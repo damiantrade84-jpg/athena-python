@@ -50,17 +50,37 @@ def test_engine_b_forex_uses_base_style_profile_when_group_override_absent():
     assert float(CONFIG["NAKED_ENGINE"]["style_profiles"]["intraday"]["min_rr"]) > 0
 
 
-def test_min_confluence_uses_2tier_stable_for_forex():
-    """Stage 4.2: forex uses stable tier (1.5), not MIN_CONFLUENCE_CLASS."""
-    pair = {"display": "USD/ZAR", "symbol": "USDZAR=X", "type": "forex"}
-    assert get_min_confluence_threshold(pair) == 1.5  # _TIER_STABLE
+def test_min_confluence_threshold_tiers():
+    """3-tier ladder: stable → 1.5; exotic → 1.7; volatile → 2.0.
+
+    Pairs with PAIR_PROFILES overrides are intentionally excluded — those test
+    the override path, not the tier resolver.
+    """
+    original_profiles = CONFIG.get("PAIR_PROFILES")
+    try:
+        CONFIG["PAIR_PROFILES"] = {}  # neutralise overrides for this test
+        eur_usd = {"display": "EUR/USD", "symbol": "EURUSD=X", "type": "forex"}
+        usd_zar = {"display": "USD/ZAR", "symbol": "USDZAR=X", "type": "forex"}
+        btc = {"display": "BTC/USDT", "symbol": "BTCUSDT", "type": "crypto"}
+        cocoa = {"display": "Cocoa", "symbol": "Cocoa", "type": "commodity"}
+        aluminium = {"display": "Aluminium", "symbol": "Aluminium", "type": "commodity"}
+        nat_gas = {"display": "Nat Gas", "symbol": "NatGas", "type": "commodity"}
+        assert get_min_confluence_threshold(eur_usd) == 1.5     # stable
+        assert get_min_confluence_threshold(usd_zar) == 1.7     # forex_exotics → exotic
+        assert get_min_confluence_threshold(btc) == 2.0         # crypto class → volatile
+        assert get_min_confluence_threshold(cocoa) == 1.7       # softs → exotic
+        assert get_min_confluence_threshold(aluminium) == 1.5   # base_metals → stable
+        assert get_min_confluence_threshold(nat_gas) == 2.0     # nat_gas → volatile
+    finally:
+        CONFIG["PAIR_PROFILES"] = original_profiles
 
 
 def test_min_confluence_class_is_not_live_threshold_input():
     original = CONFIG.get("MIN_CONFLUENCE_CLASS")
     try:
         CONFIG["MIN_CONFLUENCE_CLASS"] = {"forex": 2.95}
-        pair = {"display": "USD/ZAR", "symbol": "USDZAR=X", "type": "forex"}
+        # Stable-tier forex sanity-check that legacy class config is ignored.
+        pair = {"display": "EUR/USD", "symbol": "EURUSD=X", "type": "forex"}
         assert get_min_confluence_threshold(pair) == 1.5
         assert get_backtest_min_score_threshold(pair) == 1.5
     finally:

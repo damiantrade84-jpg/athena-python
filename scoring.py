@@ -69,11 +69,16 @@ _MAJOR_FOREX = {
     "EUR/USD", "GBP/USD", "USD/JPY", "AUD/USD", "NZD/USD", "USD/CAD", "USD/CHF"
 }
 _FOREX_CROSSES = {
-    "EUR/GBP", "EUR/JPY", "GBP/JPY", "AUD/JPY", "EUR/AUD", "GBP/AUD", "EUR/CHF", "USD/SGD"
+    "EUR/GBP", "EUR/JPY", "GBP/JPY", "AUD/JPY", "EUR/AUD", "GBP/AUD", "EUR/CHF", "USD/SGD",
+    "AUD/CHF", "AUD/NZD",
 }
-_EXOTIC_FOREX = {"USD/ZAR", "USD/MXN"}
+_EXOTIC_FOREX = {"USD/ZAR", "USD/MXN", "USD/BRL", "USD/INR"}
 _PRECIOUS_TRACKERS = {"XAU/USD", "XAG/USD", "GLD", "SLV"}
 _ENERGY_OIL = {"WTI Oil", "Brent Oil", "USO", "XLE"}
+# Industrial base metals — trend well, route to STABLE tier.
+_BASE_METALS = {"Aluminium", "Lead", "Nickel", "Zinc"}
+# Soft commodities + livestock — Athena edge unaudited; route to EXOTIC tier.
+_SOFTS = {"Cattle", "Cocoa", "Coffee", "Corn", "Cotton", "Soybeans", "Sugar", "Wheat"}
 _US_INDICES_TRACKERS = {"NASDAQ-100", "S&P 500", "Dow Jones", "SPY", "QQQ"}
 _EU_INDICES = {"DAX 40", "UK100"}
 _ASIAN_INDICES = {"ASX 200", "Nikkei 225", "Hang Seng"}
@@ -134,6 +139,10 @@ def get_pair_score_group(pair: dict) -> str:
             return "copper"
         if display in {"XPT/USD", "XPD/USD"}:
             return "pgm_metals"
+        if display in _BASE_METALS:
+            return "base_metals"
+        if display in _SOFTS:
+            return "softs"
         return "commodity_other"
     if ptype == "index":
         if display in _US_INDICES_TRACKERS:
@@ -160,12 +169,14 @@ def get_pair_score_group(pair: dict) -> str:
     return f"{ptype}_other" if ptype else "unknown"
 
 
-# Stage 2.4: Simplified 2-tier Engine A threshold system.
-# Volatile assets (crypto, nat_gas) need higher thresholds.
-# Stable assets (forex, commodity, stock, index) use lower thresholds.
+# 3-tier Engine A threshold system.
+#   VOLATILE (2.0) — crypto class, nat_gas, crypto_doge: high baseline noise.
+#   EXOTIC   (1.7) — forex_exotics, softs: thin liquidity / unaudited edge.
+#   STABLE   (1.5) — everything else.
 # CONFIG["MIN_CONFLUENCE_CLASS"] is legacy/admin metadata; this resolver does
 # not read it. Pair profile min_confluence remains the only runtime override.
 _TIER_VOLATILE = 2.0
+_TIER_EXOTIC = 1.7
 _TIER_STABLE = 1.5
 
 _PAIR_OVERRIDES = {
@@ -175,7 +186,7 @@ _PAIR_OVERRIDES = {
 
 
 def _get_threshold_tier(pair: dict) -> float:
-    """Return the confluence threshold for a pair (2-tier system)."""
+    """Return the confluence threshold for a pair (3-tier system)."""
     display = pair.get("display", "")
     ptype = pair.get("type", "")
     score_group = get_pair_score_group(pair)
@@ -188,7 +199,11 @@ def _get_threshold_tier(pair: dict) -> float:
     if ptype in ("crypto",) or score_group in ("nat_gas", "crypto_doge"):
         return _TIER_VOLATILE
 
-    # 3. Stable tier (everything else)
+    # 3. Exotic tier — thin liquidity or unaudited edge.
+    if score_group in ("forex_exotics", "softs"):
+        return _TIER_EXOTIC
+
+    # 4. Stable tier (everything else)
     return _TIER_STABLE
 
 

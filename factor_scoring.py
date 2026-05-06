@@ -32,6 +32,25 @@ log = logging.getLogger("athena")
 
 _CRYPTO_COT_PAIRS = {"BTC/USDT", "ETH/USDT"}
 
+
+def _resolve_class_keyed(mapping, score_group: str | None, asset_type: str, default):
+    """Resolve a per-class config block by score_group → asset_type → 'default'.
+
+    Lets PAIR_PROFILES.score_group + per-subgroup config entries take effect
+    where previously only pair["type"] was honoured.  E.g. a stock-typed pair
+    routed to score_group "precious_trackers" can now pull commodity-style
+    RSI bounds without touching its asset_type.
+    """
+    if not isinstance(mapping, dict):
+        return default
+    if score_group and score_group in mapping:
+        return mapping[score_group]
+    if asset_type in mapping:
+        return mapping[asset_type]
+    if "default" in mapping:
+        return mapping["default"]
+    return default
+
 # ADX gate thresholds (Wilder 1978 standard) — tunable via config.yaml FACTOR_ADX_*
 # NOTE: Read lazily inside _adx_gate() so config reloads take effect without restart.
 _ADX_HARD_FAIL_DEFAULT = 15.0    # below this → dead market, abort
@@ -183,6 +202,7 @@ def _ema_cross_confirmed(current_snap: dict, prev_snap: dict, fast_key: str, slo
 def _coherent_trend_score(
     d1_snap: dict, h4_snap: dict, h1_snap: dict, asset_type: str,
     d1_prev: dict | None = None, h4_prev: dict | None = None, h1_prev: dict | None = None,
+    score_group: str | None = None,
 ) -> tuple:
     """Multi-TF EMA alignment trend score.
 
@@ -198,14 +218,9 @@ def _coherent_trend_score(
     Stage 3.3: EMA hysteresis — 2-bar confirmation required. Pass previous-bar
     snaps as d1_prev/h4_prev/h1_prev to enable; missing prev = gap check fallback.
     """
-    tf_weights = CONFIG.get("INDICATOR_WEIGHTS", {}).get("trend", {})
-    if isinstance(tf_weights, dict):
-        raw = tf_weights.get(asset_type, tf_weights.get("default", {}))
-        if isinstance(raw, dict):
-            tf_weights = raw
-        else:
-            tf_weights = {}
-    else:
+    tf_weights_raw = CONFIG.get("INDICATOR_WEIGHTS", {}).get("trend", {})
+    tf_weights = _resolve_class_keyed(tf_weights_raw, score_group, asset_type, {})
+    if not isinstance(tf_weights, dict):
         tf_weights = {}
 
     fallback = {"d1_ema_trend": 0.50, "h4_ema_trend": 0.30, "ema_trend": 0.20}
@@ -316,7 +331,8 @@ def _previous_indicator_snap(candles: list | None) -> dict | None:
 # ── Factor 2: Momentum quality (RSI + MACD confirmation) ─────────────────────
 
 def _momentum_quality(
-    h4_snap: dict, direction: str, asset_type: str
+    h4_snap: dict, direction: str, asset_type: str,
+    score_group: str | None = None,
 ) -> float:
     """RSI + MACD confirmation quality score in [0.0, 1.0].
 
@@ -335,7 +351,11 @@ def _momentum_quality(
     Final: clamp(weighted_sum, 0.0, 1.0)
     """
     is_long = direction == "LONG"
-    rsi_bounds = CONFIG.get("RSI_BOUNDS", {}).get(asset_type, {"ob": 70, "os": 30})
+    rsi_bounds = _resolve_class_keyed(
+        CONFIG.get("RSI_BOUNDS", {}), score_group, asset_type, {"ob": 70, "os": 30}
+    )
+    if not isinstance(rsi_bounds, dict):
+        rsi_bounds = {"ob": 70, "os": 30}
     ob = float(rsi_bounds.get("ob", 70))
     os_ = float(rsi_bounds.get("os", 30))
 
@@ -416,7 +436,7 @@ def _momentum_quality(
     # Per-indicator weights from config
     ind_weights = CONFIG.get("INDICATOR_WEIGHTS", {}).get("momentum", {})
     if isinstance(ind_weights, dict) and any(isinstance(v, dict) for v in ind_weights.values()):
-        ind_weights = ind_weights.get(asset_type, ind_weights.get("default", {}))
+        ind_weights = _resolve_class_keyed(ind_weights, score_group, asset_type, {})
     rsi_w = float(ind_weights.get("rsi_z", 0.6)) if isinstance(ind_weights, dict) else 0.6
     macd_w = float(ind_weights.get("macdLine_z", 0.4)) if isinstance(ind_weights, dict) else 0.4
     total_w = rsi_w + macd_w
@@ -731,7 +751,10 @@ def _research_aroon_value(direction: str, candles: list, bonus: float, penalty: 
 
 # ── Factor 3: ADX gate ────────────────────────────────────────────────────────
 
-def _adx_gate(d1_snap: dict, h4_snap: dict, asset_type: str) -> tuple:
+def _adx_gate(
+    d1_snap: dict, h4_snap: dict, asset_type: str,
+    score_group: str | None = None,
+) -> tuple:
     """ADX trend-strength gate with sigmoid scaling.
 
     Returns (multiplier, adx_value, adx_source).
@@ -784,14 +807,12 @@ def _adx_gate(d1_snap: dict, h4_snap: dict, asset_type: str) -> tuple:
         # Soft fallback when ADX missing: use 0.5 (neutral)
         return 0.5, None, "missing"
 
-    # ── Read per-class thresholds from config ────────────────────────────────
+    # ── Read per-class thresholds from config (score_group → asset_type) ────
     _trend_min_cfg = CONFIG.get("ADX_TREND_MIN_CLASS") or {}
     _hard_fail_cfg = CONFIG.get("FACTOR_ADX_HARD_FAIL_CLASS") or {}
 
-    trend_min = (_trend_min_cfg.get(asset_type)
-                 if isinstance(_trend_min_cfg, dict) else None)
-    hard_fail = (_hard_fail_cfg.get(asset_type)
-                 if isinstance(_hard_fail_cfg, dict) else None)
+    trend_min = _resolve_class_keyed(_trend_min_cfg, score_group, asset_type, None)
+    hard_fail = _resolve_class_keyed(_hard_fail_cfg, score_group, asset_type, None)
 
     # Backward compatibility: fall back individually per missing key
     _used_fallback = False
@@ -1111,27 +1132,37 @@ def _mean_reversion_factor(
     }
 
 def _volatility_scaler(atr: float, close: float, asset_type: str) -> float:
-    """Stage 3.4: Volatility-based position-quality scaler.
+    """Volatility-based position-quality scaler with per-class bands.
 
-    Replaces the forex session multiplier with a continuous volatility measure.
-    Low volatility (ATR% < 0.5%) → 1.15 (reward precision)
-    High volatility (ATR% > 2.5%) → 0.85 (penalise noise)
-    Linear interpolation in between.
+    Maps ATR/close ratio to a multiplier:
+      ATR% ≤ low_band  → mult_low  (reward precision in low-vol)
+      ATR% ≥ high_band → mult_high (penalise noise in high-vol)
+      between          → linear interpolation
 
-    Applied to ALL asset classes, not just forex.
+    Bands are read from VOLATILITY_SCALER_BANDS[asset_type] so each class
+    operates on its own volatility scale (forex H4 ATR% ~0.1% vs crypto ~2%).
+    Falls back to the legacy global VOLATILITY_SCALER_ATR_PCT_* keys, then
+    to module defaults, when an asset class has no entry.
     """
     if close is None or close <= 0 or atr is None or atr <= 0:
         return 1.0
     atr_pct = atr / close
-    _low = float(CONFIG.get("VOLATILITY_SCALER_ATR_PCT_LOW", _VOLATILITY_SCALER_ATR_PCT_LOW))
-    _high = float(CONFIG.get("VOLATILITY_SCALER_ATR_PCT_HIGH", _VOLATILITY_SCALER_ATR_PCT_HIGH))
+
+    _bands = CONFIG.get("VOLATILITY_SCALER_BANDS") or {}
+    _class_band = _bands.get(asset_type) if isinstance(_bands, dict) else None
+    if isinstance(_class_band, dict) and "low" in _class_band and "high" in _class_band:
+        _low = float(_class_band["low"])
+        _high = float(_class_band["high"])
+    else:
+        _low = float(CONFIG.get("VOLATILITY_SCALER_ATR_PCT_LOW", _VOLATILITY_SCALER_ATR_PCT_LOW))
+        _high = float(CONFIG.get("VOLATILITY_SCALER_ATR_PCT_HIGH", _VOLATILITY_SCALER_ATR_PCT_HIGH))
+
     _mult_low = float(CONFIG.get("VOLATILITY_SCALER_MULT_LOW", _VOLATILITY_SCALER_MULT_LOW))
     _mult_high = float(CONFIG.get("VOLATILITY_SCALER_MULT_HIGH", _VOLATILITY_SCALER_MULT_HIGH))
     if atr_pct <= _low:
         return _mult_low
     if atr_pct >= _high:
         return _mult_high
-    # Linear interpolation
     t = (atr_pct - _low) / (_high - _low)
     return _mult_low + t * (_mult_high - _mult_low)
 
@@ -1173,6 +1204,15 @@ def compute_factor_scores(
     pair_id = display
     feed_status: Dict[str, str] = {}
 
+    # Resolve score_group once so per-subgroup config (e.g. precious_trackers
+    # RSI bounds for GLD-as-stock) can override asset_type lookups everywhere
+    # Engine A reads class-keyed config.
+    try:
+        from scoring import get_pair_score_group
+        score_group = get_pair_score_group(pair)
+    except Exception:
+        score_group = None
+
     # ── Data quality guard ────────────────────────────────────────────────────
     _close = h4_snap.get("close")
     _atr = h4_snap.get("atr")
@@ -1192,6 +1232,7 @@ def compute_factor_scores(
         d1_prev=d1_prev,
         h4_prev=h4_prev,
         h1_prev=h1_prev,
+        score_group=score_group,
     )
     trend_detail["hysteresis_prev_available"] = {
         "d1": d1_prev is not None,
@@ -1206,8 +1247,38 @@ def compute_factor_scores(
         regime = _get_smoothed_regime(regime_context, pair_id, regime_raw)
         return _zero_result(pair, regime, trend_detail, feed_status, reason="indeterminate_trend")
 
+    # ── Directional gate: hard cut + soft confidence ramp ────────────────────
+    # Below `min_directional`: abort (trend signal is too weak to justify any score).
+    # Inside the soft-span window: linear ramp 0→1 multiplied into base_score so a
+    # weak-but-present trend produces a proportionally smaller score, instead of
+    # the binary cliff at the threshold.
+    if asset_type == "crypto":
+        _min_directional = float(CONFIG.get("FACTOR_MIN_DIRECTIONAL_CRYPTO", 0.15))
+        _soft_span = float(CONFIG.get("FACTOR_DIRECTIONAL_SOFT_SPAN_CRYPTO", 0.30))
+    else:
+        _min_directional = float(CONFIG.get("FACTOR_MIN_DIRECTIONAL", 0.25))
+        _soft_span = float(CONFIG.get("FACTOR_DIRECTIONAL_SOFT_SPAN", 0.20))
+    _abs_trend = abs(trend_score)
+    if _abs_trend < _min_directional:
+        log.debug(
+            "[EA2] %s abs(trend)=%.3f < min_directional=%.3f — abort",
+            display, _abs_trend, _min_directional,
+        )
+        regime_raw = detect_regime(h4_snap, asset_type).get("regime", "UNKNOWN")
+        regime = _get_smoothed_regime(regime_context, pair_id, regime_raw)
+        return _zero_result(
+            pair, regime, trend_detail, feed_status,
+            reason="min_directional_failed", direction=direction,
+            min_directional=_min_directional,
+            min_directional_failed=True,
+        )
+    if _soft_span > 0 and _abs_trend < _min_directional + _soft_span:
+        dir_ramp_mult = (_abs_trend - _min_directional) / _soft_span
+    else:
+        dir_ramp_mult = 1.0
+
     # ── FACTOR 3: ADX gate ────────────────────────────────────────────────────
-    adx_mult, adx_val, adx_source = _adx_gate(d1_snap, h4_snap, asset_type)
+    adx_mult, adx_val, adx_source = _adx_gate(d1_snap, h4_snap, asset_type, score_group=score_group)
     feed_status["adx"] = adx_source
 
     # Hard abort: dead market (ADX ≤ 10)
@@ -1219,7 +1290,7 @@ def compute_factor_scores(
                             adx_val=adx_val, direction=direction)
 
     # ── FACTOR 2: Momentum quality ────────────────────────────────────────────
-    mom_quality = _momentum_quality(h4_snap, direction, asset_type)
+    mom_quality = _momentum_quality(h4_snap, direction, asset_type, score_group=score_group)
 
     # ── ADDON: Asset-specific secondary factor ────────────────────────────────
     addon_val, addon_type, addon_status = _asset_addon(
@@ -1269,10 +1340,13 @@ def compute_factor_scores(
         _close_for_vol = None
     vol_scaler = _volatility_scaler(_atr if _atr else 0.0, _close_for_vol, asset_type)
 
-    # FIX 1: For volatile-tier assets, volatility is the opportunity — don't reduce score
-    from scoring import get_pair_score_group
-    score_group = get_pair_score_group(pair)
-    if asset_type == "crypto" or score_group in ("nat_gas", "crypto_doge"):
+    # nat_gas and crypto_doge are structurally-volatile subgroups whose H4 ATR%
+    # routinely sits in the parent class's "noise" band even during normal trade.
+    # Their group multipliers already encode "high vol = opportunity", so the
+    # quality scaler is clamped to neutral-or-boost only.  The crypto-class
+    # clamp was removed once VOLATILITY_SCALER_BANDS["crypto"] was widened to
+    # match real BTC/ETH ATR%.
+    if score_group in ("nat_gas", "crypto_doge"):
         vol_scaler = max(1.0, vol_scaler)
 
     feed_status["vol_scaler"] = f"{vol_scaler:.2f}"
@@ -1362,7 +1436,7 @@ def compute_factor_scores(
         _eff_floor = float(_floor_by_regime[regime])
     else:
         _eff_floor = _conviction_floor
-    base_score = abs(trend_score) * adx_mult * vol_scaler * di_align_mult
+    base_score = abs(trend_score) * adx_mult * vol_scaler * di_align_mult * dir_ramp_mult
 
     # FIX 3: Recalibrate Cost/Funding Penalty Sensitivity
     _cost_penalty = 0.0
@@ -1538,8 +1612,9 @@ def compute_factor_scores(
         "active_nondirectional_factors": ["momentum", "addon"] + (["research_lab"] if research_detail.get("enabled") else []) + (["mean_reversion"] if mean_rev_detail.get("enabled") else []),
         "disabled_factors": [],
         "directional_confidence_multiplier": round(conviction, 4),
-        "effective_min_directional": 0.0,
-        "min_directional_threshold": 0.0,
+        "directional_ramp_multiplier": round(dir_ramp_mult, 4),
+        "effective_min_directional": round(_min_directional + _soft_span, 4),
+        "min_directional_threshold": round(_min_directional, 4),
         "optional_factor_coverage": 1.0,
         "missing_directional_optional_count": 0,
         "correlation_adjustments": {},
@@ -1559,6 +1634,8 @@ def _zero_result(
     reason: str = "unknown",
     adx_val=None,
     direction=None,
+    min_directional: float = 0.0,
+    min_directional_failed: bool = False,
 ) -> dict:
     """Return a clean zero-score result with diagnostics."""
     return {
@@ -1590,13 +1667,14 @@ def _zero_result(
         "conviction": 0.0,
         "insufficient_factors": True,
         "indeterminate_direction": reason == "indeterminate_trend",
-        "min_directional_failed": False,
+        "min_directional_failed": min_directional_failed,
         "active_directional_factors": [],
         "active_nondirectional_factors": [],
         "disabled_factors": [],
         "directional_confidence_multiplier": 0.0,
-        "effective_min_directional": 0.0,
-        "min_directional_threshold": 0.0,
+        "directional_ramp_multiplier": 0.0,
+        "effective_min_directional": round(min_directional, 4),
+        "min_directional_threshold": round(min_directional, 4),
         "optional_factor_coverage": 0.0,
         "missing_directional_optional_count": 0,
         "correlation_adjustments": {},

@@ -556,10 +556,14 @@ def test_conviction_floor_default_is_explicit_and_no_momentum_uses_floor_blend()
 
     # floor is config-driven (default 0.60 in config.yaml, _CONVICTION_FLOOR_DEFAULT = 0.20 in code)
     assert floor > 0.0
-    # With no momentum (macdHist=0, rsi neutral), conviction = base_weight only
-    assert result["conviction"] == pytest.approx(
-        float(CONFIG.get("FACTOR_BASE_WEIGHT", 0.20))
-    )
+    # With no momentum (macdHist=0, rsi neutral), stock/index pair has no addon so the
+    # ADDON_UNSUPPORTED_SPLIT_TO_BASE rule redistributes addon weight: half to base,
+    # half to momentum.  Effective base weight becomes base + addon * split_to_base.
+    base_w = float(CONFIG.get("FACTOR_BASE_WEIGHT", 0.20))
+    addon_w = float(CONFIG.get("FACTOR_ADDON_WEIGHT", 0.30))
+    split = float(CONFIG.get("ADDON_UNSUPPORTED_SPLIT_TO_BASE", 0.0))
+    expected_base = base_w + addon_w * split
+    assert result["conviction"] == pytest.approx(expected_base)
     # final_score depends on trend_score * adx * vol_scaler * di_align * (floor + (1-floor)*conviction)
     # Just verify it's in valid range and formula is consistent
     assert 0.0 < result["final_score"] < 3.0
@@ -585,17 +589,88 @@ def test_final_score_is_clamped_to_zero_to_three_contract():
     assert 0.0 <= blocked["final_score"] <= 3.0
 
 
+def test_directional_gate_hard_cut_aborts_below_min(monkeypatch):
+    """abs(trend_score) below FACTOR_MIN_DIRECTIONAL → final_score=0,
+    min_directional_failed=True, abort_reason='min_directional_failed'."""
+    # Force the threshold above the engine's structural minimum (~0.40 from a
+    # single H1 vote) so the hard-cut path is exercised on a normal trend.
+    monkeypatch.setitem(CONFIG, "FACTOR_MIN_DIRECTIONAL", 5.0)
+    monkeypatch.setitem(CONFIG, "FACTOR_DIRECTIONAL_SOFT_SPAN", 0.0)
+    result = _score(_snap("long"), _snap("long"), _snap("long"))
+    assert result["final_score"] == 0.0
+    assert result["min_directional_failed"] is True
+    assert result["abort_reason"] == "min_directional_failed"
+    assert result["min_directional_threshold"] == pytest.approx(5.0)
+
+
+def test_directional_gate_soft_span_scales_base_score(monkeypatch):
+    """abs(trend_score) inside [min, min+span] → ramp multiplier between 0 and 1
+    is multiplied into base_score; outside the span the multiplier is 1.0."""
+    # Strong trend (all three TFs aligned) sits well above the span → mult=1.0.
+    full = _score(_snap("long"), _snap("long"), _snap("long"))
+    assert full["directional_ramp_multiplier"] == pytest.approx(1.0)
+    assert full["min_directional_failed"] is False
+
+    # Position the span so the actual trend_score lands inside it.
+    abs_trend = abs(full["directional_score"])
+    monkeypatch.setitem(CONFIG, "FACTOR_MIN_DIRECTIONAL", abs_trend - 0.10)
+    monkeypatch.setitem(CONFIG, "FACTOR_DIRECTIONAL_SOFT_SPAN", 0.40)
+    ramped = _score(_snap("long"), _snap("long"), _snap("long"))
+    expected_mult = 0.10 / 0.40
+    assert ramped["directional_ramp_multiplier"] == pytest.approx(expected_mult, abs=1e-3)
+    # Ramp scales base_score → ramped final_score is strictly less than full.
+    assert 0.0 < ramped["final_score"] < full["final_score"]
+
+
+def test_score_group_overrides_asset_type_for_rsi_bounds(monkeypatch):
+    """Score-group entry beats asset_type when both are present in RSI_BOUNDS.
+
+    Canonical case: GLD carried as type=stock with score_group=precious_trackers
+    should pick up the commodity-style 75/25 RSI bounds rather than the equity 70/30.
+    """
+    # Force a RSI value that lies in different zones depending on bounds:
+    # RSI 72 is overbought under stock (70/30) → -0.25, but neutral-confirming
+    # under precious_trackers (75/25) → +0.50.  Different mom_quality → different score.
+    snap = _snap("long")
+    snap["rsi"] = 72.0
+    snap["macdHist"] = 0.0  # isolate RSI contribution
+
+    stock_pair = {"type": "stock", "display": "AAPL"}
+    gold_pair = {"type": "stock", "display": "GLD", "score_group": "precious_trackers"}
+
+    stock = _score(snap, snap, snap, pair=stock_pair)
+    gold = _score(snap, snap, snap, pair=gold_pair)
+
+    # GLD interpreted via precious_trackers RSI bounds confirms momentum;
+    # AAPL via stock RSI bounds penalises it.
+    assert gold["momentum_quality"] > stock["momentum_quality"]
+
+
+def test_directional_gate_uses_crypto_specific_thresholds():
+    """Crypto reads FACTOR_MIN_DIRECTIONAL_CRYPTO and the _CRYPTO span."""
+    pair = {"type": "crypto", "display": "BTC/USDT"}
+    result = _score(_snap("long"), _snap("long"), _snap("long"), pair=pair)
+    expected_min = float(CONFIG.get("FACTOR_MIN_DIRECTIONAL_CRYPTO", 0.15))
+    expected_span = float(CONFIG.get("FACTOR_DIRECTIONAL_SOFT_SPAN_CRYPTO", 0.30))
+    assert result["min_directional_threshold"] == pytest.approx(expected_min)
+    assert result["effective_min_directional"] == pytest.approx(expected_min + expected_span)
+
+
 def test_volatility_scaler_replaces_session_multiplier():
-    # Stage 3.4: Session multiplier deprecated; volatility scaler applied to all assets.
-    # Low volatility (ATR% < 0.5%) → scaler > 1.0
-    # High volatility (ATR% > 2.5%) → scaler < 1.0
-    low_vol_d1 = {"ema21": 110.0, "ema200": 100.0, "adx": 25.0, "close": 1000.0, "atr": 3.0, "plusDI": 25.0, "minusDI": 15.0}
-    low_vol_h4 = {"ema21": 110.0, "ema50": 100.0, "adx": 25.0, "rsi": 55.0, "macdHist": 0.0, "close": 1000.0, "atr": 3.0, "plusDI": 25.0, "minusDI": 15.0}
-    low_vol_h1 = {"ema21": 110.0, "ema50": 100.0, "close": 1000.0, "atr": 3.0}
+    # Volatility scaler is now per-class (VOLATILITY_SCALER_BANDS) — each asset
+    # class has its own low/high ATR% boundaries because forex H4 ATR% lives near
+    # 0.1% while crypto routinely sits at 1-2%.  This test confirms the scaler
+    # correctly boosts inside its class's low band and penalises above the high band.
+
+    # Forex band: low=0.0005, high=0.0025.  ATR/close = 0.0001/1.0 = 0.01% < 0.05% → boost.
+    low_vol_d1 = {"ema21": 110.0, "ema200": 100.0, "adx": 25.0, "close": 1.0, "atr": 0.0001, "plusDI": 25.0, "minusDI": 15.0}
+    low_vol_h4 = {"ema21": 110.0, "ema50": 100.0, "adx": 25.0, "rsi": 55.0, "macdHist": 0.0, "close": 1.0, "atr": 0.0001, "plusDI": 25.0, "minusDI": 15.0}
+    low_vol_h1 = {"ema21": 110.0, "ema50": 100.0, "close": 1.0, "atr": 0.0001}
     low_vol = _score(
         d1=low_vol_d1, h4=low_vol_h4, h1=low_vol_h1,
         pair={"type": "forex", "display": "TEST/FX"},
     )
+    # Stock band: low=0.005, high=0.020.  ATR/close = 5.0/100.0 = 5% > 2% → penalty.
     high_vol_d1 = {"ema21": 110.0, "ema200": 100.0, "adx": 25.0, "close": 100.0, "atr": 5.0, "plusDI": 25.0, "minusDI": 15.0}
     high_vol_h4 = {"ema21": 110.0, "ema50": 100.0, "adx": 25.0, "rsi": 55.0, "macdHist": 0.0, "close": 100.0, "atr": 5.0, "plusDI": 25.0, "minusDI": 15.0}
     high_vol_h1 = {"ema21": 110.0, "ema50": 100.0, "close": 100.0, "atr": 5.0}

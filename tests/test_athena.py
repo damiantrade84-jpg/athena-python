@@ -173,6 +173,9 @@ class TestConfig:
             assert k in CONFIG, f"Missing CONFIG key: {k}"
 
     def test_asset_class_coverage(self):
+        # All five core asset classes must be present.  Score-group keys
+        # (e.g. precious_trackers, energy_oil, softs in RSI_BOUNDS) are
+        # additive overrides and do not violate this contract.
         classes = {"crypto", "forex", "commodity", "stock", "index"}
         for key in (
             "RISK_MULT",
@@ -181,7 +184,10 @@ class TestConfig:
             "RSI_BOUNDS",
             "MIN_CONFLUENCE_CLASS",
         ):
-            assert classes == set(CONFIG[key].keys()), f"{key} missing classes"
+            present = set(CONFIG[key].keys())
+            assert classes.issubset(present), (
+                f"{key} missing asset classes: {classes - present}"
+            )
 
     def test_validate_config_no_crash(self):
         # Should not raise on valid config

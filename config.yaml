@@ -126,6 +126,28 @@ FACTOR_FUNDING_NOISE_BAND: 0.0001
 
 FACTOR_CONVICTION_FLOOR: 0.20 # Stage 2.1: lowered from 0.60 to allow more signals through
 
+# When the asset class has no addon (stock/index), redistribute the addon's
+# weight rather than collapsing it onto momentum.  0.5 splits 50/50 between
+# base and momentum, so stock/index conviction becomes 0.35 base + 0.65
+# momentum instead of 0.20 base + 0.80 momentum (which made H4 RSI+MACD the
+# sole driver).  Code default is 0.0 for backward compat; this YAML override
+# is the documented design.
+ADDON_UNSUPPORTED_SPLIT_TO_BASE: 0.5
+
+# Per-class ATR% bands for the Engine A volatility-quality scaler.
+# Each class defines the ATR/close ratio at which the scaler hits its low
+# (boost — precision territory) and high (penalty — noise territory) bounds.
+# Linear interpolation between.  Without per-class bands the global default
+# (0.005-0.025) was crypto-scale and silently boosted forex on every bar.
+# Falls back to VOLATILITY_SCALER_ATR_PCT_LOW/HIGH keys (or code defaults)
+# if asset_type missing.
+VOLATILITY_SCALER_BANDS:
+  forex:     { low: 0.0005, high: 0.0025 }   # EUR/USD H4 ATR ≈ 0.0006-0.0015
+  crypto:    { low: 0.010,  high: 0.040 }    # BTC H4 ATR% ~1-2.5% normal, >4% chaotic
+  commodity: { low: 0.003,  high: 0.015 }    # XAU/XAG/oil span; nat_gas naturally hits high
+  stock:     { low: 0.005,  high: 0.020 }    # US single-name H4 typical 0.5-1.5%
+  index:     { low: 0.002,  high: 0.010 }    # SPX/NDX H4 ATR% 0.2-0.6%
+
 ENGINE_A_RESEARCH_LAB_FACTORS:
   ENABLED: true
   BONUS: 0.15
@@ -200,6 +222,15 @@ RSI_BOUNDS:
   stock:     { ob: 70, os: 30 }
 
   index:     { ob: 70, os: 30 }
+
+  # Score-group overrides — beat asset_type when present.  precious_trackers
+  # routes GLD/SLV/XAU/XAG to commodity-style 75/25 even when carried as
+  # type=stock; energy_oil routes USO/XLE/CL the same way.  softs (Cocoa,
+  # Coffee, Sugar) trend less cleanly so use a tighter 70/30 to avoid
+  # premature trend confirmations.
+  precious_trackers: { ob: 75, os: 25 }
+  energy_oil:        { ob: 75, os: 25 }
+  softs:             { ob: 70, os: 30 }
 
 
 
@@ -942,11 +973,11 @@ INDICATOR_WEIGHTS:
 
     commodity:
 
-      d1_ema_trend: 0.34
+      d1_ema_trend: 0.5
 
-      h4_ema_trend: 0.33
+      h4_ema_trend: 0.3
 
-      ema_trend: 0.33
+      ema_trend: 0.2
 
     stock:
 
