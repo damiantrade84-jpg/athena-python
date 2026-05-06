@@ -1,5 +1,6 @@
 # Lessons
 
+- For Engine D scalp execution, keep signal grading separate from mechanical order levels. Grade/checkers decide signal quality; TP1 should represent the 1R self-pay target and VP structure should be context/runner data, not a hard RR blocker unless the user explicitly asks for structural-target gating.
 - When Research Lab gives strategy feedback, strengthen the lab's own self-audit instead of manually second-guessing every result; reports must expose simulator backend, fallback reason, and signal/trade consistency so confidence is evidence-based.
 - Separate Research Lab candidate labels from implementation readiness. A `STRONG_CANDIDATE` is research evidence; the UI/report must show a stricter implementation verdict before telling the user a result can move into the actual paper-trading tool.
 - Research Lab UI must lead with an operator decision summary, not raw retest tables. If a focused run has a strong add-candidate and no baseline comparator, show the candidate as ADD and list blockers separately instead of burying the answer under "Suggested Next Tests."

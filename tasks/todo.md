@@ -158,6 +158,24 @@
 ## Review
 
 - Confirmed `[AI] ERROR for ...` is emitted by `run_ai()` in `athena.py`, not by `engine_b_ai.py`.
+
+# Engine D ATR Stop And 1R TP Fix
+
+- [x] Trace current Engine D level calculation and execution gate.
+- [x] Change Engine D scalp TP1 to the 1R self-pay target.
+- [x] Use ATR-based SL when ATR is available, with config defaults.
+- [x] Keep VP/POC/VAH/VAL targets as context/runner fields, not hard RR blockers.
+- [x] Add focused regression coverage.
+- [x] Run focused compile and pytest validation.
+
+## Review
+
+- `calculate_scalp_levels()` now uses ATR stop distance when available and sets `tp1`/`tp_partial` to the configured 1R self-pay target.
+- VP targets are preserved as `structural_tp` / `structural_rr` / `structure_target_close` and close structure is a soft warning, not a hard execution blocker.
+- API normalization now passes the structural target fields to the Scalp Lab UI payload.
+- Compile validation passed: `python -m py_compile scalp_engine.py athena.py tests\test_scalp_engine.py tests\test_scalp_fixes.py`.
+- Focused validation passed: `python -m pytest tests/test_scalp_engine.py tests/test_scalp_fixes.py::test_crypto_scalp_precision_guard tests/test_scalp_fixes.py::test_scalp_tp1_is_1r_and_structural_target_is_context -q --basetemp=.pytest_tmp_engine_d_1r_focused` (`99 passed`).
+- Broader adjacent scalp slice was not green due pre-existing fixture/import issues around `mt5_map_symbol` and `bybit_executor._get_exchange`; the related level-contract tests above passed.
 - Compile validation passed: `python -m py_compile config.py athena.py`.
 - Focused AI routing/review validation passed: `python -m pytest tests/test_ai_config_routing.py tests/test_ai_review_safety.py -q` (`86 passed`).
 - Engine B AI regression validation passed: `python -m pytest tests/test_engine_b_ai.py -q` (`13 passed`).

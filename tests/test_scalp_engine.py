@@ -322,16 +322,30 @@ def test_fixed_range_vp_marks_range_proxy_source():
     assert vp["volume_source"] == "range_proxy"
 
 
-def test_calculate_levels_long_sl_below_val():
-    vp = {"poc": 1.1050, "vah": 1.1080, "val": 1.0970}
+def test_calculate_levels_long_uses_atr_sl_and_1r_tp(monkeypatch):
+    monkeypatch.setitem(
+        scalp_engine.CONFIG,
+        "SCALP_ENGINE",
+        {
+            **scalp_engine.CONFIG.get("SCALP_ENGINE", {}),
+            "ATR_SL_ENABLED": True,
+            "ATR_SL_MULT": 1.5,
+            "TP1_R_MULT": 1.0,
+        },
+    )
+    vp = {"poc": 1.1002, "vah": 1.1080, "val": 1.0970}
     levels = calculate_scalp_levels(
         "LONG", 1.1000, vp, "mean_reversion",
-        {"digits": 5, "point": 0.00001}, "forex"
+        {"digits": 5, "point": 0.00001}, "forex", atr_m15=0.0020
     )
-    assert levels["sl"] < vp["val"], "SL must be below VAL for LONG mean-reversion"
-    assert levels["tp1"] > levels["entry"], "TP1 must be above entry for LONG"
-    assert levels["rr"] >= 1.0
-    assert levels["sl_method"] == "vp_boundary"
+    assert levels["sl"] == 1.097
+    assert levels["tp1"] == 1.103
+    assert levels["tp_partial"] == levels["tp1"]
+    assert levels["rr"] == 1.0
+    assert levels["rr_below_min"] is False
+    assert levels["sl_method"] == "atr"
+    assert levels["structural_tp"] == vp["poc"]
+    assert levels["structure_target_close"] is True
 
 
 def test_calculate_levels_short_sl_above_vah():
@@ -360,18 +374,23 @@ def test_calculate_levels_keys():
         "LONG", 1.1000, vp, "mean_reversion",
         {"digits": 5, "point": 0.00001}, "forex"
     )
-    for k in ("entry", "sl", "tp1", "tp2", "rr", "sl_distance", "sl_method"):
+    for k in (
+        "entry", "sl", "tp_partial", "tp1", "tp2", "structural_tp",
+        "structural_rr", "structure_target_close", "rr", "sl_distance",
+        "sl_method",
+    ):
         assert k in levels, f"Missing key: {k}"
 
 
-def test_calculate_levels_trend_continuation_flags_low_rr():
+def test_calculate_levels_trend_continuation_keeps_close_structure_as_warning():
     vp = {"poc": 0.917362, "vah": 0.917585, "val": 0.91714}
     levels = calculate_scalp_levels(
         "SHORT", 0.91789, vp, "trend_continuation",
         {"digits": 5, "point": 0.00001}, "forex"
     )
-    assert levels["rr"] < 1.0
-    assert levels["rr_below_min"] is True
+    assert levels["rr"] == 1.0
+    assert levels["rr_below_min"] is False
+    assert levels["structure_target_close"] is True
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -1026,11 +1045,12 @@ def test_run_scalp_scan_surfaces_grade_c_as_watchlist(monkeypatch):
     monkeypatch.setitem(
         scalp_engine.CONFIG,
         "SCALP_ENGINE",
-        {
-            **scalp_engine.CONFIG.get("SCALP_ENGINE", {}),
-            "MIN_GRADE_AUTO_EXECUTE": "B",
-            "MIN_GRADE": "C",
-        },
+            {
+                **scalp_engine.CONFIG.get("SCALP_ENGINE", {}),
+                "EXECUTION_MIN_GRADE": "B",
+                "MIN_GRADE_AUTO_EXECUTE": "B",
+                "MIN_GRADE": "C",
+            },
     )
     monkeypatch.setattr(scalp_engine, "get_current_sessions", lambda: ["london"])
     monkeypatch.setattr(scalp_engine, "is_valid_session", lambda asset="forex": (True, "london"))
@@ -1127,6 +1147,71 @@ def test_run_scalp_scan_surfaces_fee_guard_candidate(monkeypatch):
     assert sig["executable"] is False
     assert "fee_guard_micro_stop" in sig["fail_reasons"]
     assert sig["fee_guard"]["cost_as_R"] > 0.20
+
+
+def test_run_scalp_scan_does_not_block_close_structure_target(monkeypatch):
+    monkeypatch.setitem(
+        scalp_engine.CONFIG,
+        "SCALP_ENGINE",
+        {
+            **scalp_engine.CONFIG.get("SCALP_ENGINE", {}),
+            "SESSION_FILTER": True,
+            "SESSION_MODE": "all",
+            "EXECUTION_TIMEFRAME": "M1",
+            "EXECUTION_MIN_GRADE": "B",
+            "ENGINE_D_FEE_GUARD_ENABLED": True,
+            "ENGINE_D_MAX_COST_R": 0.20,
+            "ENGINE_D_MIN_STOP_PCT": 0.0005,
+            "ESTIMATED_FEE_PCT": 0.0006,
+            "ESTIMATED_SLIPPAGE_PCT": 0.0002,
+        },
+    )
+    monkeypatch.setattr(scalp_engine, "get_current_sessions", lambda: ["london"])
+    monkeypatch.setattr(scalp_engine, "scalp_session_window", lambda *args, **kwargs: (True, "all"))
+    monkeypatch.setattr(mt5_executor, "mt5_connect", lambda: True)
+    monkeypatch.setattr(mt5_executor, "mt5_map_symbol", lambda display: "EURUSD")
+    monkeypatch.setattr(scalp_engine, "mt5_market_open_state", lambda symbol: {"open": True, "reason": "market_open"})
+    monkeypatch.setattr(mt5_executor, "mt5_get_symbol_info", lambda display: {"digits": 5, "point": 0.00001, "spread": 10})
+    monkeypatch.setattr(scalp_engine, "check_spread", lambda sym_info, asset_type: (True, 1.0))
+    monkeypatch.setattr(scalp_engine, "mt5_fetch_scalp_candles", lambda *args, **kwargs: _candles(300))
+    monkeypatch.setattr(scalp_engine, "mt5_get_live_price", lambda symbol: 100.0)
+    monkeypatch.setattr(scalp_engine, "_build_volume_profile", lambda candles: {"valid": True, "poc": 100.2, "vah": 101.0, "val": 99.0, "lvn_levels": []})
+    monkeypatch.setattr(scalp_engine, "_classify_market_state", lambda vp: "balance")
+    monkeypatch.setattr(scalp_engine, "_locate_price_vs_vp", lambda price, vp, atr_m15=0: {"location": "at_val", "nearest_level": 99.0, "distance_pct": 0.0})
+    monkeypatch.setattr(scalp_engine, "_check_absorption", lambda candles: {"detected": True, "count": 2, "bars": [{}]})
+    monkeypatch.setattr(scalp_engine, "_check_cvd", lambda candles: {"direction": "LONG", "cvd_slope": 1.0})
+    monkeypatch.setattr(scalp_engine, "_check_aaa_sequence", lambda candles, absorption, cvd, asset_type=None: {"complete": False, "phase": "absorption_only"})
+    monkeypatch.setattr(scalp_engine, "_check_vwap_lean", lambda candles, price: {"lean": "LONG", "vwap_value": 100.0})
+    monkeypatch.setattr(scalp_engine, "_classify_setup", lambda *args, **kwargs: {"valid": True, "direction": "LONG", "setup_type": "mean_reversion", "reasons": []})
+    monkeypatch.setattr(
+        scalp_engine,
+        "calculate_scalp_levels",
+        lambda *args, **kwargs: {
+            "entry": 100.0,
+            "sl": 99.0,
+            "tp_partial": 101.0,
+            "tp1": 101.0,
+            "tp2": None,
+            "structural_tp": 100.2,
+            "structural_rr": 0.2,
+            "structure_target_close": True,
+            "rr": 1.0,
+            "rr_below_min": False,
+            "rr_synthetic": True,
+            "sl_distance": 1.0,
+            "sl_method": "atr",
+        },
+    )
+    monkeypatch.setattr(scalp_engine, "ai_quality_grade", lambda *args, **kwargs: {"score": 82, "grade": "A", "reasons": [], "size_multiplier": 1.0})
+    monkeypatch.setattr(scalp_engine, "record_signal_event", lambda **kwargs: None)
+
+    result = scalp_engine.run_scalp_scan(["EUR/USD"])
+
+    sig = result["signals"][0]
+    assert sig["gate_result"] == "PASS"
+    assert sig["executable"] is True
+    assert sig["fail_reasons"] == []
+    assert "structure_target_close" in sig["soft_warnings"]
 
 
 def test_scalp_cost_assumptions_use_asset_overrides_before_global_scalars():

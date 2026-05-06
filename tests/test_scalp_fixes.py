@@ -299,12 +299,17 @@ def test_crypto_scalp_precision_guard():
     assert levels["sl"] < 0.091 
 
 
-def test_scalp_tp1_not_forced_outward_by_min_rr(monkeypatch):
-    """TP1 should remain structural (POC/VA side), not pushed outward by synthetic MIN_RR."""
+def test_scalp_tp1_is_1r_and_structural_target_is_context(monkeypatch):
+    """TP1 is the 1R self-pay target; VP structure remains separate context."""
     monkeypatch.setitem(
         scalp_engine.CONFIG,
         "SCALP_ENGINE",
-        {**scalp_engine.CONFIG.get("SCALP_ENGINE", {}), "MIN_RR": 3.0},
+        {
+            **scalp_engine.CONFIG.get("SCALP_ENGINE", {}),
+            "MIN_RR": 3.0,
+            "ATR_SL_ENABLED": False,
+            "TP1_R_MULT": 1.0,
+        },
     )
     vp = {"poc": 1.1002, "vah": 1.1010, "val": 1.1000}
     levels = scalp_engine.calculate_scalp_levels(
@@ -315,7 +320,11 @@ def test_scalp_tp1_not_forced_outward_by_min_rr(monkeypatch):
         symbol_info={"digits": 5, "point": 0.00001},
         asset_type="forex",
     )
-    assert levels["tp1"] == round(vp["poc"], 5)
+    assert levels["tp1"] == levels["tp_partial"]
+    assert levels["rr"] == 1.0
+    assert levels["rr_below_min"] is False
+    assert levels["structural_tp"] == round(vp["poc"], 5)
+    assert levels["structure_target_close"] is True
 
 
 def test_bybit_scalp_exec_uses_tp1_for_exchange_tp(monkeypatch):

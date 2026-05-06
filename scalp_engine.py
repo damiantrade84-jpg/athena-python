@@ -2076,17 +2076,12 @@ def calculate_scalp_levels(
     min_rr_override: float | None = None,
     atr_m15: float = 0.0,
 ) -> dict:
-    """Calculate SL, TP1, TP2 using VP levels.
+    """Calculate Engine D execution levels.
 
-    Mean Reversion:
-      SL: beyond VAH/VAL + buffer
-      TP1: POC
-      TP2: opposite VA boundary
-
-    Trend Continuation:
-      SL: beyond LVN/POC + buffer
-      TP1: POC or opposite VA
-      TP2: outside VA extension
+    Signal quality still comes from VP/order-flow context, but execution is
+    mechanical for scalp trades: use an ATR stop when available and set TP1 to
+    the configured 1R self-pay target. VP levels are retained as structural
+    context/runner targets instead of hard RR blockers.
     """
     cfg = CONFIG.get("SCALP_ENGINE", {})
     digits = symbol_info.get("digits", 5)
@@ -2129,35 +2124,36 @@ def calculate_scalp_levels(
         spread_half = (float(symbol_info.get("spread", 0)) * float(point)) / 2.0
         buffer = buffer + spread_half
 
-    poc = vp.get("poc", entry)
-    vah = vp.get("vah", entry)
-    val = vp.get("val", entry)
+    poc = vp.get("poc", entry) or entry
+    vah = vp.get("vah", entry) or entry
+    val = vp.get("val", entry) or entry
     min_rr_cfg = float(min_rr_override) if min_rr_override is not None else float(cfg.get("MIN_RR", 2.0))
     va_width = abs(vah - val)
+    sl_method = "vp_boundary"
+    structural_tp = poc
+    runner_tp = None
 
     if setup_type == "mean_reversion":
         if direction == "LONG":
             sl = val - buffer
-            tp1 = poc
-            tp2 = vah if cfg.get("TP2_ENABLED", True) else None
+            structural_tp = poc
+            runner_tp = vah
         else:
             sl = vah + buffer
-            tp1 = poc
-            tp2 = val if cfg.get("TP2_ENABLED", True) else None
+            structural_tp = poc
+            runner_tp = val
 
     elif setup_type == "trend_extension":
         # Price has broken through the value area boundary — SL behind the broken
         # level (now structural S/R). TP1 = MIN_RR projection. TP2 = one VA width.
         if direction == "LONG":
             sl = vah - buffer          # VAH is now support
-            sl_dist_est = max(abs(entry - sl), buffer * 2)
-            tp1 = entry + sl_dist_est * min_rr_cfg
-            tp2 = (entry + va_width) if cfg.get("TP2_ENABLED", True) else None
+            structural_tp = entry + va_width
+            runner_tp = structural_tp
         else:
             sl = val + buffer          # VAL is now resistance
-            sl_dist_est = max(abs(entry - sl), buffer * 2)
-            tp1 = entry - sl_dist_est * min_rr_cfg
-            tp2 = (entry - va_width) if cfg.get("TP2_ENABLED", True) else None
+            structural_tp = entry - va_width
+            runner_tp = structural_tp
 
     else:  # trend_continuation
         # When POC sits on the wrong side of entry, use ATR-based SL (1.5x ATR_M15)
@@ -2172,8 +2168,8 @@ def calculate_scalp_levels(
                 sl = entry - atr_m15 * _tc_atr_mult
             else:
                 sl = entry - (entry * _tc_fallback_pct)
-            tp1 = vah
-            tp2 = (vah + (vah - poc)) if cfg.get("TP2_ENABLED", True) else None
+            structural_tp = vah
+            runner_tp = vah + (vah - poc)
         else:
             if poc > entry:
                 sl = poc + buffer
@@ -2181,58 +2177,64 @@ def calculate_scalp_levels(
                 sl = entry + atr_m15 * _tc_atr_mult
             else:
                 sl = entry + (entry * _tc_fallback_pct)
-            tp1 = val
-            tp2 = (val - (poc - val)) if cfg.get("TP2_ENABLED", True) else None
+            structural_tp = val
+            runner_tp = val - (poc - val)
+
+    if atr_m15 > 0 and cfg.get("ATR_SL_ENABLED", True):
+        atr_stop_distance = atr_m15 * float(cfg.get("ATR_SL_MULT", 1.5))
+        if atr_stop_distance > 0:
+            sl = entry - atr_stop_distance if direction == "LONG" else entry + atr_stop_distance
+            sl_method = "atr"
 
     # Defensive: if VP levels place SL on the wrong side of entry (e.g. price has
     # moved outside the value area since the VP was built), clamp to entry ± buffer.
     if direction == "LONG" and sl >= entry:
         log.warning(f"[SCALP] SL clamp: LONG sl={sl:.5f} >= entry={entry:.5f} — forcing sl = entry - buffer")
         sl = entry - buffer
+        sl_method = "fallback_buffer"
     elif direction == "SHORT" and sl <= entry:
         log.warning(f"[SCALP] SL clamp: SHORT sl={sl:.5f} <= entry={entry:.5f} — forcing sl = entry + buffer")
         sl = entry + buffer
+        sl_method = "fallback_buffer"
 
     sl_distance = abs(entry - sl)
 
-    trend_ext_max_rr = float(cfg.get("TREND_EXT_MAX_RR", 0))
-    if trend_ext_max_rr > 0 and sl_distance > 0 and setup_type == "trend_extension":
-        max_tp1_dist = sl_distance * trend_ext_max_rr
-        if direction == "LONG" and tp1 > entry + max_tp1_dist:
-            log.warning("[SCALP] trend_extension TP1 capped at %.2fR", trend_ext_max_rr)
-            tp1 = entry + max_tp1_dist
-        elif direction == "SHORT" and tp1 < entry - max_tp1_dist:
-            log.warning("[SCALP] trend_extension TP1 capped at %.2fR", trend_ext_max_rr)
-            tp1 = entry - max_tp1_dist
-
-    # TP1 cap: if the structural target is unrealistically far (e.g. wide value area),
-    # clip TP1 to TP1_MAX_RR * sl_distance. trend_extension is already at exactly MIN_RR
-    # so the cap only applies to mean_reversion and trend_continuation.
-    tp1_max_rr = float(cfg.get("TP1_MAX_RR", 0))
-    if tp1_max_rr > 0 and sl_distance > 0 and setup_type != "trend_extension":
-        max_tp1_dist = sl_distance * tp1_max_rr
-        if direction == "LONG" and tp1 > entry + max_tp1_dist:
-            tp1 = entry + max_tp1_dist
-        elif direction == "SHORT" and tp1 < entry - max_tp1_dist:
-            tp1 = entry - max_tp1_dist
-
-    # TP1 is intentionally the natural structural/profile target from setup logic.
-    # Do not expand TP1 outward here to satisfy synthetic MIN_RR floors.
+    tp1_r_mult = max(float(cfg.get("TP1_R_MULT", 1.0)), 1.0)
+    tp1 = entry + (sl_distance * tp1_r_mult) if direction == "LONG" else entry - (sl_distance * tp1_r_mult)
+    tp_partial = tp1
     actual_rr = round(abs(tp1 - entry) / sl_distance, 2) if sl_distance > 0 else 0
 
-    # TP direction check: if price has drifted past the structural target the VP
-    # is invalidated — TP would be on the wrong side of entry entirely.
+    # Structural/profile targets are context and optional runners. They should
+    # not block an otherwise valid scalp when the mechanical 1R pay target exists.
+    structural_tp_direction_ok = (
+        (direction == "LONG" and structural_tp > entry)
+        or (direction == "SHORT" and structural_tp < entry)
+    )
+    structural_rr = (
+        round(abs(structural_tp - entry) / sl_distance, 2)
+        if sl_distance > 0 and structural_tp_direction_ok
+        else 0
+    )
+    structure_target_close = structural_tp_direction_ok and structural_rr < tp1_r_mult
+
+    tp2 = None
+    if cfg.get("TP2_ENABLED", True):
+        runner_candidates = [structural_tp, runner_tp]
+        if direction == "LONG":
+            valid_runners = [t for t in runner_candidates if t is not None and t > tp1]
+            tp2 = min(valid_runners) if valid_runners else None
+        else:
+            valid_runners = [t for t in runner_candidates if t is not None and t < tp1]
+            tp2 = max(valid_runners) if valid_runners else None
+
     tp_direction_ok = (direction == "LONG" and tp1 > entry) or (direction == "SHORT" and tp1 < entry)
     if not tp_direction_ok:
         log.warning(
             f"[SCALP] TP direction invalid: {direction} tp1={tp1:.5f} vs entry={entry:.5f} "
-            f"(VP structure likely stale — price drifted past target)"
+            f"(mechanical 1R target could not be built)"
         )
 
-    # If the natural structural TP does not meet MIN_RR, flag it so the caller can
-    # skip rather than distorting the level. trend_extension always meets MIN_RR by
-    # construction (tp1 = entry ± sl_dist * min_rr).
-    rr_below_min = not tp_direction_ok or (setup_type != "trend_extension" and actual_rr < min_rr_cfg)
+    rr_below_min = not tp_direction_ok or actual_rr < 1.0
 
     # --- Defensive Rounding Safeguard ---
     # Protect against level collapse if symbol_info.digits are too coarse (e.g. 2 digits for a 0.09 crypto pair).
@@ -2242,8 +2244,8 @@ def calculate_scalp_levels(
         if asset_type == "crypto":
             # Fallback to safe precision for crypto (min 4 decimals; min 6 if price < $1)
             digits = max(digits, 6 if entry < 1.0 else 4)
-
-    tp_partial = entry + sl_distance if direction == "LONG" else entry - sl_distance
+    if asset_type == "crypto" and entry < 1.0:
+        digits = max(digits, 6)
 
     return {
         "entry":        round(entry, digits),
@@ -2251,11 +2253,15 @@ def calculate_scalp_levels(
         "tp_partial":   round(tp_partial, digits),
         "tp1":          round(tp1, digits),
         "tp2":          round(tp2, digits) if tp2 else None,
+        "structural_tp": round(structural_tp, digits),
+        "structural_rr": structural_rr,
+        "structure_target_close": structure_target_close,
+        "structural_tp_direction_ok": structural_tp_direction_ok,
         "rr":           actual_rr,
         "rr_below_min": rr_below_min,
-        "rr_synthetic": setup_type == "trend_extension",
+        "rr_synthetic": True,
         "sl_distance":  round(sl_distance, digits),
-        "sl_method":    "vp_boundary",
+        "sl_method":    sl_method,
     }
 
 
@@ -3091,9 +3097,11 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
             if levels.get("rr_below_min"):
                 log.warning(
                     f"[SCALP] {display}: {setup['setup_type']} RR {levels['rr']:.2f} < MIN_RR "
-                    f"— surfacing as watchlist candidate (natural TP too close)"
+                    f"- surfacing as watchlist candidate (mechanical 1R TP invalid)"
                 )
                 candidate_fail_reasons.append("rr_below_min")
+            if levels.get("structure_target_close"):
+                candidate_soft_warnings.append("structure_target_close")
 
             # --- ENGINE D FEE GUARD ---
             fee_guard_metrics = {}
@@ -3219,8 +3227,11 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
                 "sl":              levels["sl"],
                 "tp_partial":      levels["tp_partial"],    # Fabio: first scale-out at +1R ("pay yourself first")
                 "rr_partial":      1.0,                     # always 1.0 by construction of tp_partial
-                "tp1":             levels["tp1"],            # structural target (hold after moving SL to BE)
-                "tp2":             levels["tp2"],            # runner / HTF extension
+                "tp1":             levels["tp1"],            # Engine D self-pay target at configured R
+                "tp2":             levels["tp2"],            # optional VP/structure runner
+                "structural_tp":    levels.get("structural_tp"),
+                "structural_rr":    levels.get("structural_rr"),
+                "structure_target_close": levels.get("structure_target_close"),
                 "rr1":             levels["rr"],
                 "sl_distance":     levels["sl_distance"],
                 "sl_method":       levels["sl_method"],

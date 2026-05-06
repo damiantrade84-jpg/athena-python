@@ -2109,6 +2109,12 @@ SCALP_ENGINE:
 
   score_group_overrides: {}     # Engine D-owned per-score-group scalp overrides; legacy NAKED_ENGINE fallback remains diagnostic only
 
+  ATR_SL_ENABLED: true          # Engine D execution SL uses ATR when available; VP levels remain context/runner targets.
+
+  ATR_SL_MULT: 1.5              # ATR multiple for Engine D mechanical scalp stop.
+
+  TP1_R_MULT: 1.0               # Engine D first take-profit/self-pay target in R.
+
   TP1_MAX_RR: 4.0               # Cap TP1 to this multiple of SL distance - prevents unrealistically far targets (0 = disabled)
 
   TREND_EXT_MAX_RR: 0.0         # Optional cap for trend-extension TP1 distance (0 = disabled; preserves current behavior)
