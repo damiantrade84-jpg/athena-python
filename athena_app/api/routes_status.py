@@ -37,6 +37,18 @@ def index():
     return resp
 
 
+def sentinel_prototype():
+    resp = send_from_directory("static/sentinel-prototype", "Sentinel.html")
+    resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    resp.headers["Pragma"] = "no-cache"
+    resp.headers["Expires"] = "0"
+    return resp
+
+
+def sentinel_prototype_asset(filename):
+    return send_from_directory("static/sentinel-prototype", filename)
+
+
 def api_last_scan():
     """Latest full-universe scan kept in memory - survives dashboard tab refresh.
 
@@ -200,6 +212,12 @@ def register_status_routes(app, runtime: SimpleNamespace) -> None:
     log = runtime.log
 
     app.add_url_rule("/", "index", index)
+    app.add_url_rule("/sentinel-prototype/", "sentinel_prototype", sentinel_prototype)
+    app.add_url_rule(
+        "/sentinel-prototype/<path:filename>",
+        "sentinel_prototype_asset",
+        sentinel_prototype_asset,
+    )
     app.add_url_rule("/api/last-scan", "api_last_scan", api_last_scan, methods=["GET"])
     app.add_url_rule(
         "/api/conductor/last",

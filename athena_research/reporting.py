@@ -20,6 +20,8 @@ from athena_research.metrics import StrategyMetrics
 
 log = logging.getLogger(__name__)
 
+MIN_IMPLEMENTATION_TRADES = 30
+
 OUTPUT_COLUMNS = [
     "run_id", "symbol", "asset_class", "timeframe", "zone", "family", "strategy_name",
     "params_str", "direction", "session", "status",
@@ -90,6 +92,12 @@ def _safe_bool(v) -> bool:
     return bool(v)
 
 
+def _safe_str(v) -> str:
+    if v is None or pd.isna(v):
+        return ""
+    return str(v).strip()
+
+
 def _apply_implementation_readiness(df: pd.DataFrame) -> pd.DataFrame:
     """
     Add a separate implementation verdict to research rows.
@@ -111,10 +119,10 @@ def _apply_implementation_readiness(df: pd.DataFrame) -> pd.DataFrame:
 
     for _, row in out.iterrows():
         blockers: list[str] = []
-        status = str(row.get("status", "")).strip().upper()
-        data_source = str(row.get("data_source", "")).strip().lower()
-        backend = str(row.get("simulation_backend", "")).strip().lower()
-        warning = str(row.get("simulation_warning", "")).strip()
+        status = _safe_str(row.get("status", "")).upper()
+        data_source = _safe_str(row.get("data_source", "")).lower()
+        backend = _safe_str(row.get("simulation_backend", "")).lower()
+        warning = _safe_str(row.get("simulation_warning", ""))
         trade_count = _safe_float(row.get("trade_count"))
         net_return = _safe_float(row.get("net_return"))
         oos_return = _safe_float(row.get("oos_return"))
@@ -134,6 +142,8 @@ def _apply_implementation_readiness(df: pd.DataFrame) -> pd.DataFrame:
             blockers.append(f"data_source_not_live_research:{data_source or 'missing'}")
         if not math.isfinite(trade_count) or trade_count <= 0:
             blockers.append("no_completed_trades")
+        elif trade_count < MIN_IMPLEMENTATION_TRADES:
+            blockers.append(f"trade_count_below_{MIN_IMPLEMENTATION_TRADES}")
         if not math.isfinite(net_return) or net_return <= 0:
             blockers.append("net_return_not_positive")
         if not math.isfinite(oos_return) or oos_return <= 0:
@@ -183,17 +193,25 @@ def _normalise_action_recommendations(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def build_operator_decision_summary(df: pd.DataFrame) -> dict:
-    """Build the concise operator-facing action summary for the dashboard."""
+    """Build the operator-facing action summary from deterministic result rows."""
     if df.empty:
         return {
             "headline": "No usable research rows found.",
             "decision": "NEEDS_MORE_DATA",
+            "source": "DETERMINISTIC_RESULTS",
+            "source_of_truth": "research_summary.csv",
             "use_now": [],
+            "research_candidates": [],
+            "blocked_candidates": [],
+            "candidate_groups": [],
             "keep": [],
             "remove_or_demote": [],
             "retest": [],
             "warnings": ["No Research Lab rows were available."],
             "next_step": "Run a new Research Lab discovery.",
+            "implementation_ready_count": 0,
+            "ready_use_add_count": 0,
+            "total_candidate_count": 0,
         }
 
     work = _normalise_action_recommendations(_apply_implementation_readiness(df))
@@ -215,7 +233,7 @@ def build_operator_decision_summary(df: pd.DataFrame) -> dict:
         ascending=[True, False, False, False],
     )
 
-    def _records(frame: pd.DataFrame, limit: int = 8) -> list[dict]:
+    def _records(frame: pd.DataFrame, limit: int = 100) -> list[dict]:
         cols = [
             "recommendation", "engine", "engine_component", "strategy_name", "source_indicator",
             "family", "symbol", "timeframe", "direction", "status", "trade_count",
@@ -225,6 +243,29 @@ def build_operator_decision_summary(df: pd.DataFrame) -> dict:
         available = [c for c in cols if c in frame.columns]
         return json.loads(frame[available].head(limit).fillna("").to_json(orient="records"))
 
+    def _groups(frame: pd.DataFrame, limit: int = 50) -> list[dict]:
+        if frame.empty:
+            return []
+        group_cols = [
+            c for c in [
+                "recommendation", "engine", "engine_component", "strategy_name",
+                "family", "market_group", "pair_group", "timeframe",
+            ]
+            if c in frame.columns
+        ]
+        if not group_cols:
+            return []
+        grouped = frame.groupby(group_cols, dropna=False).agg(
+            configs=("status", "count"),
+            symbols=("symbol", lambda x: ", ".join(sorted({str(v) for v in x if str(v)}))),
+            avg_trades=("trade_count", "mean"),
+            avg_pf=("profit_factor", "mean"),
+            avg_oos=("oos_return", "mean"),
+            avg_robustness=("robustness_score", "mean"),
+        ).reset_index()
+        grouped = grouped.sort_values(["configs", "avg_oos", "avg_robustness"], ascending=False)
+        return json.loads(grouped.head(limit).fillna("").to_json(orient="records"))
+
     add_rows = work[work["recommendation"] == "ADD"]
     keep_rows = work[work["recommendation"] == "KEEP"]
     use_rows = pd.concat([add_rows, keep_rows], ignore_index=False).sort_values(
@@ -233,6 +274,8 @@ def build_operator_decision_summary(df: pd.DataFrame) -> dict:
     )
     remove_rows = work[work["recommendation"].isin(["REMOVE_OR_DEMOTE", "REJECT"])]
     retest_rows = work[work["recommendation"].isin(["RETEST", "WATCHLIST_ONLY"])]
+    ready_use_rows = use_rows[use_rows["implementation_verdict"] == "IMPLEMENTATION_READY"]
+    blocked_use_rows = use_rows[use_rows["implementation_verdict"] != "IMPLEMENTATION_READY"]
 
     warnings: list[str] = []
     warning_col = work.get("simulation_warning", pd.Series("", index=work.index)).fillna("").astype(str)
@@ -244,21 +287,23 @@ def build_operator_decision_summary(df: pd.DataFrame) -> dict:
 
     ready_col = work.get("implementation_verdict", pd.Series("", index=work.index)).fillna("").astype(str)
     ready_count = int((ready_col == "IMPLEMENTATION_READY").sum())
-    if ready_count == 0 and not use_rows.empty:
+    ready_use_count = int(len(ready_use_rows))
+    if ready_use_count == 0 and not use_rows.empty:
         warnings.append("Use/add candidates exist, but none passed implementation readiness yet.")
 
-    if not use_rows.empty:
-        top = use_rows.iloc[0]
+    if not ready_use_rows.empty:
+        top = ready_use_rows.iloc[0]
         decision = "USE_ADD_CANDIDATE"
         headline = (
-            f"Use/add {top.get('strategy_name', 'candidate')} for {top.get('engine', 'research')} "
-            f"on {top.get('timeframe', 'TF')}."
+            f"{len(ready_use_rows)} ready use/add result rows. Top: "
+            f"{top.get('strategy_name', 'candidate')} for {top.get('engine', 'research')} "
+            f"on {top.get('timeframe', 'TF')} / {top.get('symbol', 'symbol')}."
         )
-        next_step = (
-            "Proceed to paper-tool implementation for readiness-passed rows."
-            if ready_count > 0
-            else "Use the add candidate as the chosen direction, but clear listed blockers before paper-tool implementation."
-        )
+        next_step = "Use the implementation-ready rows from this result table as the paper-tool action list."
+    elif not use_rows.empty:
+        decision = "CANDIDATES_BLOCKED"
+        headline = "Candidate rows exist, but none passed implementation readiness."
+        next_step = "Use the listed blockers to decide what data or telemetry must be fixed before implementation."
     elif not keep_rows.empty:
         decision = "KEEP_CURRENT"
         headline = "Keep existing setup; no better add candidate beat it."
@@ -275,13 +320,20 @@ def build_operator_decision_summary(df: pd.DataFrame) -> dict:
     return {
         "headline": headline,
         "decision": decision,
-        "use_now": _records(use_rows),
+        "source": "DETERMINISTIC_RESULTS",
+        "source_of_truth": "research_summary.csv",
+        "use_now": _records(ready_use_rows),
+        "research_candidates": _records(use_rows),
+        "blocked_candidates": _records(blocked_use_rows),
+        "candidate_groups": _groups(ready_use_rows),
         "keep": _records(keep_rows),
         "remove_or_demote": _records(remove_rows),
         "retest": _records(retest_rows),
         "warnings": warnings,
         "next_step": next_step,
         "implementation_ready_count": ready_count,
+        "ready_use_add_count": ready_use_count,
+        "total_candidate_count": int(len(use_rows)),
     }
 
 

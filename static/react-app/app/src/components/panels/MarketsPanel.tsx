@@ -7,14 +7,24 @@ import {
   LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer,
 } from 'recharts';
 import { ErrorBanner } from '@/components/shared';
+import { fmtNum, toNum } from '@/lib/utils';
 import { Globe, Clock, TrendingUp, TrendingDown, Activity } from 'lucide-react';
 
+interface BulkPriceRow {
+  bid?: number | null;
+  ask?: number | null;
+  spread?: number | null;
+  change_pct?: number | null;
+  price?: number | null;
+  changePct?: number | null;
+}
+
 interface BulkPrices {
-  prices: Record<string, { bid: number; ask: number; spread: number; change_pct: number }>;
+  prices: Record<string, BulkPriceRow>;
 }
 
 interface MarketHours {
-  sessions: Record<string, { open: string; close: string; active: boolean; time_to_open?: string; time_to_close?: string }>;
+  sessions: Record<string, { open?: string | boolean; close?: string; active?: boolean; status?: string; note?: string; hours?: string; time_to_open?: string; time_to_close?: string }>;
 }
 
 interface YieldCurve {
@@ -22,7 +32,8 @@ interface YieldCurve {
 }
 
 interface RegimeShift {
-  regimes: Record<string, string>;
+  regimes?: Record<string, string>;
+  [pair: string]: unknown;
 }
 
 interface NewsSentimentItem {
@@ -46,8 +57,15 @@ export default function MarketsPanel() {
 
   const priceEntries = prices?.prices ? Object.entries(prices.prices) : [];
   const yieldData = yieldCurve?.maturities ? Object.entries(yieldCurve.maturities).map(([k, v]) => ({ maturity: k, yield: v })) : [];
+  const regimeMap = (regime?.regimes ?? regime ?? {}) as Record<string, unknown>;
 
   const sessionOrder = ['london', 'new_york', 'tokyo', 'sydney'];
+  const sessionActive = (data?: MarketHours['sessions'][string]) => Boolean((data?.active ?? data?.open === true) || data?.status === 'Active');
+  const sessionWindow = (data?: MarketHours['sessions'][string]) => {
+    if (!data) return '--:--';
+    if (typeof data.open === 'string' && data.close) return `${data.open}-${data.close}`;
+    return data.hours || data.status || data.note || '--:--';
+  };
 
   return (
     <div className="space-y-5">
@@ -64,14 +82,14 @@ export default function MarketsPanel() {
           <div className="flex items-center justify-between">
             {sessionOrder.map(session => {
               const data = hours?.sessions?.[session];
-              const active = data?.active;
+              const active = sessionActive(data);
               return (
                 <div key={session} className={`flex items-center gap-2 px-3 py-2 rounded-md ${active ? 'bg-primary/10' : 'bg-muted/30'}`}>
                   <Globe className={`w-3.5 h-3.5 ${active ? 'text-primary' : 'text-muted-foreground'}`} />
                   <div>
                     <p className={`text-[10px] font-bold uppercase ${active ? 'text-primary' : 'text-muted-foreground'}`}>{session.replace('_', ' ')}</p>
                     <p className="text-[10px] font-mono text-muted-foreground">
-                      {data ? `${data.open}-${data.close}` : '--:--'}
+                      {sessionWindow(data)}
                     </p>
                   </div>
                   {active && <div className="w-1.5 h-1.5 rounded-full bg-primary animate-pulse" />}
@@ -110,30 +128,33 @@ export default function MarketsPanel() {
                     </tr>
                   </thead>
                   <tbody>
-                    {priceEntries.map(([pair, data]) => (
-                      <tr key={pair} className="border-b border-border/20 hover:bg-muted/30 transition-colors">
-                        <td className="py-2 text-xs font-mono font-bold">{pair}</td>
-                        <td className="py-2 text-xs font-mono text-right">{data.bid.toFixed(5)}</td>
-                        <td className="py-2 text-xs font-mono text-right">{data.ask.toFixed(5)}</td>
-                        <td className="py-2 text-xs font-mono text-right">{
-                          (() => {
-                            const p = String(pair).toUpperCase();
-                            const isJpy = p.includes('JPY');
-                            const isCrypto = p.includes('BTC') || p.includes('ETH') || p.includes('SOL') || p.includes('BNB') || p.includes('DOGE') || p.includes('SHIB');
-                            const mult = isCrypto ? 1 : isJpy ? 100 : 10000;
-                            return (data.spread * mult).toFixed(1);
-                          })()
-                        }</td>
-                        <td className={`py-2 text-xs font-mono font-bold text-right ${data.change_pct >= 0 ? 'text-long' : 'text-short'}`}>
-                          {data.change_pct >= 0 ? '+' : ''}{data.change_pct.toFixed(2)}%
-                        </td>
-                        <td className="py-2">
-                          <Badge variant="outline" className="text-[9px]">
-                            {regime?.regimes?.[pair] || 'N/A'}
-                          </Badge>
-                        </td>
-                      </tr>
-                    ))}
+                    {priceEntries.map(([pair, data]) => {
+                      const p = String(pair).toUpperCase();
+                      const isJpy = p.includes('JPY');
+                      const isCrypto = p.includes('BTC') || p.includes('ETH') || p.includes('SOL') || p.includes('BNB') || p.includes('DOGE') || p.includes('SHIB');
+                      const mult = isCrypto ? 1 : isJpy ? 100 : 10000;
+                      const bid = toNum(data.bid ?? data.price, NaN);
+                      const ask = toNum(data.ask ?? data.price, NaN);
+                      const spread = data.spread != null ? toNum(data.spread, NaN) : Math.abs(ask - bid);
+                      const changePct = toNum(data.change_pct ?? data.changePct, NaN);
+                      const changeText = Number.isFinite(changePct) ? `${changePct >= 0 ? '+' : ''}${fmtNum(changePct, 2)}%` : 'N/A';
+                      return (
+                        <tr key={pair} className="border-b border-border/20 hover:bg-muted/30 transition-colors">
+                          <td className="py-2 text-xs font-mono font-bold">{pair}</td>
+                          <td className="py-2 text-xs font-mono text-right">{fmtNum(bid, 5, 'N/A')}</td>
+                          <td className="py-2 text-xs font-mono text-right">{fmtNum(ask, 5, 'N/A')}</td>
+                          <td className="py-2 text-xs font-mono text-right">{Number.isFinite(spread) ? fmtNum(spread * mult, 1, 'N/A') : 'N/A'}</td>
+                          <td className={`py-2 text-xs font-mono font-bold text-right ${changePct >= 0 ? 'text-long' : 'text-short'}`}>
+                            {changeText}
+                          </td>
+                          <td className="py-2">
+                            <Badge variant="outline" className="text-[9px]">
+                              {String(regimeMap[pair] || 'N/A')}
+                            </Badge>
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               ) : (

@@ -10,7 +10,7 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { ErrorBanner } from '@/components/shared';
-import { Microscope, Play, Rocket, History, ListChecks, Brain } from 'lucide-react';
+import { Microscope, Play, Rocket, History, ListChecks } from 'lucide-react';
 import { fmtNum } from '@/lib/utils';
 
 interface RunSummary {
@@ -82,13 +82,20 @@ interface RankedResponse {
 interface OperatorSummary {
   headline?: string;
   decision?: string;
+  source?: string;
+  source_of_truth?: string;
   use_now?: Array<Record<string, unknown>>;
+  research_candidates?: Array<Record<string, unknown>>;
+  blocked_candidates?: Array<Record<string, unknown>>;
+  candidate_groups?: Array<Record<string, unknown>>;
   keep?: Array<Record<string, unknown>>;
   remove_or_demote?: Array<Record<string, unknown>>;
   retest?: Array<Record<string, unknown>>;
   warnings?: string[];
   next_step?: string;
   implementation_ready_count?: number;
+  ready_use_add_count?: number;
+  total_candidate_count?: number;
 }
 
 interface StartRunResponse {
@@ -96,14 +103,6 @@ interface StartRunResponse {
   mode?: string;
   status?: string;
   error?: string;
-}
-
-interface AiReviewResponse {
-  ai_review?: string;
-  summary?: string;
-  recommendation?: string;
-  error?: string;
-  [k: string]: unknown;
 }
 
 const MARKET_GROUPS = [
@@ -191,13 +190,11 @@ export default function ResearchLabPanel() {
   const [timeframes, setTimeframes] = useState('');
   const [families, setFamilies] = useState('');
   const [strategies, setStrategies] = useState('');
-  const [aiReview, setAiReview] = useState(true);
 
   // Run lifecycle
   const [currentRunId, setCurrentRunId] = useState<string | null>(null);
   const [runStatus, setRunStatus] = useState<RunStatusResponse | null>(null);
   const [ranked, setRanked] = useState<RankedResponse | null>(null);
-  const [aiReviewData, setAiReviewData] = useState<AiReviewResponse | null>(null);
   const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const { data: runsData, loading: runsLoading, error: runsError, refresh: refreshRuns } =
@@ -223,20 +220,6 @@ export default function ResearchLabPanel() {
     }
   }, [showToast]);
 
-  const fetchAiReview = useCallback(async (runId: string) => {
-    try {
-      const res = await fetch(`/api/research-lab/ai-review/${runId}`);
-      if (!res.ok) {
-        setAiReviewData(null);
-        return;
-      }
-      const json = (await res.json()) as AiReviewResponse;
-      setAiReviewData(json);
-    } catch {
-      // ai-review endpoint may legitimately return 404 when not generated; ignore
-    }
-  }, []);
-
   const pollRun = useCallback((runId: string) => {
     stopPolling();
     pollTimerRef.current = setInterval(async () => {
@@ -247,7 +230,6 @@ export default function ResearchLabPanel() {
         if (json.status === 'complete') {
           stopPolling();
           await fetchRanked(runId);
-          await fetchAiReview(runId);
           refreshRuns();
           showToast(`Run ${runId} complete — ${json.results_count ?? json.summary?.total ?? '?'} results`, 'success');
         } else if (json.status === 'failed') {
@@ -261,13 +243,12 @@ export default function ResearchLabPanel() {
         console.warn('[research-lab] poll error', e);
       }
     }, 3000);
-  }, [stopPolling, fetchRanked, fetchAiReview, refreshRuns, showToast]);
+  }, [stopPolling, fetchRanked, refreshRuns, showToast]);
 
   useEffect(() => () => stopPolling(), [stopPolling]);
 
   const startAutopilot = useCallback(async () => {
     setRanked(null);
-    setAiReviewData(null);
     setRunStatus(null);
     const res = await postStyleRun('/api/research-lab/style-run', {
       market_group: marketGroup,
@@ -285,12 +266,11 @@ export default function ResearchLabPanel() {
 
   const startManual = useCallback(async () => {
     setRanked(null);
-    setAiReviewData(null);
     setRunStatus(null);
     const payload: Record<string, unknown> = {
       mode,
       direction,
-      run_ai_review: aiReview,
+      run_ai_review: false,
     };
     const csv = (s: string) => s.split(',').map((x) => x.trim()).filter(Boolean);
     if (symbols.trim()) payload.symbols = csv(symbols);
@@ -305,48 +285,26 @@ export default function ResearchLabPanel() {
     setCurrentRunId(res.run_id);
     showToast(`Run started: ${res.run_id}`, 'info');
     pollRun(res.run_id);
-  }, [postManualRun, mode, direction, aiReview, symbols, timeframes, families, strategies, showToast, pollRun]);
+  }, [postManualRun, mode, direction, symbols, timeframes, families, strategies, showToast, pollRun]);
 
   const openRun = useCallback(async (runId: string) => {
     stopPolling();
     setCurrentRunId(runId);
     setRunStatus(null);
     setRanked(null);
-    setAiReviewData(null);
     try {
       const res = await fetch(`/api/research-lab/run/${runId}`);
       const json = (await res.json()) as RunStatusResponse;
       setRunStatus(json);
       if (json.status === 'complete') {
         await fetchRanked(runId);
-        await fetchAiReview(runId);
       } else if (json.status === 'running' || json.status === 'queued') {
         pollRun(runId);
       }
     } catch (e) {
       showToast(`Failed to open run: ${(e as Error).message}`, 'error');
     }
-  }, [stopPolling, fetchRanked, fetchAiReview, pollRun, showToast]);
-
-  const triggerAiAnalyze = useCallback(async () => {
-    if (!currentRunId) return;
-    try {
-      const res = await fetch(`/api/research-lab/analyze/${currentRunId}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({}),
-      });
-      const json = (await res.json()) as AiReviewResponse;
-      if (json.error) {
-        showToast(`AI analysis failed: ${json.error}`, 'error');
-      } else {
-        setAiReviewData(json);
-        showToast('AI analysis complete', 'success');
-      }
-    } catch (e) {
-      showToast(`AI analysis failed: ${(e as Error).message}`, 'error');
-    }
-  }, [currentRunId, showToast]);
+  }, [stopPolling, fetchRanked, pollRun, showToast]);
 
   const sortedRuns = useMemo(() => (runsData?.runs || []).slice(), [runsData]);
 
@@ -443,10 +401,6 @@ export default function ResearchLabPanel() {
                   <Input value={families} onChange={(e) => setFamilies(e.target.value)} className="h-8 text-xs font-mono" placeholder="Families (e.g. trend_momentum, volatility)" />
                   <Input value={strategies} onChange={(e) => setStrategies(e.target.value)} className="h-8 text-xs font-mono" placeholder="Strategies (e.g. macd_direction, bollinger_touch)" />
                 </div>
-                <label className="text-[11px] text-muted-foreground flex items-center gap-2 col-span-2">
-                  <input type="checkbox" checked={aiReview} onChange={(e) => setAiReview(e.target.checked)} />
-                  Run AI review on completion
-                </label>
               </div>
               <Button size="sm" className="h-8 gap-1 text-xs" onClick={startManual} disabled={manualStarting}>
                 <Play className="w-3 h-3" />
@@ -537,9 +491,6 @@ export default function ResearchLabPanel() {
                     <Button size="sm" variant="outline" className="h-7 gap-1 text-[10px]" onClick={() => fetchRanked(currentRunId)}>
                       Refresh ranked
                     </Button>
-                    <Button size="sm" variant="outline" className="h-7 gap-1 text-[10px]" onClick={triggerAiAnalyze}>
-                      <Brain className="w-3 h-3" /> Run AI analysis
-                    </Button>
                     <a
                       className="text-[10px] underline text-muted-foreground"
                       href={`/api/research-lab/download/${currentRunId}/research_report.md`}
@@ -558,7 +509,7 @@ export default function ResearchLabPanel() {
               <CardHeader className="pb-2">
                 <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Rajdhani', sans-serif", letterSpacing: '0.12em' }}>
                   <ListChecks className="w-4 h-4 text-primary" />
-                  Decision Summary
+                  Results Summary
                   <Badge className={`text-[10px] ${ranked.operator_summary.decision === 'USE_ADD_CANDIDATE' ? 'badge-long' : ranked.operator_summary.decision === 'REMOVE_OR_DEMOTE' ? 'badge-short' : 'badge-neutral'}`}>
                     {ranked.operator_summary.decision || 'NEEDS_MORE_DATA'}
                   </Badge>
@@ -566,19 +517,60 @@ export default function ResearchLabPanel() {
               </CardHeader>
               <CardContent className="space-y-3 text-xs">
                 <p className="text-sm font-medium">{ranked.operator_summary.headline || 'No decision summary available.'}</p>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <Badge className="badge-neutral text-[10px]">{ranked.operator_summary.source || 'DETERMINISTIC_RESULTS'}</Badge>
+                  <span className="text-[10px] text-muted-foreground">
+                    Source: <span className="font-mono">{ranked.operator_summary.source_of_truth || 'research_summary.csv'}</span>
+                  </span>
+                  <span className="text-[10px] text-muted-foreground">
+                    Ready use/add: <span className="font-mono">{ranked.operator_summary.ready_use_add_count ?? ranked.operator_summary.use_now?.length ?? 0}</span>
+                    {' / '}
+                    Total ready: <span className="font-mono">{ranked.operator_summary.implementation_ready_count ?? 0}</span>
+                    {' / '}
+                    Candidate rows: <span className="font-mono">{ranked.operator_summary.total_candidate_count ?? 0}</span>
+                  </span>
+                </div>
                 {ranked.operator_summary.next_step && (
                   <p className="text-[11px] text-muted-foreground">{ranked.operator_summary.next_step}</p>
                 )}
                 {(ranked.operator_summary.use_now || []).length > 0 && (
                   <div>
-                    <p className="text-[10px] uppercase text-muted-foreground mb-1">Use / Add Candidates</p>
+                    <p className="text-[10px] uppercase text-muted-foreground mb-1">Implementation-Ready Use / Add Rows</p>
                     <div className="grid gap-1">
-                      {(ranked.operator_summary.use_now || []).slice(0, 6).map((row, i) => (
+                      {(ranked.operator_summary.use_now || []).slice(0, 50).map((row, i) => (
                         <div key={i} className="flex items-center justify-between gap-3 border-b border-border/20 py-1">
                           <span>{textValue(row, 'strategy_name')} on {textValue(row, 'timeframe')} / {textValue(row, 'symbol')}</span>
                           <span className="font-mono text-[10px] text-muted-foreground">
                             PF {numberValue(row, 'profit_factor') != null ? fmtNum(numberValue(row, 'profit_factor') as number, 2) : '—'} · OOS {numberValue(row, 'oos_return') != null ? fmtNum(numberValue(row, 'oos_return') as number, 3) : '—'}
                           </span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {(ranked.operator_summary.candidate_groups || []).length > 0 && (
+                  <div>
+                    <p className="text-[10px] uppercase text-muted-foreground mb-1">Ready Groups</p>
+                    <div className="grid gap-1">
+                      {(ranked.operator_summary.candidate_groups || []).slice(0, 20).map((row, i) => (
+                        <div key={i} className="flex items-center justify-between gap-3 border-b border-border/20 py-1">
+                          <span>{textValue(row, 'engine')} / {textValue(row, 'engine_component')} / {textValue(row, 'strategy_name')} / {textValue(row, 'timeframe')}</span>
+                          <span className="font-mono text-[10px] text-muted-foreground">
+                            {textValue(row, 'configs')} configs · {textValue(row, 'symbols')}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {(ranked.operator_summary.blocked_candidates || []).length > 0 && (
+                  <div>
+                    <p className="text-[10px] uppercase text-muted-foreground mb-1">Blocked Candidates</p>
+                    <div className="grid gap-1">
+                      {(ranked.operator_summary.blocked_candidates || []).slice(0, 20).map((row, i) => (
+                        <div key={i} className="grid grid-cols-[1fr_1.4fr] gap-3 border-b border-border/20 py-1">
+                          <span>{textValue(row, 'strategy_name')} on {textValue(row, 'timeframe')} / {textValue(row, 'symbol')}</span>
+                          <span className="font-mono text-[10px] text-muted-foreground">{textValue(row, 'implementation_blockers')}</span>
                         </div>
                       ))}
                     </div>
@@ -633,6 +625,8 @@ export default function ResearchLabPanel() {
                       {(ranked.ranked || []).map((row, i) => {
                         const strong = row.status === 'STRONG_CANDIDATE';
                         const weak = row.status === 'WEAK_CANDIDATE';
+                        const readiness = String(row.implementation_verdict || '—');
+                        const readinessBlockers = String(row.implementation_blockers || '');
                         return (
                           <tr key={i} className="border-b border-border/20 hover:bg-muted/30">
                             <td className="py-2 text-[11px] font-mono">{row.symbol || '—'}</td>
@@ -643,6 +637,14 @@ export default function ResearchLabPanel() {
                             <td className="py-2 text-[10px]">
                               <Badge className={`text-[10px] ${strong ? 'badge-long' : weak ? 'badge-neutral' : 'badge-short'}`}>
                                 {row.status || '—'}
+                              </Badge>
+                            </td>
+                            <td className="py-2 text-[10px]">
+                              <Badge
+                                title={readinessBlockers}
+                                className={`text-[10px] ${readiness === 'IMPLEMENTATION_READY' ? 'badge-long' : 'badge-short'}`}
+                              >
+                                {readiness}
                               </Badge>
                             </td>
                             <td className="py-2 text-[10px] font-mono text-right">{row.trades ?? row.trade_count ?? '—'}</td>
@@ -679,6 +681,7 @@ export default function ResearchLabPanel() {
                         <th className="text-[10px] uppercase py-2 text-muted-foreground">Symbol</th>
                         <th className="text-[10px] uppercase py-2 text-muted-foreground">TF</th>
                         <th className="text-[10px] uppercase py-2 text-muted-foreground">Status</th>
+                        <th className="text-[10px] uppercase py-2 text-muted-foreground">Ready</th>
                         <th className="text-[10px] uppercase py-2 text-muted-foreground">Ready</th>
                         <th className="text-[10px] uppercase py-2 text-muted-foreground text-right">Trades</th>
                         <th className="text-[10px] uppercase py-2 text-muted-foreground text-right">PF</th>
@@ -767,35 +770,6 @@ export default function ResearchLabPanel() {
             </div>
           )}
 
-          {aiReviewData && (
-            <Card className="border-border/60 bg-card/50">
-              <CardHeader className="pb-2">
-                <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Rajdhani', sans-serif", letterSpacing: '0.12em' }}>
-                  <Brain className="w-4 h-4 text-primary" />
-                  AI Review
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-2 text-xs">
-                {aiReviewData.summary && (
-                  <div>
-                    <p className="text-[10px] uppercase text-muted-foreground">Summary</p>
-                    <p className="whitespace-pre-wrap">{aiReviewData.summary}</p>
-                  </div>
-                )}
-                {aiReviewData.recommendation && (
-                  <div>
-                    <p className="text-[10px] uppercase text-muted-foreground">Recommendation</p>
-                    <p className="whitespace-pre-wrap">{aiReviewData.recommendation}</p>
-                  </div>
-                )}
-                {aiReviewData.ai_review && (
-                  <pre className="text-[10px] font-mono whitespace-pre-wrap p-2 bg-muted/20 rounded border border-border/40 max-h-72 overflow-y-auto">
-                    {aiReviewData.ai_review}
-                  </pre>
-                )}
-              </CardContent>
-            </Card>
-          )}
         </>
       )}
     </div>

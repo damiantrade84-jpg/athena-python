@@ -908,7 +908,9 @@ def register_research_lab_routes(app) -> None:
         """Return ranked strategies JSON for dashboard display."""
         import pandas as pd
         from athena_research.reporting import (
+            _apply_implementation_readiness,
             _normalise_action_recommendations,
+            _recommendation_table,
             build_operator_decision_summary,
         )
 
@@ -936,8 +938,21 @@ def register_research_lab_routes(app) -> None:
                     operator_source = pd.read_csv(summary_path)
                 except Exception:
                     operator_source = df.copy()
-            if rec_path.exists():
-                rec_df = _normalise_action_recommendations(pd.read_csv(rec_path)).head(50)
+            ready_ranked = _apply_implementation_readiness(
+                _normalise_action_recommendations(df)
+            )
+            records = json.loads(ready_ranked.fillna("").to_json(orient="records"))
+            if summary_path.exists():
+                rec_df = _recommendation_table(
+                    _apply_implementation_readiness(
+                        _normalise_action_recommendations(operator_source)
+                    )
+                ).head(50)
+                recommendations = json.loads(rec_df.fillna("").to_json(orient="records"))
+            elif rec_path.exists():
+                rec_df = _apply_implementation_readiness(
+                    _normalise_action_recommendations(pd.read_csv(rec_path))
+                ).head(50)
                 recommendations = json.loads(rec_df.fillna("").to_json(orient="records"))
             if next_path.exists():
                 next_df = pd.read_csv(next_path).head(50)
