@@ -17,6 +17,45 @@ import { Activity, Play, Zap, AlertTriangle, Layers } from 'lucide-react';
 import { fmtNum, toNum } from '@/lib/utils';
 import { fmtPrice } from '@/lib/athenaFormat';
 
+interface DataFidelity {
+  vp_source?: string;
+  vp_fidelity?: string;
+  vp_is_proxy?: boolean;
+  cvd_source?: string;
+  cvd_fidelity?: string;
+  cvd_is_proxy?: boolean;
+  absorption_source?: string;
+  absorption_fidelity?: string;
+  absorption_is_proxy?: boolean;
+  aggression_uses_real_order_flow?: boolean;
+  notes?: string[];
+}
+
+interface AnchorCandidate {
+  valid?: boolean;
+  reason?: string;
+  bars?: number;
+  direction?: string;
+  start_time?: string | null;
+  end_time?: string | null;
+  heuristic?: string;
+}
+
+interface ProfileAnchorShadow {
+  report_only?: boolean;
+  active_anchor?: AnchorCandidate & {
+    mode?: string;
+    lookback_bars?: number;
+    volume_source?: string;
+  };
+  fixed_lookback_anchor?: AnchorCandidate & {
+    mode?: string;
+    lookback_bars?: number;
+    volume_source?: string;
+  };
+  candidates?: Record<string, AnchorCandidate>;
+}
+
 /**
  * Engine D / Scalp Lab signal — server-normalised in athena.py::_scalp_ui_signal().
  * Note: `symbol` is null for MT5 pairs; key by `display||pair||symbol`.
@@ -50,10 +89,40 @@ interface ScalpSignal {
   vp_vah?: number;
   vp_val?: number;
   vp_lvn_count?: number;
+  vp_volume_source?: string;
+  vp_bucket_count?: number;
+  vp_fidelity?: string;
+  vp_is_proxy?: boolean;
+  vp_uses_real_trade_buckets?: boolean;
   absorption_count?: number;
+  absorption_source?: string;
+  absorption_fidelity?: string;
+  absorption_is_proxy?: boolean;
   cvd_direction?: string;
   cvd_slope?: number;
+  cvd_source?: string;
+  cvd_bucket_count?: number;
+  cvd_fidelity?: string;
+  cvd_is_proxy?: boolean;
+  cvd_uses_real_trade_buckets?: boolean;
   aaa_complete?: boolean;
+  aggression_source?: string;
+  aggression_source_raw?: string;
+  aggression_source_is_proxy?: boolean;
+  aggression_confirmed?: boolean;
+  aggression_uses_real_order_flow?: boolean;
+  data_fidelity?: DataFidelity;
+  strict_fabio_pass?: boolean;
+  strict_fabio_reason?: string;
+  strict_fabio_missing_pillars?: string[];
+  strict_fabio_pillars?: Record<string, boolean>;
+  current_vs_strict_status?: string;
+  aggression_components?: Record<string, boolean>;
+  profile_anchor_mode?: string;
+  profile_anchor_bars?: number;
+  profile_anchor_start?: string | null;
+  profile_anchor_end?: string | null;
+  profile_anchor_shadow?: ProfileAnchorShadow;
   vwap?: number;
   htf_bias?: string;
   htf_bias_tf?: string;
@@ -453,6 +522,25 @@ function ScalpCard({
         {sig.cvd_direction && (
           <Badge variant="outline" className="text-[10px] uppercase">cvd {sig.cvd_direction}</Badge>
         )}
+        {sig.vp_volume_source && (
+          <Badge variant="outline" className="text-[10px]">vp {sig.vp_volume_source}</Badge>
+        )}
+        {sig.cvd_source && (
+          <Badge variant="outline" className="text-[10px]">cvd src {sig.cvd_source}</Badge>
+        )}
+        {sig.aggression_source_is_proxy != null && (
+          <Badge variant="outline" className={`text-[10px] ${sig.aggression_source_is_proxy ? 'text-short' : 'text-long'}`}>
+            {sig.aggression_source_is_proxy ? 'proxy flow' : 'trade flow'}
+          </Badge>
+        )}
+        {sig.strict_fabio_pass != null && (
+          <Badge variant="outline" className={`text-[10px] ${sig.strict_fabio_pass ? 'text-long' : 'text-short'}`}>
+            strict {sig.strict_fabio_pass ? 'yes' : 'no'}
+          </Badge>
+        )}
+        {sig.current_vs_strict_status && (
+          <Badge variant="outline" className="text-[10px]">{sig.current_vs_strict_status}</Badge>
+        )}
         {sig.htf_bias && (
           <Badge variant="outline" className="text-[10px] uppercase">{sig.htf_bias_tf || 'HTF'}: {sig.htf_bias}</Badge>
         )}
@@ -483,9 +571,31 @@ function ScalpCard({
   );
 }
 
+function boolText(value?: boolean): string {
+  if (value == null) return '-';
+  return value ? 'yes' : 'no';
+}
+
+function anchorCandidateText(candidate?: AnchorCandidate): string {
+  if (!candidate) return '-';
+  if (candidate.valid === false) return candidate.reason || 'not available';
+  const bits = [];
+  if (candidate.direction) bits.push(candidate.direction);
+  if (candidate.bars != null) bits.push(`${candidate.bars} bars`);
+  if (candidate.heuristic) bits.push(candidate.heuristic);
+  return bits.join(' / ') || 'valid';
+}
+
 function ScalpDetail({ sig, onExecute }: { sig: ScalpSignal; onExecute: (s: ScalpSignal) => void }) {
   const display = sig.display || sig.pair || sig.symbol || '—';
   const grade = String(sig.ai_grade || 'D').toUpperCase();
+  const activeAnchor = sig.profile_anchor_shadow?.active_anchor;
+  const fixedAnchor = sig.profile_anchor_shadow?.fixed_lookback_anchor;
+  const anchorCandidates = sig.profile_anchor_shadow?.candidates || {};
+  const vpProxy = sig.vp_is_proxy ?? sig.data_fidelity?.vp_is_proxy;
+  const cvdProxy = sig.cvd_is_proxy ?? sig.data_fidelity?.cvd_is_proxy;
+  const absorptionProxy = sig.absorption_is_proxy ?? sig.data_fidelity?.absorption_is_proxy;
+  const realOrderFlow = sig.aggression_uses_real_order_flow ?? sig.data_fidelity?.aggression_uses_real_order_flow;
   return (
     <div className="space-y-3">
       <div className="p-3 rounded-md bg-muted/30 space-y-2">
@@ -524,6 +634,20 @@ function ScalpDetail({ sig, onExecute }: { sig: ScalpSignal; onExecute: (s: Scal
             <Row k="POC" v={fmtNum(sig.vp_poc, 6)} />
             <Row k="VAL" v={fmtNum(sig.vp_val, 6)} />
             <Row k="LVN count" v={sig.vp_lvn_count ?? '—'} />
+            <Row k="VP source" v={sig.vp_volume_source || '—'} />
+            <Row k="VP buckets" v={sig.vp_bucket_count ?? '—'} />
+            <Row k="VP fidelity" v={sig.vp_fidelity || sig.data_fidelity?.vp_fidelity || '—'} />
+            <Row
+              k="VP proxy"
+              v={boolText(vpProxy)}
+              accent={vpProxy == null ? undefined : vpProxy ? 'short' : 'long'}
+            />
+            <Row k="Anchor mode" v={sig.profile_anchor_mode || activeAnchor?.mode || '—'} />
+            <Row k="Anchor bars" v={sig.profile_anchor_bars ?? activeAnchor?.bars ?? '—'} />
+            <Row k="Fixed lookback" v={fixedAnchor?.bars != null ? `${fixedAnchor.bars} bars` : '—'} />
+            <Row k="Prior anchor" v={anchorCandidateText(anchorCandidates.prior_session)} />
+            <Row k="Impulse anchor" v={anchorCandidateText(anchorCandidates.impulse_leg)} />
+            <Row k="Reclaim anchor" v={anchorCandidateText(anchorCandidates.reclaim_leg)} />
             <Row k="Market state" v={sig.market_state || '—'} />
             <Row k="Zone" v={`${sig.zone_type || '—'}${sig.zone_level != null ? ` @ ${fmtNum(sig.zone_level, 5)}` : ''}`} />
           </div>
@@ -536,8 +660,47 @@ function ScalpDetail({ sig, onExecute }: { sig: ScalpSignal; onExecute: (s: Scal
           <p className="text-[10px] uppercase text-muted-foreground">Order Flow (Aggression)</p>
           <div className="grid grid-cols-2 gap-2 text-xs">
             <Row k="Absorption count" v={sig.absorption_count ?? '—'} />
+            <Row k="Absorption src" v={sig.absorption_source || sig.data_fidelity?.absorption_source || '—'} />
+            <Row k="Absorption fidelity" v={sig.absorption_fidelity || sig.data_fidelity?.absorption_fidelity || '—'} />
+            <Row
+              k="Absorption proxy"
+              v={boolText(absorptionProxy)}
+              accent={absorptionProxy == null ? undefined : absorptionProxy ? 'short' : 'long'}
+            />
             <Row k="CVD direction" v={sig.cvd_direction || '—'} />
             <Row k="CVD slope" v={fmtNum(sig.cvd_slope, 4)} />
+            <Row k="CVD source" v={sig.cvd_source || '—'} />
+            <Row k="CVD buckets" v={sig.cvd_bucket_count ?? '—'} />
+            <Row k="CVD fidelity" v={sig.cvd_fidelity || sig.data_fidelity?.cvd_fidelity || '—'} />
+            <Row
+              k="CVD proxy"
+              v={boolText(cvdProxy)}
+              accent={cvdProxy == null ? undefined : cvdProxy ? 'short' : 'long'}
+            />
+            <Row k="Aggression source" v={sig.aggression_source || '—'} />
+            <Row
+              k="Real order flow"
+              v={boolText(realOrderFlow)}
+              accent={realOrderFlow == null ? undefined : realOrderFlow ? 'long' : 'short'}
+            />
+            <Row
+              k="Aggression confirmed"
+              v={sig.aggression_confirmed == null ? '—' : sig.aggression_confirmed ? 'yes' : 'no'}
+              accent={sig.aggression_confirmed == null ? undefined : sig.aggression_confirmed ? 'long' : 'short'}
+            />
+            <Row
+              k="Strict Fabio pass"
+              v={sig.strict_fabio_pass == null ? '—' : sig.strict_fabio_pass ? 'yes' : 'no'}
+              accent={sig.strict_fabio_pass == null ? undefined : sig.strict_fabio_pass ? 'long' : 'short'}
+            />
+            <Row k="Strict reason" v={sig.strict_fabio_reason || '—'} />
+            <Row k="Missing pillars" v={(sig.strict_fabio_missing_pillars || []).join(', ') || '—'} />
+            <Row k="Current vs strict" v={sig.current_vs_strict_status || '—'} />
+            <Row
+              k="Proxy flow"
+              v={sig.aggression_source_is_proxy == null ? '—' : sig.aggression_source_is_proxy ? 'yes' : 'no'}
+              accent={sig.aggression_source_is_proxy == null ? undefined : sig.aggression_source_is_proxy ? 'short' : 'long'}
+            />
             <Row k="AAA complete" v={sig.aaa_complete ? 'yes' : 'no'} accent={sig.aaa_complete ? 'long' : undefined} />
             <Row k="VWAP" v={fmtNum(sig.vwap, 6)} />
             <Row k="HTF bias" v={`${sig.htf_bias || '—'}${sig.htf_bias_tf ? ` (${sig.htf_bias_tf})` : ''}`} />

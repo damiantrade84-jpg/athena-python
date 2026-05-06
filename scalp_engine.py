@@ -1318,6 +1318,432 @@ def _check_trade_bucket_cvd(display: str, reference_ts=None, require_fresh: bool
         return {"direction": None, "cvd_value": 0, "cvd_slope": 0, "source": "error"}
 
 
+def _engine_d_aggression_fidelity(
+    absorption: dict,
+    cvd: dict,
+    aaa: dict,
+    vwap: dict,
+    setup_direction: Optional[str] = None,
+) -> dict:
+    """Expose whether Engine D aggression evidence is true flow or proxy data."""
+    cvd_source_raw = str((cvd or {}).get("source") or "candles").strip().lower()
+    source_aliases = {
+        "binance_aggtrade": "binance_aggtrade",
+        "candles": "candle_proxy",
+        "candle": "candle_proxy",
+        "disabled": "disabled",
+        "error": "error",
+        "unavailable": "unavailable",
+        "mt5_tick": "mt5_tick_proxy",
+        "range_proxy": "range_proxy",
+    }
+    aggression_source = source_aliases.get(cvd_source_raw, f"{cvd_source_raw}_proxy")
+    source_is_proxy = aggression_source != "binance_aggtrade"
+
+    setup_dir = str(setup_direction or "").upper()
+    cvd_dir = str((cvd or {}).get("direction") or "").upper()
+    aaa_dir = str((aaa or {}).get("direction") or "").upper()
+    vwap_dir = str((vwap or {}).get("lean") or "").upper()
+
+    cvd_aligned = bool(cvd_dir) and (not setup_dir or cvd_dir == setup_dir)
+    aaa_complete = bool((aaa or {}).get("complete"))
+    aaa_aligned = aaa_complete and (not setup_dir or not aaa_dir or aaa_dir == setup_dir)
+    absorption_confirmed = bool((absorption or {}).get("detected"))
+    vwap_aligned = bool(vwap_dir) and (not setup_dir or vwap_dir == setup_dir)
+
+    aggression_confirmed = bool(absorption_confirmed or cvd_aligned or aaa_aligned)
+    strict_fabio_pass = bool(
+        aggression_source == "binance_aggtrade"
+        and not source_is_proxy
+        and (cvd_aligned or aaa_aligned)
+    )
+
+    return {
+        "aggression_source": aggression_source,
+        "aggression_source_raw": cvd_source_raw,
+        "aggression_source_is_proxy": source_is_proxy,
+        "aggression_confirmed": aggression_confirmed,
+        "strict_fabio_pass": strict_fabio_pass,
+        "aggression_components": {
+            "absorption_confirmed": absorption_confirmed,
+            "cvd_aligned": cvd_aligned,
+            "aaa_aligned": aaa_aligned,
+            "vwap_aligned": vwap_aligned,
+        },
+    }
+
+
+def _engine_d_strict_fabio_shadow(
+    *,
+    market_state: str,
+    price_loc: dict,
+    setup: dict,
+    aggression_fidelity: dict,
+    current_gate_result: Optional[str] = None,
+) -> dict:
+    """Report-only strict three-pillar Fabio check; does not gate execution."""
+    setup_type = str((setup or {}).get("setup_type") or "").lower()
+    location = str((price_loc or {}).get("location") or "").lower()
+    market = str(market_state or "").lower()
+
+    if setup_type == "mean_reversion":
+        market_ok = market == "balance"
+        location_ok = location in {"at_vah", "at_val", "outside_va"}
+    elif setup_type == "trend_continuation":
+        market_ok = market == "imbalance"
+        location_ok = location == "at_lvn"
+    elif setup_type == "trend_extension":
+        market_ok = market == "imbalance"
+        location_ok = location == "outside_va"
+    else:
+        market_ok = False
+        location_ok = False
+
+    aggression_ok = bool((aggression_fidelity or {}).get("strict_fabio_pass"))
+    pillars = {
+        "market_state": market_ok,
+        "location": location_ok,
+        "aggression": aggression_ok,
+    }
+    missing = [name for name, ok in pillars.items() if not ok]
+    strict_pass = not missing
+    reason = "strict_pass" if strict_pass else "missing_" + "_".join(missing)
+
+    current = str(current_gate_result or "UNKNOWN").upper()
+    if strict_pass:
+        if current == "NO_SETUP":
+            status = "strict_pass_current_no_setup"
+        elif current == "BLOCKED":
+            status = "strict_pass_current_blocked"
+        else:
+            status = f"current_{current.lower()}_strict_pass"
+    else:
+        status = f"current_{current.lower()}_strict_fail"
+
+    return {
+        "strict_fabio_pass": strict_pass,
+        "strict_fabio_reason": reason,
+        "strict_fabio_missing_pillars": missing,
+        "strict_fabio_pillars": pillars,
+        "current_vs_strict_status": status,
+    }
+
+
+def _engine_d_source_fidelity(source: Any, *, domain: str) -> dict:
+    raw = str(source or "unknown").strip().lower()
+    aliases = {
+        "binance_aggtrade": "binance_aggtrade",
+        "trade_buckets": "binance_aggtrade",
+        "candle": "candles",
+        "candle_volume": "candle_volume",
+        "candles": "candles",
+        "range_proxy": "range_proxy",
+        "mt5_tick": "mt5_tick",
+        "mt5_tick_proxy": "mt5_tick",
+        "binance_ws": "binance_candle",
+        "binance_candle": "binance_candle",
+        "eodhd_1m": "eodhd_candle_volume",
+        "eodhd_1h": "eodhd_candle_volume",
+        "eodhd_hist": "eodhd_candle_volume",
+        "ws_tick": "ws_tick_volume",
+        "disabled": "disabled",
+        "error": "error",
+        "unavailable": "unavailable",
+        "unknown": "unknown",
+    }
+    normalized = aliases.get(raw, raw)
+    real_trade_flow = normalized == "binance_aggtrade"
+    real_volume_proxy = normalized in {
+        "candle_volume",
+        "binance_candle",
+        "eodhd_candle_volume",
+        "ws_tick_volume",
+    }
+    range_or_tick_proxy = normalized in {"range_proxy", "mt5_tick", "candles"}
+    unavailable = normalized in {"disabled", "error", "unavailable", "unknown"}
+
+    if real_trade_flow:
+        fidelity = "real_trade_bucket"
+    elif real_volume_proxy:
+        fidelity = f"{domain}_candle_volume_proxy"
+    elif range_or_tick_proxy:
+        fidelity = f"{domain}_{normalized}_proxy"
+    else:
+        fidelity = f"{domain}_proxy"
+
+    return {
+        "raw_source": raw,
+        "source": normalized,
+        "fidelity": fidelity,
+        "uses_real_trade_buckets": real_trade_flow,
+        "uses_real_order_flow": real_trade_flow,
+        "is_proxy": not real_trade_flow,
+        "is_unavailable": unavailable,
+    }
+
+
+def _engine_d_data_fidelity(
+    *,
+    vp: dict,
+    cvd: dict,
+    absorption: dict,
+    asset_type: str,
+    structure_volume_source: Any,
+    execution_volume_source: Any,
+    active_profile_anchor: str,
+) -> dict:
+    """Report-only source truth for VP, CVD, and aggression evidence."""
+    vp_source = (vp or {}).get("volume_source") or structure_volume_source or "unknown"
+    cvd_source = (cvd or {}).get("source") or "candles"
+    absorption_source = execution_volume_source or "unknown"
+
+    vp_fidelity = _engine_d_source_fidelity(vp_source, domain="vp")
+    cvd_fidelity = _engine_d_source_fidelity(cvd_source, domain="cvd")
+    absorption_fidelity = _engine_d_source_fidelity(absorption_source, domain="absorption")
+
+    notes: list[str] = []
+    if vp_fidelity["is_proxy"]:
+        notes.append(f"vp:{vp_fidelity['fidelity']}")
+    if cvd_fidelity["is_proxy"]:
+        notes.append(f"cvd:{cvd_fidelity['fidelity']}")
+    if absorption_fidelity["is_proxy"]:
+        notes.append(f"absorption:{absorption_fidelity['fidelity']}")
+
+    aggression_real_order_flow = bool(cvd_fidelity["uses_real_order_flow"])
+    return {
+        "report_only": True,
+        "asset_type": str(asset_type or "unknown"),
+        "active_profile_anchor": active_profile_anchor,
+        "vp_source": vp_fidelity["source"],
+        "vp_source_raw": vp_fidelity["raw_source"],
+        "vp_fidelity": vp_fidelity["fidelity"],
+        "vp_is_proxy": vp_fidelity["is_proxy"],
+        "vp_uses_real_trade_buckets": vp_fidelity["uses_real_trade_buckets"],
+        "vp_bucket_count": (vp or {}).get("bucket_count"),
+        "structure_volume_source": structure_volume_source,
+        "cvd_source": cvd_fidelity["source"],
+        "cvd_source_raw": cvd_fidelity["raw_source"],
+        "cvd_fidelity": cvd_fidelity["fidelity"],
+        "cvd_is_proxy": cvd_fidelity["is_proxy"],
+        "cvd_uses_real_trade_buckets": cvd_fidelity["uses_real_trade_buckets"],
+        "cvd_bucket_count": (cvd or {}).get("bucket_count"),
+        "absorption_source": absorption_fidelity["source"],
+        "absorption_source_raw": absorption_fidelity["raw_source"],
+        "absorption_fidelity": absorption_fidelity["fidelity"],
+        "absorption_is_proxy": absorption_fidelity["is_proxy"],
+        "absorption_detected": bool((absorption or {}).get("detected")),
+        "execution_volume_source": execution_volume_source,
+        "aggression_uses_real_order_flow": aggression_real_order_flow,
+        "aggression_proxy_components": notes,
+        "notes": notes,
+    }
+
+
+def _candle_float(candle: dict, key: str) -> Optional[float]:
+    try:
+        return float((candle or {}).get(key))
+    except (TypeError, ValueError):
+        return None
+
+
+def _profile_anchor_window_summary(
+    candles: list,
+    *,
+    label: str,
+    reason: str | None = None,
+) -> dict:
+    if not candles:
+        return {"label": label, "valid": False, "reason": reason or "no_candles", "bars": 0}
+    highs = [_candle_float(c, "high") for c in candles]
+    lows = [_candle_float(c, "low") for c in candles]
+    closes = [_candle_float(c, "close") for c in candles]
+    vols = [_candle_float(c, "vol") for c in candles]
+    highs = [v for v in highs if v is not None]
+    lows = [v for v in lows if v is not None]
+    closes = [v for v in closes if v is not None]
+    vols = [v for v in vols if v is not None]
+    start_ts = _coerce_utc_datetime((candles[0] or {}).get("time"))
+    end_ts = _coerce_utc_datetime((candles[-1] or {}).get("time"))
+    out = {
+        "label": label,
+        "valid": True,
+        "bars": len(candles),
+        "start_time": start_ts.isoformat() if start_ts else None,
+        "end_time": end_ts.isoformat() if end_ts else None,
+        "high": round(max(highs), 6) if highs else None,
+        "low": round(min(lows), 6) if lows else None,
+        "first_close": round(closes[0], 6) if closes else None,
+        "last_close": round(closes[-1], 6) if closes else None,
+        "total_volume": round(sum(vols), 2) if vols else None,
+    }
+    if reason:
+        out["reason"] = reason
+    return out
+
+
+def _prior_session_anchor_candidate(candles: list, min_bars: int = 20) -> dict:
+    parsed = []
+    for candle in candles or []:
+        ts = _coerce_utc_datetime((candle or {}).get("time"))
+        if ts is not None:
+            parsed.append((ts, candle))
+    if len(parsed) < min_bars:
+        return {
+            "label": "prior_session",
+            "valid": False,
+            "reason": "timestamped_candles_below_min",
+            "bars": len(parsed),
+            "min_bars": min_bars,
+        }
+    current_date = parsed[-1][0].date()
+    prior_dates = sorted({ts.date() for ts, _ in parsed if ts.date() < current_date})
+    if not prior_dates:
+        return {
+            "label": "prior_session",
+            "valid": False,
+            "reason": "no_prior_utc_session_in_window",
+            "bars": 0,
+            "session_basis": "utc_calendar_day",
+        }
+    prior_date = prior_dates[-1]
+    window = [c for ts, c in parsed if ts.date() == prior_date]
+    if len(window) < min_bars:
+        return {
+            "label": "prior_session",
+            "valid": False,
+            "reason": "prior_utc_session_below_min_bars",
+            "bars": len(window),
+            "min_bars": min_bars,
+            "session_date": str(prior_date),
+            "session_basis": "utc_calendar_day",
+        }
+    out = _profile_anchor_window_summary(
+        window,
+        label="prior_session",
+        reason="utc_calendar_day_candidate",
+    )
+    out["session_date"] = str(prior_date)
+    out["session_basis"] = "utc_calendar_day"
+    return out
+
+
+def _impulse_anchor_candidate(candles: list, min_bars: int = 5) -> dict:
+    closes = [_candle_float(c, "close") for c in candles or []]
+    if len([v for v in closes if v is not None]) < min_bars:
+        return {
+            "label": "impulse_leg",
+            "valid": False,
+            "reason": "insufficient_closes",
+            "bars": len(candles or []),
+            "min_bars": min_bars,
+        }
+    best: tuple[float, int, int] | None = None
+    for i, start_close in enumerate(closes):
+        if start_close is None or start_close <= 0:
+            continue
+        for j in range(i + min_bars - 1, len(closes)):
+            end_close = closes[j]
+            if end_close is None:
+                continue
+            move_pct = abs(end_close - start_close) / start_close
+            if best is None or move_pct > best[0]:
+                best = (move_pct, i, j)
+    if best is None or best[0] <= 0:
+        return {"label": "impulse_leg", "valid": False, "reason": "no_directional_close_move"}
+    _, start_idx, end_idx = best
+    window = candles[start_idx:end_idx + 1]
+    start_close = _candle_float(window[0], "close") or 0.0
+    end_close = _candle_float(window[-1], "close") or 0.0
+    out = _profile_anchor_window_summary(
+        window,
+        label="impulse_leg",
+        reason="largest_close_to_close_swing_candidate",
+    )
+    out["direction"] = "LONG" if end_close > start_close else "SHORT"
+    out["close_change_pct"] = round(best[0] * 100.0, 4)
+    out["heuristic"] = "largest_close_to_close_swing"
+    return out
+
+
+def _reclaim_anchor_candidate(candles: list, vp: dict, min_bars: int = 3) -> dict:
+    try:
+        vah = float((vp or {}).get("vah"))
+        val = float((vp or {}).get("val"))
+    except (TypeError, ValueError):
+        return {"label": "reclaim_leg", "valid": False, "reason": "vp_value_area_unavailable"}
+    if vah <= val:
+        return {"label": "reclaim_leg", "valid": False, "reason": "invalid_value_area"}
+
+    last_outside_idx: int | None = None
+    outside_side: str | None = None
+    for idx, candle in enumerate(candles or []):
+        close = _candle_float(candle, "close")
+        if close is None:
+            continue
+        if close > vah:
+            last_outside_idx = idx
+            outside_side = "above_vah"
+            continue
+        if close < val:
+            last_outside_idx = idx
+            outside_side = "below_val"
+            continue
+        if last_outside_idx is not None and idx - last_outside_idx + 1 >= min_bars:
+            window = candles[last_outside_idx:idx + 1]
+            out = _profile_anchor_window_summary(
+                window,
+                label="reclaim_leg",
+                reason="outside_value_reclaimed_inside_candidate",
+            )
+            out["outside_side"] = outside_side
+            out["direction"] = "SHORT_RECLAIM" if outside_side == "above_vah" else "LONG_RECLAIM"
+            out["heuristic"] = "close_outside_value_then_close_inside_value"
+            return out
+    return {"label": "reclaim_leg", "valid": False, "reason": "no_reclaim_sequence_found"}
+
+
+def _engine_d_profile_anchor_shadow(
+    *,
+    candles_m15: list,
+    vp_lookback: int,
+    vp: dict,
+    active_anchor_mode: str,
+    volume_source: Any,
+) -> dict:
+    """Report-only current/future profile anchor context; never selects levels."""
+    lookback = max(1, int(vp_lookback or 1))
+    fixed_window = (candles_m15 or [])[-lookback:]
+    candidate_window = candles_m15 or []
+    fixed_anchor = _profile_anchor_window_summary(
+        fixed_window,
+        label="fixed_lookback",
+        reason="current_profile_window" if active_anchor_mode == "fixed_lookback" else "fallback_fixed_lookback_context",
+    )
+    fixed_anchor["mode"] = "fixed_lookback"
+    fixed_anchor["lookback_bars"] = lookback
+    fixed_anchor["volume_source"] = volume_source
+    if active_anchor_mode == "fixed_lookback":
+        active = dict(fixed_anchor)
+    else:
+        active = {
+            "label": active_anchor_mode,
+            "valid": True,
+            "mode": active_anchor_mode,
+            "reason": "active_profile_not_fixed_lookback",
+            "volume_source": volume_source,
+        }
+    return {
+        "report_only": True,
+        "active_anchor": active,
+        "fixed_lookback_anchor": fixed_anchor,
+        "candidates": {
+            "prior_session": _prior_session_anchor_candidate(candidate_window),
+            "impulse_leg": _impulse_anchor_candidate(candidate_window[-lookback:]),
+            "reclaim_leg": _reclaim_anchor_candidate(candidate_window[-lookback:], vp),
+        },
+    }
+
+
 def _detect_volume_divergence(candles: list, lookback: int = 5) -> dict:
     """Detect volume divergence: price new high/low but volume doesn't confirm.
 
@@ -2806,6 +3232,8 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
 
             # ── Fetch candles (crypto vs MT5) ────────────────────────────────
             _vol_src_dominant = "binance_ws" if asset_type == "crypto" else "mt5_tick"
+            _vol_src_structure = "binance_candle" if asset_type == "crypto" else "mt5_tick"
+            _vol_src_exec = _vol_src_structure
             if asset_type == "crypto":
                 pair_dict = {
                     "display": display,
@@ -2918,6 +3346,7 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
                     mt5_sym, "M15", m15_count, include_forming=structure_include_forming
                 )
                 candles_m15, _vol_src_m15 = _overlay_eodhd_volume_for_scalp(display, asset_type, "M15", candles_m15)
+                _vol_src_structure = _vol_src_m15
                 if len(candles_m15) < 30:
                     _record_stability_sample(display, asset_type, False, reason="insufficient_m15_candles")
                     skipped.append({"pair": display, "reason": "insufficient_m15_candles"})
@@ -2949,12 +3378,14 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
                         mt5_sym, "M1", m1_count, include_forming=trigger_include_forming
                     )
                     candles_exec, _vol_src_m1 = _overlay_eodhd_volume_for_scalp(display, asset_type, "M1", candles_exec)
+                    _vol_src_exec = _vol_src_m1
                     if len(candles_exec) < 30:
                         _record_stability_sample(display, asset_type, False, reason="insufficient_m1_candles")
                         skipped.append({"pair": display, "reason": "insufficient_m1_candles"})
                         continue
                 else:
                     candles_exec = candles_m5
+                    _vol_src_exec = _vol_src_m5
 
                 fresh, stale_reason = _execution_candles_fresh(candles_exec, execution_tf)
                 if not fresh:
@@ -3006,11 +3437,14 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
                 skipped.append({"pair": display, "reason": "vp_disabled"})
                 continue
             vp_lookback = max(20, int(cfg.get("VP_LOOKBACK_BARS", 50)))
+            vp_anchor_mode = "not_built"
             vp = (
                 _build_trade_bucket_volume_profile(display)
                 if asset_type == "crypto" and cfg.get("TRADE_BUCKET_VP_ENABLED", True)
                 else {"valid": False}
             )
+            if vp.get("valid"):
+                vp_anchor_mode = "trade_bucket_session"
             if not vp.get("valid"):
                 if asset_type == "crypto" and cfg.get("TRADE_BUCKET_VP_ENABLED", True):
                     log.info(
@@ -3020,6 +3454,7 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
                 vp = _build_volume_profile(candles_m15[-vp_lookback:])
                 if vp.get("valid"):
                     vp.setdefault("volume_source", "candles")
+                    vp_anchor_mode = "fixed_lookback"
             if not vp.get("valid"):
                 _vp_reason = f"vp_invalid:{vp.get('reason', '?')}"
                 _record_stability_sample(display, asset_type, False, reason=_vp_reason)
@@ -3043,6 +3478,14 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
             _funnel["price_near_poc"] = price_loc.get("location") == "at_poc"
             _funnel["price_near_vah"] = price_loc.get("location") == "at_vah"
             _funnel["price_near_val"] = price_loc.get("location") == "at_val"
+            profile_anchor_shadow = _engine_d_profile_anchor_shadow(
+                candles_m15=candles_m15,
+                vp_lookback=vp_lookback,
+                vp=vp,
+                active_anchor_mode=vp_anchor_mode,
+                volume_source=vp.get("volume_source", _vol_src_structure),
+            )
+            _funnel["diagnostic_notes"]["profile_anchor_shadow"] = profile_anchor_shadow
 
             # Shadow proximity simulation (report-only)
             if shadow_proximity_simulations is not None:
@@ -3078,6 +3521,16 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
             _funnel["absorption_detected"] = bool(absorption.get("detected"))
             _funnel["vwap_available"] = bool(vwap.get("vwap_value"))
             _funnel["vwap_bias"] = vwap.get("lean")
+            data_fidelity = _engine_d_data_fidelity(
+                vp=vp,
+                cvd=cvd,
+                absorption=absorption,
+                asset_type=asset_type,
+                structure_volume_source=_vol_src_structure,
+                execution_volume_source=_vol_src_exec,
+                active_profile_anchor=vp_anchor_mode,
+            )
+            _funnel["diagnostic_notes"]["data_fidelity"] = data_fidelity
 
             # Setup classification
             setup = _classify_setup(market_state, price_loc, absorption, cvd, aaa, vwap, htf_bias, asset_type=asset_type, candles=candles_exec)
@@ -3170,6 +3623,8 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
                 aaa=aaa,
                 htf_bias=htf_bias,
             )
+            aggression_fidelity = _engine_d_aggression_fidelity(absorption, cvd, aaa, vwap, setup_direction=direction)
+            _funnel["diagnostic_notes"].update(aggression_fidelity)
             proxy_cfg = CONFIG.get("SCALP_ENGINE", {})
             if asset_type == "stock":
                 premarket_delta_proxy_levels = _build_premarket_delta_proxy_levels(
@@ -3224,6 +3679,14 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
             _funnel["gate_result"] = gate_result
             _funnel["fail_reasons"] = list(candidate_fail_reasons)
             _funnel["soft_warnings"] = list(candidate_soft_warnings)
+            strict_fabio_shadow = _engine_d_strict_fabio_shadow(
+                market_state=market_state,
+                price_loc=price_loc,
+                setup=setup,
+                aggression_fidelity=aggression_fidelity,
+                current_gate_result=gate_result,
+            )
+            _funnel["diagnostic_notes"].update(strict_fabio_shadow)
 
             # ── Build signal dict (preserves keys required by athena.py) ─
             signal = {
@@ -3283,12 +3746,38 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
                 "vp_lvn_count":    len(vp.get("lvn_levels", [])),
                 "vp_volume_source": vp.get("volume_source", _vol_src_dominant),
                 "vp_bucket_count":  vp.get("bucket_count"),
+                "vp_fidelity":      data_fidelity.get("vp_fidelity"),
+                "vp_is_proxy":      data_fidelity.get("vp_is_proxy"),
+                "vp_uses_real_trade_buckets": data_fidelity.get("vp_uses_real_trade_buckets"),
                 "absorption_count": absorption.get("count", 0),
+                "absorption_source": data_fidelity.get("absorption_source"),
+                "absorption_fidelity": data_fidelity.get("absorption_fidelity"),
+                "absorption_is_proxy": data_fidelity.get("absorption_is_proxy"),
                 "cvd_direction":   cvd.get("direction"),
                 "cvd_slope":       cvd.get("cvd_slope"),
                 "cvd_source":      cvd.get("source", "candles"),
                 "cvd_bucket_count": cvd.get("bucket_count"),
+                "cvd_fidelity":     data_fidelity.get("cvd_fidelity"),
+                "cvd_is_proxy":     data_fidelity.get("cvd_is_proxy"),
+                "cvd_uses_real_trade_buckets": data_fidelity.get("cvd_uses_real_trade_buckets"),
                 "aaa_complete":    aaa.get("complete", False),
+                "aggression_source": aggression_fidelity.get("aggression_source"),
+                "aggression_source_raw": aggression_fidelity.get("aggression_source_raw"),
+                "aggression_source_is_proxy": aggression_fidelity.get("aggression_source_is_proxy"),
+                "aggression_confirmed": aggression_fidelity.get("aggression_confirmed"),
+                "aggression_components": aggression_fidelity.get("aggression_components"),
+                "aggression_uses_real_order_flow": data_fidelity.get("aggression_uses_real_order_flow"),
+                "data_fidelity": data_fidelity,
+                "strict_fabio_pass": strict_fabio_shadow.get("strict_fabio_pass"),
+                "strict_fabio_reason": strict_fabio_shadow.get("strict_fabio_reason"),
+                "strict_fabio_missing_pillars": strict_fabio_shadow.get("strict_fabio_missing_pillars"),
+                "strict_fabio_pillars": strict_fabio_shadow.get("strict_fabio_pillars"),
+                "current_vs_strict_status": strict_fabio_shadow.get("current_vs_strict_status"),
+                "profile_anchor_mode": profile_anchor_shadow.get("active_anchor", {}).get("mode"),
+                "profile_anchor_bars": profile_anchor_shadow.get("active_anchor", {}).get("bars"),
+                "profile_anchor_start": profile_anchor_shadow.get("active_anchor", {}).get("start_time"),
+                "profile_anchor_end": profile_anchor_shadow.get("active_anchor", {}).get("end_time"),
+                "profile_anchor_shadow": profile_anchor_shadow,
                 "htf_bias":        htf_bias,
                 "htf_bias_tf":     bias_tf if use_bias else None,
                 "advisory":        advisory,

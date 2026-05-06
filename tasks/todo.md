@@ -263,3 +263,101 @@
 - Audit route validation passed: `python -m pytest tests/test_routes_audit.py tests/test_routes_backtest_history.py tests/test_api_contract_smoke.py -q` (`12 passed`).
 - Combined route-focused validation passed: `python -m pytest tests/test_api_contract_smoke.py tests/test_routes_audit.py tests/test_routes_backtest_history.py tests/test_routes_broker_status.py tests/test_routes_status.py tests/test_routes_market_data.py tests/test_routes_live_dashboard.py tests/test_live_dashboard.py tests/test_health_routes.py tests/test_scan_backtest_service.py -q` (`72 passed`).
 - `athena.py` at pushed `HEAD` is currently 14,193 lines with 53 Flask route decorators after the safe read-only route slices.
+
+# Engine D Fabio Scalp Tool Gap Report
+
+- [x] Extract DOCX text/tables/footnotes for requirements evidence.
+- [x] Fact-check headline external claims against primary/official sources where possible.
+- [x] Map DOCX scalp-tool requirements against Engine D code, config, API, UI, and tests.
+- [x] Write a confirmed/partial/missing/not-verified gap report without changing strategy behavior.
+
+## Review
+
+- Created `docs/diagnostics/engine_d_fabio_scalp_tool_gap_report.md`.
+- Confirmed current Engine D has the core skeleton: VP, market-state/location/aggression pipeline, grading, fee guard, ATR/1R levels, daily risk state, fresh-scan execution, and diagnostics.
+- Confirmed the largest gaps are visibility and fidelity, not missing indicators: source fields are present in raw signals but not fully passed to Scalp Lab UI, non-crypto aggression remains proxy-based, profile anchoring is mechanical last-N M15 bars, and neutral CVD can pass some VA-extreme setups under current defaults.
+- No scoring, risk, threshold, or live-execution behavior was changed.
+
+# Engine D Fabio Phase A Source Visibility
+
+- [x] Add focused tests for Engine D aggression fidelity source classification.
+- [x] Pass VP/CVD source and bucket fields through Scalp Lab API normalization.
+- [x] Add report-only aggression fidelity fields to raw Engine D signals.
+- [x] Display VP/CVD source, bucket count, proxy-flow status, and strict Fabio shadow status in Scalp Lab.
+- [x] Keep Engine D scoring, thresholds, risk, and execution gates unchanged.
+- [x] Run focused compile, TypeScript, and pytest validation.
+
+## Review
+
+- Added `_engine_d_aggression_fidelity()` in `scalp_engine.py` to label Binance aggTrade flow as true trade flow and candle/MT5/range/error/unavailable sources as proxy or non-strict diagnostic sources.
+- Added `aggression_source`, `aggression_source_raw`, `aggression_source_is_proxy`, `aggression_confirmed`, `strict_fabio_pass`, and `aggression_components` to Engine D signal output.
+- Preserved `vp_volume_source`, `vp_bucket_count`, `cvd_source`, and `cvd_bucket_count` through `_scalp_ui_signal()` in `athena.py`.
+- Updated `ScalpLabPanel.tsx` to show source/fidelity badges and detail rows without changing execution controls.
+- Updated two existing Live Dashboard helper tests in `tests/test_scalp_execution.py` to call `athena_app.api.routes_live_dashboard`, where those helpers currently live after the route extraction.
+- Validation passed:
+  - `python -m pytest tests/test_scalp_engine.py::test_aggression_fidelity_marks_proxy_flow_as_not_strict tests/test_scalp_engine.py::test_aggression_fidelity_marks_binance_trade_flow_as_strict -q --basetemp=.pytest_local_tmp\engine_d_phase_a_green1` (`2 passed`)
+  - `python -m pytest tests/test_scalp_execution.py::test_scalp_ui_signal_preserves_flow_fidelity_fields -q --basetemp=.pytest_local_tmp\engine_d_phase_a_green2` (`1 passed`)
+  - `python -m py_compile scalp_engine.py athena.py`
+  - `.\node_modules\.bin\tsc.cmd -b --noEmit` from `static/react-app/app`
+  - `python -m pytest tests/test_scalp_engine.py tests/test_scalp_execution.py -q --basetemp=.pytest_local_tmp\engine_d_phase_a_focused` (`112 passed`)
+
+# Engine D Fabio Phase B Shadow Diagnostics
+
+- [x] Add focused failing tests for strict Fabio three-pillar shadow diagnostics.
+- [x] Confirm strict Fabio shadow diagnostics do not change `gate_result`, `executable`, fail reasons, or soft warnings.
+- [x] Pass shadow mismatch fields through Scalp Lab API normalization.
+- [x] Display strict Fabio reason, missing pillars, and current-vs-strict status in Scalp Lab.
+- [x] Update the Fabio gap report with Phase B results.
+- [x] Run focused Python, TypeScript, and pytest validation.
+
+## Review
+
+- Added `_engine_d_strict_fabio_shadow()` in `scalp_engine.py` as a report-only three-pillar evaluator.
+- The strict shadow check requires market state, location, and true-flow aggression; candle/MT5/range/error/unavailable sources remain proxy/non-strict via the Phase A aggression-fidelity fields.
+- Added `strict_fabio_reason`, `strict_fabio_missing_pillars`, `strict_fabio_pillars`, and `current_vs_strict_status` to Engine D signal output and funnel diagnostic notes.
+- Preserved those fields through `_scalp_ui_signal()` in `athena.py`.
+- Updated `ScalpLabPanel.tsx` to show strict Fabio reason, missing pillars, and current-vs-strict status.
+- Confirmed by test that an existing Engine D `PASS` can be shadow-labelled `current_pass_strict_fail` while still staying `PASS` and executable.
+- Restored boot/test validity by removing the dirty prohibited `BACKTEST_USE_BT_MIN_THRESHOLDS: true` key from `config.yaml`; `config.py` explicitly fatal-errors when that key exists.
+- Red/green validation passed:
+  - `python -m pytest tests/test_scalp_engine.py::test_strict_fabio_shadow_flags_current_pass_with_proxy_aggression tests/test_scalp_engine.py::test_strict_fabio_shadow_passes_when_all_three_pillars_align -q --basetemp=.pytest_local_tmp\engine_d_phase_b_green1` (`2 passed`)
+  - `python -m pytest tests/test_scalp_execution.py::test_scalp_ui_signal_preserves_flow_fidelity_fields -q --basetemp=.pytest_local_tmp\engine_d_phase_b_green2` (`1 passed`)
+  - `python -m pytest tests/test_scalp_engine.py::test_run_scalp_scan_does_not_block_close_structure_target -q --basetemp=.pytest_local_tmp\engine_d_phase_b_green3` (`1 passed`)
+- Focused validation passed:
+  - `python -m py_compile config.py scalp_engine.py athena.py tests\test_scalp_engine.py tests\test_scalp_execution.py`
+  - `.\node_modules\.bin\tsc.cmd -b --noEmit` from `static/react-app/app`
+  - `python -m pytest tests/test_scalp_engine.py tests/test_scalp_execution.py -q --basetemp=.pytest_local_tmp\engine_d_phase_b_focused` (`114 passed`)
+  - `python -m pytest tests/test_scalp_engine.py tests/test_scalp_execution.py tests/test_scalp_fixes.py tests/test_scalp_backtest_rules.py -q --basetemp=.pytest_local_tmp\engine_d_phase_b_adjacent` (`132 passed`)
+  - `python -m pytest tests/test_stage4_hardening.py tests/test_scoring_group_routing.py -q --basetemp=.pytest_local_tmp\engine_d_phase_b_config` (`30 passed`)
+  - `python -m pytest tests/test_vectorbt_research_lab.py -q --basetemp=.pytest_local_tmp\engine_d_phase_b_vectorbt_fresh` (`65 passed`, two pandas `FutureWarning`s)
+- Full repo validation was not green: `python -m pytest -q --basetemp=.pytest_local_tmp\engine_d_phase_b_all` completed with `1164 passed, 51 failed, 2 warnings`.
+- The full-suite failures were not isolated to this Engine D patch. Confirmed categories include legacy `static/index.html` assertions, extracted-route expectations still pointed at `athena.py`, audit repo schema drift, auto-trader debate trace-id expectations, MT5 monkeypatch/module-shape failures, and research-lab no-live-import checks after full-suite import pollution.
+
+# Engine D Fabio Phase C/D Diagnostics And Full-Suite Stabilization
+
+- [x] Stabilize the confirmed full-suite baseline failures without changing runtime trading behavior.
+- [x] Add report-only Engine D data-fidelity diagnostics for VP, CVD, absorption, and aggression source truth.
+- [x] Add report-only profile-anchor shadow diagnostics for fixed-lookback, prior-session, impulse-leg, and reclaim-leg context.
+- [x] Preserve Phase C/D fields through `_scalp_ui_signal()` and Scalp Lab UI.
+- [x] Confirm Engine D scoring, thresholds, risk, gate decisions, and paper/live execution behavior are unchanged.
+- [x] Run focused, adjacent, TypeScript, and full-suite validation after all changes landed.
+
+## Review
+
+- Added schema-aware `audit_log` insertion in `athena_app/repositories/audit_repo.py` so old audit DBs without `warnings_json` still accept manual-error rows while newer DBs keep Strategy Lab telemetry.
+- Updated stale route/UI/source tests to the current extracted-route and React/Vite operator surfaces.
+- Preserved auto-trader trace-id safety by updating debate test mocks to include trace IDs instead of weakening `require_trace_id=True`.
+- Fixed test-order pollution from `tests/test_timed_exit_phases.py` by keeping broker stubs out of `sys.modules`.
+- Fixed vectorbt research-lab no-live-import checks to ignore live modules imported by unrelated earlier tests while still catching forbidden imports introduced inside each research test.
+- Fixed Telegram notification test isolation by clearing Telegram env overrides before injecting test config.
+- Added `_engine_d_data_fidelity()` and `_engine_d_profile_anchor_shadow()` in `scalp_engine.py`; both are report-only diagnostics.
+- Added data-fidelity fields and profile-anchor fields to Engine D signal payloads and Scalp Lab detail rows.
+- Confirmed an existing Engine D `PASS` fixture remains `PASS` and executable while the strict/report-only diagnostics label missing strict Fabio aggression.
+- Final validation passed:
+  - `python -m py_compile athena_app\repositories\audit_repo.py tests\test_audit_repo.py tests\test_auto_trader.py tests\test_threshold_audit.py tests\test_athena.py tests\test_pepperstone_mt5_symbols.py`
+  - `python -m pytest tests/test_athena.py tests/test_audit_repo.py tests/test_auto_trader.py tests/test_pepperstone_mt5_symbols.py tests/test_threshold_audit.py -q --basetemp=.pytest_local_tmp\baseline_fixed` (`100 passed`)
+  - `python -m pytest tests/test_timed_exit_phases.py tests/test_pepperstone_mt5_symbols.py tests/test_scalp_backtest_rules.py tests/test_scalp_engine.py tests/test_scalp_execution.py tests/test_scalp_fixes.py tests/test_telegram_notify.py -q --basetemp=.pytest_local_tmp\order_pollution_fixed2` (`214 passed`)
+  - `python -m pytest tests/test_vectorbt_research_lab.py -q --basetemp=.pytest_local_tmp\vectorbt_guard_fixed2` (`65 passed`, two pandas `FutureWarning`s)
+  - `.\node_modules\.bin\tsc.cmd -b --noEmit` from `static/react-app/app`
+  - `python -m pytest -q --basetemp=.pytest_local_tmp\baseline_full_after_order_fixes` (`1218 passed`, two pandas `FutureWarning`s)
+- Remaining risk: profile-anchor candidates are heuristic visibility only. They are not performance evidence and are not used for scoring, gates, risk, or execution.

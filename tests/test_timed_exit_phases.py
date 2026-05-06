@@ -6,9 +6,11 @@ Phase 3: Indicator confirmation (RSI/MACD) for trail close
 Engine D: SL moves to tp_partial after +1R partial
 """
 
-import sys
 import types
 import pytest
+
+# Broker stubs below are passed directly to helper calls and intentionally not
+# placed in sys.modules, because that leaks fake broker modules into later tests.
 
 # ── Stub broker modules before importing timed_exit_monitor ──────────────────
 
@@ -16,19 +18,16 @@ _mt5_stub = types.ModuleType("mt5_executor")
 _mt5_stub.mt5_close_position = lambda *a, **kw: {"success": True, "closePrice": 1.1000, "liveProfit": 5.0, "entryPrice": 1.0950}
 _mt5_stub.mt5_move_sl_to_breakeven = lambda *a, **kw: {"success": True}
 _mt5_stub.mt5_get_positions = lambda: {"positions": []}
-sys.modules["mt5_executor"] = _mt5_stub
 
 _tg_stub = types.ModuleType("telegram_notify")
 _tg_stub.notify_trade_closed = lambda **kw: None
 _tg_stub._send_message_async = lambda *a: None
-sys.modules["telegram_notify"] = _tg_stub
 
 _bybit_stub = types.ModuleType("bybit_executor")
 _bybit_stub.bybit_close_position = lambda *a, **kw: {"success": True}
 _bybit_stub.bybit_move_sl_to_breakeven = lambda *a, **kw: {"success": True}
 _bybit_stub.bybit_map_symbol = lambda p: f"{p}/USDT:USDT"
 _bybit_stub.bybit_get_positions = lambda: {"positions": []}
-sys.modules["bybit_executor"] = _bybit_stub
 
 from timed_exit_monitor import (
     _tp_progress,
@@ -519,7 +518,7 @@ class TestScalpProfitLockTry:
             mins_open=6.0,
             pair_label="T",
             move_sl=_record,
-            telegram_notify=sys.modules["telegram_notify"],
+            telegram_notify=_tg_stub,
         )
         assert len(moves) == 1
         assert moves[0] == pytest.approx(entry - 0.05 * dist)
@@ -539,7 +538,7 @@ class TestScalpProfitLockTry:
             mins_open=10.0,
             pair_label="T",
             move_sl=_record,
-            telegram_notify=sys.modules["telegram_notify"],
+            telegram_notify=_tg_stub,
         )
         assert len(moves) == 2
         assert moves[1] == pytest.approx(_sl_for_locked_profit_r(entry, dist, "SHORT", 1.0))

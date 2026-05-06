@@ -164,7 +164,9 @@ def test_threshold_report_handles_empty_no_signal_scans():
 
 
 def test_near_miss_classification_works():
-    row = build_signal_funnel_row(_pair(), _signal(score=2.0), tier="skip")
+    sig = _signal(score=1.4)
+    sig["scoreNorm"] = 0.70
+    row = build_signal_funnel_row(_pair(), sig, tier="skip")
     assert row["final_scan_result"] == "A_NEAR_MISS"
 
 
@@ -178,7 +180,7 @@ def test_shadow_thresholds_do_not_affect_execution_decisions():
 
 
 def test_fail_reason_counts_are_reported():
-    rows = [build_signal_funnel_row(_pair(), _signal(score=1.9), tier="skip")]
+    rows = [build_signal_funnel_row(_pair(), _signal(score=1.4), tier="skip")]
     report = build_report(rows)
     assert "below_engine_a_threshold" in report
     assert "engine_b_confidence_passed_false" in report

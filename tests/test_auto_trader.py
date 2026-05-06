@@ -189,6 +189,7 @@ def test_can_execute_rechecks_conviction_after_debate_adjustment(monkeypatch):
     monkeypatch.setattr(
         "signal_debate.run_signal_debate",
         lambda signal: {
+            "trace_id": "test-trace-debate-adjustment",
             "grade": "WEAK_GO",
             "allowed": True,
             "reasoning": "trim conviction",
@@ -245,6 +246,7 @@ def test_can_execute_rejects_when_debate_zeroes_engine_a_score(monkeypatch):
     monkeypatch.setattr(
         "signal_debate.run_signal_debate",
         lambda signal: {
+            "trace_id": "test-trace-debate-zero",
             "grade": "WEAK_GO",
             "allowed": True,
             "reasoning": "fully negate engine a",

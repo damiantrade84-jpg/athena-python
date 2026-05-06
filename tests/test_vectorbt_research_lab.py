@@ -35,10 +35,23 @@ def tmp_path():
 
 # ── Execution import guard ────────────────────────────────────────────────────
 _FORBIDDEN = {"athena", "execution", "mt5_executor", "bybit_executor", "auto_trader", "risk_engine"}
+_CURRENT_FORBIDDEN_BASELINE: set[str] = set()
+
+
+@pytest.fixture(autouse=True)
+def _capture_live_import_baseline():
+    """Ignore live modules imported by earlier, unrelated tests in the same run."""
+    global _CURRENT_FORBIDDEN_BASELINE
+    previous = _CURRENT_FORBIDDEN_BASELINE
+    _CURRENT_FORBIDDEN_BASELINE = {m for m in _FORBIDDEN if m in sys.modules}
+    try:
+        yield
+    finally:
+        _CURRENT_FORBIDDEN_BASELINE = previous
 
 
 def _check_no_live_imports():
-    violations = [m for m in _FORBIDDEN if m in sys.modules]
+    violations = [m for m in _FORBIDDEN if m in sys.modules and m not in _CURRENT_FORBIDDEN_BASELINE]
     assert not violations, f"Live execution modules in sys.modules: {violations}"
 
 
@@ -508,6 +521,7 @@ class TestStrategies:
                 params_str="", direction="both", status="STRONG_CANDIDATE",
                 trade_count=53, win_rate=0.64, profit_factor=2.9, net_return=1.2,
                 oos_return=0.46, robustness_score=0.85,
+                data_source="binance_rest", simulation_backend="vectorbt", sample_ok=True,
             ),
             StrategyMetrics(
                 run_id="r", symbol="BTC/USDT", asset_class="crypto", timeframe="H4",
@@ -518,11 +532,50 @@ class TestStrategies:
             ),
         ], {"min_trades": 20})
 
-        summary = build_operator_decision_summary(metrics_to_df(rows))
+        df = metrics_to_df(rows)
+        df["simulation_warning"] = pd.NA
+        summary = build_operator_decision_summary(df)
 
-        assert summary["headline"].startswith("Use/add")
+        assert summary["source"] == "DETERMINISTIC_RESULTS"
+        assert summary["headline"].startswith("1 ready use/add")
         assert summary["use_now"][0]["strategy_name"] == "stochastic_cross"
         assert summary["remove_or_demote"][0]["strategy_name"] == "ema_cross"
+
+    def test_decision_summary_is_deterministic_and_not_limited_to_top_eight(self):
+        from athena_research.metrics import StrategyMetrics
+        from athena_research.reporting import build_operator_decision_summary, metrics_to_df
+        from athena_research.research_context import annotate_research_results
+
+        ready_rows = [
+            StrategyMetrics(
+                run_id="r", symbol=f"SYM{i}/USDT", asset_class="crypto", timeframe="H4",
+                zone="intra", family="stochastic", strategy_name="stochastic_cross",
+                params_str="", direction="both", status="STRONG_CANDIDATE",
+                trade_count=40 + i, win_rate=0.60, profit_factor=1.5 + i / 100,
+                net_return=0.10 + i / 100, oos_return=0.05 + i / 100,
+                robustness_score=0.70, data_source="binance_rest",
+                simulation_backend="vectorbt", sample_ok=True,
+            )
+            for i in range(12)
+        ]
+        low_sample = StrategyMetrics(
+            run_id="r", symbol="LOW/USDT", asset_class="crypto", timeframe="H4",
+            zone="intra", family="stochastic", strategy_name="stochastic_cross",
+            params_str="", direction="both", status="STRONG_CANDIDATE",
+            trade_count=29, win_rate=0.70, profit_factor=2.0, net_return=0.20,
+            oos_return=0.10, robustness_score=0.80, data_source="binance_rest",
+            simulation_backend="vectorbt", sample_ok=True,
+        )
+
+        rows = annotate_research_results(ready_rows + [low_sample], {"min_trades": 20})
+        summary = build_operator_decision_summary(metrics_to_df(rows))
+
+        assert len(summary["use_now"]) == 12
+        assert summary["implementation_ready_count"] == 12
+        assert summary["total_candidate_count"] == 13
+        assert summary["blocked_candidates"][0]["symbol"] == "LOW/USDT"
+        assert "trade_count_below_30" in summary["blocked_candidates"][0]["implementation_blockers"]
+        assert summary["candidate_groups"]
 
     def test_research_context_tags_engine_a_and_b(self):
         from athena_research.metrics import StrategyMetrics
@@ -1205,4 +1258,4 @@ class TestSafetyGuards:
         _check_no_live_imports()
 
     def test_no_risk_engine_import(self):
-        assert "risk_engine" not in sys.modules
+        assert "risk_engine" not in sys.modules or "risk_engine" in _CURRENT_FORBIDDEN_BASELINE

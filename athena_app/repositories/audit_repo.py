@@ -40,28 +40,48 @@ def insert_manual_error(
     )
     
     with timed_sqlite_connect(audit_db, timeout=15.0, label="audit_repo.manual_error.connect") as con:
+        columns = {row[1] for row in con.execute("PRAGMA table_info(audit_log)").fetchall()}
+        base_columns = (
+            "ts",
+            "pair",
+            "score",
+            "direction",
+            "style",
+            "grade",
+            "error_tag",
+            "entry_price",
+            "sl",
+            "tp",
+            "volume",
+            "risk_amount",
+            "risk_pct",
+        )
+        base_values = (
+            ts,
+            pair,
+            score,
+            direction,
+            style,
+            "MANUAL-ERR",
+            error_tag,
+            entry_price,
+            sl,
+            tp,
+            volume,
+            risk_amount,
+            risk_pct,
+        )
+        if "warnings_json" in columns:
+            insert_columns = base_columns + ("warnings_json",)
+            insert_values = base_values + (json.dumps(telemetry),)
+        else:
+            insert_columns = base_columns
+            insert_values = base_values
+        placeholders = ",".join("?" for _ in insert_columns)
         timed_sqlite_execute_write(
             con,
-            "INSERT INTO audit_log("
-            "ts,pair,score,direction,style,grade,error_tag,"
-            "entry_price,sl,tp,volume,risk_amount,risk_pct,warnings_json"
-            ") VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            (
-                ts,
-                pair,
-                score,
-                direction,
-                style,
-                "MANUAL-ERR",
-                error_tag,
-                entry_price,
-                sl,
-                tp,
-                volume,
-                risk_amount,
-                risk_pct,
-                json.dumps(telemetry),
-            ),
+            f"INSERT INTO audit_log({','.join(insert_columns)}) VALUES({placeholders})",
+            insert_values,
             label="audit_repo.manual_error.insert",
         )
 

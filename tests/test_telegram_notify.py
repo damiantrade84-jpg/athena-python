@@ -21,6 +21,19 @@ class _Resp:
 
 def _set_config(monkeypatch, **overrides):
     monkeypatch.setattr(telegram_notify, "_dotenv_loaded", True)
+    for name in (
+        "TELEGRAM_BOT_TOKEN",
+        "TELEGRAM_CHAT_ID",
+        "TELEGRAM_ENABLED",
+        "TELEGRAM_TIMEOUT_SEC",
+        "TELEGRAM_RETRY_ATTEMPTS",
+        "TELEGRAM_RETRY_BACKOFF_SEC",
+        "TELEGRAM_QUEUE_MAX_SIZE",
+        "TELEGRAM_MAX_MESSAGE_CHARS",
+        "TELEGRAM_PARSE_MODE",
+        "TELEGRAM_FALLBACK_PLAINTEXT",
+    ):
+        monkeypatch.delenv(name, raising=False)
     config = {
         "enabled": True,
         "token": "token",

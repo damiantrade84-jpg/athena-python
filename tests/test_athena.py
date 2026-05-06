@@ -319,10 +319,12 @@ class TestJsonSafety:
 
 def test_athena_source_exposes_intermarket_payload_and_route():
     root = Path(__file__).resolve().parents[1]
-    source = (root / "athena.py").read_text(encoding="utf-8")
+    athena_source = (root / "athena.py").read_text(encoding="utf-8")
+    route_source = (root / "athena_app" / "api" / "routes_market_data.py").read_text(encoding="utf-8")
 
-    assert '@app.route("/api/intermarket-matrix")' in source
-    assert '"intermarketConfirmation": res.get("intermarketConfirmation", {})' in source
+    assert '"/api/intermarket-matrix"' in route_source
+    assert '"api_intermarket_matrix"' in route_source
+    assert '"intermarketConfirmation": res.get("intermarketConfirmation", {})' in athena_source
 
 
 def test_engine_b_live_scan_uses_mt5_market_state_helper():
@@ -337,20 +339,38 @@ def test_engine_b_live_scan_uses_mt5_market_state_helper():
 
 def test_ui_source_renders_intermarket_confirmation_box():
     root = Path(__file__).resolve().parents[1]
-    source = (root / "static" / "index.html").read_text(encoding="utf-8")
+    type_source = (root / "static" / "react-app" / "app" / "src" / "types" / "athena.ts").read_text(encoding="utf-8")
+    card_source = (
+        root
+        / "static"
+        / "react-app"
+        / "app"
+        / "src"
+        / "components"
+        / "athena"
+        / "EngineASignalCard.tsx"
+    ).read_text(encoding="utf-8")
 
-    assert "function buildIntermarketConfirmationBox(s)" in source
-    assert "buildIntermarketConfirmationBox(s)" in source
+    assert "intermarketConfirmation?: unknown" in type_source
+    assert "intermarketConfirmationEntries(signal.intermarketConfirmation)" in card_source
+    assert "Intermarket confirmation" in card_source
 
 
 def test_ui_source_exposes_pair_browser_tab_and_actions():
     root = Path(__file__).resolve().parents[1]
-    source = (root / "static" / "index.html").read_text(encoding="utf-8")
-    feature_source = (root / "static" / "js" / "features" / "pair_browser.js").read_text(encoding="utf-8")
+    home_source = (root / "static" / "react-app" / "app" / "src" / "pages" / "Home.tsx").read_text(encoding="utf-8")
+    sidebar_source = (
+        root / "static" / "react-app" / "app" / "src" / "components" / "layout" / "Sidebar.tsx"
+    ).read_text(encoding="utf-8")
+    panel_source = (
+        root / "static" / "react-app" / "app" / "src" / "components" / "panels" / "PairBrowserPanel.tsx"
+    ).read_text(encoding="utf-8")
 
-    assert 'id="nav-pair-browser"' in source
-    assert 'id="panel-pair-browser"' in source
-    assert '/static/js/features/pair_browser.js' in source
-    assert "window.runPairBrowserEngineA = function" in feature_source
-    assert "window.runPairBrowserEngineB = async function" in feature_source
-    assert "window.runPairBrowserCompare = async function" in feature_source
+    assert "pairBrowser: PairBrowserPanel" in home_source
+    assert "{ id: 'pairBrowser', label: 'Pair Browser'" in sidebar_source
+    assert "const runEngineA = useCallback" in panel_source
+    assert "const runEngineB = useCallback" in panel_source
+    assert "const runCompare = useCallback" in panel_source
+    assert "'/api/pair-scan'" in panel_source
+    assert "'/api/naked-analysis'" in panel_source
+    assert "'/api/compare-engines'" in panel_source

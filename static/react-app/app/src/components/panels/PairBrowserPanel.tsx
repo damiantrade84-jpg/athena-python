@@ -50,6 +50,17 @@ interface NakedAnalysisResponse extends EngineBNakedResult {
 type Direction = 'AUTO' | 'LONG' | 'SHORT';
 type Style = 'auto' | 'scalp' | 'intraday' | 'swing';
 
+const TRADINGVIEW_SYMBOL_MAP: Record<string, string> = {
+  EURX: 'PEPPERSTONE:EURX',
+  JPYX: 'PEPPERSTONE:JPYX',
+  USDX: 'PEPPERSTONE:USDX',
+};
+
+function tradingViewSymbolForLabel(label: string): string {
+  const normalized = label.trim().toUpperCase();
+  return TRADINGVIEW_SYMBOL_MAP[normalized] || label.replace(/\//g, '');
+}
+
 export default function PairBrowserPanel() {
   const { showToast } = useStore();
   const [search, setSearch] = useState('');
@@ -494,7 +505,7 @@ export default function PairBrowserPanel() {
                     variant="outline"
                     className="h-8 text-xs"
                     onClick={() => {
-                      const slug = selectedLabel.replace(/\//g, '');
+                      const slug = tradingViewSymbolForLabel(selectedLabel);
                       window.open(`https://www.tradingview.com/chart/?symbol=${encodeURIComponent(slug)}`, '_blank', 'noopener');
                     }}
                   >

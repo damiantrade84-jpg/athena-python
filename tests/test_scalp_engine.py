@@ -286,6 +286,154 @@ def test_check_cvd_prefers_cumulative_cvd_slope(monkeypatch):
     assert r["cvd_slope"] == 10
 
 
+def test_aggression_fidelity_marks_proxy_flow_as_not_strict():
+    fields = scalp_engine._engine_d_aggression_fidelity(
+        absorption={"detected": False, "count": 0},
+        cvd={"direction": "LONG", "source": "candles"},
+        aaa={"complete": False, "phase": "absorption_only"},
+        vwap={"lean": "LONG"},
+        setup_direction="LONG",
+    )
+
+    assert fields["aggression_confirmed"] is True
+    assert fields["aggression_source"] == "candle_proxy"
+    assert fields["aggression_source_is_proxy"] is True
+    assert fields["strict_fabio_pass"] is False
+
+
+def test_aggression_fidelity_marks_binance_trade_flow_as_strict():
+    fields = scalp_engine._engine_d_aggression_fidelity(
+        absorption={"detected": False, "count": 0},
+        cvd={"direction": "SHORT", "source": "binance_aggtrade", "bucket_count": 12},
+        aaa={"complete": False, "phase": "absorption_only"},
+        vwap={"lean": "SHORT"},
+        setup_direction="SHORT",
+    )
+
+    assert fields["aggression_confirmed"] is True
+    assert fields["aggression_source"] == "binance_aggtrade"
+    assert fields["aggression_source_is_proxy"] is False
+    assert fields["strict_fabio_pass"] is True
+
+
+def test_strict_fabio_shadow_flags_current_pass_with_proxy_aggression():
+    aggression = scalp_engine._engine_d_aggression_fidelity(
+        absorption={"detected": False, "count": 0},
+        cvd={"direction": None, "source": "candles"},
+        aaa={"complete": False, "phase": "absorption_only"},
+        vwap={"lean": "SHORT"},
+        setup_direction="SHORT",
+    )
+
+    fields = scalp_engine._engine_d_strict_fabio_shadow(
+        market_state="balance",
+        price_loc={"location": "at_vah", "nearest_level": 101.0},
+        setup={"valid": True, "setup_type": "mean_reversion", "direction": "SHORT"},
+        aggression_fidelity=aggression,
+        current_gate_result="PASS",
+    )
+
+    assert fields["strict_fabio_pass"] is False
+    assert fields["strict_fabio_missing_pillars"] == ["aggression"]
+    assert fields["strict_fabio_reason"] == "missing_aggression"
+    assert fields["current_vs_strict_status"] == "current_pass_strict_fail"
+
+
+def test_strict_fabio_shadow_passes_when_all_three_pillars_align():
+    aggression = scalp_engine._engine_d_aggression_fidelity(
+        absorption={"detected": False, "count": 0},
+        cvd={"direction": "LONG", "source": "binance_aggtrade", "bucket_count": 12},
+        aaa={"complete": False, "phase": "absorption_only"},
+        vwap={"lean": "LONG"},
+        setup_direction="LONG",
+    )
+
+    fields = scalp_engine._engine_d_strict_fabio_shadow(
+        market_state="balance",
+        price_loc={"location": "at_val", "nearest_level": 99.0},
+        setup={"valid": True, "setup_type": "mean_reversion", "direction": "LONG"},
+        aggression_fidelity=aggression,
+        current_gate_result="WATCHLIST",
+    )
+
+    assert fields["strict_fabio_pass"] is True
+    assert fields["strict_fabio_missing_pillars"] == []
+    assert fields["strict_fabio_reason"] == "strict_pass"
+    assert fields["current_vs_strict_status"] == "current_watchlist_strict_pass"
+
+
+def test_engine_d_data_fidelity_labels_real_trade_flow_and_proxies():
+    fields = scalp_engine._engine_d_data_fidelity(
+        vp={"volume_source": "range_proxy", "bucket_count": None},
+        cvd={"direction": "LONG", "source": "candles"},
+        absorption={"detected": True, "count": 1},
+        asset_type="forex",
+        structure_volume_source="mt5_tick",
+        execution_volume_source="eodhd_1m",
+        active_profile_anchor="fixed_lookback",
+    )
+
+    assert fields["report_only"] is True
+    assert fields["vp_source"] == "range_proxy"
+    assert fields["vp_is_proxy"] is True
+    assert fields["cvd_source"] == "candles"
+    assert fields["cvd_is_proxy"] is True
+    assert fields["absorption_source"] == "eodhd_candle_volume"
+    assert fields["absorption_is_proxy"] is True
+    assert fields["aggression_uses_real_order_flow"] is False
+
+    real = scalp_engine._engine_d_data_fidelity(
+        vp={"volume_source": "binance_aggtrade", "bucket_count": 12},
+        cvd={"direction": "SHORT", "source": "binance_aggtrade", "bucket_count": 12},
+        absorption={"detected": False, "count": 0},
+        asset_type="crypto",
+        structure_volume_source="binance_candle",
+        execution_volume_source="binance_candle",
+        active_profile_anchor="trade_bucket_session",
+    )
+
+    assert real["vp_uses_real_trade_buckets"] is True
+    assert real["cvd_uses_real_trade_buckets"] is True
+    assert real["aggression_uses_real_order_flow"] is True
+    assert real["absorption_is_proxy"] is True
+
+
+def test_engine_d_profile_anchor_shadow_reports_fixed_and_candidates():
+    start = datetime(2026, 5, 5, 0, 0, tzinfo=timezone.utc)
+    candles = []
+    for i in range(140):
+        close = 100.0 + (i * 0.01)
+        if i in (120, 121):
+            close = 102.0
+        elif i >= 122:
+            close = 100.5
+        candles.append({
+            "time": (start + timedelta(minutes=15 * i)).isoformat(),
+            "open": close - 0.05,
+            "high": close + 0.20,
+            "low": close - 0.20,
+            "close": close,
+            "vol": 1000 + i,
+        })
+
+    shadow = scalp_engine._engine_d_profile_anchor_shadow(
+        candles_m15=candles,
+        vp_lookback=30,
+        vp={"vah": 101.0, "val": 99.0},
+        active_anchor_mode="fixed_lookback",
+        volume_source="candle_volume",
+    )
+
+    assert shadow["report_only"] is True
+    assert shadow["active_anchor"]["mode"] == "fixed_lookback"
+    assert shadow["active_anchor"]["bars"] == 30
+    assert shadow["candidates"]["prior_session"]["valid"] is True
+    assert shadow["candidates"]["prior_session"]["session_basis"] == "utc_calendar_day"
+    assert shadow["candidates"]["impulse_leg"]["valid"] is True
+    assert shadow["candidates"]["reclaim_leg"]["valid"] is True
+    assert shadow["candidates"]["reclaim_leg"]["outside_side"] == "above_vah"
+
+
 def test_check_aaa_sequence_no_absorption():
     """AAA requires absorption first — without it, complete=False."""
     r = _check_aaa_sequence(_candles(30), {"detected": False, "count": 0, "bars": []},
@@ -1262,6 +1410,14 @@ def test_run_scalp_scan_does_not_block_close_structure_target(monkeypatch):
     assert sig["executable"] is True
     assert sig["fail_reasons"] == []
     assert "structure_target_close" in sig["soft_warnings"]
+    assert sig["strict_fabio_pass"] is False
+    assert sig["strict_fabio_missing_pillars"] == ["aggression"]
+    assert sig["current_vs_strict_status"] == "current_pass_strict_fail"
+    assert sig["data_fidelity"]["report_only"] is True
+    assert sig["data_fidelity"]["active_profile_anchor"] == "fixed_lookback"
+    assert sig["data_fidelity"]["cvd_is_proxy"] is True
+    assert sig["profile_anchor_mode"] == "fixed_lookback"
+    assert sig["profile_anchor_shadow"]["report_only"] is True
 
 
 def test_scalp_cost_assumptions_use_asset_overrides_before_global_scalars():

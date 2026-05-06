@@ -9,6 +9,7 @@ import scalp_engine
 import mt5_executor
 import risk_engine
 import execution_lifecycle
+from athena_app.api import routes_live_dashboard
 
 
 def _load_athena_module():
@@ -291,6 +292,82 @@ def test_scalp_execute_returns_fresh_skip_details(monkeypatch):
     assert data["skipped"][0]["ai_score"] == 58
 
 
+def test_scalp_ui_signal_preserves_flow_fidelity_fields():
+    athena_module = _load_athena_module()
+
+    out = athena_module._scalp_ui_signal(
+        {
+            "pair": "BTC/USDT",
+            "direction": "LONG",
+            "price": 100.0,
+            "rr1": 1.2,
+            "ai_grade": "B",
+            "vp_volume_source": "binance_aggtrade",
+            "vp_bucket_count": 14,
+            "vp_fidelity": "real_trade_bucket",
+            "vp_is_proxy": False,
+            "vp_uses_real_trade_buckets": True,
+            "absorption_source": "binance_candle",
+            "absorption_fidelity": "absorption_candle_volume_proxy",
+            "absorption_is_proxy": True,
+            "cvd_source": "binance_aggtrade",
+            "cvd_bucket_count": 14,
+            "cvd_fidelity": "real_trade_bucket",
+            "cvd_is_proxy": False,
+            "cvd_uses_real_trade_buckets": True,
+            "aggression_source": "binance_aggtrade",
+            "aggression_confirmed": True,
+            "aggression_source_is_proxy": False,
+            "aggression_uses_real_order_flow": True,
+            "data_fidelity": {
+                "report_only": True,
+                "vp_source": "binance_aggtrade",
+                "cvd_source": "binance_aggtrade",
+                "absorption_source": "binance_candle",
+                "aggression_uses_real_order_flow": True,
+            },
+            "strict_fabio_pass": True,
+            "strict_fabio_reason": "strict_pass",
+            "strict_fabio_missing_pillars": [],
+            "current_vs_strict_status": "current_pass_strict_pass",
+            "profile_anchor_mode": "trade_bucket_session",
+            "profile_anchor_bars": 50,
+            "profile_anchor_start": "2026-05-06T10:00:00+00:00",
+            "profile_anchor_end": "2026-05-06T12:00:00+00:00",
+            "profile_anchor_shadow": {
+                "report_only": True,
+                "active_anchor": {"mode": "trade_bucket_session", "bars": 50},
+                "candidates": {"prior_session": {"valid": False, "reason": "not_enough_data"}},
+            },
+        }
+    )
+
+    assert out["vp_volume_source"] == "binance_aggtrade"
+    assert out["vp_bucket_count"] == 14
+    assert out["vp_fidelity"] == "real_trade_bucket"
+    assert out["vp_is_proxy"] is False
+    assert out["vp_uses_real_trade_buckets"] is True
+    assert out["absorption_source"] == "binance_candle"
+    assert out["absorption_is_proxy"] is True
+    assert out["cvd_source"] == "binance_aggtrade"
+    assert out["cvd_bucket_count"] == 14
+    assert out["cvd_fidelity"] == "real_trade_bucket"
+    assert out["cvd_is_proxy"] is False
+    assert out["cvd_uses_real_trade_buckets"] is True
+    assert out["aggression_source"] == "binance_aggtrade"
+    assert out["aggression_confirmed"] is True
+    assert out["aggression_source_is_proxy"] is False
+    assert out["aggression_uses_real_order_flow"] is True
+    assert out["data_fidelity"]["report_only"] is True
+    assert out["strict_fabio_pass"] is True
+    assert out["strict_fabio_reason"] == "strict_pass"
+    assert out["strict_fabio_missing_pillars"] == []
+    assert out["current_vs_strict_status"] == "current_pass_strict_pass"
+    assert out["profile_anchor_mode"] == "trade_bucket_session"
+    assert out["profile_anchor_bars"] == 50
+    assert out["profile_anchor_shadow"]["report_only"] is True
+
+
 def test_open_trades_timed_hides_intraday_labels_for_scalp(monkeypatch):
     athena_module = _load_athena_module()
 
@@ -384,13 +461,12 @@ def test_open_trades_timed_engine_scalp_overrides_stale_intraday_style(monkeypat
 
 
 def test_live_dashboard_engine_d_pass_can_be_paper_candidate():
-    athena_module = _load_athena_module()
     freshness = {"gateDecision": "ALLOW"}
     engine_c = {"decisionState": "NO_SETUP", "reason": "No A/B setup"}
     engine_d = {"gateResult": "PASS"}
     levels = {"entry": 100.0, "sl": 99.0, "tp": 102.0, "tp1": 102.0, "rr": 2.0}
 
-    final_state, main_reason, block_reason = athena_module._ld_final_state(
+    final_state, main_reason, block_reason = routes_live_dashboard._ld_final_state(
         engine_c, engine_d, freshness, levels
     )
 
@@ -400,8 +476,7 @@ def test_live_dashboard_engine_d_pass_can_be_paper_candidate():
 
 
 def test_live_dashboard_engine_d_row_exposes_levels():
-    athena_module = _load_athena_module()
-    row = athena_module._ld_build_engine_d_row(
+    row = routes_live_dashboard._ld_build_engine_d_row(
         {
             "_ts": __import__("time").time(),
             "gate_result": "PASS",
