@@ -347,14 +347,14 @@ export default function LiveCockpitPanel() {
             </div>
           </ScrollArea>
           {/* Event feed */}
-          <Card className="border-border/60 bg-card/50">
+          <Card className="border-border/60 bg-card/50 shrink-0">
             <CardHeader className="pb-2">
               <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Rajdhani', sans-serif", letterSpacing: '0.12em' }}>
                 <Activity className="w-3.5 h-3.5" /> Event Feed
               </CardTitle>
             </CardHeader>
             <CardContent className="p-3 pt-0">
-              <ScrollArea className="h-[160px]">
+              <ScrollArea className="h-[100px]">
                 {events.length === 0 ? (
                   <p className="text-[11px] text-muted-foreground">No events yet.</p>
                 ) : (
