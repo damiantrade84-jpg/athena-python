@@ -1,3 +1,21 @@
+# Engine B Forex Execution Failure Diagnostics
+
+- [x] Capture current execution failure evidence from logs and recent runtime files.
+- [x] Trace Engine B forex execute request path from UI/API to broker/paper execution.
+- [x] Identify where the failure reason is lost or hidden.
+- [x] Patch minimal logging/response behavior if root cause is confirmed.
+- [x] Run focused validation and record exact outcome.
+
+## Review
+
+- Confirmed the React and Telegram execution surfaces post Engine B/forex orders to `/api/quick-execute`.
+- Confirmed failed `run_managed_execution()` results were returned as generic `Execution failed` when the broker/lifecycle result had no `error` field, and `/api/quick-execute` did not log that failed result.
+- Added failure extraction/logging so `/api/quick-execute` and `/api/execute` now log pair, venue, reason, and sanitized execution result. Empty broker failures now return `Execution failed: broker_execute returned no error detail`.
+- Validation passed: `python -m py_compile execution.py tests\test_crit_fixes.py`.
+- Validation passed: `python -m pytest tests/test_crit_fixes.py -q --basetemp=tmp/pytest-exec-failure-crit` (`11 passed`).
+- Adjacent validation passed: `python -m pytest tests/test_scalp_execution.py::test_quick_execute_rejects_direction_flip -q --basetemp=tmp/pytest-exec-failure-scalp-adjacent`.
+- Adjacent validation passed: `python -m pytest tests/test_execution_engine_c_scan.py -q --basetemp=tmp/pytest-exec-failure-engine-c-scan` (`4 passed`).
+
 # Engine B Audit-Safe Knobs And Diagnostics
 
 - [x] Add default-safe config knobs for D1 PD-array conflict distance and rejection wick/body ratio.

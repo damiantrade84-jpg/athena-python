@@ -159,6 +159,83 @@ class TestQuickExecuteExecutionGuard:
         assert r_quick.status_code == r_exec.status_code == 503
         assert r_quick.get_json()["error"] == r_exec.get_json()["error"]
 
+    def test_quick_execute_logs_empty_broker_failure(self, monkeypatch):
+        """/api/quick-execute must not hide broker failures with no error field."""
+        import execution
+        import mt5_executor
+        import risk_engine
+        from flask import Flask
+
+        rt_mock = _make_rt(execution_enabled=True)
+        rt_mock.log = MagicMock()
+        rt_mock.resolve_pair_from_signal = lambda *_args, **_kwargs: None
+        rt_mock.fetch_candles = lambda *_args, **_kwargs: []
+        rt_mock.calc_indicators_with_normalized = lambda *_args, **_kwargs: {}
+        rt_mock.atr_for_levels = lambda *_args, **_kwargs: 0.001
+        rt_mock.calc_levels = lambda *_args, **_kwargs: {}
+
+        class _Approval:
+            approved = True
+            reason = "OK"
+            volume = 0.1
+            risk_amount = 10.0
+            risk_pct = 0.001
+
+            @staticmethod
+            def to_dict():
+                return {"approved": True, "reason": "OK"}
+
+        monkeypatch.setattr(execution, "rt", lambda: rt_mock)
+        monkeypatch.setattr(
+            execution,
+            "recompute_levels_for_style",
+            lambda *_args, **_kwargs: {
+                "pip_mode": "intraday",
+                "atr": 0.001,
+                "levels": {"sl": 1.09, "tp1": 1.12, "tp2": 1.13},
+            },
+        )
+        monkeypatch.setattr(mt5_executor, "mt5_get_account", lambda: {"balance": 10000.0, "equity": 10000.0})
+        monkeypatch.setattr(mt5_executor, "mt5_get_positions", lambda: {"positions": []})
+        monkeypatch.setattr(mt5_executor, "mt5_get_symbol_info", lambda _symbol: {"digits": 5, "point": 0.00001})
+        monkeypatch.setattr(risk_engine, "risk_check", lambda **_kwargs: _Approval())
+        monkeypatch.setattr(execution, "_guardian_pre_trade", lambda *_args, **_kwargs: (True, "OK"))
+        monkeypatch.setattr(
+            execution,
+            "run_managed_execution",
+            lambda *_args, **_kwargs: {
+                "success": False,
+                "lifecycle": {
+                    "phases": [{"name": "broker_execute", "success": False}]
+                },
+            },
+        )
+
+        app = Flask(__name__)
+        execution.register_execution_routes(app)
+        client = app.test_client()
+
+        resp = client.post(
+            "/api/quick-execute",
+            json={
+                "signal": {
+                    "pair": "EUR/USD",
+                    "display": "EUR/USD",
+                    "type": "forex",
+                    "direction": "LONG",
+                    "price": 1.1,
+                },
+                "pip_mode": "intraday",
+            },
+        )
+
+        data = resp.get_json()
+        assert resp.status_code == 400
+        assert data["error"] == "Execution failed: broker_execute returned no error detail"
+        assert data["execution"]["error"] == data["error"]
+        warning_messages = [str(call.args[0]) for call in rt_mock.log.warning.call_args_list]
+        assert any("EUR/USD mt5 FAILED" in msg and data["error"] in msg for msg in warning_messages)
+
 
 # ── CRIT-002: forex intermarket cap parity ────────────────────────────────────
 

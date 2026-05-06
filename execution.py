@@ -71,6 +71,50 @@ def _execution_audit_legs(result: dict, approval) -> list[dict]:
     return audit_legs
 
 
+def _execution_failure_reason(result: object, default: str = "Execution failed") -> str:
+    """Extract a useful execution failure reason from broker/lifecycle output."""
+    if isinstance(result, dict):
+        for key in ("error", "detail", "message", "comment", "reason"):
+            val = result.get(key)
+            if val:
+                return str(val)
+        lifecycle = result.get("lifecycle")
+        if isinstance(lifecycle, dict):
+            phases = lifecycle.get("phases")
+            if isinstance(phases, list):
+                for phase in reversed(phases):
+                    if not isinstance(phase, dict):
+                        continue
+                    phase_result = phase.get("result")
+                    if isinstance(phase_result, dict):
+                        nested = _execution_failure_reason(phase_result, "")
+                        if nested:
+                            return nested
+                    if phase.get("success") is False:
+                        name = phase.get("name") or "execution"
+                        return f"{default}: {name} returned no error detail"
+        retcode = result.get("retcode")
+        if retcode is not None:
+            return f"{default}: broker retcode {retcode}"
+    return default
+
+
+def _log_execution_failure(log, prefix: str, pair: str, venue: str, result: object) -> str:
+    """Log failed execution output and return the reason sent back to operators."""
+    reason = _execution_failure_reason(result)
+    try:
+        safe_result = _json_safe(result)
+    except Exception:
+        safe_result = repr(result)
+    try:
+        log.warning(
+            f"[{prefix}] {pair or '?'} {venue or '?'} FAILED: {reason} | result={safe_result}"
+        )
+    except Exception:
+        pass
+    return reason
+
+
 def _engine_c_accepts_engine_b(
     confidence_b: dict, style_profile: dict, regime_label: str, pair_type: str
 ) -> tuple[bool, float]:
@@ -289,6 +333,7 @@ def api_quick_execute():
         return jsonify({"error": "Invalid payload"}), 400
 
     sig = d["signal"]
+    _quick_pair = sig.get("pair") or sig.get("display") or sig.get("symbol") or ""
     engine_b = d.get("engine_b") or {}
     level_override = d.get("level_override") or sig.get("level_override")
 
@@ -556,10 +601,15 @@ def api_quick_execute():
                 }
             )
         else:
-            return jsonify({"error": result.get("error", "Execution failed")}), 400
+            err = _log_execution_failure(
+                _r.log, "QUICK EXEC", pair_name, _exec_venue, result
+            )
+            if isinstance(result, dict):
+                result.setdefault("error", err)
+            return jsonify({"error": err, "execution": _json_safe(result)}), 400
 
     except Exception as e:
-        _r.log.error(f"quick_execute error: {e}")
+        _r.log.exception(f"[QUICK EXEC] {_quick_pair or '?'} error: {e}")
         return jsonify({"error": str(e)}), 500
 
 
@@ -1378,10 +1428,15 @@ def api_execute():
                 f"[EXEC] {pair} EXECUTED: ticket={result.get('ticket')}, volume={result.get('volume')}"
             )
 
+        if not result.get("success"):
+            err = _log_execution_failure(_r.log, "EXEC", pair, _exec_venue, result)
+            if isinstance(result, dict):
+                result.setdefault("error", err)
+
         return jsonify(result)
 
     except Exception as e:
-        _r.log.error(f"[EXEC] execution error: {e}")
+        _r.log.exception(f"[EXEC] {pair or '?'} execution error: {e}")
 
         return jsonify({"error": "Execution failed — check logs"}), 500
 
