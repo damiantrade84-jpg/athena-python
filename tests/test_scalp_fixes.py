@@ -306,7 +306,7 @@ def test_scalp_tp1_is_1r_and_structural_target_is_context(monkeypatch):
         "SCALP_ENGINE",
         {
             **scalp_engine.CONFIG.get("SCALP_ENGINE", {}),
-            "MIN_RR": 3.0,
+            "MIN_RR": 1.0,
             "ATR_SL_ENABLED": False,
             "TP1_R_MULT": 1.0,
         },

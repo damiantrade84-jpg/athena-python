@@ -2183,8 +2183,18 @@ def calculate_scalp_levels(
     if atr_m15 > 0 and cfg.get("ATR_SL_ENABLED", True):
         atr_stop_distance = atr_m15 * float(cfg.get("ATR_SL_MULT", 1.5))
         if atr_stop_distance > 0:
-            sl = entry - atr_stop_distance if direction == "LONG" else entry + atr_stop_distance
-            sl_method = "atr"
+            atr_sl = entry - atr_stop_distance if direction == "LONG" else entry + atr_stop_distance
+            # Use the wider stop: the one further from entry (more conservative).
+            # The structural SL (e.g. VAH/breakout-level, VAL/mean-reversion level)
+            # represents the invalidation level for the setup.  We must not place
+            # the stop inside that level — doing so stops the trade on normal
+            # pullbacks before the setup is actually invalidated.
+            if direction == "LONG" and atr_sl < sl:
+                sl = atr_sl
+                sl_method = "atr"
+            elif direction == "SHORT" and atr_sl > sl:
+                sl = atr_sl
+                sl_method = "atr"
 
     # Defensive: if VP levels place SL on the wrong side of entry (e.g. price has
     # moved outside the value area since the VP was built), clamp to entry ± buffer.
@@ -2199,13 +2209,13 @@ def calculate_scalp_levels(
 
     sl_distance = abs(entry - sl)
 
-    tp1_r_mult = max(float(cfg.get("TP1_R_MULT", 1.0)), 1.0)
+    tp1_r_mult = max(float(cfg.get("TP1_R_MULT", 1.0)), min_rr_cfg)
     tp1 = entry + (sl_distance * tp1_r_mult) if direction == "LONG" else entry - (sl_distance * tp1_r_mult)
     tp_partial = tp1
     actual_rr = round(abs(tp1 - entry) / sl_distance, 2) if sl_distance > 0 else 0
 
     # Structural/profile targets are context and optional runners. They should
-    # not block an otherwise valid scalp when the mechanical 1R pay target exists.
+    # not block an otherwise valid scalp when the mechanical pay target exists.
     structural_tp_direction_ok = (
         (direction == "LONG" and structural_tp > entry)
         or (direction == "SHORT" and structural_tp < entry)
@@ -2231,10 +2241,10 @@ def calculate_scalp_levels(
     if not tp_direction_ok:
         log.warning(
             f"[SCALP] TP direction invalid: {direction} tp1={tp1:.5f} vs entry={entry:.5f} "
-            f"(mechanical 1R target could not be built)"
+            f"(mechanical {tp1_r_mult}R target could not be built)"
         )
 
-    rr_below_min = not tp_direction_ok or actual_rr < 1.0
+    rr_below_min = not tp_direction_ok or actual_rr < min_rr_cfg
 
     # --- Defensive Rounding Safeguard ---
     # Protect against level collapse if symbol_info.digits are too coarse (e.g. 2 digits for a 0.09 crypto pair).

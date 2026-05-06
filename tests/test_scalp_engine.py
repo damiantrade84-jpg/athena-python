@@ -331,21 +331,66 @@ def test_calculate_levels_long_uses_atr_sl_and_1r_tp(monkeypatch):
             "ATR_SL_ENABLED": True,
             "ATR_SL_MULT": 1.5,
             "TP1_R_MULT": 1.0,
+            "MIN_RR": 1.0,
         },
     )
     vp = {"poc": 1.1002, "vah": 1.1080, "val": 1.0970}
+    # Entry far from VAL → structural SL (val - buffer) is wider than ATR SL
     levels = calculate_scalp_levels(
         "LONG", 1.1000, vp, "mean_reversion",
         {"digits": 5, "point": 0.00001}, "forex", atr_m15=0.0020
     )
-    assert levels["sl"] == 1.097
-    assert levels["tp1"] == 1.103
     assert levels["tp_partial"] == levels["tp1"]
     assert levels["rr"] == 1.0
     assert levels["rr_below_min"] is False
-    assert levels["sl_method"] == "atr"
     assert levels["structural_tp"] == vp["poc"]
     assert levels["structure_target_close"] is True
+    # When structural SL is wider, it should be preserved (not replaced by tighter ATR)
+    assert levels["sl"] < 1.097, "Structural SL should be wider than ATR when entry is far from VAL"
+    assert levels["sl_method"] == "vp_boundary"
+
+    # Entry close to VAL → ATR SL is wider than structural SL
+    levels_close = calculate_scalp_levels(
+        "LONG", 1.0972, vp, "mean_reversion",
+        {"digits": 5, "point": 0.00001}, "forex", atr_m15=0.0020
+    )
+    assert levels_close["sl_method"] == "atr"
+    assert levels_close["rr"] == 1.0
+    assert levels_close["sl"] == 1.0942
+
+
+def test_calculate_levels_trend_extension_preserves_structural_sl_when_wider(monkeypatch):
+    """ATR SL must not override the structural breakout-level SL when the latter is wider."""
+    monkeypatch.setitem(
+        scalp_engine.CONFIG,
+        "SCALP_ENGINE",
+        {
+            **scalp_engine.CONFIG.get("SCALP_ENGINE", {}),
+            "ATR_SL_ENABLED": True,
+            "ATR_SL_MULT": 1.5,
+            "MIN_RR": 1.0,
+        },
+    )
+    vp = {"poc": 1.1000, "vah": 1.1000, "val": 1.0900}
+    # Price broke far above VAH — structural SL (vah - buffer) is much wider than ATR SL
+    levels = calculate_scalp_levels(
+        "LONG", 1.1200, vp, "trend_extension",
+        {"digits": 5, "point": 0.00001}, "forex", atr_m15=0.0020
+    )
+    assert levels["sl_method"] == "vp_boundary"
+    assert levels["sl"] < 1.117, "Structural breakout SL should be used, not tighter ATR"
+    assert levels["rr"] == 1.0
+    assert levels["tp1"] > levels["entry"]
+
+    # Same for SHORT far below VAL
+    levels_short = calculate_scalp_levels(
+        "SHORT", 1.0800, vp, "trend_extension",
+        {"digits": 5, "point": 0.00001}, "forex", atr_m15=0.0020
+    )
+    assert levels_short["sl_method"] == "vp_boundary"
+    assert levels_short["sl"] > 1.083, "Structural breakout SL should be used, not tighter ATR"
+    assert levels_short["rr"] == 1.0
+    assert levels_short["tp1"] < levels_short["entry"]
 
 
 def test_calculate_levels_short_sl_above_vah():
@@ -382,7 +427,12 @@ def test_calculate_levels_keys():
         assert k in levels, f"Missing key: {k}"
 
 
-def test_calculate_levels_trend_continuation_keeps_close_structure_as_warning():
+def test_calculate_levels_trend_continuation_keeps_close_structure_as_warning(monkeypatch):
+    monkeypatch.setitem(
+        scalp_engine.CONFIG,
+        "SCALP_ENGINE",
+        {**scalp_engine.CONFIG.get("SCALP_ENGINE", {}), "MIN_RR": 1.0},
+    )
     vp = {"poc": 0.917362, "vah": 0.917585, "val": 0.91714}
     levels = calculate_scalp_levels(
         "SHORT", 0.91789, vp, "trend_continuation",
