@@ -45,6 +45,7 @@ from scoring import (
     calc_confluence,
     get_score_threshold,
     get_pair_profile,
+    get_pair_level_atr_class,
     get_pair_score_group,
     is_trend_state_blocked,
 )
@@ -1058,6 +1059,7 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
     for _k in ["votes", "sentiment", "eventRisk", "fundingRate", "confluenceScore"]:
         _pair_ctx.pop(_k, None)
     _pair_ctx["score_group"] = _pair_score_group
+    _level_atr_class = get_pair_level_atr_class(_pair_ctx)
 
     # Engine A backtest gate: pair profile → group → class hierarchy.
     # Stage 4.2: Backtest and live use identical 2-tier thresholds.
@@ -1430,7 +1432,7 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
             )
 
             lvl = calc_levels(
-                entry, atr, direction, _ptype, regime_state=_bt_regime_state,
+                entry, atr, direction, _level_atr_class, regime_state=_bt_regime_state,
                 style=effective_style,
             )
 
@@ -1913,7 +1915,7 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
             )
 
             lvl = calc_levels(
-                entry, atr, direction, _ptype, regime_state=_bt_regime_state2,
+                entry, atr, direction, _level_atr_class, regime_state=_bt_regime_state2,
                 style=effective_style,
             )
 
@@ -2374,7 +2376,7 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
             )
 
             lvl = calc_levels(
-                entry, atr, direction, _ptype, regime_state=_bt_regime_state3,
+                entry, atr, direction, _level_atr_class, regime_state=_bt_regime_state3,
                 style=effective_style,
             )
 
@@ -4458,6 +4460,7 @@ def backtest_pair_consensus(
 
     requested_style = _normalize_style(style)
     _pair_score_group = get_pair_score_group(pair)
+    _level_atr_class = get_pair_level_atr_class(pair)
     # Engine C BT uses the same style as Engine A (resolved via auto), and reads TFs
     # from the asset+style matrix — no more forex-specific structure TF flag.
     _ec_bt_style = requested_style if requested_style != "auto" else (
@@ -4617,7 +4620,7 @@ def backtest_pair_consensus(
                 bar_time=candles_h4[i].get("time") if candles_h4 else None,
             )
             _atr_c = _rt().atr_for_levels(d1i, h4i, h1i, pair=pair, style=resolved_style)
-            _lvl_a = calc_levels(current_price, _atr_c or atr, res_a["direction"], _ptype,
+            _lvl_a = calc_levels(current_price, _atr_c or atr, res_a["direction"], _level_atr_class,
                                  regime_state=res_a.get("regime", {}).get("state"),
                                  style=resolved_style) if _atr_c else {}
             signal_a = {

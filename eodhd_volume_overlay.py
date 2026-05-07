@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from candles_cache import candle_time_epoch_utc
+from config import CONFIG
 
 _EODHD_VOLUME_TYPES = {"stock", "commodity", "index", "forex"}
 _EODHD_VOLUME_TIMEFRAMES = {"M1", "M5", "M15", "H1", "H4", "D1"}
@@ -10,13 +11,19 @@ _INTRADAY_TFS = {"M1", "M5", "M15", "H1", "H4"}
 
 _COMMODITY_D1_ONLY = {
     "GC=F",  # retained for legacy mapping; intraday now routed via _FOREX_METALS_1M_RESAMPLE
-    # Industrial metals — EODHD D1 only (COPPER, ALUMINUM tickers confirmed)
+    # Industrial metals - D1 overlay only.
     "Copper",
     "Aluminium",
-    # Agricultural — EODHD D1 only (COFFEE, CORN, COTTON, SUGAR, WHEAT tickers confirmed)
+    "Lead",
+    "Nickel",
+    "Zinc",
+    # Agricultural commodities - D1 overlay only.
+    "Cattle",
+    "Cocoa",
     "Coffee",
     "Corn",
     "Cotton",
+    "Soybeans",
     "Sugar",
     "Wheat",
 }
@@ -148,6 +155,20 @@ def supports_eodhd_volume_overlay(pair: dict | None) -> bool:
     if not isinstance(pair, dict):
         return False
     return str(pair.get("type") or "").lower() in _EODHD_VOLUME_TYPES
+
+
+def eodhd_commodity_ticker_for_pair(pair: dict | None) -> str | None:
+    """Resolve configured EODHD commodity ticker without changing OHLC routing."""
+    if not isinstance(pair, dict):
+        return None
+    if str(pair.get("type") or "").lower() != "commodity":
+        return None
+    tickers = CONFIG.get("EODHD_COMMODITY_TICKERS", {}) or {}
+    for key in (pair.get("display"), pair.get("symbol")):
+        if key in tickers:
+            value = str(tickers.get(key) or "").strip()
+            return value or None
+    return None
 
 
 def is_eodhd_volume_whitelisted(pair: dict | None, tf: str) -> bool:

@@ -495,3 +495,54 @@
   - `.\node_modules\.bin\tsc.cmd -b --noEmit` from `static/react-app/app`
   - `python -m pytest -q --basetemp=.pytest_local_tmp\baseline_full_after_order_fixes` (`1218 passed`, two pandas `FutureWarning`s)
 - Remaining risk: profile-anchor candidates are heuristic visibility only. They are not performance evidence and are not used for scoring, gates, risk, or execution.
+
+# Engine A Asset Group Calibration Fixes
+
+- [x] Confirm current Engine A feed, threshold, ATR-class, and volume-threshold paths from source.
+- [x] Move active Engine A group thresholds into config-backed resolver while preserving pair-profile override priority.
+- [x] Route ETF and bond ETF SL/TP ATR classes without changing their stock feed/execution identity.
+- [x] Wire pair `volume_threshold` into factor scoring volume adjustment.
+- [x] Block MT5 broker candle fallback candles by default when the MT5 source fails.
+- [x] Add focused tests for each changed behavior.
+- [x] Run compile and targeted pytest validation.
+
+## Review
+
+- Added config-backed Engine A score-group thresholds and ETF ATR level-class routing.
+- Kept ETF pairs as stock-source instruments while routing SPY/QQQ/GLD/IWM/EEM/etc. to `etf` ATR multipliers and TLT to `etf_bond`.
+- Routed live crypto Engine A level ATR and OI context to Bybit by default, with Binance/signal-feed fallback disabled by config.
+- Blocked MT5 error payload fallback candles by default so broker-source failure cannot silently become Polygon/yfinance execution candles.
+- Wired pair/backtest `volume_threshold` into `compute_factor_scores()` volume adjustment.
+- Enabled explicit COT/proxy handling for stock/index formulas and explicit `cot:unsupported` diagnostics for commodities without formula coverage.
+- Updated the configured MT5 forex H4 default offset to 2h while preserving tests for the 1h override path.
+- Validation passed:
+  - `python -m py_compile scoring.py factor_scoring.py candles_cache.py data_feeds.py athena.py backtest_runner.py config.py athena_app\services\market_state.py athena_app\api\routes_live_dashboard.py tests\test_scoring_group_routing.py tests\test_factor_scoring.py tests\test_candles_cache.py tests\test_data_feeds_backtest_derivatives.py tests\test_freshness_h4_offset_regression.py`
+  - `python -m pytest tests/test_scoring_group_routing.py tests/test_factor_scoring.py tests/test_candles_cache.py tests/test_data_feeds_backtest_derivatives.py tests/test_freshness_h4_offset_regression.py -q --basetemp=.pytest_local_tmp\engine_a_asset_groups` (`70 passed`, one pytest cache permission warning)
+  - `python -m pytest tests/test_style_level_consistency.py tests/test_engine_c_bt_levels.py tests/test_market_specific_contracts.py tests/test_candle_cache_meta.py tests/test_market_state_offsets.py tests/test_candle_freshness_diagnostics.py tests/test_data_freshness.py -q --basetemp=.pytest_local_tmp\engine_a_asset_groups_adjacent` (`50 passed`, one pytest cache permission warning)
+  - `python -m pytest tests/test_factor_group_overrides.py tests/test_stage3_enhancements.py tests/test_scoring.py -q --basetemp=.pytest_local_tmp\engine_a_asset_groups_factor_adjacent` (`22 passed`, one pytest cache permission warning)
+  - `git diff --check -- scoring.py factor_scoring.py candles_cache.py data_feeds.py athena.py backtest_runner.py config.py config.yaml athena_app/services/market_state.py athena_app/api/routes_live_dashboard.py tests/test_scoring_group_routing.py tests/test_factor_scoring.py tests/test_candles_cache.py tests/test_data_feeds_backtest_derivatives.py tests/test_freshness_h4_offset_regression.py tasks/todo.md`
+
+# Engine A Missed Audit Fixes
+
+- [x] Verify the supplied misses against current source, not pasted line numbers.
+- [x] Remove or wire dead `FACTOR_WEIGHTS` config surface.
+- [x] Fix single-timeframe trend coverage to use the configured per-class max trend weight.
+- [x] Align Python fallback defaults with YAML runtime defaults.
+- [x] Surface scan-vs-auto-trader score gate gap in scan tier metadata and raise index auto floor.
+- [x] Fix commodity EODHD volume ticker mapping/REST routing without changing OHLC source.
+- [x] Add diagnostics/documentation for advisory-only stock enrichment and COT fade behavior.
+- [x] Add focused tests and run targeted validation.
+
+## Review
+
+- Removed dead `FACTOR_WEIGHTS` from runtime config and the research prompt builder.
+- Replaced the hardcoded single-TF trend max with the configured per-class trend weight max.
+- Raised `AUTO_TRADE_MIN_SCORE.index` to 1.8 and exposed `signalTierReason` so the scan UI can show the separate auto-trader score floor.
+- Added explicit EODHD commodity ticker config and allowed whitelisted commodity/index EODHD volume REST paths to run instead of returning `no_real_volume`.
+- Kept MT5 forex D1 offset at UTC 00:00 and added a regression test confirming H4-only offset behavior.
+- Validation passed:
+  - `python -m py_compile factor_scoring.py config.py scoring.py scanner.py eodhd_volume_overlay.py athena.py athena_research\prompt_builder.py reproduce_bug.py tests\test_factor_scoring.py tests\test_scoring_group_routing.py tests\test_eodhd_volume_overlay.py tests\test_market_state_offsets.py`
+  - `python -m pytest tests/test_factor_scoring.py tests/test_scoring_group_routing.py tests/test_eodhd_volume_overlay.py tests/test_market_state_offsets.py -q --basetemp C:\tmp\athena_engine_a_missed_pytest` (`66 passed`, one pytest cache permission warning)
+  - `python -m pytest tests/test_athena.py tests/test_auto_trader.py tests/test_scoring.py -q --basetemp C:\tmp\athena_engine_a_adjacent_pytest` (`44 passed`, one pytest cache permission warning)
+  - `python -m pytest tests/test_factor_scoring.py tests/test_scoring_group_routing.py tests/test_eodhd_volume_overlay.py tests/test_market_state_offsets.py tests/test_athena.py tests/test_auto_trader.py tests/test_scoring.py -q --basetemp C:\tmp\athena_engine_a_missed_final_pytest` (`110 passed`, one pytest cache permission warning)
+  - `git diff --check -- factor_scoring.py config.py config.yaml scoring.py scanner.py eodhd_volume_overlay.py athena.py athena_research/prompt_builder.py reproduce_bug.py tests/test_factor_scoring.py tests/test_scoring_group_routing.py tests/test_eodhd_volume_overlay.py tests/test_market_state_offsets.py`

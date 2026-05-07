@@ -293,7 +293,13 @@ def _coherent_trend_score(
     # so D1-only > H4-only > H1-only.
     active_votes = len(votes)
     if active_votes == 1:
-        max_single_weight = 0.50  # D1 weight
+        max_single_weight = max(
+            _w("d1_ema_trend"),
+            _w("h4_ema_trend"),
+            _w("ema_trend"),
+        )
+        if max_single_weight <= 0:
+            max_single_weight = dominant_w
         dominant_weight = dominant_w
         _tf_coverage = (1.0 / 3.0) * (dominant_weight / max_single_weight)
     else:
@@ -891,8 +897,12 @@ def _cot_addon(pair_display: str, asset_type: str, direction: str, bar_time: Opt
         # z < 1.5  → confirm direction
         # 1.5..2.5 → linear blend from confirm toward fade
         # z > 2.5  → full fade (opposing direction, 1.5× magnitude)
-        if asset_type in ("forex", "commodity") and abs(cot) > 1.5:
-            _fade_lo, _fade_hi = 1.5, 2.5
+        cot_fade_cfg = CONFIG.get("ENGINE_A_COT_CONTRARIAN_FADE", {}) or {}
+        fade_enabled = bool(cot_fade_cfg.get("ENABLED", True))
+        fade_assets = set(cot_fade_cfg.get("ASSET_TYPES", ["forex", "commodity"]) or [])
+        _fade_lo = float(cot_fade_cfg.get("FADE_START_Z", 1.5))
+        _fade_hi = float(cot_fade_cfg.get("FULL_FADE_Z", 2.5))
+        if fade_enabled and asset_type in fade_assets and abs(cot) > _fade_lo:
             _abs_cot = abs(cot)
             if _abs_cot >= _fade_hi:
                 cot = -cot * 1.5
@@ -911,6 +921,16 @@ def _cot_addon(pair_display: str, asset_type: str, direction: str, bar_time: Opt
         return _ADDON_NEUTRAL
     except Exception:
         return _ADDON_NEUTRAL
+
+
+def _cot_formula_supported(pair_display: str) -> bool:
+    """Return whether this display has an explicit COT/proxy formula."""
+    try:
+        from cot_feed import _PAIR_FORMULA as _COT_FORMULA
+        formula = _COT_FORMULA.get(pair_display)
+        return bool(formula)
+    except Exception:
+        return False
 
 
 def _funding_addon(funding_rate: Optional[float], direction: str,
@@ -1021,16 +1041,31 @@ def _asset_addon(
             oi_val = _oi_addon(oi_context, direction)
             # Funding is more real-time; OI is supporting signal (lower weight).
             val = round(funding_val * 0.6 + oi_val * 0.4, 6)
-            val = max(_ADDON_AGAINST, min(_ADDON_CONFIRM, val))
+            same_side_combo = (
+                funding_val != 0.0
+                and oi_val != 0.0
+                and ((funding_val > 0 and oi_val > 0) or (funding_val < 0 and oi_val < 0))
+            )
+            if same_side_combo:
+                combo_val = funding_val + oi_val
+                combo_hi = float(CONFIG.get("FACTOR_CRYPTO_ADDON_COMBO_CONFIRM_CAP", 0.25))
+                combo_lo = float(CONFIG.get("FACTOR_CRYPTO_ADDON_COMBO_AGAINST_CAP", -0.20))
+                val = max(combo_lo, min(combo_hi, combo_val))
+            else:
+                val = max(_ADDON_AGAINST, min(_ADDON_CONFIRM, val))
             status = "ok" if funding_rate is not None else "oi_only"
         else:
             val = funding_val
             status = "ok" if funding_rate is not None else "missing"
         return val, "funding+oi", status
 
-    if asset_type == "commodity":
+    cot_asset_types = set(CONFIG.get("ENGINE_A_COT_ADDON_ASSET_TYPES", ["commodity"]) or [])
+    if asset_type in cot_asset_types:
+        addon_type = "cot_proxy" if asset_type in ("stock", "index") else "cot"
+        if not _cot_formula_supported(display):
+            return _ADDON_NEUTRAL, addon_type, "unsupported"
         val = _cot_addon(display, asset_type, direction, bar_time)
-        return val, "cot", "ok" if val != _ADDON_NEUTRAL else "neutral"
+        return val, addon_type, "ok" if val != _ADDON_NEUTRAL else "neutral"
 
     # stock / index — no addon
     return _ADDON_NEUTRAL, "none", "unsupported"
@@ -1193,6 +1228,7 @@ def compute_factor_scores(
     oi_context: Optional[dict] = None,
     macro_context: Optional[dict] = None,
     intermarket_context: Optional[dict] = None,
+    volume_threshold: Optional[float] = None,
 ) -> Dict:
     """Compute Engine A v2 factor scores and aggregate to final conviction score.
 
@@ -1296,7 +1332,16 @@ def compute_factor_scores(
     addon_val, addon_type, addon_status = _asset_addon(
         pair, direction, funding_rate, bar_time, oi_context=oi_context
     )
+    _asset_addon_exceeds_single_cap = (
+        asset_type == "crypto"
+        and (addon_val > _ADDON_CONFIRM or addon_val < _ADDON_AGAINST)
+    )
     feed_status["addon"] = f"{addon_type}:{addon_status}"
+    if asset_type == "stock":
+        if bool(CONFIG.get("INSIDER_TRADING_ENABLED", False)):
+            feed_status["insider_trading"] = "advisory_only"
+        if bool(CONFIG.get("FUNDAMENTALS_ENABLED", False)):
+            feed_status["fundamentals"] = "advisory_only"
 
     research_val, research_detail = _research_lab_candidate_addon(
         pair, direction, h4_candles, d1_candles, asset_type
@@ -1322,8 +1367,21 @@ def compute_factor_scores(
         addon_val = _base_addon + _capped_research
         feed_status["research_lab_capped"] = f"{_capped_research:.2f}"
 
-    # Stage 1.4: unified addon bound aligned with research lab MAX_ABS
-    addon_val = max(_ADDON_AGAINST, min(_ADDON_CONFIRM, addon_val))
+    # Stage 1.4: unified addon bound aligned with research lab MAX_ABS.
+    # Crypto funding+OI can opt into a wider cap only when the asset addon
+    # itself exceeded the single-signal band before research extras were added.
+    _addon_hi = _ADDON_CONFIRM
+    _addon_lo = _ADDON_AGAINST
+    if _asset_addon_exceeds_single_cap:
+        _addon_hi = max(
+            _ADDON_CONFIRM,
+            float(CONFIG.get("FACTOR_CRYPTO_ADDON_COMBO_CONFIRM_CAP", 0.25)),
+        )
+        _addon_lo = min(
+            _ADDON_AGAINST,
+            float(CONFIG.get("FACTOR_CRYPTO_ADDON_COMBO_AGAINST_CAP", -0.20)),
+        )
+    addon_val = max(_addon_lo, min(_addon_hi, addon_val))
 
     # ── FACTOR 4: Mean Reversion (config-gated) ─────────────────────────────
     mean_rev_adj, mean_rev_detail = _mean_reversion_factor(
@@ -1486,7 +1544,11 @@ def compute_factor_scores(
     # suppresses it.  Impact bounded to CONFIG-tunable limits.
     _vol_adj_max = float(CONFIG.get("FACTOR_VOL_ADJ_MAX", 0.03))
     _vol_adj_min = float(CONFIG.get("FACTOR_VOL_ADJ_MIN", -0.03))
-    _vol_hi_thresh = float(CONFIG.get("FACTOR_VOL_HIGH_THRESHOLD", 1.5))
+    _vol_hi_thresh = float(
+        volume_threshold
+        if volume_threshold is not None
+        else CONFIG.get("FACTOR_VOL_HIGH_THRESHOLD", 1.5)
+    )
     _vol_lo_thresh = float(CONFIG.get("FACTOR_VOL_LOW_THRESHOLD", 0.5))
     _vol_adj = 0.0
     if isinstance(volume_ratio, (int, float)) and volume_ratio > 0:

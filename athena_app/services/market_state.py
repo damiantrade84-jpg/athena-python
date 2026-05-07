@@ -105,9 +105,9 @@ def market_state_offset_hours(pair: dict[str, Any] | None, tf: str) -> float:
     
     # Forex, metals, commodities, indices use the configured broker H4 grid.
     try:
-        return float(CONFIG.get("FOREX_H4_RESAMPLE_OFFSET_HOURS", 1.0) or 1.0)
+        return float(CONFIG.get("FOREX_H4_RESAMPLE_OFFSET_HOURS", 2.0) or 2.0)
     except (TypeError, ValueError):
-        return 1.0
+        return 2.0
 
 
 def trim_mt5_d1_broker_session_ahead_tail(

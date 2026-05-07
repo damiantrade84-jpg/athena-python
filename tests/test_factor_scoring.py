@@ -2,6 +2,7 @@ import pytest
 
 from config import CONFIG
 from factor_scoring import (
+    _coherent_trend_score,
     _momentum_quality,
     _oi_addon,
     build_oi_context_for_factor_scoring,
@@ -53,6 +54,8 @@ def _score(
     d1_candles=None,
     h4_candles=None,
     h1_candles=None,
+    volume_threshold=None,
+    oi_context=None,
 ):
     return compute_factor_scores(
         d1_snap=d1 if d1 is not None else _snap("long"),
@@ -67,6 +70,8 @@ def _score(
         bar_time=bar_time,
         macro_context=macro_context,
         intermarket_context=intermarket_context,
+        volume_threshold=volume_threshold,
+        oi_context=oi_context,
     )
 
 
@@ -167,6 +172,28 @@ def test_full_bullish_alignment_is_stronger_than_partial_alignment():
     assert d1_only["direction"] == "LONG"
     assert full["final_score"] > d1_only["final_score"]
     assert full["factor_scores"]["trend"] > d1_only["factor_scores"]["trend"]
+
+
+def test_single_tf_trend_coverage_uses_configured_class_max_weight(monkeypatch):
+    monkeypatch.setitem(
+        CONFIG,
+        "INDICATOR_WEIGHTS",
+        {
+            "trend": {
+                "stock": {
+                    "d1_ema_trend": 0.4,
+                    "h4_ema_trend": 0.35,
+                    "ema_trend": 0.25,
+                }
+            }
+        },
+    )
+
+    score, direction, detail = _coherent_trend_score(_snap("long"), {}, {}, "stock")
+
+    assert direction == "LONG"
+    assert score > 0
+    assert detail["tf_coverage"] == pytest.approx(0.3333)
 
 
 def test_full_bearish_alignment_is_stronger_than_partial_alignment():
@@ -333,6 +360,29 @@ def test_crypto_addon_conviction_positive_zero_negative_ordering():
     assert positive["final_score"] > zero["final_score"] > negative["final_score"]
 
 
+def test_crypto_funding_and_oi_same_side_can_exceed_single_addon_cap(monkeypatch):
+    monkeypatch.setitem(CONFIG, "FACTOR_CRYPTO_ADDON_COMBO_CONFIRM_CAP", 0.25)
+    pair = {"type": "crypto", "display": "BTC/USDT"}
+
+    result = _score(
+        pair=pair,
+        funding_rate=-0.0002,
+        oi_context={"oi_change_pct": 4.0, "price_change_pct": 2.0},
+    )
+
+    assert result["addon_value"] == pytest.approx(0.25)
+
+
+def test_stock_enrichment_flags_are_reported_advisory_only(monkeypatch):
+    monkeypatch.setitem(CONFIG, "INSIDER_TRADING_ENABLED", True)
+    monkeypatch.setitem(CONFIG, "FUNDAMENTALS_ENABLED", True)
+
+    result = _score(pair={"type": "stock", "display": "AAPL"})
+
+    assert result["feed_status"]["insider_trading"] == "advisory_only"
+    assert result["feed_status"]["fundamentals"] == "advisory_only"
+
+
 def test_research_lab_factor_config_gate_can_disable_scoring(monkeypatch):
     cfg = dict(CONFIG.get("ENGINE_A_RESEARCH_LAB_FACTORS", {}))
     cfg["ENABLED"] = False
@@ -490,6 +540,34 @@ def test_weights_report_effective_values_when_addon_is_unsupported():
     assert result["addon_unsupported"] is True
     assert result["weights"]["addon"] == pytest.approx(0.0)
     assert "base" in result["weights"]
+
+
+def test_stock_index_cot_proxy_formulas_are_config_gated(monkeypatch):
+    monkeypatch.setitem(CONFIG, "ENGINE_A_COT_ADDON_ASSET_TYPES", ["commodity", "index", "stock"])
+    monkeypatch.setattr("factor_scoring._cot_addon", lambda *_args, **_kwargs: 0.20)
+
+    result = _score(pair={"type": "stock", "display": "SPY"})
+
+    assert result["addon_type"] == "cot_proxy"
+    assert result["addon_unsupported"] is False
+    assert result["feed_status"]["addon"] == "cot_proxy:ok"
+
+
+def test_commodity_without_cot_formula_is_explicitly_unsupported(monkeypatch):
+    monkeypatch.setitem(CONFIG, "ENGINE_A_COT_ADDON_ASSET_TYPES", ["commodity", "index", "stock"])
+
+    result = _score(pair={"type": "commodity", "display": "Cocoa"})
+
+    assert result["addon_type"] == "cot"
+    assert result["addon_unsupported"] is True
+    assert result["feed_status"]["addon"] == "cot:unsupported"
+
+
+def test_pair_volume_threshold_drives_volume_adjustment():
+    loose = _score(volume_ratio=2.0, volume_threshold=1.1)
+    strict = _score(volume_ratio=2.0, volume_threshold=2.5)
+
+    assert loose["final_score"] > strict["final_score"]
 
 
 def test_research_lab_factor_supports_commodity_group_candidates(monkeypatch):

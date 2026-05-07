@@ -164,9 +164,9 @@ def extract_candles(resp) -> list | None:
 def forex_h4_resample_offset_hours() -> float:
     """H4 bucket offset (hours) for H1→H4 resampling — must match `market_state` / MT5 grid."""
     try:
-        return float(CONFIG.get("FOREX_H4_RESAMPLE_OFFSET_HOURS", 1.0) or 1.0)
+        return float(CONFIG.get("FOREX_H4_RESAMPLE_OFFSET_HOURS", 2.0) or 2.0)
     except (TypeError, ValueError):
-        return 1.0
+        return 2.0
 
 
 def resample_from_h1(
@@ -547,9 +547,30 @@ def fetch_candles(
     # any stale MT5 entries created by older code cannot feed live scoring.
     if pair.get("source") == "mt5" and fetch_mt5:
         fetch_meta.update({"resolution": "rest", "upstream": "mt5"})
-        out_candles = fetch_mt5(pair, tf, limit)
-        if isinstance(out_candles, dict):
-            out_candles = extract_candles(out_candles)
+        mt5_resp = fetch_mt5(pair, tf, limit)
+        if isinstance(mt5_resp, dict):
+            fetch_meta["error"] = bool(mt5_resp.get("error"))
+            fetch_meta["detail"] = mt5_resp.get("detail")
+            out_candles = extract_candles(mt5_resp)
+            if mt5_resp.get("error") and out_candles and not bool(
+                CONFIG.get("MT5_CANDLE_FALLBACK_ENABLED", False)
+            ):
+                fetch_meta["fallback"] = "blocked_mt5_error_candles"
+                fetch_meta["bars"] = 0
+                _annotate_fetch_meta_with_bar_freshness(
+                    fetch_meta,
+                    None,
+                    tf,
+                    offset_hours=offset_hours,
+                    live_feed=is_live_forex_crypto,
+                    pair=pair,
+                )
+                with _candle_cache_lock:
+                    _candle_cache.pop(key, None)
+                    _store_fetch_meta(key, fetch_meta)
+                return None
+        else:
+            out_candles = mt5_resp
 
         fetch_meta["bars"] = len(out_candles) if out_candles else 0
         _annotate_fetch_meta_with_bar_freshness(

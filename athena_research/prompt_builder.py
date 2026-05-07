@@ -105,14 +105,6 @@ def _load_engine_thresholds() -> str:
         lines.append(f"### Engine A — Blocked Trend States (backtest): {bts}")
         lines.append("")
 
-    # Factor weights
-    fw = cfg.get("FACTOR_WEIGHTS", {})
-    if fw:
-        lines.append("### Engine A — Factor Weights")
-        for ac, weights in fw.items():
-            lines.append(f"  {ac}: {weights}")
-        lines.append("")
-
     # Engine C BT exit
     ec = cfg.get("ENGINE_C_BT_EXIT", {})
     if ec:

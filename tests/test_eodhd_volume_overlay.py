@@ -1,9 +1,11 @@
 import os
 import sys
+from pathlib import Path
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from eodhd_volume_overlay import (
+    eodhd_commodity_ticker_for_pair,
     is_eodhd_volume_whitelisted,
     overlay_candle_volumes,
     resample_eodhd_volume_bars,
@@ -20,7 +22,41 @@ def test_supports_eodhd_volume_overlay_only_for_target_asset_classes():
     assert supports_eodhd_volume_overlay({"type": "crypto"}) is False
 
 
-def test_is_eodhd_volume_whitelisted_matches_live_audit_matrix():
+def test_configured_commodity_tickers_cover_non_slash_displays():
+    for display in (
+        "WTI Oil",
+        "Brent Oil",
+        "Nat Gas",
+        "Copper",
+        "Aluminium",
+        "Lead",
+        "Nickel",
+        "Zinc",
+        "Cattle",
+        "Cocoa",
+        "Coffee",
+        "Corn",
+        "Cotton",
+        "Soybeans",
+        "Sugar",
+        "Wheat",
+    ):
+        ticker = eodhd_commodity_ticker_for_pair(
+            {"type": "commodity", "display": display, "symbol": display}
+        )
+        assert ticker
+        assert ticker not in {"CL", "BZ", "NG"}
+
+
+def test_athena_volume_fetch_does_not_skip_whitelisted_commodities_and_indices():
+    src = Path(__file__).resolve().parents[1] / "athena.py"
+    text = src.read_text(encoding="utf-8")
+    assert 'if ptype in {"forex", "commodity", "index"}' not in text
+    assert 'if ptype == "forex":' in text
+    assert "_eodhd_commodity_ticker_for_pair(pair)" in text
+
+
+def test_is_eodhd_volume_whitelisted_matches_configured_matrix():
     assert is_eodhd_volume_whitelisted({"type": "commodity", "symbol": "GC=F"}, "D1") is True
     # GC=F moved to _FOREX_METALS_1M_RESAMPLE (intraday resampled from 1m); all TFs now allowed
     assert is_eodhd_volume_whitelisted({"type": "commodity", "symbol": "GC=F"}, "H1") is True
@@ -29,6 +65,9 @@ def test_is_eodhd_volume_whitelisted_matches_live_audit_matrix():
     assert is_eodhd_volume_whitelisted({"type": "index", "symbol": "NAS100"}, "D1") is True
     assert is_eodhd_volume_whitelisted({"type": "stock", "symbol": "AAPL.US"}, "D1") is True
     assert is_eodhd_volume_whitelisted({"type": "stock", "symbol": "AAPL.US"}, "H4") is True
+    assert is_eodhd_volume_whitelisted({"type": "commodity", "display": "Lead"}, "D1") is True
+    assert is_eodhd_volume_whitelisted({"type": "commodity", "display": "Lead"}, "H1") is False
+    assert is_eodhd_volume_whitelisted({"type": "commodity", "display": "WTI Oil"}, "H1") is True
     # Yahoo-format EURUSD=X is not in the whitelist; display-format EUR/USD is
     assert is_eodhd_volume_whitelisted({"type": "forex", "symbol": "EURUSD=X"}, "H1") is False
     assert is_eodhd_volume_whitelisted({"type": "forex", "display": "EUR/USD"}, "H1") is True

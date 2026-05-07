@@ -8,19 +8,6 @@ CONFIG = {
     "RANGING": {"index": {"dead": 15}},
     "TRENDING_ADX": 35,
     "DEVELOPING_ADX": 25,
-    "FACTOR_WEIGHTS": {
-        "index": {
-            "trend": 2.0,
-            "momentum": 1.4,
-            "volatility": 1.2,
-            "volume": 0.8,
-            "structure": 1.0,
-            "derivatives": 1.2,
-            "microstructure": 0.75,
-            "carry": 1.0,
-            "trend_strength": 1.5
-        }
-    },
     "REGIME_WEIGHTS": {
         "TRENDING": {"trend": 2.0, "momentum": 1.5}
     },

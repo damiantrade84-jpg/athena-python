@@ -70,10 +70,13 @@ from data_feeds import (  # noqa: E402
     _get_eodhd_client,
     _fetch_funding_rate,
     _fetch_bybit_funding_rate,
+    _fetch_bybit_klines,
+    _fetch_bybit_open_interest,
     _fetch_open_interest,
     _calc_oi_divergence,
 )
 from eodhd_volume_overlay import (  # noqa: E402
+    eodhd_commodity_ticker_for_pair as _eodhd_commodity_ticker_for_pair,
     is_eodhd_volume_whitelisted as _is_eodhd_volume_whitelisted,
     overlay_candle_volumes as _overlay_candle_volumes,
     resample_eodhd_volume_bars as _resample_eodhd_volume_bars,
@@ -1337,18 +1340,18 @@ def _yfinance_symbol_for_pair(pair: dict) -> str | None:
 
 
 def _eodhd_ticker_for_pair(pair: dict) -> str | None:
+    disp = pair.get("display", "")
+    ptype = pair.get("type", "")
+    sym = pair.get("symbol", "")
+    commodity_ticker = _eodhd_commodity_ticker_for_pair(pair)
+
     # Check vendor override first - highest priority
     # Empty string "" is an explicit block (pair confirmed to have no valid EODHD EOD ticker)
     override = _vendor_overrides(pair).get("eodhd")
+    if ptype == "commodity" and commodity_ticker:
+        return commodity_ticker
     if override is not None:
         return override if override else None
-    # ... rest of existing function unchanged
-
-    disp = pair.get("display", "")
-
-    ptype = pair.get("type", "")
-
-    sym = pair.get("symbol", "")
 
     if ptype == "crypto":
         base = disp.split("/")[0] if "/" in disp else disp.replace("USDT", "")
@@ -1364,6 +1367,9 @@ def _eodhd_ticker_for_pair(pair: dict) -> str | None:
 
         if sym.endswith((".FOREX", ".COMM")):
             return sym
+
+        if commodity_ticker:
+            return commodity_ticker
 
         return None
 
@@ -1494,6 +1500,30 @@ def _atr_for_levels(
         atr_val = (snaps.get(tf) or {}).get("atr")
         if atr_val:
             return atr_val
+    return None
+
+
+def _bybit_atr_for_levels(pair: dict, style: str | None) -> float | None:
+    """Fetch Bybit ATR for crypto execution levels when Bybit is the execution venue."""
+    symbol = (pair.get("symbol") or pair.get("display") or "").replace("/", "").upper()
+    if not symbol:
+        return None
+    resolved_style = _normalize_style(style or "swing")
+    if resolved_style == "auto":
+        resolved_style = "swing"
+    tf = {"scalp": "H1", "intraday": "H4", "swing": "D1"}.get(resolved_style, "D1")
+    candles = _fetch_bybit_klines(symbol, tf, 120)
+    if not candles or len(candles) < 20:
+        return None
+    atr_series = calc_atr(
+        [c["high"] for c in candles],
+        [c["low"] for c in candles],
+        [c["close"] for c in candles],
+        14,
+    )
+    for value in reversed(atr_series or []):
+        if value:
+            return float(value)
     return None
 
 
@@ -1805,9 +1835,8 @@ def _eodhd_intraday_ticker_for_pair(pair: dict) -> str | None:
     )
     if override:
         return override
-    # For commodities without intraday override, return None to trigger yfinance fallback
     if pair.get("type") == "commodity":
-        return None
+        return _eodhd_commodity_ticker_for_pair(pair)
     # Fall back to regular ticker for other types
     return _eodhd_ticker_for_pair(pair)
 
@@ -1965,9 +1994,10 @@ def _fetch_eodhd_volume_only(pair: dict, tf: str, limit: int, *, cache_only: boo
         _store_cached_eodhd_volume_only(pair, tf_key, limit, payload)
         return payload
 
-    # Skip EODHD REST for forex/commodity/index: OTC markets have no real exchange volume.
+    # Skip EODHD REST for forex: OTC markets have no real exchange volume.
+    # Whitelisted commodities/indices use EODHD as a best-effort volume overlay.
     # Return explicit flag so overlay falls back to MT5 tick-volume without wasting API calls.
-    if ptype in {"forex", "commodity", "index"}:
+    if ptype == "forex":
         payload["detail"] = "no_real_volume"
         payload["volume_source"] = "mt5_tick"
         _store_cached_eodhd_volume_only(pair, tf_key, limit, payload)
@@ -2797,6 +2827,7 @@ from scoring import (  # noqa: E402
     apply_correlation_cap,
     get_pair_profile,
     get_pair_score_group,
+    get_pair_level_atr_class,
     get_min_confluence_threshold,
     pair_filter_enabled,
     _pair_exchange_closed,
@@ -6484,7 +6515,7 @@ def api_scan_naked():
                         price=float(current_price),
                         atr=float(atr),
                         direction=direction,
-                        pair_type=pair.get("type", "stock"),
+                        pair_type=get_pair_level_atr_class(pair),
                     ),
                     "naked_data": _res,
                 }
@@ -6492,10 +6523,11 @@ def api_scan_naked():
                 # Calculate style-specific SL/TP for display
                 try:
                     from indicators import calc_levels
+                    _style_level_class = get_pair_level_atr_class(pair)
                     _lvl_scalp = calc_levels(current_price, atr, direction,
-                                              pair.get("type", "stock"), style="scalp")
+                                              _style_level_class, style="scalp")
                     _lvl_intra = calc_levels(current_price, atr, direction,
-                                              pair.get("type", "stock"), style="intraday")
+                                              _style_level_class, style="intraday")
                     signal["scalp_sl"] = _lvl_scalp["sl"]
                     signal["scalp_tp"] = _lvl_scalp["tp1"]
                     signal["intraday_sl"] = _lvl_intra["sl"]
@@ -9733,7 +9765,10 @@ def api_chart_analysis():
         except Exception as _vs_err:
             log.debug("[AI CHART] vision image retention skipped: %s", _vs_err)
 
-        _max_tokens = 1100 if triple_mode else 800
+        # Vision body was trimmed to A-H framework + 8-line structured footer (audit fix).
+        # Token budgets cut accordingly: triple 1100->450, dual/single 800->350.
+        _vision_default_max = 450 if triple_mode else 350
+        _max_tokens = int(CONFIG.get("VISION_MAX_TOKENS", _vision_default_max) or _vision_default_max)
         _vision_model = get_ai_model(CONFIG, "VISION_MODEL", "grok-4.3")
         _vision_temp = float(AITemperatureConfig.get_temperature("vision"))
         _user_parts = _chart_blocks_to_openai_user_content(content)
@@ -9802,6 +9837,19 @@ def api_chart_analysis():
                     },
                     _VISION_ARTIFACTS_DIR,
                 )
+                # Vision auto-label confidence is derived from RIGHT EDGE
+                # classification + TF alignment (audit fix: previously hardcoded 0.60).
+                _re_status = (structured.get("right_edge_status") or "").upper().replace("_", " ")
+                _re_conf_map = {
+                    "CONFIRMS": 0.85,
+                    "REVIEW": 0.50,
+                    "POTENTIAL REVERSAL": 0.20,
+                }
+                _vision_conf = _re_conf_map.get(_re_status, 0.50)
+                if structured.get("confirms_direction", True) is False:
+                    _vision_conf = max(0.0, _vision_conf - 0.10)
+                _vision_conf = round(min(1.0, max(0.0, _vision_conf)), 3)
+
                 auto_label = _create_vision_label(
                     _AUDIT_DB,
                     {
@@ -9810,7 +9858,7 @@ def api_chart_analysis():
                         "review_status": "auto",
                         "structured": structured,
                         "engine_b": eb or {},
-                        "confidence": 0.60,
+                        "confidence": _vision_conf,
                     },
                 )
                 v1_pred = _create_vision_prediction(
@@ -9824,7 +9872,7 @@ def api_chart_analysis():
                         "intraday_rating": (structured.get("style_ratings") or {}).get("intraday") or "MODERATE",
                         "swing_rating": (structured.get("style_ratings") or {}).get("swing") or "MODERATE",
                         "levels": structured.get("level_suggestions") or {},
-                        "confidence": 0.60,
+                        "confidence": _vision_conf,
                         "payload": {
                             "model": _vision_model,
                             "analysis_excerpt": analysis[:500],
@@ -10822,7 +10870,16 @@ def analyze_pair(
                     pair.get("display", _bn_sym),
                 )
 
-        _oi_data = _fetch_open_interest(_bn_sym)
+        if str(CONFIG.get("ENGINE_A_CRYPTO_DERIVATIVES_FEED", "bybit")).lower() == "bybit":
+            _oi_data = _fetch_bybit_open_interest(_bn_sym)
+            if (
+                isinstance(_oi_data, dict)
+                and _oi_data.get("error")
+                and bool(CONFIG.get("ENGINE_A_CRYPTO_DERIVATIVES_BINANCE_FALLBACK", False))
+            ):
+                _oi_data = _fetch_open_interest(_bn_sym)
+        else:
+            _oi_data = _fetch_open_interest(_bn_sym)
 
         _prev_close = d1[-2]["close"] if d1 and len(d1) >= 2 else None
 
@@ -10929,6 +10986,17 @@ def analyze_pair(
     )
 
     atr = _atr_for_levels(d1i, h4i, h1i, pair=pair, style=_style)
+    level_atr_feed = "signal"
+    if (
+        pair.get("type") == "crypto"
+        and str(CONFIG.get("ENGINE_A_CRYPTO_LEVELS_FEED", "bybit")).lower() == "bybit"
+    ):
+        bybit_atr = _bybit_atr_for_levels(pair, _style)
+        if bybit_atr:
+            atr = bybit_atr
+            level_atr_feed = "bybit"
+        elif not bool(CONFIG.get("ENGINE_A_CRYPTO_LEVELS_SIGNAL_FEED_FALLBACK", False)):
+            return None
 
     if price is None or not atr:
         return None
@@ -11003,9 +11071,14 @@ def analyze_pair(
     fib = calc_fib(h4)
 
     _regime_state = res.get("regime", {}).get("state") if res.get("regime") else None
+    _level_atr_class = get_pair_level_atr_class(pair)
+    _fd_level = dict(res.get("factorDiagnostics") or {})
+    _fd_level["levelAtrFeed"] = level_atr_feed
+    _fd_level["levelAtrClass"] = _level_atr_class
+    res["factorDiagnostics"] = _fd_level
 
     lvl = calc_levels(
-        float(price), float(atr), direction, pair["type"],
+        float(price), float(atr), direction, _level_atr_class,
         regime_state=_regime_state, style=_style,
     )
 
@@ -11393,7 +11466,7 @@ def analyze_pair(
             price=float(price),
             atr=float(atr),
             direction=direction,
-            pair_type=pair.get("type", "stock"),
+            pair_type=_level_atr_class,
         ),
         "engine_b_overlay": _engine_b_overlay_meta,
     }

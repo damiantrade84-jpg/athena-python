@@ -100,7 +100,7 @@ def api_live_feed_diagnostics():
 
     rows = []
     generated_at = datetime.now(timezone.utc).isoformat()
-    _off = float(CONFIG.get("FOREX_H4_RESAMPLE_OFFSET_HOURS", 1.0) or 1.0)
+    _off = float(CONFIG.get("FOREX_H4_RESAMPLE_OFFSET_HOURS", 2.0) or 2.0)
     _tnow = time.time()
     limits = scan_candle_limits()
     for pair in pairs:
@@ -211,7 +211,7 @@ def api_live_feed_diagnostics():
                 "diagnostics": rows,
                 "tradesPlaced": 0,
                 "forexH4ResampleOffsetHours": float(
-                    CONFIG.get("FOREX_H4_RESAMPLE_OFFSET_HOURS", 1.0) or 1.0
+                    CONFIG.get("FOREX_H4_RESAMPLE_OFFSET_HOURS", 2.0) or 2.0
                 ),
                 "mt5H4OffsetNote": (
                     "FOREX_H4_RESAMPLE_OFFSET_HOURS drives MT5 H4 (non-stock) bar grid in "

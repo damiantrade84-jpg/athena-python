@@ -320,7 +320,12 @@ CONFIG: dict = {
     "H1_CANDLES": 1000,
     "SCAN_MAX_WORKERS": 3,
     "SCAN_DEBUG_CANDLE_META": False,
-    "FOREX_H4_RESAMPLE_OFFSET_HOURS": 1.0,
+    "FOREX_H4_RESAMPLE_OFFSET_HOURS": 2.0,
+    "MT5_CANDLE_FALLBACK_ENABLED": False,
+    "ENGINE_A_CRYPTO_LEVELS_FEED": "bybit",
+    "ENGINE_A_CRYPTO_LEVELS_SIGNAL_FEED_FALLBACK": False,
+    "ENGINE_A_CRYPTO_DERIVATIVES_FEED": "bybit",
+    "ENGINE_A_CRYPTO_DERIVATIVES_BINANCE_FALLBACK": False,
     "BINANCE_KLINE_WS_INTERVALS": ["1m", "5m", "15m", "1h", "4h", "1d"],
     "MIN_CONFLUENCE": 1.0,
     "RISK_MULT": {
@@ -340,7 +345,7 @@ CONFIG: dict = {
         "index": 0.0004,
     },
     "RANGING": {
-        "crypto": {"dead": 14, "dead_pen": 1.5, "choppy": 18, "choppy_pen": 0.5},
+        "crypto": {"dead": 18, "dead_pen": 1.0, "choppy": 23, "choppy_pen": 0.5},
         "commodity": {"dead": 18, "dead_pen": 1.5, "choppy": 23, "choppy_pen": 0.5},
         "forex": {"dead": 18, "dead_pen": 1.5, "choppy": 23, "choppy_pen": 1.0},
         "stock": {"dead": 16, "dead_pen": 1.5, "choppy": 21, "choppy_pen": 0.5},
@@ -463,8 +468,8 @@ CONFIG: dict = {
         "commodity": 252,
     },
     "ADX_TREND_MIN_CLASS": {
-        "crypto": 20,
-        "forex": 22,
+        "crypto": 15,
+        "forex": 20,
         "commodity": 25,
         "stock": 25,
         "index": 25,
@@ -552,72 +557,69 @@ CONFIG: dict = {
     # in scoring.py from the two-tier system plus PAIR_PROFILES.min_confluence.
     # MIN_CONFLUENCE_CLASS is legacy/admin metadata and is not read by that gate.
     # Factor scoring gates — see factor_scoring.py
+    "ENGINE_A_PAIR_THRESHOLDS": {},
+    "ENGINE_A_SCORE_GROUP_THRESHOLDS": {
+        "default": 1.5,
+        "crypto_btc": 2.0,
+        "crypto_eth": 2.0,
+        "crypto_alt_majors": 2.0,
+        "crypto_doge": 2.0,
+        "crypto_other": 2.0,
+        "nat_gas": 2.0,
+        "forex_exotics": 1.7,
+        "softs": 1.7,
+    },
+    "ENGINE_A_ATR_LEVEL_CLASS_BY_DISPLAY": {
+        "SPY": "etf",
+        "QQQ": "etf",
+        "GLD": "etf",
+        "TLT": "etf_bond",
+        "IWM": "etf",
+        "EEM": "etf",
+        "DIA": "etf",
+        "GDX": "etf",
+        "SOXX": "etf",
+        "XLF": "etf",
+        "XLE": "etf",
+        "SLV": "etf",
+        "USO": "etf",
+    },
+    "ENGINE_A_ATR_LEVEL_CLASS_BY_SCORE_GROUP": {},
+    "ENGINE_A_COT_ADDON_ASSET_TYPES": ["commodity", "index", "stock"],
     "ADX_MISSING_BOTH_ABORT": True,
     "FACTOR_MIN_DIRECTIONAL": 0.25,  # Skip if abs(dir_score) < this (near-directionless signal)
     "FACTOR_DIRECTIONAL_SOFT_SPAN": 0.20,  # Smooth transition width for directional confidence
-    "FACTOR_MIN_DIRECTIONAL_CRYPTO": 0.15,
+    "FACTOR_MIN_DIRECTIONAL_CRYPTO": 0.20,
     "FACTOR_DIRECTIONAL_SOFT_SPAN_CRYPTO": 0.30,
+    "FACTOR_CRYPTO_ADDON_COMBO_CONFIRM_CAP": 0.25,
+    "FACTOR_CRYPTO_ADDON_COMBO_AGAINST_CAP": -0.20,
+    "ENGINE_A_COT_CONTRARIAN_FADE": {
+        "ENABLED": True,
+        "ASSET_TYPES": ["forex", "commodity"],
+        "FADE_START_Z": 1.5,
+        "FULL_FADE_Z": 2.5,
+    },
+    "EODHD_COMMODITY_TICKERS": {
+        "WTI Oil": "WTICOUSD.FOREX",
+        "Brent Oil": "BRENTOIL.FOREX",
+        "Nat Gas": "NATGASUSD.FOREX",
+        "Copper": "XCUUSD.FOREX",
+        "Aluminium": "ALI.COMM",
+        "Lead": "PB.COMM",
+        "Nickel": "NI.COMM",
+        "Zinc": "ZNC.COMM",
+        "Cattle": "LE.COMM",
+        "Cocoa": "CC.COMM",
+        "Coffee": "KC.COMM",
+        "Corn": "ZC.COMM",
+        "Cotton": "CT.COMM",
+        "Soybeans": "ZS.COMM",
+        "Sugar": "SB.COMM",
+        "Wheat": "ZW.COMM",
+    },
     "CRYPTO_TRANSITION_PENALTY_ENABLED": True,
     "CRYPTO_LIVE_MICROSTRUCTURE_SCORING_ENABLED": True,
     "REGIME_SMOOTHING_BARS": 3,  # Consecutive bars required before committing to a regime change
-    # Factor weights per asset class (base, before regime overrides)
-    "FACTOR_WEIGHTS": {
-        "crypto": {
-            "trend": 2.0,
-            "trend_strength": 1.0,
-            "momentum": 1.5,
-            "volatility": 1.0,
-            "volume": 1.0,
-            "structure": 1.0,
-            "derivatives": 1.0,
-            "microstructure": 0.75,
-            "carry": 0.0,
-        },
-        "forex": {
-            "trend": 2.0,
-            "trend_strength": 1.0,
-            "momentum": 1.0,
-            "volatility": 1.0,
-            "volume": 0.5,
-            "structure": 1.5,
-            "derivatives": 0.0,
-            "microstructure": 0.5,
-            "carry": 0.0,
-        },
-        "stock": {
-            "trend": 2.0,
-            "trend_strength": 1.0,
-            "momentum": 1.5,
-            "volatility": 1.0,
-            "volume": 1.5,
-            "structure": 1.0,
-            "derivatives": 0.5,
-            "microstructure": 0.75,
-            "carry": 1.0,
-        },
-        "commodity": {
-            "trend": 2.0,
-            "trend_strength": 1.0,
-            "momentum": 1.3,
-            "volatility": 1.5,
-            "volume": 1.0,
-            "structure": 1.3,
-            "derivatives": 0.0,
-            "microstructure": 0.75,
-            "carry": 0.0,
-        },
-        "index": {
-            "trend": 2.0,
-            "trend_strength": 1.0,
-            "momentum": 1.4,
-            "volatility": 1.2,
-            "volume": 0.8,
-            "structure": 1.0,
-            "derivatives": 1.2,
-            "microstructure": 0.75,
-            "carry": 1.0,
-        },
-    },
     # Optional subgroup multipliers for factor-group weights (Engine A non-forex).
     "FACTOR_SCORE_GROUP_MULTIPLIERS": {
         "us_stock_single": {"volatility": 1.2, "volume": 1.2, "momentum": 0.9},
@@ -736,7 +738,7 @@ CONFIG: dict = {
     "SHADOW_LEDGER_ENABLED": True,
     "MICROSTRUCTURE_FEEDS_ENABLED": True,
     "MICROSTRUCTURE_BYBIT_FEEDS_ENABLED": False,
-    "MARKET_DATA_WS_SSL_VERIFY": False,
+    "MARKET_DATA_WS_SSL_VERIFY": True,
     "BYBIT_TIME_SYNC_ENABLED": False,
     "BYBIT_RECV_WINDOW_MS": 30000,
     "PAIR_PROFILES": {},
@@ -793,11 +795,11 @@ CONFIG: dict = {
     # ── Auto-Trade Bot ────────────────────────────────────────────────────────
     "AUTO_TRADE_ENABLED": False,  # Master toggle (also togglable via UI/API)
     "AUTO_TRADE_MIN_SCORE": {  # Scan floor that determines which signals reach the auto-trader candidate list
-        "crypto": 1.40,
-        "commodity": 1.40,
-        "stock": 1.55,
-        "index": 1.35,
-        "forex": 1.0,
+        "crypto": 2.4,
+        "forex": 2.1,
+        "commodity": 1.8,
+        "stock": 1.8,
+        "index": 1.8,
     },
     "AUTO_TRADE_MIN_CONVICTION": {  # Live auto-execute gate on combinedConviction (0-1 scale)
         "default": 0.50,
@@ -1130,7 +1132,7 @@ def validate_config(cfg: dict) -> None:
         if not isinstance(v, int) or v < 10:
             log.warning(f"[CFG] {k}={v} is too low — minimum 10 candles required")
     try:
-        float(cfg.get("FOREX_H4_RESAMPLE_OFFSET_HOURS", 1.0) or 1.0)
+        float(cfg.get("FOREX_H4_RESAMPLE_OFFSET_HOURS", 2.0) or 2.0)
     except (TypeError, ValueError):
         log.warning("[CFG] FOREX_H4_RESAMPLE_OFFSET_HOURS must be numeric")
     if cfg.get("RISK_PCT", 0) > 0.05:

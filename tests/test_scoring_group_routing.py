@@ -8,8 +8,10 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from config import CONFIG
 from scoring import (
+    _classify_signal,
     get_backtest_min_score_threshold,
     get_min_confluence_threshold,
+    get_pair_level_atr_class,
     get_pair_score_group,
 )
 
@@ -73,6 +75,60 @@ def test_min_confluence_threshold_tiers():
         assert get_min_confluence_threshold(nat_gas) == 2.0     # nat_gas → volatile
     finally:
         CONFIG["PAIR_PROFILES"] = original_profiles
+
+
+def test_min_confluence_threshold_uses_configured_score_group_thresholds(monkeypatch):
+    monkeypatch.setitem(CONFIG, "PAIR_PROFILES", {})
+    monkeypatch.setitem(
+        CONFIG,
+        "ENGINE_A_SCORE_GROUP_THRESHOLDS",
+        {
+            "default": 1.11,
+            "forex_exotics": 1.77,
+            "crypto_btc": 2.22,
+        },
+    )
+
+    assert get_min_confluence_threshold(
+        {"display": "EUR/USD", "symbol": "EURUSD=X", "type": "forex"}
+    ) == 1.11
+    assert get_min_confluence_threshold(
+        {"display": "USD/ZAR", "symbol": "USDZAR=X", "type": "forex"}
+    ) == 1.77
+    assert get_min_confluence_threshold(
+        {"display": "BTC/USDT", "symbol": "BTCUSDT", "type": "crypto"}
+    ) == 2.22
+
+
+def test_python_defaults_match_runtime_yaml_for_audit_sensitive_gates():
+    assert CONFIG["RANGING"]["crypto"] == {
+        "dead": 18,
+        "dead_pen": 1.0,
+        "choppy": 23,
+        "choppy_pen": 0.5,
+    }
+    assert CONFIG["ADX_TREND_MIN_CLASS"]["crypto"] == 15
+    assert CONFIG["ADX_TREND_MIN_CLASS"]["forex"] == 20
+    assert CONFIG["AUTO_TRADE_MIN_SCORE"]["index"] == 1.8
+    assert CONFIG["FACTOR_MIN_DIRECTIONAL_CRYPTO"] == 0.20
+    assert CONFIG["ENGINE_A_COT_CONTRARIAN_FADE"] == {
+        "ENABLED": True,
+        "ASSET_TYPES": ["forex", "commodity"],
+        "FADE_START_Z": 1.5,
+        "FULL_FADE_Z": 2.5,
+    }
+
+
+def test_etf_level_atr_class_is_separate_from_stock_identity(monkeypatch):
+    monkeypatch.setitem(
+        CONFIG,
+        "ENGINE_A_ATR_LEVEL_CLASS_BY_DISPLAY",
+        {"SPY": "etf", "TLT": "etf_bond"},
+    )
+
+    assert get_pair_level_atr_class({"display": "SPY", "symbol": "SPY.US", "type": "stock"}) == "etf"
+    assert get_pair_level_atr_class({"display": "TLT", "symbol": "TLT.US", "type": "stock"}) == "etf_bond"
+    assert get_pair_level_atr_class({"display": "AAPL", "symbol": "AAPL.US", "type": "stock"}) == "stock"
 
 
 def test_min_confluence_class_is_not_live_threshold_input():
@@ -139,6 +195,32 @@ def test_backtest_no_dual_threshold_flag():
     assert "BACKTEST_USE_BT_MIN_THRESHOLDS" not in CONFIG
     assert "BT_MIN" not in CONFIG
     assert "BT_MIN_GROUP" not in CONFIG
+    assert "FACTOR_WEIGHTS" not in CONFIG
+
+
+def test_trade_tier_reason_surfaces_auto_trade_score_floor(monkeypatch):
+    monkeypatch.setitem(CONFIG, "AUTO_TRADE_MIN_SCORE", {"crypto": 2.4})
+    signal = {
+        "confluenceScore": 2.1,
+        "scanThreshold": 2.0,
+        "eventRisk": {"hardBlock": False},
+        "macroEventRisk": {"blocked": False},
+        "exchangeClosed": False,
+        "scanDiagnostics": [],
+    }
+    pair = {"display": "BTC/USDT", "symbol": "BTCUSDT", "type": "crypto", "enabled": True}
+
+    tier, reason = _classify_signal(signal, pair)
+
+    assert tier == "trade"
+    assert "scan floor 2" in reason
+    assert "auto-trader score floor 2.4" in reason
+
+
+def test_scanner_persists_tier_reason_field():
+    src = Path(__file__).resolve().parents[1] / "scanner.py"
+    text = src.read_text(encoding="utf-8")
+    assert 'sig["signalTierReason"] = tier_reason' in text
 
 
 def test_divergence_monitor_replays_shared_factor_path_for_forex():

@@ -169,6 +169,33 @@ def get_pair_score_group(pair: dict) -> str:
     return f"{ptype}_other" if ptype else "unknown"
 
 
+def get_pair_level_atr_class(pair: dict) -> str:
+    """Resolve the ATR multiplier class used for SL/TP levels.
+
+    This stays separate from pair["type"] so ETFs can keep their stock
+    feed/execution identity while using ETF-calibrated ATR multipliers.
+    """
+    profile = get_pair_profile(pair)
+    profile_class = profile.get("atr_level_class")
+    if profile_class:
+        return str(profile_class)
+
+    display = pair.get("display", "")
+    symbol = pair.get("symbol", "")
+    by_display = CONFIG.get("ENGINE_A_ATR_LEVEL_CLASS_BY_DISPLAY", {}) or {}
+    if display in by_display:
+        return str(by_display[display])
+    if symbol in by_display:
+        return str(by_display[symbol])
+
+    score_group = get_pair_score_group(pair)
+    by_group = CONFIG.get("ENGINE_A_ATR_LEVEL_CLASS_BY_SCORE_GROUP", {}) or {}
+    if score_group in by_group:
+        return str(by_group[score_group])
+
+    return str(pair.get("type", "stock") or "stock")
+
+
 # 3-tier Engine A threshold system.
 #   VOLATILE (2.0) — crypto class, nat_gas, crypto_doge: high baseline noise.
 #   EXOTIC   (1.7) — forex_exotics, softs: thin liquidity / unaudited edge.
@@ -183,6 +210,25 @@ _PAIR_OVERRIDES = {
     "XAU/USD": 1.5,
     "XAG/USD": 1.5,
 }
+
+
+def _configured_score_threshold(pair: dict) -> float | None:
+    """Return a config-backed Engine A threshold, or None when absent."""
+    display = pair.get("display", "")
+    symbol = pair.get("symbol", "")
+    ptype = pair.get("type", "")
+    score_group = get_pair_score_group(pair)
+
+    pair_thresholds = CONFIG.get("ENGINE_A_PAIR_THRESHOLDS", {}) or {}
+    for key in (display, symbol):
+        if key in pair_thresholds:
+            return float(pair_thresholds[key])
+
+    group_thresholds = CONFIG.get("ENGINE_A_SCORE_GROUP_THRESHOLDS", {}) or {}
+    for key in (score_group, ptype, "default"):
+        if key in group_thresholds:
+            return float(group_thresholds[key])
+    return None
 
 
 def _get_threshold_tier(pair: dict) -> float:
@@ -220,7 +266,11 @@ def get_score_threshold(pair: dict, is_backtest: bool = False) -> float:
     if profile.get("min_confluence") is not None:
         return float(profile.get("min_confluence"))
 
-    # 2-tier system
+    configured = _configured_score_threshold(pair)
+    if configured is not None:
+        return configured
+
+    # Fallback 3-tier system for older configs.
     return _get_threshold_tier(pair)
 
 
@@ -582,6 +632,7 @@ def calc_confluence(
         oi_context=_oi_ctx_eff,
         macro_context=macro_context,
         intermarket_context=intermarket_context,
+        volume_threshold=volume_threshold,
     )
 
     # FIX 2: BTC Bias Conditional on Correlation
@@ -917,6 +968,20 @@ def is_trend_state_blocked(
     return str(trend_state).upper() in get_blocked_trend_states(pair, scope=scope)
 
 
+def _auto_trade_score_floor(pair: dict) -> float | None:
+    floors = CONFIG.get("AUTO_TRADE_MIN_SCORE", {}) or {}
+    ptype = pair.get("type", "")
+    raw = None
+    if isinstance(floors, dict):
+        raw = floors.get(ptype, floors.get("default"))
+    else:
+        raw = floors
+    try:
+        return float(raw) if raw is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
 def _classify_signal(signal: dict, pair: dict) -> tuple[str, str]:
     """Return (tier, reason) where tier is 'trade' | 'watchlist' | 'skip'."""
     threshold = signal.get("scanThreshold", get_min_confluence_threshold(pair))
@@ -954,6 +1019,12 @@ def _classify_signal(signal: dict, pair: dict) -> tuple[str, str]:
         and not trend_blocked
         and score >= threshold
     ):
+        auto_floor = _auto_trade_score_floor(pair)
+        if auto_floor is not None and auto_floor > float(threshold):
+            return (
+                "trade",
+                f"Trade-ready (scan floor {float(threshold):g}; auto-trader score floor {auto_floor:g})",
+            )
         return "trade", "Trade-ready"
     watch_floor = max(round(threshold - 0.3, 2), 0.2)
     reasons = [d["detail"] for d in signal.get("scanDiagnostics", [])]

@@ -4,6 +4,7 @@ from athena_app.services.engine_b_market_state import engine_b_live_market_state
 from athena_app.services.market_state import (
     get_bucket_start_epoch,
     get_tf_market_state,
+    market_state_offset_hours,
     split_market_state,
 )
 from config import CONFIG
@@ -101,3 +102,13 @@ def test_mt5_forex_scan_helpers_use_offset_aware_confirmed_h4(monkeypatch):
     assert [c["time"] for c in engine_b_state["confirmed"]] == ["2026-04-24T05:00:00Z"]
     assert engine_b_state["forming"]["time"] == "2026-04-24T09:00:00Z"
 
+
+def test_mt5_forex_d1_offset_remains_utc_zero():
+    pair = {
+        "display": "EUR/USD",
+        "symbol": "EURUSD",
+        "type": "forex",
+        "source": "mt5",
+    }
+
+    assert market_state_offset_hours(pair, "D1") == 0.0

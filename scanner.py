@@ -965,6 +965,7 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict[s
                 )
 
             sig["signalTier"] = tier
+            sig["signalTierReason"] = tier_reason
 
             sig["watchlistReason"] = tier_reason if tier == "watchlist" else None
 

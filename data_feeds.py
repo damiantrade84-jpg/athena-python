@@ -60,12 +60,70 @@ _OI_HISTORY_CACHE_TTL = 3600.0
 
 _BYBIT_FUNDING_URL = "https://api.bybit.com/v5/market/funding/history"
 _BYBIT_OI_URL = "https://api.bybit.com/v5/market/open-interest"
+_BYBIT_KLINE_URL = "https://api.bybit.com/v5/market/kline"
+_BYBIT_TICKERS_URL = "https://api.bybit.com/v5/market/tickers"
 
 
 def clear_derivative_history_caches() -> None:
     """Clear in-memory caches for historical funding/OI (tests)."""
     _funding_history_cache.clear()
     _oi_history_cache.clear()
+
+
+def _bybit_interval(tf: str) -> str | None:
+    return {
+        "M1": "1",
+        "M5": "5",
+        "M15": "15",
+        "M30": "30",
+        "H1": "60",
+        "H4": "240",
+        "D1": "D",
+    }.get(str(tf or "").upper())
+
+
+def _bybit_kline_to_candle(row: list) -> dict:
+    open_time = int(row[0])
+    return {
+        "open_time": open_time,
+        "time": time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime(open_time / 1000)),
+        "open": float(row[1]),
+        "high": float(row[2]),
+        "low": float(row[3]),
+        "close": float(row[4]),
+        "volume": float(row[5]),
+        "vol": float(row[5]),
+        "turnover": float(row[6]) if len(row) > 6 else 0.0,
+    }
+
+
+def _fetch_bybit_klines(symbol: str, tf: str, limit: int) -> list[dict] | None:
+    """Fetch Bybit linear USDT perpetual klines as normalized candles."""
+    interval = _bybit_interval(tf)
+    if not symbol or interval is None:
+        return None
+    params = {
+        "category": "linear",
+        "symbol": symbol.replace("/", "").upper(),
+        "interval": interval,
+        "limit": str(min(max(int(limit or 1), 1), 1000)),
+    }
+    try:
+        r = http_requests.get(_BYBIT_KLINE_URL, params=params, timeout=15)
+        if r.status_code != 200:
+            log.warning("[BYBIT-KLINE] %s %s HTTP %s", symbol, tf, r.status_code)
+            return None
+        data = r.json()
+        if int(data.get("retCode", -1)) != 0:
+            log.warning("[BYBIT-KLINE] %s %s retCode=%s", symbol, tf, data.get("retCode"))
+            return None
+        rows = (data.get("result") or {}).get("list") or []
+        candles = [_bybit_kline_to_candle(row) for row in rows]
+        candles.sort(key=lambda c: int(c.get("open_time", 0)))
+        return candles or None
+    except Exception as exc:
+        log.debug("[BYBIT-KLINE] %s %s fetch failed: %s", symbol, tf, exc)
+        return None
 
 
 def _funding_history_cache_key(
@@ -603,6 +661,90 @@ def _fetch_bybit_funding_rate(symbol: str) -> dict:
         return {"error": True, "symbol": symbol, "detail": f"HTTP {r.status_code}"}
     except Exception as _e:
         log.debug(f"[FUNDING-BYBIT] {symbol} fetch failed: {_e}")
+        return {"error": True, "symbol": symbol, "detail": str(_e)}
+
+
+def _fetch_bybit_open_interest(symbol: str) -> dict:
+    """Fetch current Bybit open interest + mark price. Cached 5 min."""
+    symbol = symbol.replace("/", "").upper()
+    cache_key = f"bybit:{symbol}"
+    now = time.time()
+    cached = _oi_cache.get(cache_key)
+    if cached and now - cached["ts"] < _OI_CACHE_TTL:
+        return {"error": False, "symbol": symbol, "detail": "", **cached}
+
+    try:
+        params = {
+            "category": "linear",
+            "symbol": symbol,
+            "intervalTime": "5min",
+            "limit": "2",
+        }
+        r = http_requests.get(_BYBIT_OI_URL, params=params, timeout=4)
+        if r.status_code != 200:
+            if cached:
+                return {
+                    "error": True,
+                    "symbol": symbol,
+                    "detail": f"HTTP {r.status_code} (using stale)",
+                    **cached,
+                }
+            return {"error": True, "symbol": symbol, "detail": f"HTTP {r.status_code}"}
+        data = r.json()
+        if int(data.get("retCode", -1)) != 0:
+            detail = str(data.get("retMsg", "retCode"))
+            if cached:
+                return {"error": True, "symbol": symbol, "detail": detail, **cached}
+            return {"error": True, "symbol": symbol, "detail": detail}
+        rows = (data.get("result") or {}).get("list") or []
+        if not rows:
+            if cached:
+                return {"error": True, "symbol": symbol, "detail": "empty OI", **cached}
+            return {"error": True, "symbol": symbol, "detail": "empty OI"}
+        parsed = sorted(
+            (
+                {
+                    "ts": int(row.get("timestamp") or 0),
+                    "oi": float(row.get("openInterest", 0) or 0),
+                }
+                for row in rows
+            ),
+            key=lambda row: row["ts"],
+        )
+        latest = parsed[-1]
+        oi_val = float(latest["oi"])
+        oi_change = None
+        if cached and cached.get("oi"):
+            oi_change = round((oi_val - cached["oi"]) / cached["oi"] * 100, 2)
+        elif len(parsed) >= 2 and parsed[-2]["oi"]:
+            oi_change = round((oi_val - parsed[-2]["oi"]) / parsed[-2]["oi"] * 100, 2)
+
+        price = 0.0
+        pr = http_requests.get(
+            _BYBIT_TICKERS_URL,
+            params={"category": "linear", "symbol": symbol},
+            timeout=4,
+        )
+        if pr.status_code == 200:
+            pdata = pr.json()
+            if int(pdata.get("retCode", -1)) == 0:
+                items = (pdata.get("result") or {}).get("list") or []
+                if items:
+                    price = float(items[0].get("lastPrice") or items[0].get("markPrice") or 0)
+
+        entry = {
+            "oi": oi_val,
+            "oiChange": oi_change,
+            "price": price,
+            "ts": now,
+            "source": "bybit",
+        }
+        _oi_cache[cache_key] = entry
+        return {"error": False, "symbol": symbol, "detail": "", **entry}
+    except Exception as _e:
+        log.debug("[OI-BYBIT] %s fetch failed: %s", symbol, _e)
+        if cached:
+            return {"error": True, "symbol": symbol, "detail": str(_e), **cached}
         return {"error": True, "symbol": symbol, "detail": str(_e)}
 
 

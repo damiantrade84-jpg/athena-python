@@ -76,9 +76,21 @@ THRESHOLD_AUDIT:
       - current_minus_5pct
       - current_minus_10pct
 
-# Proven MT5 forex H4 open grid on this account: 01/05/09/13/17/21 UTC (1h offset).
-# Do not guess: validate with `python tools/probe_mt5_h4.py` on your broker/account server.
-FOREX_H4_RESAMPLE_OFFSET_HOURS: 1.0
+# MT5 forex H4 policy grid: 02/06/10/14/18/22 UTC (2h offset).
+# MT5 stocks keep their fixed 3h session offset in market_state.py.
+FOREX_H4_RESAMPLE_OFFSET_HOURS: 2.0
+
+# Broker candle safety: do not turn MT5 error payloads with Polygon/yfinance
+# fallback candles into execution-eligible Engine A candles.
+MT5_CANDLE_FALLBACK_ENABLED: false
+
+# Crypto paper execution is Bybit; use Bybit public data for Engine A live
+# SL/TP ATR and derivative context. Binance fallback is off by default so venue
+# basis drift cannot silently size Bybit paper trades.
+ENGINE_A_CRYPTO_LEVELS_FEED: bybit
+ENGINE_A_CRYPTO_LEVELS_SIGNAL_FEED_FALLBACK: false
+ENGINE_A_CRYPTO_DERIVATIVES_FEED: bybit
+ENGINE_A_CRYPTO_DERIVATIVES_BINANCE_FALLBACK: false
 
 BINANCE_KLINE_WS_INTERVALS:
   - "1m"
@@ -492,8 +504,8 @@ ENGINE_A_BLOCKED_TREND_STATES:
 
 # Legacy/admin metadata only. Engine A live/backtest gates use scoring.py's
 # two-tier resolver plus PAIR_PROFILES.*.min_confluence overrides, not this map.
-# Keep values aligned with historical AUTO_TRADE_MIN_SCORE displays until the
-# admin surfaces are migrated.
+# AUTO_TRADE_MIN_SCORE is a separate auto-trader candidate floor and may be
+# higher than the scan/discovery tier.
 
 MIN_CONFLUENCE_CLASS:
 
@@ -506,6 +518,66 @@ MIN_CONFLUENCE_CLASS:
   stock:     1.8
 
   index:     1.5
+
+ENGINE_A_PAIR_THRESHOLDS: {}
+
+ENGINE_A_SCORE_GROUP_THRESHOLDS:
+
+  default: 1.5
+
+  crypto_btc: 2.0
+
+  crypto_eth: 2.0
+
+  crypto_alt_majors: 2.0
+
+  crypto_doge: 2.0
+
+  crypto_other: 2.0
+
+  nat_gas: 2.0
+
+  forex_exotics: 1.7
+
+  softs: 1.7
+
+ENGINE_A_ATR_LEVEL_CLASS_BY_DISPLAY:
+
+  SPY: etf
+
+  QQQ: etf
+
+  GLD: etf
+
+  TLT: etf_bond
+
+  IWM: etf
+
+  EEM: etf
+
+  DIA: etf
+
+  GDX: etf
+
+  SOXX: etf
+
+  XLF: etf
+
+  XLE: etf
+
+  SLV: etf
+
+  USO: etf
+
+ENGINE_A_ATR_LEVEL_CLASS_BY_SCORE_GROUP: {}
+
+ENGINE_A_COT_ADDON_ASSET_TYPES:
+
+  - commodity
+
+  - index
+
+  - stock
 
 
 
@@ -638,7 +710,7 @@ AUTO_TRADE_MIN_SCORE:
 
   stock:     1.8    # align with MIN_CONFLUENCE_CLASS.stock
 
-  index:     1.5    # align with MIN_CONFLUENCE_CLASS.index
+  index:     1.8    # scan tier remains 1.5; auto score floor adds confirmation gap
 
 # AUTO_TRADE_MIN_CONVICTION is the real live gate used inside auto_trader.py.
 
@@ -829,9 +901,9 @@ EODHD_EARNINGS_CALENDAR_ENABLED: false   # false = skip unsupported EODHD earnin
 
 # ── EODHD Insider / Fundamentals Enrichment ───────────────
 
-INSIDER_TRADING_ENABLED: true      # Check SEC Form 4 insider activity for stock signals
+INSIDER_TRADING_ENABLED: true      # Advisory stock enrichment; Engine A reports diagnostic only
 
-FUNDAMENTALS_ENABLED: true         # Enrich stock signals with fundamental data
+FUNDAMENTALS_ENABLED: true         # Advisory stock enrichment; Engine A reports diagnostic only
 
 # Ranging penalties - halved (ADX vote=0 already penalises, one penalty per condition)
 
@@ -907,33 +979,9 @@ CRYPTO_TRANSITION_PENALTY:
 
 # Live crypto microstructure (WS-injected order book / flow) as an Engine A factor.
 
-# Research validation: enabled - factor_scoring applies FACTOR_WEIGHTS.crypto.microstructure
-
-# and CRYPTO_FACTOR_WEIGHT_CAPS.microstructure when live WS data passes age checks.
+# Research validation: enabled. Live WS microstructure remains separately gated in factor_scoring.
 
 CRYPTO_LIVE_MICROSTRUCTURE_SCORING_ENABLED: true
-
-
-
-# Factor weights per asset class (base)
-
-# Crypto: VMS stays in momentum; live WS microstructure scores only when the gate above is true.
-
-# Carry zeroed (never fires for crypto). Structure reduced (fib noisy on perps).
-
-# Forex trend raised to 2.0 (primary edge) and momentum to 1.0 (was under-weighted).
-
-FACTOR_WEIGHTS:
-
-  crypto:    { trend: 2.0, momentum: 1.5, volatility: 0.8, volume: 1.0, structure: 0.5, derivatives: 1.2, microstructure: 0.6, carry: 0, trend_strength: 1.0 }
-
-  forex:     { trend: 2.0, momentum: 1.0, volatility: 1.0, volume: 0.3, structure: 0.3, derivatives: 0.8, microstructure: 0.5, carry: 0.7 }  # NOTE: not used - forex routes to forex_scoring.py, not factor_scoring.py
-
-  stock:     { trend: 2.0, momentum: 1.5, volatility: 1.0, volume: 1.5, structure: 1.0, derivatives: 0.5, microstructure: 0.75, carry: 1.0 }
-
-  commodity: { trend: 2.0, momentum: 1.3, volatility: 1.5, volume: 1.0, structure: 1.3, derivatives: 0.7, microstructure: 0.75, carry: 0.5 }
-
-  index:     { trend: 2.0, momentum: 1.4, volatility: 1.2, volume: 0.8, structure: 1.0, derivatives: 1.2, microstructure: 0.75, carry: 1.0 }
 
 
 
@@ -1097,9 +1145,57 @@ FACTOR_MIN_DIRECTIONAL: 0.25
 
 FACTOR_DIRECTIONAL_SOFT_SPAN: 0.20
 
-FACTOR_MIN_DIRECTIONAL_CRYPTO: 0.15
+FACTOR_MIN_DIRECTIONAL_CRYPTO: 0.20
 
 FACTOR_DIRECTIONAL_SOFT_SPAN_CRYPTO: 0.30
+
+FACTOR_CRYPTO_ADDON_COMBO_CONFIRM_CAP: 0.25
+
+FACTOR_CRYPTO_ADDON_COMBO_AGAINST_CAP: -0.20
+
+ENGINE_A_COT_CONTRARIAN_FADE:
+
+  ENABLED: true
+
+  ASSET_TYPES: [forex, commodity]
+
+  FADE_START_Z: 1.5
+
+  FULL_FADE_Z: 2.5
+
+EODHD_COMMODITY_TICKERS:
+
+  WTI Oil: WTICOUSD.FOREX
+
+  Brent Oil: BRENTOIL.FOREX
+
+  Nat Gas: NATGASUSD.FOREX
+
+  Copper: XCUUSD.FOREX
+
+  Aluminium: ALI.COMM
+
+  Lead: PB.COMM
+
+  Nickel: NI.COMM
+
+  Zinc: ZNC.COMM
+
+  Cattle: LE.COMM
+
+  Cocoa: CC.COMM
+
+  Coffee: KC.COMM
+
+  Corn: ZC.COMM
+
+  Cotton: CT.COMM
+
+  Soybeans: ZS.COMM
+
+  Sugar: SB.COMM
+
+  Wheat: ZW.COMM
 
 
 
@@ -1343,11 +1439,13 @@ MICROSTRUCTURE_FEEDS_ENABLED: true
 
 MICROSTRUCTURE_BYBIT_FEEDS_ENABLED: false
 
-# Public market-data websockets only. Set true after fixing the Windows/proxy CA
+# Public market-data websockets only. Keep certificate verification enabled.
 
-# store. This does not affect broker REST/order requests.
+# If a local proxy/CA issue blocks market data, fix the CA store or set
 
-MARKET_DATA_WS_SSL_VERIFY: false
+# ATHENA_MARKET_DATA_WS_SSL_VERIFY=false only as a temporary diagnostic override.
+
+MARKET_DATA_WS_SSL_VERIFY: true
 
 # Avoid Bybit /v5/market/time startup calls on networks that reject the local CA
 
