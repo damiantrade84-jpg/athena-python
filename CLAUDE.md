@@ -56,6 +56,34 @@ description: alwaysApply: true
 
 ---
 
+# Exit Pipeline (Engine A / B)
+
+`timed_exit_monitor.py` owns trade-management for Engine A/B. Engine D bypasses (`engine in {scalp, engine d, scalp_vp}` early-returns) — manages TP1/SL natively at broker.
+
+**Mode dispatch (`TIMED_EXIT.tp_mode`):**
+- `trailing_atr` (default): chandelier ATR trail only. Lock + timed-close branches suppressed via early-return.
+- `fixed`: legacy lock + timed-close pipeline. Set to roll back without code changes.
+
+**Per-style `trail_activation_r`:** `{scalp: 0.3, intraday: 0.5, swing: 1.0}` R. Trail arms when `current_r ≥ activation_r`. Scalar form accepted for back-compat.
+
+**Defaults (locked unless user requests):**
+- `intraday`/`swing` `timed_close_enabled: false` — never close on timer alone.
+- `scalp.profit_lock_enabled: false` — lock no longer clips winners.
+- `trail_indicator_confirm: true` — RSI/MACD must agree before `TRAIL_CLOSE`.
+- `timer_tightens_trail: true`, `timer_tighten_factor: 0.6` — timer tightens trail, never closes.
+
+**Broker-enforced:** SL ratchets via `mt5_move_sl_to_breakeven` / `bybit_move_sl_to_breakeven` on each tick once armed. Tightens-only via `_protective_sl_tightens`.
+
+**Failure mode:** chandelier fetch failure holds previous `_trail_state` + WARN — no silent regression.
+
+**Persistence:** `timed_exit_state` SQLite (WAL, 15s). Hydrated on first `_run_check`. Stable key `(venue, audit_id)` — survives `ticket=0` / reissue.
+
+**Exit tags (`exit_reason`):** `TRAIL_CLOSE` / `TIMED_CLOSE` / `LOCK_SL_HIT`. Set via `_mark_timed_close(reason=...)`.
+
+**State machine:** `_evaluate_trail()` returns `{action: none|ratchet|close}` — single source of truth.
+
+---
+
 # Workflow Orchestration
 
 ## 1. Plan Node Default

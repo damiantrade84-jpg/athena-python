@@ -2246,15 +2246,18 @@ TIMED_EXIT:
 
     breakeven_min: 5           # move SL to entry after 5 min if in profit
 
-    close_min: 10              # force-close at 10 min if still in profit and TP not near
+    close_min: 10              # in trailing_atr mode: ignored; in fixed mode: force-close at 10 min
 
-    timed_close_enabled: false # Engine A/B scalp: BE-only - timed close OFF (SL/TP manages rest)
+    timed_close_enabled: false # OFF for trailing_atr — SL/TP/trail manages exits
 
     tp_progress_exempt: 0.40   # skip timed close if >= 40% toward TP (mirrors swing logic)
 
-    # Engine A/B style=scalp - staged SL profit-lock (generic timed exit; Engine D bypasses this monitor).
+    # Engine A/B style=scalp staged SL profit-lock — disabled in trailing_atr mode.
+    # The chandelier trail supersedes the lock ladder: it tightens monotonically with profit
+    # and the lock ladder was clipping winners at +0.10R before the trail could activate.
+    # Re-enable only if reverting tp_mode to "fixed".
 
-    profit_lock_enabled: true
+    profit_lock_enabled: false
 
     profit_lock_stages:
 
@@ -2270,21 +2273,21 @@ TIMED_EXIT:
 
     breakeven_min: 15          # move SL to entry after 15 min if in profit
 
-    close_min: 30              # close at market after 30 min if still in profit
+    close_min: 30              # in trailing_atr mode: ignored; in fixed mode: force-close at 30 min
 
-    timed_close_enabled: true  # set false to keep BE-on-timer but never force close (SL/TP only)
+    timed_close_enabled: false # OFF — never force-close on timer alone; chandelier trail manages exits
 
-    tp_progress_exempt: 0.50   # skip timed close if >= 50% toward TP (mirrors swing logic)
+    tp_progress_exempt: 0.50   # skip timed close if >= 50% toward TP (only relevant in fixed mode)
 
   swing:
 
     breakeven_days: 2.5        # move SL to entry after 2.5 days if in profit
 
-    close_days: 5.0            # close at market after 5 days if still in profit
+    close_days: 5.0            # in trailing_atr mode: ignored; in fixed mode: force-close at 5 days
 
-    timed_close_enabled: true  # set false to disable timed close for swing
+    timed_close_enabled: false # OFF — never force-close on timer alone; chandelier trail manages exits
 
-    tp_progress_exempt: 0.50   # skip close if >= 50% toward TP - let TP manage it
+    tp_progress_exempt: 0.50   # skip close if >= 50% toward TP (only relevant in fixed mode)
 
   # ── Trailing ATR TP (Phase 2) ────────────────────────────────────────────
   # When tp_mode is "trailing_atr", after a trade reaches +trail_activation_r
@@ -2292,9 +2295,17 @@ TIMED_EXIT:
   # The trail only moves in the trade's favour (never widens).
   # Trade closes when price closes below the trail level.
 
-  tp_mode: "trailing_atr"      # "fixed" = current behavior | "trailing_atr" = Chandelier trail (test mode)
+  tp_mode: "trailing_atr"      # "fixed" = legacy behavior | "trailing_atr" = Chandelier trail
 
-  trail_activation_r: 1.0     # trailing begins after trade reaches this R-multiple in profit
+  # Per-style activation R-multiple. Below this threshold the trade rides on
+  # its original ATR SL; at/above this, the chandelier trail becomes the active
+  # exit and the broker SL ratchets with it. Per-style because scalp 1R is hit
+  # in minutes while swing 1R can take days. Scalar (e.g. 1.0) still accepted
+  # for back-compat — applied to all styles.
+  trail_activation_r:
+    scalp: 0.3
+    intraday: 0.5
+    swing: 1.0
 
   trail_atr_mult:              # ATR multiplier for the trailing distance per style
     scalp: 2.0
@@ -2308,17 +2319,28 @@ TIMED_EXIT:
     intraday: "H4"
     swing: "D1"
 
-  # ── Indicator confirmation (Phase 3) ─────────────────────────────────────
-  # When enabled, trail-triggered close requires secondary indicator confirmation.
-  # Prevents premature exits during normal retracements within a trend.
+  # ── Indicator confirmation ───────────────────────────────────────────────
+  # When enabled, a trail-breach close also requires RSI / MACD confirmation
+  # of direction reversal. RSI/MACD reversal is the "reversal" we care about,
+  # so this defaults to true — the trail without confirmation is too eager and
+  # exits on wicks through the level rather than genuine direction changes.
 
-  trail_indicator_confirm: false   # set true to require RSI/MACD confirmation
+  trail_indicator_confirm: true    # require RSI/MACD confirmation on trail-breach close
 
   trail_confirm_rsi_threshold: 40  # LONG close when RSI drops below this; SHORT when above (100 - this)
 
   trail_confirm_rsi_period: 14     # RSI lookback period
 
   trail_confirm_macd: true         # also require MACD histogram sign flip
+
+  # ── Timer-tightens-trail ─────────────────────────────────────────────────
+  # When a trade exceeds close_min/close_days, instead of force-closing, the
+  # chandelier multiplier is multiplied by timer_tighten_factor (e.g. 0.6 →
+  # 60% of the configured rope). Stagnating trades get squeezed; healthy
+  # trades continue. Only takes effect when tp_mode="trailing_atr".
+
+  timer_tightens_trail: true       # use the timer to tighten the trail rather than force-close
+  timer_tighten_factor: 0.6        # multiplier applied to trail_atr_mult past close_min
 
 CHART_VISION_DATASET_ENABLED: false
 

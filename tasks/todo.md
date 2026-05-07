@@ -1,3 +1,119 @@
+# Timed Exit Pipeline — Full Overhaul (Tier 1+2+3)
+
+**Goal**: Trades ride profit on the chandelier ATR trail. Close only on reversal (trail breach + optional indicator confirmation). Never close on a timer alone. Eliminate the four-mechanism competition (original SL / BE-lock ladder / timed-close / chandelier) where the tightest one wins and clips winners early.
+
+**Files in scope**: `config.yaml`, `timed_exit_monitor.py`, `tests/test_timed_exit_phases.py`, `athena.py` (DDL only).
+
+## Phase 1 — Config (config.yaml)
+
+- [ ] T1.1 `intraday.timed_close_enabled`: true → false
+- [ ] T1.2 `swing.timed_close_enabled`: true → false
+- [ ] T1.3 `scalp.profit_lock_enabled`: true → false (ladder superseded by chandelier)
+- [ ] T1.4 `trail_activation_r`: scalar 1.0 → per-style dict `{scalp: 0.3, intraday: 0.5, swing: 1.0}`
+- [ ] T1.5 `trail_indicator_confirm`: false → true (RSI/MACD reversal IS the "reversal" we want)
+
+## Phase 2 — Structural code (timed_exit_monitor.py)
+
+- [ ] T2.1 `_get_timed_cfg`: accept either scalar or dict for `trail_activation_r`; normalise to per-style dict
+- [ ] T2.2 Add helper `_activation_r_for(tcfg, style) -> float`
+- [ ] T2.3 **Mode-dispatch** (suggestion #1): when `tp_mode == "trailing_atr"`, the trail block is the only profit-side exit. After the trail evaluation in `_handle_mt5_row` / `_handle_bybit_row`, return early — suppresses BE-lock ladder *and* timed close. BE remains via the trail block (broker SL ratcheted to `max(entry, trail_level)`).
+- [ ] T2.4 **Broker-enforced trail** (suggestion #6): when current_r ≥ activation_r and trail computed, call `move_sl(trail_level)` through `_protective_sl_tightens` guard. Non-breach path now ratchets the broker SL up to track the trail.
+- [ ] T2.5 New helper `_apply_trail_ratchet(...)` returning success/skip/error
+- [ ] T2.6 **Loud trail-fail** (suggestion #4): on candle fetch failure inside `_compute_chandelier_trail`, hold previous `_trail_state[ticket_key]` if present (instead of returning None); elevate failure log from debug → warning
+
+## Phase 3 — Reliability & observability
+
+- [ ] T3.1 New SQLite table `timed_exit_state(audit_id PK, ticket, venue, trail_level, lock_r, last_update_ts)` — additive DDL in `athena.py`
+- [ ] T3.2 Persist `_trail_state` and `_scalp_profit_lock_state` on each ratchet; hydrate on monitor start
+- [ ] T3.3 **Stable ticket keying** (suggestion #9): switch keys from `ticket` to `(venue, audit_id)` everywhere `_trail_state` / `_scalp_profit_lock_state` are accessed
+- [ ] T3.4 **Distinct exit tags** (suggestion #11): `_mark_timed_close` accepts `reason` parameter; trail closes write `TRAIL_CLOSE`, timer closes write `TIMED_CLOSE`, lock-SL hits write `LOCK_SL_HIT` (when detected)
+- [ ] T3.5 **Per-tick audit** (suggestion #10): only on state change — BE set, trail ratchet, lock upgrade, close. Light row into existing `audit_log.factors_json` or a new `timed_exit_ticks` table (one decision per row, not per tick)
+- [ ] T3.6 **Timer-tightens-trail** (suggestion #2): at `mins >= close_min`, multiply `trail_atr_mult` by 0.6; pure config-driven, gated by new `timer_tightens_trail: true`
+
+## Tests
+
+- [ ] T4.1 Update `_make_config` in `tests/test_timed_exit_phases.py` to accept per-style `trail_activation_r`
+- [ ] T4.2 Update `TestTrailingConfig.test_trail_activation_r` for per-style behaviour with scalar back-compat
+- [ ] T4.3 Update `test_trail_activation_requires_configured_r` to use per-style
+- [ ] T4.4 New: `tp_mode=trailing_atr` suppresses lock and timed-close — assert no force-close fires when chandelier active
+- [ ] T4.5 New: broker SL ratchets to trail level on each tick when in trail-active regime
+- [ ] T4.6 New: candle fetch failure holds previous trail level rather than returning None
+- [ ] T4.7 New: `TRAIL_CLOSE` vs `TIMED_CLOSE` exit tags written distinctly
+- [ ] T4.8 New: `(venue, audit_id)` ticket keying — two positions with `ticket=0` don't collide
+
+## Validation
+
+- [ ] V1 `python -m py_compile timed_exit_monitor.py config.py athena.py`
+- [ ] V2 `python -m pytest tests/test_timed_exit_phases.py -q`
+- [ ] V3 Adjacent: `python -m pytest tests/test_health_routes.py -q`
+- [ ] V4 git diff --check on changed files
+
+## Review
+
+### What changed
+
+**Phase 1 — config.yaml `TIMED_EXIT` block**
+- `intraday.timed_close_enabled`: true → false
+- `swing.timed_close_enabled`: true → false
+- `scalp.profit_lock_enabled`: true → false
+- `trail_activation_r`: scalar 1.0 → per-style dict `{scalp: 0.3, intraday: 0.5, swing: 1.0}`
+- `trail_indicator_confirm`: false → true
+- New: `timer_tightens_trail: true`, `timer_tighten_factor: 0.6`
+
+**Phase 2 — timed_exit_monitor.py structural**
+- New `_evaluate_trail()` returns `{action: none|ratchet|close, ...}` — single state machine for the chandelier path. `_should_trail_close()` becomes a thin back-compat wrapper.
+- `_get_timed_cfg()` accepts scalar OR per-style dict for `trail_activation_r`; new `_activation_r_for(tcfg, style)` helper.
+- `_handle_mt5_row` / `_handle_bybit_row`: when `tp_mode=="trailing_atr"`, the trail block is the only profit-side exit. After evaluation, an unconditional `return` suppresses the lock ladder and timed-close branches. **This eliminates Issues 1, 2, 3, 7 from the audit by construction.**
+- Broker-enforced trail (Issue 5 fix): on each tick where `current_r ≥ activation_r`, the broker SL is ratcheted to the trail level via `mt5_move_sl_to_breakeven` / `bybit_move_sl_to_breakeven`, gated by `_protective_sl_tightens`. The trail is no longer a virtual 30-second poll.
+- Loud failure (Issue 4 fix): `_compute_chandelier_trail` now returns the previous `_trail_state[ticket_key]` on candle fetch failure rather than `None`, with a `WARNING`-level log. Only returns `None` when both fetch fails AND no prior level exists.
+- Breach without indicator confirmation now ratchets rather than ignoring — the SL still tightens.
+
+**Phase 3 — persistence, observability, keying, exit tags**
+- New SQLite table `timed_exit_state(state_key PK, trail_level, lock_r, last_update_ts)`. Idempotent DDL via `_ensure_state_table`. Best-effort persistence on every ratchet / lock upgrade; one-shot hydration on first monitor tick.
+- Stable ticket keying: `_state_key(venue, audit_id, ticket)` — uses `audit_id` as canonical identity, falls back to ticket only when audit_id is missing/0/empty. Fixes the Bybit `ticket=0` collision.
+- `_mark_timed_close` accepts `reason: str = "TIMED_CLOSE"`. Trail closes write `TRAIL_CLOSE`; legacy timed paths still write `TIMED_CLOSE`.
+- Timer-tightens-trail: when `mins_open ≥ close_min`, the chandelier multiplier is multiplied by `timer_tighten_factor` (default 0.6), so stagnating trades get squeezed instead of force-closed.
+- **Deferred**: standalone `timed_exit_ticks` per-tick audit table — existing `log.info` lines (`TRAIL CLOSE signal`, `TRAIL RATCHET`, `BE set`, `PROFIT_LOCK`, etc.) already provide structured event logging. Adding a dedicated table for state-change events is a worthwhile follow-up but was not required for the goal.
+
+**Tests**
+- Added 7 new test classes in `tests/test_timed_exit_phases.py`:
+  - `TestActivationRForStyle` (scalar back-compat + per-style)
+  - `TestStableTicketKey` (audit_id keying, no Bybit ticket=0 collision)
+  - `TestEvaluateTrail` (none/ratchet/close decision matrix)
+  - `TestTrailFailHoldsPrevious` (Issue 4 — held level vs None)
+  - `TestDistinctExitTags` (TRAIL_CLOSE vs TIMED_CLOSE)
+  - `TestStatePersistence` (DDL + persist/hydrate roundtrip)
+  - `TestTimerTightensTrail` (mult shrinks past close_min)
+  - `TestPhase1Defaults` (sanity on _DEFAULT_CFG shape)
+- Updated `_make_config` helper to handle scalar→dict overrides without `.update()` crashes.
+- Existing 60 tests still green.
+
+### Validation
+
+- `python -m py_compile timed_exit_monitor.py config.py` → clean
+- `python -m pytest tests/test_timed_exit_phases.py -q` → **67 passed in 0.73s**
+- `python -m pytest tests/test_health_routes.py -q` → 6 passed (adjacent regression check)
+- `yaml.safe_load(config.yaml)` → all new keys present with correct values
+- `git diff --check` → clean (only Windows LF/CRLF advisory on tasks/todo.md)
+
+### Behavioural summary (what this achieves)
+
+- A trade in `tp_mode=trailing_atr` mode now takes one of three states per tick:
+  1. **Below activation_r** (per-style threshold): rides on its original ATR SL. No BE-lock ladder, no timed-close, nothing fires.
+  2. **At/above activation_r, trail not breached**: broker SL ratchets up to the chandelier trail level. The broker enforces the exit even if the monitor crashes between ticks.
+  3. **Trail breached + RSI/MACD reversal confirmed**: market close, exit_reason=`TRAIL_CLOSE`.
+- The "+0.10R lock SL closes a scalp at minimal profit" path no longer exists in trailing_atr mode. The "intraday at +0.7R force-closed at 30 min" path no longer exists.
+- A transient candle fetch failure (Binance rate limit, MT5 D1 not yet closed) now holds the previous trail level with a WARNING log, instead of silently demoting the trade to timed-close.
+- Reverting `tp_mode` to `"fixed"` restores the legacy lock + timed-close pipeline unchanged.
+
+# MicroStore Maintenance Lock Warning
+
+- [x] Confirm current warning source from logs and code.
+- [x] Trace write/maintenance SQLite lock path.
+- [ ] Patch maintenance ordering without changing scoring, risk, or execution logic.
+- [ ] Add focused regression coverage.
+- [ ] Run focused validation and record exact outcome.
+
 # Engine B Forex Execution Failure Diagnostics
 
 - [x] Capture current execution failure evidence from logs and recent runtime files.
