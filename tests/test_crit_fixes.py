@@ -237,8 +237,90 @@ class TestQuickExecuteExecutionGuard:
         assert any("EUR/USD mt5 FAILED" in msg and data["error"] in msg for msg in warning_messages)
 
 
-# ── CRIT-002: forex intermarket cap parity ────────────────────────────────────
+# Quick-execute freshness refresh
+def test_quick_execute_refresh_replaces_stale_freshness_metadata(monkeypatch):
+    import execution
+    import mt5_executor
+    import risk_engine
+    from flask import Flask
 
+    rt_mock = _make_rt(execution_enabled=True)
+    rt_mock.ALL_PAIRS = [{"display": "EUR/USD"}]
+    rt_mock.resolve_pair_from_signal = lambda *_args, **_kwargs: None
+    rt_mock.fetch_candles = lambda *_args, **_kwargs: []
+    rt_mock.calc_indicators_with_normalized = lambda *_args, **_kwargs: {}
+    rt_mock.atr_for_levels = lambda *_args, **_kwargs: 0.001
+    rt_mock.calc_levels = lambda *_args, **_kwargs: {}
+    rt_mock.analyze_pair.return_value = {
+        "pair": "EUR/USD",
+        "direction": "LONG",
+        "price": 1.101,
+        "atr": 0.001,
+        "confluenceScore": 2.5,
+        "maxScore": 3.0,
+        "trendState": "TRENDING",
+        "timestamp": "2026-05-07T08:20:00+00:00",
+        "candleFetchMeta": {"H4": {"stalenessSeverity": "fresh"}},
+        "candleConsistency": {"H4": {"status": "CONFIRMED_ONLY_OK"}},
+        "dataFreshness": {"allowed": True, "blocked": [], "reason": ""},
+    }
+    captured = {}
+
+    class _Approval:
+        approved = False
+        reason = "TEST_STOP_AFTER_RISK_CAPTURE"
+
+        @staticmethod
+        def to_dict():
+            return {"approved": False, "reason": "TEST_STOP_AFTER_RISK_CAPTURE"}
+
+    def _fake_risk_check(**kwargs):
+        captured["signal"] = dict(kwargs["signal"])
+        return _Approval()
+
+    monkeypatch.setattr(execution, "rt", lambda: rt_mock)
+    monkeypatch.setattr(
+        execution,
+        "recompute_levels_for_style",
+        lambda *_args, **_kwargs: {
+            "pip_mode": "intraday",
+            "atr": 0.001,
+            "levels": {"sl": 1.09, "tp1": 1.12, "tp2": 1.13},
+        },
+    )
+    monkeypatch.setattr(mt5_executor, "mt5_get_account", lambda: {"balance": 10000.0, "equity": 10000.0})
+    monkeypatch.setattr(mt5_executor, "mt5_get_positions", lambda: {"positions": []})
+    monkeypatch.setattr(mt5_executor, "mt5_get_symbol_info", lambda _symbol: {"digits": 5, "point": 0.00001})
+    monkeypatch.setattr(risk_engine, "risk_check", _fake_risk_check)
+    monkeypatch.setattr(execution, "insert_manual_error", lambda **_kwargs: None)
+
+    app = Flask(__name__)
+    execution.register_execution_routes(app)
+    client = app.test_client()
+
+    resp = client.post(
+        "/api/quick-execute",
+        json={
+            "signal": {
+                "pair": "EUR/USD",
+                "display": "EUR/USD",
+                "type": "forex",
+                "direction": "LONG",
+                "price": 1.1,
+                "timestamp": "2000-01-01T00:00:00+00:00",
+                "candleFetchMeta": {"H4": {"stalenessSeverity": "stale_multi_bucket"}},
+            },
+            "pip_mode": "intraday",
+        },
+    )
+
+    assert resp.status_code == 400
+    assert captured["signal"]["candleFetchMeta"]["H4"]["stalenessSeverity"] == "fresh"
+    assert captured["signal"]["candleConsistency"]["H4"]["status"] == "CONFIRMED_ONLY_OK"
+    assert captured["signal"]["dataFreshness"]["allowed"] is True
+
+
+# ── CRIT-002: forex intermarket cap parity ────────────────────────────────────
 class TestForexIntermarketCapParity:
 
     def test_constant_value(self):

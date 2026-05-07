@@ -391,6 +391,14 @@ def api_quick_execute():
                         "trendState", sig.get("trendState")
                     )
                     sig["timestamp"] = _fresh["timestamp"]
+                    for _fresh_key in (
+                        "candleFetchMeta",
+                        "candleFreshness",
+                        "candleConsistency",
+                        "dataFreshness",
+                    ):
+                        if _fresh.get(_fresh_key) is not None:
+                            sig[_fresh_key] = _fresh[_fresh_key]
             except Exception as _fresh_err:
                 _r.log.warning(
                     f"[QUICK EXEC] {pair}: refresh failed ({_fresh_err}) - continuing with original direction"
