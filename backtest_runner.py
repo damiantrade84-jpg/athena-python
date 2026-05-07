@@ -3564,7 +3564,9 @@ def backtest_pair_naked(pair: dict, style: str = "naked", validation_mode="stand
     requested_style = "auto" if style == "naked" else style
     _pair_score_group = get_pair_score_group(pair)
     resolved_style, style_profile = _rt().naked_scan_style_profile(
-        requested_style, score_group=_pair_score_group
+        requested_style,
+        score_group=_pair_score_group,
+        asset_type=pair.get("type", ""),
     )
     _bt_structure_gate_enabled = bool(CONFIG.get("ENGINE_B_BT_STRUCTURE_GATE_ENABLED", True))
     if not _bt_structure_gate_enabled:
@@ -3579,7 +3581,6 @@ def backtest_pair_naked(pair: dict, style: str = "naked", validation_mode="stand
     _zone_tf = style_profile.get("zone_tf", "H4")
     _entry_tf = style_profile.get("entry_tf", "H1")
     _atr_tf = style_profile.get("atr_tf", "H4")
-    _bt_sl_mode = str(CONFIG.get("ENGINE_B_BT_SL_MODE", "atr") or "atr").lower()
     _bt_enable_profile_context = bool(CONFIG.get("ENGINE_B_PROFILE_SCORING_ENABLED", False))
     _b_funnel = {
         "bars_evaluated": 0,
@@ -3792,6 +3793,7 @@ def backtest_pair_naked(pair: dict, style: str = "naked", validation_mode="stand
                 enable_profile_context=_bt_enable_profile_context,
                 d1_snap=_bt_b_d1_snap,
                 h4_snap=_bt_b_zone_snap,
+                style=resolved_style,
             )
             _b_funnel["bars_evaluated"] += 1
             if res.get("structural_verdict") != "CLEAR":
@@ -3834,48 +3836,30 @@ def backtest_pair_naked(pair: dict, style: str = "naked", validation_mode="stand
             _b_funnel["passed_gate"] += 1
 
             entry = current_price
-            _bt_regime = None
-            try:
+            # Use the same execution levels that gated this signal — eliminates the
+            # historical live/BT divergence where BT recomputed SL/TP from calc_levels
+            # while live used resolve_engine_b_execution_levels (tighter-of-both SL +
+            # structural-or-ATR TP). Fallback to calc_levels only if conf_data did not
+            # produce execution levels (e.g. zero ATR / invalid entry).
+            sl = conf_data.get("execution_sl")
+            tp = conf_data.get("execution_tp")
+            level_source = conf_data.get("rr_source") or "engine_b_execution"
+            if sl is None or tp is None:
                 _bt_regime = res.get("regime_state")
-            except Exception:
-                pass
-            # PHASE 1C: Track actual BT level source fields
-            selected_tp_source = "structural" if _bt_sl_mode == "structural" else "calc_levels"
-            selected_sl_source = "structural" if _bt_sl_mode == "structural" else "calc_levels"
-            
-            if _bt_sl_mode == "structural":
-                sl = res.get("recommended_stop_loss")
-                tp = res.get("recommended_take_profit")
-                if not tp and sl:
-                    sl_dist = abs(entry - sl)
-                    if direction == "LONG":
-                        tp = entry + (sl_dist * style_profile.get("fallback_rr", 2.0))
-                    else:
-                        tp = entry - (sl_dist * style_profile.get("fallback_rr", 2.0))
-                    selected_tp_source = "structural_fallback_rr"
-            else:
                 _lvl = calc_levels(
-                    entry,
-                    atr,
-                    direction,
-                    pair.get("type", "stock"),
-                    regime_state=_bt_regime,
-                    style=resolved_style,
+                    entry, atr, direction, pair.get("type", "stock"),
+                    regime_state=_bt_regime, style=resolved_style,
                 )
-                sl = _lvl["sl"]
-                tp = _lvl["tp1"]
-
+                sl = sl if sl is not None else _lvl.get("sl")
+                tp = tp if tp is not None else _lvl.get("tp1")
+                level_source = "calc_levels_fallback"
             if sl is None or tp is None:
                 continue
 
-            # Always recompute RR from actual SL/TP used — matches execution parity.
-            # conf_data.rr may be structural; when _bt_sl_mode="atr", sl/tp are ATR-based.
             _rr_sl_dist = abs(entry - sl)
             _rr_tp_dist = abs(tp - entry)
             rr = (_rr_tp_dist / _rr_sl_dist) if _rr_sl_dist > 0 else 0.0
-            if rr <= 0:
-                continue
-            if rr < float(style_profile.get("min_rr", 1.0)):
+            if rr <= 0 or rr < float(style_profile.get("min_rr", 1.0)):
                 continue
 
             candidates.append(
@@ -3890,9 +3874,9 @@ def backtest_pair_naked(pair: dict, style: str = "naked", validation_mode="stand
                     "res": res,
                     "conf": conf_data,
                     "regime_label": regime_label,
-                    "level_mode": _bt_sl_mode,
-                    "selected_tp_source": selected_tp_source,
-                    "selected_sl_source": selected_sl_source,
+                    "level_mode": level_source,
+                    "selected_tp_source": level_source,
+                    "selected_sl_source": level_source,
                 }
             )
 
@@ -3919,33 +3903,23 @@ def backtest_pair_naked(pair: dict, style: str = "naked", validation_mode="stand
         # Synchronize future_window to the correct H4 starting position
         _h4_fill_index = bisect.bisect_left(h4_times, entry_bar["time"])
 
-        if best.get("level_mode") == "structural":
-            sl = best["sl"]
-            tp = best["tp"]
-            _sl_dist = abs(entry - sl)
-            _tp_dist = abs(tp - entry)
-            target_rr = (_tp_dist / _sl_dist) if _sl_dist > 0 else 0.0
-            _fallback_rr = float(style_profile.get("fallback_rr", 0.0) or 0.0)
-            if _fallback_rr > 0 and target_rr > _fallback_rr and _sl_dist > 0:
-                tp = (
-                    entry + (_sl_dist * _fallback_rr)
-                    if direction == "LONG"
-                    else entry - (_sl_dist * _fallback_rr)
-                )
-                target_rr = _fallback_rr
-                selected_tp_source = "capped_to_fallback_rr"
-        else:
-            _lvl = calc_levels(
-                entry,
-                atr,
-                direction,
-                _ptype,
-                regime_state=best["res"].get("regime_state"),
-                style=resolved_style,
+        # Use the candidate's pre-resolved execution SL/TP — these came from
+        # resolve_engine_b_execution_levels (live parity). Cap TP at fallback_rr
+        # so structural targets don't run beyond the style's risk contract.
+        sl = best["sl"]
+        tp = best["tp"]
+        _sl_dist = abs(entry - sl)
+        _tp_dist = abs(tp - entry)
+        target_rr = (_tp_dist / _sl_dist) if _sl_dist > 0 else 0.0
+        _fallback_rr = float(style_profile.get("fallback_rr", 0.0) or 0.0)
+        if _fallback_rr > 0 and target_rr > _fallback_rr and _sl_dist > 0:
+            tp = (
+                entry + (_sl_dist * _fallback_rr)
+                if direction == "LONG"
+                else entry - (_sl_dist * _fallback_rr)
             )
-            sl = _lvl["sl"]
-            tp = _lvl["tp1"]
-            target_rr = _lvl.get("rr1", 0.0)
+            target_rr = _fallback_rr
+            selected_tp_source = "capped_to_fallback_rr"
 
         if sl is None or tp is None:
             i += 1
@@ -4484,18 +4458,19 @@ def backtest_pair_consensus(
 
     requested_style = _normalize_style(style)
     _pair_score_group = get_pair_score_group(pair)
-    _forex_struct_tf = CONFIG.get("ENGINE_B_FOREX_STRUCTURE_TF", "D1").upper()
-    resolved_style, style_profile = _rt().naked_scan_style_profile(
-        "intraday", score_group=_pair_score_group
+    # Engine C BT uses the same style as Engine A (resolved via auto), and reads TFs
+    # from the asset+style matrix — no more forex-specific structure TF flag.
+    _ec_bt_style = requested_style if requested_style != "auto" else (
+        "intraday" if _ptype in ("crypto", "forex") else "swing"
     )
-    if _ptype == "forex" and _forex_struct_tf == "D1":
-        resolved_style, style_profile = _rt().naked_scan_style_profile(
-            "swing", score_group=_pair_score_group
-        )
+    resolved_style, style_profile = _rt().naked_scan_style_profile(
+        _ec_bt_style,
+        score_group=_pair_score_group,
+        asset_type=_ptype,
+    )
     _zone_tf = style_profile.get("zone_tf", "H4")
     _entry_tf = style_profile.get("entry_tf", "H1")
     _atr_tf = style_profile.get("atr_tf", "H4")
-    _bt_sl_mode = str(CONFIG.get("ENGINE_B_BT_SL_MODE", "atr") or "atr").lower()
     _bt_enable_profile_context = bool(CONFIG.get("ENGINE_B_PROFILE_SCORING_ENABLED", False))
 
     _h4_need = max(50, CONFIG.get("H4_CANDLES", 1001))
@@ -4675,6 +4650,7 @@ def backtest_pair_consensus(
                 enable_profile_context=_bt_enable_profile_context,
                 d1_snap=(d1i or {}).get("snap") or {},
                 h4_snap=(h4i or {}).get("snap") or {},
+                style=resolved_style,
             )
             if res_b.get("structural_verdict") == "CLEAR":
                 conf_b = naked_engine.calculate_confidence(

@@ -115,7 +115,14 @@
       "PowerShell(Get-ChildItem -Force \"C:\\\\Users\\\\damia\\\\OneDrive\\\\Desktop\\\\athena-python\" | Select-Object @{N='Type';E={if\\($_.PSIsContainer\\){'DIR'}else{'FILE'}}}, Name, @{N='Size_MB';E={if\\($_.PSIsContainer\\){''}else{[math]::Round\\($_.Length/1MB,2\\)}}} | Sort-Object Type, Name | Format-Table -AutoSize)",
       "PowerShell(Test-Path *)",
       "Bash(awk '{print substr\\($0,1,4\\)}' /c/dev/athena-copy-dryrun-verbose.log)",
-      "PowerShell(Get-ChildItem *)"
+      "PowerShell(Get-ChildItem *)",
+      "Bash(Get-ChildItem -Path athena_research -Filter \"*.py\" -File)",
+      "Bash(Select-Object -ExpandProperty Name)",
+      "Bash(findstr /n \"shift\\(-\" athena_research\\\\strategies.py)",
+      "Bash(powershell -Command \"Select-String -Path 'athena_research\\\\strategies.py' -Pattern '@|apply|for i in' | head -40\")",
+      "Bash(Expand-Archive -Path \"C:\\\\Users\\\\damia\\\\Downloads\\\\Sentinel.zip\" -DestinationPath \"C:\\\\Users\\\\damia\\\\Downloads\\\\Sentinel_extracted\" -Force)",
+      "Bash(Get-ChildItem \"C:\\\\Users\\\\damia\\\\Downloads\\\\Sentinel_extracted\" -Recurse)",
+      "Bash(Select-Object FullName)"
     ]
   }
 }

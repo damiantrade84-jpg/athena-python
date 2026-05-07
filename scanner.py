@@ -559,7 +559,9 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict[s
                 try:
                     _pair_score_group = get_pair_score_group(pair)
                     resolved_style_b, style_profile_b = r.naked_scan_style_profile(
-                        _pair_style, score_group=_pair_score_group
+                        _pair_style,
+                        score_group=_pair_score_group,
+                        asset_type=ptype,
                     )
 
                     d1 = raw_candles.get("D1")
@@ -708,6 +710,7 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict[s
                                     asset_type=ptype,
                                     d1_snap=_sc_d1_snap,
                                     h4_snap=_sc_h4_snap,
+                                    style=resolved_style_b,
                                 )
 
                                 conf_b = None

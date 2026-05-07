@@ -47,7 +47,7 @@ def test_engine_c_scan_uses_standalone_engine_b_gate(monkeypatch):
         resolve_scan_style=lambda style, _pair: style,
         normalize_style=lambda style: style,
         analyze_pair=lambda _pair, _btc_bias, **kwargs: {},
-        naked_scan_style_profile=lambda requested_style, score_group=None: (
+        naked_scan_style_profile=lambda requested_style, score_group=None, asset_type=None: (
             requested_style,
             {"min_score": 1.1, "fallback_rr": 2.0, "min_rr": 1.0},
         ),
@@ -169,7 +169,7 @@ def test_engine_c_scan_uses_style_timeframes_and_tests_both_directions(monkeypat
             "price": 1.2345,
             "atr": 0.0020,
         },
-        naked_scan_style_profile=lambda requested_style, score_group=None: (
+        naked_scan_style_profile=lambda requested_style, score_group=None, asset_type=None: (
             requested_style,
             _style_profile(requested_style),
         ),
@@ -293,7 +293,7 @@ def test_engine_c_forex_intraday_engine_a_gets_real_tfs(monkeypatch):
     }
     captured: dict = {"fetch_tfs": [], "preloaded_candles": None}
 
-    def _style_profile(style_name: str, score_group=None):
+    def _style_profile(style_name: str, score_group=None, asset_type=None):
         if style_name == "swing":
             return (
                 "swing",
@@ -421,7 +421,7 @@ def test_engine_c_scan_optional_pairs_filter(monkeypatch):
         resolve_scan_style=lambda style, _pair: style,
         normalize_style=lambda style: style,
         analyze_pair=_spy_analyze_pair,
-        naked_scan_style_profile=lambda requested_style, score_group=None: (
+        naked_scan_style_profile=lambda requested_style, score_group=None, asset_type=None: (
             "intraday",
             {
                 "min_score": 1.0,

@@ -227,7 +227,7 @@ def test_backtest_pair_naked_enters_on_next_bar_open_with_slippage(monkeypatch):
         extract_candles=lambda candles: candles,
         fetch_candles=lambda *_args, **_kwargs: d1,
         fetch_eodhd_intraday_bt=lambda *_args, **_kwargs: (h4, h1),
-        naked_scan_style_profile=lambda style, score_group=None: (
+        naked_scan_style_profile=lambda style, score_group=None, asset_type=None: (
             "intraday",
             {"min_score": 0.5, "fallback_rr": 2.0, "min_rr": 1.0, "atr_tf": "H4"},
         ),
@@ -334,7 +334,7 @@ def test_backtest_pair_naked_skips_profile_context_when_profile_scoring_disabled
         extract_candles=lambda candles: candles,
         fetch_candles=lambda *_args, **_kwargs: d1,
         fetch_eodhd_intraday_bt=lambda *_args, **_kwargs: (h4, h1),
-        naked_scan_style_profile=lambda style, score_group=None: (
+        naked_scan_style_profile=lambda style, score_group=None, asset_type=None: (
             "intraday",
             {"min_score": 0.5, "fallback_rr": 2.0, "min_rr": 1.0, "atr_tf": "H4"},
         ),
@@ -416,7 +416,7 @@ def test_backtest_pair_naked_forex_auto_keeps_intraday_style_under_d1_structure(
     style_calls = []
     runtime = SimpleNamespace(
         fetch_candles=lambda _pair, tf, _limit: {"D1": d1, "H4": h4, "H1": h1}[tf],
-        naked_scan_style_profile=lambda style, score_group=None: (
+        naked_scan_style_profile=lambda style, score_group=None, asset_type=None: (
             style_calls.append((style, score_group)) or (
                 "intraday",
                 {
@@ -518,7 +518,7 @@ def test_backtest_pair_naked_caps_post_fill_rr_to_style_fallback(monkeypatch):
         extract_candles=lambda candles: candles,
         fetch_candles=lambda *_args, **_kwargs: d1,
         fetch_eodhd_intraday_bt=lambda *_args, **_kwargs: (h4, h1),
-        naked_scan_style_profile=lambda style, score_group=None: (
+        naked_scan_style_profile=lambda style, score_group=None, asset_type=None: (
             "intraday",
             {"min_score": 0.5, "fallback_rr": 2.0, "min_rr": 1.0, "atr_tf": "H4"},
         ),
@@ -529,7 +529,6 @@ def test_backtest_pair_naked_caps_post_fill_rr_to_style_fallback(monkeypatch):
     monkeypatch.setattr(backtest_runner, "_rt", lambda: runtime)
     monkeypatch.setattr(backtest_runner, "_get_slippage_for_bar", lambda *_args, **_kwargs: 0.0)
     monkeypatch.setattr(backtest_runner, "get_pair_score_group", lambda _pair: "default")
-    monkeypatch.setitem(backtest_runner.CONFIG, "ENGINE_B_BT_SL_MODE", "structural")
     monkeypatch.setattr(
         backtest_runner,
         "calc_levels",
@@ -585,13 +584,19 @@ def test_backtest_pair_naked_caps_post_fill_rr_to_style_fallback(monkeypatch):
     monkeypatch.setattr(
         market_structure.engine,
         "calculate_confidence",
-        lambda _res, _px, direction, **_kwargs: {
+        lambda _res, px, direction, **_kwargs: {
             "score": 2.0 if direction == "LONG" else 0.0,
             "pct": 80.0 if direction == "LONG" else 0.0,
             "rr": 2.4 if direction == "LONG" else 0.0,
             "passed": direction == "LONG",
             "trigger_pattern": "NONE",
             "max_possible": 5.0,
+            # Engine B execution levels feed straight into BT now (live parity).
+            # Wide structural targets get capped to fallback_rr at fill time.
+            "execution_sl": 95.0 if direction == "LONG" else px + 5.0,
+            "execution_tp": 120.0 if direction == "LONG" else px - 25.0,
+            "rr_used_for_gate": 2.4 if direction == "LONG" else 0.0,
+            "rr_source": "atr_sl_structural_tp",
         },
     )
 
@@ -772,7 +777,7 @@ def test_backtest_pair_naked_telemetry_captures_non_zero_values(monkeypatch):
         extract_candles=lambda candles: candles,
         fetch_candles=lambda *_args, **_kwargs: d1,
         fetch_eodhd_intraday_bt=lambda *_args, **_kwargs: (h4, h1),
-        naked_scan_style_profile=lambda style, score_group=None: (
+        naked_scan_style_profile=lambda style, score_group=None, asset_type=None: (
             "intraday",
             {"min_score": 0.5, "fallback_rr": 2.0, "min_rr": 1.0, "atr_tf": "H4"},
         ),

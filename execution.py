@@ -711,7 +711,9 @@ def api_engine_c_scan():
             )
 
             resolved_style_b, style_profile_b = _r.naked_scan_style_profile(
-                requested_style, score_group=_pair_score_group
+                requested_style,
+                score_group=_pair_score_group,
+                asset_type=ptype,
             )
 
             _zone_tf = str(style_profile_b.get("zone_tf", "H4")).upper()
@@ -878,6 +880,7 @@ def api_engine_c_scan():
                     asset_type=ptype,
                     d1_snap=_ec_d1_snap,
                     h4_snap=_ec_h4_snap,
+                    style=resolved_style_b,
                 )
                 if res_b.get("structural_verdict") == "CLEAR":
                     conf_b = engine_b.calculate_confidence(
