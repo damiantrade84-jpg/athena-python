@@ -234,6 +234,21 @@ _CRYPTO_SCALP_PAIRS = [
 _SCALP_PAIR_META_BY_DISPLAY: dict[str, dict[str, Any]] = {}
 
 
+def _crypto_sym_info(current_price: float) -> dict:
+    """Return point/digits/spread for a crypto symbol based on current price.
+
+    Replaces the former hardcoded {point=0.01, digits=2} which produced
+    catastrophic SL geometry on low-price altcoins (DOGE, XRP, ADA, SUI).
+    """
+    if current_price >= 100.0:
+        return {"spread": 0, "point": 0.01,    "digits": 2}
+    if current_price >= 5.0:
+        return {"spread": 0, "point": 0.001,   "digits": 3}
+    if current_price >= 0.50:
+        return {"spread": 0, "point": 0.0001,  "digits": 4}
+    return {"spread": 0, "point": 0.00001, "digits": 5}
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # MT5 CANDLE FETCHING
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -323,7 +338,12 @@ def _overlay_eodhd_volume_for_scalp(
         from athena_runtime import rt
         from eodhd_volume_overlay import overlay_candle_volumes
 
-        symbol = f"{display}.US" if str(asset_type).lower() == "stock" and "." not in str(display) else display
+        _suffix_map = CONFIG.get("SCALP_ENGINE", {}).get("EODHD_STOCK_EXCHANGE_SUFFIX_MAP", {})
+        if str(asset_type).lower() == "stock" and "." not in str(display):
+            suffix = _suffix_map.get(display, "US")
+            symbol = f"{display}.{suffix}"
+        else:
+            symbol = display
         pair = {"display": display, "symbol": symbol, "type": asset_type, "source": "mt5"}
         volume_resp = rt().fetch_eodhd_volume_only(
             pair,
@@ -863,7 +883,7 @@ def scalp_session_window(
 # SPREAD FILTER
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def check_spread(symbol_info: dict, asset_type: str) -> tuple:
+def check_spread(symbol_info: dict, asset_type: str, display: str = "") -> tuple:
     """Validate spread within limits.  Returns (ok: bool, spread_pips: float).
 
     Forex: spread in pips via point/pip_size conversion (standard).
@@ -882,9 +902,14 @@ def check_spread(symbol_info: dict, asset_type: str) -> tuple:
     if asset_type in ("index", "stock", "commodity"):
         # Use raw point count from MT5 — meaningful unit for these instruments.
         # MAX_SPREAD_POINTS: index=100, stock=50, commodity=30 (configurable).
+        # Per-symbol overrides via MAX_SPREAD_POINTS_OVERRIDES (e.g. XAU/USD=60).
         max_points_cfg = cfg.get("MAX_SPREAD_POINTS", {})
         defaults = {"index": 100, "stock": 50, "commodity": 30}
-        max_pts = max_points_cfg.get(asset_type, defaults.get(asset_type, 100))
+        per_symbol_overrides = cfg.get("MAX_SPREAD_POINTS_OVERRIDES", {})
+        max_pts = per_symbol_overrides.get(display) if display else None
+        if max_pts is None:
+            max_pts = max_points_cfg.get(asset_type, defaults.get(asset_type, 100))
+        max_pts = int(max_pts)
         ok = spread_raw <= max_pts
         return ok, float(spread_raw)
 
@@ -2803,7 +2828,9 @@ def ai_quality_grade(
     if asset_type in ("index", "stock", "commodity"):
         max_points_cfg = cfg.get("MAX_SPREAD_POINTS", {})
         defaults = {"index": 100, "stock": 50, "commodity": 30}
-        max_sp = float(max_points_cfg.get(asset_type, defaults.get(asset_type, 100)))
+        per_sym = cfg.get("MAX_SPREAD_POINTS_OVERRIDES", {})
+        _sym_override = per_sym.get(pair) if pair else None
+        max_sp = float(_sym_override if _sym_override is not None else max_points_cfg.get(asset_type, defaults.get(asset_type, 100)))
         spread_unit = "points"
     else:
         max_spreads = cfg.get("MAX_SPREAD_PIPS", {})
@@ -3279,7 +3306,7 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
                     continue
 
                 current_price = candles_exec[-1]["close"]
-                sym_info = {"spread": 0, "point": 0.01, "digits": 2}
+                sym_info = _crypto_sym_info(current_price)
                 spread_pips = 0.0
                 htf_bias = None
 
@@ -3327,7 +3354,7 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
                     skipped.append({"pair": display, "reason": "symbol_not_available"})
                     continue
 
-                spread_ok, spread_pips = check_spread(sym_info, asset_type)
+                spread_ok, spread_pips = check_spread(sym_info, asset_type, display)
                 if not spread_ok:
                     spread_unit = "pips" if asset_type == "forex" else "pts"
                     spread_label = f"{spread_pips}{spread_unit}"
@@ -3451,10 +3478,25 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
                         "[SCALP-VP] trade_bucket fallback: %s reason=%s — using candle VP",
                         display, vp.get("reason", "?"),
                     )
-                vp = _build_volume_profile(candles_m15[-vp_lookback:])
+                # Session-aware VP: for non-crypto, prefer prior-session candles
+                # so overnight/pre-market low-volume bars don't dilute the profile.
+                _vp_candles = candles_m15[-vp_lookback:]
+                if asset_type in ("index", "stock", "commodity") and cfg.get("VP_SESSION_AWARE", True):
+                    try:
+                        from volume_profile import split_completed_sessions
+                        _sessions = split_completed_sessions(candles_m15, asset_type)
+                        _prev = _sessions.get("prev_session_candles", [])
+                        if len(_prev) >= 20:
+                            _vp_candles = _prev
+                            vp_anchor_mode = "prior_session"
+                            log.debug("[SCALP-VP] %s using prior-session VP (%d bars)", display, len(_prev))
+                    except Exception:
+                        pass  # fall through to fixed lookback
+                vp = _build_volume_profile(_vp_candles)
                 if vp.get("valid"):
                     vp.setdefault("volume_source", "candles")
-                    vp_anchor_mode = "fixed_lookback"
+                    if vp_anchor_mode != "prior_session":
+                        vp_anchor_mode = "fixed_lookback"
             if not vp.get("valid"):
                 _vp_reason = f"vp_invalid:{vp.get('reason', '?')}"
                 _record_stability_sample(display, asset_type, False, reason=_vp_reason)
