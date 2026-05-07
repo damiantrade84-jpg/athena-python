@@ -24,6 +24,17 @@ import telegram_notify
 log = logging.getLogger("athena")
 
 
+def _is_engine_d_signal(signal: dict) -> bool:
+    engine = str((signal or {}).get("engine", "")).strip().lower()
+    return engine in ("scalp", "engine d", "scalp_vp")
+
+
+def _uses_trailing_atr_exit(signal: dict) -> bool:
+    """True when Engine A/B exits are managed by the timed-exit chandelier trail."""
+    mode = str((CONFIG.get("TIMED_EXIT") or {}).get("tp_mode", "fixed")).strip().lower()
+    return mode == "trailing_atr" and not _is_engine_d_signal(signal)
+
+
 def _mt5_entry_slippage_bps(
     direction: str, ref_price: float, fill_price: float
 ) -> tuple[float | None, float | None]:
@@ -897,13 +908,16 @@ def mt5_reconcile_after_open(exec_result: dict, signal: dict) -> dict:
         for pos in plist:
             if getattr(pos, "magic", 0) != magic:
                 continue
+            requires_tp = not _uses_trailing_atr_exit(signal)
+            sl_ok = (pos.sl or 0) > 0
+            tp_ok = (pos.tp or 0) > 0
             legs.append(
                 {
                     "ticket": int(pos.ticket),
                     "volume": float(pos.volume),
                     "sl": float(pos.sl or 0),
                     "tp": float(pos.tp or 0),
-                    "ok": (pos.sl or 0) > 0 and (pos.tp or 0) > 0,
+                    "ok": sl_ok and (tp_ok or not requires_tp),
                 }
             )
         if not legs:
@@ -922,6 +936,7 @@ def mt5_reconcile_after_open(exec_result: dict, signal: dict) -> dict:
             "error": False,
             "legs": legs,
             "allProtectionsPresent": all_ok,
+            "takeProfitRequired": not _uses_trailing_atr_exit(signal),
             "expectedVolumeApprox": want_vol,
         }
     except Exception as e:
@@ -1147,14 +1162,19 @@ def mt5_execute(signal: dict, approval: "RiskApproval") -> dict:  # noqa: F821
     vol_step = sym_info.volume_step if sym_info else 0.01
     vol_min = sym_info.volume_min if sym_info else 0.01
 
-    _engine = str(signal.get("engine", "")).strip().lower()
-    _is_scalp = _engine in ("scalp", "engine d", "scalp_vp")
+    _is_scalp = _is_engine_d_signal(signal)
+    _use_broker_tp = not _uses_trailing_atr_exit(signal)
     # Engine D / Scalp Lab uses one protected broker position with TP1 and SL.
     if _is_scalp:
         do_split = False
     else:
         # Only split if TP2 is distinct and total volume allows for at least 2 units of min_step
-        do_split = tp2 > 0 and abs(tp2 - tp) > (10 * sym_info.point) and total_vol >= (vol_min * 2)
+        do_split = (
+            _use_broker_tp
+            and tp2 > 0
+            and abs(tp2 - tp) > (10 * sym_info.point)
+            and total_vol >= (vol_min * 2)
+        )
 
     if do_split:
         vol1 = round(math.floor((total_vol / 2) / vol_step) * vol_step, 2)
@@ -1163,7 +1183,7 @@ def mt5_execute(signal: dict, approval: "RiskApproval") -> dict:  # noqa: F821
         vols = [(vol1, tp), (vol2, tp2)]
         log.info(f"[MT5] {mt5_symbol}: splitting {total_vol} lots into targets TP1={tp} ({vol1}) and TP2={tp2} ({vol2})")
     else:
-        vols = [(total_vol, tp)]
+        vols = [(total_vol, tp if _use_broker_tp else 0)]
 
     # ── Execution Loop ─────────────────────────────────────────────────────
     results = []
@@ -1285,6 +1305,7 @@ def mt5_execute(signal: dict, approval: "RiskApproval") -> dict:  # noqa: F821
         "direction": direction,
         "sl": sl,
         "tp": tp,
+        "brokerTp": tp if _use_broker_tp else 0,
         "tpPartial": None,
         "tp2": tp2 if do_split else None,
         "tp2Ticket": int(results[1].order) if len(results) > 1 else None,

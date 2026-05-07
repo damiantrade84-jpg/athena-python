@@ -323,6 +323,40 @@ class TestChandelierTrail:
         assert seen == {"pair": "EUR/USD", "tf": "H4", "limit": 34}
         assert _trail_state["dict_trail"] == pytest.approx(trail)
 
+    def test_chandelier_uses_post_entry_bars_for_high_low_anchor(self, monkeypatch):
+        import indicators
+        import timed_exit_monitor as tem
+
+        _trail_state.clear()
+        candles = []
+        for i in range(40):
+            candles.append(
+                {
+                    "time": i,
+                    "open": 100.0,
+                    "high": 106.0,
+                    "low": 99.0,
+                    "close": 102.0,
+                }
+            )
+        candles[-2]["high"] = 150.0
+
+        monkeypatch.setattr(tem, "_fetch_timed_exit_candles", lambda *args, **kwargs: candles)
+        monkeypatch.setattr(indicators, "calc_atr", lambda highs, lows, closes, period: [1.0] * len(closes))
+        tcfg = _get_timed_cfg(
+            _cfg_fn({
+                "tp_mode": "trailing_atr",
+                "trail_timeframe": {"scalp": "H1"},
+                "trail_atr_mult": {"scalp": 2.0},
+            })
+        )
+
+        trail = _compute_chandelier_trail(
+            "EUR/USD", "scalp", "LONG", 100.0, 90.0, tcfg, "entry_anchor", mins_open=30.0,
+        )
+
+        assert trail == pytest.approx(104.0)
+
     def test_trail_activation_requires_configured_r(self, monkeypatch):
         import timed_exit_monitor as tem
 
@@ -335,6 +369,7 @@ class TestChandelierTrail:
         monkeypatch.setattr(tem, "_check_indicator_confirmation", lambda *args, **kwargs: True)
 
         assert _should_trail_close(row, "intraday", "LONG", 100.0, 90.0, 106.0, tcfg) is False
+        _trail_state["T1_EUR/USD"] = 112.0
         assert _should_trail_close(row, "intraday", "LONG", 100.0, 90.0, 111.0, tcfg) is True
 
 
@@ -346,8 +381,8 @@ class TestIndicatorConfirmation:
         result = _check_indicator_confirmation("EURUSD", "intraday", "LONG", tcfg)
         assert result is True
 
-    def test_confirmation_candle_fetch_error_returns_true(self, monkeypatch):
-        """If trail confirmation candles are unavailable, fail-open."""
+    def test_confirmation_candle_fetch_error_returns_false(self, monkeypatch):
+        """If trail confirmation candles are unavailable, fail closed."""
         import timed_exit_monitor as tem
 
         tcfg = _get_timed_cfg(_cfg_fn({"trail_indicator_confirm": True}))
@@ -355,7 +390,7 @@ class TestIndicatorConfirmation:
 
         result = _check_indicator_confirmation("EURUSD", "intraday", "LONG", tcfg)
 
-        assert result is True
+        assert result is False
 
 
 # ── Chandelier exit indicator function ───────────────────────────────────────
@@ -655,12 +690,55 @@ class TestEvaluateTrail:
         row = {"ticket": "T1", "pair": "EUR/USD", "audit_id": 1}
         # cur=104, entry=100, sl=90 → current_r=0.4 < 0.5 default ... use higher cur
         # cur=110, current_r=1.0, trail=111 → cur < trail → breach
+        _trail_state["T1_EUR/USD"] = 111.0
         monkeypatch.setattr(tem, "_compute_chandelier_trail", lambda *a, **kw: 111.0)
         monkeypatch.setattr(tem, "_check_indicator_confirmation", lambda *a, **kw: True)
 
         res = _evaluate_trail(row, "intraday", "LONG", 100.0, 90.0, 110.0, tcfg)
 
         assert res["action"] == "close"
+
+    def test_first_activation_clamps_initial_breached_trail(self, monkeypatch):
+        import timed_exit_monitor as tem
+
+        tcfg = _get_timed_cfg(_cfg_fn({
+            "tp_mode": "trailing_atr",
+            "trail_activation_r": {"scalp": 0.3, "intraday": 0.5, "swing": 1.0},
+            "trail_indicator_confirm": True,
+        }))
+        row = {"ticket": "T1", "pair": "EUR/USD", "audit_id": 1}
+        monkeypatch.setattr(tem, "_compute_chandelier_trail", lambda *a, **kw: 107.0)
+        monkeypatch.setattr(tem, "_check_indicator_confirmation", lambda *a, **kw: True)
+
+        res = _evaluate_trail(
+            row, "intraday", "LONG", 100.0, 90.0, 106.0, tcfg,
+            state_key="mt5:aid:1",
+        )
+
+        assert res["action"] == "ratchet"
+        assert res["new_sl"] < 106.0
+        assert _trail_state["mt5:aid:1"] == pytest.approx(res["new_sl"])
+
+    def test_first_activation_clamps_initial_breached_short_trail(self, monkeypatch):
+        import timed_exit_monitor as tem
+
+        tcfg = _get_timed_cfg(_cfg_fn({
+            "tp_mode": "trailing_atr",
+            "trail_activation_r": {"scalp": 0.3, "intraday": 0.5, "swing": 1.0},
+            "trail_indicator_confirm": True,
+        }))
+        row = {"ticket": "T1", "pair": "EUR/USD", "audit_id": 1}
+        monkeypatch.setattr(tem, "_compute_chandelier_trail", lambda *a, **kw: 94.0)
+        monkeypatch.setattr(tem, "_check_indicator_confirmation", lambda *a, **kw: True)
+
+        res = _evaluate_trail(
+            row, "intraday", "SHORT", 100.0, 110.0, 95.0, tcfg,
+            state_key="mt5:aid:short",
+        )
+
+        assert res["action"] == "ratchet"
+        assert res["new_sl"] > 95.0
+        assert _trail_state["mt5:aid:short"] == pytest.approx(res["new_sl"])
 
     def test_breach_without_confirmation_ratchets_not_closes(self, monkeypatch):
         """Suggestion #6 corollary: if indicator says no, keep ratcheting (don't close)."""
@@ -671,6 +749,7 @@ class TestEvaluateTrail:
             "trail_indicator_confirm": True,
         }))
         row = {"ticket": "T1", "pair": "EUR/USD", "audit_id": 1}
+        _trail_state["T1_EUR/USD"] = 111.0
         monkeypatch.setattr(tem, "_compute_chandelier_trail", lambda *a, **kw: 111.0)
         monkeypatch.setattr(tem, "_check_indicator_confirmation", lambda *a, **kw: False)
 
@@ -775,6 +854,44 @@ class TestDistinctExitTags:
             r = con.execute("SELECT exit_reason FROM audit_log WHERE id=1").fetchone()
         assert r[0] == "TIMED_CLOSE"
 
+    def test_mark_timed_close_bybit_writes_price_and_live_pnl(self, monkeypatch):
+        import timed_exit_monitor as tem
+
+        calls = []
+
+        class FakeConnection:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def execute(self, query, params):
+                calls.append((query, params))
+
+            def commit(self):
+                pass
+
+        monkeypatch.setattr(tem.sqlite3, "connect", lambda *args, **kwargs: FakeConnection())
+        row = {"audit_id": 7, "risk_amount": 50.0, "pair": "BTCUSDT"}
+
+        tem._mark_timed_close(
+            "ignored.db",
+            row,
+            "bybit",
+            actual_close_price=105.5,
+            live_pnl=25.0,
+            reason="TRAIL_CLOSE",
+        )
+
+        query, params = calls[0]
+        assert "exit_price" in query
+        assert params[0] == "TRAIL_CLOSE"
+        assert params[1] == 105.5
+        assert params[2] == 25.0
+        assert params[3] == 0.5
+        assert params[5] == 7
+
 
 # ── Persistence (suggestions #5) ─────────────────────────────────────────────
 
@@ -877,6 +994,15 @@ class TestPhase1Defaults:
     def test_default_trail_activation_is_per_style(self):
         from timed_exit_monitor import _DEFAULT_CFG
         assert isinstance(_DEFAULT_CFG["trail_activation_r"], dict)
-        assert "scalp" in _DEFAULT_CFG["trail_activation_r"]
-        assert "intraday" in _DEFAULT_CFG["trail_activation_r"]
-        assert "swing" in _DEFAULT_CFG["trail_activation_r"]
+        assert _DEFAULT_CFG["trail_activation_r"] == {
+            "scalp": 0.7,
+            "intraday": 1.0,
+            "swing": 1.5,
+        }
+
+    def test_missing_activation_keys_use_raised_defaults(self):
+        tcfg = _get_timed_cfg(_cfg_fn({"trail_activation_r": {"intraday": 1.2}}))
+
+        assert tcfg["trail_activation_r"]["scalp"] == pytest.approx(0.7)
+        assert tcfg["trail_activation_r"]["intraday"] == pytest.approx(1.2)
+        assert tcfg["trail_activation_r"]["swing"] == pytest.approx(1.5)

@@ -65,7 +65,7 @@ _DEFAULT_CFG: dict = {
     "intraday": {"breakeven_min": 15,  "close_min": 30, "timed_close_enabled": True, "tp_progress_exempt": 0.50},
     "swing":    {"breakeven_days": 2.5, "close_days": 5.0, "timed_close_enabled": True, "tp_progress_exempt": 0.50},
     "tp_mode": "fixed",
-    "trail_activation_r": {"scalp": 0.3, "intraday": 0.5, "swing": 1.0},
+    "trail_activation_r": {"scalp": 0.7, "intraday": 1.0, "swing": 1.5},
     "trail_atr_mult": {"scalp": 2.0, "intraday": 2.5, "swing": 3.0},
     "trail_lookback": 14,
     "trail_timeframe": {"scalp": "H1", "intraday": "H4", "swing": "D1"},
@@ -533,6 +533,44 @@ def _safe_float(value) -> float:
         return 0.0
 
 
+def _timeframe_minutes(tf: str) -> float:
+    raw = str(tf or "").strip().upper()
+    if not raw:
+        return 60.0
+    if raw[0].isalpha():
+        unit = raw[0]
+        value_raw = raw[1:] or "1"
+    else:
+        unit = raw[-1]
+        value_raw = raw[:-1] or "1"
+    try:
+        value = max(float(value_raw), 1.0)
+    except (TypeError, ValueError):
+        value = 1.0
+    if unit == "M":
+        return value
+    if unit == "H":
+        return value * 60.0
+    if unit == "D":
+        return value * 24.0 * 60.0
+    if unit == "W":
+        return value * 7.0 * 24.0 * 60.0
+    return 60.0
+
+
+def _live_pnl_r(row: dict, entry: float, sl: float, volume: float, live_pnl: float) -> float:
+    try:
+        risk_amount = float(row.get("risk_amount") or 0)
+    except (TypeError, ValueError):
+        risk_amount = 0.0
+    if live_pnl != 0 and risk_amount > 0:
+        return round(float(live_pnl) / risk_amount, 2)
+    risk_dist = abs(float(entry) - float(sl)) if entry and sl else 0.0
+    if live_pnl != 0 and risk_dist > 0 and volume > 0:
+        return round(float(live_pnl) / (risk_dist * float(volume)), 2)
+    return 0.0
+
+
 def _parse_iso_utc(ts_iso: str | None) -> datetime | None:
     if not ts_iso:
         return None
@@ -704,8 +742,19 @@ def _mark_timed_close(
         if audit_id is None:
             log.debug(f"[TIMED_EXIT] _mark_timed_close: no audit_id for Bybit {row.get('pair')} — skipping")
             return
-        query = "UPDATE audit_log SET exit_reason=? WHERE id=? AND exit_price IS NULL"
-        params = (reason, audit_id)
+        if actual_close_price is not None and live_pnl is not None:
+            query = "UPDATE audit_log SET exit_reason=?, exit_price=?, pnl=?, r_multiple=?, exit_time=? WHERE id=? AND exit_price IS NULL"
+            params = (
+                reason,
+                actual_close_price,
+                live_pnl,
+                r_multiple,
+                datetime.now(timezone.utc).isoformat(),
+                audit_id,
+            )
+        else:
+            query = "UPDATE audit_log SET exit_reason=? WHERE id=? AND exit_price IS NULL"
+            params = (reason, audit_id)
 
     try:
         with sqlite3.connect(db_path, timeout=10.0) as con:
@@ -819,8 +868,14 @@ def _compute_chandelier_trail(
     if atr_val is None or atr_val <= 0:
         return _fail("ATR not computable")
 
-    recent_highs = highs[-lookback:]
-    recent_lows = lows[-lookback:]
+    tf_minutes = _timeframe_minutes(tf)
+    try:
+        bars_since_entry = int(float(mins_open or 0.0) // tf_minutes)
+    except (TypeError, ValueError, ZeroDivisionError):
+        bars_since_entry = 1
+    effective_lookback = max(1, min(lookback, max(1, bars_since_entry)))
+    recent_highs = highs[-effective_lookback:]
+    recent_lows = lows[-effective_lookback:]
     highest = max(recent_highs)
     lowest = min(recent_lows)
 
@@ -846,7 +901,7 @@ def _check_indicator_confirmation(
     """Check RSI and/or MACD for direction-change confirmation.
 
     Returns True if indicators confirm the reversal (safe to close).
-    Returns True on any data error (fail-open: allow close if we can't check).
+    Returns False on any data error (fail-closed: keep trailing if we can't check).
     """
     if not tcfg.get("trail_indicator_confirm", False):
         return True
@@ -854,7 +909,7 @@ def _check_indicator_confirmation(
     try:
         from indicators import calc_rsi, calc_macd
     except ImportError:
-        return True
+        return False
 
     tf = tcfg["trail_timeframe"].get(style, "H4")
     rsi_period = tcfg.get("trail_confirm_rsi_period", 14)
@@ -864,16 +919,16 @@ def _check_indicator_confirmation(
     candles = _fetch_timed_exit_candles(pair, tf, max(rsi_period + 30, 60))
 
     if not candles or len(candles) < rsi_period + 5:
-        return True
+        return False
 
     _highs, _lows, closes = _ohlc_series_from_candles(candles)
     if len(closes) < rsi_period + 5:
-        return True
+        return False
 
     rsi_series = calc_rsi(closes, rsi_period)
     rsi_val = next((v for v in reversed(rsi_series) if v is not None), None)
     if rsi_val is None:
-        return True
+        return False
 
     rsi_confirms = False
     if direction == "LONG" and rsi_val < rsi_thresh:
@@ -891,7 +946,7 @@ def _check_indicator_confirmation(
     hist = macd_data.get("hist", [])
     recent_hist = [v for v in hist[-3:] if v is not None]
     if len(recent_hist) < 2:
-        return True
+        return False
 
     if direction == "LONG" and recent_hist[-1] < 0 and recent_hist[-2] >= 0:
         return True
@@ -935,11 +990,28 @@ def _evaluate_trail(
     if current_r < activation_r:
         return {"action": "none", "reason": "below_activation", "current_r": current_r}
 
+    first_activation_tick = _trail_state.get(state_key) is None
     trail_level = _compute_chandelier_trail(
         pair, style, direction, entry, sl, tcfg, state_key, mins_open=mins_open,
     )
     if trail_level is None:
         return {"action": "none", "reason": "no_trail_data", "current_r": current_r}
+
+    if first_activation_tick:
+        epsilon = max(abs(cur_price) * 1e-8, 1e-8)
+        clamped_trail = trail_level
+        if direction == "LONG" and trail_level >= cur_price:
+            clamped_trail = cur_price - epsilon
+        elif direction == "SHORT" and trail_level <= cur_price:
+            clamped_trail = cur_price + epsilon
+        if clamped_trail != trail_level:
+            log.info(
+                f"[TIMED_EXIT] First activation trail clamped: {pair} style={style} "
+                f"raw={trail_level:.5f} clamped={clamped_trail:.5f} price={cur_price:.5f}"
+            )
+            trail_level = clamped_trail
+            _trail_state[state_key] = trail_level
+            _persist_trail_state(state_key, trail_level)
 
     breached = (
         (direction == "LONG" and cur_price < trail_level)
@@ -1332,14 +1404,20 @@ def _handle_bybit_row(row: dict, tcfg: dict, db_path: str | None = None) -> None
         if action == "close":
             result = bybit_close_position(pair, direction, volume)
             if result.get("success"):
+                pnl_r = _live_pnl_r(row, entry, _sl_raw, volume, profit)
                 if db_path:
-                    _mark_timed_close(db_path, row, "bybit", reason="TRAIL_CLOSE")
+                    _mark_timed_close(
+                        db_path, row, "bybit",
+                        actual_close_price=cur_price,
+                        live_pnl=profit,
+                        reason="TRAIL_CLOSE",
+                    )
                 log.info(
                     f"[TIMED_EXIT] TRAIL CLOSE: {pair} style={style} "
-                    f"mins={mins:.0f} profit=${profit:.2f}"
+                    f"mins={mins:.0f} profit=${profit:.2f} R={pnl_r}"
                 )
                 try:
-                    telegram_notify.notify_trade_closed(pair=pair, pnl_r=0.0, is_win=True, duration_minutes=mins)
+                    telegram_notify.notify_trade_closed(pair=pair, pnl_r=pnl_r, is_win=profit > 0, duration_minutes=mins)
                 except Exception:
                     pass
             return
@@ -1375,14 +1453,20 @@ def _handle_bybit_row(row: dict, tcfg: dict, db_path: str | None = None) -> None
         else:
             result = bybit_close_position(pair, direction, volume)
             if result.get("success"):
+                pnl_r = _live_pnl_r(row, entry, _sl_raw, volume, profit)
                 if db_path:
-                    _mark_timed_close(db_path, row, "bybit", reason="TIMED_CLOSE")
+                    _mark_timed_close(
+                        db_path, row, "bybit",
+                        actual_close_price=cur_price,
+                        live_pnl=profit,
+                        reason="TIMED_CLOSE",
+                    )
                 log.info(
                     f"[TIMED_EXIT] TIMED CLOSE: {pair} style={style} "
-                    f"mins={mins:.0f} profit=${profit:.2f}"
+                    f"mins={mins:.0f} profit=${profit:.2f} R={pnl_r}"
                 )
                 try:
-                    telegram_notify.notify_trade_closed(pair=pair, pnl_r=0, is_win=profit > 0, duration_minutes=mins)
+                    telegram_notify.notify_trade_closed(pair=pair, pnl_r=pnl_r, is_win=profit > 0, duration_minutes=mins)
                 except Exception:
                     pass
                 return
@@ -1465,14 +1549,20 @@ def _handle_bybit_row(row: dict, tcfg: dict, db_path: str | None = None) -> None
 
         result = bybit_close_position(pair, direction, volume)
         if result.get("success"):
+            pnl_r = _live_pnl_r(row, entry, _sl_raw, volume, profit)
             if db_path:
-                _mark_timed_close(db_path, row, "bybit", reason="TIMED_CLOSE")
+                _mark_timed_close(
+                    db_path, row, "bybit",
+                    actual_close_price=cur_price,
+                    live_pnl=profit,
+                    reason="TIMED_CLOSE",
+                )
             log.info(
                 f"[TIMED_EXIT] TIMED CLOSE: {pair} style={style} "
-                f"mins={mins:.0f} profit=${profit:.2f}"
+                f"mins={mins:.0f} profit=${profit:.2f} R={pnl_r}"
             )
             try:
-                telegram_notify.notify_trade_closed(pair=pair, pnl_r=0.0, is_win=True, duration_minutes=mins)
+                telegram_notify.notify_trade_closed(pair=pair, pnl_r=pnl_r, is_win=profit > 0, duration_minutes=mins)
             except Exception:
                 pass
         else:

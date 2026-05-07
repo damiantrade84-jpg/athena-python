@@ -23,6 +23,17 @@ except Exception:
 
 _exchange = None
 
+
+def _is_engine_d_signal(signal: dict) -> bool:
+    engine = str((signal or {}).get("engine", "")).strip().lower()
+    return engine in ("scalp", "engine d", "scalp_vp")
+
+
+def _uses_trailing_atr_exit(signal: dict) -> bool:
+    """True when Engine A/B exits are managed by the timed-exit chandelier trail."""
+    mode = str((CONFIG.get("TIMED_EXIT") or {}).get("tp_mode", "fixed")).strip().lower()
+    return mode == "trailing_atr" and not _is_engine_d_signal(signal)
+
 # ── Periodic clock re-sync ────────────────────────────────────────────────────
 # Bybit retCode 10002 fires when local clock drifts beyond recv_window (10 000 ms).
 # adjustForTimeDifference corrects at init and on-error, but a slow-running Windows
@@ -646,18 +657,7 @@ def bybit_close_position(pair: str, direction: str, volume: float) -> dict:
             params={"reduceOnly": True, "positionIdx": 0},
         )
         log.info(f"[BYBIT] Manual close {direction} {pair} vol={volume}")
-        
-        # Send Telegram notification for trade closed
-        try:
-            telegram_notify.notify_trade_closed(
-                pair=pair,
-                pnl_r=0.0,  # PnL not available in manual close
-                is_win=None,
-                duration_minutes=0
-            )
-        except Exception as _tn_e:
-            log.debug(f"[TELEGRAM] Trade close notification failed: {_tn_e}")
-        
+
         return {"success": True, "pair": pair, "direction": direction, "volume": volume}
     except Exception as e:
         log.error(f"[BYBIT] Close failed {pair}: {e}")
@@ -719,8 +719,9 @@ def bybit_reconcile_after_open(exec_result: dict, signal: dict) -> dict:
     if not ccxt_symbol:
         return {"error": True, "detail": "no_symbol"}
     sl = float(exec_result.get("sl") or signal.get("sl") or 0)
+    requires_tp = not _uses_trailing_atr_exit(signal)
     tp = float(exec_result.get("tp") or signal.get("tp1") or 0)
-    if sl <= 0 or tp <= 0:
+    if sl <= 0 or (requires_tp and tp <= 0):
         return {"error": False, "note": "no_levels_to_verify", "repaired": False}
     try:
         raw = exchange.fetch_positions(
@@ -738,24 +739,27 @@ def bybit_reconcile_after_open(exec_result: dict, signal: dict) -> dict:
             cur_sl = float(info.get("stopLoss", 0) or 0)
             cur_tp = float(info.get("takeProfit", 0) or 0)
             break
-        if cur_sl > 0 and cur_tp > 0:
+        if cur_sl > 0 and (cur_tp > 0 or not requires_tp):
             return {
                 "error": False,
                 "hadProtections": True,
                 "repaired": False,
                 "stopLoss": cur_sl,
                 "takeProfit": cur_tp,
+                "takeProfitRequired": requires_tp,
             }
+        missing_label = "SL/TP" if requires_tp else "SL"
         log.warning(
-            f"[BYBIT] RECONCILE: open position on {ccxt_symbol} missing SL/TP — reapplying"
+            f"[BYBIT] RECONCILE: open position on {ccxt_symbol} missing {missing_label} — reapplying"
         )
-        _set_trading_stop(exchange, ccxt_symbol, sl=sl, tp=tp)
+        _set_trading_stop(exchange, ccxt_symbol, sl=sl, tp=tp if requires_tp else 0)
         return {
             "error": False,
             "hadProtections": False,
             "repaired": True,
             "stopLoss": sl,
-            "takeProfit": tp,
+            "takeProfit": tp if requires_tp else 0,
+            "takeProfitRequired": requires_tp,
         }
     except Exception as e:
         log.error(f"[BYBIT] reconcile_after_open failed: {e}")
@@ -1039,15 +1043,15 @@ def bybit_execute(signal: dict, approval: "RiskApproval") -> dict:  # noqa: F821
                 "rolledBack": True,
             }
 
-        _engine = str(signal.get("engine", "")).strip().lower()
-        _is_scalp = _engine in ("scalp", "engine d", "scalp_vp")
+        _is_scalp = _is_engine_d_signal(signal)
+        _use_broker_tp = not _uses_trailing_atr_exit(signal)
         _tp1 = float(signal.get("tp1", 0) or 0)
         _tp2 = float(signal.get("tp2", 0) or 0)
         _tp_partial = float(signal.get("tp_partial", 0) or 0)
         # Engine D: position TP sits at the structural target (tp1).
         # A separate reduce-only limit at tp_partial closes the first 50% clip at +1R.
         # Non-scalp signals use tp1 as the single full-position exit.
-        tp_exec = _tp1
+        tp_exec = _tp1 if _use_broker_tp else 0.0
 
         # Set SL/TP on the position via Bybit v5 trading-stop endpoint
         # (stop_market / take_profit_market order types are invalid in v5)
@@ -1057,7 +1061,7 @@ def bybit_execute(signal: dict, approval: "RiskApproval") -> dict:  # noqa: F821
         for _attempt in range(2):  # 1 retry before emergency close
             try:
                 _set_trading_stop(exchange, ccxt_symbol, sl=sl, tp=tp_exec)
-                log.info(f"[BYBIT] SL/TP set: SL={sl} TP={tp_exec}")
+                log.info(f"[BYBIT] SL/TP set: SL={sl} TP={tp_exec or 'disabled'}")
                 _sl_tp_err = None
                 break
             except Exception as ste:
@@ -1100,9 +1104,9 @@ def bybit_execute(signal: dict, approval: "RiskApproval") -> dict:  # noqa: F821
 
         # ── Fabio partial exit: reduce-only limit for first 50% clip at +1R ────────
         # For Engine D scalp signals: place a limit order that closes half the position
-        # when price hits tp_partial (+1R). The position TP (tp_exec = tp1) handles the
-        # remaining 50% runner. This is non-fatal — if it fails, the trade still runs
-        # to tp1 as a single unit.
+        # when price hits tp_partial (+1R). The broker TP handles the remaining 50%
+        # runner. This is non-fatal; if it fails, the trade still runs to tp1 as a
+        # single unit.
         partial_order_id = None
         if _is_scalp and _tp_partial > 0:
             try:

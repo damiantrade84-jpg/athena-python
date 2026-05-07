@@ -2410,9 +2410,9 @@ TIMED_EXIT:
   # in minutes while swing 1R can take days. Scalar (e.g. 1.0) still accepted
   # for back-compat — applied to all styles.
   trail_activation_r:
-    scalp: 0.3
-    intraday: 0.5
-    swing: 1.0
+    scalp: 0.7
+    intraday: 1.0
+    swing: 1.5
 
   trail_atr_mult:              # ATR multiplier for the trailing distance per style
     scalp: 2.0
@@ -2446,7 +2446,7 @@ TIMED_EXIT:
   # 60% of the configured rope). Stagnating trades get squeezed; healthy
   # trades continue. Only takes effect when tp_mode="trailing_atr".
 
-  timer_tightens_trail: true       # use the timer to tighten the trail rather than force-close
+  timer_tightens_trail: false      # do not tighten chandelier from legacy close_min timers
   timer_tighten_factor: 0.6        # multiplier applied to trail_atr_mult past close_min
 
 CHART_VISION_DATASET_ENABLED: false

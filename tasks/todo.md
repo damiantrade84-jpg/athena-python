@@ -588,3 +588,63 @@
   - `python -m pytest tests/test_scoring_group_routing.py tests/test_engine_c_bt_levels.py tests/test_style_level_consistency.py tests/test_athena.py tests/test_auto_trader.py tests/test_routes_backtest_history.py -q --basetemp=.pytest_local_tmp\engine_b_additional_adjacent` (`74 passed`, one pytest cache permission warning)
   - `python -m pytest tests/test_candles_cache.py tests/test_data_feeds_backtest_derivatives.py tests/test_candle_cache_meta.py tests/test_candle_freshness_diagnostics.py tests/test_data_freshness.py tests/test_threshold_audit.py -q --basetemp=.pytest_local_tmp\engine_b_feed_adjacent` (`55 passed`, one pytest cache permission warning)
   - `git diff --check -- config.py config.yaml scoring.py market_structure.py scanner.py execution.py backtest_runner.py athena.py athena_app/services/engine_b_market_state.py tests/test_engine_b_cross_asset_fixes.py tests/test_market_state_offsets.py tasks/todo.md`
+
+# Trailing ATR Broker TP Fixes
+
+- [x] Confirm current `TIMED_EXIT` merge and broker TP/reconcile paths from source.
+- [x] Suppress broker fixed TP for Engine A/B trades when `TIMED_EXIT.tp_mode="trailing_atr"`.
+- [x] Keep Engine D/scalp_vp broker TP behavior unchanged.
+- [x] Make Bybit post-fill reconcile avoid restoring fixed TP in trailing mode.
+- [x] Add focused regression tests for MT5, Bybit execution, and Bybit reconcile.
+- [x] Run compile and targeted pytest validation.
+
+## Review
+
+- MT5 execution now treats `TIMED_EXIT.tp_mode="trailing_atr"` as timed-exit managed for non-Engine-D signals, so Engine A/B orders send `tp=0` to the broker while preserving the expected fixed TP for Engine D/scalp_vp.
+- MT5 reconcile no longer treats missing broker TP as a repair failure for non-Engine-D trailing ATR positions.
+- Bybit execution now omits `takeProfit` from the v5 trading-stop payload for non-Engine-D trailing ATR positions while keeping fixed TP attached for Engine D/scalp_vp.
+- Bybit reconcile now avoids restoring `signal.tp1` as a broker TP in trailing ATR mode unless the signal is Engine D/scalp_vp or the timed-exit mode is fixed.
+- Regression coverage added:
+  - MT5 non-Engine-D trailing ATR execution sends no broker TP.
+  - MT5 Engine D/scalp trailing ATR execution still sends broker TP.
+  - Bybit non-Engine-D trailing ATR execution sends no `takeProfit`.
+  - Bybit Engine D/scalp trailing ATR execution still sends `takeProfit`.
+  - Bybit trailing ATR reconcile does not repair missing TP for Engine A/B.
+  - Bybit fixed mode and Engine D trailing-mode reconcile still restore missing TP.
+- Validation passed:
+  - `python -m py_compile mt5_executor.py bybit_executor.py tests\test_executor_invariants.py`
+  - `python -m pytest tests/test_executor_invariants.py -q --basetemp=.pytest_local_tmp\trailing_atr_executor_tp_final` (`9 passed`, one pytest cache permission warning)
+  - `python -m pytest tests/test_scalp_fixes.py -q --basetemp=.pytest_local_tmp\trailing_atr_scalp_fixes` (`11 passed`, one pytest cache permission warning)
+  - `python -m pytest tests/test_timed_exit_phases.py -q -k "not TestDistinctExitTags and not TestStatePersistence" --basetemp=.pytest_local_tmp\trailing_atr_timed_exit_no_tmpdb` (`63 passed, 4 deselected`, one pytest cache permission warning)
+  - `git diff --check -- mt5_executor.py bybit_executor.py tests/test_executor_invariants.py tasks/todo.md`
+- Full `tests/test_timed_exit_phases.py` was attempted with multiple repo-local and `C:\tmp` base-temp paths, but the four `tmp_path` tests failed at setup/cleanup with `PermissionError: [WinError 5] Access is denied`; the non-`tmp_path` timed-exit coverage above passed.
+
+# Trailing ATR Missed Audit Fixes
+
+- [x] Verify extra audit findings against current `timed_exit_monitor.py`, `config.yaml`, and Bybit close code.
+- [x] Anchor Chandelier high/low lookback to post-entry bars and prevent first-activation instant breach closes.
+- [x] Make indicator confirmation fail closed when confirmation data is unavailable.
+- [x] Raise trailing ATR activation thresholds and disable timer-based trail tightening in `config.yaml`.
+- [x] Remove duplicate Bybit broker-close Telegram notification and persist Bybit close price/PnL when caller has live data.
+- [x] Add focused regression tests and run validation.
+
+## Review
+
+- Verified the extra audit with subagents against current source. The confirmed missed items were the pre-entry Chandelier lookback, first-activation wrong-side trail breach, fail-open indicator confirmation, too-low live activation thresholds, enabled timer trail tightening, and Bybit duplicate/reporting close behavior.
+- Chandelier high/low anchoring now limits `recent_highs`/`recent_lows` to bars since entry based on the configured trail timeframe.
+- First activation now clamps a wrong-side trail to the favorable side of live price before breach evaluation, so a newly armed trail cannot immediately market-close from stale/pre-entry structure.
+- Indicator confirmation now fails closed for missing import, missing candles, insufficient closes, missing RSI, and insufficient MACD histogram data.
+- Live and fallback trailing activation thresholds are `scalp=0.7`, `intraday=1.0`, `swing=1.5`; `timer_tightens_trail` is disabled in `config.yaml`.
+- `bybit_close_position()` no longer sends close notifications directly; callers remain responsible for close messaging.
+- Bybit timed/trail close paths now pass live price and live PnL into `_mark_timed_close()` and send Telegram with computed R instead of `0.0`.
+- Regression coverage added for post-entry Chandelier anchoring, LONG/SHORT first-activation clamps, fail-closed confirmation data miss, Bybit close marking with price/PnL, Bybit broker-close notification removal, raised default activation values, and the open-trades timed activation display.
+- Validation passed:
+  - `python -m py_compile timed_exit_monitor.py bybit_executor.py tests\test_timed_exit_phases.py tests\test_executor_invariants.py tests\test_scalp_execution.py`
+  - `python -m pytest tests/test_timed_exit_phases.py -q -k "not TestDistinctExitTags and not TestStatePersistence" --basetemp=.pytest_local_tmp\missed_trailing_timed_exit_no_tmpdb_final` (`67 passed, 5 deselected`, one pytest cache permission warning)
+  - `python -m pytest tests/test_executor_invariants.py -q --basetemp=.pytest_local_tmp\missed_trailing_executor_invariants_final` (`10 passed`, one pytest cache permission warning)
+  - `python -m pytest tests/test_scalp_execution.py -q --basetemp=.pytest_local_tmp\missed_trailing_scalp_execution_final` (`12 passed`, one pytest cache permission warning)
+  - `python -m pytest tests/test_scalp_fixes.py -q --basetemp=.pytest_local_tmp\missed_trailing_scalp_fixes_final` (`11 passed`, one pytest cache permission warning)
+  - `python -m pytest tests/test_timed_exit_phases.py::TestDistinctExitTags::test_mark_timed_close_bybit_writes_price_and_live_pnl -q --basetemp=.pytest_local_tmp\missed_trailing_bybit_mark_final` (`1 passed`, one pytest cache permission warning)
+  - YAML parse check confirmed `trail_activation_r={scalp: 0.7, intraday: 1.0, swing: 1.5}` and `timer_tightens_trail=false`.
+  - `git diff --check -- timed_exit_monitor.py bybit_executor.py config.yaml tests/test_timed_exit_phases.py tests/test_executor_invariants.py tests/test_scalp_execution.py tasks/todo.md`
+- Full `tests/test_timed_exit_phases.py` was attempted but still fails at pytest session cleanup with `PermissionError: [WinError 5] Access is denied` under the local base-temp directory; the touched non-`tmp_path` timed-exit paths and the new Bybit mark test passed separately.
