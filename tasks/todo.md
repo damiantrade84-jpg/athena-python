@@ -546,3 +546,45 @@
   - `python -m pytest tests/test_athena.py tests/test_auto_trader.py tests/test_scoring.py -q --basetemp C:\tmp\athena_engine_a_adjacent_pytest` (`44 passed`, one pytest cache permission warning)
   - `python -m pytest tests/test_factor_scoring.py tests/test_scoring_group_routing.py tests/test_eodhd_volume_overlay.py tests/test_market_state_offsets.py tests/test_athena.py tests/test_auto_trader.py tests/test_scoring.py -q --basetemp C:\tmp\athena_engine_a_missed_final_pytest` (`110 passed`, one pytest cache permission warning)
   - `git diff --check -- factor_scoring.py config.py config.yaml scoring.py scanner.py eodhd_volume_overlay.py athena.py athena_research/prompt_builder.py reproduce_bug.py tests/test_factor_scoring.py tests/test_scoring_group_routing.py tests/test_eodhd_volume_overlay.py tests/test_market_state_offsets.py`
+
+# Engine B Cross-Asset Audit Fixes
+
+- [x] Enable Engine B structure gates through config and prove `structure_ok` is consumed.
+- [x] Require Engine B alignment before Engine A scanner promotes B-confirmed entries to trade tier.
+- [x] Use Engine B style ATR timeframe in scanner overlay.
+- [x] Preserve Engine B execution SL/TP through quick execute and stale execute refresh.
+- [x] Fix CHoCH to use the BOS swing level it claims to validate.
+- [x] Route Engine B MT5 D1 market-state through the shared D1 trim.
+- [x] Remove silent Engine B MT5 backtest price-feed fallback and use source-specific routing for non-MT5 backtests.
+- [x] Add Engine B crypto Bybit level/feed parity for execution-venue consistency.
+- [x] Split Engine B backtest exit config from Engine C and fix telemetry timeframe.
+- [x] Route live naked-analysis ATR by Engine B style (`H1` scalp, `H4` intraday, `D1` swing).
+- [x] Fix Engine C backtest ATR indexing for non-H4 Engine B styles.
+- [x] Recompute Engine C live Engine B ATR when the style ATR timeframe is not H4.
+- [x] Exclude zero-volume bars from crypto BOS volume averages and make crypto room gates style-aware.
+- [x] Force commodity ETF swing macro alignment through score-group routing, not only asset type.
+- [x] Verify/fix SPY/QQQ/DIA and GLD/SLV/GDX Engine B ETF score-group routing.
+- [x] Surface the forex intraday `min_score: 3.0` inheritance in config comments without changing thresholds.
+- [x] Add focused tests and run compile/pytest validation.
+
+## Review
+
+- Turned `ENGINE_B_STRUCTURE_GATE_ENABLED` and `ENGINE_B_BT_STRUCTURE_GATE_ENABLED` on in `config.yaml`, and added explicit `ENGINE_B_SCAN_CONFIRMATION_GATE_ENABLED`, `ENGINE_B_USE_EXECUTION_LEVELS_FOR_SCAN_SIGNALS`, and Engine B crypto Bybit level-feed keys.
+- Scanner now uses Engine B's resolved zone/entry/ATR timeframes, applies B execution SL/TP to B-confirmed scan signals, and demotes trade-tier Engine A signals when Engine B confirmation fails.
+- Execution now preserves Engine B/naked execution levels, rejects explicit failed B confirmations, and blocks stale B signals instead of refreshing them through Engine A levels.
+- Engine B live market state now applies the shared MT5 D1 ahead-tail trim before splitting confirmed/forming candles.
+- Engine B CHoCH now uses BOS reference levels when BOS context exists.
+- Engine B backtest no longer substitutes EODHD/yfinance price candles for MT5 symbols, uses the source router for non-MT5/non-Binance pairs, reads `ENGINE_B_BT_EXIT`, and records telemetry timeframe from the Engine B entry timeframe.
+- Live naked analysis now resolves zone/entry/ATR candle roles from the selected Engine B style before ATR calculation.
+- Engine C live scan now uses Engine B's style ATR source for B levels, and only reuses Engine A's H4 ATR when Engine B also requests H4.
+- Engine C backtest now indexes ATR with the matching D1/H4/H1 bar index instead of always using the H4 index.
+- Engine B structure detection now computes swing prominence from the same timeframe as the high/low series being analyzed.
+- Crypto BOS volume confirmation now excludes zero-volume bars from the 20-bar average, and crypto room thresholds are scalp/intraday/swing aware.
+- Commodity swing macro alignment now also keys off `score_group`, covering stock-typed commodity ETFs.
+- `DIA` and `GDX` now route to the expected Engine B ETF score groups; forex score divergence is documented, not changed.
+- Validation passed:
+  - `python -m py_compile config.py scoring.py market_structure.py scanner.py execution.py backtest_runner.py athena.py athena_app\services\engine_b_market_state.py tests\test_engine_b_cross_asset_fixes.py tests\test_market_state_offsets.py`
+  - `python -m pytest tests/test_engine_b_cross_asset_fixes.py tests/test_engine_b_diagnostics.py tests/test_engine_b_rr_basis.py tests/test_market_state_offsets.py -q --basetemp=.pytest_local_tmp\engine_b_additional` (`74 passed`, one pytest cache permission warning)
+  - `python -m pytest tests/test_scoring_group_routing.py tests/test_engine_c_bt_levels.py tests/test_style_level_consistency.py tests/test_athena.py tests/test_auto_trader.py tests/test_routes_backtest_history.py -q --basetemp=.pytest_local_tmp\engine_b_additional_adjacent` (`74 passed`, one pytest cache permission warning)
+  - `python -m pytest tests/test_candles_cache.py tests/test_data_feeds_backtest_derivatives.py tests/test_candle_cache_meta.py tests/test_candle_freshness_diagnostics.py tests/test_data_freshness.py tests/test_threshold_audit.py -q --basetemp=.pytest_local_tmp\engine_b_feed_adjacent` (`55 passed`, one pytest cache permission warning)
+  - `git diff --check -- config.py config.yaml scoring.py market_structure.py scanner.py execution.py backtest_runner.py athena.py athena_app/services/engine_b_market_state.py tests/test_engine_b_cross_asset_fixes.py tests/test_market_state_offsets.py tasks/todo.md`

@@ -112,3 +112,28 @@ def test_mt5_forex_d1_offset_remains_utc_zero():
     }
 
     assert market_state_offset_hours(pair, "D1") == 0.0
+
+
+def test_engine_b_mt5_d1_trims_broker_session_ahead_tail():
+    pair = {
+        "display": "EUR/USD",
+        "symbol": "EURUSD",
+        "type": "forex",
+        "source": "mt5",
+    }
+    candles = [
+        _candle("2026-05-06T00:00:00Z"),
+        _candle("2026-05-07T00:00:00Z"),
+        _candle("2026-05-08T00:00:00Z"),
+    ]
+
+    state = engine_b_live_market_state(
+        pair,
+        "D1",
+        len(candles),
+        candles=candles,
+        time_now=_epoch("2026-05-07T12:00:00Z"),
+    )
+
+    assert [c["time"] for c in state["confirmed"]] == ["2026-05-06T00:00:00Z"]
+    assert state["forming"]["time"] == "2026-05-07T00:00:00Z"

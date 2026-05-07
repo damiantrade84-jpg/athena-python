@@ -109,6 +109,30 @@ def _bt_indicators_from_cache(
     return out
 
 
+def _engine_b_indexed_atr(
+    atr_map: dict,
+    atr_tf: str,
+    *,
+    d1_idx: int,
+    h4_idx: int,
+    h1_idx: int,
+    current_price: float,
+) -> tuple[float, list, int]:
+    """Return Engine B ATR using the index that matches the requested ATR TF."""
+    tf = str(atr_tf or "H4").upper()
+    atr_full = atr_map.get(tf) or atr_map.get("H4") or []
+    if tf == "D1":
+        idx = d1_idx
+    elif tf == "H1":
+        idx = h1_idx
+    else:
+        idx = h4_idx
+    fallback_atr = float(current_price) * 0.01
+    atr = atr_full[idx - 1] if idx > 0 and idx <= len(atr_full) else fallback_atr
+    atr_list_50 = atr_full[max(0, idx - 50): idx] if idx > 0 else []
+    return float(atr or fallback_atr), atr_list_50, idx
+
+
 def _bt_cached_fetch(
     pair: dict,
     tf: str,
@@ -3438,7 +3462,7 @@ def backtest_pair_naked(pair: dict, style: str = "naked", validation_mode="stand
             min_bars=500,
         )
     elif pair.get("source") == "mt5":
-        # MT5 pairs (forex, commodities): MT5 is PRIMARY for D1/H4/H1, EODHD is fallback only
+        # MT5 pairs: Engine B price candles must remain MT5-sourced.
         candles_d1 = _bt_cached_fetch(
             pair,
             "D1",
@@ -3463,71 +3487,47 @@ def backtest_pair_naked(pair: dict, style: str = "naked", validation_mode="stand
             provider="mt5",
             min_bars=500,
         )
-        
-        # Fallback to EODHD only if MT5 data is insufficient
+
         _d1_thin = not candles_d1 or len(candles_d1 or []) < 230
         _h4_thin = not candles_h4 or len(candles_h4 or []) < 500
         _h1_thin = not candles_h1 or len(candles_h1 or []) < 500
-        
+
         if _d1_thin or _h4_thin or _h1_thin:
-            log.info(
-                f"[ENGINE B BT] {pair['display']}: MT5 data thin (D1={len(candles_d1 or [])}, H4={len(candles_h4 or [])}, H1={len(candles_h1 or [])}), trying EODHD fallback"
+            log.warning(
+                "[ENGINE B BT] %s: MT5 data thin (D1=%d, H4=%d, H1=%d); "
+                "not substituting EODHD/yfinance price candles",
+                pair.get("display"),
+                len(candles_d1 or []),
+                len(candles_h4 or []),
+                len(candles_h1 or []),
             )
-            if _d1_thin:
-                _eodhd_d1 = _rt().extract_candles(_rt().fetch_eodhd(pair, "D1", 750))
-                if _eodhd_d1 and len(_eodhd_d1) > len(candles_d1 or []):
-                    candles_d1 = _eodhd_d1
-            if _h4_thin or _h1_thin:
-                _eodhd_h4, _eodhd_h1 = _bt_cached_eodhd_intraday(pair, days=730)
-                if _h4_thin and _eodhd_h4 and len(_eodhd_h4) > len(candles_h4 or []):
-                    candles_h4 = _eodhd_h4
-                if _h1_thin and _eodhd_h1 and len(_eodhd_h1) > len(candles_h1 or []):
-                    candles_h1 = _eodhd_h1
-        
-        # Final fallback to yfinance for D1 if still thin
-        if not candles_d1 or len(candles_d1 or []) < 230:
-            _yf_sym = _rt().yfinance_symbol_for_pair(pair)
-            if _yf_sym:
-                log.info(f"[ENGINE B BT] {pair['display']}: trying yfinance D1 fallback")
-                _yf_d1 = _rt().fetch_yfinance(_yf_sym, "D1", 750)
-                if _yf_d1 and len(_yf_d1) > len(candles_d1 or []):
-                    candles_d1 = _yf_d1
     else:
-        # Non-MT5, non-Binance pairs (stocks, indices, etc.): EODHD primary
+        # Non-MT5, non-Binance pairs: use the source-specific live candle router.
+        _provider = str(pair.get("source") or "source_router")
         candles_d1 = _bt_cached_fetch(
             pair,
             "D1",
             750,
-            lambda lim: _rt().extract_candles(_rt().fetch_eodhd(pair, "D1", lim)),
-            provider="eodhd",
-            min_bars=230,
-        ) or _bt_cached_fetch(
-            pair,
-            "D1",
-            750,
             lambda lim: _rt().fetch_candles(pair, "D1", lim),
-            provider=str(pair.get("source") or "fallback"),
+            provider=_provider,
             min_bars=230,
         )
-        candles_h4, candles_h1 = _bt_cached_eodhd_intraday(pair, days=730)
-        if not candles_h4 or not candles_h1:
-            log.warning(f"[ENGINE B BT] {pair['display']} EODHD intraday failed, trying live cache")
-            candles_h4 = _bt_cached_fetch(
-                pair,
-                "H4",
-                4400,
-                lambda lim: _rt().fetch_candles(pair, "H4", lim),
-                provider=str(pair.get("source") or "fallback"),
-                min_bars=500,
-            )
-            candles_h1 = _bt_cached_fetch(
-                pair,
-                "H1",
-                17600,
-                lambda lim: _rt().fetch_candles(pair, "H1", lim),
-                provider=str(pair.get("source") or "fallback"),
-                min_bars=500,
-            )
+        candles_h4 = _bt_cached_fetch(
+            pair,
+            "H4",
+            4400,
+            lambda lim: _rt().fetch_candles(pair, "H4", lim),
+            provider=_provider,
+            min_bars=500,
+        )
+        candles_h1 = _bt_cached_fetch(
+            pair,
+            "H1",
+            17600,
+            lambda lim: _rt().fetch_candles(pair, "H1", lim),
+            provider=_provider,
+            min_bars=500,
+        )
 
     if not candles_d1 or not candles_h4 or not candles_h1:
         log.warning(
@@ -3954,8 +3954,7 @@ def backtest_pair_naked(pair: dict, style: str = "naked", validation_mode="stand
         outcome = "TIMEOUT"
         r_multiple = 0.0
         exit_bar_offset = 0
-        # PHASE 3: Use config for Engine C BT exit controls instead of hardcoded values
-        _bt_exit_config = CONFIG.get("ENGINE_C_BT_EXIT", {})
+        _bt_exit_config = CONFIG.get("ENGINE_B_BT_EXIT", {}) or CONFIG.get("ENGINE_C_BT_EXIT", {})
         _asset_config = _bt_exit_config.get(_ptype, _bt_exit_config.get("stock", {}))
         _style_config = _asset_config.get(resolved_style, _asset_config.get("intraday", {}))
         max_hold_bars = _style_config.get("max_hold_bars", 24)
@@ -4140,7 +4139,7 @@ def backtest_pair_naked(pair: dict, style: str = "naked", validation_mode="stand
                     strategy_family="ENGINE_B_ONLY",
                     regime=best.get("regime_label", "RANGING"),
                     setup_type="naked",
-                    timeframe="H4",
+                    timeframe=_entry_tf,
                     failure_reason=outcome if outcome not in ["TP1", "TP2"] else None,
                     entry_reason=None,
                     exit_reason=outcome,
@@ -4570,10 +4569,14 @@ def backtest_pair_consensus(
 
         current_price = float(candles_h4[i]["close"])
 
-        _atr_full = atr_map.get(_atr_tf, atr_map["H4"])
-        _atr_idx = h4_idx
-        atr = _atr_full[_atr_idx - 1] if _atr_idx > 0 and _atr_idx <= len(_atr_full) else current_price * 0.01
-        atr_list_50 = _atr_full[max(0, _atr_idx - 50): _atr_idx]
+        atr, atr_list_50, _atr_idx = _engine_b_indexed_atr(
+            atr_map,
+            _atr_tf,
+            d1_idx=d1_idx,
+            h4_idx=h4_idx,
+            h1_idx=h1_idx,
+            current_price=current_price,
+        )
         if len(atr_list_50) >= 50:
             _valid_atrs = [a for a in atr_list_50 if a]
             _atr_avg = sum(_valid_atrs) / len(_valid_atrs) if _valid_atrs else 0

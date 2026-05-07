@@ -91,6 +91,8 @@ ENGINE_A_CRYPTO_LEVELS_FEED: bybit
 ENGINE_A_CRYPTO_LEVELS_SIGNAL_FEED_FALLBACK: false
 ENGINE_A_CRYPTO_DERIVATIVES_FEED: bybit
 ENGINE_A_CRYPTO_DERIVATIVES_BINANCE_FALLBACK: false
+ENGINE_B_CRYPTO_LEVELS_FEED: bybit
+ENGINE_B_CRYPTO_LEVELS_SIGNAL_FEED_FALLBACK: false
 
 BINANCE_KLINE_WS_INTERVALS:
   - "1m"
@@ -312,7 +314,7 @@ NAKED_MAX_DAILY: 3
 
 # Defaults match current hardcoded behavior in backtest_runner.py
 
-ENGINE_C_BT_EXIT:
+ENGINE_C_BT_EXIT: &engine_bt_exit_defaults
 
   forex:
 
@@ -443,6 +445,9 @@ ENGINE_C_BT_EXIT:
       be_arm_rr: 1.5
 
       be_min_target_rr: 1.8
+
+
+ENGINE_B_BT_EXIT: *engine_bt_exit_defaults
 
 
 
@@ -1709,6 +1714,9 @@ NAKED_ENGINE:
 
   score_group_overrides:
 
+    # Forex groups intentionally inherit base style min_score values.
+    # Non-forex groups below override intraday/swing min_score where calibrated.
+
     forex_majors:
 
       intraday: {min_rr: 1.3}
@@ -1897,9 +1905,8 @@ ENGINE_B_USE_FORMING_FOR_TRIGGER: true
 
 # - this preserves Engine B's independent signal in the 15-25 transition zone.
 
-# Engine B forex ADX floor.  Wilder defined ADX < 20 as non-trending;
-# 12 is intentionally low to allow directionally-biased ranging markets
-# through to the checklist while still filtering dead-flat conditions.
+# Engine B forex ADX diagnostic floor only. market_structure.calculate_confidence()
+# reports low-ADX regime context but does not block structure_ok with this key.
 ENGINE_B_FOREX_ADX_MIN: 12
 
 
@@ -1939,12 +1946,14 @@ ENGINE_B_FOLLOW_THROUGH:
 # Engine B backtest-only A/B experiment:
 # false = disable the structure gate only inside backtest_pair_naked().
 # Live scan, AI review, and execution paths do not consume this key.
-ENGINE_B_BT_STRUCTURE_GATE_ENABLED: false
+ENGINE_B_BT_STRUCTURE_GATE_ENABLED: true
 
 # Engine B live scan structure gate:
 # false = disable the structure_ok gate in live calculate_confidence() (same as BT experiment).
 # Live scan, AI review, and execution all consume this key.
-ENGINE_B_STRUCTURE_GATE_ENABLED: false
+ENGINE_B_STRUCTURE_GATE_ENABLED: true
+ENGINE_B_SCAN_CONFIRMATION_GATE_ENABLED: true
+ENGINE_B_USE_EXECUTION_LEVELS_FOR_SCAN_SIGNALS: true
 
 
 

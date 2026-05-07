@@ -20,7 +20,7 @@ from config import _json_safe, scan_candle_limits
 from engine_c import compute_consensus, normalise_engine_a
 from execution_lifecycle import run_managed_execution
 from factor_scoring import make_regime_smoothing_context
-from indicators import calc_indicators_with_normalized
+from indicators import calc_atr, calc_indicators_with_normalized
 from intermarket import build_scan_snapshot
 from market_structure import NakedEngine, engine_b_confidence_passes
 from guardian import pre_trade_check as _guardian_pre_trade
@@ -130,6 +130,48 @@ def _engine_c_accepts_engine_b(
         pair_type,
     )
     return bool(gate_ok), float(scaled_min)
+
+
+def _engine_b_atr_for_scan_levels(
+    sig_a: dict | None,
+    atr_candles: list,
+    atr_tf: str,
+    pair: dict,
+    resolved_style: str,
+    runtime,
+) -> tuple[float, str]:
+    """Resolve the ATR Engine B should use for Engine C scan execution levels."""
+    tf = str(atr_tf or "H4").upper()
+    atr = 0.0
+    if tf == "H4":
+        try:
+            atr = float((sig_a or {}).get("atr") or 0.0)
+        except (TypeError, ValueError):
+            atr = 0.0
+
+    if not atr or atr <= 0:
+        try:
+            _highs = [float(c["high"]) for c in atr_candles]
+            _lows = [float(c["low"]) for c in atr_candles]
+            _closes = [float(c["close"]) for c in atr_candles]
+            atr_series = calc_atr(_highs, _lows, _closes, 14)
+            atr = float(atr_series[-1]) if atr_series else 0.0
+        except (KeyError, TypeError, ValueError):
+            atr = 0.0
+
+    cfg = getattr(runtime, "CONFIG", {}) or {}
+    if (
+        str((pair or {}).get("type") or "").lower() == "crypto"
+        and str(cfg.get("ENGINE_B_CRYPTO_LEVELS_FEED", "bybit")).lower() == "bybit"
+        and hasattr(runtime, "bybit_atr_for_levels")
+    ):
+        bybit_atr = runtime.bybit_atr_for_levels(pair, resolved_style)
+        if bybit_atr:
+            return float(bybit_atr), "bybit"
+        if not bool(cfg.get("ENGINE_B_CRYPTO_LEVELS_SIGNAL_FEED_FALLBACK", False)):
+            return 0.0, "bybit_unavailable"
+
+    return float(atr or 0.0), tf
 
 
 def _engine_c_best_score(confidence_b: dict | None) -> float:
@@ -318,6 +360,75 @@ def _apply_level_override(sig: dict, override: dict) -> str | None:
     return None
 
 
+def _signal_has_engine_b_context(sig: dict, engine_b: dict | None = None) -> bool:
+    sig = sig or {}
+    engine_b = engine_b or {}
+    return bool(
+        sig.get("is_naked")
+        or sig.get("naked_data")
+        or sig.get("engine_b")
+        or ("enginesAligned" in sig)
+        or engine_b
+    )
+
+
+def _engine_b_context_confirmed(sig: dict, engine_b: dict | None = None) -> bool:
+    sig = sig or {}
+    engine_b = engine_b or {}
+    if "enginesAligned" in sig:
+        return bool(sig.get("enginesAligned"))
+    if "passed" in engine_b:
+        return bool(engine_b.get("passed"))
+    return True
+
+
+def _extract_engine_b_execution_levels(
+    sig: dict,
+    engine_b: dict | None = None,
+) -> dict | None:
+    sig = sig or {}
+    candidates = [
+        sig.get("naked_data"),
+        sig.get("engine_b"),
+        engine_b,
+        sig,
+    ]
+    for source in candidates:
+        if not isinstance(source, dict):
+            continue
+        sl = (
+            source.get("execution_sl")
+            or source.get("engine_b_execution_sl")
+            or source.get("recommended_stop_loss")
+            or (source.get("sl") if source is sig and _signal_has_engine_b_context(sig, engine_b) else None)
+        )
+        tp = (
+            source.get("execution_tp")
+            or source.get("engine_b_execution_tp")
+            or source.get("recommended_take_profit")
+            or (source.get("tp1") if source is sig and _signal_has_engine_b_context(sig, engine_b) else None)
+        )
+        try:
+            sl_f = float(sl)
+            tp_f = float(tp)
+        except (TypeError, ValueError):
+            continue
+        if sl_f > 0 and tp_f > 0:
+            return {"sl": sl_f, "tp1": tp_f, "tp2": tp_f}
+    return None
+
+
+def _apply_engine_b_execution_levels(sig: dict, engine_b: dict | None = None) -> bool:
+    levels = _extract_engine_b_execution_levels(sig, engine_b)
+    if not levels:
+        return False
+    sig["sl"] = levels["sl"]
+    sig["tp1"] = levels["tp1"]
+    sig["tp2"] = levels["tp2"]
+    sig["level_source"] = "engine_b_execution"
+    return True
+
+
 def api_quick_execute():
     _r = rt()
     # ── Execution safety guards (must match api_execute) ─────────────────
@@ -356,6 +467,7 @@ def api_quick_execute():
             _sig_age = 9999
 
     _max_age = _r.CONFIG.get("SIGNAL_MAX_AGE_SEC", 300)
+    _has_engine_b_context = _signal_has_engine_b_context(sig, engine_b)
     
     _missing_price = False
     try:
@@ -363,6 +475,21 @@ def api_quick_execute():
             _missing_price = True
     except (TypeError, ValueError):
         _missing_price = True
+
+    if (_sig_age > _max_age / 2 or _missing_price) and _has_engine_b_context:
+        return jsonify(
+            {
+                "error": "ENGINE_B_REFRESH_REQUIRED: stale or incomplete Engine B signal must be refreshed by Engine B before execution",
+                "pair": sig.get("pair"),
+            }
+        ), 409
+    if _has_engine_b_context and not _engine_b_context_confirmed(sig, engine_b):
+        return jsonify(
+            {
+                "error": "ENGINE_B_NOT_CONFIRMED: Engine B confirmation failed before execution",
+                "pair": sig.get("pair"),
+            }
+        ), 409
 
     if _sig_age > _max_age / 2 or _missing_price:
         pair = sig.get("pair", "")
@@ -404,34 +531,40 @@ def api_quick_execute():
                     f"[QUICK EXEC] {pair}: refresh failed ({_fresh_err}) - continuing with original direction"
                 )
 
-    try:
-        recomputed = recompute_levels_for_style(
-            sig,
-            pip_mode,
-            resolve_pair_from_signal=_r.resolve_pair_from_signal,
-            fetch_candles=_r.fetch_candles,
-            calc_indicators_with_normalized=_r.calc_indicators_with_normalized,
-            atr_for_levels=_r.atr_for_levels,
-            calc_levels=_r.calc_levels,
-            config=_r.CONFIG,
-        )
-        lvl = recomputed["levels"]
-        sig["sl"] = lvl["sl"]
-        sig["tp1"] = lvl["tp1"]
-        sig["tp2"] = lvl["tp2"]
+    if _has_engine_b_context and _apply_engine_b_execution_levels(sig, engine_b):
         _r.log.warning(
-            f"[QUICK EXEC] {sig.get('pair')}: style={recomputed['pip_mode']}, "
-            f"ATR={recomputed['atr']:.6f}, SL={lvl['sl']:.6f}, TP1={lvl['tp1']:.6f}"
+            f"[QUICK EXEC] {sig.get('pair')}: preserved Engine B execution levels "
+            f"SL={sig.get('sl')} TP1={sig.get('tp1')}"
         )
-    except (ValueError, TypeError) as _svc_err:
-        if "recommended_stop_loss" in engine_b and engine_b["recommended_stop_loss"]:
-            sig["sl"] = engine_b["recommended_stop_loss"]
-        if "recommended_take_profit" in engine_b and engine_b["recommended_take_profit"]:
-            sig["tp1"] = engine_b["recommended_take_profit"]
-            sig["tp2"] = engine_b["recommended_take_profit"]
-        _r.log.warning(
-            f"[QUICK EXEC] {sig.get('pair')}: style={pip_mode} level service fallback ({_svc_err})"
-        )
+    else:
+        try:
+            recomputed = recompute_levels_for_style(
+                sig,
+                pip_mode,
+                resolve_pair_from_signal=_r.resolve_pair_from_signal,
+                fetch_candles=_r.fetch_candles,
+                calc_indicators_with_normalized=_r.calc_indicators_with_normalized,
+                atr_for_levels=_r.atr_for_levels,
+                calc_levels=_r.calc_levels,
+                config=_r.CONFIG,
+            )
+            lvl = recomputed["levels"]
+            sig["sl"] = lvl["sl"]
+            sig["tp1"] = lvl["tp1"]
+            sig["tp2"] = lvl["tp2"]
+            _r.log.warning(
+                f"[QUICK EXEC] {sig.get('pair')}: style={recomputed['pip_mode']}, "
+                f"ATR={recomputed['atr']:.6f}, SL={lvl['sl']:.6f}, TP1={lvl['tp1']:.6f}"
+            )
+        except (ValueError, TypeError) as _svc_err:
+            if "recommended_stop_loss" in engine_b and engine_b["recommended_stop_loss"]:
+                sig["sl"] = engine_b["recommended_stop_loss"]
+            if "recommended_take_profit" in engine_b and engine_b["recommended_take_profit"]:
+                sig["tp1"] = engine_b["recommended_take_profit"]
+                sig["tp2"] = engine_b["recommended_take_profit"]
+            _r.log.warning(
+                f"[QUICK EXEC] {sig.get('pair')}: style={pip_mode} level service fallback ({_svc_err})"
+            )
 
     if level_override:
         _override_err = _apply_level_override(sig, level_override)
@@ -827,23 +960,27 @@ def api_engine_c_scan():
                 continue
 
             current_price = float(sig_a.get("price") or entry_candles[-1]["close"])
-            atr = float(sig_a.get("atr") or 0.0)
-            if not atr or atr <= 0:
-                from indicators import calc_atr
+            atr, atr_source = _engine_b_atr_for_scan_levels(
+                sig_a,
+                atr_candles,
+                _atr_tf,
+                pair,
+                resolved_style_b,
+                _r,
+            )
 
-                _highs = [float(c["high"]) for c in atr_candles]
-                _lows = [float(c["low"]) for c in atr_candles]
-                _closes = [float(c["close"]) for c in atr_candles]
-                atr_series = calc_atr(_highs, _lows, _closes, 14)
-                atr = float(atr_series[-1]) if atr_series else 0.0
-
             if not atr or atr <= 0:
+                _atr_detail = (
+                    "Bybit ATR unavailable and signal-feed fallback disabled"
+                    if atr_source == "bybit_unavailable"
+                    else f"ATR unavailable on {_atr_tf}"
+                )
                 results["skipped"].append(
                     _engine_c_skip_entry(
                         display,
                         "Zero ATR",
                         code="zero_atr",
-                        detail=f"ATR unavailable on {_atr_tf}",
+                        detail=_atr_detail,
                     )
                 )
                 continue
@@ -1156,8 +1293,16 @@ def api_execute():
             _sig_age = 9999
 
     _max_age = _r.CONFIG.get("SIGNAL_MAX_AGE_SEC", 300)
+    _has_engine_b_context = _signal_has_engine_b_context(sig, d.get("engine_b") or {})
 
     if _sig_age > _max_age / 2:
+        if _has_engine_b_context:
+            return jsonify(
+                {
+                    "error": "ENGINE_B_REFRESH_REQUIRED: stale Engine B signal must be refreshed by Engine B before execution",
+                    "pair": pair,
+                }
+            ), 409
         _pair_obj = next((p for p in _r.ALL_PAIRS if p["display"] == pair), None)
 
         if _pair_obj:
@@ -1213,6 +1358,17 @@ def api_execute():
 
         else:
             sig["timestamp"] = datetime.now(timezone.utc).isoformat()
+
+    if _has_engine_b_context and not _engine_b_context_confirmed(sig, d.get("engine_b") or {}):
+        return jsonify(
+            {
+                "error": "ENGINE_B_NOT_CONFIRMED: Engine B confirmation failed before execution",
+                "pair": pair,
+            }
+        ), 409
+
+    if _has_engine_b_context:
+        _apply_engine_b_execution_levels(sig, d.get("engine_b") or {})
 
     if level_override:
         _override_err = _apply_level_override(sig, level_override)

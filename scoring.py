@@ -73,13 +73,13 @@ _FOREX_CROSSES = {
     "AUD/CHF", "AUD/NZD",
 }
 _EXOTIC_FOREX = {"USD/ZAR", "USD/MXN", "USD/BRL", "USD/INR"}
-_PRECIOUS_TRACKERS = {"XAU/USD", "XAG/USD", "GLD", "SLV"}
+_PRECIOUS_TRACKERS = {"XAU/USD", "XAG/USD", "GLD", "SLV", "GDX"}
 _ENERGY_OIL = {"WTI Oil", "Brent Oil", "USO", "XLE"}
 # Industrial base metals — trend well, route to STABLE tier.
 _BASE_METALS = {"Aluminium", "Lead", "Nickel", "Zinc"}
 # Soft commodities + livestock — Athena edge unaudited; route to EXOTIC tier.
 _SOFTS = {"Cattle", "Cocoa", "Coffee", "Corn", "Cotton", "Soybeans", "Sugar", "Wheat"}
-_US_INDICES_TRACKERS = {"NASDAQ-100", "S&P 500", "Dow Jones", "SPY", "QQQ"}
+_US_INDICES_TRACKERS = {"NASDAQ-100", "S&P 500", "Dow Jones", "SPY", "QQQ", "DIA"}
 _EU_INDICES = {"DAX 40", "UK100"}
 _ASIAN_INDICES = {"ASX 200", "Nikkei 225", "Hang Seng"}
 _US_STOCK_CUSTOM = {

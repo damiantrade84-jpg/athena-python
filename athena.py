@@ -5658,30 +5658,64 @@ def _compute_naked_analysis(sig: dict, engine_a_ctx: dict = None, force_ai: bool
         if not d1 or not h4 or not h1:
             return None, pair_obj, "Failed to fetch D1/H4/H1 candles"
 
+        _pair_score_group = get_pair_score_group(pair_obj)
+        _requested_style_naked = sig.get("style", "auto")
+        resolved_style, style_profile = _naked_scan_style_profile(
+            _requested_style_naked,
+            score_group=_pair_score_group,
+            asset_type=pair_obj.get("type", ""),
+        )
+        _zone_tf = str(style_profile.get("zone_tf", "H4")).upper()
+        _entry_tf = str(style_profile.get("entry_tf", "H1")).upper()
+        _atr_tf = str(style_profile.get("atr_tf", "H4")).upper()
+        _tf_map = {"D1": d1, "H4": h4, "H1": h1}
+        _trigger_tf_map = {"D1": d1, "H4": h4_trigger, "H1": h1_trigger}
+        zone_candles = _tf_map.get(_zone_tf, h4)
+        structure_entry_candles = _tf_map.get(_entry_tf, h1)
+        trigger_candles = _trigger_tf_map.get(_entry_tf, structure_entry_candles)
+        atr_candles = _tf_map.get(_atr_tf, zone_candles)
+        if not zone_candles or not structure_entry_candles or not trigger_candles or not atr_candles:
+            return None, pair_obj, (
+                f"Failed to resolve Engine B candles "
+                f"(zone={_zone_tf}:{len(zone_candles or [])}, "
+                f"entry={_entry_tf}:{len(structure_entry_candles or [])}, "
+                f"trigger={_entry_tf}:{len(trigger_candles or [])}, "
+                f"atr={_atr_tf}:{len(atr_candles or [])})"
+            )
+
         # Structure is confirmed-bar first; trigger candles may include the live bar by config.
 
-        h4_highs = [float(c["high"]) for c in h4]
-        h4_lows = [float(c["low"]) for c in h4]
-        h4_closes = [float(c["close"]) for c in h4]
+        atr_highs = [float(c["high"]) for c in atr_candles]
+        atr_lows = [float(c["low"]) for c in atr_candles]
+        atr_closes = [float(c["close"]) for c in atr_candles]
 
         log.info(
-            f"[NAKED-AI] {pair_obj.get('display')}: H4 candles={len(h4)}, sample_high={h4_highs[-1] if h4_highs else 'N/A'}"
+            f"[NAKED-AI] {pair_obj.get('display')}: {_atr_tf} ATR candles={len(atr_candles)}, sample_high={atr_highs[-1] if atr_highs else 'N/A'}"
         )
 
-        atr_series = calc_atr(h4_highs, h4_lows, h4_closes, 14)
+        atr_series = calc_atr(atr_highs, atr_lows, atr_closes, 14)
         atr = (
             float(atr_series[-1]) if atr_series and atr_series[-1] is not None else 0.0
         )
+        if (
+            pair_obj.get("type") == "crypto"
+            and str(CONFIG.get("ENGINE_B_CRYPTO_LEVELS_FEED", "bybit")).lower() == "bybit"
+        ):
+            bybit_atr = _bybit_atr_for_levels(pair_obj, resolved_style)
+            if bybit_atr:
+                atr = float(bybit_atr)
+            elif not bool(CONFIG.get("ENGINE_B_CRYPTO_LEVELS_SIGNAL_FEED_FALLBACK", False)):
+                atr = 0.0
 
         log.info(
-            f"[NAKED-AI] {pair_obj.get('display')}: ATR series length={len(atr_series) if atr_series else 0}, final_ATR={atr}"
+            f"[NAKED-AI] {pair_obj.get('display')}: ATR tf={_atr_tf} series length={len(atr_series) if atr_series else 0}, final_ATR={atr}"
         )
 
         if not atr or atr <= 0:
             log.warning(
                 f"[NAKED-AI] {pair_obj.get('display')}: Failed ATR calc - series={atr_series}, using fallback ATR"
             )
-            current_price = float(sig.get("price") or (h1_trigger or h1)[-1]["close"])
+            current_price = float(sig.get("price") or (trigger_candles or structure_entry_candles)[-1]["close"])
             _atr_pct = {
                 "forex": 0.002,
                 "crypto": 0.02,
@@ -5694,7 +5728,7 @@ def _compute_naked_analysis(sig: dict, engine_a_ctx: dict = None, force_ai: bool
                 f"[NAKED-AI] {pair_obj.get('display')}: Using fallback ATR={atr} (type={pair_obj.get('type')})"
             )
 
-        current_price = float(sig.get("price") or (h1_trigger or h1)[-1]["close"])
+        current_price = float(sig.get("price") or (trigger_candles or structure_entry_candles)[-1]["close"])
 
         from market_structure import (
             NakedEngine,
@@ -5704,7 +5738,7 @@ def _compute_naked_analysis(sig: dict, engine_a_ctx: dict = None, force_ai: bool
 
         engine = NakedEngine()
         regime_label = _engine_b_regime_label(
-            h4,
+            zone_candles,
             pair_obj.get("type", "stock"),
             engine_a_ctx.get("regime") if isinstance(engine_a_ctx, dict) else None,
         )
@@ -5715,23 +5749,16 @@ def _compute_naked_analysis(sig: dict, engine_a_ctx: dict = None, force_ai: bool
                 calc_indicators_with_normalized(d1, pair_obj.get("type", "stock")) or {}
             ).get("snap") or {}
             _na_h4_snap = (
-                calc_indicators_with_normalized(h4, pair_obj.get("type", "stock")) or {}
+                calc_indicators_with_normalized(zone_candles, pair_obj.get("type", "stock")) or {}
             ).get("snap") or {}
         except Exception:
             pass
-        _pair_score_group = get_pair_score_group(pair_obj)
-        _requested_style_naked = sig.get("style", "auto")
-        resolved_style, style_profile = _naked_scan_style_profile(
-            _requested_style_naked,
-            score_group=_pair_score_group,
-            asset_type=pair_obj.get("type", ""),
-        )
         res = engine.set_registry_context(
             pair_obj.get("symbol") or pair_obj.get("display")
         ).analyze_structure(
             d1,
-            h4,
-            h1,
+            zone_candles,
+            structure_entry_candles,
             current_price,
             direction,
             atr,
@@ -5753,14 +5780,12 @@ def _compute_naked_analysis(sig: dict, engine_a_ctx: dict = None, force_ai: bool
             learning_ctx = None
 
         _pair_type = pair_obj.get("type", "")
-        # Determine correct entry candles based on style
-        _entry_candles = h1_trigger if resolved_style in ("scalp", "intraday") else h4_trigger
         conf = engine.calculate_confidence(
             res,
             current_price,
             direction,
             learning_ctx,
-            entry_candles=_entry_candles,
+            entry_candles=trigger_candles,
             style_profile=style_profile,
         )
         _gate_ok, _min_score_scaled = engine_b_confidence_passes(
@@ -6133,13 +6158,23 @@ def api_scan_naked():
                     )
                 else:
                     raw = fetch_candles(pair, tf, limit)
-                    if raw and len(raw) > 1:
-                        _tf_map[tf] = raw[:-1]  # drop incomplete current bar
-                    elif raw:
-                        _tf_map[tf] = raw
-                    else:
-                        _tf_map[tf] = []
-                    _tf_trigger_map[tf] = _tf_map[tf]
+                    from athena_app.services.market_state import (
+                        market_state_offset_hours,
+                        split_market_state,
+                    )
+
+                    _state = split_market_state(
+                        list(raw or []),
+                        tf,
+                        pair.get("display") or pair.get("symbol") or "",
+                        offset_hours=market_state_offset_hours(pair, tf),
+                    )
+                    _tf_map[tf] = _market_state_series(
+                        _state, include_forming=_use_forming_structure
+                    )
+                    _tf_trigger_map[tf] = _market_state_series(
+                        _state, include_forming=_use_forming_trigger
+                    )
 
             zone_candles = _tf_map.get(_zone_tf, [])
             structure_entry_candles = _tf_map.get(_entry_tf, [])
@@ -6168,6 +6203,19 @@ def api_scan_naked():
             _atr_closes = [float(c["close"]) for c in atr_candles]
             atr_series = calc_atr(_atr_highs, _atr_lows, _atr_closes, 14)
             atr = float(atr_series[-1]) if atr_series else 0.0
+            if (
+                pair.get("type") == "crypto"
+                and str(CONFIG.get("ENGINE_B_CRYPTO_LEVELS_FEED", "bybit")).lower() == "bybit"
+            ):
+                bybit_atr = _bybit_atr_for_levels(pair, resolved_style)
+                if bybit_atr:
+                    atr = float(bybit_atr)
+                    debug_row["atr_feed"] = "bybit"
+                elif not bool(CONFIG.get("ENGINE_B_CRYPTO_LEVELS_SIGNAL_FEED_FALLBACK", False)):
+                    debug_row["final_reject_reason"] = "bybit_atr_unavailable"
+                    if debug_mode:
+                        return {"debug": debug_row}
+                    return []
 
             debug_row["atr_value"] = atr
 
@@ -13474,6 +13522,7 @@ set_runtime(
         calc_indicators_with_normalized=calc_indicators_with_normalized,
         calc_indicators=calc_indicators,
         atr_for_levels=_atr_for_levels,
+        bybit_atr_for_levels=_bybit_atr_for_levels,
         calc_levels=calc_levels,
         fetch_news_context=fetch_news_context,
         fetch_yield_curve=fetch_yield_curve,

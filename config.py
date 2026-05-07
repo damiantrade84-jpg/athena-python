@@ -326,6 +326,8 @@ CONFIG: dict = {
     "ENGINE_A_CRYPTO_LEVELS_SIGNAL_FEED_FALLBACK": False,
     "ENGINE_A_CRYPTO_DERIVATIVES_FEED": "bybit",
     "ENGINE_A_CRYPTO_DERIVATIVES_BINANCE_FALLBACK": False,
+    "ENGINE_B_CRYPTO_LEVELS_FEED": "bybit",
+    "ENGINE_B_CRYPTO_LEVELS_SIGNAL_FEED_FALLBACK": False,
     "BINANCE_KLINE_WS_INTERVALS": ["1m", "5m", "15m", "1h", "4h", "1d"],
     "MIN_CONFLUENCE": 1.0,
     "RISK_MULT": {
@@ -863,6 +865,10 @@ CONFIG: dict = {
     "ENGINE_C_B_CONFLICT_MIN_SCORE": 0.70,  # Minimum B normalized score for conflict override
     "ENGINE_C_A_CONFLICT_MAX_SCORE": 0.45,  # Max opposing A normalized score for B override
     "ENGINE_C_B_CONFLICT_PENALTY": 0.85,  # Penalty applied to B score during conflict override
+    "ENGINE_B_BT_STRUCTURE_GATE_ENABLED": True,
+    "ENGINE_B_STRUCTURE_GATE_ENABLED": True,
+    "ENGINE_B_SCAN_CONFIRMATION_GATE_ENABLED": True,
+    "ENGINE_B_USE_EXECUTION_LEVELS_FOR_SCAN_SIGNALS": True,
     # ── Engine B (Naked Scalp) ────────────────────────────────────────────────
     "NAKED_ENGINE": {
         "zone_multipliers": {
@@ -963,6 +969,10 @@ CONFIG: dict = {
     },
 }
 
+# Engine B has its own backtest-exit namespace so Engine C tuning cannot
+# silently alter Engine B behavior.
+CONFIG["ENGINE_B_BT_EXIT"] = _deep_merge_dict({}, CONFIG.get("ENGINE_C_BT_EXIT", {}))
+
 # Apply YAML overrides — deep-merge dicts, overwrite scalars
 _CONFIG_DEFAULT_KEYS = set(CONFIG.keys())
 _KNOWN_YAML_ONLY_KEYS = {
@@ -980,12 +990,16 @@ _KNOWN_YAML_ONLY_KEYS = {
     "ENGINE_B_BT_STRUCTURE_GATE_ENABLED",
     "ENGINE_B_BOS_LOOKBACK_BARS",
     "ENGINE_B_BOS_VOLUME_FOR_TICKVOL",
+    "ENGINE_B_CRYPTO_LEVELS_FEED",
+    "ENGINE_B_CRYPTO_LEVELS_SIGNAL_FEED_FALLBACK",
     "ENGINE_B_CHOCH_STRICT",
+    "ENGINE_B_SCAN_CONFIRMATION_GATE_ENABLED",
     "ENGINE_B_STRUCTURAL_SL_USE_STYLE_ATR_MULTS",
     "ENGINE_B_FOLLOW_THROUGH",
     "ENGINE_B_FOREX_ADX_MIN",
     "ENGINE_B_RESEARCH_LAB_FACTORS",
     "ENGINE_B_STRUCTURE_GATE_ENABLED",
+    "ENGINE_B_USE_EXECUTION_LEVELS_FOR_SCAN_SIGNALS",
     "ENGINE_C_AI_WEIGHT_ADJUST_ENABLED",
     "ENGINE_C_AI_WEIGHT_MAX",
     "ENGINE_C_AI_WEIGHT_MIN",

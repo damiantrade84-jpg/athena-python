@@ -34,6 +34,64 @@ from factor_scoring import make_regime_smoothing_context
 log = logging.getLogger("sentinel")
 
 
+def _engine_b_scan_confirmation_gate_enabled(config: dict | None = None) -> bool:
+    cfg = config or CONFIG
+    return bool(cfg.get("ENGINE_B_SCAN_CONFIRMATION_GATE_ENABLED", True))
+
+
+def _select_engine_b_tf_candles(tf: str | None, tf_map: dict[str, list]) -> list:
+    key = str(tf or "H4").upper()
+    return list(tf_map.get(key) or [])
+
+
+def _last_atr_from_candles(candles: list, period: int = 14) -> float:
+    if not candles or len(candles) < period + 1:
+        return 0.0
+    highs = [float(c["high"]) for c in candles]
+    lows = [float(c["low"]) for c in candles]
+    closes = [float(c["close"]) for c in candles]
+    atr_series = calc_atr(highs, lows, closes, period)
+    return float(atr_series[-1]) if atr_series else 0.0
+
+
+def _engine_b_level_pair(conf_b: dict | None, res_b: dict | None) -> tuple[float | None, float | None]:
+    conf_b = conf_b or {}
+    res_b = res_b or {}
+    sl = conf_b.get("execution_sl") or res_b.get("execution_sl") or res_b.get("recommended_stop_loss")
+    tp = conf_b.get("execution_tp") or res_b.get("execution_tp") or res_b.get("recommended_take_profit")
+    try:
+        return float(sl), float(tp)
+    except (TypeError, ValueError):
+        return None, None
+
+
+def _apply_engine_b_scan_levels(signal: dict, conf_b: dict | None, res_b: dict | None) -> None:
+    sl, tp = _engine_b_level_pair(conf_b, res_b)
+    if sl is None or tp is None:
+        return
+    signal["engine_b_execution_sl"] = sl
+    signal["engine_b_execution_tp"] = tp
+    signal["engine_b_rr_used_for_gate"] = (conf_b or {}).get("rr_used_for_gate")
+    if not bool(CONFIG.get("ENGINE_B_USE_EXECUTION_LEVELS_FOR_SCAN_SIGNALS", True)):
+        return
+    signal["sl"] = sl
+    signal["tp1"] = tp
+    signal["tp2"] = tp
+    signal["levelSource"] = "engine_b_execution"
+    signal["level_source"] = "engine_b_execution"
+
+
+def _apply_engine_b_scan_gate(signal: dict, tier: str, reason: str) -> tuple[str, str]:
+    if not _engine_b_scan_confirmation_gate_enabled():
+        return tier, reason
+    if tier != "trade":
+        return tier, reason
+    if bool(signal.get("enginesAligned", False)):
+        return tier, reason
+    detail = signal.get("engine_b_error") or signal.get("engine_b_verdict") or "not_confirmed"
+    return "watchlist", f"Engine B confirmation failed ({detail})"
+
+
 def _linear_percentile(values: list[float], p: float) -> float | None:
     """Return the p-th percentile (0–100) with linear interpolation. ``values`` may be unsorted."""
     if not values:
@@ -672,16 +730,53 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict[s
                         if _should_drop_last(h1):
                             h1 = h1[:-1]
 
-                    if h4 and len(h4) >= 20:
-                        _highs = [float(c["high"]) for c in h4]
-                        _lows = [float(c["low"]) for c in h4]
-                        _closes = [float(c["close"]) for c in h4]
-                        atr_series = calc_atr(_highs, _lows, _closes, 14)
-                        atr = float(atr_series[-1]) if atr_series else 0.0
-                        current_price = float(h4[-1]["close"])
+                    if pair.get("source") != "mt5":
+                        from athena_app.services.market_state import (
+                            market_state_offset_hours,
+                            split_market_state,
+                        )
+
+                        for _tf in ("D1", "H4", "H1"):
+                            _st = split_market_state(
+                                list(raw_candles.get(_tf) or []),
+                                _tf,
+                                pair.get("display") or pair.get("symbol") or "",
+                                offset_hours=market_state_offset_hours(pair, _tf),
+                            )
+                            _confirmed = list(_st.get("confirmed") or [])
+                            if _tf == "D1":
+                                d1 = _confirmed
+                            elif _tf == "H4":
+                                h4 = _confirmed
+                            else:
+                                h1 = _confirmed
+
+                    sig_a["engine_b_evaluated"] = True
+                    _tf_map_b = {"D1": d1 or [], "H4": h4 or [], "H1": h1 or []}
+                    _zone_tf_b = str(style_profile_b.get("zone_tf", "H4")).upper()
+                    _entry_tf_b = str(style_profile_b.get("entry_tf", "H1")).upper()
+                    _atr_tf_b = str(style_profile_b.get("atr_tf", "H4")).upper()
+                    zone_candles_b = _select_engine_b_tf_candles(_zone_tf_b, _tf_map_b)
+                    entry_candles_b = _select_engine_b_tf_candles(_entry_tf_b, _tf_map_b)
+                    atr_candles_b = _select_engine_b_tf_candles(_atr_tf_b, _tf_map_b)
+
+                    if zone_candles_b and entry_candles_b and atr_candles_b:
+                        atr = _last_atr_from_candles(atr_candles_b, 14)
+                        if (
+                            ptype == "crypto"
+                            and str(CONFIG.get("ENGINE_B_CRYPTO_LEVELS_FEED", "bybit")).lower() == "bybit"
+                            and hasattr(r, "bybit_atr_for_levels")
+                        ):
+                            bybit_atr = r.bybit_atr_for_levels(pair, resolved_style_b)
+                            if bybit_atr:
+                                atr = float(bybit_atr)
+                            elif not bool(CONFIG.get("ENGINE_B_CRYPTO_LEVELS_SIGNAL_FEED_FALLBACK", False)):
+                                atr = 0.0
+                                sig_a["engine_b_error"] = "bybit_atr_unavailable"
+                        current_price = float(entry_candles_b[-1]["close"])
 
                         if atr and atr > 0:
-                            regime_label = r.engine_b_regime_label(h4, ptype)
+                            regime_label = r.engine_b_regime_label(zone_candles_b, ptype)
                             direction = sig_a.get("direction")
 
                             if direction in ("LONG", "SHORT"):
@@ -692,7 +787,7 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict[s
                                         calc_indicators_with_normalized(d1 or [], ptype) or {}
                                     ).get("snap") or {}
                                     _sc_h4_snap = (
-                                        calc_indicators_with_normalized(h4, ptype) or {}
+                                        calc_indicators_with_normalized(zone_candles_b, ptype) or {}
                                     ).get("snap") or {}
                                 except Exception:
                                     pass
@@ -700,8 +795,8 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict[s
                                     pair.get("symbol") or pair.get("display")
                                 ).analyze_structure(
                                     d1 or [],
-                                    h4,
-                                    h1 or [],
+                                    zone_candles_b,
+                                    entry_candles_b,
                                     current_price,
                                     direction,
                                     atr,
@@ -719,7 +814,7 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict[s
                                         res_b,
                                         current_price,
                                         direction,
-                                        entry_candles=h1 or h4,
+                                        entry_candles=entry_candles_b or zone_candles_b,
                                         style_profile=style_profile_b,
                                     )
                                     b_score = float(conf_b.get("score", 0))
@@ -735,6 +830,7 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict[s
                                     sig_a["engine_b_tp"] = res_b.get("recommended_take_profit")
                                     sig_a["engine_b_lifecycle_state"] = conf_b.get("lifecycle_state", "unknown")
                                     sig_a["engine_b_lifecycle_reason"] = conf_b.get("lifecycle_reason", "")
+                                    _apply_engine_b_scan_levels(sig_a, conf_b, res_b)
 
                                     a_max = sig_a.get("maxScore", 3.0)
                                     a_score = sig_a.get("confluenceScore", 0)
@@ -952,6 +1048,7 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict[s
                 sig["scoreNormPct"] = min(100, max(0, round((_cs / _maxs) * 100)))
 
             tier, tier_reason = _classify_signal(sig, pair)
+            tier, tier_reason = _apply_engine_b_scan_gate(sig, tier, tier_reason)
             if _threshold_audit_on:
                 threshold_audit_rows.append(
                     build_signal_funnel_row(
