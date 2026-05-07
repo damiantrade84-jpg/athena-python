@@ -412,6 +412,7 @@ def test_open_trades_timed_hides_intraday_labels_for_scalp(monkeypatch):
     assert payload["count"] == 1
     row = payload["positions"][0]
     assert row["style"] == "scalp"
+    assert row["trail_activation_r"] == 0.3
     assert row["be_trigger_min"] is None
     assert row["close_trigger_min"] is None
 

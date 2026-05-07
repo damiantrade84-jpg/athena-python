@@ -10286,6 +10286,7 @@ def api_open_trades_timed():
     """
     from datetime import datetime, timezone as _tz
     from timed_exit_monitor import (
+        _activation_r_for,
         _get_timed_cfg,
         _load_recent_audit_rows,
         _match_audit_row_for_position,
@@ -10441,7 +10442,7 @@ def api_open_trades_timed():
             "is_engine_d":     is_engine_d,
             "tp_partial":      _tp_part_f,
             "timed_tp_mode":   str(tcfg.get("tp_mode", "fixed")),
-            "trail_activation_r": float(tcfg.get("trail_activation_r", 1.0)),
+            "trail_activation_r": _activation_r_for(tcfg, style),
             "timed_exit_daemon_enabled": timed_global,
             "timed_close_style_enabled": timed_style_on if style in ("scalp", "intraday", "swing") else None,
             "sl_after_partial": str(_se.get("SL_AFTER_PARTIAL", "tp_partial")),
