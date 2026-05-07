@@ -23,10 +23,18 @@ import { ErrorBanner, RefreshButton } from '@/components/shared';
 import { Search, Zap, Filter, Layers, Activity, Eye, Clock, Sun, Moon, FileText } from 'lucide-react';
 import { fmtNum, toNum } from '@/lib/utils';
 import { fmtPrice } from '@/lib/athenaFormat';
+import apiClient from '@/lib/apiClient';
 import { EngineASignalCard, EngineBChecklistCard } from '@/components/athena';
 import type { EngineASignal, ScanResponse, NakedScanResponse, ChartAnalysisResponse, AiTextReviewResponse } from '@/types/athena';
 
 type ScanSource = 'A' | 'B';
+
+type ExecuteResponse = {
+  success?: boolean;
+  ticket?: string;
+  error?: string;
+  approval?: { approved: boolean; reason: string };
+};
 
 /** Group key: backend scoreGroup (e.g. forex_majors) or asset type fallback. */
 function signalGroupKey(s: EngineASignal): string {
@@ -51,6 +59,15 @@ function compareSignals(a: EngineASignal, b: EngineASignal, sortBy: string): num
   return toNum(b.confluenceScore ?? b.score) - toNum(a.confluenceScore ?? a.score);
 }
 
+function signalForExecutionPayload(signal: EngineASignal, source: ScanSource): EngineASignal {
+  if (source !== 'A') return signal;
+  const payload = { ...signal } as Record<string, unknown>;
+  delete payload.engine_b;
+  delete payload.naked_data;
+  delete payload.is_naked;
+  return payload as EngineASignal;
+}
+
 export default function SignalsPanel() {
   const { showToast, isTestMode, scanCacheA, scanCacheB, scanCacheAMeta, scanCacheBMeta, setScanCacheA, setScanCacheB } = useStore();
   const [filter, setFilter] = useState('');
@@ -72,17 +89,12 @@ export default function SignalsPanel() {
   const { data: autoTrade } = useApiPoll<{ enabled: boolean }>('/api/auto-trade', 60_000);
   const { post: postScanA, loading: scanningA } = useApiPost<ScanResponse>();
   const { post: postScanB, loading: scanningB } = useApiPost<NakedScanResponse>();
-  const { post: postExecute, loading: executing } = useApiPost<{
-    success?: boolean;
-    ticket?: string;
-    error?: string;
-    approval?: { approved: boolean; reason: string };
-  }>();
   const { post: postVision, loading: visionLoading } = useApiPost<ChartAnalysisResponse>();
   const { post: postAiText, loading: textLoading } = useApiPost<AiTextReviewResponse>();
   const [aiReview, setAiReview] = useState<ChartAnalysisResponse | null>(null);
   const [aiTextReview, setAiTextReview] = useState<AiTextReviewResponse | null>(null);
   const [aiReviewMode, setAiReviewMode] = useState<'vision' | 'text'>('vision');
+  const [executing, setExecuting] = useState(false);
   const { priceFor } = useLivePrices(10000);
 
   /**
@@ -264,13 +276,16 @@ export default function SignalsPanel() {
     const effectiveStyle = pendingStyle === 'auto'
       ? (confirmSig.style || (style === 'auto' ? 'swing' : style))
       : pendingStyle;
-    const nakedData = (confirmSig.naked_data ?? confirmSig.engine_b ?? {}) as Record<string, unknown>;
+    const signalPayload = signalForExecutionPayload(confirmSig, baseSource);
+    const nakedData = (baseSource === 'B'
+      ? (confirmSig.naked_data ?? confirmSig.engine_b ?? {})
+      : {}) as Record<string, unknown>;
     // /api/quick-execute matches the legacy "Quick Exec / Style" UI flow:
     //   { signal: <full live signal>, engine_b: {...}, pip_mode, sizing_override }
     // Backend recomputes SL/TP for the chosen pip_mode via recompute_levels_for_style().
     const payload = {
       signal: {
-        ...confirmSig,
+        ...signalPayload,
         symbol: confirmSig.symbol || confirmSig.pair || confirmSig.display,
         pair: confirmSig.pair || confirmSig.display,
         display: confirmSig.display || confirmSig.pair,
@@ -288,8 +303,12 @@ export default function SignalsPanel() {
       pip_mode: effectiveStyle,
       sizing_override: Math.max(0.25, Math.min(1.0, sizingOverride || 1.0)),
     };
-    const result = await postExecute('/api/quick-execute', payload as unknown as Record<string, unknown>);
-    if (result) {
+    setExecuting(true);
+    try {
+      const result = await apiClient.postJson(
+        '/api/quick-execute',
+        payload as unknown as Record<string, unknown>,
+      ) as ExecuteResponse;
       if (result.approval && !result.approval.approved) {
         showToast(`Rejected: ${result.approval.reason}`, 'error');
       } else if (result.success || result.ticket) {
@@ -300,12 +319,14 @@ export default function SignalsPanel() {
       } else {
         showToast(`Error: ${result.error || 'Unknown'}`, 'error');
       }
-    } else {
-      showToast('Execution failed', 'error');
+    } catch (err) {
+      showToast(`Execution failed: ${err instanceof Error ? err.message : 'unknown'}`, 'error');
+    } finally {
+      setExecuting(false);
+      setConfirmSig(null);
+      setPendingStyle('auto');
     }
-    setConfirmSig(null);
-    setPendingStyle('auto');
-  }, [confirmSig, baseSource, style, pendingStyle, sizingOverride, postExecute, showToast]);
+  }, [confirmSig, baseSource, style, pendingStyle, sizingOverride, showToast]);
 
   const sourceLabel = activeTab === 'A' ? 'Engine A' : 'Engine B';
   const lastScanAgeIso = activeTab === 'A'
