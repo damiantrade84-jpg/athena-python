@@ -61,6 +61,27 @@ def test_annotate_fetch_meta_detects_h4_one_bucket_lag_for_live_feed():
     assert out["lastBarStale"] is True
 
 
+def test_annotate_mt5_forex_h4_one_bucket_lag_not_last_bar_stale():
+    """Confirmed-only MT5 forex uses one closed bar; guardian must not mirror as blocking stale."""
+    meta = {}
+    candles = [{"time": _epoch("2026-04-24T05:00:00Z"), "close": 1.0}]
+    pair = {"type": "forex", "source": "mt5", "display": "USD/CHF"}
+
+    out = _annotate_fetch_meta_with_bar_freshness(
+        meta,
+        candles,
+        "H4",
+        now=_epoch("2026-04-24T09:30:00Z"),
+        offset_hours=1,
+        live_feed=True,
+        pair=pair,
+    )
+
+    assert out["bucketLag"] == 1
+    assert out["stalenessSeverity"] == "stale_1_bucket"
+    assert out["lastBarStale"] is False
+
+
 def test_live_forex_fetch_meta_exposes_h4_one_bucket_lag(monkeypatch):
     monkeypatch.setitem(CONFIG, "FOREX_H4_RESAMPLE_OFFSET_HOURS", 1.0)
     monkeypatch.setattr(
@@ -99,3 +120,4 @@ def test_live_forex_fetch_meta_exposes_h4_one_bucket_lag(monkeypatch):
     assert meta["bucketLag"] == 1
     assert meta["hasCurrentBucket"] is False
     assert meta["stalenessSeverity"] == "stale_1_bucket"
+    assert meta.get("lastBarStale") is False
