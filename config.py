@@ -881,7 +881,7 @@ CONFIG: dict = {
     "ENGINE_C_A_DEFAULT_MAX_SCORE_BY_TYPE": {},
     "ENGINE_B_BT_STRUCTURE_GATE_ENABLED": True,
     "ENGINE_B_STRUCTURE_GATE_ENABLED": True,
-    "ENGINE_B_SCAN_CONFIRMATION_GATE_ENABLED": True,
+    "ENGINE_B_SCAN_CONFIRMATION_GATE_ENABLED": False,
     "ENGINE_B_USE_EXECUTION_LEVELS_FOR_SCAN_SIGNALS": True,
     # ── Engine B (Naked Scalp) ────────────────────────────────────────────────
     "NAKED_ENGINE": {

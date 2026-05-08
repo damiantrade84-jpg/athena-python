@@ -456,6 +456,7 @@ function CockpitCard({ row, active, onClick }: { row: LdSymbolRow; active: boole
           <Tile label="Price" value={fmtPrice(row.latest_price, row.symbol, row.asset_type || undefined)} />
           <Tile
             label="Engine A"
+            title="Factor score vs threshold only. Scan trade tier does not require Engine B; see Engine C for consensus."
             value={
               row.engineA?.score != null
                 ? `${fmtNum(row.engineA.score, 2)} / ${fmtNum(row.engineA.maxScore, 2)}`
@@ -916,14 +917,16 @@ function Tile({
   label,
   value,
   accent,
+  title,
 }: {
   label: string;
   value: string;
   accent?: 'long' | 'short' | 'muted';
+  title?: string;
 }) {
   const fg = accent === 'long' ? 'text-long' : accent === 'short' ? 'text-short' : 'text-foreground';
   return (
-    <div className="p-2 rounded-md bg-muted/30">
+    <div className="p-2 rounded-md bg-muted/30" title={title}>
       <p className="text-[10px] uppercase text-muted-foreground">{label}</p>
       <p className={cn('text-xs font-mono font-bold truncate', fg)}>{value}</p>
     </div>

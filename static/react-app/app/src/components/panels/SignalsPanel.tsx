@@ -469,6 +469,11 @@ export default function SignalsPanel() {
         {activeTab === 'B' && scanCacheB === null && (
           <span className="text-warning">- No Engine B scan yet - click Scan Engine B</span>
         )}
+        {activeTab === 'A' && (
+          <span className="text-[10px] text-muted-foreground max-w-xl">
+            Engine A list = factor threshold trade tier only. Engine B data on cards is informational; use Engine C to compare.
+          </span>
+        )}
       </div>
 
       <div className="grid grid-cols-5 gap-4">

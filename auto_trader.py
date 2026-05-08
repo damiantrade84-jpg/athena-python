@@ -600,7 +600,12 @@ class AutoTrader:
             log.debug("[AUTO] conductor hydrate failed: %s", _e)
 
     def _can_execute(self, signal: dict, cfg: dict) -> tuple[bool, str]:
-        """Check score gate + session filter. Uses combined Engine A+B conviction when available."""
+        """Check score gate + session filter. Uses combined Engine A+B conviction when available.
+
+        Full-scan trade-tier labeling does not require Engine B alignment when
+        ``ENGINE_B_SCAN_CONFIRMATION_GATE_ENABLED`` is false; autopilot still
+        evaluates ``combinedConviction`` and alignment bonus independently here.
+        """
 
         asset_type = signal.get("type", "")
 

@@ -35,6 +35,19 @@ def test_scanner_demotes_trade_when_engine_b_not_aligned(monkeypatch):
     assert "Engine B confirmation failed" in reason
 
 
+def test_scanner_keeps_trade_when_gate_disabled_despite_engine_b_not_aligned(monkeypatch):
+    monkeypatch.setitem(scanner.CONFIG, "ENGINE_B_SCAN_CONFIRMATION_GATE_ENABLED", False)
+
+    tier, reason = scanner._apply_engine_b_scan_gate(
+        {"enginesAligned": False, "engine_b_verdict": "UNCLEAR"},
+        "trade",
+        "Trade-ready",
+    )
+
+    assert tier == "trade"
+    assert reason == "Trade-ready"
+
+
 def test_scanner_keeps_trade_when_engine_b_aligned(monkeypatch):
     monkeypatch.setitem(scanner.CONFIG, "ENGINE_B_SCAN_CONFIRMATION_GATE_ENABLED", True)
 

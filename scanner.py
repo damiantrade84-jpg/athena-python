@@ -39,8 +39,17 @@ log = logging.getLogger("sentinel")
 
 
 def _engine_b_scan_confirmation_gate_enabled(config: dict | None = None) -> bool:
+    """Return True when Engine A *trade* tier should require Engine B confirmation.
+
+    Default False: full-scan trade lists use Engine A thresholds only; Engine B
+    fields remain on the payload for Engine C / dashboards. When True (legacy),
+    a trade-tier row is demoted to watchlist unless ``enginesAligned``.
+
+    Autopilot and manual execution still apply their own conviction / risk gates
+    (see ``auto_trader.AutoTrader._can_execute``); they do not follow this flag.
+    """
     cfg = config or CONFIG
-    return bool(cfg.get("ENGINE_B_SCAN_CONFIRMATION_GATE_ENABLED", True))
+    return bool(cfg.get("ENGINE_B_SCAN_CONFIRMATION_GATE_ENABLED", False))
 
 
 def _select_engine_b_tf_candles(tf: str | None, tf_map: dict[str, list]) -> list:
@@ -86,6 +95,10 @@ def _apply_engine_b_scan_levels(signal: dict, conf_b: dict | None, res_b: dict |
 
 
 def _apply_engine_b_scan_gate(signal: dict, tier: str, reason: str) -> tuple[str, str]:
+    """Demote Engine A trade tier when B confirmation is required and missing.
+
+    Only runs when ``ENGINE_B_SCAN_CONFIRMATION_GATE_ENABLED`` is True.
+    """
     if not _engine_b_scan_confirmation_gate_enabled():
         return tier, reason
     if tier != "trade":
