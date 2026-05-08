@@ -1986,6 +1986,10 @@ class NakedEngine:
         )
         trigger_candles = h4_candles if _tfs["trigger"] == "H4" else h1_candles
 
+        # Zone/FVG candles: use confirmed-only when structure TF is H4 so
+        # zone and FVG detection matches the BOS/CHoCH forming-bar policy.
+        _zone_fvg_candles = struct_candles if structure_tf == "H4" else h4_candles
+
         # Extract numpy arrays for scipy
         h4_highs = np.array([float(c["high"]) for c in h4_candles])
         h4_lows = np.array([float(c["low"]) for c in h4_candles])
@@ -1994,17 +1998,19 @@ class NakedEngine:
         struct_lows = np.array([float(c["low"]) for c in struct_candles])
         struct_closes = np.array([float(c["close"]) for c in struct_candles])
         struct_atr = self._compute_atr_from_candles(struct_candles, fallback=atr)
-        zone_atr = self._compute_atr_from_candles(h4_candles, fallback=atr)
+        zone_atr = self._compute_atr_from_candles(_zone_fvg_candles, fallback=atr)
         struct_swings = self._swing_cache(struct_highs, struct_lows, struct_atr)
 
         # 1. Macro Zones (D1/H4)
         # Using H4 to find thick zones gives standard resolution.
+        _zf_highs = np.array([float(c["high"]) for c in _zone_fvg_candles])
+        _zf_lows = np.array([float(c["low"]) for c in _zone_fvg_candles])
         res_zones, sup_zones = self._find_zones(
-            h4_highs, h4_lows, zone_atr, regime, h4_candles
+            _zf_highs, _zf_lows, zone_atr, regime, _zone_fvg_candles
         )
 
         # Determine FVG overlap with zones — graded by quality
-        fvgs = self._detect_fvg(h4_candles)
+        fvgs = self._detect_fvg(_zone_fvg_candles)
         active_fvgs = [f for f in fvgs if not f.get("mitigated", False)]
 
         # 2. Immediate Structure Sequence and Macro H4 Sequence
@@ -2151,8 +2157,8 @@ class NakedEngine:
         order_blocks = self._detect_order_blocks(struct_candles, bos_data, atr, structure_tf=structure_tf)
         if registry_symbol:
             zone_registry = get_zone_registry()
-            zone_registry.upsert_zones(registry_symbol, structure_tf, order_blocks, [], atr=atr)
-            zone_registry.upsert_zones(registry_symbol, "H4", [], fvgs, atr=atr)
+            zone_registry.upsert_zones(registry_symbol, structure_tf, order_blocks, [], atr=atr, asset_type=asset_type)
+            zone_registry.upsert_zones(registry_symbol, "H4", [], fvgs, atr=atr, asset_type=asset_type)
             zone_registry.mark_mitigated(registry_symbol, structure_tf, current_price, atr)
             zone_registry.mark_mitigated(registry_symbol, "H4", current_price, atr)
             zone_registry.prune_old_zones()

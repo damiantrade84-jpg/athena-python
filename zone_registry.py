@@ -32,6 +32,7 @@ class ZoneRegistry:
         obs: list[dict] | None,
         fvgs: list[dict] | None,
         atr: float | None = None,
+        asset_type: str | None = None,
     ) -> None:
         key = self._key(symbol, timeframe)
         tolerance = max(float(atr or 0.0) * 0.5, 0.0)
@@ -44,6 +45,7 @@ class ZoneRegistry:
             for zone in incoming:
                 zone["symbol"] = key[0]
                 zone["timeframe"] = key[1]
+                zone["asset_type"] = asset_type or "unknown"
                 match = self._find_match(bucket, zone, tolerance)
                 if match is None:
                     bucket.append(zone)
@@ -71,13 +73,15 @@ class ZoneRegistry:
             for zone in self._zones.get(key, []):
                 if zone.get("mitigated"):
                     continue
-                midpoint = zone["bottom"] + ((zone["top"] - zone["bottom"]) * 0.5)
+                # Use zone edge crossing instead of midpoint to detect wick invalidations.
+                # Bullish zone: mitigated when price crosses below the bottom edge.
+                # Bearish zone: mitigated when price crosses above the top edge.
                 direction = zone.get("direction")
-                if direction == "bullish" and current_price <= midpoint:
+                if direction == "bullish" and current_price <= zone["bottom"]:
                     zone["mitigated"] = True
                     zone["mitigated_at"] = _utc_now_iso()
                     touched = True
-                elif direction == "bearish" and current_price >= midpoint:
+                elif direction == "bearish" and current_price >= zone["top"]:
                     zone["mitigated"] = True
                     zone["mitigated_at"] = _utc_now_iso()
                     touched = True
@@ -98,8 +102,16 @@ class ZoneRegistry:
         with self._lock:
             return bool(self._zones.get(key))
 
-    def prune_old_zones(self, max_age_hours: int = 168) -> None:
-        cutoff = datetime.now(timezone.utc) - timedelta(hours=max_age_hours)
+    def prune_old_zones(self, max_age_hours: int | None = None) -> None:
+        # Get asset-specific TTL from config if not provided explicitly.
+        if max_age_hours is None:
+            ttl_config = config.CONFIG.get("ZONE_CACHE_TTL_HOURS", {})
+            # Default to 168 hours (7 days) if config missing or not a dict
+            default_ttl = 168
+            if isinstance(ttl_config, dict):
+                default_ttl = ttl_config.get("forex", 168) or 168
+            max_age_hours = default_ttl
+
         changed = False
         with self._lock:
             for key, bucket in list(self._zones.items()):
@@ -111,6 +123,15 @@ class ZoneRegistry:
                         created_at = datetime.now(timezone.utc)
                     if created_at.tzinfo is None:
                         created_at = created_at.replace(tzinfo=timezone.utc)
+
+                    # Use asset-specific TTL from config if available.
+                    zone_ttl = max_age_hours
+                    asset_type = zone.get("asset_type", "unknown")
+                    ttl_config = config.CONFIG.get("ZONE_CACHE_TTL_HOURS", {})
+                    if isinstance(ttl_config, dict) and asset_type in ttl_config:
+                        zone_ttl = ttl_config[asset_type] or max_age_hours
+
+                    cutoff = datetime.now(timezone.utc) - timedelta(hours=zone_ttl)
                     stale = created_at < cutoff
                     untouched = int(zone.get("scan_count", 0)) <= 1 and not zone.get("mitigated", False)
                     if stale and untouched:

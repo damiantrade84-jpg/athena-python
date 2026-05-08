@@ -125,6 +125,8 @@ def _scalp_fetch_candles(pair: dict, tf: str, limit: int):
 
     Engine D crypto M1 prefers verified Binance WS candles where available,
     then falls back to the routed cache/REST path.
+
+    Returns (candles, source) where source is the actual data source used.
     """
     tf = str(tf or "").upper()
     if (
@@ -149,7 +151,8 @@ def _scalp_fetch_candles(pair: dict, tf: str, limit: int):
                         len(ws_candles),
                         age_s,
                     )
-                    return ws_candles[-limit:] if len(ws_candles) > limit else ws_candles
+                    candles = ws_candles[-limit:] if len(ws_candles) > limit else ws_candles
+                    return candles, "binance_ws"
                 log.info(
                     "[SCALP-DATA] %s M1 ws_unverified bars=%s age_s=%.0f -> fallback=routed",
                     display,
@@ -164,15 +167,16 @@ def _scalp_fetch_candles(pair: dict, tf: str, limit: int):
     try:
         from athena_runtime import rt
         candles = rt().fetch_candles(pair, tf, limit)
+        source = "binance_candle" if str(pair.get("type", "")).lower() == "crypto" else "routed"
         if tf == "M1" and str(pair.get("type", "")).lower() == "crypto":
             n = len(candles) if candles else 0
-            log.info("[SCALP-DATA] %s M1 source=routed bars=%s", pair.get("display", ""), n)
-        return candles
+            log.info("[SCALP-DATA] %s M1 source=%s bars=%s", pair.get("display", ""), source, n)
+        return candles, source
     except RuntimeError:
         log.error("[SCALP] fetch_candles unavailable — athena runtime not initialized")
     except Exception as e:
         log.error("[SCALP] fetch_candles error: %s", e)
-    return None
+    return None, "routed"
 
 
 def _rate_value(rate, field: str, default=0.0):
@@ -349,11 +353,12 @@ def _overlay_eodhd_volume_for_scalp(
       'eodhd_hist'   — EODHD intraday hist other interval
       'mt5_tick'     — fell back to raw MT5 tick-volume (overlay unavailable)
       'cache_miss'   — cache empty, bg re-warm triggered for next scan
+      'real_vol_required_unavailable' — real volume required but unavailable (config-gated)
     """
     if not candles or str(asset_type or "").lower() not in {"forex", "commodity", "index", "stock"}:
         return candles, "mt5_tick"
     cfg = CONFIG.get("SCALP_ENGINE", {})
-    if live and not cfg.get("EODHD_VOLUME_OVERLAY_LIVE_ENABLED", False):
+    if live and not cfg.get("EODHD_VOLUME_OVERLAY_LIVE_ENABLED", True):
         return candles, "mt5_tick"
     if not live and not cfg.get("EODHD_VOLUME_OVERLAY_BACKTEST_ENABLED", True):
         return candles, "mt5_tick"
@@ -382,6 +387,14 @@ def _overlay_eodhd_volume_for_scalp(
         vol_source = (volume_resp or {}).get("volume_source", "mt5_tick") if isinstance(volume_resp, dict) else "mt5_tick"
         volume_candles = (volume_resp or {}).get("candles") if isinstance(volume_resp, dict) else None
         if not volume_candles:
+            # Check if real volume is required for this asset type.
+            asset_lower = str(asset_type or "").lower()
+            if asset_lower == "forex" and cfg.get("REQUIRE_REAL_VOLUME_FOR_FOREX", False):
+                return candles, "real_vol_required_unavailable"
+            elif asset_lower == "commodity" and cfg.get("REQUIRE_REAL_VOLUME_FOR_COMMODITY", False):
+                return candles, "real_vol_required_unavailable"
+            elif asset_lower == "index" and cfg.get("REQUIRE_REAL_VOLUME_FOR_INDEX", False):
+                return candles, "real_vol_required_unavailable"
             return candles, vol_source
         merged, matched = overlay_candle_volumes(candles, volume_candles, tf)
         if matched > 0:
@@ -552,7 +565,7 @@ def _latest_candle_age_seconds(candles: list) -> float | None:
     return (_current_utc_datetime() - ts).total_seconds()
 
 
-def _scalp_candles_fresh(candles: list, timeframe: str, role: str = "execution") -> tuple[bool, str]:
+def _scalp_candles_fresh(candles: list, timeframe: str, role: str = "execution", asset_type: str = "forex") -> tuple[bool, str]:
     cfg = CONFIG.get("SCALP_ENGINE", {})
     max_age = max(1, int(cfg.get("MARKET_CANDLE_MAX_AGE_SEC", 900)))
     age_s = _latest_candle_age_seconds(candles)
@@ -567,6 +580,13 @@ def _scalp_candles_fresh(candles: list, timeframe: str, role: str = "execution")
     if age_s > max_age + tf_sec:
         role_key = str(role or "data").upper()
         return False, f"MARKET_DATA_STALE_{role_key}_{round(age_s)}s"
+
+    # Session-boundary check: if the latest candle is from a prior trading session
+    # and the market is now open, reject to prevent VP construction on stale session data.
+    # Crypto (24/7) is exempt. Forex/indices use 12h threshold (typical session gap).
+    if asset_type != "crypto" and age_s > 43200:  # 12 hours = typical session gap
+        role_key = str(role or "data").upper()
+        return False, f"PRIOR_SESSION_DATA_{role_key}_{round(age_s / 3600)}h"
     return True, "fresh"
 
 
@@ -3688,30 +3708,33 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
                     "type": "crypto",
                     "source": "binance",
                 }
-                candles_m15 = _scalp_fetch_candles(pair_dict, "M15", m15_count)
+                candles_m15, src_m15 = _scalp_fetch_candles(pair_dict, "M15", m15_count)
+                _vol_src_structure = src_m15
                 if not candles_m15 or len(candles_m15) < 30:
                     _record_stability_sample(display, asset_type, False, reason="insufficient_m15_candles")
                     skipped.append({"pair": display, "reason": "insufficient_m15_candles"})
                     continue
-                fresh, stale_reason = _scalp_candles_fresh(candles_m15, "M15", "structure")
+                fresh, stale_reason = _scalp_candles_fresh(candles_m15, "M15", "structure", asset_type)
                 if not fresh:
                     _record_stability_sample(display, asset_type, False, reason=stale_reason)
                     skipped.append({"pair": display, "reason": stale_reason})
                     continue
 
-                candles_m5 = _scalp_fetch_candles(pair_dict, "M5", m5_count)
+                candles_m5, src_m5 = _scalp_fetch_candles(pair_dict, "M5", m5_count)
+                _vol_src_dominant = src_m5
                 if not candles_m5 or len(candles_m5) < 10:
                     _record_stability_sample(display, asset_type, False, reason="insufficient_m5_candles")
                     skipped.append({"pair": display, "reason": "insufficient_m5_candles"})
                     continue
-                fresh, stale_reason = _scalp_candles_fresh(candles_m5, "M5", "context")
+                fresh, stale_reason = _scalp_candles_fresh(candles_m5, "M5", "context", asset_type)
                 if not fresh:
                     _record_stability_sample(display, asset_type, False, reason=stale_reason)
                     skipped.append({"pair": display, "reason": stale_reason})
                     continue
 
                 if execution_tf == "M1":
-                    candles_exec = _scalp_fetch_candles(pair_dict, "M1", m1_count)
+                    candles_exec, src_exec = _scalp_fetch_candles(pair_dict, "M1", m1_count)
+                    _vol_src_exec = src_exec
                     if not candles_exec or len(candles_exec) < 30:
                         _record_stability_sample(display, asset_type, False, reason="insufficient_m1_candles")
                         skipped.append({"pair": display, "reason": "insufficient_m1_candles"})
@@ -3731,7 +3754,7 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
                 htf_bias = None
 
                 if use_bias:
-                    candles_bias = _scalp_fetch_candles(pair_dict, bias_tf, h1_count)
+                    candles_bias, src_bias = _scalp_fetch_candles(pair_dict, bias_tf, h1_count)
                     if not candles_bias or len(candles_bias) < 200:
                         bias_require = bool(cfg.get("BIAS_REQUIRE_CONFIRMATION", True))
                         if bias_require:
@@ -3741,7 +3764,7 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
                             continue
                         # else: allow trade without bias confirmation
                     else:
-                        fresh, stale_reason = _scalp_candles_fresh(candles_bias, bias_tf, "bias")
+                        fresh, stale_reason = _scalp_candles_fresh(candles_bias, bias_tf, "bias", asset_type)
                         if not fresh:
                             _record_stability_sample(display, asset_type, False, reason=stale_reason)
                             skipped.append({"pair": display, "reason": stale_reason})
@@ -3794,6 +3817,10 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
                 )
                 candles_m15, _vol_src_m15 = _overlay_eodhd_volume_for_scalp(display, asset_type, "M15", candles_m15)
                 _vol_src_structure = _vol_src_m15
+                if _vol_src_m15 == "real_vol_required_unavailable":
+                    _record_stability_sample(display, asset_type, False, reason="real_volume_required_unavailable")
+                    skipped.append({"pair": display, "reason": "real_volume_required_unavailable"})
+                    continue
                 if len(candles_m15) < 30:
                     _record_stability_sample(display, asset_type, False, reason="insufficient_m15_candles")
                     skipped.append({"pair": display, "reason": "insufficient_m15_candles"})
@@ -3808,6 +3835,11 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
                     mt5_sym, "M5", m5_count, include_forming=trigger_include_forming
                 )
                 candles_m5, _vol_src_m5 = _overlay_eodhd_volume_for_scalp(display, asset_type, "M5", candles_m5)
+                _vol_src_dominant = _vol_src_m5
+                if _vol_src_m5 == "real_vol_required_unavailable":
+                    _record_stability_sample(display, asset_type, False, reason="real_volume_required_unavailable")
+                    skipped.append({"pair": display, "reason": "real_volume_required_unavailable"})
+                    continue
                 if len(candles_m5) < 10:
                     _record_stability_sample(display, asset_type, False, reason="insufficient_m5_candles")
                     skipped.append({"pair": display, "reason": "insufficient_m5_candles"})
@@ -3832,6 +3864,10 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
                     )
                     candles_exec, _vol_src_m1 = _overlay_eodhd_volume_for_scalp(display, asset_type, "M1", candles_exec)
                     _vol_src_exec = _vol_src_m1
+                    if _vol_src_m1 == "real_vol_required_unavailable":
+                        _record_stability_sample(display, asset_type, False, reason="real_volume_required_unavailable")
+                        skipped.append({"pair": display, "reason": "real_volume_required_unavailable"})
+                        continue
                     if len(candles_exec) < 30:
                         _record_stability_sample(display, asset_type, False, reason="insufficient_m1_candles")
                         skipped.append({"pair": display, "reason": "insufficient_m1_candles"})
@@ -3867,7 +3903,7 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
                             continue
                         # else: allow trade without bias confirmation
                     else:
-                        fresh, stale_reason = _scalp_candles_fresh(candles_bias, bias_tf, "bias")
+                        fresh, stale_reason = _scalp_candles_fresh(candles_bias, bias_tf, "bias", asset_type)
                         if not fresh:
                             _record_stability_sample(display, asset_type, False, reason=stale_reason)
                             skipped.append({"pair": display, "reason": stale_reason})
@@ -4280,6 +4316,8 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
                 "rr1":             levels["rr"],
                 "sl_distance":     levels["sl_distance"],
                 "sl_method":       levels["sl_method"],
+                # Volume source (top-level for UI rendering and stale data logging)
+                "volume_source":   vp.get("volume_source", _vol_src_dominant),
                 # VP fields
                 "zone_type":       setup["setup_type"],
                 "zone_high":       vp.get("vah"),

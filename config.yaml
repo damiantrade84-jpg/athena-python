@@ -62,6 +62,18 @@ ENGINE_B_FAST_FVG_DETECTION: true
 
 SCAN_DEBUG_CANDLE_META: false # Optional scan/debug payload metadata about candle resolution path.
 
+# Pre-scoring freshness gate: skip indicator calculation when any required TF
+# (D1/H4/H1) is stale. Prevents wasted CPU and false signal log entries.
+PRE_SCORING_FRESHNESS_GATE_ENABLED: true
+
+# Per-TF candle freshness diagnostic (stalenessSeverity, bucketLag, etc.).
+# Always populated for production visibility (unlike candleMeta which is debug-only).
+CANDLE_FRESHNESS_ENABLED: true
+
+# Crypto-specific D1 staleness threshold: max hours since last D1 bar open before
+# blocking scoring. Crypto trades 24/7 but Bybit REST can have delays.
+CRYPTO_D1_MAX_STALE_HOURS: 25
+
 THRESHOLD_AUDIT:
   ENABLED: false
   SHADOW_THRESHOLDS:
@@ -2212,18 +2224,24 @@ SCALP_ENGINE:
 
   TRADE_BUCKET_MIN_LEVELS: 3      # Minimum price buckets required before using aggTrade VP/CVD (lowered for reliability)
 
+  # Require real volume (EODHD overlay) for VP construction by asset type.
+  # When true, blocks VP construction if only tick_volume is available.
+  REQUIRE_REAL_VOLUME_FOR_FOREX: false
+  REQUIRE_REAL_VOLUME_FOR_COMMODITY: false
+  REQUIRE_REAL_VOLUME_FOR_INDEX: false
+
   TRADE_BUCKET_MIN_VOLUME: 0.0    # Optional minimum total bucket volume before using aggTrade VP
 
   EODHD_VOLUME_OVERLAY_LIVE_ENABLED: true   # When false in YAML, code default is also false; live overlay off → MT5 tick vol only
   EODHD_VOLUME_OVERLAY_BACKTEST_ENABLED: true # Use audited EODHD intraday volume in Engine D backtests
 
   # Live V2 US delayed quotes: 0 = off. When >0, skip volume delta injection when quote event time lags wall clock by more than this many seconds.
-  EODHD_LIVE_V2_MAX_QUOTE_LAG_SEC: 0
+  EODHD_LIVE_V2_MAX_QUOTE_LAG_SEC: 900
 
   # Reject VP when volume_profile fell back to range-proxy (zero real volume) for US stocks.
   VP_INVALIDATE_RANGE_PROXY_FOR_STOCKS: true
   # Optional: block stock scalp setups when structure overlay used EODHD 1h source (stale intraday risk).
-  BLOCK_STOCK_VP_ON_EODHD_1H_VOLUME: false
+  BLOCK_STOCK_VP_ON_EODHD_1H_VOLUME: true
 
   EODHD_VOLUME_WARMER_ENABLED: true         # Background prefetch for live EODHD volume cache
 
@@ -2234,6 +2252,21 @@ SCALP_ENGINE:
   EODHD_VOLUME_WARMER_ENGINE_A_ENABLED: true      # Pre-warm H1/H4/D1 for all non-crypto pairs (Engine A + chart Vision)
 
   EODHD_VOLUME_WARMER_SLOW_INTERVAL_SEC: 900      # 15 min - H1 TTL=55m, H4 TTL=235m, D1 TTL=23h; API-rate safe
+
+  # ── D1 Session Offset ───────────────────────────────────────────────────────
+  # D1 resample offset for MT5 brokers (default 0.0 = UTC 00:00).
+  # Some brokers (e.g., Pepperstone) use Sydney roll at 22:00 UTC for D1 candles.
+  # Adjust this to match the broker's actual D1 session start time.
+  D1_RESAMPLE_OFFSET_HOURS: 0.0
+
+  # ── Engine B Zone Cache TTL ─────────────────────────────────────────────────
+  # Zone pruning TTL by asset type. Crypto trades 24/7 so zones invalidate faster.
+  ZONE_CACHE_TTL_HOURS:
+    crypto: 72        # 3 days for crypto (24/7 markets, fast invalidation)
+    forex: 168        # 7 days for forex (default)
+    stock: 168        # 7 days for stocks (default)
+    commodity: 168    # 7 days for commodities (default)
+    index: 168        # 7 days for indices (default)
 
   # ── EODHD Stock Exchange Suffix Map ──────────────────────────────────────
   # Maps stock display name → EODHD exchange suffix. Dotless unmapped stocks are skipped

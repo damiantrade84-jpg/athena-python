@@ -5376,11 +5376,34 @@ def api_pair_scan():
         resolved_style = _resolve_scan_style(
             _normalize_style(requested_style), pair_obj
         )
+
+        # Preload market state for all TFs so confirmed-only policy matches
+        # the full-scan path — prevents forming-bar contamination in non-MT5
+        # assets and ensures consistent candle splitting.
+        _preloaded_state = {}
+        _preloaded_candles = {}
+        _preloaded_meta = {}
+        _lim = scan_candle_limits()
+        for _tf in ("D1", "H4", "H1"):
+            try:
+                if pair_obj.get("source") == "mt5":
+                    _state = _engine_b_live_market_state(pair_obj, _tf, _lim[_tf])
+                else:
+                    _state = fetch_market_state(pair_obj, _tf, _lim[_tf])
+                _preloaded_state[_tf] = _state
+                _preloaded_candles[_tf] = _market_state_series(_state, include_forming=True)
+                _preloaded_meta[_tf] = _get_candle_fetch_meta(pair_obj, _tf, _lim[_tf])
+            except Exception:
+                pass
+
         signal = analyze_pair(
             pair_obj,
             btc_bias,
             style=resolved_style,
             intermarket_snapshot=intermarket_snapshot,
+            preloaded_market_state=_preloaded_state,
+            preloaded_candles=_preloaded_candles,
+            preloaded_fetch_meta=_preloaded_meta,
         )
         if not signal:
             return (
@@ -10884,19 +10907,21 @@ def analyze_pair(
     if isinstance(_d1_state, dict):
         _d1_confirmed = list(_d1_state.get("confirmed") or [])
         _d1_forming = _d1_state.get("forming")
-        if pair.get("source") == "mt5" and pair.get("type") == "forex":
-            d1 = _d1_confirmed
-        else:
-            d1 = _d1_confirmed + ([_d1_forming] if _d1_forming else [])
-    if d1 is None:
-        d1 = fetch_candles(pair, "D1", _lim["D1"])
+        # Combine to raw candles for trim, then re-split after trimming.
+        d1_raw = _d1_confirmed + ([_d1_forming] if _d1_forming else [])
+    else:
+        d1_raw = d1
 
+    if d1_raw is None:
+        d1_raw = fetch_candles(pair, "D1", _lim["D1"])
+
+    # Trim session-ahead tail BEFORE market-state split to avoid misclassification.
     try:
         from athena_app.services.market_state import trim_mt5_d1_broker_session_ahead_tail
 
-        if d1:
-            d1, _d1_sess_trim = trim_mt5_d1_broker_session_ahead_tail(
-                pair, "D1", list(d1)
+        if d1_raw:
+            d1_raw, _d1_sess_trim = trim_mt5_d1_broker_session_ahead_tail(
+                pair, "D1", list(d1_raw)
             )
     except Exception as _d1_trim_err:
         log.debug(
@@ -10904,6 +10929,19 @@ def analyze_pair(
             pair.get("display", "?"),
             _d1_trim_err,
         )
+
+    # Re-split after trimming to get correct confirmed/forming classification.
+    if isinstance(_d1_state, dict):
+        _d1_confirmed = list(_d1_state.get("confirmed") or [])
+        _d1_forming = _d1_state.get("forming")
+        # Apply confirmed-only policy to all forex pairs regardless of source
+        # to prevent forming-bar contamination in RSI/EMA/ATR calculations.
+        if pair.get("type") == "forex":
+            d1 = _d1_confirmed
+        else:
+            d1 = _d1_confirmed + ([_d1_forming] if _d1_forming else [])
+    else:
+        d1 = d1_raw
 
     _h4_state = preloaded_market_state.get("H4")
     h4 = preloaded_candles.get("H4")
@@ -10934,6 +10972,79 @@ def analyze_pair(
             f"D1={len(d1)}/220 H4={len(h4)}/50 H1={len(h1)}/50"
         )
         return None
+
+    # Pre-scoring freshness gate: skip indicator calculation if any required
+    # TF is stale. This prevents wasted CPU and false signal log entries from
+    # scoring on stale data that would be blocked at execution time anyway.
+    if CONFIG.get("PRE_SCORING_FRESHNESS_GATE_ENABLED", True):
+        try:
+            from athena_app.services.market_state import candle_freshness_diagnostic
+
+            _stale_tfs = []
+            _freshness_diag = {}
+            for _tf, _candles in (("D1", d1), ("H4", h4), ("H1", h1)):
+                _diag = candle_freshness_diagnostic(
+                    pair, _tf, _candles,
+                    source=pair.get("source"),
+                )
+                _freshness_diag[_tf] = _diag
+                _sev = _diag.get("stalenessSeverity", "")
+                if _sev and _sev != "fresh":
+                    _stale_tfs.append(f"{_tf}:{_sev}")
+
+            # Crypto-specific D1 staleness threshold: enforce max hours since last bar open.
+            if pair.get("type") == "crypto" and d1:
+                try:
+                    import time
+                    _last_candle = d1[-1] if d1 else None
+                    if _last_candle:
+                        _last_time = _last_candle.get("time")
+                        if _last_time:
+                            _last_ts = _coerce_utc_datetime(_last_time)
+                            if _last_ts:
+                                _now = _current_utc_datetime()
+                                _age_hours = (_now - _last_ts).total_seconds() / 3600
+                                _max_hours = CONFIG.get("CRYPTO_D1_MAX_STALE_HOURS", 25)
+                                if _age_hours > _max_hours:
+                                    _stale_tfs.append(f"D1:crypto_stale_{int(_age_hours)}h")
+                except Exception:
+                    pass
+
+            if _stale_tfs:
+                _reason = "STALE_DATA_PRE_SCORING:" + ",".join(_stale_tfs)
+                log.warning(
+                    "[ANALYZE] %s pre-scoring freshness block: %s",
+                    pair.get("display", "?"),
+                    _reason,
+                )
+                return {
+                    "pair": pair.get("display"),
+                    "symbol": pair.get("symbol"),
+                    "score": 0,
+                    "confluenceScore": 0,
+                    "maxScore": 3.0,
+                    "direction": "neutral",
+                    "trendState": "neutral",
+                    "executable": False,
+                    "dataFreshness": {
+                        "allowed": False,
+                        "reason": _reason,
+                        "diagnostics": _freshness_diag,
+                    },
+                    "candleFetchMeta": {
+                        "D1": _freshness_diag.get("D1"),
+                        "H4": _freshness_diag.get("H4"),
+                        "H1": _freshness_diag.get("H1"),
+                        "pairSource": pair.get("source"),
+                    },
+                    "is_forming": is_forming,
+                }
+        except Exception as _prefresh_err:
+            log.debug(
+                "[ANALYZE] %s pre-scoring freshness check skipped: %s",
+                pair.get("display", "?"),
+                _prefresh_err,
+            )
 
     d1i = calc_indicators_with_normalized(d1, pair.get("type", "stock"))
 
@@ -11804,6 +11915,7 @@ def analyze_pair(
             "H4": _candle_fetch_meta.get("H4"),
             "H1": _candle_fetch_meta.get("H1"),
         }
+    if CONFIG.get("CANDLE_FRESHNESS_ENABLED", True):
         try:
             from athena_app.services.market_state import candle_freshness_diagnostic
 
