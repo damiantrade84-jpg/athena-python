@@ -1195,13 +1195,15 @@ def mt5_execute(signal: dict, approval: "RiskApproval") -> dict:  # noqa: F821
             "type": order_type,
             "price": price,
             "sl": sl,
-            "tp": v_tp,
             "deviation": 20,
             "magic": 240601,
             "comment": f"Ath|{pair[:12]}|{signal.get('confluenceScore', 0):.2f}"[:31],
             "type_time": mt5.ORDER_TIME_GTC,
             "type_filling": _SYMBOL_FILLING_MODES.get(mt5_symbol, mt5.ORDER_FILLING_IOC),
         }
+        # Only include TP if valid (some brokers reject tp=0 as invalid)
+        if v_tp and v_tp > 0:
+            request["tp"] = v_tp
 
         log.info(f"[MT5] Sending order: {direction} {v_size} {mt5_symbol} @ {price} | SL: {sl} | TP: {v_tp}")
         result = _send_order_with_filling_fallback(request)
