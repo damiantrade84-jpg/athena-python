@@ -656,6 +656,12 @@ BT_NUM_VARIANTS_TRIED: 1
 
 BT_BOOTSTRAP_CI_ITERATIONS: 1000
 
+# PSR withheld as "available" until trade count reaches this floor (research integrity UI).
+BT_MIN_TRADES_FOR_PSR_RELIABILITY: 30
+
+# WF payload flags SQN badges when realised trade count stays below typical robustness heuristic.
+BT_LOW_SAMPLE_SQ_WARN_TRADES: 30
+
 BT_SLIPPAGE_MODEL:
 
   ENABLED: true
@@ -1997,6 +2003,15 @@ AI_ON_DEMAND_ONLY: true
 # Engine C: fraction of A/B blend replaced by meta-learner trust (0..1). Code default 0.20.
 
 ENGINE_C_META_BLEND: 0.20
+
+# Minimum reward:risk (geometric from entry/sl/tp1) for consensus signals in risk_check.
+ENGINE_C_EXEC_MIN_RR: 1.0
+
+# When Engine A omits maxScore, use this default (see ENGINE_C_A_DEFAULT_MAX_SCORE_BY_TYPE).
+ENGINE_C_A_DEFAULT_MAX_SCORE: 3.0
+
+ENGINE_C_A_DEFAULT_MAX_SCORE_BY_TYPE: {}
+
 
 ENGINE_C_B_ONLY_MULT: 0.65
 

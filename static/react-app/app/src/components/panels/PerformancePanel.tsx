@@ -43,7 +43,9 @@ export default function PerformancePanel() {
     return [];
   }, [perf?.equity_curve]);
 
-  const dailyPnl = useMemo(() => Array.isArray(perf?.daily_pnl) ? perf!.daily_pnl : [], [perf?.daily_pnl]);
+  const dailyPnl = useMemo(() => (Array.isArray(perf?.daily_pnl) ? perf!.daily_pnl : []) as { date?: string; pnl?: number }[], [perf?.daily_pnl]);
+
+  const metricNotes = perf?.metric_interpretation_notes;
 
   const byEngineEntries: [string, PerformanceEngineRow][] = useMemo(() => {
     const src = perf?.performance_by_engine || perf?.by_engine;
@@ -68,6 +70,15 @@ export default function PerformancePanel() {
   return (
     <div className="space-y-5">
       {error && <ErrorBanner message={error} onRetry={refresh} />}
+
+      {Array.isArray(metricNotes) && metricNotes.length > 0 && (
+        <div className="rounded-md border border-border/60 bg-muted/20 px-3 py-2 text-[11px] text-muted-foreground space-y-1">
+          <p className="font-semibold text-foreground/80 uppercase tracking-wider text-[10px]">Metrics note</p>
+          {metricNotes.map((note, i) => (
+            <p key={`mn-${i}`}>{note}</p>
+          ))}
+        </div>
+      )}
 
       <div className="grid grid-cols-6 gap-3">
         <KpiCard title="Total Trades" value={num(perf?.total_trades).toString()} loading={loading} />
@@ -246,18 +257,13 @@ export default function PerformancePanel() {
   );
 }
 
-function KpiCard({ title, value, loading, sqn }: { title: string; value: string | number; loading?: boolean; sqn?: boolean }) {
-  let colorClass = '';
-  if (sqn && typeof value === 'string') {
-    const n = parseFloat(value);
-    colorClass = n >= 2 ? 'text-long' : n >= 1 ? 'text-warning' : 'text-short';
-  }
+function KpiCard({ title, value, loading }: { title: string; value: string | number; loading?: boolean }) {
   return (
     <Card className="border-border/60 bg-card/50">
       <CardContent className="p-3">
         <p className="text-[10px] uppercase tracking-wider text-muted-foreground">{title}</p>
         {loading ? <Skeleton className="h-7 w-20 mt-1" /> : (
-          <p className={`text-2xl font-mono font-bold mt-1 ${colorClass}`}>{value}</p>
+          <p className="text-2xl font-mono font-bold mt-1">{value}</p>
         )}
       </CardContent>
     </Card>

@@ -50,7 +50,14 @@ from scoring import (
     is_trend_state_blocked,
 )
 from meta_learner import meta_report
-from research_metrics import build_research_metrics, enrich_backtest_summary
+from research_metrics import (
+    annualized_sharpe_from_r_multiples,
+    annualized_sortino_engine_a_from_r_multiples,
+    build_research_metrics,
+    compute_trades_per_year_from_span,
+    enrich_backtest_summary,
+    trades_per_year_from_parallel_trade_days,
+)
 from research_validation import (
     backtest_bar_validation_state,
     build_validation_report,
@@ -2897,38 +2904,16 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
 
     r_skew = round(avg_win / abs(avg_loss), 2) if avg_loss != 0 else None
 
-    # Sharpe ratio (annualized): mean(R) / std(R) * sqrt(trades_per_year)
+    # Sharpe / Sortino (annualized on R-multiples; shared with live /api/performance helpers)
 
-    # Sortino ratio: mean(R) / downside_std(R) * sqrt(trades_per_year)
+    _trade_date0 = str(trades[0].get("date", ""))[:10] if trades else None
+    _trade_date1 = str(trades[-1].get("date", ""))[:10] if trades else None
+    _trades_per_year = compute_trades_per_year_from_span(len(trades), _trade_date0, _trade_date1)
 
-    if len(trades) >= 2:
-        try:
-            _dur_days = (
-                pd.to_datetime(trades[-1]["date"]) - pd.to_datetime(trades[0]["date"])
-            ).days
+    sharpe = annualized_sharpe_from_r_multiples(r_values, _trades_per_year, decimals=2)
 
-            _trades_per_year = len(trades) / max(1, _dur_days) * 365
-
-        except Exception:
-            _trades_per_year = float(len(trades))
-
-    else:
-        _trades_per_year = 1.0
-
-    _std_r = _var**0.5 if _var > 0 else 0
-
-    sharpe = round(avg_r / _std_r * (_trades_per_year**0.5), 2) if _std_r > 0 else 0
-
-    _downside = [r for r in r_values if r < 0]
-
-    _down_var = (
-        sum(r**2 for r in _downside) / (len(_downside) - 1) if len(_downside) > 1 else 0
-    )
-
-    _down_std = _down_var**0.5
-
-    sortino = (
-        round(avg_r / _down_std * (_trades_per_year**0.5), 2) if _down_std > 0 else 0
+    sortino = annualized_sortino_engine_a_from_r_multiples(
+        r_values, _trades_per_year, decimals=2
     )
 
     # B2: Monte Carlo drawdown simulation â€" 500 random shuffles of trade sequence
@@ -3036,6 +3021,8 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
 
     _is_insufficient = len(is_trades) < 5
 
+    _sq_warn_n = max(3, int(CONFIG.get("BT_LOW_SAMPLE_SQ_WARN_TRADES", 30) or 30))
+
     wf_split = {
         "is_trades": len(is_trades),
         "oos_trades": len(oos_trades),
@@ -3047,6 +3034,8 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
         "wf_note": "IS period had insufficient setups (<5 trades) — OOS result is fully out-of-sample"
         if _is_insufficient
         else None,
+        "lowSampleSqnWarning": len(trades) < _sq_warn_n,
+        "lowSampleSqnTradeFloor": _sq_warn_n,
     }
 
     # F5: Buy-and-hold benchmark — passive return over full D1 data period
@@ -3163,6 +3152,13 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
         ),
     )
 
+    _bt_metrics_notes: list[str] = []
+    if pair.get("type") == "forex":
+        _bt_metrics_notes.append(
+            "Forex BT compounds R at base risk_pct; aggregate path can diverge from live MT5 paper audits — "
+            "align risk_scale before comparing Sharpe/SQN to live."
+        )
+
     _bt_result = {
         "pair": pair["display"],
         "symbol": pair.get("symbol") or pair.get("display"),
@@ -3191,6 +3187,7 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
         "btStyleRequested": requested_style,
         "quantileGateNote": _engine_a_bt_gate_note(),
         "evalThreshold": bt_min,
+        "metricsInterpretationNotes": _bt_metrics_notes,
         "scanQuantileEnabled": CONFIG.get("SCAN_QUANTILE_ENABLED", True),
         "bhReturn": bh_return,
         "calibrationReport": calibration_summary,
@@ -3262,6 +3259,12 @@ def _format_backtest_results(
     profit_factor = round(gross_profit / gross_loss, 2) if gross_loss > 0 else None
     total_r = round(sum(_r(t) for t in trades), 2)
     r_values = [_r(t) for t in trades]
+    _trade_day_hints: list[str | None] = []
+    for t in trades:
+        d = t.get("date") or t.get("time")
+        raw = str(d).strip() if d is not None else ""
+        _trade_day_hints.append(raw[:10] if len(raw) >= 10 else None)
+
     avg_r = round(total_r / len(trades), 3) if trades else 0
     avg_win = round(sum(_r(t) for t in wins) / len(wins), 3) if wins else 0
     avg_loss = round(sum(_r(t) for t in losses) / len(losses), 3) if losses else 0
@@ -3281,18 +3284,18 @@ def _format_backtest_results(
     # R-skew (avg_win / |avg_loss|)
     r_skew = round(avg_win / abs(avg_loss), 2) if avg_loss != 0 else None
 
-    # Sharpe / Sortino (daily-ish approximation)
-    _std = _var**0.5
-    sharpe = round(avg_r / _std, 3) if _std > 0 else 0
-    neg_dev = sum((r - avg_r) ** 2 for r in r_values if r < 0)
-    sortino_denom = (neg_dev / len(r_values)) ** 0.5 if neg_dev > 0 else 0
-    sortino = round(avg_r / sortino_denom, 3) if sortino_denom > 0 else 0
+    _tpy = trades_per_year_from_parallel_trade_days(r_values, _trade_day_hints)
 
-    # Simple equity curve (cumulative R)
+    sharpe = annualized_sharpe_from_r_multiples(r_values, _tpy, decimals=2)
+    sortino = annualized_sortino_engine_a_from_r_multiples(r_values, _tpy, decimals=2)
+
+    _eq_risk_pct = float(_live_base_risk_pct(str(pair.get("type") or "stock")))
+
+    # Equity compounds R with live base risk_pct (parity with Engine A MC paths).
     equity_curve = []
     eq = 1.0
     for rv in r_values:
-        eq = round(eq * (1 + rv * 0.01), 4)
+        eq = round(eq * (1.0 + float(rv) * _eq_risk_pct), 4)
         equity_curve.append(eq)
 
     # Max drawdown
@@ -3305,6 +3308,8 @@ def _format_backtest_results(
         if dd > max_dd_pct:
             max_dd_pct = dd
     max_dd_pct = round(max_dd_pct, 2)
+
+    _sq_warn_n = max(3, int(CONFIG.get("BT_LOW_SAMPLE_SQ_WARN_TRADES", 30) or 30))
 
     # Max recovery bars calculation
     _peak_eq = 1.0
@@ -3328,6 +3333,8 @@ def _format_backtest_results(
         "oos_sqn": _sqn_for(oos_trades) if oos_trades else None,
         "overfit_flag": False,
         "wf_note": "Engine B walk-forward split uses trade oos flags",
+        "lowSampleSqnWarning": len(trades) < _sq_warn_n,
+        "lowSampleSqnTradeFloor": _sq_warn_n,
     }
 
     # Monte Carlo drawdown simulation (500 shuffles)
@@ -3343,7 +3350,7 @@ def _format_backtest_results(
             _mc_peak = 1.0
             _mc_max_dd = 0.0
             for rv in _shuffled:
-                _mc_eq = _mc_eq * (1 + rv * 0.01)
+                _mc_eq = _mc_eq * (1.0 + float(rv) * _eq_risk_pct)
                 if _mc_eq > _mc_peak:
                     _mc_peak = _mc_eq
                 _dd = (_mc_peak - _mc_eq) / _mc_peak * 100 if _mc_peak > 0 else 0
@@ -3372,6 +3379,13 @@ def _format_backtest_results(
         "breaker": {"count": len(_breaker_trades), "wr": _wr(_breaker_trades)},
         "fvg_overlap": {"count": len(_fvg_trades), "wr": _wr(_fvg_trades)},
     }
+
+    _metrics_interpretation: list[str] = []
+    if pair.get("type") == "forex":
+        _metrics_interpretation.append(
+            "Forex BT equity compounds R at base risk_pct; live path adapters may realise different increments — "
+            "compare BT Sharpe/SQN vs live audit cautiously."
+        )
 
     result = {
         # ── Core identity (matches Engine A) ──────────────────────────────────
@@ -3416,6 +3430,7 @@ def _format_backtest_results(
             "bt": CONFIG.get("VOLUME_THRESHOLD_BACKTEST", 1.2),
             "live": CONFIG.get("VOLUME_THRESHOLD", 1.5),
         },
+        "metricsInterpretationNotes": _metrics_interpretation,
         # ── Curves & trades (CRITICAL — JS crashes without these) ─────────────
         "equityCurve": equity_curve,
         "trades": trades,
@@ -3472,23 +3487,17 @@ def _format_backtest_results(
         )
 
 
-    # --- REGIME SEGMENTED REPORTING & RESEARCH FOLDS ---
+    # --- REGIME SEGMENTED REPORTING (R from resultR/r_multiple via _r) ---
     regimes = {}
-    is_vals, oos_vals = [], []
     for t in trades:
         rgm = t.get("regime", "UNKNOWN")
-        r_mult = t.get("r_multiple", 0)
+        r_mult = float(_r(t))
         if rgm not in regimes:
             regimes[rgm] = {"trades": 0, "wins": 0, "r_sum": 0.0}
         regimes[rgm]["trades"] += 1
         regimes[rgm]["r_sum"] += r_mult
         if r_mult > 0:
             regimes[rgm]["wins"] += 1
-
-        if t.get("oos"):
-            oos_vals.append(r_mult)
-        else:
-            is_vals.append(r_mult)
 
     for k, v in regimes.items():
         v["win_rate"] = round(v["wins"] / max(1, v["trades"]), 4)
@@ -3497,14 +3506,13 @@ def _format_backtest_results(
     result["regime_performance"] = regimes
     result["validation_mode"] = validation_mode
 
+    _tpy_trade = trades_per_year_from_parallel_trade_days(r_values, _trade_day_hints)
     return enrich_backtest_summary(
         result,
         returns=r_values,
-        in_sample_scores=is_vals,
-        out_of_sample_scores=oos_vals,
-        chosen_index=0,
         num_trials=int(CONFIG.get("BT_NUM_VARIANTS_TRIED", 1) or 1),
         bootstrap_iterations=int(CONFIG.get("BT_BOOTSTRAP_CI_ITERATIONS", 1000) or 0),
+        trades_per_year=_tpy_trade,
     )
 
 
@@ -4603,6 +4611,7 @@ def backtest_pair_consensus(
     _c_funnel = {
         "bars_evaluated": 0, "a_no_signal": 0, "b_no_signal": 0,
         "direction_conflict": 0, "low_conviction": 0, "passed_gate": 0,
+        "invalid_bt_levels": 0,
     }
 
     COOLDOWN = 2
@@ -4849,6 +4858,7 @@ def backtest_pair_consensus(
         selected_sl_source = _bt_levels.get("selected_sl_source", "unknown")
 
         if sl is None or tp is None or target_rr <= 0:
+            _c_funnel["invalid_bt_levels"] += 1
             i += 1
             continue
         if abs(entry - sl) / entry > _max_sl_pct:

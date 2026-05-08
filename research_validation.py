@@ -273,6 +273,11 @@ def build_validation_report(
             "temporal_mode_is_standard: IS/OOS is a fixed 70/30 chronological label "
             "without an embargo between IS and OOS unless you select embargoed/walk_forward*"
         )
+        notes.append(
+            f"purge_gap_bars ({int(purge_gap)}) and walk_forward folds ({int(folds)}) "
+            "only simulate trades/skips once temporal mode is embargoed or walk_forward* — "
+            "standard ignores those parameters for execution gating"
+        )
     if live_parity_execution:
         notes.append(
             "live_parity: higher slippage multiplier and live volume threshold — "

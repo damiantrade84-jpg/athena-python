@@ -151,7 +151,10 @@ export interface PerformanceMetrics {
   worst_pair?: string | null;
   average_holding_period_hours?: number | null;
   equity_curve?: number[] | { date: string; equity: number }[];
+  /** Aggregated realised P&amp;L per close date (from audit_log rows with parseable exit timestamps). */
   daily_pnl?: { date: string; pnl: number }[];
+  /** Human-readable notes on how headline metrics are computed (e.g. Sharpe annualiser). */
+  metric_interpretation_notes?: string[];
   last_20_trades?: Record<string, unknown>[];
   execution_quality?: {
     trades_with_slippage?: number;

@@ -13118,6 +13118,27 @@ def api_performance():
         if not trades:
             trades = all_trades  # fallback: if everything is unknown, show all
 
+        from collections import defaultdict
+
+        from research_metrics import (
+            annualized_sharpe_from_r_multiples,
+            annualized_sortino_engine_a_from_r_multiples,
+            trades_per_year_from_parallel_trade_days,
+        )
+
+        _epoch = datetime(1970, 1, 1, tzinfo=timezone.utc)
+
+        def _parse_close_dt(trade: dict):
+            for key in ("exit_time", "closed_at", "close_time", "ts"):
+                raw = trade.get(key)
+                if raw is None or raw == "":
+                    continue
+                try:
+                    return datetime.fromisoformat(str(raw).strip().replace("Z", "+00:00"))
+                except Exception:
+                    continue
+            return _epoch
+
         def _is_breakeven_trade(t: dict) -> bool:
             reason = str(t.get("exit_reason") or "").upper()
             pnl = _safe_float(t.get("pnl"))
@@ -13150,9 +13171,17 @@ def api_performance():
 
         win_rate = round(win_count / decisive_total * 100, 1) if decisive_total else 0
 
-        r_vals = [
-            t.get("r_multiple") for t in trades if t.get("r_multiple") is not None
-        ]
+        r_vals: list[float] = []
+        _r_day_hints: list[str | None] = []
+        for _t in trades:
+            _rm = _safe_float(_t.get("r_multiple"))
+            if _rm is None:
+                continue
+            r_vals.append(float(_rm))
+            _cd = _parse_close_dt(_t)
+            _r_day_hints.append(
+                _cd.date().isoformat() if _cd > _epoch else None
+            )
 
         avg_r = round(sum(r_vals) / len(r_vals), 2) if r_vals else 0
 
@@ -13185,44 +13214,32 @@ def api_performance():
 
         max_dd_pct = round(max_dd / peak * 100, 1) if peak > 0 else 0
 
-        # Sharpe + Sortino ratios (from R-multiples)
-
-        _perf_avg_r = sum(r_vals) / len(r_vals) if r_vals else 0
-
-        _perf_var = (
-            sum((r - _perf_avg_r) ** 2 for r in r_vals) / (len(r_vals) - 1)
-            if len(r_vals) > 1
-            else 0
+        # Sharpe / Sortino aligned with backtests: annualised on R using calendar span hints.
+        _trades_per_live = trades_per_year_from_parallel_trade_days(r_vals, _r_day_hints)
+        perf_sharpe = annualized_sharpe_from_r_multiples(
+            r_vals, _trades_per_live, decimals=2
+        )
+        perf_sortino = annualized_sortino_engine_a_from_r_multiples(
+            r_vals, _trades_per_live, decimals=2
         )
 
-        _perf_std = _perf_var**0.5
+        metric_interpretation_notes = [
+            "Sharpe/Sortino use closed-trade R-multiples with the same annualiser as backtests "
+            "(calendar span × 365 / trade count)."
+        ]
 
-        perf_sharpe = (
-            round(_perf_avg_r / _perf_std * (len(r_vals) ** 0.5), 2)
-            if _perf_std > 0
-            else 0
-        )
-
-        _perf_down = [r for r in r_vals if r < 0]
-
-        _perf_down_var = (
-            sum(r**2 for r in _perf_down) / (len(_perf_down) - 1)
-            if len(_perf_down) > 1
-            else 0
-        )
-
-        _perf_down_std = _perf_down_var**0.5
-
-        perf_sortino = (
-            round(_perf_avg_r / _perf_down_std * (len(r_vals) ** 0.5), 2)
-            if _perf_down_std > 0
-            else 0
-        )
+        daily_buckets: defaultdict[str, float] = defaultdict(float)
+        for _t in trades:
+            _pnlx = _safe_float(_t.get("pnl"))
+            if _pnlx is None:
+                continue
+            _cd_p = _parse_close_dt(_t)
+            if _cd_p <= _epoch:
+                continue
+            daily_buckets[_cd_p.date().isoformat()] += float(_pnlx)
+        daily_pnl = [{"date": d, "pnl": round(v, 2)} for d, v in sorted(daily_buckets.items())]
 
         # Win rate by regime (trendState)
-
-        from collections import defaultdict
-
         regime_stats: dict = defaultdict(lambda: {"w": 0, "l": 0})
 
         for t in trades:
@@ -13342,20 +13359,7 @@ def api_performance():
 
         avg_holding = round(sum(hp_vals) / len(hp_vals), 1) if hp_vals else None
 
-        # Last 20 completed trades - parsed close time + id (string sort breaks on ISO variants)
-
-        _epoch = datetime(1970, 1, 1, tzinfo=timezone.utc)
-
-        def _parse_close_dt(trade: dict):
-            for key in ("exit_time", "closed_at", "close_time", "ts"):
-                raw = trade.get(key)
-                if raw is None or raw == "":
-                    continue
-                try:
-                    return datetime.fromisoformat(str(raw).strip().replace("Z", "+00:00"))
-                except Exception:
-                    continue
-            return _epoch
+        # Last 20 completed trades — close time + id (string sort breaks on ISO variants)
 
         def _trade_closed_sort_key(trade: dict):
             return (_parse_close_dt(trade), int(trade.get("id") or 0))
@@ -13470,6 +13474,8 @@ def api_performance():
                 "worst_pair": worst_pair,
                 "average_holding_period_hours": avg_holding,
                 "equity_curve": equity_curve,
+                "daily_pnl": daily_pnl,
+                "metric_interpretation_notes": metric_interpretation_notes,
                 "last_20_trades": last_20,
                 "execution_quality": execution_quality,
                 "attribution_by_source": attribution_by_source,
