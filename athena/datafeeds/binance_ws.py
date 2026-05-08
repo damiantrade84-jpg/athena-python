@@ -70,6 +70,12 @@ class BinanceWS:
         """Connect to combined Binance WebSocket stream."""
         url = binance_futures_micro_stream_url(self.symbol)
         try:
+            # ping_interval=None: do NOT send outbound WS-level pings. Binance Futures
+            # under our ~30-connection fan-out delivers slow/missed pongs which trip
+            # the library keepalive (code 1011 keepalive ping timeout). Binance sends
+            # its own ping frame every 3 min; the library auto-responds with pong, so
+            # the connection stays alive. Dead streams are caught by the recv timeout
+            # below, mirroring the working pattern in bybit_ws.py.
             async with websockets.connect(
                 url,
                 ping_interval=None,
@@ -90,25 +96,16 @@ class BinanceWS:
                             "Set env SENTINEL_CONSOLE_LEVEL=INFO to see all connect lines, or tail logs/sentinel.log.",
                             self.symbol,
                         )
-                _last_ping = time.time()
                 while self._running:
                     try:
-                        raw = await asyncio.wait_for(ws.recv(), timeout=120)
-
-                        if time.time() - _last_ping > 20:
-                            try:
-                                await ws.ping()
-                                _last_ping = time.time()
-                            except Exception:
-                                pass
-
+                        raw = await asyncio.wait_for(ws.recv(), timeout=60)
                         if not raw:
                             continue
                         msg = json.loads(raw)
                         await self._handle_message(msg)
                     except asyncio.TimeoutError:
                         log.warning(
-                            f"[BinanceWS] {self.symbol}: receive timeout after 120s; reconnecting"
+                            f"[BinanceWS] {self.symbol}: receive timeout after 60s; reconnecting"
                         )
                         break
                     except json.JSONDecodeError as e:
