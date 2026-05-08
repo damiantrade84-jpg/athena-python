@@ -795,6 +795,8 @@ DATA_FRESHNESS_GATES:
   WARN_ON_STALE_SCAN: true
   BLOCK_EXECUTION_ON_STALE: true
   BLOCK_TIMEFRAMES:
+    - M5
+    - M15
     - H1
     - H4
     - D1
@@ -804,6 +806,13 @@ DATA_FRESHNESS_GATES:
     - stale_multi_bucket
     - error_path_mismatch
     - error_offset_mismatch
+
+# When true, analyze_pair / Engine D set signal["executable"]=false if data freshness blocks execution.
+SIGNAL_EXECUTABLE_FALSE_WHEN_FRESHNESS_BLOCKS: true
+
+# Engine B: use confirmed-only candles for BOS/struct series when split_market_state detects forming bar.
+ENGINE_B_STRIP_FORMING_STRUCT: true
+ENGINE_B_STRUCT_CONFIRMED_MIN_BARS: 20
 
 
 
@@ -2189,9 +2198,16 @@ SCALP_ENGINE:
 
   TRADE_BUCKET_MIN_VOLUME: 0.0    # Optional minimum total bucket volume before using aggTrade VP
 
-  EODHD_VOLUME_OVERLAY_LIVE_ENABLED: true   # Live uses warmed cache only; MT5 volume remains instant fallback
-
+  EODHD_VOLUME_OVERLAY_LIVE_ENABLED: true   # When false in YAML, code default is also false; live overlay off → MT5 tick vol only
   EODHD_VOLUME_OVERLAY_BACKTEST_ENABLED: true # Use audited EODHD intraday volume in Engine D backtests
+
+  # Live V2 US delayed quotes: 0 = off. When >0, skip volume delta injection when quote event time lags wall clock by more than this many seconds.
+  EODHD_LIVE_V2_MAX_QUOTE_LAG_SEC: 0
+
+  # Reject VP when volume_profile fell back to range-proxy (zero real volume) for US stocks.
+  VP_INVALIDATE_RANGE_PROXY_FOR_STOCKS: true
+  # Optional: block stock scalp setups when structure overlay used EODHD 1h source (stale intraday risk).
+  BLOCK_STOCK_VP_ON_EODHD_1H_VOLUME: false
 
   EODHD_VOLUME_WARMER_ENABLED: true         # Background prefetch for live EODHD volume cache
 

@@ -13,6 +13,11 @@ import time
 
 log = logging.getLogger("sentinel")
 
+try:
+    from config import CONFIG
+except ImportError:  # pragma: no cover
+    CONFIG = {}
+
 _LIVE_V2_URL = "https://eodhd.com/api/us-quote-delayed"
 
 _live_v2_batcher: LiveV2VolumeBatcher | None = None
@@ -159,6 +164,9 @@ class LiveV2VolumeBatcher:
         new_cumvol = dict(prev_cumvol)
         new_event_marker_ms = dict(prev_event_marker_ms)
         injected = 0
+        max_quote_lag_s = 0.0
+        _scalp_cfg = CONFIG.get("SCALP_ENGINE", {}) or {}
+        _max_quote_lag_s = float(_scalp_cfg.get("EODHD_LIVE_V2_MAX_QUOTE_LAG_SEC", 0) or 0)
 
         for symbol, quote in quote_map.items():
             display = symbol_to_display.get(symbol)
@@ -180,6 +188,14 @@ class LiveV2VolumeBatcher:
                 continue
 
             marker_ms = self._quote_event_marker_ms(quote)
+            lag_s: float | None = None
+            if marker_ms:
+                try:
+                    lag_s = max(0.0, (time.time() * 1000.0 - float(marker_ms)) / 1000.0)
+                    if lag_s > max_quote_lag_s:
+                        max_quote_lag_s = lag_s
+                except (TypeError, ValueError):
+                    lag_s = None
             prev_marker = int(prev_event_marker_ms.get(display) or 0)
             if prev_marker and marker_ms and marker_ms <= prev_marker:
                 continue
@@ -192,12 +208,18 @@ class LiveV2VolumeBatcher:
             else:
                 delta_vol = cum_vol
 
+            if delta_vol <= 0:
+                new_cumvol[display] = cum_vol
+                if marker_ms:
+                    new_event_marker_ms[display] = marker_ms
+                continue
+
+            if _max_quote_lag_s > 0 and lag_s is not None and lag_s > _max_quote_lag_s:
+                continue
+
             new_cumvol[display] = cum_vol
             if marker_ms:
                 new_event_marker_ms[display] = marker_ms
-
-            if delta_vol <= 0:
-                continue
 
             try:
                 candle_builder.on_tick(display, price, delta_vol, marker_ms or int(time.time() * 1000))
@@ -210,7 +232,11 @@ class LiveV2VolumeBatcher:
             self._prev_event_marker_ms = new_event_marker_ms
 
         if injected:
-            log.debug("[LIVEV2] Injected volume deltas for %d tickers", injected)
+            log.debug(
+                "[LIVEV2] Injected volume deltas for %d tickers (max quote lag ~%.1fs vs wall; us-quote-delayed)",
+                injected,
+                max_quote_lag_s,
+            )
 
     def start(self) -> None:
         """Start the polling thread if not already running."""

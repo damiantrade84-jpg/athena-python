@@ -62,10 +62,8 @@ def recompute_levels_for_style(
     if not d1 or not h4 or not h1:
         raise ValueError("Candles unavailable")
 
-    # Match analyze_pair() indicator hygiene: ignore still-forming bars.
-    d1 = d1[:-1] if len(d1) > 1 else d1
-    h4 = h4[:-1] if len(h4) > 1 else h4
-    h1 = h1[:-1] if len(h1) > 1 else h1
+    # Parity with analyze_pair() F8: use the fetched series as-is (including the
+    # open/forming bar when the provider includes it). Do not strip the last bar here.
 
     d1i = calc_indicators_with_normalized(d1, ptype) if d1 else {}
     h4i = calc_indicators_with_normalized(h4, ptype) if h4 else {}

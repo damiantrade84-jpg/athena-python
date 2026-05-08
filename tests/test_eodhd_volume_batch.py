@@ -93,6 +93,36 @@ def test_live_v2_batcher_injects_initial_delta_increment_and_rollover(monkeypatc
     assert batcher.last_cumvol["AMZN"] == 120.0
 
 
+def test_live_v2_skips_injection_when_quote_lag_exceeds_config(monkeypatch):
+    import eodhd_volume_batch as evb
+
+    cb = _DummyCandleBuilder()
+    batcher = LiveV2VolumeBatcher(api_key="test", poll_interval=60)
+    batcher.configure([{"display": "AMZN", "symbol": "AMZN.US", "type": "stock", "enabled": True}])
+
+    monkeypatch.setattr(
+        evb,
+        "CONFIG",
+        {"SCALP_ENGINE": {"EODHD_LIVE_V2_MAX_QUOTE_LAG_SEC": 50}},
+    )
+    monkeypatch.setattr(evb.time, "time", lambda: 1710000100.0)
+
+    payloads = [
+        {"data": {"AMZN.US": {"volume": 1000, "lastTradePrice": 200.0, "lastTradeTime": 1710000000}}},
+    ]
+
+    def _fake_get(*_args, **_kwargs):
+        return _DummyResponse(payloads.pop(0))
+
+    monkeypatch.setattr("data_feeds.http_requests.get", _fake_get)
+    monkeypatch.setattr("candle_feeds.get_candle_builder", lambda: cb)
+
+    batcher._poll_once()
+
+    assert cb.calls == []
+    assert batcher.last_cumvol.get("AMZN") is None
+
+
 def test_live_v2_batcher_skips_quotes_when_event_marker_does_not_advance(monkeypatch):
     cb = _DummyCandleBuilder()
     batcher = LiveV2VolumeBatcher(api_key="test", poll_interval=60)

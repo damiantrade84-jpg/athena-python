@@ -17,7 +17,8 @@ from athena_app.services.market_state import (
 DEFAULT_DATA_FRESHNESS_GATES = {
     "WARN_ON_STALE_SCAN": True,
     "BLOCK_EXECUTION_ON_STALE": True,
-    "BLOCK_TIMEFRAMES": ["H1", "H4", "D1"],
+    # Include lower TFs used by Engine D so execution-time gates match scalp/structure feeds.
+    "BLOCK_TIMEFRAMES": ["M5", "M15", "H1", "H4", "D1"],
     "BLOCK_SEVERITIES": [
         "missing_current_bucket",
         "stale_1_bucket",

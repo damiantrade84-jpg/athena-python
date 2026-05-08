@@ -1497,7 +1497,8 @@ def scan_candle_limits() -> dict[str, int]:
     Single source of truth: ``D1_CANDLES``, ``H4_CANDLES``, ``H1_CANDLES`` in CONFIG / config.yaml.
     ``fetch_candles`` (athena) routes by pair ``source`` to Binance (crypto), EODHD (forex/stocks/
     commodities/indices/ETFs), Polygon, or yfinance — same limits apply to every asset class.
-    Callers should drop the last possibly-forming bar after fetch, matching ``analyze_pair``.
+    Live ``analyze_pair`` may include the forming bar in indicator inputs (F8); callers that need
+    confirmed-only bars must split via ``split_market_state`` themselves.
     """
     return {
         "D1": int(CONFIG["D1_CANDLES"]),

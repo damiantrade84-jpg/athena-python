@@ -392,6 +392,68 @@ def _overlay_eodhd_volume_for_scalp(
     return candles, "mt5_tick"
 
 
+def _merge_vp_volume_source_tag(vp: dict, dominant: str) -> dict:
+    """Tag VP with the resolved structural volume lineage (overlay + candle module)."""
+    if not isinstance(vp, dict) or not vp.get("valid"):
+        return vp
+    dom = str(dominant or "").strip() or "unknown"
+    raw = str(vp.get("volume_source") or "").strip().lower()
+    if raw in ("", "candles", "candle_volume"):
+        vp["volume_source"] = dom
+    elif raw.startswith("range_proxy"):
+        vp["volume_source"] = f"range_proxy({dom})"
+    elif dom and dom not in raw:
+        vp["volume_source"] = f"{raw}|{dom}"
+    return vp
+
+
+def _attach_engine_d_data_freshness_to_signal(
+    signal: dict,
+    *,
+    pair_dict: dict,
+    candles_by_tf: dict[str, list],
+    time_now: float | None = None,
+) -> None:
+    """Populate candleFetchMeta + dataFreshness for parity with analyze_pair / risk_engine."""
+    try:
+        from athena_app.services.data_freshness import (
+            build_live_feed_diagnostic,
+            evaluate_execution_data_freshness,
+        )
+
+        ts = (
+            float(time_now)
+            if time_now is not None
+            else datetime.now(timezone.utc).timestamp()
+        )
+        meta: dict[str, Any] = {"pairSource": pair_dict.get("source")}
+        for tf, series in (candles_by_tf or {}).items():
+            if not series or not tf:
+                continue
+            tf_key = str(tf).upper()
+            meta[tf_key] = build_live_feed_diagnostic(
+                pair_dict,
+                tf_key,
+                list(series),
+                time_now=ts,
+                source=pair_dict.get("source"),
+            )
+        signal["candleFetchMeta"] = meta
+        fe = evaluate_execution_data_freshness(signal, CONFIG)
+        signal["dataFreshness"] = fe
+        if (
+            CONFIG.get("SIGNAL_EXECUTABLE_FALSE_WHEN_FRESHNESS_BLOCKS", True)
+            and isinstance(fe, dict)
+            and not fe.get("allowed")
+        ):
+            signal["executable"] = False
+            signal.setdefault("fail_reasons", []).append(
+                str(fe.get("reason") or "STALE_DATA_BLOCK")
+            )
+    except Exception:
+        log.debug("[SCALP] Engine D data freshness attachment failed", exc_info=True)
+
+
 def mt5_get_live_price(mt5_symbol: str) -> float | None:
     """Return a live MT5 price (bid/ask midpoint preferred)."""
     try:
@@ -1102,7 +1164,7 @@ def _build_volume_profile(
         for c in candles:
             vol = float(c.get("vol", 0) or 0)
             if vol <= 0:
-                vol = 1.0
+                vol = max(float(c["high"]) - float(c["low"]), 1e-10)
             lo = c["low"]
             hi = c["high"]
             lo_bin = max(0, int((lo - price_min) / bin_size))
@@ -1667,6 +1729,7 @@ def _engine_d_source_fidelity(source: Any, *, domain: str) -> dict:
         "binance_ws": "binance_candle",
         "binance_candle": "binance_candle",
         "eodhd_1m": "eodhd_candle_volume",
+        "eodhd_5m": "eodhd_candle_volume",
         "eodhd_1h": "eodhd_candle_volume",
         "eodhd_hist": "eodhd_candle_volume",
         "ws_tick": "ws_tick_volume",
@@ -3617,6 +3680,7 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
             _vol_src_dominant = "binance_ws" if asset_type == "crypto" else "mt5_tick"
             _vol_src_structure = "binance_candle" if asset_type == "crypto" else "mt5_tick"
             _vol_src_exec = _vol_src_structure
+            candles_bias = None
             if asset_type == "crypto":
                 pair_dict = {
                     "display": display,
@@ -3756,6 +3820,12 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
 
                 # dominant volume source = M15 (used for VP), fallback to M5
                 _vol_src_dominant = _vol_src_m15 if _vol_src_m15 != "mt5_tick" else _vol_src_m5
+                pair_dict = {
+                    "display": display,
+                    "symbol": mt5_sym,
+                    "type": asset_type,
+                    "source": "mt5",
+                }
                 if execution_tf == "M1":
                     candles_exec = mt5_fetch_scalp_candles(
                         mt5_sym, "M1", m1_count, include_forming=trigger_include_forming
@@ -3861,7 +3931,21 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
                     vp = _build_volume_profile(_vp_candles)
                 if vp.get("valid"):
                     vp.setdefault("volume_source", "candles")
-                    if vp_anchor_mode != "prior_session":
+                    vp = _merge_vp_volume_source_tag(dict(vp), _vol_src_dominant)
+                    if (
+                        asset_type == "stock"
+                        and cfg.get("VP_INVALIDATE_RANGE_PROXY_FOR_STOCKS", True)
+                        and "range_proxy" in str(vp.get("volume_source") or "").lower()
+                    ):
+                        vp = {"valid": False, "reason": "range_proxy_volume_stock"}
+                    if (
+                        vp.get("valid")
+                        and asset_type == "stock"
+                        and cfg.get("BLOCK_STOCK_VP_ON_EODHD_1H_VOLUME", False)
+                        and "eodhd_1h" in str(_vol_src_structure or "").lower()
+                    ):
+                        vp = {"valid": False, "reason": "eodhd_1h_volume_overlay_stale_risk"}
+                    if vp.get("valid") and vp_anchor_mode != "prior_session":
                         vp_anchor_mode = "fixed_lookback"
             if not vp.get("valid"):
                 _vp_reason = f"vp_invalid:{vp.get('reason', '?')}"
@@ -4285,7 +4369,16 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
                 "confluenceScore": float(quality["score"]),
                 "maxScore":        100.0,
             }
-            
+
+            _scalp_cf_by_tf: dict[str, list] = {
+                "M15": candles_m15,
+                "M5": candles_m5,
+                str(execution_tf).upper(): candles_exec,
+            }
+            if use_bias and candles_bias:
+                _scalp_cf_by_tf[str(bias_tf).upper()] = candles_bias
+            _attach_engine_d_data_freshness_to_signal(signal, pair_dict=pair_dict, candles_by_tf=_scalp_cf_by_tf)
+
             # Apply consecutive-loss halving and +2R size cap. The +2R rule caps
             # size at 0.5x; it does not increase smaller grade-based sizes.
             _risk_snapshot = get_scalp_session_risk_state()

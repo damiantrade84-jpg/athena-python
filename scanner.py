@@ -827,6 +827,7 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict[s
                                     d1_snap=_sc_d1_snap,
                                     h4_snap=_sc_h4_snap,
                                     style=resolved_style_b,
+                                    pair=pair,
                                 )
 
                                 conf_b = None

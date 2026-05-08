@@ -1035,6 +1035,7 @@ def api_engine_c_scan():
                     d1_snap=_ec_d1_snap,
                     h4_snap=_ec_h4_snap,
                     style=resolved_style_b,
+                    pair=pair,
                 )
                 if res_b.get("structural_verdict") == "CLEAR":
                     conf_b = engine_b.calculate_confidence(

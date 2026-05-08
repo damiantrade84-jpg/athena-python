@@ -63,7 +63,7 @@ def test_calc_levels_exposes_base_and_effective_multipliers():
     assert levels["tp2"] == price + atr * levels["mults_effective"]["tp2"]
 
 
-def test_recompute_levels_for_style_trims_forming_bars_and_maps_regime():
+def test_recompute_levels_for_style_keeps_forming_bar_parity_with_analyze_pair():
     pair_obj = {"display": "EUR/USD", "symbol": "EURUSD", "type": "forex"}
     sig = {
         "pair": "EUR/USD",
@@ -111,9 +111,9 @@ def test_recompute_levels_for_style_trims_forming_bars_and_maps_regime():
     assert captured["atr_style"] == "intraday"
     assert captured["regime_state"] == 2  # HIGH_VOLATILITY
     assert captured["indicator_calls"] == [
-        (9, "forex"),
-        (9, "forex"),
-        (9, "forex"),
+        (10, "forex"),
+        (10, "forex"),
+        (10, "forex"),
     ]
 
 

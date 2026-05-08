@@ -5806,6 +5806,7 @@ def _compute_naked_analysis(sig: dict, engine_a_ctx: dict = None, force_ai: bool
             d1_snap=_na_d1_snap,
             h4_snap=_na_h4_snap,
             style=resolved_style,
+            pair=pair_obj,
         )
 
         try:
@@ -6164,7 +6165,9 @@ def api_scan_naked():
             _zone_tf = style_profile.get("zone_tf", "H4")
             _entry_tf = style_profile.get("entry_tf", "H1")
             _atr_tf = style_profile.get("atr_tf", "H4")
-            _needed_tfs = list({_zone_tf, _entry_tf, _atr_tf, "D1"})
+            # Always load H4/H1/D1 so candleFetchMeta + execution freshness match analyze_pair/risk_check.
+            _needed_tfs = list({_zone_tf, _entry_tf, _atr_tf, "D1", "H4", "H1"})
+            _lim_b = scan_candle_limits()
 
             debug_row["zone_tf"] = _zone_tf
             debug_row["entry_tf"] = _entry_tf
@@ -6174,6 +6177,7 @@ def api_scan_naked():
             _tf_map = {}
             _tf_trigger_map = {}
             _tf_state_map = {}
+            _tf_raw_map: dict[str, list] = {}
             _use_forming_structure = bool(CONFIG.get("ENGINE_B_USE_FORMING_FOR_STRUCTURE", False))
             _use_forming_trigger = bool(CONFIG.get("ENGINE_B_USE_FORMING_FOR_TRIGGER", True))
             for tf in _needed_tfs:
@@ -6190,6 +6194,7 @@ def api_scan_naked():
                 if pair.get("source") == "mt5":
                     state = _engine_b_live_market_state(pair, tf, limit)
                     _tf_state_map[tf] = state
+                    _tf_raw_map[tf] = _market_state_series(state, include_forming=True)
                     _tf_map[tf] = _market_state_series(
                         state, include_forming=_use_forming_structure
                     )
@@ -6209,6 +6214,8 @@ def api_scan_naked():
                         pair.get("display") or pair.get("symbol") or "",
                         offset_hours=market_state_offset_hours(pair, tf),
                     )
+                    _tf_state_map[tf] = _state
+                    _tf_raw_map[tf] = list(raw or [])
                     _tf_map[tf] = _market_state_series(
                         _state, include_forming=_use_forming_structure
                     )
@@ -6408,6 +6415,7 @@ def api_scan_naked():
                     d1_snap=_eb_d1_snap,
                     h4_snap=_eb_zone_snap,
                     style=resolved_style,
+                    pair=pair,
                 )
 
                 verdict = res.get("structural_verdict", "NONE")
@@ -6607,6 +6615,99 @@ def api_scan_naked():
                     ),
                     "naked_data": _res,
                 }
+
+                signal["candleFetchMeta"] = {
+                    "D1": _get_candle_fetch_meta(pair, "D1", _lim_b["D1"]),
+                    "H4": _get_candle_fetch_meta(pair, "H4", _lim_b["H4"]),
+                    "H1": _get_candle_fetch_meta(pair, "H1", _lim_b["H1"]),
+                    "pairSource": pair.get("source"),
+                }
+                signal.setdefault("executable", True)
+                try:
+                    from athena_app.services.data_freshness import (
+                        check_live_candle_consistency,
+                        evaluate_execution_data_freshness,
+                    )
+
+                    _time_now_b = datetime.now(timezone.utc).timestamp()
+                    for _tf_u in ("H4", "H1", "D1"):
+                        _state_u = _tf_state_map.get(_tf_u)
+                        if not isinstance(_state_u, dict):
+                            continue
+                        _tf_candles_u = list(_tf_raw_map.get(_tf_u) or [])
+                        if pair.get("source") == "mt5" and pair.get("type") == "forex":
+                            _engine_a_input_u = list(_state_u.get("confirmed") or [])
+                        else:
+                            _engine_a_input_u = list(_state_u.get("confirmed") or [])
+                            if _state_u.get("forming"):
+                                _engine_a_input_u.append(_state_u["forming"])
+                        _engine_b_input_u = list(_state_u.get("confirmed") or [])
+                        _scanner_input_u = list(_engine_a_input_u)
+                        _consistency_paths_b = {
+                            "raw_provider": _tf_candles_u,
+                            "market_state": _state_u,
+                            "engine_a": _engine_a_input_u,
+                            "engine_b": _engine_b_input_u,
+                            "scanner": _scanner_input_u,
+                            "compare": _scanner_input_u,
+                        }
+                        _cache_meta_b = signal["candleFetchMeta"].get(_tf_u)
+                        if isinstance(_cache_meta_b, dict) and _cache_meta_b:
+                            _consistency_paths_b["cache"] = _cache_meta_b
+                        _consistency_b = check_live_candle_consistency(
+                            pair,
+                            _tf_u,
+                            _consistency_paths_b,
+                            time_now=_time_now_b,
+                        )
+                        if _consistency_b:
+                            signal.setdefault("candleConsistency", {})[_tf_u] = _consistency_b
+
+                    _fresh_b = evaluate_execution_data_freshness(signal, CONFIG)
+                    signal["dataFreshness"] = _fresh_b
+                    _cons_b = signal.get("candleConsistency", {})
+                    _has_confirmed_only_ok_b = (
+                        any(
+                            (isinstance(d, dict) and d.get("status") == "CONFIRMED_ONLY_OK")
+                            or d == "CONFIRMED_ONLY_OK"
+                            for d in _cons_b.values()
+                        )
+                        if isinstance(_cons_b, dict)
+                        else False
+                    )
+                    if _fresh_b.get("warnOnStaleScan") and _fresh_b.get("blocked"):
+                        _blocked_b = _fresh_b.get("blocked", [])
+                        _filtered_b = [
+                            b
+                            for b in _blocked_b
+                            if not (
+                                _has_confirmed_only_ok_b
+                                and isinstance(b, dict)
+                                and b.get("severity") == "stale_1_bucket"
+                            )
+                        ]
+                        if _filtered_b:
+                            _warn_b = "DATA_FRESHNESS: " + "; ".join(
+                                f"{b.get('timeframe')} {b.get('severity')}"
+                                for b in _filtered_b
+                            )
+                            signal.setdefault("warnings", [])
+                            if _warn_b not in signal["warnings"]:
+                                signal["warnings"].append(_warn_b)
+                except Exception as _fresh_err_b:
+                    log.debug(
+                        "[NAKED SCAN] %s data freshness unavailable: %s",
+                        pair.get("display", "?"),
+                        _fresh_err_b,
+                    )
+
+                _fe_b = signal.get("dataFreshness")
+                if (
+                    CONFIG.get("SIGNAL_EXECUTABLE_FALSE_WHEN_FRESHNESS_BLOCKS", True)
+                    and isinstance(_fe_b, dict)
+                    and not _fe_b.get("allowed")
+                ):
+                    signal["executable"] = False
 
                 # Calculate style-specific SL/TP for display
                 try:
@@ -11143,6 +11244,7 @@ def analyze_pair(
             d1_snap=(d1i or {}).get("snap") or {},
             h4_snap=(h4i or {}).get("snap") or {},
             style=_style or "intraday",
+            pair=pair,
         )
         _structure_adjustment = apply_structure_context_to_score(
             structure_data,
@@ -11260,6 +11362,7 @@ def analyze_pair(
                     d1_snap=(d1i or {}).get("snap") or {},
                     h4_snap=(h4i or {}).get("snap") or {},
                     style=_overlay_style,
+                    pair=pair,
                 )
 
             # 5.3 FIX: Engine B issues now add warnings instead of full block (return None).
@@ -11685,6 +11788,13 @@ def analyze_pair(
             pair.get("display", "?"),
             _freshness_err,
         )
+    _fe_final = signal.get("dataFreshness")
+    if (
+        CONFIG.get("SIGNAL_EXECUTABLE_FALSE_WHEN_FRESHNESS_BLOCKS", True)
+        and isinstance(_fe_final, dict)
+        and not _fe_final.get("allowed")
+    ):
+        signal["executable"] = False
     if CONFIG.get("SCAN_DEBUG_CANDLE_META", False):
         signal["candleMeta"] = {
             "D1": _candle_fetch_meta.get("D1"),

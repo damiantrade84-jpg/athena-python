@@ -3890,6 +3890,7 @@ def backtest_pair_naked(pair: dict, style: str = "naked", validation_mode="stand
                 d1_snap=_bt_b_d1_snap,
                 h4_snap=_bt_b_zone_snap,
                 style=resolved_style,
+                pair=pair,
             )
             _b_funnel["bars_evaluated"] += 1
             if res.get("structural_verdict") != "CLEAR":
@@ -4763,6 +4764,7 @@ def backtest_pair_consensus(
                 d1_snap=(d1i or {}).get("snap") or {},
                 h4_snap=(h4i or {}).get("snap") or {},
                 style=resolved_style,
+                pair=pair,
             )
             if res_b.get("structural_verdict") == "CLEAR":
                 conf_b = naked_engine.calculate_confidence(

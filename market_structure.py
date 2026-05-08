@@ -53,6 +53,47 @@ def engine_b_forex_asian_session_blocks_bar(
         return False
 
 
+def _engine_b_confirmed_only_struct_candles(
+    struct_candles: list,
+    structure_tf: str,
+    *,
+    pair: dict | None,
+) -> list:
+    """Use confirmed (closed) bars only for structural TF when pair context is available."""
+    if not bool(config.CONFIG.get("ENGINE_B_STRIP_FORMING_STRUCT", True)):
+        return struct_candles
+    if (
+        not struct_candles
+        or not pair
+        or not isinstance(pair, dict)
+        or len(struct_candles) < 2
+    ):
+        return struct_candles
+    try:
+        import time
+        from athena_app.services.market_state import (
+            market_state_offset_hours,
+            split_market_state,
+        )
+
+        tf_u = str(structure_tf or "").upper()
+        display = str(pair.get("display") or pair.get("symbol") or "")
+        st = split_market_state(
+            list(struct_candles),
+            tf_u,
+            display,
+            time_now=time.time(),
+            offset_hours=market_state_offset_hours(pair, tf_u),
+        )
+        confirmed = list(st.get("confirmed") or [])
+        min_bars = int(config.CONFIG.get("ENGINE_B_STRUCT_CONFIRMED_MIN_BARS", 20) or 20)
+        if len(confirmed) >= min_bars:
+            return confirmed
+    except Exception:
+        pass
+    return struct_candles
+
+
 # Engine B timeframe matrix — single source of truth for TF selection across
 # live, execution, scan, and backtest. Maps (asset_type, style) to the four
 # roles: struct (BOS/CHoCH detection), zone (S/R clusters), trigger (entry
@@ -1907,6 +1948,7 @@ class NakedEngine:
         d1_snap: dict | None = None,
         h4_snap: dict | None = None,
         style: str = "intraday",
+        pair: dict | None = None,
     ) -> dict:
         """
         Analyzes raw candle data to find Support/Resistance zones and trend sequence.
@@ -1937,6 +1979,11 @@ class NakedEngine:
             struct_candles = h4_candles
         else:
             struct_candles = h1_candles
+        struct_candles = _engine_b_confirmed_only_struct_candles(
+            struct_candles,
+            structure_tf,
+            pair=pair,
+        )
         trigger_candles = h4_candles if _tfs["trigger"] == "H4" else h1_candles
 
         # Extract numpy arrays for scipy
@@ -1975,9 +2022,14 @@ class NakedEngine:
         _allow_tick_vol_gate = bool(
             config.CONFIG.get("ENGINE_B_BOS_VOLUME_FOR_TICKVOL", False)
         )
-        _vol_gate_eligible = (
-            asset_type.lower() == "crypto" or _allow_tick_vol_gate
-        )
+        _crypto_src = str((pair or {}).get("source") or "").lower()
+        if (asset_type or "").lower() == "crypto":
+            if _crypto_src == "mt5":
+                _vol_gate_eligible = bool(_allow_tick_vol_gate)
+            else:
+                _vol_gate_eligible = True
+        else:
+            _vol_gate_eligible = bool(_allow_tick_vol_gate)
         if _vol_gate_eligible:
             _has_vol = any(float(c.get("vol", 0)) > 0 for c in struct_candles[-5:])
             if _has_vol:
@@ -3201,6 +3253,7 @@ class NakedEngine:
         asset_type="",
         d1_snap=None,
         h4_snap=None,
+        pair=None,
     ):
         """Backtest-friendly wrapper that returns entry/exit signals.
         Returns dict compatible with existing backtest reporting."""
@@ -3215,6 +3268,7 @@ class NakedEngine:
             asset_type=asset_type,
             d1_snap=d1_snap,
             h4_snap=h4_snap,
+            pair=pair,
         )
         # Use entry_tf from style_profile to select entry candles (H4 for swing, H1 for intraday/scalp)
         _entry_tf = str((style_profile or {}).get("entry_tf", "H1")).upper() if style_profile else "H1"
