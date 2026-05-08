@@ -1283,16 +1283,51 @@ def compute_consensus(
     tier, sizing = classify_conviction(conviction)
 
     # Step 5: Resolve SL and TP
-    sl_resolved = resolve_sl(entry, a["sl"], b["sl"], direction, atr)
-    tp_resolved = resolve_tp(entry, sl_resolved["sl"], a["tp"], b["tp"], direction)
+    # When Engine B checklist passed, trust execution_sl/execution_tp — they already
+    # satisfied rr_ok in market_structure.calculate_confidence (avoids resolve_tp's
+    # structural_min_rr=1.5 and SL/TP blend changing gated RR).
+    used_b_execution_bundle = False
+    conf_b_al = confidence_b if isinstance(confidence_b, dict) else {}
+    if bool(conf_b_al.get("passed")):
+        try:
+            _ex_sl = float(conf_b_al["execution_sl"])
+            _ex_tp = float(conf_b_al["execution_tp"])
+        except (KeyError, TypeError, ValueError):
+            _ex_sl = _ex_tp = None
+        if (
+            _ex_sl is not None
+            and _ex_tp is not None
+            and _ex_sl > 0
+            and _ex_tp > 0
+            and entry > 0
+        ):
+            if direction == "LONG":
+                _side_ok = _ex_sl < entry < _ex_tp
+            else:
+                _side_ok = _ex_sl > entry > _ex_tp
+            if _side_ok:
+                _risk_al = abs(entry - _ex_sl)
+                if _risk_al > 0:
+                    _rr_al = abs(_ex_tp - entry) / _risk_al
+                    sl_resolved = {"sl": round(_ex_sl, 6), "method": "engine_b_execution"}
+                    tp_resolved = {
+                        "tp": round(_ex_tp, 6),
+                        "rr": round(_rr_al, 2),
+                        "method": "engine_b_execution",
+                    }
+                    used_b_execution_bundle = True
 
-    # Validate minimum RR
-    if tp_resolved["rr"] < 1.2:
-        # RR too low after SL/TP resolution — try Engine A TP
-        if a["tp"]:
-            alt_tp = resolve_tp(entry, sl_resolved["sl"], a["tp"], None, direction)
-            if alt_tp["rr"] > tp_resolved["rr"]:
-                tp_resolved = alt_tp
+    if not used_b_execution_bundle:
+        sl_resolved = resolve_sl(entry, a["sl"], b["sl"], direction, atr)
+        tp_resolved = resolve_tp(entry, sl_resolved["sl"], a["tp"], b["tp"], direction)
+
+        # Validate minimum RR
+        if tp_resolved["rr"] < 1.2:
+            # RR too low after SL/TP resolution — try Engine A TP
+            if a["tp"]:
+                alt_tp = resolve_tp(entry, sl_resolved["sl"], a["tp"], None, direction)
+                if alt_tp["rr"] > tp_resolved["rr"]:
+                    tp_resolved = alt_tp
 
     if tp_resolved["rr"] < 1.0:
         tier = "SKIP"

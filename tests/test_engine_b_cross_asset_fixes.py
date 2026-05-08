@@ -91,6 +91,30 @@ def test_execution_treats_failed_engines_aligned_as_engine_b_context():
     assert _engine_b_context_confirmed(sig) is False
 
 
+def test_execution_requires_pass_when_naked_context_without_engines_aligned():
+    assert (
+        _engine_b_context_confirmed(
+            {"is_naked": True, "naked_data": {"execution_sl": 1.0, "execution_tp": 2.0}},
+            {},
+        )
+        is False
+    )
+    assert (
+        _engine_b_context_confirmed(
+            {
+                "is_naked": True,
+                "naked_data": {"passed": True, "execution_sl": 1.0, "execution_tp": 2.0},
+            },
+            {},
+        )
+        is True
+    )
+
+
+def test_execution_accepts_pass_in_top_level_engine_b_payload():
+    assert _engine_b_context_confirmed({"is_naked": True}, {"passed": True}) is True
+
+
 def test_choch_uses_bos_reference_level_when_bos_context_present():
     engine = NakedEngine()
     highs = np.array([100.0, 102.0, 104.0, 103.0])

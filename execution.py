@@ -377,8 +377,15 @@ def _engine_b_context_confirmed(sig: dict, engine_b: dict | None = None) -> bool
     engine_b = engine_b or {}
     if "enginesAligned" in sig:
         return bool(sig.get("enginesAligned"))
+    nested = sig.get("engine_b")
+    if not isinstance(nested, dict):
+        nested = sig.get("naked_data")
+    if isinstance(nested, dict) and "passed" in nested:
+        return bool(nested.get("passed"))
     if "passed" in engine_b:
         return bool(engine_b.get("passed"))
+    if _signal_has_engine_b_context(sig, engine_b):
+        return False
     return True
 
 

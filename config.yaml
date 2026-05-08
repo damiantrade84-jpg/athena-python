@@ -1902,6 +1902,10 @@ ENGINE_B_USE_FORMING_FOR_STRUCTURE: false
 
 ENGINE_B_USE_FORMING_FOR_TRIGGER: true
 
+# When true, apply NAKED_ENGINE.bos_volume_multiplier to BOS volume confirmation using
+# MT5 tick_volume (forex, stocks, indices, commodities). Default false: only crypto
+# uses exchange contract volume — see market_structure.NakedEngine.analyze_structure.
+ENGINE_B_BOS_VOLUME_FOR_TICKVOL: false
 
 
 # Engine B structure / zone / trigger / ATR timeframes are resolved per

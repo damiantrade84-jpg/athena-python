@@ -352,3 +352,54 @@ def test_engine_c_exposes_intermarket_multiplier_in_confirmation_payload(monkeyp
 
     assert result["intermarket_multiplier"] == 1.04
     assert result["intermarket_confirmation"]["engineCMultiplier"] == 1.04
+
+def test_engine_c_aligned_uses_b_execution_levels_when_passed(monkeypatch):
+    monkeypatch.setattr(engine_c, "get_engine_context", lambda *_a, **_k: {})
+    monkeypatch.setattr(
+        engine_c, "get_dynamic_engine_weights", lambda *_a, **_k: {"weights": None}
+    )
+    monkeypatch.setattr(
+        engine_c,
+        "predict_calibrated_prob",
+        lambda *_a, **_k: {"calibrated_prob": None},
+    )
+    monkeypatch.setattr(engine_c, "record_signal_event", lambda *_a, **_k: None)
+    monkeypatch.setattr(engine_c, "apply_meta_policy", lambda result, _meta: result)
+
+    result = engine_c.compute_consensus(
+        signal_a={
+            "confluenceScore": 1.5,
+            "maxScore": 3.0,
+            "direction": "LONG",
+            "sl": 97.0,
+            "tp1": 103.0,
+            "price": 100.0,
+            "style": "intraday",
+        },
+        signal_b={
+            "structural_verdict": "CLEAR",
+            "direction": "LONG",
+            "recommended_stop_loss": 99.0,
+            "recommended_take_profit": 101.3,
+            "order_blocks": [],
+        },
+        confidence_b={
+            "score": 4.0,
+            "max_possible": 5.0,
+            "pct": 0.0,
+            "passed": True,
+            "execution_sl": 99.0,
+            "execution_tp": 101.3,
+            "structure_ok": True,
+            "zone_ok": True,
+            "trigger_ok": True,
+        },
+        asset_type="forex",
+        regime="TRENDING",
+        entry_price=100.0,
+        atr=1.0,
+    )
+    assert result["verdict"] == "ALIGNED"
+    assert result["sl"] == pytest.approx(99.0)
+    assert result["tp"] == pytest.approx(101.3)
+    assert result["rr"] == pytest.approx(1.3)
