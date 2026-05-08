@@ -78,6 +78,15 @@ def test_binance_ws_aggtrade_stores_price_bucket(monkeypatch):
     ]
 
 
+def test_binance_futures_micro_stream_url_includes_aggtrade():
+    from athena.datafeeds.binance_ws import binance_futures_micro_stream_url
+
+    url = binance_futures_micro_stream_url("ethusdt")
+    assert "aggTrade" in url
+    assert "@trade" in url
+    assert "ethusdt@depth20@100ms" in url
+
+
 def test_bucketed_volume_profile_uses_price_level_volume():
     from volume_profile import compute_bucketed_volume_profile
 

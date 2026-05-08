@@ -113,6 +113,9 @@ _logging.getLogger("requests").setLevel(_logging.WARNING)
 _logging.getLogger("httpx").setLevel(_logging.WARNING)
 
 log.setLevel(logging.WARNING)
+_scl = os.environ.get("SENTINEL_CONSOLE_LEVEL", "").strip().upper()
+if _scl in {"DEBUG", "INFO", "WARNING", "ERROR"}:
+    log.setLevel(getattr(logging, _scl))
 
 from candles_cache import (  # noqa: E402
     _candle_cache,
@@ -14342,6 +14345,9 @@ if __name__ == "__main__":
 
         time.sleep(5)  # wait for connections to establish
 
+        mt5_pos: list = []
+        bpos: list = []
+
         try:
             from mt5_executor import mt5_get_positions, mt5_connect
 
@@ -14393,8 +14399,14 @@ if __name__ == "__main__":
         except Exception as e:
             log.debug(f"[STARTUP] Bybit reconcile skipped: {e}")
 
-        # Check audit DB for unresolved trades
+        mt5_ticket_open = {
+            str(p.get("ticket")).strip()
+            for p in mt5_pos
+            if p.get("ticket") is not None and str(p.get("ticket")).strip()
+        }
 
+        # Check audit_log for rows without exit_price (not the same as broker "open",
+        # but flags missing outcome rows for the outcome monitor / manual cleanup).
         try:
             with sqlite3.connect(_AUDIT_DB, timeout=15.0) as con:
                 con.row_factory = sqlite3.Row
@@ -14405,14 +14417,40 @@ if __name__ == "__main__":
                 ).fetchall()
 
             if unresolved:
-                log.warning(
-                    f"[STARTUP] {len(unresolved)} unresolved trade(s) in audit DB:"
-                )
-
+                by_ticket: dict[str, sqlite3.Row] = {}
                 for r in unresolved:
+                    tix = str(r["ticket"]).strip()
+                    if tix:
+                        by_ticket[tix] = r
+                unique_rows = list(by_ticket.values())
+                orphans_mt5: list[sqlite3.Row] = []
+                for r in unique_rows:
+                    tix = str(r["ticket"]).strip()
+                    if tix.isdigit() and tix not in mt5_ticket_open:
+                        orphans_mt5.append(r)
+                log.warning(
+                    f"[STARTUP] {len(unique_rows)} audit row(s) without exit_price ({len(unresolved)} incl. duplicate tickets); "
+                    f"MT5 ticket not in broker open set: {len(orphans_mt5)}."
+                )
+                for r in sorted(unique_rows, key=lambda x: str(x["pair"] or "")):
+                    tix = str(r["ticket"]).strip()
+                    tag = ""
+                    if tix.isdigit() and tix not in mt5_ticket_open:
+                        tag = " [audit-only: MT5 ticket not in open positions]"
+                    elif "-" in tix and len(tix) >= 32:
+                        tag = " [Bybit/paper id — verify vs outcome monitor if already flat]"
                     log.warning(
-                        f"  - {r['pair']} {r['direction']} entry={r['entry_price']} ticket={r['ticket']}"
+                        "  - %s %s entry=%s ticket=%s%s",
+                        r["pair"],
+                        r["direction"],
+                        r["entry_price"],
+                        tix,
+                        tag,
                     )
+                log.warning(
+                    "[STARTUP] Dashboard open cards use /api/open-trades-timed (live brokers). "
+                    "These audit rows are bookkeeping; CCXT/MT5 monitors backfill exit_price when they match."
+                )
 
         except Exception as e:
             log.debug(f"[STARTUP] Audit DB reconcile failed: {e}")

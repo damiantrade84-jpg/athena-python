@@ -1,13 +1,15 @@
 """binance_ws.py — Binance WebSocket client for order book and trade streams.
 
-Streams depth20@100ms and trade streams, maintains local order book, computes
-order book imbalance and orderflow delta, and emits metrics to Athena pipeline.
+Streams depth20@100ms, trade, and aggTrade (aggregated trades for Engine D buckets),
+maintains local order book, computes order book imbalance and orderflow delta, and
+emits metrics to Athena pipeline.
 """
 
 import asyncio
 import json
 import logging
 import random
+import threading
 import time
 from typing import Dict, List, Tuple, Optional
 import websockets
@@ -21,6 +23,18 @@ from athena.microstructure.orderbook_metrics import (  # noqa: E402
     orderflow_delta as _taker_imbalance_ratio,
 )
 from athena.microstructure.trade_bucket_store import store_trade  # noqa: E402
+
+_micro_boot_lock = threading.Lock()
+_micro_boot_logged = False
+
+
+def binance_futures_micro_stream_url(symbol: str) -> str:
+    """Combined Binance USDT-M URL for depth + trade + aggTrade (strict Engine D path)."""
+    sym = str(symbol or "btcusdt").lower().strip()
+    base = "wss://fstream.binance.com/stream"
+    return (
+        f"{base}?streams={sym}@depth20@100ms/{sym}@trade/{sym}@aggTrade"
+    )
 
 
 class BinanceWS:
@@ -54,9 +68,7 @@ class BinanceWS:
 
     async def _connect(self) -> None:
         """Connect to combined Binance WebSocket stream."""
-        depth_stream = f"{self.symbol}@depth20@100ms"
-        trade_stream = f"{self.symbol}@trade"
-        url = f"{self.base_url}?streams={depth_stream}/{trade_stream}"
+        url = binance_futures_micro_stream_url(self.symbol)
         try:
             async with websockets.connect(
                 url,
@@ -67,7 +79,17 @@ class BinanceWS:
                 ssl=default_ssl_context(),
             ) as ws:
                 self._reconnect_attempt = 0
+                global _micro_boot_logged
                 log.info(f"[BinanceWS] Connected to combined stream for {self.symbol}")
+                with _micro_boot_lock:
+                    if not _micro_boot_logged:
+                        _micro_boot_logged = True
+                        log.warning(
+                            "[BinanceWS] First micro futures stream connected (%s, depth+trade+aggTrade). "
+                            "Per-symbol lines are INFO (console shows WARNING only by default). "
+                            "Set env SENTINEL_CONSOLE_LEVEL=INFO to see all connect lines, or tail logs/sentinel.log.",
+                            self.symbol,
+                        )
                 _last_ping = time.time()
                 while self._running:
                     try:
