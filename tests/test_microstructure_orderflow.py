@@ -36,6 +36,27 @@ def test_binance_ws_emit_uses_ratio_from_accumulators():
     assert abs(r - (1.0 / 3.0)) < 1e-9
 
 
+def test_binance_ws_trade_stream_stores_price_bucket(monkeypatch):
+    from athena.datafeeds import binance_ws
+
+    stored = []
+    monkeypatch.setattr(binance_ws, "store_trade", lambda **kwargs: stored.append(kwargs))
+    ws = binance_ws.BinanceWS(symbol="btcusdt", emit_interval=60.0)
+
+    ws._handle_trade({"p": "65000.5", "q": "0.25", "m": False, "T": 1710000000000})
+
+    assert stored == [
+        {
+            "exchange": "binance",
+            "symbol": "BTCUSDT",
+            "price": 65000.5,
+            "quantity": 0.25,
+            "is_buyer_maker": False,
+            "ts": 1710000000.0,
+        }
+    ]
+
+
 def test_binance_ws_aggtrade_stores_price_bucket(monkeypatch):
     from athena.datafeeds import binance_ws
 

@@ -56,8 +56,7 @@ class BinanceWS:
         """Connect to combined Binance WebSocket stream."""
         depth_stream = f"{self.symbol}@depth20@100ms"
         trade_stream = f"{self.symbol}@trade"
-        agg_trade_stream = f"{self.symbol}@aggTrade"
-        url = f"{self.base_url}?streams={depth_stream}/{trade_stream}/{agg_trade_stream}"
+        url = f"{self.base_url}?streams={depth_stream}/{trade_stream}"
         try:
             async with websockets.connect(
                 url,
@@ -143,6 +142,14 @@ class BinanceWS:
         """Accumulate taker volume from trade stream (taker side from ``m``)."""
         size = float(data.get("q", 0))
         is_buyer_maker = data.get("m")  # true if buyer is maker (seller is taker)
+        try:
+            price = float(data.get("p", 0))
+            event_ts = float(data.get("T") or data.get("E") or 0) / 1000.0
+            if event_ts <= 0:
+                event_ts = time.time()
+        except (TypeError, ValueError):
+            price = 0.0
+            event_ts = time.time()
         # Binance: m True → seller taker (sell aggressor); m False → buyer taker
         if not is_buyer_maker:
             self.buy_taker_volume += size
@@ -150,6 +157,15 @@ class BinanceWS:
         else:
             self.sell_taker_volume += size
             self.orderflow_delta -= size
+        if size > 0 and price > 0:
+            store_trade(
+                exchange="binance",
+                symbol=self.symbol.upper(),
+                price=price,
+                quantity=size,
+                is_buyer_maker=bool(is_buyer_maker),
+                ts=event_ts,
+            )
 
     def _handle_agg_trade(self, data: Dict) -> None:
         """Persist aggregate-trade volume by price bucket for Engine D orderflow."""
