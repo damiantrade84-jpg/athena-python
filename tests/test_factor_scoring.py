@@ -818,3 +818,23 @@ def test_volume_macro_and_intermarket_context_affect_score_bounded():
     assert combined["final_score"] == pytest.approx(_base * 1.03, abs=1e-4)
     # factor_scores unchanged (adjustments apply to final_score only)
     assert high_vol["factor_scores"] == baseline["factor_scores"]
+
+
+def test_compute_factor_scores_populates_filtered_indicators_for_confidence_engine():
+    out = _score()
+    fi = out.get("filtered_indicators")
+    assert isinstance(fi, dict)
+    assert len(fi) >= 1
+
+
+def test_zero_result_carries_empty_filtered_indicators():
+    from factor_scoring import _zero_result
+
+    z = _zero_result(
+        {"type": "stock", "display": "TEST"},
+        "RANGING",
+        {},
+        {"adx": "ok"},
+        reason="test",
+    )
+    assert z.get("filtered_indicators") == {}

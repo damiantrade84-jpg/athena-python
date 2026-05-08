@@ -18,7 +18,11 @@ const engineColors: Record<string, string> = {
   'engine_a': 'bg-blue-500/20 text-blue-400 border-blue-500/40',
   'engine_b': 'bg-purple-500/20 text-purple-400 border-purple-500/40',
   'engine_c': 'bg-teal-500/20 text-teal-400 border-teal-500/40',
+  'engine_d': 'bg-amber-500/20 text-amber-400 border-amber-500/40',
   'scalp': 'bg-amber-500/20 text-amber-400 border-amber-500/40',
+  'scalp_vp': 'bg-amber-500/20 text-amber-400 border-amber-500/40',
+  'engine d': 'bg-amber-500/20 text-amber-400 border-amber-500/40',
+  'lottery': 'bg-pink-500/20 text-pink-400 border-pink-500/40',
 };
 
 export default function EngineTag({ engine, className }: EngineTagProps) {

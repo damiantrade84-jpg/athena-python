@@ -408,13 +408,18 @@ def _ld_build_engine_b_row(sig_b: dict) -> dict:
              sig_b.get("score"))
     max_score = sig_b.get("confidence_max") or conf.get("max_score") or sig_b.get("max_score")
     confidence_passed = bool(conf.get("passed") or sig_b.get("passed"))
+    _sdv = sig_b.get("structural_data_valid")
+    if _sdv is not None:
+        structural_data_valid = bool(_sdv)
+    else:
+        structural_data_valid = structural_verdict == "CLEAR"
     return {
         "score": score,
         "maxScore": max_score,
         "threshold": sig_b.get("min_score"),
         "direction": sig_b.get("direction"),
         "structuralVerdict": structural_verdict,
-        "structuralDataValid": bool(sig_b.get("structural_data_valid") or structural_verdict),
+        "structuralDataValid": structural_data_valid,
         "confidencePassed": confidence_passed,
         "structure_ok": bool(checklist.get("structure_ok") or sig_b.get("structure_ok")),
         "location_ok": bool(checklist.get("location_ok") or sig_b.get("location_ok")),

@@ -334,6 +334,112 @@ def _previous_indicator_snap(candles: list | None) -> dict | None:
         return None
 
 
+def _confidence_filtered_indicators(
+    d1_snap: dict,
+    h4_snap: dict,
+    h1_snap: dict,
+    d1_prev: Optional[dict],
+    h4_prev: Optional[dict],
+    h1_prev: Optional[dict],
+    _direction: str,
+    volume_ratio: Optional[float],
+    funding_rate: Optional[float],
+    mean_rev_detail: dict,
+) -> Dict[str, Optional[float]]:
+    """Populate confidence_engine.indicator_agreement inputs (mostly [-1, 1])."""
+    out: Dict[str, Optional[float]] = {}
+
+    d1_sign = _ema_cross_confirmed(d1_snap, d1_prev, "ema21", "ema200")
+    if d1_sign is not None:
+        out["d1_ema_trend"] = float(d1_sign)
+    h4_t_sign = _ema_cross_confirmed(h4_snap, h4_prev, "ema21", "ema50")
+    if h4_t_sign is not None:
+        out["h4_ema_trend"] = float(h4_t_sign)
+    h1_t_sign = _ema_cross_confirmed(h1_snap, h1_prev, "ema21", "ema50")
+    if h1_t_sign is not None:
+        out["ema_trend"] = float(h1_t_sign)
+
+    rsi = h4_snap.get("rsi")
+    if rsi is not None:
+        try:
+            out["rsi_z"] = max(-1.0, min(1.0, (float(rsi) - 50.0) / 50.0))
+        except (TypeError, ValueError):
+            pass
+
+    macd_hist = h4_snap.get("macdHist")
+    if macd_hist is not None:
+        try:
+            mh = float(macd_hist)
+            out["macdLine_z"] = max(-1.0, min(1.0, math.tanh(mh * 5.0)))
+        except (TypeError, ValueError):
+            pass
+
+    adx = h4_snap.get("adx")
+    if adx is not None:
+        try:
+            adx_f = float(adx)
+            out["adx_z"] = max(-1.0, min(1.0, (adx_f - 25.0) / 35.0))
+        except (TypeError, ValueError):
+            pass
+
+    close = h4_snap.get("close")
+    atr = h4_snap.get("atr")
+    if close is not None and atr is not None:
+        try:
+            c = float(close)
+            a = float(atr)
+            if c > 0 and a >= 0:
+                out["atr_z"] = max(-1.0, min(1.0, (a / c) * 80.0))
+        except (TypeError, ValueError):
+            pass
+
+    bb_pct = h4_snap.get("bbWidth_pct")
+    if bb_pct is None:
+        bb_pct = h4_snap.get("bb_width_pct")
+    if bb_pct is not None:
+        try:
+            out["bbWidth_z"] = max(-1.0, min(1.0, (float(bb_pct) - 50.0) / 50.0))
+        except (TypeError, ValueError):
+            pass
+
+    if isinstance(volume_ratio, (int, float)) and volume_ratio > 0:
+        out["volume_ratio"] = float(min(3.0, volume_ratio))
+
+    if isinstance(funding_rate, (int, float)):
+        try:
+            fr = float(funding_rate)
+            out["funding_rate"] = max(-1.0, min(1.0, math.tanh(fr * 120.0)))
+        except (TypeError, ValueError):
+            pass
+
+    if mean_rev_detail.get("enabled") and mean_rev_detail.get("z_score") is not None:
+        try:
+            z = float(mean_rev_detail["z_score"])
+            out["fib_proximity"] = max(-1.0, min(1.0, z / 3.0))
+        except (TypeError, ValueError):
+            pass
+
+    for key in (
+        "order_book_imbalance",
+        "liquidity_wall_detection",
+        "orderflow_delta",
+        "liquidity_pressure",
+        "volume_momentum_spread",
+    ):
+        v = h4_snap.get(key)
+        if v is None:
+            continue
+        try:
+            fv = float(v)
+        except (TypeError, ValueError):
+            continue
+        if fv == 0.0:
+            continue
+        out[key] = max(-1.0, min(1.0, fv))
+
+    return out
+
+
 # ── Factor 2: Momentum quality (RSI + MACD confirmation) ─────────────────────
 
 def _momentum_quality(
@@ -1714,6 +1820,18 @@ def compute_factor_scores(
         "intermarket_engine_a_delta": round(intermarket_engine_a_delta, 6),
         "feed_status": feed_status,
         "btc_bias_applied": None,
+        "filtered_indicators": _confidence_filtered_indicators(
+            d1_snap,
+            h4_snap,
+            h1_snap,
+            d1_prev,
+            h4_prev,
+            h1_prev,
+            direction,
+            volume_ratio,
+            funding_rate,
+            mean_rev_detail,
+        ),
     }
 
 
@@ -1775,4 +1893,5 @@ def _zero_result(
         "feed_status": feed_status,
         "btc_bias_applied": None,
         "abort_reason": reason,
+        "filtered_indicators": {},
     }

@@ -92,16 +92,27 @@ export default function LiveCockpitPanel() {
     fetch('/api/pairs')
       .then((r) => r.json())
       .then((data) => {
-        const pairs = Array.isArray(data?.pairs) ? data.pairs : Array.isArray(data) ? data : [];
+        let pairsRaw: unknown[] = [];
+        if (Array.isArray(data?.pairs)) {
+          pairsRaw = data.pairs as unknown[];
+        } else if (data?.groups && typeof data.groups === 'object') {
+          pairsRaw = Object.values(data.groups as Record<string, unknown[]>).flat();
+        } else if (Array.isArray(data)) {
+          pairsRaw = data;
+        }
         setAvailablePairs(
-          pairs
-            .filter((p: any) => p?.enabled !== false)
-            .map((p: any) => ({
-              display: p.display || p.symbol || '',
-              type: p.type || 'unknown',
-              enabled: true,
-            }))
-            .sort((a: any, b: any) => a.display.localeCompare(b.display)),
+          pairsRaw
+            .filter((p: unknown) => (p as { enabled?: boolean })?.enabled !== false)
+            .map((p: unknown) => {
+              const row = p as { sym?: string; label?: string; display?: string; symbol?: string; type?: string };
+              return {
+                display: row.label || row.display || row.symbol || row.sym || '',
+                type: row.type || 'unknown',
+                enabled: true,
+              };
+            })
+            .filter((p) => p.display)
+            .sort((a, b) => a.display.localeCompare(b.display)),
         );
       })
       .catch(() => setAvailablePairs([]));

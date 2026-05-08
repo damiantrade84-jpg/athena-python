@@ -31,6 +31,14 @@ from stability_monitor import record_signal_event
 log = logging.getLogger("sentinel")
 
 
+def _engine_a_reliability(engine_a: dict, a_quality: float) -> float:
+    """Blend Engine A confidence-detail score with meta quality; missing confidence → quality only."""
+    c = engine_a.get("confidence")
+    if c is None:
+        return float(a_quality)
+    return float(c) * 0.5 + float(a_quality) * 0.5
+
+
 # ── Regime-conditional engine weights ─────────────────────────────────────────
 # Backtest evidence: Engine A dominates in trends (COT/momentum factors),
 # Engine B dominates in ranges (BOS/CHoCH/zones more meaningful at structure).
@@ -336,6 +344,13 @@ def normalise_engine_a(signal_a: dict) -> dict:
     _dir_ok = signal_a.get("direction") in ("LONG", "SHORT")
     _is_full = norm > _a_has_floor and _dir_ok
     _is_partial = (not _is_full) and norm > _a_partial_floor and _dir_ok
+    _cf = None
+    _cdetail = signal_a.get("confidenceDetail")
+    if isinstance(_cdetail, dict) and _cdetail.get("confidence") is not None:
+        try:
+            _cf = float(_cdetail["confidence"])
+        except (TypeError, ValueError):
+            _cf = None
     return {
         "score_norm": round(norm, 4),
         "direction": signal_a.get("direction"),
@@ -351,7 +366,7 @@ def normalise_engine_a(signal_a: dict) -> dict:
         "cot_active": bool(cot_active),
         "carry_active": bool(carry_active),
         "style": signal_a.get("style", signal_a.get("tradeStyle", "swing")),
-        "confidence": float(signal_a.get("confidenceDetail", {}).get("confidence", 0.5)),
+        "confidence": _cf,
     }
 
 
@@ -922,7 +937,7 @@ def compute_consensus(
 
         # Reliability Layer for A_ONLY
         a_quality = 0.50 # fallback
-        a_reliability = (a.get("confidence", 0.5) * 0.5) + (a_quality * 0.5)
+        a_reliability = _engine_a_reliability(a, a_quality)
         c_reliability = a_reliability # 100% allocation to A
 
         decision_state = "blocked"
@@ -1148,7 +1163,7 @@ def compute_consensus(
                 sizing = 0.0
 
             a_quality = 0.50
-            a_reliability = (a.get("confidence", 0.5) * 0.5) + (a_quality * 0.5)
+            a_reliability = _engine_a_reliability(a, a_quality)
             c_reliability = a_reliability
 
             decision_state = "blocked"
@@ -1336,8 +1351,8 @@ def compute_consensus(
     # --- Reliability Layer ---
     a_quality = meta_policy.get("engineQualities", {}).get("engine_a", {}).get("quality_score", 0.50)
     b_quality = meta_policy.get("engineQualities", {}).get("engine_b", {}).get("quality_score", 0.50)
-    
-    a_reliability = (a.get("confidence", 0.5) * 0.5) + (a_quality * 0.5)
+
+    a_reliability = _engine_a_reliability(a, a_quality)
     b_reliability = _compute_b_reliability(b, b_quality)
     
     c_reliability = (a_reliability * weights["A"]) + (b_reliability * weights["B"])

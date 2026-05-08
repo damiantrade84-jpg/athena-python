@@ -7,7 +7,7 @@ Components:
   1. indicator_agreement  — variance within each factor's indicators
   2. timeframe_alignment  — consistency of factor scores across D1/H4/H1
   3. regime_fit            — how well signal type matches detected regime
-  4. liquidity_quality     — normalized volume, orderflow, spread metrics
+  4. liquidity_quality     — normalized volume_ratio and optional microstructure (no spread input)
 """
 
 import math
@@ -123,8 +123,10 @@ def indicator_agreement(
     filtered_indicators: Dict[str, Optional[float]],
     factor_map: Dict[str, List[str]],
 ) -> Optional[float]:
-    """Measure variance between normalized indicator signals within each factor using robust MAD.
-    agreement = robust_z_score_normalization(mean_mad). Returns 0-1 or None if no data."""
+    """Measure agreement within each factor's indicators via MAD dispersion.
+
+    Uses _mad_dispersion_score (inverse dispersion to [0,1]), not z-score normalization.
+    Returns 0–1 or None if no data."""
     mads = []
     for factor, keys in factor_map.items():
         vals = [
@@ -188,8 +190,9 @@ def liquidity_quality(
     microstructure: Optional[Dict] = None,
     session_vol_multiplier: float = 1.0,
 ) -> Optional[float]:
-    """Use normalized volume and session-based volatility multiplier.
-    Forex is decentralized, so we rely on volume_ratio and session timing.
+    """Normalized volume_ratio plus optional microstructure (wall/pressure) signals.
+
+    Spread is not used here (decentralized forex has no single spread series in this path).
     Returns 0-1 or None if no data available."""
     components = []
     # Volume ratio: >1.0 means above-average volume
