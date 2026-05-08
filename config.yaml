@@ -797,7 +797,10 @@ MAX_RISK_PER_TRADE: 0.03      # Hard cap 3% per trade
 
 DRAWDOWN_REDUCE_THRESHOLD: 0.10   # Halve size at 10% drawdown
 
-DRAWDOWN_STOP_THRESHOLD: 0.15     # Stop all trading at 15% drawdown
+DRAWDOWN_STOP_THRESHOLD: 0.15     # Stop all trading at 15% drawdown from peak equity
+
+# Master switch for drawdown stop + reduce (both off when false). Paper/debug only — not for live.
+DRAWDOWN_STOP_ENABLED: true
 
 DATA_FRESHNESS_GATES:
   WARN_ON_STALE_SCAN: true

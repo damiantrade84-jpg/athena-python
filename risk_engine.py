@@ -339,6 +339,14 @@ def _current_drawdown(equity: float, asset_type: str = "") -> float:
     return max(0.0, (peak - equity) / peak)
 
 
+def _peak_equity_snapshot(asset_type: str = "") -> float:
+    """Read persisted peak for the account domain (for logging only)."""
+    domain = _resolve_domain(asset_type)
+    with _peak_lock:
+        v = _peak_equity.get(domain)
+        return float(v) if v is not None else 0.0
+
+
 def _cluster_for_pair(pair_display: str) -> str | None:
     """Find which correlation cluster a pair belongs to."""
     return _PAIR_TO_CLUSTER.get(pair_display)
@@ -720,14 +728,20 @@ def risk_check(
     # ── Check 2: Drawdown circuit breaker ───────────────────────────────────
     dd = _current_drawdown(account_equity, asset_type)
     dd_factor = 1.0
-    if dd >= _cfg("DRAWDOWN_STOP_THRESHOLD", 0.15):
-        log.warning(
-            f"{prefix} REJECTED: drawdown {dd:.1%} exceeds stop threshold {_cfg('DRAWDOWN_STOP_THRESHOLD', 0.15):.0%}"
-        )
-        return RiskApproval(False, 0.0, 0.0, 0.0, 0.0, dd, "DRAWDOWN_CIRCUIT_BREAKER")
-    if dd >= _cfg("DRAWDOWN_REDUCE_THRESHOLD", 0.10):
-        dd_factor = 0.5
-        log.info(f"{prefix} drawdown {dd:.1%} — halving position size")
+    if _cfg("DRAWDOWN_STOP_ENABLED", True):
+        peak_snap = _peak_equity_snapshot(asset_type)
+        if dd >= _cfg("DRAWDOWN_STOP_THRESHOLD", 0.15):
+            log.warning(
+                f"{prefix} REJECTED: drawdown {dd:.1%} (equity={account_equity:,.2f} vs peak={peak_snap:,.2f} "
+                f"domain={_resolve_domain(asset_type)}) exceeds stop threshold "
+                f"{_cfg('DRAWDOWN_STOP_THRESHOLD', 0.15):.0%}"
+            )
+            return RiskApproval(False, 0.0, 0.0, 0.0, 0.0, dd, "DRAWDOWN_CIRCUIT_BREAKER")
+        if dd >= _cfg("DRAWDOWN_REDUCE_THRESHOLD", 0.10):
+            dd_factor = 0.5
+            log.info(f"{prefix} drawdown {dd:.1%} — halving position size")
+    else:
+        log.debug("%s DRAWDOWN_STOP_ENABLED=false — drawdown stop/reduce skipped", prefix)
 
     # ── Check 3: Max open positions ─────────────────────────────────────────
     if len(open_positions) >= _cfg("MAX_OPEN_POSITIONS", 5):

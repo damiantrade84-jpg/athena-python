@@ -259,6 +259,20 @@ class TestDrawdown:
             with risk_engine._peak_lock:
                 risk_engine._peak_equity = old
 
+    def test_drawdown_gate_disabled_allows_trade(self, monkeypatch):
+        import risk_engine
+
+        monkeypatch.setitem(risk_engine.CONFIG, "DRAWDOWN_STOP_ENABLED", False)
+        with risk_engine._peak_lock:
+            old = dict(risk_engine._peak_equity)
+            risk_engine._peak_equity["crypto"] = 10000.0
+        try:
+            result = risk_check(_make_signal(type="crypto"), 8000, 8000, [])
+            assert result.approved is True
+        finally:
+            with risk_engine._peak_lock:
+                risk_engine._peak_equity = old
+
     def test_drawdown_peaks_are_shared_across_domain_assets(self):
         """MT5 assets (forex, stock) must share a peak equity bucket; crypto is separate."""
         import risk_engine
