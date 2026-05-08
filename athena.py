@@ -8847,11 +8847,11 @@ def _scalp_ui_signal(raw_signal: dict) -> dict:
 
 @app.route("/api/scalp-pairs", methods=["GET"])
 def api_scalp_pairs():
-    """List Engine D scan universe (no candle work). Respects SCALP_PAIRS override."""
+    """List Engine D scan universe (no candle work). Respects SCALP_SCAN_UNIVERSE / disabled pairs."""
     try:
-        from scalp_engine import get_scalp_pairs
+        from scalp_engine import displays_for_scalp_scan
 
-        pairs = get_scalp_pairs(ACTIVE_PAIRS)
+        pairs = displays_for_scalp_scan(ACTIVE_PAIRS, disabled_displays=_disabled_pairs)
         return jsonify({"pairs": pairs, "count": len(pairs)})
     except Exception as e:
         log.error(f"api_scalp_pairs error: {e}")
@@ -8862,12 +8862,12 @@ def api_scalp_pairs():
 def api_scalp_scan():
     """Run Engine D scalp scan and return frontend-friendly JSON."""
     try:
-        from scalp_engine import get_scalp_pairs, run_scalp_scan
+        from scalp_engine import displays_for_scalp_scan, run_scalp_scan
 
         payload = request.get_json(silent=True) or {}
         pairs = payload.get("pairs")
         if not isinstance(pairs, list) or not pairs:
-            pairs = get_scalp_pairs(ACTIVE_PAIRS)
+            pairs = displays_for_scalp_scan(ACTIVE_PAIRS, disabled_displays=_disabled_pairs)
 
         diagnostic = bool(payload.get("diagnostic", False))
         result = run_scalp_scan(pairs)
@@ -14053,6 +14053,11 @@ def ensure_runtime_services_started() -> None:
             return
         _runtime_services_started = True
 
+    from athena.crypto_ws_scope import (
+        binance_micro_symbol_strings,
+        enabled_binance_micro_crypto_pairs,
+    )
+
     # Start EODHD WebSocket real-time price streaming + candle builder
     _ws_key = os.environ.get("EODHD_KEY", "")
     if _ws_key:
@@ -14098,7 +14103,9 @@ def ensure_runtime_services_started() -> None:
     # Start Binance Futures WebSocket for crypto live prices + kline candles
     crypto_enabled = [p for p in CRYPTO_PAIRS if p.get("enabled", True)]
     if crypto_enabled:
-        selected_symbols = _select_live_crypto_symbols_for_ws()
+        demand_symbols = _select_live_crypto_symbols_for_ws()
+        micro_symbols = set(binance_micro_symbol_strings(CRYPTO_PAIRS))
+        selected_symbols = sorted(set(demand_symbols) | micro_symbols)
         selected_intervals = resolve_binance_kline_ws_intervals(CONFIG)
         _binance_ws = BinanceLivePriceWS()
         _binance_ws.start()
@@ -14113,10 +14120,12 @@ def ensure_runtime_services_started() -> None:
             target=_run_binance_price_poller, daemon=True, name="binance-price-poll"
         ).start()
         log.info(
-            "[BINANCE-WS] Price feed active; kline scope symbols=%s tfs=%s (enabled_crypto=%s)",
+            "[BINANCE-WS] Price feed active; kline scope symbols=%s tfs=%s (enabled_crypto=%s demand_scoped=%s all_binance_micro=%s)",
             len(selected_symbols),
             selected_intervals,
             len(crypto_enabled),
+            len(demand_symbols),
+            len(micro_symbols),
         )
         if selected_symbols:
             log.info(
@@ -14138,14 +14147,29 @@ def ensure_runtime_services_started() -> None:
             except ImportError as exc:
                 log.warning(f"[MICRO] Import failed: {exc}")
                 return
-            selected_symbols = _select_live_crypto_symbols_for_ws()
-            crypto_pairs = []
+            micro_crypto_pairs = enabled_binance_micro_crypto_pairs(CRYPTO_PAIRS)
+            expected_n = sum(
+                1
+                for p in CRYPTO_PAIRS
+                if p.get("enabled", True)
+                and str(p.get("type") or "").lower() == "crypto"
+                and str(p.get("source") or "").lower() == "binance"
+                and str(p.get("symbol") or "").strip()
+            )
+            malformed = False
             for p in CRYPTO_PAIRS:
-                if not p.get("enabled", False):
+                if not p.get("enabled", True):
                     continue
-                sym = str(p.get("symbol") or "").replace("/", "").upper()
-                if sym in selected_symbols:
-                    crypto_pairs.append(p)
+                if str(p.get("type") or "").lower() != "crypto":
+                    continue
+                if str(p.get("source") or "").lower() != "binance":
+                    continue
+                if not str(p.get("symbol") or "").strip():
+                    malformed = True
+                    log.warning(
+                        "[MICRO] enabled binance crypto pair missing symbol: display=%s",
+                        p.get("display") or "?",
+                    )
 
             def _make_cb(sym):
                 def _cb(metrics):
@@ -14198,7 +14222,7 @@ def ensure_runtime_services_started() -> None:
 
             bybit_micro_enabled = bool(CONFIG.get("MICROSTRUCTURE_BYBIT_FEEDS_ENABLED", False))
 
-            for pair in crypto_pairs:
+            for pair in micro_crypto_pairs:
                 sym = pair["symbol"]
                 cb = _make_cb(sym)
                 b = BinanceWS(sym.lower())
@@ -14212,11 +14236,18 @@ def ensure_runtime_services_started() -> None:
                     threading.Thread(
                         target=_run, args=(y, cb), daemon=True, name=f"BbtWS-{sym}"
                     ).start()
+            scope_note = ""
+            if len(micro_crypto_pairs) != expected_n or malformed:
+                scope_note = f" enabled_binance_crypto_expected={expected_n}"
             log.info(
-                "[MICRO] Started feeds: binance=%s bybit=%s symbols=%s",
-                len(crypto_pairs),
-                len(crypto_pairs) if bybit_micro_enabled else 0,
-                ", ".join(str(p["symbol"]).replace("/", "").upper() for p in crypto_pairs) if crypto_pairs else "none",
+                "[MICRO] Started feeds (all enabled Binance crypto): binance=%s bybit=%s pairs_total=%s%s symbols=%s",
+                len(micro_crypto_pairs),
+                len(micro_crypto_pairs) if bybit_micro_enabled else 0,
+                expected_n,
+                scope_note,
+                ", ".join(str(p["symbol"]).replace("/", "").upper() for p in micro_crypto_pairs)
+                if micro_crypto_pairs
+                else "none",
             )
 
         threading.Thread(

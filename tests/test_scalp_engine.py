@@ -47,6 +47,7 @@ from scalp_engine import (
     ai_quality_grade,
     check_spread,
     get_scalp_pairs,
+    displays_for_scalp_scan,
     _guess_asset_type,
 )
 from indicators import calc_obv_trend, calc_vwap, detect_absorption, calc_cvd, detect_range_contraction
@@ -1240,6 +1241,56 @@ def test_get_scalp_pairs_fallback_has_all_types():
     assert any("USDT" in p for p in pairs)   # crypto
     assert any("XAU" in p for p in pairs)    # commodity
     assert any("Nasdaq" in p or "S&P" in p for p in pairs)  # index
+
+
+def test_displays_for_scalp_scan_all_active_excludes_disabled(monkeypatch):
+    base = scalp_engine.CONFIG.get("SCALP_ENGINE", {})
+    monkeypatch.setitem(
+        scalp_engine.CONFIG,
+        "SCALP_ENGINE",
+        {**base, "SCALP_SCAN_UNIVERSE": "all_active"},
+    )
+    active = [
+        {"display": "EUR/USD", "symbol": "EURUSD", "enabled": True, "type": "forex", "source": "mt5"},
+        {"display": "BTC/USDT", "symbol": "BTCUSDT", "enabled": True, "type": "crypto", "source": "binance"},
+        {"display": "XAU/USD", "symbol": "XAUUSD", "enabled": False, "type": "commodity", "source": "mt5"},
+    ]
+    out = displays_for_scalp_scan(active, disabled_displays={"EUR/USD"})
+    assert out == ["BTC/USDT"]
+
+
+def test_displays_for_scalp_scan_scalp_mode_delegates(monkeypatch):
+    base = scalp_engine.CONFIG.get("SCALP_ENGINE", {})
+    monkeypatch.setitem(
+        scalp_engine.CONFIG,
+        "SCALP_ENGINE",
+        {**base, "SCALP_SCAN_UNIVERSE": "scalp"},
+    )
+    active = [
+        {"display": "Naspers", "symbol": "NPN.JO", "type": "stock", "source": "eodhd", "enabled": True},
+        {"display": "BTC/USDT", "symbol": "BTCUSDT", "type": "crypto", "source": "binance", "enabled": True},
+    ]
+    out = displays_for_scalp_scan(active, disabled_displays=set())
+    assert out == get_scalp_pairs(active)
+
+
+def test_displays_for_scalp_scan_unknown_mode_falls_back_to_all_active(monkeypatch, caplog):
+    import logging
+
+    base = scalp_engine.CONFIG.get("SCALP_ENGINE", {})
+    monkeypatch.setitem(
+        scalp_engine.CONFIG,
+        "SCALP_ENGINE",
+        {**base, "SCALP_SCAN_UNIVERSE": "typo_mode"},
+    )
+    caplog.set_level(logging.WARNING)
+    active = [
+        {"display": "AAA", "enabled": True},
+        {"display": "BBB", "enabled": True},
+    ]
+    out = displays_for_scalp_scan(active, disabled_displays=set())
+    assert set(out) == {"AAA", "BBB"}
+    assert any("Unknown SCALP_SCAN_UNIVERSE" in r.message for r in caplog.records)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

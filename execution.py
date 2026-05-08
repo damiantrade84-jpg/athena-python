@@ -1739,10 +1739,12 @@ def register_execution_routes(app: Flask) -> None:
 
 def api_scalp_pairs():
     """List Engine D scan universe (mirrors athena when registered)."""
-    from scalp_engine import get_scalp_pairs
+    from scalp_engine import displays_for_scalp_scan
 
     try:
-        pairs = get_scalp_pairs(rt().ACTIVE_PAIRS)
+        _r = rt()
+        _disabled = getattr(_r, "disabled_pairs", None) or set()
+        pairs = displays_for_scalp_scan(_r.ACTIVE_PAIRS, disabled_displays=_disabled)
         return jsonify({"pairs": pairs, "count": len(pairs)})
     except Exception as e:
         rt().log.error(f"[SCALP API] scalp-pairs error: {e}")
@@ -1751,13 +1753,15 @@ def api_scalp_pairs():
 
 def api_scalp_scan():
     """Engine D scalp scan — M15 zones + M5 entry triggers (MT5 non-crypto, Binance/crypto path for USDT pairs)."""
-    from scalp_engine import get_scalp_pairs, run_scalp_scan
-    
+    from scalp_engine import displays_for_scalp_scan, run_scalp_scan
+
+    _r = rt()
     d = request.get_json() or {}
     requested_pairs = d.get("pairs")
-    
+
+    _disabled = getattr(_r, "disabled_pairs", None) or set()
     if not requested_pairs or requested_pairs == "all":
-        pairs = get_scalp_pairs(rt().ACTIVE_PAIRS)
+        pairs = displays_for_scalp_scan(_r.ACTIVE_PAIRS, disabled_displays=_disabled)
     elif isinstance(requested_pairs, list):
         pairs = requested_pairs
     else:

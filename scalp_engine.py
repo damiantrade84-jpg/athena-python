@@ -4565,3 +4565,43 @@ def get_scalp_pairs(active_pair_dicts: Optional[list[dict[str, Any]]] = None) ->
         mt5_forex + mt5_exotic + mt5_commodities + mt5_indices + mt5_stocks
         + _CRYPTO_SCALP_PAIRS
     )
+
+
+def displays_for_scalp_scan(
+    active_pair_dicts: Optional[list[dict[str, Any]]],
+    *,
+    disabled_displays: set[str] | list[str] | tuple[str, ...] | None = None,
+) -> list[str]:
+    """Default Engine D scan roster when the API client omits ``pairs``.
+
+    Reads ``SCALP_ENGINE.SCALP_SCAN_UNIVERSE``:
+    - ``all_active`` (default): every enabled pair in ``active_pair_dicts`` whose
+      ``display`` is not in ``disabled_displays`` (mirrors full-scan spirit).
+    - ``scalp``: legacy narrow universe via :func:`get_scalp_pairs`.
+    """
+    cfg = CONFIG.get("SCALP_ENGINE") or {}
+    mode = str(cfg.get("SCALP_SCAN_UNIVERSE", "all_active") or "all_active").strip().lower()
+    if mode == "scalp":
+        return list(get_scalp_pairs(active_pair_dicts))
+
+    if mode != "all_active":
+        log.warning(
+            "[SCALP] Unknown SCALP_SCAN_UNIVERSE %r — using all_active",
+            cfg.get("SCALP_SCAN_UNIVERSE"),
+        )
+
+    raw = disabled_displays or set()
+    if isinstance(raw, (list, tuple)):
+        banned = {str(d).strip() for d in raw}
+    else:
+        banned = {str(d).strip() for d in raw}
+
+    out: list[str] = []
+    for p in active_pair_dicts or []:
+        if not isinstance(p, dict) or not p.get("enabled", True):
+            continue
+        disp = str((p.get("display") or p.get("symbol") or "")).strip()
+        if not disp or disp in banned:
+            continue
+        out.append(disp)
+    return sorted(set(out), key=str.casefold)

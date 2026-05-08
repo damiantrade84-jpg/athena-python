@@ -2068,6 +2068,11 @@ SCALP_ENGINE:
 
   enabled: true
 
+  # Default Engine D roster when POST /api/scalp-scan omits pairs.
+  # all_active — every ENABLED pair in ACTIVE_PAIRS excluding disabled_pairs (dashboard kill-switch).
+  # scalp — legacy narrow universe (get_scalp_pairs / SCALP_PAIRS when set).
+  SCALP_SCAN_UNIVERSE: all_active
+
   # ── Data ──────────────────────────────────────────────────
 
   M1_CANDLES: 300               # M1 bars for execution / trigger timing
