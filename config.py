@@ -321,6 +321,8 @@ CONFIG: dict = {
     "D1_CANDLES": 1001,
     "H4_CANDLES": 1000,
     "H1_CANDLES": 1000,
+    # Skip /api/eod-bulk-last-day/{EXCH} for these ticker suffixes (404 on e.g. COMM).
+    "CANDLE_BUILDER_BULK_D1_SKIP_EXCHANGES": ["COMM"],
     "SCAN_MAX_WORKERS": 3,
     "SCAN_DEBUG_CANDLE_META": False,
     "FOREX_H4_RESAMPLE_OFFSET_HOURS": 2.0,
@@ -765,6 +767,8 @@ CONFIG: dict = {
     },
     "EXECUTOR_MODE": "paper",
     "EXECUTION_ENABLED": True,  # Master switch — enabled for demo live-level testing
+    # Re-fetch H1/H4/D1 candle metadata right before risk/guardian during execute paths.
+    "QUICK_EXEC_PREFETCH_CANDLE_META": False,
     "AUTO_EXECUTE": False,  # Auto-execute after AI grade (manual click only when False)
     "RISK_ENGINE_ENABLED": True,
     "MT5_EXECUTION_ENABLED": True,

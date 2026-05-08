@@ -320,6 +320,56 @@ def test_quick_execute_refresh_replaces_stale_freshness_metadata(monkeypatch):
     assert captured["signal"]["dataFreshness"]["allowed"] is True
 
 
+def test_execution_prefetch_candle_fetch_meta_updates_signal(monkeypatch):
+    import execution
+
+    calls: list[tuple[str, int]] = []
+
+    def _fake_fetch(pair, tf, lim):
+        calls.append((tf, int(lim)))
+        return []
+
+    mock_r = MagicMock()
+    mock_r.CONFIG = {"QUICK_EXEC_PREFETCH_CANDLE_META": True}
+    mock_r.ALL_PAIRS = [{"display": "USD/MXN", "source": "mt5", "type": "forex"}]
+    mock_r.fetch_candles = _fake_fetch
+    mock_r.log = MagicMock()
+
+    monkeypatch.setattr(
+        execution,
+        "get_candle_fetch_meta",
+        lambda _pair, tf, _lim: {"tf": tf, "lastBarStale": False, "stub": True},
+    )
+    monkeypatch.setattr(execution, "scan_candle_limits", lambda: {"H1": 11, "H4": 22, "D1": 33})
+
+    sig = {
+        "pair": "USD/MXN",
+        "candleFetchMeta": {"H1": {"lastBarStale": True}},
+    }
+    execution._maybe_prefetch_execution_candle_fetch_meta(sig, _r=mock_r)
+
+    assert calls == [("H1", 11), ("H4", 22), ("D1", 33)]
+    assert sig["candleFetchMeta"]["H1"]["lastBarStale"] is False
+    assert sig["candleFetchMeta"]["H1"]["stub"] is True
+    assert sig["candleFetchMeta"]["pairSource"] == "mt5"
+
+
+def test_execution_prefetch_disabled_is_noop():
+    import execution
+
+    calls = []
+
+    mock_r = MagicMock()
+    mock_r.CONFIG = {"QUICK_EXEC_PREFETCH_CANDLE_META": False}
+    mock_r.ALL_PAIRS = [{"display": "EUR/USD"}]
+    mock_r.fetch_candles = lambda *a, **k: calls.append(a) or []
+
+    sig = {"pair": "EUR/USD"}
+    execution._maybe_prefetch_execution_candle_fetch_meta(sig, _r=mock_r)
+
+    assert calls == []
+
+
 # ── CRIT-002: forex intermarket cap parity ────────────────────────────────────
 class TestForexIntermarketCapParity:
 

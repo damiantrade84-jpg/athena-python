@@ -425,6 +425,58 @@ def _extract_engine_b_execution_levels(
     return None
 
 
+def _maybe_prefetch_execution_candle_fetch_meta(sig: dict, *, _r) -> None:
+    """Refresh ``signal['candleFetchMeta']`` from ``fetch_candles`` + terminal metadata.
+
+    Prevents guardian/risk staleness mismatches after long UI waits (e.g. AI review) without
+    a full analyze refresh. Uses the same limits as Engine A scans.
+
+    Controlled by CONFIG ``QUICK_EXEC_PREFETCH_CANDLE_META`` (default safe: off in python
+    defaults; repo ``config.yaml`` sets true).
+
+    Ops: exotic FX (e.g. USD/MXN) still blocks if MT5 has no recent bars — verify Market Watch /
+    sessions when ``STALE_CANDLES`` persists after prefetch.
+    """
+    try:
+        if not bool((_r.CONFIG or {}).get("QUICK_EXEC_PREFETCH_CANDLE_META", False)):
+            return
+        pair_disp = str(sig.get("pair") or sig.get("display") or sig.get("symbol") or "").strip()
+        if not pair_disp:
+            return
+        pair_obj = next((p for p in (_r.ALL_PAIRS or []) if str(p.get("display", "")) == pair_disp), None)
+        if not pair_obj:
+            return
+        limits = scan_candle_limits()
+        fetch = getattr(_r, "fetch_candles", None)
+        if not callable(fetch):
+            return
+        for tf in ("H1", "H4", "D1"):
+            lim = int(limits[tf])
+            fetch(pair_obj, tf, lim)
+        d1_m = get_candle_fetch_meta(pair_obj, "D1", limits["D1"])
+        h4_m = get_candle_fetch_meta(pair_obj, "H4", limits["H4"])
+        h1_m = get_candle_fetch_meta(pair_obj, "H1", limits["H1"])
+        sig["candleFetchMeta"] = {
+            "D1": d1_m if isinstance(d1_m, dict) else {},
+            "H4": h4_m if isinstance(h4_m, dict) else {},
+            "H1": h1_m if isinstance(h1_m, dict) else {},
+            "pairSource": pair_obj.get("source"),
+        }
+        _r.log.info(
+            "[EXEC] candleFetchMeta prefetched H1=%s H4=%s D1=%s pair=%s source=%s",
+            limits.get("H1"),
+            limits.get("H4"),
+            limits.get("D1"),
+            pair_disp,
+            pair_obj.get("source"),
+        )
+    except Exception as exc:
+        try:
+            _r.log.warning("[EXEC] candleFetchMeta prefetch failed: %s", exc)
+        except Exception:
+            pass
+
+
 def _apply_engine_b_execution_levels(sig: dict, engine_b: dict | None = None) -> bool:
     levels = _extract_engine_b_execution_levels(sig, engine_b)
     if not levels:
@@ -633,6 +685,8 @@ def api_quick_execute():
             if not symbol_info or symbol_info.get("error"):
                 return jsonify({"error": "Symbol not on broker"}), 400
             _exec_venue = "mt5"
+
+        _maybe_prefetch_execution_candle_fetch_meta(sig, _r=_r)
 
         approval = risk_check(
             signal=sig,
@@ -1492,6 +1546,8 @@ def api_execute():
             else:
                 _sizing_override = 1.0
 
+        _maybe_prefetch_execution_candle_fetch_meta(sig, _r=_r)
+
         approval = risk_check(
             signal=sig,
             account_balance=account["balance"],
@@ -1837,6 +1893,8 @@ def api_scalp_execute():
 
         if _rebase_error:
             return jsonify({"error": _rebase_error}), 400
+
+        _maybe_prefetch_execution_candle_fetch_meta(sig, _r=_r)
 
         # Format signal for risk engine
         approval = risk_check(

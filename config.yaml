@@ -38,6 +38,10 @@ H4_CANDLES: 1001
 
 H1_CANDLES: 1001
 
+# EODHD bulk last-day URL uses /eod-bulk-last-day/{EXCH}; some suffixes (COMM) are not supported → HTTP 404.
+# Those pairs still receive D1 via normal EOD candle fetch; CandleBuilder bulk refresh skips them only.
+CANDLE_BUILDER_BULK_D1_SKIP_EXCHANGES: ["COMM"]
+
 SCAN_MAX_WORKERS: 6           # Increased scan concurrency for faster Engine A full-universe runs.
 
 
@@ -763,6 +767,10 @@ MAX_OPEN_POSITIONS: 20        # Testing only - revert before live
 MAX_CORRELATED_POSITIONS: 3   # Allow up to 3 correlated positions (e.g. 3 USD pairs)
 
 SIGNAL_MAX_AGE_SEC: 300       # 5 min freshness window
+
+# Refresh candleFetchMeta via fetch_candles immediately before risk/guardian on execute/
+# quick-execute/scalp-execute so long AI-review waits do not block on stale embedded H1/H4 flags.
+QUICK_EXEC_PREFETCH_CANDLE_META: true
 
 FOREX_SESSION_FILTER: true    # true = London+NY+Asian only; false = 24h (disable for testing)
 

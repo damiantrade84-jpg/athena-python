@@ -476,6 +476,30 @@ def pre_trade_check(
                         except (TypeError, ValueError):
                             stale_tfs.append(tf)
                 if stale_tfs:
+                    _detail_bits: list[str] = []
+                    try:
+                        pair_lbl = signal.get("pair") or signal.get("display") or ""
+                        for tf in ("H1", "H4"):
+                            tf_meta = candle_meta.get(tf)
+                            if not isinstance(tf_meta, dict):
+                                continue
+                            _detail_bits.append(
+                                f"{tf}:age={tf_meta.get('lastBarAgeSec')!s} "
+                                f"hasCur={tf_meta.get('hasCurrentBucket')!s} "
+                                f"sev={tf_meta.get('stalenessSeverity')!s} "
+                                f"epoch={tf_meta.get('lastBarEpoch')!s} "
+                                f"offH={tf_meta.get('offsetHours')!s} "
+                                f"lag={tf_meta.get('bucketLag')!s}"
+                            )
+                        if _detail_bits:
+                            log.warning(
+                                "[GUARDIAN] STALE_CANDLES blocked pair=%s tfs=%s | %s",
+                                pair_lbl,
+                                ", ".join(stale_tfs),
+                                " | ".join(_detail_bits),
+                            )
+                    except Exception:
+                        pass
                     return False, f"STALE_CANDLES: {', '.join(stale_tfs)}"
     except Exception:
         pass
