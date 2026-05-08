@@ -13074,9 +13074,10 @@ def api_performance():
                 return None
             mean = sum(clean) / len(clean)
             variance = sum((v - mean) ** 2 for v in clean) / (len(clean) - 1)
-            if variance <= 0:
-                return None
-            return round(mean / (variance**0.5) * (len(clean) ** 0.5), 2)
+            if variance <= 0 or mean == 0:
+                return 0.0
+            raw = mean / (variance**0.5) * (len(clean) ** 0.5)
+            return round(max(-10.0, min(10.0, raw)), 2)
 
         with sqlite3.connect(_AUDIT_DB, timeout=15.0) as con:
             con.row_factory = sqlite3.Row
@@ -13171,13 +13172,17 @@ def api_performance():
 
         win_rate = round(win_count / decisive_total * 100, 1) if decisive_total else 0
 
+        def _trade_closed_sort_key(trade: dict):
+            return (_parse_close_dt(trade), int(trade.get("id") or 0))
+
+        # Same chronological order for R series, cumulative equity, Sharpe annualiser hints, and max DD path.
+        trades_series = sorted(trades, key=_trade_closed_sort_key)
+
         r_vals: list[float] = []
         _r_day_hints: list[str | None] = []
-        for _t in trades:
+        for _t in trades_series:
             _rm = _safe_float(_t.get("r_multiple"))
-            if _rm is None:
-                continue
-            r_vals.append(float(_rm))
+            r_vals.append(float(_rm) if _rm is not None else 0.0)
             _cd = _parse_close_dt(_t)
             _r_day_hints.append(
                 _cd.date().isoformat() if _cd > _epoch else None
@@ -13223,10 +13228,23 @@ def api_performance():
             r_vals, _trades_per_live, decimals=2
         )
 
+        perf_sqn = _sqn_from_r_values(r_vals)
+
+        _sq_warn_floor = max(3, int(CONFIG.get("BT_LOW_SAMPLE_SQ_WARN_TRADES", 30) or 30))
+
         metric_interpretation_notes = [
             "Sharpe/Sortino use closed-trade R-multiples with the same annualiser as backtests "
-            "(calendar span × 365 / trade count)."
+            "(calendar span × 365 / trade count).",
+            "This panel is live/paper audit aggregates only. PSR, DSR, PBO, and bootstrap assumptions appear on "
+            "backtest API responses (Performance Lab / Backtest panel) after you run a pair backtest.",
+            "Cumulative R chart is ordered by close time (+ id tie-break); headline Sharpe/Sortino/SQN use that "
+            "same R sequence.",
         ]
+        if len(r_vals) > 0 and len(r_vals) < _sq_warn_floor:
+            metric_interpretation_notes.append(
+                f"Fewer than {_sq_warn_floor} decisive R-multiples — treat SQN/Sharpe as indicative only "
+                "(same low-sample caveat as Engine A wfSplit)."
+            )
 
         daily_buckets: defaultdict[str, float] = defaultdict(float)
         for _t in trades:
@@ -13359,20 +13377,15 @@ def api_performance():
 
         avg_holding = round(sum(hp_vals) / len(hp_vals), 1) if hp_vals else None
 
-        # Last 20 completed trades — close time + id (string sort breaks on ISO variants)
-
-        def _trade_closed_sort_key(trade: dict):
-            return (_parse_close_dt(trade), int(trade.get("id") or 0))
-
         # last_20 is already fetched from DB with ORDER BY id DESC LIMIT 20 above.
 
-        # Equity curve: cumulative R list for charting
+        # Equity curve: cumulative R list for charting (same order as Sharpe/max-DD R series)
 
         equity_curve = []
 
         cum = 0
 
-        for t in sorted(trades, key=lambda t: t.get("ts") or ""):
+        for t in trades_series:
             cum += t.get("r_multiple") or 0
 
             equity_curve.append(round(cum, 2))
@@ -13466,6 +13479,7 @@ def api_performance():
                 "profit_factor": profit_factor,
                 "sharpe": perf_sharpe,
                 "sortino": perf_sortino,
+                "sqn": perf_sqn,
                 "max_drawdown_pct": max_dd_pct,
                 "win_rate_by_regime": win_rate_by_regime,
                 "win_rate_by_score_band": win_rate_by_score_band,

@@ -80,12 +80,24 @@ export default function PerformancePanel() {
         </div>
       )}
 
-      <div className="grid grid-cols-6 gap-3">
+      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-7 gap-3">
         <KpiCard title="Total Trades" value={num(perf?.total_trades).toString()} loading={loading} />
         <KpiCard title="Win Rate" value={`${winRatePct.toFixed(1)}%`} loading={loading} />
         <KpiCard title="Profit Factor" value={profitFactor == null ? '—' : fmtNum(profitFactor, 2)} loading={loading} />
         <KpiCard title="Total R" value={fmtNum(perf?.total_r, 2)} loading={loading} />
         <KpiCard title="Sharpe" value={sharpe == null ? '—' : fmtNum(sharpe, 2)} loading={loading} />
+        <Card className="border-border/60 bg-card/50">
+          <CardContent className="p-3">
+            <p className="text-[10px] uppercase tracking-wider text-muted-foreground">SQN</p>
+            {loading ? (
+              <Skeleton className="h-7 w-14 mt-1" />
+            ) : (
+              <div className="mt-1">
+                <SqnBadge sqn={perf?.sqn} />
+              </div>
+            )}
+          </CardContent>
+        </Card>
         <KpiCard title="Max DD" value={`${maxDdPct.toFixed(1)}%`} loading={loading} />
       </div>
 
@@ -96,6 +108,9 @@ export default function PerformancePanel() {
               <TrendingUp className="w-4 h-4 text-primary" />
               Equity Curve (Cumulative R)
             </CardTitle>
+            <p className="text-[10px] text-muted-foreground font-normal normal-case tracking-normal mt-1">
+              Ordered by close time; headline Sharpe uses the same R sequence.
+            </p>
           </CardHeader>
           <CardContent>
             {loading ? <Skeleton className="h-[260px] w-full" /> : equityData.length > 0 ? (
