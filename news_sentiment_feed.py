@@ -226,45 +226,31 @@ def build_news_block(articles: list) -> str:
     return "\n\n".join(blocks)
 
 
-SYSTEM_PROMPT = """You are a senior quantitative analyst and market strategist
-embedded in a live algorithmic trading system called Athena.
+SYSTEM_PROMPT = """You are a senior quantitative analyst embedded in the Athena trading system.
+Read financial news and produce a structured sentiment signal for the confluence engine.
 
-Your sole function is to read financial news articles and produce a precise
-structured sentiment signal that feeds directly into the confluence scoring engine.
-
-Hard rules:
-1. Use chain-of-thought reasoning before scoring — work through each article.
-2. Be asset-class specific — know what moves each market.
-3. Negative/bearish news is weighted more heavily than positive (markets fall faster).
-4. Score near 0.0 for vague, speculative, or noise articles.
-5. Only score above 0.6 or below -0.6 for major confirmed events.
-6. Never hallucinate facts not present in the articles.
-7. Output ONLY valid JSON. No markdown. No preamble. No explanation outside the JSON."""
+Rules:
+1. Be asset-class specific — know what moves each market.
+2. Negative/bearish news is weighted more heavily than positive (markets fall faster).
+3. Score near 0.0 for vague, speculative, or noise articles.
+4. Only score above 0.6 or below -0.6 for major confirmed events.
+5. Never hallucinate facts not present in the articles.
+6. Output ONLY valid JSON. No markdown. No preamble. No explanation outside the JSON."""
 
 
 def build_user_prompt(
     pair_display: str,
     asset_class: str,
     news_block: str,
-    eodhd_score: Optional[float],
-    current_price: Optional[float] = None,
+    eodhd_score: Optional[float] = None,  # accepted for back-compat; not injected into prompt
+    current_price: Optional[float] = None,  # accepted for back-compat; not injected into prompt
 ) -> str:
-    price_line = (
-        f"Current price: {current_price}"
-        if current_price is not None
-        else "Current price: not provided"
-    )
-    eodhd_line = (
-        f"EODHD pre-scored sentiment (-1 to 1): {eodhd_score:.4f}"
-        if eodhd_score is not None
-        else "EODHD pre-score: unavailable"
-    )
+    # eodhd_score and current_price are intentionally NOT placed into the prompt:
+    # the EODHD pre-score anchored the model and current_price was unused (audit fix).
     ctx = ASSET_CONTEXT.get(asset_class, ASSET_CONTEXT["stock"])
 
     return f"""PAIR: {pair_display}
 ASSET CLASS: {asset_class.upper()}
-{price_line}
-{eodhd_line}
 
 CONTEXT:
 {ctx}
@@ -273,29 +259,10 @@ CONTEXT:
 {news_block}
 ==========================================
 
-TASK — work through these steps:
+TASK:
+Read each article. Score from -1.0 to +1.0 (-1 = strongly bearish, +1 = strongly bullish, 0 = neutral/noise).
 
-STEP 1 — PER-ARTICLE ANALYSIS:
-For each article, state:
-  - Directional implication for {pair_display}: BULLISH / BEARISH / NEUTRAL
-  - Confidence in that direction: HIGH / MEDIUM / LOW
-  - Why (one sentence max)
-  - Is this a major market-moving event? YES / NO
-
-STEP 2 — AGGREGATE:
-Summarise the overall picture. Note any conflicting signals.
-State whether the EODHD pre-score aligns or conflicts with your reading.
-
-STEP 3 — FINAL SCORE:
-Score from -1.0 to +1.0:
-  -1.0 = strongly bearish, high confidence
-  -0.5 = moderately bearish
-   0.0 = neutral / noise / conflicting
-  +0.5 = moderately bullish
-  +1.0 = strongly bullish, high confidence
-
-STEP 4 — JSON OUTPUT:
-Return ONLY this exact JSON structure:
+Return ONLY this JSON object — no prose, no markdown:
 
 {{
   "pair": "{pair_display}",
@@ -304,11 +271,9 @@ Return ONLY this exact JSON structure:
   "direction": "<bullish|bearish|neutral>",
   "key_themes": ["<theme1>", "<theme2>", "<theme3>"],
   "major_event_detected": <true|false>,
-  "major_event_description": "<one sentence describing the event, or null>",
-  "reasoning_summary": "<2-3 sentences summarising your reasoning>",
-  "article_count_used": <int>,
-  "eodhd_pre_score": <float or null>,
-  "eodhd_agreement": "<agree|disagree|unavailable>"
+  "major_event_description": "<one sentence or null>",
+  "reasoning_summary": "<2-3 sentences>",
+  "article_count_used": <int>
 }}"""
 
 
@@ -380,8 +345,7 @@ def get_news_sentiment(
     news_limit: int = 8,
     model: str = "grok-4.3",
 ) -> Optional[dict]:
-    """
-    Full pipeline: resolve EODHD ticker -> news -> optional EODHD sentiment -> JSON.
+    """Resolve EODHD ticker → fetch news → LLM structured sentiment JSON.
 
     Returns parsed result dict or None on failure / no articles.
     """
@@ -398,23 +362,24 @@ def get_news_sentiment(
         log.warning("[NewsAI] No articles for %s (%s)", display, ticker)
         return None
 
-    eodhd_score = fetch_eodhd_sentiment(ticker, eodhd_api_key)
     news_block = build_news_block(articles)
     user_prompt = build_user_prompt(
-        display, asset_class, news_block, eodhd_score, current_price
+        display, asset_class, news_block, eodhd_score=None, current_price=None
     )
 
     try:
         client = create_ai_client(CONFIG, api_key=xai_api_key)
         _temp = float(CONFIG.get("AI_TEMPERATURE", 0.3))
+        _max_tokens = int(CONFIG.get("NEWS_SENTIMENT_MAX_TOKENS", 400) or 400)
         response = client.chat.completions.create(
             model=model,
-            max_tokens=1200,
+            max_tokens=_max_tokens,
             temperature=_temp,
             messages=[
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": user_prompt},
             ],
+            response_format={"type": "json_object"},
         )
         raw = (response.choices[0].message.content or "").strip()
         try:

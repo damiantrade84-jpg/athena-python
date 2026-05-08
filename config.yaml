@@ -869,6 +869,8 @@ NEWS_SENTIMENT_MODEL: "grok-4.3"  # News AI text; defaults to AI_MODEL if empty 
 
 # Default OpenAI-compatible SDK read timeout is much longer; keep advisory AI bounded.
 AI_REQUEST_TIMEOUT_SEC: 30
+# Bull/Bear/Judge debate uses this (falls back to AI_REQUEST_TIMEOUT_SEC if unset).
+DEBATE_AI_TIMEOUT_SEC: 30
 MARCUS_AI_TIMEOUT_SEC: 90
 # Keep Marcus manual reviews bounded; SDK default retries can multiply the timeout.
 MARCUS_AI_SDK_MAX_RETRIES: 0
@@ -2599,13 +2601,10 @@ TIMED_EXIT:
     intraday: "H4"
     swing: "D1"
 
-  # ── Indicator confirmation ───────────────────────────────────────────────
-  # When enabled, a trail-breach close also requires RSI / MACD confirmation
-  # of direction reversal. RSI/MACD reversal is the "reversal" we care about,
-  # so this defaults to true — the trail without confirmation is too eager and
-  # exits on wicks through the level rather than genuine direction changes.
-
-  trail_indicator_confirm: true    # require RSI/MACD confirmation on trail-breach close
+  # ── Indicator confirmation ────────────────────────────────────────────────
+  # When false (default here), a trail breach triggers close from price alone.
+  # When true, requires RSI / MACD reversal first — fewer wick exits, slower to close.
+  trail_indicator_confirm: false   # pure price-vs-trail close; set true to require RSI/MACD
 
   trail_confirm_rsi_threshold: 40  # LONG close when RSI drops below this; SHORT when above (100 - this)
 

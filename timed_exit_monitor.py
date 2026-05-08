@@ -13,9 +13,11 @@ All styles support tp_progress_exempt: skip timed close if price has covered
 >= threshold fraction of entry→TP distance (letting TP manage the trade).
 
 Phase 2 — Trailing ATR TP (Chandelier exit):
-  When tp_mode="trailing_atr", after a trade reaches +trail_activation_r in profit,
-  the timed-close path is replaced by a Chandelier-style ATR trail. Trade closes when
-  price breaks below the trail level. SL stays ATR-based as always.
+  When tp_mode="trailing_atr", after price reaches +trail_activation_r (vs audit or
+  live SL), the timed-close path is replaced by a Chandelier-style ATR trail. Trade
+  closes when price breaches the trail level (plus optional indicator confirm).
+  The trailing branch runs regardless of broker floating P&L sign so fees/spread
+  cannot move the trade back into fixed-mode timers.
 
 Phase 3 — Indicator confirmation:
   When trail_indicator_confirm=true, a trail-triggered close also requires RSI reversal
@@ -533,6 +535,43 @@ def _safe_float(value) -> float:
         return 0.0
 
 
+def _risk_sl_for_activation(audit_sl: float, live_sl: float) -> float:
+    """SL price used for R-multiples and chandelier context.
+
+    Prefer the broker live SL when known so activation matches the stop the
+    position is working against; otherwise use audit (fill) SL.
+    """
+    a = _safe_float(audit_sl)
+    l = _safe_float(live_sl)
+    return l if l > 0 else a
+
+
+def _log_trail_ratchet_broker_outcome(
+    *,
+    venue: str,
+    pair: str,
+    detail: str,
+    style: str,
+    new_sl: float,
+    current_r: float,
+    trail_reason: str | None,
+    ratchet_res: dict,
+) -> None:
+    """WARN on broker skipped/failed SL ratchet so the trail path is observable."""
+    if ratchet_res.get("success") and not ratchet_res.get("skipped"):
+        log.info(
+            f"[TIMED_EXIT] TRAIL RATCHET: {venue} {detail} pair={pair} "
+            f"style={style} new_sl={new_sl:.5f} R={current_r:.2f} reason={trail_reason}"
+        )
+        return
+    log.warning(
+        f"[TIMED_EXIT] TRAIL RATCHET failed/skipped: {venue} {detail} pair={pair} "
+        f"style={style} target_sl={new_sl:.5f} R={current_r:.2f} trail_reason={trail_reason} "
+        f"success={ratchet_res.get('success')} skipped={ratchet_res.get('skipped')} "
+        f"error={ratchet_res.get('error')!r} broker_reason={ratchet_res.get('reason')!r}"
+    )
+
+
 def _timeframe_minutes(tf: str) -> float:
     raw = str(tf or "").strip().upper()
     if not raw:
@@ -965,8 +1004,12 @@ def _evaluate_trail(
     row: dict, style: str, direction: str, entry: float, sl: float,
     cur_price: float, tcfg: dict, *, mins_open: float = 0.0,
     state_key: str | None = None,
+    live_sl_for_r: float | None = None,
 ) -> dict:
     """Single decision point for the chandelier trail state machine.
+
+    ``sl`` is the audit (opening) stop; ``live_sl_for_r`` when >0 overrides for
+    R-multiples and chandelier inputs so activation matches the broker stop.
 
     Returns one of:
         {"action": "none",    "reason": ...}                                  -- inactive (hold orig SL)
@@ -977,7 +1020,10 @@ def _evaluate_trail(
     if state_key is None:
         state_key = f"{row.get('ticket')}_{pair}"
 
-    risk_dist = abs(entry - sl) if sl > 0 else 0.0
+    sl_for_r = _risk_sl_for_activation(
+        sl, live_sl_for_r if live_sl_for_r is not None else 0.0
+    )
+    risk_dist = abs(entry - sl_for_r) if sl_for_r > 0 else 0.0
     if risk_dist <= 0:
         return {"action": "none", "reason": "no_risk_dist"}
 
@@ -992,7 +1038,7 @@ def _evaluate_trail(
 
     first_activation_tick = _trail_state.get(state_key) is None
     trail_level = _compute_chandelier_trail(
-        pair, style, direction, entry, sl, tcfg, state_key, mins_open=mins_open,
+        pair, style, direction, entry, sl_for_r, tcfg, state_key, mins_open=mins_open,
     )
     if trail_level is None:
         return {"action": "none", "reason": "no_trail_data", "current_r": current_r}
@@ -1125,14 +1171,21 @@ def _handle_mt5_row(row: dict, tcfg: dict, db_path: str | None = None) -> None:
 
     # ── Trailing ATR TP (mode-dispatched single exit policy) ──────────────────
     # When tp_mode=="trailing_atr", the chandelier trail is the only profit-side
-    # exit. Below activation_r the original ATR SL protects; above it, the broker
-    # SL ratchets with the trail (suggestion #6) and the trade only closes on a
-    # confirmed breach. The lock ladder and timed close are suppressed via the
-    # explicit return at the end of this block.
-    if tcfg.get("tp_mode") == "trailing_atr" and profit > 0:
+    # exit (unconditional on broker profit sign so spreads/fees cannot drop the
+    # trade back into timed-close / BE paths). Below activation_r the original
+    # ATR SL protects; above it, the broker SL ratchets with the trail (#6).
+    if tcfg.get("tp_mode") == "trailing_atr":
         trail_eval = _evaluate_trail(
-            row, style, direction, entry, _sl_raw, cur_price, tcfg,
-            mins_open=mins, state_key=state_key,
+            row,
+            style,
+            direction,
+            entry,
+            _sl_raw,
+            cur_price,
+            tcfg,
+            mins_open=mins,
+            state_key=state_key,
+            live_sl_for_r=_live_sl_for_trail,
         )
         action = trail_eval.get("action")
 
@@ -1163,14 +1216,20 @@ def _handle_mt5_row(row: dict, tcfg: dict, db_path: str | None = None) -> None:
 
         if action == "ratchet":
             new_sl = float(trail_eval["new_sl"])
+            tr = trail_eval.get("reason")
+            cr = float(trail_eval.get("current_r", 0) or 0)
             if _protective_sl_tightens(direction, new_sl, _live_sl_for_trail, entry):
                 ratchet_res = mt5_move_sl_to_breakeven(ticket, new_sl)
-                if ratchet_res.get("success") and not ratchet_res.get("skipped"):
-                    log.info(
-                        f"[TIMED_EXIT] TRAIL RATCHET: {row['pair']} ticket={ticket} "
-                        f"style={style} new_sl={new_sl:.5f} R={trail_eval.get('current_r', 0):.2f} "
-                        f"reason={trail_eval.get('reason')}"
-                    )
+                _log_trail_ratchet_broker_outcome(
+                    venue="MT5",
+                    pair=str(row.get("pair") or ""),
+                    detail=f"ticket={ticket}",
+                    style=style,
+                    new_sl=new_sl,
+                    current_r=cr,
+                    trail_reason=str(tr),
+                    ratchet_res=ratchet_res,
+                )
         # Mode-dispatch: in trailing_atr mode, the trail block is the *only* profit-side
         # exit. Suppress lock ladder and timed-close branches by returning here. BE is
         # provided implicitly: once activation_r is reached the trail ratchets the broker
@@ -1392,12 +1451,20 @@ def _handle_bybit_row(row: dict, tcfg: dict, db_path: str | None = None) -> None
     state_key = _state_key("bybit", row.get("audit_id"), ticket)
 
     # ── Trailing ATR TP (mode-dispatched single exit policy) ──────────────────
-    # Same pattern as MT5: chandelier trail is the only profit-side exit; broker
-    # SL ratchets with the trail; lock + timed-close suppressed via early return.
-    if tcfg.get("tp_mode") == "trailing_atr" and profit > 0:
+    # Same pattern as MT5: chandelier-only when tp_mode trailing_atr regardless of
+    # broker profit sign; broker SL ratchets with the trail; timed-close suppressed.
+    if tcfg.get("tp_mode") == "trailing_atr":
         trail_eval = _evaluate_trail(
-            row, style, direction, entry, _sl_raw, cur_price, tcfg,
-            mins_open=mins, state_key=state_key,
+            row,
+            style,
+            direction,
+            entry,
+            _sl_raw,
+            cur_price,
+            tcfg,
+            mins_open=mins,
+            state_key=state_key,
+            live_sl_for_r=_live_sl_for_trail,
         )
         action = trail_eval.get("action")
 
@@ -1422,16 +1489,30 @@ def _handle_bybit_row(row: dict, tcfg: dict, db_path: str | None = None) -> None
                     pass
             return
 
-        if action == "ratchet" and ccxt_sym:
+        if action == "ratchet":
             new_sl = float(trail_eval["new_sl"])
-            if _protective_sl_tightens(direction, new_sl, _live_sl_for_trail, entry):
-                ratchet_res = bybit_move_sl_to_breakeven(ccxt_sym, direction, new_sl, volume)
-                if ratchet_res.get("success") and not ratchet_res.get("skipped"):
-                    log.info(
-                        f"[TIMED_EXIT] TRAIL RATCHET: {pair} style={style} "
-                        f"new_sl={new_sl:.5f} R={trail_eval.get('current_r', 0):.2f} "
-                        f"reason={trail_eval.get('reason')}"
-                    )
+            tr = trail_eval.get("reason")
+            cr = float(trail_eval.get("current_r", 0) or 0)
+            if not ccxt_sym:
+                log.warning(
+                    f"[TIMED_EXIT] TRAIL RATCHET blocked: Bybit ccxt symbol unresolved "
+                    f"pair={pair} style={style} target_sl={new_sl:.5f} R={cr:.2f} "
+                    f"trail_reason={tr}"
+                )
+            elif _protective_sl_tightens(direction, new_sl, _live_sl_for_trail, entry):
+                ratchet_res = bybit_move_sl_to_breakeven(
+                    ccxt_sym, direction, new_sl, volume
+                )
+                _log_trail_ratchet_broker_outcome(
+                    venue="BYBIT",
+                    pair=str(pair),
+                    detail=f"symbol={ccxt_sym}",
+                    style=style,
+                    new_sl=new_sl,
+                    current_r=cr,
+                    trail_reason=str(tr),
+                    ratchet_res=ratchet_res,
+                )
         # Mode-dispatch: only the trail manages exits in trailing_atr mode.
         return
 

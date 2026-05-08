@@ -1,10 +1,32 @@
 """Prompt builders for chart-vision analysis.
 
 These builders keep the parser footer contract stable while enforcing
-structured right-edge candle reading rules.
+structured right-edge candle reading rules. The free-form prose body
+(TRADE SNAPSHOT / BULLISH FACTORS / FINAL VERDICT, etc.) was removed
+because only the structured footer is consumed downstream — the body
+generated 500-700 tokens per call with no parsed signal.
 """
 
 from __future__ import annotations
+
+
+def _request_metadata(
+    symbol: str,
+    direction_str: str,
+    *,
+    tf: str | None = None,
+    frames: str | None = None,
+) -> str:
+    """Stable request metadata so prompts are anchored even when algo_context is sparse."""
+    lines = [
+        f"REQUEST_METADATA: symbol={symbol}",
+        f"REQUEST_METADATA: direction_bias={direction_str}",
+    ]
+    if tf:
+        lines.append(f"REQUEST_METADATA: primary_chart_tf={tf}")
+    if frames:
+        lines.append(f"REQUEST_METADATA: chart_frames={frames}")
+    return "\n".join(lines)
 
 
 _STRUCTURED_FOOTER = (
@@ -28,10 +50,10 @@ def _ae_framework(authority_tf: str) -> str:
         "D. Pattern ID: Name visible/OHLC-supported pattern ONLY if valid.\n"
         "E. Auction Behaviour: Rejection, absorption, liquidity sweep, failed breakout, displacement.\n"
         "F. Confirmation: Volume, level reaction, structure, indicator context.\n"
-        "G. Style Suitability: Rate scalp, intraday, and swing suitability separately.\n"
-        "H. Verdict: HOLD/ADJUST/CLOSE with a strict reason citing right edge evidence.\n"
+        "G. Style Suitability (entry quality): Rate scalp, intraday, and swing suitability separately, "
+        "considering whether entry is tactical or chasing congestion.\n"
+        "H. Verdict: Map your read directly to RIGHT EDGE classification (CONFIRMS / REVIEW / POTENTIAL REVERSAL).\n"
     )
-
 
 
 def build_system_prompt() -> str:
@@ -49,7 +71,7 @@ def build_system_prompt() -> str:
         "2. Do not invent patterns, levels, or indicators.\n"
         "3. Use exact prices from visible axis/overlays; use context prices only when unreadable on chart.\n"
         "4. Keep output concise and structured.\n"
-        "5. Keep the final parser footer exactly as requested.\n\n"
+        "5. Output ONLY the A-H framework reasoning followed by the structured footer — nothing else.\n\n"
         "CANDLE CONTEXT RULES:\n"
         "1. Trend structure first: higher highs/higher lows, lower highs/lower lows, or range.\n"
         "2. Candle anatomy next: body size, wick length, close location, and visible gaps.\n"
@@ -69,31 +91,15 @@ def build_single_prompt(
 ) -> str:
     return (
         "The chart screenshot is attached above this message.\n\n"
+        f"{_request_metadata(symbol, direction_str, tf=tf)}\n\n"
         "STEP 1 - VISUAL READ FIRST:\n"
         "- Read instrument/timeframe from chart UI. If unreadable after checking labels, write exactly "
         "'chart label not legible - from request' and use request symbol/timeframe only.\n"
         "- Build a context-first read: trend structure, then candle behavior, then confirmation.\n\n"
         "STEP 2 - ALGORITHMIC CONTEXT (cross-check after STEP 1; image wins on conflict):\n"
         f"{algo_context}\n\n"
-        f"CONTEXT: asset={asset_type.upper()} symbol={symbol} timeframe={tf} algorithmic_direction={direction_str}\n\n"
-        "Use this exact body order:\n"
-        "TRADE SNAPSHOT\n"
-        "MARKET STRUCTURE\n"
-        "RIGHT EDGE\n"
-        "BULLISH FACTORS\n"
-        "BEARISH FACTORS\n"
-        "KEY RISKS\n"
-        "ENTRY QUALITY\n"
-        "FINAL VERDICT\n"
-        "ACTIONABLE IMPROVEMENT\n\n"
+        f"CONTEXT: asset={asset_type.upper()}\n\n"
         f"{_ae_framework(tf)}\n"
-        "ENTRY QUALITY rules:\n"
-        "- State whether entry is tactical (pullback/retest) or chasing into congestion.\n"
-        "- Flag low-vol breakout/breakdown risk when regime text indicates low volatility.\n"
-        "- Verify RR from visible entry/SL/TP distances.\n\n"
-        "FINAL VERDICT rules:\n"
-        "- Use HOLD / ADJUST / CLOSE.\n"
-        "- HOLD is allowed only when RIGHT EDGE confirms direction.\n\n"
         "End with exactly these 8 lines, with nothing after:\n"
         f"{_STRUCTURED_FOOTER}\n"
     )
@@ -108,27 +114,18 @@ def build_dual_prompt(
 ) -> str:
     return (
         "Two chart images are attached above this text: IMAGE 1 = D1, IMAGE 2 = H4.\n\n"
+        f"{_request_metadata(symbol, direction_str, frames='D1+H4')}\n\n"
         "STEP 1 - VISUAL READ FIRST:\n"
         "- Read instrument/timeframe from chart labels on both images.\n"
         "- If unreadable after checking labels, write exactly 'chart label not legible - from request' and use request metadata.\n"
         "- D1 is macro bias. H4 is tactical structure and authoritative RIGHT EDGE timeframe.\n\n"
         "STEP 2 - ALGORITHMIC CONTEXT (cross-check after STEP 1; image wins on conflict):\n"
         f"{algo_context}\n\n"
-        f"CONTEXT: asset={asset_type.upper()} symbol={symbol} algorithmic_direction={direction_str}\n\n"
-        "Use this exact body order:\n"
-        "TRADE SNAPSHOT\n"
-        "MARKET STRUCTURE\n"
-        "RIGHT EDGE\n"
-        "BULLISH FACTORS\n"
-        "BEARISH FACTORS\n"
-        "KEY RISKS\n"
-        "ENTRY QUALITY\n"
-        "FINAL VERDICT\n"
-        "ACTIONABLE IMPROVEMENT\n\n"
+        f"CONTEXT: asset={asset_type.upper()}\n\n"
         f"{_ae_framework('H4')}\n"
         "Multi-TF rules:\n"
         "- D1 sets directional bias; H4 decides tactical validity.\n"
-        "- If H4 right edge does not confirm direction, FINAL VERDICT cannot be HOLD.\n"
+        "- If H4 right edge does not confirm direction, classify RIGHT EDGE as POTENTIAL REVERSAL or REVIEW (never CONFIRMS).\n"
         "- Note nearest obstacle between entry and TP first.\n\n"
         "End with exactly these 8 lines, with nothing after:\n"
         f"{_STRUCTURED_FOOTER}\n"
@@ -144,29 +141,19 @@ def build_triple_prompt(
 ) -> str:
     return (
         "Three chart images are attached above this text: IMAGE 1 = D1, IMAGE 2 = H4, IMAGE 3 = H1.\n\n"
+        f"{_request_metadata(symbol, direction_str, frames='D1+H4+H1')}\n\n"
         "STEP 1 - VISUAL READ FIRST:\n"
         "- Read instrument/timeframe from chart labels on all images.\n"
         "- If unreadable after checking labels, write exactly 'chart label not legible - from request' and use request metadata only.\n"
         "- D1 is macro bias. H4 is tactical structure. H1 is authoritative RIGHT EDGE timeframe.\n\n"
         "STEP 2 - ALGORITHMIC CONTEXT (cross-check after STEP 1; image wins on conflict):\n"
         f"{algo_context}\n\n"
-        f"CONTEXT: asset={asset_type.upper()} symbol={symbol} algorithmic_direction={direction_str}\n\n"
-        "Use this exact body order:\n"
-        "TRADE SNAPSHOT\n"
-        "MARKET STRUCTURE\n"
-        "RIGHT EDGE\n"
-        "BULLISH FACTORS\n"
-        "BEARISH FACTORS\n"
-        "KEY RISKS\n"
-        "ENTRY QUALITY\n"
-        "FINAL VERDICT\n"
-        "ACTIONABLE IMPROVEMENT\n\n"
+        f"CONTEXT: asset={asset_type.upper()}\n\n"
         f"{_ae_framework('H1')}\n"
         "Multi-TF rules:\n"
         "- D1 sets macro bias, H4 validates path/obstacles, H1 validates trigger quality.\n"
-        "- If H1 right edge shows counter-trend with rising volume, classify POTENTIAL REVERSAL and verdict cannot be HOLD.\n"
-        "- If EMA reclaim against trade is visible on H1, HOLD is not allowed.\n\n"
+        "- If H1 right edge shows counter-trend with rising volume, classify POTENTIAL REVERSAL.\n"
+        "- If EMA reclaim against trade is visible on H1, RIGHT EDGE cannot be CONFIRMS.\n\n"
         "End with exactly these 8 lines, with nothing after:\n"
         f"{_STRUCTURED_FOOTER}\n"
     )
-

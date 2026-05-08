@@ -122,7 +122,24 @@
       "Bash(powershell -Command \"Select-String -Path 'athena_research\\\\strategies.py' -Pattern '@|apply|for i in' | head -40\")",
       "Bash(Expand-Archive -Path \"C:\\\\Users\\\\damia\\\\Downloads\\\\Sentinel.zip\" -DestinationPath \"C:\\\\Users\\\\damia\\\\Downloads\\\\Sentinel_extracted\" -Force)",
       "Bash(Get-ChildItem \"C:\\\\Users\\\\damia\\\\Downloads\\\\Sentinel_extracted\" -Recurse)",
-      "Bash(Select-Object FullName)"
+      "Bash(Select-Object FullName)",
+      "Bash(dir *)",
+      "Bash(Select-String -Pattern \"timed|exit|trail\")",
+      "Bash(pip install *)",
+      "Bash(where npx *)",
+      "Bash(where uvx *)",
+      "Bash(C:/dev/athena-python/.venv/Scripts/python.exe C:/dev/athena-python/.claude/hooks/guard.py)",
+      "PowerShell(python -m pytest --co -q --basetemp=C:\\\\dev\\\\athena-python\\\\.pytest-tmp 2>&1 | Select-Object -First 5)",
+      "Bash(Select-Object Name)",
+      "PowerShell(Get-ChildItem \"C:\\\\dev\\\\athena-python\" | Sort-Object Name | ForEach-Object { $_.Name })"
     ]
-  }
+  },
+  "enabledMcpjsonServers": [
+    "context7",
+    "athena-audit",
+    "athena-microstructure",
+    "athena-candle-cache",
+    "athena-carry",
+    "athena-cot"
+  ]
 }

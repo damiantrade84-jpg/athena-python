@@ -1,5 +1,81 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
 ---
-description: alwaysApply: true
+
+# Commands
+
+```bash
+# Run the web app (http://127.0.0.1:5000)
+python athena.py
+
+# Run all tests
+pytest tests/
+
+# Run a single test file
+pytest tests/test_scalp_engine.py
+
+# Run a single test by name
+pytest tests/test_scalp_engine.py::test_function_name -v
+
+# Install dependencies (Python 3.11–3.13; .python-version pins 3.13)
+pip install -r requirements.txt
+```
+
+> After recreating `.venv`: run `python tools/check_ws_env.py` to verify WebSocket env.
+
+---
+
+# Module Architecture
+
+**Entry point:** `athena.py` — monolith Flask app. Never import this in tests; use `athena_app/` modules instead.
+
+**App factory:** `app.py` → calls `athena_legacy.load()` + wires `execution` healthcheck. `athena_runtime.py` holds shared runtime bindings (`set_runtime` / `rt()`) to break import cycles from the monolith.
+
+**`athena_app/` package** (modular Flask layer):
+- `api/` — route blueprints: `routes_scan`, `routes_backtest`, `routes_execution`, `routes_audit`, `routes_live_dashboard`, `routes_lottery`, `routes_market_data`, `routes_broker_status`, `routes_status`
+- `services/` — business logic: `scan_backtest_service`, `candle_service`, `data_freshness`, `market_state`, `engine_b_market_state`, `paper_mode`, `structure_context`
+- `repositories/audit_repo.py` — audit SQLite writes
+
+**Core engine files:**
+- `scoring.py` / `factor_scoring.py` — Engine A factor confluence
+- `market_structure.py` / `zone_registry.py` — Engine B SMC/ICT
+- `engine_c.py` + `engine_c_ai.py` — Engine C consensus + AI blend
+- `engine_b_ai.py` — Engine B AI advisory (review-only, never executes)
+- `scalp_engine.py` + `volume_profile.py` — Engine D scalp lab
+- `timed_exit_monitor.py` — exit pipeline for Engine A/B (Engine D bypasses)
+
+**Execution:**
+- `execution.py` — signal execution dispatcher
+- `auto_trader.py` — autopilot loop
+- `risk_engine.py` — position sizing + risk gates
+- `mt5_executor.py` / `bybit_executor.py` — broker adapters
+
+**Data pipeline:**
+- `candle_feeds.py` / `data_feeds.py` — live candle ingestion
+- `backtest_candle_cache.py` / `candle_cache.db` — cached OHLCV for backtests
+- `cot_feed.py` / `carry_feed.py` — COT + carry enrichment
+- `eodhd_volume_batch.py` — EODHD volume (Engine D only)
+
+**SQLite databases (WAL mode, 15s timeout):**
+- `audit.db` — trade audit trail (key table: `trades`)
+- `candle_cache.db` — OHLCV cache
+- `cot.db` / `carry_cache.db` — COT + carry data
+- `microstructure.db` — order-flow microstructure
+
+**AI layer:**
+- `conductor.py` — deterministic AI routing (no LLM calls for routing decisions)
+- `ai_context.py` / `ai_utils.py` — shared AI helpers
+- `vision_prompts.py` / `vision_hybrid.py` — chart vision (grok-4.3); preserve exact footer tokens
+- `lottery_engine.py` — lottery AI (separate from chart vision — do not mix)
+- `signal_debate.py` — Engine B signal debate flow
+- `news_sentiment_feed.py` — sentiment enrichment
+
+**Config:** All thresholds live in `config.yaml` (never hardcode in Python). Loaded via `config.py`.
+
+**`refs/`** — third-party Jesse framework reference; excluded from pytest and not part of the project.
+
 ---
 
 # Sentinel Pro v4 — Claude Brief
@@ -16,13 +92,30 @@ description: alwaysApply: true
 
 ---
 
+# Mandatory Audit Contract Checks
+
+For every audit, do not stop at the intended happy path. Trace the contract from producer to final consumer and prove how the system behaves when required fields are missing, false, stale, or malformed.
+
+Audit runs must explicitly check:
+- **Fail-closed defaults:** If a gate, confirmation, freshness check, score pass, RR pass, or execution approval field is absent, verify the code rejects by default. Flag any helper that returns `True`, `trade`, `passed`, or `execute` from missing data.
+- **Payload handoff contracts:** Trace scanner/backtest/engine output into `execution.py`, `auto_trader.py`, `risk_engine.py`, broker executors, monitors, API payloads, and UI consumers. Confirm required fields are always present at each boundary.
+- **Boolean presence vs truth:** Check code that uses `"key" in payload`, `payload.get(...)`, fallback `{}`, or default `True`. Verify omission, explicit `False`, `None`, and empty dict/list behavior separately.
+- **Mode dispatch and early returns:** For config modes such as `tp_mode`, backtest/live toggles, and structure-gate switches, prove which branches are skipped by early returns and whether suppressed branches are intentional.
+- **Live vs backtest parity:** Compare the exact SL/TP, ATR source, score group, session, volume, and feed paths used by live/paper execution against backtests. Call out intentional divergence separately from bugs.
+- **Execution safety handoff:** Before saying an engine is safe, inspect the execution guard, level preservation, broker adapter, monitor, and audit/log write path. Engine-internal correctness is not enough.
+- **Negative-case tests:** Recommend or add focused tests for omitted required flags, failed confirmations, stale candles, zero/invalid ATR, missing broker symbols, missing execution levels, and rejected broker SL/TP updates.
+
+If any of these checks were not performed, label that part of the audit as "not verified".
+
+---
+
 # Engines & Scoring
 
 ## Engine A — Factor Confluence (Primary)
 - **Scoring:** `final_score` 0.0–3.0 (normalized indicator confluence)
 - **Directional score:** Trend component (trend_score)
 - **Nondirectional score:** Momentum quality (mom_quality)
-- **Thresholds:** 2-tier system (volatile assets = higher threshold)
+- **Thresholds:** Profile override, pair/group YAML, then 3-tier fallback
 - **Key factors:** BTC bias (conditional on correlation), OI context for crypto, intermarket confirmation
 - **Config keys:** `ENGINE_A`, `ENGINE_A_RESEARCH_LAB_FACTORS`, `ENGINE_A_MEAN_REVERSION`
 
@@ -64,13 +157,13 @@ description: alwaysApply: true
 - `trailing_atr` (default): chandelier ATR trail only. Lock + timed-close branches suppressed via early-return.
 - `fixed`: legacy lock + timed-close pipeline. Set to roll back without code changes.
 
-**Per-style `trail_activation_r`:** `{scalp: 0.3, intraday: 0.5, swing: 1.0}` R. Trail arms when `current_r ≥ activation_r`. Scalar form accepted for back-compat.
+**Per-style `trail_activation_r`:** verify from current `config.yaml` before citing. Checked-in baseline is `{scalp: 0.7, intraday: 1.0, swing: 1.5}` R. Trail arms when `current_r >= activation_r`. Scalar form accepted for back-compat.
 
 **Defaults (locked unless user requests):**
 - `intraday`/`swing` `timed_close_enabled: false` — never close on timer alone.
 - `scalp.profit_lock_enabled: false` — lock no longer clips winners.
 - `trail_indicator_confirm: true` — RSI/MACD must agree before `TRAIL_CLOSE`.
-- `timer_tightens_trail: true`, `timer_tighten_factor: 0.6` — timer tightens trail, never closes.
+- `timer_tightens_trail: false`, `timer_tighten_factor: 0.6` — timer does not tighten trail unless explicitly enabled.
 
 **Broker-enforced:** SL ratchets via `mt5_move_sl_to_breakeven` / `bybit_move_sl_to_breakeven` on each tick once armed. Tightens-only via `_protective_sl_tightens`.
 

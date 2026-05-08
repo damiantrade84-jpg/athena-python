@@ -649,6 +649,27 @@ class TestEvaluateTrail:
     def setup_method(self):
         _trail_state.clear()
 
+    def test_live_sl_for_r_increases_measured_r_vs_audit_sl(self, monkeypatch):
+        """Tighter live SL → smaller risk distance → higher R for same price."""
+        import timed_exit_monitor as tem
+        tcfg = _get_timed_cfg(_cfg_fn({
+            "tp_mode": "trailing_atr",
+            "trail_activation_r": {"scalp": 0.3, "intraday": 0.5, "swing": 1.0},
+        }))
+        row = {"ticket": "T1", "pair": "EUR/USD", "audit_id": 1}
+        monkeypatch.setattr(tem, "_compute_chandelier_trail", lambda *a, **kw: 102.0)
+
+        below = _evaluate_trail(row, "intraday", "LONG", 100.0, 90.0, 104.0, tcfg)
+        assert below["action"] == "none"
+        assert below["reason"] == "below_activation"
+
+        above = _evaluate_trail(
+            row, "intraday", "LONG", 100.0, 90.0, 104.0, tcfg,
+            live_sl_for_r=95.0,
+        )
+        assert above["action"] == "ratchet"
+        assert above["reason"] == "active"
+
     def test_below_activation_returns_none(self, monkeypatch):
         import timed_exit_monitor as tem
         tcfg = _get_timed_cfg(_cfg_fn({

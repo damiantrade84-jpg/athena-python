@@ -16,6 +16,23 @@ description: alwaysApply: true
 
 ---
 
+# Mandatory Audit Contract Checks
+
+For every audit, do not stop at the intended happy path. Trace the contract from producer to final consumer and prove how the system behaves when required fields are missing, false, stale, or malformed.
+
+Audit runs must explicitly check:
+- **Fail-closed defaults:** If a gate, confirmation, freshness check, score pass, RR pass, or execution approval field is absent, verify the code rejects by default. Flag any helper that returns `True`, `trade`, `passed`, or `execute` from missing data.
+- **Payload handoff contracts:** Trace scanner/backtest/engine output into `execution.py`, `auto_trader.py`, `risk_engine.py`, broker executors, monitors, API payloads, and UI consumers. Confirm required fields are always present at each boundary.
+- **Boolean presence vs truth:** Check code that uses `"key" in payload`, `payload.get(...)`, fallback `{}`, or default `True`. Verify omission, explicit `False`, `None`, and empty dict/list behavior separately.
+- **Mode dispatch and early returns:** For config modes such as `tp_mode`, backtest/live toggles, and structure-gate switches, prove which branches are skipped by early returns and whether suppressed branches are intentional.
+- **Live vs backtest parity:** Compare the exact SL/TP, ATR source, score group, session, volume, and feed paths used by live/paper execution against backtests. Call out intentional divergence separately from bugs.
+- **Execution safety handoff:** Before saying an engine is safe, inspect the execution guard, level preservation, broker adapter, monitor, and audit/log write path. Engine-internal correctness is not enough.
+- **Negative-case tests:** Recommend or add focused tests for omitted required flags, failed confirmations, stale candles, zero/invalid ATR, missing broker symbols, missing execution levels, and rejected broker SL/TP updates.
+
+If any of these checks were not performed, label that part of the audit as "not verified".
+
+---
+
 # Engines & Scoring
 
 ## Engine A — Factor Confluence (Primary)

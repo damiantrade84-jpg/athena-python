@@ -273,8 +273,8 @@ class TestSignalDebateExecutionSafety:
         """Debate context string must include LEVELS data (entry, SL, TP, R:R)."""
         captured_context = []
 
-        def _fake_get_case(client, context, direction, side, model, temperature):
-            captured_context.append(context)
+        def _fake_get_case(*args):
+            captured_context.append(args[1])
             return {"conviction": 5, "key_arguments": []}
 
         monkeypatch.setattr("signal_debate.get_ai_api_key", lambda _cfg: "xai-key")
@@ -298,8 +298,8 @@ class TestSignalDebateExecutionSafety:
         """When signal has candleFetchMeta, freshness section must appear in debate context."""
         captured_context = []
 
-        def _fake_get_case(client, context, direction, side, model, temperature):
-            captured_context.append(context)
+        def _fake_get_case(*args):
+            captured_context.append(args[1])
             return {"conviction": 5, "key_arguments": []}
 
         monkeypatch.setattr("signal_debate.get_ai_api_key", lambda _cfg: "xai-key")
@@ -324,8 +324,8 @@ class TestSignalDebateExecutionSafety:
         """When signal lacks candleFetchMeta, context must not include stale placeholder text."""
         captured_context = []
 
-        def _fake_get_case(client, context, direction, side, model, temperature):
-            captured_context.append(context)
+        def _fake_get_case(*args):
+            captured_context.append(args[1])
             return {"conviction": 5, "key_arguments": []}
 
         monkeypatch.setattr("signal_debate.get_ai_api_key", lambda _cfg: "xai-key")

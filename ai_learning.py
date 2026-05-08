@@ -399,8 +399,17 @@ def get_meta_analysis_context(db_path: str, days: int = 7) -> str:
         return ""
 
     rows = [dict(r) for r in rows]
-    if len(rows) < 3:
-        return f"Insufficient data: only {len(rows)} trade(s) in last {days} days."
+    try:
+        from config import CONFIG as _CFG
+        _min_samples = int(_CFG.get("META_ANALYSIS_MIN_SAMPLES", 20) or 20)
+    except Exception:
+        _min_samples = 20
+    _min_samples = max(3, _min_samples)
+    if len(rows) < _min_samples:
+        return (
+            f"Insufficient data: only {len(rows)} trade(s) in last {days} days "
+            f"(need >= {_min_samples} for reliable patterns)."
+        )
 
     wins = sum(r.get("win", 0) for r in rows)
     r_vals = [r.get("r_multiple") or 0.0 for r in rows]

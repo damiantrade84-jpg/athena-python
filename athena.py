@@ -5869,6 +5869,7 @@ def _compute_naked_analysis(sig: dict, engine_a_ctx: dict = None, force_ai: bool
                     engine_a_ctx=engine_a_ctx,
                     news_ctx=_news_ctx,
                     freshness_ctx=engine_a_ctx if isinstance(engine_a_ctx, dict) else None,
+                    asset_type=pair_obj.get("type"),
                 )
                 if "error" not in ai_verdict:
                     res["ai_analysis"] = _enrich_engine_b_ai_payload(ai_verdict)
@@ -9518,6 +9519,8 @@ def api_chart_analysis():
         except Exception as _vraw_err:
             log.debug("[CHART-VISION] raw data table failed: %s", _vraw_err)
 
+    direction_str = sig.get("direction", "UNKNOWN") if sig else "UNKNOWN"
+
     algo_context = "\n".join(context_parts) if context_parts else "No algorithmic data available."
 
     try:
@@ -9537,7 +9540,6 @@ def api_chart_analysis():
         log.debug("[CHART-VISION] Failed to extract candle features context: %s", _cf_err)
 
     system_prompt = build_system_prompt()
-    direction_str = sig.get("direction", "UNKNOWN") if sig else "UNKNOWN"
 
     def _extract_vision_structured(
         analysis_text: str,

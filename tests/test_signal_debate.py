@@ -51,17 +51,17 @@ def test_run_signal_debate_uses_shared_client_and_grok_model(monkeypatch):
     )
     monkeypatch.setattr(
         "signal_debate._get_debate_case",
-        lambda _client, _context, _direction, side, model, _temp: {
-            "conviction": 7 if side == "BULL" else 4,
-            "key_arguments": [model],
+        lambda *_a, **_kw: {
+            "conviction": 7 if _a[3] == "BULL" else 4,
+            "key_arguments": [_a[4]],
         },
     )
     monkeypatch.setattr(
         "signal_debate._get_judge_verdict",
-        lambda _client, _context, _direction, _bull, _bear, model, _temp: {
+        lambda *_a, **_kw: {
             "grade": "WEAK_GO",
             "score_adjustment": 0.1,
-            "reasoning": model,
+            "reasoning": _a[4] if len(_a) > 4 else "grok",
         },
     )
 

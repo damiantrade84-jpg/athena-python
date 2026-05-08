@@ -46,6 +46,9 @@ def test_single_prompt_contains_footer_contract_and_ae_order():
     assert a < b < c < d < e < f < g < h
     assert "entry quality" in prompt.lower()
     assert "right edge a-h framework" in prompt.lower()
+    assert "REQUEST_METADATA: symbol=EUR/USD" in prompt
+    assert "REQUEST_METADATA: direction_bias=LONG" in prompt
+    assert "REQUEST_METADATA: primary_chart_tf=H4" in prompt
 
 
 def test_dual_prompt_uses_h4_authoritative_right_edge():
@@ -56,7 +59,12 @@ def test_dual_prompt_uses_h4_authoritative_right_edge():
         asset_type="crypto",
     )
     assert "authoritative TF: H4" in prompt
-    assert "If H4 right edge does not confirm direction, FINAL VERDICT cannot be HOLD." in prompt
+    # After audit fix: rule maps to RIGHT EDGE classification (parsed value),
+    # not the prose-only FINAL VERDICT field which was dropped.
+    assert "If H4 right edge does not confirm direction" in prompt
+    assert "POTENTIAL REVERSAL" in prompt
+    assert "REQUEST_METADATA: symbol=BTCUSDT" in prompt
+    assert "REQUEST_METADATA: chart_frames=D1+H4" in prompt
 
 
 def test_triple_prompt_uses_h1_authoritative_right_edge():
@@ -69,3 +77,5 @@ def test_triple_prompt_uses_h1_authoritative_right_edge():
     assert "authoritative TF: H1" in prompt
     assert "counter-trend with rising volume" in prompt
     assert "End with exactly these 8 lines" in prompt
+    assert "REQUEST_METADATA: symbol=XAU/USD" in prompt
+    assert "REQUEST_METADATA: chart_frames=D1+H4+H1" in prompt

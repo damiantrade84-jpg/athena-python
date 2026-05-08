@@ -812,7 +812,17 @@ class AutoTrader:
                         model=cfg.get("DEBATE_MODEL", "unknown"),
                         provider="xAI",
                         prompt_version=get_prompt_version("debate_judge"),
-                        input_packet={"pair": signal.get("pair"), "score": signal.get("confluenceScore")},
+                        input_packet={
+                            "pair": signal.get("pair"),
+                            "trace_id": debate.get("trace_id") or signal.get("trace_id"),
+                            "grade": _grade,
+                            "reasoning": (debate.get("reasoning") or "")[:500],
+                            "bull_conviction": debate.get("bull_conviction"),
+                            "bear_conviction": debate.get("bear_conviction"),
+                            "score": signal.get("confluenceScore"),
+                            "score_adjustment": debate.get("score_adjustment"),
+                            "arbitration": _ai_decision,
+                        },
                         has_chart_image=False,
                         candle_freshness_status=(
                             (signal.get("dataFreshness") or {}).get("reason") or "unknown"

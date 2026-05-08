@@ -1,5 +1,7 @@
 # Lessons
 
+- When crypto paper execution is Bybit but signal candles come from Binance, live/backtest parity must compare the level basis too. ATR, SL, TP, fees, and broker symbol metadata can drift even when the signal score path is shared.
+- When a follow-up audit says some findings were missed, verify both presence and calibrated values. A key existing in `config.yaml` is not enough if the audit requested a different threshold or group-specific value.
 - For Engine D scalp execution, keep signal grading separate from mechanical order levels. Grade/checkers decide signal quality; TP1 should represent the 1R self-pay target and VP structure should be context/runner data, not a hard RR blocker unless the user explicitly asks for structural-target gating.
 - When Research Lab gives strategy feedback, strengthen the lab's own self-audit instead of manually second-guessing every result; reports must expose simulator backend, fallback reason, and signal/trade consistency so confidence is evidence-based.
 - Separate Research Lab candidate labels from implementation readiness. A `STRONG_CANDIDATE` is research evidence; the UI/report must show a stricter implementation verdict before telling the user a result can move into the actual paper-trading tool.

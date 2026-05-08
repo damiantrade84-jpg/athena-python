@@ -200,6 +200,22 @@ def test_build_vp_invalid_on_too_few_candles():
     assert _build_volume_profile(_candles(5))["valid"] is False
 
 
+def test_split_completed_sessions_forex_filters_to_market_session_window():
+    start = datetime(2026, 3, 24, 0, 0, tzinfo=timezone.utc)
+    candles = _dated_candles(48 * 4, start, step_seconds=900)
+
+    sessions = volume_profile.split_completed_sessions(candles, "forex")
+    prev = sessions["prev_session_candles"]
+
+    assert len(prev) >= 20
+    hours = [
+        datetime.fromisoformat(str(c["time"])).astimezone(timezone.utc).hour
+        for c in prev
+    ]
+    assert min(hours) >= 7
+    assert max(hours) < 21
+
+
 def test_locate_price_at_val():
     vp = {"poc": 100.5, "vah": 101.0, "val": 100.0, "lvn_levels": []}
     r = _locate_price_vs_vp(100.0, vp)
@@ -468,6 +484,80 @@ def test_fixed_range_vp_marks_range_proxy_source():
 
     assert vp["profile_valid"] is True
     assert vp["volume_source"] == "range_proxy"
+
+
+def test_calc_m15_atr_uses_true_range_gap_not_high_low_only():
+    candles = [
+        {"high": 10.5, "low": 9.5, "close": 10.0},
+        {"high": 13.0, "low": 12.0, "close": 12.5},
+        {"high": 14.0, "low": 13.0, "close": 13.5},
+    ]
+
+    atr = scalp_engine._calc_m15_atr(candles, period=2)
+
+    assert atr > 1.0
+    assert round(atr, 4) == 2.25
+
+
+def test_stock_overlay_returns_suffix_unmapped_for_dotless_unmapped_stock(monkeypatch):
+    monkeypatch.setitem(
+        scalp_engine.CONFIG,
+        "SCALP_ENGINE",
+        {
+            **scalp_engine.CONFIG.get("SCALP_ENGINE", {}),
+            "EODHD_VOLUME_OVERLAY_LIVE_ENABLED": True,
+            "EODHD_STOCK_EXCHANGE_SUFFIX_MAP": {},
+        },
+    )
+    scalp_engine._SCALP_PAIR_META_BY_DISPLAY.clear()
+
+    candles, source = scalp_engine._overlay_eodhd_volume_for_scalp(
+        "BARC",
+        "stock",
+        "M15",
+        _candles(5),
+        live=True,
+    )
+
+    assert candles
+    assert source == "eodhd_suffix_unmapped_for_stock"
+
+
+def test_stock_real_volume_fail_reasons_preserve_suffix_unmapped_reason():
+    data_fidelity = {
+        "vp_is_proxy": True,
+        "absorption_is_proxy": True,
+    }
+
+    reasons = scalp_engine._stock_real_volume_fail_reasons(
+        data_fidelity,
+        "eodhd_suffix_unmapped_for_stock",
+        "mt5_tick",
+        "mt5_tick",
+    )
+
+    assert reasons[0] == "eodhd_suffix_unmapped_for_stock"
+    assert "real_volume_required_for_stock" in reasons
+
+
+def test_summarize_engine_d_scan_counts_skipped_diagnostic_reasons():
+    summary = summarize_engine_d_scan(
+        {
+            "skipped": [
+                {
+                    "pair": "BTC/USDT",
+                    "reason": "no_setup:balance_inside_va",
+                    "diagnostic_reason": "vp_fallback:candle_profile_after_insufficient_trade_buckets",
+                }
+            ],
+            "signals": [],
+            "sessions_active": ["asia"],
+        }
+    )
+
+    assert summary["skipped_diagnostic_reason_counts"] == {
+        "vp_fallback:candle_profile_after_insufficient_trade_buckets": 1
+    }
 
 
 def test_calculate_levels_long_uses_atr_sl_and_1r_tp(monkeypatch):
@@ -1016,6 +1106,48 @@ def test_scalp_session_window_backtest_all_mode_overrides_live_session(monkeypat
     assert bt_reason == "all"
 
 
+def test_scalp_session_window_crypto_asset_override_allows_asia(monkeypatch):
+    monkeypatch.setitem(
+        scalp_engine.CONFIG,
+        "SCALP_ENGINE",
+        {
+            **scalp_engine.CONFIG.get("SCALP_ENGINE", {}),
+            "SESSION_FILTER": True,
+            "SESSION_MODE": "london_ny",
+            "SESSION_MODE_BY_ASSET": {"crypto": "asia_london_ny"},
+        },
+    )
+
+    allowed, reason = scalp_session_window(
+        "crypto",
+        when=datetime(2026, 3, 26, 2, 0, tzinfo=timezone.utc),
+    )
+
+    assert allowed is True
+    assert reason == "asia_london_ny"
+
+
+def test_grade_sessions_crypto_asset_override_includes_asia(monkeypatch):
+    monkeypatch.setitem(
+        scalp_engine.CONFIG,
+        "SCALP_ENGINE",
+        {
+            **scalp_engine.CONFIG.get("SCALP_ENGINE", {}),
+            "SESSION_MODE": "london_ny",
+            "SESSION_MODE_BY_ASSET": {"crypto": "asia_london_ny"},
+            "GRADE_SESSIONS": ["london", "new_york"],
+            "GRADE_SESSIONS_BY_ASSET": {"crypto": ["asia", "london", "new_york"]},
+        },
+    )
+
+    sessions = get_grade_sessions_for_mode(
+        "crypto",
+        when=datetime(2026, 3, 26, 2, 0, tzinfo=timezone.utc),
+    )
+
+    assert sessions == ["asia"]
+
+
 def test_grade_sessions_all_mode_keeps_grade_neutral_to_clock(monkeypatch):
     monkeypatch.setitem(
         scalp_engine.CONFIG,
@@ -1410,9 +1542,9 @@ def test_run_scalp_scan_does_not_block_close_structure_target(monkeypatch):
     assert sig["executable"] is True
     assert sig["fail_reasons"] == []
     assert "structure_target_close" in sig["soft_warnings"]
-    assert sig["strict_fabio_pass"] is False
-    assert sig["strict_fabio_missing_pillars"] == ["aggression"]
-    assert sig["current_vs_strict_status"] == "current_pass_strict_fail"
+    assert sig["strict_fabio_pass"] is True
+    assert sig["strict_fabio_missing_pillars"] == []
+    assert sig["current_vs_strict_status"] == "current_pass_strict_pass"
     assert sig["data_fidelity"]["report_only"] is True
     assert sig["data_fidelity"]["active_profile_anchor"] == "fixed_lookback"
     assert sig["data_fidelity"]["cvd_is_proxy"] is True
@@ -1468,6 +1600,105 @@ def test_scalp_min_rr_legacy_naked_engine_override_remains_fallback(monkeypatch)
     )
 
     assert scalp_engine._scalp_min_rr_for_group("forex", "forex_majors") == 1.6
+
+
+def test_scalp_min_rr_config_covers_real_score_groups(monkeypatch):
+    overrides = {
+        "crypto_btc": {"scalp": {"min_rr": 1.2}},
+        "crypto_eth": {"scalp": {"min_rr": 1.2}},
+        "crypto_doge": {"scalp": {"min_rr": 1.2}},
+        "crypto_alt_majors": {"scalp": {"min_rr": 1.2}},
+        "crypto_other": {"scalp": {"min_rr": 1.2}},
+        "us_indices_trackers": {"scalp": {"min_rr": 1.5}},
+        "eu_indices": {"scalp": {"min_rr": 1.5}},
+        "asian_indices": {"scalp": {"min_rr": 1.5}},
+        "index_other": {"scalp": {"min_rr": 1.5}},
+        "precious_trackers": {"scalp": {"min_rr": 1.3}},
+        "energy_oil": {"scalp": {"min_rr": 1.3}},
+        "copper": {"scalp": {"min_rr": 1.3}},
+        "pgm_metals": {"scalp": {"min_rr": 1.3}},
+        "base_metals": {"scalp": {"min_rr": 1.3}},
+        "softs": {"scalp": {"min_rr": 1.3}},
+        "commodity_other": {"scalp": {"min_rr": 1.3}},
+        "us_stock_single": {"scalp": {"min_rr": 1.4}},
+        "stock_other": {"scalp": {"min_rr": 1.4}},
+        "bond_tlt": {"scalp": {"min_rr": 1.4}},
+        "smallcap_em_etf": {"scalp": {"min_rr": 1.4}},
+    }
+    monkeypatch.setitem(
+        scalp_engine.CONFIG,
+        "SCALP_ENGINE",
+        {
+            **scalp_engine.CONFIG.get("SCALP_ENGINE", {}),
+            "MIN_RR": 1.2,
+            "score_group_overrides": overrides,
+        },
+    )
+
+    for group, expected in {
+        "crypto_btc": 1.2,
+        "us_indices_trackers": 1.5,
+        "energy_oil": 1.3,
+        "us_stock_single": 1.4,
+        "smallcap_em_etf": 1.4,
+    }.items():
+        assert scalp_engine._scalp_min_rr_for_group("crypto", group) == expected
+
+
+def test_scalp_engine_config_declares_real_score_group_overrides():
+    overrides = scalp_engine.CONFIG.get("SCALP_ENGINE", {}).get("score_group_overrides", {})
+    expected_groups = {
+        "crypto_btc",
+        "crypto_eth",
+        "crypto_doge",
+        "crypto_alt_majors",
+        "crypto_other",
+        "us_indices_trackers",
+        "eu_indices",
+        "asian_indices",
+        "index_other",
+        "precious_trackers",
+        "energy_oil",
+        "nat_gas",
+        "copper",
+        "pgm_metals",
+        "base_metals",
+        "softs",
+        "commodity_other",
+        "us_stock_single",
+        "stock_other",
+        "bond_tlt",
+        "smallcap_em_etf",
+    }
+
+    assert expected_groups <= set(overrides)
+
+
+def test_scalp_engine_config_hardens_mt5_tick_volume_absorption_defaults():
+    cfg = scalp_engine.CONFIG.get("SCALP_ENGINE", {})
+    vol_mults = cfg.get("ABSORPTION_VOL_MULT_CLASS", {})
+
+    assert cfg.get("MT5_ABSORPTION_MIN_COUNT") == 2
+    assert vol_mults.get("crypto") == 2.0
+    for asset_type in ("forex", "commodity", "index", "stock"):
+        assert vol_mults.get(asset_type, 0) >= 2.5
+
+
+def test_scalp_engine_config_calibrates_explicit_low_frequency_rr_groups():
+    overrides = scalp_engine.CONFIG.get("SCALP_ENGINE", {}).get("score_group_overrides", {})
+
+    assert overrides["forex_other"]["scalp"]["min_rr"] == 1.3
+    assert overrides["crypto_doge"]["scalp"]["min_rr"] == 1.5
+    assert overrides["crypto_alt_majors"]["scalp"]["min_rr"] == 1.4
+    assert overrides["bond_tlt"]["scalp"]["min_rr"] == 1.3
+    assert overrides["smallcap_em_etf"]["scalp"]["min_rr"] == 1.5
+
+
+def test_scalp_execution_min_grade_config_uses_auto_execute_floor():
+    cfg = scalp_engine.CONFIG.get("SCALP_ENGINE", {})
+
+    assert cfg.get("MIN_GRADE_AUTO_EXECUTE") == "B"
+    assert scalp_engine._scalp_execution_min_grade(cfg) == "B"
 
 
 def test_run_scalp_scan_skips_closed_mt5_market(monkeypatch):
@@ -1953,12 +2184,90 @@ def test_summarize_engine_d_scan_merges_skips_and_signal_funnel():
     assert "rr_below_min" in result["signals_fail_and_warning_flat_counts"]
 
 
-def test_classify_mean_reversion_va_extreme_neutral_cvd(monkeypatch):
-    """Neutral CVD at VAH matches outside_va branch when ALLOW_NEUTRAL_CVD_AT_VA_EXTREME is true."""
+def test_classify_mean_reversion_va_extreme_rejects_vwap_only_without_aggression(monkeypatch):
     monkeypatch.setitem(
         scalp_engine.CONFIG,
         "SCALP_ENGINE",
-        {**scalp_engine.CONFIG.get("SCALP_ENGINE", {}), "ALLOW_NEUTRAL_CVD_AT_VA_EXTREME": True},
+        {
+            **scalp_engine.CONFIG.get("SCALP_ENGINE", {}),
+            "STRICT_FABIO_GATE_ENABLED": True,
+            "ALLOW_NEUTRAL_CVD_AT_VA_EXTREME": True,
+        },
+    )
+    setup = _classify_setup(
+        "balance",
+        {"location": "at_vah", "nearest_level": 101.0},
+        {"detected": False, "count": 0},
+        {"direction": None, "source": "candles"},
+        {},
+        {"lean": "SHORT"},
+        None,
+        asset_type="forex",
+    )
+
+    assert setup["valid"] is False
+    assert setup.get("reason") == "no_aggression_at_va_extreme"
+
+
+def test_classify_mean_reversion_outside_va_rejects_neutral_cvd_without_aggression(monkeypatch):
+    monkeypatch.setitem(
+        scalp_engine.CONFIG,
+        "SCALP_ENGINE",
+        {
+            **scalp_engine.CONFIG.get("SCALP_ENGINE", {}),
+            "STRICT_FABIO_GATE_ENABLED": True,
+        },
+    )
+    setup = _classify_setup(
+        "balance",
+        {"location": "outside_va", "above_va": True, "nearest_level": 101.0},
+        {"detected": False, "count": 0},
+        {"direction": None, "source": "candles"},
+        {},
+        {"lean": None},
+        None,
+        asset_type="forex",
+    )
+
+    assert setup["valid"] is False
+    assert setup.get("reason") == "no_aggression_outside_va"
+
+
+def test_classify_trend_continuation_requires_lvn_when_strict(monkeypatch):
+    monkeypatch.setitem(
+        scalp_engine.CONFIG,
+        "SCALP_ENGINE",
+        {
+            **scalp_engine.CONFIG.get("SCALP_ENGINE", {}),
+            "STRICT_FABIO_GATE_ENABLED": True,
+            "STRICT_TREND_LOCATION_LVN_ONLY": True,
+        },
+    )
+    setup = _classify_setup(
+        "imbalance",
+        {"location": "inside_va", "nearest_level": 100.0},
+        {"detected": True, "count": 2},
+        {"direction": "LONG", "source": "candles"},
+        {"complete": True, "direction": "LONG"},
+        {"lean": "LONG"},
+        "LONG",
+        asset_type="forex",
+    )
+
+    assert setup["valid"] is False
+    assert setup.get("reason") == "trend_continuation_requires_lvn"
+
+
+def test_classify_mean_reversion_va_extreme_neutral_cvd_legacy_override(monkeypatch):
+    """Legacy neutral-CVD behavior remains available when the strict Fabio gate is disabled."""
+    monkeypatch.setitem(
+        scalp_engine.CONFIG,
+        "SCALP_ENGINE",
+        {
+            **scalp_engine.CONFIG.get("SCALP_ENGINE", {}),
+            "STRICT_FABIO_GATE_ENABLED": False,
+            "ALLOW_NEUTRAL_CVD_AT_VA_EXTREME": True,
+        },
     )
     absorption = {"detected": False, "count": 0}
     cvd = {"direction": None, "source": "candles"}
@@ -1991,4 +2300,4 @@ def test_classify_mean_reversion_va_extreme_neutral_cvd_respects_disable(monkeyp
         asset_type="forex",
     )
     assert setup["valid"] is False
-    assert setup.get("reason") == "no_absorption_at_va_extreme"
+    assert setup.get("reason") == "no_aggression_at_va_extreme"

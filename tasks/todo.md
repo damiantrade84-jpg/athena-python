@@ -1,3 +1,47 @@
+# Engine A Audit Parity Fixes
+
+- [x] A1 Mirror live crypto Bybit ATR level basis in Engine A backtests and Engine C BT's Engine A side.
+- [x] A2 Resolve RSI warning bounds by score_group before asset type.
+- [x] A3 Use Engine A level ATR class for quick/style level recompute.
+- [x] A4 Align stale Engine A threshold comments/API note with actual resolver order.
+- [x] A5 Add focused regression tests and run targeted validation.
+
+## Review
+
+- Engine A crypto BT now requests Bybit ATR with the backtest bar time, so historical SL/TP uses point-in-time venue basis instead of latest Bybit ATR.
+- Engine C BT's Engine A leg uses the same Bybit ATR resolver.
+- Quick/style recompute now receives `get_pair_level_atr_class` and `bybit_atr_for_levels`, preserving ETF level classes and Bybit crypto ATR during quick execution.
+- RSI warnings now resolve bounds by score_group before asset type, matching factor scoring.
+- Stale Engine A threshold comments/API note now describe profile -> pair/group config -> 3-tier fallback.
+- Validation passed: `python -m py_compile backtest_runner.py scoring.py athena_app/services/candle_service.py execution.py data_feeds.py config.py athena.py tests/test_engine_a_level_parity.py tests/test_style_level_consistency.py tests/test_scoring_group_routing.py`.
+- Validation passed: `python -m pytest tests/test_engine_a_level_parity.py tests/test_style_level_consistency.py tests/test_scoring_group_routing.py tests/test_factor_scoring.py::test_score_group_overrides_asset_type_for_rsi_bounds -q --basetemp=.pytest_tmp_engine_a_audit` (`32 passed`).
+
+# Engine D Fabio Audit Fixes
+
+- [x] E1 Add focused regression coverage for strict three-pillar gating, session/VP alignment, ATR_M15, and score-group overrides.
+- [x] E2 Make Engine D strict Fabio pillars executable and config-gated.
+- [x] E3 Require real aggression for mean reversion and LVN-only location for trend continuation.
+- [x] E4 Make crypto Asia/London/NY session mode and grading asset-aware.
+- [x] E5 Make forex/non-crypto VP use completed market sessions instead of UTC-day buckets.
+- [x] E6 Replace M15 high-low average with true ATR(14) for proximity and buffers.
+- [x] E7 Wire asset/group-specific Engine D config lookups and complete score_group_overrides.
+- [x] E8 Enforce real-volume requirements for stock and crypto strict paths through watchlist fail reasons.
+- [x] E9 Run compile and focused pytest validation; record exact outcome.
+
+## Review
+
+- Engine D strict Fabio gate now contributes to executable/watchlist gating when enabled.
+- Mean reversion requires absorption, aligned CVD, or AAA; neutral CVD/VWAP-only confirmation is legacy-only when strict gate is disabled.
+- Trend continuation is LVN-only under strict mode.
+- Crypto can run Asia/London/NY via asset session override; grading sessions are asset-aware.
+- Forex/non-crypto VP anchoring uses completed market-session candles instead of UTC-day buckets.
+- Live and scalp backtest ATR_M15 now use true ATR(14).
+- Validation passed: `python -m py_compile scalp_engine.py volume_profile.py backtest_runner.py tests\test_scalp_engine.py`.
+- Validation passed: `python -m pytest tests/test_scalp_engine.py -q --basetemp=tests/.tmp-engine-d-scalp-full` (`114 passed`).
+- Validation passed: `python -m pytest tests/test_scalp_backtest_rules.py tests/test_scalp_fixes.py -q --basetemp=tests/.tmp-engine-d-backtest-adjacent` (`18 passed`).
+- Adjacent validation passed: `python -m pytest tests/test_scalp_audit_8577d0_fixes.py -q --basetemp=tests/.tmp-engine-d-audit-8577` (`5 passed`).
+- Adjacent validation passed except tmp-path fixture blocker: `python -m pytest tests/test_microstructure_orderflow.py -q -k "not point_in_time" --basetemp=tests/.tmp-engine-d-micro-no-tmp` (`9 passed, 1 deselected`); the deselected `tmp_path` test fails at pytest setup due Windows temp-directory permission, not an assertion failure.
+
 # Timed Exit Pipeline — Full Overhaul (Tier 1+2+3)
 
 **Goal**: Trades ride profit on the chandelier ATR trail. Close only on reversal (trail breach + optional indicator confirmation). Never close on a timer alone. Eliminate the four-mechanism competition (original SL / BE-lock ladder / timed-close / chandelier) where the tightest one wins and clips winners early.
@@ -588,6 +632,29 @@
   - `python -m pytest tests/test_scoring_group_routing.py tests/test_engine_c_bt_levels.py tests/test_style_level_consistency.py tests/test_athena.py tests/test_auto_trader.py tests/test_routes_backtest_history.py -q --basetemp=.pytest_local_tmp\engine_b_additional_adjacent` (`74 passed`, one pytest cache permission warning)
   - `python -m pytest tests/test_candles_cache.py tests/test_data_feeds_backtest_derivatives.py tests/test_candle_cache_meta.py tests/test_candle_freshness_diagnostics.py tests/test_data_freshness.py tests/test_threshold_audit.py -q --basetemp=.pytest_local_tmp\engine_b_feed_adjacent` (`55 passed`, one pytest cache permission warning)
   - `git diff --check -- config.py config.yaml scoring.py market_structure.py scanner.py execution.py backtest_runner.py athena.py athena_app/services/engine_b_market_state.py tests/test_engine_b_cross_asset_fixes.py tests/test_market_state_offsets.py tasks/todo.md`
+
+# Engine D Missed Follow-Up Fixes
+
+- [x] Verify supplied follow-up audit items against current `scalp_engine.py`, `config.yaml`, and tests.
+- [x] Add failing regression tests for confirmed missed Engine D items.
+- [x] Patch only confirmed misses: MT5 absorption defaults, stock suffix unmapped reason, and crypto VP fallback diagnostics.
+- [x] Run focused Engine D validation.
+
+## Review
+
+- Verified the follow-up audit against current code with subagents. RR group coverage, crypto Asia sessions, true M15 ATR, and per-class level multipliers were already present.
+- Added strict stock EODHD suffix handling: dotless unmapped stocks now return `eodhd_suffix_unmapped_for_stock` instead of silently querying `<display>.US`.
+- Added configured US suffixes for the current US stock/ETF Engine D universe so known US tickers still resolve explicitly.
+- Preserved suffix-unmapped detail in stock candidate fail reasons alongside the generic `real_volume_required_for_stock` reason.
+- Added report-only skipped diagnostic counts and per-row diagnostic reasons for crypto trade-bucket VP fallback before setup failure.
+- Hardened MT5 tick-volume absorption defaults: non-crypto `ABSORPTION_VOL_MULT_CLASS` is now 2.5 and `MT5_ABSORPTION_MIN_COUNT` is 2.
+- Applied the explicit low-frequency RR calibration misses: `forex_other=1.3`, `crypto_doge=1.5`, `crypto_alt_majors=1.4`, `bond_tlt=1.3`, `smallcap_em_etf=1.5`.
+- Red tests failed first for the missed items, then passed after the patch.
+- Validation passed:
+  - `python -m py_compile scalp_engine.py volume_profile.py backtest_runner.py tests\test_scalp_engine.py`
+  - `python -m pytest tests/test_scalp_engine.py -q --basetemp=tests/.tmp-engine-d-missed-scalp-engine-2` (`119 passed`, one pytest cache permission warning)
+  - `python -m pytest tests/test_scalp_backtest_rules.py tests/test_scalp_fixes.py -q --basetemp=tests/.tmp-engine-d-missed-adjacent-2` (`18 passed`, one pytest cache permission warning)
+  - YAML parse check printed `2 2.5 1.3 1.5 US`.
 
 # Trailing ATR Broker TP Fixes
 

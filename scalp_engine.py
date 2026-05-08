@@ -207,6 +207,7 @@ _CRYPTO_SESSIONS = {
     "london":      (7, 16),
     "new_york":    (13, 22),
     "london_ny":   (7, 22),
+    "asia_london_ny": (1, 22),
 }
 
 _TZ_LONDON = ZoneInfo("Europe/London")
@@ -232,6 +233,7 @@ _CRYPTO_SCALP_PAIRS = [
 ]
 
 _SCALP_PAIR_META_BY_DISPLAY: dict[str, dict[str, Any]] = {}
+_EODHD_STOCK_SUFFIX_UNMAPPED_SOURCE = "eodhd_suffix_unmapped_for_stock"
 
 
 def _crypto_sym_info(current_price: float) -> dict:
@@ -247,6 +249,27 @@ def _crypto_sym_info(current_price: float) -> dict:
     if current_price >= 0.50:
         return {"spread": 0, "point": 0.0001,  "digits": 4}
     return {"spread": 0, "point": 0.00001, "digits": 5}
+
+
+def _resolve_eodhd_stock_symbol_for_scalp(display: str, cfg: dict) -> tuple[Optional[str], Optional[str]]:
+    raw = str(display or "").strip()
+    if not raw:
+        return None, _EODHD_STOCK_SUFFIX_UNMAPPED_SOURCE
+    if "." in raw:
+        return raw, None
+
+    meta = _SCALP_PAIR_META_BY_DISPLAY.get(raw)
+    meta_symbol = str((meta or {}).get("symbol") or "").strip() if isinstance(meta, dict) else ""
+    if "." in meta_symbol:
+        return meta_symbol, None
+
+    suffix_map = cfg.get("EODHD_STOCK_EXCHANGE_SUFFIX_MAP", {}) or {}
+    suffix = None
+    if isinstance(suffix_map, dict):
+        suffix = suffix_map.get(raw) or suffix_map.get(raw.upper())
+    if suffix:
+        return f"{raw}.{str(suffix).strip().upper()}", None
+    return None, _EODHD_STOCK_SUFFIX_UNMAPPED_SOURCE
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -334,16 +357,21 @@ def _overlay_eodhd_volume_for_scalp(
         return candles, "mt5_tick"
     if not live and not cfg.get("EODHD_VOLUME_OVERLAY_BACKTEST_ENABLED", True):
         return candles, "mt5_tick"
+    if str(asset_type).lower() == "stock" and "." not in str(display):
+        symbol, suffix_error = _resolve_eodhd_stock_symbol_for_scalp(display, cfg)
+        if suffix_error:
+            log.warning(
+                "[SCALP-DATA] %s %s EODHD stock suffix unmapped; skipping volume overlay",
+                display,
+                tf,
+            )
+            return candles, suffix_error
+    else:
+        symbol = display
     try:
         from athena_runtime import rt
         from eodhd_volume_overlay import overlay_candle_volumes
 
-        _suffix_map = CONFIG.get("SCALP_ENGINE", {}).get("EODHD_STOCK_EXCHANGE_SUFFIX_MAP", {})
-        if str(asset_type).lower() == "stock" and "." not in str(display):
-            suffix = _suffix_map.get(display, "US")
-            symbol = f"{display}.{suffix}"
-        else:
-            symbol = display
         pair = {"display": display, "symbol": symbol, "type": asset_type, "source": "mt5"}
         volume_resp = rt().fetch_eodhd_volume_only(
             pair,
@@ -548,6 +576,11 @@ def _normalize_session_mode(raw: Any) -> str:
         "london_ny": "london_ny",
         "overlap": "london_ny",
         "lny": "london_ny",
+        "asia_london_new_york": "asia_london_ny",
+        "asia_london_ny": "asia_london_ny",
+        "asia_lny": "asia_london_ny",
+        "crypto_major": "asia_london_ny",
+        "all_major": "asia_london_ny",
         "24_7": "all",
         "247": "all",
         "24x7": "all",
@@ -555,12 +588,51 @@ def _normalize_session_mode(raw: Any) -> str:
     return aliases.get(key, key)
 
 
-def _resolved_normalized_session_mode(cfg: dict, *, backtest: bool = False) -> str:
+def _resolved_normalized_session_mode(
+    cfg: dict,
+    *,
+    backtest: bool = False,
+    asset_type: Optional[str] = None,
+) -> str:
     mode_key = "BT_SESSION_MODE" if backtest else "SESSION_MODE"
     raw_mode = cfg.get(mode_key, cfg.get("SESSION_MODE", "new_york"))
     if str(raw_mode).strip().lower() in {"inherit", "default"}:
         raw_mode = cfg.get("SESSION_MODE", "new_york")
+    if asset_type:
+        asset_key = str(asset_type).strip().lower()
+        by_asset_key = "BT_SESSION_MODE_BY_ASSET" if backtest else "SESSION_MODE_BY_ASSET"
+        by_asset = cfg.get(by_asset_key, {}) or {}
+        if isinstance(by_asset, dict):
+            asset_mode = by_asset.get(asset_key)
+            if asset_mode is not None and str(asset_mode).strip().lower() not in {"inherit", "default"}:
+                raw_mode = asset_mode
+        specific_key = f"{asset_key.upper()}_SESSION_MODE"
+        specific_bt_key = f"BT_{asset_key.upper()}_SESSION_MODE"
+        specific_mode = cfg.get(specific_bt_key if backtest else specific_key)
+        if specific_mode is not None and str(specific_mode).strip().lower() not in {"inherit", "default"}:
+            raw_mode = specific_mode
     return _normalize_session_mode(raw_mode)
+
+
+def _scalp_cfg_lookup(
+    cfg: dict,
+    key: str,
+    default: Any = None,
+    *,
+    asset_type: Optional[str] = None,
+    score_group: Optional[str] = None,
+) -> Any:
+    group = str(score_group or "").strip()
+    asset = str(asset_type or "").strip().lower()
+    for map_key in (f"{key}_GROUP", f"{key}_BY_SCORE_GROUP"):
+        values = cfg.get(map_key, {}) or {}
+        if group and isinstance(values, dict) and group in values:
+            return values[group]
+    for map_key in (f"{key}_CLASS", f"{key}_BY_ASSET"):
+        values = cfg.get(map_key, {}) or {}
+        if asset and isinstance(values, dict) and asset in values:
+            return values[asset]
+    return cfg.get(key, default)
 
 
 def _as_fraction(
@@ -623,6 +695,20 @@ def summarize_engine_d_scan(result: dict) -> dict:
     skipped = result.get("skipped") or []
     signals = result.get("signals") or []
     skipped_reason_counts = dict(Counter(s.get("reason", "unknown") for s in skipped).most_common())
+    skipped_diag = Counter()
+    for s in skipped:
+        raw_diag = s.get("diagnostic_reasons") if isinstance(s, dict) else None
+        if raw_diag is None and isinstance(s, dict):
+            raw_diag = s.get("diagnostic_reason")
+        if raw_diag is None:
+            continue
+        if isinstance(raw_diag, (list, tuple, set)):
+            values = raw_diag
+        else:
+            values = [raw_diag]
+        for item in values:
+            if item:
+                skipped_diag[str(item)] += 1
     gate_counts = dict(Counter(str(s.get("gate_result") or "UNKNOWN") for s in signals).most_common())
     executable_counts = {
         "executable_true": sum(1 for s in signals if s.get("executable")),
@@ -647,6 +733,7 @@ def summarize_engine_d_scan(result: dict) -> dict:
             "sessions_active_len": len(result.get("sessions_active") or []),
         },
         "skipped_reason_counts": skipped_reason_counts,
+        "skipped_diagnostic_reason_counts": dict(skipped_diag.most_common(40)),
         "signals_gate_result_counts": gate_counts,
         "signals_executable_breakdown": executable_counts,
         "signals_fail_and_warning_flat_counts": dict(flat_fails.most_common(40)),
@@ -732,8 +819,12 @@ def get_current_sessions() -> list:
     return get_sessions_for_time("forex")
 
 
-def _grade_session_names(cfg: dict) -> list[str]:
+def _grade_session_names(cfg: dict, asset_type: Optional[str] = None) -> list[str]:
     raw = cfg.get("GRADE_SESSIONS", ["london", "new_york"])
+    by_asset = cfg.get("GRADE_SESSIONS_BY_ASSET", {}) or {}
+    asset_key = str(asset_type or "").strip().lower()
+    if asset_key and isinstance(by_asset, dict) and asset_key in by_asset:
+        raw = by_asset.get(asset_key)
     if isinstance(raw, str):
         raw = [raw]
     return [str(s).strip().lower() for s in raw if str(s).strip()]
@@ -742,12 +833,12 @@ def _grade_session_names(cfg: dict) -> list[str]:
 def get_grade_sessions_for_mode(asset_type: str = "forex", when: Any = None, *, backtest: bool = False) -> list:
     """Return session labels used by quality grading under the configured mode."""
     cfg = CONFIG.get("SCALP_ENGINE", {})
-    mode = _resolved_normalized_session_mode(cfg, backtest=backtest)
+    mode = _resolved_normalized_session_mode(cfg, backtest=backtest, asset_type=asset_type)
     active = get_sessions_for_time(asset_type, when=when)
-    grade_sessions = _grade_session_names(cfg)
+    grade_sessions = _grade_session_names(cfg, asset_type)
     if mode in {"all", "any", "disabled", "off"}:
         return []
-    if mode == "london_ny":
+    if mode in {"london_ny", "asia_london_ny"}:
         return [s for s in active if s in grade_sessions]
     if mode in grade_sessions:
         return [mode] if mode in active else []
@@ -798,7 +889,7 @@ def scalp_session_window(
     if not cfg.get(session_filter_key, True):
         return True, "all"
 
-    mode = _resolved_normalized_session_mode(cfg, backtest=backtest)
+    mode = _resolved_normalized_session_mode(cfg, backtest=backtest, asset_type=asset_type)
     if mode in {"all", "any", "disabled", "off"}:
         return True, "all"
 
@@ -870,6 +961,31 @@ def scalp_session_window(
             return True, "london_ny"
         return False, "off_hours"
 
+    if mode == "asia_london_ny" and asset_type == "crypto":
+        asia_start, asia_end = local_defs["asia"]
+        lon_start, lon_end = local_defs["london"]
+        ny_start, ny_end = local_defs["new_york"]
+        in_asia = _hour_in_range(current_utc, asia_start, asia_end)
+        in_london = _hour_in_range(current_london, lon_start, lon_end)
+        in_ny = _hour_in_range(current_ny, ny_start, ny_end)
+        if in_asia or in_london or in_ny:
+            skip_key = "BT_NY_OPEN_SKIP_MINUTES" if backtest else "NY_OPEN_SKIP_MINUTES"
+            skip_minutes = max(0, int(cfg.get(skip_key, cfg.get("NY_OPEN_SKIP_MINUTES", 0))))
+            if in_ny and skip_minutes > 0:
+                ny_open_minute = 9 * 60 + 30
+                now_ny_minute = current_ny.hour * 60 + current_ny.minute
+                if ny_open_minute <= now_ny_minute < ny_open_minute + skip_minutes:
+                    return False, "NY_OPEN_COOLDOWN"
+            skip_key_lon = "BT_LONDON_OPEN_SKIP_MINUTES" if backtest else "LONDON_OPEN_SKIP_MINUTES"
+            skip_lon = max(0, int(cfg.get(skip_key_lon, cfg.get("LONDON_OPEN_SKIP_MINUTES", 20))))
+            if in_london and skip_lon > 0:
+                london_open_utc_minute = _london_cash_open_utc_minute_of_day(current_utc)
+                now_utc_minute = current_utc.hour * 60 + current_utc.minute
+                if london_open_utc_minute <= now_utc_minute < london_open_utc_minute + skip_lon:
+                    return False, "LONDON_OPEN_COOLDOWN"
+            return True, "asia_london_ny"
+        return False, "off_hours"
+
     if mode == "asia" and asset_type == "crypto":
         start_h, end_h = local_defs["asia"]
         if _hour_in_range(current_utc, start_h, end_h):
@@ -934,7 +1050,11 @@ def check_spread(symbol_info: dict, asset_type: str, display: str = "") -> tuple
 # PILLAR 1 — VOLUME PROFILE: Market State + Location
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def _build_volume_profile(candles: list) -> dict:
+def _build_volume_profile(
+    candles: list,
+    asset_type: Optional[str] = None,
+    score_group: Optional[str] = None,
+) -> dict:
     """Compute Volume Profile over the given candles.
 
     Returns {poc, vah, val, lvn_levels[], distribution[], balance_ratio}.
@@ -942,9 +1062,27 @@ def _build_volume_profile(candles: list) -> dict:
     otherwise falls back to a lightweight internal histogram.
     """
     cfg = CONFIG.get("SCALP_ENGINE", {})
-    num_bins = int(cfg.get("VP_BINS", 100))
-    va_pct = _as_value_area_pct(cfg.get("VP_VALUE_AREA_PCT", cfg.get("VP_VA_PCT", 0.70)), 0.70)
-    lvn_factor = _as_fraction(cfg.get("VP_LVN_THRESHOLD", cfg.get("VP_LVN_FACTOR", 0.30)), 0.30)
+    num_bins = int(_scalp_cfg_lookup(cfg, "VP_BINS", 100, asset_type=asset_type, score_group=score_group))
+    va_pct = _as_value_area_pct(
+        _scalp_cfg_lookup(
+            cfg,
+            "VP_VALUE_AREA_PCT",
+            cfg.get("VP_VA_PCT", 0.70),
+            asset_type=asset_type,
+            score_group=score_group,
+        ),
+        0.70,
+    )
+    lvn_factor = _as_fraction(
+        _scalp_cfg_lookup(
+            cfg,
+            "VP_LVN_THRESHOLD",
+            cfg.get("VP_LVN_FACTOR", 0.30),
+            asset_type=asset_type,
+            score_group=score_group,
+        ),
+        0.30,
+    )
 
     if len(candles) < 20:
         return {"valid": False, "reason": "insufficient_candles_for_vp"}
@@ -1066,8 +1204,14 @@ def _build_trade_bucket_volume_profile(display: str, reference_ts=None, require_
     min_buckets = int(cfg.get("TRADE_BUCKET_MIN_LEVELS", 8))
     min_volume = float(cfg.get("TRADE_BUCKET_MIN_VOLUME", 0.0))
     max_age_sec = int(cfg.get("TRADE_BUCKET_MAX_AGE_SEC", 300))
-    va_pct = _as_value_area_pct(cfg.get("VP_VALUE_AREA_PCT", cfg.get("VP_VA_PCT", 0.70)), 0.70)
-    lvn_factor = _as_fraction(cfg.get("VP_LVN_THRESHOLD", cfg.get("VP_LVN_FACTOR", 0.30)), 0.30)
+    va_pct = _as_value_area_pct(
+        _scalp_cfg_lookup(cfg, "VP_VALUE_AREA_PCT", cfg.get("VP_VA_PCT", 0.70), asset_type="crypto"),
+        0.70,
+    )
+    lvn_factor = _as_fraction(
+        _scalp_cfg_lookup(cfg, "VP_LVN_THRESHOLD", cfg.get("VP_LVN_FACTOR", 0.30), asset_type="crypto"),
+        0.30,
+    )
     symbol = str(display or "").replace("/", "").upper()
     try:
         from athena.microstructure.trade_bucket_store import query_session_buckets
@@ -1146,7 +1290,13 @@ def _classify_market_state(vp: dict) -> str:
     return "balance" if br >= threshold else "imbalance"
 
 
-def _locate_price_vs_vp(price: float, vp: dict, atr_m15: float = 0.0) -> dict:
+def _locate_price_vs_vp(
+    price: float,
+    vp: dict,
+    atr_m15: float = 0.0,
+    asset_type: Optional[str] = None,
+    score_group: Optional[str] = None,
+) -> dict:
     """Determine price location relative to VP levels.
 
     Returns {location: str, nearest_level: float, distance_pct: float}
@@ -1162,7 +1312,15 @@ def _locate_price_vs_vp(price: float, vp: dict, atr_m15: float = 0.0) -> dict:
 
     use_atr_proximity = cfg.get("VP_PROXIMITY_USE_ATR", True) and atr_m15 > 0
     if use_atr_proximity:
-        atr_k = float(cfg.get("VP_PROXIMITY_ATR_K", 0.20))
+        atr_k = float(
+            _scalp_cfg_lookup(
+                cfg,
+                "VP_PROXIMITY_ATR_K",
+                0.20,
+                asset_type=asset_type,
+                score_group=score_group,
+            )
+        )
         atr_proximity = atr_m15 * atr_k
 
     poc = vp.get("poc", 0)
@@ -1216,14 +1374,34 @@ def _locate_price_vs_vp(price: float, vp: dict, atr_m15: float = 0.0) -> dict:
 # PILLAR 2 — AGGRESSION: Absorption + CVD + AAA
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def _check_absorption(candles: list) -> dict:
+def _check_absorption(
+    candles: list,
+    asset_type: Optional[str] = None,
+    score_group: Optional[str] = None,
+) -> dict:
     """Detect absorption candles (high volume, small price move).
 
     Uses indicators.detect_absorption() when available, otherwise internal logic.
     """
     cfg = CONFIG.get("SCALP_ENGINE", {})
-    vol_mult = float(cfg.get("ABSORPTION_VOL_MULT", cfg.get("ABS_VOL_MULT", 2.0)))
-    max_move = float(cfg.get("ABSORPTION_MAX_MOVE_ATR", cfg.get("ABS_MAX_MOVE_ATR", 0.30)))
+    vol_mult = float(
+        _scalp_cfg_lookup(
+            cfg,
+            "ABSORPTION_VOL_MULT",
+            cfg.get("ABS_VOL_MULT", 2.0),
+            asset_type=asset_type,
+            score_group=score_group,
+        )
+    )
+    max_move = float(
+        _scalp_cfg_lookup(
+            cfg,
+            "ABSORPTION_MAX_MOVE_ATR",
+            cfg.get("ABS_MAX_MOVE_ATR", 0.30),
+            asset_type=asset_type,
+            score_group=score_group,
+        )
+    )
     sma_period = int(cfg.get("ABSORPTION_SMA_PERIOD", cfg.get("ABS_SMA_PERIOD", 20)))
     recent_window = max(1, int(cfg.get("ABSORPTION_RECENT_BARS", 5)))
 
@@ -1262,7 +1440,11 @@ def _check_absorption(candles: list) -> dict:
     return {"detected": len(hits) > 0, "count": len(hits), "bars": hits}
 
 
-def _check_cvd(candles: list) -> dict:
+def _check_cvd(
+    candles: list,
+    asset_type: Optional[str] = None,
+    score_group: Optional[str] = None,
+) -> dict:
     """Compute CVD direction from recent candles.
 
     Uses indicators.calc_cvd() when available, otherwise internal approximation.
@@ -1270,6 +1452,15 @@ def _check_cvd(candles: list) -> dict:
     """
     cfg = CONFIG.get("SCALP_ENGINE", {})
     smooth_period = int(cfg.get("CVD_SMOOTH_PERIOD", 5))
+    min_slope = float(
+        _scalp_cfg_lookup(
+            cfg,
+            "CVD_MIN_SLOPE",
+            0.0,
+            asset_type=asset_type,
+            score_group=score_group,
+        )
+    )
 
     try:
         from indicators import calc_cvd
@@ -1278,7 +1469,11 @@ def _check_cvd(candles: list) -> dict:
         slope_series = cvd_raw or ((result.get("smoothed_delta") or []) if result else [])
         if slope_series and len(slope_series) >= 6:
             slope = slope_series[-1] - slope_series[-6]
-            direction = "LONG" if slope > 0 else "SHORT" if slope < 0 else None
+            direction = (
+                "LONG" if slope > min_slope
+                else "SHORT" if slope < -min_slope
+                else None
+            )
             cvd_val = round(cvd_raw[-1], 2) if cvd_raw else 0
             return {"direction": direction, "cvd_value": cvd_val, "cvd_slope": round(slope, 4)}
     except Exception as exc:
@@ -1301,7 +1496,11 @@ def _check_cvd(candles: list) -> dict:
         cvd_series.append(cvd)
 
     slope = cvd_series[-1] - cvd_series[-6] if len(cvd_series) >= 6 else 0
-    direction = "LONG" if slope > 0 else "SHORT" if slope < 0 else None
+    direction = (
+        "LONG" if slope > min_slope
+        else "SHORT" if slope < -min_slope
+        else None
+    )
     return {"direction": direction, "cvd_value": round(cvd, 2), "cvd_slope": round(slope, 2)}
 
 
@@ -1406,7 +1605,7 @@ def _engine_d_strict_fabio_shadow(
     aggression_fidelity: dict,
     current_gate_result: Optional[str] = None,
 ) -> dict:
-    """Report-only strict three-pillar Fabio check; does not gate execution."""
+    """Strict three-pillar Fabio check used for diagnostics and optional gating."""
     setup_type = str((setup or {}).get("setup_type") or "").lower()
     location = str((price_loc or {}).get("location") or "").lower()
     market = str(market_state or "").lower()
@@ -1424,7 +1623,7 @@ def _engine_d_strict_fabio_shadow(
         market_ok = False
         location_ok = False
 
-    aggression_ok = bool((aggression_fidelity or {}).get("strict_fabio_pass"))
+    aggression_ok = bool((aggression_fidelity or {}).get("aggression_confirmed"))
     pillars = {
         "market_state": market_ok,
         "location": location_ok,
@@ -1562,6 +1761,16 @@ def _engine_d_data_fidelity(
         "aggression_proxy_components": notes,
         "notes": notes,
     }
+
+
+def _stock_real_volume_fail_reasons(data_fidelity: dict, *volume_sources: Any) -> list[str]:
+    reasons: list[str] = []
+    normalized_sources = {str(src or "").strip().lower() for src in volume_sources}
+    if _EODHD_STOCK_SUFFIX_UNMAPPED_SOURCE in normalized_sources:
+        reasons.append(_EODHD_STOCK_SUFFIX_UNMAPPED_SOURCE)
+    if (data_fidelity or {}).get("vp_is_proxy") or (data_fidelity or {}).get("absorption_is_proxy"):
+        reasons.append("real_volume_required_for_stock")
+    return reasons
 
 
 def _candle_float(candle: dict, key: str) -> Optional[float]:
@@ -2020,7 +2229,7 @@ def _time_of_day_adjustment(sessions: list, pair: str, cfg: dict) -> tuple[float
     adjustment = hour_quality.get(hour_utc, 0)
 
     # JPY pairs get Asia boost
-    if "JPY" in pair and 22 <= hour_utc <= 6:
+    if "JPY" in pair and (hour_utc >= 22 or hour_utc <= 6):
         adjustment += 10
 
     # Crypto is 24h but still has quality hours
@@ -2029,14 +2238,19 @@ def _time_of_day_adjustment(sessions: list, pair: str, cfg: dict) -> tuple[float
         if 13 <= hour_utc <= 16:
             adjustment += 5
         # Asia hours OK for crypto
-        if 22 <= hour_utc <= 6:
+        if hour_utc >= 22 or hour_utc < 9:
             adjustment = max(adjustment, 0)  # Don't penalize crypto Asia
 
     return float(adjustment), f"time_of_day_UTC{hour_utc}"
 
 
-def _check_aaa_sequence(candles: list, absorption: dict, cvd: dict,
-                        asset_type: Optional[str] = None) -> dict:
+def _check_aaa_sequence(
+    candles: list,
+    absorption: dict,
+    cvd: dict,
+    asset_type: Optional[str] = None,
+    score_group: Optional[str] = None,
+) -> dict:
     """Detect Absorption -> Accumulation -> Aggression sequence.
 
     - Absorption: already detected (pillar)
@@ -2049,12 +2263,24 @@ def _check_aaa_sequence(candles: list, absorption: dict, cvd: dict,
     # Per-asset contraction threshold: MT5 tick-volume pairs have noisier
     # candle ranges, so use a more lenient threshold (0.65) to avoid
     # accumulation detection being unreachable on M1/M5 forex.
-    _ct_by_class = cfg.get("AAA_CONTRACTION_THRESHOLD_CLASS", {})
-    if isinstance(_ct_by_class, dict) and asset_type and asset_type in _ct_by_class:
-        contraction_threshold = float(_ct_by_class[asset_type])
-    else:
-        contraction_threshold = float(cfg.get("AAA_CONTRACTION_THRESHOLD", _default_ct))
-    breakout_vol_mult = float(cfg.get("AAA_BREAKOUT_VOL_MULT", 1.5))
+    contraction_threshold = float(
+        _scalp_cfg_lookup(
+            cfg,
+            "AAA_CONTRACTION_THRESHOLD",
+            _default_ct,
+            asset_type=asset_type,
+            score_group=score_group,
+        )
+    )
+    breakout_vol_mult = float(
+        _scalp_cfg_lookup(
+            cfg,
+            "AAA_BREAKOUT_VOL_MULT",
+            1.5,
+            asset_type=asset_type,
+            score_group=score_group,
+        )
+    )
     absorption_window = max(1, int(cfg.get("AAA_ABSORPTION_RECENT_BARS", lookback * 2)))
 
     if not absorption.get("detected"):
@@ -2180,6 +2406,21 @@ def _has_meaningful_absorption(absorption: dict, asset_type: Optional[str]) -> b
     return True
 
 
+def _setup_aggression_confirmed(
+    absorption: dict,
+    cvd: dict,
+    aaa: dict,
+    direction: Optional[str],
+    asset_type: Optional[str],
+) -> bool:
+    setup_dir = str(direction or "").upper()
+    cvd_dir = str((cvd or {}).get("direction") or "").upper()
+    aaa_dir = str((aaa or {}).get("direction") or "").upper()
+    cvd_aligned = bool(cvd_dir) and (not setup_dir or cvd_dir == setup_dir)
+    aaa_aligned = bool((aaa or {}).get("complete")) and (not setup_dir or not aaa_dir or aaa_dir == setup_dir)
+    return bool(_has_meaningful_absorption(absorption or {}, asset_type) or cvd_aligned or aaa_aligned)
+
+
 def _classify_setup(
     market_state: str,
     price_loc: dict,
@@ -2209,6 +2450,7 @@ def _classify_setup(
     cfg = CONFIG.get("SCALP_ENGINE", {})
     location = price_loc.get("location", "")
     reasons = []
+    strict_fabio_gate = bool(cfg.get("STRICT_FABIO_GATE_ENABLED", True))
 
     # ── Mean Reversion — price extended beyond VA boundary (strongest signal) ─
     # Price pushed outside the value area in a ranging market → expect reversion to POC.
@@ -2221,9 +2463,12 @@ def _classify_setup(
         # Need at least one confirmation: absorption OR CVD agrees OR VWAP lean agrees
         cvd_dir = cvd.get("direction")
         has_absorption = _has_meaningful_absorption(absorption, asset_type)
-        cvd_confirms = (cvd_dir == direction) or (cvd_dir is None)
+        cvd_confirms = (cvd_dir == direction) or (not strict_fabio_gate and cvd_dir is None)
         vwap_confirms = (vwap.get("lean") == direction)
-        if not has_absorption and not cvd_confirms and not vwap_confirms:
+        if strict_fabio_gate:
+            if not _setup_aggression_confirmed(absorption, cvd, aaa, direction, asset_type):
+                return {"valid": False, "reason": "no_aggression_outside_va"}
+        elif not has_absorption and not cvd_confirms and not vwap_confirms:
             return {"valid": False, "reason": "no_absorption_outside_va"}
 
         # CVD must not actively oppose the reversion direction.
@@ -2272,8 +2517,11 @@ def _classify_setup(
         _has_abs = _has_meaningful_absorption(absorption, asset_type)
         _vwap_pre = (vwap.get("lean") == direction)
         allow_neutral_cvd = bool(cfg.get("ALLOW_NEUTRAL_CVD_AT_VA_EXTREME", True))
-        cvd_pre_ok = (_cvd_pre == direction) or (allow_neutral_cvd and _cvd_pre is None)
-        if not _has_abs and not cvd_pre_ok and not _vwap_pre:
+        cvd_pre_ok = (_cvd_pre == direction) or (not strict_fabio_gate and allow_neutral_cvd and _cvd_pre is None)
+        if strict_fabio_gate:
+            if not _setup_aggression_confirmed(absorption, cvd, aaa, direction, asset_type):
+                return {"valid": False, "reason": "no_aggression_at_va_extreme"}
+        elif not _has_abs and not cvd_pre_ok and not _vwap_pre:
             return {"valid": False, "reason": "no_absorption_at_va_extreme"}
 
         # CVD divergence: price at high but CVD falling (SHORT), or vice versa
@@ -2326,7 +2574,16 @@ def _classify_setup(
         }
 
     # ── Trend Continuation ───────────────────────────────────────────────
-    if cfg.get("SETUP_TREND", True) and market_state == "imbalance" and location in ("at_lvn", "at_poc", "inside_va", "at_val", "at_vah"):
+    _trend_locations = ("at_lvn", "at_poc", "inside_va", "at_val", "at_vah")
+    if (
+        strict_fabio_gate
+        and bool(cfg.get("STRICT_TREND_LOCATION_LVN_ONLY", True))
+        and market_state == "imbalance"
+        and location in _trend_locations
+        and location != "at_lvn"
+    ):
+        return {"valid": False, "reason": "trend_continuation_requires_lvn"}
+    if cfg.get("SETUP_TREND", True) and market_state == "imbalance" and location in _trend_locations:
         # AAA completion is the strongest signal
         if aaa.get("complete"):
             direction = aaa["direction"]
@@ -2401,10 +2658,13 @@ def _classify_setup(
 
         # Need at least one aggression confirmation: absorption OR CVD aligned OR VWAP lean
         cvd_dir = cvd.get("direction")
-        has_absorption = absorption.get("detected", False)
+        has_absorption = _has_meaningful_absorption(absorption, asset_type)
         cvd_aligned = (cvd_dir == direction)
         vwap_aligned_ext = (vwap.get("lean") == direction)
-        if not has_absorption and not cvd_aligned and not vwap_aligned_ext:
+        if strict_fabio_gate:
+            if not _setup_aggression_confirmed(absorption, cvd, aaa, direction, asset_type):
+                return {"valid": False, "reason": "no_aggression_on_va_breakout"}
+        elif not has_absorption and not cvd_aligned and not vwap_aligned_ext:
             return {"valid": False, "reason": "no_momentum_on_va_breakout"}
         if vwap_aligned_ext:
             reasons.append(f"VWAP lean confirms {direction} breakout direction")
@@ -2504,6 +2764,45 @@ def _scalp_cost_assumptions(cfg: dict, asset_type: str) -> tuple[float, float]:
     return fee_pct, slip_pct
 
 
+def _calc_m15_atr(candles: list, period: int = 14) -> float:
+    """Return the latest true ATR value for Engine D M15 buffers/proximity."""
+    highs: list[float] = []
+    lows: list[float] = []
+    closes: list[float] = []
+    for candle in candles or []:
+        try:
+            highs.append(float(candle["high"]))
+            lows.append(float(candle["low"]))
+            closes.append(float(candle["close"]))
+        except (KeyError, TypeError, ValueError):
+            continue
+    if len(closes) < 2:
+        return 0.0
+    p = max(1, int(period))
+    try:
+        from indicators import calc_atr
+        atr_series = calc_atr(highs, lows, closes, p)
+        for value in reversed(atr_series or []):
+            if value is not None and float(value) > 0:
+                return float(value)
+    except Exception as exc:
+        log.debug("[SCALP] indicators.calc_atr error, using internal true-range ATR: %s", exc)
+
+    true_ranges = []
+    for idx in range(1, len(closes)):
+        true_ranges.append(
+            max(
+                highs[idx] - lows[idx],
+                abs(highs[idx] - closes[idx - 1]),
+                abs(lows[idx] - closes[idx - 1]),
+            )
+        )
+    if not true_ranges:
+        return 0.0
+    window = true_ranges[-p:]
+    return sum(window) / len(window) if window else 0.0
+
+
 def _scalp_execution_min_grade(cfg: dict) -> str:
     if cfg.get("EXECUTION_MIN_GRADE") is not None:
         return str(cfg.get("EXECUTION_MIN_GRADE")).upper()
@@ -2526,6 +2825,7 @@ def calculate_scalp_levels(
     asset_type: str,
     min_rr_override: float | None = None,
     atr_m15: float = 0.0,
+    score_group: Optional[str] = None,
 ) -> dict:
     """Calculate Engine D execution levels.
 
@@ -2564,7 +2864,15 @@ def calculate_scalp_levels(
     # Takes the larger of the ATR buffer and the asset-class minimum so
     # volatile pairs get wider buffers while quiet pairs keep a sensible floor.
     if atr_m15 > 0 and cfg.get("BUFFER_USE_ATR", True):
-        _buf_k = float(cfg.get("BUFFER_ATR_K", 0.25))
+        _buf_k = float(
+            _scalp_cfg_lookup(
+                cfg,
+                "BUFFER_ATR_K",
+                0.25,
+                asset_type=asset_type,
+                score_group=score_group,
+            )
+        )
         buffer = max(_min_buf, atr_m15 * _buf_k)
     else:
         buffer = _min_buf
@@ -2611,7 +2919,15 @@ def calculate_scalp_levels(
         # instead of the old fixed 0.3% fallback which was too tight on BTC and
         # too wide on quiet forex pairs.
         _tc_fallback_pct = float(cfg.get("TREND_CONT_SL_FALLBACK_PCT", 0.003))
-        _tc_atr_mult = float(cfg.get("TREND_CONT_SL_ATR_MULT", 1.5))
+        _tc_atr_mult = float(
+            _scalp_cfg_lookup(
+                cfg,
+                "TREND_CONT_SL_ATR_MULT",
+                1.5,
+                asset_type=asset_type,
+                score_group=score_group,
+            )
+        )
         if direction == "LONG":
             if poc < entry:
                 sl = poc - buffer
@@ -2632,7 +2948,15 @@ def calculate_scalp_levels(
             runner_tp = val - (poc - val)
 
     if atr_m15 > 0 and cfg.get("ATR_SL_ENABLED", True):
-        atr_stop_distance = atr_m15 * float(cfg.get("ATR_SL_MULT", 1.5))
+        atr_stop_distance = atr_m15 * float(
+            _scalp_cfg_lookup(
+                cfg,
+                "ATR_SL_MULT",
+                1.5,
+                asset_type=asset_type,
+                score_group=score_group,
+            )
+        )
         if atr_stop_distance > 0:
             atr_sl = entry - atr_stop_distance if direction == "LONG" else entry + atr_stop_distance
             # Use the wider stop: the one further from entry (more conservative).
@@ -2755,72 +3079,92 @@ def ai_quality_grade(
     cfg = CONFIG.get("SCALP_ENGINE", {})
     score = 0
     reasons = []
+    components: dict[str, int] = {
+        "location": 0,
+        "absorption": 0,
+        "cvd": 0,
+        "aaa": 0,
+        "vwap": 0,
+        "session": 0,
+        "htf_bias": 0,
+        "spread": 0,
+        "volume_divergence": 0,
+        "stop_run": 0,
+        "time_of_day": 0,
+    }
 
     # ── Location quality (0–25) ──────────────────────────────────────────
     loc = price_loc.get("location", "")
     if loc in ("at_vah", "at_val"):
-        score += 25
+        components["location"] = 25
         reasons.append(f"Price at {loc.upper()} — prime location")
     elif loc == "outside_va":
-        score += 25
+        components["location"] = 25
         reasons.append("Price extended outside VA - prime mean-reversion / extension")
     elif loc == "at_lvn":
-        score += 20
+        components["location"] = 20
         reasons.append("Price at LVN — trend continuation zone")
     elif loc == "at_poc":
-        score += 10
+        components["location"] = 10
         reasons.append("Price at POC — neutral location")
     elif loc == "inside_va":
-        score += 5
+        components["location"] = 5
+    score += components["location"]
 
     # ── Absorption (0–20) ────────────────────────────────────────────────
     if absorption.get("detected"):
         cnt = absorption.get("count", 0)
         strong_abs_min = max(1, int(cfg.get("GRADE_STRONG_ABSORPTION_MIN_COUNT", 2)))
         if cnt >= strong_abs_min:
-            score += 20
+            components["absorption"] = 20
             reasons.append(f"Strong absorption ({cnt} bars)")
         elif cnt >= 1:
-            score += 12
+            components["absorption"] = 12
             reasons.append(f"Absorption detected ({cnt} bar(s))")
+    score += components["absorption"]
 
     # ── CVD confirmation (0–15) ──────────────────────────────────────────
     setup_dir = setup.get("direction")
     cvd_dir = cvd.get("direction")
     if cvd_dir and cvd_dir == setup_dir:
-        score += 15
+        components["cvd"] = 15
         reasons.append(f"CVD confirms {setup_dir}")
     elif cvd_dir is None:
-        score += 5
+        components["cvd"] = 5
         reasons.append("CVD neutral")
+    score += components["cvd"]
 
     # ── AAA sequence (0–15) ──────────────────────────────────────────────
     if aaa.get("complete"):
-        score += 15
+        components["aaa"] = 15
         reasons.append("Full AAA sequence complete")
     elif aaa.get("phase") == "accumulation":
-        score += 7
+        components["aaa"] = 7
         reasons.append("AAA: absorption + accumulation (no aggression yet)")
+    score += components["aaa"]
 
     # ── VWAP alignment (0–5) ─────────────────────────────────────────────
     if vwap.get("lean") == setup_dir:
-        score += 5
+        components["vwap"] = 5
         reasons.append(f"VWAP lean confirms {setup_dir}")
+    score += components["vwap"]
 
     # ── Session (0–10) ───────────────────────────────────────────────────
-    grade_sessions = _grade_session_names(cfg)
+    grade_sessions = _grade_session_names(cfg, asset_type)
     active_grade_sessions = [s for s in grade_sessions if s in set(sessions or [])]
     if len(active_grade_sessions) >= 2:
-        score += 10
+        components["session"] = 10
         reasons.append(f"Grade session overlap active ({'/'.join(active_grade_sessions)})")
     elif len(active_grade_sessions) == 1:
-        score += 7
+        components["session"] = 7
         reasons.append(f"Major grade session active ({active_grade_sessions[0]})")
+    score += components["session"]
 
     # ── HTF bias alignment (0–5) ─────────────────────────────────────────
     if htf_bias and htf_bias == setup_dir:
-        score += 5
+        components["htf_bias"] = 5
         reasons.append(f"HTF EMA bias aligned ({htf_bias})")
+    score += components["htf_bias"]
 
     # ── Spread penalty (−5 to +5) ────────────────────────────────────────
     # Keep units aligned with check_spread(): non-forex uses raw MT5 points,
@@ -2838,11 +3182,12 @@ def ai_quality_grade(
         spread_unit = "pips"
     if spread_pips > 0:
         if spread_pips <= max_sp * 0.5:
-            score += 5
+            components["spread"] = 5
             reasons.append(f"Tight spread ({spread_pips:.1f} {spread_unit})")
         elif spread_pips > max_sp * 0.8:
-            score -= 5
+            components["spread"] = -5
             reasons.append(f"Wide spread ({spread_pips:.1f} {spread_unit})")
+    score += components["spread"]
 
     # ── Volume divergence bonus/penalty (−10 to +10) ───────────────────────
     vol_div_grade = setup.get("volume_divergence", {})
@@ -2854,22 +3199,23 @@ def ai_quality_grade(
         if setup_type_grade in ("mean_reversion",):
             if setup_dir == "LONG" and "bullish" in div_type_grade:
                 bonus = int(10 * div_strength)
-                score += bonus
+                components["volume_divergence"] = bonus
                 reasons.append(f"Volume divergence confirms accumulation (+{bonus})")
             elif setup_dir == "SHORT" and "bearish" in div_type_grade:
                 bonus = int(10 * div_strength)
-                score += bonus
+                components["volume_divergence"] = bonus
                 reasons.append(f"Volume divergence confirms distribution (+{bonus})")
         # Trend setups: divergence WARNS (subtract points)
         elif setup_type_grade in ("trend_continuation", "trend_extension"):
             if setup_dir == "LONG" and "bearish" in div_type_grade:
                 penalty = int(10 * div_strength)
-                score -= penalty
+                components["volume_divergence"] = -penalty
                 reasons.append(f"Volume divergence warns exhaustion (−{penalty})")
             elif setup_dir == "SHORT" and "bullish" in div_type_grade:
                 penalty = int(10 * div_strength)
-                score -= penalty
+                components["volume_divergence"] = -penalty
                 reasons.append(f"Volume divergence warns exhaustion (−{penalty})")
+    score += components["volume_divergence"]
 
     # ── Stop-run penalty (−20 to 0) ──────────────────────────────────────
     stop_run_grade = setup.get("stop_run", {})
@@ -2877,19 +3223,21 @@ def ai_quality_grade(
         sr_score = stop_run_grade.get("score", 0)
         if sr_score < 0:
             penalty = abs(int(sr_score * 10))  # −2.0 → −20 points
-            score -= penalty
+            components["stop_run"] = -penalty
             reasons.append(f"Stop-run / liquidity sweep penalty (−{penalty})")
+    score += components["stop_run"]
 
     # ── Time-of-day adjustment (−5 to +5) ───────────────────────────────
     tod_adj, tod_reason = 0.0, ""
     if pair:  # Only apply during live trading, not in unit tests
         tod_adj, tod_reason = _time_of_day_adjustment(sessions, pair, cfg)
     if tod_adj != 0:
-        score += int(tod_adj)
+        components["time_of_day"] = int(tod_adj)
         if tod_adj > 0:
             reasons.append(f"Time-of-day boost ({tod_reason}: +{int(tod_adj)})")
         else:
             reasons.append(f"Time-of-day penalty ({tod_reason}: {int(tod_adj)})")
+    score += components["time_of_day"]
 
     score = max(0, min(100, score))
 
@@ -2921,12 +3269,15 @@ def ai_quality_grade(
     else:
         size_mult = 1.0  # full size regardless of grade
 
-    return {
+    out = {
         "score": score,
         "grade": grade,
         "reasons": reasons,
         "size_multiplier": size_mult,
     }
+    if cfg.get("GRADE_PERSIST_COMPONENTS", True):
+        out["score_components"] = components
+    return out
 
 
 def _build_engine_d_advisory(
@@ -3250,6 +3601,11 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
         try:
             asset_type = _guess_asset_type(display)
             _funnel["asset_type"] = asset_type
+            try:
+                from scoring import get_pair_score_group as _gpsg
+                _scalp_score_group = _gpsg({"display": display, "type": asset_type})
+            except Exception:
+                _scalp_score_group = None
             session_ok, active_session = scalp_session_window(asset_type)
             if not session_ok:
                 reason = active_session if active_session == "NY_OPEN_COOLDOWN" else "OUTSIDE_SESSION"
@@ -3465,6 +3821,7 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
                 continue
             vp_lookback = max(20, int(cfg.get("VP_LOOKBACK_BARS", 50)))
             vp_anchor_mode = "not_built"
+            trade_bucket_vp_fallback_reason = None
             vp = (
                 _build_trade_bucket_volume_profile(display)
                 if asset_type == "crypto" and cfg.get("TRADE_BUCKET_VP_ENABLED", True)
@@ -3474,17 +3831,23 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
                 vp_anchor_mode = "trade_bucket_session"
             if not vp.get("valid"):
                 if asset_type == "crypto" and cfg.get("TRADE_BUCKET_VP_ENABLED", True):
+                    _tb_reason = str(vp.get("reason") or "unknown")
+                    trade_bucket_vp_fallback_reason = f"vp_fallback:candle_profile_after_{_tb_reason}"
                     log.info(
                         "[SCALP-VP] trade_bucket fallback: %s reason=%s — using candle VP",
-                        display, vp.get("reason", "?"),
+                        display, _tb_reason,
                     )
-                # Session-aware VP: for non-crypto, prefer prior-session candles
+                # Session-aware VP: for MT5/EODHD assets, prefer prior-session candles
                 # so overnight/pre-market low-volume bars don't dilute the profile.
                 _vp_candles = candles_m15[-vp_lookback:]
-                if asset_type in ("index", "stock", "commodity") and cfg.get("VP_SESSION_AWARE", True):
+                if asset_type in ("forex", "index", "stock", "commodity") and cfg.get("VP_SESSION_AWARE", True):
                     try:
                         from volume_profile import split_completed_sessions
-                        _sessions = split_completed_sessions(candles_m15, asset_type)
+                        _sessions = split_completed_sessions(
+                            candles_m15,
+                            asset_type,
+                            session_mode=_resolved_normalized_session_mode(cfg, asset_type=asset_type),
+                        )
                         _prev = _sessions.get("prev_session_candles", [])
                         if len(_prev) >= 20:
                             _vp_candles = _prev
@@ -3492,7 +3855,10 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
                             log.debug("[SCALP-VP] %s using prior-session VP (%d bars)", display, len(_prev))
                     except Exception:
                         pass  # fall through to fixed lookback
-                vp = _build_volume_profile(_vp_candles)
+                try:
+                    vp = _build_volume_profile(_vp_candles, asset_type=asset_type, score_group=_scalp_score_group)
+                except TypeError:
+                    vp = _build_volume_profile(_vp_candles)
                 if vp.get("valid"):
                     vp.setdefault("volume_source", "candles")
                     if vp_anchor_mode != "prior_session":
@@ -3507,11 +3873,17 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
 
             market_state = _classify_market_state(vp)
             # Compute M15 ATR for proximity + buffer scaling.
-            _atr_m15 = 0.0
-            if candles_m15 and len(candles_m15) >= 14:
-                _ranges = [float(c["high"]) - float(c["low"]) for c in candles_m15[-14:]]
-                _atr_m15 = sum(_ranges) / len(_ranges)
-            price_loc = _locate_price_vs_vp(current_price, vp, atr_m15=_atr_m15)
+            _atr_m15 = _calc_m15_atr(candles_m15, period=int(cfg.get("ATR_PERIOD", 14)))
+            try:
+                price_loc = _locate_price_vs_vp(
+                    current_price,
+                    vp,
+                    atr_m15=_atr_m15,
+                    asset_type=asset_type,
+                    score_group=_scalp_score_group,
+                )
+            except TypeError:
+                price_loc = _locate_price_vs_vp(current_price, vp, atr_m15=_atr_m15)
             _funnel["volume_profile_available"] = True
             _funnel["poc"] = vp.get("poc")
             _funnel["vah"] = vp.get("vah")
@@ -3528,6 +3900,8 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
                 volume_source=vp.get("volume_source", _vol_src_structure),
             )
             _funnel["diagnostic_notes"]["profile_anchor_shadow"] = profile_anchor_shadow
+            if trade_bucket_vp_fallback_reason:
+                _funnel["diagnostic_notes"]["vp_fallback_reason"] = trade_bucket_vp_fallback_reason
 
             # Shadow proximity simulation (report-only)
             if shadow_proximity_simulations is not None:
@@ -3545,16 +3919,34 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
                     _funnel["diagnostic_notes"]["shadow_proximity_error"] = str(_sp_err)
 
             # Pillar 2: Aggression — absorption, CVD, AAA
-            absorption = _check_absorption(candles_exec)
+            try:
+                absorption = _check_absorption(candles_exec, asset_type=asset_type, score_group=_scalp_score_group)
+            except TypeError:
+                absorption = _check_absorption(candles_exec)
             cvd = (
                 _check_trade_bucket_cvd(display)
                 if asset_type == "crypto" and cfg.get("TRADE_BUCKET_CVD_ENABLED", True)
                 else {"source": "disabled"}
             )
             if not cvd.get("direction"):
-                cvd = _check_cvd(candles_exec)
+                try:
+                    cvd = _check_cvd(candles_exec, asset_type=asset_type, score_group=_scalp_score_group)
+                except TypeError:
+                    cvd = _check_cvd(candles_exec)
                 cvd["source"] = "candles"
-            aaa = _check_aaa_sequence(candles_exec, absorption, cvd, asset_type=asset_type) if cfg.get("AAA_ENABLED", True) else {"complete": False, "phase": "disabled"}
+            if cfg.get("AAA_ENABLED", True):
+                try:
+                    aaa = _check_aaa_sequence(
+                        candles_exec,
+                        absorption,
+                        cvd,
+                        asset_type=asset_type,
+                        score_group=_scalp_score_group,
+                    )
+                except TypeError:
+                    aaa = _check_aaa_sequence(candles_exec, absorption, cvd, asset_type=asset_type)
+            else:
+                aaa = {"complete": False, "phase": "disabled"}
 
             # Pillar 3: VWAP directional lean
             vwap = _check_vwap_lean(candles_m15, current_price) if cfg.get("VWAP_ENABLED", True) else {"lean": None, "vwap_value": 0}
@@ -3573,13 +3965,33 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
                 active_profile_anchor=vp_anchor_mode,
             )
             _funnel["diagnostic_notes"]["data_fidelity"] = data_fidelity
+            _data_fail_reasons: list[str] = []
+            if asset_type == "stock" and cfg.get("REQUIRE_REAL_VOLUME_FOR_STOCKS", True):
+                _data_fail_reasons.extend(
+                    _stock_real_volume_fail_reasons(
+                        data_fidelity,
+                        _vol_src_structure,
+                        _vol_src_exec,
+                        _vol_src_dominant,
+                    )
+                )
+            if (
+                asset_type == "crypto"
+                and cfg.get("STRICT_FABIO_GATE_ENABLED", True)
+                and cfg.get("REQUIRE_AGGTRADE_FOR_CRYPTO_STRICT", True)
+            ):
+                if not data_fidelity.get("vp_uses_real_trade_buckets") or not data_fidelity.get("cvd_uses_real_trade_buckets"):
+                    _data_fail_reasons.append("aggtrade_required_for_crypto_strict")
 
             # Setup classification
             setup = _classify_setup(market_state, price_loc, absorption, cvd, aaa, vwap, htf_bias, asset_type=asset_type, candles=candles_exec)
             if not setup.get("valid"):
                 _setup_reason = f"no_setup:{setup.get('reason', '?')}"
                 _record_stability_sample(display, asset_type, False, reason=_setup_reason)
-                skipped.append({"pair": display, "reason": _setup_reason})
+                _skip_row = {"pair": display, "reason": _setup_reason}
+                if trade_bucket_vp_fallback_reason:
+                    _skip_row["diagnostic_reason"] = trade_bucket_vp_fallback_reason
+                skipped.append(_skip_row)
                 _funnel["gate_result"] = "NO_SETUP"
                 _funnel["fail_reasons"].append(_setup_reason)
                 continue
@@ -3590,15 +4002,38 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
 
             candidate_fail_reasons: list[str] = []
             candidate_soft_warnings: list[str] = []
+            if trade_bucket_vp_fallback_reason:
+                candidate_soft_warnings.append(trade_bucket_vp_fallback_reason)
+            candidate_fail_reasons.extend(_data_fail_reasons)
             if use_bias and htf_bias and direction != htf_bias:
                 _ct_reason = f"counter_trend:{direction}_vs_{bias_tf}_{htf_bias}"
                 candidate_soft_warnings.append(_ct_reason)
 
             # Risk levels — use per-group min_rr if available (e.g. forex_majors/crosses)
-            from scoring import get_pair_score_group as _gpsg
-            _scalp_score_group = _gpsg({"display": display, "type": asset_type})
             _min_rr = _scalp_min_rr_for_group(asset_type, _scalp_score_group)
-            levels = calculate_scalp_levels(direction, current_price, vp, setup["setup_type"], sym_info, asset_type, min_rr_override=_min_rr, atr_m15=_atr_m15)
+            try:
+                levels = calculate_scalp_levels(
+                    direction,
+                    current_price,
+                    vp,
+                    setup["setup_type"],
+                    sym_info,
+                    asset_type,
+                    min_rr_override=_min_rr,
+                    atr_m15=_atr_m15,
+                    score_group=_scalp_score_group,
+                )
+            except TypeError:
+                levels = calculate_scalp_levels(
+                    direction,
+                    current_price,
+                    vp,
+                    setup["setup_type"],
+                    sym_info,
+                    asset_type,
+                    min_rr_override=_min_rr,
+                    atr_m15=_atr_m15,
+                )
             if levels.get("rr_below_min"):
                 log.warning(
                     f"[SCALP] {display}: {setup['setup_type']} RR {levels['rr']:.2f} < MIN_RR "
@@ -3667,6 +4102,17 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
             )
             aggression_fidelity = _engine_d_aggression_fidelity(absorption, cvd, aaa, vwap, setup_direction=direction)
             _funnel["diagnostic_notes"].update(aggression_fidelity)
+            strict_fabio_shadow = _engine_d_strict_fabio_shadow(
+                market_state=market_state,
+                price_loc=price_loc,
+                setup=setup,
+                aggression_fidelity=aggression_fidelity,
+                current_gate_result="CANDIDATE",
+            )
+            if cfg.get("STRICT_FABIO_GATE_ENABLED", True) and not strict_fabio_shadow.get("strict_fabio_pass"):
+                candidate_fail_reasons.append(
+                    f"strict_fabio:{strict_fabio_shadow.get('strict_fabio_reason', 'failed')}"
+                )
             proxy_cfg = CONFIG.get("SCALP_ENGINE", {})
             if asset_type == "stock":
                 premarket_delta_proxy_levels = _build_premarket_delta_proxy_levels(
