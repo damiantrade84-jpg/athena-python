@@ -1697,6 +1697,24 @@ def api_scalp_scan():
         out = dict(results)
         out["pairs"] = list(pairs)
         out["pair_count"] = len(pairs)
+        _db = getattr(rt(), "AUDIT_DB", "") or ""
+        _sig_list = out.get("signals") or []
+        if _db and _sig_list:
+            try:
+                from conductor import conductor_orchestrate, extract_conductor_microstructure, reset_scan_results
+
+                reset_scan_results("scalp")
+                for _s in _sig_list[:30]:
+                    _vd, _sr = extract_conductor_microstructure(_s)
+                    conductor_orchestrate(
+                        _s,
+                        _s.get("regime", "UNKNOWN"),
+                        _db,
+                        volume_divergence=_vd,
+                        stop_run=_sr,
+                    )
+            except Exception as _ce:
+                rt().log.warning(f"[CONDUCTOR] scalp scan orchestration failed: {_ce}")
         return jsonify(out)
     except Exception as e:
         rt().log.error(f"[SCALP API] Scan error: {e}")

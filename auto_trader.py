@@ -574,6 +574,31 @@ class AutoTrader:
 
         log.info(f"[AUTO] Scan complete — {executed} trade(s) executed")
 
+    def _hydrate_conductor_routing(self, signal: dict) -> None:
+        """Attach deterministic conductor routing to signal when audit DB is configured."""
+        _audit = getattr(self, "_audit_db", None) or ""
+        if not _audit:
+            return
+        ex = signal.get("conductor")
+        if isinstance(ex, dict) and "skip_signal" in ex and "run_debate" in ex:
+            return
+        try:
+            from conductor import conductor_orchestrate, extract_conductor_microstructure
+
+            _vd, _sr = extract_conductor_microstructure(signal)
+            plan = conductor_orchestrate(
+                signal,
+                signal.get("regime", "UNKNOWN"),
+                _audit,
+                volume_divergence=_vd,
+                stop_run=_sr,
+                news_risk=None,
+            )
+            signal["conductor"] = plan.get("routing", {})
+            signal["conductor_context"] = plan.get("context", {})
+        except Exception as _e:
+            log.debug("[AUTO] conductor hydrate failed: %s", _e)
+
     def _can_execute(self, signal: dict, cfg: dict) -> tuple[bool, str]:
         """Check score gate + session filter. Uses combined Engine A+B conviction when available."""
 
@@ -710,16 +735,25 @@ class AutoTrader:
             if not any(s in current_sessions for s in allowed_sessions):
                 return False, f"outside trading session ({current_sessions})"
 
+        self._hydrate_conductor_routing(signal)
+        _routing_pre = signal.get("conductor") if isinstance(signal.get("conductor"), dict) else {}
+        if _routing_pre.get("skip_signal"):
+            _rsn = _routing_pre.get("reasons", [])
+            return False, f"CONDUCTOR_SKIP: {'; '.join(str(x) for x in _rsn)}"
+
         if cfg.get("SENTIMENT_GATE_ENABLED", True):
             try:
                 from sentiment_gate import check_sentiment
 
-                sent = check_sentiment(
-                    signal.get("pair", ""), signal.get("direction", ""), asset_type
-                )
+                _cond = signal.get("conductor")
+                _do_sent = not isinstance(_cond, dict) or _cond.get("run_sentiment", True)
+                if _do_sent:
+                    sent = check_sentiment(
+                        signal.get("pair", ""), signal.get("direction", ""), asset_type
+                    )
 
-                if not sent.get("allowed", True):
-                    return False, sent.get("reason", "Sentiment block")
+                    if not sent.get("allowed", True):
+                        return False, sent.get("reason", "Sentiment block")
 
             except ImportError:
                 pass
@@ -746,7 +780,18 @@ class AutoTrader:
                 from ai_reconciliation import arbitrate_ai
                 from signal_debate import run_signal_debate
 
-                debate = run_signal_debate(signal)
+                _co = signal.get("conductor")
+                routing = _co if isinstance(_co, dict) else {}
+
+                if isinstance(routing, dict) and routing.get("run_debate") is False:
+                    debate = {
+                        "grade": "SKIP",
+                        "reasoning": "conductor: run_debate false — debate not routed",
+                        "allowed": True,
+                        "trace_id": signal.get("trace_id"),
+                    }
+                else:
+                    debate = run_signal_debate(signal)
                 _grade = debate.get("grade", "SKIP")
                 _ai_decision = arbitrate_ai(
                     {"debate": debate, "trace_id": debate.get("trace_id") or signal.get("trace_id")},
@@ -859,7 +904,7 @@ class AutoTrader:
         _sl = float(signal.get("sl") or 0)
         if _entry and _sl and _entry != _sl:
             _sl_pct = abs(_entry - _sl) / abs(_entry)
-            _max_sl_pct = float((CONFIG.get("MAX_SL_PCT") or {}).get(asset_type, 0.05))
+            _max_sl_pct = float((cfg.get("MAX_SL_PCT") or {}).get(asset_type, 0.05))
             if _sl_pct > _max_sl_pct:
                 return (
                     False,

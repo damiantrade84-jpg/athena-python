@@ -73,24 +73,37 @@ def api_conductor_last():
         log.debug(f"[CONDUCTOR] import failed: {_imp_err}")
         return jsonify({"conductor": None, "message": "Conductor module unavailable"}), 200
 
+    _lk = getattr(_cmod, "_conductor_state_lock", None)
     pair_arg = request.args.get("pair", "").strip()
-    if pair_arg and _cmod._ALL_CONDUCTOR_RESULTS:
-        _res = _cmod._ALL_CONDUCTOR_RESULTS.get(pair_arg)
-        if _res is None:
-            pair_norm = pair_arg.upper().replace("/", "")
-            for k, v in _cmod._ALL_CONDUCTOR_RESULTS.items():
-                if k.upper() == pair_arg.upper() or k.upper().replace("/", "") == pair_norm:
-                    _res = v
-                    break
-        if _res:
-            return jsonify(_json_safe({"conductor": _res.get("routing", {}), "timestamp": datetime.now(timezone.utc).isoformat()}))
-        return jsonify({"conductor": None, "message": f"{pair_arg} not in last scan"}), 200
+    if pair_arg:
+        if _lk:
+            with _lk:
+                _all_snap = dict(_cmod._ALL_CONDUCTOR_RESULTS)
+        else:
+            _all_snap = dict(_cmod._ALL_CONDUCTOR_RESULTS)
+        if _all_snap:
+            _res = _all_snap.get(pair_arg)
+            if _res is None:
+                pair_norm = pair_arg.upper().replace("/", "")
+                for k, v in _all_snap.items():
+                    if k.upper() == pair_arg.upper() or k.upper().replace("/", "") == pair_norm:
+                        _res = v
+                        break
+            if _res:
+                return jsonify(_json_safe({"conductor": _res.get("routing", {}), "timestamp": datetime.now(timezone.utc).isoformat()}))
+            return jsonify({"conductor": None, "message": f"{pair_arg} not in last scan"}), 200
 
-    if _cmod._LAST_CONDUCTOR_RESULT is None:
+    if _lk:
+        with _lk:
+            _last_only = _cmod._LAST_CONDUCTOR_RESULT
+    else:
+        _last_only = _cmod._LAST_CONDUCTOR_RESULT
+
+    if _last_only is None:
         return jsonify({"conductor": None, "message": "No conductor data yet. Run a scan."}), 200
 
     _out = {
-        "conductor": _cmod._LAST_CONDUCTOR_RESULT.get("routing", {}),
+        "conductor": _last_only.get("routing", {}),
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
     return jsonify(_json_safe(_out))
@@ -102,8 +115,16 @@ def api_conductor_pairs():
         import conductor as _cmod
     except Exception:
         return jsonify({"pairs": []}), 200
+    _lk = getattr(_cmod, "_conductor_state_lock", None)
+    if _lk:
+        with _lk:
+            _snap = dict(_cmod._ALL_CONDUCTOR_RESULTS)
+            _stype = getattr(_cmod, "_LAST_SCAN_TYPE", "")
+    else:
+        _snap = dict(_cmod._ALL_CONDUCTOR_RESULTS)
+        _stype = getattr(_cmod, "_LAST_SCAN_TYPE", "")
     pairs = []
-    for pair, res in _cmod._ALL_CONDUCTOR_RESULTS.items():
+    for pair, res in _snap.items():
         r = res.get("routing", {})
         pairs.append({
             "pair": pair,
@@ -112,7 +133,7 @@ def api_conductor_pairs():
             "skip_signal": r.get("skip_signal", False),
         })
     pairs.sort(key=lambda x: x["score_pct"], reverse=True)
-    return jsonify({"pairs": pairs, "scan_type": getattr(_cmod, "_LAST_SCAN_TYPE", "")})
+    return jsonify({"pairs": pairs, "scan_type": _stype})
 
 
 def health():

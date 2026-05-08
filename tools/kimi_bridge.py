@@ -52,10 +52,13 @@ def _jsonify_row(rows: list[sqlite3.Row]) -> dict:
 def conductor_last():
     """Return the last Conductor decision for the dashboard widget."""
     try:
-        from conductor import _LAST_CONDUCTOR_RESULT
-        if _LAST_CONDUCTOR_RESULT:
+        from conductor import _LAST_CONDUCTOR_RESULT, _conductor_state_lock
+
+        with _conductor_state_lock:
+            last = _LAST_CONDUCTOR_RESULT
+        if last:
             return jsonify({
-                "conductor": _LAST_CONDUCTOR_RESULT.get("routing", {}),
+                "conductor": last.get("routing", {}),
                 "timestamp": datetime.now(timezone.utc).isoformat(),
             })
         return jsonify({"conductor": None, "message": "No conductor data yet"})

@@ -5054,13 +5054,20 @@ def api_scan():
     _conductor_plan = None
     if _signals:
         try:
-            from conductor import conductor_orchestrate, reset_scan_results
+            from conductor import (
+                conductor_orchestrate,
+                extract_conductor_microstructure,
+                reset_scan_results,
+            )
             reset_scan_results("engine_a")
             for _sig in _signals[:30]:  # cap at 30 to bound DB query cost
+                _vd, _sr = extract_conductor_microstructure(_sig)
                 _plan = conductor_orchestrate(
                     _sig,
                     _sig.get("regime", "UNKNOWN"),
                     _AUDIT_DB,
+                    volume_divergence=_vd,
+                    stop_run=_sr,
                 )
                 if _sig is _signals[0]:
                     _conductor_plan = _plan
@@ -5183,18 +5190,46 @@ def api_analyze():
         # ── Conductor: Decide which AI functions to run ──────────────────
         _conductor_plan = None
         try:
-            from conductor import conductor_orchestrate
+            from conductor import conductor_orchestrate, extract_conductor_microstructure
+
+            _vd, _sr = extract_conductor_microstructure(sig)
             _conductor_plan = conductor_orchestrate(
                 sig,
                 sig.get("regime", "UNKNOWN"),
                 _AUDIT_DB,
                 news_ctx=news_ctx,
+                volume_divergence=_vd,
+                stop_run=_sr,
                 news_risk=news_ctx.get("risk") if news_ctx else None,
             )
             sig["conductor"] = _conductor_plan.get("routing", {})
             sig["conductor_context"] = _conductor_plan.get("context", {})
         except Exception as _cerr:
             log.debug(f"[CONDUCTOR] failed: {_cerr}")
+
+        _routing = (_conductor_plan or {}).get("routing") or {}
+        if _routing.get("skip_signal"):
+            return jsonify(
+                _json_safe(
+                    {
+                        "error": "conductor_hard_fail",
+                        "message": "Signal below conductor minimum score for analysis pipeline",
+                        "conductor": _routing,
+                        "conductor_context": (_conductor_plan or {}).get("context"),
+                    }
+                )
+            ), 422
+        if _conductor_plan and not _routing.get("run_marcus", True):
+            return jsonify(
+                _json_safe(
+                    {
+                        "skipped": True,
+                        "message": "Marcus skipped per conductor routing",
+                        "conductor": _routing,
+                        "conductor_context": _conductor_plan.get("context"),
+                    }
+                )
+            ), 200
 
         _pre_run_sec = time.monotonic() - _api_ai_started
         result = run_ai(
@@ -6673,13 +6708,20 @@ def api_scan_naked():
     # Run Conductor on Engine B signals so widget updates after an Engine B scan
     if results:
         try:
-            from conductor import conductor_orchestrate, reset_scan_results
+            from conductor import (
+                conductor_orchestrate,
+                extract_conductor_microstructure,
+                reset_scan_results,
+            )
             reset_scan_results("engine_b")
             for _sig in results[:30]:
+                _vd, _sr = extract_conductor_microstructure(_sig)
                 conductor_orchestrate(
                     _sig,
                     _sig.get("regime", "UNKNOWN"),
                     _AUDIT_DB,
+                    volume_divergence=_vd,
+                    stop_run=_sr,
                 )
         except Exception as _cerr:
             log.warning(f"[CONDUCTOR] engine-b scan orchestration failed: {_cerr}")

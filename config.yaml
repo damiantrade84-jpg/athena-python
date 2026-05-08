@@ -2634,8 +2634,11 @@ CONDUCTOR:
   # Score thresholds (%)
   HARD_FAIL_SCORE_PCT: 35          # Below this: skip signal entirely
   DEBATE_MIN_SCORE_PCT: 50         # Below this: too weak for debate
-  DEBATE_MAX_SCORE_PCT: 75         # Above this: strong enough, skip debate
-  STRONG_SCORE_PCT: 80             # Above this + clear B verdict: skip debate
+  DEBATE_MAX_SCORE_PCT: 75         # Inclusive upper band for borderline debate
+  STRONG_SCORE_PCT: 80             # Legacy; skip-debate uses score > DEBATE_MAX + clear B
+  # Marcus (/api/analyze): when false, LLM runs only if debate/vision/sentiment routed
+  RUN_MARCUS_ON_ANALYZE: true
+  LOOKBACK_DAYS: 90                # learning_log lookback for dynamic A/B weights (fallback: LEARNING_LOOKBACK_DAYS)
   # Trigger conditions
   VISION_ON_DIVERGENCE: true       # Volume divergence or stop-run -> vision
   VISION_ON_STOP_RUN: true
@@ -2643,7 +2646,7 @@ CONDUCTOR:
   # Engine weighting
   DYNAMIC_WEIGHTING_ENABLED: true  # Adjust A/B weights from DB performance
   DYNAMIC_WEIGHT_BLEND: 0.40      # % empirical vs default (0.4 = 40% empirical, 60% default)
-  MIN_SAMPLE_SIZE: 10              # Min trades before using empirical weights─
+  MIN_SAMPLE_SIZE: 10             # Min trades before using empirical weights
 # Display + paper/demo monitoring ONLY. No execution. No real orders.
 
 LIVE_DASHBOARD:
