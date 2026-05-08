@@ -328,6 +328,8 @@ CONFIG: dict = {
     "ENGINE_A_CRYPTO_DERIVATIVES_BINANCE_FALLBACK": False,
     "ENGINE_B_CRYPTO_LEVELS_FEED": "bybit",
     "ENGINE_B_CRYPTO_LEVELS_SIGNAL_FEED_FALLBACK": False,
+    # When True, Engine B skips forex on 22:00–07:00 UTC bars (backtest + live scan).
+    "ENGINE_B_FOREX_ASIAN_SESSION_SKIP_ENABLED": True,
     "BINANCE_KLINE_WS_INTERVALS": ["1m", "5m", "15m", "1h", "4h", "1d"],
     "MIN_CONFLUENCE": 1.0,
     "RISK_MULT": {
@@ -511,7 +513,7 @@ CONFIG: dict = {
         "index": 150,
     },
     # Stage 4.2: BT_MIN / BT_MIN_GROUP / BACKTEST_USE_BT_MIN_THRESHOLDS deleted.
-    # Single source of truth: scoring.py _TIER_VOLATILE (2.0) and _TIER_STABLE (1.5).
+    # Single source of truth: scoring.py profile/pair/group resolver plus 3-tier fallback.
     "RESEARCH_MODE": False,
     "BACKTEST_EVENT_RISK_GATING": False,
     "BACKTEST_SENTIMENT_GATING": False,
@@ -556,7 +558,7 @@ CONFIG: dict = {
         "commodity": 0.18,
     },
     # MIN_CONFLUENCE_GROUP removed. Engine A live/backtest thresholds are resolved
-    # in scoring.py from the two-tier system plus PAIR_PROFILES.min_confluence.
+    # in scoring.py from profile overrides, pair/group config, then 3-tier fallback.
     # MIN_CONFLUENCE_CLASS is legacy/admin metadata and is not read by that gate.
     # Factor scoring gates — see factor_scoring.py
     "ENGINE_A_PAIR_THRESHOLDS": {},
@@ -992,6 +994,7 @@ _KNOWN_YAML_ONLY_KEYS = {
     "ENGINE_B_BOS_VOLUME_FOR_TICKVOL",
     "ENGINE_B_CRYPTO_LEVELS_FEED",
     "ENGINE_B_CRYPTO_LEVELS_SIGNAL_FEED_FALLBACK",
+    "ENGINE_B_FOREX_ASIAN_SESSION_SKIP_ENABLED",
     "ENGINE_B_CHOCH_STRICT",
     "ENGINE_B_SCAN_CONFIRMATION_GATE_ENABLED",
     "ENGINE_B_STRUCTURAL_SL_USE_STYLE_ATR_MULTS",
@@ -1441,7 +1444,7 @@ def _fatal_config_validation(cfg: dict) -> None:
     if "BACKTEST_USE_BT_MIN_THRESHOLDS" in cfg:
         errors.append("BACKTEST_USE_BT_MIN_THRESHOLDS must be deleted — dual thresholds prohibited")
     if "BT_MIN_GROUP" in cfg:
-        errors.append("BT_MIN_GROUP must be deleted — use 2-tier system")
+        errors.append("BT_MIN_GROUP must be deleted - use Engine A live threshold resolver")
 
     # 5. Floor sanity
     _floor = float(cfg.get("FACTOR_CONVICTION_FLOOR", 0.20))

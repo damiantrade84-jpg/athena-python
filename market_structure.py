@@ -20,6 +20,39 @@ ENGINE_B_REGIME_GATE_DEFAULTS = {
     "LOW_VOLATILITY": 1.15,
 }
 
+
+def engine_b_forex_asian_session_blocks_bar(
+    entry_candles: list | None, asset_type: str
+) -> bool:
+    """Return True when Engine B should skip this bar for forex (Asian session UTC).
+
+    Gated by ENGINE_B_FOREX_ASIAN_SESSION_SKIP_ENABLED (default True for historical
+    backtest parity). Live scan uses the same helper so BT and discovery align.
+    """
+    if str(asset_type or "").lower() != "forex":
+        return False
+    if not bool(
+        config.CONFIG.get("ENGINE_B_FOREX_ASIAN_SESSION_SKIP_ENABLED", True)
+    ):
+        return False
+    if not entry_candles:
+        return False
+    try:
+        from datetime import datetime, timezone
+
+        last = entry_candles[-1]
+        _lt = last.get("time") or last.get("datetime")
+        if not _lt:
+            return False
+        _bar_dt = datetime.fromisoformat(str(_lt).replace("Z", "+00:00"))
+        if _bar_dt.tzinfo is None:
+            _bar_dt = _bar_dt.replace(tzinfo=timezone.utc)
+        h = _bar_dt.hour
+        return h >= 22 or h < 7
+    except Exception:
+        return False
+
+
 # Engine B timeframe matrix — single source of truth for TF selection across
 # live, execution, scan, and backtest. Maps (asset_type, style) to the four
 # roles: struct (BOS/CHoCH detection), zone (S/R clusters), trigger (entry

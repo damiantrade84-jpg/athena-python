@@ -23,7 +23,11 @@ from scoring import (
     get_pair_score_group,
 )
 from engine_c import ENGINE_C_AB_WEIGHTS
-from market_structure import NakedEngine, engine_b_min_score_threshold
+from market_structure import (
+    NakedEngine,
+    engine_b_forex_asian_session_blocks_bar,
+    engine_b_min_score_threshold,
+)
 from threshold_audit import (
     audit_enabled as threshold_audit_enabled,
     build_signal_funnel_row,
@@ -761,6 +765,10 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict[s
                     atr_candles_b = _select_engine_b_tf_candles(_atr_tf_b, _tf_map_b)
 
                     if zone_candles_b and entry_candles_b and atr_candles_b:
+                        if engine_b_forex_asian_session_blocks_bar(
+                            entry_candles_b, ptype
+                        ):
+                            return pair, sig_a, None
                         atr = _last_atr_from_candles(atr_candles_b, 14)
                         if (
                             ptype == "crypto"

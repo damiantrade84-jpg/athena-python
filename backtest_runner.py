@@ -60,6 +60,11 @@ from research_validation import (
 )
 from stability_monitor import record_backtest_summary
 
+from market_structure import (
+    engine_b_forex_asian_session_blocks_bar,
+    resolve_engine_b_asset_class,
+)
+
 
 def _bt_forex_d1_bar_time(d1_ts: str) -> str:
     """Replace D1 bar midnight UTC timestamp with 13:00 UTC for forex session check.
@@ -179,15 +184,60 @@ def _live_base_risk_pct(asset_type: str) -> float:
     }.get(asset_type, CONFIG["RISK_PCT"])
 
 
+def _engine_a_level_atr_for_bt(
+    signal_atr: float | None, pair: dict, style: str | None, as_of=None
+) -> tuple[float | None, str]:
+    """Resolve Engine A backtest ATR for SL/TP levels using the live crypto venue basis."""
+    if (
+        str((pair or {}).get("type") or "").lower() == "crypto"
+        and str(CONFIG.get("ENGINE_A_CRYPTO_LEVELS_FEED", "bybit")).lower() == "bybit"
+    ):
+        bybit_atr_for_levels = getattr(_rt(), "bybit_atr_for_levels", None)
+        bybit_atr = None
+        if callable(bybit_atr_for_levels):
+            try:
+                bybit_atr = bybit_atr_for_levels(pair, style, as_of=as_of)
+            except TypeError:
+                bybit_atr = None
+        if bybit_atr:
+            return float(bybit_atr), "bybit"
+        if not bool(CONFIG.get("ENGINE_A_CRYPTO_LEVELS_SIGNAL_FEED_FALLBACK", False)):
+            return None, "bybit_unavailable"
+    return signal_atr, "signal"
+
+
+def _engine_b_level_atr_for_bt(
+    signal_atr: float | None, pair: dict, style: str | None
+) -> tuple[float | None, str]:
+    """Resolve Engine B backtest ATR for structure/levels using live crypto venue basis."""
+    if (
+        str((pair or {}).get("type") or "").lower() == "crypto"
+        and str(CONFIG.get("ENGINE_B_CRYPTO_LEVELS_FEED", "bybit")).lower() == "bybit"
+    ):
+        bybit_fn = getattr(_rt(), "bybit_atr_for_levels", None)
+        bybit_atr = bybit_fn(pair, style) if callable(bybit_fn) else None
+        if bybit_atr:
+            return float(bybit_atr), "bybit"
+        if not bool(CONFIG.get("ENGINE_B_CRYPTO_LEVELS_SIGNAL_FEED_FALLBACK", False)):
+            return None, "bybit_unavailable"
+    if signal_atr is None:
+        return None, "signal"
+    try:
+        return float(signal_atr), "signal"
+    except (TypeError, ValueError):
+        return None, "signal"
+
+
 def _engine_a_bt_gate_note() -> str:
     """Explain Engine A backtest threshold routing for API payload (matches scoring.get_score_threshold).
 
     Stage 4.2: BT_MIN / BT_MIN_GROUP deleted. Backtest and live use identical
-    2-tier thresholds (volatile=2.0, stable=1.5) from scoring.py.
+    Engine A threshold resolution from scoring.py.
     """
     sq_on = bool(CONFIG.get("SCAN_QUANTILE_ENABLED", False))
     return (
-        "Engine A backtest uses live thresholds (2-tier: volatile=2.0, stable=1.5). "
+        "Engine A backtest uses live thresholds "
+        "(profile -> pair/group config -> 3-tier fallback). "
         "Backtest/live parity enforced. "
         "Live scan: get_min_confluence_threshold plus optional SCAN_QUANTILE_ENABLED."
         + ("" if sq_on else " SCAN_QUANTILE_ENABLED is off.")
@@ -1085,8 +1135,8 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
     _pair_ctx["score_group"] = _pair_score_group
     _level_atr_class = get_pair_level_atr_class(_pair_ctx)
 
-    # Engine A backtest gate: pair profile → group → class hierarchy.
-    # Stage 4.2: Backtest and live use identical 2-tier thresholds.
+    # Engine A backtest gate: pair profile -> pair/group config -> 3-tier fallback.
+    # Stage 4.2: Backtest and live use identical thresholds.
     bt_min = get_score_threshold(_pair_ctx, is_backtest=True)
 
     _canonical_vm, _vm_mode_warning = normalize_validation_mode(validation_mode)
@@ -1438,6 +1488,9 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
             raw_entry = entry_bar.get("open", entry_bar["close"])
 
             atr = _rt().atr_for_levels(d1i, h4i, h1i, pair=pair, style=effective_style)
+            atr, level_atr_feed = _engine_a_level_atr_for_bt(
+                atr, pair, effective_style, as_of=entry_bar.get("time")
+            )
 
             if not atr or atr == 0:
                 i += 1
@@ -1923,6 +1976,9 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
             atr = _rt().atr_for_levels(
                 d1i_ctx, h4i, h1i, pair=pair, style=effective_style
             )
+            atr, level_atr_feed = _engine_a_level_atr_for_bt(
+                atr, pair, effective_style, as_of=entry_bar.get("time")
+            )
 
             if not atr or atr == 0:
                 i += 1
@@ -2383,6 +2439,9 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
 
             atr = _rt().atr_for_levels(
                 d1i_ctx, h4i_ctx, h1i, pair=pair, style=effective_style
+            )
+            atr, level_atr_feed = _engine_a_level_atr_for_bt(
+                atr, pair, effective_style, as_of=entry_bar.get("time")
             )
 
             if not atr or atr == 0:
@@ -3676,18 +3735,14 @@ def backtest_pair_naked(pair: dict, style: str = "naked", validation_mode="stand
         if not entry_time:
             i += 1
             continue
-        # Session filter: skip forex trades outside London (07-16 UTC) and NY (13-22 UTC)
-        if pair.get("type") == "forex" and entry_time:
-            try:
-                from datetime import datetime as _dt
-                _bar_dt = _dt.fromisoformat(str(entry_time).replace("Z", "+00:00"))
-                _bar_hour = _bar_dt.hour
-                # Skip Asian session (22:00 - 07:00 UTC) — low liquidity, wide spreads
-                if _bar_hour >= 22 or _bar_hour < 7:
-                    i += 1
-                    continue
-            except Exception:
-                pass  # if time parsing fails, don't block the trade
+        # Forex: optional Asian session skip (live scan uses same gate via
+        # engine_b_forex_asian_session_blocks_bar).
+        if engine_b_forex_asian_session_blocks_bar(
+            [entry_raw[i]] if i < len(entry_raw) else [],
+            pair.get("type", ""),
+        ):
+            i += 1
+            continue
 
         _vf = backtest_bar_validation_state(
             i,
@@ -3732,6 +3787,11 @@ def backtest_pair_naked(pair: dict, style: str = "naked", validation_mode="stand
         else:
             # Reconstruct the last 50 bars from the precomputed series for the volatility gate
             atr_list_50 = _atr_full[max(0, _idx - 50) : _idx]
+
+        atr, _eb_bt_atr_feed = _engine_b_level_atr_for_bt(atr, pair, resolved_style)
+        if atr is None or float(atr) <= 0:
+            i += 1
+            continue
 
         # Volatility gate: skip trades when ATR is below 60% of its 50-bar average
         # Matches live logic but uses the precomputed slice.
@@ -3848,9 +3908,16 @@ def backtest_pair_naked(pair: dict, style: str = "naked", validation_mode="stand
             level_source = conf_data.get("rr_source") or "engine_b_execution"
             if sl is None or tp is None:
                 _bt_regime = res.get("regime_state")
+                _eb_lvl_class = resolve_engine_b_asset_class(
+                    pair.get("type", ""), _pair_score_group
+                )
                 _lvl = calc_levels(
-                    entry, atr, direction, pair.get("type", "stock"),
-                    regime_state=_bt_regime, style=resolved_style,
+                    entry,
+                    atr,
+                    direction,
+                    _eb_lvl_class,
+                    regime_state=_bt_regime,
+                    style=resolved_style,
                 )
                 sl = sl if sl is not None else _lvl.get("sl")
                 tp = tp if tp is not None else _lvl.get("tp1")
@@ -4536,15 +4603,12 @@ def backtest_pair_consensus(
             i += 1
             continue
 
-        if _ptype == "forex":
-            try:
-                from datetime import datetime as _dt
-                _bar_dt = _dt.fromisoformat(str(entry_time).replace("Z", "+00:00"))
-                if _bar_dt.hour >= 22 or _bar_dt.hour < 7:
-                    i += 1
-                    continue
-            except Exception:
-                pass
+        if engine_b_forex_asian_session_blocks_bar(
+            [candles_h4[i]] if i < len(candles_h4) else [],
+            _ptype,
+        ):
+            i += 1
+            continue
 
         _vf = backtest_bar_validation_state(
             i, min_bars=max(50, _h4_need), total_bars=len(candles_h4),
@@ -4577,6 +4641,10 @@ def backtest_pair_consensus(
             h1_idx=h1_idx,
             current_price=current_price,
         )
+        atr, _eb_bt_atr_feed_c = _engine_b_level_atr_for_bt(atr, pair, resolved_style)
+        if atr is None or float(atr) <= 0:
+            i += 1
+            continue
         if len(atr_list_50) >= 50:
             _valid_atrs = [a for a in atr_list_50 if a]
             _atr_avg = sum(_valid_atrs) / len(_valid_atrs) if _valid_atrs else 0
@@ -4623,6 +4691,9 @@ def backtest_pair_consensus(
                 bar_time=candles_h4[i].get("time") if candles_h4 else None,
             )
             _atr_c = _rt().atr_for_levels(d1i, h4i, h1i, pair=pair, style=resolved_style)
+            _atr_c, _level_atr_feed_c = _engine_a_level_atr_for_bt(
+                _atr_c, pair, resolved_style, as_of=candles_h4[i].get("time") if candles_h4 else None
+            )
             _lvl_a = calc_levels(current_price, _atr_c or atr, res_a["direction"], _level_atr_class,
                                  regime_state=res_a.get("regime", {}).get("state"),
                                  style=resolved_style) if _atr_c else {}
@@ -5013,6 +5084,7 @@ def backtest_pair_scalp(pair: dict, validation_mode: str = "standard") -> dict |
         _check_vwap_lean,
         _classify_market_state,
         _classify_setup,
+        _calc_m15_atr,
         _coerce_utc_datetime,
         _guess_asset_type,
         _locate_price_vs_vp,
@@ -5027,6 +5099,7 @@ def backtest_pair_scalp(pair: dict, validation_mode: str = "standard") -> dict |
     display = pair.get("display", pair.get("symbol", "UNKNOWN"))
     asset_type = pair.get("type", _guess_asset_type(display))
     cfg = CONFIG.get("SCALP_ENGINE", {})
+    _bt_volume_source = "binance_candle" if asset_type == "crypto" else "mt5_tick"
 
     if not cfg.get("BT_ENABLED", True):
         return {"error": f"Scalp backtest disabled in config for {display}"}
@@ -5062,7 +5135,7 @@ def backtest_pair_scalp(pair: dict, validation_mode: str = "standard") -> dict |
             if not mt5_sym:
                 return {"error": f"No MT5 symbol mapping for {display}"}
             m15_raw = mt5_fetch_scalp_candles(mt5_sym, "M15", 2000, include_forming=False)
-            m15_raw, _ = _overlay_eodhd_volume_for_scalp(display, asset_type, "M15", m15_raw, live=False)
+            m15_raw, _bt_volume_source = _overlay_eodhd_volume_for_scalp(display, asset_type, "M15", m15_raw, live=False)
     except Exception as e:
         log.error(f"[SCALP-BT] Candle fetch failed for {display}: {e}")
         return {"error": f"Candle fetch failed: {e}"}
@@ -5189,7 +5262,23 @@ def backtest_pair_scalp(pair: dict, validation_mode: str = "standard") -> dict |
             else {"valid": False}
         )
         if not vp.get("valid"):
-            vp = _build_volume_profile(vp_window)
+            if asset_type in ("forex", "index", "stock", "commodity") and cfg.get("VP_SESSION_AWARE", True):
+                try:
+                    from volume_profile import split_completed_sessions
+                    _sessions = split_completed_sessions(
+                        m15_context,
+                        asset_type,
+                        session_mode=str(cfg.get("SESSION_MODE", "london_ny")),
+                    )
+                    _prev = _sessions.get("prev_session_candles", [])
+                    if len(_prev) >= 20:
+                        vp_window = _prev
+                except Exception:
+                    pass
+            try:
+                vp = _build_volume_profile(vp_window, asset_type=asset_type)
+            except TypeError:
+                vp = _build_volume_profile(vp_window)
             if vp.get("valid"):
                 vp.setdefault("volume_source", "candles")
         if not vp.get("valid") or vp.get("poc") is None:
@@ -5204,21 +5293,46 @@ def backtest_pair_scalp(pair: dict, validation_mode: str = "standard") -> dict |
 
         market_state = _classify_market_state(vp)
         # Compute ATR for proximity + buffer scaling in backtest
-        _bt_atr_m15 = 0.0
-        if len(m15_context) >= 14:
-            _bt_ranges = [float(c["high"]) - float(c["low"]) for c in m15_context[-14:]]
-            _bt_atr_m15 = sum(_bt_ranges) / len(_bt_ranges)
-        price_loc = _locate_price_vs_vp(current_price, vp, atr_m15=_bt_atr_m15)
-        absorption = _check_absorption(exec_context)
+        _bt_atr_m15 = _calc_m15_atr(m15_context, period=int(cfg.get("ATR_PERIOD", 14)))
+        try:
+            price_loc = _locate_price_vs_vp(current_price, vp, atr_m15=_bt_atr_m15, asset_type=asset_type)
+        except TypeError:
+            price_loc = _locate_price_vs_vp(current_price, vp, atr_m15=_bt_atr_m15)
+        try:
+            absorption = _check_absorption(exec_context, asset_type=asset_type)
+        except TypeError:
+            absorption = _check_absorption(exec_context)
         cvd = (
             _check_trade_bucket_cvd(display, reference_ts=signal_close_dt, require_fresh=False)
             if asset_type == "crypto" and cfg.get("TRADE_BUCKET_CVD_ENABLED", True)
             else {"source": "disabled"}
         )
         if not cvd.get("direction"):
-            cvd = _check_cvd(exec_context)
+            try:
+                cvd = _check_cvd(exec_context, asset_type=asset_type)
+            except TypeError:
+                cvd = _check_cvd(exec_context)
             cvd["source"] = "candles"
-        aaa = _check_aaa_sequence(exec_context, absorption, cvd, asset_type=asset_type) if cfg.get("AAA_ENABLED", True) else {"complete": False, "phase": "disabled"}
+        if (
+            asset_type == "crypto"
+            and cfg.get("STRICT_FABIO_GATE_ENABLED", True)
+            and cfg.get("REQUIRE_AGGTRADE_FOR_CRYPTO_STRICT", True)
+            and (vp.get("volume_source") != "binance_aggtrade" or cvd.get("source") != "binance_aggtrade")
+        ):
+            continue
+        if (
+            asset_type == "stock"
+            and cfg.get("REQUIRE_REAL_VOLUME_FOR_STOCKS", True)
+            and _bt_volume_source not in {"eodhd_1m", "eodhd_1h", "eodhd_hist", "ws_tick"}
+        ):
+            continue
+        if cfg.get("AAA_ENABLED", True):
+            try:
+                aaa = _check_aaa_sequence(exec_context, absorption, cvd, asset_type=asset_type)
+            except TypeError:
+                aaa = _check_aaa_sequence(exec_context, absorption, cvd)
+        else:
+            aaa = {"complete": False, "phase": "disabled"}
         vwap = _check_vwap_lean(context_for_vwap, current_price) if cfg.get("VWAP_ENABLED", True) else {"lean": None, "vwap_value": 0}
         bias_context = _resample_closed_m15_context(m15_context, bias_tf)
         htf_bias = infer_bias_from_ema_stack(bias_context) if len(bias_context) >= 200 else None
