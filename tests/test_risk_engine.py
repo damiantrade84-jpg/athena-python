@@ -603,3 +603,31 @@ class TestSlOverrideDirection:
         correct_result = max(math_sl, struct_sl)  # fixed behaviour
         assert wrong_result == 92.0  # confirms old logic was wider
         assert correct_result == 95.0  # confirms fix is tighter
+# appended tests
+
+class TestConsensusMinRR:
+    def test_rejects_low_rr_when_verdict_is_engine_c(self, monkeypatch):
+        monkeypatch.setitem(risk_engine.CONFIG, "ENGINE_C_EXEC_MIN_RR", 1.0)
+        sig = _make_signal(
+            price=100.0,
+            sl=95.0,
+            tp1=104.0,
+            verdict="ALIGNED",
+            decision_state="execute",
+            tier="HIGH",
+            components={"b_checklist_passed": True},
+            engine_b_status={"checklist_passed": True},
+        )
+        r = risk_check(sig, 10000, 10000, [])
+        assert r.approved is False
+        assert r.reason == "RR_BELOW_MINIMUM"
+
+    def test_allows_low_rr_when_not_consensus_context(self, monkeypatch):
+        monkeypatch.setitem(risk_engine.CONFIG, "ENGINE_C_EXEC_MIN_RR", 1.0)
+        sig = _make_signal(
+            price=100.0,
+            sl=95.0,
+            tp1=104.0,
+        )
+        r = risk_check(sig, 10000, 10000, [])
+        assert r.approved is True

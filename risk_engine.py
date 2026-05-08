@@ -777,6 +777,41 @@ def risk_check(
         log.warning(f"{prefix} REJECTED: SHORT tp1 {tp1} must be below entry {entry}")
         return RiskApproval(False, 0.0, 0.0, 0.0, 0.0, dd, "INVALID_LEVELS")
 
+    # Engine C / consensus minimum R:R from geometry (defense in depth)
+    def _is_consensus_execution_signal(sig: dict) -> bool:
+        eng = str(sig.get("engine") or "").strip().lower()
+        if eng in ("engine_c", "consensus"):
+            return True
+        v = str(sig.get("verdict") or "").strip().upper()
+        if v in (
+            "ALIGNED",
+            "A_ONLY",
+            "B_ONLY",
+            "B_ONLY_SCORED",
+            "B_ONLY_VISION_CONFIRMED",
+            "B_OVERRIDE_CONFLICT",
+            "A_OVERRIDE_CONFLICT",
+        ):
+            return True
+        comps = sig.get("components")
+        return isinstance(comps, dict) and bool(comps)
+
+    try:
+        _min_exec_rr = float(CONFIG.get("ENGINE_C_EXEC_MIN_RR", 1.0) or 1.0)
+    except (TypeError, ValueError):
+        _min_exec_rr = 1.0
+    if _min_exec_rr > 0 and tp1 > 0 and _is_consensus_execution_signal(signal):
+        risk_abs = abs(entry - sl)
+        if risk_abs > 0:
+            rr_geom = abs(tp1 - entry) / risk_abs
+            if rr_geom + 1e-12 < _min_exec_rr:
+                log.warning(
+                    f"{prefix} REJECTED: R:R {rr_geom:.3f} < min {_min_exec_rr}"
+                )
+                return RiskApproval(
+                    False, 0.0, 0.0, 0.0, 0.0, dd, "RR_BELOW_MINIMUM"
+                )
+
     # ── Check 5: SL distance within MAX_SL_PCT ──────────────────────────────
     # BUG 4 fix: Enforce hard rejection for over-wide stops before volume calc.
     # Matches implementation in executors to prevent late-stage rejections.

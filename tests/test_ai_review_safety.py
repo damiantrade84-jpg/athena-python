@@ -1249,3 +1249,39 @@ class TestMarcusTextReviewTimeoutContract:
         assert "[AI] %s timing: prompt_build" in run_ai_body
         assert "elapsed=%.2fs timeout=%.1fs sdk_retries=%s" in text
         assert "prompt_build=%.2fs prompt_chars=%s" in text
+
+
+class TestVisionArbitrationFailClosed:
+    def test_arbitration_exception_blocks_trade(self, monkeypatch):
+        import engine_c
+        def boom(*a, **k):
+            raise RuntimeError("arb down")
+        monkeypatch.setitem(engine_c.CONFIG, "AI_VISION_CAN_UPGRADE_TRADE", False)
+        monkeypatch.setattr("ai_reconciliation.arbitrate_ai", boom)
+        from engine_c import apply_vision
+        consensus = {
+            "conviction": 0.5,
+            "tier": "MEDIUM",
+            "sizing_override": 0.65,
+            "entry": 1.1,
+            "sl": 1.09,
+            "tp": 1.13,
+            "trade": True,
+            "sl_method": "structural",
+        }
+        out = apply_vision(consensus, {"analysis": "MODERATE", "structured": {"rating": "MODERATE"}})
+        assert out["trade"] is False
+        assert out["verdict"] == "VISION_ARBITRATION_ERROR"
+
+
+class TestVisionModifiersHardVeto:
+    def test_yaml_cannot_neutralize_contradicts(self, monkeypatch):
+        import engine_c
+        monkeypatch.setitem(
+            engine_c.CONFIG,
+            "VISION_MODIFIERS",
+            {"CONTRADICTS": {"action": "confirm", "conviction_mult": 1.0}},
+        )
+        modifiers = engine_c._vision_modifiers()
+        assert modifiers["CONTRADICTS"]["action"] == "contradict"
+        assert modifiers["CONTRADICTS"]["conviction_mult"] == 0.0

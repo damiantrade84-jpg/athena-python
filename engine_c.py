@@ -55,6 +55,33 @@ ENGINE_C_AB_WEIGHTS = {
 ENGINE_C_META_BLEND = 0.20  # Default; override with CONFIG["ENGINE_C_META_BLEND"] (0..1)
 
 
+def _default_engine_a_max_score(signal_a: dict) -> float:
+    """Fallback maxScore when Engine A omits or zeroes it; optional per-type overrides in CONFIG."""
+    by_type = CONFIG.get("ENGINE_C_A_DEFAULT_MAX_SCORE_BY_TYPE")
+    if isinstance(by_type, dict):
+        for key in (
+            signal_a.get("type"),
+            signal_a.get("asset_class"),
+            signal_a.get("assetType"),
+        ):
+            if key is None:
+                continue
+            raw = by_type.get(str(key).lower())
+            if raw is None:
+                continue
+            try:
+                v = float(raw)
+                if v > 0:
+                    return v
+            except (TypeError, ValueError):
+                continue
+    try:
+        v = float(CONFIG.get("ENGINE_C_A_DEFAULT_MAX_SCORE", 3.0))
+        return v if v > 0 else 3.0
+    except (TypeError, ValueError):
+        return 3.0
+
+
 def _engine_c_meta_blend() -> float:
     """How much to tilt A/B weights toward meta-learner trust (bounded)."""
     try:
@@ -114,6 +141,12 @@ def _vision_modifiers() -> dict:
         except (TypeError, ValueError):
             conviction_mult = float(default["conviction_mult"])
         out[key] = {"action": action, "conviction_mult": conviction_mult}
+
+    # Veto verdicts cannot be neutralized by a mis-set YAML action or multiplier.
+    if "AVOID" in out:
+        out["AVOID"] = {"action": "override", "conviction_mult": 0.0}
+    if "CONTRADICTS" in out:
+        out["CONTRADICTS"] = {"action": "contradict", "conviction_mult": 0.0}
     return out
 
 
@@ -301,7 +334,16 @@ def normalise_engine_a(signal_a: dict) -> dict:
       - confluencePct: threshold-relative display percentage (UI only)
     """
     score = float(signal_a.get("confluenceScore", 0))
-    max_score = float(signal_a.get("maxScore", 3.0)) or 3.0
+    _ms_raw = signal_a.get("maxScore")
+    if _ms_raw is None:
+        max_score = _default_engine_a_max_score(signal_a)
+    else:
+        try:
+            max_score = float(_ms_raw)
+        except (TypeError, ValueError):
+            max_score = _default_engine_a_max_score(signal_a)
+        if max_score <= 0:
+            max_score = _default_engine_a_max_score(signal_a)
     score_norm = signal_a.get("scoreNorm")
     try:
         norm = float(score_norm) if score_norm is not None else None
@@ -638,7 +680,16 @@ def apply_vision(consensus: dict, vision_result: dict) -> dict:
             updated["vision_rating"] = _vision_state.get("raw") or "INVALID"
             return updated
     except Exception as _arb_err:
-        log.debug("[AI_ARBITRATION] Vision arbitration skipped: %s", _arb_err)
+        log.warning("[AI_ARBITRATION] Vision arbitration failed (fail-closed): %s", _arb_err)
+        updated["trade"] = False
+        updated["verdict"] = "VISION_ARBITRATION_ERROR"
+        updated["tier"] = "SKIP"
+        updated["sizing_override"] = 0.0
+        updated["decision_state"] = "blocked"
+        updated["vision_applied"] = True
+        updated["vision_action"] = "block"
+        updated["vision_rating"] = "ARBITRATION_FAILED"
+        return updated
 
     # Parse structured data if available
     structured = vision_result.get("structured") or {}
@@ -687,8 +738,15 @@ def apply_vision(consensus: dict, vision_result: dict) -> dict:
     # Apply modifier
     modifiers = _vision_modifiers()
     modifier = modifiers.get(rating, modifiers["MODERATE"])
-    action = modifier["action"]
-    mult = modifier["conviction_mult"]
+    action = str(modifier["action"]).lower()
+    mult = float(modifier["conviction_mult"])
+
+    # Hard veto ratings and actions — YAML cannot weaken these to a non-veto path.
+    if rating in ("AVOID", "CONTRADICTS"):
+        action = "override" if rating == "AVOID" else "contradict"
+        mult = 0.0
+    elif action in ("override", "contradict"):
+        mult = 0.0
 
     old_conviction = updated["conviction"]
     new_conviction = min(1.0, old_conviction * mult)

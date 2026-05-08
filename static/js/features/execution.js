@@ -143,6 +143,16 @@
       style: pipMode || consensus.style || "swing",
       confluenceScore: consensus.conviction,
       ts: new Date().toISOString(),
+      engine: "engine_c",
+      trade: consensus.trade,
+      verdict: consensus.verdict,
+      tier: consensus.tier,
+      signalTier: consensus.signalTier,
+      decision_state: consensus.decision_state,
+      decision_state_reason: consensus.decision_state_reason,
+      components: consensus.components,
+      engine_b_status: consensus.engine_b_status,
+      rr: consensus.rr,
     };
     var engineB = consensus.engine_b_raw || {};
     engineB.recommended_stop_loss = consensus.sl;

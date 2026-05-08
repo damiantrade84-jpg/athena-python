@@ -271,3 +271,22 @@ def test_aligned_consensus_does_not_use_engine_b_when_checklist_failed():
     assert result["components"]["a_has_signal"] is True
     assert result["components"]["b_has_signal"] is False
     assert result["components"]["b_checklist_passed"] is False
+
+
+def test_normalise_engine_a_uses_config_when_maxscore_missing(monkeypatch):
+    import engine_c
+    monkeypatch.setitem(engine_c.CONFIG, "ENGINE_C_A_DEFAULT_MAX_SCORE", 3.0)
+    monkeypatch.setitem(
+        engine_c.CONFIG,
+        "ENGINE_C_A_DEFAULT_MAX_SCORE_BY_TYPE",
+        {"forex": 2.5},
+    )
+    sig = {
+        "confluenceScore": 1.25,
+        "direction": "LONG",
+        "regime": {"label": "RANGING"},
+        "type": "forex",
+    }
+    out = engine_c.normalise_engine_a(sig)
+    assert out["max_score"] == 2.5
+    assert abs(out["score_norm"] - (1.25 / 2.5)) < 1e-6
