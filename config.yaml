@@ -2205,9 +2205,9 @@ SCALP_ENGINE:
   # during thin periods (lunch, session transitions).
   TIME_OF_DAY_ADJUSTMENT_ENABLED: true
 
-  TRADE_BUCKET_MAX_AGE_SEC: 300   # Max age of live aggTrade buckets before candle fallback
+  TRADE_BUCKET_MAX_AGE_SEC: 900   # Max age of live aggTrade buckets before candle fallback (15min window)
 
-  TRADE_BUCKET_MIN_LEVELS: 8      # Minimum price buckets required before using aggTrade VP/CVD
+  TRADE_BUCKET_MIN_LEVELS: 4      # Minimum price buckets required before using aggTrade VP/CVD (lowered for reliability)
 
   TRADE_BUCKET_MIN_VOLUME: 0.0    # Optional minimum total bucket volume before using aggTrade VP
 
