@@ -24,6 +24,25 @@ from runtime_paths import ensure_candle_cache_db_ready
 
 log = logging.getLogger("sentinel")
 
+
+def bulk_d1_skip_exchanges() -> frozenset[str]:
+    """EODHD ``/api/eod-bulk-last-day/{EXCH}`` supports stock-style exchanges only.
+
+    Suffixes such as ``COMM`` (commodity tickers like ``GC.COMM``) return HTTP 404.
+    Those assets are refreshed via standard per-symbol EOD paths elsewhere; bulk D1
+    must not call a non-existent bulk route.
+    """
+    try:
+        from config import CONFIG as _cfg
+    except ImportError:
+        return frozenset({"COMM"})
+    raw = _cfg.get("CANDLE_BUILDER_BULK_D1_SKIP_EXCHANGES", ["COMM"])
+    if not isinstance(raw, (list, tuple, set)):
+        return frozenset({"COMM"})
+    out = {str(x).strip().upper() for x in raw if x and str(x).strip()}
+    return frozenset(out) if out else frozenset({"COMM"})
+
+
 _live_prices = {}  # protected by _live_prices_lock for compound writes
 
 _live_prices_lock = threading.Lock()
@@ -1594,8 +1613,15 @@ class CandleBuilder:
             exchange_map[exch][code] = p["display"]
 
         updated = 0
+        _skip_bulk_exch = bulk_d1_skip_exchanges()
 
         for exch, code_map in exchange_map.items():
+            if str(exch).strip().upper() in _skip_bulk_exch:
+                log.debug(
+                    "[CB] Bulk D1 %s: skipped (not supported by EODHD bulk last-day; D1 via per-symbol EOD)",
+                    exch,
+                )
+                continue
             try:
                 symbols_csv = ",".join(code_map.keys())
 

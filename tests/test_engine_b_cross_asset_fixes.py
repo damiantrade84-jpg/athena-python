@@ -16,6 +16,7 @@ from execution import (
     _engine_b_atr_for_scan_levels,
     _engine_b_context_confirmed,
     _extract_engine_b_execution_levels,
+    _is_structural_engine_b_execution,
     _signal_has_engine_b_context,
 )
 from market_structure import NakedEngine, resolve_engine_b_asset_class
@@ -97,14 +98,29 @@ def test_execution_prefers_nested_engine_b_execution_levels():
     assert sig["level_source"] == "engine_b_execution"
 
 
-def test_execution_treats_failed_engines_aligned_as_engine_b_context():
-    sig = {"enginesAligned": False, "sl": 98.0, "tp1": 103.0}
+def test_execution_engine_a_scan_engines_aligned_is_not_structural_b_context():
+    """A+B merge sets enginesAligned on Engine A rows; execution must not treat that as B-only."""
+    sig_false = {"enginesAligned": False, "sl": 98.0, "tp1": 103.0}
+    assert _is_structural_engine_b_execution(sig_false) is False
+    assert _signal_has_engine_b_context(sig_false) is False
+    assert _engine_b_context_confirmed(sig_false) is True
 
-    assert _signal_has_engine_b_context(sig) is True
-    assert _engine_b_context_confirmed(sig) is False
+    sig_true = {"enginesAligned": True, "sl": 98.0, "tp1": 103.0}
+    assert _is_structural_engine_b_execution(sig_true) is False
+    assert _engine_b_context_confirmed(sig_true) is True
 
 
-def test_execution_requires_pass_when_naked_context_without_engines_aligned():
+def test_execution_structural_b_still_honors_engines_aligned_when_key_present():
+    sig = {
+        "is_naked": True,
+        "enginesAligned": False,
+        "naked_data": {"passed": True, "execution_sl": 1.0, "execution_tp": 2.0},
+    }
+    # enginesAligned checked before nested passed — unchanged ordering for structural B
+    assert _engine_b_context_confirmed(sig, {}) is False
+
+    sig_ok = {**sig, "enginesAligned": True}
+    assert _engine_b_context_confirmed(sig_ok, {}) is True
     assert (
         _engine_b_context_confirmed(
             {"is_naked": True, "naked_data": {"execution_sl": 1.0, "execution_tp": 2.0}},

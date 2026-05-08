@@ -557,11 +557,29 @@ def _log_trail_ratchet_broker_outcome(
     trail_reason: str | None,
     ratchet_res: dict,
 ) -> None:
-    """WARN on broker skipped/failed SL ratchet so the trail path is observable."""
+    """Log broker outcome for trail SL ratchet.
+
+    ``success=True`` + ``skipped=True`` (MT5) or ``alreadySet`` (Bybit) means the
+    protective SL is already at or beyond the target — not an error.
+    """
     if ratchet_res.get("success") and not ratchet_res.get("skipped"):
+        if ratchet_res.get("alreadySet"):
+            log.info(
+                f"[TIMED_EXIT] TRAIL RATCHET no-op: {venue} {detail} pair={pair} "
+                f"style={style} target_sl={new_sl:.5f} R={current_r:.2f} trail_reason={trail_reason} "
+                f"reason=SL already at broker target"
+            )
+            return
         log.info(
             f"[TIMED_EXIT] TRAIL RATCHET: {venue} {detail} pair={pair} "
             f"style={style} new_sl={new_sl:.5f} R={current_r:.2f} reason={trail_reason}"
+        )
+        return
+    if ratchet_res.get("success") and ratchet_res.get("skipped"):
+        log.info(
+            f"[TIMED_EXIT] TRAIL RATCHET no-op: {venue} {detail} pair={pair} "
+            f"style={style} target_sl={new_sl:.5f} R={current_r:.2f} trail_reason={trail_reason} "
+            f"broker_reason={ratchet_res.get('reason')!r}"
         )
         return
     log.warning(

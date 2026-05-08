@@ -360,21 +360,35 @@ def _apply_level_override(sig: dict, override: dict) -> str | None:
     return None
 
 
-def _signal_has_engine_b_context(sig: dict, engine_b: dict | None = None) -> bool:
+def _is_structural_engine_b_execution(sig: dict, engine_b: dict | None = None) -> bool:
+    """True when execution should apply Engine B level / stale-B refresh semantics.
+
+    Full-scan Engine A rows carry ``enginesAligned`` from the A+B merge; that metadata alone
+    must not trigger Engine B execution gates.
+    """
     sig = sig or {}
     engine_b = engine_b or {}
-    return bool(
-        sig.get("is_naked")
-        or sig.get("naked_data")
-        or sig.get("engine_b")
-        or ("enginesAligned" in sig)
-        or engine_b
-    )
+    if sig.get("is_naked"):
+        return True
+    if sig.get("naked_data"):
+        return True
+    eb = sig.get("engine_b")
+    if isinstance(eb, dict) and eb:
+        return True
+    if engine_b:
+        return True
+    return False
+
+
+def _signal_has_engine_b_context(sig: dict, engine_b: dict | None = None) -> bool:
+    return _is_structural_engine_b_execution(sig, engine_b)
 
 
 def _engine_b_context_confirmed(sig: dict, engine_b: dict | None = None) -> bool:
     sig = sig or {}
     engine_b = engine_b or {}
+    if not _is_structural_engine_b_execution(sig, engine_b):
+        return True
     if "enginesAligned" in sig:
         return bool(sig.get("enginesAligned"))
     nested = sig.get("engine_b")
