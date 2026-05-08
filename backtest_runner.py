@@ -5086,10 +5086,13 @@ def backtest_pair_scalp(pair: dict, validation_mode: str = "standard") -> dict |
         _classify_setup,
         _calc_m15_atr,
         _coerce_utc_datetime,
+        _crypto_sym_info,
         _guess_asset_type,
         _locate_price_vs_vp,
         _overlay_eodhd_volume_for_scalp,
         _scalp_cost_assumptions,
+        _scalp_min_rr_for_group,
+        calculate_scalp_levels,
         get_grade_sessions_for_mode,
         infer_bias_from_ema_stack,
         scalp_session_window,
@@ -5100,13 +5103,17 @@ def backtest_pair_scalp(pair: dict, validation_mode: str = "standard") -> dict |
     asset_type = pair.get("type", _guess_asset_type(display))
     cfg = CONFIG.get("SCALP_ENGINE", {})
     _bt_volume_source = "binance_candle" if asset_type == "crypto" else "mt5_tick"
+    _scalp_pair_ctx = dict(pair) if isinstance(pair, dict) else {}
+    _scalp_pair_ctx["display"] = display
+    _scalp_pair_ctx["type"] = asset_type
+    _scalp_score_group = get_pair_score_group(_scalp_pair_ctx)
+    _grade_sess_backtest_mode = not bool(cfg.get("BT_GRADE_SESSION_LIVE_PARITY", False))
 
     if not cfg.get("BT_ENABLED", True):
         return {"error": f"Scalp backtest disabled in config for {display}"}
 
     walk_bars = int(cfg.get("BT_WALK_BARS", 12))
     max_concurrent = int(cfg.get("BT_MAX_CONCURRENT", 2))
-    min_rr = float(cfg.get("MIN_RR", 2.0))
     vp_bins = int(cfg.get("VP_BINS", 64))
     abs_vol_mult = float(cfg.get("ABSORPTION_VOL_MULT", 2.0))
     slippage_ticks = int(cfg.get("BT_SLIPPAGE_TICKS", 3))
@@ -5223,6 +5230,24 @@ def backtest_pair_scalp(pair: dict, validation_mode: str = "standard") -> dict |
     )
     min_lookback = max(80, vp_lookback + 30)  # need enough bars for VP + bias/context
 
+    def _bt_scalp_sym_info(ref_price: float) -> dict:
+        """Point/digits/spread for BT — matches live crypto tiering + MT5 when available."""
+        if asset_type == "crypto":
+            return _crypto_sym_info(float(ref_price))
+        try:
+            from mt5_executor import mt5_get_symbol_info
+
+            si = mt5_get_symbol_info(display)
+            if isinstance(si, dict) and not si.get("error"):
+                return {
+                    "point": float(si.get("point") or 0.00001),
+                    "digits": int(si.get("digits") or 5),
+                    "spread": float(si.get("spread") or 0),
+                }
+        except Exception:
+            pass
+        return _crypto_sym_info(float(ref_price))
+
     # OOS split: last 30% of trades flagged as out-of-sample
     total_bars = len(candles)
 
@@ -5295,11 +5320,17 @@ def backtest_pair_scalp(pair: dict, validation_mode: str = "standard") -> dict |
         # Compute ATR for proximity + buffer scaling in backtest
         _bt_atr_m15 = _calc_m15_atr(m15_context, period=int(cfg.get("ATR_PERIOD", 14)))
         try:
-            price_loc = _locate_price_vs_vp(current_price, vp, atr_m15=_bt_atr_m15, asset_type=asset_type)
+            price_loc = _locate_price_vs_vp(
+                current_price,
+                vp,
+                atr_m15=_bt_atr_m15,
+                asset_type=asset_type,
+                score_group=_scalp_score_group,
+            )
         except TypeError:
             price_loc = _locate_price_vs_vp(current_price, vp, atr_m15=_bt_atr_m15)
         try:
-            absorption = _check_absorption(exec_context, asset_type=asset_type)
+            absorption = _check_absorption(exec_context, asset_type=asset_type, score_group=_scalp_score_group)
         except TypeError:
             absorption = _check_absorption(exec_context)
         cvd = (
@@ -5309,7 +5340,7 @@ def backtest_pair_scalp(pair: dict, validation_mode: str = "standard") -> dict |
         )
         if not cvd.get("direction"):
             try:
-                cvd = _check_cvd(exec_context, asset_type=asset_type)
+                cvd = _check_cvd(exec_context, asset_type=asset_type, score_group=_scalp_score_group)
             except TypeError:
                 cvd = _check_cvd(exec_context)
             cvd["source"] = "candles"
@@ -5328,9 +5359,18 @@ def backtest_pair_scalp(pair: dict, validation_mode: str = "standard") -> dict |
             continue
         if cfg.get("AAA_ENABLED", True):
             try:
-                aaa = _check_aaa_sequence(exec_context, absorption, cvd, asset_type=asset_type)
+                aaa = _check_aaa_sequence(
+                    exec_context,
+                    absorption,
+                    cvd,
+                    asset_type=asset_type,
+                    score_group=_scalp_score_group,
+                )
             except TypeError:
-                aaa = _check_aaa_sequence(exec_context, absorption, cvd)
+                try:
+                    aaa = _check_aaa_sequence(exec_context, absorption, cvd, asset_type=asset_type)
+                except TypeError:
+                    aaa = _check_aaa_sequence(exec_context, absorption, cvd)
         else:
             aaa = {"complete": False, "phase": "disabled"}
         vwap = _check_vwap_lean(context_for_vwap, current_price) if cfg.get("VWAP_ENABLED", True) else {"lean": None, "vwap_value": 0}
@@ -5354,11 +5394,15 @@ def backtest_pair_scalp(pair: dict, validation_mode: str = "standard") -> dict |
 
         # Grade gate: compute grade from pipeline outputs BEFORE entering the trade.
         # Mirrors live run_scalp_scan() which skips grades below MIN_GRADE_AUTO_EXECUTE.
-        _pre_grade_sessions = get_grade_sessions_for_mode(asset_type, when=signal_close_dt, backtest=True)
+        _pre_grade_sessions = get_grade_sessions_for_mode(
+            asset_type, when=signal_close_dt, backtest=_grade_sess_backtest_mode
+        )
         _pre_quality = _ai_quality_grade(
             vp=vp, price_loc=price_loc, absorption=absorption, cvd=cvd,
             aaa=aaa, vwap=vwap, setup=setup, sessions=_pre_grade_sessions,
             spread_pips=0.0, htf_bias=htf_bias,
+            asset_type=asset_type,
+            pair=display,
         )
         _pre_grade = _pre_quality.get("grade", "D")
         if _grade_order.index(_pre_grade) > _min_grade_idx:
@@ -5391,51 +5435,55 @@ def backtest_pair_scalp(pair: dict, validation_mode: str = "standard") -> dict |
         walk_rows = candles[i + 2:i + 2 + walk_bars]
         entry_bar_idx = i + 1
 
-        point_est = current_atr * 0.001  # rough point estimate
-        slippage = slippage_ticks * point_est
+        _sym_ref = _bt_scalp_sym_info(float(entry_bar["open"]))
+        _point_bt = float(_sym_ref.get("point") or 1e-6)
+        slippage = slippage_ticks * _point_bt
 
         if direction == "LONG":
-            entry = entry_bar["open"] + slippage
+            entry = float(entry_bar["open"]) + slippage
         else:
-            entry = entry_bar["open"] - slippage
+            entry = float(entry_bar["open"]) - slippage
 
-        proximity = max(va_width * 0.15, current_atr * 0.05)
-        safety_buffer = max(current_atr * 0.5, abs(entry) * 0.0005, point_est)
-        if direction == "LONG":
-            sl = zone_level - proximity - (current_atr * 0.3)
-            if sl >= entry:
-                sl = entry - safety_buffer
-            sl_distance = entry - sl
-            min_target = entry + (sl_distance * min_rr)
-            if str(setup_type).startswith("trend"):
-                tp1 = min_target
-            else:
-                tp1 = max(float(poc), min_target) if poc > entry else min_target
-            tp2 = max(float(vah), tp1 + sl_distance)
-        else:
-            sl = zone_level + proximity + (current_atr * 0.3)
-            if sl <= entry:
-                sl = entry + safety_buffer
-            sl_distance = sl - entry
-            min_target = entry - (sl_distance * min_rr)
-            if str(setup_type).startswith("trend"):
-                tp1 = min_target
-            else:
-                tp1 = min(float(poc), min_target) if poc < entry else min_target
-            tp2 = min(float(val), tp1 - sl_distance)
+        sym_info = _bt_scalp_sym_info(float(entry))
+        _min_rr_bt = _scalp_min_rr_for_group(asset_type, _scalp_score_group)
+        try:
+            levels = calculate_scalp_levels(
+                direction,
+                entry,
+                vp,
+                setup_type,
+                sym_info,
+                asset_type,
+                min_rr_override=_min_rr_bt,
+                atr_m15=_bt_atr_m15,
+                score_group=_scalp_score_group,
+            )
+        except TypeError:
+            levels = calculate_scalp_levels(
+                direction,
+                entry,
+                vp,
+                setup_type,
+                sym_info,
+                asset_type,
+                min_rr_override=_min_rr_bt,
+                atr_m15=_bt_atr_m15,
+            )
+        if levels.get("rr_below_min"):
+            continue
+        sl = float(levels["sl"])
+        tp1 = float(levels["tp1"])
+        _tp2_raw = levels.get("tp2")
+        tp2 = float(_tp2_raw) if _tp2_raw is not None else None
+        tp_partial = float(levels.get("tp_partial") or tp1)
+        sl_distance = abs(entry - sl)
+        actual_rr = float(levels.get("rr") or 0)
 
         if sl_distance <= 0:
             continue
 
         if not math.isfinite(tp1) or (direction == "LONG" and tp1 <= entry) or (direction == "SHORT" and tp1 >= entry):
             continue
-
-        actual_rr = abs(tp1 - entry) / sl_distance if sl_distance > 0 else 0
-        if actual_rr < 1.0:
-            continue
-
-        # Fabio: first scale-out is always at +1R ("pay yourself first")
-        tp_partial = entry + sl_distance if direction == "LONG" else entry - sl_distance
 
         # ── Step 5: Walk forward — Engine D Partial-exit model ──────────────────────────
         # Sequence: hit TP1 -> close ENGINE_D_TP1_SIZE (default 50%) -> move SL to BE -> trail to TP2/SL/TIMEOUT
@@ -5511,7 +5559,7 @@ def backtest_pair_scalp(pair: dict, validation_mode: str = "standard") -> dict |
                     break
 
             # 3. Check TP2 (only if TP1 hit and runner enabled)
-            if tp1_hit and tp1_size < 1.0:
+            if tp1_hit and tp1_size < 1.0 and tp2 is not None:
                 hit_tp2_now = (direction == "LONG" and bar_high >= tp2) or (direction == "SHORT" and bar_low <= tp2)
                 if hit_tp2_now:
                     tp2_hit = True
@@ -5585,7 +5633,7 @@ def backtest_pair_scalp(pair: dict, validation_mode: str = "standard") -> dict |
         risk_pct = sl_distance / entry if entry > 0 else 0
         estimated_fee_pct, estimated_slippage_pct = _scalp_cost_assumptions(cfg, asset_type)
         fee_R = estimated_fee_pct / risk_pct if risk_pct > 0 else 0
-        tick_slippage_R = slippage_ticks * point_est / sl_distance if sl_distance > 0 else 0
+        tick_slippage_R = slippage_ticks * _point_bt / sl_distance if sl_distance > 0 else 0
         asset_slippage_R = estimated_slippage_pct / risk_pct if risk_pct > 0 else 0
         slippage_R = max(tick_slippage_R, asset_slippage_R)
         
@@ -5594,10 +5642,14 @@ def backtest_pair_scalp(pair: dict, validation_mode: str = "standard") -> dict |
         r_multiple = net_R
 
         # Grade through the same scorer as live scan
-        _grade_sessions = get_grade_sessions_for_mode(asset_type, when=signal_close_dt, backtest=True)
+        _grade_sessions = get_grade_sessions_for_mode(
+            asset_type, when=signal_close_dt, backtest=_grade_sess_backtest_mode
+        )
         _quality = _ai_quality_grade(
             vp=vp, price_loc=price_loc, absorption=absorption, cvd=cvd, aaa=aaa,
             vwap=vwap, setup=setup, sessions=_grade_sessions, spread_pips=0.0, htf_bias=htf_bias,
+            asset_type=asset_type,
+            pair=display,
         )
         grade = _quality["grade"]
         grade_score = _quality["score"]
@@ -5780,7 +5832,7 @@ def backtest_pair_scalp(pair: dict, validation_mode: str = "standard") -> dict |
                     round(_is_sqn, 4) if _is_sqn is not None else None,
                     round(_oos_sqn, 4) if _oos_sqn is not None else None,
                     result.get("maxDrawdownPct"),
-                    min_rr,
+                    _scalp_min_rr_for_group(asset_type, _scalp_score_group),
                     "M15_ATR",
                     f"vp_bins={vp_bins};vp_lookback={vp_lookback};exec_tf={result['execution_tf']};walk={walk_bars};abs_mult={abs_vol_mult};slippage={slippage_ticks}",
                 ),

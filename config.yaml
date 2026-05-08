@@ -2447,6 +2447,9 @@ SCALP_ENGINE:
   BT_ENABLED: true              # Enable scalp backtesting
 
   BT_SESSION_MODE: "all"        # Testing: allow Engine D backtests across all sessions
+  # When false (default): grading uses BT_SESSION_MODE / BT_* session lists (often wider than live).
+  # When true: get_grade_sessions_for_mode uses the same SESSION_MODE path as live scan for pre/post grades.
+  BT_GRADE_SESSION_LIVE_PARITY: false
   BT_CRYPTO_SESSION_MODE: "inherit"
 
   BT_NY_OPEN_SKIP_MINUTES: 30   # Backtest mirrors live NY-open caution window
