@@ -1460,17 +1460,11 @@ def _fetch_fallback_candles(pair: dict, tf: str, limit: int, reason: str = ""):
 def _atr_for_levels(
     d1i: dict, h4i: dict, h1i: dict, pair: dict = None, style: str | None = None
 ):
-    """
-    Returns ATR value for SL/TP calculation - correct timeframe per asset class.
+    """Return ATR for SL/TP from ``CONFIG['LEVEL_ATR_PRIORITY']`` (per ``pair['type']`` and style).
 
-    CRYPTO:              H4 ATR first - entries are H4-based, H1 too tight for
-                         overnight crypto gaps and volatile moves
-    FOREX:               D1 ATR first - D1 swing trades, normal pullback 40-80
-                         pips, H1 ATR (25-30 pips) causes premature stop-outs
-    STOCKS/ETFs:         D1 ATR first - stocks gap at open daily, H1 too tight
-                         for 5-20 day swing holds
-    COMMODITIES:         D1 ATR first - macro-driven, daily gaps common on news
-    INDICES:             D1 ATR first - daily range 0.5-1.5%, H1 only 0.1-0.3%
+    Order is **not** hardcoded here: ``default`` and ``crypto`` entries define
+    which timeframe’s ATR is tried first for scalp (typically H1), intraday (H4),
+    and swing (D1 for crypto and other classes — see ``config.py`` / ``config.yaml``).
     """
     ptype = (pair or {}).get("type", "")
     resolved_style = _normalize_style(style or "swing")
@@ -7778,6 +7772,15 @@ def _apply_naked_style_score_updates(new_vals: dict) -> dict:
     return {style: dict(styles.get(style) or {}) for style in ("scalp", "intraday", "swing")}
 
 
+# MIN_CONFLUENCE_CLASS is advisory/legacy in dashboard; Engine A gates use scoring.py.
+_ENGINE_A_ACTIVE_GATE_HELP = (
+    "Runtime Engine A threshold: scoring.get_score_threshold — "
+    "PAIR_PROFILES.min_confluence, ENGINE_A_PAIR_THRESHOLDS, "
+    "ENGINE_A_SCORE_GROUP_THRESHOLDS (score_group, type, default), "
+    "then 3-tier fallback. MIN_CONFLUENCE_CLASS in this API payload is not read by that resolver."
+)
+
+
 def _engine_a_threshold_max_for_class(asset_class: str) -> float:
     """Return the Engine A score-cap-aligned max threshold for an asset class."""
     return 3.0  # Engine A v2: unified 0-3.0 scale for all asset classes (was 2.0 for forex pre-v2)
@@ -7900,7 +7903,7 @@ def api_scan_settings():
 
 @app.route("/api/bt-min", methods=["GET", "POST"])
 def api_bt_min():
-    """GET: BT_MIN + live MIN_CONFLUENCE_CLASS + flags for Engine A backtest routing.
+    """GET: BT_MIN + legacy MIN_CONFLUENCE_CLASS metadata (not the Engine A runtime gate).
     POST: update BT_MIN class floors and/or backtest_use_bt_min_thresholds (backtest only).
     Body: {"crypto": 0.55, ...} and optional {"backtest_use_bt_min_thresholds": true}
     """
@@ -7916,6 +7919,8 @@ def api_bt_min():
             {
                 "bt_min": dict(CONFIG.get("BT_MIN") or {}),
                 "live_class": dict(CONFIG.get("MIN_CONFLUENCE_CLASS") or {}),
+                "min_confluence_class_role": "advisory_legacy_display",
+                "engine_a_active_gate": _ENGINE_A_ACTIVE_GATE_HELP,
                 "backtest_use_bt_min_thresholds": bool(
                     CONFIG.get("BACKTEST_USE_BT_MIN_THRESHOLDS", False)
                 ),
@@ -8386,12 +8391,14 @@ def api_scalp_group_rr():
 
 @app.route("/api/live-confluence-thresholds", methods=["GET", "POST"])
 def api_live_confluence_thresholds():
-    """GET/POST MIN_CONFLUENCE_CLASS thresholds used by Engine A live scan tiering."""
+    """GET/POST MIN_CONFLUENCE_CLASS — advisory/legacy; Engine A uses scoring.get_score_threshold."""
     asset_classes = ("crypto", "forex", "commodity", "stock", "index")
     if request.method == "GET":
         return jsonify(
             {
                 "live_class": dict(CONFIG.get("MIN_CONFLUENCE_CLASS") or {}),
+                "min_confluence_class_role": "advisory_legacy_display",
+                "engine_a_active_gate": _ENGINE_A_ACTIVE_GATE_HELP,
             }
         )
 

@@ -15,6 +15,26 @@ from scoring import (
     get_pair_level_atr_class,
     get_pair_score_group,
 )
+from factor_scoring import _volatility_scaler
+
+
+def test_volatility_scaler_uses_score_group_override_for_precious_trackers(monkeypatch):
+    """GLD-as-stock should use precious_trackers bands, not stock bands."""
+    monkeypatch.setitem(
+        CONFIG,
+        "VOLATILITY_SCALER_BANDS",
+        {
+            "stock": {"low": 0.05, "high": 0.20},
+            "precious_trackers": {"low": 0.001, "high": 0.004},
+        },
+    )
+    monkeypatch.setitem(CONFIG, "VOLATILITY_SCALER_MULT_LOW", 1.15)
+    monkeypatch.setitem(CONFIG, "VOLATILITY_SCALER_MULT_HIGH", 0.85)
+    # ATR% = 0.002 — inside precious band → interpolated; below stock low → would be mult_low
+    v_precious = _volatility_scaler(2.0, 1000.0, "stock", "precious_trackers")
+    v_stock_only = _volatility_scaler(2.0, 1000.0, "stock", "us_stock_single")
+    assert v_precious != v_stock_only
+    assert abs(v_precious - 1.0) < abs(v_stock_only - 1.0)
 
 
 def test_pair_score_group_mapping_examples():

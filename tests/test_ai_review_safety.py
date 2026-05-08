@@ -528,19 +528,10 @@ class TestEngineBaiAdvisoryContract:
 
         monkeypatch.setattr(engine_b_ai, "create_ai_client", lambda *_a, **_kw: object())
 
-        class _FakeCompletion:
-            choices = [
-                type(
-                    "C",
-                    (),
-                    {"message": type("M", (), {"content": "NOT VALID JSON }{{"})()},
-                )()
-            ]
-
         monkeypatch.setattr(
             engine_b_ai,
             "_call_ai_with_retry",
-            lambda *_a, **_kw: _FakeCompletion(),
+            lambda *_a, **_kw: (None, "NOT VALID JSON }{{"),
         )
 
         result = get_engine_b_ai_verdict(
@@ -561,10 +552,14 @@ class TestEngineBaiAdvisoryContract:
         monkeypatch.setattr(engine_b_ai, "create_ai_client", lambda *_a, **_kw: object())
 
         _payload = json.dumps({
+            "reviewSource": "engine_b_marcus",
+            "reasoning": "Structural breakdown across styles.",
+            "verdict": "Structure is broken.",
+            "resolvedStyle": "intraday",
+            "bestValidStyle": "intraday",
             "grade": "F",
             "edgeProbability": 15,
             "riskLevel": "High",
-            "verdict": "Structure is broken.",
             "style_ratings": {
                 "scalp": {"grade": "F", "edgeProbability": 15, "riskLevel": "High"},
                 "intraday": {"grade": "F", "edgeProbability": 15, "riskLevel": "High"},
@@ -572,15 +567,10 @@ class TestEngineBaiAdvisoryContract:
             },
         })
 
-        class _FakeCompletion:
-            choices = [
-                type("C", (), {"message": type("M", (), {"content": _payload})()})()
-            ]
-
         monkeypatch.setattr(
             engine_b_ai,
             "_call_ai_with_retry",
-            lambda *_a, **_kw: _FakeCompletion(),
+            lambda *_a, **_kw: (json.loads(_payload), _payload),
         )
 
         result = get_engine_b_ai_verdict(

@@ -1166,25 +1166,28 @@ def _mean_reversion_factor(
         "max_abs": max_abs,
     }
 
-def _volatility_scaler(atr: float, close: float, asset_type: str) -> float:
-    """Volatility-based position-quality scaler with per-class bands.
+def _volatility_scaler(
+    atr: float,
+    close: float,
+    asset_type: str,
+    score_group: str | None = None,
+) -> float:
+    """Volatility-based position-quality scaler with per-class and score_group bands.
 
     Maps ATR/close ratio to a multiplier:
       ATR% ≤ low_band  → mult_low  (reward precision in low-vol)
       ATR% ≥ high_band → mult_high (penalise noise in high-vol)
       between          → linear interpolation
 
-    Bands are read from VOLATILITY_SCALER_BANDS[asset_type] so each class
-    operates on its own volatility scale (forex H4 ATR% ~0.1% vs crypto ~2%).
-    Falls back to the legacy global VOLATILITY_SCALER_ATR_PCT_* keys, then
-    to module defaults, when an asset class has no entry.
+    Bands use ``VOLATILITY_SCALER_BANDS`` with ``_resolve_class_keyed`` so
+    ``precious_trackers`` / ``energy_oil`` can override ``stock`` identity.
     """
     if close is None or close <= 0 or atr is None or atr <= 0:
         return 1.0
     atr_pct = atr / close
 
     _bands = CONFIG.get("VOLATILITY_SCALER_BANDS") or {}
-    _class_band = _bands.get(asset_type) if isinstance(_bands, dict) else None
+    _class_band = _resolve_class_keyed(_bands, score_group, asset_type, None)
     if isinstance(_class_band, dict) and "low" in _class_band and "high" in _class_band:
         _low = float(_class_band["low"])
         _high = float(_class_band["high"])
@@ -1203,12 +1206,29 @@ def _volatility_scaler(atr: float, close: float, asset_type: str) -> float:
 
 
 def _session_multiplier(bar_time: Optional[str], asset_type: str) -> float:
-    """DEPRECATED — kept for backward compat. Returns 1.0 always.
+    """Forex session liquidity multiplier — off unless ``FACTOR_FOREX_SESSION_MULT.ENABLED``.
 
-    Stage 3.4: Session-based multiplier replaced by _volatility_scaler.
-    Forex session liquidity is already reflected in spread/ATR.
+    Uses UTC hour buckets from ``scoring.get_session`` (same labels as scan UI).
     """
-    return 1.0
+    if str(asset_type or "").lower() != "forex":
+        return 1.0
+    cfg = CONFIG.get("FACTOR_FOREX_SESSION_MULT") or {}
+    if not bool(cfg.get("ENABLED", False)):
+        return 1.0
+    try:
+        from scoring import get_session
+
+        qual = str((get_session(bar_time) or {}).get("quality") or "medium")
+    except Exception:
+        qual = "medium"
+    mults = cfg.get("BY_QUALITY") or {}
+    default_map = {"high": 1.0, "medium": 0.95, "low": 0.85}
+    if not isinstance(mults, dict) or not mults:
+        mults = default_map
+    try:
+        return float(mults.get(qual, default_map.get(qual, 1.0)))
+    except (TypeError, ValueError):
+        return 1.0
 
 
 # ── Main scoring function ─────────────────────────────────────────────────────
@@ -1396,7 +1416,9 @@ def compute_factor_scores(
         _close_for_vol = float(_close_for_vol) if _close_for_vol is not None else None
     except (TypeError, ValueError):
         _close_for_vol = None
-    vol_scaler = _volatility_scaler(_atr if _atr else 0.0, _close_for_vol, asset_type)
+    vol_scaler = _volatility_scaler(
+        _atr if _atr else 0.0, _close_for_vol, asset_type, score_group
+    )
 
     # nat_gas and crypto_doge are structurally-volatile subgroups whose H4 ATR%
     # routinely sits in the parent class's "noise" band even during normal trade.
@@ -1494,7 +1516,14 @@ def compute_factor_scores(
         _eff_floor = float(_floor_by_regime[regime])
     else:
         _eff_floor = _conviction_floor
-    base_score = abs(trend_score) * adx_mult * vol_scaler * di_align_mult * dir_ramp_mult
+    base_score = (
+        abs(trend_score)
+        * adx_mult
+        * vol_scaler
+        * session_mult
+        * di_align_mult
+        * dir_ramp_mult
+    )
 
     # FIX 3: Recalibrate Cost/Funding Penalty Sensitivity
     _cost_penalty = 0.0

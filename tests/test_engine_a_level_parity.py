@@ -40,6 +40,55 @@ def test_engine_a_bt_bybit_atr_uses_backtest_bar_time(monkeypatch):
     assert captured["as_of"] == "2025-01-02T04:00:00+00:00"
 
 
+def test_engine_a_bt_binance_source_uses_signal_atr_first(monkeypatch):
+    def _bybit_atr_for_levels(pair, style, as_of=None):
+        return 12.5
+
+    monkeypatch.setattr(
+        backtest_runner,
+        "_rt",
+        lambda: SimpleNamespace(bybit_atr_for_levels=_bybit_atr_for_levels),
+    )
+    monkeypatch.setitem(CONFIG, "ENGINE_A_CRYPTO_LEVELS_FEED", "bybit")
+    monkeypatch.setitem(CONFIG, "ENGINE_A_CRYPTO_LEVELS_SIGNAL_FEED_FALLBACK", False)
+    monkeypatch.setitem(CONFIG, "ENGINE_A_CRYPTO_BT_LEVEL_ATR_USE_SIGNAL_FEED", True)
+
+    pair = {
+        "display": "BTC/USDT",
+        "symbol": "BTCUSDT",
+        "type": "crypto",
+        "source": "binance",
+    }
+    atr, source = backtest_runner._engine_a_level_atr_for_bt(
+        99.0, pair, "intraday", as_of="2025-01-02T04:00:00+00:00",
+    )
+    assert atr == 99.0
+    assert source == "signal"
+
+
+def test_engine_a_bt_binance_signal_missing_fails_closed(monkeypatch):
+    monkeypatch.setattr(
+        backtest_runner,
+        "_rt",
+        lambda: SimpleNamespace(bybit_atr_for_levels=lambda *_a, **_k: 5.0),
+    )
+    monkeypatch.setitem(CONFIG, "ENGINE_A_CRYPTO_LEVELS_FEED", "bybit")
+    monkeypatch.setitem(CONFIG, "ENGINE_A_CRYPTO_LEVELS_SIGNAL_FEED_FALLBACK", False)
+    monkeypatch.setitem(CONFIG, "ENGINE_A_CRYPTO_BT_LEVEL_ATR_USE_SIGNAL_FEED", True)
+
+    pair = {
+        "display": "BTC/USDT",
+        "symbol": "BTCUSDT",
+        "type": "crypto",
+        "source": "binance",
+    }
+    atr, source = backtest_runner._engine_a_level_atr_for_bt(
+        None, pair, "intraday", as_of="2025-01-02T04:00:00+00:00",
+    )
+    assert atr is None
+    assert source == "signal_unavailable"
+
+
 def test_engine_a_bt_fails_closed_when_bybit_atr_missing(monkeypatch):
     monkeypatch.setattr(
         backtest_runner,

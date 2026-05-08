@@ -226,7 +226,12 @@ _PAIR_OVERRIDES = {
 
 
 def _configured_score_threshold(pair: dict) -> float | None:
-    """Return a config-backed Engine A threshold, or None when absent."""
+    """Return a config-backed Engine A threshold, or None when absent.
+
+    If ``ENGINE_A_SCORE_GROUP_THRESHOLDS`` includes ``default``, this almost
+    always satisfies ``get_score_threshold`` before ``_get_threshold_tier`` /
+    ``_PAIR_OVERRIDES`` are consulted (omit ``default`` to use the 3-tier path).
+    """
     display = pair.get("display", "")
     symbol = pair.get("symbol", "")
     ptype = pair.get("type", "")

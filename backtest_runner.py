@@ -187,39 +187,65 @@ def _live_base_risk_pct(asset_type: str) -> float:
 def _engine_a_level_atr_for_bt(
     signal_atr: float | None, pair: dict, style: str | None, as_of=None
 ) -> tuple[float | None, str]:
-    """Resolve Engine A backtest ATR for SL/TP levels using the live crypto venue basis."""
-    if (
-        str((pair or {}).get("type") or "").lower() == "crypto"
-        and str(CONFIG.get("ENGINE_A_CRYPTO_LEVELS_FEED", "bybit")).lower() == "bybit"
-    ):
-        bybit_atr_for_levels = getattr(_rt(), "bybit_atr_for_levels", None)
-        bybit_atr = None
-        if callable(bybit_atr_for_levels):
-            try:
-                bybit_atr = bybit_atr_for_levels(pair, style, as_of=as_of)
-            except TypeError:
-                bybit_atr = None
-        if bybit_atr:
-            return float(bybit_atr), "bybit"
-        if not bool(CONFIG.get("ENGINE_A_CRYPTO_LEVELS_SIGNAL_FEED_FALLBACK", False)):
-            return None, "bybit_unavailable"
+    """Resolve Engine A backtest ATR for SL/TP levels.
+
+    Binance-sourced crypto backtests default to the ATR from the same OHLCV as
+    scoring (``signal``) when ``ENGINE_A_CRYPTO_BT_LEVEL_ATR_USE_SIGNAL_FEED``
+    is true, avoiding Binance-vs-Bybit basis drift. Other sources still use
+    Bybit when ``ENGINE_A_CRYPTO_LEVELS_FEED`` is ``bybit``.
+    """
+    p = pair or {}
+    if str(p.get("type") or "").lower() == "crypto":
+        if (
+            str(p.get("source") or "").lower() == "binance"
+            and bool(CONFIG.get("ENGINE_A_CRYPTO_BT_LEVEL_ATR_USE_SIGNAL_FEED", True))
+        ):
+            if signal_atr is not None:
+                try:
+                    return float(signal_atr), "signal"
+                except (TypeError, ValueError):
+                    pass
+            if not bool(CONFIG.get("ENGINE_A_CRYPTO_LEVELS_SIGNAL_FEED_FALLBACK", False)):
+                return None, "signal_unavailable"
+        if str(CONFIG.get("ENGINE_A_CRYPTO_LEVELS_FEED", "bybit")).lower() == "bybit":
+            bybit_atr_for_levels = getattr(_rt(), "bybit_atr_for_levels", None)
+            bybit_atr = None
+            if callable(bybit_atr_for_levels):
+                try:
+                    bybit_atr = bybit_atr_for_levels(pair, style, as_of=as_of)
+                except TypeError:
+                    bybit_atr = None
+            if bybit_atr:
+                return float(bybit_atr), "bybit"
+            if not bool(CONFIG.get("ENGINE_A_CRYPTO_LEVELS_SIGNAL_FEED_FALLBACK", False)):
+                return None, "bybit_unavailable"
     return signal_atr, "signal"
 
 
 def _engine_b_level_atr_for_bt(
     signal_atr: float | None, pair: dict, style: str | None
 ) -> tuple[float | None, str]:
-    """Resolve Engine B backtest ATR for structure/levels using live crypto venue basis."""
-    if (
-        str((pair or {}).get("type") or "").lower() == "crypto"
-        and str(CONFIG.get("ENGINE_B_CRYPTO_LEVELS_FEED", "bybit")).lower() == "bybit"
-    ):
-        bybit_fn = getattr(_rt(), "bybit_atr_for_levels", None)
-        bybit_atr = bybit_fn(pair, style) if callable(bybit_fn) else None
-        if bybit_atr:
-            return float(bybit_atr), "bybit"
-        if not bool(CONFIG.get("ENGINE_B_CRYPTO_LEVELS_SIGNAL_FEED_FALLBACK", False)):
-            return None, "bybit_unavailable"
+    """Resolve Engine B backtest ATR for structure/levels (Binance parity same as Engine A)."""
+    p = pair or {}
+    if str(p.get("type") or "").lower() == "crypto":
+        if (
+            str(p.get("source") or "").lower() == "binance"
+            and bool(CONFIG.get("ENGINE_B_CRYPTO_BT_LEVEL_ATR_USE_SIGNAL_FEED", True))
+        ):
+            if signal_atr is not None:
+                try:
+                    return float(signal_atr), "signal"
+                except (TypeError, ValueError):
+                    pass
+            if not bool(CONFIG.get("ENGINE_B_CRYPTO_LEVELS_SIGNAL_FEED_FALLBACK", False)):
+                return None, "signal_unavailable"
+        if str(CONFIG.get("ENGINE_B_CRYPTO_LEVELS_FEED", "bybit")).lower() == "bybit":
+            bybit_fn = getattr(_rt(), "bybit_atr_for_levels", None)
+            bybit_atr = bybit_fn(pair, style) if callable(bybit_fn) else None
+            if bybit_atr:
+                return float(bybit_atr), "bybit"
+            if not bool(CONFIG.get("ENGINE_B_CRYPTO_LEVELS_SIGNAL_FEED_FALLBACK", False)):
+                return None, "bybit_unavailable"
     if signal_atr is None:
         return None, "signal"
     try:

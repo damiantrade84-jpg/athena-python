@@ -757,7 +757,7 @@ def test_volatility_scaler_replaces_session_multiplier():
         pair={"type": "stock", "display": "AAPL"},
     )
 
-    # Session multiplier is now always 1.0 (deprecated)
+    # Session multiplier is 1.0 unless FACTOR_FOREX_SESSION_MULT.ENABLED (forex only).
     assert low_vol["session_multiplier"] == pytest.approx(1.0)
     assert high_vol["session_multiplier"] == pytest.approx(1.0)
     # Low vol gets boosted, high vol gets penalised

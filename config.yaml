@@ -91,8 +91,10 @@ ENGINE_A_CRYPTO_LEVELS_FEED: bybit
 ENGINE_A_CRYPTO_LEVELS_SIGNAL_FEED_FALLBACK: false
 ENGINE_A_CRYPTO_DERIVATIVES_FEED: bybit
 ENGINE_A_CRYPTO_DERIVATIVES_BINANCE_FALLBACK: false
+ENGINE_A_CRYPTO_BT_LEVEL_ATR_USE_SIGNAL_FEED: true
 ENGINE_B_CRYPTO_LEVELS_FEED: bybit
 ENGINE_B_CRYPTO_LEVELS_SIGNAL_FEED_FALLBACK: false
+ENGINE_B_CRYPTO_BT_LEVEL_ATR_USE_SIGNAL_FEED: true
 # Engine B: skip forex signals on 22:00–07:00 UTC (Asian); applies to BT + live scan.
 ENGINE_B_FOREX_ASIAN_SESSION_SKIP_ENABLED: true
 
@@ -142,6 +144,15 @@ FACTOR_FUNDING_NOISE_BAND: 0.0001
 
 FACTOR_CONVICTION_FLOOR: 0.20 # Stage 2.1: lowered from 0.60 to allow more signals through
 
+# Engine A forex session scaler — off by default. When ENABLED, multiplies base_score
+# by BY_QUALITY using scoring.get_session() UTC buckets (high/medium/low).
+FACTOR_FOREX_SESSION_MULT:
+  ENABLED: false
+  BY_QUALITY:
+    high: 1.0
+    medium: 0.95
+    low: 0.85
+
 # When the asset class has no addon (stock/index), redistribute the addon's
 # weight rather than collapsing it onto momentum.  0.5 splits 50/50 between
 # base and momentum, so stock/index conviction becomes 0.35 base + 0.65
@@ -163,6 +174,10 @@ VOLATILITY_SCALER_BANDS:
   commodity: { low: 0.003,  high: 0.015 }    # XAU/XAG/oil span; nat_gas naturally hits high
   stock:     { low: 0.005,  high: 0.020 }    # US single-name H4 typical 0.5-1.5%
   index:     { low: 0.002,  high: 0.010 }    # SPX/NDX H4 ATR% 0.2-0.6%
+
+  # Score-group overrides (beat asset_type when present) — aligns scaler with RSI routing
+  precious_trackers: { low: 0.003, high: 0.015 }
+  energy_oil:        { low: 0.003, high: 0.015 }
 
 ENGINE_A_RESEARCH_LAB_FACTORS:
   ENABLED: true
@@ -580,11 +595,10 @@ ENGINE_A_ATR_LEVEL_CLASS_BY_DISPLAY:
 ENGINE_A_ATR_LEVEL_CLASS_BY_SCORE_GROUP: {}
 
 ENGINE_A_COT_ADDON_ASSET_TYPES:
-
+  # COT for indices uses futures proxies where defined in cot_feed._PAIR_FORMULA
+  # (e.g. S&P 500, NASDAQ-100, DAX 40); unsupported displays stay neutral.
   - commodity
-
   - index
-
   - stock
 
 
