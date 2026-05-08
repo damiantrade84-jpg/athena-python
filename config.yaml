@@ -800,7 +800,7 @@ DRAWDOWN_REDUCE_THRESHOLD: 0.10   # Halve size at 10% drawdown
 DRAWDOWN_STOP_THRESHOLD: 0.15     # Stop all trading at 15% drawdown from peak equity
 
 # Master switch for drawdown stop + reduce (both off when false). Paper/debug only — not for live.
-DRAWDOWN_STOP_ENABLED: true
+DRAWDOWN_STOP_ENABLED: false   # paper: off so DRAWDOWN_CIRCUIT_BREAKER does not block quick exec
 
 DATA_FRESHNESS_GATES:
   WARN_ON_STALE_SCAN: true
