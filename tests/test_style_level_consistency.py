@@ -3,6 +3,8 @@
 import os
 import sys
 
+import pytest
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from athena_app.services.candle_service import recompute_levels_for_style
@@ -113,6 +115,82 @@ def test_recompute_levels_for_style_trims_forming_bars_and_maps_regime():
         (9, "forex"),
         (9, "forex"),
     ]
+
+
+def test_recompute_levels_for_style_uses_level_atr_class_helper():
+    pair_obj = {"display": "SPY", "symbol": "SPY", "type": "stock"}
+    captured = {"level_class": None}
+
+    def _calc_levels(_price, _atr, _direction, pair_type, **_kwargs):
+        captured["level_class"] = pair_type
+        return {"sl": 99.0, "tp1": 103.0, "tp2": 105.0, "rr1": 1.5, "rr2": 2.5}
+
+    out = recompute_levels_for_style(
+        {"pair": "SPY", "direction": "LONG", "price": 100.0},
+        "intraday",
+        resolve_pair_from_signal=lambda _sig: pair_obj,
+        fetch_candles=lambda _pair, _tf, _limit: [{"close": 100.0}] * 10,
+        calc_indicators_with_normalized=lambda candles, _ptype: {"snap": {"atr": 2.0}},
+        atr_for_levels=lambda *_args, **_kwargs: 2.0,
+        calc_levels=_calc_levels,
+        config={"D1_CANDLES": 10, "H4_CANDLES": 10, "H1_CANDLES": 10},
+        get_pair_level_atr_class=lambda _pair: "etf",
+    )
+
+    assert captured["level_class"] == "etf"
+    assert out["levels"]["sl"] == 99.0
+
+
+def test_recompute_levels_for_style_prefers_bybit_atr_for_crypto_levels():
+    pair_obj = {"display": "BTC/USDT", "symbol": "BTCUSDT", "type": "crypto"}
+    captured = {"atr": None}
+
+    def _calc_levels(_price, atr, _direction, _pair_type, **_kwargs):
+        captured["atr"] = atr
+        return {"sl": 95.0, "tp1": 110.0, "tp2": 120.0, "rr1": 2.0, "rr2": 4.0}
+
+    recompute_levels_for_style(
+        {"pair": "BTC/USDT", "direction": "LONG", "price": 100.0},
+        "intraday",
+        resolve_pair_from_signal=lambda _sig: pair_obj,
+        fetch_candles=lambda _pair, _tf, _limit: [{"close": 100.0}] * 10,
+        calc_indicators_with_normalized=lambda candles, _ptype: {"snap": {"atr": 1.0}},
+        atr_for_levels=lambda *_args, **_kwargs: 1.0,
+        calc_levels=_calc_levels,
+        config={
+            "D1_CANDLES": 10,
+            "H4_CANDLES": 10,
+            "H1_CANDLES": 10,
+            "ENGINE_A_CRYPTO_LEVELS_FEED": "bybit",
+            "ENGINE_A_CRYPTO_LEVELS_SIGNAL_FEED_FALLBACK": False,
+        },
+        bybit_atr_for_levels=lambda _pair, _style: 3.0,
+    )
+
+    assert captured["atr"] == 3.0
+
+
+def test_recompute_levels_for_style_fails_closed_when_bybit_atr_missing():
+    pair_obj = {"display": "BTC/USDT", "symbol": "BTCUSDT", "type": "crypto"}
+
+    with pytest.raises(ValueError, match="Bybit ATR unavailable"):
+        recompute_levels_for_style(
+            {"pair": "BTC/USDT", "direction": "LONG", "price": 100.0},
+            "intraday",
+            resolve_pair_from_signal=lambda _sig: pair_obj,
+            fetch_candles=lambda _pair, _tf, _limit: [{"close": 100.0}] * 10,
+            calc_indicators_with_normalized=lambda candles, _ptype: {"snap": {"atr": 1.0}},
+            atr_for_levels=lambda *_args, **_kwargs: 1.0,
+            calc_levels=lambda *_args, **_kwargs: {},
+            config={
+                "D1_CANDLES": 10,
+                "H4_CANDLES": 10,
+                "H1_CANDLES": 10,
+                "ENGINE_A_CRYPTO_LEVELS_FEED": "bybit",
+                "ENGINE_A_CRYPTO_LEVELS_SIGNAL_FEED_FALLBACK": False,
+            },
+            bybit_atr_for_levels=lambda _pair, _style: None,
+        )
 
 
 def test_engine_c_normalise_engine_a_prefers_style_field():

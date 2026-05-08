@@ -9,6 +9,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from config import CONFIG
 from scoring import (
     _classify_signal,
+    calc_confluence,
     get_backtest_min_score_threshold,
     get_min_confluence_threshold,
     get_pair_level_atr_class,
@@ -157,7 +158,7 @@ def test_pair_profile_can_override_score_group_and_threshold():
 
 
 def test_backtest_live_threshold_parity():
-    """Stage 4.2: Backtest and live use identical 2-tier thresholds.
+    """Stage 4.2: Backtest and live use identical Engine A thresholds.
 
     BT_MIN / BACKTEST_USE_BT_MIN_THRESHOLDS deleted.
     Pair profile min_confluence is the only override.
@@ -175,6 +176,47 @@ def test_backtest_live_threshold_parity():
         assert get_backtest_min_score_threshold(pair) == 0.99  # same as live
     finally:
         CONFIG["PAIR_PROFILES"] = original_profiles
+
+
+def test_rsi_warning_uses_score_group_bounds(monkeypatch):
+    def _fake_factor_scores(*_args, **_kwargs):
+        return {
+            "final_score": 1.5,
+            "direction": "LONG",
+            "directional_score": 1.0,
+            "nondirectional_score": 0.5,
+            "factor_scores": {"rsi": 0.5},
+            "weights": {},
+            "regime": "TRENDING",
+        }
+
+    monkeypatch.setattr("factor_scoring.compute_factor_scores", _fake_factor_scores)
+    monkeypatch.setattr(
+        "confidence_engine.compute_confidence",
+        lambda **_kwargs: {"confidence": 0.5},
+    )
+    monkeypatch.setitem(
+        CONFIG,
+        "RSI_BOUNDS",
+        {
+            "stock": {"ob": 70, "os": 30},
+            "precious_trackers": {"ob": 75, "os": 25},
+        },
+    )
+
+    snap = {"rsi": 73, "adx": 30, "close": 100, "ema50": 99, "ema200": 98, "macdHist": 1}
+    result = calc_confluence(
+        {"snap": snap},
+        {"snap": snap},
+        {"snap": snap},
+        vr=1.0,
+        stoch=None,
+        pair={"display": "GLD", "symbol": "GLD", "type": "stock"},
+        btc_bias="neutral",
+        bar_time="2026-05-08T12:00:00+00:00",
+    )
+
+    assert result["warnings"] == []
 
 
 def test_backtest_ignores_legacy_bt_min_field():

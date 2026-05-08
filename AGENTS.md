@@ -22,7 +22,7 @@ description: alwaysApply: true
 - **Scoring:** `final_score` 0.0–3.0 (normalized indicator confluence)
 - **Directional score:** Trend component (trend_score)
 - **Nondirectional score:** Momentum quality (mom_quality)
-- **Thresholds:** 2-tier system (volatile assets = higher threshold)
+- **Thresholds:** Profile override, pair/group YAML, then 3-tier fallback
 - **Key factors:** BTC bias (conditional on correlation), OI context for crypto, intermarket confirmation
 - **Config keys:** `ENGINE_A`, `ENGINE_A_RESEARCH_LAB_FACTORS`, `ENGINE_A_MEAN_REVERSION`
 

@@ -97,7 +97,9 @@ def _bybit_kline_to_candle(row: list) -> dict:
     }
 
 
-def _fetch_bybit_klines(symbol: str, tf: str, limit: int) -> list[dict] | None:
+def _fetch_bybit_klines(
+    symbol: str, tf: str, limit: int, *, end_ms: int | None = None
+) -> list[dict] | None:
     """Fetch Bybit linear USDT perpetual klines as normalized candles."""
     interval = _bybit_interval(tf)
     if not symbol or interval is None:
@@ -108,6 +110,8 @@ def _fetch_bybit_klines(symbol: str, tf: str, limit: int) -> list[dict] | None:
         "interval": interval,
         "limit": str(min(max(int(limit or 1), 1), 1000)),
     }
+    if end_ms is not None:
+        params["end"] = str(int(end_ms))
     try:
         r = http_requests.get(_BYBIT_KLINE_URL, params=params, timeout=15)
         if r.status_code != 200:

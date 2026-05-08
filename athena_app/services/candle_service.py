@@ -42,6 +42,8 @@ def recompute_levels_for_style(
     atr_for_levels: Callable[..., float | None],
     calc_levels: Callable[..., dict],
     config: dict,
+    get_pair_level_atr_class: Callable[[dict], str] | None = None,
+    bybit_atr_for_levels: Callable[..., float | None] | None = None,
 ) -> dict:
     """Recompute SL/TP levels for selected style using fresh ATR context."""
     mode = (pip_mode or "swing").strip().lower()
@@ -70,17 +72,35 @@ def recompute_levels_for_style(
     h1i = calc_indicators_with_normalized(h1, ptype) if h1 else {}
 
     exec_atr = atr_for_levels(d1i, h4i, h1i, pair=pair_obj, style=mode)
+    if (
+        str(ptype).lower() == "crypto"
+        and str(config.get("ENGINE_A_CRYPTO_LEVELS_FEED", "bybit")).lower() == "bybit"
+    ):
+        bybit_atr = (
+            bybit_atr_for_levels(pair_obj, mode)
+            if callable(bybit_atr_for_levels)
+            else None
+        )
+        if bybit_atr:
+            exec_atr = bybit_atr
+        elif not bool(config.get("ENGINE_A_CRYPTO_LEVELS_SIGNAL_FEED_FALLBACK", False)):
+            raise ValueError("Bybit ATR unavailable")
     if not exec_atr or exec_atr <= 0:
         raise ValueError("ATR unavailable")
 
     exec_price = float(sig.get("price") or 0.0)
     exec_dir = sig.get("direction", "LONG")
     regime_state = _resolve_regime_state(sig)
+    level_atr_class = (
+        get_pair_level_atr_class(pair_obj)
+        if callable(get_pair_level_atr_class)
+        else ptype
+    )
     lvl = calc_levels(
         exec_price,
         exec_atr,
         exec_dir,
-        ptype,
+        level_atr_class,
         regime_state=regime_state,
         style=mode,
     )

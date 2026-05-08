@@ -547,6 +547,8 @@ def api_quick_execute():
                 atr_for_levels=_r.atr_for_levels,
                 calc_levels=_r.calc_levels,
                 config=_r.CONFIG,
+                get_pair_level_atr_class=getattr(_r, "get_pair_level_atr_class", None),
+                bybit_atr_for_levels=getattr(_r, "bybit_atr_for_levels", None),
             )
             lvl = recomputed["levels"]
             sig["sl"] = lvl["sl"]

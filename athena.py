@@ -1503,7 +1503,7 @@ def _atr_for_levels(
     return None
 
 
-def _bybit_atr_for_levels(pair: dict, style: str | None) -> float | None:
+def _bybit_atr_for_levels(pair: dict, style: str | None, as_of=None) -> float | None:
     """Fetch Bybit ATR for crypto execution levels when Bybit is the execution venue."""
     symbol = (pair.get("symbol") or pair.get("display") or "").replace("/", "").upper()
     if not symbol:
@@ -1512,7 +1512,17 @@ def _bybit_atr_for_levels(pair: dict, style: str | None) -> float | None:
     if resolved_style == "auto":
         resolved_style = "swing"
     tf = {"scalp": "H1", "intraday": "H4", "swing": "D1"}.get(resolved_style, "D1")
-    candles = _fetch_bybit_klines(symbol, tf, 120)
+    end_ms = None
+    if as_of is not None:
+        try:
+            if hasattr(as_of, "timestamp"):
+                end_ms = int(as_of.timestamp() * 1000)
+            else:
+                end_dt = datetime.fromisoformat(str(as_of).replace("Z", "+00:00"))
+                end_ms = int(end_dt.timestamp() * 1000)
+        except Exception:
+            end_ms = None
+    candles = _fetch_bybit_klines(symbol, tf, 120, end_ms=end_ms)
     if not candles or len(candles) < 20:
         return None
     atr_series = calc_atr(
@@ -13523,6 +13533,7 @@ set_runtime(
         calc_indicators=calc_indicators,
         atr_for_levels=_atr_for_levels,
         bybit_atr_for_levels=_bybit_atr_for_levels,
+        get_pair_level_atr_class=get_pair_level_atr_class,
         calc_levels=calc_levels,
         fetch_news_context=fetch_news_context,
         fetch_yield_curve=fetch_yield_curve,

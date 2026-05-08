@@ -169,6 +169,19 @@ def get_pair_score_group(pair: dict) -> str:
     return f"{ptype}_other" if ptype else "unknown"
 
 
+def _resolve_class_keyed(mapping, score_group: str | None, asset_type: str, default):
+    """Resolve class-keyed config by score_group, then asset_type, then default."""
+    if not isinstance(mapping, dict):
+        return default
+    if score_group and score_group in mapping:
+        return mapping[score_group]
+    if asset_type in mapping:
+        return mapping[asset_type]
+    if "default" in mapping:
+        return mapping["default"]
+    return default
+
+
 def get_pair_level_atr_class(pair: dict) -> str:
     """Resolve the ATR multiplier class used for SL/TP levels.
 
@@ -254,10 +267,11 @@ def _get_threshold_tier(pair: dict) -> float:
 
 
 def get_score_threshold(pair: dict, is_backtest: bool = False) -> float:
-    """Resolve score threshold — simplified 2-tier system.
+    """Resolve score threshold.
 
     Replaces the old 6-class + BT_MIN_GROUP + BACKTEST_USE_BT_MIN_THRESHOLDS
-    hierarchy with 2 tiers + pair overrides. Backtest and live use same thresholds.
+    hierarchy with profile override, pair/group config, then 3-tier fallback.
+    Backtest and live use same thresholds.
     MIN_CONFLUENCE_CLASS is intentionally not read here.
     """
     profile = get_pair_profile(pair)
@@ -679,11 +693,15 @@ def calc_confluence(
         factor_result["btc_bias_adjusted_score"] = _adjusted
         factor_result["btc_bias_delta"] = round(_adjusted - _fs, 4)
 
-    # Preserve warnings for readability (raw thresholds)
+    # Preserve warnings for readability using the same score_group-aware bounds as factor scoring.
     w = []
     s4 = h4["snap"]
     _ptype = pair["type"]
-    _rsi_b = CONFIG["RSI_BOUNDS"].get(_ptype, {"ob": 70, "os": 30})
+    _rsi_b = _resolve_class_keyed(
+        CONFIG.get("RSI_BOUNDS", {}), get_pair_score_group(pair), _ptype, {"ob": 70, "os": 30}
+    )
+    if not isinstance(_rsi_b, dict):
+        _rsi_b = {"ob": 70, "os": 30}
     r4 = s4.get("rsi")
     if r4 is not None:
         if r4 >= _rsi_b["ob"]:
