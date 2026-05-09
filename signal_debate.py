@@ -104,7 +104,7 @@ def run_signal_debate(signal: dict, style_pref: str = "auto") -> dict:
     """
     ensure_trace_id(signal)
     api_key = get_ai_api_key(CONFIG)
-    _fail_policy = str(CONFIG.get("AUTO_TRADE_AI_FAIL_POLICY", "allow")).lower()
+    _fail_policy = str(CONFIG.get("AUTO_TRADE_AI_FAIL_POLICY", "block")).lower()
     _allowed_on_fail = (_fail_policy != "block")
 
     if not api_key:

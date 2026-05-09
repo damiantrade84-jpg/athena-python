@@ -70,8 +70,16 @@ def _last_atr_from_candles(candles: list, period: int = 14) -> float:
 def _engine_b_level_pair(conf_b: dict | None, res_b: dict | None) -> tuple[float | None, float | None]:
     conf_b = conf_b or {}
     res_b = res_b or {}
-    sl = conf_b.get("execution_sl") or res_b.get("execution_sl") or res_b.get("recommended_stop_loss")
-    tp = conf_b.get("execution_tp") or res_b.get("execution_tp") or res_b.get("recommended_take_profit")
+    sl = conf_b.get("execution_sl")
+    if sl is None:
+        sl = res_b.get("execution_sl")
+    if sl is None:
+        sl = res_b.get("recommended_stop_loss")
+    tp = conf_b.get("execution_tp")
+    if tp is None:
+        tp = res_b.get("execution_tp")
+    if tp is None:
+        tp = res_b.get("recommended_take_profit")
     try:
         return float(sl), float(tp)
     except (TypeError, ValueError):

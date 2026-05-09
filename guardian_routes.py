@@ -94,7 +94,7 @@ def api_guardian_status():
         result["overall"] = result["forensics"].get("overall", "unknown")
     except Exception as e:
         result["forensics"] = {"error": str(e)}
-        g_ok = result["guardian"].get("passed", True) is not False
+        g_ok = result["guardian"].get("passed") is True
         s_ok = result["shield"].get("circuit_breaker_open") is not True
         d_ok = result["divergence"].get("critical_count", 0) == 0
         if g_ok and s_ok and d_ok:

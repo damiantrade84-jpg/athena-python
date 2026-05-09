@@ -382,8 +382,8 @@ def bybit_get_positions() -> dict:
                     est_risk = round(abs(entry - sl_val) / entry * notional, 2)
                 else:
                     est_risk = round(
-                        notional * 0.02, 2
-                    )  # fallback: 2% when no SL is set
+                        notional * 1.0, 2
+                    )  # fallback: 100% when no SL is set
                 symbol_raw = pos.get("symbol", "")
                 # Convert BTC/USDT:USDT back to display format BTC/USDT
                 display = symbol_raw.split(":")[0] if ":" in symbol_raw else symbol_raw

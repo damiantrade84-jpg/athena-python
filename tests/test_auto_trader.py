@@ -338,3 +338,62 @@ def test_run_auto_scan_skips_when_kill_switch_active():
     trader._run_auto_scan()
 
     assert called["scan"] is False
+
+
+# ── Gate default tests (fail-closed when 'allowed' key is missing) ──────────
+
+
+def test_can_execute_blocks_when_sentiment_allowed_key_missing(monkeypatch):
+    """sentiment_gate returning {} must block execution (fail-closed)."""
+    trader = AutoTrader()
+    cfg = _base_cfg()
+    cfg["SENTIMENT_GATE_ENABLED"] = True
+    cfg["EVENT_RISK_ENABLED"] = False
+    cfg["SIGNAL_DEBATE_ENABLED"] = False
+
+    monkeypatch.setattr(
+        "sentiment_gate.check_sentiment",
+        lambda pair, direction, asset_type: {},
+    )
+
+    signal = {
+        "pair": "BTC/USDT",
+        "type": "crypto",
+        "direction": "LONG",
+        "trendState": "TRENDING",
+        "regimeName": "TRENDING",
+        "combinedConviction": 0.90,
+        "confluenceScore": 2.7,
+        "maxScore": 3.0,
+    }
+    ok, reason = trader._can_execute(signal, cfg)
+    assert ok is False
+    assert "Sentiment" in reason
+
+
+def test_can_execute_blocks_when_event_risk_allowed_key_missing(monkeypatch):
+    """event_risk returning {} must block execution (fail-closed)."""
+    trader = AutoTrader()
+    cfg = _base_cfg()
+    cfg["SENTIMENT_GATE_ENABLED"] = False
+    cfg["EVENT_RISK_ENABLED"] = True
+    cfg["SIGNAL_DEBATE_ENABLED"] = False
+
+    monkeypatch.setattr(
+        "event_risk.check_event_risk",
+        lambda pair, asset_type, **kwargs: {},
+    )
+
+    signal = {
+        "pair": "BTC/USDT",
+        "type": "crypto",
+        "direction": "LONG",
+        "trendState": "TRENDING",
+        "regimeName": "TRENDING",
+        "combinedConviction": 0.90,
+        "confluenceScore": 2.7,
+        "maxScore": 3.0,
+    }
+    ok, reason = trader._can_execute(signal, cfg)
+    assert ok is False
+    assert "Event risk" in reason

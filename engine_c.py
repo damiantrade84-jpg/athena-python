@@ -694,7 +694,7 @@ def apply_vision(consensus: dict, vision_result: dict) -> dict:
     # Parse structured data if available
     structured = vision_result.get("structured") or {}
     rating = structured.get("rating", "").upper() if structured else ""
-    confirms_dir = structured.get("confirms_direction", True) if structured else True
+    confirms_dir = structured.get("confirms_direction", False) if structured else False
     sl_flag = structured.get("sl_flag", "ok") if structured else "ok"
     tp_flag = structured.get("tp_flag", "ok") if structured else "ok"
 
@@ -729,7 +729,7 @@ def apply_vision(consensus: dict, vision_result: dict) -> dict:
                 break
 
     if not rating:
-        rating = "MODERATE"
+        rating = "AVOID"
 
     # Handle explicit direction contradiction
     if not confirms_dir and rating not in ("AVOID", "CONTRADICTS"):

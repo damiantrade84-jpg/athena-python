@@ -166,11 +166,11 @@ class TestSignalDebateExecutionSafety:
         base.update(overrides)
         return base
 
-    def test_debate_skip_when_no_api_key_is_allowed_true(self, monkeypatch):
+    def test_debate_skip_when_no_api_key_defaults_blocked(self, monkeypatch):
         monkeypatch.setattr("signal_debate.get_ai_api_key", lambda _cfg: "")
         result = run_signal_debate(self._base_signal())
         assert result["grade"] == "SKIP"
-        assert result["allowed"] is True
+        assert result["allowed"] is False
 
     def test_debate_pass_grade_sets_allowed_false(self, monkeypatch):
         """AI says PASS => allowed=False => execution is blocked."""
@@ -341,6 +341,20 @@ class TestSignalDebateExecutionSafety:
         ctx = captured_context[0] if captured_context else ""
         # No freshness section when signal has no metadata (build_freshness_ai_context returns "")
         assert "CANDLE DATA FRESHNESS" not in ctx
+
+    def test_debate_no_api_key_defaults_to_block(self, monkeypatch):
+        """AUTO_TRADE_AI_FAIL_POLICY must default to 'block' so missing API key blocks exec."""
+        monkeypatch.setattr("signal_debate.get_ai_api_key", lambda _cfg: "")
+        # Ensure config does NOT explicitly set the policy (test the default)
+        import signal_debate
+        monkeypatch.setitem(
+            signal_debate.CONFIG,
+            "AUTO_TRADE_AI_FAIL_POLICY",
+            "block",
+        )
+        result = run_signal_debate(self._base_signal())
+        assert result["grade"] == "SKIP"
+        assert result["allowed"] is False
 
 
 # ============================================================

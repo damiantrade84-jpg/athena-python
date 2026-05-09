@@ -244,10 +244,12 @@ class TestDataFreshnessGate:
 
 
 class TestDrawdown:
-    def test_severe_drawdown_rejects(self):
+    def test_severe_drawdown_rejects(self, monkeypatch):
         # Simulate 20% drawdown: peak was 10000, equity is 8000 (crypto signal)
         import risk_engine
 
+        # config.yaml may override the code default; force the gate ON for this test
+        monkeypatch.setitem(risk_engine.CONFIG, "DRAWDOWN_STOP_ENABLED", True)
         with risk_engine._peak_lock:
             old = dict(risk_engine._peak_equity)
             risk_engine._peak_equity["crypto"] = 10000.0

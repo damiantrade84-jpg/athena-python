@@ -757,7 +757,7 @@ class AutoTrader:
                         signal.get("pair", ""), signal.get("direction", ""), asset_type
                     )
 
-                    if not sent.get("allowed", True):
+                    if not sent.get("allowed", False):
                         return False, sent.get("reason", "Sentiment block")
 
             except ImportError:
@@ -773,7 +773,7 @@ class AutoTrader:
                     lookahead_hours=cfg.get("EVENT_RISK_HOURS", 4),
                 )
 
-                if not ev_risk.get("allowed", True):
+                if not ev_risk.get("allowed", False):
                     return False, ev_risk.get("reason", "Event risk block")
 
             except ImportError:

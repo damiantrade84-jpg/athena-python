@@ -400,7 +400,7 @@ def _engine_b_context_confirmed(sig: dict, engine_b: dict | None = None) -> bool
         return bool(engine_b.get("passed"))
     if _signal_has_engine_b_context(sig, engine_b):
         return False
-    return True
+    return False
 
 
 def _extract_engine_b_execution_levels(
