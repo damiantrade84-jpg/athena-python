@@ -291,6 +291,8 @@ CONFIG: dict = {
     "AI_TEMPERATURE": 0.3,
     "AI_VISION_TEMPERATURE": 0.2,  # /api/chart-analysis factual mode (override in config.yaml if needed)
     "AI_VISION_CAN_UPGRADE_TRADE": False,  # Vision CONFIRM cannot create trade=True; downgrade only by default
+    # When False, debate/vision sources classified as neutral (e.g. SKIP/REVIEW) block execution_allowed.
+    "AI_NEUTRAL_ALLOWS_EXECUTION": False,
     "ENGINE_B_PROFILE_SCORING_ENABLED": True,
     "ENGINE_B_FAST_FVG_DETECTION": True,
     "CHART_VISION_DATASET_ENABLED": False,
@@ -337,6 +339,8 @@ CONFIG: dict = {
     "ENGINE_B_CRYPTO_BT_LEVEL_ATR_USE_SIGNAL_FEED": True,
     # When True, Engine B skips forex on 22:00–07:00 UTC bars (backtest + live scan).
     "ENGINE_B_FOREX_ASIAN_SESSION_SKIP_ENABLED": True,
+    # When True, Engine B room gate requires structural distance; unknown distance fails closed.
+    "ENGINE_B_ROOM_GATE_REQUIRE_DISTANCE": True,
     "BINANCE_KLINE_WS_INTERVALS": ["1m", "5m", "15m", "1h", "4h", "1d"],
     "MIN_CONFLUENCE": 1.0,
     "RISK_MULT": {

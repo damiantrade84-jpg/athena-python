@@ -184,8 +184,25 @@ def run_managed_execution(
                 f"[LIFECYCLE] Bybit post-fill repaired missing SL/TP on {ccxt_sym}"
             )
         if rec.get("error"):
+            exec_result["success"] = False
+            exec_result["error"] = "BYBIT_PROTECTION_RECONCILE_FAILED"
+            exec_result["reconcile"] = rec
             exec_result.setdefault("lifecycleWarnings", []).append(
                 f"reconcile_error:{rec.get('detail', rec)}"
+            )
+        elif (
+            not rec.get("skipped")
+            and rec.get("note") != "no_levels_to_verify"
+            and not (
+                rec.get("hadProtections") is True or rec.get("repaired") is True
+            )
+        ):
+            # Parity with MT5: no verified SL/TP after fill when both are required
+            exec_result["success"] = False
+            exec_result["error"] = "BYBIT_PROTECTION_RECONCILE_FAILED"
+            exec_result["reconcile"] = rec
+            exec_result.setdefault("lifecycleWarnings", []).append(
+                "bybit_missing_sl_tp_after_fill"
             )
 
     exec_result["lifecycle"] = {

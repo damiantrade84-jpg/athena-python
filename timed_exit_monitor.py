@@ -1154,6 +1154,12 @@ def _handle_mt5_row(row: dict, tcfg: dict, db_path: str | None = None) -> None:
     # Get live position data
     pos_result = mt5_get_positions()
     if pos_result.get("error"):
+        log.warning(
+            "[TIMED_EXIT] mt5_get_positions error for ticket=%s pair=%s — skip tick (%s)",
+            ticket,
+            row.get("pair"),
+            pos_result.get("error"),
+        )
         return
     live = next(
         (p for p in pos_result.get("positions", []) if p.get("ticket") == ticket),

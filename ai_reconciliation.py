@@ -381,14 +381,28 @@ def arbitrate_ai(
         return result
 
     if neutrals:
-        result.update(
-            {
-                "decision": AI_DECISION_ALLOW,
-                "execution_allowed": True,
-                "ai_review_state": AI_STATE_REVIEW_INCOMPLETE,
-                "reason": "AI_NEUTRAL_OR_SKIPPED",
-            }
-        )
+        try:
+            from config import CONFIG as _cfg
+        except Exception:
+            _cfg = {}
+        if bool(_cfg.get("AI_NEUTRAL_ALLOWS_EXECUTION", False)):
+            result.update(
+                {
+                    "decision": AI_DECISION_ALLOW,
+                    "execution_allowed": True,
+                    "ai_review_state": AI_STATE_REVIEW_INCOMPLETE,
+                    "reason": "AI_NEUTRAL_OR_SKIPPED",
+                }
+            )
+        else:
+            result.update(
+                {
+                    "decision": AI_DECISION_BLOCK,
+                    "execution_allowed": False,
+                    "ai_review_state": AI_STATE_REVIEW_INCOMPLETE,
+                    "reason": "AI_NEUTRAL_BLOCKS_EXECUTION",
+                }
+            )
     return result
 
 # ── Grade → numeric map (Marcus Reid / Engine B AI) ──────────────────────────

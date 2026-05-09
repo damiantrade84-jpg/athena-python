@@ -1560,7 +1560,7 @@ def api_execute():
                         "error": f"Symbol '{pair}' not available on your MT5 broker. "
                         f"Check Market Watch or use a broker that offers this instrument."
                     }
-                ), 200
+                ), 400
 
             _exec_venue = "mt5"
 
@@ -1630,7 +1630,7 @@ def api_execute():
                     "error": f"Risk engine rejected: {approval.reason}",
                     "approval": approval.to_dict(),
                 }
-            ), 200
+            ), 422
 
         _ptc_ok, _ptc_reason = _guardian_pre_trade(sig, positions, account, _pos_resp)
         if not _ptc_ok:

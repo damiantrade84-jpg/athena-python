@@ -2944,7 +2944,10 @@ class NakedEngine:
 
         # FIX 7: Apply contextual room gate after rr is computed
         _effective_min_room_atr = _get_min_room_atr(rr, bool(res.get("bos_confirmed")), asset_type_lower, exec_style)
-        room_ok = room_dist is None or room_dist >= atr_val * _effective_min_room_atr
+        if config.CONFIG.get("ENGINE_B_ROOM_GATE_REQUIRE_DISTANCE", True):
+            room_ok = room_dist is not None and room_dist >= atr_val * _effective_min_room_atr
+        else:
+            room_ok = room_dist is None or room_dist >= atr_val * _effective_min_room_atr
         # tp_side_ok reflects structural TP for diagnostic purposes
         tp_side_ok = _exec_lvl["structural_tp_valid"]
 

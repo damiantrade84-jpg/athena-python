@@ -54,13 +54,23 @@ class TestAiArbitration:
         assert decision["decision"] == "BLOCK"
         assert decision["reason"] == "DEBATE_AI_FAILURE"
 
-    def test_debate_skip_is_neutral(self):
+    def test_debate_skip_is_neutral_blocks_execution_by_default(self):
+        decision = arbitrate_ai({"trace_id": TRACE_ID, "debate": _debate("SKIP", True)})
+
+        assert decision["execution_allowed"] is False
+        assert decision["decision"] == "BLOCK"
+        assert decision["reason"] == "AI_NEUTRAL_BLOCKS_EXECUTION"
+        assert decision["neutral_sources"] == ["debate"]
+
+    def test_debate_skip_allows_when_config_enables_neutral_execution(self, monkeypatch):
+        import config as cfg_mod
+
+        monkeypatch.setitem(cfg_mod.CONFIG, "AI_NEUTRAL_ALLOWS_EXECUTION", True)
         decision = arbitrate_ai({"trace_id": TRACE_ID, "debate": _debate("SKIP", True)})
 
         assert decision["execution_allowed"] is True
         assert decision["decision"] == "ALLOW"
         assert decision["reason"] == "AI_NEUTRAL_OR_SKIPPED"
-        assert decision["neutral_sources"] == ["debate"]
 
     def test_debate_skip_plus_vision_confirm_allows_with_support(self):
         decision = arbitrate_ai(

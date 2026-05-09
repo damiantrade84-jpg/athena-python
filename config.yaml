@@ -943,7 +943,14 @@ AI_VISION_TEMPERATURE: 0.2
 
 AI_VISION_CAN_UPGRADE_TRADE: false  # Vision CONFIRM cannot create trade=True; downgrade only by default
 
+# When true, debate SKIP / vision REVIEW-era neutral tokens allow execution_allowed.
+# Default false: incomplete AI review must not imply approval (_vision_blocks_execution checks execution_allowed is False).
+AI_NEUTRAL_ALLOWS_EXECUTION: false
+
 ENGINE_B_PROFILE_SCORING_ENABLED: true
+
+# Engine contextual room gate: require structural distance-to-level (fail closed when unknown).
+ENGINE_B_ROOM_GATE_REQUIRE_DISTANCE: true
 
 
 

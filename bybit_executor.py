@@ -958,9 +958,12 @@ def bybit_execute(signal: dict, approval: "RiskApproval") -> dict:  # noqa: F821
                 }
         except Exception as sl_cap_err:
             log.warning(
-                f"[BYBIT] {ccxt_symbol}: SL width cap check failed ({sl_cap_err}) — "
-                "proceeding but this bypasses the hard SL cap; investigate"
+                f"[BYBIT] {ccxt_symbol}: SL width cap check failed ({sl_cap_err}) — rejecting order"
             )
+            return {
+                "success": False,
+                "error": f"SL_CAP_CHECK_FAILED:{sl_cap_err}",
+            }
 
         side = "buy" if direction == "LONG" else "sell"
         log.info(

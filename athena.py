@@ -9884,7 +9884,8 @@ def api_chart_analysis():
             out["final_verdict"] = "ADJUST"
 
         if not out["rating"]:
-            out["rating"] = "MODERATE"
+            # Fail closed: missing footer ratings must not default to confirm-tier MODERATE
+            out["rating"] = "AVOID"
 
         _res_style = str(data.get("resolvedStyle") or (sig or {}).get("tradeStyle") or "swing").lower()
         if _res_style in out["style_ratings"]:

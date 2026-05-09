@@ -488,6 +488,10 @@ class TestApproval:
         sig = _make_signal(confluenceScore=2.7, maxScore=3.0, combinedConviction=0.4)
         assert _signal_quality_factor(sig) == 0.4
 
+    def test_signal_quality_factor_malformed_confluence_uses_minimum_band(self):
+        sig = _make_signal(confluenceScore="bad", maxScore="worse")
+        assert _signal_quality_factor(sig) == 0.25
+
     def test_risk_check_sizes_from_combined_conviction_when_present(self, monkeypatch):
         monkeypatch.setattr(risk_engine, "_calc_volume", lambda *args, **kwargs: 1.0)
         result = risk_check(

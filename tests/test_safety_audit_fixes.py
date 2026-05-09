@@ -1,6 +1,7 @@
 """Tests for safety fixes from deep audit (C1, M1, M2, M5, M7, L2)."""
 
 import os
+import re
 import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -244,7 +245,7 @@ def test_trust_verdict_defaults_to_trust_neither():
 
 
 def test_bybit_sl_width_exception_logged_not_silent():
-    """Bybit executor SL width check no longer does except Exception: pass."""
+    """Bybit executor SL width check fail-closed: exception rejects with SL_CAP_CHECK_FAILED."""
     import bybit_executor
     import inspect
 
@@ -256,11 +257,40 @@ def test_bybit_sl_width_exception_logged_not_silent():
     assert "except Exception:" in src, (
         "L2: SL width check still has exception handler"
     )
-    assert "pass  # graceful degradation" not in src, (
-        "L2 fix missing: except Exception: pass still present in SL width check"
+    assert "SL_CAP_CHECK_FAILED" in src, (
+        "L2 fix: cap check exception must reject order"
     )
-    assert "log.warning" in src or "SL width" in src, (
-        "L2 fix missing: exception handler should log a warning"
+    assert "proceeding but this bypasses" not in src, (
+        "L2 regression: must not proceed after cap check failure"
+    )
+
+
+# ---------------------------------------------------------------------------
+# HTTP semantics: hard failures must not use 200 OK
+# ---------------------------------------------------------------------------
+
+
+def test_api_execute_risk_rejection_uses_422_not_200():
+    import execution
+    import inspect
+
+    src = inspect.getsource(execution.api_execute)
+    assert "Risk engine rejected" in src
+    block = src.split("Risk engine rejected", 1)[1][:900]
+    assert re.search(r"\),\s*422\b", block), (
+        "Risk rejection response must use HTTP 422, not 200"
+    )
+
+
+def test_api_execute_mt5_missing_symbol_uses_400_not_200():
+    import execution
+    import inspect
+
+    src = inspect.getsource(execution.api_execute)
+    assert "not available on your MT5 broker" in src
+    block = src.split("not available on your MT5 broker", 1)[1][:500]
+    assert re.search(r"\),\s*400\b", block), (
+        "Unknown MT5 symbol must use HTTP 400, not 200"
     )
 
 

@@ -61,13 +61,13 @@ def _signal_quality_factor(signal: dict) -> float:
         max_score = float(signal.get("maxScore", 0) or 0)
         score = float(signal.get("confluenceScore", max_score) or 0)
     except (TypeError, ValueError):
-        return 1.0
+        return 0.25
 
     if max_score > 0:
         return max(0.25, min(1.0, score / max_score))
     if 0.0 <= score <= 1.0:
         return max(0.25, min(1.0, score))
-    return 1.0
+    return 0.25
 
 
 @dataclass
