@@ -1436,13 +1436,25 @@ def api_execute():
 
             except Exception as _re:
                 _r.log.warning(
-                    f"[EXEC] {pair}: live refresh failed ({_re}) — using original signal, refreshing timestamp"
+                    f"[EXEC] {pair}: live refresh failed ({_re}) — rejecting stale signal"
                 )
-
-                sig["timestamp"] = datetime.now(timezone.utc).isoformat()
+                return jsonify(
+                    {
+                        "error": f"STALE_SIGNAL_REFRESH_FAILED: {pair} live refresh failed — signal rejected",
+                        "pair": pair,
+                    }
+                ), 409
 
         else:
-            sig["timestamp"] = datetime.now(timezone.utc).isoformat()
+            _r.log.warning(
+                f"[EXEC] {pair}: pair not found in universe — rejecting stale signal"
+            )
+            return jsonify(
+                {
+                    "error": f"STALE_SIGNAL_REFRESH_FAILED: {pair} not found in universe — signal rejected",
+                    "pair": pair,
+                }
+            ), 409
 
     if _has_engine_b_context and not _engine_b_context_confirmed(sig, d.get("engine_b") or {}):
         return jsonify(
@@ -1453,7 +1465,17 @@ def api_execute():
         ), 409
 
     if _has_engine_b_context:
-        _apply_engine_b_execution_levels(sig, d.get("engine_b") or {})
+        _levels_applied = _apply_engine_b_execution_levels(sig, d.get("engine_b") or {})
+        if not _levels_applied:
+            _r.log.warning(
+                f"[EXEC] {pair}: Engine B execution levels not found — cannot execute structural signal"
+            )
+            return jsonify(
+                {
+                    "error": "ENGINE_B_LEVELS_UNAVAILABLE: structural execution levels missing",
+                    "pair": pair,
+                }
+            ), 409
 
     if level_override:
         _override_err = _apply_level_override(sig, level_override)

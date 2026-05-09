@@ -33,7 +33,7 @@ def test_run_signal_debate_skips_when_no_shared_ai_key(monkeypatch):
     result = run_signal_debate({"pair": "EUR/USD", "confluenceScore": 1.2})
 
     assert result["grade"] == "SKIP"
-    assert result["allowed"] is True
+    assert result["allowed"] is False
     assert "No AI API key configured" in result["reasoning"]
 
 

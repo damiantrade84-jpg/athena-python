@@ -1147,7 +1147,7 @@ class NakedEngine:
                 if bos_bull and bos_bear:
                     break
 
-            bos_volume_confirmed = True
+            bos_volume_confirmed = False
             if volumes is not None and len(volumes) >= 20 and (bos_bull or bos_bear):
                 positive_vols = [float(v) for v in volumes[-20:] if float(v) > 0]
                 avg_vol_20 = float(np.mean(positive_vols)) if positive_vols else 0.0
@@ -2662,7 +2662,7 @@ class NakedEngine:
             "zone_atr": zone_atr,
             "bos_confirmed": bos_confirmed,
             "bos_mtf_confirmed": bos_mtf_confirmed,
-            "bos_volume_confirmed": bos_data.get("bos_volume_confirmed", True),
+            "bos_volume_confirmed": bos_data.get("bos_volume_confirmed", False),
             "bos_data": bos_data,
             "d1_bos_data": d1_bos,
             "sweep_data": sweep_data,
@@ -3117,7 +3117,7 @@ class NakedEngine:
             _diag_codes.append(ENGINE_B_REASON_SEQUENCE_COUNTER_TREND)
         if not trigger_ok and not breakout_ok:
             _diag_codes.append(ENGINE_B_REASON_NO_TRIGGER_PATTERN)
-        elif breakout_ok and not res.get("bos_volume_confirmed", True):
+        elif breakout_ok and not res.get("bos_volume_confirmed", False):
             _diag_codes.append(ENGINE_B_REASON_BOS_WITHOUT_VOLUME)
         if _d1_conflict:
             _diag_codes.append(ENGINE_B_REASON_D1_PD_ARRAY_CONFLICT)

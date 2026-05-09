@@ -956,8 +956,11 @@ def bybit_execute(signal: dict, approval: "RiskApproval") -> dict:  # noqa: F821
                     "success": False,
                     "error": f"SL_TOO_WIDE: {_sl_dist_pct:.1%} exceeds {_max_sl_pct:.0%} crypto cap"
                 }
-        except Exception:
-            pass  # graceful degradation — do not block execution on config error
+        except Exception as sl_cap_err:
+            log.warning(
+                f"[BYBIT] {ccxt_symbol}: SL width cap check failed ({sl_cap_err}) — "
+                "proceeding but this bypasses the hard SL cap; investigate"
+            )
 
         side = "buy" if direction == "LONG" else "sell"
         log.info(

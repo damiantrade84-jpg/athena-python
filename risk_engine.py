@@ -690,8 +690,10 @@ def risk_check(
     decision_state = str(signal.get("decision_state") or "").lower()
     tier = str(signal.get("tier") or signal.get("signalTier") or "").upper()
     verdict = str(signal.get("verdict") or "").upper()
-    if decision_state in ("watchlist", "blocked") or (
-        verdict and tier in ("WATCHLIST", "SKIP")
+    if (
+        decision_state in ("watchlist", "blocked")
+        or (verdict and tier in ("WATCHLIST", "SKIP"))
+        or (not verdict and tier in ("WATCHLIST", "SKIP"))
     ):
         log.warning(f"{prefix} REJECTED: non-executable signal state")
         return RiskApproval(False, 0.0, 0.0, 0.0, 0.0, 0.0, "NON_EXECUTABLE_SIGNAL_STATE")
