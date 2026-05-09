@@ -181,6 +181,7 @@ def regime_fit(regime: str, signal_type: str = "trend") -> Optional[float]:
     Returns 0-1 or None if regime is unknown."""
     regime_upper = (regime or "").upper()
     if regime_upper not in _REGIME_FIT_MATRIX:
+        log.debug("regime_fit: regime '%s' not in matrix — component excluded", regime_upper)
         return None
     return _REGIME_FIT_MATRIX[regime_upper].get(signal_type, 0.5)
 
@@ -278,8 +279,9 @@ def compute_confidence(
     # Session quality multiplier: off-hours entries have lower conviction.
     # Timing is the strongest PROTECTIVE factor (2026-04-18 backtest: breakout_eval_hour
     # and utc_hour consistently PROTECTIVE across all asset classes and splits).
-    # Low-quality sessions push confidence down so Engine C's reliability gate
-    # demotes execute→reduced_risk or watchlist. London/NY overlap is unchanged.
+    # Low-quality sessions reduce the displayed confidence score. The live dashboard's
+    # simplified Engine C derivation uses conviction (not confidence engine output),
+    # so this multiplier is advisory/display-only unless plumbed into engine_c.py.
     _SESSION_MULTS = {"high": 1.00, "medium": 0.90, "low": 0.70}
     if session_quality in _SESSION_MULTS:
         confidence = round(confidence * _SESSION_MULTS[session_quality], 4)

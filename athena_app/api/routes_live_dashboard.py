@@ -788,7 +788,6 @@ def api_live_dashboard_snapshot():
                 "engineC": _ld_empty_engine_c(), "engineD": _ld_empty_engine_d(),
                 "aiReview": {},
                 "paperPosition": {"hasOpenPaperPosition": False, "entry": None, "sl": None, "tp": None, "pnl": None},
-                "paper": {"hasOpenPaperPosition": False, "entry": None, "sl": None, "tp": None, "pnl": None},
                 "levels": {},
                 "finalState": "BLOCKED",
                 "mainReason": "symbol_not_found",
@@ -975,13 +974,21 @@ def api_live_dashboard_snapshot():
             "finalState": final_state,
         }
         _executable_state_obj = _ld_executable_state(_symbol_state)
+        _ai_confidence = None
+        _ai_analysis = sig_a.get("aiAnalysis") or sig_a.get("analysis")
+        if isinstance(_ai_analysis, dict):
+            _ai_confidence = _ai_analysis.get("edgeProbability")  # 0-100 scale
+        if _ai_confidence is None:
+            _ai_confidence = sig_a.get("conviction")  # 0-1 scale fallback
+            if _ai_confidence is not None:
+                _ai_confidence = round(float(_ai_confidence) * 100)
         _ai_review = {
-            "marcusReid": sig_a.get("aiAnalysis") or sig_a.get("analysis"),
+            "marcusReid": _ai_analysis,
             "engineBAI": (sig_b or {}).get("ai_review"),
             "signalDebate": sig_a.get("signalDebate") or sig_a.get("debate"),
             "chartVision": sig_a.get("chartVision") or sig_a.get("vision"),
             "reviewState": sig_a.get("aiReviewState") or "NOT_VERIFIED",
-            "confidence": sig_a.get("aiConfidence"),
+            "confidence": _ai_confidence,
             "contradictions": _ld_list(sig_a.get("aiContradictions")),
             "missingInformation": _ld_list(sig_a.get("aiMissingInformation")),
             "downgradeOnly": True,
@@ -1013,8 +1020,7 @@ def api_live_dashboard_snapshot():
             "engineC": engine_c_row,
             "engineD": engine_d_row,
             "aiReview": _ai_review,
-            "paperPosition": paper_row,
-            "paper": paper_row,
+        "paperPosition": paper_row,
             "levels": _levels,
             "finalState": final_state,
             "mainReason": main_reason,

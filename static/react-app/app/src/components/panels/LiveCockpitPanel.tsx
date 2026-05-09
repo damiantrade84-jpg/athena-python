@@ -824,12 +824,12 @@ function AiReviewCard({ ai }: { ai: LdAiReview | undefined }) {
           </Badge>
         </div>
         <div className="grid grid-cols-2 gap-2 text-xs">
-          <Detail label="Confidence" value={ai.confidence != null ? `${(toNum(ai.confidence) * 100).toFixed(0)}%` : '—'} />
+          <Detail label="Confidence" value={ai.confidence != null ? `${toNum(ai.confidence).toFixed(0)}%` : '—'} />
           <Detail label="Downgrade only" value={ai.downgradeOnly ? 'YES' : 'NO'} />
-          <Detail label="Marcus Reid" value={ai.marcusReid ? 'present' : '—'} />
-          <Detail label="Engine B AI" value={ai.engineBAI ? 'present' : '—'} />
-          <Detail label="Signal Debate" value={ai.signalDebate ? 'present' : '—'} />
-          <Detail label="Chart Vision" value={ai.chartVision ? 'present' : '—'} />
+          <Detail label="Marcus Reid" value={ai.marcusReid != null ? 'present' : '—'} />
+          <Detail label="Engine B AI" value={ai.engineBAI != null ? 'present' : '—'} />
+          <Detail label="Signal Debate" value={ai.signalDebate != null ? 'present' : '—'} />
+          <Detail label="Chart Vision" value={ai.chartVision != null ? 'present' : '—'} />
         </div>
         {Array.isArray(ai.contradictions) && ai.contradictions.length > 0 && (
           <ReasonList items={ai.contradictions} className="text-warning bg-warning/10" label="Contradictions" icon={<AlertTriangle className="w-3 h-3" />} />

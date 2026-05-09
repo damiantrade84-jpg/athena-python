@@ -124,14 +124,9 @@ export default function EngineASignalCard({
             Final confluence blends trend, momentum quality, ADX/session gates and addon — it is{' '}
             <span className="font-medium text-foreground/80">not</span> the sum of the factor boxes below.
           </p>
-          {signal.engine_b_score != null && signal.engine_b_score !== undefined && (
+          {signal.engine_b != null && (
             <p className="text-[9px] text-muted-foreground leading-snug border-t border-border/40 pt-1 mt-1">
-              Same-scan Engine B:{' '}
-              <span className="font-mono text-foreground/90">
-                {signal.enginesAligned ? 'checklist passed' : 'not aligned'}
-              </span>
-              {' · '}
-              Combined verdict → Engine C
+              Engine B attached — see detail panel
             </p>
           )}
         </div>

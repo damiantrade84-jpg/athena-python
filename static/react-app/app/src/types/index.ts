@@ -300,22 +300,6 @@ export interface OpenTrade {
   swap?: number;
 }
 
-export interface ScalpSignal {
-  setup_type: string;
-  grade: 'A' | 'B' | 'C' | 'D';
-  score: number;
-  sl: number;
-  tp: number;
-  tp2?: number;
-  entry: number;
-  confluenceScore: number;
-  executable: boolean;
-  candidate_fail_reasons: string[];
-  rr_actual: number;
-  size_multiplier: number;
-  components?: Record<string, number>;
-}
-
 export interface LotteryDraw {
   date: string;
   numbers: number[];

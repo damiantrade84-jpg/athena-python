@@ -324,7 +324,10 @@ export interface ChartAnalysisResponse {
   [k: string]: unknown;
 }
 
-/** /api/analyze (Marcus Reid text analysis) response. */
+/**
+ * /api/analyze (Marcus Reid text analysis) response.
+ * Note: edgeProbability is 0-100 scale (percentage).
+ */
 export interface AiTextReviewResponse {
   reviewSource?: string;
   resolvedStyle?: string;
@@ -507,7 +510,6 @@ export interface LdSymbolRow {
   engineD: LdEngineDRow;
   aiReview: LdAiReview;
   paperPosition: { hasOpenPaperPosition?: boolean; entry?: number | null; sl?: number | null; tp?: number | null; pnl?: number | null };
-  paper: { hasOpenPaperPosition?: boolean; entry?: number | null; sl?: number | null; tp?: number | null; pnl?: number | null };
   levels: LdLevels;
   finalState: 'PAPER CANDIDATE' | 'WATCHLIST' | 'BLOCKED' | 'NO SETUP' | string;
   mainReason: string | null;
