@@ -245,6 +245,12 @@ def _engine_b_level_atr_for_bt(
                 except (TypeError, ValueError):
                     pass
             if not bool(CONFIG.get("ENGINE_B_CRYPTO_LEVELS_SIGNAL_FEED_FALLBACK", False)):
+                log.warning(
+                    "[ENGINE B BT] %s: signal-feed ATR unavailable and "
+                    "ENGINE_B_CRYPTO_LEVELS_SIGNAL_FEED_FALLBACK=false — "
+                    "skipping level resolution",
+                    p.get("display", "?"),
+                )
                 return None, "signal_unavailable"
         if str(CONFIG.get("ENGINE_B_CRYPTO_LEVELS_FEED", "bybit")).lower() == "bybit":
             bybit_fn = getattr(_rt(), "bybit_atr_for_levels", None)
@@ -252,6 +258,12 @@ def _engine_b_level_atr_for_bt(
             if bybit_atr:
                 return float(bybit_atr), "bybit"
             if not bool(CONFIG.get("ENGINE_B_CRYPTO_LEVELS_SIGNAL_FEED_FALLBACK", False)):
+                log.warning(
+                    "[ENGINE B BT] %s: Bybit ATR unavailable and "
+                    "ENGINE_B_CRYPTO_LEVELS_SIGNAL_FEED_FALLBACK=false — "
+                    "skipping level resolution",
+                    p.get("display", "?"),
+                )
                 return None, "bybit_unavailable"
     if signal_atr is None:
         return None, "signal"
@@ -3564,35 +3576,50 @@ def backtest_pair_naked(pair: dict, style: str = "naked", validation_mode="stand
             provider="mt5",
             min_bars=230,
         )
-        candles_h4 = _bt_cached_fetch(
-            pair,
-            "H4",
-            4400,
-            lambda lim: _rt().fetch_candles(pair, "H4", lim),
-            provider="mt5",
-            min_bars=500,
-        )
-        candles_h1 = _bt_cached_fetch(
-            pair,
-            "H1",
-            17600,
-            lambda lim: _rt().fetch_candles(pair, "H1", lim),
-            provider="mt5",
-            min_bars=500,
-        )
-
-        _d1_thin = not candles_d1 or len(candles_d1 or []) < 230
-        _h4_thin = not candles_h4 or len(candles_h4 or []) < 500
-        _h1_thin = not candles_h1 or len(candles_h1 or []) < 500
-
-        if _d1_thin or _h4_thin or _h1_thin:
-            log.warning(
-                "[ENGINE B BT] %s: MT5 data thin (D1=%d, H4=%d, H1=%d); "
-                "not substituting EODHD/yfinance price candles",
-                pair.get("display"),
-                len(candles_d1 or []),
-                len(candles_h4 or []),
-                len(candles_h1 or []),
+        _yf_sym = None
+        try:
+            _yf_fn = getattr(_rt(), "yfinance_symbol_for_pair", None)
+            _yf_sym = _yf_fn(pair) if callable(_yf_fn) else None
+        except Exception:
+            pass
+        if (not candles_d1 or len(candles_d1 or []) < 230) and _yf_sym:
+            _yf_d1 = _rt().fetch_yfinance(_yf_sym, "D1", 750)
+            if _yf_d1 and len(_yf_d1) > len(candles_d1 or []):
+                log.info(
+                    "[ENGINE B BT] %s: MT5 D1 thin (%d bars), "
+                    "falling back to yfinance (%d bars)",
+                    pair.get("display"),
+                    len(candles_d1 or []),
+                    len(_yf_d1),
+                )
+                candles_d1 = _yf_d1
+        try:
+            _ebt_h4, _ebt_h1 = _bt_cached_eodhd_intraday(
+                pair, days=730, h4_limit=4400, h1_limit=17600
+            )
+        except Exception:
+            _ebt_h4, _ebt_h1 = None, None
+        if _ebt_h4:
+            candles_h4 = _ebt_h4
+        else:
+            candles_h4 = _bt_cached_fetch(
+                pair,
+                "H4",
+                4400,
+                lambda lim: _rt().fetch_candles(pair, "H4", lim),
+                provider="mt5",
+                min_bars=500,
+            )
+        if _ebt_h1:
+            candles_h1 = _ebt_h1
+        else:
+            candles_h1 = _bt_cached_fetch(
+                pair,
+                "H1",
+                17600,
+                lambda lim: _rt().fetch_candles(pair, "H1", lim),
+                provider="mt5",
+                min_bars=500,
             )
     else:
         # Non-MT5, non-Binance pairs: use the source-specific live candle router.
@@ -4726,13 +4753,9 @@ def backtest_pair_consensus(
                 funding_rate=_bt_funding_rate, oi_data=_bt_oi_data, oi_context=_bt_oi_ctx,
                 bar_time=candles_h4[i].get("time") if candles_h4 else None,
             )
-            _atr_c = _rt().atr_for_levels(d1i, h4i, h1i, pair=pair, style=resolved_style)
-            _atr_c, _level_atr_feed_c = _engine_a_level_atr_for_bt(
-                _atr_c, pair, resolved_style, as_of=candles_h4[i].get("time") if candles_h4 else None
-            )
-            _lvl_a = calc_levels(current_price, _atr_c or atr, res_a["direction"], _level_atr_class,
+            _lvl_a = calc_levels(current_price, atr, res_a["direction"], _level_atr_class,
                                  regime_state=res_a.get("regime", {}).get("state"),
-                                 style=resolved_style) if _atr_c else {}
+                                 style=resolved_style)
             signal_a = {
                 "confluenceScore": res_a["score"], "maxScore": res_a.get("maxScoreOverride", 3.0),
                 "direction": res_a["direction"], "score": res_a["score"],
