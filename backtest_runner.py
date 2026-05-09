@@ -977,7 +977,7 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
             )
 
         elif pair["source"] == "mt5":
-            # MT5 pairs (forex, commodities): MT5 is PRIMARY for D1/H4/H1, EODHD is fallback only
+            # MT5 price backtests must remain MT5-sourced; missing/thin data skips later.
             d1_raw = _bt_cached_fetch(
                 pair,
                 "D1",
@@ -1002,36 +1002,6 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
                 provider="mt5",
                 min_bars=500,
             )
-            
-            # Fallback to EODHD only if MT5 data is insufficient
-            _d1_thin = not d1_raw or len(d1_raw or []) < 230
-            _h4_thin = not h4_raw or len(h4_raw or []) < 500
-            _h1_thin = not h1_raw or len(h1_raw or []) < 500
-            
-            if _d1_thin or _h4_thin or _h1_thin:
-                log.info(
-                    f"[BT] {pair['display']}: MT5 data thin (D1={len(d1_raw or [])}, H4={len(h4_raw or [])}, H1={len(h1_raw or [])}), trying EODHD fallback"
-                )
-                if _d1_thin:
-                    _eodhd_d1 = _rt().extract_candles(_rt().fetch_eodhd(pair, "D1", 750))
-                    if _eodhd_d1 and len(_eodhd_d1) > len(d1_raw or []):
-                        d1_raw = _eodhd_d1
-                if _h4_thin or _h1_thin:
-                    _eodhd_h4, _eodhd_h1 = _bt_cached_eodhd_intraday(pair, days=730)
-                    if _h4_thin and _eodhd_h4 and len(_eodhd_h4) > len(h4_raw or []):
-                        h4_raw = _eodhd_h4
-                    if _h1_thin and _eodhd_h1 and len(_eodhd_h1) > len(h1_raw or []):
-                        h1_raw = _eodhd_h1
-            
-            # Final fallback to yfinance for D1 if still thin
-            if not d1_raw or len(d1_raw or []) < 230:
-                _yf_sym = _rt().yfinance_symbol_for_pair(pair)
-                if _yf_sym:
-                    log.info(f"[BT] {pair['display']}: trying yfinance D1 fallback")
-                    _yf_d1 = _rt().fetch_yfinance(_yf_sym, "D1", 750)
-                    if _yf_d1 and len(_yf_d1) > len(d1_raw or []):
-                        d1_raw = _yf_d1
-
         elif _ptype in ("stock", "commodity", "index"):
             # Stocks/Commodities/Indices: EODHD D1 + EODHD intraday (730d)
             # Fallback chain: EODHD → Polygon (commodities) → yfinance
@@ -3576,51 +3546,22 @@ def backtest_pair_naked(pair: dict, style: str = "naked", validation_mode="stand
             provider="mt5",
             min_bars=230,
         )
-        _yf_sym = None
-        try:
-            _yf_fn = getattr(_rt(), "yfinance_symbol_for_pair", None)
-            _yf_sym = _yf_fn(pair) if callable(_yf_fn) else None
-        except Exception:
-            pass
-        if (not candles_d1 or len(candles_d1 or []) < 230) and _yf_sym:
-            _yf_d1 = _rt().fetch_yfinance(_yf_sym, "D1", 750)
-            if _yf_d1 and len(_yf_d1) > len(candles_d1 or []):
-                log.info(
-                    "[ENGINE B BT] %s: MT5 D1 thin (%d bars), "
-                    "falling back to yfinance (%d bars)",
-                    pair.get("display"),
-                    len(candles_d1 or []),
-                    len(_yf_d1),
-                )
-                candles_d1 = _yf_d1
-        try:
-            _ebt_h4, _ebt_h1 = _bt_cached_eodhd_intraday(
-                pair, days=730, h4_limit=4400, h1_limit=17600
-            )
-        except Exception:
-            _ebt_h4, _ebt_h1 = None, None
-        if _ebt_h4:
-            candles_h4 = _ebt_h4
-        else:
-            candles_h4 = _bt_cached_fetch(
-                pair,
-                "H4",
-                4400,
-                lambda lim: _rt().fetch_candles(pair, "H4", lim),
-                provider="mt5",
-                min_bars=500,
-            )
-        if _ebt_h1:
-            candles_h1 = _ebt_h1
-        else:
-            candles_h1 = _bt_cached_fetch(
-                pair,
-                "H1",
-                17600,
-                lambda lim: _rt().fetch_candles(pair, "H1", lim),
-                provider="mt5",
-                min_bars=500,
-            )
+        candles_h4 = _bt_cached_fetch(
+            pair,
+            "H4",
+            4400,
+            lambda lim: _rt().fetch_candles(pair, "H4", lim),
+            provider="mt5",
+            min_bars=500,
+        )
+        candles_h1 = _bt_cached_fetch(
+            pair,
+            "H1",
+            17600,
+            lambda lim: _rt().fetch_candles(pair, "H1", lim),
+            provider="mt5",
+            min_bars=500,
+        )
     else:
         # Non-MT5, non-Binance pairs: use the source-specific live candle router.
         _provider = str(pair.get("source") or "source_router")
@@ -4509,30 +4450,22 @@ def backtest_pair_consensus(
             provider="mt5",
             min_bars=230,
         )
-        _yf_sym = _rt().yfinance_symbol_for_pair(pair)
-        if (not candles_d1 or len(candles_d1 or []) < 230) and _yf_sym:
-            _yf_d1 = _rt().fetch_yfinance(_yf_sym, "D1", 600)
-            if _yf_d1 and len(_yf_d1) > len(candles_d1 or []):
-                candles_d1 = _yf_d1
-        candles_h4, candles_h1 = _bt_cached_eodhd_intraday(pair, days=730, h4_limit=5000, h1_limit=20000)
-        if not candles_h4 or not candles_h1:
-            log.info(f"[ENGINE C BT] {pair['display']}: EODHD failed, fetching from MT5")
-            candles_h4 = candles_h4 or _bt_cached_fetch(
-                pair,
-                "H4",
-                5000,
-                lambda lim: _rt().fetch_candles(pair, "H4", lim),
-                provider="mt5",
-                min_bars=500,
-            )
-            candles_h1 = candles_h1 or _bt_cached_fetch(
-                pair,
-                "H1",
-                5000,
-                lambda lim: _rt().fetch_candles(pair, "H1", lim),
-                provider="mt5",
-                min_bars=500,
-            )
+        candles_h4 = _bt_cached_fetch(
+            pair,
+            "H4",
+            5000,
+            lambda lim: _rt().fetch_candles(pair, "H4", lim),
+            provider="mt5",
+            min_bars=500,
+        )
+        candles_h1 = _bt_cached_fetch(
+            pair,
+            "H1",
+            5000,
+            lambda lim: _rt().fetch_candles(pair, "H1", lim),
+            provider="mt5",
+            min_bars=500,
+        )
     else:
         candles_d1 = _bt_cached_fetch(
             pair,

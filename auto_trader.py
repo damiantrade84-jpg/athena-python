@@ -761,7 +761,7 @@ class AutoTrader:
                         return False, sent.get("reason", "Sentiment block")
 
             except ImportError:
-                pass
+                return False, "Sentiment gate unavailable"
 
         if cfg.get("EVENT_RISK_ENABLED", True):
             try:
@@ -777,7 +777,7 @@ class AutoTrader:
                     return False, ev_risk.get("reason", "Event risk block")
 
             except ImportError:
-                pass
+                return False, "Event risk gate unavailable"
 
         # Signal debate gate — AI Bull/Bear/Judge evaluation before auto-execution
         if cfg.get("SIGNAL_DEBATE_ENABLED", True):
@@ -801,6 +801,7 @@ class AutoTrader:
                 _ai_decision = arbitrate_ai(
                     {"debate": debate, "trace_id": debate.get("trace_id") or signal.get("trace_id")},
                     require_trace_id=True,
+                    required_sources=("debate",),
                 )
                 signal["ai_arbitration"] = _ai_decision
                 _allowed = bool(_ai_decision.get("execution_allowed"))
@@ -898,8 +899,10 @@ class AutoTrader:
 
             except ImportError:
                 log.debug("[AUTO] signal_debate not available — skipping")
+                return False, "AI debate unavailable"
             except Exception as _debate_err:
-                log.warning(f"[AUTO] Debate failed (proceeding): {_debate_err}")
+                log.warning(f"[AUTO] Debate failed (blocking): {_debate_err}")
+                return False, f"AI debate failed: {_debate_err}"
 
         # ── SL distance pre-check (mirrors risk_engine MAX_SL_PCT gate) ──────
         # Reject here — before AI debate, sentiment, and event-risk calls —

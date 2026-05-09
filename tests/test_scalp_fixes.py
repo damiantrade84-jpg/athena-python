@@ -335,7 +335,7 @@ def test_bybit_scalp_exec_uses_tp1_for_exchange_tp(monkeypatch):
         def fetch_ticker(self, symbol):
             return {"ask": 100.0, "bid": 100.0, "last": 100.0}
         def create_market_order(self, symbol, side, amount, params=None):
-            return {"id": "ord-1", "average": 100.0, "price": 100.0, "filled": amount}
+            return {"id": "ord-1", "status": "closed", "average": 100.0, "price": 100.0, "filled": amount}
 
     monkeypatch.setattr(bybit_executor, "_get_exchange", lambda: _X())
     monkeypatch.setattr(bybit_executor, "bybit_map_symbol", lambda pair: "BTC/USDT:USDT")

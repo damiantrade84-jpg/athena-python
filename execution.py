@@ -767,6 +767,7 @@ def api_quick_execute():
         result = run_managed_execution(_exec_venue, sig, approval)
         if result.get("success"):
             _audit = _quick_audit_context(sig, engine_b)
+            _audit_ok = True
             try:
                 _audit_ts = datetime.now(timezone.utc).isoformat()
                 _audit_rows = []
@@ -810,6 +811,12 @@ def api_quick_execute():
                     timed_sqlite_commit(con, label="quick_execute.audit_success.commit")
             except Exception as ae:
                 _r.log.warning(f"[QUICK EXEC] Audit DB write failed: {ae}")
+                _audit_ok = False
+
+            if not _audit_ok:
+                result["success"] = False
+                result["error"] = "AUDIT_PERSISTENCE_FAILED_AFTER_FILL"
+                return jsonify({"error": result["error"], "execution": _json_safe(result)}), 500
 
             return jsonify(
                 {
@@ -1611,8 +1618,7 @@ def api_execute():
         result = run_managed_execution(_exec_venue, sig, approval)
 
         if result.get("success"):
-            executed_signals.add(sig_id)
-
+            _audit_ok = True
             try:
                 with timed_sqlite_connect(
                     _r.AUDIT_DB, timeout=15.0, label="execute.audit_success.connect"
@@ -1670,15 +1676,23 @@ def api_execute():
 
             except Exception as ae:
                 _r.log.warning(f"Audit DB write failed: {ae}")
+                _audit_ok = False
 
-            _r.log.info(
-                f"[EXEC] {pair} EXECUTED: ticket={result.get('ticket')}, volume={result.get('volume')}"
-            )
+            if not _audit_ok:
+                result["success"] = False
+                result["error"] = "AUDIT_PERSISTENCE_FAILED_AFTER_FILL"
+            else:
+                executed_signals.add(sig_id)
+                _r.log.info(
+                    f"[EXEC] {pair} EXECUTED: ticket={result.get('ticket')}, volume={result.get('volume')}"
+                )
 
         if not result.get("success"):
             err = _log_execution_failure(_r.log, "EXEC", pair, _exec_venue, result)
             if isinstance(result, dict):
                 result.setdefault("error", err)
+            if result.get("error") == "AUDIT_PERSISTENCE_FAILED_AFTER_FILL":
+                return jsonify(result), 500
 
         return jsonify(result)
 
@@ -1938,6 +1952,7 @@ def api_scalp_execute():
         result = run_managed_execution(_exec_venue, sig, approval)
         if result.get("success"):
             # Log to audit_db
+            _audit_ok = True
             try:
                 with timed_sqlite_connect(
                     _r.AUDIT_DB, timeout=15.0, label="scalp_execute.audit_success.connect"
@@ -1967,6 +1982,12 @@ def api_scalp_execute():
                     )
             except Exception as ae:
                 _r.log.warning(f"[SCALP API] Audit log failed: {ae}")
+                _audit_ok = False
+
+            if not _audit_ok:
+                result["success"] = False
+                result["error"] = "AUDIT_PERSISTENCE_FAILED_AFTER_FILL"
+                return jsonify({"error": result["error"], "execution": _json_safe(result)}), 500
                 
             return jsonify({
                 "success": True, 

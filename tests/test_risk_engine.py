@@ -3,6 +3,7 @@
 import sys
 import os
 import threading
+from datetime import datetime, timezone
 import pytest
 
 # Ensure project root is importable
@@ -54,8 +55,13 @@ def _make_signal(**overrides):
         "tp1": 62000,
         "tp2": 64000,
         "type": "crypto",
-        "timestamp": None,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
         "confluenceScore": 5.0,
+        "candleFetchMeta": {
+            "D1": {"stalenessSeverity": "fresh"},
+            "H4": {"stalenessSeverity": "fresh"},
+            "H1": {"stalenessSeverity": "fresh"},
+        },
     }
     base.update(overrides)
     return base

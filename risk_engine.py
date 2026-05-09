@@ -86,6 +86,28 @@ class RiskApproval:
         return asdict(self)
 
 
+def _has_execution_freshness_evidence(signal: dict) -> bool:
+    for key in ("candleConsistency", "candleFreshness", "candleFetchMeta"):
+        payload = signal.get(key)
+        if not isinstance(payload, dict) or not payload:
+            continue
+        for tf, diag in payload.items():
+            if tf == "pairSource":
+                continue
+            if isinstance(diag, dict) and (
+                diag.get("status")
+                or diag.get("stalenessSeverity")
+                or diag.get("lastBucketIso")
+                or diag.get("lastBarIso")
+                or diag.get("lastTime")
+                or diag.get("last_time")
+            ):
+                return True
+            if isinstance(diag, str) and diag.strip():
+                return True
+    return False
+
+
 # ── Peak equity persistence (survives restarts) ─────────────────────────────
 _RISK_DB = os.path.join(os.path.dirname(os.path.abspath(__file__)), "audit.db")
 _PEAK_UPSERT_SQL = (
@@ -677,6 +699,13 @@ def risk_check(
     if verdict in ("B_ONLY", "B_ONLY_SCORED", "B_ONLY_VISION_CONFIRMED", "ALIGNED"):
         engine_b_status = signal.get("engine_b_status") or {}
         components = signal.get("components") or {}
+        checklist_present = (
+            isinstance(engine_b_status, dict)
+            and engine_b_status.get("checklist_passed") is True
+        ) or (
+            isinstance(components, dict)
+            and components.get("b_checklist_passed") is True
+        )
         checklist_failed = (
             isinstance(engine_b_status, dict)
             and engine_b_status.get("checklist_passed") is False
@@ -687,12 +716,19 @@ def risk_check(
         if checklist_failed:
             log.warning(f"{prefix} REJECTED: Engine B checklist failed")
             return RiskApproval(False, 0.0, 0.0, 0.0, 0.0, 0.0, "ENGINE_B_CHECKLIST_FAILED")
+        if not checklist_present:
+            log.warning(f"{prefix} REJECTED: Engine B checklist proof missing")
+            return RiskApproval(False, 0.0, 0.0, 0.0, 0.0, 0.0, "ENGINE_B_CHECKLIST_MISSING")
 
     if verdict == "A_ONLY":
         components = signal.get("components") or {}
         if isinstance(components, dict) and components.get("a_has_signal") is False:
             log.warning(f"{prefix} REJECTED: Engine A signal invalid")
             return RiskApproval(False, 0.0, 0.0, 0.0, 0.0, 0.0, "ENGINE_A_SIGNAL_INVALID")
+
+    if not _has_execution_freshness_evidence(signal):
+        log.warning(f"{prefix} REJECTED: missing execution candle freshness proof")
+        return RiskApproval(False, 0.0, 0.0, 0.0, 0.0, 0.0, "MISSING_CANDLE_FRESHNESS")
 
     freshness = evaluate_execution_data_freshness(signal, CONFIG)
     if not freshness["allowed"]:
@@ -710,7 +746,10 @@ def risk_check(
 
     # ── Check 1: Signal freshness ───────────────────────────────────────────
     ts_str = signal.get("timestamp")
-    if ts_str and not is_manual_override:
+    if not ts_str:
+        log.warning(f"{prefix} REJECTED: missing signal timestamp")
+        return RiskApproval(False, 0.0, 0.0, 0.0, 0.0, 0.0, "MISSING_SIGNAL_TIMESTAMP")
+    if ts_str:
         try:
             sig_time = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
             age = (datetime.now(timezone.utc) - sig_time).total_seconds()

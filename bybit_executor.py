@@ -679,6 +679,7 @@ def bybit_cancel_stale_entry_orders(ccxt_symbol: str | None) -> dict:
     try:
         exchange.load_markets()
         open_orders = exchange.fetch_open_orders(ccxt_symbol) or []
+        cleanup_errors = []
         for o in open_orders:
             if (o.get("status") or "").lower() not in ("open", "new", "live"):
                 continue
@@ -697,9 +698,19 @@ def bybit_cancel_stale_entry_orders(ccxt_symbol: str | None) -> dict:
                     f"[BYBIT] Cancelled stale entry order id={o.get('id')} on {ccxt_symbol}"
                 )
             except Exception as _ce:
+                cleanup_errors.append({"order_id": o.get("id"), "error": str(_ce)})
                 log.warning(f"[BYBIT] Could not cancel order {o.get('id')}: {_ce}")
+        if cleanup_errors:
+            return {
+                "error": True,
+                "detail": "STALE_ORDER_CANCEL_FAILED",
+                "cancelled": cancelled,
+                "symbol": ccxt_symbol,
+                "cleanupErrors": cleanup_errors,
+            }
     except Exception as e:
         log.debug(f"[BYBIT] stale entry order scan: {e}")
+        return {"error": True, "detail": str(e), "cancelled": cancelled, "symbol": ccxt_symbol}
     return {"error": False, "cancelled": cancelled, "symbol": ccxt_symbol}
 
 
@@ -984,8 +995,40 @@ def bybit_execute(signal: dict, approval: "RiskApproval") -> dict:  # noqa: F821
             raise _last_err
 
         order_id = order.get("id", "")
+        info = order.get("info") if isinstance(order.get("info"), dict) else {}
+        status = str(
+            order.get("status")
+            or info.get("orderStatus")
+            or info.get("status")
+            or ""
+        ).strip().lower()
+        if status not in ("closed", "filled"):
+            return {
+                "success": False,
+                "error": f"ORDER_NOT_FILLED: status={status or 'missing'}",
+                "ticket": order_id,
+            }
+        filled_raw = order.get("filled")
+        if filled_raw is None:
+            filled_raw = info.get("cumExecQty") or info.get("filled")
+        try:
+            filled_amount = float(filled_raw)
+        except (TypeError, ValueError):
+            filled_amount = 0.0
+        if filled_amount <= 0:
+            return {
+                "success": False,
+                "error": "ORDER_NOT_FILLED: filled quantity missing or zero",
+                "ticket": order_id,
+            }
+        if filled_amount + 1e-12 < float(volume):
+            return {
+                "success": False,
+                "error": f"PARTIAL_FILL_UNSUPPORTED: filled={filled_amount} expected={volume}",
+                "ticket": order_id,
+                "volume": filled_amount,
+            }
         filled_price = float(order.get("average") or order.get("price") or price)
-        filled_amount = float(order.get("filled") or volume)
         _ref_for_slip = float(signal.get("price") or 0) or float(price)
         _sig_ref, _slip_bps = _entry_slippage_bps(
             direction, _ref_for_slip, filled_price

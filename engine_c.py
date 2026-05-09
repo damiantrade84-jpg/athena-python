@@ -1059,6 +1059,21 @@ def compute_consensus(
     if b_has and not a_has:
         # Engine B only — score it directly with conservative scaling.
         direction = b["direction"]
+        if b.get("sl") is None or b.get("tp") is None:
+            return {
+                "trade": False,
+                "verdict": "B_ONLY_LEVELS_MISSING",
+                "decision_state": "blocked",
+                "tier": "SKIP",
+                "sizing_override": 0.0,
+                "direction": direction,
+                "components": {
+                    "a_has_signal": False,
+                    "b_has_signal": True,
+                    "b_levels_present": False,
+                },
+                "diagnostics": ["engine_b_levels_missing"],
+            }
         b_only_mult = float(CONFIG.get("ENGINE_C_B_ONLY_MULT", 0.65))
         conviction = b["score_norm"] * b_only_mult
         tier, sizing = classify_conviction(conviction)

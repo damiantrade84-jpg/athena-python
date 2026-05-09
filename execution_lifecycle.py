@@ -19,6 +19,38 @@ log = logging.getLogger("sentinel")
 LIFECYCLE_VERSION = 1
 
 
+def _paper_soak_blocks_real_orders() -> bool:
+    try:
+        from config import CONFIG
+    except Exception:
+        return False
+    paper_soak = CONFIG.get("PAPER_SOAK")
+    if not isinstance(paper_soak, dict):
+        return False
+    if bool(paper_soak.get("ENABLED", False)):
+        return True
+    return paper_soak.get("REAL_ORDERS_ALLOWED") is False
+
+
+def _vision_blocks_execution(signal: dict[str, Any]) -> bool:
+    candidates = [
+        signal.get("vision_output"),
+        signal.get("structured"),
+    ]
+    for payload in candidates:
+        if not isinstance(payload, dict):
+            continue
+        structured = payload.get("structured") if isinstance(payload.get("structured"), dict) else {}
+        if payload.get("confirms_direction") is False:
+            return True
+        if structured.get("confirms_direction") is False:
+            return True
+    ai_arbitration = signal.get("ai_arbitration")
+    if isinstance(ai_arbitration, dict) and ai_arbitration.get("execution_allowed") is False:
+        return True
+    return False
+
+
 def run_managed_execution(
     venue: str,
     signal: dict[str, Any],
@@ -35,8 +67,14 @@ def run_managed_execution(
     pair = (signal.get("pair") or signal.get("symbol") or "").strip()
     phases: list[dict[str, Any]] = []
 
-    _vo = signal.get("vision_output") or signal.get("structured") or {}
-    if isinstance(_vo, dict) and _vo.get("confirms_direction") is False:
+    if _paper_soak_blocks_real_orders():
+        return {
+            "success": False,
+            "error": "PAPER_SOAK_BLOCKED_REAL_ORDER",
+            "error_tag": "paper_soak_blocked",
+        }
+
+    if _vision_blocks_execution(signal):
         log.warning(f"[VISION-VETO] Vetoing execution for {pair} due to conflicting direction.")
         try:
             import sqlite3
@@ -71,6 +109,17 @@ def run_managed_execution(
 
         pre = mt5_cancel_pending_athena_orders(pair)
         phases.append({"name": "pre_cleanup_pending", "result": pre})
+        if pre.get("error"):
+            return {
+                "success": False,
+                "error": f"PRE_CLEANUP_FAILED:{pre.get('detail') or pre}",
+                "lifecycle": {
+                    "version": LIFECYCLE_VERSION,
+                    "venue": v,
+                    "pair": pair,
+                    "phases": phases,
+                },
+            }
         if pre.get("cancelled"):
             log.info(
                 f"[LIFECYCLE] MT5 pre-cleanup removed {pre['cancelled']} stale pending(s) for {pair}"
@@ -82,7 +131,10 @@ def run_managed_execution(
         if exec_result.get("success"):
             rec = mt5_reconcile_after_open(exec_result, signal)
             phases.append({"name": "post_fill_reconcile", "result": rec})
-            if rec.get("allProtectionsPresent") is False:
+            if rec.get("error") or rec.get("allProtectionsPresent") is not True:
+                exec_result["success"] = False
+                exec_result["error"] = "MT5_PROTECTION_RECONCILE_FAILED"
+                exec_result["reconcile"] = rec
                 exec_result.setdefault("lifecycleWarnings", []).append(
                     "mt5_missing_sl_tp_after_fill"
                 )
@@ -105,6 +157,17 @@ def run_managed_execution(
     ccxt_sym = bybit_map_symbol(pair) or bybit_map_symbol(signal.get("symbol") or "")
     pre = bybit_cancel_stale_entry_orders(ccxt_sym)
     phases.append({"name": "pre_cleanup_stale_orders", "result": pre})
+    if pre.get("error"):
+        return {
+            "success": False,
+            "error": f"PRE_CLEANUP_FAILED:{pre.get('detail') or pre}",
+            "lifecycle": {
+                "version": LIFECYCLE_VERSION,
+                "venue": v,
+                "pair": pair,
+                "phases": phases,
+            },
+        }
     if pre.get("cancelled"):
         log.info(
             f"[LIFECYCLE] Bybit pre-cleanup removed {pre['cancelled']} stale order(s) for {ccxt_sym}"

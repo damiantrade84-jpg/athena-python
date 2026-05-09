@@ -109,7 +109,7 @@ def test_mt5_non_scalp_trailing_atr_execute_sends_no_broker_tp(monkeypatch):
 
     assert result["success"] is True
     assert sent_requests[0]["sl"] == signal["sl"]
-    assert sent_requests[0]["tp"] == 0
+    assert "tp" not in sent_requests[0]
     assert result["brokerTp"] == 0
 
 
@@ -197,6 +197,7 @@ def test_bybit_execute_uses_risk_approved_volume(monkeypatch):
             calls.append((symbol, side, amount, params))
             return {
                 "id": "order-1",
+                "status": "closed",
                 "average": 1005.0,
                 "filled": amount,
                 "fee": {"cost": 0.0},
@@ -241,6 +242,7 @@ def test_bybit_non_scalp_trailing_atr_execute_sends_no_take_profit(monkeypatch):
         def create_market_order(_symbol, _side, amount, params=None):
             return {
                 "id": "order-1",
+                "status": "closed",
                 "average": 1005.0,
                 "filled": amount,
                 "fee": {"cost": 0.0},
@@ -291,6 +293,7 @@ def test_bybit_engine_d_trailing_atr_execute_keeps_take_profit(monkeypatch):
         def create_market_order(_symbol, _side, amount, params=None):
             return {
                 "id": "order-1",
+                "status": "closed",
                 "average": 1005.0,
                 "filled": amount,
                 "fee": {"cost": 0.0},

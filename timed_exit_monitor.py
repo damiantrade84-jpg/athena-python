@@ -656,9 +656,6 @@ def _match_audit_row_for_position(position: dict, audit_rows: list[dict]) -> dic
         for row in audit_rows:
             if str(row.get("ticket", "")).strip() == pos_ticket and row.get("exit_time") is None:
                 return row
-        for row in audit_rows:
-            if str(row.get("ticket", "")).strip() == pos_ticket:
-                return row
 
     if not pos_pair or pos_entry <= 0:
         return None
@@ -667,6 +664,8 @@ def _match_audit_row_for_position(position: dict, audit_rows: list[dict]) -> dic
     candidates: list[tuple[float, dict]] = []
 
     for row in audit_rows:
+        if row.get("exit_time") is not None:
+            continue
         row_pair = str(row.get("pair") or "").upper()
         if row_pair != pos_pair:
             continue
@@ -690,10 +689,8 @@ def _match_audit_row_for_position(position: dict, audit_rows: list[dict]) -> dic
         if age_min > (7 * 24 * 60):
             continue
 
-        # Prefer still-open rows, then the closest entry, then the most recent row.
+        # Prefer the closest still-open row, then the most recent row.
         score = rel_entry_diff
-        if row.get("exit_time") is not None:
-            score += 0.25
         score += min(age_min, 24 * 60) / 100000.0
         candidates.append((score, row))
 

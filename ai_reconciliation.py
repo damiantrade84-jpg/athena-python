@@ -240,7 +240,12 @@ def _arbitrate_vision(vision: Any) -> dict[str, Any]:
     )
 
 
-def arbitrate_ai(verdicts: dict[str, Any] | None, *, require_trace_id: bool = True) -> dict[str, Any]:
+def arbitrate_ai(
+    verdicts: dict[str, Any] | None,
+    *,
+    require_trace_id: bool = True,
+    required_sources: tuple[str, ...] = (),
+) -> dict[str, Any]:
     """Return one deterministic AI execution decision from advisory AI verdicts.
 
     This function is pure: it reads only its inputs and performs no logging,
@@ -260,7 +265,19 @@ def arbitrate_ai(verdicts: dict[str, Any] | None, *, require_trace_id: bool = Tr
         "conflict_flags": [],
         "source_states": {},
     }
+    required_sources = tuple(s for s in required_sources if s in ("debate", "vision"))
     if verdicts is None:
+        if required_sources:
+            result.update(
+                {
+                    "decision": AI_DECISION_BLOCK,
+                    "execution_allowed": False,
+                    "ai_review_state": AI_STATE_REJECT,
+                    "reason": "AI_REQUIRED_SOURCES_MISSING",
+                    "blocking_sources": list(required_sources),
+                    "missing_sources": list(required_sources),
+                }
+            )
         return result
     if not isinstance(verdicts, dict):
         result.update(
@@ -289,6 +306,18 @@ def arbitrate_ai(verdicts: dict[str, Any] | None, *, require_trace_id: bool = Tr
 
     result["source_states"] = source_states
     has_verdict = bool(source_states)
+    missing_required = [s for s in required_sources if s not in source_states]
+    if missing_required:
+        result.update(
+            {
+                "decision": AI_DECISION_BLOCK,
+                "execution_allowed": False,
+                "ai_review_state": AI_STATE_REJECT,
+                "reason": "AI_REQUIRED_SOURCES_MISSING",
+                "blocking_sources": missing_required,
+            }
+        )
+        return result
     if require_trace_id and has_verdict and not trace_id:
         result.update(
             {

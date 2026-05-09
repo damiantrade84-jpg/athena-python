@@ -882,6 +882,7 @@ def mt5_cancel_pending_athena_orders(
                 )
     except Exception as e:
         log.warning(f"[MT5] pending order cleanup failed for {mt5_sym}: {e}")
+        return {"error": True, "detail": str(e), "cancelled": cancelled, "mt5_symbol": mt5_sym}
     return {"error": False, "cancelled": cancelled, "mt5_symbol": mt5_sym}
 
 
@@ -1215,6 +1216,7 @@ def mt5_execute(signal: dict, approval: "RiskApproval") -> dict:  # noqa: F821
 
         if result.retcode != mt5.TRADE_RETCODE_DONE:
             log.error(f"[MT5] Order rejected: retcode={result.retcode} comment={result.comment}")
+            rollback_results = []
             if results:
                 log.error(
                     f"[MT5] Multi-leg: earlier leg(s) filled but this leg failed — "
@@ -1230,16 +1232,34 @@ def mt5_execute(signal: dict, approval: "RiskApproval") -> dict:  # noqa: F821
                             order_ticket=int(rb.order),
                         )
                         _cr = mt5_close_position(_tk)
+                        rollback_results.append(
+                            {
+                                "order_ticket": int(rb.order),
+                                "position_ticket": _tk,
+                                "result": _cr,
+                                "success": bool(isinstance(_cr, dict) and _cr.get("success")),
+                            }
+                        )
                         log.warning(
                             f"[MT5] Rollback leg order_ticket={rb.order} position_ticket={_tk} -> {_cr}"
                         )
                     except Exception as _rb_e:
+                        rollback_results.append(
+                            {
+                                "order_ticket": int(getattr(rb, "order", 0) or 0),
+                                "success": False,
+                                "error": str(_rb_e),
+                            }
+                        )
                         log.error(f"[MT5] Rollback failed for partial leg: {_rb_e}")
+            rollback_complete = bool(results) and all(r.get("success") for r in rollback_results)
             return {
                 "success": False,
                 "error": f"ORDER_REJECTED: {result.comment}",
                 "retcode": result.retcode,
-                "partialLegsRolledBack": len(results),
+                "partialLegsRolledBack": sum(1 for r in rollback_results if r.get("success")),
+                "rollbackComplete": rollback_complete if results else None,
+                "rollbackResults": rollback_results,
             }
 
         log.info(f"[MT5] ORDER FILLED: ticket={result.order} | {direction} {result.volume} {mt5_symbol} @ {result.price}")
