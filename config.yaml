@@ -6,13 +6,13 @@
 
 # ── Paper/Demo Soak Mode ────────────────────────────────────────────────────────
 
-# Safe paper/demo mode that cannot place real orders.
-
-# All would-be executions must be logged as paper/demo decisions.
+# When ENABLED is true, managed execution never calls the broker (paper-only).
+# For Bybit demo / MT5 demo API orders, set ENABLED false and REAL_ORDERS_ALLOWED true,
+# and set env ATHENA_REAL_ORDERS_CONFIRM=I_UNDERSTAND_REAL_ORDER_RISK (see .env).
 
 PAPER_SOAK:
-  ENABLED: true
-  REAL_ORDERS_ALLOWED: false
+  ENABLED: false
+  REAL_ORDERS_ALLOWED: true
   LOG_ALL_SIGNALS: true
   LOG_BLOCKED_SIGNALS: true
   LOG_EXECUTION_DECISIONS: true
@@ -721,6 +721,8 @@ INDICATOR_CORRELATION_ENABLED: false
 
 
 EXECUTION_ENABLED: true       # Enable manual execution via dashboard
+
+EXECUTOR_MODE: demo            # paper | demo | live — demo aligns with Bybit demo keys
 
 AUTO_EXECUTE: false            # Manual click only (no auto-fire)
 
