@@ -4101,6 +4101,28 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
                 and cfg.get("REQUIRE_AGGTRADE_FOR_CRYPTO_STRICT", True)
             ):
                 if not data_fidelity.get("vp_uses_real_trade_buckets") or not data_fidelity.get("cvd_uses_real_trade_buckets"):
+                    if cfg.get("SKIP_CRYPTO_ON_AGGTRADE_UNAVAILABLE", True):
+                        # F3: live/BT parity — when real aggTrade buckets are unavailable
+                        # for VP or CVD, skip the pair entirely instead of emitting a
+                        # Not-executable card. Mirrors backtest_runner.py:5341-5347.
+                        # Strict gate semantics preserved (we are not letting candle-VP
+                        # signals through, we are skipping them).
+                        _skip_reason = "vp_fallback:aggtrade_unavailable"
+                        log.info(
+                            "[SCALP] %s skipped: %s (anchor=%s)",
+                            display,
+                            _skip_reason,
+                            vp_anchor_mode,
+                        )
+                        _record_stability_sample(display, asset_type, False, reason=_skip_reason)
+                        _skip_row = {"pair": display, "reason": _skip_reason}
+                        if trade_bucket_vp_fallback_reason:
+                            _skip_row["diagnostic_reason"] = trade_bucket_vp_fallback_reason
+                        skipped.append(_skip_row)
+                        _funnel["gate_result"] = "NO_SETUP"
+                        _funnel["fail_reasons"].append(_skip_reason)
+                        continue
+                    # Legacy behaviour (rollback): keep the candidate but mark non-executable.
                     _data_fail_reasons.append("aggtrade_required_for_crypto_strict")
 
             # Setup classification

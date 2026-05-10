@@ -1508,6 +1508,19 @@ MICROSTRUCTURE_FEEDS_ENABLED: true
 
 MICROSTRUCTURE_BYBIT_FEEDS_ENABLED: false
 
+# F1: One multiplexed Binance Futures micro WS for ALL crypto symbols (depth+trade+aggTrade)
+# instead of one socket per symbol. The per-symbol fan-out intermittently left individual
+# streams half-closed (no close frame) without tripping the socket-level recv timeout, so
+# BTCUSDT/ETHUSDT/XRPUSDT could go silent for >15 min while the global feed kept writing
+# other symbols. Set to false to roll back to the legacy per-symbol fan-out (BinanceWS).
+MICROSTRUCTURE_BINANCE_COMBINED_STREAM: true
+
+# Per-symbol liveness watchdog inside the multiplexed connection: when any subscribed
+# symbol has been silent for longer than this many seconds (and the connection has been
+# up at least that long, to avoid cold-start flapping), force a full reconnect. This
+# catches the half-closed-but-quiet stream case the socket-level recv timeout missed.
+MICROSTRUCTURE_BINANCE_STALE_SYMBOL_SEC: 120
+
 # Public market-data websockets only. Keep certificate verification enabled.
 
 # If a local proxy/CA issue blocks market data, fix the CA store or set
@@ -2206,6 +2219,11 @@ SCALP_ENGINE:
 
   TRADE_BUCKET_CVD_ENABLED: true  # Crypto: prefer Binance aggTrade price buckets for CVD when fresh
   REQUIRE_AGGTRADE_FOR_CRYPTO_STRICT: true
+  # F3: when REQUIRE_AGGTRADE_FOR_CRYPTO_STRICT trips because trade-bucket VP/CVD fell back to
+  # candle volume, skip the pair entirely (BT-parity) instead of emitting a Not-executable card.
+  # Strict gate semantics preserved — candle-VP signals still cannot pass execution. Set to
+  # false to revert to the legacy "Not executable" candidate-card behaviour for debugging.
+  SKIP_CRYPTO_ON_AGGTRADE_UNAVAILABLE: true
   REQUIRE_REAL_VOLUME_FOR_STOCKS: true
 
   # ── Volume Divergence Detection ───────────────────────────

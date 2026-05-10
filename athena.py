@@ -14258,7 +14258,7 @@ def ensure_runtime_services_started() -> None:
             import asyncio
 
             try:
-                from athena.datafeeds.binance_ws import BinanceWS
+                from athena.datafeeds.binance_ws import BinanceMicroMultiWS, BinanceWS
                 from athena.datafeeds.bybit_ws import BybitWS
             except ImportError as exc:
                 log.warning(f"[MICRO] Import failed: {exc}")
@@ -14287,43 +14287,59 @@ def ensure_runtime_services_started() -> None:
                         p.get("display") or "?",
                     )
 
+            def _apply_micro_cache_update(sym: str, metrics: dict) -> None:
+                """Shared micro-cache writer for Binance multiplex AND Bybit per-symbol callbacks.
+
+                Preserves the previous Binance-preferred / Bybit-fallback selection logic so
+                the multiplex switch is feed-shape neutral.
+                """
+                incoming_exchange = str(metrics.get("exchange", "")).lower()
+                now_ts = time.time()
+                existing = _micro_cache.get(sym, {})
+                existing_exchange = str(existing.get("_exchange", "")).lower()
+                existing_age = now_ts - float(existing.get("_updated_ts", 0) or 0)
+
+                # Prefer Binance for crypto microstructure because the candle/live-price
+                # path also uses Binance Futures. Fall back to Bybit only when the Binance
+                # slot is absent or stale.
+                use_update = False
+                if incoming_exchange == "binance":
+                    use_update = True
+                elif not existing:
+                    use_update = True
+                elif existing_exchange == "binance" and existing_age > 5.0:
+                    use_update = True
+                elif existing_exchange != "binance":
+                    use_update = True
+
+                if not use_update:
+                    return
+
+                _micro_cache[sym] = {
+                    k: metrics.get(k)
+                    for k in (
+                        "order_book_imbalance",
+                        "orderflow_delta",
+                        "liquidity_wall_detection",
+                        "liquidity_pressure",
+                    )
+                }
+                _micro_cache[sym]["_updated_ts"] = now_ts
+                _micro_cache[sym]["_exchange"] = incoming_exchange
+
             def _make_cb(sym):
+                """Per-symbol callback (Bybit fallback path; legacy per-symbol Binance path)."""
                 def _cb(metrics):
-                    incoming_exchange = str(metrics.get("exchange", "")).lower()
-                    now_ts = time.time()
-                    existing = _micro_cache.get(sym, {})
-                    existing_exchange = str(existing.get("_exchange", "")).lower()
-                    existing_age = now_ts - float(existing.get("_updated_ts", 0) or 0)
-
-                    # Prefer Binance for crypto microstructure because the candle/live-price
-                    # path also uses Binance Futures. Fall back to Bybit only when the Binance
-                    # slot is absent or stale.
-                    use_update = False
-                    if incoming_exchange == "binance":
-                        use_update = True
-                    elif not existing:
-                        use_update = True
-                    elif existing_exchange == "binance" and existing_age > 5.0:
-                        use_update = True
-                    elif existing_exchange != "binance":
-                        use_update = True
-
-                    if not use_update:
-                        return
-
-                    _micro_cache[sym] = {
-                        k: metrics.get(k)
-                        for k in (
-                            "order_book_imbalance",
-                            "orderflow_delta",
-                            "liquidity_wall_detection",
-                            "liquidity_pressure",
-                        )
-                    }
-                    _micro_cache[sym]["_updated_ts"] = now_ts
-                    _micro_cache[sym]["_exchange"] = incoming_exchange
+                    _apply_micro_cache_update(sym, metrics)
 
                 return _cb
+
+            def _multi_cb(metrics):
+                """Combined-stream callback: dispatch by metrics['symbol'] (uppercase)."""
+                sym = str(metrics.get("symbol") or "").upper()
+                if not sym:
+                    return
+                _apply_micro_cache_update(sym, metrics)
 
             def _run(client, cb):
                 loop = asyncio.new_event_loop()
@@ -14337,27 +14353,66 @@ def ensure_runtime_services_started() -> None:
                     loop.close()
 
             bybit_micro_enabled = bool(CONFIG.get("MICROSTRUCTURE_BYBIT_FEEDS_ENABLED", False))
+            use_combined = bool(CONFIG.get("MICROSTRUCTURE_BINANCE_COMBINED_STREAM", True))
+            stale_after = float(CONFIG.get("MICROSTRUCTURE_BINANCE_STALE_SYMBOL_SEC", 120.0))
 
-            for pair in micro_crypto_pairs:
-                sym = pair["symbol"]
-                cb = _make_cb(sym)
-                b = BinanceWS(sym.lower())
-                _ws_clients.append(b)
-                threading.Thread(
-                    target=_run, args=(b, cb), daemon=True, name=f"BinWS-{sym}"
-                ).start()
-                if bybit_micro_enabled:
+            if use_combined and micro_crypto_pairs:
+                # F1: One multiplexed Binance Futures connection for ALL micro symbols.
+                multi_syms = [
+                    str(p["symbol"]).replace("/", "").lower() for p in micro_crypto_pairs
+                ]
+                try:
+                    multi = BinanceMicroMultiWS(
+                        symbols=multi_syms,
+                        stale_symbol_seconds=stale_after,
+                    )
+                    _ws_clients.append(multi)
+                    threading.Thread(
+                        target=_run,
+                        args=(multi, _multi_cb),
+                        daemon=True,
+                        name="BinMicroMulti",
+                    ).start()
+                    log.info(
+                        "[MICRO] Combined-stream Binance feed started: %s symbols, stale_after=%.0fs",
+                        len(multi_syms),
+                        stale_after,
+                    )
+                except Exception as multi_exc:
+                    log.error(
+                        "[MICRO] BinanceMicroMultiWS failed to start (%s); falling back to per-symbol",
+                        multi_exc,
+                    )
+                    use_combined = False  # trip the legacy path below
+
+            if (not use_combined) and micro_crypto_pairs:
+                # Legacy per-symbol Binance path (rollback when combined-stream disabled).
+                for pair in micro_crypto_pairs:
+                    sym = pair["symbol"]
+                    cb = _make_cb(sym)
+                    b = BinanceWS(sym.lower())
+                    _ws_clients.append(b)
+                    threading.Thread(
+                        target=_run, args=(b, cb), daemon=True, name=f"BinWS-{sym}"
+                    ).start()
+
+            # Bybit fallback per-symbol path is independent of the Binance multiplex switch.
+            if bybit_micro_enabled:
+                for pair in micro_crypto_pairs:
+                    sym = pair["symbol"]
+                    cb = _make_cb(sym)
                     y = BybitWS(sym.upper())
                     _ws_clients.append(y)
                     threading.Thread(
                         target=_run, args=(y, cb), daemon=True, name=f"BbtWS-{sym}"
                     ).start()
+
             scope_note = ""
             if len(micro_crypto_pairs) != expected_n or malformed:
                 scope_note = f" enabled_binance_crypto_expected={expected_n}"
             log.info(
-                "[MICRO] Started feeds (all enabled Binance crypto): binance=%s bybit=%s pairs_total=%s%s symbols=%s",
-                len(micro_crypto_pairs),
+                "[MICRO] Started feeds: binance_path=%s bybit=%s pairs_total=%s%s symbols=%s",
+                "combined" if use_combined else "per_symbol_legacy",
                 len(micro_crypto_pairs) if bybit_micro_enabled else 0,
                 expected_n,
                 scope_note,

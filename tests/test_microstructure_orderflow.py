@@ -202,3 +202,145 @@ def _taker_ratio_from_ws(ws):
     from athena.microstructure.orderbook_metrics import orderflow_delta as _r
 
     return _r(ws.buy_taker_volume, ws.sell_taker_volume)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# F1: BinanceMicroMultiWS — multiplexed combined-stream client tests
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def test_binance_micro_multi_ws_url_includes_all_streams():
+    from athena.datafeeds.binance_ws import binance_futures_multi_micro_stream_url
+
+    url = binance_futures_multi_micro_stream_url(["btcusdt", "ethusdt"])
+    for sym in ("btcusdt", "ethusdt"):
+        assert f"{sym}@aggTrade" in url
+        assert f"{sym}@trade" in url
+        assert f"{sym}@depth20@100ms" in url
+    assert url.startswith("wss://fstream.binance.com/stream?streams=")
+
+
+def test_binance_micro_multi_ws_url_dedupes_and_normalises():
+    from athena.datafeeds.binance_ws import binance_futures_multi_micro_stream_url
+
+    url = binance_futures_multi_micro_stream_url(["BTC/USDT", "btcusdt", "ethusdt"])
+    # btcusdt appears once despite two inputs
+    assert url.count("btcusdt@aggTrade") == 1
+    assert url.count("ethusdt@aggTrade") == 1
+
+
+def test_binance_micro_multi_ws_dispatches_per_symbol_aggtrade(monkeypatch):
+    """Combined-stream envelope must route each @aggTrade payload to store_trade with the right symbol."""
+    import asyncio
+
+    from athena.datafeeds import binance_ws
+
+    stored: list[dict] = []
+    monkeypatch.setattr(binance_ws, "store_trade", lambda **kwargs: stored.append(kwargs))
+
+    multi = binance_ws.BinanceMicroMultiWS(symbols=["btcusdt", "ethusdt"])
+
+    async def _drive():
+        await multi._handle_message(
+            {
+                "stream": "btcusdt@aggTrade",
+                "data": {"p": "65000.0", "q": "0.1", "m": False, "T": 1710000000000},
+            }
+        )
+        await multi._handle_message(
+            {
+                "stream": "ethusdt@aggTrade",
+                "data": {"p": "3500.0", "q": "1.0", "m": True, "T": 1710000001000},
+            }
+        )
+
+    asyncio.run(_drive())
+
+    assert [r["symbol"] for r in stored] == ["BTCUSDT", "ETHUSDT"]
+    assert stored[0]["price"] == 65000.0
+    assert stored[1]["is_buyer_maker"] is True
+
+
+def test_binance_micro_multi_ws_per_symbol_state_isolation():
+    """A @trade for one symbol must not bleed accumulators into another."""
+    import asyncio
+
+    from athena.datafeeds.binance_ws import BinanceMicroMultiWS
+
+    multi = BinanceMicroMultiWS(symbols=["btcusdt", "ethusdt"])
+
+    async def _drive():
+        await multi._handle_message(
+            {
+                "stream": "btcusdt@trade",
+                "data": {"p": "65000.0", "q": "2.0", "m": False, "T": 1710000000000},
+            }
+        )
+
+    asyncio.run(_drive())
+
+    btc = multi._state["BTCUSDT"]
+    eth = multi._state["ETHUSDT"]
+    assert btc.buy_taker_volume == 2.0
+    assert btc.sell_taker_volume == 0.0
+    assert eth.buy_taker_volume == 0.0
+    assert eth.sell_taker_volume == 0.0
+    assert btc.last_msg_ts > 0
+    assert eth.last_msg_ts == 0.0
+
+
+def test_binance_micro_multi_ws_stale_symbol_watchdog_detects_silent_stream():
+    """If any one symbol has been silent past stale_symbol_seconds, watchdog must list it."""
+    import time as _time
+
+    from athena.datafeeds.binance_ws import BinanceMicroMultiWS
+
+    multi = BinanceMicroMultiWS(
+        symbols=["btcusdt", "ethusdt"], stale_symbol_seconds=60.0
+    )
+    fake_now = _time.time()
+    # Simulate a connection that has been up for 5 minutes.
+    multi._connected_at = fake_now - 300
+    # ETH heartbeating recently; BTC silent for >60s.
+    multi._state["BTCUSDT"].last_msg_ts = fake_now - 120
+    multi._state["ETHUSDT"].last_msg_ts = fake_now - 5
+
+    stale = multi._check_stale_symbols(now=fake_now)
+    assert stale == ["BTCUSDT"]
+
+
+def test_binance_micro_multi_ws_stale_watchdog_silent_during_cold_start():
+    """Watchdog must not fire while the connection has been up less than the stale window."""
+    import time as _time
+
+    from athena.datafeeds.binance_ws import BinanceMicroMultiWS
+
+    multi = BinanceMicroMultiWS(
+        symbols=["btcusdt"], stale_symbol_seconds=120.0
+    )
+    fake_now = _time.time()
+    # Connection just came up; even if last_msg_ts looks old, suppress until cold-start window passes.
+    multi._connected_at = fake_now - 30
+    multi._state["BTCUSDT"].last_msg_ts = fake_now - 200
+
+    assert multi._check_stale_symbols(now=fake_now) == []
+
+
+def test_binance_micro_multi_ws_stream_cap_guard():
+    """Constructor must refuse symbol lists that would exceed the per-connection stream cap."""
+    import pytest
+
+    from athena.datafeeds.binance_ws import BinanceMicroMultiWS
+
+    too_many = [f"sym{i}usdt" for i in range(BinanceMicroMultiWS._MAX_STREAMS // 3 + 1)]
+    with pytest.raises(ValueError):
+        BinanceMicroMultiWS(symbols=too_many)
+
+
+def test_binance_micro_multi_ws_rejects_empty_symbols():
+    import pytest
+
+    from athena.datafeeds.binance_ws import BinanceMicroMultiWS
+
+    with pytest.raises(ValueError):
+        BinanceMicroMultiWS(symbols=[])

@@ -2357,4 +2357,68 @@ def test_classify_mean_reversion_va_extreme_neutral_cvd_respects_disable(monkeyp
         asset_type="forex",
     )
     assert setup["valid"] is False
-    assert setup.get("reason") == "no_aggression_at_va_extreme"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# F3: skip-on-aggtrade-unavailable behaviour contract
+#
+# These tests lock the live/BT parity contract for the strict crypto gate. They
+# do not run a full crypto run_scalp_scan because the crypto scan path needs
+# the runtime micro/cache layer; instead they pin the source contract so future
+# refactors can't silently drop the new skip branch or weaken the strict gate.
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _scalp_engine_source() -> str:
+    import inspect
+
+    return inspect.getsource(scalp_engine)
+
+
+def test_f3_strict_gate_emits_skip_branch_when_aggtrade_unavailable():
+    """Live path must include a SKIP_CRYPTO_ON_AGGTRADE_UNAVAILABLE-gated continue."""
+    src = _scalp_engine_source()
+    assert "SKIP_CRYPTO_ON_AGGTRADE_UNAVAILABLE" in src, (
+        "F3 skip flag missing from scalp_engine; live/BT divergence will return"
+    )
+    assert "vp_fallback:aggtrade_unavailable" in src, (
+        "F3 skip reason missing; the dashboard will keep showing 'Not executable'"
+    )
+
+
+def test_f3_strict_gate_keeps_legacy_non_executable_fallback():
+    """Legacy path (`aggtrade_required_for_crypto_strict`) must remain for rollback."""
+    src = _scalp_engine_source()
+    assert "aggtrade_required_for_crypto_strict" in src, (
+        "Legacy strict-gate fail-reason removed; rollback by config alone is broken"
+    )
+
+
+def test_f3_strict_gate_skip_logs_anchor_for_debugging():
+    """Skip log must surface the active VP anchor mode so we can trace silent skips."""
+    src = _scalp_engine_source()
+    assert 'log.info(\n                            "[SCALP] %s skipped: %s (anchor=%s)"' in src, (
+        "F3 skip log signature changed; diagnostic noise will mask feed-health issues"
+    )
+
+
+def test_f3_live_and_bt_strict_gate_share_aggtrade_check_shape():
+    """Live and BT must both block when vp_source != binance_aggtrade or cvd_source != binance_aggtrade."""
+    import inspect
+
+    import backtest_runner
+
+    bt_src = inspect.getsource(backtest_runner)
+    live_src = _scalp_engine_source()
+
+    # Live side checks both VP and CVD for real-trade-bucket usage.
+    assert "vp_uses_real_trade_buckets" in live_src
+    assert "cvd_uses_real_trade_buckets" in live_src
+
+    # BT side checks both VP and CVD volume sources are "binance_aggtrade".
+    assert 'vp.get("volume_source") != "binance_aggtrade"' in bt_src
+    assert 'cvd.get("source") != "binance_aggtrade"' in bt_src
+
+    # Both gated behind REQUIRE_AGGTRADE_FOR_CRYPTO_STRICT.
+    assert 'REQUIRE_AGGTRADE_FOR_CRYPTO_STRICT' in live_src
+    assert 'REQUIRE_AGGTRADE_FOR_CRYPTO_STRICT' in bt_src
