@@ -442,6 +442,59 @@ def _confidence_filtered_indicators(
 
 # ── Factor 2: Momentum quality (RSI + MACD confirmation) ─────────────────────
 
+def _stochastic_rsi_modifier(
+    h4_candles: list,
+    direction: str,
+    asset_type: str,
+) -> float:
+    """Stochastic RSI momentum modifier (experimental, config-gated).
+
+    Returns a small adjustment in [-0.1, +0.1] based on Stochastic RSI signals.
+    StochRSI > 80 = overbought (penalise LONGs, confirm SHORTs)
+    StochRSI < 20 = oversold (confirm LONGs, penalise SHORTs)
+    """
+    cfg = CONFIG.get("ENGINE_A_STOCHASTIC_RSI", {}) or {}
+    if not cfg.get("ENABLED", False):
+        return 0.0
+
+    rsi_period = int(cfg.get("RSI_PERIOD", 14))
+    stoch_period = int(cfg.get("STOCH_PERIOD", 14))
+    k_smooth = int(cfg.get("K_SMOOTH", 3))
+    d_smooth = int(cfg.get("D_SMOOTH", 3))
+    overbought = float(cfg.get("OVERBOUGHT", 80))
+    oversold = float(cfg.get("OVERSOLD", 20))
+
+    if not h4_candles or len(h4_candles) < rsi_period + stoch_period + k_smooth + d_smooth:
+        return 0.0
+
+    try:
+        from indicators import calc_stochastic_rsi
+        stoch_rsi = calc_stochastic_rsi(h4_candles, rsi_period, stoch_period, k_smooth, d_smooth)
+        k_values = stoch_rsi.get("k", [])
+        if not k_values or k_values[-1] is None:
+            return 0.0
+
+        k = float(k_values[-1])
+        is_long = direction == "LONG"
+
+        # StochRSI overbought/oversold signals
+        if is_long:
+            if k < oversold:
+                return 0.1  # Oversold = good for LONGs
+            elif k > overbought:
+                return -0.1  # Overbought = bad for LONGs
+        else:
+            if k > overbought:
+                return 0.1  # Overbought = good for SHORTs
+            elif k < oversold:
+                return -0.1  # Oversold = bad for SHORTs
+
+        return 0.0
+    except Exception as exc:
+        log.debug("[EA2] Stochastic RSI modifier error: %s", exc)
+        return 0.0
+
+
 def _momentum_quality(
     h4_snap: dict, direction: str, asset_type: str,
     score_group: str | None = None,
@@ -1177,7 +1230,86 @@ def _asset_addon(
     return _ADDON_NEUTRAL, "none", "unsupported"
 
 
-# ── Factor 4: Mean Reversion (config-gated, additive) ───────────────────────
+# ── Factor 4: VWAP Direction Quality Filter (config-gated, multiplicative) ──
+
+def _vwap_direction_filter(
+    h4_candles: list,
+    direction: str,
+    asset_type: str,
+) -> tuple[float, dict]:
+    """VWAP direction quality filter: small multiplier based on price vs VWAP.
+
+    Returns (multiplier, detail) where multiplier is in [MAX_PENALTY, MAX_BOOST].
+    Price above VWAP favours LONGs; price below favours SHORTs.
+    Disabled by default — gate via config.
+
+    Uses session-anchored VWAP with configurable lookback period.
+    """
+    cfg = CONFIG.get("ENGINE_A_VWAP_FILTER", {}) or {}
+    if not cfg.get("ENABLED", False):
+        return 1.0, {"enabled": False}
+
+    max_boost = float(cfg.get("MAX_BOOST", 0.03))
+    max_penalty = float(cfg.get("MAX_PENALTY", -0.03))
+    lookback = int(cfg.get("CANDLE_LOOKBACK", 96))
+
+    if not h4_candles or len(h4_candles) < lookback:
+        return 1.0, {"enabled": True, "applied": False, "reason": "insufficient_candles"}
+
+    # Use last N candles for VWAP calculation
+    vwap_candles = h4_candles[-lookback:]
+    current_price = float(h4_candles[-1].get("close", 0))
+    if current_price <= 0:
+        return 1.0, {"enabled": True, "applied": False, "reason": "invalid_price"}
+
+    try:
+        from indicators import calc_vwap
+        vwap_result = calc_vwap(vwap_candles, anchor_index=0)
+        vwap_values = vwap_result.get("vwap", [])
+        if not vwap_values or vwap_values[-1] is None:
+            return 1.0, {"enabled": True, "applied": False, "reason": "vwap_calc_failed"}
+
+        vwap = float(vwap_values[-1])
+        if vwap <= 0:
+            return 1.0, {"enabled": True, "applied": False, "reason": "invalid_vwap"}
+
+        # Calculate distance from VWAP as percentage
+        vwap_distance_pct = (current_price - vwap) / vwap
+
+        # Determine multiplier based on direction alignment
+        # LONG: price above VWAP = boost, below = penalty
+        # SHORT: price below VWAP = boost, above = penalty
+        is_long = direction == "LONG"
+        if is_long:
+            if vwap_distance_pct > 0:
+                # Price above VWAP favours LONG
+                # Scale boost by distance (capped at MAX_BOOST)
+                multiplier = 1.0 + min(max_boost, vwap_distance_pct * 10.0)
+            else:
+                # Price below VWAP penalises LONG
+                multiplier = 1.0 + max(max_penalty, vwap_distance_pct * 10.0)
+        else:
+            if vwap_distance_pct < 0:
+                # Price below VWAP favours SHORT
+                multiplier = 1.0 + min(max_boost, abs(vwap_distance_pct) * 10.0)
+            else:
+                # Price above VWAP penalises SHORT
+                multiplier = 1.0 + max(max_penalty, -abs(vwap_distance_pct) * 10.0)
+
+        return multiplier, {
+            "enabled": True,
+            "applied": True,
+            "vwap": round(vwap, 6),
+            "current_price": round(current_price, 6),
+            "vwap_distance_pct": round(vwap_distance_pct, 6),
+            "multiplier": round(multiplier, 4),
+        }
+    except Exception as exc:
+        log.debug("[EA2] VWAP filter error: %s", exc)
+        return 1.0, {"enabled": True, "applied": False, "reason": "error"}
+
+
+# ── Factor 5: Mean Reversion (config-gated, additive) ───────────────────────
 
 def _mean_reversion_factor(
     h4_snap: dict,
@@ -1454,6 +1586,12 @@ def compute_factor_scores(
     # ── FACTOR 2: Momentum quality ────────────────────────────────────────────
     mom_quality = _momentum_quality(h4_snap, direction, asset_type, score_group=score_group)
 
+    # Apply Stochastic RSI modifier (experimental, config-gated)
+    stoch_rsi_adj = _stochastic_rsi_modifier(h4_candles, direction, asset_type)
+    mom_quality = max(0.0, min(1.0, mom_quality + stoch_rsi_adj))
+    if stoch_rsi_adj != 0.0:
+        feed_status["stoch_rsi"] = f"{stoch_rsi_adj:.2f}"
+
     # ── ADDON: Asset-specific secondary factor ────────────────────────────────
     addon_val, addon_type, addon_status = _asset_addon(
         pair, direction, funding_rate, bar_time, oi_context=oi_context
@@ -1509,7 +1647,14 @@ def compute_factor_scores(
         )
     addon_val = max(_addon_lo, min(_addon_hi, addon_val))
 
-    # ── FACTOR 4: Mean Reversion (config-gated) ─────────────────────────────
+    # ── FACTOR 4: VWAP Direction Quality Filter (config-gated) ───────────────
+    vwap_mult, vwap_detail = _vwap_direction_filter(
+        h4_candles, direction, asset_type
+    )
+    if vwap_detail.get("enabled"):
+        feed_status["vwap_filter"] = f"{vwap_mult:.2f}"
+
+    # ── FACTOR 5: Mean Reversion (config-gated) ─────────────────────────────
     mean_rev_adj, mean_rev_detail = _mean_reversion_factor(
         h4_snap, h4_candles, direction, asset_type
     )
@@ -1629,6 +1774,7 @@ def compute_factor_scores(
         * session_mult
         * di_align_mult
         * dir_ramp_mult
+        * vwap_mult
     )
 
     # FIX 3: Recalibrate Cost/Funding Penalty Sensitivity

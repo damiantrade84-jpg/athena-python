@@ -556,6 +556,92 @@ def calc_stochastic(candles: list, kp: int, ks: int, ds: int) -> dict:
     return {"k": kL, "d": dL}
 
 
+def calc_stochastic_rsi(candles: list, rsi_period: int = 14, stoch_period: int = 14,
+                       k_smooth: int = 3, d_smooth: int = 3) -> dict:
+    """Stochastic RSI: applies Stochastic formula to RSI values.
+
+    Returns dict with "k" (fast %K) and "d" (fast %D) arrays.
+    Both are bounded 0-100. Values >80 indicate overbought, <20 oversold.
+
+    Args:
+        candles: list of dicts with "close" key
+        rsi_period: period for RSI calculation (default 14)
+        stoch_period: period for Stochastic of RSI (default 14)
+        k_smooth: smoothing period for %K (default 3)
+        d_smooth: smoothing period for %D (default 3)
+    """
+    if not candles or len(candles) < rsi_period + stoch_period:
+        return {"k": [None] * len(candles), "d": [None] * len(candles)}
+
+    # First calculate RSI
+    rsi_values = []
+    for i in range(len(candles)):
+        if i < rsi_period - 1:
+            rsi_values.append(None)
+        else:
+            window = [float(c["close"]) for c in candles[i - rsi_period + 1:i + 1]
+                     if c.get("close") is not None]
+            if len(window) < rsi_period:
+                rsi_values.append(None)
+                continue
+
+            # Simple RSI calculation
+            gains = []
+            losses = []
+            for j in range(1, len(window)):
+                change = window[j] - window[j - 1]
+                if change > 0:
+                    gains.append(change)
+                    losses.append(0)
+                else:
+                    gains.append(0)
+                    losses.append(abs(change))
+
+            avg_gain = sum(gains) / len(gains) if gains else 0
+            avg_loss = sum(losses) / len(losses) if losses else 0
+
+            if avg_loss == 0:
+                rsi_values.append(100)
+            else:
+                rs = avg_gain / avg_loss
+                rsi = 100 - (100 / (1 + rs))
+                rsi_values.append(rsi)
+
+    # Now apply Stochastic formula to RSI values
+    n = len(rsi_values)
+    rawK = [None] * n
+
+    for i in range(stoch_period - 1, n):
+        rsi_window = rsi_values[i - stoch_period + 1:i + 1]
+        valid_rsi = [v for v in rsi_window if v is not None]
+
+        if len(valid_rsi) < stoch_period:
+            rawK[i] = 50
+            continue
+
+        hh = max(valid_rsi)
+        ll = min(valid_rsi)
+
+        if hh == ll:
+            rawK[i] = 50
+        else:
+            rawK[i] = ((rsi_values[i] - ll) / (hh - ll)) * 100
+
+    # Smooth %K to produce fast %K
+    valid_start = stoch_period - 1
+    rawK_valid = rawK[valid_start:]
+    kL_sliced = calc_sma(rawK_valid, k_smooth)
+    kL = [None] * valid_start + kL_sliced
+
+    # Smooth %K to produce %D
+    d_valid_start = valid_start + k_smooth - 1
+    kL_valid = kL[d_valid_start:]
+    dL_sliced = calc_sma(kL_valid, d_smooth)
+    dL = [None] * d_valid_start + dL_sliced
+
+    return {"k": kL, "d": dL}
+
+
 def calc_aroon(candles: list, period: int = 14) -> dict:
     """Aroon Up/Down and Oscillator. TA-Lib standard, period=14."""
 

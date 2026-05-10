@@ -128,7 +128,7 @@ BINANCE_KLINE_WS_INTERVALS:
 
 ADX_TREND_MIN_CLASS:
 
-  crypto: 15
+  crypto: 18    # raised from 15 (2026-05-10): linear ramp 10→18, full credit at ADX≥18
 
   forex: 20    # ADX 15-20 gets 0.65× soft penalty in factor_scoring; 20 allows developing trends through
 
@@ -154,9 +154,19 @@ ADX_MISSING_BOTH_ABORT: true
 
 # Funding rate addon: baseline (0.01% per 8h) and noise band half-width.
 # Narrowed from 0.0002 to 0.0001 so typical Binance/Bybit funding deviations
-# are no longer silently absorbed inside the neutral zone.
+# are treated as signal rather than noise.
 FACTOR_FUNDING_BASELINE: 0.0001
 FACTOR_FUNDING_NOISE_BAND: 0.0001
+
+# ── Multi-Exchange Funding Composite (Binance + Bybit) ───────────────────────
+# When enabled, fetches funding rates from both Binance and Bybit and composites
+# them using a weighted average. This provides a more robust market-wide funding
+# signal by reducing single-exchange anomalies. Disabled by default — uses
+# Bybit-only with Binance fallback when disabled.
+ENGINE_A_MULTI_EXCHANGE_FUNDING:
+  ENABLED: false
+  BINANCE_WEIGHT: 0.5  # Weight for Binance rate in composite
+  BYBIT_WEIGHT: 0.5    # Weight for Bybit rate in composite
 
 FACTOR_CONVICTION_FLOOR: 0.20 # Stage 2.1: lowered from 0.60 to allow more signals through
 
@@ -194,6 +204,7 @@ VOLATILITY_SCALER_BANDS:
   # Score-group overrides (beat asset_type when present) — aligns scaler with RSI routing
   precious_trackers: { low: 0.003, high: 0.015 }
   energy_oil:        { low: 0.003, high: 0.015 }
+  crypto_meme:       { low: 0.015, high: 0.060 }    # Meme coins: wider bands due to extreme volatility
 
 ENGINE_A_RESEARCH_LAB_FACTORS:
   ENABLED: true
@@ -227,6 +238,33 @@ ENGINE_A_MEAN_REVERSION:
   BB_WEIGHT: 0.40
   RSI_WEIGHT: 0.35
   Z_WEIGHT: 0.25
+
+
+# ── Engine A VWAP Direction Quality Filter ──────────────────────────────────
+# Adds a small multiplier (0.95–1.05) based on whether price is on the
+# institutionally-favoured side of session VWAP. Price above VWAP favours
+# longs; price below favours shorts. Disabled by default — enable after
+# backtest validation.
+ENGINE_A_VWAP_FILTER:
+  ENABLED: false
+  MAX_BOOST: 0.03     # max score boost when price is on the right side of VWAP
+  MAX_PENALTY: -0.03  # max score penalty when price is on the wrong side
+  CANDLE_LOOKBACK: 96 # H4 bars for session VWAP (96 × 4h = 16 days)
+
+
+# ── Engine A Stochastic RSI (experimental, config-gated) ───────────────────
+# Adds Stochastic RSI as an additional momentum quality filter. Stochastic RSI
+# applies the Stochastic oscillator formula to RSI values, providing more
+# sensitive overbought/oversold signals. Disabled by default — enable after
+# backtest validation.
+ENGINE_A_STOCHASTIC_RSI:
+  ENABLED: false
+  RSI_PERIOD: 14      # RSI calculation period
+  STOCH_PERIOD: 14   # Stochastic period applied to RSI
+  K_SMOOTH: 3         # %K smoothing period
+  D_SMOOTH: 3         # %D smoothing period
+  OVERBOUGHT: 80      # Overbought threshold
+  OVERSOLD: 20        # Oversold threshold
 
 
 
@@ -539,24 +577,18 @@ ENGINE_A_BLOCKED_TREND_STATES:
   - "DEVELOPING"
 
 
+# ── Engine A Regime-Dependent Dynamic Thresholds ────────────────────────────
+# When enabled, adjusts the score threshold based on market regime to match
+# research-backed best practices. TRENDING regimes are easier to pass (lower
+# threshold), while RANGING/HIGH_VOLATILITY are harder (higher threshold).
+# Disabled by default — enable after backtest validation.
+ENGINE_A_REGIME_DYNAMIC_THRESHOLDS:
+  ENABLED: false
+  TRENDING_MULTIPLIER: 0.90   # 10% easier in trending markets
+  RANGING_MULTIPLIER: 1.10    # 10% harder in ranging markets
+  HIGH_VOLATILITY_MULTIPLIER: 1.15  # 15% harder in chaotic markets
 
-# Legacy/admin metadata only. Engine A live/backtest gates use scoring.py's
-# resolver: PAIR_PROFILES.*.min_confluence, then ENGINE_A_PAIR_THRESHOLDS /
-# ENGINE_A_SCORE_GROUP_THRESHOLDS, then the 3-tier fallback. They do not read this map.
-# AUTO_TRADE_MIN_SCORE is a separate auto-trader candidate floor and may be
-# higher than the scan/discovery tier.
 
-MIN_CONFLUENCE_CLASS:
-
-  crypto:    2.4
-
-  forex:     2.1
-
-  commodity: 1.8
-
-  stock:     1.8
-
-  index:     1.5
 
 ENGINE_A_PAIR_THRESHOLDS: {}
 
@@ -571,6 +603,8 @@ ENGINE_A_SCORE_GROUP_THRESHOLDS:
   crypto_alt_majors: 2.0
 
   crypto_doge: 2.0
+
+  crypto_meme: 2.2  # Meme coins (PEPE, SHIB, etc.) - higher threshold due to extreme volatility
 
   crypto_other: 2.0
 
@@ -748,13 +782,13 @@ AUTO_TRADE_ENABLED: false          # Start auto-trader on server boot
 
 AUTO_TRADE_MIN_SCORE:
 
-  crypto:    2.4    # align with MIN_CONFLUENCE_CLASS.crypto
+  crypto:    2.4
 
-  forex:     2.1    # align with MIN_CONFLUENCE_CLASS.forex
+  forex:     2.1
 
-  commodity: 1.8    # align with MIN_CONFLUENCE_CLASS.commodity
+  commodity: 1.8
 
-  stock:     1.8    # align with MIN_CONFLUENCE_CLASS.stock
+  stock:     1.8
 
   index:     1.8    # scan tier remains 1.5; auto score floor adds confirmation gap
 

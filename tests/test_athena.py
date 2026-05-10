@@ -182,7 +182,6 @@ class TestConfig:
             "RANGING",
             "ATR_CLASS",
             "RSI_BOUNDS",
-            "MIN_CONFLUENCE_CLASS",
         ):
             present = set(CONFIG[key].keys())
             assert classes.issubset(present), (
@@ -194,8 +193,10 @@ class TestConfig:
         validate_config(CONFIG)
 
     def test_forex_fallbacks_match_current_repo_contract(self):
-        # Engine A v2 unified 0-3.0 scale; forex floor is 2.1 (70% of max)
-        assert CONFIG["MIN_CONFLUENCE_CLASS"]["forex"] == 2.1
+        # Engine A v2 unified 0-3.0 scale; forex default threshold is 1.5 (3-tier stable)
+        from scoring import get_score_threshold
+        pair = {"display": "EUR/USD", "symbol": "EURUSD=X", "type": "forex"}
+        assert get_score_threshold(pair) == 1.5
         assert CONFIG["AUTO_TRADE_MIN_SCORE"]["forex"] == 2.1
 
 

@@ -213,8 +213,7 @@ def get_pair_level_atr_class(pair: dict) -> str:
 #   VOLATILE (2.0) — crypto class, nat_gas, crypto_doge: high baseline noise.
 #   EXOTIC   (1.7) — forex_exotics, softs: thin liquidity / unaudited edge.
 #   STABLE   (1.5) — everything else.
-# CONFIG["MIN_CONFLUENCE_CLASS"] is legacy/admin metadata; this resolver does
-# not read it. Pair profile min_confluence remains the only runtime override.
+# Pair profile min_confluence is the only runtime override.
 _TIER_VOLATILE = 2.0
 _TIER_EXOTIC = 1.7
 _TIER_STABLE = 1.5
@@ -271,26 +270,47 @@ def _get_threshold_tier(pair: dict) -> float:
     return _TIER_STABLE
 
 
-def get_score_threshold(pair: dict, is_backtest: bool = False) -> float:
+def get_score_threshold(pair: dict, is_backtest: bool = False, regime: str | None = None) -> float:
     """Resolve score threshold.
 
     Replaces the old 6-class + BT_MIN_GROUP + BACKTEST_USE_BT_MIN_THRESHOLDS
     hierarchy with profile override, pair/group config, then 3-tier fallback.
     Backtest and live use same thresholds.
-    MIN_CONFLUENCE_CLASS is intentionally not read here.
+
+    When ENGINE_A_REGIME_DYNAMIC_THRESHOLDS.ENABLED is true, applies regime-based
+    multipliers to the resolved threshold:
+      - TRENDING: 10% easier (0.90 multiplier)
+      - RANGING: 10% harder (1.10 multiplier)
+      - HIGH_VOLATILITY: 15% harder (1.15 multiplier)
     """
     profile = get_pair_profile(pair)
 
     # Pair profile override (highest priority)
     if profile.get("min_confluence") is not None:
-        return float(profile.get("min_confluence"))
+        base_threshold = float(profile.get("min_confluence"))
+    else:
+        configured = _configured_score_threshold(pair)
+        if configured is not None:
+            base_threshold = configured
+        else:
+            # Fallback 3-tier system for older configs.
+            base_threshold = _get_threshold_tier(pair)
 
-    configured = _configured_score_threshold(pair)
-    if configured is not None:
-        return configured
+    # Apply regime-dependent dynamic thresholds if enabled
+    dynamic_cfg = CONFIG.get("ENGINE_A_REGIME_DYNAMIC_THRESHOLDS") or {}
+    if dynamic_cfg.get("ENABLED", False) and regime:
+        trending_mult = float(dynamic_cfg.get("TRENDING_MULTIPLIER", 0.90))
+        ranging_mult = float(dynamic_cfg.get("RANGING_MULTIPLIER", 1.10))
+        high_vol_mult = float(dynamic_cfg.get("HIGH_VOLATILITY_MULTIPLIER", 1.15))
 
-    # Fallback 3-tier system for older configs.
-    return _get_threshold_tier(pair)
+        if regime == "TRENDING":
+            base_threshold *= trending_mult
+        elif regime == "RANGING":
+            base_threshold *= ranging_mult
+        elif regime == "HIGH_VOLATILITY":
+            base_threshold *= high_vol_mult
+
+    return base_threshold
 
 
 def get_min_confluence_threshold(pair: dict) -> float:

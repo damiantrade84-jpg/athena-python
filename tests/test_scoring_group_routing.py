@@ -152,16 +152,15 @@ def test_etf_level_atr_class_is_separate_from_stock_identity(monkeypatch):
     assert get_pair_level_atr_class({"display": "AAPL", "symbol": "AAPL.US", "type": "stock"}) == "stock"
 
 
-def test_min_confluence_class_is_not_live_threshold_input():
-    original = CONFIG.get("MIN_CONFLUENCE_CLASS")
+def test_score_group_thresholds_is_active_config():
+    original = CONFIG.get("ENGINE_A_SCORE_GROUP_THRESHOLDS")
     try:
-        CONFIG["MIN_CONFLUENCE_CLASS"] = {"forex": 2.95}
-        # Stable-tier forex sanity-check that legacy class config is ignored.
+        CONFIG["ENGINE_A_SCORE_GROUP_THRESHOLDS"] = {"forex": 2.95, "default": 1.5}
         pair = {"display": "EUR/USD", "symbol": "EURUSD=X", "type": "forex"}
-        assert get_min_confluence_threshold(pair) == 1.5
-        assert get_backtest_min_score_threshold(pair) == 1.5
+        assert get_min_confluence_threshold(pair) == 2.95
+        assert get_backtest_min_score_threshold(pair) == 2.95
     finally:
-        CONFIG["MIN_CONFLUENCE_CLASS"] = original
+        CONFIG["ENGINE_A_SCORE_GROUP_THRESHOLDS"] = original
 
 
 def test_pair_profile_can_override_score_group_and_threshold():
