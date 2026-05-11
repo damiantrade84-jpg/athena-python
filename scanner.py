@@ -325,11 +325,12 @@ def annotate_signal_for_scan(
 
     signal["scanDiagnostics"] = diagnostics
 
+    warn_list = signal.setdefault("warnings", [])
     for reason in signal["eventRisk"].get("reasons", []):
         warn = f"EVENT RISK: {reason}"
 
-        if warn not in signal["warnings"]:
-            signal["warnings"].append(warn)
+        if warn not in warn_list:
+            warn_list.append(warn)
 
     return signal
 

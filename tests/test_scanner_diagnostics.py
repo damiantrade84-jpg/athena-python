@@ -67,3 +67,26 @@ def test_annotate_signal_for_scan_skips_forex_zero_diagnostics_for_nonzero_score
 
     assert "low_confluence" in codes
     assert "forex_hurst_veto_trend" not in codes
+
+
+def test_annotate_signal_for_scan_handles_missing_warnings_key_with_event_reasons():
+    """Upstream signals may omit ``warnings``; event-risk augmentation must not KeyError."""
+    signal = {
+        "confluenceScore": 1.0,
+        "trendState": "TRENDING",
+    }
+    pair = {"display": "AAPL", "symbol": "AAPL.US", "type": "stock", "enabled": True}
+    earnings_ctx = {"AAPL.US": {"daysTo": 2}}
+
+    out = annotate_signal_for_scan(
+        signal,
+        pair,
+        threshold=0.5,
+        ds_ctx={},
+        earnings_ctx=earnings_ctx,
+        closed_exchanges=set(),
+        news_ctx={},
+    )
+
+    assert isinstance(out.get("warnings"), list)
+    assert any("EVENT RISK:" in str(w) and "Earnings" in str(w) for w in out["warnings"])

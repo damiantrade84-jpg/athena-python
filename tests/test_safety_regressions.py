@@ -148,6 +148,7 @@ def test_bybit_execute_rejects_missing_or_zero_fill(monkeypatch):
 
     monkeypatch.setattr(bybit_executor, "_get_exchange", lambda: _Exchange())
     monkeypatch.setattr(bybit_executor, "_ensure_leverage", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(bybit_executor, "_set_trading_stop", lambda *_a, **_k: None)
     monkeypatch.setattr(bybit_executor, "bybit_map_symbol", lambda _pair: "BTC/USDT:USDT")
 
     approval = RiskApproval(True, 0.01, 10.0, 0.001, 0.001, 0.0, "OK")
@@ -160,6 +161,80 @@ def test_bybit_execute_rejects_missing_or_zero_fill(monkeypatch):
     assert "ORDER_NOT_FILLED" in result["error"]
 
 
+def test_bybit_execute_accepts_cumexecqty_without_normalized_status(monkeypatch):
+    """Bybit/CCXT occasionally returns cumulative exec qty without a unified ``status``."""
+    import bybit_executor
+
+    class _Exchange:
+        def fetch_ticker(self, _symbol):
+            return {"ask": 1000.0, "bid": 999.0, "last": 1000.0}
+
+        def create_market_order(self, *_args, **_kwargs):
+            # Shape seen on some Bybit v5 submit paths — empty ``filled`` / no CCXT ``status``.
+            return {"id": "order-sparse", "info": {"cumExecQty": "0.01"}}
+
+        def fetch_order(self, *_a, **_kwargs):
+            raise AssertionError("fill should resolve from submit payload without polling")
+
+    monkeypatch.setattr(bybit_executor, "_get_exchange", lambda: _Exchange())
+    monkeypatch.setattr(bybit_executor, "_ensure_leverage", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(bybit_executor, "_set_trading_stop", lambda *_a, **_k: None)
+    monkeypatch.setattr(bybit_executor.telegram_notify, "notify_trade_opened", lambda **_k: None)
+    monkeypatch.setattr(bybit_executor, "bybit_map_symbol", lambda _pair: "BTC/USDT:USDT")
+
+    approval = RiskApproval(True, 0.01, 10.0, 0.001, 0.001, 0.0, "OK")
+    result = bybit_executor.bybit_execute(
+        {"pair": "BTC/USDT", "direction": "LONG", "sl": 950.0, "tp1": 1100.0},
+        approval,
+    )
+
+    assert result["success"] is True
+    assert result["volume"] == 0.01
+    assert result["ticket"] == "order-sparse"
+
+
+def test_bybit_execute_poll_uses_fetch_closed_order_when_submit_sparse(monkeypatch):
+    import time
+
+    import bybit_executor
+
+    monkeypatch.setattr(time, "sleep", lambda *_a, **_kw: None)
+
+    calls = {"closed": 0}
+
+    class _Ex:
+        def fetch_ticker(self, _symbol):
+            return {"ask": 2.5, "bid": 2.49, "last": 2.5}
+
+        def create_market_order(self, *_args, **_kwargs):
+            return {"id": "oid-xyz", "info": {}}
+
+        def fetch_closed_order(self, oid, *_a, **_kw):
+            calls["closed"] += 1
+            return {
+                "id": oid,
+                "status": "closed",
+                "filled": 0.02,
+                "average": 2.5,
+                "info": {"cumExecQty": "0.02", "orderStatus": "Filled"},
+            }
+
+    monkeypatch.setattr(bybit_executor, "_get_exchange", lambda: _Ex())
+    monkeypatch.setattr(bybit_executor, "_ensure_leverage", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(bybit_executor, "_set_trading_stop", lambda *_a, **_k: None)
+    monkeypatch.setattr(bybit_executor.telegram_notify, "notify_trade_opened", lambda **_k: None)
+    monkeypatch.setattr(bybit_executor, "bybit_map_symbol", lambda _pair: "ALGO/USDT:USDT")
+
+    approval = RiskApproval(True, 0.02, 10.0, 0.001, 0.001, 0.0, "OK")
+    # Keep SL within MAX_SL_PCT crypto cap vs ~2.5 ticker (e.g. 4% floor = 2.4)
+    result = bybit_executor.bybit_execute(
+        {"pair": "ALGO/USDT", "direction": "LONG", "sl": 2.4, "tp1": 2.7},
+        approval,
+    )
+
+    assert calls["closed"] >= 1
+    assert result["success"] is True
+    assert result["volume"] == 0.02
 def test_monitor_never_matches_closed_audit_row_for_live_position():
     row = {
         "id": 1,

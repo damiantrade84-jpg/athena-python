@@ -173,6 +173,178 @@ def _validate_exit_levels(
     return None
 
 
+def _bybit_order_identity(order: dict | None) -> str:
+    """CCXT unified ``id`` or raw Bybit v5 ``orderId`` inside ``info``."""
+    if not isinstance(order, dict):
+        return ""
+    oid = order.get("id")
+    if oid is not None:
+        s = str(oid).strip()
+        if s:
+            return s
+    info = order.get("info") if isinstance(order.get("info"), dict) else {}
+    for k in ("orderId", "order_id"):
+        raw = info.get(k)
+        if raw is not None:
+            s = str(raw).strip()
+            if s:
+                return s
+    return ""
+
+
+def _bybit_parse_fill_status(order: dict | None) -> tuple[str, float]:
+    """Return (normalized_status_lc, cumulative_filled_qty).
+
+    Handles CCXT's unified dict plus Bybit v5 raw ``info`` (often exposes
+    ``cumExecQty`` while ``status`` / ``orderStatus`` are omitted on the submit path).
+    """
+    if not isinstance(order, dict):
+        return "", 0.0
+    info = order.get("info") if isinstance(order.get("info"), dict) else {}
+    raw_status = (
+        order.get("status")
+        or info.get("orderStatus")
+        or info.get("status")
+        or info.get("order_status")
+        or ""
+    )
+    status = str(raw_status).strip().lower()
+    filled_raw = order.get("filled")
+    if filled_raw is None:
+        filled_raw = (
+            info.get("cumExecQty")
+            or info.get("cum_exec_qty")
+            or info.get("filledQty")
+            or info.get("filled_qty")
+        )
+    try:
+        filled_amount = float(filled_raw or 0)
+    except (TypeError, ValueError):
+        filled_amount = 0.0
+    return status, filled_amount
+
+
+def _bybit_poll_order_snapshot(exchange, order_id: str, ccxt_symbol: str) -> dict | None:
+    """Refresh order state during entry resolution.
+
+    Bybit Unified (UTA): ``fetch_order`` requires ``params['acknowledged']=True``
+    or CCXT raises ``ArgumentsRequired`` before any HTTP call (see ccxt ``bybit.py``).
+
+    Prefer ``fetch_closed_order`` / ``fetch_open_order`` for recent market entries once
+    they leave the ambiguous submit envelope.
+    """
+    oid = str(order_id or "").strip()
+    if not oid:
+        return None
+
+    chains: list[tuple[str, object]] = []
+    _fc = getattr(exchange, "fetch_closed_order", None)
+    if callable(_fc):
+        chains.append(("fetch_closed_order", lambda: _fc(oid, ccxt_symbol)))
+    _fo = getattr(exchange, "fetch_open_order", None)
+    if callable(_fo):
+        chains.append(("fetch_open_order", lambda: _fo(oid, ccxt_symbol)))
+    _fu = getattr(exchange, "fetch_order", None)
+    if callable(_fu):
+        chains.append(
+            (
+                "fetch_order",
+                lambda: _fu(oid, ccxt_symbol, {"acknowledged": True}),
+            )
+        )
+
+    last_seen: Exception | None = None
+    for _name, _call in chains:
+        try:
+            out = _call()
+            return out if isinstance(out, dict) else None
+        except Exception as e:
+            last_seen = e
+            if type(e).__name__ in ("OrderNotFound", "InvalidOrder"):
+                continue
+            log.debug("[BYBIT] %s exception for oid=%s… %s", _name, oid[:10], e)
+    if last_seen is not None and type(last_seen).__name__ not in (
+        "OrderNotFound",
+        "InvalidOrder",
+    ):
+        log.debug(
+            "[BYBIT] order snapshot still missing after chain for oid=%s… (%s)",
+            oid[:10],
+            last_seen,
+        )
+    return None
+
+
+def _bybit_resolve_entry_fill(
+    exchange,
+    ccxt_symbol: str,
+    order: dict,
+    *,
+    requested_volume: float,
+) -> tuple[dict, str, float]:
+    """Wait briefly for measurable fill via ``fetch_order`` when submit response is sparse.
+
+    Returns updated ``order``, status_lc, cum_filled_qty.
+    """
+    order_id = _bybit_order_identity(order)
+    vol_req = float(requested_volume)
+    qty_tol = max(1e-12, abs(vol_req) * 1e-8)
+
+    bad = frozenset({"canceled", "cancelled", "rejected"})
+    good = frozenset({"closed", "filled"})
+    deadline = time.monotonic() + 5.5
+    polls = 0
+
+    status, filled = _bybit_parse_fill_status(order)
+
+    def qty_met(q: float) -> bool:
+        return q > 0 and q + qty_tol >= vol_req
+
+    while time.monotonic() < deadline:
+        if status in bad:
+            break
+        if qty_met(filled):
+            break
+        if status in good:
+            break
+
+        if polls >= 10 or not order_id:
+            break
+        time.sleep(max(0.15, polls * 0.05))
+        polls += 1
+        refreshed = _bybit_poll_order_snapshot(exchange, order_id, ccxt_symbol)
+        if isinstance(refreshed, dict):
+            order = refreshed
+        status, filled = _bybit_parse_fill_status(order)
+
+    return order, status, filled
+
+
+def _bybit_resolve_avg_entry(order: dict, *, fallback_price: float) -> float:
+    px = float(order.get("average") or order.get("price") or 0)
+    if px > 0:
+        return px
+    info = order.get("info") if isinstance(order.get("info"), dict) else {}
+    for k in ("avgPrice", "averagePrice"):
+        raw = info.get(k)
+        if raw is None or raw == "":
+            continue
+        try:
+            v = float(raw)
+        except (TypeError, ValueError):
+            continue
+        if v > 0:
+            return v
+    try:
+        _val = float(info.get("cumExecValue") or 0)
+        _qty = float(info.get("cumExecQty") or order.get("filled") or 0)
+        if _val > 0 and _qty > 0:
+            return _val / _qty
+    except (TypeError, ValueError):
+        pass
+    return float(fallback_price or 0)
+
+
 def _get_exchange():
     """Initialize Bybit Linear Futures connection."""
     global _exchange
@@ -1000,41 +1172,48 @@ def bybit_execute(signal: dict, approval: "RiskApproval") -> dict:  # noqa: F821
         if order is None:
             raise _last_err
 
-        order_id = order.get("id", "")
-        info = order.get("info") if isinstance(order.get("info"), dict) else {}
-        status = str(
-            order.get("status")
-            or info.get("orderStatus")
-            or info.get("status")
-            or ""
-        ).strip().lower()
-        if status not in ("closed", "filled"):
+        order_id = _bybit_order_identity(order)
+
+        order, scan_status, filled_amount = _bybit_resolve_entry_fill(
+            exchange,
+            ccxt_symbol,
+            order,
+            requested_volume=float(volume),
+        )
+        order_id = _bybit_order_identity(order) or order_id
+
+        vol_req = float(volume)
+        qty_tol = max(1e-12, abs(vol_req) * 1e-8)
+
+        if scan_status in {"canceled", "cancelled", "rejected"}:
             return {
                 "success": False,
-                "error": f"ORDER_NOT_FILLED: status={status or 'missing'}",
+                "error": f"ORDER_REJECTED: status={scan_status}",
                 "ticket": order_id,
             }
-        filled_raw = order.get("filled")
-        if filled_raw is None:
-            filled_raw = info.get("cumExecQty") or info.get("filled")
-        try:
-            filled_amount = float(filled_raw)
-        except (TypeError, ValueError):
-            filled_amount = 0.0
+
         if filled_amount <= 0:
             return {
                 "success": False,
-                "error": "ORDER_NOT_FILLED: filled quantity missing or zero",
+                "error": (
+                    "ORDER_NOT_FILLED: filled quantity missing or zero — "
+                    f"status={scan_status or 'missing'}"
+                ),
                 "ticket": order_id,
             }
-        if filled_amount + 1e-12 < float(volume):
+
+        if filled_amount + qty_tol < vol_req:
             return {
                 "success": False,
-                "error": f"PARTIAL_FILL_UNSUPPORTED: filled={filled_amount} expected={volume}",
+                "error": (
+                    "PARTIAL_FILL_UNSUPPORTED: filled={filled_amount} expected={volume}"
+                    + (f" status={scan_status}" if scan_status else "")
+                ),
                 "ticket": order_id,
                 "volume": filled_amount,
             }
-        filled_price = float(order.get("average") or order.get("price") or price)
+
+        filled_price = float(_bybit_resolve_avg_entry(order, fallback_price=float(price)))
         _ref_for_slip = float(signal.get("price") or 0) or float(price)
         _sig_ref, _slip_bps = _entry_slippage_bps(
             direction, _ref_for_slip, filled_price
