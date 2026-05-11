@@ -327,7 +327,8 @@ CONFIG: dict = {
     "CANDLE_BUILDER_BULK_D1_SKIP_EXCHANGES": ["COMM"],
     "SCAN_MAX_WORKERS": 3,
     "SCAN_DEBUG_CANDLE_META": False,
-    "FOREX_H4_RESAMPLE_OFFSET_HOURS": 2.0,
+    "MT5_BROKER_UTC_OFFSET": 3,
+    "FOREX_H4_RESAMPLE_OFFSET_HOURS": 1.0,
     "MT5_CANDLE_FALLBACK_ENABLED": False,
     "ENGINE_A_CRYPTO_LEVELS_FEED": "bybit",
     "ENGINE_A_CRYPTO_LEVELS_SIGNAL_FEED_FALLBACK": False,
@@ -570,7 +571,6 @@ CONFIG: dict = {
     },
     # MIN_CONFLUENCE_GROUP removed. Engine A live/backtest thresholds are resolved
     # in scoring.py from profile overrides, pair/group config, then 3-tier fallback.
-    # MIN_CONFLUENCE_CLASS is legacy/admin metadata and is not read by that gate.
     # Factor scoring gates — see factor_scoring.py
     "ENGINE_A_PAIR_THRESHOLDS": {},
     "ENGINE_A_SCORE_GROUP_THRESHOLDS": {
@@ -1042,8 +1042,7 @@ _KNOWN_YAML_ONLY_KEYS = {
     "INTERMARKET_CONFIRMATION",
     "KELLY_FRACTION",
     "LIVE_DASHBOARD",
-    "MIN_CONFLUENCE_CLASS",
-    "NAKED_MAX_DAILY",
+        "NAKED_MAX_DAILY",
     "NEWS_BG_INTERVAL_SEC",
     "NEWS_PAIR_CACHE_TTL_SEC",
     "POSITION_SIZE_CONFIDENCE_SCALING",

@@ -84,11 +84,23 @@ def market_state_offset_hours(pair: dict[str, Any] | None, tf: str) -> float:
     """Return the bucket offset for this pair/timeframe market-state split.
     
     Offset rules:
+    - MT5 D1 grid: configured by D1_RESAMPLE_OFFSET_HOURS (default 0.0 = UTC 00:00)
     - MT5 non-stock H4 grid: configured by FOREX_H4_RESAMPLE_OFFSET_HOURS
     - MT5 stocks: 3h offset (15/19 UTC grid for US exchange session)
     - Crypto (Binance): 0h offset (24/7 UTC grid)
     """
-    if str(tf or "").upper() != "H4":
+    tf_upper = str(tf or "").upper()
+    
+    # D1 offset for MT5 brokers (configurable for session roll differences)
+    if tf_upper == "D1":
+        if isinstance(pair, dict) and str(pair.get("source") or "").lower() == "mt5":
+            try:
+                return float(CONFIG.get("D1_RESAMPLE_OFFSET_HOURS", 0.0) or 0.0)
+            except (TypeError, ValueError):
+                return 0.0
+        return 0.0
+    
+    if tf_upper != "H4":
         return 0.0
     if not isinstance(pair, dict):
         return 0.0
@@ -103,9 +115,19 @@ def market_state_offset_hours(pair: dict[str, Any] | None, tf: str) -> float:
     if asset_type == "stock":
         return 3.0
     
-    # Forex, metals, commodities, indices use the configured broker H4 grid.
+    # Forex, metals, commodities, indices use the broker H4 grid.
+    # Prefer explicit config; otherwise derive from MT5_BROKER_UTC_OFFSET:
+    # formula: (24 - broker_offset) % 4  (GMT+3 → 1h, GMT+2 → 2h).
+    _explicit = CONFIG.get("FOREX_H4_RESAMPLE_OFFSET_HOURS")
+    if _explicit is not None:
+        try:
+            return float(_explicit)
+        except (TypeError, ValueError):
+            pass
+    # Auto-derive from broker UTC offset
     try:
-        return float(CONFIG.get("FOREX_H4_RESAMPLE_OFFSET_HOURS", 2.0) or 2.0)
+        _broker_off = int(CONFIG.get("MT5_BROKER_UTC_OFFSET", 3) or 3)
+        return float((24 - _broker_off) % 4)
     except (TypeError, ValueError):
         return 2.0
 
@@ -137,8 +159,11 @@ def trim_mt5_d1_broker_session_ahead_tail(
         return series, False
 
     now = float(time_now if time_now is not None else time.time())
-    # D1 remains UTC 00:00 — never apply the MT5 H4 session offset here (CLAUDE.md).
-    offset_hours = 0.0
+    # Use configured D1 offset for broker session alignment (e.g., Pepperstone Sydney roll).
+    try:
+        offset_hours = float(CONFIG.get("D1_RESAMPLE_OFFSET_HOURS", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        offset_hours = 0.0
     expected_bucket = get_bucket_start_epoch("D1", now, offset_hours=offset_hours)
 
     last_epoch = candle_timestamp_epoch(series[-1])

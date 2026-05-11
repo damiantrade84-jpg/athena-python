@@ -2706,15 +2706,36 @@ def fetch_mt5(pair: dict, tf: str, limit: int):
         err = mt5.last_error()
         return _mt5_fallback(f"MT5 failed: {err}")
 
-    # Dynamic timezone detection to align broker integers to perfect UTC strings
-    # D1 bars should always be at 00:00 UTC regardless of broker timezone offset
-    tick = mt5.symbol_info_tick(mt5_symbol)
+    # Timezone alignment: MT5 bars may arrive in broker server time or UTC
+    # depending on terminal version/broker. Auto-detect from bar data itself.
     offset_seconds = 0
-    if tick and tick.time > 0 and tf != "D1":
-        utc_now = time.time()
-        diff_sec = tick.time - utc_now
-        offset_hours = round(diff_sec / 3600.0)
-        offset_seconds = int(offset_hours * 3600)
+    if tf != "D1" and bars is not None and len(bars) > 0:
+        _tf_sec = {"M1": 60, "M5": 300, "M15": 900, "H1": 3600, "H4": 14400}.get(tf, 3600)
+        _utc_now = time.time()
+        _newest_ts = float(bars[-1]['time'])
+        _unshifted_age = _utc_now - _newest_ts
+
+        if _unshifted_age >= -300 and _unshifted_age <= 2 * _tf_sec:
+            # Bars are plausibly UTC already (newest bar is recent relative to now)
+            offset_seconds = 0
+        else:
+            # Bars may be in broker server time; try configured broker UTC offset
+            _broker_offset_cfg = int(CONFIG.get("MT5_BROKER_UTC_OFFSET", 3))
+            _shifted_age = _utc_now - (_newest_ts - _broker_offset_cfg * 3600)
+            if _shifted_age >= -300 and _shifted_age <= 2 * _tf_sec:
+                offset_seconds = _broker_offset_cfg * 3600
+            else:
+                # Fallback: tick-based detection (legacy path)
+                tick = mt5.symbol_info_tick(mt5_symbol)
+                if tick and tick.time > 0:
+                    diff_sec = tick.time - _utc_now
+                    offset_hours = round(diff_sec / 3600.0)
+                    offset_seconds = int(offset_hours * 3600)
+                log.warning(
+                    "[MT5] %s %s: timezone auto-detect unclear (unshifted_age=%.0fs), "
+                    "fallback offset=%ds",
+                    symbol, tf, _unshifted_age, offset_seconds,
+                )
 
     candles = []
     for b in bars:
@@ -7839,17 +7860,17 @@ def _persist_bt_min_yaml(cfg_path: str, current: dict) -> None:
         f.write(content)
 
 
-def _persist_live_confluence_yaml(cfg_path: str, current: dict) -> None:
+def _persist_score_group_thresholds_yaml(cfg_path: str, current: dict) -> None:
     import re as _re
 
     with open(cfg_path, "r", encoding="utf-8") as f:
         content = f.read()
 
-    def _live_block_replacer(m):
+    def _block_replacer(m):
         block = m.group(0)
-        for cls, val in current.items():
+        for key, val in current.items():
             block = _re.sub(
-                rf"^([ \t]+{_re.escape(cls)}\s*:\s*)[\d.]+",
+                rf"^([ \t]+{_re.escape(key)}\s*:\s*)[\d.]+",
                 lambda mm, v=val: f"{mm.group(1)}{v}",
                 block,
                 flags=_re.MULTILINE,
@@ -7857,8 +7878,8 @@ def _persist_live_confluence_yaml(cfg_path: str, current: dict) -> None:
         return block
 
     content = _re.sub(
-        r"^MIN_CONFLUENCE_CLASS\s*:\s*\n(?:[ \t]+\S[^\n]*\n)+",
-        _live_block_replacer,
+        r"^ENGINE_A_SCORE_GROUP_THRESHOLDS\s*:\s*\n(?:[ \t]+\S[^\n]*\n)+",
+        _block_replacer,
         content,
         flags=_re.MULTILINE,
     )
@@ -7908,13 +7929,13 @@ def _apply_bt_min_updates(new_vals: dict) -> dict:
     return current
 
 
-def _apply_live_confluence_updates(new_vals: dict) -> dict:
-    current = dict(CONFIG.get("MIN_CONFLUENCE_CLASS") or {})
+def _apply_score_group_threshold_updates(new_vals: dict) -> dict:
+    current = dict(CONFIG.get("ENGINE_A_SCORE_GROUP_THRESHOLDS") or {})
     current.update({k: round(float(v), 4) for k, v in (new_vals or {}).items()})
-    CONFIG["MIN_CONFLUENCE_CLASS"] = current
+    CONFIG["ENGINE_A_SCORE_GROUP_THRESHOLDS"] = current
     cfg_path = os.path.join(os.path.dirname(__file__), "config.yaml")
-    _persist_live_confluence_yaml(cfg_path, current)
-    log.info(f"[LIVE_THRESHOLD] Updated via UI: {current}")
+    _persist_score_group_thresholds_yaml(cfg_path, current)
+    log.info(f"[SCORE_GROUP_THRESHOLD] Updated via UI: {current}")
     return current
 
 
@@ -7942,12 +7963,11 @@ def _apply_naked_style_score_updates(new_vals: dict) -> dict:
     return {style: dict(styles.get(style) or {}) for style in ("scalp", "intraday", "swing")}
 
 
-# MIN_CONFLUENCE_CLASS is advisory/legacy in dashboard; Engine A gates use scoring.py.
 _ENGINE_A_ACTIVE_GATE_HELP = (
     "Runtime Engine A threshold: scoring.get_score_threshold — "
     "PAIR_PROFILES.min_confluence, ENGINE_A_PAIR_THRESHOLDS, "
     "ENGINE_A_SCORE_GROUP_THRESHOLDS (score_group, type, default), "
-    "then 3-tier fallback. MIN_CONFLUENCE_CLASS in this API payload is not read by that resolver."
+    "then 3-tier fallback."
 )
 
 
@@ -8073,7 +8093,7 @@ def api_scan_settings():
 
 @app.route("/api/bt-min", methods=["GET", "POST"])
 def api_bt_min():
-    """GET: BT_MIN + legacy MIN_CONFLUENCE_CLASS metadata (not the Engine A runtime gate).
+    """GET: BT_MIN + ENGINE_A_SCORE_GROUP_THRESHOLDS metadata.
     POST: update BT_MIN class floors and/or backtest_use_bt_min_thresholds (backtest only).
     Body: {"crypto": 0.55, ...} and optional {"backtest_use_bt_min_thresholds": true}
     """
@@ -8088,8 +8108,8 @@ def api_bt_min():
         return jsonify(
             {
                 "bt_min": dict(CONFIG.get("BT_MIN") or {}),
-                "live_class": dict(CONFIG.get("MIN_CONFLUENCE_CLASS") or {}),
-                "min_confluence_class_role": "advisory_legacy_display",
+                "live_class": dict(CONFIG.get("ENGINE_A_SCORE_GROUP_THRESHOLDS") or {}),
+                "min_confluence_class_role": "active_runtime_config",
                 "engine_a_active_gate": _ENGINE_A_ACTIVE_GATE_HELP,
                 "backtest_use_bt_min_thresholds": bool(
                     CONFIG.get("BACKTEST_USE_BT_MIN_THRESHOLDS", False)
@@ -8561,45 +8581,42 @@ def api_scalp_group_rr():
 
 @app.route("/api/live-confluence-thresholds", methods=["GET", "POST"])
 def api_live_confluence_thresholds():
-    """GET/POST MIN_CONFLUENCE_CLASS — advisory/legacy; Engine A uses scoring.get_score_threshold."""
+    """GET/POST ENGINE_A_SCORE_GROUP_THRESHOLDS — active runtime config for Engine A gates."""
     asset_classes = ("crypto", "forex", "commodity", "stock", "index")
     if request.method == "GET":
         return jsonify(
             {
-                "live_class": dict(CONFIG.get("MIN_CONFLUENCE_CLASS") or {}),
-                "min_confluence_class_role": "advisory_legacy_display",
+                "live_class": dict(CONFIG.get("ENGINE_A_SCORE_GROUP_THRESHOLDS") or {}),
+                "min_confluence_class_role": "active_runtime_config",
                 "engine_a_active_gate": _ENGINE_A_ACTIVE_GATE_HELP,
             }
         )
 
     data = request.get_json(silent=True) or {}
     new_vals = {}
-    for cls in asset_classes:
-        if cls not in data:
-            continue
+    for key, val in data.items():
         try:
-            val = float(data[cls])
+            val = float(val)
         except (TypeError, ValueError):
-            return jsonify({"error": f"Invalid value for {cls}"}), 400
-        _max_allowed = _engine_a_threshold_max_for_class(cls)
-        if val < 0 or val > _max_allowed:
+            return jsonify({"error": f"Invalid value for {key}"}), 400
+        if val < 0 or val > 3.0:
             return jsonify(
-                {"error": f"Value for {cls} out of range (0-{_max_allowed:g})"}
+                {"error": f"Value for {key} out of range (0-3)"}
             ), 400
-        new_vals[cls] = round(val, 4)
+        new_vals[key] = round(val, 4)
 
     if not new_vals:
         return jsonify({"error": "No valid keys provided"}), 400
 
     try:
-        current = _apply_live_confluence_updates(new_vals)
+        current = _apply_score_group_threshold_updates(new_vals)
     except Exception as e:
-        log.error(f"Failed to persist MIN_CONFLUENCE_CLASS to config.yaml: {e}")
+        log.error(f"Failed to persist ENGINE_A_SCORE_GROUP_THRESHOLDS to config.yaml: {e}")
         return jsonify(
             {
                 "saved": False,
                 "error": str(e),
-                "live_class": dict(CONFIG.get("MIN_CONFLUENCE_CLASS") or {}),
+                "live_class": dict(CONFIG.get("ENGINE_A_SCORE_GROUP_THRESHOLDS") or {}),
             }
         ), 500
 
@@ -10983,6 +11000,9 @@ def analyze_pair(
 
             _stale_tfs = []
             _freshness_diag = {}
+            _pair_type = pair.get("type", "")
+            _is_forex_stock = _pair_type in ("forex", "stock", "index", "commodity")
+
             for _tf, _candles in (("D1", d1), ("H4", h4), ("H1", h1)):
                 _diag = candle_freshness_diagnostic(
                     pair, _tf, _candles,
@@ -10990,8 +11010,31 @@ def analyze_pair(
                 )
                 _freshness_diag[_tf] = _diag
                 _sev = _diag.get("stalenessSeverity", "")
-                if _sev and _sev != "fresh":
-                    _stale_tfs.append(f"{_tf}:{_sev}")
+                if not _sev or _sev == "fresh":
+                    continue
+
+                # Confirmed-only forex/stock pairs: stale_1_bucket is expected
+                # (the forming bar is intentionally excluded from scoring).
+                if _is_forex_stock and _sev == "stale_1_bucket":
+                    continue
+
+                # D1 weekend gap tolerance: forex markets close Fri ~21:00 UTC,
+                # reopen Sun ~21:00 UTC. On Monday, confirmed-only D1 lags 3-4
+                # buckets (last confirmed = Friday). Allow up to 4-bucket D1 lag
+                # on Saturday/Sunday/Monday for non-crypto pairs.
+                if (
+                    _is_forex_stock
+                    and _tf == "D1"
+                    and _sev == "stale_multi_bucket"
+                ):
+                    import datetime as _dt_mod
+                    _utc_weekday = _dt_mod.datetime.now(_dt_mod.timezone.utc).weekday()
+                    _bucket_lag = _diag.get("bucketLag", 99)
+                    # Mon=0, Sat=5, Sun=6; allow up to 4-day D1 lag on these days
+                    if _utc_weekday in (0, 5, 6) and _bucket_lag <= 4:
+                        continue
+
+                _stale_tfs.append(f"{_tf}:{_sev}")
 
             # Crypto-specific D1 staleness threshold: enforce max hours since last bar open.
             if pair.get("type") == "crypto" and d1:
@@ -11178,22 +11221,68 @@ def analyze_pair(
     if pair.get("type") == "crypto":
         _bn_sym = pair.get("symbol", "").replace("/", "")  # e.g. BTCUSDT
 
-        # Bybit funding rate - execution is on Bybit; fall back to Binance if Bybit fails
-        _fr_resp = _fetch_bybit_funding_rate(_bn_sym)
-        if isinstance(_fr_resp, dict) and not _fr_resp.get("error"):
-            _funding_rate = _fr_resp.get("rate")
-        else:
-            _fr_resp = _fetch_funding_rate(_bn_sym)
-            _funding_rate = (
-                _fr_resp.get("rate")
-                if isinstance(_fr_resp, dict) and not _fr_resp.get("error")
-                else None
-            )
-            if _funding_rate is not None:
+        # Multi-exchange funding composite (Binance + Bybit) when enabled
+        _multi_ex_cfg = CONFIG.get("ENGINE_A_MULTI_EXCHANGE_FUNDING") or {}
+        if _multi_ex_cfg.get("ENABLED", False):
+            _binance_weight = float(_multi_ex_cfg.get("BINANCE_WEIGHT", 0.5))
+            _bybit_weight = float(_multi_ex_cfg.get("BYBIT_WEIGHT", 0.5))
+            _total_weight = _binance_weight + _bybit_weight
+
+            # Fetch from both exchanges
+            _bybit_resp = _fetch_bybit_funding_rate(_bn_sym)
+            _binance_resp = _fetch_funding_rate(_bn_sym)
+
+            _bybit_rate = None
+            _binance_rate = None
+
+            if isinstance(_bybit_resp, dict) and not _bybit_resp.get("error"):
+                _bybit_rate = _bybit_resp.get("rate")
+            if isinstance(_binance_resp, dict) and not _binance_resp.get("error"):
+                _binance_rate = _binance_resp.get("rate")
+
+            # Composite using weighted average
+            if _bybit_rate is not None and _binance_rate is not None:
+                _funding_rate = (
+                    _bybit_rate * _bybit_weight + _binance_rate * _binance_weight
+                ) / _total_weight
                 log.debug(
-                    "[FUNDING] %s: using Binance fallback rate",
+                    "[FUNDING] %s: composite rate (Bybit=%.6f, Binance=%.6f) -> %.6f",
+                    pair.get("display", _bn_sym),
+                    _bybit_rate,
+                    _binance_rate,
+                    _funding_rate,
+                )
+            elif _bybit_rate is not None:
+                _funding_rate = _bybit_rate
+                log.debug(
+                    "[FUNDING] %s: using Bybit-only rate (Binance unavailable)",
                     pair.get("display", _bn_sym),
                 )
+            elif _binance_rate is not None:
+                _funding_rate = _binance_rate
+                log.debug(
+                    "[FUNDING] %s: using Binance-only rate (Bybit unavailable)",
+                    pair.get("display", _bn_sym),
+                )
+            else:
+                _funding_rate = None
+        else:
+            # Original fallback logic: Bybit first, then Binance
+            _fr_resp = _fetch_bybit_funding_rate(_bn_sym)
+            if isinstance(_fr_resp, dict) and not _fr_resp.get("error"):
+                _funding_rate = _fr_resp.get("rate")
+            else:
+                _fr_resp = _fetch_funding_rate(_bn_sym)
+                _funding_rate = (
+                    _fr_resp.get("rate")
+                    if isinstance(_fr_resp, dict) and not _fr_resp.get("error")
+                    else None
+                )
+                if _funding_rate is not None:
+                    log.debug(
+                        "[FUNDING] %s: using Binance fallback rate",
+                        pair.get("display", _bn_sym),
+                    )
 
         if str(CONFIG.get("ENGINE_A_CRYPTO_DERIVATIVES_FEED", "bybit")).lower() == "bybit":
             _oi_data = _fetch_bybit_open_interest(_bn_sym)

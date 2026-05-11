@@ -92,9 +92,14 @@ THRESHOLD_AUDIT:
       - current_minus_5pct
       - current_minus_10pct
 
-# MT5 forex H4 policy grid: 02/06/10/14/18/22 UTC (2h offset).
-# MT5 stocks keep their fixed 3h session offset in market_state.py.
-FOREX_H4_RESAMPLE_OFFSET_HOURS: 2.0
+# MT5 broker server UTC offset. Change when DST shifts (EET=2, EEST=3).
+# Used by fetch_mt5() timezone detection and H4 grid offset derivation.
+MT5_BROKER_UTC_OFFSET: 3
+
+# MT5 forex H4 policy grid offset (hours). Derived from broker offset: (24 - broker_offset) % 4.
+# GMT+3 → 1h offset (01/05/09/13/17/21 UTC). GMT+2 → 2h (02/06/10/14/18/22 UTC).
+# Set to "auto" or remove to let market_state.py compute from MT5_BROKER_UTC_OFFSET.
+FOREX_H4_RESAMPLE_OFFSET_HOURS: 1.0
 
 # Broker candle safety: do not turn MT5 error payloads with Polygon/yfinance
 # fallback candles into execution-eligible Engine A candles.
