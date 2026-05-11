@@ -675,7 +675,11 @@ def build_signal_funnel_row(
     style_profile_b: dict[str, Any] | None = None,
     engine_b_threshold: float | None = None,
 ) -> dict[str, Any]:
-    a_threshold = get_score_threshold(pair, is_backtest=False)
+    a_threshold = (
+        _safe_float((signal or {}).get("scanThresholdEffective"), None)
+        or _safe_float((signal or {}).get("scanThreshold"), None)
+        or get_score_threshold(pair, is_backtest=False)
+    )
     res_b = signal.get("_threshold_audit_b_res") if isinstance(signal, dict) else None
     conf_b = signal.get("_threshold_audit_b_conf") if isinstance(signal, dict) else None
     b_threshold = (

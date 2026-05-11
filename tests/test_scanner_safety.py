@@ -6,7 +6,8 @@ import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import pytest
-from scanner import _engine_b_level_pair
+from engine_c import ENGINE_C_AB_WEIGHTS
+from scanner import _a_only_auto_weight, _engine_b_level_pair
 
 
 class TestEngineBLevelPair:
@@ -39,3 +40,24 @@ class TestEngineBLevelPair:
         sl, tp = _engine_b_level_pair({}, {})
         assert sl is None
         assert tp is None
+
+
+def test_a_only_auto_weight_uses_crypto_config_not_engine_c_blend_weight():
+    weight = _a_only_auto_weight(
+        {"display": "BTC/USDT", "symbol": "BTCUSDT", "type": "crypto"},
+        {"AUTO_TRADE_A_ONLY_WEIGHT": {"default": 0.60, "crypto": 0.60}},
+    )
+
+    assert weight == pytest.approx(0.60)
+    assert weight > ENGINE_C_AB_WEIGHTS["TRENDING"]["A"]
+    assert weight > ENGINE_C_AB_WEIGHTS["RANGING"]["A"]
+    assert round(1.0 * weight, 4) == pytest.approx(0.60)
+
+
+def test_a_only_auto_weight_defaults_safe_for_missing_or_malformed_config():
+    pair = {"display": "BTC/USDT", "symbol": "BTCUSDT", "type": "crypto"}
+
+    assert _a_only_auto_weight(pair, {}) == pytest.approx(0.60)
+    assert _a_only_auto_weight(pair, {"AUTO_TRADE_A_ONLY_WEIGHT": "bad"}) == pytest.approx(0.60)
+    assert _a_only_auto_weight(pair, {"AUTO_TRADE_A_ONLY_WEIGHT": {"crypto": 2.5}}) == pytest.approx(1.0)
+    assert _a_only_auto_weight(pair, {"AUTO_TRADE_A_ONLY_WEIGHT": {"crypto": -0.5}}) == pytest.approx(0.0)

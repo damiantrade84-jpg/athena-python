@@ -333,8 +333,13 @@ CONFIG: dict = {
     "ENGINE_A_CRYPTO_LEVELS_FEED": "bybit",
     "ENGINE_A_CRYPTO_LEVELS_SIGNAL_FEED_FALLBACK": False,
     "ENGINE_A_CRYPTO_DERIVATIVES_FEED": "bybit",
-    "ENGINE_A_CRYPTO_DERIVATIVES_BINANCE_FALLBACK": False,
+    "ENGINE_A_CRYPTO_DERIVATIVES_BINANCE_FALLBACK": True,
     "ENGINE_A_CRYPTO_BT_LEVEL_ATR_USE_SIGNAL_FEED": True,
+    "ENGINE_A_MULTI_EXCHANGE_FUNDING": {
+        "ENABLED": True,
+        "BINANCE_WEIGHT": 0.5,
+        "BYBIT_WEIGHT": 0.5,
+    },
     "ENGINE_B_CRYPTO_LEVELS_FEED": "bybit",
     "ENGINE_B_CRYPTO_LEVELS_SIGNAL_FEED_FALLBACK": False,
     "ENGINE_B_CRYPTO_BT_LEVEL_ATR_USE_SIGNAL_FEED": True,
@@ -824,8 +829,8 @@ CONFIG: dict = {
     "DRAWDOWN_STOP_ENABLED": True,  # Set false only for paper/debug — disables stop + size reduction
     # ── Auto-Trade Bot ────────────────────────────────────────────────────────
     "AUTO_TRADE_ENABLED": False,  # Master toggle (also togglable via UI/API)
-    "AUTO_TRADE_MIN_SCORE": {  # Scan floor that determines which signals reach the auto-trader candidate list
-        "crypto": 2.4,
+    "AUTO_TRADE_MIN_SCORE": {  # Informational scan floor; live gate is AUTO_TRADE_MIN_CONVICTION
+        "crypto": 2.0,
         "forex": 2.1,
         "commodity": 1.8,
         "stock": 1.8,
@@ -833,6 +838,10 @@ CONFIG: dict = {
     },
     "AUTO_TRADE_MIN_CONVICTION": {  # Live auto-execute gate on combinedConviction (0-1 scale)
         "default": 0.50,
+    },
+    "AUTO_TRADE_A_ONLY_WEIGHT": {
+        "default": 0.60,
+        "crypto": 0.60,
     },
     "AUTO_TRADE_MAX_DAILY": 20,  # Max auto-trades per calendar day (UTC)
     "AUTO_TRADE_MAX_PER_SCAN": 1,  # Max executions per single scan run
@@ -847,7 +856,7 @@ CONFIG: dict = {
     },
     "AUTO_TRADE_BLOCKED_TREND_STATES": {
         "default": ["DEAD RANGING", "RANGING"],
-        "crypto": ["DEAD RANGING", "RANGING"],
+        "crypto": ["DEAD RANGING"],
         "forex": [],
         "commodity": ["DEAD RANGING", "RANGING"],
         "stock": ["DEAD RANGING", "RANGING"],
@@ -861,7 +870,7 @@ CONFIG: dict = {
     "ENGINE_A_BLOCKED_TREND_STATES": ["DEAD RANGING", "DEVELOPING"],
     "AUTO_TRADE_BLOCKED_REGIMES": {
         "default": ["RANGING"],
-        "crypto": ["RANGING"],
+        "crypto": [],
         "forex": [],
         "commodity": ["RANGING"],
         "stock": ["RANGING"],

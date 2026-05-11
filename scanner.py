@@ -117,6 +117,26 @@ def _apply_engine_b_scan_gate(signal: dict, tier: str, reason: str) -> tuple[str
     return "watchlist", f"Engine B confirmation failed ({detail})"
 
 
+def _a_only_auto_weight(pair: dict | None, config: dict | None = None) -> float:
+    """Return the config-gated A-only auto conviction weight."""
+    cfg = config or CONFIG
+    weight_cfg = cfg.get("AUTO_TRADE_A_ONLY_WEIGHT", {}) or {}
+    asset_type = ""
+    try:
+        asset_type = str(pair.get("type", "")).lower() if isinstance(pair, dict) else ""
+    except Exception:
+        asset_type = ""
+
+    try:
+        if isinstance(weight_cfg, dict):
+            weight = float(weight_cfg.get(asset_type, weight_cfg.get("default", 0.60)))
+        else:
+            weight = float(weight_cfg)
+    except Exception:
+        weight = 0.60
+    return max(0.0, min(1.0, weight))
+
+
 def _linear_percentile(values: list[float], p: float) -> float | None:
     """Return the p-th percentile (0–100) with linear interpolation. ``values`` may be unsorted."""
     if not values:
@@ -886,10 +906,8 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict[s
                                     a_max = sig_a.get("maxScore", 3.0)
                                     a_score = sig_a.get("confluenceScore", 0)
                                     a_norm = float(sig_a.get("scoreNorm", 0))
-                                    # A-only fallback: use A weight only.
-                                    _rl_fb = (regime_label or "").upper()
-                                    _w_fb = ENGINE_C_AB_WEIGHTS.get(_rl_fb, ENGINE_C_AB_WEIGHTS.get("TRENDING", {"A": 0.40}))
-                                    _w_a_fb = float(_w_fb.get("A", 0.40))
+                                    # A-only fallback: do not cap with Engine C A/B blend weights.
+                                    _w_a_fb = _a_only_auto_weight(pair)
                                     sig_a["combinedConviction"] = round(a_norm * _w_a_fb, 4)
                                     sig_a["enginesAligned"] = False
                                     sig_a["engine_b_verdict"] = res_b.get("structural_verdict", "UNCLEAR")
@@ -908,7 +926,7 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict[s
                     a_max = sig_a.get("maxScore", 3.0)
                     a_score = sig_a.get("confluenceScore", 0)
                     a_norm = float(sig_a.get("scoreNorm", 0))
-                    sig_a["combinedConviction"] = round(a_norm * 0.6, 4)
+                    sig_a["combinedConviction"] = round(a_norm * _a_only_auto_weight(pair), 4)
                     sig_a["enginesAligned"] = False
                     sig_a["engine_b_error"] = str(_b_err)
                     if _threshold_audit_on:

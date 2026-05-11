@@ -14,6 +14,7 @@ from scoring import (
     get_min_confluence_threshold,
     get_pair_level_atr_class,
     get_pair_score_group,
+    get_score_threshold,
 )
 from factor_scoring import _volatility_scaler
 
@@ -121,6 +122,23 @@ def test_min_confluence_threshold_uses_configured_score_group_thresholds(monkeyp
     ) == 2.22
 
 
+def test_crypto_engine_a_scan_threshold_resolves_to_score_group_floor():
+    pairs = [
+        {"display": "BTC/USDT", "symbol": "BTCUSDT", "type": "crypto"},
+        {"display": "ETH/USDT", "symbol": "ETHUSDT", "type": "crypto"},
+        {"display": "SOL/USDT", "symbol": "SOLUSDT", "type": "crypto"},
+    ]
+
+    for pair in pairs:
+        assert get_score_threshold(pair, is_backtest=False) == 2.0
+
+    assert CONFIG["AUTO_TRADE_MIN_SCORE"]["crypto"] == 2.0
+    assert get_score_threshold(
+        {"display": "BTC/USDT", "symbol": "BTCUSDT", "type": "crypto"},
+        is_backtest=False,
+    ) == CONFIG["ENGINE_A_SCORE_GROUP_THRESHOLDS"]["crypto_btc"]
+
+
 def test_python_defaults_match_runtime_yaml_for_audit_sensitive_gates():
     assert CONFIG["RANGING"]["crypto"] == {
         "dead": 18,
@@ -128,7 +146,7 @@ def test_python_defaults_match_runtime_yaml_for_audit_sensitive_gates():
         "choppy": 23,
         "choppy_pen": 0.5,
     }
-    assert CONFIG["ADX_TREND_MIN_CLASS"]["crypto"] == 15
+    assert CONFIG["ADX_TREND_MIN_CLASS"]["crypto"] == 18
     assert CONFIG["ADX_TREND_MIN_CLASS"]["forex"] == 20
     assert CONFIG["AUTO_TRADE_MIN_SCORE"]["index"] == 1.8
     assert CONFIG["FACTOR_MIN_DIRECTIONAL_CRYPTO"] == 0.20

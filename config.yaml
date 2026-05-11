@@ -118,7 +118,7 @@ D1_RESAMPLE_OFFSET_HOURS: 0.0
 ENGINE_A_CRYPTO_LEVELS_FEED: bybit
 ENGINE_A_CRYPTO_LEVELS_SIGNAL_FEED_FALLBACK: false
 ENGINE_A_CRYPTO_DERIVATIVES_FEED: bybit
-ENGINE_A_CRYPTO_DERIVATIVES_BINANCE_FALLBACK: false
+ENGINE_A_CRYPTO_DERIVATIVES_BINANCE_FALLBACK: true
 ENGINE_A_CRYPTO_BT_LEVEL_ATR_USE_SIGNAL_FEED: true
 ENGINE_B_CRYPTO_LEVELS_FEED: bybit
 ENGINE_B_CRYPTO_LEVELS_SIGNAL_FEED_FALLBACK: false
@@ -176,7 +176,7 @@ FACTOR_FUNDING_NOISE_BAND: 0.0001
 # signal by reducing single-exchange anomalies. Disabled by default — uses
 # Bybit-only with Binance fallback when disabled.
 ENGINE_A_MULTI_EXCHANGE_FUNDING:
-  ENABLED: false
+  ENABLED: true
   BINANCE_WEIGHT: 0.5  # Weight for Binance rate in composite
   BYBIT_WEIGHT: 0.5    # Weight for Bybit rate in composite
 
@@ -794,7 +794,7 @@ AUTO_TRADE_ENABLED: false          # Start auto-trader on server boot
 
 AUTO_TRADE_MIN_SCORE:
 
-  crypto:    2.4
+  crypto:    2.0
 
   forex:     2.1
 
@@ -814,11 +814,45 @@ AUTO_TRADE_MIN_CONVICTION:
 
   default: 0.50
 
+AUTO_TRADE_A_ONLY_WEIGHT:
+
+  default: 0.60
+
+  crypto: 0.60
+
 AUTO_TRADE_MAX_DAILY: 10           # Demo mode: max auto-executions per day
 
 AUTO_TRADE_MAX_PER_SCAN: 1         # Max per scan cycle; raise to 2 only with >10 active pairs
 
 AUTO_TRADE_SCAN_INTERVAL_MIN: 30   # Scan every 30 minutes
+
+AUTO_TRADE_BLOCKED_TREND_STATES:
+
+  default: ["DEAD RANGING", "RANGING"]
+
+  crypto: ["DEAD RANGING"]
+
+  forex: []
+
+  commodity: ["DEAD RANGING", "RANGING"]
+
+  stock: ["DEAD RANGING", "RANGING"]
+
+  index: ["DEAD RANGING", "RANGING"]
+
+AUTO_TRADE_BLOCKED_REGIMES:
+
+  default: ["RANGING"]
+
+  crypto: []
+
+  forex: []
+
+  commodity: ["RANGING"]
+
+  stock: ["RANGING"]
+
+  index: ["RANGING"]
 
 # Demo/testing: 1.0 = up to 100% of balance in simultaneous stop-risk (cap effectively off).
 # For live/paper discipline use ~0.06–0.12 (validated max 1.0 in config.py).

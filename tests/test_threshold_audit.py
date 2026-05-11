@@ -58,6 +58,27 @@ def _signal(score=2.0):
     }
 
 
+def _crypto_pair():
+    return {"display": "BTC/USDT", "symbol": "BTCUSDT", "type": "crypto", "enabled": True}
+
+
+def _crypto_signal(score=2.12):
+    sig = _signal(score=score)
+    sig.update(
+        {
+            "pair": "BTC/USDT",
+            "display": "BTC/USDT",
+            "symbol": "BTCUSDT",
+            "type": "crypto",
+            "confluenceScore": score,
+            "scoreNorm": round(score / 3.0, 4),
+            "scanThresholdEffective": 2.0,
+            "scanThreshold": 2.0,
+        }
+    )
+    return sig
+
+
 def _signal_with_engine_b_diagnostics():
     sig = _signal(score=1.9)
     sig["_threshold_audit_b_style_profile"] = {"min_rr": 1.5, "min_room_atr": 0.35}
@@ -177,6 +198,24 @@ def test_shadow_thresholds_do_not_affect_execution_decisions():
     assert row["shadow_thresholds"]["ENGINE_A"]["current_minus_10pct"] < row["thresholds"]["engine_a"]
     assert sig.get("confluenceScore") == before
     assert "shadow_thresholds" not in sig
+
+
+def test_threshold_audit_prefers_signal_scan_threshold_effective_for_engine_a():
+    row = build_signal_funnel_row(_crypto_pair(), _crypto_signal(), tier="trade")
+
+    assert row["thresholds"]["engine_a"] == 2.0
+    assert row["engine_a_passed"] is True
+
+
+def test_threshold_audit_falls_back_to_configured_scan_threshold_when_signal_threshold_missing():
+    sig = _crypto_signal()
+    sig.pop("scanThresholdEffective")
+    sig.pop("scanThreshold")
+
+    row = build_signal_funnel_row(_crypto_pair(), sig, tier="trade")
+
+    assert row["thresholds"]["engine_a"] == 2.0
+    assert row["engine_a_passed"] is True
 
 
 def test_fail_reason_counts_are_reported():

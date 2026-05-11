@@ -39,6 +39,38 @@ def test_can_execute_uses_live_min_conviction_gate():
     assert reason == ""
 
 
+def test_can_execute_keeps_crypto_a_only_conviction_gate_strict():
+    trader = AutoTrader()
+    cfg = _base_cfg()
+    cfg["AUTO_TRADE_MIN_CONVICTION"] = {"default": 0.50}
+
+    low_signal = {
+        "pair": "BTC/USDT",
+        "type": "crypto",
+        "direction": "LONG",
+        "trendState": "TRENDING",
+        "regimeName": "TRENDING",
+        "confluenceScore": 2.0,
+        "maxScore": 3.0,
+        "scoreNorm": 0.6667,
+        "combinedConviction": 0.40,
+        "enginesAligned": False,
+    }
+    ok, reason = trader._can_execute(low_signal, cfg)
+    assert ok is False
+    assert "conviction 0.400 < min 0.500" in reason
+
+    high_signal = dict(
+        low_signal,
+        confluenceScore=2.7,
+        scoreNorm=0.90,
+        combinedConviction=0.54,
+    )
+    ok, reason = trader._can_execute(high_signal, cfg)
+    assert ok is True
+    assert reason == ""
+
+
 def test_status_reports_real_live_gate():
     trader = AutoTrader()
     cfg = _base_cfg()
