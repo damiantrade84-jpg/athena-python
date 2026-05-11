@@ -187,6 +187,127 @@ def test_mt5_execute_reports_order_check_rejection_before_send(monkeypatch):
     assert result["tradeState"]["terminal_trade_allowed"] is True
 
 
+def test_mt5_filling_candidates_decode_symbol_flags(monkeypatch):
+    class _FakeMT5:
+        ORDER_FILLING_FOK = 0
+        ORDER_FILLING_IOC = 1
+        ORDER_FILLING_RETURN = 2
+
+    monkeypatch.setattr(mt5_executor, "_SYMBOL_FILLING_MODES", {"NVDA.US": _FakeMT5.ORDER_FILLING_RETURN})
+
+    candidates = mt5_executor._mt5_filling_candidates(
+        _FakeMT5(),
+        "NVDA.US",
+        SimpleNamespace(filling_mode=3),
+    )
+
+    assert candidates == [
+        _FakeMT5.ORDER_FILLING_RETURN,
+        _FakeMT5.ORDER_FILLING_FOK,
+        _FakeMT5.ORDER_FILLING_IOC,
+    ]
+
+
+def test_mt5_execute_retries_unsupported_filling_during_order_check(monkeypatch):
+    send_requests = []
+    checked_fillings = []
+
+    class _FakeMT5:
+        ORDER_TYPE_BUY = 0
+        ORDER_TYPE_SELL = 1
+        TRADE_ACTION_DEAL = 10
+        ORDER_TIME_GTC = 20
+        ORDER_FILLING_FOK = 0
+        ORDER_FILLING_IOC = 1
+        ORDER_FILLING_RETURN = 2
+        TRADE_RETCODE_DONE = 10009
+        SYMBOL_TRADE_MODE_DISABLED = 0
+        SYMBOL_TRADE_MODE_FULL = 4
+
+        @staticmethod
+        def symbol_select(_symbol, _enable):
+            return True
+
+        @staticmethod
+        def symbol_info_tick(_symbol):
+            return SimpleNamespace(ask=218.49, bid=218.40)
+
+        @staticmethod
+        def symbol_info(_symbol):
+            return SimpleNamespace(
+                digits=2,
+                trade_stops_level=0,
+                point=0.01,
+                volume_step=1.0,
+                volume_min=1.0,
+                trade_mode=_FakeMT5.SYMBOL_TRADE_MODE_FULL,
+                visible=True,
+                filling_mode=1,
+            )
+
+        @staticmethod
+        def terminal_info():
+            return SimpleNamespace(trade_allowed=True, tradeapi_disabled=False)
+
+        @staticmethod
+        def account_info():
+            return SimpleNamespace(trade_allowed=True, trade_expert=True, trade_mode=0)
+
+        @staticmethod
+        def order_check(request):
+            checked_fillings.append(request["type_filling"])
+            if request["type_filling"] == _FakeMT5.ORDER_FILLING_IOC:
+                return SimpleNamespace(retcode=10030, comment="Unsupported filling mode")
+            return SimpleNamespace(retcode=0, comment="Done", margin=12.34)
+
+    def fake_send(request):
+        send_requests.append(dict(request))
+        return SimpleNamespace(
+            retcode=_FakeMT5.TRADE_RETCODE_DONE,
+            order=12345,
+            volume=request["volume"],
+            price=request["price"],
+            comment="filled",
+        )
+
+    monkeypatch.setattr(mt5_executor, "_get_mt5", lambda: _FakeMT5())
+    monkeypatch.setattr(mt5_executor, "mt5_connect", lambda: True)
+    monkeypatch.setattr(mt5_executor, "mt5_map_symbol", lambda pair: "NVDA.US")
+    monkeypatch.setattr(mt5_executor, "_send_order_with_filling_fallback", fake_send)
+    monkeypatch.setattr(mt5_executor, "_mt5_resolve_position_ticket", lambda *_args, **_kwargs: 12345)
+    monkeypatch.setattr(mt5_executor, "_mt5_total_fee_cost", lambda *_args, **_kwargs: 0.0)
+    monkeypatch.setattr(
+        mt5_executor.telegram_notify,
+        "notify_trade_opened",
+        lambda **_kwargs: None,
+    )
+    monkeypatch.setitem(mt5_executor.CONFIG, "TIMED_EXIT", {"tp_mode": "trailing_atr"})
+    monkeypatch.setattr(mt5_executor, "_SYMBOL_FILLING_MODES", {})
+
+    signal = {
+        "pair": "NVDA",
+        "direction": "LONG",
+        "price": 218.49,
+        "sl": 205.51,
+        "tp1": 240.05,
+        "type": "stock",
+        "engine": "engine_a",
+        "confluenceScore": 1.97,
+    }
+    approval = RiskApproval(True, 77.0, 100.0, 0.01, 0.01, 0.0, "OK")
+
+    result = mt5_executor.mt5_execute(signal, approval)
+
+    assert result["success"] is True
+    assert checked_fillings == [
+        _FakeMT5.ORDER_FILLING_IOC,
+        _FakeMT5.ORDER_FILLING_FOK,
+    ]
+    assert len(send_requests) == 1
+    assert send_requests[0]["type_filling"] == _FakeMT5.ORDER_FILLING_FOK
+    assert mt5_executor._SYMBOL_FILLING_MODES["NVDA.US"] == _FakeMT5.ORDER_FILLING_FOK
+
+
 def test_mt5_execute_reports_request_when_order_send_rejects_after_check_ok(monkeypatch):
     class _FakeMT5:
         ORDER_TYPE_BUY = 0

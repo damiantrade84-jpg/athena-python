@@ -230,6 +230,94 @@ def _mt5_order_check_summary(order_check) -> dict | None:
 
 # ── Lazy MT5 import (only needed when execution is used) ─────────────────────
 
+def _mt5_is_success_retcode(retcode, mt5) -> bool:
+    return retcode in (0, getattr(mt5, "TRADE_RETCODE_DONE", 10009))
+
+
+def _mt5_is_unsupported_filling_result(result) -> bool:
+    retcode = getattr(result, "retcode", None)
+    comment = str(getattr(result, "comment", "") or "")
+    return retcode == 10030 or "filling" in comment.lower()
+
+
+def _mt5_filling_candidates(mt5, mt5_symbol: str, sym_info=None, preferred=None) -> list[int]:
+    candidates: list[int] = []
+
+    def _add(raw_value) -> None:
+        if raw_value is None:
+            return
+        try:
+            value = int(raw_value)
+        except (TypeError, ValueError):
+            return
+        if value not in candidates:
+            candidates.append(value)
+
+    _add(preferred)
+    _add(_SYMBOL_FILLING_MODES.get(mt5_symbol))
+
+    raw_flags = getattr(sym_info, "filling_mode", None)
+    try:
+        flags = int(raw_flags) if raw_flags is not None else None
+    except (TypeError, ValueError):
+        flags = None
+
+    if flags is not None:
+        if flags & 1:
+            _add(getattr(mt5, "ORDER_FILLING_FOK", None))
+        if flags & 2:
+            _add(getattr(mt5, "ORDER_FILLING_IOC", None))
+    else:
+        _add(getattr(mt5, "ORDER_FILLING_IOC", None))
+
+    _add(getattr(mt5, "ORDER_FILLING_RETURN", None))
+
+    if not candidates:
+        _add(getattr(mt5, "ORDER_FILLING_IOC", None))
+
+    return candidates
+
+
+def _mt5_cache_filling_mode(mt5_symbol: str, filling_mode: int) -> None:
+    _SYMBOL_FILLING_MODES[mt5_symbol] = int(filling_mode)
+    log.info(f"[MT5] Saved filling mode {int(filling_mode)} for {mt5_symbol}")
+
+
+def _mt5_order_check_with_filling_fallback(mt5, request: dict, sym_info=None):
+    if not hasattr(mt5, "order_check"):
+        return None
+
+    mt5_symbol = request.get("symbol")
+    candidates = _mt5_filling_candidates(
+        mt5,
+        mt5_symbol,
+        sym_info=sym_info,
+        preferred=request.get("type_filling"),
+    )
+    last_check = None
+    for filling_mode in candidates:
+        request["type_filling"] = filling_mode
+        try:
+            order_check = mt5.order_check(dict(request))
+        except Exception as check_exc:
+            log.warning(f"[MT5] order_check failed before send on {mt5_symbol}: {check_exc}")
+            return None
+
+        last_check = order_check
+        check_retcode = getattr(order_check, "retcode", None)
+        if _mt5_is_success_retcode(check_retcode, mt5):
+            _mt5_cache_filling_mode(mt5_symbol, filling_mode)
+            return order_check
+        if _mt5_is_unsupported_filling_result(order_check):
+            log.warning(
+                f"[MT5] order_check unsupported filling for {mt5_symbol} with mode={filling_mode}; trying next candidate"
+            )
+            continue
+        return order_check
+
+    return last_check
+
+
 _mt5 = None
 
 
@@ -895,41 +983,27 @@ def _send_order_with_filling_fallback(request: dict):
     if not mt5 or not mt5_symbol:
         return None
 
-    # Try current or default
-    current_filling = _SYMBOL_FILLING_MODES.get(mt5_symbol, mt5.ORDER_FILLING_IOC)
-    request["type_filling"] = current_filling
-    result = mt5.order_send(request)
-
-    # MT5 Unsupported filling mode retcode is 10030, but checking comment is safe
-    if (
-        result
-        and result.retcode != mt5.TRADE_RETCODE_DONE
-        and "filling" in str(result.comment).lower()
+    sym_info = mt5.symbol_info(mt5_symbol)
+    last_result = None
+    for filling_mode in _mt5_filling_candidates(
+        mt5,
+        mt5_symbol,
+        sym_info=sym_info,
+        preferred=request.get("type_filling"),
     ):
-        # Try fallbacks
-        fallbacks = [
-            mt5.ORDER_FILLING_FOK,
-            mt5.ORDER_FILLING_RETURN,
-            mt5.ORDER_FILLING_IOC,
-        ]
-        if current_filling in fallbacks:
-            fallbacks.remove(current_filling)
-
-        for fallback in fallbacks:
-            request["type_filling"] = fallback
-            result = mt5.order_send(request)
-            if result and (
-                result.retcode == mt5.TRADE_RETCODE_DONE
-                or "filling" not in str(result.comment).lower()
-            ):
-                if result.retcode == mt5.TRADE_RETCODE_DONE:
-                    # Save the working filling mode globally
-                    _SYMBOL_FILLING_MODES[mt5_symbol] = fallback
-                    log.info(
-                        f"[MT5] Dynamically saved {fallback} as filling mode for {mt5_symbol}"
-                    )
-                break
-    return result
+        request["type_filling"] = filling_mode
+        result = mt5.order_send(request)
+        last_result = result
+        if result and _mt5_is_success_retcode(result.retcode, mt5):
+            _mt5_cache_filling_mode(mt5_symbol, filling_mode)
+            return result
+        if result and _mt5_is_unsupported_filling_result(result):
+            log.warning(
+                f"[MT5] order_send unsupported filling for {mt5_symbol} with mode={filling_mode}; trying next candidate"
+            )
+            continue
+        return result
+    return last_result
 
 
 def _mt5_resolve_position_ticket(
@@ -1340,16 +1414,10 @@ def mt5_execute(signal: dict, approval: "RiskApproval") -> dict:  # noqa: F821
         if v_tp and v_tp > 0:
             request["tp"] = v_tp
 
-        order_check = None
-        if hasattr(mt5, "order_check"):
-            try:
-                order_check = mt5.order_check(dict(request))
-            except Exception as check_exc:
-                log.warning(f"[MT5] order_check failed before send on {mt5_symbol}: {check_exc}")
-                order_check = None
+        order_check = _mt5_order_check_with_filling_fallback(mt5, request, sym_info=sym_info)
         if order_check is not None:
             check_retcode = getattr(order_check, "retcode", None)
-            if check_retcode not in (0, getattr(mt5, "TRADE_RETCODE_DONE", 10009)):
+            if not _mt5_is_success_retcode(check_retcode, mt5):
                 check_comment = getattr(order_check, "comment", "")
                 log.error(
                     f"[MT5] order_check rejected {mt5_symbol}: "
