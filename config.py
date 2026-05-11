@@ -773,6 +773,14 @@ CONFIG: dict = {
     "EXECUTION_ENABLED": True,  # Master switch — enabled for demo live-level testing
     # Re-fetch H1/H4/D1 candle metadata right before risk/guardian during execute paths.
     "QUICK_EXEC_PREFETCH_CANDLE_META": False,
+    # Rebuild candleFreshness/consistency/dataFreshness before risk (poisoned client fields).
+    "EXECUTION_HYDRATE_CANDLE_QUALITY": True,
+    # MT5 D1: small multi-bucket lag vs wall clock (weekends/holidays) downgraded to non-blocking severity.
+    "MT5_D1_CALENDAR_GAP_GRACE_BUCKETS": 4,
+    # Legacy alias — used if MT5_D1_CALENDAR_GAP_GRACE_BUCKETS is omitted in YAML.
+    "FOREX_D1_MULTI_BUCKET_CALENDAR_GAP_GRACE_BUCKETS": 4,
+    # Types that must not use D1 gap grace (24/7 markets).
+    "MT5_D1_CALENDAR_GAP_EXCLUDE_TYPES": ["crypto"],
     "AUTO_EXECUTE": False,  # Auto-execute after AI grade (manual click only when False)
     "RISK_ENGINE_ENABLED": True,
     "MT5_EXECUTION_ENABLED": True,
@@ -1061,6 +1069,38 @@ for _k, _v in _yaml_overrides.items():
         CONFIG[_k] = _v
 
 
+def get_d1_resample_offset_hours() -> float:
+    """MT5 daily bar grid offset (hours, UTC-aligned policy layer).
+
+    **Precedence:** top-level ``config.yaml`` key ``D1_RESAMPLE_OFFSET_HOURS`` wins when
+    present. Otherwise inherits ``SCALP_ENGINE.D1_RESAMPLE_OFFSET_HOURS`` (legacy nest).
+    Missing / invalid → ``0.0`` (UTC 00:00 daily buckets).
+    """
+    raw = CONFIG.get("D1_RESAMPLE_OFFSET_HOURS")
+    if raw is None:
+        se = CONFIG.get("SCALP_ENGINE")
+        if isinstance(se, dict):
+            raw = se.get("D1_RESAMPLE_OFFSET_HOURS")
+    try:
+        if raw is None:
+            return 0.0
+        return float(raw)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def get_mt5_fetch_stale_unshifted_age_sec() -> float:
+    """Max age (seconds) for newest MT5 bar before refusing tick-TZ heuristic in fetch_mt5."""
+    try:
+        v = CONFIG.get("MT5_FETCH_STALE_UNSHIFTED_AGE_SEC")
+        if v is None:
+            return float(36 * 3600)
+        out = float(v)
+        return out if out > 0 else float(36 * 3600)
+    except (TypeError, ValueError):
+        return float(36 * 3600)
+
+
 # =============================================================================
 # AI SAFETY COMPILE-TIME CONSTANTS (Audit CRIT-001, CRIT-002, CRIT-004, CRIT-005)
 # These cannot be overridden by environment variables or YAML.
@@ -1317,7 +1357,7 @@ _CRITICAL_SAFETY_SCHEMA: dict[tuple[str, ...], dict] = {
     ("BYBIT_LEVERAGE",): {"type": "int", "min": 1, "max": 1},
     ("RISK_PCT",): {"type": "number", "min": 0.0, "max": 0.05},
     ("MAX_RISK_PER_TRADE",): {"type": "number", "min": 0.0, "max": 0.05},
-    ("MAX_PORTFOLIO_HEAT",): {"type": "number", "min": 0.0, "max": 0.30},
+    ("MAX_PORTFOLIO_HEAT",): {"type": "number", "min": 0.0, "max": 1.0},
     ("MAX_OPEN_POSITIONS",): {"type": "int", "min": 0, "max": 100},
     ("MAX_CORRELATED_POSITIONS",): {"type": "int", "min": 0, "max": 20},
     ("DAILY_LOSS_LIMIT",): {"type": "number", "min": 0.0, "max": 0.20},

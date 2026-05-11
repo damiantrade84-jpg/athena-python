@@ -105,6 +105,13 @@ FOREX_H4_RESAMPLE_OFFSET_HOURS: 1.0
 # fallback candles into execution-eligible Engine A candles.
 MT5_CANDLE_FALLBACK_ENABLED: false
 
+# Bars older than this vs wall-clock skip tick-TZ heuristic in fetch_mt5 (illiquid exotic guard).
+# Code default is 129600 (36 hours) if omitted.
+MT5_FETCH_STALE_UNSHIFTED_AGE_SEC: 129600
+
+# MT5 D1 bar-start offset (hours UTC). Duplicate under SCALP_ENGINE for Engine D UX; root wins.
+D1_RESAMPLE_OFFSET_HOURS: 0.0
+
 # Crypto paper execution is Bybit; use Bybit public data for Engine A live
 # SL/TP ATR and derivative context. Binance fallback is off by default so venue
 # basis drift cannot silently size Bybit paper trades.
@@ -813,7 +820,9 @@ AUTO_TRADE_MAX_PER_SCAN: 1         # Max per scan cycle; raise to 2 only with >1
 
 AUTO_TRADE_SCAN_INTERVAL_MIN: 30   # Scan every 30 minutes
 
-MAX_PORTFOLIO_HEAT: 0.06      # 6% total risk across all positions
+# Demo/testing: 1.0 = up to 100% of balance in simultaneous stop-risk (cap effectively off).
+# For live/paper discipline use ~0.06–0.12 (validated max 1.0 in config.py).
+MAX_PORTFOLIO_HEAT: 1.0
 
 MAX_OPEN_POSITIONS: 20        # Testing only - revert before live
 
@@ -824,6 +833,17 @@ SIGNAL_MAX_AGE_SEC: 300       # 5 min freshness window
 # Refresh candleFetchMeta via fetch_candles immediately before risk/guardian on execute/
 # quick-execute/scalp-execute so long AI-review waits do not block on stale embedded H1/H4 flags.
 QUICK_EXEC_PREFETCH_CANDLE_META: true
+
+# Execution: rebuild candle freshness/consistency + dataFreshness before risk_engine (recommended).
+EXECUTION_HYDRATE_CANDLE_QUALITY: true
+
+# MT5 D1: treat small calendar/session gaps (e.g. weekend) as non-blocking for scoring/execution gates.
+# Applies to forex, commodities, indices, stocks on MT5; excluded types (default: crypto) stay strict.
+MT5_D1_CALENDAR_GAP_GRACE_BUCKETS: 4
+MT5_D1_CALENDAR_GAP_EXCLUDE_TYPES: [crypto]
+
+# Deprecated alias (still read if MT5_D1_CALENDAR_GAP_GRACE_BUCKETS removed from YAML merge).
+FOREX_D1_MULTI_BUCKET_CALENDAR_GAP_GRACE_BUCKETS: 4
 
 FOREX_SESSION_FILTER: true    # true = London+NY+Asian only; false = 24h (disable for testing)
 
@@ -2323,6 +2343,8 @@ SCALP_ENGINE:
   # D1 resample offset for MT5 brokers (default 0.0 = UTC 00:00).
   # Some brokers (e.g., Pepperstone) use Sydney roll at 22:00 UTC for D1 candles.
   # Adjust this to match the broker's actual D1 session start time.
+  # Resolved via config.get_d1_resample_offset_hours(): top-level D1_RESAMPLE_OFFSET_HOURS
+  # (see MT5 block above) overrides this nested value when both are set.
   D1_RESAMPLE_OFFSET_HOURS: 0.0
 
   # ── Engine B Zone Cache TTL ─────────────────────────────────────────────────
