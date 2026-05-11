@@ -29,10 +29,22 @@ def _is_engine_d_signal(signal: dict) -> bool:
     return engine in ("scalp", "engine d", "scalp_vp")
 
 
+def _timed_exit_cfg() -> dict:
+    cfg = CONFIG.get("TIMED_EXIT") or {}
+    return cfg if isinstance(cfg, dict) else {}
+
+
 def _uses_trailing_atr_exit(signal: dict) -> bool:
     """True when Engine A/B exits are managed by the timed-exit chandelier trail."""
-    mode = str((CONFIG.get("TIMED_EXIT") or {}).get("tp_mode", "fixed")).strip().lower()
+    mode = str(_timed_exit_cfg().get("tp_mode", "fixed")).strip().lower()
     return mode == "trailing_atr" and not _is_engine_d_signal(signal)
+
+
+def _mt5_should_send_broker_tp(signal: dict) -> bool:
+    """MT5 can still attach TP1 while timed_exit manages trailing SL ratchets."""
+    if not _uses_trailing_atr_exit(signal):
+        return True
+    return bool(_timed_exit_cfg().get("mt5_attach_broker_tp_when_trailing_atr", True))
 
 
 def _mt5_entry_slippage_bps(
@@ -111,6 +123,109 @@ def _mt5_total_fee_cost(mt5, position_tickets: list[int | None]) -> float | None
         total += float(fee_cost)
         found_any = True
     return round(total, 8) if found_any else None
+
+
+def _mt5_trade_state(mt5, mt5_symbol: str, sym_info=None) -> dict:
+    """Return MT5 trade-permission flags needed before a live order send."""
+    state = {"symbol": mt5_symbol}
+    try:
+        terminal = mt5.terminal_info()
+        if terminal is not None:
+            state["terminal_trade_allowed"] = bool(
+                getattr(terminal, "trade_allowed", False)
+            )
+            state["terminal_tradeapi_disabled"] = bool(
+                getattr(terminal, "tradeapi_disabled", False)
+            )
+    except Exception as exc:
+        state["terminal_error"] = str(exc)
+
+    try:
+        account = mt5.account_info()
+        if account is not None:
+            state["account_trade_allowed"] = bool(
+                getattr(account, "trade_allowed", False)
+            )
+            state["account_trade_expert"] = bool(getattr(account, "trade_expert", False))
+            state["account_trade_mode"] = getattr(account, "trade_mode", None)
+    except Exception as exc:
+        state["account_error"] = str(exc)
+
+    try:
+        if sym_info is None:
+            sym_info = mt5.symbol_info(mt5_symbol)
+        if sym_info is not None:
+            state["symbol_trade_mode"] = getattr(sym_info, "trade_mode", None)
+            state["symbol_trade_mode_disabled"] = (
+                state["symbol_trade_mode"]
+                == getattr(mt5, "SYMBOL_TRADE_MODE_DISABLED", 0)
+            )
+            state["symbol_trade_mode_full"] = getattr(
+                mt5, "SYMBOL_TRADE_MODE_FULL", 4
+            )
+            state["symbol_visible"] = bool(getattr(sym_info, "visible", False))
+    except Exception as exc:
+        state["symbol_error"] = str(exc)
+
+    return state
+
+
+def _mt5_trade_state_block_reason(state: dict, direction: str, mt5) -> str | None:
+    if state.get("terminal_tradeapi_disabled") is True:
+        return "terminal_tradeapi_disabled"
+    if state.get("terminal_trade_allowed") is False:
+        return "terminal_trade_not_allowed"
+    if state.get("account_trade_allowed") is False:
+        return "account_trade_not_allowed"
+    if state.get("account_trade_expert") is False:
+        return "account_expert_trading_not_allowed"
+    if state.get("symbol_trade_mode_disabled") is True:
+        return "symbol_trade_disabled"
+
+    mode = state.get("symbol_trade_mode")
+    if direction == "LONG" and mode == getattr(mt5, "SYMBOL_TRADE_MODE_SHORTONLY", 2):
+        return "symbol_short_only"
+    if direction == "SHORT" and mode == getattr(mt5, "SYMBOL_TRADE_MODE_LONGONLY", 1):
+        return "symbol_long_only"
+    return None
+
+
+def _mt5_scalar(value):
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    try:
+        return value.item()
+    except Exception:
+        return str(value)
+
+
+def _mt5_order_request_summary(request: dict) -> dict:
+    allowed = (
+        "action",
+        "symbol",
+        "volume",
+        "type",
+        "price",
+        "sl",
+        "tp",
+        "deviation",
+        "magic",
+        "comment",
+        "type_time",
+        "type_filling",
+    )
+    return {key: _mt5_scalar(request[key]) for key in allowed if key in request}
+
+
+def _mt5_order_check_summary(order_check) -> dict | None:
+    if order_check is None:
+        return None
+    fields = ("retcode", "comment", "margin", "margin_free", "margin_level", "profit")
+    out = {}
+    for field in fields:
+        if hasattr(order_check, field):
+            out[field] = _mt5_scalar(getattr(order_check, field))
+    return out
 
 
 # ── Lazy MT5 import (only needed when execution is used) ─────────────────────
@@ -762,6 +877,11 @@ def mt5_get_symbol_info(athena_display: str) -> dict:
         "trade_contract_size": info.trade_contract_size,
         "trade_tick_value": info.trade_tick_value,
         "trade_tick_size": info.trade_tick_size,
+        "trade_mode": getattr(info, "trade_mode", None),
+        "trade_mode_disabled": getattr(info, "trade_mode", None)
+        == getattr(mt5, "SYMBOL_TRADE_MODE_DISABLED", 0),
+        "order_mode": getattr(info, "order_mode", None),
+        "filling_mode": getattr(info, "filling_mode", None),
         "bid": info.bid,
         "ask": info.ask,
         "spread": info.spread,
@@ -1022,6 +1142,17 @@ def mt5_execute(signal: dict, approval: "RiskApproval") -> dict:  # noqa: F821
 
     digits = sym_info.digits if sym_info else 5
 
+    trade_state = _mt5_trade_state(mt5, mt5_symbol, sym_info)
+    block_reason = _mt5_trade_state_block_reason(trade_state, direction, mt5)
+    if block_reason:
+        log.error(f"[MT5] {mt5_symbol}: trade disabled before order_send: {trade_state}")
+        return {
+            "success": False,
+            "error": f"MT5_TRADE_DISABLED:{block_reason}",
+            "retcode": getattr(mt5, "TRADE_RETCODE_TRADE_DISABLED", 10017),
+            "tradeState": trade_state,
+        }
+
     sl = round(float(signal.get("sl", 0)), digits)
 
     tp = round(float(signal.get("tp1", 0)), digits)  # Use TP1 as primary target
@@ -1164,14 +1295,17 @@ def mt5_execute(signal: dict, approval: "RiskApproval") -> dict:  # noqa: F821
     vol_min = sym_info.volume_min if sym_info else 0.01
 
     _is_scalp = _is_engine_d_signal(signal)
-    _use_broker_tp = not _uses_trailing_atr_exit(signal)
+    _uses_trailing_exit = _uses_trailing_atr_exit(signal)
+    _use_broker_tp = _mt5_should_send_broker_tp(signal)
     # Engine D / Scalp Lab uses one protected broker position with TP1 and SL.
     if _is_scalp:
         do_split = False
     else:
         # Only split if TP2 is distinct and total volume allows for at least 2 units of min_step
         do_split = (
-            _use_broker_tp
+            not _uses_trailing_exit
+            and _use_broker_tp
+            and tp > 0
             and tp2 > 0
             and abs(tp2 - tp) > (10 * sym_info.point)
             and total_vol >= (vol_min * 2)
@@ -1206,6 +1340,30 @@ def mt5_execute(signal: dict, approval: "RiskApproval") -> dict:  # noqa: F821
         if v_tp and v_tp > 0:
             request["tp"] = v_tp
 
+        order_check = None
+        if hasattr(mt5, "order_check"):
+            try:
+                order_check = mt5.order_check(dict(request))
+            except Exception as check_exc:
+                log.warning(f"[MT5] order_check failed before send on {mt5_symbol}: {check_exc}")
+                order_check = None
+        if order_check is not None:
+            check_retcode = getattr(order_check, "retcode", None)
+            if check_retcode not in (0, getattr(mt5, "TRADE_RETCODE_DONE", 10009)):
+                check_comment = getattr(order_check, "comment", "")
+                log.error(
+                    f"[MT5] order_check rejected {mt5_symbol}: "
+                    f"retcode={check_retcode} comment={check_comment}"
+                )
+                return {
+                    "success": False,
+                    "error": f"ORDER_CHECK_REJECTED: {check_comment}",
+                    "retcode": check_retcode,
+                    "request": _mt5_order_request_summary(request),
+                    "orderCheck": _mt5_order_check_summary(order_check),
+                    "tradeState": _mt5_trade_state(mt5, mt5_symbol, sym_info),
+                }
+
         log.info(f"[MT5] Sending order: {direction} {v_size} {mt5_symbol} @ {price} | SL: {sl} | TP: {v_tp}")
         result = _send_order_with_filling_fallback(request)
 
@@ -1216,6 +1374,9 @@ def mt5_execute(signal: dict, approval: "RiskApproval") -> dict:  # noqa: F821
 
         if result.retcode != mt5.TRADE_RETCODE_DONE:
             log.error(f"[MT5] Order rejected: retcode={result.retcode} comment={result.comment}")
+            trade_state = None
+            if result.retcode == getattr(mt5, "TRADE_RETCODE_TRADE_DISABLED", 10017):
+                trade_state = _mt5_trade_state(mt5, mt5_symbol, sym_info)
             rollback_results = []
             if results:
                 log.error(
@@ -1253,14 +1414,19 @@ def mt5_execute(signal: dict, approval: "RiskApproval") -> dict:  # noqa: F821
                         )
                         log.error(f"[MT5] Rollback failed for partial leg: {_rb_e}")
             rollback_complete = bool(results) and all(r.get("success") for r in rollback_results)
-            return {
+            rejected = {
                 "success": False,
                 "error": f"ORDER_REJECTED: {result.comment}",
                 "retcode": result.retcode,
                 "partialLegsRolledBack": sum(1 for r in rollback_results if r.get("success")),
                 "rollbackComplete": rollback_complete if results else None,
                 "rollbackResults": rollback_results,
+                "request": _mt5_order_request_summary(request),
+                "orderCheck": _mt5_order_check_summary(order_check),
             }
+            if trade_state is not None:
+                rejected["tradeState"] = trade_state
+            return rejected
 
         log.info(f"[MT5] ORDER FILLED: ticket={result.order} | {direction} {result.volume} {mt5_symbol} @ {result.price}")
         results.append(result)

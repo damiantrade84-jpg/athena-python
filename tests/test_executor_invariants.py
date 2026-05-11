@@ -42,7 +42,242 @@ def test_mt5_execute_rejects_stop_beyond_configured_cap(monkeypatch):
     assert result["error"].startswith("SL_TOO_FAR")
 
 
-def test_mt5_non_scalp_trailing_atr_execute_sends_no_broker_tp(monkeypatch):
+def test_mt5_execute_blocks_disabled_symbol_before_order_send(monkeypatch):
+    send_called = False
+
+    class _FakeMT5:
+        ORDER_TYPE_BUY = 0
+        ORDER_TYPE_SELL = 1
+        TRADE_RETCODE_TRADE_DISABLED = 10017
+        SYMBOL_TRADE_MODE_DISABLED = 0
+        SYMBOL_TRADE_MODE_FULL = 4
+
+        @staticmethod
+        def symbol_select(_symbol, _enable):
+            return True
+
+        @staticmethod
+        def symbol_info_tick(_symbol):
+            return SimpleNamespace(ask=1.1000, bid=1.0998)
+
+        @staticmethod
+        def symbol_info(_symbol):
+            return SimpleNamespace(
+                digits=5,
+                trade_stops_level=0,
+                point=0.00001,
+                trade_mode=_FakeMT5.SYMBOL_TRADE_MODE_DISABLED,
+                visible=True,
+            )
+
+        @staticmethod
+        def terminal_info():
+            return SimpleNamespace(trade_allowed=True, tradeapi_disabled=False)
+
+        @staticmethod
+        def account_info():
+            return SimpleNamespace(trade_allowed=True, trade_expert=True, trade_mode=0)
+
+    def fake_send(_request):
+        nonlocal send_called
+        send_called = True
+        raise AssertionError("order_send must not be reached for disabled symbol")
+
+    monkeypatch.setattr(mt5_executor, "_get_mt5", lambda: _FakeMT5())
+    monkeypatch.setattr(mt5_executor, "mt5_connect", lambda: True)
+    monkeypatch.setattr(mt5_executor, "mt5_map_symbol", lambda pair: pair)
+    monkeypatch.setattr(mt5_executor, "_send_order_with_filling_fallback", fake_send)
+
+    signal = {
+        "pair": "EUR/USD",
+        "direction": "LONG",
+        "price": 1.1000,
+        "sl": 1.0950,
+        "tp1": 1.1150,
+        "type": "forex",
+    }
+    approval = RiskApproval(True, 1.0, 100.0, 0.01, 0.01, 0.0, "OK")
+
+    result = mt5_executor.mt5_execute(signal, approval)
+
+    assert send_called is False
+    assert result["success"] is False
+    assert result["error"] == "MT5_TRADE_DISABLED:symbol_trade_disabled"
+    assert result["retcode"] == _FakeMT5.TRADE_RETCODE_TRADE_DISABLED
+    assert result["tradeState"]["symbol_trade_mode_disabled"] is True
+
+
+def test_mt5_execute_reports_order_check_rejection_before_send(monkeypatch):
+    send_called = False
+
+    class _FakeMT5:
+        ORDER_TYPE_BUY = 0
+        ORDER_TYPE_SELL = 1
+        TRADE_ACTION_DEAL = 10
+        ORDER_TIME_GTC = 20
+        ORDER_FILLING_IOC = 30
+        TRADE_RETCODE_DONE = 10009
+        TRADE_RETCODE_TRADE_DISABLED = 10017
+        SYMBOL_TRADE_MODE_DISABLED = 0
+        SYMBOL_TRADE_MODE_FULL = 4
+
+        @staticmethod
+        def symbol_select(_symbol, _enable):
+            return True
+
+        @staticmethod
+        def symbol_info_tick(_symbol):
+            return SimpleNamespace(ask=1.1000, bid=1.0998)
+
+        @staticmethod
+        def symbol_info(_symbol):
+            return SimpleNamespace(
+                digits=5,
+                trade_stops_level=0,
+                point=0.00001,
+                volume_step=0.01,
+                volume_min=0.01,
+                trade_mode=_FakeMT5.SYMBOL_TRADE_MODE_FULL,
+                visible=True,
+            )
+
+        @staticmethod
+        def terminal_info():
+            return SimpleNamespace(trade_allowed=True, tradeapi_disabled=False)
+
+        @staticmethod
+        def account_info():
+            return SimpleNamespace(trade_allowed=True, trade_expert=True, trade_mode=0)
+
+        @staticmethod
+        def order_check(_request):
+            return SimpleNamespace(
+                retcode=_FakeMT5.TRADE_RETCODE_TRADE_DISABLED,
+                comment="Trade disabled",
+            )
+
+    def fake_send(_request):
+        nonlocal send_called
+        send_called = True
+        raise AssertionError("order_send must not be reached after order_check reject")
+
+    monkeypatch.setattr(mt5_executor, "_get_mt5", lambda: _FakeMT5())
+    monkeypatch.setattr(mt5_executor, "mt5_connect", lambda: True)
+    monkeypatch.setattr(mt5_executor, "mt5_map_symbol", lambda pair: pair)
+    monkeypatch.setattr(mt5_executor, "_send_order_with_filling_fallback", fake_send)
+    monkeypatch.setitem(mt5_executor.CONFIG, "TIMED_EXIT", {"tp_mode": "trailing_atr"})
+
+    signal = {
+        "pair": "EUR/USD",
+        "direction": "LONG",
+        "price": 1.1000,
+        "sl": 1.0950,
+        "tp1": 1.1150,
+        "type": "forex",
+        "engine": "engine_a",
+    }
+    approval = RiskApproval(True, 1.0, 100.0, 0.01, 0.01, 0.0, "OK")
+
+    result = mt5_executor.mt5_execute(signal, approval)
+
+    assert send_called is False
+    assert result["success"] is False
+    assert result["error"] == "ORDER_CHECK_REJECTED: Trade disabled"
+    assert result["retcode"] == _FakeMT5.TRADE_RETCODE_TRADE_DISABLED
+    assert result["tradeState"]["terminal_trade_allowed"] is True
+
+
+def test_mt5_execute_reports_request_when_order_send_rejects_after_check_ok(monkeypatch):
+    class _FakeMT5:
+        ORDER_TYPE_BUY = 0
+        ORDER_TYPE_SELL = 1
+        TRADE_ACTION_DEAL = 10
+        ORDER_TIME_GTC = 20
+        ORDER_FILLING_IOC = 30
+        TRADE_RETCODE_DONE = 10009
+        TRADE_RETCODE_TRADE_DISABLED = 10017
+        SYMBOL_TRADE_MODE_DISABLED = 0
+        SYMBOL_TRADE_MODE_FULL = 4
+
+        @staticmethod
+        def symbol_select(_symbol, _enable):
+            return True
+
+        @staticmethod
+        def symbol_info_tick(_symbol):
+            return SimpleNamespace(ask=1.1000, bid=1.0998)
+
+        @staticmethod
+        def symbol_info(_symbol):
+            return SimpleNamespace(
+                digits=5,
+                trade_stops_level=0,
+                point=0.00001,
+                volume_step=0.01,
+                volume_min=0.01,
+                trade_mode=_FakeMT5.SYMBOL_TRADE_MODE_FULL,
+                visible=True,
+            )
+
+        @staticmethod
+        def terminal_info():
+            return SimpleNamespace(trade_allowed=True, tradeapi_disabled=False)
+
+        @staticmethod
+        def account_info():
+            return SimpleNamespace(trade_allowed=True, trade_expert=True, trade_mode=0)
+
+        @staticmethod
+        def order_check(_request):
+            return SimpleNamespace(retcode=0, comment="Done", margin=12.34)
+
+    def fake_send(request):
+        return SimpleNamespace(
+            retcode=_FakeMT5.TRADE_RETCODE_TRADE_DISABLED,
+            order=0,
+            volume=0,
+            price=0,
+            comment="Trade disabled",
+        )
+
+    monkeypatch.setattr(mt5_executor, "_get_mt5", lambda: _FakeMT5())
+    monkeypatch.setattr(mt5_executor, "mt5_connect", lambda: True)
+    monkeypatch.setattr(mt5_executor, "mt5_map_symbol", lambda pair: pair)
+    monkeypatch.setattr(mt5_executor, "_send_order_with_filling_fallback", fake_send)
+    monkeypatch.setitem(
+        mt5_executor.CONFIG,
+        "TIMED_EXIT",
+        {
+            "tp_mode": "trailing_atr",
+            "mt5_attach_broker_tp_when_trailing_atr": True,
+        },
+    )
+
+    signal = {
+        "pair": "EUR/USD",
+        "direction": "LONG",
+        "price": 1.1000,
+        "sl": 1.0950,
+        "tp1": 1.1150,
+        "type": "forex",
+        "engine": "engine_a",
+    }
+    approval = RiskApproval(True, 1.0, 100.0, 0.01, 0.01, 0.0, "OK")
+
+    result = mt5_executor.mt5_execute(signal, approval)
+
+    assert result["success"] is False
+    assert result["error"] == "ORDER_REJECTED: Trade disabled"
+    assert result["retcode"] == _FakeMT5.TRADE_RETCODE_TRADE_DISABLED
+    assert result["orderCheck"] == {"retcode": 0, "comment": "Done", "margin": 12.34}
+    assert result["request"]["symbol"] == "EUR/USD"
+    assert result["request"]["volume"] == approval.volume
+    assert result["request"]["sl"] == signal["sl"]
+    assert result["request"]["tp"] == signal["tp1"]
+    assert result["tradeState"]["symbol_trade_mode_disabled"] is False
+
+
+def test_mt5_non_scalp_trailing_atr_execute_attaches_configured_broker_tp(monkeypatch):
     sent_requests = []
 
     class _FakeMT5:
@@ -91,7 +326,172 @@ def test_mt5_non_scalp_trailing_atr_execute_sends_no_broker_tp(monkeypatch):
         "notify_trade_opened",
         lambda **_kwargs: None,
     )
-    monkeypatch.setitem(mt5_executor.CONFIG, "TIMED_EXIT", {"tp_mode": "trailing_atr"})
+    monkeypatch.setitem(
+        mt5_executor.CONFIG,
+        "TIMED_EXIT",
+        {
+            "tp_mode": "trailing_atr",
+            "mt5_attach_broker_tp_when_trailing_atr": True,
+        },
+    )
+
+    signal = {
+        "pair": "EUR/USD",
+        "direction": "LONG",
+        "price": 1.1000,
+        "sl": 1.0950,
+        "tp1": 1.1150,
+        "type": "forex",
+        "engine": "engine_a",
+        "style": "intraday",
+    }
+    approval = RiskApproval(True, 1.0, 100.0, 0.01, 0.01, 0.0, "OK")
+
+    result = mt5_executor.mt5_execute(signal, approval)
+
+    assert result["success"] is True
+    assert sent_requests[0]["sl"] == signal["sl"]
+    assert sent_requests[0]["tp"] == signal["tp1"]
+    assert result["brokerTp"] == signal["tp1"]
+
+
+def test_mt5_non_scalp_trailing_atr_broker_tp_does_not_split_tp2(monkeypatch):
+    sent_requests = []
+
+    class _FakeMT5:
+        ORDER_TYPE_BUY = 0
+        ORDER_TYPE_SELL = 1
+        TRADE_ACTION_DEAL = 10
+        ORDER_TIME_GTC = 20
+        ORDER_FILLING_IOC = 30
+        TRADE_RETCODE_DONE = 10009
+
+        @staticmethod
+        def symbol_select(_symbol, _enable):
+            return True
+
+        @staticmethod
+        def symbol_info_tick(_symbol):
+            return SimpleNamespace(ask=1.1000, bid=1.0998)
+
+        @staticmethod
+        def symbol_info(_symbol):
+            return SimpleNamespace(
+                digits=5,
+                trade_stops_level=0,
+                point=0.00001,
+                volume_step=0.01,
+                volume_min=0.01,
+            )
+
+    def fake_send(request):
+        sent_requests.append(request)
+        return SimpleNamespace(
+            retcode=_FakeMT5.TRADE_RETCODE_DONE,
+            order=12345,
+            volume=request["volume"],
+            price=request["price"],
+        )
+
+    monkeypatch.setattr(mt5_executor, "_get_mt5", lambda: _FakeMT5())
+    monkeypatch.setattr(mt5_executor, "mt5_connect", lambda: True)
+    monkeypatch.setattr(mt5_executor, "mt5_map_symbol", lambda pair: pair)
+    monkeypatch.setattr(mt5_executor, "_send_order_with_filling_fallback", fake_send)
+    monkeypatch.setattr(mt5_executor, "_mt5_resolve_position_ticket", lambda *_args, **_kwargs: 12345)
+    monkeypatch.setattr(mt5_executor, "_mt5_total_fee_cost", lambda *_args, **_kwargs: 0.0)
+    monkeypatch.setattr(
+        mt5_executor.telegram_notify,
+        "notify_trade_opened",
+        lambda **_kwargs: None,
+    )
+    monkeypatch.setitem(
+        mt5_executor.CONFIG,
+        "TIMED_EXIT",
+        {
+            "tp_mode": "trailing_atr",
+            "mt5_attach_broker_tp_when_trailing_atr": True,
+        },
+    )
+
+    signal = {
+        "pair": "EUR/USD",
+        "direction": "LONG",
+        "price": 1.1000,
+        "sl": 1.0950,
+        "tp1": 1.1150,
+        "tp2": 1.1250,
+        "type": "forex",
+        "engine": "engine_a",
+        "style": "intraday",
+    }
+    approval = RiskApproval(True, 0.04, 100.0, 0.01, 0.01, 0.0, "OK")
+
+    result = mt5_executor.mt5_execute(signal, approval)
+
+    assert result["success"] is True
+    assert len(sent_requests) == 1
+    assert sent_requests[0]["volume"] == approval.volume
+    assert sent_requests[0]["tp"] == signal["tp1"]
+    assert result["tp2"] is None
+
+
+def test_mt5_non_scalp_trailing_atr_can_omit_broker_tp_when_config_disabled(monkeypatch):
+    sent_requests = []
+
+    class _FakeMT5:
+        ORDER_TYPE_BUY = 0
+        ORDER_TYPE_SELL = 1
+        TRADE_ACTION_DEAL = 10
+        ORDER_TIME_GTC = 20
+        ORDER_FILLING_IOC = 30
+        TRADE_RETCODE_DONE = 10009
+
+        @staticmethod
+        def symbol_select(_symbol, _enable):
+            return True
+
+        @staticmethod
+        def symbol_info_tick(_symbol):
+            return SimpleNamespace(ask=1.1000, bid=1.0998)
+
+        @staticmethod
+        def symbol_info(_symbol):
+            return SimpleNamespace(
+                digits=5,
+                trade_stops_level=0,
+                point=0.00001,
+                volume_step=0.01,
+                volume_min=0.01,
+            )
+
+    def fake_send(request):
+        sent_requests.append(request)
+        return SimpleNamespace(
+            retcode=_FakeMT5.TRADE_RETCODE_DONE,
+            order=12345,
+            volume=request["volume"],
+            price=request["price"],
+        )
+
+    monkeypatch.setattr(mt5_executor, "_get_mt5", lambda: _FakeMT5())
+    monkeypatch.setattr(mt5_executor, "mt5_connect", lambda: True)
+    monkeypatch.setattr(mt5_executor, "mt5_map_symbol", lambda pair: pair)
+    monkeypatch.setattr(mt5_executor, "_send_order_with_filling_fallback", fake_send)
+    monkeypatch.setattr(mt5_executor, "_mt5_resolve_position_ticket", lambda *_args, **_kwargs: 12345)
+    monkeypatch.setattr(mt5_executor, "_mt5_total_fee_cost", lambda *_args, **_kwargs: 0.0)
+    monkeypatch.setattr(
+        mt5_executor.telegram_notify,
+        "notify_trade_opened",
+        lambda **_kwargs: None,
+    )
+    monkeypatch.setitem(
+        mt5_executor.CONFIG,
+        "TIMED_EXIT",
+        {
+            "tp_mode": "trailing_atr",
+            "mt5_attach_broker_tp_when_trailing_atr": False,
+        },
+    )
 
     signal = {
         "pair": "EUR/USD",

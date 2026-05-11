@@ -2727,6 +2727,11 @@ TIMED_EXIT:
 
   tp_mode: "trailing_atr"      # "fixed" = legacy behavior | "trailing_atr" = Chandelier trail
 
+  # MT5 Engine A/B entries still attach TP1 as a broker-side hard cap while
+  # timed_exit manages SL ratchets and trail closes. Keep false only when a
+  # broker explicitly accepts SL-only trailing-ATR entries.
+  mt5_attach_broker_tp_when_trailing_atr: true
+
   # Per-style activation R-multiple. Below this threshold the trade rides on
   # its original ATR SL; at/above this, the chandelier trail becomes the active
   # exit and the broker SL ratchets with it. Per-style because scalp 1R is hit
