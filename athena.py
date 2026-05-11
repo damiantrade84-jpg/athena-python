@@ -197,11 +197,13 @@ from config import (
     get_ai_max_retries,
     get_ai_model,
     get_ai_timeout_sec,
+    get_mt5_fetch_stale_unshifted_age_sec,
     scan_candle_limits,
 )  # noqa: E402
 from athena.datafeeds.ws_ssl import configure_process_ca_bundle  # noqa: E402
 from ai_safe_wrappers import ai_call_with_safe_default  # noqa: E402
 from ai_signal_trace import ensure_trace_id  # noqa: E402
+from athena_app.services.mt5_time_alignment import infer_mt5_rates_time_shift_seconds  # noqa: E402
 from prompt_versions import get_prompt_version  # noqa: E402
 from regime_shift_monitor import classify_position as _regime_classify  # noqa: E402
 
@@ -2706,36 +2708,68 @@ def fetch_mt5(pair: dict, tf: str, limit: int):
         err = mt5.last_error()
         return _mt5_fallback(f"MT5 failed: {err}")
 
-    # Timezone alignment: MT5 bars may arrive in broker server time or UTC
-    # depending on terminal version/broker. Auto-detect from bar data itself.
+    # Timezone alignment: MT5 bars may use broker-aligned stamps. When the newest bar
+    # is severely stale (illiquid exotics), legacy tick TZ fallback hallucinated ±60h
+    # shifts — see infer_mt5_rates_time_shift_seconds + MT5_FETCH_STALE_UNSHIFTED_AGE_SEC.
     offset_seconds = 0
     if tf != "D1" and bars is not None and len(bars) > 0:
-        _tf_sec = {"M1": 60, "M5": 300, "M15": 900, "H1": 3600, "H4": 14400}.get(tf, 3600)
         _utc_now = time.time()
-        _newest_ts = float(bars[-1]['time'])
+        _newest_ts = float(bars[-1]["time"])
         _unshifted_age = _utc_now - _newest_ts
-
-        if _unshifted_age >= -300 and _unshifted_age <= 2 * _tf_sec:
-            # Bars are plausibly UTC already (newest bar is recent relative to now)
-            offset_seconds = 0
+        _broker_offset_cfg = int(CONFIG.get("MT5_BROKER_UTC_OFFSET", 3))
+        tick = mt5.symbol_info_tick(mt5_symbol)
+        tick_epoch = float(tick.time) if tick and getattr(tick, "time", 0) and tick.time > 0 else None
+        offset_seconds, shift_tag = infer_mt5_rates_time_shift_seconds(
+            tf,
+            _utc_now,
+            _newest_ts,
+            _broker_offset_cfg,
+            tick_epoch,
+            stale_unshifted_age_sec=get_mt5_fetch_stale_unshifted_age_sec(),
+        )
+        if shift_tag == "utc_assumed_recent":
+            pass
+        elif shift_tag == "broker_offset_applied":
+            log.debug(
+                "[MT5] %s %s: applied broker UTC-offset time shift (+offset=%ds, unshifted_age=%.0fs)",
+                symbol,
+                tf,
+                offset_seconds,
+                _unshifted_age,
+            )
+        elif shift_tag == "tick_inferred_tz":
+            log.debug(
+                "[MT5] %s %s: tick-inferred TZ offset=%ds (unshifted_age=%.0fs)",
+                symbol,
+                tf,
+                offset_seconds,
+                _unshifted_age,
+            )
+        elif shift_tag == "stale_feed_skip_tick_tz":
+            log.warning(
+                "[MT5] %s %s: newest bar very stale vs wall clock "
+                "(unshifted_age=%.0fs) — refusing tick TZ fallback (offset kept 0; check liquidity/session)",
+                symbol,
+                tf,
+                _unshifted_age,
+            )
+        elif shift_tag == "tick_tz_out_of_band":
+            log.warning(
+                "[MT5] %s %s: tick TZ inference out-of-band vs clock (unshifted_age=%.0fs); offset kept 0",
+                symbol,
+                tf,
+                _unshifted_age,
+            )
         else:
-            # Bars may be in broker server time; try configured broker UTC offset
-            _broker_offset_cfg = int(CONFIG.get("MT5_BROKER_UTC_OFFSET", 3))
-            _shifted_age = _utc_now - (_newest_ts - _broker_offset_cfg * 3600)
-            if _shifted_age >= -300 and _shifted_age <= 2 * _tf_sec:
-                offset_seconds = _broker_offset_cfg * 3600
-            else:
-                # Fallback: tick-based detection (legacy path)
-                tick = mt5.symbol_info_tick(mt5_symbol)
-                if tick and tick.time > 0:
-                    diff_sec = tick.time - _utc_now
-                    offset_hours = round(diff_sec / 3600.0)
-                    offset_seconds = int(offset_hours * 3600)
-                log.warning(
-                    "[MT5] %s %s: timezone auto-detect unclear (unshifted_age=%.0fs), "
-                    "fallback offset=%ds",
-                    symbol, tf, _unshifted_age, offset_seconds,
-                )
+            log.warning(
+                "[MT5] %s %s: ambiguous MT5 timestamps (unshifted_age=%.0fs, broker_off=%dh) — "
+                "offset kept 0 (reason=%s); verify MT5_LOGIN session / instrument session",
+                symbol,
+                tf,
+                _unshifted_age,
+                _broker_offset_cfg,
+                shift_tag,
+            )
 
     candles = []
     for b in bars:
@@ -11032,6 +11066,19 @@ def analyze_pair(
                     _bucket_lag = _diag.get("bucketLag", 99)
                     # Mon=0, Sat=5, Sun=6; allow up to 4-day D1 lag on these days
                     if _utc_weekday in (0, 5, 6) and _bucket_lag <= 4:
+                        continue
+
+                # D1 calendar gap policy: diagnostic downgrades stale_multi_bucket
+                # to d1_calendar_gap_policy_ok for MT5 forex weekend gaps.
+                # Treat it as allowed on the same Monday/Saturday/Sunday window.
+                if (
+                    _is_forex_stock
+                    and _tf == "D1"
+                    and _sev == "d1_calendar_gap_policy_ok"
+                ):
+                    import datetime as _dt_mod
+                    _utc_weekday = _dt_mod.datetime.now(_dt_mod.timezone.utc).weekday()
+                    if _utc_weekday in (0, 5, 6):
                         continue
 
                 _stale_tfs.append(f"{_tf}:{_sev}")

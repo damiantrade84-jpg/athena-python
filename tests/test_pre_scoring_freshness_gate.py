@@ -110,7 +110,7 @@ class TestPreScoringFreshnessGateForex:
         assert diag["bucketLag"] == 1
 
     def test_d1_weekend_gap_monday_morning(self, monkeypatch):
-        """D1 confirmed-only on Monday: Friday is last confirmed → 3-day lag."""
+        """D1 confirmed-only on Monday: Friday is last confirmed → 3-day lag, downgraded to policy-ok."""
         pair = {"type": "forex", "source": "mt5", "display": "EUR/USD"}
 
         # Monday 08:48 UTC; last confirmed D1 = Thursday 21:00 (Friday bar open for GMT+3)
@@ -121,8 +121,8 @@ class TestPreScoringFreshnessGateForex:
             [_candle("2026-05-08T00:00:00Z"), friday_bar],
             time_now=_epoch("2026-05-12T08:48:00Z"),  # Monday May 12
         )
-        # Should be stale_multi_bucket (lag=3 over weekend)
-        assert diag["stalenessSeverity"] == "stale_multi_bucket"
+        # Diagnostic downgrades stale_multi_bucket to d1_calendar_gap_policy_ok for weekend gaps
+        assert diag["stalenessSeverity"] == "d1_calendar_gap_policy_ok"
         assert diag["bucketLag"] >= 2
 
     def test_crypto_h4_stale_1_bucket_still_blocks(self, monkeypatch):
