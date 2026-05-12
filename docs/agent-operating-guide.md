@@ -393,6 +393,113 @@ pytest path/to/test_file.py -q
 
 ---
 
+## 13. Backtest Analysis
+
+### Key files
+
+- `backtest_runner.py` — main orchestrator, engine-specific run logic
+- `backtest.py` — legacy harness
+- `backtest_candle_cache.py` — OHLCV cache (`candle_cache.db`)
+- `run_backtest.py` — CLI runner
+- `research_validation.py` — strategy validation layer
+
+### Before interpreting results
+
+Always verify:
+
+- candle source is the same for signal generation and fill simulation
+- signal was scored on a closed bar (`iloc[-2]`), not a forming bar (`iloc[-1]`)
+- timeframe key in engine output matches what `execution.py` expects — known mismatch for swing-style forex (D1 vs H4 key) was fixed; confirm fix is present before trusting results
+- `AUTO_TRADE_MIN_SCORE` is a dead config key — verify which threshold gate is actually being tested
+- signal count vs trade count are consistent; large divergence indicates fill logic bug or RR filter too aggressive
+
+### Engine A backtest checklist
+
+- Hit rate near 50% across 200+ samples = noise, not edge; do not claim directional edge without chi-squared test
+- `combinedConviction` structurally caps Engine A-only signals below the auto-trade gate; verify this is not the cause of zero auto-trades before investigating elsewhere
+- Structure-first entry model: Engine B structural confirmation (BOS or CHoCH in direction) is required alongside the Engine A score gate; verify both gates are present in `backtest_runner.py`
+- Forming-bar lookahead: confirm signal bar is `iloc[-2]` throughout
+
+### Engine C backtest checklist
+
+- Timeout rate above 10%: inspect `_monitor_fill_index` bisect call — the type mismatch between float price and list-of-dicts was a confirmed bug; verify the fix is applied before drawing conclusions
+- `trust_neither` rate above 40%: signal quality issue upstream in Engine A or B, not an Engine C problem
+- Weight sum must equal 1.0 at every decision; flag if not enforced
+
+### Statistical validity gates
+
+- 200 closed trades minimum for directional hit-rate conclusions
+- 500 trades minimum for Sharpe/expectancy claims
+- Always split long vs short hit rates; aggregated can mask directional bias
+- Required report fields: trades, win_rate, avg_r, expectancy, max_drawdown_r, profit_factor
+
+### Debugging workflow
+
+1. Run with verbose/debug flag; count and categorize SKIP / NO_FILL / TIMEOUT entries
+2. Dump first 10 signal records; verify field presence and types
+3. Check candle alignment: signal bar close timestamp vs fill bar open timestamp
+4. For Engine A: dump `factor_score_detail` for 5 sample signals; confirm normalization sum equals raw weight sum
+5. For Engine C: confirm weight output sums to 1.0 and trust verdict is always one of the four valid states
+
+---
+
+## 14. Engine A — Structure-First Entry Redesign
+
+### Context
+
+Engine A's scorer has been confirmed as statistically near-random for directional hit-rate.
+The approved fix is a structure-first entry model: Engine B structural confirmation is
+required alongside (not instead of) the existing Engine A score gate.
+
+### Design contract
+
+A signal is a valid entry candidate only when ALL of the following pass:
+
+1. Engine B structural confirmation: BOS or CHoCH in the correct direction, from `market_structure.py` / `zone_registry.py`
+2. Structural recency: BOS/CHoCH within N candles of signal bar (configurable, default 5)
+3. Direction agreement: Engine A `trend_score` direction matches Engine B BOS/CHoCH direction
+4. Engine A score gate: `final_score >= threshold` (existing, unchanged)
+
+The structure gate must be evaluated before the score gate. If structure fails, the signal is skipped — fail closed.
+
+### Implementation target
+
+The structure gate is added as a pre-filter in the signal loop inside `backtest_runner.py`:
+
+- structure check runs first
+- if structure check fails, `continue` — do not score
+- score gate runs second
+- only signals passing both gates are recorded
+
+### Config gate
+
+Add under `ENGINE_A` in `config.yaml`:
+
+```yaml
+ENGINE_A:
+  structure_first_entry:
+    enabled: true
+    lookback_bars: 5
+    require_bos: true
+    require_choch: false
+```
+
+`enabled: false` must reproduce the original near-random baseline exactly.
+
+### Verification checklist
+
+Before marking this implementation complete:
+
+- backtest with gate enabled vs disabled produces measurably different hit-rate
+- `enabled: false` reproduces the near-random baseline
+- no forming-bar lookahead in the structure check
+- structure check uses closed bars only (`iloc[-2]`)
+- direction mapping between Engine A `trend_score` and Engine B BOS/CHoCH direction is consistent and tested
+- config key is respected; hardcoding is not acceptable
+- focused test covers: gate enabled + structure fails = no signal, gate enabled + structure passes + score fails = no signal, gate enabled + both pass = signal recorded
+
+---
+
 ## Maintaining root copies (`AGENTS.md`, `CLAUDE.md`)
 
 Shared rules live in **`docs/agent-operating-guide.md`** (this document). After edits, regenerate root copies:

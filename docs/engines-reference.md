@@ -1,6 +1,6 @@
 # Engines reference — Sentinel Pro v4
 
-**Primary reference:** operational summaries, audit checklists, and exit-pipeline notes for Engines A–D plus Vision live in [`agent-operating-guide.md`](agent-operating-guide.md) (sections **8–10**).
+**Primary reference:** operational summaries, audit checklists, and exit-pipeline notes for Engines A–D plus Vision live in [`agent-operating-guide.md`](agent-operating-guide.md) (sections **8–10**). Backtest interpretation and Engine A structure-first entry redesign: sections **§13–14**.
 
 **Archived / diagnostic write-ups:**
 

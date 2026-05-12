@@ -1,0 +1,30 @@
+---
+description: Timed exit monitor rules — scoped to timed_exit_monitor.py
+globs:
+  - "**/timed_exit_monitor.py"
+alwaysApply: false
+---
+
+# Timed Exit Monitor — Rules
+
+**Mode dispatch (`TIMED_EXIT.tp_mode`):**
+- `trailing_atr` (default): chandelier ATR trail only. Lock + timed-close branches suppressed via early-return.
+- `fixed`: legacy lock + timed-close pipeline. Config-only rollback — no code changes needed.
+
+**Defaults (locked unless user requests change):**
+- `intraday` / `swing` `timed_close_enabled: false` — never close on timer alone
+- `scalp.profit_lock_enabled: false` — lock does not clip winners
+- `trail_indicator_confirm: true` — RSI/MACD must agree before TRAIL_CLOSE
+- `timer_tightens_trail: false` — timer does not tighten trail unless explicitly enabled
+
+**State machine:** `_evaluate_trail()` is the single source of truth → returns `{action: none|ratchet|close}`.
+
+**Persistence:** `timed_exit_state` SQLite (WAL, 15s). Key = `(venue, audit_id)`. Survives ticket=0 / reissue.
+
+**Broker-enforced:** SL ratchets via `mt5_move_sl_to_breakeven` / `bybit_move_sl_to_breakeven`. Tightens-only via `_protective_sl_tightens`.
+
+**Exit tags:** `TRAIL_CLOSE` / `TIMED_CLOSE` / `LOCK_SL_HIT` — set via `_mark_timed_close(reason=...)`.
+
+**Engine D bypass:** `engine in {scalp, engine d, scalp_vp}` early-returns — Engine D manages TP1/SL natively at broker.
+
+**Failure mode:** chandelier fetch failure holds previous `_trail_state` + WARN — no silent regression.
