@@ -1,9 +1,3 @@
-# AGENTS.md — Sentinel Pro v4 (Cursor / Codex)
-
-**Audience:** Cursor agents and Codex. **Canonical:** [`docs/agent-operating-guide.md`](docs/agent-operating-guide.md). This file duplicates the canonical guide for tooling that reads **AGENTS.md** at repo root.
-
----
-
 # Sentinel Pro v4 — Agent operating guide
 
 **Athena** — Sentinel Pro v4 paper-trading and trading-analysis system: multiple engines, AI review, broker/execution adapters, monitoring, backtesting, UI/API consumers.
