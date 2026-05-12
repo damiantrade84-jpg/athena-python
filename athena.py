@@ -9179,6 +9179,7 @@ def api_scalp_execute():
                 {"success": False, "error": result.get("error", "Execution failed")}
             ), 200
 
+        _audit_insert_error = None
         try:
             _factors_json = json.dumps({
                 "vp_poc":           signal.get("vp_poc"),
@@ -9224,7 +9225,20 @@ def api_scalp_execute():
                 )
                 con.commit()
         except Exception as audit_exc:
+            _audit_insert_error = str(audit_exc)
             log.warning(f"[SCALP EXEC] audit_log insert failed: {audit_exc}")
+
+        if _audit_insert_error:
+            return jsonify(
+                {
+                    "success": False,
+                    "error": f"AUDIT_INSERT_FAILED: {_audit_insert_error}",
+                    "ticket": result.get("ticket"),
+                    "volume": result.get("volume"),
+                    "entry_price": result.get("entry_price") or result.get("entryPrice"),
+                    "approval": approval.to_dict(),
+                }
+            ), 500
 
         return jsonify(
             {
@@ -14873,14 +14887,5 @@ if __name__ == "__main__":
             log.warning(f"[TELEGRAM] Bot startup failed: {e}")
     else:
         log.info("[TELEGRAM] Bot disabled via ATHENA_DISABLE_TELEGRAM environment variable")
-
-    # Clean Ctrl-C shutdown on Windows - daemon threads stop automatically
-    import signal as _signal
-    def _shutdown_handler(sig, frame):
-        log.info("[SHUTDOWN] Ctrl-C received - stopping Sentinel Pro...")
-        import os as _os
-        _os._exit(0)
-    _signal.signal(_signal.SIGINT, _shutdown_handler)
-    _signal.signal(_signal.SIGTERM, _shutdown_handler)
 
     app.run(host=_host, port=5000, debug=False, use_reloader=False)

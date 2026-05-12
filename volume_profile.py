@@ -416,10 +416,19 @@ def compute_fixed_range_volume_profile(
 
     low_idx = min(included)
     high_idx = max(included)
+    poc_vol = float(volumes[poc_idx])
+    lvn_cutoff = poc_vol * 0.30 if poc_vol > 0 else 0.0
+    lvn_levels = [
+        round(float((edges[i] + edges[i + 1]) / 2.0), 6)
+        for i in range(bins)
+        if float(volumes[i]) < lvn_cutoff
+    ]
     out.update({
         "poc": round(float((edges[poc_idx] + edges[poc_idx + 1]) / 2.0), 6),
         "vah": round(float(edges[high_idx + 1]), 6),
         "val": round(float(edges[low_idx]), 6),
+        "lvn_levels": lvn_levels,
+        "distribution": [round(float(v), 4) for v in volumes],
         "profile_valid": True,
         "total_volume": round(total_volume, 4),
         "bin_count": bins,

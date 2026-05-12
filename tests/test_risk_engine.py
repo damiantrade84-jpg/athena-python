@@ -657,3 +657,29 @@ class TestConsensusMinRR:
         )
         r = risk_check(sig, 10000, 10000, [])
         assert r.approved is True
+
+    def test_rejects_standalone_engine_b_low_rr_after_override(self, monkeypatch):
+        monkeypatch.setitem(risk_engine.CONFIG, "ENGINE_C_EXEC_MIN_RR", 1.0)
+        sig = _make_signal(
+            price=100.0,
+            sl=95.0,
+            tp1=104.0,
+            engine="engine_b",
+            engine_b_min_rr=1.2,
+            engine_b_status={"checklist_passed": True, "min_rr": 1.2},
+        )
+        r = risk_check(sig, 10000, 10000, [])
+        assert r.approved is False
+        assert r.reason == "RR_BELOW_MINIMUM"
+
+    def test_rejects_standalone_engine_b_missing_checklist_proof(self, monkeypatch):
+        monkeypatch.setitem(risk_engine.CONFIG, "ENGINE_C_EXEC_MIN_RR", 1.0)
+        sig = _make_signal(
+            price=100.0,
+            sl=95.0,
+            tp1=110.0,
+            engine="engine_b",
+        )
+        r = risk_check(sig, 10000, 10000, [])
+        assert r.approved is False
+        assert r.reason == "ENGINE_B_CHECKLIST_MISSING"

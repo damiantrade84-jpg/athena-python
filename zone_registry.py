@@ -105,7 +105,9 @@ class ZoneRegistry:
     def prune_old_zones(self, max_age_hours: int | None = None) -> None:
         # Get asset-specific TTL from config if not provided explicitly.
         if max_age_hours is None:
-            ttl_config = config.CONFIG.get("ZONE_CACHE_TTL_HOURS", {})
+            ttl_config = config.CONFIG.get("ZONE_CACHE_TTL_HOURS")
+            if not isinstance(ttl_config, dict):
+                ttl_config = (config.CONFIG.get("SCALP_ENGINE", {}) or {}).get("ZONE_CACHE_TTL_HOURS", {})
             # Default to 168 hours (7 days) if config missing or not a dict
             default_ttl = 168
             if isinstance(ttl_config, dict):
@@ -127,14 +129,19 @@ class ZoneRegistry:
                     # Use asset-specific TTL from config if available.
                     zone_ttl = max_age_hours
                     asset_type = zone.get("asset_type", "unknown")
-                    ttl_config = config.CONFIG.get("ZONE_CACHE_TTL_HOURS", {})
+                    ttl_config = config.CONFIG.get("ZONE_CACHE_TTL_HOURS")
+                    if not isinstance(ttl_config, dict):
+                        ttl_config = (config.CONFIG.get("SCALP_ENGINE", {}) or {}).get("ZONE_CACHE_TTL_HOURS", {})
                     if isinstance(ttl_config, dict) and asset_type in ttl_config:
                         zone_ttl = ttl_config[asset_type] or max_age_hours
 
                     cutoff = datetime.now(timezone.utc) - timedelta(hours=zone_ttl)
                     stale = created_at < cutoff
+                    mitigated = bool(zone.get("mitigated", False))
+                    mitigated_ttl = int(config.CONFIG.get("ZONE_MITIGATED_TTL_HOURS", 720) or 720)
+                    mitigated_cutoff = datetime.now(timezone.utc) - timedelta(hours=mitigated_ttl)
                     untouched = int(zone.get("scan_count", 0)) <= 1 and not zone.get("mitigated", False)
-                    if stale and untouched:
+                    if (stale and untouched) or (mitigated and created_at < mitigated_cutoff):
                         changed = True
                         continue
                     kept.append(zone)
@@ -208,7 +215,8 @@ class ZoneRegistry:
 
     def _ensure_schema(self) -> None:
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
-        with sqlite3.connect(self._db_path) as conn:
+        with sqlite3.connect(self._db_path, timeout=15.0) as conn:
+            conn.execute("PRAGMA journal_mode=WAL")
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS zones (
@@ -220,21 +228,26 @@ class ZoneRegistry:
                     bottom REAL NOT NULL,
                     strength REAL NOT NULL,
                     created_at TEXT NOT NULL,
+                    asset_type TEXT NOT NULL DEFAULT 'unknown',
                     mitigated INTEGER NOT NULL,
                     mitigated_at TEXT,
                     scan_count INTEGER NOT NULL
                 )
                 """
             )
+            cols = {str(row[1]) for row in conn.execute("PRAGMA table_info(zones)").fetchall()}
+            if "asset_type" not in cols:
+                conn.execute("ALTER TABLE zones ADD COLUMN asset_type TEXT NOT NULL DEFAULT 'unknown'")
             conn.commit()
 
     def _load_from_db(self) -> None:
         loaded: dict[tuple[str, str], list[dict]] = {}
-        with sqlite3.connect(self._db_path) as conn:
+        with sqlite3.connect(self._db_path, timeout=15.0) as conn:
+            conn.execute("PRAGMA journal_mode=WAL")
             rows = conn.execute(
                 """
                 SELECT symbol, timeframe, type, direction, top, bottom, strength,
-                       created_at, mitigated, mitigated_at, scan_count
+                       created_at, asset_type, mitigated, mitigated_at, scan_count
                 FROM zones
                 """
             ).fetchall()
@@ -248,9 +261,10 @@ class ZoneRegistry:
                 "bottom": float(row[5]),
                 "strength": float(row[6]),
                 "created_at": row[7],
-                "mitigated": bool(row[8]),
-                "mitigated_at": row[9],
-                "scan_count": int(row[10]),
+                "asset_type": row[8] or "unknown",
+                "mitigated": bool(row[9]),
+                "mitigated_at": row[10],
+                "scan_count": int(row[11]),
             }
             loaded.setdefault(self._key(entry["symbol"], entry["timeframe"]), []).append(entry)
         with self._lock:
@@ -260,9 +274,20 @@ class ZoneRegistry:
         if not self._persistence_enabled:
             return
         flat_rows = []
+        active_identities = set()
         for key, bucket in self._zones.items():
             symbol, timeframe = key
             for zone in bucket:
+                identity = (
+                    symbol,
+                    timeframe,
+                    zone["type"],
+                    zone["direction"],
+                    float(zone["top"]),
+                    float(zone["bottom"]),
+                    zone["created_at"],
+                )
+                active_identities.add(identity)
                 flat_rows.append(
                     (
                         symbol,
@@ -273,19 +298,48 @@ class ZoneRegistry:
                         float(zone["bottom"]),
                         float(zone["strength"]),
                         zone["created_at"],
+                        zone.get("asset_type", "unknown"),
                         1 if zone.get("mitigated") else 0,
                         zone.get("mitigated_at"),
                         int(zone.get("scan_count", 1)),
                     )
                 )
-        with sqlite3.connect(self._db_path) as conn:
-            conn.execute("DELETE FROM zones")
+        with sqlite3.connect(self._db_path, timeout=15.0) as conn:
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute(
+                """
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_zones_identity
+                ON zones(symbol, timeframe, type, direction, top, bottom, created_at)
+                """
+            )
+            existing = conn.execute(
+                """
+                SELECT rowid, symbol, timeframe, type, direction, top, bottom, created_at
+                FROM zones
+                """
+            ).fetchall()
+            stale_rowids = [
+                row[0]
+                for row in existing
+                if (
+                    row[1],
+                    row[2],
+                    row[3],
+                    row[4],
+                    float(row[5]),
+                    float(row[6]),
+                    row[7],
+                )
+                not in active_identities
+            ]
+            if stale_rowids:
+                conn.executemany("DELETE FROM zones WHERE rowid = ?", [(rowid,) for rowid in stale_rowids])
             conn.executemany(
                 """
-                INSERT INTO zones (
+                INSERT OR REPLACE INTO zones (
                     symbol, timeframe, type, direction, top, bottom, strength,
-                    created_at, mitigated, mitigated_at, scan_count
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    created_at, asset_type, mitigated, mitigated_at, scan_count
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 flat_rows,
             )

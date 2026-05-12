@@ -4727,6 +4727,15 @@ def backtest_pair_consensus(
                     res_b, current_price, a_direction,
                     entry_candles=h1_window, style_profile=style_profile,
                 )
+                _b_gate_ok, _b_scaled_min = engine_b_confidence_passes(
+                    conf_b,
+                    style_profile,
+                    regime_label,
+                    asset_type=_ptype,
+                )
+                conf_b = dict(conf_b)
+                conf_b["passed"] = _b_gate_ok
+                conf_b["min_score_scaled"] = _b_scaled_min
                 signal_b = {
                     "structural_verdict": "CLEAR", "direction": a_direction,
                     "score": conf_b["score"], "pct": conf_b["pct"],
@@ -4884,6 +4893,21 @@ def backtest_pair_consensus(
                 r_multiple = 0.0 if outcome == "BE" else -1.0
                 price_never_reached_sl = True if outcome == "BE" else False
                 break
+            if risk > 0:
+                if direction == "LONG":
+                    bar_r_high = (float(future["high"]) - entry) / risk
+                    bar_r_low = (float(future["low"]) - entry) / risk
+                else:
+                    bar_r_high = (entry - float(future["low"])) / risk
+                    bar_r_low = (entry - float(future["high"])) / risk
+                if bar_r_high > max_favorable_excursion_r:
+                    max_favorable_excursion_r = bar_r_high
+                    bars_to_mfe = fi + 1
+                if bar_r_low < max_adverse_excursion_r:
+                    max_adverse_excursion_r = bar_r_low
+                    bars_to_mae = fi + 1
+                highest_r_seen = max(highest_r_seen, bar_r_high)
+                lowest_r_seen = min(lowest_r_seen, bar_r_low)
             if not _be_triggered and risk > 0 and target_rr >= _be_min_rr:
                 if direction == "LONG" and float(future["high"]) >= entry + risk * _be_arm_rr:
                     _active_sl = entry
@@ -5112,7 +5136,9 @@ def backtest_pair_scalp(pair: dict, validation_mode: str = "standard") -> dict |
     abs_vol_mult = float(cfg.get("ABSORPTION_VOL_MULT", 2.0))
     slippage_ticks = int(cfg.get("BT_SLIPPAGE_TICKS", 3))
     _grade_order = ["A", "B", "C", "D"]
-    _min_grade_str = str(cfg.get("MIN_GRADE_AUTO_EXECUTE", cfg.get("MIN_GRADE", "C"))).upper()
+    _min_grade_str = str(
+        cfg.get("EXECUTION_MIN_GRADE", cfg.get("MIN_GRADE_AUTO_EXECUTE", cfg.get("MIN_GRADE", "C")))
+    ).upper()
     _min_grade_idx = _grade_order.index(_min_grade_str) if _min_grade_str in _grade_order else 2
     scratch_enabled = bool(cfg.get("BT_SCRATCH_ENABLED", True))
     scratch_bars = max(1, int(cfg.get("BT_SCRATCH_BARS", 3)))
@@ -5128,7 +5154,17 @@ def backtest_pair_scalp(pair: dict, validation_mode: str = "standard") -> dict |
                 "display": display, "symbol": display.replace("/", ""),
                 "type": "crypto", "source": "binance",
             }
-            m15_raw = _scalp_fetch_candles(pair_dict, "M15", 2000)
+            m15_fetch = _scalp_fetch_candles(pair_dict, "M15", 2000)
+            if isinstance(m15_fetch, tuple):
+                m15_raw = m15_fetch[0]
+                if len(m15_fetch) > 1 and m15_fetch[1]:
+                    _bt_volume_source = str(m15_fetch[1])
+            else:
+                m15_raw = m15_fetch
+            # Live crypto fetches may include the current forming candle.  The
+            # backtest must only walk closed bars, matching MT5 include_forming=False.
+            if m15_raw and len(m15_raw) > 1:
+                m15_raw = list(m15_raw[:-1])
         else:
             from scalp_engine import mt5_fetch_scalp_candles
             from mt5_executor import mt5_map_symbol

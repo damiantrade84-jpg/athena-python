@@ -729,6 +729,7 @@ def _as_fraction(
     except (TypeError, ValueError):
         return default
     if v > 1.0:
+        log.warning("[SCALP] Fraction config value %s interpreted as percent %.6f", value, v / 100.0)
         v = v / 100.0
     lo, hi = clamp_minmax
     return max(lo, min(hi, v))
@@ -1253,8 +1254,10 @@ def _build_volume_profile(
             if not result.get("lvn_levels") or not result.get("distribution"):
                 supplemental = _internal_profile()
                 if supplemental.get("valid"):
-                    result.setdefault("lvn_levels", supplemental.get("lvn_levels", []))
-                    result.setdefault("distribution", supplemental.get("distribution", []))
+                    if not result.get("lvn_levels"):
+                        result["lvn_levels"] = supplemental.get("lvn_levels", [])
+                    if not result.get("distribution"):
+                        result["distribution"] = supplemental.get("distribution", [])
                     result.setdefault("session_high", supplemental.get("session_high"))
                     result.setdefault("session_low", supplemental.get("session_low"))
             result.setdefault("lvn_levels", [])
@@ -1367,7 +1370,7 @@ def _classify_market_state(vp: dict) -> str:
     cfg = CONFIG.get("SCALP_ENGINE", {})
     threshold = _as_fraction(cfg.get("BALANCE_THRESHOLD", 0.40), 0.40)
     if br is None:
-        log.debug("[SCALP] balance_ratio unavailable — defaulting to 'balance'")
+        log.warning("[SCALP] balance_ratio unavailable — defaulting to 'balance'")
         return "balance"
     return "balance" if br >= threshold else "imbalance"
 
@@ -2729,7 +2732,7 @@ def _classify_setup(
     # Imbalance market + price already outside VA = confirmed breakout.
     # Direction: above VAH → LONG continuation, below VAL → SHORT continuation.
     # SL sits just below the broken VA boundary (now structural support/resistance).
-    # TP1 is a fixed MIN_RR projection from entry; TP2 = one VA width extended.
+    # TP1 is the configured self-pay projection from entry; TP2 can carry VP structure.
     if cfg.get("SETUP_TREND", True) and market_state == "imbalance" and location == "outside_va":
         above_va = price_loc.get("above_va", True)
         direction = "LONG" if above_va else "SHORT"
@@ -2987,7 +2990,7 @@ def calculate_scalp_levels(
 
     elif setup_type == "trend_extension":
         # Price has broken through the value area boundary — SL behind the broken
-        # level (now structural S/R). TP1 = MIN_RR projection. TP2 = one VA width.
+        # level (now structural S/R). TP1 = configured self-pay projection. TP2 = one VA width.
         if direction == "LONG":
             sl = vah - buffer          # VAH is now support
             structural_tp = entry + va_width
@@ -3067,7 +3070,7 @@ def calculate_scalp_levels(
 
     sl_distance = abs(entry - sl)
 
-    tp1_r_mult = max(float(cfg.get("TP1_R_MULT", 1.0)), min_rr_cfg)
+    tp1_r_mult = float(cfg.get("TP1_R_MULT", 1.0))
     tp1 = entry + (sl_distance * tp1_r_mult) if direction == "LONG" else entry - (sl_distance * tp1_r_mult)
     tp_partial = tp1
     actual_rr = round(abs(tp1 - entry) / sl_distance, 2) if sl_distance > 0 else 0
@@ -3102,7 +3105,7 @@ def calculate_scalp_levels(
             f"(mechanical {tp1_r_mult}R target could not be built)"
         )
 
-    rr_below_min = not tp_direction_ok or actual_rr < min_rr_cfg
+    rr_below_min = not tp_direction_ok
 
     # --- Defensive Rounding Safeguard ---
     # Protect against level collapse if symbol_info.digits are too coarse (e.g. 2 digits for a 0.09 crypto pair).
@@ -3604,20 +3607,7 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
         )
 
     sessions = get_current_sessions()
-    mt5_session_ok, session_name = scalp_session_window("forex")
-    crypto_session_ok, _ = scalp_session_window("crypto")
-
-    if not mt5_session_ok and not crypto_session_ok:
-        for display in pairs_or_symbols:
-            _record_stability_sample(display, _guess_asset_type(display), False, reason="OUTSIDE_SESSION")
-        return _finalize_run_scalp_scan_result(
-            signals=[],
-            skipped=[{"pair": display, "reason": "OUTSIDE_SESSION"} for display in pairs_or_symbols],
-            scanned=0,
-            session_name=session_name,
-            sessions_active=sessions,
-            reason="OUTSIDE_SESSION",
-        )
+    session_name = ",".join(sessions) if sessions else "NO_SESSION"
 
     signals = []
     skipped = []
