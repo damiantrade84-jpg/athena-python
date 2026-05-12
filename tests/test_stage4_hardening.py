@@ -73,11 +73,11 @@ class TestBtMinDeleted:
         assert "BACKTEST_USE_BT_MIN_THRESHOLDS" not in CONFIG
 
     def test_backtest_uses_same_thresholds_as_live(self):
-        """2-tier system: backtest and live return identical values."""
+        """Backtest and live return identical active Engine A thresholds."""
         pair = {"display": "EUR/USD", "type": "forex"}
         live = get_score_threshold(pair, is_backtest=False)
         bt = get_score_threshold(pair, is_backtest=True)
-        assert live == bt == _TIER_STABLE
+        assert live == bt == CONFIG["ENGINE_A_SCORE_GROUP_THRESHOLDS"]["forex_majors"]
 
     def test_crypto_uses_volatile_tier(self):
         pair = {"display": "BTC/USDT", "type": "crypto"}

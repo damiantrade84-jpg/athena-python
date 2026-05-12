@@ -81,8 +81,10 @@ def test_min_confluence_threshold_tiers():
     the override path, not the tier resolver.
     """
     original_profiles = CONFIG.get("PAIR_PROFILES")
+    original_group_thresholds = CONFIG.get("ENGINE_A_SCORE_GROUP_THRESHOLDS")
     try:
         CONFIG["PAIR_PROFILES"] = {}  # neutralise overrides for this test
+        CONFIG["ENGINE_A_SCORE_GROUP_THRESHOLDS"] = {}  # exercise fallback tiers only
         eur_usd = {"display": "EUR/USD", "symbol": "EURUSD=X", "type": "forex"}
         usd_zar = {"display": "USD/ZAR", "symbol": "USDZAR=X", "type": "forex"}
         btc = {"display": "BTC/USDT", "symbol": "BTCUSDT", "type": "crypto"}
@@ -97,6 +99,7 @@ def test_min_confluence_threshold_tiers():
         assert get_min_confluence_threshold(nat_gas) == 2.0     # nat_gas → volatile
     finally:
         CONFIG["PAIR_PROFILES"] = original_profiles
+        CONFIG["ENGINE_A_SCORE_GROUP_THRESHOLDS"] = original_group_thresholds
 
 
 def test_min_confluence_threshold_uses_configured_score_group_thresholds(monkeypatch):
@@ -137,6 +140,19 @@ def test_crypto_engine_a_scan_threshold_resolves_to_score_group_floor():
         {"display": "BTC/USDT", "symbol": "BTCUSDT", "type": "crypto"},
         is_backtest=False,
     ) == CONFIG["ENGINE_A_SCORE_GROUP_THRESHOLDS"]["crypto_btc"]
+
+
+def test_forex_engine_a_scan_thresholds_are_explicit_strict_floor():
+    pairs = [
+        {"display": "EUR/USD", "symbol": "EURUSD", "type": "forex"},
+        {"display": "EUR/CHF", "symbol": "EURCHF", "type": "forex"},
+        {"display": "AUD/CHF", "symbol": "AUDCHF", "type": "forex"},
+        {"display": "EUR/NOK", "symbol": "EURNOK", "type": "forex"},
+    ]
+
+    for pair in pairs:
+        assert get_score_threshold(pair, is_backtest=False) == 2.1
+        assert get_score_threshold(pair, is_backtest=True) == 2.1
 
 
 def test_auto_trade_min_score_does_not_override_engine_a_scan_threshold(monkeypatch):

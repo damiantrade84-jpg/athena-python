@@ -580,6 +580,9 @@ CONFIG: dict = {
     "ENGINE_A_PAIR_THRESHOLDS": {},
     "ENGINE_A_SCORE_GROUP_THRESHOLDS": {
         "default": 1.5,
+        "forex_majors": 2.1,
+        "forex_crosses": 2.1,
+        "forex_other": 2.1,
         "crypto_btc": 2.0,
         "crypto_eth": 2.0,
         "crypto_alt_majors": 2.0,
