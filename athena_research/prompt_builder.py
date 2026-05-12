@@ -39,7 +39,7 @@ _PROJECT_CONTEXT = """
 Athena Pro v4 has four engines:
 
 - **Engine A** — 3-factor quantitative scoring: EMA trend coherence (D1/H4/H1), RSI+MACD momentum quality, ADX gate.
-  Unified 0–3.0 scale. Current live forex floor: MIN_CONFLUENCE_CLASS.forex = 2.1.
+  Unified 0–3.0 scale. Live thresholds resolved via scoring.get_score_threshold (profile → pair/group config → 3-tier fallback).
   **Do NOT recommend changing live thresholds from backtest findings.**
 
 - **Engine B** — Naked price-action (BOS/CHoCH, FVG, OB, swing sequence, location, trigger, room/RR).
@@ -82,12 +82,12 @@ def _load_engine_thresholds() -> str:
 
     lines = ["## Live Engine Thresholds (READ-ONLY context — do NOT recommend changing these)\n"]
 
-    # MIN_CONFLUENCE_CLASS
-    mcc = cfg.get("MIN_CONFLUENCE_CLASS", {})
-    if mcc:
-        lines.append("### Engine A — MIN_CONFLUENCE_CLASS (live scan floor, 0–3.0 scale)")
-        for ac, val in mcc.items():
-            lines.append(f"  {ac}: {val}")
+    # ENGINE_A_SCORE_GROUP_THRESHOLDS
+    sgt = cfg.get("ENGINE_A_SCORE_GROUP_THRESHOLDS", {})
+    if sgt:
+        lines.append("### Engine A — ENGINE_A_SCORE_GROUP_THRESHOLDS (active runtime config, 0–3.0 scale)")
+        for key, val in sgt.items():
+            lines.append(f"  {key}: {val}")
         lines.append("")
 
     # ADX / ranging thresholds

@@ -183,6 +183,10 @@ def _mt5_trade_state_block_reason(state: dict, direction: str, mt5) -> str | Non
         return "symbol_trade_disabled"
 
     mode = state.get("symbol_trade_mode")
+    _closeonly = getattr(mt5, "SYMBOL_TRADE_MODE_CLOSEONLY", 3)
+    if mode == _closeonly:
+        return "symbol_close_only_no_new_positions"
+
     if direction == "LONG" and mode == getattr(mt5, "SYMBOL_TRADE_MODE_SHORTONLY", 2):
         return "symbol_short_only"
     if direction == "SHORT" and mode == getattr(mt5, "SYMBOL_TRADE_MODE_LONGONLY", 1):

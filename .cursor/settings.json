@@ -1,6 +1,6 @@
 {
   "plugins": {
-    "meta-quest-agentic-tools": {
+    "superpowers": {
       "enabled": true
     }
   }

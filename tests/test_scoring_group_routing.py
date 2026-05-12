@@ -139,6 +139,14 @@ def test_crypto_engine_a_scan_threshold_resolves_to_score_group_floor():
     ) == CONFIG["ENGINE_A_SCORE_GROUP_THRESHOLDS"]["crypto_btc"]
 
 
+def test_auto_trade_min_score_does_not_override_engine_a_scan_threshold(monkeypatch):
+    """AUTO_TRADE_MIN_SCORE is informational; Engine A scan uses score-group thresholds only."""
+    pair = {"display": "BTC/USDT", "symbol": "BTCUSDT", "type": "crypto"}
+    expected = get_score_threshold(pair, is_backtest=False)
+    monkeypatch.setitem(CONFIG, "AUTO_TRADE_MIN_SCORE", {"crypto": 9.99})
+    assert get_score_threshold(pair, is_backtest=False) == expected
+
+
 def test_python_defaults_match_runtime_yaml_for_audit_sensitive_gates():
     assert CONFIG["RANGING"]["crypto"] == {
         "dead": 18,

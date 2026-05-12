@@ -321,7 +321,7 @@ def _current_policy_snapshot() -> dict[str, Any]:
     styles = ne.get("style_profiles") or {}
     return {
         "engine_a_backtest": dict(CONFIG.get("BT_MIN") or {}),
-        "engine_a_live": dict(CONFIG.get("MIN_CONFLUENCE_CLASS") or {}),
+        "engine_a_live": dict(CONFIG.get("ENGINE_A_SCORE_GROUP_THRESHOLDS") or {}),
         "engine_b_styles": {
             key: {
                 "min_score": (dict(styles.get(key) or {})).get("min_score"),
@@ -340,7 +340,7 @@ def _recommendation_id(scope_type: str, scope_key: str, current_value: float, pr
 def _build_engine_a_recommendations(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     current_bt = dict(CONFIG.get("BT_MIN") or {})
-    current_live = dict(CONFIG.get("MIN_CONFLUENCE_CLASS") or {})
+    current_live = dict(CONFIG.get("ENGINE_A_SCORE_GROUP_THRESHOLDS") or {})
 
     for asset_type, engine_name in _ENGINE_A_BY_ASSET.items():
         bucket = [row for row in rows if row.get("engine") == engine_name and row.get("asset_type") == asset_type]
@@ -412,7 +412,7 @@ def _build_engine_a_recommendations(rows: list[dict[str, Any]]) -> list[dict[str
                         "engine": "engine_a",
                         "environment": "live",
                         "title": f"Engine A Live | {_ASSET_LABELS.get(asset_type, asset_type.title())}",
-                        "subtitle": "Class-level MIN_CONFLUENCE_CLASS update",
+                        "subtitle": "Class-level ENGINE_A_SCORE_GROUP_THRESHOLDS update",
                         "current_value": round(cur_live, 4),
                         "proposed_value": round(proposed_live, 4),
                         "delta": round(proposed_live - cur_live, 4),
@@ -578,7 +578,7 @@ def _merge_live_evidence(
 
 def _build_live_engine_a_recommendations(live_a: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
-    current_live = dict(CONFIG.get("MIN_CONFLUENCE_CLASS") or {})
+    current_live = dict(CONFIG.get("ENGINE_A_SCORE_GROUP_THRESHOLDS") or {})
     for asset_type, summary in live_a.items():
         cur_live = float(current_live.get(asset_type, 0.0) or 0.0)
         live_low, live_high = _LIVE_LIMITS.get(asset_type, (0.60, 2.50))
@@ -599,7 +599,7 @@ def _build_live_engine_a_recommendations(live_a: dict[str, dict[str, Any]]) -> l
                 "engine": "engine_a",
                 "environment": "live",
                 "title": f"Engine A Live | {_ASSET_LABELS.get(asset_type, asset_type.title())}",
-                "subtitle": "Class-level MIN_CONFLUENCE_CLASS update from live outcomes",
+                "subtitle": "Class-level ENGINE_A_SCORE_GROUP_THRESHOLDS update from live outcomes",
                 "current_value": round(cur_live, 4),
                 "proposed_value": round(proposed, 4),
                 "delta": round(proposed - cur_live, 4),

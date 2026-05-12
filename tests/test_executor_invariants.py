@@ -107,6 +107,70 @@ def test_mt5_execute_blocks_disabled_symbol_before_order_send(monkeypatch):
     assert result["tradeState"]["symbol_trade_mode_disabled"] is True
 
 
+def test_mt5_execute_blocks_close_only_symbol_before_order_send(monkeypatch):
+    send_called = False
+
+    class _FakeMT5:
+        ORDER_TYPE_BUY = 0
+        ORDER_TYPE_SELL = 1
+        TRADE_RETCODE_TRADE_DISABLED = 10017
+        SYMBOL_TRADE_MODE_DISABLED = 0
+        SYMBOL_TRADE_MODE_FULL = 4
+        SYMBOL_TRADE_MODE_CLOSEONLY = 3
+
+        @staticmethod
+        def symbol_select(_symbol, _enable):
+            return True
+
+        @staticmethod
+        def symbol_info_tick(_symbol):
+            return SimpleNamespace(ask=1.1000, bid=1.0998)
+
+        @staticmethod
+        def symbol_info(_symbol):
+            return SimpleNamespace(
+                digits=5,
+                trade_stops_level=0,
+                point=0.00001,
+                trade_mode=_FakeMT5.SYMBOL_TRADE_MODE_CLOSEONLY,
+                visible=True,
+            )
+
+        @staticmethod
+        def terminal_info():
+            return SimpleNamespace(trade_allowed=True, tradeapi_disabled=False)
+
+        @staticmethod
+        def account_info():
+            return SimpleNamespace(trade_allowed=True, trade_expert=True, trade_mode=0)
+
+    def fake_send(_request):
+        nonlocal send_called
+        send_called = True
+        raise AssertionError("order_send must not be reached for close-only symbol")
+
+    monkeypatch.setattr(mt5_executor, "_get_mt5", lambda: _FakeMT5())
+    monkeypatch.setattr(mt5_executor, "mt5_connect", lambda: True)
+    monkeypatch.setattr(mt5_executor, "mt5_map_symbol", lambda pair: pair)
+    monkeypatch.setattr(mt5_executor, "_send_order_with_filling_fallback", fake_send)
+
+    signal = {
+        "pair": "EUR/USD",
+        "direction": "LONG",
+        "price": 1.1000,
+        "sl": 1.0950,
+        "tp1": 1.1150,
+        "type": "forex",
+    }
+    approval = RiskApproval(True, 1.0, 100.0, 0.01, 0.01, 0.0, "OK")
+
+    result = mt5_executor.mt5_execute(signal, approval)
+
+    assert send_called is False
+    assert result["success"] is False
+    assert result["error"] == "MT5_TRADE_DISABLED:symbol_close_only_no_new_positions"
+
+
 def test_mt5_execute_reports_order_check_rejection_before_send(monkeypatch):
     send_called = False
 

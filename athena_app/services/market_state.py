@@ -9,7 +9,7 @@ import time
 from datetime import datetime, timezone
 from typing import Any, Callable, TypedDict, Optional
 
-from config import CONFIG
+from config import CONFIG, get_d1_resample_offset_hours
 
 
 class MarketState(TypedDict):
@@ -80,6 +80,26 @@ def _epoch_iso(epoch: int | None) -> str | None:
     return datetime.fromtimestamp(int(epoch), timezone.utc).isoformat().replace("+00:00", "Z")
 
 
+def _mt5_d1_calendar_gap_grace_buckets() -> int:
+    """Max D1 buckets of lag tolerated as session calendar gaps (Sat/Sun, etc.)."""
+    raw = CONFIG.get("MT5_D1_CALENDAR_GAP_GRACE_BUCKETS")
+    if raw is None:
+        raw = CONFIG.get("FOREX_D1_MULTI_BUCKET_CALENDAR_GAP_GRACE_BUCKETS", 4)
+    try:
+        cap = int(raw or 0)
+    except (TypeError, ValueError):
+        cap = 0
+    return max(0, cap)
+
+
+def _mt5_d1_calendar_gap_excluded_types() -> set[str]:
+    """Asset types excluded from D1 gap grace (e.g. 24h crypto)."""
+    raw = CONFIG.get("MT5_D1_CALENDAR_GAP_EXCLUDE_TYPES", ["crypto"])
+    if isinstance(raw, str):
+        raw = [raw]
+    return {str(x).lower() for x in (raw or []) if str(x).strip()}
+
+
 def market_state_offset_hours(pair: dict[str, Any] | None, tf: str) -> float:
     """Return the bucket offset for this pair/timeframe market-state split.
     
@@ -94,10 +114,7 @@ def market_state_offset_hours(pair: dict[str, Any] | None, tf: str) -> float:
     # D1 offset for MT5 brokers (configurable for session roll differences)
     if tf_upper == "D1":
         if isinstance(pair, dict) and str(pair.get("source") or "").lower() == "mt5":
-            try:
-                return float(CONFIG.get("D1_RESAMPLE_OFFSET_HOURS", 0.0) or 0.0)
-            except (TypeError, ValueError):
-                return 0.0
+            return get_d1_resample_offset_hours()
         return 0.0
     
     if tf_upper != "H4":
@@ -160,10 +177,7 @@ def trim_mt5_d1_broker_session_ahead_tail(
 
     now = float(time_now if time_now is not None else time.time())
     # Use configured D1 offset for broker session alignment (e.g., Pepperstone Sydney roll).
-    try:
-        offset_hours = float(CONFIG.get("D1_RESAMPLE_OFFSET_HOURS", 0.0) or 0.0)
-    except (TypeError, ValueError):
-        offset_hours = 0.0
+    offset_hours = float(get_d1_resample_offset_hours())
     expected_bucket = get_bucket_start_epoch("D1", now, offset_hours=offset_hours)
 
     last_epoch = candle_timestamp_epoch(series[-1])
@@ -281,6 +295,43 @@ def candle_freshness_diagnostic(
     else:
         severity = "missing_current_bucket"
 
+    if (
+        severity == "stale_multi_bucket"
+        and tf == "D1"
+        and str(pair.get("source") or "").lower() == "mt5"
+        and str(pair.get("type") or "").lower() not in _mt5_d1_calendar_gap_excluded_types()
+        and bucket_lag is not None
+        and last_bucket is not None
+    ):
+        grace_cap = _mt5_d1_calendar_gap_grace_buckets()
+        blag = int(bucket_lag)
+        # bucket_lag is already (expected-last)/86400 on D1; cap bounds false "ok" when feed is hollow.
+        if grace_cap >= 2 and 2 <= blag <= grace_cap:
+            severity = "d1_calendar_gap_policy_ok"
+            # #region agent log
+            try:
+                from athena_app.debug_ndjson_agent import append_agent_ndjson
+
+                append_agent_ndjson(
+                    {
+                        "hypothesisId": "H_d1_calendar_grace",
+                        "location": "market_state.candle_freshness_diagnostic",
+                        "message": "d1_calendar_gap_policy_ok",
+                        "runId": "post-fix",
+                        "data": {
+                            "pairDisplay": pair.get("display"),
+                            "pairType": pair.get("type"),
+                            "bucketLag": blag,
+                            "graceCap": grace_cap,
+                            "lastBarIso": _epoch_iso(last_epoch),
+                            "expectedIso": _epoch_iso(int(expected_bucket)),
+                        },
+                    }
+                )
+            except Exception:
+                pass
+            # #endregion
+
     out = {
         "symbol": pair.get("symbol") or pair.get("display") or "",
         "timeframe": tf,
@@ -299,6 +350,39 @@ def candle_freshness_diagnostic(
     }
     if d1_session_trimmed:
         out["mt5D1SessionAheadTrimmed"] = True
+
+    # #region agent log
+    if severity == "stale_multi_bucket":
+        try:
+            from athena_app.debug_ndjson_agent import append_agent_ndjson
+
+            append_agent_ndjson(
+                {
+                    "hypothesisId": "H_multi_bucket_diag",
+                    "location": "market_state.candle_freshness_diagnostic",
+                    "message": "stale_multi_bucket",
+                    "runId": "post-fix",
+                    "data": {
+                        "pairDisplay": pair.get("display"),
+                        "pairSource": pair.get("source"),
+                        "tf": tf,
+                        "severity": severity,
+                        "bucketLag": bucket_lag,
+                        "offsetHours": float(offset_hours or 0.0),
+                        "lastBarEpoch": last_epoch,
+                        "lastBucketEpoch": last_bucket,
+                        "expectedBucketEpoch": int(expected_bucket),
+                        "d1Trimmed": bool(d1_session_trimmed),
+                        "candleCount": len(series),
+                        "lastBarIso": out.get("lastBarIso"),
+                        "expectedIso": out.get("expectedCurrentBucketIso"),
+                        "wallNowEpoch": int(now),
+                    },
+                }
+            )
+        except Exception:
+            pass
+    # #endregion
     return out
 
 

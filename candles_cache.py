@@ -137,11 +137,35 @@ def _annotate_fetch_meta_with_bar_freshness(
         fetch_meta["bucketLag"] = bucket_lag
         fetch_meta["hasCurrentBucket"] = bool(has_current_bucket)
         fetch_meta["stalenessSeverity"] = severity
+        pt = pair if isinstance(pair, dict) else None
+        tf_u = str(tf or "").upper()
+        # #region agent log
+        if severity == "stale_multi_bucket":
+            try:
+                from athena_app.debug_ndjson_agent import append_agent_ndjson
+
+                append_agent_ndjson(
+                    {
+                        "hypothesisId": "H_cache_meta_multi",
+                        "location": "candles_cache._annotate_fetch_meta_with_bar_freshness",
+                        "message": "cache_meta_stale_multi_bucket",
+                        "runId": "post-fix",
+                        "data": {
+                            "pairDisplay": pt.get("display") if pt else None,
+                            "tf": tf_u,
+                            "bucketLag": bucket_lag,
+                            "offsetHoursPassedIn": float(offset_hours or 0.0),
+                            "lastBarAgeSec": age_sec,
+                            "liveFeedFlag": live_feed,
+                        },
+                    }
+                )
+            except Exception:
+                pass
+        # #endregion
         # MT5 forex H1/H4: Engine A confirmed-only pipeline often lags provider series by
         # exactly one closed bar while ticks are fresh; risk/data-freshness treats this as
         # policy-normal (CONFIRMED_ONLY_OK). Align lastBarStale so guardian/quick-exec matches.
-        pt = pair if isinstance(pair, dict) else None
-        tf_u = str(tf or "").upper()
         forex_mt5_struct = (
             pt is not None
             and str(pt.get("type") or "").lower() == "forex"

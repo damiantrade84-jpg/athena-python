@@ -15,7 +15,7 @@ from athena_app.api.routes_execution import normalize_pip_mode
 from athena_app.repositories.audit_repo import insert_manual_error
 from athena_app.services.candle_service import recompute_levels_for_style
 from athena_runtime import executed_signals, rt
-from candles_cache import get_candle_fetch_meta
+from candles_cache import extract_candles, get_candle_fetch_meta
 from config import _json_safe, scan_candle_limits
 from engine_c import compute_consensus, normalise_engine_a
 from execution_lifecycle import run_managed_execution
@@ -491,6 +491,174 @@ def _maybe_prefetch_execution_candle_fetch_meta(sig: dict, *, _r) -> None:
             pass
 
 
+def _hydrate_execution_candle_quality(sig: dict, *, _r) -> None:
+    """Before risk gate: refresh candles and rebuild freshness/consistency/exec gate fields.
+
+    UI/client payloads often embed stale ``candleFreshness`` while ``candleFetchMeta`` alone was
+    prefetched elsewhere; risk uses ``evaluate_execution_data_freshness``. When enabled, this pulls
+    H1/H4/D1 via ``fetch_candles`` (scan limits), repopulates ``candleFetchMeta``, ``candleFreshness``
+    (if ``CANDLE_FRESHNESS_ENABLED``), ``candleConsistency``, and ``dataFreshness``. If every fetch
+    is empty/failed we fall back to :func:`_maybe_prefetch_execution_candle_fetch_meta` so a prior
+    ``analyze_pair`` refresh path is not poisoned.
+
+    Controlled by CONFIG ``EXECUTION_HYDRATE_CANDLE_QUALITY`` (default True in ``config.py``).
+    """
+    cfg = getattr(_r, "CONFIG", None) or {}
+    if not bool(cfg.get("EXECUTION_HYDRATE_CANDLE_QUALITY", True)):
+        _maybe_prefetch_execution_candle_fetch_meta(sig, _r=_r)
+        return
+
+    pair_disp = str(sig.get("pair") or sig.get("display") or sig.get("symbol") or "").strip()
+    if not pair_disp:
+        _maybe_prefetch_execution_candle_fetch_meta(sig, _r=_r)
+        return
+
+    pair_obj = next((p for p in (_r.ALL_PAIRS or []) if str(p.get("display", "")) == pair_disp), None)
+    if not pair_obj:
+        _maybe_prefetch_execution_candle_fetch_meta(sig, _r=_r)
+        return
+
+    fetch = getattr(_r, "fetch_candles", None)
+    if not callable(fetch):
+        _maybe_prefetch_execution_candle_fetch_meta(sig, _r=_r)
+        return
+
+    try:
+        limits = scan_candle_limits()
+        candles: dict[str, list] = {"H1": [], "H4": [], "D1": []}
+        for tf in ("H1", "H4", "D1"):
+            lim = int(limits[str(tf)])
+            raw = fetch(pair_obj, str(tf), lim)
+            extracted = extract_candles(raw)
+            candles[str(tf)] = list(extracted or [])
+
+        if not (
+            candles["H1"]
+            and candles["H4"]
+            and candles["D1"]
+        ):
+            try:
+                _r.log.info(
+                    "[EXEC] hydrate skipped (incomplete candle fetch); pair=%s h1=%d h4=%d d1=%d",
+                    pair_disp,
+                    len(candles["H1"]),
+                    len(candles["H4"]),
+                    len(candles["D1"]),
+                )
+            except Exception:
+                pass
+            _maybe_prefetch_execution_candle_fetch_meta(sig, _r=_r)
+            return
+
+        d1_m = get_candle_fetch_meta(pair_obj, "D1", limits["D1"])
+        h4_m = get_candle_fetch_meta(pair_obj, "H4", limits["H4"])
+        h1_m = get_candle_fetch_meta(pair_obj, "H1", limits["H1"])
+        sig["candleFetchMeta"] = {
+            "D1": d1_m if isinstance(d1_m, dict) else {},
+            "H4": h4_m if isinstance(h4_m, dict) else {},
+            "H1": h1_m if isinstance(h1_m, dict) else {},
+            "pairSource": pair_obj.get("source"),
+        }
+
+        from athena_app.services.data_freshness import (
+            check_live_candle_consistency,
+            evaluate_execution_data_freshness,
+        )
+        from athena_app.services.market_state import (
+            candle_freshness_diagnostic,
+            market_state_offset_hours,
+            split_market_state,
+        )
+
+        time_now = datetime.now(timezone.utc).timestamp()
+
+        candle_consistency: dict = {}
+        states_by_tf: dict[str, dict] = {}
+
+        for tf_u in ("H4", "H1", "D1"):
+            tf_candles = list(candles.get(tf_u) or [])
+            offset_h = market_state_offset_hours(pair_obj, tf_u)
+            state = split_market_state(
+                tf_candles,
+                tf_u,
+                pair_obj.get("display") or pair_obj.get("symbol") or "",
+                time_now=time_now,
+                offset_hours=offset_h,
+            )
+            states_by_tf[tf_u] = state
+            if pair_obj.get("source") == "mt5" and pair_obj.get("type") == "forex":
+                engine_a_input = list(state.get("confirmed") or [])
+            else:
+                engine_a_input = list(state.get("confirmed") or [])
+                if state.get("forming"):
+                    engine_a_input.append(state["forming"])
+            engine_b_input = list(state.get("confirmed") or [])
+            scanner_input = list(engine_a_input)
+
+            consistency_paths = {
+                "raw_provider": tf_candles,
+                "market_state": state,
+                "engine_a": engine_a_input,
+                "engine_b": engine_b_input,
+                "scanner": scanner_input,
+                "compare": scanner_input,
+            }
+            cache_meta = sig["candleFetchMeta"].get(tf_u)
+            if isinstance(cache_meta, dict) and cache_meta:
+                consistency_paths["cache"] = cache_meta
+
+            consistency_result = check_live_candle_consistency(
+                pair_obj,
+                tf_u,
+                consistency_paths,
+                time_now=time_now,
+            )
+            if consistency_result:
+                candle_consistency[tf_u] = consistency_result
+
+        sig["candleConsistency"] = candle_consistency
+
+        if bool(cfg.get("CANDLE_FRESHNESS_ENABLED", True)):
+            cf: dict = {}
+            for tf_u in ("D1", "H4", "H1"):
+                state = states_by_tf[tf_u]
+                confirmed = list(state.get("confirmed") or [])
+                forming = state.get("forming")
+                series_diag = confirmed + ([forming] if forming else [])
+                cf[tf_u] = candle_freshness_diagnostic(
+                    pair_obj,
+                    tf_u,
+                    series_diag,
+                    time_now=time_now,
+                    source=pair_obj.get("source"),
+                )
+            sig["candleFreshness"] = cf
+
+        freshness_eval = evaluate_execution_data_freshness(sig, cfg)
+        sig["dataFreshness"] = freshness_eval
+        if bool(cfg.get("SIGNAL_EXECUTABLE_FALSE_WHEN_FRESHNESS_BLOCKS", True)):
+            if isinstance(freshness_eval, dict) and not freshness_eval.get("allowed"):
+                sig["executable"] = False
+
+        try:
+            _r.log.info(
+                "[EXEC] candle quality hydrated pair=%s h1=%d h4=%d d1=%d allowed=%s",
+                pair_disp,
+                len(candles["H1"]),
+                len(candles["H4"]),
+                len(candles["D1"]),
+                (sig.get("dataFreshness") or {}).get("allowed"),
+            )
+        except Exception:
+            pass
+    except Exception as exc:
+        try:
+            _r.log.warning("[EXEC] candle quality hydrate failed: %s", exc)
+        except Exception:
+            pass
+        _maybe_prefetch_execution_candle_fetch_meta(sig, _r=_r)
+
+
 def _apply_engine_b_execution_levels(sig: dict, engine_b: dict | None = None) -> bool:
     levels = _extract_engine_b_execution_levels(sig, engine_b)
     if not levels:
@@ -700,7 +868,7 @@ def api_quick_execute():
                 return jsonify({"error": "Symbol not on broker"}), 400
             _exec_venue = "mt5"
 
-        _maybe_prefetch_execution_candle_fetch_meta(sig, _r=_r)
+        _hydrate_execution_candle_quality(sig, _r=_r)
 
         approval = risk_check(
             signal=sig,
@@ -1589,7 +1757,7 @@ def api_execute():
             else:
                 _sizing_override = 1.0
 
-        _maybe_prefetch_execution_candle_fetch_meta(sig, _r=_r)
+        _hydrate_execution_candle_quality(sig, _r=_r)
 
         approval = risk_check(
             signal=sig,
@@ -1948,7 +2116,7 @@ def api_scalp_execute():
         if _rebase_error:
             return jsonify({"error": _rebase_error}), 400
 
-        _maybe_prefetch_execution_candle_fetch_meta(sig, _r=_r)
+        _hydrate_execution_candle_quality(sig, _r=_r)
 
         # Format signal for risk engine
         approval = risk_check(
