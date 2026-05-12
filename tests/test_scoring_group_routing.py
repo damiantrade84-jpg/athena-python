@@ -149,6 +149,7 @@ def test_python_defaults_match_runtime_yaml_for_audit_sensitive_gates():
     assert CONFIG["ADX_TREND_MIN_CLASS"]["crypto"] == 18
     assert CONFIG["ADX_TREND_MIN_CLASS"]["forex"] == 20
     assert CONFIG["AUTO_TRADE_MIN_SCORE"]["index"] == 1.8
+    assert CONFIG["THRESHOLD_AUDIT"]["ENABLED"] is True
     assert CONFIG["FACTOR_MIN_DIRECTIONAL_CRYPTO"] == 0.20
     assert CONFIG["ENGINE_A_COT_CONTRARIAN_FADE"] == {
         "ENABLED": True,

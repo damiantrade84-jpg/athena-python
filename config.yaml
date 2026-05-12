@@ -75,7 +75,7 @@ CANDLE_FRESHNESS_ENABLED: true
 CRYPTO_D1_MAX_STALE_HOURS: 25
 
 THRESHOLD_AUDIT:
-  ENABLED: false
+  ENABLED: true
   SHADOW_THRESHOLDS:
     ENGINE_A:
       - current
@@ -786,9 +786,9 @@ ETORO:
 
 AUTO_TRADE_ENABLED: false          # Start auto-trader on server boot
 
-# AUTO_TRADE_MIN_SCORE is the scan floor that decides which signals reach the
-
-# auto-trader candidate list. It is not the final live execute gate.
+# AUTO_TRADE_MIN_SCORE is informational operator metadata. Engine A scan gates
+# are resolved by ENGINE_A_SCORE_GROUP_THRESHOLDS/get_score_threshold(), and
+# live auto-execution uses AUTO_TRADE_MIN_CONVICTION on combinedConviction.
 
 # Factor engine (crypto/stock/commodity/index) outputs 0-3.0.
 
@@ -1371,7 +1371,9 @@ REGIME_SMOOTHING_BARS: 3
 
 
 
-# Regime-aware factor weights
+# Legacy/inactive Engine A v1 factor-weight metadata.
+# Current Engine A v2 does not read REGIME_WEIGHTS, FACTOR_SCORE_GROUP_MULTIPLIERS,
+# or CRYPTO_FACTOR_WEIGHT_CAPS; see factor_scoring.py 3-factor multiplicative score.
 
 REGIME_WEIGHTS:
 

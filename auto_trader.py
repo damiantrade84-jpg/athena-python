@@ -157,6 +157,38 @@ def _current_combined_conviction(signal: dict) -> float:
     return round(a_norm * 0.6, 4)
 
 
+def _a_only_reject_reason(
+    signal: dict,
+    combined_conviction: float,
+    auto_min_conviction: float,
+) -> str | None:
+    """Explain the A-only auto gate in Engine A score terms when possible."""
+    if signal.get("enginesAligned") is not False:
+        return None
+
+    try:
+        score = float(signal.get("confluenceScore", 0) or 0)
+        max_score = float(signal.get("maxScore", 0) or 0)
+    except (TypeError, ValueError):
+        return None
+    if max_score <= 0 or score < 0:
+        return None
+
+    a_norm = score / max_score
+    if a_norm <= 0:
+        return None
+    weight = combined_conviction / a_norm
+    if weight <= 0:
+        return None
+
+    required_score = (auto_min_conviction / weight) * max_score
+    return (
+        f"A-only conviction {combined_conviction:.3f} < min {auto_min_conviction:.3f} "
+        f"(Engine A score {score:.2f}/{max_score:.1f}; requires about "
+        f"{required_score:.2f}/{max_score:.1f} at A-only weight {weight:.2f})"
+    )
+
+
 def _normalize_pair_key(value: str | None) -> str:
     """Normalize pair or symbol identifiers for duplicate-position matching."""
     if value is None:
@@ -662,6 +694,13 @@ class AutoTrader:
             return False, "meta policy suspended this engine bucket"
 
         if combined_conviction < auto_min_conviction:
+            a_only_reason = _a_only_reject_reason(
+                signal,
+                float(combined_conviction),
+                float(auto_min_conviction),
+            )
+            if a_only_reason:
+                return False, a_only_reason
             return False, f"conviction {combined_conviction:.3f} < min {auto_min_conviction:.3f}"
 
         # Regime filter — only execute in TRENDING regime (37% WR vs 11% RANGING, 0% DEVELOPING)

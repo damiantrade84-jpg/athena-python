@@ -1,4 +1,9 @@
-from auto_trader import AutoTrader, _current_combined_conviction, _signal_expected_prob
+from auto_trader import (
+    AutoTrader,
+    _a_only_reject_reason,
+    _current_combined_conviction,
+    _signal_expected_prob,
+)
 
 
 def _base_cfg():
@@ -58,7 +63,9 @@ def test_can_execute_keeps_crypto_a_only_conviction_gate_strict():
     }
     ok, reason = trader._can_execute(low_signal, cfg)
     assert ok is False
-    assert "conviction 0.400 < min 0.500" in reason
+    assert "A-only conviction 0.400 < min 0.500" in reason
+    assert "Engine A score 2.00/3.0" in reason
+    assert "requires about 2.50/3.0" in reason
 
     high_signal = dict(
         low_signal,
@@ -268,6 +275,21 @@ def test_current_combined_conviction_uses_engine_a_only_contract_when_overlay_mi
     }
 
     assert _current_combined_conviction(signal) == 0.36
+
+
+def test_a_only_reject_reason_reports_required_engine_a_score():
+    signal = {
+        "confluenceScore": 2.38,
+        "maxScore": 3.0,
+        "enginesAligned": False,
+    }
+
+    reason = _a_only_reject_reason(signal, 0.476, 0.50)
+
+    assert reason is not None
+    assert "A-only conviction 0.476 < min 0.500" in reason
+    assert "Engine A score 2.38/3.0" in reason
+    assert "requires about 2.50/3.0" in reason
 
 
 def test_can_execute_rejects_when_debate_zeroes_engine_a_score(monkeypatch):
