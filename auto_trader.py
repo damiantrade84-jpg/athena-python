@@ -336,10 +336,11 @@ class AutoTrader:
             "minScore": scan_min_score,
             "scanMinScore": scan_min_score,
             "minScoreExecutionNote": (
-                "Informational only; live execution uses combinedConviction and "
-                "AUTO_TRADE_MIN_CONVICTION."
+                "DEPRECATED — informational only. Changing this has no effect on execution. "
+                "Live execution uses combinedConviction and AUTO_TRADE_MIN_CONVICTION."
             ),
             "minScoreDeprecatedForExecution": True,
+            "minScoreDeprecated": True,
             "minConviction": min_conviction,
             "liveGateMetric": "combinedConviction",
             "liveGateAlignedDiscount": 0.85,
@@ -394,30 +395,25 @@ class AutoTrader:
                         or (now - self._last_meta_analysis).days >= 6
                     ):
                         self._last_meta_analysis = now
-                        try:
-                            from ai_learning import run_meta_analysis
-
-                            _meta_result = run_meta_analysis(
-                                self._audit_db,
-                                cfg_early.get("XAI_API_KEY", ""),
-                                cfg_early.get("XAI_MODEL", "grok-4.20-0309-reasoning"),
-                            )
-                            log.info(
-                                f"[AUTO] Weekly meta-analysis complete: {_meta_result.get('summary', '')[:100]}"
-                            )
-                        except Exception as _me:
-                            log.warning(f"[AUTO] Weekly meta-analysis failed: {_me}")
+                        threading.Thread(
+                            target=self._run_weekly_meta_analysis,
+                            args=(cfg_early,),
+                            daemon=True,
+                            name="AUTO-MetaAnalysis",
+                        ).start()
 
                 # Immediate scan on enable (first scan)
 
-                if self._scan_now:
-                    self._scan_now = False
+                with self._lock:
+                    scan_now = self._scan_now
+                if scan_now:
+                    with self._lock:
+                        self._scan_now = False
+                        self._last_interval_scan = now
 
                     log.info("[AUTO] Running immediate first scan...")
 
                     self._run_auto_scan()
-
-                    self._last_interval_scan = now
 
                     continue
 
@@ -429,12 +425,19 @@ class AutoTrader:
 
                 # Interval-based scan (every N minutes)
 
-                if self._last_interval_scan is None:
-                    self._last_interval_scan = now
+                with self._lock:
+                    last_interval_scan = self._last_interval_scan
+                if last_interval_scan is None:
+                    with self._lock:
+                        self._last_interval_scan = now
+                    continue
 
-                elapsed = (now - self._last_interval_scan).total_seconds() / 60
+                elapsed = (now - last_interval_scan).total_seconds() / 60
 
                 if elapsed >= interval_min:
+                    with self._lock:
+                        self._last_interval_scan = now
+
                     # Convert UTC to local time for display only (don't affect scheduling logic)
                     local_now = datetime.fromtimestamp(now.timestamp())
                     log.info(
@@ -442,8 +445,6 @@ class AutoTrader:
                     )
 
                     self._run_auto_scan()
-
-                    self._last_interval_scan = now
 
             except Exception as e:
                 log.error(f"[AUTO] Scheduler loop error: {e}")
@@ -468,6 +469,22 @@ class AutoTrader:
 
         return datetime.now(timezone.utc) + timedelta(minutes=interval_min)
 
+    def _run_weekly_meta_analysis(self, cfg: dict) -> None:
+        """Run weekly meta-analysis in a background thread to avoid blocking the scheduler loop."""
+        try:
+            from ai_learning import run_meta_analysis
+
+            _meta_result = run_meta_analysis(
+                self._audit_db,
+                cfg.get("XAI_API_KEY", ""),
+                cfg.get("XAI_MODEL", "grok-4.20-0309-reasoning"),
+            )
+            log.info(
+                f"[AUTO] Weekly meta-analysis complete: {_meta_result.get('summary', '')[:100]}"
+            )
+        except Exception as _me:
+            log.warning(f"[AUTO] Weekly meta-analysis failed: {_me}")
+
     def _run_auto_scan(self):
         """Run a full scan and auto-execute qualifying signals."""
 
@@ -485,9 +502,11 @@ class AutoTrader:
 
         max_daily = cfg.get("AUTO_TRADE_MAX_DAILY", 3)
 
-        if self._trades_today >= max_daily:
+        with self._lock:
+            trades_today = self._trades_today
+        if trades_today >= max_daily:
             log.info(
-                f"[AUTO] Daily cap reached ({self._trades_today}/{max_daily}) — scan skipped"
+                f"[AUTO] Daily cap reached ({trades_today}/{max_daily}) — scan skipped"
             )
 
             return
@@ -568,8 +587,9 @@ class AutoTrader:
             if executed >= max_per_scan:
                 break
 
-            if self._trades_today >= max_daily:
-                break
+            with self._lock:
+                if self._trades_today >= max_daily:
+                    break
 
             ok, reason = self._can_execute(sig, cfg)
 
@@ -629,7 +649,7 @@ class AutoTrader:
             signal["conductor"] = plan.get("routing", {})
             signal["conductor_context"] = plan.get("context", {})
         except Exception as _e:
-            log.debug("[AUTO] conductor hydrate failed: %s", _e)
+            log.warning("[AUTO] conductor hydrate failed: %s", _e)
 
     def _can_execute(self, signal: dict, cfg: dict) -> tuple[bool, str]:
         """Check score gate + session filter. Uses combined Engine A+B conviction when available.
@@ -650,6 +670,10 @@ class AutoTrader:
         # Fallback: recompute the same execution conviction contract used elsewhere.
         if combined_conviction is None:
             combined_conviction = _current_combined_conviction(signal)
+            log.warning(
+                f"[AUTO] {signal.get('pair')} missing combinedConviction — "
+                f"fallback recompute produced {combined_conviction:.3f}"
+            )
 
         # Auto-trade minimum conviction (0-1 scale)
         # Default: 0.50 = requires decent Engine A score OR Engine A+B alignment
@@ -965,9 +989,9 @@ class AutoTrader:
     ) -> list[dict] | None:
         """Load broker open positions once per venue during a scan.
 
-        Returns None when positions cannot be confirmed. Execution still fails
-        closed downstream in that case, so this precheck only suppresses known
-        duplicate-pair attempts.
+        Returns an empty list when positions cannot be confirmed (logs warning).
+        Execution fails closed downstream in risk_check, so this precheck only
+        suppresses known duplicate-pair attempts — a miss here is not a safety gap.
         """
         venue = "bybit" if asset_type == "crypto" else "mt5"
         if venue in positions_cache:
@@ -984,16 +1008,16 @@ class AutoTrader:
                 pos_result = mt5_get_positions()
         except Exception as e:
             log.warning(f"[AUTO] {venue.upper()} positions precheck failed: {e}")
-            positions_cache[venue] = None
-            return None
+            positions_cache[venue] = []
+            return []
 
         if isinstance(pos_result, dict) and pos_result.get("error"):
             log.warning(
                 f"[AUTO] {venue.upper()} positions precheck unavailable: "
                 f"{pos_result.get('detail', 'unknown')}"
             )
-            positions_cache[venue] = None
-            return None
+            positions_cache[venue] = []
+            return []
 
         positions = (
             pos_result.get("positions", [])
@@ -1115,13 +1139,11 @@ class AutoTrader:
             result = run_managed_execution(_exec_venue, signal, approval)
 
             if result.get("success"):
-                self._trades_today += 1
-
-                self._last_exec_at = datetime.now(timezone.utc)
-
-                self._last_exec_pair = pair
-
-                self._last_exec_dir = direction
+                with self._lock:
+                    self._trades_today += 1
+                    self._last_exec_at = datetime.now(timezone.utc)
+                    self._last_exec_pair = pair
+                    self._last_exec_dir = direction
 
                 self._write_audit(signal, approval, result, cfg)
                 record_execution_event(
