@@ -111,6 +111,29 @@ def test_backtest_pair_scalp_uses_stable_m15_execution_proxy(monkeypatch):
     assert trade["exit_bar_index"] - trade["entry_bar_index"] == 3
 
 
+def test_backtest_pair_scalp_crypto_tuple_fetch_drops_forming_bar(monkeypatch):
+    candles = _timed_candles(100, 15)
+    monkeypatch.setitem(
+        backtest_runner.CONFIG,
+        "SCALP_ENGINE",
+        {
+            **backtest_runner.CONFIG.get("SCALP_ENGINE", {}),
+            "BT_ENABLED": True,
+            "BT_SESSION_MODE": "all",
+        },
+    )
+    monkeypatch.setattr(
+        scalp_engine,
+        "_scalp_fetch_candles",
+        lambda pair, tf, limit: (candles, "binance_ws"),
+    )
+
+    result = backtest_runner.backtest_pair_scalp({"display": "BTC/USDT", "type": "crypto"})
+
+    assert "Insufficient M15 data" in result["error"]
+    assert "99 bars" in result["error"]
+
+
 def test_backtest_pair_scalp_uses_asset_aware_cost_assumptions(monkeypatch):
     candles = _timed_candles(140, 15)
     calls = []

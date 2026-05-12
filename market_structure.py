@@ -68,7 +68,7 @@ def _engine_b_confirmed_only_struct_candles(
         or not isinstance(pair, dict)
         or len(struct_candles) < 2
     ):
-        return struct_candles
+        return []
     try:
         import time
         from athena_app.services.market_state import (
@@ -90,8 +90,8 @@ def _engine_b_confirmed_only_struct_candles(
         if len(confirmed) >= min_bars:
             return confirmed
     except Exception:
-        pass
-    return struct_candles
+        return []
+    return []
 
 
 # Engine B timeframe matrix — single source of truth for TF selection across
@@ -264,8 +264,9 @@ def engine_b_min_score_threshold(
     scaled = base_min * _engine_b_regime_gate(regime_label, asset_type)
     if scaled <= 0:
         return 0.0
-    # Engine B scores in checklist points; round regime scaling to avoid unreachable gates.
-    return float(round(scaled))
+    # Keep one decimal so regime multipliers remain effective without creating
+    # brittle binary-float score boundaries.
+    return float(math.ceil((scaled * 10.0) - 1e-12) / 10.0)
 
 
 # FIX 10: Per-gate failure histogram (module-level)
@@ -1592,8 +1593,8 @@ class NakedEngine:
         """
         Detect Fair Value Gaps with mitigation tracking and consecutive merging.
 
-        A bullish FVG: candle[i-1].low > candle[i+1].high (gap up)
-        A bearish FVG: candle[i-1].high < candle[i+1].low (gap down)
+        A bearish FVG: candle[i-1].low > candle[i+1].high (gap down)
+        A bullish FVG: candle[i-1].high < candle[i+1].low (gap up)
 
         Mitigation: FVG is considered mitigated when price has retraced
         through 50%+ of the gap (consequent encroachment).
@@ -2841,6 +2842,7 @@ class NakedEngine:
         # tests) but no longer gates structure_ok. Consumers can use it as a
         # soft conviction signal.
         _diag_codes: list[str] = []
+        _engine_b_adx_val = None
         if str(res.get("asset_type") or "").lower() == "forex":
             _adx_val = res.get("d1_adx")
             if _adx_val is None:
@@ -2850,6 +2852,7 @@ class NakedEngine:
                     _adx_val = float(_adx_val)
                 except (TypeError, ValueError):
                     _adx_val = 0.0
+                _engine_b_adx_val = _adx_val
                 if _adx_val >= 30:
                     res["_adx_derived_regime"] = "TRENDING"
                 elif _adx_val >= 20:
@@ -2899,6 +2902,8 @@ class NakedEngine:
         # Contextual Room Gate helper (called after rr is known).
         # Crypto and indices trade with tighter swings → smaller min_room.
         def _get_min_room_atr(rr_val, bos_confirmed, asset_class, style):
+            if profile.get("min_room_atr") is not None:
+                return min_room_atr
             if asset_class == "crypto":
                 if style == "swing":
                     return 0.40
@@ -3034,6 +3039,8 @@ class NakedEngine:
         # FIX 4: Dynamic max_possible
         _profile_points_max = 1.0 if config.CONFIG.get("ENGINE_B_PROFILE_SCORING_ENABLED", False) else 0.0
         bonus_count = 3 + _profile_points_max  # bos_mtf, ob_at_zone, volume_ok + profile
+        if _ft_enabled:
+            bonus_count += abs(float(_ft_cfg.get("MAX_BONUS", 1.5)))
         max_possible = gate_max_possible + bonus_count
         _profile_points = 0.0
         _profile_ok = False
@@ -3133,6 +3140,13 @@ class NakedEngine:
             _diag_codes.append(ENGINE_B_REASON_TP_WRONG_SIDE)
         if res.get("tp_structural_limited"):
             _diag_codes.append(ENGINE_B_REASON_STRUCTURAL_TP_TOO_CLOSE)
+        if asset_type_lower == "forex" and _engine_b_adx_val is not None:
+            try:
+                _forex_adx_min = float(config.CONFIG.get("ENGINE_B_FOREX_ADX_MIN", 0) or 0)
+            except (TypeError, ValueError):
+                _forex_adx_min = 0.0
+            if _forex_adx_min > 0 and float(_engine_b_adx_val) < _forex_adx_min:
+                _diag_codes.append(ENGINE_B_REASON_FOREX_ADX_LOW)
 
         return {
             "score": total_score,

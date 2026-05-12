@@ -2202,6 +2202,11 @@ def test_as_fraction_accepts_decimal_or_percent_literal():
     assert abs(_as_fraction(0.15, 0.3, clamp_minmax=(0.01, 0.99)) - 0.15) < 1e-9
 
 
+def test_as_fraction_warns_on_percent_literal(caplog):
+    _as_fraction(1.5, 0.5, clamp_minmax=(0.01, 0.99))
+    assert "interpreted as percent" in caplog.text
+
+
 def test_merge_vp_aliases_fills_standard_keys():
     raw = {"profile_valid": True, "poc": None, "vah": None, "val": None, "POC": 1.103, "VAH": 1.106, "VAL": 1.097}
     m = _merge_vp_aliases(dict(raw))

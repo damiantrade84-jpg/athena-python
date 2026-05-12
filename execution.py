@@ -360,6 +360,22 @@ def _apply_level_override(sig: dict, override: dict) -> str | None:
     return None
 
 
+def _engine_d_execution_block_reason(sig: dict) -> str | None:
+    """Return the fail-closed reason for non-executable Engine D candidates."""
+    gate_result = str(sig.get("gate_result", "PASS") or "PASS").upper()
+    if sig.get("executable") is False:
+        return str(sig.get("candidate_status") or "ENGINE_D_NOT_EXECUTABLE")
+    if gate_result != "PASS":
+        return str(sig.get("candidate_status") or gate_result or "ENGINE_D_GATE_FAILED")
+    grade = str(sig.get("ai_grade") or sig.get("grade") or "").upper()
+    if grade == "D":
+        return "ENGINE_D_GRADE_D_NOT_EXECUTABLE"
+    fail_reasons = sig.get("fail_reasons")
+    if isinstance(fail_reasons, list) and fail_reasons:
+        return str(sig.get("candidate_status") or ",".join(map(str, fail_reasons)))
+    return None
+
+
 def _is_structural_engine_b_execution(sig: dict, engine_b: dict | None = None) -> bool:
     """True when execution should apply Engine B level / stale-B refresh semantics.
 
@@ -2012,6 +2028,10 @@ def api_scalp_execute():
 
     if not sig:
         return jsonify({"error": "Missing signal data"}), 400
+
+    _block_reason = _engine_d_execution_block_reason(sig)
+    if _block_reason:
+        return jsonify({"error": _block_reason, "success": False}), 400
         
     try:
         from risk_engine import risk_check
@@ -2068,7 +2088,7 @@ def api_scalp_execute():
         # execution and tell the user to rescan.
         _rebase_error = None
         try:
-            from scalp_engine import calculate_scalp_levels, _guess_asset_type
+            from scalp_engine import calculate_scalp_levels, _guess_asset_type, _scalp_min_rr_for_group
             _bid = float(symbol_info.get("bid") or 0)
             _ask = float(symbol_info.get("ask") or 0)
             _live_px = (_bid + _ask) / 2 if _bid > 0 and _ask > 0 else _bid or _ask
@@ -2081,6 +2101,8 @@ def api_scalp_execute():
             }
             if _live_px > 0 and _vp["poc"] > 0 and _vp["vah"] > 0 and _vp["val"] > 0:
                 _asset_type = _guess_asset_type(pair_key)
+                _score_group = get_pair_score_group({"display": pair_key, "symbol": pair_key, "type": _asset_type})
+                _min_rr = _scalp_min_rr_for_group(_asset_type, _score_group)
                 _rebased = calculate_scalp_levels(
                     sig.get("direction", "LONG"),
                     _live_px,
@@ -2088,6 +2110,8 @@ def api_scalp_execute():
                     sig.get("zone_type", "trend_continuation"),
                     symbol_info,
                     _asset_type,
+                    min_rr_override=_min_rr,
+                    score_group=_score_group,
                 )
                 drift_pct = abs(_live_px - _scan_px) / _scan_px * 100 if _scan_px else 0
                 if _rebased.get("rr_below_min"):

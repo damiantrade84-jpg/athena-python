@@ -199,22 +199,21 @@ class LiveV2VolumeBatcher:
             prev_marker = int(prev_event_marker_ms.get(display) or 0)
             if prev_marker and marker_ms and marker_ms <= prev_marker:
                 continue
+            if _max_quote_lag_s > 0 and lag_s is not None and lag_s > _max_quote_lag_s:
+                continue
 
             prev_vol = float(prev_cumvol.get(display) or 0)
             if prev_vol > 0 and cum_vol < prev_vol:
-                delta_vol = cum_vol
+                delta_vol = 0.0
             elif prev_vol > 0:
                 delta_vol = cum_vol - prev_vol
             else:
-                delta_vol = cum_vol
+                delta_vol = 0.0
 
             if delta_vol <= 0:
                 new_cumvol[display] = cum_vol
                 if marker_ms:
                     new_event_marker_ms[display] = marker_ms
-                continue
-
-            if _max_quote_lag_s > 0 and lag_s is not None and lag_s > _max_quote_lag_s:
                 continue
 
             new_cumvol[display] = cum_vol

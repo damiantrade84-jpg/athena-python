@@ -1713,6 +1713,15 @@ def compute_factor_scores(
     _minus_di = h4_snap.get("minusDI") or h4_snap.get("minus_di")
     di_align_mult = _di_alignment_multiplier(direction, _plus_di, _minus_di)
     feed_status["di_align"] = f"{di_align_mult:.2f}"
+    if di_align_mult == 0.0:
+        feed_status["abort_reason"] = "DI_ALIGNMENT_CONFLICT"
+        log.info(
+            "[EA2] %s DI alignment conflict direction=%s plusDI=%s minusDI=%s",
+            display,
+            direction,
+            _plus_di,
+            _minus_di,
+        )
 
     # ── Conviction score: weighted combination ────────────────────────────────
     # Read weights lazily so config reloads take effect without restart.
@@ -1863,7 +1872,11 @@ def compute_factor_scores(
     _inter_adj_max = float(CONFIG.get("FACTOR_INTER_ADJ_MAX", 0.02))
     _inter_adj_min = float(CONFIG.get("FACTOR_INTER_ADJ_MIN", -0.02))
     _inter_adj = 0.0
-    if isinstance(intermarket_context, dict):
+    _has_rich_intermarket_context = isinstance(intermarket_context, dict) and any(
+        key in intermarket_context
+        for key in ("confirmation", "matrix", "relationships", "engineAContext", "enabled")
+    )
+    if isinstance(intermarket_context, dict) and not _has_rich_intermarket_context:
         if intermarket_context.get("divergence") is True:
             _inter_adj = _inter_adj_min
         _divergence_score = intermarket_context.get("divergence_score")

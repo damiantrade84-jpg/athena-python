@@ -698,7 +698,21 @@ def risk_check(
         log.warning(f"{prefix} REJECTED: non-executable signal state")
         return RiskApproval(False, 0.0, 0.0, 0.0, 0.0, 0.0, "NON_EXECUTABLE_SIGNAL_STATE")
 
-    if verdict in ("B_ONLY", "B_ONLY_SCORED", "B_ONLY_VISION_CONFIRMED", "ALIGNED"):
+    def _is_engine_b_execution_signal(sig: dict) -> bool:
+        eng = str(sig.get("engine") or sig.get("source_engine") or "").strip().lower()
+        if eng in ("engine_b", "naked", "naked_structure", "structure", "smc"):
+            return True
+        v = str(sig.get("verdict") or "").strip().upper()
+        if v in ("B_ONLY", "B_ONLY_SCORED", "B_ONLY_VISION_CONFIRMED", "ALIGNED"):
+            return True
+        if isinstance(sig.get("engine_b_status"), dict):
+            return True
+        comps = sig.get("components")
+        return isinstance(comps, dict) and (
+            "b_checklist_passed" in comps or "b_has_signal" in comps
+        )
+
+    if _is_engine_b_execution_signal(signal):
         engine_b_status = signal.get("engine_b_status") or {}
         components = signal.get("components") or {}
         checklist_present = (
@@ -855,7 +869,24 @@ def risk_check(
         _min_exec_rr = float(CONFIG.get("ENGINE_C_EXEC_MIN_RR", 1.0) or 1.0)
     except (TypeError, ValueError):
         _min_exec_rr = 1.0
-    if _min_exec_rr > 0 and tp1 > 0 and _is_consensus_execution_signal(signal):
+    if _is_engine_b_execution_signal(signal):
+        for _key in ("engine_b_min_rr", "min_rr", "required_rr"):
+            try:
+                if signal.get(_key) is not None:
+                    _min_exec_rr = max(_min_exec_rr, float(signal.get(_key)))
+            except (TypeError, ValueError):
+                pass
+        engine_b_status = signal.get("engine_b_status") or {}
+        if isinstance(engine_b_status, dict):
+            try:
+                if engine_b_status.get("min_rr") is not None:
+                    _min_exec_rr = max(_min_exec_rr, float(engine_b_status.get("min_rr")))
+            except (TypeError, ValueError):
+                pass
+
+    if _min_exec_rr > 0 and tp1 > 0 and (
+        _is_consensus_execution_signal(signal) or _is_engine_b_execution_signal(signal)
+    ):
         risk_abs = abs(entry - sl)
         if risk_abs > 0:
             rr_geom = abs(tp1 - entry) / risk_abs
