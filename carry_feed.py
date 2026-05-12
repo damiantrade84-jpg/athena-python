@@ -34,6 +34,7 @@ import sqlite3
 import logging
 import threading
 import time
+from bisect import bisect_right
 from io import StringIO
 from typing import Optional
 
@@ -49,6 +50,12 @@ _FETCH_TTL = 86400  # re-download daily (rates change monthly but freshness matt
 # In-memory cache: pair → (z_score, fetched_at)
 _mem_cache: dict = {}
 _MEM_TTL = 24 * 3600  # 24-hour in-memory cache (rates change slowly)
+
+# In-memory cache: series_id -> (fetched_at, obs_dates, rates).
+# Historical Engine A backtests call carry lookups once per candidate bar. Keep
+# the SQLite-backed source of truth, but avoid repeated per-bar SELECTs.
+_series_mem_cache: dict[str, tuple[float, list[str], list[float]]] = {}
+_SERIES_MEM_TTL = 3600
 
 # ── FRED series IDs per currency ──────────────────────────────────────────────
 _FRED_URL = "https://fred.stlouisfed.org/graph/fredgraph.csv?id={series}"
@@ -275,6 +282,7 @@ def _write_series(series_id: str, rows: list[tuple[str, float]]):
         )
         con.commit()
         con.close()
+    _series_mem_cache.pop(series_id, None)
 
 
 _fetching_in_progress: set = set()
@@ -351,6 +359,50 @@ def _get_latest_rate(series_id: str, as_of_date: str = None) -> Optional[float]:
     return row[0] if row else None
 
 
+def _get_series_rows_cached(series_id: str) -> tuple[list[str], list[float]]:
+    """Return full DB-backed series from memory when fresh."""
+    now = time.time()
+    cached = _series_mem_cache.get(series_id)
+    if cached and now - cached[0] < _SERIES_MEM_TTL:
+        return cached[1], cached[2]
+
+    _ensure_series(series_id)
+    with _db_lock:
+        con = sqlite3.connect(_DB_PATH, timeout=15.0)
+        rows = con.execute(
+            "SELECT obs_date, rate FROM rate_series WHERE series_id=? ORDER BY obs_date ASC",
+            (series_id,),
+        ).fetchall()
+        con.close()
+    dates = [str(r[0]) for r in rows]
+    rates = [float(r[1]) for r in rows]
+    _series_mem_cache[series_id] = (now, dates, rates)
+    return dates, rates
+
+
+def _get_latest_rate_cached(series_id: str, as_of_date: str) -> Optional[float]:
+    dates, rates = _get_series_rows_cached(series_id)
+    if not dates:
+        return None
+    idx = bisect_right(dates, as_of_date)
+    if idx <= 0:
+        return None
+    return rates[idx - 1]
+
+
+def _get_rate_series_cached(
+    series_id: str, months: int = 36, as_of_date: str = None
+) -> list[float]:
+    dates, rates = _get_series_rows_cached(series_id)
+    if not dates:
+        return []
+    end = bisect_right(dates, as_of_date) if as_of_date else len(dates)
+    if end <= 0:
+        return []
+    start = max(0, end - int(months))
+    return rates[start:end]
+
+
 def _get_rate_series(
     series_id: str, months: int = 36, as_of_date: str = None
 ) -> list[float]:
@@ -418,9 +470,10 @@ def _get_rate_for_key(key: str, as_of_date: str = None) -> Optional[float]:
             cached = _rate_cache.get(series_id)
             if cached and now - cached[1] < 3600:
                 return cached[0]
-        rate = _get_latest_rate(
-            series_id, as_of_date=as_of_date
-        )  # non-blocking (background fetch)
+        if as_of_date:
+            rate = _get_latest_rate_cached(series_id, as_of_date)
+        else:
+            rate = _get_latest_rate(series_id)  # non-blocking (background fetch)
         if rate is not None:
             if not as_of_date:
                 _rate_cache[series_id] = (rate, now)
@@ -434,7 +487,10 @@ def _get_rate_for_key(key: str, as_of_date: str = None) -> Optional[float]:
             cached = _rate_cache.get(series_id)
             if cached and now - cached[1] < 3600:
                 return cached[0]
-        rate = _get_latest_rate(series_id, as_of_date=as_of_date)
+        if as_of_date:
+            rate = _get_latest_rate_cached(series_id, as_of_date)
+        else:
+            rate = _get_latest_rate(series_id)
         if rate is not None:
             if not as_of_date:
                 _rate_cache[series_id] = (rate, now)
@@ -457,14 +513,20 @@ def _get_rate_series_for_key(
     """
     if key in _10Y_SERIES_MAP:
         series_id, static_fallback = _10Y_SERIES_MAP[key]
-        s = _get_rate_series(series_id, months, as_of_date=as_of_date)
+        if as_of_date:
+            s = _get_rate_series_cached(series_id, months, as_of_date=as_of_date)
+        else:
+            s = _get_rate_series(series_id, months)
         if len(s) >= 4:
             return s
         return [static_fallback] * months  # flat fallback
 
     series_id = _FRED_CURRENCY_SERIES.get(key)
     if series_id:
-        s = _get_rate_series(series_id, months, as_of_date=as_of_date)
+        if as_of_date:
+            s = _get_rate_series_cached(series_id, months, as_of_date=as_of_date)
+        else:
+            s = _get_rate_series(series_id, months)
         if len(s) >= 4:
             return s
 

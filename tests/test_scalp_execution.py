@@ -623,3 +623,19 @@ def test_live_dashboard_engine_d_row_exposes_levels():
     assert row["tp"] == 102.0
     assert row["tp1"] == 102.0
     assert row["tp2"] == 103.0
+
+
+def test_live_dashboard_engine_d_skipped_no_setup_keeps_reason():
+    row = routes_live_dashboard._ld_build_engine_d_row(
+        {
+            "_ts": __import__("time").time(),
+            "_skipped": True,
+            "gateResult": "NO_SETUP",
+            "reason": "no_setup:no_aggression_at_va_extreme",
+        },
+        {"type": "crypto"},
+    )
+
+    assert row["gateResult"] == "NO_SETUP"
+    assert row["failReasons"] == ["no_setup:no_aggression_at_va_extreme"]
+    assert row["grade"] is None

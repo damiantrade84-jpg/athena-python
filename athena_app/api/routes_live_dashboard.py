@@ -516,8 +516,11 @@ def _ld_build_engine_d_row(scalp_cached: dict, pair: dict) -> dict:
     if scalp_cached.get("_skipped"):
         reason_raw = scalp_cached.get("reason") or "BLOCKED"
         fail_reasons = [reason_raw] if isinstance(reason_raw, str) else list(reason_raw or [])
+        gate_result = scalp_cached.get("gateResult") or scalp_cached.get("gate_result")
+        if not gate_result:
+            gate_result = "NO_SETUP" if str(reason_raw).startswith("no_setup:") else "BLOCKED"
         return {
-            "enabled": True, "gateResult": "BLOCKED",
+            "enabled": True, "gateResult": gate_result,
             "grade": None, "score": None, "setupType": None,
             "spread": scalp_cached.get("spread"), "rr": scalp_cached.get("rr1") or scalp_cached.get("rr"),
             "direction": scalp_cached.get("direction"),

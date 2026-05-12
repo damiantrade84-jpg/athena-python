@@ -5,7 +5,6 @@ import { useLivePrices } from '@/hooks/useLivePrices';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
 import { Switch } from '@/components/ui/switch';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import {
@@ -200,6 +199,46 @@ function gradeBorder(grade?: string): string {
   }
 }
 
+function signalKey(s: Pick<ScalpSignal, 'display' | 'pair' | 'symbol'>): string {
+  return String(s.display || s.pair || s.symbol || '').trim().toUpperCase();
+}
+
+function isSignalExecutable(sig: ScalpSignal): boolean {
+  return sig.executable === true && String(sig.gate_result || '').toUpperCase() === 'PASS';
+}
+
+function invalidateScalpSignal(
+  scan: ScalpScanResponse | null,
+  symbol: string,
+  reason: string,
+  fresh?: ScalpScanResponse,
+): ScalpScanResponse | null {
+  if (!scan) return scan;
+  const target = symbol.trim().toUpperCase();
+  const skipped = fresh?.skipped || [];
+  const freshRow = skipped.find((row) => signalKey(row) === target);
+  const failReason = freshRow?.reason || reason || 'fresh_scan_no_setup';
+  const signals = (scan.signals || []).map((sig) => {
+    if (signalKey(sig) !== target) return sig;
+    return {
+      ...sig,
+      executable: false,
+      gate_result: 'NO_SETUP',
+      candidate_status: failReason,
+      fail_reasons: [failReason],
+      soft_warnings: Array.from(new Set([...(sig.soft_warnings || []), 'fresh_execute_scan_invalidated_setup'])),
+    };
+  });
+  return {
+    ...scan,
+    signals,
+    skipped: skipped.length > 0 ? skipped : scan.skipped,
+    skip_count: fresh?.skip_count ?? skipped.length ?? scan.skip_count,
+    reason: fresh?.reason ?? scan.reason,
+    diagnostic_summary: fresh?.diagnostic_summary ?? scan.diagnostic_summary,
+  };
+}
+
 export default function ScalpLabPanel() {
   const {
     showToast,
@@ -260,13 +299,41 @@ export default function ScalpLabPanel() {
     } else if (result.success) {
       showToast(`Scalp executed — ticket ${result.ticket || '?'}`, 'success');
     } else {
-      showToast(`Scalp rejected: ${result.error || 'unknown'}`, 'error');
+      const reason = result.error || 'unknown';
+      setScalpLabScanCache(invalidateScalpSignal(scanResult, symbol, reason, result.fresh_scan));
+      if (selected && signalKey(selected) === symbol.toUpperCase()) {
+        setScalpLabSelectedCache({
+          ...selected,
+          executable: false,
+          gate_result: 'NO_SETUP',
+          candidate_status: reason,
+          fail_reasons: [reason],
+          soft_warnings: Array.from(new Set([...(selected.soft_warnings || []), 'fresh_execute_scan_invalidated_setup'])),
+        });
+      }
+      showToast(`Scalp rejected: ${reason}`, 'error');
     }
     setConfirmExec(null);
-  }, [confirmExec, postExecute, showToast]);
+  }, [
+    confirmExec,
+    postExecute,
+    scanResult,
+    selected,
+    setScalpLabScanCache,
+    setScalpLabSelectedCache,
+    showToast,
+  ]);
 
-  const signals = scanResult?.signals || [];
-  const skipped = scanResult?.skipped || [];
+  const signals = useMemo(() => scanResult?.signals || [], [scanResult?.signals]);
+  const skipped = useMemo(() => scanResult?.skipped || [], [scanResult?.skipped]);
+  const skippedSummary = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const row of skipped) {
+      const reason = row.reason || 'unknown';
+      counts.set(reason, (counts.get(reason) || 0) + 1);
+    }
+    return Array.from(counts.entries()).sort((a, b) => b[1] - a[1]);
+  }, [skipped]);
 
   const groupedByGrade = useMemo(() => {
     const acc: Record<string, ScalpSignal[]> = { A: [], B: [], C: [], D: [] };
@@ -327,6 +394,23 @@ export default function ScalpLabPanel() {
               <CardContent className="p-3 text-xs text-warning flex items-center gap-2">
                 <AlertTriangle className="w-3.5 h-3.5" />
                 {scanResult.reason}
+              </CardContent>
+            </Card>
+          )}
+          {skippedSummary.length > 0 && (
+            <Card className="border-warning/40 bg-warning/10">
+              <CardContent className="p-3 space-y-2">
+                <div className="text-xs text-warning flex items-center gap-2">
+                  <AlertTriangle className="w-3.5 h-3.5" />
+                  Engine D blocked {skipped.length} pair{skipped.length === 1 ? '' : 's'} on the latest scan
+                </div>
+                <div className="flex flex-wrap gap-1">
+                  {skippedSummary.slice(0, 6).map(([reason, count]) => (
+                    <Badge key={reason} variant="outline" className="text-[10px] text-warning border-warning/40">
+                      {reason} × {count}
+                    </Badge>
+                  ))}
+                </div>
               </CardContent>
             </Card>
           )}
@@ -482,7 +566,7 @@ function ScalpCard({
   const aiScore = toNum(sig.ai_score);
   const rr = sig.rr ?? sig.rr1;
   const sizeMult = sig.size_multiplier;
-  const exec = sig.executable !== false && sig.gate_result !== 'BLOCKED';
+  const exec = isSignalExecutable(sig);
   const live = toNum(livePrice);
 
   return (
@@ -538,8 +622,13 @@ function ScalpCard({
             strict {sig.strict_fabio_pass ? 'yes' : 'no'}
           </Badge>
         )}
-        {sig.current_vs_strict_status && (
-          <Badge variant="outline" className="text-[10px]">{sig.current_vs_strict_status}</Badge>
+          {sig.current_vs_strict_status && (
+            <Badge variant="outline" className="text-[10px]">{sig.current_vs_strict_status}</Badge>
+          )}
+        {sig.gate_result && (
+          <Badge variant="outline" className={`text-[10px] ${exec ? 'text-long' : 'text-warning'}`}>
+            gate {sig.gate_result}
+          </Badge>
         )}
         {sig.htf_bias && (
           <Badge variant="outline" className="text-[10px] uppercase">{sig.htf_bias_tf || 'HTF'}: {sig.htf_bias}</Badge>
@@ -565,6 +654,9 @@ function ScalpCard({
         </Button>
         {!exec && sig.candidate_status && (
           <span className="text-[10px] text-warning">{sig.candidate_status}</span>
+        )}
+        {!exec && !sig.candidate_status && (
+          <span className="text-[10px] text-warning">{sig.gate_result || 'not executable'}</span>
         )}
       </div>
     </div>
@@ -596,6 +688,7 @@ function ScalpDetail({ sig, onExecute }: { sig: ScalpSignal; onExecute: (s: Scal
   const cvdProxy = sig.cvd_is_proxy ?? sig.data_fidelity?.cvd_is_proxy;
   const absorptionProxy = sig.absorption_is_proxy ?? sig.data_fidelity?.absorption_is_proxy;
   const realOrderFlow = sig.aggression_uses_real_order_flow ?? sig.data_fidelity?.aggression_uses_real_order_flow;
+  const exec = isSignalExecutable(sig);
   return (
     <div className="space-y-3">
       <div className="p-3 rounded-md bg-muted/30 space-y-2">
@@ -613,6 +706,8 @@ function ScalpDetail({ sig, onExecute }: { sig: ScalpSignal; onExecute: (s: Scal
         <CardContent className="p-3 space-y-2">
           <p className="text-[10px] uppercase text-muted-foreground">Levels</p>
           <div className="grid grid-cols-2 gap-2 text-xs">
+            <Row k="Gate" v={sig.gate_result || '—'} accent={exec ? 'long' : 'short'} />
+            <Row k="Status" v={sig.candidate_status || (exec ? 'executable' : 'not executable')} accent={exec ? 'long' : 'short'} />
             <Row k="Entry" v={fmtPrice(sig.entry ?? sig.price, sig.pair, sig.type)} />
             <Row k="Live" v={fmtPrice(sig.livePrice, sig.pair, sig.type)} />
             <Row k="SL" v={`${fmtPrice(sig.sl, sig.pair, sig.type)}${sig.sl_method ? ` · ${sig.sl_method}` : ''}`} accent="short" />
@@ -750,7 +845,7 @@ function ScalpDetail({ sig, onExecute }: { sig: ScalpSignal; onExecute: (s: Scal
         size="sm"
         className="w-full gap-2"
         onClick={() => onExecute(sig)}
-        disabled={sig.executable === false || sig.gate_result === 'BLOCKED'}
+        disabled={!exec}
       >
         <Play className="w-3.5 h-3.5" />
         Execute Engine D Scalp

@@ -9001,8 +9001,13 @@ def api_scalp_scan():
                 _key = str(_row.get("display") or _row.get("pair") or "").upper()
                 if _key:
                     _live_dashboard_scalp_cache[_key] = {
-                        "gateResult": "BLOCKED",
+                        "display": _row.get("display") or _row.get("pair"),
+                        "pair": _row.get("pair") or _row.get("display"),
+                        "gateResult": "NO_SETUP" if str(_row.get("reason") or "").startswith("no_setup:") else "BLOCKED",
                         "reason": _row.get("reason"),
+                        "diagnostic_notes": [
+                            _row.get("diagnostic_reason")
+                        ] if _row.get("diagnostic_reason") else [],
                         "_ts": _ts_now,
                         "_skipped": True,
                     }
