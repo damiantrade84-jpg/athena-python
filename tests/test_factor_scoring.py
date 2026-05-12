@@ -827,6 +827,35 @@ def test_compute_factor_scores_populates_filtered_indicators_for_confidence_engi
     assert len(fi) >= 1
 
 
+def test_di_alignment_conflict_is_diagnostic_not_info_log(caplog):
+    d1 = {"ema21": 110.0, "ema200": 100.0, "adx": 25.0, "close": 1.0, "atr": 0.0001}
+    h4 = {
+        "ema21": 110.0,
+        "ema50": 100.0,
+        "adx": 25.0,
+        "rsi": 55.0,
+        "macdHist": 0.0,
+        "close": 1.0,
+        "atr": 0.0001,
+        "plusDI": 10.0,
+        "minusDI": 30.0,
+    }
+    h1 = {"ema21": 110.0, "ema50": 100.0, "rsi": 55.0, "macdHist": 0.0, "close": 1.0}
+    result = compute_factor_scores(
+        d1,
+        h4,
+        h1,
+        {"display": "EUR/CHF", "type": "forex"},
+        [],
+        [],
+        [],
+        1.0,
+    )
+
+    assert result["feed_status"]["abort_reason"] == "DI_ALIGNMENT_CONFLICT"
+    assert "DI alignment conflict" not in caplog.text
+
+
 def test_zero_result_carries_empty_filtered_indicators():
     from factor_scoring import _zero_result
 

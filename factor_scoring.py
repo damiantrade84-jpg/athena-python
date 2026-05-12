@@ -1715,7 +1715,7 @@ def compute_factor_scores(
     feed_status["di_align"] = f"{di_align_mult:.2f}"
     if di_align_mult == 0.0:
         feed_status["abort_reason"] = "DI_ALIGNMENT_CONFLICT"
-        log.info(
+        log.debug(
             "[EA2] %s DI alignment conflict direction=%s plusDI=%s minusDI=%s",
             display,
             direction,

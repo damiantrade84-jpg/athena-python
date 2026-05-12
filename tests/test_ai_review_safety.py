@@ -1265,6 +1265,44 @@ class TestMarcusTextReviewTimeoutContract:
         assert "prompt_build=%.2fs prompt_chars=%s" in text
 
 
+class TestMarcusNewsFreshnessContract:
+    """Marcus AI review must request fresh news instead of stale cached sentiment."""
+
+    def test_api_analyze_forces_news_refresh(self):
+        athena_path = os.path.join(os.path.dirname(__file__), "..", "athena.py")
+        with open(athena_path, encoding="utf-8") as f:
+            text = f.read()
+        start = text.index("def api_analyze():")
+        end = text.index("# Fetch live portfolio context", start)
+        analyze_prep = text[start:end]
+        assert 'sig["_force_news_refresh"] = True' in analyze_prep
+        assert "fetch_news_context([_news_pair], force_refresh=True)" in analyze_prep
+        assert "sig.get(\"newsCtx\")" in analyze_prep
+
+    def test_fetch_news_context_has_synchronous_force_refresh_path(self):
+        athena_path = os.path.join(os.path.dirname(__file__), "..", "athena.py")
+        with open(athena_path, encoding="utf-8") as f:
+            text = f.read()
+        start = text.index("def fetch_news_context(")
+        end = text.index("def _fetch_pair_news_on_demand", start)
+        fetch_body = text[start:end]
+        assert "force_refresh: bool = False" in fetch_body
+        assert "if force_refresh and allow_refresh:" in fetch_body
+        assert "return _filter_news_ctx_for_pairs(_refresh_news_cache(pairs), pairs)" in fetch_body
+        assert "_ensure_news_background_started()" in fetch_body
+
+    def test_pair_news_on_demand_can_bypass_ttl_cache_for_ai_review(self):
+        athena_path = os.path.join(os.path.dirname(__file__), "..", "athena.py")
+        with open(athena_path, encoding="utf-8") as f:
+            text = f.read()
+        start = text.index("def _fetch_pair_news_on_demand(")
+        end = text.index("def _build_signal_message", start)
+        pair_news_body = text[start:end]
+        assert "force_refresh: bool = False" in pair_news_body
+        assert "if not force_refresh and _age < _ttl" in pair_news_body
+        assert 'force_refresh=bool(signal.get("_force_news_refresh"))' in text
+
+
 class TestVisionArbitrationFailClosed:
     def test_arbitration_exception_blocks_trade(self, monkeypatch):
         import engine_c

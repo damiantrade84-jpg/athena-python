@@ -3787,9 +3787,24 @@ def _filter_news_ctx_for_pairs(data: dict, pairs: list | None) -> dict:
     return out
 
 
-def fetch_news_context(pairs: list | None = None, allow_refresh: bool = True):
-    """Return cached news context immediately. Trigger refresh if missing or expired (unless allow_refresh is False)."""
+def fetch_news_context(
+    pairs: list | None = None,
+    allow_refresh: bool = True,
+    force_refresh: bool = False,
+):
+    """Return news context.
+
+    Normal callers get cached context immediately and may trigger a background
+    refresh. AI review can pass force_refresh=True to block for the latest
+    available vendor data before building the prompt.
+    """
     global _news_cache
+    if force_refresh and allow_refresh:
+        try:
+            return _filter_news_ctx_for_pairs(_refresh_news_cache(pairs), pairs)
+        except Exception as e:
+            log.warning(f"[NEWS] Forced news refresh failed: {e}")
+
     now = time.time()
 
     with _news_lock:
@@ -3803,7 +3818,12 @@ def fetch_news_context(pairs: list | None = None, allow_refresh: bool = True):
     return _filter_news_ctx_for_pairs(data if data is not None else {}, pairs)
 
 
-def _fetch_pair_news_on_demand(display: str, sticker: str) -> tuple[list, list]:
+def _fetch_pair_news_on_demand(
+    display: str,
+    sticker: str,
+    *,
+    force_refresh: bool = False,
+) -> tuple[list, list]:
     """Fetch EODHD news + word-weights for one pair, called only during AI analysis.
 
     Returns (pair_news_list, word_weights_list). Results cached for 4 hours so
@@ -3817,7 +3837,7 @@ def _fetch_pair_news_on_demand(display: str, sticker: str) -> tuple[list, list]:
     _ttl = float(CONFIG.get("NEWS_PAIR_CACHE_TTL_SEC", 14400.0) or 14400.0)
     cached = _news_pair_cache.get(sticker, {})
     _age = _now - float(cached.get("ts", 0) or 0)
-    if _age < _ttl and ("news" in cached or "weights" in cached):
+    if not force_refresh and _age < _ttl and ("news" in cached or "weights" in cached):
         return cached.get("news", []), cached.get("weights", [])
 
     pair_news: list = []
@@ -4291,7 +4311,11 @@ def _build_signal_message(
 
         _pair_display = signal.get("pair", "")
         _pair_sticker = _eodhd_ticker_for_pair({"display": _pair_display, "symbol": signal.get("symbol", ""), "type": signal.get("type", "")})
-        _pnews, _ww = _fetch_pair_news_on_demand(_pair_display, _pair_sticker or "")
+        _pnews, _ww = _fetch_pair_news_on_demand(
+            _pair_display,
+            _pair_sticker or "",
+            force_refresh=bool(signal.get("_force_news_refresh")),
+        )
 
         if _pnews:
             _ctx_parts.append(
@@ -5161,7 +5185,13 @@ def api_analyze():
 
     try:
         _api_ai_started = time.monotonic()
-        news_ctx = sig.get("newsCtx") or fetch_news_context()
+        sig["_force_news_refresh"] = True
+        _news_pair = {
+            "display": sig.get("pair"),
+            "symbol": sig.get("symbol"),
+            "type": sig.get("type"),
+        }
+        news_ctx = fetch_news_context([_news_pair], force_refresh=True) or sig.get("newsCtx") or {}
 
         style_pref = d.get("stylePreference", "auto")
 
