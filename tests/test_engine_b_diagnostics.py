@@ -233,6 +233,8 @@ def test_asset_class_structure_adjustment_enabled_is_non_forex_non_crypto(monkey
     assert stock_diag["bos_min_break_atr"] == pytest.approx(0.072)
     assert forex_diag["applied"] is False
     assert crypto_diag["applied"] is False
+    assert forex_diag["swing_prominence_mult"] == pytest.approx(1.0)
+    assert forex_diag["bos_min_break_atr"] == pytest.approx(0.0)
 
 
 def test_equity_session_structure_context_enabled_for_stock_index_etf_only(monkeypatch):
@@ -282,6 +284,8 @@ def test_calculate_confidence_carries_asset_class_and_equity_session_diagnostics
         "asset_class": "stock",
         "applied": True,
         "structure_mult": 1.1,
+        "swing_prominence_mult": 1.1,
+        "bos_min_break_atr": 0.066,
     }
     res["equity_session_structure"] = {
         "enabled": True,
@@ -301,6 +305,9 @@ def test_calculate_confidence_carries_asset_class_and_equity_session_diagnostics
 
     diag = out["engine_b_diagnostics"]
     assert diag["asset_class_structure"]["asset_class"] == "stock"
+    assert diag["asset_class_structure"]["structure_mult"] == pytest.approx(1.1)
+    assert diag["asset_class_structure"]["swing_prominence_mult"] == pytest.approx(1.1)
+    assert diag["asset_class_structure"]["bos_min_break_atr"] == pytest.approx(0.066)
     assert diag["equity_session_structure"]["session"] == "us_cash_open"
 
 
@@ -1009,8 +1016,8 @@ def test_calculate_confidence_flexible_mode_accepts_liquidity_sweep_catalyst():
     assert out["entry_ok"] is True
     assert out["passed"] is True
     assert out["score"] == pytest.approx(5.0)
-    # FIX 2: RANGING multiplier is now 0.90 (was 1.30), so 5.0 * 0.90 = 4.5 → round = 4
-    assert min_score_scaled == 4.0
+    # RANGING multiplier is 0.90, so 5.0 * 0.90 = 4.5.
+    assert min_score_scaled == 4.5
     assert gate_ok is True
 
 
@@ -1020,7 +1027,7 @@ def test_engine_b_confidence_passes_enforces_min_score_floor():
         {"passed": True, "score": 3.0}, style_profile, regime_label="RANGING"
     )
 
-    assert min_score_scaled == 4.0
+    assert min_score_scaled == 4.5
     assert gate_ok is False
 
 

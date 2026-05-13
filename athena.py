@@ -11600,32 +11600,33 @@ def analyze_pair(
             style=_style or "intraday",
             pair=pair,
         )
-        _structure_adjustment = apply_structure_context_to_score(
-            structure_data,
-            direction=direction,
-            base_score=float(res.get("score", 0.0) or 0.0),
-            max_score=float(max_score or 0.0),
-        )
-        res["score"] = float(_structure_adjustment["adjusted_score"])
-        _fd = dict(res.get("factorDiagnostics") or {})
-        _fd["explicitStructureContext"] = _structure_adjustment
-        res["factorDiagnostics"] = _fd
+        if bool(CONFIG.get("ENGINE_A_STRUCTURE_CONTEXT_ENABLED", False)):
+            _structure_adjustment = apply_structure_context_to_score(
+                structure_data,
+                direction=direction,
+                base_score=float(res.get("score", 0.0) or 0.0),
+                max_score=float(max_score or 0.0),
+            )
+            res["score"] = float(_structure_adjustment["adjusted_score"])
+            _fd = dict(res.get("factorDiagnostics") or {})
+            _fd["explicitStructureContext"] = _structure_adjustment
+            res["factorDiagnostics"] = _fd
 
-        _votes = dict(res.get("votes") or {})
-        _sc = _structure_adjustment.get("components", {})
-        if _sc.get("zone_proximity"):
-            _votes["H4 Structural Zone"] = 1
-        if _sc.get("ob_at_zone"):
-            _votes["Order Block at Zone"] = 1
-        if _sc.get("fvg_overlap"):
-            _votes["FVG at Zone"] = 1
-        _align = _sc.get("independent_direction_alignment")
-        if _align == "aligned":
-            _votes["Structure Alignment"] = 1
-        elif _align == "opposed":
-            _votes["Structure Alignment"] = -1
-        if _votes:
-            res["votes"] = _votes
+            _votes = dict(res.get("votes") or {})
+            _sc = _structure_adjustment.get("components", {})
+            if _sc.get("zone_proximity"):
+                _votes["H4 Structural Zone"] = 1
+            if _sc.get("ob_at_zone"):
+                _votes["Order Block at Zone"] = 1
+            if _sc.get("fvg_overlap"):
+                _votes["FVG at Zone"] = 1
+            _align = _sc.get("independent_direction_alignment")
+            if _align == "aligned":
+                _votes["Structure Alignment"] = 1
+            elif _align == "opposed":
+                _votes["Structure Alignment"] = -1
+            if _votes:
+                res["votes"] = _votes
     except Exception as _structure_err:
         log.debug(
             "[STRUCTURE-CONTEXT] %s skipped: %s",

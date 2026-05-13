@@ -156,7 +156,7 @@ def apply_structure_context_to_score(
     components["fvg_overlap"] = fvg_overlap
     components["liquidity_sweep"] = liquidity_sweep
 
-    if not bool(config.CONFIG.get("ENGINE_B_STRUCTURE_SCORE_INFLUENCE_ENABLED", True)):
+    if not bool(config.CONFIG.get("ENGINE_B_STRUCTURE_SCORE_INFLUENCE_ENABLED", False)):
         return out
 
     influence_mult = _influence_level_multiplier()

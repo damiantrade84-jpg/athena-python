@@ -422,6 +422,104 @@ def test_research_lab_factor_adds_bounded_candidate_context(monkeypatch):
     assert "research_lab" in result["active_nondirectional_factors"]
 
 
+def test_research_lab_class_profile_is_config_gated(monkeypatch):
+    cfg = {
+        "ENABLED": True,
+        "BONUS": 0.15,
+        "PENALTY": -0.10,
+        "MAX_ABS": 0.20,
+        "FACTORS": ["obv_divergence", "price_momentum"],
+    }
+    class_cfg = {
+        "us_stock_single": {
+            "BONUS": 0.05,
+            "PENALTY": -0.04,
+            "MAX_ABS": 0.05,
+            "FACTORS": ["obv_divergence"],
+        }
+    }
+    monkeypatch.setitem(CONFIG, "ENGINE_A_RESEARCH_LAB_FACTORS", cfg)
+    monkeypatch.setitem(CONFIG, "ENGINE_A_RESEARCH_LAB_FACTORS_BY_CLASS", class_cfg)
+    monkeypatch.setitem(CONFIG, "ENGINE_A_SCORE_GROUP_ADJUSTMENTS_ENABLED", False)
+
+    baseline = _score(
+        pair={"type": "stock", "display": "AAPL"},
+        d1_candles=_candles(trend=0.2, volume_trend=10.0),
+    )
+
+    monkeypatch.setitem(CONFIG, "ENGINE_A_SCORE_GROUP_ADJUSTMENTS_ENABLED", True)
+    adjusted = _score(
+        pair={"type": "stock", "display": "AAPL"},
+        d1_candles=_candles(trend=0.2, volume_trend=10.0),
+    )
+
+    assert baseline["research_lab_detail"]["class_adjusted"] is False
+    assert adjusted["research_lab_detail"]["class_adjusted"] is True
+    assert adjusted["research_lab_detail"]["profile_source"] == "score_group:us_stock_single"
+    assert adjusted["research_lab_detail"]["allowed"] == ["obv_divergence"]
+    assert adjusted["research_lab_value"] == pytest.approx(0.05)
+
+
+def test_research_lab_class_profile_falls_back_to_asset_type(monkeypatch):
+    cfg = {
+        "ENABLED": True,
+        "BONUS": 0.15,
+        "PENALTY": -0.10,
+        "MAX_ABS": 0.20,
+        "FACTORS": ["obv_divergence"],
+    }
+    class_cfg = {
+        "commodity": {
+            "BONUS": 0.07,
+            "PENALTY": -0.04,
+            "MAX_ABS": 0.07,
+            "FACTORS": ["obv_divergence"],
+        }
+    }
+    monkeypatch.setitem(CONFIG, "ENGINE_A_RESEARCH_LAB_FACTORS", cfg)
+    monkeypatch.setitem(CONFIG, "ENGINE_A_RESEARCH_LAB_FACTORS_BY_CLASS", class_cfg)
+    monkeypatch.setitem(CONFIG, "ENGINE_A_SCORE_GROUP_ADJUSTMENTS_ENABLED", True)
+
+    result = _score(
+        pair={"type": "commodity", "display": "UNKNOWN_COMMODITY"},
+        d1_candles=_candles(trend=0.2, volume_trend=10.0),
+    )
+
+    assert result["research_lab_detail"]["profile_source"] == "asset_type:commodity"
+    assert result["research_lab_detail"]["class_adjusted"] is True
+    assert result["research_lab_value"] == pytest.approx(0.07)
+
+
+def test_research_lab_class_profile_uses_default_when_no_class_match(monkeypatch):
+    cfg = {
+        "ENABLED": True,
+        "BONUS": 0.15,
+        "PENALTY": -0.10,
+        "MAX_ABS": 0.20,
+        "FACTORS": ["obv_divergence"],
+    }
+    class_cfg = {
+        "default": {
+            "BONUS": 0.04,
+            "PENALTY": -0.02,
+            "MAX_ABS": 0.04,
+            "FACTORS": ["obv_divergence"],
+        }
+    }
+    monkeypatch.setitem(CONFIG, "ENGINE_A_RESEARCH_LAB_FACTORS", cfg)
+    monkeypatch.setitem(CONFIG, "ENGINE_A_RESEARCH_LAB_FACTORS_BY_CLASS", class_cfg)
+    monkeypatch.setitem(CONFIG, "ENGINE_A_SCORE_GROUP_ADJUSTMENTS_ENABLED", True)
+
+    result = _score(
+        pair={"type": "stock", "display": "UNKNOWN_STOCK"},
+        d1_candles=_candles(trend=0.2, volume_trend=10.0),
+    )
+
+    assert result["research_lab_detail"]["profile_source"] == "default"
+    assert result["research_lab_detail"]["class_adjusted"] is True
+    assert result["research_lab_value"] == pytest.approx(0.04)
+
+
 def test_research_lab_addon_is_clamped_to_addon_ceiling(monkeypatch):
     # Stage 1.4: _ADDON_CONFIRM = 0.20; research lab + funding capped at 0.20 total.
     cfg = {
@@ -628,6 +726,10 @@ def test_calc_confluence_factor_diagnostics_includes_research_lab(monkeypatch):
     assert fd.get("researchLabValue") == pytest.approx(0.15)
     detail = fd.get("researchLabDetail") or {}
     assert detail.get("score_group") == "universal"
+    asset_diag = fd.get("engineAAssetDiagnostics") or {}
+    assert asset_diag.get("score_group") == "forex_crosses"
+    assert "factor_weights" in asset_diag
+    assert "volatility" in asset_diag
     assert detail.get("components", {}).get("obv_divergence", {}).get("signal") == "confirming"
 
 
@@ -931,6 +1033,32 @@ def test_score_group_adjustments_do_not_change_forex_or_crypto_without_matching_
 
     assert forex_grouped["final_score"] == forex_base["final_score"]
     assert crypto_grouped["final_score"] == crypto_base["final_score"]
+
+
+def test_volume_momentum_spread_is_class_adjustment_gated(monkeypatch):
+    pair = {"type": "crypto", "display": "BTC/USDT"}
+    h4 = _snap("long")
+    h4["volume_momentum_spread"] = 1.0
+    monkeypatch.setitem(
+        CONFIG,
+        "INDICATOR_WEIGHTS",
+        {
+            "momentum": {
+                "crypto": {"rsi_z": 0.4, "macdLine_z": 0.2, "volume_momentum_spread": 0.4}
+            }
+        },
+    )
+    monkeypatch.setitem(CONFIG, "ENGINE_A_SCORE_GROUP_ADJUSTMENTS_ENABLED", False)
+    baseline = _score(pair=pair, h4=h4, funding_rate=0.0001)
+
+    monkeypatch.setitem(CONFIG, "ENGINE_A_SCORE_GROUP_ADJUSTMENTS_ENABLED", True)
+    aligned = _score(pair=pair, h4=h4, funding_rate=0.0001)
+    opposed_h4 = dict(h4)
+    opposed_h4["volume_momentum_spread"] = -1.0
+    opposed = _score(pair=pair, h4=opposed_h4, funding_rate=0.0001)
+
+    assert aligned["momentum_quality"] > baseline["momentum_quality"]
+    assert opposed["momentum_quality"] < aligned["momentum_quality"]
 
 
 def test_volatility_regime_adjustment_is_config_gated(monkeypatch):

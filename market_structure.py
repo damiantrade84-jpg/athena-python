@@ -3520,13 +3520,8 @@ class NakedEngine:
             _diag_codes.append(ENGINE_B_REASON_TP_WRONG_SIDE)
         if res.get("tp_structural_limited"):
             _diag_codes.append(ENGINE_B_REASON_STRUCTURAL_TP_TOO_CLOSE)
-        if asset_type_lower == "forex" and _engine_b_adx_val is not None:
-            try:
-                _forex_adx_min = float(config.CONFIG.get("ENGINE_B_FOREX_ADX_MIN", 0) or 0)
-            except (TypeError, ValueError):
-                _forex_adx_min = 0.0
-            if _forex_adx_min > 0 and float(_engine_b_adx_val) < _forex_adx_min:
-                _diag_codes.append(ENGINE_B_REASON_FOREX_ADX_LOW)
+        # Forex ADX now derives regime only; do not emit the old block-style
+        # diagnostic because low ADX is no longer a structure gate failure.
 
         _engine_b_diag_payload = {"reason_codes": _diag_codes}
         if asset_type_lower == "crypto" and isinstance(res.get("crypto_structure_diagnostics"), dict):

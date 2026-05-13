@@ -2,7 +2,8 @@ from athena_app.services.structure_context import apply_structure_context_to_sco
 import config
 
 
-def test_structure_context_boosts_score_when_zone_and_alignment_confirm():
+def test_structure_context_boosts_score_when_zone_and_alignment_confirm(monkeypatch):
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_STRUCTURE_SCORE_INFLUENCE_ENABLED", True)
     structure = {
         "structural_verdict": "CLEAR",
         "zone_touched": True,
@@ -28,7 +29,8 @@ def test_structure_context_boosts_score_when_zone_and_alignment_confirm():
     assert out["components"]["independent_direction_alignment"] == "aligned"
 
 
-def test_structure_context_penalizes_opposed_direction():
+def test_structure_context_penalizes_opposed_direction(monkeypatch):
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_STRUCTURE_SCORE_INFLUENCE_ENABLED", True)
     structure = {
         "structural_verdict": "CLEAR",
         "zone_touched": False,

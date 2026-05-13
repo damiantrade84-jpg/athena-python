@@ -152,7 +152,7 @@ ENGINE_B_RR_CAN_SATISFY_SPACE_GATE:
   crypto: false
 
 # Engine B asset-class structure tuning for stocks, indices, commodities, ETFs.
-# Active here for paper testing; config.py fallback defaults remain disabled.
+# Enabled here for paper/demo testing; config.py defaults remain fail-closed.
 ENGINE_B_ASSET_CLASS_ADJUSTMENTS_ENABLED: true
 ENGINE_B_ASSET_CLASS_VOLATILITY_AWARE_ENABLED: true
 ENGINE_B_ASSET_CLASS_STRUCTURE_MULT:
@@ -251,8 +251,8 @@ FACTOR_FOREX_SESSION_MULT:
 # is the documented design.
 ADDON_UNSUPPORTED_SPLIT_TO_BASE: 0.5
 
-# Engine A score_group/class differentiation. Defaults off here and in
-# config.py; enable for paper testing after reviewing the class maps below.
+# Engine A score_group/class differentiation. Enabled here for paper/demo
+# testing; config.py defaults remain fail-closed.
 ENGINE_A_SCORE_GROUP_ADJUSTMENTS_ENABLED: true
 ENGINE_A_FACTOR_WEIGHTS_BY_CLASS:
   us_stock_single: { momentum: 0.45, addon: 0.20, base: 0.35 }
@@ -298,8 +298,7 @@ ENGINE_A_EQUITY_SESSION_LIQUIDITY_WEIGHTING:
   OFF_HOURS_MULT: 0.98
 
 # Engine A can consume an explicit Engine B structure payload when callers pass
-# one into compute_factor_scores(). Disabled to avoid double-applying the
-# existing athena.py post-score structure adjustment.
+# one into compute_factor_scores(). Enabled here for paper/demo testing.
 ENGINE_A_STRUCTURE_CONTEXT_ENABLED: true
 
 # Per-class ATR% bands for the Engine A volatility-quality scaler.
@@ -2207,8 +2206,8 @@ ENGINE_B_BOS_VOLUME_FOR_TICKVOL: false
 # reports low-ADX regime context but does not block structure_ok with this key.
 ENGINE_B_FOREX_ADX_MIN: 12
 
-# Engine B structure score context. Defaults match the historical hardcoded
-# structure_context.py behavior; optional confluence/session effects are off.
+# Engine B structure score context. Enabled here for paper/demo testing;
+# config.py defaults remain fail-closed.
 ENGINE_B_STRUCTURE_SCORE_INFLUENCE_ENABLED: true
 ENGINE_B_STRUCTURE_SCORE_COMPONENT_BONUSES:
   zone_proximity: 0.08

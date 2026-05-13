@@ -193,10 +193,11 @@ class TestConfig:
         validate_config(CONFIG)
 
     def test_forex_fallbacks_match_current_repo_contract(self):
-        # Engine A v2 unified 0-3.0 scale; forex default threshold is 1.5 (3-tier stable)
+        # Engine A v2 unified 0-3.0 scale; forex majors use explicit score-group
+        # thresholds rather than the permissive default fallback.
         from scoring import get_score_threshold
         pair = {"display": "EUR/USD", "symbol": "EURUSD=X", "type": "forex"}
-        assert get_score_threshold(pair) == 1.5
+        assert get_score_threshold(pair) == 2.1
         assert CONFIG["AUTO_TRADE_MIN_SCORE"]["forex"] == 2.1
 
 
@@ -353,6 +354,21 @@ def test_binance_futures_paginated_timeout_tries_mirror_endpoint():
     assert "except Exception as e:" in paginated
     assert 'log.warning(f"[BN-FUT-PAG] {sym} page {page} {base}: {e}")' in paginated
     assert "continue" in paginated
+
+
+def test_engine_a_structure_context_score_adjustment_is_config_gated():
+    root = Path(__file__).resolve().parents[1]
+    source = (root / "athena.py").read_text(encoding="utf-8")
+    start = source.index("Always derive explicit structural context")
+    block = source[
+        start
+        : source.index("fib = calc_fib(h4)", start)
+    ]
+
+    assert 'CONFIG.get("ENGINE_A_STRUCTURE_CONTEXT_ENABLED", False)' in block
+    assert block.index('CONFIG.get("ENGINE_A_STRUCTURE_CONTEXT_ENABLED", False)') < block.index(
+        "_structure_adjustment = apply_structure_context_to_score"
+    )
 
 
 def test_ui_source_renders_intermarket_confirmation_box():

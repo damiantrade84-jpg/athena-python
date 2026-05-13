@@ -124,6 +124,45 @@ def _resolve_conviction_floor(score_group: str | None, asset_type: str, default:
         floor = _float_cfg(_resolve_class_keyed(keyed, score_group, asset_type, floor), floor)
     return max(0.0, min(1.0, floor))
 
+
+def _resolve_research_lab_profile(
+    base_cfg: dict,
+    score_group: str | None,
+    asset_type: str,
+) -> tuple[dict, str, bool]:
+    """Resolve optional class-keyed Research Lab settings.
+
+    Research Lab remains globally gated by ENGINE_A_RESEARCH_LAB_FACTORS.ENABLED.
+    The per-class map only applies when Engine A score-group adjustments are on,
+    keeping the historical universal Research Lab behavior as the safe default.
+    """
+    resolved = dict(base_cfg or {})
+    if not _engine_a_group_adjustments_enabled():
+        return resolved, "universal", False
+
+    keyed = CONFIG.get("ENGINE_A_RESEARCH_LAB_FACTORS_BY_CLASS") or {}
+    if not isinstance(keyed, dict):
+        return resolved, "universal", False
+
+    override = None
+    source = "universal"
+    if score_group and score_group in keyed:
+        override = keyed.get(score_group)
+        source = f"score_group:{score_group}"
+    elif asset_type in keyed:
+        override = keyed.get(asset_type)
+        source = f"asset_type:{asset_type}"
+    elif "default" in keyed:
+        override = keyed.get("default")
+        source = "default"
+
+    if isinstance(override, dict):
+        for key in ("BONUS", "PENALTY", "MAX_ABS", "FACTORS"):
+            if key in override:
+                resolved[key] = override[key]
+        return resolved, source, True
+    return resolved, source, False
+
 # ADX gate thresholds (Wilder 1978 standard) — tunable via config.yaml FACTOR_ADX_*
 # NOTE: Read lazily inside _adx_gate() so config reloads take effect without restart.
 _ADX_HARD_FAIL_DEFAULT = 15.0    # below this → dead market, abort
@@ -667,6 +706,18 @@ def _momentum_quality(
         except (TypeError, ValueError):
             pass
 
+    volume_momentum_score = 0.0
+    if _engine_a_group_adjustments_enabled():
+        try:
+            vol_spread = float(h4_snap.get("volume_momentum_spread", 0.0) or 0.0)
+            vol_spread = max(-1.0, min(1.0, vol_spread))
+            if (is_long and vol_spread > 0) or ((not is_long) and vol_spread < 0):
+                volume_momentum_score = 0.50 * abs(vol_spread)
+            elif (is_long and vol_spread < 0) or ((not is_long) and vol_spread > 0):
+                volume_momentum_score = -0.50 * abs(vol_spread)
+        except (TypeError, ValueError):
+            pass
+
     # If divergence detected, override momentum to zero regardless of indicator values
     if _divergence_detected:
         return 0.0
@@ -677,11 +728,22 @@ def _momentum_quality(
         ind_weights = _resolve_class_keyed(ind_weights, score_group, asset_type, {})
     rsi_w = float(ind_weights.get("rsi_z", 0.6)) if isinstance(ind_weights, dict) else 0.6
     macd_w = float(ind_weights.get("macdLine_z", 0.4)) if isinstance(ind_weights, dict) else 0.4
-    total_w = rsi_w + macd_w
+    volume_w = 0.0
+    if (
+        _engine_a_group_adjustments_enabled()
+        and isinstance(ind_weights, dict)
+        and abs(volume_momentum_score) > 1e-12
+    ):
+        volume_w = float(ind_weights.get("volume_momentum_spread", 0.0) or 0.0)
+    total_w = rsi_w + macd_w + volume_w
     if total_w <= 0:
         total_w = 1.0
 
-    raw = (rsi_score * rsi_w + macd_score * macd_w) / total_w
+    raw = (
+        rsi_score * rsi_w
+        + macd_score * macd_w
+        + volume_momentum_score * volume_w
+    ) / total_w
     # Rescale to true [0, 1] range. The raw weighted sum maxes at 0.50
     # (both RSI and MACD at +0.50), so we divide by 0.50 to map 0.50 → 1.0.
     # Worst case: RSI=-0.25, MACD=-0.50 → raw = -0.35 → rescaled = -0.70 → clamped to 0.
@@ -697,16 +759,20 @@ def _research_lab_candidate_addon(
     h4_candles: list,
     d1_candles: list,
     asset_type: str,
+    score_group: str | None = None,
 ) -> tuple[float, dict]:
     """Research Lab candidate factor, config-gated and bounded.
 
-    Stage 2.6: Collapsed to 3 universal factors for all asset classes:
+    Stage 2.6: Defaults to 3 universal factors for all asset classes:
       obv_divergence, bollinger_touch, price_momentum
-    Per-group factor lists removed to reduce overfitting.
+    Per-class factor lists are optional and gated by Engine A class adjustments.
     """
     cfg = CONFIG.get("ENGINE_A_RESEARCH_LAB_FACTORS", {}) or {}
     if not cfg.get("ENABLED", False):
         return 0.0, {"enabled": False}
+    cfg, research_source, class_adjusted = _resolve_research_lab_profile(
+        cfg, score_group, asset_type
+    )
 
     default_candles = d1_candles if len(d1_candles or []) >= 60 else h4_candles
     if not default_candles or len(default_candles) < 60:
@@ -746,7 +812,10 @@ def _research_lab_candidate_addon(
     total = max(-max_abs, min(max_abs, total))
     return total, {
         "enabled": True,
-        "score_group": "universal",
+        "score_group": (score_group if class_adjusted else "universal"),
+        "resolved_score_group": score_group,
+        "profile_source": research_source,
+        "class_adjusted": class_adjusted,
         "allowed": list(allowed),
         "components": components,
         "raw_total": round(sum(d.get("value", 0.0) for d in components.values()), 4),
@@ -1762,7 +1831,7 @@ def compute_factor_scores(
             feed_status["fundamentals"] = "advisory_only"
 
     research_val, research_detail = _research_lab_candidate_addon(
-        pair, direction, h4_candles, d1_candles, asset_type
+        pair, direction, h4_candles, d1_candles, asset_type, score_group
     )
     if research_detail.get("enabled"):
         addon_val += research_val
