@@ -101,6 +101,134 @@ def _rt():
     return _art_rt()
 
 
+def _engine_a_structure_first_cfg() -> dict:
+    cfg = ((CONFIG.get("ENGINE_A") or {}).get("structure_first_entry") or {})
+    return {
+        "enabled": bool(cfg.get("enabled", False)),
+        "lookback_bars": int(cfg.get("lookback_bars", 5) or 5),
+        "require_bos": bool(cfg.get("require_bos", True)),
+        "require_choch": bool(cfg.get("require_choch", False)),
+    }
+
+
+def _engine_a_structure_first_entry_passes(
+    structure_result: dict | None,
+    direction: str | None,
+    trigger_candles: list | None,
+    cfg: dict | None = None,
+) -> tuple[bool, dict]:
+    cfg = _engine_a_structure_first_cfg() if cfg is None else dict(cfg or {})
+    detail = {"enabled": bool(cfg.get("enabled", False))}
+    if not detail["enabled"]:
+        return True, detail
+    if not isinstance(structure_result, dict):
+        detail["reason"] = "missing_structure_result"
+        return False, detail
+    if direction not in ("LONG", "SHORT"):
+        detail["reason"] = "missing_engine_a_direction"
+        return False, detail
+
+    structure_direction = structure_result.get("direction")
+    if isinstance(structure_direction, str) and structure_direction in ("LONG", "SHORT"):
+        if structure_direction != direction:
+            detail["reason"] = "structure_direction_mismatch"
+            detail["structure_direction"] = structure_direction
+            return False, detail
+
+    lookback = max(0, int(cfg.get("lookback_bars", 5) or 5))
+    candles = list(trigger_candles or [])
+    last_idx = len(candles) - 1
+
+    def _recent(index_value) -> tuple[bool, int | None]:
+        try:
+            idx = int(index_value)
+        except (TypeError, ValueError):
+            return False, None
+        bars_ago = last_idx - idx
+        return 0 <= bars_ago <= lookback, bars_ago
+
+    require_bos = bool(cfg.get("require_bos", True))
+    require_choch = bool(cfg.get("require_choch", False))
+    stale_bos_seen = False
+
+    if require_bos and bool(structure_result.get("bos_confirmed")):
+        bos_data = structure_result.get("bos_data") or {}
+        index_key = "bos_bull_bar_index" if direction == "LONG" else "bos_bear_bar_index"
+        is_recent, bars_ago = _recent(bos_data.get(index_key))
+        detail.update({"bos_confirmed": True, "bos_recent": is_recent, "bos_bars_ago": bars_ago})
+        if is_recent:
+            return True, detail
+        stale_bos_seen = True
+
+    if require_choch and bool(structure_result.get("choch_confirmed")):
+        detail.update({"choch_confirmed": True, "choch_recent": True})
+        return True, detail
+
+    if stale_bos_seen:
+        detail["reason"] = "structure_not_recent"
+    else:
+        detail["reason"] = "missing_required_structure"
+    return False, detail
+
+
+def _engine_a_structure_first_entry_check(
+    *,
+    engine,
+    pair: dict,
+    direction: str | None,
+    d1_candles: list,
+    h4_candles: list,
+    h1_candles: list,
+    current_price: float | None,
+    atr: float | None,
+    regime: str | None,
+    style: str,
+    d1_snap: dict | None = None,
+    h4_snap: dict | None = None,
+    cfg: dict | None = None,
+) -> tuple[bool, dict]:
+    cfg = _engine_a_structure_first_cfg() if cfg is None else cfg
+    if not cfg.get("enabled", False):
+        return True, {"enabled": False}
+    if engine is None:
+        return False, {"enabled": True, "reason": "structure_engine_unavailable"}
+    if not direction or current_price is None or not atr or atr <= 0:
+        return False, {"enabled": True, "reason": "missing_structure_inputs"}
+    try:
+        structure_result = engine.analyze_structure(
+            d1_candles,
+            h4_candles,
+            h1_candles,
+            float(current_price),
+            direction,
+            float(atr),
+            regime=regime or "RANGING",
+            asset_type=pair.get("type", ""),
+            enable_zone_registry=False,
+            d1_snap=d1_snap,
+            h4_snap=h4_snap,
+            style=style,
+            pair=pair,
+        )
+    except Exception as exc:
+        log.debug("[BT] %s structure-first check error: %s", pair.get("display"), exc)
+        return False, {"enabled": True, "reason": "structure_engine_error", "error": str(exc)}
+
+    structure_tf = str(structure_result.get("structure_tf") or "").upper()
+    if structure_tf == "D1":
+        recency_candles = d1_candles
+    elif structure_tf == "H1":
+        recency_candles = h1_candles
+    else:
+        recency_candles = h4_candles
+    return _engine_a_structure_first_entry_passes(
+        structure_result,
+        direction,
+        trigger_candles=recency_candles,
+        cfg=cfg,
+    )
+
+
 def _bt_indicators_from_cache(
     candles: list,
     *,
@@ -1212,6 +1340,7 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
 
     funnel = {
         "total_setups": 0,
+        "fail_structure": 0,
         "fail_score": 0,
         "fail_macro": 0,
         "fail_regime": 0,
@@ -1253,6 +1382,20 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
 
     _pair_max_score = _rt().max_score_for_pair(pair)  # Pre-compute for score-based sizing
     same_bar_both_hit = 0
+    _structure_first_cfg = _engine_a_structure_first_cfg()
+    _structure_first_engine = None
+    if _structure_first_cfg.get("enabled"):
+        try:
+            from market_structure import NakedEngine
+
+            _structure_first_engine = NakedEngine()
+        except Exception as _structure_engine_err:
+            log.warning(
+                "[BT] %s structure-first engine unavailable: %s",
+                pair.get("display"),
+                _structure_engine_err,
+            )
+    funnel["structureFirstEnabled"] = bool(_structure_first_cfg.get("enabled"))
 
     # BUG 1 fix: BTC bias is derived point-in-time per bar via _bt_btc_bias(d1_window, pair).
     # No precompute needed — each call reads the D1 window available at that bar.
@@ -1525,6 +1668,35 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
             _ts = res.get("trendState", "UNKNOWN")
 
             _recent_scores.append(res["score"])
+
+            if _structure_first_cfg.get("enabled"):
+                _ea_direction = res.get("direction")
+                try:
+                    _structure_price = float(d1_window[-1]["close"])
+                except (TypeError, ValueError, KeyError, IndexError):
+                    _structure_price = None
+                _structure_atr = _rt().atr_for_levels(
+                    d1i, h4i, h1i, pair=pair, style=effective_style
+                )
+                _structure_ok, _structure_detail = _engine_a_structure_first_entry_check(
+                    engine=_structure_first_engine,
+                    pair=_pair_ctx,
+                    direction=_ea_direction,
+                    d1_candles=d1_window,
+                    h4_candles=h4_window,
+                    h1_candles=h1_window,
+                    current_price=_structure_price,
+                    atr=_structure_atr,
+                    regime=res.get("regimeName") or ((res.get("regime") or {}).get("label")),
+                    style=effective_style,
+                    d1_snap=d1i.get("snap") if isinstance(d1i, dict) else None,
+                    h4_snap=h4i.get("snap") if isinstance(h4i, dict) else None,
+                    cfg=_structure_first_cfg,
+                )
+                if not _structure_ok:
+                    funnel["fail_structure"] = funnel.get("fail_structure", 0) + 1
+                    i += 1
+                    continue
 
             if res["score"] < bt_min:
                 funnel["fail_score"] += 1
@@ -2012,6 +2184,35 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
 
             _recent_scores.append(res["score"])
 
+            if _structure_first_cfg.get("enabled"):
+                _ea_direction = res.get("direction")
+                try:
+                    _structure_price = float(h4_window[-1]["close"])
+                except (TypeError, ValueError, KeyError, IndexError):
+                    _structure_price = None
+                _structure_atr = _rt().atr_for_levels(
+                    d1i_ctx, h4i, h1i, pair=pair, style=effective_style
+                )
+                _structure_ok, _structure_detail = _engine_a_structure_first_entry_check(
+                    engine=_structure_first_engine,
+                    pair=_pair_ctx,
+                    direction=_ea_direction,
+                    d1_candles=d1_ctx,
+                    h4_candles=h4_window,
+                    h1_candles=h1_window,
+                    current_price=_structure_price,
+                    atr=_structure_atr,
+                    regime=res.get("regimeName") or ((res.get("regime") or {}).get("label")),
+                    style=effective_style,
+                    d1_snap=d1i_ctx.get("snap") if isinstance(d1i_ctx, dict) else None,
+                    h4_snap=h4i.get("snap") if isinstance(h4i, dict) else None,
+                    cfg=_structure_first_cfg,
+                )
+                if not _structure_ok:
+                    funnel["fail_structure"] = funnel.get("fail_structure", 0) + 1
+                    i += 1
+                    continue
+
             if res["score"] < bt_min:
                 funnel["fail_score"] += 1
                 i += 1
@@ -2477,6 +2678,35 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
             _ts = res.get("trendState", "UNKNOWN")
 
             _recent_scores.append(res["score"])
+
+            if _structure_first_cfg.get("enabled"):
+                _ea_direction = res.get("direction")
+                try:
+                    _structure_price = float(h1_window[-1]["close"])
+                except (TypeError, ValueError, KeyError, IndexError):
+                    _structure_price = None
+                _structure_atr = _rt().atr_for_levels(
+                    d1i_ctx, h4i_ctx, h1i, pair=pair, style=effective_style
+                )
+                _structure_ok, _structure_detail = _engine_a_structure_first_entry_check(
+                    engine=_structure_first_engine,
+                    pair=_pair_ctx,
+                    direction=_ea_direction,
+                    d1_candles=d1_ctx,
+                    h4_candles=h4_ctx,
+                    h1_candles=h1_window,
+                    current_price=_structure_price,
+                    atr=_structure_atr,
+                    regime=res.get("regimeName") or ((res.get("regime") or {}).get("label")),
+                    style=effective_style,
+                    d1_snap=d1i_ctx.get("snap") if isinstance(d1i_ctx, dict) else None,
+                    h4_snap=h4i_ctx.get("snap") if isinstance(h4i_ctx, dict) else None,
+                    cfg=_structure_first_cfg,
+                )
+                if not _structure_ok:
+                    funnel["fail_structure"] = funnel.get("fail_structure", 0) + 1
+                    i += 1
+                    continue
 
             if res["score"] < bt_min:
                 funnel["fail_score"] += 1

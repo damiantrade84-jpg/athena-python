@@ -300,6 +300,12 @@ ENGINE_A_EQUITY_SESSION_LIQUIDITY_WEIGHTING:
 # Engine A can consume an explicit Engine B structure payload when callers pass
 # one into compute_factor_scores(). Enabled here for paper/demo testing.
 ENGINE_A_STRUCTURE_CONTEXT_ENABLED: true
+ENGINE_A:
+  structure_first_entry:
+    enabled: true
+    lookback_bars: 5
+    require_bos: true
+    require_choch: false
 
 # Per-class ATR% bands for the Engine A volatility-quality scaler.
 # Each class defines the ATR/close ratio at which the scaler hits its low
@@ -1184,11 +1190,11 @@ EODHD_EARNINGS_CALENDAR_ENABLED: false   # false = skip unsupported EODHD earnin
 
 # ── EODHD Insider / Fundamentals Enrichment ───────────────
 
-INSIDER_TRADING_ENABLED: true      # Advisory stock enrichment; Engine A reports diagnostic only
+INSIDER_TRADING_DIAGNOSTIC_ENABLED: true      # Advisory stock enrichment; Engine A reports diagnostic only
 
-FUNDAMENTALS_ENABLED: true         # Advisory stock enrichment; Engine A reports diagnostic only
+FUNDAMENTALS_DIAGNOSTIC_ENABLED: true         # Advisory stock enrichment; Engine A reports diagnostic only
 
-# Ranging penalties - halved (ADX vote=0 already penalises, one penalty per condition)
+# Ranging ADX bucket boundaries used by regime.py.
 
 RANGING:
 
@@ -1196,67 +1202,31 @@ RANGING:
 
     dead: 18
 
-    dead_pen: 1.0
-
     choppy: 23
-
-    choppy_pen: 0.5
 
   forex:
 
     dead: 18
 
-    dead_pen: 1.5
-
     choppy: 23
-
-    choppy_pen: 1.0
 
   commodity:
 
     dead: 18
 
-    dead_pen: 1.5
-
     choppy: 23
-
-    choppy_pen: 0.5
 
   stock:
 
     dead: 16
 
-    dead_pen: 1.5
-
     choppy: 21
-
-    choppy_pen: 0.5
 
   index:
 
     dead: 16
 
-    dead_pen: 1.5
-
     choppy: 21
-
-    choppy_pen: 0.5
-
-
-
-# Crypto transition penalty - disabled by default (was always-on, adding up to -2.0 only for crypto)
-
-# Enable and tune if crypto signals become too noisy after RANGING recalibration
-
-CRYPTO_TRANSITION_PENALTY:
-
-  enabled: false
-
-  collapsing: 1.5
-
-  exhausting: 0.8
-
-  cap: 2.0
 
 
 
@@ -1346,72 +1316,6 @@ INDICATOR_WEIGHTS:
 
       volume_momentum_spread: 0.2
 
-  # DERIVATIVES: COT is weekly (lagging), funding is crypto-only
-
-  # Crypto OI sub-indicators (oi_change_z, oi_price_divergence) are small vs funding - conservative.
-
-  # When only one fires (e.g. funding only for crypto), it gets full weight automatically.
-
-  derivatives:
-
-    default:
-
-      cot_z: 0.6
-
-      funding_rate: 0.4
-
-    crypto:
-
-      funding_rate: 0.70
-
-      oi_change_z: 0.15
-
-      oi_price_divergence: 0.15
-
-      cot_z: 0.20
-
-  # MICROSTRUCTURE: For non-crypto (candle proxies), OBI is the strongest signal.
-
-  # OFD and LP are derived from the same OHLC data - correlated, so down-weighted.
-
-  # For crypto (real WS orderbook), liquidity_wall_detection gets meaningful weight.
-
-  microstructure:
-
-    order_book_imbalance: 0.4
-
-    liquidity_wall_detection: 0.25
-
-    orderflow_delta: 0.2
-
-    liquidity_pressure: 0.15
-
-  # VOLATILITY: ATR is the primary vol measure; BB width and realized vol confirm
-
-  volatility:
-
-    atr_z: 0.5
-
-    bbWidth_z: 0.3
-
-    realized_vol_z: 0.2
-
-  # VOLUME: volume_ratio is the primary signal; OBV confirms trend
-
-  volume:
-
-    volume_ratio: 0.7
-
-    obv_trend: 0.3
-
-  # STRUCTURE + TREND_STRENGTH: single indicators, weights don't matter (1.0 default)
-
-  # CARRY: single indicator, weight doesn't matter (1.0 default)
-
-  carry:
-
-    carry_z: 1.0
-
 
 
 # Factor scoring gates
@@ -1487,50 +1391,6 @@ EODHD_COMMODITY_TICKERS:
 # before the committed regime switches. Prevents regime whipsawing from bar to bar.
 
 REGIME_SMOOTHING_BARS: 3
-
-
-
-# Legacy/inactive Engine A v1 factor-weight metadata.
-# Current Engine A v2 does not read REGIME_WEIGHTS, FACTOR_SCORE_GROUP_MULTIPLIERS,
-# or CRYPTO_FACTOR_WEIGHT_CAPS; see factor_scoring.py 3-factor multiplicative score.
-
-REGIME_WEIGHTS:
-
-  TRENDING:        { trend: 2.0, momentum: 1.5, volatility: 1.0, volume: 1.0, structure: 0.5, derivatives: 1.2, microstructure: 1.5, carry: 1.0, trend_strength: 1.5, mean_reversion: 0.5 }
-
-  RANGING:         { trend: 0.5, momentum: 1.5, volatility: 1.0, volume: 1.0, structure: 2.0, derivatives: 1.0, microstructure: 1.5, carry: 1.0, trend_strength: 0.5, mean_reversion: 2.0 }
-
-  HIGH_VOLATILITY: { trend: 1.0, momentum: 1.0, volatility: 2.0, volume: 1.5, structure: 1.0, derivatives: 1.5, microstructure: 1.5, carry: 1.0, trend_strength: 0.8, mean_reversion: 1.5 }
-
-  LOW_VOLATILITY:  { trend: 1.2, momentum: 1.0, volatility: 0.5, volume: 1.0, structure: 1.0, derivatives: 1.0, microstructure: 1.5, carry: 1.0, trend_strength: 1.0, mean_reversion: 0.8 }
-
-
-
-# Crypto subgroup factor behavior (Engine A)
-
-FACTOR_SCORE_GROUP_MULTIPLIERS:
-
-  crypto_btc: { derivatives: 1.1 }
-
-  crypto_eth: { derivatives: 1.05 }
-
-  crypto_doge: { volatility: 1.35 }
-
-  crypto_alt_majors: { trend: 1.05, momentum: 1.05 }
-
-  crypto_other: { trend: 1.05, momentum: 1.05 }
-
-
-
-CRYPTO_FACTOR_WEIGHT_CAPS:
-
-  derivatives: 1.2
-
-  microstructure: 0.8
-
-  carry: 0
-
-  structure: 0.8
 
 
 
@@ -1695,16 +1555,6 @@ MICROSTRUCTURE:
 # Indicator correlation
 
 INDICATOR_CORRELATION_WINDOW: 200
-
-
-
-# Regime detection overrides
-
-# When false, crypto no longer receives an extra ADX-momentum transition penalty on top of
-
-# the normal ranging penalty.
-
-CRYPTO_TRANSITION_PENALTY_ENABLED: false  # NOTE: no effect on scores currently - see regime.py
 
 
 

@@ -377,8 +377,8 @@ def test_crypto_funding_and_oi_same_side_can_exceed_single_addon_cap(monkeypatch
 
 
 def test_stock_enrichment_flags_are_reported_advisory_only(monkeypatch):
-    monkeypatch.setitem(CONFIG, "INSIDER_TRADING_ENABLED", True)
-    monkeypatch.setitem(CONFIG, "FUNDAMENTALS_ENABLED", True)
+    monkeypatch.setitem(CONFIG, "INSIDER_TRADING_DIAGNOSTIC_ENABLED", True)
+    monkeypatch.setitem(CONFIG, "FUNDAMENTALS_DIAGNOSTIC_ENABLED", True)
 
     result = _score(pair={"type": "stock", "display": "AAPL"})
 

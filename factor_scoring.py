@@ -748,7 +748,14 @@ def _momentum_quality(
     # (both RSI and MACD at +0.50), so we divide by 0.50 to map 0.50 → 1.0.
     # Worst case: RSI=-0.25, MACD=-0.50 → raw = -0.35 → rescaled = -0.70 → clamped to 0.
     # This ensures mom_quality can actually reach 1.0 when both indicators confirm.
-    _max_raw = 0.50  # theoretical max of weighted sum
+    _rsi_cap = 0.50
+    _macd_cap = 0.50
+    _volume_cap = 0.50
+    _max_raw = (
+        _rsi_cap * rsi_w
+        + _macd_cap * macd_w
+        + _volume_cap * volume_w
+    ) / total_w
     rescaled = raw / _max_raw if _max_raw != 0 else 0.0
     return max(0.0, min(1.0, rescaled))
 
@@ -821,16 +828,6 @@ def _research_lab_candidate_addon(
         "raw_total": round(sum(d.get("value", 0.0) for d in components.values()), 4),
         "value": round(total, 4),
     }
-
-
-def _infer_research_score_group(display: str, asset_type: str) -> str:
-    """Stage 2.6: Research lab uses universal factors — group inference is deprecated.
-
-    All asset classes now use the same 3 universal factors:
-    obv_divergence, bollinger_touch, price_momentum.
-    This function returns a generic label for backward-compat diagnostics only.
-    """
-    return "universal"
 
 
 def _research_factor_value(
@@ -1003,7 +1000,7 @@ def _research_bollinger_value(direction: str, candles: list, bonus: float, penal
         return 0.0, {"signal": "missing", "value": 0.0}
     window = closes[-20:]
     mean = sum(window) / len(window)
-    variance = sum((x - mean) ** 2 for x in window) / max(1, len(window) - 1)
+    variance = sum((x - mean) ** 2 for x in window) / len(window)
     std = math.sqrt(max(0.0, variance))
     upper = mean + 2.0 * std
     lower = mean - 2.0 * std
@@ -1159,39 +1156,50 @@ def _adx_gate(
 
 # ── Addon: asset-specific secondary factor ────────────────────────────────────
 
-def _carry_addon(pair_display: str, direction: str, bar_time: Optional[str]) -> float:
-    """Carry z-score addon for forex pairs. Returns _ADDON_* constant."""
+def _carry_addon_with_status(pair_display: str, direction: str, bar_time: Optional[str]) -> tuple[float, str]:
+    """Carry z-score addon for forex pairs. Returns (_ADDON_* constant, status)."""
     try:
         from carry_feed import get_carry_z as _get_carry_z
         from carry_feed import _PAIR_CARRY_FORMULA as _CARRY_FORMULA
         if pair_display not in _CARRY_FORMULA:
-            return _ADDON_NEUTRAL
+            return _ADDON_NEUTRAL, "neutral"
         _as_of = bar_time[:10] if bar_time else None
         carry = _get_carry_z(pair_display, as_of_date=_as_of)
         if carry is None or carry == 0.0:
-            return _ADDON_NEUTRAL
+            return _ADDON_NEUTRAL, "neutral"
         carry = float(carry)
         is_long = direction == "LONG"
         if (is_long and carry > 0.5) or (not is_long and carry < -0.5):
-            return _ADDON_CONFIRM
+            return _ADDON_CONFIRM, "ok"
         if (is_long and carry < -0.5) or (not is_long and carry > 0.5):
-            return _ADDON_AGAINST
-        return _ADDON_NEUTRAL
-    except Exception:
-        return _ADDON_NEUTRAL
+            return _ADDON_AGAINST, "ok"
+        return _ADDON_NEUTRAL, "neutral"
+    except Exception as exc:
+        log.warning("[EA2] %s carry addon error: %s", pair_display, exc)
+        return _ADDON_NEUTRAL, "error"
 
 
-def _cot_addon(pair_display: str, asset_type: str, direction: str, bar_time: Optional[str]) -> float:
-    """COT net speculator positioning addon for commodity/forex. Returns _ADDON_* constant."""
+def _carry_addon(pair_display: str, direction: str, bar_time: Optional[str]) -> float:
+    """Carry z-score addon for forex pairs. Returns _ADDON_* constant."""
+    return _carry_addon_with_status(pair_display, direction, bar_time)[0]
+
+
+def _cot_addon_with_status(
+    pair_display: str,
+    asset_type: str,
+    direction: str,
+    bar_time: Optional[str],
+) -> tuple[float, str]:
+    """COT net speculator positioning addon for commodity/forex. Returns (_ADDON_*, status)."""
     try:
         from cot_feed import get_cot_z as _get_cot_z
         from cot_feed import _PAIR_FORMULA as _COT_FORMULA
         if pair_display not in _COT_FORMULA:
-            return _ADDON_NEUTRAL
+            return _ADDON_NEUTRAL, "unsupported"
         _as_of = bar_time[:10] if bar_time else None
         cot = _get_cot_z(pair_display, as_of_date=_as_of)
         if cot is None or cot == 0.0:
-            return _ADDON_NEUTRAL
+            return _ADDON_NEUTRAL, "neutral"
         cot = float(cot)
         # Fade the herd at extremes — linear taper avoids the sharp discontinuity
         # that previously flipped the sign at exactly |z|=2.0.
@@ -1213,15 +1221,21 @@ def _cot_addon(pair_display: str, asset_type: str, direction: str, bar_time: Opt
                 _fade = -cot * 1.5
                 cot = _confirm * (1.0 - _blend) + _fade * _blend
         if abs(cot) < 1.0:
-            return _ADDON_NEUTRAL  # insignificant signal
+            return _ADDON_NEUTRAL, "neutral"  # insignificant signal
         is_long = direction == "LONG"
         if (is_long and cot > 0) or (not is_long and cot < 0):
-            return _ADDON_CONFIRM
+            return _ADDON_CONFIRM, "ok"
         if (is_long and cot < 0) or (not is_long and cot > 0):
-            return _ADDON_AGAINST
-        return _ADDON_NEUTRAL
-    except Exception:
-        return _ADDON_NEUTRAL
+            return _ADDON_AGAINST, "ok"
+        return _ADDON_NEUTRAL, "neutral"
+    except Exception as exc:
+        log.warning("[EA2] %s COT addon error: %s", pair_display, exc)
+        return _ADDON_NEUTRAL, "error"
+
+
+def _cot_addon(pair_display: str, asset_type: str, direction: str, bar_time: Optional[str]) -> float:
+    """COT net speculator positioning addon for commodity/forex. Returns _ADDON_* constant."""
+    return _cot_addon_with_status(pair_display, asset_type, direction, bar_time)[0]
 
 
 def _cot_formula_supported(pair_display: str) -> bool:
@@ -1333,8 +1347,8 @@ def _asset_addon(
     display = pair.get("display", "")
 
     if asset_type == "forex":
-        val = _carry_addon(display, direction, bar_time)
-        return val, "carry", "ok" if val != _ADDON_NEUTRAL else "neutral"
+        val, status = _carry_addon_with_status(display, direction, bar_time)
+        return val, "carry", status
 
     if asset_type == "crypto":
         funding_val = _funding_addon(funding_rate, direction)
@@ -1365,8 +1379,8 @@ def _asset_addon(
         addon_type = "cot_proxy" if asset_type in ("stock", "index") else "cot"
         if not _cot_formula_supported(display):
             return _ADDON_NEUTRAL, addon_type, "unsupported"
-        val = _cot_addon(display, asset_type, direction, bar_time)
-        return val, addon_type, "ok" if val != _ADDON_NEUTRAL else "neutral"
+        val, status = _cot_addon_with_status(display, asset_type, direction, bar_time)
+        return val, addon_type, status
 
     # stock / index — no addon
     return _ADDON_NEUTRAL, "none", "unsupported"
@@ -1485,7 +1499,7 @@ def _mean_reversion_factor(
     # ── Bollinger %B ──
     window = closes[-20:]
     mean = sum(window) / len(window)
-    variance = sum((x - mean) ** 2 for x in window) / max(1, len(window) - 1)
+    variance = sum((x - mean) ** 2 for x in window) / len(window)
     std = math.sqrt(max(0.0, variance))
     upper = mean + 2.0 * std
     lower = mean - 2.0 * std
@@ -1825,9 +1839,9 @@ def compute_factor_scores(
     )
     feed_status["addon"] = f"{addon_type}:{addon_status}"
     if asset_type == "stock":
-        if bool(CONFIG.get("INSIDER_TRADING_ENABLED", False)):
+        if bool(CONFIG.get("INSIDER_TRADING_DIAGNOSTIC_ENABLED", False)):
             feed_status["insider_trading"] = "advisory_only"
-        if bool(CONFIG.get("FUNDAMENTALS_ENABLED", False)):
+        if bool(CONFIG.get("FUNDAMENTALS_DIAGNOSTIC_ENABLED", False)):
             feed_status["fundamentals"] = "advisory_only"
 
     research_val, research_detail = _research_lab_candidate_addon(

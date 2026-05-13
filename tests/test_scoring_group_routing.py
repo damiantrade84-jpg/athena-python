@@ -166,9 +166,7 @@ def test_auto_trade_min_score_does_not_override_engine_a_scan_threshold(monkeypa
 def test_python_defaults_match_runtime_yaml_for_audit_sensitive_gates():
     assert CONFIG["RANGING"]["crypto"] == {
         "dead": 18,
-        "dead_pen": 1.0,
         "choppy": 23,
-        "choppy_pen": 0.5,
     }
     assert CONFIG["ADX_TREND_MIN_CLASS"]["crypto"] == 18
     assert CONFIG["ADX_TREND_MIN_CLASS"]["forex"] == 20
@@ -210,7 +208,11 @@ def test_pair_profile_can_override_score_group_and_threshold():
     original = CONFIG.get("PAIR_PROFILES")
     try:
         CONFIG["PAIR_PROFILES"] = {
-            "BTC/USDT": {"score_group": "crypto_alt_majors", "min_confluence": 0.77}
+            "BTC/USDT": {
+                "score_group": "crypto_alt_majors",
+                "min_confluence": 0.77,
+                "allow_lower_threshold": True,
+            }
         }
         pair = {"display": "BTC/USDT", "symbol": "BTCUSDT", "type": "crypto"}
         assert get_pair_score_group(pair) == "crypto_alt_majors"
@@ -231,6 +233,7 @@ def test_backtest_live_threshold_parity():
             "BTC/USDT": {
                 "score_group": "crypto_btc",
                 "min_confluence": 0.99,
+                "allow_lower_threshold": True,
             }
         }
         pair = {"display": "BTC/USDT", "symbol": "BTCUSDT", "type": "crypto"}
@@ -286,10 +289,10 @@ def test_backtest_ignores_legacy_bt_min_field():
     original = CONFIG.get("PAIR_PROFILES")
     try:
         # bt_min in profile is dead code — only min_confluence matters
-        CONFIG["PAIR_PROFILES"] = {"XAU/USD": {"bt_min": 1.58, "min_confluence": 1.25}}
+        CONFIG["PAIR_PROFILES"] = {"XAU/USD": {"bt_min": 1.58, "min_confluence": 1.75}}
         pair = {"display": "XAU/USD", "symbol": "XAUUSD", "type": "commodity"}
-        assert get_backtest_min_score_threshold(pair) == 1.25
-        assert get_min_confluence_threshold(pair) == 1.25
+        assert get_backtest_min_score_threshold(pair) == 1.75
+        assert get_min_confluence_threshold(pair) == 1.75
     finally:
         CONFIG["PAIR_PROFILES"] = original
 
@@ -302,7 +305,7 @@ def test_backtest_no_dual_threshold_flag():
     assert "FACTOR_WEIGHTS" not in CONFIG
 
 
-def test_trade_tier_reason_surfaces_auto_trade_score_floor(monkeypatch):
+def test_auto_trade_min_score_does_not_change_trade_tier_reason(monkeypatch):
     monkeypatch.setitem(CONFIG, "AUTO_TRADE_MIN_SCORE", {"crypto": 2.4})
     signal = {
         "confluenceScore": 2.1,
@@ -317,8 +320,7 @@ def test_trade_tier_reason_surfaces_auto_trade_score_floor(monkeypatch):
     tier, reason = _classify_signal(signal, pair)
 
     assert tier == "trade"
-    assert "scan floor 2" in reason
-    assert "auto-trader score floor 2.4" in reason
+    assert reason == "Trade-ready"
 
 
 def test_scanner_persists_tier_reason_field():

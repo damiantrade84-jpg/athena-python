@@ -10999,18 +10999,37 @@ def analyze_pair(
     preloaded_candles = preloaded_candles or {}
     preloaded_market_state = preloaded_market_state or {}
     preloaded_fetch_meta = preloaded_fetch_meta or {}
+    from athena_app.services.candle_service import engine_a_scoring_candles_from_state
+
+    def _engine_a_confirmed_candles(tf: str, raw: list | None, state: dict | None = None) -> list:
+        if isinstance(state, dict):
+            return engine_a_scoring_candles_from_state(pair, state)
+        raw_candles = list(raw or [])
+        if not raw_candles:
+            return []
+        try:
+            from athena_app.services.market_state import split_market_state
+
+            _state = split_market_state(
+                raw_candles,
+                tf,
+                pair.get("display") or pair.get("symbol") or "",
+            )
+            return engine_a_scoring_candles_from_state(pair, _state, fallback=raw_candles)
+        except Exception as _split_err:
+            log.debug(
+                "[ANALYZE] %s %s confirmed-candle split skipped: %s",
+                pair.get("display", "?"),
+                tf,
+                _split_err,
+            )
+            return raw_candles
 
     # Determine if the primary timeframe (H1) is currently forming.
     _h1_state = preloaded_market_state.get("H1")
     h1 = preloaded_candles.get("H1")
     if isinstance(_h1_state, dict):
-        _h1_confirmed = list(_h1_state.get("confirmed") or [])
-        _h1_forming = _h1_state.get("forming")
-        # For MT5 forex we default to confirmed candles for scoring paths.
-        if pair.get("source") == "mt5" and pair.get("type") == "forex":
-            h1 = _h1_confirmed
-        else:
-            h1 = _h1_confirmed + ([_h1_forming] if _h1_forming else [])
+        h1 = _engine_a_confirmed_candles("H1", h1, _h1_state)
         is_forming = bool(_h1_state.get("is_live"))
     elif h1:
         try:
@@ -11021,6 +11040,7 @@ def analyze_pair(
                 "H1",
                 pair.get("display") or pair.get("symbol") or "",
             )
+            h1 = engine_a_scoring_candles_from_state(pair, _h1_state, fallback=h1)
             is_forming = bool(_h1_state.get("is_live"))
         except Exception:
             is_forming = False
@@ -11028,10 +11048,7 @@ def analyze_pair(
         try:
             from candle_manager import fetch_market_state as _fms
             h1_state = _fms(pair, "H1", _lim["H1"])
-            if pair.get("source") == "mt5" and pair.get("type") == "forex":
-                h1 = list(h1_state.get("confirmed") or [])
-            else:
-                h1 = h1_state["confirmed"] + ([h1_state["forming"]] if h1_state["forming"] else [])
+            h1 = _engine_a_confirmed_candles("H1", None, h1_state)
             is_forming = h1_state["is_live"]
         except Exception:
             h1, _h1_sig_meta = _fetch_ab_crypto_signal_candles(
@@ -11039,6 +11056,7 @@ def analyze_pair(
             )
             if _h1_sig_meta:
                 preloaded_fetch_meta["H1"] = _h1_sig_meta
+            h1 = _engine_a_confirmed_candles("H1", h1)
             is_forming = False
 
     _d1_state = preloaded_market_state.get("D1")
@@ -11073,34 +11091,22 @@ def analyze_pair(
             _d1_trim_err,
         )
 
-    # Re-split after trimming to get correct confirmed/forming classification.
-    if isinstance(_d1_state, dict):
-        _d1_confirmed = list(_d1_state.get("confirmed") or [])
-        _d1_forming = _d1_state.get("forming")
-        # Apply confirmed-only policy to all forex pairs regardless of source
-        # to prevent forming-bar contamination in RSI/EMA/ATR calculations.
-        if pair.get("type") == "forex":
-            d1 = _d1_confirmed
-        else:
-            d1 = _d1_confirmed + ([_d1_forming] if _d1_forming else [])
-    else:
-        d1 = d1_raw
+    # Re-split after trimming so Engine A scores the last confirmed D1 bar.
+    d1 = _engine_a_confirmed_candles("D1", d1_raw)
 
     _h4_state = preloaded_market_state.get("H4")
     h4 = preloaded_candles.get("H4")
     if isinstance(_h4_state, dict):
-        _h4_confirmed = list(_h4_state.get("confirmed") or [])
-        _h4_forming = _h4_state.get("forming")
-        if pair.get("source") == "mt5" and pair.get("type") == "forex":
-            h4 = _h4_confirmed
-        else:
-            h4 = _h4_confirmed + ([_h4_forming] if _h4_forming else [])
+        h4 = _engine_a_confirmed_candles("H4", h4, _h4_state)
+    elif h4:
+        h4 = _engine_a_confirmed_candles("H4", h4)
     if h4 is None:
         h4, _h4_sig_meta = _fetch_ab_crypto_signal_candles(
             pair, "H4", _lim["H4"], engine="A"
         )
         if _h4_sig_meta:
             preloaded_fetch_meta["H4"] = _h4_sig_meta
+        h4 = _engine_a_confirmed_candles("H4", h4)
 
     if not d1 or not h4 or not h1:
         log.warning(
@@ -11109,9 +11115,8 @@ def analyze_pair(
         )
         return None
 
-    # F8: As requested, we no longer drop the last (forming) bar automatically.
-    # This provides live-bar scoring for maximum accuracy.
-    # Indicators are now calculated on the full live series.
+    # Engine A scores confirmed candles only. Forming-bar state remains diagnostic
+    # for UI/freshness, but indicators and two-bar confirmation use closed bars.
 
     if len(d1) < 220 or len(h4) < 50 or len(h1) < 50:
         log.warning(

@@ -422,11 +422,11 @@ CONFIG: dict = {
         "index": 0.0004,
     },
     "RANGING": {
-        "crypto": {"dead": 18, "dead_pen": 1.0, "choppy": 23, "choppy_pen": 0.5},
-        "commodity": {"dead": 18, "dead_pen": 1.5, "choppy": 23, "choppy_pen": 0.5},
-        "forex": {"dead": 18, "dead_pen": 1.5, "choppy": 23, "choppy_pen": 1.0},
-        "stock": {"dead": 16, "dead_pen": 1.5, "choppy": 21, "choppy_pen": 0.5},
-        "index": {"dead": 16, "dead_pen": 1.5, "choppy": 21, "choppy_pen": 0.5},
+        "crypto": {"dead": 18, "choppy": 23},
+        "commodity": {"dead": 18, "choppy": 23},
+        "forex": {"dead": 18, "choppy": 23},
+        "stock": {"dead": 16, "choppy": 21},
+        "index": {"dead": 16, "choppy": 21},
     },
     # ATR_CLASS: fallback when no style is set. Primary path is STYLE_ATR_MULTS below.
     "ATR_CLASS": {
@@ -694,6 +694,14 @@ CONFIG: dict = {
         "OFF_HOURS_MULT": 0.98,
     },
     "ENGINE_A_STRUCTURE_CONTEXT_ENABLED": False,
+    "ENGINE_A": {
+        "structure_first_entry": {
+            "enabled": False,
+            "lookback_bars": 5,
+            "require_bos": True,
+            "require_choch": False,
+        },
+    },
     "FACTOR_CRYPTO_ADDON_COMBO_CONFIRM_CAP": 0.25,
     "FACTOR_CRYPTO_ADDON_COMBO_AGAINST_CAP": -0.20,
     "ENGINE_A_COT_CONTRARIAN_FADE": {
@@ -720,73 +728,8 @@ CONFIG: dict = {
         "Sugar": "SB.COMM",
         "Wheat": "ZW.COMM",
     },
-    "CRYPTO_TRANSITION_PENALTY_ENABLED": True,
     "CRYPTO_LIVE_MICROSTRUCTURE_SCORING_ENABLED": True,
     "REGIME_SMOOTHING_BARS": 3,  # Consecutive bars required before committing to a regime change
-    # Optional subgroup multipliers for factor-group weights (Engine A non-forex).
-    "FACTOR_SCORE_GROUP_MULTIPLIERS": {
-        "us_stock_single": {"volatility": 1.2, "volume": 1.2, "momentum": 0.9},
-        "bond_tlt": {"trend": 0.8, "volatility": 1.2, "carry": 1.3},
-        "smallcap_em_etf": {"volatility": 1.2, "momentum": 1.1},
-        "asian_indices": {"volatility": 1.15, "momentum": 1.1},
-        "energy_oil": {"volatility": 1.15, "structure": 1.1},
-        "precious_trackers": {"structure": 1.1, "volatility": 1.1},
-        "nat_gas": {"volatility": 1.35, "structure": 1.15},
-        "copper": {"trend": 1.1, "structure": 1.15},
-        "pgm_metals": {"volatility": 1.2, "structure": 1.15},
-        "crypto_btc": {"derivatives": 1.1},
-        "crypto_eth": {"derivatives": 1.05},
-        "crypto_doge": {"volatility": 1.35},
-        "crypto_alt_majors": {"trend": 1.05, "momentum": 1.05},
-        "crypto_other": {"trend": 1.05, "momentum": 1.05},
-    },
-    # Regime-aware factor weight overrides
-    "REGIME_WEIGHTS": {
-        "TRENDING": {
-            "trend": 2.0,
-            "trend_strength": 1.5,
-            "momentum": 1.5,
-            "volatility": 1.0,
-            "volume": 1.0,
-            "structure": 0.5,
-            "derivatives": 1.2,
-            "microstructure": 1.5,
-            "carry": 1.0,
-        },
-        "RANGING": {
-            "trend": 0.5,
-            "trend_strength": 0.5,
-            "momentum": 1.5,
-            "volatility": 1.0,
-            "volume": 1.0,
-            "structure": 2.0,
-            "derivatives": 1.0,
-            "microstructure": 1.5,
-            "carry": 1.0,
-        },
-        "HIGH_VOLATILITY": {
-            "trend": 1.0,
-            "trend_strength": 1.0,
-            "momentum": 1.0,
-            "volatility": 2.0,
-            "volume": 1.5,
-            "structure": 1.0,
-            "derivatives": 1.5,
-            "microstructure": 1.5,
-            "carry": 1.0,
-        },
-        "LOW_VOLATILITY": {
-            "trend": 1.2,
-            "trend_strength": 0.8,
-            "momentum": 1.0,
-            "volatility": 0.5,
-            "volume": 1.0,
-            "structure": 1.0,
-            "derivatives": 1.0,
-            "microstructure": 1.5,
-            "carry": 1.0,
-        },
-    },
     # Per-indicator weights within each factor group (multiplied with correlation weights).
     # Missing keys default to 1.0. Set to 0.0 to disable an indicator.
     "INDICATOR_WEIGHTS": {
@@ -809,23 +752,6 @@ CONFIG: dict = {
                 "volume_momentum_spread": 0.2,
             },
         },
-        "derivatives": {
-            "default": {"cot_z": 0.6, "funding_rate": 0.4},
-            "crypto": {"funding_rate": 0.75, "cot_z": 0.25},
-        },
-        "microstructure": {
-            "order_book_imbalance": 0.4,
-            "liquidity_wall_detection": 0.25,
-            "orderflow_delta": 0.2,
-            "liquidity_pressure": 0.15,
-        },
-        "volatility": {"atr_z": 0.5, "bbWidth_z": 0.3, "realized_vol_z": 0.2},
-        "volume": {"volume_ratio": 0.7, "obv_trend": 0.3},
-    },
-    "CRYPTO_FACTOR_WEIGHT_CAPS": {
-        "derivatives": 1.0,
-        "microstructure": 0.75,
-        "carry": 0.0,
     },
     # Indicator correlation control
     "INDICATOR_CORRELATION_ENABLED": False,  # Expensive O(n²); enable manually for live deep analysis
@@ -971,6 +897,8 @@ CONFIG: dict = {
     "LEARNING_LOOKBACK_DAYS": 90,  # Days of history to query for context
     "META_ANALYSIS_ENABLED": True,  # Weekly meta-analysis via configured AI provider
     "EODHD_EARNINGS_CALENDAR_ENABLED": False,  # Disabled by default; unsupported on many EODHD plans
+    "INSIDER_TRADING_DIAGNOSTIC_ENABLED": True,
+    "FUNDAMENTALS_DIAGNOSTIC_ENABLED": True,
     # ── Engine B AI Controls ─────────────────────────────────────────────────
     "ENGINE_B_NEWS_CONTEXT_ENABLED": True,  # Feed news into Engine B AI advisory (not checklist)
     "ENGINE_B_ZONE_PERSISTENCE": False,  # Persist Engine B OB/FVG registry to zones.db
@@ -1149,7 +1077,6 @@ _KNOWN_YAML_ONLY_KEYS = {
     "BT_VECTORIZED",
     "CONDUCTOR",
     "CONFIDENCE_THRESHOLD",
-    "CRYPTO_TRANSITION_PENALTY",
     "ENGINE_A_MEAN_REVERSION",
     "ENGINE_A_RESEARCH_LAB_FACTORS",
     "ENGINE_B_BT_STRUCTURE_GATE_ENABLED",
@@ -1179,8 +1106,6 @@ _KNOWN_YAML_ONLY_KEYS = {
     "FACTOR_FUNDING_BASELINE",
     "FACTOR_FUNDING_NOISE_BAND",
     "FOREX_SESSION_FILTER",
-    "FUNDAMENTALS_ENABLED",
-    "INSIDER_TRADING_ENABLED",
     "INTERMARKET_CONFIRMATION",
     "KELLY_FRACTION",
     "LIVE_DASHBOARD",

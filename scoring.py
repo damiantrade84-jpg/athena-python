@@ -284,17 +284,20 @@ def get_score_threshold(pair: dict, is_backtest: bool = False, regime: str | Non
       - HIGH_VOLATILITY: 15% harder (1.15 multiplier)
     """
     profile = get_pair_profile(pair)
-
-    # Pair profile override (highest priority)
-    if profile.get("min_confluence") is not None:
-        base_threshold = float(profile.get("min_confluence"))
+    configured = _configured_score_threshold(pair)
+    if configured is not None:
+        base_threshold = configured
     else:
-        configured = _configured_score_threshold(pair)
-        if configured is not None:
-            base_threshold = configured
-        else:
-            # Fallback 3-tier system for older configs.
-            base_threshold = _get_threshold_tier(pair)
+        # Fallback 3-tier system for older configs.
+        base_threshold = _get_threshold_tier(pair)
+
+    # Pair profiles may raise a threshold by default. Lowering below the
+    # configured/group floor requires an explicit per-profile opt-in so one
+    # stale pair override cannot silently bypass the global scan tier.
+    if profile.get("min_confluence") is not None:
+        profile_threshold = float(profile.get("min_confluence"))
+        if profile_threshold >= base_threshold or profile.get("allow_lower_threshold") is True:
+            base_threshold = profile_threshold
 
     # Apply regime-dependent dynamic thresholds if enabled
     dynamic_cfg = CONFIG.get("ENGINE_A_REGIME_DYNAMIC_THRESHOLDS") or {}
@@ -591,6 +594,10 @@ def _get_30d_correlation(
         return max(-1.0, min(1.0, r))
 
     # ── Legacy fallback path (no price data available) ───────────────────────
+    log.warning(
+        "heuristic BTC correlation fallback used for %s; pass price series to use real Pearson r",
+        pair_display or "unknown",
+    )
     # Known high-correlation majors
     if pair_display in ("ETH/USDT", "ETHUSDT"):
         return 0.90
@@ -1012,18 +1019,43 @@ def is_trend_state_blocked(
     return str(trend_state).upper() in get_blocked_trend_states(pair, scope=scope)
 
 
-def _auto_trade_score_floor(pair: dict) -> float | None:
-    floors = CONFIG.get("AUTO_TRADE_MIN_SCORE", {}) or {}
+def _auto_trade_min_conviction(pair: dict) -> float | None:
+    cfg = CONFIG.get("AUTO_TRADE_MIN_CONVICTION", {}) or {}
     ptype = pair.get("type", "")
-    raw = None
-    if isinstance(floors, dict):
-        raw = floors.get(ptype, floors.get("default"))
-    else:
-        raw = floors
+    raw = cfg.get(ptype, cfg.get("default")) if isinstance(cfg, dict) else cfg
     try:
         return float(raw) if raw is not None else None
     except (TypeError, ValueError):
         return None
+
+
+def _a_only_auto_weight(pair: dict) -> float | None:
+    cfg = CONFIG.get("AUTO_TRADE_A_ONLY_WEIGHT", {}) or {}
+    ptype = pair.get("type", "")
+    raw = cfg.get(ptype, cfg.get("default")) if isinstance(cfg, dict) else cfg
+    try:
+        weight = float(raw)
+    except (TypeError, ValueError):
+        return None
+    return weight if weight > 0 else None
+
+
+def _a_only_required_score(pair: dict, signal: dict) -> float | None:
+    min_conviction = _auto_trade_min_conviction(pair)
+    a_only_weight = _a_only_auto_weight(pair)
+    if min_conviction is None or a_only_weight is None:
+        return None
+    try:
+        max_score = float(
+            signal.get("maxScore")
+            or signal.get("maxScoreOverride")
+            or 3.0
+        )
+    except (TypeError, ValueError):
+        max_score = 3.0
+    if max_score <= 0:
+        return None
+    return (min_conviction / a_only_weight) * max_score
 
 
 def _classify_signal(signal: dict, pair: dict) -> tuple[str, str]:
@@ -1054,7 +1086,7 @@ def _classify_signal(signal: dict, pair: dict) -> tuple[str, str]:
             if not CONFIG.get("BACKTEST_SENTIMENT_GATING", False):
                 sentiment_blocked = False
 
-    if (
+    scan_ready = (
         pair.get("enabled", True)
         and not exchange_closed
         and not hard_event
@@ -1062,13 +1094,20 @@ def _classify_signal(signal: dict, pair: dict) -> tuple[str, str]:
         and not sentiment_blocked
         and not trend_blocked
         and score >= threshold
-    ):
-        auto_floor = _auto_trade_score_floor(pair)
-        if auto_floor is not None and auto_floor > float(threshold):
-            return (
-                "trade",
-                f"Trade-ready (scan floor {float(threshold):g}; auto-trader score floor {auto_floor:g})",
-            )
+    )
+    if scan_ready:
+        if signal.get("enginesAligned") is False:
+            required = _a_only_required_score(pair, signal)
+            try:
+                max_score = float(signal.get("maxScore") or signal.get("maxScoreOverride") or 3.0)
+            except (TypeError, ValueError):
+                max_score = 3.0
+            if required is not None and score < required:
+                return (
+                    "watchlist",
+                    f"A-only auto gate requires about {required:.2f}/{max_score:.1f}; "
+                    f"score {float(score):.2f} clears scan floor {float(threshold):.2f} only",
+                )
         return "trade", "Trade-ready"
     watch_floor = max(round(threshold - 0.3, 2), 0.2)
     reasons = [d["detail"] for d in signal.get("scanDiagnostics", [])]

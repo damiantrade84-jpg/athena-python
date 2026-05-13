@@ -7,6 +7,17 @@ from typing import Callable, Dict, Any
 from config import scan_candle_limits
 
 
+def engine_a_scoring_candles_from_state(
+    pair: Dict[str, Any] | None,
+    state: Dict[str, Any] | None,
+    fallback: list | None = None,
+) -> list:
+    """Return closed candles for Engine A scoring from a market-state payload."""
+    if isinstance(state, dict):
+        return list(state.get("confirmed") or [])
+    return list(fallback or [])
+
+
 def _resolve_regime_state(sig: Dict[str, Any]) -> int | None:
     regime = sig.get("regime")
     if isinstance(regime, dict):

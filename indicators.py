@@ -238,7 +238,7 @@ def calc_bb(c: list, p: int, m: float) -> dict:
 
         mn = sum(sl) / p
 
-        sd = math.sqrt(sum((x - mn) ** 2 for x in sl) / (p - 1)) if p > 1 else 0
+        sd = math.sqrt(sum((x - mn) ** 2 for x in sl) / p) if p > 0 else 0
 
         mid.append(mn)
         u.append(mn + m * sd)
@@ -293,8 +293,8 @@ def calc_squeeze(
     mn = sum(sl) / bb_period
 
     sd = (
-        math.sqrt(sum((x - mn) ** 2 for x in sl) / (bb_period - 1))
-        if bb_period > 1
+        math.sqrt(sum((x - mn) ** 2 for x in sl) / bb_period)
+        if bb_period > 0
         else 0
     )
 
@@ -316,8 +316,8 @@ def calc_squeeze(
         _sl = cl[j - bb_period + 1 : j + 1]
         _mn = sum(_sl) / bb_period
         _sd = (
-            math.sqrt(sum((x - _mn) ** 2 for x in _sl) / (bb_period - 1))
-            if bb_period > 1
+            math.sqrt(sum((x - _mn) ** 2 for x in _sl) / bb_period)
+            if bb_period > 0
             else 0
         )
 
@@ -573,39 +573,8 @@ def calc_stochastic_rsi(candles: list, rsi_period: int = 14, stoch_period: int =
     if not candles or len(candles) < rsi_period + stoch_period:
         return {"k": [None] * len(candles), "d": [None] * len(candles)}
 
-    # First calculate RSI
-    rsi_values = []
-    for i in range(len(candles)):
-        if i < rsi_period - 1:
-            rsi_values.append(None)
-        else:
-            window = [float(c["close"]) for c in candles[i - rsi_period + 1:i + 1]
-                     if c.get("close") is not None]
-            if len(window) < rsi_period:
-                rsi_values.append(None)
-                continue
-
-            # Simple RSI calculation
-            gains = []
-            losses = []
-            for j in range(1, len(window)):
-                change = window[j] - window[j - 1]
-                if change > 0:
-                    gains.append(change)
-                    losses.append(0)
-                else:
-                    gains.append(0)
-                    losses.append(abs(change))
-
-            avg_gain = sum(gains) / len(gains) if gains else 0
-            avg_loss = sum(losses) / len(losses) if losses else 0
-
-            if avg_loss == 0:
-                rsi_values.append(100)
-            else:
-                rs = avg_gain / avg_loss
-                rsi = 100 - (100 / (1 + rs))
-                rsi_values.append(rsi)
+    closes = [float(c["close"]) for c in candles]
+    rsi_values = calc_rsi(closes, rsi_period)
 
     # Now apply Stochastic formula to RSI values
     n = len(rsi_values)
@@ -616,7 +585,6 @@ def calc_stochastic_rsi(candles: list, rsi_period: int = 14, stoch_period: int =
         valid_rsi = [v for v in rsi_window if v is not None]
 
         if len(valid_rsi) < stoch_period:
-            rawK[i] = 50
             continue
 
         hh = max(valid_rsi)
@@ -627,17 +595,17 @@ def calc_stochastic_rsi(candles: list, rsi_period: int = 14, stoch_period: int =
         else:
             rawK[i] = ((rsi_values[i] - ll) / (hh - ll)) * 100
 
-    # Smooth %K to produce fast %K
-    valid_start = stoch_period - 1
-    rawK_valid = rawK[valid_start:]
-    kL_sliced = calc_sma(rawK_valid, k_smooth)
-    kL = [None] * valid_start + kL_sliced
+    kL = [None] * n
+    for i in range(n):
+        window = rawK[i - k_smooth + 1 : i + 1]
+        if i >= k_smooth - 1 and len(window) == k_smooth and all(v is not None for v in window):
+            kL[i] = sum(window) / k_smooth
 
-    # Smooth %K to produce %D
-    d_valid_start = valid_start + k_smooth - 1
-    kL_valid = kL[d_valid_start:]
-    dL_sliced = calc_sma(kL_valid, d_smooth)
-    dL = [None] * d_valid_start + dL_sliced
+    dL = [None] * n
+    for i in range(n):
+        window = kL[i - d_smooth + 1 : i + 1]
+        if i >= d_smooth - 1 and len(window) == d_smooth and all(v is not None for v in window):
+            dL[i] = sum(window) / d_smooth
 
     return {"k": kL, "d": dL}
 
@@ -813,8 +781,8 @@ def calc_bb_width_percentile(
         mn = sum(sl) / bb_period
 
         sd = (
-            math.sqrt(sum((x - mn) ** 2 for x in sl) / (bb_period - 1))
-            if bb_period > 1
+            math.sqrt(sum((x - mn) ** 2 for x in sl) / bb_period)
+            if bb_period > 0
             else 0
         )
 

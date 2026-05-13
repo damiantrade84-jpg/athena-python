@@ -152,14 +152,14 @@ def _check_usdjpy_in_cluster() -> tuple[bool, str]:
 
 
 def _check_single_crypto_cap_application() -> tuple[bool, str]:
-    """BUG guard: CRYPTO_FACTOR_WEIGHT_CAPS should be applied exactly once."""
+    """BUG guard: CRYPTO_FACTOR_WEIGHT_CAPS is no longer active config."""
     src = _read_file("factor_scoring.py")
     if "__READ_ERROR__" in src:
         return False, f"Cannot read factor_scoring.py: {src}"
     count = src.count("CRYPTO_FACTOR_WEIGHT_CAPS")
-    if count > 2:  # 1 in code + 1 in comment is OK; >2 means duplicate application
-        return False, f"CRYPTO_FACTOR_WEIGHT_CAPS referenced {count} times — check for double application"
-    return True, f"CRYPTO_FACTOR_WEIGHT_CAPS referenced {count} times"
+    if count:
+        return False, f"CRYPTO_FACTOR_WEIGHT_CAPS referenced {count} times; removed config should stay unused"
+    return True, "CRYPTO_FACTOR_WEIGHT_CAPS removed from factor scoring"
 
 
 def _check_forex_bt_routing() -> tuple[bool, str]:
