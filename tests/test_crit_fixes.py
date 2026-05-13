@@ -7,6 +7,7 @@ CRIT-002: Forex intermarket max_score cap must be the same (3.0) across
           live (athena.py) and backtest (backtest_runner.py) paths.
 """
 import importlib
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -318,6 +319,132 @@ def test_quick_execute_refresh_replaces_stale_freshness_metadata(monkeypatch):
     assert captured["signal"]["candleFetchMeta"]["H4"]["stalenessSeverity"] == "fresh"
     assert captured["signal"]["candleConsistency"]["H4"]["status"] == "CONFIRMED_ONLY_OK"
     assert captured["signal"]["dataFreshness"]["allowed"] is True
+
+
+def test_quick_execute_refreshes_stale_engine_b_signal_before_risk(monkeypatch):
+    import execution
+    import mt5_executor
+    import risk_engine
+    from flask import Flask
+
+    rt_mock = _make_rt(execution_enabled=True)
+    rt_mock.log = MagicMock()
+    rt_mock.ALL_PAIRS = [{"display": "EUR/USD", "type": "forex", "source": "mt5"}]
+    rt_mock.analyze_pair = MagicMock()
+    rt_mock.resolve_pair_from_signal = lambda *_args, **_kwargs: None
+    rt_mock.fetch_candles = lambda *_args, **_kwargs: []
+    rt_mock.calc_indicators_with_normalized = lambda *_args, **_kwargs: {}
+    rt_mock.atr_for_levels = lambda *_args, **_kwargs: 0.001
+    rt_mock.calc_levels = lambda *_args, **_kwargs: {}
+    rt_mock.compute_naked_analysis = MagicMock(
+        return_value=(
+            {
+                "passed": True,
+                "direction": "LONG",
+                "current_price": 1.205,
+                "execution_sl": 1.195,
+                "execution_tp": 1.225,
+                "score": 82.0,
+                "max_possible": 100.0,
+                "atr": 0.004,
+            },
+            {"display": "EUR/USD"},
+            None,
+        )
+    )
+    captured = {}
+
+    class _Approval:
+        approved = False
+        reason = "TEST_STOP_AFTER_ENGINE_B_REFRESH"
+
+        @staticmethod
+        def to_dict():
+            return {"approved": False, "reason": "TEST_STOP_AFTER_ENGINE_B_REFRESH"}
+
+    def _fake_risk_check(**kwargs):
+        captured["signal"] = dict(kwargs["signal"])
+        return _Approval()
+
+    monkeypatch.setattr(execution, "rt", lambda: rt_mock)
+    monkeypatch.setattr(mt5_executor, "mt5_get_account", lambda: {"balance": 10000.0, "equity": 10000.0})
+    monkeypatch.setattr(mt5_executor, "mt5_get_positions", lambda: {"positions": []})
+    monkeypatch.setattr(mt5_executor, "mt5_get_symbol_info", lambda _symbol: {"digits": 5, "point": 0.00001})
+    monkeypatch.setattr(risk_engine, "risk_check", _fake_risk_check)
+    monkeypatch.setattr(execution, "insert_manual_error", lambda **_kwargs: None)
+
+    app = Flask(__name__)
+    execution.register_execution_routes(app)
+    client = app.test_client()
+
+    resp = client.post(
+        "/api/quick-execute",
+        json={
+            "signal": {
+                "pair": "EUR/USD",
+                "display": "EUR/USD",
+                "type": "forex",
+                "direction": "LONG",
+                "timestamp": "2000-01-01T00:00:00+00:00",
+                "is_naked": True,
+                "price": 1.1,
+            },
+            "engine_b": {"passed": True},
+            "pip_mode": "intraday",
+        },
+    )
+
+    data = resp.get_json()
+    assert resp.status_code == 400
+    assert "ENGINE_B_REFRESH_REQUIRED" not in data["error"]
+    assert rt_mock.compute_naked_analysis.called
+    assert not rt_mock.analyze_pair.called
+    assert captured["signal"]["price"] == 1.205
+    assert captured["signal"]["sl"] == 1.195
+    assert captured["signal"]["tp1"] == 1.225
+    assert captured["signal"]["level_source"] == "engine_b_execution"
+
+
+def test_quick_execute_rejects_stale_engine_b_when_refresh_no_longer_passes(monkeypatch):
+    import execution
+    from flask import Flask
+
+    rt_mock = _make_rt(execution_enabled=True)
+    rt_mock.log = MagicMock()
+    rt_mock.compute_naked_analysis = MagicMock(
+        return_value=({"passed": False, "direction": "LONG"}, {"display": "EUR/USD"}, None)
+    )
+
+    monkeypatch.setattr(execution, "rt", lambda: rt_mock)
+
+    app = Flask(__name__)
+    execution.register_execution_routes(app)
+    client = app.test_client()
+
+    resp = client.post(
+        "/api/quick-execute",
+        json={
+            "signal": {
+                "pair": "EUR/USD",
+                "direction": "LONG",
+                "timestamp": "2000-01-01T00:00:00+00:00",
+                "is_naked": True,
+                "price": 1.1,
+            },
+            "engine_b": {"passed": True},
+        },
+    )
+
+    assert resp.status_code == 409
+    assert resp.get_json()["error"] == (
+        "ENGINE_B_NOT_CONFIRMED: refreshed Engine B confirmation failed before execution"
+    )
+
+
+def test_athena_runtime_exposes_engine_b_refresh_function():
+    src = (Path(__file__).resolve().parents[1] / "athena.py").read_text(encoding="utf-8")
+
+    assert "compute_naked_analysis=_compute_naked_analysis" in src
 
 
 def test_execution_prefetch_candle_fetch_meta_updates_signal(monkeypatch):

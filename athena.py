@@ -14083,6 +14083,7 @@ set_runtime(
         normalize_style=_normalize_style,
         naked_scan_style_profile=_naked_scan_style_profile,
         engine_b_regime_label=_engine_b_regime_label,
+        compute_naked_analysis=_compute_naked_analysis,
         insert_shadow_from_engine_c=_insert_shadow_from_engine_c,
         resolve_pair_from_signal=_resolve_pair_from_signal,
         calc_indicators_with_normalized=calc_indicators_with_normalized,

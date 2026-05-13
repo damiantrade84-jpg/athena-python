@@ -686,6 +686,90 @@ def _apply_engine_b_execution_levels(sig: dict, engine_b: dict | None = None) ->
     return True
 
 
+def _refresh_engine_b_execution_context(
+    sig: dict,
+    engine_b: dict | None,
+    runtime,
+    pip_mode: str | None,
+) -> tuple[dict | None, str | None]:
+    """Re-run Engine B before execution when a B signal aged during a scan.
+
+    Engine B signals cannot be refreshed with Engine A's generic scorer because
+    the stop/target and pass flag come from the structural checklist.
+    """
+    refresh_fn = getattr(runtime, "compute_naked_analysis", None)
+    if not callable(refresh_fn):
+        return None, "ENGINE_B_REFRESH_REQUIRED: Engine B refresh function unavailable"
+
+    seed = dict(sig or {})
+    if pip_mode:
+        seed["style"] = pip_mode
+
+    try:
+        refreshed, _pair_obj, err = refresh_fn(seed, force_ai=False)
+    except Exception as exc:
+        return None, f"ENGINE_B_REFRESH_FAILED: {exc}"
+
+    if err or not isinstance(refreshed, dict) or not refreshed:
+        return None, f"ENGINE_B_REFRESH_FAILED: {err or 'no refreshed Engine B context'}"
+
+    original_direction = str(sig.get("direction") or "").upper()
+    refreshed_direction = str(refreshed.get("direction") or original_direction).upper()
+    if original_direction and refreshed_direction and refreshed_direction != original_direction:
+        return (
+            None,
+            f"ENGINE_B_SIGNAL_FLIPPED: {sig.get('pair')} is now {refreshed_direction} (was {original_direction})",
+        )
+
+    if not bool(refreshed.get("passed")):
+        return None, "ENGINE_B_NOT_CONFIRMED: refreshed Engine B confirmation failed before execution"
+
+    try:
+        current_price = float(refreshed.get("current_price") or refreshed.get("price") or 0.0)
+    except (TypeError, ValueError):
+        current_price = 0.0
+    if current_price <= 0:
+        return None, "ENGINE_B_REFRESH_FAILED: refreshed Engine B context has no executable price"
+
+    sl = (
+        refreshed.get("execution_sl")
+        or refreshed.get("final_stop_loss")
+        or refreshed.get("recommended_stop_loss")
+    )
+    tp = (
+        refreshed.get("execution_tp")
+        or refreshed.get("final_take_profit")
+        or refreshed.get("recommended_take_profit")
+    )
+    try:
+        sl = float(sl)
+        tp = float(tp)
+    except (TypeError, ValueError):
+        return None, "ENGINE_B_REFRESH_FAILED: refreshed Engine B context has no executable levels"
+    if sl <= 0 or tp <= 0:
+        return None, "ENGINE_B_REFRESH_FAILED: refreshed Engine B context has invalid executable levels"
+
+    refreshed.setdefault("execution_sl", sl)
+    refreshed.setdefault("execution_tp", tp)
+    refreshed.setdefault("current_price", current_price)
+    now_iso = datetime.now(timezone.utc).isoformat()
+
+    sig["is_naked"] = True
+    sig["naked_data"] = refreshed
+    sig["engine_b"] = refreshed
+    sig["price"] = current_price
+    sig["entry"] = current_price
+    sig["timestamp"] = now_iso
+    sig["direction"] = refreshed_direction or original_direction
+    sig["atr"] = refreshed.get("atr", sig.get("atr", 0))
+    sig["confluenceScore"] = refreshed.get("score", sig.get("confluenceScore"))
+    sig["maxScore"] = refreshed.get("max_possible", sig.get("maxScore"))
+    sig["sl"] = sl
+    sig["tp1"] = tp
+    sig["tp2"] = tp
+    return refreshed, None
+
+
 def api_quick_execute():
     _r = rt()
     # ── Execution safety guards (must match api_execute) ─────────────────
@@ -734,12 +818,14 @@ def api_quick_execute():
         _missing_price = True
 
     if (_sig_age > _max_age / 2 or _missing_price) and _has_engine_b_context:
-        return jsonify(
-            {
-                "error": "ENGINE_B_REFRESH_REQUIRED: stale or incomplete Engine B signal must be refreshed by Engine B before execution",
-                "pair": sig.get("pair"),
-            }
-        ), 409
+        refreshed_engine_b, refresh_err = _refresh_engine_b_execution_context(
+            sig, engine_b, _r, pip_mode
+        )
+        if refresh_err:
+            return jsonify({"error": refresh_err, "pair": sig.get("pair")}), 409
+        engine_b = refreshed_engine_b or engine_b
+        _sig_age = 0
+        _missing_price = False
     if _has_engine_b_context and not _engine_b_context_confirmed(sig, engine_b):
         return jsonify(
             {
@@ -1565,16 +1651,18 @@ def api_execute():
     _has_engine_b_context = _signal_has_engine_b_context(sig, d.get("engine_b") or {})
 
     if _sig_age > _max_age / 2:
+        _pair_obj = None
         if _has_engine_b_context:
-            return jsonify(
-                {
-                    "error": "ENGINE_B_REFRESH_REQUIRED: stale Engine B signal must be refreshed by Engine B before execution",
-                    "pair": pair,
-                }
-            ), 409
-        _pair_obj = next((p for p in _r.ALL_PAIRS if p["display"] == pair), None)
+            refreshed_engine_b, refresh_err = _refresh_engine_b_execution_context(
+                sig, d.get("engine_b") or {}, _r, normalize_pip_mode(sig.get("style"))
+            )
+            if refresh_err:
+                return jsonify({"error": refresh_err, "pair": pair}), 409
+            d["engine_b"] = refreshed_engine_b or d.get("engine_b") or {}
+        else:
+            _pair_obj = next((p for p in _r.ALL_PAIRS if p["display"] == pair), None)
 
-        if _pair_obj:
+        if (not _has_engine_b_context) and _pair_obj:
             try:
                 _btc_bias = "neutral"
 
@@ -1629,7 +1717,7 @@ def api_execute():
                     }
                 ), 409
 
-        else:
+        elif not _has_engine_b_context:
             _r.log.warning(
                 f"[EXEC] {pair}: pair not found in universe — rejecting stale signal"
             )

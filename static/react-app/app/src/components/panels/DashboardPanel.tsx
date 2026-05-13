@@ -49,7 +49,7 @@ function asArray<T>(value: unknown): T[] {
 }
 
 export default function DashboardPanel() {
-  const { isAutoTrade, toggleAutoTrade, showToast } = useStore();
+  const { showToast } = useStore();
 
   const { data: health, loading: healthLoading, error: healthError, refresh: refreshHealth }
     = useApiPoll<HealthStatus>('/api/health', 15000);
@@ -65,12 +65,25 @@ export default function DashboardPanel() {
     = useApiPoll<LastScanResponse>('/api/last-scan?limit=6', 60000);
   const { data: performance, error: perfError }
     = useApiPoll<PerformanceMetrics>('/api/performance', 60000);
-  const { data: autoTrade } = useApiPoll<{ enabled: boolean }>('/api/auto-trade', 15000);
+  const { data: autoTrade, refresh: refreshAutoTrade } = useApiPoll<{ enabled: boolean }>('/api/auto-trade', 15000);
   const { post: postQuickExecute, loading: executingSignal } = useApiPost<{ success?: boolean; ticket?: string; error?: string; approval?: { approved: boolean; reason: string } }>();
+  const { post: postAutoTrade, loading: togglingAutoTrade } = useApiPost<{ enabled: boolean; error?: string }>();
   const { priceFor } = useLivePrices(10000);
 
   const openTrades = asArray<OpenTrade>(openTradesRaw);
   const recentSignals = (lastScan?.signals || []).slice(0, 6);
+  const serverAutoTradeEnabled = Boolean(autoTrade?.enabled);
+
+  const handleAutoTradeToggle = useCallback(async () => {
+    const action = serverAutoTradeEnabled ? 'off' : 'on';
+    const result = await postAutoTrade('/api/auto-trade', { action });
+    if (!result) {
+      showToast('Auto-trade toggle failed: server did not confirm state', 'error');
+      return;
+    }
+    await refreshAutoTrade();
+    showToast(result.enabled ? 'Auto-trade enabled on server' : 'Auto-trade disabled on server', 'info');
+  }, [postAutoTrade, refreshAutoTrade, serverAutoTradeEnabled, showToast]);
 
   const equityData = useMemo(() => {
     const ec = performance?.equity_curve;
@@ -304,12 +317,13 @@ export default function DashboardPanel() {
             <CardContent className="space-y-2">
               <Button
                 className="w-full gap-2"
-                variant={isAutoTrade ? 'default' : 'outline'}
+                variant={serverAutoTradeEnabled ? 'default' : 'outline'}
                 size="sm"
-                onClick={toggleAutoTrade}
+                onClick={handleAutoTradeToggle}
+                disabled={togglingAutoTrade}
               >
-                {isAutoTrade ? <Square className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5" />}
-                {isAutoTrade ? 'Stop Auto-Trade' : 'Start Auto-Trade'}
+                {serverAutoTradeEnabled ? <Square className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5" />}
+                {serverAutoTradeEnabled ? 'Stop Auto-Trade' : 'Start Auto-Trade'}
               </Button>
               {autoTrade && (
                 <div className="flex items-center justify-between text-[10px] text-muted-foreground px-1">

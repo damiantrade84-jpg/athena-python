@@ -93,7 +93,7 @@ interface BacktestResult {
       assumptions?: string[];
       psrNote?: string;
     };
-    pbo?: { available?: boolean; note?: string; method?: string };
+    pbo?: { available?: boolean; value?: number | null; note?: string; method?: string };
     bootstrapCI?: { available?: boolean; assumptions?: string[] };
     assumptions?: string[];
     runtimeHeavy?: string[];
