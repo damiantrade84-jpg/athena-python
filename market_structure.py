@@ -2400,13 +2400,12 @@ class NakedEngine:
             "weighted_score": round(score_ratio, 4),
         }
 
-    def analyze_structure(
+    def precompute_structure_data(
         self,
         d1_candles: list,
         h4_candles: list,
         h1_candles: list,
         current_price: float,
-        direction: str,
         atr: float,
         regime: str = "RANGING",
         fallback_rr: float = 2.0,
@@ -2418,27 +2417,20 @@ class NakedEngine:
         style: str = "intraday",
         pair: dict | None = None,
     ) -> dict:
-        """
-        Analyzes raw candle data to find Support/Resistance zones and trend sequence.
-        Returns structural verdict used by the Comparator in athena.py.
+        """Precompute all direction-independent structure analysis data.
 
-        Optional ``d1_snap`` / ``h4_snap``: indicator snaps (e.g. from ``calc_indicators_with_normalized``).
-        ``h4_snap`` should match the **second** candle series (zone TF, often H4). When provided,
-        ``d1_adx`` / ``h4_adx`` on the result prefer ``snap["adx"]`` over recalculating from OHLC.
+        Returns a precompute context dict that can be passed to
+        ``analyze_structure_direction()``. Call this once per bar, then
+        iterate over directions with the lightweight direction-dependent step.
+
+        Backward-compatible: the original ``analyze_structure()`` calls this
+        internally.
         """
         if not d1_candles or not h4_candles or not h1_candles or atr <= 0:
-            return {
-                "structural_verdict": "ERROR",
-                "reason": "Missing data or valid ATR",
-                "asset_type": asset_type,
-                "d1_adx": None,
-                "h4_adx": None,
-            }
+            return {"_error": "Missing data or valid ATR"}
 
         registry_symbol = self._consume_registry_symbol() if enable_zone_registry else None
 
-        # Asset+style aware TF selection (replaces ENGINE_B_FOREX_STRUCTURE_TF flag).
-        # Callers pre-resolve candle args by role; here we route them into struct/trigger.
         _tfs = resolve_engine_b_tfs(asset_type, style)
         structure_tf = _tfs["struct"]
         if structure_tf == "D1":
@@ -2447,18 +2439,10 @@ class NakedEngine:
             struct_candles = h4_candles
         else:
             struct_candles = h1_candles
-        struct_candles = _engine_b_confirmed_only_struct_candles(
-            struct_candles,
-            structure_tf,
-            pair=pair,
-        )
+        struct_candles = _engine_b_confirmed_only_struct_candles(struct_candles, structure_tf, pair=pair)
         trigger_candles = h4_candles if _tfs["trigger"] == "H4" else h1_candles
-
-        # Zone/FVG candles: use confirmed-only when structure TF is H4 so
-        # zone and FVG detection matches the BOS/CHoCH forming-bar policy.
         _zone_fvg_candles = struct_candles if structure_tf == "H4" else h4_candles
 
-        # Extract numpy arrays for scipy
         h4_highs = np.array([float(c["high"]) for c in h4_candles])
         h4_lows = np.array([float(c["low"]) for c in h4_candles])
 
@@ -2472,9 +2456,7 @@ class NakedEngine:
             or (pair or {}).get("group")
             or (pair or {}).get("asset_group")
         )
-        asset_struct_diag = _asset_class_structure_adjustment(
-            asset_type, _score_group, struct_candles, struct_atr
-        )
+        asset_struct_diag = _asset_class_structure_adjustment(asset_type, _score_group, struct_candles, struct_atr)
         crypto_struct_diag = _crypto_structure_adjustment(asset_type, struct_candles, struct_atr)
         structure_prominence_mult = max(
             float(crypto_struct_diag.get("swing_prominence_mult", 1.0) or 1.0),
@@ -2484,46 +2466,24 @@ class NakedEngine:
             float(crypto_struct_diag.get("bos_min_break_atr", 0.0) or 0.0),
             float(asset_struct_diag.get("bos_min_break_atr", 0.0) or 0.0),
         )
-        struct_swings = self._swing_cache(
-            struct_highs,
-            struct_lows,
-            struct_atr,
-            prominence_mult=structure_prominence_mult,
-        )
+        struct_swings = self._swing_cache(struct_highs, struct_lows, struct_atr, prominence_mult=structure_prominence_mult)
 
-        # 1. Macro Zones (D1/H4)
-        # Using H4 to find thick zones gives standard resolution.
         _zf_highs = np.array([float(c["high"]) for c in _zone_fvg_candles])
         _zf_lows = np.array([float(c["low"]) for c in _zone_fvg_candles])
-        res_zones, sup_zones = self._find_zones(
-            _zf_highs, _zf_lows, zone_atr, regime, _zone_fvg_candles
-        )
+        res_zones, sup_zones = self._find_zones(_zf_highs, _zf_lows, zone_atr, regime, _zone_fvg_candles)
 
-        # Determine FVG overlap with zones — graded by quality
         fvgs = self._detect_fvg(_zone_fvg_candles)
         active_fvgs = [f for f in fvgs if not f.get("mitigated", False)]
 
-        # 2. Immediate Structure Sequence and Macro H4 Sequence
         h4_swings = self._swing_cache(h4_highs, h4_lows, zone_atr)
-        sequence_data = self._determine_sequence(struct_highs, struct_lows, struct_atr, direction, swings=struct_swings)
-        macro_seq_data = self._determine_sequence(h4_highs, h4_lows, zone_atr, direction, swings=h4_swings)
+        sequence_data = self._determine_sequence(struct_highs, struct_lows, struct_atr, "LONG", swings=struct_swings)
+        macro_seq_data = self._determine_sequence(h4_highs, h4_lows, zone_atr, "LONG", swings=h4_swings)
 
-        # 3. BOS and Sweep Detection
-        # BOS volume confirmation only applies to feeds with real contract volume
-        # (Binance crypto). MT5 reports tick_volume for forex/commodity/index/stock
-        # which doesn't correlate with conviction at the 1.3x threshold and produces
-        # false rejections. Override via ENGINE_B_BOS_VOLUME_FOR_TICKVOL=true if a
-        # future calibration justifies tick-volume gating per asset class.
         struct_volumes = None
-        _allow_tick_vol_gate = bool(
-            config.CONFIG.get("ENGINE_B_BOS_VOLUME_FOR_TICKVOL", False)
-        )
+        _allow_tick_vol_gate = bool(config.CONFIG.get("ENGINE_B_BOS_VOLUME_FOR_TICKVOL", False))
         _crypto_src = str((pair or {}).get("source") or "").lower()
         if (asset_type or "").lower() == "crypto":
-            if _crypto_src == "mt5":
-                _vol_gate_eligible = bool(_allow_tick_vol_gate)
-            else:
-                _vol_gate_eligible = True
+            _vol_gate_eligible = not (_crypto_src == "mt5") or bool(_allow_tick_vol_gate)
         else:
             _vol_gate_eligible = bool(_allow_tick_vol_gate)
         if _vol_gate_eligible:
@@ -2531,13 +2491,8 @@ class NakedEngine:
             if _has_vol:
                 struct_volumes = np.array([float(c.get("vol", 0)) for c in struct_candles])
 
-        bos_data = self._detect_bos(
-            struct_highs, struct_lows, struct_atr,
-            volumes=struct_volumes, closes=struct_closes, swings=struct_swings,
-            min_break_atr=structure_min_break_atr,
-        )
+        bos_data = self._detect_bos(struct_highs, struct_lows, struct_atr, volumes=struct_volumes, closes=struct_closes, swings=struct_swings, min_break_atr=structure_min_break_atr)
 
-        # Compute swing highs/lows for sweep detection (structural reference levels)
         _sweep_swing_high = None
         _sweep_swing_low = None
         try:
@@ -2549,125 +2504,29 @@ class NakedEngine:
                 _sweep_swing_low = float(struct_lows[_tr_idx[-1]])
         except Exception:
             pass
-        sweep_data = self._detect_sweep(
-            struct_highs, struct_lows, struct_closes, struct_atr,
-            swing_high=_sweep_swing_high, swing_low=_sweep_swing_low,
-        )
+        sweep_data = self._detect_sweep(struct_highs, struct_lows, struct_closes, struct_atr, swing_high=_sweep_swing_high, swing_low=_sweep_swing_low)
 
-        # 3e. Multi-TF BOS Chaining — H4/struct BOS confirmed by D1 BOS = high conviction
         d1_highs = np.array([float(c["high"]) for c in d1_candles])
         d1_lows = np.array([float(c["low"]) for c in d1_candles])
         d1_closes = np.array([float(c["close"]) for c in d1_candles])
         d1_atr = self._compute_atr_from_candles(d1_candles, fallback=atr)
         d1_crypto_diag = _crypto_structure_adjustment(asset_type, d1_candles, d1_atr)
-        d1_asset_diag = _asset_class_structure_adjustment(
-            asset_type, _score_group, d1_candles, d1_atr
-        )
-        d1_prominence_mult = max(
-            float(d1_crypto_diag.get("swing_prominence_mult", 1.0) or 1.0),
-            float(d1_asset_diag.get("swing_prominence_mult", 1.0) or 1.0),
-        )
-        d1_min_break_atr = max(
-            float(d1_crypto_diag.get("bos_min_break_atr", 0.0) or 0.0),
-            float(d1_asset_diag.get("bos_min_break_atr", 0.0) or 0.0),
-        )
-        d1_swings = self._swing_cache(
-            d1_highs,
-            d1_lows,
-            d1_atr,
-            prominence_mult=d1_prominence_mult,
-        )
-        d1_bos = self._detect_bos(
-            d1_highs,
-            d1_lows,
-            d1_atr,
-            closes=d1_closes,
-            swings=d1_swings,
-            min_break_atr=d1_min_break_atr,
-        )
+        d1_asset_diag = _asset_class_structure_adjustment(asset_type, _score_group, d1_candles, d1_atr)
+        d1_prominence_mult = max(float(d1_crypto_diag.get("swing_prominence_mult", 1.0) or 1.0), float(d1_asset_diag.get("swing_prominence_mult", 1.0) or 1.0))
+        d1_min_break_atr = max(float(d1_crypto_diag.get("bos_min_break_atr", 0.0) or 0.0), float(d1_asset_diag.get("bos_min_break_atr", 0.0) or 0.0))
+        d1_swings = self._swing_cache(d1_highs, d1_lows, d1_atr, prominence_mult=d1_prominence_mult)
+        d1_bos = self._detect_bos(d1_highs, d1_lows, d1_atr, closes=d1_closes, swings=d1_swings, min_break_atr=d1_min_break_atr)
 
-        # D1 PD-array detection (informational — no scoring gate change).
-        # Detects D1 order blocks and FVGs that price is approaching and flags a
-        # directional conflict when a D1 zone opposes the requested trade direction.
-        # Consumers (Engine C, Marcus Reid) can use d1_pd_array_conflict as a soft
-        # veto or reduce conviction — not enforced here.
         d1_order_blocks_raw: list = []
         d1_fvgs_raw: list = []
-        d1_pd_array_conflict: bool = False
-        d1_conflict_details: list = []
-        d1_conflict_metric_details: list = []
         try:
             d1_order_blocks_raw = self._detect_order_blocks(d1_candles, d1_bos, d1_atr, structure_tf="D1")
             d1_fvgs_raw = [f for f in self._detect_fvg(d1_candles) if not f.get("mitigated")]
-            _conflict_window = d1_atr * _engine_b_d1_conflict_window_atr_mult()
-            for ob in d1_order_blocks_raw:
-                ob_mid = (ob["top"] + ob["bottom"]) / 2.0
-                ob_dist = abs(current_price - ob_mid)
-                if ob_dist > _conflict_window:
-                    continue
-                # Opposing D1 OB: bearish OB above price on a LONG; bullish OB below on SHORT
-                if direction == "LONG" and ob["type"] == "bearish" and ob_mid > current_price:
-                    d1_pd_array_conflict = True
-                    d1_conflict_details.append(f"D1_bearish_OB@{ob_mid:.5f} (str={ob['strength']})")
-                    d1_conflict_metric_details.append({
-                        "zone_type": "bearish_OB",
-                        "zone_price_range": {"top": ob["top"], "bottom": ob["bottom"]},
-                        "zone_mid": ob_mid,
-                        "distance_to_conflict": ob_dist,
-                        "distance_in_atr": (ob_dist / d1_atr) if d1_atr > 0 else None,
-                        "conflict_side": "above_price",
-                        "entry_side_or_tp_side": "tp_side",
-                        "strength": ob.get("strength"),
-                    })
-                elif direction == "SHORT" and ob["type"] == "bullish" and ob_mid < current_price:
-                    d1_pd_array_conflict = True
-                    d1_conflict_details.append(f"D1_bullish_OB@{ob_mid:.5f} (str={ob['strength']})")
-                    d1_conflict_metric_details.append({
-                        "zone_type": "bullish_OB",
-                        "zone_price_range": {"top": ob["top"], "bottom": ob["bottom"]},
-                        "zone_mid": ob_mid,
-                        "distance_to_conflict": ob_dist,
-                        "distance_in_atr": (ob_dist / d1_atr) if d1_atr > 0 else None,
-                        "conflict_side": "below_price",
-                        "entry_side_or_tp_side": "tp_side",
-                        "strength": ob.get("strength"),
-                    })
-            for fvg in d1_fvgs_raw:
-                fvg_mid = (fvg["top"] + fvg["bottom"]) / 2.0
-                fvg_dist = abs(current_price - fvg_mid)
-                if fvg_dist > _conflict_window:
-                    continue
-                if direction == "LONG" and fvg["type"] == "bearish" and fvg_mid > current_price:
-                    d1_pd_array_conflict = True
-                    d1_conflict_details.append(f"D1_bearish_FVG@{fvg_mid:.5f}")
-                    d1_conflict_metric_details.append({
-                        "zone_type": "bearish_FVG",
-                        "zone_price_range": {"top": fvg["top"], "bottom": fvg["bottom"]},
-                        "zone_mid": fvg_mid,
-                        "distance_to_conflict": fvg_dist,
-                        "distance_in_atr": (fvg_dist / d1_atr) if d1_atr > 0 else None,
-                        "conflict_side": "above_price",
-                        "entry_side_or_tp_side": "tp_side",
-                    })
-                elif direction == "SHORT" and fvg["type"] == "bullish" and fvg_mid < current_price:
-                    d1_pd_array_conflict = True
-                    d1_conflict_details.append(f"D1_bullish_FVG@{fvg_mid:.5f}")
-                    d1_conflict_metric_details.append({
-                        "zone_type": "bullish_FVG",
-                        "zone_price_range": {"top": fvg["top"], "bottom": fvg["bottom"]},
-                        "zone_mid": fvg_mid,
-                        "distance_to_conflict": fvg_dist,
-                        "distance_in_atr": (fvg_dist / d1_atr) if d1_atr > 0 else None,
-                        "conflict_side": "below_price",
-                        "entry_side_or_tp_side": "tp_side",
-                    })
-        except Exception as _d1e:
-            log.debug(f"[D1-PD] detection error: {_d1e}")
+        except Exception:
+            pass
+        d1_conflict_window = d1_atr * _engine_b_d1_conflict_window_atr_mult()
 
-        bos_mtf_confirmed = (
-            (bos_data.get("bos_bull") and d1_bos.get("bos_bull")) or
-            (bos_data.get("bos_bear") and d1_bos.get("bos_bear"))
-        )
+        bos_mtf_confirmed = bool((bos_data.get("bos_bull") and d1_bos.get("bos_bull")) or (bos_data.get("bos_bear") and d1_bos.get("bos_bear")))
 
         order_blocks = self._detect_order_blocks(struct_candles, bos_data, atr, structure_tf=structure_tf)
         if registry_symbol:
@@ -2677,21 +2536,13 @@ class NakedEngine:
             zone_registry.mark_mitigated(registry_symbol, structure_tf, current_price, atr)
             zone_registry.mark_mitigated(registry_symbol, "H4", current_price, atr)
             zone_registry.prune_old_zones()
-
             if zone_registry.has_zones(registry_symbol, structure_tf):
-                order_blocks = self._registry_order_blocks(
-                    zone_registry.get_active_zones(registry_symbol, structure_tf)
-                )
+                order_blocks = self._registry_order_blocks(zone_registry.get_active_zones(registry_symbol, structure_tf))
             if zone_registry.has_zones(registry_symbol, "H4"):
-                active_fvgs = self._registry_fvgs(
-                    zone_registry.get_active_zones(registry_symbol, "H4")
-                )
+                active_fvgs = self._registry_fvgs(zone_registry.get_active_zones(registry_symbol, "H4"))
 
         for zone in res_zones + sup_zones:
-            overlapping_fvgs = [
-                fvg for fvg in active_fvgs
-                if not (zone["upper"] < fvg["bottom"] or zone["lower"] > fvg["top"])
-            ]
+            overlapping_fvgs = [fvg for fvg in active_fvgs if not (zone["upper"] < fvg["bottom"] or zone["lower"] > fvg["top"])]
             zone["fvg_overlap"] = len(overlapping_fvgs) > 0
             if overlapping_fvgs and zone_atr > 0:
                 largest_fvg = max(overlapping_fvgs, key=lambda f: abs(f["top"] - f["bottom"]))
@@ -2699,80 +2550,22 @@ class NakedEngine:
             else:
                 zone["fvg_size_atr"] = 0.0
 
-        # 3b. CHoCH Detection (structural reversal)
-        choch_data = self._detect_choch(
-            struct_highs,
-            struct_lows,
-            struct_atr,
-            closes=struct_closes,
-            swings=struct_swings,
-            bos_data=bos_data,
-            min_break_atr=structure_min_break_atr,
-        )
+        choch_data = self._detect_choch(struct_highs, struct_lows, struct_atr, closes=struct_closes, swings=struct_swings, bos_data=bos_data, min_break_atr=structure_min_break_atr)
         if str(asset_type or "").lower() == "crypto":
-            crypto_struct_diag["structure_quality_score"] = _crypto_structure_quality_score(
-                bos_data,
-                choch_data,
-                sweep_data,
-                macro_seq_data["state"],
-                direction,
-                crypto_struct_diag.get("wick_dominance"),
-            )
-            crypto_struct_diag["d1"] = {
-                "volatility_regime": d1_crypto_diag.get("volatility_regime"),
-                "applied": d1_crypto_diag.get("applied"),
-                "structure_mult": d1_crypto_diag.get("structure_mult"),
-                "bos_min_break_atr": d1_crypto_diag.get("bos_min_break_atr"),
-            }
+            crypto_struct_diag["structure_quality_score"] = _crypto_structure_quality_score(bos_data, choch_data, sweep_data, macro_seq_data["state"], "LONG", crypto_struct_diag.get("wick_dominance"))
+            crypto_struct_diag["d1"] = {"volatility_regime": d1_crypto_diag.get("volatility_regime"), "applied": d1_crypto_diag.get("applied"), "structure_mult": d1_crypto_diag.get("structure_mult"), "bos_min_break_atr": d1_crypto_diag.get("bos_min_break_atr")}
         if asset_struct_diag.get("asset_class") in {"stock", "index", "commodity", "etf", "etf_bond"}:
-            asset_struct_diag["d1_structure"] = {
-                "volatility_regime": d1_asset_diag.get("volatility_regime"),
-                "applied": d1_asset_diag.get("applied"),
-                "structure_mult": d1_asset_diag.get("structure_mult"),
-                "bos_min_break_atr": d1_asset_diag.get("bos_min_break_atr"),
-            }
+            asset_struct_diag["d1_structure"] = {"volatility_regime": d1_asset_diag.get("volatility_regime"), "applied": d1_asset_diag.get("applied"), "structure_mult": d1_asset_diag.get("structure_mult"), "bos_min_break_atr": d1_asset_diag.get("bos_min_break_atr")}
 
-        # 3d. Breaker Blocks — after CHoCH, the broken swing level becomes new S/R
-        # A bullish CHoCH breaks above a Lower High → that LH level becomes support (breaker)
-        # A bearish CHoCH breaks below a Higher Low → that HL level becomes resistance (breaker)
-        _breaker_atr_mult = float(
-            config.CONFIG.get("NAKED_ENGINE", {}).get("breaker_width_atr_mult", 0.3)
-        )
+        _breaker_atr_mult = float(config.CONFIG.get("NAKED_ENGINE", {}).get("breaker_width_atr_mult", 0.3))
         breaker_blocks = []
         if choch_data.get("choch_bull") and choch_data.get("choch_level") is not None:
-            breaker_block = {
-                "type": "bullish_breaker",
-                "level": choch_data["choch_level"],
-                "upper": choch_data["choch_level"] + (struct_atr * _breaker_atr_mult),
-                "lower": choch_data["choch_level"] - (struct_atr * _breaker_atr_mult),
-            }
-            sup_zones.append({
-                "upper": breaker_block["upper"],
-                "lower": breaker_block["lower"],
-                "center": breaker_block["level"],
-                "volume_strength": 0.8,
-                "fvg_overlap": False,
-                "fvg_size_atr": 0.0,
-                "is_breaker": True,
-            })
+            breaker_block = {"type": "bullish_breaker", "level": choch_data["choch_level"], "upper": choch_data["choch_level"] + (struct_atr * _breaker_atr_mult), "lower": choch_data["choch_level"] - (struct_atr * _breaker_atr_mult)}
+            sup_zones.append({"upper": breaker_block["upper"], "lower": breaker_block["lower"], "center": breaker_block["level"], "volume_strength": 0.8, "fvg_overlap": False, "fvg_size_atr": 0.0, "is_breaker": True})
             breaker_blocks.append(breaker_block)
         elif choch_data.get("choch_bear") and choch_data.get("choch_level") is not None:
-            breaker_block = {
-                "type": "bearish_breaker",
-                "level": choch_data["choch_level"],
-                "upper": choch_data["choch_level"] + (struct_atr * _breaker_atr_mult),
-                "lower": choch_data["choch_level"] - (struct_atr * _breaker_atr_mult),
-            }
-            # Add as a resistance zone
-            res_zones.append({
-                "upper": breaker_block["upper"],
-                "lower": breaker_block["lower"],
-                "center": breaker_block["level"],
-                "volume_strength": 0.8,
-                "fvg_overlap": False,
-                "fvg_size_atr": 0.0,
-                "is_breaker": True,
-            })
+            breaker_block = {"type": "bearish_breaker", "level": choch_data["choch_level"], "upper": choch_data["choch_level"] + (struct_atr * _breaker_atr_mult), "lower": choch_data["choch_level"] - (struct_atr * _breaker_atr_mult)}
+            res_zones.append({"upper": breaker_block["upper"], "lower": breaker_block["lower"], "center": breaker_block["level"], "volume_strength": 0.8, "fvg_overlap": False, "fvg_size_atr": 0.0, "is_breaker": True})
             breaker_blocks.append(breaker_block)
         for event in choch_data.get("choch_events") or []:
             level = event.get("level")
@@ -2780,42 +2573,15 @@ class NakedEngine:
                 continue
             level = float(level)
             if event.get("type") == "bullish":
-                breaker = {
-                    "type": "bullish_breaker",
-                    "level": level,
-                    "upper": level + (struct_atr * _breaker_atr_mult),
-                    "lower": level - (struct_atr * _breaker_atr_mult),
-                }
-                sup_zones.append({
-                    "upper": breaker["upper"],
-                    "lower": breaker["lower"],
-                    "center": breaker["level"],
-                    "volume_strength": 0.8,
-                    "fvg_overlap": False,
-                    "fvg_size_atr": 0.0,
-                    "is_breaker": True,
-                })
+                breaker = {"type": "bullish_breaker", "level": level, "upper": level + (struct_atr * _breaker_atr_mult), "lower": level - (struct_atr * _breaker_atr_mult)}
+                sup_zones.append({"upper": breaker["upper"], "lower": breaker["lower"], "center": breaker["level"], "volume_strength": 0.8, "fvg_overlap": False, "fvg_size_atr": 0.0, "is_breaker": True})
                 breaker_blocks.append(breaker)
             elif event.get("type") == "bearish":
-                breaker = {
-                    "type": "bearish_breaker",
-                    "level": level,
-                    "upper": level + (struct_atr * _breaker_atr_mult),
-                    "lower": level - (struct_atr * _breaker_atr_mult),
-                }
-                res_zones.append({
-                    "upper": breaker["upper"],
-                    "lower": breaker["lower"],
-                    "center": breaker["level"],
-                    "volume_strength": 0.8,
-                    "fvg_overlap": False,
-                    "fvg_size_atr": 0.0,
-                    "is_breaker": True,
-                })
+                breaker = {"type": "bearish_breaker", "level": level, "upper": level + (struct_atr * _breaker_atr_mult), "lower": level - (struct_atr * _breaker_atr_mult)}
+                res_zones.append({"upper": breaker["upper"], "lower": breaker["lower"], "center": breaker["level"], "volume_strength": 0.8, "fvg_overlap": False, "fvg_size_atr": 0.0, "is_breaker": True})
                 breaker_blocks.append(breaker)
         breaker_block = breaker_blocks[-1] if breaker_blocks else None
 
-        # ── Zone Merging: cluster zones within 0.5 ATR into single high-confluence pools ──
         def _merge_zones(zones, merge_dist):
             if not zones:
                 return zones
@@ -2825,19 +2591,13 @@ class NakedEngine:
             for z in sorted_z[1:]:
                 prev = merged[-1]
                 if abs(z["center"] - anchors[-1]) <= merge_dist:
-                    # Merge: widen boundaries, keep strongest volume
                     prev["upper"] = max(prev["upper"], z["upper"])
                     prev["lower"] = min(prev["lower"], z["lower"])
                     prev["center"] = (prev["upper"] + prev["lower"]) / 2
-                    prev["volume_strength"] = max(
-                        prev.get("volume_strength", 0), z.get("volume_strength", 0)
-                    )
-                    # Merge FVG overlap — any overlap = True
+                    prev["volume_strength"] = max(prev.get("volume_strength", 0), z.get("volume_strength", 0))
                     if z.get("fvg_overlap"):
                         prev["fvg_overlap"] = True
-                        prev["fvg_size_atr"] = max(
-                            prev.get("fvg_size_atr", 0), z.get("fvg_size_atr", 0)
-                        )
+                        prev["fvg_size_atr"] = max(prev.get("fvg_size_atr", 0), z.get("fvg_size_atr", 0))
                 else:
                     merged.append(z)
                     anchors.append(float(z["center"]))
@@ -2847,306 +2607,9 @@ class NakedEngine:
         res_zones = _merge_zones(res_zones, _merge_dist)
         sup_zones = _merge_zones(sup_zones, _merge_dist)
 
-        # ── Zone Mitigation Purging: remove zones that price has pierced through ──
         current_close = float(struct_candles[-1]["close"]) if struct_candles else current_price
         res_zones = [z for z in res_zones if z["lower"] > current_close - (zone_atr * 0.1)]
         sup_zones = [z for z in sup_zones if z["upper"] < current_close + (zone_atr * 0.1)]
-
-        # 3c. Order Block Detection — last opposing candle before BOS
-        # 4. Find Nearest Zones Relative to Current Price
-        # Nearest resistance above price
-        valid_res = [z for z in res_zones if z["upper"] >= current_price]
-        nearest_res = (
-            min(
-                valid_res,
-                key=lambda x: 0.0
-                if x["lower"] <= current_price <= x["upper"]
-                else max(0.0, x["lower"] - current_price),
-            )
-            if valid_res
-            else None
-        )
-
-        # Nearest support below price
-        valid_sup = [z for z in sup_zones if z["lower"] <= current_price]
-        nearest_sup = (
-            min(
-                valid_sup,
-                key=lambda x: 0.0
-                if x["lower"] <= current_price <= x["upper"]
-                else max(0.0, current_price - x["upper"]),
-            )
-            if valid_sup
-            else None
-        )
-
-        # Enforce that SL cannot be on the wrong side of the entry price (live break of structure)
-        anchored_low = min(current_price, sequence_data["recent_low"])
-        anchored_high = max(current_price, sequence_data["recent_high"])
-
-        # Structural SL buffer below/above the anchored swing.
-        # Default: zone_multipliers[regime].sl (regime-aware, asset/style-agnostic).
-        # Optional: STYLE_ATR_MULTS[style][asset].sl when ENGINE_B_STRUCTURAL_SL_USE_STYLE_ATR_MULTS=true,
-        # which aligns this buffer with the execution-side ATR SL (single source of truth).
-        # The tighter-of-both logic in resolve_engine_b_execution_levels picks the
-        # safer SL regardless, so this flag mostly affects which side wins on
-        # marginal candidates.
-        multipliers = config.CONFIG.get("NAKED_ENGINE", {}).get("zone_multipliers", {})
-        buf = multipliers.get(
-            regime.upper(),
-            multipliers.get("RANGING", {"upper": 0.5, "lower": 1.2, "sl": 1.0}),
-        )
-        sl_mult = float(buf.get("sl", 1.0))
-        if bool(config.CONFIG.get("ENGINE_B_STRUCTURAL_SL_USE_STYLE_ATR_MULTS", False)):
-            _style_mults = (
-                (config.CONFIG.get("STYLE_ATR_MULTS") or {}).get(style.lower() or "intraday", {})
-                or {}
-            )
-            _asset_mults = _style_mults.get(asset_type.lower(), None)
-            if isinstance(_asset_mults, dict):
-                _style_sl = float(_asset_mults.get("sl", sl_mult))
-                # Regime scaler retained: mild widening in HIGH_VOL, tightening in LOW_VOL.
-                _regime_scale = {
-                    "TRENDING": 1.00, "RANGING": 0.90,
-                    "HIGH_VOLATILITY": 1.20, "LOW_VOLATILITY": 0.85,
-                }.get(regime.upper(), 1.0)
-                sl_mult = _style_sl * _regime_scale
-        structural_tp_buffer_mult = _engine_b_structural_tp_buffer_atr_mult()
-
-        # 5. Improved SL logic with sweep detection
-        sl = (
-            anchored_low - (atr * sl_mult)
-            if direction == "LONG"
-            else anchored_high + (atr * sl_mult)
-        )
-
-        # Override SL if sweep occurred
-        if (
-            direction == "LONG"
-            and sweep_data["bull_sweep"]
-            and sweep_data["sweep_low"] is not None
-        ):
-            sl = sweep_data["sweep_low"] - (atr * sl_mult)
-        elif (
-            direction == "SHORT"
-            and sweep_data["bear_sweep"]
-            and sweep_data["sweep_high"] is not None
-        ):
-            sl = sweep_data["sweep_high"] + (atr * sl_mult)
-
-        # Prefer the opposing structural zone, but fall back to RR projection when that
-        # zone would place TP inverted or untradeably close to the current entry.
-        tp = None
-        tp_source = "fallback_rr"
-        tp_structural_limited = False
-        structural_target_candidates = []
-
-        # Standard structural target selection: walk opposing zones, pick the
-        # nearest one beyond a minimum 0.5 ATR buffer; fall back to fallback_rr
-        # projection when no usable structural zone exists.
-        if direction == "LONG" and valid_res:
-            for zone in sorted(valid_res, key=lambda z: z["lower"]):
-                structural_tp = _engine_b_structural_target_price(
-                    zone, direction, atr, structural_tp_buffer_mult
-                )
-                target_distance = structural_tp - current_price
-                structural_target_candidates.append({
-                    "target_type": "resistance_zone",
-                    "target_price": structural_tp,
-                    "zone": dict(zone),
-                    "correct_side": structural_tp > current_price,
-                    "distance_to_target": target_distance,
-                    "atr_multiple_to_target": (target_distance / atr) if atr > 0 else None,
-                    "selected": False,
-                    "rejected_reason": "too_close_or_wrong_side"
-                    if structural_tp <= current_price + (atr * 0.5)
-                    else None,
-                })
-                if structural_tp <= current_price + (atr * 0.5):
-                    tp_structural_limited = True
-                    continue
-                tp = structural_tp
-                tp_source = "structural_zone"
-                structural_target_candidates[-1]["selected"] = True
-                break
-        elif direction == "SHORT" and valid_sup:
-            for zone in sorted(valid_sup, key=lambda z: z["upper"], reverse=True):
-                structural_tp = _engine_b_structural_target_price(
-                    zone, direction, atr, structural_tp_buffer_mult
-                )
-                target_distance = current_price - structural_tp
-                structural_target_candidates.append({
-                    "target_type": "support_zone",
-                    "target_price": structural_tp,
-                    "zone": dict(zone),
-                    "correct_side": structural_tp < current_price,
-                    "distance_to_target": target_distance,
-                    "atr_multiple_to_target": (target_distance / atr) if atr > 0 else None,
-                    "selected": False,
-                    "rejected_reason": "too_close_or_wrong_side"
-                    if structural_tp >= current_price - (atr * 0.5)
-                    else None,
-                })
-                if structural_tp >= current_price - (atr * 0.5):
-                    tp_structural_limited = True
-                    continue
-                tp = structural_tp
-                tp_source = "structural_zone"
-                structural_target_candidates[-1]["selected"] = True
-                break
-
-        if tp is None:
-            sl_dist = abs(current_price - sl) if (sl is not None) else (atr * sl_mult)
-            if sl_dist == 0:
-                sl_dist = atr * sl_mult
-            if direction == "LONG":
-                tp = current_price + (sl_dist * fallback_rr)
-            else:
-                tp = current_price - (sl_dist * fallback_rr)
-
-        selected_structural_target = next(
-            (c for c in structural_target_candidates if c.get("selected")), None
-        )
-
-        # 6. BOS validation
-        bos_confirmed = (direction == "LONG" and bos_data["bos_bull"]) or (
-            direction == "SHORT" and bos_data["bos_bear"]
-        )
-
-        # CHoCH confirmation aligned with trade direction
-        choch_confirmed = (direction == "LONG" and choch_data["choch_bull"]) or (
-            direction == "SHORT" and choch_data["choch_bear"]
-        )
-
-        fvg_overlap = False
-        if direction == "LONG" and nearest_sup:
-            fvg_overlap = nearest_sup.get("fvg_overlap", False)
-        elif direction == "SHORT" and nearest_res:
-            fvg_overlap = nearest_res.get("fvg_overlap", False)
-
-        active_zone = nearest_sup if direction == "LONG" else nearest_res
-        zone_ctx = self._zone_context(active_zone, current_price, atr, direction, trigger_candles)
-
-        # Check if an Order Block overlaps with the active zone
-        _ob_min_strength = config.CONFIG.get("NAKED_ENGINE", {}).get("ob_min_strength", 50)
-        _ob_at_zone = False
-        if active_zone and order_blocks:
-            az_lower = active_zone.get("lower", 0)
-            az_upper = active_zone.get("upper", 0)
-            for ob in order_blocks:
-                if not (ob["top"] < az_lower or ob["bottom"] > az_upper):
-                    if ob.get("strength", 0) >= _ob_min_strength:
-                        _ob_at_zone = True
-                        break
-        trigger_ctx = self._price_action_trigger(
-            trigger_candles,
-            direction,
-            atr,
-            zone_ctx["zone_touched"] or zone_ctx["near_zone"],
-            bos_confirmed,
-        )
-        latest_trigger_candle_time = None
-        if trigger_candles:
-            _last_trigger_candle = trigger_candles[-1]
-            latest_trigger_candle_time = (
-                _last_trigger_candle.get("time")
-                or _last_trigger_candle.get("timestamp")
-                or _last_trigger_candle.get("datetime")
-                or _last_trigger_candle.get("date")
-            )
-
-        # Previous-session fixed-range profile from the latest completed UTC session.
-        _profile_result = {
-            "prev_session_profile_valid": False,
-            "prev_session_profile_source_tf": None,
-            "prev_session_poc": None,
-            "prev_session_vah": None,
-            "prev_session_val": None,
-            "prev_session_profile_high": None,
-            "prev_session_profile_low": None,
-            "prev_session_total_volume": None,
-            "prev_session_start": None,
-            "prev_session_end": None,
-            "profile_in_play": False,
-            "profile_level_in_play": None,
-            "inside_prev_value_area": False,
-            "above_prev_value_area": False,
-            "below_prev_value_area": False,
-            "touched_poc": False,
-            "touched_vah": False,
-            "touched_val": False,
-            "rejected_from_poc": False,
-            "rejected_from_vah": False,
-            "rejected_from_val": False,
-            "accepted_at_poc": False,
-            "accepted_inside_value": False,
-            "returned_to_value": False,
-            "failed_return_to_value": False,
-            "profile_bias": "neutral",
-            "profile_reaction_strength": 0.0,
-            "profile_notes": "",
-        }
-        if enable_profile_context:
-            try:
-                from volume_profile import (
-                    classify_profile_interaction,
-                    compute_fixed_range_volume_profile,
-                    split_completed_sessions,
-                )
-
-                _profile_candles = h1_candles if len(h1_candles or []) >= 24 else h4_candles
-                _profile_source_tf = "H1" if len(h1_candles or []) >= 24 else "H4"
-                _sessions = split_completed_sessions(_profile_candles or [], asset_type)
-                _prev_session = _sessions.get("prev_session_candles", [])
-                if _prev_session:
-                    _profile = compute_fixed_range_volume_profile(_prev_session)
-                    if _profile.get("profile_valid"):
-                        _interaction = classify_profile_interaction(
-                            current_price=current_price,
-                            recent_candles=(trigger_candles or struct_candles or [])[-10:],
-                            direction=direction,
-                            poc=_profile["poc"],
-                            vah=_profile["vah"],
-                            val=_profile["val"],
-                            atr=atr,
-                        )
-                        _profile_result.update({
-                            "prev_session_profile_valid": True,
-                            "prev_session_profile_source_tf": _profile_source_tf,
-                            "prev_session_poc": _profile["poc"],
-                            "prev_session_vah": _profile["vah"],
-                            "prev_session_val": _profile["val"],
-                            "prev_session_profile_high": _profile["session_high"],
-                            "prev_session_profile_low": _profile["session_low"],
-                            "prev_session_total_volume": _profile["total_volume"],
-                            "prev_session_start": _profile["session_start"],
-                            "prev_session_end": _profile["session_end"],
-                            **_interaction,
-                        })
-                        log.debug(
-                            "[PROFILE] %s %s profile computed (%s POC=%s VAH=%s VAL=%s)",
-                            registry_symbol or asset_type or "unknown",
-                            direction,
-                            _profile_source_tf,
-                            _profile["poc"],
-                            _profile["vah"],
-                            _profile["val"],
-                        )
-                    else:
-                        log.debug(
-                            "[PROFILE] %s profile skipped: unusable prior-session volume",
-                            registry_symbol or asset_type or "unknown",
-                        )
-                else:
-                    log.debug(
-                        "[PROFILE] %s profile skipped: no completed prior session",
-                        registry_symbol or asset_type or "unknown",
-                    )
-            except Exception as _pe:
-                log.debug(f"[PROFILE] {registry_symbol or asset_type or 'unknown'} profile skipped: {_pe}")
-
-        is_sweep_event = (direction == "LONG" and sweep_data["bull_sweep"]) or \
-                         (direction == "SHORT" and sweep_data["bear_sweep"])
 
         d1_adx_val = _adx_from_indicator_snap(d1_snap)
         h4_adx_val = _adx_from_indicator_snap(h4_snap)
@@ -3172,24 +2635,338 @@ class NakedEngine:
         except Exception:
             pass
 
+        _structure_quality_score = None
+        if str(asset_type or "").lower() == "crypto":
+            _structure_quality_score = crypto_struct_diag.get("structure_quality_score")
+
+        # Volume profile: precompute profile candles and VP once (direction-independent part)
+        _vp_profile = None
+        _vp_source_tf = None
+        _vp_sessions = None
+        if enable_profile_context:
+            try:
+                from volume_profile import compute_fixed_range_volume_profile, split_completed_sessions
+                _vp_candles = h1_candles if len(h1_candles or []) >= 24 else h4_candles
+                _vp_source_tf = "H1" if len(h1_candles or []) >= 24 else "H4"
+                _vp_sessions = split_completed_sessions(_vp_candles or [], asset_type)
+                _vp_prev = _vp_sessions.get("prev_session_candles", [])
+                if _vp_prev:
+                    _vp_profile = compute_fixed_range_volume_profile(_vp_prev)
+            except Exception:
+                pass
+
+        return {
+            "_error": None,
+            "_registry_symbol": registry_symbol,
+            "_tfs": _tfs,
+            "_structure_tf": structure_tf,
+            "_trigger_candles": trigger_candles,
+            "_struct_candles": struct_candles,
+            "_score_group": _score_group,
+            "asset_type": asset_type,
+            "atr": atr,
+            "d1_atr": d1_atr,
+            "struct_atr": struct_atr,
+            "zone_atr": zone_atr,
+            "struct_highs": struct_highs,
+            "struct_lows": struct_lows,
+            "struct_closes": struct_closes,
+            "h4_highs": h4_highs,
+            "h4_lows": h4_lows,
+            "d1_highs": d1_highs,
+            "d1_lows": d1_lows,
+            "d1_closes": d1_closes,
+            "res_zones": res_zones,
+            "sup_zones": sup_zones,
+            "active_fvgs": active_fvgs,
+            "sequence_data": sequence_data,
+            "macro_seq_data": macro_seq_data,
+            "bos_data": bos_data,
+            "d1_bos": d1_bos,
+            "sweep_data": sweep_data,
+            "bos_mtf_confirmed": bos_mtf_confirmed,
+            "order_blocks": order_blocks,
+            "choch_data": choch_data,
+            "breaker_block": breaker_block,
+            "breaker_blocks": breaker_blocks,
+            "asset_struct_diag": asset_struct_diag,
+            "crypto_struct_diag": crypto_struct_diag,
+            "d1_crypto_diag": d1_crypto_diag,
+            "d1_asset_diag": d1_asset_diag,
+            "d1_order_blocks_raw": d1_order_blocks_raw,
+            "d1_fvgs_raw": d1_fvgs_raw,
+            "d1_conflict_window": d1_conflict_window,
+            "d1_adx": d1_adx_val,
+            "h4_adx": h4_adx_val,
+            "_structure_quality_score": _structure_quality_score,
+            # Volume profile precompute
+            "_vp_profile": _vp_profile,
+            "_vp_source_tf": _vp_source_tf,
+            "_vp_sessions": _vp_sessions,
+            "structure_tf": structure_tf,
+            "regime": regime,
+            "fallback_rr": fallback_rr,
+            "style": style,
+            "pair": pair,
+            "enable_profile_context": enable_profile_context,
+        }
+
+    def analyze_structure_direction(
+        self,
+        precompute: dict,
+        current_price: float,
+        direction: str,
+    ) -> dict:
+        """Apply direction to precomputed structure data (see ``precompute_structure_data``).
+
+        Returns the same result dict as ``analyze_structure()`` but uses the
+        precomputed context to avoid duplicating expensive direction-independent
+        work (zone finding, FVG detection, BOS, CHoCH, swing detection, etc.).
+        """
+        if precompute.get("_error"):
+            return {
+                "structural_verdict": "ERROR",
+                "reason": precompute["_error"],
+                "asset_type": precompute.get("asset_type", ""),
+                "d1_adx": None,
+                "h4_adx": None,
+            }
+
+        # Unpack precomputed data
+        atr = precompute["atr"]
+        d1_atr = precompute["d1_atr"]
+        struct_atr = precompute["struct_atr"]
+        zone_atr = precompute["zone_atr"]
+        res_zones = precompute["res_zones"]
+        sup_zones = precompute["sup_zones"]
+        active_fvgs = precompute["active_fvgs"]
+        sequence_data = precompute["sequence_data"]
+        macro_seq_data = precompute["macro_seq_data"]
+        bos_data = precompute["bos_data"]
+        d1_bos = precompute["d1_bos"]
+        sweep_data = precompute["sweep_data"]
+        choch_data = precompute["choch_data"]
+        order_blocks = precompute["order_blocks"]
+        breaker_block = precompute["breaker_block"]
+        breaker_blocks = precompute["breaker_blocks"]
+        asset_struct_diag = precompute["asset_struct_diag"]
+        crypto_struct_diag = precompute["crypto_struct_diag"]
+        d1_order_blocks_raw = precompute["d1_order_blocks_raw"]
+        d1_fvgs_raw = precompute["d1_fvgs_raw"]
+        d1_conflict_window = precompute["d1_conflict_window"]
+        trigger_candles = precompute["_trigger_candles"]
+        struct_candles = precompute["_struct_candles"]
+        tfs = precompute["_tfs"]
+        structure_tf = precompute["_structure_tf"]
+        bos_mtf_confirmed = precompute["bos_mtf_confirmed"]
+        asset_type = precompute["asset_type"]
+        regime = precompute["regime"]
+        fallback_rr = precompute["fallback_rr"]
+        style = precompute["style"]
+        pair = precompute.get("pair")
+        enable_profile_context = precompute.get("enable_profile_context", True)
+        registry_symbol = precompute.get("_registry_symbol")
+        d1_adx_val = precompute.get("d1_adx")
+        h4_adx_val = precompute.get("h4_adx")
+
+        # D1 PD-array: direction-dependent filtering
+        d1_pd_array_conflict: bool = False
+        d1_conflict_details: list = []
+        d1_conflict_metric_details: list = []
+        try:
+            for ob in d1_order_blocks_raw:
+                ob_mid = (ob["top"] + ob["bottom"]) / 2.0
+                ob_dist = abs(current_price - ob_mid)
+                if ob_dist > d1_conflict_window:
+                    continue
+                if direction == "LONG" and ob["type"] == "bearish" and ob_mid > current_price:
+                    d1_pd_array_conflict = True
+                    d1_conflict_details.append(f"D1_bearish_OB@{ob_mid:.5f} (str={ob['strength']})")
+                    d1_conflict_metric_details.append({"zone_type": "bearish_OB", "zone_price_range": {"top": ob["top"], "bottom": ob["bottom"]}, "zone_mid": ob_mid, "distance_to_conflict": ob_dist, "distance_in_atr": (ob_dist / d1_atr) if d1_atr > 0 else None, "conflict_side": "above_price", "entry_side_or_tp_side": "tp_side", "strength": ob.get("strength")})
+                elif direction == "SHORT" and ob["type"] == "bullish" and ob_mid < current_price:
+                    d1_pd_array_conflict = True
+                    d1_conflict_details.append(f"D1_bullish_OB@{ob_mid:.5f} (str={ob['strength']})")
+                    d1_conflict_metric_details.append({"zone_type": "bullish_OB", "zone_price_range": {"top": ob["top"], "bottom": ob["bottom"]}, "zone_mid": ob_mid, "distance_to_conflict": ob_dist, "distance_in_atr": (ob_dist / d1_atr) if d1_atr > 0 else None, "conflict_side": "below_price", "entry_side_or_tp_side": "tp_side", "strength": ob.get("strength")})
+            for fvg in d1_fvgs_raw:
+                fvg_mid = (fvg["top"] + fvg["bottom"]) / 2.0
+                fvg_dist = abs(current_price - fvg_mid)
+                if fvg_dist > d1_conflict_window:
+                    continue
+                if direction == "LONG" and fvg["type"] == "bearish" and fvg_mid > current_price:
+                    d1_pd_array_conflict = True
+                    d1_conflict_details.append(f"D1_bearish_FVG@{fvg_mid:.5f}")
+                    d1_conflict_metric_details.append({"zone_type": "bearish_FVG", "zone_price_range": {"top": fvg["top"], "bottom": fvg["bottom"]}, "zone_mid": fvg_mid, "distance_to_conflict": fvg_dist, "distance_in_atr": (fvg_dist / d1_atr) if d1_atr > 0 else None, "conflict_side": "above_price", "entry_side_or_tp_side": "tp_side"})
+                elif direction == "SHORT" and fvg["type"] == "bullish" and fvg_mid < current_price:
+                    d1_pd_array_conflict = True
+                    d1_conflict_details.append(f"D1_bullish_FVG@{fvg_mid:.5f}")
+                    d1_conflict_metric_details.append({"zone_type": "bullish_FVG", "zone_price_range": {"top": fvg["top"], "bottom": fvg["bottom"]}, "zone_mid": fvg_mid, "distance_to_conflict": fvg_dist, "distance_in_atr": (fvg_dist / d1_atr) if d1_atr > 0 else None, "conflict_side": "below_price", "entry_side_or_tp_side": "tp_side"})
+        except Exception:
+            pass
+
+        # Nearest resistance above price
+        valid_res = [z for z in res_zones if z["upper"] >= current_price]
+        nearest_res = (
+            min(valid_res, key=lambda x: 0.0 if x["lower"] <= current_price <= x["upper"] else max(0.0, x["lower"] - current_price))
+            if valid_res else None
+        )
+
+        # Nearest support below price
+        valid_sup = [z for z in sup_zones if z["lower"] <= current_price]
+        nearest_sup = (
+            min(valid_sup, key=lambda x: 0.0 if x["lower"] <= current_price <= x["upper"] else max(0.0, current_price - x["upper"]))
+            if valid_sup else None
+        )
+
+        anchored_low = min(current_price, sequence_data["recent_low"])
+        anchored_high = max(current_price, sequence_data["recent_high"])
+
+        multipliers = config.CONFIG.get("NAKED_ENGINE", {}).get("zone_multipliers", {})
+        buf = multipliers.get(regime.upper(), multipliers.get("RANGING", {"upper": 0.5, "lower": 1.2, "sl": 1.0}))
+        sl_mult = float(buf.get("sl", 1.0))
+        if bool(config.CONFIG.get("ENGINE_B_STRUCTURAL_SL_USE_STYLE_ATR_MULTS", False)):
+            _style_mults = (config.CONFIG.get("STYLE_ATR_MULTS") or {}).get(style.lower() or "intraday", {}) or {}
+            _asset_mults = _style_mults.get(asset_type.lower(), None)
+            if isinstance(_asset_mults, dict):
+                _style_sl = float(_asset_mults.get("sl", sl_mult))
+                _regime_scale = {"TRENDING": 1.00, "RANGING": 0.90, "HIGH_VOLATILITY": 1.20, "LOW_VOLATILITY": 0.85}.get(regime.upper(), 1.0)
+                sl_mult = _style_sl * _regime_scale
+        structural_tp_buffer_mult = _engine_b_structural_tp_buffer_atr_mult()
+
+        # SL with sweep override
+        sl = (anchored_low - (atr * sl_mult) if direction == "LONG" else anchored_high + (atr * sl_mult))
+        if direction == "LONG" and sweep_data["bull_sweep"] and sweep_data["sweep_low"] is not None:
+            sl = sweep_data["sweep_low"] - (atr * sl_mult)
+        elif direction == "SHORT" and sweep_data["bear_sweep"] and sweep_data["sweep_high"] is not None:
+            sl = sweep_data["sweep_high"] + (atr * sl_mult)
+
+        # TP from structural zones
+        tp = None
+        tp_source = "fallback_rr"
+        tp_structural_limited = False
+        structural_target_candidates = []
+
+        if direction == "LONG" and valid_res:
+            for zone in sorted(valid_res, key=lambda z: z["lower"]):
+                structural_tp = _engine_b_structural_target_price(zone, direction, atr, structural_tp_buffer_mult)
+                target_distance = structural_tp - current_price
+                structural_target_candidates.append({"target_type": "resistance_zone", "target_price": structural_tp, "zone": dict(zone), "correct_side": structural_tp > current_price, "distance_to_target": target_distance, "atr_multiple_to_target": (target_distance / atr) if atr > 0 else None, "selected": False, "rejected_reason": "too_close_or_wrong_side" if structural_tp <= current_price + (atr * 0.5) else None})
+                if structural_tp <= current_price + (atr * 0.5):
+                    tp_structural_limited = True
+                    continue
+                tp = structural_tp
+                tp_source = "structural_zone"
+                structural_target_candidates[-1]["selected"] = True
+                break
+        elif direction == "SHORT" and valid_sup:
+            for zone in sorted(valid_sup, key=lambda z: z["upper"], reverse=True):
+                structural_tp = _engine_b_structural_target_price(zone, direction, atr, structural_tp_buffer_mult)
+                target_distance = current_price - structural_tp
+                structural_target_candidates.append({"target_type": "support_zone", "target_price": structural_tp, "zone": dict(zone), "correct_side": structural_tp < current_price, "distance_to_target": target_distance, "atr_multiple_to_target": (target_distance / atr) if atr > 0 else None, "selected": False, "rejected_reason": "too_close_or_wrong_side" if structural_tp >= current_price - (atr * 0.5) else None})
+                if structural_tp >= current_price - (atr * 0.5):
+                    tp_structural_limited = True
+                    continue
+                tp = structural_tp
+                tp_source = "structural_zone"
+                structural_target_candidates[-1]["selected"] = True
+                break
+
+        if tp is None:
+            sl_dist = abs(current_price - sl) if (sl is not None) else (atr * sl_mult)
+            if sl_dist == 0:
+                sl_dist = atr * sl_mult
+            tp = current_price + (sl_dist * fallback_rr) if direction == "LONG" else current_price - (sl_dist * fallback_rr)
+
+        selected_structural_target = next((c for c in structural_target_candidates if c.get("selected")), None)
+
+        bos_confirmed = (direction == "LONG" and bos_data["bos_bull"]) or (direction == "SHORT" and bos_data["bos_bear"])
+        choch_confirmed = (direction == "LONG" and choch_data["choch_bull"]) or (direction == "SHORT" and choch_data["choch_bear"])
+
+        fvg_overlap = False
+        if direction == "LONG" and nearest_sup:
+            fvg_overlap = nearest_sup.get("fvg_overlap", False)
+        elif direction == "SHORT" and nearest_res:
+            fvg_overlap = nearest_res.get("fvg_overlap", False)
+
+        active_zone = nearest_sup if direction == "LONG" else nearest_res
+        zone_ctx = self._zone_context(active_zone, current_price, atr, direction, trigger_candles)
+
+        _ob_min_strength = config.CONFIG.get("NAKED_ENGINE", {}).get("ob_min_strength", 50)
+        _ob_at_zone = False
+        if active_zone and order_blocks:
+            az_lower = active_zone.get("lower", 0)
+            az_upper = active_zone.get("upper", 0)
+            for ob in order_blocks:
+                if not (ob["top"] < az_lower or ob["bottom"] > az_upper):
+                    if ob.get("strength", 0) >= _ob_min_strength:
+                        _ob_at_zone = True
+                        break
+        trigger_ctx = self._price_action_trigger(trigger_candles, direction, atr, zone_ctx["zone_touched"] or zone_ctx["near_zone"], bos_confirmed)
+
+        latest_trigger_candle_time = None
+        if trigger_candles:
+            _last_tc = trigger_candles[-1]
+            latest_trigger_candle_time = _last_tc.get("time") or _last_tc.get("timestamp") or _last_tc.get("datetime") or _last_tc.get("date")
+
+        # Volume profile interaction (direction-dependent part)
+        _profile_result = {
+            "prev_session_profile_valid": False, "prev_session_profile_source_tf": None,
+            "prev_session_poc": None, "prev_session_vah": None, "prev_session_val": None,
+            "prev_session_profile_high": None, "prev_session_profile_low": None,
+            "prev_session_total_volume": None, "prev_session_start": None, "prev_session_end": None,
+            "profile_in_play": False, "profile_level_in_play": None,
+            "inside_prev_value_area": False, "above_prev_value_area": False, "below_prev_value_area": False,
+            "touched_poc": False, "touched_vah": False, "touched_val": False,
+            "rejected_from_poc": False, "rejected_from_vah": False, "rejected_from_val": False,
+            "accepted_at_poc": False, "accepted_inside_value": False,
+            "returned_to_value": False, "failed_return_to_value": False,
+            "profile_bias": "neutral", "profile_reaction_strength": 0.0, "profile_notes": "",
+        }
+        _vp_profile = precompute.get("_vp_profile")
+        _vp_source_tf = precompute.get("_vp_source_tf")
+        if enable_profile_context and _vp_profile and _vp_profile.get("profile_valid"):
+            try:
+                from volume_profile import classify_profile_interaction
+                _interaction = classify_profile_interaction(
+                    current_price=current_price,
+                    recent_candles=(trigger_candles or struct_candles or [])[-10:],
+                    direction=direction,
+                    poc=_vp_profile["poc"],
+                    vah=_vp_profile["vah"],
+                    val=_vp_profile["val"],
+                    atr=atr,
+                )
+                _profile_result.update({
+                    "prev_session_profile_valid": True,
+                    "prev_session_profile_source_tf": _vp_source_tf,
+                    "prev_session_poc": _vp_profile["poc"],
+                    "prev_session_vah": _vp_profile["vah"],
+                    "prev_session_val": _vp_profile["val"],
+                    "prev_session_profile_high": _vp_profile["session_high"],
+                    "prev_session_profile_low": _vp_profile["session_low"],
+                    "prev_session_total_volume": _vp_profile["total_volume"],
+                    "prev_session_start": _vp_profile["session_start"],
+                    "prev_session_end": _vp_profile["session_end"],
+                    **_interaction,
+                })
+            except Exception:
+                pass
+
+        is_sweep_event = (direction == "LONG" and sweep_data["bull_sweep"]) or (direction == "SHORT" and sweep_data["bear_sweep"])
+
         forex_session_structure = None
         if str(asset_type or "").lower() == "forex":
             forex_session_structure = _engine_b_forex_session_structure_context(
-                asset_type=asset_type,
-                candle_time=latest_trigger_candle_time,
+                asset_type=asset_type, candle_time=latest_trigger_candle_time,
                 zone_context=bool(zone_ctx["zone_touched"] or zone_ctx["near_zone"]),
-                ob_at_zone=bool(_ob_at_zone),
-                fvg_overlap=bool(fvg_overlap),
+                ob_at_zone=bool(_ob_at_zone), fvg_overlap=bool(fvg_overlap),
                 liquidity_sweep=bool(is_sweep_event),
             )
         equity_session_structure = None
         if asset_struct_diag.get("asset_class") in {"stock", "index", "etf", "etf_bond"}:
             equity_session_structure = _engine_b_equity_session_structure_context(
-                asset_class=asset_struct_diag.get("asset_class"),
-                candle_time=latest_trigger_candle_time,
+                asset_class=asset_struct_diag.get("asset_class"), candle_time=latest_trigger_candle_time,
                 zone_context=bool(zone_ctx["zone_touched"] or zone_ctx["near_zone"]),
-                ob_at_zone=bool(_ob_at_zone),
-                fvg_overlap=bool(fvg_overlap),
+                ob_at_zone=bool(_ob_at_zone), fvg_overlap=bool(fvg_overlap),
                 liquidity_sweep=bool(is_sweep_event),
             )
 
@@ -3209,12 +2986,8 @@ class NakedEngine:
             "selected_structural_target": selected_structural_target,
             "nearest_target_type": (selected_structural_target or {}).get("target_type"),
             "nearest_target_price": (selected_structural_target or {}).get("target_price"),
-            "distance_to_res": (nearest_res["lower"] - current_price)
-            if nearest_res
-            else None,
-            "distance_to_sup": (current_price - nearest_sup["upper"])
-            if nearest_sup
-            else None,
+            "distance_to_res": (nearest_res["lower"] - current_price) if nearest_res else None,
+            "distance_to_sup": (current_price - nearest_sup["upper"]) if nearest_sup else None,
             "atr": atr,
             "d1_atr": d1_atr,
             "struct_atr": struct_atr,
@@ -3244,47 +3017,20 @@ class NakedEngine:
             "engulfing_candle": trigger_ctx["engulfing"],
             "inside_break_candle": trigger_ctx["inside_break"],
             "strong_close": trigger_ctx["strong_close"],
-            "trigger_timeframe": _tfs["trigger"],
+            "trigger_timeframe": tfs["trigger"],
             "latest_confirmed_trigger_candle_time": latest_trigger_candle_time,
             "structure_tf": structure_tf,
             "asset_type": asset_type,
-            **(
-                {"forex_session_structure": forex_session_structure}
-                if str(asset_type or "").lower() == "forex"
-                else {}
-            ),
-            **(
-                {"asset_class_structure_diagnostics": asset_struct_diag}
-                if asset_struct_diag.get("asset_class")
-                in {"stock", "index", "commodity", "etf", "etf_bond"}
-                else {}
-            ),
-            **(
-                {"equity_session_structure": equity_session_structure}
-                if equity_session_structure is not None
-                else {}
-            ),
-            **(
-                {"crypto_structure_diagnostics": crypto_struct_diag}
-                if str(asset_type or "").lower() == "crypto"
-                else {}
-            ),
+            **({"forex_session_structure": forex_session_structure} if str(asset_type or "").lower() == "forex" else {}),
+            **({"asset_class_structure_diagnostics": asset_struct_diag} if asset_struct_diag.get("asset_class") in {"stock", "index", "commodity", "etf", "etf_bond"} else {}),
+            **({"equity_session_structure": equity_session_structure} if equity_session_structure is not None else {}),
+            **({"crypto_structure_diagnostics": crypto_struct_diag} if str(asset_type or "").lower() == "crypto" else {}),
             "d1_adx": d1_adx_val,
             "h4_adx": h4_adx_val,
-            # Independent directional assessment from Engine B's own price-action evidence.
-            # Advisory only — does not affect scoring, checklist, or execution gates.
-            # Allows Engine C to detect genuine direction conflicts vs inherited ones.
             "engine_b_independent_direction": self._determine_independent_direction(
-                h1_sequence=sequence_data["state"],
-                h4_sequence=macro_seq_data["state"],
-                bos_data=bos_data,
-                d1_bos=d1_bos,
-                choch_data=choch_data,
-                sweep_data=sweep_data,
+                h1_sequence=sequence_data["state"], h4_sequence=macro_seq_data["state"],
+                bos_data=bos_data, d1_bos=d1_bos, choch_data=choch_data, sweep_data=sweep_data,
             ),
-            # D1 PD-array context (informational — no scoring gate).
-            # d1_pd_array_conflict=True when an opposing D1 OB or unmitigated FVG is within
-            # 3×ATR in the direction of trade. Surfaces in Marcus Reid input and UI diagnostics.
             "d1_order_blocks": d1_order_blocks_raw,
             "d1_fvgs": d1_fvgs_raw,
             "d1_pd_array_conflict": d1_pd_array_conflict,
@@ -3292,6 +3038,42 @@ class NakedEngine:
             "d1_conflict_metric_details": d1_conflict_metric_details,
             **_profile_result,
         }
+
+    def analyze_structure(
+        self,
+        d1_candles: list,
+        h4_candles: list,
+        h1_candles: list,
+        current_price: float,
+        direction: str,
+        atr: float,
+        regime: str = "RANGING",
+        fallback_rr: float = 2.0,
+        asset_type: str = "",
+        enable_zone_registry: bool = True,
+        enable_profile_context: bool = True,
+        d1_snap: dict | None = None,
+        h4_snap: dict | None = None,
+        style: str = "intraday",
+        pair: dict | None = None,
+    ) -> dict:
+        """
+        Analyzes raw candle data to find Support/Resistance zones and trend sequence.
+        Returns structural verdict used by the Comparator in athena.py.
+
+        Delegates to ``precompute_structure_data()`` + ``analyze_structure_direction()``
+        for backward compatibility. For optimal performance (especially during backtesting),
+        call ``precompute_structure_data()`` once per bar and iterate directions with
+        ``analyze_structure_direction()``.
+        """
+        pre = self.precompute_structure_data(
+            d1_candles, h4_candles, h1_candles, current_price, atr,
+            regime=regime, fallback_rr=fallback_rr, asset_type=asset_type,
+            enable_zone_registry=enable_zone_registry,
+            enable_profile_context=enable_profile_context,
+            d1_snap=d1_snap, h4_snap=h4_snap, style=style, pair=pair,
+        )
+        return self.analyze_structure_direction(pre, current_price, direction)
 
     def _determine_lifecycle_state(self, res: dict, current_price: float, direction: str, trigger_ok: bool) -> tuple[str, str]:
         bos_confirmed = res.get("bos_confirmed", False)
@@ -3572,14 +3354,23 @@ class NakedEngine:
         )
 
         space_ok = room_ok or rr_ok
-        # Forex often has a nearby structural level while the execution RR
-        # model still has valid protective distance. Keep historical behavior
-        # unless this explicit test flag is enabled.
+        # Some asset classes often have a nearby structural level while the
+        # execution RR model still has valid protective distance. Keep
+        # historical behavior unless the explicit asset-scoped flag is enabled.
+        _rr_space_cfg = config.CONFIG.get("ENGINE_B_RR_CAN_SATISFY_SPACE_GATE", False)
+        if isinstance(_rr_space_cfg, dict):
+            rr_space_gate_enabled = bool(
+                _rr_space_cfg.get(asset_type_lower, _rr_space_cfg.get("default", False))
+            )
+        else:
+            rr_space_gate_enabled = bool(_rr_space_cfg)
+        # Back-compat for the first Forex-only fix.
         forex_rr_space_gate_enabled = (
             asset_type_lower == "forex"
             and bool(config.CONFIG.get("ENGINE_B_FOREX_RR_CAN_SATISFY_SPACE_GATE", False))
         )
-        space_gate_ok = space_ok if forex_rr_space_gate_enabled else room_ok
+        rr_space_gate_enabled = rr_space_gate_enabled or forex_rr_space_gate_enabled
+        space_gate_ok = space_ok if rr_space_gate_enabled else room_ok
 
         # Stage 2.8: Optional volume confirmation gate.
         # Contributes to gate_score (+1 bonus) but is NOT mandatory for pass.
@@ -3789,6 +3580,7 @@ class NakedEngine:
             "entry_ok": entry_ok,
             "room_ok": room_ok,
             "space_gate_ok": space_gate_ok,
+            "rr_space_gate_enabled": rr_space_gate_enabled,
             "forex_rr_space_gate_enabled": forex_rr_space_gate_enabled,
             "min_room_atr_used": round(_effective_min_room_atr, 4),
             "rr_ok": rr_ok,

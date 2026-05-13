@@ -285,7 +285,7 @@ def test_backtest_pair_naked_enters_on_next_bar_open_with_slippage(monkeypatch):
 
     monkeypatch.setattr(
         market_structure.engine,
-        "analyze_structure",
+        "analyze_structure_direction",
         lambda *_args, **_kwargs: {
             "structural_verdict": "CLEAR",
             "order_blocks": [],
@@ -349,6 +349,7 @@ def test_backtest_pair_naked_skips_profile_context_when_profile_scoring_disabled
     )
 
     captured = []
+    pre_captured = []
 
     monkeypatch.setattr(backtest_runner, "_rt", lambda: runtime)
     monkeypatch.setattr(backtest_runner, "get_pair_score_group", lambda _pair: "default")
@@ -375,7 +376,11 @@ def test_backtest_pair_naked_skips_profile_context_when_profile_scoring_disabled
 
     import market_structure
 
-    def _capture_analyze(*_args, **kwargs):
+    def _capture_pre(*args, **kwargs):
+        pre_captured.append(kwargs)
+        return {"_error": None}
+
+    def _capture_analyze_dir(*_args, **kwargs):
         captured.append(kwargs)
         return {
             "structural_verdict": "CLEAR",
@@ -390,7 +395,8 @@ def test_backtest_pair_naked_skips_profile_context_when_profile_scoring_disabled
             "volume_strength": 0.0,
         }
 
-    monkeypatch.setattr(market_structure.engine, "analyze_structure", _capture_analyze)
+    monkeypatch.setattr(market_structure.engine, "precompute_structure_data", _capture_pre)
+    monkeypatch.setattr(market_structure.engine, "analyze_structure_direction", _capture_analyze_dir)
     monkeypatch.setattr(
         market_structure.engine,
         "calculate_confidence",
@@ -407,7 +413,8 @@ def test_backtest_pair_naked_skips_profile_context_when_profile_scoring_disabled
     backtest_runner.backtest_pair_naked(pair, style="intraday")
 
     assert captured
-    assert all(call.get("enable_profile_context") is False for call in captured)
+    assert all(call.get("enable_profile_context") is False for call in pre_captured)
+
 
 
 def test_backtest_pair_naked_forex_auto_keeps_intraday_style_under_d1_structure(monkeypatch):
@@ -470,7 +477,7 @@ def test_backtest_pair_naked_forex_auto_keeps_intraday_style_under_d1_structure(
 
     monkeypatch.setattr(
         market_structure.engine,
-        "analyze_structure",
+        "analyze_structure_direction",
         lambda *_args, **_kwargs: {
             "structural_verdict": "CLEAR",
             "recommended_stop_loss": 0.8790,
@@ -570,7 +577,7 @@ def test_backtest_pair_naked_caps_post_fill_rr_to_style_fallback(monkeypatch):
 
     monkeypatch.setattr(
         market_structure.engine,
-        "analyze_structure",
+        "analyze_structure_direction",
         lambda *_args, **_kwargs: {
             "structural_verdict": "CLEAR",
             "recommended_stop_loss": 95.0,
@@ -834,7 +841,7 @@ def test_backtest_pair_naked_telemetry_captures_non_zero_values(monkeypatch):
 
     monkeypatch.setattr(
         market_structure.engine,
-        "analyze_structure",
+        "analyze_structure_direction",
         lambda *_args, **_kwargs: {
             "structural_verdict": "CLEAR",
             "recommended_stop_loss": 95.0,

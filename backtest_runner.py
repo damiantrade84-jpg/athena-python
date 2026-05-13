@@ -20,6 +20,10 @@ import pandas as pd
 from telemetry import build_strategy_lab_telemetry
 
 from athena_runtime import rt as _art_rt
+from athena_app.services.crypto_signal_feed import (
+    fetch_crypto_signal_candles,
+    resolve_crypto_signal_feed,
+)
 from backtest_candle_cache import fetch_backtest_candles, fetch_backtest_eodhd_intraday
 from calibration import calibration_report
 from config import CONFIG, _json_safe
@@ -159,6 +163,54 @@ def _bt_cached_fetch(
         tf,
         limit,
         fetcher,
+        provider=provider,
+        min_bars=min_bars,
+    )
+
+
+_BINANCE_BT_INTERVALS = {"D1": "1d", "H4": "4h", "H1": "1h"}
+
+
+def _crypto_bt_signal_candles(
+    pair: dict,
+    *,
+    engine: str,
+    tf: str,
+    limit: int,
+    min_bars: int | None,
+):
+    """Fetch crypto backtest candles from the configured Engine A/B signal feed."""
+    tf_u = str(tf or "").upper()
+    feed = resolve_crypto_signal_feed(engine, CONFIG)
+    provider = "bybit_linear_kline" if feed == "bybit" else "binance_futures"
+    sym = pair["symbol"]
+
+    def _default_fetch(pair_arg: dict, tf_arg: str, limit_arg: int):
+        interval = _BINANCE_BT_INTERVALS.get(str(tf_arg or "").upper())
+        if interval is None:
+            return _rt().fetch_candles(pair_arg, tf_arg, limit_arg)
+        if str(tf_arg or "").upper() == "D1":
+            return _rt().fetch_binance(sym, interval, limit_arg)
+        return _rt().fetch_binance_paginated(sym, interval, limit_arg)
+
+    def _fetch(limit_arg: int):
+        result = fetch_crypto_signal_candles(
+            pair,
+            tf_u,
+            limit_arg,
+            engine=engine,
+            config=CONFIG,
+            default_fetch=_default_fetch,
+            bybit_fetch=getattr(_rt(), "fetch_bybit_klines", None),
+            bybit_paginated_fetch=getattr(_rt(), "fetch_bybit_klines_paginated", None),
+        )
+        return result.candles
+
+    return _bt_cached_fetch(
+        pair,
+        tf_u,
+        limit,
+        _fetch,
         provider=provider,
         min_bars=min_bars,
     )
@@ -928,8 +980,6 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
     try:
         import pandas as pd
 
-        sym = pair["symbol"]
-
         def df_to_candles(df):
 
             return [
@@ -947,32 +997,28 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
         _ptype = pair.get("type", "")
 
         if pair["source"] == "binance":
-            # Crypto: paginated H4/H1 for 2+ years of data
-
-            d1_raw = _bt_cached_fetch(
+            # Crypto: config-gated Engine A signal feed (Binance default, Bybit experiment optional).
+            d1_raw = _crypto_bt_signal_candles(
                 pair,
-                "D1",
-                750,
-                lambda lim: _rt().fetch_binance(sym, "1d", lim),
-                provider="binance_futures",
+                engine="A",
+                tf="D1",
+                limit=750,
                 min_bars=230,
             )
 
-            h4_raw = _bt_cached_fetch(
+            h4_raw = _crypto_bt_signal_candles(
                 pair,
-                "H4",
-                4400,
-                lambda lim: _rt().fetch_binance_paginated(sym, "4h", lim),
-                provider="binance_futures",
+                engine="A",
+                tf="H4",
+                limit=4400,
                 min_bars=500,
             )
 
-            h1_raw = _bt_cached_fetch(
+            h1_raw = _crypto_bt_signal_candles(
                 pair,
-                "H1",
-                17600,
-                lambda lim: _rt().fetch_binance_paginated(sym, "1h", lim),
-                provider="binance_futures",
+                engine="A",
+                tf="H1",
+                limit=17600,
                 min_bars=500,
             )
 
@@ -3511,29 +3557,25 @@ def backtest_pair_naked(pair: dict, style: str = "naked", validation_mode="stand
     # Use same extended data fetch as Engine A backtest — live cache only holds ~180d.
     if pair.get("source") == "binance":
         # Crypto: paginated Binance fetch — 730 days: D1=750, H4=4400, H1=17600
-        sym = pair["symbol"]
-        candles_d1 = _bt_cached_fetch(
+        candles_d1 = _crypto_bt_signal_candles(
             pair,
-            "D1",
-            750,
-            lambda lim: _rt().fetch_binance(sym, "1d", lim),
-            provider="binance_futures",
+            engine="B",
+            tf="D1",
+            limit=750,
             min_bars=230,
         )
-        candles_h4 = _bt_cached_fetch(
+        candles_h4 = _crypto_bt_signal_candles(
             pair,
-            "H4",
-            4400,
-            lambda lim: _rt().fetch_binance_paginated(sym, "4h", lim),
-            provider="binance_futures",
+            engine="B",
+            tf="H4",
+            limit=4400,
             min_bars=500,
         )
-        candles_h1 = _bt_cached_fetch(
+        candles_h1 = _crypto_bt_signal_candles(
             pair,
-            "H1",
-            17600,
-            lambda lim: _rt().fetch_binance_paginated(sym, "1h", lim),
-            provider="binance_futures",
+            engine="B",
+            tf="H1",
+            limit=17600,
             min_bars=500,
         )
     elif pair.get("source") == "mt5":
@@ -3842,23 +3884,28 @@ def backtest_pair_naked(pair: dict, style: str = "naked", validation_mode="stand
             ).get("snap") or {}
         except Exception:
             pass
+        # Precompute direction-independent structure data once per bar
+        _bt_pre = naked_engine.precompute_structure_data(
+            d1_ctx,
+            zone_ctx,
+            entry_ctx,
+            current_price,
+            atr,
+            regime=regime_label,
+            fallback_rr=style_profile.get("fallback_rr", 2.0),
+            asset_type=pair.get("type", ""),
+            enable_profile_context=_bt_enable_profile_context,
+            d1_snap=_bt_b_d1_snap,
+            h4_snap=_bt_b_zone_snap,
+            style=resolved_style,
+            pair=pair,
+        )
         candidates = []
         for direction in ["LONG", "SHORT"]:
-            res = naked_engine.analyze_structure(
-                d1_ctx,
-                zone_ctx,
-                entry_ctx,
+            res = naked_engine.analyze_structure_direction(
+                _bt_pre,
                 current_price,
                 direction,
-                atr,
-                regime_label,
-                fallback_rr=style_profile.get("fallback_rr", 2.0),
-                asset_type=pair.get("type", ""),
-                enable_profile_context=_bt_enable_profile_context,
-                d1_snap=_bt_b_d1_snap,
-                h4_snap=_bt_b_zone_snap,
-                style=resolved_style,
-                pair=pair,
             )
             _b_funnel["bars_evaluated"] += 1
             if res.get("structural_verdict") != "CLEAR":
