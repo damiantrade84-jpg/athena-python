@@ -36,18 +36,11 @@ interface RegimeShift {
   [pair: string]: unknown;
 }
 
-interface NewsSentimentItem {
-  pair: string;
-  sentiment: string;
-  score: number;
-}
-
 export default function MarketsPanel() {
   const { data: prices, loading: pricesLoading, error: pricesError, refresh: refreshPrices } = useApiPoll<BulkPrices>('/api/bulk-prices', 10000);
   const { data: hours, loading: hoursLoading, error: hoursError } = useApiPoll<MarketHours>('/api/market-hours', 30000);
   const { data: yieldCurve, loading: yieldLoading, error: yieldError } = useApiPoll<YieldCurve>('/api/yield-curve', 0);
   const { data: regime, loading: regimeLoading, error: regimeError } = useApiPoll<RegimeShift>('/api/regime-shift', 30000);
-  const { data: sentiment, loading: sentLoading, error: sentError } = useApiPoll<NewsSentimentItem[]>('/api/news-sentiment', 30000);
 
   const [now, setNow] = useState(new Date());
   useEffect(() => {
@@ -69,9 +62,9 @@ export default function MarketsPanel() {
 
   return (
     <div className="space-y-5">
-      {(pricesError || hoursError || yieldError || regimeError || sentError) && (
+      {(pricesError || hoursError || yieldError || regimeError) && (
         <ErrorBanner
-          message={[pricesError, hoursError, yieldError, regimeError, sentError].filter(Boolean).join(' | ')}
+          message={[pricesError, hoursError, yieldError, regimeError].filter(Boolean).join(' | ')}
           onRetry={() => refreshPrices()}
         />
       )}
@@ -210,26 +203,15 @@ export default function MarketsPanel() {
             </CardContent>
           </Card>
 
-          {/* News Sentiment */}
+          {/* News Sentiment — /api/news-sentiment requires a per-pair symbol (see Pair Browser). */}
           <Card className="border-border/60 bg-card/50">
             <CardHeader className="pb-2">
               <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Rajdhani', sans-serif", letterSpacing: '0.12em' }}>News Sentiment</CardTitle>
             </CardHeader>
             <CardContent>
-              {sentLoading ? <Skeleton className="h-20 w-full" /> : Array.isArray(sentiment) && sentiment.length > 0 ? (
-                <div className="space-y-1">
-                  {sentiment.map(s => (
-                    <div key={s.pair} className="flex items-center justify-between p-2 rounded-md bg-muted/30">
-                      <span className="text-xs font-mono">{s.pair}</span>
-                      <Badge variant="outline" className={`text-[10px] ${s.sentiment === 'risk_on' ? 'text-long border-long/40' : s.sentiment === 'risk_off' ? 'text-short border-short/40' : ''}`}>
-                        {s.sentiment}
-                      </Badge>
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <div className="text-center text-muted-foreground py-8 text-xs">No sentiment data</div>
-              )}
+              <p className="text-muted-foreground text-xs leading-relaxed py-2">
+                EODHD + AI sentiment runs per symbol. Open <span className="text-foreground font-medium">Pair Browser</span>, choose a pair, and run news sentiment there — bulk markets view has no single symbol to query.
+              </p>
             </CardContent>
           </Card>
         </div>
