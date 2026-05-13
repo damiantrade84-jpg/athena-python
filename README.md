@@ -83,6 +83,15 @@ curl -X POST http://localhost:5000/api/kimi/audit/query -d '{"sql": "SELECT * FR
 - **`athena.py`** — pair universes (`FOREX_PAIRS`, `CRYPTO_PAIRS`, etc.), Flask routes, prompts.
 - **Scalp universe** — `SCALP_ENGINE.SCALP_PAIRS` in `config.yaml` overrides the default; otherwise Engine D uses active **MT5 + Binance crypto** pairs from the runtime list.
 
+### Engine A crypto tuning note
+
+Do not re-enable the rejected Engine A crypto tuning bundle without a fresh A/B
+research run. The removed bundle included crypto-only mean reversion activation,
+funding z-score defaults, DI conflict softening, raw candle divergence fallback,
+and a higher crypto Research Lab bonus. A BTC/USDT comparison on 2026-05-13
+regressed the main metrics: SQN `-0.55 -> -0.64`, expectancy `-0.066R ->
+-0.077R`, win rate `38.0% -> 37.1%`, and profit factor `0.90 -> 0.89`.
+
 ---
 
 ## Tests
