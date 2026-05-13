@@ -195,14 +195,18 @@ export default function SignalsPanel() {
         } else {
           const result = await postScanB('/api/scan-naked', { assetClass: ac, style });
           if (result?.signals) {
+            const pairsScanned = result.totalPairs ?? result.activePairs;
             setScanCacheB(
               result.signals as EngineASignal[],
-              { count: result.signals.length, scannedAt: new Date().toISOString() },
+              {
+                count: result.signals.length,
+                scannedAt: new Date().toISOString(),
+                ...(pairsScanned != null ? { pairsScanned } : {}),
+              },
             );
-            const scanned = result.totalPairs ?? result.activePairs ?? result.debugRows?.length;
             showToast(
-              scanned != null
-                ? `Engine B: ${result.signals.length} structural signals / ${scanned} pairs scanned`
+              pairsScanned != null
+                ? `Engine B: ${result.signals.length} structural signals / ${pairsScanned} pairs scanned`
                 : `Engine B: ${result.signals.length} structural signals`,
               'success',
             );
@@ -500,7 +504,11 @@ export default function SignalsPanel() {
           {activeTab === 'A' ? <Zap className="w-3 h-3" /> : <Layers className="w-3 h-3" />}
           {sourceLabel}
         </span>
-        <span>{filtered.length} signals match filter ({baseSignals.length} total)</span>
+        <span>
+          {activeTab === 'B' && scanCacheBMeta?.pairsScanned != null
+            ? `${filtered.length} signals match filter (${baseSignals.length} passed · ${scanCacheBMeta.pairsScanned} pairs scanned)`
+            : `${filtered.length} signals match filter (${baseSignals.length} total)`}
+        </span>
         {lastScanAgeIso && <span>- Scanned: {new Date(lastScanAgeIso).toLocaleTimeString()}</span>}
         {activeTab === 'B' && scanCacheB === null && (
           <span className="text-warning">- No Engine B scan yet - click Scan Engine B</span>

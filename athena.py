@@ -6976,11 +6976,19 @@ def api_scan_naked():
         except Exception as _cerr:
             log.warning(f"[CONDUCTOR] engine-b scan orchestration failed: {_cerr}")
 
+    log.info(
+        "[NAKED SCAN] complete: %d signal(s) from %d candidate pair(s) (asset_class=%s, style=%s)",
+        len(results),
+        len(candidate_pairs),
+        asset_class or "all",
+        requested_style,
+    )
+
     if debug_mode:
         # REGRESSION CHECK: Print Engine B scan-funnel summary
-        print("\n" + "="*80)
+        print("\n" + "=" * 80)
         print("REGRESSION CHECK - ENGINE B SCAN FUNNEL")
-        print("="*80)
+        print("=" * 80)
         print(f"Total pairs scanned: {engine_b_funnel['total']}")
         print(f"No clear structure: {engine_b_funnel['no_clear_structure']}")
         print(f"Gate fail - structure: {engine_b_funnel['gate_fail_struct']}")
