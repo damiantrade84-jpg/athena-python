@@ -24,6 +24,7 @@ from market_structure import (
     _engine_b_structural_target_price,
     _engine_b_structural_tp_buffer_atr_mult,
     _engine_b_micro_breakout_value,
+    _crypto_structure_adjustment,
     engine,
     engine_b_confidence_passes,
 )
@@ -74,6 +75,126 @@ def _base_res_long():
         "profile_reaction_strength": 0.0,
         "profile_bias": "neutral",
     }
+
+
+def test_crypto_structure_adjustment_default_off_preserves_detection_threshold(monkeypatch):
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_CRYPTO_VOLATILITY_ADJUSTMENT_ENABLED", False)
+    candles = [
+        {"open": 100.0, "high": 108.0, "low": 96.0, "close": 100.0}
+        for _ in range(6)
+    ]
+
+    diag = _crypto_structure_adjustment("crypto", candles, atr=5.0)
+
+    assert diag["enabled"] is False
+    assert diag["applied"] is False
+    assert diag["volatility_regime"] == "high_volatility"
+    assert diag["swing_prominence_mult"] == pytest.approx(1.0)
+    assert diag["bos_min_break_atr"] == pytest.approx(0.0)
+
+
+def test_crypto_structure_adjustment_enabled_requires_stronger_bos(monkeypatch):
+    local_engine = NakedEngine()
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_CRYPTO_VOLATILITY_ADJUSTMENT_ENABLED", True)
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_CRYPTO_STRUCTURE_MULT", 2.0)
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_CRYPTO_BOS_MIN_BREAK_ATR", 0.10)
+
+    highs = np.array([100.0, 105.0, 101.0, 104.0, 101.0, 105.3], dtype=float)
+    lows = np.array([99.0, 100.0, 98.0, 100.0, 99.0, 101.0], dtype=float)
+    closes = np.array([99.5, 104.5, 100.5, 103.5, 100.0, 105.3], dtype=float)
+    swings = {"peak_idx": np.array([1, 3]), "trough_idx": np.array([2, 4])}
+
+    legacy = local_engine._detect_bos(
+        highs,
+        lows,
+        atr=2.0,
+        closes=closes,
+        swings=swings,
+    )
+    adjusted = local_engine._detect_bos(
+        highs,
+        lows,
+        atr=2.0,
+        closes=closes,
+        swings=swings,
+        min_break_atr=0.20,
+    )
+
+    assert legacy["bos_bull"] is True
+    assert adjusted["bos_bull"] is False
+
+
+def test_calculate_confidence_carries_crypto_structure_diagnostics_only_for_crypto():
+    res = _base_res_long()
+    res["asset_type"] = "crypto"
+    res["distance_to_res"] = 2.0
+    res["crypto_structure_diagnostics"] = {
+        "enabled": True,
+        "applied": True,
+        "volatility_regime": "high_volatility",
+        "wick_dominance": 0.72,
+        "structure_quality_score": 0.55,
+    }
+
+    crypto_out = engine.calculate_confidence(
+        res,
+        current_price=100.0,
+        direction="LONG",
+        learning_ctx=None,
+        entry_candles=[],
+        style_profile={"min_room_atr": 0.35, "min_rr": 1.0, "require_macro_align": False},
+    )
+    forex_res = dict(res)
+    forex_res["asset_type"] = "forex"
+    forex_out = engine.calculate_confidence(
+        forex_res,
+        current_price=100.0,
+        direction="LONG",
+        learning_ctx=None,
+        entry_candles=[],
+        style_profile={"min_room_atr": 0.35, "min_rr": 1.0, "require_macro_align": False},
+    )
+
+    assert crypto_out["engine_b_diagnostics"]["crypto_structure"]["applied"] is True
+    assert "crypto_structure" not in forex_out["engine_b_diagnostics"]
+
+
+def test_analyze_structure_adds_crypto_structure_payload(monkeypatch):
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_STRIP_FORMING_STRUCT", False)
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_CRYPTO_VOLATILITY_ADJUSTMENT_ENABLED", True)
+    candles = []
+    for i in range(40):
+        base = 100.0 + (i * 0.4)
+        candles.append(
+            {
+                "open": base,
+                "high": base + (5.0 if i % 6 == 0 else 2.0),
+                "low": base - (4.0 if i % 7 == 0 else 1.5),
+                "close": base + 0.8,
+                "vol": 100.0 + i,
+            }
+        )
+
+    out = NakedEngine().analyze_structure(
+        d1_candles=candles,
+        h4_candles=candles,
+        h1_candles=candles,
+        current_price=float(candles[-1]["close"]),
+        direction="LONG",
+        atr=5.0,
+        regime="HIGH_VOLATILITY",
+        asset_type="crypto",
+        enable_zone_registry=False,
+        enable_profile_context=False,
+        pair={"display": "BTC/USDT", "type": "crypto", "source": "binance"},
+    )
+
+    diag = out.get("crypto_structure_diagnostics")
+    assert isinstance(diag, dict)
+    assert diag["enabled"] is True
+    assert diag["volatility_regime"] in {"elevated_volatility", "high_volatility"}
+    assert "wick_dominance" in diag
+    assert "structure_quality_score" in diag
 
 
 def test_calculate_confidence_engine_b_diagnostics_resistance_too_close():

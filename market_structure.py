@@ -180,6 +180,129 @@ ENGINE_B_REASON_D1_PD_ARRAY_CONFLICT = "d1_pd_array_conflict"
 ENGINE_B_REASON_STRUCTURAL_TP_TOO_CLOSE = "structural_tp_too_close"
 
 
+def _float_cfg(key: str, default: float) -> float:
+    try:
+        return float(config.CONFIG.get(key, default))
+    except (TypeError, ValueError):
+        return float(default)
+
+
+def _crypto_structure_adjustment(asset_type: str, candles: list, atr: float) -> dict:
+    """Return default-off crypto structure tuning and diagnostics.
+
+    Crypto spends more time in wick-heavy, high-ATR regimes than forex. When the
+    explicit flag is enabled, only elevated/high crypto volatility widens swing
+    prominence and requires a minimum close-through for BOS/CHoCH.
+    """
+    is_crypto = str(asset_type or "").lower() == "crypto"
+    enabled = bool(config.CONFIG.get("ENGINE_B_CRYPTO_VOLATILITY_ADJUSTMENT_ENABLED", False))
+    detail = {
+        "asset_type": str(asset_type or "").lower(),
+        "enabled": enabled,
+        "applied": False,
+        "volatility_regime": "not_crypto" if not is_crypto else "unknown",
+        "atr_pct": None,
+        "wick_dominance": None,
+        "structure_mult": 1.0,
+        "swing_prominence_mult": 1.0,
+        "bos_min_break_atr": 0.0,
+    }
+    if not is_crypto:
+        return detail
+
+    try:
+        close = float((candles[-1] or {}).get("close", 0.0)) if candles else 0.0
+    except (TypeError, ValueError, AttributeError):
+        close = 0.0
+    try:
+        atr_val = float(atr or 0.0)
+    except (TypeError, ValueError):
+        atr_val = 0.0
+    atr_pct = (atr_val / abs(close)) if close else None
+
+    bands = (config.CONFIG.get("VOLATILITY_SCALER_BANDS", {}) or {}).get("crypto", {}) or {}
+    try:
+        low_band = float(bands.get("low", 0.010))
+    except (TypeError, ValueError):
+        low_band = 0.010
+    try:
+        high_band = float(bands.get("high", 0.040))
+    except (TypeError, ValueError):
+        high_band = 0.040
+    if high_band < low_band:
+        low_band, high_band = high_band, low_band
+
+    if atr_pct is None:
+        regime = "unknown"
+    elif atr_pct >= high_band:
+        regime = "high_volatility"
+    elif atr_pct >= low_band:
+        regime = "elevated_volatility"
+    else:
+        regime = "normal"
+
+    wick_ratios: list[float] = []
+    for c in (candles or [])[-5:]:
+        try:
+            high = float(c.get("high"))
+            low = float(c.get("low"))
+            open_v = float(c.get("open"))
+            close_v = float(c.get("close"))
+            candle_range = high - low
+            if candle_range > 0:
+                body = abs(close_v - open_v)
+                wick_ratios.append(max(0.0, min(1.0, (candle_range - body) / candle_range)))
+        except (AttributeError, TypeError, ValueError):
+            continue
+    wick_dominance = round(float(np.mean(wick_ratios)), 4) if wick_ratios else None
+
+    cfg_mult = max(1.0, _float_cfg("ENGINE_B_CRYPTO_STRUCTURE_MULT", 1.25))
+    applied_mult = 1.0
+    if enabled and regime == "high_volatility":
+        applied_mult = cfg_mult
+    elif enabled and regime == "elevated_volatility":
+        applied_mult = 1.0 + ((cfg_mult - 1.0) * 0.5)
+
+    min_break = 0.0
+    if applied_mult > 1.0:
+        min_break = max(0.0, _float_cfg("ENGINE_B_CRYPTO_BOS_MIN_BREAK_ATR", 0.10)) * applied_mult
+
+    detail.update({
+        "volatility_regime": regime,
+        "atr_pct": round(atr_pct, 6) if atr_pct is not None else None,
+        "wick_dominance": wick_dominance,
+        "structure_mult": round(applied_mult, 4),
+        "swing_prominence_mult": round(applied_mult, 4),
+        "bos_min_break_atr": round(min_break, 4),
+        "applied": applied_mult > 1.0,
+    })
+    return detail
+
+
+def _crypto_structure_quality_score(
+    bos_data: dict, choch_data: dict, sweep_data: dict, macro_sequence: str, direction: str, wick_dominance
+) -> float:
+    score = 0.0
+    if bool(bos_data.get("bos_bull") or bos_data.get("bos_bear")):
+        score += 0.35
+    if bool(choch_data.get("choch_bull") or choch_data.get("choch_bear")):
+        score += 0.20
+    if bool(sweep_data.get("bull_sweep") or sweep_data.get("bear_sweep")):
+        score += 0.15
+    if (direction == "LONG" and macro_sequence == "HH_HL") or (
+        direction == "SHORT" and macro_sequence == "LH_LL"
+    ):
+        score += 0.15
+    if bool(bos_data.get("bos_volume_confirmed")):
+        score += 0.15
+    try:
+        if wick_dominance is not None and float(wick_dominance) >= 0.65:
+            score -= 0.10
+    except (TypeError, ValueError):
+        pass
+    return round(max(0.0, min(1.0, score)), 4)
+
+
 def _engine_b_structural_tp_buffer_atr_mult() -> float:
     """Dedicated opposing-zone TP buffer, separate from stop-loss zone width."""
     naked_cfg = config.CONFIG.get("NAKED_ENGINE", {}) or {}
@@ -895,10 +1018,20 @@ class NakedEngine:
         return atr if atr > 0 else float(fallback or 0.0)
 
     @staticmethod
-    def _swing_cache(highs: np.ndarray, lows: np.ndarray, atr: float, distance: int = 3) -> dict:
+    def _swing_cache(
+        highs: np.ndarray,
+        lows: np.ndarray,
+        atr: float,
+        distance: int = 3,
+        prominence_mult: float = 1.0,
+    ) -> dict:
         if atr <= 0:
             return {"peak_idx": np.array([], dtype=int), "trough_idx": np.array([], dtype=int)}
-        prominence = atr * 0.8
+        try:
+            prominence_mult = max(1.0, float(prominence_mult or 1.0))
+        except (TypeError, ValueError):
+            prominence_mult = 1.0
+        prominence = atr * 0.8 * prominence_mult
         peak_idx, _ = find_peaks(highs, prominence=prominence, distance=distance)
         trough_idx, _ = find_peaks(-lows, prominence=prominence, distance=distance)
         return {"peak_idx": peak_idx, "trough_idx": trough_idx}
@@ -1079,7 +1212,8 @@ class NakedEngine:
 
     def _detect_bos(self, highs: np.ndarray, lows: np.ndarray, atr: float,
                     volumes: np.ndarray = None, closes: np.ndarray = None,
-                    swings: dict | None = None) -> dict:
+                    swings: dict | None = None,
+                    min_break_atr: float = 0.0) -> dict:
         """Detect Break of Structure (BOS) using close-based breakout of the
         prior structural swing.
 
@@ -1114,6 +1248,10 @@ class NakedEngine:
             prior_low = float(last_troughs[-2])
             prior_high_idx = int(peak_idx[-2])
             prior_low_idx = int(trough_idx[-2])
+            try:
+                min_break_abs = max(0.0, float(min_break_atr or 0.0)) * float(atr)
+            except (TypeError, ValueError):
+                min_break_abs = 0.0
             _has_close = closes is not None and len(closes) > 0
             n = len(closes) if _has_close else len(highs)
 
@@ -1128,7 +1266,7 @@ class NakedEngine:
                 idx = n - k
                 close_v = float(closes[idx]) if _has_close else float(highs[idx])
                 # Bull BOS: close above prior swing high, no subsequent close back below
-                if not bos_bull and close_v > prior_high:
+                if not bos_bull and close_v > prior_high + min_break_abs:
                     invalidated = False
                     for j in range(idx + 1, n):
                         if (float(closes[j]) if _has_close else float(lows[j])) < prior_high:
@@ -1137,7 +1275,7 @@ class NakedEngine:
                     if not invalidated:
                         bos_bull, bos_bull_idx, bos_bull_vol_ref = True, idx, idx
                 close_v_bear = float(closes[idx]) if _has_close else float(lows[idx])
-                if not bos_bear and close_v_bear < prior_low:
+                if not bos_bear and close_v_bear < prior_low - min_break_abs:
                     invalidated = False
                     for j in range(idx + 1, n):
                         if (float(closes[j]) if _has_close else float(highs[j])) > prior_low:
@@ -1189,6 +1327,7 @@ class NakedEngine:
         self, highs: np.ndarray, lows: np.ndarray, atr: float,
         closes: np.ndarray = None, swings: dict | None = None,
         bos_data: dict | None = None,
+        min_break_atr: float = 0.0,
     ) -> dict:
         """Detect Change of Character (CHoCH) — structural reversal signal.
 
@@ -1218,6 +1357,10 @@ class NakedEngine:
                 return {"choch_bull": False, "choch_bear": False, "choch_level": None, "choch_events": []}
 
             last_close = float(closes[-1]) if closes is not None and len(closes) > 0 else None
+            try:
+                min_break_abs = max(0.0, float(min_break_atr or 0.0)) * float(atr)
+            except (TypeError, ValueError):
+                min_break_abs = 0.0
             if isinstance(bos_data, dict) and last_close is not None:
                 choch_events = []
                 choch_level = None
@@ -1225,13 +1368,13 @@ class NakedEngine:
                 choch_bear = False
                 if bos_data.get("bos_bear") and bos_data.get("bos_reference_high") is not None:
                     ref_high = float(bos_data["bos_reference_high"])
-                    choch_bull = bool(last_close > ref_high)
+                    choch_bull = bool(last_close > ref_high + min_break_abs)
                     if choch_bull:
                         choch_level = ref_high
                         choch_events.append({"type": "bullish", "level": ref_high})
                 if bos_data.get("bos_bull") and bos_data.get("bos_reference_low") is not None:
                     ref_low = float(bos_data["bos_reference_low"])
-                    choch_bear = bool(last_close < ref_low)
+                    choch_bear = bool(last_close < ref_low - min_break_abs)
                     if choch_bear:
                         choch_level = ref_low
                         choch_events.append({"type": "bearish", "level": ref_low})
@@ -1258,14 +1401,14 @@ class NakedEngine:
                 and _trend_count(last_troughs, descending=True) >= min_trend_transitions
             )
             bull_break = closes[-1] if closes is not None and len(closes) > 0 else highs[-1]
-            choch_bull = bool(was_bearish and bull_break > last_peaks[-1])
+            choch_bull = bool(was_bearish and bull_break > last_peaks[-1] + min_break_abs)
 
             was_bullish = (
                 _trend_count(last_peaks, descending=False) >= min_trend_transitions
                 and _trend_count(last_troughs, descending=False) >= min_trend_transitions
             )
             bear_break = closes[-1] if closes is not None and len(closes) > 0 else lows[-1]
-            choch_bear = bool(was_bullish and bear_break < last_troughs[-1])
+            choch_bear = bool(was_bullish and bear_break < last_troughs[-1] - min_break_abs)
 
             choch_level = None
             choch_events = []
@@ -2000,7 +2143,13 @@ class NakedEngine:
         struct_closes = np.array([float(c["close"]) for c in struct_candles])
         struct_atr = self._compute_atr_from_candles(struct_candles, fallback=atr)
         zone_atr = self._compute_atr_from_candles(_zone_fvg_candles, fallback=atr)
-        struct_swings = self._swing_cache(struct_highs, struct_lows, struct_atr)
+        crypto_struct_diag = _crypto_structure_adjustment(asset_type, struct_candles, struct_atr)
+        struct_swings = self._swing_cache(
+            struct_highs,
+            struct_lows,
+            struct_atr,
+            prominence_mult=crypto_struct_diag.get("swing_prominence_mult", 1.0),
+        )
 
         # 1. Macro Zones (D1/H4)
         # Using H4 to find thick zones gives standard resolution.
@@ -2045,6 +2194,7 @@ class NakedEngine:
         bos_data = self._detect_bos(
             struct_highs, struct_lows, struct_atr,
             volumes=struct_volumes, closes=struct_closes, swings=struct_swings,
+            min_break_atr=crypto_struct_diag.get("bos_min_break_atr", 0.0),
         )
 
         # Compute swing highs/lows for sweep detection (structural reference levels)
@@ -2069,8 +2219,21 @@ class NakedEngine:
         d1_lows = np.array([float(c["low"]) for c in d1_candles])
         d1_closes = np.array([float(c["close"]) for c in d1_candles])
         d1_atr = self._compute_atr_from_candles(d1_candles, fallback=atr)
-        d1_swings = self._swing_cache(d1_highs, d1_lows, d1_atr)
-        d1_bos = self._detect_bos(d1_highs, d1_lows, d1_atr, closes=d1_closes, swings=d1_swings)
+        d1_crypto_diag = _crypto_structure_adjustment(asset_type, d1_candles, d1_atr)
+        d1_swings = self._swing_cache(
+            d1_highs,
+            d1_lows,
+            d1_atr,
+            prominence_mult=d1_crypto_diag.get("swing_prominence_mult", 1.0),
+        )
+        d1_bos = self._detect_bos(
+            d1_highs,
+            d1_lows,
+            d1_atr,
+            closes=d1_closes,
+            swings=d1_swings,
+            min_break_atr=d1_crypto_diag.get("bos_min_break_atr", 0.0),
+        )
 
         # D1 PD-array detection (informational — no scoring gate change).
         # Detects D1 order blocks and FVGs that price is approaching and flags a
@@ -2193,7 +2356,23 @@ class NakedEngine:
             closes=struct_closes,
             swings=struct_swings,
             bos_data=bos_data,
+            min_break_atr=crypto_struct_diag.get("bos_min_break_atr", 0.0),
         )
+        if str(asset_type or "").lower() == "crypto":
+            crypto_struct_diag["structure_quality_score"] = _crypto_structure_quality_score(
+                bos_data,
+                choch_data,
+                sweep_data,
+                macro_seq_data["state"],
+                direction,
+                crypto_struct_diag.get("wick_dominance"),
+            )
+            crypto_struct_diag["d1"] = {
+                "volatility_regime": d1_crypto_diag.get("volatility_regime"),
+                "applied": d1_crypto_diag.get("applied"),
+                "structure_mult": d1_crypto_diag.get("structure_mult"),
+                "bos_min_break_atr": d1_crypto_diag.get("bos_min_break_atr"),
+            }
 
         # 3d. Breaker Blocks — after CHoCH, the broken swing level becomes new S/R
         # A bullish CHoCH breaks above a Lower High → that LH level becomes support (breaker)
@@ -2690,6 +2869,11 @@ class NakedEngine:
             "latest_confirmed_trigger_candle_time": latest_trigger_candle_time,
             "structure_tf": structure_tf,
             "asset_type": asset_type,
+            **(
+                {"crypto_structure_diagnostics": crypto_struct_diag}
+                if str(asset_type or "").lower() == "crypto"
+                else {}
+            ),
             "d1_adx": d1_adx_val,
             "h4_adx": h4_adx_val,
             # Independent directional assessment from Engine B's own price-action evidence.
@@ -3148,6 +3332,10 @@ class NakedEngine:
             if _forex_adx_min > 0 and float(_engine_b_adx_val) < _forex_adx_min:
                 _diag_codes.append(ENGINE_B_REASON_FOREX_ADX_LOW)
 
+        _engine_b_diag_payload = {"reason_codes": _diag_codes}
+        if asset_type_lower == "crypto" and isinstance(res.get("crypto_structure_diagnostics"), dict):
+            _engine_b_diag_payload["crypto_structure"] = res.get("crypto_structure_diagnostics")
+
         return {
             "score": total_score,
             "gate_score": gate_score,
@@ -3220,7 +3408,7 @@ class NakedEngine:
             "research_lab_detail": research_lab_detail,
             "follow_through_bonus": round(_ft_bonus, 2),
             "follow_through_detail": _ft_detail,
-            "engine_b_diagnostics": {"reason_codes": _diag_codes},
+            "engine_b_diagnostics": _engine_b_diag_payload,
             "_adx_derived_regime": res.get("_adx_derived_regime"),
         }
 

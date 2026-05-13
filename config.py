@@ -912,6 +912,9 @@ CONFIG: dict = {
     "ENGINE_B_STRUCTURE_GATE_ENABLED": True,
     "ENGINE_B_SCAN_CONFIRMATION_GATE_ENABLED": False,
     "ENGINE_B_USE_EXECUTION_LEVELS_FOR_SCAN_SIGNALS": True,
+    "ENGINE_B_CRYPTO_VOLATILITY_ADJUSTMENT_ENABLED": False,
+    "ENGINE_B_CRYPTO_STRUCTURE_MULT": 1.25,
+    "ENGINE_B_CRYPTO_BOS_MIN_BREAK_ATR": 0.10,
     # ── Engine B (Naked Scalp) ────────────────────────────────────────────────
     "NAKED_ENGINE": {
         "zone_multipliers": {
