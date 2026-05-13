@@ -1,6 +1,6 @@
 ---
 name: athena-code
-description: Evidence-only engineering for the ATHENA live multi-engine trading repository. Use when Codex must audit, debug, patch, review, or extend ATHENA code with real execution risk, especially around execution safety, live/backtest parity, data integrity, market-state integrity, score integrity, risk gates, broker lifecycle, dashboard/API/Telegram truth, or engine separation across Engine A, B, C, and D.
+description: Evidence-only engineering for the ATHENA live multi-engine trading repository. Use when auditing, debugging, patching, reviewing, or extending ATHENA code with real execution risk, especially around execution safety, live/backtest parity, data integrity, market-state integrity, score integrity, risk gates, broker lifecycle, dashboard/API/Telegram truth, or engine separation across Engine A, B, C, and D.
 ---
 
 # ATHENA Code

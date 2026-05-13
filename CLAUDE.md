@@ -189,68 +189,14 @@ Engine B AI is **review-only**. AI must not override gates, risk/freshness check
 
 ---
 
-## 7. Audits — operating contract
+## 7. Audits, Backtests, Engine Entry Design
 
-### Critical agent behavior
+Detailed methodology lives in skills — Claude Code will load the relevant one:
 
-**Audit / review / debug / bug-finding:**
-
-- Do not stop at the happy path or after the first issue.
-- Do not patch before producing a bug list unless explicitly asked.
-- Trace producer → consumer contracts; verify missing/false/null/stale/malformed/empty cases separately.
-- Treat missing safety fields as critical until proven fail-closed.
-- Separate confirmed bugs from suspicious patterns; label gaps `not verified`.
-- Do not call a path “safe” without execution guard, broker adapter, monitor, and audit/log path.
-- Prefer evidence: code paths, tests, logs, repro steps. If a test cannot run, say why and name the test.
-
-**Implementation / fixes:**
-
-- Smallest safe change; preserve behavior unless that behavior is the bug.
-- No hardcoded trading logic; add/update focused tests; run when possible; summarize before/after and residual risk.
-
-### Audit completion checklist
-
-An audit is complete only when the response includes:
-
-1. Files inspected  
-2. Functions/classes inspected  
-3. Execution paths traced  
-4. Commands/tests run  
-5. Areas **not verified**  
-6. Ranked bug list **with evidence**  
-7. Recommended or added negative-case tests  
-
-Per bug/suspected bug include: severity, file/function, producer, consumer, trigger, actual vs expected behavior, impact, minimal fix, test to prove.
-
-Never say **no bugs** unless inspected scope **and** skipped scope are explicit.
-
-### Mandatory audit contract checks
-
-Trace end-to-end when required fields are **missing**, **false**, **null**, **stale**, **malformed**, **empty**, **wrong type**, **delayed**, or **partially populated**.
-
-**1. Fail-closed defaults** — Reject-by-default unless proven otherwise for gates, confirmations, freshness, scores, RR, structure, AI review, execution approval, broker symbol, SL/TP, ATR, session, kill-switch, risk config, positions, balances. Flag helpers that return `True` / `trade` / `passed` / `execute` / `approved` / `allow` / `valid` / `safe` from absent or bad data.
-
-**2. Payload handoff** — Trace scanner/backtest/engine/consensus outputs into `execution.py`, `auto_trader.py`, `risk_engine.py`, brokers, monitors, audit/API/UI.
-
-**3. Boolean presence vs truth** — Scrutinize `in`-checks, `.get(...)`, `.get(..., True)`, `{}`/`[]` fallbacks; verify omitted key vs `False`/`None`/empty/type/stale separately.
-
-**4. Mode dispatch & early returns** — `tp_mode`, backtest/live/paper, structure gates, AI toggles, engine enablement, sessions, overrides, fallback thresholds.
-
-**5. Live vs backtest parity** — SL/TP/ATR, score group, session, volume, feeds, freshness, RR, broker mapping, rounding, spreads/slippage, approval fields, sizing, monitors.
-
-**6. Execution safety handoff** — Producer → scoring → consensus → guard → risk → levels → broker → responses → monitors → audit/log → UI/API.
-
-**7. Negative-case tests** — Omitted flags, failed confirmations, stale candles, bad ATR, missing symbol/levels, rejected SL/TP updates, fills/orders lifecycle, duplicates, restart recovery, malformed payloads, kill-switch, disabled engine, paper/live mismatch.
-
-Label any unchecked area **`not verified`**.
-
-### Primary inspection order
-
-**Execution safety:** scanner → engine scores → Engine C/trust → approval payload → `execution.py` → `auto_trader.py` → `risk_engine.py` → broker → monitor → audit/log → API/UI.
-
-**Backtest/live parity:** BT signal + levels → live signal + levels → ATR/score/session/volume/feed → broker precision → monitor/audit.
-
-**AI/vision:** prompt → payload → parser → footer/ratings/levels → review gate → execution handoff → logs/audit.
+- Audit/bug-finding → `.claude/skills/athena-audit/SKILL.md`
+- Backtest analysis → `.claude/skills/backtest-analysis/SKILL.md`
+- Engine A entry redesign → `.claude/skills/engine-entry-design/SKILL.md`
+- Evidence-only ATHENA engineering (execution safety, parity, gates) → `.claude/skills/athena-code/SKILL.md`
 
 ---
 
@@ -400,113 +346,6 @@ If commands are unknown: check `README`, `pyproject.toml`, `pytest.ini`, `packag
 ```bash
 pytest path/to/test_file.py -q
 ```
-
----
-
-## 13. Backtest Analysis
-
-### Key files
-
-- `backtest_runner.py` — main orchestrator, engine-specific run logic
-- `backtest.py` — legacy harness
-- `backtest_candle_cache.py` — OHLCV cache (`candle_cache.db`)
-- `run_backtest.py` — CLI runner
-- `research_validation.py` — strategy validation layer
-
-### Before interpreting results
-
-Always verify:
-
-- candle source is the same for signal generation and fill simulation
-- signal was scored on a closed bar (`iloc[-2]`), not a forming bar (`iloc[-1]`)
-- timeframe key in engine output matches what `execution.py` expects — known mismatch for swing-style forex (D1 vs H4 key) was fixed; confirm fix is present before trusting results
-- `AUTO_TRADE_MIN_SCORE` is a dead config key — verify which threshold gate is actually being tested
-- signal count vs trade count are consistent; large divergence indicates fill logic bug or RR filter too aggressive
-
-### Engine A backtest checklist
-
-- Hit rate near 50% across 200+ samples = noise, not edge; do not claim directional edge without chi-squared test
-- `combinedConviction` structurally caps Engine A-only signals below the auto-trade gate; verify this is not the cause of zero auto-trades before investigating elsewhere
-- Structure-first entry model: Engine B structural confirmation (BOS or CHoCH in direction) is required alongside the Engine A score gate; verify both gates are present in `backtest_runner.py`
-- Forming-bar lookahead: confirm signal bar is `iloc[-2]` throughout
-
-### Engine C backtest checklist
-
-- Timeout rate above 10%: inspect `_monitor_fill_index` bisect call — the type mismatch between float price and list-of-dicts was a confirmed bug; verify the fix is applied before drawing conclusions
-- `trust_neither` rate above 40%: signal quality issue upstream in Engine A or B, not an Engine C problem
-- Weight sum must equal 1.0 at every decision; flag if not enforced
-
-### Statistical validity gates
-
-- 200 closed trades minimum for directional hit-rate conclusions
-- 500 trades minimum for Sharpe/expectancy claims
-- Always split long vs short hit rates; aggregated can mask directional bias
-- Required report fields: trades, win_rate, avg_r, expectancy, max_drawdown_r, profit_factor
-
-### Debugging workflow
-
-1. Run with verbose/debug flag; count and categorize SKIP / NO_FILL / TIMEOUT entries
-2. Dump first 10 signal records; verify field presence and types
-3. Check candle alignment: signal bar close timestamp vs fill bar open timestamp
-4. For Engine A: dump `factor_score_detail` for 5 sample signals; confirm normalization sum equals raw weight sum
-5. For Engine C: confirm weight output sums to 1.0 and trust verdict is always one of the four valid states
-
----
-
-## 14. Engine A — Structure-First Entry Redesign
-
-### Context
-
-Engine A's scorer has been confirmed as statistically near-random for directional hit-rate.
-The approved fix is a structure-first entry model: Engine B structural confirmation is
-required alongside (not instead of) the existing Engine A score gate.
-
-### Design contract
-
-A signal is a valid entry candidate only when ALL of the following pass:
-
-1. Engine B structural confirmation: BOS or CHoCH in the correct direction, from `market_structure.py` / `zone_registry.py`
-2. Structural recency: BOS/CHoCH within N candles of signal bar (configurable, default 5)
-3. Direction agreement: Engine A `trend_score` direction matches Engine B BOS/CHoCH direction
-4. Engine A score gate: `final_score >= threshold` (existing, unchanged)
-
-The structure gate must be evaluated before the score gate. If structure fails, the signal is skipped — fail closed.
-
-### Implementation target
-
-The structure gate is added as a pre-filter in the signal loop inside `backtest_runner.py`:
-
-- structure check runs first
-- if structure check fails, `continue` — do not score
-- score gate runs second
-- only signals passing both gates are recorded
-
-### Config gate
-
-Add under `ENGINE_A` in `config.yaml`:
-
-```yaml
-ENGINE_A:
-  structure_first_entry:
-    enabled: true
-    lookback_bars: 5
-    require_bos: true
-    require_choch: false
-```
-
-`enabled: false` must reproduce the original near-random baseline exactly.
-
-### Verification checklist
-
-Before marking this implementation complete:
-
-- backtest with gate enabled vs disabled produces measurably different hit-rate
-- `enabled: false` reproduces the near-random baseline
-- no forming-bar lookahead in the structure check
-- structure check uses closed bars only (`iloc[-2]`)
-- direction mapping between Engine A `trend_score` and Engine B BOS/CHoCH direction is consistent and tested
-- config key is respected; hardcoding is not acceptable
-- focused test covers: gate enabled + structure fails = no signal, gate enabled + structure passes + score fails = no signal, gate enabled + both pass = signal recorded
 
 ---
 
