@@ -83,12 +83,27 @@ def _auto_trade_live_gate_display(cfg: dict) -> str:
 
 
 def _signal_engine(signal: dict) -> str:
-    engine = str(signal.get("engine") or "").strip().lower()
+    engine = str(signal.get("engine") or signal.get("source_engine") or "").strip().lower()
     if engine == "scalp":
         return "scalp"
     if engine in ("engine_c", "consensus"):
         return "engine_c"
+    if engine in ("engine_b", "naked", "naked_structure", "structure", "smc"):
+        return "engine_b"
+    if bool(signal.get("is_naked")):
+        return "engine_b"
+    if isinstance(signal.get("engine_b"), dict) or isinstance(signal.get("naked_data"), dict):
+        return "engine_b"
     return "engine_a"
+
+
+def _signal_pair_key(signal: dict) -> str:
+    return str(
+        signal.get("pair")
+        or signal.get("display")
+        or signal.get("symbol")
+        or ""
+    ).strip().upper()
 
 
 def _signal_expected_prob(signal: dict) -> float | None:
@@ -241,6 +256,8 @@ class AutoTrader:
         self._lock = threading.Lock()
 
         self._trades_today = 0
+
+        self._naked_trades_today_by_pair: dict[str, int] = {}
 
         self._last_date = ""  # YYYY-MM-DD UTC
 
@@ -458,6 +475,8 @@ class AutoTrader:
 
             self._trades_today = 0
 
+            self._naked_trades_today_by_pair.clear()
+
     def _next_scan_time(self) -> datetime:
 
         cfg = self._config_fn() if self._config_fn else {}
@@ -579,6 +598,10 @@ class AutoTrader:
         signals = sorted(signals, key=_current_combined_conviction, reverse=True)
 
         max_per_scan = cfg.get("AUTO_TRADE_MAX_PER_SCAN", 1)
+        try:
+            naked_max_daily = int(cfg.get("NAKED_MAX_DAILY", 0) or 0)
+        except (TypeError, ValueError):
+            naked_max_daily = 0
 
         executed = 0
         positions_cache: dict[str, list[dict] | None] = {}
@@ -590,6 +613,14 @@ class AutoTrader:
             with self._lock:
                 if self._trades_today >= max_daily:
                     break
+                if naked_max_daily > 0 and _signal_engine(sig) == "engine_b":
+                    pair_key = _signal_pair_key(sig)
+                    if pair_key and self._naked_trades_today_by_pair.get(pair_key, 0) >= naked_max_daily:
+                        log.info(
+                            f"[AUTO] {sig.get('pair')} skipped: Engine B daily pair cap "
+                            f"{naked_max_daily} reached"
+                        )
+                        continue
 
             ok, reason = self._can_execute(sig, cfg)
 
@@ -623,6 +654,13 @@ class AutoTrader:
 
             if success:
                 executed += 1
+                if naked_max_daily > 0 and _signal_engine(sig) == "engine_b":
+                    pair_key = _signal_pair_key(sig)
+                    if pair_key:
+                        with self._lock:
+                            self._naked_trades_today_by_pair[pair_key] = (
+                                self._naked_trades_today_by_pair.get(pair_key, 0) + 1
+                            )
 
         log.info(f"[AUTO] Scan complete — {executed} trade(s) executed")
 

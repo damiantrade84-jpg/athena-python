@@ -874,11 +874,19 @@ def api_quick_execute():
                     f"[QUICK EXEC] {pair}: refresh failed ({_fresh_err}) - continuing with original direction"
                 )
 
-    if _has_engine_b_context and _apply_engine_b_execution_levels(sig, engine_b):
-        _r.log.warning(
-            f"[QUICK EXEC] {sig.get('pair')}: preserved Engine B execution levels "
-            f"SL={sig.get('sl')} TP1={sig.get('tp1')}"
-        )
+    if _has_engine_b_context:
+        if _apply_engine_b_execution_levels(sig, engine_b):
+            _r.log.warning(
+                f"[QUICK EXEC] {sig.get('pair')}: preserved Engine B execution levels "
+                f"SL={sig.get('sl')} TP1={sig.get('tp1')}"
+            )
+        else:
+            return jsonify(
+                {
+                    "error": "ENGINE_B_LEVELS_UNAVAILABLE: Engine B execution levels missing or invalid",
+                    "pair": sig.get("pair"),
+                }
+            ), 409
     else:
         try:
             recomputed = recompute_levels_for_style(

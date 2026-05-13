@@ -277,16 +277,22 @@ def _engine_b_confirmed_only_struct_candles(
     structure_tf: str,
     *,
     pair: dict | None,
+    diagnostics: dict | None = None,
 ) -> list:
     """Use confirmed (closed) bars only for structural TF when pair context is available."""
+    def _reason(code: str, **extra) -> None:
+        if isinstance(diagnostics, dict):
+            diagnostics.clear()
+            diagnostics.update({"reason": code, **extra})
+
     if not bool(config.CONFIG.get("ENGINE_B_STRIP_FORMING_STRUCT", True)):
+        _reason("disabled")
         return struct_candles
-    if (
-        not struct_candles
-        or not pair
-        or not isinstance(pair, dict)
-        or len(struct_candles) < 2
-    ):
+    if not struct_candles or len(struct_candles) < 2:
+        _reason("insufficient_input", candle_count=len(struct_candles or []))
+        return []
+    if not pair or not isinstance(pair, dict):
+        _reason("missing_pair_context")
         return []
     try:
         import time
@@ -307,8 +313,19 @@ def _engine_b_confirmed_only_struct_candles(
         confirmed = list(st.get("confirmed") or [])
         min_bars = int(config.CONFIG.get("ENGINE_B_STRUCT_CONFIRMED_MIN_BARS", 20) or 20)
         if len(confirmed) >= min_bars:
+            _reason(
+                "confirmed",
+                confirmed_count=len(confirmed),
+                min_bars=min_bars,
+            )
             return confirmed
-    except Exception:
+        _reason(
+            "insufficient_confirmed_bars",
+            confirmed_count=len(confirmed),
+            min_bars=min_bars,
+        )
+    except Exception as exc:
+        _reason("split_market_state_error", error=str(exc))
         return []
     return []
 
@@ -514,7 +531,7 @@ def _asset_class_structure_adjustment(
     vol_aware = bool(
         config.CONFIG.get("ENGINE_B_ASSET_CLASS_VOLATILITY_AWARE_ENABLED", False)
     )
-    applicable = asset_class in {"stock", "index", "commodity", "etf", "etf_bond"}
+    applicable = asset_class in {"forex", "stock", "index", "commodity", "etf", "etf_bond"}
     detail = {
         "asset_type": str(asset_type or "").lower(),
         "asset_class": asset_class,
@@ -590,7 +607,7 @@ def _asset_class_structure_adjustment(
         min_break_base = _float_value_from_mapping(
             break_cfg, str(score_group).lower(), 0.0
         )
-    min_break = max(0.0, min_break_base) * applied_mult if applied_mult > 1.0 else 0.0
+    min_break = max(0.0, min_break_base) * applied_mult if enabled else 0.0
 
     detail.update({
         "volatility_regime": regime,
@@ -598,7 +615,7 @@ def _asset_class_structure_adjustment(
         "structure_mult": round(applied_mult, 4),
         "swing_prominence_mult": round(applied_mult, 4),
         "bos_min_break_atr": round(min_break, 4),
-        "applied": applied_mult > 1.0,
+        "applied": applied_mult > 1.0 or min_break > 0.0,
     })
     return detail
 
@@ -1284,22 +1301,30 @@ def resolve_engine_b_execution_levels(
         except (TypeError, ValueError):
             _fallback_rr = 0.0
         if _min_rr is not None and _fallback_rr > 0 and _exec_rr < _min_rr:
-            _sl_dist = abs(_entry - _exec_sl)
-            if _sl_dist > 0:
-                _target_rr = max(_fallback_rr, _min_rr)
-                _exec_tp = (
-                    _entry + (_sl_dist * _target_rr)
-                    if direction == "LONG"
-                    else _entry - (_sl_dist * _target_rr)
-                )
-                _tp_source = "fallback_rr"
-                _level_mode = f"{_sl_source}_sl_{_tp_source}_tp"
-                _rr_source = _level_mode
-                _fallback_applied = True
-                _fallback_reason = "structural_tp_below_min_rr"
-                _exec_rr, _exec_valid, _exec_reject, _exec_tp_side_ok = _compute_exec_rr(
-                    _exec_sl, _exec_tp
-                )
+            _fallback_reason = (
+                "structural_tp_below_min_rr"
+                if _tp_source == "structural"
+                else f"{_tp_source}_tp_below_min_rr"
+            )
+            if bool(config.CONFIG.get("ENGINE_B_ALLOW_SYNTHETIC_FALLBACK_RR_TP", False)):
+                _sl_dist = abs(_entry - _exec_sl)
+                if _sl_dist > 0:
+                    _target_rr = max(_fallback_rr, _min_rr)
+                    _exec_tp = (
+                        _entry + (_sl_dist * _target_rr)
+                        if direction == "LONG"
+                        else _entry - (_sl_dist * _target_rr)
+                    )
+                    _tp_source = "fallback_rr"
+                    _level_mode = f"{_sl_source}_sl_{_tp_source}_tp"
+                    _rr_source = _level_mode
+                    _fallback_applied = True
+                    _exec_rr, _exec_valid, _exec_reject, _exec_tp_side_ok = _compute_exec_rr(
+                        _exec_sl, _exec_tp
+                    )
+            else:
+                _exec_valid = False
+                _exec_reject = _fallback_reason
 
     return {
         "entry": _entry,
@@ -1799,10 +1824,12 @@ class NakedEngine:
                             displacement = (max_after - ob_top) / atr if atr > 0 else 0
                         else:
                             displacement = 0
-                        # Volume strength
+                        # Volume strength. Missing/zero volume must not grant the
+                        # 40% volume contribution used for exchange-volume assets.
                         vol = float(c.get("vol", 0))
-                        avg_vol = np.mean([float(candles[k].get("vol", 0)) for k in range(max(0, i - 20), i)]) if i > 0 else 1
-                        vol_ratio = vol / avg_vol if avg_vol > 0 else 1.0
+                        avg_vol = np.mean([float(candles[k].get("vol", 0)) for k in range(max(0, i - 20), i)]) if i > 0 else 0.0
+                        volume_available = bool(vol > 0 and avg_vol > 0)
+                        vol_ratio = vol / avg_vol if volume_available else 0.0
                         # Strength score: 60% displacement, 40% volume (capped 0-100)
                         strength = min(100, int((min(displacement / 2.0, 1.0) * 60) + (min(vol_ratio / 2.0, 1.0) * 40)))
                         obs.append({
@@ -1811,6 +1838,7 @@ class NakedEngine:
                             "bottom": ob_bottom,
                             "displacement": round(displacement, 2),
                             "vol_ratio": round(vol_ratio, 2),
+                            "volume_available": volume_available,
                             "strength": strength,
                             "mitigated": False,
                         })
@@ -1846,10 +1874,12 @@ class NakedEngine:
                             displacement = (ob_top - min_after) / atr if atr > 0 else 0
                         else:
                             displacement = 0
-                        # Volume strength
+                        # Volume strength. Missing/zero volume must not grant the
+                        # 40% volume contribution used for exchange-volume assets.
                         vol = float(c.get("vol", 0))
-                        avg_vol = np.mean([float(candles[k].get("vol", 0)) for k in range(max(0, i - 20), i)]) if i > 0 else 1
-                        vol_ratio = vol / avg_vol if avg_vol > 0 else 1.0
+                        avg_vol = np.mean([float(candles[k].get("vol", 0)) for k in range(max(0, i - 20), i)]) if i > 0 else 0.0
+                        volume_available = bool(vol > 0 and avg_vol > 0)
+                        vol_ratio = vol / avg_vol if volume_available else 0.0
                         strength = min(100, int((min(displacement / 2.0, 1.0) * 60) + (min(vol_ratio / 2.0, 1.0) * 40)))
                         obs.append({
                             "type": "bearish",
@@ -1857,6 +1887,7 @@ class NakedEngine:
                             "bottom": ob_bottom,
                             "displacement": round(displacement, 2),
                             "vol_ratio": round(vol_ratio, 2),
+                            "volume_available": volume_available,
                             "strength": strength,
                             "mitigated": False,
                         })
@@ -1874,7 +1905,7 @@ class NakedEngine:
         swing_high: float = None, swing_low: float = None,
     ) -> dict:
         """
-        Detect liquidity sweep patterns in the last 5 candles.
+        Detect liquidity sweep patterns in the configured recent candle window.
         Uses swing highs/lows (from find_peaks) as reference levels where
         stop losses cluster per SMC methodology.
         
@@ -1908,19 +1939,25 @@ class NakedEngine:
                 lookback_highs = highs[-15:-5] if len(highs) >= 15 else highs[:-5]
                 ref_high = float(np.max(lookback_highs)) if len(lookback_highs) > 0 else float(highs[-6])
 
-            last_5_highs = highs[-5:]
-            last_5_lows = lows[-5:]
-            last_5_closes = closes[-5:]
+            try:
+                sweep_lookback = int(config.CONFIG.get("ENGINE_B_SWEEP_LOOKBACK_BARS", 5) or 5)
+            except (TypeError, ValueError):
+                sweep_lookback = 5
+            sweep_lookback = max(1, min(sweep_lookback, len(closes)))
+
+            recent_highs = highs[-sweep_lookback:]
+            recent_lows = lows[-sweep_lookback:]
+            recent_closes = closes[-sweep_lookback:]
 
             bull_sweep = False
             bear_sweep = False
             sweep_low = None
             sweep_high = None
 
-            for i in range(5):
-                high = last_5_highs[i]
-                low = last_5_lows[i]
-                close = last_5_closes[i]
+            for i in range(sweep_lookback):
+                high = recent_highs[i]
+                low = recent_lows[i]
+                close = recent_closes[i]
 
                 # Bullish sweep: wick below swing low, close above it (stop hunt below → reversal up)
                 if (
@@ -2439,7 +2476,13 @@ class NakedEngine:
             struct_candles = h4_candles
         else:
             struct_candles = h1_candles
-        struct_candles = _engine_b_confirmed_only_struct_candles(struct_candles, structure_tf, pair=pair)
+        forming_strip_diag: dict = {}
+        struct_candles = _engine_b_confirmed_only_struct_candles(
+            struct_candles,
+            structure_tf,
+            pair=pair,
+            diagnostics=forming_strip_diag,
+        )
         trigger_candles = h4_candles if _tfs["trigger"] == "H4" else h1_candles
         _zone_fvg_candles = struct_candles if structure_tf == "H4" else h4_candles
 
@@ -2709,6 +2752,7 @@ class NakedEngine:
             "style": style,
             "pair": pair,
             "enable_profile_context": enable_profile_context,
+            "forming_strip_diagnostics": forming_strip_diag,
         }
 
     def analyze_structure_direction(
@@ -3306,7 +3350,7 @@ class NakedEngine:
         sl = _exec_lvl["execution_sl"]
         tp = _exec_lvl["execution_tp"]
         rr = _exec_lvl["rr_used_for_gate"]
-        rr_ok = rr >= min_rr
+        rr_ok = bool(_exec_lvl["execution_levels_valid"]) and rr >= min_rr
 
         # FIX 7: Apply contextual room gate after rr is computed
         _effective_min_room_atr = _get_min_room_atr(rr, bool(res.get("bos_confirmed")), asset_type_lower, exec_style)
@@ -3353,7 +3397,9 @@ class NakedEngine:
             or (absorption_confirmed and location_at_extreme)  # NEW: mean-reversion entry
         )
 
-        space_ok = room_ok or rr_ok
+        _rr_space_tp_is_structural = str(_exec_lvl.get("level_mode") or "").endswith("_structural_tp")
+        rr_can_satisfy_space = bool(rr_ok and _rr_space_tp_is_structural)
+        space_ok = room_ok or rr_can_satisfy_space
         # Some asset classes often have a nearby structural level while the
         # execution RR model still has valid protective distance. Keep
         # historical behavior unless the explicit asset-scoped flag is enabled.
@@ -3577,6 +3623,7 @@ class NakedEngine:
             "space_gate_ok": space_gate_ok,
             "rr_space_gate_enabled": rr_space_gate_enabled,
             "forex_rr_space_gate_enabled": forex_rr_space_gate_enabled,
+            "rr_can_satisfy_space_gate": rr_can_satisfy_space,
             "min_room_atr_used": round(_effective_min_room_atr, 4),
             "rr_ok": rr_ok,
             "tp_side_ok": tp_side_ok,

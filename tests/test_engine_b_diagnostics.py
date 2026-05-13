@@ -23,6 +23,7 @@ from market_structure import (
     NakedEngine,
     _engine_b_structural_target_price,
     _engine_b_structural_tp_buffer_atr_mult,
+    _engine_b_confirmed_only_struct_candles,
     _engine_b_micro_breakout_value,
     _asset_class_structure_adjustment,
     _engine_b_forex_session_structure_context,
@@ -125,6 +126,121 @@ def test_crypto_structure_adjustment_enabled_requires_stronger_bos(monkeypatch):
 
     assert legacy["bos_bull"] is True
     assert adjusted["bos_bull"] is False
+
+
+def test_forex_asset_structure_adjustment_applies_configured_bos_min_break(monkeypatch):
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_ASSET_CLASS_ADJUSTMENTS_ENABLED", True)
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_ASSET_CLASS_VOLATILITY_AWARE_ENABLED", True)
+    monkeypatch.setitem(
+        config.CONFIG,
+        "ENGINE_B_ASSET_CLASS_BOS_MIN_BREAK_ATR",
+        {"forex": 0.05},
+    )
+    candles = [
+        {"open": 100.0, "high": 101.0, "low": 99.0, "close": 100.5}
+        for _ in range(24)
+    ]
+
+    diag = _asset_class_structure_adjustment("forex", "forex_majors", candles, atr=1.0)
+
+    assert diag["asset_class"] == "forex"
+    assert diag["bos_min_break_atr"] == pytest.approx(0.05)
+
+
+def test_order_block_zero_volume_does_not_receive_volume_strength_bonus():
+    local_engine = NakedEngine()
+    candles = [
+        {"open": 100.0, "high": 101.0, "low": 99.0, "close": 100.5, "vol": 0.0}
+        for _ in range(14)
+    ]
+    candles[9].update({"open": 100.0, "high": 100.2, "low": 98.8, "close": 99.0, "vol": 0.0})
+    candles[10].update({"open": 99.2, "high": 103.5, "low": 99.0, "close": 103.0, "vol": 0.0})
+
+    obs = local_engine._detect_order_blocks(
+        candles,
+        {
+            "bos_bull": True,
+            "last_broken_high": 102.0,
+            "bos_bull_bar_index": 10,
+        },
+        atr=1.0,
+        structure_tf="H4",
+    )
+
+    assert obs
+    assert obs[0]["strength"] == 60
+    assert obs[0]["volume_available"] is False
+
+
+def test_sweep_lookback_bars_uses_configured_window(monkeypatch):
+    local_engine = NakedEngine()
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_SWEEP_LOOKBACK_BARS", 7)
+    highs = np.array([105.0] * 12, dtype=float)
+    lows = np.array([101.0] * 12, dtype=float)
+    closes = np.array([101.5] * 12, dtype=float)
+    lows[-6] = 99.0
+    closes[-6] = 100.5
+
+    out = local_engine._detect_sweep(
+        highs,
+        lows,
+        closes,
+        atr=1.0,
+        swing_low=100.0,
+        swing_high=106.0,
+    )
+
+    assert out["bull_sweep"] is True
+    assert out["sweep_low"] == pytest.approx(99.0)
+
+
+def test_forming_strip_reports_missing_pair_reason(monkeypatch):
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_STRIP_FORMING_STRUCT", True)
+    diagnostics = {}
+    out = _engine_b_confirmed_only_struct_candles(
+        [{"time": "2026-05-13T00:00:00Z"}, {"time": "2026-05-13T04:00:00Z"}],
+        "H4",
+        pair=None,
+        diagnostics=diagnostics,
+    )
+
+    assert out == []
+    assert diagnostics["reason"] == "missing_pair_context"
+
+
+def test_rr_cannot_satisfy_space_gate_with_non_structural_tp(monkeypatch):
+    local_engine = NakedEngine()
+    monkeypatch.setitem(
+        config.CONFIG,
+        "ENGINE_B_RR_CAN_SATISFY_SPACE_GATE",
+        {"default": False, "forex": True},
+    )
+    res = _base_res_long()
+    res["asset_type"] = "forex"
+    res["distance_to_res"] = 0.05
+    res["recommended_take_profit"] = None
+
+    out = local_engine.calculate_confidence(
+        res,
+        current_price=100.0,
+        direction="LONG",
+        learning_ctx=None,
+        entry_candles=[],
+        style_profile={
+            "style": "intraday",
+            "min_score": 3.0,
+            "min_room_atr": 0.35,
+            "min_rr": 1.5,
+            "fallback_rr": 2.0,
+            "require_macro_align": False,
+        },
+    )
+
+    assert out["rr_ok"] is True
+    assert out["level_mode"].endswith("_atr_tp")
+    assert out["room_ok"] is False
+    assert out["space_gate_ok"] is False
+    assert out["passed"] is False
 
 
 def test_forex_session_structure_context_default_disabled_no_score_bonus(monkeypatch):

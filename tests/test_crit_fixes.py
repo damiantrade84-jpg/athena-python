@@ -7,6 +7,7 @@ CRIT-002: Forex intermarket max_score cap must be the same (3.0) across
           live (athena.py) and backtest (backtest_runner.py) paths.
 """
 import importlib
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -159,6 +160,46 @@ class TestQuickExecuteExecutionGuard:
 
         assert r_quick.status_code == r_exec.status_code == 503
         assert r_quick.get_json()["error"] == r_exec.get_json()["error"]
+
+    def test_quick_execute_rejects_engine_b_without_execution_levels(self, monkeypatch):
+        """/api/quick-execute must fail closed when structural Engine B levels are absent."""
+        import execution
+        from flask import Flask
+
+        rt_mock = _make_rt(execution_enabled=True)
+        rt_mock.log = MagicMock()
+
+        def _unexpected_recompute(*_args, **_kwargs):
+            raise AssertionError("Engine B quick execute must not recompute generic levels")
+
+        monkeypatch.setattr(execution, "rt", lambda: rt_mock)
+        monkeypatch.setattr(execution, "recompute_levels_for_style", _unexpected_recompute)
+
+        app = Flask(__name__)
+        execution.register_execution_routes(app)
+        client = app.test_client()
+
+        resp = client.post(
+            "/api/quick-execute",
+            json={
+                "signal": {
+                    "pair": "EUR/USD",
+                    "display": "EUR/USD",
+                    "type": "forex",
+                    "direction": "LONG",
+                    "price": 1.1,
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "is_naked": True,
+                    "naked_data": {"passed": True},
+                },
+                "engine_b": {"passed": True},
+                "pip_mode": "intraday",
+            },
+        )
+
+        data = resp.get_json()
+        assert resp.status_code == 409
+        assert "ENGINE_B_LEVELS_UNAVAILABLE" in data["error"]
 
     def test_quick_execute_logs_empty_broker_failure(self, monkeypatch):
         """/api/quick-execute must not hide broker failures with no error field."""

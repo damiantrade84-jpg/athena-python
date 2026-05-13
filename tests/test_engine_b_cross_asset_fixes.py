@@ -151,6 +151,28 @@ def test_scanner_engine_b_alignment_uses_final_score_gate():
     assert conf_b["min_score_scaled"] == pytest.approx(4.5)
 
 
+def test_scanner_opposite_independent_engine_b_does_not_raise_conviction():
+    combined = scanner._engine_b_scan_combined_conviction(
+        a_norm=0.50,
+        b_norm=1.00,
+        weights={"A": 0.40, "B": 0.60},
+        direction_aligned=False,
+    )
+
+    assert combined == pytest.approx(0.30)
+
+
+def test_scanner_aligned_engine_b_uses_regime_weights_for_conviction():
+    combined = scanner._engine_b_scan_combined_conviction(
+        a_norm=0.50,
+        b_norm=1.00,
+        weights={"A": 0.40, "B": 0.60},
+        direction_aligned=True,
+    )
+
+    assert combined == pytest.approx(0.80)
+
+
 def test_execution_prefers_nested_engine_b_execution_levels():
     sig = {
         "is_naked": True,

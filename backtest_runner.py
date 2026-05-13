@@ -410,9 +410,9 @@ def _engine_a_level_atr_for_bt(
 
 
 def _engine_b_level_atr_for_bt(
-    signal_atr: float | None, pair: dict, style: str | None
+    signal_atr: float | None, pair: dict, style: str | None, *, as_of=None
 ) -> tuple[float | None, str]:
-    """Resolve Engine B backtest ATR for structure/levels (Binance parity same as Engine A)."""
+    """Resolve Engine B backtest ATR for structure/levels using the live level feed contract."""
     p = pair or {}
     if str(p.get("type") or "").lower() == "crypto":
         if (
@@ -434,7 +434,12 @@ def _engine_b_level_atr_for_bt(
                 return None, "signal_unavailable"
         if str(CONFIG.get("ENGINE_B_CRYPTO_LEVELS_FEED", "bybit")).lower() == "bybit":
             bybit_fn = getattr(_rt(), "bybit_atr_for_levels", None)
-            bybit_atr = bybit_fn(pair, style) if callable(bybit_fn) else None
+            bybit_atr = None
+            if callable(bybit_fn):
+                try:
+                    bybit_atr = bybit_fn(pair, style, as_of=as_of)
+                except TypeError:
+                    bybit_atr = bybit_fn(pair, style)
             if bybit_atr:
                 return float(bybit_atr), "bybit"
             if not bool(CONFIG.get("ENGINE_B_CRYPTO_LEVELS_SIGNAL_FEED_FALLBACK", False)):
@@ -4062,7 +4067,9 @@ def backtest_pair_naked(pair: dict, style: str = "naked", validation_mode="stand
             # Reconstruct the last 50 bars from the precomputed series for the volatility gate
             atr_list_50 = _atr_full[max(0, _idx - 50) : _idx]
 
-        atr, _eb_bt_atr_feed = _engine_b_level_atr_for_bt(atr, pair, resolved_style)
+        atr, _eb_bt_atr_feed = _engine_b_level_atr_for_bt(
+            atr, pair, resolved_style, as_of=entry_time
+        )
         if atr is None or float(atr) <= 0:
             i += 1
             continue
@@ -4408,18 +4415,6 @@ def backtest_pair_naked(pair: dict, style: str = "naked", validation_mode="stand
                         price_never_reached_sl = False
 
             if direction == "LONG":
-                # Check TP first — if price reached TP on this bar, it wins
-                if f_high >= tp:
-                    outcome = "TP1"
-                    r_multiple = round(target_rr, 2)
-                    price_never_reached_tp = False
-                    break
-                # Then check SL (before any BE modification)
-                if f_low <= _active_sl:
-                    outcome = "BE" if _be_triggered else "SL"
-                    r_multiple = 0.0 if outcome == "BE" else -1.0
-                    price_never_reached_sl = False
-                    break
                 # BE trigger — only activate if RR >= be_min_rr
                 if not _be_triggered and risk > 0 and target_rr >= _be_min_rr:
                     if f_high >= entry + (risk * _be_arm_rr):
@@ -4428,18 +4423,6 @@ def backtest_pair_naked(pair: dict, style: str = "naked", validation_mode="stand
                         be_armed = True
                         be_trigger_r = _be_arm_rr
             else:
-                # Check TP first
-                if f_low <= tp:
-                    outcome = "TP1"
-                    r_multiple = round(target_rr, 2)
-                    price_never_reached_tp = False
-                    break
-                # Then check SL
-                if f_high >= _active_sl:
-                    outcome = "BE" if _be_triggered else "SL"
-                    r_multiple = 0.0 if outcome == "BE" else -1.0
-                    price_never_reached_sl = False
-                    break
                 # BE trigger — only if RR >= be_min_rr
                 if not _be_triggered and risk > 0 and target_rr >= _be_min_rr:
                     if f_low <= entry - (risk * _be_arm_rr):
@@ -4506,6 +4489,7 @@ def backtest_pair_naked(pair: dict, style: str = "naked", validation_mode="stand
                 "actual_rr": round(actual_rr, 2),
                 "selected_tp": round(float(tp), 6),
                 "selected_sl": round(float(sl), 6),
+                "bt_exit_policy": CONFIG.get("ENGINE_B_BT_EXIT_POLICY", "fixed_target_be"),
                 "bos_volume_confirmed": best["res"].get("bos_volume_confirmed", True),
                 "choch_confirmed": best["res"].get("choch_confirmed", False),
                 "ob_at_zone": best["res"].get("ob_at_zone", False),
@@ -4914,7 +4898,9 @@ def backtest_pair_consensus(
             h1_idx=h1_idx,
             current_price=current_price,
         )
-        atr, _eb_bt_atr_feed_c = _engine_b_level_atr_for_bt(atr, pair, resolved_style)
+        atr, _eb_bt_atr_feed_c = _engine_b_level_atr_for_bt(
+            atr, pair, resolved_style, as_of=entry_time
+        )
         if atr is None or float(atr) <= 0:
             i += 1
             continue

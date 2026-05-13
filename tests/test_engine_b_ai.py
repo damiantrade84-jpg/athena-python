@@ -89,6 +89,18 @@ def test_validate_engine_b_ai_payload_creates_missing_style_ratings():
     assert out["style_ratings"]["swing"]["edgeProbability"] == 60.0
 
 
+def test_validate_engine_b_ai_payload_normalizes_generated_style_grades():
+    out = _validate_engine_b_ai_payload(
+        {"grade": "B+", "edgeProbability": 60, "riskLevel": "Low", "verdict": "ok"},
+        pair="TEST",
+    )
+
+    assert out["grade"] == "B+"
+    assert out["style_ratings"]["scalp"]["grade"] == "C"
+    assert out["style_ratings"]["intraday"]["grade"] == "C"
+    assert out["style_ratings"]["swing"]["grade"] == "C"
+
+
 def test_validate_engine_b_ai_payload_sanitizes_nested_style_fields():
     out = _validate_engine_b_ai_payload(
         {

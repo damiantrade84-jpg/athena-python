@@ -1139,6 +1139,43 @@ def test_run_auto_scan_stops_at_daily_cap(monkeypatch):
     assert len(executed) <= 3  # max_daily = 3
 
 
+def test_run_auto_scan_enforces_naked_max_daily_per_pair(monkeypatch):
+    trader = AutoTrader()
+    cfg = _base_cfg()
+    cfg["AUTO_TRADE_MAX_DAILY"] = 5
+    cfg["AUTO_TRADE_MAX_PER_SCAN"] = 5
+    cfg["NAKED_MAX_DAILY"] = 1
+    cfg["AUTO_TRADE_BLOCKED_TREND_STATES"] = {"default": [], "crypto": []}
+    cfg["AUTO_TRADE_BLOCKED_REGIMES"] = {"default": [], "crypto": []}
+
+    sig1 = _passing_signal(pair="BTC/USDT", engine="engine_b", is_naked=True)
+    sig2 = _passing_signal(pair="BTC/USDT", engine="engine_b", is_naked=True)
+    sig3 = _passing_signal(pair="ETH/USDT", engine="engine_b", is_naked=True)
+
+    trader.configure(
+        lambda style="auto": {"success": True, "tradeSignals": [sig1, sig2, sig3], "watchlist": [], "scanFunnel": {}},
+        lambda: False,
+        lambda: False,
+        "",
+        lambda: cfg,
+    )
+    monkeypatch.setattr(trader, "_can_execute", lambda sig, _cfg: (True, ""))
+    monkeypatch.setattr(trader, "_get_cached_open_positions", lambda *_args, **_kwargs: [])
+
+    executed = []
+
+    def tracking_execute(sig, _cfg):
+        executed.append(sig.get("pair"))
+        return True
+
+    monkeypatch.setattr(trader, "_execute_signal", tracking_execute)
+
+    trader._run_auto_scan()
+
+    assert executed.count("BTC/USDT") == 1
+    assert executed.count("ETH/USDT") == 1
+
+
 def test_run_auto_scan_logs_near_miss_watchlist(monkeypatch, caplog):
     """When scan returns no signals but has watchlist entries, log the best near-miss."""
     trader = AutoTrader()

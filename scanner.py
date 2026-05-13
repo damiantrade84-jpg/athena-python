@@ -152,6 +152,38 @@ def _apply_engine_b_scan_confidence_gate(
     return bool(gate_ok), scaled_min
 
 
+def _engine_b_scan_combined_conviction(
+    a_norm: float,
+    b_norm: float,
+    weights: dict | None,
+    *,
+    direction_aligned: bool,
+) -> float:
+    """Blend Engine B only when its independent direction agrees with Engine A."""
+    try:
+        a_val = max(0.0, min(1.0, float(a_norm)))
+    except (TypeError, ValueError):
+        a_val = 0.0
+    try:
+        b_val = max(0.0, min(1.0, float(b_norm)))
+    except (TypeError, ValueError):
+        b_val = 0.0
+
+    if not direction_aligned:
+        return round(a_val * 0.60, 4)
+
+    w = weights or ENGINE_C_AB_WEIGHTS.get("TRENDING", {"A": 0.40, "B": 0.60})
+    try:
+        w_a = float(w.get("A", 0.40))
+    except (TypeError, ValueError, AttributeError):
+        w_a = 0.40
+    try:
+        w_b = float(w.get("B", 0.60))
+    except (TypeError, ValueError, AttributeError):
+        w_b = 0.60
+    return round((a_val * w_a) + (b_val * w_b), 4)
+
+
 def _engine_b_structure_ready_watchlist_config(config: dict | None = None) -> dict:
     cfg = config or CONFIG
     raw = cfg.get("ENGINE_B_STRUCTURE_READY_WATCHLIST", {}) or {}
@@ -1263,8 +1295,16 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict[s
                                     _w_a = float(_w.get("A", 0.40))
                                     _w_b = float(_w.get("B", 0.60))
 
-                                    combined_conviction = (a_norm * _w_a) + (b_norm * _w_b)
-                                    sig_a["combinedConviction"] = round(combined_conviction, 4)
+                                    _engine_b_direction_aligned = (
+                                        _engine_b_direction_used == direction
+                                    )
+                                    combined_conviction = _engine_b_scan_combined_conviction(
+                                        a_norm,
+                                        b_norm,
+                                        _w,
+                                        direction_aligned=_engine_b_direction_aligned,
+                                    )
+                                    sig_a["combinedConviction"] = combined_conviction
                                     sig_a["engine_b_scoreNorm"] = round(b_norm, 4)
                                     _apply_engine_b_scan_confidence_gate(
                                         sig_a,
@@ -1274,10 +1314,8 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict[s
                                         ptype,
                                     )
                                     sig_a["engine_b_confidence_passed"] = bool(conf_b.get("passed", False))
-                                    sig_a["engine_b_direction_aligned_with_a"] = (
-                                        _engine_b_direction_used == direction
-                                    )
-                                    if _engine_b_direction_used != direction:
+                                    sig_a["engine_b_direction_aligned_with_a"] = _engine_b_direction_aligned
+                                    if not _engine_b_direction_aligned:
                                         sig_a["enginesAligned"] = False
                                     _mark_engine_b_structure_ready_watchlist(
                                         sig_a,

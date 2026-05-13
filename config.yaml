@@ -124,7 +124,7 @@ ENGINE_AB_CRYPTO_SIGNAL_FEED: binance
 ENGINE_AB_CRYPTO_SIGNAL_FEED_FALLBACK: false
 ENGINE_B_CRYPTO_LEVELS_FEED: bybit
 ENGINE_B_CRYPTO_LEVELS_SIGNAL_FEED_FALLBACK: false
-ENGINE_B_CRYPTO_BT_LEVEL_ATR_USE_SIGNAL_FEED: true
+ENGINE_B_CRYPTO_BT_LEVEL_ATR_USE_SIGNAL_FEED: false
 # Engine B: skip forex signals on 22:00–07:00 UTC (Asian); applies to BT + live scan.
 ENGINE_B_FOREX_ASIAN_SESSION_SKIP_ENABLED: true
 
@@ -162,6 +162,7 @@ ENGINE_B_ASSET_CLASS_STRUCTURE_MULT:
   etf: 1.08
   etf_bond: 1.05
 ENGINE_B_ASSET_CLASS_BOS_MIN_BREAK_ATR:
+  forex: 0.05
   stock: 0.06
   index: 0.05
   commodity: 0.08
@@ -494,6 +495,12 @@ BT_PERCENTILE_FILTER: false
 # NAKED_MAX_DAILY: Max Engine B trades per pair per day (live auto-trade cap)
 
 NAKED_MAX_DAILY: 3
+
+# Engine B backtests currently model fixed TP1/SL plus one-shot BE arming.
+# Live Engine A/B management can use TIMED_EXIT.tp_mode=trailing_atr, so this
+# explicit policy label is attached to BT trade rows instead of implying live
+# timed-exit parity.
+ENGINE_B_BT_EXIT_POLICY: fixed_target_be
 
 
 
@@ -1056,6 +1063,8 @@ SIGNAL_EXECUTABLE_FALSE_WHEN_FRESHNESS_BLOCKS: true
 # Engine B: use confirmed-only candles for BOS/struct series when split_market_state detects forming bar.
 ENGINE_B_STRIP_FORMING_STRUCT: true
 ENGINE_B_STRUCT_CONFIRMED_MIN_BARS: 20
+ENGINE_B_SWEEP_LOOKBACK_BARS: 5
+ENGINE_B_ALLOW_SYNTHETIC_FALLBACK_RR_TP: false
 
 
 
@@ -1795,7 +1804,7 @@ NAKED_ENGINE:
 
     scalp:
 
-      min_score: 3.0
+      min_score: 6.0
 
       min_rr: 1.5
 
@@ -1803,7 +1812,7 @@ NAKED_ENGINE:
 
     intraday:
 
-      min_score: 3.0
+      min_score: 6.0
 
       min_rr: 1.5
 
@@ -1811,7 +1820,7 @@ NAKED_ENGINE:
 
     swing:
 
-      min_score: 4.0
+      min_score: 6.5
 
       min_rr: 2.0
 
@@ -1882,123 +1891,123 @@ NAKED_ENGINE:
 
     nat_gas:
 
-      scalp: {min_score: 3.0}
+      scalp: {min_score: 6.0}
 
-      intraday: {min_score: 4.0, min_rr: 1.6}
+      intraday: {min_score: 6.0, min_rr: 1.6}
 
-      swing: {min_score: 4.0, min_rr: 2.0}
+      swing: {min_score: 6.5, min_rr: 2.0}
 
     crypto_doge:
 
-      scalp: {min_score: 3.0, min_room_atr: 0.5}
+      scalp: {min_score: 6.0, min_room_atr: 0.5}
 
-      intraday: {min_score: 4.0, min_room_atr: 0.9, min_rr: 1.5}
+      intraday: {min_score: 6.0, min_room_atr: 0.9, min_rr: 1.5}
 
-      swing: {min_score: 4.0, min_room_atr: 1.2, min_rr: 1.9}
+      swing: {min_score: 6.5, min_room_atr: 1.2, min_rr: 1.9}
 
     crypto_btc:
 
-      scalp: {min_score: 3.0}
+      scalp: {min_score: 6.0}
 
-      intraday: {min_score: 4.0}
+      intraday: {min_score: 6.0}
 
-      swing: {min_score: 4.0}
+      swing: {min_score: 6.5}
 
     crypto_eth:
 
-      scalp: {min_score: 3.0}
+      scalp: {min_score: 6.0}
 
-      intraday: {min_score: 4.0}
+      intraday: {min_score: 6.0}
 
-      swing: {min_score: 4.0}
+      swing: {min_score: 6.5}
 
     crypto_alt_majors:
 
-      scalp: {min_score: 3.0}
+      scalp: {min_score: 6.0}
 
-      intraday: {min_score: 4.0}
+      intraday: {min_score: 6.0}
 
-      swing: {min_score: 4.0}
+      swing: {min_score: 6.5}
 
     crypto_other:
 
-      scalp: {min_score: 3.0}
+      scalp: {min_score: 6.0}
 
-      intraday: {min_score: 4.0}
+      intraday: {min_score: 6.0}
 
-      swing: {min_score: 4.0}
+      swing: {min_score: 6.5}
 
     energy_oil:
 
-      scalp: {min_score: 3.0}
+      scalp: {min_score: 6.0}
 
-      intraday: {min_score: 4.0}
+      intraday: {min_score: 6.0}
 
-      swing: {min_score: 4.0}
+      swing: {min_score: 6.5}
 
     precious_trackers:
 
-      scalp: {min_score: 3.0}
+      scalp: {min_score: 6.0}
 
-      intraday: {min_score: 4.0}
+      intraday: {min_score: 6.0}
 
-      swing: {min_score: 4.0}
+      swing: {min_score: 6.5}
 
     commodity_other:
 
-      scalp: {min_score: 3.0}
+      scalp: {min_score: 6.0}
 
-      intraday: {min_score: 4.0}
+      intraday: {min_score: 6.0}
 
-      swing: {min_score: 4.0}
+      swing: {min_score: 6.5}
 
     copper:
 
-      scalp: {min_score: 3.0}
+      scalp: {min_score: 6.0}
 
-      intraday: {min_score: 4.0}
+      intraday: {min_score: 6.0}
 
-      swing: {min_score: 4.0}
+      swing: {min_score: 6.5}
 
     pgm_metals:
 
-      scalp: {min_score: 3.0}
+      scalp: {min_score: 6.0}
 
-      intraday: {min_score: 4.0}
+      intraday: {min_score: 6.0}
 
-      swing: {min_score: 4.0}
+      swing: {min_score: 6.5}
 
     us_stock_single:
 
-      scalp: {min_score: 3.0}
+      scalp: {min_score: 6.0}
 
-      intraday: {min_score: 4.0}
+      intraday: {min_score: 6.0}
 
-      swing: {min_score: 4.0}
+      swing: {min_score: 6.5}
 
     stock_other:
 
-      scalp: {min_score: 3.0}
+      scalp: {min_score: 6.0}
 
-      intraday: {min_score: 4.0}
+      intraday: {min_score: 6.0}
 
-      swing: {min_score: 4.0}
+      swing: {min_score: 6.5}
 
     smallcap_em_etf:
 
-      scalp: {min_score: 3.0}
+      scalp: {min_score: 6.0}
 
-      intraday: {min_score: 4.0}
+      intraday: {min_score: 6.0}
 
-      swing: {min_score: 4.0}
+      swing: {min_score: 6.5}
 
     bond_tlt:
 
-      scalp: {min_score: 3.0}
+      scalp: {min_score: 6.0}
 
-      intraday: {min_score: 4.0}
+      intraday: {min_score: 6.0}
 
-      swing: {min_score: 4.0}
+      swing: {min_score: 6.5}
 
 
 

@@ -344,7 +344,11 @@ CONFIG: dict = {
     },
     "ENGINE_B_CRYPTO_LEVELS_FEED": "bybit",
     "ENGINE_B_CRYPTO_LEVELS_SIGNAL_FEED_FALLBACK": False,
-    "ENGINE_B_CRYPTO_BT_LEVEL_ATR_USE_SIGNAL_FEED": True,
+    "ENGINE_B_CRYPTO_BT_LEVEL_ATR_USE_SIGNAL_FEED": False,
+    "ENGINE_B_SWEEP_LOOKBACK_BARS": 5,
+    "ENGINE_B_ALLOW_SYNTHETIC_FALLBACK_RR_TP": False,
+    "NAKED_MAX_DAILY": 3,
+    "ENGINE_B_BT_EXIT_POLICY": "fixed_target_be",
     # When True, Engine B skips forex on 22:00–07:00 UTC bars (backtest + live scan).
     "ENGINE_B_FOREX_ASIAN_SESSION_SKIP_ENABLED": True,
     # Diagnostics-first forex session weighting for Engine B structure context.
@@ -386,6 +390,7 @@ CONFIG: dict = {
         "etf_bond": 1.05,
     },
     "ENGINE_B_ASSET_CLASS_BOS_MIN_BREAK_ATR": {
+        "forex": 0.05,
         "stock": 0.06,
         "index": 0.05,
         "commodity": 0.08,
@@ -975,19 +980,19 @@ CONFIG: dict = {
         "rejection_wick_body_ratio": 1.2,
         "style_profiles": {
             "scalp": {
-                "min_score": 3.0,
+                "min_score": 6.0,
                 "min_rr": 1.5,
                 "fallback_rr": 2.0,
                 "require_macro_align": False,
             },
             "intraday": {
-                "min_score": 4.0,
+                "min_score": 6.0,
                 "min_rr": 1.5,
                 "fallback_rr": 2.0,
                 "require_macro_align": False,
             },
             "swing": {
-                "min_score": 5.0,
+                "min_score": 6.5,
                 "min_rr": 2.0,
                 "fallback_rr": 3.0,
                 "require_macro_align": False,
@@ -1010,13 +1015,13 @@ CONFIG: dict = {
                 "swing": {"min_room_atr": 1.2, "min_rr": 1.8},
             },
             "nat_gas": {
-                "intraday": {"min_score": 4.0, "min_rr": 1.6},
-                "swing": {"min_score": 4.0, "min_rr": 2.0},
+                "intraday": {"min_score": 6.0, "min_rr": 1.6},
+                "swing": {"min_score": 6.5, "min_rr": 2.0},
             },
             "crypto_doge": {
-                "scalp": {"min_score": 3.0, "min_room_atr": 0.5},
-                "intraday": {"min_score": 4.0, "min_room_atr": 0.9, "min_rr": 1.5},
-                "swing": {"min_score": 4.0, "min_room_atr": 1.2, "min_rr": 1.9},
+                "scalp": {"min_score": 6.0, "min_room_atr": 0.5},
+                "intraday": {"min_score": 6.0, "min_room_atr": 0.9, "min_rr": 1.5},
+                "swing": {"min_score": 6.5, "min_room_atr": 1.2, "min_rr": 1.9},
             },
         },
     },

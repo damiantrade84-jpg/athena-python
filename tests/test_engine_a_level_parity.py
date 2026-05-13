@@ -109,6 +109,57 @@ def test_engine_a_bt_fails_closed_when_bybit_atr_missing(monkeypatch):
     assert source == "bybit_unavailable"
 
 
+def test_engine_b_bt_bybit_atr_uses_backtest_bar_time(monkeypatch):
+    captured = {}
+
+    def _bybit_atr_for_levels(pair, style, as_of=None):
+        captured["pair"] = pair
+        captured["style"] = style
+        captured["as_of"] = as_of
+        return 7.25
+
+    monkeypatch.setattr(
+        backtest_runner,
+        "_rt",
+        lambda: SimpleNamespace(bybit_atr_for_levels=_bybit_atr_for_levels),
+    )
+    monkeypatch.setitem(CONFIG, "ENGINE_B_CRYPTO_LEVELS_FEED", "bybit")
+    monkeypatch.setitem(CONFIG, "ENGINE_B_CRYPTO_LEVELS_SIGNAL_FEED_FALLBACK", False)
+    monkeypatch.setitem(CONFIG, "ENGINE_B_CRYPTO_BT_LEVEL_ATR_USE_SIGNAL_FEED", False)
+
+    atr, source = backtest_runner._engine_b_level_atr_for_bt(
+        3.0,
+        {"display": "BTC/USDT", "symbol": "BTCUSDT", "type": "crypto", "source": "binance"},
+        "intraday",
+        as_of="2025-01-02T04:00:00+00:00",
+    )
+
+    assert atr == 7.25
+    assert source == "bybit"
+    assert captured["as_of"] == "2025-01-02T04:00:00+00:00"
+
+
+def test_engine_b_bt_fails_closed_when_bybit_atr_missing(monkeypatch):
+    monkeypatch.setattr(
+        backtest_runner,
+        "_rt",
+        lambda: SimpleNamespace(bybit_atr_for_levels=lambda *_args, **_kwargs: None),
+    )
+    monkeypatch.setitem(CONFIG, "ENGINE_B_CRYPTO_LEVELS_FEED", "bybit")
+    monkeypatch.setitem(CONFIG, "ENGINE_B_CRYPTO_LEVELS_SIGNAL_FEED_FALLBACK", False)
+    monkeypatch.setitem(CONFIG, "ENGINE_B_CRYPTO_BT_LEVEL_ATR_USE_SIGNAL_FEED", False)
+
+    atr, source = backtest_runner._engine_b_level_atr_for_bt(
+        3.0,
+        {"display": "BTC/USDT", "symbol": "BTCUSDT", "type": "crypto", "source": "binance"},
+        "intraday",
+        as_of="2025-01-02T04:00:00+00:00",
+    )
+
+    assert atr is None
+    assert source == "bybit_unavailable"
+
+
 def test_fetch_bybit_klines_accepts_point_in_time_end(monkeypatch):
     captured = {}
 

@@ -1,6 +1,7 @@
 import os
 import sys
 import pytest
+from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
@@ -24,8 +25,9 @@ def _make_signal(**overrides):
         "tp1": 110.0,
         "tp2": 120.0,
         "type": "crypto",
-        "timestamp": None,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
         "confluenceScore": 5.0,
+        "candleConsistency": {"H4": {"status": "OK"}},
     }
     base.update(overrides)
     return base
@@ -73,6 +75,26 @@ def test_wrong_side_tp_rejected_short():
     result = risk_check(_make_signal(direction="SHORT", price=100.0, sl=105.0, tp1=110.0), 10000.0, 10000.0, [])
     assert result.approved is False
     assert result.reason == "INVALID_LEVELS"
+
+
+def test_risk_check_treats_is_naked_as_engine_b_for_min_rr():
+    result = risk_check(
+        _make_signal(
+            price=100.0,
+            sl=95.0,
+            tp1=102.0,
+            is_naked=True,
+            naked_data={"passed": True},
+            min_rr=2.0,
+        ),
+        10000.0,
+        10000.0,
+        [],
+    )
+
+    assert result.approved is False
+    assert result.reason == "RR_BELOW_MINIMUM"
+
 
 def test_rr_uses_absolute_reward_absolute_risk():
     # Verify resolve_engine_b_execution_levels absolute RR computation
@@ -176,7 +198,7 @@ def test_calculate_confidence_zero_atr_keeps_execution_levels_invalid():
     assert out["rr_used_for_gate"] == 0.0
 
 
-def test_forex_structural_tp_below_min_rr_uses_execution_sl_fallback():
+def test_forex_structural_tp_below_min_rr_rejects_synthetic_fallback():
     out = resolve_engine_b_execution_levels(
         direction="LONG",
         entry=100.0,
@@ -191,15 +213,17 @@ def test_forex_structural_tp_below_min_rr_uses_execution_sl_fallback():
 
     assert out["structural_rr"] == pytest.approx(0.1)
     assert out["execution_sl"] == pytest.approx(98.5)
-    assert out["execution_tp"] == pytest.approx(103.0)
-    assert out["rr_used_for_gate"] == pytest.approx(2.0)
-    assert out["rr_source"] == "atr_sl_fallback_rr_tp"
-    assert out["fallback_tp_applied"] is True
+    assert out["execution_tp"] == pytest.approx(101.0)
+    assert out["rr_used_for_gate"] == pytest.approx(2.0 / 3.0, abs=1e-4)
+    assert out["rr_source"] == "atr_sl_structural_tp"
+    assert out["execution_levels_valid"] is False
+    assert out["execution_level_reject_reason"] == "structural_tp_below_min_rr"
+    assert out["fallback_tp_applied"] is False
     assert out["fallback_tp_reason"] == "structural_tp_below_min_rr"
 
 
 @pytest.mark.parametrize("asset_class", ["crypto", "commodity", "index", "stock"])
-def test_non_forex_structural_tp_below_min_rr_uses_fallback(asset_class):
+def test_non_forex_structural_tp_below_min_rr_rejects_synthetic_fallback(asset_class):
     out = resolve_engine_b_execution_levels(
         direction="LONG",
         entry=100.0,
@@ -212,15 +236,16 @@ def test_non_forex_structural_tp_below_min_rr_uses_fallback(asset_class):
         fallback_rr=2.0,
     )
 
-    expected_tp = 100.0 + abs(100.0 - out["execution_sl"]) * 2.0
-    assert out["execution_tp"] == pytest.approx(expected_tp)
-    assert out["rr_used_for_gate"] == pytest.approx(2.0)
-    assert out["rr_source"].endswith("_sl_fallback_rr_tp")
-    assert out["fallback_tp_applied"] is True
+    assert out["execution_tp"] == pytest.approx(101.0)
+    assert out["rr_used_for_gate"] < 1.5
+    assert out["rr_source"].endswith("_sl_structural_tp")
+    assert out["execution_levels_valid"] is False
+    assert out["execution_level_reject_reason"] == "structural_tp_below_min_rr"
+    assert out["fallback_tp_applied"] is False
     assert out["fallback_tp_reason"] == "structural_tp_below_min_rr"
 
 
-def test_calculate_confidence_reports_forex_fallback_rr_basis():
+def test_calculate_confidence_rejects_forex_structural_tp_below_min_rr():
     engine = NakedEngine()
     out = engine.calculate_confidence(
         {
@@ -250,8 +275,11 @@ def test_calculate_confidence_reports_forex_fallback_rr_basis():
         },
     )
 
-    assert out["rr_ok"] is True
-    assert out["rr_used_for_gate"] == pytest.approx(2.0)
-    assert out["execution_tp"] == pytest.approx(103.0)
-    assert out["rr_source"] == "atr_sl_fallback_rr_tp"
-    assert out["fallback_tp_applied"] is True
+    assert out["rr_ok"] is False
+    assert out["passed"] is False
+    assert out["rr_used_for_gate"] < 1.5
+    assert out["execution_tp"] == pytest.approx(101.0)
+    assert out["rr_source"] == "atr_sl_structural_tp"
+    assert out["execution_levels_valid"] is False
+    assert out["execution_level_reject_reason"] == "structural_tp_below_min_rr"
+    assert out["fallback_tp_applied"] is False

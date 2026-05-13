@@ -758,10 +758,16 @@ def risk_check(
         eng = str(sig.get("engine") or sig.get("source_engine") or "").strip().lower()
         if eng in ("engine_b", "naked", "naked_structure", "structure", "smc"):
             return True
+        if bool(sig.get("is_naked")):
+            return True
         v = str(sig.get("verdict") or "").strip().upper()
         if v in ("B_ONLY", "B_ONLY_SCORED", "B_ONLY_VISION_CONFIRMED", "ALIGNED"):
             return True
         if isinstance(sig.get("engine_b_status"), dict):
+            return True
+        if isinstance(sig.get("engine_b"), dict):
+            return True
+        if isinstance(sig.get("naked_data"), dict):
             return True
         comps = sig.get("components")
         return isinstance(comps, dict) and (
@@ -770,10 +776,18 @@ def risk_check(
 
     if _is_engine_b_execution_signal(signal):
         engine_b_status = signal.get("engine_b_status") or {}
+        engine_b_payload = signal.get("engine_b") or signal.get("naked_data") or {}
         components = signal.get("components") or {}
         checklist_present = (
             isinstance(engine_b_status, dict)
             and engine_b_status.get("checklist_passed") is True
+        ) or (
+            isinstance(engine_b_payload, dict)
+            and (
+                engine_b_payload.get("checklist_passed") is True
+                or engine_b_payload.get("passed") is True
+                or engine_b_payload.get("final_engine_b_passed") is True
+            )
         ) or (
             isinstance(components, dict)
             and components.get("b_checklist_passed") is True
@@ -781,6 +795,13 @@ def risk_check(
         checklist_failed = (
             isinstance(engine_b_status, dict)
             and engine_b_status.get("checklist_passed") is False
+        ) or (
+            isinstance(engine_b_payload, dict)
+            and (
+                engine_b_payload.get("checklist_passed") is False
+                or engine_b_payload.get("passed") is False
+                or engine_b_payload.get("final_engine_b_passed") is False
+            )
         ) or (
             isinstance(components, dict)
             and components.get("b_checklist_passed") is False

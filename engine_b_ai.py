@@ -124,7 +124,7 @@ def _validate_engine_b_ai_payload(parsed: dict, pair: str) -> dict:
     for style in REQUIRED_STYLE_KEYS:
         if style not in style_ratings or not isinstance(style_ratings[style], dict):
             style_ratings[style] = {
-                "grade": out.get("grade", "C"),
+                "grade": _normalise_engine_b_grade(out.get("grade", "C"), pair),
                 "edgeProbability": ep_val,
                 "riskLevel": rl,
             }
