@@ -892,7 +892,7 @@ ETORO:
 
 # ── Auto-Trader ────────────────────────────────────────────
 
-AUTO_TRADE_ENABLED: false          # Start auto-trader on server boot
+AUTO_TRADE_ENABLED: true          # Start auto-trader on server boot
 
 # AUTO_TRADE_MIN_SCORE is informational operator metadata. Engine A scan gates
 # are resolved by ENGINE_A_SCORE_GROUP_THRESHOLDS/get_score_threshold(), and
