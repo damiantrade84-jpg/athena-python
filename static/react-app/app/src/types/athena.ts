@@ -199,10 +199,14 @@ export interface EngineBChecklist {
 export interface ScanResponse {
   success?: boolean;
   signals?: EngineASignal[];
+  tradeSignals?: EngineASignal[];
+  watchlist?: EngineASignal[];
   scanned?: number;
   scannedAt?: string;
   scan_time?: number;
   pairs_scanned?: number;
+  totalPairs?: number;
+  activePairs?: number;
   asset_class?: string;
   style?: string;
   available?: boolean;

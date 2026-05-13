@@ -68,11 +68,37 @@ function signalForExecutionPayload(signal: EngineASignal, source: ScanSource): E
   return payload as EngineASignal;
 }
 
+function engineAScanDisplaySignals(result: ScanResponse): EngineASignal[] {
+  const trade = Array.isArray(result.signals) ? result.signals : [];
+  const watchlist = Array.isArray(result.watchlist) ? result.watchlist : [];
+  return [
+    ...trade.map((s) => ({
+      ...s,
+      signalClass: s.signalClass || 'TRADE',
+      signalTier: s.signalTier || 'trade',
+    })),
+    ...watchlist.map((s) => ({
+      ...s,
+      signalClass: s.signalClass || 'WATCHLIST',
+      signalTier: s.signalTier || 'watchlist',
+      trade: false,
+    })),
+  ];
+}
+
+function canExecuteSignal(signal: EngineASignal | null, source: ScanSource): boolean {
+  if (!signal) return false;
+  if (source === 'B') return true;
+  const tier = String(signal.signalTier || signal.scan_tier || signal.signalClass || '').toLowerCase();
+  if (tier.includes('watch') || tier === 'skip' || tier === 'blocked') return false;
+  return tier === 'trade' || tier === 'criteria' || signal.trade === true;
+}
+
 export default function SignalsPanel() {
   const { showToast, isTestMode, scanCacheA, scanCacheB, scanCacheAMeta, scanCacheBMeta, setScanCacheA, setScanCacheB } = useStore();
   const [filter, setFilter] = useState('');
   const [directionFilter, setDirectionFilter] = useState<string>('all');
-  const [assetClass, setAssetClass] = useState<string>('forex');
+  const [assetClass, setAssetClass] = useState<string>('all');
   const [style, setStyle] = useState<string>('auto');
   const [sortBy, setSortBy] = useState<string>('score');
   /** Which engine tab is active - persists in component state (fine, since both caches live in global store) */
@@ -150,14 +176,17 @@ export default function SignalsPanel() {
       try {
         if (which === 'A') {
           const result = await postScanA('/api/scan', { asset_class: ac, force: false, style });
-          if (result?.signals) {
+          if (result?.signals || result?.watchlist) {
+            const tradeSignals = Array.isArray(result.signals) ? result.signals : [];
+            const watchlistSignals = Array.isArray(result.watchlist) ? result.watchlist : [];
+            const displaySignals = engineAScanDisplaySignals(result);
             setScanCacheA(
-              result.signals as EngineASignal[],
-              { count: result.signals.length, scannedAt: new Date().toISOString() },
+              displaySignals,
+              { count: displaySignals.length, scannedAt: new Date().toISOString() },
             );
             setSortBy('score');
             showToast(
-              `Engine A: ${result.signals.length} signals - ${result.pairs_scanned ?? '?'} pairs in ${fmtNum(result.scan_time, 1, '?')}s`,
+              `Engine A: ${tradeSignals.length} trade / ${watchlistSignals.length} watchlist - ${result.totalPairs ?? result.pairs_scanned ?? '?'} pairs`,
               'success',
             );
           } else {
@@ -189,8 +218,9 @@ export default function SignalsPanel() {
   );
 
   const isPaper = autoTrade?.enabled ?? false;
-  const executeDisabled = isTestMode;
-  const executeLabel = isTestMode ? 'TEST MODE' : isPaper ? 'PAPER MODE' : 'Execute';
+  const selectedCanExecute = canExecuteSignal(selected, baseSource);
+  const executeDisabled = isTestMode || !selectedCanExecute;
+  const executeLabel = isTestMode ? 'TEST MODE' : !selectedCanExecute ? 'WATCHLIST' : isPaper ? 'PAPER MODE' : 'Execute';
 
   const runAiReview = useCallback(
     async (sig: EngineASignal | null) => {
@@ -477,7 +507,7 @@ export default function SignalsPanel() {
         )}
         {activeTab === 'A' && (
           <span className="text-[10px] text-muted-foreground max-w-xl">
-            Engine A list = factor threshold trade tier only. Engine B data on cards is informational; use Engine C to compare.
+            Engine A list includes trade tier and watchlist. Watchlist rows are display-only until they clear trade tier.
           </span>
         )}
       </div>
