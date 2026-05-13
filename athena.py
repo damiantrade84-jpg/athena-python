@@ -11143,12 +11143,16 @@ def analyze_pair(
     # scoring on stale data that would be blocked at execution time anyway.
     if CONFIG.get("PRE_SCORING_FRESHNESS_GATE_ENABLED", True):
         try:
+            from athena_app.services.data_freshness import (
+                pre_scoring_allows_confirmed_only_stale_1,
+            )
             from athena_app.services.market_state import candle_freshness_diagnostic
 
             _stale_tfs = []
             _freshness_diag = {}
             _pair_type = pair.get("type", "")
             _is_forex_stock = _pair_type in ("forex", "stock", "index", "commodity")
+            _allow_confirmed_only_stale_1 = pre_scoring_allows_confirmed_only_stale_1(pair)
 
             for _tf, _candles in (("D1", d1), ("H4", h4), ("H1", h1)):
                 _diag = candle_freshness_diagnostic(
@@ -11160,9 +11164,9 @@ def analyze_pair(
                 if not _sev or _sev == "fresh":
                     continue
 
-                # Confirmed-only forex/stock pairs: stale_1_bucket is expected
-                # (the forming bar is intentionally excluded from scoring).
-                if _is_forex_stock and _sev == "stale_1_bucket":
+                # Confirmed-only Engine A scoring: stale_1_bucket is expected
+                # while the current forming bar is intentionally excluded.
+                if _allow_confirmed_only_stale_1 and _sev == "stale_1_bucket":
                     continue
 
                 # D1 weekend gap tolerance: forex markets close Fri ~21:00 UTC,

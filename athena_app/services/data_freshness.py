@@ -38,6 +38,22 @@ _WARNING_STATUSES = {
     "WARNING_ONE_BUCKET_LAG",
 }
 
+CONFIRMED_ONLY_PRE_SCORING_TYPES = {
+    "crypto",
+    "forex",
+    "stock",
+    "index",
+    "commodity",
+}
+
+
+def pre_scoring_allows_confirmed_only_stale_1(pair: dict[str, Any] | None) -> bool:
+    """Return whether one-bucket lag is expected for confirmed-only Engine A scoring."""
+    if not isinstance(pair, dict):
+        return False
+    pair_type = str(pair.get("type") or "").strip().lower()
+    return pair_type in CONFIRMED_ONLY_PRE_SCORING_TYPES
+
 
 def _tf_seconds(tf: str) -> int:
     return {

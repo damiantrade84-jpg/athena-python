@@ -2,9 +2,10 @@
 
 Verifies:
 - stale_1_bucket passes for confirmed-only forex pairs
+- stale_1_bucket passes for confirmed-only crypto pairs
 - D1 weekend gap (up to 4 buckets) passes on Monday
 - stale_multi_bucket on H1/H4 during market hours still blocks
-- Crypto pairs remain strict (no weekend tolerance)
+- Crypto pairs remain strict for multi-bucket stale data
 """
 
 from datetime import datetime, timezone
@@ -17,6 +18,7 @@ from athena_app.services.market_state import (
     get_bucket_start_epoch,
     market_state_offset_hours,
 )
+from athena_app.services.data_freshness import pre_scoring_allows_confirmed_only_stale_1
 from config import CONFIG
 
 
@@ -125,8 +127,8 @@ class TestPreScoringFreshnessGateForex:
         assert diag["stalenessSeverity"] == "d1_calendar_gap_policy_ok"
         assert diag["bucketLag"] >= 2
 
-    def test_crypto_h4_stale_1_bucket_still_blocks(self, monkeypatch):
-        """Crypto pairs have no confirmed-only tolerance."""
+    def test_crypto_h4_stale_1_bucket_passes_for_confirmed_only_policy(self, monkeypatch):
+        """Confirmed-only crypto H4: last closed bar 1 bucket behind is normal."""
         monkeypatch.setitem(CONFIG, "FOREX_H4_RESAMPLE_OFFSET_HOURS", 0.0)
         pair = {"type": "crypto", "source": "binance", "display": "BTCUSDT"}
 
@@ -137,6 +139,21 @@ class TestPreScoringFreshnessGateForex:
         )
         # Current bucket=08:00, last bar=04:00, lag=1
         assert diag["stalenessSeverity"] == "stale_1_bucket"
+        assert diag["bucketLag"] == 1
+        assert pre_scoring_allows_confirmed_only_stale_1(pair) is True
+
+    def test_crypto_h4_stale_multi_bucket_remains_strict(self, monkeypatch):
+        """Confirmed-only tolerance does not cover genuinely stale crypto H4 data."""
+        monkeypatch.setitem(CONFIG, "FOREX_H4_RESAMPLE_OFFSET_HOURS", 0.0)
+        pair = {"type": "crypto", "source": "binance", "display": "BTCUSDT"}
+
+        diag = candle_freshness_diagnostic(
+            pair, "H4",
+            [_candle("2026-05-10T20:00:00Z"), _candle("2026-05-11T00:00:00Z")],
+            time_now=_epoch("2026-05-11T08:48:00Z"),
+        )
+        assert diag["stalenessSeverity"] == "stale_multi_bucket"
+        assert diag["bucketLag"] > 1
 
 
 class TestFetchMT5OffsetDetection:
