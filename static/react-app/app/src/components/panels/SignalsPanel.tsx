@@ -170,7 +170,13 @@ export default function SignalsPanel() {
               result.signals as EngineASignal[],
               { count: result.signals.length, scannedAt: new Date().toISOString() },
             );
-            showToast(`Engine B: ${result.signals.length} structural signals`, 'success');
+            const scanned = result.totalPairs ?? result.activePairs ?? result.debugRows?.length;
+            showToast(
+              scanned != null
+                ? `Engine B: ${result.signals.length} structural signals / ${scanned} pairs scanned`
+                : `Engine B: ${result.signals.length} structural signals`,
+              'success',
+            );
           } else {
             showToast('Engine B scan returned nothing', 'info');
           }

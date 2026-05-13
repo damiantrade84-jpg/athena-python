@@ -216,6 +216,9 @@ export interface NakedScanResponse {
   success?: boolean;
   signals?: EngineASignal[]; // each carries naked_data
   debugRows?: unknown[];
+  scanFunnel?: Record<string, unknown>;
+  totalPairs?: number;
+  activePairs?: number;
   [k: string]: unknown;
 }
 

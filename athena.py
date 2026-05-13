@@ -6911,12 +6911,14 @@ def api_scan_naked():
     }
 
     log.info(f"[DEBUG] Starting scan with {len(candidate_pairs)} candidate pairs, debug_mode={debug_mode}")
+    from athena_app.services.naked_scan_service import iter_naked_scan_rows
+
     with ThreadPoolExecutor(max_workers=_max_workers) as pool:
         futures = {pool.submit(_scan_pair, pair, debug_mode): pair for pair in candidate_pairs}
         for future in as_completed(futures):
             result = future.result()
             log.debug(f"[DEBUG] Future result type: {type(result)}, length: {len(result) if isinstance(result, list) else 'N/A'}")
-            for row in (result or []):
+            for row in iter_naked_scan_rows(result):
                 if debug_mode and row.get("debug"):
                     debug_rows.append(row["debug"])
                     log.debug(f"[DEBUG] Added debug row for {row['debug'].get('pair')}")
@@ -6950,6 +6952,8 @@ def api_scan_naked():
         key=lambda x: x.get("confluenceScore", 0),
         reverse=True,
     )
+    if not debug_mode:
+        engine_b_funnel["passed"] = len(results)
 
     # Run Conductor on Engine B signals so widget updates after an Engine B scan
     if results:
@@ -6989,10 +6993,19 @@ def api_scan_naked():
         return jsonify(_json_safe({
             "success": True,
             "signals": results,
-            "debugRows": debug_rows
+            "debugRows": debug_rows,
+            "scanFunnel": engine_b_funnel,
+            "totalPairs": len(candidate_pairs),
+            "activePairs": len(candidate_pairs),
         }))
 
-    return jsonify(_json_safe({"success": True, "signals": results}))
+    return jsonify(_json_safe({
+        "success": True,
+        "signals": results,
+        "scanFunnel": engine_b_funnel,
+        "totalPairs": len(candidate_pairs),
+        "activePairs": len(candidate_pairs),
+    }))
 
 
 @app.route("/api/webhook", methods=["POST"])
