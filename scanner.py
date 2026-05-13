@@ -25,6 +25,7 @@ from scoring import (
 from engine_c import ENGINE_C_AB_WEIGHTS
 from market_structure import (
     NakedEngine,
+    engine_b_confidence_passes,
     engine_b_forex_asian_session_blocks_bar,
     engine_b_min_score_threshold,
 )
@@ -102,6 +103,183 @@ def _apply_engine_b_scan_levels(signal: dict, conf_b: dict | None, res_b: dict |
     signal["level_source"] = "engine_b_execution"
 
 
+def _apply_engine_b_scan_confidence_gate(
+    signal: dict,
+    conf_b: dict | None,
+    style_profile: dict | None,
+    regime_label: str | None,
+    asset_type: str = "",
+) -> tuple[bool, float]:
+    """Apply Engine B's final style/regime score floor to scan alignment."""
+    gate_ok, scaled_min = engine_b_confidence_passes(
+        conf_b,
+        style_profile,
+        regime_label,
+        asset_type,
+    )
+    signal["enginesAligned"] = bool(gate_ok)
+    signal["engine_b_min_score_scaled"] = scaled_min
+    if isinstance(conf_b, dict):
+        conf_b["passed"] = bool(gate_ok)
+        conf_b["min_score_scaled"] = scaled_min
+    return bool(gate_ok), scaled_min
+
+
+def _engine_b_structure_ready_watchlist_config(config: dict | None = None) -> dict:
+    cfg = config or CONFIG
+    raw = cfg.get("ENGINE_B_STRUCTURE_READY_WATCHLIST", {}) or {}
+    return raw if isinstance(raw, dict) else {}
+
+
+def _engine_b_structure_ready_watchlist_detail(
+    conf_b: dict | None,
+    res_b: dict | None,
+    *,
+    config: dict | None = None,
+) -> dict | None:
+    """Return safe scan-only diagnostics for strong B structures awaiting trigger.
+
+    This intentionally does not alter Engine B's pass state. It only lets full
+    scan expose candidates that have meaningful structure but are blocked by the
+    final price-action trigger, so they can be monitored without execution.
+    """
+    cfg = _engine_b_structure_ready_watchlist_config(config)
+    if not bool(cfg.get("ENABLED", False)):
+        return None
+    if not isinstance(conf_b, dict) or not isinstance(res_b, dict):
+        return None
+    if bool(conf_b.get("passed", False)):
+        return None
+
+    try:
+        score = float(conf_b.get("score", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        score = 0.0
+    try:
+        min_score = float(conf_b.get("min_score_scaled", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        min_score = 0.0
+    try:
+        max_possible = float(conf_b.get("max_possible", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        max_possible = 0.0
+    try:
+        min_ratio = float(cfg.get("MIN_SCORE_RATIO", 0.85))
+    except (TypeError, ValueError):
+        min_ratio = 0.85
+    min_ratio = max(0.0, min(1.0, min_ratio))
+
+    if min_score > 0:
+        score_ok = score >= (min_score * min_ratio)
+    elif max_possible > 0:
+        score_ok = (score / max_possible) >= min_ratio
+    else:
+        score_ok = False
+    if not score_ok:
+        return None
+
+    asset_type = str(res_b.get("asset_type") or conf_b.get("asset_type") or "").lower()
+    forex_gate_near_miss = asset_type == "forex" and bool(
+        cfg.get("FOREX_GATE_NEAR_MISS_ENABLED", False)
+    )
+    trigger_ok = bool(conf_b.get("trigger_ok", False))
+    entry_ok = bool(conf_b.get("entry_ok", False))
+    if (
+        bool(cfg.get("REQUIRE_TRIGGER_MISSING", True))
+        and not forex_gate_near_miss
+        and (trigger_ok or entry_ok)
+    ):
+        return None
+
+    if (
+        bool(cfg.get("REQUIRE_STRUCTURE_OK", True))
+        and not forex_gate_near_miss
+        and not bool(conf_b.get("structure_ok", False))
+    ):
+        return None
+
+    structure_evidence = {
+        "bos_confirmed": bool(res_b.get("bos_confirmed", False)),
+        "choch_confirmed": bool(res_b.get("choch_confirmed", False)),
+        "liquidity_sweep": bool(res_b.get("liquidity_sweep", False)),
+        "ob_at_zone": bool(res_b.get("ob_at_zone", False)),
+        "fvg_overlap": bool(res_b.get("fvg_overlap", False)),
+        "breaker_block": bool(res_b.get("breaker_block", False)),
+    }
+    if not any(structure_evidence.values()):
+        return None
+
+    location_context = bool(
+        conf_b.get("location_ok", False)
+        or conf_b.get("zone_ok", False)
+        or res_b.get("zone_touched", False)
+        or res_b.get("near_active_zone", False)
+        or res_b.get("ob_at_zone", False)
+        or res_b.get("fvg_overlap", False)
+    )
+    if bool(cfg.get("REQUIRE_LOCATION_CONTEXT", True)) and not location_context:
+        if not forex_gate_near_miss:
+            return None
+
+    if forex_gate_near_miss:
+        try:
+            min_confirmations = int(cfg.get("FOREX_MIN_GATE_CONFIRMATIONS", 3))
+        except (TypeError, ValueError):
+            min_confirmations = 3
+        min_confirmations = max(1, min(5, min_confirmations))
+        space_gate_ok = bool(conf_b.get("space_gate_ok", conf_b.get("room_ok", False)))
+        gate_confirmations = [
+            bool(conf_b.get("structure_ok", False)),
+            bool(conf_b.get("location_ok", False)),
+            entry_ok,
+            space_gate_ok,
+            bool(conf_b.get("rr_ok", False)),
+        ]
+        if sum(1 for item in gate_confirmations if item) < min_confirmations:
+            return None
+
+    failed_gates = list(conf_b.get("failed_gate_names") or [])
+    reason = "Engine B structure ready; awaiting price-action trigger"
+    execution_block_reason = "awaiting_price_action_trigger"
+    if forex_gate_near_miss:
+        blocked = ", ".join(failed_gates) if failed_gates else "gate_near_miss"
+        reason = f"Engine B forex near miss; blocked by {blocked}"
+        execution_block_reason = "engine_b_gate_near_miss"
+    return {
+        "reason": reason,
+        "execution_allowed": False,
+        "execution_block_reason": execution_block_reason,
+        "asset_type": asset_type or None,
+        "forex_gate_near_miss": forex_gate_near_miss,
+        "score": round(score, 4),
+        "min_score_scaled": round(min_score, 4),
+        "min_score_ratio": min_ratio,
+        "trigger_ok": trigger_ok,
+        "entry_ok": entry_ok,
+        "structure_ok": bool(conf_b.get("structure_ok", False)),
+        "location_context": location_context,
+        "failed_gates": failed_gates,
+        "structure_evidence": structure_evidence,
+    }
+
+
+def _mark_engine_b_structure_ready_watchlist(
+    signal: dict,
+    conf_b: dict | None,
+    res_b: dict | None,
+    *,
+    config: dict | None = None,
+) -> dict | None:
+    detail = _engine_b_structure_ready_watchlist_detail(conf_b, res_b, config=config)
+    if not detail:
+        return None
+    signal["engine_b_structure_ready_watchlist"] = True
+    signal["engine_b_structure_ready_detail"] = detail
+    signal["engine_b_execution_blocked"] = True
+    signal["engine_b_execution_block_reason"] = detail["execution_block_reason"]
+    return detail
+
+
 def _apply_engine_b_scan_gate(signal: dict, tier: str, reason: str) -> tuple[str, str]:
     """Demote Engine A trade tier when B confirmation is required and missing.
 
@@ -115,6 +293,45 @@ def _apply_engine_b_scan_gate(signal: dict, tier: str, reason: str) -> tuple[str
         return tier, reason
     detail = signal.get("engine_b_error") or signal.get("engine_b_verdict") or "not_confirmed"
     return "watchlist", f"Engine B confirmation failed ({detail})"
+
+
+def _apply_engine_b_structure_ready_scan_tier(
+    signal: dict,
+    tier: str,
+    reason: str,
+    *,
+    config: dict | None = None,
+) -> tuple[str, str]:
+    """Promote scan-only Engine B near-ready rows to watchlist, never trade."""
+    cfg = _engine_b_structure_ready_watchlist_config(config)
+    if not bool(cfg.get("ENABLED", False)):
+        return tier, reason
+    if tier == "trade":
+        return tier, reason
+    detail = signal.get("engine_b_structure_ready_detail")
+    if not isinstance(detail, dict):
+        return tier, reason
+    if bool(detail.get("execution_allowed", False)):
+        return tier, reason
+
+    safety_block_codes = {
+        "closed_exchange",
+        "event_risk",
+        "inactive_pair",
+        "engine_b_error",
+    }
+    codes = {d.get("code") for d in signal.get("scanDiagnostics", []) if isinstance(d, dict)}
+    if codes.intersection(safety_block_codes):
+        return tier, reason
+
+    diagnostics = signal.setdefault("scanDiagnostics", [])
+    diagnostics.append(
+        {
+            "code": "engine_b_structure_ready_watchlist",
+            "detail": detail.get("reason", "Engine B structure ready; awaiting trigger"),
+        }
+    )
+    return "watchlist", str(detail.get("reason") or "Engine B structure ready; awaiting trigger")
 
 
 def _a_only_auto_weight(pair: dict | None, config: dict | None = None) -> float:
@@ -897,7 +1114,18 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict[s
                                     combined_conviction = (a_norm * _w_a) + (b_norm * _w_b)
                                     sig_a["combinedConviction"] = round(combined_conviction, 4)
                                     sig_a["engine_b_scoreNorm"] = round(b_norm, 4)
-                                    sig_a["enginesAligned"] = bool(conf_b.get("passed", False))
+                                    _apply_engine_b_scan_confidence_gate(
+                                        sig_a,
+                                        conf_b,
+                                        style_profile_b,
+                                        regime_label,
+                                        ptype,
+                                    )
+                                    _mark_engine_b_structure_ready_watchlist(
+                                        sig_a,
+                                        conf_b,
+                                        res_b,
+                                    )
 
                                     log.debug(
                                         f"[SCAN+B] {pair.get('display')} A={a_score:.2f}/{a_max} B={b_score:.2f}/{b_max} "
@@ -1100,6 +1328,11 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict[s
 
             tier, tier_reason = _classify_signal(sig, pair)
             tier, tier_reason = _apply_engine_b_scan_gate(sig, tier, tier_reason)
+            tier, tier_reason = _apply_engine_b_structure_ready_scan_tier(
+                sig,
+                tier,
+                tier_reason,
+            )
             if _threshold_audit_on:
                 threshold_audit_rows.append(
                     build_signal_funnel_row(

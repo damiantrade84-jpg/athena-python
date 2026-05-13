@@ -140,6 +140,8 @@ ENGINE_B_FOREX_SESSION_STRUCTURE_WEIGHTING:
   LIQUIDITY_SWEEP_ACTIVE_SESSION_BONUS: 0.01
   MAX_ABS_SCORE_BONUS: 0.04
 
+ENGINE_B_FOREX_RR_CAN_SATISFY_SPACE_GATE: true
+
 # Engine B asset-class structure tuning for stocks, indices, commodities, ETFs.
 # Active here for paper testing; config.py fallback defaults remain disabled.
 ENGINE_B_ASSET_CLASS_ADJUSTMENTS_ENABLED: true
@@ -2207,6 +2209,14 @@ ENGINE_B_STRUCTURE_GATE_ENABLED: true
 # When true, Engine A full-scan *trade* tier requires Engine B confirmation (enginesAligned).
 # Default false: Engine A and B are independent on scan; use Engine C for combined verdict.
 ENGINE_B_SCAN_CONFIRMATION_GATE_ENABLED: false
+ENGINE_B_STRUCTURE_READY_WATCHLIST:
+  ENABLED: true
+  MIN_SCORE_RATIO: 0.85
+  REQUIRE_TRIGGER_MISSING: true
+  REQUIRE_STRUCTURE_OK: true
+  REQUIRE_LOCATION_CONTEXT: true
+  FOREX_GATE_NEAR_MISS_ENABLED: true
+  FOREX_MIN_GATE_CONFIRMATIONS: 3
 ENGINE_B_USE_EXECUTION_LEVELS_FOR_SCAN_SIGNALS: true
 
 

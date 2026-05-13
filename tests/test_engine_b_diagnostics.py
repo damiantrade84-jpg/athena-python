@@ -428,6 +428,42 @@ def test_calculate_confidence_engine_b_diagnostics_resistance_too_close():
     assert diag.get("reason_codes") == [ENGINE_B_REASON_RESISTANCE_TOO_CLOSE]
 
 
+def test_forex_rr_can_satisfy_space_gate_when_config_enabled(monkeypatch):
+    res = _base_res_long()
+    res["asset_type"] = "forex"
+    res["distance_to_res"] = 0.05
+    style_profile = {"min_room_atr": 0.35, "min_rr": 1.0, "require_macro_align": False}
+
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_FOREX_RR_CAN_SATISFY_SPACE_GATE", False)
+    baseline = engine.calculate_confidence(
+        res,
+        current_price=100.0,
+        direction="LONG",
+        learning_ctx=None,
+        entry_candles=[],
+        style_profile=style_profile,
+    )
+
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_FOREX_RR_CAN_SATISFY_SPACE_GATE", True)
+    enabled = engine.calculate_confidence(
+        res,
+        current_price=100.0,
+        direction="LONG",
+        learning_ctx=None,
+        entry_candles=[],
+        style_profile=style_profile,
+    )
+
+    assert baseline["room_ok"] is False
+    assert baseline["space_gate_ok"] is False
+    assert baseline["passed"] is False
+    assert enabled["room_ok"] is False
+    assert enabled["rr_ok"] is True
+    assert enabled["space_gate_ok"] is True
+    assert enabled["forex_rr_space_gate_enabled"] is True
+    assert enabled["passed"] is True
+
+
 def test_calculate_confidence_engine_b_diagnostics_support_too_close():
     res = _base_res_long()
     res["current_swing_sequence"] = "LH_LL"

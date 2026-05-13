@@ -8,6 +8,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from risk_engine import risk_check
 from threshold_audit import (
     REQUIRED_FIELDS,
+    _engine_b_fail_reasons,
+    _engine_b_hard_fail_reasons,
     audit_enabled,
     build_signal_funnel_row,
     write_signal_funnel_rows,
@@ -329,6 +331,23 @@ def test_passed_false_row_contains_at_least_one_hard_fail_reason():
     hard_fails = _engine_b_hard_fail_reasons(conf_b, res_b)
     assert len(hard_fails) >= 1
     assert "engine_b_entry_ok_false" in hard_fails or "engine_b_confidence_passed_false" in hard_fails
+
+
+def test_space_gate_ok_prevents_room_from_hard_fail_reason():
+    conf_b = {
+        "passed": True,
+        "structure_ok": True,
+        "location_ok": True,
+        "entry_ok": True,
+        "room_ok": False,
+        "space_gate_ok": True,
+        "rr_ok": True,
+        "macro_ok": True,
+    }
+    res_b = {"structural_verdict": "CLEAR"}
+
+    assert "engine_b_room_ok_false" not in _engine_b_hard_fail_reasons(conf_b, res_b)
+    assert "engine_b_room_ok_false" not in _engine_b_fail_reasons(conf_b, res_b)
 
 
 def test_soft_warnings_do_not_imply_failed_checklist():

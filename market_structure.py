@@ -3572,12 +3572,20 @@ class NakedEngine:
         )
 
         space_ok = room_ok or rr_ok
+        # Forex often has a nearby structural level while the execution RR
+        # model still has valid protective distance. Keep historical behavior
+        # unless this explicit test flag is enabled.
+        forex_rr_space_gate_enabled = (
+            asset_type_lower == "forex"
+            and bool(config.CONFIG.get("ENGINE_B_FOREX_RR_CAN_SATISFY_SPACE_GATE", False))
+        )
+        space_gate_ok = space_ok if forex_rr_space_gate_enabled else room_ok
 
         # Stage 2.8: Optional volume confirmation gate.
         # Contributes to gate_score (+1 bonus) but is NOT mandatory for pass.
         volume_ok = bool(res.get("volume_confirmed", False))
 
-        gate_confirmations = [structure_ok, location_ok, entry_ok, room_ok, rr_ok]
+        gate_confirmations = [structure_ok, location_ok, entry_ok, space_gate_ok, rr_ok]
         if require_macro_align:
             gate_confirmations.append(macro_ok)
         confirmations = list(gate_confirmations)
@@ -3662,7 +3670,7 @@ class NakedEngine:
 
         pct = min(100, max(0, round((total_score / max_possible) * 100)))
         if checklist_mode == "strict":
-            passed = structure_ok and zone_ok and trigger_ok and room_ok and rr_ok and macro_ok
+            passed = structure_ok and zone_ok and trigger_ok and space_gate_ok and rr_ok and macro_ok
         else:
             # Flexible but not free — require BOTH location AND a trigger/catalyst.
             # BOS alone is not enough. You need: structure + (zone OR breakout) + trigger + room/rr.
@@ -3671,7 +3679,7 @@ class NakedEngine:
                 structure_ok
                 and location_ok
                 and entry_ok
-                and room_ok
+                and space_gate_ok
                 and rr_ok
                 and (macro_ok if require_macro_align else True)
             )
@@ -3683,6 +3691,8 @@ class NakedEngine:
             failed_gate_names.append("loc")
         if not entry_ok:
             failed_gate_names.append("trigger")
+        if not space_gate_ok:
+            failed_gate_names.append("space")
         if not rr_ok:
             failed_gate_names.append(f"rr={rr:.1f}(src={_exec_lvl['rr_source']})")
 
@@ -3695,7 +3705,7 @@ class NakedEngine:
             ("structure_ok", structure_ok),
             ("location_ok", location_ok),
             ("entry_ok", entry_ok),
-            ("room_ok", room_ok),
+            ("room_ok", space_gate_ok),
             ("rr_ok", rr_ok),
             ("macro_ok", macro_ok if require_macro_align else True),
         ]:
@@ -3778,6 +3788,8 @@ class NakedEngine:
             "original_trigger_ok": original_trigger_ok,
             "entry_ok": entry_ok,
             "room_ok": room_ok,
+            "space_gate_ok": space_gate_ok,
+            "forex_rr_space_gate_enabled": forex_rr_space_gate_enabled,
             "min_room_atr_used": round(_effective_min_room_atr, 4),
             "rr_ok": rr_ok,
             "tp_side_ok": tp_side_ok,

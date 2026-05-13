@@ -155,6 +155,8 @@ def _engine_b_hard_fail_reasons(conf_b: dict[str, Any] | None, res_b: dict[str, 
         return ["engine_b_confidence_not_evaluated"]
     # Checklist components that directly block
     for key in ("structure_ok", "location_ok", "entry_ok", "room_ok", "rr_ok", "macro_ok"):
+        if key == "room_ok" and conf_b.get("space_gate_ok") is True:
+            continue
         if conf_b.get(key) is False:
             reasons.append(f"engine_b_{key}_false")
     # If passed is explicitly False, it's a hard fail
@@ -223,6 +225,8 @@ def _engine_b_fail_reasons(conf_b: dict[str, Any] | None, res_b: dict[str, Any] 
     if not isinstance(conf_b, dict):
         return sorted(set(reasons + ["engine_b_confidence_not_evaluated"]))
     for key in ("structure_ok", "location_ok", "entry_ok", "room_ok", "rr_ok", "macro_ok"):
+        if key == "room_ok" and conf_b.get("space_gate_ok") is True:
+            continue
         if conf_b.get(key) is False:
             reasons.append(f"engine_b_{key}_false")
     if conf_b.get("passed") is not True:
@@ -242,6 +246,7 @@ def _engine_b_components(conf_b: dict[str, Any] | None) -> dict[str, Any]:
         "trigger_ok",
         "entry_ok",
         "room_ok",
+        "space_gate_ok",
         "rr_ok",
         "macro_ok",
         "breakout_ok",

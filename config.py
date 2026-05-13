@@ -359,6 +359,10 @@ CONFIG: dict = {
         "LIQUIDITY_SWEEP_ACTIVE_SESSION_BONUS": 0.01,
         "MAX_ABS_SCORE_BONUS": 0.04,
     },
+    # Forex-only, default-off correction for the Engine B space gate:
+    # when enabled, valid execution RR can satisfy the "room/rr" gate comment
+    # without changing non-forex assets.
+    "ENGINE_B_FOREX_RR_CAN_SATISFY_SPACE_GATE": False,
     # Default-off non-forex/crypto structure tuning for stocks, indices, commodities, and ETFs.
     "ENGINE_B_ASSET_CLASS_ADJUSTMENTS_ENABLED": False,
     "ENGINE_B_ASSET_CLASS_VOLATILITY_AWARE_ENABLED": False,
@@ -949,6 +953,17 @@ CONFIG: dict = {
     "ENGINE_B_BT_STRUCTURE_GATE_ENABLED": True,
     "ENGINE_B_STRUCTURE_GATE_ENABLED": True,
     "ENGINE_B_SCAN_CONFIRMATION_GATE_ENABLED": False,
+    # Scan-only surfacing for Engine B structures that are blocked by the final trigger.
+    # Default-off: execution and Engine B pass gates remain unchanged unless explicitly enabled.
+    "ENGINE_B_STRUCTURE_READY_WATCHLIST": {
+        "ENABLED": False,
+        "MIN_SCORE_RATIO": 0.85,
+        "REQUIRE_TRIGGER_MISSING": True,
+        "REQUIRE_STRUCTURE_OK": True,
+        "REQUIRE_LOCATION_CONTEXT": True,
+        "FOREX_GATE_NEAR_MISS_ENABLED": False,
+        "FOREX_MIN_GATE_CONFIRMATIONS": 3,
+    },
     "ENGINE_B_USE_EXECUTION_LEVELS_FOR_SCAN_SIGNALS": True,
     "ENGINE_B_CRYPTO_VOLATILITY_ADJUSTMENT_ENABLED": False,
     "ENGINE_B_CRYPTO_STRUCTURE_MULT": 1.25,
