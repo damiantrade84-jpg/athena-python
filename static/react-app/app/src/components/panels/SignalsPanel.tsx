@@ -59,6 +59,34 @@ function compareSignals(a: EngineASignal, b: EngineASignal, sortBy: string): num
   return toNum(b.confluenceScore ?? b.score) - toNum(a.confluenceScore ?? a.score);
 }
 
+/** Labels for Engine B scanFunnel keys returned by /api/scan-naked. */
+const ENGINE_B_FUNNEL_LABELS: Record<string, string> = {
+  passed: 'Passed',
+  insufficient_candles: 'No data (candles)',
+  bybit_atr_unavailable: 'Bybit ATR missing',
+  invalid_atr: 'Invalid ATR',
+  volatility_gate: 'Volatility gate',
+  pair_exception: 'Exception',
+  no_clear_structure: 'No CLEAR structure',
+  gate_fail_struct: 'Gate: structure',
+  gate_fail_loc: 'Gate: location',
+  gate_fail_trigger: 'Gate: trigger',
+  gate_fail_rr: 'Gate: RR',
+  gate_fail_other: 'Gate: other',
+  unknown_reject: 'Unknown',
+  total: 'Total',
+};
+
+function formatEngineBScanFunnel(funnel: Record<string, number> | undefined): string | null {
+  if (!funnel || typeof funnel !== 'object') return null;
+  const entries = Object.entries(funnel)
+    .filter(([k, v]) => k !== 'total' && k !== 'passed' && typeof v === 'number' && v > 0)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 8);
+  if (!entries.length) return null;
+  return entries.map(([k, v]) => `${ENGINE_B_FUNNEL_LABELS[k] ?? k} ${v}`).join(' · ');
+}
+
 function signalForExecutionPayload(signal: EngineASignal, source: ScanSource): EngineASignal {
   if (source !== 'A') return signal;
   const payload = { ...signal } as Record<string, unknown>;
@@ -196,12 +224,14 @@ export default function SignalsPanel() {
           const result = await postScanB('/api/scan-naked', { assetClass: ac, style });
           if (result?.signals) {
             const pairsScanned = result.totalPairs ?? result.activePairs;
+            const funnel = result.scanFunnel as Record<string, number> | undefined;
             setScanCacheB(
               result.signals as EngineASignal[],
               {
                 count: result.signals.length,
                 scannedAt: new Date().toISOString(),
                 ...(pairsScanned != null ? { pairsScanned } : {}),
+                ...(funnel && Object.keys(funnel).length ? { scanFunnel: funnel } : {}),
               },
             );
             showToast(
@@ -510,8 +540,10 @@ export default function SignalsPanel() {
             : `${filtered.length} signals match filter (${baseSignals.length} total)`}
         </span>
         {lastScanAgeIso && <span>- Scanned: {new Date(lastScanAgeIso).toLocaleTimeString()}</span>}
-        {activeTab === 'B' && scanCacheB === null && (
-          <span className="text-warning">- No Engine B scan yet - click Scan Engine B</span>
+        {activeTab === 'B' && scanCacheBMeta?.scanFunnel && (
+          <span className="text-[10px] text-muted-foreground max-w-3xl leading-snug" title="Per-pair reject breakdown from last Engine B scan (see server log for full funnel)">
+            Rejects: {formatEngineBScanFunnel(scanCacheBMeta.scanFunnel) ?? '—'}
+          </span>
         )}
         {activeTab === 'A' && (
           <span className="text-[10px] text-muted-foreground max-w-xl">

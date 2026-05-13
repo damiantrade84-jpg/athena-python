@@ -6268,6 +6268,74 @@ def api_scan_naked():
 
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
+    engine_b_funnel = {
+        "total": len(candidate_pairs),
+        "passed": 0,
+        "insufficient_candles": 0,
+        "bybit_atr_unavailable": 0,
+        "invalid_atr": 0,
+        "volatility_gate": 0,
+        "pair_exception": 0,
+        "no_clear_structure": 0,
+        "gate_fail_struct": 0,
+        "gate_fail_loc": 0,
+        "gate_fail_trigger": 0,
+        "gate_fail_rr": 0,
+        "gate_fail_other": 0,
+        "unknown_reject": 0,
+    }
+    _funnel_lock = threading.Lock()
+
+    def _gate_bucket_from_failed_names(failed_names):
+        if not failed_names:
+            return "other"
+        for g in failed_names:
+            if str(g).lower() == "struct":
+                return "struct"
+        for g in failed_names:
+            if str(g).lower() == "loc":
+                return "loc"
+        for g in failed_names:
+            if "trigger" in str(g).lower():
+                return "trigger"
+        for g in failed_names:
+            gl = str(g).lower()
+            if gl == "rr_gate" or gl.startswith("rr=") or gl.startswith("rr"):
+                return "rr"
+        return "other"
+
+    def _record_pair_funnel(had_signal: bool, row: dict) -> None:
+        """One row per pair: why Engine B did not emit a signal (or passed)."""
+        with _funnel_lock:
+            if had_signal:
+                engine_b_funnel["passed"] += 1
+                return
+            reason = str(row.get("final_reject_reason") or "").strip()
+            if reason == "insufficient_candles":
+                engine_b_funnel["insufficient_candles"] += 1
+            elif reason == "bybit_atr_unavailable":
+                engine_b_funnel["bybit_atr_unavailable"] += 1
+            elif reason == "invalid_atr":
+                engine_b_funnel["invalid_atr"] += 1
+            elif reason == "volatility_gate":
+                engine_b_funnel["volatility_gate"] += 1
+            elif reason.startswith("exception:"):
+                engine_b_funnel["pair_exception"] += 1
+            elif reason == "no_clear_structural_verdict":
+                engine_b_funnel["no_clear_structure"] += 1
+            elif reason.startswith("gate_failures") or row.get("failed_gate_names"):
+                bucket = _gate_bucket_from_failed_names(list(row.get("failed_gate_names") or []))
+                key = {
+                    "struct": "gate_fail_struct",
+                    "loc": "gate_fail_loc",
+                    "trigger": "gate_fail_trigger",
+                    "rr": "gate_fail_rr",
+                    "other": "gate_fail_other",
+                }.get(bucket, "gate_fail_other")
+                engine_b_funnel[key] += 1
+            else:
+                engine_b_funnel["unknown_reject"] += 1
+
     def _scan_pair(pair, debug_mode=False):
         debug_row = {
             "pair": pair.get("display"),
@@ -6295,6 +6363,7 @@ def api_scan_naked():
             "direction_details": {}
         }
 
+        _best_signal = None
         try:
             engine = NakedEngine()
 
@@ -6454,7 +6523,6 @@ def api_scan_naked():
             except Exception:
                 pass
             local_results = []
-            _best_signal = None
             def _build_direction_debug(direction, verdict, res, conf_data, threshold, fail_gates):
                 _conf = conf_data or {}
                 _res = res if isinstance(res, dict) else {}
@@ -6871,44 +6939,39 @@ def api_scan_naked():
 
                 if _best_signal is None or signal["confluenceScore"] > _best_signal["confluenceScore"]:
                     _best_signal = signal
+
+            if _best_signal is None:
+                if not debug_row["long_structural_verdict"] and not debug_row["short_structural_verdict"]:
+                    debug_row["final_reject_reason"] = "no_clear_structural_verdict"
+                elif debug_row["failed_gate_names"]:
+                    debug_row["final_reject_reason"] = f"gate_failures: {','.join(debug_row['failed_gate_names'])}"
+                else:
+                    debug_row["final_reject_reason"] = "unknown"
+
+            if _best_signal is not None:
+                local_results.append(_best_signal)
+
+            if debug_mode:
+                local_results.append({"debug": debug_row})
+
         except Exception as e:
             debug_row["final_reject_reason"] = f"exception: {str(e)}"
             log.warning(f"[NAKED SCAN] {pair.get('display')} error: {e}")
+            _best_signal = None
             if debug_mode:
                 return {"debug": debug_row}
             return []
-
-        # If no signal was generated but we tested both directions, set final reject reason
-        if _best_signal is None:
-            if not debug_row["long_structural_verdict"] and not debug_row["short_structural_verdict"]:
-                debug_row["final_reject_reason"] = "no_clear_structural_verdict"
-            elif debug_row["failed_gate_names"]:
-                debug_row["final_reject_reason"] = f"gate_failures: {','.join(debug_row['failed_gate_names'])}"
-            else:
-                debug_row["final_reject_reason"] = "unknown"
-
-        if _best_signal is not None:
-            local_results.append(_best_signal)
-
-        # Always return debug row in debug mode
-        if debug_mode:
-            local_results.append({"debug": debug_row})
+        finally:
+            _had = (
+                _best_signal is not None
+                and not str(debug_row.get("final_reject_reason") or "").startswith("exception:")
+            )
+            _record_pair_funnel(_had, debug_row)
 
         return local_results
 
     _max_workers = max(1, int(CONFIG.get("SCAN_MAX_WORKERS", 3) or 3))
     debug_rows = []
-
-    # REGRESSION CHECK: Engine B scan-funnel tracking
-    engine_b_funnel = {
-        "total": len(candidate_pairs),
-        "no_clear_structure": 0,
-        "gate_fail_struct": 0,
-        "gate_fail_loc": 0,
-        "gate_fail_trigger": 0,
-        "gate_fail_rr": 0,
-        "passed": 0,
-    }
 
     log.info(f"[DEBUG] Starting scan with {len(candidate_pairs)} candidate pairs, debug_mode={debug_mode}")
     from athena_app.services.naked_scan_service import iter_naked_scan_rows
@@ -6922,23 +6985,6 @@ def api_scan_naked():
                 if debug_mode and row.get("debug"):
                     debug_rows.append(row["debug"])
                     log.debug(f"[DEBUG] Added debug row for {row['debug'].get('pair')}")
-
-                    # REGRESSION CHECK: Track Engine B funnel
-                    dbg = row["debug"]
-                    if not dbg.get("long_structural_verdict") and not dbg.get("short_structural_verdict"):
-                        engine_b_funnel["no_clear_structure"] += 1
-                    else:
-                        for gate in dbg.get("failed_gate_names", []):
-                            if "struct" in gate:
-                                engine_b_funnel["gate_fail_struct"] += 1
-                            elif "loc" in gate:
-                                engine_b_funnel["gate_fail_loc"] += 1
-                            elif "trigger" in gate:
-                                engine_b_funnel["gate_fail_trigger"] += 1
-                            elif "rr" in gate:
-                                engine_b_funnel["gate_fail_rr"] += 1
-                        if dbg.get("long_passed") or dbg.get("short_passed"):
-                            engine_b_funnel["passed"] += 1
                 else:
                     results.append(row)
                     _pair_key = row.get("display", "")
@@ -6952,8 +6998,6 @@ def api_scan_naked():
         key=lambda x: x.get("confluenceScore", 0),
         reverse=True,
     )
-    if not debug_mode:
-        engine_b_funnel["passed"] = len(results)
 
     # Run Conductor on Engine B signals so widget updates after an Engine B scan
     if results:
@@ -6977,12 +7021,24 @@ def api_scan_naked():
             log.warning(f"[CONDUCTOR] engine-b scan orchestration failed: {_cerr}")
 
     log.info(
-        "[NAKED SCAN] complete: %d signal(s) from %d candidate pair(s) (asset_class=%s, style=%s)",
+        "[NAKED SCAN] complete: %d signal(s) from %d candidate pair(s) (asset_class=%s, style=%s) funnel=%s",
         len(results),
         len(candidate_pairs),
         asset_class or "all",
         requested_style,
+        {k: engine_b_funnel[k] for k in engine_b_funnel if k != "total"},
     )
+    _funnel_sum = sum(
+        int(v)
+        for k, v in engine_b_funnel.items()
+        if k != "total" and isinstance(v, (int, float))
+    )
+    if _funnel_sum != len(candidate_pairs):
+        log.warning(
+            "[NAKED SCAN] funnel row count %s != candidate pairs %s (report if reproducible)",
+            _funnel_sum,
+            len(candidate_pairs),
+        )
 
     if debug_mode:
         # REGRESSION CHECK: Print Engine B scan-funnel summary
@@ -6990,12 +7046,19 @@ def api_scan_naked():
         print("REGRESSION CHECK - ENGINE B SCAN FUNNEL")
         print("=" * 80)
         print(f"Total pairs scanned: {engine_b_funnel['total']}")
+        print(f"Passed: {engine_b_funnel['passed']}")
+        print(f"Insufficient candles: {engine_b_funnel['insufficient_candles']}")
+        print(f"Bybit ATR unavailable: {engine_b_funnel['bybit_atr_unavailable']}")
+        print(f"Invalid ATR: {engine_b_funnel['invalid_atr']}")
+        print(f"Volatility gate: {engine_b_funnel['volatility_gate']}")
+        print(f"Pair exception: {engine_b_funnel['pair_exception']}")
         print(f"No clear structure: {engine_b_funnel['no_clear_structure']}")
         print(f"Gate fail - structure: {engine_b_funnel['gate_fail_struct']}")
         print(f"Gate fail - location: {engine_b_funnel['gate_fail_loc']}")
         print(f"Gate fail - trigger: {engine_b_funnel['gate_fail_trigger']}")
         print(f"Gate fail - RR: {engine_b_funnel['gate_fail_rr']}")
-        print(f"Passed: {engine_b_funnel['passed']}")
+        print(f"Gate fail - other: {engine_b_funnel['gate_fail_other']}")
+        print(f"Unknown reject: {engine_b_funnel['unknown_reject']}")
         print("="*80 + "\n")
 
         return jsonify(_json_safe({

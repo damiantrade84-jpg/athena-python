@@ -21,7 +21,7 @@ interface AppState {
   scalpLabSelectedCache: unknown | null;
   scanCacheAMeta: { count: number; scannedAt: string } | null;
   /** Engine B: `pairsScanned` comes from API `totalPairs` (universe size for this scan). */
-  scanCacheBMeta: { count: number; scannedAt: string; pairsScanned?: number } | null;
+  scanCacheBMeta: { count: number; scannedAt: string; pairsScanned?: number; scanFunnel?: Record<string, number> } | null;
 }
 
 interface AppActions {
@@ -36,7 +36,7 @@ interface AppActions {
   showToast: (message: string, type: 'success' | 'error' | 'info') => void;
   getLivePrice: (pair: string) => number | undefined;
   setScanCacheA: (signals: unknown[], meta?: { count: number; scannedAt: string }) => void;
-  setScanCacheB: (signals: unknown[], meta?: { count: number; scannedAt: string; pairsScanned?: number }) => void;
+  setScanCacheB: (signals: unknown[], meta?: { count: number; scannedAt: string; pairsScanned?: number; scanFunnel?: Record<string, number> }) => void;
   setScalpLabScanCache: (result: unknown | null) => void;
   setScalpLabSelectedCache: (signal: unknown | null) => void;
 }
@@ -75,14 +75,14 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   const [scalpLabScanCache, setScalpLabScanCache] = useState<unknown | null>(null);
   const [scalpLabSelectedCache, setScalpLabSelectedCache] = useState<unknown | null>(null);
   const [scanCacheAMeta, setScanCacheAMeta] = useState<{ count: number; scannedAt: string } | null>(null);
-  const [scanCacheBMeta, setScanCacheBMeta] = useState<{ count: number; scannedAt: string; pairsScanned?: number } | null>(null);
+  const [scanCacheBMeta, setScanCacheBMeta] = useState<{ count: number; scannedAt: string; pairsScanned?: number; scanFunnel?: Record<string, number> } | null>(null);
 
   const setScanCacheA = useCallback((signals: unknown[], meta?: { count: number; scannedAt: string }) => {
     setScanCacheAState(signals);
     if (meta) setScanCacheAMeta(meta);
   }, []);
 
-  const setScanCacheB = useCallback((signals: unknown[], meta?: { count: number; scannedAt: string; pairsScanned?: number }) => {
+  const setScanCacheB = useCallback((signals: unknown[], meta?: { count: number; scannedAt: string; pairsScanned?: number; scanFunnel?: Record<string, number> }) => {
     setScanCacheBState(signals);
     if (meta) setScanCacheBMeta(meta);
   }, []);
