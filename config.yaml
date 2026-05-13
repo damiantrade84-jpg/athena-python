@@ -128,6 +128,45 @@ ENGINE_B_FOREX_ASIAN_SESSION_SKIP_ENABLED: true
 
 BINANCE_KLINE_WS_INTERVALS:
   - "1m"
+# Engine B forex session diagnostics. ENABLED only enriches structure payloads;
+# SCORE_INFLUENCE_ENABLED must also be true before score adjustment can use it.
+ENGINE_B_FOREX_SESSION_STRUCTURE_WEIGHTING:
+  ENABLED: true
+  SCORE_INFLUENCE_ENABLED: true
+  HIGH_QUALITY_BONUS: 0.02
+  MEDIUM_QUALITY_BONUS: 0.01
+  LOW_QUALITY_PENALTY: -0.02
+  LONDON_NY_OVERLAP_BONUS: 0.01
+  LIQUIDITY_SWEEP_ACTIVE_SESSION_BONUS: 0.01
+  MAX_ABS_SCORE_BONUS: 0.04
+
+# Engine B asset-class structure tuning for stocks, indices, commodities, ETFs.
+# Active here for paper testing; config.py fallback defaults remain disabled.
+ENGINE_B_ASSET_CLASS_ADJUSTMENTS_ENABLED: true
+ENGINE_B_ASSET_CLASS_VOLATILITY_AWARE_ENABLED: true
+ENGINE_B_ASSET_CLASS_STRUCTURE_MULT:
+  stock: 1.10
+  index: 1.05
+  commodity: 1.15
+  etf: 1.08
+  etf_bond: 1.05
+ENGINE_B_ASSET_CLASS_BOS_MIN_BREAK_ATR:
+  stock: 0.06
+  index: 0.05
+  commodity: 0.08
+  etf: 0.05
+  etf_bond: 0.04
+
+# US cash-session structure context for stocks/indices/ETFs.
+ENGINE_B_EQUITY_SESSION_STRUCTURE_WEIGHTING:
+  ENABLED: true
+  SCORE_INFLUENCE_ENABLED: true
+  HIGH_QUALITY_BONUS: 0.015
+  MEDIUM_QUALITY_BONUS: 0.008
+  OFF_HOURS_PENALTY: -0.015
+  LIQUIDITY_SWEEP_ACTIVE_SESSION_BONUS: 0.008
+  MAX_ABS_SCORE_BONUS: 0.03
+
   - "5m"
   - "15m"
   - "1h"
@@ -2095,6 +2134,28 @@ ENGINE_B_FOREX_ADX_MIN: 12
 
 # Crypto structure adjustment is default-off to preserve existing Engine B
 # behavior. When enabled, crypto in elevated/high ATR% regimes requires wider
+# Engine B structure score context. Defaults match the historical hardcoded
+# structure_context.py behavior; optional confluence/session effects are off.
+ENGINE_B_STRUCTURE_SCORE_INFLUENCE_ENABLED: true
+ENGINE_B_STRUCTURE_SCORE_COMPONENT_BONUSES:
+  zone_proximity: 0.08
+  ob_at_zone: 0.05
+  fvg_overlap: 0.05
+  liquidity_sweep: 0.04
+  independent_direction_aligned: 0.04
+  independent_direction_opposed: -0.08
+ENGINE_B_STRUCTURE_SCORE_MULT_BOUNDS:
+  min: 0.85
+  max: 1.25
+ENGINE_B_STRUCTURE_INFLUENCE_LEVEL: enhanced
+ENGINE_B_STRUCTURE_INFLUENCE_LEVEL_MULTIPLIERS:
+  conservative: 0.75
+  standard: 1.0
+  enhanced: 1.25
+ENGINE_B_STRUCTURE_SCORE_CONFLUENCE:
+  ENABLED: true
+  BONUS: 0.03
+
 # swings and stronger close-throughs for BOS/CHoCH.
 ENGINE_B_CRYPTO_VOLATILITY_ADJUSTMENT_ENABLED: true
 ENGINE_B_CRYPTO_STRUCTURE_MULT: 1.25

@@ -53,6 +53,225 @@ def engine_b_forex_asian_session_blocks_bar(
         return False
 
 
+def _parse_utc_candle_time(value):
+    try:
+        from datetime import datetime, timezone
+
+        if not value:
+            return None
+        dt = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(timezone.utc)
+    except Exception:
+        return None
+
+
+def _forex_session_bucket(candle_time) -> dict:
+    dt = _parse_utc_candle_time(candle_time)
+    if dt is None:
+        return {
+            "session": "unknown",
+            "session_quality": "unknown",
+            "sessions_active": [],
+            "utc_hour": None,
+        }
+    hour = dt.hour
+    if 12 <= hour < 16:
+        session = "london_ny_overlap"
+        quality = "high"
+        active = ["london", "new_york"]
+    elif 7 <= hour < 10:
+        session = "london_open"
+        quality = "high"
+        active = ["london"]
+    elif 10 <= hour < 12:
+        session = "london"
+        quality = "medium"
+        active = ["london"]
+    elif 16 <= hour < 21:
+        session = "new_york"
+        quality = "medium"
+        active = ["new_york"]
+    else:
+        session = "asian_off_hours"
+        quality = "low"
+        active = ["asia"]
+    return {
+        "session": session,
+        "session_quality": quality,
+        "sessions_active": active,
+        "utc_hour": hour,
+    }
+
+
+def _engine_b_forex_session_structure_context(
+    *,
+    asset_type: str,
+    candle_time,
+    zone_context: bool,
+    ob_at_zone: bool,
+    fvg_overlap: bool,
+    liquidity_sweep: bool,
+) -> dict:
+    """Forex-only session diagnostics for structure quality.
+
+    London and New York tend to give cleaner institutional structure than the
+    Asian/off-hours window. This helper is diagnostics-first and only produces a
+    score bonus when the explicit config flag is enabled.
+    """
+    session_cfg = config.CONFIG.get("ENGINE_B_FOREX_SESSION_STRUCTURE_WEIGHTING", {}) or {}
+    if not isinstance(session_cfg, dict):
+        session_cfg = {}
+    enabled = bool(session_cfg.get("ENABLED", False))
+    bucket = _forex_session_bucket(candle_time)
+    is_forex = str(asset_type or "").lower() == "forex"
+    confluence_count = sum(
+        1 for item in (zone_context, ob_at_zone, fvg_overlap, liquidity_sweep) if item
+    )
+    active_quality = bucket["session_quality"] in {"high", "medium"}
+    score_bonus = 0.0
+    if enabled and is_forex and bucket["session_quality"] != "unknown" and confluence_count > 0:
+        if bucket["session_quality"] == "high":
+            score_bonus += _float_value_from_mapping(
+                session_cfg, "HIGH_QUALITY_BONUS", 0.02
+            )
+        elif bucket["session_quality"] == "medium":
+            score_bonus += _float_value_from_mapping(
+                session_cfg, "MEDIUM_QUALITY_BONUS", 0.01
+            )
+        elif bucket["session_quality"] == "low":
+            score_bonus += _float_value_from_mapping(
+                session_cfg, "LOW_QUALITY_PENALTY", -0.02
+            )
+        if bucket["session"] == "london_ny_overlap":
+            score_bonus += _float_value_from_mapping(
+                session_cfg, "LONDON_NY_OVERLAP_BONUS", 0.01
+            )
+        if liquidity_sweep and active_quality:
+            score_bonus += _float_value_from_mapping(
+                session_cfg, "LIQUIDITY_SWEEP_ACTIVE_SESSION_BONUS", 0.01
+            )
+        max_abs = abs(
+            _float_value_from_mapping(session_cfg, "MAX_ABS_SCORE_BONUS", 0.04)
+        )
+        score_bonus = max(-max_abs, min(max_abs, score_bonus))
+
+    return {
+        "enabled": enabled,
+        "session": bucket["session"],
+        "session_quality": bucket["session_quality"],
+        "sessions_active": bucket["sessions_active"],
+        "utc_hour": bucket["utc_hour"],
+        "confluence_count": confluence_count,
+        "active_session_structure": bool(active_quality and confluence_count > 0),
+        "liquidity_sweep_active_session": bool(liquidity_sweep and active_quality),
+        "score_bonus": round(score_bonus, 6),
+        "score_influence_enabled": bool(
+            session_cfg.get("SCORE_INFLUENCE_ENABLED", False)
+        ),
+    }
+
+
+def _equity_session_bucket(candle_time) -> dict:
+    dt = _parse_utc_candle_time(candle_time)
+    if dt is None:
+        return {
+            "session": "unknown",
+            "session_quality": "unknown",
+            "sessions_active": [],
+            "utc_hour": None,
+        }
+    decimal_hour = dt.hour + (dt.minute / 60.0)
+    # UTC approximation of US cash hours; configurable scoring remains optional.
+    if 14.5 <= decimal_hour < 16.0:
+        session = "us_cash_open"
+        quality = "high"
+    elif 16.0 <= decimal_hour < 20.5:
+        session = "us_regular"
+        quality = "medium"
+    elif 20.5 <= decimal_hour < 21.0:
+        session = "us_cash_close"
+        quality = "high"
+    else:
+        session = "off_hours"
+        quality = "low"
+    return {
+        "session": session,
+        "session_quality": quality,
+        "sessions_active": ["us_cash"] if session != "off_hours" else [],
+        "utc_hour": round(decimal_hour, 2),
+    }
+
+
+def _engine_b_equity_session_structure_context(
+    *,
+    asset_class: str,
+    candle_time,
+    zone_context: bool,
+    ob_at_zone: bool,
+    fvg_overlap: bool,
+    liquidity_sweep: bool,
+) -> dict:
+    """Diagnostics-first US session context for stocks, indices, and ETFs."""
+    session_cfg = config.CONFIG.get("ENGINE_B_EQUITY_SESSION_STRUCTURE_WEIGHTING", {}) or {}
+    if not isinstance(session_cfg, dict):
+        session_cfg = {}
+    enabled = bool(session_cfg.get("ENABLED", False))
+    bucket = _equity_session_bucket(candle_time)
+    class_key = str(asset_class or "").lower()
+    applicable = class_key in {"stock", "index", "etf", "etf_bond"}
+    confluence_count = sum(
+        1 for item in (zone_context, ob_at_zone, fvg_overlap, liquidity_sweep) if item
+    )
+    active_quality = bucket["session_quality"] in {"high", "medium"}
+    score_bonus = 0.0
+    if enabled and applicable and bucket["session_quality"] != "unknown" and confluence_count > 0:
+        if bucket["session_quality"] == "high":
+            score_bonus += _float_value_from_mapping(
+                session_cfg, "HIGH_QUALITY_BONUS", 0.015
+            )
+        elif bucket["session_quality"] == "medium":
+            score_bonus += _float_value_from_mapping(
+                session_cfg, "MEDIUM_QUALITY_BONUS", 0.008
+            )
+        elif bucket["session_quality"] == "low":
+            score_bonus += _float_value_from_mapping(
+                session_cfg, "OFF_HOURS_PENALTY", -0.015
+            )
+        if liquidity_sweep and active_quality:
+            score_bonus += _float_value_from_mapping(
+                session_cfg, "LIQUIDITY_SWEEP_ACTIVE_SESSION_BONUS", 0.008
+            )
+        max_abs = abs(
+            _float_value_from_mapping(session_cfg, "MAX_ABS_SCORE_BONUS", 0.03)
+        )
+        score_bonus = max(-max_abs, min(max_abs, score_bonus))
+
+    return {
+        "enabled": enabled,
+        "asset_class": class_key,
+        "session": bucket["session"],
+        "session_quality": bucket["session_quality"],
+        "sessions_active": bucket["sessions_active"],
+        "utc_hour": bucket["utc_hour"],
+        "confluence_count": confluence_count,
+        "active_session_structure": bool(active_quality and confluence_count > 0),
+        "liquidity_sweep_active_session": bool(liquidity_sweep and active_quality),
+        "score_bonus": round(score_bonus, 6),
+        "score_influence_enabled": bool(
+            session_cfg.get("SCORE_INFLUENCE_ENABLED", False)
+        ),
+    }
+
+
+def _float_value_from_mapping(mapping: dict, key: str, default: float) -> float:
+    try:
+        return float((mapping or {}).get(key, default))
+    except (TypeError, ValueError):
+        return float(default)
+
+
 def _engine_b_confirmed_only_struct_candles(
     struct_candles: list,
     structure_tf: str,
@@ -271,6 +490,111 @@ def _crypto_structure_adjustment(asset_type: str, candles: list, atr: float) -> 
         "volatility_regime": regime,
         "atr_pct": round(atr_pct, 6) if atr_pct is not None else None,
         "wick_dominance": wick_dominance,
+        "structure_mult": round(applied_mult, 4),
+        "swing_prominence_mult": round(applied_mult, 4),
+        "bos_min_break_atr": round(min_break, 4),
+        "applied": applied_mult > 1.0,
+    })
+    return detail
+
+
+def _asset_class_structure_adjustment(
+    asset_type: str,
+    score_group: str | None,
+    candles: list,
+    atr: float,
+) -> dict:
+    """Default-off non-forex/non-crypto structure tuning.
+
+    Reuses Engine B's existing swing prominence and close-through hooks so asset
+    classes can be tested without duplicating BOS/CHoCH detection logic.
+    """
+    asset_class = resolve_engine_b_asset_class(asset_type, score_group)
+    enabled = bool(config.CONFIG.get("ENGINE_B_ASSET_CLASS_ADJUSTMENTS_ENABLED", False))
+    vol_aware = bool(
+        config.CONFIG.get("ENGINE_B_ASSET_CLASS_VOLATILITY_AWARE_ENABLED", False)
+    )
+    applicable = asset_class in {"stock", "index", "commodity", "etf", "etf_bond"}
+    detail = {
+        "asset_type": str(asset_type or "").lower(),
+        "asset_class": asset_class,
+        "score_group": score_group,
+        "enabled": enabled,
+        "volatility_aware": vol_aware,
+        "applied": False,
+        "volatility_regime": "not_applicable" if not applicable else "unknown",
+        "atr_pct": None,
+        "structure_mult": 1.0,
+        "swing_prominence_mult": 1.0,
+        "bos_min_break_atr": 0.0,
+    }
+    if not applicable:
+        return detail
+
+    try:
+        close = float((candles[-1] or {}).get("close", 0.0)) if candles else 0.0
+    except (TypeError, ValueError, AttributeError):
+        close = 0.0
+    try:
+        atr_val = float(atr or 0.0)
+    except (TypeError, ValueError):
+        atr_val = 0.0
+    atr_pct = (atr_val / abs(close)) if close else None
+
+    bands_all = config.CONFIG.get("VOLATILITY_SCALER_BANDS", {}) or {}
+    bands = bands_all.get(str(score_group or "").lower()) or bands_all.get(asset_class) or {}
+    try:
+        low_band = float(bands.get("low", 0.005))
+    except (TypeError, ValueError):
+        low_band = 0.005
+    try:
+        high_band = float(bands.get("high", 0.020))
+    except (TypeError, ValueError):
+        high_band = 0.020
+    if high_band < low_band:
+        low_band, high_band = high_band, low_band
+
+    if atr_pct is None:
+        regime = "unknown"
+    elif atr_pct >= high_band:
+        regime = "high_volatility"
+    elif atr_pct >= low_band:
+        regime = "elevated_volatility"
+    else:
+        regime = "normal"
+
+    mult_cfg = config.CONFIG.get("ENGINE_B_ASSET_CLASS_STRUCTURE_MULT", {}) or {}
+    break_cfg = config.CONFIG.get("ENGINE_B_ASSET_CLASS_BOS_MIN_BREAK_ATR", {}) or {}
+    if not isinstance(mult_cfg, dict):
+        mult_cfg = {}
+    if not isinstance(break_cfg, dict):
+        break_cfg = {}
+    cfg_mult = max(1.0, _float_value_from_mapping(mult_cfg, asset_class, 1.0))
+    if cfg_mult == 1.0 and score_group:
+        cfg_mult = max(
+            1.0, _float_value_from_mapping(mult_cfg, str(score_group).lower(), 1.0)
+        )
+
+    applied_mult = 1.0
+    if enabled:
+        if vol_aware:
+            if regime == "high_volatility":
+                applied_mult = cfg_mult
+            elif regime == "elevated_volatility":
+                applied_mult = 1.0 + ((cfg_mult - 1.0) * 0.5)
+        else:
+            applied_mult = cfg_mult
+
+    min_break_base = _float_value_from_mapping(break_cfg, asset_class, 0.0)
+    if min_break_base == 0.0 and score_group:
+        min_break_base = _float_value_from_mapping(
+            break_cfg, str(score_group).lower(), 0.0
+        )
+    min_break = max(0.0, min_break_base) * applied_mult if applied_mult > 1.0 else 0.0
+
+    detail.update({
+        "volatility_regime": regime,
+        "atr_pct": round(atr_pct, 6) if atr_pct is not None else None,
         "structure_mult": round(applied_mult, 4),
         "swing_prominence_mult": round(applied_mult, 4),
         "bos_min_break_atr": round(min_break, 4),
@@ -2143,12 +2467,28 @@ class NakedEngine:
         struct_closes = np.array([float(c["close"]) for c in struct_candles])
         struct_atr = self._compute_atr_from_candles(struct_candles, fallback=atr)
         zone_atr = self._compute_atr_from_candles(_zone_fvg_candles, fallback=atr)
+        _score_group = (
+            (pair or {}).get("score_group")
+            or (pair or {}).get("group")
+            or (pair or {}).get("asset_group")
+        )
+        asset_struct_diag = _asset_class_structure_adjustment(
+            asset_type, _score_group, struct_candles, struct_atr
+        )
         crypto_struct_diag = _crypto_structure_adjustment(asset_type, struct_candles, struct_atr)
+        structure_prominence_mult = max(
+            float(crypto_struct_diag.get("swing_prominence_mult", 1.0) or 1.0),
+            float(asset_struct_diag.get("swing_prominence_mult", 1.0) or 1.0),
+        )
+        structure_min_break_atr = max(
+            float(crypto_struct_diag.get("bos_min_break_atr", 0.0) or 0.0),
+            float(asset_struct_diag.get("bos_min_break_atr", 0.0) or 0.0),
+        )
         struct_swings = self._swing_cache(
             struct_highs,
             struct_lows,
             struct_atr,
-            prominence_mult=crypto_struct_diag.get("swing_prominence_mult", 1.0),
+            prominence_mult=structure_prominence_mult,
         )
 
         # 1. Macro Zones (D1/H4)
@@ -2194,7 +2534,7 @@ class NakedEngine:
         bos_data = self._detect_bos(
             struct_highs, struct_lows, struct_atr,
             volumes=struct_volumes, closes=struct_closes, swings=struct_swings,
-            min_break_atr=crypto_struct_diag.get("bos_min_break_atr", 0.0),
+            min_break_atr=structure_min_break_atr,
         )
 
         # Compute swing highs/lows for sweep detection (structural reference levels)
@@ -2220,11 +2560,22 @@ class NakedEngine:
         d1_closes = np.array([float(c["close"]) for c in d1_candles])
         d1_atr = self._compute_atr_from_candles(d1_candles, fallback=atr)
         d1_crypto_diag = _crypto_structure_adjustment(asset_type, d1_candles, d1_atr)
+        d1_asset_diag = _asset_class_structure_adjustment(
+            asset_type, _score_group, d1_candles, d1_atr
+        )
+        d1_prominence_mult = max(
+            float(d1_crypto_diag.get("swing_prominence_mult", 1.0) or 1.0),
+            float(d1_asset_diag.get("swing_prominence_mult", 1.0) or 1.0),
+        )
+        d1_min_break_atr = max(
+            float(d1_crypto_diag.get("bos_min_break_atr", 0.0) or 0.0),
+            float(d1_asset_diag.get("bos_min_break_atr", 0.0) or 0.0),
+        )
         d1_swings = self._swing_cache(
             d1_highs,
             d1_lows,
             d1_atr,
-            prominence_mult=d1_crypto_diag.get("swing_prominence_mult", 1.0),
+            prominence_mult=d1_prominence_mult,
         )
         d1_bos = self._detect_bos(
             d1_highs,
@@ -2232,7 +2583,7 @@ class NakedEngine:
             d1_atr,
             closes=d1_closes,
             swings=d1_swings,
-            min_break_atr=d1_crypto_diag.get("bos_min_break_atr", 0.0),
+            min_break_atr=d1_min_break_atr,
         )
 
         # D1 PD-array detection (informational — no scoring gate change).
@@ -2356,7 +2707,7 @@ class NakedEngine:
             closes=struct_closes,
             swings=struct_swings,
             bos_data=bos_data,
-            min_break_atr=crypto_struct_diag.get("bos_min_break_atr", 0.0),
+            min_break_atr=structure_min_break_atr,
         )
         if str(asset_type or "").lower() == "crypto":
             crypto_struct_diag["structure_quality_score"] = _crypto_structure_quality_score(
@@ -2372,6 +2723,13 @@ class NakedEngine:
                 "applied": d1_crypto_diag.get("applied"),
                 "structure_mult": d1_crypto_diag.get("structure_mult"),
                 "bos_min_break_atr": d1_crypto_diag.get("bos_min_break_atr"),
+            }
+        if asset_struct_diag.get("asset_class") in {"stock", "index", "commodity", "etf", "etf_bond"}:
+            asset_struct_diag["d1_structure"] = {
+                "volatility_regime": d1_asset_diag.get("volatility_regime"),
+                "applied": d1_asset_diag.get("applied"),
+                "structure_mult": d1_asset_diag.get("structure_mult"),
+                "bos_min_break_atr": d1_asset_diag.get("bos_min_break_atr"),
             }
 
         # 3d. Breaker Blocks — after CHoCH, the broken swing level becomes new S/R
@@ -2814,6 +3172,27 @@ class NakedEngine:
         except Exception:
             pass
 
+        forex_session_structure = None
+        if str(asset_type or "").lower() == "forex":
+            forex_session_structure = _engine_b_forex_session_structure_context(
+                asset_type=asset_type,
+                candle_time=latest_trigger_candle_time,
+                zone_context=bool(zone_ctx["zone_touched"] or zone_ctx["near_zone"]),
+                ob_at_zone=bool(_ob_at_zone),
+                fvg_overlap=bool(fvg_overlap),
+                liquidity_sweep=bool(is_sweep_event),
+            )
+        equity_session_structure = None
+        if asset_struct_diag.get("asset_class") in {"stock", "index", "etf", "etf_bond"}:
+            equity_session_structure = _engine_b_equity_session_structure_context(
+                asset_class=asset_struct_diag.get("asset_class"),
+                candle_time=latest_trigger_candle_time,
+                zone_context=bool(zone_ctx["zone_touched"] or zone_ctx["near_zone"]),
+                ob_at_zone=bool(_ob_at_zone),
+                fvg_overlap=bool(fvg_overlap),
+                liquidity_sweep=bool(is_sweep_event),
+            )
+
         return {
             "structural_verdict": "CLEAR",
             "direction": direction,
@@ -2869,6 +3248,22 @@ class NakedEngine:
             "latest_confirmed_trigger_candle_time": latest_trigger_candle_time,
             "structure_tf": structure_tf,
             "asset_type": asset_type,
+            **(
+                {"forex_session_structure": forex_session_structure}
+                if str(asset_type or "").lower() == "forex"
+                else {}
+            ),
+            **(
+                {"asset_class_structure_diagnostics": asset_struct_diag}
+                if asset_struct_diag.get("asset_class")
+                in {"stock", "index", "commodity", "etf", "etf_bond"}
+                else {}
+            ),
+            **(
+                {"equity_session_structure": equity_session_structure}
+                if equity_session_structure is not None
+                else {}
+            ),
             **(
                 {"crypto_structure_diagnostics": crypto_struct_diag}
                 if str(asset_type or "").lower() == "crypto"
@@ -3335,6 +3730,12 @@ class NakedEngine:
         _engine_b_diag_payload = {"reason_codes": _diag_codes}
         if asset_type_lower == "crypto" and isinstance(res.get("crypto_structure_diagnostics"), dict):
             _engine_b_diag_payload["crypto_structure"] = res.get("crypto_structure_diagnostics")
+        if asset_type_lower == "forex" and isinstance(res.get("forex_session_structure"), dict):
+            _engine_b_diag_payload["forex_session_structure"] = res.get("forex_session_structure")
+        if isinstance(res.get("asset_class_structure_diagnostics"), dict):
+            _engine_b_diag_payload["asset_class_structure"] = res.get("asset_class_structure_diagnostics")
+        if isinstance(res.get("equity_session_structure"), dict):
+            _engine_b_diag_payload["equity_session_structure"] = res.get("equity_session_structure")
 
         return {
             "score": total_score,

@@ -24,6 +24,9 @@ from market_structure import (
     _engine_b_structural_target_price,
     _engine_b_structural_tp_buffer_atr_mult,
     _engine_b_micro_breakout_value,
+    _asset_class_structure_adjustment,
+    _engine_b_forex_session_structure_context,
+    _engine_b_equity_session_structure_context,
     _crypto_structure_adjustment,
     engine,
     engine_b_confidence_passes,
@@ -122,6 +125,218 @@ def test_crypto_structure_adjustment_enabled_requires_stronger_bos(monkeypatch):
 
     assert legacy["bos_bull"] is True
     assert adjusted["bos_bull"] is False
+
+
+def test_forex_session_structure_context_default_disabled_no_score_bonus(monkeypatch):
+    monkeypatch.setitem(
+        config.CONFIG,
+        "ENGINE_B_FOREX_SESSION_STRUCTURE_WEIGHTING",
+        {"ENABLED": False, "SCORE_INFLUENCE_ENABLED": False},
+    )
+
+    diag = _engine_b_forex_session_structure_context(
+        asset_type="forex",
+        candle_time="2026-05-13T13:00:00Z",
+        zone_context=True,
+        ob_at_zone=True,
+        fvg_overlap=True,
+        liquidity_sweep=True,
+    )
+
+    assert diag["enabled"] is False
+    assert diag["session"] == "london_ny_overlap"
+    assert diag["session_quality"] == "high"
+    assert diag["liquidity_sweep_active_session"] is True
+    assert diag["score_bonus"] == 0.0
+
+
+def test_forex_session_structure_context_enabled_weights_active_session(monkeypatch):
+    monkeypatch.setitem(
+        config.CONFIG,
+        "ENGINE_B_FOREX_SESSION_STRUCTURE_WEIGHTING",
+        {
+            "ENABLED": True,
+            "SCORE_INFLUENCE_ENABLED": False,
+            "HIGH_QUALITY_BONUS": 0.02,
+            "MEDIUM_QUALITY_BONUS": 0.01,
+            "LOW_QUALITY_PENALTY": -0.02,
+            "LONDON_NY_OVERLAP_BONUS": 0.01,
+            "LIQUIDITY_SWEEP_ACTIVE_SESSION_BONUS": 0.01,
+            "MAX_ABS_SCORE_BONUS": 0.04,
+        },
+    )
+
+    overlap = _engine_b_forex_session_structure_context(
+        asset_type="forex",
+        candle_time="2026-05-13T13:00:00Z",
+        zone_context=True,
+        ob_at_zone=True,
+        fvg_overlap=True,
+        liquidity_sweep=True,
+    )
+    asian = _engine_b_forex_session_structure_context(
+        asset_type="forex",
+        candle_time="2026-05-13T02:00:00Z",
+        zone_context=True,
+        ob_at_zone=False,
+        fvg_overlap=False,
+        liquidity_sweep=False,
+    )
+    crypto = _engine_b_forex_session_structure_context(
+        asset_type="crypto",
+        candle_time="2026-05-13T13:00:00Z",
+        zone_context=True,
+        ob_at_zone=True,
+        fvg_overlap=True,
+        liquidity_sweep=True,
+    )
+
+    assert overlap["session"] == "london_ny_overlap"
+    assert overlap["score_bonus"] == pytest.approx(0.04)
+    assert asian["session"] == "asian_off_hours"
+    assert asian["score_bonus"] == pytest.approx(-0.02)
+    assert crypto["score_bonus"] == 0.0
+
+
+def test_asset_class_structure_adjustment_default_disabled_no_detection_change(monkeypatch):
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_ASSET_CLASS_ADJUSTMENTS_ENABLED", False)
+    candles = [
+        {"open": 100.0, "high": 103.0, "low": 98.0, "close": 100.0}
+        for _ in range(8)
+    ]
+
+    diag = _asset_class_structure_adjustment("stock", None, candles, atr=2.0)
+
+    assert diag["enabled"] is False
+    assert diag["asset_class"] == "stock"
+    assert diag["applied"] is False
+    assert diag["swing_prominence_mult"] == pytest.approx(1.0)
+    assert diag["bos_min_break_atr"] == pytest.approx(0.0)
+
+
+def test_asset_class_structure_adjustment_enabled_is_non_forex_non_crypto(monkeypatch):
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_ASSET_CLASS_ADJUSTMENTS_ENABLED", True)
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_ASSET_CLASS_VOLATILITY_AWARE_ENABLED", False)
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_ASSET_CLASS_STRUCTURE_MULT", {"stock": 1.20})
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_ASSET_CLASS_BOS_MIN_BREAK_ATR", {"stock": 0.06})
+    candles = [
+        {"open": 100.0, "high": 103.0, "low": 98.0, "close": 100.0}
+        for _ in range(8)
+    ]
+
+    stock_diag = _asset_class_structure_adjustment("stock", None, candles, atr=2.0)
+    forex_diag = _asset_class_structure_adjustment("forex", None, candles, atr=2.0)
+    crypto_diag = _asset_class_structure_adjustment("crypto", None, candles, atr=2.0)
+
+    assert stock_diag["applied"] is True
+    assert stock_diag["swing_prominence_mult"] == pytest.approx(1.20)
+    assert stock_diag["bos_min_break_atr"] == pytest.approx(0.072)
+    assert forex_diag["applied"] is False
+    assert crypto_diag["applied"] is False
+
+
+def test_equity_session_structure_context_enabled_for_stock_index_etf_only(monkeypatch):
+    monkeypatch.setitem(
+        config.CONFIG,
+        "ENGINE_B_EQUITY_SESSION_STRUCTURE_WEIGHTING",
+        {
+            "ENABLED": True,
+            "SCORE_INFLUENCE_ENABLED": True,
+            "HIGH_QUALITY_BONUS": 0.015,
+            "MEDIUM_QUALITY_BONUS": 0.008,
+            "OFF_HOURS_PENALTY": -0.015,
+            "LIQUIDITY_SWEEP_ACTIVE_SESSION_BONUS": 0.008,
+            "MAX_ABS_SCORE_BONUS": 0.03,
+        },
+    )
+
+    stock = _engine_b_equity_session_structure_context(
+        asset_class="stock",
+        candle_time="2026-05-13T14:45:00Z",
+        zone_context=True,
+        ob_at_zone=True,
+        fvg_overlap=False,
+        liquidity_sweep=True,
+    )
+    commodity = _engine_b_equity_session_structure_context(
+        asset_class="commodity",
+        candle_time="2026-05-13T14:45:00Z",
+        zone_context=True,
+        ob_at_zone=True,
+        fvg_overlap=False,
+        liquidity_sweep=True,
+    )
+
+    assert stock["session"] == "us_cash_open"
+    assert stock["session_quality"] == "high"
+    assert stock["score_bonus"] == pytest.approx(0.023)
+    assert commodity["score_bonus"] == 0.0
+
+
+def test_calculate_confidence_carries_asset_class_and_equity_session_diagnostics():
+    res = _base_res_long()
+    res["asset_type"] = "stock"
+    res["distance_to_res"] = 2.0
+    res["asset_class_structure_diagnostics"] = {
+        "enabled": True,
+        "asset_class": "stock",
+        "applied": True,
+        "structure_mult": 1.1,
+    }
+    res["equity_session_structure"] = {
+        "enabled": True,
+        "asset_class": "stock",
+        "session": "us_cash_open",
+        "score_bonus": 0.023,
+    }
+
+    out = engine.calculate_confidence(
+        res,
+        current_price=100.0,
+        direction="LONG",
+        learning_ctx=None,
+        entry_candles=[],
+        style_profile={"min_room_atr": 0.35, "min_rr": 1.0, "require_macro_align": False},
+    )
+
+    diag = out["engine_b_diagnostics"]
+    assert diag["asset_class_structure"]["asset_class"] == "stock"
+    assert diag["equity_session_structure"]["session"] == "us_cash_open"
+
+
+def test_calculate_confidence_carries_forex_session_diagnostics_only_for_forex():
+    res = _base_res_long()
+    res["asset_type"] = "forex"
+    res["distance_to_res"] = 2.0
+    res["forex_session_structure"] = {
+        "enabled": True,
+        "session": "london_ny_overlap",
+        "session_quality": "high",
+        "liquidity_sweep_active_session": True,
+        "score_bonus": 0.04,
+    }
+
+    forex_out = engine.calculate_confidence(
+        res,
+        current_price=100.0,
+        direction="LONG",
+        learning_ctx=None,
+        entry_candles=[],
+        style_profile={"min_room_atr": 0.35, "min_rr": 1.0, "require_macro_align": False},
+    )
+    crypto_res = dict(res)
+    crypto_res["asset_type"] = "crypto"
+    crypto_out = engine.calculate_confidence(
+        crypto_res,
+        current_price=100.0,
+        direction="LONG",
+        learning_ctx=None,
+        entry_candles=[],
+        style_profile={"min_room_atr": 0.35, "min_rr": 1.0, "require_macro_align": False},
+    )
+
+    assert forex_out["engine_b_diagnostics"]["forex_session_structure"]["session"] == "london_ny_overlap"
+    assert "forex_session_structure" not in crypto_out["engine_b_diagnostics"]
 
 
 def test_calculate_confidence_carries_crypto_structure_diagnostics_only_for_crypto():

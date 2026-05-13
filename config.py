@@ -347,6 +347,44 @@ CONFIG: dict = {
     "ENGINE_B_FOREX_ASIAN_SESSION_SKIP_ENABLED": True,
     # When True, Engine B room gate requires structural distance; unknown distance fails closed.
     "ENGINE_B_ROOM_GATE_REQUIRE_DISTANCE": True,
+    # Diagnostics-first forex session weighting for Engine B structure context.
+    # Disabled by default; score influence requires SCORE_INFLUENCE_ENABLED too.
+    "ENGINE_B_FOREX_SESSION_STRUCTURE_WEIGHTING": {
+        "ENABLED": False,
+        "SCORE_INFLUENCE_ENABLED": False,
+        "HIGH_QUALITY_BONUS": 0.02,
+        "MEDIUM_QUALITY_BONUS": 0.01,
+        "LOW_QUALITY_PENALTY": -0.02,
+        "LONDON_NY_OVERLAP_BONUS": 0.01,
+        "LIQUIDITY_SWEEP_ACTIVE_SESSION_BONUS": 0.01,
+        "MAX_ABS_SCORE_BONUS": 0.04,
+    },
+    # Default-off non-forex/crypto structure tuning for stocks, indices, commodities, and ETFs.
+    "ENGINE_B_ASSET_CLASS_ADJUSTMENTS_ENABLED": False,
+    "ENGINE_B_ASSET_CLASS_VOLATILITY_AWARE_ENABLED": False,
+    "ENGINE_B_ASSET_CLASS_STRUCTURE_MULT": {
+        "stock": 1.10,
+        "index": 1.05,
+        "commodity": 1.15,
+        "etf": 1.08,
+        "etf_bond": 1.05,
+    },
+    "ENGINE_B_ASSET_CLASS_BOS_MIN_BREAK_ATR": {
+        "stock": 0.06,
+        "index": 0.05,
+        "commodity": 0.08,
+        "etf": 0.05,
+        "etf_bond": 0.04,
+    },
+    "ENGINE_B_EQUITY_SESSION_STRUCTURE_WEIGHTING": {
+        "ENABLED": False,
+        "SCORE_INFLUENCE_ENABLED": False,
+        "HIGH_QUALITY_BONUS": 0.015,
+        "MEDIUM_QUALITY_BONUS": 0.008,
+        "OFF_HOURS_PENALTY": -0.015,
+        "LIQUIDITY_SWEEP_ACTIVE_SESSION_BONUS": 0.008,
+        "MAX_ABS_SCORE_BONUS": 0.03,
+    },
     "BINANCE_KLINE_WS_INTERVALS": ["1m", "5m", "15m", "1h", "4h", "1d"],
     "MIN_CONFLUENCE": 1.0,
     "RISK_MULT": {
@@ -914,6 +952,29 @@ CONFIG: dict = {
     "ENGINE_B_USE_EXECUTION_LEVELS_FOR_SCAN_SIGNALS": True,
     "ENGINE_B_CRYPTO_VOLATILITY_ADJUSTMENT_ENABLED": False,
     "ENGINE_B_CRYPTO_STRUCTURE_MULT": 1.25,
+    "ENGINE_B_STRUCTURE_SCORE_INFLUENCE_ENABLED": True,
+    "ENGINE_B_STRUCTURE_SCORE_COMPONENT_BONUSES": {
+        "zone_proximity": 0.08,
+        "ob_at_zone": 0.05,
+        "fvg_overlap": 0.05,
+        "liquidity_sweep": 0.04,
+        "independent_direction_aligned": 0.04,
+        "independent_direction_opposed": -0.08,
+    },
+    "ENGINE_B_STRUCTURE_SCORE_MULT_BOUNDS": {
+        "min": 0.85,
+        "max": 1.20,
+    },
+    "ENGINE_B_STRUCTURE_INFLUENCE_LEVEL": "standard",
+    "ENGINE_B_STRUCTURE_INFLUENCE_LEVEL_MULTIPLIERS": {
+        "conservative": 0.75,
+        "standard": 1.0,
+        "enhanced": 1.25,
+    },
+    "ENGINE_B_STRUCTURE_SCORE_CONFLUENCE": {
+        "ENABLED": False,
+        "BONUS": 0.03,
+    },
     "ENGINE_B_CRYPTO_BOS_MIN_BREAK_ATR": 0.10,
     # ── Engine B (Naked Scalp) ────────────────────────────────────────────────
     "NAKED_ENGINE": {
