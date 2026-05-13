@@ -79,6 +79,26 @@ def test_scanner_applies_engine_b_execution_levels_to_signal(monkeypatch):
     assert signal["engine_b_rr_used_for_gate"] == pytest.approx(2.0)
 
 
+def test_scanner_engine_b_alignment_uses_final_score_gate():
+    signal = {}
+    conf_b = {"passed": True, "score": 3.0}
+
+    gate_ok, scaled_min = scanner._apply_engine_b_scan_confidence_gate(
+        signal,
+        conf_b,
+        {"min_score": 5.0},
+        "RANGING",
+        "forex",
+    )
+
+    assert scaled_min == pytest.approx(4.5)
+    assert gate_ok is False
+    assert signal["enginesAligned"] is False
+    assert signal["engine_b_min_score_scaled"] == pytest.approx(4.5)
+    assert conf_b["passed"] is False
+    assert conf_b["min_score_scaled"] == pytest.approx(4.5)
+
+
 def test_execution_prefers_nested_engine_b_execution_levels():
     sig = {
         "is_naked": True,

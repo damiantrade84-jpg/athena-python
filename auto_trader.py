@@ -975,11 +975,17 @@ class AutoTrader:
         _sl = float(signal.get("sl") or 0)
         if _entry and _sl and _entry != _sl:
             _sl_pct = abs(_entry - _sl) / abs(_entry)
-            _max_sl_pct = float((cfg.get("MAX_SL_PCT") or {}).get(asset_type, 0.05))
+            try:
+                from risk_engine import resolve_max_sl_pct
+
+                _max_sl_pct, _max_sl_source = resolve_max_sl_pct(signal, asset_type, cfg)
+            except Exception:
+                _max_sl_pct = float((cfg.get("MAX_SL_PCT") or {}).get(asset_type, 0.05))
+                _max_sl_source = f"asset:{asset_type}"
             if _sl_pct > _max_sl_pct:
                 return (
                     False,
-                    f"SL distance {_sl_pct:.1%} exceeds MAX_SL_PCT {_max_sl_pct:.1%} for {asset_type}",
+                    f"SL distance {_sl_pct:.1%} exceeds MAX_SL_PCT {_max_sl_pct:.1%} for {asset_type} ({_max_sl_source})",
                 )
 
         return True, ""

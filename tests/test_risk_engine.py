@@ -11,6 +11,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from risk_engine import (
     join_peak_audit_queue,
+    resolve_max_sl_pct,
     risk_check,
     _cfg,
     _signal_quality_factor,
@@ -397,6 +398,71 @@ class TestMaxSlPct:
         )
         assert result.approved is False
         assert result.reason == "MAX_SL_EXCEEDED"
+
+    def test_score_group_override_allows_mapped_volatile_commodity(self, monkeypatch):
+        monkeypatch.setitem(risk_engine.CONFIG, "MAX_SL_PCT", {"commodity": 0.04})
+        monkeypatch.setitem(
+            risk_engine.CONFIG,
+            "MAX_SL_PCT_SCORE_GROUP_OVERRIDES",
+            {"precious_trackers": 0.10},
+        )
+        sig = _make_signal(
+            pair="XAG/USD",
+            type="commodity",
+            price=100.0,
+            sl=90.9,
+            tp1=120.0,
+            tp2=130.0,
+            score_group="precious_trackers",
+        )
+
+        cap, source = resolve_max_sl_pct(sig, "commodity", risk_engine.CONFIG)
+        assert cap == pytest.approx(0.10)
+        assert source == "score_group:precious_trackers"
+        result = risk_check(sig, 100000, 100000, [])
+        assert result.reason != "MAX_SL_EXCEEDED"
+
+    def test_unmapped_commodity_still_uses_strict_base_cap(self, monkeypatch):
+        monkeypatch.setitem(risk_engine.CONFIG, "MAX_SL_PCT", {"commodity": 0.04})
+        monkeypatch.setitem(risk_engine.CONFIG, "MAX_SL_PCT_SCORE_GROUP_OVERRIDES", {})
+        sig = _make_signal(
+            pair="Commodity Other",
+            type="commodity",
+            price=100.0,
+            sl=95.5,
+            tp1=110.0,
+            tp2=115.0,
+        )
+
+        cap, source = resolve_max_sl_pct(sig, "commodity", risk_engine.CONFIG)
+        assert cap == pytest.approx(0.04)
+        assert source == "asset:commodity"
+        result = risk_check(sig, 100000, 100000, [])
+        assert result.approved is False
+        assert result.reason == "MAX_SL_EXCEEDED"
+
+    def test_symbol_override_can_cover_unmapped_display(self, monkeypatch):
+        monkeypatch.setitem(risk_engine.CONFIG, "MAX_SL_PCT", {"commodity": 0.04})
+        monkeypatch.setitem(risk_engine.CONFIG, "MAX_SL_PCT_SCORE_GROUP_OVERRIDES", {})
+        monkeypatch.setitem(
+            risk_engine.CONFIG,
+            "MAX_SL_PCT_SYMBOL_OVERRIDES",
+            {"Gasoline": 0.08},
+        )
+        sig = _make_signal(
+            pair="Gasoline",
+            type="commodity",
+            price=100.0,
+            sl=93.0,
+            tp1=116.0,
+            tp2=124.0,
+        )
+
+        cap, source = resolve_max_sl_pct(sig, "commodity", risk_engine.CONFIG)
+        assert cap == pytest.approx(0.08)
+        assert source == "symbol:Gasoline"
+        result = risk_check(sig, 100000, 100000, [])
+        assert result.reason != "MAX_SL_EXCEEDED"
 
 
 class TestInvalidLevels:

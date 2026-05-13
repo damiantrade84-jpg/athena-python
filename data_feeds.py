@@ -130,6 +130,47 @@ def _fetch_bybit_klines(
         return None
 
 
+def _fetch_bybit_klines_paginated(symbol: str, tf: str, total_bars: int) -> list[dict] | None:
+    """Fetch older Bybit linear USDT perpetual klines by walking ``end`` backward."""
+    try:
+        target = int(total_bars or 0)
+    except (TypeError, ValueError):
+        target = 0
+    if target <= 0:
+        return None
+
+    collected: dict[int, dict] = {}
+    end_ms: int | None = None
+    remaining = target
+
+    while remaining > 0:
+        batch_limit = min(1000, remaining)
+        chunk = _fetch_bybit_klines(symbol, tf, batch_limit, end_ms=end_ms)
+        if not chunk:
+            break
+        new_rows = 0
+        for candle in chunk:
+            try:
+                open_time = int(candle.get("open_time"))
+            except (TypeError, ValueError):
+                continue
+            if open_time not in collected:
+                new_rows += 1
+            collected[open_time] = candle
+        if new_rows == 0:
+            break
+        earliest = min(int(c.get("open_time", 0)) for c in chunk if c.get("open_time") is not None)
+        if earliest <= 0:
+            break
+        end_ms = earliest - 1
+        remaining = target - len(collected)
+
+    if not collected:
+        return None
+    candles = [collected[k] for k in sorted(collected)]
+    return candles[-target:] if len(candles) > target else candles
+
+
 def _funding_history_cache_key(
     source: str,
     symbol: str,

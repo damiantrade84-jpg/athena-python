@@ -447,12 +447,14 @@ def pre_trade_check(
     # ── Check 5: SL distance within MAX_SL_PCT ────────────────────────
     try:
         from config import CONFIG
+        from risk_engine import resolve_max_sl_pct
+
         asset_type = signal.get("type", "")
-        max_sl_pct = CONFIG.get("MAX_SL_PCT", {}).get(asset_type, 0.08)
+        max_sl_pct, max_sl_source = resolve_max_sl_pct(signal, asset_type, CONFIG)
         sl_dist_pct = abs(price - sl) / price
         if sl_dist_pct > max_sl_pct * 1.05:  # 5% tolerance for rounding
             return False, (
-                f"SL_EXCEEDS_CAP: {sl_dist_pct:.1%} > {max_sl_pct:.1%} for {asset_type}"
+                f"SL_EXCEEDS_CAP: {sl_dist_pct:.1%} > {max_sl_pct:.1%} for {asset_type} ({max_sl_source})"
             )
     except Exception:
         pass  # Degrade gracefully if config unavailable

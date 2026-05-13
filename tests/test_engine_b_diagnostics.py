@@ -435,6 +435,7 @@ def test_forex_rr_can_satisfy_space_gate_when_config_enabled(monkeypatch):
     style_profile = {"min_room_atr": 0.35, "min_rr": 1.0, "require_macro_align": False}
 
     monkeypatch.setitem(config.CONFIG, "ENGINE_B_FOREX_RR_CAN_SATISFY_SPACE_GATE", False)
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_RR_CAN_SATISFY_SPACE_GATE", {"default": False})
     baseline = engine.calculate_confidence(
         res,
         current_price=100.0,
@@ -462,6 +463,36 @@ def test_forex_rr_can_satisfy_space_gate_when_config_enabled(monkeypatch):
     assert enabled["space_gate_ok"] is True
     assert enabled["forex_rr_space_gate_enabled"] is True
     assert enabled["passed"] is True
+
+
+def test_asset_rr_can_satisfy_space_gate_when_config_enabled(monkeypatch):
+    res = _base_res_long()
+    res["asset_type"] = "stock"
+    res["distance_to_res"] = 0.05
+    style_profile = {"min_room_atr": 0.35, "min_rr": 1.0, "require_macro_align": False}
+
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_FOREX_RR_CAN_SATISFY_SPACE_GATE", False)
+    monkeypatch.setitem(
+        config.CONFIG,
+        "ENGINE_B_RR_CAN_SATISFY_SPACE_GATE",
+        {"default": False, "stock": True},
+    )
+
+    out = engine.calculate_confidence(
+        res,
+        current_price=100.0,
+        direction="LONG",
+        learning_ctx=None,
+        entry_candles=[],
+        style_profile=style_profile,
+    )
+
+    assert out["room_ok"] is False
+    assert out["rr_ok"] is True
+    assert out["space_gate_ok"] is True
+    assert out["rr_space_gate_enabled"] is True
+    assert out["forex_rr_space_gate_enabled"] is False
+    assert out["passed"] is True
 
 
 def test_calculate_confidence_engine_b_diagnostics_support_too_close():

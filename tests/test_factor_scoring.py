@@ -1,5 +1,6 @@
 import pytest
 
+import factor_scoring
 from config import CONFIG
 from factor_scoring import (
     _coherent_trend_score,
@@ -56,6 +57,7 @@ def _score(
     h1_candles=None,
     volume_threshold=None,
     oi_context=None,
+    structure_result=None,
 ):
     return compute_factor_scores(
         d1_snap=d1 if d1 is not None else _snap("long"),
@@ -72,6 +74,7 @@ def _score(
         intermarket_context=intermarket_context,
         volume_threshold=volume_threshold,
         oi_context=oi_context,
+        structure_result=structure_result,
     )
 
 
@@ -628,7 +631,8 @@ def test_calc_confluence_factor_diagnostics_includes_research_lab(monkeypatch):
     assert detail.get("components", {}).get("obv_divergence", {}).get("signal") == "confirming"
 
 
-def test_conviction_floor_default_is_explicit_and_no_momentum_uses_floor_blend():
+def test_conviction_floor_default_is_explicit_and_no_momentum_uses_floor_blend(monkeypatch):
+    monkeypatch.setitem(CONFIG, "ENGINE_A_SCORE_GROUP_ADJUSTMENTS_ENABLED", False)
     floor = float(CONFIG["FACTOR_CONVICTION_FLOOR"])
     result = _score(_snap("long"), _snap("long"), _snap("long"))
 
@@ -672,6 +676,7 @@ def test_directional_gate_hard_cut_aborts_below_min(monkeypatch):
     min_directional_failed=True, abort_reason='min_directional_failed'."""
     # Force the threshold above the engine's structural minimum (~0.40 from a
     # single H1 vote) so the hard-cut path is exercised on a normal trend.
+    monkeypatch.setitem(CONFIG, "ENGINE_A_SCORE_GROUP_ADJUSTMENTS_ENABLED", False)
     monkeypatch.setitem(CONFIG, "FACTOR_MIN_DIRECTIONAL", 5.0)
     monkeypatch.setitem(CONFIG, "FACTOR_DIRECTIONAL_SOFT_SPAN", 0.0)
     result = _score(_snap("long"), _snap("long"), _snap("long"))
@@ -684,6 +689,7 @@ def test_directional_gate_hard_cut_aborts_below_min(monkeypatch):
 def test_directional_gate_soft_span_scales_base_score(monkeypatch):
     """abs(trend_score) inside [min, min+span] → ramp multiplier between 0 and 1
     is multiplied into base_score; outside the span the multiplier is 1.0."""
+    monkeypatch.setitem(CONFIG, "ENGINE_A_SCORE_GROUP_ADJUSTMENTS_ENABLED", False)
     # Strong trend (all three TFs aligned) sits well above the span → mult=1.0.
     full = _score(_snap("long"), _snap("long"), _snap("long"))
     assert full["directional_ramp_multiplier"] == pytest.approx(1.0)
@@ -867,3 +873,129 @@ def test_zero_result_carries_empty_filtered_indicators():
         reason="test",
     )
     assert z.get("filtered_indicators") == {}
+
+
+def test_score_group_adjustments_default_disabled_preserves_score(monkeypatch):
+    pair = {"type": "stock", "display": "AAPL"}
+    monkeypatch.setitem(CONFIG, "ENGINE_A_SCORE_GROUP_ADJUSTMENTS_ENABLED", False)
+    baseline = _score(pair=pair, h4=_snap("long", momentum="bullish"))
+
+    monkeypatch.setitem(
+        CONFIG,
+        "ENGINE_A_FACTOR_WEIGHTS_BY_CLASS",
+        {"us_stock_single": {"momentum": 0.0, "addon": 0.0, "base": 1.0}},
+    )
+    unchanged = _score(pair=pair, h4=_snap("long", momentum="bullish"))
+
+    assert unchanged["final_score"] == baseline["final_score"]
+    assert unchanged["weights"] == baseline["weights"]
+    assert unchanged["engine_a_asset_diagnostics"]["score_group_adjustments_enabled"] is False
+
+
+def test_score_group_adjustments_change_stock_only_when_enabled(monkeypatch):
+    pair = {"type": "stock", "display": "AAPL"}
+    baseline = _score(pair=pair)
+
+    monkeypatch.setitem(CONFIG, "ENGINE_A_SCORE_GROUP_ADJUSTMENTS_ENABLED", True)
+    monkeypatch.setitem(
+        CONFIG,
+        "ENGINE_A_FACTOR_WEIGHTS_BY_CLASS",
+        {"us_stock_single": {"momentum": 0.05, "addon": 0.0, "base": 0.95}},
+    )
+    monkeypatch.setitem(CONFIG, "ENGINE_A_ADDON_UNSUPPORTED_SPLIT_BY_CLASS", {"stock": 0.0})
+    adjusted = _score(pair=pair)
+
+    assert adjusted["score_group"] == "us_stock_single"
+    assert adjusted["weights"]["base"] == pytest.approx(0.95)
+    assert adjusted["weights"]["momentum"] == pytest.approx(0.05)
+    assert adjusted["final_score"] != baseline["final_score"]
+    assert adjusted["engine_a_asset_diagnostics"]["factor_weights"]["configured"]["base"] == pytest.approx(0.95)
+
+
+def test_score_group_adjustments_do_not_change_forex_or_crypto_without_matching_maps(monkeypatch):
+    forex_pair = {"type": "forex", "display": "EUR/USD"}
+    crypto_pair = {"type": "crypto", "display": "BTC/USDT"}
+    forex_base = _score(pair=forex_pair, h4=_snap("long", momentum="bullish"))
+    crypto_base = _score(pair=crypto_pair, h4=_snap("long", momentum="bullish"), funding_rate=0.0001)
+
+    monkeypatch.setitem(CONFIG, "ENGINE_A_SCORE_GROUP_ADJUSTMENTS_ENABLED", True)
+    monkeypatch.setitem(
+        CONFIG,
+        "ENGINE_A_FACTOR_WEIGHTS_BY_CLASS",
+        {"us_stock_single": {"momentum": 0.05, "addon": 0.0, "base": 0.95}},
+    )
+    monkeypatch.setitem(CONFIG, "ENGINE_A_DIRECTIONAL_RAMP_BY_CLASS", {"stock": {"min_directional": 0.9, "soft_span": 0.1}})
+
+    forex_grouped = _score(pair=forex_pair, h4=_snap("long", momentum="bullish"))
+    crypto_grouped = _score(pair=crypto_pair, h4=_snap("long", momentum="bullish"), funding_rate=0.0001)
+
+    assert forex_grouped["final_score"] == forex_base["final_score"]
+    assert crypto_grouped["final_score"] == crypto_base["final_score"]
+
+
+def test_volatility_regime_adjustment_is_config_gated(monkeypatch):
+    pair = {"type": "stock", "display": "AAPL"}
+    monkeypatch.setattr(
+        factor_scoring,
+        "detect_regime",
+        lambda *args, **kwargs: {"regime": "HIGH_VOLATILITY"},
+    )
+    monkeypatch.setitem(CONFIG, "ENGINE_A_VOLATILITY_REGIME_ADJUSTMENT_ENABLED", False)
+    baseline = _score(pair=pair, h4=_snap("long", momentum="bullish"))
+
+    monkeypatch.setitem(CONFIG, "ENGINE_A_VOLATILITY_REGIME_ADJUSTMENT_ENABLED", True)
+    monkeypatch.setitem(CONFIG, "ENGINE_A_VOLATILITY_REGIME_MULTIPLIERS", {"stock": {"HIGH_VOLATILITY": 0.90}})
+    monkeypatch.setitem(CONFIG, "ENGINE_A_VOLATILITY_REGIME_MULT_BOUNDS", {"min": 0.80, "max": 1.10})
+    adjusted = _score(pair=pair, h4=_snap("long", momentum="bullish"))
+
+    assert adjusted["volatility_regime_multiplier"] == pytest.approx(0.9)
+    assert adjusted["final_score"] < baseline["final_score"]
+    assert adjusted["engine_a_asset_diagnostics"]["volatility"]["regime_multiplier"]["applied"] is True
+
+
+def test_equity_session_liquidity_weighting_is_config_gated(monkeypatch):
+    pair = {"type": "stock", "display": "AAPL"}
+    monkeypatch.setitem(
+        CONFIG,
+        "ENGINE_A_EQUITY_SESSION_LIQUIDITY_WEIGHTING",
+        {
+            "ENABLED": True,
+            "ASSET_TYPES": ["stock", "index"],
+            "ACTIVE_UTC_START_HOUR": 13.5,
+            "ACTIVE_UTC_END_HOUR": 20.0,
+            "ACTIVE_MULT": 1.02,
+            "OFF_HOURS_MULT": 0.98,
+        },
+    )
+
+    active = _score(pair=pair, h4=_snap("long", momentum="bullish"), bar_time="2026-05-13T14:00:00+00:00")
+    off_hours = _score(pair=pair, h4=_snap("long", momentum="bullish"), bar_time="2026-05-13T02:00:00+00:00")
+
+    assert active["equity_session_multiplier"] == pytest.approx(1.02)
+    assert off_hours["equity_session_multiplier"] == pytest.approx(0.98)
+    assert active["final_score"] > off_hours["final_score"]
+
+
+def test_engine_a_structure_context_adjustment_is_optional(monkeypatch):
+    pair = {"type": "stock", "display": "AAPL"}
+    structure = {
+        "structural_verdict": "CLEAR",
+        "zone_touched": True,
+        "ob_at_zone": True,
+        "fvg_overlap": True,
+        "engine_b_independent_direction": "LONG",
+        "asset_type": "stock",
+    }
+
+    monkeypatch.setitem(CONFIG, "ENGINE_A_STRUCTURE_CONTEXT_ENABLED", False)
+    baseline = _score(pair=pair, h4=_snap("long", momentum="bullish"), structure_result=structure)
+
+    monkeypatch.setitem(CONFIG, "ENGINE_A_STRUCTURE_CONTEXT_ENABLED", True)
+    monkeypatch.setitem(CONFIG, "ENGINE_B_STRUCTURE_SCORE_INFLUENCE_ENABLED", True)
+    monkeypatch.setitem(CONFIG, "ENGINE_B_STRUCTURE_INFLUENCE_LEVEL", "standard")
+    monkeypatch.setitem(CONFIG, "ENGINE_B_STRUCTURE_SCORE_MULT_BOUNDS", {"min": 0.85, "max": 1.50})
+    adjusted = _score(pair=pair, h4=_snap("long", momentum="bullish"), structure_result=structure)
+
+    assert baseline["structure_context_adjustment"]["enabled"] is False
+    assert adjusted["structure_context_adjustment"]["applied"] is True
+    assert adjusted["final_score"] > baseline["final_score"]

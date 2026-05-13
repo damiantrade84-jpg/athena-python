@@ -71,6 +71,7 @@ from data_feeds import (  # noqa: E402
     _fetch_funding_rate,
     _fetch_bybit_funding_rate,
     _fetch_bybit_klines,
+    _fetch_bybit_klines_paginated,
     _fetch_bybit_open_interest,
     _fetch_open_interest,
     _calc_oi_divergence,
@@ -126,6 +127,10 @@ from candles_cache import (  # noqa: E402
     get_candle_fetch_meta as _get_candle_fetch_meta,
     merge_forex_forming_ws as _merge_forex_forming_ws_core,
     resample_from_h1 as _resample_from_h1,
+)
+from athena_app.services.crypto_signal_feed import (  # noqa: E402
+    fetch_crypto_signal_candles as _fetch_crypto_signal_candles,
+    resolve_crypto_signal_feed as _resolve_crypto_signal_feed,
 )
 
 
@@ -1648,8 +1653,9 @@ def _binance_futures_kline_to_candle(k):
 def fetch_binance(sym, interval, limit):
     """Download OHLCV candles from Binance USD-M futures REST with failover."""
 
-    try:
-        for base in ["https://fapi.binance.com", "https://fapi1.binance.com"]:
+    last_error = None
+    for base in ["https://fapi.binance.com", "https://fapi1.binance.com"]:
+        try:
             r = http_requests.get(
                 f"{base}/fapi/v1/klines",
                 params={"symbol": sym, "interval": interval, "limit": limit},
@@ -1660,12 +1666,13 @@ def fetch_binance(sym, interval, limit):
                 return [_binance_futures_kline_to_candle(k) for k in r.json()]
 
             log.warning(f"[BN-FUT] {sym} HTTP {r.status_code}: {r.text[:120]}")
+        except Exception as e:
+            last_error = e
+            log.warning(f"[BN-FUT] {sym} {base}: {e}")
 
-        return None
-
-    except Exception as e:
-        log.error(f"[BN-FUT] {sym}: {e}")
-        return None
+    if last_error is not None:
+        log.error(f"[BN-FUT] {sym}: all endpoints failed; last_error={last_error}")
+    return None
 
 
 def fetch_binance_paginated(sym, interval, total_bars):
@@ -1685,25 +1692,29 @@ def fetch_binance_paginated(sym, interval, total_bars):
                 params["endTime"] = end_time
 
             for base in ["https://fapi.binance.com", "https://fapi1.binance.com"]:
-                r = http_requests.get(
-                    f"{base}/fapi/v1/klines", params=params, timeout=15
-                )
+                try:
+                    r = http_requests.get(
+                        f"{base}/fapi/v1/klines", params=params, timeout=15
+                    )
 
-                if r.status_code == 200:
-                    data = r.json()
+                    if r.status_code == 200:
+                        data = r.json()
 
-                    if not data:
+                        if not data:
+                            break
+
+                        batch = [_binance_futures_kline_to_candle(k) for k in data]
+
+                        all_candles = batch + all_candles  # prepend older data
+
+                        end_time = data[0][0] - 1  # 1ms before earliest bar
+
                         break
 
-                    batch = [_binance_futures_kline_to_candle(k) for k in data]
-
-                    all_candles = batch + all_candles  # prepend older data
-
-                    end_time = data[0][0] - 1  # 1ms before earliest bar
-
-                    break
-
-                log.warning(f"[BN-FUT-PAG] {sym} HTTP {r.status_code}: {r.text[:120]}")
+                    log.warning(f"[BN-FUT-PAG] {sym} {base} HTTP {r.status_code}: {r.text[:120]}")
+                except Exception as e:
+                    log.warning(f"[BN-FUT-PAG] {sym} page {page} {base}: {e}")
+                    continue
 
             else:
                 break  # both endpoints failed
@@ -2829,6 +2840,29 @@ def fetch_candles(pair: dict, tf: str, limit: int) -> list | None:
         yfinance_symbol_for_pair=_yfinance_symbol_for_pair,
         tf_b=TF_B,
     )
+
+
+def _fetch_ab_crypto_signal_candles(pair: dict, tf: str, limit: int, *, engine: str = "AB"):
+    """Fetch Engine A/B crypto signal candles with optional Bybit source experiment."""
+    if (
+        str((pair or {}).get("type") or "").lower() != "crypto"
+        or _resolve_crypto_signal_feed(engine, CONFIG) == "binance"
+    ):
+        return fetch_candles(pair, tf, limit), None
+
+    result = _fetch_crypto_signal_candles(
+        pair,
+        tf,
+        limit,
+        engine=engine,
+        config=CONFIG,
+        default_fetch=lambda pair_arg, tf_arg, limit_arg: fetch_candles(
+            pair_arg, tf_arg, limit_arg
+        ),
+        bybit_fetch=_fetch_bybit_klines,
+        bybit_paginated_fetch=_fetch_bybit_klines_paginated,
+    )
+    return result.candles, result.meta
 
 
 def fetch_market_state(pair: dict, tf: str, limit: int) -> dict:
@@ -11000,7 +11034,11 @@ def analyze_pair(
                 h1 = h1_state["confirmed"] + ([h1_state["forming"]] if h1_state["forming"] else [])
             is_forming = h1_state["is_live"]
         except Exception:
-            h1 = fetch_candles(pair, "H1", _lim["H1"])
+            h1, _h1_sig_meta = _fetch_ab_crypto_signal_candles(
+                pair, "H1", _lim["H1"], engine="A"
+            )
+            if _h1_sig_meta:
+                preloaded_fetch_meta["H1"] = _h1_sig_meta
             is_forming = False
 
     _d1_state = preloaded_market_state.get("D1")
@@ -11014,7 +11052,11 @@ def analyze_pair(
         d1_raw = d1
 
     if d1_raw is None:
-        d1_raw = fetch_candles(pair, "D1", _lim["D1"])
+        d1_raw, _d1_sig_meta = _fetch_ab_crypto_signal_candles(
+            pair, "D1", _lim["D1"], engine="A"
+        )
+        if _d1_sig_meta:
+            preloaded_fetch_meta["D1"] = _d1_sig_meta
 
     # Trim session-ahead tail BEFORE market-state split to avoid misclassification.
     try:
@@ -11054,7 +11096,11 @@ def analyze_pair(
         else:
             h4 = _h4_confirmed + ([_h4_forming] if _h4_forming else [])
     if h4 is None:
-        h4 = fetch_candles(pair, "H4", _lim["H4"])
+        h4, _h4_sig_meta = _fetch_ab_crypto_signal_candles(
+            pair, "H4", _lim["H4"], engine="A"
+        )
+        if _h4_sig_meta:
+            preloaded_fetch_meta["H4"] = _h4_sig_meta
 
     if not d1 or not h4 or not h1:
         log.warning(
@@ -11430,8 +11476,16 @@ def analyze_pair(
         _asset_prices = [float(c.get("close", 0)) for c in _cf_h4c if c.get("close") is not None]
         if _asset_prices and len(_asset_prices) >= 15:
             try:
-                _btc_candles = fetch_candles(
-                    {"symbol": "BTCUSDT", "source": "binance"}, "H4", len(_asset_prices)
+                _btc_candles, _btc_meta = _fetch_ab_crypto_signal_candles(
+                    {
+                        "symbol": "BTCUSDT",
+                        "display": "BTC/USDT",
+                        "source": "binance",
+                        "type": "crypto",
+                    },
+                    "H4",
+                    len(_asset_prices),
+                    engine="A",
                 )
                 if _btc_candles:
                     _benchmark_prices = [
@@ -11724,17 +11778,36 @@ def analyze_pair(
                         else min(_math_sl, _struct_sl)
                     )
 
-                    # Hard SL distance cap - prevents runaway structural overrides
-                    _max_sl_pct = CONFIG.get("MAX_SL_PCT", {}).get(pair.get("type", ""), 0.05)
+                    # Hard SL distance cap - prevents runaway structural overrides.
+                    # Use the same resolver as risk/execution so mapped volatile
+                    # commodity groups can be tested without raising the global cap.
+                    try:
+                        from risk_engine import resolve_max_sl_pct
+
+                        _max_sl_pct, _max_sl_source = resolve_max_sl_pct(
+                            {
+                                "pair": pair.get("display"),
+                                "display": pair.get("display"),
+                                "symbol": pair.get("symbol"),
+                                "type": pair.get("type"),
+                                "score_group": _score_group,
+                            },
+                            pair.get("type", ""),
+                            CONFIG,
+                        )
+                    except Exception:
+                        _max_sl_pct = CONFIG.get("MAX_SL_PCT", {}).get(pair.get("type", ""), 0.05)
+                        _max_sl_source = f"asset:{pair.get('type', '')}"
                     _sl_dist_pct = abs(float(price) - float(lvl["sl"])) / float(price)
                     if _sl_dist_pct > _max_sl_pct:
                         log.warning(
-                            "[ENGINE-B] pair=%s block_code=%s direction=%s sl_dist_pct=%.4f max_sl_pct=%.4f",
+                            "[ENGINE-B] pair=%s block_code=%s direction=%s sl_dist_pct=%.4f max_sl_pct=%.4f source=%s",
                             pair["display"],
                             ENGINE_B_REASON_STRUCTURAL_SL_HARD_CAP,
                             direction,
                             _sl_dist_pct,
                             _max_sl_pct,
+                            _max_sl_source,
                         )
                         _engine_b_block_reasons.append(f"ENGINE-B: {ENGINE_B_REASON_STRUCTURAL_SL_HARD_CAP}")
 
@@ -14015,6 +14088,8 @@ set_runtime(
         calc_indicators=calc_indicators,
         atr_for_levels=_atr_for_levels,
         bybit_atr_for_levels=_bybit_atr_for_levels,
+        fetch_bybit_klines=_fetch_bybit_klines,
+        fetch_bybit_klines_paginated=_fetch_bybit_klines_paginated,
         get_pair_level_atr_class=get_pair_level_atr_class,
         calc_levels=calc_levels,
         fetch_news_context=fetch_news_context,

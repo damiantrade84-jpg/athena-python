@@ -344,6 +344,17 @@ def test_engine_b_live_scan_uses_mt5_market_state_helper():
     assert '_engine_b_live_market_state(pair_obj, "H4", _clim["H4"])' in source
 
 
+def test_binance_futures_paginated_timeout_tries_mirror_endpoint():
+    root = Path(__file__).resolve().parents[1]
+    source = (root / "athena.py").read_text(encoding="utf-8")
+    paginated = source[source.index("def fetch_binance_paginated") : source.index("def _fetch_bt_yfinance")]
+
+    assert 'for base in ["https://fapi.binance.com", "https://fapi1.binance.com"]' in paginated
+    assert "except Exception as e:" in paginated
+    assert 'log.warning(f"[BN-FUT-PAG] {sym} page {page} {base}: {e}")' in paginated
+    assert "continue" in paginated
+
+
 def test_ui_source_renders_intermarket_confirmation_box():
     root = Path(__file__).resolve().parents[1]
     type_source = (root / "static" / "react-app" / "app" / "src" / "types" / "athena.ts").read_text(encoding="utf-8")

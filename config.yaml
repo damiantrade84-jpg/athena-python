@@ -120,14 +120,14 @@ ENGINE_A_CRYPTO_LEVELS_SIGNAL_FEED_FALLBACK: false
 ENGINE_A_CRYPTO_DERIVATIVES_FEED: bybit
 ENGINE_A_CRYPTO_DERIVATIVES_BINANCE_FALLBACK: true
 ENGINE_A_CRYPTO_BT_LEVEL_ATR_USE_SIGNAL_FEED: true
+ENGINE_AB_CRYPTO_SIGNAL_FEED: binance
+ENGINE_AB_CRYPTO_SIGNAL_FEED_FALLBACK: false
 ENGINE_B_CRYPTO_LEVELS_FEED: bybit
 ENGINE_B_CRYPTO_LEVELS_SIGNAL_FEED_FALLBACK: false
 ENGINE_B_CRYPTO_BT_LEVEL_ATR_USE_SIGNAL_FEED: true
 # Engine B: skip forex signals on 22:00–07:00 UTC (Asian); applies to BT + live scan.
 ENGINE_B_FOREX_ASIAN_SESSION_SKIP_ENABLED: true
 
-BINANCE_KLINE_WS_INTERVALS:
-  - "1m"
 # Engine B forex session diagnostics. ENABLED only enriches structure payloads;
 # SCORE_INFLUENCE_ENABLED must also be true before score adjustment can use it.
 ENGINE_B_FOREX_SESSION_STRUCTURE_WEIGHTING:
@@ -141,6 +141,15 @@ ENGINE_B_FOREX_SESSION_STRUCTURE_WEIGHTING:
   MAX_ABS_SCORE_BONUS: 0.04
 
 ENGINE_B_FOREX_RR_CAN_SATISFY_SPACE_GATE: true
+ENGINE_B_RR_CAN_SATISFY_SPACE_GATE:
+  default: false
+  forex: true
+  stock: true
+  index: true
+  commodity: true
+  etf: true
+  etf_bond: true
+  crypto: false
 
 # Engine B asset-class structure tuning for stocks, indices, commodities, ETFs.
 # Active here for paper testing; config.py fallback defaults remain disabled.
@@ -169,6 +178,8 @@ ENGINE_B_EQUITY_SESSION_STRUCTURE_WEIGHTING:
   LIQUIDITY_SWEEP_ACTIVE_SESSION_BONUS: 0.008
   MAX_ABS_SCORE_BONUS: 0.03
 
+BINANCE_KLINE_WS_INTERVALS:
+  - "1m"
   - "5m"
   - "15m"
   - "1h"
@@ -239,6 +250,57 @@ FACTOR_FOREX_SESSION_MULT:
 # sole driver).  Code default is 0.0 for backward compat; this YAML override
 # is the documented design.
 ADDON_UNSUPPORTED_SPLIT_TO_BASE: 0.5
+
+# Engine A score_group/class differentiation. Defaults off here and in
+# config.py; enable for paper testing after reviewing the class maps below.
+ENGINE_A_SCORE_GROUP_ADJUSTMENTS_ENABLED: true
+ENGINE_A_FACTOR_WEIGHTS_BY_CLASS:
+  us_stock_single: { momentum: 0.45, addon: 0.20, base: 0.35 }
+  stock_other: { momentum: 0.48, addon: 0.20, base: 0.32 }
+  us_indices_trackers: { momentum: 0.50, addon: 0.15, base: 0.35 }
+  index_other: { momentum: 0.50, addon: 0.15, base: 0.35 }
+  commodity_other: { momentum: 0.45, addon: 0.35, base: 0.20 }
+  precious_trackers: { momentum: 0.40, addon: 0.35, base: 0.25 }
+  energy_oil: { momentum: 0.40, addon: 0.35, base: 0.25 }
+  nat_gas: { momentum: 0.35, addon: 0.35, base: 0.30 }
+ENGINE_A_DIRECTIONAL_RAMP_BY_CLASS:
+  stock: { min_directional: 0.30, soft_span: 0.20 }
+  index: { min_directional: 0.28, soft_span: 0.18 }
+  commodity: { min_directional: 0.28, soft_span: 0.25 }
+  us_stock_single: { min_directional: 0.32, soft_span: 0.18 }
+  nat_gas: { min_directional: 0.25, soft_span: 0.30 }
+ENGINE_A_ADDON_UNSUPPORTED_SPLIT_BY_CLASS:
+  stock: 0.55
+  index: 0.60
+ENGINE_A_CONVICTION_FLOOR_BY_CLASS:
+  stock: 0.22
+  index: 0.24
+  commodity: 0.20
+
+# Optional regime-aware score quality multiplier. This is separate from the
+# existing ATR% scaler; it is disabled by default and class/score_group keyed.
+ENGINE_A_VOLATILITY_REGIME_ADJUSTMENT_ENABLED: true
+ENGINE_A_VOLATILITY_REGIME_MULTIPLIERS:
+  stock: { HIGH_VOLATILITY: 0.95, LOW_VOLATILITY: 1.02 }
+  index: { HIGH_VOLATILITY: 0.97, LOW_VOLATILITY: 1.01 }
+  commodity: { HIGH_VOLATILITY: 0.94, LOW_VOLATILITY: 1.02 }
+  nat_gas: { HIGH_VOLATILITY: 1.03, LOW_VOLATILITY: 1.00 }
+ENGINE_A_VOLATILITY_REGIME_MULT_BOUNDS: { min: 0.90, max: 1.05 }
+
+# Optional US cash-session weighting for stocks/indices/ETFs. UTC hours are
+# config values so DST/session experiments do not require code changes.
+ENGINE_A_EQUITY_SESSION_LIQUIDITY_WEIGHTING:
+  ENABLED: true
+  ASSET_TYPES: ["stock", "index", "etf", "etf_bond"]
+  ACTIVE_UTC_START_HOUR: 13.5
+  ACTIVE_UTC_END_HOUR: 20.0
+  ACTIVE_MULT: 1.02
+  OFF_HOURS_MULT: 0.98
+
+# Engine A can consume an explicit Engine B structure payload when callers pass
+# one into compute_factor_scores(). Disabled to avoid double-applying the
+# existing athena.py post-score structure adjustment.
+ENGINE_A_STRUCTURE_CONTEXT_ENABLED: true
 
 # Per-class ATR% bands for the Engine A volatility-quality scaler.
 # Each class defines the ATR/close ratio at which the scaler hits its low
@@ -948,6 +1010,17 @@ FOREX_ENGINE:
   session_shoulder_hours: 1          # Hours either side of core sessions treated as shoulder
 
 MAX_RISK_PER_TRADE: 0.03      # Hard cap 3% per trade
+
+# Keep the base commodity SL cap at config.py's 4%. These narrow overrides are
+# for paper-testing volatile commodity subgroups that otherwise reject before
+# sizing, while still leaving all unmapped commodities on the stricter cap.
+MAX_SL_PCT_SCORE_GROUP_OVERRIDES:
+  precious_trackers: 0.10   # XAU/XAG can need wider ATR/structure stops
+  base_metals: 0.055        # Zinc/Nickel/Lead/Aluminium slightly above 4%
+  energy_oil: 0.08          # WTI/Brent style energy swings
+  nat_gas: 0.10
+MAX_SL_PCT_SYMBOL_OVERRIDES:
+  Gasoline: 0.08
 
 DRAWDOWN_REDUCE_THRESHOLD: 0.10   # Halve size at 10% drawdown
 
@@ -2134,8 +2207,6 @@ ENGINE_B_BOS_VOLUME_FOR_TICKVOL: false
 # reports low-ADX regime context but does not block structure_ok with this key.
 ENGINE_B_FOREX_ADX_MIN: 12
 
-# Crypto structure adjustment is default-off to preserve existing Engine B
-# behavior. When enabled, crypto in elevated/high ATR% regimes requires wider
 # Engine B structure score context. Defaults match the historical hardcoded
 # structure_context.py behavior; optional confluence/session effects are off.
 ENGINE_B_STRUCTURE_SCORE_INFLUENCE_ENABLED: true
@@ -2158,6 +2229,8 @@ ENGINE_B_STRUCTURE_SCORE_CONFLUENCE:
   ENABLED: true
   BONUS: 0.03
 
+# Crypto structure adjustment is default-off to preserve existing Engine B
+# behavior. When enabled, crypto in elevated/high ATR% regimes requires wider
 # swings and stronger close-throughs for BOS/CHoCH.
 ENGINE_B_CRYPTO_VOLATILITY_ADJUSTMENT_ENABLED: true
 ENGINE_B_CRYPTO_STRUCTURE_MULT: 1.25
@@ -2216,6 +2289,7 @@ ENGINE_B_STRUCTURE_READY_WATCHLIST:
   REQUIRE_STRUCTURE_OK: true
   REQUIRE_LOCATION_CONTEXT: true
   FOREX_GATE_NEAR_MISS_ENABLED: true
+  ASSET_GATE_NEAR_MISS_ENABLED: true
   FOREX_MIN_GATE_CONFIRMATIONS: 3
 ENGINE_B_USE_EXECUTION_LEVELS_FOR_SCAN_SIGNALS: true
 

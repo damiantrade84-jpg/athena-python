@@ -9,6 +9,10 @@ from datetime import datetime, timezone
 from typing import Any
 
 from athena_runtime import rt
+from athena_app.services.crypto_signal_feed import (
+    fetch_crypto_signal_candles,
+    resolve_crypto_signal_feed,
+)
 from candles_cache import get_candle_fetch_meta
 from config import CONFIG, scan_candle_limits
 from data_feeds import http_requests
@@ -66,6 +70,29 @@ def _last_atr_from_candles(candles: list, period: int = 14) -> float:
     closes = [float(c["close"]) for c in candles]
     atr_series = calc_atr(highs, lows, closes, period)
     return float(atr_series[-1]) if atr_series else 0.0
+
+
+def _fetch_ab_crypto_signal_candles(runtime, pair: dict, tf: str, limit: int):
+    """Fetch shared Engine A/B scan candles with optional crypto Bybit experiment."""
+    if (
+        str((pair or {}).get("type") or "").lower() != "crypto"
+        or resolve_crypto_signal_feed("AB", CONFIG) == "binance"
+    ):
+        return runtime.fetch_candles(pair, tf, limit), None
+
+    result = fetch_crypto_signal_candles(
+        pair,
+        tf,
+        limit,
+        engine="AB",
+        config=CONFIG,
+        default_fetch=lambda pair_arg, tf_arg, limit_arg: runtime.fetch_candles(
+            pair_arg, tf_arg, limit_arg
+        ),
+        bybit_fetch=getattr(runtime, "fetch_bybit_klines", None),
+        bybit_paginated_fetch=getattr(runtime, "fetch_bybit_klines_paginated", None),
+    )
+    return result.candles, result.meta
 
 
 def _engine_b_level_pair(conf_b: dict | None, res_b: dict | None) -> tuple[float | None, float | None]:
@@ -182,18 +209,23 @@ def _engine_b_structure_ready_watchlist_detail(
     forex_gate_near_miss = asset_type == "forex" and bool(
         cfg.get("FOREX_GATE_NEAR_MISS_ENABLED", False)
     )
+    asset_gate_near_miss = (
+        asset_type in {"forex", "stock", "index", "commodity", "etf", "etf_bond"}
+        and bool(cfg.get("ASSET_GATE_NEAR_MISS_ENABLED", False))
+    )
+    gate_near_miss = forex_gate_near_miss or asset_gate_near_miss
     trigger_ok = bool(conf_b.get("trigger_ok", False))
     entry_ok = bool(conf_b.get("entry_ok", False))
     if (
         bool(cfg.get("REQUIRE_TRIGGER_MISSING", True))
-        and not forex_gate_near_miss
+        and not gate_near_miss
         and (trigger_ok or entry_ok)
     ):
         return None
 
     if (
         bool(cfg.get("REQUIRE_STRUCTURE_OK", True))
-        and not forex_gate_near_miss
+        and not gate_near_miss
         and not bool(conf_b.get("structure_ok", False))
     ):
         return None
@@ -218,10 +250,10 @@ def _engine_b_structure_ready_watchlist_detail(
         or res_b.get("fvg_overlap", False)
     )
     if bool(cfg.get("REQUIRE_LOCATION_CONTEXT", True)) and not location_context:
-        if not forex_gate_near_miss:
+        if not gate_near_miss:
             return None
 
-    if forex_gate_near_miss:
+    if gate_near_miss:
         try:
             min_confirmations = int(cfg.get("FOREX_MIN_GATE_CONFIRMATIONS", 3))
         except (TypeError, ValueError):
@@ -241,9 +273,10 @@ def _engine_b_structure_ready_watchlist_detail(
     failed_gates = list(conf_b.get("failed_gate_names") or [])
     reason = "Engine B structure ready; awaiting price-action trigger"
     execution_block_reason = "awaiting_price_action_trigger"
-    if forex_gate_near_miss:
+    if gate_near_miss:
         blocked = ", ".join(failed_gates) if failed_gates else "gate_near_miss"
-        reason = f"Engine B forex near miss; blocked by {blocked}"
+        label = "forex" if forex_gate_near_miss else asset_type or "asset"
+        reason = f"Engine B {label} near miss; blocked by {blocked}"
         execution_block_reason = "engine_b_gate_near_miss"
     return {
         "reason": reason,
@@ -251,6 +284,8 @@ def _engine_b_structure_ready_watchlist_detail(
         "execution_block_reason": execution_block_reason,
         "asset_type": asset_type or None,
         "forex_gate_near_miss": forex_gate_near_miss,
+        "asset_gate_near_miss": asset_gate_near_miss,
+        "gate_near_miss": gate_near_miss,
         "score": round(score, 4),
         "min_score_scaled": round(min_score, 4),
         "min_score_ratio": min_ratio,
@@ -786,10 +821,23 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict[s
                     .get(pair.get("display"), {})
                     .get("candles")
                 )
+                _crypto_bybit_signal_feed = (
+                    pair.get("type") == "crypto"
+                    and resolve_crypto_signal_feed("AB", CONFIG) == "bybit"
+                )
+                _d1_res, _d1_meta = _fetch_ab_crypto_signal_candles(
+                    r, pair, "D1", _lim["D1"]
+                )
+                _h4_res, _h4_meta = _fetch_ab_crypto_signal_candles(
+                    r, pair, "H4", _lim["H4"]
+                )
+                _h1_res, _h1_meta = _fetch_ab_crypto_signal_candles(
+                    r, pair, "H1", _lim["H1"]
+                )
                 raw_candles = {
-                    "D1": r.fetch_candles(pair, "D1", _lim["D1"]),
-                    "H4": _im_h4 or r.fetch_candles(pair, "H4", _lim["H4"]),
-                    "H1": r.fetch_candles(pair, "H1", _lim["H1"]),
+                    "D1": _d1_res,
+                    "H4": (None if _crypto_bybit_signal_feed else _im_h4) or _h4_res,
+                    "H1": _h1_res,
                 }
                 preloaded_market_state = {}
                 preloaded_candles_for_a = dict(raw_candles)
@@ -830,9 +878,9 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict[s
                             _state_err,
                         )
                 fetch_meta = {
-                    "D1": get_candle_fetch_meta(pair, "D1", _lim["D1"]),
-                    "H4": get_candle_fetch_meta(pair, "H4", _lim["H4"]),
-                    "H1": get_candle_fetch_meta(pair, "H1", _lim["H1"]),
+                    "D1": _d1_meta or get_candle_fetch_meta(pair, "D1", _lim["D1"]),
+                    "H4": _h4_meta or get_candle_fetch_meta(pair, "H4", _lim["H4"]),
+                    "H1": _h1_meta or get_candle_fetch_meta(pair, "H1", _lim["H1"]),
                 }
                 rate_limited_tfs = [
                     tf

@@ -40,7 +40,9 @@ import type {
 } from '@/types/athena';
 
 const DEFAULT_SYMBOLS = 'EUR/USD,GBP/USD,XAU/USD,BTCUSDT,ETHUSDT,NVDA,AAPL,MSFT';
-const POLL_MS = 5000;
+// Snapshot builds fetch candles per symbol; keep this above observed endpoint
+// latency so the browser does not stack overlapping read-only requests.
+const POLL_MS = 15000;
 
 export default function LiveCockpitPanel() {
   const { showToast } = useStore();
@@ -56,9 +58,12 @@ export default function LiveCockpitPanel() {
   const [availablePairs, setAvailablePairs] = useState<{ display: string; type: string; enabled: boolean }[]>([]);
   const [pairsDropdownOpen, setPairsDropdownOpen] = useState(false);
   const pollRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const inFlightRef = useRef(false);
   const { post: postPaperExec, loading: papering } = useApiPost<{ ok?: boolean; error?: string; ticket?: string }>();
 
   const fetchSnap = useCallback(async () => {
+    if (inFlightRef.current) return;
+    inFlightRef.current = true;
     setLoading(true);
     setError(null);
     try {
@@ -79,6 +84,7 @@ export default function LiveCockpitPanel() {
     } catch (e) {
       setError(String(e));
     } finally {
+      inFlightRef.current = false;
       setLoading(false);
     }
   }, [activeSymbols, tf, selected]);
@@ -125,9 +131,11 @@ export default function LiveCockpitPanel() {
   useEffect(() => {
     if (pollRef.current) clearTimeout(pollRef.current);
     if (!autoPoll) return;
-    const tick = () => {
-      fetchSnap();
-      pollRef.current = setTimeout(tick, POLL_MS);
+    const tick = async () => {
+      await fetchSnap();
+      if (autoPoll) {
+        pollRef.current = setTimeout(tick, POLL_MS);
+      }
     };
     pollRef.current = setTimeout(tick, POLL_MS);
     return () => {

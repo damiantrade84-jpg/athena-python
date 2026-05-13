@@ -62,7 +62,7 @@ export default function DashboardPanel() {
   const { data: openTradesRaw, loading: tradesLoading, error: tradesError, refresh: refreshTrades }
     = useApiPoll<OpenTrade[] | { positions?: OpenTrade[] }>('/api/open-trades-timed', 15000);
   const { data: lastScan, error: lastScanError, refresh: refreshScan }
-    = useApiPoll<LastScanResponse>('/api/last-scan', 60000);
+    = useApiPoll<LastScanResponse>('/api/last-scan?limit=6', 60000);
   const { data: performance, error: perfError }
     = useApiPoll<PerformanceMetrics>('/api/performance', 60000);
   const { data: autoTrade } = useApiPoll<{ enabled: boolean }>('/api/auto-trade', 15000);

@@ -21,6 +21,7 @@ import math
 import logging
 import threading
 import warnings
+from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
 from config import CONFIG
@@ -50,6 +51,78 @@ def _resolve_class_keyed(mapping, score_group: str | None, asset_type: str, defa
     if "default" in mapping:
         return mapping["default"]
     return default
+
+
+def _float_cfg(value, default: float) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return float(default)
+
+
+def _resolve_pair_score_group(pair: dict) -> str | None:
+    try:
+        from scoring import get_pair_score_group
+        return get_pair_score_group(pair)
+    except Exception:
+        return pair.get("score_group")
+
+
+def _engine_a_group_adjustments_enabled() -> bool:
+    return bool(CONFIG.get("ENGINE_A_SCORE_GROUP_ADJUSTMENTS_ENABLED", False))
+
+
+def _resolve_factor_weights(score_group: str | None, asset_type: str) -> dict:
+    weights = {
+        "momentum": _float_cfg(CONFIG.get("FACTOR_MOMENTUM_WEIGHT"), _MOMENTUM_WEIGHT_DEFAULT),
+        "addon": _float_cfg(CONFIG.get("FACTOR_ADDON_WEIGHT"), _ADDON_WEIGHT_DEFAULT),
+        "base": _float_cfg(CONFIG.get("FACTOR_BASE_WEIGHT"), _BASE_WEIGHT_DEFAULT),
+    }
+    if not _engine_a_group_adjustments_enabled():
+        return weights
+
+    keyed = CONFIG.get("ENGINE_A_FACTOR_WEIGHTS_BY_CLASS") or {}
+    overrides = _resolve_class_keyed(keyed, score_group, asset_type, {})
+    if isinstance(overrides, dict):
+        for key in ("momentum", "addon", "base"):
+            if key in overrides:
+                weights[key] = _float_cfg(overrides.get(key), weights[key])
+    return weights
+
+
+def _resolve_directional_ramp(asset_type: str, score_group: str | None) -> tuple[float, float]:
+    if asset_type == "crypto":
+        min_directional = _float_cfg(CONFIG.get("FACTOR_MIN_DIRECTIONAL_CRYPTO"), 0.15)
+        soft_span = _float_cfg(CONFIG.get("FACTOR_DIRECTIONAL_SOFT_SPAN_CRYPTO"), 0.30)
+    else:
+        min_directional = _float_cfg(CONFIG.get("FACTOR_MIN_DIRECTIONAL"), 0.25)
+        soft_span = _float_cfg(CONFIG.get("FACTOR_DIRECTIONAL_SOFT_SPAN"), 0.20)
+
+    if not _engine_a_group_adjustments_enabled():
+        return min_directional, soft_span
+
+    keyed = CONFIG.get("ENGINE_A_DIRECTIONAL_RAMP_BY_CLASS") or {}
+    overrides = _resolve_class_keyed(keyed, score_group, asset_type, {})
+    if isinstance(overrides, dict):
+        min_directional = _float_cfg(overrides.get("min_directional"), min_directional)
+        soft_span = _float_cfg(overrides.get("soft_span"), soft_span)
+    return min_directional, soft_span
+
+
+def _resolve_addon_split(score_group: str | None, asset_type: str) -> float:
+    split = _float_cfg(CONFIG.get("ADDON_UNSUPPORTED_SPLIT_TO_BASE"), 0.0)
+    if _engine_a_group_adjustments_enabled():
+        keyed = CONFIG.get("ENGINE_A_ADDON_UNSUPPORTED_SPLIT_BY_CLASS") or {}
+        split = _float_cfg(_resolve_class_keyed(keyed, score_group, asset_type, split), split)
+    return max(0.0, min(1.0, split))
+
+
+def _resolve_conviction_floor(score_group: str | None, asset_type: str, default: float) -> float:
+    floor = default
+    if _engine_a_group_adjustments_enabled():
+        keyed = CONFIG.get("ENGINE_A_CONVICTION_FLOOR_BY_CLASS") or {}
+        floor = _float_cfg(_resolve_class_keyed(keyed, score_group, asset_type, floor), floor)
+    return max(0.0, min(1.0, floor))
 
 # ADX gate thresholds (Wilder 1978 standard) — tunable via config.yaml FACTOR_ADX_*
 # NOTE: Read lazily inside _adx_gate() so config reloads take effect without restart.
@@ -1469,6 +1542,95 @@ def _session_multiplier(bar_time: Optional[str], asset_type: str) -> float:
         return 1.0
 
 
+def _utc_decimal_hour(bar_time: Optional[str]) -> float | None:
+    if not bar_time:
+        return None
+    try:
+        if isinstance(bar_time, datetime):
+            dt = bar_time
+        else:
+            text = str(bar_time).strip()
+            if text.endswith("Z"):
+                text = text[:-1] + "+00:00"
+            dt = datetime.fromisoformat(text)
+        if dt.tzinfo is not None:
+            dt = dt.astimezone(timezone.utc)
+        return float(dt.hour) + float(dt.minute) / 60.0
+    except Exception:
+        return None
+
+
+def _equity_session_multiplier(
+    bar_time: Optional[str],
+    asset_type: str,
+) -> tuple[float, dict]:
+    """Optional US-session liquidity weighting for stock/index/ETF Engine A scores."""
+    cfg = CONFIG.get("ENGINE_A_EQUITY_SESSION_LIQUIDITY_WEIGHTING") or {}
+    detail = {"enabled": bool(cfg.get("ENABLED", False)), "applied": False, "multiplier": 1.0}
+    if not detail["enabled"]:
+        return 1.0, detail
+    asset_l = str(asset_type or "").lower()
+    assets = set(cfg.get("ASSET_TYPES") or ["stock", "index", "etf", "etf_bond"])
+    if asset_l not in assets:
+        detail["reason"] = "asset_not_enabled"
+        return 1.0, detail
+
+    hour = _utc_decimal_hour(bar_time)
+    if hour is None:
+        detail["reason"] = "missing_or_invalid_bar_time"
+        return 1.0, detail
+
+    start = _float_cfg(cfg.get("ACTIVE_UTC_START_HOUR"), 13.5)
+    end = _float_cfg(cfg.get("ACTIVE_UTC_END_HOUR"), 20.0)
+    if start <= end:
+        active = start <= hour < end
+    else:
+        active = hour >= start or hour < end
+    mult_key = "ACTIVE_MULT" if active else "OFF_HOURS_MULT"
+    mult = _float_cfg(cfg.get(mult_key), 1.0)
+    detail.update({
+        "applied": True,
+        "session": "us_active" if active else "off_hours",
+        "utc_hour": round(hour, 4),
+        "multiplier": round(mult, 6),
+    })
+    return mult, detail
+
+
+def _volatility_regime_multiplier(
+    regime: str,
+    asset_type: str,
+    score_group: str | None,
+) -> tuple[float, dict]:
+    """Optional score multiplier for asset classes where regime changes quality."""
+    enabled = bool(CONFIG.get("ENGINE_A_VOLATILITY_REGIME_ADJUSTMENT_ENABLED", False))
+    detail = {
+        "enabled": enabled,
+        "applied": False,
+        "regime": regime,
+        "multiplier": 1.0,
+    }
+    if not enabled:
+        return 1.0, detail
+
+    keyed = CONFIG.get("ENGINE_A_VOLATILITY_REGIME_MULTIPLIERS") or {}
+    resolved = _resolve_class_keyed(keyed, score_group, asset_type, {})
+    mult = 1.0
+    if isinstance(resolved, dict):
+        mult = _float_cfg(resolved.get(regime, resolved.get("default")), 1.0)
+    elif resolved is not None:
+        mult = _float_cfg(resolved, 1.0)
+
+    bounds = CONFIG.get("ENGINE_A_VOLATILITY_REGIME_MULT_BOUNDS") or {}
+    min_mult = _float_cfg(bounds.get("min"), 0.85)
+    max_mult = _float_cfg(bounds.get("max"), 1.15)
+    if max_mult < min_mult:
+        min_mult, max_mult = max_mult, min_mult
+    mult = max(min_mult, min(max_mult, mult))
+    detail.update({"applied": abs(mult - 1.0) > 1e-9, "multiplier": round(mult, 6)})
+    return mult, detail
+
+
 # ── Main scoring function ─────────────────────────────────────────────────────
 
 def compute_factor_scores(
@@ -1487,6 +1649,7 @@ def compute_factor_scores(
     macro_context: Optional[dict] = None,
     intermarket_context: Optional[dict] = None,
     volume_threshold: Optional[float] = None,
+    structure_result: Optional[dict] = None,
 ) -> Dict:
     """Compute Engine A v2 factor scores and aggregate to final conviction score.
 
@@ -1501,11 +1664,7 @@ def compute_factor_scores(
     # Resolve score_group once so per-subgroup config (e.g. precious_trackers
     # RSI bounds for GLD-as-stock) can override asset_type lookups everywhere
     # Engine A reads class-keyed config.
-    try:
-        from scoring import get_pair_score_group
-        score_group = get_pair_score_group(pair)
-    except Exception:
-        score_group = None
+    score_group = _resolve_pair_score_group(pair)
 
     # ── Data quality guard ────────────────────────────────────────────────────
     _close = h4_snap.get("close")
@@ -1546,12 +1705,7 @@ def compute_factor_scores(
     # Inside the soft-span window: linear ramp 0→1 multiplied into base_score so a
     # weak-but-present trend produces a proportionally smaller score, instead of
     # the binary cliff at the threshold.
-    if asset_type == "crypto":
-        _min_directional = float(CONFIG.get("FACTOR_MIN_DIRECTIONAL_CRYPTO", 0.15))
-        _soft_span = float(CONFIG.get("FACTOR_DIRECTIONAL_SOFT_SPAN_CRYPTO", 0.30))
-    else:
-        _min_directional = float(CONFIG.get("FACTOR_MIN_DIRECTIONAL", 0.25))
-        _soft_span = float(CONFIG.get("FACTOR_DIRECTIONAL_SOFT_SPAN", 0.20))
+    _min_directional, _soft_span = _resolve_directional_ramp(asset_type, score_group)
     _abs_trend = abs(trend_score)
     if _abs_trend < _min_directional:
         log.debug(
@@ -1686,6 +1840,12 @@ def compute_factor_scores(
     session_mult = _session_multiplier(bar_time, asset_type)
     feed_status["session"] = f"{session_mult:.2f}"
 
+    # Optional equity-session weighting is isolated from the existing forex
+    # session multiplier and is default-off to preserve current Engine A scores.
+    equity_session_mult, equity_session_detail = _equity_session_multiplier(bar_time, asset_type)
+    if equity_session_detail.get("enabled"):
+        feed_status["equity_session"] = str(equity_session_detail.get("session") or equity_session_detail.get("reason") or "neutral")
+
     # ── +DI/-DI directional alignment multiplier ──────────────────────────────
     # Stage 1.3: ADX measures strength but not direction. If EMA says LONG but
     # -DI > +DI, bearish pressure dominates — score must be suppressed.
@@ -1725,10 +1885,11 @@ def compute_factor_scores(
 
     # ── Conviction score: weighted combination ────────────────────────────────
     # Read weights lazily so config reloads take effect without restart.
-    _momentum_w = float(CONFIG.get("FACTOR_MOMENTUM_WEIGHT", _MOMENTUM_WEIGHT_DEFAULT))
-    _addon_w = float(CONFIG.get("FACTOR_ADDON_WEIGHT", _ADDON_WEIGHT_DEFAULT))
-    _base_w = float(CONFIG.get("FACTOR_BASE_WEIGHT", _BASE_WEIGHT_DEFAULT))
-    _conviction_floor = float(CONFIG.get("FACTOR_CONVICTION_FLOOR", _CONVICTION_FLOOR_DEFAULT))
+    factor_weight_cfg = _resolve_factor_weights(score_group, asset_type)
+    _momentum_w = factor_weight_cfg["momentum"]
+    _addon_w = factor_weight_cfg["addon"]
+    _base_w = factor_weight_cfg["base"]
+    _conviction_floor = _float_cfg(CONFIG.get("FACTOR_CONVICTION_FLOOR"), _CONVICTION_FLOOR_DEFAULT)
     # conviction ∈ [0, 1] — how strongly we believe in this setup
     # Base floor + momentum quality + addon (addon_val can be negative → reduces conviction).
     # Normalise addon: +0.20 → +1.0, 0.00 → 0.0, -0.15 → -0.75 (penalty preserved, not floored).
@@ -1742,8 +1903,7 @@ def compute_factor_scores(
     _eff_addon_w = _addon_w
     _eff_base_w = _base_w
     if addon_status == "unsupported":
-        _split_to_base = float(CONFIG.get("ADDON_UNSUPPORTED_SPLIT_TO_BASE", 0.0))
-        _split_to_base = max(0.0, min(1.0, _split_to_base))
+        _split_to_base = _resolve_addon_split(score_group, asset_type)
         _eff_base_w = _base_w + _addon_w * _split_to_base
         _eff_mom_w = _momentum_w + _addon_w * (1.0 - _split_to_base)
         _eff_addon_w = 0.0
@@ -1776,11 +1936,21 @@ def compute_factor_scores(
         _eff_floor = float(_floor_by_regime[regime])
     else:
         _eff_floor = _conviction_floor
+    _eff_floor = _resolve_conviction_floor(score_group, asset_type, _eff_floor)
+
+    vol_regime_mult, vol_regime_detail = _volatility_regime_multiplier(
+        regime, asset_type, score_group
+    )
+    if vol_regime_detail.get("enabled"):
+        feed_status["vol_regime"] = f"{vol_regime_detail.get('multiplier', 1.0):.2f}"
+
     base_score = (
         abs(trend_score)
         * adx_mult
         * vol_scaler
         * session_mult
+        * equity_session_mult
+        * vol_regime_mult
         * di_align_mult
         * dir_ramp_mult
         * vwap_mult
@@ -1919,6 +2089,64 @@ def compute_factor_scores(
             log.debug("[EA2] %s intermarket confirmation skipped: %s", display, exc)
             feed_status["intermarket"] = "error"
 
+    structure_adjustment = {
+        "enabled": bool(CONFIG.get("ENGINE_A_STRUCTURE_CONTEXT_ENABLED", False)),
+        "applied": False,
+        "adjusted_score": round(final_score, 6),
+    }
+    if structure_adjustment["enabled"] and isinstance(structure_result, dict):
+        try:
+            from athena_app.services.structure_context import apply_structure_context_to_score
+
+            structure_adjustment = apply_structure_context_to_score(
+                structure_result,
+                direction=direction,
+                base_score=float(final_score or 0.0),
+                max_score=3.0,
+            )
+            adjusted = structure_adjustment.get("adjusted_score")
+            if isinstance(adjusted, (int, float)):
+                final_score = max(0.0, min(3.0, float(adjusted)))
+            feed_status["structure_context"] = "applied" if structure_adjustment.get("applied") else "neutral"
+        except Exception as exc:
+            log.debug("[EA2] %s structure context skipped: %s", display, exc)
+            feed_status["structure_context"] = "error"
+            structure_adjustment = {
+                "enabled": True,
+                "applied": False,
+                "adjusted_score": round(final_score, 6),
+                "error": "structure_context_error",
+            }
+
+    asset_diagnostics = {
+        "asset_type": asset_type,
+        "score_group": score_group,
+        "score_group_adjustments_enabled": _engine_a_group_adjustments_enabled(),
+        "factor_weights": {
+            "configured": {
+                "momentum": round(_momentum_w, 6),
+                "addon": round(_addon_w, 6),
+                "base": round(_base_w, 6),
+            },
+            "effective": {
+                "momentum": round(_eff_mom_w, 6),
+                "addon": round(_eff_addon_w, 6),
+                "base": round(_eff_base_w, 6),
+            },
+        },
+        "directional_ramp": {
+            "min_directional": round(_min_directional, 6),
+            "soft_span": round(_soft_span, 6),
+            "multiplier": round(dir_ramp_mult, 6),
+        },
+        "volatility": {
+            "atr_pct_scaler": round(vol_scaler, 6),
+            "regime_multiplier": vol_regime_detail,
+        },
+        "equity_session": equity_session_detail,
+        "conviction_floor": round(_eff_floor, 6),
+    }
+
     # ── Factor scores dict (for UI / Marcus Reid diagnostics) ─────────────────
     factor_scores = {
         "trend": round(trend_score, 4),
@@ -1942,6 +2170,10 @@ def compute_factor_scores(
         # ── Factor breakdown (UI + AI) ────────────────────────────────────────
         "factor_scores": factor_scores,
         "weights": {"trend": 1.0, "momentum": _eff_mom_w, "addon": _eff_addon_w, "base": _eff_base_w},
+        "asset_type": asset_type,
+        "score_group": score_group,
+        "engine_a_asset_diagnostics": asset_diagnostics,
+        "structure_context_adjustment": structure_adjustment,
         "trend_coherence": trend_detail,
         # ── Diagnostic fields (backward compat with Engine C / scoring.py) ───
         "directional_score": round(trend_score, 4),
@@ -1959,6 +2191,8 @@ def compute_factor_scores(
         "mean_reversion_detail": mean_rev_detail,
         "addon_unsupported": addon_status == "unsupported",
         "session_multiplier": round(session_mult, 4),
+        "equity_session_multiplier": round(equity_session_mult, 4),
+        "volatility_regime_multiplier": round(vol_regime_mult, 4),
         "conviction": round(conviction, 4),
         # ── Compatibility flags ───────────────────────────────────────────────
         "insufficient_factors": False,
@@ -2006,16 +2240,48 @@ def _zero_result(
     min_directional_failed: bool = False,
 ) -> dict:
     """Return a clean zero-score result with diagnostics."""
+    asset_type = pair.get("type", "stock")
+    score_group = _resolve_pair_score_group(pair)
+    weight_cfg = _resolve_factor_weights(score_group, asset_type)
+    asset_diagnostics = {
+        "asset_type": asset_type,
+        "score_group": score_group,
+        "score_group_adjustments_enabled": _engine_a_group_adjustments_enabled(),
+        "factor_weights": {"configured": weight_cfg, "effective": weight_cfg},
+        "directional_ramp": {
+            "min_directional": round(min_directional, 6),
+            "soft_span": 0.0,
+            "multiplier": 0.0,
+        },
+        "volatility": {
+            "atr_pct_scaler": 1.0,
+            "regime_multiplier": {
+                "enabled": bool(CONFIG.get("ENGINE_A_VOLATILITY_REGIME_ADJUSTMENT_ENABLED", False)),
+                "applied": False,
+                "regime": regime,
+                "multiplier": 1.0,
+            },
+        },
+        "equity_session": {
+            "enabled": bool((CONFIG.get("ENGINE_A_EQUITY_SESSION_LIQUIDITY_WEIGHTING") or {}).get("ENABLED", False)),
+            "applied": False,
+            "multiplier": 1.0,
+        },
+        "conviction_floor": 0.0,
+    }
     return {
         "final_score": 0.0,
         "direction": direction,
         "regime": regime,
         "factor_scores": {"trend": 0.0, "momentum": 0.0, "addon": 0.0, "research_lab": 0.0, "mean_reversion": 0.0},
-        "weights": {
-            "trend": 1.0,
-            "momentum": float(CONFIG.get("FACTOR_MOMENTUM_WEIGHT", _MOMENTUM_WEIGHT_DEFAULT)),
-            "addon": float(CONFIG.get("FACTOR_ADDON_WEIGHT", _ADDON_WEIGHT_DEFAULT)),
-            "base": float(CONFIG.get("FACTOR_BASE_WEIGHT", _BASE_WEIGHT_DEFAULT)),
+        "weights": {"trend": 1.0, **weight_cfg},
+        "asset_type": asset_type,
+        "score_group": score_group,
+        "engine_a_asset_diagnostics": asset_diagnostics,
+        "structure_context_adjustment": {
+            "enabled": bool(CONFIG.get("ENGINE_A_STRUCTURE_CONTEXT_ENABLED", False)),
+            "applied": False,
+            "adjusted_score": 0.0,
         },
         "trend_coherence": trend_detail,
         "directional_score": 0.0,
@@ -2032,6 +2298,8 @@ def _zero_result(
         "mean_reversion_value": 0.0,
         "mean_reversion_detail": {"enabled": bool(CONFIG.get("ENGINE_A_MEAN_REVERSION", {}).get("ENABLED", False))},
         "session_multiplier": 1.0,
+        "equity_session_multiplier": 1.0,
+        "volatility_regime_multiplier": 1.0,
         "conviction": 0.0,
         "insufficient_factors": True,
         "indeterminate_direction": reason == "indeterminate_trend",

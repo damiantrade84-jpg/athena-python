@@ -335,6 +335,8 @@ CONFIG: dict = {
     "ENGINE_A_CRYPTO_DERIVATIVES_FEED": "bybit",
     "ENGINE_A_CRYPTO_DERIVATIVES_BINANCE_FALLBACK": True,
     "ENGINE_A_CRYPTO_BT_LEVEL_ATR_USE_SIGNAL_FEED": True,
+    "ENGINE_AB_CRYPTO_SIGNAL_FEED": "binance",
+    "ENGINE_AB_CRYPTO_SIGNAL_FEED_FALLBACK": False,
     "ENGINE_A_MULTI_EXCHANGE_FUNDING": {
         "ENABLED": True,
         "BINANCE_WEIGHT": 0.5,
@@ -345,8 +347,6 @@ CONFIG: dict = {
     "ENGINE_B_CRYPTO_BT_LEVEL_ATR_USE_SIGNAL_FEED": True,
     # When True, Engine B skips forex on 22:00–07:00 UTC bars (backtest + live scan).
     "ENGINE_B_FOREX_ASIAN_SESSION_SKIP_ENABLED": True,
-    # When True, Engine B room gate requires structural distance; unknown distance fails closed.
-    "ENGINE_B_ROOM_GATE_REQUIRE_DISTANCE": True,
     # Diagnostics-first forex session weighting for Engine B structure context.
     # Disabled by default; score influence requires SCORE_INFLUENCE_ENABLED too.
     "ENGINE_B_FOREX_SESSION_STRUCTURE_WEIGHTING": {
@@ -363,6 +363,18 @@ CONFIG: dict = {
     # when enabled, valid execution RR can satisfy the "room/rr" gate comment
     # without changing non-forex assets.
     "ENGINE_B_FOREX_RR_CAN_SATISFY_SPACE_GATE": False,
+    # Asset-scoped version of the same correction. Defaults preserve historical
+    # behavior; config.yaml enables paper-test assets explicitly.
+    "ENGINE_B_RR_CAN_SATISFY_SPACE_GATE": {
+        "default": False,
+        "forex": False,
+        "stock": False,
+        "index": False,
+        "commodity": False,
+        "etf": False,
+        "etf_bond": False,
+        "crypto": False,
+    },
     # Default-off non-forex/crypto structure tuning for stocks, indices, commodities, and ETFs.
     "ENGINE_B_ASSET_CLASS_ADJUSTMENTS_ENABLED": False,
     "ENGINE_B_ASSET_CLASS_VOLATILITY_AWARE_ENABLED": False,
@@ -389,6 +401,8 @@ CONFIG: dict = {
         "LIQUIDITY_SWEEP_ACTIVE_SESSION_BONUS": 0.008,
         "MAX_ABS_SCORE_BONUS": 0.03,
     },
+    # When True, Engine B room gate requires structural distance; unknown distance fails closed.
+    "ENGINE_B_ROOM_GATE_REQUIRE_DISTANCE": True,
     "BINANCE_KLINE_WS_INTERVALS": ["1m", "5m", "15m", "1h", "4h", "1d"],
     "MIN_CONFLUENCE": 1.0,
     "RISK_MULT": {
@@ -660,6 +674,25 @@ CONFIG: dict = {
         "ENABLED": False,
         "BY_QUALITY": {"high": 1.0, "medium": 0.95, "low": 0.85},
     },
+    # Engine A class/score_group overrides. Disabled by default so the unified
+    # factor formula keeps historical behavior unless a class is explicitly tuned.
+    "ENGINE_A_SCORE_GROUP_ADJUSTMENTS_ENABLED": False,
+    "ENGINE_A_FACTOR_WEIGHTS_BY_CLASS": {},
+    "ENGINE_A_DIRECTIONAL_RAMP_BY_CLASS": {},
+    "ENGINE_A_ADDON_UNSUPPORTED_SPLIT_BY_CLASS": {},
+    "ENGINE_A_CONVICTION_FLOOR_BY_CLASS": {},
+    "ENGINE_A_VOLATILITY_REGIME_ADJUSTMENT_ENABLED": False,
+    "ENGINE_A_VOLATILITY_REGIME_MULTIPLIERS": {},
+    "ENGINE_A_VOLATILITY_REGIME_MULT_BOUNDS": {"min": 0.85, "max": 1.15},
+    "ENGINE_A_EQUITY_SESSION_LIQUIDITY_WEIGHTING": {
+        "ENABLED": False,
+        "ASSET_TYPES": ["stock", "index", "etf", "etf_bond"],
+        "ACTIVE_UTC_START_HOUR": 13.5,
+        "ACTIVE_UTC_END_HOUR": 20.0,
+        "ACTIVE_MULT": 1.02,
+        "OFF_HOURS_MULT": 0.98,
+    },
+    "ENGINE_A_STRUCTURE_CONTEXT_ENABLED": False,
     "FACTOR_CRYPTO_ADDON_COMBO_CONFIRM_CAP": 0.25,
     "FACTOR_CRYPTO_ADDON_COMBO_AGAINST_CAP": -0.20,
     "ENGINE_A_COT_CONTRARIAN_FADE": {
@@ -857,6 +890,8 @@ CONFIG: dict = {
         "index":     0.04,
         "stock":     0.08,
     },
+    "MAX_SL_PCT_SCORE_GROUP_OVERRIDES": {},
+    "MAX_SL_PCT_SYMBOL_OVERRIDES": {},
     "DATA_FRESHNESS_GATES": {
         "WARN_ON_STALE_SCAN": True,
         "BLOCK_EXECUTION_ON_STALE": True,
@@ -962,11 +997,10 @@ CONFIG: dict = {
         "REQUIRE_STRUCTURE_OK": True,
         "REQUIRE_LOCATION_CONTEXT": True,
         "FOREX_GATE_NEAR_MISS_ENABLED": False,
+        "ASSET_GATE_NEAR_MISS_ENABLED": False,
         "FOREX_MIN_GATE_CONFIRMATIONS": 3,
     },
     "ENGINE_B_USE_EXECUTION_LEVELS_FOR_SCAN_SIGNALS": True,
-    "ENGINE_B_CRYPTO_VOLATILITY_ADJUSTMENT_ENABLED": False,
-    "ENGINE_B_CRYPTO_STRUCTURE_MULT": 1.25,
     "ENGINE_B_STRUCTURE_SCORE_INFLUENCE_ENABLED": True,
     "ENGINE_B_STRUCTURE_SCORE_COMPONENT_BONUSES": {
         "zone_proximity": 0.08,
@@ -990,6 +1024,8 @@ CONFIG: dict = {
         "ENABLED": False,
         "BONUS": 0.03,
     },
+    "ENGINE_B_CRYPTO_VOLATILITY_ADJUSTMENT_ENABLED": False,
+    "ENGINE_B_CRYPTO_STRUCTURE_MULT": 1.25,
     "ENGINE_B_CRYPTO_BOS_MIN_BREAK_ATR": 0.10,
     # ── Engine B (Naked Scalp) ────────────────────────────────────────────────
     "NAKED_ENGINE": {

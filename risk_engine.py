@@ -33,6 +33,62 @@ def _cfg(key: str, default):
     return CONFIG.get(key, default)
 
 
+def resolve_max_sl_pct(
+    signal: dict | None,
+    asset_type: str | None = None,
+    cfg: dict | None = None,
+) -> tuple[float, str]:
+    """Resolve the execution SL-width cap with explicit narrow overrides.
+
+    The default asset cap remains the fail-closed safety baseline.  Optional
+    score-group/symbol overrides let volatile commodity subgroups be paper-tested
+    without raising the global commodity cap for every instrument.
+    """
+    signal = signal or {}
+    cfg = cfg or CONFIG
+    asset = str(asset_type or signal.get("type") or signal.get("asset_type") or "").lower()
+    caps = cfg.get("MAX_SL_PCT") or {}
+    try:
+        cap = float(caps.get(asset, caps.get("default", 0.05)))
+    except (TypeError, ValueError):
+        cap = 0.05
+    source = f"asset:{asset or 'default'}"
+
+    score_group = signal.get("score_group") or signal.get("scoreGroup")
+    if not score_group:
+        try:
+            from scoring import get_pair_score_group
+            display = signal.get("pair") or signal.get("display") or signal.get("symbol")
+            if display and asset:
+                score_group = get_pair_score_group({"display": display, "symbol": display, "type": asset})
+        except Exception:
+            score_group = None
+    group_caps = cfg.get("MAX_SL_PCT_SCORE_GROUP_OVERRIDES") or {}
+    if score_group in group_caps:
+        try:
+            cap = float(group_caps[score_group])
+            source = f"score_group:{score_group}"
+        except (TypeError, ValueError):
+            pass
+
+    display_keys = [
+        signal.get("pair"),
+        signal.get("display"),
+        signal.get("symbol"),
+        signal.get("mt5_symbol"),
+    ]
+    symbol_caps = cfg.get("MAX_SL_PCT_SYMBOL_OVERRIDES") or {}
+    for key in display_keys:
+        if key in symbol_caps:
+            try:
+                cap = float(symbol_caps[key])
+                source = f"symbol:{key}"
+            except (TypeError, ValueError):
+                pass
+            break
+    return max(0.0, cap), source
+
+
 # Legacy alias kept for backward compat — reads live
 _EXEC_DEFAULTS = {
     "RISK_PCT": 0.01,
@@ -901,15 +957,14 @@ def risk_check(
     # ── Check 5: SL distance within MAX_SL_PCT ──────────────────────────────
     # BUG 4 fix: Enforce hard rejection for over-wide stops before volume calc.
     # Matches implementation in executors to prevent late-stage rejections.
-    _caps = CONFIG.get("MAX_SL_PCT") or {}
-    max_sl_pct = _caps.get(asset_type, 0.05)
+    max_sl_pct, max_sl_source = resolve_max_sl_pct(signal, asset_type, CONFIG)
     
     if entry != 0:
         sl_pct = abs(entry - sl) / abs(entry)
         if sl_pct > max_sl_pct:
             log.warning(
                 f"{prefix} REJECTED: SL distance {sl_pct:.1%} exceeds MAX_SL_PCT "
-                f"{max_sl_pct:.1%} for {asset_type}"
+                f"{max_sl_pct:.1%} for {asset_type} ({max_sl_source})"
             )
             return RiskApproval(False, 0.0, 0.0, 0.0, 0.0, dd, "MAX_SL_EXCEEDED")
 

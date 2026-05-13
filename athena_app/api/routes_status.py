@@ -61,6 +61,18 @@ def api_last_scan():
     if not r.get("success") or not r.get("scannedAt"):
         return jsonify({"available": False, "reason": "no_scan"}), 200
     out = dict(r)
+    # UI dashboards often need only a preview. Keep the default full payload for
+    # existing callers, but allow read-only panels to avoid repeatedly shipping
+    # multi-MB scan snapshots while the app is idle.
+    try:
+        limit = int(request.args.get("limit", "0") or 0)
+    except (TypeError, ValueError):
+        limit = 0
+    if limit > 0 and isinstance(out.get("signals"), list):
+        total_signals = len(out["signals"])
+        out["signals"] = out["signals"][:limit]
+        out["signalsTruncated"] = total_signals > limit
+        out["totalSignals"] = total_signals
     out["available"] = True
     return jsonify(_json_safe(out))
 

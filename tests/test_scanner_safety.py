@@ -78,6 +78,7 @@ def _structure_ready_config(enabled=True):
             "REQUIRE_STRUCTURE_OK": True,
             "REQUIRE_LOCATION_CONTEXT": True,
             "FOREX_GATE_NEAR_MISS_ENABLED": True,
+            "ASSET_GATE_NEAR_MISS_ENABLED": True,
             "FOREX_MIN_GATE_CONFIRMATIONS": 3,
         }
     }
@@ -171,6 +172,43 @@ def test_engine_b_forex_gate_near_miss_can_surface_without_execution():
     assert detail["execution_allowed"] is False
     assert detail["execution_block_reason"] == "engine_b_gate_near_miss"
     assert "struct" in detail["reason"]
+
+
+def test_engine_b_asset_gate_near_miss_can_surface_without_execution():
+    conf_b = {
+        "score": 4.5,
+        "max_possible": 9.0,
+        "min_score_scaled": 3.6,
+        "passed": False,
+        "structure_ok": True,
+        "location_ok": False,
+        "zone_ok": False,
+        "trigger_ok": True,
+        "entry_ok": True,
+        "room_ok": False,
+        "space_gate_ok": True,
+        "rr_ok": True,
+        "failed_gate_names": ["loc"],
+    }
+    res_b = {
+        "asset_type": "stock",
+        "structural_verdict": "CLEAR",
+        "bos_confirmed": True,
+        "ob_at_zone": False,
+    }
+
+    detail = _engine_b_structure_ready_watchlist_detail(
+        conf_b,
+        res_b,
+        config=_structure_ready_config(enabled=True),
+    )
+
+    assert detail is not None
+    assert detail["asset_gate_near_miss"] is True
+    assert detail["gate_near_miss"] is True
+    assert detail["execution_allowed"] is False
+    assert detail["execution_block_reason"] == "engine_b_gate_near_miss"
+    assert "stock near miss" in detail["reason"]
 
 
 def test_engine_b_structure_ready_scan_tier_promotes_skip_to_watchlist_only():

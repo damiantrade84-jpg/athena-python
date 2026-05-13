@@ -105,6 +105,24 @@ def test_last_scan_reflects_runtime_state_changes():
     assert second["scannedAt"] == "2026-05-05T12:00:00+00:00"
 
 
+def test_last_scan_limit_slices_signals_without_changing_default_payload():
+    runtime = _runtime()
+    runtime.state["last_scan"] = {
+        "success": True,
+        "scannedAt": "2026-05-13T12:00:00+00:00",
+        "signals": [{"pair": f"P{i}"} for i in range(10)],
+    }
+    client, _app = _client(runtime)
+
+    full = client.get("/api/last-scan").get_json()
+    limited = client.get("/api/last-scan?limit=3").get_json()
+
+    assert len(full["signals"]) == 10
+    assert len(limited["signals"]) == 3
+    assert limited["totalSignals"] == 10
+    assert limited["signalsTruncated"] is True
+
+
 def test_microstructure_health_uses_runtime_cache():
     runtime = _runtime()
     client, _app = _client(runtime)
