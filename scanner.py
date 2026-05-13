@@ -330,6 +330,54 @@ def _apply_engine_b_scan_gate(signal: dict, tier: str, reason: str) -> tuple[str
     return "watchlist", f"Engine B confirmation failed ({detail})"
 
 
+def _apply_engine_b_only_watchlist_scan_tier(
+    signal: dict,
+    tier: str,
+    reason: str,
+    *,
+    config: dict | None = None,
+) -> tuple[str, str]:
+    """Surface scan-only Engine B passes that Engine A tiering would hide.
+
+    This never promotes to trade. It only preserves a passed naked-structure
+    setup for operator review when Engine A is below its scan floor.
+    """
+    cfg = config or CONFIG
+    if not bool(cfg.get("ENGINE_B_SCAN_B_ONLY_WATCHLIST_ENABLED", False)):
+        return tier, reason
+    if tier == "trade":
+        return tier, reason
+    if not bool(signal.get("engine_b_confidence_passed", False)):
+        return tier, reason
+
+    diagnostics = signal.setdefault("scanDiagnostics", [])
+    safety_block_codes = {
+        "closed_exchange",
+        "event_risk",
+        "macro_event_risk",
+        "inactive_pair",
+        "engine_b_error",
+    }
+    codes = {d.get("code") for d in diagnostics if isinstance(d, dict)}
+    if codes.intersection(safety_block_codes):
+        return tier, reason
+
+    b_dir = signal.get("engine_b_direction")
+    a_dir = signal.get("direction")
+    aligned = bool(signal.get("enginesAligned", False))
+    if b_dir in ("LONG", "SHORT") and a_dir in ("LONG", "SHORT") and b_dir != a_dir:
+        detail = f"Engine B-only watchlist: B {b_dir}, A {a_dir}"
+    elif aligned:
+        detail = "Engine B passed; Engine A below scan floor"
+    else:
+        detail = "Engine B-only watchlist"
+
+    diagnostics.append({"code": "engine_b_only_watchlist", "detail": detail})
+    signal["engine_b_execution_blocked"] = True
+    signal["engine_b_execution_block_reason"] = "engine_b_only_scan_watchlist"
+    return "watchlist", detail
+
+
 def _apply_engine_b_structure_ready_scan_tier(
     signal: dict,
     tier: str,
@@ -1133,12 +1181,68 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict[s
                                         entry_candles=entry_candles_b or zone_candles_b,
                                         style_profile=style_profile_b,
                                     )
+                                    _engine_b_direction_used = direction
+                                    # Scan-only B independence: if Engine A's direction causes the
+                                    # naked-structure gate to fail, optionally re-check the direction
+                                    # inferred from Engine B's own BOS/CHoCH/sweep evidence.
+                                    if bool(CONFIG.get("ENGINE_B_SCAN_INDEPENDENT_DIRECTION_ENABLED", False)):
+                                        _initial_gate_ok, _ = engine_b_confidence_passes(
+                                            conf_b,
+                                            style_profile_b,
+                                            regime_label,
+                                            ptype,
+                                        )
+                                        _independent = res_b.get("engine_b_independent_direction") or {}
+                                        _alt_direction = _independent.get("direction")
+                                        if (
+                                            not _initial_gate_ok
+                                            and _alt_direction in ("LONG", "SHORT")
+                                            and _alt_direction != direction
+                                        ):
+                                            alt_res_b = _engine_b.set_registry_context(
+                                                pair.get("symbol") or pair.get("display")
+                                            ).analyze_structure(
+                                                d1 or [],
+                                                zone_candles_b,
+                                                entry_candles_b,
+                                                current_price,
+                                                _alt_direction,
+                                                atr,
+                                                regime_label,
+                                                fallback_rr=style_profile_b.get("fallback_rr", 2.0),
+                                                asset_type=ptype,
+                                                d1_snap=_sc_d1_snap,
+                                                h4_snap=_sc_h4_snap,
+                                                style=resolved_style_b,
+                                                pair=pair,
+                                            )
+                                            if alt_res_b.get("structural_verdict") == "CLEAR":
+                                                alt_conf_b = _engine_b.calculate_confidence(
+                                                    alt_res_b,
+                                                    current_price,
+                                                    _alt_direction,
+                                                    entry_candles=entry_candles_b or zone_candles_b,
+                                                    style_profile=style_profile_b,
+                                                )
+                                                alt_gate_ok, _ = engine_b_confidence_passes(
+                                                    alt_conf_b,
+                                                    style_profile_b,
+                                                    regime_label,
+                                                    ptype,
+                                                )
+                                                if alt_gate_ok:
+                                                    res_b = alt_res_b
+                                                    conf_b = alt_conf_b
+                                                    _engine_b_direction_used = _alt_direction
+                                                    sig_a["engine_b_independent_direction_scan_applied"] = True
+                                                    sig_a["engine_b_original_direction"] = direction
                                     b_score = float(conf_b.get("score", 0))
                                     b_max = float(conf_b.get("max_possible", 5))
 
                                     sig_a["engine_b_score"] = round(b_score, 2)
                                     sig_a["engine_b_max"] = round(b_max, 1)
                                     sig_a["engine_b_pct"] = round(b_score / b_max * 100, 1) if b_max else 0
+                                    sig_a["engine_b_direction"] = _engine_b_direction_used
                                     sig_a["engine_b_verdict"] = res_b.get("structural_verdict")
                                     sig_a["engine_b_bos"] = res_b.get("bos_confirmed", False)
                                     sig_a["engine_b_ob"] = res_b.get("ob_at_zone", False)
@@ -1169,6 +1273,12 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict[s
                                         regime_label,
                                         ptype,
                                     )
+                                    sig_a["engine_b_confidence_passed"] = bool(conf_b.get("passed", False))
+                                    sig_a["engine_b_direction_aligned_with_a"] = (
+                                        _engine_b_direction_used == direction
+                                    )
+                                    if _engine_b_direction_used != direction:
+                                        sig_a["enginesAligned"] = False
                                     _mark_engine_b_structure_ready_watchlist(
                                         sig_a,
                                         conf_b,
@@ -1376,6 +1486,11 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict[s
 
             tier, tier_reason = _classify_signal(sig, pair)
             tier, tier_reason = _apply_engine_b_scan_gate(sig, tier, tier_reason)
+            tier, tier_reason = _apply_engine_b_only_watchlist_scan_tier(
+                sig,
+                tier,
+                tier_reason,
+            )
             tier, tier_reason = _apply_engine_b_structure_ready_scan_tier(
                 sig,
                 tier,

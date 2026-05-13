@@ -2281,6 +2281,13 @@ ENGINE_B_STRUCTURE_GATE_ENABLED: true
 # When true, Engine A full-scan *trade* tier requires Engine B confirmation (enginesAligned).
 # Default false: Engine A and B are independent on scan; use Engine C for combined verdict.
 ENGINE_B_SCAN_CONFIRMATION_GATE_ENABLED: false
+# Scan-only paper/demo diagnostics: Engine B may re-check its own independent
+# naked-structure direction when the Engine A direction blocks B. config.py
+# remains default-off.
+ENGINE_B_SCAN_INDEPENDENT_DIRECTION_ENABLED: true
+# Scan-only paper/demo diagnostics: passed B-only setups surface as watchlist
+# rows instead of disappearing behind Engine A's scan tier. No execution bypass.
+ENGINE_B_SCAN_B_ONLY_WATCHLIST_ENABLED: true
 ENGINE_B_STRUCTURE_READY_WATCHLIST:
   ENABLED: true
   MIN_SCORE_RATIO: 0.85

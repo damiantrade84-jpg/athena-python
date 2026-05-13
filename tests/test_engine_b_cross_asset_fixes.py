@@ -62,6 +62,58 @@ def test_scanner_keeps_trade_when_engine_b_aligned(monkeypatch):
     assert reason == "Trade-ready"
 
 
+def test_scanner_b_only_watchlist_is_default_off(monkeypatch):
+    monkeypatch.setitem(scanner.CONFIG, "ENGINE_B_SCAN_B_ONLY_WATCHLIST_ENABLED", False)
+    sig = {"engine_b_confidence_passed": True, "direction": "LONG", "engine_b_direction": "LONG"}
+
+    tier, reason = scanner._apply_engine_b_only_watchlist_scan_tier(
+        sig,
+        "skip",
+        "Below discovery threshold",
+    )
+
+    assert tier == "skip"
+    assert reason == "Below discovery threshold"
+    assert "engine_b_execution_blocked" not in sig
+
+
+def test_scanner_b_only_watchlist_surfaces_passed_b_without_trade(monkeypatch):
+    monkeypatch.setitem(scanner.CONFIG, "ENGINE_B_SCAN_B_ONLY_WATCHLIST_ENABLED", True)
+    sig = {"engine_b_confidence_passed": True, "direction": "LONG", "engine_b_direction": "SHORT"}
+
+    tier, reason = scanner._apply_engine_b_only_watchlist_scan_tier(
+        sig,
+        "skip",
+        "Below discovery threshold",
+    )
+
+    assert tier == "watchlist"
+    assert reason == "Engine B-only watchlist: B SHORT, A LONG"
+    assert sig["engine_b_execution_blocked"] is True
+    assert sig["engine_b_execution_block_reason"] == "engine_b_only_scan_watchlist"
+    assert sig["scanDiagnostics"][-1]["code"] == "engine_b_only_watchlist"
+
+
+def test_scanner_b_only_watchlist_does_not_override_safety_blocks(monkeypatch):
+    monkeypatch.setitem(scanner.CONFIG, "ENGINE_B_SCAN_B_ONLY_WATCHLIST_ENABLED", True)
+    sig = {
+        "engine_b_confidence_passed": True,
+        "direction": "LONG",
+        "engine_b_direction": "LONG",
+        "scanDiagnostics": [{"code": "closed_exchange", "detail": "Exchange closed"}],
+    }
+
+    tier, reason = scanner._apply_engine_b_only_watchlist_scan_tier(
+        sig,
+        "skip",
+        "Exchange closed",
+    )
+
+    assert tier == "skip"
+    assert reason == "Exchange closed"
+    assert "engine_b_execution_blocked" not in sig
+
+
 def test_scanner_applies_engine_b_execution_levels_to_signal(monkeypatch):
     monkeypatch.setitem(scanner.CONFIG, "ENGINE_B_USE_EXECUTION_LEVELS_FOR_SCAN_SIGNALS", True)
     signal = {"sl": 90.0, "tp1": 110.0, "tp2": 120.0}

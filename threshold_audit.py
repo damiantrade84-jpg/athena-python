@@ -636,6 +636,8 @@ def _final_scan_result(
         return "BLOCKED_RISK"
     if c_type in {"A_ONLY", "B_ONLY", "ALIGNED"} and tier == "trade":
         return c_type
+    if c_type in {"A_ONLY", "B_ONLY", "ALIGNED"} and tier == "watchlist":
+        return f"{c_type}_WATCHLIST"
     a_score = _safe_float(signal.get("confluenceScore"), 0.0) or 0.0
     b_score = _safe_float((signal.get("_threshold_audit_b_conf") or {}).get("score"), 0.0) or 0.0
     if a_threshold > 0 and a_threshold * 0.85 <= a_score < a_threshold:

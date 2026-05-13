@@ -989,6 +989,12 @@ CONFIG: dict = {
     "ENGINE_B_BT_STRUCTURE_GATE_ENABLED": True,
     "ENGINE_B_STRUCTURE_GATE_ENABLED": True,
     "ENGINE_B_SCAN_CONFIRMATION_GATE_ENABLED": False,
+    # Scan-only: let Engine B re-check its own naked-structure direction when
+    # the Engine A direction blocks B. Default-off to preserve historical scan behavior.
+    "ENGINE_B_SCAN_INDEPENDENT_DIRECTION_ENABLED": False,
+    # Scan-only: surface passed B-only structures as watchlist rows when A is
+    # below its scan threshold. This does not grant execution permission.
+    "ENGINE_B_SCAN_B_ONLY_WATCHLIST_ENABLED": False,
     # Scan-only surfacing for Engine B structures that are blocked by the final trigger.
     # Default-off: execution and Engine B pass gates remain unchanged unless explicitly enabled.
     "ENGINE_B_STRUCTURE_READY_WATCHLIST": {

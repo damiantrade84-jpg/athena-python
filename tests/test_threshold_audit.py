@@ -187,10 +187,31 @@ def test_threshold_report_handles_empty_no_signal_scans():
 
 
 def test_near_miss_classification_works():
-    sig = _signal(score=1.4)
+    sig = _signal(score=1.9)
     sig["scoreNorm"] = 0.70
     row = build_signal_funnel_row(_pair(), sig, tier="skip")
     assert row["final_scan_result"] == "A_NEAR_MISS"
+
+
+def test_threshold_audit_labels_b_only_watchlist():
+    sig = _signal(score=0.6)
+    sig["scoreNorm"] = 0.20
+    sig["_threshold_audit_b_res"] = {"structural_verdict": "CLEAR", "direction": "SHORT"}
+    sig["_threshold_audit_b_conf"] = {
+        "score": 4.0,
+        "max_possible": 5.0,
+        "passed": True,
+        "structure_ok": True,
+        "location_ok": True,
+        "entry_ok": True,
+        "room_ok": True,
+        "rr_ok": True,
+    }
+
+    row = build_signal_funnel_row(_pair(), sig, tier="watchlist")
+
+    assert row["engine_c_consensus_type"] == "B_ONLY"
+    assert row["final_scan_result"] == "B_ONLY_WATCHLIST"
 
 
 def test_shadow_thresholds_do_not_affect_execution_decisions():

@@ -118,6 +118,7 @@ If any required safety field is missing, stale, malformed, null, false, or ambig
 - Scoring is **locked** unless the user asks to change it.
 - Do not change Engine A/B/D thresholds unless requested.
 - Do not hardcode thresholds, symbols, offsets, scoring constants, or gates in Python — use `config.yaml`/config layer.
+- Engine A and Engine B are independent signal engines. Do not make Engine A suppress Engine B, or Engine B suppress Engine A, unless an explicitly named config gate says so. Engine C is the comparison/consensus layer for A vs B agreement, conflict, A-only, and B-only outcomes.
 
 Changes should be:
 
@@ -255,6 +256,7 @@ Label any unchecked area **`not verified`**.
 - **Thresholds:** profile override → pair/group YAML → 3-tier fallback.
 - **Factors:** BTC bias (conditional on correlation), OI (crypto), intermarket confirmation.
 - **Config:** `ENGINE_A`, `ENGINE_A_RESEARCH_LAB_FACTORS`, `ENGINE_A_MEAN_REVERSION`
+- **Boundary:** Engine A should score factor confluence on its own evidence. It may expose diagnostics for Engine B context, but it should not hide valid Engine B structures or require Engine B confirmation unless a specific config-gated feature requires that behavior.
 
 **Audit concerns:** normalization, missing score group, threshold source drift, profile/override misuse, permissive fallback, BTC/OI misuse, live/BT mismatch.
 
@@ -265,12 +267,14 @@ Label any unchecked area **`not verified`**.
 - **Checklist:** swings, BOS, sweeps, FVG overlap, zone/trigger quality.
 - **Styles:** scalp H1, intraday H4, swing D1 — each `min_score` + `min_rr`.
 - **Config:** `NAKED_ENGINE.style_profiles`, `NAKED_MAX_DAILY`, `ENGINE_B_REGIME_MULTIPLIERS`
+- **Boundary:** Engine B should score naked market structure on its own BOS/CHoCH/OB/FVG/liquidity evidence. It should not be discarded solely because Engine A is below threshold or pointing elsewhere; surface B-only or B-vs-A conflict to Engine C / scan diagnostics when config allows.
 
 **Audit concerns:** AI review mistaken for approval, missing profile passes, regime math, RR mismatch, structure gate skipped by early return, live/BT mismatch, incomplete payload confirmations.
 
 ### Engine C — Consensus (A vs B)
 
 - **Outputs:** calibrated probability, trust (`trust_a` / `trust_b` / `trust_both` / `trust_neither`), weights `{"A": x, "B": y}` summing to 1.0, conviction (`UPGRADE`/`NEUTRAL`/`DOWNGRADE`), decision state (trade, tier, sizing override, disagreement diagnosis).
+- **Boundary:** Engine C owns comparison between Engine A and Engine B. A/B agreement, conflict, A-only, and B-only states should be decided here or in explicit scan-only surfacing helpers, not by silently letting one engine erase the other upstream.
 
 **Audit concerns:** default-pass trust, weights ≠ 1, trades without proof, `trust_neither` still trading, bad conviction upgrades, sizing bypass, unlogged A/B mismatch, missing diagnosis in audit path.
 
