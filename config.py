@@ -977,6 +977,8 @@ CONFIG: dict = {
     # Scan-only: surface passed B-only structures as watchlist rows when A is
     # below its scan threshold. This does not grant execution permission.
     "ENGINE_B_SCAN_B_ONLY_WATCHLIST_ENABLED": False,
+    # Full-scan diagnostics: attach per-row engine_b_scan_gate_funnel payload (report-only).
+    "ENGINE_B_SCAN_GATE_FUNNEL_ENABLED": True,
     # Scan-only surfacing for Engine B structures that are blocked by the final trigger.
     # Default-off: execution and Engine B pass gates remain unchanged unless explicitly enabled.
     "ENGINE_B_STRUCTURE_READY_WATCHLIST": {
@@ -1142,6 +1144,7 @@ _KNOWN_YAML_ONLY_KEYS = {
     "ENGINE_B_FOREX_ASIAN_SESSION_SKIP_ENABLED",
     "ENGINE_B_CHOCH_STRICT",
     "ENGINE_B_SCAN_CONFIRMATION_GATE_ENABLED",
+    "ENGINE_B_SCAN_GATE_FUNNEL_ENABLED",
     "ENGINE_B_STRUCTURAL_SL_USE_STYLE_ATR_MULTS",
     "ENGINE_B_FOLLOW_THROUGH",
     "ENGINE_B_FOREX_ADX_MIN",

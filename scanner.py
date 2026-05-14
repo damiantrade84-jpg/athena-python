@@ -485,6 +485,108 @@ def _linear_percentile(values: list[float], p: float) -> float | None:
     return xs[f] + (k - f) * (xs[c] - xs[f])
 
 
+def _scalar_float_gate(x: Any) -> float | None:
+    """JSON-safe finite float helper for funnel diagnostics."""
+    try:
+        if x is None:
+            return None
+        v = float(x)
+        if v != v:  # NaN
+            return None
+        return round(v, 8)
+    except (TypeError, ValueError):
+        return None
+
+
+def _attach_engine_b_scan_gate_funnel(
+    *,
+    sig: dict,
+    pair: dict,
+    score_group: str | None,
+    resolved_style: str | None,
+    style_profile_b: dict | None,
+    conf_b: dict | None,
+    res_b: dict | None,
+    extras: dict[str, Any],
+) -> None:
+    """Populate report-only funnel dict on sig; never changes pass/fail or execution."""
+    if not bool(CONFIG.get("ENGINE_B_SCAN_GATE_FUNNEL_ENABLED", True)):
+        return
+    sp = style_profile_b if isinstance(style_profile_b, dict) else {}
+    cnf = conf_b if isinstance(conf_b, dict) else {}
+    rb = res_b if isinstance(res_b, dict) else {}
+    ptype = str(pair.get("type") or "").lower()
+    atr_val = extras.get("atr_value")
+    skip_stage = extras.get("engine_b_skip_stage")
+    if isinstance(skip_stage, str) and not skip_stage:
+        skip_stage = None
+    funnel: dict[str, Any] = {
+        "symbol": pair.get("display") or pair.get("symbol"),
+        "asset_type": pair.get("type"),
+        "score_group": score_group,
+        "style": resolved_style,
+        "sig_a_present": True,
+        "engine_b_evaluated": bool(sig.get("engine_b_evaluated")),
+        "engine_b_skip_stage": skip_stage,
+        "engine_b_error": sig.get("engine_b_error"),
+        "candles_ok": bool(extras.get("candles_tf_ok")),
+        "atr": _scalar_float_gate(atr_val),
+        "atr_source": extras.get("atr_source"),
+        "bybit_atr_available": extras.get("bybit_atr_available"),
+        "fallback_allowed": (
+            bool(CONFIG.get("ENGINE_B_CRYPTO_LEVELS_SIGNAL_FEED_FALLBACK", False))
+            if ptype == "crypto"
+            else None
+        ),
+        "structure_verdict": rb.get("structural_verdict"),
+        "direction_a": sig.get("direction"),
+        "direction_b": sig.get("engine_b_direction"),
+        "structure_ok": cnf.get("structure_ok"),
+        "location_ok": cnf.get("location_ok"),
+        "entry_ok": cnf.get("entry_ok"),
+        "room_ok": cnf.get("room_ok"),
+        "space_gate_ok": cnf.get("space_gate_ok"),
+        "rr_ok": cnf.get("rr_ok"),
+        "score": _scalar_float_gate(cnf.get("score")),
+        "min_score_scaled": _scalar_float_gate(sig.get("engine_b_min_score_scaled")),
+        "min_rr": _scalar_float_gate(sp.get("min_rr")),
+        "entry": _scalar_float_gate(extras.get("entry_price")),
+        "sl": sig.get("sl"),
+        "tp": sig.get("tp1"),
+        "structural_sl": cnf.get("structural_sl"),
+        "structural_tp": cnf.get("structural_tp"),
+        "execution_sl": cnf.get("execution_sl"),
+        "execution_tp": cnf.get("execution_tp"),
+        "rr": _scalar_float_gate(cnf.get("rr")),
+        "rr_source": cnf.get("rr_source"),
+        "execution_level_reject_reason": cnf.get("execution_level_reject_reason"),
+        "tp_structural_limited": rb.get("tp_structural_limited"),
+        "failed_gate_names": list(cnf.get("failed_gate_names") or []),
+        "final_tier": None,
+        "final_reason": None,
+        "synthetic_fallback_rr_tp_enabled": bool(
+            CONFIG.get("ENGINE_B_ALLOW_SYNTHETIC_FALLBACK_RR_TP", False)
+        ),
+        "rr_can_satisfy_space_gate_crypto_config": False,
+        "rr_space_gate_enabled_overlay": cnf.get("rr_space_gate_enabled"),
+    }
+    # Config truth for crypto RR↔space (not re-evaluating logic).
+    _rr_gate_cfg = CONFIG.get("ENGINE_B_RR_CAN_SATISFY_SPACE_GATE", False)
+    if isinstance(_rr_gate_cfg, dict):
+        funnel["rr_can_satisfy_space_gate_crypto_config"] = bool(_rr_gate_cfg.get("crypto", False))
+    funnel["structure_executed"] = bool(extras.get("structure_executed"))
+    sig["engine_b_scan_gate_funnel"] = funnel
+
+
+def _patch_engine_b_funnel_final_tier(sig: dict, tier: str, tier_reason: str) -> None:
+    if not bool(CONFIG.get("ENGINE_B_SCAN_GATE_FUNNEL_ENABLED", True)):
+        return
+    fd = sig.get("engine_b_scan_gate_funnel")
+    if isinstance(fd, dict):
+        fd["final_tier"] = tier
+        fd["final_reason"] = tier_reason
+
+
 def compute_scan_quantile_floors(
     scores_by_type: dict[str, list[float]],
     *,
@@ -1006,6 +1108,17 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict[s
 
                 ptype = pair.get("type", "")
                 try:
+                    _eb_snap = {"conf": None, "res": None}
+                    _eb_funnel_extras: dict[str, Any] = {
+                        "candles_tf_ok": False,
+                        "atr_value": None,
+                        "atr_source": None,
+                        "bybit_atr_available": None,
+                        "engine_b_skip_stage": None,
+                        "regime_label": None,
+                        "structure_executed": False,
+                        "entry_price": None,
+                    }
                     _pair_score_group = get_pair_score_group(pair)
                     resolved_style_b, style_profile_b = r.naked_scan_style_profile(
                         _pair_style,
@@ -1151,27 +1264,53 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict[s
                     entry_candles_b = _select_engine_b_tf_candles(_entry_tf_b, _tf_map_b)
                     atr_candles_b = _select_engine_b_tf_candles(_atr_tf_b, _tf_map_b)
 
+                    _eb_funnel_extras["candles_tf_ok"] = bool(
+                        zone_candles_b and entry_candles_b and atr_candles_b
+                    )
+
                     if zone_candles_b and entry_candles_b and atr_candles_b:
                         if engine_b_forex_asian_session_blocks_bar(
                             entry_candles_b, ptype
                         ):
+                            _eb_funnel_extras["engine_b_skip_stage"] = (
+                                "forex_asian_session_block"
+                            )
+                            _attach_engine_b_scan_gate_funnel(
+                                sig=sig_a,
+                                pair=pair,
+                                score_group=_pair_score_group,
+                                resolved_style=resolved_style_b,
+                                style_profile_b=style_profile_b,
+                                conf_b=_eb_snap["conf"],
+                                res_b=_eb_snap["res"],
+                                extras=dict(_eb_funnel_extras),
+                            )
                             return pair, sig_a, None
-                        atr = _last_atr_from_candles(atr_candles_b, 14)
+                        atr_signal = float(_last_atr_from_candles(atr_candles_b, 14))
+                        atr = atr_signal
+                        _eb_funnel_extras["atr_value"] = atr
+                        _eb_funnel_extras["atr_source"] = "candle_atr_tf"
+                        _eb_funnel_extras["bybit_atr_available"] = None
                         if (
                             ptype == "crypto"
                             and str(CONFIG.get("ENGINE_B_CRYPTO_LEVELS_FEED", "bybit")).lower() == "bybit"
                             and hasattr(r, "bybit_atr_for_levels")
                         ):
                             bybit_atr = r.bybit_atr_for_levels(pair, resolved_style_b)
+                            _eb_funnel_extras["bybit_atr_available"] = bool(bybit_atr)
                             if bybit_atr:
                                 atr = float(bybit_atr)
+                                _eb_funnel_extras["atr_value"] = atr
+                                _eb_funnel_extras["atr_source"] = "bybit_levels"
                             elif not bool(CONFIG.get("ENGINE_B_CRYPTO_LEVELS_SIGNAL_FEED_FALLBACK", False)):
                                 atr = 0.0
                                 sig_a["engine_b_error"] = "bybit_atr_unavailable"
                         current_price = float(entry_candles_b[-1]["close"])
+                        _eb_funnel_extras["entry_price"] = current_price
 
                         if atr and atr > 0:
                             regime_label = r.engine_b_regime_label(zone_candles_b, ptype)
+                            _eb_funnel_extras["regime_label"] = regime_label
                             direction = sig_a.get("direction")
 
                             if direction in ("LONG", "SHORT"):
@@ -1203,6 +1342,7 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict[s
                                     style=resolved_style_b,
                                     pair=pair,
                                 )
+                                _eb_funnel_extras["structure_executed"] = True
 
                                 conf_b = None
                                 if res_b.get("structural_verdict") == "CLEAR":
@@ -1336,6 +1476,9 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict[s
                                     sig_a["combinedConviction"] = round(a_norm * _w_a_fb, 4)
                                     sig_a["enginesAligned"] = False
                                     sig_a["engine_b_verdict"] = res_b.get("structural_verdict", "UNCLEAR")
+                                _eb_snap["res"] = res_b
+                                _eb_snap["conf"] = conf_b
+
                                 if _threshold_audit_on:
                                     sig_a["_threshold_audit_b_res"] = res_b
                                     sig_a["_threshold_audit_b_conf"] = conf_b
@@ -1345,6 +1488,35 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict[s
                                         ptype,
                                     )
                                     sig_a["_threshold_audit_b_style_profile"] = style_profile_b
+
+                            else:
+                                _eb_funnel_extras.setdefault(
+                                    "engine_b_skip_stage",
+                                    "engine_a_direction_not_traded",
+                                )
+                        elif _eb_funnel_extras["candles_tf_ok"]:
+                            _eb_funnel_extras.setdefault(
+                                "engine_b_skip_stage",
+                                "crypto_bybit_atr_unavailable"
+                                if sig_a.get("engine_b_error") == "bybit_atr_unavailable"
+                                else "atr_blocked_zero_or_invalid",
+                            )
+                    else:
+                        _eb_funnel_extras.setdefault(
+                            "engine_b_skip_stage",
+                            "missing_engine_b_tf_candles",
+                        )
+
+                    _attach_engine_b_scan_gate_funnel(
+                        sig=sig_a,
+                        pair=pair,
+                        score_group=_pair_score_group,
+                        resolved_style=resolved_style_b,
+                        style_profile_b=style_profile_b,
+                        conf_b=_eb_snap["conf"],
+                        res_b=_eb_snap["res"],
+                        extras=dict(_eb_funnel_extras),
+                    )
 
                 except Exception as _b_err:
                     log.debug(f"[SCAN+B] {pair.get('display')} Engine B failed: {_b_err}")
@@ -1356,6 +1528,29 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict[s
                     sig_a["engine_b_error"] = str(_b_err)
                     if _threshold_audit_on:
                         sig_a["_threshold_audit_b_error"] = str(_b_err)
+                    try:
+                        _eb_funnel_extras.setdefault(
+                            "engine_b_skip_stage", "engine_b_overlay_exception"
+                        )
+                        _sg = locals().get("_pair_score_group")
+                        if _sg is None:
+                            _sg = get_pair_score_group(pair)
+                        _attach_engine_b_scan_gate_funnel(
+                            sig=sig_a,
+                            pair=pair,
+                            score_group=_sg,
+                            resolved_style=locals().get("resolved_style_b"),
+                            style_profile_b=locals().get("style_profile_b"),
+                            conf_b=_eb_snap["conf"],
+                            res_b=_eb_snap["res"],
+                            extras=dict(_eb_funnel_extras),
+                        )
+                    except Exception:
+                        log.debug(
+                            "[SCAN+B] %s engine_b_scan_gate_funnel attach failed",
+                            pair.get("display", "?"),
+                            exc_info=True,
+                        )
 
                 return pair, sig_a, None
 
@@ -1551,6 +1746,8 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict[s
 
             sig["watchlistReason"] = tier_reason if tier == "watchlist" else None
 
+            _patch_engine_b_funnel_final_tier(sig, tier, tier_reason)
+
             codes = {d.get("code") for d in sig.get("scanDiagnostics", [])}
 
             if "low_confluence" in codes:
@@ -1598,14 +1795,16 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict[s
                 )
 
             else:
-                skipped.append(
-                    {
-                        "pair": pair["display"],
-                        "reason": tier_reason,
-                        "tier": "skip",
-                        "diagnostics": sig.get("scanDiagnostics", []),
-                    }
-                )
+                _skip_payload: dict[str, Any] = {
+                    "pair": pair["display"],
+                    "reason": tier_reason,
+                    "tier": "skip",
+                    "diagnostics": sig.get("scanDiagnostics", []),
+                }
+                _eb_fd = sig.get("engine_b_scan_gate_funnel")
+                if isinstance(_eb_fd, dict):
+                    _skip_payload["engine_b_scan_gate_funnel"] = dict(_eb_fd)
+                skipped.append(_skip_payload)
 
                 log.info(
                     f"{pair['display']:12s} SKIP  {sig['confluenceScore']}/{sig.get('maxScore', 3)} :: {tier_reason}"
