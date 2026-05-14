@@ -201,45 +201,22 @@ function SectionCard({
 }
 
 function DetailGrid({ rows }: { rows: Array<[string, unknown]> }) {
-  const visibleRows = rows.filter(([, value]) => value != null && value !== '');
+  const visibleRows = rows.filter(([, value]) => {
+    if (value == null || value === '') return false;
+    if (Array.isArray(value)) return value.length > 0;
+    if (isPlainObject(value)) return false;
+    return true;
+  });
   if (visibleRows.length === 0) return null;
   return (
     <div className="grid grid-cols-2 gap-2 text-xs">
       {visibleRows.map(([label, value]) => (
         <div key={label} className="flex items-center justify-between gap-2 rounded border border-slate-700 bg-slate-900 px-2 py-1">
           <span className="text-[10px] text-slate-400 capitalize">{label.replace(/_/g, ' ')}</span>
-          <span className="font-mono text-right break-words text-slate-100">{formatValue(value)}</span>
+          <span className="font-mono text-right break-words text-slate-100">{formatScalar(value)}</span>
         </div>
       ))}
     </div>
-  );
-}
-
-function InfoCard({
-  title,
-  icon,
-  rows,
-  warnings,
-}: {
-  title: string;
-  icon: ReactNode;
-  rows: Array<[string, unknown]>;
-  warnings?: string[];
-}) {
-  const hasRows = rows.some(([, value]) => value != null && value !== '');
-  if (!hasRows && (!warnings || warnings.length === 0)) return null;
-  return (
-    <Card className="border-slate-700 bg-slate-900 shadow-sm">
-      <CardContent className="p-3 space-y-2">
-        <div className="flex items-center justify-between gap-2">
-          <span className="text-xs font-semibold flex items-center gap-1 text-amber-400 uppercase tracking-wide">
-            {icon} {title}
-          </span>
-        </div>
-        <DetailGrid rows={rows} />
-        <ListBlock title="Warnings" items={warnings} />
-      </CardContent>
-    </Card>
   );
 }
 
@@ -280,37 +257,68 @@ function ExpandableSection({
 function MarketIntelligenceCard({ data }: { data?: AiMarketIntelligenceSummary }) {
   if (!data) return null;
   const macroRegime = data.risk_regime || data.macro_regime?.risk_regime;
+  const calendar = asList(data.calendar_within_72h || data.macro_regime?.calendar_within_72h);
+  const warnings = asList(data.warnings);
+  const sourceStatus = data.source_status && Object.keys(data.source_status).length > 0 ? data.source_status : null;
   return (
-    <InfoCard
-      title="Market Intelligence"
-      icon={<ShieldAlert className="w-3.5 h-3.5 text-warning" />}
-      rows={[
-        ['freshness_status', data.freshness_status],
-        ['risk_regime', macroRegime],
-        ['calendar_72h', asList(data.calendar_within_72h || data.macro_regime?.calendar_within_72h).join('; ')],
-        ['source_status', Object.keys(data.source_status || {}).length ? data.source_status : null],
-      ]}
-      warnings={asList(data.warnings)}
-    />
+    <Card className="border-slate-700 bg-slate-900 shadow-sm">
+      <CardContent className="p-3 space-y-2">
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-xs font-semibold flex items-center gap-1 text-amber-400 uppercase tracking-wide">
+            <ShieldAlert className="w-3.5 h-3.5 text-warning" /> Market Intelligence
+          </span>
+        </div>
+        <DetailGrid
+          rows={[
+            ['freshness_status', data.freshness_status],
+            ['risk_regime', macroRegime],
+          ]}
+        />
+        {calendar.length > 0 && <ListBlock title="Calendar (72h)" items={calendar} />}
+        {sourceStatus && (
+          <div>
+            <p className="text-[10px] uppercase text-amber-400 font-semibold mb-1">Source status</p>
+            <KeyValueRows data={sourceStatus as Record<string, unknown>} />
+          </div>
+        )}
+        {warnings.length > 0 && <ListBlock title="Warnings" items={warnings} />}
+        <RawDetailsBlock title="Raw market intelligence" value={data} />
+      </CardContent>
+    </Card>
   );
 }
 
 function VisionSummaryCard({ data }: { data?: AiVisionSummary }) {
   if (!data) return null;
+  const obstacles = asList(data.visible_obstacles);
+  const styleRatings = data.style_ratings && Object.keys(data.style_ratings).length > 0 ? data.style_ratings : null;
   return (
-    <InfoCard
-      title="Vision Summary"
-      icon={<Eye className="w-3.5 h-3.5 text-primary" />}
-      rows={[
-        ['right_edge_status', data.right_edge_status],
-        ['tf_alignment', data.tf_alignment],
-        ['freshness_status', data.freshness_status],
-        ['execution_context', data.allowed_for_execution_context ? 'allowed advisory context' : 'not allowed'],
-        ['style_ratings', Object.keys(data.style_ratings || {}).length ? data.style_ratings : null],
-        ['visible_obstacles', asList(data.visible_obstacles).join('; ')],
-        ['memo', data.memo],
-      ]}
-    />
+    <Card className="border-slate-700 bg-slate-900 shadow-sm">
+      <CardContent className="p-3 space-y-2">
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-xs font-semibold flex items-center gap-1 text-amber-400 uppercase tracking-wide">
+            <Eye className="w-3.5 h-3.5 text-primary" /> Vision Summary
+          </span>
+        </div>
+        <DetailGrid
+          rows={[
+            ['right_edge_status', data.right_edge_status],
+            ['tf_alignment', data.tf_alignment],
+            ['freshness_status', data.freshness_status],
+            ['execution_context', data.allowed_for_execution_context ? 'allowed advisory context' : 'not allowed'],
+          ]}
+        />
+        {styleRatings && (
+          <div>
+            <p className="text-[10px] uppercase text-amber-400 font-semibold mb-1">Style ratings</p>
+            <KeyValueRows data={styleRatings as Record<string, unknown>} />
+          </div>
+        )}
+        {obstacles.length > 0 && <ListBlock title="Visible obstacles" items={obstacles} />}
+        {data.memo && <SectionCard title="Memo">{data.memo}</SectionCard>}
+        <RawDetailsBlock title="Raw vision summary" value={data} />
+      </CardContent>
+    </Card>
   );
 }
 
@@ -384,11 +392,11 @@ function DataCheckedCard({
     ['freshness', data?.freshness],
   ];
   return (
-    <ExpandableSection title="Data checked" icon={<Info className="w-3.5 h-3.5 text-primary" />} defaultOpen>
+    <ExpandableSection title="Data checked" icon={<Info className="w-3.5 h-3.5 text-primary" />}>
       <div className="space-y-2">
         <DetailGrid rows={checkRows} />
         {!data && (
-          <p className="text-[11px] text-muted-foreground">
+          <p className="text-[11px] text-slate-400">
             Backend did not return a structured data_checked block; showing facts and missing fields from the chat summary.
           </p>
         )}
@@ -406,7 +414,7 @@ function ToolCallsCard({ toolCalls }: { toolCalls?: AiToolCallSummary[] }) {
   return (
     <ExpandableSection title="Tool transparency" icon={<Wrench className="w-3.5 h-3.5 text-primary" />}>
       {calls.length === 0 ? (
-        <p className="text-[11px] text-muted-foreground">
+        <p className="text-[11px] text-slate-400">
           No structured tool_calls were returned by the backend for this turn.
         </p>
       ) : (
@@ -414,14 +422,23 @@ function ToolCallsCard({ toolCalls }: { toolCalls?: AiToolCallSummary[] }) {
           {calls.map((call, index) => {
             const name = call.name || call.tool || `tool_${index + 1}`;
             const summary = call.output_summary || call.summary || call.reason || call.error;
+            const args = (call.args || call.input) as unknown;
+            const hasArgs = args != null && (isPlainObject(args) ? Object.keys(args).length > 0 : true);
             return (
               <div key={`${name}-${index}`} className="rounded border border-slate-700 bg-slate-950 p-2 space-y-1">
                 <div className="flex items-center justify-between gap-2">
                   <span className="text-xs font-medium text-slate-100">{name}</span>
                   <Badge className={cn('text-[10px] border font-semibold', statusClass(call.status))}>{call.status || 'unknown'}</Badge>
                 </div>
-                <DetailGrid rows={[['duration_ms', call.duration_ms], ['args', call.args || call.input]]} />
-                {summary && <p className="text-[11px] text-slate-300 whitespace-pre-wrap break-words">{summary}</p>}
+                <DetailGrid rows={[['duration_ms', call.duration_ms]]} />
+                {summary && <p className="text-[11px] text-slate-200 whitespace-pre-wrap break-words">{summary}</p>}
+                {hasArgs && isPlainObject(args) && (
+                  <div>
+                    <p className="text-[10px] uppercase text-amber-400 font-semibold mb-1">Arguments</p>
+                    <KeyValueRows data={args as Record<string, unknown>} />
+                  </div>
+                )}
+                <RawDetailsBlock title="Raw tool call" value={call} />
               </div>
             );
           })}
@@ -473,6 +490,17 @@ function StrategistSummaryCard({ summary }: { summary?: AiStrategistSummary | nu
   );
 }
 
+function deriveAnswerFallback(response: AiTradeChatResponse): string {
+  const parts: string[] = [];
+  if (response.market_read) parts.push(response.market_read);
+  if (response.trade_thesis) parts.push(response.trade_thesis);
+  if (response.final_action) parts.push(`Final action: ${response.final_action}`);
+  if (parts.length === 0) {
+    return 'Backend returned no narrative text. See structured fields below.';
+  }
+  return parts.join('\n\n');
+}
+
 function AssistantResponse({
   response,
   symbol,
@@ -488,9 +516,11 @@ function AssistantResponse({
   const confirmationNeeded = asList(response.confirmation_needed);
   const missingData = asList(response.missing_data);
   const factsUsed = asList(response.facts_used);
+  const answerText = (response.answer && response.answer.trim()) || deriveAnswerFallback(response);
 
   return (
-    <div className="space-y-3">
+    <div className="space-y-3 relative isolate">
+      {/* 1. Decision badge row */}
       <div className="flex items-center gap-2 flex-wrap">
         <Badge className={cn('text-[10px] border font-semibold', decisionClass(response.decision))}>
           {response.decision || 'NO_DECISION'}
@@ -518,33 +548,58 @@ function AssistantResponse({
         )}
       </div>
 
+      {/* 2. Selected Signal summary */}
       <SelectedSignalSummary signal={response.selected_signal} symbol={response.symbol || symbol} traceId={response.trace_id || traceId} />
 
+      {/* 3. Assistant Answer / Trading Desk Read — visible by default, top priority */}
+      <div className="rounded-md border border-amber-600/40 bg-slate-900 p-3 space-y-2 shadow-sm">
+        <div className="flex items-center gap-2">
+          <MessageSquare className="w-3.5 h-3.5 text-amber-400" />
+          <p className="text-[10px] uppercase tracking-wide text-amber-400 font-semibold">Trading desk read</p>
+        </div>
+        <div className="text-xs leading-relaxed whitespace-pre-wrap break-words text-slate-100">
+          {answerText}
+        </div>
+      </div>
+
+      {/* Market read + thesis as supporting structured sections */}
       <div className="grid gap-2">
         <SectionCard title="Market read">{response.market_read}</SectionCard>
         <SectionCard title="Trade thesis">{response.trade_thesis}</SectionCard>
-        <ListBlock title="Supports" items={supports} />
-        <ListBlock title="Contradictions" items={contradictions} />
-        <ListBlock title="Confirmation needed" items={confirmationNeeded} />
-        <SectionCard title="Invalidation" tone="warning">{response.invalidation}</SectionCard>
-        <SectionCard title="Historical analogue summary">{response.historical_analogue_summary}</SectionCard>
-        <SectionCard title="Compare summary">{response.compare_summary}</SectionCard>
-        <SectionCard title="Final action" tone="long">{response.final_action}</SectionCard>
       </div>
 
+      {/* 4. Final Action */}
+      <SectionCard title="Final action" tone="long">{response.final_action}</SectionCard>
+
+      {/* 5. Supports */}
+      <ListBlock title="Supports" items={supports} />
+
+      {/* 6. Contradictions / Risk warnings */}
+      <ListBlock title="Contradictions" items={contradictions} />
+      {contradictionFlags.length > 0 && <ListBlock title="Contradiction flags" items={contradictionFlags} />}
+
+      {/* 7. Confirmation needed */}
+      <ListBlock title="Confirmation needed" items={confirmationNeeded} />
+
+      {/* 8. Invalidation */}
+      <SectionCard title="Invalidation" tone="warning">{response.invalidation}</SectionCard>
+
+      {/* 9. Historical analogue / compare */}
+      <SectionCard title="Historical analogue summary">{response.historical_analogue_summary}</SectionCard>
+      <SectionCard title="Compare summary">{response.compare_summary}</SectionCard>
+
+      {/* 10. Market Intelligence summary */}
       <MarketIntelligenceCard data={response.market_intelligence} />
+
+      {/* 11. Vision Summary */}
       <VisionSummaryCard data={response.vision_summary} />
 
-      <ExpandableSection title="Assistant narrative" icon={<MessageSquare className="w-3.5 h-3.5 text-amber-400" />} defaultOpen>
-        <div className="text-xs leading-relaxed whitespace-pre-wrap break-words rounded-md border border-slate-700 bg-slate-950 p-3 text-slate-100">
-          {response.answer || 'No assistant narrative returned.'}
-        </div>
-      </ExpandableSection>
-
+      {/* 12. Expandable Data Checked / Tool Transparency / Strategist / Raw Details (collapsed by default) */}
       <DataCheckedCard data={response.data_checked} factsUsed={factsUsed} missingData={missingData} />
       <ToolCallsCard toolCalls={response.tool_calls} />
       <StrategistSummaryCard summary={response.strategist_summary} />
-      <ListBlock title="Contradiction flags" items={contradictionFlags} />
+      <RawDetailsBlock title="Raw response details" value={response} />
+
       <SafetyCard safety={response.safety} riskWarning={response.risk_warning} />
     </div>
   );
@@ -727,7 +782,7 @@ export default function AITradingAgentPanel({
   }, [compareSymbol, send]);
 
   return (
-    <Card className={cn('border border-amber-700/40 bg-slate-950 shadow-lg text-slate-100 rounded-xl', className)}>
+    <Card className={cn('relative isolate border border-amber-700/40 bg-slate-950 shadow-lg text-slate-100 rounded-xl', className)}>
       <CardHeader className="pb-2">
         <CardTitle className="text-xs font-semibold flex items-center justify-between gap-2 uppercase tracking-wider text-amber-400">
           <span className="inline-flex items-center gap-2">

@@ -431,6 +431,51 @@ def _resolve_chat_context(request: dict[str, Any]) -> tuple[dict[str, Any] | Non
     return resolved, resolution
 
 
+def _build_selected_signal_summary(
+    resolved_signal: dict[str, Any] | None,
+    packet: dict[str, Any] | None,
+    request: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Best-effort advisory summary of the selected signal for the chat UI.
+
+    Pure surface metadata; never modifies decision state, gates, or thresholds.
+    Returns None when there is no resolvable signal context (symbol-only chat).
+    """
+    src: dict[str, Any] = {}
+    if isinstance(resolved_signal, dict):
+        src.update(resolved_signal)
+    if isinstance(packet, dict):
+        for key, value in packet.items():
+            src.setdefault(key, value)
+
+    if not src and not request.get("trace_id") and not request.get("symbol"):
+        return None
+
+    def pick(*keys: str) -> Any:
+        for key in keys:
+            if key in src and src[key] is not None:
+                return src[key]
+        return None
+
+    summary = {
+        "symbol": pick("symbol", "pair", "display") or request.get("symbol"),
+        "trace_id": pick("trace_id", "id") or request.get("trace_id"),
+        "direction": pick("direction", "side"),
+        "engine": pick("engine", "engine_source", "source_engine", "source"),
+        "state": pick("state", "candidate_status", "finalState", "gate_result"),
+        "score": pick("score", "conviction", "confidence"),
+        "threshold": pick("threshold", "score_threshold"),
+        "rr": pick("rr", "rRatio", "r_ratio"),
+        "entry": pick("entry", "entry_price"),
+        "sl": pick("sl", "stop", "stop_loss"),
+        "tp": pick("tp", "take_profit", "tp1"),
+        "style": pick("style", "timeframe_style"),
+    }
+    if not any(value is not None for value in summary.values()):
+        return None
+    return summary
+
+
 def run_trade_chat_turn(request: dict) -> dict[str, Any]:
     request = request if isinstance(request, dict) else {}
     message = str(request.get("message") or "").strip()
@@ -474,6 +519,7 @@ def run_trade_chat_turn(request: dict) -> dict[str, Any]:
             "trace_id": (packet or {}).get("trace_id") or request.get("trace_id"),
             "symbol": (packet or {}).get("symbol") or request.get("symbol"),
             "context_resolution": context_resolution,
+            "selected_signal": _build_selected_signal_summary(resolved_signal, packet, request),
             "tool_calls": [
                 _compact_tool_call(call)
                 for call in tool_calls
