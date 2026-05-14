@@ -216,7 +216,11 @@ def point_in_time_funding_rate(
 
 
 def build_oi_data_for_divergence(
-    oi_rows: list[dict], bar_ms: int, prev_bar_ms: int | None
+    oi_rows: list[dict],
+    bar_ms: int,
+    prev_bar_ms: int | None,
+    *,
+    max_age_ms: int | float | None = None,
 ) -> dict | None:
     """Build ``oi_data`` dict for :func:`_calc_oi_divergence` using OI at ``bar_ms`` vs ``prev_bar_ms``."""
     if prev_bar_ms is None or not oi_rows:
@@ -225,6 +229,13 @@ def build_oi_data_for_divergence(
     rec_prev = _row_at_or_before(oi_rows, prev_bar_ms, "ts_ms")
     if not rec_now or not rec_prev:
         return None
+    if max_age_ms is not None:
+        try:
+            max_age = float(max_age_ms)
+            if max_age > 0 and (float(bar_ms) - float(rec_now["ts_ms"])) > max_age:
+                return None
+        except (TypeError, ValueError):
+            return None
     if rec_prev["ts_ms"] >= rec_now["ts_ms"]:
         return None
     oi_now = float(rec_now["oi"])
@@ -237,6 +248,7 @@ def build_oi_data_for_divergence(
         "oiChange": round(oi_change, 2),
         "price": 0.0,
         "ts": rec_now["ts_ms"] / 1000.0,
+        "point_in_time": True,
         "error": False,
         "symbol": "",
         "detail": "",

@@ -6,6 +6,8 @@ from types import SimpleNamespace
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
+import pytest
+
 import backtest_runner
 from config import CONFIG
 from data_feeds import _fetch_bybit_klines
@@ -40,7 +42,7 @@ def test_engine_a_bt_bybit_atr_uses_backtest_bar_time(monkeypatch):
     assert captured["as_of"] == "2025-01-02T04:00:00+00:00"
 
 
-def test_engine_a_bt_binance_source_uses_signal_atr_first(monkeypatch):
+def test_engine_a_bt_binance_source_uses_live_bybit_level_feed_first(monkeypatch):
     def _bybit_atr_for_levels(pair, style, as_of=None):
         return 12.5
 
@@ -62,11 +64,11 @@ def test_engine_a_bt_binance_source_uses_signal_atr_first(monkeypatch):
     atr, source = backtest_runner._engine_a_level_atr_for_bt(
         99.0, pair, "intraday", as_of="2025-01-02T04:00:00+00:00",
     )
-    assert atr == 99.0
-    assert source == "signal"
+    assert atr == 12.5
+    assert source == "bybit"
 
 
-def test_engine_a_bt_binance_signal_missing_fails_closed(monkeypatch):
+def test_engine_a_bt_binance_signal_missing_still_uses_live_bybit_feed(monkeypatch):
     monkeypatch.setattr(
         backtest_runner,
         "_rt",
@@ -85,8 +87,8 @@ def test_engine_a_bt_binance_signal_missing_fails_closed(monkeypatch):
     atr, source = backtest_runner._engine_a_level_atr_for_bt(
         None, pair, "intraday", as_of="2025-01-02T04:00:00+00:00",
     )
-    assert atr is None
-    assert source == "signal_unavailable"
+    assert atr == 5.0
+    assert source == "bybit"
 
 
 def test_engine_a_bt_fails_closed_when_bybit_atr_missing(monkeypatch):
@@ -107,6 +109,47 @@ def test_engine_a_bt_fails_closed_when_bybit_atr_missing(monkeypatch):
 
     assert atr is None
     assert source == "bybit_unavailable"
+
+
+def test_engine_a_structure_context_uses_engine_a_level_atr_resolver(monkeypatch):
+    captured = {}
+
+    class _StructureEngine:
+        def analyze_structure(self, *_args, **_kwargs):
+            captured["atr"] = _args[5]
+            return {"structural_verdict": "CLEAR", "engine_b_independent_direction": "LONG"}
+
+    monkeypatch.setattr(
+        backtest_runner,
+        "_rt",
+        lambda: SimpleNamespace(bybit_atr_for_levels=lambda *_args, **_kwargs: 7.5),
+    )
+    monkeypatch.setitem(CONFIG, "ENGINE_A_CRYPTO_LEVELS_FEED", "bybit")
+    monkeypatch.setitem(CONFIG, "ENGINE_A_CRYPTO_LEVELS_SIGNAL_FEED_FALLBACK", False)
+
+    atr, source = backtest_runner._engine_a_level_atr_for_bt(
+        3.0,
+        {"display": "ETH/USDT", "symbol": "ETHUSDT", "type": "crypto", "source": "binance"},
+        "intraday",
+        as_of="2025-01-02T04:00:00+00:00",
+    )
+    result, detail = backtest_runner._engine_a_structure_result_for_bt(
+        engine=_StructureEngine(),
+        pair={"display": "ETH/USDT", "type": "crypto"},
+        direction="LONG",
+        d1_candles=[{"close": 1.0}],
+        h4_candles=[{"close": 1.0}],
+        h1_candles=[{"close": 1.0}],
+        current_price=10.0,
+        atr=atr,
+        regime="TRENDING",
+        style="intraday",
+    )
+
+    assert source == "bybit"
+    assert captured["atr"] == pytest.approx(7.5)
+    assert result["structural_verdict"] == "CLEAR"
+    assert detail == {"enabled": True}
 
 
 def test_engine_b_bt_bybit_atr_uses_backtest_bar_time(monkeypatch):

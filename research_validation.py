@@ -344,12 +344,16 @@ def volume_threshold_for_backtest(
     default_live: float,
     default_bt: float,
 ) -> float:
-    """Volume gate for calc_confluence: explicit live parity uses live default unless profile overrides."""
+    """Volume gate for calc_confluence.
+
+    Standard Engine A backtests use the live threshold so default BT results can
+    be compared to scan output. Research stress modes keep the relaxed BT gate.
+    """
     if pair_profile_volume is not None:
         try:
             return float(pair_profile_volume)
         except (TypeError, ValueError):
             pass
-    if validation_mode == "live_parity":
+    if validation_mode in ("standard", "live_parity"):
         return float(default_live)
     return float(default_bt)

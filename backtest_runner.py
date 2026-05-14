@@ -24,6 +24,8 @@ from athena_app.services.crypto_signal_feed import (
     fetch_crypto_signal_candles,
     resolve_crypto_signal_feed,
 )
+from athena_app.services.market_state import market_state_offset_hours, split_market_state
+from athena_app.services.structure_context import apply_structure_context_to_score
 from backtest_candle_cache import fetch_backtest_candles, fetch_backtest_eodhd_intraday
 from calibration import calibration_report
 from config import CONFIG, _json_safe
@@ -229,6 +231,114 @@ def _engine_a_structure_first_entry_check(
     )
 
 
+def _engine_a_structure_result_for_bt(
+    *,
+    engine,
+    pair: dict,
+    direction: str | None,
+    d1_candles: list,
+    h4_candles: list,
+    h1_candles: list,
+    current_price: float | None,
+    atr: float | None,
+    regime: str | None,
+    style: str,
+    d1_snap: dict | None = None,
+    h4_snap: dict | None = None,
+) -> tuple[dict | None, dict]:
+    detail = {"enabled": True}
+    if engine is None:
+        return None, {**detail, "reason": "structure_engine_unavailable"}
+    if not direction or current_price is None or not atr or atr <= 0:
+        return None, {**detail, "reason": "missing_structure_inputs"}
+    try:
+        result = engine.analyze_structure(
+            d1_candles,
+            h4_candles,
+            h1_candles,
+            float(current_price),
+            direction,
+            float(atr),
+            regime=regime or "RANGING",
+            asset_type=pair.get("type", ""),
+            enable_zone_registry=False,
+            d1_snap=d1_snap,
+            h4_snap=h4_snap,
+            style=style,
+            pair=pair,
+        )
+    except Exception as exc:
+        log.debug("[BT] %s structure context error: %s", pair.get("display"), exc)
+        return None, {**detail, "reason": "structure_engine_error", "error": str(exc)}
+    return result, detail
+
+
+def _apply_engine_a_structure_context_to_bt_result(
+    res: dict,
+    *,
+    structure_result: dict | None,
+    direction: str | None,
+    max_score: float | None,
+) -> dict:
+    if not bool(CONFIG.get("ENGINE_A_STRUCTURE_CONTEXT_ENABLED", False)):
+        return res
+    if not isinstance(structure_result, dict):
+        return res
+    adjusted = apply_structure_context_to_score(
+        structure_result,
+        direction=direction,
+        base_score=float(res.get("score", 0.0) or 0.0),
+        max_score=float(max_score or 0.0),
+    )
+    out = dict(res)
+    out["score"] = float(adjusted["adjusted_score"])
+    fd = dict(out.get("factorDiagnostics") or {})
+    fd["explicitStructureContext"] = adjusted
+    out["factorDiagnostics"] = fd
+
+    votes = dict(out.get("votes") or {})
+    components = adjusted.get("components", {})
+    if components.get("zone_proximity"):
+        votes["H4 Structural Zone"] = 1
+    if components.get("ob_at_zone"):
+        votes["Order Block at Zone"] = 1
+    if components.get("fvg_overlap"):
+        votes["FVG at Zone"] = 1
+    align = components.get("independent_direction_alignment")
+    if align == "aligned":
+        votes["Structure Alignment"] = 1
+    elif align == "opposed":
+        votes["Structure Alignment"] = -1
+    if votes:
+        out["votes"] = votes
+    return out
+
+
+def _bt_confirmed_candles(pair: dict, tf: str, candles: list, *, time_now: float | None = None) -> list:
+    state = split_market_state(
+        list(candles or []),
+        tf,
+        pair.get("display") or pair.get("symbol") or "",
+        time_now=time_now,
+        offset_hours=market_state_offset_hours(pair, tf),
+    )
+    return list(state["confirmed"])
+
+
+def _bt_price_series_before(candles: list | None, times, cutoff_ts, *, limit: int) -> list[float] | None:
+    if not candles or times is None or cutoff_ts is None or pd.isna(cutoff_ts):
+        return None
+    idx = bisect.bisect_left(times, cutoff_ts)
+    rows = candles[max(0, idx - max(1, int(limit or 1))) : idx]
+    prices = []
+    for row in rows:
+        try:
+            prices.append(float(row["close"]))
+        except (TypeError, ValueError, KeyError):
+            continue
+    return prices or None
+
+
 def _bt_indicators_from_cache(
     candles: list,
     *,
@@ -376,24 +486,12 @@ def _engine_a_level_atr_for_bt(
 ) -> tuple[float | None, str]:
     """Resolve Engine A backtest ATR for SL/TP levels.
 
-    Binance-sourced crypto backtests default to the ATR from the same OHLCV as
-    scoring (``signal``) when ``ENGINE_A_CRYPTO_BT_LEVEL_ATR_USE_SIGNAL_FEED``
-    is true, avoiding Binance-vs-Bybit basis drift. Other sources still use
-    Bybit when ``ENGINE_A_CRYPTO_LEVELS_FEED`` is ``bybit``.
+    Backtests use the same level ATR feed as live when live is configured for
+    Bybit. Signal-feed ATR is only a fallback when the live level source is not
+    Bybit or fallback is explicitly enabled.
     """
     p = pair or {}
     if str(p.get("type") or "").lower() == "crypto":
-        if (
-            str(p.get("source") or "").lower() == "binance"
-            and bool(CONFIG.get("ENGINE_A_CRYPTO_BT_LEVEL_ATR_USE_SIGNAL_FEED", True))
-        ):
-            if signal_atr is not None:
-                try:
-                    return float(signal_atr), "signal"
-                except (TypeError, ValueError):
-                    pass
-            if not bool(CONFIG.get("ENGINE_A_CRYPTO_LEVELS_SIGNAL_FEED_FALLBACK", False)):
-                return None, "signal_unavailable"
         if str(CONFIG.get("ENGINE_A_CRYPTO_LEVELS_FEED", "bybit")).lower() == "bybit":
             bybit_atr_for_levels = getattr(_rt(), "bybit_atr_for_levels", None)
             bybit_atr = None
@@ -406,6 +504,17 @@ def _engine_a_level_atr_for_bt(
                 return float(bybit_atr), "bybit"
             if not bool(CONFIG.get("ENGINE_A_CRYPTO_LEVELS_SIGNAL_FEED_FALLBACK", False)):
                 return None, "bybit_unavailable"
+        if (
+            str(p.get("source") or "").lower() == "binance"
+            and bool(CONFIG.get("ENGINE_A_CRYPTO_BT_LEVEL_ATR_USE_SIGNAL_FEED", True))
+        ):
+            if signal_atr is not None:
+                try:
+                    return float(signal_atr), "signal"
+                except (TypeError, ValueError):
+                    pass
+            if not bool(CONFIG.get("ENGINE_A_CRYPTO_LEVELS_SIGNAL_FEED_FALLBACK", False)):
+                return None, "signal_unavailable"
     return signal_atr, "signal"
 
 
@@ -546,7 +655,12 @@ def _bt_crypto_funding_oi_for_bar(
     if prev_bar_ts is not None and not pd.isna(prev_bar_ts):
         prev_ms = int(prev_bar_ts.timestamp() * 1000)
     oi_data = (
-        build_oi_data_for_divergence(oi_rows or [], bar_ms, prev_ms)
+        build_oi_data_for_divergence(
+            oi_rows or [],
+            bar_ms,
+            prev_ms,
+            max_age_ms=float(CONFIG.get("ENGINE_A_BT_OI_MAX_AGE_MS", 24 * 3600 * 1000) or 0),
+        )
         if oi_rows
         else None
     )
@@ -1266,6 +1380,10 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
                 min_bars=500,
             )
 
+        d1_raw = _bt_confirmed_candles(pair, "D1", d1_raw)
+        h4_raw = _bt_confirmed_candles(pair, "H4", h4_raw)
+        h1_raw = _bt_confirmed_candles(pair, "H1", h1_raw)
+
         if not d1_raw:
             return {"error": f"No D1 data for {pair['display']}"}
 
@@ -1328,6 +1446,33 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
         _pair_ctx.pop(_k, None)
     _pair_ctx["score_group"] = _pair_score_group
     _level_atr_class = get_pair_level_atr_class(_pair_ctx)
+    _bt_btc_h4_raw = None
+    _bt_btc_h4_times = None
+    if _ptype == "crypto" and "BTC" not in str(pair.get("display") or pair.get("symbol") or ""):
+        try:
+            _bt_btc_h4_raw = _crypto_bt_signal_candles(
+                {
+                    "symbol": "BTCUSDT",
+                    "display": "BTC/USDT",
+                    "source": "binance",
+                    "type": "crypto",
+                },
+                engine="A",
+                tf="H4",
+                limit=max(len(h4_raw), 500),
+                min_bars=50,
+            )
+            _bt_btc_h4_raw = _bt_confirmed_candles(
+                {"display": "BTC/USDT", "symbol": "BTCUSDT", "source": "binance", "type": "crypto"},
+                "H4",
+                _bt_btc_h4_raw,
+            )
+            if _bt_btc_h4_raw:
+                _bt_btc_h4_times = pd.to_datetime(
+                    [c["time"] for c in _bt_btc_h4_raw], utc=True, errors="coerce"
+                )
+        except Exception as _btc_hist_err:
+            log.debug("[BT-CORR] %s BTC benchmark history unavailable: %s", pair.get("display"), _btc_hist_err)
 
     # Engine A backtest gate: pair profile -> pair/group config -> 3-tier fallback.
     # Stage 4.2: Backtest and live use identical thresholds.
@@ -1389,7 +1534,8 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
     same_bar_both_hit = 0
     _structure_first_cfg = _engine_a_structure_first_cfg()
     _structure_first_engine = None
-    if _structure_first_cfg.get("enabled"):
+    _structure_context_enabled = bool(CONFIG.get("ENGINE_A_STRUCTURE_CONTEXT_ENABLED", False))
+    if _structure_first_cfg.get("enabled") or _structure_context_enabled:
         try:
             from market_structure import NakedEngine
 
@@ -1640,6 +1786,12 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
                         _bt_dxy_h4_raw,
                         _bt_dxy_h4_times,
                     )
+                    _bt_asset_prices = _bt_price_series_before(
+                        h4_raw, h4_times, intraday_cutoff, limit=220
+                    )
+                    _bt_benchmark_prices = _bt_price_series_before(
+                        _bt_btc_h4_raw, _bt_btc_h4_times, intraday_cutoff, limit=220
+                    )
                     res = calc_confluence(
                         d1i,
                         h4i,
@@ -1658,6 +1810,8 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
                         oi_context=_bt_oi_ctx,
                         macro_context=_bt_macro_ctx,
                         intermarket_context=_bt_intermarket_ctx,
+                        asset_prices=_bt_asset_prices,
+                        benchmark_prices=_bt_benchmark_prices,
                     )
 
             except Exception as _bt_bar_err:
@@ -1667,6 +1821,46 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
                 )
                 i += 1
                 continue
+
+            if _structure_context_enabled:
+                try:
+                    _structure_price = float(d1_window[-1]["close"])
+                except (TypeError, ValueError, KeyError, IndexError):
+                    _structure_price = None
+                _structure_atr_raw = _rt().atr_for_levels(
+                    d1i, h4i, h1i, pair=pair, style=effective_style
+                )
+                _structure_atr, _structure_atr_feed = _engine_a_level_atr_for_bt(
+                    _structure_atr_raw,
+                    pair,
+                    effective_style,
+                    as_of=d1_window[-1].get("time") if d1_window else None,
+                )
+                _structure_result, _structure_detail = _engine_a_structure_result_for_bt(
+                    engine=_structure_first_engine,
+                    pair=_pair_ctx,
+                    direction=res.get("direction"),
+                    d1_candles=d1_window,
+                    h4_candles=h4_window,
+                    h1_candles=h1_window,
+                    current_price=_structure_price,
+                    atr=_structure_atr,
+                    regime=res.get("regimeName") or ((res.get("regime") or {}).get("label")),
+                    style=effective_style,
+                    d1_snap=d1i.get("snap") if isinstance(d1i, dict) else None,
+                    h4_snap=h4i.get("snap") if isinstance(h4i, dict) else None,
+                )
+                res = _apply_engine_a_structure_context_to_bt_result(
+                    res,
+                    structure_result=_structure_result,
+                    direction=res.get("direction"),
+                    max_score=res.get("maxScoreOverride") or 3.0,
+                )
+                _structure_detail["atr_feed"] = _structure_atr_feed
+                if _structure_detail.get("reason"):
+                    fd = dict(res.get("factorDiagnostics") or {})
+                    fd["explicitStructureContextStatus"] = _structure_detail
+                    res["factorDiagnostics"] = fd
 
             funnel["total_setups"] += 1
 
@@ -2155,6 +2349,12 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
                         _bt_dxy_h4_raw,
                         _bt_dxy_h4_times,
                     )
+                    _bt_asset_prices = _bt_price_series_before(
+                        h4_raw, h4_times, entry_ts, limit=220
+                    )
+                    _bt_benchmark_prices = _bt_price_series_before(
+                        _bt_btc_h4_raw, _bt_btc_h4_times, entry_ts, limit=220
+                    )
                     res = calc_confluence(
                         d1i_ctx,
                         h4i,
@@ -2173,6 +2373,8 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
                         oi_context=_bt_oi_ctx,
                         macro_context=_bt_macro_ctx,
                         intermarket_context=_bt_intermarket_ctx,
+                        asset_prices=_bt_asset_prices,
+                        benchmark_prices=_bt_benchmark_prices,
                     )
 
             except Exception as _bt_bar_err:
@@ -2182,6 +2384,46 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
                 )
                 i += 1
                 continue
+
+            if _structure_context_enabled:
+                try:
+                    _structure_price = float(h4_window[-1]["close"])
+                except (TypeError, ValueError, KeyError, IndexError):
+                    _structure_price = None
+                _structure_atr_raw = _rt().atr_for_levels(
+                    d1i_ctx, h4i, h1i, pair=pair, style=effective_style
+                )
+                _structure_atr, _structure_atr_feed = _engine_a_level_atr_for_bt(
+                    _structure_atr_raw,
+                    pair,
+                    effective_style,
+                    as_of=h4_window[-1].get("time") if h4_window else None,
+                )
+                _structure_result, _structure_detail = _engine_a_structure_result_for_bt(
+                    engine=_structure_first_engine,
+                    pair=_pair_ctx,
+                    direction=res.get("direction"),
+                    d1_candles=d1_ctx,
+                    h4_candles=h4_window,
+                    h1_candles=h1_window,
+                    current_price=_structure_price,
+                    atr=_structure_atr,
+                    regime=res.get("regimeName") or ((res.get("regime") or {}).get("label")),
+                    style=effective_style,
+                    d1_snap=d1i_ctx.get("snap") if isinstance(d1i_ctx, dict) else None,
+                    h4_snap=h4i.get("snap") if isinstance(h4i, dict) else None,
+                )
+                res = _apply_engine_a_structure_context_to_bt_result(
+                    res,
+                    structure_result=_structure_result,
+                    direction=res.get("direction"),
+                    max_score=res.get("maxScoreOverride") or 3.0,
+                )
+                _structure_detail["atr_feed"] = _structure_atr_feed
+                if _structure_detail.get("reason"):
+                    fd = dict(res.get("factorDiagnostics") or {})
+                    fd["explicitStructureContextStatus"] = _structure_detail
+                    res["factorDiagnostics"] = fd
 
             funnel["total_setups"] += 1
 
@@ -2650,6 +2892,12 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
                         _bt_dxy_h4_raw,
                         _bt_dxy_h4_times,
                     )
+                    _bt_asset_prices = _bt_price_series_before(
+                        h4_raw, h4_ts_sc, entry_ts, limit=220
+                    )
+                    _bt_benchmark_prices = _bt_price_series_before(
+                        _bt_btc_h4_raw, _bt_btc_h4_times, entry_ts, limit=220
+                    )
                     res = calc_confluence(
                         d1i_ctx,
                         h4i_ctx,
@@ -2668,6 +2916,8 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
                         oi_context=_bt_oi_ctx,
                         macro_context=_bt_macro_ctx,
                         intermarket_context=_bt_intermarket_ctx,
+                        asset_prices=_bt_asset_prices,
+                        benchmark_prices=_bt_benchmark_prices,
                     )
 
             except Exception as _bt_bar_err:
@@ -2677,6 +2927,46 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
                 )
                 i += 1
                 continue
+
+            if _structure_context_enabled:
+                try:
+                    _structure_price = float(h1_window[-1]["close"])
+                except (TypeError, ValueError, KeyError, IndexError):
+                    _structure_price = None
+                _structure_atr_raw = _rt().atr_for_levels(
+                    d1i_ctx, h4i_ctx, h1i, pair=pair, style=effective_style
+                )
+                _structure_atr, _structure_atr_feed = _engine_a_level_atr_for_bt(
+                    _structure_atr_raw,
+                    pair,
+                    effective_style,
+                    as_of=h1_window[-1].get("time") if h1_window else None,
+                )
+                _structure_result, _structure_detail = _engine_a_structure_result_for_bt(
+                    engine=_structure_first_engine,
+                    pair=_pair_ctx,
+                    direction=res.get("direction"),
+                    d1_candles=d1_ctx,
+                    h4_candles=h4_ctx,
+                    h1_candles=h1_window,
+                    current_price=_structure_price,
+                    atr=_structure_atr,
+                    regime=res.get("regimeName") or ((res.get("regime") or {}).get("label")),
+                    style=effective_style,
+                    d1_snap=d1i_ctx.get("snap") if isinstance(d1i_ctx, dict) else None,
+                    h4_snap=h4i_ctx.get("snap") if isinstance(h4i_ctx, dict) else None,
+                )
+                res = _apply_engine_a_structure_context_to_bt_result(
+                    res,
+                    structure_result=_structure_result,
+                    direction=res.get("direction"),
+                    max_score=res.get("maxScoreOverride") or 3.0,
+                )
+                _structure_detail["atr_feed"] = _structure_atr_feed
+                if _structure_detail.get("reason"):
+                    fd = dict(res.get("factorDiagnostics") or {})
+                    fd["explicitStructureContextStatus"] = _structure_detail
+                    res["factorDiagnostics"] = fd
 
             funnel["total_setups"] += 1
 
@@ -4890,7 +5180,7 @@ def backtest_pair_consensus(
 
         current_price = float(candles_h4[i]["close"])
 
-        atr, atr_list_50, _atr_idx = _engine_b_indexed_atr(
+        signal_atr, atr_list_50, _atr_idx = _engine_b_indexed_atr(
             atr_map,
             _atr_tf,
             d1_idx=d1_idx,
@@ -4899,7 +5189,7 @@ def backtest_pair_consensus(
             current_price=current_price,
         )
         atr, _eb_bt_atr_feed_c = _engine_b_level_atr_for_bt(
-            atr, pair, resolved_style, as_of=entry_time
+            signal_atr, pair, resolved_style, as_of=entry_time
         )
         if atr is None or float(atr) <= 0:
             i += 1
@@ -4949,7 +5239,16 @@ def backtest_pair_consensus(
                 funding_rate=_bt_funding_rate, oi_data=_bt_oi_data, oi_context=_bt_oi_ctx,
                 bar_time=candles_h4[i].get("time") if candles_h4 else None,
             )
-            _lvl_a = calc_levels(current_price, atr, res_a["direction"], _level_atr_class,
+            _ea_signal_atr = _rt().atr_for_levels(
+                d1i, h4i, h1i, pair=pair, style=resolved_style
+            )
+            engine_a_atr, _ea_bt_atr_feed_c = _engine_a_level_atr_for_bt(
+                _ea_signal_atr, pair, resolved_style, as_of=entry_time
+            )
+            if engine_a_atr is None or float(engine_a_atr) <= 0:
+                i += 1
+                continue
+            _lvl_a = calc_levels(current_price, engine_a_atr, res_a["direction"], _level_atr_class,
                                  regime_state=res_a.get("regime", {}).get("state"),
                                  style=resolved_style)
             signal_a = {

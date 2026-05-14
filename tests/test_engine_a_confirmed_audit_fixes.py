@@ -1,7 +1,9 @@
 import logging
 import math
 import sys
+import time
 import types
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -124,6 +126,125 @@ def test_structure_first_entry_requires_recent_bos():
     assert stale_detail["reason"] == "structure_not_recent"
     assert recent is True
     assert recent_detail["bos_recent"] is True
+
+
+def test_calc_confluence_passes_structure_result_into_factor_scoring(monkeypatch):
+    import scoring
+
+    captured = {}
+
+    def fake_compute_factor_scores(*args, **kwargs):
+        captured["structure_result"] = kwargs.get("structure_result")
+        return {
+            "final_score": 1.0,
+            "direction": "LONG",
+            "factor_scores": {"trend": 1.0, "momentum": 0.5},
+            "weights": {"momentum": 0.4, "addon": 0.2, "base": 0.4},
+            "regime": "TRENDING",
+            "directional_score": 1.0,
+            "nondirectional_score": 0.5,
+            "feed_status": {},
+            "correlation_adjustments": {},
+            "disabled_factors": [],
+            "directional_confidence_multiplier": 1.0,
+            "factorDiagnostics": {},
+        }
+
+    def fake_confidence(**_kwargs):
+        return {"confidence": 0.8}
+
+    monkeypatch.setattr("factor_scoring.compute_factor_scores", fake_compute_factor_scores)
+    monkeypatch.setattr("confidence_engine.compute_confidence", fake_confidence)
+    monkeypatch.setitem(CONFIG, "RANGING", {"crypto": {"dead": 18}, "commodity": {"dead": 18}})
+
+    structure_result = {"structural_verdict": "CLEAR"}
+    out = scoring.calc_confluence(
+        {"snap": {"adx": 30}},
+        {"snap": {"adx": 30}},
+        {"snap": {"adx": 30}},
+        1.0,
+        {},
+        {"display": "ETH/USDT", "symbol": "ETHUSDT", "type": "crypto"},
+        "neutral",
+        structure_result=structure_result,
+    )
+
+    assert out["score"] == pytest.approx(1.0)
+    assert captured["structure_result"] is structure_result
+
+
+def test_build_oi_context_rejects_error_and_stale_payloads(monkeypatch):
+    from factor_scoring import build_oi_context_for_factor_scoring
+
+    monkeypatch.setitem(CONFIG, "ENGINE_A_OI_MAX_AGE_SEC", 300)
+    d1 = [{"close": 100.0}, {"close": 110.0}]
+    h1_snap = {"close": 112.0}
+
+    assert build_oi_context_for_factor_scoring(
+        {"error": True, "oiChange": 4.2, "ts": time.time()},
+        d1,
+        h1_snap,
+    ) is None
+    assert build_oi_context_for_factor_scoring(
+        {"error": False, "oiChange": 4.2, "ts": time.time() - 301},
+        d1,
+        h1_snap,
+    ) is None
+    assert build_oi_context_for_factor_scoring(
+        {"error": False, "oiChange": 4.2, "ts": 1_700_000_000, "point_in_time": True},
+        d1,
+        h1_snap,
+    )["oi_change_pct"] == pytest.approx(4.2)
+    assert build_oi_context_for_factor_scoring(
+        {"error": False, "oiChange": 4.2, "ts": time.time()},
+        d1,
+        h1_snap,
+    )["oi_change_pct"] == pytest.approx(4.2)
+
+
+def test_backtest_confirmed_candles_strips_current_open_bucket():
+    import backtest_runner
+
+    now = datetime(2026, 5, 14, 12, 30, tzinfo=timezone.utc).timestamp()
+    candles = [
+        {"time": "2026-05-14T08:00:00+00:00", "close": 100.0},
+        {"time": "2026-05-14T12:00:00+00:00", "close": 999.0},
+    ]
+
+    out = backtest_runner._bt_confirmed_candles(
+        {"display": "BTC/USDT", "symbol": "BTCUSDT", "source": "binance", "type": "crypto"},
+        "H4",
+        candles,
+        time_now=now,
+    )
+
+    assert out == [candles[0]]
+
+
+def test_backtest_structure_context_helper_matches_live_adjustment(monkeypatch):
+    import backtest_runner
+
+    monkeypatch.setitem(CONFIG, "ENGINE_A_STRUCTURE_CONTEXT_ENABLED", True)
+    monkeypatch.setitem(CONFIG, "ENGINE_B_STRUCTURE_SCORE_INFLUENCE_ENABLED", True)
+    monkeypatch.setitem(CONFIG, "ENGINE_A_STRUCTURE_CONTEXT_BONUS_CAP", 0.20)
+    monkeypatch.setitem(CONFIG, "ENGINE_A_STRUCTURE_CONTEXT_MAX_MULT", 1.20)
+
+    res = {"score": 1.5, "maxScoreOverride": 3.0, "votes": {}, "factorDiagnostics": {}}
+    structure = {
+        "structural_verdict": "CLEAR",
+        "engine_b_independent_direction": "LONG",
+        "zone_touched": True,
+    }
+
+    out = backtest_runner._apply_engine_a_structure_context_to_bt_result(
+        res,
+        structure_result=structure,
+        direction="LONG",
+        max_score=3.0,
+    )
+
+    assert out["score"] > res["score"]
+    assert "explicitStructureContext" in out["factorDiagnostics"]
 
 
 def test_bollinger_bands_use_population_standard_deviation():

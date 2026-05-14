@@ -4,6 +4,7 @@ CONFIG is built from hard-coded defaults then overlaid with config.yaml values.
 Import CONFIG from here; never import from athena.py directly.
 """
 
+import math
 import os
 import logging
 
@@ -334,7 +335,9 @@ CONFIG: dict = {
     "ENGINE_A_CRYPTO_LEVELS_SIGNAL_FEED_FALLBACK": False,
     "ENGINE_A_CRYPTO_DERIVATIVES_FEED": "bybit",
     "ENGINE_A_CRYPTO_DERIVATIVES_BINANCE_FALLBACK": True,
-    "ENGINE_A_CRYPTO_BT_LEVEL_ATR_USE_SIGNAL_FEED": True,
+    "ENGINE_A_OI_MAX_AGE_SEC": 300,
+    "ENGINE_A_BT_OI_MAX_AGE_MS": 86400000,
+    "ENGINE_A_CRYPTO_BT_LEVEL_ATR_USE_SIGNAL_FEED": False,
     "ENGINE_AB_CRYPTO_SIGNAL_FEED": "binance",
     "ENGINE_AB_CRYPTO_SIGNAL_FEED_FALLBACK": False,
     "ENGINE_A_MULTI_EXCHANGE_FUNDING": {
@@ -1568,6 +1571,44 @@ def _fatal_config_validation(cfg: dict) -> None:
                 )
 
     # 4. BT_MIN prohibited — Stage 4.2
+    _factor_weights = cfg.get("ENGINE_A_FACTOR_WEIGHTS_BY_CLASS", {}) or {}
+    for class_key, weights in _factor_weights.items():
+        if not isinstance(weights, dict):
+            errors.append(f"Engine A factor weights for {class_key} must be a dict")
+            continue
+        total = 0.0
+        missing = []
+        for key in ("momentum", "addon", "base"):
+            if key not in weights:
+                missing.append(key)
+                continue
+            try:
+                value = float(weights[key])
+            except (TypeError, ValueError):
+                errors.append(f"Engine A factor weight {class_key}.{key} must be numeric")
+                continue
+            if not math.isfinite(value) or value < 0:
+                errors.append(f"Engine A factor weight {class_key}.{key} must be finite and non-negative")
+            total += value
+        if missing:
+            errors.append(
+                f"Engine A factor weights for {class_key} missing keys: {', '.join(missing)}"
+            )
+        elif abs(total - 1.0) > 1e-6:
+            errors.append(
+                f"Engine A factor weights for {class_key} sum to {total:.4f}, expected 1.0"
+            )
+
+    _pair_profiles = cfg.get("PAIR_PROFILES", {}) or {}
+    for profile_name, profile in _pair_profiles.items():
+        if not isinstance(profile, dict):
+            continue
+        for inactive_key in ("weight_overrides", "bt_min"):
+            if inactive_key in profile:
+                errors.append(
+                    f"PAIR_PROFILES[{profile_name!r}].{inactive_key} is inactive in Engine A v2"
+                )
+
     if "BACKTEST_USE_BT_MIN_THRESHOLDS" in cfg:
         errors.append("BACKTEST_USE_BT_MIN_THRESHOLDS must be deleted — dual thresholds prohibited")
     if "BT_MIN_GROUP" in cfg:

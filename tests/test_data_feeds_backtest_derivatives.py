@@ -44,6 +44,7 @@ def test_oi_data_for_divergence_uses_latest_at_or_before():
     assert d is not None
     assert d["oiChange"] == pytest.approx(10.0)
     assert d["oi"] == pytest.approx(110.0)
+    assert d["point_in_time"] is True
 
 
 def test_oi_data_none_when_no_record_before_bar():
@@ -54,6 +55,20 @@ def test_oi_data_none_when_no_record_before_bar():
 def test_oi_data_none_when_prev_same_snapshot():
     oi_rows = [{"ts_ms": 1000, "oi": 100.0}]
     assert data_feeds.build_oi_data_for_divergence(oi_rows, bar_ms=1500, prev_bar_ms=500) is None
+
+
+def test_oi_data_none_when_latest_snapshot_is_stale():
+    oi_rows = [
+        {"ts_ms": 1000, "oi": 100.0},
+        {"ts_ms": 2000, "oi": 110.0},
+    ]
+
+    assert data_feeds.build_oi_data_for_divergence(
+        oi_rows,
+        bar_ms=10_000,
+        prev_bar_ms=1500,
+        max_age_ms=1000,
+    ) is None
 
 
 def test_bybit_funding_history_cache_reuse():

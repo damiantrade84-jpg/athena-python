@@ -119,7 +119,9 @@ ENGINE_A_CRYPTO_LEVELS_FEED: bybit
 ENGINE_A_CRYPTO_LEVELS_SIGNAL_FEED_FALLBACK: false
 ENGINE_A_CRYPTO_DERIVATIVES_FEED: bybit
 ENGINE_A_CRYPTO_DERIVATIVES_BINANCE_FALLBACK: true
-ENGINE_A_CRYPTO_BT_LEVEL_ATR_USE_SIGNAL_FEED: true
+ENGINE_A_OI_MAX_AGE_SEC: 300
+ENGINE_A_BT_OI_MAX_AGE_MS: 86400000
+ENGINE_A_CRYPTO_BT_LEVEL_ATR_USE_SIGNAL_FEED: false
 ENGINE_AB_CRYPTO_SIGNAL_FEED: binance
 ENGINE_AB_CRYPTO_SIGNAL_FEED_FALLBACK: false
 ENGINE_B_CRYPTO_LEVELS_FEED: bybit
@@ -303,7 +305,7 @@ ENGINE_A_EQUITY_SESSION_LIQUIDITY_WEIGHTING:
 ENGINE_A_STRUCTURE_CONTEXT_ENABLED: true
 ENGINE_A:
   structure_first_entry:
-    enabled: true
+    enabled: false
     lookback_bars: 5
     require_bos: true
     require_choch: false
@@ -1638,35 +1640,17 @@ PAIR_PROFILES:
 
     disable_filters: [obv, session]
 
-    weight_overrides:
-
-      h4_fib: 1.5
-
-      h1_bb: 0.5
-
     min_confluence: 1.05
-
-    bt_min: 1.80   # p75 diagnostic - was 0.65 (bypassed class BT_MIN)
 
   XAG/USD:
 
     disable_filters: [obv, session]
 
-    weight_overrides:
-
-      h4_fib: 1.5
-
     min_confluence: 1.05
-
-    bt_min: 1.80   # p75 diagnostic - was 0.65
 
   LINK/USDT:
 
     disable_filters: [mean_revert]
-
-    weight_overrides:
-
-      funding: 1.25
 
   SUI/USDT:
 

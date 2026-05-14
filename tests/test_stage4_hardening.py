@@ -59,6 +59,28 @@ class TestFatalConfigValidation:
                     f"Trend weights for {asset_class} sum to {total}, expected 1.0"
                 )
 
+    def test_rejects_missummed_engine_a_factor_weights(self):
+        bad = {
+            **CONFIG,
+            "ENGINE_A_FACTOR_WEIGHTS_BY_CLASS": {
+                **CONFIG.get("ENGINE_A_FACTOR_WEIGHTS_BY_CLASS", {}),
+                "crypto": {"momentum": 0.9, "addon": 0.2, "base": 0.2},
+            },
+        }
+        with pytest.raises(ConfigValidationError):
+            _fatal_config_validation(bad)
+
+    def test_rejects_inactive_pair_profile_knobs(self):
+        bad = {
+            **CONFIG,
+            "PAIR_PROFILES": {
+                **CONFIG.get("PAIR_PROFILES", {}),
+                "TEST/PAIR": {"weight_overrides": {"h4_fib": 2.0}, "bt_min": 1.0},
+            },
+        }
+        with pytest.raises(ConfigValidationError):
+            _fatal_config_validation(bad)
+
 
 # ── 4.2: BT_MIN deletion ─────────────────────────────────────────────────────
 

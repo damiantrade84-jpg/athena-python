@@ -1,3 +1,5 @@
+import time
+
 import pytest
 
 import factor_scoring
@@ -116,7 +118,7 @@ def test_public_helpers_match_current_contract():
     assert set(ctx) == {"history", "committed", "lock"}
 
     oi_context = build_oi_context_for_factor_scoring(
-        {"oiChange": 6.0},
+        {"oiChange": 6.0, "ts": time.time()},
         [{"close": 100.0}, {"close": 105.0}],
         {"close": 110.0},
     )

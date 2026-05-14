@@ -20,6 +20,7 @@ Design principles:
 import math
 import logging
 import threading
+import time
 import warnings
 from datetime import datetime, timezone
 from typing import Dict, List, Optional
@@ -238,6 +239,18 @@ def build_oi_context_for_factor_scoring(
     """Build oi_context for crypto derivatives addon (parity with old engine)."""
     if not oi_data or oi_data.get("oiChange") is None:
         return None
+    if bool(oi_data.get("error")):
+        return None
+    ts = oi_data.get("ts")
+    if ts is None and not bool(oi_data.get("point_in_time")):
+        return None
+    if ts is not None and not bool(oi_data.get("point_in_time")):
+        try:
+            max_age = float(CONFIG.get("ENGINE_A_OI_MAX_AGE_SEC", 300) or 300)
+            if max_age > 0 and time.time() - float(ts) > max_age:
+                return None
+        except (TypeError, ValueError):
+            return None
     d1c = d1_candles or []
     if len(d1c) < 2:
         return None

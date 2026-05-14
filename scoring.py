@@ -647,6 +647,7 @@ def calc_confluence(
     oi_context: dict | None = None,
     macro_context: dict | None = None,
     intermarket_context: dict | None = None,
+    structure_result: dict | None = None,
     asset_prices: list | None = None,
     benchmark_prices: list | None = None,
 ) -> dict:
@@ -678,6 +679,7 @@ def calc_confluence(
         oi_context=_oi_ctx_eff,
         macro_context=macro_context,
         intermarket_context=intermarket_context,
+        structure_result=structure_result,
         volume_threshold=volume_threshold,
     )
 
