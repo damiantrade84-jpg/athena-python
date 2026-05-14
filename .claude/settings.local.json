@@ -1,10 +1,28 @@
 {
+  "permissions": {
+    "allow": [
+      "PowerShell(head *)",
+      "PowerShell(Get-ChildItem \"C:\\\\dev\\\\athena-python\" -File | Where-Object {$_.Name -match \"\\\\.py$|\\\\.json$|\\\\.yaml$|\\\\.toml$\"} | Select-Object -First 30 Name)",
+      "Bash(python -m pytest *)",
+      "Bash(git log *)",
+      "Bash(git diff *)",
+      "Bash(git status)",
+      "Bash(git status *)",
+      "PowerShell(python -m pytest *)",
+      "PowerShell(git log *)",
+      "PowerShell(git diff *)",
+      "PowerShell(git status)",
+      "PowerShell(git status *)"
+    ]
+  },
   "enabledMcpjsonServers": [
     "context7",
     "athena-audit",
     "athena-microstructure",
     "athena-candle-cache",
     "athena-carry",
-    "athena-cot"
+    "athena-cot",
+    "github",
+    "playwright"
   ]
 }
