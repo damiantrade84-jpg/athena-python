@@ -620,6 +620,7 @@ def mt5_get_account() -> dict:
         "detail": "",
         "login": info.login,
         "server": info.server,
+        "risk_domain": f"forex:mt5:{info.server}:{info.login}",
         "balance": info.balance,
         "equity": info.equity,
         "margin": info.margin,
@@ -911,6 +912,125 @@ def mt5_move_sl_to_breakeven(ticket: int, entry_price: float) -> dict:
     log.warning(
         f"[MT5] Breakeven SL failed ticket={ticket}: {err} "
         f"(requested={entry_price:.5f} current_sl={current_sl:.5f} current_price={current_price:.5f})"
+    )
+    return {"success": False, "error": err}
+
+
+def mt5_modify_protective_stops(
+    ticket: int,
+    sl: float | None = None,
+    tp: float | None = None,
+    clear_tp: bool = False,
+) -> dict:
+    """Modify SL and/or TP on an open MT5 position via TRADE_ACTION_SLTP.
+
+    Args:
+        ticket: position ticket.
+        sl: new stop-loss price. None leaves the broker SL unchanged
+            (validated like mt5_move_sl_to_breakeven — only moves in the
+            trade's favour). Pass 0.0 to clear the SL (rare).
+        tp: new take-profit price. None leaves the broker TP unchanged.
+        clear_tp: when True, forces TP to 0.0 (removes the fixed broker TP).
+            Mutually exclusive with passing a positive tp value; clear_tp
+            wins if both are set.
+
+    Returns dict with success/error keys. Skipped (no-op) operations come
+    back as success=True, skipped=True so callers can treat them as benign.
+    """
+    mt5 = _get_mt5()
+
+    if not mt5 or not mt5_connect():
+        return {"success": False, "error": "MT5 not connected"}
+
+    positions = mt5.positions_get(ticket=ticket)
+    if not positions:
+        return {"success": False, "error": f"Position {ticket} not found"}
+
+    pos = positions[0]
+    sym_info = mt5.symbol_info(pos.symbol)
+    if not sym_info:
+        return {"success": False, "error": f"Cannot get symbol info for {pos.symbol}"}
+
+    point = sym_info.point or 0.00001
+    stops_level = sym_info.trade_stops_level if hasattr(sym_info, 'trade_stops_level') else 0
+    current_price = pos.price_current if hasattr(pos, 'price_current') else 0
+    direction_long = pos.type == 0
+    current_sl = pos.sl
+    current_tp = pos.tp
+
+    target_sl = float(current_sl)
+    if sl is not None:
+        # Apply the same "only-improves" guard as mt5_move_sl_to_breakeven so
+        # we never widen the broker stop. A zero current_sl means no stop set
+        # yet — accept any positive sl in that case.
+        tolerance = point * 10
+        if float(sl) <= 0:
+            target_sl = 0.0
+        elif current_sl <= 0:
+            target_sl = float(sl)
+        elif direction_long and float(sl) > current_sl + tolerance:
+            target_sl = float(sl)
+        elif (not direction_long) and float(sl) < current_sl - tolerance:
+            target_sl = float(sl)
+        else:
+            # Requested SL is not protective — keep current.
+            target_sl = float(current_sl)
+
+        # Validate distance from price when actually changing the stop.
+        if target_sl != current_sl and target_sl > 0 and stops_level > 0 and current_price > 0:
+            min_sl_distance = stops_level * point
+            if direction_long:
+                min_allowed_sl = current_price - min_sl_distance
+                if target_sl > min_allowed_sl:
+                    log.warning(
+                        f"[MT5] modify_stops SL too close: ticket={ticket} "
+                        f"req={target_sl:.5f} min_allowed={min_allowed_sl:.5f}"
+                    )
+                    return {"success": False, "error": f"SL too close to price (min: {min_allowed_sl:.5f})"}
+            else:
+                min_allowed_sl = current_price + min_sl_distance
+                if target_sl < min_allowed_sl:
+                    log.warning(
+                        f"[MT5] modify_stops SL too close: ticket={ticket} "
+                        f"req={target_sl:.5f} min_allowed={min_allowed_sl:.5f}"
+                    )
+                    return {"success": False, "error": f"SL too close to price (min: {min_allowed_sl:.5f})"}
+
+    if clear_tp:
+        target_tp = 0.0
+    elif tp is not None:
+        target_tp = float(tp)
+    else:
+        target_tp = float(current_tp)
+
+    sl_changed = abs(target_sl - float(current_sl)) > (point * 0.5)
+    tp_changed = abs(target_tp - float(current_tp)) > (point * 0.5)
+    if not sl_changed and not tp_changed:
+        return {"success": True, "skipped": True, "reason": "no change"}
+
+    request = {
+        "action": mt5.TRADE_ACTION_SLTP,
+        "symbol": pos.symbol,
+        "sl": target_sl,
+        "tp": target_tp,
+        "position": ticket,
+        "magic": 240601,
+        "comment": "Athena|TrailMod",
+    }
+
+    result = mt5.order_send(request)
+    if result and result.retcode == mt5.TRADE_RETCODE_DONE:
+        log.info(
+            f"[MT5] modify_stops: ticket={ticket} sl {current_sl}->{target_sl} "
+            f"tp {current_tp}->{target_tp}"
+        )
+        return {"success": True, "newSl": target_sl, "newTp": target_tp,
+                "slChanged": sl_changed, "tpChanged": tp_changed}
+
+    err = result.comment if result else "order_send failed"
+    log.warning(
+        f"[MT5] modify_stops failed ticket={ticket}: {err} "
+        f"(sl_req={target_sl:.5f} tp_req={target_tp:.5f})"
     )
     return {"success": False, "error": err}
 

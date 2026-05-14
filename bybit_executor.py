@@ -7,6 +7,7 @@ All orders must arrive as a pre-validated RiskApproval from risk_engine.py.
 """
 
 import os
+import hashlib
 import logging
 import time
 import threading
@@ -33,6 +34,25 @@ def _uses_trailing_atr_exit(signal: dict) -> bool:
     """True when Engine A/B exits are managed by the timed-exit chandelier trail."""
     mode = str((CONFIG.get("TIMED_EXIT") or {}).get("tp_mode", "fixed")).strip().lower()
     return mode == "trailing_atr" and not _is_engine_d_signal(signal)
+
+
+def bybit_account_risk_domain() -> str:
+    env_label = (
+        "demo"
+        if os.environ.get("BYBIT_DEMO", "false").lower() in ("true", "1", "yes")
+        else (
+            "testnet"
+            if os.environ.get("BYBIT_TESTNET", "false").lower() in ("true", "1", "yes")
+            else "live"
+        )
+    )
+    api_key = os.environ.get("BYBIT_API_KEY", "")
+    key_fp = (
+        hashlib.sha256(api_key.encode("utf-8")).hexdigest()[:12]
+        if api_key
+        else "unknown"
+    )
+    return f"crypto:bybit:{env_label}:{key_fp}"
 
 # ── Periodic clock re-sync ────────────────────────────────────────────────────
 # Bybit retCode 10002 fires when local clock drifts beyond recv_window (10 000 ms).
@@ -428,22 +448,30 @@ def bybit_map_symbol(athena_display: str) -> str | None:
     return None
 
 
-def _set_trading_stop(exchange, ccxt_symbol: str, sl: float = 0, tp: float = 0) -> None:
+def _set_trading_stop(
+    exchange, ccxt_symbol: str, sl: float = 0, tp: float = 0,
+    clear_tp: bool = False,
+) -> None:
     """Set SL/TP on an open Bybit v5 position via trading-stop endpoint.
 
     Bybit v5 does not support stop_market / take_profit_market order types.
     The correct approach is POST /v5/position/trading-stop.
     ccxt_symbol format: "DOT/USDT:USDT" → raw_symbol "DOTUSDT"
+
+    When ``clear_tp`` is True, send takeProfit="0" which Bybit treats as
+    "remove TP" (chandelier trail is now the only profit-side exit).
     """
     raw_symbol = ccxt_symbol.split(":")[0].replace("/", "")  # DOT/USDT:USDT → DOTUSDT
     params: dict = {"category": "linear", "symbol": raw_symbol, "positionIdx": 0}
     if sl > 0:
         params["stopLoss"] = str(sl)
         params["slTriggerBy"] = "MarkPrice"
-    if tp > 0:
+    if clear_tp:
+        params["takeProfit"] = "0"
+    elif tp > 0:
         params["takeProfit"] = str(tp)
         params["tpTriggerBy"] = "MarkPrice"
-    if sl > 0 or tp > 0:
+    if sl > 0 or tp > 0 or clear_tp:
         exchange.private_post_v5_position_trading_stop(params)
 
 
@@ -488,6 +516,7 @@ def bybit_get_account() -> dict:
     exchange = _get_exchange()
     if not exchange:
         return {"error": True, "symbol": "Bybit", "detail": "Bybit not connected"}
+    risk_domain = bybit_account_risk_domain()
     for attempt in range(2):
         try:
             balance = exchange.fetch_balance(params={"type": "linear"})
@@ -511,6 +540,7 @@ def bybit_get_account() -> dict:
                 "exchange": "Bybit",
                 "testnet": os.environ.get("BYBIT_TESTNET", "false").lower()
                 in ("true", "1", "yes"),
+                "risk_domain": risk_domain,
                 "balance": total,
                 "equity": total + unrealized,  # ← real equity including open P&L
                 "freeBalance": free,
@@ -1406,7 +1436,8 @@ def bybit_execute(signal: dict, approval: "RiskApproval") -> dict:  # noqa: F821
 
 
 def bybit_move_sl_to_breakeven(
-    ccxt_symbol: str, direction: str, entry_price: float, volume: float
+    ccxt_symbol: str, direction: str, entry_price: float, volume: float,
+    clear_tp: bool = False,
 ) -> dict:
     """Move stop-loss to breakeven (entry price) for an open position.
 
@@ -1414,53 +1445,78 @@ def bybit_move_sl_to_breakeven(
     Validates the SL against the current mark price before submission —
     a race condition can cause mark price to move back past entry between
     the 1R check and the API call, which Bybit rejects (retCode 10001).
+
+    When ``clear_tp`` is True, also remove the broker take-profit so the
+    chandelier trail becomes the only profit-side exit. ``entry_price`` may
+    be 0 in that case (caller wants TP cleared without changing SL).
     """
+    del volume  # not needed for trading-stop endpoint
     exchange = _get_exchange()
     if not exchange:
         return {"success": False, "error": "BYBIT_NOT_CONNECTED"}
     try:
-        # Validate SL against live mark price to guard against the race where
-        # price moves back past entry between the 1R check and the API call.
-        # Bybit rule: SHORT SL must be > mark_price; LONG SL must be < mark_price.
-        try:
-            ticker = exchange.fetch_ticker(ccxt_symbol)
-            mark_price = float(
-                ticker.get("markPrice") or ticker.get("last") or 0
-            )
-        except Exception as tick_err:
-            log.debug(f"[BYBIT] BREAKEVEN mark price fetch failed for {ccxt_symbol}: {tick_err}")
-            mark_price = 0.0
-
-        is_short = direction.upper() == "SHORT"
-        if mark_price > 0:
-            if is_short and entry_price <= mark_price:
-                log.warning(
-                    f"[BYBIT] BREAKEVEN skipped for {ccxt_symbol} SHORT: "
-                    f"entry {entry_price} <= mark {mark_price} — market moved back against position"
+        sl_requested = entry_price > 0
+        if sl_requested:
+            # Validate SL against live mark price to guard against the race where
+            # price moves back past entry between the 1R check and the API call.
+            # Bybit rule: SHORT SL must be > mark_price; LONG SL must be < mark_price.
+            try:
+                ticker = exchange.fetch_ticker(ccxt_symbol)
+                mark_price = float(
+                    ticker.get("markPrice") or ticker.get("last") or 0
                 )
-                return {"success": False, "error": "BREAKEVEN_INVALID_MARK_PRICE", "skipped": True}
-            if not is_short and entry_price >= mark_price:
-                log.warning(
-                    f"[BYBIT] BREAKEVEN skipped for {ccxt_symbol} LONG: "
-                    f"entry {entry_price} >= mark {mark_price} — market moved back against position"
-                )
-                return {"success": False, "error": "BREAKEVEN_INVALID_MARK_PRICE", "skipped": True}
+            except Exception as tick_err:
+                log.debug(f"[BYBIT] BREAKEVEN mark price fetch failed for {ccxt_symbol}: {tick_err}")
+                mark_price = 0.0
 
-        _set_trading_stop(exchange, ccxt_symbol, sl=entry_price)
-        log.info(
-            f"[BYBIT] BREAKEVEN SL placed: {ccxt_symbol} {direction} @ {entry_price} "
-            f"(mark={mark_price:.4f})"
+            is_short = direction.upper() == "SHORT"
+            if mark_price > 0:
+                if is_short and entry_price <= mark_price:
+                    log.warning(
+                        f"[BYBIT] BREAKEVEN skipped for {ccxt_symbol} SHORT: "
+                        f"entry {entry_price} <= mark {mark_price} — market moved back against position"
+                    )
+                    # If we only had an SL to move and it's invalid, return; but if
+                    # caller also wanted TP cleared we still attempt that below.
+                    if not clear_tp:
+                        return {"success": False, "error": "BREAKEVEN_INVALID_MARK_PRICE", "skipped": True}
+                    sl_requested = False
+                if not is_short and entry_price >= mark_price:
+                    log.warning(
+                        f"[BYBIT] BREAKEVEN skipped for {ccxt_symbol} LONG: "
+                        f"entry {entry_price} >= mark {mark_price} — market moved back against position"
+                    )
+                    if not clear_tp:
+                        return {"success": False, "error": "BREAKEVEN_INVALID_MARK_PRICE", "skipped": True}
+                    sl_requested = False
+
+        if not sl_requested and not clear_tp:
+            return {"success": True, "skipped": True, "reason": "no_change_requested"}
+
+        _set_trading_stop(
+            exchange, ccxt_symbol,
+            sl=entry_price if sl_requested else 0,
+            clear_tp=clear_tp,
         )
-        return {"success": True, "newSl": entry_price}
+        log.info(
+            f"[BYBIT] Stops modified: {ccxt_symbol} {direction} "
+            f"sl={entry_price if sl_requested else 'unchanged'} "
+            f"clear_tp={clear_tp}"
+        )
+        return {
+            "success": True,
+            "newSl": entry_price if sl_requested else None,
+            "tpCleared": clear_tp,
+        }
     except Exception as e:
         err_str = str(e)
-        # retCode 34040 "not modified" — SL is already at the target price; treat as success.
+        # retCode 34040 "not modified" — already at target; treat as success.
         if "34040" in err_str or "not modified" in err_str.lower():
             log.debug(
                 f"[BYBIT] BREAKEVEN already set for {ccxt_symbol} (34040 not modified) — no action needed"
             )
             return {"success": True, "newSl": entry_price, "alreadySet": True}
-        log.warning(f"[BYBIT] Failed to move SL to breakeven for {ccxt_symbol}: {e}")
+        log.warning(f"[BYBIT] Failed to modify stops for {ccxt_symbol}: {e}")
         return {"success": False, "error": err_str}
 
 

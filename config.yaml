@@ -2853,6 +2853,46 @@ TIMED_EXIT:
     intraday: 2.5
     swing: 3.0
 
+  # Per-venue rope override. Crypto (Bybit) gets a wider rope to absorb noise;
+  # MT5 (FX/metals/indices) gets a tighter one. Falls back to trail_atr_mult
+  # above when venue or style is missing.
+  trail_atr_mult_by_venue:
+    bybit:
+      scalp: 2.5
+      intraday: 3.0
+      swing: 3.5
+    mt5:
+      scalp: 1.8
+      intraday: 2.2
+      swing: 2.8
+
+  # Peak-R give-back close. Once chandelier is active, track the highest R
+  # the trade reaches; if current R drops below peak by giveback_r, close
+  # immediately. Independent of the trail-line breach — protects against
+  # sharp reversals that haven't yet touched the chandelier level.
+  trail_giveback_r:
+    scalp: 0.3
+    intraday: 0.4
+    swing: 0.6
+
+  # Optional per-venue override for give-back. Crypto noisier → slightly
+  # larger budget; MT5 tighter to lock profit faster.
+  trail_giveback_r_by_venue:
+    bybit:
+      scalp: 0.4
+      intraday: 0.5
+      swing: 0.7
+    mt5:
+      scalp: 0.25
+      intraday: 0.35
+      swing: 0.5
+
+  # When the chandelier first activates (trade crosses trail_activation_r),
+  # clear the fixed broker TP so the trail is the only profit-side exit.
+  # Without this the original TP caps the winner before the trail can run.
+  # Set to false to revert to legacy behavior (fixed TP stays as a hard cap).
+  trail_clear_broker_tp_on_activation: true
+
   trail_lookback: 14           # bars of execution TF for highest_high/lowest_low lookback
 
   trail_timeframe:             # candle TF used for trailing computation per style
