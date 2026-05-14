@@ -558,6 +558,174 @@ def get_facts_used_tool(
     }
 
 
+def get_latest_research_summary_tool(
+    limit: int = 5,
+    run_id: str | None = None,
+) -> dict[str, Any]:
+    """Load and summarize the latest research results."""
+    try:
+        from athena_research.research_agent import (
+            load_latest_research_results,
+            summarize_research_results,
+        )
+        if run_id:
+            summary = summarize_research_results(run_id)
+        else:
+            results = load_latest_research_results(limit=limit)
+            if results and not results[0].get("warning"):
+                summary = summarize_research_results()
+            else:
+                summary = {
+                    "warning": "No research results found.",
+                    "missing_fields": ["research_results"],
+                }
+    except ImportError as exc:
+        summary = {
+            "warning": f"Research Agent module unavailable: {exc}",
+            "missing_fields": ["research_agent_module"],
+        }
+    except Exception as exc:
+        summary = {
+            "warning": f"Failed to load research results: {exc}",
+            "missing_fields": [],
+        }
+    return {
+        "schema_version": "ai_tool.research_summary.v1",
+        "status": "ok" if not summary.get("warning") else "unavailable",
+        "generated_at": _now_iso(),
+        "research_summary": summary,
+        "advisory_only": True,
+        "execution_allowed": False,
+    }
+
+
+def propose_research_plan_tool(
+    user_goal: str | None = None,
+    scope: dict[str, Any] | None = None,
+    run_id: str | None = None,
+) -> dict[str, Any]:
+    """Propose a research plan based on latest results and user goal."""
+    try:
+        from athena_research.research_agent import (
+            propose_next_research_plan,
+            summarize_research_results,
+        )
+        scope = scope if isinstance(scope, dict) else {}
+        summary = summarize_research_results(
+            run_id or scope.get("run_id") or scope.get("run_path_or_id")
+        )
+        plan = propose_next_research_plan(summary, user_goal=user_goal)
+        status = "proposed"
+    except ImportError as exc:
+        plan = {"warning": f"Research Agent module unavailable: {exc}"}
+        status = "unavailable"
+    except Exception as exc:
+        plan = {"warning": f"Failed to propose plan: {exc}"}
+        status = "error"
+    return {
+        "schema_version": "ai_tool.research_plan.v1",
+        "status": status,
+        "generated_at": _now_iso(),
+        "plan": plan,
+        "advisory_only": True,
+        "execution_allowed": False,
+    }
+
+
+def validate_research_plan_tool(plan: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Validate a research plan for safety and consistency."""
+    if not isinstance(plan, dict):
+        return {
+            "schema_version": "ai_tool.validate_research_plan.v1",
+            "status": "error",
+            "generated_at": _now_iso(),
+            "validation": {"valid": False, "issues": ["No plan provided."]},
+            "advisory_only": True,
+            "execution_allowed": False,
+        }
+    try:
+        from athena_research.research_agent import validate_research_plan
+        validation = validate_research_plan(plan)
+    except ImportError as exc:
+        validation = {"valid": False, "issues": [f"Module unavailable: {exc}"]}
+    except Exception as exc:
+        validation = {"valid": False, "issues": [f"Validation error: {exc}"]}
+    return {
+        "schema_version": "ai_tool.validate_research_plan.v1",
+        "status": "ok",
+        "generated_at": _now_iso(),
+        "validation": validation,
+        "advisory_only": True,
+        "execution_allowed": False,
+    }
+
+
+def compare_research_runs_tool(
+    baseline: str | None = None,
+    candidate: str | None = None,
+) -> dict[str, Any]:
+    """Compare two research runs."""
+    if not baseline or not candidate:
+        return {
+            "schema_version": "ai_tool.compare_research_runs.v1",
+            "status": "error",
+            "generated_at": _now_iso(),
+            "comparison": {
+                "missing_fields": [k for k, v in [("baseline", baseline), ("candidate", candidate)] if not v],
+            },
+            "advisory_only": True,
+            "execution_allowed": False,
+        }
+    try:
+        from athena_research.research_agent import compare_research_runs
+        comparison = compare_research_runs(baseline, candidate)
+    except ImportError as exc:
+        comparison = {"warning": f"Module unavailable: {exc}"}
+    except Exception as exc:
+        comparison = {"warning": f"Comparison error: {exc}"}
+    return {
+        "schema_version": "ai_tool.compare_research_runs.v1",
+        "status": "ok",
+        "generated_at": _now_iso(),
+        "baseline_run_id": baseline,
+        "candidate_run_id": candidate,
+        "comparison": comparison,
+        "advisory_only": True,
+        "execution_allowed": False,
+    }
+
+
+def get_research_recommendations_tool(
+    run_id: str | None = None,
+    summary_or_comparison: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Generate recommendations from research results."""
+    try:
+        from athena_research.research_agent import (
+            produce_research_recommendations,
+            summarize_research_results,
+        )
+        if run_id:
+            summary = summarize_research_results(run_id)
+        elif isinstance(summary_or_comparison, dict):
+            summary = summary_or_comparison
+        else:
+            summary = summarize_research_results()
+        recommendations = produce_research_recommendations(summary)
+    except ImportError as exc:
+        recommendations = [{"warning": f"Module unavailable: {exc}"}]
+    except Exception as exc:
+        recommendations = [{"warning": f"Error: {exc}"}]
+    return {
+        "schema_version": "ai_tool.research_recommendations.v1",
+        "status": "ok",
+        "generated_at": _now_iso(),
+        "recommendations": recommendations,
+        "advisory_only": True,
+        "execution_allowed": False,
+    }
+
+
 def get_ai_tool_registry() -> dict[str, Callable[..., dict[str, Any]]]:
     return {
         "get_signal_detail": get_signal_detail,
@@ -570,4 +738,9 @@ def get_ai_tool_registry() -> dict[str, Callable[..., dict[str, Any]]]:
         "compare_symbols_tool": compare_symbols_tool,
         "get_strategist_view_tool": get_strategist_view_tool,
         "get_facts_used_tool": get_facts_used_tool,
+        "get_latest_research_summary_tool": get_latest_research_summary_tool,
+        "propose_research_plan_tool": propose_research_plan_tool,
+        "validate_research_plan_tool": validate_research_plan_tool,
+        "compare_research_runs_tool": compare_research_runs_tool,
+        "get_research_recommendations_tool": get_research_recommendations_tool,
     }

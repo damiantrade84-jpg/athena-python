@@ -14362,6 +14362,22 @@ try:
 except Exception as _rl_err:
     log.warning("[startup] Research Lab routes not loaded: %s", _rl_err)
 
+# ── Research Agent routes (advisory-only, never executes trades) ──────────────
+try:
+    from athena_research.research_agent_routes import register_research_agent_routes
+    register_research_agent_routes(app)
+    log.info("[startup] Research Agent routes registered")
+except Exception as _ra_err:
+    log.warning("[startup] Research Agent routes not loaded: %s", _ra_err)
+
+# ── AI Evaluation routes (read-only metrics, never executes trades) ────────────
+try:
+    from athena_research.ai_evaluation_routes import register_ai_evaluation_routes
+    register_ai_evaluation_routes(app)
+    log.info("[startup] AI Evaluation routes registered")
+except Exception as _ae_err:
+    log.warning("[startup] AI Evaluation routes not loaded: %s", _ae_err)
+
 _runtime_services_lock = threading.Lock()
 _runtime_services_started = False
 _binance_ws = None

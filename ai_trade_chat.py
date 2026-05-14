@@ -105,6 +105,35 @@ def plan_tool_calls(user_message: str, context: dict) -> list[dict[str, Any]]:
         if not any(call["name"] == name for call in calls):
             calls.append({"name": name, "args": args})
 
+    # ── Research Agent routing (specific patterns first, general catch-all last) ─
+    if any(token in msg for token in ("compare runs", "compare research",
+                                       "run comparison")):
+        add("compare_research_runs",
+            baseline=context.get("baseline_run_id"),
+            candidate=context.get("candidate_run_id"))
+        return calls
+
+    if any(token in msg for token in ("validate plan", "validate research")):
+        add("validate_research_plan", plan=context.get("plan"))
+        return calls
+
+    if any(token in msg for token in ("propose research", "propose plan",
+                                       "what should we test", "next research")):
+        add("propose_research_plan", user_goal=user_message)
+        return calls
+
+    if any(token in msg for token in ("research", "backtest", "what works",
+                                       "test next", "weak cluster", "strong cluster",
+                                       "research plan", "research run",
+                                       "recommendation", "more data", "need data",
+                                       "what needs testing", "next test")):
+        add("get_latest_research_summary", run_id=context.get("run_id"))
+        return calls
+
+    if any(token in msg for token in ("validate plan", "validate research")):
+        add("validate_research_plan", plan=context.get("plan"))
+        return calls
+
     if "compare" in msg or "cleaner" in msg:
         comparison = context.get("comparison_symbol") or _extract_comparison_symbol(user_message, symbol)
         add("compare_symbols", left_symbol=symbol, right_symbol=comparison, left_signal=resolved_signal)
@@ -160,6 +189,12 @@ def _execute_tool(call: dict[str, Any]) -> dict[str, Any]:
             "compare_symbols": tools.compare_symbols_tool,
             "get_strategist_view": tools.get_strategist_view_tool,
             "get_facts_used": tools.get_facts_used_tool,
+            # Research Agent tools
+            "get_latest_research_summary": tools.get_latest_research_summary_tool,
+            "propose_research_plan": tools.propose_research_plan_tool,
+            "validate_research_plan": tools.validate_research_plan_tool,
+            "compare_research_runs": tools.compare_research_runs_tool,
+            "get_research_recommendations": tools.get_research_recommendations_tool,
         }
         fn = mapping.get(str(name))
         if fn is None:

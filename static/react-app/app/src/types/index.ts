@@ -187,7 +187,8 @@ export type PanelId =
   | 'researchLab'
   | 'performance'
   | 'markets'
-  | 'guardian';
+  | 'guardian'
+  | 'aiPerformance';
 
 export interface LotteryNumber {
   numbers: number[];

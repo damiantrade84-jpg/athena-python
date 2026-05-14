@@ -8,6 +8,7 @@ import {
   ChevronUp,
   Eye,
   FileText,
+  FlaskConical,
   GitCompare,
   Info,
   Loader2,
@@ -109,15 +110,61 @@ function asList(items?: unknown): string[] {
   }).filter(Boolean);
 }
 
-function formatValue(value: unknown): string {
-  if (value == null || value === '') return '-';
+function isScalar(value: unknown): value is string | number | boolean {
+  return typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean';
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function formatScalar(value: unknown): string {
+  if (value == null || value === '') return '—';
   if (typeof value === 'string') return value;
   if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+  if (Array.isArray(value)) return value.length === 0 ? '—' : `${value.length} items`;
+  if (isPlainObject(value)) {
+    const keys = Object.keys(value);
+    return keys.length === 0 ? '—' : `${keys.length} fields`;
+  }
+  return String(value);
+}
+
+function safeJson(value: unknown): string {
   try {
-    return JSON.stringify(value);
+    return JSON.stringify(value, null, 2);
   } catch {
     return String(value);
   }
+}
+
+function KeyValueRows({ data }: { data?: Record<string, unknown> | null }) {
+  if (!data || Object.keys(data).length === 0) return null;
+  return (
+    <div className="space-y-1">
+      {Object.entries(data).map(([key, value]) => (
+        <div key={key} className="flex items-start justify-between gap-2 rounded border border-slate-700 bg-slate-950 px-2 py-1 text-[11px]">
+          <span className="text-slate-400 capitalize">{key.replace(/_/g, ' ')}</span>
+          <span className="font-mono text-right break-words text-slate-100">
+            {isScalar(value) || value == null ? formatScalar(value) : safeJson(value).slice(0, 120)}
+          </span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function RawDetailsBlock({ title, value }: { title: string; value: unknown }) {
+  if (value == null) return null;
+  if (Array.isArray(value) && value.length === 0) return null;
+  if (isPlainObject(value) && Object.keys(value).length === 0) return null;
+  return (
+    <ExpandableSection title={title} icon={<Info className="w-3.5 h-3.5 text-slate-400" />}>
+      <pre className="text-[10px] leading-snug text-slate-200 bg-slate-950 border border-slate-700 rounded p-2 max-h-64 overflow-auto whitespace-pre-wrap break-words">
+        {safeJson(value)}
+      </pre>
+    </ExpandableSection>
+  );
 }
 
 function statusClass(status?: string): string {
@@ -728,6 +775,41 @@ export default function AITradingAgentPanel({
                 Compare flow stays inside advisory chat; it does not call execution or threshold-changing routes.
               </p>
             </div>
+
+            {/* ── Research Agent Quick Prompts ───────────────────────────── */}
+            <Collapsible className="border border-slate-700/60 rounded-md">
+              <CollapsibleTrigger className="flex items-center gap-2 w-full p-2 text-[11px] font-semibold text-slate-300 hover:bg-slate-800/50">
+                <FlaskConical className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                <span>Research Agent</span>
+                <ChevronDown className="w-3 h-3 ml-auto text-slate-500" />
+              </CollapsibleTrigger>
+              <CollapsibleContent className="p-2 pt-0 space-y-2">
+                <p className="text-[10px] text-slate-500">
+                  Ask the Research Agent for insights from completed backtest runs. Advisory only.
+                </p>
+                <div className="flex flex-wrap gap-1">
+                  {[
+                    'What should we test next based on the latest research?',
+                    'What works best for crypto scalp and intra?',
+                    'Which strategies need more data?',
+                    'Propose a research plan for forex',
+                    'What are the strongest and weakest clusters?',
+                  ].map((prompt) => (
+                    <Button
+                      key={prompt}
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="h-7 text-[10px] bg-slate-800 text-slate-100 border-slate-600 hover:bg-slate-700"
+                      disabled={loading}
+                      onClick={() => send(prompt)}
+                    >
+                      {prompt}
+                    </Button>
+                  ))}
+                </div>
+              </CollapsibleContent>
+            </Collapsible>
 
             <div className="flex flex-wrap gap-1">
               {QUICK_PROMPTS.map((prompt) => (

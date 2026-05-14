@@ -10,7 +10,7 @@ import { Switch } from '@/components/ui/switch';
 import {
   LayoutDashboard, Zap, Search, Settings, TrendingUp,
   Layers, Activity, BarChart2, FlaskConical, Filter, Ticket,
-  Microscope, PieChart, Globe, ShieldCheck, Radio,
+  Microscope, PieChart, Globe, ShieldCheck, Radio, BrainCircuit,
 } from 'lucide-react';
 
 const navItems: { id: PanelId; label: string; icon: ElementType; badge?: string }[] = [
@@ -30,6 +30,7 @@ const navItems: { id: PanelId; label: string; icon: ElementType; badge?: string 
   { id: 'performance', label: 'Performance',  icon: PieChart },
   { id: 'markets',     label: 'Markets',      icon: Globe },
   { id: 'guardian',    label: 'Guardian',     icon: ShieldCheck },
+  { id: 'aiPerformance', label: 'AI Perf',    icon: BrainCircuit },
 ];
 
 export default function Sidebar() {
