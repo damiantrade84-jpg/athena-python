@@ -1143,6 +1143,11 @@ DEBATE_AI_TIMEOUT_SEC: 30
 MARCUS_AI_TIMEOUT_SEC: 90
 # Keep Marcus manual reviews bounded; SDK default retries can multiply the timeout.
 MARCUS_AI_SDK_MAX_RETRIES: 0
+# Phase 1 AI agent scaffolding is advisory/read-only by default.
+AI_MARCUS_TWO_STAGE_ENABLED: false
+AI_AGENT_PACKET_ENABLED: true
+AI_SIMILAR_SETUPS_ENABLED: true
+AI_CONTRADICTION_DETECTOR_ENABLED: true
 # Retry loop inside run_ai() for transient timeouts (independent of SDK retries).
 MARCUS_AI_MAX_RETRIES: 2
 MARCUS_AI_RETRY_BACKOFF_SEC: 3.0
@@ -1788,7 +1793,7 @@ NAKED_ENGINE:
 
     scalp:
 
-      min_score: 5.0
+      min_score: 4.0
 
       min_rr: 1.5
 
@@ -1796,7 +1801,7 @@ NAKED_ENGINE:
 
     intraday:
 
-      min_score: 5.0
+      min_score: 4.0
 
       min_rr: 1.5
 
@@ -1804,7 +1809,7 @@ NAKED_ENGINE:
 
     swing:
 
-      min_score: 5.5
+      min_score: 5.0
 
       min_rr: 2.0
 
@@ -1875,123 +1880,123 @@ NAKED_ENGINE:
 
     nat_gas:
 
-      scalp: {min_score: 5.0}
+      scalp: {min_score: 4.0}
 
-      intraday: {min_score: 5.0, min_rr: 1.6}
+      intraday: {min_score: 4.0, min_rr: 1.6}
 
-      swing: {min_score: 5.5, min_rr: 2.0}
+      swing: {min_score: 5.0, min_rr: 2.0}
 
     crypto_doge:
 
-      scalp: {min_score: 5.0, min_room_atr: 0.5}
+      scalp: {min_score: 4.0, min_room_atr: 0.5}
 
-      intraday: {min_score: 5.0, min_room_atr: 0.9, min_rr: 1.5}
+      intraday: {min_score: 4.0, min_room_atr: 0.9, min_rr: 1.5}
 
-      swing: {min_score: 5.5, min_room_atr: 1.2, min_rr: 1.9}
+      swing: {min_score: 5.0, min_room_atr: 1.2, min_rr: 1.9}
 
     crypto_btc:
 
-      scalp: {min_score: 5.0}
+      scalp: {min_score: 4.0}
 
-      intraday: {min_score: 5.0}
+      intraday: {min_score: 4.0}
 
-      swing: {min_score: 5.5}
+      swing: {min_score: 5.0}
 
     crypto_eth:
 
-      scalp: {min_score: 5.0}
+      scalp: {min_score: 4.0}
 
-      intraday: {min_score: 5.0}
+      intraday: {min_score: 4.0}
 
-      swing: {min_score: 5.5}
+      swing: {min_score: 5.0}
 
     crypto_alt_majors:
 
-      scalp: {min_score: 5.0}
+      scalp: {min_score: 4.0}
 
-      intraday: {min_score: 5.0}
+      intraday: {min_score: 4.0}
 
-      swing: {min_score: 5.5}
+      swing: {min_score: 5.0}
 
     crypto_other:
 
-      scalp: {min_score: 5.0}
+      scalp: {min_score: 4.0}
 
-      intraday: {min_score: 5.0}
+      intraday: {min_score: 4.0}
 
-      swing: {min_score: 5.5}
+      swing: {min_score: 5.0}
 
     energy_oil:
 
-      scalp: {min_score: 5.0}
+      scalp: {min_score: 4.0}
 
-      intraday: {min_score: 5.0}
+      intraday: {min_score: 4.0}
 
-      swing: {min_score: 5.5}
+      swing: {min_score: 5.0}
 
     precious_trackers:
 
-      scalp: {min_score: 5.0}
+      scalp: {min_score: 4.0}
 
-      intraday: {min_score: 5.0}
+      intraday: {min_score: 4.0}
 
-      swing: {min_score: 5.5}
+      swing: {min_score: 5.0}
 
     commodity_other:
 
-      scalp: {min_score: 5.0}
+      scalp: {min_score: 4.0}
 
-      intraday: {min_score: 5.0}
+      intraday: {min_score: 4.0}
 
-      swing: {min_score: 5.5}
+      swing: {min_score: 5.0}
 
     copper:
 
-      scalp: {min_score: 5.0}
+      scalp: {min_score: 4.0}
 
-      intraday: {min_score: 5.0}
+      intraday: {min_score: 4.0}
 
-      swing: {min_score: 5.5}
+      swing: {min_score: 5.0}
 
     pgm_metals:
 
-      scalp: {min_score: 5.0}
+      scalp: {min_score: 4.0}
 
-      intraday: {min_score: 5.0}
+      intraday: {min_score: 4.0}
 
-      swing: {min_score: 5.5}
+      swing: {min_score: 5.0}
 
     us_stock_single:
 
-      scalp: {min_score: 5.0}
+      scalp: {min_score: 4.0}
 
-      intraday: {min_score: 5.0}
+      intraday: {min_score: 4.0}
 
-      swing: {min_score: 5.5}
+      swing: {min_score: 5.0}
 
     stock_other:
 
-      scalp: {min_score: 5.0}
+      scalp: {min_score: 4.0}
 
-      intraday: {min_score: 5.0}
+      intraday: {min_score: 4.0}
 
-      swing: {min_score: 5.5}
+      swing: {min_score: 5.0}
 
     smallcap_em_etf:
 
-      scalp: {min_score: 5.0}
+      scalp: {min_score: 4.0}
 
-      intraday: {min_score: 5.0}
+      intraday: {min_score: 4.0}
 
-      swing: {min_score: 5.5}
+      swing: {min_score: 5.0}
 
     bond_tlt:
 
-      scalp: {min_score: 5.0}
+      scalp: {min_score: 4.0}
 
-      intraday: {min_score: 5.0}
+      intraday: {min_score: 4.0}
 
-      swing: {min_score: 5.5}
+      swing: {min_score: 5.0}
 
 
 

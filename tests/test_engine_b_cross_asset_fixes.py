@@ -175,14 +175,15 @@ def test_checked_in_engine_b_thresholds_match_reachable_gate_baseline():
     profiles = config.CONFIG["NAKED_ENGINE"]["style_profiles"]
     overrides = config.CONFIG["NAKED_ENGINE"]["score_group_overrides"]
 
-    assert profiles["scalp"]["min_score"] == pytest.approx(5.0)
-    assert profiles["intraday"]["min_score"] == pytest.approx(5.0)
-    assert profiles["swing"]["min_score"] == pytest.approx(5.5)
-    assert overrides["nat_gas"]["intraday"]["min_score"] == pytest.approx(5.0)
-    assert overrides["nat_gas"]["swing"]["min_score"] == pytest.approx(5.5)
-    assert overrides["crypto_doge"]["scalp"]["min_score"] == pytest.approx(5.0)
-    assert overrides["crypto_doge"]["intraday"]["min_score"] == pytest.approx(5.0)
-    assert overrides["crypto_doge"]["swing"]["min_score"] == pytest.approx(5.5)
+    assert profiles["scalp"]["min_score"] == pytest.approx(4.0)
+    assert profiles["intraday"]["min_score"] == pytest.approx(4.0)
+    assert profiles["swing"]["min_score"] == pytest.approx(5.0)
+    assert overrides["nat_gas"]["scalp"]["min_score"] == pytest.approx(4.0)
+    assert overrides["nat_gas"]["intraday"]["min_score"] == pytest.approx(4.0)
+    assert overrides["nat_gas"]["swing"]["min_score"] == pytest.approx(5.0)
+    assert overrides["crypto_doge"]["scalp"]["min_score"] == pytest.approx(4.0)
+    assert overrides["crypto_doge"]["intraday"]["min_score"] == pytest.approx(4.0)
+    assert overrides["crypto_doge"]["swing"]["min_score"] == pytest.approx(5.0)
 
 
 def test_scanner_opposite_independent_engine_b_does_not_raise_conviction():
