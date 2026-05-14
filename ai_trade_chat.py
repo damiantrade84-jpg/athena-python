@@ -10,6 +10,7 @@ from ai_agent_logger import log_ai_chat_turn
 from ai_agent_safety import validate_ai_chat_response
 from ai_conversation_store import append_turn, create_or_get_thread, get_recent_turns
 from ai_orchestrator import run_ai_trade_review, summarize_trade_for_chat
+import ai_tools as _ai_tools
 
 
 MARCUS_CHAT_SYSTEM_PROMPT = """You are Marcus Reid, a trading desk analyst.
@@ -91,15 +92,22 @@ def plan_tool_calls(user_message: str, context: dict) -> list[dict[str, Any]]:
     context = context if isinstance(context, dict) else {}
     symbol = _symbol_from_context(context)
     trace_id = context.get("trace_id")
+    resolved_signal = context.get("resolved_signal") if isinstance(context.get("resolved_signal"), dict) else None
     calls: list[dict[str, Any]] = []
 
     def add(name: str, **args: Any) -> None:
+        # Pre-resolved signal context short-circuits per-tool runtime lookup
+        # so the chat reflects the operator's selected signal payload, not a
+        # stale runtime cache miss.
+        if resolved_signal is not None and "signal" not in args and name not in {"compare_symbols", "get_open_risk_state"}:
+            args = dict(args)
+            args["signal"] = resolved_signal
         if not any(call["name"] == name for call in calls):
             calls.append({"name": name, "args": args})
 
     if "compare" in msg or "cleaner" in msg:
         comparison = context.get("comparison_symbol") or _extract_comparison_symbol(user_message, symbol)
-        add("compare_symbols", left_symbol=symbol, right_symbol=comparison)
+        add("compare_symbols", left_symbol=symbol, right_symbol=comparison, left_signal=resolved_signal)
         return calls
 
     add("get_signal_detail", signal_id=trace_id, symbol=symbol)
@@ -320,6 +328,74 @@ def compose_trader_answer(user_message: str, tool_results: dict, packet: dict | 
     }
 
 
+def _resolve_chat_context(request: dict[str, Any]) -> tuple[dict[str, Any] | None, dict[str, Any]]:
+    """Resolve the signal context using a deterministic priority order.
+
+    Priority: 1) runtime trace_id lookup, 2) explicit request signal payload,
+    3) runtime symbol lookup, 4) symbol-only, 5) none. Returns the resolved
+    signal (or None) plus a context_resolution diagnostic block.
+    """
+    trace_id = str(request.get("trace_id") or "").strip() or None
+    symbol = str(request.get("symbol") or "").strip() or None
+    signal_payload = request.get("signal") if isinstance(request.get("signal"), dict) else None
+
+    resolution: dict[str, Any] = {
+        "mode": "none",
+        "trace_id_received": bool(trace_id),
+        "signal_payload_received": bool(signal_payload),
+        "resolved_symbol": None,
+        "resolved_engine": None,
+        "warnings": [],
+    }
+    resolved: dict[str, Any] | None = None
+
+    # 1. Runtime trace_id lookup
+    if trace_id:
+        try:
+            found, _lookup = _ai_tools._find_signal(signal_id=trace_id, symbol=None)
+            if isinstance(found, dict) and found:
+                resolved = found
+                resolution["mode"] = "trace_id"
+        except Exception as exc:
+            resolution["warnings"].append(f"trace_id lookup failed: {exc}")
+
+    # 2. Explicit signal payload from request
+    if resolved is None and signal_payload:
+        resolved = dict(signal_payload)
+        resolution["mode"] = "request_signal_payload"
+
+    # 3. Runtime symbol lookup (latest selected/live signal for this symbol)
+    if resolved is None and symbol:
+        try:
+            found, _lookup = _ai_tools._find_signal(signal_id=None, symbol=symbol)
+            if isinstance(found, dict) and found:
+                resolved = found
+                resolution["mode"] = "latest_symbol_signal"
+        except Exception as exc:
+            resolution["warnings"].append(f"symbol lookup failed: {exc}")
+
+    # 4/5. Symbol-only fallback or no context
+    if resolved is None:
+        resolution["mode"] = "symbol_only" if symbol else "none"
+
+    if resolved is not None:
+        resolution["resolved_symbol"] = (
+            resolved.get("symbol")
+            or resolved.get("pair")
+            or resolved.get("display")
+            or symbol
+        )
+        resolution["resolved_engine"] = (
+            resolved.get("engine")
+            or resolved.get("engine_source")
+            or resolved.get("source_engine")
+        )
+    else:
+        resolution["resolved_symbol"] = symbol
+
+    return resolved, resolution
+
+
 def run_trade_chat_turn(request: dict) -> dict[str, Any]:
     request = request if isinstance(request, dict) else {}
     message = str(request.get("message") or "").strip()
@@ -337,12 +413,15 @@ def run_trade_chat_turn(request: dict) -> dict[str, Any]:
     if not session_id:
         session_id = f"ai-chat-{uuid.uuid4().hex}"
 
+    resolved_signal, context_resolution = _resolve_chat_context(request)
+
     context = {
         "trace_id": request.get("trace_id"),
         "symbol": request.get("symbol"),
         "asset_type": request.get("asset_type"),
         "style": request.get("style"),
         "comparison_symbol": request.get("comparison_symbol"),
+        "resolved_signal": resolved_signal,
     }
     tool_plan = plan_tool_calls(message, context)
     if request.get("include_vision") is False:
@@ -359,6 +438,7 @@ def run_trade_chat_turn(request: dict) -> dict[str, Any]:
             "session_id": session_id,
             "trace_id": (packet or {}).get("trace_id") or request.get("trace_id"),
             "symbol": (packet or {}).get("symbol") or request.get("symbol"),
+            "context_resolution": context_resolution,
             "tool_calls": [
                 _compact_tool_call(call)
                 for call in tool_calls

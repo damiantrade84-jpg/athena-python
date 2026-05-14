@@ -771,6 +771,7 @@ export default function SignalsPanel() {
                     <AITradingAgentPanel
                       symbol={signalSymbol(selected)}
                       traceId={signalTraceId(selected)}
+                      signal={(selected as unknown as Record<string, unknown>) ?? null}
                       seedMessage="Review this trade. What supports it, what argues against it, and what would confirm or invalidate it?"
                     />
                   )}

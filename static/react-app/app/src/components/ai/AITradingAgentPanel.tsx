@@ -30,6 +30,7 @@ import { ErrorBanner } from '@/components/shared';
 import { getAiStrategistBrief, postAiTradeChat } from '@/lib/apiClient';
 import { cn } from '@/lib/utils';
 import type {
+  AiContextResolutionSummary,
   AiDataCheckedSummary,
   AiMarketIntelligenceSummary,
   AiSelectedSignalSummary,
@@ -37,6 +38,7 @@ import type {
   AiStrategistSummary,
   AiToolCallSummary,
   AiTradeChatResponse,
+  AiTradeChatSignalPayload,
   AiVisionSummary,
 } from '@/types/athena';
 
@@ -60,17 +62,17 @@ type ChatMessage =
 function decisionClass(decision?: string): string {
   switch (decision) {
     case 'VALID_SETUP':
-      return 'bg-long/20 text-long border-long/30';
+      return 'bg-emerald-950 text-emerald-200 border-emerald-500/70';
     case 'BLOCKED_BY_RISK':
     case 'NO_TRADE':
-      return 'bg-short/20 text-short border-short/30';
+      return 'bg-rose-950 text-rose-200 border-rose-500/70';
     case 'WAIT_FOR_CONFIRMATION':
     case 'WATCHLIST':
-      return 'bg-warning/20 text-warning border-warning/30';
+      return 'bg-blue-950 text-blue-200 border-blue-500/70';
     case 'DATA_INSUFFICIENT':
-      return 'bg-muted/60 text-muted-foreground border-border/60';
+      return 'bg-amber-900/80 text-amber-200 border-amber-500/60';
     default:
-      return 'bg-muted/40 text-muted-foreground border-border/60';
+      return 'bg-slate-800 text-slate-200 border-slate-600';
   }
 }
 
@@ -78,10 +80,14 @@ function ListBlock({ title, items }: { title: string; items?: string[] }) {
   if (!items || items.length === 0) return null;
   return (
     <div className="space-y-1">
-      <p className="text-[10px] uppercase text-muted-foreground">{title}</p>
+      <p className="text-[10px] uppercase text-amber-400 font-semibold">{title}</p>
       <div className="flex flex-wrap gap-1">
         {items.slice(0, 12).map((item, index) => (
-          <Badge key={`${item}-${index}`} variant="outline" className="text-[10px] max-w-full break-words whitespace-normal">
+          <Badge
+            key={`${item}-${index}`}
+            variant="outline"
+            className="text-[10px] max-w-full break-words whitespace-normal bg-slate-900 text-slate-100 border-slate-600"
+          >
             {item}
           </Badge>
         ))}
@@ -115,10 +121,10 @@ function formatValue(value: unknown): string {
 }
 
 function statusClass(status?: string): string {
-  if (status === 'ok' || status === 'fresh' || status === 'allowed') return 'bg-long/15 text-long border-long/30';
-  if (status === 'error' || status === 'stale' || status === 'blocked') return 'bg-short/15 text-short border-short/30';
-  if (status === 'skipped' || status === 'partial' || status === 'unavailable') return 'bg-warning/15 text-warning border-warning/30';
-  return 'bg-muted/40 text-muted-foreground border-border/60';
+  if (status === 'ok' || status === 'fresh' || status === 'allowed') return 'bg-emerald-950 text-emerald-200 border-emerald-500/70';
+  if (status === 'error' || status === 'stale' || status === 'blocked') return 'bg-rose-950 text-rose-200 border-rose-500/70';
+  if (status === 'skipped' || status === 'partial' || status === 'unavailable') return 'bg-amber-900/80 text-amber-200 border-amber-500/60';
+  return 'bg-slate-800 text-slate-200 border-slate-600';
 }
 
 function SectionCard({
@@ -133,16 +139,16 @@ function SectionCard({
   if (!children) return null;
   const toneClass =
     tone === 'warning'
-      ? 'border-warning/40 bg-warning/5'
+      ? 'border-amber-500/60 bg-amber-950/70'
       : tone === 'short'
-        ? 'border-short/40 bg-short/5'
+        ? 'border-rose-500/60 bg-rose-950/70'
         : tone === 'long'
-          ? 'border-long/40 bg-long/5'
-          : 'border-border/50 bg-muted/20';
+          ? 'border-emerald-500/60 bg-emerald-950/70'
+          : 'border-slate-700 bg-slate-900';
   return (
-    <div className={cn('rounded-md border p-2 space-y-1', toneClass)}>
-      <p className="text-[10px] uppercase text-muted-foreground">{title}</p>
-      <p className="text-xs leading-relaxed whitespace-pre-wrap break-words">{children}</p>
+    <div className={cn('rounded-md border p-3 space-y-1', toneClass)}>
+      <p className="text-[10px] uppercase text-amber-400 font-semibold tracking-wide">{title}</p>
+      <p className="text-xs leading-relaxed whitespace-pre-wrap break-words text-slate-100">{children}</p>
     </div>
   );
 }
@@ -153,9 +159,9 @@ function DetailGrid({ rows }: { rows: Array<[string, unknown]> }) {
   return (
     <div className="grid grid-cols-2 gap-2 text-xs">
       {visibleRows.map(([label, value]) => (
-        <div key={label} className="flex items-center justify-between gap-2 rounded border border-border/30 bg-muted/10 px-2 py-1">
-          <span className="text-[10px] text-muted-foreground capitalize">{label.replace(/_/g, ' ')}</span>
-          <span className="font-mono text-right break-words">{formatValue(value)}</span>
+        <div key={label} className="flex items-center justify-between gap-2 rounded border border-slate-700 bg-slate-900 px-2 py-1">
+          <span className="text-[10px] text-slate-400 capitalize">{label.replace(/_/g, ' ')}</span>
+          <span className="font-mono text-right break-words text-slate-100">{formatValue(value)}</span>
         </div>
       ))}
     </div>
@@ -176,10 +182,10 @@ function InfoCard({
   const hasRows = rows.some(([, value]) => value != null && value !== '');
   if (!hasRows && (!warnings || warnings.length === 0)) return null;
   return (
-    <Card className="border-border/60 bg-card/50">
+    <Card className="border-slate-700 bg-slate-900 shadow-sm">
       <CardContent className="p-3 space-y-2">
         <div className="flex items-center justify-between gap-2">
-          <span className="text-xs font-semibold flex items-center gap-1">
+          <span className="text-xs font-semibold flex items-center gap-1 text-amber-400 uppercase tracking-wide">
             {icon} {title}
           </span>
         </div>
@@ -203,17 +209,21 @@ function ExpandableSection({
 }) {
   const [open, setOpen] = useState(defaultOpen);
   return (
-    <Collapsible open={open} onOpenChange={setOpen} className="rounded-md border border-border/50 bg-muted/10">
+    <Collapsible open={open} onOpenChange={setOpen} className="rounded-md border border-slate-700 bg-slate-900">
       <CollapsibleTrigger asChild>
-        <Button type="button" variant="ghost" className="h-8 w-full justify-between px-2 text-xs">
-          <span className="inline-flex items-center gap-1">
+        <Button
+          type="button"
+          variant="ghost"
+          className="h-8 w-full justify-between px-2 text-xs text-slate-100 hover:bg-slate-800"
+        >
+          <span className="inline-flex items-center gap-1 text-amber-400 font-semibold uppercase tracking-wide">
             {icon}
             {title}
           </span>
-          {open ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+          {open ? <ChevronUp className="w-3.5 h-3.5 text-slate-300" /> : <ChevronDown className="w-3.5 h-3.5 text-slate-300" />}
         </Button>
       </CollapsibleTrigger>
-      <CollapsibleContent className="px-2 pb-2">
+      <CollapsibleContent className="px-2 pb-2 text-slate-100">
         {children}
       </CollapsibleContent>
     </Collapsible>
@@ -271,22 +281,22 @@ function SelectedSignalSummary({
   const hasSignal = !!(resolvedSymbol || resolvedTraceId);
   if (!hasSignal) {
     return (
-      <div className="rounded-md border border-warning/40 bg-warning/5 p-3 text-[11px] text-warning space-y-1">
+      <div className="rounded-md border border-amber-500/60 bg-amber-900/80 p-3 text-[11px] text-amber-100 space-y-1">
         <div className="flex items-center gap-2 font-medium">
           <AlertTriangle className="w-3.5 h-3.5" />
-          No selected signal
+          Symbol-only chat — no signal linked
         </div>
         <p className="leading-relaxed">
-          Select a scan or cockpit signal before asking for a trade-specific review. The agent stays read-only and will not infer an executable setup from an empty context.
+          Select a signal from the cockpit cards for trade-specific analysis. The agent stays read-only and will not infer an executable setup from an empty context.
         </p>
       </div>
     );
   }
   return (
-    <div className="rounded-md border border-border/50 bg-muted/10 p-3 space-y-2">
+    <div className="rounded-md border border-slate-700 bg-slate-900 p-3 space-y-2">
       <div className="flex items-center justify-between gap-2">
-        <p className="text-xs font-semibold">Selected Signal</p>
-        <Badge variant="outline" className="text-[10px] max-w-[220px] truncate">{resolvedSymbol || 'linked trace'}</Badge>
+        <p className="text-xs font-semibold text-amber-400 uppercase tracking-wide">Selected Signal</p>
+        <Badge variant="outline" className="text-[10px] max-w-[220px] truncate bg-slate-800 text-slate-100 border-amber-600/40">{resolvedSymbol || 'linked trace'}</Badge>
       </div>
       <DetailGrid
         rows={[
@@ -358,13 +368,13 @@ function ToolCallsCard({ toolCalls }: { toolCalls?: AiToolCallSummary[] }) {
             const name = call.name || call.tool || `tool_${index + 1}`;
             const summary = call.output_summary || call.summary || call.reason || call.error;
             return (
-              <div key={`${name}-${index}`} className="rounded border border-border/40 bg-card/40 p-2 space-y-1">
+              <div key={`${name}-${index}`} className="rounded border border-slate-700 bg-slate-950 p-2 space-y-1">
                 <div className="flex items-center justify-between gap-2">
-                  <span className="text-xs font-medium">{name}</span>
-                  <Badge className={cn('text-[10px] border', statusClass(call.status))}>{call.status || 'unknown'}</Badge>
+                  <span className="text-xs font-medium text-slate-100">{name}</span>
+                  <Badge className={cn('text-[10px] border font-semibold', statusClass(call.status))}>{call.status || 'unknown'}</Badge>
                 </div>
                 <DetailGrid rows={[['duration_ms', call.duration_ms], ['args', call.args || call.input]]} />
-                {summary && <p className="text-[11px] text-muted-foreground whitespace-pre-wrap break-words">{summary}</p>}
+                {summary && <p className="text-[11px] text-slate-300 whitespace-pre-wrap break-words">{summary}</p>}
               </div>
             );
           })}
@@ -379,12 +389,12 @@ function SafetyCard({ safety, riskWarning }: { safety?: AiTradeChatResponse['saf
   const blockedReasons = asList(safety?.blocked_reasons);
   const advisoryOnly = safety?.advisory_only !== false;
   return (
-    <div className="rounded-md border border-warning/40 bg-warning/5 p-2 text-[11px] text-warning space-y-2">
-      <div className="flex items-center gap-2 font-medium">
+    <div className="rounded-md border border-amber-500/60 bg-amber-900/80 p-3 text-[11px] text-amber-100 space-y-2">
+      <div className="flex items-center gap-2 font-medium text-amber-200">
         <ShieldAlert className="w-3.5 h-3.5" />
         Safety note
       </div>
-      <p className="leading-relaxed">
+      <p className="leading-relaxed text-amber-100">
         {safety?.note || 'AI is advisory/read-only. Execution still requires ATHENA risk, freshness, guardian, and trade gates.'}
       </p>
       <DetailGrid
@@ -435,27 +445,27 @@ function AssistantResponse({
   return (
     <div className="space-y-3">
       <div className="flex items-center gap-2 flex-wrap">
-        <Badge className={cn('text-[10px] border', decisionClass(response.decision))}>
+        <Badge className={cn('text-[10px] border font-semibold', decisionClass(response.decision))}>
           {response.decision || 'NO_DECISION'}
         </Badge>
         {contradictionFlags.length > 0 || contradictions.length > 0 ? (
-          <Badge className="bg-short/15 text-short border-short/30 text-[10px]">
+          <Badge className="bg-rose-950 text-rose-200 border-rose-500/70 text-[10px]">
             <AlertTriangle className="w-3 h-3 mr-1" />
             {Math.max(contradictionFlags.length, contradictions.length)} flags
           </Badge>
         ) : (
-          <Badge className="bg-long/15 text-long border-long/30 text-[10px]">
+          <Badge className="bg-emerald-950 text-emerald-200 border-emerald-500/70 text-[10px]">
             <CheckCircle2 className="w-3 h-3 mr-1" />
             No contradictions
           </Badge>
         )}
         {response.final_action && (
-          <Badge variant="outline" className="text-[10px]">
+          <Badge variant="outline" className="text-[10px] bg-slate-800 text-slate-100 border-slate-600">
             Action: {response.final_action}
           </Badge>
         )}
         {response.compared_symbol && (
-          <Badge variant="outline" className="text-[10px]">
+          <Badge variant="outline" className="text-[10px] bg-slate-800 text-slate-100 border-slate-600">
             Compared: {response.compared_symbol}
           </Badge>
         )}
@@ -478,8 +488,8 @@ function AssistantResponse({
       <MarketIntelligenceCard data={response.market_intelligence} />
       <VisionSummaryCard data={response.vision_summary} />
 
-      <ExpandableSection title="Assistant narrative" icon={<MessageSquare className="w-3.5 h-3.5 text-primary" />} defaultOpen>
-        <div className="text-xs leading-relaxed whitespace-pre-wrap break-words rounded-md border border-border/40 bg-muted/20 p-3">
+      <ExpandableSection title="Assistant narrative" icon={<MessageSquare className="w-3.5 h-3.5 text-amber-400" />} defaultOpen>
+        <div className="text-xs leading-relaxed whitespace-pre-wrap break-words rounded-md border border-slate-700 bg-slate-950 p-3 text-slate-100">
           {response.answer || 'No assistant narrative returned.'}
         </div>
       </ExpandableSection>
@@ -555,11 +565,13 @@ function StrategistBriefCard({
 export default function AITradingAgentPanel({
   symbol,
   traceId,
+  signal,
   seedMessage = DEFAULT_SEED,
   className,
 }: {
   symbol?: string | null;
   traceId?: string | null;
+  signal?: AiTradeChatSignalPayload | null;
   seedMessage?: string;
   className?: string;
 }) {
@@ -574,7 +586,9 @@ export default function AITradingAgentPanel({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const hasSelectedSignal = !!(symbol || traceId);
+  const hasSelectedSignal = !!(symbol || traceId || signal);
+  const resolvedTraceId = traceId || signal?.trace_id || null;
+  const resolvedSymbol = symbol || signal?.symbol || null;
 
   useEffect(() => {
     setSessionId(null);
@@ -582,7 +596,7 @@ export default function AITradingAgentPanel({
     setError(null);
     setInput(seedMessage);
     setCompareSymbol('');
-  }, [symbol, traceId, seedMessage]);
+  }, [symbol, traceId, signal, seedMessage]);
 
   const loadBrief = useCallback(async () => {
     setBriefLoading(true);
@@ -605,11 +619,11 @@ export default function AITradingAgentPanel({
 
   const canSend = input.trim().length > 0 && !loading;
   const contextLabel = useMemo(() => {
-    if (symbol && traceId) return `${symbol} / ${traceId}`;
-    if (symbol) return symbol;
-    if (traceId) return traceId;
+    if (resolvedSymbol && resolvedTraceId) return `${resolvedSymbol} / ${resolvedTraceId}`;
+    if (resolvedSymbol) return resolvedSymbol;
+    if (resolvedTraceId) return resolvedTraceId;
     return 'No signal selected';
-  }, [symbol, traceId]);
+  }, [resolvedSymbol, resolvedTraceId]);
 
   const send = useCallback(
     async (messageOverride?: string, options?: { compare?: string }) => {
@@ -629,12 +643,13 @@ export default function AITradingAgentPanel({
       try {
         const response = await postAiTradeChat({
           session_id: sessionId,
-          trace_id: traceId || null,
-          symbol: symbol || null,
+          trace_id: resolvedTraceId,
+          symbol: resolvedSymbol,
           message,
           include_vision: true,
           include_similar_setups: true,
           compare_symbol: options?.compare || null,
+          signal: signal || null,
         });
         setSessionId(response.session_id);
         setMessages((current) => [
@@ -655,7 +670,7 @@ export default function AITradingAgentPanel({
         setLoading(false);
       }
     },
-    [hasSelectedSignal, input, loading, sessionId, symbol, traceId],
+    [hasSelectedSignal, input, loading, sessionId, resolvedSymbol, resolvedTraceId, signal],
   );
 
   const sendCompare = useCallback(() => {
@@ -665,14 +680,14 @@ export default function AITradingAgentPanel({
   }, [compareSymbol, send]);
 
   return (
-    <Card className={cn('border-border/60 bg-card/50', className)}>
+    <Card className={cn('border border-amber-700/40 bg-slate-950 shadow-lg text-slate-100 rounded-xl', className)}>
       <CardHeader className="pb-2">
-        <CardTitle className="text-xs font-semibold flex items-center justify-between gap-2 uppercase tracking-wider">
+        <CardTitle className="text-xs font-semibold flex items-center justify-between gap-2 uppercase tracking-wider text-amber-400">
           <span className="inline-flex items-center gap-2">
-            <Bot className="w-4 h-4 text-primary" />
+            <Bot className="w-4 h-4 text-amber-400" />
             AI Trading Agent
           </span>
-          <Badge variant="outline" className="text-[10px] max-w-[240px] truncate">
+          <Badge variant="outline" className="text-[10px] max-w-[240px] truncate bg-slate-900 text-slate-100 border-amber-600/40">
             {contextLabel}
           </Badge>
         </CardTitle>
@@ -685,31 +700,31 @@ export default function AITradingAgentPanel({
           </TabsList>
 
           <TabsContent value="review" className="m-0 mt-3 space-y-3">
-            <SelectedSignalSummary symbol={symbol} traceId={traceId} />
+            <SelectedSignalSummary signal={signal as AiSelectedSignalSummary | null | undefined} symbol={resolvedSymbol} traceId={resolvedTraceId} />
             {error && <ErrorBanner message={error} />}
 
-            <div className="rounded-md border border-border/50 bg-muted/10 p-2 space-y-2">
+            <div className="rounded-md border border-slate-700 bg-slate-900 p-2 space-y-2">
               <div className="flex items-center gap-2">
-                <GitCompare className="w-3.5 h-3.5 text-primary" />
+                <GitCompare className="w-3.5 h-3.5 text-amber-400" />
                 <Input
                   value={compareSymbol}
                   onChange={(event) => setCompareSymbol(event.target.value)}
                   placeholder="Compare symbol, e.g. BTCUSDT"
-                  className="h-8 text-xs"
+                  className="h-8 text-xs bg-slate-950 text-slate-100 placeholder:text-slate-500 border-slate-700"
                   disabled={loading}
                 />
                 <Button
                   type="button"
                   variant="outline"
                   size="sm"
-                  className="h-8 text-[10px]"
+                  className="h-8 text-[10px] bg-slate-800 text-slate-100 border-slate-600 hover:bg-slate-700"
                   disabled={loading || !hasSelectedSignal || !compareSymbol.trim()}
                   onClick={sendCompare}
                 >
                   Compare
                 </Button>
               </div>
-              <p className="text-[10px] text-muted-foreground">
+              <p className="text-[10px] text-slate-400">
                 Compare flow stays inside advisory chat; it does not call execution or threshold-changing routes.
               </p>
             </div>
@@ -721,7 +736,7 @@ export default function AITradingAgentPanel({
                   type="button"
                   variant="outline"
                   size="sm"
-                  className="h-7 text-[10px]"
+                  className="h-7 text-[10px] bg-slate-800 text-slate-100 border-slate-600 hover:bg-slate-700"
                   disabled={loading}
                   onClick={() => send(prompt)}
                 >
@@ -734,14 +749,20 @@ export default function AITradingAgentPanel({
               <Textarea
                 value={input}
                 onChange={(event) => setInput(event.target.value)}
-                className="min-h-[96px] text-xs resize-none"
+                className="min-h-[96px] text-xs resize-none bg-slate-950 text-slate-100 placeholder:text-slate-500 border-slate-700 focus-visible:ring-amber-500/40"
                 disabled={loading}
               />
               <div className="flex items-center justify-between gap-2">
-                <p className="text-[10px] text-muted-foreground">
+                <p className="text-[10px] text-slate-400">
                   Advisory only. API failures leave this draft intact.
                 </p>
-                <Button type="button" size="sm" className="h-8 gap-1 text-xs" disabled={!canSend} onClick={() => send()}>
+                <Button
+                  type="button"
+                  size="sm"
+                  className="h-8 gap-1 text-xs bg-amber-600 text-slate-950 hover:bg-amber-500 disabled:bg-slate-700 disabled:text-slate-400"
+                  disabled={!canSend}
+                  onClick={() => send()}
+                >
                   {loading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Send className="w-3.5 h-3.5" />}
                   {loading ? 'Reviewing...' : 'Send'}
                 </Button>
@@ -751,31 +772,47 @@ export default function AITradingAgentPanel({
             <ScrollArea className="max-h-[620px] pr-2">
               <div className="space-y-3">
                 {messages.length === 0 && !loading && !error && (
-                  <div className="flex items-center gap-2 text-[11px] text-muted-foreground rounded-md border border-border/40 bg-muted/10 p-3">
-                    <MessageSquare className="w-3.5 h-3.5" />
-                    <span>{hasSelectedSignal ? 'Ready for a read-only tool-chat review.' : 'No signal selected. You can ask general questions, but select a signal for trade-specific evidence.'}</span>
+                  <div className="flex items-center gap-2 text-[11px] text-slate-300 rounded-md border border-slate-700 bg-slate-900 p-3">
+                    <MessageSquare className="w-3.5 h-3.5 text-amber-400" />
+                    <span>{hasSelectedSignal ? 'Ready for a read-only tool-chat review.' : 'Symbol-only chat. Select a signal for trade-specific analysis.'}</span>
                   </div>
                 )}
 
                 {messages.map((message) => (
-                  <div key={message.id} className={cn('rounded-md border p-3 space-y-2', message.role === 'user' ? 'border-primary/30 bg-primary/5' : 'border-border/50 bg-card/40')}>
+                  <div
+                    key={message.id}
+                    className={cn(
+                      'rounded-md border p-3 space-y-2',
+                      message.role === 'user'
+                        ? 'border-amber-600/40 bg-slate-900 text-slate-100'
+                        : 'border-slate-700 bg-slate-950 text-slate-100',
+                    )}
+                  >
                     <div className="flex items-center justify-between gap-2">
-                      <Badge variant="outline" className="text-[10px]">
+                      <Badge
+                        variant="outline"
+                        className={cn(
+                          'text-[10px] font-semibold',
+                          message.role === 'user'
+                            ? 'bg-amber-900/80 text-amber-200 border-amber-500/60'
+                            : 'bg-slate-800 text-slate-100 border-slate-600',
+                        )}
+                      >
                         {message.role === 'user' ? 'You' : 'Assistant'}
                       </Badge>
-                      <span className="text-[10px] text-muted-foreground">{new Date(message.createdAt).toLocaleTimeString()}</span>
+                      <span className="text-[10px] text-slate-400">{new Date(message.createdAt).toLocaleTimeString()}</span>
                     </div>
                     {message.role === 'user' ? (
-                      <p className="text-xs whitespace-pre-wrap break-words">{message.content}</p>
+                      <p className="text-xs whitespace-pre-wrap break-words text-slate-100 leading-relaxed">{message.content}</p>
                     ) : (
-                      <AssistantResponse response={message.response} symbol={symbol} traceId={traceId} />
+                      <AssistantResponse response={message.response} symbol={resolvedSymbol} traceId={resolvedTraceId} />
                     )}
                   </div>
                 ))}
 
                 {loading && (
-                  <div className="rounded-md border border-border/50 bg-muted/10 p-3 text-xs text-muted-foreground flex items-center gap-2">
-                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  <div className="rounded-md border border-slate-700 bg-slate-900 p-3 text-xs text-slate-200 flex items-center gap-2">
+                    <Loader2 className="w-3.5 h-3.5 animate-spin text-amber-400" />
                     Checking signal context, market intelligence, Vision, similar setups, and safety notes...
                   </div>
                 )}

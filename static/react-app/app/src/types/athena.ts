@@ -534,6 +534,41 @@ export interface AiTradeChatRequest {
   include_vision?: boolean;
   include_similar_setups?: boolean;
   compare_symbol?: string | null;
+  signal?: AiTradeChatSignalPayload | null;
+}
+
+export interface AiTradeChatSignalPayload {
+  trace_id?: string | null;
+  symbol?: string | null;
+  direction?: string | null;
+  engine?: string | null;
+  engine_source?: string | null;
+  style?: string | null;
+  timeframe?: string | null;
+  score?: number | null;
+  threshold?: number | null;
+  confidence?: number | null;
+  rr?: number | null;
+  rr1?: number | null;
+  min_rr?: number | null;
+  entry?: number | null;
+  sl?: number | null;
+  tp?: number | null;
+  tp1?: number | null;
+  tp2?: number | null;
+  latest_price?: number | null;
+  spread?: number | null;
+  state?: string | null;
+  [k: string]: unknown;
+}
+
+export interface AiContextResolutionSummary {
+  mode?: 'trace_id' | 'request_signal_payload' | 'latest_symbol_signal' | 'symbol_only' | 'none' | string;
+  trace_id_received?: boolean;
+  signal_payload_received?: boolean;
+  resolved_symbol?: string | null;
+  resolved_engine?: string | null;
+  warnings?: string[];
 }
 
 export interface AiTradeChatResponse {
@@ -563,6 +598,7 @@ export interface AiTradeChatResponse {
   strategist_summary?: AiStrategistSummary | null;
   compared_symbol?: string | null;
   compare_summary?: string | null;
+  context_resolution?: AiContextResolutionSummary | null;
   created_at?: string;
 }
 

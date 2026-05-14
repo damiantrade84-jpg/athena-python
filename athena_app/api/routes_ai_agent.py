@@ -208,6 +208,9 @@ def register_ai_agent_routes(app, runtime) -> None:
         if not message:
             return jsonify({"error": "message_required"}), 400
 
+        signal_payload = payload.get("signal")
+        signal_payload = signal_payload if isinstance(signal_payload, dict) else None
+
         answer = run_trade_chat_turn(
             {
                 "session_id": payload.get("session_id"),
@@ -217,6 +220,7 @@ def register_ai_agent_routes(app, runtime) -> None:
                 "include_vision": payload.get("include_vision", True),
                 "include_similar_setups": payload.get("include_similar_setups", True),
                 "comparison_symbol": payload.get("comparison_symbol") or payload.get("compare_symbol"),
+                "signal": signal_payload,
                 "_audit_db": audit_db,
             }
         )

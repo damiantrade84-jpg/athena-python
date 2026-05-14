@@ -39,6 +39,7 @@ import type {
   LdEngineCRow,
   LdEngineDRow,
   LdAiReview,
+  AiTradeChatSignalPayload,
 } from '@/types/athena';
 
 const DEFAULT_SYMBOLS = 'EUR/USD,GBP/USD,XAU/USD,BTCUSDT,ETHUSDT,NVDA,AAPL,MSFT';
@@ -423,6 +424,65 @@ export default function LiveCockpitPanel() {
   );
 }
 
+function buildAgentSignalPayload(row: LdSymbolRow): AiTradeChatSignalPayload {
+  const direction = row.engineA?.direction || row.engineB?.direction || null;
+  const engine = row.engineA?.passed
+    ? 'engine_a'
+    : row.engineB?.confidencePassed
+      ? 'engine_b'
+      : row.engineC?.decisionState === 'ALIGNED'
+        ? 'engine_c'
+        : row.engineD?.gateResult === 'PASS'
+          ? 'engine_d'
+          : 'engine_unknown';
+  const score = row.engineA?.score ?? row.engineB?.score ?? row.engineD?.score ?? null;
+  const threshold = row.engineA?.threshold ?? row.engineB?.threshold ?? null;
+  const rr = row.levels?.rr ?? row.engineA?.rr ?? row.engineD?.rr ?? null;
+  const entry = row.levels?.entry ?? row.engineA?.entry ?? row.engineB?.entry ?? null;
+  const sl = row.levels?.sl ?? row.engineA?.sl ?? row.engineB?.sl ?? null;
+  const tp = row.levels?.tp ?? row.levels?.tp1 ?? row.engineA?.tp ?? row.engineB?.tp ?? null;
+  return {
+    trace_id: row.traceId ?? null,
+    symbol: row.symbol,
+    pair: row.symbol,
+    display: row.symbol,
+    type: row.asset_type ?? null,
+    asset_type: row.asset_type ?? null,
+    direction,
+    engine,
+    engine_source: engine,
+    style: row.engineD?.setupType ?? null,
+    timeframe: row.timeframe ?? null,
+    score,
+    threshold,
+    rr,
+    rr1: rr,
+    min_rr: null,
+    entry,
+    price: entry,
+    sl,
+    tp,
+    tp1: tp,
+    tp2: row.levels?.tp2 ?? null,
+    latest_price: row.latest_price ?? null,
+    spread: row.spread ?? null,
+    spread_pips: row.spread ?? null,
+    state: row.finalState ?? null,
+    finalState: row.finalState ?? null,
+    mainReason: row.mainReason ?? null,
+    blockReason: row.blockReason ?? null,
+    engine_a: row.engineA ?? null,
+    engine_b: row.engineB ?? null,
+    engine_c: row.engineC ?? null,
+    engine_d: row.engineD ?? null,
+    vision: row.aiReview?.chartVision ?? null,
+    ai_review: row.aiReview ?? null,
+    dataFreshness: row.freshness ?? null,
+    freshness_status: row.freshness?.consistencyStatus ?? row.freshness?.policyStatus ?? null,
+    levels: row.levels ?? null,
+  };
+}
+
 function connBg(state?: string): string {
   if (state === 'connected' || state === 'live') return 'bg-long/20 text-long';
   if (state === 'error') return 'bg-short/20 text-short';
@@ -608,6 +668,7 @@ function CockpitDetail({
           <AITradingAgentPanel
             symbol={row.symbol}
             traceId={row.traceId}
+            signal={buildAgentSignalPayload(row)}
             seedMessage="Review this trade. What supports it, what argues against it, and what would confirm or invalidate it?"
           />
         </TabsContent>

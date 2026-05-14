@@ -152,6 +152,120 @@ def test_trade_chat_rejects_empty_message(tmp_path):
     assert resp.get_json()["error"] == "message_required"
 
 
+def _selected_signal_payload(symbol: str = "QQQ.US") -> dict:
+    return {
+        "trace_id": "selected-trace-1",
+        "symbol": symbol,
+        "pair": symbol,
+        "direction": "LONG",
+        "engine": "engine_a",
+        "engine_source": "engine_a",
+        "style": "intraday",
+        "rr1": 2.1,
+        "min_rr": 1.5,
+        "entry": 450.12,
+        "sl": 446.0,
+        "tp1": 458.0,
+        "dataFreshness": {"allowed": True, "reason": "fresh"},
+        "market_intelligence": {
+            "schema_version": "market_intelligence.v1",
+            "freshness_status": "fresh",
+            "macro_regime": {"risk_regime": "risk_on", "calendar_within_72h": []},
+        },
+        "vision": {
+            "structured_trade_read": {
+                "right_edge_status": "CONFIRMS",
+                "tf_alignment": "ALIGNED",
+                "freshness_status": "fresh",
+                "allowed_for_execution_context": True,
+            }
+        },
+    }
+
+
+def test_trade_chat_resolves_from_trace_id_lookup(tmp_path):
+    client = _client(tmp_path, {"signals": [_selected_signal_payload()]})
+
+    resp = client.post(
+        "/api/ai/trade-chat",
+        json={
+            "trace_id": "selected-trace-1",
+            "symbol": "QQQ.US",
+            "message": "Review this trade.",
+        },
+    )
+
+    assert resp.status_code == 200
+    data = resp.get_json()
+    resolution = data.get("context_resolution") or {}
+    assert resolution.get("mode") == "trace_id"
+    assert resolution.get("trace_id_received") is True
+    assert resolution.get("resolved_symbol") == "QQQ.US"
+    assert data["trace_id"] == "selected-trace-1"
+    # Must not emit the "no linked signal packet" placeholder copy.
+    assert "no linked signal packet is available" not in (data.get("answer") or "").lower()
+    assert "no linked signal packet is available" not in (data.get("market_read") or "").lower()
+
+
+def test_trade_chat_uses_signal_payload_when_runtime_lookup_misses(tmp_path):
+    # Runtime cache empty so trace_id lookup misses; signal payload should win.
+    client = _client(tmp_path)
+
+    resp = client.post(
+        "/api/ai/trade-chat",
+        json={
+            "symbol": "QQQ.US",
+            "message": "Review this trade.",
+            "signal": _selected_signal_payload(),
+        },
+    )
+
+    assert resp.status_code == 200
+    data = resp.get_json()
+    resolution = data.get("context_resolution") or {}
+    assert resolution.get("mode") == "request_signal_payload"
+    assert resolution.get("signal_payload_received") is True
+    assert resolution.get("resolved_symbol") == "QQQ.US"
+    assert "no linked signal packet is available" not in (data.get("answer") or "").lower()
+    assert "no linked signal packet is available" not in (data.get("market_read") or "").lower()
+
+
+def test_trade_chat_symbol_only_fallback_when_no_signal(tmp_path):
+    client = _client(tmp_path)
+
+    resp = client.post(
+        "/api/ai/trade-chat",
+        json={"symbol": "QQQ.US", "message": "What do you know?"},
+    )
+
+    assert resp.status_code == 200
+    data = resp.get_json()
+    resolution = data.get("context_resolution") or {}
+    assert resolution.get("mode") == "symbol_only"
+    assert resolution.get("signal_payload_received") is False
+    assert resolution.get("trace_id_received") is False
+    assert data["safety"]["read_only"] is True
+
+
+def test_trade_chat_request_signal_payload_remains_read_only(tmp_path):
+    client = _client(tmp_path)
+
+    resp = client.post(
+        "/api/ai/trade-chat",
+        json={
+            "symbol": "QQQ.US",
+            "message": "Place this trade now.",
+            "signal": _selected_signal_payload(),
+        },
+    )
+
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["safety"]["can_execute"] is False
+    assert data["safety"]["can_modify_thresholds"] is False
+    assert "execute" not in (data.get("final_action") or "").lower()
+
+
 def test_strategist_brief_route_returns_stable_shape(tmp_path):
     client = _client(tmp_path)
 
