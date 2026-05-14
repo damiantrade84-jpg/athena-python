@@ -1,362 +1,54 @@
-# CLAUDE.md — Athena / Sentinel Pro v4
+# CLAUDE.md - Athena / Sentinel Pro v4
 
-**Audience:** Claude Code (`claude.ai/code`). **Canonical:** [`docs/agent-operating-guide.md`](docs/agent-operating-guide.md) — same mirrored body as [`AGENTS.md`](AGENTS.md).
+Claude Code quick guide. Detailed operating rules live in [AGENTS.md](AGENTS.md) and [docs/agent-operating-guide.md](docs/agent-operating-guide.md).
 
----
+## Core Rules
 
-# Sentinel Pro v4 — Agent operating guide
+- Work evidence-first: inspect code, logs, tests, DB paths, or docs before making claims.
+- Keep changes minimal and focused. Do not refactor unrelated code.
+- Paper-only unless the user explicitly approves otherwise.
+- Never weaken risk, freshness, kill switch, RR, spread, fee, broker, guardian, audit, or execution gates.
+- Scoring and thresholds are locked unless the user explicitly asks to change them; thresholds belong in `config.yaml`.
+- Never import `athena.py` in tests; use `athena_app/` modules.
 
-**Athena** — Sentinel Pro v4 paper-trading and trading-analysis system: multiple engines, AI review, broker/execution adapters, monitoring, backtesting, UI/API consumers.
-
-**Priorities:** correctness, safety, fail-closed behavior, and reproducibility over speed, cosmetic cleanup, or clever shortcuts.
-
-**Engine deep dives:** `docs/engines-reference.md` (summary + pointers to audits/diagnostics).
-
-**Shared structure:** `AGENTS.md` (Cursor/Codex) and `CLAUDE.md` (Claude Code) mirror this document’s section order.
-
----
-
-## 1. Commands
+## Commands
 
 ```bash
-# Web app (http://127.0.0.1:5000)
 python athena.py
-
-# Tests
 pytest tests/
-pytest tests/test_scalp_engine.py -v
-pytest tests/test_scalp_engine.py::test_function_name -v
-
-# Dependencies (Python 3.11–3.13; .python-version pins 3.13)
 pip install -r requirements.txt
 ```
 
-After recreating `.venv`: run `python tools/check_ws_env.py` to verify WebSocket env.
-
----
-
-## 2. Repository map
-
-**Entry point:** `athena.py` — monolith Flask app. **Never import this in tests**; use `athena_app/` modules instead.
-
-**App factory:** `app.py` → `athena_legacy.load()` + `execution` healthcheck. `athena_runtime.py` holds shared runtime bindings (`set_runtime` / `rt()`) to break import cycles from the monolith.
-
-### `athena_app/` (modular Flask layer)
-
-- **`api/`** — route blueprints: `routes_scan`, `routes_backtest`, `routes_execution`, `routes_audit`, `routes_live_dashboard`, `routes_lottery`, `routes_market_data`, `routes_broker_status`, `routes_status`
-- **`services/`** — `scan_backtest_service`, `candle_service`, `data_freshness`, `market_state`, `engine_b_market_state`, `paper_mode`, `structure_context`
-- **`repositories/audit_repo.py`** — audit SQLite writes
-
-### Core engines
-
-- `scoring.py` / `factor_scoring.py` — Engine A factor confluence
-- `market_structure.py` / `zone_registry.py` — Engine B SMC/ICT
-- `engine_c.py` + `engine_c_ai.py` — Engine C consensus + AI blend
-- `engine_b_ai.py` — Engine B AI advisory (**review-only**, never executes)
-- `scalp_engine.py` + `volume_profile.py` — Engine D scalp lab
-- `timed_exit_monitor.py` — exit pipeline for Engine A/B (Engine D bypasses)
-
-### Execution
-
-- `execution.py` — signal execution dispatcher
-- `auto_trader.py` — autopilot loop
-- `risk_engine.py` — position sizing + risk gates
-- `mt5_executor.py` / `bybit_executor.py` — broker adapters
-
-### Data pipeline
-
-- `candle_feeds.py` / `data_feeds.py` — live candle ingestion
-- `backtest_candle_cache.py` / `candle_cache.db` — cached OHLCV for backtests
-- `cot_feed.py` / `carry_feed.py` — COT + carry enrichment
-- `eodhd_volume_batch.py` — EODHD volume (**Engine D only**)
-
-### SQLite (WAL mode, 15s timeout where applicable)
-
-- `audit.db` — trade audit trail (`trades`)
-- `candle_cache.db` — OHLCV cache
-- `cot.db` / `carry_cache.db`
-- `microstructure.db` — order-flow microstructure
-
-### AI layer
-
-- `conductor.py` — deterministic routing (no LLM for routing decisions)
-- `ai_context.py` / `ai_utils.py` — shared helpers
-- `vision_prompts.py` / `vision_hybrid.py` — chart vision (grok-4.3); **preserve exact footer tokens**
-- `lottery_engine.py` — lottery AI (**separate** from chart vision — do not mix)
-- `signal_debate.py` — Engine B debate flow
-- `news_sentiment_feed.py` — sentiment enrichment
-
-### Config
-
-All thresholds belong in **`config.yaml`** (loaded via `config.py`). Do not hardcode trading thresholds or safety gates in Python.
-
-### Reference code
-
-**`refs/`** — third-party Jesse framework reference; excluded from pytest and not part of shipped product logic.
-
----
-
-## 3. Safety rules
-
-### Trading safety
-
-Paper-only unless the user **explicitly** states otherwise.
-
-Never bypass or weaken:
-
-- risk gates, freshness gates, kill-switches, execution approval gates
-- broker safety checks, score thresholds, RR checks, SL/TP validation
-- position/balance validation, stale-data protections, monitor/audit logging
-
-**AI review cannot override execution gates.**
-
-Real-money enablement requires **all** of:
-
-1. ≥ 1 week clean paper results  
-2. explicit manual user approval  
-3. tests proving fail-closed execution behavior  
-4. broker adapter checks proving SL/TP and risk preservation  
-
-If any required safety field is missing, stale, malformed, null, false, or ambiguous, the system must **reject by default**.
-
-### Engine and scoring safety
-
-- Scoring is **locked** unless the user asks to change it.
-- Do not change Engine A/B/D thresholds unless requested.
-- Do not hardcode thresholds, symbols, offsets, scoring constants, or gates in Python — use `config.yaml`/config layer.
-- Engine A and Engine B are independent signal engines. Do not make Engine A suppress Engine B, or Engine B suppress Engine A, unless an explicitly named config gate says so. Engine C is the comparison/consensus layer for A vs B agreement, conflict, A-only, and B-only outcomes.
-
-Changes should be:
-
-- config-gated where appropriate  
-- default-safe and minimally invasive  
-- covered by focused tests  
-- explainable with code-path evidence  
-
-### Sentinel brief (Claude/Code summary)
-
-| Area | Rule |
-|------|------|
-| **Safety** | Paper only; never bypass risk/freshness/kill-switch; AI cannot override gates |
-| **Scoring** | Locked; thresholds only via user request → `config.yaml` |
-| **Dev** | No guessing; default-safe tests; never import `athena.py` in tests; SQLite WAL + 15s timeout |
-| **AI** | Engine B AI advisory only; Vision footer tokens immutable; Lottery ≠ Vision |
-| **Data** | Freshness mandatory; H4 offsets: Binance 0h, MT5 forex 2h, MT5 stocks 3h; D1 @ UTC 00:00; `fetch_mt5()` for MT5; EODHD **volume-only** for Engine D |
-
-### Test safety
-
-- Never import `athena.py` in tests.
-- SQLite: WAL + 15s timeout where applicable; avoid brittle tests on global DB state.
-
----
-
-## 4. Development invariants
-
-- No guessing; find root causes; no temporary fixes.
-- No cosmetic rewrites during bug fixes; keep scope minimal.
-- Use config instead of hardcoding.
-- Add tests for safety-relevant bugs.
-- Prefer simple, explicit code; preserve public contracts unless the contract is the bug.
-
----
-
-## 5. Data freshness & sources
-
-Freshness gate is **mandatory**.
-
-**H4/session offsets:**
-
-- Binance H4: `0h`
-- MT5 forex H4: `2h`
-- MT5 stocks H4: `3h`
-- D1 candles: UTC `00:00`
-
-**Sources:**
-
-- MT5 data → `fetch_mt5()`
-- EODHD → **volume-only** for Engine D
-- Do not silently mix feeds or let stale fallback pass execution safety
-
----
-
-## 6. AI boundaries
-
-Engine B AI is **review-only**. AI must not override gates, risk/freshness checks, approve execution without required fields, mix Vision and Lottery contracts, or mutate thresholds unless requested.
-
-**Chart Vision** vs **Lottery AI** are separate: do not mix prompts, parsers, tokens, ratings, or payloads.
-
-**Vision footer tokens (exact):** `RIGHT EDGE`, `TF ALIGNMENT`, `RATING`, `LEVELS`
-
----
-
-## 7. Audits, Backtests, Engine Entry Design
-
-Detailed methodology lives in skills — Claude Code will load the relevant one:
-
-- Audit/bug-finding → `.claude/skills/athena-audit/SKILL.md`
-- Backtest analysis → `.claude/skills/backtest-analysis/SKILL.md`
-- Engine A entry redesign → `.claude/skills/engine-entry-design/SKILL.md`
-- Evidence-only ATHENA engineering (execution safety, parity, gates) → `.claude/skills/athena-code/SKILL.md`
-
----
-
-## 8. Engines & scoring
-
-### Engine A — Factor confluence (primary)
-
-- **Scoring:** `final_score` 0.0–3.0; directional `trend_score`; nondirectional `mom_quality`.
-- **Thresholds:** profile override → pair/group YAML → 3-tier fallback.
-- **Factors:** BTC bias (conditional on correlation), OI (crypto), intermarket confirmation.
-- **Config:** `ENGINE_A`, `ENGINE_A_RESEARCH_LAB_FACTORS`, `ENGINE_A_MEAN_REVERSION`
-- **Boundary:** Engine A should score factor confluence on its own evidence. It may expose diagnostics for Engine B context, but it should not hide valid Engine B structures or require Engine B confirmation unless a specific config-gated feature requires that behavior.
-
-**Audit concerns:** normalization, missing score group, threshold source drift, profile/override misuse, permissive fallback, BTC/OI misuse, live/BT mismatch.
-
-### Engine B — Naked structure (SMC/ICT)
-
-- **Scoring:** % of max; regime-gated thresholds.
-- **Regime multipliers:** TRENDING 0.90, RANGING 0.90, HIGH_VOL 0.85, LOW_VOL 1.15.
-- **Checklist:** swings, BOS, sweeps, FVG overlap, zone/trigger quality.
-- **Styles:** scalp H1, intraday H4, swing D1 — each `min_score` + `min_rr`.
-- **Config:** `NAKED_ENGINE.style_profiles`, `NAKED_MAX_DAILY`, `ENGINE_B_REGIME_MULTIPLIERS`
-- **Boundary:** Engine B should score naked market structure on its own BOS/CHoCH/OB/FVG/liquidity evidence. It should not be discarded solely because Engine A is below threshold or pointing elsewhere; surface B-only or B-vs-A conflict to Engine C / scan diagnostics when config allows.
-
-**Audit concerns:** AI review mistaken for approval, missing profile passes, regime math, RR mismatch, structure gate skipped by early return, live/BT mismatch, incomplete payload confirmations.
-
-### Engine C — Consensus (A vs B)
-
-- **Outputs:** calibrated probability, trust (`trust_a` / `trust_b` / `trust_both` / `trust_neither`), weights `{"A": x, "B": y}` summing to 1.0, conviction (`UPGRADE`/`NEUTRAL`/`DOWNGRADE`), decision state (trade, tier, sizing override, disagreement diagnosis).
-- **Boundary:** Engine C owns comparison between Engine A and Engine B. A/B agreement, conflict, A-only, and B-only states should be decided here or in explicit scan-only surfacing helpers, not by silently letting one engine erase the other upstream.
-
-**Audit concerns:** default-pass trust, weights ≠ 1, trades without proof, `trust_neither` still trading, bad conviction upgrades, sizing bypass, unlogged A/B mismatch, missing diagnosis in audit path.
-
-### Engine D — Scalp lab (VP / order flow)
-
-- Fabio Valentini VP + OF: balance/imbalance, VAL/VAH/POC/LVN.
-- **Setups:** mean reversion (VA extreme → POC), trend continuation (pullback to LVN).
-- **Grades:** A/B/C/D.
-- **Three pillars:** market state + location + aggression — **all** must align (when strict mode applies per config).
-- **Sessions:** NY open skip, London cash open, modes NY/London/Asia/All (per config/asset rules).
-- **Config:** `SCALP_ENGINE`, `BT_*`
-
-**Audit concerns:** missing pillar passes, grade D trades, session skip ignored, mixed volume sources, EODHD beyond volume-only role, live/BT mismatch, bad/missing POC or VA levels, aggression defaulting “on”.
-
----
-
-## 9. Vision / chart analysis
-
-**Input:** screenshots + H4/H1/D1 + algorithmic context.
-
-**Output:** RIGHT EDGE status, TF alignment, per-style ratings, levels.
-
-**Model:** `VISION_MODEL` (grok-4.3), ~800–1100 tokens, temperature from `AITemperatureConfig`.
-
-**Parser:** exact footer tokens; do not rename/reorder unless explicitly requested.
-
-**Audit concerns:** permissive parser, malformed output passing, missing levels, REVIEW treated as confirm, Vision mixed with Lottery, AI overriding gates, wrong TF for ratings, parser defaulting to pass/trade.
-
----
-
-## 10. Exit pipeline (Engine A / B)
-
-`timed_exit_monitor.py` owns trade management for Engine A/B. Engine D bypasses (`engine in {scalp, engine d, scalp_vp}` early-returns) — TP1/SL at broker.
-
-**`TIMED_EXIT.tp_mode`:**
-
-- `trailing_atr` (default): chandelier ATR trail; lock + timed-close suppressed via early-return when configured accordingly.
-- `fixed`: legacy lock + timed-close (config rollback path).
-
-**`trail_activation_r`:** confirm in live `config.yaml` before citing; checked-in baseline often `{scalp: 0.7, intraday: 1.0, swing: 1.5}` R; arms when `current_r >= activation_r`; scalar accepted for back-compat.
-
-**Typical defaults (change only on user request):** `intraday`/`swing` `timed_close_enabled: false`; `scalp.profit_lock_enabled: false`; `trail_indicator_confirm: true`; `timer_tightens_trail: false` with `timer_tighten_factor: 0.6`.
-
-**Broker:** SL ratchets via MT5/Bybit BE/trail helpers; tightens-only via `_protective_sl_tightens`.
-
-**Resilience:** chandelier fetch failure should hold prior `_trail_state` and warn.
-
-**Persistence:** `timed_exit_state` SQLite; stable key `(venue, audit_id)`.
-
-**Exit reasons:** e.g. `TRAIL_CLOSE`, `TIMED_CLOSE`, `LOCK_SL_HIT` via `_mark_timed_close(reason=...)`.
-
-**Trail evaluation:** `_evaluate_trail()` → `{action: none|ratchet|close}`.
-
----
-
-## 11. Workflow & task tracking
-
-### Session start
-
-- Review **`tasks/lessons.md`** for project-specific patterns.
-- Review **`tasks/todo.md`** for open work.
-
-### Planning & execution (Claude/planning loop)
-
-- Use **plan mode** for non-trivial work (3+ steps or architecture).
-- Re-plan if assumptions break or safety is at risk.
-- Use **subagents** for parallel exploration; one focused task per subagent.
-- After **user corrections**, append patterns to `tasks/lessons.md`.
-- **Verify before done:** tests, logs, staff-engineer bar.
-- For non-trivial edits, ask whether a cleaner design exists; avoid hacky fixes.
-- **Autonomy:** fix reported bugs/CI using evidence; avoid hand-holding.
-
-### Task files (when non-trivial or requested)
-
-- **`tasks/todo.md`:** checkable items, completed markers, short review section.
-- **`tasks/lessons.md`:** concise, actionable rules after corrections.
-
-Task files **do not** replace running tests or proofs.
-
-### Audit mode (explicit asks to audit/review/find bugs)
-
-1. Inspect first; don’t patch unless asked.  
-2. Producer→consumer map.  
-3. Fail-closed behavior.  
-4. Presence vs truth.  
-5. Mode dispatch / early returns.  
-6. Parity where relevant.  
-7. Execution handoff.  
-8. Ranked findings.  
-9. Negative tests.  
-10. Then fixes.  
-
-Don’t stall on preamble — read code and run safe commands.
-
-### Implementation mode
-
-Short plan when non-trivial; smallest safe diff; config-gated; tests; summarize risk.
-
-### When to stop and re-plan
-
-Conflicting tests, execution-safety risk, architecture surprises, missing files/env failures, fixes that weaken gates or change locked scoring.
-
-### Task tracking nuance
-
-Use `tasks/todo.md` / `tasks/lessons.md` when work is large or the user wants durable tracking — not as a substitute for verification.
-
----
-
-## 12. Verification
-
-Before claiming **done / fixed / passing**, verify with the **smallest** relevant command.
-
-If commands are unknown: check `README`, `pyproject.toml`, `pytest.ini`, `package.json`, CI config — then infer.
-
-**Python example:**
-
-```bash
-pytest path/to/test_file.py -q
-```
-
----
-
-## Maintaining root copies (`AGENTS.md`, `CLAUDE.md`)
-
-Shared rules live in **`docs/agent-operating-guide.md`** (this document). After edits, regenerate root copies:
-
-```bash
-python tools/sync_agent_docs.py
-```
-
----
-
-*End of shared operating guide.*
+## Key Paths
+
+- `athena.py` - Flask monolith entry point.
+- `athena_app/api/` - modular API routes.
+- `scoring.py`, `factor_scoring.py` - Engine A.
+- `market_structure.py`, `zone_registry.py`, `engine_b_ai.py` - Engine B.
+- `engine_c.py`, `engine_c_ai.py` - Engine C.
+- `scalp_engine.py`, `volume_profile.py` - Engine D.
+- `execution.py`, `auto_trader.py`, `risk_engine.py`, `mt5_executor.py`, `bybit_executor.py` - high-risk execution path.
+- `config.yaml` / `config.py` - config and thresholds.
+
+## AI Agent Boundaries
+
+- All AI is advisory-only: Marcus, Engine B AI, AI review packets, Strategist, market intelligence, Vision, similar setups, and AI Trading Agent chat.
+- AI may explain, challenge, downgrade, block, request confirmation, compare evidence, and recommend research.
+- AI must not execute trades, approve orders, mutate config/thresholds, change strategy parameters, or bypass deterministic gates.
+- `/api/ai/trade-chat` and `ai_tools.py` are read-only. They may inspect signal, engine, Vision, market-intelligence, similar-setup, strategist, and risk-state context only.
+- `ai_agent_safety.validate_ai_chat_response()` must keep `read_only=true`, `can_execute=false`, `can_modify_thresholds=false`, and `deterministic_gates_required=true`.
+- AI must not preserve `VALID_SETUP` when deterministic gates fail, kill switch is active, guardian is not clean, or RR/spread/fee/freshness/risk data is failed or missing.
+- Similar setups with sample size under 20 are insufficient; do not make calibrated probability claims.
+- Market intelligence uses existing local/repo sources only; stale or unavailable sources must be surfaced as warnings, not invented.
+- Strategist is read-only and advisory; it must not directly block execution unless a future explicit config gate is added and defaults safe.
+- Marcus two-stage memo mode is optional and disabled by default; existing single-stage behavior must remain compatible.
+
+## Vision
+
+- Chart Vision and Lottery AI are separate. Do not mix prompts, parsers, ratings, or payloads.
+- Preserve footer tokens: `RIGHT EDGE`, `TF ALIGNMENT`, `RATING`, `LEVELS`.
+- Structured Vision freshness must not upgrade execution context. Missing or stale timestamps mean `allowed_for_execution_context=false`.
+
+## Verification
+
+Before saying fixed or done, run the smallest relevant compile/test/smoke command and report exactly what passed or was not verified.

@@ -74,7 +74,13 @@ After recreating `.venv`: run `python tools/check_ws_env.py` to verify WebSocket
 ### AI layer
 
 - `conductor.py` — deterministic routing (no LLM for routing decisions)
-- `ai_context.py` / `ai_utils.py` — shared helpers
+- `ai_contracts.py` — canonical AI packet/context/decision schemas
+- `ai_context.py` / `ai_utils.py` — shared helpers and AI review packet builder
+- `ai_orchestrator.py` / `ai_similar_setups.py` / `ai_contradiction_detector.py` — advisory packet orchestration, historical analogue scaffold, deterministic contradiction checks
+- `ai_tools.py` / `ai_trade_chat.py` / `ai_agent_safety.py` — read-only AI Trading Agent tool registry, chat orchestration, and response safety validation
+- `market_intelligence.py` / `pair_context.py` / `ai_strategist.py` — read-only market desk context, pair context, and Strategist summaries
+- `ai_conversation_store.py` / `ai_agent_logger.py` — best-effort chat persistence and audit logging; failures must not block chat/review
+- `athena_app/api/routes_ai_agent.py` — `/api/ai/trade-chat`, conversation routes, and Strategist routes
 - `vision_prompts.py` / `vision_hybrid.py` — chart vision (grok-4.3); **preserve exact footer tokens**
 - `lottery_engine.py` — lottery AI (**separate** from chart vision — do not mix)
 - `signal_debate.py` — Engine B debate flow
@@ -102,7 +108,7 @@ Never bypass or weaken:
 - broker safety checks, score thresholds, RR checks, SL/TP validation
 - position/balance validation, stale-data protections, monitor/audit logging
 
-**AI review cannot override execution gates.**
+**AI review and AI Trading Agent chat cannot override execution gates.**
 
 Real-money enablement requires **all** of:
 
@@ -134,7 +140,7 @@ Changes should be:
 | **Safety** | Paper only; never bypass risk/freshness/kill-switch; AI cannot override gates |
 | **Scoring** | Locked; thresholds only via user request → `config.yaml` |
 | **Dev** | No guessing; default-safe tests; never import `athena.py` in tests; SQLite WAL + 15s timeout |
-| **AI** | Engine B AI advisory only; Vision footer tokens immutable; Lottery ≠ Vision |
+| **AI** | Advisory only; AI Agent/chat/tools cannot execute, mutate config, or override deterministic gates; Vision footer tokens immutable; Lottery ≠ Vision |
 | **Data** | Freshness mandatory; H4 offsets: Binance 0h, MT5 forex 2h, MT5 stocks 3h; D1 @ UTC 00:00; `fetch_mt5()` for MT5; EODHD **volume-only** for Engine D |
 
 ### Test safety
@@ -175,9 +181,21 @@ Freshness gate is **mandatory**.
 
 ## 6. AI boundaries
 
-Engine B AI is **review-only**. AI must not override gates, risk/freshness checks, approve execution without required fields, mix Vision and Lottery contracts, or mutate thresholds unless requested.
+All ATHENA AI is advisory-only. Engine B AI, Marcus review, AI review packets, Strategist, market intelligence, Vision, similar setups, and AI Trading Agent chat may explain, challenge, downgrade, block, request confirmation, compare evidence, and recommend research. They must not execute trades, approve orders, mutate config/thresholds, change strategy parameters, or bypass guardian, freshness, kill switch, RR, spread, fee, broker, or risk gates.
 
-**Chart Vision** vs **Lottery AI** are separate: do not mix prompts, parsers, tokens, ratings, or payloads.
+The AI Agent stack is a tool-using desk assistant, not an execution layer:
+
+- `AIReviewPacket` is the canonical review context; missing fields must be recorded, not invented.
+- `/api/ai/trade-chat` and AI tools are read-only. Tool calls may read signal, engine, Vision, market-intelligence, similar-setup, strategist, and risk-state context only.
+- `validate_ai_chat_response()` must force `read_only=true`, `can_execute=false`, `can_modify_thresholds=false`, and `deterministic_gates_required=true`.
+- AI must never return or preserve `VALID_SETUP` when deterministic gates fail, kill switch is active, guardian is not clean, RR/spread/fee/freshness data is failed or missing, or the packet says the setup is blocked.
+- Similar-setup samples under 20 are `insufficient`; do not make calibrated probability claims from insufficient history.
+- Market intelligence and pair context use existing repo/local sources only; unavailable or stale sources must be surfaced as warnings, not filled with generic macro opinions.
+- Strategist functions are read-only and must not directly block execution unless an explicit future config gate is added and defaults safe.
+- Conversation persistence and AI logging are best-effort; DB/log failures must not block signal generation or chat responses.
+- Marcus two-stage memo mode is optional and disabled by default; when disabled, existing single-stage structured review behavior must remain compatible.
+
+**Chart Vision** vs **Lottery AI** are separate: do not mix prompts, parsers, tokens, ratings, or payloads. Structured Vision may add `vision_trade_read.v1`, but execution-adjacent use must honor freshness policy and `allowed_for_execution_context=false` for missing/stale timestamps.
 
 **Vision footer tokens (exact):** `RIGHT EDGE`, `TF ALIGNMENT`, `RATING`, `LEVELS`
 
@@ -185,12 +203,12 @@ Engine B AI is **review-only**. AI must not override gates, risk/freshness check
 
 ## 7. Audits, Backtests, Engine Entry Design
 
-Detailed methodology lives in skills — Claude Code will load the relevant one:
+Detailed methodology lives in **mirrored** repo skills: **Codex** discovers `.agents/skills/`; **Claude Code** discovers `.claude/skills/` (identical folders and `SKILL.md` files).
 
-- Audit/bug-finding → `.claude/skills/athena-audit/SKILL.md`
-- Backtest analysis → `.claude/skills/backtest-analysis/SKILL.md`
-- Engine A entry redesign → `.claude/skills/engine-entry-design/SKILL.md`
-- Evidence-only ATHENA engineering (execution safety, parity, gates) → `.claude/skills/athena-code/SKILL.md`
+- Audit/bug-finding → `athena-audit/SKILL.md`
+- Backtest analysis → `backtest-analysis/SKILL.md`
+- Engine A entry redesign → `engine-entry-design/SKILL.md`
+- Evidence-only ATHENA engineering (execution safety, parity, gates) → `athena-code/SKILL.md`
 
 ---
 
