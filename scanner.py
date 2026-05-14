@@ -564,6 +564,7 @@ def _attach_engine_b_scan_gate_funnel(
         "failed_gate_names": list(cnf.get("failed_gate_names") or []),
         "final_tier": None,
         "final_reason": None,
+        "engine_b_confidence_passed": sig.get("engine_b_confidence_passed"),
         "synthetic_fallback_rr_tp_enabled": bool(
             CONFIG.get("ENGINE_B_ALLOW_SYNTHETIC_FALLBACK_RR_TP", False)
         ),
@@ -1855,7 +1856,7 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict[s
 
         watchlist = apply_correlation_cap(watchlist)
 
-        return {
+        _scan_out: dict[str, Any] = {
             "success": True,
             "signals": results,
             "tradeSignals": results,
@@ -1884,6 +1885,39 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict[s
                 # manual/API endpoints (/api/scalp-scan, /api/scalp-execute).
             },
         }
+        try:
+            from athena_app.diagnostics.engine_b_gate_funnel_persist import (
+                maybe_persist_engine_b_scan_gate_funnel,
+            )
+
+            _pair_type_lookup: dict[str, str] = {}
+            for _p in candidate_pairs:
+                _disp = str(_p.get("display") or _p.get("symbol") or "").strip()
+                if not _disp:
+                    continue
+                _pair_type_lookup[_disp] = str(_p.get("type") or "").strip().lower()
+            _scan_out.update(
+                maybe_persist_engine_b_scan_gate_funnel(
+                    _scan_out,
+                    pair_types_by_display=_pair_type_lookup,
+                )
+            )
+        except Exception as _persist_merge_err:
+            log.warning(
+                "[ENGINE_B_FUNNEL_PERSIST] merge failed (non-fatal): %s",
+                _persist_merge_err,
+            )
+        try:
+            from athena_app.diagnostics.engine_b_gate_funnel_persist import (
+                write_engine_b_funnel_scan_touch_file,
+            )
+
+            touch = write_engine_b_funnel_scan_touch_file(_scan_out)
+            _scan_out["engine_b_scan_funnel_touch"] = touch
+
+        except Exception as _touch_err:
+            log.warning("[ENGINE_B_FUNNEL_TOUCH] %s", _touch_err)
+        return _scan_out
 
     finally:
         r.scan_lock.release()

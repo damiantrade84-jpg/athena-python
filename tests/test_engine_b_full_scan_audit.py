@@ -58,6 +58,7 @@ ENGINE_B_SCAN_FUNNEL_SHAPE_KEYS = frozenset(
         "synthetic_fallback_rr_tp_enabled",
         "rr_can_satisfy_space_gate_crypto_config",
         "rr_space_gate_enabled_overlay",
+        "engine_b_confidence_passed",
     }
 )
 

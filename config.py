@@ -979,6 +979,10 @@ CONFIG: dict = {
     "ENGINE_B_SCAN_B_ONLY_WATCHLIST_ENABLED": False,
     # Full-scan diagnostics: attach per-row engine_b_scan_gate_funnel payload (report-only).
     "ENGINE_B_SCAN_GATE_FUNNEL_ENABLED": True,
+    # Persist funnel extracts + summaries under logs/engine_b_gate_funnel (fail-open).
+    # Env ENGINE_B_SCAN_GATE_FUNNEL_PERSIST=0 disables, =1 forces on.
+    "ENGINE_B_SCAN_GATE_FUNNEL_PERSIST_ENABLED": True,
+    "ENGINE_B_SCAN_GATE_FUNNEL_OUTPUT_DIR": "logs/engine_b_gate_funnel",
     # Scan-only surfacing for Engine B structures that are blocked by the final trigger.
     # Default-off: execution and Engine B pass gates remain unchanged unless explicitly enabled.
     "ENGINE_B_STRUCTURE_READY_WATCHLIST": {
