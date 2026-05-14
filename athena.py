@@ -5738,6 +5738,17 @@ def _compute_naked_analysis(sig: dict, engine_a_ctx: dict = None, force_ai: bool
 
     def _enrich_engine_b_ai_payload(payload: dict) -> dict:
         enriched = dict(payload or {})
+        # Match engine_b_ai._validate_engine_b_ai_payload: never leave edgeProbability None
+        try:
+            _ep_raw = enriched.get("edgeProbability")
+            if _ep_raw is None:
+                enriched["edgeProbability"] = 50.0
+            else:
+                enriched["edgeProbability"] = float(
+                    max(0.0, min(100.0, float(_ep_raw)))
+                )
+        except (TypeError, ValueError):
+            enriched["edgeProbability"] = 50.0
 
         def _fmt_level(value):
             try:
@@ -6065,7 +6076,7 @@ def _compute_naked_analysis(sig: dict, engine_a_ctx: dict = None, force_ai: bool
                     )
                     res["ai_analysis"] = {
                         "grade": "N/A",
-                        "edgeProbability": None,
+                        "edgeProbability": 50.0,
                         "riskLevel": "UNKNOWN",
                         "verdict": f"AI review unavailable: {err_msg}",
                     }
@@ -6074,7 +6085,7 @@ def _compute_naked_analysis(sig: dict, engine_a_ctx: dict = None, force_ai: bool
                 log.warning(f"[NAKED-AI] Failed to get AI verdict: {e}")
                 res["ai_analysis"] = {
                     "grade": "N/A",
-                    "edgeProbability": None,
+                    "edgeProbability": 50.0,
                     "riskLevel": "UNKNOWN",
                     "verdict": f"AI review unavailable: {e}",
                 }

@@ -359,7 +359,13 @@ def build_engine_b_signal_message(
     lines.append(f"Room Score: {confidence_result.get('room_points', 0):.2f}")
     lines.append(f"RR Score: {confidence_result.get('rr_points', 0):.2f}")
     lines.append(f"Catalyst Bonus: {confidence_result.get('catalyst_bonus', 0):.2f}")
-    lines.append(f"AI Adjustment: {confidence_result.get('ai_adjustment', 0):.2f}")
+    _ai_adj = confidence_result.get("ai_adjustment")
+    try:
+        _ai_adj_f = float(_ai_adj) if _ai_adj is not None else 0.0
+    except (TypeError, ValueError):
+        _ai_adj_f = 0.0
+    if _ai_adj_f:
+        lines.append(f"AI Adjustment: {_ai_adj_f:.2f}")
 
     # === LEARNING CONTEXT ===
     if learning_ctx and learning_ctx.get("sample_size", 0) >= 5:

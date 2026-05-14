@@ -4411,6 +4411,10 @@ def backtest_pair_naked(pair: dict, style: str = "naked", validation_mode="stand
             ).get("snap") or {}
         except Exception:
             pass
+        # Match live/scanner: zone registry consumes a one-shot symbol set on the engine first.
+        naked_engine.set_registry_context(
+            str(pair.get("display") or pair.get("symbol") or "").strip() or None
+        )
         # Precompute direction-independent structure data once per bar
         _bt_pre = naked_engine.precompute_structure_data(
             d1_ctx,
