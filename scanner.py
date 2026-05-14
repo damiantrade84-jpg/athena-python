@@ -148,6 +148,7 @@ def _apply_engine_b_scan_confidence_gate(
     signal["engine_b_min_score_scaled"] = scaled_min
     if isinstance(conf_b, dict):
         conf_b["passed"] = bool(gate_ok)
+        conf_b["checklist_passed"] = bool(gate_ok)
         conf_b["min_score_scaled"] = scaled_min
     return bool(gate_ok), scaled_min
 
@@ -1770,6 +1771,8 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict[s
                                     sig_a["engine_b_verdict"] = res_b.get("structural_verdict", "UNCLEAR")
                                 _eb_snap["res"] = res_b
                                 _eb_snap["conf"] = conf_b
+                                sig_a["engine_b_status"] = conf_b
+                                sig_a["engine_b"] = res_b
 
                                 if _threshold_audit_on:
                                     sig_a["_threshold_audit_b_res"] = res_b

@@ -756,23 +756,32 @@ def risk_check(
 
     def _is_engine_b_execution_signal(sig: dict) -> bool:
         eng = str(sig.get("engine") or sig.get("source_engine") or "").strip().lower()
-        if eng in ("engine_b", "naked", "naked_structure", "structure", "smc"):
+        v = str(sig.get("verdict") or "").strip().upper()
+
+        if eng in ("a", "engine_a", "scalp", "scalp_vp", "engine_d"):
+            if v not in ("B_ONLY", "B_ONLY_SCORED", "B_ONLY_VISION_CONFIRMED", "ALIGNED"):
+                return False
+
+        if eng in ("engine_b", "naked", "naked_structure", "structure", "smc", "b"):
             return True
         if bool(sig.get("is_naked")):
             return True
-        v = str(sig.get("verdict") or "").strip().upper()
         if v in ("B_ONLY", "B_ONLY_SCORED", "B_ONLY_VISION_CONFIRMED", "ALIGNED"):
             return True
-        if isinstance(sig.get("engine_b_status"), dict):
+
+        eb = sig.get("engine_b") or sig.get("naked_data")
+        if isinstance(eb, dict) and (eb.get("passed") is True or eb.get("checklist_passed") is True):
             return True
-        if isinstance(sig.get("engine_b"), dict):
+
+        eb_status = sig.get("engine_b_status")
+        if isinstance(eb_status, dict) and eb_status.get("checklist_passed") is True:
             return True
-        if isinstance(sig.get("naked_data"), dict):
-            return True
+
         comps = sig.get("components")
-        return isinstance(comps, dict) and (
-            "b_checklist_passed" in comps or "b_has_signal" in comps
-        )
+        if isinstance(comps, dict) and comps.get("b_checklist_passed") is True:
+            return True
+
+        return False
 
     if _is_engine_b_execution_signal(signal):
         engine_b_status = signal.get("engine_b_status") or {}
