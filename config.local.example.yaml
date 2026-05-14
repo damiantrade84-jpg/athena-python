@@ -1,0 +1,13 @@
+# Machine-local overrides (copy to config.local.yaml — gitignored).
+# Use for Bybit/MT5 DEMO account testing: sends real API orders to the demo venue.
+#
+# REQUIRED before start (fatal config check):
+#   ATHENA_REAL_ORDERS_CONFIRM=I_UNDERSTAND_REAL_ORDER_RISK
+# Add to `.env` or your shell when using this file.
+#
+# Optional: align with demo API keys
+# EXECUTOR_MODE: demo
+
+PAPER_SOAK:
+  ENABLED: false
+  REAL_ORDERS_ALLOWED: true

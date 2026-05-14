@@ -1,6 +1,8 @@
 """config.py — Sentinel Pro configuration loading and validation.
 
-CONFIG is built from hard-coded defaults then overlaid with config.yaml values.
+CONFIG is built from hard-coded defaults then overlaid with ``config.yaml``.
+Optional ``config.local.yaml`` (gitignored) is deep-merged on top for machine-local
+overrides (e.g. demo broker testing) without changing tracked defaults.
 Import CONFIG from here; never import from athena.py directly.
 """
 
@@ -236,7 +238,8 @@ _yaml_overrides: dict = {}
 try:
     import yaml as _yaml
 
-    _cfg_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.yaml")
+    _cfg_dir = os.path.dirname(os.path.abspath(__file__))
+    _cfg_path = os.path.join(_cfg_dir, "config.yaml")
     if os.path.exists(_cfg_path):
         with open(_cfg_path, "r", encoding="utf-8") as _f:
             _raw_yaml = _f.read()
@@ -258,6 +261,25 @@ try:
                 )
         _yaml_overrides = _yaml.safe_load(_raw_yaml) or {}
         log.info(f"Loaded config.yaml ({len(_yaml_overrides)} keys)")
+
+    _local_path = os.path.join(_cfg_dir, "config.local.yaml")
+    if os.path.exists(_local_path):
+        with open(_local_path, "r", encoding="utf-8") as _lf:
+            _raw_local = _lf.read()
+        _ldupes = scan_duplicate_top_level_yaml_keys(_raw_local)
+        if _ldupes:
+            for _k, _lines in sorted(_ldupes.items()):
+                log.warning(
+                    "[CFG] Duplicate top-level key %r in config.local.yaml (lines %s) — last value wins; remove duplicates",
+                    _k,
+                    _lines,
+                )
+        _local_doc = _yaml.safe_load(_raw_local)
+        if isinstance(_local_doc, dict):
+            _yaml_overrides = _deep_merge_dict(_yaml_overrides, _local_doc)
+            log.info("Merged config.local.yaml over config.yaml (%d top-level keys)", len(_yaml_overrides))
+        elif _local_doc is not None:
+            log.warning("[CFG] config.local.yaml root must be a mapping — ignoring file")
 except ImportError:
     pass  # pyyaml optional
 except Exception as _e:

@@ -72,6 +72,11 @@ def run_managed_execution(
             "success": False,
             "error": "PAPER_SOAK_BLOCKED_REAL_ORDER",
             "error_tag": "paper_soak_blocked",
+            "hint": (
+                "Paper soak blocks broker APIs while PAPER_SOAK.ENABLED is true. "
+                "For Bybit/MT5 demo orders: copy config.local.example.yaml to config.local.yaml, "
+                "set ATHENA_REAL_ORDERS_CONFIRM=I_UNDERSTAND_REAL_ORDER_RISK in the environment, restart."
+            ),
         }
 
     if _vision_blocks_execution(signal):

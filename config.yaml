@@ -6,9 +6,15 @@
 
 # ── Paper/Demo Soak Mode ────────────────────────────────────────────────────────
 
-# When ENABLED is true, managed execution never calls the broker (paper-only).
-# For Bybit demo / MT5 demo API orders, set ENABLED false and REAL_ORDERS_ALLOWED true,
-# and set env ATHENA_REAL_ORDERS_CONFIRM=I_UNDERSTAND_REAL_ORDER_RISK (see .env).
+# When ENABLED is true, managed execution never calls the broker (paper-only)
+# and returns PAPER_SOAK_BLOCKED_REAL_ORDER from run_managed_execution / lifecycle.
+#
+# For Bybit demo / MT5 demo broker orders without editing tracked config.yaml:
+#   1. Copy config.local.example.yaml → config.local.yaml (gitignored).
+#   2. Set ATHENA_REAL_ORDERS_CONFIRM=I_UNDERSTAND_REAL_ORDER_RISK in the environment
+#      (required whenever real/demo orders are enabled — boot will fail without it).
+#
+# Or override only on this machine via the same keys in config.local.yaml.
 
 PAPER_SOAK:
   ENABLED: true
