@@ -1,4 +1,4 @@
-{
+﻿{
   "permissions": {
     "allow": [
       "PowerShell(head *)",
@@ -24,5 +24,9 @@
     "athena-cot",
     "github",
     "playwright"
-  ]
+  ],
+  "skillOverrides": {
+    "athena-audit": "user-invocable-only",
+    "engine-entry-design": "user-invocable-only"
+  }
 }

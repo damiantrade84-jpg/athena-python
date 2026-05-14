@@ -16,16 +16,30 @@
 
 ---
 
+## Context Loading Contract
+
+- Codex and Cursor start with `AGENTS.md` for repository instructions.
+- Codex must not start with `CLAUDE.md`; that file is Claude Code-only startup context.
+- Codex repo skills must live under `.agents/skills/<skill-name>/SKILL.md` for repository skill discovery.
+- Codex should not rely on `tools/skills/*` for automatic repo skill discovery.
+- Claude Code project skills belong under `.claude/skills/<skill-name>/SKILL.md`.
+- Old audit docs, task artifacts, historical findings, and archived reports are historical context. Do not load them unless the user explicitly asks for a historical review, full audit comparison, or a named artifact.
+- Engine A, Engine B, Engine C, and Engine D are independent unless the task explicitly concerns consensus, blending, or cross-engine coordination.
+- Run only tests directly related to the touched behavior. Do not run the full test suite or unrelated engine/UI/backtest tests unless explicitly requested or shared infrastructure was changed.
+- Do not read `tasks/`, old audit reports, generated logs, backtest artifacts, or historical skill references at startup. Read them only when the user names them or the current task requires that exact artifact.
+- Use subagents, Superpowers, or other workflow helpers only when the task benefits from parallel investigation or a specialized workflow and the active tool policy allows it. Do not use them to broaden a small fix into a full audit.
+
+---
+
 ## 1. Commands
 
 ```bash
 # Web app (http://127.0.0.1:5000)
 python athena.py
 
-# Tests
-pytest tests/
-pytest tests/test_scalp_engine.py -v
-pytest tests/test_scalp_engine.py::test_function_name -v
+# Targeted tests
+pytest path/to/test_file.py -q
+pytest path/to/test_file.py::test_function_name -q
 
 # Dependencies (Python 3.11–3.13; .python-version pins 3.13)
 pip install -r requirements.txt
@@ -153,6 +167,9 @@ Changes should be:
 
 - Never import `athena.py` in tests.
 - SQLite: WAL + 15s timeout where applicable; avoid brittle tests on global DB state.
+- Run only tests directly related to the touched behavior.
+- Do not run `pytest tests/`, unrelated engine suites, broad UI builds, broad backtest batches, or unrelated smoke suites unless explicitly requested or shared infrastructure was changed.
+- If no focused test exists, prefer a narrow import/compile/smoke check for the touched module and state what remains not verified.
 
 ---
 
@@ -209,12 +226,12 @@ The AI Agent stack is a tool-using desk assistant, not an execution layer:
 
 ## 7. Audits, Backtests, Engine Entry Design
 
-Detailed methodology lives in **mirrored** repo skills: **Codex** discovers `.agents/skills/`; **Claude Code** discovers `.claude/skills/` (identical folders and `SKILL.md` files).
+Detailed methodology lives in repo skills: **Codex** discovers `.agents/skills/`; **Claude Code** discovers `.claude/skills/`. Do not use `tools/skills/*` as an automatic Codex repo-skill discovery location.
 
-- Audit/bug-finding → `athena-audit/SKILL.md`
-- Backtest analysis → `backtest-analysis/SKILL.md`
-- Engine A entry redesign → `engine-entry-design/SKILL.md`
-- Evidence-only ATHENA engineering (execution safety, parity, gates) → `athena-code/SKILL.md`
+- Full audit/manual trace → `athena-audit/SKILL.md` only when explicitly requested.
+- Backtest analysis → `backtest-analysis/SKILL.md` only for explicit backtest-analysis tasks.
+- Deprecated Engine A entry redesign → `engine-entry-design/SKILL.md` only when explicitly requested.
+- Targeted ATHENA fixes and evidence-based code changes → `athena-code/SKILL.md`.
 
 ---
 
@@ -304,44 +321,34 @@ Detailed methodology lives in **mirrored** repo skills: **Codex** discovers `.ag
 
 ### Session start
 
-- Review **`tasks/lessons.md`** for project-specific patterns.
-- Review **`tasks/todo.md`** for open work.
+- Start from `AGENTS.md` and the user's exact request.
+- Do not review `tasks/lessons.md`, `tasks/todo.md`, old audits, generated logs, or backtest artifacts by default.
+- Open historical/task files only when the user names them or they are directly needed to verify the current issue.
 
 ### Planning & execution (Claude/planning loop)
 
 - Use **plan mode** for non-trivial work (3+ steps or architecture).
 - Re-plan if assumptions break or safety is at risk.
-- Use **subagents** for parallel exploration; one focused task per subagent.
+- Use **subagents** or Superpowers only when the task benefits from parallel exploration or a specialized workflow, and keep each delegated task focused on the current request.
 - After **user corrections**, append patterns to `tasks/lessons.md`.
 - **Verify before done:** tests, logs, staff-engineer bar.
 - For non-trivial edits, ask whether a cleaner design exists; avoid hacky fixes.
 - **Autonomy:** fix reported bugs/CI using evidence; avoid hand-holding.
 
-### Task files (when non-trivial or requested)
+### Task files (only when needed)
 
-- **`tasks/todo.md`:** checkable items, completed markers, short review section.
-- **`tasks/lessons.md`:** concise, actionable rules after corrections.
+- Use `tasks/todo.md` only when the user requests durable tracking or the task genuinely needs a persistent checklist.
+- Use `tasks/lessons.md` only after a user correction creates a reusable repository rule.
 
-Task files **do not** replace running tests or proofs.
+Task files are not startup context and do not replace running targeted tests or proofs.
 
 ### Audit mode (explicit asks to audit/review/find bugs)
 
-1. Inspect first; don’t patch unless asked.  
-2. Producer→consumer map.  
-3. Fail-closed behavior.  
-4. Presence vs truth.  
-5. Mode dispatch / early returns.  
-6. Parity where relevant.  
-7. Execution handoff.  
-8. Ranked findings.  
-9. Negative tests.  
-10. Then fixes.  
-
-Don’t stall on preamble — read code and run safe commands.
+Use the manual audit skill only when the user explicitly asks for an audit, bug hunt, full trace, or strict finding format. Keep the root guide limited to scope and safety rules; the audit `SKILL.md` owns detailed audit procedure and checks.
 
 ### Implementation mode
 
-Short plan when non-trivial; smallest safe diff; config-gated; tests; summarize risk.
+Short plan when non-trivial; smallest safe diff; config-gated where needed; targeted tests only; summarize risk.
 
 ### When to stop and re-plan
 
@@ -349,7 +356,7 @@ Conflicting tests, execution-safety risk, architecture surprises, missing files/
 
 ### Task tracking nuance
 
-Use `tasks/todo.md` / `tasks/lessons.md` when work is large or the user wants durable tracking — not as a substitute for verification.
+Use `tasks/todo.md` / `tasks/lessons.md` only when work is large or the user wants durable tracking, not as default context and not as a substitute for verification.
 
 ---
 

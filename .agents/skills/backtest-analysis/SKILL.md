@@ -26,13 +26,7 @@ Historical notes about Engine A requiring Engine B confirmation, Engine A/C time
 
 ## Before Interpreting Results
 
-Always check:
-
-1. Candle source: same feed for signal generation and fill simulation.
-2. Forming-bar lookahead: signal scored on a closed bar, not a forming bar.
-3. Timeframe key: engine output key matches the consuming path.
-4. Score threshold: actual active gate, not stale config keys.
-5. Signal count versus trade count: low trades with many signals usually points to fill logic or RR filtering.
+Always check candle source, forming-bar lookahead, timeframe key, active score threshold, and signal count versus trade count.
 
 ## Statistical Validity Gates
 
