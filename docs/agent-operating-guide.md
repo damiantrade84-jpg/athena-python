@@ -6,7 +6,7 @@
 
 **Engine deep dives:** `docs/engines-reference.md` (summary + pointers to audits/diagnostics).
 
-**Shared structure:** `AGENTS.md` (Cursor/Codex) and `CLAUDE.md` (Claude Code) mirror this document’s section order.
+**Mirroring:** Root `AGENTS.md` (Cursor/Codex) duplicates this guide. Root `CLAUDE.md` is a short Claude Code stub from `docs/claude-code-guide.md` pointing here for full detail (`AGENTS.md` is `.claudeignore`'d for Claude Code).
 
 ---
 
@@ -363,7 +363,11 @@ pytest path/to/test_file.py -q
 
 ## Maintaining root copies (`AGENTS.md`, `CLAUDE.md`)
 
-Shared rules live in **`docs/agent-operating-guide.md`** (this document). After edits, regenerate root copies:
+Shared rules for Cursor/Codex live in **`docs/agent-operating-guide.md`** (this document) and are mirrored to root **`AGENTS.md`**.
+
+The short Claude Code guide body lives in **`docs/claude-code-guide.md`** and is regenerated to root **`CLAUDE.md`** (root **`AGENTS.md`** is Cursor/Codex-only and is listed in **`.claudeignore`** for Claude Code).
+
+After edits to either canonical file above, regenerate root copies:
 
 ```bash
 python tools/sync_agent_docs.py

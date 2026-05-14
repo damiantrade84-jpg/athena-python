@@ -1,0 +1,20 @@
+# Cursor/Codex only — Claude Code uses CLAUDE.md + docs/agent-operating-guide.md when needed
+AGENTS.md
+
+# Runtime output — never needs to be in context
+logs/
+*.jsonl
+*.db
+*.db-shm
+*.db-wal
+
+# Research/backtest artifacts
+logs/research_lab/
+logs/backtest_matrix/
+logs/scalp_audit/
+logs/ai_review/
+
+# Task/audit docs (reference manually when needed)
+tasks/
+docs/audits/
+docs/diagnostics/

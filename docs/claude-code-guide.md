@@ -1,9 +1,3 @@
-# CLAUDE.md — Athena / Sentinel Pro v4
-
-Claude Code quick guide. Full operating rules: [docs/agent-operating-guide.md](docs/agent-operating-guide.md). (**`AGENTS.md` is Cursor/Codex-only** and is omitted from Claude Code context via `.claudeignore`.)
-
----
-
 ## Core Rules
 
 - Work evidence-first: inspect code, logs, tests, DB paths, or docs before making claims.
