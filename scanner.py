@@ -449,6 +449,232 @@ def _apply_engine_b_structure_ready_scan_tier(
     return "watchlist", str(detail.get("reason") or "Engine B structure ready; awaiting trigger")
 
 
+# --- Engine B independent scan helpers --------------------------------------
+#
+# These helpers exist so the full-scan path can produce Engine B signals or
+# Engine B rejection/funnel rows independently of Engine A. They keep Engine A
+# scoring, Engine B thresholds, risk/kill-switch and live execution untouched.
+
+# Status sentinel that downstream consumers (UI, audit, tests) use to recognise
+# a row whose source engine is Engine B (not an Engine A signal with a B
+# overlay).
+ENGINE_B_SOURCE = "ENGINE_B"
+ENGINE_A_SOURCE = "ENGINE_A"
+
+
+def _make_engine_b_only_signal_stub(pair: dict) -> dict:
+    """Build a minimal sig stub when Engine A produced no signal.
+
+    The stub keeps the downstream pipeline able to attach Engine B overlay
+    fields (verdict, score, SL/TP, RR, funnel) and route the row as an Engine
+    B-only result. Engine A scoring fields are zeroed/absent — the row is
+    never auto-traded and is classified by ``_classify_engine_b_only_signal``.
+    """
+    return {
+        "engine_source": ENGINE_B_SOURCE,
+        "engine": "B",
+        "engine_name": "Engine B",
+        "symbol": pair.get("symbol"),
+        "display": pair.get("display"),
+        "type": pair.get("type"),
+        "asset_type": pair.get("type"),
+        "direction": None,
+        "confluenceScore": 0.0,
+        "scoreNorm": 0.0,
+        "maxScore": 0.0,
+        "combinedConviction": 0.0,
+        "enginesAligned": False,
+        "engine_a_present": False,
+        "scanDiagnostics": [],
+        "warnings": [],
+    }
+
+
+def _engine_b_independent_direction_probe(
+    pair: dict,
+    *,
+    engine,
+    d1_candles: list,
+    zone_candles: list,
+    entry_candles: list,
+    current_price: float,
+    atr: float,
+    regime_label: str | None,
+    style_profile: dict,
+    resolved_style: str,
+    asset_type: str,
+    d1_snap: dict | None,
+    h4_snap: dict | None,
+) -> tuple[str | None, dict | None, dict | None]:
+    """Pick best Engine B direction independently of Engine A.
+
+    Runs ``analyze_structure`` for both LONG and SHORT, and for any CLEAR
+    verdict computes confidence and tests the style/regime gate. Returns the
+    best ``(direction, res_b, conf_b)`` tuple — preferring gate-passed over
+    not-passed, then higher confidence score. Returns ``(None, None, None)``
+    when neither direction has a CLEAR structural verdict.
+    """
+    best: tuple[bool, float, str, dict, dict] | None = None
+    for try_direction in ("LONG", "SHORT"):
+        res_b = engine.set_registry_context(
+            pair.get("symbol") or pair.get("display")
+        ).analyze_structure(
+            d1_candles or [],
+            zone_candles,
+            entry_candles,
+            current_price,
+            try_direction,
+            atr,
+            regime_label,
+            fallback_rr=style_profile.get("fallback_rr", 2.0),
+            asset_type=asset_type,
+            d1_snap=d1_snap or {},
+            h4_snap=h4_snap or {},
+            style=resolved_style,
+            pair=pair,
+        )
+        if res_b.get("structural_verdict") != "CLEAR":
+            continue
+        conf_b = engine.calculate_confidence(
+            res_b,
+            current_price,
+            try_direction,
+            entry_candles=entry_candles or zone_candles,
+            style_profile=style_profile,
+        )
+        gate_ok, _ = engine_b_confidence_passes(
+            conf_b, style_profile, regime_label, asset_type,
+        )
+        try:
+            score = float(conf_b.get("score") or 0.0)
+        except (TypeError, ValueError):
+            score = 0.0
+        candidate = (bool(gate_ok), score, try_direction, res_b, conf_b)
+        if best is None or candidate > best:
+            best = candidate
+    if best is None:
+        return None, None, None
+    _, _, direction, res_b, conf_b = best
+    return direction, res_b, conf_b
+
+
+def _annotate_engine_b_only_signal_for_scan(
+    signal: dict,
+    pair: dict,
+    ds_ctx: dict,
+    earnings_ctx: dict,
+    closed_exchanges: set,
+    news_ctx: dict,
+) -> dict:
+    """Minimal scan annotation for Engine B-only rows.
+
+    Mirrors the safety-block portion of ``annotate_signal_for_scan`` (exchange
+    closed / event risk / inactive pair) but does not inject Engine A
+    threshold or low-confluence diagnostics, which do not apply to an Engine B
+    independent row.
+    """
+    signal["isEnabled"] = pair.get("enabled", True)
+    signal["exchangeClosed"] = _pair_exchange_closed(pair, closed_exchanges)
+    signal["eventRisk"] = _build_event_risk(
+        pair, ds_ctx, earnings_ctx, closed_exchanges
+    )
+    signal["newsCtx"] = news_ctx
+    if CONFIG.get("EVENT_RISK_ENABLED", True):
+        try:
+            from event_risk import check_event_risk
+            ev_risk = check_event_risk(
+                pair.get("display", ""),
+                pair.get("type", ""),
+                lookahead_hours=CONFIG.get("EVENT_RISK_HOURS", 4),
+            )
+            signal["macroEventRisk"] = {
+                "blocked": not ev_risk.get("allowed", True),
+                "reason": ev_risk.get("reason", ""),
+                "events": ev_risk.get("events", []),
+            }
+        except Exception as e:
+            log.warning(f"Error checking macro event risk for B-only scan: {e}")
+            signal["macroEventRisk"] = {
+                "blocked": False,
+                "reason": "Error checking macro events",
+                "events": [],
+            }
+    diagnostics = []
+    if signal.get("exchangeClosed"):
+        diagnostics.append({"code": "closed_exchange", "detail": "Exchange closed"})
+    if signal["eventRisk"].get("hardBlock"):
+        diagnostics.append(
+            {"code": "event_risk", "detail": ", ".join(signal["eventRisk"].get("reasons", []))}
+        )
+    if signal.get("macroEventRisk", {}).get("blocked"):
+        diagnostics.append(
+            {"code": "macro_event_risk", "detail": signal["macroEventRisk"].get("reason", "")}
+        )
+    if not pair.get("enabled", True):
+        diagnostics.append({"code": "inactive_pair", "detail": "Pair not auto-enabled"})
+    if signal.get("engine_b_error"):
+        diagnostics.append(
+            {"code": "engine_b_error", "detail": str(signal.get("engine_b_error"))}
+        )
+    signal["scanDiagnostics"] = diagnostics
+    return signal
+
+
+def _classify_engine_b_only_signal(signal: dict, pair: dict) -> tuple[str, str]:
+    """Classifier for Engine B-only rows.
+
+    Uses Engine B gates only — never Engine A threshold or combinedConviction.
+    Result is always either ``"watchlist"`` (when Engine B confidence passed
+    and no safety blocks) or ``"skip"``. Engine B-only rows are never tier
+    ``"trade"``: live auto-trade requires the full A-driven path.
+    """
+    diagnostics_iter = (
+        d for d in signal.get("scanDiagnostics", []) if isinstance(d, dict)
+    )
+    codes: set[str] = {str(d.get("code")) for d in diagnostics_iter if d.get("code") is not None}
+    safety_block_codes = {
+        "closed_exchange",
+        "event_risk",
+        "macro_event_risk",
+        "inactive_pair",
+    }
+    blocked = codes & safety_block_codes
+    if blocked:
+        return "skip", f"Engine B blocked by safety codes: {','.join(sorted(blocked))}"
+    if not pair.get("enabled", True):
+        return "skip", "Pair not auto-enabled"
+    if signal.get("engine_b_error"):
+        return "skip", f"Engine B error: {signal.get('engine_b_error')}"
+    funnel = signal.get("engine_b_scan_gate_funnel")
+    if not isinstance(funnel, dict):
+        funnel = {}
+    verdict = signal.get("engine_b_verdict") or funnel.get("structure_verdict")
+    if verdict != "CLEAR":
+        skip_stage = funnel.get("engine_b_skip_stage")
+        if skip_stage:
+            return "skip", f"Engine B no signal: {skip_stage}"
+        return "skip", f"Engine B structural verdict {verdict or 'NONE'}"
+    if not bool(signal.get("engine_b_confidence_passed", False)):
+        failed = (
+            signal.get("engine_b_failed_gate_names")
+            or funnel.get("failed_gate_names")
+            or []
+        )
+        if failed:
+            failed_str = ",".join(str(g) for g in failed)
+            if any(
+                str(g).startswith("rr=") or str(g).lower() == "rr_gate"
+                for g in failed
+            ):
+                return "skip", f"Engine B RR gate failed: {failed_str}"
+            return "skip", f"Engine B gates failed: {failed_str}"
+        return "skip", "Engine B confidence gate not passed"
+    detail = "Engine B-only watchlist"
+    if signal.get("engine_b_direction"):
+        detail = f"Engine B-only watchlist ({signal.get('engine_b_direction')})"
+    return "watchlist", detail
+
+
 def _a_only_auto_weight(pair: dict | None, config: dict | None = None) -> float:
     """Return the config-gated A-only auto conviction weight."""
     cfg = config or CONFIG
@@ -1104,8 +1330,19 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict[s
                 else:
                     print(f"[REGRESSION-A] {pair['display']:12s} type={pair.get('type'):8s} D1={d1_count:3d} H4={h4_count:3d} H1={h1_count:3d} NO SIGNAL")
 
+                # Engine separation: when Engine A produces no signal we MUST
+                # still run Engine B and emit either an Engine B-only signal
+                # row or an Engine B rejection/funnel row. Engine B output
+                # must never depend on Engine A.
+                engine_b_scan_only = False
                 if not sig_a:
-                    return pair, None, None
+                    sig_a = _make_engine_b_only_signal_stub(pair)
+                    engine_b_scan_only = True
+                else:
+                    sig_a.setdefault("engine_source", ENGINE_A_SOURCE)
+                    sig_a.setdefault("engine", "A")
+                    sig_a.setdefault("engine_name", "Engine A")
+                    sig_a["engine_a_present"] = True
 
                 ptype = pair.get("type", "")
                 try:
@@ -1312,53 +1549,104 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict[s
                         if atr and atr > 0:
                             regime_label = r.engine_b_regime_label(zone_candles_b, ptype)
                             _eb_funnel_extras["regime_label"] = regime_label
+
+                            # Snapshots are needed for both A-driven and Engine
+                            # B-only paths.
+                            _sc_d1_snap = {}
+                            _sc_h4_snap = {}
+                            try:
+                                _sc_d1_snap = (
+                                    calc_indicators_with_normalized(d1 or [], ptype) or {}
+                                ).get("snap") or {}
+                                _sc_h4_snap = (
+                                    calc_indicators_with_normalized(zone_candles_b, ptype) or {}
+                                ).get("snap") or {}
+                            except Exception:
+                                pass
+
+                            # Engine B-only path: when no Engine A direction
+                            # exists, probe both directions independently and
+                            # pick the best. This makes Engine B output
+                            # independent of Engine A.
+                            _b_only_probe_res = None
+                            _b_only_probe_conf = None
+                            if engine_b_scan_only:
+                                _b_dir, _b_only_probe_res, _b_only_probe_conf = (
+                                    _engine_b_independent_direction_probe(
+                                        pair,
+                                        engine=_engine_b,
+                                        d1_candles=d1 or [],
+                                        zone_candles=zone_candles_b,
+                                        entry_candles=entry_candles_b,
+                                        current_price=current_price,
+                                        atr=atr,
+                                        regime_label=regime_label,
+                                        style_profile=style_profile_b,
+                                        resolved_style=resolved_style_b,
+                                        asset_type=ptype,
+                                        d1_snap=_sc_d1_snap,
+                                        h4_snap=_sc_h4_snap,
+                                    )
+                                )
+                                if _b_dir in ("LONG", "SHORT"):
+                                    sig_a["direction"] = _b_dir
+                                else:
+                                    _eb_funnel_extras.setdefault(
+                                        "engine_b_skip_stage",
+                                        "no_clear_structural_verdict",
+                                    )
                             direction = sig_a.get("direction")
 
                             if direction in ("LONG", "SHORT"):
-                                _sc_d1_snap = {}
-                                _sc_h4_snap = {}
-                                try:
-                                    _sc_d1_snap = (
-                                        calc_indicators_with_normalized(d1 or [], ptype) or {}
-                                    ).get("snap") or {}
-                                    _sc_h4_snap = (
-                                        calc_indicators_with_normalized(zone_candles_b, ptype) or {}
-                                    ).get("snap") or {}
-                                except Exception:
-                                    pass
-                                res_b = _engine_b.set_registry_context(
-                                    pair.get("symbol") or pair.get("display")
-                                ).analyze_structure(
-                                    d1 or [],
-                                    zone_candles_b,
-                                    entry_candles_b,
-                                    current_price,
-                                    direction,
-                                    atr,
-                                    regime_label,
-                                    fallback_rr=style_profile_b.get("fallback_rr", 2.0),
-                                    asset_type=ptype,
-                                    d1_snap=_sc_d1_snap,
-                                    h4_snap=_sc_h4_snap,
-                                    style=resolved_style_b,
-                                    pair=pair,
-                                )
+                                if _b_only_probe_res is not None:
+                                    # Reuse probe result so we don't re-run
+                                    # analyze_structure for the picked direction.
+                                    res_b = _b_only_probe_res
+                                else:
+                                    res_b = _engine_b.set_registry_context(
+                                        pair.get("symbol") or pair.get("display")
+                                    ).analyze_structure(
+                                        d1 or [],
+                                        zone_candles_b,
+                                        entry_candles_b,
+                                        current_price,
+                                        direction,
+                                        atr,
+                                        regime_label,
+                                        fallback_rr=style_profile_b.get("fallback_rr", 2.0),
+                                        asset_type=ptype,
+                                        d1_snap=_sc_d1_snap,
+                                        h4_snap=_sc_h4_snap,
+                                        style=resolved_style_b,
+                                        pair=pair,
+                                    )
                                 _eb_funnel_extras["structure_executed"] = True
 
                                 conf_b = None
                                 if res_b.get("structural_verdict") == "CLEAR":
-                                    conf_b = _engine_b.calculate_confidence(
-                                        res_b,
-                                        current_price,
-                                        direction,
-                                        entry_candles=entry_candles_b or zone_candles_b,
-                                        style_profile=style_profile_b,
-                                    )
+                                    if _b_only_probe_conf is not None:
+                                        conf_b = _b_only_probe_conf
+                                    else:
+                                        conf_b = _engine_b.calculate_confidence(
+                                            res_b,
+                                            current_price,
+                                            direction,
+                                            entry_candles=entry_candles_b or zone_candles_b,
+                                            style_profile=style_profile_b,
+                                        )
                                     _engine_b_direction_used = direction
-                                    # Scan-only B independence: if Engine A's direction causes the
-                                    # naked-structure gate to fail, optionally re-check the direction
-                                    # inferred from Engine B's own BOS/CHoCH/sweep evidence.
-                                    if bool(CONFIG.get("ENGINE_B_SCAN_INDEPENDENT_DIRECTION_ENABLED", False)):
+                                    # Scan-only B independence (legacy A-driven
+                                    # path): if Engine A's direction makes the
+                                    # naked-structure gate fail, optionally
+                                    # re-check the direction inferred from
+                                    # Engine B's own BOS/CHoCH/sweep evidence.
+                                    # Skipped for engine_b_scan_only — the
+                                    # probe above already evaluated both
+                                    # directions and picked the best.
+                                    if (
+                                        not engine_b_scan_only
+                                        and bool(CONFIG.get("ENGINE_B_SCAN_INDEPENDENT_DIRECTION_ENABLED", False))
+                                    ):
                                         _initial_gate_ok, _ = engine_b_confidence_passes(
                                             conf_b,
                                             style_profile_b,
@@ -1640,8 +1928,12 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict[s
                 buffered_ok.append((pair, sig))
 
         # Cross-sectional quantile floors per asset class (this scan only).
+        # Engine B-only rows must not enter the Engine A quantile cohort —
+        # their confluenceScore is intentionally 0 and would skew the floor.
         scores_by_type: dict[str, list[float]] = {}
         for pair, sig in buffered_ok:
+            if sig.get("engine_source") == ENGINE_B_SOURCE:
+                continue
             ptype = pair.get("type") or "stock"
             scores_by_type.setdefault(ptype, []).append(float(sig.get("confluenceScore", 0)))
 
@@ -1670,6 +1962,64 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict[s
             log.info(f"[SCAN-Q] Per-type quantile floors: {quantile_floors}")
 
         for pair, sig in buffered_ok:
+            # Engine B-only rows take a separate classification path. They
+            # must never use Engine A's threshold, quantile floor, or
+            # combinedConviction — those are Engine A semantics. Engine B
+            # rows are classified by Engine B gates only and capped at
+            # tier="watchlist" (never auto-trade).
+            if sig.get("engine_source") == ENGINE_B_SOURCE:
+                sig = _annotate_engine_b_only_signal_for_scan(
+                    sig,
+                    pair,
+                    ds_ctx,
+                    earnings_ctx,
+                    _closed_exchanges,
+                    news_ctx,
+                )
+                tier, tier_reason = _classify_engine_b_only_signal(sig, pair)
+                if _threshold_audit_on:
+                    threshold_audit_rows.append(
+                        build_signal_funnel_row(
+                            pair,
+                            sig,
+                            tier=tier,
+                            tier_reason=tier_reason,
+                            style_profile_b=sig.get("_threshold_audit_b_style_profile"),
+                            engine_b_threshold=sig.get("_threshold_audit_b_threshold"),
+                        )
+                    )
+                sig["signalTier"] = tier
+                sig["signalTierReason"] = tier_reason
+                sig["watchlistReason"] = tier_reason if tier == "watchlist" else None
+                _patch_engine_b_funnel_final_tier(sig, tier, tier_reason)
+                codes = {d.get("code") for d in sig.get("scanDiagnostics", [])}
+                if "closed_exchange" in codes:
+                    scan_funnel["closed_exchange"] += 1
+                if "event_risk" in codes:
+                    scan_funnel["event_block"] += 1
+                if "inactive_pair" in codes:
+                    scan_funnel["inactive_pair"] += 1
+                if tier == "watchlist":
+                    watchlist.append(sig)
+                    scan_funnel["watchlist"] += 1
+                    log.info(
+                        f"{pair['display']:12s} WATCH [B-only] :: {tier_reason}"
+                    )
+                else:
+                    _skip_payload: dict[str, Any] = {
+                        "pair": pair["display"],
+                        "reason": tier_reason,
+                        "tier": "skip",
+                        "engine_source": ENGINE_B_SOURCE,
+                        "diagnostics": sig.get("scanDiagnostics", []),
+                    }
+                    _eb_fd = sig.get("engine_b_scan_gate_funnel")
+                    if isinstance(_eb_fd, dict):
+                        _skip_payload["engine_b_scan_gate_funnel"] = dict(_eb_fd)
+                    skipped.append(_skip_payload)
+                    log.info(f"{pair['display']:12s} SKIP  [B-only] :: {tier_reason}")
+                continue
+
             # Unify threshold resolution — ensures live scan and backtest parity (BUG 7)
             # Pass regime for dynamic threshold adjustment when enabled
             regime = sig.get("regime")
@@ -1713,7 +2063,7 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict[s
             if effective_threshold and effective_threshold > 0:
                 sig["thresholdProgressPct"] = min(100, max(0, round((_cs / effective_threshold) * 67)))
                 sig["confluencePct"] = sig["thresholdProgressPct"] # backward compat
-            
+
             _maxs = float(sig.get("maxScore", 2.0))
             if _maxs > 0:
                 sig["scoreNormPct"] = min(100, max(0, round((_cs / _maxs) * 100)))

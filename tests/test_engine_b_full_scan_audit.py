@@ -65,11 +65,23 @@ ENGINE_B_SCAN_FUNNEL_SHAPE_KEYS = frozenset(
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_scan_source_engine_b_only_after_sig_a():
+def test_scan_does_not_short_circuit_engine_b_when_sig_a_missing():
+    """Regression: full scan must not drop a pair when Engine A is silent.
+
+    Before the Engine B independent scan fix, ``if not sig_a:`` exited the
+    per-pair worker with ``return pair, None, None`` and Engine B never ran.
+    The corrected path builds a B-only sig stub and continues so Engine B
+    produces either a signal row or a rejection/funnel row independently.
+    """
     text = (REPO_ROOT / "scanner.py").read_text(encoding="utf-8")
     idx = text.find("if not sig_a:")
     assert idx >= 0
-    assert "return pair, None, None" in text[idx : idx + 500]
+    region = text[idx : idx + 500]
+    assert "return pair, None, None" not in region, (
+        "Engine B must run independently of Engine A; "
+        "the early-return coupling is a regression."
+    )
+    assert "_make_engine_b_only_signal_stub" in region
 
 
 def test_scan_source_crypto_bybit_atr_unavailable_diagnostic_constant():
