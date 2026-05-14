@@ -10269,6 +10269,28 @@ def api_chart_analysis():
             entry_price=_entry_hint,
             current_level_sets=current_levels,
         )
+        try:
+            from vision_trade_read import parse_vision_trade_read
+
+            structured_trade_read = parse_vision_trade_read(
+                analysis,
+                structured=structured,
+                chart_timestamp=_chart_generated_at,
+                latest_candle_ts=_latest_candle_ts,
+                image_hash=_stored_vision.get("image_hash"),
+                timeframe=tf,
+            )
+            structured["structured_trade_read"] = structured_trade_read
+        except Exception as _vtr_err:
+            log.debug("[CHART-VISION] structured trade read parse failed: %s", _vtr_err)
+            structured_trade_read = {
+                "schema_version": "vision_trade_read.v1",
+                "right_edge_status": structured.get("right_edge_status") or "UNKNOWN",
+                "tf_alignment": "UNKNOWN",
+                "freshness_status": "unknown",
+                "allowed_for_execution_context": False,
+                "warnings": [f"structured Vision parser failed: {_vtr_err}"],
+            }
 
         try:
             if bool(CONFIG.get("CHART_VISION_DATASET_ENABLED", True)):
@@ -10378,10 +10400,24 @@ def api_chart_analysis():
             "symbol": symbol,
             "tf": _tf_label,
         }
-        # Cache vision result for AI reconciliation layer (keyed by symbol with _vision suffix)
+        # Cache vision result for AI reconciliation. Execution-adjacent keys include
+        # trace/latest/image; incomplete keys are retained only for UI reconciliation.
         try:
-            _vsym_key = str(symbol or "").replace("/", "_") + "_vision"
-            _engine_b_cache_put(_vsym_key, _vision_payload)
+            from vision_trade_read import build_vision_cache_key
+
+            _cache_meta = build_vision_cache_key(
+                symbol=symbol,
+                timeframe_set=_tf_label,
+                direction=direction_str,
+                trace_id=(sig or {}).get("trace_id") if sig else None,
+                latest_candle_ts=_latest_candle_ts,
+                image_hash=_stored_vision.get("image_hash"),
+            )
+            _vision_payload["cache_key"] = _cache_meta
+            _engine_b_cache_put(_cache_meta["key"] + "_vision", _vision_payload)
+            if _cache_meta.get("ui_only"):
+                _vsym_key = str(symbol or "").replace("/", "_") + "_vision"
+                _engine_b_cache_put(_vsym_key, _vision_payload)
         except Exception:
             pass
         try:
@@ -10433,6 +10469,7 @@ def api_chart_analysis():
         _response_payload: dict = {
             "analysis": analysis,
             "structured": structured,
+            "structured_trade_read": structured_trade_read,
             "model": _vision_model,
             "symbol": symbol,
             "tf": _tf_label,
@@ -10450,6 +10487,8 @@ def api_chart_analysis():
             _response_payload["chart_timestamp_warnings"] = _chart_ts_warnings
         if _latest_candle_ts:
             _response_payload["latest_candle_ts"] = _latest_candle_ts
+        if _stored_vision.get("image_hash"):
+            _response_payload["image_hash"] = _stored_vision.get("image_hash")
         return jsonify(_response_payload)
 
     except Exception as e:
@@ -14154,6 +14193,7 @@ from types import SimpleNamespace  # noqa: E402
 
 from athena_runtime import set_runtime  # noqa: E402
 from athena_app.api.routes_audit import register_audit_routes  # noqa: E402
+from athena_app.api.routes_ai_agent import register_ai_agent_routes  # noqa: E402
 from athena_app.api.routes_backtest import register_backtest_history_routes  # noqa: E402
 from athena_app.api.routes_broker_status import register_broker_status_routes  # noqa: E402
 from athena_app.api.routes_live_dashboard import register_live_dashboard_routes  # noqa: E402
@@ -14234,6 +14274,18 @@ register_backtest_history_routes(
 register_lottery_routes(
     app,
     SimpleNamespace(CONFIG=CONFIG, AUDIT_DB=_AUDIT_DB, log=log),
+)
+register_ai_agent_routes(
+    app,
+    SimpleNamespace(
+        CONFIG=CONFIG,
+        AUDIT_DB=_AUDIT_DB,
+        last_scan_results=lambda: _last_scan_results,
+        live_dashboard_scalp_cache=_live_dashboard_scalp_cache,
+        live_dashboard_scalp_cache_lock=_live_dashboard_scalp_cache_lock,
+        json_safe=_json_safe,
+        log=log,
+    ),
 )
 register_market_data_routes(
     app,

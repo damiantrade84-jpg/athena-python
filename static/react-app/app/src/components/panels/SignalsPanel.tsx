@@ -20,11 +20,12 @@ import {
 } from '@/components/ui/alert-dialog';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { ErrorBanner, RefreshButton } from '@/components/shared';
-import { Search, Zap, Filter, Layers, Activity, Eye, Clock, Sun, Moon, FileText } from 'lucide-react';
+import { Search, Zap, Filter, Layers, Activity, Eye, Clock, Sun, Moon, FileText, Bot } from 'lucide-react';
 import { fmtNum, toNum } from '@/lib/utils';
 import { fmtPrice } from '@/lib/athenaFormat';
 import apiClient from '@/lib/apiClient';
 import { EngineASignalCard, EngineBChecklistCard } from '@/components/athena';
+import AITradingAgentPanel from '@/components/ai/AITradingAgentPanel';
 import type { EngineASignal, ScanResponse, NakedScanResponse, ChartAnalysisResponse, AiTextReviewResponse } from '@/types/athena';
 
 type ScanSource = 'A' | 'B';
@@ -122,6 +123,17 @@ function canExecuteSignal(signal: EngineASignal | null, source: ScanSource): boo
   return tier === 'trade' || tier === 'criteria' || signal.trade === true;
 }
 
+function signalTraceId(signal: EngineASignal | null): string | null {
+  if (!signal) return null;
+  const raw = signal.trace_id ?? signal.traceId;
+  return typeof raw === 'string' && raw.trim() ? raw.trim() : null;
+}
+
+function signalSymbol(signal: EngineASignal | null): string | null {
+  if (!signal) return null;
+  return signal.symbol || signal.pair || signal.display || null;
+}
+
 export default function SignalsPanel() {
   const { showToast, isTestMode, scanCacheA, scanCacheB, scanCacheAMeta, scanCacheBMeta, setScanCacheA, setScanCacheB } = useStore();
   const [filter, setFilter] = useState('');
@@ -148,6 +160,7 @@ export default function SignalsPanel() {
   const [aiReview, setAiReview] = useState<ChartAnalysisResponse | null>(null);
   const [aiTextReview, setAiTextReview] = useState<AiTextReviewResponse | null>(null);
   const [aiReviewMode, setAiReviewMode] = useState<'vision' | 'text'>('vision');
+  const [agentOpen, setAgentOpen] = useState(false);
   const [executing, setExecuting] = useState(false);
   const { priceFor } = useLivePrices(10000);
 
@@ -331,6 +344,7 @@ export default function SignalsPanel() {
     setSelected(s);
     setAiReview(null);
     setAiTextReview(null);
+    setAgentOpen(false);
   }, []);
 
   const requestExecute = useCallback(
@@ -726,6 +740,15 @@ export default function SignalsPanel() {
                       <FileText className={textLoading ? 'w-3.5 h-3.5 animate-pulse' : 'w-3.5 h-3.5'} />
                       {textLoading ? 'AI Text...' : 'AI Review (Text)'}
                     </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="h-8 text-xs gap-1"
+                      onClick={() => setAgentOpen((open) => !open)}
+                    >
+                      <Bot className="w-3.5 h-3.5" />
+                      Discuss with AI
+                    </Button>
                     {aiReview?.structured?.right_edge_status && aiReviewMode === 'vision' && (
                       <Badge
                         className={
@@ -743,6 +766,14 @@ export default function SignalsPanel() {
                       </Badge>
                     )}
                   </div>
+
+                  {agentOpen && (
+                    <AITradingAgentPanel
+                      symbol={signalSymbol(selected)}
+                      traceId={signalTraceId(selected)}
+                      seedMessage="Review this trade. What supports it, what argues against it, and what would confirm or invalidate it?"
+                    />
+                  )}
 
                   {/* AI Review mode toggle */}
                   {(aiReview || aiTextReview) && (

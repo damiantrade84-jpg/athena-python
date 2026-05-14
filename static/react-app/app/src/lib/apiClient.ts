@@ -2,6 +2,14 @@
 // Mirrors the original window.apiClient interface for legacy support.
 
 import { safeJson } from './safeJson';
+import type {
+  AiStrategistBriefResponse,
+  AiTradeChatRequest,
+  AiTradeChatResponse,
+  CompareResponse,
+  EngineASignal,
+  PairScanResponse,
+} from '@/types/athena';
 
 const API_BASE = import.meta.env.VITE_API_BASE || '';
 
@@ -62,6 +70,26 @@ export function initApiClient() {
     window.apiClient = apiClient;
   }
   return window.apiClient;
+}
+
+export function postAiTradeChat(payload: AiTradeChatRequest): Promise<AiTradeChatResponse> {
+  return apiClient.post<AiTradeChatResponse>(
+    '/api/ai/trade-chat',
+    payload as unknown as Record<string, unknown>,
+  );
+}
+
+export function postPairScan(symbol: string, style = 'auto'): Promise<PairScanResponse> {
+  return apiClient.post<PairScanResponse>('/api/pair-scan', { symbol, style });
+}
+
+export function postCompareEngines(signal: EngineASignal, style = 'auto'): Promise<CompareResponse> {
+  return apiClient.post<CompareResponse>('/api/compare-engines', { signal, style });
+}
+
+export function getAiStrategistBrief(assetScope = 'all'): Promise<AiStrategistBriefResponse> {
+  const params = new URLSearchParams({ asset_scope: assetScope || 'all' });
+  return apiClient.get<AiStrategistBriefResponse>(`/api/ai/strategist/brief?${params.toString()}`);
 }
 
 export default apiClient;

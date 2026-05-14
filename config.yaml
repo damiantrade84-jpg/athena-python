@@ -1148,6 +1148,24 @@ AI_MARCUS_TWO_STAGE_ENABLED: false
 AI_AGENT_PACKET_ENABLED: true
 AI_SIMILAR_SETUPS_ENABLED: true
 AI_CONTRADICTION_DETECTOR_ENABLED: true
+AI_MARKET_INTELLIGENCE_ENABLED: true
+AI_MARKET_INTELLIGENCE_TTL_SECONDS: 1800
+AI_MARKET_INTELLIGENCE_FAIL_OPEN: true
+AI_STRATEGIST_ENABLED: true
+AI_STRATEGIST_PRE_TRADE_ENABLED: false
+AI_STRATEGIST_MORNING_BRIEF_ENABLED: true
+AI_STRATEGIST_WEEKLY_RETRO_ENABLED: true
+VISION_FRESHNESS_POLICY:
+  missing_chart_timestamp: downgrade_to_review
+  missing_latest_candle_ts: downgrade_to_review
+  stale_action: reject_for_execution_context
+  max_age_sec:
+    M1: 180
+    M5: 900
+    M15: 1800
+    H1: 5400
+    H4: 18000
+    D1: 97200
 # Retry loop inside run_ai() for transient timeouts (independent of SDK retries).
 MARCUS_AI_MAX_RETRIES: 2
 MARCUS_AI_RETRY_BACKOFF_SEC: 3.0

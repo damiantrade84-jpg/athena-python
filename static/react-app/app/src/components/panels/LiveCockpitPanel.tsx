@@ -11,8 +11,10 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Checkbox } from '@/components/ui/checkbox';
 import { ErrorBanner, RefreshButton } from '@/components/shared';
+import AITradingAgentPanel from '@/components/ai/AITradingAgentPanel';
 import {
   Radio,
+  Bot,
   Activity,
   Zap,
   Layers,
@@ -511,8 +513,10 @@ function CockpitDetail({
   onPaperExecute: (row: LdSymbolRow) => void;
   executing: boolean;
 }) {
+  const [activeTab, setActiveTab] = useState('overview');
+
   return (
-    <Tabs defaultValue="overview" className="flex-1 flex flex-col overflow-hidden">
+    <Tabs value={activeTab} onValueChange={setActiveTab} className="flex-1 flex flex-col overflow-hidden">
       <CardHeader className="pb-1 shrink-0">
         <div className="flex items-center justify-between">
           <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Rajdhani', sans-serif", letterSpacing: '0.12em' }}>
@@ -526,6 +530,10 @@ function CockpitDetail({
             {row.spread != null && (
               <span className="text-[10px] text-muted-foreground">spread {fmtNum(row.spread, 4)}</span>
             )}
+            <Button type="button" size="sm" variant="outline" className="h-7 gap-1 text-[10px]" onClick={() => setActiveTab('agent')}>
+              <Bot className="w-3.5 h-3.5" />
+              Discuss with AI
+            </Button>
           </div>
         </div>
         <TabsList className="w-full justify-start mt-2">
@@ -536,6 +544,7 @@ function CockpitDetail({
           <TabsTrigger value="engineC" className="text-[11px]">Engine C</TabsTrigger>
           <TabsTrigger value="engineD" className="text-[11px]">Engine D</TabsTrigger>
           <TabsTrigger value="ai" className="text-[11px]">AI</TabsTrigger>
+          <TabsTrigger value="agent" className="text-[11px]">Agent</TabsTrigger>
           <TabsTrigger value="execute" className="text-[11px]">Execute</TabsTrigger>
           <TabsTrigger value="diagnostics" className="text-[11px]">Diagnostics</TabsTrigger>
         </TabsList>
@@ -593,6 +602,14 @@ function CockpitDetail({
 
         <TabsContent value="ai" className="m-0 mt-2">
           <AiReviewCard ai={row.aiReview} />
+        </TabsContent>
+
+        <TabsContent value="agent" className="m-0 mt-2">
+          <AITradingAgentPanel
+            symbol={row.symbol}
+            traceId={row.traceId}
+            seedMessage="Review this trade. What supports it, what argues against it, and what would confirm or invalidate it?"
+          />
         </TabsContent>
 
         <TabsContent value="execute" className="m-0 mt-2 space-y-3">

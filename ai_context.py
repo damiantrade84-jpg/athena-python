@@ -1,6 +1,12 @@
 """ai_context.py — Shared AI context builder and style resolver."""
 
+from datetime import datetime, timezone
 from typing import Dict, Any, List, Optional
+
+try:
+    from ai_signal_trace import ensure_trace_id
+except Exception:  # pragma: no cover - import guard for legacy tooling
+    ensure_trace_id = None
 
 def resolve_ai_style(signal: Dict[str, Any], explicit_style: str = "auto") -> str:
     """Resolve trading style based on UI selection, signal content, or asset rules.
@@ -301,3 +307,478 @@ def build_ai_calibration_context_string(signal: Dict[str, Any], engine_source: s
         lines.append(f"Freshness status: {dq['freshness_status']}")
 
     return "\n".join(lines)
+
+
+_MISSING = object()
+
+
+def _present(value: Any) -> bool:
+    return value is not _MISSING and value is not None
+
+
+def _as_dict(value: Any) -> Dict[str, Any]:
+    return value if isinstance(value, dict) else {}
+
+
+def _as_list(value: Any) -> List[Any]:
+    if value is None or value is _MISSING:
+        return []
+    if isinstance(value, list):
+        return value
+    if isinstance(value, tuple):
+        return list(value)
+    return [value]
+
+
+def _first_present(*values: Any) -> Any:
+    for value in values:
+        if value is not _MISSING and value is not None:
+            return value
+    return None
+
+
+def _pick(source: Dict[str, Any], *keys: str) -> Any:
+    for key in keys:
+        if key in source and source[key] is not None:
+            return source[key]
+    return _MISSING
+
+
+def _pick_nested(signal: Dict[str, Any], nested: Dict[str, Any], *keys: str) -> Any:
+    return _first_present(_pick(nested, *keys), _pick(signal, *keys))
+
+
+def _to_float(value: Any) -> float | None:
+    try:
+        if value is None or value is _MISSING or value == "":
+            return None
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _compact_missing(data: Dict[str, Any], required_fields: List[str]) -> List[str]:
+    return [
+        field
+        for field in required_fields
+        if data.get(field, _MISSING) is None or data.get(field, _MISSING) is _MISSING
+    ]
+
+
+def _section_complete(data: Dict[str, Any], required_fields: List[str]) -> float:
+    if not required_fields:
+        return 1.0
+    missing = set(data.get("missing_fields") or [])
+    complete = sum(1 for field in required_fields if field not in missing)
+    return round(complete / len(required_fields), 4)
+
+
+def _freshness_status(value: Any) -> Any:
+    if isinstance(value, dict):
+        if value.get("allowed") is False:
+            reason = value.get("reason") or value.get("status") or value.get("freshness_status") or "blocked"
+            return f"allowed_false:{reason}"
+        return (
+            value.get("status")
+            or value.get("freshness_status")
+            or value.get("reason")
+            or ("fresh" if value.get("allowed") is True else None)
+        )
+    return value
+
+
+def _signal_symbol(signal: Dict[str, Any]) -> str:
+    return str(
+        signal.get("symbol")
+        or signal.get("pair")
+        or signal.get("display")
+        or signal.get("ticker")
+        or "unknown"
+    )
+
+
+def _engine_dict(signal: Dict[str, Any], *keys: str) -> Dict[str, Any]:
+    for key in keys:
+        value = signal.get(key)
+        if isinstance(value, dict):
+            return value
+    return {}
+
+
+def build_engine_d_context(signal: Dict[str, Any]) -> Dict[str, Any]:
+    """Extract canonical Engine D scalp context from live/backtest signal payloads."""
+    signal = signal if isinstance(signal, dict) else {}
+    engine_d = _engine_dict(signal, "engine_d", "scalp", "engineD")
+    fee_guard = _pick_nested(signal, engine_d, "fee_guard", "feeGuard")
+    if fee_guard is _MISSING:
+        fee_guard = _pick(signal, "spread_fees_guard")
+
+    data = {
+        "setup_type": _pick_nested(signal, engine_d, "setup_type", "zone_type", "zoneType"),
+        "gate_result": _pick_nested(signal, engine_d, "gate_result", "gateResult"),
+        "executable": _pick_nested(signal, engine_d, "executable"),
+        "candidate_status": _pick_nested(signal, engine_d, "candidate_status", "candidateStatus"),
+        "quality_score": _pick_nested(signal, engine_d, "quality_score", "ai_score", "score"),
+        "quality_grade": _pick_nested(signal, engine_d, "quality_grade", "ai_grade", "grade"),
+        "quality_reasons": _as_list(_pick_nested(signal, engine_d, "quality_reasons", "ai_reasons", "reasons")),
+        "market_state": _pick_nested(signal, engine_d, "market_state", "marketState"),
+        "session": _pick_nested(signal, engine_d, "session"),
+        "execution_tf": _pick_nested(signal, engine_d, "execution_tf", "executionTf"),
+        "structure_tf": _pick_nested(signal, engine_d, "structure_tf", "structureTf"),
+        "context_tf": _pick_nested(signal, engine_d, "context_tf", "contextTf"),
+        "vp_poc": _pick_nested(signal, engine_d, "vp_poc", "poc"),
+        "vp_vah": _pick_nested(signal, engine_d, "vp_vah", "vah"),
+        "vp_val": _pick_nested(signal, engine_d, "vp_val", "val"),
+        "vp_lvn_count": _pick_nested(signal, engine_d, "vp_lvn_count", "lvn_count"),
+        "vp_volume_source": _pick_nested(signal, engine_d, "vp_volume_source", "volume_source"),
+        "vp_fidelity": _pick_nested(signal, engine_d, "vp_fidelity"),
+        "vp_is_proxy": _pick_nested(signal, engine_d, "vp_is_proxy"),
+        "vp_uses_real_trade_buckets": _pick_nested(signal, engine_d, "vp_uses_real_trade_buckets"),
+        "profile_anchor_mode": _pick_nested(signal, engine_d, "profile_anchor_mode"),
+        "profile_anchor_start": _pick_nested(signal, engine_d, "profile_anchor_start"),
+        "profile_anchor_end": _pick_nested(signal, engine_d, "profile_anchor_end"),
+        "vwap": _pick_nested(signal, engine_d, "vwap"),
+        "absorption_count": _pick_nested(signal, engine_d, "absorption_count"),
+        "absorption_source": _pick_nested(signal, engine_d, "absorption_source"),
+        "absorption_fidelity": _pick_nested(signal, engine_d, "absorption_fidelity"),
+        "absorption_is_proxy": _pick_nested(signal, engine_d, "absorption_is_proxy"),
+        "cvd_direction": _pick_nested(signal, engine_d, "cvd_direction"),
+        "cvd_slope": _pick_nested(signal, engine_d, "cvd_slope"),
+        "cvd_source": _pick_nested(signal, engine_d, "cvd_source"),
+        "cvd_bucket_count": _pick_nested(signal, engine_d, "cvd_bucket_count"),
+        "cvd_fidelity": _pick_nested(signal, engine_d, "cvd_fidelity"),
+        "cvd_is_proxy": _pick_nested(signal, engine_d, "cvd_is_proxy"),
+        "aaa_complete": _pick_nested(signal, engine_d, "aaa_complete"),
+        "aggression_source": _pick_nested(signal, engine_d, "aggression_source"),
+        "aggression_confirmed": _pick_nested(signal, engine_d, "aggression_confirmed"),
+        "aggression_uses_real_order_flow": _pick_nested(signal, engine_d, "aggression_uses_real_order_flow"),
+        "aggression_source_is_proxy": _pick_nested(signal, engine_d, "aggression_source_is_proxy"),
+        "rr1": _pick_nested(signal, engine_d, "rr1", "rr"),
+        "spread_pips": _pick_nested(signal, engine_d, "spread_pips", "spread"),
+        "fee_guard": fee_guard if _present(fee_guard) else None,
+        "sl_method": _pick_nested(signal, engine_d, "sl_method"),
+        "sl_distance": _pick_nested(signal, engine_d, "sl_distance", "slDistance"),
+        "rr_ok": _pick_nested(signal, engine_d, "rr_ok"),
+        "strict_fabio_pass": _pick_nested(signal, engine_d, "strict_fabio_pass"),
+        "strict_fabio_reason": _pick_nested(signal, engine_d, "strict_fabio_reason"),
+        "strict_fabio_missing_pillars": _as_list(_pick_nested(signal, engine_d, "strict_fabio_missing_pillars")),
+        "strict_fabio_pillars": _pick_nested(signal, engine_d, "strict_fabio_pillars"),
+    }
+    for key, value in list(data.items()):
+        if value is _MISSING:
+            data[key] = None
+    required = [
+        "setup_type", "gate_result", "executable", "candidate_status", "quality_score",
+        "quality_grade", "market_state", "session", "execution_tf", "vp_poc", "vp_vah",
+        "vp_val", "vp_volume_source", "vp_fidelity", "vp_is_proxy",
+        "vp_uses_real_trade_buckets", "vwap", "absorption_count", "absorption_source",
+        "cvd_direction", "cvd_source", "aaa_complete", "aggression_source",
+        "aggression_confirmed", "aggression_uses_real_order_flow", "rr1", "spread_pips",
+        "fee_guard", "sl_method", "sl_distance", "rr_ok", "strict_fabio_pass",
+        "strict_fabio_reason", "strict_fabio_missing_pillars", "strict_fabio_pillars",
+    ]
+    data["missing_fields"] = _compact_missing(data, required)
+    return data
+
+
+def _build_engine_a_context(signal: Dict[str, Any]) -> Dict[str, Any]:
+    engine_a = _engine_dict(signal, "engine_a", "engineA")
+    score = _to_float(_pick_nested(signal, engine_a, "score", "confluenceScore", "final_score"))
+    max_score = _to_float(_pick_nested(signal, engine_a, "max_score", "maxScore"))
+    score_pct = _to_float(_pick_nested(signal, engine_a, "score_pct", "rawScorePct", "confluencePct"))
+    if score_pct is None and score is not None and max_score:
+        score_pct = score / max_score * 100.0
+    data = {
+        "score": score,
+        "max_score": max_score,
+        "score_pct": score_pct,
+        "direction": _pick_nested(signal, engine_a, "direction"),
+        "regime": _pick_nested(signal, engine_a, "regime", "trendState", "regimeName"),
+        "trend_score": _pick_nested(signal, engine_a, "trend_score", "trendScore"),
+        "momentum_score": _pick_nested(signal, engine_a, "momentum_score", "mom_quality", "momentumScore"),
+        "adx": _pick_nested(signal, engine_a, "adx"),
+        "volatility_state": _pick_nested(signal, engine_a, "volatility_state", "volatilityState"),
+        "factor_diagnostics": _pick_nested(signal, engine_a, "factor_diagnostics", "factorDiagnostics"),
+        "threshold_progress": _pick_nested(signal, engine_a, "threshold_progress", "thresholdProgressPct"),
+    }
+    for key, value in list(data.items()):
+        if value is _MISSING:
+            data[key] = None
+    required = [
+        "score", "max_score", "score_pct", "direction", "regime", "trend_score",
+        "momentum_score", "adx", "volatility_state", "factor_diagnostics",
+        "threshold_progress",
+    ]
+    data["missing_fields"] = _compact_missing(data, required)
+    return data
+
+
+def _build_engine_b_context(signal: Dict[str, Any]) -> Dict[str, Any]:
+    engine_b = _engine_dict(signal, "engine_b", "engine_b_overlay", "naked_data", "engineB")
+    data = {
+        "verdict": _pick_nested(signal, engine_b, "verdict", "structural_verdict", "engine_b_verdict"),
+        "confidence": _pick_nested(signal, engine_b, "confidence", "confidence_score", "score", "engine_b_score"),
+        "direction": _pick_nested(signal, engine_b, "direction", "independent_direction", "engine_b_independent_direction"),
+        "bos": _pick_nested(signal, engine_b, "bos", "break_of_structure"),
+        "choch": _pick_nested(signal, engine_b, "choch"),
+        "order_block": _pick_nested(signal, engine_b, "order_block", "ob"),
+        "fvg": _pick_nested(signal, engine_b, "fvg"),
+        "liquidity_sweep": _pick_nested(signal, engine_b, "liquidity_sweep", "sweep"),
+        "zone_context": _pick_nested(signal, engine_b, "zone_context", "zone_quality", "zone_ok"),
+        "rr": _pick_nested(signal, engine_b, "rr", "rr1"),
+        "style": _pick_nested(signal, engine_b, "style"),
+    }
+    for key, value in list(data.items()):
+        if value is _MISSING:
+            data[key] = None
+    required = [
+        "verdict", "confidence", "direction", "bos", "choch", "order_block",
+        "fvg", "liquidity_sweep", "zone_context", "rr", "style",
+    ]
+    data["missing_fields"] = _compact_missing(data, required)
+    return data
+
+
+def _build_engine_c_context(signal: Dict[str, Any]) -> Dict[str, Any]:
+    engine_c = _engine_dict(signal, "engine_c", "engineC")
+    data = {
+        "decision_state": _pick_nested(signal, engine_c, "decision_state"),
+        "combined_conviction": _pick_nested(signal, engine_c, "combined_conviction", "combinedConviction", "conviction"),
+        "a_norm": _pick_nested(signal, engine_c, "a_norm", "engine_a_norm"),
+        "b_norm": _pick_nested(signal, engine_c, "b_norm", "engine_b_norm"),
+        "blend_case": _pick_nested(signal, engine_c, "blend_case"),
+        "watchlist_reason": _pick_nested(signal, engine_c, "watchlist_reason"),
+        "reliability_flags": _as_list(_pick_nested(signal, engine_c, "reliability_flags")),
+    }
+    for key, value in list(data.items()):
+        if value is _MISSING:
+            data[key] = None
+    required = [
+        "decision_state", "combined_conviction", "a_norm", "b_norm", "blend_case",
+        "watchlist_reason", "reliability_flags",
+    ]
+    data["missing_fields"] = _compact_missing(data, required)
+    return data
+
+
+def _build_vision_context(signal: Dict[str, Any], vision: Dict[str, Any] | None = None) -> Dict[str, Any]:
+    vision_data = _as_dict(vision) or _engine_dict(signal, "vision", "ai_vision")
+    structured = _as_dict(vision_data.get("structured"))
+    structured_trade_read = _as_dict(vision_data.get("structured_trade_read") or structured.get("structured_trade_read"))
+    data = {
+        "right_edge_status": _first_present(_pick(vision_data, "right_edge_status"), _pick(structured, "right_edge_status")),
+        "tf_alignment": _first_present(_pick(vision_data, "tf_alignment"), _pick(structured, "tf_alignment")),
+        "confirms_direction": _first_present(_pick(vision_data, "confirms_direction"), _pick(structured, "confirms_direction")),
+        "style_ratings": _first_present(_pick(vision_data, "style_ratings", "vision_style_ratings"), _pick(structured, "style_ratings")),
+        "last_candle_read": _first_present(_pick(vision_data, "last_candle_read"), _pick(structured, "last_candle_read")),
+        "last_3_5_candles": _first_present(_pick(vision_data, "last_3_5_candles"), _pick(structured, "last_3_5_candles")),
+        "visible_obstacles": _first_present(_pick(vision_data, "visible_obstacles"), _pick(structured, "visible_obstacles")),
+        "freshness_status": _first_present(_pick(vision_data, "freshness_status"), _pick(structured, "freshness_status")),
+        "chart_timestamp": _first_present(_pick(vision_data, "chart_timestamp"), _pick(structured, "chart_timestamp")),
+        "latest_candle_ts": _first_present(_pick(vision_data, "latest_candle_ts"), _pick(structured, "latest_candle_ts")),
+        "image_hash": _first_present(_pick(vision_data, "image_hash"), _pick(signal, "image_hash")),
+        "structured_trade_read": structured_trade_read or None,
+        "allowed_for_execution_context": _first_present(
+            _pick(vision_data, "allowed_for_execution_context"),
+            _pick(structured_trade_read, "allowed_for_execution_context"),
+        ),
+    }
+    for key, value in list(data.items()):
+        if value is _MISSING:
+            data[key] = None
+    required = [
+        "right_edge_status", "tf_alignment", "confirms_direction", "style_ratings",
+        "last_candle_read", "last_3_5_candles", "visible_obstacles", "freshness_status",
+        "chart_timestamp", "latest_candle_ts", "image_hash",
+    ]
+    data["missing_fields"] = _compact_missing(data, required)
+    return data
+
+
+def _build_risk_context(signal: Dict[str, Any]) -> Dict[str, Any]:
+    risk = _engine_dict(signal, "risk", "risk_state", "riskState")
+    fee_guard = _pick(signal, "fee_guard", "spread_fees_guard")
+    data = {
+        "rr": _first_present(_pick(risk, "rr"), _pick(signal, "rr1", "rr")),
+        "min_rr": _first_present(_pick(risk, "min_rr", "minRR"), _pick(signal, "min_rr", "minRR")),
+        "sl": _first_present(_pick(risk, "sl", "stop_loss"), _pick(signal, "sl", "stopLoss")),
+        "tp": _first_present(_pick(risk, "tp", "take_profit"), _pick(signal, "tp", "tp1", "takeProfit")),
+        "entry": _first_present(_pick(risk, "entry"), _pick(signal, "entry", "price")),
+        "position_size": _first_present(_pick(risk, "position_size"), _pick(signal, "position_size")),
+        "spread": _first_present(_pick(risk, "spread"), _pick(signal, "spread", "spread_pips")),
+        "fees": _first_present(_pick(risk, "fees"), fee_guard),
+        "slippage": _first_present(_pick(risk, "slippage"), _pick(signal, "slippage")),
+        "guardian_status": _first_present(_pick(risk, "guardian_status"), _pick(signal, "guardian_status")),
+        "kill_switch_status": _first_present(_pick(risk, "kill_switch_status"), _pick(signal, "kill_switch_status")),
+        "event_risk": _first_present(_pick(risk, "event_risk"), _pick(signal, "event_risk")),
+        "data_freshness_status": _first_present(
+            _pick(risk, "data_freshness_status"),
+            _freshness_status(_pick(signal, "dataFreshness", "data_freshness", "freshnessStatus", "freshness_status")),
+        ),
+    }
+    for key, value in list(data.items()):
+        if value is _MISSING:
+            data[key] = None
+    required = [
+        "rr", "min_rr", "sl", "tp", "entry", "position_size", "spread", "fees",
+        "slippage", "guardian_status", "kill_switch_status", "event_risk",
+        "data_freshness_status",
+    ]
+    data["missing_fields"] = _compact_missing(data, required)
+    return data
+
+
+def _build_data_quality_context(signal: Dict[str, Any]) -> Dict[str, Any]:
+    candle_meta = _as_dict(signal.get("candleFetchMeta") or signal.get("candle_fetch_meta"))
+    data_freshness = _pick(signal, "dataFreshness", "data_freshness")
+    if data_freshness is _MISSING:
+        data_freshness = None
+    data_freshness_status = _freshness_status(data_freshness)
+    direct_freshness_status = _pick(signal, "freshnessStatus", "freshness_status")
+    if isinstance(data_freshness_status, str) and data_freshness_status.upper().startswith("ALLOWED_FALSE"):
+        freshness_status = data_freshness_status
+    else:
+        freshness_status = _first_present(direct_freshness_status, data_freshness_status)
+    stale_flags = _as_list(signal.get("stale_flags") or candle_meta.get("stale_flags"))
+    provider_flags = _as_list(signal.get("provider_flags") or candle_meta.get("provider_flags"))
+    data = {
+        "candle_source": _first_present(_pick(candle_meta, "source"), _pick(signal, "candle_source", "source")),
+        "volume_source": _first_present(_pick(signal, "volume_source"), _pick(signal, "vp_volume_source")),
+        "freshness_status": freshness_status,
+        "stale_flags": stale_flags,
+        "provider_flags": provider_flags,
+        "confirmed_only": _first_present(_pick(candle_meta, "confirmed_only"), _pick(signal, "confirmed_only")),
+        "forming_bar_policy": _first_present(_pick(candle_meta, "forming_bar_policy"), _pick(signal, "forming_bar_policy")),
+    }
+    for key, value in list(data.items()):
+        if value is _MISSING:
+            data[key] = None
+    required = [
+        "candle_source", "volume_source", "freshness_status", "confirmed_only",
+        "forming_bar_policy",
+    ]
+    data["missing_fields"] = _compact_missing(data, required)
+    return data
+
+
+def _build_deterministic_gate_context(signal: Dict[str, Any]) -> Dict[str, Any]:
+    engine_c = _engine_dict(signal, "engine_c", "engineC")
+    data = {
+        "trade": _first_present(_pick(signal, "trade"), _pick(engine_c, "trade")),
+        "advisory_rule_trade_allowed": _pick(signal, "advisory_rule_trade_allowed"),
+        "execution_allowed": _pick(signal, "execution_allowed", "executionAllowed"),
+        "risk_allowed": _pick(signal, "risk_allowed", "riskAllowed"),
+        "freshness_allowed": _pick(signal, "freshness_allowed", "freshnessAllowed"),
+        "signal_class": _pick(signal, "signalClass", "signal_class"),
+        "signal_tier": _pick(signal, "signalTier", "signal_tier", "scan_tier"),
+        "final_state": _pick(signal, "finalState", "final_state"),
+        "block_reason": _pick(signal, "blockReason", "block_reason"),
+        "engine_c_decision_state": _first_present(_pick(engine_c, "decision_state"), _pick(signal, "decision_state")),
+    }
+    for key, value in list(data.items()):
+        if value is _MISSING:
+            data[key] = None
+    return data
+
+
+def build_ai_review_packet(
+    signal: Dict[str, Any],
+    user_question: str | None = None,
+    vision: Dict[str, Any] | None = None,
+) -> Dict[str, Any]:
+    """Build a canonical advisory-only AI review packet without changing legacy callers."""
+    signal = dict(signal or {})
+    if ensure_trace_id:
+        try:
+            ensure_trace_id(signal)
+        except Exception:
+            pass
+    asset_type = str(signal.get("type") or signal.get("asset_type") or "unknown").lower()
+    requested_style = resolve_ai_style(signal, str(signal.get("requested_style") or signal.get("style") or "auto"))
+    engine_source = str(
+        signal.get("engine_source")
+        or signal.get("source_engine")
+        or signal.get("engine")
+        or signal.get("setup_engine")
+        or "unknown"
+    )
+    engine_a = _build_engine_a_context(signal)
+    engine_b = _build_engine_b_context(signal)
+    engine_c = _build_engine_c_context(signal)
+    engine_d = build_engine_d_context(signal)
+    vision_ctx = _build_vision_context(signal, vision)
+    risk = _build_risk_context(signal)
+    data_quality = _build_data_quality_context(signal)
+    deterministic_gates = _build_deterministic_gate_context(signal)
+    similar = _as_dict(signal.get("similar_outcomes")) or {
+        "examples": [],
+        "aggregate_sample_size": 0,
+        "win_rate": None,
+        "avg_r": None,
+        "profit_factor": None,
+        "oos_decay": None,
+        "reliability": "unavailable",
+        "warning": None,
+        "missing_fields": [],
+    }
+    similar.setdefault("missing_fields", [])
+    market_context = {
+        "pair": signal.get("pair") or signal.get("display") or signal.get("symbol"),
+        "session": signal.get("session") or signal.get("current_session"),
+        "timeframe": signal.get("timeframe") or signal.get("tf"),
+        "timestamp": signal.get("timestamp") or signal.get("ts"),
+        "regime": signal.get("regime") or signal.get("regimeName"),
+        "data_freshness": signal.get("dataFreshness") or signal.get("data_freshness"),
+    }
+    market_intelligence = _as_dict(signal.get("market_intelligence"))
+    try:
+        from config import CONFIG as _CONFIG
+
+        mi_enabled = bool(_CONFIG.get("AI_MARKET_INTELLIGENCE_ENABLED", True))
+    except BaseException:
+        mi_enabled = True
+    if not market_intelligence and mi_enabled:
+        try:
+            from market_intelligence import get_market_intelligence
+
+            market_intelligence = get_market_intelligence(market_context.get("pair") or _signal_symbol(signal), asset_type)
+        except Exception as exc:
+            market_intelligence = {
+                "schema_version": "market_intelligence.v1",
+                "freshness_status": "unavailable",
+                "warnings": [f"Market intelligence unavailable: {exc}"],
+                "missing_fields": [],
+            }
+    completeness = {
+        "engine_a_complete": _section_complete(engine_a, [k for k in engine_a if k != "missing_fields"]),
+        "engine_b_complete": _section_complete(engine_b, [k for k in engine_b if k != "missing_fields"]),
+        "engine_c_complete": _section_complete(engine_c, [k for k in engine_c if k != "missing_fields"]),
+        "engine_d_complete": _section_complete(engine_d, [k for k in engine_d if k != "missing_fields"]),
+        "vision_complete": _section_complete(vision_ctx, [k for k in vision_ctx if k != "missing_fields"]),
+        "risk_complete": _section_complete(risk, [k for k in risk if k != "missing_fields"]),
+        "data_quality_complete": _section_complete(data_quality, [k for k in data_quality if k != "missing_fields"]),
+    }
+    completeness["overall_complete"] = round(sum(completeness.values()) / max(len(completeness), 1), 4)
+    return {
+        "schema_version": "1.0",
+        "trace_id": str(signal.get("trace_id") or ""),
+        "symbol": _signal_symbol(signal),
+        "asset_type": asset_type,
+        "direction": signal.get("direction"),
+        "requested_style": requested_style,
+        "engine_source": engine_source,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "market_context": market_context,
+        "market_intelligence": market_intelligence,
+        "engine_a": engine_a,
+        "engine_b": engine_b,
+        "engine_c": engine_c,
+        "engine_d": engine_d,
+        "vision": vision_ctx,
+        "risk": risk,
+        "data_quality": data_quality,
+        "similar_outcomes": similar,
+        "user_question": user_question,
+        "context_completeness": completeness,
+        "deterministic_gates": deterministic_gates,
+    }

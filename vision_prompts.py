@@ -40,6 +40,24 @@ _STRUCTURED_FOOTER = (
     "SWING LEVELS: SL=<KEEP|price> TP=<KEEP|price>"
 )
 
+_VISION_TRADE_READ_JSON = (
+    "VISION_TRADE_READ_JSON (place before footer, valid compact JSON):\n"
+    "{\"schema_version\":\"vision_trade_read.v1\","
+    "\"right_edge_status\":\"CONFIRMS|REVIEW|POTENTIAL_REVERSAL|UNKNOWN\","
+    "\"tf_alignment\":\"ALIGNED|CONFLICTED|UNKNOWN\","
+    "\"confirms_direction\":true,"
+    "\"chart_identity_confidence\":\"confirmed|from_request|unclear\","
+    "\"freshness_status\":\"unknown\","
+    "\"allowed_for_execution_context\":false,"
+    "\"last_candle_read\":{\"body_size\":\"\",\"close_location\":\"upper_third|middle|lower_third|unknown\",\"upper_wick\":\"\",\"lower_wick\":\"\",\"read\":\"\"},"
+    "\"last_3_5_candles\":{\"sequence\":\"\",\"auction_behavior\":\"\",\"momentum_state\":\"\"},"
+    "\"visible_structure\":{\"support\":[],\"resistance\":[],\"trendline_or_channel\":\"\",\"obstacles_before_tp\":[]},"
+    "\"style_ratings\":{\"scalp\":\"STRONG|MODERATE|WEAK|AVOID|CONTRADICTS|NA\",\"intraday\":\"STRONG|MODERATE|WEAK|AVOID|CONTRADICTS|NA\",\"swing\":\"STRONG|MODERATE|WEAK|AVOID|CONTRADICTS|NA\"},"
+    "\"level_suggestions\":{\"sl\":{\"action\":\"KEEP|ADJUST|UNKNOWN\",\"suggested\":null,\"reason\":\"\"},\"tp1\":{\"action\":\"KEEP|ADJUST|UNKNOWN\",\"suggested\":null,\"reason\":\"\"}},"
+    "\"memo\":\"concise auditable visible-chart memo\","
+    "\"missing_visual_information\":[],\"warnings\":[]}"
+)
+
 
 def _ae_framework(authority_tf: str) -> str:
     return (
@@ -71,7 +89,8 @@ def build_system_prompt() -> str:
         "2. Do not invent patterns, levels, or indicators.\n"
         "3. Use exact prices from visible axis/overlays; use context prices only when unreadable on chart.\n"
         "4. Keep output concise and structured.\n"
-        "5. Output ONLY the A-H framework reasoning followed by the structured footer — nothing else.\n\n"
+        "5. Output ONLY the A-H framework reasoning, VISION_TRADE_READ_JSON, and the structured footer — nothing else.\n"
+        "6. The JSON is advisory only and must set allowed_for_execution_context=false unless timestamps are explicit in request/context.\n\n"
         "CANDLE CONTEXT RULES:\n"
         "1. Trend structure first: higher highs/higher lows, lower highs/lower lows, or range.\n"
         "2. Candle anatomy next: body size, wick length, close location, and visible gaps.\n"
@@ -100,6 +119,7 @@ def build_single_prompt(
         f"{algo_context}\n\n"
         f"CONTEXT: asset={asset_type.upper()}\n\n"
         f"{_ae_framework(tf)}\n"
+        f"{_VISION_TRADE_READ_JSON}\n\n"
         "End with exactly these 8 lines, with nothing after:\n"
         f"{_STRUCTURED_FOOTER}\n"
     )
@@ -127,6 +147,7 @@ def build_dual_prompt(
         "- D1 sets directional bias; H4 decides tactical validity.\n"
         "- If H4 right edge does not confirm direction, classify RIGHT EDGE as POTENTIAL REVERSAL or REVIEW (never CONFIRMS).\n"
         "- Note nearest obstacle between entry and TP first.\n\n"
+        f"{_VISION_TRADE_READ_JSON}\n\n"
         "End with exactly these 8 lines, with nothing after:\n"
         f"{_STRUCTURED_FOOTER}\n"
     )
@@ -154,6 +175,7 @@ def build_triple_prompt(
         "- D1 sets macro bias, H4 validates path/obstacles, H1 validates trigger quality.\n"
         "- If H1 right edge shows counter-trend with rising volume, classify POTENTIAL REVERSAL.\n"
         "- If EMA reclaim against trade is visible on H1, RIGHT EDGE cannot be CONFIRMS.\n\n"
+        f"{_VISION_TRADE_READ_JSON}\n\n"
         "End with exactly these 8 lines, with nothing after:\n"
         f"{_STRUCTURED_FOOTER}\n"
     )
