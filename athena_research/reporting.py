@@ -884,8 +884,8 @@ def write_markdown_report(df: pd.DataFrame, run_dir: Path, run_id: str, run_meta
     a("## Engine B Findings")
     a(_engine_recommendation(valid, "engine_b_proxy"))
     a("")
-    a("## Engine D Findings")
-    a(_engine_recommendation(valid, "engine_d_proxy"))
+    a("## Scalp Momentum Proxy Findings (NOT real Engine D)")
+    a(_engine_recommendation(valid, "scalp_momentum_proxy"))
     a("")
 
     # ── Q11: Do not test further ─────────────────────────────────────────────

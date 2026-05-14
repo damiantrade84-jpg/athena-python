@@ -64,6 +64,7 @@ from advisory_thresholds import (
 )
 from lottery_service import ensure_lottery_schema
 from lottery_engine import set_lottery_db_path
+from guardian import pre_trade_check as _guardian_pre_trade
 
 from data_feeds import (  # noqa: E402
     http_requests,
@@ -9325,6 +9326,15 @@ def api_scalp_execute():
                     "approval": approval.to_dict(),
                 }
             ), 200
+
+        _ptc_ok, _ptc_reason = _guardian_pre_trade(signal, positions, account, positions_resp)
+        if not _ptc_ok:
+            return jsonify(
+                {
+                    "success": False,
+                    "error": f"Guardian: {_ptc_reason}",
+                }
+            ), 400
 
         result = run_managed_execution(_exec_venue, signal, approval)
         if not result.get("success"):

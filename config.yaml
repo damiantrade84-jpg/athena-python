@@ -2692,7 +2692,10 @@ SCALP_ENGINE:
   BT_SESSION_MODE: "all"        # Testing: allow Engine D backtests across all sessions
   # When false (default): grading uses BT_SESSION_MODE / BT_* session lists (often wider than live).
   # When true: get_grade_sessions_for_mode uses the same SESSION_MODE path as live scan for pre/post grades.
-  BT_GRADE_SESSION_LIVE_PARITY: false
+  # When true: backtest grading uses the same SESSION_MODE path as live scan.
+  # When false (legacy): grading uses BT_SESSION_MODE (often "all"), which can inflate
+  # backtest win rates with off-hours signals that live would skip.
+  BT_GRADE_SESSION_LIVE_PARITY: true
   BT_CRYPTO_SESSION_MODE: "inherit"
 
   BT_NY_OPEN_SKIP_MINUTES: 30   # Backtest mirrors live NY-open caution window
@@ -2704,6 +2707,18 @@ SCALP_ENGINE:
   BT_COMMISSION_PER_SIDE: 0.0   # Commission per side (set per broker)
 
   BT_SLIPPAGE_TICKS: 3          # Slippage assumption in ticks
+
+  # Engine D fee / execution guard — backtest parity with live
+  ENGINE_D_FEE_GUARD_ENABLED: true
+  ENGINE_D_MAX_COST_R: 0.20      # Max (fee+slippage) / risk_distance before reject
+  ENGINE_D_MIN_STOP_PCT: 0.0005  # Min stop as fraction of entry price (5bp)
+
+  # Engine D partial-exit model — backtest only (live uses broker TP1/SL)
+  ENGINE_D_PARTIAL_EXIT_ENABLED: true
+  ENGINE_D_TP1_SIZE: 0.50        # Fraction of position to close at TP1
+  ENGINE_D_MOVE_SL_TO_BE_AFTER_TP1: true
+  ENGINE_D_RUNNER_ENABLED: true
+  ENGINE_D_SAME_CANDLE_POLICY: "conservative_sl_first"  # SL-first on same-bar TP/SL
 
   BT_SCRATCH_ENABLED: true      # Scratch if there is no early follow-through
 

@@ -604,7 +604,11 @@ def strategy_structure_filters(df: pd.DataFrame, params: dict) -> dict:
                     meta={"family": "engine_b_proxy", "sub": "structure_filters"})
 
 
-# ── G. Engine D Scalp Proxy ───────────────────────────────────────────────────
+# ── G. Scalp Momentum Proxies (NOT real Engine D) ─────────────────────────────
+# WARNING: These are simplified pandas momentum/breakout strategies for Research Lab
+# screening ONLY. They implement NONE of the real Engine D Fabio Valentini VP+
+# order-flow methodology (POC/VAH/VAL, absorption, CVD, AAA, session grading).
+# Do NOT use these results to guide live Engine D tuning.
 
 def strategy_vwap_reclaim(df: pd.DataFrame, params: dict) -> dict:
     """VWAP reclaim/reject scalp — crypto/index focused."""
@@ -625,7 +629,7 @@ def strategy_vwap_reclaim(df: pd.DataFrame, params: dict) -> dict:
     short_exits = close > vwap + band
 
     return _signals(long_entries, long_exits, short_entries, short_exits,
-                    meta={"family": "engine_d_proxy", "sub": "vwap_reclaim"})
+                    meta={"family": "scalp_momentum_proxy", "sub": "vwap_reclaim"})
 
 
 def strategy_micro_breakout(df: pd.DataFrame, params: dict) -> dict:
@@ -642,7 +646,7 @@ def strategy_micro_breakout(df: pd.DataFrame, params: dict) -> dict:
     short_exits = close > recent_high
 
     return _signals(long_entries, long_exits, short_entries, short_exits,
-                    meta={"family": "engine_d_proxy", "sub": "micro_breakout"})
+                    meta={"family": "scalp_momentum_proxy", "sub": "micro_breakout"})
 
 
 def strategy_ema_scalp_pullback(df: pd.DataFrame, params: dict) -> dict:
@@ -666,10 +670,10 @@ def strategy_ema_scalp_pullback(df: pd.DataFrame, params: dict) -> dict:
     short_exits = close > ema + atr * atr_sl
 
     return _signals(long_entries, long_exits, short_entries, short_exits,
-                    meta={"family": "engine_d_proxy", "sub": "ema_scalp_pullback"})
+                    meta={"family": "scalp_momentum_proxy", "sub": "ema_scalp_pullback"})
 
 
-# ── G2. CVD Momentum (Engine D) ─────────────────────────────────────────────
+# ── G2. CVD Momentum Proxy (NOT real Engine D) ──────────────────────────────
 
 def strategy_cvd_momentum(df: pd.DataFrame, params: dict) -> dict:
     """Cumulative Volume Delta momentum — approximation via candle body ratio."""
@@ -698,7 +702,7 @@ def strategy_cvd_momentum(df: pd.DataFrame, params: dict) -> dict:
     short_exits = close > vwap + atr * atr_sl
 
     return _signals(long_entries, long_exits, short_entries, short_exits,
-                    meta={"family": "engine_d_proxy", "sub": "cvd_momentum"})
+                    meta={"family": "scalp_momentum_proxy", "sub": "cvd_momentum"})
 
 
 # ── H. Stochastic Strategies ────────────────────────────────────────────────
@@ -995,10 +999,10 @@ STRATEGY_REGISTRY: dict[str, tuple[str, Callable]] = {
     "atr_compression":        ("volatility",      strategy_atr_compression),
     "ob_bos":                 ("engine_b_proxy",  strategy_ob_bos),
     "structure_filters":      ("engine_b_proxy",  strategy_structure_filters),
-    "vwap_reclaim":           ("engine_d_proxy",  strategy_vwap_reclaim),
-    "micro_breakout":         ("engine_d_proxy",  strategy_micro_breakout),
-    "ema_scalp_pullback":     ("engine_d_proxy",  strategy_ema_scalp_pullback),
-    "cvd_momentum":           ("engine_d_proxy",  strategy_cvd_momentum),
+    "vwap_reclaim":           ("scalp_momentum_proxy",  strategy_vwap_reclaim),
+    "micro_breakout":         ("scalp_momentum_proxy",  strategy_micro_breakout),
+    "ema_scalp_pullback":     ("scalp_momentum_proxy",  strategy_ema_scalp_pullback),
+    "cvd_momentum":           ("scalp_momentum_proxy",  strategy_cvd_momentum),
     "stochastic_cross":       ("stochastic",      strategy_stochastic_cross),
     "stochastic_divergence":  ("stochastic",      strategy_stochastic_divergence),
     "fib_retracement":        ("fibonacci",        strategy_fib_retracement),
@@ -1017,7 +1021,7 @@ FAMILY_STRATEGIES: dict[str, list[str]] = {
     "mean_reversion": ["rsi_extreme", "bollinger_touch", "vwap_deviation"],
     "volatility":     ["bb_squeeze_breakout", "atr_compression"],
     "engine_b_proxy": ["ob_bos", "structure_filters"],
-    "engine_d_proxy": ["vwap_reclaim", "micro_breakout", "ema_scalp_pullback", "cvd_momentum"],
+    "scalp_momentum_proxy": ["vwap_reclaim", "micro_breakout", "ema_scalp_pullback", "cvd_momentum"],
     "stochastic":     ["stochastic_cross", "stochastic_divergence"],
     "fibonacci":      ["fib_retracement"],
     "aroon_family":   ["aroon_trend"],

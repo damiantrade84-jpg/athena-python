@@ -1681,6 +1681,8 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict[s
                 "engineB": "naked_structure",
                 "engineC": "consensus",
                 "engineD": "scalp_vp",
+                # NOTE: Engine D is NOT auto-executed. It is available via
+                # manual/API endpoints (/api/scalp-scan, /api/scalp-execute).
             },
         }
 
