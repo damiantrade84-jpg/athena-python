@@ -1,27 +1,28 @@
 ---
 name: athena-code
-description: Evidence-only engineering for the ATHENA live multi-engine trading repository. Use when auditing, debugging, patching, reviewing, or extending ATHENA code with real execution risk, especially around execution safety, live/backtest parity, data integrity, market-state integrity, score integrity, risk gates, broker lifecycle, dashboard/API/Telegram truth, or engine separation across Engine A, B, C, and D.
+description: Targeted Athena fixes and evidence-based code changes. Use for bounded bug fixes, debugging, and implementation work in exact target files. Do not perform full-system audits unless explicitly requested.
 ---
 
 # ATHENA Code
 
 ## Overview
 
+Use for targeted Athena fixes and evidence-based code changes. Do not perform full-system audits unless explicitly requested.
+
 Work only from verified repository evidence. Read the actual files before making claims, treat comments, configs, and prior discussion as unverified until traced in code, and keep changes minimal because this system has live execution risk.
 
 ## Operating Mode
 
-Choose one mode before acting.
+Choose one mode before acting. This skill is not a full-audit skill.
 
-- Audit: inspect and report findings only. Do not patch or refactor.
 - Surgical Fix: patch only a verified issue. Re-read the target file immediately before editing and preserve existing shapes unless the bug requires change.
-- Feature Build: map the current architecture first, extend the correct layer, and preserve engine separation plus monitoring truth.
+- Feature Build: map only the current feature's architecture, extend the correct layer, and preserve engine separation plus monitoring truth.
 
 ## Required Workflow
 
-1. Start with `AGENTS.md`, `CLAUDE.md` when relevant, `config.yaml`, and the exact target files.
-2. Trace the real control flow for the paths the task touches: live, scan, execute, auto-trader, monitoring, research/backtest, and operator surfaces.
-3. Verify data truth from source to consumer: candle source, confirmed versus forming bars, timeframe alignment, cache use, stale-state behavior, and lookahead leakage.
+1. Start with `AGENTS.md` and exact target files.
+2. Trace only the real control flow for the touched path and its direct callers/callees.
+3. Verify data truth only where the current change depends on it: source, consumer, stale-state behavior, and type/shape contracts.
 4. Verify only the affected engines. Do not assume Engine A logic applies to B, C, or D.
 5. Verify risk and execution truth end-to-end before changing behavior: `risk_check()`, kill switches, sizing source, SL and TP rules, lifecycle state, DB writes, and broker reconciliation.
 6. Verify operator truth end-to-end: DB, API, UI, Telegram, and monitoring must reflect the same underlying state.
@@ -35,7 +36,9 @@ Choose one mode before acting.
 - Never assume a config key, helper, field, or route is live just because it exists.
 - Never silently change scoring, risk, or live execution logic unless the request explicitly requires it and the call path proves the need.
 - Separate confirmed findings from hypotheses.
+- Do not load historical audit docs unless the user explicitly asks for historical/full audit comparison.
+- Run only targeted tests covering changed behavior.
 
-## Reference
+## References
 
-Load [references/audit-contract.md](references/audit-contract.md) when you need the ATHENA file map, non-negotiable invariants, audit phases, or the confirmed findings format from the provided spec.
+Do not load historical audit references for normal targeted fixes. Use the manual audit skill only when the user explicitly asks for a full audit, historical/full audit comparison, or strict audit finding format.

@@ -1344,6 +1344,9 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict[s
                     sig_a.setdefault("engine_name", "Engine A")
                     sig_a["engine_a_present"] = True
 
+                    if sig_a.get("direction") not in ("LONG", "SHORT"):
+                        engine_b_scan_only = True
+
                 ptype = pair.get("type", "")
                 try:
                     _eb_snap = {"conf": None, "res": None}
