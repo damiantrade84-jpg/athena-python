@@ -1,3 +1,14 @@
+## Context Loading Contract
+
+- Claude Code starts with this `CLAUDE.md` project instruction file only.
+- `AGENTS.md` is for Cursor/Codex and must not be treated as Claude startup context.
+- Claude project skills live under `.claude/skills/<skill-name>/SKILL.md`.
+- Old audit docs, task artifacts, historical findings, and archived reports are historical context. Do not load them unless the user explicitly asks for a historical review, full audit comparison, or a named artifact.
+- Engine A, Engine B, Engine C, and Engine D are independent unless the task explicitly concerns consensus, blending, or cross-engine coordination.
+- Run only tests directly related to the touched behavior. Do not run the full test suite or unrelated engine/UI/backtest tests unless explicitly requested or shared infrastructure was changed.
+- Do not read `tasks/`, old audit reports, generated logs, backtest artifacts, or historical skill references at startup. Read them only when the user names them or the current task requires that exact artifact.
+- Use subagents, Superpowers, or other workflow helpers only when the task benefits from parallel investigation or a specialized workflow. Do not use them to broaden a small fix into a full audit.
+
 ## Core Rules
 
 - Work evidence-first: inspect code, logs, tests, DB paths, or docs before making claims.
@@ -11,8 +22,14 @@
 
 ```bash
 python athena.py
-pytest tests/
 pip install -r requirements.txt
+```
+
+Run targeted tests for the changed behavior, for example:
+
+```bash
+pytest path/to/test_file.py -q
+pytest path/to/test_file.py::test_function_name -q
 ```
 
 ## Key Paths
@@ -31,13 +48,8 @@ pip install -r requirements.txt
 - All AI is advisory-only: Marcus, Engine B AI, AI review packets, Strategist, market intelligence, Vision, similar setups, and AI Trading Agent chat.
 - AI may explain, challenge, downgrade, block, request confirmation, compare evidence, and recommend research.
 - AI must not execute trades, approve orders, mutate config/thresholds, change strategy parameters, or bypass deterministic gates.
-- `/api/ai/trade-chat` and `ai_tools.py` are read-only. They may inspect signal, engine, Vision, market-intelligence, similar-setup, strategist, and risk-state context only.
+- `/api/ai/trade-chat` and `ai_tools.py` are read-only.
 - `ai_agent_safety.validate_ai_chat_response()` must keep `read_only=true`, `can_execute=false`, `can_modify_thresholds=false`, and `deterministic_gates_required=true`.
-- AI must not preserve `VALID_SETUP` when deterministic gates fail, kill switch is active, guardian is not clean, or RR/spread/fee/freshness/risk data is failed or missing.
-- Similar setups with sample size under 20 are insufficient; do not make calibrated probability claims.
-- Market intelligence uses existing local/repo sources only; stale or unavailable sources must be surfaced as warnings, not invented.
-- Strategist is read-only and advisory; it must not directly block execution unless a future explicit config gate is added and defaults safe.
-- Marcus two-stage memo mode is optional and disabled by default; existing single-stage behavior must remain compatible.
 
 ## Vision
 
@@ -47,4 +59,4 @@ pip install -r requirements.txt
 
 ## Verification
 
-Before saying fixed or done, run the smallest relevant compile/test/smoke command and report exactly what passed or was not verified.
+Before saying fixed or done, run the smallest relevant compile/test/smoke command for the changed behavior and report exactly what passed or was not verified. If no focused test exists, inspect the changed path and state the exact targeted command that should be added or run.

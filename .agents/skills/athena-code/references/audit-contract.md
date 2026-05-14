@@ -8,7 +8,7 @@ The source text for the findings template ends after the `Current code` block he
 
 ### FOUNDATION / POLICY
 
-- `CLAUDE.md` only for Claude Code startup context
+- `AGENTS.md` only for Codex startup context
 - `config.yaml`
 
 ### DATA / MARKET STATE
@@ -133,7 +133,7 @@ The source text for the findings template ends after the `Current code` block he
 
 ### Phase 0 - Recon
 
-- read `CLAUDE.md` and exact target files
+- read `AGENTS.md` and exact target files
 - read `config.yaml`
 - read exact target files
 - list exact file paths inspected

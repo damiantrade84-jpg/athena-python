@@ -1,0 +1,6 @@
+interface:
+  display_name: "ATHENA Code"
+  short_description: "Targeted ATHENA fixes from verified evidence"
+  default_prompt: "Use $athena-code for a targeted ATHENA fix in exact files from verified repository evidence only."
+policy:
+  allow_implicit_invocation: true
