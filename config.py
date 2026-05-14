@@ -980,19 +980,19 @@ CONFIG: dict = {
         "rejection_wick_body_ratio": 1.2,
         "style_profiles": {
             "scalp": {
-                "min_score": 6.0,
+                "min_score": 5.0,
                 "min_rr": 1.5,
                 "fallback_rr": 2.0,
                 "require_macro_align": False,
             },
             "intraday": {
-                "min_score": 6.0,
+                "min_score": 5.0,
                 "min_rr": 1.5,
                 "fallback_rr": 2.0,
                 "require_macro_align": False,
             },
             "swing": {
-                "min_score": 6.5,
+                "min_score": 5.5,
                 "min_rr": 2.0,
                 "fallback_rr": 3.0,
                 "require_macro_align": False,
@@ -1015,13 +1015,13 @@ CONFIG: dict = {
                 "swing": {"min_room_atr": 1.2, "min_rr": 1.8},
             },
             "nat_gas": {
-                "intraday": {"min_score": 6.0, "min_rr": 1.6},
-                "swing": {"min_score": 6.5, "min_rr": 2.0},
+                "intraday": {"min_score": 5.0, "min_rr": 1.6},
+                "swing": {"min_score": 5.5, "min_rr": 2.0},
             },
             "crypto_doge": {
-                "scalp": {"min_score": 6.0, "min_room_atr": 0.5},
-                "intraday": {"min_score": 6.0, "min_room_atr": 0.9, "min_rr": 1.5},
-                "swing": {"min_score": 6.5, "min_room_atr": 1.2, "min_rr": 1.9},
+                "scalp": {"min_score": 5.0, "min_room_atr": 0.5},
+                "intraday": {"min_score": 5.0, "min_room_atr": 0.9, "min_rr": 1.5},
+                "swing": {"min_score": 5.5, "min_room_atr": 1.2, "min_rr": 1.9},
             },
         },
     },

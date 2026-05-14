@@ -1804,7 +1804,7 @@ NAKED_ENGINE:
 
     scalp:
 
-      min_score: 6.0
+      min_score: 5.0
 
       min_rr: 1.5
 
@@ -1812,7 +1812,7 @@ NAKED_ENGINE:
 
     intraday:
 
-      min_score: 6.0
+      min_score: 5.0
 
       min_rr: 1.5
 
@@ -1820,7 +1820,7 @@ NAKED_ENGINE:
 
     swing:
 
-      min_score: 6.5
+      min_score: 5.5
 
       min_rr: 2.0
 
@@ -1891,123 +1891,123 @@ NAKED_ENGINE:
 
     nat_gas:
 
-      scalp: {min_score: 6.0}
+      scalp: {min_score: 5.0}
 
-      intraday: {min_score: 6.0, min_rr: 1.6}
+      intraday: {min_score: 5.0, min_rr: 1.6}
 
-      swing: {min_score: 6.5, min_rr: 2.0}
+      swing: {min_score: 5.5, min_rr: 2.0}
 
     crypto_doge:
 
-      scalp: {min_score: 6.0, min_room_atr: 0.5}
+      scalp: {min_score: 5.0, min_room_atr: 0.5}
 
-      intraday: {min_score: 6.0, min_room_atr: 0.9, min_rr: 1.5}
+      intraday: {min_score: 5.0, min_room_atr: 0.9, min_rr: 1.5}
 
-      swing: {min_score: 6.5, min_room_atr: 1.2, min_rr: 1.9}
+      swing: {min_score: 5.5, min_room_atr: 1.2, min_rr: 1.9}
 
     crypto_btc:
 
-      scalp: {min_score: 6.0}
+      scalp: {min_score: 5.0}
 
-      intraday: {min_score: 6.0}
+      intraday: {min_score: 5.0}
 
-      swing: {min_score: 6.5}
+      swing: {min_score: 5.5}
 
     crypto_eth:
 
-      scalp: {min_score: 6.0}
+      scalp: {min_score: 5.0}
 
-      intraday: {min_score: 6.0}
+      intraday: {min_score: 5.0}
 
-      swing: {min_score: 6.5}
+      swing: {min_score: 5.5}
 
     crypto_alt_majors:
 
-      scalp: {min_score: 6.0}
+      scalp: {min_score: 5.0}
 
-      intraday: {min_score: 6.0}
+      intraday: {min_score: 5.0}
 
-      swing: {min_score: 6.5}
+      swing: {min_score: 5.5}
 
     crypto_other:
 
-      scalp: {min_score: 6.0}
+      scalp: {min_score: 5.0}
 
-      intraday: {min_score: 6.0}
+      intraday: {min_score: 5.0}
 
-      swing: {min_score: 6.5}
+      swing: {min_score: 5.5}
 
     energy_oil:
 
-      scalp: {min_score: 6.0}
+      scalp: {min_score: 5.0}
 
-      intraday: {min_score: 6.0}
+      intraday: {min_score: 5.0}
 
-      swing: {min_score: 6.5}
+      swing: {min_score: 5.5}
 
     precious_trackers:
 
-      scalp: {min_score: 6.0}
+      scalp: {min_score: 5.0}
 
-      intraday: {min_score: 6.0}
+      intraday: {min_score: 5.0}
 
-      swing: {min_score: 6.5}
+      swing: {min_score: 5.5}
 
     commodity_other:
 
-      scalp: {min_score: 6.0}
+      scalp: {min_score: 5.0}
 
-      intraday: {min_score: 6.0}
+      intraday: {min_score: 5.0}
 
-      swing: {min_score: 6.5}
+      swing: {min_score: 5.5}
 
     copper:
 
-      scalp: {min_score: 6.0}
+      scalp: {min_score: 5.0}
 
-      intraday: {min_score: 6.0}
+      intraday: {min_score: 5.0}
 
-      swing: {min_score: 6.5}
+      swing: {min_score: 5.5}
 
     pgm_metals:
 
-      scalp: {min_score: 6.0}
+      scalp: {min_score: 5.0}
 
-      intraday: {min_score: 6.0}
+      intraday: {min_score: 5.0}
 
-      swing: {min_score: 6.5}
+      swing: {min_score: 5.5}
 
     us_stock_single:
 
-      scalp: {min_score: 6.0}
+      scalp: {min_score: 5.0}
 
-      intraday: {min_score: 6.0}
+      intraday: {min_score: 5.0}
 
-      swing: {min_score: 6.5}
+      swing: {min_score: 5.5}
 
     stock_other:
 
-      scalp: {min_score: 6.0}
+      scalp: {min_score: 5.0}
 
-      intraday: {min_score: 6.0}
+      intraday: {min_score: 5.0}
 
-      swing: {min_score: 6.5}
+      swing: {min_score: 5.5}
 
     smallcap_em_etf:
 
-      scalp: {min_score: 6.0}
+      scalp: {min_score: 5.0}
 
-      intraday: {min_score: 6.0}
+      intraday: {min_score: 5.0}
 
-      swing: {min_score: 6.5}
+      swing: {min_score: 5.5}
 
     bond_tlt:
 
-      scalp: {min_score: 6.0}
+      scalp: {min_score: 5.0}
 
-      intraday: {min_score: 6.0}
+      intraday: {min_score: 5.0}
 
-      swing: {min_score: 6.5}
+      swing: {min_score: 5.5}
 
 
 

@@ -151,6 +151,40 @@ def test_scanner_engine_b_alignment_uses_final_score_gate():
     assert conf_b["min_score_scaled"] == pytest.approx(4.5)
 
 
+def test_scanner_engine_b_score_floor_accepts_mandatory_gate_baseline():
+    signal = {}
+    conf_b = {"passed": True, "score": 5.0}
+
+    gate_ok, scaled_min = scanner._apply_engine_b_scan_confidence_gate(
+        signal,
+        conf_b,
+        {"min_score": 5.0},
+        "RANGING",
+        "forex",
+    )
+
+    assert scaled_min == pytest.approx(4.5)
+    assert gate_ok is True
+    assert signal["enginesAligned"] is True
+    assert signal["engine_b_min_score_scaled"] == pytest.approx(4.5)
+    assert conf_b["passed"] is True
+    assert conf_b["min_score_scaled"] == pytest.approx(4.5)
+
+
+def test_checked_in_engine_b_thresholds_match_reachable_gate_baseline():
+    profiles = config.CONFIG["NAKED_ENGINE"]["style_profiles"]
+    overrides = config.CONFIG["NAKED_ENGINE"]["score_group_overrides"]
+
+    assert profiles["scalp"]["min_score"] == pytest.approx(5.0)
+    assert profiles["intraday"]["min_score"] == pytest.approx(5.0)
+    assert profiles["swing"]["min_score"] == pytest.approx(5.5)
+    assert overrides["nat_gas"]["intraday"]["min_score"] == pytest.approx(5.0)
+    assert overrides["nat_gas"]["swing"]["min_score"] == pytest.approx(5.5)
+    assert overrides["crypto_doge"]["scalp"]["min_score"] == pytest.approx(5.0)
+    assert overrides["crypto_doge"]["intraday"]["min_score"] == pytest.approx(5.0)
+    assert overrides["crypto_doge"]["swing"]["min_score"] == pytest.approx(5.5)
+
+
 def test_scanner_opposite_independent_engine_b_does_not_raise_conviction():
     combined = scanner._engine_b_scan_combined_conviction(
         a_norm=0.50,
