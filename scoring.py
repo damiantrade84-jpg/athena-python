@@ -744,6 +744,12 @@ def calc_confluence(
             )
         elif r4 <= _rsi_b["os"]:
             w.append(f"H4 RSI oversold ({r4:.0f} <= {_rsi_b['os']}) — wait for bounce")
+    _fs_feed_early = factor_result.get("feed_status") or {}
+    if _fs_feed_early.get("adx") == "missing":
+        w.append(
+            "ADX unavailable on both D1 and H4 — legacy neutral multiplier (0.5×) applied; "
+            "set ADX_MISSING_BOTH_ABORT true (recommended) for fail-closed scoring."
+        )
     # Crypto OI divergence (parity with analyze_pair — uses D1[-2] vs H1 close)
     if oi_data is not None and pair.get("type") == "crypto":
         from data_feeds import _calc_oi_divergence
@@ -898,6 +904,10 @@ def calc_confluence(
             "missingDirectionalOptionalCount": factor_result.get("missing_directional_optional_count"),
             "optionalFactorCoverage": factor_result.get("optional_factor_coverage"),
             "feedStatus": factor_result.get("feed_status", {}),
+            "regimeLabelsDualCapture": {
+                "trendState": trend_state,
+                "factorRegime": _regime_str,
+            },
             "macroContext": macro_context or {},
             "intermarket": factor_result.get("intermarket_confirmation") or {},
             "insufficientFactors": factor_result.get("insufficient_factors", False),

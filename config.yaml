@@ -11,8 +11,8 @@
 # and set env ATHENA_REAL_ORDERS_CONFIRM=I_UNDERSTAND_REAL_ORDER_RISK (see .env).
 
 PAPER_SOAK:
-  ENABLED: false
-  REAL_ORDERS_ALLOWED: true
+  ENABLED: true
+  REAL_ORDERS_ALLOWED: false
   LOG_ALL_SIGNALS: true
   LOG_BLOCKED_SIGNALS: true
   LOG_EXECUTION_DECISIONS: true
@@ -235,7 +235,9 @@ ENGINE_A_MULTI_EXCHANGE_FUNDING:
   BINANCE_WEIGHT: 0.5  # Weight for Binance rate in composite
   BYBIT_WEIGHT: 0.5    # Weight for Bybit rate in composite
 
-FACTOR_CONVICTION_FLOOR: 0.20 # Minimum Engine A conviction floor used when deriving combined conviction
+# Multiplicative floor inside compute_factor_scores: final_score *= eff_floor + (1-eff_floor)*conviction.
+# Not the scanner combinedConviction field (that uses scoreNorm × AUTO_TRADE_A_ONLY_WEIGHT / blend weights).
+FACTOR_CONVICTION_FLOOR: 0.20
 
 # Engine A forex session scaler — off by default. When ENABLED, multiplies base_score
 # by BY_QUALITY using scoring.get_session() UTC buckets (high/medium/low).
@@ -891,7 +893,7 @@ INDICATOR_CORRELATION_ENABLED: false
 
 EXECUTION_ENABLED: true       # Enable manual execution via dashboard
 
-EXECUTOR_MODE: demo            # paper | demo | live — demo aligns with Bybit demo keys
+EXECUTOR_MODE: paper           # paper | demo | live — demo aligns with Bybit demo keys
 
 AUTO_EXECUTE: false            # Manual click only (no auto-fire)
 
@@ -907,7 +909,7 @@ ETORO:
 
 # ── Auto-Trader ────────────────────────────────────────────
 
-AUTO_TRADE_ENABLED: true          # Start auto-trader on server boot
+AUTO_TRADE_ENABLED: false          # Start auto-trader on server boot
 
 # AUTO_TRADE_MIN_SCORE is informational operator metadata. Engine A scan gates
 # are resolved by ENGINE_A_SCORE_GROUP_THRESHOLDS/get_score_threshold(), and
@@ -1691,19 +1693,9 @@ PAIR_PROFILES:
 
     disable_filters: [obv]
 
-    weight_overrides:
-
-      h4_fib: 1.5
-
-      h1_bb: 0.75
-
   USD/MXN:
 
     disable_filters: [obv]
-
-    weight_overrides:
-
-      session: 1.25
 
 
 

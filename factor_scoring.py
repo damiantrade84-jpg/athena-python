@@ -2088,8 +2088,12 @@ def compute_factor_scores(
                     _cost_penalty = _carry_boost  # Small boost
                 else:
                     _cost_penalty = 0
-        except Exception:
-            pass
+                feed_status["forex_carry_cost"] = "ok"
+            else:
+                feed_status["forex_carry_cost"] = "missing"
+        except Exception as exc:
+            log.debug("[EA2] %s forex carry differential unavailable: %s", display, exc)
+            feed_status["forex_carry_cost"] = "error"
 
     # ── Phase 2 parameter wiring: volume_ratio, macro_context, intermarket_context ──
     # These parameters were previously accepted but silently ignored.  They now

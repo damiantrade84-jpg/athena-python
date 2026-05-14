@@ -733,6 +733,53 @@ def test_calc_confluence_factor_diagnostics_includes_research_lab(monkeypatch):
     assert "factor_weights" in asset_diag
     assert "volatility" in asset_diag
     assert detail.get("components", {}).get("obv_divergence", {}).get("signal") == "confirming"
+    dual = fd.get("regimeLabelsDualCapture") or {}
+    assert dual.get("trendState") == out["trendState"]
+    assert dual.get("factorRegime") == out.get("regimeName")
+
+
+def test_calc_confluence_warns_when_adx_missing_soft_multiplier(monkeypatch):
+    """Legacy soft ADX path surfaces an explicit warning (fail-closed uses ADX_MISSING_BOTH_ABORT)."""
+    monkeypatch.setitem(CONFIG, "ADX_MISSING_BOTH_ABORT", False)
+    from scoring import calc_confluence
+
+    pair = {"type": "forex", "display": "EUR/USD"}
+    d1 = {"snap": _snap("long", include_adx=False)}
+    h4 = {"snap": _snap("long", include_adx=False)}
+    h1 = {"snap": _snap("long", include_adx=False)}
+    candles = _candles(trend=0.2, volume_trend=10.0)
+    out = calc_confluence(
+        d1,
+        h4,
+        h1,
+        vr=1.0,
+        stoch={"k": [], "d": []},
+        pair=pair,
+        btc_bias="neutral",
+        d1_candles=candles,
+        h4_candles=candles,
+        h1_candles=candles,
+    )
+    assert any("ADX unavailable" in str(w) for w in out.get("warnings", []))
+
+
+def test_forex_carry_feed_status_ok_when_carry_present(monkeypatch):
+    import carry_feed
+
+    monkeypatch.setattr(carry_feed, "get_carry_differential", lambda _display: 0.0)
+    result = _score(pair={"type": "forex", "display": "EUR/USD"})
+    assert result["feed_status"].get("forex_carry_cost") == "ok"
+
+
+def test_forex_carry_feed_status_error_when_carry_raises(monkeypatch):
+    import carry_feed
+
+    def boom(_display):
+        raise RuntimeError("carry unavailable")
+
+    monkeypatch.setattr(carry_feed, "get_carry_differential", boom)
+    result = _score(pair={"type": "forex", "display": "EUR/USD"})
+    assert result["feed_status"].get("forex_carry_cost") == "error"
 
 
 def test_conviction_floor_default_is_explicit_and_no_momentum_uses_floor_blend(monkeypatch):
