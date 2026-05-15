@@ -899,7 +899,7 @@ INDICATOR_CORRELATION_ENABLED: false
 
 EXECUTION_ENABLED: true       # Enable manual execution via dashboard
 
-EXECUTOR_MODE: paper           # paper | demo | live — demo aligns with Bybit demo keys
+EXECUTOR_MODE: demo            # paper | demo | live — demo aligns with Bybit demo keys
 
 AUTO_EXECUTE: false            # Manual click only (no auto-fire)
 

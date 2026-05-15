@@ -12,6 +12,7 @@ only orchestrates and attaches a ``lifecycle`` envelope to the result dict.
 from __future__ import annotations
 
 import logging
+import os
 from typing import Any
 
 log = logging.getLogger("sentinel")
@@ -19,7 +20,31 @@ log = logging.getLogger("sentinel")
 LIFECYCLE_VERSION = 1
 
 
-def _paper_soak_blocks_real_orders() -> bool:
+def _demo_broker_execution_requested(venue: str) -> bool:
+    mode = ""
+    try:
+        from config import CONFIG
+    except Exception:
+        CONFIG = {}
+    try:
+        mode = str(CONFIG.get("EXECUTOR_MODE", "") or "").strip().lower()
+    except Exception:
+        mode = ""
+    if mode == "demo":
+        return True
+
+    v = (venue or "").strip().lower()
+    if v == "bybit":
+        return os.environ.get("BYBIT_DEMO", "false").lower() in ("true", "1", "yes")
+    if v == "mt5":
+        server = os.environ.get("MT5_SERVER", "")
+        return "demo" in server.lower()
+    return False
+
+
+def _paper_soak_blocks_real_orders(venue: str = "") -> bool:
+    if _demo_broker_execution_requested(venue):
+        return False
     try:
         from config import CONFIG
     except Exception:
@@ -67,7 +92,7 @@ def run_managed_execution(
     pair = (signal.get("pair") or signal.get("symbol") or "").strip()
     phases: list[dict[str, Any]] = []
 
-    if _paper_soak_blocks_real_orders():
+    if _paper_soak_blocks_real_orders(v):
         return {
             "success": False,
             "error": "PAPER_SOAK_BLOCKED_REAL_ORDER",

@@ -46,6 +46,8 @@ def test_lifecycle_paper_soak_blocks_before_broker(monkeypatch):
         "PAPER_SOAK",
         {"ENABLED": True, "REAL_ORDERS_ALLOWED": False},
     )
+    monkeypatch.setitem(config.CONFIG, "EXECUTOR_MODE", "paper")
+    monkeypatch.delenv("MT5_SERVER", raising=False)
 
     fake = types.ModuleType("mt5_executor")
 
@@ -64,6 +66,36 @@ def test_lifecycle_paper_soak_blocks_before_broker(monkeypatch):
 
     assert result["success"] is False
     assert result["error"] == "PAPER_SOAK_BLOCKED_REAL_ORDER"
+
+
+def test_lifecycle_demo_mode_bypasses_paper_soak_block(monkeypatch):
+    monkeypatch.setitem(
+        config.CONFIG,
+        "PAPER_SOAK",
+        {"ENABLED": True, "REAL_ORDERS_ALLOWED": False},
+    )
+    monkeypatch.setitem(config.CONFIG, "EXECUTOR_MODE", "demo")
+
+    fake = types.ModuleType("mt5_executor")
+    fake.mt5_cancel_pending_athena_orders = lambda _pair: {"error": False, "cancelled": 0}
+    fake.mt5_execute = lambda *_args, **_kwargs: {
+        "success": True,
+        "ticket": "demo-ticket",
+        "volume": 0.01,
+    }
+    fake.mt5_reconcile_after_open = lambda *_args, **_kwargs: {
+        "error": False,
+        "allProtectionsPresent": True,
+    }
+    monkeypatch.setitem(sys.modules, "mt5_executor", fake)
+
+    approval = RiskApproval(True, 0.01, 10.0, 0.001, 0.001, 0.0, "OK")
+    result = execution_lifecycle.run_managed_execution(
+        "mt5", {"pair": "EUR/USD", "direction": "LONG"}, approval
+    )
+
+    assert result["success"] is True
+    assert result["ticket"] == "demo-ticket"
 
 
 def test_lifecycle_blocks_nested_vision_rejection(monkeypatch):
