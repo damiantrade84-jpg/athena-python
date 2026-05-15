@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import asyncio
+import logging
 from dataclasses import dataclass
+from types import SimpleNamespace
 
 import telegram_bot
 
@@ -141,3 +144,28 @@ def test_telegram_command_specs_include_engine_b_menu_entry():
     assert commands["engineb"] == "Engine B naked-structure scan"
     assert "scan" in commands
     assert "enginec" in commands
+
+
+def test_telegram_error_handler_logs_transient_polling_error_without_traceback(caplog):
+    class NetworkError(Exception):
+        __module__ = "telegram.error"
+
+    context = SimpleNamespace(error=NetworkError("httpx.ReadError"))
+
+    with caplog.at_level(logging.WARNING, logger="sentinel"):
+        asyncio.run(telegram_bot._telegram_error_handler(None, context))
+
+    record = next(rec for rec in caplog.records if "Transient polling/update error handled" in rec.message)
+    assert record.exc_info is None
+
+
+def test_telegram_error_handler_logs_update_failure_with_traceback(caplog):
+    error = ValueError("bad callback")
+    update = SimpleNamespace(effective_chat=SimpleNamespace(id=123))
+    context = SimpleNamespace(error=error)
+
+    with caplog.at_level(logging.ERROR, logger="sentinel"):
+        asyncio.run(telegram_bot._telegram_error_handler(update, context))
+
+    record = next(rec for rec in caplog.records if "Update handler failed chat_id=123" in rec.message)
+    assert record.exc_info[1] is error
