@@ -657,9 +657,9 @@ def _engine_b_structural_tp_buffer_atr_mult() -> float:
 def _engine_b_d1_conflict_window_atr_mult() -> float:
     naked_cfg = config.CONFIG.get("NAKED_ENGINE", {}) or {}
     try:
-        mult = float(naked_cfg.get("d1_pd_array_conflict_window_atr_mult", 3.0))
+        mult = float(naked_cfg.get("d1_pd_array_conflict_window_atr_mult", 1.5))
     except (TypeError, ValueError):
-        mult = 3.0
+        mult = 1.5
     return max(0.0, mult)
 
 
@@ -2210,6 +2210,7 @@ class NakedEngine:
         atr: float,
         zone_hit: bool,
         bos_confirmed: bool,
+        is_trending: bool = False,
     ) -> dict:
         if len(candles) < 3:
             return {
@@ -2246,6 +2247,10 @@ class NakedEngine:
         lower_wick = min(open_, close) - low
 
         rejection_ratio = _engine_b_rejection_wick_body_ratio()
+        # In trending regimes, candles have larger bodies and smaller wicks —
+        # reduce the wick/body requirement so rejection patterns still fire.
+        if is_trending:
+            rejection_ratio = min(rejection_ratio, 1.0)
         bull_rejection = lower_wick >= max(body * rejection_ratio, atr * 0.08) and close >= low + (range_ * 0.6)
         bear_rejection = upper_wick >= max(body * rejection_ratio, atr * 0.08) and close <= high - (range_ * 0.6)
 
@@ -2981,7 +2986,15 @@ class NakedEngine:
                     if ob.get("strength", 0) >= _ob_min_strength:
                         _ob_at_zone = True
                         break
-        trigger_ctx = self._price_action_trigger(trigger_candles, direction, atr, zone_ctx["zone_touched"] or zone_ctx["near_zone"], bos_confirmed)
+        trigger_ctx = self._price_action_trigger(
+            trigger_candles, direction, atr,
+            zone_ctx["zone_touched"] or zone_ctx["near_zone"],
+            bos_confirmed,
+            is_trending=(
+                (direction == "LONG" and sequence_data["state"] == "HH_HL" and macro_seq_data["state"] == "HH_HL")
+                or (direction == "SHORT" and sequence_data["state"] == "LH_LL" and macro_seq_data["state"] == "LH_LL")
+            ),
+        )
 
         latest_trigger_candle_time = None
         if trigger_candles:
@@ -3349,8 +3362,23 @@ class NakedEngine:
             or res.get("engulfing_candle")
         )
         ob_at_zone = bool(res.get("ob_at_zone"))
-        location_ok = zone_ok or ob_at_zone or (allow_breakout_entry and breakout_ok)
-        location_mode = "normal" if location_ok else "none"
+
+        # Trend-continuation path: BOS/CHoCH/sweep confirmed with trigger pattern
+        # even if price is not at a zone. Valid pullback entry in trending regimes
+        # where price has moved away from structural levels.
+        _trend_pullback = (
+            (bool(res.get("bos_confirmed"))
+             or bool(res.get("choch_confirmed"))
+             or bool(res.get("liquidity_sweep")))
+            and trigger_ok
+        )
+
+        location_ok = zone_ok or ob_at_zone or (allow_breakout_entry and breakout_ok) or _trend_pullback
+        location_mode = (
+            "trend_pullback"
+            if _trend_pullback and not zone_ok and not ob_at_zone
+            else "normal" if location_ok else "none"
+        )
         location_distance_atr = None
         if res.get("active_zone_distance") is not None:
             try:
@@ -3414,7 +3442,19 @@ class NakedEngine:
         # FIX 7: Apply contextual room gate after rr is computed
         _effective_min_room_atr = _get_min_room_atr(rr, bool(res.get("bos_confirmed")), asset_type_lower, exec_style)
         if config.CONFIG.get("ENGINE_B_ROOM_GATE_REQUIRE_DISTANCE", True):
-            room_ok = room_dist is not None and room_dist >= atr_val * _effective_min_room_atr
+            if room_dist is None:
+                # In strong trends with confirmed BOS, no opposing zone means
+                # the trend has room to run — pass the room gate.
+                _h1_trend = (direction == "LONG" and h1_seq == "HH_HL") or (
+                    direction == "SHORT" and h1_seq == "LH_LL"
+                )
+                _h4_trend = (direction == "LONG" and h4_seq == "HH_HL") or (
+                    direction == "SHORT" and h4_seq == "LH_LL"
+                )
+                _bos_ok = bool(res.get("bos_confirmed"))
+                room_ok = (_h1_trend or _h4_trend) and _bos_ok
+            else:
+                room_ok = room_dist >= atr_val * _effective_min_room_atr
         else:
             room_ok = room_dist is None or room_dist >= atr_val * _effective_min_room_atr
         # tp_side_ok reflects structural TP for diagnostic purposes
