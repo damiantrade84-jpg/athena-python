@@ -1,23 +1,84 @@
-# Claude Code (project)
+# Claude Code project config
 
 ## Context hygiene
 
-- **`.claudeignore`** (repo root) excludes runtime DBs/logs, research artifacts, `tasks/`, and heavy `docs/` subtrees from default Claude Code context. Track those paths in git normally; ignore is for token/latency only.
-- **Agent guides:** root `CLAUDE.md` is generated from [`docs/claude-code-guide.md`](../docs/claude-code-guide.md); edit that file and run `python tools/sync_agent_docs.py`. **`AGENTS.md` is listed in `.claudeignore`** so Claude Code does not ingest it—it is for Cursor/Codex only (`AGENTS.md` mirrors `docs/agent-operating-guide.md`). For full detail in Claude Code, read `docs/agent-operating-guide.md` when required.
+- Claude Code startup context is `CLAUDE.md`.
+- Codex/Cursor startup context is `AGENTS.md`.
+- Do not import `AGENTS.md` into `CLAUDE.md` unless you intentionally want shared startup context.
+- `.claudeignore` is used only for Claude Code context hygiene. It should not be used as the main source of truth for agent behavior.
+- Runtime DBs/logs, generated research artifacts, `tasks/`, old audits, and heavy diagnostics should stay out of default context unless explicitly needed.
 
-## MCP (.mcp.json)
+## Skills
 
-Optional servers require environment setup before starting Claude Code:
+Claude Code project skills live under:
 
-| Server        | Requirement |
-|---------------|-------------|
-| **playwright** | `npx` on PATH; first browser launch may download Playwright browsers (`npx playwright install` if the MCP logs ask for it). |
+```text
+.claude/skills/<skill-name>/SKILL.md
+```
 
-Enable servers in `.claude/settings.local.json` via `enabledMcpjsonServers` (list includes server names from `.mcp.json`).
+Current project skill:
 
-## Hooks (.claude/settings.json)
+```text
+.claude/skills/athena-audit/SKILL.md
+```
 
-- **PreToolUse**: warns when editing `execution.py`, `risk_engine.py`, `mt5_executor.py`, `bybit_executor.py`, or `auto_trader.py` (notice only).
-- **PostToolUse**: invokes [tools/claude_hooks/post_tooluse_pytest_tests.py](../tools/claude_hooks/post_tooluse_pytest_tests.py) on every Write|Edit; the script **suppresses output** unless `file_path` is `tests/test_*.py` (case-insensitive path match), then runs `python -m pytest <file> -q --tb=line --disable-warnings`. On success: a short one-line summary; on failure: at most **50 lines** of stdout/stderr (tail, with an omitted-line prefix when truncated).
+Invoke manually with:
 
-Hook scripts: [tools/claude_hooks/](../tools/claude_hooks/). Restart Claude Code after changing hook config.
+```text
+/athena-audit
+```
+
+The `athena-audit` skill is manual-only and should include:
+
+```yaml
+disable-model-invocation: true
+```
+
+Do not reference skills that do not exist under `.claude/skills/`.
+
+## Subagents
+
+Claude subagents live under:
+
+```text
+.claude/agents/
+```
+
+Current subagent:
+
+```text
+.claude/agents/execution-safety-reviewer.md
+```
+
+Use it only for focused review of execution/risk/broker-path diffs.
+
+## MCP
+
+Optional MCP servers require environment setup before starting Claude Code.
+
+| Server | Requirement |
+|---|---|
+| `playwright` | `npx` on PATH; run `npx playwright install` if Playwright asks for browser setup. |
+
+Enable local MCP servers in `.claude/settings.local.json` only. Do not commit personal local settings.
+
+## Hooks
+
+Shared hook config lives in:
+
+```text
+.claude/settings.json
+```
+
+Current hooks:
+
+- `PreToolUse`: warns on edits touching execution/risk/broker-sensitive files.
+- `PostToolUse`: runs targeted pytest only when a touched path is a `tests/test_*.py` file.
+
+Hook scripts live under:
+
+```text
+tools/claude_hooks/
+```
+
+Restart Claude Code after changing hook config.

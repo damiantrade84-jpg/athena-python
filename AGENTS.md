@@ -1,51 +1,60 @@
-# AGENTS.md — Sentinel Pro v4 (Cursor / Codex)
+# AGENTS.md - Athena / Sentinel Pro v4 (Codex / Cursor)
 
-**Audience:** Cursor agents and Codex. **Canonical:** [`docs/agent-operating-guide.md`](docs/agent-operating-guide.md). This file duplicates the canonical guide for tooling that reads **AGENTS.md** at repo root.
+Primary repo-level startup instructions for Codex/Cursor.
 
-# AGENTS.md - Athena / Sentinel Pro (Cursor & Codex)
+Do not intentionally load `CLAUDE.md`. Claude Code uses `CLAUDE.md`.
 
-**This file is the ONLY startup context for Cursor and Codex.**
-Do NOT load `CLAUDE.md` — it is for Claude Code only.
+## Core rules
 
-## Core Rules (Always Follow)
+- Paper-only unless the user explicitly approves live trading.
+- Never bypass risk gates, freshness checks, kill switches, execution approvals, broker safety checks, RR checks, SL/TP validation, audit logging, or deterministic safety rules.
+- AI is advisory only. AI review, Marcus, Vision, Strategist, AI Agent chat, and similar-setup logic cannot execute trades, approve orders, mutate config, or override deterministic gates.
+- Engine A, Engine B, Engine C, and Engine D are separate unless the task explicitly concerns consensus, routing, or cross-engine payload handoff.
+- Engine A and Engine B must not suppress each other. Engine C owns agreement, conflict, A-only, and B-only comparison.
+- Start with the files relevant to the user’s request. The repository map below lists common entry points only; inspect additional current source files when needed to verify the real execution path.
+- Do not load `tasks/`, old audit reports, generated logs, backtest artifacts, historical findings, or archived diagnostics unless the user names them or the current issue directly requires them.
+- Run only targeted tests for the changed behavior. Never run full test suites unless explicitly requested.
+- Minimal changes only. Do not refactor unrelated code.
+- Evidence first. Inspect current source before making claims.
+- If unsure, say `not verified` instead of guessing.
 
-- **Paper-only** unless user explicitly approves live trading.
-- **Never bypass** risk gates, freshness checks, kill-switches, execution approvals, or safety rules.
-- AI is **advisory only** — cannot execute trades, approve orders, modify config, or bypass deterministic gates.
-- Use **only current files** listed in the Repository Map below.
-- Run **only targeted tests** for the changed behavior. Never run full test suites unless explicitly requested.
-- Do **not** load `tasks/`, old audit reports, logs, backtest artifacts, or historical findings unless the user names them.
-- Engines (A, B, C, D) are independent unless the task requires consensus or cross-engine work.
-- **Minimal changes** — only modify what was asked. No unrelated refactoring.
-- **Evidence-first** — inspect code before making claims.
+## Codex skill policy
 
-## Repository Map (Current)
+- Codex repo skills live under `.agents/skills/<skill-name>/SKILL.md`.
+- Current installed repo skill: `athena-audit`.
+- `athena-audit` is manual-only. Invoke it only for explicit full audit, bug hunt, strict findings, execution-safety review, live/backtest parity review, or end-to-end trace work.
+- Do not look for or use skills that do not exist under `.agents/skills/`.
+- Codex manual-only invocation is controlled by `.agents/skills/athena-audit/agents/openai.yaml`.
 
-**Entry:** `athena.py` (Flask monolith — never import in tests)
+## Repository map
 
-**Key Modules:**
-- Engine A: `scoring.py`, `factor_scoring.py`
+Common entry points only. This is not a complete allowlist.
+
+- App/routes: `athena.py`
+- Scanner: `scanner.py`
+- Engine A: `scoring.py`, `factor_scoring.py`, `forex_scoring.py`
 - Engine B: `market_structure.py`, `engine_b_ai.py`
 - Engine C: `engine_c.py`, `engine_c_ai.py`
 - Engine D: `scalp_engine.py`
-- Execution: `execution.py`, `auto_trader.py`, `risk_engine.py`, `mt5_executor.py`, `bybit_executor.py`
-- Config: `config.yaml` (all thresholds live here)
+- Execution: `execution.py`, `auto_trader.py`, `risk_engine.py`, `guardian.py`, `mt5_executor.py`, `bybit_executor.py`
+- Data/candles: `candles_cache.py`, `candle_feeds.py`, provider-specific feed modules
+- AI/Vision: `ai_agent_safety.py`, AI review modules, chart/Vision payload builders, browser chart code under `static/`
+- Research Lab: `athena_research/`, `tools/vectorbt_research_lab.py`, `configs/vectorbt_research_lab.yaml`
+- Backtesting: `backtest_runner.py`, backtest matrix tooling, telemetry/report writers
+- Config: `config.py`, `config.yaml`, `configs/`
+- Tests: targeted `tests/test_*.py` only for touched behavior
 
-**AI Safety:**
-- All AI components are read-only advisory.
-- `ai_agent_safety.validate_ai_chat_response()` must enforce `read_only=true`, `can_execute=false`.
+## Safe workflow
 
-## Before You Finish Any Task
+1. Restate the exact user request in operational terms.
+2. Identify the relevant engine/surface and current source files.
+3. Trace producer-to-consumer behavior before editing.
+4. Apply the smallest safe patch.
+5. Run the smallest relevant compile/test command.
+6. Report what changed, what passed, and what was not verified.
 
-1. Run the smallest relevant test or compile command for the changed code.
-2. Report exactly what passed or was not verified.
-3. State the next command the user should run if needed.
+## Detailed reference
 
-## When in Doubt
+Use `docs/agent-operating-guide.md` only when the task requires fuller repository operating rules. Do not load it by default for small edits.
 
-Read the detailed reference: `docs/agent-operating-guide.md`
 
----
-
-**Last synced:** May 2026
-**Purpose:** Keep Cursor/Codex fast, safe, and grounded in current code only.

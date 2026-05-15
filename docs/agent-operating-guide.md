@@ -11,7 +11,7 @@
 ## Context Loading Contract
 
 - Codex and Cursor start with `AGENTS.md` for repository instructions.
-- Codex must not start with `CLAUDE.md`; that file is Claude Code-only startup context.
+- Codex/Cursor start from `AGENTS.md`; Claude Code starts from `CLAUDE.md`. Do not intentionally cross-load these startup files.
 - Codex repo skills must live under `.agents/skills/<skill-name>/SKILL.md` for repository skill discovery.
 - Codex should not rely on `tools/skills/*` for automatic repo skill discovery.
 - Claude Code project skills belong under `.claude/skills/<skill-name>/SKILL.md`.
@@ -216,14 +216,16 @@ The AI Agent stack is a tool-using desk assistant, not an execution layer:
 
 ---
 
-## 7. Audits, Backtests, Engine Entry Design
+## 7. Skills and audit mode
 
-Detailed methodology lives in repo skills: **Codex** discovers `.agents/skills/`; **Claude Code** discovers `.claude/skills/`. Do not use `tools/skills/*` as an automatic Codex repo-skill discovery location.
+Detailed repeatable audit methodology lives in repo skills.
 
-- Full audit/manual trace → `athena-audit/SKILL.md` only when explicitly requested.
-- Backtest analysis → `backtest-analysis/SKILL.md` only for explicit backtest-analysis tasks.
-- Deprecated Engine A entry redesign → `engine-entry-design/SKILL.md` only when explicitly requested.
-- Targeted ATHENA fixes and evidence-based code changes → `athena-code/SKILL.md`.
+- Codex discovers repo skills under `.agents/skills/<skill-name>/SKILL.md`.
+- Claude Code discovers project skills under `.claude/skills/<skill-name>/SKILL.md`.
+- Current installed repo skill: `athena-audit` only.
+- `athena-audit` is manual-only and should be used only for explicit full audit, bug hunt, strict findings, execution-safety review, live/backtest parity review, producer-to-consumer contract review, or end-to-end trace work.
+- Do not reference or search for skills that do not exist in the current repo skill folders.
+- Use only the current repo skill folders documented above as automatic repo-skill discovery locations.
 
 ---
 
@@ -313,7 +315,9 @@ Detailed methodology lives in repo skills: **Codex** discovers `.agents/skills/`
 
 ### Session start
 
-- Start from `AGENTS.md` and the user's exact request.
+- Start from the active tool’s root instruction file and the user's exact request:
+  - Codex/Cursor: `AGENTS.md`
+  - Claude Code: `CLAUDE.md`
 - Do not review `tasks/lessons.md`, `tasks/todo.md`, old audits, generated logs, or backtest artifacts by default.
 - Open historical/task files only when the user names them or they are directly needed to verify the current issue.
 
@@ -368,11 +372,11 @@ pytest path/to/test_file.py -q
 
 ## Maintaining root copies (`AGENTS.md`, `CLAUDE.md`)
 
-Shared rules for Cursor/Codex live in **`docs/agent-operating-guide.md`** (this document) and are mirrored to root **`AGENTS.md`**.
+Shared operating guidance lives in **`docs/agent-operating-guide.md`**. Root **`AGENTS.md`** and **`CLAUDE.md`** are maintained separately as short startup guides.
 
-The short Claude Code guide body lives in **`docs/claude-code-guide.md`** and is regenerated to root **`CLAUDE.md`** (root **`AGENTS.md`** is Cursor/Codex-only and is listed in **`.claudeignore`** for Claude Code).
+Root **`CLAUDE.md`** is maintained directly as the Claude Code startup guide. Root **`AGENTS.md`** is maintained separately for Codex/Cursor.
 
-After edits to either canonical file above, regenerate root copies:
+After edits to startup files or this guide, validate the instruction layout:
 
 ```bash
 python tools/sync_agent_docs.py
@@ -381,3 +385,5 @@ python tools/sync_agent_docs.py
 ---
 
 *End of shared operating guide.*
+
+

@@ -54,3 +54,14 @@ tests/_artifacts/
 
 # SQLite CLI binary (downloaded locally)
 sqlite3.exe
+
+# Claude Code local/private settings
+.claude/settings.local.json
+.agent_skill_cleanup_backup/
+.pytest_local_tmp/
+pytest_tmp*/
+pytest_tmp_env/
+tests/.tmp-*/
+tests/_basetemp*/
+tmp/pytest-*/
+devathena-python.pytest_basetemp_full/

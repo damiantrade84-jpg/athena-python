@@ -1,6 +1,7 @@
 ---
 name: athena-audit
 description: Manual-only Athena/Sentinel Pro audit workflow for explicit full audit, bug hunt, strict findings, execution-safety review, live/backtest parity review, producer-to-consumer contract review, or end-to-end trace tasks. Do not use for small fixes, quick targeted edits, or simple explanations.
+disable-model-invocation: true
 ---
 
 # Athena Audit Methodology

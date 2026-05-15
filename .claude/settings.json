@@ -1,26 +1,28 @@
 {
-  "PreToolUse": [
-    {
-      "matcher": "Write|Edit",
-      "hooks": [
-        {
-          "type": "command",
-          "command": "python tools/claude_hooks/pre_tooluse_execution_notice.py",
-          "timeout": 15
-        }
-      ]
-    }
-  ],
-  "PostToolUse": [
-    {
-      "matcher": "Write|Edit",
-      "hooks": [
-        {
-          "type": "command",
-          "command": "python tools/claude_hooks/post_tooluse_pytest_tests.py",
-          "timeout": 120
-        }
-      ]
-    }
-  ]
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python tools/claude_hooks/pre_tooluse_execution_notice.py",
+            "timeout": 15
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python tools/claude_hooks/post_tooluse_pytest_tests.py",
+            "timeout": 120
+          }
+        ]
+      }
+    ]
+  }
 }
