@@ -1564,9 +1564,14 @@ def _check_cvd(
     except Exception as exc:
         log.debug("[SCALP] indicators.calc_cvd error: %s", exc)
 
-    # Internal fallback — candle-based buy/sell approximation
+    # Internal fallback — tick-volume-weighted candle approximation
     if len(candles) < 10:
         return {"direction": None, "cvd_value": 0, "cvd_slope": 0}
+
+    recent_vols = [float(c.get("vol", 0) or 0) for c in candles[-20:]]
+    avg_vol = sum(recent_vols) / len(recent_vols) if recent_vols else 1.0
+    if avg_vol <= 0:
+        avg_vol = 1.0
 
     cvd = 0.0
     cvd_series = []
@@ -1574,10 +1579,21 @@ def _check_cvd(
         vol = float(c.get("vol", 0) or 0)
         rng = c["high"] - c["low"]
         if rng > 0:
-            buy_pct = (c["close"] - c["low"]) / rng
+            close_position = (c["close"] - c["low"]) / rng
         else:
-            buy_pct = 0.5
-        cvd += vol * (2 * buy_pct - 1)
+            close_position = 0.5
+        raw_delta = 2 * close_position - 1
+
+        vol_ratio = vol / avg_vol if avg_vol > 0 else 1.0
+        if vol_ratio > 1.2:
+            vol_weight = min(vol_ratio / 2.0, 1.5)
+        elif vol_ratio < 0.8:
+            vol_weight = max(vol_ratio * 0.5, 0.2)
+        else:
+            vol_weight = 0.6
+
+        weighted_delta = raw_delta * vol_weight
+        cvd += weighted_delta
         cvd_series.append(cvd)
 
     slope = cvd_series[-1] - cvd_series[-6] if len(cvd_series) >= 6 else 0
@@ -2147,6 +2163,109 @@ def _detect_volume_divergence(candles: list, lookback: int = 5) -> dict:
     result["prior_avg_vol"] = round(prior_avg_vol, 2)
     result["lookback"] = lookback
     return result
+
+
+def _tick_volume_quality_score(
+    candles: list,
+    asset_type: str,
+    *,
+    lookback: int = 20,
+) -> dict:
+    """Score tick_volume reliability for non-crypto assets (0-100).
+
+    MT5 tick_volume counts price changes, not real traded volume.
+    Quality indicators:
+    1. Tick-to-range correlation: high correlation = noisy (every tick moves price)
+    2. Tick volume variance: low variance = constant noise, high variance = real activity
+    3. Volume spike ratio: bars with vol > 2x SMA indicate real participation events
+    4. Zero-volume bars: high count = data gaps, low quality
+
+    Returns {quality_score, is_reliable, diagnostics}
+    """
+    if len(candles) < lookback:
+        return {"quality_score": 0, "is_reliable": False, "reason": "insufficient_candles", "diagnostics": {}}
+
+    cfg = CONFIG.get("SCALP_ENGINE", {})
+    window = candles[-lookback:]
+
+    vols = [float(c.get("vol", 0) or 0) for c in window]
+    ranges = [float(c["high"]) - float(c["low"]) for c in window]
+
+    avg_vol = sum(vols) / len(vols)
+    if avg_vol <= 0:
+        return {"quality_score": 0, "is_reliable": False, "reason": "zero_average_volume", "diagnostics": {}}
+
+    vol_std = (sum((v - avg_vol) ** 2 for v in vols) / len(vols)) ** 0.5
+    vol_cv = vol_std / avg_vol if avg_vol > 0 else 0
+
+    ranges_avg = sum(ranges) / len(ranges)
+    if ranges_avg <= 0:
+        return {"quality_score": 0, "is_reliable": False, "reason": "zero_average_range", "diagnostics": {}}
+
+    vol_range_corr = 0.0
+    n = len(vols)
+    vol_mean = avg_vol
+    range_mean = ranges_avg
+    cov_sum = 0.0
+    vol_var_sum = 0.0
+    range_var_sum = 0.0
+    for i in range(n):
+        dv = vols[i] - vol_mean
+        dr = ranges[i] - range_mean
+        cov_sum += dv * dr
+        vol_var_sum += dv * dv
+        range_var_sum += dr * dr
+    vol_var = vol_var_sum / n
+    range_var = range_var_sum / n
+    if vol_var > 0 and range_var > 0:
+        vol_range_corr = cov_sum / (n * (vol_var ** 0.5) * (range_var ** 0.5))
+
+    zero_vol_count = sum(1 for v in vols if v <= 0)
+    zero_vol_ratio = zero_vol_count / len(vols)
+
+    spike_threshold = float(cfg.get("TICK_VOL_SPIKE_MULT", 2.0))
+    spike_count = sum(1 for v in vols if v > avg_vol * spike_threshold)
+    spike_ratio = spike_count / len(vols)
+
+    score = 50
+
+    if vol_cv >= 0.5:
+        score += 15
+    elif vol_cv >= 0.3:
+        score += 10
+    elif vol_cv >= 0.15:
+        score += 5
+    else:
+        score -= 15
+
+    abs_corr = abs(vol_range_corr)
+    if abs_corr < 0.2:
+        score += 10
+    elif abs_corr < 0.4:
+        score += 5
+    elif abs_corr > 0.7:
+        score -= 10
+
+    score += int(spike_ratio * 20)
+
+    score -= int(zero_vol_ratio * 30)
+
+    score = max(0, min(100, score))
+
+    quality_threshold = float(cfg.get("TICK_VOL_QUALITY_THRESHOLD", 35))
+    is_reliable = score >= quality_threshold
+
+    return {
+        "quality_score": score,
+        "is_reliable": is_reliable,
+        "diagnostics": {
+            "vol_cv": round(vol_cv, 3),
+            "vol_range_corr": round(vol_range_corr, 3),
+            "spike_ratio": round(spike_ratio, 3),
+            "zero_vol_ratio": round(zero_vol_ratio, 3),
+            "avg_vol": round(avg_vol, 2),
+        },
+    }
 
 
 def _detect_stop_run(candles: list, direction: str, atr: float) -> dict:
@@ -3153,6 +3272,8 @@ def ai_quality_grade(
     htf_bias: Optional[str],
     asset_type: Optional[str] = None,
     pair: str = "",
+    data_fidelity: Optional[dict] = None,
+    tick_vol_quality: Optional[dict] = None,
 ) -> dict:
     """Rule-based quality scoring (0–100). No API call — instant.
 
@@ -3161,6 +3282,9 @@ def ai_quality_grade(
       B  (60–79):  Half size   (0.5x)
       C  (40–59):  Quarter     (0.25x)
       D  (<40):    Skip        (0x)
+
+    Proxy-aware: when data_fidelity indicates proxy volume sources,
+    grade components are capped to prevent Grade A without real volume evidence.
     """
     cfg = CONFIG.get("SCALP_ENGINE", {})
     score = 0
@@ -3178,6 +3302,21 @@ def ai_quality_grade(
         "stop_run": 0,
         "time_of_day": 0,
     }
+
+    is_proxy = False
+    if data_fidelity:
+        is_proxy = bool(
+            data_fidelity.get("vp_is_proxy")
+            or data_fidelity.get("cvd_is_proxy")
+            or data_fidelity.get("absorption_is_proxy")
+        )
+    proxy_cap_enabled = bool(cfg.get("PROXY_AWARE_GRADING_ENABLED", True))
+
+    tvq_score = 0
+    tvq_reliable = False
+    if tick_vol_quality:
+        tvq_score = int(tick_vol_quality.get("quality_score", 0))
+        tvq_reliable = bool(tick_vol_quality.get("is_reliable", False))
 
     # ── Location quality (0–25) ──────────────────────────────────────────
     loc = price_loc.get("location", "")
@@ -3201,32 +3340,47 @@ def ai_quality_grade(
     if absorption.get("detected"):
         cnt = absorption.get("count", 0)
         strong_abs_min = max(1, int(cfg.get("GRADE_STRONG_ABSORPTION_MIN_COUNT", 2)))
+        abs_max = 20
+        if proxy_cap_enabled and is_proxy:
+            abs_max = int(cfg.get("GRADE_PROXY_ABSORPTION_MAX", 10))
+            if tvq_reliable and tvq_score >= 50:
+                abs_max = int(cfg.get("GRADE_PROXY_ABSORPTION_MAX_RELIABLE", 14))
         if cnt >= strong_abs_min:
-            components["absorption"] = 20
-            reasons.append(f"Strong absorption ({cnt} bars)")
+            components["absorption"] = min(20, abs_max)
+            reasons.append(f"Strong absorption ({cnt} bars)" + (" (proxy-capped)" if proxy_cap_enabled and is_proxy and components["absorption"] < 20 else ""))
         elif cnt >= 1:
-            components["absorption"] = 12
-            reasons.append(f"Absorption detected ({cnt} bar(s))")
+            components["absorption"] = min(12, abs_max)
+            reasons.append(f"Absorption detected ({cnt} bar(s))" + (" (proxy-capped)" if proxy_cap_enabled and is_proxy and components["absorption"] < 12 else ""))
     score += components["absorption"]
 
     # ── CVD confirmation (0–15) ──────────────────────────────────────────
     setup_dir = setup.get("direction")
     cvd_dir = cvd.get("direction")
+    cvd_max = 15
+    cvd_neutral_max = 5
+    if proxy_cap_enabled and is_proxy:
+        cvd_max = int(cfg.get("GRADE_PROXY_CVD_MAX", 7))
+        cvd_neutral_max = int(cfg.get("GRADE_PROXY_CVD_NEUTRAL_MAX", 2))
     if cvd_dir and cvd_dir == setup_dir:
-        components["cvd"] = 15
-        reasons.append(f"CVD confirms {setup_dir}")
+        components["cvd"] = cvd_max
+        reasons.append(f"CVD confirms {setup_dir}" + (" (proxy-capped)" if proxy_cap_enabled and is_proxy and cvd_max < 15 else ""))
     elif cvd_dir is None:
-        components["cvd"] = 5
-        reasons.append("CVD neutral")
+        components["cvd"] = cvd_neutral_max
+        reasons.append("CVD neutral" + (" (proxy)" if proxy_cap_enabled and is_proxy else ""))
     score += components["cvd"]
 
     # ── AAA sequence (0–15) ──────────────────────────────────────────────
+    aaa_max = 15
+    aaa_accum_max = 7
+    if proxy_cap_enabled and is_proxy:
+        aaa_max = int(cfg.get("GRADE_PROXY_AAA_MAX", 10))
+        aaa_accum_max = int(cfg.get("GRADE_PROXY_AAA_ACCUM_MAX", 5))
     if aaa.get("complete"):
-        components["aaa"] = 15
-        reasons.append("Full AAA sequence complete")
+        components["aaa"] = aaa_max
+        reasons.append("Full AAA sequence complete" + (" (proxy-capped)" if proxy_cap_enabled and is_proxy and aaa_max < 15 else ""))
     elif aaa.get("phase") == "accumulation":
-        components["aaa"] = 7
-        reasons.append("AAA: absorption + accumulation (no aggression yet)")
+        components["aaa"] = aaa_accum_max
+        reasons.append("AAA: absorption + accumulation (no aggression yet)" + (" (proxy-capped)" if proxy_cap_enabled and is_proxy and aaa_accum_max < 7 else ""))
     score += components["aaa"]
 
     # ── VWAP alignment (0–5) ─────────────────────────────────────────────
@@ -4029,10 +4183,13 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
                     _funnel["diagnostic_notes"]["shadow_proximity_error"] = str(_sp_err)
 
             # Pillar 2: Aggression — absorption, CVD, AAA
+            # Absorption runs on M5 (not M1 execution) — single-bar tick-volume
+            # absorption on M1 is too noisy; Fabio methodology uses 5min+ charts.
+            _absorption_tf_candles = candles_m5 if len(candles_m5) >= 10 else candles_exec
             try:
-                absorption = _check_absorption(candles_exec, asset_type=asset_type, score_group=_scalp_score_group)
+                absorption = _check_absorption(_absorption_tf_candles, asset_type=asset_type, score_group=_scalp_score_group)
             except TypeError:
-                absorption = _check_absorption(candles_exec)
+                absorption = _check_absorption(_absorption_tf_candles)
             cvd = (
                 _check_trade_bucket_cvd(display)
                 if asset_type == "crypto" and cfg.get("TRADE_BUCKET_CVD_ENABLED", True)
@@ -4264,7 +4421,10 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
             # Quality grade
             if cfg.get("AI_GRADING", True):
                 grade_sessions = get_grade_sessions_for_mode(asset_type)
-                quality = ai_quality_grade(vp, price_loc, absorption, cvd, aaa, vwap, setup, grade_sessions, spread_pips, htf_bias, asset_type, display)
+                tick_vol_quality = None
+                if asset_type and asset_type != "crypto" and cfg.get("TICK_VOL_QUALITY_GRADING_ENABLED", True):
+                    tick_vol_quality = _tick_volume_quality_score(candles_m5, asset_type)
+                quality = ai_quality_grade(vp, price_loc, absorption, cvd, aaa, vwap, setup, grade_sessions, spread_pips, htf_bias, asset_type, display, data_fidelity=data_fidelity, tick_vol_quality=tick_vol_quality)
             else:
                 quality = {"score": 50, "grade": "C", "reasons": ["grading_disabled"], "size_multiplier": 1.0}
 

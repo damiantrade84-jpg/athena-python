@@ -749,7 +749,7 @@ ENGINE_A_SCORE_GROUP_THRESHOLDS:
 
   crypto_meme: 2.2  # Meme coins (PEPE, SHIB, etc.) - higher threshold due to extreme volatility
 
-  crypto_other: 2.0
+  crypto_other: 2.2
 
   nat_gas: 2.0
 
@@ -2384,6 +2384,24 @@ SCALP_ENGINE:
   REQUIRE_REAL_VOLUME_FOR_FOREX: false
   REQUIRE_REAL_VOLUME_FOR_COMMODITY: false
   REQUIRE_REAL_VOLUME_FOR_INDEX: false
+
+  # ── Tick Volume Quality Scoring (non-crypto only) ─────────────────────
+  # MT5 tick_volume counts price changes, not real trades. These settings
+  # measure tick_volume reliability and cap grade components when data is proxy.
+  TICK_VOL_QUALITY_GRADING_ENABLED: true     # Enable tick-volume quality scoring in grading
+  TICK_VOL_SPIKE_MULT: 2.0                   # Volume multiplier to count as a "spike" event
+  TICK_VOL_QUALITY_THRESHOLD: 35             # Minimum quality score (0-100) to consider tick_volume reliable
+
+  # ── Proxy-Aware Grading ───────────────────────────────────────────────
+  # When volume data is proxy-based (tick_volume, candle approximation),
+  # grade components are capped to prevent Grade A without real volume evidence.
+  PROXY_AWARE_GRADING_ENABLED: true
+  GRADE_PROXY_ABSORPTION_MAX: 10             # Max absorption points when using proxy volume (default 20)
+  GRADE_PROXY_ABSORPTION_MAX_RELIABLE: 14    # Max absorption when tick-vol quality is reliable (≥35)
+  GRADE_PROXY_CVD_MAX: 7                     # Max CVD aligned points for proxy CVD (default 15)
+  GRADE_PROXY_CVD_NEUTRAL_MAX: 2             # Max CVD neutral points for proxy CVD (default 5)
+  GRADE_PROXY_AAA_MAX: 10                    # Max AAA complete points for proxy data (default 15)
+  GRADE_PROXY_AAA_ACCUM_MAX: 5               # Max AAA accumulation points for proxy data (default 7)
 
   TRADE_BUCKET_MIN_VOLUME: 0.0    # Optional minimum total bucket volume before using aggTrade VP
 
