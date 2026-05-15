@@ -523,7 +523,8 @@ def test_research_lab_class_profile_uses_default_when_no_class_match(monkeypatch
 
 
 def test_research_lab_addon_is_clamped_to_addon_ceiling(monkeypatch):
-    # Stage 1.4: _ADDON_CONFIRM = 0.20; research lab + funding capped at 0.20 total.
+    # Stage 1.4: _ADDON_CONFIRM = 0.20; when post-research total exceeds the
+    # single-signal band, the wider combo cap (0.25) applies.
     cfg = {
         "ENABLED": True,
         "BONUS": 0.20,
@@ -539,7 +540,7 @@ def test_research_lab_addon_is_clamped_to_addon_ceiling(monkeypatch):
     )
 
     assert result["research_lab_value"] == pytest.approx(0.20)
-    assert result["addon_value"] == pytest.approx(0.20)
+    assert result["addon_value"] == pytest.approx(0.25)
 
 
 def test_research_lab_stochastic_candidate_applies_only_to_confirmed_h4_alt_allowlist(monkeypatch):
@@ -1009,7 +1010,9 @@ def test_di_alignment_conflict_is_diagnostic_not_info_log(caplog):
         1.0,
     )
 
-    assert result["feed_status"]["abort_reason"] == "DI_ALIGNMENT_CONFLICT"
+    # DI alignment conflict is now a soft penalty (0.3x), not a hard abort.
+    assert result["feed_status"]["di_align"] == "0.30"
+    assert result["final_score"] > 0.0
     assert "DI alignment conflict" not in caplog.text
 
 

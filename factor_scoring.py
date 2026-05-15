@@ -6,6 +6,8 @@ Architecture (research-validated, 2026-04):
   Factor 3 — ADX GATE    : Trend-strength filter. Hard abort < 15; soft penalty 15-25; full >= 25.
   Addon    — ASSET ADDON : One optional secondary per class (forex=carry, crypto=funding,
                            commodity=COT). Graceful 0.0 when data unavailable — no phantom signal.
+  Gate     — DI ALIGNMENT: +DI/-DI directional confirmation. Soft penalty (0.3x) when DI
+           disagrees with EMA direction by >5 points. Prevents EMA/ADI divergence trades.
 
 Design principles:
   - Direction from TREND factor only — no other factor can flip direction.
@@ -681,23 +683,16 @@ def _momentum_quality(
     # If price makes higher highs but RSI/MACD makes lower highs (bearish div),
     # or price makes lower lows but RSI/MACD makes higher lows (bullish div),
     # momentum quality is zeroed — divergence precedes reversals.
-    def _detect_divergence(price_vals: list, ind_vals: list, dir_: str) -> bool:
-        if len(price_vals) < 3 or len(ind_vals) < 3:
-            return False
-        if dir_ == "LONG":
-            # Bearish divergence: higher price high, lower indicator high
-            return price_vals[-1] > price_vals[-2] and ind_vals[-1] < ind_vals[-2]
-        else:
-            # Bullish divergence: lower price low, higher indicator low
-            return price_vals[-1] < price_vals[-2] and ind_vals[-1] > ind_vals[-2]
-
-    _price_swings = h4_snap.get("price_swings", [])
-    _rsi_swings = h4_snap.get("rsi_swings", [])
-    _macd_hist_swings = h4_snap.get("macd_hist_swings", [])
-    _divergence_detected = (
-        _detect_divergence(_price_swings, _rsi_swings, direction)
-        or _detect_divergence(_price_swings, _macd_hist_swings, direction)
-    )
+    _divergence_detected = False
+    try:
+        from indicators import calc_rsi_divergence
+        _rsi_div = calc_rsi_divergence(h4_candles, lookback=30)
+        if _rsi_div == "bearish" and direction == "LONG":
+            _divergence_detected = True
+        elif _rsi_div == "bullish" and direction == "SHORT":
+            _divergence_detected = True
+    except Exception as exc:
+        log.debug("[EA2] RSI divergence check error: %s", exc)
 
     # MACD histogram score — aligned confirms, opposing penalises strongly.
     # Penalty increased from -0.15 to -0.50 (2026-04-30 audit): the old value
@@ -1111,8 +1106,8 @@ def _adx_gate(
         _h4 = None
 
     if _d1 is not None and _h4 is not None:
-        adx = max(_d1, _h4)
-        source = "d1" if _d1 >= _h4 else "h4"
+        adx = _d1
+        source = "d1"
     elif _d1 is not None:
         adx, source = _d1, "d1"
     elif _h4 is not None:
@@ -1846,10 +1841,6 @@ def compute_factor_scores(
     addon_val, addon_type, addon_status = _asset_addon(
         pair, direction, funding_rate, bar_time, oi_context=oi_context
     )
-    _asset_addon_exceeds_single_cap = (
-        asset_type == "crypto"
-        and (addon_val > _ADDON_CONFIRM or addon_val < _ADDON_AGAINST)
-    )
     feed_status["addon"] = f"{addon_type}:{addon_status}"
     if asset_type == "stock":
         if bool(CONFIG.get("INSIDER_TRADING_DIAGNOSTIC_ENABLED", False)):
@@ -1882,8 +1873,12 @@ def compute_factor_scores(
         feed_status["research_lab_capped"] = f"{_capped_research:.2f}"
 
     # Stage 1.4: unified addon bound aligned with research lab MAX_ABS.
-    # Crypto funding+OI can opt into a wider cap only when the asset addon
-    # itself exceeded the single-signal band before research extras were added.
+    # Check exceeds-single-cap AFTER research lab is added so the wider combo
+    # cap applies when the post-research total exceeds the single-signal band.
+    _asset_addon_exceeds_single_cap = (
+        asset_type == "crypto"
+        and (addon_val > _ADDON_CONFIRM or addon_val < _ADDON_AGAINST)
+    )
     _addon_hi = _ADDON_CONFIRM
     _addon_lo = _ADDON_AGAINST
     if _asset_addon_exceeds_single_cap:
@@ -1921,14 +1916,10 @@ def compute_factor_scores(
         _atr if _atr else 0.0, _close_for_vol, asset_type, score_group
     )
 
-    # nat_gas and crypto_doge are structurally-volatile subgroups whose H4 ATR%
-    # routinely sits in the parent class's "noise" band even during normal trade.
-    # Their group multipliers already encode "high vol = opportunity", so the
-    # quality scaler is clamped to neutral-or-boost only.  The crypto-class
-    # clamp was removed once VOLATILITY_SCALER_BANDS["crypto"] was widened to
-    # match real BTC/ETH ATR%.
-    if score_group in ("nat_gas", "crypto_doge"):
-        vol_scaler = max(1.0, vol_scaler)
+    # nat_gas and crypto_doge are structurally-volatile subgroups. Their
+    # VOLATILITY_SCALER_BANDS config entries already set wider ATR% bands,
+    # so the quality scaler naturally stays near-neutral for normal trading
+    # conditions. No clamp needed.
 
     feed_status["vol_scaler"] = f"{vol_scaler:.2f}"
 
@@ -1955,14 +1946,14 @@ def compute_factor_scores(
             elif abs(di_diff) < 5.0:
                 return 0.5
             else:
-                return 0.0
+                return 0.3
         elif trend_dir == "SHORT":
             if minus_di > plus_di:
                 return 1.0
             elif abs(di_diff) < 5.0:
                 return 0.5
             else:
-                return 0.0
+                return 0.3
         return 0.5
 
     _plus_di = h4_snap.get("plusDI") or h4_snap.get("plus_di")
@@ -2040,19 +2031,9 @@ def compute_factor_scores(
     if vol_regime_detail.get("enabled"):
         feed_status["vol_regime"] = f"{vol_regime_detail.get('multiplier', 1.0):.2f}"
 
-    base_score = (
-        abs(trend_score)
-        * adx_mult
-        * vol_scaler
-        * session_mult
-        * equity_session_mult
-        * vol_regime_mult
-        * di_align_mult
-        * dir_ramp_mult
-        * vwap_mult
-    )
-
     # FIX 3: Recalibrate Cost/Funding Penalty Sensitivity
+    # Computed before base_score so the cost factor participates in the
+    # multiplier chain (boosts are no longer wasted near the 3.0 cap).
     _cost_penalty = 0.0
     _fund_high = float(CONFIG.get("FACTOR_FUNDING_HIGH_PCT", 0.01))
     _fund_low = float(CONFIG.get("FACTOR_FUNDING_LOW_PCT", -0.01))
@@ -2094,6 +2075,19 @@ def compute_factor_scores(
         except Exception as exc:
             log.debug("[EA2] %s forex carry differential unavailable: %s", display, exc)
             feed_status["forex_carry_cost"] = "error"
+
+    base_score = (
+        abs(trend_score)
+        * adx_mult
+        * vol_scaler
+        * session_mult
+        * equity_session_mult
+        * vol_regime_mult
+        * di_align_mult
+        * dir_ramp_mult
+        * vwap_mult
+        * (1.0 - _cost_penalty)
+    )
 
     # ── Phase 2 parameter wiring: volume_ratio, macro_context, intermarket_context ──
     # These parameters were previously accepted but silently ignored.  They now
@@ -2157,7 +2151,6 @@ def compute_factor_scores(
     _total_adj = max(-_total_adj_cap, min(_total_adj_cap, _vol_adj + _macro_adj + _inter_adj))
 
     final_score = base_score * (_eff_floor + (1.0 - _eff_floor) * conviction)
-    final_score = final_score * (1.0 - _cost_penalty)
     final_score = final_score * (1.0 + _total_adj)
     # Apply mean reversion adjustment (additive, bounded)
     final_score = final_score + mean_rev_adj

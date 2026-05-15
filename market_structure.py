@@ -1462,7 +1462,7 @@ class NakedEngine:
         if avg_volume_20 <= 0:
             avg_volume_20 = 1.0
         zone_vol_means = (
-            pd.Series(vols).rolling(window=3, center=True, min_periods=1).mean().to_numpy()
+            pd.Series(vols).rolling(window=3, center=False, min_periods=1).mean().to_numpy()
             if len(vols) > 0
             else np.array([], dtype=float)
         )
@@ -2650,9 +2650,9 @@ class NakedEngine:
         res_zones = _merge_zones(res_zones, _merge_dist)
         sup_zones = _merge_zones(sup_zones, _merge_dist)
 
-        current_close = float(struct_candles[-1]["close"]) if struct_candles else current_price
-        res_zones = [z for z in res_zones if z["lower"] > current_close - (zone_atr * 0.1)]
-        sup_zones = [z for z in sup_zones if z["upper"] < current_close + (zone_atr * 0.1)]
+        # Zone filtering is now direction-dependent in analyze_structure_direction()
+        # via valid_res/valid_sup filters. Removed direction-independent filtering
+        # that incorrectly removed zones relevant for the opposite direction.
 
         d1_adx_val = _adx_from_indicator_snap(d1_snap)
         h4_adx_val = _adx_from_indicator_snap(h4_snap)
@@ -3464,7 +3464,7 @@ class NakedEngine:
         _profile_points_max = 1.0 if config.CONFIG.get("ENGINE_B_PROFILE_SCORING_ENABLED", False) else 0.0
         bonus_count = 3 + _profile_points_max  # bos_mtf, ob_at_zone, volume_ok + profile
         if _ft_enabled:
-            bonus_count += abs(float(_ft_cfg.get("MAX_BONUS", 1.5)))
+            bonus_count += _ft_bonus
         max_possible = gate_max_possible + bonus_count
         _profile_points = 0.0
         _profile_ok = False
