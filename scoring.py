@@ -270,15 +270,13 @@ def _get_threshold_tier(pair: dict) -> float:
     return _TIER_STABLE
 
 
-def get_score_threshold(pair: dict, is_backtest: bool = False, regime: str | None = None) -> float:
-    """Resolve score threshold.
+def get_score_threshold(pair: dict, regime: str | None = None) -> float:
+    """Resolve score threshold (live and backtest share the same value).
 
-    Replaces the old 6-class + BT_MIN_GROUP + BACKTEST_USE_BT_MIN_THRESHOLDS
-    hierarchy with profile override, pair/group config, then 3-tier fallback.
-    Backtest and live use same thresholds.
+    Profile override -> pair/group config -> 3-tier fallback.
 
-    When ENGINE_A_REGIME_DYNAMIC_THRESHOLDS.ENABLED is true, applies regime-based
-    multipliers to the resolved threshold:
+    When ENGINE_A_REGIME_DYNAMIC_THRESHOLDS.ENABLED is true and ``regime`` is
+    provided, applies regime-based multipliers to the resolved threshold:
       - TRENDING: 10% easier (0.90 multiplier)
       - RANGING: 10% harder (1.10 multiplier)
       - HIGH_VOLATILITY: 15% harder (1.15 multiplier)
@@ -318,12 +316,12 @@ def get_score_threshold(pair: dict, is_backtest: bool = False, regime: str | Non
 
 def get_min_confluence_threshold(pair: dict) -> float:
     """Legacy wrapper for live scan threshold resolution."""
-    return get_score_threshold(pair, is_backtest=False)
+    return get_score_threshold(pair)
 
 
 def get_backtest_min_score_threshold(pair: dict) -> float:
-    """Legacy wrapper for Engine A backtest gate."""
-    return get_score_threshold(pair, is_backtest=True)
+    """Legacy wrapper for Engine A backtest gate (parity with live)."""
+    return get_score_threshold(pair)
 
 
 def pair_filter_enabled(pair: dict, filter_name: str) -> bool:

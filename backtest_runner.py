@@ -86,6 +86,11 @@ def _bt_forex_d1_bar_time(d1_ts: str) -> str:
     filter (London: 07-17, NY: 12-21). 13:00 UTC is peak London/NY overlap and
     represents the most liquid part of the trading day -- appropriate for a D1
     signal that spans the full day.
+
+    M2 parity note: live forex D1 signals emit at the actual D1 bar close
+    (typically 22:00 UTC), not 13:00 UTC. Any BT path that calls this helper
+    MUST stamp ``signalTimeProxy = "13:00 UTC"`` on its result so downstream
+    consumers can identify timestamps that diverge from live emission.
     """
     try:
         from datetime import datetime, timezone
@@ -481,6 +486,112 @@ def _live_base_risk_pct(asset_type: str) -> float:
     }.get(asset_type, CONFIG["RISK_PCT"])
 
 
+def _bt_synth_candle_fetch_meta(bar_time: str | None, tfs=("H1", "H4")) -> dict:
+    """Synthesize a candleFetchMeta block for BT signals (M5 parity).
+
+    BT iterates historical confirmed bars, so freshness is by definition OK.
+    Building this block lets BT call evaluate_execution_data_freshness() for
+    symmetry with live and surface drift if the gate's logic changes.
+    """
+    meta: dict[str, dict] = {}
+    for tf in tfs:
+        meta[tf] = {
+            "lastBarStale": False,
+            "hasCurrentBucket": True,
+            "lastBarAgeSec": 0.0,
+            "lastBarEpoch": bar_time,
+            "stalenessSeverity": "ok",
+            "offsetHours": 0,
+            "bucketLag": 0,
+        }
+    return meta
+
+
+def _bt_freshness_passes(bar_time: str | None) -> tuple[bool, str]:
+    """Run live freshness gate on a synthesized BT candleFetchMeta payload."""
+    try:
+        from athena_app.services.data_freshness import evaluate_execution_data_freshness
+    except Exception:
+        return True, "freshness_unavailable"
+    try:
+        meta = _bt_synth_candle_fetch_meta(bar_time)
+        signal = {"candleFetchMeta": meta}
+        result = evaluate_execution_data_freshness(signal, CONFIG)
+        if isinstance(result, dict):
+            if result.get("allowed", True):
+                return True, str(result.get("reason", "ok"))
+            return False, str(result.get("reason", "freshness_block"))
+    except Exception as exc:
+        return True, f"freshness_exception:{exc}"
+    return True, "ok"
+
+
+def _bt_pre_trade_invariants(
+    pair: dict,
+    *,
+    direction: str,
+    entry: float,
+    sl: float,
+    tp1: float,
+    factor_diagnostics: dict | None = None,
+    asset_type: str | None = None,
+) -> tuple[bool, str]:
+    """Run guardian.pre_trade_invariants against a synthesized BT signal.
+
+    Catches the deterministic guardian checks (direction-vs-directionalScore,
+    geometry, MAX_SL_PCT) inside BT loops. Mirrors the live execution
+    contract so geometry / scoring bugs are surfaced in BT just as in live.
+    """
+    try:
+        from guardian import pre_trade_invariants
+    except Exception:
+        return True, "guardian_unavailable"
+    signal = {
+        "pair": pair.get("display") or pair.get("symbol"),
+        "direction": direction,
+        "price": float(entry),
+        "sl": float(sl),
+        "tp1": float(tp1),
+        "type": asset_type or pair.get("type"),
+        "factorDiagnostics": factor_diagnostics or {},
+    }
+    return pre_trade_invariants(signal)
+
+
+def _bt_risk_pct(
+    asset_type: str,
+    regime: str | None = None,
+    *,
+    equity: float = 1.0,
+    peak: float = 1.0,
+) -> tuple[float, float, bool]:
+    """BT-side mirror of risk_engine sizing. Returns (risk_pct, drawdown, allowed).
+
+    Mirrors live risk_engine semantics so BT equity curves track live behavior:
+      - per-asset base risk via _adaptive_risk_pct (Kelly cap, HIGH_VOLATILITY 0.7x)
+      - drawdown halving once synthetic equity falls past DRAWDOWN_REDUCE_THRESHOLD
+      - drawdown circuit-breaker rejection once it exceeds DRAWDOWN_STOP_THRESHOLD
+
+    `_adaptive_risk_pct` reads audit.db for Kelly history; if unavailable it
+    falls back to the asset_risk_map base — same fallback as live.
+    """
+    try:
+        from risk_engine import _adaptive_risk_pct as _live_adaptive_risk
+
+        base = float(_live_adaptive_risk(asset_type, regime or ""))
+    except Exception:
+        base = _live_base_risk_pct(asset_type)
+
+    dd = max(0.0, (peak - equity) / peak) if peak > 0 else 0.0
+    dd_stop = float(CONFIG.get("DRAWDOWN_STOP_THRESHOLD", 0.15) or 0.15)
+    dd_reduce = float(CONFIG.get("DRAWDOWN_REDUCE_THRESHOLD", 0.10) or 0.10)
+    if dd >= dd_stop:
+        return 0.0, dd, False
+    if dd >= dd_reduce:
+        return base * 0.5, dd, True
+    return base, dd, True
+
+
 def _engine_a_level_atr_for_bt(
     signal_atr: float | None, pair: dict, style: str | None, as_of=None
 ) -> tuple[float | None, str]:
@@ -572,15 +683,28 @@ def _engine_a_bt_gate_note() -> str:
 
     Stage 4.2: BT_MIN / BT_MIN_GROUP deleted. Backtest and live use identical
     Engine A threshold resolution from scoring.py.
+
+    H2 parity note: live scan can layer a SCAN_QUANTILE cross-section floor
+    (top-fraction across all pairs in a scan). BT runs pair-by-pair and
+    cannot construct that universe-snapshot, so when SCAN_QUANTILE_ENABLED
+    is on, BT trade counts will exceed live by exactly the trades that the
+    quantile floor would have rejected.
     """
     sq_on = bool(CONFIG.get("SCAN_QUANTILE_ENABLED", False))
-    return (
+    note = (
         "Engine A backtest uses live thresholds "
         "(profile -> pair/group config -> 3-tier fallback). "
-        "Backtest/live parity enforced. "
+        "Backtest/live parity enforced on static threshold and regime multiplier. "
         "Live scan: get_min_confluence_threshold plus optional SCAN_QUANTILE_ENABLED."
-        + ("" if sq_on else " SCAN_QUANTILE_ENABLED is off.")
     )
+    if sq_on:
+        note += (
+            " SCAN_QUANTILE_ENABLED=true in live but BT cannot replay the "
+            "cross-section floor — BT trade count is an upper bound vs live."
+        )
+    else:
+        note += " SCAN_QUANTILE_ENABLED is off."
+    return note
 
 
 def _bt_btc_bias(d1_window: list, pair: dict) -> str:
@@ -676,7 +800,59 @@ _BASE_BACKTEST_SLIP = {
 }
 
 
-def _get_slippage_for_bar(bar: dict, ptype: str) -> float:
+_BROKER_SPREAD_CACHE: dict[str, float] = {}
+
+
+def _apply_broker_spread_floor(
+    base_pct: float, bar: dict | None, pair: dict | None
+) -> float:
+    """Floor base slippage at the live broker's quoted spread (MT5 only)."""
+    spread_abs = _bt_broker_spread_floor(pair)
+    if spread_abs <= 0:
+        return base_pct
+    try:
+        ref_price = float((bar or {}).get("close") or (bar or {}).get("open") or 0.0)
+    except (TypeError, ValueError):
+        ref_price = 0.0
+    if ref_price <= 0:
+        return base_pct
+    spread_pct = spread_abs / ref_price
+    return max(base_pct, spread_pct)
+
+
+def _bt_broker_spread_floor(pair: dict | None) -> float:
+    """Cache-once broker spread floor for MT5 pairs.
+
+    Returns absolute price-units (point * spread). 0.0 means no broker info
+    available — caller falls back to the static slippage base.
+    """
+    if not isinstance(pair, dict):
+        return 0.0
+    if str(pair.get("source") or "").lower() != "mt5":
+        return 0.0
+    display = str(pair.get("display") or pair.get("symbol") or "")
+    if not display:
+        return 0.0
+    cached = _BROKER_SPREAD_CACHE.get(display)
+    if cached is not None:
+        return cached
+    try:
+        from mt5_executor import mt5_get_symbol_info
+
+        si = mt5_get_symbol_info(display)
+        if isinstance(si, dict) and not si.get("error"):
+            point = float(si.get("point") or 0.0)
+            spread_points = float(si.get("spread") or 0.0)
+            spread_floor = max(0.0, point * spread_points)
+            _BROKER_SPREAD_CACHE[display] = spread_floor
+            return spread_floor
+    except Exception:
+        pass
+    _BROKER_SPREAD_CACHE[display] = 0.0
+    return 0.0
+
+
+def _get_slippage_for_bar(bar: dict, ptype: str, *, pair: dict | None = None) -> float:
     """Deterministic per-bar slippage model shared by all backtest engines."""
     base = _BASE_BACKTEST_SLIP.get(ptype, 0.001)
 
@@ -688,13 +864,14 @@ def _get_slippage_for_bar(bar: dict, ptype: str) -> float:
             h = -1
 
         if 0 <= h < 7 or h >= 22:
-            return base * 1.8
+            base_after_hours = base * 1.8
+            return _apply_broker_spread_floor(base_after_hours, bar, pair)
         if 13 <= h < 16:
             base = base * 0.7
 
     model = CONFIG.get("BT_SLIPPAGE_MODEL", {}) or {}
     if not bool(model.get("ENABLED", False)):
-        return base
+        return _apply_broker_spread_floor(base, bar, pair)
 
     def _float_or_none(value):
         try:
@@ -722,7 +899,8 @@ def _get_slippage_for_bar(bar: dict, ptype: str) -> float:
     impact = 0.0
     if price and atr and qty_adv_ratio > 0:
         impact = (atr / price) * k2 * math.sqrt(qty_adv_ratio)
-    return min(cap, max(base, (k1 * base) + impact))
+    final = min(cap, max(base, (k1 * base) + impact))
+    return _apply_broker_spread_floor(final, bar, pair)
 
 
 def _bar_with_slippage_context(bar: dict, *, atr: float | None = None) -> dict:
@@ -763,9 +941,14 @@ def _resolve_barrier_exit(
     """Resolve TP/SL touches on a single OHLC bar.
 
     When both SL and TP are touched on the same bar, intrabar order cannot
-    be determined from OHLC. Use the bar's open-to-level distance as a
-    tiebreaker: whichever level the bar opened closer to is assumed hit
-    first. This gives an unbiased estimate vs the old always-SL pessimism.
+    be determined from OHLC. Resolution mode is config-gated via
+    ``BT_SAME_BAR_RESOLUTION``:
+
+      - ``pessimistic_sl`` (default): assume SL hit first. Removes positive
+        bias on volatile bars; better matches live broker fill order in the
+        absence of tick-level history.
+      - ``open_distance``: legacy heuristic — whichever level the bar opened
+        closer to is assumed hit first.
     """
     bar_high = float(bar["high"])
     bar_low = float(bar["low"])
@@ -781,10 +964,15 @@ def _resolve_barrier_exit(
 
     same_bar_both_hit = hit_sl and (hit_tp2 or hit_tp1)
     if same_bar_both_hit:
-        _open = float(bar.get("open", (bar_high + bar_low) / 2))
-        _tp_ref = tp2 if hit_tp2 else tp1
-        if _tp_ref is not None and abs(_open - _tp_ref) < abs(_open - sl):
-            return ("TP2" if hit_tp2 else "TP1"), True
+        mode = str(
+            CONFIG.get("BT_SAME_BAR_RESOLUTION", "pessimistic_sl")
+            or "pessimistic_sl"
+        ).lower()
+        if mode == "open_distance":
+            _open = float(bar.get("open", (bar_high + bar_low) / 2))
+            _tp_ref = tp2 if hit_tp2 else tp1
+            if _tp_ref is not None and abs(_open - _tp_ref) < abs(_open - sl):
+                return ("TP2" if hit_tp2 else "TP1"), True
         return sl_outcome, True
     if hit_tp2:
         return "TP2", False
@@ -1474,9 +1662,49 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
         except Exception as _btc_hist_err:
             log.debug("[BT-CORR] %s BTC benchmark history unavailable: %s", pair.get("display"), _btc_hist_err)
 
+    # M5 parity: smoke-test the live freshness gate against a synthesized
+    # candleFetchMeta. If this fails, the live gate has drifted and BT may
+    # be admitting trades the live path would block; surface as a warning.
+    _bt_fresh_ok, _bt_fresh_why = _bt_freshness_passes(
+        h4_raw[-1].get("time") if h4_raw else None
+    )
+    if not _bt_fresh_ok:
+        log.warning(
+            "[BT-FRESHNESS] %s synthesized freshness payload BLOCKED: %s — "
+            "BT and live execution gate may have drifted",
+            pair.get("display"), _bt_fresh_why,
+        )
+
+    # L4 parity: opt-in smoke-test that exercises the live state-aware
+    # scoring helper so a regression in candle_service does not slip past
+    # BT runs. Default off to avoid runtime cost; flip in tests.
+    if bool(CONFIG.get("BT_USE_LIVE_STATE_AWARE_SCORING_SMOKE", False)):
+        try:
+            from athena_app.services.candle_service import engine_a_scoring_candles_from_state
+
+            _smoke_state = {"confirmed": list(h4_raw[-50:])} if h4_raw else {}
+            _smoke_out = engine_a_scoring_candles_from_state(
+                _pair_ctx, _smoke_state, fallback=h4_raw
+            )
+            if not isinstance(_smoke_out, list) or len(_smoke_out) > len(h4_raw or []):
+                log.warning(
+                    "[BT-STATE-SMOKE] %s engine_a_scoring_candles_from_state "
+                    "returned unexpected payload (len=%s)",
+                    pair.get("display"),
+                    len(_smoke_out) if isinstance(_smoke_out, list) else "n/a",
+                )
+        except Exception as _smoke_err:
+            log.warning(
+                "[BT-STATE-SMOKE] %s engine_a_scoring_candles_from_state failed: %s",
+                pair.get("display"), _smoke_err,
+            )
+
     # Engine A backtest gate: pair profile -> pair/group config -> 3-tier fallback.
     # Stage 4.2: Backtest and live use identical thresholds.
-    bt_min = get_score_threshold(_pair_ctx, is_backtest=True)
+    bt_min_static = get_score_threshold(_pair_ctx)
+    # NB: when ENGINE_A_REGIME_DYNAMIC_THRESHOLDS.ENABLED is true, live applies a
+    # regime multiplier per bar. The per-bar threshold is recomputed below.
+    bt_min = bt_min_static
 
     _canonical_vm, _vm_mode_warning = normalize_validation_mode(validation_mode)
     _temporal_vm = temporal_validation_mode(_canonical_vm)
@@ -1630,7 +1858,7 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
 
         MIN_BARS = 220  # Fixed indicator warmup (EMA200 + buffer) — do not tie to D1_CANDLES fetch depth
         COOLDOWN = 3
-        MAX_OPEN = 3  # R5: max concurrent positions
+        MAX_OPEN = 1  # Mirror live duplicate-pair guard (risk_engine.py rejects concurrent same-pair trades)
 
         total_bars = len(d1_raw)
 
@@ -1897,6 +2125,15 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
                     i += 1
                     continue
 
+            # H1 parity: when ENGINE_A_REGIME_DYNAMIC_THRESHOLDS.ENABLED is on,
+            # live applies a per-bar regime multiplier — recompute here so BT
+            # threshold tracks live exactly.
+            _bar_regime = (
+                res.get("regimeName")
+                or ((res.get("regime") or {}).get("label") if isinstance(res.get("regime"), dict) else None)
+                or _ts
+            )
+            bt_min = get_score_threshold(_pair_ctx, regime=_bar_regime)
             if res["score"] < bt_min:
                 funnel["fail_score"] += 1
                 i += 1
@@ -1930,7 +2167,7 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
 
             _slip_mult = 3.0 if _canonical_vm == "live_parity" else 1.0
             slip = raw_entry * _get_slippage_for_bar(
-                _bar_with_slippage_context(entry_bar, atr=atr), _ptype
+                _bar_with_slippage_context(entry_bar, atr=atr), _ptype, pair=pair
             ) * _slip_mult
             entry = raw_entry + slip if direction == "LONG" else raw_entry - slip
 
@@ -2007,6 +2244,27 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
                 i += 1
                 continue
 
+            # C2: deterministic guardian invariants (direction-vs-directionalScore
+            # and any geometry edge case the inline checks above would miss).
+            _gd_ok, _gd_why = _bt_pre_trade_invariants(
+                pair,
+                direction=direction,
+                entry=entry,
+                sl=sl,
+                tp1=tp1,
+                factor_diagnostics=res.get("factorDiagnostics"),
+                asset_type=_ptype,
+            )
+            if not _gd_ok:
+                funnel["fail_pre_trade_invariants"] = (
+                    funnel.get("fail_pre_trade_invariants", 0) + 1
+                )
+                log.debug(
+                    f"[BT-GUARDIAN] {pair['display']} {direction} REJECTED: {_gd_why}"
+                )
+                i += 1
+                continue
+
             # T1: Volatility-adjusted sizing â€" if ATR > 1.5x its 20-bar SMA, reduce size 30%
 
             _atr_series = calc_atr(
@@ -2060,7 +2318,7 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
                     break
                 if _bar_outcome == "SL":
                     _sl_slip_r = (
-                        _get_slippage_for_bar(_bar_with_slippage_context(bar, atr=atr), _ptype) * sl / (atr * sl_mult)
+                        _get_slippage_for_bar(_bar_with_slippage_context(bar, atr=atr), _ptype, pair=pair) * sl / (atr * sl_mult)
                         if atr and sl_mult
                         else 0
                     )
@@ -2101,7 +2359,12 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
                 tp2=tp2,
             )
 
-            live_risk_pct = _live_base_risk_pct(_ptype)
+            # Live-parity sizing: read base risk via risk_engine._adaptive_risk_pct
+            # (Kelly + HIGH_VOLATILITY 0.7x) and apply drawdown halving / stop.
+            _bt_peak = max(equity_curve) if equity_curve else 1.0
+            live_risk_pct, _bt_dd, _bt_allowed = _bt_risk_pct(
+                _ptype, regime=_bar_regime, equity=equity, peak=_bt_peak
+            )
 
             # F3: Deduct round-trip exchange fee (entry + exit commission) from result_r
 
@@ -2113,15 +2376,15 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
                 result_r = round(result_r - _fee_r_sw, 4)
 
             # T1: Apply volatility adjustment and score-based sizing to position size
-
-            # Apply the same base per-asset risk percentages as the live risk gateway.
-            # (forex=0.6, crypto=0.8). Live risk_engine does NOT apply RISK_MULT —
-            # it uses asset_risk_map in _adaptive_risk_pct() instead.
-            # BT equity curves are therefore ~40% smaller than live for forex.
-            # Do not compare BT Sharpe/SQN directly to live P&L without adjusting.
-            equity_change = (
-                result_r * live_risk_pct * _vol_adj * _score_factor
-            )
+            if not _bt_allowed:
+                # Drawdown circuit-breaker hit — live would reject; record zero P&L.
+                equity_change = 0.0
+                outcome = "DRAWDOWN_CIRCUIT_BREAKER"
+                result_r = 0.0
+            else:
+                equity_change = (
+                    result_r * live_risk_pct * _vol_adj * _score_factor
+                )
 
             equity = round(equity * (1 + equity_change), 6)
 
@@ -2194,7 +2457,7 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
         MIN_H4 = 250  # Fixed indicator warmup — do not tie to H4_CANDLES fetch depth
         COOLDOWN = 2
         MAX_HOLD = 24
-        MAX_OPEN = 3
+        MAX_OPEN = 1  # Mirror live duplicate-pair guard
 
         total_h4 = len(h4_raw)
 
@@ -2460,6 +2723,15 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
                     i += 1
                     continue
 
+            # H1 parity: when ENGINE_A_REGIME_DYNAMIC_THRESHOLDS.ENABLED is on,
+            # live applies a per-bar regime multiplier — recompute here so BT
+            # threshold tracks live exactly.
+            _bar_regime = (
+                res.get("regimeName")
+                or ((res.get("regime") or {}).get("label") if isinstance(res.get("regime"), dict) else None)
+                or _ts
+            )
+            bt_min = get_score_threshold(_pair_ctx, regime=_bar_regime)
             if res["score"] < bt_min:
                 funnel["fail_score"] += 1
                 i += 1
@@ -2495,7 +2767,7 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
 
             _slip_mult = 3.0 if _canonical_vm == "live_parity" else 1.0
             slip = raw_entry * _get_slippage_for_bar(
-                _bar_with_slippage_context(entry_bar, atr=atr), _ptype
+                _bar_with_slippage_context(entry_bar, atr=atr), _ptype, pair=pair
             ) * _slip_mult
             entry = raw_entry + slip if direction == "LONG" else raw_entry - slip
 
@@ -2566,6 +2838,27 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
                 i += 1
                 continue
 
+            # C2: deterministic guardian invariants (direction-vs-directionalScore
+            # and any geometry edge case the inline checks above would miss).
+            _gd_ok, _gd_why = _bt_pre_trade_invariants(
+                pair,
+                direction=direction,
+                entry=entry,
+                sl=sl,
+                tp1=tp1,
+                factor_diagnostics=res.get("factorDiagnostics"),
+                asset_type=_ptype,
+            )
+            if not _gd_ok:
+                funnel["fail_pre_trade_invariants"] = (
+                    funnel.get("fail_pre_trade_invariants", 0) + 1
+                )
+                log.debug(
+                    f"[BT-GUARDIAN] {pair['display']} {direction} REJECTED: {_gd_why}"
+                )
+                i += 1
+                continue
+
             _atr_series = calc_atr(
                 [c["high"] for c in h4_window],
                 [c["low"] for c in h4_window],
@@ -2617,7 +2910,7 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
                     break
                 if _bar_outcome == "SL":
                     _sl_slip_r = (
-                        _get_slippage_for_bar(_bar_with_slippage_context(bar, atr=atr), _ptype) * sl / (atr * sl_mult)
+                        _get_slippage_for_bar(_bar_with_slippage_context(bar, atr=atr), _ptype, pair=pair) * sl / (atr * sl_mult)
                         if atr and sl_mult
                         else 0
                     )
@@ -2656,7 +2949,12 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
                 tp2=tp2,
             )
 
-            live_risk_pct = _live_base_risk_pct(_ptype)
+            # Live-parity sizing: read base risk via risk_engine._adaptive_risk_pct
+            # (Kelly + HIGH_VOLATILITY 0.7x) and apply drawdown halving / stop.
+            _bt_peak = max(equity_curve) if equity_curve else 1.0
+            live_risk_pct, _bt_dd, _bt_allowed = _bt_risk_pct(
+                _ptype, regime=_bar_regime, equity=equity, peak=_bt_peak
+            )
 
             # F3: Deduct round-trip exchange fee from result_r
 
@@ -2667,14 +2965,14 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
 
                 result_r = round(result_r - _fee_r_id, 4)
 
-            # Apply the same base per-asset risk percentages as the live risk gateway.
-            # (forex=0.6, crypto=0.8). Live risk_engine does NOT apply RISK_MULT —
-            # it uses asset_risk_map in _adaptive_risk_pct() instead.
-            # BT equity curves are therefore ~40% smaller than live for forex.
-            # Do not compare BT Sharpe/SQN directly to live P&L without adjusting.
-            equity_change = (
-                result_r * live_risk_pct * _vol_adj * _score_factor
-            )
+            if not _bt_allowed:
+                equity_change = 0.0
+                outcome = "DRAWDOWN_CIRCUIT_BREAKER"
+                result_r = 0.0
+            else:
+                equity_change = (
+                    result_r * live_risk_pct * _vol_adj * _score_factor
+                )
 
             equity = round(equity * (1 + equity_change), 6)
 
@@ -2745,7 +3043,7 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
         MIN_H1 = 250  # Fixed indicator warmup — do not tie to H1_CANDLES fetch depth
         COOLDOWN = 1
         MAX_HOLD = 12
-        MAX_OPEN = 3
+        MAX_OPEN = 1  # Mirror live duplicate-pair guard
 
         total_h1 = len(h1_raw)
 
@@ -3003,6 +3301,15 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
                     i += 1
                     continue
 
+            # H1 parity: when ENGINE_A_REGIME_DYNAMIC_THRESHOLDS.ENABLED is on,
+            # live applies a per-bar regime multiplier — recompute here so BT
+            # threshold tracks live exactly.
+            _bar_regime = (
+                res.get("regimeName")
+                or ((res.get("regime") or {}).get("label") if isinstance(res.get("regime"), dict) else None)
+                or _ts
+            )
+            bt_min = get_score_threshold(_pair_ctx, regime=_bar_regime)
             if res["score"] < bt_min:
                 funnel["fail_score"] += 1
                 i += 1
@@ -3036,7 +3343,7 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
 
             _slip_mult = 3.0 if _canonical_vm == "live_parity" else 1.0
             slip = raw_entry * _get_slippage_for_bar(
-                _bar_with_slippage_context(entry_bar, atr=atr), _ptype
+                _bar_with_slippage_context(entry_bar, atr=atr), _ptype, pair=pair
             ) * _slip_mult
             entry = raw_entry + slip if direction == "LONG" else raw_entry - slip
 
@@ -3107,6 +3414,27 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
                 i += 1
                 continue
 
+            # C2: deterministic guardian invariants (direction-vs-directionalScore
+            # and any geometry edge case the inline checks above would miss).
+            _gd_ok, _gd_why = _bt_pre_trade_invariants(
+                pair,
+                direction=direction,
+                entry=entry,
+                sl=sl,
+                tp1=tp1,
+                factor_diagnostics=res.get("factorDiagnostics"),
+                asset_type=_ptype,
+            )
+            if not _gd_ok:
+                funnel["fail_pre_trade_invariants"] = (
+                    funnel.get("fail_pre_trade_invariants", 0) + 1
+                )
+                log.debug(
+                    f"[BT-GUARDIAN] {pair['display']} {direction} REJECTED: {_gd_why}"
+                )
+                i += 1
+                continue
+
             _atr_series = calc_atr(
                 [c["high"] for c in h1_window],
                 [c["low"] for c in h1_window],
@@ -3158,7 +3486,7 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
                     break
                 if _bar_outcome == "SL":
                     _sl_slip_r = (
-                        _get_slippage_for_bar(_bar_with_slippage_context(bar, atr=atr), _ptype) * sl / (atr * sl_mult)
+                        _get_slippage_for_bar(_bar_with_slippage_context(bar, atr=atr), _ptype, pair=pair) * sl / (atr * sl_mult)
                         if atr and sl_mult
                         else 0
                     )
@@ -3197,7 +3525,12 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
                 tp2=tp2,
             )
 
-            live_risk_pct = _live_base_risk_pct(_ptype)
+            # Live-parity sizing: read base risk via risk_engine._adaptive_risk_pct
+            # (Kelly + HIGH_VOLATILITY 0.7x) and apply drawdown halving / stop.
+            _bt_peak = max(equity_curve) if equity_curve else 1.0
+            live_risk_pct, _bt_dd, _bt_allowed = _bt_risk_pct(
+                _ptype, regime=_bar_regime, equity=equity, peak=_bt_peak
+            )
 
             # F3: Deduct round-trip exchange fee from result_r
 
@@ -3208,14 +3541,14 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
 
                 result_r = round(result_r - _fee_r_sc, 4)
 
-            # Apply the same base per-asset risk percentages as the live risk gateway.
-            # (forex=0.6, crypto=0.8). Live risk_engine does NOT apply RISK_MULT —
-            # it uses asset_risk_map in _adaptive_risk_pct() instead.
-            # BT equity curves are therefore ~40% smaller than live for forex.
-            # Do not compare BT Sharpe/SQN directly to live P&L without adjusting.
-            equity_change = (
-                result_r * live_risk_pct * _vol_adj * _score_factor
-            )
+            if not _bt_allowed:
+                equity_change = 0.0
+                outcome = "DRAWDOWN_CIRCUIT_BREAKER"
+                result_r = 0.0
+            else:
+                equity_change = (
+                    result_r * live_risk_pct * _vol_adj * _score_factor
+                )
 
             equity = round(equity * (1 + equity_change), 6)
 
@@ -3476,6 +3809,8 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
     import random as _rnd
 
     _risk_pct = _live_base_risk_pct(pair["type"])
+    _dd_reduce = float(CONFIG.get("DRAWDOWN_REDUCE_THRESHOLD", 0.10) or 0.10)
+    _dd_stop = float(CONFIG.get("DRAWDOWN_STOP_THRESHOLD", 0.15) or 0.15)
 
     _mc_dds = []
 
@@ -3488,7 +3823,13 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
         _mdd = 0.0
 
         for _r in _shuffled:
-            _eq *= 1 + _r * _risk_pct
+            # Mirror live drawdown semantics inside the MC path so reported
+            # P5/P50/P95 reflect the actual live risk gate, not a static base.
+            _dd_now = (_pk - _eq) / _pk if _pk > 0 else 0.0
+            if _dd_now >= _dd_stop:
+                continue  # Live would reject — no equity change
+            _r_pct = _risk_pct * (0.5 if _dd_now >= _dd_reduce else 1.0)
+            _eq *= 1 + _r * _r_pct
 
             if _eq > _pk:
                 _pk = _eq
@@ -3754,6 +4095,11 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
             trades, same_bar_both_hit
         ),
         "same_bar_both_hit": same_bar_both_hit,
+        # L3: % of trades where SL+TP both hit on the same OHLC bar — ambiguity
+        # in intrabar order. High values mean BT win-rate is unreliable.
+        "sameBarAmbiguityPct": (
+            round(same_bar_both_hit / max(1, len(trades)) * 100, 2)
+        ),
         "pairMaxScore": _pair_max_score,
         "equityCurve": equity_curve,
         "trades": trades,
@@ -3843,12 +4189,23 @@ def _format_backtest_results(
     sortino = annualized_sortino_engine_a_from_r_multiples(r_values, _tpy, decimals=2)
 
     _eq_risk_pct = float(_live_base_risk_pct(str(pair.get("type") or "stock")))
+    _dd_reduce_b = float(CONFIG.get("DRAWDOWN_REDUCE_THRESHOLD", 0.10) or 0.10)
+    _dd_stop_b = float(CONFIG.get("DRAWDOWN_STOP_THRESHOLD", 0.15) or 0.15)
 
-    # Equity compounds R with live base risk_pct (parity with Engine A MC paths).
+    # Equity compounds R with live base risk_pct, applying live drawdown
+    # halving / circuit-breaker so BT equity tracks risk_engine semantics.
     equity_curve = []
     eq = 1.0
+    eq_peak = 1.0
     for rv in r_values:
-        eq = round(eq * (1.0 + float(rv) * _eq_risk_pct), 4)
+        _dd_now = (eq_peak - eq) / eq_peak if eq_peak > 0 else 0.0
+        if _dd_now >= _dd_stop_b:
+            equity_curve.append(round(eq, 4))
+            continue
+        _r_pct = _eq_risk_pct * (0.5 if _dd_now >= _dd_reduce_b else 1.0)
+        eq = round(eq * (1.0 + float(rv) * _r_pct), 4)
+        if eq > eq_peak:
+            eq_peak = eq
         equity_curve.append(eq)
 
     # Max drawdown
@@ -3890,7 +4247,7 @@ def _format_backtest_results(
         "lowSampleSqnTradeFloor": _sq_warn_n,
     }
 
-    # Monte Carlo drawdown simulation (500 shuffles)
+    # Monte Carlo drawdown simulation (500 shuffles), live drawdown semantics applied
     mc_dd_p50 = 0.0
     mc_dd_p95 = 0.0
     if len(r_values) >= 10:
@@ -3903,7 +4260,11 @@ def _format_backtest_results(
             _mc_peak = 1.0
             _mc_max_dd = 0.0
             for rv in _shuffled:
-                _mc_eq = _mc_eq * (1.0 + float(rv) * _eq_risk_pct)
+                _mc_dd_now = (_mc_peak - _mc_eq) / _mc_peak if _mc_peak > 0 else 0.0
+                if _mc_dd_now >= _dd_stop_b:
+                    continue
+                _r_pct_mc = _eq_risk_pct * (0.5 if _mc_dd_now >= _dd_reduce_b else 1.0)
+                _mc_eq = _mc_eq * (1.0 + float(rv) * _r_pct_mc)
                 if _mc_eq > _mc_peak:
                     _mc_peak = _mc_eq
                 _dd = (_mc_peak - _mc_eq) / _mc_peak * 100 if _mc_peak > 0 else 0
@@ -3976,6 +4337,11 @@ def _format_backtest_results(
         "btStyleRequested": "naked",
         "engine": engine_type,
         "same_bar_both_hit": same_bar_both_hit,
+        # L3: % of trades where SL+TP both hit on the same OHLC bar — ambiguity
+        # in intrabar order. High values mean BT win-rate is unreliable.
+        "sameBarAmbiguityPct": (
+            round(same_bar_both_hit / max(1, len(trades)) * 100, 2)
+        ),
         # ── Benchmarks ────────────────────────────────────────────────────────
         "bhReturn": None,
         "pairMaxScore": None,
@@ -4181,9 +4547,11 @@ def backtest_pair_naked(pair: dict, style: str = "naked", validation_mode="stand
         )
         return _early
 
-    candles_d1 = candles_d1[:-1] if len(candles_d1) > 1 else candles_d1
-    candles_h4 = candles_h4[:-1] if len(candles_h4) > 1 else candles_h4
-    candles_h1 = candles_h1[:-1] if len(candles_h1) > 1 else candles_h1
+    # Drop forming bars via the canonical split_market_state pipeline so MT5/Bybit
+    # session offsets are honoured (matches Engine A swing BT and live scan).
+    candles_d1 = _bt_confirmed_candles(pair, "D1", candles_d1)
+    candles_h4 = _bt_confirmed_candles(pair, "H4", candles_h4)
+    candles_h1 = _bt_confirmed_candles(pair, "H1", candles_h1)
 
     _canonical_vm, _vm_mode_warning = normalize_validation_mode(validation_mode)
     _temporal_vm = temporal_validation_mode(_canonical_vm)
@@ -4198,15 +4566,8 @@ def backtest_pair_naked(pair: dict, style: str = "naked", validation_mode="stand
         score_group=_pair_score_group,
         asset_type=pair.get("type", ""),
     )
-    _bt_structure_gate_enabled = bool(CONFIG.get("ENGINE_B_BT_STRUCTURE_GATE_ENABLED", True))
-    if not _bt_structure_gate_enabled:
-        style_profile = dict(style_profile)
-        style_profile["disable_structure_gate"] = True
-        log.warning(
-            "[ENGINE B BT] %s structure gate DISABLED for backtest experiment "
-            "(ENGINE_B_BT_STRUCTURE_GATE_ENABLED=false)",
-            pair.get("display"),
-        )
+    # The Engine B structure gate is mandatory in live; the BT escape hatch
+    # was removed (audit H4) to keep parity.
     _pair_type = pair.get("type", "stock")
     _zone_tf = style_profile.get("zone_tf", "H4")
     _entry_tf = style_profile.get("entry_tf", "H1")
@@ -4546,7 +4907,7 @@ def backtest_pair_naked(pair: dict, style: str = "naked", validation_mode="stand
         _ptype = pair.get("type", "stock")
         _slip_mult = 3.0 if _canonical_vm == "live_parity" else 1.0
         slip = raw_entry * _get_slippage_for_bar(
-            _bar_with_slippage_context(entry_bar, atr=atr), _ptype
+            _bar_with_slippage_context(entry_bar, atr=atr), _ptype, pair=pair
         ) * _slip_mult
         entry = raw_entry + slip if direction == "LONG" else raw_entry - slip
         
@@ -4872,7 +5233,8 @@ def backtest_pair_naked(pair: dict, style: str = "naked", validation_mode="stand
     if "error" not in result:
         result["btStyle"] = resolved_style
         result["btStyleRequested"] = requested_style
-        result["btStructureGateEnabled"] = _bt_structure_gate_enabled
+        # Structure gate is mandatory; reported for downstream telemetry consumers.
+        result["btStructureGateEnabled"] = True
         try:
             import sqlite3 as _sq
 
@@ -5082,9 +5444,11 @@ def backtest_pair_consensus(
                                             purge_gap=purge_gap, folds=folds, mode_warning=_mw)
         return early
 
-    candles_d1 = candles_d1[:-1] if len(candles_d1) > 1 else candles_d1
-    candles_h4 = candles_h4[:-1] if len(candles_h4) > 1 else candles_h4
-    candles_h1 = candles_h1[:-1] if len(candles_h1) > 1 else candles_h1
+    # Drop forming bars via the canonical split_market_state pipeline so MT5/Bybit
+    # session offsets are honoured (matches Engine A swing BT and live scan).
+    candles_d1 = _bt_confirmed_candles(pair, "D1", candles_d1)
+    candles_h4 = _bt_confirmed_candles(pair, "H4", candles_h4)
+    candles_h1 = _bt_confirmed_candles(pair, "H1", candles_h1)
 
     _canonical_vm, _vm_mode_warning = normalize_validation_mode(validation_mode)
     _temporal_vm = temporal_validation_mode(_canonical_vm)
@@ -5094,11 +5458,8 @@ def backtest_pair_consensus(
     requested_style = _normalize_style(style)
     _pair_score_group = get_pair_score_group(pair)
     _level_atr_class = get_pair_level_atr_class(pair)
-    # Engine C BT uses the same style as Engine A (resolved via auto), and reads TFs
-    # from the asset+style matrix — no more forex-specific structure TF flag.
-    _ec_bt_style = requested_style if requested_style != "auto" else (
-        "intraday" if _ptype in ("crypto", "forex") else "swing"
-    )
+    # L2: Single source of truth for style resolution — matches Engine A BT.
+    _ec_bt_style = _effective_backtest_style(pair, requested_style)
     resolved_style, style_profile = _rt().naked_scan_style_profile(
         _ec_bt_style,
         score_group=_pair_score_group,
@@ -5111,10 +5472,46 @@ def backtest_pair_consensus(
 
     _h4_need = max(50, CONFIG.get("H4_CANDLES", 1001))
     _h1_need = max(50, CONFIG.get("H1_CANDLES", 1001))
-    _min_conviction = float(
-        (CONFIG.get("AUTO_TRADE_MIN_CONVICTION") or {}).get("default", 0.50)
-    )
-    _enforce_min_conviction = bool(CONFIG.get("ENGINE_C_BT_ENFORCE_MIN_CONVICTION", False))
+    # H6 parity: live applies per-asset AUTO_TRADE_MIN_CONVICTION with a 0.85
+    # aligned-discount, plus an AUTO_TRADE_MAX_DAILY portfolio cap. Mirror both.
+    _auto_min_conv_cfg = CONFIG.get("AUTO_TRADE_MIN_CONVICTION") or {}
+    if isinstance(_auto_min_conv_cfg, dict):
+        _min_conviction = float(
+            _auto_min_conv_cfg.get(_ptype, _auto_min_conv_cfg.get("default", 0.50))
+        )
+    else:
+        _min_conviction = float(_auto_min_conv_cfg or 0.50)
+    _live_aligned_discount = float(CONFIG.get("LIVE_GATE_ALIGNED_DISCOUNT", 0.85) or 0.85)
+    # Live execution always enforces AUTO_TRADE_MIN_CONVICTION; mirror that in BT.
+    _enforce_min_conviction = bool(CONFIG.get("ENGINE_C_BT_ENFORCE_MIN_CONVICTION", True))
+    _auto_max_daily = int(CONFIG.get("AUTO_TRADE_MAX_DAILY", 10) or 10)
+    _bt_daily_count: dict[str, int] = {}
+
+    # H5 parity: build a point-in-time intermarket store + regime context to
+    # feed Engine A inside the Engine C consensus path (matches live analyze_pair).
+    _bt_intermarket_series_store_c = None
+    if bool((CONFIG.get("INTERMARKET_CONFIRMATION", {}) or {}).get("enabled", False)):
+        try:
+            _bt_im_universe_c = discover_active_universe(
+                getattr(_rt(), "ALL_PAIRS", []),
+                disabled_pairs=getattr(_rt(), "disabled_pairs", []),
+                etf_pairs=getattr(_rt(), "ETF_PAIRS", []),
+            )
+            _bt_im_limit_c = max(int(CONFIG.get("H4_CANDLES", 1000) or 1000), 220)
+            _bt_intermarket_series_store_c = prepare_series_store(
+                _bt_im_universe_c,
+                fetch_candles=_rt().fetch_candles,
+                timeframe="H4",
+                limit=_bt_im_limit_c,
+                config=CONFIG,
+                preloaded_candles={pair.get("display"): candles_h4},
+            )
+        except Exception as _bt_im_err_c:
+            _bt_intermarket_series_store_c = None
+            log.warning(
+                "[ENGINE C BT] %s: intermarket history store build failed: %s",
+                pair.get("display"), _bt_im_err_c,
+            )
 
     h4_times = pd.to_datetime([c["time"] for c in candles_h4], utc=True, errors="coerce")
     d1_times = pd.to_datetime([c["time"] for c in candles_d1], utc=True, errors="coerce")
@@ -5253,12 +5650,32 @@ def backtest_pair_consensus(
                 )
             _bt_oi_ctx = build_oi_context_for_factor_scoring(_bt_oi_data, d1_ctx, h1i.get("snap"))
 
+            # H5 parity: pass intermarket context (point-in-time) and the
+            # configured volume threshold so Engine A inside Engine C BT sees
+            # the same inputs as live analyze_pair().
+            _bt_intermarket_ctx_c = None
+            if _bt_intermarket_series_store_c is not None:
+                try:
+                    _bt_intermarket_ctx_c = build_point_in_time_context(
+                        _pair_ctx,
+                        all_pairs=getattr(_rt(), "ALL_PAIRS", []),
+                        disabled_pairs=getattr(_rt(), "disabled_pairs", []),
+                        etf_pairs=getattr(_rt(), "ETF_PAIRS", []),
+                        series_store=_bt_intermarket_series_store_c,
+                        cutoff_ts=entry_time,
+                        config=CONFIG,
+                    )
+                except Exception:
+                    _bt_intermarket_ctx_c = None
+
             # Engine A v2: all asset classes (including forex) use calc_confluence
             res_a = calc_confluence(
                 d1i, h4i, h1i, vr, stoch, _pair_ctx, btc_bias,
                 d1_candles=d1_ctx, h4_candles=h4_window, h1_candles=h1_window,
                 funding_rate=_bt_funding_rate, oi_data=_bt_oi_data, oi_context=_bt_oi_ctx,
                 bar_time=candles_h4[i].get("time") if candles_h4 else None,
+                volume_threshold=_engine_a_volume_threshold(_pair_ctx, _canonical_vm),
+                intermarket_context=_bt_intermarket_ctx_c,
             )
             _ea_signal_atr = _rt().atr_for_levels(
                 d1i, h4i, h1i, pair=pair, style=resolved_style
@@ -5366,8 +5783,31 @@ def backtest_pair_consensus(
             continue
 
         conviction = float(consensus.get("conviction", 0.0))
-        if _enforce_min_conviction and conviction < _min_conviction:
+        # H6 parity: live applies a 0.85 aligned discount to the conviction
+        # floor when Engine A and Engine B agree. Mirror the same logic so
+        # BT does not over-count trades vs live execution.
+        _aligned = bool(
+            consensus.get("aligned")
+            or consensus.get("enginesAligned")
+            or (signal_a.get("direction") and signal_b_use.get("direction") == signal_a.get("direction"))
+        )
+        _conv_floor = (
+            _min_conviction * _live_aligned_discount if _aligned else _min_conviction
+        )
+        if _enforce_min_conviction and conviction < _conv_floor:
             _c_funnel["low_conviction"] += 1
+            i += 1
+            continue
+
+        # H6 parity: live caps auto-executions at AUTO_TRADE_MAX_DAILY per day.
+        # entry_bar is assigned later in this block, so use the next-bar time
+        # (which would be the live fill timestamp) for the day-of-trade key.
+        if i + 1 < len(candles_h4):
+            _bar_day = (candles_h4[i + 1].get("time") or "")[:10]
+        else:
+            _bar_day = str(entry_time)[:10]
+        if _bt_daily_count.get(_bar_day, 0) >= _auto_max_daily:
+            _c_funnel["daily_cap"] = _c_funnel.get("daily_cap", 0) + 1
             i += 1
             continue
 
@@ -5385,7 +5825,7 @@ def backtest_pair_consensus(
         raw_entry = float(entry_bar.get("open", entry_bar["close"]))
         _slip_mult = 3.0 if _canonical_vm == "live_parity" else 1.0
         slip = raw_entry * _get_slippage_for_bar(
-            _bar_with_slippage_context(entry_bar, atr=atr), _ptype
+            _bar_with_slippage_context(entry_bar, atr=atr), _ptype, pair=pair
         ) * _slip_mult
         entry = raw_entry + slip if direction == "LONG" else raw_entry - slip
 
@@ -5412,6 +5852,28 @@ def backtest_pair_consensus(
             i += 1
             continue
         if abs(entry - sl) / entry > _max_sl_pct:
+            i += 1
+            continue
+
+        # C2: deterministic guardian invariants (direction-vs-directionalScore,
+        # geometry, MAX_SL_PCT). Reuses the live execution contract.
+        _gd_ok, _gd_why = _bt_pre_trade_invariants(
+            pair,
+            direction=direction,
+            entry=entry,
+            sl=sl,
+            tp1=tp,
+            factor_diagnostics=res_a.get("factorDiagnostics"),
+            asset_type=_ptype,
+        )
+        if not _gd_ok:
+            _c_funnel["fail_pre_trade_invariants"] = (
+                _c_funnel.get("fail_pre_trade_invariants", 0) + 1
+            )
+            log.debug(
+                "[ENGINE C BT] %s %s REJECTED guardian: %s",
+                pair["display"], direction, _gd_why,
+            )
             i += 1
             continue
 
@@ -5583,6 +6045,10 @@ def backtest_pair_consensus(
             "bars_to_mfe": bars_to_mfe,
             "bars_to_mae": bars_to_mae,
         })
+
+        # H6: increment per-day counter so AUTO_TRADE_MAX_DAILY caps subsequent fills.
+        if _bar_day:
+            _bt_daily_count[_bar_day] = _bt_daily_count.get(_bar_day, 0) + 1
 
         last_exit_bar = i + 1 + exit_bar_offset
         i = last_exit_bar + COOLDOWN
@@ -6388,6 +6854,15 @@ def backtest_pair_scalp(pair: dict, validation_mode: str = "standard") -> dict |
     result["vp_lookback_bars"] = vp_lookback
     result["lower_tf_fallback"] = True
     result["backtest_model"] = "M15_STABLE_PROXY"
+    # H3 parity: live Engine D executes on M1/M5; BT runs an M15 proxy.
+    # Surface a non-removable warning so BT consumers cannot mistake these
+    # results for live-equivalent scalp performance.
+    result["executionTimeframeProxy"] = "M15"
+    result["liveExecutionTimeframe"] = "M1/M5"
+    result.setdefault("warnings", []).append(
+        "[SCALP-BT] M15 execution proxy — live Engine D runs on M1/M5. "
+        "BT win-rate / Sharpe is NOT directly comparable to live scalp P&L."
+    )
 
     # ── Scalp-specific analysis ─────────────────────────────────────────────
     absorption_trades = [t for t in trades if t.get("trigger_type") == "absorption"]

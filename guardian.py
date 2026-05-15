@@ -371,6 +371,78 @@ def boot_check() -> dict:
 # PRE-TRADE CHECKS — Runtime validation (run before every execution)
 # ═══════════════════════════════════════════════════════════════════════
 
+def pre_trade_invariants(signal: dict) -> tuple[bool, str]:
+    """Deterministic pre-trade invariants that do not depend on live account state.
+
+    Mirrors the subset of pre_trade_check() that is safe for the backtest path
+    to call: required signal fields, valid direction, SL/TP geometry,
+    direction-vs-directionalScore consistency, and MAX_SL_PCT cap.
+
+    Live execution still runs the full pre_trade_check() (positions, account,
+    freshness, drawdown). Backtest calls this helper so geometry/direction
+    bugs are surfaced in BT just as they are in live.
+    """
+    required = ["pair", "direction", "price", "sl", "tp1"]
+    missing = [f for f in required if not signal.get(f)]
+    if missing:
+        return False, f"SIGNAL_MISSING_FIELDS: {', '.join(missing)}"
+
+    direction = str(signal.get("direction", "")).upper()
+    if direction not in ("LONG", "SHORT"):
+        return False, f"INVALID_DIRECTION: {signal.get('direction')}"
+
+    try:
+        price = float(signal.get("price", 0))
+        sl = float(signal.get("sl", 0))
+        tp1 = float(signal.get("tp1", 0))
+    except (TypeError, ValueError):
+        return False, "INVALID_LEVELS_NUMERIC"
+
+    if price <= 0 or sl <= 0 or tp1 <= 0:
+        return False, f"INVALID_LEVELS: price={price}, sl={sl}, tp1={tp1}"
+
+    if direction == "LONG":
+        if sl >= price:
+            return False, f"LONG_SL_ABOVE_ENTRY: sl={sl} >= price={price}"
+        if tp1 <= price:
+            return False, f"LONG_TP_BELOW_ENTRY: tp1={tp1} <= price={price}"
+    else:
+        if sl <= price:
+            return False, f"SHORT_SL_BELOW_ENTRY: sl={sl} <= price={price}"
+        if tp1 >= price:
+            return False, f"SHORT_TP_ABOVE_ENTRY: tp1={tp1} >= price={price}"
+
+    dir_score = (signal.get("factorDiagnostics") or {}).get("directionalScore")
+    if dir_score is not None and dir_score != 0:
+        try:
+            expected_dir = "LONG" if float(dir_score) > 0 else "SHORT"
+            if direction != expected_dir:
+                return False, (
+                    f"DIRECTION_SCORE_MISMATCH: direction={direction} but "
+                    f"directionalScore={float(dir_score):.4f} implies {expected_dir}"
+                )
+        except (TypeError, ValueError):
+            pass
+
+    try:
+        from config import CONFIG
+        from risk_engine import resolve_max_sl_pct
+
+        asset_type = signal.get("type") or signal.get("pairType") or ""
+        max_sl_pct, max_sl_source = resolve_max_sl_pct(signal, asset_type, CONFIG)
+        if price > 0:
+            sl_dist_pct = abs(price - sl) / price
+            if sl_dist_pct > max_sl_pct * 1.05:  # 5% tolerance for rounding
+                return False, (
+                    f"SL_EXCEEDS_CAP: {sl_dist_pct:.1%} > {max_sl_pct:.1%} for "
+                    f"{asset_type} ({max_sl_source})"
+                )
+    except Exception:
+        pass
+
+    return True, "OK"
+
+
 def pre_trade_check(
     signal: dict,
     positions: list,

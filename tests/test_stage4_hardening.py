@@ -97,8 +97,9 @@ class TestBtMinDeleted:
     def test_backtest_uses_same_thresholds_as_live(self):
         """Backtest and live return identical active Engine A thresholds."""
         pair = {"display": "EUR/USD", "type": "forex"}
-        live = get_score_threshold(pair, is_backtest=False)
-        bt = get_score_threshold(pair, is_backtest=True)
+        # Both wrappers and the canonical function return the same value now.
+        live = get_score_threshold(pair)
+        bt = get_score_threshold(pair)
         assert live == bt == CONFIG["ENGINE_A_SCORE_GROUP_THRESHOLDS"]["forex_majors"]
 
     def test_crypto_uses_volatile_tier(self):

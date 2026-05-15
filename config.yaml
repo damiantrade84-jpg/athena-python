@@ -2150,10 +2150,8 @@ ENGINE_B_FOLLOW_THROUGH:
 # execution_tp directly (live parity), via market_structure.resolve_engine_b_execution_levels.
 # Legacy ENGINE_B_BT_SL_MODE flag removed.
 
-# Engine B backtest-only A/B experiment:
-# false = disable the structure gate only inside backtest_pair_naked().
-# Live scan, AI review, and execution paths do not consume this key.
-ENGINE_B_BT_STRUCTURE_GATE_ENABLED: true
+# ENGINE_B_BT_STRUCTURE_GATE_ENABLED removed: the structure gate is mandatory
+# in live and the backtest must not have a private bypass that breaks parity.
 
 # Engine B live scan structure gate:
 # false = disable the structure_ok gate in live calculate_confidence() (same as BT experiment).
