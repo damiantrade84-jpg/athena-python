@@ -297,6 +297,45 @@ class TestDrawdown:
         # Crypto drawdown — independent
         assert abs(risk_engine._current_drawdown(8000, "crypto") - 0.2) < 1e-9
 
+    def test_account_scoped_crypto_peak_blocks_same_account(self, monkeypatch):
+        import risk_engine
+
+        monkeypatch.setitem(risk_engine.CONFIG, "DRAWDOWN_STOP_ENABLED", True)
+        domain = "crypto:bybit:demo:key-a"
+        with risk_engine._peak_lock:
+            risk_engine._peak_equity = {domain: 100000.0}
+
+        result = risk_check(
+            _make_signal(type="crypto"),
+            48561.47,
+            48561.47,
+            [],
+            account_domain=domain,
+        )
+
+        assert result.approved is False
+        assert result.reason == "DRAWDOWN_CIRCUIT_BREAKER"
+
+    def test_account_scoped_crypto_peak_does_not_block_other_demo_account(self, monkeypatch):
+        import risk_engine
+
+        monkeypatch.setitem(risk_engine.CONFIG, "DRAWDOWN_STOP_ENABLED", True)
+        old_domain = "crypto:bybit:demo:key-a"
+        new_domain = "crypto:bybit:demo:key-b"
+        with risk_engine._peak_lock:
+            risk_engine._peak_equity = {old_domain: 100000.0}
+
+        result = risk_check(
+            _make_signal(type="crypto"),
+            48561.47,
+            48561.47,
+            [],
+            account_domain=new_domain,
+        )
+
+        assert result.approved is True
+        assert risk_engine._peak_equity[new_domain] == 48561.47
+
 
 # ── Max positions ────────────────────────────────────────────────────────────
 
@@ -624,6 +663,28 @@ class TestPeakEquityThreadSafety:
         # Crypto remains clean
         blocked_crypto, _ = risk_engine._check_daily_loss(10000.0, "crypto")
         assert blocked_crypto is False
+
+    def test_daily_loss_uses_account_domain_when_available(self):
+        import risk_engine
+
+        domain_a = "crypto:bybit:demo:key-a"
+        domain_b = "crypto:bybit:demo:key-b"
+
+        risk_engine.record_daily_pnl(
+            -6000.0, 100000.0, "crypto", account_domain=domain_a
+        )
+
+        blocked_a, pct_a = risk_engine._check_daily_loss(
+            100000.0, "crypto", account_domain=domain_a
+        )
+        blocked_b, pct_b = risk_engine._check_daily_loss(
+            100000.0, "crypto", account_domain=domain_b
+        )
+
+        assert blocked_a is True
+        assert abs(pct_a - 0.06) < 1e-9
+        assert blocked_b is False
+        assert pct_b == 0.0
 
     def test_fresh_day_resets_counters(self):
         import risk_engine

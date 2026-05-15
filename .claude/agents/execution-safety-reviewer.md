@@ -36,8 +36,3 @@ You review **only** changes that touch the execution pipeline: `execution.py`, `
 1. **Summary** — Safe / Concerns / Blocked (one line).
 2. **Ranked findings** — Each: **severity** (CRITICAL/HIGH/MEDIUM/LOW), **file:region**, **issue**, **evidence** (what the code does), **recommended fix** (minimal).
 3. **Residual risk** — What was not fully verified.
-
-## References
-
-- Use concepts from `.claude/skills/athena-audit/SKILL.md`; scope narrowly to execution surfaces.
-- Align findings with repo `AGENTS.md` safety rules and `.claude/skills/athena-code/references/audit-contract.md`.

@@ -16,6 +16,7 @@ from execution import (
     _engine_b_atr_for_scan_levels,
     _engine_b_context_confirmed,
     _extract_engine_b_execution_levels,
+    _refresh_engine_b_execution_context,
     _is_structural_engine_b_execution,
     _signal_has_engine_b_context,
 )
@@ -227,6 +228,27 @@ def test_execution_prefers_nested_engine_b_execution_levels():
     assert sig["level_source"] == "engine_b_execution"
 
 
+def test_execution_prefers_top_level_resolved_engine_b_levels_over_raw_overlay():
+    sig = {
+        "engine": "B",
+        "sl": 1.0900,
+        "tp1": 1.1300,
+        "engine_b_execution_sl": 1.0950,
+        "engine_b_execution_tp": 1.1250,
+        "engine_b": {
+            "recommended_stop_loss": 1.0800,
+            "recommended_take_profit": 1.1400,
+            "passed": True,
+        },
+    }
+
+    assert _extract_engine_b_execution_levels(sig) == {
+        "sl": 1.0950,
+        "tp1": 1.1250,
+        "tp2": 1.1250,
+    }
+
+
 def test_execution_engine_a_scan_engines_aligned_is_not_structural_b_context():
     """A+B merge sets enginesAligned on Engine A rows; execution must not treat that as B-only."""
     sig_false = {"enginesAligned": False, "sl": 98.0, "tp1": 103.0}
@@ -237,6 +259,27 @@ def test_execution_engine_a_scan_engines_aligned_is_not_structural_b_context():
     sig_true = {"enginesAligned": True, "sl": 98.0, "tp1": 103.0}
     assert _is_structural_engine_b_execution(sig_true) is False
     assert _engine_b_context_confirmed(sig_true) is True
+
+
+def test_execution_engine_a_raw_engine_b_overlay_is_not_structural_b_context():
+    sig = {
+        "engine": "A",
+        "enginesAligned": False,
+        "sl": 1.0900,
+        "tp1": 1.1300,
+        "engine_b_execution_sl": 1.0950,
+        "engine_b_execution_tp": 1.1250,
+        "engine_b": {
+            "structural_verdict": "CLEAR",
+            "recommended_stop_loss": 1.0800,
+            "recommended_take_profit": 1.1400,
+            "passed": False,
+        },
+    }
+
+    assert _is_structural_engine_b_execution(sig) is False
+    assert _signal_has_engine_b_context(sig) is False
+    assert _engine_b_context_confirmed(sig) is True
 
 
 def test_execution_structural_b_still_honors_engines_aligned_when_key_present():
@@ -271,6 +314,37 @@ def test_execution_structural_b_still_honors_engines_aligned_when_key_present():
 
 def test_execution_accepts_pass_in_top_level_engine_b_payload():
     assert _engine_b_context_confirmed({"is_naked": True}, {"passed": True}) is True
+
+
+def test_engine_b_execution_refresh_requests_fail_closed_execution_mode():
+    calls = {}
+
+    def refresh(seed, **kwargs):
+        calls.update(kwargs)
+        return (
+            {
+                "passed": True,
+                "direction": "LONG",
+                "current_price": 100.0,
+                "execution_sl": 98.0,
+                "execution_tp": 104.0,
+            },
+            {"display": "TEST"},
+            None,
+        )
+
+    sig = {"pair": "TEST", "direction": "LONG", "is_naked": True}
+    refreshed, err = _refresh_engine_b_execution_context(
+        sig,
+        {},
+        SimpleNamespace(compute_naked_analysis=refresh),
+        "intraday",
+    )
+
+    assert err is None
+    assert refreshed is not None
+    assert calls["force_ai"] is False
+    assert calls["execution_mode"] is True
 
 
 def test_choch_uses_bos_reference_level_when_bos_context_present():

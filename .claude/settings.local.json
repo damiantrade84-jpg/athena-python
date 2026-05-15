@@ -1,4 +1,4 @@
-﻿{
+{
   "permissions": {
     "allow": [
       "PowerShell(head *)",
@@ -12,7 +12,17 @@
       "PowerShell(git log *)",
       "PowerShell(git diff *)",
       "PowerShell(git status)",
-      "PowerShell(git status *)"
+      "PowerShell(git status *)",
+      "Bash(git add *)",
+      "Bash(git checkout *)",
+      "Bash(git commit *)",
+      "Skill(superpowers:systematic-debugging)",
+      "Bash(python *)",
+      "Skill(superpowers:dispatching-parallel-agents)",
+      "Bash(git -C C:/dev/athena-python show --stat 71dbe7b8)",
+      "Bash(git -C C:/dev/athena-python show --stat eb6c40cf)",
+      "Skill(superpowers:test-driven-development)",
+      "Bash(git stash *)"
     ]
   },
   "enabledMcpjsonServers": [

@@ -1008,6 +1008,7 @@ def api_live_dashboard_snapshot():
 
         symbol_rows.append({
             "symbol": display,
+            "traceId": sig_a.get("trace_id") or sig_b.get("trace_id") or scalp_cached.get("trace_id"),
             "asset_type": pair.get("type"),
             "source": pair.get("source"),
             "timeframe": tf,

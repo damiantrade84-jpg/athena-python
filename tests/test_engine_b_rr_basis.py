@@ -96,6 +96,24 @@ def test_risk_check_treats_is_naked_as_engine_b_for_min_rr():
     assert result.reason == "RR_BELOW_MINIMUM"
 
 
+def test_risk_check_reads_nested_engine_b_min_rr():
+    result = risk_check(
+        _make_signal(
+            price=100.0,
+            sl=95.0,
+            tp1=107.5,
+            is_naked=True,
+            naked_data={"passed": True, "min_rr": 2.0},
+        ),
+        10000.0,
+        10000.0,
+        [],
+    )
+
+    assert result.approved is False
+    assert result.reason == "RR_BELOW_MINIMUM"
+
+
 def test_rr_uses_absolute_reward_absolute_risk():
     # Verify resolve_engine_b_execution_levels absolute RR computation
     out_long = resolve_engine_b_execution_levels(

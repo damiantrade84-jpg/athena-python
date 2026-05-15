@@ -4,9 +4,7 @@
 
 **Priorities:** correctness, safety, fail-closed behavior, and reproducibility over speed, cosmetic cleanup, or clever shortcuts.
 
-**Engine deep dives:** `docs/engines-reference.md` (summary + pointers to audits/diagnostics).
 
-**Mirroring:** Root `AGENTS.md` (Cursor/Codex) duplicates this guide. Root `CLAUDE.md` is a short Claude Code stub from `docs/claude-code-guide.md` pointing here for full detail (`AGENTS.md` is `.claudeignore`'d for Claude Code).
 
 ---
 

@@ -4558,6 +4558,15 @@ def backtest_pair_naked(pair: dict, style: str = "naked", validation_mode="stand
         # so structural targets don't run beyond the style's risk contract.
         sl = best["sl"]
         tp = best["tp"]
+        if sl is None or tp is None:
+            i += 1
+            continue
+        try:
+            sl = float(sl)
+            tp = float(tp)
+        except (TypeError, ValueError):
+            i += 1
+            continue
         _sl_dist = abs(entry - sl)
         _tp_dist = abs(tp - entry)
         target_rr = (_tp_dist / _sl_dist) if _sl_dist > 0 else 0.0
@@ -4571,7 +4580,15 @@ def backtest_pair_naked(pair: dict, style: str = "naked", validation_mode="stand
             target_rr = _fallback_rr
             selected_tp_source = "capped_to_fallback_rr"
 
-        if sl is None or tp is None:
+        _levels_side_ok = (
+            (direction == "LONG" and sl < entry < tp)
+            or (direction == "SHORT" and sl > entry > tp)
+        )
+        if not _levels_side_ok:
+            log.debug(
+                f"[ENGINE-B-BT] {pair['display']} {direction} invalid post-fill levels "
+                f"entry={entry} sl={sl} tp={tp} - SKIP"
+            )
             i += 1
             continue
         if target_rr <= 0:

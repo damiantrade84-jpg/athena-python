@@ -5724,7 +5724,12 @@ def _engine_b_regime_label(
         return "RANGING"
 
 
-def _compute_naked_analysis(sig: dict, engine_a_ctx: dict = None, force_ai: bool = False):
+def _compute_naked_analysis(
+    sig: dict,
+    engine_a_ctx: dict = None,
+    force_ai: bool = False,
+    execution_mode: bool = False,
+):
     if not isinstance(sig, dict):
         return None, None, "Invalid signal"
 
@@ -5734,6 +5739,8 @@ def _compute_naked_analysis(sig: dict, engine_a_ctx: dict = None, force_ai: bool
 
     direction = str(sig.get("direction", "LONG")).upper()
     if direction not in ("LONG", "SHORT"):
+        if execution_mode:
+            return None, pair_obj, "Invalid Engine B execution direction"
         direction = "LONG"
 
     def _enrich_engine_b_ai_payload(payload: dict) -> dict:
@@ -5908,6 +5915,8 @@ def _compute_naked_analysis(sig: dict, engine_a_ctx: dict = None, force_ai: bool
         )
 
         if not atr or atr <= 0:
+            if execution_mode:
+                return None, pair_obj, "Engine B execution ATR unavailable"
             log.warning(
                 f"[NAKED-AI] {pair_obj.get('display')}: Failed ATR calc - series={atr_series}, using fallback ATR"
             )
@@ -5989,7 +5998,7 @@ def _compute_naked_analysis(sig: dict, engine_a_ctx: dict = None, force_ai: bool
             conf, style_profile, regime_label, _pair_type
         )
         _regime_gate = _engine_b_regime_gate(regime_label, _pair_type)
-        res["min_score_used"] = int(_min_score_scaled)
+        res["min_score_used"] = float(_min_score_scaled)
         res["regime_gate"] = _regime_gate
         res.update(conf)
         res["checklist_passed"] = bool(conf.get("passed"))
@@ -6027,7 +6036,7 @@ def _compute_naked_analysis(sig: dict, engine_a_ctx: dict = None, force_ai: bool
                     "pair": pair_obj.get("display"),
                     "style": resolved_style,
                     "regime": regime_label,
-                    "min_score_used": int(_min_score_scaled),
+                    "min_score_used": float(_min_score_scaled),
                     "lifecycle_state": conf.get("lifecycle_state", "unknown"),
                     "lifecycle_reason": conf.get("lifecycle_reason", ""),
                 },
@@ -6701,6 +6710,13 @@ def api_scan_naked():
                 if not conf_data.get("rr_ok"):
                     _fail_gates.append(f"rr={conf_data.get('rr', 0):.1f}")
                 _conf_failed_gates = list(conf_data.get("failed_gate_names") or _fail_gates)
+                if not _gate_ok and not _conf_failed_gates:
+                    try:
+                        _score_for_floor = float(conf_data.get("score", 0.0) or 0.0)
+                    except (TypeError, ValueError):
+                        _score_for_floor = 0.0
+                    if bool(conf_data.get("passed")) and _score_for_floor < float(_min_score_scaled):
+                        _conf_failed_gates.append("min_score")
                 _direction_debug = _build_direction_debug(
                     direction, verdict, res, conf_data, _min_score_scaled, _conf_failed_gates
                 )
@@ -7284,6 +7300,7 @@ def api_webhook():
             symbol_info=symbol_info,
             kill_switch=_kill_switch,
             sizing_override=float(d.get("sizingOverride", 1.0)),
+            account_domain=account.get("risk_domain"),
         )
 
         if not approval.approved:
@@ -9328,6 +9345,7 @@ def api_scalp_execute():
             symbol_info=symbol_info,
             kill_switch=_kill_switch,
             sizing_override=float(signal.get("size_multiplier", 1.0) or 1.0),
+            account_domain=account.get("risk_domain"),
         )
         if not approval.approved:
             return jsonify(
@@ -12579,12 +12597,14 @@ def _update_trade_outcome(
                 from risk_engine import record_daily_pnl
 
                 _bal = 0.0
+                _account_domain = None
 
                 if asset_type == "crypto":
                     try:
                         import bybit_executor as _bm
 
                         _bex = _bm._get_exchange()
+                        _account_domain = _bm.bybit_account_risk_domain()
 
                         if _bex:
                             _bb = _bex.fetch_balance()
@@ -12602,12 +12622,18 @@ def _update_trade_outcome(
 
                         if _acc:
                             _bal = _acc.get("balance", 0)
+                            _account_domain = _acc.get("risk_domain")
 
                     except Exception as _mt5e:
                         log.debug(f"[DAILY-PNL] MT5 balance fetch: {_mt5e}")
 
                 if _bal > 0:
-                    record_daily_pnl(pnl, _bal, asset_type or "unknown")
+                    record_daily_pnl(
+                        pnl,
+                        _bal,
+                        asset_type or "unknown",
+                        account_domain=_account_domain,
+                    )
 
             except Exception as _dpnl_err:
                 log.debug(f"[DAILY-PNL] record failed: {_dpnl_err}")

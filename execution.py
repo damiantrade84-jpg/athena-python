@@ -388,8 +388,20 @@ def _is_structural_engine_b_execution(sig: dict, engine_b: dict | None = None) -
         return True
     if sig.get("naked_data"):
         return True
+    eng = str(sig.get("engine") or sig.get("source_engine") or "").strip().lower()
+    verdict = str(sig.get("verdict") or "").strip().upper()
+    engine_a_row = eng in ("a", "engine_a", "scalp", "scalp_vp", "engine_d")
+    b_executable_verdict = verdict in (
+        "ALIGNED",
+        "B_ONLY",
+        "B_ONLY_SCORED",
+        "B_ONLY_VISION_CONFIRMED",
+        "B_OVERRIDE_CONFLICT",
+    )
     eb = sig.get("engine_b")
     if isinstance(eb, dict) and eb:
+        if engine_a_row and not b_executable_verdict:
+            return False
         return True
     if engine_b:
         return True
@@ -424,34 +436,48 @@ def _extract_engine_b_execution_levels(
     engine_b: dict | None = None,
 ) -> dict | None:
     sig = sig or {}
-    candidates = [
-        sig.get("naked_data"),
-        sig.get("engine_b"),
-        engine_b,
-        sig,
-    ]
-    for source in candidates:
-        if not isinstance(source, dict):
-            continue
-        sl = (
-            source.get("execution_sl")
-            or source.get("engine_b_execution_sl")
-            or source.get("recommended_stop_loss")
-            or (source.get("sl") if source is sig and _signal_has_engine_b_context(sig, engine_b) else None)
-        )
-        tp = (
-            source.get("execution_tp")
-            or source.get("engine_b_execution_tp")
-            or source.get("recommended_take_profit")
-            or (source.get("tp1") if source is sig and _signal_has_engine_b_context(sig, engine_b) else None)
-        )
+    has_b_context = _signal_has_engine_b_context(sig, engine_b)
+
+    def _levels_from(source: dict, *, allow_recommended: bool, allow_signal_levels: bool = False) -> dict | None:
+        sl = source.get("execution_sl") or source.get("engine_b_execution_sl")
+        tp = source.get("execution_tp") or source.get("engine_b_execution_tp")
+        if allow_recommended and (sl is None or tp is None):
+            sl = sl or source.get("recommended_stop_loss")
+            tp = tp or source.get("recommended_take_profit")
+        if allow_signal_levels and (sl is None or tp is None):
+            sl = sl or source.get("sl")
+            tp = tp or source.get("tp1")
         try:
             sl_f = float(sl)
             tp_f = float(tp)
         except (TypeError, ValueError):
-            continue
+            return None
         if sl_f > 0 and tp_f > 0:
             return {"sl": sl_f, "tp1": tp_f, "tp2": tp_f}
+        return None
+
+    candidates = [
+        (sig, False, False),
+        sig.get("naked_data"),
+        sig.get("engine_b_status"),
+        engine_b,
+        sig.get("engine_b"),
+        (sig, False, has_b_context),
+    ]
+    for source in candidates:
+        allow_recommended = True
+        allow_signal_levels = False
+        if isinstance(source, tuple):
+            source, allow_recommended, allow_signal_levels = source
+        if not isinstance(source, dict):
+            continue
+        levels = _levels_from(
+            source,
+            allow_recommended=allow_recommended,
+            allow_signal_levels=allow_signal_levels,
+        )
+        if levels:
+            return levels
     return None
 
 
@@ -706,7 +732,7 @@ def _refresh_engine_b_execution_context(
         seed["style"] = pip_mode
 
     try:
-        refreshed, _pair_obj, err = refresh_fn(seed, force_ai=False)
+        refreshed, _pair_obj, err = refresh_fn(seed, force_ai=False, execution_mode=True)
     except Exception as exc:
         return None, f"ENGINE_B_REFRESH_FAILED: {exc}"
 
@@ -989,6 +1015,7 @@ def api_quick_execute():
             kill_switch=_r.kill_switch(),
             sizing_override=_sizing_override,
             is_manual_override=True,
+            account_domain=account.get("risk_domain"),
         )
 
         pair_name = sig.get("pair", sig.get("symbol", "N/A"))
@@ -1879,6 +1906,7 @@ def api_execute():
             symbol_info=symbol_info,
             kill_switch=_r.kill_switch(),
             sizing_override=_sizing_override,
+            account_domain=account.get("risk_domain"),
         )
 
         if not approval.approved:
@@ -2247,7 +2275,8 @@ def api_scalp_execute():
             symbol_info=symbol_info,
             kill_switch=_r.kill_switch(),
             sizing_override=_sizing_override,
-            is_manual_override=True
+            is_manual_override=True,
+            account_domain=account.get("risk_domain"),
         )
         
         if not approval.approved:

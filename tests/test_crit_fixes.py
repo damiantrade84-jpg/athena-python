@@ -488,6 +488,21 @@ def test_athena_runtime_exposes_engine_b_refresh_function():
     assert "compute_naked_analysis=_compute_naked_analysis" in src
 
 
+def test_naked_execution_refresh_is_fail_closed_for_direction_and_atr():
+    src = (Path(__file__).resolve().parents[1] / "athena.py").read_text(encoding="utf-8")
+
+    assert "execution_mode: bool = False" in src
+    assert 'return None, pair_obj, "Invalid Engine B execution direction"' in src
+    assert 'return None, pair_obj, "Engine B execution ATR unavailable"' in src
+
+
+def test_scan_naked_reports_min_score_floor_reject():
+    src = (Path(__file__).resolve().parents[1] / "athena.py").read_text(encoding="utf-8")
+
+    assert '_conf_failed_gates.append("min_score")' in src
+    assert 'res["min_score_used"] = float(_min_score_scaled)' in src
+
+
 def test_execution_prefetch_candle_fetch_meta_updates_signal(monkeypatch):
     import execution
 

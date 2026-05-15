@@ -327,11 +327,28 @@ _peak_lock = threading.Lock()
 _peak_last_saved: float = 0.0  # epoch seconds of last _save_peak_equity call (any domain)
 
 
-def _resolve_domain(asset_type: str = "") -> str:
+def _normalize_account_domain(account_domain: str | None = None) -> str:
+    raw = str(account_domain or "").strip().lower()
+    if not raw:
+        return ""
+    safe = []
+    for ch in raw:
+        if ch.isalnum() or ch in (":", "_", "-", "."):
+            safe.append(ch)
+        elif ch.isspace() or ch in ("/", "\\"):
+            safe.append("-")
+    normalized = "".join(safe).strip(":-_.")
+    return normalized[:160]
+
+
+def _resolve_domain(asset_type: str = "", account_domain: str | None = None) -> str:
     """Map granular asset types to account domains to prevent state mixing (BUG 2).
     - crypto -> 'crypto' (Bybit)
     - forex, stock, commodity, index -> 'forex' (MT5/forex domain)
     """
+    account_key = _normalize_account_domain(account_domain)
+    if account_key:
+        return account_key
     at = (asset_type or "unknown").lower()
     if at == "crypto":
         return "crypto"
@@ -349,11 +366,14 @@ _KELLY_TTL_SECONDS: float = 300.0  # 5 minutes
 
 
 def record_daily_pnl(
-    pnl: float, account_balance: float, asset_type: str = ""
+    pnl: float,
+    account_balance: float,
+    asset_type: str = "",
+    account_domain: str | None = None,
 ) -> None:
     """Record realized P&L for daily loss tracking (per account domain). Called by outcome monitor."""
     global _daily_pnl, _daily_pnl_date, _daily_start_balance
-    domain = _resolve_domain(asset_type)
+    domain = _resolve_domain(asset_type, account_domain)
     with _daily_lock:
         today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         if today != _daily_pnl_date:
@@ -373,11 +393,13 @@ def record_daily_pnl(
 
 
 def _check_daily_loss(
-    account_balance: float, asset_type: str = ""
+    account_balance: float,
+    asset_type: str = "",
+    account_domain: str | None = None,
 ) -> tuple[bool, float]:
     """Check if daily loss limit is breached for this domain. Returns (blocked, loss_pct)."""
     global _daily_pnl_date, _daily_pnl, _daily_start_balance
-    domain = _resolve_domain(asset_type)
+    domain = _resolve_domain(asset_type, account_domain)
     with _daily_lock:
         today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         if today != _daily_pnl_date:
@@ -394,10 +416,12 @@ def _check_daily_loss(
         return loss_pct >= _cfg("DAILY_LOSS_LIMIT", 0.05), loss_pct
 
 
-def _update_peak(equity: float, asset_type: str = "") -> float:
+def _update_peak(
+    equity: float, asset_type: str = "", account_domain: str | None = None
+) -> float:
     """Track peak equity for drawdown calculation (per account domain). Thread-safe. Persists on new highs."""
     global _peak_equity, _peak_last_saved
-    domain = _resolve_domain(asset_type)
+    domain = _resolve_domain(asset_type, account_domain)
     with _peak_lock:
         cur = _peak_equity.get(domain)
         if cur is None or equity > cur:
@@ -409,17 +433,19 @@ def _update_peak(equity: float, asset_type: str = "") -> float:
         return _peak_equity[domain]
 
 
-def _current_drawdown(equity: float, asset_type: str = "") -> float:
+def _current_drawdown(
+    equity: float, asset_type: str = "", account_domain: str | None = None
+) -> float:
     """Calculate current drawdown from peak as a fraction (0.0 = no drawdown)."""
-    peak = _update_peak(equity, asset_type)
+    peak = _update_peak(equity, asset_type, account_domain)
     if peak <= 0:
         return 0.0
     return max(0.0, (peak - equity) / peak)
 
 
-def _peak_equity_snapshot(asset_type: str = "") -> float:
+def _peak_equity_snapshot(asset_type: str = "", account_domain: str | None = None) -> float:
     """Read persisted peak for the account domain (for logging only)."""
-    domain = _resolve_domain(asset_type)
+    domain = _resolve_domain(asset_type, account_domain)
     with _peak_lock:
         v = _peak_equity.get(domain)
         return float(v) if v is not None else 0.0
@@ -702,6 +728,7 @@ def risk_check(
     kill_switch: bool = False,
     sizing_override: float = 1.0,
     is_manual_override: bool = False,
+    account_domain: str | None = None,
 ) -> RiskApproval:
     """Mandatory risk gateway. Every execution path calls this first.
 
@@ -737,6 +764,12 @@ def risk_check(
         return RiskApproval(False, 0.0, 0.0, 0.0, 0.0, 0.0, "INVALID_DIRECTION")
 
     asset_type = signal.get("type", "") or "unknown"
+    account_domain = (
+        account_domain
+        or signal.get("risk_account_domain")
+        or signal.get("account_domain")
+        or signal.get("accountDomain")
+    )
 
     # ── Check 0: Kill switch ────────────────────────────────────────────────
     if kill_switch:
@@ -839,7 +872,7 @@ def risk_check(
         return RiskApproval(False, 0.0, 0.0, 0.0, 0.0, 0.0, reason)
 
     # ── Check 0.5: Daily loss limit ────────────────────────────────────────
-    daily_blocked, daily_loss_pct = _check_daily_loss(account_balance, asset_type)
+    daily_blocked, daily_loss_pct = _check_daily_loss(account_balance, asset_type, account_domain)
     if daily_blocked:
         log.warning(
             f"{prefix} REJECTED: daily loss {daily_loss_pct:.1%} exceeds {_cfg('DAILY_LOSS_LIMIT', 0.05):.0%} limit"
@@ -867,14 +900,15 @@ def risk_check(
             return RiskApproval(False, 0.0, 0.0, 0.0, 0.0, 0.0, "UNPARSEABLE_TIMESTAMP")
 
     # ── Check 2: Drawdown circuit breaker ───────────────────────────────────
-    dd = _current_drawdown(account_equity, asset_type)
+    dd = _current_drawdown(account_equity, asset_type, account_domain)
     dd_factor = 1.0
     if _cfg("DRAWDOWN_STOP_ENABLED", True):
-        peak_snap = _peak_equity_snapshot(asset_type)
+        peak_snap = _peak_equity_snapshot(asset_type, account_domain)
+        domain_snap = _resolve_domain(asset_type, account_domain)
         if dd >= _cfg("DRAWDOWN_STOP_THRESHOLD", 0.15):
             log.warning(
                 f"{prefix} REJECTED: drawdown {dd:.1%} (equity={account_equity:,.2f} vs peak={peak_snap:,.2f} "
-                f"domain={_resolve_domain(asset_type)}) exceeds stop threshold "
+                f"domain={domain_snap}) exceeds stop threshold "
                 f"{_cfg('DRAWDOWN_STOP_THRESHOLD', 0.15):.0%}"
             )
             return RiskApproval(False, 0.0, 0.0, 0.0, 0.0, dd, "DRAWDOWN_CIRCUIT_BREAKER")
@@ -956,19 +990,20 @@ def risk_check(
     except (TypeError, ValueError):
         _min_exec_rr = 1.0
     if _is_engine_b_execution_signal(signal):
-        for _key in ("engine_b_min_rr", "min_rr", "required_rr"):
-            try:
-                if signal.get(_key) is not None:
-                    _min_exec_rr = max(_min_exec_rr, float(signal.get(_key)))
-            except (TypeError, ValueError):
-                pass
-        engine_b_status = signal.get("engine_b_status") or {}
-        if isinstance(engine_b_status, dict):
-            try:
-                if engine_b_status.get("min_rr") is not None:
-                    _min_exec_rr = max(_min_exec_rr, float(engine_b_status.get("min_rr")))
-            except (TypeError, ValueError):
-                pass
+        for _rr_source in (
+            signal,
+            signal.get("engine_b_status"),
+            signal.get("engine_b"),
+            signal.get("naked_data"),
+        ):
+            if not isinstance(_rr_source, dict):
+                continue
+            for _key in ("engine_b_min_rr", "min_rr", "required_rr"):
+                try:
+                    if _rr_source.get(_key) is not None:
+                        _min_exec_rr = max(_min_exec_rr, float(_rr_source.get(_key)))
+                except (TypeError, ValueError):
+                    pass
 
     if _min_exec_rr > 0 and tp1 > 0 and (
         _is_consensus_execution_signal(signal) or _is_engine_b_execution_signal(signal)

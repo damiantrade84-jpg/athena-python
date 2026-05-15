@@ -24,10 +24,6 @@
       "command": "uvx",
       "args": ["mcp-server-sqlite", "--db-path", "C:/dev/athena-python/cot.db"]
     },
-    "github": {
-      "command": "npx",
-      "args": ["-y", "@modelcontextprotocol/server-github"]
-    },
     "playwright": {
       "command": "npx",
       "args": ["-y", "@playwright/mcp@latest"]

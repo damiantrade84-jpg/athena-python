@@ -110,6 +110,15 @@ def test_engine_a_backtest_indicator_windows_stop_before_fill_bar():
     )
 
 
+def test_engine_b_backtest_validates_post_fill_level_sides_before_rr():
+    src = Path(backtest_runner.__file__).read_text(encoding="utf-8")
+    assert "invalid post-fill levels" in src
+    side_check = 'direction == "LONG" and sl < entry < tp'
+    rr_check = 'if target_rr < float(style_profile.get("min_rr", 1.0)):'
+    assert side_check in src
+    assert src.index(side_check) < src.index(rr_check)
+
+
 def test_resolve_barrier_exit_prefers_sl_when_long_bar_hits_tp_and_sl():
     outcome, both_hit = backtest_runner._resolve_barrier_exit(
         {"high": 105.0, "low": 94.0},

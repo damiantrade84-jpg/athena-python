@@ -1172,6 +1172,7 @@ class AutoTrader:
                 symbol_info=symbol_info,
                 kill_switch=self._kill_switch_fn() if self._kill_switch_fn else False,
                 sizing_override=sizing_override,
+                account_domain=account.get("risk_domain"),
             )
 
             if not approval.approved:
