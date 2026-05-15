@@ -243,8 +243,8 @@ def _build_disagreement_diagnosis(
             _b_missing.append(b.get("signal_diagnostic") or "engine_b_checklist_failed")
         if not b_struct_ok:
             _b_diagnostics = signal_b.get("engine_b_diagnostics") or {}
-            if isinstance(_b_diagnostics, str):
-                log.debug("[ENGINE C] signal_b['engine_b_diagnostics'] is a string (%r), treating as empty dict", _b_diagnostics)
+            if not isinstance(_b_diagnostics, dict):
+                log.debug("[ENGINE C] signal_b['engine_b_diagnostics'] is %s (expected dict), treating as empty", type(_b_diagnostics).__name__)
                 _b_diagnostics = {}
             _b_reason_codes = _b_diagnostics.get("reason_codes", [])
             _b_missing.append(f"structure_failed (codes={_b_reason_codes})")
@@ -509,6 +509,11 @@ def resolve_sl(
         dist_b = abs(entry - sl_b)
         if dist_b <= max_sl_dist and dist_b > 0:
             candidates.append(("structural", sl_b, dist_b))
+        elif dist_b == 0:
+            log.debug(
+                "[ENGINE_C] resolve_sl: structural SL=%s equals entry=%s — dropped (zero distance)",
+                sl_b, entry,
+            )
         elif dist_b > max_sl_dist and atr > 0:
             # Structural too wide — clamp to 2.5x ATR
             if direction == "LONG":
@@ -551,7 +556,9 @@ def resolve_tp(
     - Else Engine A ATR-based TP
     - Calculate actual RR from resolved levels
     """
-    if not entry or not sl or entry <= 0:
+    if not entry or entry <= 0:
+        return {"tp": None, "rr": 0, "method": "NO_DATA"}
+    if sl is None or sl <= 0:
         return {"tp": None, "rr": 0, "method": "NO_DATA"}
 
     risk = abs(entry - sl)
@@ -693,10 +700,10 @@ def apply_vision(consensus: dict, vision_result: dict) -> dict:
 
     # Parse structured data if available
     structured = vision_result.get("structured") or {}
-    rating = structured.get("rating", "").upper() if structured else ""
-    confirms_dir = structured.get("confirms_direction", False) if structured else False
-    sl_flag = structured.get("sl_flag", "ok") if structured else "ok"
-    tp_flag = structured.get("tp_flag", "ok") if structured else "ok"
+    rating = structured.get("rating", "").upper()
+    confirms_dir = structured.get("confirms_direction", False)
+    sl_flag = structured.get("sl_flag", "ok")
+    tp_flag = structured.get("tp_flag", "ok")
 
     text = (vision_result.get("analysis") or "").upper()
 
@@ -710,13 +717,13 @@ def apply_vision(consensus: dict, vision_result: dict) -> dict:
         confirms_dir = False
         rating = "CONTRADICTS"
 
-    # If no structured rating, extract the overall rating from text
+    # If no structured rating, extract the overall rating from text using word boundaries
     if not rating:
         for r in ["AVOID", "STRONG", "MODERATE", "WEAK", "CONTRADICTS"]:
-            if r in text:
+            if _re.search(rf"\b{r}\b", text):
                 rating = r
                 break
-        if "CONTRADICT" in text or "CONFLICTED" in text:
+        if _re.search(r"\bCONTRADICT\b", text) or _re.search(r"\bCONFLICTED\b", text):
             confirms_dir = False
             rating = "CONTRADICTS"
 
@@ -748,7 +755,9 @@ def apply_vision(consensus: dict, vision_result: dict) -> dict:
     elif action in ("override", "contradict"):
         mult = 0.0
 
-    old_conviction = updated["conviction"]
+    old_conviction = updated.get("conviction", 0.0)
+    if "conviction" not in updated:
+        log.warning("[ENGINE_C] apply_vision called on consensus without conviction key; defaulting to 0.0")
     new_conviction = min(1.0, old_conviction * mult)
 
     # Reclassify tier
@@ -1057,23 +1066,29 @@ def compute_consensus(
         return _finalize_consensus(result, asset_type)
 
     if b_has and not a_has:
-        # Engine B only — score it directly with conservative scaling.
         direction = b["direction"]
         if b.get("sl") is None or b.get("tp") is None:
-            return {
-                "trade": False,
-                "verdict": "B_ONLY_LEVELS_MISSING",
-                "decision_state": "blocked",
-                "tier": "SKIP",
-                "sizing_override": 0.0,
-                "direction": direction,
-                "components": {
-                    "a_has_signal": False,
-                    "b_has_signal": True,
-                    "b_levels_present": False,
-                },
-                "diagnostics": ["engine_b_levels_missing"],
-            }
+            return _build_result(
+                trade=False,
+                verdict="B_ONLY_LEVELS_MISSING",
+                direction=direction,
+                conviction=0.0,
+                tier="SKIP",
+                sizing=0.0,
+                a_norm=a, b_norm=b, entry=entry,
+                sl=None, sl_method="no_levels",
+                tp=None, tp_method="no_levels",
+                rr=0.0,
+                weights={"A": 0.0, "B": 1.0},
+                decision_state="blocked",
+                decision_state_reason="engine_b_levels_missing",
+                a_reliability=0.0,
+                b_reliability=0.0,
+                c_reliability=0.0,
+                disagreement_diagnosis=_build_disagreement_diagnosis(
+                    "B_ONLY", a, b, signal_a, signal_b, regime
+                ),
+            )
         b_only_mult = float(CONFIG.get("ENGINE_C_B_ONLY_MULT", 0.65))
         conviction = b["score_norm"] * b_only_mult
         tier, sizing = classify_conviction(conviction)
