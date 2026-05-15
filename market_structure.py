@@ -1291,7 +1291,27 @@ def resolve_engine_b_execution_levels(
 
     _fallback_applied = False
     _fallback_reason = None
-    if _exec_valid and fallback_rr is not None:
+    # Synthetic fallback eligibility: a valid SL (correct side, non-zero distance)
+    # is required to construct a TP from sl_dist * fallback_rr. We allow the
+    # fallback to fire in two cases:
+    #   1. exec is valid but RR below min_rr (legacy path)
+    #   2. exec is invalid because of TP-only problems (missing or wrong-side TP)
+    # Wrong-side SL is a fundamental direction error and is never recovered.
+    _sl_valid_for_synthetic = (
+        _exec_sl is not None
+        and _entry > 0
+        and (
+            (direction == "LONG" and _exec_sl < _entry)
+            or (direction == "SHORT" and _exec_sl > _entry)
+        )
+    )
+    _tp_only_failure = (not _exec_valid) and _exec_reject in (
+        "tp_wrong_side",
+        "levels_missing",
+    )
+    if fallback_rr is not None and _sl_valid_for_synthetic and (
+        _exec_valid or _tp_only_failure
+    ):
         try:
             _min_rr = float(min_rr) if min_rr is not None else None
         except (TypeError, ValueError):
@@ -1300,12 +1320,27 @@ def resolve_engine_b_execution_levels(
             _fallback_rr = float(fallback_rr)
         except (TypeError, ValueError):
             _fallback_rr = 0.0
-        if _min_rr is not None and _fallback_rr > 0 and _exec_rr < _min_rr:
-            _fallback_reason = (
-                "structural_tp_below_min_rr"
-                if _tp_source == "structural"
-                else f"{_tp_source}_tp_below_min_rr"
+        _need_synthetic = (
+            _min_rr is not None
+            and _fallback_rr > 0
+            and (
+                (_exec_valid and _exec_rr < _min_rr)
+                or _tp_only_failure
             )
+        )
+        if _need_synthetic:
+            if _tp_only_failure:
+                _fallback_reason = (
+                    "missing_tp_synthesized"
+                    if _exec_reject == "levels_missing"
+                    else "wrong_side_tp_synthesized"
+                )
+            else:
+                _fallback_reason = (
+                    "structural_tp_below_min_rr"
+                    if _tp_source == "structural"
+                    else f"{_tp_source}_tp_below_min_rr"
+                )
             if bool(config.CONFIG.get("ENGINE_B_ALLOW_SYNTHETIC_FALLBACK_RR_TP", False)):
                 _sl_dist = abs(_entry - _exec_sl)
                 if _sl_dist > 0:
@@ -1322,7 +1357,9 @@ def resolve_engine_b_execution_levels(
                     _exec_rr, _exec_valid, _exec_reject, _exec_tp_side_ok = _compute_exec_rr(
                         _exec_sl, _exec_tp
                     )
-            else:
+            elif _exec_valid:
+                # Flag off and original exec was valid: keep legacy "force invalid" semantics.
+                # For TP-only failures with flag off, leave the original reject reason.
                 _exec_valid = False
                 _exec_reject = _fallback_reason
 
@@ -3231,8 +3268,19 @@ class NakedEngine:
         hard_counter = (direction == "LONG" and h1_seq == "LH_LL" and h4_seq == "LH_LL") or (
             direction == "SHORT" and h1_seq == "HH_HL" and h4_seq == "HH_HL"
         )
+        # hard_counter softening: default is a soft score penalty rather than
+        # a structure_ok veto. Legacy veto mode remains available via the
+        # NAKED_ENGINE.hard_counter_mode config key. Mirrors Engine A's soft
+        # DI-conflict penalty from commit 3d2c3eed (factor_scoring.py:1939-1957).
+        _naked_engine_cfg = config.CONFIG.get("NAKED_ENGINE", {}) or {}
+        _hard_counter_mode = str(_naked_engine_cfg.get("hard_counter_mode", "penalty")).lower()
+        try:
+            _hard_counter_penalty_cfg = float(_naked_engine_cfg.get("hard_counter_penalty", 1.0))
+        except (TypeError, ValueError):
+            _hard_counter_penalty_cfg = 1.0
+        _hard_counter_veto = hard_counter and _hard_counter_mode == "veto"
         bos_mtf = bool(res.get("bos_mtf_confirmed", False))
-        structure_ok = not hard_counter and (
+        structure_ok = (not _hard_counter_veto) and (
             micro_aligned
             or macro_aligned
             or res.get("bos_confirmed", False)
@@ -3265,7 +3313,10 @@ class NakedEngine:
                 else:
                     res["_adx_derived_regime"] = "RANGING"
 
-        # Stage 2.3: Commodity swing requires macro alignment regardless of config
+        # Stage 2.3 (commit 8c26a078): commodity swing requires macro alignment.
+        # Default True for back-compat / safety — commodities are macro-driven.
+        # Set NAKED_ENGINE.commodity_swing_force_macro_align: false to trust YAML
+        # (NAKED_ENGINE.style_profiles.swing.require_macro_align.commodity).
         _score_group_lower = str(profile.get("score_group") or "").lower()
         _commodity_macro_groups = {
             "nat_gas",
@@ -3275,8 +3326,12 @@ class NakedEngine:
             "copper",
             "pgm_metals",
         }
+        _force_commodity_macro = bool(
+            _naked_engine_cfg.get("commodity_swing_force_macro_align", True)
+        )
         _commodity_swing_macro_required = (
-            exec_style == "swing"
+            _force_commodity_macro
+            and exec_style == "swing"
             and (
                 asset_type_lower in ("commodity", "nat_gas", "energy_oil", "precious_trackers")
                 or _score_group_lower in _commodity_macro_groups
@@ -3323,7 +3378,11 @@ class NakedEngine:
                 return 0.20
             if bos_confirmed:
                 return 0.25
-            return 0.35
+            # Catch-all fallback: aligned with crypto intraday (0.25) so non-BOS
+            # sub-2RR setups on forex/commodity/stock/ETF are not held to a
+            # stricter standard than crypto. Was 0.35; lowered as part of the
+            # cross-asset strictness fix.
+            return 0.25
 
         # Structural levels from analyze_structure
         _struct_sl = res.get("recommended_stop_loss")
@@ -3397,8 +3456,14 @@ class NakedEngine:
             or (absorption_confirmed and location_at_extreme)  # NEW: mean-reversion entry
         )
 
-        _rr_space_tp_is_structural = str(_exec_lvl.get("level_mode") or "").endswith("_structural_tp")
-        rr_can_satisfy_space = bool(rr_ok and _rr_space_tp_is_structural)
+        # Accept both structural TPs and synthetic-fallback TPs as a "meaningful"
+        # target that can substitute for room. Raw ATR TPs do not qualify
+        # because they carry no structural justification.
+        _level_mode_str = str(_exec_lvl.get("level_mode") or "")
+        _rr_space_tp_qualified = _level_mode_str.endswith("_structural_tp") or _level_mode_str.endswith(
+            "_fallback_rr_tp"
+        )
+        rr_can_satisfy_space = bool(rr_ok and _rr_space_tp_qualified)
         space_ok = room_ok or rr_can_satisfy_space
         # Some asset classes often have a nearby structural level while the
         # execution RR model still has valid protective distance. Keep
@@ -3503,6 +3568,15 @@ class NakedEngine:
         )
         _d1_penalty = _d1_penalty if _d1_conflict else 0.0
         total_score = max(0.0, total_score - _d1_penalty)
+
+        # hard_counter soft penalty in "penalty" mode. In "veto" mode structure_ok
+        # is already False and the signal won't pass, so the penalty has no effect.
+        _hard_counter_penalty = (
+            _hard_counter_penalty_cfg
+            if (hard_counter and _hard_counter_mode != "veto")
+            else 0.0
+        )
+        total_score = max(0.0, total_score - _hard_counter_penalty)
         # gate_score stays integer — never modified by penalty
 
         pct = min(100, max(0, round((total_score / max_possible) * 100)))
@@ -3640,6 +3714,9 @@ class NakedEngine:
             "lifecycle_reason": lifecycle_reason,
             "d1_pd_conflict_penalty": round(_d1_penalty, 2),
             "d1_conflict_details": res.get("d1_conflict_details", []),
+            "hard_counter_active": bool(hard_counter),
+            "hard_counter_mode": _hard_counter_mode,
+            "hard_counter_penalty": round(_hard_counter_penalty, 2),
             "location_passed": location_ok,
             "location_mode": location_mode,
             "location_distance_atr": round(location_distance_atr, 4)

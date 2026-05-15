@@ -89,20 +89,25 @@ def test_scan_source_crypto_bybit_atr_unavailable_diagnostic_constant():
     assert "bybit_atr_unavailable" in text
 
 
-def test_yaml_crypto_rr_space_sat_false():
+def test_yaml_crypto_rr_space_sat_true():
+    # Commit 71dbe7b8 unblocked crypto by flipping this to true; verify YAML pins it.
     raw = yaml.safe_load((REPO_ROOT / "config.yaml").read_text(encoding="utf-8"))
     gate = raw.get("ENGINE_B_RR_CAN_SATISFY_SPACE_GATE") or {}
     assert isinstance(gate, dict)
-    assert gate.get("crypto") is False
+    assert gate.get("crypto") is True
 
 
-def test_loaded_config_matches_crypto_rr_space_false():
+def test_loaded_config_matches_crypto_rr_space_true():
     cfg_rr = CONFIG.get("ENGINE_B_RR_CAN_SATISFY_SPACE_GATE")
     assert isinstance(cfg_rr, dict), "expected dict-scoped ENGINE_B_RR_CAN_SATISFY_SPACE_GATE"
-    assert cfg_rr.get("crypto") is False
+    assert cfg_rr.get("crypto") is True
 
 
-def test_resolve_engine_b_structural_tp_below_min_rr_rejects_when_fallback_off():
+def test_resolve_engine_b_structural_tp_below_min_rr_rejects_when_fallback_off(monkeypatch):
+    # Default for ENGINE_B_ALLOW_SYNTHETIC_FALLBACK_RR_TP is now True in
+    # config.py; explicitly pin it off for this regression to verify the
+    # legacy "force invalid" path still works when operators disable the flag.
+    monkeypatch.setitem(CONFIG, "ENGINE_B_ALLOW_SYNTHETIC_FALLBACK_RR_TP", False)
     out = resolve_engine_b_execution_levels(
         direction="LONG",
         entry=100.0,
@@ -155,7 +160,8 @@ def test_attach_engine_b_scan_gate_funnel_stable_shape(monkeypatch):
     funnel = sig.get("engine_b_scan_gate_funnel")
     assert isinstance(funnel, dict)
     assert ENGINE_B_SCAN_FUNNEL_SHAPE_KEYS <= set(funnel.keys())
-    assert funnel["rr_can_satisfy_space_gate_crypto_config"] is False
+    # Crypto rr_space_gate was flipped to True in commit 71dbe7b8 (unblock crypto).
+    assert funnel["rr_can_satisfy_space_gate_crypto_config"] is True
 
     _patch_engine_b_funnel_final_tier(sig, "skip", "Below discovery threshold")
     assert funnel["final_tier"] == "skip"

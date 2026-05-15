@@ -682,7 +682,14 @@ def test_calculate_confidence_forex_adx_derives_regime_not_blocks_structure():
         config.CONFIG["ENGINE_B_FOREX_ADX_MIN"] = old_min
 
 
-def test_calculate_confidence_can_disable_structure_gate_for_bt_experiment_only():
+def test_calculate_confidence_can_disable_structure_gate_for_bt_experiment_only(monkeypatch):
+    # Pin legacy "veto" mode so hard_counter zeroes structure_ok — this is the
+    # only configuration where disable_structure_gate has an observable effect.
+    monkeypatch.setitem(
+        config.CONFIG.setdefault("NAKED_ENGINE", {}),
+        "hard_counter_mode",
+        "veto",
+    )
     res = _base_res_long()
     res.update(
         {
@@ -1386,6 +1393,37 @@ def test_calculate_confidence_d1_penalty_is_reduced():
 
 
 def test_calculate_confidence_emits_sequence_counter_trend():
+    """Default mode: hard_counter applies a soft score penalty, not a veto.
+
+    HTF counter-trend on both H1 and H4 still emits the diagnostic code, but
+    structure_ok remains True (subject to other gates) so that a setup with
+    strong BOS/sweep/trigger can still pass with reduced total_score. Matches
+    the Engine A soft-penalty pattern from commit 3d2c3eed for DI alignment.
+    """
+    res = _base_res_long()
+    res["current_swing_sequence"] = "LH_LL"
+    res["macro_swing_sequence"] = "LH_LL"
+    out = engine.calculate_confidence(
+        res,
+        current_price=100.0,
+        direction="LONG",
+        learning_ctx=None,
+        entry_candles=[],
+        style_profile={"min_room_atr": 0.35, "min_rr": 1.0, "require_macro_align": False},
+    )
+    codes = out.get("engine_b_diagnostics", {}).get("reason_codes", [])
+    assert ENGINE_B_REASON_SEQUENCE_COUNTER_TREND in codes
+    assert out["structure_ok"] is True
+    assert out["hard_counter_penalty"] == pytest.approx(1.0)
+
+
+def test_calculate_confidence_hard_counter_veto_mode(monkeypatch):
+    """Legacy veto mode: hard_counter zeroes structure_ok and signal fails."""
+    monkeypatch.setitem(
+        config.CONFIG.setdefault("NAKED_ENGINE", {}),
+        "hard_counter_mode",
+        "veto",
+    )
     res = _base_res_long()
     res["current_swing_sequence"] = "LH_LL"
     res["macro_swing_sequence"] = "LH_LL"
@@ -1400,6 +1438,7 @@ def test_calculate_confidence_emits_sequence_counter_trend():
     codes = out.get("engine_b_diagnostics", {}).get("reason_codes", [])
     assert ENGINE_B_REASON_SEQUENCE_COUNTER_TREND in codes
     assert out["structure_ok"] is False
+    assert out["hard_counter_penalty"] == pytest.approx(0.0)
 
 
 # ─── Engine B RR basis tests ──────────────────────────────────────────────────

@@ -395,7 +395,11 @@ CONFIG: dict = {
     "ENGINE_B_CRYPTO_LEVELS_SIGNAL_FEED_FALLBACK": False,
     "ENGINE_B_CRYPTO_BT_LEVEL_ATR_USE_SIGNAL_FEED": False,
     "ENGINE_B_SWEEP_LOOKBACK_BARS": 5,
-    "ENGINE_B_ALLOW_SYNTHETIC_FALLBACK_RR_TP": False,
+    # Defaults True: synthetic-RR TP fallback rescues otherwise-valid Engine B
+    # signals whose structural target falls short of min_rr (or whose structural
+    # TP is missing/wrong-side). Code defaults must agree with config.yaml so
+    # deployments without overlay do not silently disable the rescue path.
+    "ENGINE_B_ALLOW_SYNTHETIC_FALLBACK_RR_TP": True,
     "NAKED_MAX_DAILY": 3,
     "ENGINE_B_BT_EXIT_POLICY": "fixed_target_be",
     # When True, Engine B skips forex on 22:00–07:00 UTC bars (backtest + live scan).
