@@ -28,12 +28,78 @@ def _as_dict(value: Any) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
 
+# Sections that must drive DATA_INSUFFICIENT must be tied to the engine that
+# actually produced the signal. An Engine D scalp signal naturally has no
+# Engine A/B/C nested context (different scan, different pipeline) — counting
+# their missing_fields would force DATA_INSUFFICIENT on every single-engine
+# signal. Engine C is the only consensus engine that legitimately requires
+# A and B context.
+_ENGINE_PRIMARY_SECTIONS: dict[str, tuple[str, ...]] = {
+    "scalp": ("engine_d",),
+    "engine_d": ("engine_d",),
+    "d": ("engine_d",),
+    "engine_a": ("engine_a",),
+    "a": ("engine_a",),
+    "engine_b": ("engine_b",),
+    "b": ("engine_b",),
+    "engine_c": ("engine_a", "engine_b", "engine_c"),
+    "c": ("engine_a", "engine_b", "engine_c"),
+    "consensus": ("engine_a", "engine_b", "engine_c"),
+}
+
+# Risk/data_quality have many runtime-only fields (position_size, slippage,
+# guardian_status, kill_switch_status, event_risk, candle_source,
+# confirmed_only, forming_bar_policy) that are not populated on chat-path
+# packets. Only the genuinely analysis-critical fields should escalate to
+# DATA_INSUFFICIENT.
+_CRITICAL_RISK_FIELDS: frozenset[str] = frozenset(
+    {"rr", "min_rr", "sl", "tp", "entry", "data_freshness_status"}
+)
+_CRITICAL_DATA_QUALITY_FIELDS: frozenset[str] = frozenset({"freshness_status"})
+
+
+def _primary_sections(packet: dict[str, Any]) -> tuple[str, ...]:
+    src = str(packet.get("engine_source") or "").strip().lower()
+    if src in _ENGINE_PRIMARY_SECTIONS:
+        return _ENGINE_PRIMARY_SECTIONS[src]
+    for key, sections in _ENGINE_PRIMARY_SECTIONS.items():
+        if key and key in src:
+            return sections
+    return ("engine_a", "engine_b", "engine_c", "engine_d")
+
+
+def _section_attempted(section_data: dict[str, Any]) -> bool:
+    """True iff the section has any populated value besides ``missing_fields``.
+
+    Used to skip cross-cutting sections (vision) that were never gathered for
+    this signal — absence-of-attempt is not the same as data insufficiency.
+    """
+    for key, value in section_data.items():
+        if key == "missing_fields":
+            continue
+        if value not in (None, "", [], {}):
+            return True
+    return False
+
+
 def _missing_sections(packet: dict[str, Any]) -> list[str]:
     missing: list[str] = []
-    for section in ("engine_a", "engine_b", "engine_c", "engine_d", "vision", "risk", "data_quality"):
+    for section in _primary_sections(packet):
         fields = _as_dict(packet.get(section)).get("missing_fields") or []
         for field in fields:
             missing.append(f"{section}.{field}")
+    vision_data = _as_dict(packet.get("vision"))
+    if _section_attempted(vision_data):
+        for field in vision_data.get("missing_fields") or []:
+            missing.append(f"vision.{field}")
+    risk_data = _as_dict(packet.get("risk"))
+    for field in risk_data.get("missing_fields") or []:
+        if field in _CRITICAL_RISK_FIELDS:
+            missing.append(f"risk.{field}")
+    dq_data = _as_dict(packet.get("data_quality"))
+    for field in dq_data.get("missing_fields") or []:
+        if field in _CRITICAL_DATA_QUALITY_FIELDS:
+            missing.append(f"data_quality.{field}")
     return missing
 
 
