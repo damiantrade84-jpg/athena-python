@@ -128,3 +128,86 @@ def test_marcus_prompt_contains_required_safety_language():
     assert "If data is missing, say what is missing" in prompt
     assert "Never override guardian, freshness, kill switch, RR, spread, fee, or risk gates" in prompt
     assert "execute trades" not in prompt.lower()
+
+
+def test_llm_answer_replaces_answer_and_preserves_deterministic_decision(monkeypatch, tmp_path):
+    runtime = SimpleNamespace(last_scan_results=lambda: {"signals": [_signal()]})
+    ai_tools.set_ai_tools_runtime(runtime)
+
+    llm_text = (
+        "BTCUSDT LONG looks like a watchlist setup — the structure supports it but "
+        "similar-setup history is too thin for a probability claim, so wait for a "
+        "fresh H1 close before adding."
+    )
+    monkeypatch.setattr(
+        ai_trade_chat,
+        "_try_marcus_chat_llm",
+        lambda message, response, tool_results, packet: (llm_text, "test-marcus-model"),
+    )
+
+    out = ai_trade_chat.run_trade_chat_turn(
+        {
+            "trace_id": "trace-1",
+            "symbol": "BTCUSDT",
+            "message": "Walk me through this one in your own words.",
+            "_audit_db": str(tmp_path / "audit.db"),
+        }
+    )
+
+    assert out["answer"] == llm_text
+    assert out["llm_answer"] is True
+    assert out["deterministic_answer"]
+    assert out["deterministic_answer"] != llm_text
+    assert out["safety"]["can_execute"] is False
+    assert out["decision"] in {"VALID_SETUP", "WATCHLIST", "WAIT_FOR_CONFIRMATION", "DATA_INSUFFICIENT", "BLOCKED_BY_RISK"}
+
+
+def test_llm_unsafe_execution_language_falls_back_to_deterministic(monkeypatch):
+    class _FakeMessage:
+        content = "You should place the trade right now at market."
+
+    class _FakeChoice:
+        message = _FakeMessage()
+
+    class _FakeCompletion:
+        choices = [_FakeChoice()]
+
+    class _FakeChatCompletions:
+        def create(self, **kwargs):
+            return _FakeCompletion()
+
+    class _FakeChat:
+        completions = _FakeChatCompletions()
+
+    class _FakeClient:
+        chat = _FakeChat()
+
+    monkeypatch.setattr(ai_trade_chat, "ai_key_configured", lambda cfg=None: True)
+    monkeypatch.setattr(ai_trade_chat, "create_ai_client", lambda cfg=None, **kw: _FakeClient())
+    monkeypatch.setattr(ai_trade_chat, "get_ai_model", lambda cfg=None, preferred_key="AI_MODEL": "test-model")
+    monkeypatch.setattr(ai_trade_chat, "get_ai_timeout_sec", lambda cfg=None, preferred_key=None: 5.0)
+    monkeypatch.setattr(ai_trade_chat, "get_ai_max_retries", lambda cfg=None, preferred_key=None: 0)
+
+    text, model_used = ai_trade_chat._try_marcus_chat_llm(
+        "Should I take it?",
+        {"decision": "WATCHLIST", "supports": [], "contradictions": []},
+        {},
+        None,
+    )
+
+    assert text is None
+    assert model_used == "deterministic_fallback"
+
+
+def test_llm_disabled_when_api_key_missing(monkeypatch):
+    monkeypatch.setattr(ai_trade_chat, "ai_key_configured", lambda cfg=None: False)
+
+    text, model_used = ai_trade_chat._try_marcus_chat_llm(
+        "Anything to add?",
+        {"decision": "WATCHLIST"},
+        {},
+        None,
+    )
+
+    assert text is None
+    assert model_used == "deterministic_fallback"

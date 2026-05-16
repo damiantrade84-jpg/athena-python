@@ -39,6 +39,7 @@ Common entry points only. This is not a complete allowlist.
 - Execution: `execution.py`, `auto_trader.py`, `risk_engine.py`, `guardian.py`, `mt5_executor.py`, `bybit_executor.py`
 - Data/candles: `candles_cache.py`, `candle_feeds.py`, provider-specific feed modules
 - AI/Vision: `ai_agent_safety.py`, AI review modules, chart/Vision payload builders, browser chart code under `static/`
+- AI Agent chat: `ai_trade_chat.py`, `athena_app/api/routes_ai_agent.py`. The chat answer narrative may use an LLM when an AI API key is configured; the deterministic decision card, safety flags, and gates remain authoritative and are never altered by the LLM. With no API key the chat falls back to the deterministic answer.
 - Research Lab: `athena_research/`, `tools/vectorbt_research_lab.py`, `configs/vectorbt_research_lab.yaml`
 - Backtesting: `backtest_runner.py`, backtest matrix tooling, telemetry/report writers
 - Config: `config.py`, `config.yaml`, `configs/`
@@ -58,3 +59,5 @@ Common entry points only. This is not a complete allowlist.
 Use `docs/agent-operating-guide.md` only when the task requires fuller repository operating rules. Do not load it by default for small edits.
 
 
+- Do not use user-profile Codex skills or memory skills for this repo unless explicitly requested.
+- For this repo, active skill discovery should come from `.agents/skills/` only.

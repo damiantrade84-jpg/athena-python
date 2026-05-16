@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+import logging
 import re
 import uuid
 from typing import Any, Callable
@@ -11,6 +13,26 @@ from ai_agent_safety import validate_ai_chat_response
 from ai_conversation_store import append_turn, create_or_get_thread, get_recent_turns
 from ai_orchestrator import run_ai_trade_review, summarize_trade_for_chat
 import ai_tools as _ai_tools
+from config import (
+    CONFIG,
+    AITemperatureConfig,
+    ai_key_configured,
+    create_ai_client,
+    get_ai_max_retries,
+    get_ai_model,
+    get_ai_timeout_sec,
+)
+
+
+log = logging.getLogger("athena")
+
+# Mirrors ai_agent_safety._UNSAFE_EXECUTION_RE. Duplicated here so an LLM reply
+# containing execution verbs triggers a full deterministic fallback (not just a
+# final_action downgrade) — the chat is advisory only.
+_LLM_UNSAFE_EXECUTION_RE = re.compile(
+    r"\b(place|send|route|open|execute|submit)\s+(the\s+)?(trade|order|position)\b",
+    re.IGNORECASE,
+)
 
 
 MARCUS_CHAT_SYSTEM_PROMPT = """You are Marcus Reid, a trading desk analyst.
@@ -476,6 +498,118 @@ def _build_selected_signal_summary(
     return summary
 
 
+def _build_marcus_user_message(
+    user_message: str,
+    response: dict[str, Any],
+    tool_results: dict[str, dict[str, Any]],
+    packet: dict[str, Any] | None,
+) -> str:
+    """Render the deterministic ground truth + the trader's question into a
+    grounded user message for the chat LLM. The LLM must narrate, not invent.
+    """
+    _ = packet  # signal-shape facts already surfaced through ``response``
+    selected = response.get("selected_signal") or {}
+    ground_truth = {
+        "decision": response.get("decision"),
+        "final_action": response.get("final_action"),
+        "market_read": response.get("market_read"),
+        "trade_thesis": response.get("trade_thesis"),
+        "supports": response.get("supports") or [],
+        "contradictions": response.get("contradictions") or [],
+        "confirmation_needed": response.get("confirmation_needed") or [],
+        "invalidation": response.get("invalidation"),
+        "risk_warning": response.get("risk_warning"),
+        "historical_analogue_summary": response.get("historical_analogue_summary"),
+        "safety_flags": response.get("safety_flags") or [],
+        "contradiction_flags": response.get("contradiction_flags") or [],
+        "missing_data": response.get("missing_data") or [],
+        "vision_summary": response.get("vision_summary") or {},
+        "market_intelligence": response.get("market_intelligence") or {},
+    }
+    tools_summary = [
+        {"name": name, "status": call.get("status")}
+        for name, call in tool_results.items()
+    ]
+    try:
+        gt_json = json.dumps(ground_truth, default=str, indent=2)[:6000]
+        sel_json = json.dumps(selected, default=str, indent=2)[:1500]
+        tools_json = json.dumps(tools_summary, default=str)[:1500]
+    except Exception:
+        gt_json = str(ground_truth)[:6000]
+        sel_json = str(selected)[:1500]
+        tools_json = str(tools_summary)[:1500]
+
+    parts = [
+        "Trader's question:",
+        user_message.strip(),
+        "",
+        "Selected signal (advisory metadata; never alter levels):",
+        sel_json,
+        "",
+        "Deterministic ground truth — these fields are authoritative. Do NOT contradict them:",
+        gt_json,
+        "",
+        "Tools consulted this turn:",
+        tools_json,
+        "",
+        "Answer format:",
+        "- Reply as Marcus Reid in a conversational paragraph that directly answers the trader's question.",
+        "- Reference the specific trade (symbol, direction, levels, decision) when relevant.",
+        "- Use only the deterministic ground truth and tool results above. Do not invent facts, probabilities, or levels.",
+        "- If `missing_data` is non-empty, state what is missing.",
+        "- Never say the trade will be placed, opened, executed, sent, submitted, or routed. This chat is advisory only.",
+        "- Keep it under 200 words.",
+    ]
+    return "\n".join(parts)
+
+
+def _try_marcus_chat_llm(
+    user_message: str,
+    response: dict[str, Any],
+    tool_results: dict[str, dict[str, Any]],
+    packet: dict[str, Any] | None,
+) -> tuple[str | None, str]:
+    """Call the configured LLM to produce a conversational Marcus answer.
+
+    Returns ``(answer_text, model_name)`` on success and
+    ``(None, "deterministic_fallback")`` on any failure, missing API key, empty
+    completion, or LLM output that contains unsafe execution language.
+    Deterministic gates, decision, and safety flags are never altered here.
+    """
+    try:
+        if not ai_key_configured(CONFIG):
+            return None, "deterministic_fallback"
+        model = get_ai_model(CONFIG, preferred_key="MARCUS_MODEL")
+        client = create_ai_client(
+            CONFIG,
+            max_retries=get_ai_max_retries(CONFIG, preferred_key="AI_SDK_MAX_RETRIES"),
+        )
+        user_content = _build_marcus_user_message(user_message, response, tool_results, packet)
+        completion = client.chat.completions.create(
+            model=model,
+            max_tokens=600,
+            temperature=float(AITemperatureConfig.get_temperature("marcus")),
+            timeout=get_ai_timeout_sec(CONFIG),
+            messages=[
+                {"role": "system", "content": MARCUS_CHAT_SYSTEM_PROMPT},
+                {"role": "user", "content": user_content},
+            ],
+        )
+        text = (completion.choices[0].message.content or "").strip()
+        if not text:
+            return None, "deterministic_fallback"
+        if _LLM_UNSAFE_EXECUTION_RE.search(text):
+            log.warning(
+                "[AI_TRADE_CHAT] LLM answer contained unsafe execution language; "
+                "falling back to deterministic answer."
+            )
+            return None, "deterministic_fallback"
+        return text, str(model)
+    except Exception as exc:
+        log.warning("[AI_TRADE_CHAT] LLM call failed; falling back to deterministic answer: %s", exc)
+        return None, "deterministic_fallback"
+
+
 def run_trade_chat_turn(request: dict) -> dict[str, Any]:
     request = request if isinstance(request, dict) else {}
     message = str(request.get("message") or "").strip()
@@ -513,6 +647,7 @@ def run_trade_chat_turn(request: dict) -> dict[str, Any]:
     tool_results = {str(call.get("name")): call for call in tool_calls}
     packet = _packet_from_tool_results(tool_results)
     response = compose_trader_answer(message, tool_results, packet)
+    deterministic_answer = response.get("answer") or ""
     response.update(
         {
             "session_id": session_id,
@@ -530,8 +665,17 @@ def run_trade_chat_turn(request: dict) -> dict[str, Any]:
                 "can_modify_thresholds": False,
                 "deterministic_gates_required": True,
             },
+            "deterministic_answer": deterministic_answer,
         }
     )
+
+    llm_text, model_used = _try_marcus_chat_llm(message, response, tool_results, packet)
+    if llm_text:
+        response["answer"] = llm_text
+        response["llm_answer"] = True
+    else:
+        response["llm_answer"] = False
+
     response = validate_ai_chat_response(response, packet)
 
     append_turn(session_id, "user", message, db_path=audit_db)
@@ -557,7 +701,7 @@ def run_trade_chat_turn(request: dict) -> dict[str, Any]:
         safety_flags=response.get("safety_flags") or [],
         missing_data=response.get("missing_data") or [],
         contradiction_flags=response.get("contradiction_flags") or [],
-        model_used="deterministic_fallback",
+        model_used=model_used,
         prompt=MARCUS_CHAT_SYSTEM_PROMPT,
     )
     return response
