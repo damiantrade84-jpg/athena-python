@@ -127,6 +127,12 @@ def _list_runs(output_dir: str = "logs/research_lab") -> None:
               f"{r.get('symbol_count', '?'):8s} {r.get('strong', '?'):8s} {r.get('weak', '?'):8s}")
 
 
+def _family_choices() -> list[str]:
+    """Return strategy family choices from the shared research registry."""
+    from athena_research.strategies import FAMILY_STRATEGIES
+    return sorted(FAMILY_STRATEGIES)
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Athena Research Lab — VectorBT strategy discovery",
@@ -138,8 +144,7 @@ def main():
     )
     parser.add_argument(
         "--families", nargs="+",
-        choices=["trend_momentum", "pullback", "breakout", "mean_reversion",
-                 "volatility", "engine_b_proxy", "engine_d_proxy"],
+        choices=_family_choices(),
         help="Override strategy families to test (default: from config)",
     )
     parser.add_argument(

@@ -458,6 +458,23 @@ class TestStrategies:
         result = strategy_micro_breakout(ohlcv, {"range_bars": 6, "atr_sl_mult": 1.0})
         assert result["entries"].dtype == bool
 
+    def test_engine_d_proxy_atr_stop_params_change_exits(self, ohlcv):
+        from athena_research.strategies import strategy_micro_breakout, strategy_vwap_reclaim
+
+        tight_vwap = strategy_vwap_reclaim(ohlcv, {"band_std": 0.1, "atr_sl_mult": 0.2})
+        loose_vwap = strategy_vwap_reclaim(ohlcv, {"band_std": 0.1, "atr_sl_mult": 3.0})
+        assert (
+            not tight_vwap["exits"].equals(loose_vwap["exits"])
+            or not tight_vwap["short_exits"].equals(loose_vwap["short_exits"])
+        )
+
+        tight_breakout = strategy_micro_breakout(ohlcv, {"range_bars": 6, "atr_sl_mult": 0.2})
+        loose_breakout = strategy_micro_breakout(ohlcv, {"range_bars": 6, "atr_sl_mult": 3.0})
+        assert (
+            not tight_breakout["exits"].equals(loose_breakout["exits"])
+            or not tight_breakout["short_exits"].equals(loose_breakout["short_exits"])
+        )
+
     def test_param_grid_expansion(self):
         from athena_research.strategies import generate_param_grid
 
@@ -478,6 +495,43 @@ class TestStrategies:
         specs = list(iter_strategy_specs(["trend_momentum"], strategy_params, direction="both"))
         assert len(specs) >= 1
         assert all(isinstance(s, StrategySpec) for s in specs)
+
+    def test_engine_d_proxy_family_uses_configured_scalp_specs(self):
+        from athena_research.run_manager import load_config
+        from athena_research.strategies import iter_strategy_specs
+
+        cfg = load_config("configs/vectorbt_research_lab.yaml")
+        specs = list(iter_strategy_specs(["engine_d_proxy"], cfg["strategies"], direction="both"))
+
+        names = {s.name for s in specs}
+        assert {"vwap_reclaim", "micro_breakout", "ema_scalp_pullback", "cvd_momentum"}.issubset(names)
+        assert all(s.family == "engine_d_proxy" for s in specs)
+        assert any(s.name == "micro_breakout" and "range_bars" in s.params for s in specs)
+
+    def test_legacy_scalp_momentum_family_aliases_to_engine_d_config(self):
+        from athena_research.run_manager import load_config
+        from athena_research.strategies import iter_strategy_specs
+
+        cfg = load_config("configs/vectorbt_research_lab.yaml")
+        specs = list(iter_strategy_specs(["scalp_momentum_proxy"], cfg["strategies"], direction="both"))
+
+        assert specs
+        assert all(s.family == "engine_d_proxy" for s in specs)
+        assert any(s.name == "vwap_reclaim" and "band_std" in s.params for s in specs)
+
+    def test_known_ignored_strategy_config_params_are_not_present(self):
+        from athena_research.run_manager import load_config
+
+        cfg = load_config("configs/vectorbt_research_lab.yaml")
+        ignored = {"fee_guard_r", "min_swing_bars", "pivot_bars"}
+        offenders = []
+        for family, strategies in cfg["strategies"].items():
+            for strategy_name, params in (strategies or {}).items():
+                for param_name in (params or {}):
+                    if param_name in ignored:
+                        offenders.append(f"{family}.{strategy_name}.{param_name}")
+
+        assert offenders == []
 
     def test_run_strategy_dispatcher(self, ohlcv):
         from athena_research.strategies import run_strategy, StrategySpec
@@ -610,6 +664,23 @@ class TestStrategies:
         assert tagged[1].recommendation in {"RETEST", "WATCHLIST_ONLY"}
 
         _check_no_live_imports()
+
+    def test_engine_d_proxy_results_are_tagged_as_engine_d(self):
+        from athena_research.metrics import StrategyMetrics
+        from athena_research.research_context import annotate_research_results
+
+        rows = [StrategyMetrics(
+            run_id="r", symbol="BTC/USDT", asset_class="crypto", timeframe="M5",
+            zone="scalp", family="engine_d_proxy", strategy_name="micro_breakout",
+            params_str="", direction="both", status="WEAK_CANDIDATE",
+            trade_count=30, profit_factor=1.1, oos_return=0.01,
+        )]
+
+        tagged = annotate_research_results(rows, {"min_trades": 20})
+
+        assert tagged[0].engine == "ENGINE_D"
+        assert tagged[0].engine_component == "scalp_momentum_proxy"
+        assert tagged[0].timeframe_zone == "scalp"
 
     def test_retest_plan_can_target_retest_recommendations(self, tmp_path, monkeypatch):
         from flask import Flask
@@ -1130,6 +1201,91 @@ class TestRunManager:
         assert isinstance(cfg, dict)
         assert "tiny_run" in cfg
         assert "strategies" in cfg
+
+    def test_cli_family_choices_match_strategy_registry(self):
+        from athena_research.strategies import FAMILY_STRATEGIES
+        from tools import vectorbt_research_lab
+
+        assert set(vectorbt_research_lab._family_choices()) == set(FAMILY_STRATEGIES)
+
+    def test_run_research_passes_timeframe_max_bars_to_loader(self, tmp_path, monkeypatch):
+        from types import SimpleNamespace
+
+        import athena_research.run_manager as rm
+        from athena_research.strategies import StrategySpec
+
+        config_path = tmp_path / "research_lab.yaml"
+        config_path.write_text(
+            """
+research_lab:
+  data:
+    cache_dir: data_cache
+    max_bars:
+      M5: 123
+      H1: 456
+  fees:
+    crypto: 0.0006
+    default: 0.001
+  slippage:
+    default: 0.0
+  is_pct: 0.70
+  min_trades: 1
+  zones:
+    scalp:
+      timeframes: [M5]
+    intra:
+      timeframes: [H1]
+  strategies:
+    trend_momentum: {}
+""",
+            encoding="utf-8",
+        )
+        df = _make_ohlcv(80)
+        limits_by_timeframe = {}
+        captured_meta = {}
+
+        monkeypatch.setattr(
+            rm,
+            "iter_strategy_specs",
+            lambda families, strategy_params, direction="both": iter([
+                StrategySpec(
+                    family="trend_momentum",
+                    name="ema_cross",
+                    params={"fast_period": 10, "slow_period": 50},
+                    direction=direction,
+                )
+            ]),
+        )
+
+        def fake_load_ohlcv_multi(symbols, timeframe, **kwargs):
+            limits_by_timeframe[timeframe] = kwargs["limit"]
+            return {
+                symbols[0]: (df.copy(), SimpleNamespace(data_source="synthetic_test", notes=""))
+            }
+
+        def fake_generate_all_reports(all_results, output_dir, run_id, run_meta):
+            captured_meta.update(run_meta)
+            run_dir = Path(output_dir) / run_id
+            run_dir.mkdir(parents=True, exist_ok=True)
+            return run_dir
+
+        monkeypatch.setattr(rm, "load_ohlcv_multi", fake_load_ohlcv_multi)
+        monkeypatch.setattr(rm, "_run_symbol_tf", lambda *args, **kwargs: [])
+        monkeypatch.setattr(rm, "generate_all_reports", fake_generate_all_reports)
+
+        rm.run_research(
+            mode="small",
+            config_path=config_path,
+            output_dir=tmp_path / "runs",
+            run_id="run_max_bars_test",
+            symbols=["BTC/USDT"],
+            timeframes=["M5", "H1"],
+            families=["trend_momentum"],
+            max_workers=1,
+        )
+
+        assert limits_by_timeframe == {"M5": 123, "H1": 456}
+        assert captured_meta["max_bars_by_timeframe"] == {"M5": 123, "H1": 456}
 
     def test_list_runs_empty(self, tmp_path):
         from athena_research.run_manager import list_runs

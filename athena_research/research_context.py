@@ -199,29 +199,29 @@ _STRATEGY_META: dict[str, dict[str, str]] = {
         "source_indicator": "VWAP deviation",
     },
     "cvd_momentum": {
-        "engine": "ENGINE_B",
-        "component": "entry_trigger",
+        "engine": "ENGINE_D",
+        "component": "scalp_momentum_proxy",
         "candidate_action": "ADD_CANDIDATE",
         "structure_context": "orderflow_momentum_proxy",
         "source_indicator": "CVD + VWAP proxy",
     },
     "vwap_reclaim": {
-        "engine": "ENGINE_B",
-        "component": "entry_trigger",
+        "engine": "ENGINE_D",
+        "component": "scalp_momentum_proxy",
         "candidate_action": "ADD_CANDIDATE",
         "structure_context": "vwap_reclaim",
         "source_indicator": "VWAP reclaim",
     },
     "micro_breakout": {
-        "engine": "ENGINE_B",
-        "component": "entry_trigger",
+        "engine": "ENGINE_D",
+        "component": "scalp_momentum_proxy",
         "candidate_action": "ADD_CANDIDATE",
         "structure_context": "micro_structure_break",
         "source_indicator": "Recent range break",
     },
     "ema_scalp_pullback": {
-        "engine": "ENGINE_A",
-        "component": "scalp_pullback_candidate",
+        "engine": "ENGINE_D",
+        "component": "scalp_momentum_proxy",
         "candidate_action": "ADD_CANDIDATE",
         "structure_context": "ema_scalp_pullback",
         "source_indicator": "EMA pullback",
@@ -232,7 +232,12 @@ _STRATEGY_META: dict[str, dict[str, str]] = {
 def strategy_research_meta(strategy_name: str, family: str = "") -> dict[str, str]:
     meta = dict(_STRATEGY_META.get(strategy_name, {}))
     if not meta:
-        engine = "ENGINE_B" if family == "engine_b_proxy" else "RESEARCH"
+        if family == "engine_b_proxy":
+            engine = "ENGINE_B"
+        elif family in {"engine_d_proxy", "scalp_momentum_proxy"}:
+            engine = "ENGINE_D"
+        else:
+            engine = "RESEARCH"
         meta = {
             "engine": engine,
             "component": family or "unclassified",

@@ -295,12 +295,22 @@ def run_research(
     data_cfg = cfg.get("data", {})
     cache_dir = Path(data_cfg.get("cache_dir", "logs/research_lab/data_cache"))
     allow_yfinance = bool(data_cfg.get("ALLOW_YFINANCE_FALLBACK", False))
+    max_bars_cfg = data_cfg.get("max_bars", {}) or {}
+    default_max_bars = int(data_cfg.get("default_max_bars", 1000))
+    max_bars_by_timeframe: dict[str, int] = {}
 
     for tf in timeframes:
+        try:
+            tf_limit = int(max_bars_cfg.get(tf, default_max_bars))
+        except (TypeError, ValueError):
+            tf_limit = default_max_bars
+        tf_limit = max(1, tf_limit)
+        max_bars_by_timeframe[tf] = tf_limit
         try:
             pair_dict = load_ohlcv_multi(
                 symbols, tf,
                 cache_dir=cache_dir,
+                limit=tf_limit,
                 force_refresh=force_refresh,
                 allow_yfinance=allow_yfinance,
             )
@@ -402,6 +412,7 @@ def run_research(
         "combination_count_planned": planned_combination_count,
         "combination_count_executed": executed_combination_count,
         "combination_truncated": combination_truncated,
+        "max_bars_by_timeframe": max_bars_by_timeframe,
     }
     try:
         run_dir = generate_all_reports(all_results, output_dir, run_id, run_meta)

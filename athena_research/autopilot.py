@@ -24,7 +24,7 @@ RESEARCH_STYLE_PROFILES = {
     "timeframes": ["M15", "H1"],
     "zone_set": "scalp_zones",
     "strategy_families": [
-      "scalp_momentum_proxy", "engine_b_proxy", "trend_momentum", "breakout",
+      "engine_d_proxy", "engine_b_proxy", "trend_momentum", "breakout",
       "mean_reversion", "volatility", "stochastic", "divergence"
     ],
     "validation_focus": ["Engine A/B component audit", "fast reaction", "tight stop feasibility", "TP1 hit rate", "fee/slippage sensitivity", "session quality"]
@@ -35,7 +35,7 @@ RESEARCH_STYLE_PROFILES = {
     "strategy_families": [
       "trend_momentum", "pullback", "breakout", "mean_reversion", "engine_b_proxy",
       "volatility", "stochastic", "fibonacci", "aroon_family", "divergence",
-      "trend_follow", "vol_regime", "scalp_momentum_proxy"
+      "trend_follow", "vol_regime", "engine_d_proxy"
     ],
     "validation_focus": ["Engine A/B component audit", "same-day continuation", "intraday reversal", "liquidity sweep into zone", "session continuation", "target room"]
   },
@@ -58,8 +58,8 @@ _FAMILY_ALTERNATIVES: dict[str, list[str]] = {
     "breakout":        ["volatility", "vol_regime", "engine_b_proxy"],
     "mean_reversion":  ["divergence", "stochastic", "volatility"],
     "volatility":      ["engine_b_proxy", "vol_regime", "mean_reversion"],
-    "engine_b_proxy":  ["scalp_momentum_proxy", "breakout", "volatility"],
-    "scalp_momentum_proxy":  ["engine_b_proxy", "mean_reversion", "breakout"],
+    "engine_b_proxy":  ["engine_d_proxy", "breakout", "volatility"],
+    "engine_d_proxy":  ["engine_b_proxy", "mean_reversion", "breakout"],
     "stochastic":      ["trend_momentum", "divergence"],
     "fibonacci":       ["pullback", "engine_b_proxy"],
     "aroon_family":    ["trend_momentum", "trend_follow"],

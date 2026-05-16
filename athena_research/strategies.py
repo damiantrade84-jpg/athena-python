@@ -624,12 +624,12 @@ def strategy_vwap_reclaim(df: pd.DataFrame, params: dict) -> dict:
     band = band_std * atr
 
     long_entries = _crossed_above(close, vwap + band)
-    long_exits = close < vwap - band
+    long_exits = close < vwap - band * atr_sl
     short_entries = _crossed_below(close, vwap - band)
-    short_exits = close > vwap + band
+    short_exits = close > vwap + band * atr_sl
 
     return _signals(long_entries, long_exits, short_entries, short_exits,
-                    meta={"family": "scalp_momentum_proxy", "sub": "vwap_reclaim"})
+                    meta={"family": "engine_d_proxy", "sub": "vwap_reclaim"})
 
 
 def strategy_micro_breakout(df: pd.DataFrame, params: dict) -> dict:
@@ -639,14 +639,15 @@ def strategy_micro_breakout(df: pd.DataFrame, params: dict) -> dict:
 
     recent_high = df["high"].rolling(range_bars).max().shift(1)
     recent_low = df["low"].rolling(range_bars).min().shift(1)
+    atr = _atr(df["high"], df["low"], close)
 
     long_entries = _crossed_above(close, recent_high)
-    long_exits = close < recent_low
+    long_exits = close < recent_low - atr * atr_sl
     short_entries = _crossed_below(close, recent_low)
-    short_exits = close > recent_high
+    short_exits = close > recent_high + atr * atr_sl
 
     return _signals(long_entries, long_exits, short_entries, short_exits,
-                    meta={"family": "scalp_momentum_proxy", "sub": "micro_breakout"})
+                    meta={"family": "engine_d_proxy", "sub": "micro_breakout"})
 
 
 def strategy_ema_scalp_pullback(df: pd.DataFrame, params: dict) -> dict:
@@ -670,7 +671,7 @@ def strategy_ema_scalp_pullback(df: pd.DataFrame, params: dict) -> dict:
     short_exits = close > ema + atr * atr_sl
 
     return _signals(long_entries, long_exits, short_entries, short_exits,
-                    meta={"family": "scalp_momentum_proxy", "sub": "ema_scalp_pullback"})
+                    meta={"family": "engine_d_proxy", "sub": "ema_scalp_pullback"})
 
 
 # ── G2. CVD Momentum Proxy (NOT real Engine D) ──────────────────────────────
@@ -702,7 +703,7 @@ def strategy_cvd_momentum(df: pd.DataFrame, params: dict) -> dict:
     short_exits = close > vwap + atr * atr_sl
 
     return _signals(long_entries, long_exits, short_entries, short_exits,
-                    meta={"family": "scalp_momentum_proxy", "sub": "cvd_momentum"})
+                    meta={"family": "engine_d_proxy", "sub": "cvd_momentum"})
 
 
 # ── H. Stochastic Strategies ────────────────────────────────────────────────
@@ -999,10 +1000,10 @@ STRATEGY_REGISTRY: dict[str, tuple[str, Callable]] = {
     "atr_compression":        ("volatility",      strategy_atr_compression),
     "ob_bos":                 ("engine_b_proxy",  strategy_ob_bos),
     "structure_filters":      ("engine_b_proxy",  strategy_structure_filters),
-    "vwap_reclaim":           ("scalp_momentum_proxy",  strategy_vwap_reclaim),
-    "micro_breakout":         ("scalp_momentum_proxy",  strategy_micro_breakout),
-    "ema_scalp_pullback":     ("scalp_momentum_proxy",  strategy_ema_scalp_pullback),
-    "cvd_momentum":           ("scalp_momentum_proxy",  strategy_cvd_momentum),
+    "vwap_reclaim":           ("engine_d_proxy",  strategy_vwap_reclaim),
+    "micro_breakout":         ("engine_d_proxy",  strategy_micro_breakout),
+    "ema_scalp_pullback":     ("engine_d_proxy",  strategy_ema_scalp_pullback),
+    "cvd_momentum":           ("engine_d_proxy",  strategy_cvd_momentum),
     "stochastic_cross":       ("stochastic",      strategy_stochastic_cross),
     "stochastic_divergence":  ("stochastic",      strategy_stochastic_divergence),
     "fib_retracement":        ("fibonacci",        strategy_fib_retracement),
@@ -1014,6 +1015,11 @@ STRATEGY_REGISTRY: dict[str, tuple[str, Callable]] = {
     "realized_vol_breakout":  ("vol_regime",       strategy_realized_vol_breakout),
 }
 
+_ENGINE_D_PROXY_STRATEGIES = ["vwap_reclaim", "micro_breakout", "ema_scalp_pullback", "cvd_momentum"]
+FAMILY_ALIASES: dict[str, str] = {
+    "scalp_momentum_proxy": "engine_d_proxy",
+}
+
 FAMILY_STRATEGIES: dict[str, list[str]] = {
     "trend_momentum": ["ema_cross", "ema_alignment", "macd_direction"],
     "pullback":       ["pullback_ema"],
@@ -1021,7 +1027,9 @@ FAMILY_STRATEGIES: dict[str, list[str]] = {
     "mean_reversion": ["rsi_extreme", "bollinger_touch", "vwap_deviation"],
     "volatility":     ["bb_squeeze_breakout", "atr_compression"],
     "engine_b_proxy": ["ob_bos", "structure_filters"],
-    "scalp_momentum_proxy": ["vwap_reclaim", "micro_breakout", "ema_scalp_pullback", "cvd_momentum"],
+    "engine_d_proxy": _ENGINE_D_PROXY_STRATEGIES,
+    # Backward-compatible alias for older UI/autopilot references.
+    "scalp_momentum_proxy": _ENGINE_D_PROXY_STRATEGIES,
     "stochastic":     ["stochastic_cross", "stochastic_divergence"],
     "fibonacci":      ["fib_retracement"],
     "aroon_family":   ["aroon_trend"],
@@ -1047,15 +1055,19 @@ def iter_strategy_specs(
     direction: str = "both",
 ) -> Iterator[StrategySpec]:
     """Yield all StrategySpec instances for the requested families."""
-    for family in families:
-        strategy_names = FAMILY_STRATEGIES.get(family, [])
+    for requested_family in families:
+        canonical_family = FAMILY_ALIASES.get(requested_family, requested_family)
+        strategy_names = FAMILY_STRATEGIES.get(requested_family, FAMILY_STRATEGIES.get(canonical_family, []))
+        family_cfg = strategy_params.get(requested_family)
+        if family_cfg is None and canonical_family != requested_family:
+            family_cfg = strategy_params.get(canonical_family, {})
+        family_cfg = family_cfg or {}
         for sname in strategy_names:
-            family_cfg = strategy_params.get(family, {})
             param_cfg = family_cfg.get(sname, {})
             grids = generate_param_grid(sname, param_cfg) if param_cfg else [{}]
             for params in grids:
                 yield StrategySpec(
-                    family=family,
+                    family=canonical_family,
                     name=sname,
                     params=params,
                     direction=direction,
