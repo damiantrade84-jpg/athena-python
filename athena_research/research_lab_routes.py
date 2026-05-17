@@ -154,6 +154,8 @@ def register_research_lab_routes(app) -> None:
                     params=params,
                     directions=directions,
                     max_combinations=max_combinations,
+                    market_group=body.get("market_group"),
+                    trading_style=body.get("trading_style"),
                 )
                 _merge_run_meta_tags(_DEFAULT_OUTPUT, run_id, run_meta_tags)
                 _active_runs[run_id]["status"] = "complete"

@@ -26,6 +26,7 @@ from ai_research_contracts import (
     ResearchRecommendation,
     ResearchResultSummary,
 )
+from athena_research.metrics import validate_metric_record
 
 log = logging.getLogger(__name__)
 
@@ -65,6 +66,19 @@ def _read_csv_safe(path: Path) -> list[dict[str, Any]]:
     except Exception as exc:
         log.warning("[ResearchAgent] Failed to read %s: %s", path, exc)
         return []
+
+
+def _missing_files(run_dir: Path, filenames: list[str]) -> list[str]:
+    return [name for name in filenames if not (run_dir / name).exists()]
+
+
+def _append_incomplete_run_warnings(run_data: dict[str, Any], missing: list[str]) -> None:
+    if not missing:
+        return
+    run_data["missing_files"] = missing
+    run_data.setdefault("warnings", []).append(
+        "Incomplete research run output; missing " + ", ".join(missing)
+    )
 
 
 def _read_json_safe(path: Path) -> dict[str, Any] | list[Any] | None:
@@ -218,6 +232,12 @@ def load_latest_research_results(limit: int = 5) -> list[dict[str, Any]]:
             run_data["timeframes"] = _collect_field(ranked, "timeframe") or run_data.get("timeframes", [])
             run_data["families"] = _collect_field(ranked, "family") or run_data.get("families", [])
             run_data["engines"] = _collect_field(ranked, "engine")
+            invalid_rows = [idx for idx, row in enumerate(ranked, start=1) if validate_metric_record(row)]
+            if invalid_rows:
+                run_data["invalid_metric_rows"] = len(invalid_rows)
+                run_data.setdefault("warnings", []).append(
+                    f"Invalid metric values in {len(invalid_rows)} ranked row(s)."
+                )
 
         summary = _read_csv_safe(summary_path)
         if summary:
@@ -225,6 +245,10 @@ def load_latest_research_results(limit: int = 5) -> list[dict[str, Any]]:
 
         run_data["has_ranked"] = bool(ranked)
         run_data["has_summary"] = bool(summary)
+        _append_incomplete_run_warnings(
+            run_data,
+            _missing_files(run_dir, ["ranked_strategies.csv", "research_summary.csv"]),
+        )
         results.append(run_data)
 
     # Backtest matrix runs

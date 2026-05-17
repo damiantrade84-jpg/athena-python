@@ -151,6 +151,35 @@ class TestResearchAgentCore:
             ra._RESEARCH_LAB_DIR = original_dir
             ra._BACKTEST_MATRIX_DIR = original_dir
 
+    def test_load_latest_reports_incomplete_run_outputs(self):
+        """Existing run dirs with missing CSVs must be surfaced, not silently treated as empty results."""
+        from athena_research.research_agent import load_latest_research_results
+        import athena_research.research_agent as ra
+        import shutil
+
+        tmp_root = Path(tempfile.mkdtemp(prefix="ra_incomplete_test_"))
+        run_dir = tmp_root / "run_20260502_120000"
+        run_dir.mkdir(parents=True)
+        (run_dir / "run_meta.json").write_text(json.dumps({"mode": "tiny"}), encoding="utf-8")
+
+        original_research = ra._RESEARCH_LAB_DIR
+        original_backtest = ra._BACKTEST_MATRIX_DIR
+        ra._RESEARCH_LAB_DIR = tmp_root
+        ra._BACKTEST_MATRIX_DIR = tmp_root / "missing_backtests"
+        try:
+            results = load_latest_research_results(limit=5)
+        finally:
+            ra._RESEARCH_LAB_DIR = original_research
+            ra._BACKTEST_MATRIX_DIR = original_backtest
+            shutil.rmtree(tmp_root, ignore_errors=True)
+
+        assert results[0]["run_id"] == run_dir.name
+        assert results[0]["has_ranked"] is False
+        assert results[0]["has_summary"] is False
+        assert "ranked_strategies.csv" in results[0]["missing_files"]
+        assert "research_summary.csv" in results[0]["missing_files"]
+        assert any("incomplete" in warning.lower() for warning in results[0]["warnings"])
+
     def test_summarize_nonexistent_run_returns_warning(self):
         from athena_research.research_agent import summarize_research_results
         summary = summarize_research_results("nonexistent_run_id")

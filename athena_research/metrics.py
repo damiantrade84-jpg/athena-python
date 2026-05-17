@@ -19,6 +19,62 @@ log = logging.getLogger(__name__)
 
 # ─── Result schema ────────────────────────────────────────────────────────────
 
+_METRIC_RANGES = {
+    "win_rate": (0.0, 1.0),
+    "exposure_pct": (0.0, 1.0),
+    "robustness_score": (0.0, 1.0),
+    "param_sensitivity": (0.0, 1.0),
+}
+
+
+def _finite_float(value) -> float | None:
+    try:
+        f = float(value)
+    except (TypeError, ValueError):
+        return None
+    return f if math.isfinite(f) else None
+
+
+def validate_metric_record(record: dict) -> list[str]:
+    """Return deterministic validation errors for impossible metric values."""
+    errors: list[str] = []
+    trade_count = record.get("trade_count")
+    if trade_count not in (None, ""):
+        try:
+            if int(trade_count) < 0:
+                errors.append("trade_count_negative")
+        except (TypeError, ValueError):
+            errors.append("trade_count_invalid")
+
+    for key, (lo, hi) in _METRIC_RANGES.items():
+        if key not in record or record.get(key) in (None, ""):
+            continue
+        value = _finite_float(record.get(key))
+        if value is None:
+            errors.append(f"{key}_invalid")
+        elif value < lo or value > hi:
+            errors.append(f"{key}_out_of_range")
+
+    profit_factor = record.get("profit_factor")
+    if profit_factor not in (None, ""):
+        pf = _finite_float(profit_factor)
+        if pf is None:
+            errors.append("profit_factor_invalid")
+        elif pf < 0:
+            errors.append("profit_factor_negative")
+    return errors
+
+
+def compute_param_sensitivity(returns) -> float:
+    """Score stability across neighbouring parameter returns: 1 stable, 0 unstable."""
+    vals = np.array([float(v) for v in returns if _finite_float(v) is not None], dtype=float)
+    if len(vals) < 2:
+        return float("nan")
+    spread = float(np.nanstd(vals))
+    ref = max(abs(float(np.nanmean(vals))), 0.01)
+    return float(max(0.0, min(1.0, 1.0 - spread / ref)))
+
+
 @dataclass
 class StrategyMetrics:
     run_id: str

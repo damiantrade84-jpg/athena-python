@@ -22,7 +22,7 @@ import yaml
 from athena_research.data_loader import (
     asset_class_for, load_ohlcv_multi, vbt_freq,
 )
-from athena_research.metrics import StrategyMetrics, evaluate_strategy
+from athena_research.metrics import StrategyMetrics, compute_param_sensitivity, evaluate_strategy
 from athena_research.reporting import generate_all_reports
 from athena_research.research_context import annotate_research_results
 from athena_research.strategies import StrategySpec, iter_strategy_specs, run_strategy
@@ -189,6 +189,8 @@ def run_research(
     zones: Optional[list[str]] = None,
     test_directions: bool = False,
     max_combinations: Optional[int] = None,
+    trading_style: Optional[str] = None,
+    market_group: Optional[str] = None,
 ) -> dict:
     """
     Execute a full or focused research lab run.
@@ -230,6 +232,9 @@ def run_research(
     is_pct = float(cfg.get("is_pct", 0.70))
     min_trades = int(cfg.get("min_trades", 20))
     strategy_params = cfg.get("strategies", {})
+    if trading_style is None and active_zones:
+        if len(set(active_zones)) == 1 and active_zones[0] in {"scalp", "intra", "swing"}:
+            trading_style = active_zones[0]
 
     log.info("[run_manager] Run %s | mode=%s | symbols=%d | TFs=%s | families=%s",
              run_id, mode, len(symbols), timeframes, families)
@@ -239,37 +244,53 @@ def run_research(
     if test_directions and direction == "both":
         direction_list = ["both", "long", "short"]
 
-    # Build strategy specs for all directions
-    specs = []
-    for d in direction_list:
-        specs.extend(iter_strategy_specs(families, strategy_params, direction=d))
-    
-    # Apply strategy/param filters
-    if strategies is not None:
-        if isinstance(strategies, str):
-            strategies = [s.strip() for s in strategies.split(",") if s.strip()]
-        specs = [s for s in specs if s.name in strategies]
+    selected_strategies = strategies
+    if selected_strategies is not None and isinstance(selected_strategies, str):
+        selected_strategies = [s.strip() for s in selected_strategies.split(",") if s.strip()]
+    selected_directions = directions
+    if selected_directions is not None and isinstance(selected_directions, str):
+        selected_directions = [d.upper().strip() for d in selected_directions.split(",") if d.strip()]
 
-    if params is not None:
-        # If params is passed, keep only specs that match the passed parameters
-        # params can be a dict of key=values
-        filtered_specs = []
-        for s in specs:
-            matches = True
-            for pk, pv in params.items():
-                if str(s.params.get(pk)) != str(pv):
-                    matches = False
-                    break
-            if matches:
-                filtered_specs.append(s)
-        specs = filtered_specs
+    def _build_specs_for_context(tf: str | None = None, group: str | None = None) -> list[StrategySpec]:
+        built: list[StrategySpec] = []
+        for d in direction_list:
+            try:
+                generated = iter_strategy_specs(
+                    families,
+                    strategy_params,
+                    direction=d,
+                    trading_style=trading_style,
+                    market_group=group or market_group,
+                    timeframe=tf,
+                )
+            except TypeError:
+                # Older tests and integrations monkeypatch the historical
+                # three-argument contract. Keep that compatibility while the
+                # real implementation supports contextual overlays.
+                generated = iter_strategy_specs(families, strategy_params, direction=d)
+            built.extend(generated)
+        if selected_strategies is not None:
+            built = [s for s in built if s.name in selected_strategies]
+        if params is not None:
+            filtered_specs = []
+            for s in built:
+                matches = True
+                for pk, pv in params.items():
+                    if str(s.params.get(pk)) != str(pv):
+                        matches = False
+                        break
+                if matches:
+                    filtered_specs.append(s)
+            built = filtered_specs
+        if selected_directions is not None:
+            built = [s for s in built if s.direction.upper() in [d.upper() for d in selected_directions]]
+        return built
 
-    if directions is not None:
-        if isinstance(directions, str):
-            directions = [d.upper().strip() for d in directions.split(",") if d.strip()]
-        specs = [s for s in specs if s.direction.upper() in [d.upper() for d in directions]]
+    # Generic planned count; concrete pair specs are rebuilt after data load so
+    # timeframe/market profile overlays can differ per symbol/timeframe.
+    specs = _build_specs_for_context()
 
-    log.info("[run_manager] %d strategy specs to test", len(specs))
+
 
     requested_combination_count = len(symbols) * len(timeframes) * len(specs)
     combination_cap = None
@@ -325,11 +346,14 @@ def run_research(
     specs_by_pair: dict[tuple[str, str], list[StrategySpec]] = {}
     remaining = combination_cap
     for key in all_data.keys():
+        symbol, tf = key
+        pair_market_group = market_group or asset_class_for(symbol)
+        pair_specs_all = _build_specs_for_context(tf=tf, group=pair_market_group)
         if remaining is None:
-            specs_by_pair[key] = specs
+            specs_by_pair[key] = pair_specs_all
             continue
-        take = min(len(specs), remaining)
-        specs_by_pair[key] = specs[:take]
+        take = min(len(pair_specs_all), remaining)
+        specs_by_pair[key] = pair_specs_all[:take]
         remaining -= take
 
     # Run strategies in parallel
@@ -369,19 +393,29 @@ def run_research(
 
     log.info("[run_manager] Completed %d strategy evaluations", len(all_results))
 
-    # Apply symbol breadth component to robustness (0.20 weight)
+    # Apply symbol breadth component to robustness (0.20 weight) and parameter
+    # sensitivity across neighbouring configs in the same symbol/TF/family bucket.
     from collections import defaultdict
     strategy_symbol_returns: dict[str, list[float]] = defaultdict(list)
+    sensitivity_buckets: dict[str, list[float]] = defaultdict(list)
     for m in all_results:
         if math.isfinite(m.net_return):
             key = f"{m.family}::{m.strategy_name}::{m.params_str}"
             strategy_symbol_returns[key].append(m.net_return)
+            sens_key = f"{m.symbol}::{m.timeframe}::{m.family}::{m.strategy_name}::{m.direction}"
+            sensitivity_buckets[sens_key].append(m.net_return)
     for m in all_results:
         key = f"{m.family}::{m.strategy_name}::{m.params_str}"
         returns = strategy_symbol_returns.get(key, [])
         if returns:
             breadth = sum(1 for r in returns if r > 0) / len(returns)
             m.robustness_score = min(1.0, m.robustness_score + breadth * 0.20)
+        sens_key = f"{m.symbol}::{m.timeframe}::{m.family}::{m.strategy_name}::{m.direction}"
+        sensitivity = compute_param_sensitivity(sensitivity_buckets.get(sens_key, []))
+        if math.isfinite(sensitivity):
+            m.param_sensitivity = sensitivity
+            # Fold stability into robustness with a small research-only weight.
+            m.robustness_score = min(1.0, m.robustness_score + sensitivity * 0.10)
 
     # Tag results with zone info based on timeframe
     zone_cfg = cfg.get("zones", {})
@@ -413,6 +447,8 @@ def run_research(
         "combination_count_executed": executed_combination_count,
         "combination_truncated": combination_truncated,
         "max_bars_by_timeframe": max_bars_by_timeframe,
+        "market_group": market_group,
+        "trading_style": trading_style,
     }
     try:
         run_dir = generate_all_reports(all_results, output_dir, run_id, run_meta)

@@ -21,6 +21,7 @@ from athena_research.metrics import StrategyMetrics
 log = logging.getLogger(__name__)
 
 MIN_IMPLEMENTATION_TRADES = 30
+RUN_META_SCHEMA_VERSION = 1
 
 OUTPUT_COLUMNS = [
     "run_id", "symbol", "asset_class", "timeframe", "zone", "family", "strategy_name",
@@ -947,8 +948,12 @@ def _engine_recommendation(valid: pd.DataFrame, family: str) -> str:
 
 def write_run_meta(run_dir: Path, run_id: str, run_meta: dict) -> None:
     meta_path = run_dir / "run_meta.json"
-    data = {"run_id": run_id, **run_meta,
-            "generated_at": datetime.now(timezone.utc).isoformat()}
+    data = {
+        "schema_version": RUN_META_SCHEMA_VERSION,
+        "run_id": run_id,
+        **run_meta,
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+    }
     meta_path.write_text(json.dumps(data, indent=2, default=str), encoding="utf-8")
 
 

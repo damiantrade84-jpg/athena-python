@@ -1049,12 +1049,45 @@ def generate_param_grid(strategy_name: str, param_config: dict) -> list[dict]:
     return [dict(zip(keys, combo)) for combo in combos]
 
 
+def _deep_merge_dicts(*configs: dict | None) -> dict:
+    """Merge nested dict configs without mutating the source config."""
+    merged: dict = {}
+    for cfg in configs:
+        if not isinstance(cfg, dict):
+            continue
+        for key, value in cfg.items():
+            if isinstance(value, dict) and isinstance(merged.get(key), dict):
+                merged[key] = _deep_merge_dicts(merged[key], value)
+            else:
+                merged[key] = value
+    return merged
+
+
+def _profiled_strategy_params(
+    strategy_params: dict,
+    trading_style: str | None = None,
+    market_group: str | None = None,
+    timeframe: str | None = None,
+) -> dict:
+    """Apply base + style + market + timeframe parameter overlays."""
+    base = {k: v for k, v in (strategy_params or {}).items()
+            if k not in {"profiles", "market_profiles", "timeframe_profiles"}}
+    style_cfg = (strategy_params or {}).get("profiles", {}).get(trading_style or "", {})
+    market_cfg = (strategy_params or {}).get("market_profiles", {}).get(market_group or "", {})
+    timeframe_cfg = (strategy_params or {}).get("timeframe_profiles", {}).get(timeframe or "", {})
+    return _deep_merge_dicts(base, style_cfg, market_cfg, timeframe_cfg)
+
+
 def iter_strategy_specs(
     families: list[str],
     strategy_params: dict,
     direction: str = "both",
+    trading_style: str | None = None,
+    market_group: str | None = None,
+    timeframe: str | None = None,
 ) -> Iterator[StrategySpec]:
     """Yield all StrategySpec instances for the requested families."""
+    strategy_params = _profiled_strategy_params(strategy_params, trading_style, market_group, timeframe)
     for requested_family in families:
         canonical_family = FAMILY_ALIASES.get(requested_family, requested_family)
         strategy_names = FAMILY_STRATEGIES.get(requested_family, FAMILY_STRATEGIES.get(canonical_family, []))

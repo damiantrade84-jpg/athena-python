@@ -137,6 +137,55 @@ def test_cross_helpers_ignore_nan_warmup_values():
     assert _crossed_below(a, b).tolist() == [False, False, False, True]
 
 
+def test_strategy_specs_apply_market_style_timeframe_profiles():
+    from athena_research.strategies import iter_strategy_specs
+
+    cfg = {
+        "trend_momentum": {
+            "ema_cross": {"fast_period": [20], "slow_period": [50]},
+        },
+        "profiles": {
+            "scalp": {
+                "trend_momentum": {
+                    "ema_cross": {"fast_period": [5], "slow_period": [13]},
+                }
+            },
+            "swing": {
+                "trend_momentum": {
+                    "ema_cross": {"fast_period": [50], "slow_period": [200]},
+                }
+            },
+        },
+        "market_profiles": {
+            "crypto": {
+                "trend_momentum": {
+                    "ema_cross": {"adx_min": [25]},
+                }
+            }
+        },
+        "timeframe_profiles": {
+            "M15": {
+                "trend_momentum": {
+                    "ema_cross": {"rsi_confirm": [True]},
+                }
+            }
+        },
+    }
+
+    scalp_crypto = list(iter_strategy_specs(
+        ["trend_momentum"], cfg, trading_style="scalp", market_group="crypto", timeframe="M15"
+    ))
+    swing = list(iter_strategy_specs(
+        ["trend_momentum"], cfg, trading_style="swing", market_group="forex", timeframe="D1"
+    ))
+
+    scalp_ema = next(spec for spec in scalp_crypto if spec.name == "ema_cross")
+    swing_ema = next(spec for spec in swing if spec.name == "ema_cross")
+
+    assert scalp_ema.params == {"fast_period": 5, "slow_period": 13, "adx_min": 25, "rsi_confirm": True}
+    assert swing_ema.params == {"fast_period": 50, "slow_period": 200}
+
+
 def test_pandas_portfolio_exposure_counts_flat_price_holding_bars():
     from athena_research.metrics import _pandas_portfolio
 
@@ -165,6 +214,44 @@ def test_profit_factor_is_finite_when_no_losing_trades():
     )
 
     assert math.isfinite(stats["profit_factor"])
+
+
+def test_validate_metric_record_rejects_impossible_values():
+    from athena_research.metrics import validate_metric_record
+
+    errors = validate_metric_record({
+        "trade_count": -1,
+        "win_rate": 1.25,
+        "profit_factor": -0.5,
+        "exposure_pct": 1.5,
+    })
+
+    assert "trade_count_negative" in errors
+    assert "win_rate_out_of_range" in errors
+    assert "profit_factor_negative" in errors
+    assert "exposure_pct_out_of_range" in errors
+
+
+def test_compute_param_sensitivity_penalises_unstable_neighbours():
+    from athena_research.metrics import compute_param_sensitivity
+
+    stable = compute_param_sensitivity([0.10, 0.11, 0.09, 0.10])
+    unstable = compute_param_sensitivity([0.30, -0.20, 0.05, -0.10])
+
+    assert 0.0 <= unstable <= stable <= 1.0
+
+
+def test_research_run_meta_includes_schema_version(tmp_path):
+    from athena_research.reporting import RUN_META_SCHEMA_VERSION, write_run_meta
+
+    run_dir = tmp_path / "run_schema_test"
+    run_dir.mkdir()
+
+    write_run_meta(run_dir, "run_schema_test", {"mode": "tiny"})
+
+    meta = json.loads((run_dir / "run_meta.json").read_text(encoding="utf-8"))
+    assert meta["schema_version"] == RUN_META_SCHEMA_VERSION
+    assert meta["run_id"] == "run_schema_test"
 
 
 def test_research_run_meta_tags_keep_session_relationship_fields(tmp_path):
