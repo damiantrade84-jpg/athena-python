@@ -45,7 +45,13 @@ interface BacktestResult {
   scoreBands?: Record<string, unknown>;
   regimeStats?: Record<string, unknown>;
   funnel?: Record<string, unknown>;
-  wfSplit?: { is_sqn?: number; oos_sqn?: number; [k: string]: unknown };
+  wfSplit?: {
+    is_sqn?: number | null;
+    oos_sqn?: number | null;
+    lowSampleSqnWarning?: boolean;
+    lowSampleSqnTradeFloor?: number;
+    [k: string]: unknown;
+  };
   confluenceAnalysis?: Record<string, unknown>;
   btStyle?: string;
   btStyleRequested?: string;
@@ -78,6 +84,23 @@ interface BacktestResult {
   notes?: string;
   error?: string;
   success?: boolean;
+  researchMetrics?: {
+    tradeCount?: number;
+    psr?: { available?: boolean; value?: number | null; note?: string; sampleCount?: number };
+    dsr?: {
+      available?: boolean;
+      value?: number | null;
+      assumptions?: string[];
+      psrNote?: string;
+    };
+    pbo?: { available?: boolean; value?: number | null; note?: string; method?: string };
+    bootstrapCI?: { available?: boolean; assumptions?: string[] };
+    assumptions?: string[];
+    runtimeHeavy?: string[];
+    sampleMoments?: Record<string, unknown>;
+  };
+  metricsInterpretationNotes?: string[];
+  researchValidation?: Record<string, unknown>;
   [k: string]: unknown;
 }
 
@@ -489,6 +512,62 @@ export default function BacktestPanel() {
                 <Stat title="IS SQN" value={result.wfSplit?.is_sqn == null ? '—' : fmtNum(result.wfSplit.is_sqn, 2)} />
                 <Stat title="OOS SQN" value={result.wfSplit?.oos_sqn == null ? '—' : fmtNum(result.wfSplit.oos_sqn, 2)} />
               </div>
+
+              {result.wfSplit?.lowSampleSqnWarning === true && (
+                <div className="flex items-center gap-2 p-3 rounded-md bg-warning/15 border border-warning/40 text-warning text-xs">
+                  <AlertTriangle className="w-4 h-4 shrink-0" />
+                  <span>
+                    Low sample warning: fewer than {result.wfSplit?.lowSampleSqnTradeFloor ?? 30} realised trades — treat SQN /
+                    risk metrics as indicative only.
+                  </span>
+                </div>
+              )}
+
+              {Array.isArray(result.metricsInterpretationNotes) && result.metricsInterpretationNotes.length > 0 && (
+                <div className="rounded-md border border-border/60 bg-muted/20 px-3 py-2 text-[11px] text-muted-foreground space-y-1">
+                  <p className="font-semibold text-foreground/80 uppercase tracking-wider text-[10px]">Interpretation</p>
+                  {result.metricsInterpretationNotes.map((line, i) => (
+                    <p key={`mi-${i}`}>{line}</p>
+                  ))}
+                </div>
+              )}
+
+              {result.researchMetrics && (
+                <Card className="border-border/60 bg-card/50">
+                  <CardHeader className="pb-2">
+                    <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Rajdhani', sans-serif", letterSpacing: '0.12em' }}>Research integrity (PSR / DSR / PBO)</CardTitle>
+                  </CardHeader>
+                  <CardContent className="space-y-2 text-[11px] text-muted-foreground">
+                    <div className="flex flex-wrap gap-2">
+                      <Badge variant="outline" className="text-[10px] font-mono">
+                        trades {result.researchMetrics.tradeCount ?? '—'}
+                      </Badge>
+                      <Badge variant="outline" className="text-[10px] font-mono">
+                        PSR {result.researchMetrics.psr?.available ? `Φ=${fmtNum(Number(result.researchMetrics.psr?.value), 3)}` : 'n/a'}
+                      </Badge>
+                      <Badge variant="outline" className="text-[10px] font-mono">
+                        DSR {result.researchMetrics.dsr?.available ? `Φ=${fmtNum(Number(result.researchMetrics.dsr?.value), 3)}` : 'n/a'}
+                      </Badge>
+                    </div>
+                    {result.researchMetrics.psr?.note && (
+                      <p><span className="text-foreground/80">PSR note:</span> {String(result.researchMetrics.psr.note)}</p>
+                    )}
+                    {result.researchMetrics.pbo?.note && (
+                      <p><span className="text-foreground/80">PBO:</span> {String(result.researchMetrics.pbo.note)} — {result.researchMetrics.pbo?.available ? fmtNum(Number(result.researchMetrics.pbo?.value), 2) : 'not computed'}</p>
+                    )}
+                    {Array.isArray(result.researchMetrics.assumptions) && result.researchMetrics.assumptions.length > 0 && (
+                      <div>
+                        <p className="text-foreground/80 text-[10px] uppercase tracking-wider mb-1">Assumptions / flags</p>
+                        <ul className="list-disc pl-4 space-y-0.5 font-mono text-[10px]">
+                          {result.researchMetrics.assumptions.slice(0, 12).map((a) => (
+                            <li key={a}>{a}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                  </CardContent>
+                </Card>
+              )}
 
               {/* Equity curve */}
               <Card className="border-border/60 bg-card/50">

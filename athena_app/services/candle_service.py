@@ -7,6 +7,17 @@ from typing import Callable, Dict, Any
 from config import scan_candle_limits
 
 
+def engine_a_scoring_candles_from_state(
+    pair: Dict[str, Any] | None,
+    state: Dict[str, Any] | None,
+    fallback: list | None = None,
+) -> list:
+    """Return closed candles for Engine A scoring from a market-state payload."""
+    if isinstance(state, dict):
+        return list(state.get("confirmed") or [])
+    return list(fallback or [])
+
+
 def _resolve_regime_state(sig: Dict[str, Any]) -> int | None:
     regime = sig.get("regime")
     if isinstance(regime, dict):
@@ -42,6 +53,8 @@ def recompute_levels_for_style(
     atr_for_levels: Callable[..., float | None],
     calc_levels: Callable[..., dict],
     config: dict,
+    get_pair_level_atr_class: Callable[[dict], str] | None = None,
+    bybit_atr_for_levels: Callable[..., float | None] | None = None,
 ) -> dict:
     """Recompute SL/TP levels for selected style using fresh ATR context."""
     mode = (pip_mode or "swing").strip().lower()
@@ -60,27 +73,43 @@ def recompute_levels_for_style(
     if not d1 or not h4 or not h1:
         raise ValueError("Candles unavailable")
 
-    # Match analyze_pair() indicator hygiene: ignore still-forming bars.
-    d1 = d1[:-1] if len(d1) > 1 else d1
-    h4 = h4[:-1] if len(h4) > 1 else h4
-    h1 = h1[:-1] if len(h1) > 1 else h1
+    # Parity with analyze_pair() F8: use the fetched series as-is (including the
+    # open/forming bar when the provider includes it). Do not strip the last bar here.
 
     d1i = calc_indicators_with_normalized(d1, ptype) if d1 else {}
     h4i = calc_indicators_with_normalized(h4, ptype) if h4 else {}
     h1i = calc_indicators_with_normalized(h1, ptype) if h1 else {}
 
     exec_atr = atr_for_levels(d1i, h4i, h1i, pair=pair_obj, style=mode)
+    if (
+        str(ptype).lower() == "crypto"
+        and str(config.get("ENGINE_A_CRYPTO_LEVELS_FEED", "bybit")).lower() == "bybit"
+    ):
+        bybit_atr = (
+            bybit_atr_for_levels(pair_obj, mode)
+            if callable(bybit_atr_for_levels)
+            else None
+        )
+        if bybit_atr:
+            exec_atr = bybit_atr
+        elif not bool(config.get("ENGINE_A_CRYPTO_LEVELS_SIGNAL_FEED_FALLBACK", False)):
+            raise ValueError("Bybit ATR unavailable")
     if not exec_atr or exec_atr <= 0:
         raise ValueError("ATR unavailable")
 
     exec_price = float(sig.get("price") or 0.0)
     exec_dir = sig.get("direction", "LONG")
     regime_state = _resolve_regime_state(sig)
+    level_atr_class = (
+        get_pair_level_atr_class(pair_obj)
+        if callable(get_pair_level_atr_class)
+        else ptype
+    )
     lvl = calc_levels(
         exec_price,
         exec_atr,
         exec_dir,
-        ptype,
+        level_atr_class,
         regime_state=regime_state,
         style=mode,
     )

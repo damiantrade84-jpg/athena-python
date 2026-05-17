@@ -11,8 +11,18 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Skeleton } from '@/components/ui/skeleton';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
 import { ErrorBanner } from '@/components/shared';
-import { GitMerge, Play, BarChart3, Layers, Activity, Zap, Eye } from 'lucide-react';
+import { GitMerge, Play, BarChart3, Layers, Activity, Zap, Eye, Clock, Sun, Moon, FileText } from 'lucide-react';
 import { fmtNum, toNum } from '@/lib/utils';
 import { fmtPrice } from '@/lib/athenaFormat';
 import type {
@@ -22,6 +32,8 @@ import type {
   CompareResponse,
   PairsResponse,
   PairListEntry,
+  ChartAnalysisResponse,
+  AiTextReviewResponse,
 } from '@/types/athena';
 import { AreaChart, Area, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 
@@ -184,12 +196,25 @@ export default function EngineCPanel() {
   const [btPair, setBtPair] = useState<string>('EURUSD');
   const [btResult, setBtResult] = useState<EngineCBacktestResponse | null>(null);
 
+  // Execution state
+  const [confirmRow, setConfirmRow] = useState<EngineCConsensusRow | null>(null);
+  const [pendingStyle, setPendingStyle] = useState<'scalp' | 'intraday' | 'swing'>('swing');
+  const [sizingOverride, setSizingOverride] = useState<number>(1.0);
+
+  // AI Review state
+  const [aiReview, setAiReview] = useState<ChartAnalysisResponse | null>(null);
+  const [aiTextReview, setAiTextReview] = useState<AiTextReviewResponse | null>(null);
+  const [aiReviewMode, setAiReviewMode] = useState<'vision' | 'text'>('vision');
+
   const { data: pairsData } = useApiPoll<PairsResponse>('/api/pairs', 0);
   const allPairs = useMemo(() => flattenPairs(pairsData), [pairsData]);
 
   const { post: postScan, loading: scanning, error: scanError } = useApiPost<EngineCScanResponse>();
   const { post: postCompare, loading: comparing } = useApiPost<CompareResponse>();
   const { post: postBacktest, loading: backtesting } = useApiPost<EngineCBacktestResponse>();
+  const { post: postExecute, loading: executing } = useApiPost<{ success?: boolean; ticket?: string; error?: string }>();
+  const { post: postVision, loading: visionLoading } = useApiPost<ChartAnalysisResponse>();
+  const { post: postAiText, loading: textLoading } = useApiPost<AiTextReviewResponse>();
   const { priceFor } = useLivePrices(10000);
 
   const runScan = useCallback(async () => {
@@ -257,6 +282,140 @@ export default function EngineCPanel() {
     setBtResult(result);
     showToast(`Backtest ${btPair}: ${result.trades ?? 0} trades`, 'success');
   }, [btPair, postBacktest, showToast]);
+
+  // Reset AI review when selected row changes
+  const handleSelect = useCallback((row: EngineCConsensusRow) => {
+    setSelected(row);
+    setAiReview(null);
+    setAiTextReview(null);
+  }, []);
+
+  // Execution
+  const requestExecute = useCallback(
+    (row: EngineCConsensusRow, pipMode: 'scalp' | 'intraday' | 'swing') => {
+      setPendingStyle(pipMode);
+      setConfirmRow(row);
+    },
+    [],
+  );
+
+  const onConfirmExecute = useCallback(async () => {
+    if (!confirmRow) return;
+    const display = confirmRow.display || confirmRow.symbol || confirmRow.pair || '';
+    const engineB = (confirmRow.engine_b_raw || {}) as Record<string, unknown>;
+    const rowSizing = toNum(confirmRow.sizing_override, 1);
+    const combined = Math.max(0.25, Math.min(1.0, sizingOverride * rowSizing));
+    const payload = {
+      signal: {
+        pair: display,
+        display,
+        symbol: confirmRow.symbol || display,
+        type: confirmRow.type,
+        direction: confirmRow.direction,
+        price: confirmRow.entry,
+        sl: confirmRow.sl,
+        tp1: confirmRow.tp,
+        tp2: confirmRow.tp,
+        style: pendingStyle,
+        confluenceScore: confirmRow.conviction,
+        ts: new Date().toISOString(),
+      },
+      engine_b: engineB,
+      pip_mode: pendingStyle,
+      sizing_override: combined,
+    };
+    const result = await postExecute('/api/quick-execute', payload as unknown as Record<string, unknown>);
+    if (result) {
+      if (result.success || result.ticket) {
+        showToast(`Engine C: ${confirmRow.direction} ${display} executed (${pendingStyle.toUpperCase()}) - ticket ${result.ticket || '?'}`, 'success');
+      } else {
+        showToast(`Error: ${result.error || 'Unknown'}`, 'error');
+      }
+    } else {
+      showToast('Execution failed', 'error');
+    }
+    setConfirmRow(null);
+  }, [confirmRow, pendingStyle, sizingOverride, postExecute, showToast]);
+
+  // AI Vision Review
+  const runAiReview = useCallback(
+    async (row: EngineCConsensusRow | null) => {
+      if (!row) return;
+      const sym = row.symbol || row.display || row.pair;
+      if (!sym) { showToast('No symbol for AI review', 'error'); return; }
+      try {
+        const candleRes = await fetch(`/api/candles?symbol=${encodeURIComponent(sym)}&tf=H4&limit=300`);
+        const candleJson = await candleRes.json();
+        if (!candleRes.ok || !Array.isArray(candleJson?.candles) || candleJson.candles.length === 0) {
+          showToast(`AI Review: no H4 candles for ${sym}`, 'error');
+          return;
+        }
+        const result = await postVision('/api/chart-analysis', {
+          symbol: sym,
+          tf: 'H4',
+          signal: { direction: row.direction, entry: row.entry, sl: row.sl, tp: row.tp, type: row.type },
+          engineB: row.engine_b_raw || {},
+          server_render: true,
+          chart_source: 'engine_c_panel',
+          candles: candleJson.candles,
+          entry: row.entry,
+          sl: row.sl,
+          tp: row.tp,
+        });
+        if (!result || result.error) {
+          showToast(`AI Review failed: ${result?.error || 'unknown'}`, 'error');
+          setAiReview(null);
+          return;
+        }
+        setAiReview(result);
+        setAiReviewMode('vision');
+        showToast('AI Vision review ready', 'success');
+      } catch (err) {
+        showToast(`AI Review error: ${err instanceof Error ? err.message : 'unknown'}`, 'error');
+      }
+    },
+    [postVision, showToast],
+  );
+
+  // AI Text Review
+  const runAiTextReview = useCallback(
+    async (row: EngineCConsensusRow | null) => {
+      if (!row) return;
+      const sym = row.symbol || row.display || row.pair;
+      if (!sym) { showToast('No symbol for AI review', 'error'); return; }
+      try {
+        const sig = {
+          symbol: sym,
+          pair: row.display || sym,
+          display: row.display || sym,
+          direction: row.direction,
+          entry: row.entry,
+          sl: row.sl,
+          tp: row.tp,
+          tp1: row.tp,
+          rr: row.rr,
+          type: row.type,
+          conviction: row.conviction,
+          style: row.style || pendingStyle,
+        };
+        const result = await postAiText('/api/analyze', {
+          signal: sig,
+          stylePreference: row.style || 'auto',
+        });
+        if (!result || result.error) {
+          showToast(`AI Text Review failed: ${result?.error || 'unknown'}`, 'error');
+          setAiTextReview(null);
+          return;
+        }
+        setAiTextReview(result);
+        setAiReviewMode('text');
+        showToast('AI Text review ready', 'success');
+      } catch (err) {
+        showToast(`AI Text Review error: ${err instanceof Error ? err.message : 'unknown'}`, 'error');
+      }
+    },
+    [postAiText, pendingStyle, showToast],
+  );
 
   const buckets: Record<BucketKey, EngineCConsensusRow[]> = {
     aligned: scanResult?.aligned || [],
@@ -396,7 +555,7 @@ export default function EngineCPanel() {
                               livePrice={priceFor(row)}
                               bucket={activeBucket}
                               selected={selected === row}
-                              onSelect={setSelected}
+                              onSelect={handleSelect}
                             />
                           ))}
                         </div>
@@ -417,11 +576,25 @@ export default function EngineCPanel() {
             </CardHeader>
             <CardContent>
               {selected ? (
-                <ScrollArea className="h-[480px] pr-2">
-                  <ConsensusDetail row={{ ...selected, livePrice: priceFor(selected) }} />
+                <ScrollArea className="h-[600px] pr-2">
+                  <ConsensusDetail
+                    row={{ ...selected, livePrice: priceFor(selected) }}
+                    onExecute={requestExecute}
+                    executing={executing}
+                    sizingOverride={sizingOverride}
+                    onSizingChange={setSizingOverride}
+                    aiReview={aiReview}
+                    aiTextReview={aiTextReview}
+                    aiReviewMode={aiReviewMode}
+                    onAiReviewModeChange={setAiReviewMode}
+                    onRunVision={runAiReview}
+                    onRunText={runAiTextReview}
+                    visionLoading={visionLoading}
+                    textLoading={textLoading}
+                  />
                 </ScrollArea>
               ) : (
-                <div className="flex flex-col items-center justify-center h-[480px] text-muted-foreground">
+                <div className="flex flex-col items-center justify-center h-[600px] text-muted-foreground">
                   <Layers className="w-8 h-8 mb-3 opacity-40" />
                   <p className="text-sm">Select a row to inspect consensus components</p>
                 </div>
@@ -631,6 +804,44 @@ export default function EngineCPanel() {
           )}
         </CardContent>
       </Card>
+
+      {/* Execution confirmation dialog */}
+      <AlertDialog open={!!confirmRow} onOpenChange={(open) => { if (!open) setConfirmRow(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              Confirm Execution - {pendingStyle.toUpperCase()}
+            </AlertDialogTitle>
+            <AlertDialogDescription asChild>
+              <div className="space-y-2 text-xs">
+                <div>
+                  Execute <b>{confirmRow?.direction}</b> {confirmRow?.display || confirmRow?.symbol} at{' '}
+                  <span className="font-mono">{fmtPrice(confirmRow?.entry, confirmRow?.pair, confirmRow?.type)}</span>
+                </div>
+                <div className="font-mono">
+                  SL: {fmtPrice(confirmRow?.sl, confirmRow?.pair, confirmRow?.type)} ·
+                  TP: {fmtPrice(confirmRow?.tp, confirmRow?.pair, confirmRow?.type)} ·
+                  RR: {fmtNum(confirmRow?.rr, 2)}
+                </div>
+                <div className="text-[10px] text-muted-foreground">
+                  Sizing: <span className="font-mono">{fmtNum(sizingOverride, 2)}x</span> ·
+                  Tier: {confirmRow?.tier || '—'} · Conviction: {fmtNum(confirmRow?.conviction, 2)}
+                </div>
+                <div className="text-[10px] text-muted-foreground">
+                  Backend will recompute SL/TP for the selected style via /api/quick-execute (recompute_levels_for_style),
+                  apply risk_check, and route to MT5 or Bybit.
+                </div>
+              </div>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={onConfirmExecute} disabled={executing}>
+              {executing ? 'Executing...' : `Confirm ${pendingStyle.toUpperCase()}`}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }
@@ -697,7 +908,35 @@ function ConsensusRowCard({
   );
 }
 
-function ConsensusDetail({ row }: { row: EngineCConsensusRow }) {
+function ConsensusDetail({
+  row,
+  onExecute,
+  executing,
+  sizingOverride,
+  onSizingChange,
+  aiReview,
+  aiTextReview,
+  aiReviewMode,
+  onAiReviewModeChange,
+  onRunVision,
+  onRunText,
+  visionLoading,
+  textLoading,
+}: {
+  row: EngineCConsensusRow;
+  onExecute: (row: EngineCConsensusRow, style: 'scalp' | 'intraday' | 'swing') => void;
+  executing: boolean;
+  sizingOverride: number;
+  onSizingChange: (v: number) => void;
+  aiReview: ChartAnalysisResponse | null;
+  aiTextReview: AiTextReviewResponse | null;
+  aiReviewMode: 'vision' | 'text';
+  onAiReviewModeChange: (m: 'vision' | 'text') => void;
+  onRunVision: (row: EngineCConsensusRow) => void;
+  onRunText: (row: EngineCConsensusRow) => void;
+  visionLoading: boolean;
+  textLoading: boolean;
+}) {
   const display = row.display || row.symbol || row.pair || '—';
   const aNorm = row.components?.a_norm;
   const bNorm = row.components?.b_norm;
@@ -716,6 +955,243 @@ function ConsensusDetail({ row }: { row: EngineCConsensusRow }) {
         </div>
       </div>
 
+      {/* Execute by Style toolbar */}
+      <Card className="border-border/60 bg-card/50">
+        <CardContent className="p-3 space-y-3">
+          <div className="flex items-center justify-between gap-2">
+            <p className="text-[10px] uppercase text-muted-foreground">Execute by Style</p>
+            <div className="flex items-center gap-2 text-[10px] text-muted-foreground">
+              <span>Sizing</span>
+              <Input
+                type="number"
+                min={0.25}
+                max={1}
+                step={0.25}
+                value={sizingOverride}
+                onChange={(e) => onSizingChange(Math.max(0.25, Math.min(1.0, Number(e.target.value) || 1.0)))}
+                className="w-16 h-7 text-xs font-mono text-center"
+              />
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-9 gap-1 text-xs hover:bg-warning/10"
+              onClick={() => onExecute(row, 'scalp')}
+              disabled={executing || !row.direction}
+            >
+              <Clock className="w-3.5 h-3.5" />
+              Scalp
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-9 gap-1 text-xs hover:bg-primary/10"
+              onClick={() => onExecute(row, 'intraday')}
+              disabled={executing || !row.direction}
+            >
+              <Sun className="w-3.5 h-3.5" />
+              Intraday
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-9 gap-1 text-xs hover:bg-long/10"
+              onClick={() => onExecute(row, 'swing')}
+              disabled={executing || !row.direction}
+            >
+              <Moon className="w-3.5 h-3.5" />
+              Swing
+            </Button>
+          </div>
+          {!row.direction && (
+            <p className="text-[10px] text-warning">No direction — execution disabled</p>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* AI Review actions */}
+      <div className="flex items-center gap-2 flex-wrap">
+        <Button
+          size="sm"
+          variant="outline"
+          className="h-8 text-xs gap-1"
+          onClick={() => onRunVision(row)}
+          disabled={visionLoading}
+        >
+          <Eye className={visionLoading ? 'w-3.5 h-3.5 animate-pulse' : 'w-3.5 h-3.5'} />
+          {visionLoading ? 'AI Vision...' : 'AI Review (Vision)'}
+        </Button>
+        <Button
+          size="sm"
+          variant="outline"
+          className="h-8 text-xs gap-1"
+          onClick={() => onRunText(row)}
+          disabled={textLoading}
+        >
+          <FileText className={textLoading ? 'w-3.5 h-3.5 animate-pulse' : 'w-3.5 h-3.5'} />
+          {textLoading ? 'AI Text...' : 'AI Review (Text)'}
+        </Button>
+        {aiReview?.structured?.right_edge_status && aiReviewMode === 'vision' && (
+          <Badge
+            className={
+              aiReview.structured.right_edge_status === 'CONFIRMS' ? 'badge-long'
+              : aiReview.structured.right_edge_status === 'POTENTIAL_REVERSAL' ? 'badge-short'
+              : 'badge-neutral'
+            }
+          >
+            RIGHT EDGE: {aiReview.structured.right_edge_status.replace('_', ' ')}
+          </Badge>
+        )}
+        {aiTextReview?.grade && aiReviewMode === 'text' && (
+          <Badge variant="outline" className="text-[10px] uppercase">
+            Grade {aiTextReview.grade}
+          </Badge>
+        )}
+      </div>
+
+      {/* AI Review mode toggle */}
+      {(aiReview || aiTextReview) && (
+        <div className="flex items-center gap-1 bg-muted/30 rounded-md p-1 w-fit">
+          <button
+            type="button"
+            onClick={() => onAiReviewModeChange('vision')}
+            className={`px-2 py-1 rounded text-[10px] font-medium transition-colors ${
+              aiReviewMode === 'vision' ? 'bg-background shadow-sm text-foreground' : 'text-muted-foreground hover:text-foreground'
+            }`}
+            disabled={!aiReview}
+          >
+            Vision
+          </button>
+          <button
+            type="button"
+            onClick={() => onAiReviewModeChange('text')}
+            className={`px-2 py-1 rounded text-[10px] font-medium transition-colors ${
+              aiReviewMode === 'text' ? 'bg-background shadow-sm text-foreground' : 'text-muted-foreground hover:text-foreground'
+            }`}
+            disabled={!aiTextReview}
+          >
+            Text
+          </button>
+        </div>
+      )}
+
+      {/* AI Vision Review output */}
+      {aiReview && aiReviewMode === 'vision' && (
+        <Card className="border-border/60 bg-card/50">
+          <CardContent className="p-3 space-y-2">
+            <div className="flex items-center justify-between">
+              <p className="text-[10px] uppercase text-muted-foreground">AI Vision Review</p>
+              <span className="text-[10px] text-muted-foreground font-mono">{aiReview.model || 'vision'} - {aiReview.tf || 'H4'}</span>
+            </div>
+
+            {aiReview.chart_image && (
+              <div className="border border-border/50 rounded-md overflow-hidden">
+                <img
+                  src={aiReview.chart_image}
+                  alt={`${aiReview.symbol || 'Chart'} ${aiReview.tf || 'H4'}`}
+                  className="w-full h-auto"
+                  style={{ maxHeight: '280px', objectFit: 'contain' }}
+                />
+              </div>
+            )}
+
+            {aiReview.structured?.style_ratings && (
+              <div className="grid grid-cols-3 gap-2 text-[11px]">
+                <div>
+                  <div className="text-muted-foreground text-[10px]">Scalp</div>
+                  <div className="font-mono">{aiReview.structured.style_ratings.scalp || '-'}</div>
+                </div>
+                <div>
+                  <div className="text-muted-foreground text-[10px]">Intraday</div>
+                  <div className="font-mono">{aiReview.structured.style_ratings.intraday || '-'}</div>
+                </div>
+                <div>
+                  <div className="text-muted-foreground text-[10px]">Swing</div>
+                  <div className="font-mono">{aiReview.structured.style_ratings.swing || '-'}</div>
+                </div>
+              </div>
+            )}
+
+            {(aiReview.structured?.sl_flag === 'too_tight' || aiReview.structured?.tp_flag === 'too_far') && (
+              <div className="text-[11px] text-warning">
+                {aiReview.structured.sl_flag === 'too_tight' && 'SL flagged tight - '}
+                {aiReview.structured.tp_flag === 'too_far' && 'TP flagged far'}
+              </div>
+            )}
+
+            {aiReview.structured?.final_verdict && (
+              <div className="text-[11px]">
+                <span className="text-muted-foreground">Verdict: </span>
+                <span className="font-mono">{aiReview.structured.final_verdict}</span>
+              </div>
+            )}
+
+            {aiReview.analysis && (
+              <pre className="text-[11px] font-mono whitespace-pre-wrap text-foreground/90 max-h-72 overflow-y-auto p-2 bg-muted/20 rounded border border-border/40">
+                {aiReview.analysis}
+              </pre>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
+      {/* AI Text Review (Marcus Reid) output */}
+      {aiTextReview && aiReviewMode === 'text' && (
+        <Card className="border-border/60 bg-card/50">
+          <CardContent className="p-3 space-y-2">
+            <div className="flex items-center justify-between">
+              <p className="text-[10px] uppercase text-muted-foreground">AI Text Review - Marcus Reid</p>
+              <span className="text-[10px] text-muted-foreground font-mono">
+                {aiTextReview.grade || '-'} - edge {aiTextReview.edgeProbability ?? '-'}%
+              </span>
+            </div>
+
+            {aiTextReview.style_ratings && (
+              <div className="grid grid-cols-3 gap-2 text-[11px]">
+                <div>
+                  <div className="text-muted-foreground text-[10px]">Scalp</div>
+                  <div className="font-mono">{aiTextReview.style_ratings.scalp?.grade || '-'}</div>
+                </div>
+                <div>
+                  <div className="text-muted-foreground text-[10px]">Intraday</div>
+                  <div className="font-mono">{aiTextReview.style_ratings.intraday?.grade || '-'}</div>
+                </div>
+                <div>
+                  <div className="text-muted-foreground text-[10px]">Swing</div>
+                  <div className="font-mono">{aiTextReview.style_ratings.swing?.grade || '-'}</div>
+                </div>
+              </div>
+            )}
+
+            <div className="grid grid-cols-2 gap-2 text-[11px]">
+              <div><span className="text-muted-foreground">Verdict:</span> <span className="font-mono">{aiTextReview.verdict || '-'}</span></div>
+              <div><span className="text-muted-foreground">Risk:</span> <span className="font-mono">{aiTextReview.riskLevel || '-'}</span></div>
+              <div><span className="text-muted-foreground">Position:</span> <span className="font-mono">{aiTextReview.positionSizing || '-'}</span></div>
+              <div><span className="text-muted-foreground">Entry:</span> <span className="font-mono">{aiTextReview.entryZone || '-'}</span></div>
+              <div><span className="text-muted-foreground">Invalidation:</span> <span className="font-mono">{aiTextReview.invalidation || '-'}</span></div>
+              <div><span className="text-muted-foreground">Key Levels:</span> <span className="font-mono">{aiTextReview.keyLevels || '-'}</span></div>
+            </div>
+
+            {aiTextReview.warnings && aiTextReview.warnings.length > 0 && (
+              <div className="text-[11px] text-warning">
+                {aiTextReview.warnings.map((w, i) => (
+                  <div key={i}>- {w}</div>
+                ))}
+              </div>
+            )}
+
+            {aiTextReview.narrative && (
+              <pre className="text-[11px] font-mono whitespace-pre-wrap text-foreground/90 max-h-72 overflow-y-auto p-2 bg-muted/20 rounded border border-border/40">
+                {aiTextReview.narrative}
+              </pre>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Data tabs */}
       <Tabs defaultValue="levels" className="w-full">
         <TabsList className="grid grid-cols-4 w-full">
           <TabsTrigger value="levels">Levels</TabsTrigger>

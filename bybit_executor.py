@@ -7,6 +7,7 @@ All orders must arrive as a pre-validated RiskApproval from risk_engine.py.
 """
 
 import os
+import hashlib
 import logging
 import time
 import threading
@@ -22,6 +23,36 @@ except Exception:
     CONFIG = {}
 
 _exchange = None
+
+
+def _is_engine_d_signal(signal: dict) -> bool:
+    engine = str((signal or {}).get("engine", "")).strip().lower()
+    return engine in ("scalp", "engine d", "scalp_vp")
+
+
+def _uses_trailing_atr_exit(signal: dict) -> bool:
+    """True when Engine A/B exits are managed by the timed-exit chandelier trail."""
+    mode = str((CONFIG.get("TIMED_EXIT") or {}).get("tp_mode", "fixed")).strip().lower()
+    return mode == "trailing_atr" and not _is_engine_d_signal(signal)
+
+
+def bybit_account_risk_domain() -> str:
+    env_label = (
+        "demo"
+        if os.environ.get("BYBIT_DEMO", "false").lower() in ("true", "1", "yes")
+        else (
+            "testnet"
+            if os.environ.get("BYBIT_TESTNET", "false").lower() in ("true", "1", "yes")
+            else "live"
+        )
+    )
+    api_key = os.environ.get("BYBIT_API_KEY", "")
+    key_fp = (
+        hashlib.sha256(api_key.encode("utf-8")).hexdigest()[:12]
+        if api_key
+        else "unknown"
+    )
+    return f"crypto:bybit:{env_label}:{key_fp}"
 
 # ── Periodic clock re-sync ────────────────────────────────────────────────────
 # Bybit retCode 10002 fires when local clock drifts beyond recv_window (10 000 ms).
@@ -162,6 +193,178 @@ def _validate_exit_levels(
     return None
 
 
+def _bybit_order_identity(order: dict | None) -> str:
+    """CCXT unified ``id`` or raw Bybit v5 ``orderId`` inside ``info``."""
+    if not isinstance(order, dict):
+        return ""
+    oid = order.get("id")
+    if oid is not None:
+        s = str(oid).strip()
+        if s:
+            return s
+    info = order.get("info") if isinstance(order.get("info"), dict) else {}
+    for k in ("orderId", "order_id"):
+        raw = info.get(k)
+        if raw is not None:
+            s = str(raw).strip()
+            if s:
+                return s
+    return ""
+
+
+def _bybit_parse_fill_status(order: dict | None) -> tuple[str, float]:
+    """Return (normalized_status_lc, cumulative_filled_qty).
+
+    Handles CCXT's unified dict plus Bybit v5 raw ``info`` (often exposes
+    ``cumExecQty`` while ``status`` / ``orderStatus`` are omitted on the submit path).
+    """
+    if not isinstance(order, dict):
+        return "", 0.0
+    info = order.get("info") if isinstance(order.get("info"), dict) else {}
+    raw_status = (
+        order.get("status")
+        or info.get("orderStatus")
+        or info.get("status")
+        or info.get("order_status")
+        or ""
+    )
+    status = str(raw_status).strip().lower()
+    filled_raw = order.get("filled")
+    if filled_raw is None:
+        filled_raw = (
+            info.get("cumExecQty")
+            or info.get("cum_exec_qty")
+            or info.get("filledQty")
+            or info.get("filled_qty")
+        )
+    try:
+        filled_amount = float(filled_raw or 0)
+    except (TypeError, ValueError):
+        filled_amount = 0.0
+    return status, filled_amount
+
+
+def _bybit_poll_order_snapshot(exchange, order_id: str, ccxt_symbol: str) -> dict | None:
+    """Refresh order state during entry resolution.
+
+    Bybit Unified (UTA): ``fetch_order`` requires ``params['acknowledged']=True``
+    or CCXT raises ``ArgumentsRequired`` before any HTTP call (see ccxt ``bybit.py``).
+
+    Prefer ``fetch_closed_order`` / ``fetch_open_order`` for recent market entries once
+    they leave the ambiguous submit envelope.
+    """
+    oid = str(order_id or "").strip()
+    if not oid:
+        return None
+
+    chains: list[tuple[str, object]] = []
+    _fc = getattr(exchange, "fetch_closed_order", None)
+    if callable(_fc):
+        chains.append(("fetch_closed_order", lambda: _fc(oid, ccxt_symbol)))
+    _fo = getattr(exchange, "fetch_open_order", None)
+    if callable(_fo):
+        chains.append(("fetch_open_order", lambda: _fo(oid, ccxt_symbol)))
+    _fu = getattr(exchange, "fetch_order", None)
+    if callable(_fu):
+        chains.append(
+            (
+                "fetch_order",
+                lambda: _fu(oid, ccxt_symbol, {"acknowledged": True}),
+            )
+        )
+
+    last_seen: Exception | None = None
+    for _name, _call in chains:
+        try:
+            out = _call()
+            return out if isinstance(out, dict) else None
+        except Exception as e:
+            last_seen = e
+            if type(e).__name__ in ("OrderNotFound", "InvalidOrder"):
+                continue
+            log.debug("[BYBIT] %s exception for oid=%s… %s", _name, oid[:10], e)
+    if last_seen is not None and type(last_seen).__name__ not in (
+        "OrderNotFound",
+        "InvalidOrder",
+    ):
+        log.debug(
+            "[BYBIT] order snapshot still missing after chain for oid=%s… (%s)",
+            oid[:10],
+            last_seen,
+        )
+    return None
+
+
+def _bybit_resolve_entry_fill(
+    exchange,
+    ccxt_symbol: str,
+    order: dict,
+    *,
+    requested_volume: float,
+) -> tuple[dict, str, float]:
+    """Wait briefly for measurable fill via ``fetch_order`` when submit response is sparse.
+
+    Returns updated ``order``, status_lc, cum_filled_qty.
+    """
+    order_id = _bybit_order_identity(order)
+    vol_req = float(requested_volume)
+    qty_tol = max(1e-12, abs(vol_req) * 1e-8)
+
+    bad = frozenset({"canceled", "cancelled", "rejected"})
+    good = frozenset({"closed", "filled"})
+    deadline = time.monotonic() + 5.5
+    polls = 0
+
+    status, filled = _bybit_parse_fill_status(order)
+
+    def qty_met(q: float) -> bool:
+        return q > 0 and q + qty_tol >= vol_req
+
+    while time.monotonic() < deadline:
+        if status in bad:
+            break
+        if qty_met(filled):
+            break
+        if status in good:
+            break
+
+        if polls >= 10 or not order_id:
+            break
+        time.sleep(max(0.15, polls * 0.05))
+        polls += 1
+        refreshed = _bybit_poll_order_snapshot(exchange, order_id, ccxt_symbol)
+        if isinstance(refreshed, dict):
+            order = refreshed
+        status, filled = _bybit_parse_fill_status(order)
+
+    return order, status, filled
+
+
+def _bybit_resolve_avg_entry(order: dict, *, fallback_price: float) -> float:
+    px = float(order.get("average") or order.get("price") or 0)
+    if px > 0:
+        return px
+    info = order.get("info") if isinstance(order.get("info"), dict) else {}
+    for k in ("avgPrice", "averagePrice"):
+        raw = info.get(k)
+        if raw is None or raw == "":
+            continue
+        try:
+            v = float(raw)
+        except (TypeError, ValueError):
+            continue
+        if v > 0:
+            return v
+    try:
+        _val = float(info.get("cumExecValue") or 0)
+        _qty = float(info.get("cumExecQty") or order.get("filled") or 0)
+        if _val > 0 and _qty > 0:
+            return _val / _qty
+    except (TypeError, ValueError):
+        pass
+    return float(fallback_price or 0)
+
+
 def _get_exchange():
     """Initialize Bybit Linear Futures connection."""
     global _exchange
@@ -245,22 +448,30 @@ def bybit_map_symbol(athena_display: str) -> str | None:
     return None
 
 
-def _set_trading_stop(exchange, ccxt_symbol: str, sl: float = 0, tp: float = 0) -> None:
+def _set_trading_stop(
+    exchange, ccxt_symbol: str, sl: float = 0, tp: float = 0,
+    clear_tp: bool = False,
+) -> None:
     """Set SL/TP on an open Bybit v5 position via trading-stop endpoint.
 
     Bybit v5 does not support stop_market / take_profit_market order types.
     The correct approach is POST /v5/position/trading-stop.
     ccxt_symbol format: "DOT/USDT:USDT" → raw_symbol "DOTUSDT"
+
+    When ``clear_tp`` is True, send takeProfit="0" which Bybit treats as
+    "remove TP" (chandelier trail is now the only profit-side exit).
     """
     raw_symbol = ccxt_symbol.split(":")[0].replace("/", "")  # DOT/USDT:USDT → DOTUSDT
     params: dict = {"category": "linear", "symbol": raw_symbol, "positionIdx": 0}
     if sl > 0:
         params["stopLoss"] = str(sl)
         params["slTriggerBy"] = "MarkPrice"
-    if tp > 0:
+    if clear_tp:
+        params["takeProfit"] = "0"
+    elif tp > 0:
         params["takeProfit"] = str(tp)
         params["tpTriggerBy"] = "MarkPrice"
-    if sl > 0 or tp > 0:
+    if sl > 0 or tp > 0 or clear_tp:
         exchange.private_post_v5_position_trading_stop(params)
 
 
@@ -305,6 +516,7 @@ def bybit_get_account() -> dict:
     exchange = _get_exchange()
     if not exchange:
         return {"error": True, "symbol": "Bybit", "detail": "Bybit not connected"}
+    risk_domain = bybit_account_risk_domain()
     for attempt in range(2):
         try:
             balance = exchange.fetch_balance(params={"type": "linear"})
@@ -328,6 +540,7 @@ def bybit_get_account() -> dict:
                 "exchange": "Bybit",
                 "testnet": os.environ.get("BYBIT_TESTNET", "false").lower()
                 in ("true", "1", "yes"),
+                "risk_domain": risk_domain,
                 "balance": total,
                 "equity": total + unrealized,  # ← real equity including open P&L
                 "freeBalance": free,
@@ -371,8 +584,8 @@ def bybit_get_positions() -> dict:
                     est_risk = round(abs(entry - sl_val) / entry * notional, 2)
                 else:
                     est_risk = round(
-                        notional * 0.02, 2
-                    )  # fallback: 2% when no SL is set
+                        notional * 1.0, 2
+                    )  # fallback: 100% when no SL is set
                 symbol_raw = pos.get("symbol", "")
                 # Convert BTC/USDT:USDT back to display format BTC/USDT
                 display = symbol_raw.split(":")[0] if ":" in symbol_raw else symbol_raw
@@ -646,18 +859,7 @@ def bybit_close_position(pair: str, direction: str, volume: float) -> dict:
             params={"reduceOnly": True, "positionIdx": 0},
         )
         log.info(f"[BYBIT] Manual close {direction} {pair} vol={volume}")
-        
-        # Send Telegram notification for trade closed
-        try:
-            telegram_notify.notify_trade_closed(
-                pair=pair,
-                pnl_r=0.0,  # PnL not available in manual close
-                is_win=None,
-                duration_minutes=0
-            )
-        except Exception as _tn_e:
-            log.debug(f"[TELEGRAM] Trade close notification failed: {_tn_e}")
-        
+
         return {"success": True, "pair": pair, "direction": direction, "volume": volume}
     except Exception as e:
         log.error(f"[BYBIT] Close failed {pair}: {e}")
@@ -679,6 +881,7 @@ def bybit_cancel_stale_entry_orders(ccxt_symbol: str | None) -> dict:
     try:
         exchange.load_markets()
         open_orders = exchange.fetch_open_orders(ccxt_symbol) or []
+        cleanup_errors = []
         for o in open_orders:
             if (o.get("status") or "").lower() not in ("open", "new", "live"):
                 continue
@@ -697,9 +900,19 @@ def bybit_cancel_stale_entry_orders(ccxt_symbol: str | None) -> dict:
                     f"[BYBIT] Cancelled stale entry order id={o.get('id')} on {ccxt_symbol}"
                 )
             except Exception as _ce:
+                cleanup_errors.append({"order_id": o.get("id"), "error": str(_ce)})
                 log.warning(f"[BYBIT] Could not cancel order {o.get('id')}: {_ce}")
+        if cleanup_errors:
+            return {
+                "error": True,
+                "detail": "STALE_ORDER_CANCEL_FAILED",
+                "cancelled": cancelled,
+                "symbol": ccxt_symbol,
+                "cleanupErrors": cleanup_errors,
+            }
     except Exception as e:
         log.debug(f"[BYBIT] stale entry order scan: {e}")
+        return {"error": True, "detail": str(e), "cancelled": cancelled, "symbol": ccxt_symbol}
     return {"error": False, "cancelled": cancelled, "symbol": ccxt_symbol}
 
 
@@ -719,8 +932,9 @@ def bybit_reconcile_after_open(exec_result: dict, signal: dict) -> dict:
     if not ccxt_symbol:
         return {"error": True, "detail": "no_symbol"}
     sl = float(exec_result.get("sl") or signal.get("sl") or 0)
+    requires_tp = not _uses_trailing_atr_exit(signal)
     tp = float(exec_result.get("tp") or signal.get("tp1") or 0)
-    if sl <= 0 or tp <= 0:
+    if sl <= 0 or (requires_tp and tp <= 0):
         return {"error": False, "note": "no_levels_to_verify", "repaired": False}
     try:
         raw = exchange.fetch_positions(
@@ -738,24 +952,27 @@ def bybit_reconcile_after_open(exec_result: dict, signal: dict) -> dict:
             cur_sl = float(info.get("stopLoss", 0) or 0)
             cur_tp = float(info.get("takeProfit", 0) or 0)
             break
-        if cur_sl > 0 and cur_tp > 0:
+        if cur_sl > 0 and (cur_tp > 0 or not requires_tp):
             return {
                 "error": False,
                 "hadProtections": True,
                 "repaired": False,
                 "stopLoss": cur_sl,
                 "takeProfit": cur_tp,
+                "takeProfitRequired": requires_tp,
             }
+        missing_label = "SL/TP" if requires_tp else "SL"
         log.warning(
-            f"[BYBIT] RECONCILE: open position on {ccxt_symbol} missing SL/TP — reapplying"
+            f"[BYBIT] RECONCILE: open position on {ccxt_symbol} missing {missing_label} — reapplying"
         )
-        _set_trading_stop(exchange, ccxt_symbol, sl=sl, tp=tp)
+        _set_trading_stop(exchange, ccxt_symbol, sl=sl, tp=tp if requires_tp else 0)
         return {
             "error": False,
             "hadProtections": False,
             "repaired": True,
             "stopLoss": sl,
-            "takeProfit": tp,
+            "takeProfit": tp if requires_tp else 0,
+            "takeProfitRequired": requires_tp,
         }
     except Exception as e:
         log.error(f"[BYBIT] reconcile_after_open failed: {e}")
@@ -941,8 +1158,14 @@ def bybit_execute(signal: dict, approval: "RiskApproval") -> dict:  # noqa: F821
                     "success": False,
                     "error": f"SL_TOO_WIDE: {_sl_dist_pct:.1%} exceeds {_max_sl_pct:.0%} crypto cap"
                 }
-        except Exception:
-            pass  # graceful degradation — do not block execution on config error
+        except Exception as sl_cap_err:
+            log.warning(
+                f"[BYBIT] {ccxt_symbol}: SL width cap check failed ({sl_cap_err}) — rejecting order"
+            )
+            return {
+                "success": False,
+                "error": f"SL_CAP_CHECK_FAILED:{sl_cap_err}",
+            }
 
         side = "buy" if direction == "LONG" else "sell"
         log.info(
@@ -979,9 +1202,48 @@ def bybit_execute(signal: dict, approval: "RiskApproval") -> dict:  # noqa: F821
         if order is None:
             raise _last_err
 
-        order_id = order.get("id", "")
-        filled_price = float(order.get("average") or order.get("price") or price)
-        filled_amount = float(order.get("filled") or volume)
+        order_id = _bybit_order_identity(order)
+
+        order, scan_status, filled_amount = _bybit_resolve_entry_fill(
+            exchange,
+            ccxt_symbol,
+            order,
+            requested_volume=float(volume),
+        )
+        order_id = _bybit_order_identity(order) or order_id
+
+        vol_req = float(volume)
+        qty_tol = max(1e-12, abs(vol_req) * 1e-8)
+
+        if scan_status in {"canceled", "cancelled", "rejected"}:
+            return {
+                "success": False,
+                "error": f"ORDER_REJECTED: status={scan_status}",
+                "ticket": order_id,
+            }
+
+        if filled_amount <= 0:
+            return {
+                "success": False,
+                "error": (
+                    "ORDER_NOT_FILLED: filled quantity missing or zero — "
+                    f"status={scan_status or 'missing'}"
+                ),
+                "ticket": order_id,
+            }
+
+        if filled_amount + qty_tol < vol_req:
+            return {
+                "success": False,
+                "error": (
+                    "PARTIAL_FILL_UNSUPPORTED: filled={filled_amount} expected={volume}"
+                    + (f" status={scan_status}" if scan_status else "")
+                ),
+                "ticket": order_id,
+                "volume": filled_amount,
+            }
+
+        filled_price = float(_bybit_resolve_avg_entry(order, fallback_price=float(price)))
         _ref_for_slip = float(signal.get("price") or 0) or float(price)
         _sig_ref, _slip_bps = _entry_slippage_bps(
             direction, _ref_for_slip, filled_price
@@ -1039,15 +1301,15 @@ def bybit_execute(signal: dict, approval: "RiskApproval") -> dict:  # noqa: F821
                 "rolledBack": True,
             }
 
-        _engine = str(signal.get("engine", "")).strip().lower()
-        _is_scalp = _engine in ("scalp", "engine d", "scalp_vp")
+        _is_scalp = _is_engine_d_signal(signal)
+        _use_broker_tp = not _uses_trailing_atr_exit(signal)
         _tp1 = float(signal.get("tp1", 0) or 0)
         _tp2 = float(signal.get("tp2", 0) or 0)
         _tp_partial = float(signal.get("tp_partial", 0) or 0)
         # Engine D: position TP sits at the structural target (tp1).
         # A separate reduce-only limit at tp_partial closes the first 50% clip at +1R.
         # Non-scalp signals use tp1 as the single full-position exit.
-        tp_exec = _tp1
+        tp_exec = _tp1 if _use_broker_tp else 0.0
 
         # Set SL/TP on the position via Bybit v5 trading-stop endpoint
         # (stop_market / take_profit_market order types are invalid in v5)
@@ -1057,7 +1319,7 @@ def bybit_execute(signal: dict, approval: "RiskApproval") -> dict:  # noqa: F821
         for _attempt in range(2):  # 1 retry before emergency close
             try:
                 _set_trading_stop(exchange, ccxt_symbol, sl=sl, tp=tp_exec)
-                log.info(f"[BYBIT] SL/TP set: SL={sl} TP={tp_exec}")
+                log.info(f"[BYBIT] SL/TP set: SL={sl} TP={tp_exec or 'disabled'}")
                 _sl_tp_err = None
                 break
             except Exception as ste:
@@ -1100,9 +1362,9 @@ def bybit_execute(signal: dict, approval: "RiskApproval") -> dict:  # noqa: F821
 
         # ── Fabio partial exit: reduce-only limit for first 50% clip at +1R ────────
         # For Engine D scalp signals: place a limit order that closes half the position
-        # when price hits tp_partial (+1R). The position TP (tp_exec = tp1) handles the
-        # remaining 50% runner. This is non-fatal — if it fails, the trade still runs
-        # to tp1 as a single unit.
+        # when price hits tp_partial (+1R). The broker TP handles the remaining 50%
+        # runner. This is non-fatal; if it fails, the trade still runs to tp1 as a
+        # single unit.
         partial_order_id = None
         if _is_scalp and _tp_partial > 0:
             try:
@@ -1174,7 +1436,8 @@ def bybit_execute(signal: dict, approval: "RiskApproval") -> dict:  # noqa: F821
 
 
 def bybit_move_sl_to_breakeven(
-    ccxt_symbol: str, direction: str, entry_price: float, volume: float
+    ccxt_symbol: str, direction: str, entry_price: float, volume: float,
+    clear_tp: bool = False,
 ) -> dict:
     """Move stop-loss to breakeven (entry price) for an open position.
 
@@ -1182,53 +1445,78 @@ def bybit_move_sl_to_breakeven(
     Validates the SL against the current mark price before submission —
     a race condition can cause mark price to move back past entry between
     the 1R check and the API call, which Bybit rejects (retCode 10001).
+
+    When ``clear_tp`` is True, also remove the broker take-profit so the
+    chandelier trail becomes the only profit-side exit. ``entry_price`` may
+    be 0 in that case (caller wants TP cleared without changing SL).
     """
+    del volume  # not needed for trading-stop endpoint
     exchange = _get_exchange()
     if not exchange:
         return {"success": False, "error": "BYBIT_NOT_CONNECTED"}
     try:
-        # Validate SL against live mark price to guard against the race where
-        # price moves back past entry between the 1R check and the API call.
-        # Bybit rule: SHORT SL must be > mark_price; LONG SL must be < mark_price.
-        try:
-            ticker = exchange.fetch_ticker(ccxt_symbol)
-            mark_price = float(
-                ticker.get("markPrice") or ticker.get("last") or 0
-            )
-        except Exception as tick_err:
-            log.debug(f"[BYBIT] BREAKEVEN mark price fetch failed for {ccxt_symbol}: {tick_err}")
-            mark_price = 0.0
-
-        is_short = direction.upper() == "SHORT"
-        if mark_price > 0:
-            if is_short and entry_price <= mark_price:
-                log.warning(
-                    f"[BYBIT] BREAKEVEN skipped for {ccxt_symbol} SHORT: "
-                    f"entry {entry_price} <= mark {mark_price} — market moved back against position"
+        sl_requested = entry_price > 0
+        if sl_requested:
+            # Validate SL against live mark price to guard against the race where
+            # price moves back past entry between the 1R check and the API call.
+            # Bybit rule: SHORT SL must be > mark_price; LONG SL must be < mark_price.
+            try:
+                ticker = exchange.fetch_ticker(ccxt_symbol)
+                mark_price = float(
+                    ticker.get("markPrice") or ticker.get("last") or 0
                 )
-                return {"success": False, "error": "BREAKEVEN_INVALID_MARK_PRICE", "skipped": True}
-            if not is_short and entry_price >= mark_price:
-                log.warning(
-                    f"[BYBIT] BREAKEVEN skipped for {ccxt_symbol} LONG: "
-                    f"entry {entry_price} >= mark {mark_price} — market moved back against position"
-                )
-                return {"success": False, "error": "BREAKEVEN_INVALID_MARK_PRICE", "skipped": True}
+            except Exception as tick_err:
+                log.debug(f"[BYBIT] BREAKEVEN mark price fetch failed for {ccxt_symbol}: {tick_err}")
+                mark_price = 0.0
 
-        _set_trading_stop(exchange, ccxt_symbol, sl=entry_price)
-        log.info(
-            f"[BYBIT] BREAKEVEN SL placed: {ccxt_symbol} {direction} @ {entry_price} "
-            f"(mark={mark_price:.4f})"
+            is_short = direction.upper() == "SHORT"
+            if mark_price > 0:
+                if is_short and entry_price <= mark_price:
+                    log.warning(
+                        f"[BYBIT] BREAKEVEN skipped for {ccxt_symbol} SHORT: "
+                        f"entry {entry_price} <= mark {mark_price} — market moved back against position"
+                    )
+                    # If we only had an SL to move and it's invalid, return; but if
+                    # caller also wanted TP cleared we still attempt that below.
+                    if not clear_tp:
+                        return {"success": False, "error": "BREAKEVEN_INVALID_MARK_PRICE", "skipped": True}
+                    sl_requested = False
+                if not is_short and entry_price >= mark_price:
+                    log.warning(
+                        f"[BYBIT] BREAKEVEN skipped for {ccxt_symbol} LONG: "
+                        f"entry {entry_price} >= mark {mark_price} — market moved back against position"
+                    )
+                    if not clear_tp:
+                        return {"success": False, "error": "BREAKEVEN_INVALID_MARK_PRICE", "skipped": True}
+                    sl_requested = False
+
+        if not sl_requested and not clear_tp:
+            return {"success": True, "skipped": True, "reason": "no_change_requested"}
+
+        _set_trading_stop(
+            exchange, ccxt_symbol,
+            sl=entry_price if sl_requested else 0,
+            clear_tp=clear_tp,
         )
-        return {"success": True, "newSl": entry_price}
+        log.info(
+            f"[BYBIT] Stops modified: {ccxt_symbol} {direction} "
+            f"sl={entry_price if sl_requested else 'unchanged'} "
+            f"clear_tp={clear_tp}"
+        )
+        return {
+            "success": True,
+            "newSl": entry_price if sl_requested else None,
+            "tpCleared": clear_tp,
+        }
     except Exception as e:
         err_str = str(e)
-        # retCode 34040 "not modified" — SL is already at the target price; treat as success.
+        # retCode 34040 "not modified" — already at target; treat as success.
         if "34040" in err_str or "not modified" in err_str.lower():
             log.debug(
                 f"[BYBIT] BREAKEVEN already set for {ccxt_symbol} (34040 not modified) — no action needed"
             )
             return {"success": True, "newSl": entry_price, "alreadySet": True}
-        log.warning(f"[BYBIT] Failed to move SL to breakeven for {ccxt_symbol}: {e}")
+        log.warning(f"[BYBIT] Failed to modify stops for {ccxt_symbol}: {e}")
         return {"success": False, "error": err_str}
 
 

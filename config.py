@@ -1,9 +1,12 @@
 """config.py — Sentinel Pro configuration loading and validation.
 
-CONFIG is built from hard-coded defaults then overlaid with config.yaml values.
+CONFIG is built from hard-coded defaults then overlaid with ``config.yaml``.
+Optional ``config.local.yaml`` (gitignored) is deep-merged on top for machine-local
+overrides (e.g. demo broker testing) without changing tracked defaults.
 Import CONFIG from here; never import from athena.py directly.
 """
 
+import math
 import os
 import logging
 
@@ -149,14 +152,41 @@ def get_ai_timeout_sec(
     return float(fallback)
 
 
-def create_ai_client(cfg: dict | None = None, api_key: str | None = None):
+def get_ai_max_retries(
+    cfg: dict | None = None,
+    preferred_key: str = "AI_SDK_MAX_RETRIES",
+    fallback: int = 2,
+) -> int:
+    cfg = cfg or CONFIG
+    candidates = []
+    if preferred_key:
+        candidates.append(cfg.get(preferred_key))
+    candidates.append(cfg.get("AI_SDK_MAX_RETRIES"))
+    for candidate in candidates:
+        try:
+            retries = int(candidate)
+        except (TypeError, ValueError):
+            continue
+        if retries >= 0:
+            return retries
+    return max(0, int(fallback))
+
+
+def create_ai_client(
+    cfg: dict | None = None,
+    api_key: str | None = None,
+    max_retries: int | None = None,
+):
     import openai
 
     resolved_key = _clean_ai_value(api_key) or get_ai_api_key(cfg)
-    return openai.OpenAI(
-        api_key=resolved_key,
-        base_url=get_ai_base_url(cfg),
-    )
+    client_kwargs = {
+        "api_key": resolved_key,
+        "base_url": get_ai_base_url(cfg),
+    }
+    if max_retries is not None:
+        client_kwargs["max_retries"] = max(0, int(max_retries))
+    return openai.OpenAI(**client_kwargs)
 
 
 def ai_runtime_descriptor(
@@ -208,7 +238,8 @@ _yaml_overrides: dict = {}
 try:
     import yaml as _yaml
 
-    _cfg_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.yaml")
+    _cfg_dir = os.path.dirname(os.path.abspath(__file__))
+    _cfg_path = os.path.join(_cfg_dir, "config.yaml")
     if os.path.exists(_cfg_path):
         with open(_cfg_path, "r", encoding="utf-8") as _f:
             _raw_yaml = _f.read()
@@ -230,6 +261,25 @@ try:
                 )
         _yaml_overrides = _yaml.safe_load(_raw_yaml) or {}
         log.info(f"Loaded config.yaml ({len(_yaml_overrides)} keys)")
+
+    _local_path = os.path.join(_cfg_dir, "config.local.yaml")
+    if os.path.exists(_local_path):
+        with open(_local_path, "r", encoding="utf-8") as _lf:
+            _raw_local = _lf.read()
+        _ldupes = scan_duplicate_top_level_yaml_keys(_raw_local)
+        if _ldupes:
+            for _k, _lines in sorted(_ldupes.items()):
+                log.warning(
+                    "[CFG] Duplicate top-level key %r in config.local.yaml (lines %s) — last value wins; remove duplicates",
+                    _k,
+                    _lines,
+                )
+        _local_doc = _yaml.safe_load(_raw_local)
+        if isinstance(_local_doc, dict):
+            _yaml_overrides = _deep_merge_dict(_yaml_overrides, _local_doc)
+            log.info("Merged config.local.yaml over config.yaml (%d top-level keys)", len(_yaml_overrides))
+        elif _local_doc is not None:
+            log.warning("[CFG] config.local.yaml root must be a mapping — ignoring file")
 except ImportError:
     pass  # pyyaml optional
 except Exception as _e:
@@ -247,7 +297,33 @@ CONFIG: dict = {
     "VISION_MODEL": os.environ.get("VISION_MODEL", _AI_MODEL_DEFAULT),
     "NEWS_SENTIMENT_MODEL": os.environ.get("NEWS_SENTIMENT_MODEL", _AI_MODEL_DEFAULT),
     "AI_REQUEST_TIMEOUT_SEC": 30.0,
-    "MARCUS_AI_TIMEOUT_SEC": 30.0,
+    "DEBATE_AI_TIMEOUT_SEC": 30.0,
+    "MARCUS_AI_TIMEOUT_SEC": 90.0,
+    "MARCUS_AI_SDK_MAX_RETRIES": 0,
+    "AI_MARCUS_TWO_STAGE_ENABLED": False,
+    "AI_AGENT_PACKET_ENABLED": True,
+    "AI_SIMILAR_SETUPS_ENABLED": True,
+    "AI_CONTRADICTION_DETECTOR_ENABLED": True,
+    "AI_MARKET_INTELLIGENCE_ENABLED": True,
+    "AI_MARKET_INTELLIGENCE_TTL_SECONDS": 1800,
+    "AI_MARKET_INTELLIGENCE_FAIL_OPEN": True,
+    "AI_STRATEGIST_ENABLED": True,
+    "AI_STRATEGIST_PRE_TRADE_ENABLED": False,
+    "AI_STRATEGIST_MORNING_BRIEF_ENABLED": True,
+    "AI_STRATEGIST_WEEKLY_RETRO_ENABLED": True,
+    "VISION_FRESHNESS_POLICY": {
+        "missing_chart_timestamp": "downgrade_to_review",
+        "missing_latest_candle_ts": "downgrade_to_review",
+        "stale_action": "reject_for_execution_context",
+        "max_age_sec": {
+            "M1": 180,
+            "M5": 900,
+            "M15": 1800,
+            "H1": 5400,
+            "H4": 18000,
+            "D1": 97200,
+        },
+    },
     "AI_PROMPT_STORE_CLEANUP_ENABLED": True,
     "AI_PROMPT_STORE_RETENTION_DAYS": 90,
     "AI_PROMPT_STORE_MIN_DELETE_AGE_DAYS": 7,
@@ -262,7 +338,10 @@ CONFIG: dict = {
     "AI_TEMPERATURE": 0.3,
     "AI_VISION_TEMPERATURE": 0.2,  # /api/chart-analysis factual mode (override in config.yaml if needed)
     "AI_VISION_CAN_UPGRADE_TRADE": False,  # Vision CONFIRM cannot create trade=True; downgrade only by default
+    # When False, debate/vision sources classified as neutral (e.g. SKIP/REVIEW) block execution_allowed.
+    "AI_NEUTRAL_ALLOWS_EXECUTION": False,
     "ENGINE_B_PROFILE_SCORING_ENABLED": True,
+    "ENGINE_B_FAST_FVG_DETECTION": True,
     "CHART_VISION_DATASET_ENABLED": False,
     "CHART_VISION_V2_SHADOW_ENABLED": False,
     "CRYPTOPANIC_KEY": os.environ.get("CRYPTOPANIC_KEY", ""),
@@ -276,6 +355,8 @@ CONFIG: dict = {
     "VOLUME_THRESHOLD_BACKTEST": 1.2,
     "BT_NUM_VARIANTS_TRIED": 1,
     "BT_BOOTSTRAP_CI_ITERATIONS": 1000,
+    "BT_MIN_TRADES_FOR_PSR_RELIABILITY": 30,
+    "BT_LOW_SAMPLE_SQ_WARN_TRADES": 30,
     "BT_SLIPPAGE_MODEL": {
         "ENABLED": True,
         "K1_TICK_MULT": 1.0,
@@ -289,9 +370,97 @@ CONFIG: dict = {
     "D1_CANDLES": 1001,
     "H4_CANDLES": 1000,
     "H1_CANDLES": 1000,
+    # Skip /api/eod-bulk-last-day/{EXCH} for these ticker suffixes (404 on e.g. COMM).
+    "CANDLE_BUILDER_BULK_D1_SKIP_EXCHANGES": ["COMM"],
     "SCAN_MAX_WORKERS": 3,
     "SCAN_DEBUG_CANDLE_META": False,
+    "MT5_BROKER_UTC_OFFSET": 3,
     "FOREX_H4_RESAMPLE_OFFSET_HOURS": 1.0,
+    "MT5_CANDLE_FALLBACK_ENABLED": False,
+    "ENGINE_A_CRYPTO_LEVELS_FEED": "bybit",
+    "ENGINE_A_CRYPTO_LEVELS_SIGNAL_FEED_FALLBACK": False,
+    "ENGINE_A_CRYPTO_DERIVATIVES_FEED": "bybit",
+    "ENGINE_A_CRYPTO_DERIVATIVES_BINANCE_FALLBACK": True,
+    "ENGINE_A_OI_MAX_AGE_SEC": 300,
+    "ENGINE_A_BT_OI_MAX_AGE_MS": 86400000,
+    "ENGINE_A_CRYPTO_BT_LEVEL_ATR_USE_SIGNAL_FEED": False,
+    "ENGINE_AB_CRYPTO_SIGNAL_FEED": "binance",
+    "ENGINE_AB_CRYPTO_SIGNAL_FEED_FALLBACK": False,
+    "ENGINE_A_MULTI_EXCHANGE_FUNDING": {
+        "ENABLED": True,
+        "BINANCE_WEIGHT": 0.5,
+        "BYBIT_WEIGHT": 0.5,
+    },
+    "ENGINE_B_CRYPTO_LEVELS_FEED": "bybit",
+    "ENGINE_B_CRYPTO_LEVELS_SIGNAL_FEED_FALLBACK": False,
+    "ENGINE_B_CRYPTO_BT_LEVEL_ATR_USE_SIGNAL_FEED": False,
+    "ENGINE_B_SWEEP_LOOKBACK_BARS": 5,
+    # Defaults True: synthetic-RR TP fallback rescues otherwise-valid Engine B
+    # signals whose structural target falls short of min_rr (or whose structural
+    # TP is missing/wrong-side). Code defaults must agree with config.yaml so
+    # deployments without overlay do not silently disable the rescue path.
+    "ENGINE_B_ALLOW_SYNTHETIC_FALLBACK_RR_TP": True,
+    "NAKED_MAX_DAILY": 3,
+    "ENGINE_B_BT_EXIT_POLICY": "fixed_target_be",
+    # When True, Engine B skips forex on 22:00–07:00 UTC bars (backtest + live scan).
+    "ENGINE_B_FOREX_ASIAN_SESSION_SKIP_ENABLED": True,
+    # Diagnostics-first forex session weighting for Engine B structure context.
+    # Disabled by default; score influence requires SCORE_INFLUENCE_ENABLED too.
+    "ENGINE_B_FOREX_SESSION_STRUCTURE_WEIGHTING": {
+        "ENABLED": False,
+        "SCORE_INFLUENCE_ENABLED": False,
+        "HIGH_QUALITY_BONUS": 0.02,
+        "MEDIUM_QUALITY_BONUS": 0.01,
+        "LOW_QUALITY_PENALTY": -0.02,
+        "LONDON_NY_OVERLAP_BONUS": 0.01,
+        "LIQUIDITY_SWEEP_ACTIVE_SESSION_BONUS": 0.01,
+        "MAX_ABS_SCORE_BONUS": 0.04,
+    },
+    # Forex-only, default-off correction for the Engine B space gate:
+    # when enabled, valid execution RR can satisfy the "room/rr" gate comment
+    # without changing non-forex assets.
+    "ENGINE_B_FOREX_RR_CAN_SATISFY_SPACE_GATE": False,
+    # Asset-scoped version of the same correction. Defaults preserve historical
+    # behavior; config.yaml enables paper-test assets explicitly.
+    "ENGINE_B_RR_CAN_SATISFY_SPACE_GATE": {
+        "default": False,
+        "forex": False,
+        "stock": False,
+        "index": False,
+        "commodity": False,
+        "etf": False,
+        "etf_bond": False,
+        "crypto": False,
+    },
+    # Default-off non-forex/crypto structure tuning for stocks, indices, commodities, and ETFs.
+    "ENGINE_B_ASSET_CLASS_ADJUSTMENTS_ENABLED": False,
+    "ENGINE_B_ASSET_CLASS_VOLATILITY_AWARE_ENABLED": False,
+    "ENGINE_B_ASSET_CLASS_STRUCTURE_MULT": {
+        "stock": 1.10,
+        "index": 1.05,
+        "commodity": 1.15,
+        "etf": 1.08,
+        "etf_bond": 1.05,
+    },
+    "ENGINE_B_ASSET_CLASS_BOS_MIN_BREAK_ATR": {
+        "forex": 0.05,
+        "stock": 0.06,
+        "index": 0.05,
+        "commodity": 0.08,
+        "etf": 0.05,
+        "etf_bond": 0.04,
+    },
+    "ENGINE_B_EQUITY_SESSION_STRUCTURE_WEIGHTING": {
+        "ENABLED": False,
+        "SCORE_INFLUENCE_ENABLED": False,
+        "HIGH_QUALITY_BONUS": 0.015,
+        "MEDIUM_QUALITY_BONUS": 0.008,
+        "OFF_HOURS_PENALTY": -0.015,
+        "LIQUIDITY_SWEEP_ACTIVE_SESSION_BONUS": 0.008,
+        "MAX_ABS_SCORE_BONUS": 0.03,
+    },
+    # When True, Engine B room gate requires structural distance; unknown distance fails closed.
+    "ENGINE_B_ROOM_GATE_REQUIRE_DISTANCE": True,
     "BINANCE_KLINE_WS_INTERVALS": ["1m", "5m", "15m", "1h", "4h", "1d"],
     "MIN_CONFLUENCE": 1.0,
     "RISK_MULT": {
@@ -311,11 +480,11 @@ CONFIG: dict = {
         "index": 0.0004,
     },
     "RANGING": {
-        "crypto": {"dead": 14, "dead_pen": 1.5, "choppy": 18, "choppy_pen": 0.5},
-        "commodity": {"dead": 18, "dead_pen": 1.5, "choppy": 23, "choppy_pen": 0.5},
-        "forex": {"dead": 18, "dead_pen": 1.5, "choppy": 23, "choppy_pen": 1.0},
-        "stock": {"dead": 16, "dead_pen": 1.5, "choppy": 21, "choppy_pen": 0.5},
-        "index": {"dead": 16, "dead_pen": 1.5, "choppy": 21, "choppy_pen": 0.5},
+        "crypto": {"dead": 18, "choppy": 23},
+        "commodity": {"dead": 18, "choppy": 23},
+        "forex": {"dead": 18, "choppy": 23},
+        "stock": {"dead": 16, "choppy": 21},
+        "index": {"dead": 16, "choppy": 21},
     },
     # ATR_CLASS: fallback when no style is set. Primary path is STYLE_ATR_MULTS below.
     "ATR_CLASS": {
@@ -323,6 +492,8 @@ CONFIG: dict = {
         "commodity": {"sl": 1.5, "tp1": 2.5, "tp2": 4.0},
         "index": {"sl": 1.5, "tp1": 2.5, "tp2": 4.0},
         "stock": {"sl": 1.5, "tp1": 2.5, "tp2": 4.0},
+        "etf": {"sl": 1.2, "tp1": 2.0, "tp2": 3.5},
+        "etf_bond": {"sl": 0.9, "tp1": 1.5, "tp2": 2.5},
         "crypto": {"sl": 2.0, "tp1": 3.5, "tp2": 5.0},
     },
     # Style-specific ATR multipliers — calibrated to industry benchmarks:
@@ -353,6 +524,10 @@ CONFIG: dict = {
             "forex":     {"sl": 1.00, "tp1": 1.50, "tp2": 2.50},
             "crypto":    {"sl": 1.20, "tp1": 1.80, "tp2": 3.00},
             "stock":     {"sl": 1.00, "tp1": 1.50, "tp2": 2.50},
+            # Broad ETFs (SPY/QQQ/IWM/EEM/sector ETFs) are smoother than single stocks.
+            "etf":       {"sl": 0.80, "tp1": 1.30, "tp2": 2.20},
+            # Bond ETFs (TLT) — lowest realised vol, tightest stops.
+            "etf_bond":  {"sl": 0.60, "tp1": 1.00, "tp2": 1.80},
             "commodity": {"sl": 1.20, "tp1": 1.80, "tp2": 3.00},
             "index":     {"sl": 1.00, "tp1": 1.50, "tp2": 2.50},
         },
@@ -363,6 +538,8 @@ CONFIG: dict = {
             "forex":     {"sl": 1.50, "tp1": 3.00, "tp2": 4.50},
             "crypto":    {"sl": 1.50, "tp1": 3.00, "tp2": 4.50},
             "stock":     {"sl": 1.50, "tp1": 3.00, "tp2": 4.50},
+            "etf":       {"sl": 1.20, "tp1": 2.40, "tp2": 3.60},
+            "etf_bond":  {"sl": 0.90, "tp1": 1.80, "tp2": 2.70},
             "commodity": {"sl": 2.00, "tp1": 4.00, "tp2": 6.00},
             "index":     {"sl": 1.50, "tp1": 3.00, "tp2": 4.50},
         },
@@ -375,6 +552,8 @@ CONFIG: dict = {
             "forex":     {"sl": 1.80, "tp1": 3.00, "tp2": 5.00},
             "crypto":    {"sl": 1.50, "tp1": 2.50, "tp2": 4.00},
             "stock":     {"sl": 1.80, "tp1": 3.00, "tp2": 5.00},
+            "etf":       {"sl": 1.40, "tp1": 2.40, "tp2": 4.00},
+            "etf_bond":  {"sl": 1.10, "tp1": 1.80, "tp2": 3.00},
             "commodity": {"sl": 1.80, "tp1": 3.00, "tp2": 5.00},
             "index":     {"sl": 1.80, "tp1": 3.00, "tp2": 5.00},
         },
@@ -424,8 +603,8 @@ CONFIG: dict = {
         "commodity": 252,
     },
     "ADX_TREND_MIN_CLASS": {
-        "crypto": 20,
-        "forex": 22,
+        "crypto": 15,
+        "forex": 20,
         "commodity": 25,
         "stock": 25,
         "index": 25,
@@ -465,7 +644,7 @@ CONFIG: dict = {
         "index": 150,
     },
     # Stage 4.2: BT_MIN / BT_MIN_GROUP / BACKTEST_USE_BT_MIN_THRESHOLDS deleted.
-    # Single source of truth: scoring.py _TIER_VOLATILE (2.0) and _TIER_STABLE (1.5).
+    # Single source of truth: scoring.py profile/pair/group resolver plus 3-tier fallback.
     "RESEARCH_MODE": False,
     "BACKTEST_EVENT_RISK_GATING": False,
     "BACKTEST_SENTIMENT_GATING": False,
@@ -510,139 +689,105 @@ CONFIG: dict = {
         "commodity": 0.18,
     },
     # MIN_CONFLUENCE_GROUP removed. Engine A live/backtest thresholds are resolved
-    # in scoring.py from the two-tier system plus PAIR_PROFILES.min_confluence.
-    # MIN_CONFLUENCE_CLASS is legacy/admin metadata and is not read by that gate.
+    # in scoring.py from profile overrides, pair/group config, then 3-tier fallback.
     # Factor scoring gates — see factor_scoring.py
+    "ENGINE_A_PAIR_THRESHOLDS": {},
+    "ENGINE_A_SCORE_GROUP_THRESHOLDS": {
+        "default": 1.5,
+        "forex_majors": 2.1,
+        "forex_crosses": 2.1,
+        "forex_other": 2.1,
+        "crypto_btc": 2.0,
+        "crypto_eth": 2.0,
+        "crypto_alt_majors": 2.0,
+        "crypto_doge": 2.0,
+        "crypto_other": 2.0,
+        "nat_gas": 2.0,
+        "forex_exotics": 1.7,
+        "softs": 1.7,
+    },
+    "ENGINE_A_ATR_LEVEL_CLASS_BY_DISPLAY": {
+        "SPY": "etf",
+        "QQQ": "etf",
+        "GLD": "etf",
+        "TLT": "etf_bond",
+        "IWM": "etf",
+        "EEM": "etf",
+        "DIA": "etf",
+        "GDX": "etf",
+        "SOXX": "etf",
+        "XLF": "etf",
+        "XLE": "etf",
+        "SLV": "etf",
+        "USO": "etf",
+    },
+    "ENGINE_A_ATR_LEVEL_CLASS_BY_SCORE_GROUP": {},
+    "ENGINE_A_COT_ADDON_ASSET_TYPES": ["commodity", "index", "stock"],
     "ADX_MISSING_BOTH_ABORT": True,
     "FACTOR_MIN_DIRECTIONAL": 0.25,  # Skip if abs(dir_score) < this (near-directionless signal)
     "FACTOR_DIRECTIONAL_SOFT_SPAN": 0.20,  # Smooth transition width for directional confidence
-    "FACTOR_MIN_DIRECTIONAL_CRYPTO": 0.15,
+    "FACTOR_MIN_DIRECTIONAL_CRYPTO": 0.20,
     "FACTOR_DIRECTIONAL_SOFT_SPAN_CRYPTO": 0.30,
-    "CRYPTO_TRANSITION_PENALTY_ENABLED": True,
+    "FACTOR_FOREX_SESSION_MULT": {
+        "ENABLED": False,
+        "BY_QUALITY": {"high": 1.0, "medium": 0.95, "low": 0.85},
+    },
+    # Engine A class/score_group overrides. Disabled by default so the unified
+    # factor formula keeps historical behavior unless a class is explicitly tuned.
+    "ENGINE_A_SCORE_GROUP_ADJUSTMENTS_ENABLED": False,
+    "ENGINE_A_FACTOR_WEIGHTS_BY_CLASS": {},
+    "ENGINE_A_DIRECTIONAL_RAMP_BY_CLASS": {},
+    "ENGINE_A_ADDON_UNSUPPORTED_SPLIT_BY_CLASS": {},
+    "ENGINE_A_CONVICTION_FLOOR_BY_CLASS": {},
+    "ENGINE_A_RESEARCH_LAB_FACTORS_BY_CLASS": {},
+    "ENGINE_A_VOLATILITY_REGIME_ADJUSTMENT_ENABLED": False,
+    "ENGINE_A_VOLATILITY_REGIME_MULTIPLIERS": {},
+    "ENGINE_A_VOLATILITY_REGIME_MULT_BOUNDS": {"min": 0.85, "max": 1.15},
+    "ENGINE_A_EQUITY_SESSION_LIQUIDITY_WEIGHTING": {
+        "ENABLED": False,
+        "ASSET_TYPES": ["stock", "index", "etf", "etf_bond"],
+        "ACTIVE_UTC_START_HOUR": 13.5,
+        "ACTIVE_UTC_END_HOUR": 20.0,
+        "ACTIVE_MULT": 1.02,
+        "OFF_HOURS_MULT": 0.98,
+    },
+    "ENGINE_A_STRUCTURE_CONTEXT_ENABLED": False,
+    "ENGINE_A": {
+        "structure_first_entry": {
+            "enabled": False,
+            "lookback_bars": 5,
+            "require_bos": True,
+            "require_choch": False,
+        },
+    },
+    "FACTOR_CRYPTO_ADDON_COMBO_CONFIRM_CAP": 0.25,
+    "FACTOR_CRYPTO_ADDON_COMBO_AGAINST_CAP": -0.20,
+    "ENGINE_A_COT_CONTRARIAN_FADE": {
+        "ENABLED": True,
+        "ASSET_TYPES": ["forex", "commodity"],
+        "FADE_START_Z": 1.5,
+        "FULL_FADE_Z": 2.5,
+    },
+    "EODHD_COMMODITY_TICKERS": {
+        "WTI Oil": "WTICOUSD.FOREX",
+        "Brent Oil": "BRENTOIL.FOREX",
+        "Nat Gas": "NATGASUSD.FOREX",
+        "Copper": "XCUUSD.FOREX",
+        "Aluminium": "ALI.COMM",
+        "Lead": "PB.COMM",
+        "Nickel": "NI.COMM",
+        "Zinc": "ZNC.COMM",
+        "Cattle": "LE.COMM",
+        "Cocoa": "CC.COMM",
+        "Coffee": "KC.COMM",
+        "Corn": "ZC.COMM",
+        "Cotton": "CT.COMM",
+        "Soybeans": "ZS.COMM",
+        "Sugar": "SB.COMM",
+        "Wheat": "ZW.COMM",
+    },
     "CRYPTO_LIVE_MICROSTRUCTURE_SCORING_ENABLED": True,
     "REGIME_SMOOTHING_BARS": 3,  # Consecutive bars required before committing to a regime change
-    # Factor weights per asset class (base, before regime overrides)
-    "FACTOR_WEIGHTS": {
-        "crypto": {
-            "trend": 2.0,
-            "trend_strength": 1.0,
-            "momentum": 1.5,
-            "volatility": 1.0,
-            "volume": 1.0,
-            "structure": 1.0,
-            "derivatives": 1.0,
-            "microstructure": 0.75,
-            "carry": 0.0,
-        },
-        "forex": {
-            "trend": 2.0,
-            "trend_strength": 1.0,
-            "momentum": 1.0,
-            "volatility": 1.0,
-            "volume": 0.5,
-            "structure": 1.5,
-            "derivatives": 0.0,
-            "microstructure": 0.5,
-            "carry": 0.0,
-        },
-        "stock": {
-            "trend": 2.0,
-            "trend_strength": 1.0,
-            "momentum": 1.5,
-            "volatility": 1.0,
-            "volume": 1.5,
-            "structure": 1.0,
-            "derivatives": 0.5,
-            "microstructure": 0.75,
-            "carry": 1.0,
-        },
-        "commodity": {
-            "trend": 2.0,
-            "trend_strength": 1.0,
-            "momentum": 1.3,
-            "volatility": 1.5,
-            "volume": 1.0,
-            "structure": 1.3,
-            "derivatives": 0.0,
-            "microstructure": 0.75,
-            "carry": 0.0,
-        },
-        "index": {
-            "trend": 2.0,
-            "trend_strength": 1.0,
-            "momentum": 1.4,
-            "volatility": 1.2,
-            "volume": 0.8,
-            "structure": 1.0,
-            "derivatives": 1.2,
-            "microstructure": 0.75,
-            "carry": 1.0,
-        },
-    },
-    # Optional subgroup multipliers for factor-group weights (Engine A non-forex).
-    "FACTOR_SCORE_GROUP_MULTIPLIERS": {
-        "us_stock_single": {"volatility": 1.2, "volume": 1.2, "momentum": 0.9},
-        "bond_tlt": {"trend": 0.8, "volatility": 1.2, "carry": 1.3},
-        "smallcap_em_etf": {"volatility": 1.2, "momentum": 1.1},
-        "asian_indices": {"volatility": 1.15, "momentum": 1.1},
-        "energy_oil": {"volatility": 1.15, "structure": 1.1},
-        "precious_trackers": {"structure": 1.1, "volatility": 1.1},
-        "nat_gas": {"volatility": 1.35, "structure": 1.15},
-        "copper": {"trend": 1.1, "structure": 1.15},
-        "pgm_metals": {"volatility": 1.2, "structure": 1.15},
-        "crypto_btc": {"derivatives": 1.1},
-        "crypto_eth": {"derivatives": 1.05},
-        "crypto_doge": {"volatility": 1.35},
-        "crypto_alt_majors": {"trend": 1.05, "momentum": 1.05},
-        "crypto_other": {"trend": 1.05, "momentum": 1.05},
-    },
-    # Regime-aware factor weight overrides
-    "REGIME_WEIGHTS": {
-        "TRENDING": {
-            "trend": 2.0,
-            "trend_strength": 1.5,
-            "momentum": 1.5,
-            "volatility": 1.0,
-            "volume": 1.0,
-            "structure": 0.5,
-            "derivatives": 1.2,
-            "microstructure": 1.5,
-            "carry": 1.0,
-        },
-        "RANGING": {
-            "trend": 0.5,
-            "trend_strength": 0.5,
-            "momentum": 1.5,
-            "volatility": 1.0,
-            "volume": 1.0,
-            "structure": 2.0,
-            "derivatives": 1.0,
-            "microstructure": 1.5,
-            "carry": 1.0,
-        },
-        "HIGH_VOLATILITY": {
-            "trend": 1.0,
-            "trend_strength": 1.0,
-            "momentum": 1.0,
-            "volatility": 2.0,
-            "volume": 1.5,
-            "structure": 1.0,
-            "derivatives": 1.5,
-            "microstructure": 1.5,
-            "carry": 1.0,
-        },
-        "LOW_VOLATILITY": {
-            "trend": 1.2,
-            "trend_strength": 0.8,
-            "momentum": 1.0,
-            "volatility": 0.5,
-            "volume": 1.0,
-            "structure": 1.0,
-            "derivatives": 1.0,
-            "microstructure": 1.5,
-            "carry": 1.0,
-        },
-    },
     # Per-indicator weights within each factor group (multiplied with correlation weights).
     # Missing keys default to 1.0. Set to 0.0 to disable an indicator.
     "INDICATOR_WEIGHTS": {
@@ -665,23 +810,6 @@ CONFIG: dict = {
                 "volume_momentum_spread": 0.2,
             },
         },
-        "derivatives": {
-            "default": {"cot_z": 0.6, "funding_rate": 0.4},
-            "crypto": {"funding_rate": 0.75, "cot_z": 0.25},
-        },
-        "microstructure": {
-            "order_book_imbalance": 0.4,
-            "liquidity_wall_detection": 0.25,
-            "orderflow_delta": 0.2,
-            "liquidity_pressure": 0.15,
-        },
-        "volatility": {"atr_z": 0.5, "bbWidth_z": 0.3, "realized_vol_z": 0.2},
-        "volume": {"volume_ratio": 0.7, "obv_trend": 0.3},
-    },
-    "CRYPTO_FACTOR_WEIGHT_CAPS": {
-        "derivatives": 1.0,
-        "microstructure": 0.75,
-        "carry": 0.0,
     },
     # Indicator correlation control
     "INDICATOR_CORRELATION_ENABLED": False,  # Expensive O(n²); enable manually for live deep analysis
@@ -697,7 +825,7 @@ CONFIG: dict = {
     "SHADOW_LEDGER_ENABLED": True,
     "MICROSTRUCTURE_FEEDS_ENABLED": True,
     "MICROSTRUCTURE_BYBIT_FEEDS_ENABLED": False,
-    "MARKET_DATA_WS_SSL_VERIFY": False,
+    "MARKET_DATA_WS_SSL_VERIFY": True,
     "BYBIT_TIME_SYNC_ENABLED": False,
     "BYBIT_RECV_WINDOW_MS": 30000,
     "PAIR_PROFILES": {},
@@ -711,6 +839,16 @@ CONFIG: dict = {
     },
     "EXECUTOR_MODE": "paper",
     "EXECUTION_ENABLED": True,  # Master switch — enabled for demo live-level testing
+    # Re-fetch H1/H4/D1 candle metadata right before risk/guardian during execute paths.
+    "QUICK_EXEC_PREFETCH_CANDLE_META": False,
+    # Rebuild candleFreshness/consistency/dataFreshness before risk (poisoned client fields).
+    "EXECUTION_HYDRATE_CANDLE_QUALITY": True,
+    # MT5 D1: small multi-bucket lag vs wall clock (weekends/holidays) downgraded to non-blocking severity.
+    "MT5_D1_CALENDAR_GAP_GRACE_BUCKETS": 4,
+    # Legacy alias — used if MT5_D1_CALENDAR_GAP_GRACE_BUCKETS is omitted in YAML.
+    "FOREX_D1_MULTI_BUCKET_CALENDAR_GAP_GRACE_BUCKETS": 4,
+    # Types that must not use D1 gap grace (24/7 markets).
+    "MT5_D1_CALENDAR_GAP_EXCLUDE_TYPES": ["crypto"],
     "AUTO_EXECUTE": False,  # Auto-execute after AI grade (manual click only when False)
     "RISK_ENGINE_ENABLED": True,
     "MT5_EXECUTION_ENABLED": True,
@@ -737,6 +875,8 @@ CONFIG: dict = {
         "index":     0.04,
         "stock":     0.08,
     },
+    "MAX_SL_PCT_SCORE_GROUP_OVERRIDES": {},
+    "MAX_SL_PCT_SYMBOL_OVERRIDES": {},
     "DATA_FRESHNESS_GATES": {
         "WARN_ON_STALE_SCAN": True,
         "BLOCK_EXECUTION_ON_STALE": True,
@@ -751,17 +891,22 @@ CONFIG: dict = {
     },
     "DRAWDOWN_REDUCE_THRESHOLD": 0.10,  # At 10% drawdown, halve position sizes
     "DRAWDOWN_STOP_THRESHOLD": 0.15,  # At 15% drawdown, reject ALL new trades
+    "DRAWDOWN_STOP_ENABLED": True,  # Set false only for paper/debug — disables stop + size reduction
     # ── Auto-Trade Bot ────────────────────────────────────────────────────────
     "AUTO_TRADE_ENABLED": False,  # Master toggle (also togglable via UI/API)
-    "AUTO_TRADE_MIN_SCORE": {  # Scan floor that determines which signals reach the auto-trader candidate list
-        "crypto": 1.40,
-        "commodity": 1.40,
-        "stock": 1.55,
-        "index": 1.35,
-        "forex": 1.0,
+    "AUTO_TRADE_MIN_SCORE": {  # Informational scan floor; live gate is AUTO_TRADE_MIN_CONVICTION
+        "crypto": 2.0,
+        "forex": 2.1,
+        "commodity": 1.8,
+        "stock": 1.8,
+        "index": 1.8,
     },
     "AUTO_TRADE_MIN_CONVICTION": {  # Live auto-execute gate on combinedConviction (0-1 scale)
         "default": 0.50,
+    },
+    "AUTO_TRADE_A_ONLY_WEIGHT": {
+        "default": 0.60,
+        "crypto": 0.60,
     },
     "AUTO_TRADE_MAX_DAILY": 20,  # Max auto-trades per calendar day (UTC)
     "AUTO_TRADE_MAX_PER_SCAN": 1,  # Max executions per single scan run
@@ -776,7 +921,7 @@ CONFIG: dict = {
     },
     "AUTO_TRADE_BLOCKED_TREND_STATES": {
         "default": ["DEAD RANGING", "RANGING"],
-        "crypto": ["DEAD RANGING", "RANGING"],
+        "crypto": ["DEAD RANGING"],
         "forex": [],
         "commodity": ["DEAD RANGING", "RANGING"],
         "stock": ["DEAD RANGING", "RANGING"],
@@ -790,7 +935,7 @@ CONFIG: dict = {
     "ENGINE_A_BLOCKED_TREND_STATES": ["DEAD RANGING", "DEVELOPING"],
     "AUTO_TRADE_BLOCKED_REGIMES": {
         "default": ["RANGING"],
-        "crypto": ["RANGING"],
+        "crypto": [],
         "forex": [],
         "commodity": ["RANGING"],
         "stock": ["RANGING"],
@@ -810,30 +955,13 @@ CONFIG: dict = {
     "LEARNING_LOOKBACK_DAYS": 90,  # Days of history to query for context
     "META_ANALYSIS_ENABLED": True,  # Weekly meta-analysis via configured AI provider
     "EODHD_EARNINGS_CALENDAR_ENABLED": False,  # Disabled by default; unsupported on many EODHD plans
+    "INSIDER_TRADING_DIAGNOSTIC_ENABLED": True,
+    "FUNDAMENTALS_DIAGNOSTIC_ENABLED": True,
     # ── Engine B AI Controls ─────────────────────────────────────────────────
     "ENGINE_B_NEWS_CONTEXT_ENABLED": True,  # Feed news into Engine B AI advisory (not checklist)
     "ENGINE_B_ZONE_PERSISTENCE": False,  # Persist Engine B OB/FVG registry to zones.db
     "ENGINE_B_USE_FORMING_FOR_STRUCTURE": False,
     "ENGINE_B_USE_FORMING_FOR_TRIGGER": True,
-    "ENGINE_B_CRYPTO_PROFILE_ENABLED": False,
-    "ENGINE_B_CRYPTO_TARGET_MODEL_ENABLED": False,
-    "ENGINE_B_CRYPTO_TARGET_V2_ENABLED": False,
-    "ENGINE_B_CRYPTO_REQUIRE_STRUCTURAL_TARGET_FOR_PASS": True,
-    "ENGINE_B_CRYPTO_ALLOW_FALLBACK_TARGET_FOR_PASS": False,
-    "ENGINE_B_CRYPTO_TARGET_SEARCH_MAX_RANK": 8,
-    "ENGINE_B_CRYPTO_TARGET_MIN_RR": 1.2,
-    "ENGINE_B_CRYPTO_MIN_RR": 1.2,
-    "ENGINE_B_CRYPTO_TARGET_MIN_ATR_MULTIPLE": 1.0,
-    "ENGINE_B_CRYPTO_TARGET_MAX_ATR_MULTIPLE": 6.0,
-    "ENGINE_B_CRYPTO_ALLOW_D1_TARGETS": True,
-    "ENGINE_B_CRYPTO_TRIGGER_PROFILE_ENABLED": False,
-    "ENGINE_B_CRYPTO_ENTRY_TIMEFRAMES": ["M15", "M5"],
-    "ENGINE_B_CRYPTO_CONTEXT_TIMEFRAME": "H1",
-    "ENGINE_B_CRYPTO_STRUCTURE_TIMEFRAMES": ["H4", "D1"],
-    "ENGINE_B_CRYPTO_LOCATION_ATR_BUFFER": 0.75,
-    "ENGINE_B_CRYPTO_MIN_DISPLACEMENT_ATR": 0.35,
-    "ENGINE_B_CRYPTO_MIN_VOLUME_RATIO": 1.2,
-    "ENGINE_B_CRYPTO_MIN_TAKER_DELTA_RATIO": 0.55,
     "AI_ON_DEMAND_ONLY": True,  # AI runs on user-initiated actions only, not auto-scans
     # ── Engine C B-side fallback controls ─────────────────────────────────────
     "ENGINE_C_B_ONLY_MULT": 0.65,  # Scale B-only conviction when A has no signal
@@ -841,6 +969,63 @@ CONFIG: dict = {
     "ENGINE_C_B_CONFLICT_MIN_SCORE": 0.70,  # Minimum B normalized score for conflict override
     "ENGINE_C_A_CONFLICT_MAX_SCORE": 0.45,  # Max opposing A normalized score for B override
     "ENGINE_C_B_CONFLICT_PENALTY": 0.85,  # Penalty applied to B score during conflict override
+    "ENGINE_C_EXEC_MIN_RR": 1.0,
+    "ENGINE_C_A_DEFAULT_MAX_SCORE": 3.0,
+    "ENGINE_C_A_DEFAULT_MAX_SCORE_BY_TYPE": {},
+    "ENGINE_B_BT_STRUCTURE_GATE_ENABLED": True,
+    "ENGINE_B_STRUCTURE_GATE_ENABLED": True,
+    "ENGINE_B_SCAN_CONFIRMATION_GATE_ENABLED": False,
+    # Scan-only: let Engine B re-check its own naked-structure direction when
+    # the Engine A direction blocks B. Default-off to preserve historical scan behavior.
+    "ENGINE_B_SCAN_INDEPENDENT_DIRECTION_ENABLED": False,
+    # Scan-only: surface passed B-only structures as watchlist rows when A is
+    # below its scan threshold. This does not grant execution permission.
+    "ENGINE_B_SCAN_B_ONLY_WATCHLIST_ENABLED": False,
+    # Full-scan diagnostics: attach per-row engine_b_scan_gate_funnel payload (report-only).
+    "ENGINE_B_SCAN_GATE_FUNNEL_ENABLED": True,
+    # Persist funnel extracts + summaries under logs/engine_b_gate_funnel (fail-open).
+    # Env ENGINE_B_SCAN_GATE_FUNNEL_PERSIST=0 disables, =1 forces on.
+    "ENGINE_B_SCAN_GATE_FUNNEL_PERSIST_ENABLED": True,
+    "ENGINE_B_SCAN_GATE_FUNNEL_OUTPUT_DIR": "logs/engine_b_gate_funnel",
+    # Scan-only surfacing for Engine B structures that are blocked by the final trigger.
+    # Default-off: execution and Engine B pass gates remain unchanged unless explicitly enabled.
+    "ENGINE_B_STRUCTURE_READY_WATCHLIST": {
+        "ENABLED": False,
+        "MIN_SCORE_RATIO": 0.85,
+        "REQUIRE_TRIGGER_MISSING": True,
+        "REQUIRE_STRUCTURE_OK": True,
+        "REQUIRE_LOCATION_CONTEXT": True,
+        "FOREX_GATE_NEAR_MISS_ENABLED": False,
+        "ASSET_GATE_NEAR_MISS_ENABLED": False,
+        "FOREX_MIN_GATE_CONFIRMATIONS": 3,
+    },
+    "ENGINE_B_USE_EXECUTION_LEVELS_FOR_SCAN_SIGNALS": True,
+    "ENGINE_B_STRUCTURE_SCORE_INFLUENCE_ENABLED": False,
+    "ENGINE_B_STRUCTURE_SCORE_COMPONENT_BONUSES": {
+        "zone_proximity": 0.08,
+        "ob_at_zone": 0.05,
+        "fvg_overlap": 0.05,
+        "liquidity_sweep": 0.04,
+        "independent_direction_aligned": 0.04,
+        "independent_direction_opposed": -0.08,
+    },
+    "ENGINE_B_STRUCTURE_SCORE_MULT_BOUNDS": {
+        "min": 0.85,
+        "max": 1.20,
+    },
+    "ENGINE_B_STRUCTURE_INFLUENCE_LEVEL": "standard",
+    "ENGINE_B_STRUCTURE_INFLUENCE_LEVEL_MULTIPLIERS": {
+        "conservative": 0.75,
+        "standard": 1.0,
+        "enhanced": 1.25,
+    },
+    "ENGINE_B_STRUCTURE_SCORE_CONFLUENCE": {
+        "ENABLED": False,
+        "BONUS": 0.03,
+    },
+    "ENGINE_B_CRYPTO_VOLATILITY_ADJUSTMENT_ENABLED": False,
+    "ENGINE_B_CRYPTO_STRUCTURE_MULT": 1.25,
+    "ENGINE_B_CRYPTO_BOS_MIN_BREAK_ATR": 0.10,
     # ── Engine B (Naked Scalp) ────────────────────────────────────────────────
     "NAKED_ENGINE": {
         "zone_multipliers": {
@@ -850,9 +1035,11 @@ CONFIG: dict = {
             "LOW_VOLATILITY": {"upper": 0.2, "lower": 0.8, "sl": 1.0},
         },
         "structural_tp_buffer_atr_mult": 0.25,
+        "d1_pd_array_conflict_window_atr_mult": 3.0,
+        "rejection_wick_body_ratio": 1.2,
         "style_profiles": {
             "scalp": {
-                "min_score": 3.0,
+                "min_score": 4.0,
                 "min_rr": 1.5,
                 "fallback_rr": 2.0,
                 "require_macro_align": False,
@@ -887,13 +1074,14 @@ CONFIG: dict = {
                 "swing": {"min_room_atr": 1.2, "min_rr": 1.8},
             },
             "nat_gas": {
+                "scalp": {"min_score": 4.0},
                 "intraday": {"min_score": 4.0, "min_rr": 1.6},
-                "swing": {"min_score": 4.0, "min_rr": 2.0},
+                "swing": {"min_score": 5.0, "min_rr": 2.0},
             },
             "crypto_doge": {
-                "scalp": {"min_score": 3.0, "min_room_atr": 0.5},
+                "scalp": {"min_score": 4.0, "min_room_atr": 0.5},
                 "intraday": {"min_score": 4.0, "min_room_atr": 0.9, "min_rr": 1.5},
-                "swing": {"min_score": 4.0, "min_room_atr": 1.2, "min_rr": 1.9},
+                "swing": {"min_score": 5.0, "min_room_atr": 1.2, "min_rr": 1.9},
             },
         },
     },
@@ -939,6 +1127,10 @@ CONFIG: dict = {
     },
 }
 
+# Engine B has its own backtest-exit namespace so Engine C tuning cannot
+# silently alter Engine B behavior.
+CONFIG["ENGINE_B_BT_EXIT"] = _deep_merge_dict({}, CONFIG.get("ENGINE_C_BT_EXIT", {}))
+
 # Apply YAML overrides — deep-merge dicts, overwrite scalars
 _CONFIG_DEFAULT_KEYS = set(CONFIG.keys())
 _KNOWN_YAML_ONLY_KEYS = {
@@ -950,39 +1142,40 @@ _KNOWN_YAML_ONLY_KEYS = {
     "BT_VECTORIZED",
     "CONDUCTOR",
     "CONFIDENCE_THRESHOLD",
-    "CRYPTO_TRANSITION_PENALTY",
     "ENGINE_A_MEAN_REVERSION",
     "ENGINE_A_RESEARCH_LAB_FACTORS",
-    "ENGINE_B_BT_SL_MODE",
     "ENGINE_B_BT_STRUCTURE_GATE_ENABLED",
-    "ENGINE_B_CRYPTO_MAX_TARGET_ATR_MULTIPLE",
-    "ENGINE_B_CRYPTO_MIN_TARGET_ATR_MULTIPLE",
-    "ENGINE_B_CRYPTO_REQUIRE_CLEAR_PATH_TO_TP2",
-    "ENGINE_B_CRYPTO_TARGET_MODE",
-    "ENGINE_B_CRYPTO_TP1_MODE",
-    "ENGINE_B_CRYPTO_TP2_MODE",
+    "ENGINE_B_BOS_LOOKBACK_BARS",
+    "ENGINE_B_BOS_VOLUME_FOR_TICKVOL",
+    "ENGINE_B_CRYPTO_LEVELS_FEED",
+    "ENGINE_B_CRYPTO_LEVELS_SIGNAL_FEED_FALLBACK",
+    "ENGINE_B_FOREX_ASIAN_SESSION_SKIP_ENABLED",
+    "ENGINE_B_CHOCH_STRICT",
+    "ENGINE_B_SCAN_CONFIRMATION_GATE_ENABLED",
+    "ENGINE_B_SCAN_GATE_FUNNEL_ENABLED",
+    "ENGINE_B_STRUCTURAL_SL_USE_STYLE_ATR_MULTS",
     "ENGINE_B_FOLLOW_THROUGH",
     "ENGINE_B_FOREX_ADX_MIN",
-    "ENGINE_B_FOREX_STRUCTURE_TF",
     "ENGINE_B_RESEARCH_LAB_FACTORS",
     "ENGINE_B_STRUCTURE_GATE_ENABLED",
+    "ENGINE_B_USE_EXECUTION_LEVELS_FOR_SCAN_SIGNALS",
     "ENGINE_C_AI_WEIGHT_ADJUST_ENABLED",
     "ENGINE_C_AI_WEIGHT_MAX",
     "ENGINE_C_AI_WEIGHT_MIN",
     "ENGINE_C_AI_WEIGHT_VERDICT_ENABLED",
     "ENGINE_C_META_BLEND",
+    "ENGINE_C_EXEC_MIN_RR",
+    "ENGINE_C_A_DEFAULT_MAX_SCORE",
+    "ENGINE_C_A_DEFAULT_MAX_SCORE_BY_TYPE",
     "FACTOR_ADX_HARD_FAIL_CLASS",
     "FACTOR_CONVICTION_FLOOR",
     "FACTOR_FUNDING_BASELINE",
     "FACTOR_FUNDING_NOISE_BAND",
     "FOREX_SESSION_FILTER",
-    "FUNDAMENTALS_ENABLED",
-    "INSIDER_TRADING_ENABLED",
     "INTERMARKET_CONFIRMATION",
     "KELLY_FRACTION",
     "LIVE_DASHBOARD",
-    "MIN_CONFLUENCE_CLASS",
-    "NAKED_MAX_DAILY",
+        "NAKED_MAX_DAILY",
     "NEWS_BG_INTERVAL_SEC",
     "NEWS_PAIR_CACHE_TTL_SEC",
     "POSITION_SIZE_CONFIDENCE_SCALING",
@@ -999,6 +1192,38 @@ for _k, _v in _yaml_overrides.items():
         CONFIG[_k] = _deep_merge_dict(CONFIG[_k], _v)
     else:
         CONFIG[_k] = _v
+
+
+def get_d1_resample_offset_hours() -> float:
+    """MT5 daily bar grid offset (hours, UTC-aligned policy layer).
+
+    **Precedence:** top-level ``config.yaml`` key ``D1_RESAMPLE_OFFSET_HOURS`` wins when
+    present. Otherwise inherits ``SCALP_ENGINE.D1_RESAMPLE_OFFSET_HOURS`` (legacy nest).
+    Missing / invalid → ``0.0`` (UTC 00:00 daily buckets).
+    """
+    raw = CONFIG.get("D1_RESAMPLE_OFFSET_HOURS")
+    if raw is None:
+        se = CONFIG.get("SCALP_ENGINE")
+        if isinstance(se, dict):
+            raw = se.get("D1_RESAMPLE_OFFSET_HOURS")
+    try:
+        if raw is None:
+            return 0.0
+        return float(raw)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def get_mt5_fetch_stale_unshifted_age_sec() -> float:
+    """Max age (seconds) for newest MT5 bar before refusing tick-TZ heuristic in fetch_mt5."""
+    try:
+        v = CONFIG.get("MT5_FETCH_STALE_UNSHIFTED_AGE_SEC")
+        if v is None:
+            return float(36 * 3600)
+        out = float(v)
+        return out if out > 0 else float(36 * 3600)
+    except (TypeError, ValueError):
+        return float(36 * 3600)
 
 
 # =============================================================================
@@ -1112,7 +1337,7 @@ def validate_config(cfg: dict) -> None:
         if not isinstance(v, int) or v < 10:
             log.warning(f"[CFG] {k}={v} is too low — minimum 10 candles required")
     try:
-        float(cfg.get("FOREX_H4_RESAMPLE_OFFSET_HOURS", 1.0) or 1.0)
+        float(cfg.get("FOREX_H4_RESAMPLE_OFFSET_HOURS", 2.0) or 2.0)
     except (TypeError, ValueError):
         log.warning("[CFG] FOREX_H4_RESAMPLE_OFFSET_HOURS must be numeric")
     if cfg.get("RISK_PCT", 0) > 0.05:
@@ -1257,7 +1482,7 @@ _CRITICAL_SAFETY_SCHEMA: dict[tuple[str, ...], dict] = {
     ("BYBIT_LEVERAGE",): {"type": "int", "min": 1, "max": 1},
     ("RISK_PCT",): {"type": "number", "min": 0.0, "max": 0.05},
     ("MAX_RISK_PER_TRADE",): {"type": "number", "min": 0.0, "max": 0.05},
-    ("MAX_PORTFOLIO_HEAT",): {"type": "number", "min": 0.0, "max": 0.30},
+    ("MAX_PORTFOLIO_HEAT",): {"type": "number", "min": 0.0, "max": 1.0},
     ("MAX_OPEN_POSITIONS",): {"type": "int", "min": 0, "max": 100},
     ("MAX_CORRELATED_POSITIONS",): {"type": "int", "min": 0, "max": 20},
     ("DAILY_LOSS_LIMIT",): {"type": "number", "min": 0.0, "max": 0.20},
@@ -1404,10 +1629,48 @@ def _fatal_config_validation(cfg: dict) -> None:
                 )
 
     # 4. BT_MIN prohibited — Stage 4.2
+    _factor_weights = cfg.get("ENGINE_A_FACTOR_WEIGHTS_BY_CLASS", {}) or {}
+    for class_key, weights in _factor_weights.items():
+        if not isinstance(weights, dict):
+            errors.append(f"Engine A factor weights for {class_key} must be a dict")
+            continue
+        total = 0.0
+        missing = []
+        for key in ("momentum", "addon", "base"):
+            if key not in weights:
+                missing.append(key)
+                continue
+            try:
+                value = float(weights[key])
+            except (TypeError, ValueError):
+                errors.append(f"Engine A factor weight {class_key}.{key} must be numeric")
+                continue
+            if not math.isfinite(value) or value < 0:
+                errors.append(f"Engine A factor weight {class_key}.{key} must be finite and non-negative")
+            total += value
+        if missing:
+            errors.append(
+                f"Engine A factor weights for {class_key} missing keys: {', '.join(missing)}"
+            )
+        elif abs(total - 1.0) > 1e-6:
+            errors.append(
+                f"Engine A factor weights for {class_key} sum to {total:.4f}, expected 1.0"
+            )
+
+    _pair_profiles = cfg.get("PAIR_PROFILES", {}) or {}
+    for profile_name, profile in _pair_profiles.items():
+        if not isinstance(profile, dict):
+            continue
+        for inactive_key in ("weight_overrides", "bt_min"):
+            if inactive_key in profile:
+                errors.append(
+                    f"PAIR_PROFILES[{profile_name!r}].{inactive_key} is inactive in Engine A v2"
+                )
+
     if "BACKTEST_USE_BT_MIN_THRESHOLDS" in cfg:
         errors.append("BACKTEST_USE_BT_MIN_THRESHOLDS must be deleted — dual thresholds prohibited")
     if "BT_MIN_GROUP" in cfg:
-        errors.append("BT_MIN_GROUP must be deleted — use 2-tier system")
+        errors.append("BT_MIN_GROUP must be deleted - use Engine A live threshold resolver")
 
     # 5. Floor sanity
     _floor = float(cfg.get("FACTOR_CONVICTION_FLOOR", 0.20))
@@ -1445,7 +1708,8 @@ def scan_candle_limits() -> dict[str, int]:
     Single source of truth: ``D1_CANDLES``, ``H4_CANDLES``, ``H1_CANDLES`` in CONFIG / config.yaml.
     ``fetch_candles`` (athena) routes by pair ``source`` to Binance (crypto), EODHD (forex/stocks/
     commodities/indices/ETFs), Polygon, or yfinance — same limits apply to every asset class.
-    Callers should drop the last possibly-forming bar after fetch, matching ``analyze_pair``.
+    Live ``analyze_pair`` may include the forming bar in indicator inputs (F8); callers that need
+    confirmed-only bars must split via ``split_market_state`` themselves.
     """
     return {
         "D1": int(CONFIG["D1_CANDLES"]),

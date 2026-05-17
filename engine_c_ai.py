@@ -72,7 +72,7 @@ def normalize_engine_c_ai_weight_verdict(
         elif tv_raw in ("neither", "none", "no_confidence"):
             tv = "trust_neither"
     if tv is None:
-        tv = "trust_both"
+        tv = "trust_neither"
 
     out["trust_verdict"] = tv
     out["reasoning"] = str(out.get("reasoning") or out.get("rationale") or "")[:8000]

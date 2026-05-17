@@ -14,6 +14,7 @@ Only runs on auto-trade candidates (not manual scans) to control API costs.
 
 import json
 import logging
+from concurrent.futures import ThreadPoolExecutor
 
 from ai_safe_wrappers import ai_call_with_safe_default
 from ai_schemas import DebateCaseResponse, JudgeVerdictResponse
@@ -26,9 +27,22 @@ from config import (
     create_ai_client,
     get_ai_api_key,
     get_ai_model,
+    get_ai_provider_label,
 )
 
 log = logging.getLogger("sentinel.debate")
+
+
+def _debate_timeout_sec() -> float:
+    """Per-call HTTP timeout for debate LLM requests (seconds)."""
+    raw = CONFIG.get("DEBATE_AI_TIMEOUT_SEC")
+    if raw is None:
+        raw = CONFIG.get("AI_REQUEST_TIMEOUT_SEC")
+    try:
+        t = float(raw if raw is not None else 30.0)
+    except (TypeError, ValueError):
+        t = 30.0
+    return t if t > 0 else 30.0
 
 
 def _finalize_score_adjustment(raw: object) -> tuple[float, float]:
@@ -90,7 +104,7 @@ def run_signal_debate(signal: dict, style_pref: str = "auto") -> dict:
     """
     ensure_trace_id(signal)
     api_key = get_ai_api_key(CONFIG)
-    _fail_policy = str(CONFIG.get("AUTO_TRADE_AI_FAIL_POLICY", "allow")).lower()
+    _fail_policy = str(CONFIG.get("AUTO_TRADE_AI_FAIL_POLICY", "block")).lower()
     _allowed_on_fail = (_fail_policy != "block")
 
     if not api_key:
@@ -170,26 +184,55 @@ def run_signal_debate(signal: dict, style_pref: str = "auto") -> dict:
         _temp_bull = AITemperatureConfig.get_temperature("debate_bull")
         _temp_bear = AITemperatureConfig.get_temperature("debate_bear")
         _temp_judge = AITemperatureConfig.get_temperature("debate_judge")
+        _http_timeout = _debate_timeout_sec()
 
-        # Step 1: Bull Case
-        bull_response = _get_debate_case(
-            client, context, direction, "BULL", _model, _temp_bull
-        )
+        # Steps 1+2: Bull and Bear in parallel (independent calls).
+        # Worst-case latency drops from 3 sequential calls to 2 (bull||bear → judge).
+        if bool(CONFIG.get("DEBATE_PARALLEL_BULL_BEAR", True)):
+            with ThreadPoolExecutor(max_workers=2, thread_name_prefix="debate") as pool:
+                bull_future = pool.submit(
+                    _get_debate_case,
+                    client,
+                    context,
+                    direction,
+                    "BULL",
+                    _model,
+                    _temp_bull,
+                    _http_timeout,
+                )
+                bear_future = pool.submit(
+                    _get_debate_case,
+                    client,
+                    context,
+                    direction,
+                    "BEAR",
+                    _model,
+                    _temp_bear,
+                    _http_timeout,
+                )
+                bull_response = bull_future.result()
+                bear_response = bear_future.result()
+        else:
+            bull_response = _get_debate_case(
+                client, context, direction, "BULL", _model, _temp_bull, _http_timeout
+            )
+            bear_response = _get_debate_case(
+                client, context, direction, "BEAR", _model, _temp_bear, _http_timeout
+            )
 
-        # Step 2: Bear Case
-        bear_response = _get_debate_case(
-            client, context, direction, "BEAR", _model, _temp_bear
-        )
-
-        # Step 3: Judge
+        # Step 3: Judge (depends on both; no duplicate full context — see _get_judge_verdict)
         judge_response = _get_judge_verdict(
             client,
-            context,
             direction,
             bull_response,
             bear_response,
             _model,
             _temp_judge,
+            pair=str(pair),
+            score=score,
+            max_score=max_score,
+            regime=str(regime),
+            timeout_sec=_http_timeout,
         )
 
         grade = judge_response.get("grade", "PASS")
@@ -216,6 +259,65 @@ def run_signal_debate(signal: dict, style_pref: str = "auto") -> dict:
             f"(Bull:{result['bull_conviction']}/10, "
             f"Bear:{result['bear_conviction']}/10)"
         )
+
+        # Per-debate audit row so prompts/inputs are reproducible from JSONL store.
+        try:
+            from ai_review_logger import (
+                REVIEW_TYPE_SIGNAL_DEBATE,
+                log_ai_review,
+                map_debate_grade_to_ai_state,
+            )
+            from prompt_versions import get_prompt_version
+
+            log_ai_review(
+                symbol=pair,
+                asset_type=str(asset_type or "unknown"),
+                review_type=REVIEW_TYPE_SIGNAL_DEBATE,
+                model=_model,
+                provider=get_ai_provider_label(CONFIG),
+                prompt_version=get_prompt_version("debate_judge"),
+                input_packet={
+                    "context": context,
+                    "direction": direction,
+                    "score": score,
+                    "max_score": max_score,
+                    "regime": regime,
+                    "bull_conviction": result["bull_conviction"],
+                    "bear_conviction": result["bear_conviction"],
+                    "bull_arguments": result["bull_arguments"],
+                    "bear_arguments": result["bear_arguments"],
+                    "judge_reasoning": result["reasoning"],
+                },
+                has_chart_image=False,
+                candle_freshness_status=(signal.get("dataFreshness") or {}).get("reason")
+                if isinstance(signal.get("dataFreshness"), dict)
+                else None,
+                engine_a_state=signal.get("confluenceScore"),
+                engine_b_state=(signal.get("engine_b") or {}).get("score_pct")
+                if isinstance(signal.get("engine_b"), dict)
+                else None,
+                engine_c_state=signal.get("combinedConviction"),
+                engine_d_state=None,
+                risk_state={
+                    "rr1": signal.get("rr1"),
+                    "score_adjustment": score_adj,
+                    "score_adjustment_raw": raw_adj,
+                },
+                ai_review_state=map_debate_grade_to_ai_state(grade),
+                ai_confidence=(result["bull_conviction"] - result["bear_conviction"])
+                * 10.0
+                + 50.0,
+                contradictions_count=0,
+                missing_information_count=0,
+                parse_success=True,
+                schema_valid=grade in ("STRONG_GO", "WEAK_GO", "PASS", "STRONG_AVOID"),
+                execution_allowed_before_ai=True,
+                execution_allowed_after_ai=allowed,
+                final_action="advisory" if allowed else "blocked",
+                trace_id=signal.get("trace_id"),
+            )
+        except Exception as _audit_err:
+            log.debug("[DEBATE] audit log failed: %s", _audit_err)
 
         return result
 
@@ -252,7 +354,13 @@ def run_signal_debate(signal: dict, style_pref: str = "auto") -> dict:
 
 
 def _get_debate_case(
-    client, context: str, direction: str, side: str, model: str, temperature: float
+    client,
+    context: str,
+    direction: str,
+    side: str,
+    model: str,
+    temperature: float,
+    timeout_sec: float,
 ) -> dict:
     """Get bull or bear case from the LLM."""
     if side == "BULL":
@@ -291,6 +399,7 @@ def _get_debate_case(
                 {"role": "user", "content": prompt},
             ],
             response_format=DebateCaseResponse,
+            timeout=timeout_sec,
         )
         if completion.choices[0].message.parsed:
             return completion.choices[0].message.parsed.model_dump()
@@ -306,6 +415,7 @@ def _get_debate_case(
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": prompt},
             ],
+            timeout=timeout_sec,
         )
         text = response.output_text.strip()
         parsed = parse_json_object(text)
@@ -318,12 +428,29 @@ def _get_debate_case(
 
 
 def _get_judge_verdict(
-    client, context: str, direction: str, bull: dict, bear: dict, model: str, temperature: float
+    client,
+    direction: str,
+    bull: dict,
+    bear: dict,
+    model: str,
+    temperature: float,
+    *,
+    pair: str,
+    score: object,
+    max_score: float,
+    regime: str,
+    timeout_sec: float,
 ) -> dict:
-    """Get judge verdict comparing bull and bear cases."""
+    """Get judge verdict comparing bull and bear cases.
+
+    Full signal context was already supplied to Bull/Bear; judge sees only a
+    one-line summary plus both cases to avoid duplicating the entire prompt.
+    """
     prompt = (
-        f"You are an impartial JUDGE evaluating a {direction} trade.\n\n"
-        f"Signal: {context}\n\n"
+        f"You are an impartial JUDGE evaluating a {direction} trade on {pair}.\n\n"
+        "Bull and Bear analysts already received the full signal context. "
+        "Do not invent facts beyond their arguments and the summary line below.\n\n"
+        f"SUMMARY: direction={direction} | score={score}/{max_score} | regime={regime}\n\n"
         f"BULL CASE (conviction: {bull.get('conviction', '?')}/10):\n"
         f"Arguments: {json.dumps(bull.get('key_arguments', []))}\n\n"
         f"BEAR CASE (conviction: {bear.get('conviction', '?')}/10):\n"
@@ -350,6 +477,7 @@ def _get_judge_verdict(
                 {"role": "user", "content": prompt},
             ],
             response_format=JudgeVerdictResponse,
+            timeout=timeout_sec,
         )
         if completion.choices[0].message.parsed:
             result = completion.choices[0].message.parsed.model_dump()
@@ -369,6 +497,7 @@ def _get_judge_verdict(
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": prompt},
             ],
+            timeout=timeout_sec,
         )
         text = response.output_text.strip()
         result = parse_json_object(text)

@@ -53,7 +53,7 @@ def build_freshness_ai_context(signal: dict) -> str:
 
         # Data gate decision
         if gate:
-            allowed = gate.get("allowed", True)
+            allowed = gate.get("allowed", False)
             blocked = gate.get("blocked") or []
             warnings = gate.get("warnings") or []
             reason = gate.get("reason") or ""

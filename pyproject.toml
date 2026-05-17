@@ -16,5 +16,7 @@ norecursedirs = [
     ".pytest_cache",
     ".ruff_cache",
     "tests/.tmp",
+    ".tmp-engine-d-adjacent-2",
+    "_basetemp_trailing_atr_timed_exit_fresh",
     "__pycache__",
 ]

@@ -272,7 +272,6 @@ research_lab:
       micro_breakout:
         range_bars: [3, 6]
         atr_sl_mult: [0.5, 1.0]
-        fee_guard_r: [0.5]
       ema_scalp_pullback:
         ema_period: [21]
         atr_sl_mult: [0.5, 1.0]
@@ -308,10 +307,8 @@ research_lab:
     divergence:
       obv_divergence:
         lookback: [20, 30]
-        min_swing_bars: [3, 5]
       rsi_divergence:
         lookback: [20, 30]
-        pivot_bars: [3, 5]
 
     trend_follow:
       chandelier_trend:

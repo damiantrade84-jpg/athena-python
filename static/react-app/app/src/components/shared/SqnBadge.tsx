@@ -11,6 +11,7 @@ export default function SqnBadge({ sqn, className }: SqnBadgeProps) {
   const valid = Number.isFinite(n);
   let variant: string;
   if (!valid) variant = 'bg-muted/20 text-muted-foreground border-muted/40';
+  else if (n >= 3.0) variant = 'bg-emerald-500/15 text-emerald-400 border-emerald-500/40';
   else if (n >= 2.0) variant = 'bg-long/20 text-long border-long/40';
   else if (n >= 1.0) variant = 'bg-warning/20 text-warning border-warning/40';
   else variant = 'bg-short/20 text-short border-short/40';

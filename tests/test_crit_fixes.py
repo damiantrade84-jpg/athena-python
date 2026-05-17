@@ -7,6 +7,8 @@ CRIT-002: Forex intermarket max_score cap must be the same (3.0) across
           live (athena.py) and backtest (backtest_runner.py) paths.
 """
 import importlib
+from datetime import datetime, timezone
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -159,9 +161,399 @@ class TestQuickExecuteExecutionGuard:
         assert r_quick.status_code == r_exec.status_code == 503
         assert r_quick.get_json()["error"] == r_exec.get_json()["error"]
 
+    def test_quick_execute_rejects_engine_b_without_execution_levels(self, monkeypatch):
+        """/api/quick-execute must fail closed when structural Engine B levels are absent."""
+        import execution
+        from flask import Flask
+
+        rt_mock = _make_rt(execution_enabled=True)
+        rt_mock.log = MagicMock()
+
+        def _unexpected_recompute(*_args, **_kwargs):
+            raise AssertionError("Engine B quick execute must not recompute generic levels")
+
+        monkeypatch.setattr(execution, "rt", lambda: rt_mock)
+        monkeypatch.setattr(execution, "recompute_levels_for_style", _unexpected_recompute)
+
+        app = Flask(__name__)
+        execution.register_execution_routes(app)
+        client = app.test_client()
+
+        resp = client.post(
+            "/api/quick-execute",
+            json={
+                "signal": {
+                    "pair": "EUR/USD",
+                    "display": "EUR/USD",
+                    "type": "forex",
+                    "direction": "LONG",
+                    "price": 1.1,
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "is_naked": True,
+                    "naked_data": {"passed": True},
+                },
+                "engine_b": {"passed": True},
+                "pip_mode": "intraday",
+            },
+        )
+
+        data = resp.get_json()
+        assert resp.status_code == 409
+        assert "ENGINE_B_LEVELS_UNAVAILABLE" in data["error"]
+
+    def test_quick_execute_logs_empty_broker_failure(self, monkeypatch):
+        """/api/quick-execute must not hide broker failures with no error field."""
+        import execution
+        import mt5_executor
+        import risk_engine
+        from flask import Flask
+
+        rt_mock = _make_rt(execution_enabled=True)
+        rt_mock.log = MagicMock()
+        rt_mock.resolve_pair_from_signal = lambda *_args, **_kwargs: None
+        rt_mock.fetch_candles = lambda *_args, **_kwargs: []
+        rt_mock.calc_indicators_with_normalized = lambda *_args, **_kwargs: {}
+        rt_mock.atr_for_levels = lambda *_args, **_kwargs: 0.001
+        rt_mock.calc_levels = lambda *_args, **_kwargs: {}
+
+        class _Approval:
+            approved = True
+            reason = "OK"
+            volume = 0.1
+            risk_amount = 10.0
+            risk_pct = 0.001
+
+            @staticmethod
+            def to_dict():
+                return {"approved": True, "reason": "OK"}
+
+        monkeypatch.setattr(execution, "rt", lambda: rt_mock)
+        monkeypatch.setattr(
+            execution,
+            "recompute_levels_for_style",
+            lambda *_args, **_kwargs: {
+                "pip_mode": "intraday",
+                "atr": 0.001,
+                "levels": {"sl": 1.09, "tp1": 1.12, "tp2": 1.13},
+            },
+        )
+        monkeypatch.setattr(mt5_executor, "mt5_get_account", lambda: {"balance": 10000.0, "equity": 10000.0})
+        monkeypatch.setattr(mt5_executor, "mt5_get_positions", lambda: {"positions": []})
+        monkeypatch.setattr(mt5_executor, "mt5_get_symbol_info", lambda _symbol: {"digits": 5, "point": 0.00001})
+        monkeypatch.setattr(risk_engine, "risk_check", lambda **_kwargs: _Approval())
+        monkeypatch.setattr(execution, "_guardian_pre_trade", lambda *_args, **_kwargs: (True, "OK"))
+        monkeypatch.setattr(
+            execution,
+            "run_managed_execution",
+            lambda *_args, **_kwargs: {
+                "success": False,
+                "lifecycle": {
+                    "phases": [{"name": "broker_execute", "success": False}]
+                },
+            },
+        )
+
+        app = Flask(__name__)
+        execution.register_execution_routes(app)
+        client = app.test_client()
+
+        resp = client.post(
+            "/api/quick-execute",
+            json={
+                "signal": {
+                    "pair": "EUR/USD",
+                    "display": "EUR/USD",
+                    "type": "forex",
+                    "direction": "LONG",
+                    "price": 1.1,
+                },
+                "pip_mode": "intraday",
+            },
+        )
+
+        data = resp.get_json()
+        assert resp.status_code == 400
+        assert data["error"] == "Execution failed: broker_execute returned no error detail"
+        assert data["execution"]["error"] == data["error"]
+        warning_messages = [str(call.args[0]) for call in rt_mock.log.warning.call_args_list]
+        assert any("EUR/USD mt5 FAILED" in msg and data["error"] in msg for msg in warning_messages)
+
+
+# Quick-execute freshness refresh
+def test_quick_execute_refresh_replaces_stale_freshness_metadata(monkeypatch):
+    import execution
+    import mt5_executor
+    import risk_engine
+    from flask import Flask
+
+    rt_mock = _make_rt(execution_enabled=True)
+    rt_mock.ALL_PAIRS = [{"display": "EUR/USD"}]
+    rt_mock.resolve_pair_from_signal = lambda *_args, **_kwargs: None
+    rt_mock.fetch_candles = lambda *_args, **_kwargs: []
+    rt_mock.calc_indicators_with_normalized = lambda *_args, **_kwargs: {}
+    rt_mock.atr_for_levels = lambda *_args, **_kwargs: 0.001
+    rt_mock.calc_levels = lambda *_args, **_kwargs: {}
+    rt_mock.analyze_pair.return_value = {
+        "pair": "EUR/USD",
+        "direction": "LONG",
+        "price": 1.101,
+        "atr": 0.001,
+        "confluenceScore": 2.5,
+        "maxScore": 3.0,
+        "trendState": "TRENDING",
+        "timestamp": "2026-05-07T08:20:00+00:00",
+        "candleFetchMeta": {"H4": {"stalenessSeverity": "fresh"}},
+        "candleConsistency": {"H4": {"status": "CONFIRMED_ONLY_OK"}},
+        "dataFreshness": {"allowed": True, "blocked": [], "reason": ""},
+    }
+    captured = {}
+
+    class _Approval:
+        approved = False
+        reason = "TEST_STOP_AFTER_RISK_CAPTURE"
+
+        @staticmethod
+        def to_dict():
+            return {"approved": False, "reason": "TEST_STOP_AFTER_RISK_CAPTURE"}
+
+    def _fake_risk_check(**kwargs):
+        captured["signal"] = dict(kwargs["signal"])
+        return _Approval()
+
+    monkeypatch.setattr(execution, "rt", lambda: rt_mock)
+    monkeypatch.setattr(
+        execution,
+        "recompute_levels_for_style",
+        lambda *_args, **_kwargs: {
+            "pip_mode": "intraday",
+            "atr": 0.001,
+            "levels": {"sl": 1.09, "tp1": 1.12, "tp2": 1.13},
+        },
+    )
+    monkeypatch.setattr(mt5_executor, "mt5_get_account", lambda: {"balance": 10000.0, "equity": 10000.0})
+    monkeypatch.setattr(mt5_executor, "mt5_get_positions", lambda: {"positions": []})
+    monkeypatch.setattr(mt5_executor, "mt5_get_symbol_info", lambda _symbol: {"digits": 5, "point": 0.00001})
+    monkeypatch.setattr(risk_engine, "risk_check", _fake_risk_check)
+    monkeypatch.setattr(execution, "insert_manual_error", lambda **_kwargs: None)
+
+    app = Flask(__name__)
+    execution.register_execution_routes(app)
+    client = app.test_client()
+
+    resp = client.post(
+        "/api/quick-execute",
+        json={
+            "signal": {
+                "pair": "EUR/USD",
+                "display": "EUR/USD",
+                "type": "forex",
+                "direction": "LONG",
+                "price": 1.1,
+                "timestamp": "2000-01-01T00:00:00+00:00",
+                "candleFetchMeta": {"H4": {"stalenessSeverity": "stale_multi_bucket"}},
+            },
+            "pip_mode": "intraday",
+        },
+    )
+
+    assert resp.status_code == 400
+    assert captured["signal"]["candleFetchMeta"]["H4"]["stalenessSeverity"] == "fresh"
+    assert captured["signal"]["candleConsistency"]["H4"]["status"] == "CONFIRMED_ONLY_OK"
+    assert captured["signal"]["dataFreshness"]["allowed"] is True
+
+
+def test_quick_execute_refreshes_stale_engine_b_signal_before_risk(monkeypatch):
+    import execution
+    import mt5_executor
+    import risk_engine
+    from flask import Flask
+
+    rt_mock = _make_rt(execution_enabled=True)
+    rt_mock.log = MagicMock()
+    rt_mock.ALL_PAIRS = [{"display": "EUR/USD", "type": "forex", "source": "mt5"}]
+    rt_mock.analyze_pair = MagicMock()
+    rt_mock.resolve_pair_from_signal = lambda *_args, **_kwargs: None
+    rt_mock.fetch_candles = lambda *_args, **_kwargs: []
+    rt_mock.calc_indicators_with_normalized = lambda *_args, **_kwargs: {}
+    rt_mock.atr_for_levels = lambda *_args, **_kwargs: 0.001
+    rt_mock.calc_levels = lambda *_args, **_kwargs: {}
+    rt_mock.compute_naked_analysis = MagicMock(
+        return_value=(
+            {
+                "passed": True,
+                "direction": "LONG",
+                "current_price": 1.205,
+                "execution_sl": 1.195,
+                "execution_tp": 1.225,
+                "score": 82.0,
+                "max_possible": 100.0,
+                "atr": 0.004,
+            },
+            {"display": "EUR/USD"},
+            None,
+        )
+    )
+    captured = {}
+
+    class _Approval:
+        approved = False
+        reason = "TEST_STOP_AFTER_ENGINE_B_REFRESH"
+
+        @staticmethod
+        def to_dict():
+            return {"approved": False, "reason": "TEST_STOP_AFTER_ENGINE_B_REFRESH"}
+
+    def _fake_risk_check(**kwargs):
+        captured["signal"] = dict(kwargs["signal"])
+        return _Approval()
+
+    monkeypatch.setattr(execution, "rt", lambda: rt_mock)
+    monkeypatch.setattr(mt5_executor, "mt5_get_account", lambda: {"balance": 10000.0, "equity": 10000.0})
+    monkeypatch.setattr(mt5_executor, "mt5_get_positions", lambda: {"positions": []})
+    monkeypatch.setattr(mt5_executor, "mt5_get_symbol_info", lambda _symbol: {"digits": 5, "point": 0.00001})
+    monkeypatch.setattr(risk_engine, "risk_check", _fake_risk_check)
+    monkeypatch.setattr(execution, "insert_manual_error", lambda **_kwargs: None)
+
+    app = Flask(__name__)
+    execution.register_execution_routes(app)
+    client = app.test_client()
+
+    resp = client.post(
+        "/api/quick-execute",
+        json={
+            "signal": {
+                "pair": "EUR/USD",
+                "display": "EUR/USD",
+                "type": "forex",
+                "direction": "LONG",
+                "timestamp": "2000-01-01T00:00:00+00:00",
+                "is_naked": True,
+                "price": 1.1,
+            },
+            "engine_b": {"passed": True},
+            "pip_mode": "intraday",
+        },
+    )
+
+    data = resp.get_json()
+    assert resp.status_code == 400
+    assert "ENGINE_B_REFRESH_REQUIRED" not in data["error"]
+    assert rt_mock.compute_naked_analysis.called
+    assert not rt_mock.analyze_pair.called
+    assert captured["signal"]["price"] == 1.205
+    assert captured["signal"]["sl"] == 1.195
+    assert captured["signal"]["tp1"] == 1.225
+    assert captured["signal"]["level_source"] == "engine_b_execution"
+
+
+def test_quick_execute_rejects_stale_engine_b_when_refresh_no_longer_passes(monkeypatch):
+    import execution
+    from flask import Flask
+
+    rt_mock = _make_rt(execution_enabled=True)
+    rt_mock.log = MagicMock()
+    rt_mock.compute_naked_analysis = MagicMock(
+        return_value=({"passed": False, "direction": "LONG"}, {"display": "EUR/USD"}, None)
+    )
+
+    monkeypatch.setattr(execution, "rt", lambda: rt_mock)
+
+    app = Flask(__name__)
+    execution.register_execution_routes(app)
+    client = app.test_client()
+
+    resp = client.post(
+        "/api/quick-execute",
+        json={
+            "signal": {
+                "pair": "EUR/USD",
+                "direction": "LONG",
+                "timestamp": "2000-01-01T00:00:00+00:00",
+                "is_naked": True,
+                "price": 1.1,
+            },
+            "engine_b": {"passed": True},
+        },
+    )
+
+    assert resp.status_code == 409
+    assert resp.get_json()["error"] == (
+        "ENGINE_B_NOT_CONFIRMED: refreshed Engine B confirmation failed before execution"
+    )
+
+
+def test_athena_runtime_exposes_engine_b_refresh_function():
+    src = (Path(__file__).resolve().parents[1] / "athena.py").read_text(encoding="utf-8")
+
+    assert "compute_naked_analysis=_compute_naked_analysis" in src
+
+
+def test_naked_execution_refresh_is_fail_closed_for_direction_and_atr():
+    src = (Path(__file__).resolve().parents[1] / "athena.py").read_text(encoding="utf-8")
+
+    assert "execution_mode: bool = False" in src
+    assert 'return None, pair_obj, "Invalid Engine B execution direction"' in src
+    assert 'return None, pair_obj, "Engine B execution ATR unavailable"' in src
+
+
+def test_scan_naked_reports_min_score_floor_reject():
+    src = (Path(__file__).resolve().parents[1] / "athena.py").read_text(encoding="utf-8")
+
+    assert '_conf_failed_gates.append("min_score")' in src
+    assert 'res["min_score_used"] = float(_min_score_scaled)' in src
+
+
+def test_execution_prefetch_candle_fetch_meta_updates_signal(monkeypatch):
+    import execution
+
+    calls: list[tuple[str, int]] = []
+
+    def _fake_fetch(pair, tf, lim):
+        calls.append((tf, int(lim)))
+        return []
+
+    mock_r = MagicMock()
+    mock_r.CONFIG = {"QUICK_EXEC_PREFETCH_CANDLE_META": True}
+    mock_r.ALL_PAIRS = [{"display": "USD/MXN", "source": "mt5", "type": "forex"}]
+    mock_r.fetch_candles = _fake_fetch
+    mock_r.log = MagicMock()
+
+    monkeypatch.setattr(
+        execution,
+        "get_candle_fetch_meta",
+        lambda _pair, tf, _lim: {"tf": tf, "lastBarStale": False, "stub": True},
+    )
+    monkeypatch.setattr(execution, "scan_candle_limits", lambda: {"H1": 11, "H4": 22, "D1": 33})
+
+    sig = {
+        "pair": "USD/MXN",
+        "candleFetchMeta": {"H1": {"lastBarStale": True}},
+    }
+    execution._maybe_prefetch_execution_candle_fetch_meta(sig, _r=mock_r)
+
+    assert calls == [("H1", 11), ("H4", 22), ("D1", 33)]
+    assert sig["candleFetchMeta"]["H1"]["lastBarStale"] is False
+    assert sig["candleFetchMeta"]["H1"]["stub"] is True
+    assert sig["candleFetchMeta"]["pairSource"] == "mt5"
+
+
+def test_execution_prefetch_disabled_is_noop():
+    import execution
+
+    calls = []
+
+    mock_r = MagicMock()
+    mock_r.CONFIG = {"QUICK_EXEC_PREFETCH_CANDLE_META": False}
+    mock_r.ALL_PAIRS = [{"display": "EUR/USD"}]
+    mock_r.fetch_candles = lambda *a, **k: calls.append(a) or []
+
+    sig = {"pair": "EUR/USD"}
+    execution._maybe_prefetch_execution_candle_fetch_meta(sig, _r=mock_r)
+
+    assert calls == []
+
 
 # ── CRIT-002: forex intermarket cap parity ────────────────────────────────────
-
 class TestForexIntermarketCapParity:
 
     def test_constant_value(self):

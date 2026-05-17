@@ -8,6 +8,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from risk_engine import risk_check
 from threshold_audit import (
     REQUIRED_FIELDS,
+    _engine_b_fail_reasons,
+    _engine_b_hard_fail_reasons,
     audit_enabled,
     build_signal_funnel_row,
     write_signal_funnel_rows,
@@ -56,6 +58,27 @@ def _signal(score=2.0):
         },
         "_threshold_audit_b_threshold": 3.0,
     }
+
+
+def _crypto_pair():
+    return {"display": "BTC/USDT", "symbol": "BTCUSDT", "type": "crypto", "enabled": True}
+
+
+def _crypto_signal(score=2.12):
+    sig = _signal(score=score)
+    sig.update(
+        {
+            "pair": "BTC/USDT",
+            "display": "BTC/USDT",
+            "symbol": "BTCUSDT",
+            "type": "crypto",
+            "confluenceScore": score,
+            "scoreNorm": round(score / 3.0, 4),
+            "scanThresholdEffective": 2.0,
+            "scanThreshold": 2.0,
+        }
+    )
+    return sig
 
 
 def _signal_with_engine_b_diagnostics():
@@ -164,8 +187,31 @@ def test_threshold_report_handles_empty_no_signal_scans():
 
 
 def test_near_miss_classification_works():
-    row = build_signal_funnel_row(_pair(), _signal(score=2.0), tier="skip")
+    sig = _signal(score=1.9)
+    sig["scoreNorm"] = 0.70
+    row = build_signal_funnel_row(_pair(), sig, tier="skip")
     assert row["final_scan_result"] == "A_NEAR_MISS"
+
+
+def test_threshold_audit_labels_b_only_watchlist():
+    sig = _signal(score=0.6)
+    sig["scoreNorm"] = 0.20
+    sig["_threshold_audit_b_res"] = {"structural_verdict": "CLEAR", "direction": "SHORT"}
+    sig["_threshold_audit_b_conf"] = {
+        "score": 4.0,
+        "max_possible": 5.0,
+        "passed": True,
+        "structure_ok": True,
+        "location_ok": True,
+        "entry_ok": True,
+        "room_ok": True,
+        "rr_ok": True,
+    }
+
+    row = build_signal_funnel_row(_pair(), sig, tier="watchlist")
+
+    assert row["engine_c_consensus_type"] == "B_ONLY"
+    assert row["final_scan_result"] == "B_ONLY_WATCHLIST"
 
 
 def test_shadow_thresholds_do_not_affect_execution_decisions():
@@ -177,8 +223,26 @@ def test_shadow_thresholds_do_not_affect_execution_decisions():
     assert "shadow_thresholds" not in sig
 
 
+def test_threshold_audit_prefers_signal_scan_threshold_effective_for_engine_a():
+    row = build_signal_funnel_row(_crypto_pair(), _crypto_signal(), tier="trade")
+
+    assert row["thresholds"]["engine_a"] == 2.0
+    assert row["engine_a_passed"] is True
+
+
+def test_threshold_audit_falls_back_to_configured_scan_threshold_when_signal_threshold_missing():
+    sig = _crypto_signal()
+    sig.pop("scanThresholdEffective")
+    sig.pop("scanThreshold")
+
+    row = build_signal_funnel_row(_crypto_pair(), sig, tier="trade")
+
+    assert row["thresholds"]["engine_a"] == 2.0
+    assert row["engine_a_passed"] is True
+
+
 def test_fail_reason_counts_are_reported():
-    rows = [build_signal_funnel_row(_pair(), _signal(score=1.9), tier="skip")]
+    rows = [build_signal_funnel_row(_pair(), _signal(score=1.4), tier="skip")]
     report = build_report(rows)
     assert "below_engine_a_threshold" in report
     assert "engine_b_confidence_passed_false" in report
@@ -288,6 +352,23 @@ def test_passed_false_row_contains_at_least_one_hard_fail_reason():
     hard_fails = _engine_b_hard_fail_reasons(conf_b, res_b)
     assert len(hard_fails) >= 1
     assert "engine_b_entry_ok_false" in hard_fails or "engine_b_confidence_passed_false" in hard_fails
+
+
+def test_space_gate_ok_prevents_room_from_hard_fail_reason():
+    conf_b = {
+        "passed": True,
+        "structure_ok": True,
+        "location_ok": True,
+        "entry_ok": True,
+        "room_ok": False,
+        "space_gate_ok": True,
+        "rr_ok": True,
+        "macro_ok": True,
+    }
+    res_b = {"structural_verdict": "CLEAR"}
+
+    assert "engine_b_room_ok_false" not in _engine_b_hard_fail_reasons(conf_b, res_b)
+    assert "engine_b_room_ok_false" not in _engine_b_fail_reasons(conf_b, res_b)
 
 
 def test_soft_warnings_do_not_imply_failed_checklist():

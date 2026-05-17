@@ -2,6 +2,54 @@ from config import CONFIG
 from guardian import pre_trade_check
 
 
+def test_guardian_stale_candles_logs_diagnostic_fields(caplog):
+    import logging
+
+    signal = {
+        "pair": "USD/MXN",
+        "direction": "LONG",
+        "price": 18.0,
+        "sl": 17.9,
+        "tp1": 18.1,
+        "type": "forex",
+        "factorDiagnostics": {},
+        "candleFetchMeta": {
+            "H1": {
+                "lastBarStale": True,
+                "lastBarAgeSec": 7154,
+                "hasCurrentBucket": False,
+                "stalenessSeverity": "stale_1_bucket",
+                "lastBarEpoch": 100,
+                "offsetHours": 0.0,
+                "bucketLag": 1,
+            },
+            "H4": {
+                "lastBarStale": True,
+                "lastBarAgeSec": 7154,
+                "hasCurrentBucket": False,
+                "stalenessSeverity": "stale_1_bucket",
+                "lastBarEpoch": 100,
+                "offsetHours": 2.0,
+                "bucketLag": 1,
+            },
+        },
+    }
+    original = CONFIG.get("ENGINE_A_STALE_CANDLE_GUARD", True)
+    try:
+        CONFIG["ENGINE_A_STALE_CANDLE_GUARD"] = True
+        caplog.set_level(logging.WARNING)
+        ok, reason = pre_trade_check(signal, [], {"balance": 1000.0, "equity": 1000.0})
+
+        assert ok is False
+        assert "STALE_CANDLES:" in reason
+        assert "7154" in reason
+        joined = " ".join(caplog.messages)
+        assert "USD/MXN" in joined
+        assert "hasCur=False" in joined or "hasCur=False" in "".join(caplog.messages)
+    finally:
+        CONFIG["ENGINE_A_STALE_CANDLE_GUARD"] = original
+
+
 def _base_signal() -> dict:
     return {
         "pair": "EUR/USD",

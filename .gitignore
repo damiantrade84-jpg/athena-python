@@ -1,15 +1,19 @@
 # Environment / secrets
 .env
+config.local.yaml
 
 # Python cache
 __pycache__/
 .pytest_cache/
+.pytest_basetemp/
 *.pyc
 *.pyo
 
 # Logs / audit
 audit.jsonl
 *.log
+logs/
+.learnings/
 
 # Backup files
 *_backup*.py
@@ -25,8 +29,14 @@ test_ws.py
 
 # SQLite databases — too large for GitHub, contain runtime/market data
 *.db
+*.sqlite
+*.sqlite3
 *.db-shm
 *.db-wal
+*.sqlite-shm
+*.sqlite-wal
+*.sqlite3-shm
+*.sqlite3-wal
 
 # Backtest result dumps
 bt_*.json
@@ -44,3 +54,14 @@ tests/_artifacts/
 
 # SQLite CLI binary (downloaded locally)
 sqlite3.exe
+
+# Claude Code local/private settings
+.claude/settings.local.json
+.agent_skill_cleanup_backup/
+.pytest_local_tmp/
+pytest_tmp*/
+pytest_tmp_env/
+tests/.tmp-*/
+tests/_basetemp*/
+tmp/pytest-*/
+devathena-python.pytest_basetemp_full/

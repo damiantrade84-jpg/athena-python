@@ -1,0 +1,32 @@
+{
+  "mcpServers": {
+    "context7": {
+      "command": "npx",
+      "args": ["-y", "@upstash/context7-mcp"]
+    },
+    "athena-audit": {
+      "command": "uvx",
+      "args": ["mcp-server-sqlite", "--db-path", "C:/dev/athena-python/audit.db"]
+    },
+    "athena-microstructure": {
+      "command": "uvx",
+      "args": ["mcp-server-sqlite", "--db-path", "C:/dev/athena-python/microstructure.db"]
+    },
+    "athena-candle-cache": {
+      "command": "uvx",
+      "args": ["mcp-server-sqlite", "--db-path", "C:/dev/athena-python/candle_cache.db"]
+    },
+    "athena-carry": {
+      "command": "uvx",
+      "args": ["mcp-server-sqlite", "--db-path", "C:/dev/athena-python/carry_cache.db"]
+    },
+    "athena-cot": {
+      "command": "uvx",
+      "args": ["mcp-server-sqlite", "--db-path", "C:/dev/athena-python/cot.db"]
+    },
+    "playwright": {
+      "command": "npx",
+      "args": ["-y", "@playwright/mcp@latest"]
+    }
+  }
+}

@@ -9,81 +9,44 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
+from tests.route_contract_helpers import endpoint_map_from_files
+
 
 ROOT = Path(__file__).resolve().parents[1]
 ATHENA_PATH = ROOT / "athena.py"
 EXECUTION_PATH = ROOT / "execution.py"
 GUARDIAN_ROUTES_PATH = ROOT / "guardian_routes.py"
-
-
-def _endpoint_map_from_add_url_rule(src: str) -> dict[str, set[str]]:
-    """Collect Flask `app.add_url_rule("/path", ..., methods=[...])` registrations."""
-    tree = ast.parse(src)
-    out: dict[str, set[str]] = {}
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.Call):
-            continue
-        func = node.func
-        if not (isinstance(func, ast.Attribute) and func.attr == "add_url_rule"):
-            continue
-        if not node.args or not isinstance(node.args[0], ast.Constant):
-            continue
-        path = node.args[0].value
-        if not isinstance(path, str):
-            continue
-        methods = {"GET"}
-        for kw in node.keywords or []:
-            if kw.arg == "methods" and isinstance(kw.value, (ast.List, ast.Tuple)):
-                vals = []
-                for elt in kw.value.elts:
-                    if isinstance(elt, ast.Constant):
-                        vals.append(str(elt.value))
-                if vals:
-                    methods = set(vals)
-        out[path] = methods
-    return out
-
-
-def _endpoint_map_from_source(src: str) -> dict[str, set[str]]:
-    tree = ast.parse(src)
-    out: dict[str, set[str]] = {}
-    for node in tree.body:
-        if not isinstance(node, ast.FunctionDef):
-            continue
-        for dec in node.decorator_list:
-            if not isinstance(dec, ast.Call):
-                continue
-            func = dec.func
-            if not (isinstance(func, ast.Attribute) and func.attr == "route"):
-                continue
-            if not dec.args or not isinstance(dec.args[0], ast.Constant):
-                continue
-            path = dec.args[0].value
-            methods = {"GET"}
-            for kw in dec.keywords or []:
-                if kw.arg == "methods" and isinstance(kw.value, (ast.List, ast.Tuple)):
-                    vals = []
-                    for elt in kw.value.elts:
-                        if isinstance(elt, ast.Constant):
-                            vals.append(str(elt.value))
-                    if vals:
-                        methods = set(vals)
-            out[path] = methods
-    return out
+ROUTE_FILES = [
+    ATHENA_PATH,
+    EXECUTION_PATH,
+    GUARDIAN_ROUTES_PATH,
+    ROOT / "athena_app" / "api" / "routes_audit.py",
+    ROOT / "athena_app" / "api" / "routes_backtest.py",
+    ROOT / "athena_app" / "api" / "routes_broker_status.py",
+    ROOT / "athena_app" / "api" / "routes_execution.py",
+    ROOT / "athena_app" / "api" / "routes_live_dashboard.py",
+    ROOT / "athena_app" / "api" / "routes_lottery.py",
+    ROOT / "athena_app" / "api" / "routes_market_data.py",
+    ROOT / "athena_app" / "api" / "routes_scan.py",
+    ROOT / "athena_app" / "api" / "routes_status.py",
+]
 
 
 def _endpoint_map() -> dict[str, set[str]]:
     """Merge @app.route decorators from monolith and split route modules."""
-    merged: dict[str, set[str]] = {}
-    for path in (ATHENA_PATH, EXECUTION_PATH, GUARDIAN_ROUTES_PATH):
+    return endpoint_map_from_files(ROUTE_FILES)
+
+
+def _function_source_from_files(name: str) -> str:
+    for path in ROUTE_FILES:
         if not path.exists():
             continue
-        text = path.read_text(encoding="utf-8")
-        part = _endpoint_map_from_source(text)
-        part.update(_endpoint_map_from_add_url_rule(text))
-        for k, v in part.items():
-            merged[k] = v
-    return merged
+        src = path.read_text(encoding="utf-8")
+        tree = ast.parse(src)
+        for node in tree.body:
+            if isinstance(node, ast.FunctionDef) and node.name == name:
+                return ast.unparse(node)
+    return ""
 
 
 def test_key_endpoints_exist_with_methods():
@@ -100,6 +63,10 @@ def test_key_endpoints_exist_with_methods():
     assert "/api/live-feed-diagnostics" in ep and "GET" in ep["/api/live-feed-diagnostics"]
     assert "POST" in ep["/api/live-feed-diagnostics"]
     assert "/api/backtest" in ep and "POST" in ep["/api/backtest"]
+    assert "/api/backtest-history" in ep and "GET" in ep["/api/backtest-history"]
+    assert "/api/backtest-history/<pair_name>" in ep and "GET" in ep["/api/backtest-history/<pair_name>"]
+    assert "/api/backtest-best" in ep and "GET" in ep["/api/backtest-best"]
+    assert "/api/audit" in ep and "GET" in ep["/api/audit"]
     assert "/api/intermarket-matrix" in ep and "GET" in ep["/api/intermarket-matrix"]
     assert "/api/bt-min" in ep and "GET" in ep["/api/bt-min"] and "POST" in ep["/api/bt-min"]
     assert "/api/naked-style-thresholds" in ep and "GET" in ep["/api/naked-style-thresholds"]
@@ -132,30 +99,20 @@ def test_live_forex_payload_exposes_explicit_regime_name():
 
 def test_live_feed_diagnostics_route_is_read_only():
     """Verify /api/live-feed-diagnostics does not call order execution functions."""
-    src = ATHENA_PATH.read_text(encoding="utf-8")
-    # Find the api_live_feed_diagnostics function
-    import ast
-    tree = ast.parse(src)
-    
-    for node in tree.body:
-        if isinstance(node, ast.FunctionDef) and node.name == "api_live_feed_diagnostics":
-            # Check the function body for any calls to execution/order functions
-            forbidden_calls = [
-                "mt5_send_order",
-                "bybit_send_order",
-                "execute_trade",
-                "place_order",
-                "send_order",
-                "open_position",
-                "close_position",
-            ]
-            
-            func_source = ast.unparse(node)
-            for forbidden in forbidden_calls:
-                assert forbidden not in func_source, f"Found forbidden call {forbidden} in api_live_feed_diagnostics"
-            break
-    else:
+    func_source = _function_source_from_files("api_live_feed_diagnostics")
+    if not func_source:
         raise AssertionError("api_live_feed_diagnostics function not found")
+    forbidden_calls = [
+        "mt5_send_order",
+        "bybit_send_order",
+        "execute_trade",
+        "place_order",
+        "send_order",
+        "open_position",
+        "close_position",
+    ]
+    for forbidden in forbidden_calls:
+        assert forbidden not in func_source, f"Found forbidden call {forbidden} in api_live_feed_diagnostics"
 
 
 def test_scan_response_includes_payload_version_and_contract():

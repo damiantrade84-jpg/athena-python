@@ -33,6 +33,62 @@ def _cfg(key: str, default):
     return CONFIG.get(key, default)
 
 
+def resolve_max_sl_pct(
+    signal: dict | None,
+    asset_type: str | None = None,
+    cfg: dict | None = None,
+) -> tuple[float, str]:
+    """Resolve the execution SL-width cap with explicit narrow overrides.
+
+    The default asset cap remains the fail-closed safety baseline.  Optional
+    score-group/symbol overrides let volatile commodity subgroups be paper-tested
+    without raising the global commodity cap for every instrument.
+    """
+    signal = signal or {}
+    cfg = cfg or CONFIG
+    asset = str(asset_type or signal.get("type") or signal.get("asset_type") or "").lower()
+    caps = cfg.get("MAX_SL_PCT") or {}
+    try:
+        cap = float(caps.get(asset, caps.get("default", 0.05)))
+    except (TypeError, ValueError):
+        cap = 0.05
+    source = f"asset:{asset or 'default'}"
+
+    score_group = signal.get("score_group") or signal.get("scoreGroup")
+    if not score_group:
+        try:
+            from scoring import get_pair_score_group
+            display = signal.get("pair") or signal.get("display") or signal.get("symbol")
+            if display and asset:
+                score_group = get_pair_score_group({"display": display, "symbol": display, "type": asset})
+        except Exception:
+            score_group = None
+    group_caps = cfg.get("MAX_SL_PCT_SCORE_GROUP_OVERRIDES") or {}
+    if score_group in group_caps:
+        try:
+            cap = float(group_caps[score_group])
+            source = f"score_group:{score_group}"
+        except (TypeError, ValueError):
+            pass
+
+    display_keys = [
+        signal.get("pair"),
+        signal.get("display"),
+        signal.get("symbol"),
+        signal.get("mt5_symbol"),
+    ]
+    symbol_caps = cfg.get("MAX_SL_PCT_SYMBOL_OVERRIDES") or {}
+    for key in display_keys:
+        if key in symbol_caps:
+            try:
+                cap = float(symbol_caps[key])
+                source = f"symbol:{key}"
+            except (TypeError, ValueError):
+                pass
+            break
+    return max(0.0, cap), source
+
+
 # Legacy alias kept for backward compat — reads live
 _EXEC_DEFAULTS = {
     "RISK_PCT": 0.01,
@@ -61,13 +117,13 @@ def _signal_quality_factor(signal: dict) -> float:
         max_score = float(signal.get("maxScore", 0) or 0)
         score = float(signal.get("confluenceScore", max_score) or 0)
     except (TypeError, ValueError):
-        return 1.0
+        return 0.25
 
     if max_score > 0:
         return max(0.25, min(1.0, score / max_score))
     if 0.0 <= score <= 1.0:
         return max(0.25, min(1.0, score))
-    return 1.0
+    return 0.25
 
 
 @dataclass
@@ -84,6 +140,28 @@ class RiskApproval:
 
     def to_dict(self) -> dict:
         return asdict(self)
+
+
+def _has_execution_freshness_evidence(signal: dict) -> bool:
+    for key in ("candleConsistency", "candleFreshness", "candleFetchMeta"):
+        payload = signal.get(key)
+        if not isinstance(payload, dict) or not payload:
+            continue
+        for tf, diag in payload.items():
+            if tf == "pairSource":
+                continue
+            if isinstance(diag, dict) and (
+                diag.get("status")
+                or diag.get("stalenessSeverity")
+                or diag.get("lastBucketIso")
+                or diag.get("lastBarIso")
+                or diag.get("lastTime")
+                or diag.get("last_time")
+            ):
+                return True
+            if isinstance(diag, str) and diag.strip():
+                return True
+    return False
 
 
 # ── Peak equity persistence (survives restarts) ─────────────────────────────
@@ -249,11 +327,28 @@ _peak_lock = threading.Lock()
 _peak_last_saved: float = 0.0  # epoch seconds of last _save_peak_equity call (any domain)
 
 
-def _resolve_domain(asset_type: str = "") -> str:
+def _normalize_account_domain(account_domain: str | None = None) -> str:
+    raw = str(account_domain or "").strip().lower()
+    if not raw:
+        return ""
+    safe = []
+    for ch in raw:
+        if ch.isalnum() or ch in (":", "_", "-", "."):
+            safe.append(ch)
+        elif ch.isspace() or ch in ("/", "\\"):
+            safe.append("-")
+    normalized = "".join(safe).strip(":-_.")
+    return normalized[:160]
+
+
+def _resolve_domain(asset_type: str = "", account_domain: str | None = None) -> str:
     """Map granular asset types to account domains to prevent state mixing (BUG 2).
     - crypto -> 'crypto' (Bybit)
     - forex, stock, commodity, index -> 'forex' (MT5/forex domain)
     """
+    account_key = _normalize_account_domain(account_domain)
+    if account_key:
+        return account_key
     at = (asset_type or "unknown").lower()
     if at == "crypto":
         return "crypto"
@@ -271,11 +366,14 @@ _KELLY_TTL_SECONDS: float = 300.0  # 5 minutes
 
 
 def record_daily_pnl(
-    pnl: float, account_balance: float, asset_type: str = ""
+    pnl: float,
+    account_balance: float,
+    asset_type: str = "",
+    account_domain: str | None = None,
 ) -> None:
     """Record realized P&L for daily loss tracking (per account domain). Called by outcome monitor."""
     global _daily_pnl, _daily_pnl_date, _daily_start_balance
-    domain = _resolve_domain(asset_type)
+    domain = _resolve_domain(asset_type, account_domain)
     with _daily_lock:
         today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         if today != _daily_pnl_date:
@@ -295,11 +393,13 @@ def record_daily_pnl(
 
 
 def _check_daily_loss(
-    account_balance: float, asset_type: str = ""
+    account_balance: float,
+    asset_type: str = "",
+    account_domain: str | None = None,
 ) -> tuple[bool, float]:
     """Check if daily loss limit is breached for this domain. Returns (blocked, loss_pct)."""
     global _daily_pnl_date, _daily_pnl, _daily_start_balance
-    domain = _resolve_domain(asset_type)
+    domain = _resolve_domain(asset_type, account_domain)
     with _daily_lock:
         today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         if today != _daily_pnl_date:
@@ -316,10 +416,12 @@ def _check_daily_loss(
         return loss_pct >= _cfg("DAILY_LOSS_LIMIT", 0.05), loss_pct
 
 
-def _update_peak(equity: float, asset_type: str = "") -> float:
+def _update_peak(
+    equity: float, asset_type: str = "", account_domain: str | None = None
+) -> float:
     """Track peak equity for drawdown calculation (per account domain). Thread-safe. Persists on new highs."""
     global _peak_equity, _peak_last_saved
-    domain = _resolve_domain(asset_type)
+    domain = _resolve_domain(asset_type, account_domain)
     with _peak_lock:
         cur = _peak_equity.get(domain)
         if cur is None or equity > cur:
@@ -331,12 +433,22 @@ def _update_peak(equity: float, asset_type: str = "") -> float:
         return _peak_equity[domain]
 
 
-def _current_drawdown(equity: float, asset_type: str = "") -> float:
+def _current_drawdown(
+    equity: float, asset_type: str = "", account_domain: str | None = None
+) -> float:
     """Calculate current drawdown from peak as a fraction (0.0 = no drawdown)."""
-    peak = _update_peak(equity, asset_type)
+    peak = _update_peak(equity, asset_type, account_domain)
     if peak <= 0:
         return 0.0
     return max(0.0, (peak - equity) / peak)
+
+
+def _peak_equity_snapshot(asset_type: str = "", account_domain: str | None = None) -> float:
+    """Read persisted peak for the account domain (for logging only)."""
+    domain = _resolve_domain(asset_type, account_domain)
+    with _peak_lock:
+        v = _peak_equity.get(domain)
+        return float(v) if v is not None else 0.0
 
 
 def _cluster_for_pair(pair_display: str) -> str | None:
@@ -616,6 +728,7 @@ def risk_check(
     kill_switch: bool = False,
     sizing_override: float = 1.0,
     is_manual_override: bool = False,
+    account_domain: str | None = None,
 ) -> RiskApproval:
     """Mandatory risk gateway. Every execution path calls this first.
 
@@ -651,6 +764,12 @@ def risk_check(
         return RiskApproval(False, 0.0, 0.0, 0.0, 0.0, 0.0, "INVALID_DIRECTION")
 
     asset_type = signal.get("type", "") or "unknown"
+    account_domain = (
+        account_domain
+        or signal.get("risk_account_domain")
+        or signal.get("account_domain")
+        or signal.get("accountDomain")
+    )
 
     # ── Check 0: Kill switch ────────────────────────────────────────────────
     if kill_switch:
@@ -660,18 +779,71 @@ def risk_check(
     decision_state = str(signal.get("decision_state") or "").lower()
     tier = str(signal.get("tier") or signal.get("signalTier") or "").upper()
     verdict = str(signal.get("verdict") or "").upper()
-    if decision_state in ("watchlist", "blocked") or (
-        verdict and tier in ("WATCHLIST", "SKIP")
+    if (
+        decision_state in ("watchlist", "blocked")
+        or (verdict and tier in ("WATCHLIST", "SKIP"))
+        or (not verdict and tier in ("WATCHLIST", "SKIP"))
     ):
         log.warning(f"{prefix} REJECTED: non-executable signal state")
         return RiskApproval(False, 0.0, 0.0, 0.0, 0.0, 0.0, "NON_EXECUTABLE_SIGNAL_STATE")
 
-    if verdict in ("B_ONLY", "B_ONLY_SCORED", "B_ONLY_VISION_CONFIRMED", "ALIGNED"):
+    def _is_engine_b_execution_signal(sig: dict) -> bool:
+        eng = str(sig.get("engine") or sig.get("source_engine") or "").strip().lower()
+        v = str(sig.get("verdict") or "").strip().upper()
+
+        if eng in ("a", "engine_a", "scalp", "scalp_vp", "engine_d"):
+            if v not in ("B_ONLY", "B_ONLY_SCORED", "B_ONLY_VISION_CONFIRMED", "ALIGNED"):
+                return False
+
+        if eng in ("engine_b", "naked", "naked_structure", "structure", "smc", "b"):
+            return True
+        if bool(sig.get("is_naked")):
+            return True
+        if v in ("B_ONLY", "B_ONLY_SCORED", "B_ONLY_VISION_CONFIRMED", "ALIGNED"):
+            return True
+
+        eb = sig.get("engine_b") or sig.get("naked_data")
+        if isinstance(eb, dict) and (eb.get("passed") is True or eb.get("checklist_passed") is True):
+            return True
+
+        eb_status = sig.get("engine_b_status")
+        if isinstance(eb_status, dict) and eb_status.get("checklist_passed") is True:
+            return True
+
+        comps = sig.get("components")
+        if isinstance(comps, dict) and comps.get("b_checklist_passed") is True:
+            return True
+
+        return False
+
+    if _is_engine_b_execution_signal(signal):
         engine_b_status = signal.get("engine_b_status") or {}
+        engine_b_payload = signal.get("engine_b") or signal.get("naked_data") or {}
         components = signal.get("components") or {}
+        checklist_present = (
+            isinstance(engine_b_status, dict)
+            and engine_b_status.get("checklist_passed") is True
+        ) or (
+            isinstance(engine_b_payload, dict)
+            and (
+                engine_b_payload.get("checklist_passed") is True
+                or engine_b_payload.get("passed") is True
+                or engine_b_payload.get("final_engine_b_passed") is True
+            )
+        ) or (
+            isinstance(components, dict)
+            and components.get("b_checklist_passed") is True
+        )
         checklist_failed = (
             isinstance(engine_b_status, dict)
             and engine_b_status.get("checklist_passed") is False
+        ) or (
+            isinstance(engine_b_payload, dict)
+            and (
+                engine_b_payload.get("checklist_passed") is False
+                or engine_b_payload.get("passed") is False
+                or engine_b_payload.get("final_engine_b_passed") is False
+            )
         ) or (
             isinstance(components, dict)
             and components.get("b_checklist_passed") is False
@@ -679,12 +851,19 @@ def risk_check(
         if checklist_failed:
             log.warning(f"{prefix} REJECTED: Engine B checklist failed")
             return RiskApproval(False, 0.0, 0.0, 0.0, 0.0, 0.0, "ENGINE_B_CHECKLIST_FAILED")
+        if not checklist_present:
+            log.warning(f"{prefix} REJECTED: Engine B checklist proof missing")
+            return RiskApproval(False, 0.0, 0.0, 0.0, 0.0, 0.0, "ENGINE_B_CHECKLIST_MISSING")
 
     if verdict == "A_ONLY":
         components = signal.get("components") or {}
         if isinstance(components, dict) and components.get("a_has_signal") is False:
             log.warning(f"{prefix} REJECTED: Engine A signal invalid")
             return RiskApproval(False, 0.0, 0.0, 0.0, 0.0, 0.0, "ENGINE_A_SIGNAL_INVALID")
+
+    if not _has_execution_freshness_evidence(signal):
+        log.warning(f"{prefix} REJECTED: missing execution candle freshness proof")
+        return RiskApproval(False, 0.0, 0.0, 0.0, 0.0, 0.0, "MISSING_CANDLE_FRESHNESS")
 
     freshness = evaluate_execution_data_freshness(signal, CONFIG)
     if not freshness["allowed"]:
@@ -693,7 +872,7 @@ def risk_check(
         return RiskApproval(False, 0.0, 0.0, 0.0, 0.0, 0.0, reason)
 
     # ── Check 0.5: Daily loss limit ────────────────────────────────────────
-    daily_blocked, daily_loss_pct = _check_daily_loss(account_balance, asset_type)
+    daily_blocked, daily_loss_pct = _check_daily_loss(account_balance, asset_type, account_domain)
     if daily_blocked:
         log.warning(
             f"{prefix} REJECTED: daily loss {daily_loss_pct:.1%} exceeds {_cfg('DAILY_LOSS_LIMIT', 0.05):.0%} limit"
@@ -702,7 +881,10 @@ def risk_check(
 
     # ── Check 1: Signal freshness ───────────────────────────────────────────
     ts_str = signal.get("timestamp")
-    if ts_str and not is_manual_override:
+    if not ts_str:
+        log.warning(f"{prefix} REJECTED: missing signal timestamp")
+        return RiskApproval(False, 0.0, 0.0, 0.0, 0.0, 0.0, "MISSING_SIGNAL_TIMESTAMP")
+    if ts_str:
         try:
             sig_time = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
             age = (datetime.now(timezone.utc) - sig_time).total_seconds()
@@ -718,16 +900,23 @@ def risk_check(
             return RiskApproval(False, 0.0, 0.0, 0.0, 0.0, 0.0, "UNPARSEABLE_TIMESTAMP")
 
     # ── Check 2: Drawdown circuit breaker ───────────────────────────────────
-    dd = _current_drawdown(account_equity, asset_type)
+    dd = _current_drawdown(account_equity, asset_type, account_domain)
     dd_factor = 1.0
-    if dd >= _cfg("DRAWDOWN_STOP_THRESHOLD", 0.15):
-        log.warning(
-            f"{prefix} REJECTED: drawdown {dd:.1%} exceeds stop threshold {_cfg('DRAWDOWN_STOP_THRESHOLD', 0.15):.0%}"
-        )
-        return RiskApproval(False, 0.0, 0.0, 0.0, 0.0, dd, "DRAWDOWN_CIRCUIT_BREAKER")
-    if dd >= _cfg("DRAWDOWN_REDUCE_THRESHOLD", 0.10):
-        dd_factor = 0.5
-        log.info(f"{prefix} drawdown {dd:.1%} — halving position size")
+    if _cfg("DRAWDOWN_STOP_ENABLED", True):
+        peak_snap = _peak_equity_snapshot(asset_type, account_domain)
+        domain_snap = _resolve_domain(asset_type, account_domain)
+        if dd >= _cfg("DRAWDOWN_STOP_THRESHOLD", 0.15):
+            log.warning(
+                f"{prefix} REJECTED: drawdown {dd:.1%} (equity={account_equity:,.2f} vs peak={peak_snap:,.2f} "
+                f"domain={domain_snap}) exceeds stop threshold "
+                f"{_cfg('DRAWDOWN_STOP_THRESHOLD', 0.15):.0%}"
+            )
+            return RiskApproval(False, 0.0, 0.0, 0.0, 0.0, dd, "DRAWDOWN_CIRCUIT_BREAKER")
+        if dd >= _cfg("DRAWDOWN_REDUCE_THRESHOLD", 0.10):
+            dd_factor = 0.5
+            log.info(f"{prefix} drawdown {dd:.1%} — halving position size")
+    else:
+        log.debug("%s DRAWDOWN_STOP_ENABLED=false — drawdown stop/reduce skipped", prefix)
 
     # ── Check 3: Max open positions ─────────────────────────────────────────
     if len(open_positions) >= _cfg("MAX_OPEN_POSITIONS", 5):
@@ -777,18 +966,70 @@ def risk_check(
         log.warning(f"{prefix} REJECTED: SHORT tp1 {tp1} must be below entry {entry}")
         return RiskApproval(False, 0.0, 0.0, 0.0, 0.0, dd, "INVALID_LEVELS")
 
+    # Engine C / consensus minimum R:R from geometry (defense in depth)
+    def _is_consensus_execution_signal(sig: dict) -> bool:
+        eng = str(sig.get("engine") or "").strip().lower()
+        if eng in ("engine_c", "consensus"):
+            return True
+        v = str(sig.get("verdict") or "").strip().upper()
+        if v in (
+            "ALIGNED",
+            "A_ONLY",
+            "B_ONLY",
+            "B_ONLY_SCORED",
+            "B_ONLY_VISION_CONFIRMED",
+            "B_OVERRIDE_CONFLICT",
+            "A_OVERRIDE_CONFLICT",
+        ):
+            return True
+        comps = sig.get("components")
+        return isinstance(comps, dict) and bool(comps)
+
+    try:
+        _min_exec_rr = float(CONFIG.get("ENGINE_C_EXEC_MIN_RR", 1.0) or 1.0)
+    except (TypeError, ValueError):
+        _min_exec_rr = 1.0
+    if _is_engine_b_execution_signal(signal):
+        for _rr_source in (
+            signal,
+            signal.get("engine_b_status"),
+            signal.get("engine_b"),
+            signal.get("naked_data"),
+        ):
+            if not isinstance(_rr_source, dict):
+                continue
+            for _key in ("engine_b_min_rr", "min_rr", "required_rr"):
+                try:
+                    if _rr_source.get(_key) is not None:
+                        _min_exec_rr = max(_min_exec_rr, float(_rr_source.get(_key)))
+                except (TypeError, ValueError):
+                    pass
+
+    if _min_exec_rr > 0 and tp1 > 0 and (
+        _is_consensus_execution_signal(signal) or _is_engine_b_execution_signal(signal)
+    ):
+        risk_abs = abs(entry - sl)
+        if risk_abs > 0:
+            rr_geom = abs(tp1 - entry) / risk_abs
+            if rr_geom + 1e-12 < _min_exec_rr:
+                log.warning(
+                    f"{prefix} REJECTED: R:R {rr_geom:.3f} < min {_min_exec_rr}"
+                )
+                return RiskApproval(
+                    False, 0.0, 0.0, 0.0, 0.0, dd, "RR_BELOW_MINIMUM"
+                )
+
     # ── Check 5: SL distance within MAX_SL_PCT ──────────────────────────────
     # BUG 4 fix: Enforce hard rejection for over-wide stops before volume calc.
     # Matches implementation in executors to prevent late-stage rejections.
-    _caps = CONFIG.get("MAX_SL_PCT") or {}
-    max_sl_pct = _caps.get(asset_type, 0.05)
+    max_sl_pct, max_sl_source = resolve_max_sl_pct(signal, asset_type, CONFIG)
     
     if entry != 0:
         sl_pct = abs(entry - sl) / abs(entry)
         if sl_pct > max_sl_pct:
             log.warning(
                 f"{prefix} REJECTED: SL distance {sl_pct:.1%} exceeds MAX_SL_PCT "
-                f"{max_sl_pct:.1%} for {asset_type}"
+                f"{max_sl_pct:.1%} for {asset_type} ({max_sl_source})"
             )
             return RiskApproval(False, 0.0, 0.0, 0.0, 0.0, dd, "MAX_SL_EXCEEDED")
 

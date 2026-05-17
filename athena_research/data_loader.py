@@ -659,7 +659,16 @@ def load_ohlcv(
             df, prov = cached
             log.debug("[data_loader] Cache hit %s %s (%d bars, source=%s)",
                       symbol, timeframe, len(df), prov.data_source if prov else "?")
-            return _clean(df), prov
+            cleaned = _clean(df).tail(limit)
+            prov = _provenance(
+                cleaned,
+                symbol,
+                timeframe,
+                prov.data_source if prov else "cache",
+                cached=True,
+                notes=prov.notes if prov else "loaded from cache",
+            )
+            return cleaned, prov
 
     # Fetch from source
     df, source, notes = _dispatch(symbol, timeframe, limit, allow_yfinance)

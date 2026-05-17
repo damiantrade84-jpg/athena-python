@@ -166,11 +166,11 @@ class TestSignalDebateExecutionSafety:
         base.update(overrides)
         return base
 
-    def test_debate_skip_when_no_api_key_is_allowed_true(self, monkeypatch):
+    def test_debate_skip_when_no_api_key_defaults_blocked(self, monkeypatch):
         monkeypatch.setattr("signal_debate.get_ai_api_key", lambda _cfg: "")
         result = run_signal_debate(self._base_signal())
         assert result["grade"] == "SKIP"
-        assert result["allowed"] is True
+        assert result["allowed"] is False
 
     def test_debate_pass_grade_sets_allowed_false(self, monkeypatch):
         """AI says PASS => allowed=False => execution is blocked."""
@@ -273,8 +273,8 @@ class TestSignalDebateExecutionSafety:
         """Debate context string must include LEVELS data (entry, SL, TP, R:R)."""
         captured_context = []
 
-        def _fake_get_case(client, context, direction, side, model, temperature):
-            captured_context.append(context)
+        def _fake_get_case(*args):
+            captured_context.append(args[1])
             return {"conviction": 5, "key_arguments": []}
 
         monkeypatch.setattr("signal_debate.get_ai_api_key", lambda _cfg: "xai-key")
@@ -298,8 +298,8 @@ class TestSignalDebateExecutionSafety:
         """When signal has candleFetchMeta, freshness section must appear in debate context."""
         captured_context = []
 
-        def _fake_get_case(client, context, direction, side, model, temperature):
-            captured_context.append(context)
+        def _fake_get_case(*args):
+            captured_context.append(args[1])
             return {"conviction": 5, "key_arguments": []}
 
         monkeypatch.setattr("signal_debate.get_ai_api_key", lambda _cfg: "xai-key")
@@ -324,8 +324,8 @@ class TestSignalDebateExecutionSafety:
         """When signal lacks candleFetchMeta, context must not include stale placeholder text."""
         captured_context = []
 
-        def _fake_get_case(client, context, direction, side, model, temperature):
-            captured_context.append(context)
+        def _fake_get_case(*args):
+            captured_context.append(args[1])
             return {"conviction": 5, "key_arguments": []}
 
         monkeypatch.setattr("signal_debate.get_ai_api_key", lambda _cfg: "xai-key")
@@ -341,6 +341,20 @@ class TestSignalDebateExecutionSafety:
         ctx = captured_context[0] if captured_context else ""
         # No freshness section when signal has no metadata (build_freshness_ai_context returns "")
         assert "CANDLE DATA FRESHNESS" not in ctx
+
+    def test_debate_no_api_key_defaults_to_block(self, monkeypatch):
+        """AUTO_TRADE_AI_FAIL_POLICY must default to 'block' so missing API key blocks exec."""
+        monkeypatch.setattr("signal_debate.get_ai_api_key", lambda _cfg: "")
+        # Ensure config does NOT explicitly set the policy (test the default)
+        import signal_debate
+        monkeypatch.setitem(
+            signal_debate.CONFIG,
+            "AUTO_TRADE_AI_FAIL_POLICY",
+            "block",
+        )
+        result = run_signal_debate(self._base_signal())
+        assert result["grade"] == "SKIP"
+        assert result["allowed"] is False
 
 
 # ============================================================
@@ -528,19 +542,10 @@ class TestEngineBaiAdvisoryContract:
 
         monkeypatch.setattr(engine_b_ai, "create_ai_client", lambda *_a, **_kw: object())
 
-        class _FakeCompletion:
-            choices = [
-                type(
-                    "C",
-                    (),
-                    {"message": type("M", (), {"content": "NOT VALID JSON }{{"})()},
-                )()
-            ]
-
         monkeypatch.setattr(
             engine_b_ai,
             "_call_ai_with_retry",
-            lambda *_a, **_kw: _FakeCompletion(),
+            lambda *_a, **_kw: (None, "NOT VALID JSON }{{"),
         )
 
         result = get_engine_b_ai_verdict(
@@ -561,10 +566,14 @@ class TestEngineBaiAdvisoryContract:
         monkeypatch.setattr(engine_b_ai, "create_ai_client", lambda *_a, **_kw: object())
 
         _payload = json.dumps({
+            "reviewSource": "engine_b_marcus",
+            "reasoning": "Structural breakdown across styles.",
+            "verdict": "Structure is broken.",
+            "resolvedStyle": "intraday",
+            "bestValidStyle": "intraday",
             "grade": "F",
             "edgeProbability": 15,
             "riskLevel": "High",
-            "verdict": "Structure is broken.",
             "style_ratings": {
                 "scalp": {"grade": "F", "edgeProbability": 15, "riskLevel": "High"},
                 "intraday": {"grade": "F", "edgeProbability": 15, "riskLevel": "High"},
@@ -572,15 +581,10 @@ class TestEngineBaiAdvisoryContract:
             },
         })
 
-        class _FakeCompletion:
-            choices = [
-                type("C", (), {"message": type("M", (), {"content": _payload})()})()
-            ]
-
         monkeypatch.setattr(
             engine_b_ai,
             "_call_ai_with_retry",
-            lambda *_a, **_kw: _FakeCompletion(),
+            lambda *_a, **_kw: (json.loads(_payload), _payload),
         )
 
         result = get_engine_b_ai_verdict(
@@ -1251,7 +1255,85 @@ class TestMarcusTextReviewTimeoutContract:
         start = text.index("def run_ai(")
         end = text.index("t = (completion.choices[0].message.content", start)
         run_ai_body = text[start:end]
+        assert 'preferred_key="MARCUS_AI_SDK_MAX_RETRIES"' in run_ai_body
+        assert "create_ai_client(CONFIG, max_retries=_sdk_max_retries)" in run_ai_body
         assert "get_ai_timeout_sec(" in run_ai_body
         assert 'preferred_key="MARCUS_AI_TIMEOUT_SEC"' in run_ai_body
         assert "timeout=_timeout_sec" in run_ai_body
         assert "[AI] %s timing: prompt_build" in run_ai_body
+        assert "elapsed=%.2fs timeout=%.1fs sdk_retries=%s" in text
+        assert "prompt_build=%.2fs prompt_chars=%s" in text
+
+
+class TestMarcusNewsFreshnessContract:
+    """Marcus AI review must request fresh news instead of stale cached sentiment."""
+
+    def test_api_analyze_forces_news_refresh(self):
+        athena_path = os.path.join(os.path.dirname(__file__), "..", "athena.py")
+        with open(athena_path, encoding="utf-8") as f:
+            text = f.read()
+        start = text.index("def api_analyze():")
+        end = text.index("# Fetch live portfolio context", start)
+        analyze_prep = text[start:end]
+        assert 'sig["_force_news_refresh"] = True' in analyze_prep
+        assert "fetch_news_context([_news_pair], force_refresh=True)" in analyze_prep
+        assert "sig.get(\"newsCtx\")" in analyze_prep
+
+    def test_fetch_news_context_has_synchronous_force_refresh_path(self):
+        athena_path = os.path.join(os.path.dirname(__file__), "..", "athena.py")
+        with open(athena_path, encoding="utf-8") as f:
+            text = f.read()
+        start = text.index("def fetch_news_context(")
+        end = text.index("def _fetch_pair_news_on_demand", start)
+        fetch_body = text[start:end]
+        assert "force_refresh: bool = False" in fetch_body
+        assert "if force_refresh and allow_refresh:" in fetch_body
+        assert "return _filter_news_ctx_for_pairs(_refresh_news_cache(pairs), pairs)" in fetch_body
+        assert "_ensure_news_background_started()" in fetch_body
+
+    def test_pair_news_on_demand_can_bypass_ttl_cache_for_ai_review(self):
+        athena_path = os.path.join(os.path.dirname(__file__), "..", "athena.py")
+        with open(athena_path, encoding="utf-8") as f:
+            text = f.read()
+        start = text.index("def _fetch_pair_news_on_demand(")
+        end = text.index("def _build_signal_message", start)
+        pair_news_body = text[start:end]
+        assert "force_refresh: bool = False" in pair_news_body
+        assert "if not force_refresh and _age < _ttl" in pair_news_body
+        assert 'force_refresh=bool(signal.get("_force_news_refresh"))' in text
+
+
+class TestVisionArbitrationFailClosed:
+    def test_arbitration_exception_blocks_trade(self, monkeypatch):
+        import engine_c
+        def boom(*a, **k):
+            raise RuntimeError("arb down")
+        monkeypatch.setitem(engine_c.CONFIG, "AI_VISION_CAN_UPGRADE_TRADE", False)
+        monkeypatch.setattr("ai_reconciliation.arbitrate_ai", boom)
+        from engine_c import apply_vision
+        consensus = {
+            "conviction": 0.5,
+            "tier": "MEDIUM",
+            "sizing_override": 0.65,
+            "entry": 1.1,
+            "sl": 1.09,
+            "tp": 1.13,
+            "trade": True,
+            "sl_method": "structural",
+        }
+        out = apply_vision(consensus, {"analysis": "MODERATE", "structured": {"rating": "MODERATE"}})
+        assert out["trade"] is False
+        assert out["verdict"] == "VISION_ARBITRATION_ERROR"
+
+
+class TestVisionModifiersHardVeto:
+    def test_yaml_cannot_neutralize_contradicts(self, monkeypatch):
+        import engine_c
+        monkeypatch.setitem(
+            engine_c.CONFIG,
+            "VISION_MODIFIERS",
+            {"CONTRADICTS": {"action": "confirm", "conviction_mult": 1.0}},
+        )
+        modifiers = engine_c._vision_modifiers()
+        assert modifiers["CONTRADICTS"]["action"] == "contradict"
+        assert modifiers["CONTRADICTS"]["conviction_mult"] == 0.0

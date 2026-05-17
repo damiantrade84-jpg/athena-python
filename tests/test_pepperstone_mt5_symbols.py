@@ -18,6 +18,16 @@ _ATHENA_SPEC.loader.exec_module(_ATHENA_MOD)
 ALL_PAIRS = _ATHENA_MOD.ALL_PAIRS
 _TELEGRAM_BOT_PATH = Path(__file__).resolve().parents[1] / "telegram_bot.py"
 _STATIC_INDEX_PATH = Path(__file__).resolve().parents[1] / "static" / "index.html"
+_PAIR_BROWSER_PANEL_PATH = (
+    Path(__file__).resolve().parents[1]
+    / "static"
+    / "react-app"
+    / "app"
+    / "src"
+    / "components"
+    / "panels"
+    / "PairBrowserPanel.tsx"
+)
 
 
 _EXPECTED_NEW_SYMBOLS = {
@@ -136,7 +146,8 @@ def test_currency_indices_are_present_on_operator_surfaces():
     assert pair_aliases["jpyx"] == "JPYX"
     assert pair_aliases["jpx"] == "JPYX"
 
-    html = _STATIC_INDEX_PATH.read_text(encoding="utf-8")
-    assert '"EURX":"PEPPERSTONE:EURX"' in html
-    assert '"JPYX":"PEPPERSTONE:JPYX"' in html
-    assert '"USDX":"PEPPERSTONE:USDX"' in html
+    pair_browser_source = _PAIR_BROWSER_PANEL_PATH.read_text(encoding="utf-8")
+    assert "EURX: 'PEPPERSTONE:EURX'" in pair_browser_source
+    assert "JPYX: 'PEPPERSTONE:JPYX'" in pair_browser_source
+    assert "USDX: 'PEPPERSTONE:USDX'" in pair_browser_source
+    assert "tradingViewSymbolForLabel(selectedLabel)" in pair_browser_source

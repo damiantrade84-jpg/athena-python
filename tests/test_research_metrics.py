@@ -17,16 +17,24 @@ def test_probabilistic_sharpe_ratio_increases_for_stronger_returns():
     weak_returns = [0.1, -0.1, 0.05, -0.02, 0.03, 0.01]
     strong_returns = [0.5, 0.4, 0.45, 0.35, 0.5, 0.42]
 
-    weak = probabilistic_sharpe_ratio(0.2, weak_returns)
-    strong = probabilistic_sharpe_ratio(2.0, strong_returns)
+    weak = probabilistic_sharpe_ratio(0.2, weak_returns, min_reliable_trade_count=2)
+    strong = probabilistic_sharpe_ratio(2.0, strong_returns, min_reliable_trade_count=2)
 
     assert weak["available"] is True
     assert strong["available"] is True
     assert weak["value"] < strong["value"]
 
 
+def test_probabilistic_sharpe_ratio_withheld_below_default_floor():
+    short = [0.1, -0.05, 0.2]
+    out = probabilistic_sharpe_ratio(0.5, short)
+    assert out["available"] is False
+    assert out.get("note") == "psr_below_min_reliable_trade_count"
+
+
 def test_deflated_sharpe_ratio_reports_trial_assumption_when_missing():
-    returns = [0.4, 0.2, 0.5, -0.1, 0.3, 0.25, 0.35]
+    rng = [0.4, 0.2, 0.5, -0.1, 0.3, 0.25, 0.35]
+    returns = rng * 6  # ≥30 samples for default PSR floor
     result = deflated_sharpe_ratio(1.2, returns)
 
     assert result["available"] is True
@@ -60,6 +68,7 @@ def test_enrich_backtest_summary_adds_research_metrics():
     assert "dsr" in metrics
     assert "pbo" in metrics
     assert metrics["tradeCount"] == 4
+    assert metrics["psr"].get("available") is False
 
 
 def test_build_research_metrics_marks_runtime_heavy_pbo_path():
@@ -92,3 +101,4 @@ def test_build_research_metrics_includes_bootstrap_ci():
 
     assert metrics["bootstrapCI"]["available"] is True
     assert metrics["bootstrapCI"]["iterations"] == 25
+

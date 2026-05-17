@@ -683,9 +683,9 @@ class AutopilotSession:
             cfg = yaml.safe_load(cfg_path.read_text(encoding="utf-8")) if cfg_path.exists() else {}
             asset_key = self.market_group.lower()
 
-            # Engine A: MIN_CONFLUENCE_CLASS live floor
-            min_conf = cfg.get("MIN_CONFLUENCE_CLASS", {})
-            engine_a_live = min_conf.get(asset_key, min_conf.get("crypto", 2.0))
+            # Engine A: ENGINE_A_SCORE_GROUP_THRESHOLDS live floor
+            min_conf = cfg.get("ENGINE_A_SCORE_GROUP_THRESHOLDS", {})
+            engine_a_live = min_conf.get("default", 1.5)
             # Discovery proxy for Engine A: lowest robustness_score among strong candidates
             engine_a_disc = None
             if not combined.empty and "robustness_score" in combined.columns:

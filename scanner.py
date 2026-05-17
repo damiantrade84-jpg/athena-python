@@ -9,6 +9,10 @@ from datetime import datetime, timezone
 from typing import Any
 
 from athena_runtime import rt
+from athena_app.services.crypto_signal_feed import (
+    fetch_crypto_signal_candles,
+    resolve_crypto_signal_feed,
+)
 from candles_cache import get_candle_fetch_meta
 from config import CONFIG, scan_candle_limits
 from data_feeds import http_requests
@@ -23,7 +27,12 @@ from scoring import (
     get_pair_score_group,
 )
 from engine_c import ENGINE_C_AB_WEIGHTS
-from market_structure import NakedEngine, engine_b_min_score_threshold
+from market_structure import (
+    NakedEngine,
+    engine_b_confidence_passes,
+    engine_b_forex_asian_session_blocks_bar,
+    engine_b_min_score_threshold,
+)
 from threshold_audit import (
     audit_enabled as threshold_audit_enabled,
     build_signal_funnel_row,
@@ -32,6 +41,659 @@ from threshold_audit import (
 from factor_scoring import make_regime_smoothing_context
 
 log = logging.getLogger("sentinel")
+
+
+def _engine_b_scan_confirmation_gate_enabled(config: dict | None = None) -> bool:
+    """Return True when Engine A *trade* tier should require Engine B confirmation.
+
+    Default False: full-scan trade lists use Engine A thresholds only; Engine B
+    fields remain on the payload for Engine C / dashboards. When True (legacy),
+    a trade-tier row is demoted to watchlist unless ``enginesAligned``.
+
+    Autopilot and manual execution still apply their own conviction / risk gates
+    (see ``auto_trader.AutoTrader._can_execute``); they do not follow this flag.
+    """
+    cfg = config or CONFIG
+    return bool(cfg.get("ENGINE_B_SCAN_CONFIRMATION_GATE_ENABLED", False))
+
+
+def _select_engine_b_tf_candles(tf: str | None, tf_map: dict[str, list]) -> list:
+    key = str(tf or "H4").upper()
+    return list(tf_map.get(key) or [])
+
+
+def _last_atr_from_candles(candles: list, period: int = 14) -> float:
+    if not candles or len(candles) < period + 1:
+        return 0.0
+    highs = [float(c["high"]) for c in candles]
+    lows = [float(c["low"]) for c in candles]
+    closes = [float(c["close"]) for c in candles]
+    atr_series = calc_atr(highs, lows, closes, period)
+    return float(atr_series[-1]) if atr_series else 0.0
+
+
+def _fetch_ab_crypto_signal_candles(runtime, pair: dict, tf: str, limit: int):
+    """Fetch shared Engine A/B scan candles with optional crypto Bybit experiment."""
+    if (
+        str((pair or {}).get("type") or "").lower() != "crypto"
+        or resolve_crypto_signal_feed("AB", CONFIG) == "binance"
+    ):
+        return runtime.fetch_candles(pair, tf, limit), None
+
+    result = fetch_crypto_signal_candles(
+        pair,
+        tf,
+        limit,
+        engine="AB",
+        config=CONFIG,
+        default_fetch=lambda pair_arg, tf_arg, limit_arg: runtime.fetch_candles(
+            pair_arg, tf_arg, limit_arg
+        ),
+        bybit_fetch=getattr(runtime, "fetch_bybit_klines", None),
+        bybit_paginated_fetch=getattr(runtime, "fetch_bybit_klines_paginated", None),
+    )
+    return result.candles, result.meta
+
+
+def _engine_b_level_pair(conf_b: dict | None, res_b: dict | None) -> tuple[float | None, float | None]:
+    conf_b = conf_b or {}
+    res_b = res_b or {}
+    sl = conf_b.get("execution_sl")
+    if sl is None:
+        sl = res_b.get("execution_sl")
+    if sl is None:
+        sl = res_b.get("recommended_stop_loss")
+    tp = conf_b.get("execution_tp")
+    if tp is None:
+        tp = res_b.get("execution_tp")
+    if tp is None:
+        tp = res_b.get("recommended_take_profit")
+    try:
+        return float(sl), float(tp)
+    except (TypeError, ValueError):
+        return None, None
+
+
+def _apply_engine_b_scan_levels(signal: dict, conf_b: dict | None, res_b: dict | None) -> None:
+    sl, tp = _engine_b_level_pair(conf_b, res_b)
+    if sl is None or tp is None:
+        return
+    signal["engine_b_execution_sl"] = sl
+    signal["engine_b_execution_tp"] = tp
+    signal["engine_b_rr_used_for_gate"] = (conf_b or {}).get("rr_used_for_gate")
+    if not bool(CONFIG.get("ENGINE_B_USE_EXECUTION_LEVELS_FOR_SCAN_SIGNALS", True)):
+        return
+    signal["sl"] = sl
+    signal["tp1"] = tp
+    signal["tp2"] = tp
+    signal["levelSource"] = "engine_b_execution"
+    signal["level_source"] = "engine_b_execution"
+
+
+def _apply_engine_b_scan_confidence_gate(
+    signal: dict,
+    conf_b: dict | None,
+    style_profile: dict | None,
+    regime_label: str | None,
+    asset_type: str = "",
+) -> tuple[bool, float]:
+    """Apply Engine B's final style/regime score floor to scan alignment."""
+    gate_ok, scaled_min = engine_b_confidence_passes(
+        conf_b,
+        style_profile,
+        regime_label,
+        asset_type,
+    )
+    signal["enginesAligned"] = bool(gate_ok)
+    signal["engine_b_min_score_scaled"] = scaled_min
+    if isinstance(conf_b, dict):
+        conf_b["passed"] = bool(gate_ok)
+        conf_b["checklist_passed"] = bool(gate_ok)
+        conf_b["min_score_scaled"] = scaled_min
+    return bool(gate_ok), scaled_min
+
+
+def _engine_b_scan_combined_conviction(
+    a_norm: float,
+    b_norm: float,
+    weights: dict | None,
+    *,
+    direction_aligned: bool,
+) -> float:
+    """Blend Engine B only when its independent direction agrees with Engine A."""
+    try:
+        a_val = max(0.0, min(1.0, float(a_norm)))
+    except (TypeError, ValueError):
+        a_val = 0.0
+    try:
+        b_val = max(0.0, min(1.0, float(b_norm)))
+    except (TypeError, ValueError):
+        b_val = 0.0
+
+    if not direction_aligned:
+        return round(a_val * 0.60, 4)
+
+    w = weights or ENGINE_C_AB_WEIGHTS.get("TRENDING", {"A": 0.40, "B": 0.60})
+    try:
+        w_a = float(w.get("A", 0.40))
+    except (TypeError, ValueError, AttributeError):
+        w_a = 0.40
+    try:
+        w_b = float(w.get("B", 0.60))
+    except (TypeError, ValueError, AttributeError):
+        w_b = 0.60
+    return round((a_val * w_a) + (b_val * w_b), 4)
+
+
+def _engine_b_structure_ready_watchlist_config(config: dict | None = None) -> dict:
+    cfg = config or CONFIG
+    raw = cfg.get("ENGINE_B_STRUCTURE_READY_WATCHLIST", {}) or {}
+    return raw if isinstance(raw, dict) else {}
+
+
+def _engine_b_structure_ready_watchlist_detail(
+    conf_b: dict | None,
+    res_b: dict | None,
+    *,
+    config: dict | None = None,
+) -> dict | None:
+    """Return safe scan-only diagnostics for strong B structures awaiting trigger.
+
+    This intentionally does not alter Engine B's pass state. It only lets full
+    scan expose candidates that have meaningful structure but are blocked by the
+    final price-action trigger, so they can be monitored without execution.
+    """
+    cfg = _engine_b_structure_ready_watchlist_config(config)
+    if not bool(cfg.get("ENABLED", False)):
+        return None
+    if not isinstance(conf_b, dict) or not isinstance(res_b, dict):
+        return None
+    if bool(conf_b.get("passed", False)):
+        return None
+
+    try:
+        score = float(conf_b.get("score", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        score = 0.0
+    try:
+        min_score = float(conf_b.get("min_score_scaled", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        min_score = 0.0
+    try:
+        max_possible = float(conf_b.get("max_possible", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        max_possible = 0.0
+    try:
+        min_ratio = float(cfg.get("MIN_SCORE_RATIO", 0.85))
+    except (TypeError, ValueError):
+        min_ratio = 0.85
+    min_ratio = max(0.0, min(1.0, min_ratio))
+
+    if min_score > 0:
+        score_ok = score >= (min_score * min_ratio)
+    elif max_possible > 0:
+        score_ok = (score / max_possible) >= min_ratio
+    else:
+        score_ok = False
+    if not score_ok:
+        return None
+
+    asset_type = str(res_b.get("asset_type") or conf_b.get("asset_type") or "").lower()
+    forex_gate_near_miss = asset_type == "forex" and bool(
+        cfg.get("FOREX_GATE_NEAR_MISS_ENABLED", False)
+    )
+    asset_gate_near_miss = (
+        asset_type in {"forex", "stock", "index", "commodity", "etf", "etf_bond"}
+        and bool(cfg.get("ASSET_GATE_NEAR_MISS_ENABLED", False))
+    )
+    gate_near_miss = forex_gate_near_miss or asset_gate_near_miss
+    trigger_ok = bool(conf_b.get("trigger_ok", False))
+    entry_ok = bool(conf_b.get("entry_ok", False))
+    if (
+        bool(cfg.get("REQUIRE_TRIGGER_MISSING", True))
+        and not gate_near_miss
+        and (trigger_ok or entry_ok)
+    ):
+        return None
+
+    if (
+        bool(cfg.get("REQUIRE_STRUCTURE_OK", True))
+        and not gate_near_miss
+        and not bool(conf_b.get("structure_ok", False))
+    ):
+        return None
+
+    structure_evidence = {
+        "bos_confirmed": bool(res_b.get("bos_confirmed", False)),
+        "choch_confirmed": bool(res_b.get("choch_confirmed", False)),
+        "liquidity_sweep": bool(res_b.get("liquidity_sweep", False)),
+        "ob_at_zone": bool(res_b.get("ob_at_zone", False)),
+        "fvg_overlap": bool(res_b.get("fvg_overlap", False)),
+        "breaker_block": bool(res_b.get("breaker_block", False)),
+    }
+    if not any(structure_evidence.values()):
+        return None
+
+    location_context = bool(
+        conf_b.get("location_ok", False)
+        or conf_b.get("zone_ok", False)
+        or res_b.get("zone_touched", False)
+        or res_b.get("near_active_zone", False)
+        or res_b.get("ob_at_zone", False)
+        or res_b.get("fvg_overlap", False)
+    )
+    if bool(cfg.get("REQUIRE_LOCATION_CONTEXT", True)) and not location_context:
+        if not gate_near_miss:
+            return None
+
+    if gate_near_miss:
+        try:
+            min_confirmations = int(cfg.get("FOREX_MIN_GATE_CONFIRMATIONS", 3))
+        except (TypeError, ValueError):
+            min_confirmations = 3
+        min_confirmations = max(1, min(5, min_confirmations))
+        space_gate_ok = bool(conf_b.get("space_gate_ok", conf_b.get("room_ok", False)))
+        gate_confirmations = [
+            bool(conf_b.get("structure_ok", False)),
+            bool(conf_b.get("location_ok", False)),
+            entry_ok,
+            space_gate_ok,
+            bool(conf_b.get("rr_ok", False)),
+        ]
+        if sum(1 for item in gate_confirmations if item) < min_confirmations:
+            return None
+
+    failed_gates = list(conf_b.get("failed_gate_names") or [])
+    reason = "Engine B structure ready; awaiting price-action trigger"
+    execution_block_reason = "awaiting_price_action_trigger"
+    if gate_near_miss:
+        blocked = ", ".join(failed_gates) if failed_gates else "gate_near_miss"
+        label = "forex" if forex_gate_near_miss else asset_type or "asset"
+        reason = f"Engine B {label} near miss; blocked by {blocked}"
+        execution_block_reason = "engine_b_gate_near_miss"
+    return {
+        "reason": reason,
+        "execution_allowed": False,
+        "execution_block_reason": execution_block_reason,
+        "asset_type": asset_type or None,
+        "forex_gate_near_miss": forex_gate_near_miss,
+        "asset_gate_near_miss": asset_gate_near_miss,
+        "gate_near_miss": gate_near_miss,
+        "score": round(score, 4),
+        "min_score_scaled": round(min_score, 4),
+        "min_score_ratio": min_ratio,
+        "trigger_ok": trigger_ok,
+        "entry_ok": entry_ok,
+        "structure_ok": bool(conf_b.get("structure_ok", False)),
+        "location_context": location_context,
+        "failed_gates": failed_gates,
+        "structure_evidence": structure_evidence,
+    }
+
+
+def _mark_engine_b_structure_ready_watchlist(
+    signal: dict,
+    conf_b: dict | None,
+    res_b: dict | None,
+    *,
+    config: dict | None = None,
+) -> dict | None:
+    detail = _engine_b_structure_ready_watchlist_detail(conf_b, res_b, config=config)
+    if not detail:
+        return None
+    signal["engine_b_structure_ready_watchlist"] = True
+    signal["engine_b_structure_ready_detail"] = detail
+    signal["engine_b_execution_blocked"] = True
+    signal["engine_b_execution_block_reason"] = detail["execution_block_reason"]
+    return detail
+
+
+def _apply_engine_b_scan_gate(signal: dict, tier: str, reason: str) -> tuple[str, str]:
+    """Demote Engine A trade tier when B confirmation is required and missing.
+
+    Only runs when ``ENGINE_B_SCAN_CONFIRMATION_GATE_ENABLED`` is True.
+    """
+    if not _engine_b_scan_confirmation_gate_enabled():
+        return tier, reason
+    if tier != "trade":
+        return tier, reason
+    if bool(signal.get("enginesAligned", False)):
+        return tier, reason
+    detail = signal.get("engine_b_error") or signal.get("engine_b_verdict") or "not_confirmed"
+    return "watchlist", f"Engine B confirmation failed ({detail})"
+
+
+def _apply_engine_b_only_watchlist_scan_tier(
+    signal: dict,
+    tier: str,
+    reason: str,
+    *,
+    config: dict | None = None,
+) -> tuple[str, str]:
+    """Surface scan-only Engine B passes that Engine A tiering would hide.
+
+    This never promotes to trade. It only preserves a passed naked-structure
+    setup for operator review when Engine A is below its scan floor.
+    """
+    cfg = config or CONFIG
+    if not bool(cfg.get("ENGINE_B_SCAN_B_ONLY_WATCHLIST_ENABLED", False)):
+        return tier, reason
+    if tier == "trade":
+        return tier, reason
+    if not bool(signal.get("engine_b_confidence_passed", False)):
+        return tier, reason
+
+    diagnostics = signal.setdefault("scanDiagnostics", [])
+    safety_block_codes = {
+        "closed_exchange",
+        "event_risk",
+        "macro_event_risk",
+        "inactive_pair",
+        "engine_b_error",
+    }
+    codes = {d.get("code") for d in diagnostics if isinstance(d, dict)}
+    if codes.intersection(safety_block_codes):
+        return tier, reason
+
+    b_dir = signal.get("engine_b_direction")
+    a_dir = signal.get("direction")
+    aligned = bool(signal.get("enginesAligned", False))
+    if b_dir in ("LONG", "SHORT") and a_dir in ("LONG", "SHORT") and b_dir != a_dir:
+        detail = f"Engine B-only watchlist: B {b_dir}, A {a_dir}"
+    elif aligned:
+        detail = "Engine B passed; Engine A below scan floor"
+    else:
+        detail = "Engine B-only watchlist"
+
+    diagnostics.append({"code": "engine_b_only_watchlist", "detail": detail})
+    signal["engine_b_execution_blocked"] = True
+    signal["engine_b_execution_block_reason"] = "engine_b_only_scan_watchlist"
+    return "watchlist", detail
+
+
+def _apply_engine_b_structure_ready_scan_tier(
+    signal: dict,
+    tier: str,
+    reason: str,
+    *,
+    config: dict | None = None,
+) -> tuple[str, str]:
+    """Promote scan-only Engine B near-ready rows to watchlist, never trade."""
+    cfg = _engine_b_structure_ready_watchlist_config(config)
+    if not bool(cfg.get("ENABLED", False)):
+        return tier, reason
+    if tier == "trade":
+        return tier, reason
+    detail = signal.get("engine_b_structure_ready_detail")
+    if not isinstance(detail, dict):
+        return tier, reason
+    if bool(detail.get("execution_allowed", False)):
+        return tier, reason
+
+    safety_block_codes = {
+        "closed_exchange",
+        "event_risk",
+        "inactive_pair",
+        "engine_b_error",
+    }
+    codes = {d.get("code") for d in signal.get("scanDiagnostics", []) if isinstance(d, dict)}
+    if codes.intersection(safety_block_codes):
+        return tier, reason
+
+    diagnostics = signal.setdefault("scanDiagnostics", [])
+    diagnostics.append(
+        {
+            "code": "engine_b_structure_ready_watchlist",
+            "detail": detail.get("reason", "Engine B structure ready; awaiting trigger"),
+        }
+    )
+    return "watchlist", str(detail.get("reason") or "Engine B structure ready; awaiting trigger")
+
+
+# --- Engine B independent scan helpers --------------------------------------
+#
+# These helpers exist so the full-scan path can produce Engine B signals or
+# Engine B rejection/funnel rows independently of Engine A. They keep Engine A
+# scoring, Engine B thresholds, risk/kill-switch and live execution untouched.
+
+# Status sentinel that downstream consumers (UI, audit, tests) use to recognise
+# a row whose source engine is Engine B (not an Engine A signal with a B
+# overlay).
+ENGINE_B_SOURCE = "ENGINE_B"
+ENGINE_A_SOURCE = "ENGINE_A"
+
+
+def _make_engine_b_only_signal_stub(pair: dict) -> dict:
+    """Build a minimal sig stub when Engine A produced no signal.
+
+    The stub keeps the downstream pipeline able to attach Engine B overlay
+    fields (verdict, score, SL/TP, RR, funnel) and route the row as an Engine
+    B-only result. Engine A scoring fields are zeroed/absent — the row is
+    never auto-traded and is classified by ``_classify_engine_b_only_signal``.
+    """
+    return {
+        "engine_source": ENGINE_B_SOURCE,
+        "engine": "B",
+        "engine_name": "Engine B",
+        "symbol": pair.get("symbol"),
+        "display": pair.get("display"),
+        "type": pair.get("type"),
+        "asset_type": pair.get("type"),
+        "direction": None,
+        "confluenceScore": 0.0,
+        "scoreNorm": 0.0,
+        "maxScore": 0.0,
+        "combinedConviction": 0.0,
+        "enginesAligned": False,
+        "engine_a_present": False,
+        "scanDiagnostics": [],
+        "warnings": [],
+    }
+
+
+def _engine_b_independent_direction_probe(
+    pair: dict,
+    *,
+    engine,
+    d1_candles: list,
+    zone_candles: list,
+    entry_candles: list,
+    current_price: float,
+    atr: float,
+    regime_label: str | None,
+    style_profile: dict,
+    resolved_style: str,
+    asset_type: str,
+    d1_snap: dict | None,
+    h4_snap: dict | None,
+) -> tuple[str | None, dict | None, dict | None]:
+    """Pick best Engine B direction independently of Engine A.
+
+    Runs ``analyze_structure`` for both LONG and SHORT, and for any CLEAR
+    verdict computes confidence and tests the style/regime gate. Returns the
+    best ``(direction, res_b, conf_b)`` tuple — preferring gate-passed over
+    not-passed, then higher confidence score. Returns ``(None, None, None)``
+    when neither direction has a CLEAR structural verdict.
+    """
+    best: tuple[bool, float, str, dict, dict] | None = None
+    for try_direction in ("LONG", "SHORT"):
+        res_b = engine.set_registry_context(
+            pair.get("symbol") or pair.get("display")
+        ).analyze_structure(
+            d1_candles or [],
+            zone_candles,
+            entry_candles,
+            current_price,
+            try_direction,
+            atr,
+            regime_label,
+            fallback_rr=style_profile.get("fallback_rr", 2.0),
+            asset_type=asset_type,
+            d1_snap=d1_snap or {},
+            h4_snap=h4_snap or {},
+            style=resolved_style,
+            pair=pair,
+        )
+        if res_b.get("structural_verdict") != "CLEAR":
+            continue
+        conf_b = engine.calculate_confidence(
+            res_b,
+            current_price,
+            try_direction,
+            entry_candles=entry_candles or zone_candles,
+            style_profile=style_profile,
+        )
+        gate_ok, _ = engine_b_confidence_passes(
+            conf_b, style_profile, regime_label, asset_type,
+        )
+        try:
+            score = float(conf_b.get("score") or 0.0)
+        except (TypeError, ValueError):
+            score = 0.0
+        candidate = (bool(gate_ok), score, try_direction, res_b, conf_b)
+        if best is None or candidate > best:
+            best = candidate
+    if best is None:
+        return None, None, None
+    _, _, direction, res_b, conf_b = best
+    return direction, res_b, conf_b
+
+
+def _annotate_engine_b_only_signal_for_scan(
+    signal: dict,
+    pair: dict,
+    ds_ctx: dict,
+    earnings_ctx: dict,
+    closed_exchanges: set,
+    news_ctx: dict,
+) -> dict:
+    """Minimal scan annotation for Engine B-only rows.
+
+    Mirrors the safety-block portion of ``annotate_signal_for_scan`` (exchange
+    closed / event risk / inactive pair) but does not inject Engine A
+    threshold or low-confluence diagnostics, which do not apply to an Engine B
+    independent row.
+    """
+    signal["isEnabled"] = pair.get("enabled", True)
+    signal["exchangeClosed"] = _pair_exchange_closed(pair, closed_exchanges)
+    signal["eventRisk"] = _build_event_risk(
+        pair, ds_ctx, earnings_ctx, closed_exchanges
+    )
+    signal["newsCtx"] = news_ctx
+    if CONFIG.get("EVENT_RISK_ENABLED", True):
+        try:
+            from event_risk import check_event_risk
+            ev_risk = check_event_risk(
+                pair.get("display", ""),
+                pair.get("type", ""),
+                lookahead_hours=CONFIG.get("EVENT_RISK_HOURS", 4),
+            )
+            signal["macroEventRisk"] = {
+                "blocked": not ev_risk.get("allowed", True),
+                "reason": ev_risk.get("reason", ""),
+                "events": ev_risk.get("events", []),
+            }
+        except Exception as e:
+            log.warning(f"Error checking macro event risk for B-only scan: {e}")
+            signal["macroEventRisk"] = {
+                "blocked": False,
+                "reason": "Error checking macro events",
+                "events": [],
+            }
+    diagnostics = []
+    if signal.get("exchangeClosed"):
+        diagnostics.append({"code": "closed_exchange", "detail": "Exchange closed"})
+    if signal["eventRisk"].get("hardBlock"):
+        diagnostics.append(
+            {"code": "event_risk", "detail": ", ".join(signal["eventRisk"].get("reasons", []))}
+        )
+    if signal.get("macroEventRisk", {}).get("blocked"):
+        diagnostics.append(
+            {"code": "macro_event_risk", "detail": signal["macroEventRisk"].get("reason", "")}
+        )
+    if not pair.get("enabled", True):
+        diagnostics.append({"code": "inactive_pair", "detail": "Pair not auto-enabled"})
+    if signal.get("engine_b_error"):
+        diagnostics.append(
+            {"code": "engine_b_error", "detail": str(signal.get("engine_b_error"))}
+        )
+    signal["scanDiagnostics"] = diagnostics
+    return signal
+
+
+def _classify_engine_b_only_signal(signal: dict, pair: dict) -> tuple[str, str]:
+    """Classifier for Engine B-only rows.
+
+    Uses Engine B gates only — never Engine A threshold or combinedConviction.
+    Result is always either ``"watchlist"`` (when Engine B confidence passed
+    and no safety blocks) or ``"skip"``. Engine B-only rows are never tier
+    ``"trade"``: live auto-trade requires the full A-driven path.
+    """
+    diagnostics_iter = (
+        d for d in signal.get("scanDiagnostics", []) if isinstance(d, dict)
+    )
+    codes: set[str] = {str(d.get("code")) for d in diagnostics_iter if d.get("code") is not None}
+    safety_block_codes = {
+        "closed_exchange",
+        "event_risk",
+        "macro_event_risk",
+        "inactive_pair",
+    }
+    blocked = codes & safety_block_codes
+    if blocked:
+        return "skip", f"Engine B blocked by safety codes: {','.join(sorted(blocked))}"
+    if not pair.get("enabled", True):
+        return "skip", "Pair not auto-enabled"
+    if signal.get("engine_b_error"):
+        return "skip", f"Engine B error: {signal.get('engine_b_error')}"
+    funnel = signal.get("engine_b_scan_gate_funnel")
+    if not isinstance(funnel, dict):
+        funnel = {}
+    verdict = signal.get("engine_b_verdict") or funnel.get("structure_verdict")
+    if verdict != "CLEAR":
+        skip_stage = funnel.get("engine_b_skip_stage")
+        if skip_stage:
+            return "skip", f"Engine B no signal: {skip_stage}"
+        return "skip", f"Engine B structural verdict {verdict or 'NONE'}"
+    if not bool(signal.get("engine_b_confidence_passed", False)):
+        failed = (
+            signal.get("engine_b_failed_gate_names")
+            or funnel.get("failed_gate_names")
+            or []
+        )
+        if failed:
+            failed_str = ",".join(str(g) for g in failed)
+            if any(
+                str(g).startswith("rr=") or str(g).lower() == "rr_gate"
+                for g in failed
+            ):
+                return "skip", f"Engine B RR gate failed: {failed_str}"
+            return "skip", f"Engine B gates failed: {failed_str}"
+        return "skip", "Engine B confidence gate not passed"
+    detail = "Engine B-only watchlist"
+    if signal.get("engine_b_direction"):
+        detail = f"Engine B-only watchlist ({signal.get('engine_b_direction')})"
+    return "watchlist", detail
+
+
+def _a_only_auto_weight(pair: dict | None, config: dict | None = None) -> float:
+    """Return the config-gated A-only auto conviction weight."""
+    cfg = config or CONFIG
+    weight_cfg = cfg.get("AUTO_TRADE_A_ONLY_WEIGHT", {}) or {}
+    asset_type = ""
+    try:
+        asset_type = str(pair.get("type", "")).lower() if isinstance(pair, dict) else ""
+    except Exception:
+        asset_type = ""
+
+    try:
+        if isinstance(weight_cfg, dict):
+            weight = float(weight_cfg.get(asset_type, weight_cfg.get("default", 0.60)))
+        else:
+            weight = float(weight_cfg)
+    except Exception:
+        weight = 0.60
+    return max(0.0, min(1.0, weight))
 
 
 def _linear_percentile(values: list[float], p: float) -> float | None:
@@ -48,6 +710,109 @@ def _linear_percentile(values: list[float], p: float) -> float | None:
     if f == c:
         return xs[f]
     return xs[f] + (k - f) * (xs[c] - xs[f])
+
+
+def _scalar_float_gate(x: Any) -> float | None:
+    """JSON-safe finite float helper for funnel diagnostics."""
+    try:
+        if x is None:
+            return None
+        v = float(x)
+        if v != v:  # NaN
+            return None
+        return round(v, 8)
+    except (TypeError, ValueError):
+        return None
+
+
+def _attach_engine_b_scan_gate_funnel(
+    *,
+    sig: dict,
+    pair: dict,
+    score_group: str | None,
+    resolved_style: str | None,
+    style_profile_b: dict | None,
+    conf_b: dict | None,
+    res_b: dict | None,
+    extras: dict[str, Any],
+) -> None:
+    """Populate report-only funnel dict on sig; never changes pass/fail or execution."""
+    if not bool(CONFIG.get("ENGINE_B_SCAN_GATE_FUNNEL_ENABLED", True)):
+        return
+    sp = style_profile_b if isinstance(style_profile_b, dict) else {}
+    cnf = conf_b if isinstance(conf_b, dict) else {}
+    rb = res_b if isinstance(res_b, dict) else {}
+    ptype = str(pair.get("type") or "").lower()
+    atr_val = extras.get("atr_value")
+    skip_stage = extras.get("engine_b_skip_stage")
+    if isinstance(skip_stage, str) and not skip_stage:
+        skip_stage = None
+    funnel: dict[str, Any] = {
+        "symbol": pair.get("display") or pair.get("symbol"),
+        "asset_type": pair.get("type"),
+        "score_group": score_group,
+        "style": resolved_style,
+        "sig_a_present": True,
+        "engine_b_evaluated": bool(sig.get("engine_b_evaluated")),
+        "engine_b_skip_stage": skip_stage,
+        "engine_b_error": sig.get("engine_b_error"),
+        "candles_ok": bool(extras.get("candles_tf_ok")),
+        "atr": _scalar_float_gate(atr_val),
+        "atr_source": extras.get("atr_source"),
+        "bybit_atr_available": extras.get("bybit_atr_available"),
+        "fallback_allowed": (
+            bool(CONFIG.get("ENGINE_B_CRYPTO_LEVELS_SIGNAL_FEED_FALLBACK", False))
+            if ptype == "crypto"
+            else None
+        ),
+        "structure_verdict": rb.get("structural_verdict"),
+        "direction_a": sig.get("direction"),
+        "direction_b": sig.get("engine_b_direction"),
+        "structure_ok": cnf.get("structure_ok"),
+        "location_ok": cnf.get("location_ok"),
+        "entry_ok": cnf.get("entry_ok"),
+        "room_ok": cnf.get("room_ok"),
+        "space_gate_ok": cnf.get("space_gate_ok"),
+        "rr_ok": cnf.get("rr_ok"),
+        "score": _scalar_float_gate(cnf.get("score")),
+        "min_score_scaled": _scalar_float_gate(sig.get("engine_b_min_score_scaled")),
+        "min_rr": _scalar_float_gate(sp.get("min_rr")),
+        "entry": _scalar_float_gate(extras.get("entry_price")),
+        "sl": sig.get("sl"),
+        "tp": sig.get("tp1"),
+        "structural_sl": cnf.get("structural_sl"),
+        "structural_tp": cnf.get("structural_tp"),
+        "execution_sl": cnf.get("execution_sl"),
+        "execution_tp": cnf.get("execution_tp"),
+        "rr": _scalar_float_gate(cnf.get("rr")),
+        "rr_source": cnf.get("rr_source"),
+        "execution_level_reject_reason": cnf.get("execution_level_reject_reason"),
+        "tp_structural_limited": rb.get("tp_structural_limited"),
+        "failed_gate_names": list(cnf.get("failed_gate_names") or []),
+        "final_tier": None,
+        "final_reason": None,
+        "engine_b_confidence_passed": sig.get("engine_b_confidence_passed"),
+        "synthetic_fallback_rr_tp_enabled": bool(
+            CONFIG.get("ENGINE_B_ALLOW_SYNTHETIC_FALLBACK_RR_TP", False)
+        ),
+        "rr_can_satisfy_space_gate_crypto_config": False,
+        "rr_space_gate_enabled_overlay": cnf.get("rr_space_gate_enabled"),
+    }
+    # Config truth for crypto RR↔space (not re-evaluating logic).
+    _rr_gate_cfg = CONFIG.get("ENGINE_B_RR_CAN_SATISFY_SPACE_GATE", False)
+    if isinstance(_rr_gate_cfg, dict):
+        funnel["rr_can_satisfy_space_gate_crypto_config"] = bool(_rr_gate_cfg.get("crypto", False))
+    funnel["structure_executed"] = bool(extras.get("structure_executed"))
+    sig["engine_b_scan_gate_funnel"] = funnel
+
+
+def _patch_engine_b_funnel_final_tier(sig: dict, tier: str, tier_reason: str) -> None:
+    if not bool(CONFIG.get("ENGINE_B_SCAN_GATE_FUNNEL_ENABLED", True)):
+        return
+    fd = sig.get("engine_b_scan_gate_funnel")
+    if isinstance(fd, dict):
+        fd["final_tier"] = tier
+        fd["final_reason"] = tier_reason
 
 
 def compute_scan_quantile_floors(
@@ -222,11 +987,12 @@ def annotate_signal_for_scan(
 
     signal["scanDiagnostics"] = diagnostics
 
+    warn_list = signal.setdefault("warnings", [])
     for reason in signal["eventRisk"].get("reasons", []):
         warn = f"EVENT RISK: {reason}"
 
-        if warn not in signal["warnings"]:
-            signal["warnings"].append(warn)
+        if warn not in warn_list:
+            warn_list.append(warn)
 
     return signal
 
@@ -465,10 +1231,23 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict[s
                     .get(pair.get("display"), {})
                     .get("candles")
                 )
+                _crypto_bybit_signal_feed = (
+                    pair.get("type") == "crypto"
+                    and resolve_crypto_signal_feed("AB", CONFIG) == "bybit"
+                )
+                _d1_res, _d1_meta = _fetch_ab_crypto_signal_candles(
+                    r, pair, "D1", _lim["D1"]
+                )
+                _h4_res, _h4_meta = _fetch_ab_crypto_signal_candles(
+                    r, pair, "H4", _lim["H4"]
+                )
+                _h1_res, _h1_meta = _fetch_ab_crypto_signal_candles(
+                    r, pair, "H1", _lim["H1"]
+                )
                 raw_candles = {
-                    "D1": r.fetch_candles(pair, "D1", _lim["D1"]),
-                    "H4": _im_h4 or r.fetch_candles(pair, "H4", _lim["H4"]),
-                    "H1": r.fetch_candles(pair, "H1", _lim["H1"]),
+                    "D1": _d1_res,
+                    "H4": (None if _crypto_bybit_signal_feed else _im_h4) or _h4_res,
+                    "H1": _h1_res,
                 }
                 preloaded_market_state = {}
                 preloaded_candles_for_a = dict(raw_candles)
@@ -509,9 +1288,9 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict[s
                             _state_err,
                         )
                 fetch_meta = {
-                    "D1": get_candle_fetch_meta(pair, "D1", _lim["D1"]),
-                    "H4": get_candle_fetch_meta(pair, "H4", _lim["H4"]),
-                    "H1": get_candle_fetch_meta(pair, "H1", _lim["H1"]),
+                    "D1": _d1_meta or get_candle_fetch_meta(pair, "D1", _lim["D1"]),
+                    "H4": _h4_meta or get_candle_fetch_meta(pair, "H4", _lim["H4"]),
+                    "H1": _h1_meta or get_candle_fetch_meta(pair, "H1", _lim["H1"]),
                 }
                 rate_limited_tfs = [
                     tf
@@ -552,14 +1331,41 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict[s
                 else:
                     print(f"[REGRESSION-A] {pair['display']:12s} type={pair.get('type'):8s} D1={d1_count:3d} H4={h4_count:3d} H1={h1_count:3d} NO SIGNAL")
 
+                # Engine separation: when Engine A produces no signal we MUST
+                # still run Engine B and emit either an Engine B-only signal
+                # row or an Engine B rejection/funnel row. Engine B output
+                # must never depend on Engine A.
+                engine_b_scan_only = False
                 if not sig_a:
-                    return pair, None, None
+                    sig_a = _make_engine_b_only_signal_stub(pair)
+                    engine_b_scan_only = True
+                else:
+                    sig_a.setdefault("engine_source", ENGINE_A_SOURCE)
+                    sig_a.setdefault("engine", "A")
+                    sig_a.setdefault("engine_name", "Engine A")
+                    sig_a["engine_a_present"] = True
+
+                    if sig_a.get("direction") not in ("LONG", "SHORT"):
+                        engine_b_scan_only = True
 
                 ptype = pair.get("type", "")
                 try:
+                    _eb_snap = {"conf": None, "res": None}
+                    _eb_funnel_extras: dict[str, Any] = {
+                        "candles_tf_ok": False,
+                        "atr_value": None,
+                        "atr_source": None,
+                        "bybit_atr_available": None,
+                        "engine_b_skip_stage": None,
+                        "regime_label": None,
+                        "structure_executed": False,
+                        "entry_price": None,
+                    }
                     _pair_score_group = get_pair_score_group(pair)
                     resolved_style_b, style_profile_b = r.naked_scan_style_profile(
-                        _pair_style, score_group=_pair_score_group
+                        _pair_style,
+                        score_group=_pair_score_group,
+                        asset_type=ptype,
                     )
 
                     d1 = raw_candles.get("D1")
@@ -670,61 +1476,238 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict[s
                         if _should_drop_last(h1):
                             h1 = h1[:-1]
 
-                    if h4 and len(h4) >= 20:
-                        _highs = [float(c["high"]) for c in h4]
-                        _lows = [float(c["low"]) for c in h4]
-                        _closes = [float(c["close"]) for c in h4]
-                        atr_series = calc_atr(_highs, _lows, _closes, 14)
-                        atr = float(atr_series[-1]) if atr_series else 0.0
-                        current_price = float(h4[-1]["close"])
+                    if pair.get("source") != "mt5":
+                        from athena_app.services.market_state import (
+                            market_state_offset_hours,
+                            split_market_state,
+                        )
+
+                        for _tf in ("D1", "H4", "H1"):
+                            _st = split_market_state(
+                                list(raw_candles.get(_tf) or []),
+                                _tf,
+                                pair.get("display") or pair.get("symbol") or "",
+                                offset_hours=market_state_offset_hours(pair, _tf),
+                            )
+                            _confirmed = list(_st.get("confirmed") or [])
+                            if _tf == "D1":
+                                d1 = _confirmed
+                            elif _tf == "H4":
+                                h4 = _confirmed
+                            else:
+                                h1 = _confirmed
+
+                    sig_a["engine_b_evaluated"] = True
+                    _tf_map_b = {"D1": d1 or [], "H4": h4 or [], "H1": h1 or []}
+                    _zone_tf_b = str(style_profile_b.get("zone_tf", "H4")).upper()
+                    _entry_tf_b = str(style_profile_b.get("entry_tf", "H1")).upper()
+                    _atr_tf_b = str(style_profile_b.get("atr_tf", "H4")).upper()
+                    zone_candles_b = _select_engine_b_tf_candles(_zone_tf_b, _tf_map_b)
+                    entry_candles_b = _select_engine_b_tf_candles(_entry_tf_b, _tf_map_b)
+                    atr_candles_b = _select_engine_b_tf_candles(_atr_tf_b, _tf_map_b)
+
+                    _eb_funnel_extras["candles_tf_ok"] = bool(
+                        zone_candles_b and entry_candles_b and atr_candles_b
+                    )
+
+                    if zone_candles_b and entry_candles_b and atr_candles_b:
+                        if engine_b_forex_asian_session_blocks_bar(
+                            entry_candles_b, ptype
+                        ):
+                            _eb_funnel_extras["engine_b_skip_stage"] = (
+                                "forex_asian_session_block"
+                            )
+                            _attach_engine_b_scan_gate_funnel(
+                                sig=sig_a,
+                                pair=pair,
+                                score_group=_pair_score_group,
+                                resolved_style=resolved_style_b,
+                                style_profile_b=style_profile_b,
+                                conf_b=_eb_snap["conf"],
+                                res_b=_eb_snap["res"],
+                                extras=dict(_eb_funnel_extras),
+                            )
+                            return pair, sig_a, None
+                        atr_signal = float(_last_atr_from_candles(atr_candles_b, 14))
+                        atr = atr_signal
+                        _eb_funnel_extras["atr_value"] = atr
+                        _eb_funnel_extras["atr_source"] = "candle_atr_tf"
+                        _eb_funnel_extras["bybit_atr_available"] = None
+                        if (
+                            ptype == "crypto"
+                            and str(CONFIG.get("ENGINE_B_CRYPTO_LEVELS_FEED", "bybit")).lower() == "bybit"
+                            and hasattr(r, "bybit_atr_for_levels")
+                        ):
+                            bybit_atr = r.bybit_atr_for_levels(pair, resolved_style_b)
+                            _eb_funnel_extras["bybit_atr_available"] = bool(bybit_atr)
+                            if bybit_atr:
+                                atr = float(bybit_atr)
+                                _eb_funnel_extras["atr_value"] = atr
+                                _eb_funnel_extras["atr_source"] = "bybit_levels"
+                            elif not bool(CONFIG.get("ENGINE_B_CRYPTO_LEVELS_SIGNAL_FEED_FALLBACK", False)):
+                                atr = 0.0
+                                sig_a["engine_b_error"] = "bybit_atr_unavailable"
+                        current_price = float(entry_candles_b[-1]["close"])
+                        _eb_funnel_extras["entry_price"] = current_price
 
                         if atr and atr > 0:
-                            regime_label = r.engine_b_regime_label(h4, ptype)
+                            regime_label = r.engine_b_regime_label(zone_candles_b, ptype)
+                            _eb_funnel_extras["regime_label"] = regime_label
+
+                            # Snapshots are needed for both A-driven and Engine
+                            # B-only paths.
+                            _sc_d1_snap = {}
+                            _sc_h4_snap = {}
+                            try:
+                                _sc_d1_snap = (
+                                    calc_indicators_with_normalized(d1 or [], ptype) or {}
+                                ).get("snap") or {}
+                                _sc_h4_snap = (
+                                    calc_indicators_with_normalized(zone_candles_b, ptype) or {}
+                                ).get("snap") or {}
+                            except Exception:
+                                pass
+
+                            # Engine B-only path: when no Engine A direction
+                            # exists, probe both directions independently and
+                            # pick the best. This makes Engine B output
+                            # independent of Engine A.
+                            _b_only_probe_res = None
+                            _b_only_probe_conf = None
+                            if engine_b_scan_only:
+                                _b_dir, _b_only_probe_res, _b_only_probe_conf = (
+                                    _engine_b_independent_direction_probe(
+                                        pair,
+                                        engine=_engine_b,
+                                        d1_candles=d1 or [],
+                                        zone_candles=zone_candles_b,
+                                        entry_candles=entry_candles_b,
+                                        current_price=current_price,
+                                        atr=atr,
+                                        regime_label=regime_label,
+                                        style_profile=style_profile_b,
+                                        resolved_style=resolved_style_b,
+                                        asset_type=ptype,
+                                        d1_snap=_sc_d1_snap,
+                                        h4_snap=_sc_h4_snap,
+                                    )
+                                )
+                                if _b_dir in ("LONG", "SHORT"):
+                                    sig_a["direction"] = _b_dir
+                                else:
+                                    _eb_funnel_extras.setdefault(
+                                        "engine_b_skip_stage",
+                                        "no_clear_structural_verdict",
+                                    )
                             direction = sig_a.get("direction")
 
                             if direction in ("LONG", "SHORT"):
-                                _sc_d1_snap = {}
-                                _sc_h4_snap = {}
-                                try:
-                                    _sc_d1_snap = (
-                                        calc_indicators_with_normalized(d1 or [], ptype) or {}
-                                    ).get("snap") or {}
-                                    _sc_h4_snap = (
-                                        calc_indicators_with_normalized(h4, ptype) or {}
-                                    ).get("snap") or {}
-                                except Exception:
-                                    pass
-                                res_b = _engine_b.set_registry_context(
-                                    pair.get("symbol") or pair.get("display")
-                                ).analyze_structure(
-                                    d1 or [],
-                                    h4,
-                                    h1 or [],
-                                    current_price,
-                                    direction,
-                                    atr,
-                                    regime_label,
-                                    fallback_rr=style_profile_b.get("fallback_rr", 2.0),
-                                    asset_type=ptype,
-                                    d1_snap=_sc_d1_snap,
-                                    h4_snap=_sc_h4_snap,
-                                )
+                                if _b_only_probe_res is not None:
+                                    # Reuse probe result so we don't re-run
+                                    # analyze_structure for the picked direction.
+                                    res_b = _b_only_probe_res
+                                else:
+                                    res_b = _engine_b.set_registry_context(
+                                        pair.get("symbol") or pair.get("display")
+                                    ).analyze_structure(
+                                        d1 or [],
+                                        zone_candles_b,
+                                        entry_candles_b,
+                                        current_price,
+                                        direction,
+                                        atr,
+                                        regime_label,
+                                        fallback_rr=style_profile_b.get("fallback_rr", 2.0),
+                                        asset_type=ptype,
+                                        d1_snap=_sc_d1_snap,
+                                        h4_snap=_sc_h4_snap,
+                                        style=resolved_style_b,
+                                        pair=pair,
+                                    )
+                                _eb_funnel_extras["structure_executed"] = True
 
                                 conf_b = None
                                 if res_b.get("structural_verdict") == "CLEAR":
-                                    conf_b = _engine_b.calculate_confidence(
-                                        res_b,
-                                        current_price,
-                                        direction,
-                                        entry_candles=h1 or h4,
-                                        style_profile=style_profile_b,
-                                    )
+                                    if _b_only_probe_conf is not None:
+                                        conf_b = _b_only_probe_conf
+                                    else:
+                                        conf_b = _engine_b.calculate_confidence(
+                                            res_b,
+                                            current_price,
+                                            direction,
+                                            entry_candles=entry_candles_b or zone_candles_b,
+                                            style_profile=style_profile_b,
+                                        )
+                                    _engine_b_direction_used = direction
+                                    # Scan-only B independence (legacy A-driven
+                                    # path): if Engine A's direction makes the
+                                    # naked-structure gate fail, optionally
+                                    # re-check the direction inferred from
+                                    # Engine B's own BOS/CHoCH/sweep evidence.
+                                    # Skipped for engine_b_scan_only — the
+                                    # probe above already evaluated both
+                                    # directions and picked the best.
+                                    if (
+                                        not engine_b_scan_only
+                                        and bool(CONFIG.get("ENGINE_B_SCAN_INDEPENDENT_DIRECTION_ENABLED", False))
+                                    ):
+                                        _initial_gate_ok, _ = engine_b_confidence_passes(
+                                            conf_b,
+                                            style_profile_b,
+                                            regime_label,
+                                            ptype,
+                                        )
+                                        _independent = res_b.get("engine_b_independent_direction") or {}
+                                        _alt_direction = _independent.get("direction")
+                                        if (
+                                            not _initial_gate_ok
+                                            and _alt_direction in ("LONG", "SHORT")
+                                            and _alt_direction != direction
+                                        ):
+                                            alt_res_b = _engine_b.set_registry_context(
+                                                pair.get("symbol") or pair.get("display")
+                                            ).analyze_structure(
+                                                d1 or [],
+                                                zone_candles_b,
+                                                entry_candles_b,
+                                                current_price,
+                                                _alt_direction,
+                                                atr,
+                                                regime_label,
+                                                fallback_rr=style_profile_b.get("fallback_rr", 2.0),
+                                                asset_type=ptype,
+                                                d1_snap=_sc_d1_snap,
+                                                h4_snap=_sc_h4_snap,
+                                                style=resolved_style_b,
+                                                pair=pair,
+                                            )
+                                            if alt_res_b.get("structural_verdict") == "CLEAR":
+                                                alt_conf_b = _engine_b.calculate_confidence(
+                                                    alt_res_b,
+                                                    current_price,
+                                                    _alt_direction,
+                                                    entry_candles=entry_candles_b or zone_candles_b,
+                                                    style_profile=style_profile_b,
+                                                )
+                                                alt_gate_ok, _ = engine_b_confidence_passes(
+                                                    alt_conf_b,
+                                                    style_profile_b,
+                                                    regime_label,
+                                                    ptype,
+                                                )
+                                                if alt_gate_ok:
+                                                    res_b = alt_res_b
+                                                    conf_b = alt_conf_b
+                                                    _engine_b_direction_used = _alt_direction
+                                                    sig_a["engine_b_independent_direction_scan_applied"] = True
+                                                    sig_a["engine_b_original_direction"] = direction
                                     b_score = float(conf_b.get("score", 0))
                                     b_max = float(conf_b.get("max_possible", 5))
 
                                     sig_a["engine_b_score"] = round(b_score, 2)
                                     sig_a["engine_b_max"] = round(b_max, 1)
                                     sig_a["engine_b_pct"] = round(b_score / b_max * 100, 1) if b_max else 0
+                                    sig_a["engine_b_direction"] = _engine_b_direction_used
                                     sig_a["engine_b_verdict"] = res_b.get("structural_verdict")
                                     sig_a["engine_b_bos"] = res_b.get("bos_confirmed", False)
                                     sig_a["engine_b_ob"] = res_b.get("ob_at_zone", False)
@@ -732,6 +1715,7 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict[s
                                     sig_a["engine_b_tp"] = res_b.get("recommended_take_profit")
                                     sig_a["engine_b_lifecycle_state"] = conf_b.get("lifecycle_state", "unknown")
                                     sig_a["engine_b_lifecycle_reason"] = conf_b.get("lifecycle_reason", "")
+                                    _apply_engine_b_scan_levels(sig_a, conf_b, res_b)
 
                                     a_max = sig_a.get("maxScore", 3.0)
                                     a_score = sig_a.get("confluenceScore", 0)
@@ -744,10 +1728,33 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict[s
                                     _w_a = float(_w.get("A", 0.40))
                                     _w_b = float(_w.get("B", 0.60))
 
-                                    combined_conviction = (a_norm * _w_a) + (b_norm * _w_b)
-                                    sig_a["combinedConviction"] = round(combined_conviction, 4)
+                                    _engine_b_direction_aligned = (
+                                        _engine_b_direction_used == direction
+                                    )
+                                    combined_conviction = _engine_b_scan_combined_conviction(
+                                        a_norm,
+                                        b_norm,
+                                        _w,
+                                        direction_aligned=_engine_b_direction_aligned,
+                                    )
+                                    sig_a["combinedConviction"] = combined_conviction
                                     sig_a["engine_b_scoreNorm"] = round(b_norm, 4)
-                                    sig_a["enginesAligned"] = bool(conf_b.get("passed", False))
+                                    _apply_engine_b_scan_confidence_gate(
+                                        sig_a,
+                                        conf_b,
+                                        style_profile_b,
+                                        regime_label,
+                                        ptype,
+                                    )
+                                    sig_a["engine_b_confidence_passed"] = bool(conf_b.get("passed", False))
+                                    sig_a["engine_b_direction_aligned_with_a"] = _engine_b_direction_aligned
+                                    if not _engine_b_direction_aligned:
+                                        sig_a["enginesAligned"] = False
+                                    _mark_engine_b_structure_ready_watchlist(
+                                        sig_a,
+                                        conf_b,
+                                        res_b,
+                                    )
 
                                     log.debug(
                                         f"[SCAN+B] {pair.get('display')} A={a_score:.2f}/{a_max} B={b_score:.2f}/{b_max} "
@@ -757,13 +1764,16 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict[s
                                     a_max = sig_a.get("maxScore", 3.0)
                                     a_score = sig_a.get("confluenceScore", 0)
                                     a_norm = float(sig_a.get("scoreNorm", 0))
-                                    # A-only fallback: use A weight only.
-                                    _rl_fb = (regime_label or "").upper()
-                                    _w_fb = ENGINE_C_AB_WEIGHTS.get(_rl_fb, ENGINE_C_AB_WEIGHTS.get("TRENDING", {"A": 0.40}))
-                                    _w_a_fb = float(_w_fb.get("A", 0.40))
+                                    # A-only fallback: do not cap with Engine C A/B blend weights.
+                                    _w_a_fb = _a_only_auto_weight(pair)
                                     sig_a["combinedConviction"] = round(a_norm * _w_a_fb, 4)
                                     sig_a["enginesAligned"] = False
                                     sig_a["engine_b_verdict"] = res_b.get("structural_verdict", "UNCLEAR")
+                                _eb_snap["res"] = res_b
+                                _eb_snap["conf"] = conf_b
+                                sig_a["engine_b_status"] = conf_b
+                                sig_a["engine_b"] = res_b
+
                                 if _threshold_audit_on:
                                     sig_a["_threshold_audit_b_res"] = res_b
                                     sig_a["_threshold_audit_b_conf"] = conf_b
@@ -774,16 +1784,68 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict[s
                                     )
                                     sig_a["_threshold_audit_b_style_profile"] = style_profile_b
 
+                            else:
+                                _eb_funnel_extras.setdefault(
+                                    "engine_b_skip_stage",
+                                    "engine_a_direction_not_traded",
+                                )
+                        elif _eb_funnel_extras["candles_tf_ok"]:
+                            _eb_funnel_extras.setdefault(
+                                "engine_b_skip_stage",
+                                "crypto_bybit_atr_unavailable"
+                                if sig_a.get("engine_b_error") == "bybit_atr_unavailable"
+                                else "atr_blocked_zero_or_invalid",
+                            )
+                    else:
+                        _eb_funnel_extras.setdefault(
+                            "engine_b_skip_stage",
+                            "missing_engine_b_tf_candles",
+                        )
+
+                    _attach_engine_b_scan_gate_funnel(
+                        sig=sig_a,
+                        pair=pair,
+                        score_group=_pair_score_group,
+                        resolved_style=resolved_style_b,
+                        style_profile_b=style_profile_b,
+                        conf_b=_eb_snap["conf"],
+                        res_b=_eb_snap["res"],
+                        extras=dict(_eb_funnel_extras),
+                    )
+
                 except Exception as _b_err:
                     log.debug(f"[SCAN+B] {pair.get('display')} Engine B failed: {_b_err}")
                     a_max = sig_a.get("maxScore", 3.0)
                     a_score = sig_a.get("confluenceScore", 0)
                     a_norm = float(sig_a.get("scoreNorm", 0))
-                    sig_a["combinedConviction"] = round(a_norm * 0.6, 4)
+                    sig_a["combinedConviction"] = round(a_norm * _a_only_auto_weight(pair), 4)
                     sig_a["enginesAligned"] = False
                     sig_a["engine_b_error"] = str(_b_err)
                     if _threshold_audit_on:
                         sig_a["_threshold_audit_b_error"] = str(_b_err)
+                    try:
+                        _eb_funnel_extras.setdefault(
+                            "engine_b_skip_stage", "engine_b_overlay_exception"
+                        )
+                        _sg = locals().get("_pair_score_group")
+                        if _sg is None:
+                            _sg = get_pair_score_group(pair)
+                        _attach_engine_b_scan_gate_funnel(
+                            sig=sig_a,
+                            pair=pair,
+                            score_group=_sg,
+                            resolved_style=locals().get("resolved_style_b"),
+                            style_profile_b=locals().get("style_profile_b"),
+                            conf_b=_eb_snap["conf"],
+                            res_b=_eb_snap["res"],
+                            extras=dict(_eb_funnel_extras),
+                        )
+                    except Exception:
+                        log.debug(
+                            "[SCAN+B] %s engine_b_scan_gate_funnel attach failed",
+                            pair.get("display", "?"),
+                            exc_info=True,
+                        )
 
                 return pair, sig_a, None
 
@@ -872,8 +1934,12 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict[s
                 buffered_ok.append((pair, sig))
 
         # Cross-sectional quantile floors per asset class (this scan only).
+        # Engine B-only rows must not enter the Engine A quantile cohort —
+        # their confluenceScore is intentionally 0 and would skew the floor.
         scores_by_type: dict[str, list[float]] = {}
         for pair, sig in buffered_ok:
+            if sig.get("engine_source") == ENGINE_B_SOURCE:
+                continue
             ptype = pair.get("type") or "stock"
             scores_by_type.setdefault(ptype, []).append(float(sig.get("confluenceScore", 0)))
 
@@ -902,8 +1968,68 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict[s
             log.info(f"[SCAN-Q] Per-type quantile floors: {quantile_floors}")
 
         for pair, sig in buffered_ok:
+            # Engine B-only rows take a separate classification path. They
+            # must never use Engine A's threshold, quantile floor, or
+            # combinedConviction — those are Engine A semantics. Engine B
+            # rows are classified by Engine B gates only and capped at
+            # tier="watchlist" (never auto-trade).
+            if sig.get("engine_source") == ENGINE_B_SOURCE:
+                sig = _annotate_engine_b_only_signal_for_scan(
+                    sig,
+                    pair,
+                    ds_ctx,
+                    earnings_ctx,
+                    _closed_exchanges,
+                    news_ctx,
+                )
+                tier, tier_reason = _classify_engine_b_only_signal(sig, pair)
+                if _threshold_audit_on:
+                    threshold_audit_rows.append(
+                        build_signal_funnel_row(
+                            pair,
+                            sig,
+                            tier=tier,
+                            tier_reason=tier_reason,
+                            style_profile_b=sig.get("_threshold_audit_b_style_profile"),
+                            engine_b_threshold=sig.get("_threshold_audit_b_threshold"),
+                        )
+                    )
+                sig["signalTier"] = tier
+                sig["signalTierReason"] = tier_reason
+                sig["watchlistReason"] = tier_reason if tier == "watchlist" else None
+                _patch_engine_b_funnel_final_tier(sig, tier, tier_reason)
+                codes = {d.get("code") for d in sig.get("scanDiagnostics", [])}
+                if "closed_exchange" in codes:
+                    scan_funnel["closed_exchange"] += 1
+                if "event_risk" in codes:
+                    scan_funnel["event_block"] += 1
+                if "inactive_pair" in codes:
+                    scan_funnel["inactive_pair"] += 1
+                if tier == "watchlist":
+                    watchlist.append(sig)
+                    scan_funnel["watchlist"] += 1
+                    log.info(
+                        f"{pair['display']:12s} WATCH [B-only] :: {tier_reason}"
+                    )
+                else:
+                    _skip_payload: dict[str, Any] = {
+                        "pair": pair["display"],
+                        "reason": tier_reason,
+                        "tier": "skip",
+                        "engine_source": ENGINE_B_SOURCE,
+                        "diagnostics": sig.get("scanDiagnostics", []),
+                    }
+                    _eb_fd = sig.get("engine_b_scan_gate_funnel")
+                    if isinstance(_eb_fd, dict):
+                        _skip_payload["engine_b_scan_gate_funnel"] = dict(_eb_fd)
+                    skipped.append(_skip_payload)
+                    log.info(f"{pair['display']:12s} SKIP  [B-only] :: {tier_reason}")
+                continue
+
             # Unify threshold resolution — ensures live scan and backtest parity (BUG 7)
-            static_threshold = get_score_threshold(pair, is_backtest=False)
+            # Pass regime for dynamic threshold adjustment when enabled
+            regime = sig.get("regime")
+            static_threshold = get_score_threshold(pair, regime=regime)
 
             if r.test_mode():
                 static_threshold = max(0.1, static_threshold * 0.5)
@@ -943,12 +2069,23 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict[s
             if effective_threshold and effective_threshold > 0:
                 sig["thresholdProgressPct"] = min(100, max(0, round((_cs / effective_threshold) * 67)))
                 sig["confluencePct"] = sig["thresholdProgressPct"] # backward compat
-            
+
             _maxs = float(sig.get("maxScore", 2.0))
             if _maxs > 0:
                 sig["scoreNormPct"] = min(100, max(0, round((_cs / _maxs) * 100)))
 
             tier, tier_reason = _classify_signal(sig, pair)
+            tier, tier_reason = _apply_engine_b_scan_gate(sig, tier, tier_reason)
+            tier, tier_reason = _apply_engine_b_only_watchlist_scan_tier(
+                sig,
+                tier,
+                tier_reason,
+            )
+            tier, tier_reason = _apply_engine_b_structure_ready_scan_tier(
+                sig,
+                tier,
+                tier_reason,
+            )
             if _threshold_audit_on:
                 threshold_audit_rows.append(
                     build_signal_funnel_row(
@@ -962,8 +2099,11 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict[s
                 )
 
             sig["signalTier"] = tier
+            sig["signalTierReason"] = tier_reason
 
             sig["watchlistReason"] = tier_reason if tier == "watchlist" else None
+
+            _patch_engine_b_funnel_final_tier(sig, tier, tier_reason)
 
             codes = {d.get("code") for d in sig.get("scanDiagnostics", [])}
 
@@ -1012,14 +2152,16 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict[s
                 )
 
             else:
-                skipped.append(
-                    {
-                        "pair": pair["display"],
-                        "reason": tier_reason,
-                        "tier": "skip",
-                        "diagnostics": sig.get("scanDiagnostics", []),
-                    }
-                )
+                _skip_payload: dict[str, Any] = {
+                    "pair": pair["display"],
+                    "reason": tier_reason,
+                    "tier": "skip",
+                    "diagnostics": sig.get("scanDiagnostics", []),
+                }
+                _eb_fd = sig.get("engine_b_scan_gate_funnel")
+                if isinstance(_eb_fd, dict):
+                    _skip_payload["engine_b_scan_gate_funnel"] = dict(_eb_fd)
+                skipped.append(_skip_payload)
 
                 log.info(
                     f"{pair['display']:12s} SKIP  {sig['confluenceScore']}/{sig.get('maxScore', 3)} :: {tier_reason}"
@@ -1070,7 +2212,7 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict[s
 
         watchlist = apply_correlation_cap(watchlist)
 
-        return {
+        _scan_out: dict[str, Any] = {
             "success": True,
             "signals": results,
             "tradeSignals": results,
@@ -1095,8 +2237,43 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict[s
                 "engineB": "naked_structure",
                 "engineC": "consensus",
                 "engineD": "scalp_vp",
+                # NOTE: Engine D is NOT auto-executed. It is available via
+                # manual/API endpoints (/api/scalp-scan, /api/scalp-execute).
             },
         }
+        try:
+            from athena_app.diagnostics.engine_b_gate_funnel_persist import (
+                maybe_persist_engine_b_scan_gate_funnel,
+            )
+
+            _pair_type_lookup: dict[str, str] = {}
+            for _p in candidate_pairs:
+                _disp = str(_p.get("display") or _p.get("symbol") or "").strip()
+                if not _disp:
+                    continue
+                _pair_type_lookup[_disp] = str(_p.get("type") or "").strip().lower()
+            _scan_out.update(
+                maybe_persist_engine_b_scan_gate_funnel(
+                    _scan_out,
+                    pair_types_by_display=_pair_type_lookup,
+                )
+            )
+        except Exception as _persist_merge_err:
+            log.warning(
+                "[ENGINE_B_FUNNEL_PERSIST] merge failed (non-fatal): %s",
+                _persist_merge_err,
+            )
+        try:
+            from athena_app.diagnostics.engine_b_gate_funnel_persist import (
+                write_engine_b_funnel_scan_touch_file,
+            )
+
+            touch = write_engine_b_funnel_scan_touch_file(_scan_out)
+            _scan_out["engine_b_scan_funnel_touch"] = touch
+
+        except Exception as _touch_err:
+            log.warning("[ENGINE_B_FUNNEL_TOUCH] %s", _touch_err)
+        return _scan_out
 
     finally:
         r.scan_lock.release()

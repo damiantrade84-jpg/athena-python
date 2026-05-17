@@ -34,9 +34,10 @@ def test_pyyaml_loads_single_fx_h4_value():
     with open(cfg_path, "r", encoding="utf-8") as f:
         data = yaml.safe_load(f) or {}
     v = data.get("FOREX_H4_RESAMPLE_OFFSET_HOURS")
-    assert v == 1.0
+    # Value depends on MT5_BROKER_UTC_OFFSET: GMT+3→1.0, GMT+2→2.0
+    assert v in (1.0, 2.0)
     # Runtime CONFIG after merge
-    assert float(CONFIG.get("FOREX_H4_RESAMPLE_OFFSET_HOURS", 0.0) or 0.0) == 1.0
+    assert float(CONFIG.get("FOREX_H4_RESAMPLE_OFFSET_HOURS", 0.0) or 0.0) in (1.0, 2.0)
 
 
 def test_fetch_meta_annotates_offset_hours_for_mt5_h4(

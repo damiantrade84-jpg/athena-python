@@ -23,6 +23,7 @@ import threading
 import copy
 import webbrowser
 import logging
+import logging.handlers
 import sqlite3
 import signal as _signal
 
@@ -39,7 +40,7 @@ import telegram_notify
 
 from datetime import datetime, timezone, timedelta
 
-from flask import Flask, jsonify, request, send_from_directory
+from flask import Flask, jsonify, request
 from athena_app.api.routes_scan import api_scan_impl
 from athena_app.api.routes_backtest import api_backtest_impl
 from athena_app.api.routes_execution import normalize_pip_mode
@@ -61,50 +62,23 @@ from advisory_thresholds import (
     get_recommendation_snapshot,
     record_action,
 )
-from lottery_service import (
-    add_lottery_draw,
-    clear_lottery_draws,
-    delete_lottery_draw,
-    ensure_lottery_schema,
-    import_lottery_csv,
-)
-from lottery_engine import (
-    LOTTERY_GAME_RULES,
-    build_lottery_dashboard,
-    compare_generator_modes,
-    compute_bonus_intelligence,
-    compute_entropy_analysis,
-    compute_pair_lift,
-    compute_number_frequency,
-    compute_positional_distribution,
-    compute_recommended_sum_range,
-    compute_rolling_frequency,
-    compute_overdue_numbers,
-    compute_pair_frequency,
-    compute_repeat_from_last_draw_stats,
-    compute_consecutive_stats,
-    compute_low_high_distribution,
-    compute_odd_even_distribution,
-    compute_sum_distribution,
-    compute_triplet_frequency,
-    flag_anomalous_draws,
-    generate_tickets,
-    generate_wheel,
-    history_rows as lottery_history_rows,
-    score_ticket,
-    set_lottery_db_path,
-    simulate_generator,
-)
+from lottery_service import ensure_lottery_schema
+from lottery_engine import set_lottery_db_path
+from guardian import pre_trade_check as _guardian_pre_trade
 
 from data_feeds import (  # noqa: E402
     http_requests,
     _get_eodhd_client,
     _fetch_funding_rate,
     _fetch_bybit_funding_rate,
+    _fetch_bybit_klines,
+    _fetch_bybit_klines_paginated,
+    _fetch_bybit_open_interest,
     _fetch_open_interest,
     _calc_oi_divergence,
 )
 from eodhd_volume_overlay import (  # noqa: E402
+    eodhd_commodity_ticker_for_pair as _eodhd_commodity_ticker_for_pair,
     is_eodhd_volume_whitelisted as _is_eodhd_volume_whitelisted,
     overlay_candle_volumes as _overlay_candle_volumes,
     resample_eodhd_volume_bars as _resample_eodhd_volume_bars,
@@ -121,6 +95,15 @@ logging.basicConfig(
     datefmt="%H:%M:%S",
 )
 
+_log_file_path = os.path.join(os.path.dirname(__file__), "logs", "sentinel.log")
+os.makedirs(os.path.dirname(_log_file_path), exist_ok=True)
+_file_handler = logging.handlers.RotatingFileHandler(
+    _log_file_path, maxBytes=20 * 1024 * 1024, backupCount=5, encoding="utf-8"
+)
+_file_handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s"))
+_file_handler.setLevel(logging.INFO)
+logging.getLogger().addHandler(_file_handler)
+
 log = logging.getLogger("sentinel")
 
 # Silence noisy HTTP and library loggers - reduces console flood
@@ -132,6 +115,9 @@ _logging.getLogger("requests").setLevel(_logging.WARNING)
 _logging.getLogger("httpx").setLevel(_logging.WARNING)
 
 log.setLevel(logging.WARNING)
+_scl = os.environ.get("SENTINEL_CONSOLE_LEVEL", "").strip().upper()
+if _scl in {"DEBUG", "INFO", "WARNING", "ERROR"}:
+    log.setLevel(getattr(logging, _scl))
 
 from candles_cache import (  # noqa: E402
     _candle_cache,
@@ -142,6 +128,10 @@ from candles_cache import (  # noqa: E402
     get_candle_fetch_meta as _get_candle_fetch_meta,
     merge_forex_forming_ws as _merge_forex_forming_ws_core,
     resample_from_h1 as _resample_from_h1,
+)
+from athena_app.services.crypto_signal_feed import (  # noqa: E402
+    fetch_crypto_signal_candles as _fetch_crypto_signal_candles,
+    resolve_crypto_signal_feed as _resolve_crypto_signal_feed,
 )
 
 
@@ -210,13 +200,16 @@ from config import (
     get_ai_provider_label,
     get_ai_api_key,
     get_ai_base_url,
+    get_ai_max_retries,
     get_ai_model,
     get_ai_timeout_sec,
+    get_mt5_fetch_stale_unshifted_age_sec,
     scan_candle_limits,
 )  # noqa: E402
 from athena.datafeeds.ws_ssl import configure_process_ca_bundle  # noqa: E402
 from ai_safe_wrappers import ai_call_with_safe_default  # noqa: E402
 from ai_signal_trace import ensure_trace_id  # noqa: E402
+from athena_app.services.mt5_time_alignment import infer_mt5_rates_time_shift_seconds  # noqa: E402
 from prompt_versions import get_prompt_version  # noqa: E402
 from regime_shift_monitor import classify_position as _regime_classify  # noqa: E402
 
@@ -1358,18 +1351,18 @@ def _yfinance_symbol_for_pair(pair: dict) -> str | None:
 
 
 def _eodhd_ticker_for_pair(pair: dict) -> str | None:
+    disp = pair.get("display", "")
+    ptype = pair.get("type", "")
+    sym = pair.get("symbol", "")
+    commodity_ticker = _eodhd_commodity_ticker_for_pair(pair)
+
     # Check vendor override first - highest priority
     # Empty string "" is an explicit block (pair confirmed to have no valid EODHD EOD ticker)
     override = _vendor_overrides(pair).get("eodhd")
+    if ptype == "commodity" and commodity_ticker:
+        return commodity_ticker
     if override is not None:
         return override if override else None
-    # ... rest of existing function unchanged
-
-    disp = pair.get("display", "")
-
-    ptype = pair.get("type", "")
-
-    sym = pair.get("symbol", "")
 
     if ptype == "crypto":
         base = disp.split("/")[0] if "/" in disp else disp.replace("USDT", "")
@@ -1385,6 +1378,9 @@ def _eodhd_ticker_for_pair(pair: dict) -> str | None:
 
         if sym.endswith((".FOREX", ".COMM")):
             return sym
+
+        if commodity_ticker:
+            return commodity_ticker
 
         return None
 
@@ -1475,17 +1471,11 @@ def _fetch_fallback_candles(pair: dict, tf: str, limit: int, reason: str = ""):
 def _atr_for_levels(
     d1i: dict, h4i: dict, h1i: dict, pair: dict = None, style: str | None = None
 ):
-    """
-    Returns ATR value for SL/TP calculation - correct timeframe per asset class.
+    """Return ATR for SL/TP from ``CONFIG['LEVEL_ATR_PRIORITY']`` (per ``pair['type']`` and style).
 
-    CRYPTO:              H4 ATR first - entries are H4-based, H1 too tight for
-                         overnight crypto gaps and volatile moves
-    FOREX:               D1 ATR first - D1 swing trades, normal pullback 40-80
-                         pips, H1 ATR (25-30 pips) causes premature stop-outs
-    STOCKS/ETFs:         D1 ATR first - stocks gap at open daily, H1 too tight
-                         for 5-20 day swing holds
-    COMMODITIES:         D1 ATR first - macro-driven, daily gaps common on news
-    INDICES:             D1 ATR first - daily range 0.5-1.5%, H1 only 0.1-0.3%
+    Order is **not** hardcoded here: ``default`` and ``crypto`` entries define
+    which timeframe’s ATR is tried first for scalp (typically H1), intraday (H4),
+    and swing (D1 for crypto and other classes — see ``config.py`` / ``config.yaml``).
     """
     ptype = (pair or {}).get("type", "")
     resolved_style = _normalize_style(style or "swing")
@@ -1515,6 +1505,40 @@ def _atr_for_levels(
         atr_val = (snaps.get(tf) or {}).get("atr")
         if atr_val:
             return atr_val
+    return None
+
+
+def _bybit_atr_for_levels(pair: dict, style: str | None, as_of=None) -> float | None:
+    """Fetch Bybit ATR for crypto execution levels when Bybit is the execution venue."""
+    symbol = (pair.get("symbol") or pair.get("display") or "").replace("/", "").upper()
+    if not symbol:
+        return None
+    resolved_style = _normalize_style(style or "swing")
+    if resolved_style == "auto":
+        resolved_style = "swing"
+    tf = {"scalp": "H1", "intraday": "H4", "swing": "D1"}.get(resolved_style, "D1")
+    end_ms = None
+    if as_of is not None:
+        try:
+            if hasattr(as_of, "timestamp"):
+                end_ms = int(as_of.timestamp() * 1000)
+            else:
+                end_dt = datetime.fromisoformat(str(as_of).replace("Z", "+00:00"))
+                end_ms = int(end_dt.timestamp() * 1000)
+        except Exception:
+            end_ms = None
+    candles = _fetch_bybit_klines(symbol, tf, 120, end_ms=end_ms)
+    if not candles or len(candles) < 20:
+        return None
+    atr_series = calc_atr(
+        [c["high"] for c in candles],
+        [c["low"] for c in candles],
+        [c["close"] for c in candles],
+        14,
+    )
+    for value in reversed(atr_series or []):
+        if value:
+            return float(value)
     return None
 
 
@@ -1630,8 +1654,9 @@ def _binance_futures_kline_to_candle(k):
 def fetch_binance(sym, interval, limit):
     """Download OHLCV candles from Binance USD-M futures REST with failover."""
 
-    try:
-        for base in ["https://fapi.binance.com", "https://fapi1.binance.com"]:
+    last_error = None
+    for base in ["https://fapi.binance.com", "https://fapi1.binance.com"]:
+        try:
             r = http_requests.get(
                 f"{base}/fapi/v1/klines",
                 params={"symbol": sym, "interval": interval, "limit": limit},
@@ -1642,12 +1667,13 @@ def fetch_binance(sym, interval, limit):
                 return [_binance_futures_kline_to_candle(k) for k in r.json()]
 
             log.warning(f"[BN-FUT] {sym} HTTP {r.status_code}: {r.text[:120]}")
+        except Exception as e:
+            last_error = e
+            log.warning(f"[BN-FUT] {sym} {base}: {e}")
 
-        return None
-
-    except Exception as e:
-        log.error(f"[BN-FUT] {sym}: {e}")
-        return None
+    if last_error is not None:
+        log.error(f"[BN-FUT] {sym}: all endpoints failed; last_error={last_error}")
+    return None
 
 
 def fetch_binance_paginated(sym, interval, total_bars):
@@ -1667,25 +1693,29 @@ def fetch_binance_paginated(sym, interval, total_bars):
                 params["endTime"] = end_time
 
             for base in ["https://fapi.binance.com", "https://fapi1.binance.com"]:
-                r = http_requests.get(
-                    f"{base}/fapi/v1/klines", params=params, timeout=15
-                )
+                try:
+                    r = http_requests.get(
+                        f"{base}/fapi/v1/klines", params=params, timeout=15
+                    )
 
-                if r.status_code == 200:
-                    data = r.json()
+                    if r.status_code == 200:
+                        data = r.json()
 
-                    if not data:
+                        if not data:
+                            break
+
+                        batch = [_binance_futures_kline_to_candle(k) for k in data]
+
+                        all_candles = batch + all_candles  # prepend older data
+
+                        end_time = data[0][0] - 1  # 1ms before earliest bar
+
                         break
 
-                    batch = [_binance_futures_kline_to_candle(k) for k in data]
-
-                    all_candles = batch + all_candles  # prepend older data
-
-                    end_time = data[0][0] - 1  # 1ms before earliest bar
-
-                    break
-
-                log.warning(f"[BN-FUT-PAG] {sym} HTTP {r.status_code}: {r.text[:120]}")
+                    log.warning(f"[BN-FUT-PAG] {sym} {base} HTTP {r.status_code}: {r.text[:120]}")
+                except Exception as e:
+                    log.warning(f"[BN-FUT-PAG] {sym} page {page} {base}: {e}")
+                    continue
 
             else:
                 break  # both endpoints failed
@@ -1826,9 +1856,8 @@ def _eodhd_intraday_ticker_for_pair(pair: dict) -> str | None:
     )
     if override:
         return override
-    # For commodities without intraday override, return None to trigger yfinance fallback
     if pair.get("type") == "commodity":
-        return None
+        return _eodhd_commodity_ticker_for_pair(pair)
     # Fall back to regular ticker for other types
     return _eodhd_ticker_for_pair(pair)
 
@@ -1986,9 +2015,10 @@ def _fetch_eodhd_volume_only(pair: dict, tf: str, limit: int, *, cache_only: boo
         _store_cached_eodhd_volume_only(pair, tf_key, limit, payload)
         return payload
 
-    # Skip EODHD REST for forex/commodity/index: OTC markets have no real exchange volume.
+    # Skip EODHD REST for forex: OTC markets have no real exchange volume.
+    # Whitelisted commodities/indices use EODHD as a best-effort volume overlay.
     # Return explicit flag so overlay falls back to MT5 tick-volume without wasting API calls.
-    if ptype in {"forex", "commodity", "index"}:
+    if ptype == "forex":
         payload["detail"] = "no_real_volume"
         payload["volume_source"] = "mt5_tick"
         _store_cached_eodhd_volume_only(pair, tf_key, limit, payload)
@@ -2690,15 +2720,68 @@ def fetch_mt5(pair: dict, tf: str, limit: int):
         err = mt5.last_error()
         return _mt5_fallback(f"MT5 failed: {err}")
 
-    # Dynamic timezone detection to align broker integers to perfect UTC strings
-    # D1 bars should always be at 00:00 UTC regardless of broker timezone offset
-    tick = mt5.symbol_info_tick(mt5_symbol)
+    # Timezone alignment: MT5 bars may use broker-aligned stamps. When the newest bar
+    # is severely stale (illiquid exotics), legacy tick TZ fallback hallucinated ±60h
+    # shifts — see infer_mt5_rates_time_shift_seconds + MT5_FETCH_STALE_UNSHIFTED_AGE_SEC.
     offset_seconds = 0
-    if tick and tick.time > 0 and tf != "D1":
-        utc_now = time.time()
-        diff_sec = tick.time - utc_now
-        offset_hours = round(diff_sec / 3600.0)
-        offset_seconds = int(offset_hours * 3600)
+    if tf != "D1" and bars is not None and len(bars) > 0:
+        _utc_now = time.time()
+        _newest_ts = float(bars[-1]["time"])
+        _unshifted_age = _utc_now - _newest_ts
+        _broker_offset_cfg = int(CONFIG.get("MT5_BROKER_UTC_OFFSET", 3))
+        tick = mt5.symbol_info_tick(mt5_symbol)
+        tick_epoch = float(tick.time) if tick and getattr(tick, "time", 0) and tick.time > 0 else None
+        offset_seconds, shift_tag = infer_mt5_rates_time_shift_seconds(
+            tf,
+            _utc_now,
+            _newest_ts,
+            _broker_offset_cfg,
+            tick_epoch,
+            stale_unshifted_age_sec=get_mt5_fetch_stale_unshifted_age_sec(),
+        )
+        if shift_tag == "utc_assumed_recent":
+            pass
+        elif shift_tag == "broker_offset_applied":
+            log.debug(
+                "[MT5] %s %s: applied broker UTC-offset time shift (+offset=%ds, unshifted_age=%.0fs)",
+                symbol,
+                tf,
+                offset_seconds,
+                _unshifted_age,
+            )
+        elif shift_tag == "tick_inferred_tz":
+            log.debug(
+                "[MT5] %s %s: tick-inferred TZ offset=%ds (unshifted_age=%.0fs)",
+                symbol,
+                tf,
+                offset_seconds,
+                _unshifted_age,
+            )
+        elif shift_tag == "stale_feed_skip_tick_tz":
+            log.warning(
+                "[MT5] %s %s: newest bar very stale vs wall clock "
+                "(unshifted_age=%.0fs) — refusing tick TZ fallback (offset kept 0; check liquidity/session)",
+                symbol,
+                tf,
+                _unshifted_age,
+            )
+        elif shift_tag == "tick_tz_out_of_band":
+            log.warning(
+                "[MT5] %s %s: tick TZ inference out-of-band vs clock (unshifted_age=%.0fs); offset kept 0",
+                symbol,
+                tf,
+                _unshifted_age,
+            )
+        else:
+            log.warning(
+                "[MT5] %s %s: ambiguous MT5 timestamps (unshifted_age=%.0fs, broker_off=%dh) — "
+                "offset kept 0 (reason=%s); verify MT5_LOGIN session / instrument session",
+                symbol,
+                tf,
+                _unshifted_age,
+                _broker_offset_cfg,
+                shift_tag,
+            )
 
     candles = []
     for b in bars:
@@ -2760,6 +2843,29 @@ def fetch_candles(pair: dict, tf: str, limit: int) -> list | None:
     )
 
 
+def _fetch_ab_crypto_signal_candles(pair: dict, tf: str, limit: int, *, engine: str = "AB"):
+    """Fetch Engine A/B crypto signal candles with optional Bybit source experiment."""
+    if (
+        str((pair or {}).get("type") or "").lower() != "crypto"
+        or _resolve_crypto_signal_feed(engine, CONFIG) == "binance"
+    ):
+        return fetch_candles(pair, tf, limit), None
+
+    result = _fetch_crypto_signal_candles(
+        pair,
+        tf,
+        limit,
+        engine=engine,
+        config=CONFIG,
+        default_fetch=lambda pair_arg, tf_arg, limit_arg: fetch_candles(
+            pair_arg, tf_arg, limit_arg
+        ),
+        bybit_fetch=_fetch_bybit_klines,
+        bybit_paginated_fetch=_fetch_bybit_klines_paginated,
+    )
+    return result.candles, result.meta
+
+
 def fetch_market_state(pair: dict, tf: str, limit: int) -> dict:
     """Detailed market state for a pair/tf, identifying if the last bar is forming."""
     from candle_manager import fetch_market_state as _fms
@@ -2818,6 +2924,7 @@ from scoring import (  # noqa: E402
     apply_correlation_cap,
     get_pair_profile,
     get_pair_score_group,
+    get_pair_level_atr_class,
     get_min_confluence_threshold,
     pair_filter_enabled,
     _pair_exchange_closed,
@@ -3715,9 +3822,24 @@ def _filter_news_ctx_for_pairs(data: dict, pairs: list | None) -> dict:
     return out
 
 
-def fetch_news_context(pairs: list | None = None, allow_refresh: bool = True):
-    """Return cached news context immediately. Trigger refresh if missing or expired (unless allow_refresh is False)."""
+def fetch_news_context(
+    pairs: list | None = None,
+    allow_refresh: bool = True,
+    force_refresh: bool = False,
+):
+    """Return news context.
+
+    Normal callers get cached context immediately and may trigger a background
+    refresh. AI review can pass force_refresh=True to block for the latest
+    available vendor data before building the prompt.
+    """
     global _news_cache
+    if force_refresh and allow_refresh:
+        try:
+            return _filter_news_ctx_for_pairs(_refresh_news_cache(pairs), pairs)
+        except Exception as e:
+            log.warning(f"[NEWS] Forced news refresh failed: {e}")
+
     now = time.time()
 
     with _news_lock:
@@ -3731,7 +3853,12 @@ def fetch_news_context(pairs: list | None = None, allow_refresh: bool = True):
     return _filter_news_ctx_for_pairs(data if data is not None else {}, pairs)
 
 
-def _fetch_pair_news_on_demand(display: str, sticker: str) -> tuple[list, list]:
+def _fetch_pair_news_on_demand(
+    display: str,
+    sticker: str,
+    *,
+    force_refresh: bool = False,
+) -> tuple[list, list]:
     """Fetch EODHD news + word-weights for one pair, called only during AI analysis.
 
     Returns (pair_news_list, word_weights_list). Results cached for 4 hours so
@@ -3745,7 +3872,7 @@ def _fetch_pair_news_on_demand(display: str, sticker: str) -> tuple[list, list]:
     _ttl = float(CONFIG.get("NEWS_PAIR_CACHE_TTL_SEC", 14400.0) or 14400.0)
     cached = _news_pair_cache.get(sticker, {})
     _age = _now - float(cached.get("ts", 0) or 0)
-    if _age < _ttl and ("news" in cached or "weights" in cached):
+    if not force_refresh and _age < _ttl and ("news" in cached or "weights" in cached):
         return cached.get("news", []), cached.get("weights", [])
 
     pair_news: list = []
@@ -4219,7 +4346,11 @@ def _build_signal_message(
 
         _pair_display = signal.get("pair", "")
         _pair_sticker = _eodhd_ticker_for_pair({"display": _pair_display, "symbol": signal.get("symbol", ""), "type": signal.get("type", "")})
-        _pnews, _ww = _fetch_pair_news_on_demand(_pair_display, _pair_sticker or "")
+        _pnews, _ww = _fetch_pair_news_on_demand(
+            _pair_display,
+            _pair_sticker or "",
+            force_refresh=bool(signal.get("_force_news_refresh")),
+        )
 
         if _pnews:
             _ctx_parts.append(
@@ -4359,14 +4490,26 @@ def run_ai(
         log.error("[AI] AI API key is not configured")
         return {"error": "AI API key not configured"}
 
+    _provider = get_ai_provider_label(CONFIG)
+    _model = get_ai_model(CONFIG, "AI_MODEL", "grok-4.3")
+    _timeout_sec = None
+    _sdk_max_retries = None
+    _prompt_sec = None
+    _prompt_chars = None
+    _provider_started = None
+
     try:
-        _provider = get_ai_provider_label(CONFIG)
         log.info(
             f"[AI] Analyzing {signal['pair']} via provider={_provider} "
-            f"base_url={get_ai_base_url(CONFIG)} model={get_ai_model(CONFIG, 'AI_MODEL', 'grok-4.3')}"
+            f"base_url={get_ai_base_url(CONFIG)} model={_model}"
         )
 
-        c = create_ai_client(CONFIG)
+        _sdk_max_retries = get_ai_max_retries(
+            CONFIG,
+            preferred_key="MARCUS_AI_SDK_MAX_RETRIES",
+            fallback=0,
+        )
+        c = create_ai_client(CONFIG, max_retries=_sdk_max_retries)
         _temp = float(AITemperatureConfig.get_temperature("marcus"))
 
         style_labels = {
@@ -4394,25 +4537,70 @@ def run_ai(
             learning_ctx=learning_ctx,
         )
         _prompt_sec = time.monotonic() - _prompt_started
+        _prompt_chars = len(msg)
 
-        _model = get_ai_model(CONFIG, "AI_MODEL", "grok-4.3")
         _timeout_sec = get_ai_timeout_sec(
             CONFIG,
             preferred_key="MARCUS_AI_TIMEOUT_SEC",
-            fallback=30.0,
+            fallback=90.0,
         )
         _provider_started = time.monotonic()
-        completion = c.chat.completions.create(
-            model=_model,
-            max_tokens=1100,
-            temperature=_temp,
-            messages=[
-                {"role": "system", "content": EXPERT_PROMPT},
-                {"role": "user", "content": msg},
-            ],
-            response_format={"type": "json_object"},
-            timeout=_timeout_sec,
-        )
+
+        def _is_retryable_ai_error(exc: Exception) -> bool:
+            text = str(exc or "").strip().lower()
+            if not text:
+                return False
+            markers = (
+                "timed out",
+                "timeout",
+                "connection reset",
+                "connection aborted",
+                "connection refused",
+                "temporarily unavailable",
+                "server error",
+                "rate limit",
+                "too many requests",
+                "502",
+                "503",
+                "504",
+            )
+            return any(marker in text for marker in markers)
+
+        _max_ai_retries = int(CONFIG.get("MARCUS_AI_MAX_RETRIES", 1) or 1)
+        _backoff_base = float(CONFIG.get("MARCUS_AI_RETRY_BACKOFF_SEC", 2.0) or 2.0)
+        _last_exc = None
+        completion = None
+        for _attempt in range(_max_ai_retries + 1):
+            try:
+                completion = c.chat.completions.create(
+                    model=_model,
+                    max_tokens=1100,
+                    temperature=_temp,
+                    messages=[
+                        {"role": "system", "content": EXPERT_PROMPT},
+                        {"role": "user", "content": msg},
+                    ],
+                    response_format={"type": "json_object"},
+                    timeout=_timeout_sec,
+                )
+                break
+            except Exception as _e:
+                _last_exc = _e
+                if _attempt >= _max_ai_retries or not _is_retryable_ai_error(_e):
+                    raise
+                _sleep = _backoff_base * (2 ** _attempt)
+                log.warning(
+                    "[AI] transient failure for %s on attempt %s/%s: %s; retrying in %.1fs",
+                    signal.get("pair", "?"),
+                    _attempt + 1,
+                    _max_ai_retries + 1,
+                    _e,
+                    _sleep,
+                )
+                time.sleep(_sleep)
+        if completion is None:
+            raise _last_exc or RuntimeError("AI call failed with no completion")
+
         _provider_sec = time.monotonic() - _provider_started
         log.info(
             "[AI] %s timing: prompt_build=%.2fs provider=%.2fs timeout=%.1fs prompt_chars=%d",
@@ -4420,7 +4608,7 @@ def run_ai(
             _prompt_sec,
             _provider_sec,
             _timeout_sec,
-            len(msg),
+            _prompt_chars,
         )
         t = (completion.choices[0].message.content or "").strip()
         result = _parse_ai_json(t, signal["pair"])
@@ -4551,7 +4739,24 @@ def run_ai(
         return result
 
     except Exception as e:
-        log.error(f"[AI] ERROR for {signal.get('pair', '?')}: {e}")
+        _elapsed_sec = (
+            time.monotonic() - _provider_started
+            if _provider_started is not None
+            else 0.0
+        )
+        log.error(
+            "[AI] ERROR for %s: %s | elapsed=%.2fs timeout=%.1fs sdk_retries=%s "
+            "provider=%s model=%s prompt_build=%.2fs prompt_chars=%s",
+            signal.get("pair", "?"),
+            e,
+            _elapsed_sec,
+            float(_timeout_sec or 0.0),
+            _sdk_max_retries if _sdk_max_retries is not None else "?",
+            _provider,
+            _model,
+            float(_prompt_sec or 0.0),
+            _prompt_chars if _prompt_chars is not None else "?",
+        )
 
         return {"error": str(e)}
 
@@ -4949,15 +5154,6 @@ def _auth_and_rate_limit():
     _rate_limits[key].append(now)
 
 
-@app.route("/")
-def index():
-    resp = send_from_directory("static", "index.html")
-    resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
-    resp.headers["Pragma"] = "no-cache"
-    resp.headers["Expires"] = "0"
-    return resp
-
-
 @app.route("/api/scan", methods=["POST"])
 def api_scan():
     global _dxy_h4_cache
@@ -4975,13 +5171,20 @@ def api_scan():
     _conductor_plan = None
     if _signals:
         try:
-            from conductor import conductor_orchestrate, reset_scan_results
+            from conductor import (
+                conductor_orchestrate,
+                extract_conductor_microstructure,
+                reset_scan_results,
+            )
             reset_scan_results("engine_a")
             for _sig in _signals[:30]:  # cap at 30 to bound DB query cost
+                _vd, _sr = extract_conductor_microstructure(_sig)
                 _plan = conductor_orchestrate(
                     _sig,
                     _sig.get("regime", "UNKNOWN"),
                     _AUDIT_DB,
+                    volume_divergence=_vd,
+                    stop_run=_sr,
                 )
                 if _sig is _signals[0]:
                     _conductor_plan = _plan
@@ -4995,78 +5198,6 @@ def api_scan():
     global _last_scan_results
     _last_scan_results = result
     return jsonify(_json_safe(result))
-
-
-@app.route("/api/last-scan", methods=["GET"])
-def api_last_scan():
-    """Latest full-universe scan kept in memory - survives dashboard tab refresh.
-
-    Use this instead of relying only on ``localStorage`` (large payloads can exceed
-    quota and fail to persist, leaving an older snapshot).
-    """
-    global _last_scan_results
-    r = _last_scan_results
-    if not isinstance(r, dict):
-        return jsonify({"available": False, "reason": "invalid"}), 200
-    if not r.get("success") or not r.get("scannedAt"):
-        return jsonify({"available": False, "reason": "no_scan"}), 200
-    out = dict(r)
-    out["available"] = True
-    return jsonify(_json_safe(out))
-
-
-@app.route("/api/conductor/last", methods=["GET"])
-@app.route("/api/kimi/conductor/last", methods=["GET"])
-def api_conductor_last():
-    """Return conductor routing for a specific pair (?pair=) or the top scan signal."""
-    try:
-        import conductor as _cmod
-    except Exception as _imp_err:
-        log.debug(f"[CONDUCTOR] import failed: {_imp_err}")
-        return jsonify({"conductor": None, "message": "Conductor module unavailable"}), 200
-
-    pair_arg = request.args.get("pair", "").strip()
-    if pair_arg and _cmod._ALL_CONDUCTOR_RESULTS:
-        # Try exact match, then case-insensitive, then slash-normalized
-        _res = _cmod._ALL_CONDUCTOR_RESULTS.get(pair_arg)
-        if _res is None:
-            pair_norm = pair_arg.upper().replace("/", "")
-            for k, v in _cmod._ALL_CONDUCTOR_RESULTS.items():
-                if k.upper() == pair_arg.upper() or k.upper().replace("/", "") == pair_norm:
-                    _res = v
-                    break
-        if _res:
-            return jsonify(_json_safe({"conductor": _res.get("routing", {}), "timestamp": datetime.now(timezone.utc).isoformat()}))
-        return jsonify({"conductor": None, "message": f"{pair_arg} not in last scan"}), 200
-
-    if _cmod._LAST_CONDUCTOR_RESULT is None:
-        return jsonify({"conductor": None, "message": "No conductor data yet. Run a scan."}), 200
-
-    _out = {
-        "conductor": _cmod._LAST_CONDUCTOR_RESULT.get("routing", {}),
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-    }
-    return jsonify(_json_safe(_out))
-
-
-@app.route("/api/conductor/pairs", methods=["GET"])
-def api_conductor_pairs():
-    """Return the list of pairs that have conductor results from the last scan."""
-    try:
-        import conductor as _cmod
-    except Exception:
-        return jsonify({"pairs": []}), 200
-    pairs = []
-    for pair, res in _cmod._ALL_CONDUCTOR_RESULTS.items():
-        r = res.get("routing", {})
-        pairs.append({
-            "pair": pair,
-            "direction": r.get("direction", "?"),
-            "score_pct": r.get("score_pct", 0),
-            "skip_signal": r.get("skip_signal", False),
-        })
-    pairs.sort(key=lambda x: x["score_pct"], reverse=True)
-    return jsonify({"pairs": pairs, "scan_type": getattr(_cmod, "_LAST_SCAN_TYPE", "")})
 
 
 @app.route("/api/analyze", methods=["POST"])
@@ -5089,7 +5220,13 @@ def api_analyze():
 
     try:
         _api_ai_started = time.monotonic()
-        news_ctx = sig.get("newsCtx") or fetch_news_context()
+        sig["_force_news_refresh"] = True
+        _news_pair = {
+            "display": sig.get("pair"),
+            "symbol": sig.get("symbol"),
+            "type": sig.get("type"),
+        }
+        news_ctx = fetch_news_context([_news_pair], force_refresh=True) or sig.get("newsCtx") or {}
 
         style_pref = d.get("stylePreference", "auto")
 
@@ -5176,18 +5313,46 @@ def api_analyze():
         # ── Conductor: Decide which AI functions to run ──────────────────
         _conductor_plan = None
         try:
-            from conductor import conductor_orchestrate
+            from conductor import conductor_orchestrate, extract_conductor_microstructure
+
+            _vd, _sr = extract_conductor_microstructure(sig)
             _conductor_plan = conductor_orchestrate(
                 sig,
                 sig.get("regime", "UNKNOWN"),
                 _AUDIT_DB,
                 news_ctx=news_ctx,
+                volume_divergence=_vd,
+                stop_run=_sr,
                 news_risk=news_ctx.get("risk") if news_ctx else None,
             )
             sig["conductor"] = _conductor_plan.get("routing", {})
             sig["conductor_context"] = _conductor_plan.get("context", {})
         except Exception as _cerr:
             log.debug(f"[CONDUCTOR] failed: {_cerr}")
+
+        _routing = (_conductor_plan or {}).get("routing") or {}
+        if _routing.get("skip_signal"):
+            return jsonify(
+                _json_safe(
+                    {
+                        "error": "conductor_hard_fail",
+                        "message": "Signal below conductor minimum score for analysis pipeline",
+                        "conductor": _routing,
+                        "conductor_context": (_conductor_plan or {}).get("context"),
+                    }
+                )
+            ), 422
+        if _conductor_plan and not _routing.get("run_marcus", True):
+            return jsonify(
+                _json_safe(
+                    {
+                        "skipped": True,
+                        "message": "Marcus skipped per conductor routing",
+                        "conductor": _routing,
+                        "conductor_context": _conductor_plan.get("context"),
+                    }
+                )
+            ), 200
 
         _pre_run_sec = time.monotonic() - _api_ai_started
         result = run_ai(
@@ -5331,11 +5496,34 @@ def api_pair_scan():
         resolved_style = _resolve_scan_style(
             _normalize_style(requested_style), pair_obj
         )
+
+        # Preload market state for all TFs so confirmed-only policy matches
+        # the full-scan path — prevents forming-bar contamination in non-MT5
+        # assets and ensures consistent candle splitting.
+        _preloaded_state = {}
+        _preloaded_candles = {}
+        _preloaded_meta = {}
+        _lim = scan_candle_limits()
+        for _tf in ("D1", "H4", "H1"):
+            try:
+                if pair_obj.get("source") == "mt5":
+                    _state = _engine_b_live_market_state(pair_obj, _tf, _lim[_tf])
+                else:
+                    _state = fetch_market_state(pair_obj, _tf, _lim[_tf])
+                _preloaded_state[_tf] = _state
+                _preloaded_candles[_tf] = _market_state_series(_state, include_forming=True)
+                _preloaded_meta[_tf] = _get_candle_fetch_meta(pair_obj, _tf, _lim[_tf])
+            except Exception:
+                pass
+
         signal = analyze_pair(
             pair_obj,
             btc_bias,
             style=resolved_style,
             intermarket_snapshot=intermarket_snapshot,
+            preloaded_market_state=_preloaded_state,
+            preloaded_candles=_preloaded_candles,
+            preloaded_fetch_meta=_preloaded_meta,
         )
         if not signal:
             return (
@@ -5404,11 +5592,21 @@ def _resolve_pair_from_signal(sig: dict) -> dict | None:
 
 
 def _naked_scan_style_profile(
-    style: str | None, score_group: str | None = None
+    style: str | None,
+    score_group: str | None = None,
+    asset_type: str | None = None,
 ) -> tuple[str, dict]:
     resolved = _normalize_style(style)
     if resolved == "auto":
         resolved = "intraday"  # Engine B walks H4 bars - intraday is the natural default
+    # TFs come from market_structure.resolve_engine_b_tfs (single source of truth).
+    # asset_type defaults to "forex" when caller omits it; this matches legacy behaviour
+    # for tests / callers that don't supply pair context.
+    from market_structure import resolve_engine_b_tfs
+    _tf_asset = (asset_type or "forex").lower()
+    _tf_scalp = resolve_engine_b_tfs(_tf_asset, "scalp")
+    _tf_intra = resolve_engine_b_tfs(_tf_asset, "intraday")
+    _tf_swing = resolve_engine_b_tfs(_tf_asset, "swing")
     profiles = {
         "scalp": {
             "min_score": 3.0,
@@ -5416,9 +5614,9 @@ def _naked_scan_style_profile(
             "min_rr": 1.0,
             "fallback_rr": 1.4,
             "require_macro_align": False,
-            "zone_tf": "H4",
-            "entry_tf": "H1",
-            "atr_tf": "H4",
+            "zone_tf": _tf_scalp["zone"],
+            "entry_tf": _tf_scalp["trigger"],
+            "atr_tf": _tf_scalp["atr"],
         },
         "intraday": {
             "min_score": 4.0,
@@ -5426,9 +5624,9 @@ def _naked_scan_style_profile(
             "min_rr": 1.2,
             "fallback_rr": 1.8,
             "require_macro_align": False,
-            "zone_tf": "H4",
-            "entry_tf": "H1",
-            "atr_tf": "H4",
+            "zone_tf": _tf_intra["zone"],
+            "entry_tf": _tf_intra["trigger"],
+            "atr_tf": _tf_intra["atr"],
         },
         "swing": {
             "min_score": 4.0,
@@ -5436,9 +5634,9 @@ def _naked_scan_style_profile(
             "min_rr": 1.6,
             "fallback_rr": 2.2,
             "require_macro_align": False,
-            "zone_tf": "D1",
-            "entry_tf": "H4",
-            "atr_tf": "D1",
+            "zone_tf": _tf_swing["zone"],
+            "entry_tf": _tf_swing["trigger"],
+            "atr_tf": _tf_swing["atr"],
         },
     }
     cfg_profiles = (CONFIG.get("NAKED_ENGINE", {}) or {}).get("style_profiles", {}) or {}
@@ -5526,7 +5724,12 @@ def _engine_b_regime_label(
         return "RANGING"
 
 
-def _compute_naked_analysis(sig: dict, engine_a_ctx: dict = None, force_ai: bool = False):
+def _compute_naked_analysis(
+    sig: dict,
+    engine_a_ctx: dict = None,
+    force_ai: bool = False,
+    execution_mode: bool = False,
+):
     if not isinstance(sig, dict):
         return None, None, "Invalid signal"
 
@@ -5536,10 +5739,23 @@ def _compute_naked_analysis(sig: dict, engine_a_ctx: dict = None, force_ai: bool
 
     direction = str(sig.get("direction", "LONG")).upper()
     if direction not in ("LONG", "SHORT"):
+        if execution_mode:
+            return None, pair_obj, "Invalid Engine B execution direction"
         direction = "LONG"
 
     def _enrich_engine_b_ai_payload(payload: dict) -> dict:
         enriched = dict(payload or {})
+        # Match engine_b_ai._validate_engine_b_ai_payload: never leave edgeProbability None
+        try:
+            _ep_raw = enriched.get("edgeProbability")
+            if _ep_raw is None:
+                enriched["edgeProbability"] = 50.0
+            else:
+                enriched["edgeProbability"] = float(
+                    max(0.0, min(100.0, float(_ep_raw)))
+                )
+        except (TypeError, ValueError):
+            enriched["edgeProbability"] = 50.0
 
         def _fmt_level(value):
             try:
@@ -5645,30 +5861,66 @@ def _compute_naked_analysis(sig: dict, engine_a_ctx: dict = None, force_ai: bool
         if not d1 or not h4 or not h1:
             return None, pair_obj, "Failed to fetch D1/H4/H1 candles"
 
+        _pair_score_group = get_pair_score_group(pair_obj)
+        _requested_style_naked = sig.get("style", "auto")
+        resolved_style, style_profile = _naked_scan_style_profile(
+            _requested_style_naked,
+            score_group=_pair_score_group,
+            asset_type=pair_obj.get("type", ""),
+        )
+        _zone_tf = str(style_profile.get("zone_tf", "H4")).upper()
+        _entry_tf = str(style_profile.get("entry_tf", "H1")).upper()
+        _atr_tf = str(style_profile.get("atr_tf", "H4")).upper()
+        _tf_map = {"D1": d1, "H4": h4, "H1": h1}
+        _trigger_tf_map = {"D1": d1, "H4": h4_trigger, "H1": h1_trigger}
+        zone_candles = _tf_map.get(_zone_tf, h4)
+        structure_entry_candles = _tf_map.get(_entry_tf, h1)
+        trigger_candles = _trigger_tf_map.get(_entry_tf, structure_entry_candles)
+        atr_candles = _tf_map.get(_atr_tf, zone_candles)
+        if not zone_candles or not structure_entry_candles or not trigger_candles or not atr_candles:
+            return None, pair_obj, (
+                f"Failed to resolve Engine B candles "
+                f"(zone={_zone_tf}:{len(zone_candles or [])}, "
+                f"entry={_entry_tf}:{len(structure_entry_candles or [])}, "
+                f"trigger={_entry_tf}:{len(trigger_candles or [])}, "
+                f"atr={_atr_tf}:{len(atr_candles or [])})"
+            )
+
         # Structure is confirmed-bar first; trigger candles may include the live bar by config.
 
-        h4_highs = [float(c["high"]) for c in h4]
-        h4_lows = [float(c["low"]) for c in h4]
-        h4_closes = [float(c["close"]) for c in h4]
+        atr_highs = [float(c["high"]) for c in atr_candles]
+        atr_lows = [float(c["low"]) for c in atr_candles]
+        atr_closes = [float(c["close"]) for c in atr_candles]
 
         log.info(
-            f"[NAKED-AI] {pair_obj.get('display')}: H4 candles={len(h4)}, sample_high={h4_highs[-1] if h4_highs else 'N/A'}"
+            f"[NAKED-AI] {pair_obj.get('display')}: {_atr_tf} ATR candles={len(atr_candles)}, sample_high={atr_highs[-1] if atr_highs else 'N/A'}"
         )
 
-        atr_series = calc_atr(h4_highs, h4_lows, h4_closes, 14)
+        atr_series = calc_atr(atr_highs, atr_lows, atr_closes, 14)
         atr = (
             float(atr_series[-1]) if atr_series and atr_series[-1] is not None else 0.0
         )
+        if (
+            pair_obj.get("type") == "crypto"
+            and str(CONFIG.get("ENGINE_B_CRYPTO_LEVELS_FEED", "bybit")).lower() == "bybit"
+        ):
+            bybit_atr = _bybit_atr_for_levels(pair_obj, resolved_style)
+            if bybit_atr:
+                atr = float(bybit_atr)
+            elif not bool(CONFIG.get("ENGINE_B_CRYPTO_LEVELS_SIGNAL_FEED_FALLBACK", False)):
+                atr = 0.0
 
         log.info(
-            f"[NAKED-AI] {pair_obj.get('display')}: ATR series length={len(atr_series) if atr_series else 0}, final_ATR={atr}"
+            f"[NAKED-AI] {pair_obj.get('display')}: ATR tf={_atr_tf} series length={len(atr_series) if atr_series else 0}, final_ATR={atr}"
         )
 
         if not atr or atr <= 0:
+            if execution_mode:
+                return None, pair_obj, "Engine B execution ATR unavailable"
             log.warning(
                 f"[NAKED-AI] {pair_obj.get('display')}: Failed ATR calc - series={atr_series}, using fallback ATR"
             )
-            current_price = float(sig.get("price") or (h1_trigger or h1)[-1]["close"])
+            current_price = float(sig.get("price") or (trigger_candles or structure_entry_candles)[-1]["close"])
             _atr_pct = {
                 "forex": 0.002,
                 "crypto": 0.02,
@@ -5681,7 +5933,7 @@ def _compute_naked_analysis(sig: dict, engine_a_ctx: dict = None, force_ai: bool
                 f"[NAKED-AI] {pair_obj.get('display')}: Using fallback ATR={atr} (type={pair_obj.get('type')})"
             )
 
-        current_price = float(sig.get("price") or (h1_trigger or h1)[-1]["close"])
+        current_price = float(sig.get("price") or (trigger_candles or structure_entry_candles)[-1]["close"])
 
         from market_structure import (
             NakedEngine,
@@ -5691,7 +5943,7 @@ def _compute_naked_analysis(sig: dict, engine_a_ctx: dict = None, force_ai: bool
 
         engine = NakedEngine()
         regime_label = _engine_b_regime_label(
-            h4,
+            zone_candles,
             pair_obj.get("type", "stock"),
             engine_a_ctx.get("regime") if isinstance(engine_a_ctx, dict) else None,
         )
@@ -5702,7 +5954,7 @@ def _compute_naked_analysis(sig: dict, engine_a_ctx: dict = None, force_ai: bool
                 calc_indicators_with_normalized(d1, pair_obj.get("type", "stock")) or {}
             ).get("snap") or {}
             _na_h4_snap = (
-                calc_indicators_with_normalized(h4, pair_obj.get("type", "stock")) or {}
+                calc_indicators_with_normalized(zone_candles, pair_obj.get("type", "stock")) or {}
             ).get("snap") or {}
         except Exception:
             pass
@@ -5710,8 +5962,8 @@ def _compute_naked_analysis(sig: dict, engine_a_ctx: dict = None, force_ai: bool
             pair_obj.get("symbol") or pair_obj.get("display")
         ).analyze_structure(
             d1,
-            h4,
-            h1,
+            zone_candles,
+            structure_entry_candles,
             current_price,
             direction,
             atr,
@@ -5719,6 +5971,8 @@ def _compute_naked_analysis(sig: dict, engine_a_ctx: dict = None, force_ai: bool
             asset_type=pair_obj.get("type", ""),
             d1_snap=_na_d1_snap,
             h4_snap=_na_h4_snap,
+            style=resolved_style,
+            pair=pair_obj,
         )
 
         try:
@@ -5731,27 +5985,20 @@ def _compute_naked_analysis(sig: dict, engine_a_ctx: dict = None, force_ai: bool
             log.warning(f"Failed to fetch AI learning context for Naked Analysis: {e}")
             learning_ctx = None
 
-        _pair_score_group = get_pair_score_group(pair_obj)
-        _requested_style_naked = sig.get("style", "auto")
-        resolved_style, style_profile = _naked_scan_style_profile(
-            _requested_style_naked, score_group=_pair_score_group
-        )
         _pair_type = pair_obj.get("type", "")
-        # Determine correct entry candles based on style
-        _entry_candles = h1_trigger if resolved_style in ("scalp", "intraday") else h4_trigger
         conf = engine.calculate_confidence(
             res,
             current_price,
             direction,
             learning_ctx,
-            entry_candles=_entry_candles,
+            entry_candles=trigger_candles,
             style_profile=style_profile,
         )
         _gate_ok, _min_score_scaled = engine_b_confidence_passes(
             conf, style_profile, regime_label, _pair_type
         )
         _regime_gate = _engine_b_regime_gate(regime_label, _pair_type)
-        res["min_score_used"] = int(_min_score_scaled)
+        res["min_score_used"] = float(_min_score_scaled)
         res["regime_gate"] = _regime_gate
         res.update(conf)
         res["checklist_passed"] = bool(conf.get("passed"))
@@ -5789,7 +6036,7 @@ def _compute_naked_analysis(sig: dict, engine_a_ctx: dict = None, force_ai: bool
                     "pair": pair_obj.get("display"),
                     "style": resolved_style,
                     "regime": regime_label,
-                    "min_score_used": int(_min_score_scaled),
+                    "min_score_used": float(_min_score_scaled),
                     "lifecycle_state": conf.get("lifecycle_state", "unknown"),
                     "lifecycle_reason": conf.get("lifecycle_reason", ""),
                 },
@@ -5824,6 +6071,7 @@ def _compute_naked_analysis(sig: dict, engine_a_ctx: dict = None, force_ai: bool
                     engine_a_ctx=engine_a_ctx,
                     news_ctx=_news_ctx,
                     freshness_ctx=engine_a_ctx if isinstance(engine_a_ctx, dict) else None,
+                    asset_type=pair_obj.get("type"),
                 )
                 if "error" not in ai_verdict:
                     res["ai_analysis"] = _enrich_engine_b_ai_payload(ai_verdict)
@@ -5837,7 +6085,7 @@ def _compute_naked_analysis(sig: dict, engine_a_ctx: dict = None, force_ai: bool
                     )
                     res["ai_analysis"] = {
                         "grade": "N/A",
-                        "edgeProbability": None,
+                        "edgeProbability": 50.0,
                         "riskLevel": "UNKNOWN",
                         "verdict": f"AI review unavailable: {err_msg}",
                     }
@@ -5846,7 +6094,7 @@ def _compute_naked_analysis(sig: dict, engine_a_ctx: dict = None, force_ai: bool
                 log.warning(f"[NAKED-AI] Failed to get AI verdict: {e}")
                 res["ai_analysis"] = {
                     "grade": "N/A",
-                    "edgeProbability": None,
+                    "edgeProbability": 50.0,
                     "riskLevel": "UNKNOWN",
                     "verdict": f"AI review unavailable: {e}",
                 }
@@ -5933,7 +6181,9 @@ def api_compare_engines():
     engine_a_style = _resolve_scan_style(_normalize_style(requested_style), pair_obj)
     _pair_score_group = get_pair_score_group(pair_obj)
     engine_b_style, engine_b_profile = _naked_scan_style_profile(
-        requested_style, score_group=_pair_score_group
+        requested_style,
+        score_group=_pair_score_group,
+        asset_type=pair_obj.get("type", ""),
     )
 
     try:
@@ -6039,6 +6289,74 @@ def api_scan_naked():
 
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
+    engine_b_funnel = {
+        "total": len(candidate_pairs),
+        "passed": 0,
+        "insufficient_candles": 0,
+        "bybit_atr_unavailable": 0,
+        "invalid_atr": 0,
+        "volatility_gate": 0,
+        "pair_exception": 0,
+        "no_clear_structure": 0,
+        "gate_fail_struct": 0,
+        "gate_fail_loc": 0,
+        "gate_fail_trigger": 0,
+        "gate_fail_rr": 0,
+        "gate_fail_other": 0,
+        "unknown_reject": 0,
+    }
+    _funnel_lock = threading.Lock()
+
+    def _gate_bucket_from_failed_names(failed_names):
+        if not failed_names:
+            return "other"
+        for g in failed_names:
+            if str(g).lower() == "struct":
+                return "struct"
+        for g in failed_names:
+            if str(g).lower() == "loc":
+                return "loc"
+        for g in failed_names:
+            if "trigger" in str(g).lower():
+                return "trigger"
+        for g in failed_names:
+            gl = str(g).lower()
+            if gl == "rr_gate" or gl.startswith("rr=") or gl.startswith("rr"):
+                return "rr"
+        return "other"
+
+    def _record_pair_funnel(had_signal: bool, row: dict) -> None:
+        """One row per pair: why Engine B did not emit a signal (or passed)."""
+        with _funnel_lock:
+            if had_signal:
+                engine_b_funnel["passed"] += 1
+                return
+            reason = str(row.get("final_reject_reason") or "").strip()
+            if reason == "insufficient_candles":
+                engine_b_funnel["insufficient_candles"] += 1
+            elif reason == "bybit_atr_unavailable":
+                engine_b_funnel["bybit_atr_unavailable"] += 1
+            elif reason == "invalid_atr":
+                engine_b_funnel["invalid_atr"] += 1
+            elif reason == "volatility_gate":
+                engine_b_funnel["volatility_gate"] += 1
+            elif reason.startswith("exception:"):
+                engine_b_funnel["pair_exception"] += 1
+            elif reason == "no_clear_structural_verdict":
+                engine_b_funnel["no_clear_structure"] += 1
+            elif reason.startswith("gate_failures") or row.get("failed_gate_names"):
+                bucket = _gate_bucket_from_failed_names(list(row.get("failed_gate_names") or []))
+                key = {
+                    "struct": "gate_fail_struct",
+                    "loc": "gate_fail_loc",
+                    "trigger": "gate_fail_trigger",
+                    "rr": "gate_fail_rr",
+                    "other": "gate_fail_other",
+                }.get(bucket, "gate_fail_other")
+                engine_b_funnel[key] += 1
+            else:
+                engine_b_funnel["unknown_reject"] += 1
+
     def _scan_pair(pair, debug_mode=False):
         debug_row = {
             "pair": pair.get("display"),
@@ -6066,48 +6384,25 @@ def api_scan_naked():
             "direction_details": {}
         }
 
+        _best_signal = None
         try:
             engine = NakedEngine()
 
             _pair_score_group = get_pair_score_group(pair)
             resolved_style, style_profile = _naked_scan_style_profile(
-                requested_style, score_group=_pair_score_group
+                requested_style,
+                score_group=_pair_score_group,
+                asset_type=pair.get("type", ""),
             )
-            _is_crypto_profile = (
-                pair.get("type") == "crypto"
-                and bool(CONFIG.get("ENGINE_B_CRYPTO_PROFILE_ENABLED", False))
-            )
-            _is_crypto_trigger_profile = _is_crypto_profile and bool(
-                CONFIG.get("ENGINE_B_CRYPTO_TRIGGER_PROFILE_ENABLED", False)
-            )
-
             debug_row["style"] = resolved_style
 
-            # Determine which timeframes this pair/style needs
+            # Timeframes resolved by market_structure.resolve_engine_b_tfs (single source of truth)
             _zone_tf = style_profile.get("zone_tf", "H4")
             _entry_tf = style_profile.get("entry_tf", "H1")
             _atr_tf = style_profile.get("atr_tf", "H4")
-            if _is_crypto_profile:
-                _structure_tfs = CONFIG.get(
-                    "ENGINE_B_CRYPTO_STRUCTURE_TIMEFRAMES", ["H4", "D1"]
-                )
-                if not isinstance(_structure_tfs, (list, tuple)):
-                    _structure_tfs = ["H4", "D1"]
-                _structure_tfs = [str(tf).upper() for tf in _structure_tfs]
-                _zone_tf = "H4" if "H4" in _structure_tfs else _structure_tfs[0]
-                _entry_tf = str(CONFIG.get("ENGINE_B_CRYPTO_CONTEXT_TIMEFRAME", "H1")).upper()
-                _atr_tf = _zone_tf
-            _needed_tfs = {_zone_tf, _entry_tf, _atr_tf, "D1"}
-            _crypto_entry_tfs = []
-            if _is_crypto_trigger_profile:
-                _configured_entry_tfs = CONFIG.get(
-                    "ENGINE_B_CRYPTO_ENTRY_TIMEFRAMES", ["M15", "M5"]
-                )
-                if not isinstance(_configured_entry_tfs, (list, tuple)):
-                    _configured_entry_tfs = ["M15", "M5"]
-                _crypto_entry_tfs = [str(tf).upper() for tf in _configured_entry_tfs]
-                _needed_tfs.update(_crypto_entry_tfs)
-            _needed_tfs = list(_needed_tfs)
+            # Always load H4/H1/D1 so candleFetchMeta + execution freshness match analyze_pair/risk_check.
+            _needed_tfs = list({_zone_tf, _entry_tf, _atr_tf, "D1", "H4", "H1"})
+            _lim_b = scan_candle_limits()
 
             debug_row["zone_tf"] = _zone_tf
             debug_row["entry_tf"] = _entry_tf
@@ -6117,6 +6412,7 @@ def api_scan_naked():
             _tf_map = {}
             _tf_trigger_map = {}
             _tf_state_map = {}
+            _tf_raw_map: dict[str, list] = {}
             _use_forming_structure = bool(CONFIG.get("ENGINE_B_USE_FORMING_FOR_STRUCTURE", False))
             _use_forming_trigger = bool(CONFIG.get("ENGINE_B_USE_FORMING_FOR_TRIGGER", True))
             for tf in _needed_tfs:
@@ -6133,43 +6429,40 @@ def api_scan_naked():
                 if pair.get("source") == "mt5":
                     state = _engine_b_live_market_state(pair, tf, limit)
                     _tf_state_map[tf] = state
+                    _tf_raw_map[tf] = _market_state_series(state, include_forming=True)
                     _tf_map[tf] = _market_state_series(
                         state, include_forming=_use_forming_structure
                     )
                     _tf_trigger_map[tf] = _market_state_series(
                         state, include_forming=_use_forming_trigger
                     )
-                elif _is_crypto_profile and pair.get("source") == "binance":
-                    raw = (
-                        fetch_binance_paginated(pair["symbol"], TF_B[tf], limit)
-                        if limit > 1000
-                        else fetch_binance(pair["symbol"], TF_B[tf], limit)
-                    )
-                    if raw and len(raw) > 1:
-                        _tf_map[tf] = raw[:-1]  # drop incomplete current bar
-                    elif raw:
-                        _tf_map[tf] = raw
-                    else:
-                        _tf_map[tf] = []
-                    _tf_trigger_map[tf] = _tf_map[tf]
                 else:
                     raw = fetch_candles(pair, tf, limit)
-                    if raw and len(raw) > 1:
-                        _tf_map[tf] = raw[:-1]  # drop incomplete current bar
-                    elif raw:
-                        _tf_map[tf] = raw
-                    else:
-                        _tf_map[tf] = []
-                    _tf_trigger_map[tf] = _tf_map[tf]
+                    from athena_app.services.market_state import (
+                        market_state_offset_hours,
+                        split_market_state,
+                    )
+
+                    _state = split_market_state(
+                        list(raw or []),
+                        tf,
+                        pair.get("display") or pair.get("symbol") or "",
+                        offset_hours=market_state_offset_hours(pair, tf),
+                    )
+                    _tf_state_map[tf] = _state
+                    _tf_raw_map[tf] = list(raw or [])
+                    _tf_map[tf] = _market_state_series(
+                        _state, include_forming=_use_forming_structure
+                    )
+                    _tf_trigger_map[tf] = _market_state_series(
+                        _state, include_forming=_use_forming_trigger
+                    )
 
             zone_candles = _tf_map.get(_zone_tf, [])
             structure_entry_candles = _tf_map.get(_entry_tf, [])
             entry_candles = _tf_trigger_map.get(_entry_tf, _tf_map.get(_entry_tf, []))
             d1_candles = _tf_map.get("D1", [])
             atr_candles = _tf_map.get(_atr_tf, zone_candles)
-            crypto_entry_candles_by_tf = {
-                tf: _tf_trigger_map.get(tf, _tf_map.get(tf, [])) for tf in _crypto_entry_tfs
-            }
             _engine_b_is_forming = any(
                 bool((_tf_state_map.get(tf) or {}).get("is_live"))
                 for tf in (_zone_tf, _entry_tf, _atr_tf, "D1")
@@ -6192,6 +6485,19 @@ def api_scan_naked():
             _atr_closes = [float(c["close"]) for c in atr_candles]
             atr_series = calc_atr(_atr_highs, _atr_lows, _atr_closes, 14)
             atr = float(atr_series[-1]) if atr_series else 0.0
+            if (
+                pair.get("type") == "crypto"
+                and str(CONFIG.get("ENGINE_B_CRYPTO_LEVELS_FEED", "bybit")).lower() == "bybit"
+            ):
+                bybit_atr = _bybit_atr_for_levels(pair, resolved_style)
+                if bybit_atr:
+                    atr = float(bybit_atr)
+                    debug_row["atr_feed"] = "bybit"
+                elif not bool(CONFIG.get("ENGINE_B_CRYPTO_LEVELS_SIGNAL_FEED_FALLBACK", False)):
+                    debug_row["final_reject_reason"] = "bybit_atr_unavailable"
+                    if debug_mode:
+                        return {"debug": debug_row}
+                    return []
 
             debug_row["atr_value"] = atr
 
@@ -6238,7 +6544,6 @@ def api_scan_naked():
             except Exception:
                 pass
             local_results = []
-            _best_signal = None
             def _build_direction_debug(direction, verdict, res, conf_data, threshold, fail_gates):
                 _conf = conf_data or {}
                 _res = res if isinstance(res, dict) else {}
@@ -6278,7 +6583,7 @@ def api_scan_naked():
                     "trigger_required": True,
                     "trigger_timeframe": _conf.get("trigger_timeframe", _res.get("trigger_timeframe")),
                     "trigger_detected": _entry_ok,
-                    "trigger_type_checked": "crypto_m15_m5_profile" if _conf.get("crypto_profile_enabled") else "price_action_or_structural_catalyst",
+                    "trigger_type_checked": "price_action_or_structural_catalyst",
                     "trigger_type_found": _conf.get("trigger_type") or _trigger_type_found,
                     "candle_pattern_state": {
                         "pattern": _res.get("trigger_pattern", "NONE"),
@@ -6303,18 +6608,9 @@ def api_scan_naked():
                     "volume_confirmation_state": {
                         "bos_volume_confirmed": _bos_volume,
                     },
-                    "m15_trigger_state": _conf.get("m15_trigger_state"),
-                    "m5_trigger_state": _conf.get("m5_trigger_state"),
                     "exact_trigger_reject_reason": (
-                        _conf.get("exact_trigger_reject_reason")
-                        or ("no_price_action_or_structural_catalyst" if "trigger" in _failed_gate_names else None)
+                        "no_price_action_or_structural_catalyst" if "trigger" in _failed_gate_names else None
                     ),
-                    "target_v2_enabled": _conf.get("target_v2_enabled"),
-                    "selected_target_price": _conf.get("selected_target_price"),
-                    "selected_target_tf": _conf.get("selected_target_tf"),
-                    "selected_target_type": _conf.get("selected_target_type"),
-                    "selected_target_rr": _conf.get("selected_target_rr"),
-                    "selected_target_is_structural": _conf.get("selected_target_is_structural"),
                     "rr_used_for_gate": _conf.get("rr_used_for_gate"),
                     "rr_source": _conf.get("rr_source"),
                     "structural_rr": _conf.get("structural_rr"),
@@ -6323,52 +6619,11 @@ def api_scan_naked():
                     "execution_tp": _conf.get("execution_tp"),
                     "fallback_tp_applied": _conf.get("fallback_tp_applied"),
                     "fallback_tp_reason": _conf.get("fallback_tp_reason"),
-                    "fallback_projection_price": _conf.get("fallback_projection_price"),
-                    "fallback_used_for_final_pass": _conf.get("fallback_used_for_final_pass"),
                     "location_passed": _conf.get("location_passed", _conf.get("location_ok")),
                     "location_mode": _conf.get("location_mode"),
                     "location_distance_atr": _conf.get("location_distance_atr"),
                     "trigger_passed": _conf.get("trigger_passed", _conf.get("trigger_ok")),
                     "trigger_type": _conf.get("trigger_type"),
-                    "trigger_volume_ratio": _conf.get("trigger_volume_ratio"),
-                    "trigger_taker_buy_ratio": _conf.get("trigger_taker_buy_ratio"),
-                    "trigger_taker_sell_ratio": _conf.get("trigger_taker_sell_ratio"),
-                    "trigger_displacement_atr": _conf.get("trigger_displacement_atr"),
-                    "crypto_target_old_target": res.get("crypto_target_old_target") if isinstance(res, dict) else None,
-                    "crypto_target_old_rr": res.get("crypto_target_old_rr") if isinstance(res, dict) else None,
-                    "crypto_target_tp1": res.get("crypto_target_tp1") if isinstance(res, dict) else None,
-                    "crypto_target_tp2": res.get("crypto_target_tp2") if isinstance(res, dict) else None,
-                    "crypto_target_final_target": res.get("crypto_target_final_target") if isinstance(res, dict) else None,
-                    "crypto_target_final_rr": res.get("crypto_target_final_rr") if isinstance(res, dict) else None,
-                    "crypto_target_mode_used": res.get("crypto_target_mode_used") if isinstance(res, dict) else None,
-                    "crypto_target_used_true_h4_liquidity_target": res.get("crypto_target_used_true_h4_liquidity_target") if isinstance(res, dict) else None,
-                    "crypto_target_used_fallback_projection": res.get("crypto_target_used_fallback_projection") if isinstance(res, dict) else None,
-                    "crypto_target_fallback_reason": res.get("crypto_target_fallback_reason") if isinstance(res, dict) else None,
-                    "crypto_target_tp2_reject_reason": res.get("crypto_target_tp2_reject_reason") if isinstance(res, dict) else None,
-                    "crypto_target_h4_liquidity_target_count": res.get("crypto_target_h4_liquidity_target_count") if isinstance(res, dict) else None,
-                    "crypto_target_selected_h4_liquidity_rank": res.get("crypto_target_selected_h4_liquidity_rank") if isinstance(res, dict) else None,
-                    "crypto_target_selected_h4_liquidity_price": res.get("crypto_target_selected_h4_liquidity_price") if isinstance(res, dict) else None,
-                    "crypto_target_atr_multiple": res.get("crypto_target_atr_multiple") if isinstance(res, dict) else None,
-                    "crypto_target_min_target_atr_multiple": res.get("crypto_target_min_target_atr_multiple") if isinstance(res, dict) else None,
-                    "crypto_target_max_target_atr_multiple": res.get("crypto_target_max_target_atr_multiple") if isinstance(res, dict) else None,
-                    "crypto_target_path_clear_to_tp2": res.get("crypto_target_path_clear_to_tp2") if isinstance(res, dict) else None,
-                    "crypto_target_path_block_reason": res.get("crypto_target_path_block_reason") if isinstance(res, dict) else None,
-                    "crypto_target_candidate_targets": res.get("crypto_target_candidate_targets") if isinstance(res, dict) else None,
-                    "crypto_target_candidate_targets_total": res.get("crypto_target_candidate_targets_total") if isinstance(res, dict) else None,
-                    "crypto_target_candidate_targets_considered": res.get("crypto_target_candidate_targets_considered") if isinstance(res, dict) else None,
-                    "crypto_target_candidate_targets_rejected": res.get("crypto_target_candidate_targets_rejected") if isinstance(res, dict) else None,
-                    "crypto_target_candidate_reject_reasons_count": res.get("crypto_target_candidate_reject_reasons_count") if isinstance(res, dict) else None,
-                    "crypto_target_selected_target_price": res.get("crypto_target_selected_target_price") if isinstance(res, dict) else None,
-                    "crypto_target_selected_target_tf": res.get("crypto_target_selected_target_tf") if isinstance(res, dict) else None,
-                    "crypto_target_selected_target_type": res.get("crypto_target_selected_target_type") if isinstance(res, dict) else None,
-                    "crypto_target_selected_target_rank": res.get("crypto_target_selected_target_rank") if isinstance(res, dict) else None,
-                    "crypto_target_selected_target_rr": res.get("crypto_target_selected_target_rr") if isinstance(res, dict) else None,
-                    "crypto_target_selected_target_atr_multiple": res.get("crypto_target_selected_target_atr_multiple") if isinstance(res, dict) else None,
-                    "crypto_target_selected_target_is_structural": res.get("crypto_target_selected_target_is_structural") if isinstance(res, dict) else None,
-                    "crypto_target_fallback_projection_price": res.get("crypto_target_fallback_projection_price") if isinstance(res, dict) else None,
-                    "crypto_target_fallback_projection_rr": res.get("crypto_target_fallback_projection_rr") if isinstance(res, dict) else None,
-                    "crypto_target_fallback_used_for_diagnostics_only": res.get("crypto_target_fallback_used_for_diagnostics_only") if isinstance(res, dict) else None,
-                    "crypto_target_v2_reject_reason": res.get("crypto_target_v2_reject_reason") if isinstance(res, dict) else None,
                     "entry": res.get("current_price") if isinstance(res, dict) else None,
                     "stop": res.get("recommended_stop_loss") if isinstance(res, dict) else None,
                 }
@@ -6393,6 +6648,8 @@ def api_scan_naked():
                     asset_type=pair.get("type", ""),
                     d1_snap=_eb_d1_snap,
                     h4_snap=_eb_zone_snap,
+                    style=resolved_style,
+                    pair=pair,
                 )
 
                 verdict = res.get("structural_verdict", "NONE")
@@ -6418,7 +6675,6 @@ def api_scan_naked():
                     direction,
                     entry_candles=entry_candles,
                     style_profile=style_profile,
-                    crypto_entry_candles_by_tf=crypto_entry_candles_by_tf,
                 )
 
                 if direction == "LONG":
@@ -6454,6 +6710,13 @@ def api_scan_naked():
                 if not conf_data.get("rr_ok"):
                     _fail_gates.append(f"rr={conf_data.get('rr', 0):.1f}")
                 _conf_failed_gates = list(conf_data.get("failed_gate_names") or _fail_gates)
+                if not _gate_ok and not _conf_failed_gates:
+                    try:
+                        _score_for_floor = float(conf_data.get("score", 0.0) or 0.0)
+                    except (TypeError, ValueError):
+                        _score_for_floor = 0.0
+                    if bool(conf_data.get("passed")) and _score_for_floor < float(_min_score_scaled):
+                        _conf_failed_gates.append("min_score")
                 _direction_debug = _build_direction_debug(
                     direction, verdict, res, conf_data, _min_score_scaled, _conf_failed_gates
                 )
@@ -6589,18 +6852,112 @@ def api_scan_naked():
                         price=float(current_price),
                         atr=float(atr),
                         direction=direction,
-                        pair_type=pair.get("type", "stock"),
+                        pair_type=get_pair_level_atr_class(pair),
                     ),
                     "naked_data": _res,
                 }
 
+                signal["candleFetchMeta"] = {
+                    "D1": _get_candle_fetch_meta(pair, "D1", _lim_b["D1"]),
+                    "H4": _get_candle_fetch_meta(pair, "H4", _lim_b["H4"]),
+                    "H1": _get_candle_fetch_meta(pair, "H1", _lim_b["H1"]),
+                    "pairSource": pair.get("source"),
+                }
+                signal.setdefault("executable", True)
+                try:
+                    from athena_app.services.data_freshness import (
+                        check_live_candle_consistency,
+                        evaluate_execution_data_freshness,
+                    )
+
+                    _time_now_b = datetime.now(timezone.utc).timestamp()
+                    for _tf_u in ("H4", "H1", "D1"):
+                        _state_u = _tf_state_map.get(_tf_u)
+                        if not isinstance(_state_u, dict):
+                            continue
+                        _tf_candles_u = list(_tf_raw_map.get(_tf_u) or [])
+                        if pair.get("source") == "mt5" and pair.get("type") == "forex":
+                            _engine_a_input_u = list(_state_u.get("confirmed") or [])
+                        else:
+                            _engine_a_input_u = list(_state_u.get("confirmed") or [])
+                            if _state_u.get("forming"):
+                                _engine_a_input_u.append(_state_u["forming"])
+                        _engine_b_input_u = list(_state_u.get("confirmed") or [])
+                        _scanner_input_u = list(_engine_a_input_u)
+                        _consistency_paths_b = {
+                            "raw_provider": _tf_candles_u,
+                            "market_state": _state_u,
+                            "engine_a": _engine_a_input_u,
+                            "engine_b": _engine_b_input_u,
+                            "scanner": _scanner_input_u,
+                            "compare": _scanner_input_u,
+                        }
+                        _cache_meta_b = signal["candleFetchMeta"].get(_tf_u)
+                        if isinstance(_cache_meta_b, dict) and _cache_meta_b:
+                            _consistency_paths_b["cache"] = _cache_meta_b
+                        _consistency_b = check_live_candle_consistency(
+                            pair,
+                            _tf_u,
+                            _consistency_paths_b,
+                            time_now=_time_now_b,
+                        )
+                        if _consistency_b:
+                            signal.setdefault("candleConsistency", {})[_tf_u] = _consistency_b
+
+                    _fresh_b = evaluate_execution_data_freshness(signal, CONFIG)
+                    signal["dataFreshness"] = _fresh_b
+                    _cons_b = signal.get("candleConsistency", {})
+                    _has_confirmed_only_ok_b = (
+                        any(
+                            (isinstance(d, dict) and d.get("status") == "CONFIRMED_ONLY_OK")
+                            or d == "CONFIRMED_ONLY_OK"
+                            for d in _cons_b.values()
+                        )
+                        if isinstance(_cons_b, dict)
+                        else False
+                    )
+                    if _fresh_b.get("warnOnStaleScan") and _fresh_b.get("blocked"):
+                        _blocked_b = _fresh_b.get("blocked", [])
+                        _filtered_b = [
+                            b
+                            for b in _blocked_b
+                            if not (
+                                _has_confirmed_only_ok_b
+                                and isinstance(b, dict)
+                                and b.get("severity") == "stale_1_bucket"
+                            )
+                        ]
+                        if _filtered_b:
+                            _warn_b = "DATA_FRESHNESS: " + "; ".join(
+                                f"{b.get('timeframe')} {b.get('severity')}"
+                                for b in _filtered_b
+                            )
+                            signal.setdefault("warnings", [])
+                            if _warn_b not in signal["warnings"]:
+                                signal["warnings"].append(_warn_b)
+                except Exception as _fresh_err_b:
+                    log.debug(
+                        "[NAKED SCAN] %s data freshness unavailable: %s",
+                        pair.get("display", "?"),
+                        _fresh_err_b,
+                    )
+
+                _fe_b = signal.get("dataFreshness")
+                if (
+                    CONFIG.get("SIGNAL_EXECUTABLE_FALSE_WHEN_FRESHNESS_BLOCKS", True)
+                    and isinstance(_fe_b, dict)
+                    and not _fe_b.get("allowed")
+                ):
+                    signal["executable"] = False
+
                 # Calculate style-specific SL/TP for display
                 try:
                     from indicators import calc_levels
+                    _style_level_class = get_pair_level_atr_class(pair)
                     _lvl_scalp = calc_levels(current_price, atr, direction,
-                                              pair.get("type", "stock"), style="scalp")
+                                              _style_level_class, style="scalp")
                     _lvl_intra = calc_levels(current_price, atr, direction,
-                                              pair.get("type", "stock"), style="intraday")
+                                              _style_level_class, style="intraday")
                     signal["scalp_sl"] = _lvl_scalp["sl"]
                     signal["scalp_tp"] = _lvl_scalp["tp1"]
                     signal["intraday_sl"] = _lvl_intra["sl"]
@@ -6610,72 +6967,52 @@ def api_scan_naked():
 
                 if _best_signal is None or signal["confluenceScore"] > _best_signal["confluenceScore"]:
                     _best_signal = signal
+
+            if _best_signal is None:
+                if not debug_row["long_structural_verdict"] and not debug_row["short_structural_verdict"]:
+                    debug_row["final_reject_reason"] = "no_clear_structural_verdict"
+                elif debug_row["failed_gate_names"]:
+                    debug_row["final_reject_reason"] = f"gate_failures: {','.join(debug_row['failed_gate_names'])}"
+                else:
+                    debug_row["final_reject_reason"] = "unknown"
+
+            if _best_signal is not None:
+                local_results.append(_best_signal)
+
+            if debug_mode:
+                local_results.append({"debug": debug_row})
+
         except Exception as e:
             debug_row["final_reject_reason"] = f"exception: {str(e)}"
             log.warning(f"[NAKED SCAN] {pair.get('display')} error: {e}")
+            _best_signal = None
             if debug_mode:
                 return {"debug": debug_row}
             return []
-
-        # If no signal was generated but we tested both directions, set final reject reason
-        if _best_signal is None:
-            if not debug_row["long_structural_verdict"] and not debug_row["short_structural_verdict"]:
-                debug_row["final_reject_reason"] = "no_clear_structural_verdict"
-            elif debug_row["failed_gate_names"]:
-                debug_row["final_reject_reason"] = f"gate_failures: {','.join(debug_row['failed_gate_names'])}"
-            else:
-                debug_row["final_reject_reason"] = "unknown"
-
-        if _best_signal is not None:
-            local_results.append(_best_signal)
-
-        # Always return debug row in debug mode
-        if debug_mode:
-            local_results.append({"debug": debug_row})
+        finally:
+            _had = (
+                _best_signal is not None
+                and not str(debug_row.get("final_reject_reason") or "").startswith("exception:")
+            )
+            _record_pair_funnel(_had, debug_row)
 
         return local_results
 
     _max_workers = max(1, int(CONFIG.get("SCAN_MAX_WORKERS", 3) or 3))
     debug_rows = []
 
-    # REGRESSION CHECK: Engine B scan-funnel tracking
-    engine_b_funnel = {
-        "total": len(candidate_pairs),
-        "no_clear_structure": 0,
-        "gate_fail_struct": 0,
-        "gate_fail_loc": 0,
-        "gate_fail_trigger": 0,
-        "gate_fail_rr": 0,
-        "passed": 0,
-    }
-
     log.info(f"[DEBUG] Starting scan with {len(candidate_pairs)} candidate pairs, debug_mode={debug_mode}")
+    from athena_app.services.naked_scan_service import iter_naked_scan_rows
+
     with ThreadPoolExecutor(max_workers=_max_workers) as pool:
         futures = {pool.submit(_scan_pair, pair, debug_mode): pair for pair in candidate_pairs}
         for future in as_completed(futures):
             result = future.result()
             log.debug(f"[DEBUG] Future result type: {type(result)}, length: {len(result) if isinstance(result, list) else 'N/A'}")
-            for row in (result or []):
+            for row in iter_naked_scan_rows(result):
                 if debug_mode and row.get("debug"):
                     debug_rows.append(row["debug"])
                     log.debug(f"[DEBUG] Added debug row for {row['debug'].get('pair')}")
-
-                    # REGRESSION CHECK: Track Engine B funnel
-                    dbg = row["debug"]
-                    if not dbg.get("long_structural_verdict") and not dbg.get("short_structural_verdict"):
-                        engine_b_funnel["no_clear_structure"] += 1
-                    else:
-                        for gate in dbg.get("failed_gate_names", []):
-                            if "struct" in gate:
-                                engine_b_funnel["gate_fail_struct"] += 1
-                            elif "loc" in gate:
-                                engine_b_funnel["gate_fail_loc"] += 1
-                            elif "trigger" in gate:
-                                engine_b_funnel["gate_fail_trigger"] += 1
-                            elif "rr" in gate:
-                                engine_b_funnel["gate_fail_rr"] += 1
-                        if dbg.get("long_passed") or dbg.get("short_passed"):
-                            engine_b_funnel["passed"] += 1
                 else:
                     results.append(row)
                     _pair_key = row.get("display", "")
@@ -6693,38 +7030,81 @@ def api_scan_naked():
     # Run Conductor on Engine B signals so widget updates after an Engine B scan
     if results:
         try:
-            from conductor import conductor_orchestrate, reset_scan_results
+            from conductor import (
+                conductor_orchestrate,
+                extract_conductor_microstructure,
+                reset_scan_results,
+            )
             reset_scan_results("engine_b")
             for _sig in results[:30]:
+                _vd, _sr = extract_conductor_microstructure(_sig)
                 conductor_orchestrate(
                     _sig,
                     _sig.get("regime", "UNKNOWN"),
                     _AUDIT_DB,
+                    volume_divergence=_vd,
+                    stop_run=_sr,
                 )
         except Exception as _cerr:
             log.warning(f"[CONDUCTOR] engine-b scan orchestration failed: {_cerr}")
 
+    log.info(
+        "[NAKED SCAN] complete: %d signal(s) from %d candidate pair(s) (asset_class=%s, style=%s) funnel=%s",
+        len(results),
+        len(candidate_pairs),
+        asset_class or "all",
+        requested_style,
+        {k: engine_b_funnel[k] for k in engine_b_funnel if k != "total"},
+    )
+    _funnel_sum = sum(
+        int(v)
+        for k, v in engine_b_funnel.items()
+        if k != "total" and isinstance(v, (int, float))
+    )
+    if _funnel_sum != len(candidate_pairs):
+        log.warning(
+            "[NAKED SCAN] funnel row count %s != candidate pairs %s (report if reproducible)",
+            _funnel_sum,
+            len(candidate_pairs),
+        )
+
     if debug_mode:
         # REGRESSION CHECK: Print Engine B scan-funnel summary
-        print("\n" + "="*80)
+        print("\n" + "=" * 80)
         print("REGRESSION CHECK - ENGINE B SCAN FUNNEL")
-        print("="*80)
+        print("=" * 80)
         print(f"Total pairs scanned: {engine_b_funnel['total']}")
+        print(f"Passed: {engine_b_funnel['passed']}")
+        print(f"Insufficient candles: {engine_b_funnel['insufficient_candles']}")
+        print(f"Bybit ATR unavailable: {engine_b_funnel['bybit_atr_unavailable']}")
+        print(f"Invalid ATR: {engine_b_funnel['invalid_atr']}")
+        print(f"Volatility gate: {engine_b_funnel['volatility_gate']}")
+        print(f"Pair exception: {engine_b_funnel['pair_exception']}")
         print(f"No clear structure: {engine_b_funnel['no_clear_structure']}")
         print(f"Gate fail - structure: {engine_b_funnel['gate_fail_struct']}")
         print(f"Gate fail - location: {engine_b_funnel['gate_fail_loc']}")
         print(f"Gate fail - trigger: {engine_b_funnel['gate_fail_trigger']}")
         print(f"Gate fail - RR: {engine_b_funnel['gate_fail_rr']}")
-        print(f"Passed: {engine_b_funnel['passed']}")
+        print(f"Gate fail - other: {engine_b_funnel['gate_fail_other']}")
+        print(f"Unknown reject: {engine_b_funnel['unknown_reject']}")
         print("="*80 + "\n")
 
         return jsonify(_json_safe({
             "success": True,
             "signals": results,
-            "debugRows": debug_rows
+            "debugRows": debug_rows,
+            "scanFunnel": engine_b_funnel,
+            "totalPairs": len(candidate_pairs),
+            "activePairs": len(candidate_pairs),
         }))
 
-    return jsonify(_json_safe({"success": True, "signals": results}))
+    return jsonify(_json_safe({
+        "success": True,
+        "signals": results,
+        "scanFunnel": engine_b_funnel,
+        "totalPairs": len(candidate_pairs),
+        "activePairs": len(candidate_pairs),
+    }))
 
 
 @app.route("/api/webhook", methods=["POST"])
@@ -6920,6 +7300,7 @@ def api_webhook():
             symbol_info=symbol_info,
             kill_switch=_kill_switch,
             sizing_override=float(d.get("sizingOverride", 1.0)),
+            account_domain=account.get("risk_domain"),
         )
 
         if not approval.approved:
@@ -6991,122 +7372,6 @@ def api_webhook():
         log.error(f"[WEBHOOK] execution error: {e}")
 
         return jsonify({"error": "Webhook execution failed - check logs"}), 500
-
-
-@app.route("/api/mt5-status")
-def api_mt5_status():
-    """Get MT5 connection status and account info."""
-
-    try:
-        from mt5_executor import mt5_get_account, mt5_get_positions
-
-        account = mt5_get_account()
-
-        if not account or account.get("error"):
-            return jsonify(
-                {
-                    "connected": False,
-                    "error": account.get("detail", "MT5 not connected")
-                    if isinstance(account, dict)
-                    else "MT5 not connected",
-                }
-            )
-
-        _pos_resp = mt5_get_positions()
-
-        if isinstance(_pos_resp, dict) and _pos_resp.get("error"):
-            positions = []
-        else:
-            positions = (
-                _pos_resp.get("positions", [])
-                if isinstance(_pos_resp, dict)
-                else (_pos_resp or [])
-            )
-
-        return jsonify(
-            {
-                "connected": True,
-                "account": account,
-                "openPositions": len(positions),
-                "positions": positions,
-                "executionEnabled": CONFIG.get("EXECUTION_ENABLED", False),
-            }
-        )
-
-    except Exception as e:
-        return jsonify({"connected": False, "error": str(e)})
-
-
-@app.route("/api/mt5-positions")
-def api_mt5_positions():
-    """Get open MT5 positions."""
-
-    try:
-        from mt5_executor import mt5_get_positions
-
-        _pos_resp = mt5_get_positions()
-
-        if isinstance(_pos_resp, dict) and _pos_resp.get("error"):
-            return jsonify(
-                {
-                    "positions": [],
-                    "error": _pos_resp.get("detail", "Positions unavailable"),
-                }
-            ), 503
-
-        return jsonify(
-            {
-                "positions": _pos_resp.get("positions", [])
-                if isinstance(_pos_resp, dict)
-                else (_pos_resp or [])
-            }
-        )
-
-    except Exception as e:
-        return jsonify({"positions": [], "error": str(e)})
-
-
-@app.route("/api/bybit-status")
-def api_bybit_status():
-    """Get Bybit Futures connection status and account info."""
-
-    try:
-        from bybit_executor import bybit_get_account, bybit_get_positions
-
-        account = bybit_get_account()
-
-        if not account or account.get("error"):
-            return jsonify(
-                {
-                    "connected": False,
-                    "error": account.get("detail", "Bybit not connected")
-                    if isinstance(account, dict)
-                    else "Bybit not connected",
-                }
-            )
-
-        _pos_resp = bybit_get_positions()
-
-        if isinstance(_pos_resp, dict) and _pos_resp.get("error"):
-            positions = []
-        else:
-            positions = (
-                _pos_resp.get("positions", [])
-                if isinstance(_pos_resp, dict)
-                else (_pos_resp or [])
-            )
-
-        return jsonify(
-            {
-                "connected": True,
-                "account": account,
-                "openPositions": len(positions),
-                "positions": positions,
-            }
-        )
-
-    except Exception as e:
-        return jsonify({"connected": False, "error": str(e)})
 
 
 @app.route("/api/close-position", methods=["POST"])
@@ -7213,160 +7478,6 @@ def api_close_position():
     status = 200 if result.get("success") else 500
 
     return jsonify(result), status
-
-
-@app.route("/api/binance-status")
-def api_binance_status():
-    """Legacy endpoint - redirects to Bybit status."""
-
-    return api_bybit_status()
-
-
-@app.route("/api/market-hours")
-def api_market_hours():
-    """Return open/closed status for all major markets in GMT+2 (SAST/EET).
-
-    Sessions defined in UTC, converted to GMT+2 for display.
-    Crypto is always open (24/7). Forex closes Fri 22:00 UTC, reopens Sun 22:00 UTC.
-    """
-    from datetime import datetime, timezone, timedelta
-
-    now_utc = datetime.now(timezone.utc)
-    now_gmt2 = now_utc + timedelta(hours=2)
-
-    utc_h = now_utc.hour
-    utc_m = now_utc.minute
-    utc_total = utc_h * 60 + utc_m
-    utc_weekday = now_utc.weekday()  # 0=Mon, 6=Sun
-
-    def mins_until(target_total_utc):
-        """Minutes until a UTC HH:MM time (expressed as total minutes)."""
-        diff = target_total_utc - utc_total
-        if diff <= 0:
-            diff += 24 * 60
-        return diff
-
-    def fmt_opens_in(minutes):
-        if minutes < 60:
-            return f"Opens in {minutes}m"
-        h = minutes // 60
-        m = minutes % 60
-        return f"Opens in {h}h {m}m" if m else f"Opens in {h}h"
-
-    # ── Forex (Sun 22:00 UTC - Fri 22:00 UTC) ────────────────────────────────
-    if utc_weekday == 5:  # Saturday - closed all day
-        forex_open = False
-        forex_status = "Closed (Weekend)"
-        # Opens Sun 22:00 UTC = (6-5)*24*60 - utc_total + 22*60
-        mins_to_sun22 = ((6 - utc_weekday) * 1440) - utc_total + 22 * 60
-        forex_opens_in = fmt_opens_in(mins_to_sun22 % (7 * 1440))
-    elif utc_weekday == 6 and utc_total < 22 * 60:  # Sunday before 22:00 UTC
-        forex_open = False
-        forex_status = "Closed (Weekend)"
-        forex_opens_in = fmt_opens_in(22 * 60 - utc_total)
-    elif utc_weekday == 4 and utc_total >= 22 * 60:  # Friday after 22:00 UTC
-        forex_open = False
-        forex_status = "Closed (Weekend)"
-        forex_opens_in = "Opens Sun 22:00 UTC"
-    else:
-        forex_open = True
-        forex_status = "Open"
-        forex_opens_in = None
-
-    # ── Sessions (UTC) ─────────────────────────────────────────────────────────
-    # Sydney:    21:00-06:00 UTC  (23:00-08:00 GMT+2)
-    # Tokyo:     00:00-09:00 UTC  (02:00-11:00 GMT+2)
-    # London:    07:00-16:00 UTC  (09:00-18:00 GMT+2)
-    # New York:  13:00-21:00 UTC  (15:00-23:00 GMT+2)
-
-    def session_state(start_utc, end_utc):
-        """Returns (is_open, mins_to_open_or_close)."""
-        s = start_utc * 60
-        e = end_utc * 60
-        if s <= e:
-            is_open = s <= utc_total < e
-            if is_open:
-                return True, e - utc_total
-            else:
-                return False, mins_until(s)
-        else:  # wraps midnight
-            is_open = utc_total >= s or utc_total < e
-            if is_open:
-                if utc_total >= s:
-                    return True, (24 * 60 - utc_total) + e
-                else:
-                    return True, e - utc_total
-            else:
-                return False, mins_until(s)
-
-    syd_open, syd_mins = session_state(21, 6)
-    tok_open, tok_mins = session_state(0, 9)
-    lon_open, lon_mins = session_state(7, 16)
-    ny_open, ny_mins = session_state(13, 21)
-
-    # London/NY overlap
-    overlap_open = lon_open and ny_open
-
-    # ── Equity markets (GMT+2 local times) ────────────────────────────────────
-    # JSE:       09:00-17:00 GMT+2 (Mon-Fri)
-    # LSE/UK100: 09:00-17:30 GMT+2 (Mon-Fri) = 07:00-15:30 UTC
-    # NYSE/DAX:  NYSE 15:30-22:00 GMT+2 | DAX 09:00-17:30 GMT+2
-    gmt2_h = now_gmt2.hour
-    gmt2_m = now_gmt2.minute
-    gmt2_total = gmt2_h * 60 + gmt2_m
-    is_weekday = utc_weekday <= 4  # Mon-Fri
-
-    def equity_state(open_gmt2, close_gmt2):
-        s = open_gmt2[0] * 60 + open_gmt2[1]
-        e = close_gmt2[0] * 60 + close_gmt2[1]
-        if not is_weekday:
-            diff = ((7 - utc_weekday) % 7) * 1440 + s - gmt2_total
-            return False, "Closed (Weekend)", f"Opens Mon {open_gmt2[0]:02d}:{open_gmt2[1]:02d}"
-        is_open = s <= gmt2_total < e
-        if is_open:
-            diff = e - gmt2_total
-            return True, "Open", f"Closes in {diff//60}h {diff%60}m" if diff >= 60 else f"Closes in {diff}m"
-        elif gmt2_total < s:
-            diff = s - gmt2_total
-            return False, "Pre-Market", fmt_opens_in(diff)
-        else:
-            return False, "Closed", f"Opens tomorrow {open_gmt2[0]:02d}:{open_gmt2[1]:02d}"
-
-    jse_open, jse_status, jse_note = equity_state((9, 0), (17, 0))
-    lse_open, lse_status, lse_note = equity_state((9, 0), (17, 30))
-    dax_open, dax_status, dax_note = equity_state((9, 0), (17, 30))
-    nyse_open, nyse_status, nyse_note = equity_state((15, 30), (22, 0))
-
-    # ── Build response ─────────────────────────────────────────────────────────
-    def session_detail(is_open, mins):
-        if not forex_open:
-            return {"open": False, "status": "Forex Closed", "note": forex_opens_in}
-        if is_open:
-            h, m = divmod(mins, 60)
-            note = f"Closes in {h}h {m}m" if h else f"Closes in {m}m"
-            return {"open": True, "status": "Active", "note": note}
-        else:
-            return {"open": False, "status": "Closed", "note": fmt_opens_in(mins)}
-
-    return jsonify({
-        "serverTime": now_utc.strftime("%Y-%m-%d %H:%M:%S UTC"),
-        "localTime": now_gmt2.strftime("%Y-%m-%d %H:%M GMT+2"),
-        "sessions": {
-            "sydney":    session_detail(syd_open, syd_mins),
-            "tokyo":     session_detail(tok_open, tok_mins),
-            "london":    session_detail(lon_open, lon_mins),
-            "new_york":  session_detail(ny_open, ny_mins),
-            "overlap":   {"open": overlap_open and forex_open, "status": "London/NY Overlap" if (overlap_open and forex_open) else "Inactive", "note": "Highest liquidity"},
-        },
-        "markets": {
-            "forex":  {"open": forex_open, "status": forex_status, "note": forex_opens_in or "Closes Fri 22:00 UTC", "hours": "Sun 22:00 - Fri 22:00 UTC"},
-            "crypto": {"open": True, "status": "Open 24/7", "note": "Always open", "hours": "24/7"},
-            "jse":    {"open": jse_open, "status": jse_status, "note": jse_note, "hours": "09:00-17:00 GMT+2"},
-            "lse":    {"open": lse_open, "status": lse_status, "note": lse_note, "hours": "09:00-17:30 GMT+2"},
-            "dax":    {"open": dax_open, "status": dax_status, "note": dax_note, "hours": "09:00-17:30 GMT+2"},
-            "nyse":   {"open": nyse_open, "status": nyse_status, "note": nyse_note, "hours": "15:30-22:00 GMT+2"},
-        },
-    })
 
 
 @app.route("/api/execution-config", methods=["GET", "POST"])
@@ -7841,64 +7952,6 @@ def api_backtest():
         return jsonify({"error": "Backtest failed"}), 500
 
 
-@app.route("/api/backtest-history")
-def api_backtest_history():
-    """Return all stored backtest results, newest first."""
-    try:
-        with sqlite3.connect(_AUDIT_DB, timeout=15.0) as con:
-            con.row_factory = sqlite3.Row
-            rows = con.execute("""
-                SELECT * FROM backtest_results
-                ORDER BY run_date DESC
-                LIMIT 500
-            """).fetchall()
-            return jsonify([dict(r) for r in rows])
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-
-@app.route("/api/backtest-history/<pair_name>")
-def api_backtest_history_pair(pair_name):
-    """Return backtest history for a specific pair."""
-    try:
-        with sqlite3.connect(_AUDIT_DB, timeout=15.0) as con:
-            con.row_factory = sqlite3.Row
-            rows = con.execute(
-                """
-                SELECT * FROM backtest_results
-                WHERE pair = ?
-                ORDER BY run_date DESC
-                LIMIT 50
-            """,
-                (pair_name,),
-            ).fetchall()
-            return jsonify([dict(r) for r in rows])
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-
-@app.route("/api/backtest-best")
-def api_backtest_best():
-    """Return best result per pair (highest SQN from most recent run)."""
-    try:
-        with sqlite3.connect(_AUDIT_DB, timeout=15.0) as con:
-            con.row_factory = sqlite3.Row
-            rows = con.execute("""
-                SELECT b.*
-                FROM backtest_results b
-                INNER JOIN (
-                    SELECT pair, MAX(run_date) as latest
-                    FROM backtest_results
-                    GROUP BY pair
-                ) latest ON b.pair = latest.pair
-                AND b.run_date = latest.latest
-                ORDER BY b.sqn DESC
-            """).fetchall()
-            return jsonify([dict(r) for r in rows])
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-
 # N4: Kill-switch API - immediately blocks new scans/analyses
 
 
@@ -8018,17 +8071,17 @@ def _persist_bt_min_yaml(cfg_path: str, current: dict) -> None:
         f.write(content)
 
 
-def _persist_live_confluence_yaml(cfg_path: str, current: dict) -> None:
+def _persist_score_group_thresholds_yaml(cfg_path: str, current: dict) -> None:
     import re as _re
 
     with open(cfg_path, "r", encoding="utf-8") as f:
         content = f.read()
 
-    def _live_block_replacer(m):
+    def _block_replacer(m):
         block = m.group(0)
-        for cls, val in current.items():
+        for key, val in current.items():
             block = _re.sub(
-                rf"^([ \t]+{_re.escape(cls)}\s*:\s*)[\d.]+",
+                rf"^([ \t]+{_re.escape(key)}\s*:\s*)[\d.]+",
                 lambda mm, v=val: f"{mm.group(1)}{v}",
                 block,
                 flags=_re.MULTILINE,
@@ -8036,8 +8089,8 @@ def _persist_live_confluence_yaml(cfg_path: str, current: dict) -> None:
         return block
 
     content = _re.sub(
-        r"^MIN_CONFLUENCE_CLASS\s*:\s*\n(?:[ \t]+\S[^\n]*\n)+",
-        _live_block_replacer,
+        r"^ENGINE_A_SCORE_GROUP_THRESHOLDS\s*:\s*\n(?:[ \t]+\S[^\n]*\n)+",
+        _block_replacer,
         content,
         flags=_re.MULTILINE,
     )
@@ -8087,13 +8140,13 @@ def _apply_bt_min_updates(new_vals: dict) -> dict:
     return current
 
 
-def _apply_live_confluence_updates(new_vals: dict) -> dict:
-    current = dict(CONFIG.get("MIN_CONFLUENCE_CLASS") or {})
+def _apply_score_group_threshold_updates(new_vals: dict) -> dict:
+    current = dict(CONFIG.get("ENGINE_A_SCORE_GROUP_THRESHOLDS") or {})
     current.update({k: round(float(v), 4) for k, v in (new_vals or {}).items()})
-    CONFIG["MIN_CONFLUENCE_CLASS"] = current
+    CONFIG["ENGINE_A_SCORE_GROUP_THRESHOLDS"] = current
     cfg_path = os.path.join(os.path.dirname(__file__), "config.yaml")
-    _persist_live_confluence_yaml(cfg_path, current)
-    log.info(f"[LIVE_THRESHOLD] Updated via UI: {current}")
+    _persist_score_group_thresholds_yaml(cfg_path, current)
+    log.info(f"[SCORE_GROUP_THRESHOLD] Updated via UI: {current}")
     return current
 
 
@@ -8119,6 +8172,14 @@ def _apply_naked_style_score_updates(new_vals: dict) -> dict:
     _persist_naked_style_profiles_yaml(cfg_path, full_for_yaml)
     log.info(f"[NAKED_ENGINE] min_score updated via advisory: {new_vals}")
     return {style: dict(styles.get(style) or {}) for style in ("scalp", "intraday", "swing")}
+
+
+_ENGINE_A_ACTIVE_GATE_HELP = (
+    "Runtime Engine A threshold: scoring.get_score_threshold — "
+    "PAIR_PROFILES.min_confluence, ENGINE_A_PAIR_THRESHOLDS, "
+    "ENGINE_A_SCORE_GROUP_THRESHOLDS (score_group, type, default), "
+    "then 3-tier fallback."
+)
 
 
 def _engine_a_threshold_max_for_class(asset_class: str) -> float:
@@ -8243,7 +8304,7 @@ def api_scan_settings():
 
 @app.route("/api/bt-min", methods=["GET", "POST"])
 def api_bt_min():
-    """GET: BT_MIN + live MIN_CONFLUENCE_CLASS + flags for Engine A backtest routing.
+    """GET: BT_MIN + ENGINE_A_SCORE_GROUP_THRESHOLDS metadata.
     POST: update BT_MIN class floors and/or backtest_use_bt_min_thresholds (backtest only).
     Body: {"crypto": 0.55, ...} and optional {"backtest_use_bt_min_thresholds": true}
     """
@@ -8258,7 +8319,9 @@ def api_bt_min():
         return jsonify(
             {
                 "bt_min": dict(CONFIG.get("BT_MIN") or {}),
-                "live_class": dict(CONFIG.get("MIN_CONFLUENCE_CLASS") or {}),
+                "live_class": dict(CONFIG.get("ENGINE_A_SCORE_GROUP_THRESHOLDS") or {}),
+                "min_confluence_class_role": "active_runtime_config",
+                "engine_a_active_gate": _ENGINE_A_ACTIVE_GATE_HELP,
                 "backtest_use_bt_min_thresholds": bool(
                     CONFIG.get("BACKTEST_USE_BT_MIN_THRESHOLDS", False)
                 ),
@@ -8729,43 +8792,42 @@ def api_scalp_group_rr():
 
 @app.route("/api/live-confluence-thresholds", methods=["GET", "POST"])
 def api_live_confluence_thresholds():
-    """GET/POST MIN_CONFLUENCE_CLASS thresholds used by Engine A live scan tiering."""
+    """GET/POST ENGINE_A_SCORE_GROUP_THRESHOLDS — active runtime config for Engine A gates."""
     asset_classes = ("crypto", "forex", "commodity", "stock", "index")
     if request.method == "GET":
         return jsonify(
             {
-                "live_class": dict(CONFIG.get("MIN_CONFLUENCE_CLASS") or {}),
+                "live_class": dict(CONFIG.get("ENGINE_A_SCORE_GROUP_THRESHOLDS") or {}),
+                "min_confluence_class_role": "active_runtime_config",
+                "engine_a_active_gate": _ENGINE_A_ACTIVE_GATE_HELP,
             }
         )
 
     data = request.get_json(silent=True) or {}
     new_vals = {}
-    for cls in asset_classes:
-        if cls not in data:
-            continue
+    for key, val in data.items():
         try:
-            val = float(data[cls])
+            val = float(val)
         except (TypeError, ValueError):
-            return jsonify({"error": f"Invalid value for {cls}"}), 400
-        _max_allowed = _engine_a_threshold_max_for_class(cls)
-        if val < 0 or val > _max_allowed:
+            return jsonify({"error": f"Invalid value for {key}"}), 400
+        if val < 0 or val > 3.0:
             return jsonify(
-                {"error": f"Value for {cls} out of range (0-{_max_allowed:g})"}
+                {"error": f"Value for {key} out of range (0-3)"}
             ), 400
-        new_vals[cls] = round(val, 4)
+        new_vals[key] = round(val, 4)
 
     if not new_vals:
         return jsonify({"error": "No valid keys provided"}), 400
 
     try:
-        current = _apply_live_confluence_updates(new_vals)
+        current = _apply_score_group_threshold_updates(new_vals)
     except Exception as e:
-        log.error(f"Failed to persist MIN_CONFLUENCE_CLASS to config.yaml: {e}")
+        log.error(f"Failed to persist ENGINE_A_SCORE_GROUP_THRESHOLDS to config.yaml: {e}")
         return jsonify(
             {
                 "saved": False,
                 "error": str(e),
-                "live_class": dict(CONFIG.get("MIN_CONFLUENCE_CLASS") or {}),
+                "live_class": dict(CONFIG.get("ENGINE_A_SCORE_GROUP_THRESHOLDS") or {}),
             }
         ), 500
 
@@ -8964,6 +9026,9 @@ def _scalp_ui_signal(raw_signal: dict) -> dict:
         "sl": raw_signal.get("sl"),
         "tp1": raw_signal.get("tp1"),
         "tp2": raw_signal.get("tp2"),
+        "structural_tp": raw_signal.get("structural_tp"),
+        "structural_rr": raw_signal.get("structural_rr"),
+        "structure_target_close": raw_signal.get("structure_target_close"),
         "rr": float(raw_signal.get("rr1", 0.0) or 0.0),
         "ai_grade": ai_grade,
         "ai_score": raw_signal.get("ai_score", 0),
@@ -8976,8 +9041,38 @@ def _scalp_ui_signal(raw_signal: dict) -> dict:
         "vp_poc": raw_signal.get("vp_poc"),
         "vp_vah": raw_signal.get("vp_vah"),
         "vp_val": raw_signal.get("vp_val"),
+        "vp_volume_source": raw_signal.get("vp_volume_source"),
+        "vp_bucket_count": raw_signal.get("vp_bucket_count"),
+        "vp_fidelity": raw_signal.get("vp_fidelity"),
+        "vp_is_proxy": raw_signal.get("vp_is_proxy"),
+        "vp_uses_real_trade_buckets": raw_signal.get("vp_uses_real_trade_buckets"),
         "absorption_count": raw_signal.get("absorption_count"),
+        "absorption_source": raw_signal.get("absorption_source"),
+        "absorption_fidelity": raw_signal.get("absorption_fidelity"),
+        "absorption_is_proxy": raw_signal.get("absorption_is_proxy"),
         "cvd_direction": raw_signal.get("cvd_direction"),
+        "cvd_source": raw_signal.get("cvd_source"),
+        "cvd_bucket_count": raw_signal.get("cvd_bucket_count"),
+        "cvd_fidelity": raw_signal.get("cvd_fidelity"),
+        "cvd_is_proxy": raw_signal.get("cvd_is_proxy"),
+        "cvd_uses_real_trade_buckets": raw_signal.get("cvd_uses_real_trade_buckets"),
+        "aggression_source": raw_signal.get("aggression_source"),
+        "aggression_source_raw": raw_signal.get("aggression_source_raw"),
+        "aggression_source_is_proxy": raw_signal.get("aggression_source_is_proxy"),
+        "aggression_confirmed": raw_signal.get("aggression_confirmed"),
+        "aggression_uses_real_order_flow": raw_signal.get("aggression_uses_real_order_flow"),
+        "data_fidelity": raw_signal.get("data_fidelity"),
+        "strict_fabio_pass": raw_signal.get("strict_fabio_pass"),
+        "strict_fabio_reason": raw_signal.get("strict_fabio_reason"),
+        "strict_fabio_missing_pillars": raw_signal.get("strict_fabio_missing_pillars"),
+        "strict_fabio_pillars": raw_signal.get("strict_fabio_pillars"),
+        "current_vs_strict_status": raw_signal.get("current_vs_strict_status"),
+        "aggression_components": raw_signal.get("aggression_components"),
+        "profile_anchor_mode": raw_signal.get("profile_anchor_mode"),
+        "profile_anchor_bars": raw_signal.get("profile_anchor_bars"),
+        "profile_anchor_start": raw_signal.get("profile_anchor_start"),
+        "profile_anchor_end": raw_signal.get("profile_anchor_end"),
+        "profile_anchor_shadow": raw_signal.get("profile_anchor_shadow"),
         "aaa_complete": raw_signal.get("aaa_complete"),
         "size_multiplier": raw_signal.get("size_multiplier"),
         "sl_method": raw_signal.get("sl_method"),
@@ -9006,11 +9101,11 @@ def _scalp_ui_signal(raw_signal: dict) -> dict:
 
 @app.route("/api/scalp-pairs", methods=["GET"])
 def api_scalp_pairs():
-    """List Engine D scan universe (no candle work). Respects SCALP_PAIRS override."""
+    """List Engine D scan universe (no candle work). Respects SCALP_SCAN_UNIVERSE / disabled pairs."""
     try:
-        from scalp_engine import get_scalp_pairs
+        from scalp_engine import displays_for_scalp_scan
 
-        pairs = get_scalp_pairs(ACTIVE_PAIRS)
+        pairs = displays_for_scalp_scan(ACTIVE_PAIRS, disabled_displays=_disabled_pairs)
         return jsonify({"pairs": pairs, "count": len(pairs)})
     except Exception as e:
         log.error(f"api_scalp_pairs error: {e}")
@@ -9021,12 +9116,12 @@ def api_scalp_pairs():
 def api_scalp_scan():
     """Run Engine D scalp scan and return frontend-friendly JSON."""
     try:
-        from scalp_engine import get_scalp_pairs, run_scalp_scan
+        from scalp_engine import displays_for_scalp_scan, run_scalp_scan
 
         payload = request.get_json(silent=True) or {}
         pairs = payload.get("pairs")
         if not isinstance(pairs, list) or not pairs:
-            pairs = get_scalp_pairs(ACTIVE_PAIRS)
+            pairs = displays_for_scalp_scan(ACTIVE_PAIRS, disabled_displays=_disabled_pairs)
 
         diagnostic = bool(payload.get("diagnostic", False))
         result = run_scalp_scan(pairs)
@@ -9053,8 +9148,13 @@ def api_scalp_scan():
                 _key = str(_row.get("display") or _row.get("pair") or "").upper()
                 if _key:
                     _live_dashboard_scalp_cache[_key] = {
-                        "gateResult": "BLOCKED",
+                        "display": _row.get("display") or _row.get("pair"),
+                        "pair": _row.get("pair") or _row.get("display"),
+                        "gateResult": "NO_SETUP" if str(_row.get("reason") or "").startswith("no_setup:") else "BLOCKED",
                         "reason": _row.get("reason"),
+                        "diagnostic_notes": [
+                            _row.get("diagnostic_reason")
+                        ] if _row.get("diagnostic_reason") else [],
                         "_ts": _ts_now,
                         "_skipped": True,
                     }
@@ -9245,6 +9345,7 @@ def api_scalp_execute():
             symbol_info=symbol_info,
             kill_switch=_kill_switch,
             sizing_override=float(signal.get("size_multiplier", 1.0) or 1.0),
+            account_domain=account.get("risk_domain"),
         )
         if not approval.approved:
             return jsonify(
@@ -9255,12 +9356,22 @@ def api_scalp_execute():
                 }
             ), 200
 
+        _ptc_ok, _ptc_reason = _guardian_pre_trade(signal, positions, account, positions_resp)
+        if not _ptc_ok:
+            return jsonify(
+                {
+                    "success": False,
+                    "error": f"Guardian: {_ptc_reason}",
+                }
+            ), 400
+
         result = run_managed_execution(_exec_venue, signal, approval)
         if not result.get("success"):
             return jsonify(
                 {"success": False, "error": result.get("error", "Execution failed")}
             ), 200
 
+        _audit_insert_error = None
         try:
             _factors_json = json.dumps({
                 "vp_poc":           signal.get("vp_poc"),
@@ -9306,7 +9417,20 @@ def api_scalp_execute():
                 )
                 con.commit()
         except Exception as audit_exc:
+            _audit_insert_error = str(audit_exc)
             log.warning(f"[SCALP EXEC] audit_log insert failed: {audit_exc}")
+
+        if _audit_insert_error:
+            return jsonify(
+                {
+                    "success": False,
+                    "error": f"AUDIT_INSERT_FAILED: {_audit_insert_error}",
+                    "ticket": result.get("ticket"),
+                    "volume": result.get("volume"),
+                    "entry_price": result.get("entry_price") or result.get("entryPrice"),
+                    "approval": approval.to_dict(),
+                }
+            ), 500
 
         return jsonify(
             {
@@ -9821,6 +9945,8 @@ def api_chart_analysis():
         except Exception as _vraw_err:
             log.debug("[CHART-VISION] raw data table failed: %s", _vraw_err)
 
+    direction_str = sig.get("direction", "UNKNOWN") if sig else "UNKNOWN"
+
     algo_context = "\n".join(context_parts) if context_parts else "No algorithmic data available."
 
     try:
@@ -9840,7 +9966,6 @@ def api_chart_analysis():
         log.debug("[CHART-VISION] Failed to extract candle features context: %s", _cf_err)
 
     system_prompt = build_system_prompt()
-    direction_str = sig.get("direction", "UNKNOWN") if sig else "UNKNOWN"
 
     def _extract_vision_structured(
         analysis_text: str,
@@ -10016,7 +10141,8 @@ def api_chart_analysis():
             out["final_verdict"] = "ADJUST"
 
         if not out["rating"]:
-            out["rating"] = "MODERATE"
+            # Fail closed: missing footer ratings must not default to confirm-tier MODERATE
+            out["rating"] = "AVOID"
 
         _res_style = str(data.get("resolvedStyle") or (sig or {}).get("tradeStyle") or "swing").lower()
         if _res_style in out["style_ratings"]:
@@ -10133,7 +10259,10 @@ def api_chart_analysis():
         except Exception as _vs_err:
             log.debug("[AI CHART] vision image retention skipped: %s", _vs_err)
 
-        _max_tokens = 1100 if triple_mode else 800
+        # Vision body was trimmed to A-H framework + 8-line structured footer (audit fix).
+        # Token budgets cut accordingly: triple 1100->450, dual/single 800->350.
+        _vision_default_max = 450 if triple_mode else 350
+        _max_tokens = int(CONFIG.get("VISION_MAX_TOKENS", _vision_default_max) or _vision_default_max)
         _vision_model = get_ai_model(CONFIG, "VISION_MODEL", "grok-4.3")
         _vision_temp = float(AITemperatureConfig.get_temperature("vision"))
         _user_parts = _chart_blocks_to_openai_user_content(content)
@@ -10169,6 +10298,28 @@ def api_chart_analysis():
             entry_price=_entry_hint,
             current_level_sets=current_levels,
         )
+        try:
+            from vision_trade_read import parse_vision_trade_read
+
+            structured_trade_read = parse_vision_trade_read(
+                analysis,
+                structured=structured,
+                chart_timestamp=_chart_generated_at,
+                latest_candle_ts=_latest_candle_ts,
+                image_hash=_stored_vision.get("image_hash"),
+                timeframe=tf,
+            )
+            structured["structured_trade_read"] = structured_trade_read
+        except Exception as _vtr_err:
+            log.debug("[CHART-VISION] structured trade read parse failed: %s", _vtr_err)
+            structured_trade_read = {
+                "schema_version": "vision_trade_read.v1",
+                "right_edge_status": structured.get("right_edge_status") or "UNKNOWN",
+                "tf_alignment": "UNKNOWN",
+                "freshness_status": "unknown",
+                "allowed_for_execution_context": False,
+                "warnings": [f"structured Vision parser failed: {_vtr_err}"],
+            }
 
         try:
             if bool(CONFIG.get("CHART_VISION_DATASET_ENABLED", True)):
@@ -10202,6 +10353,19 @@ def api_chart_analysis():
                     },
                     _VISION_ARTIFACTS_DIR,
                 )
+                # Vision auto-label confidence is derived from RIGHT EDGE
+                # classification + TF alignment (audit fix: previously hardcoded 0.60).
+                _re_status = (structured.get("right_edge_status") or "").upper().replace("_", " ")
+                _re_conf_map = {
+                    "CONFIRMS": 0.85,
+                    "REVIEW": 0.50,
+                    "POTENTIAL REVERSAL": 0.20,
+                }
+                _vision_conf = _re_conf_map.get(_re_status, 0.50)
+                if structured.get("confirms_direction", True) is False:
+                    _vision_conf = max(0.0, _vision_conf - 0.10)
+                _vision_conf = round(min(1.0, max(0.0, _vision_conf)), 3)
+
                 auto_label = _create_vision_label(
                     _AUDIT_DB,
                     {
@@ -10210,7 +10374,7 @@ def api_chart_analysis():
                         "review_status": "auto",
                         "structured": structured,
                         "engine_b": eb or {},
-                        "confidence": 0.60,
+                        "confidence": _vision_conf,
                     },
                 )
                 v1_pred = _create_vision_prediction(
@@ -10224,7 +10388,7 @@ def api_chart_analysis():
                         "intraday_rating": (structured.get("style_ratings") or {}).get("intraday") or "MODERATE",
                         "swing_rating": (structured.get("style_ratings") or {}).get("swing") or "MODERATE",
                         "levels": structured.get("level_suggestions") or {},
-                        "confidence": 0.60,
+                        "confidence": _vision_conf,
                         "payload": {
                             "model": _vision_model,
                             "analysis_excerpt": analysis[:500],
@@ -10265,10 +10429,24 @@ def api_chart_analysis():
             "symbol": symbol,
             "tf": _tf_label,
         }
-        # Cache vision result for AI reconciliation layer (keyed by symbol with _vision suffix)
+        # Cache vision result for AI reconciliation. Execution-adjacent keys include
+        # trace/latest/image; incomplete keys are retained only for UI reconciliation.
         try:
-            _vsym_key = str(symbol or "").replace("/", "_") + "_vision"
-            _engine_b_cache_put(_vsym_key, _vision_payload)
+            from vision_trade_read import build_vision_cache_key
+
+            _cache_meta = build_vision_cache_key(
+                symbol=symbol,
+                timeframe_set=_tf_label,
+                direction=direction_str,
+                trace_id=(sig or {}).get("trace_id") if sig else None,
+                latest_candle_ts=_latest_candle_ts,
+                image_hash=_stored_vision.get("image_hash"),
+            )
+            _vision_payload["cache_key"] = _cache_meta
+            _engine_b_cache_put(_cache_meta["key"] + "_vision", _vision_payload)
+            if _cache_meta.get("ui_only"):
+                _vsym_key = str(symbol or "").replace("/", "_") + "_vision"
+                _engine_b_cache_put(_vsym_key, _vision_payload)
         except Exception:
             pass
         try:
@@ -10320,6 +10498,7 @@ def api_chart_analysis():
         _response_payload: dict = {
             "analysis": analysis,
             "structured": structured,
+            "structured_trade_read": structured_trade_read,
             "model": _vision_model,
             "symbol": symbol,
             "tf": _tf_label,
@@ -10337,6 +10516,8 @@ def api_chart_analysis():
             _response_payload["chart_timestamp_warnings"] = _chart_ts_warnings
         if _latest_candle_ts:
             _response_payload["latest_candle_ts"] = _latest_candle_ts
+        if _stored_vision.get("image_hash"):
+            _response_payload["image_hash"] = _stored_vision.get("image_hash")
         return jsonify(_response_payload)
 
     except Exception as e:
@@ -10579,361 +10760,18 @@ def api_backup_db():
         return jsonify({"success": False, "error": str(e)}), 500
 
 
-@app.route("/api/prices")
-def api_prices():
 
-    with _live_prices_lock:
-        snapshot = dict(_live_prices)
 
-    return jsonify(
-        {
-            "prices": snapshot,
-            "count": len(snapshot),
-            "ts": datetime.now(timezone.utc).isoformat(),
-        }
-    )
 
 
-@app.route("/api/yield-curve")
-def api_yield_curve():
-    """Phase E: Yield curve data for dashboard widget."""
 
-    try:
-        yc = fetch_yield_curve()
 
-        if not yc:
-            return jsonify({"error": "Yield curve unavailable"}), 503
 
-        return jsonify(yc)
 
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
 
 
-@app.route("/api/bulk-prices")
-def api_bulk_prices():
-    """Phase D: Bulk live OHLCV for US stocks via EODHD real-time endpoint (1 call vs multiple WS connections)."""
 
-    try:
-        _key = os.environ.get("EODHD_KEY", "")
 
-        if not _key:
-            return jsonify({"error": "EODHD_KEY not set"}), 500
-
-        syms = request.args.get("symbols", "GOOG.US,GLD.US,SPY.US,QQQ.US")
-
-        r = http_requests.get(
-            f"https://eodhd.com/api/real-time/{syms.split(',')[0]}?s={','.join(syms.split(',')[1:])}&api_token={_key}&fmt=json",
-            timeout=8,
-        )
-
-        if r.status_code != 200:
-            return jsonify({"error": f"HTTP {r.status_code}"}), 502
-
-        data = r.json()
-
-        results = {}
-
-        rows = data if isinstance(data, list) else [data]
-
-        for row in rows:
-            sym = row.get("code", "")
-
-            results[sym] = {
-                "price": row.get("close") or row.get("last_trade"),
-                "open": row.get("open"),
-                "high": row.get("high"),
-                "low": row.get("low"),
-                "volume": row.get("volume"),
-                "changePct": row.get("change_p"),
-                "changeDiff": row.get("change"),
-                "timestamp": row.get("timestamp"),
-            }
-
-        return jsonify(
-            {"prices": results, "ts": datetime.now(timezone.utc).isoformat()}
-        )
-
-    except Exception as e:
-        log.error(f"api_bulk_prices error: {e}")
-
-        return jsonify({"error": "Bulk prices failed"}), 500
-
-
-@app.route("/api/pairs")
-def api_pairs():
-    """Return ALL_PAIRS grouped by asset type for frontend selectors (excludes JSE)."""
-
-    type_labels = {
-        "forex": "Forex",
-        "commodity": "Commodities",
-        "index": "Indices",
-        "stock": "US Stocks",
-        "etf": "ETFs",
-        "crypto": "Crypto",
-    }
-
-    _etf_syms = {p["symbol"] for p in ETF_PAIRS}
-
-    _jse_syms = {p["symbol"] for p in JSE_PAIRS}
-
-    groups = {}
-
-    for p in ALL_PAIRS:
-        sym = p["symbol"]
-
-        if sym in _jse_syms:
-            continue  # JSE excluded from backtest selector (data quality)
-
-        t = p.get("type", "other")
-
-        label = "ETFs" if sym in _etf_syms else type_labels.get(t, t.title())
-
-        if label not in groups:
-            groups[label] = []
-
-        groups[label].append(
-            {"sym": sym, "label": p["display"], "enabled": p.get("enabled", True)}
-        )
-
-    bt_total = len(ALL_PAIRS) - len(JSE_PAIRS)
-
-    return jsonify({"groups": groups, "total": bt_total, "active": len(ACTIVE_PAIRS)})
-
-
-@app.route("/api/intermarket-matrix")
-def api_intermarket_matrix():
-    """Inspect the current H4 intermarket relationship matrix."""
-
-    try:
-        from intermarket import build_public_matrix_payload, build_scan_snapshot
-
-        asset_filter = request.args.get("asset_filter") or request.args.get(
-            "assetClassFilter"
-        )
-        try:
-            limit = max(1, min(int(request.args.get("limit", 40)), 200))
-        except (TypeError, ValueError):
-            limit = 40
-
-        snapshot = build_scan_snapshot(
-            ALL_PAIRS,
-            disabled_pairs=_disabled_pairs,
-            etf_pairs=ETF_PAIRS,
-            fetch_candles=fetch_candles,
-            config=CONFIG,
-        )
-        payload = build_public_matrix_payload(
-            snapshot,
-            asset_class_filter=asset_filter,
-            limit=limit,
-        )
-        return jsonify(_json_safe(payload))
-    except Exception as e:
-        log.error(f"api_intermarket_matrix error: {e}")
-        return jsonify({"success": False, "error": str(e)}), 500
-
-
-@app.route("/api/candles", methods=["GET"])
-def api_candles():
-    """Return OHLCV candles for the chart widget."""
-    symbol = request.args.get("symbol")
-    tf = request.args.get("tf", "H4").upper()
-    # Binance klines allow up to 1000; extra history lets H4/D1 EMA200 start further left vs TradingView.
-    try:
-        limit = min(int(request.args.get("limit", 300)), 1000)
-    except (TypeError, ValueError):
-        limit = 300
-
-    if not symbol:
-        return jsonify({"error": "Missing symbol parameter"}), 400
-
-    pair = next(
-        (p for p in ALL_PAIRS if p.get("symbol") == symbol or p.get("display") == symbol),
-        None,
-    )
-    if not pair:
-        return jsonify({"error": f"Unknown symbol: {symbol}"}), 404
-
-    # Dashboard chart: use a forex-only aligned candle path so H1/H4/D1 for Vision
-    # come from one canonical H1 timeline (EODHD + optional forming WS merge).
-    # ?source=live keeps the generic shared fetch path for debugging.
-    ptype = pair.get("type") or ""
-    source_q = (request.args.get("source") or "").strip().lower()
-    chart_source = "live" if source_q == "live" else "shared"
-    candles = None
-
-    if ptype == "forex" and pair.get("source") == "eodhd" and source_q != "live":
-        # Fetch one canonical H1 stream and resample deterministically for H4/D1.
-        base_limit = {
-            "H1": limit,
-            "H4": min(max(limit * 4 + 8, 80), 9000),
-            "D1": min(max(limit * 24 + 24, 240), 9000),
-        }.get(tf, limit)
-        h1_series = _extract_candles(fetch_eodhd(pair, "H1", base_limit))
-        if h1_series:
-            h1_series, ws_note = _merge_forex_forming_ws(
-                h1_series, pair.get("display", ""), "H1", base_limit
-            )
-            candles = _resample_from_h1(
-                h1_series,
-                tf,
-                limit,
-                alignment_offset_hours=(
-                    _forex_h4_resample_offset_hours() if ptype == "forex" else 0.0
-                ),
-            )
-            if candles:
-                chart_source = "eodhd_h1_resampled"
-                if ws_note:
-                    chart_source += "+ws"
-
-    if not candles:
-        candles = fetch_candles(pair, tf, limit)
-        # Optional forming-bar merge for forex on generic/shared path.
-        if candles and ptype == "forex" and pair.get("source") != "polygon":
-            candles, ws_note = _merge_forex_forming_ws(
-                candles, pair.get("display", ""), tf, limit
-            )
-            if ws_note and chart_source == "shared":
-                chart_source = "shared+ws"
-
-    if not candles:
-        return jsonify({"error": f"No candle data for {symbol} {tf}"}), 404
-
-    _naive_iso_utc = re.compile(
-        r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?$"
-    )
-    result = []
-    for c in candles:
-        _t = c.get("time", c.get("datetime", ""))
-        if isinstance(_t, str):
-            _ts = _t.strip().replace(" ", "T")
-            if _naive_iso_utc.match(_ts):
-                _ts += "Z"
-            _t = _ts
-        result.append(
-            {
-                "t": _t,
-                "o": float(c.get("open", 0)),
-                "h": float(c.get("high", 0)),
-                "l": float(c.get("low", 0)),
-                "c": float(c.get("close", 0)),
-                "v": float(c.get("vol", c.get("volume", 0))),
-            }
-        )
-
-    return jsonify(
-        {
-            "candles": result,
-            "symbol": symbol,
-            "display": pair.get("display", symbol),
-            "tf": tf,
-            "pairType": ptype,
-            "candlesSource": chart_source,
-        }
-    )
-
-
-@app.route("/api/news-sentiment", methods=["GET", "POST"])
-def api_news_sentiment():
-    """EODHD news + AI-provider structured sentiment for one pair (display or Yahoo symbol).
-
-    Uses ``EODHD_KEY`` and the configured AI API key. Model: ``NEWS_SENTIMENT_MODEL`` or ``AI_MODEL``.
-    """
-    from news_sentiment_feed import get_news_sentiment, news_to_confluence_vote
-
-    sym = request.args.get("symbol")
-    if not sym and request.method == "POST":
-        body = request.get_json(silent=True) or {}
-        sym = body.get("symbol") or body.get("pair")
-    if not sym:
-        return jsonify({"error": "Missing symbol parameter"}), 400
-
-    pair = next(
-        (p for p in ALL_PAIRS if p.get("symbol") == sym or p.get("display") == sym),
-        None,
-    )
-    if not pair:
-        return jsonify({"error": f"Unknown symbol: {sym}"}), 404
-
-    eod_key = os.environ.get("EODHD_KEY", "").strip()
-    if not eod_key:
-        return jsonify({"error": "EODHD_KEY not set"}), 503
-
-    ai_key = get_ai_api_key(CONFIG)
-    if not ai_key:
-        return jsonify({"error": "AI API key not set"}), 500
-
-    price = None
-    disp = pair.get("display", "")
-    try:
-        with _live_prices_lock:
-            lp = _live_prices.get(disp)
-            if lp:
-                price = lp.get("price")
-    except Exception:
-        pass
-
-    model = get_ai_model(CONFIG, "NEWS_SENTIMENT_MODEL", "grok-4.3")
-    result = get_news_sentiment(
-        pair,
-        eodhd_api_key=eod_key,
-        xai_api_key=ai_key,
-        eodhd_ticker_for_pair=_eodhd_ticker_for_pair,
-        current_price=price,
-        model=model,
-    )
-    if not result:
-        return (
-            jsonify(
-                {
-                    "error": "No sentiment result (no news, API error, or parse failure)",
-                }
-            ),
-            502,
-        )
-
-    vote = news_to_confluence_vote(result)
-    out = {
-        "pair": disp,
-        "eodhdTicker": _eodhd_ticker_for_pair(pair),
-        "structured": result,
-        "confluenceVote": vote,
-    }
-    return jsonify(_json_safe(out))
-
-
-@app.route("/api/health")
-def health():
-    data_sources = _configured_data_sources()
-    mt5_status = _mt5_connection_health()
-
-    return jsonify(
-        {
-            "status": "paused" if _kill_switch else "ok",
-            "killSwitch": _kill_switch,
-            "pairs": len(ALL_PAIRS),
-            "activePairs": len(ACTIVE_PAIRS),
-            "dataSource": "+".join(data_sources),
-            "dataSources": data_sources,
-            "mt5": mt5_status,
-            "microstructureFeedsEnabled": bool(
-                CONFIG.get("MICROSTRUCTURE_FEEDS_ENABLED")
-            ),
-            "aiKey": ai_key_configured(CONFIG),
-            "xaiKey": ai_key_configured(CONFIG),
-        }
-    )
-
-
-def _configured_data_sources() -> list[str]:
-    sources = set()
-    for pair in ALL_PAIRS:
-        source = str(pair.get("source") or "").strip().lower()
-        if source:
-            sources.add(source)
-    return sorted(sources)
 
 
 def _mt5_connection_health() -> dict:
@@ -11013,211 +10851,7 @@ def api_feed_health():
     return jsonify(_json_safe(_feed_health_snapshot()))
 
 
-@app.route("/api/live-feed-diagnostics", methods=["GET", "POST"])
-def api_live_feed_diagnostics():
-    """Read-only live candle diagnostics. Does not place trades."""
-    payload = request.get_json(silent=True) if request.method == "POST" else {}
-    payload = payload or {}
-    raw_symbols = payload.get("symbols") or request.args.get("symbols")
-    if isinstance(raw_symbols, str):
-        wanted = {s.strip().upper() for s in raw_symbols.split(",") if s.strip()}
-    elif isinstance(raw_symbols, list):
-        wanted = {str(s).strip().upper() for s in raw_symbols if str(s).strip()}
-    else:
-        wanted = set()
 
-    raw_tfs = payload.get("timeframes") or request.args.get("timeframes")
-    if isinstance(raw_tfs, str):
-        timeframes = [s.strip().upper() for s in raw_tfs.split(",") if s.strip()]
-    elif isinstance(raw_tfs, list):
-        timeframes = [str(s).strip().upper() for s in raw_tfs if str(s).strip()]
-    else:
-        timeframes = ["H1", "H4", "D1"]
-
-    pairs = []
-    for pair in ACTIVE_PAIRS:
-        keys = {
-            str(pair.get("display", "")).upper(),
-            str(pair.get("symbol", "")).upper(),
-        }
-        if wanted and not (wanted & keys):
-            continue
-        pairs.append(pair)
-
-    from athena_app.services.data_freshness import (
-        build_live_feed_diagnostic,
-        check_live_candle_consistency,
-    )
-    from athena_app.services.engine_b_market_state import engine_b_live_market_state
-    from athena_app.services.market_state import get_tf_market_state, market_state_offset_hours
-
-    def _last_n_candle_opens(ser, n: int = 5) -> list[str]:
-        """Open-time strings for the last n candles (MT5 H4 bar grid visibility)."""
-        if not ser or not isinstance(ser, list):
-            return []
-        from datetime import datetime, timezone
-
-        out: list[str] = []
-        for c in ser[-n:]:
-            if not isinstance(c, dict):
-                continue
-            t = c.get("time", c.get("datetime"))
-            if t is None:
-                continue
-            if isinstance(t, (int, float)):
-                e = int(t / 1000) if t > 1e12 else int(t)
-                out.append(
-                    datetime.fromtimestamp(e, tz=timezone.utc)
-                    .isoformat()
-                    .replace("+00:00", "Z")
-                )
-            else:
-                out.append(str(t))
-        return out
-
-    rows = []
-    generated_at = datetime.now(timezone.utc).isoformat()
-    _off = float(CONFIG.get("FOREX_H4_RESAMPLE_OFFSET_HOURS", 1.0) or 1.0)
-    _tnow = time.time()
-    limits = scan_candle_limits()
-    for pair in pairs:
-        for tf in timeframes:
-            tf_u = str(tf or "").upper()
-            limit = int(limits.get(tf_u, CONFIG.get(f"{tf_u}_CANDLES", 300)) or 300)
-            started = time.perf_counter()
-            candles = None
-            provider_error = None
-            try:
-                candles = fetch_candles(pair, tf_u, limit)
-            except Exception as exc:
-                provider_error = str(exc)
-            duration_ms = (time.perf_counter() - started) * 1000.0
-            meta = _get_candle_fetch_meta(pair, tf_u, limit) or {}
-            diag = build_live_feed_diagnostic(
-                pair,
-                tf_u,
-                candles,
-                fetch_meta=meta,
-                source=meta.get("upstream") or pair.get("source"),
-                fetch_duration_ms=duration_ms,
-                provider_error=provider_error,
-                time_now=_tnow,
-            )
-
-            state_a = get_tf_market_state(pair, tf_u, candles=candles or [])
-            state_b = engine_b_live_market_state(
-                pair,
-                tf_u,
-                len(candles or []),
-                candles=candles or [],
-            )
-            if pair.get("source") == "mt5" and pair.get("type") == "forex":
-                engine_a_input = list(state_a.get("confirmed") or [])
-            else:
-                engine_a_input = list(state_a.get("confirmed") or [])
-                if state_a.get("forming"):
-                    engine_a_input.append(state_a["forming"])
-            engine_b_input = list(state_b.get("confirmed") or [])
-            scanner_input = list(engine_a_input)
-            diag["consistency"] = check_live_candle_consistency(
-                pair,
-                tf_u,
-                {
-                    "raw_provider": candles or [],
-                    "cache": diag,
-                    "market_state": state_a,
-                    "engine_a": engine_a_input,
-                    "engine_b": engine_b_input,
-                    "scanner": scanner_input,
-                    "compare": scanner_input,
-                },
-                time_now=_tnow,
-            )
-            if tf_u == "H4" and pair.get("source") == "mt5":
-                diag["mt5H4Diagnostics"] = {
-                    "forexH4ResampleOffsetHours": _off,
-                    "marketStateOffsetHours": float(
-                        market_state_offset_hours(pair, "H4")
-                    ),
-                    "fetchMetaOffsetHours": meta.get("offsetHours"),
-                    "last5BarOpenIso": _last_n_candle_opens(candles or []),
-                    "expectedCurrentBucketIso": diag.get("expectedCurrentBucketIso"),
-                    "lastBarIso": diag.get("lastBarIso"),
-                    "stalenessSeverity": diag.get("stalenessSeverity"),
-                    "bucketLag": diag.get("bucketLag"),
-                    "resolution": meta.get("resolution"),
-                    "upstream": meta.get("upstream"),
-                    "cacheBypass": bool(meta.get("cacheBypass") or meta.get("cacheWriteSkipped")),
-                }
-            rows.append(diag)
-
-            if pair.get("type") == "crypto" and tf_u in {"H1", "H4", "D1"}:
-                cb = get_candle_builder()
-                ws_candles = None
-                if cb is not None:
-                    try:
-                        ws_candles = cb.get_candles(pair.get("display", ""), tf_u, min(limit, 1001))
-                    except Exception as exc:
-                        ws_diag = build_live_feed_diagnostic(
-                            pair,
-                            tf_u,
-                            [],
-                            source="binance_ws",
-                            provider_status="error",
-                            provider_error=str(exc),
-                        )
-                        rows.append(ws_diag)
-                        continue
-                if ws_candles:
-                    rows.append(
-                        build_live_feed_diagnostic(
-                            pair,
-                            tf_u,
-                            ws_candles,
-                            source="binance_ws",
-                            provider_status="ok",
-                        )
-                    )
-
-    return jsonify(
-        _json_safe(
-            {
-                "success": True,
-                "generatedAt": generated_at,
-                "count": len(rows),
-                "diagnostics": rows,
-                "tradesPlaced": 0,
-                "forexH4ResampleOffsetHours": float(
-                    CONFIG.get("FOREX_H4_RESAMPLE_OFFSET_HOURS", 1.0) or 1.0
-                ),
-                "mt5H4OffsetNote": (
-                    "FOREX_H4_RESAMPLE_OFFSET_HOURS drives MT5 H4 (non-stock) bar grid in "
-                    "market_state; US stocks H4 use 3h offset. Prove grid with tools/probe_mt5_h4.py"
-                ),
-            }
-        )
-    )
-
-
-@app.route("/api/signal-stability")
-def api_signal_stability():
-
-    engine = request.args.get("engine")
-    return jsonify(get_signal_stability_index(engine=engine, db_path=_AUDIT_DB))
-
-
-@app.route("/api/debug/routes")
-def api_debug_routes():
-    """Debug endpoint to list all registered API routes. Read-only."""
-    routes = []
-    for rule in app.url_map.iter_rules():
-        if rule.rule.startswith("/api/"):
-            routes.append({
-                "path": rule.rule,
-                "methods": sorted(list(rule.methods - {"HEAD", "OPTIONS"})),
-                "endpoint": rule.endpoint,
-            })
-    return jsonify({"routes": sorted(routes, key=lambda x: x["path"])})
 
 @app.route("/api/open-trades-timed")
 def api_open_trades_timed():
@@ -11233,6 +10867,7 @@ def api_open_trades_timed():
     """
     from datetime import datetime, timezone as _tz
     from timed_exit_monitor import (
+        _activation_r_for,
         _get_timed_cfg,
         _load_recent_audit_rows,
         _match_audit_row_for_position,
@@ -11388,7 +11023,7 @@ def api_open_trades_timed():
             "is_engine_d":     is_engine_d,
             "tp_partial":      _tp_part_f,
             "timed_tp_mode":   str(tcfg.get("tp_mode", "fixed")),
-            "trail_activation_r": float(tcfg.get("trail_activation_r", 1.0)),
+            "trail_activation_r": _activation_r_for(tcfg, style),
             "timed_exit_daemon_enabled": timed_global,
             "timed_close_style_enabled": timed_style_on if style in ("scalp", "intraday", "swing") else None,
             "sl_after_partial": str(_se.get("SL_AFTER_PARTIAL", "tp_partial")),
@@ -11414,29 +11049,6 @@ def api_open_trades_timed():
         out.append(res_p)
 
     return jsonify({"positions": out, "count": len(out)})
-
-
-@app.route("/api/audit")
-def api_audit():
-    """Return last N audit log entries from SQLite."""
-
-    limit = min(int(request.args.get("limit", 50)), 500)
-
-    try:
-        con = sqlite3.connect(_AUDIT_DB, timeout=15.0)
-
-        con.row_factory = sqlite3.Row
-
-        rows = con.execute(
-            "SELECT * FROM audit_log ORDER BY id DESC LIMIT ?", (limit,)
-        ).fetchall()
-
-        con.close()
-
-        return jsonify([dict(r) for r in rows])
-
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
 
 
 def _check_api_keys() -> None:
@@ -11549,18 +11161,37 @@ def analyze_pair(
     preloaded_candles = preloaded_candles or {}
     preloaded_market_state = preloaded_market_state or {}
     preloaded_fetch_meta = preloaded_fetch_meta or {}
+    from athena_app.services.candle_service import engine_a_scoring_candles_from_state
+
+    def _engine_a_confirmed_candles(tf: str, raw: list | None, state: dict | None = None) -> list:
+        if isinstance(state, dict):
+            return engine_a_scoring_candles_from_state(pair, state)
+        raw_candles = list(raw or [])
+        if not raw_candles:
+            return []
+        try:
+            from athena_app.services.market_state import split_market_state
+
+            _state = split_market_state(
+                raw_candles,
+                tf,
+                pair.get("display") or pair.get("symbol") or "",
+            )
+            return engine_a_scoring_candles_from_state(pair, _state, fallback=raw_candles)
+        except Exception as _split_err:
+            log.debug(
+                "[ANALYZE] %s %s confirmed-candle split skipped: %s",
+                pair.get("display", "?"),
+                tf,
+                _split_err,
+            )
+            return raw_candles
 
     # Determine if the primary timeframe (H1) is currently forming.
     _h1_state = preloaded_market_state.get("H1")
     h1 = preloaded_candles.get("H1")
     if isinstance(_h1_state, dict):
-        _h1_confirmed = list(_h1_state.get("confirmed") or [])
-        _h1_forming = _h1_state.get("forming")
-        # For MT5 forex we default to confirmed candles for scoring paths.
-        if pair.get("source") == "mt5" and pair.get("type") == "forex":
-            h1 = _h1_confirmed
-        else:
-            h1 = _h1_confirmed + ([_h1_forming] if _h1_forming else [])
+        h1 = _engine_a_confirmed_candles("H1", h1, _h1_state)
         is_forming = bool(_h1_state.get("is_live"))
     elif h1:
         try:
@@ -11571,6 +11202,7 @@ def analyze_pair(
                 "H1",
                 pair.get("display") or pair.get("symbol") or "",
             )
+            h1 = engine_a_scoring_candles_from_state(pair, _h1_state, fallback=h1)
             is_forming = bool(_h1_state.get("is_live"))
         except Exception:
             is_forming = False
@@ -11578,13 +11210,15 @@ def analyze_pair(
         try:
             from candle_manager import fetch_market_state as _fms
             h1_state = _fms(pair, "H1", _lim["H1"])
-            if pair.get("source") == "mt5" and pair.get("type") == "forex":
-                h1 = list(h1_state.get("confirmed") or [])
-            else:
-                h1 = h1_state["confirmed"] + ([h1_state["forming"]] if h1_state["forming"] else [])
+            h1 = _engine_a_confirmed_candles("H1", None, h1_state)
             is_forming = h1_state["is_live"]
         except Exception:
-            h1 = fetch_candles(pair, "H1", _lim["H1"])
+            h1, _h1_sig_meta = _fetch_ab_crypto_signal_candles(
+                pair, "H1", _lim["H1"], engine="A"
+            )
+            if _h1_sig_meta:
+                preloaded_fetch_meta["H1"] = _h1_sig_meta
+            h1 = _engine_a_confirmed_candles("H1", h1)
             is_forming = False
 
     _d1_state = preloaded_market_state.get("D1")
@@ -11592,19 +11226,25 @@ def analyze_pair(
     if isinstance(_d1_state, dict):
         _d1_confirmed = list(_d1_state.get("confirmed") or [])
         _d1_forming = _d1_state.get("forming")
-        if pair.get("source") == "mt5" and pair.get("type") == "forex":
-            d1 = _d1_confirmed
-        else:
-            d1 = _d1_confirmed + ([_d1_forming] if _d1_forming else [])
-    if d1 is None:
-        d1 = fetch_candles(pair, "D1", _lim["D1"])
+        # Combine to raw candles for trim, then re-split after trimming.
+        d1_raw = _d1_confirmed + ([_d1_forming] if _d1_forming else [])
+    else:
+        d1_raw = d1
 
+    if d1_raw is None:
+        d1_raw, _d1_sig_meta = _fetch_ab_crypto_signal_candles(
+            pair, "D1", _lim["D1"], engine="A"
+        )
+        if _d1_sig_meta:
+            preloaded_fetch_meta["D1"] = _d1_sig_meta
+
+    # Trim session-ahead tail BEFORE market-state split to avoid misclassification.
     try:
         from athena_app.services.market_state import trim_mt5_d1_broker_session_ahead_tail
 
-        if d1:
-            d1, _d1_sess_trim = trim_mt5_d1_broker_session_ahead_tail(
-                pair, "D1", list(d1)
+        if d1_raw:
+            d1_raw, _d1_sess_trim = trim_mt5_d1_broker_session_ahead_tail(
+                pair, "D1", list(d1_raw)
             )
     except Exception as _d1_trim_err:
         log.debug(
@@ -11613,17 +11253,22 @@ def analyze_pair(
             _d1_trim_err,
         )
 
+    # Re-split after trimming so Engine A scores the last confirmed D1 bar.
+    d1 = _engine_a_confirmed_candles("D1", d1_raw)
+
     _h4_state = preloaded_market_state.get("H4")
     h4 = preloaded_candles.get("H4")
     if isinstance(_h4_state, dict):
-        _h4_confirmed = list(_h4_state.get("confirmed") or [])
-        _h4_forming = _h4_state.get("forming")
-        if pair.get("source") == "mt5" and pair.get("type") == "forex":
-            h4 = _h4_confirmed
-        else:
-            h4 = _h4_confirmed + ([_h4_forming] if _h4_forming else [])
+        h4 = _engine_a_confirmed_candles("H4", h4, _h4_state)
+    elif h4:
+        h4 = _engine_a_confirmed_candles("H4", h4)
     if h4 is None:
-        h4 = fetch_candles(pair, "H4", _lim["H4"])
+        h4, _h4_sig_meta = _fetch_ab_crypto_signal_candles(
+            pair, "H4", _lim["H4"], engine="A"
+        )
+        if _h4_sig_meta:
+            preloaded_fetch_meta["H4"] = _h4_sig_meta
+        h4 = _engine_a_confirmed_candles("H4", h4)
 
     if not d1 or not h4 or not h1:
         log.warning(
@@ -11632,9 +11277,8 @@ def analyze_pair(
         )
         return None
 
-    # F8: As requested, we no longer drop the last (forming) bar automatically.
-    # This provides live-bar scoring for maximum accuracy.
-    # Indicators are now calculated on the full live series.
+    # Engine A scores confirmed candles only. Forming-bar state remains diagnostic
+    # for UI/freshness, but indicators and two-bar confirmation use closed bars.
 
     if len(d1) < 220 or len(h4) < 50 or len(h1) < 50:
         log.warning(
@@ -11642,6 +11286,122 @@ def analyze_pair(
             f"D1={len(d1)}/220 H4={len(h4)}/50 H1={len(h1)}/50"
         )
         return None
+
+    # Pre-scoring freshness gate: skip indicator calculation if any required
+    # TF is stale. This prevents wasted CPU and false signal log entries from
+    # scoring on stale data that would be blocked at execution time anyway.
+    if CONFIG.get("PRE_SCORING_FRESHNESS_GATE_ENABLED", True):
+        try:
+            from athena_app.services.data_freshness import (
+                pre_scoring_allows_confirmed_only_stale_1,
+            )
+            from athena_app.services.market_state import candle_freshness_diagnostic
+
+            _stale_tfs = []
+            _freshness_diag = {}
+            _pair_type = pair.get("type", "")
+            _is_forex_stock = _pair_type in ("forex", "stock", "index", "commodity")
+            _allow_confirmed_only_stale_1 = pre_scoring_allows_confirmed_only_stale_1(pair)
+
+            for _tf, _candles in (("D1", d1), ("H4", h4), ("H1", h1)):
+                _diag = candle_freshness_diagnostic(
+                    pair, _tf, _candles,
+                    source=pair.get("source"),
+                )
+                _freshness_diag[_tf] = _diag
+                _sev = _diag.get("stalenessSeverity", "")
+                if not _sev or _sev == "fresh":
+                    continue
+
+                # Confirmed-only Engine A scoring: stale_1_bucket is expected
+                # while the current forming bar is intentionally excluded.
+                if _allow_confirmed_only_stale_1 and _sev == "stale_1_bucket":
+                    continue
+
+                # D1 weekend gap tolerance: forex markets close Fri ~21:00 UTC,
+                # reopen Sun ~21:00 UTC. On Monday, confirmed-only D1 lags 3-4
+                # buckets (last confirmed = Friday). Allow up to 4-bucket D1 lag
+                # on Saturday/Sunday/Monday for non-crypto pairs.
+                if (
+                    _is_forex_stock
+                    and _tf == "D1"
+                    and _sev == "stale_multi_bucket"
+                ):
+                    import datetime as _dt_mod
+                    _utc_weekday = _dt_mod.datetime.now(_dt_mod.timezone.utc).weekday()
+                    _bucket_lag = _diag.get("bucketLag", 99)
+                    # Mon=0, Sat=5, Sun=6; allow up to 4-day D1 lag on these days
+                    if _utc_weekday in (0, 5, 6) and _bucket_lag <= 4:
+                        continue
+
+                # D1 calendar gap policy: diagnostic downgrades stale_multi_bucket
+                # to d1_calendar_gap_policy_ok for MT5 forex weekend gaps.
+                # Treat it as allowed on the same Monday/Saturday/Sunday window.
+                if (
+                    _is_forex_stock
+                    and _tf == "D1"
+                    and _sev == "d1_calendar_gap_policy_ok"
+                ):
+                    import datetime as _dt_mod
+                    _utc_weekday = _dt_mod.datetime.now(_dt_mod.timezone.utc).weekday()
+                    if _utc_weekday in (0, 5, 6):
+                        continue
+
+                _stale_tfs.append(f"{_tf}:{_sev}")
+
+            # Crypto-specific D1 staleness threshold: enforce max hours since last bar open.
+            if pair.get("type") == "crypto" and d1:
+                try:
+                    import time
+                    _last_candle = d1[-1] if d1 else None
+                    if _last_candle:
+                        _last_time = _last_candle.get("time")
+                        if _last_time:
+                            _last_ts = _coerce_utc_datetime(_last_time)
+                            if _last_ts:
+                                _now = _current_utc_datetime()
+                                _age_hours = (_now - _last_ts).total_seconds() / 3600
+                                _max_hours = CONFIG.get("CRYPTO_D1_MAX_STALE_HOURS", 25)
+                                if _age_hours > _max_hours:
+                                    _stale_tfs.append(f"D1:crypto_stale_{int(_age_hours)}h")
+                except Exception:
+                    pass
+
+            if _stale_tfs:
+                _reason = "STALE_DATA_PRE_SCORING:" + ",".join(_stale_tfs)
+                log.warning(
+                    "[ANALYZE] %s pre-scoring freshness block: %s",
+                    pair.get("display", "?"),
+                    _reason,
+                )
+                return {
+                    "pair": pair.get("display"),
+                    "symbol": pair.get("symbol"),
+                    "score": 0,
+                    "confluenceScore": 0,
+                    "maxScore": 3.0,
+                    "direction": "neutral",
+                    "trendState": "neutral",
+                    "executable": False,
+                    "dataFreshness": {
+                        "allowed": False,
+                        "reason": _reason,
+                        "diagnostics": _freshness_diag,
+                    },
+                    "candleFetchMeta": {
+                        "D1": _freshness_diag.get("D1"),
+                        "H4": _freshness_diag.get("H4"),
+                        "H1": _freshness_diag.get("H1"),
+                        "pairSource": pair.get("source"),
+                    },
+                    "is_forming": is_forming,
+                }
+        except Exception as _prefresh_err:
+            log.debug(
+                "[ANALYZE] %s pre-scoring freshness check skipped: %s",
+                pair.get("display", "?"),
+                _prefresh_err,
+            )
 
     d1i = calc_indicators_with_normalized(d1, pair.get("type", "stock"))
 
@@ -11774,24 +11534,79 @@ def analyze_pair(
     if pair.get("type") == "crypto":
         _bn_sym = pair.get("symbol", "").replace("/", "")  # e.g. BTCUSDT
 
-        # Bybit funding rate - execution is on Bybit; fall back to Binance if Bybit fails
-        _fr_resp = _fetch_bybit_funding_rate(_bn_sym)
-        if isinstance(_fr_resp, dict) and not _fr_resp.get("error"):
-            _funding_rate = _fr_resp.get("rate")
-        else:
-            _fr_resp = _fetch_funding_rate(_bn_sym)
-            _funding_rate = (
-                _fr_resp.get("rate")
-                if isinstance(_fr_resp, dict) and not _fr_resp.get("error")
-                else None
-            )
-            if _funding_rate is not None:
+        # Multi-exchange funding composite (Binance + Bybit) when enabled
+        _multi_ex_cfg = CONFIG.get("ENGINE_A_MULTI_EXCHANGE_FUNDING") or {}
+        if _multi_ex_cfg.get("ENABLED", False):
+            _binance_weight = float(_multi_ex_cfg.get("BINANCE_WEIGHT", 0.5))
+            _bybit_weight = float(_multi_ex_cfg.get("BYBIT_WEIGHT", 0.5))
+            _total_weight = _binance_weight + _bybit_weight
+
+            # Fetch from both exchanges
+            _bybit_resp = _fetch_bybit_funding_rate(_bn_sym)
+            _binance_resp = _fetch_funding_rate(_bn_sym)
+
+            _bybit_rate = None
+            _binance_rate = None
+
+            if isinstance(_bybit_resp, dict) and not _bybit_resp.get("error"):
+                _bybit_rate = _bybit_resp.get("rate")
+            if isinstance(_binance_resp, dict) and not _binance_resp.get("error"):
+                _binance_rate = _binance_resp.get("rate")
+
+            # Composite using weighted average
+            if _bybit_rate is not None and _binance_rate is not None:
+                _funding_rate = (
+                    _bybit_rate * _bybit_weight + _binance_rate * _binance_weight
+                ) / _total_weight
                 log.debug(
-                    "[FUNDING] %s: using Binance fallback rate",
+                    "[FUNDING] %s: composite rate (Bybit=%.6f, Binance=%.6f) -> %.6f",
+                    pair.get("display", _bn_sym),
+                    _bybit_rate,
+                    _binance_rate,
+                    _funding_rate,
+                )
+            elif _bybit_rate is not None:
+                _funding_rate = _bybit_rate
+                log.debug(
+                    "[FUNDING] %s: using Bybit-only rate (Binance unavailable)",
                     pair.get("display", _bn_sym),
                 )
+            elif _binance_rate is not None:
+                _funding_rate = _binance_rate
+                log.debug(
+                    "[FUNDING] %s: using Binance-only rate (Bybit unavailable)",
+                    pair.get("display", _bn_sym),
+                )
+            else:
+                _funding_rate = None
+        else:
+            # Original fallback logic: Bybit first, then Binance
+            _fr_resp = _fetch_bybit_funding_rate(_bn_sym)
+            if isinstance(_fr_resp, dict) and not _fr_resp.get("error"):
+                _funding_rate = _fr_resp.get("rate")
+            else:
+                _fr_resp = _fetch_funding_rate(_bn_sym)
+                _funding_rate = (
+                    _fr_resp.get("rate")
+                    if isinstance(_fr_resp, dict) and not _fr_resp.get("error")
+                    else None
+                )
+                if _funding_rate is not None:
+                    log.debug(
+                        "[FUNDING] %s: using Binance fallback rate",
+                        pair.get("display", _bn_sym),
+                    )
 
-        _oi_data = _fetch_open_interest(_bn_sym)
+        if str(CONFIG.get("ENGINE_A_CRYPTO_DERIVATIVES_FEED", "bybit")).lower() == "bybit":
+            _oi_data = _fetch_bybit_open_interest(_bn_sym)
+            if (
+                isinstance(_oi_data, dict)
+                and _oi_data.get("error")
+                and bool(CONFIG.get("ENGINE_A_CRYPTO_DERIVATIVES_BINANCE_FALLBACK", False))
+            ):
+                _oi_data = _fetch_open_interest(_bn_sym)
+        else:
+            _oi_data = _fetch_open_interest(_bn_sym)
 
         _prev_close = d1[-2]["close"] if d1 and len(d1) >= 2 else None
 
@@ -11832,8 +11647,16 @@ def analyze_pair(
         _asset_prices = [float(c.get("close", 0)) for c in _cf_h4c if c.get("close") is not None]
         if _asset_prices and len(_asset_prices) >= 15:
             try:
-                _btc_candles = fetch_candles(
-                    {"symbol": "BTCUSDT", "source": "binance"}, "H4", len(_asset_prices)
+                _btc_candles, _btc_meta = _fetch_ab_crypto_signal_candles(
+                    {
+                        "symbol": "BTCUSDT",
+                        "display": "BTC/USDT",
+                        "source": "binance",
+                        "type": "crypto",
+                    },
+                    "H4",
+                    len(_asset_prices),
+                    engine="A",
                 )
                 if _btc_candles:
                     _benchmark_prices = [
@@ -11898,6 +11721,17 @@ def analyze_pair(
     )
 
     atr = _atr_for_levels(d1i, h4i, h1i, pair=pair, style=_style)
+    level_atr_feed = "signal"
+    if (
+        pair.get("type") == "crypto"
+        and str(CONFIG.get("ENGINE_A_CRYPTO_LEVELS_FEED", "bybit")).lower() == "bybit"
+    ):
+        bybit_atr = _bybit_atr_for_levels(pair, _style)
+        if bybit_atr:
+            atr = bybit_atr
+            level_atr_feed = "bybit"
+        elif not bool(CONFIG.get("ENGINE_A_CRYPTO_LEVELS_SIGNAL_FEED_FALLBACK", False)):
+            return None
 
     if price is None or not atr:
         return None
@@ -11934,33 +11768,36 @@ def analyze_pair(
             asset_type=pair.get("type", ""),
             d1_snap=(d1i or {}).get("snap") or {},
             h4_snap=(h4i or {}).get("snap") or {},
+            style=_style or "intraday",
+            pair=pair,
         )
-        _structure_adjustment = apply_structure_context_to_score(
-            structure_data,
-            direction=direction,
-            base_score=float(res.get("score", 0.0) or 0.0),
-            max_score=float(max_score or 0.0),
-        )
-        res["score"] = float(_structure_adjustment["adjusted_score"])
-        _fd = dict(res.get("factorDiagnostics") or {})
-        _fd["explicitStructureContext"] = _structure_adjustment
-        res["factorDiagnostics"] = _fd
+        if bool(CONFIG.get("ENGINE_A_STRUCTURE_CONTEXT_ENABLED", False)):
+            _structure_adjustment = apply_structure_context_to_score(
+                structure_data,
+                direction=direction,
+                base_score=float(res.get("score", 0.0) or 0.0),
+                max_score=float(max_score or 0.0),
+            )
+            res["score"] = float(_structure_adjustment["adjusted_score"])
+            _fd = dict(res.get("factorDiagnostics") or {})
+            _fd["explicitStructureContext"] = _structure_adjustment
+            res["factorDiagnostics"] = _fd
 
-        _votes = dict(res.get("votes") or {})
-        _sc = _structure_adjustment.get("components", {})
-        if _sc.get("zone_proximity"):
-            _votes["H4 Structural Zone"] = 1
-        if _sc.get("ob_at_zone"):
-            _votes["Order Block at Zone"] = 1
-        if _sc.get("fvg_overlap"):
-            _votes["FVG at Zone"] = 1
-        _align = _sc.get("independent_direction_alignment")
-        if _align == "aligned":
-            _votes["Structure Alignment"] = 1
-        elif _align == "opposed":
-            _votes["Structure Alignment"] = -1
-        if _votes:
-            res["votes"] = _votes
+            _votes = dict(res.get("votes") or {})
+            _sc = _structure_adjustment.get("components", {})
+            if _sc.get("zone_proximity"):
+                _votes["H4 Structural Zone"] = 1
+            if _sc.get("ob_at_zone"):
+                _votes["Order Block at Zone"] = 1
+            if _sc.get("fvg_overlap"):
+                _votes["FVG at Zone"] = 1
+            _align = _sc.get("independent_direction_alignment")
+            if _align == "aligned":
+                _votes["Structure Alignment"] = 1
+            elif _align == "opposed":
+                _votes["Structure Alignment"] = -1
+            if _votes:
+                res["votes"] = _votes
     except Exception as _structure_err:
         log.debug(
             "[STRUCTURE-CONTEXT] %s skipped: %s",
@@ -11971,9 +11808,14 @@ def analyze_pair(
     fib = calc_fib(h4)
 
     _regime_state = res.get("regime", {}).get("state") if res.get("regime") else None
+    _level_atr_class = get_pair_level_atr_class(pair)
+    _fd_level = dict(res.get("factorDiagnostics") or {})
+    _fd_level["levelAtrFeed"] = level_atr_feed
+    _fd_level["levelAtrClass"] = _level_atr_class
+    res["factorDiagnostics"] = _fd_level
 
     lvl = calc_levels(
-        float(price), float(atr), direction, pair["type"],
+        float(price), float(atr), direction, _level_atr_class,
         regime_state=_regime_state, style=_style,
     )
 
@@ -12021,7 +11863,9 @@ def analyze_pair(
                 engine as naked_engine,
             )
             _overlay_style, _overlay_profile = _naked_scan_style_profile(
-                _style, score_group=_score_group
+                _style,
+                score_group=_score_group,
+                asset_type=pair.get("type", ""),
             )
 
             if structure_data is None:
@@ -12043,6 +11887,8 @@ def analyze_pair(
                     asset_type=pair.get("type", ""),
                     d1_snap=(d1i or {}).get("snap") or {},
                     h4_snap=(h4i or {}).get("snap") or {},
+                    style=_overlay_style,
+                    pair=pair,
                 )
 
             # 5.3 FIX: Engine B issues now add warnings instead of full block (return None).
@@ -12104,17 +11950,36 @@ def analyze_pair(
                         else min(_math_sl, _struct_sl)
                     )
 
-                    # Hard SL distance cap - prevents runaway structural overrides
-                    _max_sl_pct = CONFIG.get("MAX_SL_PCT", {}).get(pair.get("type", ""), 0.05)
+                    # Hard SL distance cap - prevents runaway structural overrides.
+                    # Use the same resolver as risk/execution so mapped volatile
+                    # commodity groups can be tested without raising the global cap.
+                    try:
+                        from risk_engine import resolve_max_sl_pct
+
+                        _max_sl_pct, _max_sl_source = resolve_max_sl_pct(
+                            {
+                                "pair": pair.get("display"),
+                                "display": pair.get("display"),
+                                "symbol": pair.get("symbol"),
+                                "type": pair.get("type"),
+                                "score_group": _score_group,
+                            },
+                            pair.get("type", ""),
+                            CONFIG,
+                        )
+                    except Exception:
+                        _max_sl_pct = CONFIG.get("MAX_SL_PCT", {}).get(pair.get("type", ""), 0.05)
+                        _max_sl_source = f"asset:{pair.get('type', '')}"
                     _sl_dist_pct = abs(float(price) - float(lvl["sl"])) / float(price)
                     if _sl_dist_pct > _max_sl_pct:
                         log.warning(
-                            "[ENGINE-B] pair=%s block_code=%s direction=%s sl_dist_pct=%.4f max_sl_pct=%.4f",
+                            "[ENGINE-B] pair=%s block_code=%s direction=%s sl_dist_pct=%.4f max_sl_pct=%.4f source=%s",
                             pair["display"],
                             ENGINE_B_REASON_STRUCTURAL_SL_HARD_CAP,
                             direction,
                             _sl_dist_pct,
                             _max_sl_pct,
+                            _max_sl_source,
                         )
                         _engine_b_block_reasons.append(f"ENGINE-B: {ENGINE_B_REASON_STRUCTURAL_SL_HARD_CAP}")
 
@@ -12358,7 +12223,7 @@ def analyze_pair(
             price=float(price),
             atr=float(atr),
             direction=direction,
-            pair_type=pair.get("type", "stock"),
+            pair_type=_level_atr_class,
         ),
         "engine_b_overlay": _engine_b_overlay_meta,
     }
@@ -12468,12 +12333,20 @@ def analyze_pair(
             pair.get("display", "?"),
             _freshness_err,
         )
+    _fe_final = signal.get("dataFreshness")
+    if (
+        CONFIG.get("SIGNAL_EXECUTABLE_FALSE_WHEN_FRESHNESS_BLOCKS", True)
+        and isinstance(_fe_final, dict)
+        and not _fe_final.get("allowed")
+    ):
+        signal["executable"] = False
     if CONFIG.get("SCAN_DEBUG_CANDLE_META", False):
         signal["candleMeta"] = {
             "D1": _candle_fetch_meta.get("D1"),
             "H4": _candle_fetch_meta.get("H4"),
             "H1": _candle_fetch_meta.get("H1"),
         }
+    if CONFIG.get("CANDLE_FRESHNESS_ENABLED", True):
         try:
             from athena_app.services.market_state import candle_freshness_diagnostic
 
@@ -12724,12 +12597,14 @@ def _update_trade_outcome(
                 from risk_engine import record_daily_pnl
 
                 _bal = 0.0
+                _account_domain = None
 
                 if asset_type == "crypto":
                     try:
                         import bybit_executor as _bm
 
                         _bex = _bm._get_exchange()
+                        _account_domain = _bm.bybit_account_risk_domain()
 
                         if _bex:
                             _bb = _bex.fetch_balance()
@@ -12747,12 +12622,18 @@ def _update_trade_outcome(
 
                         if _acc:
                             _bal = _acc.get("balance", 0)
+                            _account_domain = _acc.get("risk_domain")
 
                     except Exception as _mt5e:
                         log.debug(f"[DAILY-PNL] MT5 balance fetch: {_mt5e}")
 
                 if _bal > 0:
-                    record_daily_pnl(pnl, _bal, asset_type or "unknown")
+                    record_daily_pnl(
+                        pnl,
+                        _bal,
+                        asset_type or "unknown",
+                        account_domain=_account_domain,
+                    )
 
             except Exception as _dpnl_err:
                 log.debug(f"[DAILY-PNL] record failed: {_dpnl_err}")
@@ -13807,1038 +13688,6 @@ def api_regime_shift():
 # ── Task 2: Performance Dashboard Endpoint ─────────────────────────────────────────
 
 
-@app.route("/api/lottery/import", methods=["POST"])
-def api_lottery_import():
-    try:
-        payload = request.get_json(silent=True) or {}
-        game = str(request.form.get("game") or payload.get("game") or "").strip().lower()
-        mode = str(request.form.get("mode") or payload.get("mode") or "append").strip().lower()
-        preview_flag = request.form.get("preview_only")
-        if preview_flag is None:
-            preview_flag = payload.get("preview_only")
-        preview_only = str(preview_flag or "").strip().lower() in ("1", "true", "yes", "on")
-
-        if mode not in ("append", "replace"):
-            return jsonify({"error": "Invalid import mode"}), 400
-
-        file_obj = request.files.get("file")
-        csv_text = ""
-        source_file = ""
-        if file_obj:
-            csv_text = file_obj.read().decode("utf-8-sig", errors="replace")
-            source_file = file_obj.filename or ""
-        else:
-            csv_text = str(payload.get("csv_text") or "")
-            source_file = str(payload.get("source_file") or "")
-
-        if not game:
-            return jsonify({"error": "Missing game"}), 400
-        if not csv_text.strip():
-            return jsonify({"error": "Missing CSV file"}), 400
-
-        result = import_lottery_csv(
-            _AUDIT_DB,
-            game=game,
-            csv_text=csv_text,
-            source_file=source_file,
-            mode=mode,
-            preview_only=preview_only,
-        )
-        return jsonify(result), (400 if result.get("error") else 200)
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-
-def _lottery_filter_args():
-    game = str(request.args.get("game") or "").strip().lower()
-    if not game:
-        raise ValueError("Missing game")
-    start_date = str(request.args.get("start_date") or "").strip() or None
-    end_date = str(request.args.get("end_date") or "").strip() or None
-    include_bonus_raw = str(request.args.get("include_bonus") or "false").strip().lower()
-    include_bonus = include_bonus_raw in ("1", "true", "yes", "on")
-    limit_raw = request.args.get("limit", 200)
-    try:
-        limit = int(limit_raw)
-    except (TypeError, ValueError):
-        limit = 200
-    return game, start_date, end_date, include_bonus, max(1, min(limit, 2000))
-
-
-def _lottery_ai_extract_json(raw_text: str) -> dict:
-    text = str(raw_text or "").strip()
-    if not text:
-        return {}
-    fenced = re.sub(r"^```(?:json)?\s*|\s*```$", "", text, flags=re.IGNORECASE | re.DOTALL).strip()
-    candidates = [fenced, text]
-    for candidate in candidates:
-        try:
-            return json.loads(candidate)
-        except Exception:
-            pass
-    start = text.find("{")
-    end = text.rfind("}")
-    if start >= 0 and end > start:
-        return json.loads(text[start : end + 1])
-    raise ValueError("AI response was not valid JSON")
-
-
-def _lottery_ai_openai_message_text(content) -> str:
-    """Extract assistant text from OpenAI-compatible chat completion ``message.content``."""
-    if content is None:
-        return ""
-    if isinstance(content, str):
-        return content.strip()
-    parts = []
-    for block in content:
-        if isinstance(block, dict):
-            if block.get("type") == "text" and block.get("text"):
-                parts.append(str(block["text"]))
-        else:
-            t = getattr(block, "text", None)
-            if t:
-                parts.append(str(t))
-    return "\n".join(parts).strip()
-
-
-def _lottery_ai_prompt_payload(game: str, start_date=None, end_date=None, window: int = 50, z_threshold: float = 2.5):
-    game_key = str(game or "").strip().lower()
-    rules = LOTTERY_GAME_RULES[game_key]
-    board = build_lottery_dashboard(
-        game_key,
-        start_date=start_date,
-        end_date=end_date,
-        include_bonus=True,
-    )
-    if not board.get("total_draws"):
-        raise ValueError("No draw history found - please import draws first")
-
-    rolling = compute_rolling_frequency(game_key, window=window, start_date=start_date, end_date=end_date)
-    pair_lift = compute_pair_lift(game_key, start_date=start_date, end_date=end_date, limit=50)
-    anomalies = flag_anomalous_draws(game_key, z_threshold=z_threshold, start_date=start_date, end_date=end_date)
-    bonus = compute_bonus_intelligence(game_key, window=window, start_date=start_date, end_date=end_date)
-    entropy = compute_entropy_analysis(game_key, start_date=start_date, end_date=end_date)
-    recent = lottery_history_rows(game_key, start_date=start_date, end_date=end_date, limit=10)
-
-    recent_draws = "\n".join(
-        [
-            f"- {row.get('draw_date')}: {', '.join(str(n) for n in row.get('numbers', []))}"
-            + (f" | bonus {row.get('bonus')}" if row.get("bonus") is not None else "")
-            for row in recent.get("history", [])
-        ]
-    ) or "No recent draws"
-    anomalous_rows = anomalies.get("anomalous_draws", [])
-    anomalous_summary = (
-        "\n".join(
-            [
-                f"- {row.get('draw_date')}: flags={', '.join(row.get('flags', []))}; "
-                f"sum={row.get('metrics', {}).get('draw_sum')}"
-                for row in anomalous_rows[:5]
-            ]
-        )
-        if anomalous_rows
-        else "No anomalous draws at this threshold."
-    )
-    most_recent_flag = ", ".join((anomalous_rows[-1].get("flags") or [])) if anomalous_rows else "None"
-
-    rolling_rows = rolling.get("numbers", [])
-    heating_numbers = [row["number"] for row in rolling_rows if row.get("z_score") is not None and float(row["z_score"]) > 1.5][:12]
-    cooling_numbers = [row["number"] for row in rolling_rows if row.get("z_score") is not None and float(row["z_score"]) < -1.5][:12]
-    overdue_lookup = {row["number"]: row for row in board.get("overdue_numbers", [])}
-    overdue_neutral = [
-        row["number"]
-        for row in rolling_rows
-        if row.get("trend") == "neutral" and row["number"] in overdue_lookup
-    ][:12]
-    overdue_list = "\n".join(
-        [
-            f"- {row['number']}: {row['draws_since_seen']} draws since seen (last seen {row.get('last_seen_date') or 'never'})"
-            for row in board.get("overdue_numbers", [])[:10]
-        ]
-    ) or "None"
-    pair_lift_list = "\n".join(
-        [
-            f"- {row['pair'][0]}-{row['pair'][1]}: lift {row['lift']}, conf {row['confidence_ab']}, count {row['observed']}"
-            for row in pair_lift.get("pairs", [])
-            if float(row.get("lift") or 0) > 1.5
-        ][:10]
-    ) or "None above 1.5"
-    positional_ranges = "\n".join(
-        [
-            f"- Ball {row['position']}: min {row['min']}, p10 {row['p10']}, mean {row['mean']}, p90 {row['p90']}, max {row['max']}"
-            for row in board.get("positional_distribution", [])
-        ]
-    ) or "Unavailable"
-    bonus_top_picks = ", ".join(str(row["number"]) for row in bonus.get("top_picks", [])[:5]) if bonus.get("has_bonus") else "N/A"
-    bonus_overdue = ", ".join(str(row["number"]) for row in bonus.get("overdue", [])[:5]) if bonus.get("has_bonus") else "N/A"
-    bonus_heating = ", ".join(
-        str(row["number"]) for row in bonus.get("rolling", []) if row.get("trend") == "heating"
-    ) if bonus.get("has_bonus") else "N/A"
-
-    # --- Entropy intelligence (lotto / powerball only) -----------------------
-    entropy_section = ""
-    if entropy and entropy.get("eligible"):
-        pb = entropy.get("per_ball") or {}
-        entropy_section = f"""
-ENTROPY ANALYSIS (Shannon information theory):
-H(X) = -Σ p(xi)·log2(p(xi)).  Max entropy (perfect uniform) = {entropy.get('h_max_bits')} bits.
-Overall: {pb.get('entropy_bits')} bits - ratio {pb.get('entropy_ratio')} of maximum ({entropy.get('draw_count')} draws, {pb.get('total_observations')} ball observations)
-Fairness verdict: {entropy.get('fairness')}
-Rolling trend: {entropy.get('rolling_trend')}"""
-        for rw in entropy.get("rolling", []):
-            entropy_section += f"\n  Window {rw['window']}: {rw['entropy_bits']} bits (ratio {rw['entropy_ratio']})"
-        low_entropy_positions = [
-            p for p in entropy.get("positional", [])
-            if p.get("entropy_ratio") is not None and float(p["entropy_ratio"]) < 0.85
-        ]
-        if low_entropy_positions:
-            entropy_section += "\nLow-entropy positions (ratio < 0.85 - concentrated ranges):"
-            for p in low_entropy_positions:
-                entropy_section += f"\n  Ball {p['position']}: {p['entropy_bits']} bits (ratio {p['entropy_ratio']}, {p['distinct_values']} distinct values)"
-        else:
-            entropy_section += "\nAll ball positions have normal entropy (≥ 0.85 ratio)."
-
-    rules_text = json.dumps(
-        {
-            "game": game_key,
-            "main_count": rules["main_count"],
-            "main_min": rules["main_min"],
-            "main_max": rules["main_max"],
-            "has_bonus": rules["has_bonus"],
-            "bonus_min": rules.get("bonus_min"),
-            "bonus_max": rules.get("bonus_max"),
-        },
-        indent=2,
-    )
-    sum_range = board.get("recommended_sum_range", {}) or {}
-    sum_summary = board.get("sum_distribution_summary", {}) or {}
-    prompt = f"""
-You are a lottery number analyst. Analyse the following data for {game_key}
-and recommend exactly which numbers to add to a wheeling system for
-tonight's draw. Be precise and data-driven.
-
-GAME RULES:
-{rules_text}
-
-RECENT DRAW HISTORY (last 10 draws):
-{recent_draws}
-
-ANOMALOUS DRAWS DETECTED:
-{anomalous_summary}
-Most recent anomaly flag: {most_recent_flag}
-
-SMART SUM RANGE:
-Recommended: {sum_range.get("min")} to {sum_range.get("max")} (covers 70% of historical draws)
-Average sum: {sum_summary.get("avg_sum")}
-
-NUMBER TEMPERATURE (rolling {window} draws):
-Heating numbers (z > 1.5): {heating_numbers}
-Cooling numbers (z < -1.5): {cooling_numbers}
-Neutral but overdue: {overdue_neutral}
-
-TOP OVERDUE NUMBERS:
-{overdue_list}
-
-TOP PAIR AFFINITIES (lift > 1.5):
-{pair_lift_list}
-
-BALL POSITION RANGES:
-{positional_ranges}
-
-BONUS BALL DATA (if applicable):
-Top picks: {bonus_top_picks}
-Most overdue bonus: {bonus_overdue}
-Heating bonus balls: {bonus_heating}
-{entropy_section}
-
-IMPORTANT MATHEMATICAL CONTEXT:
-- Each lottery draw is an independent event (memoryless property).
-  Hot/cold/overdue patterns are descriptive, NOT predictive (Tversky & Kahneman, 1971).
-- The ONLY mathematically justified strategy is anti-crowd: avoiding popular numbers
-  to reduce jackpot split probability (Henze & Riedwyl, 1998 - ~20-30% higher expected
-  payout, not higher win probability).
-- Entropy ratio close to 1.0 confirms the draw is consistent with fair RNG.
-  Deviations below 0.95 warrant investigation but are expected in small samples.
-- Use entropy data to assess draw fairness and weight your confidence accordingly.
-  If entropy is highly uniform, frequency deviations are just noise.
-  If entropy shows notable deviation, frequency patterns carry more weight.
-
-Based on ALL of the above data, provide:
-
-1. RECOMMENDED POOL (10-12 numbers for the wheel):
-   List exactly 10-12 main numbers with a one-line reason for each.
-   Ensure coverage across all ball positions.
-   Prioritise: overdue + heating > pair anchors > positional fillers.
-
-2. NUMBERS TO AVOID TONIGHT:
-   List 3-5 numbers to exclude and why.
-
-3. GENERATOR MODE RECOMMENDATION:
-   Which mode to use: pure_random / hot_bias / cold_bias /
-   overdue_bias / balanced_mix / pair_bias / anti_crowd
-   And why.
-
-4. BONUS BALL PICK (if applicable):
-   Top 2 bonus ball recommendations with reasoning.
-
-5. SUM FILTER:
-   Recommended min_sum and max_sum for scoring tonight
-   based on anomaly context.
-
-6. ENTROPY ASSESSMENT (if entropy data provided):
-   Interpret the entropy ratio and rolling trend.
-   Does entropy support or undermine frequency-based selections?
-   Flag any low-entropy ball positions that suggest concentrated ranges.
-
-7. CONFIDENCE LEVEL:
-   Rate your confidence in this selection: Low / Medium / High
-   Factor in: entropy fairness verdict, sample size, rolling trend,
-   and the mathematical reality that lottery draws are independent events.
-
-Respond in this exact JSON format:
-{{
-  "recommended_pool": [list of 10-12 integers],
-  "avoid_numbers": [list of 3-5 integers],
-  "generator_mode": "mode_name",
-  "bonus_picks": [list of 2 integers or empty if no bonus],
-  "sum_filter": {{"min": integer, "max": integer}},
-  "entropy_assessment": {{
-    "fairness": "highly_uniform/normal/notable_deviation/significant_deviation",
-    "interpretation": "what the entropy tells us about this draw history",
-    "impact_on_selection": "how entropy influenced the recommended pool"
-  }},
-  "confidence": "Low/Medium/High",
-  "reasoning": {{
-    "pool_reasoning": "explanation per number",
-    "avoid_reasoning": "why avoid these",
-    "mode_reasoning": "why this mode",
-    "bonus_reasoning": "why these bonus balls",
-    "entropy_reasoning": "how entropy data shaped the analysis",
-    "confidence_reasoning": "what drives or limits confidence"
-  }}
-}}
-""".strip()
-    return {
-        "prompt": prompt,
-        "board": board,
-        "rolling": rolling,
-        "pair_lift": pair_lift,
-        "anomalies": anomalies,
-        "bonus": bonus,
-        "entropy": entropy,
-        "recent": recent,
-        "rules": rules,
-    }
-
-
-@app.route("/api/lottery/dashboard")
-def api_lottery_dashboard():
-    try:
-        game, start_date, end_date, include_bonus, _limit = _lottery_filter_args()
-        payload = build_lottery_dashboard(
-            game,
-            start_date=start_date,
-            end_date=end_date,
-            include_bonus=include_bonus,
-        )
-        return jsonify(payload)
-    except ValueError as e:
-        return jsonify({"error": str(e)}), 400
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-
-@app.route("/api/lottery/frequency")
-def api_lottery_frequency():
-    try:
-        game, start_date, end_date, include_bonus, _limit = _lottery_filter_args()
-        freq = compute_number_frequency(
-            game,
-            start_date=start_date,
-            end_date=end_date,
-            include_bonus=include_bonus,
-        )
-        overdue = compute_overdue_numbers(
-            game,
-            start_date=start_date,
-            end_date=end_date,
-            include_bonus=include_bonus,
-        )
-        return jsonify(
-            {
-                "game": game,
-                "draw_count": freq.get("draw_count", 0),
-                "number_frequency": freq.get("main_number_frequency", []),
-                "overdue": overdue.get("overdue", []),
-                "decade_groups": freq.get("decade_groups", []),
-                "bonus_frequency": freq.get("bonus_frequency", []),
-                "bonus_overdue": overdue.get("bonus_overdue", []),
-            }
-        )
-    except ValueError as e:
-        return jsonify({"error": str(e)}), 400
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-
-@app.route("/api/lottery/pairs")
-def api_lottery_pairs():
-    try:
-        game, start_date, end_date, _include_bonus, limit = _lottery_filter_args()
-        return jsonify(
-            compute_pair_frequency(
-                game,
-                start_date=start_date,
-                end_date=end_date,
-                limit=limit,
-            )
-        )
-    except ValueError as e:
-        return jsonify({"error": str(e)}), 400
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-
-@app.route("/api/lottery/triplets")
-def api_lottery_triplets():
-    try:
-        game, start_date, end_date, _include_bonus, limit = _lottery_filter_args()
-        return jsonify(
-            compute_triplet_frequency(
-                game,
-                start_date=start_date,
-                end_date=end_date,
-                limit=limit,
-            )
-        )
-    except ValueError as e:
-        return jsonify({"error": str(e)}), 400
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-
-@app.route("/api/lottery/history")
-def api_lottery_history():
-    try:
-        game, start_date, end_date, _include_bonus, limit = _lottery_filter_args()
-        return jsonify(
-            lottery_history_rows(
-                game,
-                start_date=start_date,
-                end_date=end_date,
-                limit=limit,
-            )
-        )
-    except ValueError as e:
-        return jsonify({"error": str(e)}), 400
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-
-@app.route("/api/lottery/distributions")
-def api_lottery_distributions():
-    try:
-        game, start_date, end_date, _include_bonus, _limit = _lottery_filter_args()
-        return jsonify(
-            {
-                "game": game,
-                "sum_distribution": compute_sum_distribution(
-                    game, start_date=start_date, end_date=end_date
-                ),
-                "odd_even_distribution": compute_odd_even_distribution(
-                    game, start_date=start_date, end_date=end_date
-                ),
-                "low_high_distribution": compute_low_high_distribution(
-                    game, start_date=start_date, end_date=end_date
-                ),
-                "consecutive": compute_consecutive_stats(
-                    game, start_date=start_date, end_date=end_date
-                ),
-                "repeat_from_last_draw": compute_repeat_from_last_draw_stats(
-                    game, start_date=start_date, end_date=end_date
-                ),
-            }
-        )
-    except ValueError as e:
-        return jsonify({"error": str(e)}), 400
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-
-@app.route("/api/lottery/sum-range")
-def api_lottery_sum_range():
-    try:
-        game, start_date, end_date, _include_bonus, _limit = _lottery_filter_args()
-        return jsonify(
-            compute_recommended_sum_range(
-                game,
-                start_date=start_date,
-                end_date=end_date,
-            )
-        )
-    except ValueError as e:
-        return jsonify({"error": str(e)}), 400
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-
-@app.route("/api/lottery/positional")
-def api_lottery_positional():
-    try:
-        game, start_date, end_date, _include_bonus, _limit = _lottery_filter_args()
-        return jsonify(
-            compute_positional_distribution(
-                game,
-                start_date=start_date,
-                end_date=end_date,
-            )
-        )
-    except ValueError as e:
-        return jsonify({"error": str(e)}), 400
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-
-@app.route("/api/lottery/rolling-frequency")
-def api_lottery_rolling_frequency():
-    try:
-        game, start_date, end_date, _include_bonus, _limit = _lottery_filter_args()
-        try:
-            window = int(request.args.get("window", 50))
-        except (TypeError, ValueError):
-            window = 50
-        return jsonify(
-            compute_rolling_frequency(
-                game,
-                window=window,
-                start_date=start_date,
-                end_date=end_date,
-            )
-        )
-    except ValueError as e:
-        return jsonify({"error": str(e)}), 400
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-
-@app.route("/api/lottery/pair-lift")
-def api_lottery_pair_lift():
-    try:
-        game, start_date, end_date, _include_bonus, limit = _lottery_filter_args()
-        return jsonify(
-            compute_pair_lift(
-                game,
-                start_date=start_date,
-                end_date=end_date,
-                limit=limit,
-            )
-        )
-    except ValueError as e:
-        return jsonify({"error": str(e)}), 400
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-
-@app.route("/api/lottery/anomalous-draws")
-def api_lottery_anomalous_draws():
-    try:
-        game, start_date, end_date, _include_bonus, _limit = _lottery_filter_args()
-        try:
-            z_threshold = float(request.args.get("z_threshold", 2.5))
-        except (TypeError, ValueError):
-            z_threshold = 2.5
-        return jsonify(
-            flag_anomalous_draws(
-                game,
-                z_threshold=z_threshold,
-                start_date=start_date,
-                end_date=end_date,
-            )
-        )
-    except ValueError as e:
-        return jsonify({"error": str(e)}), 400
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-
-@app.route("/api/lottery/bonus-intelligence")
-def api_lottery_bonus_intelligence():
-    try:
-        game, start_date, end_date, _include_bonus, _limit = _lottery_filter_args()
-        try:
-            window = int(request.args.get("window", 50))
-        except (TypeError, ValueError):
-            window = 50
-        return jsonify(
-            compute_bonus_intelligence(
-                game,
-                window=window,
-                start_date=start_date,
-                end_date=end_date,
-            )
-        )
-    except ValueError as e:
-        return jsonify({"error": str(e)}), 400
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-
-@app.route("/api/lottery/ai-analysis", methods=["POST"])
-def api_lottery_ai_analysis():
-    try:
-        ai_key = get_ai_api_key(CONFIG)
-        if not ai_key:
-            return jsonify({"error": "AI API key not configured"}), 500
-
-        data = request.get_json(silent=True) or {}
-        game = str(data.get("game") or "").strip().lower()
-        if not game:
-            return jsonify({"error": "Missing game"}), 400
-        start_date = str(data.get("start_date") or "").strip() or None
-        end_date = str(data.get("end_date") or "").strip() or None
-        try:
-            window = int(data.get("window", 50))
-        except (TypeError, ValueError):
-            window = 50
-        try:
-            z_threshold = float(data.get("z_threshold", 2.5))
-        except (TypeError, ValueError):
-            z_threshold = 2.5
-
-        analytics = _lottery_ai_prompt_payload(
-            game,
-            start_date=start_date,
-            end_date=end_date,
-            window=window,
-            z_threshold=z_threshold,
-        )
-        _lottery_model = (
-            str(CONFIG.get("LOTTERY_AI_MODEL") or "").strip()
-            or get_ai_model(CONFIG, "AI_MODEL", "grok-4.3")
-        )
-        _temp = float(CONFIG.get("AI_TEMPERATURE", 0.3))
-        client = create_ai_client(CONFIG, api_key=ai_key)
-        completion = client.chat.completions.create(
-            model=_lottery_model,
-            max_tokens=1800,
-            temperature=_temp,
-            messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        "You are a lottery number analyst. Reply with a single valid JSON object "
-                        "exactly matching the schema the user requested. No markdown fences, no preamble."
-                    ),
-                },
-                {"role": "user", "content": analytics["prompt"]},
-            ],
-        )
-        choice = completion.choices[0].message if completion.choices else None
-        raw_text = _lottery_ai_openai_message_text(
-            getattr(choice, "content", None) if choice else None
-        )
-        try:
-            parsed = _lottery_ai_extract_json(raw_text)
-        except ValueError as e:
-            try:
-                from ai_review_logger import (
-                    AI_STATE_REVIEW_INCOMPLETE,
-                    REVIEW_TYPE_LOTTERY_AI,
-                    log_ai_review,
-                )
-
-                log_ai_review(
-                    symbol=game,
-                    asset_type="lottery",
-                    review_type=REVIEW_TYPE_LOTTERY_AI,
-                    model=_lottery_model,
-                    provider=get_ai_provider_label(CONFIG),
-                    prompt_version="lottery_ai_v1",
-                    input_packet=analytics.get("prompt", ""),
-                    has_chart_image=False,
-                    candle_freshness_status="not_applicable",
-                    engine_a_state=None,
-                    engine_b_state=None,
-                    engine_c_state=None,
-                    engine_d_state=None,
-                    risk_state=None,
-                    ai_review_state=AI_STATE_REVIEW_INCOMPLETE,
-                    ai_confidence=None,
-                    contradictions_count=0,
-                    missing_information_count=1,
-                    parse_success=False,
-                    schema_valid=False,
-                    execution_allowed_before_ai=True,
-                    execution_allowed_after_ai=True,
-                    final_action="advisory",
-                )
-            except Exception as _log_exc:
-                log.debug("[LOTTERY-AI] audit log failed: %s", _log_exc)
-            return jsonify({"error": str(e)}), 400
-        try:
-            from ai_review_logger import (
-                AI_STATE_CAUTION,
-                REVIEW_TYPE_LOTTERY_AI,
-                log_ai_review,
-            )
-
-            _required = {
-                "recommended_pool",
-                "avoid_numbers",
-                "generator_mode",
-                "confidence",
-                "reasoning",
-            }
-            log_ai_review(
-                symbol=game,
-                asset_type="lottery",
-                review_type=REVIEW_TYPE_LOTTERY_AI,
-                model=_lottery_model,
-                provider=get_ai_provider_label(CONFIG),
-                prompt_version="lottery_ai_v1",
-                input_packet=analytics.get("prompt", ""),
-                has_chart_image=False,
-                candle_freshness_status="not_applicable",
-                engine_a_state=None,
-                engine_b_state=None,
-                engine_c_state=None,
-                engine_d_state=None,
-                risk_state=None,
-                ai_review_state=AI_STATE_CAUTION,
-                ai_confidence=None,
-                contradictions_count=0,
-                missing_information_count=0,
-                parse_success=True,
-                schema_valid=_required.issubset(parsed.keys()),
-                execution_allowed_before_ai=True,
-                execution_allowed_after_ai=True,
-                final_action="advisory",
-            )
-        except Exception as _log_exc:
-            log.debug("[LOTTERY-AI] audit log failed: %s", _log_exc)
-        recommended_pool = [int(x) for x in (parsed.get("recommended_pool") or []) if str(x).strip()]
-        avoid_numbers = [int(x) for x in (parsed.get("avoid_numbers") or []) if str(x).strip()]
-        bonus_picks = [int(x) for x in (parsed.get("bonus_picks") or []) if str(x).strip()]
-        return jsonify(
-            {
-                "analysis": parsed,
-                "raw_analysis_text": raw_text,
-                "model": _lottery_model,
-                "recommended_pool": recommended_pool,
-                "avoid_numbers": avoid_numbers,
-                "generator_mode": str(parsed.get("generator_mode") or ""),
-                "bonus_picks": bonus_picks[:2],
-                "sum_filter": parsed.get("sum_filter", {}),
-                "entropy_assessment": parsed.get("entropy_assessment", {}),
-                "confidence": str(parsed.get("confidence") or ""),
-                "reasoning": parsed.get("reasoning", {}),
-            }
-        )
-    except ValueError as e:
-        return jsonify({"error": str(e)}), 400
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-
-@app.route("/api/lottery/draws")
-def api_lottery_draws():
-    """Backward-compatible alias for phase-1 draws endpoint."""
-    try:
-        game, start_date, end_date, _include_bonus, limit = _lottery_filter_args()
-        return jsonify(
-            lottery_history_rows(
-                game,
-                start_date=start_date,
-                end_date=end_date,
-                limit=limit,
-            )
-        )
-    except ValueError as e:
-        return jsonify({"error": str(e)}), 400
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-
-@app.route("/api/lottery/stats")
-def api_lottery_stats():
-    """Backward-compatible alias for phase-1 stats endpoint."""
-    try:
-        game, start_date, end_date, include_bonus, _limit = _lottery_filter_args()
-        return jsonify(
-            build_lottery_dashboard(
-                game,
-                start_date=start_date,
-                end_date=end_date,
-                include_bonus=include_bonus,
-            )
-        )
-    except ValueError as e:
-        return jsonify({"error": str(e)}), 400
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-
-@app.route("/api/lottery/clear", methods=["POST"])
-def api_lottery_clear():
-    try:
-        payload = request.get_json(silent=True) or {}
-        game = str(payload.get("game") or request.form.get("game") or "").strip().lower() or None
-        return jsonify(clear_lottery_draws(_AUDIT_DB, game=game))
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-
-@app.route("/api/lottery/add-draw", methods=["POST"])
-def api_lottery_add_draw():
-    """Manually enter a single draw result without uploading a CSV.
-
-    POST JSON body:
-      {
-        "game":      "lotto" | "powerball" | "daily_lotto",
-        "draw_date": "YYYY-MM-DD",
-        "numbers":   [7, 14, 22, 31, 40, 51],   // main numbers (unsorted is fine)
-        "bonus":     12                           // required for lotto/powerball, omit for daily_lotto
-      }
-    """
-    try:
-        payload = request.get_json(silent=True) or {}
-        game = str(payload.get("game") or "").strip().lower()
-        draw_date = str(payload.get("draw_date") or "").strip()
-        numbers = payload.get("numbers")
-        bonus = payload.get("bonus")
-
-        if not game:
-            return jsonify({"error": "Missing game"}), 400
-        if not draw_date:
-            return jsonify({"error": "Missing draw_date"}), 400
-        if not numbers or not isinstance(numbers, list):
-            return jsonify({"error": "numbers must be a non-empty list"}), 400
-
-        result = add_lottery_draw(
-            _AUDIT_DB,
-            game=game,
-            draw_date=draw_date,
-            numbers=numbers,
-            bonus=bonus,
-            source_file="manual",
-        )
-        status = 200 if result["inserted"] else 409
-        return jsonify(result), status
-    except ValueError as e:
-        return jsonify({"error": str(e)}), 400
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-
-@app.route("/api/lottery/delete-draw", methods=["POST"])
-def api_lottery_delete_draw():
-    """Delete a specific draw by game + date.
-
-    POST JSON body:
-      { "game": "lotto", "draw_date": "2024-06-01" }
-    """
-    try:
-        payload = request.get_json(silent=True) or {}
-        game = str(payload.get("game") or "").strip().lower()
-        draw_date = str(payload.get("draw_date") or "").strip()
-        if not game:
-            return jsonify({"error": "Missing game"}), 400
-        if not draw_date:
-            return jsonify({"error": "Missing draw_date"}), 400
-        return jsonify(delete_lottery_draw(_AUDIT_DB, game=game, draw_date=draw_date))
-    except ValueError as e:
-        return jsonify({"error": str(e)}), 400
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-
-@app.route("/api/lottery/generate", methods=["POST"])
-def api_lottery_generate():
-    try:
-        payload = request.get_json(silent=True) or {}
-        game = str(payload.get("game") or "").strip().lower()
-        mode = str(payload.get("mode") or "pure_random").strip().lower()
-        ticket_count = int(payload.get("ticket_count") or 5)
-        include_bonus = bool(payload.get("include_bonus", False))
-        start_date = payload.get("start_date")
-        end_date = payload.get("end_date")
-        filters = payload.get("filters") if isinstance(payload.get("filters"), dict) else {}
-
-        result = generate_tickets(
-            game,
-            mode=mode,
-            ticket_count=ticket_count,
-            include_bonus=include_bonus,
-            filters=filters,
-            start_date=start_date,
-            end_date=end_date,
-        )
-        return jsonify(result)
-    except ValueError as e:
-        return jsonify({"error": str(e)}), 400
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-
-@app.route("/api/lottery/wheel", methods=["POST"])
-def api_lottery_wheel():
-    try:
-        payload = request.get_json(silent=True) or {}
-        game = str(payload.get("game") or "").strip().lower()
-        chosen_numbers = payload.get("chosen_numbers") or []
-        guarantee_if = payload.get("guarantee_if")
-        return jsonify(
-            generate_wheel(
-                game,
-                chosen_numbers=chosen_numbers,
-                guarantee_if=guarantee_if,
-            )
-        )
-    except ValueError as e:
-        return jsonify({"error": str(e)}), 400
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-
-@app.route("/api/lottery/score-ticket", methods=["POST"])
-def api_lottery_score_ticket():
-    try:
-        payload = request.get_json(silent=True) or {}
-        game = str(payload.get("game") or "").strip().lower()
-        ticket = payload.get("ticket") or {}
-        start_date = payload.get("start_date")
-        end_date = payload.get("end_date")
-        include_bonus = bool(payload.get("include_bonus", False))
-        return jsonify(
-            score_ticket(
-                game,
-                ticket=ticket,
-                include_bonus=include_bonus,
-                start_date=start_date,
-                end_date=end_date,
-            )
-        )
-    except ValueError as e:
-        return jsonify({"error": str(e)}), 400
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-
-@app.route("/api/lottery/simulate", methods=["POST"])
-def api_lottery_simulate():
-    req_started = time.perf_counter()
-    try:
-        payload = request.get_json(silent=True) or {}
-        game = str(payload.get("game") or "").strip().lower()
-        mode = str(payload.get("mode") or "pure_random").strip().lower()
-        tickets_per_draw = int(payload.get("tickets_per_draw") or 1)
-        include_bonus = bool(payload.get("include_bonus", False))
-        start_date = payload.get("start_date")
-        end_date = payload.get("end_date")
-        filters = payload.get("filters") if isinstance(payload.get("filters"), dict) else {}
-        seed = None
-        raw_seed = payload.get("seed")
-        if raw_seed is not None:
-            try:
-                seed = int(raw_seed)
-            except (TypeError, ValueError):
-                seed = None
-        ticket_cost = payload.get("ticket_cost")
-        payout_table = payload.get("payout_table") or {}
-        if isinstance(payout_table, str):
-            payout_table = json.loads(payout_table or "{}")
-        if not isinstance(payout_table, dict):
-            payout_table = {}
-
-        log.info(
-            "[LotterySimAPI] request received game=%s mode=%s tickets_per_draw=%s start=%s end=%s include_bonus=%s",
-            game,
-            mode,
-            tickets_per_draw,
-            start_date,
-            end_date,
-            include_bonus,
-        )
-
-        result = simulate_generator(
-            game,
-            mode=mode,
-            tickets_per_draw=tickets_per_draw,
-            start_date=start_date,
-            end_date=end_date,
-            include_bonus=include_bonus,
-            ticket_cost=ticket_cost,
-            payout_table=payout_table,
-            filters=filters,
-            seed=seed,
-        )
-        serialize_started = time.perf_counter()
-        response = jsonify(result)
-        log.info(
-            "[LotterySimAPI] response serialization complete game=%s mode=%s total_ms=%.1f serialize_ms=%.1f",
-            game,
-            mode,
-            (time.perf_counter() - req_started) * 1000.0,
-            (time.perf_counter() - serialize_started) * 1000.0,
-        )
-        return response
-    except ValueError as e:
-        log.warning("[LotterySimAPI] value error after %.1f ms: %s", (time.perf_counter() - req_started) * 1000.0, e)
-        return jsonify({"error": str(e)}), 400
-    except Exception as e:
-        log.exception("[LotterySimAPI] failure after %.1f ms", (time.perf_counter() - req_started) * 1000.0)
-        return jsonify({"error": str(e)}), 500
-
-
-@app.route("/api/lottery/compare-modes", methods=["POST"])
-def api_lottery_compare_modes():
-    try:
-        payload = request.get_json(silent=True) or {}
-        game = str(payload.get("game") or "").strip().lower()
-        modes = payload.get("modes") or []
-        if isinstance(modes, str):
-            modes = [m.strip() for m in modes.split(",") if m.strip()]
-        if not isinstance(modes, list):
-            modes = []
-        tickets_per_draw = int(payload.get("tickets_per_draw") or 1)
-        include_bonus = bool(payload.get("include_bonus", False))
-        start_date = payload.get("start_date")
-        end_date = payload.get("end_date")
-        filters = payload.get("filters") if isinstance(payload.get("filters"), dict) else {}
-        ticket_cost = payload.get("ticket_cost")
-        payout_table = payload.get("payout_table") or {}
-        if isinstance(payout_table, str):
-            payout_table = json.loads(payout_table or "{}")
-        if not isinstance(payout_table, dict):
-            payout_table = {}
-
-        seed = None
-        raw_seed = payload.get("seed")
-        if raw_seed is not None:
-            try:
-                seed = int(raw_seed)
-            except (TypeError, ValueError):
-                seed = None
-
-        result = compare_generator_modes(
-            game,
-            modes=modes,
-            tickets_per_draw=tickets_per_draw,
-            start_date=start_date,
-            end_date=end_date,
-            include_bonus=include_bonus,
-            ticket_cost=ticket_cost,
-            payout_table=payout_table,
-            filters=filters,
-            seed=seed,
-        )
-        return jsonify(result)
-    except ValueError as e:
-        return jsonify({"error": str(e)}), 400
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-
 @app.route("/api/performance")
 def api_performance():
     """Return performance statistics for all completed trades."""
@@ -14889,9 +13738,10 @@ def api_performance():
                 return None
             mean = sum(clean) / len(clean)
             variance = sum((v - mean) ** 2 for v in clean) / (len(clean) - 1)
-            if variance <= 0:
-                return None
-            return round(mean / (variance**0.5) * (len(clean) ** 0.5), 2)
+            if variance <= 0 or mean == 0:
+                return 0.0
+            raw = mean / (variance**0.5) * (len(clean) ** 0.5)
+            return round(max(-10.0, min(10.0, raw)), 2)
 
         with sqlite3.connect(_AUDIT_DB, timeout=15.0) as con:
             con.row_factory = sqlite3.Row
@@ -14933,6 +13783,27 @@ def api_performance():
         if not trades:
             trades = all_trades  # fallback: if everything is unknown, show all
 
+        from collections import defaultdict
+
+        from research_metrics import (
+            annualized_sharpe_from_r_multiples,
+            annualized_sortino_engine_a_from_r_multiples,
+            trades_per_year_from_parallel_trade_days,
+        )
+
+        _epoch = datetime(1970, 1, 1, tzinfo=timezone.utc)
+
+        def _parse_close_dt(trade: dict):
+            for key in ("exit_time", "closed_at", "close_time", "ts"):
+                raw = trade.get(key)
+                if raw is None or raw == "":
+                    continue
+                try:
+                    return datetime.fromisoformat(str(raw).strip().replace("Z", "+00:00"))
+                except Exception:
+                    continue
+            return _epoch
+
         def _is_breakeven_trade(t: dict) -> bool:
             reason = str(t.get("exit_reason") or "").upper()
             pnl = _safe_float(t.get("pnl"))
@@ -14965,9 +13836,21 @@ def api_performance():
 
         win_rate = round(win_count / decisive_total * 100, 1) if decisive_total else 0
 
-        r_vals = [
-            t.get("r_multiple") for t in trades if t.get("r_multiple") is not None
-        ]
+        def _trade_closed_sort_key(trade: dict):
+            return (_parse_close_dt(trade), int(trade.get("id") or 0))
+
+        # Same chronological order for R series, cumulative equity, Sharpe annualiser hints, and max DD path.
+        trades_series = sorted(trades, key=_trade_closed_sort_key)
+
+        r_vals: list[float] = []
+        _r_day_hints: list[str | None] = []
+        for _t in trades_series:
+            _rm = _safe_float(_t.get("r_multiple"))
+            r_vals.append(float(_rm) if _rm is not None else 0.0)
+            _cd = _parse_close_dt(_t)
+            _r_day_hints.append(
+                _cd.date().isoformat() if _cd > _epoch else None
+            )
 
         avg_r = round(sum(r_vals) / len(r_vals), 2) if r_vals else 0
 
@@ -15000,44 +13883,45 @@ def api_performance():
 
         max_dd_pct = round(max_dd / peak * 100, 1) if peak > 0 else 0
 
-        # Sharpe + Sortino ratios (from R-multiples)
-
-        _perf_avg_r = sum(r_vals) / len(r_vals) if r_vals else 0
-
-        _perf_var = (
-            sum((r - _perf_avg_r) ** 2 for r in r_vals) / (len(r_vals) - 1)
-            if len(r_vals) > 1
-            else 0
+        # Sharpe / Sortino aligned with backtests: annualised on R using calendar span hints.
+        _trades_per_live = trades_per_year_from_parallel_trade_days(r_vals, _r_day_hints)
+        perf_sharpe = annualized_sharpe_from_r_multiples(
+            r_vals, _trades_per_live, decimals=2
+        )
+        perf_sortino = annualized_sortino_engine_a_from_r_multiples(
+            r_vals, _trades_per_live, decimals=2
         )
 
-        _perf_std = _perf_var**0.5
+        perf_sqn = _sqn_from_r_values(r_vals)
 
-        perf_sharpe = (
-            round(_perf_avg_r / _perf_std * (len(r_vals) ** 0.5), 2)
-            if _perf_std > 0
-            else 0
-        )
+        _sq_warn_floor = max(3, int(CONFIG.get("BT_LOW_SAMPLE_SQ_WARN_TRADES", 30) or 30))
 
-        _perf_down = [r for r in r_vals if r < 0]
+        metric_interpretation_notes = [
+            "Sharpe/Sortino use closed-trade R-multiples with the same annualiser as backtests "
+            "(calendar span × 365 / trade count).",
+            "This panel is live/paper audit aggregates only. PSR, DSR, PBO, and bootstrap assumptions appear on "
+            "backtest API responses (Performance Lab / Backtest panel) after you run a pair backtest.",
+            "Cumulative R chart is ordered by close time (+ id tie-break); headline Sharpe/Sortino/SQN use that "
+            "same R sequence.",
+        ]
+        if len(r_vals) > 0 and len(r_vals) < _sq_warn_floor:
+            metric_interpretation_notes.append(
+                f"Fewer than {_sq_warn_floor} decisive R-multiples — treat SQN/Sharpe as indicative only "
+                "(same low-sample caveat as Engine A wfSplit)."
+            )
 
-        _perf_down_var = (
-            sum(r**2 for r in _perf_down) / (len(_perf_down) - 1)
-            if len(_perf_down) > 1
-            else 0
-        )
-
-        _perf_down_std = _perf_down_var**0.5
-
-        perf_sortino = (
-            round(_perf_avg_r / _perf_down_std * (len(r_vals) ** 0.5), 2)
-            if _perf_down_std > 0
-            else 0
-        )
+        daily_buckets: defaultdict[str, float] = defaultdict(float)
+        for _t in trades:
+            _pnlx = _safe_float(_t.get("pnl"))
+            if _pnlx is None:
+                continue
+            _cd_p = _parse_close_dt(_t)
+            if _cd_p <= _epoch:
+                continue
+            daily_buckets[_cd_p.date().isoformat()] += float(_pnlx)
+        daily_pnl = [{"date": d, "pnl": round(v, 2)} for d, v in sorted(daily_buckets.items())]
 
         # Win rate by regime (trendState)
-
-        from collections import defaultdict
-
         regime_stats: dict = defaultdict(lambda: {"w": 0, "l": 0})
 
         for t in trades:
@@ -15157,33 +14041,15 @@ def api_performance():
 
         avg_holding = round(sum(hp_vals) / len(hp_vals), 1) if hp_vals else None
 
-        # Last 20 completed trades - parsed close time + id (string sort breaks on ISO variants)
-
-        _epoch = datetime(1970, 1, 1, tzinfo=timezone.utc)
-
-        def _parse_close_dt(trade: dict):
-            for key in ("exit_time", "closed_at", "close_time", "ts"):
-                raw = trade.get(key)
-                if raw is None or raw == "":
-                    continue
-                try:
-                    return datetime.fromisoformat(str(raw).strip().replace("Z", "+00:00"))
-                except Exception:
-                    continue
-            return _epoch
-
-        def _trade_closed_sort_key(trade: dict):
-            return (_parse_close_dt(trade), int(trade.get("id") or 0))
-
         # last_20 is already fetched from DB with ORDER BY id DESC LIMIT 20 above.
 
-        # Equity curve: cumulative R list for charting
+        # Equity curve: cumulative R list for charting (same order as Sharpe/max-DD R series)
 
         equity_curve = []
 
         cum = 0
 
-        for t in sorted(trades, key=lambda t: t.get("ts") or ""):
+        for t in trades_series:
             cum += t.get("r_multiple") or 0
 
             equity_curve.append(round(cum, 2))
@@ -15277,6 +14143,7 @@ def api_performance():
                 "profit_factor": profit_factor,
                 "sharpe": perf_sharpe,
                 "sortino": perf_sortino,
+                "sqn": perf_sqn,
                 "max_drawdown_pct": max_dd_pct,
                 "win_rate_by_regime": win_rate_by_regime,
                 "win_rate_by_score_band": win_rate_by_score_band,
@@ -15285,6 +14152,8 @@ def api_performance():
                 "worst_pair": worst_pair,
                 "average_holding_period_hours": avg_holding,
                 "equity_curve": equity_curve,
+                "daily_pnl": daily_pnl,
+                "metric_interpretation_notes": metric_interpretation_notes,
                 "last_20_trades": last_20,
                 "execution_quality": execution_quality,
                 "attribution_by_source": attribution_by_source,
@@ -15313,1081 +14182,61 @@ _live_dashboard_scalp_cache_lock = threading.Lock()
 _LIVE_DASHBOARD_SCALP_TTL = 300.0  # 5 min - longer TTL so snapshot returns something even between scans
 
 
-@app.route("/api/microstructure-health")
-def api_microstructure_health():
-    """Feed freshness for crypto microstructure WS (operational dashboard)."""
-    now = time.time()
-    enabled = bool(CONFIG.get("MICROSTRUCTURE_FEEDS_ENABLED"))
-    rows = []
-    for sym, data in _micro_cache.items():
-        if not isinstance(data, dict):
-            continue
-        ts = data.get("_updated_ts")
-        age = round(now - ts, 1) if ts is not None else None
-        rows.append(
-            {
-                "symbol": sym,
-                "age_sec": age,
-                "stale": age is None or age > 45.0,
-                "order_book_imbalance": data.get("order_book_imbalance"),
-                "liquidity_pressure": data.get("liquidity_pressure"),
-            }
-        )
-    rows.sort(key=lambda r: r["symbol"])
-    return jsonify(
-        _json_safe({"feeds_enabled": enabled, "symbol_count": len(rows), "symbols": rows})
-    )
 
 
 # ── Live Dashboard v1 - snapshot helpers ─────────────────────────────────────
 
-def _ld_empty_engine_a() -> dict:
-    return {
-        "score": None, "maxScore": None, "threshold": None,
-        "direction": None, "passed": False,
-        "factorScores": {"trend": None, "momentum": None, "addon": None},
-        "trendScore": None, "momentumScore": None, "addonScore": None,
-        "adxValue": None, "adxGate": None, "sessionMultiplier": None, "conviction": None,
-        "entry": None, "sl": None, "tp": None, "tp1": None, "tp2": None, "rr": None,
-        "failReasons": [],
-        "freshnessPolicyStatus": None,
-    }
-
-
-def _ld_empty_engine_b() -> dict:
-    return {
-        "score": None, "maxScore": None, "threshold": None,
-        "direction": None, "structuralVerdict": None, "structuralDataValid": False,
-        "confidencePassed": False,
-        "structure_ok": False, "location_ok": False, "entry_ok": False,
-        "room_rr_ok": False, "d1_conflict": None,
-        "hardFailReasons": [], "softWarnings": [], "diagnosticNotes": [],
-        "noTriggerClassification": None,
-        "entry": None, "sl": None, "tp": None, "rr": None,
-    }
-
-
-def _ld_empty_engine_c() -> dict:
-    return {
-        "decisionState": "NO_SETUP", "consensusType": None,
-        "conviction": None, "tier": None, "trade": False, "reason": None,
-        "engineAContribution": None, "engineBContribution": None,
-        "engineBChecklistPassed": False, "watchlistReason": None, "blockReason": None,
-    }
-
-
-def _ld_empty_engine_d() -> dict:
-    return {
-        "enabled": True, "gateResult": "DATA_MISSING",
-        "grade": None, "score": None, "setupType": None,
-        "spread": None, "rr": None, "direction": None,
-        "failReasons": [], "softWarnings": [], "diagnosticNotes": [],
-        "missingData": ["engine_d_cache_missing"],
-        "vp": {"vah": None, "poc": None, "val": None},
-        "nearPoc": None, "nearVah": None, "nearVal": None,
-        "cvdAvailable": None, "cvdBias": None, "absorptionDetected": None,
-    }
-
-
-def _ld_list(value) -> list:
-    if value is None:
-        return []
-    if isinstance(value, list):
-        return [str(v) for v in value if v is not None and str(v)]
-    if isinstance(value, tuple):
-        return [str(v) for v in value if v is not None and str(v)]
-    if isinstance(value, str):
-        return [value] if value else []
-    return [str(value)]
-
-
-def _ld_has_valid_levels(levels: dict | None) -> bool:
-    if not isinstance(levels, dict):
-        return False
-    try:
-        entry = float(levels.get("entry"))
-        sl = float(levels.get("sl"))
-        tp = float(levels.get("tp") if levels.get("tp") is not None else levels.get("tp1"))
-        rr = float(levels.get("rr"))
-    except (TypeError, ValueError):
-        return False
-    return bool(entry and sl and tp and rr > 0 and entry != sl)
-
-
-def _ld_final_state(engine_c: dict, engine_d: dict, freshness: dict, levels: dict) -> tuple[str, str | None, str | None]:
-    c_state = engine_c.get("decisionState") or "NO_SETUP"
-    d_gate = engine_d.get("gateResult") or "DATA_MISSING"
-    if freshness.get("gateDecision") != "ALLOW":
-        return "BLOCKED", "Freshness gate blocked", freshness.get("blockReason") or freshness.get("consistencyStatus")
-    if d_gate == "DATA_MISSING":
-        missing = ", ".join(_ld_list(engine_d.get("missingData"))) or "Engine D data missing"
-        return "BLOCKED", "Engine D data missing", missing
-    if c_state == "BLOCKED" or d_gate == "BLOCKED":
-        return "BLOCKED", engine_c.get("blockReason") or "Engine gate blocked", engine_c.get("blockReason") or (engine_d.get("failReasons") or [None])[0]
-    if c_state in ("A_ONLY", "B_ONLY", "WATCHLIST") or d_gate == "WATCHLIST":
-        return "WATCHLIST", engine_c.get("watchlistReason") or engine_c.get("reason") or "Watchlist only", None
-    if c_state == "ALIGNED" and _ld_has_valid_levels(levels):
-        return "PAPER CANDIDATE", "Aligned paper candidate", None
-    if d_gate == "PASS" and _ld_has_valid_levels(levels):
-        return "PAPER CANDIDATE", "Engine D paper candidate", None
-    return "NO SETUP", engine_c.get("reason") or "No executable setup", None
-
-
-def _ld_executable_state(symbol_row: dict, risk_reason: str | None = None) -> dict:
-    paper_soak = CONFIG.get("PAPER_SOAK") or {}
-    paper_enabled = bool(paper_soak.get("ENABLED", True))
-    real_allowed = bool(CONFIG.get("REAL_ORDERS_ALLOWED", False))
-    freshness = symbol_row.get("freshness") or {}
-    engine_c = symbol_row.get("engineC") or {}
-    engine_d = symbol_row.get("engineD") or {}
-    levels = symbol_row.get("levels") or {}
-    final_state = symbol_row.get("finalState") or "NO SETUP"
-
-    disabled_reason = None
-    if not paper_enabled:
-        disabled_reason = "PAPER_SOAK.ENABLED_FALSE"
-    elif real_allowed:
-        disabled_reason = "REAL_ORDERS_ALLOWED_TRUE"
-    elif freshness.get("gateDecision") != "ALLOW":
-        disabled_reason = freshness.get("blockReason") or "FRESHNESS_BLOCK"
-    elif engine_c.get("decisionState") in ("BLOCKED", "WATCHLIST"):
-        disabled_reason = "ENGINE_C_" + str(engine_c.get("decisionState"))
-    elif engine_d.get("gateResult") == "DATA_MISSING":
-        disabled_reason = "ENGINE_D_DATA_MISSING: " + (", ".join(_ld_list(engine_d.get("missingData"))) or "missing_data")
-    elif engine_d.get("gateResult") == "BLOCKED":
-        disabled_reason = "ENGINE_D_BLOCKED"
-    elif final_state in ("BLOCKED", "WATCHLIST", "NO SETUP"):
-        disabled_reason = final_state.replace(" ", "_")
-    elif not _ld_has_valid_levels(levels):
-        disabled_reason = "INVALID_LEVELS"
-    elif risk_reason and risk_reason != "OK":
-        disabled_reason = "RISK_" + risk_reason
-
-    return {
-        "canPaperExecute": disabled_reason is None,
-        "canRealExecute": False,
-        "disabledReason": disabled_reason,
-        "riskStatus": risk_reason or "NOT_CHECKED",
-        "freshnessStatus": freshness.get("gateDecision") or "BLOCK",
-        "paperMode": paper_enabled,
-        "realOrdersAllowed": real_allowed,
-    }
-
-
-def _ld_build_engine_a_row(sig: dict) -> dict:
-    """Extract Engine A v2 fields from a cached scan signal dict."""
-    if not sig:
-        return _ld_empty_engine_a()
-    score = sig.get("confluenceScore") or sig.get("score") or 0.0
-    max_score = sig.get("maxScore") or 3.0
-    direction = sig.get("direction")
-    threshold = sig.get("threshold") or sig.get("minThreshold")
-    # Derive threshold from pair profile if not in signal
-    if threshold is None:
-        try:
-            from scoring import get_min_confluence_threshold
-            _pair_lookup = _resolve_pair_from_signal(sig) or {}
-            if _pair_lookup:
-                threshold = get_min_confluence_threshold(_pair_lookup)
-        except Exception:
-            pass
-    passed = bool(threshold is not None and float(score or 0) >= float(threshold)) if threshold else bool(float(score or 0) > 0 and direction)
-    factor_scores = sig.get("factorScores") or {}
-    fail_reasons = []
-    _warns = sig.get("warnings") or []
-    if isinstance(_warns, list):
-        fail_reasons = [str(w) for w in _warns if w]
-    return {
-        "score": score,
-        "maxScore": max_score,
-        "threshold": threshold,
-        "direction": direction,
-        "passed": passed,
-        "factorScores": {
-            "trend": factor_scores.get("trend"),
-            "momentum": factor_scores.get("momentum"),
-            "addon": factor_scores.get("addon"),
-        },
-        "trendScore": factor_scores.get("trend"),
-        "momentumScore": factor_scores.get("momentum"),
-        "addonScore": factor_scores.get("addon"),
-        "adxValue": sig.get("adxValue"),
-        "adxGate": sig.get("adxGate") or sig.get("adx_gate"),
-        "sessionMultiplier": sig.get("sessionMultiplier"),
-        "conviction": sig.get("conviction"),
-        "entry": sig.get("entry"),
-        "sl": sig.get("sl"),
-        "tp": sig.get("tp") or sig.get("tp1"),
-        "tp1": sig.get("tp1") or sig.get("tp"),
-        "tp2": sig.get("tp2"),
-        "rr": sig.get("rr"),
-        "failReasons": fail_reasons,
-        "freshnessPolicyStatus": (sig.get("dataFreshness") or {}).get("policyStatus"),
-    }
-
-
-def _ld_build_engine_b_row(sig_b: dict) -> dict:
-    """Extract Engine B fields from a cached naked analysis dict."""
-    if not sig_b:
-        return _ld_empty_engine_b()
-    conf = sig_b.get("confidence") or {}
-    checklist = sig_b.get("checklist") or conf.get("checklist") or {}
-    structural_verdict = sig_b.get("structural_verdict")
-    score = (sig_b.get("confidence_score") or conf.get("score") or
-             sig_b.get("score"))
-    max_score = sig_b.get("confidence_max") or conf.get("max_score") or sig_b.get("max_score")
-    confidence_passed = bool(conf.get("passed") or sig_b.get("passed"))
-    return {
-        "score": score,
-        "maxScore": max_score,
-        "threshold": sig_b.get("min_score"),
-        "direction": sig_b.get("direction"),
-        "structuralVerdict": structural_verdict,
-        "structuralDataValid": bool(sig_b.get("structural_data_valid") or structural_verdict),
-        "confidencePassed": confidence_passed,
-        "structure_ok": bool(checklist.get("structure_ok") or sig_b.get("structure_ok")),
-        "location_ok": bool(checklist.get("location_ok") or sig_b.get("location_ok")),
-        "entry_ok": bool(checklist.get("entry_ok") or sig_b.get("entry_ok")),
-        "room_rr_ok": bool(checklist.get("room_rr_ok") or checklist.get("room_ok") or sig_b.get("room_rr_ok")),
-        "d1_conflict": checklist.get("d1_conflict") if "d1_conflict" in checklist else sig_b.get("d1_conflict"),
-        "hardFailReasons": _ld_list(conf.get("hard_fail_reasons") or
-                                    sig_b.get("hard_fail_reasons")),
-        "softWarnings": _ld_list(conf.get("soft_warnings") or
-                                 sig_b.get("soft_warnings")),
-        "diagnosticNotes": _ld_list(conf.get("diagnostic_notes") or
-                                    sig_b.get("diagnostic_notes")),
-        "noTriggerClassification": sig_b.get("no_trigger_classification") or sig_b.get("no_trigger"),
-        "entry": sig_b.get("entry"),
-        "sl": sig_b.get("sl"),
-        "tp": sig_b.get("tp"),
-        "rr": sig_b.get("rr"),
-    }
-
-
-def _ld_derive_engine_c_state(a_row: dict, b_row: dict) -> dict:
-    """Derive Engine C decision state from Engine A/B rows (no scoring change)."""
-    a_passed = bool(a_row.get("passed"))
-    b_passed = bool(b_row.get("confidencePassed"))
-    a_dir = a_row.get("direction")
-    b_dir = b_row.get("direction")
-
-    if not a_passed and not b_passed:
-        state = "NO_SETUP"
-    elif a_passed and b_passed:
-        dirs_conflict = bool(a_dir and b_dir and a_dir != b_dir)
-        state = "CONFLICT" if dirs_conflict else "ALIGNED"
-    elif a_passed:
-        state = "A_ONLY"
-    else:
-        state = "B_ONLY"
-
-    conviction = a_row.get("conviction")
-    try:
-        conviction_f = float(conviction or 0.0)
-    except (TypeError, ValueError):
-        conviction_f = 0.0
-
-    tier = None
-    if state == "ALIGNED":
-        if conviction_f >= 0.70:
-            tier = "HIGH"
-        elif conviction_f >= 0.50:
-            tier = "MEDIUM"
-        elif conviction_f >= 0.35:
-            tier = "LOW"
-        else:
-            tier = "SKIP"
-    elif state in ("A_ONLY", "B_ONLY"):
-        tier = "WATCHLIST"
-    elif state == "CONFLICT":
-        tier = "WATCHLIST"
-
-    direction = a_dir or b_dir
-    return {
-        "decisionState": state,
-        "consensusType": ("A+B" if state == "ALIGNED"
-                          else ("A" if state == "A_ONLY"
-                                else ("B" if state == "B_ONLY" else None))),
-        "conviction": conviction_f if state == "ALIGNED" else None,
-        "tier": tier,
-        "trade": False,  # Dashboard never creates execution permission
-        "engineAContribution": a_row.get("score"),
-        "engineBContribution": b_row.get("score"),
-        "engineBChecklistPassed": bool(b_row.get("confidencePassed")),
-        "watchlistReason": ("single_engine_only" if state in ("A_ONLY", "B_ONLY")
-                            else ("engine_conflict" if state == "CONFLICT" else None)),
-        "blockReason": None,
-        "reason": (f"{direction} - {state}" if state != "NO_SETUP" else "no engine setup"),
-    }
-
-
-def _ld_build_engine_d_row(scalp_cached: dict, pair: dict) -> dict:
-    """Build Engine D row from cached scalp result dict."""
-    if not scalp_cached:
-        return _ld_empty_engine_d()
-
-    ts = scalp_cached.get("_ts")
-    engine_d_ttl = float((CONFIG.get("LIVE_DASHBOARD") or {}).get("ENGINE_D_UPDATE_SEC", 300))
-    is_stale = ts is None or (time.time() - ts) > max(engine_d_ttl, 60.0)
-
-    asset_type = pair.get("type") or ""
-    limited_data = asset_type not in ("crypto",)
-    soft_warnings = ["DATA_LIMITED_NON_CRYPTO"] if limited_data else []
-    soft_warnings.extend(_ld_list(scalp_cached.get("soft_warnings")))
-
-    if is_stale:
-        return {**_ld_empty_engine_d(), "softWarnings": soft_warnings,
-                "missingData": ["engine_d_cache_stale_or_missing"]}
-
-    if scalp_cached.get("_skipped"):
-        reason_raw = scalp_cached.get("reason") or "BLOCKED"
-        fail_reasons = [reason_raw] if isinstance(reason_raw, str) else list(reason_raw or [])
-        return {
-            "enabled": True, "gateResult": "BLOCKED",
-            "grade": None, "score": None, "setupType": None,
-            "spread": scalp_cached.get("spread"), "rr": scalp_cached.get("rr1") or scalp_cached.get("rr"),
-            "direction": scalp_cached.get("direction"),
-            "failReasons": fail_reasons, "softWarnings": soft_warnings,
-            "diagnosticNotes": _ld_list(scalp_cached.get("diagnostic_notes")),
-            "missingData": _ld_list(scalp_cached.get("missing_data")),
-            "vp": {"vah": None, "poc": None, "val": None},
-            "nearPoc": None, "nearVah": None, "nearVal": None,
-            "cvdAvailable": False, "cvdBias": None, "absorptionDetected": False,
-        }
-
-    grade = scalp_cached.get("ai_grade")
-    score = scalp_cached.get("ai_score")
-    explicit_gate = scalp_cached.get("gate_result") or scalp_cached.get("gateResult")
-    if explicit_gate:
-        gate_result = explicit_gate
-    elif grade in ("A", "B"):
-        gate_result = "PASS"
-    elif grade == "C":
-        gate_result = "WATCHLIST"
-    elif grade == "D":
-        gate_result = "BLOCKED"
-    else:
-        gate_result = "NO_SETUP"
-
-    return {
-        "enabled": True,
-        "gateResult": gate_result,
-        "grade": grade,
-        "score": score,
-        "setupType": scalp_cached.get("zone_type") or scalp_cached.get("setup_type"),
-        "spread": scalp_cached.get("spread"),
-        "rr": scalp_cached.get("rr1") or scalp_cached.get("rr"),
-        "direction": scalp_cached.get("direction"),
-        "entry": scalp_cached.get("price") or scalp_cached.get("entry"),
-        "sl": scalp_cached.get("sl"),
-        "tp": scalp_cached.get("tp1") or scalp_cached.get("tp"),
-        "tp1": scalp_cached.get("tp1") or scalp_cached.get("tp"),
-        "tp2": scalp_cached.get("tp2"),
-        "failReasons": _ld_list(scalp_cached.get("fail_reasons") or scalp_cached.get("ai_reasons")),
-        "softWarnings": soft_warnings,
-        "diagnosticNotes": _ld_list(scalp_cached.get("diagnostic_notes")),
-        "missingData": _ld_list(scalp_cached.get("missing_data")),
-        "vp": {
-            "vah": scalp_cached.get("vp_vah"),
-            "poc": scalp_cached.get("vp_poc"),
-            "val": scalp_cached.get("vp_val"),
-        },
-        "nearPoc": bool(scalp_cached.get("near_poc")) if scalp_cached.get("near_poc") is not None else None,
-        "nearVah": bool(scalp_cached.get("near_vah")) if scalp_cached.get("near_vah") is not None else None,
-        "nearVal": bool(scalp_cached.get("near_val")) if scalp_cached.get("near_val") is not None else None,
-        "cvdAvailable": scalp_cached.get("cvd_direction") is not None,
-        "cvdBias": scalp_cached.get("cvd_direction"),
-        "absorptionDetected": bool((scalp_cached.get("absorption_count") or 0) > 0),
-    }
-
-
-def _ld_freshness_row(pair: dict, tf: str, candles: list | None, provider_error: str | None) -> dict:
-    """Build a policy-aware freshness summary row for the live dashboard."""
-    if provider_error or not candles:
-        return {
-            "consistencyStatus": "PROVIDER_ERROR" if provider_error else "DATA_MISSING",
-            "policyStatus": None,
-            "gateDecision": "BLOCK",
-            "blockReason": provider_error or "no_candles",
-        }
-    try:
-        from athena_app.services.market_state import candle_freshness_diagnostic
-        diag = candle_freshness_diagnostic(pair, tf, candles)
-        severity = diag.get("stalenessSeverity") or "missing_current_bucket"
-
-        # Policy mapping: MT5-sourced pairs use CONFIRMED_ONLY - stale_1_bucket is expected
-        source = pair.get("source") or ""
-        ptype = pair.get("type") or ""
-        confirmed_only = source == "mt5" or ptype in ("forex", "commodity", "index", "stock")
-
-        if severity == "fresh":
-            consistency = "OK"
-            policy_status = "POLICY_OK"
-            gate = "ALLOW"
-            block_reason = None
-        elif severity == "stale_1_bucket" and confirmed_only:
-            consistency = "CONFIRMED_ONLY_OK"
-            policy_status = "POLICY_OK"
-            gate = "ALLOW"
-            block_reason = None
-        elif severity == "stale_1_bucket":
-            consistency = "TRUE_STALE_1_BUCKET"
-            policy_status = "POLICY_LAG"
-            gate = "BLOCK"
-            block_reason = "stale_1_bucket"
-        elif severity == "stale_multi_bucket":
-            consistency = "TRUE_STALE_MULTI_BUCKET"
-            policy_status = "POLICY_LAG"
-            gate = "BLOCK"
-            block_reason = "stale_multi_bucket"
-        else:
-            consistency = "PROVIDER_STALE"
-            policy_status = None
-            gate = "BLOCK"
-            block_reason = severity
-
-        return {
-            "consistencyStatus": consistency,
-            "policyStatus": policy_status,
-            "gateDecision": gate,
-            "blockReason": block_reason,
-            "bucketLag": diag.get("bucketLag"),
-            "lastBarIso": diag.get("lastBarIso"),
-            "candleConsistency": diag,
-        }
-    except Exception as exc:
-        return {
-            "consistencyStatus": "PROVIDER_ERROR",
-            "policyStatus": None,
-            "gateDecision": "BLOCK",
-            "blockReason": str(exc)[:120],
-        }
-
-
-def _ld_paper_position(display: str) -> dict:
-    """Look up the latest open paper/demo position for a symbol from audit_log."""
-    empty = {"hasOpenPaperPosition": False, "entry": None, "sl": None, "tp": None, "pnl": None}
-    try:
-        with sqlite3.connect(_AUDIT_DB, timeout=5.0) as con:
-            con.row_factory = sqlite3.Row
-            row = con.execute(
-                "SELECT entry_price, sl, tp, direction FROM audit_log "
-                "WHERE pair=? AND grade LIKE 'PAPER%' AND exit_price IS NULL "
-                "ORDER BY ts DESC LIMIT 1",
-                (display,),
-            ).fetchone()
-        if row:
-            return {
-                "hasOpenPaperPosition": True,
-                "entry": row["entry_price"],
-                "sl": row["sl"],
-                "tp": row["tp"],
-                "pnl": None,
-            }
-    except Exception:
-        pass
-    return empty
-
-
-def _ld_binance_ws_live() -> bool:
-    """Check if the Binance live price WebSocket is running."""
-    try:
-        bws = _binance_ws
-        if bws is None:
-            return False
-        if not getattr(bws, "_running", False):
-            return False
-        t = getattr(bws, "_thread", None)
-        return bool(t is not None and t.is_alive())
-    except Exception:
-        return False
-
-
-def _ld_open_paper_positions() -> list[dict]:
-    rows: list[dict] = []
-    try:
-        with sqlite3.connect(_AUDIT_DB, timeout=5.0) as con:
-            con.row_factory = sqlite3.Row
-            for row in con.execute(
-                "SELECT pair, entry_price, sl, tp FROM audit_log "
-                "WHERE grade LIKE 'LD-PAPER%' AND exit_price IS NULL"
-            ).fetchall():
-                entry = row["entry_price"]
-                sl = row["sl"]
-                risk_amount = 0.0
-                try:
-                    risk_amount = abs(float(entry or 0) - float(sl or 0))
-                except (TypeError, ValueError):
-                    risk_amount = 0.0
-                rows.append({"pair": row["pair"], "entry": entry, "sl": sl, "tp": row["tp"], "risk_amount": risk_amount})
-    except Exception:
-        return []
-    return rows
-
-
-def _ld_resolve_pair(symbol: str) -> dict | None:
-    sym_upper = str(symbol or "").upper()
-    for p in ALL_PAIRS:
-        keys = {
-            str(p.get("display", "")).upper(),
-            str(p.get("symbol", "")).upper(),
-            str(p.get("pair", "")).upper(),
-        }
-        if sym_upper in keys:
-            return p
-    return None
-
-
-@app.route("/api/live-dashboard/snapshot")
-def api_live_dashboard_snapshot():
-    """Read-only live dashboard snapshot for paper/demo monitoring.
-
-    SAFETY CONTRACT:
-    - Never places orders.
-    - Never calls broker order APIs.
-    - Never mutates account state.
-    - PAPER_SOAK.ENABLED and REAL_ORDERS_ALLOWED are always re-read from CONFIG.
-    - Returns per-symbol error rows on failure; never 500 for individual symbols.
-    """
-    cfg_ld = CONFIG.get("LIVE_DASHBOARD") or {}
-    if not cfg_ld.get("ENABLED", True):
-        return jsonify({"error": "Live Dashboard disabled in config"}), 503
-
-    # Parse requested symbols
-    raw_syms = request.args.get("symbols", "")
-    tf = str(request.args.get("timeframe") or cfg_ld.get("DEFAULT_TIMEFRAME") or "H4").upper()
-    if tf not in ("H1", "H4", "D1"):
-        tf = "H4"
-
-    if raw_syms:
-        req_symbols = [s.strip() for s in raw_syms.split(",") if s.strip()]
-    else:
-        req_symbols = list(cfg_ld.get("DEFAULT_SYMBOLS") or [])
-
-    max_syms = max(1, int(cfg_ld.get("MAX_SYMBOLS", 8)))
-    truncated = len(req_symbols) > max_syms
-    if truncated:
-        log.warning("[LIVE-DASH] %d symbols requested; truncating to %d", len(req_symbols), max_syms)
-    req_symbols = req_symbols[:max_syms]
-
-    # Safety state - always read from CONFIG
-    paper_soak = CONFIG.get("PAPER_SOAK") or {}
-    paper_mode = {
-        "enabled": bool(paper_soak.get("ENABLED", True)),
-        "realOrdersAllowed": bool(CONFIG.get("REAL_ORDERS_ALLOWED", False)),
-    }
-
-    # Connection status
-    mt5_health = _mt5_connection_health()
-    binance_live = _ld_binance_ws_live()
-    connections = {
-        "mt5": ("connected" if mt5_health.get("connected")
-                else ("error" if mt5_health.get("available") else "unknown")),
-        "binanceWs": "live" if binance_live else "unknown",
-    }
-
-    # Build lookup from last full scan results (Engine A)
-    _last_a_by_display: dict = {}
-    for _sig in (_last_scan_results.get("signals") or []):
-        _disp = str(_sig.get("display") or _sig.get("pair") or "").upper()
-        if _disp:
-            _last_a_by_display[_disp] = _sig
-
-    now = datetime.now(timezone.utc)
-    symbol_rows = []
-    events = []
-    freshness_all_ok = True
-
-    for sym_req in req_symbols:
-        sym_upper = sym_req.strip().upper()
-
-        # Resolve pair dict from ALL_PAIRS
-        pair = None
-        for _p in ALL_PAIRS:
-            _keys = {str(_p.get("display", "")).upper(), str(_p.get("symbol", "")).upper()}
-            if sym_upper in _keys:
-                pair = _p
-                break
-
-        if pair is None:
-            symbol_rows.append({
-                "symbol": sym_req, "asset_type": None, "source": None, "timeframe": tf,
-                "error": "symbol_not_found",
-                "latest_price": None, "bid": None, "ask": None, "spread": None, "change_pct": None,
-                "chart": None,
-                "freshness": {"consistencyStatus": "DATA_MISSING", "policyStatus": None,
-                              "gateDecision": "BLOCK", "blockReason": "symbol_not_found"},
-                "engineA": _ld_empty_engine_a(), "engineB": _ld_empty_engine_b(),
-                "engineC": _ld_empty_engine_c(), "engineD": _ld_empty_engine_d(),
-                "aiReview": {},
-                "paperPosition": {"hasOpenPaperPosition": False, "entry": None, "sl": None, "tp": None, "pnl": None},
-                "paper": {"hasOpenPaperPosition": False, "entry": None, "sl": None, "tp": None, "pnl": None},
-                "levels": {},
-                "finalState": "BLOCKED",
-                "mainReason": "symbol_not_found",
-                "blockReason": "symbol_not_found",
-                "executableState": {
-                    "canPaperExecute": False, "canRealExecute": False,
-                    "disabledReason": "symbol_not_found", "riskStatus": "NOT_CHECKED",
-                    "freshnessStatus": "BLOCK",
-                    "paperMode": bool((CONFIG.get("PAPER_SOAK") or {}).get("ENABLED", True)),
-                    "realOrdersAllowed": bool(CONFIG.get("REAL_ORDERS_ALLOWED", False)),
-                },
-            })
-            continue
-
-        display = str(pair.get("display") or pair.get("symbol") or sym_req)
-
-        # Live price
-        with _live_prices_lock:
-            lp_entry = dict(_live_prices.get(display) or {})
-        latest_price = lp_entry.get("price")
-        bid = lp_entry.get("bid")
-        ask = lp_entry.get("ask")
-        spread = None
-        if bid is not None and ask is not None:
-            try:
-                spread = round(float(ask) - float(bid), 6)
-            except (TypeError, ValueError):
-                pass
-        change_pct = lp_entry.get("change_pct")
-
-        # H4 candles for chart (limit 65 to get 60 confirmed bars after forming-bar considerations)
-        chart_candles = None
-        freshness_result = {"consistencyStatus": "DATA_MISSING", "policyStatus": None,
-                            "gateDecision": "BLOCK", "blockReason": "no_candles"}
-        provider_error_str = None
-        raw_candles = None
-        try:
-            raw_candles = fetch_candles(pair, tf, 65)
-        except Exception as exc:
-            provider_error_str = str(exc)[:120]
-
-        freshness_result = _ld_freshness_row(pair, tf, raw_candles, provider_error_str)
-
-        if raw_candles:
-            display_candles = raw_candles[-60:] if len(raw_candles) > 60 else raw_candles
-            chart_candles = []
-            for _c in display_candles:
-                if not isinstance(_c, dict):
-                    continue
-                chart_candles.append({
-                    "time": _c.get("time") or _c.get("t") or _c.get("date"),
-                    "open": _c.get("open") or _c.get("o"),
-                    "high": _c.get("high") or _c.get("h"),
-                    "low": _c.get("low") or _c.get("l"),
-                    "close": _c.get("close") or _c.get("c"),
-                    "volume": _c.get("volume") or _c.get("v"),
-                })
-
-        # H4 grid offset for display annotation
-        h4_offset_hours: float | None = None
-        if tf == "H4":
-            src = pair.get("source") or ""
-            ptype = pair.get("type") or ""
-            if src == "binance":
-                h4_offset_hours = 0.0
-            elif ptype == "stock":
-                h4_offset_hours = 3.0
-            else:
-                h4_offset_hours = 2.0
-
-        chart_row = None
-        if chart_candles:
-            latest_iso = chart_candles[-1].get("time") if chart_candles else None
-            chart_row = {
-                "candles": chart_candles,
-                "latestConfirmedCandleIso": latest_iso,
-                "latestFormingCandleIso": None,
-                "candlePolicy": "CONFIRMED_ONLY",
-                "h4GridOffsetHours": h4_offset_hours,
-            }
-
-        # Engine A - from last scan cache (no re-run on snapshot)
-        sig_a = _last_a_by_display.get(display.upper()) or {}
-        engine_a_row = _ld_build_engine_a_row(sig_a)
-
-        # Engine B - from in-process cache
-        sig_b = _engine_b_cache_get(display) or _engine_b_cache_get(display.upper()) or {}
-        engine_b_row = _ld_build_engine_b_row(sig_b)
-
-        # Engine C - derived (no scoring change, no execution)
-        engine_c_row = _ld_derive_engine_c_state(engine_a_row, engine_b_row)
-
-        # Engine D - from scalp cache
-        with _live_dashboard_scalp_cache_lock:
-            scalp_cached = dict(_live_dashboard_scalp_cache.get(display.upper()) or {})
-        engine_d_row = _ld_build_engine_d_row(scalp_cached, pair)
-
-        # Paper position
-        paper_row = _ld_paper_position(display)
-
-        # Freshness aggregate
-        if freshness_result.get("gateDecision") != "ALLOW":
-            freshness_all_ok = False
-
-        # Build event entries for notable state changes
-        c_state = engine_c_row.get("decisionState")
-        if c_state == "ALIGNED":
-            events.append({
-                "timestamp": now.isoformat(),
-                "symbol": display,
-                "severity": "pass",
-                "message": f"Engine C ALIGNED [{engine_c_row.get('tier','?')}] - {engine_a_row.get('direction','?')}",
-            })
-        elif c_state == "WATCHLIST" or c_state in ("A_ONLY", "B_ONLY"):
-            events.append({
-                "timestamp": now.isoformat(),
-                "symbol": display,
-                "severity": "watch",
-                "message": f"Engine C {c_state} - {engine_a_row.get('direction') or engine_b_row.get('direction') or '?'}",
-            })
-        if freshness_result.get("gateDecision") == "BLOCK":
-            events.append({
-                "timestamp": now.isoformat(),
-                "symbol": display,
-                "severity": "block",
-                "message": f"Freshness BLOCK [{display}]: {freshness_result.get('consistencyStatus','?')}",
-            })
-        d_gate = engine_d_row.get("gateResult")
-        if d_gate == "PASS":
-            events.append({
-                "timestamp": now.isoformat(),
-                "symbol": display,
-                "severity": "pass",
-                "message": f"Engine D PASS grade={engine_d_row.get('grade','?')} - {engine_d_row.get('setupType','?')}",
-            })
-        elif d_gate == "WATCHLIST":
-            events.append({
-                "timestamp": now.isoformat(),
-                "symbol": display,
-                "severity": "watch",
-                "message": f"Engine D WATCHLIST (grade C) - {engine_d_row.get('setupType','?')}",
-            })
-
-        # Derive levels from best available engine (B > A > D)
-        _levels: dict = {}
-        if engine_b_row.get("entry") is not None:
-            _levels = {"entry": engine_b_row.get("entry"), "sl": engine_b_row.get("sl"),
-                       "tp": engine_b_row.get("tp"), "tp1": engine_b_row.get("tp"),
-                       "tp2": None, "rr": engine_b_row.get("rr"),
-                       "source": "engineB"}
-        elif sig_a.get("entry") is not None:
-            _levels = {"entry": sig_a.get("entry"), "sl": sig_a.get("sl"),
-                       "tp": sig_a.get("tp") or sig_a.get("tp1"),
-                       "tp1": sig_a.get("tp1") or sig_a.get("tp"),
-                       "tp2": sig_a.get("tp2"), "rr": sig_a.get("rr"),
-                       "source": "engineA"}
-        elif engine_d_row.get("entry") is not None:
-            _levels = {"entry": engine_d_row.get("entry"), "sl": engine_d_row.get("sl"),
-                       "tp": engine_d_row.get("tp") or engine_d_row.get("tp1"),
-                       "tp1": engine_d_row.get("tp1") or engine_d_row.get("tp"),
-                       "tp2": engine_d_row.get("tp2"), "rr": engine_d_row.get("rr"),
-                       "source": "engineD"}
-
-        if chart_row is not None:
-            chart_row["levels"] = {
-                "entry": _levels.get("entry"),
-                "sl": _levels.get("sl"),
-                "tp1": _levels.get("tp1") or _levels.get("tp"),
-                "tp2": _levels.get("tp2"),
-                "live": latest_price,
-                "vah": (engine_d_row.get("vp") or {}).get("vah"),
-                "poc": (engine_d_row.get("vp") or {}).get("poc"),
-                "val": (engine_d_row.get("vp") or {}).get("val"),
-            }
-
-        final_state, main_reason, block_reason = _ld_final_state(
-            engine_c_row, engine_d_row, freshness_result, _levels
-        )
-        _symbol_state = {
-            "freshness": freshness_result,
-            "engineC": engine_c_row,
-            "engineD": engine_d_row,
-            "levels": _levels,
-            "finalState": final_state,
-        }
-        _executable_state_obj = _ld_executable_state(_symbol_state)
-        _ai_review = {
-            "marcusReid": sig_a.get("aiAnalysis") or sig_a.get("analysis"),
-            "engineBAI": (sig_b or {}).get("ai_review"),
-            "signalDebate": sig_a.get("signalDebate") or sig_a.get("debate"),
-            "chartVision": sig_a.get("chartVision") or sig_a.get("vision"),
-            "reviewState": sig_a.get("aiReviewState") or "NOT_VERIFIED",
-            "confidence": sig_a.get("aiConfidence"),
-            "contradictions": _ld_list(sig_a.get("aiContradictions")),
-            "missingInformation": _ld_list(sig_a.get("aiMissingInformation")),
-            "downgradeOnly": True,
-            "affectedExecutionPermission": False,
-        }
-
-        # executableState: paper-only - never grants real execution
-        _c_state = engine_c_row.get("decisionState", "NO_SETUP")
-        _fresh_ok = freshness_result.get("gateDecision") == "ALLOW"
-        _executable_state = (
-            "PAPER_READY" if (_c_state in ("ALIGNED", "A_ONLY", "B_ONLY") and _fresh_ok)
-            else "NOT_READY"
-        )
-
-        symbol_rows.append({
-            "symbol": display,
-            "asset_type": pair.get("type"),
-            "source": pair.get("source"),
-            "timeframe": tf,
-            "latest_price": latest_price,
-            "bid": bid,
-            "ask": ask,
-            "spread": spread,
-            "change_pct": change_pct,
-            "chart": chart_row,
-            "freshness": freshness_result,
-            "engineA": engine_a_row,
-            "engineB": engine_b_row,
-            "engineC": engine_c_row,
-            "engineD": engine_d_row,
-            "aiReview": _ai_review,
-            "paperPosition": paper_row,
-            "paper": paper_row,
-            "levels": _levels,
-            "finalState": final_state,
-            "mainReason": main_reason,
-            "blockReason": block_reason,
-            "executableState": _executable_state_obj,
-        })
-
-    return jsonify(_json_safe({
-        "payloadVersion": "live-dashboard-v3",
-        "contract": {
-            "engineA": "v2_factor_scoring",
-            "engineB": "naked_structure",
-            "engineC": "consensus",
-            "engineD": "scalp_vp",
-            "execution": "paper_only",
-        },
-        "generated_at": now.isoformat(),
-        "paperMode": paper_mode,
-        "connections": connections,
-        "truncatedSymbols": truncated,
-        "freshnessAllOk": freshness_all_ok,
-        "symbols": symbol_rows,
-        "events": events[-50:],
-    }))
-
-
-@app.route("/api/live-dashboard/paper-execute", methods=["POST"])
-def api_live_dashboard_paper_execute():
-    """Paper-only execution logger for Live Dashboard v2.
-
-    Never calls any broker API. Logs the paper entry to audit_log with
-    grade='LD-PAPER-EXECUTE' for soak tracking. Enforces paper mode,
-    freshness gate, and kill-switch - identical safety stack as live
-    execution except no broker call is made.
-    """
-    # Safety: abort immediately if real orders are somehow enabled
-    if CONFIG.get("REAL_ORDERS_ALLOWED", False):
-        return jsonify({"ok": False, "error": "REAL_ORDERS_ALLOWED is true - paper endpoint blocked"}), 403
-
-    paper_cfg = CONFIG.get("PAPER_SOAK") or {}
-    if not paper_cfg.get("ENABLED", True):
-        return jsonify({"ok": False, "error": "PAPER_SOAK.ENABLED is false - paper mode is off"}), 403
-
-    data = request.get_json(force=True, silent=True) or {}
-    symbol = (data.get("symbol") or "").strip().upper()
-    direction = (data.get("direction") or "").strip().upper()
-    entry = data.get("entry")
-    sl = data.get("sl")
-    tp = data.get("tp")
-    rr = data.get("rr")
-
-    if not symbol:
-        return jsonify({"ok": False, "error": "symbol required"}), 400
-    if direction not in ("LONG", "SHORT"):
-        return jsonify({"ok": False, "error": "direction must be LONG or SHORT"}), 400
-
-    # Kill-switch check
-    try:
-        from risk_engine import is_kill_switch_active
-        if is_kill_switch_active():
-            return jsonify({"ok": False, "error": "Kill switch is active"}), 409
-    except Exception:
-        pass
-
-    # Freshness re-check - find the pair config
-    pair_cfg = _ld_resolve_pair(symbol)
-    if pair_cfg is None:
-        return jsonify({"ok": False, "allowed": False, "error": "symbol_not_found"}), 404
-
-    if pair_cfg is not None:
-        try:
-            raw_c = fetch_candles(pair_cfg, "H4", 10)
-            fresh = _ld_freshness_row(pair_cfg, "H4", raw_c, None)
-            if fresh.get("gateDecision") == "BLOCK":
-                return jsonify({
-                    "ok": False,
-                    "error": "Freshness gate BLOCK",
-                    "freshnessStatus": fresh.get("consistencyStatus"),
-                }), 409
-        except Exception:
-            return jsonify({"ok": False, "allowed": False, "error": "Freshness validation failed"}), 409
-
-    display = str(pair_cfg.get("display") or pair_cfg.get("symbol") or symbol)
-    sig_a = {}
-    for _sig in (_last_scan_results.get("signals") or []):
-        _disp = str(_sig.get("display") or _sig.get("pair") or "").upper()
-        if _disp == display.upper():
-            sig_a = _sig
-            break
-    engine_a_row = _ld_build_engine_a_row(sig_a)
-    sig_b = _engine_b_cache_get(display) or _engine_b_cache_get(display.upper()) or {}
-    engine_b_row = _ld_build_engine_b_row(sig_b)
-    engine_c_row = _ld_derive_engine_c_state(engine_a_row, engine_b_row)
-    with _live_dashboard_scalp_cache_lock:
-        scalp_cached = dict(_live_dashboard_scalp_cache.get(display.upper()) or {})
-    engine_d_row = _ld_build_engine_d_row(scalp_cached, pair_cfg)
-
-    if engine_b_row.get("entry") is not None:
-        levels = {"entry": engine_b_row.get("entry"), "sl": engine_b_row.get("sl"),
-                  "tp": engine_b_row.get("tp"), "tp1": engine_b_row.get("tp"),
-                  "rr": engine_b_row.get("rr"), "source": "engineB"}
-    elif engine_a_row.get("entry") is not None:
-        levels = {"entry": engine_a_row.get("entry"), "sl": engine_a_row.get("sl"),
-                  "tp": engine_a_row.get("tp"), "tp1": engine_a_row.get("tp1"),
-                  "tp2": engine_a_row.get("tp2"), "rr": engine_a_row.get("rr"),
-                  "source": "engineA"}
-    elif engine_d_row.get("entry") is not None:
-        levels = {"entry": engine_d_row.get("entry"), "sl": engine_d_row.get("sl"),
-                  "tp": engine_d_row.get("tp") or engine_d_row.get("tp1"),
-                  "tp1": engine_d_row.get("tp1") or engine_d_row.get("tp"),
-                  "tp2": engine_d_row.get("tp2"), "rr": engine_d_row.get("rr"),
-                  "source": "engineD"}
-    else:
-        levels = {"entry": entry, "sl": sl, "tp": tp, "tp1": tp, "rr": rr,
-                  "source": "request_fallback"}
-
-    final_state, main_reason, block_reason = _ld_final_state(engine_c_row, engine_d_row, fresh, levels)
-    exec_state = _ld_executable_state({
-        "freshness": fresh, "engineC": engine_c_row, "engineD": engine_d_row,
-        "levels": levels, "finalState": final_state,
-    })
-    if not exec_state.get("canPaperExecute"):
-        return jsonify({
-            "ok": False,
-            "allowed": False,
-            "error": exec_state.get("disabledReason") or "PAPER_EXECUTE_BLOCKED",
-            "finalState": final_state,
-            "mainReason": main_reason,
-            "blockReason": block_reason,
-            "executableState": exec_state,
-        }), 409
-
-    direction = (
-        engine_a_row.get("direction")
-        or engine_b_row.get("direction")
-        or engine_d_row.get("direction")
-        or direction
-    ).upper()
-    signal_for_risk = {
-        "pair": display,
-        "type": pair_cfg.get("type"),
-        "direction": direction,
-        "price": levels.get("entry"),
-        "sl": levels.get("sl"),
-        "tp1": levels.get("tp1") or levels.get("tp"),
-        "tp2": levels.get("tp2"),
-        "rr": levels.get("rr"),
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-        "decision_state": engine_c_row.get("decisionState"),
-        "tier": engine_c_row.get("tier"),
-        "verdict": engine_c_row.get("decisionState"),
-        "components": {"b_checklist_passed": bool(engine_b_row.get("confidencePassed"))},
-        "engine_b_status": {"checklist_passed": bool(engine_b_row.get("confidencePassed"))},
-        "dataFreshness": {"allowed": True, "reason": None},
-    }
-    try:
-        from risk_engine import risk_check
-
-        paper_balance = float(paper_cfg.get("ACCOUNT_BALANCE", 10000.0))
-        approval = risk_check(
-            signal=signal_for_risk,
-            account_balance=paper_balance,
-            account_equity=paper_balance,
-            open_positions=_ld_open_paper_positions(),
-            symbol_info=None,
-            kill_switch=_kill_switch,
-            sizing_override=1.0,
-        )
-    except Exception as exc:
-        return jsonify({"ok": False, "allowed": False, "error": f"risk_check failed: {exc}"}), 409
-
-    if not approval.approved:
-        return jsonify({
-            "ok": False,
-            "allowed": False,
-            "error": f"Risk engine rejected: {approval.reason}",
-            "approval": approval.to_dict(),
-            "executableState": _ld_executable_state({
-                "freshness": fresh, "engineC": engine_c_row, "engineD": engine_d_row,
-                "levels": levels, "finalState": final_state,
-            }, approval.reason),
-        }), 409
-
-    now_ts = datetime.now(timezone.utc).isoformat()
-    log_id = None
-    try:
-        with sqlite3.connect(_AUDIT_DB, timeout=15.0) as con:
-            con.execute("PRAGMA journal_mode=WAL")
-            cur = con.execute(
-                """INSERT INTO audit_log
-                   (ts, pair, direction, grade, style, asset_class, entry_price, sl, tp)
-                   VALUES (?,?,?,?,?,?,?,?,?)""",
-                (now_ts, display, direction, "LD-PAPER-EXECUTE", "paper",
-                 pair_cfg.get("type") if pair_cfg else None,
-                 float(levels.get("entry")) if levels.get("entry") is not None else None,
-                 float(levels.get("sl")) if levels.get("sl") is not None else None,
-                 float(levels.get("tp")) if levels.get("tp") is not None else None),
-            )
-            con.commit()
-            log_id = cur.lastrowid
-    except Exception as exc:
-        return jsonify({"ok": False, "error": f"DB write failed: {exc}"}), 500
-
-    return jsonify({
-        "ok": True,
-        "allowed": True,
-        "log_id": log_id,
-        "symbol": display,
-        "direction": direction,
-        "grade": "LD-PAPER-EXECUTE",
-        "approval": approval.to_dict(),
-        "timestamp": now_ts,
-        "note": "Paper log only - no broker order placed",
-    })
-
-
-@app.route("/api/shadow-signals")
-def api_shadow_signals():
-    """Recent Engine C shadow ledger rows (requires SHADOW_LEDGER_ENABLED + scans)."""
-    try:
-        lim = int(request.args.get("limit", 50))
-    except (TypeError, ValueError):
-        lim = 50
-    lim = max(1, min(lim, 200))
-    try:
-        with sqlite3.connect(_AUDIT_DB, timeout=15.0) as con:
-            con.row_factory = sqlite3.Row
-            q = con.execute(
-                "SELECT * FROM shadow_signals ORDER BY id DESC LIMIT ?",
-                (lim,),
-            ).fetchall()
-        return jsonify(_json_safe({"signals": [dict(r) for r in q]}))
-    except Exception as e:
-        log.error(f"api_shadow_signals: {e}")
-        return jsonify({"error": str(e)}), 500
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 from types import SimpleNamespace  # noqa: E402
 
 from athena_runtime import set_runtime  # noqa: E402
+from athena_app.api.routes_audit import register_audit_routes  # noqa: E402
+from athena_app.api.routes_ai_agent import register_ai_agent_routes  # noqa: E402
+from athena_app.api.routes_backtest import register_backtest_history_routes  # noqa: E402
+from athena_app.api.routes_broker_status import register_broker_status_routes  # noqa: E402
+from athena_app.api.routes_live_dashboard import register_live_dashboard_routes  # noqa: E402
+from athena_app.api.routes_lottery import register_lottery_routes  # noqa: E402
+from athena_app.api.routes_market_data import register_market_data_routes  # noqa: E402
+from athena_app.api.routes_status import register_status_routes  # noqa: E402
 from execution import register_execution_routes  # noqa: E402
 
 set_runtime(
@@ -16414,11 +14263,16 @@ set_runtime(
         normalize_style=_normalize_style,
         naked_scan_style_profile=_naked_scan_style_profile,
         engine_b_regime_label=_engine_b_regime_label,
+        compute_naked_analysis=_compute_naked_analysis,
         insert_shadow_from_engine_c=_insert_shadow_from_engine_c,
         resolve_pair_from_signal=_resolve_pair_from_signal,
         calc_indicators_with_normalized=calc_indicators_with_normalized,
         calc_indicators=calc_indicators,
         atr_for_levels=_atr_for_levels,
+        bybit_atr_for_levels=_bybit_atr_for_levels,
+        fetch_bybit_klines=_fetch_bybit_klines,
+        fetch_bybit_klines_paginated=_fetch_bybit_klines_paginated,
+        get_pair_level_atr_class=get_pair_level_atr_class,
         calc_levels=calc_levels,
         fetch_news_context=fetch_news_context,
         fetch_yield_curve=fetch_yield_curve,
@@ -16442,6 +14296,100 @@ set_runtime(
     )
 )
 register_execution_routes(app)
+register_broker_status_routes(
+    app,
+    SimpleNamespace(CONFIG=CONFIG),
+)
+register_audit_routes(
+    app,
+    SimpleNamespace(AUDIT_DB=_AUDIT_DB),
+)
+register_backtest_history_routes(
+    app,
+    SimpleNamespace(AUDIT_DB=_AUDIT_DB),
+)
+register_lottery_routes(
+    app,
+    SimpleNamespace(CONFIG=CONFIG, AUDIT_DB=_AUDIT_DB, log=log),
+)
+register_ai_agent_routes(
+    app,
+    SimpleNamespace(
+        CONFIG=CONFIG,
+        AUDIT_DB=_AUDIT_DB,
+        last_scan_results=lambda: _last_scan_results,
+        live_dashboard_scalp_cache=_live_dashboard_scalp_cache,
+        live_dashboard_scalp_cache_lock=_live_dashboard_scalp_cache_lock,
+        json_safe=_json_safe,
+        log=log,
+    ),
+)
+register_market_data_routes(
+    app,
+    SimpleNamespace(
+        CONFIG=CONFIG,
+        ALL_PAIRS=ALL_PAIRS,
+        ACTIVE_PAIRS=ACTIVE_PAIRS,
+        ETF_PAIRS=ETF_PAIRS,
+        JSE_PAIRS=JSE_PAIRS,
+        disabled_pairs=_disabled_pairs,
+        live_prices=_live_prices,
+        live_prices_lock=_live_prices_lock,
+        fetch_yield_curve=fetch_yield_curve,
+        http_requests=http_requests,
+        fetch_candles=fetch_candles,
+        fetch_eodhd=fetch_eodhd,
+        extract_candles=_extract_candles,
+        merge_forex_forming_ws=_merge_forex_forming_ws,
+        resample_from_h1=_resample_from_h1,
+        forex_h4_resample_offset_hours=_forex_h4_resample_offset_hours,
+        eodhd_ticker_for_pair=_eodhd_ticker_for_pair,
+        json_safe=_json_safe,
+        log=log,
+    ),
+)
+register_live_dashboard_routes(
+    app,
+    SimpleNamespace(
+        CONFIG=CONFIG,
+        AUDIT_DB=_AUDIT_DB,
+        ALL_PAIRS=ALL_PAIRS,
+        ACTIVE_PAIRS=ACTIVE_PAIRS,
+        live_prices=_live_prices,
+        live_prices_lock=_live_prices_lock,
+        live_dashboard_scalp_cache=_live_dashboard_scalp_cache,
+        live_dashboard_scalp_cache_lock=_live_dashboard_scalp_cache_lock,
+        fetch_candles=fetch_candles,
+        scan_candle_limits=scan_candle_limits,
+        get_candle_fetch_meta=_get_candle_fetch_meta,
+        get_candle_builder=get_candle_builder,
+        json_safe=_json_safe,
+        mt5_connection_health=_mt5_connection_health,
+        engine_b_cache_get=_engine_b_cache_get,
+        resolve_pair_from_signal=_resolve_pair_from_signal,
+        get_min_confluence_threshold=get_min_confluence_threshold,
+        last_scan_results=lambda: _last_scan_results,
+        binance_ws=lambda: _binance_ws,
+        kill_switch=lambda: _kill_switch,
+        log=log,
+    ),
+)
+register_status_routes(
+    app,
+    SimpleNamespace(
+        CONFIG=CONFIG,
+        AUDIT_DB=_AUDIT_DB,
+        all_pairs=lambda: ALL_PAIRS,
+        active_pairs=lambda: ACTIVE_PAIRS,
+        kill_switch=lambda: _kill_switch,
+        last_scan_results=lambda: _last_scan_results,
+        mt5_connection_health=lambda: _mt5_connection_health(),
+        micro_cache=lambda: _micro_cache,
+        json_safe=_json_safe,
+        signal_stability_index=get_signal_stability_index,
+        log=log,
+    ),
+)
 
 # ── Research Lab routes (optional - does not affect production logic) ─────────
 try:
@@ -16450,6 +14398,22 @@ try:
     log.info("[startup] Research Lab routes registered")
 except Exception as _rl_err:
     log.warning("[startup] Research Lab routes not loaded: %s", _rl_err)
+
+# ── Research Agent routes (advisory-only, never executes trades) ──────────────
+try:
+    from athena_research.research_agent_routes import register_research_agent_routes
+    register_research_agent_routes(app)
+    log.info("[startup] Research Agent routes registered")
+except Exception as _ra_err:
+    log.warning("[startup] Research Agent routes not loaded: %s", _ra_err)
+
+# ── AI Evaluation routes (read-only metrics, never executes trades) ────────────
+try:
+    from athena_research.ai_evaluation_routes import register_ai_evaluation_routes
+    register_ai_evaluation_routes(app)
+    log.info("[startup] AI Evaluation routes registered")
+except Exception as _ae_err:
+    log.warning("[startup] AI Evaluation routes not loaded: %s", _ae_err)
 
 _runtime_services_lock = threading.Lock()
 _runtime_services_started = False
@@ -16675,6 +14639,11 @@ def ensure_runtime_services_started() -> None:
             return
         _runtime_services_started = True
 
+    from athena.crypto_ws_scope import (
+        binance_micro_symbol_strings,
+        enabled_binance_micro_crypto_pairs,
+    )
+
     # Start EODHD WebSocket real-time price streaming + candle builder
     _ws_key = os.environ.get("EODHD_KEY", "")
     if _ws_key:
@@ -16720,7 +14689,9 @@ def ensure_runtime_services_started() -> None:
     # Start Binance Futures WebSocket for crypto live prices + kline candles
     crypto_enabled = [p for p in CRYPTO_PAIRS if p.get("enabled", True)]
     if crypto_enabled:
-        selected_symbols = _select_live_crypto_symbols_for_ws()
+        demand_symbols = _select_live_crypto_symbols_for_ws()
+        micro_symbols = set(binance_micro_symbol_strings(CRYPTO_PAIRS))
+        selected_symbols = sorted(set(demand_symbols) | micro_symbols)
         selected_intervals = resolve_binance_kline_ws_intervals(CONFIG)
         _binance_ws = BinanceLivePriceWS()
         _binance_ws.start()
@@ -16735,10 +14706,12 @@ def ensure_runtime_services_started() -> None:
             target=_run_binance_price_poller, daemon=True, name="binance-price-poll"
         ).start()
         log.info(
-            "[BINANCE-WS] Price feed active; kline scope symbols=%s tfs=%s (enabled_crypto=%s)",
+            "[BINANCE-WS] Price feed active; kline scope symbols=%s tfs=%s (enabled_crypto=%s demand_scoped=%s all_binance_micro=%s)",
             len(selected_symbols),
             selected_intervals,
             len(crypto_enabled),
+            len(demand_symbols),
+            len(micro_symbols),
         )
         if selected_symbols:
             log.info(
@@ -16755,57 +14728,88 @@ def ensure_runtime_services_started() -> None:
             import asyncio
 
             try:
-                from athena.datafeeds.binance_ws import BinanceWS
+                from athena.datafeeds.binance_ws import BinanceMicroMultiWS, BinanceWS
                 from athena.datafeeds.bybit_ws import BybitWS
             except ImportError as exc:
                 log.warning(f"[MICRO] Import failed: {exc}")
                 return
-            selected_symbols = _select_live_crypto_symbols_for_ws()
-            crypto_pairs = []
+            micro_crypto_pairs = enabled_binance_micro_crypto_pairs(CRYPTO_PAIRS)
+            expected_n = sum(
+                1
+                for p in CRYPTO_PAIRS
+                if p.get("enabled", True)
+                and str(p.get("type") or "").lower() == "crypto"
+                and str(p.get("source") or "").lower() == "binance"
+                and str(p.get("symbol") or "").strip()
+            )
+            malformed = False
             for p in CRYPTO_PAIRS:
-                if not p.get("enabled", False):
+                if not p.get("enabled", True):
                     continue
-                sym = str(p.get("symbol") or "").replace("/", "").upper()
-                if sym in selected_symbols:
-                    crypto_pairs.append(p)
+                if str(p.get("type") or "").lower() != "crypto":
+                    continue
+                if str(p.get("source") or "").lower() != "binance":
+                    continue
+                if not str(p.get("symbol") or "").strip():
+                    malformed = True
+                    log.warning(
+                        "[MICRO] enabled binance crypto pair missing symbol: display=%s",
+                        p.get("display") or "?",
+                    )
+
+            def _apply_micro_cache_update(sym: str, metrics: dict) -> None:
+                """Shared micro-cache writer for Binance multiplex AND Bybit per-symbol callbacks.
+
+                Preserves the previous Binance-preferred / Bybit-fallback selection logic so
+                the multiplex switch is feed-shape neutral.
+                """
+                incoming_exchange = str(metrics.get("exchange", "")).lower()
+                now_ts = time.time()
+                existing = _micro_cache.get(sym, {})
+                existing_exchange = str(existing.get("_exchange", "")).lower()
+                existing_age = now_ts - float(existing.get("_updated_ts", 0) or 0)
+
+                # Prefer Binance for crypto microstructure because the candle/live-price
+                # path also uses Binance Futures. Fall back to Bybit only when the Binance
+                # slot is absent or stale.
+                use_update = False
+                if incoming_exchange == "binance":
+                    use_update = True
+                elif not existing:
+                    use_update = True
+                elif existing_exchange == "binance" and existing_age > 5.0:
+                    use_update = True
+                elif existing_exchange != "binance":
+                    use_update = True
+
+                if not use_update:
+                    return
+
+                _micro_cache[sym] = {
+                    k: metrics.get(k)
+                    for k in (
+                        "order_book_imbalance",
+                        "orderflow_delta",
+                        "liquidity_wall_detection",
+                        "liquidity_pressure",
+                    )
+                }
+                _micro_cache[sym]["_updated_ts"] = now_ts
+                _micro_cache[sym]["_exchange"] = incoming_exchange
 
             def _make_cb(sym):
+                """Per-symbol callback (Bybit fallback path; legacy per-symbol Binance path)."""
                 def _cb(metrics):
-                    incoming_exchange = str(metrics.get("exchange", "")).lower()
-                    now_ts = time.time()
-                    existing = _micro_cache.get(sym, {})
-                    existing_exchange = str(existing.get("_exchange", "")).lower()
-                    existing_age = now_ts - float(existing.get("_updated_ts", 0) or 0)
-
-                    # Prefer Binance for crypto microstructure because the candle/live-price
-                    # path also uses Binance Futures. Fall back to Bybit only when the Binance
-                    # slot is absent or stale.
-                    use_update = False
-                    if incoming_exchange == "binance":
-                        use_update = True
-                    elif not existing:
-                        use_update = True
-                    elif existing_exchange == "binance" and existing_age > 5.0:
-                        use_update = True
-                    elif existing_exchange != "binance":
-                        use_update = True
-
-                    if not use_update:
-                        return
-
-                    _micro_cache[sym] = {
-                        k: metrics.get(k)
-                        for k in (
-                            "order_book_imbalance",
-                            "orderflow_delta",
-                            "liquidity_wall_detection",
-                            "liquidity_pressure",
-                        )
-                    }
-                    _micro_cache[sym]["_updated_ts"] = now_ts
-                    _micro_cache[sym]["_exchange"] = incoming_exchange
+                    _apply_micro_cache_update(sym, metrics)
 
                 return _cb
+
+            def _multi_cb(metrics):
+                """Combined-stream callback: dispatch by metrics['symbol'] (uppercase)."""
+                sym = str(metrics.get("symbol") or "").upper()
+                if not sym:
+                    return
+                _apply_micro_cache_update(sym, metrics)
 
             def _run(client, cb):
                 loop = asyncio.new_event_loop()
@@ -16819,26 +14823,72 @@ def ensure_runtime_services_started() -> None:
                     loop.close()
 
             bybit_micro_enabled = bool(CONFIG.get("MICROSTRUCTURE_BYBIT_FEEDS_ENABLED", False))
+            use_combined = bool(CONFIG.get("MICROSTRUCTURE_BINANCE_COMBINED_STREAM", True))
+            stale_after = float(CONFIG.get("MICROSTRUCTURE_BINANCE_STALE_SYMBOL_SEC", 120.0))
 
-            for pair in crypto_pairs:
-                sym = pair["symbol"]
-                cb = _make_cb(sym)
-                b = BinanceWS(sym.lower())
-                _ws_clients.append(b)
-                threading.Thread(
-                    target=_run, args=(b, cb), daemon=True, name=f"BinWS-{sym}"
-                ).start()
-                if bybit_micro_enabled:
+            if use_combined and micro_crypto_pairs:
+                # F1: One multiplexed Binance Futures connection for ALL micro symbols.
+                multi_syms = [
+                    str(p["symbol"]).replace("/", "").lower() for p in micro_crypto_pairs
+                ]
+                try:
+                    multi = BinanceMicroMultiWS(
+                        symbols=multi_syms,
+                        stale_symbol_seconds=stale_after,
+                    )
+                    _ws_clients.append(multi)
+                    threading.Thread(
+                        target=_run,
+                        args=(multi, _multi_cb),
+                        daemon=True,
+                        name="BinMicroMulti",
+                    ).start()
+                    log.info(
+                        "[MICRO] Combined-stream Binance feed started: %s symbols, stale_after=%.0fs",
+                        len(multi_syms),
+                        stale_after,
+                    )
+                except Exception as multi_exc:
+                    log.error(
+                        "[MICRO] BinanceMicroMultiWS failed to start (%s); falling back to per-symbol",
+                        multi_exc,
+                    )
+                    use_combined = False  # trip the legacy path below
+
+            if (not use_combined) and micro_crypto_pairs:
+                # Legacy per-symbol Binance path (rollback when combined-stream disabled).
+                for pair in micro_crypto_pairs:
+                    sym = pair["symbol"]
+                    cb = _make_cb(sym)
+                    b = BinanceWS(sym.lower())
+                    _ws_clients.append(b)
+                    threading.Thread(
+                        target=_run, args=(b, cb), daemon=True, name=f"BinWS-{sym}"
+                    ).start()
+
+            # Bybit fallback per-symbol path is independent of the Binance multiplex switch.
+            if bybit_micro_enabled:
+                for pair in micro_crypto_pairs:
+                    sym = pair["symbol"]
+                    cb = _make_cb(sym)
                     y = BybitWS(sym.upper())
                     _ws_clients.append(y)
                     threading.Thread(
                         target=_run, args=(y, cb), daemon=True, name=f"BbtWS-{sym}"
                     ).start()
+
+            scope_note = ""
+            if len(micro_crypto_pairs) != expected_n or malformed:
+                scope_note = f" enabled_binance_crypto_expected={expected_n}"
             log.info(
-                "[MICRO] Started feeds: binance=%s bybit=%s symbols=%s",
-                len(crypto_pairs),
-                len(crypto_pairs) if bybit_micro_enabled else 0,
-                ", ".join(str(p["symbol"]).replace("/", "").upper() for p in crypto_pairs) if crypto_pairs else "none",
+                "[MICRO] Started feeds: binance_path=%s bybit=%s pairs_total=%s%s symbols=%s",
+                "combined" if use_combined else "per_symbol_legacy",
+                len(micro_crypto_pairs) if bybit_micro_enabled else 0,
+                expected_n,
+                scope_note,
+                ", ".join(str(p["symbol"]).replace("/", "").upper() for p in micro_crypto_pairs)
+                if micro_crypto_pairs
+                else "none",
             )
 
         threading.Thread(
@@ -16933,6 +14983,9 @@ if __name__ == "__main__":
 
         time.sleep(5)  # wait for connections to establish
 
+        mt5_pos: list = []
+        bpos: list = []
+
         try:
             from mt5_executor import mt5_get_positions, mt5_connect
 
@@ -16984,8 +15037,14 @@ if __name__ == "__main__":
         except Exception as e:
             log.debug(f"[STARTUP] Bybit reconcile skipped: {e}")
 
-        # Check audit DB for unresolved trades
+        mt5_ticket_open = {
+            str(p.get("ticket")).strip()
+            for p in mt5_pos
+            if p.get("ticket") is not None and str(p.get("ticket")).strip()
+        }
 
+        # Check audit_log for rows without exit_price (not the same as broker "open",
+        # but flags missing outcome rows for the outcome monitor / manual cleanup).
         try:
             with sqlite3.connect(_AUDIT_DB, timeout=15.0) as con:
                 con.row_factory = sqlite3.Row
@@ -16996,14 +15055,40 @@ if __name__ == "__main__":
                 ).fetchall()
 
             if unresolved:
-                log.warning(
-                    f"[STARTUP] {len(unresolved)} unresolved trade(s) in audit DB:"
-                )
-
+                by_ticket: dict[str, sqlite3.Row] = {}
                 for r in unresolved:
+                    tix = str(r["ticket"]).strip()
+                    if tix:
+                        by_ticket[tix] = r
+                unique_rows = list(by_ticket.values())
+                orphans_mt5: list[sqlite3.Row] = []
+                for r in unique_rows:
+                    tix = str(r["ticket"]).strip()
+                    if tix.isdigit() and tix not in mt5_ticket_open:
+                        orphans_mt5.append(r)
+                log.warning(
+                    f"[STARTUP] {len(unique_rows)} audit row(s) without exit_price ({len(unresolved)} incl. duplicate tickets); "
+                    f"MT5 ticket not in broker open set: {len(orphans_mt5)}."
+                )
+                for r in sorted(unique_rows, key=lambda x: str(x["pair"] or "")):
+                    tix = str(r["ticket"]).strip()
+                    tag = ""
+                    if tix.isdigit() and tix not in mt5_ticket_open:
+                        tag = " [audit-only: MT5 ticket not in open positions]"
+                    elif "-" in tix and len(tix) >= 32:
+                        tag = " [Bybit/paper id — verify vs outcome monitor if already flat]"
                     log.warning(
-                        f"  - {r['pair']} {r['direction']} entry={r['entry_price']} ticket={r['ticket']}"
+                        "  - %s %s entry=%s ticket=%s%s",
+                        r["pair"],
+                        r["direction"],
+                        r["entry_price"],
+                        tix,
+                        tag,
                     )
+                log.warning(
+                    "[STARTUP] Dashboard open cards use /api/open-trades-timed (live brokers). "
+                    "These audit rows are bookkeeping; CCXT/MT5 monitors backfill exit_price when they match."
+                )
 
         except Exception as e:
             log.debug(f"[STARTUP] Audit DB reconcile failed: {e}")
@@ -17122,14 +15207,5 @@ if __name__ == "__main__":
             log.warning(f"[TELEGRAM] Bot startup failed: {e}")
     else:
         log.info("[TELEGRAM] Bot disabled via ATHENA_DISABLE_TELEGRAM environment variable")
-
-    # Clean Ctrl-C shutdown on Windows - daemon threads stop automatically
-    import signal as _signal
-    def _shutdown_handler(sig, frame):
-        log.info("[SHUTDOWN] Ctrl-C received - stopping Sentinel Pro...")
-        import os as _os
-        _os._exit(0)
-    _signal.signal(_signal.SIGINT, _shutdown_handler)
-    _signal.signal(_signal.SIGTERM, _shutdown_handler)
 
     app.run(host=_host, port=5000, debug=False, use_reloader=False)

@@ -401,6 +401,54 @@ def _fetch_open_positions_sync(req) -> tuple[list[tuple[dict, str]], dict]:
     return out, meta
 
 
+def _is_transient_telegram_error(error: object) -> bool:
+    """Return True for Telegram polling transport errors that PTB can retry."""
+    if error is None:
+        return False
+    name = error.__class__.__name__
+    module = getattr(error.__class__, "__module__", "")
+    if module.startswith("telegram.error") and name in {
+        "NetworkError",
+        "TimedOut",
+        "RetryAfter",
+    }:
+        return True
+    cause = getattr(error, "__cause__", None) or getattr(error, "__context__", None)
+    cause_name = cause.__class__.__name__ if cause is not None else ""
+    cause_module = getattr(cause.__class__, "__module__", "") if cause is not None else ""
+    return cause_module.startswith(("httpx", "httpcore")) and cause_name in {
+        "ReadError",
+        "ConnectError",
+        "ConnectTimeout",
+        "ReadTimeout",
+        "RemoteProtocolError",
+    }
+
+
+async def _telegram_error_handler(update, context) -> None:
+    """Prevent PTB from emitting unhandled-error logs for retryable polling failures."""
+    error = getattr(context, "error", None)
+    if _is_transient_telegram_error(error):
+        log.warning(
+            "[TELEGRAM] Transient polling/update error handled: %s: %s",
+            error.__class__.__name__,
+            error,
+        )
+        return
+
+    chat = getattr(getattr(update, "effective_chat", None), "id", None)
+    if isinstance(error, BaseException):
+        log.error(
+            "[TELEGRAM] Update handler failed%s: %s: %s",
+            f" chat_id={chat}" if chat is not None else "",
+            error.__class__.__name__,
+            error,
+            exc_info=(type(error), error, error.__traceback__),
+        )
+        return
+    log.error("[TELEGRAM] Update handler failed with non-exception error: %r", error)
+
+
 def start_telegram_bot():
     """Start the Telegram bot in a background thread."""
     config = get_runtime_config()
@@ -1368,6 +1416,7 @@ def _build_and_run(token: str, chat_ids: list[str]):
             return
 
     # Register all handlers
+    app.add_error_handler(_telegram_error_handler)
     app.add_handler(CommandHandler("help", cmd_help))
     app.add_handler(CommandHandler("start", cmd_help))
     app.add_handler(CommandHandler("scan", cmd_scan))

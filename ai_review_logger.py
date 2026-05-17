@@ -343,6 +343,16 @@ def log_ai_review(
     image_retrieval_key: str | None = None,
     experiment_id: str | None = None,
     variant_id: str | None = None,
+    packet_hash: str | None = None,
+    memo_text: str | None = None,
+    contradiction_flags: list[str] | None = None,
+    context_completeness: dict[str, Any] | None = None,
+    market_intelligence_hash: str | None = None,
+    market_intelligence_freshness: str | None = None,
+    vision_structured_hash: str | None = None,
+    strategist_verdict: str | None = None,
+    strategist_warnings: list[str] | None = None,
+    packet_schema_version: str | None = None,
 ) -> None:
     """Write one AI review audit record to JSONL.  Never raises."""
     ai_changed_execution_permission = (
@@ -376,7 +386,7 @@ def log_ai_review(
         "model": model,
         "provider": provider,
         "prompt_version": prompt_version,
-        "input_packet_hash": _hash_input(input_packet),
+        "input_packet_hash": packet_hash or _hash_input(input_packet),
         "input_content_sha256": _full_hash,
         "input_retrieval_key": _retrieval_key,
         "has_chart_image": has_chart_image,
@@ -407,6 +417,26 @@ def log_ai_review(
         record["experiment_id"] = experiment_id
     if variant_id:
         record["variant_id"] = variant_id
+    if packet_hash:
+        record["packet_hash"] = packet_hash
+    if memo_text:
+        record["memo_text"] = memo_text
+    if contradiction_flags is not None:
+        record["contradiction_flags"] = contradiction_flags
+    if context_completeness is not None:
+        record["context_completeness"] = context_completeness
+    if market_intelligence_hash:
+        record["market_intelligence_hash"] = market_intelligence_hash
+    if market_intelligence_freshness:
+        record["market_intelligence_freshness"] = market_intelligence_freshness
+    if vision_structured_hash:
+        record["vision_structured_hash"] = vision_structured_hash
+    if strategist_verdict:
+        record["strategist_verdict"] = strategist_verdict
+    if strategist_warnings is not None:
+        record["strategist_warnings"] = strategist_warnings
+    if packet_schema_version:
+        record["packet_schema_version"] = packet_schema_version
 
     try:
         _ensure_log_dir()

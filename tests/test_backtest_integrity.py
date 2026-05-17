@@ -110,6 +110,15 @@ def test_engine_a_backtest_indicator_windows_stop_before_fill_bar():
     )
 
 
+def test_engine_b_backtest_validates_post_fill_level_sides_before_rr():
+    src = Path(backtest_runner.__file__).read_text(encoding="utf-8")
+    assert "invalid post-fill levels" in src
+    side_check = 'direction == "LONG" and sl < entry < tp'
+    rr_check = 'if target_rr < float(style_profile.get("min_rr", 1.0)):'
+    assert side_check in src
+    assert src.index(side_check) < src.index(rr_check)
+
+
 def test_resolve_barrier_exit_prefers_sl_when_long_bar_hits_tp_and_sl():
     outcome, both_hit = backtest_runner._resolve_barrier_exit(
         {"high": 105.0, "low": 94.0},
@@ -194,8 +203,6 @@ def test_engine_b_confidence_gate_requires_passed_and_score_floor():
         style_profile,
         "TRENDING",
     )
-    # engine_b_min_score_threshold applies regime gate then round() to avoid unreachable gates.
-    # With default yaml TRENDING multiplier neutralized to 1.0: round(1.1 * 1.0) == 1.0
     assert round(scaled_min, 3) == 1.0
     assert gate_ok is False
 
@@ -205,6 +212,14 @@ def test_engine_b_confidence_gate_requires_passed_and_score_floor():
         "TRENDING",
     )
     assert round(scaled_min, 3) == 1.0
+    assert gate_ok is True
+
+    gate_ok, scaled_min = engine_b_confidence_passes(
+        {"score": 2.6, "passed": True},
+        {"min_score": 3.0},
+        "HIGH_VOLATILITY",
+    )
+    assert round(scaled_min, 3) == 2.6
     assert gate_ok is True
 
 
@@ -227,7 +242,7 @@ def test_backtest_pair_naked_enters_on_next_bar_open_with_slippage(monkeypatch):
         extract_candles=lambda candles: candles,
         fetch_candles=lambda *_args, **_kwargs: d1,
         fetch_eodhd_intraday_bt=lambda *_args, **_kwargs: (h4, h1),
-        naked_scan_style_profile=lambda style, score_group=None: (
+        naked_scan_style_profile=lambda style, score_group=None, asset_type=None: (
             "intraday",
             {"min_score": 0.5, "fallback_rr": 2.0, "min_rr": 1.0, "atr_tf": "H4"},
         ),
@@ -279,7 +294,7 @@ def test_backtest_pair_naked_enters_on_next_bar_open_with_slippage(monkeypatch):
 
     monkeypatch.setattr(
         market_structure.engine,
-        "analyze_structure",
+        "analyze_structure_direction",
         lambda *_args, **_kwargs: {
             "structural_verdict": "CLEAR",
             "order_blocks": [],
@@ -334,7 +349,7 @@ def test_backtest_pair_naked_skips_profile_context_when_profile_scoring_disabled
         extract_candles=lambda candles: candles,
         fetch_candles=lambda *_args, **_kwargs: d1,
         fetch_eodhd_intraday_bt=lambda *_args, **_kwargs: (h4, h1),
-        naked_scan_style_profile=lambda style, score_group=None: (
+        naked_scan_style_profile=lambda style, score_group=None, asset_type=None: (
             "intraday",
             {"min_score": 0.5, "fallback_rr": 2.0, "min_rr": 1.0, "atr_tf": "H4"},
         ),
@@ -343,6 +358,7 @@ def test_backtest_pair_naked_skips_profile_context_when_profile_scoring_disabled
     )
 
     captured = []
+    pre_captured = []
 
     monkeypatch.setattr(backtest_runner, "_rt", lambda: runtime)
     monkeypatch.setattr(backtest_runner, "get_pair_score_group", lambda _pair: "default")
@@ -369,7 +385,11 @@ def test_backtest_pair_naked_skips_profile_context_when_profile_scoring_disabled
 
     import market_structure
 
-    def _capture_analyze(*_args, **kwargs):
+    def _capture_pre(*args, **kwargs):
+        pre_captured.append(kwargs)
+        return {"_error": None}
+
+    def _capture_analyze_dir(*_args, **kwargs):
         captured.append(kwargs)
         return {
             "structural_verdict": "CLEAR",
@@ -384,7 +404,8 @@ def test_backtest_pair_naked_skips_profile_context_when_profile_scoring_disabled
             "volume_strength": 0.0,
         }
 
-    monkeypatch.setattr(market_structure.engine, "analyze_structure", _capture_analyze)
+    monkeypatch.setattr(market_structure.engine, "precompute_structure_data", _capture_pre)
+    monkeypatch.setattr(market_structure.engine, "analyze_structure_direction", _capture_analyze_dir)
     monkeypatch.setattr(
         market_structure.engine,
         "calculate_confidence",
@@ -401,7 +422,8 @@ def test_backtest_pair_naked_skips_profile_context_when_profile_scoring_disabled
     backtest_runner.backtest_pair_naked(pair, style="intraday")
 
     assert captured
-    assert all(call.get("enable_profile_context") is False for call in captured)
+    assert all(call.get("enable_profile_context") is False for call in pre_captured)
+
 
 
 def test_backtest_pair_naked_forex_auto_keeps_intraday_style_under_d1_structure(monkeypatch):
@@ -416,7 +438,7 @@ def test_backtest_pair_naked_forex_auto_keeps_intraday_style_under_d1_structure(
     style_calls = []
     runtime = SimpleNamespace(
         fetch_candles=lambda _pair, tf, _limit: {"D1": d1, "H4": h4, "H1": h1}[tf],
-        naked_scan_style_profile=lambda style, score_group=None: (
+        naked_scan_style_profile=lambda style, score_group=None, asset_type=None: (
             style_calls.append((style, score_group)) or (
                 "intraday",
                 {
@@ -464,7 +486,7 @@ def test_backtest_pair_naked_forex_auto_keeps_intraday_style_under_d1_structure(
 
     monkeypatch.setattr(
         market_structure.engine,
-        "analyze_structure",
+        "analyze_structure_direction",
         lambda *_args, **_kwargs: {
             "structural_verdict": "CLEAR",
             "recommended_stop_loss": 0.8790,
@@ -518,7 +540,7 @@ def test_backtest_pair_naked_caps_post_fill_rr_to_style_fallback(monkeypatch):
         extract_candles=lambda candles: candles,
         fetch_candles=lambda *_args, **_kwargs: d1,
         fetch_eodhd_intraday_bt=lambda *_args, **_kwargs: (h4, h1),
-        naked_scan_style_profile=lambda style, score_group=None: (
+        naked_scan_style_profile=lambda style, score_group=None, asset_type=None: (
             "intraday",
             {"min_score": 0.5, "fallback_rr": 2.0, "min_rr": 1.0, "atr_tf": "H4"},
         ),
@@ -529,7 +551,6 @@ def test_backtest_pair_naked_caps_post_fill_rr_to_style_fallback(monkeypatch):
     monkeypatch.setattr(backtest_runner, "_rt", lambda: runtime)
     monkeypatch.setattr(backtest_runner, "_get_slippage_for_bar", lambda *_args, **_kwargs: 0.0)
     monkeypatch.setattr(backtest_runner, "get_pair_score_group", lambda _pair: "default")
-    monkeypatch.setitem(backtest_runner.CONFIG, "ENGINE_B_BT_SL_MODE", "structural")
     monkeypatch.setattr(
         backtest_runner,
         "calc_levels",
@@ -565,7 +586,7 @@ def test_backtest_pair_naked_caps_post_fill_rr_to_style_fallback(monkeypatch):
 
     monkeypatch.setattr(
         market_structure.engine,
-        "analyze_structure",
+        "analyze_structure_direction",
         lambda *_args, **_kwargs: {
             "structural_verdict": "CLEAR",
             "recommended_stop_loss": 95.0,
@@ -585,13 +606,19 @@ def test_backtest_pair_naked_caps_post_fill_rr_to_style_fallback(monkeypatch):
     monkeypatch.setattr(
         market_structure.engine,
         "calculate_confidence",
-        lambda _res, _px, direction, **_kwargs: {
+        lambda _res, px, direction, **_kwargs: {
             "score": 2.0 if direction == "LONG" else 0.0,
             "pct": 80.0 if direction == "LONG" else 0.0,
             "rr": 2.4 if direction == "LONG" else 0.0,
             "passed": direction == "LONG",
             "trigger_pattern": "NONE",
             "max_possible": 5.0,
+            # Engine B execution levels feed straight into BT now (live parity).
+            # Wide structural targets get capped to fallback_rr at fill time.
+            "execution_sl": 95.0 if direction == "LONG" else px + 5.0,
+            "execution_tp": 120.0 if direction == "LONG" else px - 25.0,
+            "rr_used_for_gate": 2.4 if direction == "LONG" else 0.0,
+            "rr_source": "atr_sl_structural_tp",
         },
     )
 
@@ -772,7 +799,7 @@ def test_backtest_pair_naked_telemetry_captures_non_zero_values(monkeypatch):
         extract_candles=lambda candles: candles,
         fetch_candles=lambda *_args, **_kwargs: d1,
         fetch_eodhd_intraday_bt=lambda *_args, **_kwargs: (h4, h1),
-        naked_scan_style_profile=lambda style, score_group=None: (
+        naked_scan_style_profile=lambda style, score_group=None, asset_type=None: (
             "intraday",
             {"min_score": 0.5, "fallback_rr": 2.0, "min_rr": 1.0, "atr_tf": "H4"},
         ),
@@ -823,7 +850,7 @@ def test_backtest_pair_naked_telemetry_captures_non_zero_values(monkeypatch):
 
     monkeypatch.setattr(
         market_structure.engine,
-        "analyze_structure",
+        "analyze_structure_direction",
         lambda *_args, **_kwargs: {
             "structural_verdict": "CLEAR",
             "recommended_stop_loss": 95.0,

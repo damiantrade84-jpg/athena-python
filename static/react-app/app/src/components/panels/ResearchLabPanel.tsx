@@ -10,7 +10,7 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { ErrorBanner } from '@/components/shared';
-import { Microscope, Play, Rocket, History, ListChecks, Brain } from 'lucide-react';
+import { Microscope, Play, Rocket, History, ListChecks } from 'lucide-react';
 import { fmtNum } from '@/lib/utils';
 
 interface RunSummary {
@@ -55,9 +55,11 @@ interface RankedRow {
   timeframe?: string;
   family?: string;
   strategy?: string;
+  strategy_name?: string;
   direction?: string;
   status?: string;
   trades?: number;
+  trade_count?: number;
   win_rate?: number;
   profit_factor?: number;
   expectancy?: number;
@@ -72,8 +74,28 @@ interface RankedResponse {
   ranked?: RankedRow[];
   recommendations?: Array<Record<string, unknown>>;
   automated_next_tests?: Array<Record<string, unknown>>;
+  operator_summary?: OperatorSummary;
   note?: string;
   error?: string;
+}
+
+interface OperatorSummary {
+  headline?: string;
+  decision?: string;
+  source?: string;
+  source_of_truth?: string;
+  use_now?: Array<Record<string, unknown>>;
+  research_candidates?: Array<Record<string, unknown>>;
+  blocked_candidates?: Array<Record<string, unknown>>;
+  candidate_groups?: Array<Record<string, unknown>>;
+  keep?: Array<Record<string, unknown>>;
+  remove_or_demote?: Array<Record<string, unknown>>;
+  retest?: Array<Record<string, unknown>>;
+  warnings?: string[];
+  next_step?: string;
+  implementation_ready_count?: number;
+  ready_use_add_count?: number;
+  total_candidate_count?: number;
 }
 
 interface StartRunResponse {
@@ -81,14 +103,6 @@ interface StartRunResponse {
   mode?: string;
   status?: string;
   error?: string;
-}
-
-interface AiReviewResponse {
-  ai_review?: string;
-  summary?: string;
-  recommendation?: string;
-  error?: string;
-  [k: string]: unknown;
 }
 
 const MARKET_GROUPS = [
@@ -134,6 +148,31 @@ function statusBadge(status?: string): string {
   }
 }
 
+function textValue(row: Record<string, unknown>, key: string, fallback = '—'): string {
+  const value = row[key];
+  if (value === null || value === undefined || value === '') return fallback;
+  return String(value);
+}
+
+function numberValue(row: Record<string, unknown>, key: string): number | null {
+  const value = row[key];
+  if (value === null || value === undefined || value === '') return null;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+}
+
+function recommendationBadge(recommendation?: string): string {
+  switch ((recommendation || '').toUpperCase()) {
+    case 'ADD': return 'badge-long';
+    case 'KEEP': return 'badge-neutral';
+    case 'REMOVE_OR_DEMOTE':
+    case 'REJECT': return 'badge-short';
+    case 'RETEST':
+    case 'WATCHLIST_ONLY': return 'badge-neutral';
+    default: return 'badge-neutral';
+  }
+}
+
 export default function ResearchLabPanel() {
   const { showToast } = useStore();
 
@@ -151,13 +190,11 @@ export default function ResearchLabPanel() {
   const [timeframes, setTimeframes] = useState('');
   const [families, setFamilies] = useState('');
   const [strategies, setStrategies] = useState('');
-  const [aiReview, setAiReview] = useState(true);
 
   // Run lifecycle
   const [currentRunId, setCurrentRunId] = useState<string | null>(null);
   const [runStatus, setRunStatus] = useState<RunStatusResponse | null>(null);
   const [ranked, setRanked] = useState<RankedResponse | null>(null);
-  const [aiReviewData, setAiReviewData] = useState<AiReviewResponse | null>(null);
   const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const { data: runsData, loading: runsLoading, error: runsError, refresh: refreshRuns } =
@@ -183,16 +220,6 @@ export default function ResearchLabPanel() {
     }
   }, [showToast]);
 
-  const fetchAiReview = useCallback(async (runId: string) => {
-    try {
-      const res = await fetch(`/api/research-lab/ai-review/${runId}`);
-      const json = (await res.json()) as AiReviewResponse;
-      setAiReviewData(json);
-    } catch {
-      // ai-review endpoint may legitimately return 404 when not generated; ignore
-    }
-  }, []);
-
   const pollRun = useCallback((runId: string) => {
     stopPolling();
     pollTimerRef.current = setInterval(async () => {
@@ -203,7 +230,6 @@ export default function ResearchLabPanel() {
         if (json.status === 'complete') {
           stopPolling();
           await fetchRanked(runId);
-          await fetchAiReview(runId);
           refreshRuns();
           showToast(`Run ${runId} complete — ${json.results_count ?? json.summary?.total ?? '?'} results`, 'success');
         } else if (json.status === 'failed') {
@@ -217,13 +243,12 @@ export default function ResearchLabPanel() {
         console.warn('[research-lab] poll error', e);
       }
     }, 3000);
-  }, [stopPolling, fetchRanked, fetchAiReview, refreshRuns, showToast]);
+  }, [stopPolling, fetchRanked, refreshRuns, showToast]);
 
   useEffect(() => () => stopPolling(), [stopPolling]);
 
   const startAutopilot = useCallback(async () => {
     setRanked(null);
-    setAiReviewData(null);
     setRunStatus(null);
     const res = await postStyleRun('/api/research-lab/style-run', {
       market_group: marketGroup,
@@ -241,12 +266,11 @@ export default function ResearchLabPanel() {
 
   const startManual = useCallback(async () => {
     setRanked(null);
-    setAiReviewData(null);
     setRunStatus(null);
     const payload: Record<string, unknown> = {
       mode,
       direction,
-      run_ai_review: aiReview,
+      run_ai_review: false,
     };
     const csv = (s: string) => s.split(',').map((x) => x.trim()).filter(Boolean);
     if (symbols.trim()) payload.symbols = csv(symbols);
@@ -261,44 +285,26 @@ export default function ResearchLabPanel() {
     setCurrentRunId(res.run_id);
     showToast(`Run started: ${res.run_id}`, 'info');
     pollRun(res.run_id);
-  }, [postManualRun, mode, direction, aiReview, symbols, timeframes, families, strategies, showToast, pollRun]);
+  }, [postManualRun, mode, direction, symbols, timeframes, families, strategies, showToast, pollRun]);
 
   const openRun = useCallback(async (runId: string) => {
+    stopPolling();
     setCurrentRunId(runId);
+    setRunStatus(null);
+    setRanked(null);
     try {
       const res = await fetch(`/api/research-lab/run/${runId}`);
       const json = (await res.json()) as RunStatusResponse;
       setRunStatus(json);
       if (json.status === 'complete') {
         await fetchRanked(runId);
-        await fetchAiReview(runId);
       } else if (json.status === 'running' || json.status === 'queued') {
         pollRun(runId);
       }
     } catch (e) {
       showToast(`Failed to open run: ${(e as Error).message}`, 'error');
     }
-  }, [fetchRanked, fetchAiReview, pollRun, showToast]);
-
-  const triggerAiAnalyze = useCallback(async () => {
-    if (!currentRunId) return;
-    try {
-      const res = await fetch(`/api/research-lab/analyze/${currentRunId}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({}),
-      });
-      const json = (await res.json()) as AiReviewResponse;
-      if (json.error) {
-        showToast(`AI analysis failed: ${json.error}`, 'error');
-      } else {
-        setAiReviewData(json);
-        showToast('AI analysis complete', 'success');
-      }
-    } catch (e) {
-      showToast(`AI analysis failed: ${(e as Error).message}`, 'error');
-    }
-  }, [currentRunId, showToast]);
+  }, [stopPolling, fetchRanked, pollRun, showToast]);
 
   const sortedRuns = useMemo(() => (runsData?.runs || []).slice(), [runsData]);
 
@@ -395,10 +401,6 @@ export default function ResearchLabPanel() {
                   <Input value={families} onChange={(e) => setFamilies(e.target.value)} className="h-8 text-xs font-mono" placeholder="Families (e.g. trend_momentum, volatility)" />
                   <Input value={strategies} onChange={(e) => setStrategies(e.target.value)} className="h-8 text-xs font-mono" placeholder="Strategies (e.g. macd_direction, bollinger_touch)" />
                 </div>
-                <label className="text-[11px] text-muted-foreground flex items-center gap-2 col-span-2">
-                  <input type="checkbox" checked={aiReview} onChange={(e) => setAiReview(e.target.checked)} />
-                  Run AI review on completion
-                </label>
               </div>
               <Button size="sm" className="h-8 gap-1 text-xs" onClick={startManual} disabled={manualStarting}>
                 <Play className="w-3 h-3" />
@@ -489,9 +491,6 @@ export default function ResearchLabPanel() {
                     <Button size="sm" variant="outline" className="h-7 gap-1 text-[10px]" onClick={() => fetchRanked(currentRunId)}>
                       Refresh ranked
                     </Button>
-                    <Button size="sm" variant="outline" className="h-7 gap-1 text-[10px]" onClick={triggerAiAnalyze}>
-                      <Brain className="w-3 h-3" /> Run AI analysis
-                    </Button>
                     <a
                       className="text-[10px] underline text-muted-foreground"
                       href={`/api/research-lab/download/${currentRunId}/research_report.md`}
@@ -504,6 +503,100 @@ export default function ResearchLabPanel() {
               </div>
             </CardContent>
           </Card>
+
+          {ranked?.operator_summary && (
+            <Card className="border-border/60 bg-card/50">
+              <CardHeader className="pb-2">
+                <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Rajdhani', sans-serif", letterSpacing: '0.12em' }}>
+                  <ListChecks className="w-4 h-4 text-primary" />
+                  Results Summary
+                  <Badge className={`text-[10px] ${ranked.operator_summary.decision === 'USE_ADD_CANDIDATE' ? 'badge-long' : ranked.operator_summary.decision === 'REMOVE_OR_DEMOTE' ? 'badge-short' : 'badge-neutral'}`}>
+                    {ranked.operator_summary.decision || 'NEEDS_MORE_DATA'}
+                  </Badge>
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-3 text-xs">
+                <p className="text-sm font-medium">{ranked.operator_summary.headline || 'No decision summary available.'}</p>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <Badge className="badge-neutral text-[10px]">{ranked.operator_summary.source || 'DETERMINISTIC_RESULTS'}</Badge>
+                  <span className="text-[10px] text-muted-foreground">
+                    Source: <span className="font-mono">{ranked.operator_summary.source_of_truth || 'research_summary.csv'}</span>
+                  </span>
+                  <span className="text-[10px] text-muted-foreground">
+                    Ready use/add: <span className="font-mono">{ranked.operator_summary.ready_use_add_count ?? ranked.operator_summary.use_now?.length ?? 0}</span>
+                    {' / '}
+                    Total ready: <span className="font-mono">{ranked.operator_summary.implementation_ready_count ?? 0}</span>
+                    {' / '}
+                    Candidate rows: <span className="font-mono">{ranked.operator_summary.total_candidate_count ?? 0}</span>
+                  </span>
+                </div>
+                {ranked.operator_summary.next_step && (
+                  <p className="text-[11px] text-muted-foreground">{ranked.operator_summary.next_step}</p>
+                )}
+                {(ranked.operator_summary.use_now || []).length > 0 && (
+                  <div>
+                    <p className="text-[10px] uppercase text-muted-foreground mb-1">Implementation-Ready Use / Add Rows</p>
+                    <div className="grid gap-1">
+                      {(ranked.operator_summary.use_now || []).slice(0, 50).map((row, i) => (
+                        <div key={i} className="flex items-center justify-between gap-3 border-b border-border/20 py-1">
+                          <span>{textValue(row, 'strategy_name')} on {textValue(row, 'timeframe')} / {textValue(row, 'symbol')}</span>
+                          <span className="font-mono text-[10px] text-muted-foreground">
+                            PF {numberValue(row, 'profit_factor') != null ? fmtNum(numberValue(row, 'profit_factor') as number, 2) : '—'} · OOS {numberValue(row, 'oos_return') != null ? fmtNum(numberValue(row, 'oos_return') as number, 3) : '—'}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {(ranked.operator_summary.candidate_groups || []).length > 0 && (
+                  <div>
+                    <p className="text-[10px] uppercase text-muted-foreground mb-1">Ready Groups</p>
+                    <div className="grid gap-1">
+                      {(ranked.operator_summary.candidate_groups || []).slice(0, 20).map((row, i) => (
+                        <div key={i} className="flex items-center justify-between gap-3 border-b border-border/20 py-1">
+                          <span>{textValue(row, 'engine')} / {textValue(row, 'engine_component')} / {textValue(row, 'strategy_name')} / {textValue(row, 'timeframe')}</span>
+                          <span className="font-mono text-[10px] text-muted-foreground">
+                            {textValue(row, 'configs')} configs · {textValue(row, 'symbols')}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {(ranked.operator_summary.blocked_candidates || []).length > 0 && (
+                  <div>
+                    <p className="text-[10px] uppercase text-muted-foreground mb-1">Blocked Candidates</p>
+                    <div className="grid gap-1">
+                      {(ranked.operator_summary.blocked_candidates || []).slice(0, 20).map((row, i) => (
+                        <div key={i} className="grid grid-cols-[1fr_1.4fr] gap-3 border-b border-border/20 py-1">
+                          <span>{textValue(row, 'strategy_name')} on {textValue(row, 'timeframe')} / {textValue(row, 'symbol')}</span>
+                          <span className="font-mono text-[10px] text-muted-foreground">{textValue(row, 'implementation_blockers')}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {(ranked.operator_summary.remove_or_demote || []).length > 0 && (
+                  <div>
+                    <p className="text-[10px] uppercase text-muted-foreground mb-1">Remove / Demote</p>
+                    <div className="flex flex-wrap gap-1">
+                      {(ranked.operator_summary.remove_or_demote || []).slice(0, 8).map((row, i) => (
+                        <Badge key={i} className="badge-short text-[10px]">{textValue(row, 'strategy_name')}</Badge>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {(ranked.operator_summary.warnings || []).length > 0 && (
+                  <div className="rounded border border-warning/40 bg-warning/10 p-2">
+                    <p className="text-[10px] uppercase text-muted-foreground mb-1">Warnings</p>
+                    {(ranked.operator_summary.warnings || []).map((w, i) => (
+                      <p key={i} className="text-[11px]">{w}</p>
+                    ))}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          )}
 
           {ranked && (ranked.ranked || []).length > 0 && (
             <Card className="border-border/60 bg-card/50">
@@ -532,19 +625,29 @@ export default function ResearchLabPanel() {
                       {(ranked.ranked || []).map((row, i) => {
                         const strong = row.status === 'STRONG_CANDIDATE';
                         const weak = row.status === 'WEAK_CANDIDATE';
+                        const readiness = String(row.implementation_verdict || '—');
+                        const readinessBlockers = String(row.implementation_blockers || '');
                         return (
                           <tr key={i} className="border-b border-border/20 hover:bg-muted/30">
                             <td className="py-2 text-[11px] font-mono">{row.symbol || '—'}</td>
                             <td className="py-2 text-[10px]">{row.timeframe || '—'}</td>
                             <td className="py-2 text-[10px]">{row.family || '—'}</td>
-                            <td className="py-2 text-[10px]">{row.strategy || '—'}</td>
+                            <td className="py-2 text-[10px]">{row.strategy || row.strategy_name || '—'}</td>
                             <td className="py-2 text-[10px] uppercase">{row.direction || '—'}</td>
                             <td className="py-2 text-[10px]">
                               <Badge className={`text-[10px] ${strong ? 'badge-long' : weak ? 'badge-neutral' : 'badge-short'}`}>
                                 {row.status || '—'}
                               </Badge>
                             </td>
-                            <td className="py-2 text-[10px] font-mono text-right">{row.trades ?? '—'}</td>
+                            <td className="py-2 text-[10px]">
+                              <Badge
+                                title={readinessBlockers}
+                                className={`text-[10px] ${readiness === 'IMPLEMENTATION_READY' ? 'badge-long' : 'badge-short'}`}
+                              >
+                                {readiness}
+                              </Badge>
+                            </td>
+                            <td className="py-2 text-[10px] font-mono text-right">{row.trades ?? row.trade_count ?? '—'}</td>
                             <td className="py-2 text-[10px] font-mono text-right">{row.win_rate != null ? `${fmtNum(row.win_rate, 1)}%` : '—'}</td>
                             <td className="py-2 text-[10px] font-mono text-right">{row.profit_factor != null ? fmtNum(row.profit_factor, 2) : '—'}</td>
                             <td className="py-2 text-[10px] font-mono text-right">{row.sqn != null ? fmtNum(row.sqn, 2) : '—'}</td>
@@ -559,41 +662,114 @@ export default function ResearchLabPanel() {
             </Card>
           )}
 
+          {ranked && (ranked.recommendations || []).length > 0 && (
+            <Card className="border-border/60 bg-card/50">
+              <CardHeader className="pb-2">
+                <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Rajdhani', sans-serif", letterSpacing: '0.12em' }}>
+                  Keep / Add / Remove / Retest
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <ScrollArea className="h-[360px]">
+                  <table className="w-full text-left">
+                    <thead>
+                      <tr className="border-b border-border/40">
+                        <th className="text-[10px] uppercase py-2 text-muted-foreground">Action</th>
+                        <th className="text-[10px] uppercase py-2 text-muted-foreground">Engine</th>
+                        <th className="text-[10px] uppercase py-2 text-muted-foreground">Component</th>
+                        <th className="text-[10px] uppercase py-2 text-muted-foreground">Strategy</th>
+                        <th className="text-[10px] uppercase py-2 text-muted-foreground">Symbol</th>
+                        <th className="text-[10px] uppercase py-2 text-muted-foreground">TF</th>
+                        <th className="text-[10px] uppercase py-2 text-muted-foreground">Status</th>
+                        <th className="text-[10px] uppercase py-2 text-muted-foreground">Ready</th>
+                        <th className="text-[10px] uppercase py-2 text-muted-foreground">Ready</th>
+                        <th className="text-[10px] uppercase py-2 text-muted-foreground text-right">Trades</th>
+                        <th className="text-[10px] uppercase py-2 text-muted-foreground text-right">PF</th>
+                        <th className="text-[10px] uppercase py-2 text-muted-foreground text-right">OOS</th>
+                        <th className="text-[10px] uppercase py-2 text-muted-foreground text-right">Robust</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {(ranked.recommendations || []).map((row, i) => {
+                        const recommendation = textValue(row, 'recommendation');
+                        const pf = numberValue(row, 'profit_factor');
+                        const oos = numberValue(row, 'oos_return');
+                        const robustness = numberValue(row, 'robustness_score');
+                        const readiness = textValue(row, 'implementation_verdict');
+                        return (
+                          <tr key={i} className="border-b border-border/20 hover:bg-muted/30">
+                            <td className="py-2 text-[10px]">
+                              <Badge className={`text-[10px] ${recommendationBadge(recommendation)}`}>{recommendation}</Badge>
+                            </td>
+                            <td className="py-2 text-[10px]">{textValue(row, 'engine')}</td>
+                            <td className="py-2 text-[10px]">{textValue(row, 'engine_component')}</td>
+                            <td className="py-2 text-[10px]">{textValue(row, 'strategy_name')}</td>
+                            <td className="py-2 text-[10px] font-mono">{textValue(row, 'symbol')}</td>
+                            <td className="py-2 text-[10px]">{textValue(row, 'timeframe')}</td>
+                            <td className="py-2 text-[10px]">{textValue(row, 'status')}</td>
+                            <td className="py-2 text-[10px]">
+                              <Badge className={`text-[10px] ${readiness === 'IMPLEMENTATION_READY' ? 'badge-long' : 'badge-short'}`}>
+                                {readiness}
+                              </Badge>
+                            </td>
+                            <td className="py-2 text-[10px] font-mono text-right">{textValue(row, 'trade_count')}</td>
+                            <td className="py-2 text-[10px] font-mono text-right">{pf != null ? fmtNum(pf, 2) : '—'}</td>
+                            <td className="py-2 text-[10px] font-mono text-right">{oos != null ? fmtNum(oos, 3) : '—'}</td>
+                            <td className="py-2 text-[10px] font-mono text-right">{robustness != null ? fmtNum(robustness, 2) : '—'}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </ScrollArea>
+              </CardContent>
+            </Card>
+          )}
+
+          {ranked && (ranked.automated_next_tests || []).length > 0 && (
+            <Card className="border-border/60 bg-card/50">
+              <CardHeader className="pb-2">
+                <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Rajdhani', sans-serif", letterSpacing: '0.12em' }}>
+                  Suggested Next Tests
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <ScrollArea className="h-[260px]">
+                  <table className="w-full text-left">
+                    <thead>
+                      <tr className="border-b border-border/40">
+                        <th className="text-[10px] uppercase py-2 text-muted-foreground">Engine</th>
+                        <th className="text-[10px] uppercase py-2 text-muted-foreground">Component</th>
+                        <th className="text-[10px] uppercase py-2 text-muted-foreground">Group</th>
+                        <th className="text-[10px] uppercase py-2 text-muted-foreground">Zone</th>
+                        <th className="text-[10px] uppercase py-2 text-muted-foreground">Failed</th>
+                        <th className="text-[10px] uppercase py-2 text-muted-foreground">Suggested</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {(ranked.automated_next_tests || []).map((row, i) => (
+                        <tr key={i} className="border-b border-border/20 hover:bg-muted/30">
+                          <td className="py-2 text-[10px]">{textValue(row, 'engine')}</td>
+                          <td className="py-2 text-[10px]">{textValue(row, 'engine_component')}</td>
+                          <td className="py-2 text-[10px]">{textValue(row, 'pair_group') || textValue(row, 'market_group')}</td>
+                          <td className="py-2 text-[10px]">{textValue(row, 'timeframe_zone')}</td>
+                          <td className="py-2 text-[10px]">{textValue(row, 'failed_strategies')}</td>
+                          <td className="py-2 text-[10px]">{textValue(row, 'suggested_strategies')}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </ScrollArea>
+              </CardContent>
+            </Card>
+          )}
+
           {ranked?.note && (!ranked.ranked || ranked.ranked.length === 0) && (
             <div className="p-3 rounded-md bg-muted/20 text-[11px] text-muted-foreground">
               {ranked.note}
             </div>
           )}
 
-          {aiReviewData && (
-            <Card className="border-border/60 bg-card/50">
-              <CardHeader className="pb-2">
-                <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Rajdhani', sans-serif", letterSpacing: '0.12em' }}>
-                  <Brain className="w-4 h-4 text-primary" />
-                  AI Review
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-2 text-xs">
-                {aiReviewData.summary && (
-                  <div>
-                    <p className="text-[10px] uppercase text-muted-foreground">Summary</p>
-                    <p className="whitespace-pre-wrap">{aiReviewData.summary}</p>
-                  </div>
-                )}
-                {aiReviewData.recommendation && (
-                  <div>
-                    <p className="text-[10px] uppercase text-muted-foreground">Recommendation</p>
-                    <p className="whitespace-pre-wrap">{aiReviewData.recommendation}</p>
-                  </div>
-                )}
-                {aiReviewData.ai_review && (
-                  <pre className="text-[10px] font-mono whitespace-pre-wrap p-2 bg-muted/20 rounded border border-border/40 max-h-72 overflow-y-auto">
-                    {aiReviewData.ai_review}
-                  </pre>
-                )}
-              </CardContent>
-            </Card>
-          )}
         </>
       )}
     </div>

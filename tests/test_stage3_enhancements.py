@@ -218,13 +218,15 @@ def test_coherent_trend_score_with_hysteresis():
 # ── 3.4 Volatility scaler ────────────────────────────────────────────────────
 
 def test_volatility_scaler_low_vol_boosts():
-    """ATR% < 0.5% → scaler > 1.0"""
-    scaler = _volatility_scaler(atr=3.0, close=1000.0, asset_type="forex")
+    """Inside the class's low band → scaler > 1.0.  Forex band low=0.0005, so
+    ATR/close = 0.0001/1.0 = 0.01% sits well inside the boost zone."""
+    scaler = _volatility_scaler(atr=0.0001, close=1.0, asset_type="forex")
     assert scaler > 1.0
 
 
 def test_volatility_scaler_high_vol_penalises():
-    """ATR% > 2.5% → scaler < 1.0"""
+    """Above the class's high band → scaler < 1.0.  Crypto band high=0.04,
+    so ATR/close = 5.0/100.0 = 5% sits above the penalty threshold."""
     scaler = _volatility_scaler(atr=5.0, close=100.0, asset_type="crypto")
     assert scaler < 1.0
 

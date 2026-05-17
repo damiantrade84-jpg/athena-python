@@ -199,29 +199,29 @@ _STRATEGY_META: dict[str, dict[str, str]] = {
         "source_indicator": "VWAP deviation",
     },
     "cvd_momentum": {
-        "engine": "ENGINE_B",
-        "component": "entry_trigger",
+        "engine": "ENGINE_D",
+        "component": "scalp_momentum_proxy",
         "candidate_action": "ADD_CANDIDATE",
         "structure_context": "orderflow_momentum_proxy",
         "source_indicator": "CVD + VWAP proxy",
     },
     "vwap_reclaim": {
-        "engine": "ENGINE_B",
-        "component": "entry_trigger",
+        "engine": "ENGINE_D",
+        "component": "scalp_momentum_proxy",
         "candidate_action": "ADD_CANDIDATE",
         "structure_context": "vwap_reclaim",
         "source_indicator": "VWAP reclaim",
     },
     "micro_breakout": {
-        "engine": "ENGINE_B",
-        "component": "entry_trigger",
+        "engine": "ENGINE_D",
+        "component": "scalp_momentum_proxy",
         "candidate_action": "ADD_CANDIDATE",
         "structure_context": "micro_structure_break",
         "source_indicator": "Recent range break",
     },
     "ema_scalp_pullback": {
-        "engine": "ENGINE_A",
-        "component": "scalp_pullback_candidate",
+        "engine": "ENGINE_D",
+        "component": "scalp_momentum_proxy",
         "candidate_action": "ADD_CANDIDATE",
         "structure_context": "ema_scalp_pullback",
         "source_indicator": "EMA pullback",
@@ -232,7 +232,12 @@ _STRATEGY_META: dict[str, dict[str, str]] = {
 def strategy_research_meta(strategy_name: str, family: str = "") -> dict[str, str]:
     meta = dict(_STRATEGY_META.get(strategy_name, {}))
     if not meta:
-        engine = "ENGINE_B" if family == "engine_b_proxy" else "RESEARCH"
+        if family == "engine_b_proxy":
+            engine = "ENGINE_B"
+        elif family in {"engine_d_proxy", "scalp_momentum_proxy"}:
+            engine = "ENGINE_D"
+        else:
+            engine = "RESEARCH"
         meta = {
             "engine": engine,
             "component": family or "unclassified",
@@ -296,9 +301,14 @@ def _finite(v: float) -> bool:
 
 def _recommendation(status: str, action: str, delta_pf: float, delta_oos: float, is_baseline: bool) -> str:
     status = (status or "").upper()
+    action = (action or "").upper()
     if status == "STRONG_CANDIDATE":
-        if is_baseline:
+        if is_baseline or action == "KEEP_EXISTING":
             return "KEEP"
+        if action == "WATCHLIST_ONLY":
+            return "WATCHLIST_ONLY"
+        if action == "ADD_CANDIDATE":
+            return "ADD"
         if (_finite(delta_pf) and delta_pf > 0) or (_finite(delta_oos) and delta_oos > 0):
             return "ADD"
         return "RETEST"
@@ -309,6 +319,22 @@ def _recommendation(status: str, action: str, delta_pf: float, delta_oos: float,
     if is_baseline:
         return "REMOVE_OR_DEMOTE"
     return "REJECT"
+
+
+def recommendation_from_fields(
+    status: str,
+    action: str = "",
+    strategy_name: str = "",
+    family: str = "",
+    delta_pf: float = float("nan"),
+    delta_oos: float = float("nan"),
+) -> str:
+    """Return the display/action recommendation for saved research rows."""
+    meta_action = action
+    if not meta_action:
+        meta_action = strategy_research_meta(strategy_name, family).get("candidate_action", "")
+    is_baseline = strategy_name in _ENGINE_A_BASELINE or strategy_name in _ENGINE_B_BASELINE
+    return _recommendation(status, meta_action, delta_pf, delta_oos, is_baseline)
 
 
 def annotate_research_results(results: Iterable, cfg: dict | None = None) -> list:
@@ -357,7 +383,14 @@ def annotate_research_results(results: Iterable, cfg: dict | None = None) -> lis
         if _finite(m.oos_return) and _finite(base_oos):
             delta_oos = float(m.oos_return) - base_oos
         is_baseline = m.strategy_name in _ENGINE_A_BASELINE or m.strategy_name in _ENGINE_B_BASELINE
-        rec = _recommendation(m.status, m.candidate_action, delta_pf, delta_oos, is_baseline)
+        rec = recommendation_from_fields(
+            m.status,
+            m.candidate_action,
+            m.strategy_name,
+            m.family,
+            delta_pf,
+            delta_oos,
+        )
         final.append(replace(
             m,
             baseline_delta_pf=delta_pf,

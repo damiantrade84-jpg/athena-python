@@ -20,13 +20,22 @@ import {
 } from '@/components/ui/alert-dialog';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { ErrorBanner, RefreshButton } from '@/components/shared';
-import { Search, Zap, Filter, Layers, Activity, Eye, Clock, Sun, Moon, FileText } from 'lucide-react';
+import { Search, Zap, Filter, Layers, Activity, Eye, Clock, Sun, Moon, FileText, Bot } from 'lucide-react';
 import { fmtNum, toNum } from '@/lib/utils';
 import { fmtPrice } from '@/lib/athenaFormat';
+import apiClient from '@/lib/apiClient';
 import { EngineASignalCard, EngineBChecklistCard } from '@/components/athena';
+import AITradingAgentPanel from '@/components/ai/AITradingAgentPanel';
 import type { EngineASignal, ScanResponse, NakedScanResponse, ChartAnalysisResponse, AiTextReviewResponse } from '@/types/athena';
 
 type ScanSource = 'A' | 'B';
+
+type ExecuteResponse = {
+  success?: boolean;
+  ticket?: string;
+  error?: string;
+  approval?: { approved: boolean; reason: string };
+};
 
 /** Group key: backend scoreGroup (e.g. forex_majors) or asset type fallback. */
 function signalGroupKey(s: EngineASignal): string {
@@ -51,11 +60,85 @@ function compareSignals(a: EngineASignal, b: EngineASignal, sortBy: string): num
   return toNum(b.confluenceScore ?? b.score) - toNum(a.confluenceScore ?? a.score);
 }
 
+/** Labels for Engine B scanFunnel keys returned by /api/scan-naked. */
+const ENGINE_B_FUNNEL_LABELS: Record<string, string> = {
+  passed: 'Passed',
+  insufficient_candles: 'No data (candles)',
+  bybit_atr_unavailable: 'Bybit ATR missing',
+  invalid_atr: 'Invalid ATR',
+  volatility_gate: 'Volatility gate',
+  pair_exception: 'Exception',
+  no_clear_structure: 'No CLEAR structure',
+  gate_fail_struct: 'Gate: structure',
+  gate_fail_loc: 'Gate: location',
+  gate_fail_trigger: 'Gate: trigger',
+  gate_fail_rr: 'Gate: RR',
+  gate_fail_other: 'Gate: other',
+  unknown_reject: 'Unknown',
+  total: 'Total',
+};
+
+function formatEngineBScanFunnel(funnel: Record<string, number> | undefined): string | null {
+  if (!funnel || typeof funnel !== 'object') return null;
+  const entries = Object.entries(funnel)
+    .filter(([k, v]) => k !== 'total' && k !== 'passed' && typeof v === 'number' && v > 0)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 8);
+  if (!entries.length) return null;
+  return entries.map(([k, v]) => `${ENGINE_B_FUNNEL_LABELS[k] ?? k} ${v}`).join(' · ');
+}
+
+function signalForExecutionPayload(signal: EngineASignal, source: ScanSource): EngineASignal {
+  if (source !== 'A') return signal;
+  const payload = { ...signal } as Record<string, unknown>;
+  delete payload.engine_b;
+  delete payload.naked_data;
+  delete payload.is_naked;
+  return payload as EngineASignal;
+}
+
+function engineAScanDisplaySignals(result: ScanResponse): EngineASignal[] {
+  const trade = Array.isArray(result.signals) ? result.signals : [];
+  const watchlist = Array.isArray(result.watchlist) ? result.watchlist : [];
+  return [
+    ...trade.map((s) => ({
+      ...s,
+      signalClass: s.signalClass || 'TRADE',
+      signalTier: s.signalTier || 'trade',
+    })),
+    ...watchlist.map((s) => ({
+      ...s,
+      signalClass: s.signalClass || 'WATCHLIST',
+      signalTier: s.signalTier || 'watchlist',
+      trade: false,
+    })),
+  ];
+}
+
+function canExecuteSignal(signal: EngineASignal | null, source: ScanSource): boolean {
+  if (!signal) return false;
+  if (source === 'B') return true;
+  const tier = String(signal.signalTier || signal.scan_tier || signal.signalClass || '').toLowerCase();
+  if (tier.includes('watch') || tier === 'skip' || tier === 'blocked') return false;
+  return tier === 'trade' || tier === 'criteria' || signal.trade === true;
+}
+
+function signalTraceId(signal: EngineASignal | null): string | null {
+  if (!signal) return null;
+  const raw = signal.trace_id ?? signal.traceId;
+  return typeof raw === 'string' && raw.trim() ? raw.trim() : null;
+}
+
+function signalSymbol(signal: EngineASignal | null): string | null {
+  if (!signal) return null;
+  return signal.symbol || signal.pair || signal.display || null;
+}
+
 export default function SignalsPanel() {
   const { showToast, isTestMode, scanCacheA, scanCacheB, scanCacheAMeta, scanCacheBMeta, setScanCacheA, setScanCacheB } = useStore();
   const [filter, setFilter] = useState('');
   const [directionFilter, setDirectionFilter] = useState<string>('all');
-  const [assetClass, setAssetClass] = useState<string>('forex');
+  const [assetClass, setAssetClass] = useState<string>('all');
   const [style, setStyle] = useState<string>('auto');
   const [sortBy, setSortBy] = useState<string>('score');
   /** Which engine tab is active - persists in component state (fine, since both caches live in global store) */
@@ -72,17 +155,13 @@ export default function SignalsPanel() {
   const { data: autoTrade } = useApiPoll<{ enabled: boolean }>('/api/auto-trade', 60_000);
   const { post: postScanA, loading: scanningA } = useApiPost<ScanResponse>();
   const { post: postScanB, loading: scanningB } = useApiPost<NakedScanResponse>();
-  const { post: postExecute, loading: executing } = useApiPost<{
-    success?: boolean;
-    ticket?: string;
-    error?: string;
-    approval?: { approved: boolean; reason: string };
-  }>();
   const { post: postVision, loading: visionLoading } = useApiPost<ChartAnalysisResponse>();
   const { post: postAiText, loading: textLoading } = useApiPost<AiTextReviewResponse>();
   const [aiReview, setAiReview] = useState<ChartAnalysisResponse | null>(null);
   const [aiTextReview, setAiTextReview] = useState<AiTextReviewResponse | null>(null);
   const [aiReviewMode, setAiReviewMode] = useState<'vision' | 'text'>('vision');
+  const [agentOpen, setAgentOpen] = useState(false);
+  const [executing, setExecuting] = useState(false);
   const { priceFor } = useLivePrices(10000);
 
   /**
@@ -138,14 +217,17 @@ export default function SignalsPanel() {
       try {
         if (which === 'A') {
           const result = await postScanA('/api/scan', { asset_class: ac, force: false, style });
-          if (result?.signals) {
+          if (result?.signals || result?.watchlist) {
+            const tradeSignals = Array.isArray(result.signals) ? result.signals : [];
+            const watchlistSignals = Array.isArray(result.watchlist) ? result.watchlist : [];
+            const displaySignals = engineAScanDisplaySignals(result);
             setScanCacheA(
-              result.signals as EngineASignal[],
-              { count: result.signals.length, scannedAt: new Date().toISOString() },
+              displaySignals,
+              { count: displaySignals.length, scannedAt: new Date().toISOString() },
             );
             setSortBy('score');
             showToast(
-              `Engine A: ${result.signals.length} signals - ${result.pairs_scanned ?? '?'} pairs in ${fmtNum(result.scan_time, 1, '?')}s`,
+              `Engine A: ${tradeSignals.length} trade / ${watchlistSignals.length} watchlist - ${result.totalPairs ?? result.pairs_scanned ?? '?'} pairs`,
               'success',
             );
           } else {
@@ -154,11 +236,23 @@ export default function SignalsPanel() {
         } else {
           const result = await postScanB('/api/scan-naked', { assetClass: ac, style });
           if (result?.signals) {
+            const pairsScanned = result.totalPairs ?? result.activePairs;
+            const funnel = result.scanFunnel as Record<string, number> | undefined;
             setScanCacheB(
               result.signals as EngineASignal[],
-              { count: result.signals.length, scannedAt: new Date().toISOString() },
+              {
+                count: result.signals.length,
+                scannedAt: new Date().toISOString(),
+                ...(pairsScanned != null ? { pairsScanned } : {}),
+                ...(funnel && Object.keys(funnel).length ? { scanFunnel: funnel } : {}),
+              },
             );
-            showToast(`Engine B: ${result.signals.length} structural signals`, 'success');
+            showToast(
+              pairsScanned != null
+                ? `Engine B: ${result.signals.length} structural signals / ${pairsScanned} pairs scanned`
+                : `Engine B: ${result.signals.length} structural signals`,
+              'success',
+            );
           } else {
             showToast('Engine B scan returned nothing', 'info');
           }
@@ -171,8 +265,9 @@ export default function SignalsPanel() {
   );
 
   const isPaper = autoTrade?.enabled ?? false;
-  const executeDisabled = isTestMode;
-  const executeLabel = isTestMode ? 'TEST MODE' : isPaper ? 'PAPER MODE' : 'Execute';
+  const selectedCanExecute = canExecuteSignal(selected, baseSource);
+  const executeDisabled = isTestMode || !selectedCanExecute;
+  const executeLabel = isTestMode ? 'TEST MODE' : !selectedCanExecute ? 'WATCHLIST' : isPaper ? 'PAPER MODE' : 'Execute';
 
   const runAiReview = useCallback(
     async (sig: EngineASignal | null) => {
@@ -249,6 +344,7 @@ export default function SignalsPanel() {
     setSelected(s);
     setAiReview(null);
     setAiTextReview(null);
+    setAgentOpen(false);
   }, []);
 
   const requestExecute = useCallback(
@@ -264,13 +360,16 @@ export default function SignalsPanel() {
     const effectiveStyle = pendingStyle === 'auto'
       ? (confirmSig.style || (style === 'auto' ? 'swing' : style))
       : pendingStyle;
-    const nakedData = (confirmSig.naked_data ?? confirmSig.engine_b ?? {}) as Record<string, unknown>;
+    const signalPayload = signalForExecutionPayload(confirmSig, baseSource);
+    const nakedData = (baseSource === 'B'
+      ? (confirmSig.naked_data ?? confirmSig.engine_b ?? {})
+      : {}) as Record<string, unknown>;
     // /api/quick-execute matches the legacy "Quick Exec / Style" UI flow:
     //   { signal: <full live signal>, engine_b: {...}, pip_mode, sizing_override }
     // Backend recomputes SL/TP for the chosen pip_mode via recompute_levels_for_style().
     const payload = {
       signal: {
-        ...confirmSig,
+        ...signalPayload,
         symbol: confirmSig.symbol || confirmSig.pair || confirmSig.display,
         pair: confirmSig.pair || confirmSig.display,
         display: confirmSig.display || confirmSig.pair,
@@ -288,8 +387,12 @@ export default function SignalsPanel() {
       pip_mode: effectiveStyle,
       sizing_override: Math.max(0.25, Math.min(1.0, sizingOverride || 1.0)),
     };
-    const result = await postExecute('/api/quick-execute', payload as unknown as Record<string, unknown>);
-    if (result) {
+    setExecuting(true);
+    try {
+      const result = await apiClient.postJson(
+        '/api/quick-execute',
+        payload as unknown as Record<string, unknown>,
+      ) as ExecuteResponse;
       if (result.approval && !result.approval.approved) {
         showToast(`Rejected: ${result.approval.reason}`, 'error');
       } else if (result.success || result.ticket) {
@@ -300,12 +403,14 @@ export default function SignalsPanel() {
       } else {
         showToast(`Error: ${result.error || 'Unknown'}`, 'error');
       }
-    } else {
-      showToast('Execution failed', 'error');
+    } catch (err) {
+      showToast(`Execution failed: ${err instanceof Error ? err.message : 'unknown'}`, 'error');
+    } finally {
+      setExecuting(false);
+      setConfirmSig(null);
+      setPendingStyle('auto');
     }
-    setConfirmSig(null);
-    setPendingStyle('auto');
-  }, [confirmSig, baseSource, style, pendingStyle, sizingOverride, postExecute, showToast]);
+  }, [confirmSig, baseSource, style, pendingStyle, sizingOverride, showToast]);
 
   const sourceLabel = activeTab === 'A' ? 'Engine A' : 'Engine B';
   const lastScanAgeIso = activeTab === 'A'
@@ -443,10 +548,21 @@ export default function SignalsPanel() {
           {activeTab === 'A' ? <Zap className="w-3 h-3" /> : <Layers className="w-3 h-3" />}
           {sourceLabel}
         </span>
-        <span>{filtered.length} signals match filter ({baseSignals.length} total)</span>
+        <span>
+          {activeTab === 'B' && scanCacheBMeta?.pairsScanned != null
+            ? `${filtered.length} signals match filter (${baseSignals.length} passed · ${scanCacheBMeta.pairsScanned} pairs scanned)`
+            : `${filtered.length} signals match filter (${baseSignals.length} total)`}
+        </span>
         {lastScanAgeIso && <span>- Scanned: {new Date(lastScanAgeIso).toLocaleTimeString()}</span>}
-        {activeTab === 'B' && scanCacheB === null && (
-          <span className="text-warning">- No Engine B scan yet - click Scan Engine B</span>
+        {activeTab === 'B' && scanCacheBMeta?.scanFunnel && (
+          <span className="text-[10px] text-muted-foreground max-w-3xl leading-snug" title="Per-pair reject breakdown from last Engine B scan (see server log for full funnel)">
+            Rejects: {formatEngineBScanFunnel(scanCacheBMeta.scanFunnel) ?? '—'}
+          </span>
+        )}
+        {activeTab === 'A' && (
+          <span className="text-[10px] text-muted-foreground max-w-xl">
+            Engine A list includes trade tier and watchlist. Watchlist rows are display-only until they clear trade tier.
+          </span>
         )}
       </div>
 
@@ -624,6 +740,15 @@ export default function SignalsPanel() {
                       <FileText className={textLoading ? 'w-3.5 h-3.5 animate-pulse' : 'w-3.5 h-3.5'} />
                       {textLoading ? 'AI Text...' : 'AI Review (Text)'}
                     </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="h-8 text-xs gap-1"
+                      onClick={() => setAgentOpen((open) => !open)}
+                    >
+                      <Bot className="w-3.5 h-3.5" />
+                      Discuss with AI
+                    </Button>
                     {aiReview?.structured?.right_edge_status && aiReviewMode === 'vision' && (
                       <Badge
                         className={
@@ -641,6 +766,15 @@ export default function SignalsPanel() {
                       </Badge>
                     )}
                   </div>
+
+                  {agentOpen && (
+                    <AITradingAgentPanel
+                      symbol={signalSymbol(selected)}
+                      traceId={signalTraceId(selected)}
+                      signal={(selected as unknown as Record<string, unknown>) ?? null}
+                      seedMessage="Review this trade. What supports it, what argues against it, and what would confirm or invalidate it?"
+                    />
+                  )}
 
                   {/* AI Review mode toggle */}
                   {(aiReview || aiTextReview) && (

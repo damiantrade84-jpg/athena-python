@@ -151,7 +151,10 @@ export interface PerformanceMetrics {
   worst_pair?: string | null;
   average_holding_period_hours?: number | null;
   equity_curve?: number[] | { date: string; equity: number }[];
+  /** Aggregated realised P&amp;L per close date (from audit_log rows with parseable exit timestamps). */
   daily_pnl?: { date: string; pnl: number }[];
+  /** Human-readable notes on how headline metrics are computed (e.g. Sharpe annualiser). */
+  metric_interpretation_notes?: string[];
   last_20_trades?: Record<string, unknown>[];
   execution_quality?: {
     trades_with_slippage?: number;
@@ -184,7 +187,8 @@ export type PanelId =
   | 'researchLab'
   | 'performance'
   | 'markets'
-  | 'guardian';
+  | 'guardian'
+  | 'aiPerformance';
 
 export interface LotteryNumber {
   numbers: number[];
@@ -295,22 +299,6 @@ export interface OpenTrade {
   open_time: string;
   duration: string;
   swap?: number;
-}
-
-export interface ScalpSignal {
-  setup_type: string;
-  grade: 'A' | 'B' | 'C' | 'D';
-  score: number;
-  sl: number;
-  tp: number;
-  tp2?: number;
-  entry: number;
-  confluenceScore: number;
-  executable: boolean;
-  candidate_fail_reasons: string[];
-  rr_actual: number;
-  size_multiplier: number;
-  components?: Record<string, number>;
 }
 
 export interface LotteryDraw {

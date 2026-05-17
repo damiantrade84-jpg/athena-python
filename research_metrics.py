@@ -24,11 +24,118 @@ from __future__ import annotations
 
 import math
 import random
+from datetime import date, datetime
 from statistics import NormalDist
 from typing import Any
 
 _NORMAL = NormalDist()
 _EULER_GAMMA = 0.5772156649015329
+
+
+def _psr_reliable_trade_floor() -> int:
+    """Minimum trades before PSR is treated as reliable (small-sample caveat)."""
+    try:
+        from config import CONFIG
+
+        v = CONFIG.get("BT_MIN_TRADES_FOR_PSR_RELIABILITY", 30)
+        return max(2, int(v))
+    except Exception:
+        return 30
+
+
+def parse_iso_trade_day(value: str | None) -> date | None:
+    """Calendar date from ``YYYY-MM-DD`` or ISO datetime prefix."""
+    if not value or not isinstance(value, str):
+        return None
+    s = value.strip()[:10]
+    if len(s) < 10:
+        return None
+    try:
+        return datetime.strptime(s, "%Y-%m-%d").date()
+    except ValueError:
+        return None
+
+
+def compute_trades_per_year_from_span(
+    n_trades: int,
+    first_date_iso: str | None,
+    last_date_iso: str | None,
+) -> float:
+    """Annualisation aligned with Engine A ``backtest_runner`` (365-day calendar span).
+
+    Unusable dates fall back to ``float(n_trades)`` like Engine A's exception branch.
+    """
+    if n_trades < 2:
+        return 1.0
+    d0 = parse_iso_trade_day(first_date_iso)
+    d1 = parse_iso_trade_day(last_date_iso)
+    if d0 is None or d1 is None or d1 < d0:
+        return float(n_trades)
+    span_days = max(1, (d1 - d0).days)
+    return (float(n_trades) / float(span_days)) * 365.0
+
+
+def annualized_sharpe_from_r_multiples(
+    r_values: list[float],
+    trades_per_year: float,
+    *,
+    decimals: int = 2,
+) -> float:
+    """Annualised Sharpe on R-multiples: mean / sample_std * sqrt(trades_per_year)."""
+    clean = [float(x) for x in r_values if _safe_float(x) is not None]
+    n = len(clean)
+    if n < 2:
+        return 0.0
+    tpy = float(trades_per_year)
+    if tpy <= 0:
+        return 0.0
+    avg = sum(clean) / n
+    var = sum((r - avg) ** 2 for r in clean) / (n - 1)
+    if var <= 0:
+        return 0.0
+    std = var**0.5
+    return round(avg / std * (tpy**0.5), decimals)
+
+
+def annualized_sortino_engine_a_from_r_multiples(
+    r_values: list[float],
+    trades_per_year: float,
+    *,
+    decimals: int = 2,
+) -> float:
+    """Sortino matching Engine A: downside variance from negative returns only."""
+    clean = [float(x) for x in r_values if _safe_float(x) is not None]
+    n = len(clean)
+    if n < 2:
+        return 0.0
+    tpy = float(trades_per_year)
+    if tpy <= 0:
+        return 0.0
+    avg = sum(clean) / n
+    downside = [r for r in clean if r < 0]
+    down_var = (
+        sum(r * r for r in downside) / (len(downside) - 1) if len(downside) > 1 else 0.0
+    )
+    down_std = down_var**0.5 if down_var > 0 else 0.0
+    return round((avg / down_std * (tpy**0.5)) if down_std > 0 else 0.0, decimals)
+
+
+def trades_per_year_from_parallel_trade_days(
+    r_values: list[float],
+    date_hints: list[str | None],
+) -> float:
+    """``trades_per_year`` when each R has an optional same-index ``YYYY-MM-DD`` hint."""
+    clean_r = [float(x) for x in r_values if _safe_float(x) is not None]
+    n = len(clean_r)
+    if n < 2:
+        return 1.0
+    days = [d for h in date_hints if (d := parse_iso_trade_day(h)) is not None]
+    if len(days) < 2:
+        return float(n)
+    d0 = min(days)
+    d1 = max(days)
+    span = max(1, (d1 - d0).days)
+    return (float(n) / float(span)) * 365.0
 
 
 def _safe_float(value: Any) -> float | None:
@@ -105,6 +212,7 @@ def probabilistic_sharpe_ratio(
     sample_size: int | None = None,
     skewness: float | None = None,
     kurtosis: float | None = None,
+    min_reliable_trade_count: int | None = None,
 ) -> dict[str, Any]:
     """Compute the Probabilistic Sharpe Ratio.
 
@@ -138,6 +246,22 @@ def probabilistic_sharpe_ratio(
             "benchmarkSharpe": benchmark_sharpe,
             "sampleCount": n,
             "note": "insufficient_samples_for_psr",
+        }
+
+    _floor = (
+        int(min_reliable_trade_count)
+        if min_reliable_trade_count is not None
+        else _psr_reliable_trade_floor()
+    )
+    _floor = max(2, _floor)
+    if n < _floor:
+        return {
+            "available": False,
+            "value": None,
+            "benchmarkSharpe": benchmark_sharpe,
+            "sampleCount": n,
+            "note": "psr_below_min_reliable_trade_count",
+            "minReliableTradeCount": _floor,
         }
 
     gamma3 = gamma3 if gamma3 is not None else 0.0
@@ -185,6 +309,7 @@ def deflated_sharpe_ratio(
     skewness: float | None = None,
     kurtosis: float | None = None,
     num_trials: int | None = None,
+    min_reliable_trade_count: int | None = None,
 ) -> dict[str, Any]:
     """Compute the Deflated Sharpe Ratio.
 
@@ -239,7 +364,10 @@ def deflated_sharpe_ratio(
         sample_size=n,
         skewness=gamma3,
         kurtosis=gamma4,
+        min_reliable_trade_count=min_reliable_trade_count,
     )
+    if psr.get("note") == "psr_below_min_reliable_trade_count":
+        assumptions.append("psr_below_min_reliable_trade_count_dsr_skipped")
     return {
         "available": bool(psr.get("available")),
         "value": psr.get("value"),
@@ -247,6 +375,7 @@ def deflated_sharpe_ratio(
         "sampleCount": n,
         "numTrials": trials,
         "assumptions": assumptions,
+        "psrNote": psr.get("note"),
     }
 
 
@@ -366,12 +495,14 @@ def build_research_metrics(
     assumptions = []
     runtime_heavy = []
 
+    _psr_floor = _psr_reliable_trade_floor()
     psr = probabilistic_sharpe_ratio(
         observed_sharpe,
         clean_returns,
         sample_size=int(moments["count"] or 0),
         skewness=_safe_float(moments["skewness"]),
         kurtosis=_safe_float(moments["kurtosis"]),
+        min_reliable_trade_count=_psr_floor,
     )
 
     dsr = deflated_sharpe_ratio(
@@ -381,6 +512,7 @@ def build_research_metrics(
         skewness=_safe_float(moments["skewness"]),
         kurtosis=_safe_float(moments["kurtosis"]),
         num_trials=num_trials,
+        min_reliable_trade_count=_psr_floor,
     )
     assumptions.extend(dsr.get("assumptions", []))
 

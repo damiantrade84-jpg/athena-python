@@ -43,6 +43,22 @@ def _parse_iso_dt(raw: object) -> Optional[datetime]:
         return None
 
 
+def _merge_run_meta_tags(output_dir: Path, run_id: str, tags: dict) -> None:
+    """Merge non-empty relationship tags into a run_meta.json file."""
+    meta_path = output_dir / run_id / "run_meta.json"
+    if not meta_path.exists():
+        return
+    try:
+        mdata = json.loads(meta_path.read_text(encoding="utf-8"))
+        for key, value in tags.items():
+            if value is None or value == "":
+                continue
+            mdata[key] = value
+        meta_path.write_text(json.dumps(mdata, indent=2), encoding="utf-8")
+    except Exception:
+        log.debug("[research_lab_routes] failed to merge run_meta tags for %s", run_id, exc_info=True)
+
+
 def _cleanup_autopilot_plan_states(now: Optional[datetime] = None) -> None:
     """Drop completed/failed idempotency records after their replay window."""
     now = now or _now_utc()
@@ -107,6 +123,14 @@ def register_research_lab_routes(app) -> None:
         params = body.get("params", None)
         directions = body.get("directions", None)
         max_combinations = body.get("max_combinations", None)
+        run_meta_tags = {
+            "parent_run_id": body.get("parent_run_id"),
+            "session_id": body.get("session_id"),
+            "role": body.get("role"),
+            "market_group": body.get("market_group"),
+            "trading_style": body.get("trading_style"),
+            "research_depth": body.get("research_depth"),
+        }
 
         from athena_research.run_manager import run_research, _DEFAULT_CONFIG
         from datetime import datetime, timezone
@@ -130,7 +154,10 @@ def register_research_lab_routes(app) -> None:
                     params=params,
                     directions=directions,
                     max_combinations=max_combinations,
+                    market_group=body.get("market_group"),
+                    trading_style=body.get("trading_style"),
                 )
+                _merge_run_meta_tags(_DEFAULT_OUTPUT, run_id, run_meta_tags)
                 _active_runs[run_id]["status"] = "complete"
 
                 _active_runs[run_id]["result"] = result
@@ -474,6 +501,8 @@ def register_research_lab_routes(app) -> None:
         market_group = body.get("market_group", "crypto").lower()
         trading_style = body.get("trading_style", "intra").lower()
         research_depth = body.get("research_depth", "standard").lower()
+        session_id = body.get("session_id")
+        parent_run_id = body.get("parent_run_id")
 
         # Resolve mode
         if research_depth == "quick":
@@ -518,19 +547,16 @@ def register_research_lab_routes(app) -> None:
                     families=families
                 )
                 
-                # Write trading style specifics to run_meta
-                meta_path = _DEFAULT_OUTPUT / run_id / "run_meta.json"
-                if meta_path.exists():
-                    try:
-                        mdata = json.loads(meta_path.read_text(encoding="utf-8"))
-                        mdata["market_group"] = market_group
-                        mdata["trading_style"] = trading_style
-                        mdata["research_depth"] = research_depth
-                        mdata["zone_set"] = profile.get("zone_set")
-                        mdata["validation_focus"] = profile.get("validation_focus")
-                        meta_path.write_text(json.dumps(mdata, indent=2), encoding="utf-8")
-                    except Exception:
-                        pass
+                _merge_run_meta_tags(_DEFAULT_OUTPUT, run_id, {
+                    "market_group": market_group,
+                    "trading_style": trading_style,
+                    "research_depth": research_depth,
+                    "zone_set": profile.get("zone_set"),
+                    "validation_focus": profile.get("validation_focus"),
+                    "session_id": session_id,
+                    "parent_run_id": parent_run_id,
+                    "role": body.get("role") or "style_run",
+                })
 
                 _active_runs[run_id]["status"] = "complete"
                 _active_runs[run_id]["result"] = result
@@ -858,13 +884,14 @@ def register_research_lab_routes(app) -> None:
         # Sanitise — only allow known file names, no directory traversal
         allowed = {
             "research_summary.csv", "ranked_strategies.csv", "by_asset_group.csv",
-            "by_symbol.csv", "by_timeframe.csv", "by_session.csv", "by_direction.csv",
+            "by_symbol.csv", "by_timeframe.csv", "by_session.csv", "by_session_bucket.csv", "by_direction.csv",
             "by_zone.csv", "per_pair_recommendation.csv",
             "indicator_attribution.csv", "rejected_or_failed_configs.csv",
             "engine_a_component_audit.csv", "engine_b_component_audit.csv",
             "candidate_indicator_attribution.csv", "group_breakdown.csv",
             "zone_breakdown_scalp_intra_swing.csv", "structure_context_breakdown.csv",
             "automated_next_tests.csv", "add_remove_retest_recommendations.csv",
+            "implementation_ready_candidates.csv",
             "research_report.md", "ai_research_review.md", "ai_action_plan.json",
             "ai_engine_recommendations.json", "run_meta.json", "error_traceback.txt",
         }
@@ -882,6 +909,12 @@ def register_research_lab_routes(app) -> None:
     def api_research_lab_ranked(run_id: str):
         """Return ranked strategies JSON for dashboard display."""
         import pandas as pd
+        from athena_research.reporting import (
+            _apply_implementation_readiness,
+            _normalise_action_recommendations,
+            _recommendation_table,
+            build_operator_decision_summary,
+        )
 
         run_dir = _DEFAULT_OUTPUT / run_id
         ranked_path = run_dir / "ranked_strategies.csv"
@@ -894,23 +927,47 @@ def register_research_lab_routes(app) -> None:
 
         try:
             df = pd.read_csv(ranked_path).head(50)
+            summary_path = run_dir / "research_summary.csv"
             rec_path = run_dir / "add_remove_retest_recommendations.csv"
             next_path = run_dir / "automated_next_tests.csv"
             # Use pandas JSON serialiser which handles numpy types correctly
             records = json.loads(df.fillna("").to_json(orient="records"))
             recommendations = []
             next_tests = []
-            if rec_path.exists():
-                rec_df = pd.read_csv(rec_path).head(50)
+            operator_source = df.copy()
+            if summary_path.exists():
+                try:
+                    operator_source = pd.read_csv(summary_path)
+                except Exception:
+                    operator_source = df.copy()
+            ready_ranked = _apply_implementation_readiness(
+                _normalise_action_recommendations(df)
+            )
+            records = json.loads(ready_ranked.fillna("").to_json(orient="records"))
+            if summary_path.exists():
+                rec_df = _recommendation_table(
+                    _apply_implementation_readiness(
+                        _normalise_action_recommendations(operator_source)
+                    )
+                ).head(50)
+                recommendations = json.loads(rec_df.fillna("").to_json(orient="records"))
+            elif rec_path.exists():
+                rec_df = _apply_implementation_readiness(
+                    _normalise_action_recommendations(pd.read_csv(rec_path))
+                ).head(50)
                 recommendations = json.loads(rec_df.fillna("").to_json(orient="records"))
             if next_path.exists():
                 next_df = pd.read_csv(next_path).head(50)
                 next_tests = json.loads(next_df.fillna("").to_json(orient="records"))
+            operator_summary = build_operator_decision_summary(operator_source)
+            if operator_summary.get("use_now"):
+                next_tests = []
             return jsonify({
                 "run_id": run_id,
                 "ranked": records,
                 "recommendations": recommendations,
                 "automated_next_tests": next_tests,
+                "operator_summary": operator_summary,
             })
         except Exception as e:
             return jsonify({"error": str(e)}), 500

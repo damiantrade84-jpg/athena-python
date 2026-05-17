@@ -1,0 +1,52 @@
+---
+description: >
+  Backtest running, debugging, and interpretation for Athena. Apply when working on
+  backtest_runner.py, backtest.py, analyzing results, debugging Engine A or C reliability,
+  timeout rates, or live vs backtest parity. Also apply for "why is the hit rate low",
+  "Engine C timeouts", "is this result statistically meaningful", or "check backtest validity".
+globs:
+  - "**/backtest_runner.py"
+  - "**/backtest.py"
+  - "**/run_backtest.py"
+  - "**/research_validation.py"
+alwaysApply: false
+---
+
+# Athena — Backtest Analysis
+
+## Before interpreting results
+
+Always verify:
+- Same candle feed used for signal generation and fill simulation
+- Signal scored on closed bar `iloc[-2]`, not forming bar `iloc[-1]`
+- Timeframe key in engine output matches `execution.py` expectation — confirmed D1/H4 key mismatch was fixed for swing-style forex; verify fix is present
+- `AUTO_TRADE_MIN_SCORE` is a dead config key — confirm which threshold gate is actually active
+- Signal count vs trade count consistency — large divergence = fill logic bug or RR filter too aggressive
+
+## Engine A checklist
+
+- Hit rate ~50% across 200+ samples = noise; do not claim edge without chi-squared test
+- `combinedConviction` structurally caps Engine A-only signals below auto-trade gate; verify this is not causing zero auto-trades
+- Structure-first entry gate: Engine B BOS/CHoCH confirmation required alongside score gate; confirm both gates are present in `backtest_runner.py`
+- Forming-bar lookahead: confirm `iloc[-2]` throughout signal scoring
+
+## Engine C checklist
+
+- Timeout rate >10%: inspect `_monitor_fill_index` bisect — type mismatch between float price and list-of-dicts was a confirmed bug; verify fix before drawing conclusions
+- `trust_neither` >40%: upstream signal quality issue in Engine A or B
+- Weight output must sum to 1.0 at every decision
+
+## Statistical validity
+
+- 200 closed trades minimum for directional hit-rate conclusions
+- 500 trades minimum for Sharpe/expectancy claims
+- Always split long vs short hit rates
+- Required report fields: trades, win_rate, avg_r, expectancy, max_drawdown_r, profit_factor
+
+## Debug steps
+
+1. Count and categorize SKIP / NO_FILL / TIMEOUT in logs
+2. Dump first 10 signal records; verify field presence and types
+3. Check candle alignment: signal bar close timestamp vs fill bar open timestamp
+4. For Engine A: dump `factor_score_detail` for 5 samples; confirm normalization
+5. For Engine C: confirm weight sum = 1.0 and trust verdict is always one of four valid states

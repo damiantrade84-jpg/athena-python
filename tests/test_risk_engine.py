@@ -3,6 +3,7 @@
 import sys
 import os
 import threading
+from datetime import datetime, timezone
 import pytest
 
 # Ensure project root is importable
@@ -10,6 +11,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from risk_engine import (
     join_peak_audit_queue,
+    resolve_max_sl_pct,
     risk_check,
     _cfg,
     _signal_quality_factor,
@@ -54,8 +56,13 @@ def _make_signal(**overrides):
         "tp1": 62000,
         "tp2": 64000,
         "type": "crypto",
-        "timestamp": None,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
         "confluenceScore": 5.0,
+        "candleFetchMeta": {
+            "D1": {"stalenessSeverity": "fresh"},
+            "H4": {"stalenessSeverity": "fresh"},
+            "H1": {"stalenessSeverity": "fresh"},
+        },
     }
     base.update(overrides)
     return base
@@ -244,10 +251,12 @@ class TestDataFreshnessGate:
 
 
 class TestDrawdown:
-    def test_severe_drawdown_rejects(self):
+    def test_severe_drawdown_rejects(self, monkeypatch):
         # Simulate 20% drawdown: peak was 10000, equity is 8000 (crypto signal)
         import risk_engine
 
+        # config.yaml may override the code default; force the gate ON for this test
+        monkeypatch.setitem(risk_engine.CONFIG, "DRAWDOWN_STOP_ENABLED", True)
         with risk_engine._peak_lock:
             old = dict(risk_engine._peak_equity)
             risk_engine._peak_equity["crypto"] = 10000.0
@@ -255,6 +264,20 @@ class TestDrawdown:
             result = risk_check(_make_signal(type="crypto"), 8000, 8000, [])
             assert result.approved is False
             assert result.reason == "DRAWDOWN_CIRCUIT_BREAKER"
+        finally:
+            with risk_engine._peak_lock:
+                risk_engine._peak_equity = old
+
+    def test_drawdown_gate_disabled_allows_trade(self, monkeypatch):
+        import risk_engine
+
+        monkeypatch.setitem(risk_engine.CONFIG, "DRAWDOWN_STOP_ENABLED", False)
+        with risk_engine._peak_lock:
+            old = dict(risk_engine._peak_equity)
+            risk_engine._peak_equity["crypto"] = 10000.0
+        try:
+            result = risk_check(_make_signal(type="crypto"), 8000, 8000, [])
+            assert result.approved is True
         finally:
             with risk_engine._peak_lock:
                 risk_engine._peak_equity = old
@@ -273,6 +296,45 @@ class TestDrawdown:
         assert abs(risk_engine._current_drawdown(45000, "stock") - 0.1) < 1e-9
         # Crypto drawdown — independent
         assert abs(risk_engine._current_drawdown(8000, "crypto") - 0.2) < 1e-9
+
+    def test_account_scoped_crypto_peak_blocks_same_account(self, monkeypatch):
+        import risk_engine
+
+        monkeypatch.setitem(risk_engine.CONFIG, "DRAWDOWN_STOP_ENABLED", True)
+        domain = "crypto:bybit:demo:key-a"
+        with risk_engine._peak_lock:
+            risk_engine._peak_equity = {domain: 100000.0}
+
+        result = risk_check(
+            _make_signal(type="crypto"),
+            48561.47,
+            48561.47,
+            [],
+            account_domain=domain,
+        )
+
+        assert result.approved is False
+        assert result.reason == "DRAWDOWN_CIRCUIT_BREAKER"
+
+    def test_account_scoped_crypto_peak_does_not_block_other_demo_account(self, monkeypatch):
+        import risk_engine
+
+        monkeypatch.setitem(risk_engine.CONFIG, "DRAWDOWN_STOP_ENABLED", True)
+        old_domain = "crypto:bybit:demo:key-a"
+        new_domain = "crypto:bybit:demo:key-b"
+        with risk_engine._peak_lock:
+            risk_engine._peak_equity = {old_domain: 100000.0}
+
+        result = risk_check(
+            _make_signal(type="crypto"),
+            48561.47,
+            48561.47,
+            [],
+            account_domain=new_domain,
+        )
+
+        assert result.approved is True
+        assert risk_engine._peak_equity[new_domain] == 48561.47
 
 
 # ── Max positions ────────────────────────────────────────────────────────────
@@ -376,6 +438,71 @@ class TestMaxSlPct:
         assert result.approved is False
         assert result.reason == "MAX_SL_EXCEEDED"
 
+    def test_score_group_override_allows_mapped_volatile_commodity(self, monkeypatch):
+        monkeypatch.setitem(risk_engine.CONFIG, "MAX_SL_PCT", {"commodity": 0.04})
+        monkeypatch.setitem(
+            risk_engine.CONFIG,
+            "MAX_SL_PCT_SCORE_GROUP_OVERRIDES",
+            {"precious_trackers": 0.10},
+        )
+        sig = _make_signal(
+            pair="XAG/USD",
+            type="commodity",
+            price=100.0,
+            sl=90.9,
+            tp1=120.0,
+            tp2=130.0,
+            score_group="precious_trackers",
+        )
+
+        cap, source = resolve_max_sl_pct(sig, "commodity", risk_engine.CONFIG)
+        assert cap == pytest.approx(0.10)
+        assert source == "score_group:precious_trackers"
+        result = risk_check(sig, 100000, 100000, [])
+        assert result.reason != "MAX_SL_EXCEEDED"
+
+    def test_unmapped_commodity_still_uses_strict_base_cap(self, monkeypatch):
+        monkeypatch.setitem(risk_engine.CONFIG, "MAX_SL_PCT", {"commodity": 0.04})
+        monkeypatch.setitem(risk_engine.CONFIG, "MAX_SL_PCT_SCORE_GROUP_OVERRIDES", {})
+        sig = _make_signal(
+            pair="Commodity Other",
+            type="commodity",
+            price=100.0,
+            sl=95.5,
+            tp1=110.0,
+            tp2=115.0,
+        )
+
+        cap, source = resolve_max_sl_pct(sig, "commodity", risk_engine.CONFIG)
+        assert cap == pytest.approx(0.04)
+        assert source == "asset:commodity"
+        result = risk_check(sig, 100000, 100000, [])
+        assert result.approved is False
+        assert result.reason == "MAX_SL_EXCEEDED"
+
+    def test_symbol_override_can_cover_unmapped_display(self, monkeypatch):
+        monkeypatch.setitem(risk_engine.CONFIG, "MAX_SL_PCT", {"commodity": 0.04})
+        monkeypatch.setitem(risk_engine.CONFIG, "MAX_SL_PCT_SCORE_GROUP_OVERRIDES", {})
+        monkeypatch.setitem(
+            risk_engine.CONFIG,
+            "MAX_SL_PCT_SYMBOL_OVERRIDES",
+            {"Gasoline": 0.08},
+        )
+        sig = _make_signal(
+            pair="Gasoline",
+            type="commodity",
+            price=100.0,
+            sl=93.0,
+            tp1=116.0,
+            tp2=124.0,
+        )
+
+        cap, source = resolve_max_sl_pct(sig, "commodity", risk_engine.CONFIG)
+        assert cap == pytest.approx(0.08)
+        assert source == "symbol:Gasoline"
+        result = risk_check(sig, 100000, 100000, [])
+        assert result.reason != "MAX_SL_EXCEEDED"
+
 
 class TestInvalidLevels:
     def test_rejects_zero_sl(self):
@@ -466,6 +593,10 @@ class TestApproval:
         sig = _make_signal(confluenceScore=2.7, maxScore=3.0, combinedConviction=0.4)
         assert _signal_quality_factor(sig) == 0.4
 
+    def test_signal_quality_factor_malformed_confluence_uses_minimum_band(self):
+        sig = _make_signal(confluenceScore="bad", maxScore="worse")
+        assert _signal_quality_factor(sig) == 0.25
+
     def test_risk_check_sizes_from_combined_conviction_when_present(self, monkeypatch):
         monkeypatch.setattr(risk_engine, "_calc_volume", lambda *args, **kwargs: 1.0)
         result = risk_check(
@@ -532,6 +663,28 @@ class TestPeakEquityThreadSafety:
         # Crypto remains clean
         blocked_crypto, _ = risk_engine._check_daily_loss(10000.0, "crypto")
         assert blocked_crypto is False
+
+    def test_daily_loss_uses_account_domain_when_available(self):
+        import risk_engine
+
+        domain_a = "crypto:bybit:demo:key-a"
+        domain_b = "crypto:bybit:demo:key-b"
+
+        risk_engine.record_daily_pnl(
+            -6000.0, 100000.0, "crypto", account_domain=domain_a
+        )
+
+        blocked_a, pct_a = risk_engine._check_daily_loss(
+            100000.0, "crypto", account_domain=domain_a
+        )
+        blocked_b, pct_b = risk_engine._check_daily_loss(
+            100000.0, "crypto", account_domain=domain_b
+        )
+
+        assert blocked_a is True
+        assert abs(pct_a - 0.06) < 1e-9
+        assert blocked_b is False
+        assert pct_b == 0.0
 
     def test_fresh_day_resets_counters(self):
         import risk_engine
@@ -603,3 +756,57 @@ class TestSlOverrideDirection:
         correct_result = max(math_sl, struct_sl)  # fixed behaviour
         assert wrong_result == 92.0  # confirms old logic was wider
         assert correct_result == 95.0  # confirms fix is tighter
+# appended tests
+
+class TestConsensusMinRR:
+    def test_rejects_low_rr_when_verdict_is_engine_c(self, monkeypatch):
+        monkeypatch.setitem(risk_engine.CONFIG, "ENGINE_C_EXEC_MIN_RR", 1.0)
+        sig = _make_signal(
+            price=100.0,
+            sl=95.0,
+            tp1=104.0,
+            verdict="ALIGNED",
+            decision_state="execute",
+            tier="HIGH",
+            components={"b_checklist_passed": True},
+            engine_b_status={"checklist_passed": True},
+        )
+        r = risk_check(sig, 10000, 10000, [])
+        assert r.approved is False
+        assert r.reason == "RR_BELOW_MINIMUM"
+
+    def test_allows_low_rr_when_not_consensus_context(self, monkeypatch):
+        monkeypatch.setitem(risk_engine.CONFIG, "ENGINE_C_EXEC_MIN_RR", 1.0)
+        sig = _make_signal(
+            price=100.0,
+            sl=95.0,
+            tp1=104.0,
+        )
+        r = risk_check(sig, 10000, 10000, [])
+        assert r.approved is True
+
+    def test_rejects_standalone_engine_b_low_rr_after_override(self, monkeypatch):
+        monkeypatch.setitem(risk_engine.CONFIG, "ENGINE_C_EXEC_MIN_RR", 1.0)
+        sig = _make_signal(
+            price=100.0,
+            sl=95.0,
+            tp1=104.0,
+            engine="engine_b",
+            engine_b_min_rr=1.2,
+            engine_b_status={"checklist_passed": True, "min_rr": 1.2},
+        )
+        r = risk_check(sig, 10000, 10000, [])
+        assert r.approved is False
+        assert r.reason == "RR_BELOW_MINIMUM"
+
+    def test_rejects_standalone_engine_b_missing_checklist_proof(self, monkeypatch):
+        monkeypatch.setitem(risk_engine.CONFIG, "ENGINE_C_EXEC_MIN_RR", 1.0)
+        sig = _make_signal(
+            price=100.0,
+            sl=95.0,
+            tp1=110.0,
+            engine="engine_b",
+        )
+        r = risk_check(sig, 10000, 10000, [])
+        assert r.approved is False
+        assert r.reason == "ENGINE_B_CHECKLIST_MISSING"

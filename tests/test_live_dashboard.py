@@ -26,41 +26,56 @@ import ast
 import sys
 from pathlib import Path
 
+from tests.route_contract_helpers import endpoint_map_from_files
+
 ROOT = Path(__file__).resolve().parents[1]
 ATHENA_PATH = ROOT / "athena.py"
+LIVE_DASHBOARD_PATH = ROOT / "athena_app" / "api" / "routes_live_dashboard.py"
+SOURCE_FILES = [ATHENA_PATH, LIVE_DASHBOARD_PATH]
 
 
 # ── AST helpers ──────────────────────────────────────────────────────────────
 
 def _route_map() -> dict[str, set[str]]:
-    """Return {path: methods} from @app.route decorators in athena.py."""
-    src = ATHENA_PATH.read_text(encoding="utf-8")
-    tree = ast.parse(src)
-    out: dict[str, set[str]] = {}
-    for node in tree.body:
-        if not isinstance(node, ast.FunctionDef):
-            continue
-        for dec in node.decorator_list:
-            if not isinstance(dec, ast.Call):
-                continue
-            func = dec.func
-            if not (isinstance(func, ast.Attribute) and func.attr == "route"):
-                continue
-            if not dec.args or not isinstance(dec.args[0], ast.Constant):
-                continue
-            path = dec.args[0].value
-            methods: set[str] = {"GET"}
-            for kw in dec.keywords or []:
-                if kw.arg == "methods" and isinstance(kw.value, (ast.List, ast.Tuple)):
-                    vals = [e.value for e in kw.value.elts if isinstance(e, ast.Constant)]
-                    if vals:
-                        methods = set(vals)
-            out[path] = methods
-    return out
+    """Return {path: methods} from monolith and extracted dashboard modules."""
+    return endpoint_map_from_files(
+        [
+            ATHENA_PATH,
+            LIVE_DASHBOARD_PATH,
+        ]
+    )
 
 
 def _src() -> str:
-    return ATHENA_PATH.read_text(encoding="utf-8")
+    return "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in SOURCE_FILES
+        if path.exists()
+    )
+
+
+def _function_node(name: str) -> ast.FunctionDef | None:
+    for path in SOURCE_FILES:
+        if not path.exists():
+            continue
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in tree.body:
+            if isinstance(node, ast.FunctionDef) and node.name == name:
+                return node
+    return None
+
+
+def _function_source(name: str) -> str:
+    for path in SOURCE_FILES:
+        if not path.exists():
+            continue
+        src = path.read_text(encoding="utf-8")
+        tree = ast.parse(src)
+        lines = src.splitlines(keepends=True)
+        for node in tree.body:
+            if isinstance(node, ast.FunctionDef) and node.name == name:
+                return "".join(lines[node.lineno - 1 : node.end_lineno])
+    return ""
 
 
 # ── Phase 8 / Phase 9: endpoint registration ─────────────────────────────────
@@ -77,14 +92,7 @@ def test_snapshot_endpoint_registered():
 
 def test_snapshot_never_calls_execute():
     """The snapshot function body must not reference order-placement callables."""
-    src = _src()
-    # Find the function body of api_live_dashboard_snapshot
-    tree = ast.parse(src)
-    snapshot_fn = None
-    for node in tree.body:
-        if isinstance(node, ast.FunctionDef) and node.name == "api_live_dashboard_snapshot":
-            snapshot_fn = node
-            break
+    snapshot_fn = _function_node("api_live_dashboard_snapshot")
     assert snapshot_fn is not None, "api_live_dashboard_snapshot function not found"
 
     forbidden = {"mt5_execute", "bybit_execute", "risk_check", "api_execute",
@@ -190,10 +198,8 @@ def test_engine_a_v2_fields_in_snapshot():
 
 def test_engine_a_no_legacy_vote_fields_as_active_scoring():
     """_ld_build_engine_a_row must not use d1_trend/h4_macd vote keys as scoring."""
-    src = _src()
-    idx_start = src.find("def _ld_build_engine_a_row(")
-    idx_end = src.find("\ndef ", idx_start + 1)
-    fn_body = src[idx_start:idx_end] if idx_end != -1 else src[idx_start:idx_start + 1500]
+    fn_body = _function_source("_ld_build_engine_a_row")
+    assert fn_body, "_ld_build_engine_a_row function not found"
     legacy_vote_keys = ["d1_trend", "h4_macd", "h1_ema", "h4_oscillator"]
     for key in legacy_vote_keys:
         assert key not in fn_body, (
@@ -223,11 +229,8 @@ def test_engine_c_decision_states_present():
 
 def test_engine_c_trade_always_false_in_dashboard():
     """Dashboard must not set trade=True; execution always requires backend re-check."""
-    src = _src()
-    idx = src.find("def _ld_derive_engine_c_state(")
-    assert idx != -1, "_ld_derive_engine_c_state function not found"
-    fn_end = src.find("\ndef ", idx + 1)
-    fn_body = src[idx: fn_end] if fn_end != -1 else src[idx: idx + 2000]
+    fn_body = _function_source("_ld_derive_engine_c_state")
+    assert fn_body, "_ld_derive_engine_c_state function not found"
     assert '"trade": False' in fn_body or "'trade': False" in fn_body, (
         "_ld_derive_engine_c_state must set trade=False (dashboard never creates execution permission)"
     )
@@ -269,8 +272,7 @@ def test_scalp_cache_written_by_scalp_scan_not_snapshot():
     # Snapshot must only READ from the cache, not write
     idx_snapshot = src.find("def api_live_dashboard_snapshot():")
     assert idx_snapshot != -1
-    idx_next_snapshot = src.find("\n@app.route", idx_snapshot + 1)
-    snapshot_body = src[idx_snapshot: idx_next_snapshot] if idx_next_snapshot != -1 else src[idx_snapshot:]
+    snapshot_body = _function_source("api_live_dashboard_snapshot")
     # Check no direct write to cache in snapshot (assignment with [key] = ... pattern)
     # We allow reads via .get()
     assert "_live_dashboard_scalp_cache[" not in snapshot_body or \
@@ -309,10 +311,9 @@ def test_symbol_not_found_returns_row_not_500():
 
 def test_watchlist_blocked_not_executable():
     """Dashboard must not expose any execution endpoint that bypasses engine state."""
-    src = _src()
     # The snapshot endpoint docstring must affirm paper-only contract
-    idx = src.find("def api_live_dashboard_snapshot():")
-    snippet = src[idx: idx + 600]
+    src = _src()
+    snippet = _function_source("api_live_dashboard_snapshot")[:600]
     assert "PAPER_MONITOR_ONLY" in src or "paper" in snippet.lower(), (
         "Snapshot must reference paper monitoring contract"
     )
@@ -339,22 +340,30 @@ def test_frontend_tab_registered():
     html_path = ROOT / "static" / "index.html"
     assert html_path.exists()
     html = html_path.read_text(encoding="utf-8")
-    assert "nav-live-dashboard" in html, "Live Dashboard nav item missing"
-    assert "panel-live-dashboard" in html, "Live Dashboard panel div missing"
-    assert "ldCardGrid" in html, "ldCardGrid element missing"
-    assert "ldEventFeed" in html, "ldEventFeed element missing"
-    assert "ldScalpRadar" in html, "ldScalpRadar element missing"
-    assert "ldPaperSummary" in html, "ldPaperSummary element missing"
+    assert 'id="root"' in html, "React app mount root missing"
+    assert "/static/assets/" in html, "Built React assets missing from app shell"
+
+    sidebar = (ROOT / "static" / "react-app" / "app" / "src" / "components" / "layout" / "Sidebar.tsx").read_text(encoding="utf-8")
+    home = (ROOT / "static" / "react-app" / "app" / "src" / "pages" / "Home.tsx").read_text(encoding="utf-8")
+    panel = (ROOT / "static" / "react-app" / "app" / "src" / "components" / "panels" / "LiveCockpitPanel.tsx").read_text(encoding="utf-8")
+
+    assert "id: 'liveCockpit'" in sidebar, "Live Cockpit nav item missing"
+    assert "label: 'Live Cockpit'" in sidebar, "Live Cockpit nav label missing"
+    assert "liveCockpit: LiveCockpitPanel" in home, "Live Cockpit panel registration missing"
+    assert "/api/live-dashboard/snapshot" in panel, "Live dashboard snapshot consumer missing"
 
 
 def test_frontend_status_bar_badges():
-    html_path = ROOT / "static" / "index.html"
-    html = html_path.read_text(encoding="utf-8")
-    assert "PAPER MODE ON" in html
-    assert "REAL ORDERS OFF" in html
-    assert "ld-mt5-badge" in html
-    assert "ld-binance-badge" in html
-    assert "ld-freshness-badge" in html
+    panel_path = ROOT / "static" / "react-app" / "app" / "src" / "components" / "panels" / "LiveCockpitPanel.tsx"
+    panel = panel_path.read_text(encoding="utf-8")
+
+    assert "MT5:" in panel
+    assert "BINANCE:" in panel
+    assert "FRESHNESS OK" in panel
+    assert "FRESHNESS ISSUE" in panel
+    assert "Paper:" in panel
+    assert "Real orders:" in panel
+    assert "REAL_ORDERS_ALLOWED" in panel
 
 
 def test_frontend_candlestick_chart_renderer():
@@ -430,13 +439,7 @@ def test_paper_execute_endpoint_registered():
 
 def test_paper_execute_never_calls_broker():
     """paper-execute function must not reference any broker order function."""
-    src = _src()
-    tree = ast.parse(src)
-    fn_node = None
-    for node in tree.body:
-        if isinstance(node, ast.FunctionDef) and node.name == "api_live_dashboard_paper_execute":
-            fn_node = node
-            break
+    fn_node = _function_node("api_live_dashboard_paper_execute")
     assert fn_node is not None, "api_live_dashboard_paper_execute function not found"
 
     forbidden = {
@@ -459,11 +462,8 @@ def test_paper_execute_never_calls_broker():
 
 def test_paper_execute_enforces_real_orders_blocked():
     """paper-execute must guard against REAL_ORDERS_ALLOWED=true."""
-    src = _src()
-    idx = src.find("def api_live_dashboard_paper_execute(")
-    assert idx != -1, "api_live_dashboard_paper_execute not found"
-    idx_end = src.find("\n@app.route", idx + 1)
-    fn_body = src[idx: idx_end] if idx_end != -1 else src[idx: idx + 3000]
+    fn_body = _function_source("api_live_dashboard_paper_execute")
+    assert fn_body, "api_live_dashboard_paper_execute not found"
     assert "REAL_ORDERS_ALLOWED" in fn_body, (
         "paper-execute must re-check REAL_ORDERS_ALLOWED before logging"
     )
@@ -487,10 +487,8 @@ def test_snapshot_v3_executable_state_shape():
 
 def test_paper_execute_calls_risk_check_and_blocks_states():
     src = _src()
-    idx = src.find("def api_live_dashboard_paper_execute(")
-    assert idx != -1
-    fn_end = src.find("\n@app.route", idx + 1)
-    fn_body = src[idx:fn_end] if fn_end != -1 else src[idx:]
+    fn_body = _function_source("api_live_dashboard_paper_execute")
+    assert fn_body
     assert "risk_check(" in fn_body
     assert "DATA_MISSING" in src
     assert "WATCHLIST" in src
@@ -531,3 +529,5 @@ def test_athena_py_compiles():
         py_compile.compile(tmp, doraise=True)
     finally:
         Path(tmp).unlink(missing_ok=True)
+    if LIVE_DASHBOARD_PATH.exists():
+        py_compile.compile(str(LIVE_DASHBOARD_PATH), doraise=True)

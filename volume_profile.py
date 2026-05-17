@@ -6,10 +6,14 @@ from collections import OrderedDict
 from datetime import datetime, timezone
 import logging
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import numpy as np
 
 log = logging.getLogger("sentinel")
+
+_TZ_LONDON = ZoneInfo("Europe/London")
+_TZ_NEW_YORK = ZoneInfo("America/New_York")
 
 
 def compute_bucketed_volume_profile(
@@ -154,13 +158,74 @@ def _candle_num(candle: dict, *keys: str) -> float | None:
     return None
 
 
-def split_completed_sessions(candles: list, asset_type: str) -> dict:
+def _normalize_session_mode(raw: Any) -> str:
+    mode = str(raw or "london_ny").strip().lower()
+    key = mode.replace("-", "_").replace(" ", "_").replace("/", "_")
+    while "__" in key:
+        key = key.replace("__", "_")
+    aliases = {
+        "ny": "new_york",
+        "newyork": "new_york",
+        "london_new_york": "london_ny",
+        "londonny": "london_ny",
+        "asia_london_new_york": "asia_london_ny",
+        "crypto_major": "asia_london_ny",
+        "all_major": "asia_london_ny",
+    }
+    return aliases.get(key, key)
+
+
+def _session_label_for_ts(ts: datetime, asset_type: str, session_mode: str) -> tuple[str, str] | None:
+    asset = str(asset_type or "").strip().lower()
+    mode = _normalize_session_mode(session_mode)
+    utc = ts.astimezone(timezone.utc)
+    london = utc.astimezone(_TZ_LONDON)
+    new_york = utc.astimezone(_TZ_NEW_YORK)
+
+    def _in_window(local_dt: datetime, start_h: int, end_h: int) -> bool:
+        minute = local_dt.hour * 60 + local_dt.minute
+        return start_h * 60 <= minute < end_h * 60
+
+    if mode in {"all", "any", "disabled", "off"}:
+        return utc.date().isoformat(), "utc_day"
+
+    if asset == "stock":
+        if _in_window(new_york, 8, 16):
+            return new_york.date().isoformat(), "new_york"
+        return None
+
+    if asset == "crypto":
+        labels = []
+        if mode in {"asia", "asia_london_ny"} and _in_window(utc, 1, 9):
+            labels.append(("asia", utc.date().isoformat()))
+        if mode in {"london", "london_ny", "asia_london_ny"} and _in_window(london, 7, 16):
+            labels.append(("london", london.date().isoformat()))
+        if mode in {"new_york", "london_ny", "asia_london_ny"} and _in_window(new_york, 8, 17):
+            labels.append(("new_york", new_york.date().isoformat()))
+        if not labels:
+            return None
+        session_date = labels[0][1]
+        label = "asia_london_ny" if mode == "asia_london_ny" else labels[0][0]
+        return session_date, label
+
+    if mode == "london" and _in_window(london, 7, 16):
+        return london.date().isoformat(), "london"
+    if mode == "new_york" and _in_window(new_york, 8, 16):
+        return new_york.date().isoformat(), "new_york"
+    if mode in {"london_ny", "asia_london_ny"}:
+        in_london = _in_window(london, 7, 16)
+        in_ny = _in_window(new_york, 8, 16)
+        if in_london or in_ny:
+            return (london.date() if in_london else new_york.date()).isoformat(), "london_ny"
+    return None
+
+
+def split_completed_sessions(candles: list, asset_type: str, session_mode: str | None = None) -> dict:
     """Split candles into current session and immediately preceding completed session.
 
     Session boundaries are determined from the latest candle date in the provided
     dataset, not the wall clock, so historical backtests remain correct.
     """
-    _ = asset_type
     grouped: OrderedDict = OrderedDict()
     parsed = []
     for candle in candles or []:
@@ -174,19 +239,36 @@ def split_completed_sessions(candles: list, asset_type: str) -> dict:
             "current_session_candles": [],
             "prev_session_date": None,
             "current_session_date": None,
+            "prev_session_name": None,
+            "current_session_name": None,
+            "session_basis": "asset_session_window",
         }
     parsed.sort(key=lambda item: item[0])
     for ts, candle in parsed:
-        grouped.setdefault(ts.date(), []).append(candle)
+        session_key = _session_label_for_ts(ts, asset_type, session_mode or "london_ny")
+        if session_key is None:
+            continue
+        grouped.setdefault(session_key, []).append(candle)
 
-    session_dates = list(grouped.keys())
-    current_session_date = session_dates[-1]
-    prev_session_date = session_dates[-2] if len(session_dates) >= 2 else None
+    session_basis = "asset_session_window"
+    if not grouped:
+        for ts, candle in parsed:
+            grouped.setdefault((ts.date().isoformat(), "utc_day"), []).append(candle)
+        session_basis = "utc_date_fallback"
+
+    session_keys = list(grouped.keys())
+    current_session_key = session_keys[-1]
+    prev_session_key = session_keys[-2] if len(session_keys) >= 2 else None
+    current_session_date, current_session_name = current_session_key
+    prev_session_date, prev_session_name = prev_session_key if prev_session_key else (None, None)
     return {
-        "prev_session_candles": list(grouped.get(prev_session_date, [])) if prev_session_date else [],
-        "current_session_candles": list(grouped.get(current_session_date, [])),
-        "prev_session_date": prev_session_date.isoformat() if prev_session_date else None,
-        "current_session_date": current_session_date.isoformat() if current_session_date else None,
+        "prev_session_candles": list(grouped.get(prev_session_key, [])) if prev_session_key else [],
+        "current_session_candles": list(grouped.get(current_session_key, [])),
+        "prev_session_date": prev_session_date,
+        "current_session_date": current_session_date,
+        "prev_session_name": prev_session_name,
+        "current_session_name": current_session_name,
+        "session_basis": session_basis,
     }
 
 
@@ -334,10 +416,19 @@ def compute_fixed_range_volume_profile(
 
     low_idx = min(included)
     high_idx = max(included)
+    poc_vol = float(volumes[poc_idx])
+    lvn_cutoff = poc_vol * 0.30 if poc_vol > 0 else 0.0
+    lvn_levels = [
+        round(float((edges[i] + edges[i + 1]) / 2.0), 6)
+        for i in range(bins)
+        if float(volumes[i]) < lvn_cutoff
+    ]
     out.update({
         "poc": round(float((edges[poc_idx] + edges[poc_idx + 1]) / 2.0), 6),
         "vah": round(float(edges[high_idx + 1]), 6),
         "val": round(float(edges[low_idx]), 6),
+        "lvn_levels": lvn_levels,
+        "distribution": [round(float(v), 4) for v in volumes],
         "profile_valid": True,
         "total_volume": round(total_volume, 4),
         "bin_count": bins,

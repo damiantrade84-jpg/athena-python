@@ -199,10 +199,14 @@ export interface EngineBChecklist {
 export interface ScanResponse {
   success?: boolean;
   signals?: EngineASignal[];
+  tradeSignals?: EngineASignal[];
+  watchlist?: EngineASignal[];
   scanned?: number;
   scannedAt?: string;
   scan_time?: number;
   pairs_scanned?: number;
+  totalPairs?: number;
+  activePairs?: number;
   asset_class?: string;
   style?: string;
   available?: boolean;
@@ -216,6 +220,9 @@ export interface NakedScanResponse {
   success?: boolean;
   signals?: EngineASignal[]; // each carries naked_data
   debugRows?: unknown[];
+  scanFunnel?: Record<string, unknown>;
+  totalPairs?: number;
+  activePairs?: number;
   [k: string]: unknown;
 }
 
@@ -324,7 +331,10 @@ export interface ChartAnalysisResponse {
   [k: string]: unknown;
 }
 
-/** /api/analyze (Marcus Reid text analysis) response. */
+/**
+ * /api/analyze (Marcus Reid text analysis) response.
+ * Note: edgeProbability is 0-100 scale (percentage).
+ */
 export interface AiTextReviewResponse {
   reviewSource?: string;
   resolvedStyle?: string;
@@ -484,6 +494,7 @@ export interface LdAiReview {
 
 export interface LdSymbolRow {
   symbol: string;
+  traceId?: string | null;
   asset_type: string | null;
   source: string | null;
   timeframe: string;
@@ -507,13 +518,194 @@ export interface LdSymbolRow {
   engineD: LdEngineDRow;
   aiReview: LdAiReview;
   paperPosition: { hasOpenPaperPosition?: boolean; entry?: number | null; sl?: number | null; tp?: number | null; pnl?: number | null };
-  paper: { hasOpenPaperPosition?: boolean; entry?: number | null; sl?: number | null; tp?: number | null; pnl?: number | null };
   levels: LdLevels;
   finalState: 'PAPER CANDIDATE' | 'WATCHLIST' | 'BLOCKED' | 'NO SETUP' | string;
   mainReason: string | null;
   blockReason: string | null;
   executableState: LdExecutableState;
   error?: string;
+}
+
+export interface AiTradeChatRequest {
+  session_id?: string | null;
+  trace_id?: string | null;
+  symbol?: string | null;
+  message: string;
+  include_vision?: boolean;
+  include_similar_setups?: boolean;
+  compare_symbol?: string | null;
+  signal?: AiTradeChatSignalPayload | null;
+}
+
+export interface AiTradeChatSignalPayload {
+  trace_id?: string | null;
+  symbol?: string | null;
+  direction?: string | null;
+  engine?: string | null;
+  engine_source?: string | null;
+  style?: string | null;
+  timeframe?: string | null;
+  score?: number | null;
+  threshold?: number | null;
+  confidence?: number | null;
+  rr?: number | null;
+  rr1?: number | null;
+  min_rr?: number | null;
+  entry?: number | null;
+  sl?: number | null;
+  tp?: number | null;
+  tp1?: number | null;
+  tp2?: number | null;
+  latest_price?: number | null;
+  spread?: number | null;
+  state?: string | null;
+  [k: string]: unknown;
+}
+
+export interface AiContextResolutionSummary {
+  mode?: 'trace_id' | 'request_signal_payload' | 'latest_symbol_signal' | 'symbol_only' | 'none' | string;
+  trace_id_received?: boolean;
+  signal_payload_received?: boolean;
+  resolved_symbol?: string | null;
+  resolved_engine?: string | null;
+  warnings?: string[];
+}
+
+export interface AiTradeChatResponse {
+  session_id: string;
+  trace_id: string | null;
+  symbol: string | null;
+  answer: string;
+  decision: 'NO_TRADE' | 'WATCHLIST' | 'WAIT_FOR_CONFIRMATION' | 'VALID_SETUP' | 'BLOCKED_BY_RISK' | 'DATA_INSUFFICIENT' | string;
+  market_read?: string | null;
+  trade_thesis?: string | null;
+  supports?: string[];
+  contradictions?: string[];
+  facts_used?: string[];
+  missing_data?: string[];
+  confirmation_needed?: string[];
+  invalidation?: string | null;
+  historical_analogue_summary?: string | null;
+  risk_warning?: string | null;
+  market_intelligence?: AiMarketIntelligenceSummary;
+  vision_summary?: AiVisionSummary;
+  contradiction_flags?: string[];
+  final_action?: string | null;
+  selected_signal?: AiSelectedSignalSummary | null;
+  data_checked?: AiDataCheckedSummary;
+  tool_calls?: AiToolCallSummary[];
+  safety?: AiAgentSafetySummary;
+  strategist_summary?: AiStrategistSummary | null;
+  compared_symbol?: string | null;
+  compare_summary?: string | null;
+  context_resolution?: AiContextResolutionSummary | null;
+  created_at?: string;
+}
+
+export interface AiSelectedSignalSummary {
+  symbol?: string | null;
+  trace_id?: string | null;
+  direction?: Direction | string | null;
+  engine?: string | null;
+  state?: string | null;
+  score?: number | null;
+  threshold?: number | null;
+  rr?: number | null;
+  entry?: number | null;
+  sl?: number | null;
+  tp?: number | null;
+  style?: string | null;
+  [k: string]: unknown;
+}
+
+export interface AiToolCallSummary {
+  name?: string;
+  tool?: string;
+  status?: 'ok' | 'error' | 'skipped' | 'unavailable' | string;
+  reason?: string | null;
+  duration_ms?: number | null;
+  args?: Record<string, unknown>;
+  input?: Record<string, unknown>;
+  output_summary?: string | null;
+  summary?: string | null;
+  error?: string | null;
+  [k: string]: unknown;
+}
+
+export interface AiDataCheckedSummary {
+  signal?: boolean;
+  market_intelligence?: boolean;
+  vision?: boolean;
+  similar_setups?: boolean;
+  strategist?: boolean;
+  freshness?: string | null;
+  warnings?: string[];
+  sources?: string[];
+  [k: string]: unknown;
+}
+
+export interface AiAgentSafetySummary {
+  advisory_only?: boolean;
+  can_execute?: boolean;
+  execution_blocked?: boolean;
+  note?: string | null;
+  warnings?: string[];
+  blocked_reasons?: string[];
+  [k: string]: unknown;
+}
+
+export interface AiStrategistSummary {
+  headline?: string | null;
+  macro_regime?: string | null;
+  key_risks?: string[];
+  avoid_conditions?: string[];
+  data_warnings?: string[];
+  [k: string]: unknown;
+}
+
+export interface AiMarketIntelligenceSummary {
+  schema_version?: string;
+  freshness_status?: 'fresh' | 'partial' | 'stale' | 'unavailable' | string | null;
+  warnings?: string[];
+  risk_regime?: string | null;
+  macro_regime?: {
+    risk_regime?: string | null;
+    calendar_within_72h?: unknown[];
+    [k: string]: unknown;
+  };
+  calendar_within_72h?: unknown[];
+  source_status?: Record<string, unknown>;
+  pair_context?: Record<string, unknown>;
+  [k: string]: unknown;
+}
+
+export interface AiVisionSummary {
+  right_edge_status?: string | null;
+  tf_alignment?: string | null;
+  freshness_status?: string | null;
+  allowed_for_execution_context?: boolean;
+  style_ratings?: Partial<Record<'scalp' | 'intraday' | 'swing', string>> | Record<string, unknown>;
+  visible_obstacles?: unknown[];
+  memo?: string | null;
+  [k: string]: unknown;
+}
+
+export interface AiStrategistBriefResponse {
+  schema_version?: 'strategist_brief.v1' | string;
+  generated_at?: string;
+  asset_scope?: string;
+  headline?: string;
+  macro_regime?: string;
+  key_risks?: string[];
+  watchlist?: string[];
+  avoid_conditions?: string[];
+  open_positions_summary?: string;
+  yesterday_outcomes?: string;
+  calendar_risks?: unknown[];
+  data_warnings?: string[];
+  full_brief?: string;
+  error?: string;
+  [k: string]: unknown;
 }
 
 export interface LdEvent {

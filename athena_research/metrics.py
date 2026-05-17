@@ -19,6 +19,62 @@ log = logging.getLogger(__name__)
 
 # ─── Result schema ────────────────────────────────────────────────────────────
 
+_METRIC_RANGES = {
+    "win_rate": (0.0, 1.0),
+    "exposure_pct": (0.0, 1.0),
+    "robustness_score": (0.0, 1.0),
+    "param_sensitivity": (0.0, 1.0),
+}
+
+
+def _finite_float(value) -> float | None:
+    try:
+        f = float(value)
+    except (TypeError, ValueError):
+        return None
+    return f if math.isfinite(f) else None
+
+
+def validate_metric_record(record: dict) -> list[str]:
+    """Return deterministic validation errors for impossible metric values."""
+    errors: list[str] = []
+    trade_count = record.get("trade_count")
+    if trade_count not in (None, ""):
+        try:
+            if int(trade_count) < 0:
+                errors.append("trade_count_negative")
+        except (TypeError, ValueError):
+            errors.append("trade_count_invalid")
+
+    for key, (lo, hi) in _METRIC_RANGES.items():
+        if key not in record or record.get(key) in (None, ""):
+            continue
+        value = _finite_float(record.get(key))
+        if value is None:
+            errors.append(f"{key}_invalid")
+        elif value < lo or value > hi:
+            errors.append(f"{key}_out_of_range")
+
+    profit_factor = record.get("profit_factor")
+    if profit_factor not in (None, ""):
+        pf = _finite_float(profit_factor)
+        if pf is None:
+            errors.append("profit_factor_invalid")
+        elif pf < 0:
+            errors.append("profit_factor_negative")
+    return errors
+
+
+def compute_param_sensitivity(returns) -> float:
+    """Score stability across neighbouring parameter returns: 1 stable, 0 unstable."""
+    vals = np.array([float(v) for v in returns if _finite_float(v) is not None], dtype=float)
+    if len(vals) < 2:
+        return float("nan")
+    spread = float(np.nanstd(vals))
+    ref = max(abs(float(np.nanmean(vals))), 0.01)
+    return float(max(0.0, min(1.0, 1.0 - spread / ref)))
+
+
 @dataclass
 class StrategyMetrics:
     run_id: str
@@ -53,6 +109,12 @@ class StrategyMetrics:
     status: str = "NEEDS_MORE_DATA"   # STRONG_CANDIDATE | WEAK_CANDIDATE | REJECT | NEEDS_MORE_DATA
     skip_reason: str = ""
     data_source: str = ""   # "binance_rest"|"mt5"|"eodhd"|"yfinance_fallback"|"synthetic_test"|"DATA_UNAVAILABLE"
+    entry_signal_count: int = 0
+    short_entry_signal_count: int = 0
+    exit_signal_count: int = 0
+    short_exit_signal_count: int = 0
+    simulation_backend: str = ""
+    simulation_warning: str = ""
     zone: str = ""          # "scalp"|"intra"|"swing" — tagged post-run by run_manager
     # Research audit context (report-only; never drives live gates)
     engine: str = ""
@@ -92,19 +154,40 @@ def run_portfolio(
 
     Returns a unified stats dict.
     """
+    def _count_signals(series: Optional[pd.Series]) -> int:
+        if series is None:
+            return 0
+        try:
+            return int(series.fillna(False).astype(bool).sum())
+        except Exception:
+            return 0
+
+    def _fallback(reason: str) -> dict:
+        stats = _pandas_portfolio(close, entries, exits, short_entries, short_exits,
+                                  fees, slippage, freq=freq)
+        stats["simulation_backend"] = "pandas_fallback"
+        stats["simulation_warning"] = reason
+        return stats
+
     # Try VectorBT
     try:
-        return _vbt_portfolio(close, entries, exits, short_entries, short_exits,
-                              fees, slippage, freq, init_cash)
+        stats = _vbt_portfolio(close, entries, exits, short_entries, short_exits,
+                               fees, slippage, freq, init_cash)
+        if (
+            int(stats.get("trade_count", 0) or 0) == 0
+            and (_count_signals(entries) or _count_signals(short_entries))
+        ):
+            reason = "vectorbt_zero_trades_with_entry_signals"
+            log.debug("[metrics] %s; using pandas fallback", reason)
+            return _fallback(reason)
+        else:
+            stats.setdefault("simulation_backend", "vectorbt")
+            stats.setdefault("simulation_warning", "")
+            return stats
     except ImportError:
-        log.debug("[metrics] vectorbt not installed — using pandas fallback")
+        return _fallback("vectorbt_unavailable")
     except Exception as e:
-        log.debug("[metrics] vectorbt failed (%s) — using pandas fallback", e)
-
-    # Pandas fallback
-    return _pandas_portfolio(close, entries, exits, short_entries, short_exits,
-                             fees, slippage, freq=freq)
-
+        return _fallback(f"vectorbt_error:{type(e).__name__}")
 
 def _vbt_portfolio(close, entries, exits, short_entries, short_exits,
                    fees, slippage, freq, init_cash) -> dict:
@@ -141,6 +224,8 @@ def _vbt_portfolio(close, entries, exits, short_entries, short_exits,
             return default
 
     # Try to get trade records for granular stats
+    trade_returns = np.array([])
+    trade_durations = np.array([])
     try:
         trades_df = pf.trades.records_readable  # proper DataFrame with named columns
         ret_col = next((c for c in trades_df.columns if c.lower() in ("return", "ret")), None)
@@ -151,12 +236,16 @@ def _vbt_portfolio(close, entries, exits, short_entries, short_exits,
 
         if len(trades_df) > 0:
             raw_rec = pf.trades.records  # structured array for index positions
-            entry_idx = raw_rec["entry_idx"] if "entry_idx" in raw_rec.dtype.names else None
-            exit_idx = raw_rec["exit_idx"] if "exit_idx" in raw_rec.dtype.names else None
-            if entry_idx is not None and exit_idx is not None:
-                trade_durations = (exit_idx - entry_idx).astype(float)
+            if isinstance(raw_rec, pd.DataFrame) and {"entry_idx", "exit_idx"}.issubset(raw_rec.columns):
+                trade_durations = (raw_rec["exit_idx"].to_numpy() - raw_rec["entry_idx"].to_numpy()).astype(float)
             else:
-                trade_durations = np.array([])
+                names = getattr(getattr(raw_rec, "dtype", None), "names", None) or []
+                entry_idx = raw_rec["entry_idx"] if "entry_idx" in names else None
+                exit_idx = raw_rec["exit_idx"] if "exit_idx" in names else None
+                if entry_idx is not None and exit_idx is not None:
+                    trade_durations = (exit_idx - entry_idx).astype(float)
+                else:
+                    trade_durations = np.array([])
         else:
             trade_durations = np.array([])
     except Exception as e:
@@ -183,6 +272,7 @@ def _pandas_portfolio(close, entries, exits, short_entries, short_exits, fees, s
     trade_returns: list[float] = []
     trade_durations: list[int] = []
     equity = [1.0]
+    exposure_mask: list[bool] = []
     current_eq = 1.0
 
     n = len(close)
@@ -233,16 +323,18 @@ def _pandas_portfolio(close, entries, exits, short_entries, short_exits, fees, s
                     entry_bar = i
                     position = 1
 
+        exposure_mask.append(position != 0)
         equity.append(current_eq)
 
     equity_s = pd.Series(equity, index=close.index[:len(equity)])
+    exposure_pct = float(np.mean(exposure_mask)) if exposure_mask else float("nan")
     return _build_stats(
         trade_returns=np.array(trade_returns),
         trade_durations=np.array(trade_durations),
         equity=equity_s,
         init_cash=1.0,
         fees=fees,
-        stats_dict={},
+        stats_dict={"exposure_pct": exposure_pct},
         freq=freq,
     )
 
@@ -262,7 +354,12 @@ def _build_stats(trade_returns: np.ndarray, trade_durations: np.ndarray,
     win_rate = win_count / n
     avg_win = trade_returns[wins].mean() if win_count > 0 else 0.0
     avg_loss = abs(trade_returns[losses].mean()) if loss_count > 0 else 0.0
-    profit_factor = (win_count * avg_win) / (loss_count * avg_loss) if (loss_count > 0 and avg_loss > 0) else float("inf")
+    if loss_count > 0 and avg_loss > 0:
+        profit_factor = (win_count * avg_win) / (loss_count * avg_loss)
+    elif win_count > 0:
+        profit_factor = float(win_count)
+    else:
+        profit_factor = 0.0
     expectancy = trade_returns.mean()
 
     # Drawdown from equity curve
@@ -306,6 +403,7 @@ def _build_stats(trade_returns: np.ndarray, trade_durations: np.ndarray,
         "sqn": sqn,
         "gross_return": gross_return,
         "avg_duration_bars": avg_duration,
+        "exposure_pct": stats_dict.get("exposure_pct", float("nan")),
         "equity": equity,
         "trade_returns": trade_returns,
     }
@@ -320,6 +418,15 @@ def split_is_oos(df: pd.DataFrame, is_pct: float = 0.70) -> tuple[pd.DataFrame, 
 
 
 # ─── Full strategy evaluation ─────────────────────────────────────────────────
+
+def _count_bool_signals(series: Optional[pd.Series]) -> int:
+    if series is None:
+        return 0
+    try:
+        return int(series.fillna(False).astype(bool).sum())
+    except Exception:
+        return 0
+
 
 def evaluate_strategy(
     df: pd.DataFrame,
@@ -366,6 +473,11 @@ def evaluate_strategy(
         entries = pd.Series(False, index=df.index)
         exits = pd.Series(False, index=df.index)
 
+    entry_signal_count = _count_bool_signals(entries)
+    short_entry_signal_count = _count_bool_signals(short_entries)
+    exit_signal_count = _count_bool_signals(exits)
+    short_exit_signal_count = _count_bool_signals(short_exits)
+
     # Full run
     all_stats = run_portfolio(close, entries, exits, short_entries, short_exits,
                               fees=fees, slippage=slippage, freq=freq)
@@ -395,6 +507,12 @@ def evaluate_strategy(
             trade_count=n, status="NEEDS_MORE_DATA",
             skip_reason=f"only {n} trades < min {min_trades}",
             data_source=data_source,
+            entry_signal_count=entry_signal_count,
+            short_entry_signal_count=short_entry_signal_count,
+            exit_signal_count=exit_signal_count,
+            short_exit_signal_count=short_exit_signal_count,
+            simulation_backend=all_stats.get("simulation_backend", ""),
+            simulation_warning=all_stats.get("simulation_warning", ""),
         )
 
     # Gross vs net: gross_return already excludes fees in our backtester
@@ -408,13 +526,18 @@ def evaluate_strategy(
     robustness = _compute_robustness(n, is_r, oos_r, net_r)
     status = _classify_status(n, net_r, robustness, is_r, oos_r, min_trades)
 
-    # Exposure: fraction of bars with open position
-    equity = all_stats.get("equity")
-    exposure_pct = float("nan")
-    if equity is not None and len(equity) > 0:
-        # rough proxy: fraction of consecutive equity changes ≠ 0
-        eq_arr = equity.values if hasattr(equity, "values") else np.array(equity)
-        exposure_pct = float((np.diff(eq_arr) != 0).mean()) if len(eq_arr) > 1 else float("nan")
+    # Exposure: prefer simulator-provided position exposure; keep equity-change
+    # fallback for backends that cannot expose position state.
+    exposure_pct = all_stats.get("exposure_pct", float("nan"))
+    try:
+        exposure_pct = float(exposure_pct)
+    except Exception:
+        exposure_pct = float("nan")
+    if not math.isfinite(exposure_pct):
+        equity = all_stats.get("equity")
+        if equity is not None and len(equity) > 0:
+            eq_arr = equity.values if hasattr(equity, "values") else np.array(equity)
+            exposure_pct = float((np.diff(eq_arr) != 0).mean()) if len(eq_arr) > 1 else float("nan")
 
     return StrategyMetrics(
         run_id=run_id,
@@ -442,6 +565,21 @@ def evaluate_strategy(
         robustness_score=robustness,
         status=status,
         data_source=data_source,
+        entry_signal_count=entry_signal_count,
+        short_entry_signal_count=short_entry_signal_count,
+        exit_signal_count=exit_signal_count,
+        short_exit_signal_count=short_exit_signal_count,
+        simulation_backend=all_stats.get("simulation_backend", ""),
+        simulation_warning=";".join(
+            dict.fromkeys(
+                warning for warning in [
+                    all_stats.get("simulation_warning", ""),
+                    is_stats.get("simulation_warning", ""),
+                    oos_stats.get("simulation_warning", ""),
+                ]
+                if warning
+            )
+        ),
     )
 
 

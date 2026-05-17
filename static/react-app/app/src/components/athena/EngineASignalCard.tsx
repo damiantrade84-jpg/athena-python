@@ -52,6 +52,7 @@ export default function EngineASignalCard({
   const livePrice = toNum(signal.livePrice, NaN);
   const displayPrice = Number.isFinite(livePrice) ? livePrice : signal.entry ?? signal.price;
   const decimals = priceDecimals(pair, type);
+  const intermarketEntries = intermarketConfirmationEntries(signal.intermarketConfirmation);
   void displayPrice;
 
   return (
@@ -123,6 +124,11 @@ export default function EngineASignalCard({
             Final confluence blends trend, momentum quality, ADX/session gates and addon — it is{' '}
             <span className="font-medium text-foreground/80">not</span> the sum of the factor boxes below.
           </p>
+          {signal.engine_b != null && (
+            <p className="text-[9px] text-muted-foreground leading-snug border-t border-border/40 pt-1 mt-1">
+              Engine B attached — see detail panel
+            </p>
+          )}
         </div>
 
         {/* Factor breakdown */}
@@ -131,6 +137,20 @@ export default function EngineASignalCard({
             <FactorBox label="Trend" value={fs.trend} accent="long" />
             <FactorBox label="Momentum" value={fs.momentum} accent="primary" />
             <FactorBox label="Addon" value={fs.addon} accent="warning" />
+          </div>
+        )}
+
+        {!compact && intermarketEntries.length > 0 && (
+          <div className="rounded-md border border-border/50 bg-muted/20 p-2 space-y-1">
+            <p className="text-[10px] uppercase text-muted-foreground">Intermarket confirmation</p>
+            <div className="grid grid-cols-2 gap-1">
+              {intermarketEntries.map(([label, value]) => (
+                <div key={label} className="text-[10px] min-w-0">
+                  <span className="text-muted-foreground">{label}: </span>
+                  <span className="font-mono text-foreground break-words">{value}</span>
+                </div>
+              ))}
+            </div>
           </div>
         )}
 
@@ -225,6 +245,28 @@ function FactorBox({
       </p>
     </div>
   );
+}
+
+function intermarketConfirmationEntries(value: unknown): Array<[string, string]> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return [];
+  return Object.entries(value as Record<string, unknown>)
+    .filter(([, v]) => v != null && v !== '')
+    .slice(0, 6)
+    .map(([k, v]) => [k, formatIntermarketValue(v)]);
+}
+
+function formatIntermarketValue(value: unknown): string {
+  if (typeof value === 'number') return fmtNum(value, 2);
+  if (typeof value === 'boolean') return value ? 'true' : 'false';
+  if (typeof value === 'string') return value;
+  if (Array.isArray(value)) return value.map(formatIntermarketValue).join(', ');
+  if (value && typeof value === 'object') {
+    return Object.entries(value as Record<string, unknown>)
+      .slice(0, 3)
+      .map(([k, v]) => `${k}:${formatIntermarketValue(v)}`)
+      .join(' ');
+  }
+  return String(value ?? '');
 }
 
 function Level({

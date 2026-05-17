@@ -23,53 +23,15 @@ from market_structure import (
     NakedEngine,
     _engine_b_structural_target_price,
     _engine_b_structural_tp_buffer_atr_mult,
+    _engine_b_confirmed_only_struct_candles,
     _engine_b_micro_breakout_value,
+    _asset_class_structure_adjustment,
+    _engine_b_forex_session_structure_context,
+    _engine_b_equity_session_structure_context,
+    _crypto_structure_adjustment,
     engine,
     engine_b_confidence_passes,
 )
-
-
-def _set_crypto_profile_flags(monkeypatch):
-    monkeypatch.setitem(config.CONFIG, "ENGINE_B_CRYPTO_PROFILE_ENABLED", True)
-    monkeypatch.setitem(config.CONFIG, "ENGINE_B_CRYPTO_TARGET_V2_ENABLED", True)
-    monkeypatch.setitem(config.CONFIG, "ENGINE_B_CRYPTO_TRIGGER_PROFILE_ENABLED", True)
-    monkeypatch.setitem(config.CONFIG, "ENGINE_B_CRYPTO_ALLOW_FALLBACK_TARGET_FOR_PASS", False)
-    monkeypatch.setitem(config.CONFIG, "ENGINE_B_CRYPTO_REQUIRE_STRUCTURAL_TARGET_FOR_PASS", True)
-    monkeypatch.setitem(config.CONFIG, "ENGINE_B_CRYPTO_MIN_RR", 1.2)
-    monkeypatch.setitem(config.CONFIG, "ENGINE_B_CRYPTO_LOCATION_ATR_BUFFER", 0.75)
-    monkeypatch.setitem(config.CONFIG, "ENGINE_B_CRYPTO_MIN_DISPLACEMENT_ATR", 0.35)
-    monkeypatch.setitem(config.CONFIG, "ENGINE_B_CRYPTO_MIN_VOLUME_RATIO", 1.2)
-    monkeypatch.setitem(config.CONFIG, "ENGINE_B_CRYPTO_MIN_TAKER_DELTA_RATIO", 0.55)
-    monkeypatch.setitem(config.CONFIG, "ENGINE_B_CRYPTO_ENTRY_TIMEFRAMES", ["M15", "M5"])
-
-
-def _crypto_kline(open_, high, low, close, volume=100.0, taker_buy=None):
-    candle = {
-        "open_time": 1,
-        "open": float(open_),
-        "high": float(high),
-        "low": float(low),
-        "close": float(close),
-        "volume": float(volume),
-        "vol": float(volume),
-        "quote_volume": float(volume) * float(close),
-        "number_of_trades": 10,
-    }
-    if taker_buy is not None:
-        candle["taker_buy_base_volume"] = float(taker_buy)
-        candle["taker_buy_quote_volume"] = float(taker_buy) * float(close)
-    return candle
-
-
-def _crypto_trigger_candles_long():
-    candles = [
-        _crypto_kline(100.0, 100.48, 99.95, 100.12, volume=100.0, taker_buy=50.0)
-        for _ in range(20)
-    ]
-    candles.append(
-        _crypto_kline(100.05, 100.50, 100.00, 100.45, volume=150.0, taker_buy=100.0)
-    )
-    return candles
 
 
 def _micro_breakout_candles_long():
@@ -87,42 +49,6 @@ def _micro_breakout_candles_long():
     candles[-2]["close"] = 100.2
     candles[-1].update({"open": 100.2, "high": 101.2, "low": 100.1, "close": 101.0, "vol": 160.0, "volume": 160.0})
     return candles
-
-
-def _crypto_res_long_with_structural_target():
-    res = _base_res_long()
-    res.update(
-        {
-            "asset_type": "crypto",
-            "structural_verdict": "CLEAR",
-            "trigger_ok": False,
-            "bos_confirmed": True,
-            "strong_close": False,
-            "inside_break_candle": False,
-            "engulfing_candle": False,
-            "liquidity_sweep": False,
-            "choch_confirmed": False,
-            "zone_touched": False,
-            "near_active_zone": False,
-            "ob_at_zone": False,
-            "active_zone_distance": 0.5,
-            "distance_to_res": 3.0,
-            "nearest_support_zone": {"lower": 99.2, "upper": 100.1, "center": 99.8},
-            "recommended_stop_loss": 99.0,
-            "recommended_take_profit": 101.4,
-            "crypto_target_selected_target_price": 101.4,
-            "crypto_target_selected_target_tf": "H4",
-            "crypto_target_selected_target_type": "resistance_zone",
-            "crypto_target_selected_target_rr": 1.4,
-            "crypto_target_selected_target_is_structural": True,
-            "crypto_target_used_fallback_projection": False,
-            "crypto_target_fallback_used_for_diagnostics_only": True,
-            "crypto_target_fallback_projection_price": 102.0,
-            "crypto_target_path_clear_to_tp2": True,
-            "crypto_target_path_block_reason": None,
-        }
-    )
-    return res
 
 
 def _base_res_long():
@@ -155,6 +81,460 @@ def _base_res_long():
     }
 
 
+def test_crypto_structure_adjustment_default_off_preserves_detection_threshold(monkeypatch):
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_CRYPTO_VOLATILITY_ADJUSTMENT_ENABLED", False)
+    candles = [
+        {"open": 100.0, "high": 108.0, "low": 96.0, "close": 100.0}
+        for _ in range(6)
+    ]
+
+    diag = _crypto_structure_adjustment("crypto", candles, atr=5.0)
+
+    assert diag["enabled"] is False
+    assert diag["applied"] is False
+    assert diag["volatility_regime"] == "high_volatility"
+    assert diag["swing_prominence_mult"] == pytest.approx(1.0)
+    assert diag["bos_min_break_atr"] == pytest.approx(0.0)
+
+
+def test_crypto_structure_adjustment_enabled_requires_stronger_bos(monkeypatch):
+    local_engine = NakedEngine()
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_CRYPTO_VOLATILITY_ADJUSTMENT_ENABLED", True)
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_CRYPTO_STRUCTURE_MULT", 2.0)
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_CRYPTO_BOS_MIN_BREAK_ATR", 0.10)
+
+    highs = np.array([100.0, 105.0, 101.0, 104.0, 101.0, 105.3], dtype=float)
+    lows = np.array([99.0, 100.0, 98.0, 100.0, 99.0, 101.0], dtype=float)
+    closes = np.array([99.5, 104.5, 100.5, 103.5, 100.0, 105.3], dtype=float)
+    swings = {"peak_idx": np.array([1, 3]), "trough_idx": np.array([2, 4])}
+
+    legacy = local_engine._detect_bos(
+        highs,
+        lows,
+        atr=2.0,
+        closes=closes,
+        swings=swings,
+    )
+    adjusted = local_engine._detect_bos(
+        highs,
+        lows,
+        atr=2.0,
+        closes=closes,
+        swings=swings,
+        min_break_atr=0.20,
+    )
+
+    assert legacy["bos_bull"] is True
+    assert adjusted["bos_bull"] is False
+
+
+def test_forex_asset_structure_adjustment_applies_configured_bos_min_break(monkeypatch):
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_ASSET_CLASS_ADJUSTMENTS_ENABLED", True)
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_ASSET_CLASS_VOLATILITY_AWARE_ENABLED", True)
+    monkeypatch.setitem(
+        config.CONFIG,
+        "ENGINE_B_ASSET_CLASS_BOS_MIN_BREAK_ATR",
+        {"forex": 0.05},
+    )
+    candles = [
+        {"open": 100.0, "high": 101.0, "low": 99.0, "close": 100.5}
+        for _ in range(24)
+    ]
+
+    diag = _asset_class_structure_adjustment("forex", "forex_majors", candles, atr=1.0)
+
+    assert diag["asset_class"] == "forex"
+    assert diag["bos_min_break_atr"] == pytest.approx(0.05)
+
+
+def test_order_block_zero_volume_does_not_receive_volume_strength_bonus():
+    local_engine = NakedEngine()
+    candles = [
+        {"open": 100.0, "high": 101.0, "low": 99.0, "close": 100.5, "vol": 0.0}
+        for _ in range(14)
+    ]
+    candles[9].update({"open": 100.0, "high": 100.2, "low": 98.8, "close": 99.0, "vol": 0.0})
+    candles[10].update({"open": 99.2, "high": 103.5, "low": 99.0, "close": 103.0, "vol": 0.0})
+
+    obs = local_engine._detect_order_blocks(
+        candles,
+        {
+            "bos_bull": True,
+            "last_broken_high": 102.0,
+            "bos_bull_bar_index": 10,
+        },
+        atr=1.0,
+        structure_tf="H4",
+    )
+
+    assert obs
+    assert obs[0]["strength"] == 60
+    assert obs[0]["volume_available"] is False
+
+
+def test_sweep_lookback_bars_uses_configured_window(monkeypatch):
+    local_engine = NakedEngine()
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_SWEEP_LOOKBACK_BARS", 7)
+    highs = np.array([105.0] * 12, dtype=float)
+    lows = np.array([101.0] * 12, dtype=float)
+    closes = np.array([101.5] * 12, dtype=float)
+    lows[-6] = 99.0
+    closes[-6] = 100.5
+
+    out = local_engine._detect_sweep(
+        highs,
+        lows,
+        closes,
+        atr=1.0,
+        swing_low=100.0,
+        swing_high=106.0,
+    )
+
+    assert out["bull_sweep"] is True
+    assert out["sweep_low"] == pytest.approx(99.0)
+
+
+def test_forming_strip_reports_missing_pair_reason(monkeypatch):
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_STRIP_FORMING_STRUCT", True)
+    diagnostics = {}
+    out = _engine_b_confirmed_only_struct_candles(
+        [{"time": "2026-05-13T00:00:00Z"}, {"time": "2026-05-13T04:00:00Z"}],
+        "H4",
+        pair=None,
+        diagnostics=diagnostics,
+    )
+
+    assert out == []
+    assert diagnostics["reason"] == "missing_pair_context"
+
+
+def test_rr_cannot_satisfy_space_gate_with_non_structural_tp(monkeypatch):
+    local_engine = NakedEngine()
+    monkeypatch.setitem(
+        config.CONFIG,
+        "ENGINE_B_RR_CAN_SATISFY_SPACE_GATE",
+        {"default": False, "forex": True},
+    )
+    res = _base_res_long()
+    res["asset_type"] = "forex"
+    res["distance_to_res"] = 0.05
+    res["recommended_take_profit"] = None
+
+    out = local_engine.calculate_confidence(
+        res,
+        current_price=100.0,
+        direction="LONG",
+        learning_ctx=None,
+        entry_candles=[],
+        style_profile={
+            "style": "intraday",
+            "min_score": 3.0,
+            "min_room_atr": 0.35,
+            "min_rr": 1.5,
+            "fallback_rr": 2.0,
+            "require_macro_align": False,
+        },
+    )
+
+    assert out["rr_ok"] is True
+    assert out["level_mode"].endswith("_atr_tp")
+    assert out["room_ok"] is False
+    assert out["space_gate_ok"] is False
+    assert out["passed"] is False
+
+
+def test_forex_session_structure_context_default_disabled_no_score_bonus(monkeypatch):
+    monkeypatch.setitem(
+        config.CONFIG,
+        "ENGINE_B_FOREX_SESSION_STRUCTURE_WEIGHTING",
+        {"ENABLED": False, "SCORE_INFLUENCE_ENABLED": False},
+    )
+
+    diag = _engine_b_forex_session_structure_context(
+        asset_type="forex",
+        candle_time="2026-05-13T13:00:00Z",
+        zone_context=True,
+        ob_at_zone=True,
+        fvg_overlap=True,
+        liquidity_sweep=True,
+    )
+
+    assert diag["enabled"] is False
+    assert diag["session"] == "london_ny_overlap"
+    assert diag["session_quality"] == "high"
+    assert diag["liquidity_sweep_active_session"] is True
+    assert diag["score_bonus"] == 0.0
+
+
+def test_forex_session_structure_context_enabled_weights_active_session(monkeypatch):
+    monkeypatch.setitem(
+        config.CONFIG,
+        "ENGINE_B_FOREX_SESSION_STRUCTURE_WEIGHTING",
+        {
+            "ENABLED": True,
+            "SCORE_INFLUENCE_ENABLED": False,
+            "HIGH_QUALITY_BONUS": 0.02,
+            "MEDIUM_QUALITY_BONUS": 0.01,
+            "LOW_QUALITY_PENALTY": -0.02,
+            "LONDON_NY_OVERLAP_BONUS": 0.01,
+            "LIQUIDITY_SWEEP_ACTIVE_SESSION_BONUS": 0.01,
+            "MAX_ABS_SCORE_BONUS": 0.04,
+        },
+    )
+
+    overlap = _engine_b_forex_session_structure_context(
+        asset_type="forex",
+        candle_time="2026-05-13T13:00:00Z",
+        zone_context=True,
+        ob_at_zone=True,
+        fvg_overlap=True,
+        liquidity_sweep=True,
+    )
+    asian = _engine_b_forex_session_structure_context(
+        asset_type="forex",
+        candle_time="2026-05-13T02:00:00Z",
+        zone_context=True,
+        ob_at_zone=False,
+        fvg_overlap=False,
+        liquidity_sweep=False,
+    )
+    crypto = _engine_b_forex_session_structure_context(
+        asset_type="crypto",
+        candle_time="2026-05-13T13:00:00Z",
+        zone_context=True,
+        ob_at_zone=True,
+        fvg_overlap=True,
+        liquidity_sweep=True,
+    )
+
+    assert overlap["session"] == "london_ny_overlap"
+    assert overlap["score_bonus"] == pytest.approx(0.04)
+    assert asian["session"] == "asian_off_hours"
+    assert asian["score_bonus"] == pytest.approx(-0.02)
+    assert crypto["score_bonus"] == 0.0
+
+
+def test_asset_class_structure_adjustment_default_disabled_no_detection_change(monkeypatch):
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_ASSET_CLASS_ADJUSTMENTS_ENABLED", False)
+    candles = [
+        {"open": 100.0, "high": 103.0, "low": 98.0, "close": 100.0}
+        for _ in range(8)
+    ]
+
+    diag = _asset_class_structure_adjustment("stock", None, candles, atr=2.0)
+
+    assert diag["enabled"] is False
+    assert diag["asset_class"] == "stock"
+    assert diag["applied"] is False
+    assert diag["swing_prominence_mult"] == pytest.approx(1.0)
+    assert diag["bos_min_break_atr"] == pytest.approx(0.0)
+
+
+def test_asset_class_structure_adjustment_enabled_is_non_forex_non_crypto(monkeypatch):
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_ASSET_CLASS_ADJUSTMENTS_ENABLED", True)
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_ASSET_CLASS_VOLATILITY_AWARE_ENABLED", False)
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_ASSET_CLASS_STRUCTURE_MULT", {"stock": 1.20})
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_ASSET_CLASS_BOS_MIN_BREAK_ATR", {"stock": 0.06})
+    candles = [
+        {"open": 100.0, "high": 103.0, "low": 98.0, "close": 100.0}
+        for _ in range(8)
+    ]
+
+    stock_diag = _asset_class_structure_adjustment("stock", None, candles, atr=2.0)
+    forex_diag = _asset_class_structure_adjustment("forex", None, candles, atr=2.0)
+    crypto_diag = _asset_class_structure_adjustment("crypto", None, candles, atr=2.0)
+
+    assert stock_diag["applied"] is True
+    assert stock_diag["swing_prominence_mult"] == pytest.approx(1.20)
+    assert stock_diag["bos_min_break_atr"] == pytest.approx(0.072)
+    assert forex_diag["applied"] is False
+    assert crypto_diag["applied"] is False
+    assert forex_diag["swing_prominence_mult"] == pytest.approx(1.0)
+    assert forex_diag["bos_min_break_atr"] == pytest.approx(0.0)
+
+
+def test_equity_session_structure_context_enabled_for_stock_index_etf_only(monkeypatch):
+    monkeypatch.setitem(
+        config.CONFIG,
+        "ENGINE_B_EQUITY_SESSION_STRUCTURE_WEIGHTING",
+        {
+            "ENABLED": True,
+            "SCORE_INFLUENCE_ENABLED": True,
+            "HIGH_QUALITY_BONUS": 0.015,
+            "MEDIUM_QUALITY_BONUS": 0.008,
+            "OFF_HOURS_PENALTY": -0.015,
+            "LIQUIDITY_SWEEP_ACTIVE_SESSION_BONUS": 0.008,
+            "MAX_ABS_SCORE_BONUS": 0.03,
+        },
+    )
+
+    stock = _engine_b_equity_session_structure_context(
+        asset_class="stock",
+        candle_time="2026-05-13T14:45:00Z",
+        zone_context=True,
+        ob_at_zone=True,
+        fvg_overlap=False,
+        liquidity_sweep=True,
+    )
+    commodity = _engine_b_equity_session_structure_context(
+        asset_class="commodity",
+        candle_time="2026-05-13T14:45:00Z",
+        zone_context=True,
+        ob_at_zone=True,
+        fvg_overlap=False,
+        liquidity_sweep=True,
+    )
+
+    assert stock["session"] == "us_cash_open"
+    assert stock["session_quality"] == "high"
+    assert stock["score_bonus"] == pytest.approx(0.023)
+    assert commodity["score_bonus"] == 0.0
+
+
+def test_calculate_confidence_carries_asset_class_and_equity_session_diagnostics():
+    res = _base_res_long()
+    res["asset_type"] = "stock"
+    res["distance_to_res"] = 2.0
+    res["asset_class_structure_diagnostics"] = {
+        "enabled": True,
+        "asset_class": "stock",
+        "applied": True,
+        "structure_mult": 1.1,
+        "swing_prominence_mult": 1.1,
+        "bos_min_break_atr": 0.066,
+    }
+    res["equity_session_structure"] = {
+        "enabled": True,
+        "asset_class": "stock",
+        "session": "us_cash_open",
+        "score_bonus": 0.023,
+    }
+
+    out = engine.calculate_confidence(
+        res,
+        current_price=100.0,
+        direction="LONG",
+        learning_ctx=None,
+        entry_candles=[],
+        style_profile={"min_room_atr": 0.35, "min_rr": 1.0, "require_macro_align": False},
+    )
+
+    diag = out["engine_b_diagnostics"]
+    assert diag["asset_class_structure"]["asset_class"] == "stock"
+    assert diag["asset_class_structure"]["structure_mult"] == pytest.approx(1.1)
+    assert diag["asset_class_structure"]["swing_prominence_mult"] == pytest.approx(1.1)
+    assert diag["asset_class_structure"]["bos_min_break_atr"] == pytest.approx(0.066)
+    assert diag["equity_session_structure"]["session"] == "us_cash_open"
+
+
+def test_calculate_confidence_carries_forex_session_diagnostics_only_for_forex():
+    res = _base_res_long()
+    res["asset_type"] = "forex"
+    res["distance_to_res"] = 2.0
+    res["forex_session_structure"] = {
+        "enabled": True,
+        "session": "london_ny_overlap",
+        "session_quality": "high",
+        "liquidity_sweep_active_session": True,
+        "score_bonus": 0.04,
+    }
+
+    forex_out = engine.calculate_confidence(
+        res,
+        current_price=100.0,
+        direction="LONG",
+        learning_ctx=None,
+        entry_candles=[],
+        style_profile={"min_room_atr": 0.35, "min_rr": 1.0, "require_macro_align": False},
+    )
+    crypto_res = dict(res)
+    crypto_res["asset_type"] = "crypto"
+    crypto_out = engine.calculate_confidence(
+        crypto_res,
+        current_price=100.0,
+        direction="LONG",
+        learning_ctx=None,
+        entry_candles=[],
+        style_profile={"min_room_atr": 0.35, "min_rr": 1.0, "require_macro_align": False},
+    )
+
+    assert forex_out["engine_b_diagnostics"]["forex_session_structure"]["session"] == "london_ny_overlap"
+    assert "forex_session_structure" not in crypto_out["engine_b_diagnostics"]
+
+
+def test_calculate_confidence_carries_crypto_structure_diagnostics_only_for_crypto():
+    res = _base_res_long()
+    res["asset_type"] = "crypto"
+    res["distance_to_res"] = 2.0
+    res["crypto_structure_diagnostics"] = {
+        "enabled": True,
+        "applied": True,
+        "volatility_regime": "high_volatility",
+        "wick_dominance": 0.72,
+        "structure_quality_score": 0.55,
+    }
+
+    crypto_out = engine.calculate_confidence(
+        res,
+        current_price=100.0,
+        direction="LONG",
+        learning_ctx=None,
+        entry_candles=[],
+        style_profile={"min_room_atr": 0.35, "min_rr": 1.0, "require_macro_align": False},
+    )
+    forex_res = dict(res)
+    forex_res["asset_type"] = "forex"
+    forex_out = engine.calculate_confidence(
+        forex_res,
+        current_price=100.0,
+        direction="LONG",
+        learning_ctx=None,
+        entry_candles=[],
+        style_profile={"min_room_atr": 0.35, "min_rr": 1.0, "require_macro_align": False},
+    )
+
+    assert crypto_out["engine_b_diagnostics"]["crypto_structure"]["applied"] is True
+    assert "crypto_structure" not in forex_out["engine_b_diagnostics"]
+
+
+def test_analyze_structure_adds_crypto_structure_payload(monkeypatch):
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_STRIP_FORMING_STRUCT", False)
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_CRYPTO_VOLATILITY_ADJUSTMENT_ENABLED", True)
+    candles = []
+    for i in range(40):
+        base = 100.0 + (i * 0.4)
+        candles.append(
+            {
+                "open": base,
+                "high": base + (5.0 if i % 6 == 0 else 2.0),
+                "low": base - (4.0 if i % 7 == 0 else 1.5),
+                "close": base + 0.8,
+                "vol": 100.0 + i,
+            }
+        )
+
+    out = NakedEngine().analyze_structure(
+        d1_candles=candles,
+        h4_candles=candles,
+        h1_candles=candles,
+        current_price=float(candles[-1]["close"]),
+        direction="LONG",
+        atr=5.0,
+        regime="HIGH_VOLATILITY",
+        asset_type="crypto",
+        enable_zone_registry=False,
+        enable_profile_context=False,
+        pair={"display": "BTC/USDT", "type": "crypto", "source": "binance"},
+    )
+
+    diag = out.get("crypto_structure_diagnostics")
+    assert isinstance(diag, dict)
+    assert diag["enabled"] is True
+    assert diag["volatility_regime"] in {"elevated_volatility", "high_volatility"}
+    assert "wick_dominance" in diag
+    assert "structure_quality_score" in diag
+
+
 def test_calculate_confidence_engine_b_diagnostics_resistance_too_close():
     """LONG with distance_to_res below min_room_atr * atr → resistance_too_close."""
     res = _base_res_long()
@@ -169,6 +549,73 @@ def test_calculate_confidence_engine_b_diagnostics_resistance_too_close():
     )
     diag = out.get("engine_b_diagnostics") or {}
     assert diag.get("reason_codes") == [ENGINE_B_REASON_RESISTANCE_TOO_CLOSE]
+
+
+def test_forex_rr_can_satisfy_space_gate_when_config_enabled(monkeypatch):
+    res = _base_res_long()
+    res["asset_type"] = "forex"
+    res["distance_to_res"] = 0.05
+    style_profile = {"min_room_atr": 0.35, "min_rr": 1.0, "require_macro_align": False}
+
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_FOREX_RR_CAN_SATISFY_SPACE_GATE", False)
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_RR_CAN_SATISFY_SPACE_GATE", {"default": False})
+    baseline = engine.calculate_confidence(
+        res,
+        current_price=100.0,
+        direction="LONG",
+        learning_ctx=None,
+        entry_candles=[],
+        style_profile=style_profile,
+    )
+
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_FOREX_RR_CAN_SATISFY_SPACE_GATE", True)
+    enabled = engine.calculate_confidence(
+        res,
+        current_price=100.0,
+        direction="LONG",
+        learning_ctx=None,
+        entry_candles=[],
+        style_profile=style_profile,
+    )
+
+    assert baseline["room_ok"] is False
+    assert baseline["space_gate_ok"] is False
+    assert baseline["passed"] is False
+    assert enabled["room_ok"] is False
+    assert enabled["rr_ok"] is True
+    assert enabled["space_gate_ok"] is True
+    assert enabled["forex_rr_space_gate_enabled"] is True
+    assert enabled["passed"] is True
+
+
+def test_asset_rr_can_satisfy_space_gate_when_config_enabled(monkeypatch):
+    res = _base_res_long()
+    res["asset_type"] = "stock"
+    res["distance_to_res"] = 0.05
+    style_profile = {"min_room_atr": 0.35, "min_rr": 1.0, "require_macro_align": False}
+
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_FOREX_RR_CAN_SATISFY_SPACE_GATE", False)
+    monkeypatch.setitem(
+        config.CONFIG,
+        "ENGINE_B_RR_CAN_SATISFY_SPACE_GATE",
+        {"default": False, "stock": True},
+    )
+
+    out = engine.calculate_confidence(
+        res,
+        current_price=100.0,
+        direction="LONG",
+        learning_ctx=None,
+        entry_candles=[],
+        style_profile=style_profile,
+    )
+
+    assert out["room_ok"] is False
+    assert out["rr_ok"] is True
+    assert out["space_gate_ok"] is True
+    assert out["rr_space_gate_enabled"] is True
+    assert out["forex_rr_space_gate_enabled"] is False
+    assert out["passed"] is True
 
 
 def test_calculate_confidence_engine_b_diagnostics_support_too_close():
@@ -235,7 +682,14 @@ def test_calculate_confidence_forex_adx_derives_regime_not_blocks_structure():
         config.CONFIG["ENGINE_B_FOREX_ADX_MIN"] = old_min
 
 
-def test_calculate_confidence_can_disable_structure_gate_for_bt_experiment_only():
+def test_calculate_confidence_can_disable_structure_gate_for_bt_experiment_only(monkeypatch):
+    # Pin legacy "veto" mode so hard_counter zeroes structure_ok — this is the
+    # only configuration where disable_structure_gate has an observable effect.
+    monkeypatch.setitem(
+        config.CONFIG.setdefault("NAKED_ENGINE", {}),
+        "hard_counter_mode",
+        "veto",
+    )
     res = _base_res_long()
     res.update(
         {
@@ -410,6 +864,221 @@ def test_analyze_structure_falls_back_to_rr_when_resistance_is_too_close(monkeyp
     assert result["recommended_take_profit"] > 100.0
 
 
+def test_d1_pd_array_conflict_window_is_configurable(monkeypatch):
+    local_engine = NakedEngine()
+    naked_cfg = dict(config.CONFIG.get("NAKED_ENGINE", {}) or {})
+    naked_cfg["d1_pd_array_conflict_window_atr_mult"] = 1.5
+    monkeypatch.setitem(config.CONFIG, "NAKED_ENGINE", naked_cfg)
+
+    monkeypatch.setattr(
+        local_engine,
+        "_find_zones",
+        lambda *_args, **_kwargs: (
+            [{"upper": 103.0, "lower": 102.8, "center": 102.9, "volume_strength": 1.0}],
+            [{"upper": 99.7, "lower": 99.5, "center": 99.6, "volume_strength": 1.0}],
+        ),
+    )
+    monkeypatch.setattr(
+        local_engine,
+        "_detect_fvg",
+        lambda *_args, **_kwargs: [],
+    )
+    monkeypatch.setattr(
+        local_engine,
+        "_determine_sequence",
+        lambda *_args, **_kwargs: {
+            "state": "HH_HL",
+            "recent_low": 99.6,
+            "recent_high": 102.0,
+            "has_equal_extrema": False,
+        },
+    )
+    monkeypatch.setattr(
+        local_engine,
+        "_detect_bos",
+        lambda *_args, **_kwargs: {
+            "bos_bull": True,
+            "bos_bear": False,
+            "bos_volume_confirmed": True,
+        },
+    )
+    monkeypatch.setattr(
+        local_engine,
+        "_detect_sweep",
+        lambda *_args, **_kwargs: {
+            "bull_sweep": False,
+            "bear_sweep": False,
+            "sweep_low": None,
+            "sweep_high": None,
+        },
+    )
+    monkeypatch.setattr(
+        local_engine,
+        "_detect_order_blocks",
+        lambda *_args, **_kwargs: [
+            {"type": "bearish", "top": 102.1, "bottom": 101.9, "strength": 75}
+        ],
+    )
+    monkeypatch.setattr(
+        local_engine,
+        "_detect_choch",
+        lambda *_args, **_kwargs: {
+            "choch_bull": False,
+            "choch_bear": False,
+            "choch_level": None,
+        },
+    )
+    monkeypatch.setattr(
+        local_engine,
+        "_zone_context",
+        lambda *_args, **_kwargs: {"distance": 0.2, "near_zone": True, "zone_touched": True},
+    )
+    monkeypatch.setattr(
+        local_engine,
+        "_price_action_trigger",
+        lambda *_args, **_kwargs: {
+            "pattern": "REJECTION",
+            "trigger_ok": True,
+            "rejection": True,
+            "engulfing": False,
+            "inside_break": False,
+            "strong_close": True,
+        },
+    )
+
+    candles = [
+        {"open": 100.0, "high": 100.5, "low": 99.5, "close": 100.0, "vol": 1000.0}
+        for _ in range(40)
+    ]
+    result = local_engine.analyze_structure(
+        candles,
+        candles,
+        candles,
+        current_price=100.0,
+        direction="LONG",
+        atr=1.0,
+        regime="RANGING",
+        fallback_rr=1.8,
+        asset_type="forex",
+        enable_zone_registry=False,
+        enable_profile_context=False,
+    )
+
+    assert result["d1_pd_array_conflict"] is False
+    assert result["d1_conflict_metric_details"] == []
+
+
+def test_rejection_wick_body_ratio_is_configurable(monkeypatch):
+    local_engine = NakedEngine()
+    naked_cfg = dict(config.CONFIG.get("NAKED_ENGINE", {}) or {})
+    naked_cfg["rejection_wick_body_ratio"] = 0.8
+    monkeypatch.setitem(config.CONFIG, "NAKED_ENGINE", naked_cfg)
+
+    candles = [
+        {"open": 99.8, "high": 100.1, "low": 99.5, "close": 99.9},
+        {"open": 100.2, "high": 100.4, "low": 99.6, "close": 99.7},
+        {"open": 100.0, "high": 101.1, "low": 99.1, "close": 101.0},
+    ]
+
+    trigger = local_engine._price_action_trigger(
+        candles,
+        direction="LONG",
+        atr=1.0,
+        zone_hit=False,
+        bos_confirmed=False,
+    )
+
+    assert trigger["trigger_ok"] is True
+    assert trigger["pattern"] == "REJECTION"
+
+
+def test_follow_through_diagnostics_can_run_without_score_impact(monkeypatch):
+    monkeypatch.setitem(
+        config.CONFIG,
+        "ENGINE_B_FOLLOW_THROUGH",
+        {"ENABLED": False, "DIAGNOSTICS_ENABLED": True, "MAX_BONUS": 1.5, "MIN_PENALTY": -0.5},
+    )
+    res = _base_res_long()
+    res["distance_to_res"] = 3.0
+    baseline = engine.calculate_confidence(
+        res,
+        current_price=100.0,
+        direction="LONG",
+        learning_ctx=None,
+        entry_candles=[],
+        style_profile={"min_room_atr": 0.35, "min_rr": 1.0, "require_macro_align": False},
+    )
+
+    entry_candles = [
+        {"open": 100.0, "high": 100.5, "low": 99.8, "close": 100.3}
+        for _ in range(6)
+    ]
+    observed = engine.calculate_confidence(
+        res,
+        current_price=100.0,
+        direction="LONG",
+        learning_ctx=None,
+        entry_candles=entry_candles,
+        style_profile={"min_room_atr": 0.35, "min_rr": 1.0, "require_macro_align": False},
+    )
+
+    detail = observed["follow_through_detail"]
+    assert observed["score"] == baseline["score"]
+    assert observed["follow_through_bonus"] == 0.0
+    assert detail["enabled"] is False
+    assert detail["diagnostics_enabled"] is True
+    assert detail["confidence"] == "insufficient_data"
+
+
+def _fvg_fixture():
+    candles = []
+    for i in range(90):
+        base = 100.0 + ((i % 9) * 0.05)
+        candles.append(
+            {
+                "open": base,
+                "high": base + 0.25,
+                "low": base - 0.25,
+                "close": base + 0.03,
+                "vol": 1000.0,
+            }
+        )
+    candles[4].update({"open": 110.0, "high": 111.0, "low": 109.0, "close": 109.5})
+    candles[6].update({"open": 104.5, "high": 105.0, "low": 104.0, "close": 104.2})
+    candles[10].update({"open": 107.8, "high": 108.0, "low": 106.0, "close": 107.2})
+    candles[20].update({"open": 90.2, "high": 91.0, "low": 89.5, "close": 90.0})
+    candles[22].update({"open": 96.4, "high": 97.0, "low": 96.0, "close": 96.5})
+    candles[30].update({"open": 92.5, "high": 94.0, "low": 92.0, "close": 93.0})
+    return candles
+
+
+def test_engine_b_fast_fvg_detection_matches_legacy(monkeypatch):
+    local_engine = NakedEngine()
+    candles = _fvg_fixture()
+
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_FAST_FVG_DETECTION", False)
+    legacy = local_engine._detect_fvg(candles)
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_FAST_FVG_DETECTION", True)
+    fast = local_engine._detect_fvg(candles)
+
+    assert fast == legacy
+    assert any(fvg.get("mitigated") for fvg in fast)
+
+
+def test_engine_b_fast_fvg_detection_falls_back_to_legacy(monkeypatch):
+    local_engine = NakedEngine()
+    candles = _fvg_fixture()
+    expected = local_engine._detect_fvg_legacy(candles)
+
+    def _raise_fast(_candles):
+        raise RuntimeError("fast path failure")
+
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_FAST_FVG_DETECTION", True)
+    monkeypatch.setattr(local_engine, "_detect_fvg_fast", _raise_fast)
+
+    assert local_engine._detect_fvg(candles) == expected
+
+
 def test_calculate_confidence_structural_tp_wrong_side_emits_diagnostic():
     """Wrong structural TP emits ENGINE_B_REASON_TP_WRONG_SIDE.
     rr_ok is now True because the RR gate uses ATR execution levels (not structural TP).
@@ -470,8 +1139,8 @@ def test_calculate_confidence_flexible_mode_accepts_liquidity_sweep_catalyst():
     assert out["entry_ok"] is True
     assert out["passed"] is True
     assert out["score"] == pytest.approx(5.0)
-    # FIX 2: RANGING multiplier is now 0.90 (was 1.30), so 5.0 * 0.90 = 4.5 → round = 4
-    assert min_score_scaled == 4.0
+    # RANGING multiplier is 0.90, so 5.0 * 0.90 = 4.5.
+    assert min_score_scaled == 4.5
     assert gate_ok is True
 
 
@@ -481,7 +1150,7 @@ def test_engine_b_confidence_passes_enforces_min_score_floor():
         {"passed": True, "score": 3.0}, style_profile, regime_label="RANGING"
     )
 
-    assert min_score_scaled == 4.0
+    assert min_score_scaled == 4.5
     assert gate_ok is False
 
 
@@ -724,6 +1393,37 @@ def test_calculate_confidence_d1_penalty_is_reduced():
 
 
 def test_calculate_confidence_emits_sequence_counter_trend():
+    """Default mode: hard_counter applies a soft score penalty, not a veto.
+
+    HTF counter-trend on both H1 and H4 still emits the diagnostic code, but
+    structure_ok remains True (subject to other gates) so that a setup with
+    strong BOS/sweep/trigger can still pass with reduced total_score. Matches
+    the Engine A soft-penalty pattern from commit 3d2c3eed for DI alignment.
+    """
+    res = _base_res_long()
+    res["current_swing_sequence"] = "LH_LL"
+    res["macro_swing_sequence"] = "LH_LL"
+    out = engine.calculate_confidence(
+        res,
+        current_price=100.0,
+        direction="LONG",
+        learning_ctx=None,
+        entry_candles=[],
+        style_profile={"min_room_atr": 0.35, "min_rr": 1.0, "require_macro_align": False},
+    )
+    codes = out.get("engine_b_diagnostics", {}).get("reason_codes", [])
+    assert ENGINE_B_REASON_SEQUENCE_COUNTER_TREND in codes
+    assert out["structure_ok"] is True
+    assert out["hard_counter_penalty"] == pytest.approx(1.0)
+
+
+def test_calculate_confidence_hard_counter_veto_mode(monkeypatch):
+    """Legacy veto mode: hard_counter zeroes structure_ok and signal fails."""
+    monkeypatch.setitem(
+        config.CONFIG.setdefault("NAKED_ENGINE", {}),
+        "hard_counter_mode",
+        "veto",
+    )
     res = _base_res_long()
     res["current_swing_sequence"] = "LH_LL"
     res["macro_swing_sequence"] = "LH_LL"
@@ -738,133 +1438,7 @@ def test_calculate_confidence_emits_sequence_counter_trend():
     codes = out.get("engine_b_diagnostics", {}).get("reason_codes", [])
     assert ENGINE_B_REASON_SEQUENCE_COUNTER_TREND in codes
     assert out["structure_ok"] is False
-
-
-def test_crypto_taker_pressure_uses_binance_kline_fields():
-    pressure = engine._crypto_kline_taker_pressure(
-        _crypto_kline(100.0, 101.0, 99.0, 100.5, volume=100.0, taker_buy=60.0)
-    )
-    assert pressure["taker_data_missing"] is False
-    assert pressure["taker_buy_ratio"] == pytest.approx(0.6)
-    assert pressure["taker_sell_ratio"] == pytest.approx(0.4)
-
-    missing = engine._crypto_kline_taker_pressure(
-        {"open": 1.0, "high": 1.0, "low": 1.0, "close": 1.0, "volume": 100.0}
-    )
-    assert missing["taker_data_missing"] is True
-
-
-def test_crypto_profile_m15_trigger_can_create_pass_with_structural_target(monkeypatch):
-    _set_crypto_profile_flags(monkeypatch)
-    res = _crypto_res_long_with_structural_target()
-
-    out = engine.calculate_confidence(
-        res,
-        current_price=100.0,
-        direction="LONG",
-        learning_ctx=None,
-        entry_candles=[],
-        style_profile={"min_room_atr": 0.35, "min_rr": 1.2, "require_macro_align": False},
-        crypto_entry_candles_by_tf={"M15": _crypto_trigger_candles_long(), "M5": []},
-    )
-
-    assert out["passed"] is True
-    assert out["trigger_passed"] is True
-    assert out["trigger_timeframe"] == "M15"
-    assert out["selected_target_is_structural"] is True
-    assert out["fallback_used_for_final_pass"] is False
-    assert out["failed_gate_names"] == []
-
-
-def test_crypto_profile_requires_real_h4_or_d1_target(monkeypatch):
-    _set_crypto_profile_flags(monkeypatch)
-    res = _crypto_res_long_with_structural_target()
-    res["crypto_target_selected_target_price"] = None
-    res["crypto_target_selected_target_tf"] = None
-    res["crypto_target_selected_target_is_structural"] = False
-    res["recommended_take_profit"] = 101.4
-
-    out = engine.calculate_confidence(
-        res,
-        current_price=100.0,
-        direction="LONG",
-        learning_ctx=None,
-        entry_candles=[],
-        style_profile={"min_room_atr": 0.35, "min_rr": 1.2, "require_macro_align": False},
-        crypto_entry_candles_by_tf={"M15": _crypto_trigger_candles_long(), "M5": []},
-    )
-
-    assert out["passed"] is False
-    assert out["crypto_target_v2_valid"] is False
-    assert "target_v2" in out["failed_gate_names"]
-
-
-def test_crypto_profile_fallback_target_cannot_create_final_pass(monkeypatch):
-    _set_crypto_profile_flags(monkeypatch)
-    res = _crypto_res_long_with_structural_target()
-    res["crypto_target_selected_target_price"] = None
-    res["crypto_target_selected_target_tf"] = None
-    res["crypto_target_selected_target_is_structural"] = False
-    res["crypto_target_used_fallback_projection"] = True
-    res["crypto_target_fallback_used_for_diagnostics_only"] = False
-    res["recommended_take_profit"] = 102.0
-
-    out = engine.calculate_confidence(
-        res,
-        current_price=100.0,
-        direction="LONG",
-        learning_ctx=None,
-        entry_candles=[],
-        style_profile={"min_room_atr": 0.35, "min_rr": 1.2, "require_macro_align": False},
-        crypto_entry_candles_by_tf={"M15": _crypto_trigger_candles_long(), "M5": []},
-    )
-
-    assert out["passed"] is False
-    assert out["fallback_used_for_final_pass"] is True
-    assert "fallback_target" in out["failed_gate_names"]
-    assert "target_v2" in out["failed_gate_names"]
-
-
-def test_crypto_profile_requires_enabled_trigger_profile_to_pass(monkeypatch):
-    _set_crypto_profile_flags(monkeypatch)
-    res = _crypto_res_long_with_structural_target()
-
-    out = engine.calculate_confidence(
-        res,
-        current_price=100.0,
-        direction="LONG",
-        learning_ctx=None,
-        entry_candles=[],
-        style_profile={"min_room_atr": 0.35, "min_rr": 1.2, "require_macro_align": False},
-        crypto_entry_candles_by_tf={"M15": [], "M5": []},
-    )
-
-    assert out["passed"] is False
-    assert out["trigger_passed"] is False
-
-
-def test_forex_engine_b_behavior_unchanged_when_crypto_flags_enabled(monkeypatch):
-    _set_crypto_profile_flags(monkeypatch)
-    res = _base_res_long()
-    res["asset_type"] = "forex"
-    res["distance_to_res"] = 3.0
-    res["recommended_stop_loss"] = 99.0
-    res["recommended_take_profit"] = 102.0
-
-    out = engine.calculate_confidence(
-        res,
-        current_price=100.0,
-        direction="LONG",
-        learning_ctx=None,
-        entry_candles=[],
-        style_profile={"min_room_atr": 0.35, "min_rr": 1.5, "require_macro_align": False},
-        crypto_entry_candles_by_tf={"M15": _crypto_trigger_candles_long(), "M5": []},
-    )
-
-    assert out["crypto_profile_enabled"] is False
-    assert out["trigger_ok"] is True
-    assert out["passed"] is True
-    assert out["failed_gate_names"] == []
+    assert out["hard_counter_penalty"] == pytest.approx(0.0)
 
 
 # ─── Engine B RR basis tests ──────────────────────────────────────────────────
@@ -1052,25 +1626,3 @@ def test_execution_levels_exposed_in_confidence_output():
         assert key in out, f"Missing key: {key}"
 
 
-def test_crypto_fallback_projection_cannot_pass_final_rr_gate(monkeypatch):
-    """Fallback projection used for final pass → rr_ok may be True from ATR but crypto gates block passed."""
-    _set_crypto_profile_flags(monkeypatch)
-    res = _crypto_res_long_with_structural_target()
-    res["crypto_target_selected_target_price"] = None
-    res["crypto_target_selected_target_tf"] = None
-    res["crypto_target_selected_target_is_structural"] = False
-    res["crypto_target_used_fallback_projection"] = True
-    res["crypto_target_fallback_used_for_diagnostics_only"] = False
-    res["recommended_take_profit"] = 102.0
-
-    out = engine.calculate_confidence(
-        res,
-        current_price=100.0,
-        direction="LONG",
-        learning_ctx=None,
-        entry_candles=[],
-        style_profile={"min_room_atr": 0.35, "min_rr": 1.2, "require_macro_align": False, "style": "intraday"},
-        crypto_entry_candles_by_tf={"M15": _crypto_trigger_candles_long(), "M5": []},
-    )
-    assert out["passed"] is False
-    assert out["fallback_used_for_final_pass"] is True

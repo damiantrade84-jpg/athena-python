@@ -273,6 +273,11 @@ def build_validation_report(
             "temporal_mode_is_standard: IS/OOS is a fixed 70/30 chronological label "
             "without an embargo between IS and OOS unless you select embargoed/walk_forward*"
         )
+        notes.append(
+            f"purge_gap_bars ({int(purge_gap)}) and walk_forward folds ({int(folds)}) "
+            "only simulate trades/skips once temporal mode is embargoed or walk_forward* — "
+            "standard ignores those parameters for execution gating"
+        )
     if live_parity_execution:
         notes.append(
             "live_parity: higher slippage multiplier and live volume threshold — "
@@ -339,12 +344,16 @@ def volume_threshold_for_backtest(
     default_live: float,
     default_bt: float,
 ) -> float:
-    """Volume gate for calc_confluence: explicit live parity uses live default unless profile overrides."""
+    """Volume gate for calc_confluence.
+
+    Standard Engine A backtests use the live threshold so default BT results can
+    be compared to scan output. Research stress modes keep the relaxed BT gate.
+    """
     if pair_profile_volume is not None:
         try:
             return float(pair_profile_volume)
         except (TypeError, ValueError):
             pass
-    if validation_mode == "live_parity":
+    if validation_mode in ("standard", "live_parity"):
         return float(default_live)
     return float(default_bt)

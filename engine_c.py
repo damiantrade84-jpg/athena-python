@@ -31,6 +31,14 @@ from stability_monitor import record_signal_event
 log = logging.getLogger("sentinel")
 
 
+def _engine_a_reliability(engine_a: dict, a_quality: float) -> float:
+    """Blend Engine A confidence-detail score with meta quality; missing confidence → quality only."""
+    c = engine_a.get("confidence")
+    if c is None:
+        return float(a_quality)
+    return float(c) * 0.5 + float(a_quality) * 0.5
+
+
 # ── Regime-conditional engine weights ─────────────────────────────────────────
 # Backtest evidence: Engine A dominates in trends (COT/momentum factors),
 # Engine B dominates in ranges (BOS/CHoCH/zones more meaningful at structure).
@@ -45,6 +53,33 @@ ENGINE_C_AB_WEIGHTS = {
     "LOW_VOLATILITY":  {"A": 0.40, "B": 0.60},
 }
 ENGINE_C_META_BLEND = 0.20  # Default; override with CONFIG["ENGINE_C_META_BLEND"] (0..1)
+
+
+def _default_engine_a_max_score(signal_a: dict) -> float:
+    """Fallback maxScore when Engine A omits or zeroes it; optional per-type overrides in CONFIG."""
+    by_type = CONFIG.get("ENGINE_C_A_DEFAULT_MAX_SCORE_BY_TYPE")
+    if isinstance(by_type, dict):
+        for key in (
+            signal_a.get("type"),
+            signal_a.get("asset_class"),
+            signal_a.get("assetType"),
+        ):
+            if key is None:
+                continue
+            raw = by_type.get(str(key).lower())
+            if raw is None:
+                continue
+            try:
+                v = float(raw)
+                if v > 0:
+                    return v
+            except (TypeError, ValueError):
+                continue
+    try:
+        v = float(CONFIG.get("ENGINE_C_A_DEFAULT_MAX_SCORE", 3.0))
+        return v if v > 0 else 3.0
+    except (TypeError, ValueError):
+        return 3.0
 
 
 def _engine_c_meta_blend() -> float:
@@ -106,6 +141,12 @@ def _vision_modifiers() -> dict:
         except (TypeError, ValueError):
             conviction_mult = float(default["conviction_mult"])
         out[key] = {"action": action, "conviction_mult": conviction_mult}
+
+    # Veto verdicts cannot be neutralized by a mis-set YAML action or multiplier.
+    if "AVOID" in out:
+        out["AVOID"] = {"action": "override", "conviction_mult": 0.0}
+    if "CONTRADICTS" in out:
+        out["CONTRADICTS"] = {"action": "contradict", "conviction_mult": 0.0}
     return out
 
 
@@ -202,8 +243,8 @@ def _build_disagreement_diagnosis(
             _b_missing.append(b.get("signal_diagnostic") or "engine_b_checklist_failed")
         if not b_struct_ok:
             _b_diagnostics = signal_b.get("engine_b_diagnostics") or {}
-            if isinstance(_b_diagnostics, str):
-                log.debug("[ENGINE C] signal_b['engine_b_diagnostics'] is a string (%r), treating as empty dict", _b_diagnostics)
+            if not isinstance(_b_diagnostics, dict):
+                log.debug("[ENGINE C] signal_b['engine_b_diagnostics'] is %s (expected dict), treating as empty", type(_b_diagnostics).__name__)
                 _b_diagnostics = {}
             _b_reason_codes = _b_diagnostics.get("reason_codes", [])
             _b_missing.append(f"structure_failed (codes={_b_reason_codes})")
@@ -293,7 +334,16 @@ def normalise_engine_a(signal_a: dict) -> dict:
       - confluencePct: threshold-relative display percentage (UI only)
     """
     score = float(signal_a.get("confluenceScore", 0))
-    max_score = float(signal_a.get("maxScore", 3.0)) or 3.0
+    _ms_raw = signal_a.get("maxScore")
+    if _ms_raw is None:
+        max_score = _default_engine_a_max_score(signal_a)
+    else:
+        try:
+            max_score = float(_ms_raw)
+        except (TypeError, ValueError):
+            max_score = _default_engine_a_max_score(signal_a)
+        if max_score <= 0:
+            max_score = _default_engine_a_max_score(signal_a)
     score_norm = signal_a.get("scoreNorm")
     try:
         norm = float(score_norm) if score_norm is not None else None
@@ -336,6 +386,13 @@ def normalise_engine_a(signal_a: dict) -> dict:
     _dir_ok = signal_a.get("direction") in ("LONG", "SHORT")
     _is_full = norm > _a_has_floor and _dir_ok
     _is_partial = (not _is_full) and norm > _a_partial_floor and _dir_ok
+    _cf = None
+    _cdetail = signal_a.get("confidenceDetail")
+    if isinstance(_cdetail, dict) and _cdetail.get("confidence") is not None:
+        try:
+            _cf = float(_cdetail["confidence"])
+        except (TypeError, ValueError):
+            _cf = None
     return {
         "score_norm": round(norm, 4),
         "direction": signal_a.get("direction"),
@@ -351,7 +408,7 @@ def normalise_engine_a(signal_a: dict) -> dict:
         "cot_active": bool(cot_active),
         "carry_active": bool(carry_active),
         "style": signal_a.get("style", signal_a.get("tradeStyle", "swing")),
-        "confidence": float(signal_a.get("confidenceDetail", {}).get("confidence", 0.5)),
+        "confidence": _cf,
     }
 
 
@@ -452,6 +509,11 @@ def resolve_sl(
         dist_b = abs(entry - sl_b)
         if dist_b <= max_sl_dist and dist_b > 0:
             candidates.append(("structural", sl_b, dist_b))
+        elif dist_b == 0:
+            log.debug(
+                "[ENGINE_C] resolve_sl: structural SL=%s equals entry=%s — dropped (zero distance)",
+                sl_b, entry,
+            )
         elif dist_b > max_sl_dist and atr > 0:
             # Structural too wide — clamp to 2.5x ATR
             if direction == "LONG":
@@ -494,7 +556,9 @@ def resolve_tp(
     - Else Engine A ATR-based TP
     - Calculate actual RR from resolved levels
     """
-    if not entry or not sl or entry <= 0:
+    if not entry or entry <= 0:
+        return {"tp": None, "rr": 0, "method": "NO_DATA"}
+    if sl is None or sl <= 0:
         return {"tp": None, "rr": 0, "method": "NO_DATA"}
 
     risk = abs(entry - sl)
@@ -623,14 +687,23 @@ def apply_vision(consensus: dict, vision_result: dict) -> dict:
             updated["vision_rating"] = _vision_state.get("raw") or "INVALID"
             return updated
     except Exception as _arb_err:
-        log.debug("[AI_ARBITRATION] Vision arbitration skipped: %s", _arb_err)
+        log.warning("[AI_ARBITRATION] Vision arbitration failed (fail-closed): %s", _arb_err)
+        updated["trade"] = False
+        updated["verdict"] = "VISION_ARBITRATION_ERROR"
+        updated["tier"] = "SKIP"
+        updated["sizing_override"] = 0.0
+        updated["decision_state"] = "blocked"
+        updated["vision_applied"] = True
+        updated["vision_action"] = "block"
+        updated["vision_rating"] = "ARBITRATION_FAILED"
+        return updated
 
     # Parse structured data if available
     structured = vision_result.get("structured") or {}
-    rating = structured.get("rating", "").upper() if structured else ""
-    confirms_dir = structured.get("confirms_direction", True) if structured else True
-    sl_flag = structured.get("sl_flag", "ok") if structured else "ok"
-    tp_flag = structured.get("tp_flag", "ok") if structured else "ok"
+    rating = structured.get("rating", "").upper()
+    confirms_dir = structured.get("confirms_direction", False)
+    sl_flag = structured.get("sl_flag", "ok")
+    tp_flag = structured.get("tp_flag", "ok")
 
     text = (vision_result.get("analysis") or "").upper()
 
@@ -644,13 +717,13 @@ def apply_vision(consensus: dict, vision_result: dict) -> dict:
         confirms_dir = False
         rating = "CONTRADICTS"
 
-    # If no structured rating, extract the overall rating from text
+    # If no structured rating, extract the overall rating from text using word boundaries
     if not rating:
         for r in ["AVOID", "STRONG", "MODERATE", "WEAK", "CONTRADICTS"]:
-            if r in text:
+            if _re.search(rf"\b{r}\b", text):
                 rating = r
                 break
-        if "CONTRADICT" in text or "CONFLICTED" in text:
+        if _re.search(r"\bCONTRADICT\b", text) or _re.search(r"\bCONFLICTED\b", text):
             confirms_dir = False
             rating = "CONTRADICTS"
 
@@ -663,7 +736,7 @@ def apply_vision(consensus: dict, vision_result: dict) -> dict:
                 break
 
     if not rating:
-        rating = "MODERATE"
+        rating = "AVOID"
 
     # Handle explicit direction contradiction
     if not confirms_dir and rating not in ("AVOID", "CONTRADICTS"):
@@ -672,10 +745,19 @@ def apply_vision(consensus: dict, vision_result: dict) -> dict:
     # Apply modifier
     modifiers = _vision_modifiers()
     modifier = modifiers.get(rating, modifiers["MODERATE"])
-    action = modifier["action"]
-    mult = modifier["conviction_mult"]
+    action = str(modifier["action"]).lower()
+    mult = float(modifier["conviction_mult"])
 
-    old_conviction = updated["conviction"]
+    # Hard veto ratings and actions — YAML cannot weaken these to a non-veto path.
+    if rating in ("AVOID", "CONTRADICTS"):
+        action = "override" if rating == "AVOID" else "contradict"
+        mult = 0.0
+    elif action in ("override", "contradict"):
+        mult = 0.0
+
+    old_conviction = updated.get("conviction", 0.0)
+    if "conviction" not in updated:
+        log.warning("[ENGINE_C] apply_vision called on consensus without conviction key; defaulting to 0.0")
     new_conviction = min(1.0, old_conviction * mult)
 
     # Reclassify tier
@@ -922,7 +1004,7 @@ def compute_consensus(
 
         # Reliability Layer for A_ONLY
         a_quality = 0.50 # fallback
-        a_reliability = (a.get("confidence", 0.5) * 0.5) + (a_quality * 0.5)
+        a_reliability = _engine_a_reliability(a, a_quality)
         c_reliability = a_reliability # 100% allocation to A
 
         decision_state = "blocked"
@@ -984,8 +1066,29 @@ def compute_consensus(
         return _finalize_consensus(result, asset_type)
 
     if b_has and not a_has:
-        # Engine B only — score it directly with conservative scaling.
         direction = b["direction"]
+        if b.get("sl") is None or b.get("tp") is None:
+            return _build_result(
+                trade=False,
+                verdict="B_ONLY_LEVELS_MISSING",
+                direction=direction,
+                conviction=0.0,
+                tier="SKIP",
+                sizing=0.0,
+                a_norm=a, b_norm=b, entry=entry,
+                sl=None, sl_method="no_levels",
+                tp=None, tp_method="no_levels",
+                rr=0.0,
+                weights={"A": 0.0, "B": 1.0},
+                decision_state="blocked",
+                decision_state_reason="engine_b_levels_missing",
+                a_reliability=0.0,
+                b_reliability=0.0,
+                c_reliability=0.0,
+                disagreement_diagnosis=_build_disagreement_diagnosis(
+                    "B_ONLY", a, b, signal_a, signal_b, regime
+                ),
+            )
         b_only_mult = float(CONFIG.get("ENGINE_C_B_ONLY_MULT", 0.65))
         conviction = b["score_norm"] * b_only_mult
         tier, sizing = classify_conviction(conviction)
@@ -1148,7 +1251,7 @@ def compute_consensus(
                 sizing = 0.0
 
             a_quality = 0.50
-            a_reliability = (a.get("confidence", 0.5) * 0.5) + (a_quality * 0.5)
+            a_reliability = _engine_a_reliability(a, a_quality)
             c_reliability = a_reliability
 
             decision_state = "blocked"
@@ -1283,16 +1386,51 @@ def compute_consensus(
     tier, sizing = classify_conviction(conviction)
 
     # Step 5: Resolve SL and TP
-    sl_resolved = resolve_sl(entry, a["sl"], b["sl"], direction, atr)
-    tp_resolved = resolve_tp(entry, sl_resolved["sl"], a["tp"], b["tp"], direction)
+    # When Engine B checklist passed, trust execution_sl/execution_tp — they already
+    # satisfied rr_ok in market_structure.calculate_confidence (avoids resolve_tp's
+    # structural_min_rr=1.5 and SL/TP blend changing gated RR).
+    used_b_execution_bundle = False
+    conf_b_al = confidence_b if isinstance(confidence_b, dict) else {}
+    if bool(conf_b_al.get("passed")):
+        try:
+            _ex_sl = float(conf_b_al["execution_sl"])
+            _ex_tp = float(conf_b_al["execution_tp"])
+        except (KeyError, TypeError, ValueError):
+            _ex_sl = _ex_tp = None
+        if (
+            _ex_sl is not None
+            and _ex_tp is not None
+            and _ex_sl > 0
+            and _ex_tp > 0
+            and entry > 0
+        ):
+            if direction == "LONG":
+                _side_ok = _ex_sl < entry < _ex_tp
+            else:
+                _side_ok = _ex_sl > entry > _ex_tp
+            if _side_ok:
+                _risk_al = abs(entry - _ex_sl)
+                if _risk_al > 0:
+                    _rr_al = abs(_ex_tp - entry) / _risk_al
+                    sl_resolved = {"sl": round(_ex_sl, 6), "method": "engine_b_execution"}
+                    tp_resolved = {
+                        "tp": round(_ex_tp, 6),
+                        "rr": round(_rr_al, 2),
+                        "method": "engine_b_execution",
+                    }
+                    used_b_execution_bundle = True
 
-    # Validate minimum RR
-    if tp_resolved["rr"] < 1.2:
-        # RR too low after SL/TP resolution — try Engine A TP
-        if a["tp"]:
-            alt_tp = resolve_tp(entry, sl_resolved["sl"], a["tp"], None, direction)
-            if alt_tp["rr"] > tp_resolved["rr"]:
-                tp_resolved = alt_tp
+    if not used_b_execution_bundle:
+        sl_resolved = resolve_sl(entry, a["sl"], b["sl"], direction, atr)
+        tp_resolved = resolve_tp(entry, sl_resolved["sl"], a["tp"], b["tp"], direction)
+
+        # Validate minimum RR
+        if tp_resolved["rr"] < 1.2:
+            # RR too low after SL/TP resolution — try Engine A TP
+            if a["tp"]:
+                alt_tp = resolve_tp(entry, sl_resolved["sl"], a["tp"], None, direction)
+                if alt_tp["rr"] > tp_resolved["rr"]:
+                    tp_resolved = alt_tp
 
     if tp_resolved["rr"] < 1.0:
         tier = "SKIP"
@@ -1301,8 +1439,8 @@ def compute_consensus(
     # --- Reliability Layer ---
     a_quality = meta_policy.get("engineQualities", {}).get("engine_a", {}).get("quality_score", 0.50)
     b_quality = meta_policy.get("engineQualities", {}).get("engine_b", {}).get("quality_score", 0.50)
-    
-    a_reliability = (a.get("confidence", 0.5) * 0.5) + (a_quality * 0.5)
+
+    a_reliability = _engine_a_reliability(a, a_quality)
     b_reliability = _compute_b_reliability(b, b_quality)
     
     c_reliability = (a_reliability * weights["A"]) + (b_reliability * weights["B"])

@@ -173,23 +173,31 @@ class TestConfig:
             assert k in CONFIG, f"Missing CONFIG key: {k}"
 
     def test_asset_class_coverage(self):
+        # All five core asset classes must be present.  Score-group keys
+        # (e.g. precious_trackers, energy_oil, softs in RSI_BOUNDS) are
+        # additive overrides and do not violate this contract.
         classes = {"crypto", "forex", "commodity", "stock", "index"}
         for key in (
             "RISK_MULT",
             "RANGING",
             "ATR_CLASS",
             "RSI_BOUNDS",
-            "MIN_CONFLUENCE_CLASS",
         ):
-            assert classes == set(CONFIG[key].keys()), f"{key} missing classes"
+            present = set(CONFIG[key].keys())
+            assert classes.issubset(present), (
+                f"{key} missing asset classes: {classes - present}"
+            )
 
     def test_validate_config_no_crash(self):
         # Should not raise on valid config
         validate_config(CONFIG)
 
     def test_forex_fallbacks_match_current_repo_contract(self):
-        # Engine A v2 unified 0-3.0 scale; forex floor is 2.1 (70% of max)
-        assert CONFIG["MIN_CONFLUENCE_CLASS"]["forex"] == 2.1
+        # Engine A v2 unified 0-3.0 scale; forex majors use explicit score-group
+        # thresholds rather than the permissive default fallback.
+        from scoring import get_score_threshold
+        pair = {"display": "EUR/USD", "symbol": "EURUSD=X", "type": "forex"}
+        assert get_score_threshold(pair) == 2.1
         assert CONFIG["AUTO_TRADE_MIN_SCORE"]["forex"] == 2.1
 
 
@@ -319,10 +327,12 @@ class TestJsonSafety:
 
 def test_athena_source_exposes_intermarket_payload_and_route():
     root = Path(__file__).resolve().parents[1]
-    source = (root / "athena.py").read_text(encoding="utf-8")
+    athena_source = (root / "athena.py").read_text(encoding="utf-8")
+    route_source = (root / "athena_app" / "api" / "routes_market_data.py").read_text(encoding="utf-8")
 
-    assert '@app.route("/api/intermarket-matrix")' in source
-    assert '"intermarketConfirmation": res.get("intermarketConfirmation", {})' in source
+    assert '"/api/intermarket-matrix"' in route_source
+    assert '"api_intermarket_matrix"' in route_source
+    assert '"intermarketConfirmation": res.get("intermarketConfirmation", {})' in athena_source
 
 
 def test_engine_b_live_scan_uses_mt5_market_state_helper():
@@ -335,22 +345,66 @@ def test_engine_b_live_scan_uses_mt5_market_state_helper():
     assert '_engine_b_live_market_state(pair_obj, "H4", _clim["H4"])' in source
 
 
+def test_binance_futures_paginated_timeout_tries_mirror_endpoint():
+    root = Path(__file__).resolve().parents[1]
+    source = (root / "athena.py").read_text(encoding="utf-8")
+    paginated = source[source.index("def fetch_binance_paginated") : source.index("def _fetch_bt_yfinance")]
+
+    assert 'for base in ["https://fapi.binance.com", "https://fapi1.binance.com"]' in paginated
+    assert "except Exception as e:" in paginated
+    assert 'log.warning(f"[BN-FUT-PAG] {sym} page {page} {base}: {e}")' in paginated
+    assert "continue" in paginated
+
+
+def test_engine_a_structure_context_score_adjustment_is_config_gated():
+    root = Path(__file__).resolve().parents[1]
+    source = (root / "athena.py").read_text(encoding="utf-8")
+    start = source.index("Always derive explicit structural context")
+    block = source[
+        start
+        : source.index("fib = calc_fib(h4)", start)
+    ]
+
+    assert 'CONFIG.get("ENGINE_A_STRUCTURE_CONTEXT_ENABLED", False)' in block
+    assert block.index('CONFIG.get("ENGINE_A_STRUCTURE_CONTEXT_ENABLED", False)') < block.index(
+        "_structure_adjustment = apply_structure_context_to_score"
+    )
+
+
 def test_ui_source_renders_intermarket_confirmation_box():
     root = Path(__file__).resolve().parents[1]
-    source = (root / "static" / "index.html").read_text(encoding="utf-8")
+    type_source = (root / "static" / "react-app" / "app" / "src" / "types" / "athena.ts").read_text(encoding="utf-8")
+    card_source = (
+        root
+        / "static"
+        / "react-app"
+        / "app"
+        / "src"
+        / "components"
+        / "athena"
+        / "EngineASignalCard.tsx"
+    ).read_text(encoding="utf-8")
 
-    assert "function buildIntermarketConfirmationBox(s)" in source
-    assert "buildIntermarketConfirmationBox(s)" in source
+    assert "intermarketConfirmation?: unknown" in type_source
+    assert "intermarketConfirmationEntries(signal.intermarketConfirmation)" in card_source
+    assert "Intermarket confirmation" in card_source
 
 
 def test_ui_source_exposes_pair_browser_tab_and_actions():
     root = Path(__file__).resolve().parents[1]
-    source = (root / "static" / "index.html").read_text(encoding="utf-8")
-    feature_source = (root / "static" / "js" / "features" / "pair_browser.js").read_text(encoding="utf-8")
+    home_source = (root / "static" / "react-app" / "app" / "src" / "pages" / "Home.tsx").read_text(encoding="utf-8")
+    sidebar_source = (
+        root / "static" / "react-app" / "app" / "src" / "components" / "layout" / "Sidebar.tsx"
+    ).read_text(encoding="utf-8")
+    panel_source = (
+        root / "static" / "react-app" / "app" / "src" / "components" / "panels" / "PairBrowserPanel.tsx"
+    ).read_text(encoding="utf-8")
 
-    assert 'id="nav-pair-browser"' in source
-    assert 'id="panel-pair-browser"' in source
-    assert '/static/js/features/pair_browser.js' in source
-    assert "window.runPairBrowserEngineA = function" in feature_source
-    assert "window.runPairBrowserEngineB = async function" in feature_source
-    assert "window.runPairBrowserCompare = async function" in feature_source
+    assert "pairBrowser: PairBrowserPanel" in home_source
+    assert "{ id: 'pairBrowser', label: 'Pair Browser'" in sidebar_source
+    assert "const runEngineA = useCallback" in panel_source
+    assert "const runEngineB = useCallback" in panel_source
+    assert "const runCompare = useCallback" in panel_source
+    assert "'/api/pair-scan'" in panel_source
+    assert "'/api/naked-analysis'" in panel_source
+    assert "'/api/compare-engines'" in panel_source

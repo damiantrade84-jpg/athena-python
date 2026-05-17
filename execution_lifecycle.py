@@ -12,11 +12,68 @@ only orchestrates and attaches a ``lifecycle`` envelope to the result dict.
 from __future__ import annotations
 
 import logging
+import os
 from typing import Any
 
 log = logging.getLogger("sentinel")
 
 LIFECYCLE_VERSION = 1
+
+
+def _demo_broker_execution_requested(venue: str) -> bool:
+    mode = ""
+    try:
+        from config import CONFIG
+    except Exception:
+        CONFIG = {}
+    try:
+        mode = str(CONFIG.get("EXECUTOR_MODE", "") or "").strip().lower()
+    except Exception:
+        mode = ""
+    if mode == "demo":
+        return True
+
+    v = (venue or "").strip().lower()
+    if v == "bybit":
+        return os.environ.get("BYBIT_DEMO", "false").lower() in ("true", "1", "yes")
+    if v == "mt5":
+        server = os.environ.get("MT5_SERVER", "")
+        return "demo" in server.lower()
+    return False
+
+
+def _paper_soak_blocks_real_orders(venue: str = "") -> bool:
+    if _demo_broker_execution_requested(venue):
+        return False
+    try:
+        from config import CONFIG
+    except Exception:
+        return False
+    paper_soak = CONFIG.get("PAPER_SOAK")
+    if not isinstance(paper_soak, dict):
+        return False
+    if bool(paper_soak.get("ENABLED", False)):
+        return True
+    return paper_soak.get("REAL_ORDERS_ALLOWED") is False
+
+
+def _vision_blocks_execution(signal: dict[str, Any]) -> bool:
+    candidates = [
+        signal.get("vision_output"),
+        signal.get("structured"),
+    ]
+    for payload in candidates:
+        if not isinstance(payload, dict):
+            continue
+        structured = payload.get("structured") if isinstance(payload.get("structured"), dict) else {}
+        if payload.get("confirms_direction") is False:
+            return True
+        if structured.get("confirms_direction") is False:
+            return True
+    ai_arbitration = signal.get("ai_arbitration")
+    if isinstance(ai_arbitration, dict) and ai_arbitration.get("execution_allowed") is False:
+        return True
+    return False
 
 
 def run_managed_execution(
@@ -35,8 +92,19 @@ def run_managed_execution(
     pair = (signal.get("pair") or signal.get("symbol") or "").strip()
     phases: list[dict[str, Any]] = []
 
-    _vo = signal.get("vision_output") or signal.get("structured") or {}
-    if isinstance(_vo, dict) and _vo.get("confirms_direction") is False:
+    if _paper_soak_blocks_real_orders(v):
+        return {
+            "success": False,
+            "error": "PAPER_SOAK_BLOCKED_REAL_ORDER",
+            "error_tag": "paper_soak_blocked",
+            "hint": (
+                "Paper soak blocks broker APIs while PAPER_SOAK.ENABLED is true. "
+                "For Bybit/MT5 demo orders: copy config.local.example.yaml to config.local.yaml, "
+                "set ATHENA_REAL_ORDERS_CONFIRM=I_UNDERSTAND_REAL_ORDER_RISK in the environment, restart."
+            ),
+        }
+
+    if _vision_blocks_execution(signal):
         log.warning(f"[VISION-VETO] Vetoing execution for {pair} due to conflicting direction.")
         try:
             import sqlite3
@@ -71,6 +139,17 @@ def run_managed_execution(
 
         pre = mt5_cancel_pending_athena_orders(pair)
         phases.append({"name": "pre_cleanup_pending", "result": pre})
+        if pre.get("error"):
+            return {
+                "success": False,
+                "error": f"PRE_CLEANUP_FAILED:{pre.get('detail') or pre}",
+                "lifecycle": {
+                    "version": LIFECYCLE_VERSION,
+                    "venue": v,
+                    "pair": pair,
+                    "phases": phases,
+                },
+            }
         if pre.get("cancelled"):
             log.info(
                 f"[LIFECYCLE] MT5 pre-cleanup removed {pre['cancelled']} stale pending(s) for {pair}"
@@ -82,7 +161,10 @@ def run_managed_execution(
         if exec_result.get("success"):
             rec = mt5_reconcile_after_open(exec_result, signal)
             phases.append({"name": "post_fill_reconcile", "result": rec})
-            if rec.get("allProtectionsPresent") is False:
+            if rec.get("error") or rec.get("allProtectionsPresent") is not True:
+                exec_result["success"] = False
+                exec_result["error"] = "MT5_PROTECTION_RECONCILE_FAILED"
+                exec_result["reconcile"] = rec
                 exec_result.setdefault("lifecycleWarnings", []).append(
                     "mt5_missing_sl_tp_after_fill"
                 )
@@ -105,6 +187,17 @@ def run_managed_execution(
     ccxt_sym = bybit_map_symbol(pair) or bybit_map_symbol(signal.get("symbol") or "")
     pre = bybit_cancel_stale_entry_orders(ccxt_sym)
     phases.append({"name": "pre_cleanup_stale_orders", "result": pre})
+    if pre.get("error"):
+        return {
+            "success": False,
+            "error": f"PRE_CLEANUP_FAILED:{pre.get('detail') or pre}",
+            "lifecycle": {
+                "version": LIFECYCLE_VERSION,
+                "venue": v,
+                "pair": pair,
+                "phases": phases,
+            },
+        }
     if pre.get("cancelled"):
         log.info(
             f"[LIFECYCLE] Bybit pre-cleanup removed {pre['cancelled']} stale order(s) for {ccxt_sym}"
@@ -121,8 +214,25 @@ def run_managed_execution(
                 f"[LIFECYCLE] Bybit post-fill repaired missing SL/TP on {ccxt_sym}"
             )
         if rec.get("error"):
+            exec_result["success"] = False
+            exec_result["error"] = "BYBIT_PROTECTION_RECONCILE_FAILED"
+            exec_result["reconcile"] = rec
             exec_result.setdefault("lifecycleWarnings", []).append(
                 f"reconcile_error:{rec.get('detail', rec)}"
+            )
+        elif (
+            not rec.get("skipped")
+            and rec.get("note") != "no_levels_to_verify"
+            and not (
+                rec.get("hadProtections") is True or rec.get("repaired") is True
+            )
+        ):
+            # Parity with MT5: no verified SL/TP after fill when both are required
+            exec_result["success"] = False
+            exec_result["error"] = "BYBIT_PROTECTION_RECONCILE_FAILED"
+            exec_result["reconcile"] = rec
+            exec_result.setdefault("lifecycleWarnings", []).append(
+                "bybit_missing_sl_tp_after_fill"
             )
 
     exec_result["lifecycle"] = {

@@ -1,0 +1,53 @@
+[mcp_servers.athena-audit]
+args = [
+    "mcp-server-sqlite",
+    "--db-path",
+    "C:/dev/athena-python/audit.db",
+]
+command = "uvx"
+
+[mcp_servers.athena-candle-cache]
+args = [
+    "mcp-server-sqlite",
+    "--db-path",
+    "C:/dev/athena-python/candle_cache.db",
+]
+command = "uvx"
+
+[mcp_servers.athena-carry]
+args = [
+    "mcp-server-sqlite",
+    "--db-path",
+    "C:/dev/athena-python/carry_cache.db",
+]
+command = "uvx"
+
+[mcp_servers.athena-cot]
+args = [
+    "mcp-server-sqlite",
+    "--db-path",
+    "C:/dev/athena-python/cot.db",
+]
+command = "uvx"
+
+[mcp_servers.athena-microstructure]
+args = [
+    "mcp-server-sqlite",
+    "--db-path",
+    "C:/dev/athena-python/microstructure.db",
+]
+command = "uvx"
+
+[mcp_servers.context7]
+args = [
+    "-y",
+    "@upstash/context7-mcp",
+]
+command = "npx"
+
+[mcp_servers.playwright]
+args = [
+    "-y",
+    "@playwright/mcp@latest",
+]
+command = "npx"

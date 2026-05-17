@@ -238,7 +238,7 @@ def calc_bb(c: list, p: int, m: float) -> dict:
 
         mn = sum(sl) / p
 
-        sd = math.sqrt(sum((x - mn) ** 2 for x in sl) / (p - 1)) if p > 1 else 0
+        sd = math.sqrt(sum((x - mn) ** 2 for x in sl) / p) if p > 0 else 0
 
         mid.append(mn)
         u.append(mn + m * sd)
@@ -293,8 +293,8 @@ def calc_squeeze(
     mn = sum(sl) / bb_period
 
     sd = (
-        math.sqrt(sum((x - mn) ** 2 for x in sl) / (bb_period - 1))
-        if bb_period > 1
+        math.sqrt(sum((x - mn) ** 2 for x in sl) / bb_period)
+        if bb_period > 0
         else 0
     )
 
@@ -316,8 +316,8 @@ def calc_squeeze(
         _sl = cl[j - bb_period + 1 : j + 1]
         _mn = sum(_sl) / bb_period
         _sd = (
-            math.sqrt(sum((x - _mn) ** 2 for x in _sl) / (bb_period - 1))
-            if bb_period > 1
+            math.sqrt(sum((x - _mn) ** 2 for x in _sl) / bb_period)
+            if bb_period > 0
             else 0
         )
 
@@ -556,6 +556,60 @@ def calc_stochastic(candles: list, kp: int, ks: int, ds: int) -> dict:
     return {"k": kL, "d": dL}
 
 
+def calc_stochastic_rsi(candles: list, rsi_period: int = 14, stoch_period: int = 14,
+                       k_smooth: int = 3, d_smooth: int = 3) -> dict:
+    """Stochastic RSI: applies Stochastic formula to RSI values.
+
+    Returns dict with "k" (fast %K) and "d" (fast %D) arrays.
+    Both are bounded 0-100. Values >80 indicate overbought, <20 oversold.
+
+    Args:
+        candles: list of dicts with "close" key
+        rsi_period: period for RSI calculation (default 14)
+        stoch_period: period for Stochastic of RSI (default 14)
+        k_smooth: smoothing period for %K (default 3)
+        d_smooth: smoothing period for %D (default 3)
+    """
+    if not candles or len(candles) < rsi_period + stoch_period:
+        return {"k": [None] * len(candles), "d": [None] * len(candles)}
+
+    closes = [float(c["close"]) for c in candles]
+    rsi_values = calc_rsi(closes, rsi_period)
+
+    # Now apply Stochastic formula to RSI values
+    n = len(rsi_values)
+    rawK = [None] * n
+
+    for i in range(stoch_period - 1, n):
+        rsi_window = rsi_values[i - stoch_period + 1:i + 1]
+        valid_rsi = [v for v in rsi_window if v is not None]
+
+        if len(valid_rsi) < stoch_period:
+            continue
+
+        hh = max(valid_rsi)
+        ll = min(valid_rsi)
+
+        if hh == ll:
+            rawK[i] = 50
+        else:
+            rawK[i] = ((rsi_values[i] - ll) / (hh - ll)) * 100
+
+    kL = [None] * n
+    for i in range(n):
+        window = rawK[i - k_smooth + 1 : i + 1]
+        if i >= k_smooth - 1 and len(window) == k_smooth and all(v is not None for v in window):
+            kL[i] = sum(window) / k_smooth
+
+    dL = [None] * n
+    for i in range(n):
+        window = kL[i - d_smooth + 1 : i + 1]
+        if i >= d_smooth - 1 and len(window) == d_smooth and all(v is not None for v in window):
+            dL[i] = sum(window) / d_smooth
+
+    return {"k": kL, "d": dL}
+
+
 def calc_aroon(candles: list, period: int = 14) -> dict:
     """Aroon Up/Down and Oscillator. TA-Lib standard, period=14."""
 
@@ -727,8 +781,8 @@ def calc_bb_width_percentile(
         mn = sum(sl) / bb_period
 
         sd = (
-            math.sqrt(sum((x - mn) ** 2 for x in sl) / (bb_period - 1))
-            if bb_period > 1
+            math.sqrt(sum((x - mn) ** 2 for x in sl) / bb_period)
+            if bb_period > 0
             else 0
         )
 

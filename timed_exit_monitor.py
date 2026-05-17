@@ -13,9 +13,11 @@ All styles support tp_progress_exempt: skip timed close if price has covered
 >= threshold fraction of entry→TP distance (letting TP manage the trade).
 
 Phase 2 — Trailing ATR TP (Chandelier exit):
-  When tp_mode="trailing_atr", after a trade reaches +trail_activation_r in profit,
-  the timed-close path is replaced by a Chandelier-style ATR trail. Trade closes when
-  price breaks below the trail level. SL stays ATR-based as always.
+  When tp_mode="trailing_atr", after price reaches +trail_activation_r (vs audit or
+  live SL), the timed-close path is replaced by a Chandelier-style ATR trail. Trade
+  closes when price breaches the trail level (plus optional indicator confirm).
+  The trailing branch runs regardless of broker floating P&L sign so fees/spread
+  cannot move the trade back into fixed-mode timers.
 
 Phase 3 — Indicator confirmation:
   When trail_indicator_confirm=true, a trail-triggered close also requires RSI reversal
@@ -37,8 +39,18 @@ log = logging.getLogger("timed_exit")
 
 _be_done: set = set()
 _trail_state: dict = {}
+# Peak R-multiple reached per ticket while chandelier is active. Used by the
+# give-back close to fire when current_r drops below peak by giveback_r.
+_peak_r_state: dict[str, float] = {}
+# Set of state_keys for which the fixed broker TP has already been cleared
+# (one-shot per ticket — avoids re-sending clear-TP on every ratchet tick).
+_tp_cleared_state: set[str] = set()
 # Engine A/B style=scalp: last applied lock_r tier (0.0 = fallback BE only). Upgrades only.
 _scalp_profit_lock_state: dict[str, float] = {}
+# Per-process flag: True once the in-memory state has been hydrated from SQLite.
+_state_hydrated: bool = False
+# DB path captured by the monitor; persistence helpers use this when set.
+_state_db_path: str | None = None
 
 _DEFAULT_CFG: dict = {
     "enabled": True,
@@ -61,14 +73,20 @@ _DEFAULT_CFG: dict = {
     "intraday": {"breakeven_min": 15,  "close_min": 30, "timed_close_enabled": True, "tp_progress_exempt": 0.50},
     "swing":    {"breakeven_days": 2.5, "close_days": 5.0, "timed_close_enabled": True, "tp_progress_exempt": 0.50},
     "tp_mode": "fixed",
-    "trail_activation_r": 1.0,
+    "trail_activation_r": {"scalp": 0.7, "intraday": 1.0, "swing": 1.5},
     "trail_atr_mult": {"scalp": 2.0, "intraday": 2.5, "swing": 3.0},
+    "pre_activation_profit_protect_enabled": False,
+    "pre_activation_profit_arm_r": {"scalp": 0.20, "intraday": 0.25, "swing": 0.35},
+    "pre_activation_profit_close_r": {"scalp": 0.0, "intraday": 0.0, "swing": 0.0},
+    "pre_activation_profit_giveback_r": {"scalp": 0.25, "intraday": 0.35, "swing": 0.50},
     "trail_lookback": 14,
     "trail_timeframe": {"scalp": "H1", "intraday": "H4", "swing": "D1"},
     "trail_indicator_confirm": False,
     "trail_confirm_rsi_threshold": 40,
     "trail_confirm_rsi_period": 14,
     "trail_confirm_macd": True,
+    "timer_tightens_trail": False,
+    "timer_tighten_factor": 0.6,
 }
 
 _PROFIT_LOCK_STAGES_DEFAULT: tuple[dict, ...] = (
@@ -115,6 +133,153 @@ def _current_r_multiple(
 
 def _pair_label_key(value: str | None) -> str:
     return str(value or "").replace("/", "").replace(" ", "").upper()
+
+
+def _ensure_state_table(db_path: str) -> None:
+    """Idempotent DDL for the trail/lock state side-table. Called lazily."""
+    try:
+        with sqlite3.connect(db_path, timeout=10.0) as con:
+            con.execute("PRAGMA journal_mode=WAL")
+            con.execute(
+                """
+                CREATE TABLE IF NOT EXISTS timed_exit_state (
+                    state_key       TEXT PRIMARY KEY,
+                    trail_level     REAL,
+                    lock_r          REAL,
+                    peak_r          REAL,
+                    tp_cleared      INTEGER DEFAULT 0,
+                    last_update_ts  TEXT
+                )
+                """
+            )
+            for stmt in (
+                "ALTER TABLE timed_exit_state ADD COLUMN peak_r REAL",
+                "ALTER TABLE timed_exit_state ADD COLUMN tp_cleared INTEGER DEFAULT 0",
+            ):
+                try:
+                    con.execute(stmt)
+                except sqlite3.OperationalError:
+                    pass
+            con.commit()
+    except Exception as e:
+        log.debug(f"[TIMED_EXIT] _ensure_state_table failed: {e}")
+
+
+def _persist_trail_state(state_key: str, trail_level: float) -> None:
+    """Best-effort persist of one trail level. Silent on failure (in-memory remains canonical)."""
+    if not _state_db_path:
+        return
+    try:
+        with sqlite3.connect(_state_db_path, timeout=10.0) as con:
+            con.execute(
+                """
+                INSERT INTO timed_exit_state (state_key, trail_level, last_update_ts)
+                VALUES (?, ?, ?)
+                ON CONFLICT(state_key) DO UPDATE SET
+                    trail_level = excluded.trail_level,
+                    last_update_ts = excluded.last_update_ts
+                """,
+                (state_key, float(trail_level), datetime.now(timezone.utc).isoformat()),
+            )
+            con.commit()
+    except Exception as e:
+        log.debug(f"[TIMED_EXIT] _persist_trail_state failed key={state_key}: {e}")
+
+
+def _persist_peak_r(state_key: str, peak_r: float) -> None:
+    """Best-effort persist of the highest R reached. Silent on failure."""
+    if not _state_db_path:
+        return
+    try:
+        with sqlite3.connect(_state_db_path, timeout=10.0) as con:
+            con.execute(
+                """
+                INSERT INTO timed_exit_state (state_key, peak_r, last_update_ts)
+                VALUES (?, ?, ?)
+                ON CONFLICT(state_key) DO UPDATE SET
+                    peak_r = excluded.peak_r,
+                    last_update_ts = excluded.last_update_ts
+                """,
+                (state_key, float(peak_r), datetime.now(timezone.utc).isoformat()),
+            )
+            con.commit()
+    except Exception as e:
+        log.debug(f"[TIMED_EXIT] _persist_peak_r failed key={state_key}: {e}")
+
+
+def _persist_tp_cleared(state_key: str) -> None:
+    """Best-effort persist of the broker-TP-cleared marker. Silent on failure."""
+    if not _state_db_path:
+        return
+    try:
+        with sqlite3.connect(_state_db_path, timeout=10.0) as con:
+            con.execute(
+                """
+                INSERT INTO timed_exit_state (state_key, tp_cleared, last_update_ts)
+                VALUES (?, 1, ?)
+                ON CONFLICT(state_key) DO UPDATE SET
+                    tp_cleared = 1,
+                    last_update_ts = excluded.last_update_ts
+                """,
+                (state_key, datetime.now(timezone.utc).isoformat()),
+            )
+            con.commit()
+    except Exception as e:
+        log.debug(f"[TIMED_EXIT] _persist_tp_cleared failed key={state_key}: {e}")
+
+
+def _persist_lock_state(state_key: str, lock_r: float) -> None:
+    if not _state_db_path:
+        return
+    try:
+        with sqlite3.connect(_state_db_path, timeout=10.0) as con:
+            con.execute(
+                """
+                INSERT INTO timed_exit_state (state_key, lock_r, last_update_ts)
+                VALUES (?, ?, ?)
+                ON CONFLICT(state_key) DO UPDATE SET
+                    lock_r = excluded.lock_r,
+                    last_update_ts = excluded.last_update_ts
+                """,
+                (state_key, float(lock_r), datetime.now(timezone.utc).isoformat()),
+            )
+            con.commit()
+    except Exception as e:
+        log.debug(f"[TIMED_EXIT] _persist_lock_state failed key={state_key}: {e}")
+
+
+def _hydrate_state_from_db(db_path: str) -> None:
+    """One-shot hydration of in-memory state dicts from SQLite at monitor start."""
+    global _state_hydrated
+    if _state_hydrated:
+        return
+    _ensure_state_table(db_path)
+    try:
+        with sqlite3.connect(db_path, timeout=10.0) as con:
+            con.row_factory = sqlite3.Row
+            rows = con.execute(
+                "SELECT state_key, trail_level, lock_r, peak_r, tp_cleared FROM timed_exit_state"
+            ).fetchall()
+        for r in rows:
+            sk = r["state_key"]
+            if r["trail_level"] is not None:
+                _trail_state[sk] = float(r["trail_level"])
+            if r["lock_r"] is not None:
+                _scalp_profit_lock_state[sk] = float(r["lock_r"])
+            if r["peak_r"] is not None:
+                _peak_r_state[sk] = float(r["peak_r"])
+            if r["tp_cleared"]:
+                _tp_cleared_state.add(sk)
+        log.info(
+            f"[TIMED_EXIT] State hydrated from db: {len(_trail_state)} trail entries, "
+            f"{len(_scalp_profit_lock_state)} lock entries, "
+            f"{len(_peak_r_state)} peak_r entries, "
+            f"{len(_tp_cleared_state)} tp_cleared entries"
+        )
+    except Exception as e:
+        log.debug(f"[TIMED_EXIT] _hydrate_state_from_db failed: {e}")
+    finally:
+        _state_hydrated = True
 
 
 def _resolve_timed_exit_pair(pair_label: str) -> dict | None:
@@ -298,7 +463,9 @@ def _try_scalp_profit_lock_sl(
 
     result = move_sl(target_sl)
     if result.get("success") and not result.get("skipped"):
-        _scalp_profit_lock_state[ticket_key] = float(record_lock if record_lock is not None else 0.0)
+        _lock_val = float(record_lock if record_lock is not None else 0.0)
+        _scalp_profit_lock_state[ticket_key] = _lock_val
+        _persist_lock_state(ticket_key, _lock_val)
         cr_txt = f"{current_r:.2f}" if current_r is not None else "?"
         if log_mode == "PROFIT_LOCK":
             log.info(
@@ -341,12 +508,102 @@ def _get_timed_cfg(config_fn) -> dict:
         raw.get("breakeven_buffer_r", _DEFAULT_CFG["breakeven_buffer_r"])
     )
     merged["tp_mode"] = str(raw.get("tp_mode", _DEFAULT_CFG["tp_mode"])).lower()
-    merged["trail_activation_r"] = float(raw.get("trail_activation_r", _DEFAULT_CFG["trail_activation_r"]))
+    # trail_activation_r accepts either a scalar (applied to all styles) or a per-style dict.
+    _act_raw = raw.get("trail_activation_r", _DEFAULT_CFG["trail_activation_r"])
+    if isinstance(_act_raw, dict):
+        _act_defaults = _DEFAULT_CFG["trail_activation_r"]
+        merged["trail_activation_r"] = {
+            s: float(_act_raw.get(s, _act_defaults[s]))
+            for s in ("scalp", "intraday", "swing")
+        }
+    else:
+        try:
+            _act_scalar = float(_act_raw)
+        except (TypeError, ValueError):
+            _act_scalar = 1.0
+        merged["trail_activation_r"] = {
+            s: _act_scalar for s in ("scalp", "intraday", "swing")
+        }
     trail_mult_raw = raw.get("trail_atr_mult") or {}
     merged["trail_atr_mult"] = {
         s: float(trail_mult_raw.get(s, _DEFAULT_CFG["trail_atr_mult"][s]))
         for s in ("scalp", "intraday", "swing")
     }
+    # Per-venue trail rope overrides. Each venue bucket fills missing styles
+    # from the default trail_atr_mult so a partial override still works.
+    trail_mult_by_venue_raw = raw.get("trail_atr_mult_by_venue") or {}
+    merged["trail_atr_mult_by_venue"] = {}
+    if isinstance(trail_mult_by_venue_raw, dict):
+        for venue, bucket in trail_mult_by_venue_raw.items():
+            if not isinstance(bucket, dict):
+                continue
+            merged["trail_atr_mult_by_venue"][str(venue).lower()] = {
+                s: float(bucket.get(s, merged["trail_atr_mult"][s]))
+                for s in ("scalp", "intraday", "swing")
+            }
+    # Peak-R give-back budget per style (default) and optional per-venue.
+    giveback_raw = raw.get("trail_giveback_r") or {}
+    if isinstance(giveback_raw, dict):
+        merged["trail_giveback_r"] = {
+            s: float(giveback_raw.get(s, 0.0))
+            for s in ("scalp", "intraday", "swing")
+        }
+    else:
+        try:
+            _gb_scalar = float(giveback_raw)
+        except (TypeError, ValueError):
+            _gb_scalar = 0.0
+        merged["trail_giveback_r"] = {
+            s: _gb_scalar for s in ("scalp", "intraday", "swing")
+        }
+    giveback_by_venue_raw = raw.get("trail_giveback_r_by_venue") or {}
+    merged["trail_giveback_r_by_venue"] = {}
+    if isinstance(giveback_by_venue_raw, dict):
+        for venue, bucket in giveback_by_venue_raw.items():
+            if not isinstance(bucket, dict):
+                continue
+            merged["trail_giveback_r_by_venue"][str(venue).lower()] = {
+                s: float(bucket.get(s, merged["trail_giveback_r"][s]))
+                for s in ("scalp", "intraday", "swing")
+            }
+    merged["pre_activation_profit_protect_enabled"] = bool(
+        raw.get(
+            "pre_activation_profit_protect_enabled",
+            _DEFAULT_CFG["pre_activation_profit_protect_enabled"],
+        )
+    )
+    for key in (
+        "pre_activation_profit_arm_r",
+        "pre_activation_profit_close_r",
+        "pre_activation_profit_giveback_r",
+    ):
+        raw_map = raw.get(key, _DEFAULT_CFG[key])
+        defaults = _DEFAULT_CFG[key]
+        if isinstance(raw_map, dict):
+            merged[key] = {
+                s: float(raw_map.get(s, defaults[s]))
+                for s in ("scalp", "intraday", "swing")
+            }
+        else:
+            try:
+                scalar = float(raw_map)
+            except (TypeError, ValueError):
+                scalar = float(defaults["intraday"])
+            merged[key] = {s: scalar for s in ("scalp", "intraday", "swing")}
+        by_venue_key = f"{key}_by_venue"
+        by_venue_raw = raw.get(by_venue_key) or {}
+        merged[by_venue_key] = {}
+        if isinstance(by_venue_raw, dict):
+            for venue, bucket in by_venue_raw.items():
+                if not isinstance(bucket, dict):
+                    continue
+                merged[by_venue_key][str(venue).lower()] = {
+                    s: float(bucket.get(s, merged[key][s]))
+                    for s in ("scalp", "intraday", "swing")
+                }
+    merged["trail_clear_broker_tp_on_activation"] = bool(
+        raw.get("trail_clear_broker_tp_on_activation", True)
+    )
     merged["trail_lookback"] = int(raw.get("trail_lookback", _DEFAULT_CFG["trail_lookback"]))
     trail_tf_raw = raw.get("trail_timeframe") or {}
     merged["trail_timeframe"] = {
@@ -357,7 +614,108 @@ def _get_timed_cfg(config_fn) -> dict:
     merged["trail_confirm_rsi_threshold"] = int(raw.get("trail_confirm_rsi_threshold", _DEFAULT_CFG["trail_confirm_rsi_threshold"]))
     merged["trail_confirm_rsi_period"] = int(raw.get("trail_confirm_rsi_period", _DEFAULT_CFG["trail_confirm_rsi_period"]))
     merged["trail_confirm_macd"] = bool(raw.get("trail_confirm_macd", _DEFAULT_CFG["trail_confirm_macd"]))
+    merged["timer_tightens_trail"] = bool(raw.get("timer_tightens_trail", _DEFAULT_CFG["timer_tightens_trail"]))
+    try:
+        merged["timer_tighten_factor"] = float(raw.get("timer_tighten_factor", _DEFAULT_CFG["timer_tighten_factor"]))
+    except (TypeError, ValueError):
+        merged["timer_tighten_factor"] = float(_DEFAULT_CFG["timer_tighten_factor"])
     return merged
+
+
+def _activation_r_for(tcfg: dict, style: str) -> float:
+    """Per-style activation R-multiple, with scalar back-compat handled in _get_timed_cfg."""
+    act = tcfg.get("trail_activation_r")
+    if isinstance(act, dict):
+        try:
+            return float(act.get(style, act.get("intraday", 1.0)))
+        except (TypeError, ValueError):
+            return 1.0
+    try:
+        return float(act)
+    except (TypeError, ValueError):
+        return 1.0
+
+
+def _trail_atr_mult_for(tcfg: dict, style: str, venue: str | None) -> float:
+    """Resolve trail ATR multiplier. Per-venue override wins when defined; else default per-style."""
+    by_venue = tcfg.get("trail_atr_mult_by_venue") or {}
+    if venue and isinstance(by_venue, dict):
+        bucket = by_venue.get(venue) or by_venue.get(venue.lower())
+        if isinstance(bucket, dict):
+            try:
+                return float(bucket.get(style, bucket.get("intraday", 2.5)))
+            except (TypeError, ValueError):
+                pass
+    default = tcfg.get("trail_atr_mult") or {}
+    if isinstance(default, dict):
+        try:
+            return float(default.get(style, default.get("intraday", 2.5)))
+        except (TypeError, ValueError):
+            return 2.5
+    try:
+        return float(default)
+    except (TypeError, ValueError):
+        return 2.5
+
+
+def _giveback_r_for(tcfg: dict, style: str, venue: str | None) -> float:
+    """Resolve peak-R give-back budget. Per-venue override wins; 0 disables give-back close."""
+    by_venue = tcfg.get("trail_giveback_r_by_venue") or {}
+    if venue and isinstance(by_venue, dict):
+        bucket = by_venue.get(venue) or by_venue.get(venue.lower())
+        if isinstance(bucket, dict):
+            try:
+                return float(bucket.get(style, bucket.get("intraday", 0.0)))
+            except (TypeError, ValueError):
+                pass
+    default = tcfg.get("trail_giveback_r") or {}
+    if isinstance(default, dict):
+        try:
+            return float(default.get(style, default.get("intraday", 0.0)))
+        except (TypeError, ValueError):
+            return 0.0
+    try:
+        return float(default)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _venue_style_r_for(
+    tcfg: dict,
+    key: str,
+    style: str,
+    venue: str | None,
+    default: float = 0.0,
+) -> float:
+    by_venue = tcfg.get(f"{key}_by_venue") or {}
+    if venue and isinstance(by_venue, dict):
+        bucket = by_venue.get(venue) or by_venue.get(str(venue).lower())
+        if isinstance(bucket, dict):
+            try:
+                return float(bucket.get(style, bucket.get("intraday", default)))
+            except (TypeError, ValueError):
+                pass
+    default_map = tcfg.get(key) or {}
+    if isinstance(default_map, dict):
+        try:
+            return float(default_map.get(style, default_map.get("intraday", default)))
+        except (TypeError, ValueError):
+            return default
+    try:
+        return float(default_map)
+    except (TypeError, ValueError):
+        return default
+
+
+def _state_key(venue: str, audit_id, ticket) -> str:
+    """Stable per-trade key. audit_id is the canonical identity; ticket is fallback only.
+
+    Two Bybit positions with ticket=0 (split legs / fallback matching) would otherwise
+    collide on a ticket-only key.
+    """
+    if audit_id not in (None, "", 0):
+        return f"{venue}:aid:{audit_id}"
+    return f"{venue}:tkt:{ticket}"
 
 
 def _load_recent_audit_rows(db_path: str) -> list[dict]:
@@ -368,7 +726,7 @@ def _load_recent_audit_rows(db_path: str) -> list[dict]:
             rows = con.execute(
                 """
                 SELECT id, ticket, pair, engine, style, ts, direction, entry_price, sl, tp,
-                       tp_partial, volume, risk_amount, asset_class, exit_time
+                       tp_partial, volume, risk_amount, asset_class, exit_time, grade
                 FROM   audit_log
                 WHERE  pair IS NOT NULL
                   AND  grade NOT LIKE '%ERR%'
@@ -389,6 +747,107 @@ def _safe_float(value) -> float:
         return float(value)
     except (TypeError, ValueError):
         return 0.0
+
+
+def _risk_sl_for_activation(audit_sl: float, live_sl: float) -> float:
+    """SL price used for R-multiples and chandelier context.
+
+    Prefer the broker live SL when known so activation matches the stop the
+    position is working against; otherwise use audit (fill) SL.
+    """
+    a = _safe_float(audit_sl)
+    l = _safe_float(live_sl)
+    return l if l > 0 else a
+
+
+def _log_trail_ratchet_broker_outcome(
+    *,
+    venue: str,
+    pair: str,
+    detail: str,
+    style: str,
+    new_sl: float,
+    current_r: float,
+    trail_reason: str | None,
+    ratchet_res: dict,
+) -> None:
+    """Log broker outcome for trail SL ratchet.
+
+    ``success=True`` + ``skipped=True`` (MT5) or ``alreadySet`` (Bybit) means the
+    protective SL is already at or beyond the target — not an error.
+    """
+    if ratchet_res.get("success") and not ratchet_res.get("skipped"):
+        if ratchet_res.get("alreadySet"):
+            log.info(
+                f"[TIMED_EXIT] TRAIL RATCHET no-op: {venue} {detail} pair={pair} "
+                f"style={style} target_sl={new_sl:.5f} R={current_r:.2f} trail_reason={trail_reason} "
+                f"reason=SL already at broker target"
+            )
+            return
+        log.info(
+            f"[TIMED_EXIT] TRAIL RATCHET: {venue} {detail} pair={pair} "
+            f"style={style} new_sl={new_sl:.5f} R={current_r:.2f} reason={trail_reason}"
+        )
+        return
+    if ratchet_res.get("success") and ratchet_res.get("skipped"):
+        log.info(
+            f"[TIMED_EXIT] TRAIL RATCHET no-op: {venue} {detail} pair={pair} "
+            f"style={style} target_sl={new_sl:.5f} R={current_r:.2f} trail_reason={trail_reason} "
+            f"broker_reason={ratchet_res.get('reason')!r}"
+        )
+        return
+    log.warning(
+        f"[TIMED_EXIT] TRAIL RATCHET failed/skipped: {venue} {detail} pair={pair} "
+        f"style={style} target_sl={new_sl:.5f} R={current_r:.2f} trail_reason={trail_reason} "
+        f"success={ratchet_res.get('success')} skipped={ratchet_res.get('skipped')} "
+        f"error={ratchet_res.get('error')!r} broker_reason={ratchet_res.get('reason')!r}"
+    )
+
+
+def _timeframe_minutes(tf: str) -> float:
+    raw = str(tf or "").strip().upper()
+    if not raw:
+        return 60.0
+    if raw[0].isalpha():
+        unit = raw[0]
+        value_raw = raw[1:] or "1"
+    else:
+        unit = raw[-1]
+        value_raw = raw[:-1] or "1"
+    try:
+        value = max(float(value_raw), 1.0)
+    except (TypeError, ValueError):
+        value = 1.0
+    if unit == "M":
+        return value
+    if unit == "H":
+        return value * 60.0
+    if unit == "D":
+        return value * 24.0 * 60.0
+    if unit == "W":
+        return value * 7.0 * 24.0 * 60.0
+    return 60.0
+
+
+def _live_pnl_r(row: dict, entry: float, sl: float, volume: float, live_pnl: float) -> float:
+    try:
+        risk_amount = float(row.get("risk_amount") or 0)
+    except (TypeError, ValueError):
+        risk_amount = 0.0
+    if live_pnl != 0 and risk_amount > 0:
+        return round(float(live_pnl) / risk_amount, 2)
+    risk_dist = abs(float(entry) - float(sl)) if entry and sl else 0.0
+    if live_pnl != 0 and risk_dist > 0 and volume > 0:
+        return round(float(live_pnl) / (risk_dist * float(volume)), 2)
+    return 0.0
+
+
+def _audit_row_is_executed_like(row: dict) -> bool:
+    grade = str(row.get("grade") or "").strip().upper()
+    if grade in ("EXECUTED", "AUTO"):
+        return True
+    ticket = str(row.get("ticket") or "").strip()
+    return ticket not in ("", "0", "None") and _safe_float(row.get("volume")) > 0
 
 
 def _parse_iso_utc(ts_iso: str | None) -> datetime | None:
@@ -419,17 +878,16 @@ def _match_audit_row_for_position(position: dict, audit_rows: list[dict]) -> dic
         for row in audit_rows:
             if str(row.get("ticket", "")).strip() == pos_ticket and row.get("exit_time") is None:
                 return row
-        for row in audit_rows:
-            if str(row.get("ticket", "")).strip() == pos_ticket:
-                return row
 
     if not pos_pair or pos_entry <= 0:
         return None
 
     now_utc = datetime.now(timezone.utc)
-    candidates: list[tuple[float, dict]] = []
+    candidates: list[tuple[int, float, dict]] = []
 
     for row in audit_rows:
+        if row.get("exit_time") is not None:
+            continue
         row_pair = str(row.get("pair") or "").upper()
         if row_pair != pos_pair:
             continue
@@ -453,18 +911,17 @@ def _match_audit_row_for_position(position: dict, audit_rows: list[dict]) -> dic
         if age_min > (7 * 24 * 60):
             continue
 
-        # Prefer still-open rows, then the closest entry, then the most recent row.
+        # Prefer executed/live-like rows over signal-only rows, then closest entry.
         score = rel_entry_diff
-        if row.get("exit_time") is not None:
-            score += 0.25
         score += min(age_min, 24 * 60) / 100000.0
-        candidates.append((score, row))
+        executed_rank = 0 if _audit_row_is_executed_like(row) else 1
+        candidates.append((executed_rank, score, row))
 
     if not candidates:
         return None
 
-    candidates.sort(key=lambda item: item[0])
-    return candidates[0][1]
+    candidates.sort(key=lambda item: (item[0], item[1]))
+    return candidates[0][2]
 
 
 def _row_for_live_position(position: dict, audit_rows: list[dict]) -> dict | None:
@@ -490,15 +947,28 @@ def _row_for_live_position(position: dict, audit_rows: list[dict]) -> dict | Non
     }
 
 
-def _mark_timed_close(db_path: str, row: dict, venue: str, *, actual_close_price: float | None = None, live_pnl: float | None = None) -> None:
-    """Persist a timed-close marker so outcome logging preserves exit_reason.
+def _mark_timed_close(
+    db_path: str,
+    row: dict,
+    venue: str,
+    *,
+    actual_close_price: float | None = None,
+    live_pnl: float | None = None,
+    reason: str = "TIMED_CLOSE",
+) -> None:
+    """Persist an exit-reason marker so outcome logging preserves how the trade closed.
+
+    `reason` (suggestion #11) distinguishes:
+      - TRAIL_CLOSE   : chandelier trail breached + confirmed
+      - TIMED_CLOSE   : timer-driven close (legacy fixed-mode path)
+      - LOCK_SL_HIT   : reserved for future broker-detected lock SL hits
 
     MT5: prefer exact-ticket match; fall back to id-based mark when the audit row was
     matched by proximity (split legs, fallback matching) to avoid silent no-ops.
     Bybit: always mark by id (live ticket is not stable on Bybit).
-    
-    When actual_close_price and live_pnl are provided (from timed exit), write them immediately
-    to prevent the outcome monitor from overwriting with incorrect deal data.
+
+    When actual_close_price and live_pnl are provided (from timed exit), write them
+    immediately to prevent the outcome monitor from overwriting with incorrect deal data.
     """
     audit_id = row.get("audit_id")
     audit_ticket = str(row.get("audit_ticket") or "").strip()
@@ -517,7 +987,7 @@ def _mark_timed_close(db_path: str, row: dict, venue: str, *, actual_close_price
                 # Write actual close price and PnL immediately
                 query = "UPDATE audit_log SET exit_reason=?, exit_price=?, pnl=?, r_multiple=?, exit_time=? WHERE ticket=? AND exit_price IS NULL"
                 params = (
-                    "TIMED_CLOSE",
+                    reason,
                     actual_close_price,
                     live_pnl,
                     r_multiple,
@@ -526,13 +996,13 @@ def _mark_timed_close(db_path: str, row: dict, venue: str, *, actual_close_price
                 )
             else:
                 query = "UPDATE audit_log SET exit_reason=? WHERE ticket=? AND exit_price IS NULL"
-                params = ("TIMED_CLOSE", audit_ticket)
+                params = (reason, audit_ticket)
         elif audit_id is not None:
             # Fallback: matched by proximity (split legs, etc.) — use stable row id
             if actual_close_price is not None and live_pnl is not None:
                 query = "UPDATE audit_log SET exit_reason=?, exit_price=?, pnl=?, r_multiple=?, exit_time=? WHERE id=? AND exit_price IS NULL"
                 params = (
-                    "TIMED_CLOSE",
+                    reason,
                     actual_close_price,
                     live_pnl,
                     r_multiple,
@@ -541,7 +1011,7 @@ def _mark_timed_close(db_path: str, row: dict, venue: str, *, actual_close_price
                 )
             else:
                 query = "UPDATE audit_log SET exit_reason=? WHERE id=? AND exit_price IS NULL"
-                params = ("TIMED_CLOSE", audit_id)
+                params = (reason, audit_id)
         else:
             log.debug(f"[TIMED_EXIT] _mark_timed_close: no usable key for MT5 {row.get('pair')} — skipping")
             return
@@ -549,8 +1019,19 @@ def _mark_timed_close(db_path: str, row: dict, venue: str, *, actual_close_price
         if audit_id is None:
             log.debug(f"[TIMED_EXIT] _mark_timed_close: no audit_id for Bybit {row.get('pair')} — skipping")
             return
-        query = "UPDATE audit_log SET exit_reason=? WHERE id=? AND exit_price IS NULL"
-        params = ("TIMED_CLOSE", audit_id)
+        if actual_close_price is not None and live_pnl is not None:
+            query = "UPDATE audit_log SET exit_reason=?, exit_price=?, pnl=?, r_multiple=?, exit_time=? WHERE id=? AND exit_price IS NULL"
+            params = (
+                reason,
+                actual_close_price,
+                live_pnl,
+                r_multiple,
+                datetime.now(timezone.utc).isoformat(),
+                audit_id,
+            )
+        else:
+            query = "UPDATE audit_log SET exit_reason=? WHERE id=? AND exit_price IS NULL"
+            params = (reason, audit_id)
 
     try:
         with sqlite3.connect(db_path, timeout=10.0) as con:
@@ -605,39 +1086,74 @@ def _live_current_price(live: dict, fallback: float = 0.0) -> float:
 
 def _compute_chandelier_trail(
     pair: str, style: str, direction: str, entry: float, sl: float,
-    tcfg: dict, ticket_key: str,
+    tcfg: dict, ticket_key: str, *, mins_open: float = 0.0,
+    venue: str | None = None,
 ) -> float | None:
     """Compute Chandelier-style trailing stop from recent candle data.
 
-    Returns the trail price level, or None if candle data is unavailable.
-    Updates _trail_state[ticket_key] with the running best trail level
-    (ratchets in the trade's favour; never widens).
+    Returns the trail price level. On candle/data failure returns the *previous*
+    `_trail_state[ticket_key]` if present (so a transient candle fetch hiccup
+    does not collapse the trade into the timed-close path); only returns None
+    when no prior level exists. Successful computations ratchet in the trade's
+    favour and are persisted to disk via _persist_state.
     """
+    prev = _trail_state.get(ticket_key)
+
+    def _fail(reason: str) -> float | None:
+        if prev is not None:
+            log.warning(
+                f"[TIMED_EXIT] Trail data unavailable ({reason}) — holding previous "
+                f"level {prev:.5f}: pair={pair} style={style} key={ticket_key}"
+            )
+            return prev
+        log.warning(
+            f"[TIMED_EXIT] Trail data unavailable ({reason}) and no prior level — "
+            f"trail inactive this tick: pair={pair} style={style} key={ticket_key}"
+        )
+        return None
+
     try:
         from indicators import calc_atr
     except ImportError:
-        return None
+        return _fail("indicators import failed")
 
     tf = tcfg["trail_timeframe"].get(style, "H4")
     lookback = tcfg["trail_lookback"]
-    mult = tcfg["trail_atr_mult"].get(style, 2.5)
+    mult = _trail_atr_mult_for(tcfg, style, venue)
+
+    # Timer-tightens-trail: once mins_open exceeds the style's close threshold,
+    # tighten the chandelier multiplier instead of force-closing the trade.
+    if tcfg.get("timer_tightens_trail") and mins_open > 0:
+        scfg = tcfg.get(style) or {}
+        if style == "swing":
+            close_min = float(scfg.get("close_days", 0.0)) * 24 * 60
+        else:
+            close_min = float(scfg.get("close_min", 0.0))
+        if close_min > 0 and mins_open >= close_min:
+            mult = mult * float(tcfg.get("timer_tighten_factor", 0.6))
 
     candles = _fetch_timed_exit_candles(pair, tf, lookback + 20)
 
     if not candles or len(candles) < lookback + 1:
-        return None
+        return _fail("insufficient candles")
 
     highs, lows, closes = _ohlc_series_from_candles(candles)
     if len(closes) < lookback + 1:
-        return None
+        return _fail("insufficient parsed closes")
 
     atr_series = calc_atr(highs, lows, closes, 14)
     atr_val = next((v for v in reversed(atr_series) if v is not None), None)
     if atr_val is None or atr_val <= 0:
-        return None
+        return _fail("ATR not computable")
 
-    recent_highs = highs[-lookback:]
-    recent_lows = lows[-lookback:]
+    tf_minutes = _timeframe_minutes(tf)
+    try:
+        bars_since_entry = int(float(mins_open or 0.0) // tf_minutes)
+    except (TypeError, ValueError, ZeroDivisionError):
+        bars_since_entry = 1
+    effective_lookback = max(1, min(lookback, max(1, bars_since_entry)))
+    recent_highs = highs[-effective_lookback:]
+    recent_lows = lows[-effective_lookback:]
     highest = max(recent_highs)
     lowest = min(recent_lows)
 
@@ -646,7 +1162,6 @@ def _compute_chandelier_trail(
     else:
         raw_trail = lowest + mult * atr_val
 
-    prev = _trail_state.get(ticket_key)
     if prev is not None:
         if direction == "LONG":
             raw_trail = max(raw_trail, prev)
@@ -654,6 +1169,7 @@ def _compute_chandelier_trail(
             raw_trail = min(raw_trail, prev)
 
     _trail_state[ticket_key] = raw_trail
+    _persist_trail_state(ticket_key, raw_trail)
     return raw_trail
 
 
@@ -663,7 +1179,7 @@ def _check_indicator_confirmation(
     """Check RSI and/or MACD for direction-change confirmation.
 
     Returns True if indicators confirm the reversal (safe to close).
-    Returns True on any data error (fail-open: allow close if we can't check).
+    Returns False on any data error (fail-closed: keep trailing if we can't check).
     """
     if not tcfg.get("trail_indicator_confirm", False):
         return True
@@ -671,7 +1187,7 @@ def _check_indicator_confirmation(
     try:
         from indicators import calc_rsi, calc_macd
     except ImportError:
-        return True
+        return False
 
     tf = tcfg["trail_timeframe"].get(style, "H4")
     rsi_period = tcfg.get("trail_confirm_rsi_period", 14)
@@ -681,16 +1197,16 @@ def _check_indicator_confirmation(
     candles = _fetch_timed_exit_candles(pair, tf, max(rsi_period + 30, 60))
 
     if not candles or len(candles) < rsi_period + 5:
-        return True
+        return False
 
     _highs, _lows, closes = _ohlc_series_from_candles(candles)
     if len(closes) < rsi_period + 5:
-        return True
+        return False
 
     rsi_series = calc_rsi(closes, rsi_period)
     rsi_val = next((v for v in reversed(rsi_series) if v is not None), None)
     if rsi_val is None:
-        return True
+        return False
 
     rsi_confirms = False
     if direction == "LONG" and rsi_val < rsi_thresh:
@@ -708,7 +1224,7 @@ def _check_indicator_confirmation(
     hist = macd_data.get("hist", [])
     recent_hist = [v for v in hist[-3:] if v is not None]
     if len(recent_hist) < 2:
-        return True
+        return False
 
     if direction == "LONG" and recent_hist[-1] < 0 and recent_hist[-2] >= 0:
         return True
@@ -723,58 +1239,211 @@ def _check_indicator_confirmation(
     return False
 
 
-def _should_trail_close(
+def _evaluate_trail(
     row: dict, style: str, direction: str, entry: float, sl: float,
-    cur_price: float, tcfg: dict,
-) -> bool:
-    """Evaluate whether a trailing ATR TP close should fire.
+    cur_price: float, tcfg: dict, *, mins_open: float = 0.0,
+    state_key: str | None = None,
+    live_sl_for_r: float | None = None,
+    venue: str | None = None,
+) -> dict:
+    """Single decision point for the chandelier trail state machine.
 
-    Returns True if price has broken the Chandelier trail AND indicator
-    confirmation passes (when enabled). Returns False otherwise.
+    ``sl`` is the audit (opening) stop; ``live_sl_for_r`` when >0 overrides for
+    R-multiples and chandelier inputs so activation matches the broker stop.
+
+    Returns one of:
+        {"action": "none",    "reason": ...}
+        {"action": "ratchet", "new_sl": float, "reason": ..., "trail_level",
+                              "clear_broker_tp": bool}   -- ratchet (and optionally clear TP)
+        {"action": "close",   "trail_level": float, "reason": ...}
+
+    The "ratchet" path may set ``clear_broker_tp`` once per ticket on first
+    activation (when trail_clear_broker_tp_on_activation is true) so the
+    handler can drop the fixed broker TP. Subsequent ticks omit the flag.
+
+    The "close" reasons:
+        - "breach_confirmed" — price crossed the chandelier line (+ optional indicator confirm)
+        - "peak_giveback"    — current R fell below peak R by trail_giveback_r
+        - "profit_roundtrip" — sub-activation profit was armed, then gave back to floor
     """
-    _risk_dist = abs(entry - sl) if sl > 0 else 0.0
-    if _risk_dist <= 0:
-        return False
+    pair = row.get("pair") or ""
+    if state_key is None:
+        state_key = f"{row.get('ticket')}_{pair}"
+
+    sl_for_r = _risk_sl_for_activation(
+        sl, live_sl_for_r if live_sl_for_r is not None else 0.0
+    )
+    risk_dist = abs(entry - sl_for_r) if sl_for_r > 0 else 0.0
+    if risk_dist <= 0:
+        return {"action": "none", "reason": "no_risk_dist"}
 
     if direction == "LONG":
-        current_r = (cur_price - entry) / _risk_dist
+        current_r = (cur_price - entry) / risk_dist
     else:
-        current_r = (entry - cur_price) / _risk_dist
+        current_r = (entry - cur_price) / risk_dist
 
-    activation_r = tcfg.get("trail_activation_r", 1.0)
+    activation_r = _activation_r_for(tcfg, style)
+    if tcfg.get("pre_activation_profit_protect_enabled"):
+        arm_r = _venue_style_r_for(
+            tcfg, "pre_activation_profit_arm_r", style, venue, default=0.0
+        )
+        close_r = _venue_style_r_for(
+            tcfg, "pre_activation_profit_close_r", style, venue, default=0.0
+        )
+        giveback_r_pre = _venue_style_r_for(
+            tcfg, "pre_activation_profit_giveback_r", style, venue, default=0.0
+        )
+        prev_peak_pre = _peak_r_state.get(state_key)
+        peak_r_pre = prev_peak_pre if prev_peak_pre is not None else current_r
+        if current_r > peak_r_pre:
+            peak_r_pre = current_r
+        if arm_r > 0 and peak_r_pre >= arm_r:
+            if prev_peak_pre is None or current_r > prev_peak_pre:
+                _peak_r_state[state_key] = current_r
+                _persist_peak_r(state_key, current_r)
+                peak_r_pre = current_r
+            else:
+                _peak_r_state.setdefault(state_key, prev_peak_pre)
+
+            roundtrip_close = current_r <= close_r
+            giveback_close_pre = (
+                giveback_r_pre > 0 and (peak_r_pre - current_r) >= giveback_r_pre
+            )
+            if current_r < activation_r and (roundtrip_close or giveback_close_pre):
+                log.info(
+                    f"[TIMED_EXIT] PROFIT ROUNDTRIP close: {pair} style={style} dir={direction} "
+                    f"peak_r={peak_r_pre:.2f} current_r={current_r:.2f} "
+                    f"arm_r={arm_r:.2f} close_r={close_r:.2f} giveback_r={giveback_r_pre:.2f}"
+                )
+                return {
+                    "action": "close",
+                    "trail_level": None,
+                    "current_r": current_r,
+                    "peak_r": peak_r_pre,
+                    "giveback_r": giveback_r_pre,
+                    "reason": "profit_roundtrip",
+                }
+
     if current_r < activation_r:
-        return False
+        return {"action": "none", "reason": "below_activation", "current_r": current_r}
 
-    pair = row.get("pair") or ""
-    ticket_key = f"{row.get('ticket')}_{pair}"
-
+    first_activation_tick = _trail_state.get(state_key) is None
     trail_level = _compute_chandelier_trail(
-        pair, style, direction, entry, sl, tcfg, ticket_key,
+        pair, style, direction, entry, sl_for_r, tcfg, state_key,
+        mins_open=mins_open, venue=venue,
     )
     if trail_level is None:
-        return False
+        return {"action": "none", "reason": "no_trail_data", "current_r": current_r}
 
-    breached = False
-    if direction == "LONG" and cur_price < trail_level:
-        breached = True
-    elif direction == "SHORT" and cur_price > trail_level:
-        breached = True
+    if first_activation_tick:
+        epsilon = max(abs(cur_price) * 1e-8, 1e-8)
+        clamped_trail = trail_level
+        if direction == "LONG" and trail_level >= cur_price:
+            clamped_trail = cur_price - epsilon
+        elif direction == "SHORT" and trail_level <= cur_price:
+            clamped_trail = cur_price + epsilon
+        if clamped_trail != trail_level:
+            log.info(
+                f"[TIMED_EXIT] First activation trail clamped: {pair} style={style} "
+                f"raw={trail_level:.5f} clamped={clamped_trail:.5f} price={cur_price:.5f}"
+            )
+            trail_level = clamped_trail
+            _trail_state[state_key] = trail_level
+            _persist_trail_state(state_key, trail_level)
+
+    # Peak-R tracking. Ratchets up monotonically. Persisted so a monitor
+    # restart does not erase the peak and reset the give-back budget.
+    prev_peak = _peak_r_state.get(state_key, current_r)
+    if current_r > prev_peak:
+        _peak_r_state[state_key] = current_r
+        _persist_peak_r(state_key, current_r)
+        peak_r = current_r
+    else:
+        _peak_r_state.setdefault(state_key, prev_peak)
+        peak_r = prev_peak
+
+    giveback_r = _giveback_r_for(tcfg, style, venue)
+    giveback_close = (
+        giveback_r > 0 and (peak_r - current_r) >= giveback_r and peak_r >= activation_r
+    )
+
+    breached = (
+        (direction == "LONG" and cur_price < trail_level)
+        or (direction == "SHORT" and cur_price > trail_level)
+    )
+
+    # Whether to signal the broker TP drop. One-shot per ticket; gated by config.
+    clear_broker_tp = bool(
+        tcfg.get("trail_clear_broker_tp_on_activation", True)
+        and state_key not in _tp_cleared_state
+    )
+    if clear_broker_tp:
+        # Mark as cleared *before* returning so a subsequent tick in the same
+        # process doesn't re-send the clear if the handler ignored it.
+        _tp_cleared_state.add(state_key)
+        _persist_tp_cleared(state_key)
+
+    if giveback_close:
+        log.info(
+            f"[TIMED_EXIT] PEAK GIVE-BACK close: {pair} style={style} dir={direction} "
+            f"peak_r={peak_r:.2f} current_r={current_r:.2f} giveback_r={giveback_r:.2f}"
+        )
+        return {
+            "action": "close",
+            "trail_level": trail_level,
+            "current_r": current_r,
+            "peak_r": peak_r,
+            "giveback_r": giveback_r,
+            "reason": "peak_giveback",
+        }
 
     if not breached:
-        return False
+        return {
+            "action": "ratchet",
+            "new_sl": trail_level,
+            "trail_level": trail_level,
+            "current_r": current_r,
+            "peak_r": peak_r,
+            "clear_broker_tp": clear_broker_tp,
+            "reason": "active",
+        }
 
     if not _check_indicator_confirmation(pair, style, direction, tcfg):
         log.debug(
             f"[TIMED_EXIT] Trail breached but indicator confirmation failed: {pair} "
             f"style={style} trail={trail_level:.5f} price={cur_price:.5f}"
         )
-        return False
+        # Breach without confirmation — keep ratcheting; do not close.
+        return {
+            "action": "ratchet",
+            "new_sl": trail_level,
+            "trail_level": trail_level,
+            "current_r": current_r,
+            "peak_r": peak_r,
+            "clear_broker_tp": clear_broker_tp,
+            "reason": "breach_no_confirm",
+        }
 
     log.info(
         f"[TIMED_EXIT] TRAIL CLOSE signal: {pair} style={style} direction={direction} "
         f"trail={trail_level:.5f} price={cur_price:.5f} R={current_r:.2f}"
     )
-    return True
+    return {
+        "action": "close",
+        "trail_level": trail_level,
+        "current_r": current_r,
+        "peak_r": peak_r,
+        "reason": "breach_confirmed",
+    }
+
+
+def _should_trail_close(
+    row: dict, style: str, direction: str, entry: float, sl: float,
+    cur_price: float, tcfg: dict,
+) -> bool:
+    """Backward-compat boolean wrapper. New code should call _evaluate_trail() directly."""
+    res = _evaluate_trail(row, style, direction, entry, sl, cur_price, tcfg)
+    return res.get("action") == "close"
 
 
 def _handle_mt5_row(row: dict, tcfg: dict, db_path: str | None = None) -> None:
@@ -783,6 +1452,7 @@ def _handle_mt5_row(row: dict, tcfg: dict, db_path: str | None = None) -> None:
         from mt5_executor import (
             mt5_close_position,
             mt5_move_sl_to_breakeven,
+            mt5_modify_protective_stops,
             mt5_get_positions,
         )
         import telegram_notify
@@ -809,6 +1479,12 @@ def _handle_mt5_row(row: dict, tcfg: dict, db_path: str | None = None) -> None:
     # Get live position data
     pos_result = mt5_get_positions()
     if pos_result.get("error"):
+        log.warning(
+            "[TIMED_EXIT] mt5_get_positions error for ticket=%s pair=%s — skip tick (%s)",
+            ticket,
+            row.get("pair"),
+            pos_result.get("error"),
+        )
         return
     live = next(
         (p for p in pos_result.get("positions", []) if p.get("ticket") == ticket),
@@ -836,10 +1512,36 @@ def _handle_mt5_row(row: dict, tcfg: dict, db_path: str | None = None) -> None:
     be_due_now = mins >= be_trigger_min
 
     _sl_raw = float(row.get("sl") or 0)
+    _live_sl_for_trail = _safe_float(live.get("sl"))
+    state_key = _state_key("mt5", row.get("audit_id"), ticket)
 
-    # ── Phase 2: Trailing ATR TP ──────────────────────────────────────────────
-    if tcfg.get("tp_mode") == "trailing_atr" and profit > 0:
-        if _should_trail_close(row, style, direction, entry, _sl_raw, cur_price, tcfg):
+    # ── Trailing ATR TP (mode-dispatched single exit policy) ──────────────────
+    # When tp_mode=="trailing_atr", the chandelier trail is the only profit-side
+    # exit (unconditional on broker profit sign so spreads/fees cannot drop the
+    # trade back into timed-close / BE paths). Below activation_r the original
+    # ATR SL protects; above it, the broker SL ratchets with the trail (#6).
+    if tcfg.get("tp_mode") == "trailing_atr":
+        trail_eval = _evaluate_trail(
+            row,
+            style,
+            direction,
+            entry,
+            _sl_raw,
+            cur_price,
+            tcfg,
+            mins_open=mins,
+            state_key=state_key,
+            live_sl_for_r=_live_sl_for_trail,
+            venue="mt5",
+        )
+        action = trail_eval.get("action")
+        close_reason = "TRAIL_CLOSE"
+        if trail_eval.get("reason") == "peak_giveback":
+            close_reason = "TRAIL_GIVEBACK"
+        elif trail_eval.get("reason") == "profit_roundtrip":
+            close_reason = "TRAIL_PROFIT_ROUNDTRIP"
+
+        if action == "close":
             result = mt5_close_position(ticket)
             if result.get("success"):
                 actual_close_price = result.get("closePrice")
@@ -848,16 +1550,54 @@ def _handle_mt5_row(row: dict, tcfg: dict, db_path: str | None = None) -> None:
                 if live_pnl != 0 and row.get("risk_amount") and row["risk_amount"] > 0:
                     pnl_r = round(live_pnl / float(row["risk_amount"]), 2)
                 if db_path:
-                    _mark_timed_close(db_path, row, "mt5", actual_close_price=actual_close_price, live_pnl=live_pnl)
+                    _mark_timed_close(
+                        db_path, row, "mt5",
+                        actual_close_price=actual_close_price,
+                        live_pnl=live_pnl,
+                        reason=close_reason,
+                    )
                 log.info(
-                    f"[TIMED_EXIT] TRAIL CLOSE: {row['pair']} ticket={ticket} "
+                    f"[TIMED_EXIT] {close_reason}: {row['pair']} ticket={ticket} "
                     f"style={style} mins={mins:.0f} profit=${live_pnl:.2f} R={pnl_r}"
                 )
                 try:
                     telegram_notify.notify_trade_closed(pair=row["pair"], pnl_r=pnl_r, is_win=live_pnl > 0, duration_minutes=mins)
                 except Exception:
                     pass
-                return
+            return
+
+        if action == "ratchet":
+            new_sl = float(trail_eval["new_sl"])
+            tr = trail_eval.get("reason")
+            cr = float(trail_eval.get("current_r", 0) or 0)
+            clear_tp = bool(trail_eval.get("clear_broker_tp"))
+            sl_tightens = _protective_sl_tightens(direction, new_sl, _live_sl_for_trail, entry)
+            if sl_tightens or clear_tp:
+                ratchet_res = mt5_modify_protective_stops(
+                    ticket,
+                    sl=new_sl if sl_tightens else None,
+                    clear_tp=clear_tp,
+                )
+                if clear_tp and ratchet_res.get("success"):
+                    log.info(
+                        f"[TIMED_EXIT] Broker TP cleared (chandelier active): "
+                        f"{row['pair']} ticket={ticket} style={style} R={cr:.2f}"
+                    )
+                _log_trail_ratchet_broker_outcome(
+                    venue="MT5",
+                    pair=str(row.get("pair") or ""),
+                    detail=f"ticket={ticket}",
+                    style=style,
+                    new_sl=new_sl,
+                    current_r=cr,
+                    trail_reason=str(tr),
+                    ratchet_res=ratchet_res,
+                )
+        # Mode-dispatch: in trailing_atr mode, the trail block is the *only* profit-side
+        # exit. Suppress lock ladder and timed-close branches by returning here. BE is
+        # provided implicitly: once activation_r is reached the trail ratchets the broker
+        # SL up; below activation, the original ATR SL still protects.
+        return
 
     # ── Degenerate close-before-BE path (scalp/intraday with close_min <= be_min)
     if (
@@ -884,7 +1624,7 @@ def _handle_mt5_row(row: dict, tcfg: dict, db_path: str | None = None) -> None:
                 if live_pnl != 0 and row.get("risk_amount") and row["risk_amount"] > 0:
                     pnl_r = round(live_pnl / float(row["risk_amount"]), 2)
                 if db_path:
-                    _mark_timed_close(db_path, row, "mt5", actual_close_price=actual_close_price, live_pnl=live_pnl)
+                    _mark_timed_close(db_path, row, "mt5", actual_close_price=actual_close_price, live_pnl=live_pnl, reason="TIMED_CLOSE")
                 log.info(
                     f"[TIMED_EXIT] TIMED CLOSE: {row['pair']} ticket={ticket} "
                     f"style={style} mins={mins:.0f} profit=${live_pnl:.2f} R={pnl_r} "
@@ -910,7 +1650,7 @@ def _handle_mt5_row(row: dict, tcfg: dict, db_path: str | None = None) -> None:
 
     if use_scalp_lock:
         _try_scalp_profit_lock_sl(
-            ticket_key=str(ticket),
+            ticket_key=_state_key("mt5", row.get("audit_id"), ticket),
             risk_amount=_risk_amount,
             scfg=scfg,
             tcfg=tcfg,
@@ -988,7 +1728,7 @@ def _handle_mt5_row(row: dict, tcfg: dict, db_path: str | None = None) -> None:
                 if risk_dist > 0:
                     pnl_r = round(live_pnl / (risk_dist * float(row.get("volume", 1))), 2)
             if db_path:
-                _mark_timed_close(db_path, row, "mt5", actual_close_price=actual_close_price, live_pnl=live_pnl)
+                _mark_timed_close(db_path, row, "mt5", actual_close_price=actual_close_price, live_pnl=live_pnl, reason="TIMED_CLOSE")
             log.info(
                 f"[TIMED_EXIT] TIMED CLOSE: {row['pair']} ticket={ticket} "
                 f"style={style} mins={mins:.0f} profit=${live_pnl:.2f} R={pnl_r} "
@@ -1070,23 +1810,88 @@ def _handle_bybit_row(row: dict, tcfg: dict, db_path: str | None = None) -> None
     be_due_now = mins >= be_trigger_min
 
     _sl_raw = float(row.get("sl") or 0)
+    _live_sl_for_trail = _safe_float(live.get("sl"))
+    state_key = _state_key("bybit", row.get("audit_id"), ticket)
 
-    # ── Phase 2: Trailing ATR TP ──────────────────────────────────────────────
-    if tcfg.get("tp_mode") == "trailing_atr" and profit > 0:
-        if _should_trail_close(row, style, direction, entry, _sl_raw, cur_price, tcfg):
+    # ── Trailing ATR TP (mode-dispatched single exit policy) ──────────────────
+    # Same pattern as MT5: chandelier-only when tp_mode trailing_atr regardless of
+    # broker profit sign; broker SL ratchets with the trail; timed-close suppressed.
+    if tcfg.get("tp_mode") == "trailing_atr":
+        trail_eval = _evaluate_trail(
+            row,
+            style,
+            direction,
+            entry,
+            _sl_raw,
+            cur_price,
+            tcfg,
+            mins_open=mins,
+            state_key=state_key,
+            live_sl_for_r=_live_sl_for_trail,
+            venue="bybit",
+        )
+        action = trail_eval.get("action")
+        close_reason = "TRAIL_CLOSE"
+        if trail_eval.get("reason") == "peak_giveback":
+            close_reason = "TRAIL_GIVEBACK"
+        elif trail_eval.get("reason") == "profit_roundtrip":
+            close_reason = "TRAIL_PROFIT_ROUNDTRIP"
+
+        if action == "close":
             result = bybit_close_position(pair, direction, volume)
             if result.get("success"):
+                pnl_r = _live_pnl_r(row, entry, _sl_raw, volume, profit)
                 if db_path:
-                    _mark_timed_close(db_path, row, "bybit")
+                    _mark_timed_close(
+                        db_path, row, "bybit",
+                        actual_close_price=cur_price,
+                        live_pnl=profit,
+                        reason=close_reason,
+                    )
                 log.info(
-                    f"[TIMED_EXIT] TRAIL CLOSE: {pair} style={style} "
-                    f"mins={mins:.0f} profit=${profit:.2f}"
+                    f"[TIMED_EXIT] {close_reason}: {pair} style={style} "
+                    f"mins={mins:.0f} profit=${profit:.2f} R={pnl_r}"
                 )
                 try:
-                    telegram_notify.notify_trade_closed(pair=pair, pnl_r=0.0, is_win=True, duration_minutes=mins)
+                    telegram_notify.notify_trade_closed(pair=pair, pnl_r=pnl_r, is_win=profit > 0, duration_minutes=mins)
                 except Exception:
                     pass
-                return
+            return
+
+        if action == "ratchet":
+            new_sl = float(trail_eval["new_sl"])
+            tr = trail_eval.get("reason")
+            cr = float(trail_eval.get("current_r", 0) or 0)
+            clear_tp = bool(trail_eval.get("clear_broker_tp"))
+            sl_tightens = _protective_sl_tightens(direction, new_sl, _live_sl_for_trail, entry)
+            if not ccxt_sym:
+                log.warning(
+                    f"[TIMED_EXIT] TRAIL RATCHET blocked: Bybit ccxt symbol unresolved "
+                    f"pair={pair} style={style} target_sl={new_sl:.5f} R={cr:.2f} "
+                    f"trail_reason={tr}"
+                )
+            elif sl_tightens or clear_tp:
+                ratchet_res = bybit_move_sl_to_breakeven(
+                    ccxt_sym, direction, new_sl if sl_tightens else 0.0, volume,
+                    clear_tp=clear_tp,
+                )
+                if clear_tp and ratchet_res.get("success"):
+                    log.info(
+                        f"[TIMED_EXIT] Broker TP cleared (chandelier active): "
+                        f"{pair} symbol={ccxt_sym} style={style} R={cr:.2f}"
+                    )
+                _log_trail_ratchet_broker_outcome(
+                    venue="BYBIT",
+                    pair=str(pair),
+                    detail=f"symbol={ccxt_sym}",
+                    style=style,
+                    new_sl=new_sl,
+                    current_r=cr,
+                    trail_reason=str(tr),
+                    ratchet_res=ratchet_res,
+                )
+        # Mode-dispatch: only the trail manages exits in trailing_atr mode.
+        return
 
     # ── Degenerate close-before-BE path (scalp/intraday with close_min <= be_min)
     if (
@@ -1106,14 +1911,20 @@ def _handle_bybit_row(row: dict, tcfg: dict, db_path: str | None = None) -> None
         else:
             result = bybit_close_position(pair, direction, volume)
             if result.get("success"):
+                pnl_r = _live_pnl_r(row, entry, _sl_raw, volume, profit)
                 if db_path:
-                    _mark_timed_close(db_path, row, "bybit")
+                    _mark_timed_close(
+                        db_path, row, "bybit",
+                        actual_close_price=cur_price,
+                        live_pnl=profit,
+                        reason="TIMED_CLOSE",
+                    )
                 log.info(
                     f"[TIMED_EXIT] TIMED CLOSE: {pair} style={style} "
-                    f"mins={mins:.0f} profit=${profit:.2f}"
+                    f"mins={mins:.0f} profit=${profit:.2f} R={pnl_r}"
                 )
                 try:
-                    telegram_notify.notify_trade_closed(pair=pair, pnl_r=0, is_win=profit > 0, duration_minutes=mins)
+                    telegram_notify.notify_trade_closed(pair=pair, pnl_r=pnl_r, is_win=profit > 0, duration_minutes=mins)
                 except Exception:
                     pass
                 return
@@ -1131,7 +1942,7 @@ def _handle_bybit_row(row: dict, tcfg: dict, db_path: str | None = None) -> None
 
     if use_scalp_lock and ccxt_sym:
         _try_scalp_profit_lock_sl(
-            ticket_key=ticket,
+            ticket_key=_state_key("bybit", row.get("audit_id"), ticket),
             risk_amount=_risk_amount,
             scfg=scfg,
             tcfg=tcfg,
@@ -1196,14 +2007,20 @@ def _handle_bybit_row(row: dict, tcfg: dict, db_path: str | None = None) -> None
 
         result = bybit_close_position(pair, direction, volume)
         if result.get("success"):
+            pnl_r = _live_pnl_r(row, entry, _sl_raw, volume, profit)
             if db_path:
-                _mark_timed_close(db_path, row, "bybit")
+                _mark_timed_close(
+                    db_path, row, "bybit",
+                    actual_close_price=cur_price,
+                    live_pnl=profit,
+                    reason="TIMED_CLOSE",
+                )
             log.info(
                 f"[TIMED_EXIT] TIMED CLOSE: {pair} style={style} "
-                f"mins={mins:.0f} profit=${profit:.2f}"
+                f"mins={mins:.0f} profit=${profit:.2f} R={pnl_r}"
             )
             try:
-                telegram_notify.notify_trade_closed(pair=pair, pnl_r=0.0, is_win=True, duration_minutes=mins)
+                telegram_notify.notify_trade_closed(pair=pair, pnl_r=pnl_r, is_win=profit > 0, duration_minutes=mins)
             except Exception:
                 pass
         else:
@@ -1214,9 +2031,15 @@ def _handle_bybit_row(row: dict, tcfg: dict, db_path: str | None = None) -> None
 
 def _run_check(db_path: str, config_fn) -> None:
     """Single check cycle — called every interval by the monitor thread."""
+    global _state_db_path
     tcfg = _get_timed_cfg(config_fn)
     if not tcfg.get("enabled", True):
         return
+
+    # Capture db_path for persistence helpers and hydrate state on first run.
+    if _state_db_path is None and db_path:
+        _state_db_path = db_path
+        _hydrate_state_from_db(db_path)
 
     audit_rows = _load_recent_audit_rows(db_path)
     if not audit_rows:

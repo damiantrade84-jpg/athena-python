@@ -137,10 +137,48 @@ def _annotate_fetch_meta_with_bar_freshness(
         fetch_meta["bucketLag"] = bucket_lag
         fetch_meta["hasCurrentBucket"] = bool(has_current_bucket)
         fetch_meta["stalenessSeverity"] = severity
-        fetch_meta["lastBarStale"] = bool(
-            age_sec > (2 * tf_seconds)
-            or (live_feed and not has_current_bucket)
+        pt = pair if isinstance(pair, dict) else None
+        tf_u = str(tf or "").upper()
+        # #region agent log
+        if severity == "stale_multi_bucket":
+            try:
+                from athena_app.debug_ndjson_agent import append_agent_ndjson
+
+                append_agent_ndjson(
+                    {
+                        "hypothesisId": "H_cache_meta_multi",
+                        "location": "candles_cache._annotate_fetch_meta_with_bar_freshness",
+                        "message": "cache_meta_stale_multi_bucket",
+                        "runId": "post-fix",
+                        "data": {
+                            "pairDisplay": pt.get("display") if pt else None,
+                            "tf": tf_u,
+                            "bucketLag": bucket_lag,
+                            "offsetHoursPassedIn": float(offset_hours or 0.0),
+                            "lastBarAgeSec": age_sec,
+                            "liveFeedFlag": live_feed,
+                        },
+                    }
+                )
+            except Exception:
+                pass
+        # #endregion
+        # MT5 forex H1/H4: Engine A confirmed-only pipeline often lags provider series by
+        # exactly one closed bar while ticks are fresh; risk/data-freshness treats this as
+        # policy-normal (CONFIRMED_ONLY_OK). Align lastBarStale so guardian/quick-exec matches.
+        forex_mt5_struct = (
+            pt is not None
+            and str(pt.get("type") or "").lower() == "forex"
+            and str(pt.get("source") or "").lower() == "mt5"
+            and tf_u in {"H1", "H4"}
         )
+        age_exceeds_cap = age_sec > (2 * tf_seconds)
+        if forex_mt5_struct and severity == "stale_1_bucket":
+            fetch_meta["lastBarStale"] = bool(age_exceeds_cap)
+        else:
+            fetch_meta["lastBarStale"] = bool(
+                age_exceeds_cap or (live_feed and not has_current_bucket)
+            )
     fetch_meta["offsetHours"] = float(offset_hours or 0.0)
     return fetch_meta
 
@@ -164,9 +202,9 @@ def extract_candles(resp) -> list | None:
 def forex_h4_resample_offset_hours() -> float:
     """H4 bucket offset (hours) for H1→H4 resampling — must match `market_state` / MT5 grid."""
     try:
-        return float(CONFIG.get("FOREX_H4_RESAMPLE_OFFSET_HOURS", 1.0) or 1.0)
+        return float(CONFIG.get("FOREX_H4_RESAMPLE_OFFSET_HOURS", 2.0) or 2.0)
     except (TypeError, ValueError):
-        return 1.0
+        return 2.0
 
 
 def resample_from_h1(
@@ -547,9 +585,30 @@ def fetch_candles(
     # any stale MT5 entries created by older code cannot feed live scoring.
     if pair.get("source") == "mt5" and fetch_mt5:
         fetch_meta.update({"resolution": "rest", "upstream": "mt5"})
-        out_candles = fetch_mt5(pair, tf, limit)
-        if isinstance(out_candles, dict):
-            out_candles = extract_candles(out_candles)
+        mt5_resp = fetch_mt5(pair, tf, limit)
+        if isinstance(mt5_resp, dict):
+            fetch_meta["error"] = bool(mt5_resp.get("error"))
+            fetch_meta["detail"] = mt5_resp.get("detail")
+            out_candles = extract_candles(mt5_resp)
+            if mt5_resp.get("error") and out_candles and not bool(
+                CONFIG.get("MT5_CANDLE_FALLBACK_ENABLED", False)
+            ):
+                fetch_meta["fallback"] = "blocked_mt5_error_candles"
+                fetch_meta["bars"] = 0
+                _annotate_fetch_meta_with_bar_freshness(
+                    fetch_meta,
+                    None,
+                    tf,
+                    offset_hours=offset_hours,
+                    live_feed=is_live_forex_crypto,
+                    pair=pair,
+                )
+                with _candle_cache_lock:
+                    _candle_cache.pop(key, None)
+                    _store_fetch_meta(key, fetch_meta)
+                return None
+        else:
+            out_candles = mt5_resp
 
         fetch_meta["bars"] = len(out_candles) if out_candles else 0
         _annotate_fetch_meta_with_bar_freshness(

@@ -155,6 +155,8 @@ def _engine_b_hard_fail_reasons(conf_b: dict[str, Any] | None, res_b: dict[str, 
         return ["engine_b_confidence_not_evaluated"]
     # Checklist components that directly block
     for key in ("structure_ok", "location_ok", "entry_ok", "room_ok", "rr_ok", "macro_ok"):
+        if key == "room_ok" and conf_b.get("space_gate_ok") is True:
+            continue
         if conf_b.get(key) is False:
             reasons.append(f"engine_b_{key}_false")
     # If passed is explicitly False, it's a hard fail
@@ -223,6 +225,8 @@ def _engine_b_fail_reasons(conf_b: dict[str, Any] | None, res_b: dict[str, Any] 
     if not isinstance(conf_b, dict):
         return sorted(set(reasons + ["engine_b_confidence_not_evaluated"]))
     for key in ("structure_ok", "location_ok", "entry_ok", "room_ok", "rr_ok", "macro_ok"):
+        if key == "room_ok" and conf_b.get("space_gate_ok") is True:
+            continue
         if conf_b.get(key) is False:
             reasons.append(f"engine_b_{key}_false")
     if conf_b.get("passed") is not True:
@@ -242,6 +246,7 @@ def _engine_b_components(conf_b: dict[str, Any] | None) -> dict[str, Any]:
         "trigger_ok",
         "entry_ok",
         "room_ok",
+        "space_gate_ok",
         "rr_ok",
         "macro_ok",
         "breakout_ok",
@@ -631,6 +636,8 @@ def _final_scan_result(
         return "BLOCKED_RISK"
     if c_type in {"A_ONLY", "B_ONLY", "ALIGNED"} and tier == "trade":
         return c_type
+    if c_type in {"A_ONLY", "B_ONLY", "ALIGNED"} and tier == "watchlist":
+        return f"{c_type}_WATCHLIST"
     a_score = _safe_float(signal.get("confluenceScore"), 0.0) or 0.0
     b_score = _safe_float((signal.get("_threshold_audit_b_conf") or {}).get("score"), 0.0) or 0.0
     if a_threshold > 0 and a_threshold * 0.85 <= a_score < a_threshold:
@@ -675,7 +682,11 @@ def build_signal_funnel_row(
     style_profile_b: dict[str, Any] | None = None,
     engine_b_threshold: float | None = None,
 ) -> dict[str, Any]:
-    a_threshold = get_score_threshold(pair, is_backtest=False)
+    a_threshold = (
+        _safe_float((signal or {}).get("scanThresholdEffective"), None)
+        or _safe_float((signal or {}).get("scanThreshold"), None)
+        or get_score_threshold(pair)
+    )
     res_b = signal.get("_threshold_audit_b_res") if isinstance(signal, dict) else None
     conf_b = signal.get("_threshold_audit_b_conf") if isinstance(signal, dict) else None
     b_threshold = (

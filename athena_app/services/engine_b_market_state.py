@@ -29,15 +29,25 @@ def engine_b_live_market_state(
     - Else for MT5 pairs, fetch directly from MT5 and split via `split_market_state`.
     - Else fall back to the shared `fetch_market_state` path.
     """
-    from athena_app.services.market_state import market_state_offset_hours, split_market_state
+    from athena_app.services.market_state import (
+        market_state_offset_hours,
+        split_market_state,
+        trim_mt5_d1_broker_session_ahead_tail,
+    )
 
     tf_u = str(tf or "").upper()
     display = pair.get("display") or pair.get("symbol") or ""
     offset_hours = market_state_offset_hours(pair, tf_u)
 
     if candles is not None:
-        return split_market_state(
+        series, _ = trim_mt5_d1_broker_session_ahead_tail(
+            pair,
+            tf_u,
             list(candles or []),
+            time_now=time_now,
+        )
+        return split_market_state(
+            series,
             tf_u,
             display,
             time_now=time_now,
@@ -54,6 +64,12 @@ def engine_b_live_market_state(
                 series = raw
             elif isinstance(raw, dict):
                 series = (raw.get("candles") or []) if isinstance(raw.get("candles"), list) else []
+            series, _ = trim_mt5_d1_broker_session_ahead_tail(
+                pair,
+                tf_u,
+                series,
+                time_now=time_now,
+            )
             return split_market_state(
                 series,
                 tf_u,

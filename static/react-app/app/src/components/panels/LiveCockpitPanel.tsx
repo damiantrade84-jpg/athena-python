@@ -4,14 +4,17 @@ import { useApiPost } from '@/hooks/useApiData';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Switch } from '@/components/ui/switch';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import { Checkbox } from '@/components/ui/checkbox';
 import { ErrorBanner, RefreshButton } from '@/components/shared';
+import AITradingAgentPanel from '@/components/ai/AITradingAgentPanel';
 import {
   Radio,
+  Bot,
   Activity,
   Zap,
   Layers,
@@ -23,6 +26,8 @@ import {
   Check,
   X,
   Info,
+  ChevronDown,
+  Plus,
 } from 'lucide-react';
 import { cn, fmtNum, toNum } from '@/lib/utils';
 import { fmtPrice } from '@/lib/athenaFormat';
@@ -34,10 +39,13 @@ import type {
   LdEngineCRow,
   LdEngineDRow,
   LdAiReview,
+  AiTradeChatSignalPayload,
 } from '@/types/athena';
 
 const DEFAULT_SYMBOLS = 'EUR/USD,GBP/USD,XAU/USD,BTCUSDT,ETHUSDT,NVDA,AAPL,MSFT';
-const POLL_MS = 5000;
+// Snapshot builds fetch candles per symbol; keep this above observed endpoint
+// latency so the browser does not stack overlapping read-only requests.
+const POLL_MS = 15000;
 
 export default function LiveCockpitPanel() {
   const { showToast } = useStore();
@@ -50,10 +58,15 @@ export default function LiveCockpitPanel() {
   const [snapshot, setSnapshot] = useState<LdSnapshot | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [availablePairs, setAvailablePairs] = useState<{ display: string; type: string; enabled: boolean }[]>([]);
+  const [pairsDropdownOpen, setPairsDropdownOpen] = useState(false);
   const pollRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const inFlightRef = useRef(false);
   const { post: postPaperExec, loading: papering } = useApiPost<{ ok?: boolean; error?: string; ticket?: string }>();
 
   const fetchSnap = useCallback(async () => {
+    if (inFlightRef.current) return;
+    inFlightRef.current = true;
     setLoading(true);
     setError(null);
     try {
@@ -74,6 +87,7 @@ export default function LiveCockpitPanel() {
     } catch (e) {
       setError(String(e));
     } finally {
+      inFlightRef.current = false;
       setLoading(false);
     }
   }, [activeSymbols, tf, selected]);
@@ -82,12 +96,49 @@ export default function LiveCockpitPanel() {
     fetchSnap();
   }, [fetchSnap]);
 
+  // Fetch available pairs for the dropdown
+  useEffect(() => {
+    fetch('/api/pairs')
+      .then((r) => r.json())
+      .then((data) => {
+        let pairsRaw: unknown[] = [];
+        if (Array.isArray(data?.pairs)) {
+          pairsRaw = data.pairs as unknown[];
+        } else if (data?.groups && typeof data.groups === 'object') {
+          pairsRaw = Object.values(data.groups as Record<string, unknown[]>).flat();
+        } else if (Array.isArray(data)) {
+          pairsRaw = data;
+        }
+        setAvailablePairs(
+          pairsRaw
+            .filter((p: unknown) => (p as { enabled?: boolean })?.enabled !== false)
+            .map((p: unknown) => {
+              const row = p as { sym?: string; label?: string; display?: string; symbol?: string; type?: string };
+              return {
+                display: row.label || row.display || row.symbol || row.sym || '',
+                type: row.type || 'unknown',
+                enabled: true,
+              };
+            })
+            .filter((p) => p.display)
+            .sort((a, b) => a.display.localeCompare(b.display)),
+        );
+      })
+      .catch(() => setAvailablePairs([]));
+  }, []);
+
+  const activeSymbolsSet = useMemo(() => {
+    return new Set(activeSymbols.split(',').map((s) => s.trim()).filter(Boolean));
+  }, [activeSymbols]);
+
   useEffect(() => {
     if (pollRef.current) clearTimeout(pollRef.current);
     if (!autoPoll) return;
-    const tick = () => {
-      fetchSnap();
-      pollRef.current = setTimeout(tick, POLL_MS);
+    const tick = async () => {
+      await fetchSnap();
+      if (autoPoll) {
+        pollRef.current = setTimeout(tick, POLL_MS);
+      }
     };
     pollRef.current = setTimeout(tick, POLL_MS);
     return () => {
@@ -111,6 +162,18 @@ export default function LiveCockpitPanel() {
 
   const selectedRow = symbols.find((s) => s.symbol === selected) || null;
 
+  const toggleSymbol = useCallback((display: string) => {
+    const set = new Set(activeSymbols.split(',').map((s) => s.trim()).filter(Boolean));
+    if (set.has(display)) {
+      set.delete(display);
+    } else {
+      set.add(display);
+    }
+    const joined = Array.from(set).join(',');
+    setSymbolsInput(joined);
+    setActiveSymbols(joined);
+  }, [activeSymbols]);
+
   const onPaperExecute = useCallback(
     async (row: LdSymbolRow) => {
       const direction = row.engineA?.direction || row.engineB?.direction;
@@ -133,7 +196,7 @@ export default function LiveCockpitPanel() {
   );
 
   return (
-    <div className="flex flex-col h-[calc(100vh-120px)] gap-3">
+    <div className="flex flex-col h-[calc(100vh-120px)] gap-3 overflow-hidden">
       {/* Status bar */}
       <Card className="border-border/60 bg-card/50">
         <CardContent className="p-3 flex items-center gap-2 flex-wrap">
@@ -168,19 +231,94 @@ export default function LiveCockpitPanel() {
         </Card>
       )}
 
-      {/* Symbol input + filters */}
+      {/* Symbol selector + filters */}
       <Card className="border-border/60 bg-card/50">
         <CardContent className="p-3 flex items-center gap-2 flex-wrap">
-          <Input
-            value={symbolsInput}
-            onChange={(e) => setSymbolsInput(e.target.value)}
-            onBlur={() => setActiveSymbols(symbolsInput)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') setActiveSymbols(symbolsInput);
-            }}
-            placeholder="Comma-separated symbols (e.g. EUR/USD,XAU/USD,BTCUSDT)"
-            className="flex-1 min-w-[280px] h-8 text-xs font-mono"
-          />
+          <Popover open={pairsDropdownOpen} onOpenChange={setPairsDropdownOpen}>
+            <PopoverTrigger asChild>
+              <Button variant="outline" className="h-8 text-xs flex items-center gap-1">
+                <Plus className="w-3.5 h-3.5" />
+                Select Symbols
+                <ChevronDown className="w-3 h-3" />
+                {activeSymbolsSet.size > 0 && (
+                  <Badge variant="secondary" className="text-[9px] ml-1">
+                    {activeSymbolsSet.size}
+                  </Badge>
+                )}
+              </Button>
+            </PopoverTrigger>
+            <PopoverContent className="w-[340px] p-0" align="start">
+              <div className="p-2 border-b">
+                <p className="text-[10px] uppercase text-muted-foreground font-semibold">Available Pairs</p>
+              </div>
+              <ScrollArea className="h-[280px]">
+                <div className="p-2 space-y-1">
+                  {availablePairs.length === 0 && (
+                    <p className="text-[11px] text-muted-foreground p-2">No pairs loaded.</p>
+                  )}
+                  {availablePairs.map((p) => {
+                    const checked = activeSymbolsSet.has(p.display);
+                    return (
+                      <div
+                        key={p.display}
+                        className="flex items-center gap-2 p-1.5 rounded hover:bg-muted/50 cursor-pointer"
+                        onClick={() => toggleSymbol(p.display)}
+                      >
+                        <Checkbox checked={checked} />
+                        <span className="text-xs font-mono flex-1">{p.display}</span>
+                        <Badge variant="outline" className="text-[9px] uppercase">
+                          {p.type}
+                        </Badge>
+                      </div>
+                    );
+                  })}
+                </div>
+              </ScrollArea>
+              <div className="p-2 border-t flex items-center justify-between">
+                <span className="text-[10px] text-muted-foreground">
+                  {activeSymbolsSet.size} selected
+                </span>
+                <div className="flex gap-1">
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="h-6 text-[10px]"
+                    onClick={() => {
+                      setSymbolsInput(DEFAULT_SYMBOLS);
+                      setActiveSymbols(DEFAULT_SYMBOLS);
+                    }}
+                  >
+                    Reset
+                  </Button>
+                  <Button
+                    size="sm"
+                    className="h-6 text-[10px]"
+                    onClick={() => setPairsDropdownOpen(false)}
+                  >
+                    Done
+                  </Button>
+                </div>
+              </div>
+            </PopoverContent>
+          </Popover>
+
+          {/* Selected symbols as removable badges */}
+          <div className="flex items-center gap-1 flex-wrap flex-1 min-w-0">
+            {Array.from(activeSymbolsSet).map((sym) => (
+              <Badge
+                key={sym}
+                variant="secondary"
+                className="text-[10px] font-mono cursor-pointer hover:bg-destructive/20"
+                onClick={() => toggleSymbol(sym)}
+              >
+                {sym} <X className="w-2.5 h-2.5 inline ml-0.5" />
+              </Badge>
+            ))}
+            {activeSymbolsSet.size === 0 && (
+              <span className="text-[11px] text-muted-foreground">No symbols selected</span>
+            )}
+          </div>
+
           <Select value={tf} onValueChange={(v) => setTf(v as 'H1' | 'H4' | 'D1')}>
             <SelectTrigger className="w-[80px] h-8 text-xs">
               <SelectValue />
@@ -203,8 +341,8 @@ export default function LiveCockpitPanel() {
               <SelectItem value="blocked">Blocked</SelectItem>
             </SelectContent>
           </Select>
-          <Button size="sm" className="h-8 text-xs" onClick={() => setActiveSymbols(symbolsInput)}>
-            Apply
+          <Button size="sm" className="h-8 text-xs" onClick={() => fetchSnap()}>
+            Refresh
           </Button>
         </CardContent>
       </Card>
@@ -212,10 +350,10 @@ export default function LiveCockpitPanel() {
       {error && <ErrorBanner message={error} onRetry={fetchSnap} />}
 
       {/* Two-column layout */}
-      <div className="flex-1 grid grid-cols-7 gap-3 overflow-hidden">
+      <div className="flex-1 grid grid-cols-7 gap-3 overflow-hidden min-h-0">
         {/* Left: card grid */}
-        <div className="col-span-3 flex flex-col gap-2 overflow-hidden">
-          <ScrollArea className="flex-1 pr-2">
+        <div className="col-span-3 flex flex-col gap-2 overflow-hidden min-h-0 h-full">
+          <ScrollArea className="flex-1 min-h-0 pr-2">
             <div className="grid grid-cols-1 gap-2">
               {filtered.length === 0 ? (
                 <Card className="border-border/60 bg-card/50">
@@ -231,14 +369,14 @@ export default function LiveCockpitPanel() {
             </div>
           </ScrollArea>
           {/* Event feed */}
-          <Card className="border-border/60 bg-card/50">
+          <Card className="border-border/60 bg-card/50 shrink-0">
             <CardHeader className="pb-2">
               <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Rajdhani', sans-serif", letterSpacing: '0.12em' }}>
                 <Activity className="w-3.5 h-3.5" /> Event Feed
               </CardTitle>
             </CardHeader>
             <CardContent className="p-3 pt-0">
-              <ScrollArea className="h-[160px]">
+              <ScrollArea className="h-[100px]">
                 {events.length === 0 ? (
                   <p className="text-[11px] text-muted-foreground">No events yet.</p>
                 ) : (
@@ -272,7 +410,7 @@ export default function LiveCockpitPanel() {
         </div>
 
         {/* Right: detail tabs */}
-        <Card className="col-span-4 border-border/60 bg-card/50 flex flex-col overflow-hidden">
+        <Card className="col-span-4 border-border/60 bg-card/50 flex flex-col overflow-hidden min-h-0 h-full">
           {selectedRow ? (
             <CockpitDetail row={selectedRow} onPaperExecute={onPaperExecute} executing={papering} />
           ) : (
@@ -284,6 +422,65 @@ export default function LiveCockpitPanel() {
       </div>
     </div>
   );
+}
+
+function buildAgentSignalPayload(row: LdSymbolRow): AiTradeChatSignalPayload {
+  const direction = row.engineA?.direction || row.engineB?.direction || null;
+  const engine = row.engineA?.passed
+    ? 'engine_a'
+    : row.engineB?.confidencePassed
+      ? 'engine_b'
+      : row.engineC?.decisionState === 'ALIGNED'
+        ? 'engine_c'
+        : row.engineD?.gateResult === 'PASS'
+          ? 'engine_d'
+          : 'engine_unknown';
+  const score = row.engineA?.score ?? row.engineB?.score ?? row.engineD?.score ?? null;
+  const threshold = row.engineA?.threshold ?? row.engineB?.threshold ?? null;
+  const rr = row.levels?.rr ?? row.engineA?.rr ?? row.engineD?.rr ?? null;
+  const entry = row.levels?.entry ?? row.engineA?.entry ?? row.engineB?.entry ?? null;
+  const sl = row.levels?.sl ?? row.engineA?.sl ?? row.engineB?.sl ?? null;
+  const tp = row.levels?.tp ?? row.levels?.tp1 ?? row.engineA?.tp ?? row.engineB?.tp ?? null;
+  return {
+    trace_id: row.traceId ?? null,
+    symbol: row.symbol,
+    pair: row.symbol,
+    display: row.symbol,
+    type: row.asset_type ?? null,
+    asset_type: row.asset_type ?? null,
+    direction,
+    engine,
+    engine_source: engine,
+    style: row.engineD?.setupType ?? null,
+    timeframe: row.timeframe ?? null,
+    score,
+    threshold,
+    rr,
+    rr1: rr,
+    min_rr: null,
+    entry,
+    price: entry,
+    sl,
+    tp,
+    tp1: tp,
+    tp2: row.levels?.tp2 ?? null,
+    latest_price: row.latest_price ?? null,
+    spread: row.spread ?? null,
+    spread_pips: row.spread ?? null,
+    state: row.finalState ?? null,
+    finalState: row.finalState ?? null,
+    mainReason: row.mainReason ?? null,
+    blockReason: row.blockReason ?? null,
+    engine_a: row.engineA ?? null,
+    engine_b: row.engineB ?? null,
+    engine_c: row.engineC ?? null,
+    engine_d: row.engineD ?? null,
+    vision: row.aiReview?.chartVision ?? null,
+    ai_review: row.aiReview ?? null,
+    dataFreshness: row.freshness ?? null,
+    freshness_status: row.freshness?.consistencyStatus ?? row.freshness?.policyStatus ?? null,
+    levels: row.levels ?? null,
+  };
 }
 
 function connBg(state?: string): string {
@@ -329,6 +526,7 @@ function CockpitCard({ row, active, onClick }: { row: LdSymbolRow; active: boole
           <Tile label="Price" value={fmtPrice(row.latest_price, row.symbol, row.asset_type || undefined)} />
           <Tile
             label="Engine A"
+            title="Factor score vs threshold only. Scan trade tier does not require Engine B; see Engine C for consensus."
             value={
               row.engineA?.score != null
                 ? `${fmtNum(row.engineA.score, 2)} / ${fmtNum(row.engineA.maxScore, 2)}`
@@ -375,8 +573,10 @@ function CockpitDetail({
   onPaperExecute: (row: LdSymbolRow) => void;
   executing: boolean;
 }) {
+  const [activeTab, setActiveTab] = useState('overview');
+
   return (
-    <Tabs defaultValue="overview" className="flex-1 flex flex-col overflow-hidden">
+    <Tabs value={activeTab} onValueChange={setActiveTab} className="flex-1 flex flex-col overflow-hidden">
       <CardHeader className="pb-1 shrink-0">
         <div className="flex items-center justify-between">
           <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Rajdhani', sans-serif", letterSpacing: '0.12em' }}>
@@ -390,6 +590,10 @@ function CockpitDetail({
             {row.spread != null && (
               <span className="text-[10px] text-muted-foreground">spread {fmtNum(row.spread, 4)}</span>
             )}
+            <Button type="button" size="sm" variant="outline" className="h-7 gap-1 text-[10px]" onClick={() => setActiveTab('agent')}>
+              <Bot className="w-3.5 h-3.5" />
+              Discuss with AI
+            </Button>
           </div>
         </div>
         <TabsList className="w-full justify-start mt-2">
@@ -400,12 +604,13 @@ function CockpitDetail({
           <TabsTrigger value="engineC" className="text-[11px]">Engine C</TabsTrigger>
           <TabsTrigger value="engineD" className="text-[11px]">Engine D</TabsTrigger>
           <TabsTrigger value="ai" className="text-[11px]">AI</TabsTrigger>
+          <TabsTrigger value="agent" className="text-[11px]">Agent</TabsTrigger>
           <TabsTrigger value="execute" className="text-[11px]">Execute</TabsTrigger>
           <TabsTrigger value="diagnostics" className="text-[11px]">Diagnostics</TabsTrigger>
         </TabsList>
       </CardHeader>
 
-      <ScrollArea className="flex-1 px-4 pb-4">
+      <ScrollArea className="flex-1 min-h-0 px-4 pb-4">
         <TabsContent value="overview" className="m-0 mt-2 space-y-3">
           <div className="grid grid-cols-2 gap-2">
             <Tile label="Final state" value={row.finalState} />
@@ -457,6 +662,15 @@ function CockpitDetail({
 
         <TabsContent value="ai" className="m-0 mt-2">
           <AiReviewCard ai={row.aiReview} />
+        </TabsContent>
+
+        <TabsContent value="agent" className="m-0 mt-2">
+          <AITradingAgentPanel
+            symbol={row.symbol}
+            traceId={row.traceId}
+            signal={buildAgentSignalPayload(row)}
+            seedMessage="Review this trade. What supports it, what argues against it, and what would confirm or invalidate it?"
+          />
         </TabsContent>
 
         <TabsContent value="execute" className="m-0 mt-2 space-y-3">
@@ -696,12 +910,12 @@ function AiReviewCard({ ai }: { ai: LdAiReview | undefined }) {
           </Badge>
         </div>
         <div className="grid grid-cols-2 gap-2 text-xs">
-          <Detail label="Confidence" value={ai.confidence != null ? `${(toNum(ai.confidence) * 100).toFixed(0)}%` : '—'} />
+          <Detail label="Confidence" value={ai.confidence != null ? `${toNum(ai.confidence).toFixed(0)}%` : '—'} />
           <Detail label="Downgrade only" value={ai.downgradeOnly ? 'YES' : 'NO'} />
-          <Detail label="Marcus Reid" value={ai.marcusReid ? 'present' : '—'} />
-          <Detail label="Engine B AI" value={ai.engineBAI ? 'present' : '—'} />
-          <Detail label="Signal Debate" value={ai.signalDebate ? 'present' : '—'} />
-          <Detail label="Chart Vision" value={ai.chartVision ? 'present' : '—'} />
+          <Detail label="Marcus Reid" value={ai.marcusReid != null ? 'present' : '—'} />
+          <Detail label="Engine B AI" value={ai.engineBAI != null ? 'present' : '—'} />
+          <Detail label="Signal Debate" value={ai.signalDebate != null ? 'present' : '—'} />
+          <Detail label="Chart Vision" value={ai.chartVision != null ? 'present' : '—'} />
         </div>
         {Array.isArray(ai.contradictions) && ai.contradictions.length > 0 && (
           <ReasonList items={ai.contradictions} className="text-warning bg-warning/10" label="Contradictions" icon={<AlertTriangle className="w-3 h-3" />} />
@@ -789,14 +1003,16 @@ function Tile({
   label,
   value,
   accent,
+  title,
 }: {
   label: string;
   value: string;
   accent?: 'long' | 'short' | 'muted';
+  title?: string;
 }) {
   const fg = accent === 'long' ? 'text-long' : accent === 'short' ? 'text-short' : 'text-foreground';
   return (
-    <div className="p-2 rounded-md bg-muted/30">
+    <div className="p-2 rounded-md bg-muted/30" title={title}>
       <p className="text-[10px] uppercase text-muted-foreground">{label}</p>
       <p className={cn('text-xs font-mono font-bold truncate', fg)}>{value}</p>
     </div>

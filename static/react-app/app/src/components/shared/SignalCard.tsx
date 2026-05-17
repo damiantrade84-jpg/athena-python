@@ -1,7 +1,6 @@
 import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { Progress } from '@/components/ui/progress';
 import { cn, fmtNum, toNum } from '@/lib/utils';
 import { Play, Clock, ArrowUpRight } from 'lucide-react';
 import type { Signal } from '@/types';
@@ -14,6 +13,15 @@ interface SignalCardProps {
   compact?: boolean;
 }
 
+/** Map backend conviction (0–1) or legacy confidence (0–100) to 0–100 display. */
+function confidenceDisplayPct(conviction: unknown, confidence: unknown): number {
+  const raw = conviction ?? confidence;
+  const n = toNum(raw, NaN);
+  if (!Number.isFinite(n)) return 0;
+  if (n >= 0 && n <= 1) return n * 100;
+  return n;
+}
+
 export default function SignalCard({ signal, onExecute, disabled, disabledLabel, compact }: SignalCardProps) {
   const isLong  = signal.direction === 'LONG';
   const isShort = signal.direction === 'SHORT';
@@ -22,7 +30,7 @@ export default function SignalCard({ signal, onExecute, disabled, disabledLabel,
     ? { background: 'hsl(var(--long) / 0.18)', color: 'hsl(var(--long))' }
     : { background: 'hsl(var(--short) / 0.18)', color: 'hsl(var(--short))' };
 
-  const conf = toNum(signal.conviction ?? signal.confidence, 0);
+  const conf = confidenceDisplayPct(signal.conviction, signal.confidence);
   const CONF_HIGH = 85;
   const CONF_MED  = 70;
   const confColor = conf >= CONF_HIGH ? 'text-long' : conf >= CONF_MED ? 'text-warning' : 'text-muted-foreground';

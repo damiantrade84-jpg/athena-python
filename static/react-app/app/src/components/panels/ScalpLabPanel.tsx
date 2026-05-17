@@ -5,7 +5,6 @@ import { useLivePrices } from '@/hooks/useLivePrices';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
 import { Switch } from '@/components/ui/switch';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import {
@@ -16,6 +15,45 @@ import { ErrorBanner } from '@/components/shared';
 import { Activity, Play, Zap, AlertTriangle, Layers } from 'lucide-react';
 import { fmtNum, toNum } from '@/lib/utils';
 import { fmtPrice } from '@/lib/athenaFormat';
+
+interface DataFidelity {
+  vp_source?: string;
+  vp_fidelity?: string;
+  vp_is_proxy?: boolean;
+  cvd_source?: string;
+  cvd_fidelity?: string;
+  cvd_is_proxy?: boolean;
+  absorption_source?: string;
+  absorption_fidelity?: string;
+  absorption_is_proxy?: boolean;
+  aggression_uses_real_order_flow?: boolean;
+  notes?: string[];
+}
+
+interface AnchorCandidate {
+  valid?: boolean;
+  reason?: string;
+  bars?: number;
+  direction?: string;
+  start_time?: string | null;
+  end_time?: string | null;
+  heuristic?: string;
+}
+
+interface ProfileAnchorShadow {
+  report_only?: boolean;
+  active_anchor?: AnchorCandidate & {
+    mode?: string;
+    lookback_bars?: number;
+    volume_source?: string;
+  };
+  fixed_lookback_anchor?: AnchorCandidate & {
+    mode?: string;
+    lookback_bars?: number;
+    volume_source?: string;
+  };
+  candidates?: Record<string, AnchorCandidate>;
+}
 
 /**
  * Engine D / Scalp Lab signal — server-normalised in athena.py::_scalp_ui_signal().
@@ -50,10 +88,40 @@ interface ScalpSignal {
   vp_vah?: number;
   vp_val?: number;
   vp_lvn_count?: number;
+  vp_volume_source?: string;
+  vp_bucket_count?: number;
+  vp_fidelity?: string;
+  vp_is_proxy?: boolean;
+  vp_uses_real_trade_buckets?: boolean;
   absorption_count?: number;
+  absorption_source?: string;
+  absorption_fidelity?: string;
+  absorption_is_proxy?: boolean;
   cvd_direction?: string;
   cvd_slope?: number;
+  cvd_source?: string;
+  cvd_bucket_count?: number;
+  cvd_fidelity?: string;
+  cvd_is_proxy?: boolean;
+  cvd_uses_real_trade_buckets?: boolean;
   aaa_complete?: boolean;
+  aggression_source?: string;
+  aggression_source_raw?: string;
+  aggression_source_is_proxy?: boolean;
+  aggression_confirmed?: boolean;
+  aggression_uses_real_order_flow?: boolean;
+  data_fidelity?: DataFidelity;
+  strict_fabio_pass?: boolean;
+  strict_fabio_reason?: string;
+  strict_fabio_missing_pillars?: string[];
+  strict_fabio_pillars?: Record<string, boolean>;
+  current_vs_strict_status?: string;
+  aggression_components?: Record<string, boolean>;
+  profile_anchor_mode?: string;
+  profile_anchor_bars?: number;
+  profile_anchor_start?: string | null;
+  profile_anchor_end?: string | null;
+  profile_anchor_shadow?: ProfileAnchorShadow;
   vwap?: number;
   htf_bias?: string;
   htf_bias_tf?: string;
@@ -131,11 +199,55 @@ function gradeBorder(grade?: string): string {
   }
 }
 
+function signalKey(s: Pick<ScalpSignal, 'display' | 'pair' | 'symbol'>): string {
+  return String(s.display || s.pair || s.symbol || '').trim().toUpperCase();
+}
+
+function isSignalExecutable(sig: ScalpSignal): boolean {
+  return sig.executable === true && String(sig.gate_result || '').toUpperCase() === 'PASS';
+}
+
+function invalidateScalpSignal(
+  scan: ScalpScanResponse | null,
+  symbol: string,
+  reason: string,
+  fresh?: ScalpScanResponse,
+): ScalpScanResponse | null {
+  if (!scan) return scan;
+  const target = symbol.trim().toUpperCase();
+  const skipped = fresh?.skipped || [];
+  const freshRow = skipped.find((row) => signalKey(row) === target);
+  const failReason = freshRow?.reason || reason || 'fresh_scan_no_setup';
+  const signals = (scan.signals || []).map((sig) => {
+    if (signalKey(sig) !== target) return sig;
+    return {
+      ...sig,
+      executable: false,
+      gate_result: 'NO_SETUP',
+      candidate_status: failReason,
+      fail_reasons: [failReason],
+      soft_warnings: Array.from(new Set([...(sig.soft_warnings || []), 'fresh_execute_scan_invalidated_setup'])),
+    };
+  });
+  return {
+    ...scan,
+    signals,
+    skipped: skipped.length > 0 ? skipped : scan.skipped,
+    skip_count: fresh?.skip_count ?? skipped.length ?? scan.skip_count,
+    reason: fresh?.reason ?? scan.reason,
+    diagnostic_summary: fresh?.diagnostic_summary ?? scan.diagnostic_summary,
+  };
+}
+
 export default function ScalpLabPanel() {
-  const { showToast } = useStore();
+  const {
+    showToast,
+    scalpLabScanCache,
+    scalpLabSelectedCache,
+    setScalpLabScanCache,
+    setScalpLabSelectedCache,
+  } = useStore();
   const [diagnostic, setDiagnostic] = useState(false);
-  const [scanResult, setScanResult] = useState<ScalpScanResponse | null>(null);
-  const [selected, setSelected] = useState<ScalpSignal | null>(null);
   const [confirmExec, setConfirmExec] = useState<ScalpSignal | null>(null);
 
   const { data: pairsData } = useApiPoll<ScalpPairsResponse>('/api/scalp-pairs', 0);
@@ -144,20 +256,22 @@ export default function ScalpLabPanel() {
   const { priceFor } = useLivePrices(10000);
 
   const universeCount = pairsData?.count ?? pairsData?.pairs?.length ?? 0;
+  const scanResult = scalpLabScanCache as ScalpScanResponse | null;
+  const selected = scalpLabSelectedCache as ScalpSignal | null;
 
   const runScan = useCallback(async () => {
-    setSelected(null);
+    setScalpLabSelectedCache(null);
     const result = await postScan('/api/scalp-scan', { diagnostic });
     if (!result || result.error) {
       showToast(`Scalp scan failed: ${result?.error || 'unknown'}`, 'error');
       return;
     }
-    setScanResult(result);
+    setScalpLabScanCache(result);
     showToast(
       `Engine D: ${result.pass_count ?? 0}/${result.candidate_count ?? 0} pass · ${result.skip_count ?? 0} skipped (session: ${result.session || '—'})`,
       'success',
     );
-  }, [diagnostic, postScan, showToast]);
+  }, [diagnostic, postScan, showToast, setScalpLabScanCache, setScalpLabSelectedCache]);
 
   const requestExecute = useCallback((s: ScalpSignal) => setConfirmExec(s), []);
 
@@ -185,13 +299,41 @@ export default function ScalpLabPanel() {
     } else if (result.success) {
       showToast(`Scalp executed — ticket ${result.ticket || '?'}`, 'success');
     } else {
-      showToast(`Scalp rejected: ${result.error || 'unknown'}`, 'error');
+      const reason = result.error || 'unknown';
+      setScalpLabScanCache(invalidateScalpSignal(scanResult, symbol, reason, result.fresh_scan));
+      if (selected && signalKey(selected) === symbol.toUpperCase()) {
+        setScalpLabSelectedCache({
+          ...selected,
+          executable: false,
+          gate_result: 'NO_SETUP',
+          candidate_status: reason,
+          fail_reasons: [reason],
+          soft_warnings: Array.from(new Set([...(selected.soft_warnings || []), 'fresh_execute_scan_invalidated_setup'])),
+        });
+      }
+      showToast(`Scalp rejected: ${reason}`, 'error');
     }
     setConfirmExec(null);
-  }, [confirmExec, postExecute, showToast]);
+  }, [
+    confirmExec,
+    postExecute,
+    scanResult,
+    selected,
+    setScalpLabScanCache,
+    setScalpLabSelectedCache,
+    showToast,
+  ]);
 
-  const signals = scanResult?.signals || [];
-  const skipped = scanResult?.skipped || [];
+  const signals = useMemo(() => scanResult?.signals || [], [scanResult?.signals]);
+  const skipped = useMemo(() => scanResult?.skipped || [], [scanResult?.skipped]);
+  const skippedSummary = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const row of skipped) {
+      const reason = row.reason || 'unknown';
+      counts.set(reason, (counts.get(reason) || 0) + 1);
+    }
+    return Array.from(counts.entries()).sort((a, b) => b[1] - a[1]);
+  }, [skipped]);
 
   const groupedByGrade = useMemo(() => {
     const acc: Record<string, ScalpSignal[]> = { A: [], B: [], C: [], D: [] };
@@ -255,6 +397,23 @@ export default function ScalpLabPanel() {
               </CardContent>
             </Card>
           )}
+          {skippedSummary.length > 0 && (
+            <Card className="border-warning/40 bg-warning/10">
+              <CardContent className="p-3 space-y-2">
+                <div className="text-xs text-warning flex items-center gap-2">
+                  <AlertTriangle className="w-3.5 h-3.5" />
+                  Engine D blocked {skipped.length} pair{skipped.length === 1 ? '' : 's'} on the latest scan
+                </div>
+                <div className="flex flex-wrap gap-1">
+                  {skippedSummary.slice(0, 6).map(([reason, count]) => (
+                    <Badge key={reason} variant="outline" className="text-[10px] text-warning border-warning/40">
+                      {reason} × {count}
+                    </Badge>
+                  ))}
+                </div>
+              </CardContent>
+            </Card>
+          )}
 
           {/* Signals + detail */}
           <div className="grid grid-cols-5 gap-4">
@@ -285,7 +444,7 @@ export default function ScalpLabPanel() {
                                 sig={s}
                                 livePrice={priceFor(s)}
                                 selected={selected === s}
-                                onSelect={setSelected}
+                                onSelect={setScalpLabSelectedCache}
                                 onExecute={requestExecute}
                               />
                             ))}
@@ -407,7 +566,7 @@ function ScalpCard({
   const aiScore = toNum(sig.ai_score);
   const rr = sig.rr ?? sig.rr1;
   const sizeMult = sig.size_multiplier;
-  const exec = sig.executable !== false && sig.gate_result !== 'BLOCKED';
+  const exec = isSignalExecutable(sig);
   const live = toNum(livePrice);
 
   return (
@@ -447,6 +606,30 @@ function ScalpCard({
         {sig.cvd_direction && (
           <Badge variant="outline" className="text-[10px] uppercase">cvd {sig.cvd_direction}</Badge>
         )}
+        {sig.vp_volume_source && (
+          <Badge variant="outline" className="text-[10px]">vp {sig.vp_volume_source}</Badge>
+        )}
+        {sig.cvd_source && (
+          <Badge variant="outline" className="text-[10px]">cvd src {sig.cvd_source}</Badge>
+        )}
+        {sig.aggression_source_is_proxy != null && (
+          <Badge variant="outline" className={`text-[10px] ${sig.aggression_source_is_proxy ? 'text-short' : 'text-long'}`}>
+            {sig.aggression_source_is_proxy ? 'proxy flow' : 'trade flow'}
+          </Badge>
+        )}
+        {sig.strict_fabio_pass != null && (
+          <Badge variant="outline" className={`text-[10px] ${sig.strict_fabio_pass ? 'text-long' : 'text-short'}`}>
+            strict {sig.strict_fabio_pass ? 'yes' : 'no'}
+          </Badge>
+        )}
+          {sig.current_vs_strict_status && (
+            <Badge variant="outline" className="text-[10px]">{sig.current_vs_strict_status}</Badge>
+          )}
+        {sig.gate_result && (
+          <Badge variant="outline" className={`text-[10px] ${exec ? 'text-long' : 'text-warning'}`}>
+            gate {sig.gate_result}
+          </Badge>
+        )}
         {sig.htf_bias && (
           <Badge variant="outline" className="text-[10px] uppercase">{sig.htf_bias_tf || 'HTF'}: {sig.htf_bias}</Badge>
         )}
@@ -472,14 +655,40 @@ function ScalpCard({
         {!exec && sig.candidate_status && (
           <span className="text-[10px] text-warning">{sig.candidate_status}</span>
         )}
+        {!exec && !sig.candidate_status && (
+          <span className="text-[10px] text-warning">{sig.gate_result || 'not executable'}</span>
+        )}
       </div>
     </div>
   );
 }
 
+function boolText(value?: boolean): string {
+  if (value == null) return '-';
+  return value ? 'yes' : 'no';
+}
+
+function anchorCandidateText(candidate?: AnchorCandidate): string {
+  if (!candidate) return '-';
+  if (candidate.valid === false) return candidate.reason || 'not available';
+  const bits = [];
+  if (candidate.direction) bits.push(candidate.direction);
+  if (candidate.bars != null) bits.push(`${candidate.bars} bars`);
+  if (candidate.heuristic) bits.push(candidate.heuristic);
+  return bits.join(' / ') || 'valid';
+}
+
 function ScalpDetail({ sig, onExecute }: { sig: ScalpSignal; onExecute: (s: ScalpSignal) => void }) {
   const display = sig.display || sig.pair || sig.symbol || '—';
   const grade = String(sig.ai_grade || 'D').toUpperCase();
+  const activeAnchor = sig.profile_anchor_shadow?.active_anchor;
+  const fixedAnchor = sig.profile_anchor_shadow?.fixed_lookback_anchor;
+  const anchorCandidates = sig.profile_anchor_shadow?.candidates || {};
+  const vpProxy = sig.vp_is_proxy ?? sig.data_fidelity?.vp_is_proxy;
+  const cvdProxy = sig.cvd_is_proxy ?? sig.data_fidelity?.cvd_is_proxy;
+  const absorptionProxy = sig.absorption_is_proxy ?? sig.data_fidelity?.absorption_is_proxy;
+  const realOrderFlow = sig.aggression_uses_real_order_flow ?? sig.data_fidelity?.aggression_uses_real_order_flow;
+  const exec = isSignalExecutable(sig);
   return (
     <div className="space-y-3">
       <div className="p-3 rounded-md bg-muted/30 space-y-2">
@@ -497,6 +706,8 @@ function ScalpDetail({ sig, onExecute }: { sig: ScalpSignal; onExecute: (s: Scal
         <CardContent className="p-3 space-y-2">
           <p className="text-[10px] uppercase text-muted-foreground">Levels</p>
           <div className="grid grid-cols-2 gap-2 text-xs">
+            <Row k="Gate" v={sig.gate_result || '—'} accent={exec ? 'long' : 'short'} />
+            <Row k="Status" v={sig.candidate_status || (exec ? 'executable' : 'not executable')} accent={exec ? 'long' : 'short'} />
             <Row k="Entry" v={fmtPrice(sig.entry ?? sig.price, sig.pair, sig.type)} />
             <Row k="Live" v={fmtPrice(sig.livePrice, sig.pair, sig.type)} />
             <Row k="SL" v={`${fmtPrice(sig.sl, sig.pair, sig.type)}${sig.sl_method ? ` · ${sig.sl_method}` : ''}`} accent="short" />
@@ -518,6 +729,20 @@ function ScalpDetail({ sig, onExecute }: { sig: ScalpSignal; onExecute: (s: Scal
             <Row k="POC" v={fmtNum(sig.vp_poc, 6)} />
             <Row k="VAL" v={fmtNum(sig.vp_val, 6)} />
             <Row k="LVN count" v={sig.vp_lvn_count ?? '—'} />
+            <Row k="VP source" v={sig.vp_volume_source || '—'} />
+            <Row k="VP buckets" v={sig.vp_bucket_count ?? '—'} />
+            <Row k="VP fidelity" v={sig.vp_fidelity || sig.data_fidelity?.vp_fidelity || '—'} />
+            <Row
+              k="VP proxy"
+              v={boolText(vpProxy)}
+              accent={vpProxy == null ? undefined : vpProxy ? 'short' : 'long'}
+            />
+            <Row k="Anchor mode" v={sig.profile_anchor_mode || activeAnchor?.mode || '—'} />
+            <Row k="Anchor bars" v={sig.profile_anchor_bars ?? activeAnchor?.bars ?? '—'} />
+            <Row k="Fixed lookback" v={fixedAnchor?.bars != null ? `${fixedAnchor.bars} bars` : '—'} />
+            <Row k="Prior anchor" v={anchorCandidateText(anchorCandidates.prior_session)} />
+            <Row k="Impulse anchor" v={anchorCandidateText(anchorCandidates.impulse_leg)} />
+            <Row k="Reclaim anchor" v={anchorCandidateText(anchorCandidates.reclaim_leg)} />
             <Row k="Market state" v={sig.market_state || '—'} />
             <Row k="Zone" v={`${sig.zone_type || '—'}${sig.zone_level != null ? ` @ ${fmtNum(sig.zone_level, 5)}` : ''}`} />
           </div>
@@ -530,8 +755,47 @@ function ScalpDetail({ sig, onExecute }: { sig: ScalpSignal; onExecute: (s: Scal
           <p className="text-[10px] uppercase text-muted-foreground">Order Flow (Aggression)</p>
           <div className="grid grid-cols-2 gap-2 text-xs">
             <Row k="Absorption count" v={sig.absorption_count ?? '—'} />
+            <Row k="Absorption src" v={sig.absorption_source || sig.data_fidelity?.absorption_source || '—'} />
+            <Row k="Absorption fidelity" v={sig.absorption_fidelity || sig.data_fidelity?.absorption_fidelity || '—'} />
+            <Row
+              k="Absorption proxy"
+              v={boolText(absorptionProxy)}
+              accent={absorptionProxy == null ? undefined : absorptionProxy ? 'short' : 'long'}
+            />
             <Row k="CVD direction" v={sig.cvd_direction || '—'} />
             <Row k="CVD slope" v={fmtNum(sig.cvd_slope, 4)} />
+            <Row k="CVD source" v={sig.cvd_source || '—'} />
+            <Row k="CVD buckets" v={sig.cvd_bucket_count ?? '—'} />
+            <Row k="CVD fidelity" v={sig.cvd_fidelity || sig.data_fidelity?.cvd_fidelity || '—'} />
+            <Row
+              k="CVD proxy"
+              v={boolText(cvdProxy)}
+              accent={cvdProxy == null ? undefined : cvdProxy ? 'short' : 'long'}
+            />
+            <Row k="Aggression source" v={sig.aggression_source || '—'} />
+            <Row
+              k="Real order flow"
+              v={boolText(realOrderFlow)}
+              accent={realOrderFlow == null ? undefined : realOrderFlow ? 'long' : 'short'}
+            />
+            <Row
+              k="Aggression confirmed"
+              v={sig.aggression_confirmed == null ? '—' : sig.aggression_confirmed ? 'yes' : 'no'}
+              accent={sig.aggression_confirmed == null ? undefined : sig.aggression_confirmed ? 'long' : 'short'}
+            />
+            <Row
+              k="Strict Fabio pass"
+              v={sig.strict_fabio_pass == null ? '—' : sig.strict_fabio_pass ? 'yes' : 'no'}
+              accent={sig.strict_fabio_pass == null ? undefined : sig.strict_fabio_pass ? 'long' : 'short'}
+            />
+            <Row k="Strict reason" v={sig.strict_fabio_reason || '—'} />
+            <Row k="Missing pillars" v={(sig.strict_fabio_missing_pillars || []).join(', ') || '—'} />
+            <Row k="Current vs strict" v={sig.current_vs_strict_status || '—'} />
+            <Row
+              k="Proxy flow"
+              v={sig.aggression_source_is_proxy == null ? '—' : sig.aggression_source_is_proxy ? 'yes' : 'no'}
+              accent={sig.aggression_source_is_proxy == null ? undefined : sig.aggression_source_is_proxy ? 'short' : 'long'}
+            />
             <Row k="AAA complete" v={sig.aaa_complete ? 'yes' : 'no'} accent={sig.aaa_complete ? 'long' : undefined} />
             <Row k="VWAP" v={fmtNum(sig.vwap, 6)} />
             <Row k="HTF bias" v={`${sig.htf_bias || '—'}${sig.htf_bias_tf ? ` (${sig.htf_bias_tf})` : ''}`} />
@@ -581,7 +845,7 @@ function ScalpDetail({ sig, onExecute }: { sig: ScalpSignal; onExecute: (s: Scal
         size="sm"
         className="w-full gap-2"
         onClick={() => onExecute(sig)}
-        disabled={sig.executable === false || sig.gate_result === 'BLOCKED'}
+        disabled={!exec}
       >
         <Play className="w-3.5 h-3.5" />
         Execute Engine D Scalp

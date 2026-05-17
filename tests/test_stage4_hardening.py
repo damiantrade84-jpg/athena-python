@@ -59,6 +59,28 @@ class TestFatalConfigValidation:
                     f"Trend weights for {asset_class} sum to {total}, expected 1.0"
                 )
 
+    def test_rejects_missummed_engine_a_factor_weights(self):
+        bad = {
+            **CONFIG,
+            "ENGINE_A_FACTOR_WEIGHTS_BY_CLASS": {
+                **CONFIG.get("ENGINE_A_FACTOR_WEIGHTS_BY_CLASS", {}),
+                "crypto": {"momentum": 0.9, "addon": 0.2, "base": 0.2},
+            },
+        }
+        with pytest.raises(ConfigValidationError):
+            _fatal_config_validation(bad)
+
+    def test_rejects_inactive_pair_profile_knobs(self):
+        bad = {
+            **CONFIG,
+            "PAIR_PROFILES": {
+                **CONFIG.get("PAIR_PROFILES", {}),
+                "TEST/PAIR": {"weight_overrides": {"h4_fib": 2.0}, "bt_min": 1.0},
+            },
+        }
+        with pytest.raises(ConfigValidationError):
+            _fatal_config_validation(bad)
+
 
 # ── 4.2: BT_MIN deletion ─────────────────────────────────────────────────────
 
@@ -73,11 +95,12 @@ class TestBtMinDeleted:
         assert "BACKTEST_USE_BT_MIN_THRESHOLDS" not in CONFIG
 
     def test_backtest_uses_same_thresholds_as_live(self):
-        """2-tier system: backtest and live return identical values."""
+        """Backtest and live return identical active Engine A thresholds."""
         pair = {"display": "EUR/USD", "type": "forex"}
-        live = get_score_threshold(pair, is_backtest=False)
-        bt = get_score_threshold(pair, is_backtest=True)
-        assert live == bt == _TIER_STABLE
+        # Both wrappers and the canonical function return the same value now.
+        live = get_score_threshold(pair)
+        bt = get_score_threshold(pair)
+        assert live == bt == CONFIG["ENGINE_A_SCORE_GROUP_THRESHOLDS"]["forex_majors"]
 
     def test_crypto_uses_volatile_tier(self):
         pair = {"display": "BTC/USDT", "type": "crypto"}

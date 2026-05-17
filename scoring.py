@@ -69,12 +69,17 @@ _MAJOR_FOREX = {
     "EUR/USD", "GBP/USD", "USD/JPY", "AUD/USD", "NZD/USD", "USD/CAD", "USD/CHF"
 }
 _FOREX_CROSSES = {
-    "EUR/GBP", "EUR/JPY", "GBP/JPY", "AUD/JPY", "EUR/AUD", "GBP/AUD", "EUR/CHF", "USD/SGD"
+    "EUR/GBP", "EUR/JPY", "GBP/JPY", "AUD/JPY", "EUR/AUD", "GBP/AUD", "EUR/CHF", "USD/SGD",
+    "AUD/CHF", "AUD/NZD",
 }
-_EXOTIC_FOREX = {"USD/ZAR", "USD/MXN"}
-_PRECIOUS_TRACKERS = {"XAU/USD", "XAG/USD", "GLD", "SLV"}
+_EXOTIC_FOREX = {"USD/ZAR", "USD/MXN", "USD/BRL", "USD/INR"}
+_PRECIOUS_TRACKERS = {"XAU/USD", "XAG/USD", "GLD", "SLV", "GDX"}
 _ENERGY_OIL = {"WTI Oil", "Brent Oil", "USO", "XLE"}
-_US_INDICES_TRACKERS = {"NASDAQ-100", "S&P 500", "Dow Jones", "SPY", "QQQ"}
+# Industrial base metals — trend well, route to STABLE tier.
+_BASE_METALS = {"Aluminium", "Lead", "Nickel", "Zinc"}
+# Soft commodities + livestock — Athena edge unaudited; route to EXOTIC tier.
+_SOFTS = {"Cattle", "Cocoa", "Coffee", "Corn", "Cotton", "Soybeans", "Sugar", "Wheat"}
+_US_INDICES_TRACKERS = {"NASDAQ-100", "S&P 500", "Dow Jones", "SPY", "QQQ", "DIA"}
 _EU_INDICES = {"DAX 40", "UK100"}
 _ASIAN_INDICES = {"ASX 200", "Nikkei 225", "Hang Seng"}
 _US_STOCK_CUSTOM = {
@@ -134,6 +139,10 @@ def get_pair_score_group(pair: dict) -> str:
             return "copper"
         if display in {"XPT/USD", "XPD/USD"}:
             return "pgm_metals"
+        if display in _BASE_METALS:
+            return "base_metals"
+        if display in _SOFTS:
+            return "softs"
         return "commodity_other"
     if ptype == "index":
         if display in _US_INDICES_TRACKERS:
@@ -160,12 +169,53 @@ def get_pair_score_group(pair: dict) -> str:
     return f"{ptype}_other" if ptype else "unknown"
 
 
-# Stage 2.4: Simplified 2-tier Engine A threshold system.
-# Volatile assets (crypto, nat_gas) need higher thresholds.
-# Stable assets (forex, commodity, stock, index) use lower thresholds.
-# CONFIG["MIN_CONFLUENCE_CLASS"] is legacy/admin metadata; this resolver does
-# not read it. Pair profile min_confluence remains the only runtime override.
+def _resolve_class_keyed(mapping, score_group: str | None, asset_type: str, default):
+    """Resolve class-keyed config by score_group, then asset_type, then default."""
+    if not isinstance(mapping, dict):
+        return default
+    if score_group and score_group in mapping:
+        return mapping[score_group]
+    if asset_type in mapping:
+        return mapping[asset_type]
+    if "default" in mapping:
+        return mapping["default"]
+    return default
+
+
+def get_pair_level_atr_class(pair: dict) -> str:
+    """Resolve the ATR multiplier class used for SL/TP levels.
+
+    This stays separate from pair["type"] so ETFs can keep their stock
+    feed/execution identity while using ETF-calibrated ATR multipliers.
+    """
+    profile = get_pair_profile(pair)
+    profile_class = profile.get("atr_level_class")
+    if profile_class:
+        return str(profile_class)
+
+    display = pair.get("display", "")
+    symbol = pair.get("symbol", "")
+    by_display = CONFIG.get("ENGINE_A_ATR_LEVEL_CLASS_BY_DISPLAY", {}) or {}
+    if display in by_display:
+        return str(by_display[display])
+    if symbol in by_display:
+        return str(by_display[symbol])
+
+    score_group = get_pair_score_group(pair)
+    by_group = CONFIG.get("ENGINE_A_ATR_LEVEL_CLASS_BY_SCORE_GROUP", {}) or {}
+    if score_group in by_group:
+        return str(by_group[score_group])
+
+    return str(pair.get("type", "stock") or "stock")
+
+
+# 3-tier Engine A threshold system.
+#   VOLATILE (2.0) — crypto class, nat_gas, crypto_doge: high baseline noise.
+#   EXOTIC   (1.7) — forex_exotics, softs: thin liquidity / unaudited edge.
+#   STABLE   (1.5) — everything else.
+# Pair profile min_confluence is the only runtime override.
 _TIER_VOLATILE = 2.0
+_TIER_EXOTIC = 1.7
 _TIER_STABLE = 1.5
 
 _PAIR_OVERRIDES = {
@@ -174,8 +224,32 @@ _PAIR_OVERRIDES = {
 }
 
 
+def _configured_score_threshold(pair: dict) -> float | None:
+    """Return a config-backed Engine A threshold, or None when absent.
+
+    If ``ENGINE_A_SCORE_GROUP_THRESHOLDS`` includes ``default``, this almost
+    always satisfies ``get_score_threshold`` before ``_get_threshold_tier`` /
+    ``_PAIR_OVERRIDES`` are consulted (omit ``default`` to use the 3-tier path).
+    """
+    display = pair.get("display", "")
+    symbol = pair.get("symbol", "")
+    ptype = pair.get("type", "")
+    score_group = get_pair_score_group(pair)
+
+    pair_thresholds = CONFIG.get("ENGINE_A_PAIR_THRESHOLDS", {}) or {}
+    for key in (display, symbol):
+        if key in pair_thresholds:
+            return float(pair_thresholds[key])
+
+    group_thresholds = CONFIG.get("ENGINE_A_SCORE_GROUP_THRESHOLDS", {}) or {}
+    for key in (score_group, ptype, "default"):
+        if key in group_thresholds:
+            return float(group_thresholds[key])
+    return None
+
+
 def _get_threshold_tier(pair: dict) -> float:
-    """Return the confluence threshold for a pair (2-tier system)."""
+    """Return the confluence threshold for a pair (3-tier system)."""
     display = pair.get("display", "")
     ptype = pair.get("type", "")
     score_group = get_pair_score_group(pair)
@@ -188,35 +262,66 @@ def _get_threshold_tier(pair: dict) -> float:
     if ptype in ("crypto",) or score_group in ("nat_gas", "crypto_doge"):
         return _TIER_VOLATILE
 
-    # 3. Stable tier (everything else)
+    # 3. Exotic tier — thin liquidity or unaudited edge.
+    if score_group in ("forex_exotics", "softs"):
+        return _TIER_EXOTIC
+
+    # 4. Stable tier (everything else)
     return _TIER_STABLE
 
 
-def get_score_threshold(pair: dict, is_backtest: bool = False) -> float:
-    """Resolve score threshold — simplified 2-tier system.
+def get_score_threshold(pair: dict, regime: str | None = None) -> float:
+    """Resolve score threshold (live and backtest share the same value).
 
-    Replaces the old 6-class + BT_MIN_GROUP + BACKTEST_USE_BT_MIN_THRESHOLDS
-    hierarchy with 2 tiers + pair overrides. Backtest and live use same thresholds.
-    MIN_CONFLUENCE_CLASS is intentionally not read here.
+    Profile override -> pair/group config -> 3-tier fallback.
+
+    When ENGINE_A_REGIME_DYNAMIC_THRESHOLDS.ENABLED is true and ``regime`` is
+    provided, applies regime-based multipliers to the resolved threshold:
+      - TRENDING: 10% easier (0.90 multiplier)
+      - RANGING: 10% harder (1.10 multiplier)
+      - HIGH_VOLATILITY: 15% harder (1.15 multiplier)
     """
     profile = get_pair_profile(pair)
+    configured = _configured_score_threshold(pair)
+    if configured is not None:
+        base_threshold = configured
+    else:
+        # Fallback 3-tier system for older configs.
+        base_threshold = _get_threshold_tier(pair)
 
-    # Pair profile override (highest priority)
+    # Pair profiles may raise a threshold by default. Lowering below the
+    # configured/group floor requires an explicit per-profile opt-in so one
+    # stale pair override cannot silently bypass the global scan tier.
     if profile.get("min_confluence") is not None:
-        return float(profile.get("min_confluence"))
+        profile_threshold = float(profile.get("min_confluence"))
+        if profile_threshold >= base_threshold or profile.get("allow_lower_threshold") is True:
+            base_threshold = profile_threshold
 
-    # 2-tier system
-    return _get_threshold_tier(pair)
+    # Apply regime-dependent dynamic thresholds if enabled
+    dynamic_cfg = CONFIG.get("ENGINE_A_REGIME_DYNAMIC_THRESHOLDS") or {}
+    if dynamic_cfg.get("ENABLED", False) and regime:
+        trending_mult = float(dynamic_cfg.get("TRENDING_MULTIPLIER", 0.90))
+        ranging_mult = float(dynamic_cfg.get("RANGING_MULTIPLIER", 1.10))
+        high_vol_mult = float(dynamic_cfg.get("HIGH_VOLATILITY_MULTIPLIER", 1.15))
+
+        if regime == "TRENDING":
+            base_threshold *= trending_mult
+        elif regime == "RANGING":
+            base_threshold *= ranging_mult
+        elif regime == "HIGH_VOLATILITY":
+            base_threshold *= high_vol_mult
+
+    return base_threshold
 
 
 def get_min_confluence_threshold(pair: dict) -> float:
     """Legacy wrapper for live scan threshold resolution."""
-    return get_score_threshold(pair, is_backtest=False)
+    return get_score_threshold(pair)
 
 
 def get_backtest_min_score_threshold(pair: dict) -> float:
-    """Legacy wrapper for Engine A backtest gate."""
-    return get_score_threshold(pair, is_backtest=True)
+    """Legacy wrapper for Engine A backtest gate (parity with live)."""
+    return get_score_threshold(pair)
 
 
 def pair_filter_enabled(pair: dict, filter_name: str) -> bool:
@@ -487,6 +592,10 @@ def _get_30d_correlation(
         return max(-1.0, min(1.0, r))
 
     # ── Legacy fallback path (no price data available) ───────────────────────
+    log.warning(
+        "heuristic BTC correlation fallback used for %s; pass price series to use real Pearson r",
+        pair_display or "unknown",
+    )
     # Known high-correlation majors
     if pair_display in ("ETH/USDT", "ETHUSDT"):
         return 0.90
@@ -536,6 +645,7 @@ def calc_confluence(
     oi_context: dict | None = None,
     macro_context: dict | None = None,
     intermarket_context: dict | None = None,
+    structure_result: dict | None = None,
     asset_prices: list | None = None,
     benchmark_prices: list | None = None,
 ) -> dict:
@@ -567,6 +677,8 @@ def calc_confluence(
         oi_context=_oi_ctx_eff,
         macro_context=macro_context,
         intermarket_context=intermarket_context,
+        structure_result=structure_result,
+        volume_threshold=volume_threshold,
     )
 
     # FIX 2: BTC Bias Conditional on Correlation
@@ -613,11 +725,15 @@ def calc_confluence(
         factor_result["btc_bias_adjusted_score"] = _adjusted
         factor_result["btc_bias_delta"] = round(_adjusted - _fs, 4)
 
-    # Preserve warnings for readability (raw thresholds)
+    # Preserve warnings for readability using the same score_group-aware bounds as factor scoring.
     w = []
     s4 = h4["snap"]
     _ptype = pair["type"]
-    _rsi_b = CONFIG["RSI_BOUNDS"].get(_ptype, {"ob": 70, "os": 30})
+    _rsi_b = _resolve_class_keyed(
+        CONFIG.get("RSI_BOUNDS", {}), get_pair_score_group(pair), _ptype, {"ob": 70, "os": 30}
+    )
+    if not isinstance(_rsi_b, dict):
+        _rsi_b = {"ob": 70, "os": 30}
     r4 = s4.get("rsi")
     if r4 is not None:
         if r4 >= _rsi_b["ob"]:
@@ -626,6 +742,12 @@ def calc_confluence(
             )
         elif r4 <= _rsi_b["os"]:
             w.append(f"H4 RSI oversold ({r4:.0f} <= {_rsi_b['os']}) — wait for bounce")
+    _fs_feed_early = factor_result.get("feed_status") or {}
+    if _fs_feed_early.get("adx") == "missing":
+        w.append(
+            "ADX unavailable on both D1 and H4 — legacy neutral multiplier (0.5×) applied; "
+            "set ADX_MISSING_BOTH_ABORT true (recommended) for fail-closed scoring."
+        )
     # Crypto OI divergence (parity with analyze_pair — uses D1[-2] vs H1 close)
     if oi_data is not None and pair.get("type") == "crypto":
         from data_feeds import _calc_oi_divergence
@@ -780,10 +902,15 @@ def calc_confluence(
             "missingDirectionalOptionalCount": factor_result.get("missing_directional_optional_count"),
             "optionalFactorCoverage": factor_result.get("optional_factor_coverage"),
             "feedStatus": factor_result.get("feed_status", {}),
+            "regimeLabelsDualCapture": {
+                "trendState": trend_state,
+                "factorRegime": _regime_str,
+            },
             "macroContext": macro_context or {},
             "intermarket": factor_result.get("intermarket_confirmation") or {},
             "insufficientFactors": factor_result.get("insufficient_factors", False),
             "cryptoEngineADiagnostics": factor_result.get("crypto_engine_a_diagnostics"),
+            "engineAAssetDiagnostics": factor_result.get("engine_a_asset_diagnostics"),
             "researchLabValue": factor_result.get("research_lab_value"),
             "researchLabDetail": factor_result.get("research_lab_detail"),
         },
@@ -902,6 +1029,45 @@ def is_trend_state_blocked(
     return str(trend_state).upper() in get_blocked_trend_states(pair, scope=scope)
 
 
+def _auto_trade_min_conviction(pair: dict) -> float | None:
+    cfg = CONFIG.get("AUTO_TRADE_MIN_CONVICTION", {}) or {}
+    ptype = pair.get("type", "")
+    raw = cfg.get(ptype, cfg.get("default")) if isinstance(cfg, dict) else cfg
+    try:
+        return float(raw) if raw is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _a_only_auto_weight(pair: dict) -> float | None:
+    cfg = CONFIG.get("AUTO_TRADE_A_ONLY_WEIGHT", {}) or {}
+    ptype = pair.get("type", "")
+    raw = cfg.get(ptype, cfg.get("default")) if isinstance(cfg, dict) else cfg
+    try:
+        weight = float(raw)
+    except (TypeError, ValueError):
+        return None
+    return weight if weight > 0 else None
+
+
+def _a_only_required_score(pair: dict, signal: dict) -> float | None:
+    min_conviction = _auto_trade_min_conviction(pair)
+    a_only_weight = _a_only_auto_weight(pair)
+    if min_conviction is None or a_only_weight is None:
+        return None
+    try:
+        max_score = float(
+            signal.get("maxScore")
+            or signal.get("maxScoreOverride")
+            or 3.0
+        )
+    except (TypeError, ValueError):
+        max_score = 3.0
+    if max_score <= 0:
+        return None
+    return (min_conviction / a_only_weight) * max_score
+
+
 def _classify_signal(signal: dict, pair: dict) -> tuple[str, str]:
     """Return (tier, reason) where tier is 'trade' | 'watchlist' | 'skip'."""
     threshold = signal.get("scanThreshold", get_min_confluence_threshold(pair))
@@ -930,7 +1096,7 @@ def _classify_signal(signal: dict, pair: dict) -> tuple[str, str]:
             if not CONFIG.get("BACKTEST_SENTIMENT_GATING", False):
                 sentiment_blocked = False
 
-    if (
+    scan_ready = (
         pair.get("enabled", True)
         and not exchange_closed
         and not hard_event
@@ -938,7 +1104,20 @@ def _classify_signal(signal: dict, pair: dict) -> tuple[str, str]:
         and not sentiment_blocked
         and not trend_blocked
         and score >= threshold
-    ):
+    )
+    if scan_ready:
+        if signal.get("enginesAligned") is False:
+            required = _a_only_required_score(pair, signal)
+            try:
+                max_score = float(signal.get("maxScore") or signal.get("maxScoreOverride") or 3.0)
+            except (TypeError, ValueError):
+                max_score = 3.0
+            if required is not None and score < required:
+                return (
+                    "watchlist",
+                    f"A-only auto gate requires about {required:.2f}/{max_score:.1f}; "
+                    f"score {float(score):.2f} clears scan floor {float(threshold):.2f} only",
+                )
         return "trade", "Trade-ready"
     watch_floor = max(round(threshold - 0.3, 2), 0.2)
     reasons = [d["detail"] for d in signal.get("scanDiagnostics", [])]

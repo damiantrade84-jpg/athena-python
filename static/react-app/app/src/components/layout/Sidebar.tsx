@@ -1,4 +1,6 @@
+import { useCallback, type ElementType } from 'react';
 import { useStore } from '@/hooks/useStore';
+import { useApiPoll, useApiPost } from '@/hooks/useApiData';
 import type { PanelId } from '@/types';
 import { cn, fmtNum, toNum } from '@/lib/utils';
 import { Separator } from '@/components/ui/separator';
@@ -8,10 +10,10 @@ import { Switch } from '@/components/ui/switch';
 import {
   LayoutDashboard, Zap, Search, Settings, TrendingUp,
   Layers, Activity, BarChart2, FlaskConical, Filter, Ticket,
-  Microscope, PieChart, Globe, ShieldCheck, Radio,
+  Microscope, PieChart, Globe, ShieldCheck, Radio, BrainCircuit,
 } from 'lucide-react';
 
-const navItems: { id: PanelId; label: string; icon: React.ElementType; badge?: string }[] = [
+const navItems: { id: PanelId; label: string; icon: ElementType; badge?: string }[] = [
   { id: 'dashboard',   label: 'Dashboard',   icon: LayoutDashboard },
   { id: 'signals',     label: 'Signals',      icon: Zap,        badge: 'LIVE' },
   { id: 'pairBrowser', label: 'Pair Browser', icon: Search },
@@ -28,16 +30,30 @@ const navItems: { id: PanelId; label: string; icon: React.ElementType; badge?: s
   { id: 'performance', label: 'Performance',  icon: PieChart },
   { id: 'markets',     label: 'Markets',      icon: Globe },
   { id: 'guardian',    label: 'Guardian',     icon: ShieldCheck },
+  { id: 'aiPerformance', label: 'AI Perf',    icon: BrainCircuit },
 ];
 
 export default function Sidebar() {
-  const { activePanel, setActivePanel, signals, positions, guardian, isAutoTrade, toggleAutoTrade, isTestMode, toggleTestMode } = useStore();
+  const { activePanel, setActivePanel, signals, positions, guardian, showToast, isTestMode, toggleTestMode } = useStore();
+  const { data: autoTrade, refresh: refreshAutoTrade } = useApiPoll<{ enabled: boolean }>('/api/auto-trade', 15000);
+  const { post: postAutoTrade, loading: togglingAutoTrade } = useApiPost<{ enabled: boolean; error?: string }>();
 
   const activeSignals  = signals.filter(s => s.status === 'active').length;
   const openPositions  = positions.filter(p => p.status === 'open').length;
   const dailyLoss      = toNum(guardian?.dailyLoss);
   const dailyLossLimit = toNum(guardian?.dailyLossLimit, 1);
   const riskPct        = Math.min(100, (Math.abs(dailyLoss) / Math.max(1, dailyLossLimit)) * 100);
+  const serverAutoTradeEnabled = Boolean(autoTrade?.enabled);
+
+  const handleAutoTradeToggle = useCallback(async (checked: boolean) => {
+    const result = await postAutoTrade('/api/auto-trade', { action: checked ? 'on' : 'off' });
+    if (!result) {
+      showToast('Auto-trade toggle failed: server did not confirm state', 'error');
+      return;
+    }
+    await refreshAutoTrade();
+    showToast(result.enabled ? 'Auto-trade enabled on server' : 'Auto-trade disabled on server', 'info');
+  }, [postAutoTrade, refreshAutoTrade, showToast]);
 
   return (
     <aside className="w-[210px] shrink-0 border-r border-sidebar-border bg-sidebar flex flex-col">
@@ -197,7 +213,7 @@ export default function Sidebar() {
         {/* Toggles */}
         <div className="flex items-center justify-between px-1">
           <span className="text-[10px]" style={{ color: 'hsl(var(--muted-foreground))' }}>Auto-Trade</span>
-          <Switch checked={isAutoTrade} onCheckedChange={toggleAutoTrade} />
+          <Switch checked={serverAutoTradeEnabled} onCheckedChange={handleAutoTradeToggle} disabled={togglingAutoTrade} />
         </div>
         <div className="flex items-center justify-between px-1">
           <span className="text-[10px]" style={{ color: 'hsl(var(--muted-foreground))' }}>Test Mode</span>

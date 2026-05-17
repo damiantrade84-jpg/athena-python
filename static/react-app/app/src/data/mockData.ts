@@ -36,7 +36,7 @@ export function generateSignals(count = 8): Signal[] {
     const entry = rand(1.05, 1.45);
     const sl = direction === 'LONG' ? entry - rand(0.005, 0.02) : entry + rand(0.005, 0.02);
     const tp = direction === 'LONG' ? entry + rand(0.01, 0.04) : entry - rand(0.01, 0.04);
-    const confidence = randInt(60, 98);
+    const conviction = Number(rand(0.6, 0.98).toFixed(2));
     signals.push({
       id: `sig_${i}`,
       pair,
@@ -46,7 +46,7 @@ export function generateSignals(count = 8): Signal[] {
       tp: Number(tp.toFixed(5)),
       tp2: Number((direction === 'LONG' ? tp + 0.01 : tp - 0.01).toFixed(5)),
       tp3: Number((direction === 'LONG' ? tp + 0.02 : tp - 0.02).toFixed(5)),
-      confidence,
+      conviction,
       engine: `Engine ${ENGINES[randInt(0, ENGINES.length)].id}`,
       timeframe: TIMEFRAMES[randInt(2, 6)],
       rRatio: Number(rand(1.5, 4.5).toFixed(2)),

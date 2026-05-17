@@ -20,6 +20,9 @@ from athena_research.metrics import StrategyMetrics
 
 log = logging.getLogger(__name__)
 
+MIN_IMPLEMENTATION_TRADES = 30
+RUN_META_SCHEMA_VERSION = 1
+
 OUTPUT_COLUMNS = [
     "run_id", "symbol", "asset_class", "timeframe", "zone", "family", "strategy_name",
     "params_str", "direction", "session", "status",
@@ -27,10 +30,13 @@ OUTPUT_COLUMNS = [
     "max_drawdown", "sharpe", "sqn", "exposure_pct", "avg_duration_bars",
     "gross_return", "net_return", "is_return", "oos_return",
     "robustness_score", "param_sensitivity", "skip_reason", "data_source",
+    "entry_signal_count", "short_entry_signal_count", "exit_signal_count",
+    "short_exit_signal_count", "simulation_backend", "simulation_warning",
     "engine", "engine_component", "candidate_action", "source_indicator",
     "market_group", "pair_group", "timeframe_zone", "session_bucket",
     "structure_context", "baseline_delta_pf", "baseline_delta_oos",
     "sample_ok", "recommendation",
+    "implementation_verdict", "implementation_scope", "implementation_blockers",
 ]
 
 
@@ -77,9 +83,265 @@ def _safe_float(v) -> float:
         return float("nan")
 
 
+def _safe_bool(v) -> bool:
+    if isinstance(v, bool):
+        return v
+    if v is None or pd.isna(v):
+        return False
+    if isinstance(v, str):
+        return v.strip().lower() in {"1", "true", "yes", "y"}
+    return bool(v)
+
+
+def _safe_str(v) -> str:
+    if v is None or pd.isna(v):
+        return ""
+    return str(v).strip()
+
+
+def _apply_implementation_readiness(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Add a separate implementation verdict to research rows.
+
+    This is intentionally report-only. It does not alter candidate scoring,
+    live gates, risk logic, or engine thresholds.
+    """
+    if df.empty:
+        out = df.copy()
+        for col in ("implementation_verdict", "implementation_scope", "implementation_blockers"):
+            if col not in out.columns:
+                out[col] = ""
+        return out
+
+    out = df.copy()
+    verdicts: list[str] = []
+    scopes: list[str] = []
+    blockers_list: list[str] = []
+
+    for _, row in out.iterrows():
+        blockers: list[str] = []
+        status = _safe_str(row.get("status", "")).upper()
+        data_source = _safe_str(row.get("data_source", "")).lower()
+        backend = _safe_str(row.get("simulation_backend", "")).lower()
+        warning = _safe_str(row.get("simulation_warning", ""))
+        trade_count = _safe_float(row.get("trade_count"))
+        net_return = _safe_float(row.get("net_return"))
+        oos_return = _safe_float(row.get("oos_return"))
+        profit_factor = _safe_float(row.get("profit_factor"))
+        robustness = _safe_float(row.get("robustness_score"))
+        sample_ok = _safe_bool(row.get("sample_ok"))
+
+        if status != "STRONG_CANDIDATE":
+            blockers.append(f"status_not_strong:{status or 'missing'}")
+        if not sample_ok:
+            blockers.append("sample_not_ok")
+        if warning:
+            blockers.append(f"simulation_warning:{warning}")
+        if backend == "pandas_fallback":
+            blockers.append("simulator_fallback_used")
+        if data_source in {"", "synthetic_test", "data_unavailable"}:
+            blockers.append(f"data_source_not_live_research:{data_source or 'missing'}")
+        if not math.isfinite(trade_count) or trade_count <= 0:
+            blockers.append("no_completed_trades")
+        elif trade_count < MIN_IMPLEMENTATION_TRADES:
+            blockers.append(f"trade_count_below_{MIN_IMPLEMENTATION_TRADES}")
+        if not math.isfinite(net_return) or net_return <= 0:
+            blockers.append("net_return_not_positive")
+        if not math.isfinite(oos_return) or oos_return <= 0:
+            blockers.append("oos_return_not_positive")
+        if not math.isfinite(profit_factor) or profit_factor <= 1.0:
+            blockers.append("profit_factor_not_above_one")
+        if not math.isfinite(robustness) or robustness < 0.60:
+            blockers.append("robustness_below_strong_floor")
+
+        if blockers:
+            verdicts.append("NOT_IMPLEMENTABLE")
+            scopes.append("RESEARCH_ONLY")
+        else:
+            verdicts.append("IMPLEMENTATION_READY")
+            scopes.append("PAPER_TOOL_ONLY")
+        blockers_list.append(";".join(blockers))
+
+    out["implementation_verdict"] = verdicts
+    out["implementation_scope"] = scopes
+    out["implementation_blockers"] = blockers_list
+    return out
+
+
+def _normalise_action_recommendations(df: pd.DataFrame) -> pd.DataFrame:
+    """Recompute display recommendations from row fields for new and older CSVs."""
+    if df.empty:
+        return df.copy()
+    out = df.copy()
+    try:
+        from athena_research.research_context import recommendation_from_fields
+
+        recs: list[str] = []
+        for _, row in out.iterrows():
+            recs.append(recommendation_from_fields(
+                status=str(row.get("status", "")),
+                action=str(row.get("candidate_action", "")),
+                strategy_name=str(row.get("strategy_name", "")),
+                family=str(row.get("family", "")),
+                delta_pf=_safe_float(row.get("baseline_delta_pf")),
+                delta_oos=_safe_float(row.get("baseline_delta_oos")),
+            ))
+        out["recommendation"] = recs
+    except Exception:
+        if "recommendation" not in out.columns:
+            out["recommendation"] = ""
+    return out
+
+
+def build_operator_decision_summary(df: pd.DataFrame) -> dict:
+    """Build the operator-facing action summary from deterministic result rows."""
+    if df.empty:
+        return {
+            "headline": "No usable research rows found.",
+            "decision": "NEEDS_MORE_DATA",
+            "source": "DETERMINISTIC_RESULTS",
+            "source_of_truth": "research_summary.csv",
+            "use_now": [],
+            "research_candidates": [],
+            "blocked_candidates": [],
+            "candidate_groups": [],
+            "keep": [],
+            "remove_or_demote": [],
+            "retest": [],
+            "warnings": ["No Research Lab rows were available."],
+            "next_step": "Run a new Research Lab discovery.",
+            "implementation_ready_count": 0,
+            "ready_use_add_count": 0,
+            "total_candidate_count": 0,
+        }
+
+    work = _normalise_action_recommendations(_apply_implementation_readiness(df))
+
+    def _num(col: str) -> pd.Series:
+        return pd.to_numeric(work.get(col, pd.Series(float("nan"), index=work.index)), errors="coerce")
+
+    work["_status_order"] = work.get("status", "").map({
+        "STRONG_CANDIDATE": 0,
+        "WEAK_CANDIDATE": 1,
+        "NEEDS_MORE_DATA": 2,
+        "REJECT": 3,
+    }).fillna(9)
+    work["_sort_oos"] = _num("oos_return").fillna(-999)
+    work["_sort_robust"] = _num("robustness_score").fillna(-999)
+    work["_sort_pf"] = _num("profit_factor").fillna(-999)
+    work = work.sort_values(
+        ["_status_order", "_sort_oos", "_sort_robust", "_sort_pf"],
+        ascending=[True, False, False, False],
+    )
+
+    def _records(frame: pd.DataFrame, limit: int = 100) -> list[dict]:
+        cols = [
+            "recommendation", "engine", "engine_component", "strategy_name", "source_indicator",
+            "family", "symbol", "timeframe", "direction", "status", "trade_count",
+            "win_rate", "profit_factor", "oos_return", "robustness_score",
+            "implementation_verdict", "implementation_blockers",
+        ]
+        available = [c for c in cols if c in frame.columns]
+        return json.loads(frame[available].head(limit).fillna("").to_json(orient="records"))
+
+    def _groups(frame: pd.DataFrame, limit: int = 50) -> list[dict]:
+        if frame.empty:
+            return []
+        group_cols = [
+            c for c in [
+                "recommendation", "engine", "engine_component", "strategy_name",
+                "family", "market_group", "pair_group", "timeframe",
+            ]
+            if c in frame.columns
+        ]
+        if not group_cols:
+            return []
+        grouped = frame.groupby(group_cols, dropna=False).agg(
+            configs=("status", "count"),
+            symbols=("symbol", lambda x: ", ".join(sorted({str(v) for v in x if str(v)}))),
+            avg_trades=("trade_count", "mean"),
+            avg_pf=("profit_factor", "mean"),
+            avg_oos=("oos_return", "mean"),
+            avg_robustness=("robustness_score", "mean"),
+        ).reset_index()
+        grouped = grouped.sort_values(["configs", "avg_oos", "avg_robustness"], ascending=False)
+        return json.loads(grouped.head(limit).fillna("").to_json(orient="records"))
+
+    add_rows = work[work["recommendation"] == "ADD"]
+    keep_rows = work[work["recommendation"] == "KEEP"]
+    use_rows = pd.concat([add_rows, keep_rows], ignore_index=False).sort_values(
+        ["_status_order", "_sort_oos", "_sort_robust", "_sort_pf"],
+        ascending=[True, False, False, False],
+    )
+    remove_rows = work[work["recommendation"].isin(["REMOVE_OR_DEMOTE", "REJECT"])]
+    retest_rows = work[work["recommendation"].isin(["RETEST", "WATCHLIST_ONLY"])]
+    ready_use_rows = use_rows[use_rows["implementation_verdict"] == "IMPLEMENTATION_READY"]
+    blocked_use_rows = use_rows[use_rows["implementation_verdict"] != "IMPLEMENTATION_READY"]
+
+    warnings: list[str] = []
+    warning_col = work.get("simulation_warning", pd.Series("", index=work.index)).fillna("").astype(str)
+    backend_col = work.get("simulation_backend", pd.Series("", index=work.index)).fillna("").astype(str)
+    if int((warning_col != "").sum()) > 0:
+        warnings.append(f"{int((warning_col != '').sum())} rows have simulator warnings.")
+    if int((backend_col == "pandas_fallback").sum()) > 0:
+        warnings.append(f"{int((backend_col == 'pandas_fallback').sum())} rows used pandas fallback.")
+
+    ready_col = work.get("implementation_verdict", pd.Series("", index=work.index)).fillna("").astype(str)
+    ready_count = int((ready_col == "IMPLEMENTATION_READY").sum())
+    ready_use_count = int(len(ready_use_rows))
+    if ready_use_count == 0 and not use_rows.empty:
+        warnings.append("Use/add candidates exist, but none passed implementation readiness yet.")
+
+    if not ready_use_rows.empty:
+        top = ready_use_rows.iloc[0]
+        decision = "USE_ADD_CANDIDATE"
+        headline = (
+            f"{len(ready_use_rows)} ready use/add result rows. Top: "
+            f"{top.get('strategy_name', 'candidate')} for {top.get('engine', 'research')} "
+            f"on {top.get('timeframe', 'TF')} / {top.get('symbol', 'symbol')}."
+        )
+        next_step = "Use the implementation-ready rows from this result table as the paper-tool action list."
+    elif not use_rows.empty:
+        decision = "CANDIDATES_BLOCKED"
+        headline = "Candidate rows exist, but none passed implementation readiness."
+        next_step = "Use the listed blockers to decide what data or telemetry must be fixed before implementation."
+    elif not keep_rows.empty:
+        decision = "KEEP_CURRENT"
+        headline = "Keep existing setup; no better add candidate beat it."
+        next_step = "Keep the current component and do not add new logic from this run."
+    elif not remove_rows.empty:
+        decision = "REMOVE_OR_DEMOTE"
+        headline = "Remove or demote failing components from this run."
+        next_step = "Do not implement rejected components."
+    else:
+        decision = "NEEDS_MORE_DATA"
+        headline = "No clear keep/add/remove action from this run."
+        next_step = "Run a broader validation only if this area is still important."
+
+    return {
+        "headline": headline,
+        "decision": decision,
+        "source": "DETERMINISTIC_RESULTS",
+        "source_of_truth": "research_summary.csv",
+        "use_now": _records(ready_use_rows),
+        "research_candidates": _records(use_rows),
+        "blocked_candidates": _records(blocked_use_rows),
+        "candidate_groups": _groups(ready_use_rows),
+        "keep": _records(keep_rows),
+        "remove_or_demote": _records(remove_rows),
+        "retest": _records(retest_rows),
+        "warnings": warnings,
+        "next_step": next_step,
+        "implementation_ready_count": ready_count,
+        "ready_use_add_count": ready_use_count,
+        "total_candidate_count": int(len(use_rows)),
+    }
+
+
 # ─── CSV writers ──────────────────────────────────────────────────────────────
 
 def write_csvs(df: pd.DataFrame, run_dir: Path) -> list[Path]:
+    df = _apply_implementation_readiness(_normalise_action_recommendations(df))
     written = []
 
     def _save(frame: pd.DataFrame, name: str):
@@ -117,6 +379,8 @@ def write_csvs(df: pd.DataFrame, run_dir: Path) -> list[Path]:
     # By session
     if "session" in df.columns:
         _save(_group_agg(df, "session"), "by_session.csv")
+    if "session_bucket" in df.columns and df["session_bucket"].notna().any() and (df["session_bucket"] != "").any():
+        _save(_group_agg(df[df["session_bucket"] != ""], "session_bucket"), "by_session_bucket.csv")
 
     # By direction
     if "direction" in df.columns:
@@ -140,6 +404,10 @@ def write_csvs(df: pd.DataFrame, run_dir: Path) -> list[Path]:
     if "recommendation" in df.columns:
         _save(_automated_next_tests(df), "automated_next_tests.csv")
         _save(_recommendation_table(df), "add_remove_retest_recommendations.csv")
+
+    if "implementation_verdict" in df.columns:
+        ready = df[df["implementation_verdict"] == "IMPLEMENTATION_READY"].copy()
+        _save(ready, "implementation_ready_candidates.csv")
 
     # Per-pair recommendation (top result per symbol)
     if not ranked.empty:
@@ -262,6 +530,7 @@ def _recommendation_table(df: pd.DataFrame) -> pd.DataFrame:
         "family", "market_group", "pair_group", "symbol", "timeframe_zone", "timeframe", "structure_context", "direction",
         "status", "trade_count", "win_rate", "profit_factor", "oos_return",
         "baseline_delta_pf", "baseline_delta_oos", "robustness_score",
+        "implementation_verdict", "implementation_scope", "implementation_blockers",
     ]
     available = [c for c in cols if c in df.columns]
     if not available:
@@ -282,7 +551,12 @@ def _recommendation_table(df: pd.DataFrame) -> pd.DataFrame:
 def _automated_next_tests(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty or "recommendation" not in df.columns:
         return pd.DataFrame()
-    weak = df[df["recommendation"].isin(["REMOVE_OR_DEMOTE", "REJECT", "RETEST", "WATCHLIST_ONLY"])].copy()
+    status_col = df.get("status", pd.Series("", index=df.index)).fillna("").astype(str).str.upper()
+    rec_col = df["recommendation"].fillna("").astype(str).str.upper()
+    weak = df[
+        rec_col.isin(["REMOVE_OR_DEMOTE", "REJECT"])
+        | status_col.isin(["REJECT", "NEEDS_MORE_DATA"])
+    ].copy()
     if weak.empty:
         return pd.DataFrame()
     rows = []
@@ -319,6 +593,7 @@ def _automated_next_tests(df: pd.DataFrame) -> pd.DataFrame:
 def write_markdown_report(df: pd.DataFrame, run_dir: Path, run_id: str, run_meta: dict) -> Path:
     """Generate research_report.md answering the required research questions."""
     report_path = run_dir / "research_report.md"
+    df = _apply_implementation_readiness(_normalise_action_recommendations(df))
 
     lines: list[str] = []
     a = lines.append
@@ -349,6 +624,63 @@ def write_markdown_report(df: pd.DataFrame, run_dir: Path, run_id: str, run_meta
     a("")
 
     # ── Q1: Best strategy family ─────────────────────────────────────────────
+    a("## Research Run Self-Audit")
+    if df.empty:
+        a("No rows available for self-audit.")
+    else:
+        warning_col = df.get("simulation_warning", pd.Series("", index=df.index)).fillna("").astype(str)
+        backend_col = df.get("simulation_backend", pd.Series("", index=df.index)).fillna("").astype(str)
+        entry_col = pd.to_numeric(df.get("entry_signal_count", pd.Series(0, index=df.index)), errors="coerce").fillna(0)
+        short_entry_col = pd.to_numeric(df.get("short_entry_signal_count", pd.Series(0, index=df.index)), errors="coerce").fillna(0)
+        warning_rows = warning_col[warning_col != ""]
+        fallback_rows = backend_col[backend_col == "pandas_fallback"]
+        total_signals = int(entry_col.sum() + short_entry_col.sum())
+        a(f"- Rows with simulator warnings: **{len(warning_rows)}**")
+        a(f"- Rows using pandas fallback: **{len(fallback_rows)}**")
+        a(f"- Total entry signals observed: **{total_signals}**")
+        if len(warning_rows) > 0:
+            warn_agg = warning_rows.value_counts().rename_axis("simulation_warning").reset_index(name="count")
+            a(_df_to_md(warn_agg))
+        else:
+            a("- Simulator warnings: none")
+    a("")
+
+    a("## Implementation Readiness")
+    if df.empty:
+        a("No rows available for implementation readiness.")
+    else:
+        readiness = df.get("implementation_verdict", pd.Series("", index=df.index)).fillna("").astype(str)
+        counts = readiness.value_counts().rename_axis("implementation_verdict").reset_index(name="count")
+        a(_df_to_md(counts))
+        ready_rows = df[df["implementation_verdict"] == "IMPLEMENTATION_READY"].copy()
+        if ready_rows.empty:
+            a("")
+            a("**Implementation verdict:** `NOT_IMPLEMENTABLE`")
+            a("No candidate passed all implementation-readiness checks for this run.")
+        else:
+            cols = [
+                "symbol", "timeframe", "strategy_name", "status", "trade_count",
+                "profit_factor", "oos_return", "robustness_score", "implementation_scope",
+            ]
+            a("")
+            a("**Implementation verdict:** `IMPLEMENTATION_READY` candidates exist for paper-tool integration.")
+            a(_df_to_md(ready_rows[[c for c in cols if c in ready_rows.columns]].head(15)))
+        blocked = df[df["implementation_verdict"] != "IMPLEMENTATION_READY"].copy()
+        if not blocked.empty and "implementation_blockers" in blocked.columns:
+            blocker_counts = (
+                blocked["implementation_blockers"]
+                .fillna("")
+                .astype(str)
+                .str.split(";")
+                .explode()
+            )
+            blocker_counts = blocker_counts[blocker_counts != ""].value_counts().head(12)
+            if not blocker_counts.empty:
+                a("")
+                a("Top implementation blockers:")
+                a(_df_to_md(blocker_counts.rename_axis("blocker").reset_index(name="count")))
+    a("")
+
     a("## Which Strategy Family Works Best?")
     if not valid.empty:
         fam_agg = valid.groupby("family").agg(
@@ -553,7 +885,7 @@ def write_markdown_report(df: pd.DataFrame, run_dir: Path, run_id: str, run_meta
     a("## Engine B Findings")
     a(_engine_recommendation(valid, "engine_b_proxy"))
     a("")
-    a("## Engine D Findings")
+    a("## Engine D Proxy Findings (NOT real Engine D)")
     a(_engine_recommendation(valid, "engine_d_proxy"))
     a("")
 
@@ -616,8 +948,12 @@ def _engine_recommendation(valid: pd.DataFrame, family: str) -> str:
 
 def write_run_meta(run_dir: Path, run_id: str, run_meta: dict) -> None:
     meta_path = run_dir / "run_meta.json"
-    data = {"run_id": run_id, **run_meta,
-            "generated_at": datetime.now(timezone.utc).isoformat()}
+    data = {
+        "schema_version": RUN_META_SCHEMA_VERSION,
+        "run_id": run_id,
+        **run_meta,
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+    }
     meta_path.write_text(json.dumps(data, indent=2, default=str), encoding="utf-8")
 
 
@@ -669,6 +1005,36 @@ def generate_all_reports(
         "files_ok": len(errors) == 0,
         "errors": errors,
     }
+    try:
+        df = _apply_implementation_readiness(_normalise_action_recommendations(df))
+        warnings = df.get("simulation_warning", pd.Series("", index=df.index)).fillna("").astype(str)
+        backends = df.get("simulation_backend", pd.Series("", index=df.index)).fillna("").astype(str)
+        readiness = df.get("implementation_verdict", pd.Series("", index=df.index)).fillna("").astype(str)
+        status_data["self_audit"] = {
+            "simulation_warning_rows": int((warnings != "").sum()),
+            "pandas_fallback_rows": int((backends == "pandas_fallback").sum()),
+        }
+        status_data["implementation_readiness"] = {
+            "ready_rows": int((readiness == "IMPLEMENTATION_READY").sum()),
+            "blocked_rows": int((readiness != "IMPLEMENTATION_READY").sum()),
+            "run_verdict": (
+                "IMPLEMENTATION_READY"
+                if int((readiness == "IMPLEMENTATION_READY").sum()) > 0
+                else "NOT_IMPLEMENTABLE"
+            ),
+            "scope": "PAPER_TOOL_ONLY",
+        }
+    except Exception:
+        status_data["self_audit"] = {
+            "simulation_warning_rows": 0,
+            "pandas_fallback_rows": 0,
+        }
+        status_data["implementation_readiness"] = {
+            "ready_rows": 0,
+            "blocked_rows": 0,
+            "run_verdict": "NOT_IMPLEMENTABLE",
+            "scope": "RESEARCH_ONLY",
+        }
     try:
         status_path.write_text(json.dumps(status_data, indent=2, default=str), encoding="utf-8")
     except Exception:

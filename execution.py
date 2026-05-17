@@ -15,12 +15,12 @@ from athena_app.api.routes_execution import normalize_pip_mode
 from athena_app.repositories.audit_repo import insert_manual_error
 from athena_app.services.candle_service import recompute_levels_for_style
 from athena_runtime import executed_signals, rt
-from candles_cache import get_candle_fetch_meta
+from candles_cache import extract_candles, get_candle_fetch_meta
 from config import _json_safe, scan_candle_limits
 from engine_c import compute_consensus, normalise_engine_a
 from execution_lifecycle import run_managed_execution
 from factor_scoring import make_regime_smoothing_context
-from indicators import calc_indicators_with_normalized
+from indicators import calc_atr, calc_indicators_with_normalized
 from intermarket import build_scan_snapshot
 from market_structure import NakedEngine, engine_b_confidence_passes
 from guardian import pre_trade_check as _guardian_pre_trade
@@ -71,6 +71,50 @@ def _execution_audit_legs(result: dict, approval) -> list[dict]:
     return audit_legs
 
 
+def _execution_failure_reason(result: object, default: str = "Execution failed") -> str:
+    """Extract a useful execution failure reason from broker/lifecycle output."""
+    if isinstance(result, dict):
+        for key in ("error", "detail", "message", "comment", "reason"):
+            val = result.get(key)
+            if val:
+                return str(val)
+        lifecycle = result.get("lifecycle")
+        if isinstance(lifecycle, dict):
+            phases = lifecycle.get("phases")
+            if isinstance(phases, list):
+                for phase in reversed(phases):
+                    if not isinstance(phase, dict):
+                        continue
+                    phase_result = phase.get("result")
+                    if isinstance(phase_result, dict):
+                        nested = _execution_failure_reason(phase_result, "")
+                        if nested:
+                            return nested
+                    if phase.get("success") is False:
+                        name = phase.get("name") or "execution"
+                        return f"{default}: {name} returned no error detail"
+        retcode = result.get("retcode")
+        if retcode is not None:
+            return f"{default}: broker retcode {retcode}"
+    return default
+
+
+def _log_execution_failure(log, prefix: str, pair: str, venue: str, result: object) -> str:
+    """Log failed execution output and return the reason sent back to operators."""
+    reason = _execution_failure_reason(result)
+    try:
+        safe_result = _json_safe(result)
+    except Exception:
+        safe_result = repr(result)
+    try:
+        log.warning(
+            f"[{prefix}] {pair or '?'} {venue or '?'} FAILED: {reason} | result={safe_result}"
+        )
+    except Exception:
+        pass
+    return reason
+
+
 def _engine_c_accepts_engine_b(
     confidence_b: dict, style_profile: dict, regime_label: str, pair_type: str
 ) -> tuple[bool, float]:
@@ -86,6 +130,48 @@ def _engine_c_accepts_engine_b(
         pair_type,
     )
     return bool(gate_ok), float(scaled_min)
+
+
+def _engine_b_atr_for_scan_levels(
+    sig_a: dict | None,
+    atr_candles: list,
+    atr_tf: str,
+    pair: dict,
+    resolved_style: str,
+    runtime,
+) -> tuple[float, str]:
+    """Resolve the ATR Engine B should use for Engine C scan execution levels."""
+    tf = str(atr_tf or "H4").upper()
+    atr = 0.0
+    if tf == "H4":
+        try:
+            atr = float((sig_a or {}).get("atr") or 0.0)
+        except (TypeError, ValueError):
+            atr = 0.0
+
+    if not atr or atr <= 0:
+        try:
+            _highs = [float(c["high"]) for c in atr_candles]
+            _lows = [float(c["low"]) for c in atr_candles]
+            _closes = [float(c["close"]) for c in atr_candles]
+            atr_series = calc_atr(_highs, _lows, _closes, 14)
+            atr = float(atr_series[-1]) if atr_series else 0.0
+        except (KeyError, TypeError, ValueError):
+            atr = 0.0
+
+    cfg = getattr(runtime, "CONFIG", {}) or {}
+    if (
+        str((pair or {}).get("type") or "").lower() == "crypto"
+        and str(cfg.get("ENGINE_B_CRYPTO_LEVELS_FEED", "bybit")).lower() == "bybit"
+        and hasattr(runtime, "bybit_atr_for_levels")
+    ):
+        bybit_atr = runtime.bybit_atr_for_levels(pair, resolved_style)
+        if bybit_atr:
+            return float(bybit_atr), "bybit"
+        if not bool(cfg.get("ENGINE_B_CRYPTO_LEVELS_SIGNAL_FEED_FALLBACK", False)):
+            return 0.0, "bybit_unavailable"
+
+    return float(atr or 0.0), tf
 
 
 def _engine_c_best_score(confidence_b: dict | None) -> float:
@@ -274,6 +360,442 @@ def _apply_level_override(sig: dict, override: dict) -> str | None:
     return None
 
 
+def _engine_d_execution_block_reason(sig: dict) -> str | None:
+    """Return the fail-closed reason for non-executable Engine D candidates."""
+    gate_result = str(sig.get("gate_result", "PASS") or "PASS").upper()
+    if sig.get("executable") is False:
+        return str(sig.get("candidate_status") or "ENGINE_D_NOT_EXECUTABLE")
+    if gate_result != "PASS":
+        return str(sig.get("candidate_status") or gate_result or "ENGINE_D_GATE_FAILED")
+    grade = str(sig.get("ai_grade") or sig.get("grade") or "").upper()
+    if grade == "D":
+        return "ENGINE_D_GRADE_D_NOT_EXECUTABLE"
+    fail_reasons = sig.get("fail_reasons")
+    if isinstance(fail_reasons, list) and fail_reasons:
+        return str(sig.get("candidate_status") or ",".join(map(str, fail_reasons)))
+    return None
+
+
+def _is_structural_engine_b_execution(sig: dict, engine_b: dict | None = None) -> bool:
+    """True when execution should apply Engine B level / stale-B refresh semantics.
+
+    Full-scan Engine A rows carry ``enginesAligned`` from the A+B merge; that metadata alone
+    must not trigger Engine B execution gates.
+    """
+    sig = sig or {}
+    engine_b = engine_b or {}
+    if sig.get("is_naked"):
+        return True
+    if sig.get("naked_data"):
+        return True
+    eng = str(sig.get("engine") or sig.get("source_engine") or "").strip().lower()
+    verdict = str(sig.get("verdict") or "").strip().upper()
+    engine_a_row = eng in ("a", "engine_a", "scalp", "scalp_vp", "engine_d")
+    b_executable_verdict = verdict in (
+        "ALIGNED",
+        "B_ONLY",
+        "B_ONLY_SCORED",
+        "B_ONLY_VISION_CONFIRMED",
+        "B_OVERRIDE_CONFLICT",
+    )
+    eb = sig.get("engine_b")
+    if isinstance(eb, dict) and eb:
+        if engine_a_row and not b_executable_verdict:
+            return False
+        return True
+    if engine_b:
+        return True
+    return False
+
+
+def _signal_has_engine_b_context(sig: dict, engine_b: dict | None = None) -> bool:
+    return _is_structural_engine_b_execution(sig, engine_b)
+
+
+def _engine_b_context_confirmed(sig: dict, engine_b: dict | None = None) -> bool:
+    sig = sig or {}
+    engine_b = engine_b or {}
+    if not _is_structural_engine_b_execution(sig, engine_b):
+        return True
+    if "enginesAligned" in sig:
+        return bool(sig.get("enginesAligned"))
+    nested = sig.get("engine_b")
+    if not isinstance(nested, dict):
+        nested = sig.get("naked_data")
+    if isinstance(nested, dict) and "passed" in nested:
+        return bool(nested.get("passed"))
+    if "passed" in engine_b:
+        return bool(engine_b.get("passed"))
+    if _signal_has_engine_b_context(sig, engine_b):
+        return False
+    return False
+
+
+def _extract_engine_b_execution_levels(
+    sig: dict,
+    engine_b: dict | None = None,
+) -> dict | None:
+    sig = sig or {}
+    has_b_context = _signal_has_engine_b_context(sig, engine_b)
+
+    def _levels_from(source: dict, *, allow_recommended: bool, allow_signal_levels: bool = False) -> dict | None:
+        sl = source.get("execution_sl") or source.get("engine_b_execution_sl")
+        tp = source.get("execution_tp") or source.get("engine_b_execution_tp")
+        if allow_recommended and (sl is None or tp is None):
+            sl = sl or source.get("recommended_stop_loss")
+            tp = tp or source.get("recommended_take_profit")
+        if allow_signal_levels and (sl is None or tp is None):
+            sl = sl or source.get("sl")
+            tp = tp or source.get("tp1")
+        try:
+            sl_f = float(sl)
+            tp_f = float(tp)
+        except (TypeError, ValueError):
+            return None
+        if sl_f > 0 and tp_f > 0:
+            return {"sl": sl_f, "tp1": tp_f, "tp2": tp_f}
+        return None
+
+    candidates = [
+        (sig, False, False),
+        sig.get("naked_data"),
+        sig.get("engine_b_status"),
+        engine_b,
+        sig.get("engine_b"),
+        (sig, False, has_b_context),
+    ]
+    for source in candidates:
+        allow_recommended = True
+        allow_signal_levels = False
+        if isinstance(source, tuple):
+            source, allow_recommended, allow_signal_levels = source
+        if not isinstance(source, dict):
+            continue
+        levels = _levels_from(
+            source,
+            allow_recommended=allow_recommended,
+            allow_signal_levels=allow_signal_levels,
+        )
+        if levels:
+            return levels
+    return None
+
+
+def _maybe_prefetch_execution_candle_fetch_meta(sig: dict, *, _r) -> None:
+    """Refresh ``signal['candleFetchMeta']`` from ``fetch_candles`` + terminal metadata.
+
+    Prevents guardian/risk staleness mismatches after long UI waits (e.g. AI review) without
+    a full analyze refresh. Uses the same limits as Engine A scans.
+
+    Controlled by CONFIG ``QUICK_EXEC_PREFETCH_CANDLE_META`` (default safe: off in python
+    defaults; repo ``config.yaml`` sets true).
+
+    Ops: exotic FX (e.g. USD/MXN) still blocks if MT5 has no recent bars — verify Market Watch /
+    sessions when ``STALE_CANDLES`` persists after prefetch.
+    """
+    try:
+        if not bool((_r.CONFIG or {}).get("QUICK_EXEC_PREFETCH_CANDLE_META", False)):
+            return
+        pair_disp = str(sig.get("pair") or sig.get("display") or sig.get("symbol") or "").strip()
+        if not pair_disp:
+            return
+        pair_obj = next((p for p in (_r.ALL_PAIRS or []) if str(p.get("display", "")) == pair_disp), None)
+        if not pair_obj:
+            return
+        limits = scan_candle_limits()
+        fetch = getattr(_r, "fetch_candles", None)
+        if not callable(fetch):
+            return
+        for tf in ("H1", "H4", "D1"):
+            lim = int(limits[tf])
+            fetch(pair_obj, tf, lim)
+        d1_m = get_candle_fetch_meta(pair_obj, "D1", limits["D1"])
+        h4_m = get_candle_fetch_meta(pair_obj, "H4", limits["H4"])
+        h1_m = get_candle_fetch_meta(pair_obj, "H1", limits["H1"])
+        sig["candleFetchMeta"] = {
+            "D1": d1_m if isinstance(d1_m, dict) else {},
+            "H4": h4_m if isinstance(h4_m, dict) else {},
+            "H1": h1_m if isinstance(h1_m, dict) else {},
+            "pairSource": pair_obj.get("source"),
+        }
+        _r.log.info(
+            "[EXEC] candleFetchMeta prefetched H1=%s H4=%s D1=%s pair=%s source=%s",
+            limits.get("H1"),
+            limits.get("H4"),
+            limits.get("D1"),
+            pair_disp,
+            pair_obj.get("source"),
+        )
+    except Exception as exc:
+        try:
+            _r.log.warning("[EXEC] candleFetchMeta prefetch failed: %s", exc)
+        except Exception:
+            pass
+
+
+def _hydrate_execution_candle_quality(sig: dict, *, _r) -> None:
+    """Before risk gate: refresh candles and rebuild freshness/consistency/exec gate fields.
+
+    UI/client payloads often embed stale ``candleFreshness`` while ``candleFetchMeta`` alone was
+    prefetched elsewhere; risk uses ``evaluate_execution_data_freshness``. When enabled, this pulls
+    H1/H4/D1 via ``fetch_candles`` (scan limits), repopulates ``candleFetchMeta``, ``candleFreshness``
+    (if ``CANDLE_FRESHNESS_ENABLED``), ``candleConsistency``, and ``dataFreshness``. If every fetch
+    is empty/failed we fall back to :func:`_maybe_prefetch_execution_candle_fetch_meta` so a prior
+    ``analyze_pair`` refresh path is not poisoned.
+
+    Controlled by CONFIG ``EXECUTION_HYDRATE_CANDLE_QUALITY`` (default True in ``config.py``).
+    """
+    cfg = getattr(_r, "CONFIG", None) or {}
+    if not bool(cfg.get("EXECUTION_HYDRATE_CANDLE_QUALITY", True)):
+        _maybe_prefetch_execution_candle_fetch_meta(sig, _r=_r)
+        return
+
+    pair_disp = str(sig.get("pair") or sig.get("display") or sig.get("symbol") or "").strip()
+    if not pair_disp:
+        _maybe_prefetch_execution_candle_fetch_meta(sig, _r=_r)
+        return
+
+    pair_obj = next((p for p in (_r.ALL_PAIRS or []) if str(p.get("display", "")) == pair_disp), None)
+    if not pair_obj:
+        _maybe_prefetch_execution_candle_fetch_meta(sig, _r=_r)
+        return
+
+    fetch = getattr(_r, "fetch_candles", None)
+    if not callable(fetch):
+        _maybe_prefetch_execution_candle_fetch_meta(sig, _r=_r)
+        return
+
+    try:
+        limits = scan_candle_limits()
+        candles: dict[str, list] = {"H1": [], "H4": [], "D1": []}
+        for tf in ("H1", "H4", "D1"):
+            lim = int(limits[str(tf)])
+            raw = fetch(pair_obj, str(tf), lim)
+            extracted = extract_candles(raw)
+            candles[str(tf)] = list(extracted or [])
+
+        if not (
+            candles["H1"]
+            and candles["H4"]
+            and candles["D1"]
+        ):
+            try:
+                _r.log.info(
+                    "[EXEC] hydrate skipped (incomplete candle fetch); pair=%s h1=%d h4=%d d1=%d",
+                    pair_disp,
+                    len(candles["H1"]),
+                    len(candles["H4"]),
+                    len(candles["D1"]),
+                )
+            except Exception:
+                pass
+            _maybe_prefetch_execution_candle_fetch_meta(sig, _r=_r)
+            return
+
+        d1_m = get_candle_fetch_meta(pair_obj, "D1", limits["D1"])
+        h4_m = get_candle_fetch_meta(pair_obj, "H4", limits["H4"])
+        h1_m = get_candle_fetch_meta(pair_obj, "H1", limits["H1"])
+        sig["candleFetchMeta"] = {
+            "D1": d1_m if isinstance(d1_m, dict) else {},
+            "H4": h4_m if isinstance(h4_m, dict) else {},
+            "H1": h1_m if isinstance(h1_m, dict) else {},
+            "pairSource": pair_obj.get("source"),
+        }
+
+        from athena_app.services.data_freshness import (
+            check_live_candle_consistency,
+            evaluate_execution_data_freshness,
+        )
+        from athena_app.services.market_state import (
+            candle_freshness_diagnostic,
+            market_state_offset_hours,
+            split_market_state,
+        )
+
+        time_now = datetime.now(timezone.utc).timestamp()
+
+        candle_consistency: dict = {}
+        states_by_tf: dict[str, dict] = {}
+
+        for tf_u in ("H4", "H1", "D1"):
+            tf_candles = list(candles.get(tf_u) or [])
+            offset_h = market_state_offset_hours(pair_obj, tf_u)
+            state = split_market_state(
+                tf_candles,
+                tf_u,
+                pair_obj.get("display") or pair_obj.get("symbol") or "",
+                time_now=time_now,
+                offset_hours=offset_h,
+            )
+            states_by_tf[tf_u] = state
+            if pair_obj.get("source") == "mt5" and pair_obj.get("type") == "forex":
+                engine_a_input = list(state.get("confirmed") or [])
+            else:
+                engine_a_input = list(state.get("confirmed") or [])
+                if state.get("forming"):
+                    engine_a_input.append(state["forming"])
+            engine_b_input = list(state.get("confirmed") or [])
+            scanner_input = list(engine_a_input)
+
+            consistency_paths = {
+                "raw_provider": tf_candles,
+                "market_state": state,
+                "engine_a": engine_a_input,
+                "engine_b": engine_b_input,
+                "scanner": scanner_input,
+                "compare": scanner_input,
+            }
+            cache_meta = sig["candleFetchMeta"].get(tf_u)
+            if isinstance(cache_meta, dict) and cache_meta:
+                consistency_paths["cache"] = cache_meta
+
+            consistency_result = check_live_candle_consistency(
+                pair_obj,
+                tf_u,
+                consistency_paths,
+                time_now=time_now,
+            )
+            if consistency_result:
+                candle_consistency[tf_u] = consistency_result
+
+        sig["candleConsistency"] = candle_consistency
+
+        if bool(cfg.get("CANDLE_FRESHNESS_ENABLED", True)):
+            cf: dict = {}
+            for tf_u in ("D1", "H4", "H1"):
+                state = states_by_tf[tf_u]
+                confirmed = list(state.get("confirmed") or [])
+                forming = state.get("forming")
+                series_diag = confirmed + ([forming] if forming else [])
+                cf[tf_u] = candle_freshness_diagnostic(
+                    pair_obj,
+                    tf_u,
+                    series_diag,
+                    time_now=time_now,
+                    source=pair_obj.get("source"),
+                )
+            sig["candleFreshness"] = cf
+
+        freshness_eval = evaluate_execution_data_freshness(sig, cfg)
+        sig["dataFreshness"] = freshness_eval
+        if bool(cfg.get("SIGNAL_EXECUTABLE_FALSE_WHEN_FRESHNESS_BLOCKS", True)):
+            if isinstance(freshness_eval, dict) and not freshness_eval.get("allowed"):
+                sig["executable"] = False
+
+        try:
+            _r.log.info(
+                "[EXEC] candle quality hydrated pair=%s h1=%d h4=%d d1=%d allowed=%s",
+                pair_disp,
+                len(candles["H1"]),
+                len(candles["H4"]),
+                len(candles["D1"]),
+                (sig.get("dataFreshness") or {}).get("allowed"),
+            )
+        except Exception:
+            pass
+    except Exception as exc:
+        try:
+            _r.log.warning("[EXEC] candle quality hydrate failed: %s", exc)
+        except Exception:
+            pass
+        _maybe_prefetch_execution_candle_fetch_meta(sig, _r=_r)
+
+
+def _apply_engine_b_execution_levels(sig: dict, engine_b: dict | None = None) -> bool:
+    levels = _extract_engine_b_execution_levels(sig, engine_b)
+    if not levels:
+        return False
+    sig["sl"] = levels["sl"]
+    sig["tp1"] = levels["tp1"]
+    sig["tp2"] = levels["tp2"]
+    sig["level_source"] = "engine_b_execution"
+    return True
+
+
+def _refresh_engine_b_execution_context(
+    sig: dict,
+    engine_b: dict | None,
+    runtime,
+    pip_mode: str | None,
+) -> tuple[dict | None, str | None]:
+    """Re-run Engine B before execution when a B signal aged during a scan.
+
+    Engine B signals cannot be refreshed with Engine A's generic scorer because
+    the stop/target and pass flag come from the structural checklist.
+    """
+    refresh_fn = getattr(runtime, "compute_naked_analysis", None)
+    if not callable(refresh_fn):
+        return None, "ENGINE_B_REFRESH_REQUIRED: Engine B refresh function unavailable"
+
+    seed = dict(sig or {})
+    if pip_mode:
+        seed["style"] = pip_mode
+
+    try:
+        refreshed, _pair_obj, err = refresh_fn(seed, force_ai=False, execution_mode=True)
+    except Exception as exc:
+        return None, f"ENGINE_B_REFRESH_FAILED: {exc}"
+
+    if err or not isinstance(refreshed, dict) or not refreshed:
+        return None, f"ENGINE_B_REFRESH_FAILED: {err or 'no refreshed Engine B context'}"
+
+    original_direction = str(sig.get("direction") or "").upper()
+    refreshed_direction = str(refreshed.get("direction") or original_direction).upper()
+    if original_direction and refreshed_direction and refreshed_direction != original_direction:
+        return (
+            None,
+            f"ENGINE_B_SIGNAL_FLIPPED: {sig.get('pair')} is now {refreshed_direction} (was {original_direction})",
+        )
+
+    if not bool(refreshed.get("passed")):
+        return None, "ENGINE_B_NOT_CONFIRMED: refreshed Engine B confirmation failed before execution"
+
+    try:
+        current_price = float(refreshed.get("current_price") or refreshed.get("price") or 0.0)
+    except (TypeError, ValueError):
+        current_price = 0.0
+    if current_price <= 0:
+        return None, "ENGINE_B_REFRESH_FAILED: refreshed Engine B context has no executable price"
+
+    sl = (
+        refreshed.get("execution_sl")
+        or refreshed.get("final_stop_loss")
+        or refreshed.get("recommended_stop_loss")
+    )
+    tp = (
+        refreshed.get("execution_tp")
+        or refreshed.get("final_take_profit")
+        or refreshed.get("recommended_take_profit")
+    )
+    try:
+        sl = float(sl)
+        tp = float(tp)
+    except (TypeError, ValueError):
+        return None, "ENGINE_B_REFRESH_FAILED: refreshed Engine B context has no executable levels"
+    if sl <= 0 or tp <= 0:
+        return None, "ENGINE_B_REFRESH_FAILED: refreshed Engine B context has invalid executable levels"
+
+    refreshed.setdefault("execution_sl", sl)
+    refreshed.setdefault("execution_tp", tp)
+    refreshed.setdefault("current_price", current_price)
+    now_iso = datetime.now(timezone.utc).isoformat()
+
+    sig["is_naked"] = True
+    sig["naked_data"] = refreshed
+    sig["engine_b"] = refreshed
+    sig["price"] = current_price
+    sig["entry"] = current_price
+    sig["timestamp"] = now_iso
+    sig["direction"] = refreshed_direction or original_direction
+    sig["atr"] = refreshed.get("atr", sig.get("atr", 0))
+    sig["confluenceScore"] = refreshed.get("score", sig.get("confluenceScore"))
+    sig["maxScore"] = refreshed.get("max_possible", sig.get("maxScore"))
+    sig["sl"] = sl
+    sig["tp1"] = tp
+    sig["tp2"] = tp
+    return refreshed, None
+
+
 def api_quick_execute():
     _r = rt()
     # ── Execution safety guards (must match api_execute) ─────────────────
@@ -289,6 +811,7 @@ def api_quick_execute():
         return jsonify({"error": "Invalid payload"}), 400
 
     sig = d["signal"]
+    _quick_pair = sig.get("pair") or sig.get("display") or sig.get("symbol") or ""
     engine_b = d.get("engine_b") or {}
     level_override = d.get("level_override") or sig.get("level_override")
 
@@ -311,6 +834,7 @@ def api_quick_execute():
             _sig_age = 9999
 
     _max_age = _r.CONFIG.get("SIGNAL_MAX_AGE_SEC", 300)
+    _has_engine_b_context = _signal_has_engine_b_context(sig, engine_b)
     
     _missing_price = False
     try:
@@ -318,6 +842,23 @@ def api_quick_execute():
             _missing_price = True
     except (TypeError, ValueError):
         _missing_price = True
+
+    if (_sig_age > _max_age / 2 or _missing_price) and _has_engine_b_context:
+        refreshed_engine_b, refresh_err = _refresh_engine_b_execution_context(
+            sig, engine_b, _r, pip_mode
+        )
+        if refresh_err:
+            return jsonify({"error": refresh_err, "pair": sig.get("pair")}), 409
+        engine_b = refreshed_engine_b or engine_b
+        _sig_age = 0
+        _missing_price = False
+    if _has_engine_b_context and not _engine_b_context_confirmed(sig, engine_b):
+        return jsonify(
+            {
+                "error": "ENGINE_B_NOT_CONFIRMED: Engine B confirmation failed before execution",
+                "pair": sig.get("pair"),
+            }
+        ), 409
 
     if _sig_age > _max_age / 2 or _missing_price:
         pair = sig.get("pair", "")
@@ -346,39 +887,63 @@ def api_quick_execute():
                         "trendState", sig.get("trendState")
                     )
                     sig["timestamp"] = _fresh["timestamp"]
+                    for _fresh_key in (
+                        "candleFetchMeta",
+                        "candleFreshness",
+                        "candleConsistency",
+                        "dataFreshness",
+                    ):
+                        if _fresh.get(_fresh_key) is not None:
+                            sig[_fresh_key] = _fresh[_fresh_key]
             except Exception as _fresh_err:
                 _r.log.warning(
                     f"[QUICK EXEC] {pair}: refresh failed ({_fresh_err}) - continuing with original direction"
                 )
 
-    try:
-        recomputed = recompute_levels_for_style(
-            sig,
-            pip_mode,
-            resolve_pair_from_signal=_r.resolve_pair_from_signal,
-            fetch_candles=_r.fetch_candles,
-            calc_indicators_with_normalized=_r.calc_indicators_with_normalized,
-            atr_for_levels=_r.atr_for_levels,
-            calc_levels=_r.calc_levels,
-            config=_r.CONFIG,
-        )
-        lvl = recomputed["levels"]
-        sig["sl"] = lvl["sl"]
-        sig["tp1"] = lvl["tp1"]
-        sig["tp2"] = lvl["tp2"]
-        _r.log.warning(
-            f"[QUICK EXEC] {sig.get('pair')}: style={recomputed['pip_mode']}, "
-            f"ATR={recomputed['atr']:.6f}, SL={lvl['sl']:.6f}, TP1={lvl['tp1']:.6f}"
-        )
-    except (ValueError, TypeError) as _svc_err:
-        if "recommended_stop_loss" in engine_b and engine_b["recommended_stop_loss"]:
-            sig["sl"] = engine_b["recommended_stop_loss"]
-        if "recommended_take_profit" in engine_b and engine_b["recommended_take_profit"]:
-            sig["tp1"] = engine_b["recommended_take_profit"]
-            sig["tp2"] = engine_b["recommended_take_profit"]
-        _r.log.warning(
-            f"[QUICK EXEC] {sig.get('pair')}: style={pip_mode} level service fallback ({_svc_err})"
-        )
+    if _has_engine_b_context:
+        if _apply_engine_b_execution_levels(sig, engine_b):
+            _r.log.warning(
+                f"[QUICK EXEC] {sig.get('pair')}: preserved Engine B execution levels "
+                f"SL={sig.get('sl')} TP1={sig.get('tp1')}"
+            )
+        else:
+            return jsonify(
+                {
+                    "error": "ENGINE_B_LEVELS_UNAVAILABLE: Engine B execution levels missing or invalid",
+                    "pair": sig.get("pair"),
+                }
+            ), 409
+    else:
+        try:
+            recomputed = recompute_levels_for_style(
+                sig,
+                pip_mode,
+                resolve_pair_from_signal=_r.resolve_pair_from_signal,
+                fetch_candles=_r.fetch_candles,
+                calc_indicators_with_normalized=_r.calc_indicators_with_normalized,
+                atr_for_levels=_r.atr_for_levels,
+                calc_levels=_r.calc_levels,
+                config=_r.CONFIG,
+                get_pair_level_atr_class=getattr(_r, "get_pair_level_atr_class", None),
+                bybit_atr_for_levels=getattr(_r, "bybit_atr_for_levels", None),
+            )
+            lvl = recomputed["levels"]
+            sig["sl"] = lvl["sl"]
+            sig["tp1"] = lvl["tp1"]
+            sig["tp2"] = lvl["tp2"]
+            _r.log.warning(
+                f"[QUICK EXEC] {sig.get('pair')}: style={recomputed['pip_mode']}, "
+                f"ATR={recomputed['atr']:.6f}, SL={lvl['sl']:.6f}, TP1={lvl['tp1']:.6f}"
+            )
+        except (ValueError, TypeError) as _svc_err:
+            if "recommended_stop_loss" in engine_b and engine_b["recommended_stop_loss"]:
+                sig["sl"] = engine_b["recommended_stop_loss"]
+            if "recommended_take_profit" in engine_b and engine_b["recommended_take_profit"]:
+                sig["tp1"] = engine_b["recommended_take_profit"]
+                sig["tp2"] = engine_b["recommended_take_profit"]
+            _r.log.warning(
+                f"[QUICK EXEC] {sig.get('pair')}: style={pip_mode} level service fallback ({_svc_err})"
+            )
 
     if level_override:
         _override_err = _apply_level_override(sig, level_override)
@@ -439,6 +1004,8 @@ def api_quick_execute():
                 return jsonify({"error": "Symbol not on broker"}), 400
             _exec_venue = "mt5"
 
+        _hydrate_execution_candle_quality(sig, _r=_r)
+
         approval = risk_check(
             signal=sig,
             account_balance=account["balance"],
@@ -448,6 +1015,7 @@ def api_quick_execute():
             kill_switch=_r.kill_switch(),
             sizing_override=_sizing_override,
             is_manual_override=True,
+            account_domain=account.get("risk_domain"),
         )
 
         pair_name = sig.get("pair", sig.get("symbol", "N/A"))
@@ -504,6 +1072,7 @@ def api_quick_execute():
         result = run_managed_execution(_exec_venue, sig, approval)
         if result.get("success"):
             _audit = _quick_audit_context(sig, engine_b)
+            _audit_ok = True
             try:
                 _audit_ts = datetime.now(timezone.utc).isoformat()
                 _audit_rows = []
@@ -547,6 +1116,12 @@ def api_quick_execute():
                     timed_sqlite_commit(con, label="quick_execute.audit_success.commit")
             except Exception as ae:
                 _r.log.warning(f"[QUICK EXEC] Audit DB write failed: {ae}")
+                _audit_ok = False
+
+            if not _audit_ok:
+                result["success"] = False
+                result["error"] = "AUDIT_PERSISTENCE_FAILED_AFTER_FILL"
+                return jsonify({"error": result["error"], "execution": _json_safe(result)}), 500
 
             return jsonify(
                 {
@@ -556,10 +1131,15 @@ def api_quick_execute():
                 }
             )
         else:
-            return jsonify({"error": result.get("error", "Execution failed")}), 400
+            err = _log_execution_failure(
+                _r.log, "QUICK EXEC", pair_name, _exec_venue, result
+            )
+            if isinstance(result, dict):
+                result.setdefault("error", err)
+            return jsonify({"error": err, "execution": _json_safe(result)}), 400
 
     except Exception as e:
-        _r.log.error(f"quick_execute error: {e}")
+        _r.log.exception(f"[QUICK EXEC] {_quick_pair or '?'} error: {e}")
         return jsonify({"error": str(e)}), 500
 
 
@@ -661,7 +1241,9 @@ def api_engine_c_scan():
             )
 
             resolved_style_b, style_profile_b = _r.naked_scan_style_profile(
-                requested_style, score_group=_pair_score_group
+                requested_style,
+                score_group=_pair_score_group,
+                asset_type=ptype,
             )
 
             _zone_tf = str(style_profile_b.get("zone_tf", "H4")).upper()
@@ -767,23 +1349,27 @@ def api_engine_c_scan():
                 continue
 
             current_price = float(sig_a.get("price") or entry_candles[-1]["close"])
-            atr = float(sig_a.get("atr") or 0.0)
-            if not atr or atr <= 0:
-                from indicators import calc_atr
+            atr, atr_source = _engine_b_atr_for_scan_levels(
+                sig_a,
+                atr_candles,
+                _atr_tf,
+                pair,
+                resolved_style_b,
+                _r,
+            )
 
-                _highs = [float(c["high"]) for c in atr_candles]
-                _lows = [float(c["low"]) for c in atr_candles]
-                _closes = [float(c["close"]) for c in atr_candles]
-                atr_series = calc_atr(_highs, _lows, _closes, 14)
-                atr = float(atr_series[-1]) if atr_series else 0.0
-
             if not atr or atr <= 0:
+                _atr_detail = (
+                    "Bybit ATR unavailable and signal-feed fallback disabled"
+                    if atr_source == "bybit_unavailable"
+                    else f"ATR unavailable on {_atr_tf}"
+                )
                 results["skipped"].append(
                     _engine_c_skip_entry(
                         display,
                         "Zero ATR",
                         code="zero_atr",
-                        detail=f"ATR unavailable on {_atr_tf}",
+                        detail=_atr_detail,
                     )
                 )
                 continue
@@ -828,6 +1414,8 @@ def api_engine_c_scan():
                     asset_type=ptype,
                     d1_snap=_ec_d1_snap,
                     h4_snap=_ec_h4_snap,
+                    style=resolved_style_b,
+                    pair=pair,
                 )
                 if res_b.get("structural_verdict") == "CLEAR":
                     conf_b = engine_b.calculate_confidence(
@@ -1095,11 +1683,21 @@ def api_execute():
             _sig_age = 9999
 
     _max_age = _r.CONFIG.get("SIGNAL_MAX_AGE_SEC", 300)
+    _has_engine_b_context = _signal_has_engine_b_context(sig, d.get("engine_b") or {})
 
     if _sig_age > _max_age / 2:
-        _pair_obj = next((p for p in _r.ALL_PAIRS if p["display"] == pair), None)
+        _pair_obj = None
+        if _has_engine_b_context:
+            refreshed_engine_b, refresh_err = _refresh_engine_b_execution_context(
+                sig, d.get("engine_b") or {}, _r, normalize_pip_mode(sig.get("style"))
+            )
+            if refresh_err:
+                return jsonify({"error": refresh_err, "pair": pair}), 409
+            d["engine_b"] = refreshed_engine_b or d.get("engine_b") or {}
+        else:
+            _pair_obj = next((p for p in _r.ALL_PAIRS if p["display"] == pair), None)
 
-        if _pair_obj:
+        if (not _has_engine_b_context) and _pair_obj:
             try:
                 _btc_bias = "neutral"
 
@@ -1145,13 +1743,46 @@ def api_execute():
 
             except Exception as _re:
                 _r.log.warning(
-                    f"[EXEC] {pair}: live refresh failed ({_re}) — using original signal, refreshing timestamp"
+                    f"[EXEC] {pair}: live refresh failed ({_re}) — rejecting stale signal"
                 )
+                return jsonify(
+                    {
+                        "error": f"STALE_SIGNAL_REFRESH_FAILED: {pair} live refresh failed — signal rejected",
+                        "pair": pair,
+                    }
+                ), 409
 
-                sig["timestamp"] = datetime.now(timezone.utc).isoformat()
+        elif not _has_engine_b_context:
+            _r.log.warning(
+                f"[EXEC] {pair}: pair not found in universe — rejecting stale signal"
+            )
+            return jsonify(
+                {
+                    "error": f"STALE_SIGNAL_REFRESH_FAILED: {pair} not found in universe — signal rejected",
+                    "pair": pair,
+                }
+            ), 409
 
-        else:
-            sig["timestamp"] = datetime.now(timezone.utc).isoformat()
+    if _has_engine_b_context and not _engine_b_context_confirmed(sig, d.get("engine_b") or {}):
+        return jsonify(
+            {
+                "error": "ENGINE_B_NOT_CONFIRMED: Engine B confirmation failed before execution",
+                "pair": pair,
+            }
+        ), 409
+
+    if _has_engine_b_context:
+        _levels_applied = _apply_engine_b_execution_levels(sig, d.get("engine_b") or {})
+        if not _levels_applied:
+            _r.log.warning(
+                f"[EXEC] {pair}: Engine B execution levels not found — cannot execute structural signal"
+            )
+            return jsonify(
+                {
+                    "error": "ENGINE_B_LEVELS_UNAVAILABLE: structural execution levels missing",
+                    "pair": pair,
+                }
+            ), 409
 
     if level_override:
         _override_err = _apply_level_override(sig, level_override)
@@ -1236,7 +1867,7 @@ def api_execute():
                         "error": f"Symbol '{pair}' not available on your MT5 broker. "
                         f"Check Market Watch or use a broker that offers this instrument."
                     }
-                ), 200
+                ), 400
 
             _exec_venue = "mt5"
 
@@ -1265,6 +1896,8 @@ def api_execute():
             else:
                 _sizing_override = 1.0
 
+        _hydrate_execution_candle_quality(sig, _r=_r)
+
         approval = risk_check(
             signal=sig,
             account_balance=account["balance"],
@@ -1273,6 +1906,7 @@ def api_execute():
             symbol_info=symbol_info,
             kill_switch=_r.kill_switch(),
             sizing_override=_sizing_override,
+            account_domain=account.get("risk_domain"),
         )
 
         if not approval.approved:
@@ -1304,7 +1938,7 @@ def api_execute():
                     "error": f"Risk engine rejected: {approval.reason}",
                     "approval": approval.to_dict(),
                 }
-            ), 200
+            ), 422
 
         _ptc_ok, _ptc_reason = _guardian_pre_trade(sig, positions, account, _pos_resp)
         if not _ptc_ok:
@@ -1314,8 +1948,7 @@ def api_execute():
         result = run_managed_execution(_exec_venue, sig, approval)
 
         if result.get("success"):
-            executed_signals.add(sig_id)
-
+            _audit_ok = True
             try:
                 with timed_sqlite_connect(
                     _r.AUDIT_DB, timeout=15.0, label="execute.audit_success.connect"
@@ -1373,15 +2006,28 @@ def api_execute():
 
             except Exception as ae:
                 _r.log.warning(f"Audit DB write failed: {ae}")
+                _audit_ok = False
 
-            _r.log.info(
-                f"[EXEC] {pair} EXECUTED: ticket={result.get('ticket')}, volume={result.get('volume')}"
-            )
+            if not _audit_ok:
+                result["success"] = False
+                result["error"] = "AUDIT_PERSISTENCE_FAILED_AFTER_FILL"
+            else:
+                executed_signals.add(sig_id)
+                _r.log.info(
+                    f"[EXEC] {pair} EXECUTED: ticket={result.get('ticket')}, volume={result.get('volume')}"
+                )
+
+        if not result.get("success"):
+            err = _log_execution_failure(_r.log, "EXEC", pair, _exec_venue, result)
+            if isinstance(result, dict):
+                result.setdefault("error", err)
+            if result.get("error") == "AUDIT_PERSISTENCE_FAILED_AFTER_FILL":
+                return jsonify(result), 500
 
         return jsonify(result)
 
     except Exception as e:
-        _r.log.error(f"[EXEC] execution error: {e}")
+        _r.log.exception(f"[EXEC] {pair or '?'} execution error: {e}")
 
         return jsonify({"error": "Execution failed — check logs"}), 500
 
@@ -1437,10 +2083,12 @@ def register_execution_routes(app: Flask) -> None:
 
 def api_scalp_pairs():
     """List Engine D scan universe (mirrors athena when registered)."""
-    from scalp_engine import get_scalp_pairs
+    from scalp_engine import displays_for_scalp_scan
 
     try:
-        pairs = get_scalp_pairs(rt().ACTIVE_PAIRS)
+        _r = rt()
+        _disabled = getattr(_r, "disabled_pairs", None) or set()
+        pairs = displays_for_scalp_scan(_r.ACTIVE_PAIRS, disabled_displays=_disabled)
         return jsonify({"pairs": pairs, "count": len(pairs)})
     except Exception as e:
         rt().log.error(f"[SCALP API] scalp-pairs error: {e}")
@@ -1449,13 +2097,15 @@ def api_scalp_pairs():
 
 def api_scalp_scan():
     """Engine D scalp scan — M15 zones + M5 entry triggers (MT5 non-crypto, Binance/crypto path for USDT pairs)."""
-    from scalp_engine import get_scalp_pairs, run_scalp_scan
-    
+    from scalp_engine import displays_for_scalp_scan, run_scalp_scan
+
+    _r = rt()
     d = request.get_json() or {}
     requested_pairs = d.get("pairs")
-    
+
+    _disabled = getattr(_r, "disabled_pairs", None) or set()
     if not requested_pairs or requested_pairs == "all":
-        pairs = get_scalp_pairs(rt().ACTIVE_PAIRS)
+        pairs = displays_for_scalp_scan(_r.ACTIVE_PAIRS, disabled_displays=_disabled)
     elif isinstance(requested_pairs, list):
         pairs = requested_pairs
     else:
@@ -1466,6 +2116,24 @@ def api_scalp_scan():
         out = dict(results)
         out["pairs"] = list(pairs)
         out["pair_count"] = len(pairs)
+        _db = getattr(rt(), "AUDIT_DB", "") or ""
+        _sig_list = out.get("signals") or []
+        if _db and _sig_list:
+            try:
+                from conductor import conductor_orchestrate, extract_conductor_microstructure, reset_scan_results
+
+                reset_scan_results("scalp")
+                for _s in _sig_list[:30]:
+                    _vd, _sr = extract_conductor_microstructure(_s)
+                    conductor_orchestrate(
+                        _s,
+                        _s.get("regime", "UNKNOWN"),
+                        _db,
+                        volume_divergence=_vd,
+                        stop_run=_sr,
+                    )
+            except Exception as _ce:
+                rt().log.warning(f"[CONDUCTOR] scalp scan orchestration failed: {_ce}")
         return jsonify(out)
     except Exception as e:
         rt().log.error(f"[SCALP API] Scan error: {e}")
@@ -1484,6 +2152,10 @@ def api_scalp_execute():
 
     if not sig:
         return jsonify({"error": "Missing signal data"}), 400
+
+    _block_reason = _engine_d_execution_block_reason(sig)
+    if _block_reason:
+        return jsonify({"error": _block_reason, "success": False}), 400
         
     try:
         from risk_engine import risk_check
@@ -1540,7 +2212,7 @@ def api_scalp_execute():
         # execution and tell the user to rescan.
         _rebase_error = None
         try:
-            from scalp_engine import calculate_scalp_levels, _guess_asset_type
+            from scalp_engine import calculate_scalp_levels, _guess_asset_type, _scalp_min_rr_for_group
             _bid = float(symbol_info.get("bid") or 0)
             _ask = float(symbol_info.get("ask") or 0)
             _live_px = (_bid + _ask) / 2 if _bid > 0 and _ask > 0 else _bid or _ask
@@ -1553,6 +2225,8 @@ def api_scalp_execute():
             }
             if _live_px > 0 and _vp["poc"] > 0 and _vp["vah"] > 0 and _vp["val"] > 0:
                 _asset_type = _guess_asset_type(pair_key)
+                _score_group = get_pair_score_group({"display": pair_key, "symbol": pair_key, "type": _asset_type})
+                _min_rr = _scalp_min_rr_for_group(_asset_type, _score_group)
                 _rebased = calculate_scalp_levels(
                     sig.get("direction", "LONG"),
                     _live_px,
@@ -1560,6 +2234,8 @@ def api_scalp_execute():
                     sig.get("zone_type", "trend_continuation"),
                     symbol_info,
                     _asset_type,
+                    min_rr_override=_min_rr,
+                    score_group=_score_group,
                 )
                 drift_pct = abs(_live_px - _scan_px) / _scan_px * 100 if _scan_px else 0
                 if _rebased.get("rr_below_min"):
@@ -1588,6 +2264,8 @@ def api_scalp_execute():
         if _rebase_error:
             return jsonify({"error": _rebase_error}), 400
 
+        _hydrate_execution_candle_quality(sig, _r=_r)
+
         # Format signal for risk engine
         approval = risk_check(
             signal=sig,
@@ -1597,7 +2275,8 @@ def api_scalp_execute():
             symbol_info=symbol_info,
             kill_switch=_r.kill_switch(),
             sizing_override=_sizing_override,
-            is_manual_override=True
+            is_manual_override=True,
+            account_domain=account.get("risk_domain"),
         )
         
         if not approval.approved:
@@ -1612,6 +2291,7 @@ def api_scalp_execute():
         result = run_managed_execution(_exec_venue, sig, approval)
         if result.get("success"):
             # Log to audit_db
+            _audit_ok = True
             try:
                 with timed_sqlite_connect(
                     _r.AUDIT_DB, timeout=15.0, label="scalp_execute.audit_success.connect"
@@ -1641,6 +2321,12 @@ def api_scalp_execute():
                     )
             except Exception as ae:
                 _r.log.warning(f"[SCALP API] Audit log failed: {ae}")
+                _audit_ok = False
+
+            if not _audit_ok:
+                result["success"] = False
+                result["error"] = "AUDIT_PERSISTENCE_FAILED_AFTER_FILL"
+                return jsonify({"error": result["error"], "execution": _json_safe(result)}), 500
                 
             return jsonify({
                 "success": True, 

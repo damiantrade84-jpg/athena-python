@@ -8,6 +8,7 @@ import logging
 import time
 from typing import Optional
 
+from ai_schemas import EngineBResponse
 from ai_utils import parse_json_object
 from config import CONFIG, AITemperatureConfig, create_ai_client, get_ai_model
 
@@ -39,14 +40,36 @@ def _is_retryable_ai_error(exc: Exception) -> bool:
 
 
 def _call_ai_with_retry(client, model: str, messages: list, temperature: float):
-    """Call AI with timeout and exponential backoff retry on transient provider failures."""
+    """Call AI with timeout and exponential backoff retry on transient provider failures.
+
+    Prefers Pydantic-validated structured output via beta.chat.completions.parse;
+    falls back to legacy json_object response_format if structured-output is unavailable.
+    Returns a tuple (parsed_dict_or_none, raw_text) — parsed_dict_or_none is set when
+    structured-output succeeded; raw_text is set when only the legacy path returned.
+    """
     timeout_sec = float(CONFIG.get("ENGINE_B_AI_TIMEOUT_SEC", 30.0) or 30.0)
     max_retries = int(CONFIG.get("ENGINE_B_AI_MAX_RETRIES", 2) or 2)
     backoff_base = float(CONFIG.get("ENGINE_B_AI_RETRY_BACKOFF_SEC", 1.0) or 1.0)
-    last_exc = None
+    use_structured = bool(CONFIG.get("ENGINE_B_AI_STRUCTURED_OUTPUT", True))
+    last_exc: Optional[Exception] = None
     for attempt in range(max_retries + 1):
         try:
-            return client.chat.completions.create(
+            if use_structured:
+                try:
+                    completion = client.beta.chat.completions.parse(
+                        model=model,
+                        max_tokens=800,
+                        temperature=temperature,
+                        messages=messages,
+                        response_format=EngineBResponse,
+                        timeout=timeout_sec,
+                    )
+                    parsed = completion.choices[0].message.parsed
+                    if parsed is not None:
+                        return parsed.model_dump(), None
+                except Exception as _so_err:
+                    log.debug("[ENGINE_B_AI] structured output unavailable: %s", _so_err)
+            completion = client.chat.completions.create(
                 model=model,
                 max_tokens=800,
                 temperature=temperature,
@@ -54,6 +77,7 @@ def _call_ai_with_retry(client, model: str, messages: list, temperature: float):
                 response_format={"type": "json_object"},
                 timeout=timeout_sec,
             )
+            return None, (completion.choices[0].message.content or "").strip()
         except Exception as e:
             last_exc = e
             if attempt >= max_retries or not _is_retryable_ai_error(e):
@@ -67,7 +91,9 @@ def _call_ai_with_retry(client, model: str, messages: list, temperature: float):
                 sleep_sec,
             )
             time.sleep(sleep_sec)
-    raise last_exc
+    if last_exc is not None:
+        raise last_exc
+    raise RuntimeError("engine_b_ai retry exhausted without exception")
 
 
 def _validate_engine_b_ai_payload(parsed: dict, pair: str) -> dict:
@@ -98,7 +124,7 @@ def _validate_engine_b_ai_payload(parsed: dict, pair: str) -> dict:
     for style in REQUIRED_STYLE_KEYS:
         if style not in style_ratings or not isinstance(style_ratings[style], dict):
             style_ratings[style] = {
-                "grade": out.get("grade", "C"),
+                "grade": _normalise_engine_b_grade(out.get("grade", "C"), pair),
                 "edgeProbability": ep_val,
                 "riskLevel": rl,
             }
@@ -333,7 +359,13 @@ def build_engine_b_signal_message(
     lines.append(f"Room Score: {confidence_result.get('room_points', 0):.2f}")
     lines.append(f"RR Score: {confidence_result.get('rr_points', 0):.2f}")
     lines.append(f"Catalyst Bonus: {confidence_result.get('catalyst_bonus', 0):.2f}")
-    lines.append(f"AI Adjustment: {confidence_result.get('ai_adjustment', 0):.2f}")
+    _ai_adj = confidence_result.get("ai_adjustment")
+    try:
+        _ai_adj_f = float(_ai_adj) if _ai_adj is not None else 0.0
+    except (TypeError, ValueError):
+        _ai_adj_f = 0.0
+    if _ai_adj_f:
+        lines.append(f"AI Adjustment: {_ai_adj_f:.2f}")
 
     # === LEARNING CONTEXT ===
     if learning_ctx and learning_ctx.get("sample_size", 0) >= 5:
@@ -455,6 +487,7 @@ def get_engine_b_ai_verdict(
     engine_a_ctx: Optional[dict] = None,
     news_ctx: Optional[dict] = None,
     freshness_ctx: Optional[dict] = None,
+    asset_type: Optional[str] = None,
 ) -> dict:
     """
     Get AI analysis for Engine B signal using the configured AI provider.
@@ -503,7 +536,7 @@ def get_engine_b_ai_verdict(
             "Derive letter grades by weighing evidence — do NOT map a short checklist phrase to A+/A/B mechanically. "
             "Evaluate the trade setup based on the 'Resolved AI style' and 'Asset type' provided in the AI CALIBRATION CONTEXT. "
             "Do NOT judge a Scalp setup by Swing criteria (or vice versa). "
-            "Evaluate Risk:Reward per style rules (SCALP: RR >= 2.0 acceptable (Engine D MIN_RR); INTRADAY: RR >= 2.0 preferred; SWING: RR >= 3.0 preferred). "
+            "Evaluate Risk:Reward per style rules (SCALP: RR >= 1.5 acceptable; INTRADAY: RR >= 2.0 preferred; SWING: RR >= 3.0 preferred). "
             "Do not automatically penalize Crypto for wide SL unless it exceeds MAX_SL_PCT. "
             + cross_engine_note
             + " Weigh: overall structural conviction; distance to boundary; "
@@ -516,7 +549,7 @@ def get_engine_b_ai_verdict(
         )
         _temp = float(AITemperatureConfig.get_temperature("engine_b_ai"))
 
-        completion = _call_ai_with_retry(
+        parsed_dict, raw_text = _call_ai_with_retry(
             client,
             model=str(xai_model or get_ai_model(CONFIG, "AI_MODEL")).strip(),
             messages=[
@@ -526,8 +559,10 @@ def get_engine_b_ai_verdict(
             temperature=_temp,
         )
 
-        text = (completion.choices[0].message.content or "").strip()
-        parsed = parse_json_object(text)
+        if parsed_dict is not None:
+            parsed = parsed_dict
+        else:
+            parsed = parse_json_object(raw_text or "")
 
         if parsed is None:
             log.error(f"[ENGINE_B_AI] {pair}: Failed to parse JSON from AI response")
@@ -568,12 +603,21 @@ def get_engine_b_ai_verdict(
             ).get("reason") or "unknown"
             log_ai_review(
                 symbol=pair,
-                asset_type="unknown",
+                asset_type=str(
+                    asset_type
+                    or (engine_a_ctx.get("type") if isinstance(engine_a_ctx, dict) else None)
+                    or "unknown"
+                ),
                 review_type=REVIEW_TYPE_ENGINE_B_AI,
                 model=str(xai_model or get_ai_model(CONFIG, "AI_MODEL")).strip(),
                 provider="xAI",
                 prompt_version=get_prompt_version("engine_b_ai"),
-                input_packet={"pair": pair, "direction": direction},
+                input_packet={
+                    "pair": pair,
+                    "direction": direction,
+                    "system_prompt": expert_prompt,
+                    "user_message": message,
+                },
                 has_chart_image=False,
                 candle_freshness_status=_freshness_reason,
                 engine_a_state=(engine_a_ctx or {}).get("confluenceScore") if isinstance(engine_a_ctx, dict) else None,

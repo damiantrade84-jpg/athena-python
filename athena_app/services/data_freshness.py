@@ -17,7 +17,8 @@ from athena_app.services.market_state import (
 DEFAULT_DATA_FRESHNESS_GATES = {
     "WARN_ON_STALE_SCAN": True,
     "BLOCK_EXECUTION_ON_STALE": True,
-    "BLOCK_TIMEFRAMES": ["H1", "H4", "D1"],
+    # Include lower TFs used by Engine D so execution-time gates match scalp/structure feeds.
+    "BLOCK_TIMEFRAMES": ["M5", "M15", "H1", "H4", "D1"],
     "BLOCK_SEVERITIES": [
         "missing_current_bucket",
         "stale_1_bucket",
@@ -36,6 +37,22 @@ _WARNING_STATUSES = {
     "WARNING_FORMING_USED",
     "WARNING_ONE_BUCKET_LAG",
 }
+
+CONFIRMED_ONLY_PRE_SCORING_TYPES = {
+    "crypto",
+    "forex",
+    "stock",
+    "index",
+    "commodity",
+}
+
+
+def pre_scoring_allows_confirmed_only_stale_1(pair: dict[str, Any] | None) -> bool:
+    """Return whether one-bucket lag is expected for confirmed-only Engine A scoring."""
+    if not isinstance(pair, dict):
+        return False
+    pair_type = str(pair.get("type") or "").strip().lower()
+    return pair_type in CONFIRMED_ONLY_PRE_SCORING_TYPES
 
 
 def _tf_seconds(tf: str) -> int:
@@ -466,6 +483,9 @@ def evaluate_execution_data_freshness(
                 if has_confirmed_only_ok and severity == "stale_1_bucket":
                     # Skip blocking on stale_1_bucket when policy-aware status is CONFIRMED_ONLY_OK
                     continue
+                if severity == "d1_calendar_gap_policy_ok":
+                    # Calendar gap policy is intentional D1 weekend tolerance; do not block
+                    continue
                 _add(tf, severity, source_key, diag)
 
     allowed = not (bool(gate.get("BLOCK_EXECUTION_ON_STALE", True)) and blocked)
@@ -473,6 +493,35 @@ def evaluate_execution_data_freshness(
     if not allowed:
         first = blocked[0]
         reason = f"STALE_DATA_BLOCK:{first['timeframe']}:{first['severity']}"
+
+    # #region agent log
+    if blocked and gate.get("BLOCK_EXECUTION_ON_STALE", True):
+        severe = False
+        for b in blocked:
+            sev = str(b.get("severity") or "")
+            if "stale_multi" in sev or "multi_bucket" in sev:
+                severe = True
+                break
+        if severe:
+            try:
+                from athena_app.debug_ndjson_agent import append_agent_ndjson
+
+                append_agent_ndjson(
+                    {
+                        "hypothesisId": "H_risk_blocked_stale_multi",
+                        "location": "data_freshness.evaluate_execution_data_freshness",
+                        "message": "exec_blocked_stale_multi",
+                        "runId": "post-fix",
+                        "data": {
+                            "signalPair": (sig.get("pair") if isinstance(sig, dict) else None),
+                            "blocked": blocked[:4],
+                            "reason": reason,
+                        },
+                    }
+                )
+            except Exception:
+                pass
+    # #endregion
 
     return {
         "allowed": allowed,
