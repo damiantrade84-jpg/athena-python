@@ -104,6 +104,34 @@ def test_lee_confirmation_supports_verified_clean_signal_without_execution():
     assert result["model_used"] == "hermes-gpt-5.5-test"
 
 
+def test_lee_confirmation_accepts_structured_engine_d_session_without_packet_warning():
+    signal = _clean_signal(
+        engine_d={
+            "gate_result": "PASS",
+            "executable": True,
+            "rr1": 2.2,
+            "rr_ok": True,
+            "strict_fabio_pass": True,
+            "session": {
+                "name": "New York",
+                "quality": "medium",
+                "color": "#3b82f6",
+            },
+        }
+    )
+
+    result = run_lee_confirmation(
+        {"trace_id": "lee-trace-1", "symbol": "EUR/USD"},
+        signal,
+        server_verified_signal=True,
+        adapter=_SupportAdapter(),
+    )
+
+    assert result["lee_verdict"] == "CONTEXT_SUPPORTS"
+    assert not any("lee_packet_build_warning" in warning for warning in result["warnings"])
+    assert "deterministic_gate_evidence_incomplete" not in result["safety_flags"]
+
+
 def test_lee_confirmation_requires_server_verified_signal_for_trade_specific_support():
     result = run_lee_confirmation(
         {"trace_id": "lee-trace-1", "symbol": "EUR/USD"},

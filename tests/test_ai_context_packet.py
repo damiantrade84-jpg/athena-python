@@ -8,6 +8,7 @@ from ai_context import (
     build_ai_review_packet,
     build_engine_d_context,
 )
+from ai_contracts import AIReviewPacket
 
 
 @pytest.fixture(autouse=True)
@@ -86,6 +87,28 @@ def test_build_engine_d_context_extracts_actual_scalp_payload_keys():
     assert ctx["vp_uses_real_trade_buckets"] is True
     assert ctx["strict_fabio_pass"] is False
     assert "strict_fabio_pass" not in ctx["missing_fields"]
+
+
+def test_build_engine_d_context_normalizes_session_object_for_review_packet():
+    signal = {
+        "pair": "BTCUSDT",
+        "type": "crypto",
+        "direction": "LONG",
+        "engine_d": {
+            "session": {
+                "name": "New York",
+                "quality": "medium",
+                "color": "#3b82f6",
+            },
+            "executable": False,
+            "rr_ok": True,
+        },
+    }
+
+    packet = build_ai_review_packet(signal)
+
+    assert packet["engine_d"]["session"] == "New York"
+    AIReviewPacket.model_validate(packet)
 
 
 def test_build_ai_review_packet_records_missing_fields_and_completeness():

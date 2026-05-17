@@ -330,6 +330,21 @@ def _as_list(value: Any) -> List[Any]:
     return [value]
 
 
+def _to_text(value: Any) -> str | None:
+    if value is None or value is _MISSING:
+        return None
+    if isinstance(value, str):
+        text = value.strip()
+        return text or None
+    if isinstance(value, dict):
+        for key in ("name", "label", "session", "value"):
+            text = _to_text(value.get(key))
+            if text:
+                return text
+        return None
+    return str(value)
+
+
 def _first_present(*values: Any) -> Any:
     for value in values:
         if value is not _MISSING and value is not None:
@@ -422,7 +437,7 @@ def build_engine_d_context(signal: Dict[str, Any]) -> Dict[str, Any]:
         "quality_grade": _pick_nested(signal, engine_d, "quality_grade", "ai_grade", "grade"),
         "quality_reasons": _as_list(_pick_nested(signal, engine_d, "quality_reasons", "ai_reasons", "reasons")),
         "market_state": _pick_nested(signal, engine_d, "market_state", "marketState"),
-        "session": _pick_nested(signal, engine_d, "session"),
+        "session": _to_text(_pick_nested(signal, engine_d, "session")),
         "execution_tf": _pick_nested(signal, engine_d, "execution_tf", "executionTf"),
         "structure_tf": _pick_nested(signal, engine_d, "structure_tf", "structureTf"),
         "context_tf": _pick_nested(signal, engine_d, "context_tf", "contextTf"),
