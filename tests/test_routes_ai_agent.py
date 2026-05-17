@@ -33,7 +33,7 @@ class _Log:
         pass
 
 
-def _client(tmp_path, last_scan=None):
+def _client(tmp_path, last_scan=None, lee_adapter=None):
     app = Flask(__name__)
     runtime = SimpleNamespace(
         CONFIG={
@@ -45,6 +45,7 @@ def _client(tmp_path, last_scan=None):
         last_scan_results=lambda: last_scan or {},
         live_dashboard_scalp_cache={},
         live_dashboard_scalp_cache_lock=None,
+        lee_reasoning_adapter=lee_adapter,
         json_safe=lambda value: value,
         log=_Log(),
     )
@@ -264,6 +265,85 @@ def test_trade_chat_request_signal_payload_remains_read_only(tmp_path):
     assert data["safety"]["can_execute"] is False
     assert data["safety"]["can_modify_thresholds"] is False
     assert "execute" not in (data.get("final_action") or "").lower()
+
+
+def test_lee_confirmation_route_requires_server_verified_signal(tmp_path):
+    client = _client(tmp_path)
+
+    resp = client.post(
+        "/api/ai/lee-confirmation",
+        json={"trace_id": "selected-trace-1", "symbol": "QQQ.US", "signal": _selected_signal_payload()},
+    )
+
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["schema_version"] == "lee_confirmation.v1"
+    assert data["lee_verdict"] == "NEED_MORE_DATA"
+    assert data["trade_specific_confirmation_allowed"] is False
+    assert data["execution_allowed"] is False
+    assert data["safety"]["can_execute"] is False
+    assert "server_verified_signal" in data["missing_data"]
+    assert data["context_resolution"]["mode"] == "unverified_client_signal"
+
+
+def test_lee_confirmation_route_fails_closed_on_client_server_mismatch(tmp_path):
+    client = _client(tmp_path, {"signals": [_selected_signal_payload(symbol="QQQ.US")]})
+
+    resp = client.post(
+        "/api/ai/lee-confirmation",
+        json={
+            "trace_id": "selected-trace-1",
+            "symbol": "QQQ.US",
+            "signal": {**_selected_signal_payload(symbol="SPY.US"), "trace_id": "selected-trace-1"},
+        },
+    )
+
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["lee_verdict"] == "NEED_MORE_DATA"
+    assert data["trade_specific_confirmation_allowed"] is False
+    assert "client_signal_mismatch" in data["safety_flags"]
+    assert any("mismatch" in warning.lower() for warning in data["warnings"])
+
+
+def test_lee_confirmation_route_requires_matching_server_trace_when_trace_requested(tmp_path):
+    server_signal_without_trace = _selected_signal_payload(symbol="QQQ.US")
+    server_signal_without_trace.pop("trace_id", None)
+    client = _client(tmp_path, {"signals": [server_signal_without_trace]})
+
+    resp = client.post(
+        "/api/ai/lee-confirmation",
+        json={"trace_id": "selected-trace-1", "symbol": "QQQ.US", "signal": _selected_signal_payload(symbol="QQQ.US")},
+    )
+
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["lee_verdict"] == "NEED_MORE_DATA"
+    assert data["trade_specific_confirmation_allowed"] is False
+    assert data["context_resolution"]["server_verified_signal"] is False
+    assert "server_trace_id_missing" in data["safety_flags"]
+
+
+def test_lee_confirmation_route_returns_safe_support_card_for_verified_signal(tmp_path):
+    client = _client(tmp_path, {"signals": [_selected_signal_payload(symbol="QQQ.US")]})
+
+    resp = client.post(
+        "/api/ai/lee-confirmation",
+        json={"trace_id": "selected-trace-1", "symbol": "QQQ.US", "signal": _selected_signal_payload(symbol="QQQ.US")},
+    )
+
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["schema_version"] == "lee_confirmation.v1"
+    assert data["lee_verdict"] in {"CONTEXT_SUPPORTS", "WAIT", "NEED_MORE_DATA"}
+    assert data["display_label"] != "CONFIRM"
+    assert data["advisory_only"] is True
+    assert data["execution_allowed"] is False
+    assert data["safety"]["read_only"] is True
+    assert data["safety"]["can_execute"] is False
+    assert data["safety"]["can_modify_thresholds"] is False
+    assert data["safety"]["can_modify_guardian"] is False
+    assert data["context_resolution"]["server_verified_signal"] is True
 
 
 def test_strategist_brief_route_returns_stable_shape(tmp_path):

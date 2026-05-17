@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import {
   AlertTriangle,
@@ -28,11 +28,11 @@ import { Separator } from '@/components/ui/separator';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Textarea } from '@/components/ui/textarea';
 import { ErrorBanner } from '@/components/shared';
-import { getAiStrategistBrief, postAiTradeChat } from '@/lib/apiClient';
+import { getAiStrategistBrief, postAiLeeConfirmation, postAiTradeChat } from '@/lib/apiClient';
 import { cn } from '@/lib/utils';
 import type {
-  AiContextResolutionSummary,
   AiDataCheckedSummary,
+  AiLeeConfirmationResponse,
   AiMarketIntelligenceSummary,
   AiSelectedSignalSummary,
   AiStrategistBriefResponse,
@@ -72,6 +72,21 @@ function decisionClass(decision?: string): string {
       return 'bg-blue-950 text-blue-200 border-blue-500/70';
     case 'DATA_INSUFFICIENT':
       return 'bg-amber-900/80 text-amber-200 border-amber-500/60';
+    default:
+      return 'bg-slate-800 text-slate-200 border-slate-600';
+  }
+}
+
+function leeVerdictClass(verdict?: string): string {
+  switch (verdict) {
+    case 'CONTEXT_SUPPORTS':
+      return 'bg-blue-950 text-blue-200 border-blue-500/70';
+    case 'CONTEXT_BLOCKS':
+      return 'bg-rose-950 text-rose-200 border-rose-500/70';
+    case 'WAIT':
+      return 'bg-amber-900/80 text-amber-200 border-amber-500/60';
+    case 'NEED_MORE_DATA':
+      return 'bg-slate-800 text-slate-200 border-slate-600';
     default:
       return 'bg-slate-800 text-slate-200 border-slate-600';
   }
@@ -605,6 +620,156 @@ function AssistantResponse({
   );
 }
 
+function LeeConfirmationCard({
+  response,
+  loading,
+  error,
+  onRefresh,
+  hasSelectedSignal,
+}: {
+  response: AiLeeConfirmationResponse | null;
+  loading: boolean;
+  error: string | null;
+  onRefresh: () => void;
+  hasSelectedSignal: boolean;
+}) {
+  const supports = asList(response?.supports);
+  const risks = asList(response?.risks);
+  const missingData = asList(response?.missing_data);
+  const warnings = asList(response?.warnings);
+  const safetyFlags = asList(response?.safety_flags);
+  const safety = response?.safety;
+  const label = response?.display_label || response?.lee_verdict || 'Lee check';
+  const responseMarketIntelligence = response?.market_intelligence as AiMarketIntelligenceSummary | undefined;
+
+  return (
+    <div className="space-y-3">
+      {error && <ErrorBanner message={error} />}
+      <div className="flex items-center justify-between gap-2">
+        <div>
+          <p className="text-xs font-semibold flex items-center gap-1 text-amber-400 uppercase tracking-wide">
+            <Bot className="w-3.5 h-3.5 text-amber-400" />
+            Lee advisory confirmation
+          </p>
+          <p className="text-[10px] text-slate-400">
+            Read-only Hermes/Lee context. Athena deterministic gates stay authoritative.
+          </p>
+        </div>
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          className="h-7 text-[10px] gap-1 bg-slate-800 text-slate-100 border-slate-600 hover:bg-slate-700"
+          disabled={loading || !hasSelectedSignal}
+          onClick={onRefresh}
+        >
+          <RefreshCw className={loading ? 'w-3.5 h-3.5 animate-spin' : 'w-3.5 h-3.5'} />
+          Check
+        </Button>
+      </div>
+
+      {!hasSelectedSignal && (
+        <div className="rounded-md border border-amber-500/60 bg-amber-900/80 p-3 text-[11px] text-amber-100 space-y-1">
+          <div className="flex items-center gap-2 font-medium">
+            <AlertTriangle className="w-3.5 h-3.5" />
+            Select a signal before asking Lee
+          </div>
+          <p className="leading-relaxed">
+            Lee will not provide trade-specific context from a client-only or empty signal. The backend must re-resolve the signal from server runtime state.
+          </p>
+        </div>
+      )}
+
+      {loading && !response && (
+        <div className="rounded-md border border-slate-700 bg-slate-900 p-3 text-xs text-slate-200 flex items-center gap-2">
+          <Loader2 className="w-3.5 h-3.5 animate-spin text-amber-400" />
+          Re-resolving server-side signal context and safety clamps...
+        </div>
+      )}
+
+      {response && (
+        <div className="space-y-3">
+          <div className="flex flex-wrap gap-2">
+            <Badge className={cn('text-[10px] border font-semibold', leeVerdictClass(response.lee_verdict))}>
+              {label}
+            </Badge>
+            <Badge variant="outline" className="text-[10px] bg-slate-800 text-slate-100 border-slate-600">
+              {response.schema_version || 'lee_confirmation.v1'}
+            </Badge>
+            <Badge className="bg-amber-900/80 text-amber-200 border-amber-500/60 text-[10px]">
+              Advisory only
+            </Badge>
+            {response.trade_specific_confirmation_allowed ? (
+              <Badge className="bg-blue-950 text-blue-200 border-blue-500/70 text-[10px]">
+                Context support allowed
+              </Badge>
+            ) : (
+              <Badge className="bg-slate-800 text-slate-200 border-slate-600 text-[10px]">
+                No trade-specific approval
+              </Badge>
+            )}
+          </div>
+
+          <div className="rounded-md border border-amber-600/40 bg-slate-900 p-3 space-y-2 shadow-sm">
+            <div className="flex items-center gap-2">
+              <MessageSquare className="w-3.5 h-3.5 text-amber-400" />
+              <p className="text-[10px] uppercase tracking-wide text-amber-400 font-semibold">Lee read</p>
+            </div>
+            <p className="text-xs leading-relaxed whitespace-pre-wrap break-words text-slate-100">
+              {response.narrative || 'Lee returned no narrative. See structured fields below.'}
+            </p>
+            <p className="text-[10px] text-amber-200 leading-relaxed">
+              This is not execution permission or an order-approval signal. Athena gates, guardian, freshness, risk, and broker controls remain authoritative.
+            </p>
+          </div>
+
+          <SelectedSignalSummary signal={response.selected_signal} symbol={response.symbol} traceId={response.trace_id} />
+          <DetailGrid
+            rows={[
+              ['generated_at', response.generated_at],
+              ['confidence', response.confidence],
+              ['model_used', response.model_used],
+              ['advisory_only', response.advisory_only !== false],
+              ['execution_allowed', response.execution_allowed],
+              ['trade_specific_context', response.trade_specific_confirmation_allowed],
+            ]}
+          />
+
+          <div className="rounded-md border border-amber-500/60 bg-amber-900/80 p-3 text-[11px] text-amber-100 space-y-2">
+            <div className="flex items-center gap-2 font-medium text-amber-200">
+              <ShieldAlert className="w-3.5 h-3.5" />
+              Lee safety envelope
+            </div>
+            <p className="leading-relaxed text-amber-100">
+              {safety?.note || 'Lee is advisory/read-only. She cannot execute, modify thresholds, guardian, kill-switch, or risk state.'}
+            </p>
+            <DetailGrid
+              rows={[
+                ['read_only', safety?.read_only !== false],
+                ['can_execute', safety?.can_execute],
+                ['can_modify_thresholds', safety?.can_modify_thresholds],
+                ['can_modify_guardian', safety?.can_modify_guardian],
+                ['deterministic_gates_required', safety?.deterministic_gates_required],
+                ['execution_blocked', safety?.execution_blocked],
+              ]}
+            />
+          </div>
+
+          <ListBlock title="Supports" items={supports} />
+          <ListBlock title="Risks" items={risks} />
+          <ListBlock title="Missing data" items={missingData} />
+          <ListBlock title="Warnings" items={warnings} />
+          <ListBlock title="Safety flags" items={safetyFlags} />
+          <MarketIntelligenceCard data={responseMarketIntelligence} />
+          <RawDetailsBlock title="Context resolution" value={response.context_resolution} />
+          <RawDetailsBlock title="External context" value={response.external_context} />
+          <RawDetailsBlock title="Raw Lee confirmation" value={response} />
+        </div>
+      )}
+    </div>
+  );
+}
+
 function StrategistBriefCard({
   brief,
   loading,
@@ -684,13 +849,30 @@ export default function AITradingAgentPanel({
   const [brief, setBrief] = useState<AiStrategistBriefResponse | null>(null);
   const [briefLoading, setBriefLoading] = useState(false);
   const [briefError, setBriefError] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<'review' | 'brief'>('review');
+  const [activeTab, setActiveTab] = useState<'review' | 'lee' | 'brief'>('review');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [lee, setLee] = useState<AiLeeConfirmationResponse | null>(null);
+  const [leeLoading, setLeeLoading] = useState(false);
+  const [leeError, setLeeError] = useState<string | null>(null);
+  const leeRequestSeq = useRef(0);
+  const leeAbortRef = useRef<AbortController | null>(null);
+  const leeContextKeyRef = useRef('');
 
   const hasSelectedSignal = !!(symbol || traceId || signal);
   const resolvedTraceId = traceId || signal?.trace_id || null;
   const resolvedSymbol = symbol || signal?.symbol || null;
+  const leeContextKey = useMemo(
+    () =>
+      JSON.stringify({
+        trace_id: resolvedTraceId,
+        symbol: resolvedSymbol,
+        signal_trace_id: signal?.trace_id ?? null,
+        signal_symbol: signal?.symbol ?? null,
+      }),
+    [resolvedSymbol, resolvedTraceId, signal?.symbol, signal?.trace_id],
+  );
+  leeContextKeyRef.current = leeContextKey;
 
   useEffect(() => {
     setSessionId(null);
@@ -698,6 +880,11 @@ export default function AITradingAgentPanel({
     setError(null);
     setInput(seedMessage);
     setCompareSymbol('');
+    setLee(null);
+    setLeeError(null);
+    setLeeLoading(false);
+    leeAbortRef.current?.abort();
+    leeRequestSeq.current += 1;
   }, [symbol, traceId, signal, seedMessage]);
 
   const loadBrief = useCallback(async () => {
@@ -713,11 +900,58 @@ export default function AITradingAgentPanel({
     }
   }, []);
 
+  const loadLee = useCallback(async () => {
+    if (!hasSelectedSignal || leeLoading) return;
+    leeAbortRef.current?.abort();
+    const requestId = leeRequestSeq.current + 1;
+    leeRequestSeq.current = requestId;
+    const controller = new AbortController();
+    const requestContextKey = leeContextKey;
+    leeAbortRef.current = controller;
+    setLeeLoading(true);
+    setLeeError(null);
+
+    try {
+      const response = await postAiLeeConfirmation(
+        {
+          trace_id: resolvedTraceId,
+          symbol: resolvedSymbol,
+          signal: signal || null,
+        },
+        { signal: controller.signal },
+      );
+      if (controller.signal.aborted || leeRequestSeq.current !== requestId || leeContextKeyRef.current !== requestContextKey) return;
+      setLee(response);
+    } catch (err) {
+      if (controller.signal.aborted || leeRequestSeq.current !== requestId || leeContextKeyRef.current !== requestContextKey) return;
+      setLee(null);
+      setLeeError(err instanceof Error ? err.message : 'Lee confirmation request failed');
+    } finally {
+      if (leeRequestSeq.current === requestId && leeContextKeyRef.current === requestContextKey) {
+        setLeeLoading(false);
+        if (leeAbortRef.current === controller) {
+          leeAbortRef.current = null;
+        }
+      }
+    }
+  }, [hasSelectedSignal, leeContextKey, leeLoading, resolvedSymbol, resolvedTraceId, signal]);
+
+  useEffect(() => () => {
+    leeAbortRef.current?.abort();
+    leeRequestSeq.current += 1;
+  }, []);
+
   useEffect(() => {
     if (activeTab === 'brief' && !brief && !briefLoading && !briefError) {
       void loadBrief();
     }
   }, [activeTab, brief, briefError, briefLoading, loadBrief]);
+
+  useEffect(() => {
+    if (activeTab === 'lee' && !lee && !leeLoading && !leeError && hasSelectedSignal) {
+      void loadLee();
+    }
+  }, [activeTab, hasSelectedSignal, lee, leeError, leeLoading, loadLee]);
 
   const canSend = input.trim().length > 0 && !loading;
   const contextLabel = useMemo(() => {
@@ -772,7 +1006,7 @@ export default function AITradingAgentPanel({
         setLoading(false);
       }
     },
-    [hasSelectedSignal, input, loading, sessionId, resolvedSymbol, resolvedTraceId, signal],
+    [input, loading, sessionId, resolvedSymbol, resolvedTraceId, signal],
   );
 
   const sendCompare = useCallback(() => {
@@ -795,9 +1029,10 @@ export default function AITradingAgentPanel({
         </CardTitle>
       </CardHeader>
       <CardContent className="space-y-3">
-        <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as 'review' | 'brief')}>
-          <TabsList className="grid w-full grid-cols-2">
+        <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as 'review' | 'lee' | 'brief')}>
+          <TabsList className="grid w-full grid-cols-3">
             <TabsTrigger value="review" className="text-[11px]">Tool Chat</TabsTrigger>
+            <TabsTrigger value="lee" className="text-[11px]">Lee Check</TabsTrigger>
             <TabsTrigger value="brief" className="text-[11px]">Strategist Brief</TabsTrigger>
           </TabsList>
 
@@ -958,6 +1193,16 @@ export default function AITradingAgentPanel({
 
             <Separator />
             <SafetyCard riskWarning="This panel is a read-only advisor. It cannot place orders, approve execution, or change config thresholds." />
+          </TabsContent>
+
+          <TabsContent value="lee" className="m-0 mt-3">
+            <LeeConfirmationCard
+              response={lee}
+              loading={leeLoading}
+              error={leeError}
+              onRefresh={loadLee}
+              hasSelectedSignal={hasSelectedSignal}
+            />
           </TabsContent>
 
           <TabsContent value="brief" className="m-0 mt-3">

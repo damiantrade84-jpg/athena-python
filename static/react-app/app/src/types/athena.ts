@@ -602,6 +602,62 @@ export interface AiTradeChatResponse {
   created_at?: string;
 }
 
+export type AiLeeConfirmationVerdict = 'CONTEXT_SUPPORTS' | 'WAIT' | 'CONTEXT_BLOCKS' | 'NEED_MORE_DATA';
+export type AiLeeConfidence = 'low' | 'medium' | 'high';
+
+export interface AiLeeConfirmationRequest {
+  trace_id?: string | null;
+  symbol?: string | null;
+  signal?: AiTradeChatSignalPayload | null;
+}
+
+export interface AiLeeExternalContext {
+  schema_version?: 'lee_external_context.v1' | string;
+  market_intelligence_freshness?: 'fresh' | 'partial' | 'stale' | 'unavailable' | 'unknown' | string;
+  vision_freshness?: string | null;
+  source_status?: Record<string, unknown>;
+  warnings?: string[];
+  missing_fields?: string[];
+  [k: string]: unknown;
+}
+
+export interface AiLeeSafetyEnvelope {
+  read_only?: boolean;
+  can_execute?: boolean;
+  can_modify_thresholds?: boolean;
+  can_modify_guardian?: boolean;
+  deterministic_gates_required?: boolean;
+  execution_blocked?: boolean;
+  note?: string | null;
+  [k: string]: unknown;
+}
+
+export interface AiLeeConfirmationResponse {
+  schema_version?: 'lee_confirmation.v1' | string;
+  generated_at?: string;
+  trace_id?: string | null;
+  symbol?: string | null;
+  lee_verdict: AiLeeConfirmationVerdict | string;
+  display_label?: string;
+  confidence?: AiLeeConfidence | string;
+  narrative?: string;
+  supports?: string[];
+  risks?: string[];
+  missing_data?: string[];
+  warnings?: string[];
+  safety_flags?: string[];
+  market_intelligence?: AiMarketIntelligenceSummary | Record<string, unknown>;
+  external_context?: AiLeeExternalContext;
+  selected_signal?: AiSelectedSignalSummary | null;
+  context_resolution?: AiContextResolutionSummary | Record<string, unknown> | null;
+  model_used?: string;
+  advisory_only?: boolean;
+  execution_allowed?: boolean;
+  trade_specific_confirmation_allowed?: boolean;
+  safety?: AiLeeSafetyEnvelope;
+  [k: string]: unknown;
+}
+
 export interface AiSelectedSignalSummary {
   symbol?: string | null;
   trace_id?: string | null;

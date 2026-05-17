@@ -256,3 +256,89 @@ class AITradeDecision(BaseModel):
     @classmethod
     def _force_deterministic_gates(cls, _value: Any) -> bool:
         return True
+
+
+LeeConfirmationVerdict = Literal["CONTEXT_SUPPORTS", "WAIT", "CONTEXT_BLOCKS", "NEED_MORE_DATA"]
+LeeConfidence = Literal["low", "medium", "high"]
+
+
+class LeeSafetyEnvelope(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    read_only: bool = True
+    can_execute: bool = False
+    can_modify_thresholds: bool = False
+    can_modify_guardian: bool = False
+    deterministic_gates_required: bool = True
+    execution_blocked: bool = True
+    note: str = "Lee is advisory only; Athena deterministic gates remain authoritative."
+
+    @field_validator("read_only", "deterministic_gates_required", "execution_blocked", mode="before")
+    @classmethod
+    def _force_true(cls, _value: Any) -> bool:
+        return True
+
+    @field_validator("can_execute", "can_modify_thresholds", "can_modify_guardian", mode="before")
+    @classmethod
+    def _force_false(cls, _value: Any) -> bool:
+        return False
+
+
+class LeeExternalContext(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    schema_version: str = "lee_external_context.v1"
+    market_intelligence_freshness: Literal["fresh", "partial", "stale", "unavailable", "unknown"] | str = "unavailable"
+    vision_freshness: str | None = None
+    source_status: dict[str, Any] = Field(default_factory=dict)
+    warnings: list[str] = Field(default_factory=list)
+    missing_fields: list[str] = Field(default_factory=list)
+
+
+class LeeReasoningDraft(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    lee_verdict: LeeConfirmationVerdict = "NEED_MORE_DATA"
+    confidence: LeeConfidence = "low"
+    narrative: str = "Lee needs more verified Athena context before making an advisory read."
+    supports: list[str] = Field(default_factory=list)
+    risks: list[str] = Field(default_factory=list)
+    missing_data: list[str] = Field(default_factory=list)
+    model_used: str = "deterministic_fallback"
+
+
+class LeeConfirmationResponse(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    schema_version: str = "lee_confirmation.v1"
+    generated_at: str
+    trace_id: str | None = None
+    symbol: str | None = None
+    lee_verdict: LeeConfirmationVerdict = "NEED_MORE_DATA"
+    display_label: str = "Data gap"
+    confidence: LeeConfidence = "low"
+    narrative: str = "Lee needs more verified Athena context before making an advisory read."
+    supports: list[str] = Field(default_factory=list)
+    risks: list[str] = Field(default_factory=list)
+    missing_data: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    safety_flags: list[str] = Field(default_factory=list)
+    market_intelligence: dict[str, Any] = Field(default_factory=dict)
+    external_context: LeeExternalContext = Field(default_factory=LeeExternalContext)
+    selected_signal: dict[str, Any] | None = None
+    context_resolution: dict[str, Any] = Field(default_factory=dict)
+    model_used: str = "deterministic_fallback"
+    advisory_only: bool = True
+    execution_allowed: bool = False
+    trade_specific_confirmation_allowed: bool = False
+    safety: LeeSafetyEnvelope = Field(default_factory=LeeSafetyEnvelope)
+
+    @field_validator("advisory_only", mode="before")
+    @classmethod
+    def _force_advisory_only(cls, _value: Any) -> bool:
+        return True
+
+    @field_validator("execution_allowed", mode="before")
+    @classmethod
+    def _force_execution_blocked(cls, _value: Any) -> bool:
+        return False

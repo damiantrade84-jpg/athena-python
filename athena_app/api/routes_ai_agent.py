@@ -13,6 +13,7 @@ from typing import Any, Iterable
 from flask import jsonify, request
 
 from ai_conversation_store import get_recent_turns, list_threads, set_thread_title
+from ai_lee_confirmation import run_lee_confirmation
 from ai_strategist import strategist_morning_brief, strategist_pre_trade_check, weekly_strategy_retrospective
 from ai_tools import set_ai_tools_runtime
 from ai_trade_chat import run_trade_chat_turn
@@ -158,6 +159,75 @@ def _find_signal(runtime: Any, trace_id: str | None, symbol: str | None) -> dict
     return None
 
 
+def _signal_trace(signal: dict[str, Any] | None) -> str:
+    signal = signal if isinstance(signal, dict) else {}
+    return str(signal.get("trace_id") or signal.get("traceId") or signal.get("id") or "").strip()
+
+
+def _signal_symbol(signal: dict[str, Any] | None) -> str:
+    signal = signal if isinstance(signal, dict) else {}
+    return str(signal.get("symbol") or signal.get("pair") or signal.get("display") or "").strip().upper()
+
+
+def _lee_context_resolution(
+    server_signal: dict[str, Any] | None,
+    request_trace_id: str | None,
+    request_symbol: str | None,
+    signal_payload: dict[str, Any] | None,
+) -> tuple[bool, dict[str, Any], list[str], list[str]]:
+    warnings: list[str] = []
+    flags: list[str] = []
+    trace_text = str(request_trace_id or "").strip()
+    symbol_text = str(request_symbol or "").strip().upper()
+    payload_trace = _signal_trace(signal_payload)
+    payload_symbol = _signal_symbol(signal_payload)
+    server_trace = _signal_trace(server_signal)
+    server_symbol = _signal_symbol(server_signal)
+
+    resolution = {
+        "trace_id_received": bool(trace_text),
+        "symbol_received": bool(symbol_text),
+        "signal_payload_received": bool(signal_payload),
+        "server_verified_signal": False,
+        "resolved_symbol": server_symbol or symbol_text or payload_symbol or None,
+        "resolved_trace_id": server_trace or trace_text or payload_trace or None,
+        "warnings": warnings,
+    }
+
+    if not server_signal:
+        resolution["mode"] = "unverified_client_signal" if signal_payload else "no_server_signal"
+        warnings.append("Lee confirmation requires a server-verified Athena signal; client payload alone is not authoritative.")
+        flags.append("server_signal_not_verified")
+        return False, resolution, flags, warnings
+
+    if (trace_text or payload_trace) and not server_trace:
+        resolution["mode"] = "server_trace_id_missing"
+        warnings.append("Lee confirmation requires the server-resolved signal to carry the requested trace_id.")
+        flags.append("server_trace_id_missing")
+        return False, resolution, flags, warnings
+
+    mismatches: list[str] = []
+    if trace_text and server_trace and trace_text != server_trace:
+        mismatches.append("request_trace_id_mismatch")
+    if symbol_text and server_symbol and symbol_text != server_symbol:
+        mismatches.append("request_symbol_mismatch")
+    if payload_trace and server_trace and payload_trace != server_trace:
+        mismatches.append("client_trace_id_mismatch")
+    if payload_symbol and server_symbol and payload_symbol != server_symbol:
+        mismatches.append("client_symbol_mismatch")
+
+    if mismatches:
+        resolution["mode"] = "client_server_mismatch"
+        warnings.append("Client signal snapshot mismatch; Lee confirmation failed closed against server runtime state.")
+        flags.append("client_signal_mismatch")
+        flags.extend(mismatches)
+        return False, resolution, flags, warnings
+
+    resolution["mode"] = "server_trace_id" if trace_text and server_trace == trace_text else "server_symbol"
+    resolution["server_verified_signal"] = True
+    return True, resolution, flags, warnings
+
+
 def _answer_text(symbol: str | None, message: str, decision: dict[str, Any], summary: dict[str, Any]) -> str:
     facts = summary.get("facts_used") or []
     missing = summary.get("missing_data") or []
@@ -223,6 +293,39 @@ def register_ai_agent_routes(app, runtime) -> None:
                 "signal": signal_payload,
                 "_audit_db": audit_db,
             }
+        )
+        json_safe = getattr(runtime, "json_safe", None)
+        safe_answer = json_safe(answer) if callable(json_safe) else answer
+        return jsonify(safe_answer)
+
+    @app.post("/api/ai/lee-confirmation")
+    def api_ai_lee_confirmation():
+        payload = request.get_json(silent=True) or {}
+        trace_id = str(payload.get("trace_id") or "").strip() or None
+        symbol = str(payload.get("symbol") or "").strip() or None
+        signal_payload = payload.get("signal")
+        signal_payload = signal_payload if isinstance(signal_payload, dict) else None
+        server_signal = _find_signal(runtime, trace_id, symbol)
+        server_verified, context_resolution, safety_flags, warnings = _lee_context_resolution(
+            server_signal,
+            trace_id,
+            symbol,
+            signal_payload,
+        )
+        adapter = getattr(runtime, "lee_reasoning_adapter", None)
+        answer = run_lee_confirmation(
+            {
+                "trace_id": trace_id,
+                "symbol": symbol,
+                "signal": signal_payload,
+                "_audit_db": audit_db,
+            },
+            server_signal if server_signal else signal_payload,
+            server_verified_signal=server_verified,
+            adapter=adapter,
+            context_resolution=context_resolution,
+            pre_safety_flags=safety_flags,
+            pre_warnings=warnings,
         )
         json_safe = getattr(runtime, "json_safe", None)
         safe_answer = json_safe(answer) if callable(json_safe) else answer

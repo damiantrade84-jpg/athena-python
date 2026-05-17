@@ -3,6 +3,8 @@
 
 import { safeJson } from './safeJson';
 import type {
+  AiLeeConfirmationRequest,
+  AiLeeConfirmationResponse,
   AiStrategistBriefResponse,
   AiTradeChatRequest,
   AiTradeChatResponse,
@@ -77,6 +79,18 @@ export function postAiTradeChat(payload: AiTradeChatRequest): Promise<AiTradeCha
     '/api/ai/trade-chat',
     payload as unknown as Record<string, unknown>,
   );
+}
+
+export function postAiLeeConfirmation(
+  payload: AiLeeConfirmationRequest,
+  options?: { signal?: AbortSignal },
+): Promise<AiLeeConfirmationResponse> {
+  return requestJson('/api/ai/lee-confirmation', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload || {}),
+    signal: options?.signal,
+  }) as Promise<AiLeeConfirmationResponse>;
 }
 
 export function postPairScan(symbol: string, style = 'auto'): Promise<PairScanResponse> {
