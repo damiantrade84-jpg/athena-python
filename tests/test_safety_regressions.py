@@ -287,6 +287,42 @@ def test_monitor_never_matches_closed_audit_row_for_live_position():
     assert _match_audit_row_for_position(pos, [row]) is None
 
 
+def test_monitor_prefers_executed_audit_row_over_signal_row_for_live_position():
+    now = datetime.now(timezone.utc).isoformat()
+    signal_only_row = {
+        "id": 1,
+        "ticket": None,
+        "pair": "ADA/USDT",
+        "direction": "SHORT",
+        "entry_price": 0.25439,
+        "volume": None,
+        "grade": "B",
+        "ts": now,
+        "exit_time": None,
+    }
+    executed_row = {
+        "id": 2,
+        "ticket": "order-uuid",
+        "pair": "ADA/USDT",
+        "direction": "SHORT",
+        "entry_price": 0.25440,
+        "volume": 13986.0,
+        "grade": "EXECUTED",
+        "ts": now,
+        "exit_time": None,
+    }
+    pos = {
+        "ticket": "0",
+        "pair": "ADA/USDT",
+        "direction": "SHORT",
+        "entry": 0.254395,
+    }
+
+    matched = _match_audit_row_for_position(pos, [signal_only_row, executed_row])
+
+    assert matched["id"] == 2
+
+
 def test_mt5_split_leg_failure_reports_incomplete_rollback(monkeypatch):
     import mt5_executor
 

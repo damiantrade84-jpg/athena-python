@@ -75,6 +75,10 @@ _DEFAULT_CFG: dict = {
     "tp_mode": "fixed",
     "trail_activation_r": {"scalp": 0.7, "intraday": 1.0, "swing": 1.5},
     "trail_atr_mult": {"scalp": 2.0, "intraday": 2.5, "swing": 3.0},
+    "pre_activation_profit_protect_enabled": False,
+    "pre_activation_profit_arm_r": {"scalp": 0.20, "intraday": 0.25, "swing": 0.35},
+    "pre_activation_profit_close_r": {"scalp": 0.0, "intraday": 0.0, "swing": 0.0},
+    "pre_activation_profit_giveback_r": {"scalp": 0.25, "intraday": 0.35, "swing": 0.50},
     "trail_lookback": 14,
     "trail_timeframe": {"scalp": "H1", "intraday": "H4", "swing": "D1"},
     "trail_indicator_confirm": False,
@@ -562,6 +566,41 @@ def _get_timed_cfg(config_fn) -> dict:
                 s: float(bucket.get(s, merged["trail_giveback_r"][s]))
                 for s in ("scalp", "intraday", "swing")
             }
+    merged["pre_activation_profit_protect_enabled"] = bool(
+        raw.get(
+            "pre_activation_profit_protect_enabled",
+            _DEFAULT_CFG["pre_activation_profit_protect_enabled"],
+        )
+    )
+    for key in (
+        "pre_activation_profit_arm_r",
+        "pre_activation_profit_close_r",
+        "pre_activation_profit_giveback_r",
+    ):
+        raw_map = raw.get(key, _DEFAULT_CFG[key])
+        defaults = _DEFAULT_CFG[key]
+        if isinstance(raw_map, dict):
+            merged[key] = {
+                s: float(raw_map.get(s, defaults[s]))
+                for s in ("scalp", "intraday", "swing")
+            }
+        else:
+            try:
+                scalar = float(raw_map)
+            except (TypeError, ValueError):
+                scalar = float(defaults["intraday"])
+            merged[key] = {s: scalar for s in ("scalp", "intraday", "swing")}
+        by_venue_key = f"{key}_by_venue"
+        by_venue_raw = raw.get(by_venue_key) or {}
+        merged[by_venue_key] = {}
+        if isinstance(by_venue_raw, dict):
+            for venue, bucket in by_venue_raw.items():
+                if not isinstance(bucket, dict):
+                    continue
+                merged[by_venue_key][str(venue).lower()] = {
+                    s: float(bucket.get(s, merged[key][s]))
+                    for s in ("scalp", "intraday", "swing")
+                }
     merged["trail_clear_broker_tp_on_activation"] = bool(
         raw.get("trail_clear_broker_tp_on_activation", True)
     )
@@ -641,6 +680,33 @@ def _giveback_r_for(tcfg: dict, style: str, venue: str | None) -> float:
         return 0.0
 
 
+def _venue_style_r_for(
+    tcfg: dict,
+    key: str,
+    style: str,
+    venue: str | None,
+    default: float = 0.0,
+) -> float:
+    by_venue = tcfg.get(f"{key}_by_venue") or {}
+    if venue and isinstance(by_venue, dict):
+        bucket = by_venue.get(venue) or by_venue.get(str(venue).lower())
+        if isinstance(bucket, dict):
+            try:
+                return float(bucket.get(style, bucket.get("intraday", default)))
+            except (TypeError, ValueError):
+                pass
+    default_map = tcfg.get(key) or {}
+    if isinstance(default_map, dict):
+        try:
+            return float(default_map.get(style, default_map.get("intraday", default)))
+        except (TypeError, ValueError):
+            return default
+    try:
+        return float(default_map)
+    except (TypeError, ValueError):
+        return default
+
+
 def _state_key(venue: str, audit_id, ticket) -> str:
     """Stable per-trade key. audit_id is the canonical identity; ticket is fallback only.
 
@@ -660,7 +726,7 @@ def _load_recent_audit_rows(db_path: str) -> list[dict]:
             rows = con.execute(
                 """
                 SELECT id, ticket, pair, engine, style, ts, direction, entry_price, sl, tp,
-                       tp_partial, volume, risk_amount, asset_class, exit_time
+                       tp_partial, volume, risk_amount, asset_class, exit_time, grade
                 FROM   audit_log
                 WHERE  pair IS NOT NULL
                   AND  grade NOT LIKE '%ERR%'
@@ -776,6 +842,14 @@ def _live_pnl_r(row: dict, entry: float, sl: float, volume: float, live_pnl: flo
     return 0.0
 
 
+def _audit_row_is_executed_like(row: dict) -> bool:
+    grade = str(row.get("grade") or "").strip().upper()
+    if grade in ("EXECUTED", "AUTO"):
+        return True
+    ticket = str(row.get("ticket") or "").strip()
+    return ticket not in ("", "0", "None") and _safe_float(row.get("volume")) > 0
+
+
 def _parse_iso_utc(ts_iso: str | None) -> datetime | None:
     if not ts_iso:
         return None
@@ -809,7 +883,7 @@ def _match_audit_row_for_position(position: dict, audit_rows: list[dict]) -> dic
         return None
 
     now_utc = datetime.now(timezone.utc)
-    candidates: list[tuple[float, dict]] = []
+    candidates: list[tuple[int, float, dict]] = []
 
     for row in audit_rows:
         if row.get("exit_time") is not None:
@@ -837,16 +911,17 @@ def _match_audit_row_for_position(position: dict, audit_rows: list[dict]) -> dic
         if age_min > (7 * 24 * 60):
             continue
 
-        # Prefer the closest still-open row, then the most recent row.
+        # Prefer executed/live-like rows over signal-only rows, then closest entry.
         score = rel_entry_diff
         score += min(age_min, 24 * 60) / 100000.0
-        candidates.append((score, row))
+        executed_rank = 0 if _audit_row_is_executed_like(row) else 1
+        candidates.append((executed_rank, score, row))
 
     if not candidates:
         return None
 
-    candidates.sort(key=lambda item: item[0])
-    return candidates[0][1]
+    candidates.sort(key=lambda item: (item[0], item[1]))
+    return candidates[0][2]
 
 
 def _row_for_live_position(position: dict, audit_rows: list[dict]) -> dict | None:
@@ -1189,6 +1264,7 @@ def _evaluate_trail(
     The "close" reasons:
         - "breach_confirmed" — price crossed the chandelier line (+ optional indicator confirm)
         - "peak_giveback"    — current R fell below peak R by trail_giveback_r
+        - "profit_roundtrip" — sub-activation profit was armed, then gave back to floor
     """
     pair = row.get("pair") or ""
     if state_key is None:
@@ -1207,6 +1283,47 @@ def _evaluate_trail(
         current_r = (entry - cur_price) / risk_dist
 
     activation_r = _activation_r_for(tcfg, style)
+    if tcfg.get("pre_activation_profit_protect_enabled"):
+        arm_r = _venue_style_r_for(
+            tcfg, "pre_activation_profit_arm_r", style, venue, default=0.0
+        )
+        close_r = _venue_style_r_for(
+            tcfg, "pre_activation_profit_close_r", style, venue, default=0.0
+        )
+        giveback_r_pre = _venue_style_r_for(
+            tcfg, "pre_activation_profit_giveback_r", style, venue, default=0.0
+        )
+        prev_peak_pre = _peak_r_state.get(state_key)
+        peak_r_pre = prev_peak_pre if prev_peak_pre is not None else current_r
+        if current_r > peak_r_pre:
+            peak_r_pre = current_r
+        if arm_r > 0 and peak_r_pre >= arm_r:
+            if prev_peak_pre is None or current_r > prev_peak_pre:
+                _peak_r_state[state_key] = current_r
+                _persist_peak_r(state_key, current_r)
+                peak_r_pre = current_r
+            else:
+                _peak_r_state.setdefault(state_key, prev_peak_pre)
+
+            roundtrip_close = current_r <= close_r
+            giveback_close_pre = (
+                giveback_r_pre > 0 and (peak_r_pre - current_r) >= giveback_r_pre
+            )
+            if current_r < activation_r and (roundtrip_close or giveback_close_pre):
+                log.info(
+                    f"[TIMED_EXIT] PROFIT ROUNDTRIP close: {pair} style={style} dir={direction} "
+                    f"peak_r={peak_r_pre:.2f} current_r={current_r:.2f} "
+                    f"arm_r={arm_r:.2f} close_r={close_r:.2f} giveback_r={giveback_r_pre:.2f}"
+                )
+                return {
+                    "action": "close",
+                    "trail_level": None,
+                    "current_r": current_r,
+                    "peak_r": peak_r_pre,
+                    "giveback_r": giveback_r_pre,
+                    "reason": "profit_roundtrip",
+                }
+
     if current_r < activation_r:
         return {"action": "none", "reason": "below_activation", "current_r": current_r}
 
@@ -1421,6 +1538,8 @@ def _handle_mt5_row(row: dict, tcfg: dict, db_path: str | None = None) -> None:
         close_reason = "TRAIL_CLOSE"
         if trail_eval.get("reason") == "peak_giveback":
             close_reason = "TRAIL_GIVEBACK"
+        elif trail_eval.get("reason") == "profit_roundtrip":
+            close_reason = "TRAIL_PROFIT_ROUNDTRIP"
 
         if action == "close":
             result = mt5_close_position(ticket)
@@ -1715,6 +1834,8 @@ def _handle_bybit_row(row: dict, tcfg: dict, db_path: str | None = None) -> None
         close_reason = "TRAIL_CLOSE"
         if trail_eval.get("reason") == "peak_giveback":
             close_reason = "TRAIL_GIVEBACK"
+        elif trail_eval.get("reason") == "profit_roundtrip":
+            close_reason = "TRAIL_PROFIT_ROUNDTRIP"
 
         if action == "close":
             result = bybit_close_position(pair, direction, volume)

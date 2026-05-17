@@ -648,6 +648,8 @@ class TestStableTicketKey:
 class TestEvaluateTrail:
     def setup_method(self):
         _trail_state.clear()
+        import timed_exit_monitor as tem
+        tem._peak_r_state.clear()
 
     def test_live_sl_for_r_increases_measured_r_vs_audit_sl(self, monkeypatch):
         """Tighter live SL → smaller risk distance → higher R for same price."""
@@ -792,6 +794,42 @@ class TestEvaluateTrail:
 
         assert res["action"] == "none"
         assert res["reason"] == "no_trail_data"
+
+    def test_pre_activation_profit_roundtrip_closes_after_sub_1r_peak(self, monkeypatch):
+        import timed_exit_monitor as tem
+
+        tcfg = _get_timed_cfg(_cfg_fn({
+            "tp_mode": "trailing_atr",
+            "trail_activation_r": {"scalp": 0.7, "intraday": 1.0, "swing": 1.5},
+            "pre_activation_profit_protect_enabled": True,
+            "pre_activation_profit_arm_r": {"intraday": 0.25},
+            "pre_activation_profit_close_r": {"intraday": 0.0},
+            "pre_activation_profit_giveback_r": {"intraday": 0.0},
+        }))
+        row = {"ticket": "T1", "pair": "ADA/USDT", "audit_id": 1846}
+        state_key = "bybit:aid:1846"
+        monkeypatch.setattr(
+            tem,
+            "_compute_chandelier_trail",
+            lambda *a, **kw: pytest.fail("trail should not compute below activation"),
+        )
+
+        armed = _evaluate_trail(
+            row, "intraday", "SHORT", 100.0, 110.0, 96.0, tcfg,
+            state_key=state_key, venue="bybit",
+        )
+        assert armed["action"] == "none"
+        assert armed["reason"] == "below_activation"
+        assert tem._peak_r_state[state_key] == pytest.approx(0.4)
+
+        roundtrip = _evaluate_trail(
+            row, "intraday", "SHORT", 100.0, 110.0, 100.5, tcfg,
+            state_key=state_key, venue="bybit",
+        )
+        assert roundtrip["action"] == "close"
+        assert roundtrip["reason"] == "profit_roundtrip"
+        assert roundtrip["peak_r"] == pytest.approx(0.4)
+        assert roundtrip["current_r"] == pytest.approx(-0.05)
 
 
 # ── Trail-fail-holds-previous-level (suggestion #4) ──────────────────────────
