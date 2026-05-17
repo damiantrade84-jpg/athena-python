@@ -1,0 +1,5 @@
+policy:
+  allow_implicit_invocation: false
+interface:
+  name: Athena Audit
+  short_description: Full audit, bug hunt, and safety review for Athena trading system

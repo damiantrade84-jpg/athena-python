@@ -1,108 +1,68 @@
----
-description: alwaysApply: true
----
+# CLAUDE.md - Athena / Sentinel Pro v4 (Claude Code)
 
-# Sentinel Pro v4 — Claude Brief
+Primary repo-level startup instructions for Claude Code.
 
-**Safety:** Paper only. Never bypass risk/freshness/kill-switch. AI cannot override gates. No real orders without 1 week clean paper + manual approval.
+Do not intentionally load `AGENTS.md`. Codex/Cursor use `AGENTS.md`.
 
-**Scoring:** Locked. Do not change Engine A/B/D thresholds unless user requests. No hardcode in Python — use `config.yaml`.
+## Core rules
 
-**Dev:** No guessing. All changes config-gated, default-safe, with tests. Never import `athena.py` in tests. SQLite: WAL mode, 15s timeout.
+- Paper-only unless the user explicitly approves live trading.
+- Never bypass risk gates, freshness checks, kill switches, execution approvals, broker safety checks, RR checks, SL/TP validation, audit logging, or deterministic safety rules.
+- AI is advisory only. AI review, Marcus, Vision, Strategist, AI Agent chat, and similar-setup logic cannot execute trades, approve orders, mutate config, or override deterministic gates.
+- Engine A, Engine B, Engine C, and Engine D are separate unless the task explicitly concerns consensus, routing, or cross-engine payload handoff.
+- Engine A and Engine B must not suppress each other. Engine C owns agreement, conflict, A-only, and B-only comparison.
+- Start with the files relevant to the user's request. The repository map below lists common entry points only; inspect additional current source files when needed to verify the real execution path.
+- Do not load `tasks/`, old audit reports, generated logs, backtest artifacts, historical findings, or archived diagnostics unless the user names them or the current issue directly requires them.
+- Run only targeted tests for the changed behavior. Never run full test suites unless explicitly requested.
+- Minimal changes only. Do not refactor unrelated code.
+- Evidence first. Inspect current source before making claims.
+- If unsure, say `not verified` instead of guessing.
 
-**AI:** Engine B AI review-only. Preserve exact vision footer tokens. Chart Vision and Lottery AI are separate — do not mix.
+## Mandatory skill routing
 
-**Data:** Freshness gate mandatory. H4 offsets: Binance 0h, MT5 forex 2h, MT5 stocks 3h. D1 = UTC 00:00. MT5 → `fetch_mt5()`, EODHD volume-only for Engine D.
+- Before editing `execution.py`, `risk_engine.py`, `guardian.py`, `auto_trader.py`, `mt5_executor.py`, or `bybit_executor.py`, invoke `/athena-audit` to verify execution safety first.
+- If changes affect Engine A/B/C/D scoring or threshold logic, verify live/backtest parity before applying.
+- After any edit to safety gates, freshness checks, or kill switches, run targeted tests for the touched behavior.
 
----
+## Claude Code skill policy
 
-# Engines & Scoring
+- Claude Code project skills live under `.claude/skills/<skill-name>/SKILL.md`.
+- Current installed repo skill: `athena-audit`.
+- Invoke manually with `/athena-audit` only for explicit full audit, bug hunt, strict findings, execution-safety review, live/backtest parity review, or end-to-end trace work.
+- Do not look for or use skills that do not exist under `.claude/skills/`.
+- The `athena-audit` skill must include `disable-model-invocation: true` in Claude frontmatter.
 
-## Engine A — Factor Confluence (Primary)
-- **Scoring:** `final_score` 0.0–3.0 (normalized indicator confluence)
-- **Directional score:** Trend component (trend_score)
-- **Nondirectional score:** Momentum quality (mom_quality)
-- **Thresholds:** 2-tier system (volatile assets = higher threshold)
-- **Key factors:** BTC bias (conditional on correlation), OI context for crypto, intermarket confirmation
-- **Config keys:** `ENGINE_A`, `ENGINE_A_RESEARCH_LAB_FACTORS`, `ENGINE_A_MEAN_REVERSION`
+## Repository map
 
-## Engine B — Naked Market Structure (SMC/ICT)
-- **Scoring:** Score/max_score (%), regime-gated thresholds
-- **Regime multipliers:** TRENDING=0.90, RANGING=0.90, HIGH_VOL=0.85, LOW_VOL=1.15
-- **Checklist:** Swing sequence, BOS, liquidity sweeps, FVG overlap, zone quality, trigger quality
-- **Styles:** scalp (H1), intraday (H4), swing (D1) — each with min_score + min_rr
-- **Config keys:** `NAKED_ENGINE.style_profiles`, `NAKED_MAX_DAILY`, `ENGINE_B_REGIME_MULTIPLIERS`
+Common entry points only. This is not a complete allowlist.
 
-## Engine C — Consensus Engine (A vs B Trust)
-- **Purpose:** Compare Engine A and B signals, resolve conflicts
-- **Scoring:** Calibrated probability, trust verdict (trust_a/trust_b/trust_both/trust_neither)
-- **Weight recommendation:** {"A": x, "B": y} summing to 1.0
-- **Conviction modifier:** Categorical (UPGRADE/NEUTRAL/DOWNGRADE) mapped to float
-- **Decision states:** trade boolean, tier, sizing_override, disagreement_diagnosis
+- App/routes: `athena.py`
+- Scanner: `scanner.py`
+- Engine A: `scoring.py`, `factor_scoring.py`, `forex_scoring.py`
+- Engine B: `market_structure.py`, `engine_b_ai.py`
+- Engine C: `engine_c.py`, `engine_c_ai.py`
+- Engine D: `scalp_engine.py`
+- Execution: `execution.py`, `auto_trader.py`, `risk_engine.py`, `guardian.py`, `mt5_executor.py`, `bybit_executor.py`
+- Data/candles: `candles_cache.py`, `candle_feeds.py`, provider-specific feed modules
+- AI/Vision: `ai_agent_safety.py`, AI review modules, chart/Vision payload builders, browser chart code under `static/`
+- AI Agent chat: `ai_trade_chat.py`, `athena_app/api/routes_ai_agent.py`. The chat answer narrative may use an LLM when an AI API key is configured; the deterministic decision card, safety flags, and gates remain authoritative and are never altered by the LLM. With no API key the chat falls back to the deterministic answer.
+- Research Lab: `athena_research/`, `tools/vectorbt_research_lab.py`, `configs/vectorbt_research_lab.yaml`
+- Backtesting: `backtest_runner.py`, backtest matrix tooling, telemetry/report writers
+- Config: `config.py`, `config.yaml`, `configs/`
+- Tests: targeted `tests/test_*.py` only for touched behavior
 
-## Engine D — Scalp Lab (Volume Profile)
-- **Methodology:** Fabio Valentini VP + Order Flow (balance/imbalance, VAL/VAH/POC/LVN)
-- **Setup types:** Mean Reversion (price at VA extreme → target POC) / Trend Continuation (pullback to LVN)
-- **Grading:** A (full) / B (half) / C (quarter) / D (skip)
-- **Three-pillar gate:** Market State + Location + Aggression (ALL must align)
-- **Session filter:** NY open skip, London cash open, session mode (NY/London/Asia/All)
-- **Config keys:** `SCALP_ENGINE`, `BT_*` (backtest params)
+## Safe workflow
 
-## Vision (Chart Analysis)
-- **Input:** Chart screenshots (H4/H1/D1) + algorithmic context
-- **Output:** RIGHT EDGE status (CONFIRMS/REVIEW/POTENTIAL REVERSAL), TF alignment, per-style ratings
-- **Model:** VISION_MODEL (grok-4.3), 800–1100 tokens, temperature from AITemperatureConfig
-- **Parser contract:** Exact footer tokens required — `RIGHT EDGE`, `TF ALIGNMENT`, `RATING`, `LEVELS`
+1. Restate the exact user request in operational terms.
+2. Identify the relevant engine/surface and current source files.
+3. Trace producer-to-consumer behavior before editing.
+4. Apply the smallest safe patch.
+5. Run the smallest relevant compile/test command.
+6. Report what changed, what passed, and what was not verified.
 
----
+## Detailed reference
 
-# Workflow Orchestration
+Use `docs/agent-operating-guide.md` only when the task requires fuller repository operating rules. Do not load it by default for small edits.
 
-## 1. Plan Node Default
-- Enter plan mode for ANY non-trivial task (3+ steps or architectural decisions)
-- If something goes sideways, STOP and re-plan immediately
-- Use plan mode for verification steps, not just building
-- Write detailed specs upfront to reduce ambiguity
-
-## 2. Subagent Strategy
-- Use subagents liberally to keep main context window clean
-- Offload research, exploration, and parallel analysis to subagents
-- For complex problems, throw more compute at it via subagents
-- One tack per subagent for focused execution
-
-## 3. Self-Improvement Loop
-- After ANY correction from the user: update `tasks/lessons.md` with the pattern
-- Write rules for yourself that prevent the same mistake
-- Ruthlessly iterate on these lessons until mistake rate drops
-- Review lessons at session start for relevant project
-
-## 4. Verification Before Done
-- Never mark a task complete without proving it works
-- Diff behavior between main and your changes when relevant
-- Ask yourself: "Would a staff engineer approve this?"
-- Run tests, check logs, demonstrate correctness
-
-## 5. Demand Elegance (Balanced)
-- For non-trivial changes: pause and ask "is there a more elegant way?"
-- If a fix feels hacky: "Knowing everything I know now, implement the elegant solution"
-- Skip this for simple, obvious fixes – don't over-engineer
-- Challenge your own work before presenting it
-
-## 6. Autonomous Bug Fixing
-- When given a bug report: just fix it. Don't ask for hand-holding
-- Point at logs, errors, failing tests – then resolve them
-- Zero context switching required from the user
-- Go fix failing CI tests without being told how
-
-## 7. Task Management
-1. **Plan First**: Write plan to `tasks/todo.md` with checkable items
-2. **Verify Plan**: Check in before starting implementation
-3. **Track Progress**: Mark items complete as you go
-4. **Explain Changes**: High-level summary at each step
-5. **Document Results**: Add review section to `tasks/todo.md`
-6. **Capture Lessons**: Update `tasks/lessons.md` after corrections
-
-## 8. Core Principles
-- **Simplicity First**: Make every change as simple as possible. Impact minimal code.
-- **No Laziness**: Find root causes. No temporary fixes. Senior developer standards.
-- **Minimal Impact**: Changes should only touch what's necessary. Avoid introducing bugs.
+- Do not use user-profile Codex skills or memory skills for this repo unless explicitly requested.
+- For this repo, active skill discovery should come from `.claude/skills/` only.
