@@ -4465,6 +4465,67 @@ def _build_signal_message(
     return "\n".join(lines)
 
 
+def _normalize_ai_analyze_signal(sig: dict) -> dict:
+    """Fill legacy Marcus prompt fields from Engine C/other review payloads.
+
+    /api/analyze historically receives Engine A-shaped signals. Engine C panel
+    rows use consensus names such as entry/tp/rr/conviction. Keep this as a
+    compatibility adapter only; it does not change any trade gates.
+    """
+    if not isinstance(sig, dict):
+        return sig
+
+    if sig.get("price") is None and sig.get("entry") is not None:
+        sig["price"] = sig.get("entry")
+    if sig.get("tp1") is None:
+        sig["tp1"] = sig.get("tp") if sig.get("tp") is not None else sig.get("takeProfit")
+    if sig.get("tp2") is None:
+        sig["tp2"] = sig.get("tp1")
+    if sig.get("rr1") is None:
+        sig["rr1"] = sig.get("rr")
+    if sig.get("rr2") is None:
+        sig["rr2"] = sig.get("rr1")
+
+    engine_hint = str(
+        sig.get("engine_source")
+        or sig.get("source_engine")
+        or sig.get("engine")
+        or ""
+    ).lower()
+    is_engine_c_like = (
+        engine_hint in {"engine_c", "consensus", "c"}
+        or (
+            sig.get("confluenceScore") is None
+            and any(key in sig for key in ("conviction", "combinedConviction", "decision_state", "engine_c"))
+        )
+    )
+    if is_engine_c_like:
+        sig.setdefault("engine_source", "engine_c")
+        conviction = (
+            sig.get("combinedConviction")
+            if sig.get("combinedConviction") is not None
+            else sig.get("conviction")
+        )
+        if sig.get("confluenceScore") is None and conviction is not None:
+            sig["confluenceScore"] = conviction
+            sig.setdefault("maxScore", 1.0)
+        engine_c = sig.get("engine_c")
+        if not isinstance(engine_c, dict):
+            engine_c = {}
+            sig["engine_c"] = engine_c
+        for key, value in (
+            ("decision_state", sig.get("decision_state")),
+            ("conviction", conviction),
+            ("tier", sig.get("tier")),
+            ("components", sig.get("components")),
+            ("verdict", sig.get("verdict")),
+        ):
+            if value is not None and engine_c.get(key) is None:
+                engine_c[key] = value
+
+    return sig
+
+
 def _parse_ai_json(text: str, pair: str = "?") -> dict | None:
     """Parse JSON from AI response using multiple fallback strategies."""
     from ai_utils import parse_json_object
@@ -4484,6 +4545,7 @@ def run_ai(
 ) -> dict:
     """Send signal data to the configured AI provider for Marcus Reid analysis."""
 
+    signal = _normalize_ai_analyze_signal(signal)
     ensure_trace_id(signal)
 
     if not ai_key_configured(CONFIG):

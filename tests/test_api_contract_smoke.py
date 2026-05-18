@@ -75,6 +75,26 @@ def test_key_endpoints_exist_with_methods():
     assert "/api/forensics/summary" in ep and "GET" in ep["/api/forensics/summary"]
 
 
+def test_api_analyze_normalizes_engine_c_review_payload_shape():
+    """Engine C text review must not hit Marcus with missing legacy level keys."""
+    src = ATHENA_PATH.read_text(encoding="utf-8")
+    assert "def _normalize_ai_analyze_signal" in src
+    assert 'sig["price"] = sig.get("entry")' in src
+    assert 'sig["tp1"] = sig.get("tp")' in src
+    assert 'sig["rr1"] = sig.get("rr")' in src
+    assert 'sig.setdefault("engine_source", "engine_c")' in src
+    assert "signal = _normalize_ai_analyze_signal(signal)" in src
+
+    panel_src = (ROOT / "static" / "react-app" / "app" / "src" / "components" / "panels" / "EngineCPanel.tsx").read_text(
+        encoding="utf-8"
+    )
+    assert "engine_source: 'engine_c'" in panel_src
+    assert "price: row.entry" in panel_src
+    assert "tp2: row.tp" in panel_src
+    assert "rr2: row.rr" in panel_src
+    assert "engine_c: {" in panel_src
+
+
 def test_execute_payload_contract_strings_present():
     src = ATHENA_PATH.read_text(encoding="utf-8") + EXECUTION_PATH.read_text(
         encoding="utf-8"
