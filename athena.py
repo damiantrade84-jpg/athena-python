@@ -11907,12 +11907,6 @@ def analyze_pair(
 
     # OI divergence warnings are appended inside calc_confluence when oi_data is passed (no duplicate here).
 
-    score_norm = (
-        min(1.0, float(res["score"]) / float(max_score))
-        if max_score and float(max_score) > 0
-        else 0.0
-    )
-
     # --- ENGINE B: NAKED MARKET STRUCTURE OVERLAY ---
     _engine_b_overlay_meta = None
     if use_naked_engine and res["score"] >= get_min_confluence_threshold(pair):
@@ -12098,6 +12092,7 @@ def analyze_pair(
         )
         _post_news_score = float(res.get("score", 0.0) or 0.0)
         news_adjustment = _post_news_score - _pre_news_score
+        raw_news_adjustment = news_adjustment
 
         # GUARD 1: Don't let news rescue a weak setup to trade-tier
         if base_score < _threshold * 0.8:
@@ -12115,8 +12110,20 @@ def analyze_pair(
         # LOG for audit trail
         res["news_adjustment"] = round(news_adjustment, 4)
         res["pre_news_score"] = round(_pre_news_score, 4)
+        res["newsSentimentDelta"] = round(news_adjustment, 6)
+        if round(raw_news_adjustment, 6) != round(news_adjustment, 6):
+            res["newsSentimentRawDelta"] = round(raw_news_adjustment, 6)
+            res.setdefault("warnings", []).append(
+                f"News AI guard: raw score change {raw_news_adjustment:+.4f} guarded to {news_adjustment:+.4f}"
+            )
     except Exception as _ns_err:
         log.debug("[NewsAI] scan blend skipped: %s", _ns_err)
+
+    score_norm = (
+        min(1.0, float(res["score"]) / float(max_score))
+        if max_score and float(max_score) > 0
+        else 0.0
+    )
 
     # Dynamic Confluence Scaling: Anchor the UI 67% mark to the actual pair threshold.
     # This prevents strong Crypto signals (e.g. 1.88) from looking 'WEAK' just because 3.0 is impossible.
@@ -12242,6 +12249,8 @@ def analyze_pair(
         "confidenceDetail": res.get("confidenceDetail", {}),
         "newsSentimentVote": res.get("newsSentimentVote"),
         "newsSentimentDelta": res.get("newsSentimentDelta"),
+        "newsSentimentRawDelta": res.get("newsSentimentRawDelta"),
+        "preNewsScore": res.get("pre_news_score"),
         "newsSentimentSummary": res.get("newsSentimentSummary"),
         "usdRelativeStrength": _usd_relative_strength,
         "intermarketConfirmation": res.get("intermarketConfirmation", {}),

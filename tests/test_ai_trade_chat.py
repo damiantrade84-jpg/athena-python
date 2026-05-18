@@ -70,6 +70,24 @@ def test_plan_compare_triggers_compare_tool():
     assert calls[0]["args"]["right_symbol"] == "ETH/USDT"
 
 
+def test_plan_research_lab_prompt_stays_in_trade_review():
+    calls = ai_trade_chat.plan_tool_calls(
+        "What should we test next based on the latest research?",
+        {"symbol": "BTCUSDT"},
+    )
+    names = {call["name"] for call in calls}
+
+    assert "get_signal_detail" in names
+    assert "get_engine_context" in names
+    assert not {
+        "get_latest_research_summary",
+        "propose_research_plan",
+        "validate_research_plan",
+        "compare_research_runs",
+        "get_research_recommendations",
+    } & names
+
+
 def test_run_trade_chat_turn_missing_model_uses_deterministic_fallback(tmp_path):
     runtime = SimpleNamespace(last_scan_results=lambda: {"signals": [_signal()]})
     ai_tools.set_ai_tools_runtime(runtime)

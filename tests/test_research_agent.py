@@ -565,31 +565,47 @@ class TestResearchChatTools:
             assert result["advisory_only"] is True, f"{fn.__name__} not advisory_only"
             assert result["execution_allowed"] is False, f"{fn.__name__} not execution_allowed"
 
-    def test_chat_routes_research_questions(self):
-        """Research questions should route to research tools."""
+    def test_ai_trading_chat_does_not_route_research_lab_questions(self):
+        """AI Trading Agent chat should not route to Research Lab tools."""
         from ai_trade_chat import plan_tool_calls
 
-        test_cases = [
-            ("what works best for crypto scalp", ["get_latest_research_summary"]),
-            ("tell me about the research", ["get_latest_research_summary"]),
-            ("research plan for engine d", ["get_latest_research_summary"]),
-            ("compare runs engine a vs engine d", ["compare_research_runs"]),
-            ("propose research plan for forex", ["propose_research_plan"]),
-            ("what should we test next", ["propose_research_plan"]),
-        ]
+        research_tools = {
+            "get_latest_research_summary",
+            "propose_research_plan",
+            "validate_research_plan",
+            "compare_research_runs",
+            "get_research_recommendations",
+        }
+        for message in [
+            "what works best for crypto scalp",
+            "tell me about the research",
+            "research plan for engine d",
+            "compare runs engine a vs engine d",
+            "propose research plan for forex",
+            "what should we test next",
+        ]:
+            calls = plan_tool_calls(message, {"symbol": "BTCUSDT"})
+            call_names = {c["name"] for c in calls}
+            assert not (research_tools & call_names), (
+                f"'{message}' should stay in trade review, got {call_names}"
+            )
+            assert "get_signal_detail" in call_names
 
-        context = {"symbol": "BTCUSDT"}
+    def test_research_tools_remain_available_to_research_lab(self):
+        """Research Lab tool wrappers stay available outside AI Trading Agent routing."""
+        import ai_tools
 
-        for message, expected_tools in test_cases:
-            calls = plan_tool_calls(message, context)
-            call_names = [c["name"] for c in calls]
-            for expected in expected_tools:
-                assert expected in call_names, (
-                    f"'{message}' should route to {expected}, got {call_names}"
-                )
+        for fn_name in [
+            "get_latest_research_summary_tool",
+            "propose_research_plan_tool",
+            "validate_research_plan_tool",
+            "compare_research_runs_tool",
+            "get_research_recommendations_tool",
+        ]:
+            assert hasattr(ai_tools, fn_name)
 
     def test_chat_does_not_auto_run(self):
-        """Chat may propose research but must not auto-execute."""
+        """Chat may discuss research wording but must not auto-execute."""
         from ai_trade_chat import plan_tool_calls
 
         messages = [
@@ -598,8 +614,8 @@ class TestResearchChatTools:
         ]
         for msg in messages:
             calls = plan_tool_calls(msg, {"symbol": "BTCUSDT"})
-            names = [c["name"] for c in calls]
-            assert "run_approved_research_plan" not in names
+            call_names = [c["name"] for c in calls]
+            assert "run_approved_research_plan" not in call_names
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

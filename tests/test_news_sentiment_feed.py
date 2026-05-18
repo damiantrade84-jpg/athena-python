@@ -110,4 +110,7 @@ def test_apply_news_sentiment_blends_score(monkeypatch):
     assert res["score"] == pytest.approx(0.65)
     assert res["newsSentimentVote"] == 0.5
     assert res["newsSentimentDelta"] == pytest.approx(0.15)  # 0.1 * 3.0 * 0.5
+    assert res["newsSentimentSummary"]["direction"] == "bullish"
+    assert "article_count_used" in res["newsSentimentSummary"]
+    assert "key_themes" in res["newsSentimentSummary"]
     assert any("News AI" in w for w in res["warnings"])

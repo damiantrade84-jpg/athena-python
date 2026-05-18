@@ -8,7 +8,6 @@ import {
   ChevronUp,
   Eye,
   FileText,
-  FlaskConical,
   GitCompare,
   Info,
   Loader2,
@@ -1065,41 +1064,6 @@ export default function AITradingAgentPanel({
                 Compare flow stays inside advisory chat; it does not call execution or threshold-changing routes.
               </p>
             </div>
-
-            {/* ── Research Agent Quick Prompts ───────────────────────────── */}
-            <Collapsible className="border border-slate-700/60 rounded-md">
-              <CollapsibleTrigger className="flex items-center gap-2 w-full p-2 text-[11px] font-semibold text-slate-300 hover:bg-slate-800/50">
-                <FlaskConical className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-                <span>Research Agent</span>
-                <ChevronDown className="w-3 h-3 ml-auto text-slate-500" />
-              </CollapsibleTrigger>
-              <CollapsibleContent className="p-2 pt-0 space-y-2">
-                <p className="text-[10px] text-slate-500">
-                  Ask the Research Agent for insights from completed backtest runs. Advisory only.
-                </p>
-                <div className="flex flex-wrap gap-1">
-                  {[
-                    'What should we test next based on the latest research?',
-                    'What works best for crypto scalp and intra?',
-                    'Which strategies need more data?',
-                    'Propose a research plan for forex',
-                    'What are the strongest and weakest clusters?',
-                  ].map((prompt) => (
-                    <Button
-                      key={prompt}
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      className="h-7 text-[10px] bg-slate-800 text-slate-100 border-slate-600 hover:bg-slate-700"
-                      disabled={loading}
-                      onClick={() => send(prompt)}
-                    >
-                      {prompt}
-                    </Button>
-                  ))}
-                </div>
-              </CollapsibleContent>
-            </Collapsible>
 
             <div className="flex flex-wrap gap-1">
               {QUICK_PROMPTS.map((prompt) => (

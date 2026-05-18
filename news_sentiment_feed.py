@@ -574,7 +574,13 @@ def apply_news_sentiment_to_scan_result(
         res["newsSentimentSummary"] = {
             "direction": detail.get("direction"),
             "confidence": detail.get("confidence"),
+            "sentiment_score": detail.get("sentiment_score"),
+            "article_count_used": detail.get("article_count_used"),
+            "key_themes": list(detail.get("key_themes") or [])[:6],
             "major_event_detected": detail.get("major_event_detected"),
+            "major_event_description": detail.get("major_event_description"),
+            "eodhd_pre_score": detail.get("eodhd_pre_score"),
+            "eodhd_agreement": detail.get("eodhd_agreement"),
             "reasoning_summary": (detail.get("reasoning_summary") or "")[:400],
         }
     elif vote is not None:
