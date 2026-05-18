@@ -54,6 +54,7 @@ def _telegram_command_specs() -> list[tuple[str, str]]:
         ("auto", "Toggle auto-trader"),
         ("decay", "Score decay for open trades"),
         ("bt", "Quick backtest"),
+        ("execute", "Scan pair and execute trade"),
         ("kill", "Emergency stop"),
         ("resume", "Lift kill switch"),
         ("help", "Show command help"),
@@ -551,6 +552,7 @@ def _build_and_run(token: str, chat_ids: list[str]):
             "`/enginec forex`      Engine C consensus scan\n"
             "`/scalp BTC/USDT`     Engine D scalp scan\n"
             "`/signal ETH/USDT`   Analyse a single pair\n"
+            "`/execute ETH/USDT`  Scan and execute (SCALP/INTRADAY/SWING buttons)\n"
             "`/positions winning` Open trades + P&L\n"
             "`/trade ETH/USDT`     One open trade card\n"
             "`/close ETH/USDT`    Close a position\n"
@@ -1132,6 +1134,52 @@ def _build_and_run(token: str, chat_ids: list[str]):
         except Exception:
             await msg.edit_text("⚠️ Athena offline — check server")
 
+    # ── /execute ──────────────────────────────────────────────────────────────
+
+    async def cmd_execute(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if not _guard(update):
+            return
+        if not context.args:
+            await update.message.reply_text(
+                "Usage: `/execute ETH/USDT [scalp|intraday|swing]`\n"
+                "Scans the pair and shows an execute card with SCALP/INTRADAY/SWING buttons.",
+                parse_mode="Markdown",
+            )
+            return
+
+        raw_args = context.args
+        style_hint = ""
+        if raw_args[-1].lower() in ("scalp", "intraday", "swing"):
+            style_hint = raw_args[-1].lower()
+            raw_args = raw_args[:-1]
+        pair = _resolve_pair(" ".join(raw_args))
+
+        msg = await update.message.reply_text(f"⏳ Scanning *{pair}* for execution...", parse_mode="Markdown")
+        try:
+            resp = await _run_in_thread(lambda: _safe_json(req.post(
+                f"{_BASE}/api/pair-scan",
+                json={"symbol": pair, "style": style_hint or "auto"},
+                timeout=_TIMEOUT_SCAN,
+            )))
+            if resp.get("error"):
+                await msg.edit_text(f"❌ Error: {resp['error']}")
+                return
+            sig = resp.get("signal")
+            if not sig:
+                await msg.edit_text(
+                    f"No executable signal for *{pair}* right now.\n"
+                    "Run `/signal {pair}` for a detailed breakdown.",
+                    parse_mode="Markdown",
+                )
+                return
+            await msg.delete()
+            await _send_signal_card(update.effective_chat.id, sig, context)
+        except Exception as exc:
+            await msg.edit_text(
+                f"⚠️ Athena offline — check server\n`{str(exc)[:100]}`",
+                parse_mode="Markdown",
+            )
+
     # ── Helper: send signal card with execute buttons ─────────────────────────
 
     async def _send_signal_card(chat_id_val, sig: dict, context):
@@ -1183,33 +1231,45 @@ def _build_and_run(token: str, chat_ids: list[str]):
                 await query.message.reply_text("❌ Signal expired — re-scan to refresh")
                 return
             sig = entry["signal"]
-            pip_mode = action.replace("exec_", "")
-            if pip_mode == "swing":
-                pip_mode = None
+            style_map = {"exec_scalp": "scalp", "exec_intraday": "intraday", "exec_swing": "swing"}
+            style = style_map.get(action, "swing")
+            pair_label = sig.get("pair") or sig.get("display") or "?"
+            direction_label = sig.get("direction") or "?"
 
             await query.message.reply_text(
-                f"⏳ Executing *{sig.get('pair', sig.get('display'))} {sig.get('direction')} {pip_mode or 'SWING'}*...",
+                f"⏳ Executing *{pair_label} {direction_label}* ({style.upper()})...",
                 parse_mode="Markdown"
             )
             try:
+                _sig_ref = sig
+                _style_ref = style
                 resp = await _run_in_thread(lambda: _safe_json(req.post(
-                    f"{_BASE}/api/quick-execute",
+                    f"{_BASE}/api/webhook",
                     json={
-                        "signal": sig,
-                        "pip_mode": pip_mode,
-                        "sizing_override": 1.0,
+                        "pair":         _sig_ref.get("pair") or _sig_ref.get("display"),
+                        "type":         _sig_ref.get("type", ""),
+                        "direction":    _sig_ref.get("direction"),
+                        "price":        _sig_ref.get("price", 0),
+                        "sl":           _sig_ref.get("sl", 0),
+                        "tp1":          _sig_ref.get("tp1", 0),
+                        "tp2":          _sig_ref.get("tp2", _sig_ref.get("tp1", 0)),
+                        "score":        _sig_ref.get("confluenceScore", 0),
+                        "maxScore":     _sig_ref.get("maxScore", 3.0),
+                        "trendState":   _sig_ref.get("trendState", "DEVELOPING"),
+                        "style":        _style_ref,
+                        "sizingOverride": 1.0,
                     },
                     timeout=_TIMEOUT_EXEC,
                 )))
                 if resp.get("success"):
                     ticket = resp.get("ticket", "?")
                     entry_px = resp.get("entryPrice", sig.get("price", "?"))
-                    sl = resp.get("sl", sig.get("sl", "?"))
-                    tp = resp.get("tp", sig.get("tp1", "?"))
+                    sl_out = resp.get("sl", sig.get("sl", "?"))
+                    tp_out = resp.get("tp", sig.get("tp1", "?"))
                     await query.message.reply_text(
                         f"✅ *EXECUTED*\n"
-                        f"*{sig.get('pair', sig.get('display'))} {sig.get('direction')}* @ `{entry_px}`\n"
-                        f"SL: `{sl}` | TP: `{tp}`\n"
+                        f"*{pair_label} {direction_label}* @ `{entry_px}`\n"
+                        f"SL: `{sl_out}` | TP: `{tp_out}`\n"
                         f"Ticket: `#{ticket}`",
                         parse_mode="Markdown"
                     )
@@ -1218,8 +1278,11 @@ def _build_and_run(token: str, chat_ids: list[str]):
                 else:
                     err = resp.get("error", "Unknown error")
                     await query.message.reply_text(f"❌ Execution failed: `{err}`", parse_mode="Markdown")
-            except Exception:
-                await query.message.reply_text("⚠️ Athena offline — check server")
+            except Exception as exc:
+                await query.message.reply_text(
+                    f"⚠️ Athena offline — check server\n`{str(exc)[:120]}`",
+                    parse_mode="Markdown"
+                )
             return
 
         # ── AI Analysis ──
@@ -1438,6 +1501,8 @@ def _build_and_run(token: str, chat_ids: list[str]):
     app.add_handler(CommandHandler("auto", cmd_auto))
     app.add_handler(CommandHandler("decay", cmd_decay))
     app.add_handler(CommandHandler("bt", cmd_bt))
+    app.add_handler(CommandHandler("execute", cmd_execute))
+    app.add_handler(CommandHandler("exec", cmd_execute))
     app.add_handler(CommandHandler("kill", cmd_kill))
     app.add_handler(CommandHandler("resume", cmd_resume))
     app.add_handler(CallbackQueryHandler(button_callback))
