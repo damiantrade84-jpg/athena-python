@@ -28,7 +28,7 @@ from athena_app.services.market_state import market_state_offset_hours, split_ma
 from athena_app.services.structure_context import apply_structure_context_to_score
 from backtest_candle_cache import fetch_backtest_candles, fetch_backtest_eodhd_intraday
 from calibration import calibration_report
-from config import CONFIG, _json_safe
+from config import CONFIG, _json_safe, get_optimal_workers
 from indicators import (
     calc_atr,
     calc_fib,
@@ -7172,7 +7172,10 @@ def run_full_backtest(
         except Exception as e:
             return pair, {"error": str(e)}
 
-    _bt_workers = int(CONFIG.get("BACKTEST_MAX_WORKERS", 6))
+    _bt_workers = get_optimal_workers(
+        configured_max=int(CONFIG.get("BACKTEST_MAX_WORKERS", 10) or 10),
+        conservative=True
+    )
     with ThreadPoolExecutor(max_workers=_bt_workers) as pool:
         futures = {pool.submit(_bt, p): p for p in pairs_to_test}
 

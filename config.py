@@ -1718,6 +1718,42 @@ def scan_candle_limits() -> dict[str, int]:
     }
 
 
+def get_optimal_workers(configured_max: int | None = None, conservative: bool = True) -> int:
+    """Calculate optimal worker count based on CPU and memory (conservative for work laptops).
+
+    Args:
+        configured_max: Upper bound from config (SCAN_MAX_WORKERS or BACKTEST_MAX_WORKERS)
+        conservative: If True, uses 60% of CPUs; if False, uses 100%
+
+    Returns:
+        Sensible worker count that leaves headroom for other applications
+    """
+    try:
+        import psutil
+        cpu_count = psutil.cpu_count(logical=True) or 4
+        mem_gb = psutil.virtual_memory().total / (1024**3)
+    except Exception:
+        # psutil not available - fallback to config values
+        cpu_count = os.cpu_count() or 4
+        mem_gb = 16  # Assume 16GB if unknown
+
+    # CPU-based: 60% for conservative (work laptop), 80% for aggressive
+    cpu_factor = 0.6 if conservative else 0.8
+    cpu_based = max(1, int(cpu_count * cpu_factor))
+
+    # Memory-based: ~2GB per worker for safety (conservative for 16GB total)
+    mem_based = max(1, int(mem_gb / 2.5))
+
+    # Take the more restrictive limit
+    optimal = min(cpu_based, mem_based)
+
+    # Apply configured max if provided
+    if configured_max is not None:
+        optimal = min(optimal, max(1, configured_max))
+
+    return max(1, optimal)
+
+
 def _json_safe(value):
     """Recursively convert NaN/inf float values to None so Flask emits valid JSON."""
     import math as _math

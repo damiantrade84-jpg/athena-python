@@ -48,7 +48,7 @@ H1_CANDLES: 1001
 # Those pairs still receive D1 via normal EOD candle fetch; CandleBuilder bulk refresh skips them only.
 CANDLE_BUILDER_BULK_D1_SKIP_EXCHANGES: ["COMM"]
 
-SCAN_MAX_WORKERS: 6           # Increased scan concurrency for faster Engine A full-universe runs.
+SCAN_MAX_WORKERS: 8           # Increased scan concurrency for faster Engine A full-universe runs. (Conservative: 8 for i7/16GB)
 
 
 
@@ -62,9 +62,11 @@ NEWS_BG_INTERVAL_SEC: 3600    # How often the background news loop runs (seconds
 
 NEWS_PAIR_CACHE_TTL_SEC: 14400 # How long per-pair news/word-weights are cached after an AI fetch (seconds). Default 14400 = 4 hours.
 
-BACKTEST_MAX_WORKERS: 8       # Parallel workers for backtesting (Engine A & B). Increase for faster backtests.
+BACKTEST_MAX_WORKERS: 10      # Parallel workers for backtesting (Engine A & B). (Conservative: 10 for i7/16GB)
 BT_VECTORIZED: true           # Speed path: exact-window indicator caching for Engine A/B backtests (parity-safe target).
 ENGINE_B_FAST_FVG_DETECTION: true
+
+SCAN_TIMEOUT_SEC: 45          # Per-pair scan timeout in seconds (faster fail for stalled pairs)
 
 SCAN_DEBUG_CANDLE_META: false # Optional scan/debug payload metadata about candle resolution path.
 

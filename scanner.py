@@ -14,7 +14,7 @@ from athena_app.services.crypto_signal_feed import (
     resolve_crypto_signal_feed,
 )
 from candles_cache import get_candle_fetch_meta
-from config import CONFIG, scan_candle_limits
+from config import CONFIG, scan_candle_limits, get_optimal_workers
 from data_feeds import http_requests
 from indicators import calc_atr, calc_indicators, calc_indicators_with_normalized
 from intermarket import build_scan_snapshot
@@ -1220,7 +1220,11 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict[s
 
         _engine_b = NakedEngine()
         _regime_context = make_regime_smoothing_context()
-        _max_workers = max(1, int(CONFIG.get("SCAN_MAX_WORKERS", 3) or 3))
+        _max_workers = get_optimal_workers(
+            configured_max=int(CONFIG.get("SCAN_MAX_WORKERS", 8) or 8),
+            conservative=True
+        )
+        _scan_timeout = int(CONFIG.get("SCAN_TIMEOUT_SEC", 45) or 45)
 
         def _analyse(pair):
             try:
@@ -1860,11 +1864,11 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict[s
             for fut in as_completed(futures):
                 pair = futures[fut]
                 try:
-                    pair_result, sig, err = fut.result(timeout=60)
+                    pair_result, sig, err = fut.result(timeout=_scan_timeout)
                 except TimeoutError:
-                    errors.append({"pair": pair["display"], "error": "Scan timeout (60s)"})
+                    errors.append({"pair": pair["display"], "error": f"Scan timeout ({_scan_timeout}s)"})
                     scan_funnel["errors"] += 1
-                    log.error(f"{pair['display']:12s} ERR: Scan timeout (60s)")
+                    log.error(f"{pair['display']:12s} ERR: Scan timeout ({_scan_timeout}s)")
                     continue
 
                 if err:

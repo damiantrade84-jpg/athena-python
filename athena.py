@@ -189,7 +189,6 @@ def _merge_forex_forming_ws(candles: list, display: str, tf: str, limit: int):
     )
 
 
-
 # N1: CONFIG loaded from config.py (YAML overrides + validation happen there)
 
 from config import (
@@ -205,6 +204,7 @@ from config import (
     get_ai_timeout_sec,
     get_mt5_fetch_stale_unshifted_age_sec,
     scan_candle_limits,
+    get_optimal_workers,
 )  # noqa: E402
 from athena.datafeeds.ws_ssl import configure_process_ca_bundle  # noqa: E402
 from ai_safe_wrappers import ai_call_with_safe_default  # noqa: E402
@@ -3320,7 +3320,10 @@ def fetch_div_split_context():
     symbols = list(dict.fromkeys(_DIV_SPLIT_PAIRS))
     max_workers = min(
         len(symbols),
-        max(1, int(CONFIG.get("SCAN_MAX_WORKERS", 3) or 3)),
+        get_optimal_workers(
+            configured_max=int(CONFIG.get("SCAN_MAX_WORKERS", 8) or 8),
+            conservative=True
+        ),
     )
 
     def _fetch_symbol_div_split(sym: str) -> tuple[str, dict]:
@@ -7060,7 +7063,10 @@ def api_scan_naked():
 
         return local_results
 
-    _max_workers = max(1, int(CONFIG.get("SCAN_MAX_WORKERS", 3) or 3))
+    _max_workers = get_optimal_workers(
+        configured_max=int(CONFIG.get("SCAN_MAX_WORKERS", 8) or 8),
+        conservative=True
+    )
     debug_rows = []
 
     log.info(f"[DEBUG] Starting scan with {len(candidate_pairs)} candidate pairs, debug_mode={debug_mode}")
