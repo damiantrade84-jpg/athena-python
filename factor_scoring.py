@@ -1760,12 +1760,17 @@ def compute_factor_scores(
     # ── Data quality guard ────────────────────────────────────────────────────
     _close = h4_snap.get("close")
     _atr = h4_snap.get("atr")
-    if _close and _atr == 0:
+    try:
+        _atr_float = float(_atr) if _atr is not None else None
+    except (TypeError, ValueError):
+        _atr_float = None
+    if _close and (_atr_float is None or not math.isfinite(_atr_float) or _atr_float <= 0):
         log.warning("[EA2] %s ATR=0 — frozen candle data suspected", display)
+        feed_status["atr"] = "invalid"
         regime_raw = detect_regime(h4_snap, asset_type).get("regime", "UNKNOWN")
         regime = _get_smoothed_regime(regime_context, pair_id, regime_raw)
-        return _zero_result(pair, regime, {"error": "atr_zero"}, feed_status,
-                            reason="atr_zero_abort", direction=None)
+        return _zero_result(pair, regime, {"error": "atr_invalid"}, feed_status,
+                            reason="atr_invalid_abort", direction=None)
 
     # ── FACTOR 1: Trend ───────────────────────────────────────────────────────
     d1_prev = _previous_indicator_snap(d1_candles)
@@ -2154,6 +2159,10 @@ def compute_factor_scores(
     final_score = final_score * (1.0 + _total_adj)
     # Apply mean reversion adjustment (additive, bounded)
     final_score = final_score + mean_rev_adj
+    if not math.isfinite(float(final_score)):
+        feed_status["final_score"] = "invalid"
+        return _zero_result(pair, regime, {"error": "final_score_invalid"}, feed_status,
+                            reason="final_score_invalid_abort", direction=direction)
     final_score = max(0.0, min(3.0, final_score))
 
     intermarket_confirmation = None

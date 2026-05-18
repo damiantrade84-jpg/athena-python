@@ -116,7 +116,178 @@ def test_c2_pre_trade_invariants_blocks_inverted_geometry():
     assert "LONG_SL_ABOVE_ENTRY" in reason
 
 
+def test_c2_pre_trade_invariants_allows_short_with_negative_score():
+    from guardian import pre_trade_invariants
+
+    sig = {
+        "pair": "EUR/USD",
+        "direction": "SHORT",
+        "price": 1.10,
+        "sl": 1.11,
+        "tp1": 1.08,
+        "type": "forex",
+        "factorDiagnostics": {"directionalScore": -0.8},
+    }
+    ok, reason = pre_trade_invariants(sig)
+    assert ok is True, f"Expected SHORT with negative score to pass, got: {reason}"
+
+
+def test_c2_pre_trade_invariants_blocks_short_with_positive_score():
+    from guardian import pre_trade_invariants
+
+    sig = {
+        "pair": "EUR/USD",
+        "direction": "SHORT",
+        "price": 1.10,
+        "sl": 1.11,
+        "tp1": 1.08,
+        "type": "forex",
+        "factorDiagnostics": {"directionalScore": 0.5},
+    }
+    ok, reason = pre_trade_invariants(sig)
+    assert ok is False
+    assert "DIRECTION_SCORE_MISMATCH" in reason
+
+
+def test_c2_bt_pre_trade_invariants_skips_diagnostics_on_consensus_override():
+    """Engine C B-override: consensus SHORT but Engine A factorDiagnostics says LONG.
+    The helper must not pass Engine A's irrelevant diagnostics, or the invariant
+    would falsely reject the trade."""
+    from backtest_runner import _bt_pre_trade_invariants
+
+    pair = {"display": "GBP/USD", "type": "forex"}
+    # Simulate the exact call site logic in backtest_pair_consensus:
+    res_a = {"direction": "LONG", "factorDiagnostics": {"directionalScore": 0.6}}
+    consensus_direction = "SHORT"
+    _fd = (
+        res_a.get("factorDiagnostics")
+        if res_a.get("direction") == consensus_direction
+        else None
+    )
+    ok, reason = _bt_pre_trade_invariants(
+        pair,
+        direction=consensus_direction,
+        entry=1.3000,
+        sl=1.3050,
+        tp1=1.2950,
+        factor_diagnostics=_fd,
+        asset_type="forex",
+    )
+    assert ok is True, f"Consensus override SHORT should pass when A diagnostics are excluded: {reason}"
+
+
 # ── C3: Engine C BT min-conviction default flipped to True ───────────────────
+def test_engine_c_bt_selects_engine_b_direction_independent_from_engine_a_hint():
+    from backtest_runner import _engine_c_select_engine_b_bt_candidate
+
+    class FakeNakedEngine:
+        def precompute_structure_data(self, *args, **kwargs):
+            return {"precomputed": True}
+
+        def analyze_structure_direction(self, precomputed, current_price, direction):
+            assert precomputed == {"precomputed": True}
+            if direction == "SHORT":
+                return {
+                    "structural_verdict": "CLEAR",
+                    "recommended_stop_loss": 101.0,
+                    "recommended_take_profit": 98.0,
+                    "order_blocks": [{"strength": 2}],
+                }
+            return {
+                "structural_verdict": "CLEAR",
+                "recommended_stop_loss": 99.0,
+                "recommended_take_profit": 102.0,
+                "order_blocks": [],
+            }
+
+        def calculate_confidence(self, res, current_price, direction, **kwargs):
+            return {
+                "score": 8.0 if direction == "SHORT" else 2.0,
+                "pct": 80.0 if direction == "SHORT" else 20.0,
+                "structure_ok": True,
+                "zone_ok": True,
+                "trigger_ok": True,
+                "entry_ok": True,
+                "rr_ok": True,
+                "rr": 2.0,
+            }
+
+    def confidence_passes(conf, style_profile, regime_label, asset_type=""):
+        return conf["score"] >= 5.0, 5.0
+
+    selected = _engine_c_select_engine_b_bt_candidate(
+        naked_engine=FakeNakedEngine(),
+        d1_ctx=[],
+        zone_ctx=[],
+        h1_window=[],
+        current_price=100.0,
+        atr=1.0,
+        regime_label="RANGING",
+        style_profile={"fallback_rr": 2.0},
+        asset_type="forex",
+        enable_profile_context=False,
+        d1_snap={},
+        h4_snap={},
+        resolved_style="intraday",
+        pair={"display": "EUR/USD", "type": "forex"},
+        confidence_passes=confidence_passes,
+        direction_hint="LONG",
+    )
+
+    signal_b, conf_b, _res_b = selected
+    assert signal_b["direction"] == "SHORT"
+    assert signal_b["engine_b_independent_direction"]["direction"] == "SHORT"
+    assert conf_b["passed"] is True
+
+
+def test_engine_d_bt_fee_guard_blocks_micro_stop():
+    from backtest_runner import _engine_d_fee_guard_metrics
+
+    metrics = _engine_d_fee_guard_metrics(
+        cfg={
+            "ENGINE_D_FEE_GUARD_ENABLED": True,
+            "ENGINE_D_MIN_STOP_PCT": 0.0005,
+            "ENGINE_D_MAX_COST_R": 0.20,
+        },
+        asset_type="crypto",
+        entry=100.0,
+        sl=99.99,
+        estimated_fee_pct=0.0004,
+        estimated_slippage_pct=0.0002,
+    )
+
+    assert metrics["engine_d_reject_reason"] == "fee_guard_micro_stop"
+
+
+def test_engine_d_bt_fee_guard_blocks_high_cost_r():
+    from backtest_runner import _engine_d_fee_guard_metrics
+
+    metrics = _engine_d_fee_guard_metrics(
+        cfg={
+            "ENGINE_D_FEE_GUARD_ENABLED": True,
+            "ENGINE_D_MIN_STOP_PCT": 0.0005,
+            "ENGINE_D_MAX_COST_R": 0.20,
+        },
+        asset_type="crypto",
+        entry=100.0,
+        sl=99.0,
+        estimated_fee_pct=0.002,
+        estimated_slippage_pct=0.001,
+    )
+
+    assert metrics["engine_d_reject_reason"] == "fee_guard_high_cost"
+
+
+def test_engine_d_bt_grading_receives_proxy_fidelity_inputs():
+    import inspect
+    import backtest_runner
+
+    src = inspect.getsource(backtest_runner.backtest_pair_scalp)
+    assert "data_fidelity=data_fidelity" in src
+    assert "tick_vol_quality=tick_vol_quality" in src
+    assert '"data_fidelity": data_fidelity' in src
+
+
 def test_c3_default_engine_c_bt_enforce_min_conviction_is_truthy():
     # If unset in CONFIG, the runtime default (read inside backtest_runner) is True.
     assert bool(CONFIG.get("ENGINE_C_BT_ENFORCE_MIN_CONVICTION", True)) is True

@@ -363,6 +363,10 @@ def _pick_nested(signal: Dict[str, Any], nested: Dict[str, Any], *keys: str) -> 
     return _first_present(_pick(nested, *keys), _pick(signal, *keys))
 
 
+def _pick_engine_nested(nested: Dict[str, Any], *keys: str) -> Any:
+    return _pick(nested, *keys)
+
+
 def _to_float(value: Any) -> float | None:
     try:
         if value is None or value is _MISSING or value == "":
@@ -498,23 +502,23 @@ def build_engine_d_context(signal: Dict[str, Any]) -> Dict[str, Any]:
 
 def _build_engine_a_context(signal: Dict[str, Any]) -> Dict[str, Any]:
     engine_a = _engine_dict(signal, "engine_a", "engineA")
-    score = _to_float(_pick_nested(signal, engine_a, "score", "confluenceScore", "final_score"))
-    max_score = _to_float(_pick_nested(signal, engine_a, "max_score", "maxScore"))
-    score_pct = _to_float(_pick_nested(signal, engine_a, "score_pct", "rawScorePct", "confluencePct"))
+    score = _to_float(_pick_engine_nested(engine_a, "score", "confluenceScore", "final_score"))
+    max_score = _to_float(_pick_engine_nested(engine_a, "max_score", "maxScore"))
+    score_pct = _to_float(_pick_engine_nested(engine_a, "score_pct", "rawScorePct", "confluencePct"))
     if score_pct is None and score is not None and max_score:
         score_pct = score / max_score * 100.0
     data = {
         "score": score,
         "max_score": max_score,
         "score_pct": score_pct,
-        "direction": _pick_nested(signal, engine_a, "direction"),
-        "regime": _pick_nested(signal, engine_a, "regime", "trendState", "regimeName"),
-        "trend_score": _pick_nested(signal, engine_a, "trend_score", "trendScore"),
-        "momentum_score": _pick_nested(signal, engine_a, "momentum_score", "mom_quality", "momentumScore"),
-        "adx": _pick_nested(signal, engine_a, "adx"),
-        "volatility_state": _pick_nested(signal, engine_a, "volatility_state", "volatilityState"),
-        "factor_diagnostics": _pick_nested(signal, engine_a, "factor_diagnostics", "factorDiagnostics"),
-        "threshold_progress": _pick_nested(signal, engine_a, "threshold_progress", "thresholdProgressPct"),
+        "direction": _pick_engine_nested(engine_a, "direction"),
+        "regime": _pick_engine_nested(engine_a, "regime", "trendState", "regimeName"),
+        "trend_score": _pick_engine_nested(engine_a, "trend_score", "trendScore"),
+        "momentum_score": _pick_engine_nested(engine_a, "momentum_score", "mom_quality", "momentumScore"),
+        "adx": _pick_engine_nested(engine_a, "adx"),
+        "volatility_state": _pick_engine_nested(engine_a, "volatility_state", "volatilityState"),
+        "factor_diagnostics": _pick_engine_nested(engine_a, "factor_diagnostics", "factorDiagnostics"),
+        "threshold_progress": _pick_engine_nested(engine_a, "threshold_progress", "thresholdProgressPct"),
     }
     for key, value in list(data.items()):
         if value is _MISSING:
@@ -531,17 +535,17 @@ def _build_engine_a_context(signal: Dict[str, Any]) -> Dict[str, Any]:
 def _build_engine_b_context(signal: Dict[str, Any]) -> Dict[str, Any]:
     engine_b = _engine_dict(signal, "engine_b", "engine_b_overlay", "naked_data", "engineB")
     data = {
-        "verdict": _pick_nested(signal, engine_b, "verdict", "structural_verdict", "engine_b_verdict"),
-        "confidence": _pick_nested(signal, engine_b, "confidence", "confidence_score", "score", "engine_b_score"),
-        "direction": _pick_nested(signal, engine_b, "direction", "independent_direction", "engine_b_independent_direction"),
-        "bos": _pick_nested(signal, engine_b, "bos", "break_of_structure"),
-        "choch": _pick_nested(signal, engine_b, "choch"),
-        "order_block": _pick_nested(signal, engine_b, "order_block", "ob"),
-        "fvg": _pick_nested(signal, engine_b, "fvg"),
-        "liquidity_sweep": _pick_nested(signal, engine_b, "liquidity_sweep", "sweep"),
-        "zone_context": _pick_nested(signal, engine_b, "zone_context", "zone_quality", "zone_ok"),
-        "rr": _pick_nested(signal, engine_b, "rr", "rr1"),
-        "style": _pick_nested(signal, engine_b, "style"),
+        "verdict": _pick_engine_nested(engine_b, "verdict", "structural_verdict", "engine_b_verdict"),
+        "confidence": _pick_engine_nested(engine_b, "confidence", "confidence_score", "score", "engine_b_score"),
+        "direction": _pick_engine_nested(engine_b, "direction", "independent_direction", "engine_b_independent_direction"),
+        "bos": _pick_engine_nested(engine_b, "bos", "break_of_structure"),
+        "choch": _pick_engine_nested(engine_b, "choch"),
+        "order_block": _pick_engine_nested(engine_b, "order_block", "ob"),
+        "fvg": _pick_engine_nested(engine_b, "fvg"),
+        "liquidity_sweep": _pick_engine_nested(engine_b, "liquidity_sweep", "sweep"),
+        "zone_context": _pick_engine_nested(engine_b, "zone_context", "zone_quality", "zone_ok"),
+        "rr": _pick_engine_nested(engine_b, "rr", "rr1"),
+        "style": _pick_engine_nested(engine_b, "style"),
     }
     for key, value in list(data.items()):
         if value is _MISSING:

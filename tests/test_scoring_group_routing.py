@@ -2,6 +2,7 @@
 
 import os
 import sys
+import importlib.util
 from pathlib import Path
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -17,6 +18,15 @@ from scoring import (
     get_score_threshold,
 )
 from factor_scoring import _volatility_scaler
+
+
+def _load_root_athena_module():
+    root = Path(__file__).resolve().parents[1]
+    spec = importlib.util.spec_from_file_location("_athena_root_for_tests", root / "athena.py")
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    return module
 
 
 def test_volatility_scaler_uses_score_group_override_for_precious_trackers(monkeypatch):
@@ -72,6 +82,38 @@ def test_engine_b_forex_uses_base_style_profile_when_group_override_absent():
                     f"{grp}.{style} must not override min_score — forex uses base profile"
                 )
     assert float(CONFIG["NAKED_ENGINE"]["style_profiles"]["intraday"]["min_rr"]) > 0
+
+
+def test_engine_b_resolved_style_profiles_keep_configured_min_rr_contracts():
+    _naked_scan_style_profile = _load_root_athena_module()._naked_scan_style_profile
+
+    _, scalp = _naked_scan_style_profile("scalp", score_group="forex_majors", asset_type="forex")
+    _, forex_major = _naked_scan_style_profile("intraday", score_group="forex_majors", asset_type="forex")
+    _, forex_cross = _naked_scan_style_profile("intraday", score_group="forex_crosses", asset_type="forex")
+    _, btc = _naked_scan_style_profile("intraday", score_group="crypto_btc", asset_type="crypto")
+    _, eth = _naked_scan_style_profile("intraday", score_group="crypto_eth", asset_type="crypto")
+    _, alt = _naked_scan_style_profile("intraday", score_group="crypto_alt_majors", asset_type="crypto")
+    _, commodity = _naked_scan_style_profile("swing", score_group="commodity_other", asset_type="commodity")
+
+    assert float(scalp["min_rr"]) == 1.5
+    assert float(forex_major["min_rr"]) == 1.3
+    assert float(forex_cross["min_rr"]) == 1.3
+    assert float(btc["min_rr"]) == 1.3
+    assert float(eth["min_rr"]) == 1.3
+    assert float(alt["min_rr"]) == 1.4
+    assert float(commodity["min_rr"]) == 2.0
+
+
+def test_engine_b_base_style_profiles_keep_min_score_contract():
+    _naked_scan_style_profile = _load_root_athena_module()._naked_scan_style_profile
+
+    _, scalp = _naked_scan_style_profile("scalp", asset_type="forex")
+    _, intraday = _naked_scan_style_profile("intraday", asset_type="forex")
+    _, swing = _naked_scan_style_profile("swing", asset_type="forex")
+
+    assert float(scalp["min_score"]) == 4.0
+    assert float(intraday["min_score"]) == 4.0
+    assert float(swing["min_score"]) == 4.0
 
 
 def test_min_confluence_threshold_tiers():

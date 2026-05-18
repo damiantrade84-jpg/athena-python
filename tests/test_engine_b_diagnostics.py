@@ -31,6 +31,7 @@ from market_structure import (
     _crypto_structure_adjustment,
     engine,
     engine_b_confidence_passes,
+    engine_b_min_score_threshold,
 )
 
 
@@ -1488,6 +1489,150 @@ def test_resolve_engine_b_execution_levels_atr_sl_fallback_tp_when_structural_mi
     assert out["execution_rr"] > 0
     assert out["execution_levels_valid"] is True
     assert "atr" in out["tp_source"] if "tp_source" in out else True
+
+
+def test_engine_b_structural_tp_below_min_rr_uses_fallback_rr_tp(monkeypatch):
+    """Close structural target stays diagnostic; Engine B gates on fallback-RR TP."""
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_ALLOW_SYNTHETIC_FALLBACK_RR_TP", True)
+
+    out = resolve_engine_b_execution_levels(
+        direction="LONG",
+        entry=100.0,
+        structural_sl=97.0,
+        structural_tp=101.0,
+        atr=2.0,
+        style="intraday",
+        asset_class="forex",
+        min_rr=1.5,
+        fallback_rr=2.0,
+    )
+
+    assert out["structural_tp"] == pytest.approx(101.0)
+    assert out["structural_rr"] == pytest.approx(1.0 / 3.0, abs=1e-4)
+    assert out["fallback_tp_applied"] is True
+    assert out["fallback_tp_reason"] == "structural_tp_below_min_rr"
+    assert out["execution_sl"] == pytest.approx(97.0)
+    assert out["execution_tp"] == pytest.approx(106.0)
+    assert out["execution_rr"] == pytest.approx(2.0)
+    assert out["rr_used_for_gate"] == pytest.approx(2.0)
+    assert out["rr_source"].endswith("_fallback_rr_tp")
+    assert out["level_mode"].endswith("_fallback_rr_tp")
+    assert out["execution_levels_valid"] is True
+
+
+def test_engine_b_invalid_atr_still_fails_closed():
+    out = resolve_engine_b_execution_levels(
+        direction="LONG",
+        entry=100.0,
+        structural_sl=97.0,
+        structural_tp=106.0,
+        atr=0.0,
+        style="intraday",
+        asset_class="forex",
+        min_rr=1.5,
+        fallback_rr=2.0,
+    )
+
+    assert out["execution_levels_valid"] is False
+    assert out["rr_source"] == "invalid_atr"
+    assert out["rr_used_for_gate"] == 0.0
+    assert out["fallback_tp_applied"] is False
+
+
+def test_engine_b_raw_atr_tp_does_not_satisfy_space_gate(monkeypatch):
+    """Raw ATR TP can fix RR, but it must not count as structural room."""
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_RR_CAN_SATISFY_SPACE_GATE", {"forex": True})
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_FOREX_RR_CAN_SATISFY_SPACE_GATE", True)
+
+    res = _base_res_long()
+    res["atr"] = 1.0
+    res["recommended_stop_loss"] = 98.5
+    res["recommended_take_profit"] = None
+    res["distance_to_res"] = 0.05
+
+    out = engine.calculate_confidence(
+        res,
+        current_price=100.0,
+        direction="LONG",
+        learning_ctx=None,
+        entry_candles=[],
+        style_profile={
+            "min_room_atr": 0.35,
+            "min_rr": 1.2,
+            "fallback_rr": 2.0,
+            "require_macro_align": False,
+            "style": "intraday",
+        },
+    )
+
+    assert out["rr_ok"] is True
+    assert out["level_mode"].endswith("_atr_tp")
+    assert out["rr_can_satisfy_space_gate"] is False
+    assert out["space_gate_ok"] is False
+
+
+def test_engine_b_bos_volume_confirmed_adds_bonus_point():
+    res = _base_res_long()
+    res["bos_volume_confirmed"] = True
+    res["volume_confirmed"] = False
+
+    out = engine.calculate_confidence(
+        res,
+        current_price=100.0,
+        direction="LONG",
+        learning_ctx=None,
+        entry_candles=[],
+        style_profile={
+            "min_room_atr": 0.35,
+            "min_rr": 1.0,
+            "fallback_rr": 2.0,
+            "require_macro_align": False,
+            "style": "intraday",
+        },
+    )
+
+    assert out["volume_bonus"] == pytest.approx(1.0)
+    assert out["bonus_points"] >= 2.0  # OB-at-zone + BOS volume.
+
+
+def test_engine_b_follow_through_denominator_uses_configured_capacity(monkeypatch):
+    res = _base_res_long()
+    ft_cfg = {
+        "ENABLED": True,
+        "DIAGNOSTICS_ENABLED": True,
+        "MAX_BONUS": 1.5,
+        "MIN_PENALTY": -0.5,
+    }
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_FOLLOW_THROUGH", ft_cfg)
+
+    out = engine.calculate_confidence(
+        res,
+        current_price=100.0,
+        direction="LONG",
+        learning_ctx=None,
+        entry_candles=[],
+        style_profile={
+            "min_room_atr": 0.35,
+            "min_rr": 1.0,
+            "fallback_rr": 2.0,
+            "require_macro_align": False,
+            "style": "intraday",
+        },
+    )
+
+    assert out["follow_through"]["score"] == pytest.approx(0.0)
+    assert out["max_possible"] == pytest.approx(10.5)
+
+
+def test_engine_b_score_floor_uses_regime_multiplier_not_min_rr():
+    profile = {"min_score": 4.0, "min_rr": 9.9}
+
+    trending_floor = engine_b_min_score_threshold(profile, "TRENDING", "forex")
+    high_vol_floor = engine_b_min_score_threshold(profile, "HIGH_VOLATILITY", "forex")
+
+    assert trending_floor == pytest.approx(3.6)
+    assert high_vol_floor == pytest.approx(3.4)
+    assert trending_floor != profile["min_rr"]
 
 
 def test_resolve_engine_b_execution_levels_structural_fallback_when_atr_config_missing():

@@ -3525,7 +3525,7 @@ class NakedEngine:
 
         # Stage 2.8: Optional volume confirmation gate.
         # Contributes to gate_score (+1 bonus) but is NOT mandatory for pass.
-        volume_ok = bool(res.get("volume_confirmed", False))
+        volume_ok = bool(res.get("bos_confirmed") and res.get("bos_volume_confirmed", False))
 
         gate_confirmations = [structure_ok, location_ok, entry_ok, space_gate_ok, rr_ok]
         if require_macro_align:
@@ -3569,7 +3569,7 @@ class NakedEngine:
         _profile_points_max = 1.0 if config.CONFIG.get("ENGINE_B_PROFILE_SCORING_ENABLED", False) else 0.0
         bonus_count = 3 + _profile_points_max  # bos_mtf, ob_at_zone, volume_ok + profile
         if _ft_enabled:
-            bonus_count += _ft_bonus
+            bonus_count += abs(float(_ft_cfg.get("MAX_BONUS", 1.5)))
         max_possible = gate_max_possible + bonus_count
         _profile_points = 0.0
         _profile_ok = False
@@ -3745,6 +3745,7 @@ class NakedEngine:
             "trigger_pattern": res.get("trigger_pattern", "NONE"),
             "ob_at_zone": ob_at_zone,
             "bos_mtf_confirmed": bos_mtf,
+            "volume_bonus": 1.0 if volume_ok else 0.0,
             "breaker_active": bool(res.get("breaker_block")),
             "profile_points": round(_profile_points, 2),
             "profile_ok": _profile_ok,
@@ -3772,6 +3773,7 @@ class NakedEngine:
             "research_lab_detail": research_lab_detail,
             "follow_through_bonus": round(_ft_bonus, 2),
             "follow_through_detail": _ft_detail,
+            "follow_through": _ft_detail,
             "engine_b_diagnostics": _engine_b_diag_payload,
             "_adx_derived_regime": res.get("_adx_derived_regime"),
         }

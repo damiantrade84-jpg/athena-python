@@ -29,6 +29,15 @@ def test_stale_timestamp_rejects_execution_context():
     assert out["allowed_for_execution_context"] is False
 
 
+def test_future_timestamp_rejects_execution_context():
+    future = (datetime.now(timezone.utc) + timedelta(minutes=10)).isoformat()
+    out = parse_vision_trade_read("{}", chart_timestamp=future, latest_candle_ts=future, timeframe="M5")
+
+    assert out["freshness_status"] != "fresh"
+    assert out["allowed_for_execution_context"] is False
+    assert any("future" in warning.lower() for warning in out["warnings"])
+
+
 def test_vision_cache_key_includes_execution_adjacent_fields():
     out = build_vision_cache_key(
         symbol="EUR/USD",

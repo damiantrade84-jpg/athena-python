@@ -121,6 +121,25 @@ def test_build_ai_review_packet_records_missing_fields_and_completeness():
     assert 0.0 <= packet["context_completeness"]["overall_complete"] <= 1.0
 
 
+def test_engine_a_only_signal_does_not_populate_engine_b_from_root_fields():
+    packet = build_ai_review_packet(
+        {
+            "pair": "EUR/USD",
+            "type": "forex",
+            "engine_source": "engine_a",
+            "direction": "LONG",
+            "rr1": 2.0,
+            "style": "intraday",
+            "engine_a": {"direction": "LONG", "score": 2.1, "max_score": 3.0},
+        }
+    )
+
+    assert packet["engine_a"]["direction"] == "LONG"
+    assert packet["engine_b"]["direction"] is None
+    assert packet["engine_b"]["rr"] is None
+    assert "direction" in packet["engine_b"]["missing_fields"]
+
+
 def test_data_freshness_allowed_false_overrides_fresh_text():
     packet = build_ai_review_packet(
         {

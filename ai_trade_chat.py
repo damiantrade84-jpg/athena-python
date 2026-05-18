@@ -30,7 +30,10 @@ log = logging.getLogger("athena")
 # containing execution verbs triggers a full deterministic fallback (not just a
 # final_action downgrade) — the chat is advisory only.
 _LLM_UNSAFE_EXECUTION_RE = re.compile(
-    r"\b(place|send|route|open|execute|submit)\s+(the\s+)?(trade|order|position)\b",
+    r"\b(?:"
+    r"(?:approve|confirm|authorize|allow)\s+(?:the\s+)?(?:trade|order|position|setup)"
+    r"|(?:place|send|route|open|execute|submit)\s+(?:the\s+)?(?:trade|order|position)"
+    r")\b",
     re.IGNORECASE,
 )
 

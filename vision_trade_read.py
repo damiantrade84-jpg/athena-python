@@ -117,10 +117,12 @@ def apply_vision_freshness_policy(read: dict[str, Any], timeframe: str | None = 
     warnings = list(out.get("warnings") or [])
     tf = str(timeframe or out.get("timeframe") or "H4").upper()
     max_age = (policy.get("max_age_sec") or {}).get(tf)
+    max_future_skew = float(policy.get("max_future_skew_sec", 120))
     chart_ts = _parse_dt(out.get("chart_timestamp"))
     latest_ts = _parse_dt(out.get("latest_candle_ts"))
     freshness = out.get("freshness_status") or "unknown"
     allowed = bool(out.get("allowed_for_execution_context", False))
+    now = datetime.now(timezone.utc)
 
     if not chart_ts:
         freshness = "unknown"
@@ -130,8 +132,23 @@ def apply_vision_freshness_policy(read: dict[str, Any], timeframe: str | None = 
         freshness = "unknown"
         allowed = False
         warnings.append("latest_candle_ts missing; Vision cannot be used for execution context.")
+    future_skew_sec = 0.0
+    if chart_ts:
+        future_skew_sec = max(future_skew_sec, (chart_ts - now).total_seconds())
+    if latest_ts:
+        future_skew_sec = max(future_skew_sec, (latest_ts - now).total_seconds())
+    if future_skew_sec > max_future_skew:
+        freshness = "future_timestamp"
+        allowed = False
+        warnings.append(
+            f"Vision timestamp is in the future; skew_sec={int(future_skew_sec)} max_future_skew_sec={int(max_future_skew)}."
+        )
+        out["freshness_status"] = freshness
+        out["allowed_for_execution_context"] = allowed
+        out["warnings"] = sorted(set(str(w) for w in warnings if w))
+        return out
     if latest_ts and max_age is not None:
-        age = (datetime.now(timezone.utc) - latest_ts).total_seconds()
+        age = (now - latest_ts).total_seconds()
         if age > float(max_age):
             freshness = "stale"
             allowed = False

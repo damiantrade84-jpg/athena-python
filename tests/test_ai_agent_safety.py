@@ -51,6 +51,19 @@ def test_execution_language_is_downgraded():
     assert "unsupported_execution_language_downgraded" in out["safety_flags"]
 
 
+def test_approve_trade_language_is_downgraded():
+    response = {
+        "decision": "WATCHLIST",
+        "answer": "Approve the trade now.",
+        "final_action": "advisory_review_only",
+    }
+
+    out = validate_ai_chat_response(response, _packet())
+
+    assert out["final_action"] == "require_user_review_advisory_only"
+    assert "unsupported_execution_language_downgraded" in out["safety_flags"]
+
+
 def test_kill_switch_active_blocks_valid_setup():
     response = {"decision": "VALID_SETUP", "answer": "valid", "final_action": "advisory_review_only"}
     packet = _packet(risk={**_packet()["risk"], "kill_switch_status": "ACTIVE"})

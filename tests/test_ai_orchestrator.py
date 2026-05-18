@@ -1,4 +1,10 @@
-from ai_orchestrator import build_packet_for_signal, run_ai_trade_review
+from ai_orchestrator import _primary_sections, build_packet_for_signal, run_ai_trade_review
+
+
+def test_primary_sections_does_not_match_single_letter_substrings():
+    packet = {"engine_source": "Engine B naked market structure"}
+
+    assert _primary_sections(packet) == ("engine_b",)
 
 
 def test_failed_deterministic_gate_cannot_become_valid_setup():

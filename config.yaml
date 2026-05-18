@@ -310,7 +310,7 @@ ENGINE_A_EQUITY_SESSION_LIQUIDITY_WEIGHTING:
 
 # Engine A can consume an explicit Engine B structure payload when callers pass
 # one into compute_factor_scores(). Enabled here for paper/demo testing.
-ENGINE_A_STRUCTURE_CONTEXT_ENABLED: true
+ENGINE_A_STRUCTURE_CONTEXT_ENABLED: false
 ENGINE_A:
   structure_first_entry:
     enabled: false

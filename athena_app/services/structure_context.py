@@ -148,7 +148,10 @@ def apply_structure_context_to_score(
     ob_at_zone = bool(structure_result.get("ob_at_zone"))
     fvg_overlap = bool(structure_result.get("fvg_overlap"))
     liquidity_sweep = bool(structure_result.get("liquidity_sweep"))
-    independent_direction = str(structure_result.get("engine_b_independent_direction") or "").upper()
+    independent_direction_raw = structure_result.get("engine_b_independent_direction")
+    if isinstance(independent_direction_raw, dict):
+        independent_direction_raw = independent_direction_raw.get("direction")
+    independent_direction = str(independent_direction_raw or "").upper()
     direction_u = str(direction or "").upper()
 
     components["zone_proximity"] = zone_proximity

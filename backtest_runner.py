@@ -1272,6 +1272,163 @@ def _resolve_engine_c_bt_levels_after_fill(
     }
 
 
+def _engine_c_select_engine_b_bt_candidate(
+    *,
+    naked_engine,
+    d1_ctx: list,
+    zone_ctx: list,
+    h1_window: list,
+    current_price: float,
+    atr: float,
+    regime_label: str,
+    style_profile: dict,
+    asset_type: str,
+    enable_profile_context: bool,
+    d1_snap: dict | None,
+    h4_snap: dict | None,
+    resolved_style: str,
+    pair: dict,
+    confidence_passes,
+    direction_hint: str | None = None,
+) -> tuple[dict, dict, dict] | None:
+    """Select Engine B's backtest candidate without inheriting Engine A direction."""
+
+    directions: list[str] = []
+    for direction in (direction_hint, "LONG", "SHORT"):
+        direction = str(direction or "").upper()
+        if direction in ("LONG", "SHORT") and direction not in directions:
+            directions.append(direction)
+
+    precomputed = None
+    if hasattr(naked_engine, "precompute_structure_data") and hasattr(naked_engine, "analyze_structure_direction"):
+        precomputed = naked_engine.precompute_structure_data(
+            d1_ctx,
+            zone_ctx,
+            h1_window,
+            current_price,
+            atr,
+            regime=regime_label,
+            fallback_rr=style_profile.get("fallback_rr", 2.0),
+            asset_type=asset_type,
+            enable_profile_context=enable_profile_context,
+            d1_snap=d1_snap or {},
+            h4_snap=h4_snap or {},
+            style=resolved_style,
+            pair=pair,
+        )
+
+    candidates: list[tuple[dict, dict, dict]] = []
+    for b_direction in directions:
+        if precomputed is not None:
+            res_b = naked_engine.analyze_structure_direction(precomputed, current_price, b_direction)
+        else:
+            res_b = naked_engine.analyze_structure(
+                d1_ctx,
+                zone_ctx,
+                h1_window,
+                current_price,
+                b_direction,
+                atr,
+                regime_label,
+                fallback_rr=style_profile.get("fallback_rr", 2.0),
+                asset_type=asset_type,
+                enable_profile_context=enable_profile_context,
+                d1_snap=d1_snap or {},
+                h4_snap=h4_snap or {},
+                style=resolved_style,
+                pair=pair,
+            )
+        if res_b.get("structural_verdict") != "CLEAR":
+            continue
+
+        conf_b = naked_engine.calculate_confidence(
+            res_b,
+            current_price,
+            b_direction,
+            entry_candles=h1_window,
+            style_profile=style_profile,
+        )
+        b_gate_ok, b_scaled_min = confidence_passes(
+            conf_b,
+            style_profile,
+            regime_label,
+            asset_type=asset_type,
+        )
+        conf_b = dict(conf_b)
+        conf_b["passed"] = b_gate_ok
+        conf_b["min_score_scaled"] = b_scaled_min
+        signal_b = {
+            "structural_verdict": "CLEAR",
+            "direction": b_direction,
+            "score": conf_b["score"],
+            "pct": conf_b["pct"],
+            "passed": conf_b.get("passed", False),
+            "recommended_stop_loss": res_b.get("recommended_stop_loss"),
+            "recommended_take_profit": res_b.get("recommended_take_profit"),
+            "structure_ok": conf_b.get("structure_ok", False),
+            "zone_ok": conf_b.get("zone_ok", False),
+            "trigger_ok": conf_b.get("trigger_ok", False),
+            "entry_ok": conf_b.get("entry_ok", False),
+            "rr_ok": conf_b.get("rr_ok", False),
+            "rr": conf_b.get("rr", 0.0),
+            "bos_mtf": conf_b.get("bos_mtf_confirmed", False),
+            "ob_at_zone": conf_b.get("ob_at_zone", False),
+            "ob_strength": max((ob.get("strength", 0) for ob in res_b.get("order_blocks", [])), default=0),
+            "engine_b_independent_direction": {
+                "direction": b_direction,
+                "confidence": conf_b.get("pct"),
+                "source": "engine_c_bt_direction_scan",
+            },
+        }
+        candidates.append((signal_b, conf_b, res_b))
+
+    if not candidates:
+        return None
+
+    def _candidate_rank(candidate: tuple[dict, dict, dict]) -> tuple[int, float, float]:
+        signal_b, conf_b, _res_b = candidate
+        return (
+            1 if conf_b.get("passed") else 0,
+            float(conf_b.get("score") or signal_b.get("score") or 0.0),
+            float(conf_b.get("pct") or signal_b.get("pct") or 0.0),
+        )
+
+    return max(candidates, key=_candidate_rank)
+
+
+def _engine_d_fee_guard_metrics(
+    *,
+    cfg: dict,
+    asset_type: str,
+    entry: float,
+    sl: float,
+    estimated_fee_pct: float,
+    estimated_slippage_pct: float,
+) -> dict:
+    risk_distance_abs = abs(float(entry) - float(sl))
+    risk_distance_pct = risk_distance_abs / float(entry) if float(entry) > 0 else 0.0
+    estimated_total_cost_pct = float(estimated_fee_pct) + float(estimated_slippage_pct)
+    cost_as_r = estimated_total_cost_pct / risk_distance_pct if risk_distance_pct > 0 else float("inf")
+    max_cost_r = float(cfg.get("ENGINE_D_MAX_COST_R", 0.20))
+    min_stop_pct = float(cfg.get("ENGINE_D_MIN_STOP_PCT", 0.0005))
+    reason = None
+    if cfg.get("ENGINE_D_FEE_GUARD_ENABLED", True):
+        if risk_distance_abs <= 0:
+            reason = "fee_guard_zero_stop"
+        elif risk_distance_pct < min_stop_pct:
+            reason = "fee_guard_micro_stop"
+        elif cost_as_r > max_cost_r:
+            reason = "fee_guard_high_cost"
+    return {
+        "engine_d_reject_reason": reason,
+        "risk_distance_pct": risk_distance_pct,
+        "estimated_total_cost_pct": estimated_total_cost_pct,
+        "cost_as_R": cost_as_r,
+        "min_required_stop_pct": min_stop_pct,
+        "max_allowed_cost_R": max_cost_r,
+    }
+
+
 def _time_series_quality(label: str, times) -> dict:
     """Summarize parse quality and ordering for a timestamp series."""
     valid = times.dropna()
@@ -5706,53 +5863,24 @@ def backtest_pair_consensus(
 
         best_b = None
         try:
-            res_b = naked_engine.analyze_structure(
-                d1_ctx,
-                zone_ctx,
-                h1_window,
-                current_price,
-                a_direction,
-                atr,
-                regime_label,
-                fallback_rr=style_profile.get("fallback_rr", 2.0),
+            best_b = _engine_c_select_engine_b_bt_candidate(
+                naked_engine=naked_engine,
+                d1_ctx=d1_ctx,
+                zone_ctx=zone_ctx,
+                h1_window=h1_window,
+                current_price=current_price,
+                atr=atr,
+                regime_label=regime_label,
+                style_profile=style_profile,
                 asset_type=_ptype,
                 enable_profile_context=_bt_enable_profile_context,
                 d1_snap=(d1i or {}).get("snap") or {},
                 h4_snap=(h4i or {}).get("snap") or {},
-                style=resolved_style,
+                resolved_style=resolved_style,
                 pair=pair,
+                confidence_passes=engine_b_confidence_passes,
+                direction_hint=a_direction,
             )
-            if res_b.get("structural_verdict") == "CLEAR":
-                conf_b = naked_engine.calculate_confidence(
-                    res_b, current_price, a_direction,
-                    entry_candles=h1_window, style_profile=style_profile,
-                )
-                _b_gate_ok, _b_scaled_min = engine_b_confidence_passes(
-                    conf_b,
-                    style_profile,
-                    regime_label,
-                    asset_type=_ptype,
-                )
-                conf_b = dict(conf_b)
-                conf_b["passed"] = _b_gate_ok
-                conf_b["min_score_scaled"] = _b_scaled_min
-                signal_b = {
-                    "structural_verdict": "CLEAR", "direction": a_direction,
-                    "score": conf_b["score"], "pct": conf_b["pct"],
-                    "passed": conf_b.get("passed", False),
-                    "recommended_stop_loss": res_b.get("recommended_stop_loss"),
-                    "recommended_take_profit": res_b.get("recommended_take_profit"),
-                    "structure_ok": conf_b.get("structure_ok", False),
-                    "zone_ok": conf_b.get("zone_ok", False),
-                    "trigger_ok": conf_b.get("trigger_ok", False),
-                    "entry_ok": conf_b.get("entry_ok", False),
-                    "rr_ok": conf_b.get("rr_ok", False),
-                    "rr": conf_b.get("rr", 0.0),
-                    "bos_mtf": conf_b.get("bos_mtf_confirmed", False),
-                    "ob_at_zone": conf_b.get("ob_at_zone", False),
-                    "ob_strength": max((ob.get("strength", 0) for ob in res_b.get("order_blocks", [])), default=0),
-                }
-                best_b = (signal_b, conf_b, res_b)
         except Exception as _be:
             log.debug("[ENGINE C BT] %s bar %d Engine B failed: %s", pair.get("display"), i, _be)
 
@@ -5857,13 +5985,21 @@ def backtest_pair_consensus(
 
         # C2: deterministic guardian invariants (direction-vs-directionalScore,
         # geometry, MAX_SL_PCT). Reuses the live execution contract.
+        # When consensus direction differs from Engine A (B-override or B-only),
+        # Engine A's factorDiagnostics.directionalScore is irrelevant — skip it
+        # so the invariant check does not falsely reject valid consensus trades.
+        _fd = (
+            res_a.get("factorDiagnostics")
+            if res_a.get("direction") == direction
+            else None
+        )
         _gd_ok, _gd_why = _bt_pre_trade_invariants(
             pair,
             direction=direction,
             entry=entry,
             sl=sl,
             tp1=tp,
-            factor_diagnostics=res_a.get("factorDiagnostics"),
+            factor_diagnostics=_fd,
             asset_type=_ptype,
         )
         if not _gd_ok:
@@ -6154,11 +6290,13 @@ def backtest_pair_scalp(pair: dict, validation_mode: str = "standard") -> dict |
         _calc_m15_atr,
         _coerce_utc_datetime,
         _crypto_sym_info,
+        _engine_d_data_fidelity,
         _guess_asset_type,
         _locate_price_vs_vp,
         _overlay_eodhd_volume_for_scalp,
         _scalp_cost_assumptions,
         _scalp_min_rr_for_group,
+        _tick_volume_quality_score,
         calculate_scalp_levels,
         get_grade_sessions_for_mode,
         infer_bias_from_ema_stack,
@@ -6423,6 +6561,18 @@ def backtest_pair_scalp(pair: dict, validation_mode: str = "standard") -> dict |
             except TypeError:
                 cvd = _check_cvd(exec_context)
             cvd["source"] = "candles"
+        data_fidelity = _engine_d_data_fidelity(
+            vp=vp,
+            cvd=cvd,
+            absorption=absorption,
+            asset_type=asset_type,
+            structure_volume_source=vp.get("volume_source", _bt_volume_source),
+            execution_volume_source=_bt_volume_source,
+            active_profile_anchor="bt_m15_proxy",
+        )
+        tick_vol_quality = None
+        if asset_type and asset_type != "crypto" and cfg.get("TICK_VOL_QUALITY_GRADING_ENABLED", True):
+            tick_vol_quality = _tick_volume_quality_score(exec_context, asset_type)
         if (
             asset_type == "crypto"
             and cfg.get("STRICT_FABIO_GATE_ENABLED", True)
@@ -6482,6 +6632,8 @@ def backtest_pair_scalp(pair: dict, validation_mode: str = "standard") -> dict |
             spread_pips=0.0, htf_bias=htf_bias,
             asset_type=asset_type,
             pair=display,
+            data_fidelity=data_fidelity,
+            tick_vol_quality=tick_vol_quality,
         )
         _pre_grade = _pre_quality.get("grade", "D")
         if _grade_order.index(_pre_grade) > _min_grade_idx:
@@ -6559,6 +6711,17 @@ def backtest_pair_scalp(pair: dict, validation_mode: str = "standard") -> dict |
         actual_rr = float(levels.get("rr") or 0)
 
         if sl_distance <= 0:
+            continue
+        estimated_fee_pct, estimated_slippage_pct = _scalp_cost_assumptions(cfg, asset_type)
+        fee_guard_metrics = _engine_d_fee_guard_metrics(
+            cfg=cfg,
+            asset_type=asset_type,
+            entry=entry,
+            sl=sl,
+            estimated_fee_pct=estimated_fee_pct,
+            estimated_slippage_pct=estimated_slippage_pct,
+        )
+        if fee_guard_metrics.get("engine_d_reject_reason"):
             continue
 
         if not math.isfinite(tp1) or (direction == "LONG" and tp1 <= entry) or (direction == "SHORT" and tp1 >= entry):
@@ -6710,7 +6873,6 @@ def backtest_pair_scalp(pair: dict, validation_mode: str = "standard") -> dict |
         # Fee & Slippage calculation
         # fee_R = estimated_fee_pct / risk_pct
         risk_pct = sl_distance / entry if entry > 0 else 0
-        estimated_fee_pct, estimated_slippage_pct = _scalp_cost_assumptions(cfg, asset_type)
         fee_R = estimated_fee_pct / risk_pct if risk_pct > 0 else 0
         tick_slippage_R = slippage_ticks * _point_bt / sl_distance if sl_distance > 0 else 0
         asset_slippage_R = estimated_slippage_pct / risk_pct if risk_pct > 0 else 0
@@ -6729,6 +6891,8 @@ def backtest_pair_scalp(pair: dict, validation_mode: str = "standard") -> dict |
             vwap=vwap, setup=setup, sessions=_grade_sessions, spread_pips=0.0, htf_bias=htf_bias,
             asset_type=asset_type,
             pair=display,
+            data_fidelity=data_fidelity,
+            tick_vol_quality=tick_vol_quality,
         )
         grade = _quality["grade"]
         grade_score = _quality["score"]
@@ -6776,6 +6940,7 @@ def backtest_pair_scalp(pair: dict, validation_mode: str = "standard") -> dict |
             "gross_R": round(gross_R, 4),
             "fee_R": round(fee_R, 4),
             "slippage_R": round(slippage_R, 4),
+            "fee_guard": fee_guard_metrics,
             "net_R": net_R,
             "resultR": r_multiple,
             "r_multiple": r_multiple,
@@ -6805,11 +6970,22 @@ def backtest_pair_scalp(pair: dict, validation_mode: str = "standard") -> dict |
             "market_state": market_state,
             "price_location": price_loc.get("location"),
             "vp_volume_source": vp.get("volume_source", "candles"),
+            "vp_fidelity": data_fidelity.get("vp_fidelity"),
+            "vp_is_proxy": data_fidelity.get("vp_is_proxy"),
+            "vp_uses_real_trade_buckets": data_fidelity.get("vp_uses_real_trade_buckets"),
             "vp_bucket_count": vp.get("bucket_count"),
             "absorption_count": int(absorption.get("count", 0) or 0),
+            "absorption_source": data_fidelity.get("absorption_source"),
+            "absorption_fidelity": data_fidelity.get("absorption_fidelity"),
+            "absorption_is_proxy": data_fidelity.get("absorption_is_proxy"),
             "cvd_direction": cvd.get("direction"),
             "cvd_source": cvd.get("source", "candles"),
+            "cvd_fidelity": data_fidelity.get("cvd_fidelity"),
+            "cvd_is_proxy": data_fidelity.get("cvd_is_proxy"),
+            "cvd_uses_real_trade_buckets": data_fidelity.get("cvd_uses_real_trade_buckets"),
             "cvd_bucket_count": cvd.get("bucket_count"),
+            "data_fidelity": data_fidelity,
+            "tick_vol_quality": tick_vol_quality,
             "aaa_complete": bool(aaa.get("complete")),
             "vwap_lean": vwap.get("lean"),
 

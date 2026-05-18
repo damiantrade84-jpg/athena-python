@@ -7,6 +7,7 @@ broker/execution paths, mutate thresholds, or authorize trades.
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from ai_context import build_ai_review_packet
@@ -62,7 +63,17 @@ def _primary_sections(packet: dict[str, Any]) -> tuple[str, ...]:
     src = str(packet.get("engine_source") or "").strip().lower()
     if src in _ENGINE_PRIMARY_SECTIONS:
         return _ENGINE_PRIMARY_SECTIONS[src]
+    if re.search(r"\bengine\s*d\b|\bengine_d\b|\bscalp\b", src):
+        return ("engine_d",)
+    if re.search(r"\bengine\s*a\b|\bengine_a\b", src):
+        return ("engine_a",)
+    if re.search(r"\bengine\s*b\b|\bengine_b\b|\bnaked\b|\bmarket\s+structure\b", src):
+        return ("engine_b",)
+    if re.search(r"\bengine\s*c\b|\bengine_c\b|\bconsensus\b", src):
+        return ("engine_a", "engine_b", "engine_c")
     for key, sections in _ENGINE_PRIMARY_SECTIONS.items():
+        if len(key) == 1:
+            continue
         if key and key in src:
             return sections
     return ("engine_a", "engine_b", "engine_c", "engine_d")

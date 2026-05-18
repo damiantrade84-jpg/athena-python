@@ -1,4 +1,5 @@
 import time
+import math
 
 import pytest
 
@@ -111,6 +112,23 @@ def _stochastic_cross_candles():
         }
         for close in closes
     ]
+
+
+def test_engine_a_rejects_non_finite_h4_atr():
+    h4 = _snap("long", momentum="bullish")
+    h4["atr"] = float("nan")
+
+    out = _score(
+        d1=_snap("long", momentum="bullish"),
+        h4=h4,
+        h1=_snap("long", momentum="bullish"),
+        pair={"type": "stock", "display": "TEST"},
+    )
+
+    assert math.isfinite(out["final_score"])
+    assert out["final_score"] == 0.0
+    assert out["abort_reason"] == "atr_invalid_abort"
+    assert out["feed_status"]["atr"] == "invalid"
 
 
 def test_public_helpers_match_current_contract():

@@ -278,7 +278,7 @@ def get_engine_c_weight_verdict(
         model = str(xai_model or get_ai_model(CONFIG, "AI_MODEL")).strip()
         client = create_ai_client(CONFIG, api_key=key)
         _temp = float(CONFIG.get("AI_TEMPERATURE", 0.3))
-        completion = _call_ai_with_retry(
+        parsed_dict, raw_text = _call_ai_with_retry(
             client,
             model,
             messages=[
@@ -287,8 +287,7 @@ def get_engine_c_weight_verdict(
             ],
             temperature=_temp,
         )
-        text = (completion.choices[0].message.content or "").strip()
-        parsed = parse_json_object(text)
+        parsed = parsed_dict if isinstance(parsed_dict, dict) else parse_json_object(raw_text or "")
         if parsed is None:
             log.warning("[ENGINE_C_AI] Failed to parse JSON from AI response")
             _log_engine_c_ai_review(
@@ -395,6 +394,13 @@ def apply_engine_c_ai_weight_adjustment(result: dict, verdict: dict) -> dict:
     tier, sizing = classify_conviction(new_c)
     result["tier"] = tier
     result["sizing_override"] = round(sizing, 4)
+
+    if tier == "SKIP":
+        result["trade"] = False
+        result["decision_state"] = "blocked"
+        result["sizing_override"] = 0.0
+        result["ai_weight_adjustment_applied"] = True
+        return result
 
     if not result.get("trade"):
         if tier == "SKIP":

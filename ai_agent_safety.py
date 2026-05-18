@@ -9,7 +9,10 @@ from ai_contradiction_detector import detect_ai_contradictions
 
 
 _UNSAFE_EXECUTION_RE = re.compile(
-    r"\b(place|send|route|open|execute|submit)\s+(the\s+)?(trade|order|position)\b",
+    r"\b(?:"
+    r"(?:approve|confirm|authorize|allow)\s+(?:the\s+)?(?:trade|order|position|setup)"
+    r"|(?:place|send|route|open|execute|submit)\s+(?:the\s+)?(?:trade|order|position)"
+    r")\b",
     re.IGNORECASE,
 )
 

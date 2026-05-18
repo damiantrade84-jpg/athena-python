@@ -29,6 +29,25 @@ def test_structure_context_boosts_score_when_zone_and_alignment_confirm(monkeypa
     assert out["components"]["independent_direction_alignment"] == "aligned"
 
 
+def test_structure_context_accepts_engine_b_independent_direction_dict(monkeypatch):
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_STRUCTURE_SCORE_INFLUENCE_ENABLED", True)
+    structure = {
+        "structural_verdict": "CLEAR",
+        "zone_touched": True,
+        "engine_b_independent_direction": {"direction": "LONG", "confidence": "high"},
+    }
+
+    out = apply_structure_context_to_score(
+        structure,
+        direction="LONG",
+        base_score=1.5,
+        max_score=3.0,
+    )
+
+    assert out["components"]["independent_direction_alignment"] == "aligned"
+    assert out["adjusted_score"] > 1.5
+
+
 def test_structure_context_penalizes_opposed_direction(monkeypatch):
     monkeypatch.setitem(config.CONFIG, "ENGINE_B_STRUCTURE_SCORE_INFLUENCE_ENABLED", True)
     structure = {
