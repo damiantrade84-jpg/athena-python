@@ -815,7 +815,7 @@ def test_bybit_execute_uses_risk_approved_volume(monkeypatch):
     assert result["volume"] == 0.5
 
 
-def test_bybit_non_scalp_trailing_atr_execute_sends_no_take_profit(monkeypatch):
+def test_bybit_non_scalp_trailing_atr_execute_sends_take_profit_by_default(monkeypatch):
     stop_calls = []
 
     class _FakeExchange:
@@ -846,6 +846,61 @@ def test_bybit_non_scalp_trailing_atr_execute_sends_no_take_profit(monkeypatch):
         lambda **_kwargs: None,
     )
     monkeypatch.setitem(bybit_executor.CONFIG, "TIMED_EXIT", {"tp_mode": "trailing_atr"})
+
+    signal = {
+        "pair": "BTCUSDT",
+        "direction": "LONG",
+        "price": 1000.0,
+        "sl": 950.0,
+        "tp1": 1100.0,
+        "type": "crypto",
+        "engine": "engine_b",
+        "style": "intraday",
+    }
+    approval = RiskApproval(True, 0.5, 25.0, 0.01, 0.01, 0.0, "OK")
+
+    result = bybit_executor.bybit_execute(signal, approval)
+
+    assert result["success"] is True
+    assert stop_calls[0]["stopLoss"] == "950.0"
+    assert stop_calls[0]["takeProfit"] == "1100.0"
+
+
+def test_bybit_non_scalp_trailing_atr_execute_can_disable_take_profit(monkeypatch):
+    stop_calls = []
+
+    class _FakeExchange:
+        @staticmethod
+        def fetch_ticker(_symbol):
+            return {"ask": 1005.0, "last": 1005.0}
+
+        @staticmethod
+        def create_market_order(_symbol, _side, amount, params=None):
+            return {
+                "id": "order-1",
+                "status": "closed",
+                "average": 1005.0,
+                "filled": amount,
+                "fee": {"cost": 0.0},
+            }
+
+        @staticmethod
+        def private_post_v5_position_trading_stop(params):
+            stop_calls.append(params)
+
+    monkeypatch.setattr(bybit_executor, "_get_exchange", lambda: _FakeExchange())
+    monkeypatch.setattr(bybit_executor, "bybit_map_symbol", lambda _pair: "BTC/USDT:USDT")
+    monkeypatch.setattr(bybit_executor, "_ensure_leverage", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        bybit_executor.telegram_notify,
+        "notify_trade_opened",
+        lambda **_kwargs: None,
+    )
+    monkeypatch.setitem(
+        bybit_executor.CONFIG,
+        "TIMED_EXIT",
+        {"tp_mode": "trailing_atr", "bybit_attach_broker_tp_when_trailing_atr": False},
+    )
 
     signal = {
         "pair": "BTCUSDT",
@@ -982,7 +1037,7 @@ def test_bybit_close_position_does_not_notify_directly(monkeypatch):
     assert notifications == []
 
 
-def test_bybit_reconcile_trailing_atr_missing_tp_does_not_repair(monkeypatch):
+def test_bybit_reconcile_trailing_atr_missing_tp_repairs_by_default(monkeypatch):
     stop_calls = []
 
     class _FakeExchange:
@@ -1003,6 +1058,49 @@ def test_bybit_reconcile_trailing_atr_missing_tp_does_not_repair(monkeypatch):
     monkeypatch.setattr(bybit_executor, "_get_exchange", lambda: _FakeExchange())
     monkeypatch.setattr(bybit_executor, "bybit_map_symbol", lambda _pair: "BTC/USDT:USDT")
     monkeypatch.setitem(bybit_executor.CONFIG, "TIMED_EXIT", {"tp_mode": "trailing_atr"})
+
+    result = bybit_executor.bybit_reconcile_after_open(
+        {"success": True, "symbol": "BTC/USDT:USDT", "sl": 950.0, "tp": 1100.0},
+        {
+            "pair": "BTCUSDT",
+            "sl": 950.0,
+            "tp1": 1100.0,
+            "engine": "engine_a",
+            "style": "intraday",
+        },
+    )
+
+    assert result["repaired"] is True
+    assert result["takeProfitRequired"] is True
+    assert stop_calls[0]["stopLoss"] == "950.0"
+    assert stop_calls[0]["takeProfit"] == "1100.0"
+
+
+def test_bybit_reconcile_trailing_atr_tp_can_be_disabled(monkeypatch):
+    stop_calls = []
+
+    class _FakeExchange:
+        @staticmethod
+        def fetch_positions(params=None):
+            return [
+                {
+                    "symbol": "BTC/USDT:USDT",
+                    "contracts": 1.0,
+                    "info": {"stopLoss": "950.0", "takeProfit": "0"},
+                }
+            ]
+
+        @staticmethod
+        def private_post_v5_position_trading_stop(params):
+            stop_calls.append(params)
+
+    monkeypatch.setattr(bybit_executor, "_get_exchange", lambda: _FakeExchange())
+    monkeypatch.setattr(bybit_executor, "bybit_map_symbol", lambda _pair: "BTC/USDT:USDT")
+    monkeypatch.setitem(
+        bybit_executor.CONFIG,
+        "TIMED_EXIT",
+        {"tp_mode": "trailing_atr", "bybit_attach_broker_tp_when_trailing_atr": False},
+    )
 
     result = bybit_executor.bybit_reconcile_after_open(
         {"success": True, "symbol": "BTC/USDT:USDT", "sl": 950.0, "tp": 0},

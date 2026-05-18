@@ -36,6 +36,16 @@ def _uses_trailing_atr_exit(signal: dict) -> bool:
     return mode == "trailing_atr" and not _is_engine_d_signal(signal)
 
 
+def _bybit_should_send_broker_tp(signal: dict) -> bool:
+    """Bybit can keep a broker TP as a pre-activation failsafe in trailing mode."""
+    if not _uses_trailing_atr_exit(signal):
+        return True
+    cfg = CONFIG.get("TIMED_EXIT") or {}
+    if not isinstance(cfg, dict):
+        return False
+    return bool(cfg.get("bybit_attach_broker_tp_when_trailing_atr", True))
+
+
 def bybit_account_risk_domain() -> str:
     env_label = (
         "demo"
@@ -932,7 +942,7 @@ def bybit_reconcile_after_open(exec_result: dict, signal: dict) -> dict:
     if not ccxt_symbol:
         return {"error": True, "detail": "no_symbol"}
     sl = float(exec_result.get("sl") or signal.get("sl") or 0)
-    requires_tp = not _uses_trailing_atr_exit(signal)
+    requires_tp = _bybit_should_send_broker_tp(signal)
     tp = float(exec_result.get("tp") or signal.get("tp1") or 0)
     if sl <= 0 or (requires_tp and tp <= 0):
         return {"error": False, "note": "no_levels_to_verify", "repaired": False}
@@ -1302,7 +1312,7 @@ def bybit_execute(signal: dict, approval: "RiskApproval") -> dict:  # noqa: F821
             }
 
         _is_scalp = _is_engine_d_signal(signal)
-        _use_broker_tp = not _uses_trailing_atr_exit(signal)
+        _use_broker_tp = _bybit_should_send_broker_tp(signal)
         _tp1 = float(signal.get("tp1", 0) or 0)
         _tp2 = float(signal.get("tp2", 0) or 0)
         _tp_partial = float(signal.get("tp_partial", 0) or 0)
