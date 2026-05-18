@@ -623,8 +623,11 @@ def _stochastic_rsi_modifier(
 
 
 def _momentum_quality(
-    h4_snap: dict, direction: str, asset_type: str,
+    h4_snap: dict,
+    direction: str,
+    asset_type: str,
     score_group: str | None = None,
+    h4_candles: list | None = None,
 ) -> float:
     """RSI + MACD confirmation quality score in [0.0, 1.0].
 
@@ -684,15 +687,17 @@ def _momentum_quality(
     # or price makes lower lows but RSI/MACD makes higher lows (bullish div),
     # momentum quality is zeroed — divergence precedes reversals.
     _divergence_detected = False
-    try:
-        from indicators import calc_rsi_divergence
-        _rsi_div = calc_rsi_divergence(h4_candles, lookback=30)
-        if _rsi_div == "bearish" and direction == "LONG":
-            _divergence_detected = True
-        elif _rsi_div == "bullish" and direction == "SHORT":
-            _divergence_detected = True
-    except Exception as exc:
-        log.debug("[EA2] RSI divergence check error: %s", exc)
+    if isinstance(h4_candles, list) and len(h4_candles) >= 35:
+        try:
+            from indicators import calc_rsi_divergence
+
+            _rsi_div = calc_rsi_divergence(h4_candles, lookback=30)
+            if _rsi_div == "bearish" and direction == "LONG":
+                _divergence_detected = True
+            elif _rsi_div == "bullish" and direction == "SHORT":
+                _divergence_detected = True
+        except Exception as exc:
+            log.debug("[EA2] RSI divergence check error: %s", exc)
 
     # MACD histogram score — aligned confirms, opposing penalises strongly.
     # Penalty increased from -0.15 to -0.50 (2026-04-30 audit): the old value
@@ -1834,7 +1839,13 @@ def compute_factor_scores(
                             adx_val=adx_val, direction=direction)
 
     # ── FACTOR 2: Momentum quality ────────────────────────────────────────────
-    mom_quality = _momentum_quality(h4_snap, direction, asset_type, score_group=score_group)
+    mom_quality = _momentum_quality(
+        h4_snap,
+        direction,
+        asset_type,
+        score_group=score_group,
+        h4_candles=h4_candles,
+    )
 
     # Apply Stochastic RSI modifier (experimental, config-gated)
     stoch_rsi_adj = _stochastic_rsi_modifier(h4_candles, direction, asset_type)
@@ -1965,14 +1976,15 @@ def compute_factor_scores(
     _minus_di = h4_snap.get("minusDI") or h4_snap.get("minus_di")
     di_align_mult = _di_alignment_multiplier(direction, _plus_di, _minus_di)
     feed_status["di_align"] = f"{di_align_mult:.2f}"
-    if di_align_mult == 0.0:
-        feed_status["abort_reason"] = "DI_ALIGNMENT_CONFLICT"
+    if di_align_mult <= 0.3 and _plus_di is not None and _minus_di is not None:
+        feed_status["di_align_opposed"] = "true"
         log.debug(
-            "[EA2] %s DI alignment conflict direction=%s plusDI=%s minusDI=%s",
+            "[EA2] %s DI opposed to trend direction=%s plusDI=%s minusDI=%s mult=%.2f",
             display,
             direction,
             _plus_di,
             _minus_di,
+            di_align_mult,
         )
 
     # ── Conviction score: weighted combination ────────────────────────────────

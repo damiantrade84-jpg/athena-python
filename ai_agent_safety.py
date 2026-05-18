@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import logging
 import re
 from typing import Any
+
+log = logging.getLogger("athena")
 
 from ai_contradiction_detector import detect_ai_contradictions
 
@@ -127,8 +130,11 @@ def validate_ai_chat_response(response: dict, packet: dict | None = None) -> dic
             packet_failed = True
         if any(flag in _VALID_SETUP_BLOCKING_CONTRADICTIONS for flag in contradictions.get("flags") or []):
             packet_failed = True
-    except Exception:
-        pass
+    except Exception as exc:
+        log.warning("[AI_SAFETY] contradiction detector failed (fail-closed): %s", exc)
+        packet_failed = True
+        if "contradiction_detector_error" not in safety_flags:
+            safety_flags.append("contradiction_detector_error")
 
     final_action = str(safe.get("final_action") or "")
     answer = str(safe.get("answer") or "")

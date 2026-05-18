@@ -96,6 +96,19 @@ def test_missing_rr_blocks_valid_setup():
     assert "RR_MISSING" in out["safety_flags"]
 
 
+def test_contradiction_detector_error_fail_closed(monkeypatch):
+    def _boom(*_args, **_kwargs):
+        raise RuntimeError("detector unavailable")
+
+    monkeypatch.setattr("ai_agent_safety.detect_ai_contradictions", _boom)
+    response = {"decision": "VALID_SETUP", "answer": "valid", "final_action": "advisory_review_only"}
+
+    out = validate_ai_chat_response(response, _packet())
+
+    assert out["decision"] == "BLOCKED_BY_RISK"
+    assert "contradiction_detector_error" in out["safety_flags"]
+
+
 def test_missing_scalp_spread_blocks_valid_setup():
     response = {"decision": "VALID_SETUP", "answer": "valid", "final_action": "advisory_review_only"}
     engine_d = _packet()["engine_d"]

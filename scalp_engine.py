@@ -3708,6 +3708,19 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
     from mt5_executor import mt5_map_symbol, mt5_get_symbol_info, mt5_connect
 
     cfg = CONFIG.get("SCALP_ENGINE", {})
+    if cfg.get("enabled") is False:
+        log.info("[SCALP] Engine D scan skipped: SCALP_ENGINE.enabled is false")
+        return _finalize_run_scalp_scan_result(
+            signals=[],
+            skipped=[
+                {"pair": display, "reason": "SCALP_ENGINE_DISABLED"}
+                for display in pairs_or_symbols
+            ],
+            scanned=0,
+            session_name="DISABLED",
+            sessions_active=[],
+            reason="SCALP_ENGINE_DISABLED",
+        )
     m1_count = int(cfg.get("M1_CANDLES", 300))
     m15_count = int(cfg.get("M15_CANDLES", 500))
     m5_count  = int(cfg.get("M5_CANDLES", 1000))

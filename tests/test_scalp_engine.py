@@ -1758,6 +1758,20 @@ def test_scalp_execution_min_grade_config_uses_auto_execute_floor():
     assert scalp_engine._scalp_execution_min_grade(cfg) == "B"
 
 
+def test_run_scalp_scan_respects_engine_disabled_flag(monkeypatch):
+    monkeypatch.setitem(
+        scalp_engine.CONFIG,
+        "SCALP_ENGINE",
+        {**scalp_engine.CONFIG.get("SCALP_ENGINE", {}), "enabled": False},
+    )
+
+    result = scalp_engine.run_scalp_scan(["EUR/USD"])
+
+    assert result["signals"] == []
+    assert result["skipped"] == [{"pair": "EUR/USD", "reason": "SCALP_ENGINE_DISABLED"}]
+    assert result.get("reason") == "SCALP_ENGINE_DISABLED"
+
+
 def test_run_scalp_scan_skips_closed_mt5_market(monkeypatch):
     monkeypatch.setitem(
         scalp_engine.CONFIG,

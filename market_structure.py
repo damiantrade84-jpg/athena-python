@@ -1700,13 +1700,15 @@ class NakedEngine:
                 "bos_bear_bar_index": bos_bear_idx,
             }
 
-        except Exception:
+        except Exception as exc:
+            log.warning("[ENGINE_B] _detect_bos failed: %s", exc, exc_info=True)
             return {
                 "bos_bull": False, "bos_bear": False,
                 "last_broken_high": None, "last_broken_low": None,
                 "bos_reference_high": None, "bos_reference_low": None,
                 "bos_volume_confirmed": False,
                 "bos_bull_bar_index": None, "bos_bear_bar_index": None,
+                "_detection_error": str(exc),
             }
 
     def _detect_choch(
@@ -1811,8 +1813,15 @@ class NakedEngine:
                 "choch_level": choch_level,
                 "choch_events": choch_events,
             }
-        except Exception:
-            return {"choch_bull": False, "choch_bear": False, "choch_level": None, "choch_events": []}
+        except Exception as exc:
+            log.warning("[ENGINE_B] _detect_choch failed: %s", exc, exc_info=True)
+            return {
+                "choch_bull": False,
+                "choch_bear": False,
+                "choch_level": None,
+                "choch_events": [],
+                "_detection_error": str(exc),
+            }
 
     def _detect_order_blocks(self, candles: list, bos_data: dict, atr: float,
                               structure_tf: str = "H4") -> list:
@@ -2525,6 +2534,27 @@ class NakedEngine:
             pair=pair,
             diagnostics=forming_strip_diag,
         )
+        _strip_reason = str(forming_strip_diag.get("reason") or "")
+        if _strip_reason == "missing_pair_context":
+            return {
+                "_error": "missing_pair_context",
+                "forming_strip_diagnostics": forming_strip_diag,
+            }
+        if _strip_reason == "insufficient_confirmed_bars":
+            return {
+                "_error": "insufficient_confirmed_bars",
+                "forming_strip_diagnostics": forming_strip_diag,
+            }
+        if _strip_reason in ("split_market_state_error", "insufficient_input"):
+            return {
+                "_error": _strip_reason,
+                "forming_strip_diagnostics": forming_strip_diag,
+            }
+        if not struct_candles:
+            return {
+                "_error": _strip_reason or "struct_candles_empty",
+                "forming_strip_diagnostics": forming_strip_diag,
+            }
         trigger_candles = h4_candles if _tfs["trigger"] == "H4" else h1_candles
         _zone_fvg_candles = struct_candles if structure_tf == "H4" else h4_candles
 
@@ -2613,11 +2643,17 @@ class NakedEngine:
 
         bos_mtf_confirmed = bool((bos_data.get("bos_bull") and d1_bos.get("bos_bull")) or (bos_data.get("bos_bear") and d1_bos.get("bos_bear")))
 
-        order_blocks = self._detect_order_blocks(struct_candles, bos_data, atr, structure_tf=structure_tf)
+        order_blocks = self._detect_order_blocks(
+            struct_candles, bos_data, struct_atr, structure_tf=structure_tf
+        )
         if registry_symbol:
             zone_registry = get_zone_registry()
-            zone_registry.upsert_zones(registry_symbol, structure_tf, order_blocks, [], atr=atr, asset_type=asset_type)
-            zone_registry.upsert_zones(registry_symbol, "H4", [], fvgs, atr=atr, asset_type=asset_type)
+            zone_registry.upsert_zones(
+                registry_symbol, structure_tf, order_blocks, [], atr=struct_atr, asset_type=asset_type
+            )
+            zone_registry.upsert_zones(
+                registry_symbol, "H4", [], fvgs, atr=struct_atr, asset_type=asset_type
+            )
             zone_registry.mark_mitigated(registry_symbol, structure_tf, current_price, atr)
             zone_registry.mark_mitigated(registry_symbol, "H4", current_price, atr)
             zone_registry.prune_old_zones()

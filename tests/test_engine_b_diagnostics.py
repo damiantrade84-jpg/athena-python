@@ -209,6 +209,21 @@ def test_forming_strip_reports_missing_pair_reason(monkeypatch):
     assert diagnostics["reason"] == "missing_pair_context"
 
 
+def test_precompute_returns_missing_pair_context_error(monkeypatch):
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_STRIP_FORMING_STRUCT", True)
+    candles = _micro_breakout_candles_long()
+    out = NakedEngine().precompute_structure_data(
+        d1_candles=candles,
+        h4_candles=candles,
+        h1_candles=candles,
+        current_price=101.0,
+        atr=1.0,
+        pair=None,
+    )
+    assert out.get("_error") == "missing_pair_context"
+    assert out.get("forming_strip_diagnostics", {}).get("reason") == "missing_pair_context"
+
+
 def test_rr_cannot_satisfy_space_gate_with_non_structural_tp(monkeypatch):
     local_engine = NakedEngine()
     monkeypatch.setitem(

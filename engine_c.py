@@ -1184,7 +1184,7 @@ def compute_consensus(
 
             decision_state = "blocked"
             if tier != "SKIP":
-                if c_reliability >= 0.60 and conviction >= 0.65:
+                if c_reliability >= _REL_EXEC and conviction >= _CONV_EXEC:
                     decision_state = "execute"
                 elif c_reliability >= _REL_RR and conviction >= _CONV_RR:
                     decision_state = "reduced_risk"
@@ -1256,12 +1256,12 @@ def compute_consensus(
 
             decision_state = "blocked"
             if tier != "SKIP":
-                if c_reliability >= 0.60 and conviction >= 0.65:
+                if c_reliability >= _REL_EXEC and conviction >= _CONV_EXEC:
                     decision_state = "execute"
-                elif c_reliability >= 0.45 and conviction >= 0.50:
+                elif c_reliability >= _REL_RR and conviction >= _CONV_RR:
                     decision_state = "reduced_risk"
                     sizing = max(0.0, sizing - _SIZING_DELTA_RR)
-                elif conviction >= 0.40:
+                elif conviction >= _CONV_WATCH:
                     decision_state = "watchlist"
 
             if decision_state == "blocked":

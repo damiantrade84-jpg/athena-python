@@ -387,10 +387,44 @@ def _resolve_chat_context(request: dict[str, Any]) -> tuple[dict[str, Any] | Non
         except Exception as exc:
             resolution["warnings"].append(f"trace_id lookup failed: {exc}")
 
-    # 2. Explicit signal payload from request
+    # 2. Explicit signal payload — prefer server trace match when trace_id provided
     if resolved is None and signal_payload:
-        resolved = dict(signal_payload)
-        resolution["mode"] = "request_signal_payload"
+        payload_trace = str(
+            signal_payload.get("trace_id") or signal_payload.get("traceId") or ""
+        ).strip()
+        if trace_id:
+            try:
+                server_found, _lookup = _ai_tools._find_signal(signal_id=trace_id, symbol=None)
+            except Exception as exc:
+                server_found = None
+                resolution["warnings"].append(f"trace_id verification failed: {exc}")
+            else:
+                server_found = server_found if isinstance(server_found, dict) else None
+            if server_found:
+                server_trace = str(
+                    server_found.get("trace_id") or server_found.get("traceId") or ""
+                ).strip()
+                if server_trace and server_trace != trace_id:
+                    resolution["warnings"].append("trace_id_server_mismatch")
+                    resolution["mode"] = "trace_id_mismatch"
+                else:
+                    resolved = server_found
+                    resolution["mode"] = "trace_id_server_verified"
+                    if payload_trace and payload_trace != server_trace:
+                        resolution["warnings"].append(
+                            "client_signal_payload_ignored_server_authoritative"
+                        )
+            else:
+                resolution["warnings"].append(
+                    "trace_id_not_found_on_server; client payload not used"
+                )
+                resolution["mode"] = "trace_id_not_found"
+        else:
+            resolved = dict(signal_payload)
+            resolution["mode"] = "request_signal_payload"
+            resolution["warnings"].append(
+                "unverified_client_signal_payload; provide trace_id for server binding"
+            )
 
     # 3. Runtime symbol lookup (latest selected/live signal for this symbol)
     if resolved is None and symbol:

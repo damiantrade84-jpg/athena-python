@@ -287,6 +287,31 @@ def _build_external_context(packet: dict[str, Any]) -> LeeExternalContext:
     )
 
 
+def _compact_lee_evidence_packet(packet: dict[str, Any]) -> dict[str, Any]:
+    """Prefer engine-separated sections so truncation keeps authoritative fields."""
+    if not isinstance(packet, dict):
+        return {}
+    compact: dict[str, Any] = {
+        "schema_version": packet.get("schema_version"),
+        "trace_id": packet.get("trace_id"),
+        "symbol": packet.get("symbol"),
+        "asset_type": packet.get("asset_type"),
+        "direction": packet.get("direction"),
+        "engine_source": packet.get("engine_source"),
+        "market_context": packet.get("market_context"),
+        "deterministic_gates": packet.get("deterministic_gates"),
+        "data_quality": packet.get("data_quality"),
+        "risk": packet.get("risk"),
+        "context_completeness": packet.get("context_completeness"),
+        "engine_a": packet.get("engine_a"),
+        "engine_b": packet.get("engine_b"),
+        "engine_c": packet.get("engine_c"),
+        "engine_d": packet.get("engine_d"),
+        "vision": packet.get("vision"),
+    }
+    return {k: v for k, v in compact.items() if v is not None}
+
+
 def _build_packet(signal: dict[str, Any], request: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
     warnings: list[str] = []
     try:
@@ -336,6 +361,12 @@ class HermesLeeReasoningAdapter:
 
             from config import AITemperatureConfig, create_ai_client, get_ai_model, get_ai_timeout_sec
 
+            max_chars = int(CONFIG.get("AI_LEE_EVIDENCE_PACKET_MAX_CHARS", 12000) or 12000)
+            evidence_body = _compact_lee_evidence_packet(evidence_packet)
+            evidence_json = json.dumps(evidence_body, default=str)
+            if len(evidence_json) > max_chars:
+                evidence_json = evidence_json[:max_chars]
+
             model = get_ai_model(CONFIG, preferred_key="LEE_MODEL")
             client = create_ai_client(CONFIG)
             completion = client.chat.completions.create(
@@ -356,7 +387,7 @@ class HermesLeeReasoningAdapter:
                         "content": (
                             "Return strict JSON with keys lee_verdict, confidence, narrative, supports, risks, missing_data. "
                             "Allowed lee_verdict values: CONTEXT_SUPPORTS, WAIT, CONTEXT_BLOCKS, NEED_MORE_DATA. "
-                            "Evidence packet:\n" + json.dumps(evidence_packet, default=str)[:8000]
+                            "Evidence packet:\n" + evidence_json
                         ),
                     },
                 ],

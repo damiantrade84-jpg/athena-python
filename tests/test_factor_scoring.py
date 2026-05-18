@@ -114,6 +114,29 @@ def _stochastic_cross_candles():
     ]
 
 
+def test_momentum_quality_rsi_divergence_disqualifies_opposing_direction(monkeypatch):
+    """EA-01: h4_candles must reach calc_rsi_divergence for disqualification."""
+    import indicators
+
+    h4_snap = _snap("long", momentum="bullish")
+    candles = _candles(80)
+    monkeypatch.setattr(indicators, "calc_rsi_divergence", lambda c, lookback=30: "bearish")
+
+    mq_long = _momentum_quality(h4_snap, "LONG", "stock", h4_candles=candles)
+    assert mq_long == 0.0
+
+    monkeypatch.setattr(indicators, "calc_rsi_divergence", lambda c, lookback=30: "bullish")
+    mq_short = _momentum_quality(_snap("short", momentum="bearish"), "SHORT", "stock", h4_candles=candles)
+    assert mq_short == 0.0
+
+
+def test_momentum_quality_skips_divergence_without_enough_candles():
+    h4_snap = _snap("long", momentum="bullish")
+    short_candles = _candles(10)
+    mq = _momentum_quality(h4_snap, "LONG", "stock", h4_candles=short_candles)
+    assert mq > 0.0
+
+
 def test_engine_a_rejects_non_finite_h4_atr():
     h4 = _snap("long", momentum="bullish")
     h4["atr"] = float("nan")
