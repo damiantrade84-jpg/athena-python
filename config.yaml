@@ -337,7 +337,6 @@ VOLATILITY_SCALER_BANDS:
   # Score-group overrides (beat asset_type when present) — aligns scaler with RSI routing
   precious_trackers: { low: 0.003, high: 0.015 }
   energy_oil:        { low: 0.003, high: 0.015 }
-  crypto_meme:       { low: 0.015, high: 0.060 }    # Meme coins: wider bands due to extreme volatility
 
 ENGINE_A_RESEARCH_LAB_FACTORS:
   ENABLED: true
@@ -733,6 +732,11 @@ ENGINE_A_PAIR_THRESHOLDS: {}
 
 ENGINE_A_SCORE_GROUP_THRESHOLDS:
 
+  # Note: forex_exotics (1.7) sits *below* forex_majors (2.1) by design.
+  # Exotics rarely score high enough to clear a majors-grade bar, so the
+  # tier is loosened to keep them tradable. This intentionally inverts the
+  # generic "thin liquidity = stricter" comment in scoring.py's _TIER_*.
+
   default: 1.5
 
   forex_majors: 2.1
@@ -748,8 +752,6 @@ ENGINE_A_SCORE_GROUP_THRESHOLDS:
   crypto_alt_majors: 2.0
 
   crypto_doge: 2.0
-
-  crypto_meme: 2.2  # Meme coins (PEPE, SHIB, etc.) - higher threshold due to extreme volatility
 
   crypto_other: 2.2
 
@@ -1673,13 +1675,9 @@ PAIR_PROFILES:
 
     disable_filters: [obv, session]
 
-    min_confluence: 1.05
-
   XAG/USD:
 
     disable_filters: [obv, session]
-
-    min_confluence: 1.05
 
   LINK/USDT:
 
