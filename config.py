@@ -697,14 +697,29 @@ CONFIG: dict = {
         "forex_majors": 2.1,
         "forex_crosses": 2.1,
         "forex_other": 2.1,
+        "forex_exotics": 1.7,
         "crypto_btc": 2.0,
         "crypto_eth": 2.0,
         "crypto_alt_majors": 2.0,
         "crypto_doge": 2.0,
-        "crypto_other": 2.0,
+        "crypto_other": 2.2,
+        "precious_trackers": 1.5,
+        "energy_oil": 1.5,
         "nat_gas": 2.0,
-        "forex_exotics": 1.7,
+        "copper": 1.5,
+        "pgm_metals": 1.5,
+        "base_metals": 1.5,
         "softs": 1.7,
+        "commodity_other": 1.5,
+        "us_indices_trackers": 1.5,
+        "eu_indices": 1.5,
+        "asian_indices": 1.5,
+        "index_other": 1.5,
+        "us_stock_single": 1.5,
+        "bond_tlt": 1.5,
+        "smallcap_em_etf": 1.5,
+        "stock_other": 1.5,
+        "unknown": 1.5,
     },
     "ENGINE_A_ATR_LEVEL_CLASS_BY_DISPLAY": {
         "SPY": "etf",
@@ -1609,6 +1624,30 @@ def _fatal_config_validation(cfg: dict) -> None:
     _TIER_STABLE = 1.5
     if _TIER_VOLATILE < _TIER_STABLE:
         errors.append(f"TIER_VOLATILE ({_TIER_VOLATILE}) must be >= TIER_STABLE ({_TIER_STABLE})")
+
+    try:
+        from scoring import ENGINE_A_KNOWN_SCORE_GROUPS
+    except Exception as exc:
+        log.warning("[CFG] Engine A score_group coverage check skipped: %s", exc)
+    else:
+        _group_thresholds = cfg.get("ENGINE_A_SCORE_GROUP_THRESHOLDS") or {}
+        if not isinstance(_group_thresholds, dict):
+            errors.append("ENGINE_A_SCORE_GROUP_THRESHOLDS must be a dict")
+        else:
+            for group in sorted(ENGINE_A_KNOWN_SCORE_GROUPS):
+                if group not in _group_thresholds:
+                    errors.append(
+                        f"ENGINE_A_SCORE_GROUP_THRESHOLDS missing score_group {group!r} "
+                        "(required — do not rely on legacy 3-tier fallback)"
+                    )
+            for key in _group_thresholds:
+                if key == "default":
+                    continue
+                if key not in ENGINE_A_KNOWN_SCORE_GROUPS:
+                    log.warning(
+                        "[CFG] ENGINE_A_SCORE_GROUP_THRESHOLDS has unknown score_group key %r",
+                        key,
+                    )
 
     # 2. Bound non-contradiction
     _addon_confirm = float(cfg.get("FACTOR_ADDON_CONFIRM", 0.20))

@@ -732,6 +732,9 @@ ENGINE_A_PAIR_THRESHOLDS: {}
 
 ENGINE_A_SCORE_GROUP_THRESHOLDS:
 
+  # Every get_pair_score_group() value must be listed (see scoring.ENGINE_A_KNOWN_SCORE_GROUPS).
+  # "default" is only for unknown / forward-compatible groups — not a stand-in for missing keys.
+
   # Note: forex_exotics (1.7) sits *below* forex_majors (2.1) by design.
   # Exotics rarely score high enough to clear a majors-grade bar, so the
   # tier is loosened to keep them tradable. This intentionally inverts the
@@ -739,27 +742,42 @@ ENGINE_A_SCORE_GROUP_THRESHOLDS:
 
   default: 1.5
 
+  # Forex
   forex_majors: 2.1
-
   forex_crosses: 2.1
-
   forex_other: 2.1
-
-  crypto_btc: 2.0
-
-  crypto_eth: 2.0
-
-  crypto_alt_majors: 2.0
-
-  crypto_doge: 2.0
-
-  crypto_other: 2.2
-
-  nat_gas: 2.0
-
   forex_exotics: 1.7
 
+  # Crypto
+  crypto_btc: 2.0
+  crypto_eth: 2.0
+  crypto_alt_majors: 2.0
+  crypto_doge: 2.0
+  crypto_other: 2.2
+
+  # Commodity
+  precious_trackers: 1.5
+  energy_oil: 1.5
+  nat_gas: 2.0
+  copper: 1.5
+  pgm_metals: 1.5
+  base_metals: 1.5
   softs: 1.7
+  commodity_other: 1.5
+
+  # Index
+  us_indices_trackers: 1.5
+  eu_indices: 1.5
+  asian_indices: 1.5
+  index_other: 1.5
+
+  # Stock / ETF
+  us_stock_single: 1.5
+  bond_tlt: 1.5
+  smallcap_em_etf: 1.5
+  stock_other: 1.5
+
+  unknown: 1.5
 
 ENGINE_A_ATR_LEVEL_CLASS_BY_DISPLAY:
 

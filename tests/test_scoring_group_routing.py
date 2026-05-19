@@ -9,6 +9,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from config import CONFIG
 from scoring import (
+    ENGINE_A_KNOWN_SCORE_GROUPS,
     _classify_signal,
     calc_confluence,
     get_backtest_min_score_threshold,
@@ -46,6 +47,30 @@ def test_volatility_scaler_uses_score_group_override_for_precious_trackers(monke
     v_stock_only = _volatility_scaler(2.0, 1000.0, "stock", "us_stock_single")
     assert v_precious != v_stock_only
     assert abs(v_precious - 1.0) < abs(v_stock_only - 1.0)
+
+
+def test_engine_a_score_group_thresholds_cover_all_known_groups():
+    """Each score_group must have its own floor — not legacy 3-tier or asset_type fallback."""
+    thresholds = CONFIG.get("ENGINE_A_SCORE_GROUP_THRESHOLDS") or {}
+    missing = sorted(g for g in ENGINE_A_KNOWN_SCORE_GROUPS if g not in thresholds)
+    assert not missing, f"ENGINE_A_SCORE_GROUP_THRESHOLDS missing: {missing}"
+
+
+def test_engine_a_threshold_resolves_by_score_group_not_asset_type(monkeypatch):
+    """Broad asset_type keys must not override score_group-specific floors."""
+    monkeypatch.setitem(CONFIG, "PAIR_PROFILES", {})
+    monkeypatch.setitem(
+        CONFIG,
+        "ENGINE_A_SCORE_GROUP_THRESHOLDS",
+        {
+            "default": 9.9,
+            "crypto": 9.8,
+            "crypto_btc": 2.0,
+            "us_stock_single": 1.5,
+        },
+    )
+    assert get_score_threshold({"display": "BTC/USDT", "type": "crypto"}) == 2.0
+    assert get_score_threshold({"display": "AAPL", "type": "stock"}) == 1.5
 
 
 def test_pair_score_group_mapping_examples():
@@ -195,6 +220,19 @@ def test_forex_engine_a_scan_thresholds_are_explicit_strict_floor():
         assert get_score_threshold(pair) == 2.1
 
 
+def test_equity_and_commodity_groups_use_explicit_stable_floor():
+    examples = [
+        ({"display": "AAPL", "type": "stock"}, "us_stock_single", 1.5),
+        ({"display": "SPY", "type": "stock"}, "us_indices_trackers", 1.5),
+        ({"display": "XAU/USD", "type": "commodity"}, "precious_trackers", 1.5),
+        ({"display": "Copper", "type": "commodity"}, "copper", 1.5),
+        ({"display": "DAX 40", "type": "index"}, "eu_indices", 1.5),
+    ]
+    for pair, expected_group, expected_threshold in examples:
+        assert get_pair_score_group(pair) == expected_group
+        assert get_score_threshold(pair) == expected_threshold
+
+
 def test_auto_trade_min_score_does_not_override_engine_a_scan_threshold(monkeypatch):
     """AUTO_TRADE_MIN_SCORE is informational; Engine A scan uses score-group thresholds only."""
     pair = {"display": "BTC/USDT", "symbol": "BTCUSDT", "type": "crypto"}
@@ -236,7 +274,10 @@ def test_etf_level_atr_class_is_separate_from_stock_identity(monkeypatch):
 def test_score_group_thresholds_is_active_config():
     original = CONFIG.get("ENGINE_A_SCORE_GROUP_THRESHOLDS")
     try:
-        CONFIG["ENGINE_A_SCORE_GROUP_THRESHOLDS"] = {"forex": 2.95, "default": 1.5}
+        CONFIG["ENGINE_A_SCORE_GROUP_THRESHOLDS"] = {
+            "forex_majors": 2.95,
+            "default": 1.5,
+        }
         pair = {"display": "EUR/USD", "symbol": "EURUSD=X", "type": "forex"}
         assert get_min_confluence_threshold(pair) == 2.95
         assert get_backtest_min_score_threshold(pair) == 2.95

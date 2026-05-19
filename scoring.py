@@ -169,6 +169,39 @@ def get_pair_score_group(pair: dict) -> str:
     return f"{ptype}_other" if ptype else "unknown"
 
 
+# Every value returned by get_pair_score_group() must have an explicit entry in
+# ENGINE_A_SCORE_GROUP_THRESHOLDS (config.yaml / config.py). The "default" key is
+# only for forward-compatible unknown groups — not a substitute for listed groups.
+ENGINE_A_KNOWN_SCORE_GROUPS = frozenset({
+    "forex_majors",
+    "forex_crosses",
+    "forex_exotics",
+    "forex_other",
+    "crypto_btc",
+    "crypto_eth",
+    "crypto_doge",
+    "crypto_alt_majors",
+    "crypto_other",
+    "precious_trackers",
+    "energy_oil",
+    "nat_gas",
+    "copper",
+    "pgm_metals",
+    "base_metals",
+    "softs",
+    "commodity_other",
+    "us_indices_trackers",
+    "eu_indices",
+    "asian_indices",
+    "index_other",
+    "us_stock_single",
+    "bond_tlt",
+    "smallcap_em_etf",
+    "stock_other",
+    "unknown",
+})
+
+
 def _resolve_class_keyed(mapping, score_group: str | None, asset_type: str, default):
     """Resolve class-keyed config by score_group, then asset_type, then default."""
     if not isinstance(mapping, dict):
@@ -227,13 +260,13 @@ _PAIR_OVERRIDES = {
 def _configured_score_threshold(pair: dict) -> float | None:
     """Return a config-backed Engine A threshold, or None when absent.
 
-    If ``ENGINE_A_SCORE_GROUP_THRESHOLDS`` includes ``default``, this almost
-    always satisfies ``get_score_threshold`` before ``_get_threshold_tier`` /
-    ``_PAIR_OVERRIDES`` are consulted (omit ``default`` to use the 3-tier path).
+    Resolution order: pair display/symbol override, then score_group, then
+    ``default``. Asset ``type`` is intentionally not used here so a broad
+    ``crypto`` / ``forex`` key cannot mask per-group floors. When this returns
+    None, ``get_score_threshold`` falls back to the legacy 3-tier resolver.
     """
     display = pair.get("display", "")
     symbol = pair.get("symbol", "")
-    ptype = pair.get("type", "")
     score_group = get_pair_score_group(pair)
 
     pair_thresholds = CONFIG.get("ENGINE_A_PAIR_THRESHOLDS", {}) or {}
@@ -242,7 +275,7 @@ def _configured_score_threshold(pair: dict) -> float | None:
             return float(pair_thresholds[key])
 
     group_thresholds = CONFIG.get("ENGINE_A_SCORE_GROUP_THRESHOLDS", {}) or {}
-    for key in (score_group, ptype, "default"):
+    for key in (score_group, "default"):
         if key in group_thresholds:
             return float(group_thresholds[key])
     return None
