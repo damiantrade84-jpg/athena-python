@@ -817,7 +817,7 @@ ENGINE_A_BLOCKED_TREND_STATES:
 # threshold), while RANGING/HIGH_VOLATILITY are harder (higher threshold).
 # Disabled by default — enable after backtest validation.
 ENGINE_A_REGIME_DYNAMIC_THRESHOLDS:
-  ENABLED: true
+  ENABLED: false
   TRENDING_MULTIPLIER: 0.90   # 10% easier in trending markets
   RANGING_MULTIPLIER: 1.10    # 10% harder in ranging markets
   HIGH_VOLATILITY_MULTIPLIER: 1.15  # 15% harder in chaotic markets
