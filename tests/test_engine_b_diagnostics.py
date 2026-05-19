@@ -53,6 +53,11 @@ def _micro_breakout_candles_long():
     return candles
 
 
+def _stub_confirmed_struct_candles(struct_candles, *_args, **_kwargs):
+    """Unit tests stub forming-bar strip so mocked structure paths can run."""
+    return struct_candles
+
+
 def _base_res_long():
     return {
         "atr": 1.0,
@@ -781,6 +786,10 @@ def test_check_macro_correlation_wrapper_matches_detail():
 
 def test_analyze_structure_falls_back_to_rr_when_resistance_is_too_close(monkeypatch):
     local_engine = NakedEngine()
+    monkeypatch.setattr(
+        "market_structure._engine_b_confirmed_only_struct_candles",
+        _stub_confirmed_struct_candles,
+    )
 
     monkeypatch.setattr(
         local_engine,
@@ -872,6 +881,7 @@ def test_analyze_structure_falls_back_to_rr_when_resistance_is_too_close(monkeyp
         asset_type="stock",
         enable_zone_registry=False,
         enable_profile_context=False,
+        pair={"display": "TEST", "type": "stock", "source": "eodhd"},
     )
 
     expected_tp = 100.0 + ((100.0 - result["recommended_stop_loss"]) * 1.8)
@@ -886,6 +896,10 @@ def test_d1_pd_array_conflict_window_is_configurable(monkeypatch):
     naked_cfg = dict(config.CONFIG.get("NAKED_ENGINE", {}) or {})
     naked_cfg["d1_pd_array_conflict_window_atr_mult"] = 1.5
     monkeypatch.setitem(config.CONFIG, "NAKED_ENGINE", naked_cfg)
+    monkeypatch.setattr(
+        "market_structure._engine_b_confirmed_only_struct_candles",
+        _stub_confirmed_struct_candles,
+    )
 
     monkeypatch.setattr(
         local_engine,
@@ -979,10 +993,24 @@ def test_d1_pd_array_conflict_window_is_configurable(monkeypatch):
         asset_type="forex",
         enable_zone_registry=False,
         enable_profile_context=False,
+        pair={"display": "EUR/USD", "type": "forex", "source": "eodhd"},
     )
 
     assert result["d1_pd_array_conflict"] is False
     assert result["d1_conflict_metric_details"] == []
+    assert result["d1_pd_array_conflict_window_atr_mult"] == 1.5
+
+
+def test_analyze_structure_error_payload_exposes_stable_d1_conflict_defaults():
+    """Precompute errors must not omit diagnostic keys (no KeyError in consumers)."""
+    pre = {"_error": "missing_pair_context", "asset_type": "forex"}
+    out = NakedEngine().analyze_structure_direction(pre, 100.0, "LONG")
+    assert out["structural_verdict"] == "ERROR"
+    assert out["d1_pd_array_conflict"] is False
+    assert out["d1_conflict_metric_details"] == []
+    assert out["d1_pd_array_conflict_window_atr_mult"] == pytest.approx(
+        float((config.CONFIG.get("NAKED_ENGINE") or {}).get("d1_pd_array_conflict_window_atr_mult", 1.5))
+    )
 
 
 def test_rejection_wick_body_ratio_is_configurable(monkeypatch):

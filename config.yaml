@@ -100,10 +100,12 @@ THRESHOLD_AUDIT:
       - current_minus_5pct
       - current_minus_10pct
 
-# Diagnostic-only Engine A/B calibration telemetry. Disabled by default; when
-# enabled it appends report rows and must not alter thresholds, scores, gates,
-# or execution behavior.
-CALIBRATION_DIAGNOSTICS_ENABLED: false
+# Diagnostic-only Engine A/B calibration telemetry. When enabled it appends
+# report rows and must not alter thresholds, scores, gates, or execution
+# behavior (see calibration_diagnostics.py).
+# Enabled 2026-05-19 for demo calibration collection per final_calibration_decision_report.md
+# (PC-RES-001). Gate/threshold overlay proposals remain apply:false.
+CALIBRATION_DIAGNOSTICS_ENABLED: true
 CALIBRATION_DIAGNOSTICS_PATH: "logs/calibration_diagnostics/calibration_events.jsonl"
 
 # Research-only portfolio/position volatility targeting diagnostics. Disabled
@@ -2049,6 +2051,12 @@ NAKED_ENGINE:
       swing: {min_rr: 1.9}
 
     precious_trackers:
+
+      intraday: {min_rr: 1.3}
+
+      swing: {min_rr: 1.8}
+
+    energy_oil:
 
       intraday: {min_rr: 1.3}
 

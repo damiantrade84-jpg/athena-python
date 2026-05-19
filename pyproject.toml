@@ -9,13 +9,22 @@ description = "Sentinel / Athena trading stack"
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
+# Repo-local basetemp avoids Windows permission failures under %TEMP%/pytest-of-*.
+addopts = "--basetemp=.pytest_tmp"
 norecursedirs = [
     "refs",
     ".git",
     ".venv",
     ".pytest_cache",
+    ".pytest_tmp",
     ".ruff_cache",
     "tests/.tmp",
+    ".tmp-engine-ab-boundary-commit",
+    ".tmp-engine-ab-commit",
+    ".tmp-engine-ab-final",
+    ".tmp-engine-ab-final2",
+    ".tmp-engine-b-blocker-full",
+    ".tmp-tp-sl-audit",
     ".tmp-engine-d-adjacent-2",
     "_basetemp_trailing_atr_timed_exit_fresh",
     "__pycache__",

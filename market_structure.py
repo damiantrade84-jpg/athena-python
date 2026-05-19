@@ -1201,6 +1201,45 @@ ENGINE_B_LEVEL_COHORTS = {
 }
 
 
+def _engine_b_analyze_structure_error_result(
+    precompute: dict,
+    *,
+    direction: str | None = None,
+) -> dict:
+    """Stable diagnostic payload when structure precompute cannot run."""
+    conflict_window = _engine_b_d1_conflict_window_atr_mult()
+    return {
+        "structural_verdict": "ERROR",
+        "reason": str(precompute.get("_error") or "unknown"),
+        "direction": direction,
+        "asset_type": precompute.get("asset_type", ""),
+        "d1_adx": None,
+        "h4_adx": None,
+        "d1_pd_array_conflict": False,
+        "d1_conflict_details": [],
+        "d1_conflict_metric_details": [],
+        "d1_pd_array_conflict_window_atr_mult": conflict_window,
+        "recommended_stop_loss": None,
+        "recommended_take_profit": None,
+        "tp_source": None,
+        "tp_structural_limited": False,
+        "current_price": None,
+        "structural_target_candidates": [],
+        "selected_structural_target": None,
+        "nearest_target_type": None,
+        "nearest_target_price": None,
+        "fallback_tp_applied": False,
+        "fallback_tp_reason": None,
+        "level_mode": "error",
+        "level_cohort": "unknown_level_mode",
+        "atr": None,
+        "d1_atr": None,
+        "struct_atr": None,
+        "zone_atr": None,
+        "forming_strip_diagnostics": precompute.get("forming_strip_diagnostics"),
+    }
+
+
 def engine_b_level_cohort(level_mode: str | None) -> str:
     """Normalize execution-level source modes into stable reporting cohorts."""
     mode = str(level_mode or "")
@@ -3013,13 +3052,10 @@ class NakedEngine:
         work (zone finding, FVG detection, BOS, CHoCH, swing detection, etc.).
         """
         if precompute.get("_error"):
-            return {
-                "structural_verdict": "ERROR",
-                "reason": precompute["_error"],
-                "asset_type": precompute.get("asset_type", ""),
-                "d1_adx": None,
-                "h4_adx": None,
-            }
+            return _engine_b_analyze_structure_error_result(
+                precompute,
+                direction=direction,
+            )
 
         # Unpack precomputed data
         atr = precompute["atr"]
@@ -3333,6 +3369,7 @@ class NakedEngine:
             "d1_pd_array_conflict": d1_pd_array_conflict,
             "d1_conflict_details": d1_conflict_details,
             "d1_conflict_metric_details": d1_conflict_metric_details,
+            "d1_pd_array_conflict_window_atr_mult": _engine_b_d1_conflict_window_atr_mult(),
             **_profile_result,
         }
 

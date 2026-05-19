@@ -89,14 +89,27 @@ def test_pair_score_group_mapping_examples():
     )
 
 
+ENGINE_B_NON_FOREX_OVERRIDE_REPRESENTATIVES = (
+    "crypto_btc",
+    "us_stock_single",
+    "energy_oil",
+    "nat_gas",
+)
+
+
 def test_engine_b_runtime_groups_keep_non_forex_override_coverage():
     groups = ((CONFIG.get("NAKED_ENGINE") or {}).get("score_group_overrides") or {})
     # Verify representative non-forex groups carry score_group_overrides
-    assert "crypto_btc" in groups
-    assert "us_stock_single" in groups
-    assert "energy_oil" in groups
-    assert "nat_gas" in groups
+    for grp in ENGINE_B_NON_FOREX_OVERRIDE_REPRESENTATIVES:
+        assert grp in groups, f"NAKED_ENGINE.score_group_overrides missing {grp}"
     assert bool(CONFIG.get("ENGINE_B_PROFILE_SCORING_ENABLED")) is True
+
+
+def test_engine_b_non_forex_representatives_have_intraday_min_rr_override():
+    """Regression: representative Engine B non-forex groups expose min_rr overrides."""
+    groups = ((CONFIG.get("NAKED_ENGINE") or {}).get("score_group_overrides") or {})
+    for grp in ENGINE_B_NON_FOREX_OVERRIDE_REPRESENTATIVES:
+        assert float(groups[grp]["intraday"]["min_rr"]) > 0.0
 
 
 def test_engine_b_forex_uses_base_style_profile_when_group_override_absent():

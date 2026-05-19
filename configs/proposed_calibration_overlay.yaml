@@ -1,0 +1,207 @@
+# =============================================================================
+# PROPOSED CALIBRATION OVERLAY — INACTIVE / NOT IMPORTED
+# =============================================================================
+# DO NOT merge into config.yaml or config.local.yaml.
+# config.py loads only config.yaml + config.local.yaml — not this file.
+# =============================================================================
+
+PROPOSED_OVERLAY_META:
+  version: "2026-05-19-r3"
+  status: proposed_inactive
+  import_into_live_config: false
+  live_behavior_changed_by_this_file: false
+  applied_via_config_yaml:
+    - CALIBRATION_DIAGNOSTICS_ENABLED
+  applied_note: "Diagnostics enabled in config.yaml for demo (2026-05-19). Gate proposals still apply:false."
+  evidence_accepted_trades: 466
+  evidence_rejected_diagnostics: 2
+  evidence_date_range: "2026-03-30..2026-05-19"
+  walk_forward_note: "Train 2026-03-30..2026-04-24; OOS 2026-04-25..2026-05-19"
+  ranking_policy: robust_metrics_not_raw_pnl
+  engines_merged: false
+
+# -----------------------------------------------------------------------------
+# ACTIVE PROPOSALS (research env only — live_change_allowed: false)
+# -----------------------------------------------------------------------------
+_proposed_active_settings:
+  CALIBRATION_DIAGNOSTICS_ENABLED:
+    proposed_value: true
+    live_value: true
+    engine: BOTH
+    group: all
+    evidence_file: logs/calibration/master_evidence_report.md
+    metric: "rejected_n=2; strong_groups=0"
+    accepted_sample_size: 466
+    rejected_sample_size: 2
+    expected_effect: ">=30 diagnostic events per engine×regime for gate studies"
+    rollback_rule: "Set CALIBRATION_DIAGNOSTICS_ENABLED false; archive calibration_events.jsonl"
+    live_change_allowed: false
+    research_only: true
+  CALIBRATION_DIAGNOSTICS_PATH:
+    proposed_value: "logs/calibration_diagnostics/calibration_events.jsonl"
+    live_value: "logs/calibration_diagnostics/calibration_events.jsonl"
+    engine: BOTH
+    group: all
+    evidence_file: config.yaml
+    metric: "path unchanged; paired with diagnostics flag"
+    accepted_sample_size: 466
+    rejected_sample_size: 2
+    expected_effect: "no behavior change"
+    rollback_rule: "n/a"
+    live_change_allowed: false
+    research_only: true
+
+# Evidence: master_evidence_report.md §1 rejected_n=2; EXP-P0-001
+# Metric: diagnostic_event_count=2; need >=30 per engine×regime
+# Sample: accepted=466 rejected=2
+# Expected: non-gate telemetry only (config.yaml L103-105)
+# Rollback: CALIBRATION_DIAGNOSTICS_ENABLED: false
+CALIBRATION_DIAGNOSTICS_ENABLED: true
+
+# Evidence: config.yaml L107 (unchanged path)
+# Metric: n/a
+# Rollback: n/a
+CALIBRATION_DIAGNOSTICS_PATH: "logs/calibration_diagnostics/calibration_events.jsonl"
+
+# -----------------------------------------------------------------------------
+# GATE ADJUSTMENTS — apply: false (harness / OOS only)
+# -----------------------------------------------------------------------------
+_proposed_gate_adjustments:
+
+  - proposal_id: PC-A-001
+    apply: false
+    engine: ENGINE_A
+    cohort: {regime: LOW_VOLATILITY, style: intraday, accepted_n: 76}
+    variable_family: score_group_threshold
+    config_keys: [ENGINE_A_SCORE_GROUP_THRESHOLDS.default]
+    live_value: 1.5
+    research_sweep_range: [1.425, 1.5, 1.575]
+    baseline_expectancy_r: -0.055
+    baseline_win_rate: 0.7105
+    rejection_pattern: "rejected_n=0"
+    evidence_files: [logs/calibration/group_blocker_matrix.csv, logs/calibration/master_evidence_report.md]
+    experiment_id: EXP-A-001
+    rollback_rule: "Revert if OOS avg_R < baseline or n<30"
+
+  - proposal_id: PC-A-002
+    apply: false
+    engine: ENGINE_A
+    cohort: {regime: TRENDING, accepted_n: 96}
+    variable_family: score_group_threshold
+    config_keys: [ENGINE_A_SCORE_GROUP_THRESHOLDS.default]
+    live_value: 1.5
+    research_sweep_range: [1.35, 1.5, 1.65]
+    baseline_expectancy_r: -0.1039
+    baseline_win_rate: 0.6354
+    rejection_pattern: "1 pilot below_threshold distance -0.4 (n=1)"
+    evidence_files: [logs/calibration/master_evidence_report.md, logs/calibration/diagnostics_normalized/engine_a_distance_to_threshold.csv]
+    experiment_id: EXP-A-002
+    rollback_rule: "Keep live 1.5 if OOS avg_R < -0.05"
+
+  - proposal_id: PC-A-003
+    apply: false
+    engine: ENGINE_A
+    cohort: {regime: TRENDING, style: intraday, accepted_n: 63}
+    variable_family: directional_ramp
+    config_keys: [FACTOR_MIN_DIRECTIONAL, FACTOR_DIRECTIONAL_SOFT_SPAN]
+    live_value: {FACTOR_MIN_DIRECTIONAL: 0.25, FACTOR_DIRECTIONAL_SOFT_SPAN: 0.20}
+    research_sweep_range: {FACTOR_MIN_DIRECTIONAL: [0.20, 0.25, 0.30]}
+    baseline_expectancy_r: 0.0278
+    baseline_win_rate: 0.8095
+    rejection_pattern: "rejected_n=0"
+    evidence_files: [logs/calibration/group_blocker_matrix.csv]
+    experiment_id: EXP-A-005
+    rollback_rule: "Restore 0.25 if OOS avg_R < +0.02"
+
+  - proposal_id: PC-A-004
+    apply: false
+    engine: ENGINE_A
+    cohort: {regime: LOW_VOLATILITY, accepted_n: 111}
+    variable_family: ADX_trend_min
+    config_keys: [ADX_TREND_MIN_CLASS.default]
+    live_value: null
+    research_sweep_range: [22.0, 25.0, 28.0]
+    baseline_expectancy_r: -0.0663
+    baseline_win_rate: 0.6667
+    rejection_pattern: "rejected_n=0"
+    evidence_files: [logs/calibration/full_baseline_real/by_engine_regime.csv]
+    experiment_id: EXP-A-004
+    rollback_rule: "Restore live ADX map if expectancy worsens OOS"
+
+  - proposal_id: PC-B-001
+    apply: false
+    engine: ENGINE_B
+    cohort: {regime: TRENDING, accepted_n: 32}
+    variable_family: min_rr
+    config_keys: [NAKED_ENGINE.style_profiles.intraday.min_rr, NAKED_ENGINE.style_profiles.scalp.min_rr]
+    live_value: 1.5
+    research_sweep_range: [1.2, 1.5, 2.0]
+    baseline_expectancy_r: 0.1241
+    baseline_win_rate: 0.5938
+    rejection_pattern: "rejected_n=0"
+    evidence_files: [logs/calibration/full_baseline_real/by_engine_regime.csv]
+    experiment_id: EXP-B-005
+    rollback_rule: "Restore min_rr 1.5 if OOS avg_R < +0.08"
+
+  - proposal_id: PC-B-002
+    apply: false
+    engine: ENGINE_B
+    cohort: {regime: RANGING, accepted_n: 125}
+    variable_family: min_room_atr
+    config_keys: [NAKED_ENGINE.style_profiles.intraday.min_room_atr]
+    live_value: null
+    research_sweep_range: [0.20, 0.25, 0.35]
+    baseline_expectancy_r: -0.0663
+    baseline_win_rate: 0.568
+    rejection_pattern: "pilot min_score n=1"
+    evidence_files: [logs/calibration/group_blocker_matrix.csv, logs/calibration/diagnostics_normalized/by_engine_failure_reason.csv]
+    experiment_id: EXP-B-003
+    rollback_rule: "Restore live min_room_atr if no R gain"
+
+  - proposal_id: PC-B-003
+    apply: false
+    engine: ENGINE_B
+    cohort: {regime: RANGING, style: scalp, accepted_n: 60}
+    variable_family: min_rr
+    config_keys: [NAKED_ENGINE.style_profiles.scalp.min_rr]
+    live_value: 1.5
+    research_sweep_range: [1.2, 1.5, 2.0]
+    baseline_expectancy_r: -0.0458
+    baseline_win_rate: 0.65
+    rejection_pattern: "rejected_n=0"
+    evidence_files: [logs/calibration/group_blocker_matrix.csv]
+    experiment_id: EXP-B-002
+    rollback_rule: "Restore 1.5 if OOS n<30"
+
+  - proposal_id: PC-B-004
+    apply: false
+    engine: ENGINE_B
+    cohort: {style: scalp, accepted_n: 75}
+    variable_family: fallback_TP_enabled
+    config_keys: [ENGINE_B_ALLOW_SYNTHETIC_FALLBACK_RR_TP]
+    live_value: true
+    research_sweep_range: [true, false]
+    baseline_expectancy_r: 0.0145
+    baseline_win_rate: 0.6267
+    rejection_pattern: "level_mode missing on accepted export"
+    evidence_files: [logs/calibration/master_evidence_report.md]
+    experiment_id: EXP-B-008
+    rollback_rule: "Keep true if fallback-off arm fails OOS"
+
+_proposed_holds:
+
+  - hold_id: PH-B-001
+    engine: ENGINE_B
+    config_keys: [ENGINE_B_REGIME_MULTIPLIERS.TRENDING]
+    live_value: 0.90
+    evidence_file: logs/calibration/full_baseline_real/by_engine_regime.csv
+    metric: "ENGINE_B TRENDING n=32 avg_R=+0.1241"
+    rollback_rule: "Do not tighten without EXP-B-006 OOS win"
+
+  - hold_id: PH-A-001
+    engine: ENGINE_A
+    config_keys: [FACTOR_MIN_DIRECTIONAL]
+    live_value: 0.25
+    evidence_file: logs/calibration/group_blocker_matrix.csv
+    metric: "TRENDING|intraday n=63 avg_R=+0.0278"
+    rollback_rule: "Do not loosen without EXP-A-005 OOS win"
