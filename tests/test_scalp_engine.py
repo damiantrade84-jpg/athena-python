@@ -379,10 +379,14 @@ def test_strict_fabio_shadow_passes_when_all_three_pillars_align():
     assert fields["current_vs_strict_status"] == "current_watchlist_strict_pass"
 
 
-def test_engine_d_source_fidelity_maps_eodhd_5m_to_candle_volume():
+def test_engine_d_source_fidelity_maps_eodhd_5m_to_delayed_real_volume():
     fields = scalp_engine._engine_d_source_fidelity("eodhd_5m", domain="stock")
     assert fields["source"] == "eodhd_candle_volume"
-    assert "candle_volume_proxy" in fields["fidelity"]
+    # EODHD bar-close volume is real (not synthesized), just delayed — labelled
+    # delayed_real_volume so operators can lift caps independently of pure proxies.
+    assert "delayed_real_volume" in fields["fidelity"]
+    assert fields["is_delayed_real"] is True
+    assert fields["is_proxy"] is True
 
 
 def test_engine_d_data_fidelity_labels_real_trade_flow_and_proxies():

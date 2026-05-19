@@ -1082,7 +1082,12 @@ def scalp_session_window(
 # SPREAD FILTER
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def check_spread(symbol_info: dict, asset_type: str, display: str = "") -> tuple:
+def check_spread(
+    symbol_info: dict,
+    asset_type: str,
+    display: str = "",
+    score_group: Optional[str] = None,
+) -> tuple:
     """Validate spread within limits.  Returns (ok: bool, spread_pips: float).
 
     Forex: spread in pips via point/pip_size conversion (standard).
@@ -1090,6 +1095,12 @@ def check_spread(symbol_info: dict, asset_type: str, display: str = "") -> tuple
       produces nonsense values (e.g. 47200 pips) for these instruments because
       their point size is tiny but has no relationship to the forex pip concept.
     Crypto: always passes (spread not applicable to perpetual futures).
+
+    Precedence for the cap:
+      per-symbol override (MAX_SPREAD_POINTS_OVERRIDES) > score-group
+      (MAX_SPREAD_PIPS_BY_SCORE_GROUP / MAX_SPREAD_POINTS_BY_SCORE_GROUP) >
+      asset-class (MAX_SPREAD_PIPS / MAX_SPREAD_POINTS) > built-in default.
+    Empty score-group maps = legacy behaviour.
     """
     cfg = CONFIG.get("SCALP_ENGINE", {})
     spread_raw = symbol_info.get("spread", 0)
@@ -1105,7 +1116,10 @@ def check_spread(symbol_info: dict, asset_type: str, display: str = "") -> tuple
         max_points_cfg = cfg.get("MAX_SPREAD_POINTS", {})
         defaults = {"index": 100, "stock": 50, "commodity": 30}
         per_symbol_overrides = cfg.get("MAX_SPREAD_POINTS_OVERRIDES", {})
+        group_pts_cfg = cfg.get("MAX_SPREAD_POINTS_BY_SCORE_GROUP", {}) or {}
         max_pts = per_symbol_overrides.get(display) if display else None
+        if max_pts is None and score_group and score_group in group_pts_cfg:
+            max_pts = group_pts_cfg[score_group]
         if max_pts is None:
             max_pts = max_points_cfg.get(asset_type, defaults.get(asset_type, 100))
         max_pts = int(max_pts)
@@ -1114,6 +1128,7 @@ def check_spread(symbol_info: dict, asset_type: str, display: str = "") -> tuple
 
     # Forex: convert to pips via standard formula
     max_spreads = cfg.get("MAX_SPREAD_PIPS", {})
+    group_pips_cfg = cfg.get("MAX_SPREAD_PIPS_BY_SCORE_GROUP", {}) or {}
     spread_price = spread_raw * point
     digits = symbol_info.get("digits", 5)
     if digits == 3:
@@ -1124,7 +1139,10 @@ def check_spread(symbol_info: dict, asset_type: str, display: str = "") -> tuple
     else:
         pip_size = point
     spread_pips = spread_price / pip_size if pip_size > 0 else 0
-    max_spread = max_spreads.get(asset_type, max_spreads.get("forex", 4))
+    if score_group and score_group in group_pips_cfg:
+        max_spread = group_pips_cfg[score_group]
+    else:
+        max_spread = max_spreads.get(asset_type, max_spreads.get("forex", 4))
     ok = spread_pips <= max_spread
     return ok, round(spread_pips, 2)
 
@@ -1779,17 +1797,24 @@ def _engine_d_source_fidelity(source: Any, *, domain: str) -> dict:
     }
     normalized = aliases.get(raw, raw)
     real_trade_flow = normalized == "binance_aggtrade"
-    real_volume_proxy = normalized in {
-        "candle_volume",
-        "binance_candle",
+    # Delayed-real: post-trade real volume with a latency penalty (live US-stock
+    # WS aggregation, EODHD intraday history). Still proxy for execution-trust
+    # purposes but distinguishable from pure candle/range proxies for caps.
+    delayed_real = normalized in {
         "eodhd_candle_volume",
         "ws_tick_volume",
     }
+    real_volume_proxy = normalized in {
+        "candle_volume",
+        "binance_candle",
+    } or delayed_real
     range_or_tick_proxy = normalized in {"range_proxy", "mt5_tick", "candles"}
     unavailable = normalized in {"disabled", "error", "unavailable", "unknown"}
 
     if real_trade_flow:
         fidelity = "real_trade_bucket"
+    elif delayed_real:
+        fidelity = f"{domain}_delayed_real_volume"
     elif real_volume_proxy:
         fidelity = f"{domain}_candle_volume_proxy"
     elif range_or_tick_proxy:
@@ -1804,6 +1829,7 @@ def _engine_d_source_fidelity(source: Any, *, domain: str) -> dict:
         "uses_real_trade_buckets": real_trade_flow,
         "uses_real_order_flow": real_trade_flow,
         "is_proxy": not real_trade_flow,
+        "is_delayed_real": delayed_real,
         "is_unavailable": unavailable,
     }
 
@@ -1836,6 +1862,13 @@ def _engine_d_data_fidelity(
         notes.append(f"absorption:{absorption_fidelity['fidelity']}")
 
     aggression_real_order_flow = bool(cvd_fidelity["uses_real_order_flow"])
+    # Delayed-real: at least one source carries real post-trade volume but with
+    # latency (ws_tick aggregation, EODHD intraday history). Consumers can use
+    # this to apply intermediate caps between real-bucket and pure proxy.
+    vp_delayed = bool(vp_fidelity.get("is_delayed_real"))
+    cvd_delayed = bool(cvd_fidelity.get("is_delayed_real"))
+    absorption_delayed = bool(absorption_fidelity.get("is_delayed_real"))
+    is_delayed_real = any((vp_delayed, cvd_delayed, absorption_delayed))
     return {
         "report_only": True,
         "asset_type": str(asset_type or "unknown"),
@@ -1844,6 +1877,7 @@ def _engine_d_data_fidelity(
         "vp_source_raw": vp_fidelity["raw_source"],
         "vp_fidelity": vp_fidelity["fidelity"],
         "vp_is_proxy": vp_fidelity["is_proxy"],
+        "vp_is_delayed_real": vp_delayed,
         "vp_uses_real_trade_buckets": vp_fidelity["uses_real_trade_buckets"],
         "vp_bucket_count": (vp or {}).get("bucket_count"),
         "structure_volume_source": structure_volume_source,
@@ -1851,16 +1885,19 @@ def _engine_d_data_fidelity(
         "cvd_source_raw": cvd_fidelity["raw_source"],
         "cvd_fidelity": cvd_fidelity["fidelity"],
         "cvd_is_proxy": cvd_fidelity["is_proxy"],
+        "cvd_is_delayed_real": cvd_delayed,
         "cvd_uses_real_trade_buckets": cvd_fidelity["uses_real_trade_buckets"],
         "cvd_bucket_count": (cvd or {}).get("bucket_count"),
         "absorption_source": absorption_fidelity["source"],
         "absorption_source_raw": absorption_fidelity["raw_source"],
         "absorption_fidelity": absorption_fidelity["fidelity"],
         "absorption_is_proxy": absorption_fidelity["is_proxy"],
+        "absorption_is_delayed_real": absorption_delayed,
         "absorption_detected": bool((absorption or {}).get("detected")),
         "execution_volume_source": execution_volume_source,
         "aggression_uses_real_order_flow": aggression_real_order_flow,
         "aggression_proxy_components": notes,
+        "is_delayed_real": is_delayed_real,
         "notes": notes,
     }
 
@@ -3274,6 +3311,7 @@ def ai_quality_grade(
     pair: str = "",
     data_fidelity: Optional[dict] = None,
     tick_vol_quality: Optional[dict] = None,
+    score_group: Optional[str] = None,
 ) -> dict:
     """Rule-based quality scoring (0–100). No API call — instant.
 
@@ -3304,13 +3342,33 @@ def ai_quality_grade(
     }
 
     is_proxy = False
+    absorption_is_delayed_real = False
+    cvd_is_delayed_real = False
+    aaa_is_delayed_real = False
     if data_fidelity:
         is_proxy = bool(
             data_fidelity.get("vp_is_proxy")
             or data_fidelity.get("cvd_is_proxy")
             or data_fidelity.get("absorption_is_proxy")
         )
+        absorption_is_delayed_real = bool(data_fidelity.get("absorption_is_delayed_real"))
+        cvd_is_delayed_real = bool(data_fidelity.get("cvd_is_delayed_real"))
+        # AAA composes absorption + range contraction; treat delayed-real if
+        # either of its evidence streams (absorption, vp) is delayed-real.
+        aaa_is_delayed_real = bool(
+            data_fidelity.get("absorption_is_delayed_real")
+            or data_fidelity.get("vp_is_delayed_real")
+        )
     proxy_cap_enabled = bool(cfg.get("PROXY_AWARE_GRADING_ENABLED", True))
+
+    def _delayed_cap(key: str, fallback: int) -> int:
+        try:
+            raw = cfg.get(key)
+            if raw is None:
+                return int(fallback)
+            return int(raw)
+        except (TypeError, ValueError):
+            return int(fallback)
 
     tvq_score = 0
     tvq_reliable = False
@@ -3319,24 +3377,38 @@ def ai_quality_grade(
         tvq_reliable = bool(tick_vol_quality.get("is_reliable", False))
 
     # ── Location quality (0–25) ──────────────────────────────────────────
+    # Point values are configurable via GRADE_LOCATION_POINTS so operators can
+    # differentiate at_vah/at_val from outside_va once backtested.
+    _loc_defaults = {"at_vah": 25, "at_val": 25, "outside_va": 25, "at_lvn": 20, "at_poc": 10, "inside_va": 5}
+    _loc_pts_cfg = cfg.get("GRADE_LOCATION_POINTS", {}) or {}
+    def _loc_pts(key: str) -> int:
+        try:
+            return int(_loc_pts_cfg.get(key, _loc_defaults.get(key, 0)))
+        except (TypeError, ValueError):
+            return int(_loc_defaults.get(key, 0))
+
     loc = price_loc.get("location", "")
     if loc in ("at_vah", "at_val"):
-        components["location"] = 25
+        components["location"] = _loc_pts(loc)
         reasons.append(f"Price at {loc.upper()} — prime location")
     elif loc == "outside_va":
-        components["location"] = 25
+        components["location"] = _loc_pts("outside_va")
         reasons.append("Price extended outside VA - prime mean-reversion / extension")
     elif loc == "at_lvn":
-        components["location"] = 20
+        components["location"] = _loc_pts("at_lvn")
         reasons.append("Price at LVN — trend continuation zone")
     elif loc == "at_poc":
-        components["location"] = 10
+        components["location"] = _loc_pts("at_poc")
         reasons.append("Price at POC — neutral location")
     elif loc == "inside_va":
-        components["location"] = 5
+        components["location"] = _loc_pts("inside_va")
     score += components["location"]
 
     # ── Absorption (0–20) ────────────────────────────────────────────────
+    # GRADE_TICK_SINGLE_BAR_ABS_MAX caps a single-bar absorption credit for
+    # non-crypto tick-volume pairs that fall below MT5_ABSORPTION_MIN_COUNT.
+    # Mirrors the setup-gate filter used by _has_meaningful_absorption.
+    # Default 12 preserves legacy behaviour; lower (e.g. 6) when ready.
     if absorption.get("detected"):
         cnt = absorption.get("count", 0)
         strong_abs_min = max(1, int(cfg.get("GRADE_STRONG_ABSORPTION_MIN_COUNT", 2)))
@@ -3345,12 +3417,26 @@ def ai_quality_grade(
             abs_max = int(cfg.get("GRADE_PROXY_ABSORPTION_MAX", 10))
             if tvq_reliable and tvq_score >= 50:
                 abs_max = int(cfg.get("GRADE_PROXY_ABSORPTION_MAX_RELIABLE", 14))
+            # Delayed-real volume (eodhd_*, ws_tick): optionally lift the cap.
+            # Default = abs_max → no change.
+            if absorption_is_delayed_real:
+                abs_max = max(abs_max, _delayed_cap("GRADE_DELAYED_REAL_ABSORPTION_MAX", abs_max))
         if cnt >= strong_abs_min:
             components["absorption"] = min(20, abs_max)
             reasons.append(f"Strong absorption ({cnt} bars)" + (" (proxy-capped)" if proxy_cap_enabled and is_proxy and components["absorption"] < 20 else ""))
         elif cnt >= 1:
-            components["absorption"] = min(12, abs_max)
-            reasons.append(f"Absorption detected ({cnt} bar(s))" + (" (proxy-capped)" if proxy_cap_enabled and is_proxy and components["absorption"] < 12 else ""))
+            single_bar_base = 12
+            if asset_type and asset_type != "crypto":
+                mt5_min = int(cfg.get("MT5_ABSORPTION_MIN_COUNT", 2))
+                if cnt < mt5_min:
+                    single_bar_base = int(cfg.get("GRADE_TICK_SINGLE_BAR_ABS_MAX", 12))
+            components["absorption"] = min(single_bar_base, abs_max)
+            _capped_below_legacy = components["absorption"] < 12
+            reasons.append(
+                f"Absorption detected ({cnt} bar(s))"
+                + (" (proxy-capped)" if proxy_cap_enabled and is_proxy and components["absorption"] < 12 else "")
+                + (" (tick-single-bar-capped)" if single_bar_base < 12 and _capped_below_legacy and not (proxy_cap_enabled and is_proxy) else "")
+            )
     score += components["absorption"]
 
     # ── CVD confirmation (0–15) ──────────────────────────────────────────
@@ -3361,6 +3447,12 @@ def ai_quality_grade(
     if proxy_cap_enabled and is_proxy:
         cvd_max = int(cfg.get("GRADE_PROXY_CVD_MAX", 7))
         cvd_neutral_max = int(cfg.get("GRADE_PROXY_CVD_NEUTRAL_MAX", 2))
+        if cvd_is_delayed_real:
+            cvd_max = max(cvd_max, _delayed_cap("GRADE_DELAYED_REAL_CVD_MAX", cvd_max))
+            cvd_neutral_max = max(
+                cvd_neutral_max,
+                _delayed_cap("GRADE_DELAYED_REAL_CVD_NEUTRAL_MAX", cvd_neutral_max),
+            )
     if cvd_dir and cvd_dir == setup_dir:
         components["cvd"] = cvd_max
         reasons.append(f"CVD confirms {setup_dir}" + (" (proxy-capped)" if proxy_cap_enabled and is_proxy and cvd_max < 15 else ""))
@@ -3375,6 +3467,12 @@ def ai_quality_grade(
     if proxy_cap_enabled and is_proxy:
         aaa_max = int(cfg.get("GRADE_PROXY_AAA_MAX", 10))
         aaa_accum_max = int(cfg.get("GRADE_PROXY_AAA_ACCUM_MAX", 5))
+        if aaa_is_delayed_real:
+            aaa_max = max(aaa_max, _delayed_cap("GRADE_DELAYED_REAL_AAA_MAX", aaa_max))
+            aaa_accum_max = max(
+                aaa_accum_max,
+                _delayed_cap("GRADE_DELAYED_REAL_AAA_ACCUM_MAX", aaa_accum_max),
+            )
     if aaa.get("complete"):
         components["aaa"] = aaa_max
         reasons.append("Full AAA sequence complete" + (" (proxy-capped)" if proxy_cap_enabled and is_proxy and aaa_max < 15 else ""))
@@ -3408,17 +3506,28 @@ def ai_quality_grade(
 
     # ── Spread penalty (−5 to +5) ────────────────────────────────────────
     # Keep units aligned with check_spread(): non-forex uses raw MT5 points,
-    # forex uses pip-converted spread.
+    # forex uses pip-converted spread. Precedence:
+    #   per-symbol override > score-group > asset-class > default.
     if asset_type in ("index", "stock", "commodity"):
         max_points_cfg = cfg.get("MAX_SPREAD_POINTS", {})
         defaults = {"index": 100, "stock": 50, "commodity": 30}
         per_sym = cfg.get("MAX_SPREAD_POINTS_OVERRIDES", {})
+        group_pts_cfg = cfg.get("MAX_SPREAD_POINTS_BY_SCORE_GROUP", {}) or {}
         _sym_override = per_sym.get(pair) if pair else None
-        max_sp = float(_sym_override if _sym_override is not None else max_points_cfg.get(asset_type, defaults.get(asset_type, 100)))
+        if _sym_override is not None:
+            max_sp = float(_sym_override)
+        elif score_group and score_group in group_pts_cfg:
+            max_sp = float(group_pts_cfg[score_group])
+        else:
+            max_sp = float(max_points_cfg.get(asset_type, defaults.get(asset_type, 100)))
         spread_unit = "points"
     else:
         max_spreads = cfg.get("MAX_SPREAD_PIPS", {})
-        max_sp = float(max_spreads.get(asset_type, max_spreads.get("forex", 4)))
+        group_pips_cfg = cfg.get("MAX_SPREAD_PIPS_BY_SCORE_GROUP", {}) or {}
+        if score_group and score_group in group_pips_cfg:
+            max_sp = float(group_pips_cfg[score_group])
+        else:
+            max_sp = float(max_spreads.get(asset_type, max_spreads.get("forex", 4)))
         spread_unit = "pips"
     if spread_pips > 0:
         if spread_pips <= max_sp * 0.5:
@@ -3486,6 +3595,18 @@ def ai_quality_grade(
     b_thresh = int(grade_map.get("B", 60))
     c_thresh = int(grade_map.get("C", 40))
 
+    # Data-fidelity threshold lift: when the underlying VP/CVD/absorption sources
+    # are proxy, raise A/B thresholds so noisy evidence must score higher to clear.
+    # GRADE_PROXY_THRESHOLD_BUMP_LOW_TVQ applies the larger lift when tick-volume
+    # quality is unreliable. Defaults 0 = legacy behaviour.
+    if is_proxy:
+        _bump = int(cfg.get("GRADE_PROXY_THRESHOLD_BUMP", 0) or 0)
+        if tick_vol_quality and not tvq_reliable:
+            _bump = max(_bump, int(cfg.get("GRADE_PROXY_THRESHOLD_BUMP_LOW_TVQ", 0) or 0))
+        if _bump > 0:
+            a_thresh += _bump
+            b_thresh += _bump
+
     if score >= a_thresh:
         grade = "A"
     elif score >= b_thresh:
@@ -3509,11 +3630,25 @@ def ai_quality_grade(
     else:
         size_mult = 1.0  # full size regardless of grade
 
+    # ── TVQ execution gate flag (additive, default no-op) ────────────────
+    # When TVQ_REQUIRED_FOR_EXEC_NONCRYPTO=true, non-crypto + proxy volume +
+    # unreliable tick-volume quality demotes executable to WATCHLIST in
+    # run_scalp_scan. Default False preserves legacy behaviour.
+    tvq_blocks_execution = bool(
+        cfg.get("TVQ_REQUIRED_FOR_EXEC_NONCRYPTO", False)
+        and asset_type
+        and asset_type != "crypto"
+        and is_proxy
+        and tick_vol_quality is not None
+        and not tvq_reliable
+    )
+
     out = {
         "score": score,
         "grade": grade,
         "reasons": reasons,
         "size_multiplier": size_mult,
+        "tvq_blocks_execution": tvq_blocks_execution,
     }
     if cfg.get("GRADE_PERSIST_COMPONENTS", True):
         out["score_components"] = components
@@ -3954,7 +4089,10 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
                     skipped.append({"pair": display, "reason": "symbol_not_available"})
                     continue
 
-                spread_ok, spread_pips = check_spread(sym_info, asset_type, display)
+                try:
+                    spread_ok, spread_pips = check_spread(sym_info, asset_type, display, score_group=_scalp_score_group)
+                except TypeError:
+                    spread_ok, spread_pips = check_spread(sym_info, asset_type, display)
                 if not spread_ok:
                     spread_unit = "pips" if asset_type == "forex" else "pts"
                     spread_label = f"{spread_pips}{spread_unit}"
@@ -4437,7 +4575,7 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
                 tick_vol_quality = None
                 if asset_type and asset_type != "crypto" and cfg.get("TICK_VOL_QUALITY_GRADING_ENABLED", True):
                     tick_vol_quality = _tick_volume_quality_score(candles_m5, asset_type)
-                quality = ai_quality_grade(vp, price_loc, absorption, cvd, aaa, vwap, setup, grade_sessions, spread_pips, htf_bias, asset_type, display, data_fidelity=data_fidelity, tick_vol_quality=tick_vol_quality)
+                quality = ai_quality_grade(vp, price_loc, absorption, cvd, aaa, vwap, setup, grade_sessions, spread_pips, htf_bias, asset_type, display, data_fidelity=data_fidelity, tick_vol_quality=tick_vol_quality, score_group=_scalp_score_group)
             else:
                 quality = {"score": 50, "grade": "C", "reasons": ["grading_disabled"], "size_multiplier": 1.0}
 
@@ -4469,6 +4607,16 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
                 candidate_status_reason = ",".join(candidate_fail_reasons) if candidate_fail_reasons else f"grade_{grade}_watchlist"
                 if grade_rank < execution_rank:
                     candidate_soft_warnings.append(f"grade_{grade}_below_execution_min_{execution_min_grade}")
+            # TVQ execution gate (additive, default no-op via cfg flag).
+            # When TVQ_REQUIRED_FOR_EXEC_NONCRYPTO=true and ai_quality_grade
+            # flagged tvq_blocks_execution, demote a passing candidate to
+            # WATCHLIST. Never re-enables a BLOCKED grade-D candidate.
+            if quality.get("tvq_blocks_execution") and gate_result == "PASS":
+                gate_result = "WATCHLIST"
+                executable = False
+                candidate_soft_warnings.append("tvq_below_threshold_proxy_volume")
+                if candidate_status_reason == "method_valid":
+                    candidate_status_reason = "tvq_below_threshold_proxy_volume"
             _funnel["gate_result"] = gate_result
             _funnel["fail_reasons"] = list(candidate_fail_reasons)
             _funnel["soft_warnings"] = list(candidate_soft_warnings)

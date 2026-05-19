@@ -796,7 +796,7 @@ ENGINE_A_BLOCKED_TREND_STATES:
 # threshold), while RANGING/HIGH_VOLATILITY are harder (higher threshold).
 # Disabled by default — enable after backtest validation.
 ENGINE_A_REGIME_DYNAMIC_THRESHOLDS:
-  ENABLED: false
+  ENABLED: true
   TRENDING_MULTIPLIER: 0.90   # 10% easier in trending markets
   RANGING_MULTIPLIER: 1.10    # 10% harder in ranging markets
   HIGH_VOLATILITY_MULTIPLIER: 1.15  # 15% harder in chaotic markets
@@ -1012,7 +1012,7 @@ ETORO:
 
 # ── Auto-Trader ────────────────────────────────────────────
 
-AUTO_TRADE_ENABLED: true          # Start auto-trader on server boot
+AUTO_TRADE_ENABLED: false          # Start auto-trader on server boot
 
 # AUTO_TRADE_MIN_SCORE is informational operator metadata. Engine A scan gates
 # are resolved by ENGINE_A_SCORE_GROUP_THRESHOLDS/get_score_threshold(), and
@@ -2461,6 +2461,54 @@ SCALP_ENGINE:
   GRADE_PROXY_CVD_NEUTRAL_MAX: 2             # Max CVD neutral points for proxy CVD (default 5)
   GRADE_PROXY_AAA_MAX: 10                    # Max AAA complete points for proxy data (default 15)
   GRADE_PROXY_AAA_ACCUM_MAX: 5               # Max AAA accumulation points for proxy data (default 7)
+
+  # ── Engine D additive grading knobs (audit 2026-05) ─────────────────────────
+  # All values below default to current behaviour (legacy preservation) until
+  # operators flip them after backtest validation. Empty maps and zeros are no-ops.
+
+  # Per-location point overrides for the 0–25 location component in ai_quality_grade.
+  # Defaults match legacy literals; lower outside_va to 20 once backtested if
+  # outside-VA setups need to clear a higher quality bar than at_vah/at_val.
+  GRADE_LOCATION_POINTS:
+    at_vah: 25
+    at_val: 25
+    outside_va: 25
+    at_lvn: 20
+    at_poc: 10
+    inside_va: 5
+
+  # Cap on the single-bar absorption credit when non-crypto tick volume fails the
+  # MT5_ABSORPTION_MIN_COUNT setup-gate filter. Default 12 = legacy. Drop to 6–8 to
+  # require multi-bar confirmation before granting the full absorption credit.
+  GRADE_TICK_SINGLE_BAR_ABS_MAX: 12
+
+  # Bump A/B grade thresholds when the underlying VP/CVD/absorption are proxy. Both
+  # default 0 = legacy. _LOW_TVQ applies the larger lift when tick-volume quality
+  # is unreliable (tick_vol_quality is_reliable=false).
+  GRADE_PROXY_THRESHOLD_BUMP: 0
+  GRADE_PROXY_THRESHOLD_BUMP_LOW_TVQ: 0
+
+  # Delayed-real (eodhd_*, ws_tick_volume) fidelity tier caps. Source is real
+  # post-trade volume but with latency, so caps may be set above the pure proxy
+  # caps. Each value max(existing_proxy_cap, configured) — i.e. omit/leave equal
+  # to the proxy value to keep legacy behaviour.
+  GRADE_DELAYED_REAL_ABSORPTION_MAX: 10      # ≥ GRADE_PROXY_ABSORPTION_MAX to take effect
+  GRADE_DELAYED_REAL_CVD_MAX: 7              # ≥ GRADE_PROXY_CVD_MAX to take effect
+  GRADE_DELAYED_REAL_CVD_NEUTRAL_MAX: 2      # ≥ GRADE_PROXY_CVD_NEUTRAL_MAX to take effect
+  GRADE_DELAYED_REAL_AAA_MAX: 10             # ≥ GRADE_PROXY_AAA_MAX to take effect
+  GRADE_DELAYED_REAL_AAA_ACCUM_MAX: 5        # ≥ GRADE_PROXY_AAA_ACCUM_MAX to take effect
+
+  # Per-score-group spread caps (precedence: MAX_SPREAD_*_OVERRIDES per-symbol >
+  # _BY_SCORE_GROUP > asset-class default). Empty maps = no group routing (legacy).
+  # Keys are score_group strings from scoring.get_pair_score_group()
+  # (e.g. forex_majors, forex_crosses, forex_exotics, us_indices_trackers, …).
+  MAX_SPREAD_PIPS_BY_SCORE_GROUP: {}         # forex/crypto pips
+  MAX_SPREAD_POINTS_BY_SCORE_GROUP: {}       # index/stock/commodity raw MT5 points
+
+  # When true, demote non-crypto setups with proxy volume + unreliable tick-volume
+  # quality from PASS to WATCHLIST. Default false = legacy (TVQ informs grading
+  # only, never the execution gate).
+  TVQ_REQUIRED_FOR_EXEC_NONCRYPTO: false
 
   TRADE_BUCKET_MIN_VOLUME: 0.0    # Optional minimum total bucket volume before using aggTrade VP
 
