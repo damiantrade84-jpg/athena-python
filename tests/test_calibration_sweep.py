@@ -144,8 +144,104 @@ def test_calibration_sweep_engine_b_fallback_tp_uses_synthetic_flag():
     assert disabled[0]["overrides"]["ENGINE_B_ALLOW_SYNTHETIC_FALLBACK_RR_TP"] is False
 
 
+def test_named_research_presets_cover_requested_families():
+    from tools import calibration_sweep
+
+    expected = {
+        "engine_a_thresholds": "score_group_threshold_default",
+        "engine_a_adx": "adx_trend_min",
+        "engine_a_directional_ramp": "directional_ramp_min",
+        "engine_a_volatility": "volatility_scaler_low",
+        "engine_b_min_score": "style_min_score",
+        "engine_b_rr": "style_min_rr",
+        "engine_b_room": "min_room_atr",
+        "engine_b_regime_multiplier": "regime_multiplier",
+        "engine_b_fallback_tp": "fallback_tp_enabled",
+    }
+
+    for preset, parameter in expected.items():
+        engine = "engine_a" if preset.startswith("engine_a") else "engine_b"
+        rows = calibration_sweep.build_sweep_space(engine, preset=preset)
+        values = {row["parameters"].get(parameter) for row in rows}
+        assert len(values) >= 2, (preset, parameter, values)
+
+
 def test_calibration_sweep_requires_input_json_without_dry_run():
     from tools import calibration_sweep
 
     with pytest.raises(ValueError, match="input-json"):
         calibration_sweep.run(["--engine", "engine_a", "--preset", "tiny"])
+
+
+def test_calibration_sweep_applies_threshold_filter_when_scores_exist(tmp_path):
+    from tools import calibration_sweep
+
+    input_json = tmp_path / "rows.json"
+    input_json.write_text(
+        json.dumps(
+            {
+                "rows": [
+                    {
+                        "engine": "ENGINE_A",
+                        "symbol": "EUR/USD",
+                        "asset_class": "forex",
+                        "score_group": "forex_majors",
+                        "regime": "TRENDING",
+                        "timeframe_style": "intraday",
+                        "score": 1.4,
+                        "win": True,
+                        "r_multiple": 1.0,
+                    },
+                    {
+                        "engine": "ENGINE_A",
+                        "symbol": "EUR/USD",
+                        "asset_class": "forex",
+                        "score_group": "forex_majors",
+                        "regime": "TRENDING",
+                        "timeframe_style": "intraday",
+                        "score": 1.6,
+                        "win": False,
+                        "r_multiple": -1.0,
+                    },
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = calibration_sweep.run(
+        [
+            "--engine",
+            "engine_a",
+            "--preset",
+            "custom",
+            "--engine-a-thresholds",
+            "1.5",
+            "--engine-a-directional-min",
+            "0.25",
+            "--engine-a-directional-full",
+            "0.45",
+            "--engine-a-adx-trend-min",
+            "25",
+            "--engine-a-adx-hard-fail",
+            "15",
+            "--engine-a-volatility-low",
+            "0.005",
+            "--engine-a-volatility-high",
+            "0.025",
+            "--input-json",
+            str(input_json),
+            "--output-dir",
+            str(tmp_path / "out"),
+        ]
+    )
+
+    assert len(result["rows"]) == 1
+    row = result["rows"][0]
+    assert row["threshold_filter_applied"] is True
+    assert row["threshold_candidate"] == pytest.approx(1.5)
+    assert row["raw_source_count"] == 2
+    assert row["admitted_count"] == 1
+    assert row["excluded_by_threshold_count"] == 1
+    assert row["trade_count"] == 1
+    assert row["expectancy"] == pytest.approx(-1.0)

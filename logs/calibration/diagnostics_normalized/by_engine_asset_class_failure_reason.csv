@@ -1,0 +1,12 @@
+engine,asset_class,failure_reason,event_count,passed_count,failed_count
+ENGINE_B,(blank),passed,16,16,0
+ENGINE_B,forex,passed,14,14,0
+ENGINE_B,(blank),checklist,8,0,8
+ENGINE_B,forex,checklist,8,0,8
+ENGINE_A,forex,below_engine_a_threshold,6,0,6
+ENGINE_B,(blank),min_score,4,0,4
+ENGINE_B,forex,min_score,4,0,4
+ENGINE_A,crypto,below_engine_a_threshold,2,0,2
+ENGINE_A,stock,passed,2,2,0
+ENGINE_B,stock,min_score,2,0,2
+ENGINE_B,stock,passed,2,2,0

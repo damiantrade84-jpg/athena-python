@@ -47,7 +47,29 @@ REQUIRED_ROW_FIELDS = [
     "sample_period",
     "split_label",
     "parameter_variants_tested",
+    "threshold_candidate",
+    "threshold_filter_applied",
+    "raw_source_count",
+    "admitted_count",
+    "excluded_by_threshold_count",
+    "threshold_filter_reason",
 ]
+
+PRESET_CHOICES = (
+    "tiny",
+    "standard",
+    "custom",
+    "engine_a_thresholds",
+    "engine_a_adx",
+    "engine_a_directional_ramp",
+    "engine_a_volatility",
+    "engine_b_min_score",
+    "engine_b_rr",
+    "engine_b_room",
+    "engine_b_regime_multiplier",
+    "engine_b_fallback_tp",
+    "combined_research_only",
+)
 
 
 def _json_safe(value: Any) -> Any:
@@ -134,6 +156,38 @@ def _engine_a_variants(
         adx_hard_fail = adx_hard_fail or [15.0]
         volatility_low = volatility_low or [0.005]
         volatility_high = volatility_high or [0.025]
+    elif preset == "engine_a_thresholds":
+        score_thresholds = score_thresholds or [1.35, 1.425, 1.5, 1.575, 1.65]
+        directional_ramp_min = directional_ramp_min or [0.25]
+        directional_ramp_full = directional_ramp_full or [0.45]
+        adx_trend_min = adx_trend_min or [25.0]
+        adx_hard_fail = adx_hard_fail or [15.0]
+        volatility_low = volatility_low or [0.005]
+        volatility_high = volatility_high or [0.025]
+    elif preset == "engine_a_adx":
+        score_thresholds = score_thresholds or [1.5]
+        directional_ramp_min = directional_ramp_min or [0.25]
+        directional_ramp_full = directional_ramp_full or [0.45]
+        adx_trend_min = adx_trend_min or [22.0, 25.0, 28.0]
+        adx_hard_fail = adx_hard_fail or [12.0, 15.0, 18.0]
+        volatility_low = volatility_low or [0.005]
+        volatility_high = volatility_high or [0.025]
+    elif preset == "engine_a_directional_ramp":
+        score_thresholds = score_thresholds or [1.5]
+        directional_ramp_min = directional_ramp_min or [0.20, 0.25, 0.30]
+        directional_ramp_full = directional_ramp_full or [0.40, 0.45, 0.50]
+        adx_trend_min = adx_trend_min or [25.0]
+        adx_hard_fail = adx_hard_fail or [15.0]
+        volatility_low = volatility_low or [0.005]
+        volatility_high = volatility_high or [0.025]
+    elif preset == "engine_a_volatility":
+        score_thresholds = score_thresholds or [1.5]
+        directional_ramp_min = directional_ramp_min or [0.25]
+        directional_ramp_full = directional_ramp_full or [0.45]
+        adx_trend_min = adx_trend_min or [25.0]
+        adx_hard_fail = adx_hard_fail or [15.0]
+        volatility_low = volatility_low or [0.004, 0.005, 0.006]
+        volatility_high = volatility_high or [0.020, 0.025, 0.030]
     else:
         score_thresholds = score_thresholds or [2.0, 2.1, 2.2]
         directional_ramp_min = directional_ramp_min or [0.20, 0.25, 0.30]
@@ -203,6 +257,36 @@ def _engine_b_variants(
         min_room_atr = min_room_atr or [0.25]
         regime_multipliers = regime_multipliers or [1.0]
         fallback_tp_enabled = fallback_tp_enabled or [True]
+    elif preset == "engine_b_min_score":
+        engine_b_min_score = engine_b_min_score or [3.5, 4.0, 4.5]
+        engine_b_min_rr = engine_b_min_rr or [1.5]
+        min_room_atr = min_room_atr or [0.25]
+        regime_multipliers = regime_multipliers or [1.0]
+        fallback_tp_enabled = fallback_tp_enabled or [True]
+    elif preset == "engine_b_rr":
+        engine_b_min_score = engine_b_min_score or [4.0]
+        engine_b_min_rr = engine_b_min_rr or [1.2, 1.5, 2.0]
+        min_room_atr = min_room_atr or [0.25]
+        regime_multipliers = regime_multipliers or [1.0]
+        fallback_tp_enabled = fallback_tp_enabled or [True]
+    elif preset == "engine_b_room":
+        engine_b_min_score = engine_b_min_score or [4.0]
+        engine_b_min_rr = engine_b_min_rr or [1.5]
+        min_room_atr = min_room_atr or [0.20, 0.25, 0.35]
+        regime_multipliers = regime_multipliers or [1.0]
+        fallback_tp_enabled = fallback_tp_enabled or [True]
+    elif preset == "engine_b_regime_multiplier":
+        engine_b_min_score = engine_b_min_score or [4.0]
+        engine_b_min_rr = engine_b_min_rr or [1.5]
+        min_room_atr = min_room_atr or [0.25]
+        regime_multipliers = regime_multipliers or [0.90, 1.0, 1.10]
+        fallback_tp_enabled = fallback_tp_enabled or [True]
+    elif preset == "engine_b_fallback_tp":
+        engine_b_min_score = engine_b_min_score or [4.0]
+        engine_b_min_rr = engine_b_min_rr or [1.5]
+        min_room_atr = min_room_atr or [0.25]
+        regime_multipliers = regime_multipliers or [1.0]
+        fallback_tp_enabled = fallback_tp_enabled or [True, False]
     else:
         engine_b_min_score = engine_b_min_score or [3.5, 4.0, 4.5]
         engine_b_min_rr = engine_b_min_rr or [1.2, 1.5, 2.0]
@@ -274,9 +358,13 @@ def build_sweep_space(
 ) -> list[dict[str, Any]]:
     engine_norm = str(engine or "").lower()
     preset_norm = str(preset or "tiny").lower()
-    if preset_norm not in {"tiny", "custom", "standard"}:
-        raise ValueError("preset must be one of: tiny, custom, standard")
+    if preset_norm not in set(PRESET_CHOICES):
+        raise ValueError(f"preset must be one of: {', '.join(PRESET_CHOICES)}")
+    if preset_norm == "combined_research_only":
+        preset_norm = "standard"
     if engine_norm == "engine_a":
+        if preset_norm.startswith("engine_b_"):
+            raise ValueError(f"{preset_norm} is an Engine B preset; use --engine engine_b")
         return _engine_a_variants(
             preset=preset_norm,
             directional_ramp_min=directional_ramp_min,
@@ -284,12 +372,16 @@ def build_sweep_space(
             **kwargs,
         )
     if engine_norm == "engine_b":
+        if preset_norm.startswith("engine_a_"):
+            raise ValueError(f"{preset_norm} is an Engine A preset; use --engine engine_a")
         return _engine_b_variants(
             preset=preset_norm,
             engine_b_min_rr=engine_b_min_rr,
             **kwargs,
         )
     if engine_norm == "both":
+        if preset_norm.startswith("engine_a_") or preset_norm.startswith("engine_b_"):
+            raise ValueError(f"{preset_norm} is engine-specific; use matching --engine")
         engine_a_keys = {
             "score_thresholds",
             "adx_trend_min",
@@ -339,6 +431,94 @@ def _mean(values: Iterable[float]) -> float | None:
     return sum(vals) / len(vals)
 
 
+def _safe_float(value: Any) -> float | None:
+    try:
+        if value is None or value == "":
+            return None
+        out = float(value)
+        if out != out:
+            return None
+        return out
+    except (TypeError, ValueError):
+        return None
+
+
+def _record_score(row: dict[str, Any], engine: str) -> float | None:
+    keys = (
+        ("score", "raw_score", "final_score", "confluenceScore")
+        if engine == "ENGINE_A"
+        else ("score", "raw_score", "engine_b_score")
+    )
+    for key in keys:
+        score = _safe_float(row.get(key))
+        if score is not None:
+            return score
+    return None
+
+
+def _threshold_candidate(variant: dict[str, Any]) -> float | None:
+    params = variant.get("parameters") or {}
+    engine = str(variant.get("engine") or "").upper()
+    if engine == "ENGINE_A":
+        return _safe_float(params.get("score_group_threshold_default"))
+    if engine == "ENGINE_B":
+        base = _safe_float(params.get("style_min_score"))
+        mult = _safe_float(params.get("regime_multiplier"))
+        if base is None:
+            return None
+        return round(base * (mult if mult is not None else 1.0), 6)
+    return None
+
+
+def _threshold_filtered_records(
+    *,
+    variant: dict[str, Any],
+    records: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    engine = str(variant.get("engine") or "").upper()
+    threshold = _threshold_candidate(variant)
+    if threshold is None:
+        return records, {
+            "threshold_candidate": None,
+            "threshold_filter_applied": False,
+            "raw_source_count": len(records),
+            "admitted_count": len(records),
+            "excluded_by_threshold_count": 0,
+            "threshold_filter_reason": "threshold_not_resolved",
+        }
+
+    scored: list[tuple[dict[str, Any], float]] = []
+    unscored = 0
+    for row in records:
+        score = _record_score(row, engine)
+        if score is None:
+            unscored += 1
+            continue
+        scored.append((row, score))
+
+    if not scored:
+        return records, {
+            "threshold_candidate": threshold,
+            "threshold_filter_applied": False,
+            "raw_source_count": len(records),
+            "admitted_count": len(records),
+            "excluded_by_threshold_count": 0,
+            "threshold_filter_reason": "no_score_fields_in_input",
+        }
+
+    admitted = [row for row, score in scored if score >= threshold]
+    return admitted, {
+        "threshold_candidate": threshold,
+        "threshold_filter_applied": True,
+        "raw_source_count": len(records),
+        "admitted_count": len(admitted),
+        "excluded_by_threshold_count": len(scored) - len(admitted),
+        "threshold_filter_reason": "score_gte_candidate_threshold"
+        if unscored == 0
+        else f"score_gte_candidate_threshold; unscored_rows_ignored={unscored}",
+    }
+
+
 def _robust_rank(row: dict[str, Any]) -> float:
     trade_count = float(row.get("trade_count") or 0)
     expectancy = float(row.get("expectancy") or 0.0)
@@ -379,6 +559,19 @@ def _records_for_variant(
                 "fallback_tp_applied": False if engine == "ENGINE_B" else "",
             }
         ]
+    threshold_meta = {
+        "threshold_candidate": _threshold_candidate(variant),
+        "threshold_filter_applied": False,
+        "raw_source_count": len(source_records),
+        "admitted_count": len(source_records),
+        "excluded_by_threshold_count": 0,
+        "threshold_filter_reason": "dry_run_synthetic" if dry_run else "no_threshold_filter",
+    }
+    if not dry_run and source_records:
+        source_records, threshold_meta = _threshold_filtered_records(
+            variant=variant,
+            records=source_records,
+        )
 
     grouped: dict[tuple[Any, ...], list[dict[str, Any]]] = {}
     for row in source_records:
@@ -432,6 +625,7 @@ def _records_for_variant(
             "sample_period": sample_period,
             "split_label": split_label,
             "parameter_variants_tested": parameter_variants_tested,
+            **threshold_meta,
             "parameters": variant["parameters"],
         }
         out["robust_rank_score"] = _robust_rank(out)
@@ -466,7 +660,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         description="Research-only Engine A/B calibration sweep harness. Does not mutate live config."
     )
     parser.add_argument("--engine", choices=("engine_a", "engine_b", "both"), default="both")
-    parser.add_argument("--preset", choices=("tiny", "standard", "custom"), default="tiny")
+    parser.add_argument("--preset", choices=PRESET_CHOICES, default="tiny")
     parser.add_argument("--dry-run", action="store_true", help="Use synthetic rows when no input data is supplied.")
     parser.add_argument("--input-json", help="Optional JSON rows/trades to aggregate under each parameter variant.")
     parser.add_argument("--output-dir", default="reports/calibration_sweep")

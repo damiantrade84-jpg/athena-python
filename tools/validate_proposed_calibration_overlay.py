@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import re
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any
@@ -38,6 +39,17 @@ _REQUIRED_PROPOSAL_FIELDS = (
     "evidence_files",
     "rollback_rule",
     "experiment_id",
+)
+
+_PROTECTED_LIVE_FILES = (
+    "config.py",
+    "config.yaml",
+    "scoring.py",
+    "factor_scoring.py",
+    "forex_scoring.py",
+    "market_structure.py",
+    "execution.py",
+    "risk_engine.py",
 )
 
 
@@ -180,6 +192,26 @@ def _check_inline_evidence_comments(text: str, errors: list[str]) -> None:
         errors.append("overlay missing Evidence metadata (comments or _proposed_active_settings)")
 
 
+def _check_protected_live_files_unchanged(errors: list[str]) -> None:
+    try:
+        result = subprocess.run(
+            ["git", "diff", "--name-only", "--", *_PROTECTED_LIVE_FILES],
+            cwd=str(ROOT),
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+    except Exception as exc:
+        errors.append(f"could not verify protected live diffs: {exc}")
+        return
+    changed = [line.strip() for line in result.stdout.splitlines() if line.strip()]
+    if changed:
+        errors.append(
+            "protected live/config/scoring/execution files have unstaged diffs: "
+            + ", ".join(changed)
+        )
+
+
 def validate_overlay(path: Path) -> list[str]:
     errors: list[str] = []
     if not path.exists():
@@ -196,6 +228,7 @@ def validate_overlay(path: Path) -> list[str]:
     _check_active_settings(doc, errors)
     _check_execution_safety(doc, errors)
     _check_inline_evidence_comments(text, errors)
+    _check_protected_live_files_unchanged(errors)
 
     known = _known_config_keys()
     if known:
