@@ -1445,6 +1445,67 @@ def bybit_execute(signal: dict, approval: "RiskApproval") -> dict:  # noqa: F821
         return {"success": False, "error": f"ORDER_FAILED: {str(e)}"}
 
 
+def bybit_modify_protective_sl(
+    ccxt_symbol: str,
+    direction: str,
+    sl: float,
+    *,
+    ref_sl: float = 0.0,
+    entry: float = 0.0,
+    clear_tp: bool = False,
+) -> dict:
+    """Tighten broker SL on an open Bybit position (trail ratchet path).
+
+    Unlike ``bybit_move_sl_to_breakeven``, does not apply mark-price breakeven
+    validation — the caller supplies a trail level that may sit between entry
+    and mark during a pullback.
+    """
+    exchange = _get_exchange()
+    if not exchange:
+        return {"success": False, "error": "BYBIT_NOT_CONNECTED"}
+    if sl <= 0 and not clear_tp:
+        return {"success": True, "skipped": True, "reason": "no_change_requested"}
+
+    d = str(direction).upper()
+    ref = float(ref_sl or 0.0)
+    if sl > 0 and entry > 0:
+        if ref <= 0:
+            if d == "LONG" and sl <= entry:
+                return {"success": True, "skipped": True, "reason": "sl_not_protective"}
+            if d == "SHORT" and sl >= entry:
+                return {"success": True, "skipped": True, "reason": "sl_not_protective"}
+        elif d == "LONG" and sl <= ref:
+            return {"success": True, "skipped": True, "reason": "sl_not_tighter"}
+        elif d == "SHORT" and sl >= ref:
+            return {"success": True, "skipped": True, "reason": "sl_not_tighter"}
+
+    try:
+        _set_trading_stop(
+            exchange,
+            ccxt_symbol,
+            sl=sl if sl > 0 else 0,
+            clear_tp=clear_tp,
+        )
+        log.info(
+            f"[BYBIT] Protective SL modified: {ccxt_symbol} {direction} "
+            f"sl={sl if sl > 0 else 'unchanged'} clear_tp={clear_tp}"
+        )
+        return {
+            "success": True,
+            "newSl": sl if sl > 0 else None,
+            "tpCleared": clear_tp,
+        }
+    except Exception as e:
+        err_str = str(e)
+        if "34040" in err_str or "not modified" in err_str.lower():
+            log.debug(
+                f"[BYBIT] Protective SL already at target for {ccxt_symbol} (34040) — no action"
+            )
+            return {"success": True, "newSl": sl, "alreadySet": True}
+        log.warning(f"[BYBIT] Protective SL modify failed for {ccxt_symbol}: {e}")
+        return {"success": False, "error": err_str}
+
+
 def bybit_move_sl_to_breakeven(
     ccxt_symbol: str, direction: str, entry_price: float, volume: float,
     clear_tp: bool = False,

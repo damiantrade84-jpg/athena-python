@@ -1076,6 +1076,51 @@ def test_bybit_reconcile_trailing_atr_missing_tp_repairs_by_default(monkeypatch)
     assert stop_calls[0]["takeProfit"] == "1100.0"
 
 
+def test_bybit_modify_protective_sl_tightens_without_mark_guard(monkeypatch):
+    stop_calls = []
+
+    class _FakeExchange:
+        @staticmethod
+        def private_post_v5_position_trading_stop(params):
+            stop_calls.append(params)
+
+    monkeypatch.setattr(bybit_executor, "_get_exchange", lambda: _FakeExchange())
+
+    result = bybit_executor.bybit_modify_protective_sl(
+        "BTC/USDT:USDT",
+        "LONG",
+        101.0,
+        ref_sl=90.0,
+        entry=100.0,
+    )
+
+    assert result["success"] is True
+    assert stop_calls[0]["stopLoss"] == "101.0"
+
+
+def test_bybit_modify_protective_sl_skips_widening(monkeypatch):
+    stop_calls = []
+
+    class _FakeExchange:
+        @staticmethod
+        def private_post_v5_position_trading_stop(params):
+            stop_calls.append(params)
+
+    monkeypatch.setattr(bybit_executor, "_get_exchange", lambda: _FakeExchange())
+
+    result = bybit_executor.bybit_modify_protective_sl(
+        "BTC/USDT:USDT",
+        "LONG",
+        95.0,
+        ref_sl=98.0,
+        entry=100.0,
+    )
+
+    assert result["success"] is True
+    assert result.get("skipped") is True
+    assert stop_calls == []
+
+
 def test_bybit_reconcile_trailing_atr_tp_can_be_disabled(monkeypatch):
     stop_calls = []
 

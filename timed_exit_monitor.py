@@ -388,6 +388,54 @@ def _protective_sl_tightens(
     return new_sl < ref
 
 
+def _try_trailing_mode_breakeven(
+    *,
+    state_key: str,
+    row: dict,
+    style: str,
+    be_due_now: bool,
+    profit: float,
+    tcfg: dict,
+    entry: float,
+    sl_raw: float,
+    direction: str,
+    live_sl: float,
+    mins: float,
+    move_sl: Callable[[float], dict],
+    pair_label: str,
+) -> None:
+    """Time-based BE under trailing_atr when trade is green but below chandelier activation."""
+    if not be_due_now or state_key in _be_done:
+        return
+    risk_amount = float(row.get("risk_amount") or 0)
+    be_min_profit_r = tcfg.get("breakeven_min_profit_r", 0.20)
+    be_buffer_r = tcfg.get("breakeven_buffer_r", 0.05)
+    if profit < max(
+        0.01,
+        ((risk_amount * be_min_profit_r) if risk_amount > 0 else 0.0),
+    ):
+        return
+    sl_dist = abs(entry - sl_raw) if sl_raw > 0 else 0.0
+    if sl_dist <= 0:
+        return
+    if be_buffer_r > 0:
+        be_buffer = sl_dist * be_buffer_r
+        direction_long = str(direction).upper() != "SHORT"
+        be_price = entry + be_buffer if direction_long else entry - be_buffer
+    else:
+        be_price = entry
+    if not _protective_sl_tightens(direction, be_price, live_sl, entry):
+        return
+    result = move_sl(be_price)
+    if result.get("success") and not result.get("skipped"):
+        _be_done.add(state_key)
+        log.info(
+            f"[TIMED_EXIT] trailing BE set: {pair_label} style={style} "
+            f"mins_open={mins:.1f} be_price={be_price:.5f} "
+            f"(entry={entry:.5f} buffer={be_buffer_r:.0%} of SL dist)"
+        )
+
+
 def _try_scalp_profit_lock_sl(
     *,
     ticket_key: str,
@@ -619,7 +667,13 @@ def _get_timed_cfg(config_fn) -> dict:
         merged["timer_tighten_factor"] = float(raw.get("timer_tighten_factor", _DEFAULT_CFG["timer_tighten_factor"]))
     except (TypeError, ValueError):
         merged["timer_tighten_factor"] = float(_DEFAULT_CFG["timer_tighten_factor"])
+    scalp_raw = cfg.get("SCALP_ENGINE") or {}
+    merged["scalp_live_profit_protect"] = bool(scalp_raw.get("LIVE_PROFIT_PROTECT", True))
     return merged
+
+
+def _is_engine_d_engine(engine: str) -> bool:
+    return str(engine or "").strip().lower() in ("scalp", "engine d", "scalp_vp")
 
 
 def _activation_r_for(tcfg: dict, style: str) -> float:
@@ -1245,6 +1299,7 @@ def _evaluate_trail(
     state_key: str | None = None,
     live_sl_for_r: float | None = None,
     venue: str | None = None,
+    trail_mode: str = "full",
 ) -> dict:
     """Single decision point for the chandelier trail state machine.
 
@@ -1325,7 +1380,19 @@ def _evaluate_trail(
                 }
 
     if current_r < activation_r:
+        peak_watch = _peak_r_state.get(state_key)
+        if current_r > 0:
+            log.info(
+                f"[TIMED_EXIT] below_activation watch: {pair} style={style} dir={direction} "
+                f"current_r={current_r:.2f} peak_r={peak_watch} activation_r={activation_r:.2f} "
+                f"mode={trail_mode}"
+            )
+        if trail_mode == "pre_activation_only":
+            return {"action": "none", "reason": "below_activation", "current_r": current_r}
         return {"action": "none", "reason": "below_activation", "current_r": current_r}
+
+    if trail_mode == "pre_activation_only":
+        return {"action": "none", "reason": "pre_activation_only_cap", "current_r": current_r}
 
     first_activation_tick = _trail_state.get(state_key) is None
     trail_level = _compute_chandelier_trail(
@@ -1593,10 +1660,23 @@ def _handle_mt5_row(row: dict, tcfg: dict, db_path: str | None = None) -> None:
                     trail_reason=str(tr),
                     ratchet_res=ratchet_res,
                 )
+        _try_trailing_mode_breakeven(
+            state_key=state_key,
+            row=row,
+            style=style,
+            be_due_now=be_due_now,
+            profit=profit,
+            tcfg=tcfg,
+            entry=entry,
+            sl_raw=_sl_raw,
+            direction=str(direction),
+            live_sl=_live_sl_for_trail,
+            mins=mins,
+            move_sl=lambda sl_px: mt5_move_sl_to_breakeven(ticket, sl_px),
+            pair_label=str(row.get("pair") or ""),
+        )
         # Mode-dispatch: in trailing_atr mode, the trail block is the *only* profit-side
-        # exit. Suppress lock ladder and timed-close branches by returning here. BE is
-        # provided implicitly: once activation_r is reached the trail ratchets the broker
-        # SL up; below activation, the original ATR SL still protects.
+        # exit. Suppress lock ladder and timed-close branches by returning here.
         return
 
     # ── Degenerate close-before-BE path (scalp/intraday with close_min <= be_min)
@@ -1751,6 +1831,7 @@ def _handle_bybit_row(row: dict, tcfg: dict, db_path: str | None = None) -> None
         from bybit_executor import (
             bybit_close_position,
             bybit_move_sl_to_breakeven,
+            bybit_modify_protective_sl,
             bybit_map_symbol,
             bybit_get_positions,
         )
@@ -1764,11 +1845,6 @@ def _handle_bybit_row(row: dict, tcfg: dict, db_path: str | None = None) -> None
     engine    = str(row.get("engine") or "").lower()
     style     = (row.get("style") or "intraday").lower()
     entry     = float(row.get("entry_price") or 0)
-
-    # Engine D / Scalp Lab trades use broker TP1/SL management.
-    # Do not treat generic Engine A/B "style=scalp" trades as Engine D.
-    if engine in ("scalp", "engine d", "scalp_vp"):
-        return
 
     if style not in ("scalp", "intraday", "swing"):
         style = "intraday"
@@ -1794,6 +1870,52 @@ def _handle_bybit_row(row: dict, tcfg: dict, db_path: str | None = None) -> None
     direction = live.get("direction", row.get("direction", "LONG"))
     volume    = float(live.get("volume", 0))
 
+    _sl_raw = float(row.get("sl") or 0)
+    _live_sl_for_trail = _safe_float(live.get("sl"))
+    state_key = _state_key("bybit", row.get("audit_id"), ticket)
+
+    # Engine D / Scalp Lab: broker TP1/SL + optional milestones; pre_activation
+    # giveback when LIVE_PROFIT_PROTECT is enabled (no chandelier / timed close).
+    if _is_engine_d_engine(engine):
+        if not tcfg.get("scalp_live_profit_protect", True):
+            return
+        trail_eval = _evaluate_trail(
+            row,
+            style,
+            direction,
+            entry,
+            _sl_raw,
+            cur_price,
+            tcfg,
+            mins_open=mins,
+            state_key=state_key,
+            live_sl_for_r=_live_sl_for_trail,
+            venue="bybit",
+            trail_mode="pre_activation_only",
+        )
+        if trail_eval.get("action") == "close":
+            result = bybit_close_position(pair, direction, volume)
+            if result.get("success"):
+                pnl_r = _live_pnl_r(row, entry, _sl_raw, volume, profit)
+                if db_path:
+                    _mark_timed_close(
+                        db_path, row, "bybit",
+                        actual_close_price=cur_price,
+                        live_pnl=profit,
+                        reason="TRAIL_PROFIT_ROUNDTRIP",
+                    )
+                log.info(
+                    f"[TIMED_EXIT] ENGINE_D PROFIT_PROTECT: {pair} style={style} "
+                    f"mins={mins:.0f} profit=${profit:.2f} R={pnl_r}"
+                )
+                try:
+                    telegram_notify.notify_trade_closed(
+                        pair=pair, pnl_r=pnl_r, is_win=profit > 0, duration_minutes=mins,
+                    )
+                except Exception:
+                    pass
+        return
+
     if style == "swing":
         be_trigger_min    = scfg["breakeven_days"] * 24 * 60
         close_trigger_min = scfg["close_days"] * 24 * 60
@@ -1808,10 +1930,6 @@ def _handle_bybit_row(row: dict, tcfg: dict, db_path: str | None = None) -> None
 
     close_due_now = mins >= close_trigger_min
     be_due_now = mins >= be_trigger_min
-
-    _sl_raw = float(row.get("sl") or 0)
-    _live_sl_for_trail = _safe_float(live.get("sl"))
-    state_key = _state_key("bybit", row.get("audit_id"), ticket)
 
     # ── Trailing ATR TP (mode-dispatched single exit policy) ──────────────────
     # Same pattern as MT5: chandelier-only when tp_mode trailing_atr regardless of
@@ -1871,8 +1989,12 @@ def _handle_bybit_row(row: dict, tcfg: dict, db_path: str | None = None) -> None
                     f"trail_reason={tr}"
                 )
             elif sl_tightens or clear_tp:
-                ratchet_res = bybit_move_sl_to_breakeven(
-                    ccxt_sym, direction, new_sl if sl_tightens else 0.0, volume,
+                ratchet_res = bybit_modify_protective_sl(
+                    ccxt_sym,
+                    direction,
+                    new_sl if sl_tightens else 0.0,
+                    ref_sl=_live_sl_for_trail,
+                    entry=entry,
                     clear_tp=clear_tp,
                 )
                 if clear_tp and ratchet_res.get("success"):
@@ -1890,6 +2012,23 @@ def _handle_bybit_row(row: dict, tcfg: dict, db_path: str | None = None) -> None
                     trail_reason=str(tr),
                     ratchet_res=ratchet_res,
                 )
+        _try_trailing_mode_breakeven(
+            state_key=state_key,
+            row=row,
+            style=style,
+            be_due_now=be_due_now,
+            profit=profit,
+            tcfg=tcfg,
+            entry=entry,
+            sl_raw=_sl_raw,
+            direction=str(direction),
+            live_sl=_live_sl_for_trail,
+            mins=mins,
+            move_sl=lambda sl_px: bybit_move_sl_to_breakeven(
+                ccxt_sym, direction, sl_px, volume,
+            ),
+            pair_label=str(pair),
+        )
         # Mode-dispatch: only the trail manages exits in trailing_atr mode.
         return
 

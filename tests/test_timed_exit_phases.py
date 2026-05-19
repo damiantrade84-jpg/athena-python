@@ -1065,3 +1065,122 @@ class TestPhase1Defaults:
         assert tcfg["trail_activation_r"]["scalp"] == pytest.approx(0.7)
         assert tcfg["trail_activation_r"]["intraday"] == pytest.approx(1.2)
         assert tcfg["trail_activation_r"]["swing"] == pytest.approx(1.5)
+
+
+class TestTrailingModeBreakeven:
+    def setup_method(self):
+        import timed_exit_monitor as tem
+        tem._be_done.clear()
+
+    def test_trailing_be_moves_sl_when_due(self):
+        import timed_exit_monitor as tem
+        moves = []
+        tcfg = _get_timed_cfg(_cfg_fn({
+            "breakeven_min_profit_r": 0.10,
+            "breakeven_buffer_r": 0.05,
+        }))
+        tem._try_trailing_mode_breakeven(
+            state_key="bybit:aid:1",
+            row={"risk_amount": 10.0},
+            style="intraday",
+            be_due_now=True,
+            profit=5.0,
+            tcfg=tcfg,
+            entry=100.0,
+            sl_raw=90.0,
+            direction="LONG",
+            live_sl=91.0,
+            mins=20.0,
+            move_sl=lambda px: moves.append(px) or {"success": True},
+            pair_label="ADA/USDT",
+        )
+        assert len(moves) == 1
+        assert moves[0] == pytest.approx(100.5)
+        assert "bybit:aid:1" in tem._be_done
+
+
+class TestPreActivationOnlyMode:
+    def setup_method(self):
+        _trail_state.clear()
+        import timed_exit_monitor as tem
+        tem._peak_r_state.clear()
+
+    def test_pre_activation_only_skips_chandelier(self, monkeypatch):
+        import timed_exit_monitor as tem
+        tcfg = _get_timed_cfg(_cfg_fn({
+            "tp_mode": "trailing_atr",
+            "trail_activation_r": {"intraday": 1.0},
+            "pre_activation_profit_protect_enabled": True,
+        }))
+        row = {"ticket": "0", "pair": "BTC/USDT", "audit_id": 9}
+        monkeypatch.setattr(
+            tem,
+            "_compute_chandelier_trail",
+            lambda *a, **kw: pytest.fail("chandelier must not run in pre_activation_only"),
+        )
+        res = _evaluate_trail(
+            row, "intraday", "LONG", 100.0, 90.0, 115.0, tcfg,
+            state_key="bybit:aid:9", venue="bybit",
+            trail_mode="pre_activation_only",
+        )
+        assert res["reason"] == "pre_activation_only_cap"
+        assert res["action"] == "none"
+
+
+class TestEngineDProfitProtect:
+    def setup_method(self):
+        import timed_exit_monitor as tem
+        tem._peak_r_state.clear()
+        tem._be_done.clear()
+
+    def test_engine_d_closes_on_pre_activation_giveback(self, monkeypatch):
+        import sys
+        import timed_exit_monitor as tem
+
+        row = {
+            "pair": "BTC/USDT",
+            "direction": "LONG",
+            "entry_price": 100.0,
+            "sl": 90.0,
+            "ticket": "0",
+            "audit_id": 42,
+            "engine": "scalp",
+            "style": "scalp",
+            "ts": "2026-04-14T10:00:00Z",
+            "risk_amount": 10.0,
+        }
+        cfg = _get_timed_cfg(lambda: {
+            "TIMED_EXIT": {
+                "enabled": True,
+                "tp_mode": "trailing_atr",
+                "pre_activation_profit_protect_enabled": True,
+                "pre_activation_profit_arm_r": {"scalp": 0.20},
+                "pre_activation_profit_giveback_r": {"scalp": 0.25},
+                "trail_activation_r": {"scalp": 0.7, "intraday": 1.0, "swing": 1.5},
+                "scalp": {"breakeven_min": 5, "close_min": 10},
+                "intraday": {"breakeven_min": 15, "close_min": 30},
+                "swing": {"breakeven_days": 2.5, "close_days": 5.0},
+            },
+            "SCALP_ENGINE": {"LIVE_PROFIT_PROTECT": True},
+        })
+        closes = []
+        fake_bybit = types.ModuleType("bybit_executor")
+        fake_bybit.bybit_get_positions = lambda: {
+            "positions": [{
+                "pair": "BTC/USDT",
+                "profit": 1.0,
+                "currentPrice": 100.0,
+                "sl": 90.0,
+                "direction": "LONG",
+                "volume": 0.1,
+            }]
+        }
+        fake_bybit.bybit_close_position = lambda *a, **kw: closes.append(a) or {"success": True}
+        fake_bybit.bybit_map_symbol = lambda p: f"{p}/USDT:USDT"
+        fake_bybit.bybit_modify_protective_sl = lambda *a, **kw: {"success": True}
+        fake_bybit.bybit_move_sl_to_breakeven = lambda *a, **kw: {"success": True}
+        monkeypatch.setitem(sys.modules, "bybit_executor", fake_bybit)
+        monkeypatch.setitem(sys.modules, "telegram_notify", _tg_stub)
+        tem._peak_r_state["bybit:aid:42"] = 0.5
+        tem._handle_bybit_row(row, cfg)
+        assert closes, "expected pre_activation giveback close for Engine D"

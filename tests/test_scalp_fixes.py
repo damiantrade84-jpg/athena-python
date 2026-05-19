@@ -30,19 +30,24 @@ def test_startup_does_not_launch_news_polling():
 
 # --- 2. Timed Exit Guard Tests ---
 
-def test_scalp_trades_excluded_from_timed_exit(monkeypatch):
-    """Ensure Engine D / scalp trades are ignored by the timed-exit monitor."""
+def test_scalp_trades_excluded_from_timed_exit_when_profit_protect_off(monkeypatch):
+    """Engine D is ignored by timed-exit when LIVE_PROFIT_PROTECT is disabled."""
     row = {
         "pair": "EURUSD",
         "direction": "long",
         "entry_price": 1.0500,
         "ticket": 12345,
-        "engine": "scalp", 
-        "ts": "2026-04-14T10:00:00Z" 
+        "engine": "scalp",
+        "ts": "2026-04-14T10:00:00Z",
     }
-    
-    cfg = {"scalp": {"breakeven_min": 5, "close_min": 10}, "intraday": {}, "swing": {}}
-    
+
+    cfg = {
+        "scalp": {"breakeven_min": 5, "close_min": 10},
+        "intraday": {},
+        "swing": {},
+        "scalp_live_profit_protect": False,
+    }
+
     with patch("mt5_executor.mt5_get_positions") as mock_get_pos:
         timed_exit_monitor._handle_mt5_row(row, cfg)
         mock_get_pos.assert_not_called()
