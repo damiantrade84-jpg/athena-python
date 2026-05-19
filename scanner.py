@@ -380,6 +380,19 @@ def _apply_engine_b_only_watchlist_scan_tier(
         return tier, reason
     if tier == "trade":
         return tier, reason
+    try:
+        score = float(signal.get("confluenceScore", 0) or 0)
+        threshold = float(
+            signal.get("scanThreshold")
+            or signal.get("scanThresholdEffective")
+            or signal.get("threshold")
+            or 0
+        )
+    except (TypeError, ValueError):
+        score = 0.0
+        threshold = 0.0
+    if threshold > 0 and score >= threshold:
+        return tier, reason
     if not bool(signal.get("engine_b_confidence_passed", False)):
         return tier, reason
 
@@ -471,12 +484,14 @@ def _make_engine_b_only_signal_stub(pair: dict) -> dict:
     B-only result. Engine A scoring fields are zeroed/absent — the row is
     never auto-traded and is classified by ``_classify_engine_b_only_signal``.
     """
+    display = pair.get("display") or pair.get("symbol")
     return {
         "engine_source": ENGINE_B_SOURCE,
         "engine": "B",
         "engine_name": "Engine B",
+        "pair": display,
         "symbol": pair.get("symbol"),
-        "display": pair.get("display"),
+        "display": display,
         "type": pair.get("type"),
         "asset_type": pair.get("type"),
         "direction": None,
@@ -489,6 +504,55 @@ def _make_engine_b_only_signal_stub(pair: dict) -> dict:
         "scanDiagnostics": [],
         "warnings": [],
     }
+
+
+def _engine_a_block_reason(engine_a_signal: dict | None) -> str:
+    if not isinstance(engine_a_signal, dict):
+        return "engine_a_no_direction"
+
+    data_freshness = engine_a_signal.get("dataFreshness")
+    if isinstance(data_freshness, dict):
+        reason = data_freshness.get("reason") or data_freshness.get("status")
+        if reason:
+            return str(reason)
+
+    for key in ("skipReason", "signalTierReason", "watchlistReason", "reason"):
+        reason = engine_a_signal.get(key)
+        if reason:
+            return str(reason)
+
+    direction = engine_a_signal.get("direction")
+    if direction:
+        return f"engine_a_no_trade_direction:{direction}"
+    return "engine_a_no_direction"
+
+
+def _make_engine_b_only_signal_stub_from_blocked_engine_a(
+    pair: dict,
+    engine_a_signal: dict | None,
+) -> dict:
+    """Convert a blocked/neutral Engine A row into an explicit B-only row.
+
+    Engine B may still be scanned independently, but its direction must not be
+    written onto an Engine A-sourced row. Preserve the A block as diagnostics so
+    the UI/audit trail can show why Engine A did not produce a trade direction.
+    """
+    stub = _make_engine_b_only_signal_stub(pair)
+    stub["engine_a_blocked"] = True
+    stub["engine_a_block_reason"] = _engine_a_block_reason(engine_a_signal)
+
+    if isinstance(engine_a_signal, dict):
+        stub["engine_a_direction"] = engine_a_signal.get("direction")
+        stub["engine_a_confluenceScore"] = engine_a_signal.get("confluenceScore")
+        stub["engine_a_scoreNorm"] = engine_a_signal.get("scoreNorm")
+        if engine_a_signal.get("dataFreshness") is not None:
+            stub["engine_a_dataFreshness"] = engine_a_signal.get("dataFreshness")
+        if engine_a_signal.get("candleFetchMeta") is not None:
+            stub["engine_a_candleFetchMeta"] = engine_a_signal.get("candleFetchMeta")
+        if engine_a_signal.get("scanDiagnostics") is not None:
+            stub["engine_a_scanDiagnostics"] = engine_a_signal.get("scanDiagnostics")
+
+    return stub
 
 
 def _engine_b_independent_direction_probe(
@@ -617,6 +681,13 @@ def _annotate_engine_b_only_signal_for_scan(
         diagnostics.append(
             {"code": "engine_b_error", "detail": str(signal.get("engine_b_error"))}
         )
+    if signal.get("engine_a_blocked"):
+        diagnostics.append(
+            {
+                "code": "engine_a_blocked",
+                "detail": str(signal.get("engine_a_block_reason") or "engine_a_no_direction"),
+            }
+        )
     signal["scanDiagnostics"] = diagnostics
     return signal
 
@@ -674,6 +745,25 @@ def _classify_engine_b_only_signal(signal: dict, pair: dict) -> tuple[str, str]:
     if signal.get("engine_b_direction"):
         detail = f"Engine B-only watchlist ({signal.get('engine_b_direction')})"
     return "watchlist", detail
+
+
+def _scan_signal_rank(signal: dict) -> float:
+    """Sort key for final scan buckets without assuming Engine A score fields."""
+    try:
+        conviction = signal.get("combinedConviction")
+        if conviction is not None:
+            return float(conviction)
+    except (TypeError, ValueError):
+        pass
+
+    try:
+        score = float(signal.get("confluenceScore", 0) or 0)
+        max_score = float(signal.get("maxScore", 0) or 0)
+    except (TypeError, ValueError):
+        return 0.0
+    if max_score <= 0:
+        return 0.0
+    return score / max_score
 
 
 def _a_only_auto_weight(pair: dict | None, config: dict | None = None) -> float:
@@ -1344,13 +1434,17 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict[s
                     sig_a = _make_engine_b_only_signal_stub(pair)
                     engine_b_scan_only = True
                 else:
-                    sig_a.setdefault("engine_source", ENGINE_A_SOURCE)
-                    sig_a.setdefault("engine", "A")
-                    sig_a.setdefault("engine_name", "Engine A")
-                    sig_a["engine_a_present"] = True
-
                     if sig_a.get("direction") not in ("LONG", "SHORT"):
+                        sig_a = _make_engine_b_only_signal_stub_from_blocked_engine_a(
+                            pair,
+                            sig_a,
+                        )
                         engine_b_scan_only = True
+                    else:
+                        sig_a.setdefault("engine_source", ENGINE_A_SOURCE)
+                        sig_a.setdefault("engine", "A")
+                        sig_a.setdefault("engine_name", "Engine A")
+                        sig_a["engine_a_present"] = True
 
                 ptype = pair.get("type", "")
                 try:
@@ -2048,6 +2142,8 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict[s
             sig["scanThresholdStatic"] = static_threshold
             sig["scanQuantileCut"] = q_cut
             sig["scanThresholdEffective"] = effective_threshold
+            sig["threshold"] = effective_threshold
+            sig["liveThreshold"] = static_threshold
 
             if (
                 q_cut is not None
@@ -2200,19 +2296,9 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict[s
             except Exception as _audit_err:
                 log.warning("[THRESHOLD-AUDIT] write failed: %s", _audit_err)
 
-        results.sort(
-            key=lambda x: x.get(
-                "combinedConviction", x.get("confluenceScore", 0) / x.get("maxScore", 3.0)
-            ),
-            reverse=True,
-        )
+        results.sort(key=_scan_signal_rank, reverse=True)
 
-        watchlist.sort(
-            key=lambda x: x.get(
-                "combinedConviction", x.get("confluenceScore", 0) / x.get("maxScore", 3.0)
-            ),
-            reverse=True,
-        )
+        watchlist.sort(key=_scan_signal_rank, reverse=True)
 
         results = apply_correlation_cap(results)
 

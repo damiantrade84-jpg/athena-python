@@ -268,6 +268,10 @@ def test_score_group_requirement_overrides_are_explicit_for_distinct_crypto_and_
     assert CONFIG["ENGINE_A_DIRECTIONAL_RAMP_BY_CLASS"]["forex_exotics"]["min_directional"] < (
         CONFIG["ENGINE_A_DIRECTIONAL_RAMP_BY_CLASS"]["forex_majors"]["min_directional"]
     )
+    assert CONFIG["ENGINE_A_CONVICTION_FLOOR_BY_CLASS"]["forex_majors"] == pytest.approx(0.60)
+    assert CONFIG["ENGINE_A_ADX_SOURCE_BY_CLASS"]["forex_majors"] == "max"
+    assert CONFIG["ENGINE_A_DI_ALIGNMENT_MULT_BY_CLASS"]["forex"]["opposed"] == pytest.approx(0.65)
+    assert CONFIG["ENGINE_A_SCAN_A_ONLY_AUTO_GATE_ENABLED"] is False
 
 
 def test_engine_a_regime_label_for_threshold_supports_live_result_shapes(monkeypatch):

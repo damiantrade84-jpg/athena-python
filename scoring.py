@@ -17,6 +17,19 @@ from indicators import (
 log = logging.getLogger("athena")
 
 
+def _safe_feed_mult(feed_status: dict, key: str) -> float | None:
+    """Parse feed_status multiplier strings (e.g. di_align '0.30') for UI diagnostics."""
+    if not isinstance(feed_status, dict):
+        return None
+    raw = feed_status.get(key)
+    if raw is None or raw == "":
+        return None
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return None
+
+
 def _tf_score_proxy(snap: dict) -> dict | None:
     """Build a lightweight per-timeframe score proxy for timeframe_alignment.
 
@@ -923,6 +936,11 @@ def calc_confluence(
             "missingDirectionalOptionalCount": factor_result.get("missing_directional_optional_count"),
             "optionalFactorCoverage": factor_result.get("optional_factor_coverage"),
             "feedStatus": factor_result.get("feed_status", {}),
+            "momentumQuality": factor_result.get("momentum_quality"),
+            "adxMultiplier": factor_result.get("adx_multiplier"),
+            "directionalRampMult": factor_result.get("directional_ramp_multiplier"),
+            "conviction": factor_result.get("conviction"),
+            "diAlignMult": _safe_feed_mult(factor_result.get("feed_status", {}), "di_align"),
             "regimeLabelsDualCapture": {
                 "trendState": trend_state,
                 "factorRegime": _regime_str,
@@ -1154,17 +1172,18 @@ def _classify_signal(signal: dict, pair: dict) -> tuple[str, str]:
     )
     if scan_ready:
         if signal.get("enginesAligned") is False:
-            required = _a_only_required_score(pair, signal)
-            try:
-                max_score = float(signal.get("maxScore") or signal.get("maxScoreOverride") or 3.0)
-            except (TypeError, ValueError):
-                max_score = 3.0
-            if required is not None and score < required:
-                return (
-                    "watchlist",
-                    f"A-only auto gate requires about {required:.2f}/{max_score:.1f}; "
-                    f"score {float(score):.2f} clears scan floor {float(threshold):.2f} only",
-                )
+            if bool(CONFIG.get("ENGINE_A_SCAN_A_ONLY_AUTO_GATE_ENABLED", False)):
+                required = _a_only_required_score(pair, signal)
+                try:
+                    max_score = float(signal.get("maxScore") or signal.get("maxScoreOverride") or 3.0)
+                except (TypeError, ValueError):
+                    max_score = 3.0
+                if required is not None and score < required:
+                    return (
+                        "watchlist",
+                        f"A-only auto gate requires about {required:.2f}/{max_score:.1f}; "
+                        f"score {float(score):.2f} clears scan floor {float(threshold):.2f} only",
+                    )
         return "trade", "Trade-ready"
     watch_floor = max(round(threshold - 0.3, 2), 0.2)
     reasons = [d["detail"] for d in signal.get("scanDiagnostics", [])]

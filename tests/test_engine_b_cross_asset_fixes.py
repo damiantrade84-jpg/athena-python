@@ -95,6 +95,27 @@ def test_scanner_b_only_watchlist_surfaces_passed_b_without_trade(monkeypatch):
     assert sig["scanDiagnostics"][-1]["code"] == "engine_b_only_watchlist"
 
 
+def test_scanner_b_only_watchlist_does_not_override_a_scan_floor_watchlist(monkeypatch):
+    monkeypatch.setitem(scanner.CONFIG, "ENGINE_B_SCAN_B_ONLY_WATCHLIST_ENABLED", True)
+    sig = {
+        "engine_b_confidence_passed": True,
+        "direction": "SHORT",
+        "engine_b_direction": "LONG",
+        "confluenceScore": 2.38,
+        "scanThreshold": 2.1,
+    }
+
+    tier, reason = scanner._apply_engine_b_only_watchlist_scan_tier(
+        sig,
+        "watchlist",
+        "A-only auto gate requires about 2.50/3.0",
+    )
+
+    assert tier == "watchlist"
+    assert reason == "A-only auto gate requires about 2.50/3.0"
+    assert "engine_b_execution_block_reason" not in sig
+
+
 def test_scanner_b_only_watchlist_does_not_override_safety_blocks(monkeypatch):
     monkeypatch.setitem(scanner.CONFIG, "ENGINE_B_SCAN_B_ONLY_WATCHLIST_ENABLED", True)
     sig = {

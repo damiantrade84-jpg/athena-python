@@ -14,6 +14,7 @@ from scoring import _classify_signal, _get_30d_correlation, get_score_threshold
 
 
 def test_a_only_scan_tier_demotes_below_live_conviction_floor(monkeypatch):
+    monkeypatch.setitem(CONFIG, "ENGINE_A_SCAN_A_ONLY_AUTO_GATE_ENABLED", True)
     monkeypatch.setitem(CONFIG, "AUTO_TRADE_MIN_CONVICTION", {"default": 0.50})
     monkeypatch.setitem(CONFIG, "AUTO_TRADE_A_ONLY_WEIGHT", {"default": 0.60, "crypto": 0.60})
     pair = {"display": "BTC/USDT", "symbol": "BTCUSDT", "type": "crypto", "enabled": True}
@@ -31,7 +32,27 @@ def test_a_only_scan_tier_demotes_below_live_conviction_floor(monkeypatch):
     assert "A-only auto gate requires about 2.50/3.0" in reason
 
 
+def test_a_only_scan_tier_defaults_to_scan_floor_not_live_auto_gate(monkeypatch):
+    monkeypatch.setitem(CONFIG, "ENGINE_A_SCAN_A_ONLY_AUTO_GATE_ENABLED", False)
+    monkeypatch.setitem(CONFIG, "AUTO_TRADE_MIN_CONVICTION", {"default": 0.50})
+    monkeypatch.setitem(CONFIG, "AUTO_TRADE_A_ONLY_WEIGHT", {"default": 0.60, "crypto": 0.60})
+    pair = {"display": "EUR/CHF", "symbol": "EURCHF", "type": "forex", "enabled": True}
+    signal = {
+        "confluenceScore": 2.38,
+        "maxScore": 3.0,
+        "scanThreshold": 2.1,
+        "enginesAligned": False,
+        "combinedConviction": 0.476,
+    }
+
+    tier, reason = _classify_signal(signal, pair)
+
+    assert tier == "trade"
+    assert reason == "Trade-ready"
+
+
 def test_a_only_scan_tier_allows_scores_above_live_conviction_floor(monkeypatch):
+    monkeypatch.setitem(CONFIG, "ENGINE_A_SCAN_A_ONLY_AUTO_GATE_ENABLED", True)
     monkeypatch.setitem(CONFIG, "AUTO_TRADE_MIN_CONVICTION", {"default": 0.50})
     monkeypatch.setitem(CONFIG, "AUTO_TRADE_A_ONLY_WEIGHT", {"default": 0.60, "crypto": 0.60})
     pair = {"display": "BTC/USDT", "symbol": "BTCUSDT", "type": "crypto", "enabled": True}

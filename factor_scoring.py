@@ -128,6 +128,29 @@ def _resolve_conviction_floor(score_group: str | None, asset_type: str, default:
     return max(0.0, min(1.0, floor))
 
 
+def _resolve_adx_source_mode(score_group: str | None, asset_type: str) -> str:
+    keyed = CONFIG.get("ENGINE_A_ADX_SOURCE_BY_CLASS") or {}
+    mode = _resolve_class_keyed(keyed, score_group, asset_type, "d1_first")
+    mode = str(mode or "d1_first").strip().lower()
+    if mode not in {"d1_first", "h4_first", "max"}:
+        return "d1_first"
+    return mode
+
+
+def _resolve_di_alignment_multipliers(score_group: str | None, asset_type: str) -> dict:
+    multipliers = {"missing": 0.5, "balanced": 0.5, "opposed": 0.3}
+    if not _engine_a_group_adjustments_enabled():
+        return multipliers
+
+    keyed = CONFIG.get("ENGINE_A_DI_ALIGNMENT_MULT_BY_CLASS") or {}
+    overrides = _resolve_class_keyed(keyed, score_group, asset_type, {})
+    if isinstance(overrides, dict):
+        for state in ("missing", "balanced", "opposed"):
+            if state in overrides:
+                multipliers[state] = _float_cfg(overrides.get(state), multipliers[state])
+    return {state: max(0.0, min(1.0, value)) for state, value in multipliers.items()}
+
+
 def _resolve_research_lab_profile(
     base_cfg: dict,
     score_group: str | None,
@@ -1122,8 +1145,13 @@ def _adx_gate(
         _h4 = None
 
     if _d1 is not None and _h4 is not None:
-        adx = _d1
-        source = "d1"
+        mode = _resolve_adx_source_mode(score_group, asset_type)
+        if mode == "h4_first":
+            adx, source = _h4, "h4"
+        elif mode == "max" and _h4 > _d1:
+            adx, source = _h4, "h4"
+        else:
+            adx, source = _d1, "d1"
     elif _d1 is not None:
         adx, source = _d1, "d1"
     elif _h4 is not None:
@@ -1968,25 +1996,27 @@ def compute_factor_scores(
     # ── +DI/-DI directional alignment multiplier ──────────────────────────────
     # Stage 1.3: ADX measures strength but not direction. If EMA says LONG but
     # -DI > +DI, bearish pressure dominates — score must be suppressed.
+    _di_mults = _resolve_di_alignment_multipliers(score_group, asset_type)
+
     def _di_alignment_multiplier(trend_dir: str, plus_di: float | None, minus_di: float | None) -> float:
         if plus_di is None or minus_di is None:
-            return 0.5  # data missing → neutral
+            return _di_mults["missing"]
         di_diff = plus_di - minus_di
         if trend_dir == "LONG":
             if plus_di > minus_di:
                 return 1.0
             elif abs(di_diff) < 5.0:
-                return 0.5
+                return _di_mults["balanced"]
             else:
-                return 0.3
+                return _di_mults["opposed"]
         elif trend_dir == "SHORT":
             if minus_di > plus_di:
                 return 1.0
             elif abs(di_diff) < 5.0:
-                return 0.5
+                return _di_mults["balanced"]
             else:
-                return 0.3
-        return 0.5
+                return _di_mults["opposed"]
+        return _di_mults["missing"]
 
     _plus_di = h4_snap.get("plusDI") or h4_snap.get("plus_di")
     _minus_di = h4_snap.get("minusDI") or h4_snap.get("minus_di")

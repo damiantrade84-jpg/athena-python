@@ -783,6 +783,8 @@ CONFIG: dict = {
     "ENGINE_A_DIRECTIONAL_RAMP_BY_CLASS": {},
     "ENGINE_A_ADDON_UNSUPPORTED_SPLIT_BY_CLASS": {},
     "ENGINE_A_CONVICTION_FLOOR_BY_CLASS": {},
+    "ENGINE_A_ADX_SOURCE_BY_CLASS": {},
+    "ENGINE_A_DI_ALIGNMENT_MULT_BY_CLASS": {},
     "ENGINE_A_RESEARCH_LAB_FACTORS_BY_CLASS": {},
     "ENGINE_A_VOLATILITY_REGIME_ADJUSTMENT_ENABLED": False,
     "ENGINE_A_VOLATILITY_REGIME_MULTIPLIERS": {},
@@ -954,6 +956,7 @@ CONFIG: dict = {
         "default": 0.60,
         "crypto": 0.60,
     },
+    "ENGINE_A_SCAN_A_ONLY_AUTO_GATE_ENABLED": False,
     "AUTO_TRADE_MAX_DAILY": 20,  # Max auto-trades per calendar day (UTC)
     "AUTO_TRADE_MAX_PER_SCAN": 1,  # Max executions per single scan run
     "AUTO_TRADE_SIZING_OVERRIDE": 1.0,  # Full live-level sizing on demo
@@ -1746,6 +1749,58 @@ def _fatal_config_validation(cfg: dict) -> None:
     _floor = float(cfg.get("FACTOR_CONVICTION_FLOOR", 0.20))
     if not (0.10 <= _floor <= 0.30):
         errors.append(f"Conviction floor {_floor} must be in [0.10, 0.30]")
+
+    _asset_class_keys = {"crypto", "forex", "commodity", "stock", "index", "default"}
+    _class_floors = cfg.get("ENGINE_A_CONVICTION_FLOOR_BY_CLASS") or {}
+    if not isinstance(_class_floors, dict):
+        errors.append("ENGINE_A_CONVICTION_FLOOR_BY_CLASS must be a dict")
+    else:
+        for key, value in _class_floors.items():
+            if key not in _asset_class_keys and key not in ENGINE_A_KNOWN_SCORE_GROUPS:
+                log.warning("[CFG] ENGINE_A_CONVICTION_FLOOR_BY_CLASS has unknown class key %r", key)
+            try:
+                floor_value = float(value)
+            except (TypeError, ValueError):
+                errors.append(f"Engine A conviction floor {key} must be numeric")
+                continue
+            if not math.isfinite(floor_value) or not (0.10 <= floor_value <= 0.70):
+                errors.append(f"Engine A conviction floor {key}={floor_value} must be in [0.10, 0.70]")
+
+    _adx_sources = cfg.get("ENGINE_A_ADX_SOURCE_BY_CLASS") or {}
+    if not isinstance(_adx_sources, dict):
+        errors.append("ENGINE_A_ADX_SOURCE_BY_CLASS must be a dict")
+    else:
+        for key, mode in _adx_sources.items():
+            if key not in _asset_class_keys and key not in ENGINE_A_KNOWN_SCORE_GROUPS:
+                log.warning("[CFG] ENGINE_A_ADX_SOURCE_BY_CLASS has unknown class key %r", key)
+            mode_s = str(mode or "").strip().lower()
+            if mode_s not in {"d1_first", "h4_first", "max"}:
+                errors.append(
+                    f"Engine A ADX source mode {key}={mode!r} must be one of d1_first, h4_first, max"
+                )
+
+    _di_profiles = cfg.get("ENGINE_A_DI_ALIGNMENT_MULT_BY_CLASS") or {}
+    if not isinstance(_di_profiles, dict):
+        errors.append("ENGINE_A_DI_ALIGNMENT_MULT_BY_CLASS must be a dict")
+    else:
+        for key, profile in _di_profiles.items():
+            if key not in _asset_class_keys and key not in ENGINE_A_KNOWN_SCORE_GROUPS:
+                log.warning("[CFG] ENGINE_A_DI_ALIGNMENT_MULT_BY_CLASS has unknown class key %r", key)
+            if not isinstance(profile, dict):
+                errors.append(f"Engine A DI alignment profile {key} must be a dict")
+                continue
+            for state in ("missing", "balanced", "opposed"):
+                if state not in profile:
+                    continue
+                try:
+                    mult_value = float(profile[state])
+                except (TypeError, ValueError):
+                    errors.append(f"Engine A DI alignment multiplier {key}.{state} must be numeric")
+                    continue
+                if not math.isfinite(mult_value) or not (0.10 <= mult_value <= 1.0):
+                    errors.append(
+                        f"Engine A DI alignment multiplier {key}.{state}={mult_value} must be in [0.10, 1.0]"
+                    )
 
     # 6. Definition guards — Engine B max_possible must be defined
     _b_max = cfg.get("ENGINE_B_MAX_POSSIBLE")

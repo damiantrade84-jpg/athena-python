@@ -219,6 +219,68 @@ def test_missing_adx_can_use_legacy_soft_multiplier_when_explicitly_disabled(mon
     assert result["final_score"] > 0.0
 
 
+def test_forex_adx_source_uses_stronger_h4_when_configured(monkeypatch):
+    monkeypatch.setitem(
+        CONFIG,
+        "ENGINE_A_ADX_SOURCE_BY_CLASS",
+        {"forex_majors": "max"},
+    )
+
+    result = _score(
+        {"ema21": 110.0, "ema200": 100.0, "adx": 14.0, "close": 100.0, "atr": 1.0},
+        {
+            "ema21": 110.0,
+            "ema50": 100.0,
+            "adx": 30.0,
+            "rsi": 55.0,
+            "macdHist": 0.2,
+            "close": 100.0,
+            "atr": 1.0,
+            "plusDI": 25.0,
+            "minusDI": 15.0,
+        },
+        {"ema21": 110.0, "ema50": 100.0, "close": 100.0, "atr": 1.0},
+        pair={"type": "forex", "display": "EUR/USD"},
+    )
+
+    assert result["adx_source"] == "h4"
+    assert result["adx_multiplier"] == pytest.approx(1.0)
+
+
+def test_forex_score_reachability_restored_without_lowering_threshold(monkeypatch):
+    import carry_feed
+    from scoring import get_score_threshold
+
+    pair = {"type": "forex", "display": "EUR/USD"}
+    floors = dict(CONFIG.get("ENGINE_A_CONVICTION_FLOOR_BY_CLASS") or {})
+    floors["forex_majors"] = 0.60
+    monkeypatch.setitem(CONFIG, "ENGINE_A_SCORE_GROUP_ADJUSTMENTS_ENABLED", True)
+    monkeypatch.setitem(CONFIG, "ENGINE_A_CONVICTION_FLOOR_BY_CLASS", floors)
+    monkeypatch.setattr(carry_feed, "get_carry_z", lambda *_args, **_kwargs: 0.0)
+    monkeypatch.setattr(carry_feed, "get_carry_differential", lambda _display: 0.0)
+
+    result = _score(
+        {"ema21": 110.0, "ema200": 100.0, "adx": 25.0, "close": 100.0, "atr": 1.0},
+        {
+            "ema21": 110.0,
+            "ema50": 100.0,
+            "adx": 25.0,
+            "rsi": 55.0,
+            "macdHist": 0.2,
+            "close": 100.0,
+            "atr": 1.0,
+            "plusDI": 25.0,
+            "minusDI": 15.0,
+        },
+        {"ema21": 110.0, "ema50": 100.0, "close": 100.0, "atr": 1.0},
+        pair=pair,
+    )
+
+    assert get_score_threshold(pair) == pytest.approx(2.1)
+    assert result["engine_a_asset_diagnostics"]["conviction_floor"] == pytest.approx(0.60)
+    assert result["final_score"] >= get_score_threshold(pair)
+
+
 def test_full_bullish_alignment_is_stronger_than_partial_alignment():
     full = _score(_snap("long"), _snap("long"), _snap("long"))
     d1_only = _score(_snap("long"), {}, {})
@@ -698,7 +760,10 @@ def test_weights_report_effective_values_when_addon_is_unsupported():
 
 def test_stock_index_cot_proxy_formulas_are_config_gated(monkeypatch):
     monkeypatch.setitem(CONFIG, "ENGINE_A_COT_ADDON_ASSET_TYPES", ["commodity", "index", "stock"])
-    monkeypatch.setattr("factor_scoring._cot_addon", lambda *_args, **_kwargs: 0.20)
+    monkeypatch.setattr(
+        "factor_scoring._cot_addon_with_status",
+        lambda *_args, **_kwargs: (0.20, "ok"),
+    )
 
     result = _score(pair={"type": "stock", "display": "SPY"})
 
@@ -1035,6 +1100,38 @@ def test_compute_factor_scores_populates_filtered_indicators_for_confidence_engi
     assert len(fi) >= 1
 
 
+def test_calc_confluence_exposes_di_align_mult_for_ui():
+    from scoring import calc_confluence
+
+    d1 = {"snap": {"ema21": 110.0, "ema200": 100.0, "adx": 25.0, "close": 1.0, "atr": 0.0001}}
+    h4 = {
+        "snap": {
+            "ema21": 110.0,
+            "ema50": 100.0,
+            "adx": 25.0,
+            "rsi": 55.0,
+            "macdHist": 0.0,
+            "close": 1.0,
+            "atr": 0.0001,
+            "plusDI": 10.0,
+            "minusDI": 30.0,
+        }
+    }
+    h1 = {"snap": {"ema21": 110.0, "ema50": 100.0, "rsi": 55.0, "macdHist": 0.0, "close": 1.0}}
+    out = calc_confluence(
+        d1,
+        h4,
+        h1,
+        1.0,
+        {},
+        {"display": "EUR/USD", "type": "forex"},
+        "neutral",
+    )
+    fd = out.get("factorDiagnostics") or {}
+    assert fd.get("diAlignMult") == pytest.approx(0.65)
+    assert fd.get("feedStatus", {}).get("di_align") == "0.65"
+
+
 def test_di_alignment_conflict_is_diagnostic_not_info_log(caplog):
     d1 = {"ema21": 110.0, "ema200": 100.0, "adx": 25.0, "close": 1.0, "atr": 0.0001}
     h4 = {
@@ -1060,8 +1157,8 @@ def test_di_alignment_conflict_is_diagnostic_not_info_log(caplog):
         1.0,
     )
 
-    # DI alignment conflict is now a soft penalty (0.3x), not a hard abort.
-    assert result["feed_status"]["di_align"] == "0.30"
+    # DI alignment conflict is a configurable soft penalty, not a hard abort.
+    assert result["feed_status"]["di_align"] == "0.65"
     assert result["final_score"] > 0.0
     assert "DI alignment conflict" not in caplog.text
 

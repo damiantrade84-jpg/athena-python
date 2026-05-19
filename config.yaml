@@ -333,9 +333,35 @@ ENGINE_A_ADDON_UNSUPPORTED_SPLIT_BY_CLASS:
   stock: 0.55
   index: 0.60
 ENGINE_A_CONVICTION_FLOOR_BY_CLASS:
+  # Forex uses the 0-3 Engine A scale with strict 2.1 majors/crosses floors.
+  # Keep the threshold strict, but restore the old forex score reachability by
+  # applying the conviction-floor blend only for forex groups.
+  forex: 0.60
+  forex_majors: 0.60
+  forex_crosses: 0.60
+  forex_other: 0.60
+  forex_exotics: 0.55
   stock: 0.22
   index: 0.24
   commodity: 0.20
+
+ENGINE_A_ADX_SOURCE_BY_CLASS:
+  # Forex H4 trends frequently lead D1 ADX. Use the stronger D1/H4 ADX value
+  # for Engine A forex scoring while preserving d1_first default elsewhere.
+  forex: max
+  forex_majors: max
+  forex_crosses: max
+  forex_other: max
+  forex_exotics: max
+
+ENGINE_A_DI_ALIGNMENT_MULT_BY_CLASS:
+  # DI is a lagging H4 pressure check. Keep it as a forex penalty, but do not
+  # let a normal pullback cut Engine A scores by 50-70% after the trend gate
+  # already passed.
+  forex:
+    missing: 1.0
+    balanced: 0.85
+    opposed: 0.65
 
 # Optional regime-aware score quality multiplier. This is separate from the
 # existing ATR% scaler; it is disabled by default and class/score_group keyed.
@@ -1068,6 +1094,10 @@ AUTO_TRADE_A_ONLY_WEIGHT:
   default: 0.60
 
   crypto: 0.60
+
+# false = scan trade tier means Engine A cleared scan floor and scan blockers.
+# Live auto-execution still enforces AUTO_TRADE_MIN_CONVICTION.
+ENGINE_A_SCAN_A_ONLY_AUTO_GATE_ENABLED: false
 
 AUTO_TRADE_MAX_DAILY: 10           # Demo mode: max auto-executions per day
 

@@ -15,6 +15,8 @@ from scanner import (
     _classify_engine_b_only_signal,
     _engine_b_independent_direction_probe,
     _make_engine_b_only_signal_stub,
+    _make_engine_b_only_signal_stub_from_blocked_engine_a,
+    _scan_signal_rank,
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -43,6 +45,7 @@ def test_engine_b_only_stub_has_required_independent_fields():
     assert stub["engine_source"] == ENGINE_B_SOURCE
     assert stub["engine"] == "B"
     assert stub["engine_name"] == "Engine B"
+    assert stub["pair"] == "BTCUSDT"
     assert stub["symbol"] == "BTCUSDT"
     assert stub["asset_type"] == "crypto"
     assert stub["direction"] is None
@@ -50,6 +53,42 @@ def test_engine_b_only_stub_has_required_independent_fields():
     assert stub["maxScore"] == 0.0
     assert stub["engine_a_present"] is False
     assert stub["enginesAligned"] is False
+
+
+def test_blocked_engine_a_row_converts_to_explicit_b_only_stub():
+    pair = {"display": "S&P 500", "symbol": "SPX", "type": "index"}
+    blocked_a = {
+        "engine_source": "ENGINE_A",
+        "direction": "neutral",
+        "confluenceScore": 0.0,
+        "scoreNorm": 0.0,
+        "dataFreshness": {
+            "allowed": False,
+            "reason": "STALE_DATA_PRE_SCORING",
+        },
+        "candleFetchMeta": {"H4": {"stale": True}},
+    }
+
+    stub = _make_engine_b_only_signal_stub_from_blocked_engine_a(pair, blocked_a)
+
+    assert stub["engine_source"] == ENGINE_B_SOURCE
+    assert stub["engine"] == "B"
+    assert stub["direction"] is None
+    assert stub["confluenceScore"] == 0.0
+    assert stub["engine_a_present"] is False
+    assert stub["engine_a_blocked"] is True
+    assert stub["engine_a_block_reason"] == "STALE_DATA_PRE_SCORING"
+    assert stub["engine_a_direction"] == "neutral"
+    assert stub["engine_a_dataFreshness"] == blocked_a["dataFreshness"]
+    assert stub["engine_a_candleFetchMeta"] == blocked_a["candleFetchMeta"]
+
+
+def test_scan_rank_handles_b_only_zero_max_score():
+    pair = {"display": "BTCUSDT", "symbol": "BTCUSDT", "type": "crypto"}
+    stub = _make_engine_b_only_signal_stub(pair)
+
+    assert stub["maxScore"] == 0.0
+    assert _scan_signal_rank(stub) == 0.0
 
 
 # ---------------------------------------------------------------------------
