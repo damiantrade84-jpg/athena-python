@@ -1,6 +1,6 @@
 # Threshold recommendation report
 
-_Generated: 2026-05-19 16:23 UTC. Research-only; no live config or execution changes._
+_Generated: 2026-05-19 18:09 UTC. Research-only; no live config or execution changes._
 
 ## Dataset
 

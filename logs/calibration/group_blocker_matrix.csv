@@ -1,0 +1,60 @@
+engine,asset_class,score_group,regime,style,sample_size_accepted,sample_size_rejected,avg_r_multiple,win_rate,primary_failure_reason,secondary_failure_reason,avg_distance_to_threshold,near_threshold_rate,fallback_tp_applied_rate,structural_tp_rate,evidence_strength,recommended_next_experiment,live_change_allowed
+ENGINE_A,(blank),(blank),LOW_VOLATILITY,intraday,76,0,-0.055,0.7105,,,,,,,weak,Outcome review: execution/exit quality and R skew; separate from gate calibration.,False
+ENGINE_A,(blank),(blank),TRENDING,intraday,63,0,0.0278,0.8095,,,,,,,weak,Expand diagnostic + trade sample; walk-forward split before any parameter sweep.,False
+ENGINE_B,(blank),(blank),RANGING,scalp,60,0,-0.0458,0.65,,,,,,,weak,Outcome review: execution/exit quality and R skew; separate from gate calibration.,False
+ENGINE_B,(blank),(blank),RANGING,intraday,58,0,-0.0731,0.5172,,,,,,,weak,Outcome review: execution/exit quality and R skew; separate from gate calibration.,False
+ENGINE_A,(blank),(blank),LOW_VOLATILITY,scalp,27,0,-0.2404,0.6296,,,,,,,insufficient,Enable CALIBRATION_DIAGNOSTICS and collect >=30 JSONL events for this group before comparing rejections.,False
+ENGINE_B,(blank),(blank),TRENDING,intraday,27,0,0.0726,0.6296,,,,,,,insufficient,Enable CALIBRATION_DIAGNOSTICS and collect >=30 JSONL events for this group before comparing rejections.,False
+ENGINE_A,forex,(blank),TREND_PULLBACK,intraday,22,0,-0.1645,0.4545,,,,,,,insufficient,Enable CALIBRATION_DIAGNOSTICS and collect >=30 JSONL events for this group before comparing rejections.,False
+ENGINE_A,(blank),(blank),TRENDING,swing,16,0,-0.225,0.25,,,,,,,insufficient,Enable CALIBRATION_DIAGNOSTICS and collect >=30 JSONL events for this group before comparing rejections.,False
+ENGINE_A,(blank),(blank),TRENDING,scalp,11,0,-0.42,0.3636,,,,,,,insufficient,Enable CALIBRATION_DIAGNOSTICS and collect >=30 JSONL events for this group before comparing rejections.,False
+ENGINE_A,(blank),(blank),RANGING,intraday,9,0,-0.09,0.4444,,,,,,,insufficient,Enable CALIBRATION_DIAGNOSTICS and collect >=30 JSONL events for this group before comparing rejections.,False
+ENGINE_A,(blank),(blank),LOW_VOLATILITY,swing,8,0,0.4137,0.375,,,,,,,insufficient,Enable CALIBRATION_DIAGNOSTICS and collect >=30 JSONL events for this group before comparing rejections.,False
+ENGINE_B,(blank),(blank),LOW_VOLATILITY,scalp,7,0,0.1343,0.7143,,,,,,,insufficient,Enable CALIBRATION_DIAGNOSTICS and collect >=30 JSONL events for this group before comparing rejections.,False
+ENGINE_B,(blank),(blank),RANGING,swing,7,0,-0.1886,0.2857,,,,,,,insufficient,Enable CALIBRATION_DIAGNOSTICS and collect >=30 JSONL events for this group before comparing rejections.,False
+ENGINE_A,(blank),(blank),DEAD RANGING,intraday,6,0,0.0333,0.5,,,,,,,insufficient,Enable CALIBRATION_DIAGNOSTICS and collect >=30 JSONL events for this group before comparing rejections.,False
+ENGINE_B,(blank),(blank),LOW_VOLATILITY,intraday,5,0,-0.1725,0.2,,,,,,,insufficient,Enable CALIBRATION_DIAGNOSTICS and collect >=30 JSONL events for this group before comparing rejections.,False
+ENGINE_A,(blank),(blank),DEVELOPING,swing,4,0,-0.51,0.5,,,,,,,insufficient,Enable CALIBRATION_DIAGNOSTICS and collect >=30 JSONL events for this group before comparing rejections.,False
+ENGINE_A,(blank),(blank),RANGING,scalp,4,0,-0.08,0.5,,,,,,,insufficient,Enable CALIBRATION_DIAGNOSTICS and collect >=30 JSONL events for this group before comparing rejections.,False
+ENGINE_B,(blank),(blank),DEAD RANGING,intraday,4,0,-0.74,0.5,,,,,,,insufficient,Enable CALIBRATION_DIAGNOSTICS and collect >=30 JSONL events for this group before comparing rejections.,False
+ENGINE_B,(blank),(blank),TRENDING,scalp,4,0,0.75,0.5,,,,,,,insufficient,Enable CALIBRATION_DIAGNOSTICS and collect >=30 JSONL events for this group before comparing rejections.,False
+ENGINE_A,(blank),(blank),DEVELOPING,intraday,3,0,0.0967,0.6667,,,,,,,insufficient,Enable CALIBRATION_DIAGNOSTICS and collect >=30 JSONL events for this group before comparing rejections.,False
+ENGINE_A,(blank),(blank),TREND_PULLBACK,intraday,3,0,-0.01,0.6667,,,,,,,insufficient,Enable CALIBRATION_DIAGNOSTICS and collect >=30 JSONL events for this group before comparing rejections.,False
+ENGINE_A,forex,(blank),LONDON_BREAKOUT,intraday,3,0,-0.2833,0.3333,,,,,,,insufficient,Enable CALIBRATION_DIAGNOSTICS and collect >=30 JSONL events for this group before comparing rejections.,False
+ENGINE_B,(blank),(blank),DEVELOPING,intraday,3,0,0.4667,1.0,,,,,,,insufficient,Enable CALIBRATION_DIAGNOSTICS and collect >=30 JSONL events for this group before comparing rejections.,False
+ENGINE_B,(blank),(blank),HH_HL,intraday,3,0,-0.09,0.6667,,,,,,,insufficient,Enable CALIBRATION_DIAGNOSTICS and collect >=30 JSONL events for this group before comparing rejections.,False
+ENGINE_A,(blank),(blank),(blank),intraday,2,0,-0.01,0.0,,,,,,,insufficient,Enable CALIBRATION_DIAGNOSTICS and collect >=30 JSONL events for this group before comparing rejections.,False
+ENGINE_A,(blank),(blank),DEVELOPING,scalp,2,0,0.04,1.0,,,,,,,insufficient,Enable CALIBRATION_DIAGNOSTICS and collect >=30 JSONL events for this group before comparing rejections.,False
+ENGINE_A,commodity,(blank),DEVELOPING,swing,2,0,-0.1,0.0,,,,,,,insufficient,Enable CALIBRATION_DIAGNOSTICS and collect >=30 JSONL events for this group before comparing rejections.,False
+ENGINE_A,crypto,(blank),DEVELOPING,intraday,2,0,-1.09,0.0,,,,,,,insufficient,Enable CALIBRATION_DIAGNOSTICS and collect >=30 JSONL events for this group before comparing rejections.,False
+ENGINE_A,crypto,(blank),TRENDING,intraday,2,0,-1.07,0.0,,,,,,,insufficient,Enable CALIBRATION_DIAGNOSTICS and collect >=30 JSONL events for this group before comparing rejections.,False
+ENGINE_A,stock,(blank),TRENDING,swing,2,0,-0.58,0.0,,,,,,,insufficient,Enable CALIBRATION_DIAGNOSTICS and collect >=30 JSONL events for this group before comparing rejections.,False
+ENGINE_B,(blank),(blank),EXPANSION,intraday,2,0,-0.4,0.5,,,,,,,insufficient,Enable CALIBRATION_DIAGNOSTICS and collect >=30 JSONL events for this group before comparing rejections.,False
+ENGINE_B,(blank),(blank),LH_LL,scalp,2,0,0.24,0.5,,,,,,,insufficient,Enable CALIBRATION_DIAGNOSTICS and collect >=30 JSONL events for this group before comparing rejections.,False
+ENGINE_A,(blank),(blank),(blank),scalp,1,0,0.05,1.0,,,,,,,insufficient,Enable CALIBRATION_DIAGNOSTICS and collect >=30 JSONL events for this group before comparing rejections.,False
+ENGINE_A,(blank),(blank),DEAD RANGING,scalp,1,0,-0.63,0.0,,,,,,,insufficient,Enable CALIBRATION_DIAGNOSTICS and collect >=30 JSONL events for this group before comparing rejections.,False
+ENGINE_A,(blank),(blank),LONDON_BREAKOUT,swing,1,0,1.59,1.0,,,,,,,insufficient,Enable CALIBRATION_DIAGNOSTICS and collect >=30 JSONL events for this group before comparing rejections.,False
+ENGINE_A,(blank),(blank),RANGING,swing,1,0,-1.0,0.0,,,,,,,insufficient,Enable CALIBRATION_DIAGNOSTICS and collect >=30 JSONL events for this group before comparing rejections.,False
+ENGINE_A,forex,(blank),EXPANSION,intraday,1,0,,1.0,,,,,,,insufficient,Enable CALIBRATION_DIAGNOSTICS and collect >=30 JSONL events for this group before comparing rejections.,False
+ENGINE_A,forex,(blank),RANGING,auto,1,0,,1.0,,,,,,,insufficient,Enable CALIBRATION_DIAGNOSTICS and collect >=30 JSONL events for this group before comparing rejections.,False
+ENGINE_A,forex,(blank),TRENDING,intraday,1,0,,1.0,,,,,,,insufficient,Enable CALIBRATION_DIAGNOSTICS and collect >=30 JSONL events for this group before comparing rejections.,False
+ENGINE_A,index,(blank),DEVELOPING,swing,1,0,-0.1,0.0,,,,,,,insufficient,Enable CALIBRATION_DIAGNOSTICS and collect >=30 JSONL events for this group before comparing rejections.,False
+ENGINE_A,stock,(blank),TRENDING,auto,1,0,,1.0,,,,,,,insufficient,Enable CALIBRATION_DIAGNOSTICS and collect >=30 JSONL events for this group before comparing rejections.,False
+ENGINE_B,(blank),(blank),DEAD RANGING,scalp,1,0,-0.09,0.0,,,,,,,insufficient,Enable CALIBRATION_DIAGNOSTICS and collect >=30 JSONL events for this group before comparing rejections.,False
+ENGINE_B,(blank),(blank),DEAD RANGING,swing,1,0,1.26,1.0,,,,,,,insufficient,Enable CALIBRATION_DIAGNOSTICS and collect >=30 JSONL events for this group before comparing rejections.,False
+ENGINE_B,(blank),(blank),HH_HL,scalp,1,0,-0.49,0.0,,,,,,,insufficient,Enable CALIBRATION_DIAGNOSTICS and collect >=30 JSONL events for this group before comparing rejections.,False
+ENGINE_B,(blank),(blank),LH_LL,intraday,1,0,0.0,1.0,,,,,,,insufficient,Enable CALIBRATION_DIAGNOSTICS and collect >=30 JSONL events for this group before comparing rejections.,False
+ENGINE_B,(blank),(blank),NONE,intraday,1,0,0.25,1.0,,,,,,,insufficient,Enable CALIBRATION_DIAGNOSTICS and collect >=30 JSONL events for this group before comparing rejections.,False
+ENGINE_B,(blank),(blank),NONE,swing,1,0,-0.45,0.0,,,,,,,insufficient,Enable CALIBRATION_DIAGNOSTICS and collect >=30 JSONL events for this group before comparing rejections.,False
+ENGINE_B,(blank),(blank),TREND_PULLBACK,swing,1,0,-0.19,0.0,,,,,,,insufficient,Enable CALIBRATION_DIAGNOSTICS and collect >=30 JSONL events for this group before comparing rejections.,False
+ENGINE_B,stock,(blank),TRENDING,swing,1,0,-0.99,0.0,,,,,,,insufficient,Enable CALIBRATION_DIAGNOSTICS and collect >=30 JSONL events for this group before comparing rejections.,False
+ENGINE_B,forex,(blank),TRENDING,(blank),0,18,,,checklist,(blank),2.2778,1.0,,,insufficient,Enable CALIBRATION_DIAGNOSTICS and collect >=30 JSONL events for this group before comparing rejections.,False
+ENGINE_B,(blank),(blank),TRENDING,(blank),0,16,,,checklist,(blank),1.85,1.0,,,insufficient,Enable CALIBRATION_DIAGNOSTICS and collect >=30 JSONL events for this group before comparing rejections.,False
+ENGINE_B,(blank),(blank),RANGING,(blank),0,8,,,min_score,(blank),-0.5,0.5,0.0,1.0,insufficient,Enable CALIBRATION_DIAGNOSTICS and collect >=30 JSONL events for this group before comparing rejections.,False
+ENGINE_B,forex,(blank),RANGING,(blank),0,8,,,min_score,(blank),-0.5,0.5,,,insufficient,Enable CALIBRATION_DIAGNOSTICS and collect >=30 JSONL events for this group before comparing rejections.,False
+ENGINE_A,forex,(blank),TRENDING,D1/H4/H1,0,4,,,below_engine_a_threshold,(blank),-1.45,0.0,,,insufficient,Enable CALIBRATION_DIAGNOSTICS and collect >=30 JSONL events for this group before comparing rejections.,False
+ENGINE_B,(blank),(blank),HIGH_VOLATILITY,(blank),0,4,,,(blank),(blank),0.0,1.0,,,insufficient,Enable CALIBRATION_DIAGNOSTICS and collect >=30 JSONL events for this group before comparing rejections.,False
+ENGINE_B,stock,(blank),TRENDING,(blank),0,4,,,min_score,(blank),0.0,0.5,,,insufficient,Enable CALIBRATION_DIAGNOSTICS and collect >=30 JSONL events for this group before comparing rejections.,False
+ENGINE_A,crypto,(blank),TRENDING,D1/H4/H1,0,2,,,below_engine_a_threshold,(blank),-0.8,0.0,,,insufficient,Enable CALIBRATION_DIAGNOSTICS and collect >=30 JSONL events for this group before comparing rejections.,False
+ENGINE_A,forex,(blank),RANGING,D1/H4/H1,0,2,,,below_engine_a_threshold,(blank),-2.09,0.0,,,insufficient,Enable CALIBRATION_DIAGNOSTICS and collect >=30 JSONL events for this group before comparing rejections.,False
+ENGINE_A,stock,(blank),TRENDING,D1/H4/H1,0,2,,,(blank),(blank),0.15,1.0,,,insufficient,Enable CALIBRATION_DIAGNOSTICS and collect >=30 JSONL events for this group before comparing rejections.,False

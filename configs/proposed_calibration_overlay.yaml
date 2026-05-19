@@ -6,7 +6,7 @@
 # =============================================================================
 
 PROPOSED_OVERLAY_META:
-  version: "2026-05-19-r5"
+  version: "2026-05-19-r7"
   status: proposed_inactive
   import_into_live_config: false
   live_behavior_changed_by_this_file: false
