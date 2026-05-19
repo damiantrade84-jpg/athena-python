@@ -123,7 +123,41 @@
       "PowerShell(Get-CimInstance *)",
       "PowerShell(Write-Output \"===Audit entries since bot restart \\(15:15:25\\)===\"; Get-Content \"C:\\\\dev\\\\athena-python\\\\logs\\\\ai_review\\\\ai_review_audit.jsonl\" -Tail 30 | ForEach-Object { $j = $_ | ConvertFrom-Json; $ts = [datetime]::Parse\\($j.timestamp\\); if \\($ts -ge [datetime]::Parse\\(\"2026-05-05T13:15:25Z\"\\)\\) { [PSCustomObject]@{ Time = $ts.ToLocalTime\\(\\).ToString\\(\"HH:mm:ss\"\\); Symbol = $j.symbol; Type = $j.review_type; State = $j.ai_review_state; Conf = $j.ai_confidence; SchemaOK = $j.schema_valid } } } | Format-Table -AutoSize)",
       "PowerShell(Write-Output \"===All audit entries since restart 15:15:25===\"; Get-Content \"C:\\\\dev\\\\athena-python\\\\logs\\\\ai_review\\\\ai_review_audit.jsonl\" -Tail 50 | ForEach-Object { try { $j = $_ | ConvertFrom-Json; $ts = [datetime]::Parse\\($j.timestamp\\); if \\($ts -ge [datetime]::Parse\\(\"2026-05-05T13:15:25Z\"\\)\\) { [PSCustomObject]@{ Time = $ts.ToLocalTime\\(\\).ToString\\(\"HH:mm:ss\"\\); Symbol = $j.symbol; Type = $j.review_type; State = $j.ai_review_state; SchemaOK = $j.schema_valid; HasImg = $j.has_chart_image } } } catch {} } | Format-Table -AutoSize)",
-      "PowerShell(Select-String *)"
+      "PowerShell(Select-String *)",
+      "Bash(ATHENA_REAL_ORDERS_CONFIRM=I_UNDERSTAND_REAL_ORDER_RISK ./.venv/Scripts/python.exe -m pytest tests/test_engine_b_diagnostics.py -q -k \"d1_pd_array_conflict_window_is_configurable or analyze_structure_falls_back_to_rr_when_resistance\")",
+      "Bash(git stash *)",
+      "Read(//tmp/**)",
+      "Bash(awk '/^diff --git a\\\\/market_structure.py/,/^diff --git/' /tmp/full_stash.diff)",
+      "Bash(ATHENA_REAL_ORDERS_CONFIRM=I_UNDERSTAND_REAL_ORDER_RISK ./.venv/Scripts/python.exe -c ' *)",
+      "Bash(ATHENA_REAL_ORDERS_CONFIRM=I_UNDERSTAND_REAL_ORDER_RISK ./.venv/Scripts/python.exe -m pytest tests/test_engine_b_rr_basis.py -q)",
+      "Bash(ATHENA_REAL_ORDERS_CONFIRM=I_UNDERSTAND_REAL_ORDER_RISK ./.venv/Scripts/python.exe -m pytest tests/test_engine_b_diagnostics.py -q --deselect tests/test_engine_b_diagnostics.py::test_d1_pd_array_conflict_window_is_configurable --deselect tests/test_engine_b_diagnostics.py::test_analyze_structure_falls_back_to_rr_when_resistance_is_too_close)",
+      "Bash(ATHENA_REAL_ORDERS_CONFIRM=I_UNDERSTAND_REAL_ORDER_RISK ./.venv/Scripts/python.exe -m pytest tests/test_engine_b_full_scan_audit.py -q)",
+      "Bash(pip show *)",
+      "Bash(where pytest *)",
+      "Bash(\"C:/Users/damia/AppData/Local/Programs/Python/Python313/python.exe\" -m pytest tests/test_scalp_engine.py -x --tb=short)",
+      "Bash(\"C:/Users/damia/AppData/Local/Programs/Python/Python313/python.exe\" -m pytest tests/test_scalp_engine.py tests/test_scalp_audit_8577d0_fixes.py --tb=short)",
+      "Bash(\"C:/Users/damia/AppData/Local/Programs/Python/Python313/python.exe\" -m pytest tests/test_scalp_engine.py::test_execution_min_grade_a_marks_b_as_watchlist_not_skip tests/test_scalp_engine.py::test_run_scalp_scan_surfaces_grade_c_as_watchlist tests/test_scalp_engine.py::test_run_scalp_scan_surfaces_fee_guard_candidate -v --tb=long)",
+      "Bash(\"C:/Users/damia/AppData/Local/Programs/Python/Python313/python.exe\" -m pytest tests/test_scalp_engine.py::test_scalp_fetch_candles_crypto_m1_prefers_ws tests/test_scalp_engine.py::test_scalp_fetch_candles_crypto_m1_falls_back_when_ws_stale --tb=line)",
+      "Bash(\"C:/Users/damia/AppData/Local/Programs/Python/Python313/python.exe\" -m pytest tests/test_scalp_engine.py tests/test_scalp_audit_8577d0_fixes.py --tb=line)",
+      "Bash(awk NR>=122100 && NR<=122275 *)",
+      "Bash(tasklist /FI \"IMAGENAME eq python.exe\" /FO CSV)",
+      "PowerShell(Get-Command *)",
+      "Bash(PYTHONIOENCODING=utf-8 tail -n 200 logs/threshold_audit/signal_funnel.jsonl)",
+      "Bash(PYTHONIOENCODING=utf-8 python -c ' *)",
+      "Bash(findstr /n /c:\"forex_majors\" /c:\"forex_crosses\" /c:\"ENGINE_A_SCORE_GROUP_THRESHOLDS\")",
+      "Bash(git show *)",
+      "Bash(powershell *)",
+      "PowerShell(Get-Content C:\\\\dev\\\\athena-python\\\\logs\\\\threshold_audit\\\\signal_funnel.jsonl -Tail 500 | ForEach-Object { try { $j = $_ | ConvertFrom-Json; if \\($j.asset_type -eq 'forex'\\) { '{0,-10} raw={1,5:F2}  trend={2,6:F2}  mom={3,4:F2}  addon={4,4:F2}  coh={5,4:F2}  tier={6}' -f $j.symbol, $j.engine_a_raw_score, $j.engine_a_trend_score, $j.engine_a_momentum_score, $j.engine_a_addon_score, $j.factor_diagnostics.trendCoherence.coherence_ratio, $j.scan_tier } } catch {} } | Select-Object -Last 40)",
+      "PowerShell(Get-Content C:\\\\dev\\\\athena-python\\\\logs\\\\calibration_diagnostics\\\\calibration_events.jsonl -Tail 600 | ForEach-Object { try { $j = $_ | ConvertFrom-Json; if \\($j.engine -eq 'engine_a' -and $j.asset_class -eq 'forex' -and $j.timestamp -match '2026-05-19'\\) { '{0,-10} score={1,5:F2}/{2:F2} trend={3,5:F2} adx_m={4,4:F2} di_m={5,4} dr_m={6,4:F2} vol_s={7,4:F2}' -f $j.pair, $j.final_score, $j.threshold, $j.trend_score, $j.adx_mult, $j.di_align_mult, $j.dir_ramp_mult, $j.volatility_scaler } } catch {} } | Select-Object -Last 35)"
     ]
-  }
+  },
+  "disabledMcpjsonServers": [
+    "context7",
+    "athena-audit",
+    "athena-microstructure",
+    "athena-candle-cache",
+    "athena-carry",
+    "athena-cot",
+    "playwright"
+  ]
 }

@@ -35,7 +35,6 @@ Revisit only after:
 - A held-out/OOS sweep confirms expectancy or risk improvement without trade-count collapse.
 
 ---
----
 
 ## DI alignment opposed multiplier (0.3) — audit 2026-05-19
 

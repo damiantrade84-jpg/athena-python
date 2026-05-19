@@ -353,7 +353,13 @@ def _ld_build_engine_a_row(sig: dict) -> dict:
     score = sig.get("confluenceScore") or sig.get("score") or 0.0
     max_score = sig.get("maxScore") or 3.0
     direction = sig.get("direction")
-    threshold = sig.get("threshold") or sig.get("minThreshold")
+    threshold = (
+        sig.get("threshold")
+        or sig.get("liveThreshold")
+        or sig.get("scanThresholdEffective")
+        or sig.get("scanThreshold")
+        or sig.get("minThreshold")
+    )
     # Derive threshold from pair profile if not in signal
     if threshold is None:
         try:

@@ -8,6 +8,7 @@ import {
   priceDecimals,
   confluencePct,
   convictionTier,
+  engineAThreshold,
   regimeLabel,
   sessionLabel,
 } from '@/lib/athenaFormat';
@@ -44,9 +45,13 @@ export default function EngineASignalCard({
   const convT = convictionTier(Number.isFinite(conv) ? conv : null);
   const score = toNum(signal.confluenceScore ?? signal.score, NaN);
   const max = toNum(signal.maxScore, NaN);
-  const threshold = toNum(signal.threshold, NaN);
-  const passed = Number.isFinite(score) && Number.isFinite(threshold) && score >= threshold;
+  const threshold = engineAThreshold(signal);
+  const passed = Number.isFinite(score) && threshold != null && score >= threshold;
   const fs = signal.factorScores || {};
+  const fd = signal.factorDiagnostics || {};
+  const diAlign = toNum(fd.diAlignMult, NaN);
+  const adxMult = toNum(fd.adxMultiplier, NaN);
+  const dirRamp = toNum(fd.directionalRampMult, NaN);
   const pair = signal.display || signal.pair || signal.symbol || '—';
   const type = signal.type;
   const livePrice = toNum(signal.livePrice, NaN);
@@ -106,7 +111,7 @@ export default function EngineASignalCard({
               <span className={cn('font-mono', passed ? 'text-long' : 'text-muted-foreground')}>
                 {fmtNum(score, 2)}/{fmtNum(max, 2)}
               </span>
-              {Number.isFinite(threshold) && <span className="ml-1">≥ {fmtNum(threshold, 2)}</span>}
+              {threshold != null && <span className="ml-1">≥ {fmtNum(threshold, 2)}</span>}
             </span>
             <span className="font-mono">{conf != null ? `${conf.toFixed(0)}%` : '—'}</span>
           </div>
@@ -124,6 +129,25 @@ export default function EngineASignalCard({
             Final confluence blends trend, momentum quality, ADX/session gates and addon — it is{' '}
             <span className="font-medium text-foreground/80">not</span> the sum of the factor boxes below.
           </p>
+          {(Number.isFinite(diAlign) || Number.isFinite(adxMult) || Number.isFinite(dirRamp)) && (
+            <p className="text-[9px] text-muted-foreground leading-snug">
+              Score chain:{' '}
+              {Number.isFinite(diAlign) && (
+                <span className={diAlign <= 0.35 ? 'text-short font-medium' : 'text-foreground/80'}>
+                  DI×{fmtNum(diAlign, 2)}
+                </span>
+              )}
+              {Number.isFinite(adxMult) && (
+                <span>{Number.isFinite(diAlign) ? ' · ' : ''}ADX×{fmtNum(adxMult, 2)}</span>
+              )}
+              {Number.isFinite(dirRamp) && (
+                <span>{Number.isFinite(diAlign) || Number.isFinite(adxMult) ? ' · ' : ''}ramp×{fmtNum(dirRamp, 2)}</span>
+              )}
+              {Number.isFinite(diAlign) && diAlign <= 0.35 && (
+                <span className="text-short"> — +DI/-DI opposes EMA trend (main forex suppressor)</span>
+              )}
+            </p>
+          )}
           {signal.engine_b != null && (
             <p className="text-[9px] text-muted-foreground leading-snug border-t border-border/40 pt-1 mt-1">
               Engine B attached — see detail panel

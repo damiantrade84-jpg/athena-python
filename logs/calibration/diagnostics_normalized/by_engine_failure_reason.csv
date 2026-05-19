@@ -1,6 +1,2 @@
 engine,failure_reason,event_count,passed_count,failed_count
-ENGINE_B,passed,32,32,0
-ENGINE_B,checklist,16,0,16
-ENGINE_B,min_score,10,0,10
-ENGINE_A,below_engine_a_threshold,8,0,8
-ENGINE_A,passed,2,2,0
+ENGINE_A,below_engine_a_threshold,21,0,21

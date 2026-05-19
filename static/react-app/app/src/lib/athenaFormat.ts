@@ -34,6 +34,23 @@ export function fmtScore(score: unknown, max: unknown, decimals = 2): string {
   return `${fmtNum(score, decimals)} / ${fmtNum(max, decimals)}`;
 }
 
+/** Resolve Engine A scan threshold from API payload (field names differ by route). */
+export function engineAThreshold(sig: EngineASignal | null | undefined): number | null {
+  if (!sig) return null;
+  const candidates = [
+    sig.threshold,
+    (sig as Record<string, unknown>).liveThreshold,
+    (sig as Record<string, unknown>).scanThresholdEffective,
+    (sig as Record<string, unknown>).scanThreshold,
+    (sig as Record<string, unknown>).scanThresholdStatic,
+  ];
+  for (const raw of candidates) {
+    const n = toNum(raw, NaN);
+    if (Number.isFinite(n) && n > 0) return n;
+  }
+  return null;
+}
+
 /** Compute a confluence percent anchored to the per-pair threshold (~67% = passing).
  *  Prefer backend-computed confluencePct when available (it rounds to integer).
  */
@@ -44,10 +61,10 @@ export function confluencePct(sig: EngineASignal | null | undefined): number | n
     return Math.max(0, Math.min(100, sig.confluencePct));
   }
   const score = toNum(sig.confluenceScore ?? sig.score, NaN);
-  const threshold = toNum(sig.threshold, NaN);
+  const threshold = engineAThreshold(sig);
   const max = toNum(sig.maxScore, NaN);
   if (!Number.isFinite(score)) return null;
-  if (Number.isFinite(threshold) && threshold > 0) {
+  if (threshold != null && threshold > 0) {
     // Anchor: at threshold show ~67%, scale linearly above/below
     const pct = Math.round((score / threshold) * 67);
     return Math.max(0, Math.min(100, pct));

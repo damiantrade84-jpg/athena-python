@@ -12239,6 +12239,7 @@ def analyze_pair(
         "scoreNorm": round(score_norm, 4),
         "votes": res["votes"],
         "maxScore": max_score,
+        "threshold": _threshold,
         "liveThreshold": _threshold,
         "rawScorePct": round((float(res["score"]) / float(max_score) * 100) if max_score else 0, 2),
         "thresholdProgressPct": _confluence_pct,
