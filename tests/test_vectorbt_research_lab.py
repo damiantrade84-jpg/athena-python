@@ -393,6 +393,7 @@ def test_run_portfolio_falls_back_when_vectorbt_returns_zero_with_signals(monkey
         shorts,
         fees=0.0,
         slippage=0.0,
+        backtest_exit_config={"BACKTEST_EXIT_MODE": "live_exit"},
     )
 
     assert stats["trade_count"] == 2
@@ -467,6 +468,7 @@ def test_evaluate_strategy_records_signal_and_simulation_audit_fields(monkeypatc
         fees=0.0,
         slippage=0.0,
         min_trades=1,
+        backtest_exit_config={"BACKTEST_EXIT_MODE": "live_exit"},
     )
 
     assert result.entry_signal_count == 2
@@ -1500,5 +1502,100 @@ class TestSafetyGuards:
     def test_research_lab_does_not_import_executor(self):
         _check_no_live_imports()
 
-    def test_no_risk_engine_import(self):
-        assert "risk_engine" not in sys.modules or "risk_engine" in _CURRENT_FORBIDDEN_BASELINE
+def test_no_risk_engine_import():
+    assert "risk_engine" not in sys.modules or "risk_engine" in _CURRENT_FORBIDDEN_BASELINE
+
+
+def test_research_metrics_default_to_triple_barrier_exit_metadata():
+    from athena_research.metrics import evaluate_strategy
+    from athena_research.strategies import StrategySpec
+
+    df = _make_ohlcv(n=80, seed=99)
+    entries = pd.Series(False, index=df.index)
+    exits = pd.Series(False, index=df.index)
+    entries.iloc[20] = True
+    entries.iloc[35] = True
+
+    spec = StrategySpec(
+        name="ema_cross",
+        family="trend_momentum",
+        params={},
+        direction="long",
+    )
+    metrics = evaluate_strategy(
+        df=df,
+        signals={"entries": entries, "exits": exits},
+        spec=spec,
+        run_id="r",
+        symbol="EUR/USD",
+        asset_class="forex",
+        timeframe="H1",
+        fees=0.0,
+        slippage=0.0,
+        min_trades=1,
+        backtest_exit_config={
+            "BACKTEST_EXIT_MODE": "triple_barrier",
+            "BACKTEST_TRIPLE_BARRIER": {
+                "target_source": "atr",
+                "atr_length": 3,
+                "sl_mult": 1.0,
+                "tp_mult": 1.5,
+                "max_hold_bars": {"H1": 4},
+                "same_bar_policy": "sl_first",
+            },
+        },
+    )
+
+    assert metrics.backtest_exit_mode == "triple_barrier"
+    assert metrics.same_bar_policy == "sl_first"
+    assert metrics.atr_length == 3
+    assert metrics.exit_reason_breakdown
+    _check_no_live_imports()
+
+
+def test_research_reporting_groups_by_exit_mode(tmp_path):
+    from athena_research.metrics import StrategyMetrics
+    from athena_research.reporting import generate_all_reports
+
+    row = StrategyMetrics(
+        run_id="r",
+        symbol="EUR/USD",
+        asset_class="forex",
+        timeframe="H1",
+        family="trend_momentum",
+        strategy_name="ema_cross",
+        params_str="",
+        direction="long",
+        trade_count=3,
+        win_rate=0.67,
+        profit_factor=1.2,
+        avg_return=0.01,
+        expectancy=0.01,
+        max_drawdown=-0.01,
+        sharpe=1.0,
+        sqn=1.0,
+        gross_return=0.02,
+        net_return=0.02,
+        is_return=0.01,
+        oos_return=0.01,
+        robustness_score=0.7,
+        status="WEAK_CANDIDATE",
+        engine="ENGINE_A",
+        market_group="forex",
+        backtest_exit_mode="triple_barrier",
+        exit_reason_breakdown="tp=2|sl=1",
+        same_bar_policy="sl_first",
+        atr_length=14,
+    )
+    run_dir = generate_all_reports(
+        [row],
+        tmp_path,
+        "r",
+        {"mode": "tiny", "symbol_count": 1, "families": ["trend_momentum"], "backtest_exit_mode": "triple_barrier"},
+    )
+
+    assert (run_dir / "by_backtest_exit_mode.csv").exists()
+    assert (run_dir / "by_engine_asset_timeframe_family_exit_mode.csv").exists()
+    summary = (run_dir / "research_report.md").read_text(encoding="utf-8")
+    assert "Backtest exit mode" in summary
+    assert "triple_barrier" in summary

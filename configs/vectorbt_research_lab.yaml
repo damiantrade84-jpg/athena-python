@@ -18,6 +18,39 @@ research_lab:
   slippage:
     default: 0.0002
 
+  # Research/backtest-only exit baseline. This isolates entry/indicator edge
+  # from live ATR/RR execution and timed-exit behavior.
+  backtest_exit:
+    BACKTEST_EXIT_MODE: triple_barrier  # baseline_r | atr_baseline | triple_barrier | live_exit
+    BACKTEST_BASELINE_R:
+      sl_r: 1.0
+      tp_r: 1.5
+      max_hold_bars:
+        M15: 12
+        H1: 24
+        H4: 18
+        D1: 10
+    BACKTEST_ATR_BASELINE:
+      atr_length: 14
+      sl_atr: 1.0
+      tp_atr: 1.5
+      max_hold_bars:
+        M15: 12
+        H1: 24
+        H4: 18
+        D1: 10
+    BACKTEST_TRIPLE_BARRIER:
+      target_source: atr
+      atr_length: 14
+      sl_mult: 1.0
+      tp_mult: 1.5
+      max_hold_bars:
+        M15: 12
+        H1: 24
+        H4: 18
+        D1: 10
+      same_bar_policy: sl_first
+
   # ── Tiny validation run (first run, limited scope) ──────────────────────
   tiny_run:
     symbols:

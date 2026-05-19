@@ -36,6 +36,7 @@ OUTPUT_COLUMNS = [
     "market_group", "pair_group", "timeframe_zone", "session_bucket",
     "structure_context", "baseline_delta_pf", "baseline_delta_oos",
     "sample_ok", "recommendation",
+    "backtest_exit_mode", "exit_reason_breakdown", "same_bar_policy", "atr_length",
     "implementation_verdict", "implementation_scope", "implementation_blockers",
 ]
 
@@ -395,6 +396,14 @@ def write_csvs(df: pd.DataFrame, run_dir: Path) -> list[Path]:
         _save(_engine_component_audit(df, "ENGINE_A"), "engine_a_component_audit.csv")
         _save(_engine_component_audit(df, "ENGINE_B"), "engine_b_component_audit.csv")
 
+    if {"engine", "asset_class", "timeframe", "family", "backtest_exit_mode"}.issubset(df.columns):
+        _save(
+            _audit_agg(df, ["engine", "asset_class", "timeframe", "family", "backtest_exit_mode"]),
+            "by_engine_asset_timeframe_family_exit_mode.csv",
+        )
+    if "backtest_exit_mode" in df.columns:
+        _save(_group_agg(df, "backtest_exit_mode"), "by_backtest_exit_mode.csv")
+
     if "market_group" in df.columns:
         _save(_group_context_breakdown(df), "group_breakdown.csv")
 
@@ -603,6 +612,7 @@ def write_markdown_report(df: pd.DataFrame, run_dir: Path, run_id: str, run_meta
     a(f"**Run ID:** `{run_id}`  **Generated:** {ts}  ")
     a(f"**Mode:** {run_meta.get('mode', 'research')}  **Symbols:** {run_meta.get('symbol_count', '?')}  "
       f"**Families:** {run_meta.get('families', '?')}")
+    a(f"**Backtest exit mode:** `{run_meta.get('backtest_exit_mode', 'triple_barrier')}`")
     a("")
     a("> **IMPORTANT:** These are backtest discovery findings at intentionally lower thresholds.")
     a("> Do NOT copy these thresholds into live engine gates.")
@@ -643,6 +653,16 @@ def write_markdown_report(df: pd.DataFrame, run_dir: Path, run_id: str, run_meta
             a(_df_to_md(warn_agg))
         else:
             a("- Simulator warnings: none")
+        if "backtest_exit_mode" in df.columns:
+            exit_mode_counts = df["backtest_exit_mode"].fillna("").astype(str).value_counts().rename_axis("backtest_exit_mode").reset_index(name="rows")
+            a("")
+            a("### Exit Baseline")
+            a(_df_to_md(exit_mode_counts))
+        if "exit_reason_breakdown" in df.columns:
+            reason_counts = df["exit_reason_breakdown"].fillna("").astype(str)
+            reason_counts = reason_counts[reason_counts != ""].value_counts().rename_axis("exit_reason_breakdown").reset_index(name="rows")
+            if not reason_counts.empty:
+                a(_df_to_md(reason_counts.head(20)))
     a("")
 
     a("## Implementation Readiness")

@@ -135,6 +135,7 @@ def _run_symbol_tf(
     is_pct: float,
     min_trades: int,
     data_source: str = "",
+    backtest_exit_config: Optional[dict] = None,
 ) -> list[StrategyMetrics]:
     """Run all strategy specs on one symbol/TF combination."""
     results = []
@@ -161,6 +162,7 @@ def _run_symbol_tf(
                 min_trades=min_trades,
                 freq=freq,
                 data_source=data_source,
+                backtest_exit_config=backtest_exit_config,
             )
             results.append(metrics)
         except Exception as e:
@@ -232,6 +234,7 @@ def run_research(
     is_pct = float(cfg.get("is_pct", 0.70))
     min_trades = int(cfg.get("min_trades", 20))
     strategy_params = cfg.get("strategies", {})
+    backtest_exit_config = cfg.get("backtest_exit", {})
     if trading_style is None and active_zones:
         if len(set(active_zones)) == 1 and active_zones[0] in {"scalp", "intra", "swing"}:
             trading_style = active_zones[0]
@@ -380,7 +383,7 @@ def run_research(
                 _run_symbol_tf,
                 symbol, tf, ohlcv, pair_specs,
                 run_id, fees_cfg, slippage, is_pct, min_trades,
-                prov.data_source,
+                prov.data_source, backtest_exit_config,
             )
             tasks.append(future)
             executed_combination_count += len(pair_specs)
@@ -449,6 +452,8 @@ def run_research(
         "max_bars_by_timeframe": max_bars_by_timeframe,
         "market_group": market_group,
         "trading_style": trading_style,
+        "backtest_exit_mode": (backtest_exit_config or {}).get("BACKTEST_EXIT_MODE", "triple_barrier"),
+        "backtest_exit_config": backtest_exit_config,
     }
     try:
         run_dir = generate_all_reports(all_results, output_dir, run_id, run_meta)

@@ -357,6 +357,28 @@ CONFIG: dict = {
     "BT_BOOTSTRAP_CI_ITERATIONS": 1000,
     "BT_MIN_TRADES_FOR_PSR_RELIABILITY": 30,
     "BT_LOW_SAMPLE_SQ_WARN_TRADES": 30,
+    # Research/backtest-only exit baselines. These keys must not be used by
+    # live scanner, risk, broker, guardian, or timed-exit runtime code.
+    "BACKTEST_EXIT_MODE": "triple_barrier",
+    "BACKTEST_BASELINE_R": {
+        "sl_r": 1.0,
+        "tp_r": 1.5,
+        "max_hold_bars": {"M15": 12, "H1": 24, "H4": 18, "D1": 10},
+    },
+    "BACKTEST_ATR_BASELINE": {
+        "atr_length": 14,
+        "sl_atr": 1.0,
+        "tp_atr": 1.5,
+        "max_hold_bars": {"M15": 12, "H1": 24, "H4": 18, "D1": 10},
+    },
+    "BACKTEST_TRIPLE_BARRIER": {
+        "target_source": "atr",
+        "atr_length": 14,
+        "sl_mult": 1.0,
+        "tp_mult": 1.5,
+        "max_hold_bars": {"M15": 12, "H1": 24, "H4": 18, "D1": 10},
+        "same_bar_policy": "sl_first",
+    },
     "BT_SLIPPAGE_MODEL": {
         "ENABLED": True,
         "K1_TICK_MULT": 1.0,

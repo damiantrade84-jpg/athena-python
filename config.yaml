@@ -535,6 +535,41 @@ BT_AUTO_TOGGLE: false
 
 BT_PERCENTILE_FILTER: false
 
+# Research/backtest-only exit baselines. These do not drive live scanner,
+# guardian, broker execution, risk shield, Telegram execution, or timed exits.
+BACKTEST_EXIT_MODE: triple_barrier  # baseline_r | atr_baseline | triple_barrier | live_exit
+
+BACKTEST_BASELINE_R:
+  sl_r: 1.0
+  tp_r: 1.5
+  max_hold_bars:
+    M15: 12
+    H1: 24
+    H4: 18
+    D1: 10
+
+BACKTEST_ATR_BASELINE:
+  atr_length: 14
+  sl_atr: 1.0
+  tp_atr: 1.5
+  max_hold_bars:
+    M15: 12
+    H1: 24
+    H4: 18
+    D1: 10
+
+BACKTEST_TRIPLE_BARRIER:
+  target_source: atr
+  atr_length: 14
+  sl_mult: 1.0
+  tp_mult: 1.5
+  max_hold_bars:
+    M15: 12
+    H1: 24
+    H4: 18
+    D1: 10
+  same_bar_policy: sl_first
+
 
 
 # ── Engine B (Naked Market Structure) thresholds ──────────────────────────────

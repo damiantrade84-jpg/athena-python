@@ -15,6 +15,8 @@ from typing import Optional
 import numpy as np
 import pandas as pd
 
+from backtest_exits import calculate_backtest_exit, normalized_backtest_exit_config
+
 log = logging.getLogger(__name__)
 
 # ─── Result schema ────────────────────────────────────────────────────────────
@@ -130,6 +132,10 @@ class StrategyMetrics:
     baseline_delta_oos: float = float("nan")
     sample_ok: bool = False
     recommendation: str = ""
+    backtest_exit_mode: str = ""
+    exit_reason_breakdown: str = ""
+    same_bar_policy: str = ""
+    atr_length: float = float("nan")
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -147,6 +153,9 @@ def run_portfolio(
     slippage: float = 0.0002,
     freq: str = "1h",
     init_cash: float = 10_000.0,
+    timeframe: str = "H1",
+    backtest_exit_config: Optional[dict] = None,
+    df: Optional[pd.DataFrame] = None,
 ) -> dict:
     """
     Run VectorBT portfolio simulation.  Falls back to manual pandas backtester
@@ -169,7 +178,28 @@ def run_portfolio(
         stats["simulation_warning"] = reason
         return stats
 
-    # Try VectorBT
+    exit_cfg = normalized_backtest_exit_config(backtest_exit_config)
+    exit_mode = str(exit_cfg.get("BACKTEST_EXIT_MODE") or "triple_barrier").lower()
+    if exit_mode != "live_exit":
+        if df is None:
+            return {
+                "trade_count": 0,
+                "simulation_backend": "research_exit_baseline",
+                "simulation_warning": "missing_ohlcv_for_backtest_exit_mode",
+                "backtest_exit_mode": exit_mode,
+            }
+        return _baseline_exit_portfolio(
+            df=df,
+            entries=entries,
+            short_entries=short_entries,
+            fees=fees,
+            slippage=slippage,
+            freq=freq,
+            timeframe=timeframe,
+            backtest_exit_config=exit_cfg,
+        )
+
+    # Try VectorBT for explicit live-exit parity simulation only.
     try:
         stats = _vbt_portfolio(close, entries, exits, short_entries, short_exits,
                                fees, slippage, freq, init_cash)
@@ -339,6 +369,139 @@ def _pandas_portfolio(close, entries, exits, short_entries, short_exits, fees, s
     )
 
 
+def _baseline_exit_portfolio(
+    df: pd.DataFrame,
+    entries: pd.Series,
+    short_entries: Optional[pd.Series],
+    fees: float,
+    slippage: float,
+    freq: str,
+    timeframe: str,
+    backtest_exit_config: dict,
+) -> dict:
+    """Research baseline portfolio using explicit TP/SL/timeout exits."""
+    required = {"open", "high", "low", "close"}
+    if not required.issubset(set(df.columns)):
+        return {
+            "trade_count": 0,
+            "simulation_backend": "research_exit_baseline",
+            "simulation_warning": "missing_ohlcv_columns",
+            "backtest_exit_mode": backtest_exit_config.get("BACKTEST_EXIT_MODE"),
+        }
+
+    work = df.copy()
+    candles = work.reset_index().rename(columns={"index": "timestamp"}).to_dict("records")
+    close = work["close"]
+    long_entries = entries.reindex(work.index, fill_value=False).fillna(False).astype(bool)
+    short_entries = (
+        short_entries.reindex(work.index, fill_value=False).fillna(False).astype(bool)
+        if short_entries is not None
+        else pd.Series(False, index=work.index)
+    )
+    atr_len = int(
+        (backtest_exit_config.get("BACKTEST_TRIPLE_BARRIER", {}) or {}).get(
+            "atr_length",
+            (backtest_exit_config.get("BACKTEST_ATR_BASELINE", {}) or {}).get("atr_length", 14),
+        )
+        or 14
+    )
+    atr_series = _research_atr(work, atr_len)
+
+    trade_returns: list[float] = []
+    trade_durations: list[int] = []
+    exit_reasons: dict[str, int] = {}
+    invalid_reasons: dict[str, int] = {}
+    equity = [1.0]
+    current_eq = 1.0
+    exposure_mask: list[bool] = []
+    i = 0
+    n = len(work)
+    mode = str(backtest_exit_config.get("BACKTEST_EXIT_MODE") or "triple_barrier").lower()
+    same_bar_policy = ""
+    while i < n - 1:
+        side = None
+        if bool(long_entries.iloc[i]):
+            side = "LONG"
+            entry_price = float(close.iloc[i]) * (1 + slippage)
+        elif bool(short_entries.iloc[i]):
+            side = "SHORT"
+            entry_price = float(close.iloc[i]) * (1 - slippage)
+        if not side:
+            exposure_mask.append(False)
+            equity.append(current_eq)
+            i += 1
+            continue
+
+        result = calculate_backtest_exit(
+            candles,
+            i,
+            entry_price,
+            side,
+            timeframe,
+            mode=mode,
+            config=backtest_exit_config,
+            atr_series=atr_series,
+        )
+        same_bar_policy = result.same_bar_policy
+        if result.exit_reason == "invalid":
+            reason = str(result.metadata.get("failure_reason") or "invalid")
+            invalid_reasons[reason] = invalid_reasons.get(reason, 0) + 1
+            exposure_mask.append(False)
+            equity.append(current_eq)
+            i += 1
+            continue
+
+        ret = float(result.r_multiple)
+        risk_pct = abs(float(entry_price) - float(result.sl_price or entry_price)) / float(entry_price)
+        ret_pct = ret * risk_pct - fees * 2
+        trade_returns.append(ret_pct)
+        trade_durations.append(max(1, int(result.exit_index or i) - i))
+        exit_reasons[result.exit_reason] = exit_reasons.get(result.exit_reason, 0) + 1
+        current_eq *= (1 + ret_pct)
+        for _ in range(max(1, int(result.exit_index or i) - i)):
+            exposure_mask.append(True)
+            equity.append(current_eq)
+        i = max(i + 1, int(result.exit_index or i) + 1)
+
+    equity_s = pd.Series(equity, index=close.index[:len(equity)])
+    exposure_pct = float(np.mean(exposure_mask)) if exposure_mask else float("nan")
+    stats = _build_stats(
+        trade_returns=np.array(trade_returns),
+        trade_durations=np.array(trade_durations),
+        equity=equity_s,
+        init_cash=1.0,
+        fees=fees,
+        stats_dict={"exposure_pct": exposure_pct},
+        freq=freq,
+    )
+    stats["simulation_backend"] = "research_exit_baseline"
+    stats["simulation_warning"] = ""
+    stats["backtest_exit_mode"] = mode
+    stats["exit_reason_breakdown"] = _format_counts(exit_reasons)
+    stats["invalid_exit_breakdown"] = _format_counts(invalid_reasons)
+    stats["same_bar_policy"] = same_bar_policy or "sl_first"
+    stats["atr_length"] = atr_len if mode in {"atr_baseline", "triple_barrier"} else float("nan")
+    if invalid_reasons:
+        stats["simulation_warning"] = f"invalid_exits:{_format_counts(invalid_reasons)}"
+    return stats
+
+
+def _format_counts(counts: dict[str, int]) -> str:
+    return "|".join(f"{k}={v}" for k, v in sorted(counts.items()))
+
+
+def _research_atr(df: pd.DataFrame, length: int) -> pd.Series:
+    high = pd.to_numeric(df["high"], errors="coerce")
+    low = pd.to_numeric(df["low"], errors="coerce")
+    close = pd.to_numeric(df["close"], errors="coerce")
+    prev_close = close.shift(1)
+    tr = pd.concat(
+        [(high - low).abs(), (high - prev_close).abs(), (low - prev_close).abs()],
+        axis=1,
+    ).max(axis=1)
+    return tr.rolling(length, min_periods=length).mean()
+
+
 def _build_stats(trade_returns: np.ndarray, trade_durations: np.ndarray,
                  equity: pd.Series, init_cash: float, fees: float,
                  stats_dict: dict, freq: str = "1h") -> dict:
@@ -442,6 +605,7 @@ def evaluate_strategy(
     min_trades: int = 20,
     freq: str = "1h",
     data_source: str = "",
+    backtest_exit_config: Optional[dict] = None,
 ) -> StrategyMetrics:
     """Compute full StrategyMetrics for one strategy run."""
     from athena_research.data_loader import vbt_freq
@@ -479,8 +643,13 @@ def evaluate_strategy(
     short_exit_signal_count = _count_bool_signals(short_exits)
 
     # Full run
+    exit_cfg = normalized_backtest_exit_config(
+        backtest_exit_config or signals.get("meta", {}).get("backtest_exit_config")
+    )
     all_stats = run_portfolio(close, entries, exits, short_entries, short_exits,
-                              fees=fees, slippage=slippage, freq=freq)
+                              fees=fees, slippage=slippage, freq=freq,
+                              timeframe=timeframe, backtest_exit_config=exit_cfg,
+                              df=df)
 
     # IS / OOS
     df_is, df_oos = split_is_oos(df, is_pct)
@@ -490,12 +659,14 @@ def evaluate_strategy(
     is_stats = run_portfolio(
         df_is["close"], is_signals["entries"], is_signals["exits"],
         is_signals.get("short_entries"), is_signals.get("short_exits"),
-        fees=fees, slippage=slippage, freq=freq,
+        fees=fees, slippage=slippage, freq=freq, timeframe=timeframe,
+        backtest_exit_config=exit_cfg, df=df_is,
     )
     oos_stats = run_portfolio(
         df_oos["close"], oos_signals["entries"], oos_signals["exits"],
         oos_signals.get("short_entries"), oos_signals.get("short_exits"),
-        fees=fees, slippage=slippage, freq=freq,
+        fees=fees, slippage=slippage, freq=freq, timeframe=timeframe,
+        backtest_exit_config=exit_cfg, df=df_oos,
     )
 
     n = all_stats.get("trade_count", 0)
@@ -513,6 +684,10 @@ def evaluate_strategy(
             short_exit_signal_count=short_exit_signal_count,
             simulation_backend=all_stats.get("simulation_backend", ""),
             simulation_warning=all_stats.get("simulation_warning", ""),
+            backtest_exit_mode=all_stats.get("backtest_exit_mode", exit_cfg.get("BACKTEST_EXIT_MODE", "")),
+            exit_reason_breakdown=all_stats.get("exit_reason_breakdown", ""),
+            same_bar_policy=all_stats.get("same_bar_policy", ""),
+            atr_length=all_stats.get("atr_length", float("nan")),
         )
 
     # Gross vs net: gross_return already excludes fees in our backtester
@@ -580,6 +755,10 @@ def evaluate_strategy(
                 if warning
             )
         ),
+        backtest_exit_mode=all_stats.get("backtest_exit_mode", exit_cfg.get("BACKTEST_EXIT_MODE", "")),
+        exit_reason_breakdown=all_stats.get("exit_reason_breakdown", ""),
+        same_bar_policy=all_stats.get("same_bar_policy", ""),
+        atr_length=all_stats.get("atr_length", float("nan")),
     )
 
 
