@@ -38,7 +38,16 @@ OUTPUT_COLUMNS = [
     "sample_ok", "recommendation",
     "backtest_exit_mode", "exit_reason_breakdown", "same_bar_policy", "atr_length",
     "implementation_verdict", "implementation_scope", "implementation_blockers",
+    "engine_fidelity", "fidelity_note", "trust_tier", "trust_summary",
 ]
+
+
+def _enrich_with_trust(df: pd.DataFrame, *, validation_run_count: int = 0) -> pd.DataFrame:
+    """Apply implementation readiness, recommendations, and trust metadata."""
+    from athena_research.trust_metadata import apply_trust_metadata
+
+    work = _apply_implementation_readiness(_normalise_action_recommendations(df))
+    return apply_trust_metadata(work, validation_run_count=validation_run_count)
 
 
 # ─── Run folder helpers ───────────────────────────────────────────────────────
@@ -194,8 +203,14 @@ def _normalise_action_recommendations(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
-def build_operator_decision_summary(df: pd.DataFrame) -> dict:
+def build_operator_decision_summary(
+    df: pd.DataFrame,
+    *,
+    validation_run_count: int = 0,
+) -> dict:
     """Build the operator-facing action summary from deterministic result rows."""
+    from athena_research.trust_metadata import build_trust_context
+
     if df.empty:
         return {
             "headline": "No usable research rows found.",
@@ -214,9 +229,13 @@ def build_operator_decision_summary(df: pd.DataFrame) -> dict:
             "implementation_ready_count": 0,
             "ready_use_add_count": 0,
             "total_candidate_count": 0,
+            "use_now_trusted": [],
+            "screen_only": [],
+            "reject_trusted": [],
+            "trust_context": build_trust_context(df, validation_run_count=validation_run_count),
         }
 
-    work = _normalise_action_recommendations(_apply_implementation_readiness(df))
+    work = _enrich_with_trust(df, validation_run_count=validation_run_count)
 
     def _num(col: str) -> pd.Series:
         return pd.to_numeric(work.get(col, pd.Series(float("nan"), index=work.index)), errors="coerce")
@@ -241,6 +260,7 @@ def build_operator_decision_summary(df: pd.DataFrame) -> dict:
             "family", "symbol", "timeframe", "direction", "status", "trade_count",
             "win_rate", "profit_factor", "oos_return", "robustness_score",
             "implementation_verdict", "implementation_blockers",
+            "engine_fidelity", "fidelity_note", "trust_tier", "trust_summary",
         ]
         available = [c for c in cols if c in frame.columns]
         return json.loads(frame[available].head(limit).fillna("").to_json(orient="records"))
@@ -319,6 +339,21 @@ def build_operator_decision_summary(df: pd.DataFrame) -> dict:
         headline = "No clear keep/add/remove action from this run."
         next_step = "Run a broader validation only if this area is still important."
 
+    trust_col = work.get("trust_tier", pd.Series("", index=work.index)).fillna("").astype(str)
+    use_now_trusted = work[trust_col == "USE_NOW"]
+    screen_only_rows = work[trust_col == "SCREEN_ONLY"]
+    reject_trusted = work[trust_col == "REJECT"]
+    retest_trusted = work[trust_col == "RETEST"]
+
+    if not use_now_trusted.empty and ready_use_count == 0:
+        warnings.append(
+            f"{len(use_now_trusted)} live-aligned row(s) passed trust but failed implementation readiness."
+        )
+    if decision == "USE_ADD_CANDIDATE" and use_now_trusted.empty and not use_rows.empty:
+        warnings.append(
+            "Use/add candidates exist but none are USE_NOW trusted (proxy or discovery-only)."
+        )
+
     return {
         "headline": headline,
         "decision": decision,
@@ -336,13 +371,18 @@ def build_operator_decision_summary(df: pd.DataFrame) -> dict:
         "implementation_ready_count": ready_count,
         "ready_use_add_count": ready_use_count,
         "total_candidate_count": int(len(use_rows)),
+        "use_now_trusted": _records(use_now_trusted),
+        "screen_only": _records(screen_only_rows),
+        "reject_trusted": _records(reject_trusted),
+        "retest_trusted": _records(retest_trusted),
+        "trust_context": build_trust_context(work, validation_run_count=validation_run_count),
     }
 
 
 # ─── CSV writers ──────────────────────────────────────────────────────────────
 
 def write_csvs(df: pd.DataFrame, run_dir: Path) -> list[Path]:
-    df = _apply_implementation_readiness(_normalise_action_recommendations(df))
+    df = _enrich_with_trust(df)
     written = []
 
     def _save(frame: pd.DataFrame, name: str):
@@ -602,7 +642,7 @@ def _automated_next_tests(df: pd.DataFrame) -> pd.DataFrame:
 def write_markdown_report(df: pd.DataFrame, run_dir: Path, run_id: str, run_meta: dict) -> Path:
     """Generate research_report.md answering the required research questions."""
     report_path = run_dir / "research_report.md"
-    df = _apply_implementation_readiness(_normalise_action_recommendations(df))
+    df = _enrich_with_trust(df)
 
     lines: list[str] = []
     a = lines.append
@@ -1026,7 +1066,7 @@ def generate_all_reports(
         "errors": errors,
     }
     try:
-        df = _apply_implementation_readiness(_normalise_action_recommendations(df))
+        df = _enrich_with_trust(df)
         warnings = df.get("simulation_warning", pd.Series("", index=df.index)).fillna("").astype(str)
         backends = df.get("simulation_backend", pd.Series("", index=df.index)).fillna("").astype(str)
         readiness = df.get("implementation_verdict", pd.Series("", index=df.index)).fillna("").astype(str)

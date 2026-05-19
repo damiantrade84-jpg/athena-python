@@ -676,57 +676,51 @@ class AutopilotSession:
         except Exception as e:
             log.warning("[autopilot_session] Per-pair recs from combined rows failed: %s", e)
 
-        # ── Engine comparison (Engine A, Engine B, ADX Gate) ──────────────────
+        # ── Engine comparison (read-only live context — not comparable to discovery) ──
         try:
             import yaml
+            from athena_research.trust_metadata import build_trust_context
+
             cfg_path = Path(__file__).parent.parent / "config.yaml"
             cfg = yaml.safe_load(cfg_path.read_text(encoding="utf-8")) if cfg_path.exists() else {}
             asset_key = self.market_group.lower()
 
-            # Engine A: ENGINE_A_SCORE_GROUP_THRESHOLDS live floor
             min_conf = cfg.get("ENGINE_A_SCORE_GROUP_THRESHOLDS", {})
             engine_a_live = min_conf.get("default", 1.5)
-            # Discovery proxy for Engine A: lowest robustness_score among strong candidates
-            engine_a_disc = None
-            if not combined.empty and "robustness_score" in combined.columns:
-                strong_df = combined[combined["status"].str.upper() == "STRONG_CANDIDATE"] if "status" in combined.columns else pd.DataFrame()
-                if not strong_df.empty:
-                    engine_a_disc = round(strong_df["robustness_score"].min(), 2)
 
-            # Engine B: NAKED_ENGINE.style_profiles min_score
             naked = cfg.get("NAKED_ENGINE", {})
             style_profiles = naked.get("style_profiles", {})
-            # Use intraday as default for Engine B comparison
             engine_b_live = style_profiles.get("intraday", {}).get("min_score", 3.0)
-            # Discovery proxy for Engine B: if any engine_b_proxy strategies, use their best score
-            engine_b_disc = None
-            if not combined.empty and "strategy_name" in combined.columns:
-                eb_df = combined[combined["strategy_name"].str.contains("engine_b", case=False, na=False)]
-                if not eb_df.empty and "robustness_score" in eb_df.columns:
-                    engine_b_disc = round(eb_df["robustness_score"].max(), 2)
 
-            # ADX Gate: ADX_TREND_MIN_CLASS and FACTOR_ADX_HARD_FAIL_CLASS
             adx_trend_min = cfg.get("ADX_TREND_MIN_CLASS", {})
             adx_hard_fail = cfg.get("FACTOR_ADX_HARD_FAIL_CLASS", {})
             adx_live = adx_trend_min.get(asset_key, adx_trend_min.get("crypto", 15))
             adx_hard_fail_val = adx_hard_fail.get(asset_key, adx_hard_fail.get("crypto", 10))
-            # Discovery proxy for ADX: use avg ADX from results if available (placeholder for now)
-            adx_disc = None
+
+            trust_ctx = build_trust_context(
+                combined,
+                validation_run_count=len(self.validation_run_ids),
+            )
 
             self.engine_comparison = {
+                "note": (
+                    "Discovery robustness (0–1) is NOT comparable to live Engine A score floors (0–3.0). "
+                    "Use trust_tier on each row instead of comparing discovery_proxy to live_floor."
+                ),
                 "engine_a": {
                     "live_floor": engine_a_live,
-                    "discovery_proxy": engine_a_disc,
+                    "live_floor_scale": "0-3.0",
                 },
                 "engine_b": {
                     "live_min_score": engine_b_live,
-                    "discovery_proxy": engine_b_disc,
+                    "live_min_score_scale": "checklist_points",
                 },
                 "adx_gate": {
                     "live_trend_min": adx_live,
                     "live_hard_fail": adx_hard_fail_val,
-                    "discovery_proxy": adx_disc,
                 },
+                "trust_tier_counts": trust_ctx.get("tier_counts", {}),
+                "validation_run_count": len(self.validation_run_ids),
                 "asset_class": asset_key,
             }
         except Exception as e:
@@ -935,6 +929,7 @@ def get_session_result(
     run_ids.extend(state.get("followup_run_ids", []))
 
     scoped_rows: list[dict] = []
+    combined_df = None
     for rid in run_ids:
         ranked_path = output_dir / rid / "ranked_strategies.csv"
         if ranked_path.exists():
@@ -944,6 +939,10 @@ def get_session_result(
                 allowed = set(GROUP_SYMBOLS.get(state["market_group"], []))
                 if allowed and "symbol" in df.columns:
                     df = df[df["symbol"].isin(allowed)]
+                if combined_df is None:
+                    combined_df = df.copy()
+                else:
+                    combined_df = pd.concat([combined_df, df], ignore_index=True)
                 import math as _math
                 def _clean(obj):
                     if isinstance(obj, dict):
@@ -957,9 +956,32 @@ def get_session_result(
             except Exception as e:
                 log.warning("[autopilot_session] Could not load ranked for %s: %s", rid, e)
 
+    validation_run_count = len(state.get("validation_run_ids", []) or [])
+    trust_context = None
+    if combined_df is not None and not combined_df.empty:
+        from athena_research.reporting import _enrich_with_trust
+        from athena_research.trust_metadata import build_trust_context
+
+        enriched = _enrich_with_trust(combined_df, validation_run_count=validation_run_count)
+        trust_context = build_trust_context(enriched, validation_run_count=validation_run_count)
+        import math as _math
+
+        def _clean(obj):
+            if isinstance(obj, dict):
+                return {k: _clean(v) for k, v in obj.items()}
+            if isinstance(obj, list):
+                return [_clean(v) for v in obj]
+            if isinstance(obj, float) and (_math.isnan(obj) or _math.isinf(obj)):
+                return None
+            return obj
+
+        scoped_rows = _clean(enriched.to_dict(orient="records"))
+
     result = dict(state)
     result["scoped_rows"] = scoped_rows
     result["scoped_row_count"] = len(scoped_rows)
+    result["trust_context"] = trust_context
+    result["validation_run_count"] = validation_run_count
     return result
 
 

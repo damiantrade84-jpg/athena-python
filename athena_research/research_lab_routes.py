@@ -43,6 +43,33 @@ def _parse_iso_dt(raw: object) -> Optional[datetime]:
         return None
 
 
+def _validation_run_count_for_run(run_dir: Path, sessions_dir: Path | None = None) -> int:
+    """Count validation child runs linked to this run via session metadata."""
+    meta_path = run_dir / "run_meta.json"
+    if not meta_path.exists():
+        return 0
+    try:
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    except Exception:
+        return 0
+
+    session_id = meta.get("session_id")
+    if not session_id:
+        return 0
+
+    from athena_research.autopilot_session import _SESSIONS_DIR
+
+    sd = sessions_dir or _SESSIONS_DIR
+    sess_path = sd / str(session_id) / "session.json"
+    if not sess_path.exists():
+        return 0
+    try:
+        data = json.loads(sess_path.read_text(encoding="utf-8"))
+        return len(data.get("validation_run_ids", []) or [])
+    except Exception:
+        return 0
+
+
 def _merge_run_meta_tags(output_dir: Path, run_id: str, tags: dict) -> None:
     """Merge non-empty relationship tags into a run_meta.json file."""
     meta_path = output_dir / run_id / "run_meta.json"
@@ -910,8 +937,7 @@ def register_research_lab_routes(app) -> None:
         """Return ranked strategies JSON for dashboard display."""
         import pandas as pd
         from athena_research.reporting import (
-            _apply_implementation_readiness,
-            _normalise_action_recommendations,
+            _enrich_with_trust,
             _recommendation_table,
             build_operator_decision_summary,
         )
@@ -930,8 +956,7 @@ def register_research_lab_routes(app) -> None:
             summary_path = run_dir / "research_summary.csv"
             rec_path = run_dir / "add_remove_retest_recommendations.csv"
             next_path = run_dir / "automated_next_tests.csv"
-            # Use pandas JSON serialiser which handles numpy types correctly
-            records = json.loads(df.fillna("").to_json(orient="records"))
+            validation_run_count = _validation_run_count_for_run(run_dir)
             recommendations = []
             next_tests = []
             operator_source = df.copy()
@@ -940,26 +965,27 @@ def register_research_lab_routes(app) -> None:
                     operator_source = pd.read_csv(summary_path)
                 except Exception:
                     operator_source = df.copy()
-            ready_ranked = _apply_implementation_readiness(
-                _normalise_action_recommendations(df)
-            )
+            ready_ranked = _enrich_with_trust(df, validation_run_count=validation_run_count)
             records = json.loads(ready_ranked.fillna("").to_json(orient="records"))
             if summary_path.exists():
                 rec_df = _recommendation_table(
-                    _apply_implementation_readiness(
-                        _normalise_action_recommendations(operator_source)
-                    )
+                    _enrich_with_trust(operator_source, validation_run_count=validation_run_count)
                 ).head(50)
                 recommendations = json.loads(rec_df.fillna("").to_json(orient="records"))
             elif rec_path.exists():
-                rec_df = _apply_implementation_readiness(
-                    _normalise_action_recommendations(pd.read_csv(rec_path))
+                rec_df = _enrich_with_trust(
+                    pd.read_csv(rec_path),
+                    validation_run_count=validation_run_count,
                 ).head(50)
                 recommendations = json.loads(rec_df.fillna("").to_json(orient="records"))
             if next_path.exists():
                 next_df = pd.read_csv(next_path).head(50)
                 next_tests = json.loads(next_df.fillna("").to_json(orient="records"))
-            operator_summary = build_operator_decision_summary(operator_source)
+            operator_summary = build_operator_decision_summary(
+                operator_source,
+                validation_run_count=validation_run_count,
+            )
+            trust_context = operator_summary.get("trust_context", {})
             if operator_summary.get("use_now"):
                 next_tests = []
             return jsonify({
@@ -968,6 +994,8 @@ def register_research_lab_routes(app) -> None:
                 "recommendations": recommendations,
                 "automated_next_tests": next_tests,
                 "operator_summary": operator_summary,
+                "trust_context": trust_context,
+                "validation_run_count": validation_run_count,
             })
         except Exception as e:
             return jsonify({"error": str(e)}), 500

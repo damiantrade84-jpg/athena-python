@@ -10,7 +10,7 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { ErrorBanner } from '@/components/shared';
-import { Microscope, Play, Rocket, History, ListChecks } from 'lucide-react';
+import { Microscope, Play, Rocket, History, ListChecks, ChevronDown, ChevronUp, AlertTriangle } from 'lucide-react';
 import { fmtNum } from '@/lib/utils';
 
 interface RunSummary {
@@ -50,6 +50,20 @@ interface RunStatusResponse {
   [k: string]: unknown;
 }
 
+interface TrustLegendItem {
+  tier: string;
+  label: string;
+  meaning: string;
+}
+
+interface TrustContext {
+  legend?: TrustLegendItem[];
+  tier_counts?: Record<string, number>;
+  fidelity_counts?: Record<string, number>;
+  validation_run_count?: number;
+  disclaimer?: string;
+}
+
 interface RankedRow {
   symbol?: string;
   timeframe?: string;
@@ -66,6 +80,17 @@ interface RankedRow {
   sqn?: number;
   sharpe?: number;
   max_drawdown?: number;
+  recommendation?: string;
+  engine?: string;
+  engine_component?: string;
+  implementation_verdict?: string;
+  implementation_blockers?: string;
+  engine_fidelity?: string;
+  fidelity_note?: string;
+  trust_tier?: string;
+  trust_summary?: string;
+  oos_return?: number;
+  robustness_score?: number;
   [k: string]: unknown;
 }
 
@@ -75,6 +100,8 @@ interface RankedResponse {
   recommendations?: Array<Record<string, unknown>>;
   automated_next_tests?: Array<Record<string, unknown>>;
   operator_summary?: OperatorSummary;
+  trust_context?: TrustContext;
+  validation_run_count?: number;
   note?: string;
   error?: string;
 }
@@ -91,11 +118,37 @@ interface OperatorSummary {
   keep?: Array<Record<string, unknown>>;
   remove_or_demote?: Array<Record<string, unknown>>;
   retest?: Array<Record<string, unknown>>;
+  use_now_trusted?: Array<Record<string, unknown>>;
+  screen_only?: Array<Record<string, unknown>>;
+  reject_trusted?: Array<Record<string, unknown>>;
+  retest_trusted?: Array<Record<string, unknown>>;
+  trust_context?: TrustContext;
   warnings?: string[];
   next_step?: string;
   implementation_ready_count?: number;
   ready_use_add_count?: number;
   total_candidate_count?: number;
+}
+
+interface SessionState {
+  session_id?: string;
+  status?: string;
+  current_phase?: string;
+  progress_pct?: number;
+  discovery_run_id?: string;
+  validation_run_ids?: string[];
+  final_verdict?: string;
+  final_summary?: string;
+  engine_comparison?: Record<string, unknown>;
+  trust_context?: TrustContext;
+  scoped_rows?: RankedRow[];
+  error?: string;
+}
+
+interface StartSessionResponse {
+  session_id?: string;
+  status?: string;
+  error?: string;
 }
 
 interface StartRunResponse {
@@ -138,12 +191,56 @@ const DIRECTIONS = [
   { value: 'short', label: 'Short only' },
 ];
 
+const SESSION_TERMINAL = new Set(['COMPLETE', 'FAILED', 'CANCELLED']);
+
 function statusBadge(status?: string): string {
   switch ((status || '').toLowerCase()) {
     case 'complete': return 'badge-long';
     case 'running':
     case 'queued': return 'badge-neutral';
     case 'failed': return 'badge-short';
+    default: return 'badge-neutral';
+  }
+}
+
+function trustTierBadge(tier?: string): string {
+  switch ((tier || '').toUpperCase()) {
+    case 'USE_NOW': return 'badge-long';
+    case 'SCREEN_ONLY': return 'badge-neutral';
+    case 'RETEST': return 'badge-neutral';
+    case 'REJECT': return 'badge-short';
+    default: return 'badge-neutral';
+  }
+}
+
+function fidelityBadge(fidelity?: string): string {
+  switch ((fidelity || '').toUpperCase()) {
+    case 'LIVE_ALIGNED_A':
+    case 'LIVE_ALIGNED_B': return 'badge-long';
+    case 'PROXY_ENGINE_B':
+    case 'PROXY_ENGINE_D': return 'badge-short';
+    default: return 'badge-neutral';
+  }
+}
+
+function recommendationBadge(recommendation?: string): string {
+  switch ((recommendation || '').toUpperCase()) {
+    case 'ADD': return 'badge-long';
+    case 'KEEP': return 'badge-neutral';
+    case 'REMOVE_OR_DEMOTE':
+    case 'REJECT': return 'badge-short';
+    case 'RETEST':
+    case 'WATCHLIST_ONLY': return 'badge-neutral';
+    default: return 'badge-neutral';
+  }
+}
+
+function sessionVerdictBadge(verdict?: string): string {
+  switch ((verdict || '').toUpperCase()) {
+    case 'IMPLEMENTATION_CANDIDATE': return 'badge-long';
+    case 'VALIDATION_CANDIDATE': return 'badge-neutral';
+    case 'WEAK_EDGE': return 'badge-neutral';
+    case 'REJECTED': return 'badge-short';
     default: return 'badge-neutral';
   }
 }
@@ -161,16 +258,93 @@ function numberValue(row: Record<string, unknown>, key: string): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
-function recommendationBadge(recommendation?: string): string {
-  switch ((recommendation || '').toUpperCase()) {
-    case 'ADD': return 'badge-long';
-    case 'KEEP': return 'badge-neutral';
-    case 'REMOVE_OR_DEMOTE':
-    case 'REJECT': return 'badge-short';
-    case 'RETEST':
-    case 'WATCHLIST_ONLY': return 'badge-neutral';
-    default: return 'badge-neutral';
-  }
+function TrustBanner({ trustContext }: { trustContext?: TrustContext }) {
+  const [open, setOpen] = useState(false);
+  if (!trustContext) return null;
+
+  const counts = trustContext.tier_counts || {};
+  const tiers = ['USE_NOW', 'SCREEN_ONLY', 'RETEST', 'REJECT'] as const;
+
+  return (
+    <Card className="border-border/60 bg-card/50">
+      <CardContent className="p-4 space-y-3">
+        <div className="flex items-center justify-between gap-2 flex-wrap">
+          <div className="flex items-center gap-2 flex-wrap">
+            {tiers.map((tier) => (
+              <Badge key={tier} className={`${trustTierBadge(tier)} text-[10px]`}>
+                {tier.replace('_', ' ')} ({counts[tier] ?? 0})
+              </Badge>
+            ))}
+            {(trustContext.validation_run_count ?? 0) > 0 && (
+              <Badge className="badge-neutral text-[10px]">
+                Validation runs: {trustContext.validation_run_count}
+              </Badge>
+            )}
+          </div>
+          <Button variant="ghost" size="sm" className="h-7 text-[10px] gap-1" onClick={() => setOpen(!open)}>
+            How to read these results
+            {open ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+          </Button>
+        </div>
+        {open && (
+          <div className="space-y-2 text-[11px] text-muted-foreground border-t border-border/40 pt-3">
+            {trustContext.disclaimer && <p>{trustContext.disclaimer}</p>}
+            {(trustContext.legend || []).map((item) => (
+              <div key={item.tier}>
+                <span className="font-semibold text-foreground">{item.label}</span>
+                {' — '}
+                {item.meaning}
+              </div>
+            ))}
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+function ActionCard({
+  title,
+  rows,
+  accentClass,
+  emptyText,
+}: {
+  title: string;
+  rows: Array<Record<string, unknown>>;
+  accentClass: string;
+  emptyText: string;
+}) {
+  return (
+    <Card className={`border-border/60 bg-card/50 ${accentClass}`}>
+      <CardHeader className="pb-2">
+        <CardTitle className="text-xs font-semibold uppercase tracking-wider">{title} ({rows.length})</CardTitle>
+      </CardHeader>
+      <CardContent>
+        {rows.length === 0 ? (
+          <p className="text-[11px] text-muted-foreground">{emptyText}</p>
+        ) : (
+          <ScrollArea className="h-[180px]">
+            <div className="space-y-1">
+              {rows.slice(0, 30).map((row, i) => (
+                <div
+                  key={i}
+                  className="flex items-start justify-between gap-2 border-b border-border/20 py-1 text-[11px]"
+                  title={textValue(row, 'trust_summary') || textValue(row, 'fidelity_note')}
+                >
+                  <span>
+                    {textValue(row, 'strategy_name')} · {textValue(row, 'symbol')} · {textValue(row, 'timeframe')}
+                  </span>
+                  <Badge className={`${fidelityBadge(textValue(row, 'engine_fidelity'))} text-[9px] shrink-0`}>
+                    {textValue(row, 'engine_fidelity', '—').replace(/_/g, ' ')}
+                  </Badge>
+                </div>
+              ))}
+            </div>
+          </ScrollArea>
+        )}
+      </CardContent>
+    </Card>
+  );
 }
 
 export default function ResearchLabPanel() {
@@ -178,12 +352,10 @@ export default function ResearchLabPanel() {
 
   const [activeTab, setActiveTab] = useState<'autopilot' | 'manual' | 'runs'>('autopilot');
 
-  // Autopilot
   const [marketGroup, setMarketGroup] = useState('crypto');
   const [tradingStyle, setTradingStyle] = useState('intra');
   const [researchDepth, setResearchDepth] = useState('standard');
 
-  // Manual
   const [mode, setMode] = useState('tiny');
   const [direction, setDirection] = useState('both');
   const [symbols, setSymbols] = useState('');
@@ -191,22 +363,35 @@ export default function ResearchLabPanel() {
   const [families, setFamilies] = useState('');
   const [strategies, setStrategies] = useState('');
 
-  // Run lifecycle
   const [currentRunId, setCurrentRunId] = useState<string | null>(null);
   const [runStatus, setRunStatus] = useState<RunStatusResponse | null>(null);
   const [ranked, setRanked] = useState<RankedResponse | null>(null);
+
+  const [sessionId, setSessionId] = useState<string | null>(null);
+  const [sessionState, setSessionState] = useState<SessionState | null>(null);
+  const [sessionStarting, setSessionStarting] = useState(false);
+
   const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const sessionPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const { data: runsData, loading: runsLoading, error: runsError, refresh: refreshRuns } =
     useApiPoll<RunsResponse>('/api/research-lab/runs', 0);
 
-  const { post: postStyleRun, loading: styleStarting } = useApiPost<StartRunResponse>();
   const { post: postManualRun, loading: manualStarting } = useApiPost<StartRunResponse>();
+
+  const trustContext = ranked?.trust_context || ranked?.operator_summary?.trust_context;
 
   const stopPolling = useCallback(() => {
     if (pollTimerRef.current) {
       clearInterval(pollTimerRef.current);
       pollTimerRef.current = null;
+    }
+  }, []);
+
+  const stopSessionPolling = useCallback(() => {
+    if (sessionPollRef.current) {
+      clearInterval(sessionPollRef.current);
+      sessionPollRef.current = null;
     }
   }, []);
 
@@ -238,31 +423,87 @@ export default function ResearchLabPanel() {
           showToast(`Run ${runId} failed: ${json.error || 'unknown'}`, 'error');
         }
       } catch (e) {
-        // Network blip — keep polling
-        // eslint-disable-next-line no-console
         console.warn('[research-lab] poll error', e);
       }
     }, 3000);
   }, [stopPolling, fetchRanked, refreshRuns, showToast]);
 
-  useEffect(() => () => stopPolling(), [stopPolling]);
+  const pollSession = useCallback((sid: string) => {
+    stopSessionPolling();
+    sessionPollRef.current = setInterval(async () => {
+      try {
+        const res = await fetch(`/api/research-lab/session-autopilot/status/${sid}`);
+        const json = (await res.json()) as SessionState;
+        setSessionState(json);
+        if (SESSION_TERMINAL.has(String(json.status || '').toUpperCase())) {
+          stopSessionPolling();
+          if (String(json.status).toUpperCase() === 'COMPLETE') {
+            const rres = await fetch(`/api/research-lab/session-autopilot/result/${sid}`);
+            const rdata = (await rres.json()) as SessionState;
+            setSessionState(rdata);
+            const discId = rdata.discovery_run_id;
+            if (discId) {
+              setCurrentRunId(discId);
+              await fetchRanked(discId);
+            }
+            showToast(`Session complete — verdict: ${rdata.final_verdict || 'unknown'}`, 'success');
+          } else if (String(json.status).toUpperCase() === 'FAILED') {
+            showToast('Session autopilot failed', 'error');
+          }
+          refreshRuns();
+        }
+      } catch (e) {
+        console.warn('[research-lab] session poll error', e);
+      }
+    }, 3000);
+  }, [stopSessionPolling, fetchRanked, refreshRuns, showToast]);
 
-  const startAutopilot = useCallback(async () => {
+  useEffect(() => () => {
+    stopPolling();
+    stopSessionPolling();
+  }, [stopPolling, stopSessionPolling]);
+
+  const startSessionAutopilot = useCallback(async () => {
     setRanked(null);
     setRunStatus(null);
-    const res = await postStyleRun('/api/research-lab/style-run', {
-      market_group: marketGroup,
-      trading_style: tradingStyle,
-      research_depth: researchDepth,
-    });
-    if (!res || res.error || !res.run_id) {
-      showToast(`Autopilot failed: ${res?.error || 'unknown'}`, 'error');
-      return;
+    setSessionState(null);
+    setSessionStarting(true);
+    try {
+      const res = await fetch('/api/research-lab/session-autopilot/start', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          market_group: marketGroup,
+          trading_style: tradingStyle,
+          research_depth: researchDepth,
+        }),
+      });
+      const data = (await res.json()) as StartSessionResponse;
+      if (data.error || !data.session_id) {
+        showToast(`Session failed: ${data.error || 'unknown'}`, 'error');
+        return;
+      }
+      setSessionId(data.session_id);
+      setSessionState(data as SessionState);
+      showToast(`Session autopilot started: ${data.session_id}`, 'info');
+      pollSession(data.session_id);
+    } catch (e) {
+      showToast(`Session failed: ${(e as Error).message}`, 'error');
+    } finally {
+      setSessionStarting(false);
     }
-    setCurrentRunId(res.run_id);
-    showToast(`Autopilot started: ${res.run_id} (${res.mode || 'standard'})`, 'info');
-    pollRun(res.run_id);
-  }, [postStyleRun, marketGroup, tradingStyle, researchDepth, showToast, pollRun]);
+  }, [marketGroup, tradingStyle, researchDepth, showToast, pollSession]);
+
+  const stopSession = useCallback(async () => {
+    if (!sessionId) return;
+    try {
+      await fetch(`/api/research-lab/session-autopilot/stop/${sessionId}`, { method: 'POST' });
+      stopSessionPolling();
+      showToast('Session stop requested', 'info');
+    } catch (e) {
+      showToast(`Stop failed: ${(e as Error).message}`, 'error');
+    }
+  }, [sessionId, stopSessionPolling, showToast]);
 
   const startManual = useCallback(async () => {
     setRanked(null);
@@ -308,6 +549,18 @@ export default function ResearchLabPanel() {
 
   const sortedRuns = useMemo(() => (runsData?.runs || []).slice(), [runsData]);
 
+  const op = ranked?.operator_summary;
+  const useNowRows = op?.use_now_trusted || [];
+  const screenRows = op?.screen_only || [];
+  const retestRows = op?.retest_trusted || op?.retest || [];
+  const rejectRows = op?.reject_trusted?.length
+    ? op.reject_trusted
+    : op?.remove_or_demote || [];
+
+  const sessionVerdictWarning = sessionState?.final_verdict === 'IMPLEMENTATION_CANDIDATE'
+    && useNowRows.length === 0
+    && ranked !== null;
+
   return (
     <div className="space-y-5">
       <Card className="border-border/60 bg-card/50">
@@ -317,27 +570,26 @@ export default function ResearchLabPanel() {
             <h3 className="text-sm font-semibold">Research Lab</h3>
           </div>
           <p className="text-xs text-muted-foreground">
-            Strategy discovery and ranking via <span className="font-mono">athena_research</span>. Endpoints under
-            <span className="font-mono"> /api/research-lab/*</span>. Output writes to
-            <span className="font-mono"> athena_research/output/&lt;run_id&gt;/</span>; rankings persist as
-            <span className="font-mono"> ranked_strategies.csv</span>. Live runs are polled every 3 s.
+            Strategy discovery via <span className="font-mono">athena_research</span>. Discovery uses simplified
+            proxies — trust tiers show what is live-aligned vs screen-only. Session autopilot runs discovery
+            plus validation child runs before recommending actions.
           </p>
         </CardContent>
       </Card>
 
       <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as typeof activeTab)}>
         <TabsList>
-          <TabsTrigger value="autopilot" className="text-xs">One-Click Autopilot</TabsTrigger>
+          <TabsTrigger value="autopilot" className="text-xs">Session Autopilot</TabsTrigger>
           <TabsTrigger value="manual" className="text-xs">Manual Run</TabsTrigger>
           <TabsTrigger value="runs" className="text-xs">Run History</TabsTrigger>
         </TabsList>
 
-        <TabsContent value="autopilot" className="mt-3">
+        <TabsContent value="autopilot" className="mt-3 space-y-3">
           <Card className="border-border/60 bg-card/50">
             <CardHeader className="pb-2">
               <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Rajdhani', sans-serif", letterSpacing: '0.12em' }}>
                 <Rocket className="w-4 h-4 text-primary" />
-                Style-driven Discovery
+                One-Click Session Autopilot
               </CardTitle>
             </CardHeader>
             <CardContent className="space-y-3">
@@ -360,17 +612,58 @@ export default function ResearchLabPanel() {
                     {DEPTHS.map((o) => <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>)}
                   </SelectContent>
                 </Select>
-                <Button size="sm" className="h-8 gap-1 text-xs" onClick={startAutopilot} disabled={styleStarting}>
+                <Button size="sm" className="h-8 gap-1 text-xs" onClick={startSessionAutopilot} disabled={sessionStarting}>
                   <Play className="w-3 h-3" />
-                  {styleStarting ? 'Queuing…' : 'Run Autopilot'}
+                  {sessionStarting ? 'Starting…' : 'Run Session Autopilot'}
                 </Button>
+                {sessionId && !SESSION_TERMINAL.has(String(sessionState?.status || '').toUpperCase()) && (
+                  <Button size="sm" variant="outline" className="h-8 text-xs" onClick={stopSession}>
+                    Stop
+                  </Button>
+                )}
               </div>
               <p className="text-[10px] text-muted-foreground">
-                Style profile resolves symbols / timeframes / families / strategies from
-                <span className="font-mono"> RESEARCH_STYLE_PROFILES</span>. Use Manual Run for full control.
+                Runs discovery → validation child runs → AI review. Results use trust tiers — not live engine parity for proxies.
               </p>
             </CardContent>
           </Card>
+
+          {sessionState && (
+            <Card className="border-border/60 bg-card/50">
+              <CardHeader className="pb-2">
+                <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider">
+                  Session · <span className="font-mono">{sessionState.session_id}</span>
+                  {sessionState.final_verdict && (
+                    <Badge className={`${sessionVerdictBadge(sessionState.final_verdict)} text-[10px]`}>
+                      {sessionState.final_verdict.replace(/_/g, ' ')}
+                    </Badge>
+                  )}
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-2 text-[11px]">
+                <div className="flex flex-wrap gap-3 text-muted-foreground">
+                  <span>Phase: <strong className="text-foreground">{sessionState.current_phase || sessionState.status}</strong></span>
+                  {sessionState.progress_pct != null && <span>Progress: {sessionState.progress_pct}%</span>}
+                  {sessionState.discovery_run_id && <span>Discovery: <span className="font-mono">{sessionState.discovery_run_id}</span></span>}
+                  {(sessionState.validation_run_ids || []).length > 0 && (
+                    <span>Validation runs: {(sessionState.validation_run_ids || []).length}</span>
+                  )}
+                </div>
+                {sessionState.final_summary && (
+                  <p className="text-muted-foreground">{sessionState.final_summary}</p>
+                )}
+                {sessionVerdictWarning && (
+                  <div className="flex items-start gap-2 p-2 rounded border border-warning/40 bg-warning/10 text-warning">
+                    <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+                    <span>
+                      Session verdict is IMPLEMENTATION_CANDIDATE but no USE_NOW trusted rows found.
+                      Proxy or discovery-only strategies may have passed — check Screen Only card.
+                    </span>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          )}
         </TabsContent>
 
         <TabsContent value="manual" className="mt-3">
@@ -396,10 +689,10 @@ export default function ResearchLabPanel() {
                   </SelectContent>
                 </Select>
                 <div className="col-span-2 grid grid-cols-2 gap-3">
-                  <Input value={symbols} onChange={(e) => setSymbols(e.target.value)} className="h-8 text-xs font-mono" placeholder="Symbols (comma-separated, e.g. BTC/USDT, EUR/USD)" />
-                  <Input value={timeframes} onChange={(e) => setTimeframes(e.target.value)} className="h-8 text-xs font-mono" placeholder="Timeframes (e.g. M15, H1, H4)" />
-                  <Input value={families} onChange={(e) => setFamilies(e.target.value)} className="h-8 text-xs font-mono" placeholder="Families (e.g. trend_momentum, volatility)" />
-                  <Input value={strategies} onChange={(e) => setStrategies(e.target.value)} className="h-8 text-xs font-mono" placeholder="Strategies (e.g. macd_direction, bollinger_touch)" />
+                  <Input value={symbols} onChange={(e) => setSymbols(e.target.value)} className="h-8 text-xs font-mono" placeholder="Symbols (comma-separated)" />
+                  <Input value={timeframes} onChange={(e) => setTimeframes(e.target.value)} className="h-8 text-xs font-mono" placeholder="Timeframes (e.g. M15, H1)" />
+                  <Input value={families} onChange={(e) => setFamilies(e.target.value)} className="h-8 text-xs font-mono" placeholder="Families" />
+                  <Input value={strategies} onChange={(e) => setStrategies(e.target.value)} className="h-8 text-xs font-mono" placeholder="Strategies" />
                 </div>
               </div>
               <Button size="sm" className="h-8 gap-1 text-xs" onClick={startManual} disabled={manualStarting}>
@@ -461,7 +754,6 @@ export default function ResearchLabPanel() {
         </TabsContent>
       </Tabs>
 
-      {/* Active run detail */}
       {currentRunId && (
         <>
           <Card className="border-border/60 bg-card/50">
@@ -486,7 +778,7 @@ export default function ResearchLabPanel() {
                 </div>
               )}
               <div className="flex items-center gap-2 flex-wrap">
-                {currentRunId && runStatus?.status === 'complete' && (
+                {runStatus?.status === 'complete' && (
                   <>
                     <Button size="sm" variant="outline" className="h-7 gap-1 text-[10px]" onClick={() => fetchRanked(currentRunId)}>
                       Refresh ranked
@@ -504,157 +796,116 @@ export default function ResearchLabPanel() {
             </CardContent>
           </Card>
 
-          {ranked?.operator_summary && (
-            <Card className="border-border/60 bg-card/50">
-              <CardHeader className="pb-2">
-                <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Rajdhani', sans-serif", letterSpacing: '0.12em' }}>
-                  <ListChecks className="w-4 h-4 text-primary" />
-                  Results Summary
-                  <Badge className={`text-[10px] ${ranked.operator_summary.decision === 'USE_ADD_CANDIDATE' ? 'badge-long' : ranked.operator_summary.decision === 'REMOVE_OR_DEMOTE' ? 'badge-short' : 'badge-neutral'}`}>
-                    {ranked.operator_summary.decision || 'NEEDS_MORE_DATA'}
-                  </Badge>
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-3 text-xs">
-                <p className="text-sm font-medium">{ranked.operator_summary.headline || 'No decision summary available.'}</p>
-                <div className="flex items-center gap-2 flex-wrap">
-                  <Badge className="badge-neutral text-[10px]">{ranked.operator_summary.source || 'DETERMINISTIC_RESULTS'}</Badge>
-                  <span className="text-[10px] text-muted-foreground">
-                    Source: <span className="font-mono">{ranked.operator_summary.source_of_truth || 'research_summary.csv'}</span>
-                  </span>
-                  <span className="text-[10px] text-muted-foreground">
-                    Ready use/add: <span className="font-mono">{ranked.operator_summary.ready_use_add_count ?? ranked.operator_summary.use_now?.length ?? 0}</span>
-                    {' / '}
-                    Total ready: <span className="font-mono">{ranked.operator_summary.implementation_ready_count ?? 0}</span>
-                    {' / '}
-                    Candidate rows: <span className="font-mono">{ranked.operator_summary.total_candidate_count ?? 0}</span>
-                  </span>
-                </div>
-                {ranked.operator_summary.next_step && (
-                  <p className="text-[11px] text-muted-foreground">{ranked.operator_summary.next_step}</p>
-                )}
-                {(ranked.operator_summary.use_now || []).length > 0 && (
-                  <div>
-                    <p className="text-[10px] uppercase text-muted-foreground mb-1">Implementation-Ready Use / Add Rows</p>
-                    <div className="grid gap-1">
-                      {(ranked.operator_summary.use_now || []).slice(0, 50).map((row, i) => (
-                        <div key={i} className="flex items-center justify-between gap-3 border-b border-border/20 py-1">
-                          <span>{textValue(row, 'strategy_name')} on {textValue(row, 'timeframe')} / {textValue(row, 'symbol')}</span>
-                          <span className="font-mono text-[10px] text-muted-foreground">
-                            PF {numberValue(row, 'profit_factor') != null ? fmtNum(numberValue(row, 'profit_factor') as number, 2) : '—'} · OOS {numberValue(row, 'oos_return') != null ? fmtNum(numberValue(row, 'oos_return') as number, 3) : '—'}
-                          </span>
-                        </div>
-                      ))}
+          {trustContext && <TrustBanner trustContext={trustContext} />}
+
+          {op && (
+            <>
+              <Card className="border-border/60 bg-card/50">
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider">
+                    Decision Summary
+                    <Badge className={`text-[10px] ${op.decision === 'USE_ADD_CANDIDATE' ? 'badge-long' : op.decision === 'REMOVE_OR_DEMOTE' ? 'badge-short' : 'badge-neutral'}`}>
+                      {op.decision || 'NEEDS_MORE_DATA'}
+                    </Badge>
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-2 text-xs">
+                  <p className="text-sm font-medium">{op.headline}</p>
+                  {op.next_step && <p className="text-[11px] text-muted-foreground">{op.next_step}</p>}
+                  {(op.warnings || []).length > 0 && (
+                    <div className="rounded border border-warning/40 bg-warning/10 p-2">
+                      {(op.warnings || []).map((w, i) => <p key={i} className="text-[11px]">{w}</p>)}
                     </div>
-                  </div>
-                )}
-                {(ranked.operator_summary.candidate_groups || []).length > 0 && (
-                  <div>
-                    <p className="text-[10px] uppercase text-muted-foreground mb-1">Ready Groups</p>
-                    <div className="grid gap-1">
-                      {(ranked.operator_summary.candidate_groups || []).slice(0, 20).map((row, i) => (
-                        <div key={i} className="flex items-center justify-between gap-3 border-b border-border/20 py-1">
-                          <span>{textValue(row, 'engine')} / {textValue(row, 'engine_component')} / {textValue(row, 'strategy_name')} / {textValue(row, 'timeframe')}</span>
-                          <span className="font-mono text-[10px] text-muted-foreground">
-                            {textValue(row, 'configs')} configs · {textValue(row, 'symbols')}
-                          </span>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-                {(ranked.operator_summary.blocked_candidates || []).length > 0 && (
-                  <div>
-                    <p className="text-[10px] uppercase text-muted-foreground mb-1">Blocked Candidates</p>
-                    <div className="grid gap-1">
-                      {(ranked.operator_summary.blocked_candidates || []).slice(0, 20).map((row, i) => (
-                        <div key={i} className="grid grid-cols-[1fr_1.4fr] gap-3 border-b border-border/20 py-1">
-                          <span>{textValue(row, 'strategy_name')} on {textValue(row, 'timeframe')} / {textValue(row, 'symbol')}</span>
-                          <span className="font-mono text-[10px] text-muted-foreground">{textValue(row, 'implementation_blockers')}</span>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-                {(ranked.operator_summary.remove_or_demote || []).length > 0 && (
-                  <div>
-                    <p className="text-[10px] uppercase text-muted-foreground mb-1">Remove / Demote</p>
-                    <div className="flex flex-wrap gap-1">
-                      {(ranked.operator_summary.remove_or_demote || []).slice(0, 8).map((row, i) => (
-                        <Badge key={i} className="badge-short text-[10px]">{textValue(row, 'strategy_name')}</Badge>
-                      ))}
-                    </div>
-                  </div>
-                )}
-                {(ranked.operator_summary.warnings || []).length > 0 && (
-                  <div className="rounded border border-warning/40 bg-warning/10 p-2">
-                    <p className="text-[10px] uppercase text-muted-foreground mb-1">Warnings</p>
-                    {(ranked.operator_summary.warnings || []).map((w, i) => (
-                      <p key={i} className="text-[11px]">{w}</p>
-                    ))}
-                  </div>
-                )}
-              </CardContent>
-            </Card>
+                  )}
+                </CardContent>
+              </Card>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <ActionCard
+                  title="Works — paper review"
+                  rows={useNowRows}
+                  accentClass="border-long/30"
+                  emptyText="No live-aligned USE_NOW rows. Check Screen Only for proxy candidates."
+                />
+                <ActionCard
+                  title="Screen only — not live parity"
+                  rows={screenRows}
+                  accentClass="border-warning/30"
+                  emptyText="No proxy or discovery-only rows."
+                />
+                <ActionCard
+                  title="Retest"
+                  rows={retestRows}
+                  accentClass=""
+                  emptyText="Nothing flagged for retest."
+                />
+                <ActionCard
+                  title="Do not use"
+                  rows={rejectRows}
+                  accentClass="border-short/30"
+                  emptyText="No rejected rows."
+                />
+              </div>
+            </>
           )}
 
           {ranked && (ranked.ranked || []).length > 0 && (
             <Card className="border-border/60 bg-card/50">
               <CardHeader className="pb-2">
-                <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Rajdhani', sans-serif", letterSpacing: '0.12em' }}>Ranked Strategies (top 50)</CardTitle>
+                <CardTitle className="text-xs font-semibold uppercase tracking-wider">Ranked Strategies (top 50)</CardTitle>
               </CardHeader>
               <CardContent>
                 <ScrollArea className="h-[420px]">
                   <table className="w-full text-left">
                     <thead>
                       <tr className="border-b border-border/40">
+                        <th className="text-[10px] uppercase py-2 text-muted-foreground">Trust</th>
+                        <th className="text-[10px] uppercase py-2 text-muted-foreground">Fidelity</th>
                         <th className="text-[10px] uppercase py-2 text-muted-foreground">Symbol</th>
                         <th className="text-[10px] uppercase py-2 text-muted-foreground">TF</th>
-                        <th className="text-[10px] uppercase py-2 text-muted-foreground">Family</th>
                         <th className="text-[10px] uppercase py-2 text-muted-foreground">Strategy</th>
-                        <th className="text-[10px] uppercase py-2 text-muted-foreground">Dir</th>
                         <th className="text-[10px] uppercase py-2 text-muted-foreground">Status</th>
+                        <th className="text-[10px] uppercase py-2 text-muted-foreground">Ready</th>
                         <th className="text-[10px] uppercase py-2 text-muted-foreground text-right">Trades</th>
-                        <th className="text-[10px] uppercase py-2 text-muted-foreground text-right">WR</th>
                         <th className="text-[10px] uppercase py-2 text-muted-foreground text-right">PF</th>
-                        <th className="text-[10px] uppercase py-2 text-muted-foreground text-right">SQN</th>
-                        <th className="text-[10px] uppercase py-2 text-muted-foreground text-right">DD</th>
+                        <th className="text-[10px] uppercase py-2 text-muted-foreground text-right">OOS</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {(ranked.ranked || []).map((row, i) => {
-                        const strong = row.status === 'STRONG_CANDIDATE';
-                        const weak = row.status === 'WEAK_CANDIDATE';
-                        const readiness = String(row.implementation_verdict || '—');
-                        const readinessBlockers = String(row.implementation_blockers || '');
-                        return (
-                          <tr key={i} className="border-b border-border/20 hover:bg-muted/30">
-                            <td className="py-2 text-[11px] font-mono">{row.symbol || '—'}</td>
-                            <td className="py-2 text-[10px]">{row.timeframe || '—'}</td>
-                            <td className="py-2 text-[10px]">{row.family || '—'}</td>
-                            <td className="py-2 text-[10px]">{row.strategy || row.strategy_name || '—'}</td>
-                            <td className="py-2 text-[10px] uppercase">{row.direction || '—'}</td>
-                            <td className="py-2 text-[10px]">
-                              <Badge className={`text-[10px] ${strong ? 'badge-long' : weak ? 'badge-neutral' : 'badge-short'}`}>
-                                {row.status || '—'}
-                              </Badge>
-                            </td>
-                            <td className="py-2 text-[10px]">
-                              <Badge
-                                title={readinessBlockers}
-                                className={`text-[10px] ${readiness === 'IMPLEMENTATION_READY' ? 'badge-long' : 'badge-short'}`}
-                              >
-                                {readiness}
-                              </Badge>
-                            </td>
-                            <td className="py-2 text-[10px] font-mono text-right">{row.trades ?? row.trade_count ?? '—'}</td>
-                            <td className="py-2 text-[10px] font-mono text-right">{row.win_rate != null ? `${fmtNum(row.win_rate, 1)}%` : '—'}</td>
-                            <td className="py-2 text-[10px] font-mono text-right">{row.profit_factor != null ? fmtNum(row.profit_factor, 2) : '—'}</td>
-                            <td className="py-2 text-[10px] font-mono text-right">{row.sqn != null ? fmtNum(row.sqn, 2) : '—'}</td>
-                            <td className="py-2 text-[10px] font-mono text-right">{row.max_drawdown != null ? fmtNum(row.max_drawdown, 1) : '—'}</td>
-                          </tr>
-                        );
-                      })}
+                      {(ranked.ranked || []).map((row, i) => (
+                        <tr
+                          key={i}
+                          className="border-b border-border/20 hover:bg-muted/30"
+                          title={[row.trust_summary, row.fidelity_note, row.implementation_blockers].filter(Boolean).join(' · ')}
+                        >
+                          <td className="py-2">
+                            <Badge className={`text-[10px] ${trustTierBadge(row.trust_tier)}`}>
+                              {(row.trust_tier || '—').replace(/_/g, ' ')}
+                            </Badge>
+                          </td>
+                          <td className="py-2">
+                            <Badge className={`text-[9px] ${fidelityBadge(row.engine_fidelity)}`}>
+                              {(row.engine_fidelity || '—').replace(/_/g, ' ')}
+                            </Badge>
+                          </td>
+                          <td className="py-2 text-[11px] font-mono">{row.symbol || '—'}</td>
+                          <td className="py-2 text-[10px]">{row.timeframe || '—'}</td>
+                          <td className="py-2 text-[10px]">{row.strategy || row.strategy_name || '—'}</td>
+                          <td className="py-2">
+                            <Badge className={`text-[10px] ${row.status === 'STRONG_CANDIDATE' ? 'badge-long' : 'badge-neutral'}`}>
+                              {row.status || '—'}
+                            </Badge>
+                          </td>
+                          <td className="py-2">
+                            <Badge className={`text-[10px] ${row.implementation_verdict === 'IMPLEMENTATION_READY' ? 'badge-long' : 'badge-short'}`}>
+                              {row.implementation_verdict || '—'}
+                            </Badge>
+                          </td>
+                          <td className="py-2 text-[10px] font-mono text-right">{row.trades ?? row.trade_count ?? '—'}</td>
+                          <td className="py-2 text-[10px] font-mono text-right">{row.profit_factor != null ? fmtNum(row.profit_factor, 2) : '—'}</td>
+                          <td className="py-2 text-[10px] font-mono text-right">{row.oos_return != null ? fmtNum(row.oos_return, 3) : '—'}</td>
+                        </tr>
+                      ))}
                     </tbody>
                   </table>
                 </ScrollArea>
@@ -665,96 +916,62 @@ export default function ResearchLabPanel() {
           {ranked && (ranked.recommendations || []).length > 0 && (
             <Card className="border-border/60 bg-card/50">
               <CardHeader className="pb-2">
-                <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Rajdhani', sans-serif", letterSpacing: '0.12em' }}>
-                  Keep / Add / Remove / Retest
-                </CardTitle>
+                <CardTitle className="text-xs font-semibold uppercase tracking-wider">Keep / Add / Remove / Retest</CardTitle>
               </CardHeader>
               <CardContent>
                 <ScrollArea className="h-[360px]">
                   <table className="w-full text-left">
                     <thead>
                       <tr className="border-b border-border/40">
+                        <th className="text-[10px] uppercase py-2 text-muted-foreground">Trust</th>
                         <th className="text-[10px] uppercase py-2 text-muted-foreground">Action</th>
+                        <th className="text-[10px] uppercase py-2 text-muted-foreground">Fidelity</th>
                         <th className="text-[10px] uppercase py-2 text-muted-foreground">Engine</th>
-                        <th className="text-[10px] uppercase py-2 text-muted-foreground">Component</th>
                         <th className="text-[10px] uppercase py-2 text-muted-foreground">Strategy</th>
                         <th className="text-[10px] uppercase py-2 text-muted-foreground">Symbol</th>
                         <th className="text-[10px] uppercase py-2 text-muted-foreground">TF</th>
-                        <th className="text-[10px] uppercase py-2 text-muted-foreground">Status</th>
                         <th className="text-[10px] uppercase py-2 text-muted-foreground">Ready</th>
-                        <th className="text-[10px] uppercase py-2 text-muted-foreground">Ready</th>
-                        <th className="text-[10px] uppercase py-2 text-muted-foreground text-right">Trades</th>
                         <th className="text-[10px] uppercase py-2 text-muted-foreground text-right">PF</th>
-                        <th className="text-[10px] uppercase py-2 text-muted-foreground text-right">OOS</th>
                         <th className="text-[10px] uppercase py-2 text-muted-foreground text-right">Robust</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {(ranked.recommendations || []).map((row, i) => {
-                        const recommendation = textValue(row, 'recommendation');
-                        const pf = numberValue(row, 'profit_factor');
-                        const oos = numberValue(row, 'oos_return');
-                        const robustness = numberValue(row, 'robustness_score');
-                        const readiness = textValue(row, 'implementation_verdict');
-                        return (
-                          <tr key={i} className="border-b border-border/20 hover:bg-muted/30">
-                            <td className="py-2 text-[10px]">
-                              <Badge className={`text-[10px] ${recommendationBadge(recommendation)}`}>{recommendation}</Badge>
-                            </td>
-                            <td className="py-2 text-[10px]">{textValue(row, 'engine')}</td>
-                            <td className="py-2 text-[10px]">{textValue(row, 'engine_component')}</td>
-                            <td className="py-2 text-[10px]">{textValue(row, 'strategy_name')}</td>
-                            <td className="py-2 text-[10px] font-mono">{textValue(row, 'symbol')}</td>
-                            <td className="py-2 text-[10px]">{textValue(row, 'timeframe')}</td>
-                            <td className="py-2 text-[10px]">{textValue(row, 'status')}</td>
-                            <td className="py-2 text-[10px]">
-                              <Badge className={`text-[10px] ${readiness === 'IMPLEMENTATION_READY' ? 'badge-long' : 'badge-short'}`}>
-                                {readiness}
-                              </Badge>
-                            </td>
-                            <td className="py-2 text-[10px] font-mono text-right">{textValue(row, 'trade_count')}</td>
-                            <td className="py-2 text-[10px] font-mono text-right">{pf != null ? fmtNum(pf, 2) : '—'}</td>
-                            <td className="py-2 text-[10px] font-mono text-right">{oos != null ? fmtNum(oos, 3) : '—'}</td>
-                            <td className="py-2 text-[10px] font-mono text-right">{robustness != null ? fmtNum(robustness, 2) : '—'}</td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </ScrollArea>
-              </CardContent>
-            </Card>
-          )}
-
-          {ranked && (ranked.automated_next_tests || []).length > 0 && (
-            <Card className="border-border/60 bg-card/50">
-              <CardHeader className="pb-2">
-                <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Rajdhani', sans-serif", letterSpacing: '0.12em' }}>
-                  Suggested Next Tests
-                </CardTitle>
-              </CardHeader>
-              <CardContent>
-                <ScrollArea className="h-[260px]">
-                  <table className="w-full text-left">
-                    <thead>
-                      <tr className="border-b border-border/40">
-                        <th className="text-[10px] uppercase py-2 text-muted-foreground">Engine</th>
-                        <th className="text-[10px] uppercase py-2 text-muted-foreground">Component</th>
-                        <th className="text-[10px] uppercase py-2 text-muted-foreground">Group</th>
-                        <th className="text-[10px] uppercase py-2 text-muted-foreground">Zone</th>
-                        <th className="text-[10px] uppercase py-2 text-muted-foreground">Failed</th>
-                        <th className="text-[10px] uppercase py-2 text-muted-foreground">Suggested</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {(ranked.automated_next_tests || []).map((row, i) => (
-                        <tr key={i} className="border-b border-border/20 hover:bg-muted/30">
+                      {(ranked.recommendations || []).map((row, i) => (
+                        <tr
+                          key={i}
+                          className="border-b border-border/20 hover:bg-muted/30"
+                          title={textValue(row, 'trust_summary') || textValue(row, 'fidelity_note')}
+                        >
+                          <td className="py-2">
+                            <Badge className={`text-[10px] ${trustTierBadge(textValue(row, 'trust_tier'))}`}>
+                              {textValue(row, 'trust_tier', '—').replace(/_/g, ' ')}
+                            </Badge>
+                          </td>
+                          <td className="py-2">
+                            <Badge className={`text-[10px] ${recommendationBadge(textValue(row, 'recommendation'))}`}>
+                              {textValue(row, 'recommendation')}
+                            </Badge>
+                          </td>
+                          <td className="py-2">
+                            <Badge className={`text-[9px] ${fidelityBadge(textValue(row, 'engine_fidelity'))}`}>
+                              {textValue(row, 'engine_fidelity', '—').replace(/_/g, ' ')}
+                            </Badge>
+                          </td>
                           <td className="py-2 text-[10px]">{textValue(row, 'engine')}</td>
-                          <td className="py-2 text-[10px]">{textValue(row, 'engine_component')}</td>
-                          <td className="py-2 text-[10px]">{textValue(row, 'pair_group') || textValue(row, 'market_group')}</td>
-                          <td className="py-2 text-[10px]">{textValue(row, 'timeframe_zone')}</td>
-                          <td className="py-2 text-[10px]">{textValue(row, 'failed_strategies')}</td>
-                          <td className="py-2 text-[10px]">{textValue(row, 'suggested_strategies')}</td>
+                          <td className="py-2 text-[10px]">{textValue(row, 'strategy_name')}</td>
+                          <td className="py-2 text-[10px] font-mono">{textValue(row, 'symbol')}</td>
+                          <td className="py-2 text-[10px]">{textValue(row, 'timeframe')}</td>
+                          <td className="py-2">
+                            <Badge className={`text-[10px] ${textValue(row, 'implementation_verdict') === 'IMPLEMENTATION_READY' ? 'badge-long' : 'badge-short'}`}>
+                              {textValue(row, 'implementation_verdict')}
+                            </Badge>
+                          </td>
+                          <td className="py-2 text-[10px] font-mono text-right">
+                            {numberValue(row, 'profit_factor') != null ? fmtNum(numberValue(row, 'profit_factor') as number, 2) : '—'}
+                          </td>
+                          <td className="py-2 text-[10px] font-mono text-right">
+                            {numberValue(row, 'robustness_score') != null ? fmtNum(numberValue(row, 'robustness_score') as number, 2) : '—'}
+                          </td>
                         </tr>
                       ))}
                     </tbody>
@@ -765,11 +982,8 @@ export default function ResearchLabPanel() {
           )}
 
           {ranked?.note && (!ranked.ranked || ranked.ranked.length === 0) && (
-            <div className="p-3 rounded-md bg-muted/20 text-[11px] text-muted-foreground">
-              {ranked.note}
-            </div>
+            <div className="p-3 rounded-md bg-muted/20 text-[11px] text-muted-foreground">{ranked.note}</div>
           )}
-
         </>
       )}
     </div>
