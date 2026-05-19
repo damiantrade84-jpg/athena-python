@@ -5,6 +5,8 @@ import sys
 import importlib.util
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from config import CONFIG
@@ -17,6 +19,7 @@ from scoring import (
     get_pair_level_atr_class,
     get_pair_score_group,
     get_score_threshold,
+    engine_a_regime_label_for_threshold,
 )
 from factor_scoring import _volatility_scaler
 
@@ -239,6 +242,31 @@ def test_auto_trade_min_score_does_not_override_engine_a_scan_threshold(monkeypa
     expected = get_score_threshold(pair)
     monkeypatch.setitem(CONFIG, "AUTO_TRADE_MIN_SCORE", {"crypto": 9.99})
     assert get_score_threshold(pair) == expected
+
+
+def test_score_group_requirement_overrides_are_explicit_for_distinct_crypto_and_forex_groups():
+    assert CONFIG["ADX_TREND_MIN_CLASS"]["crypto_other"] > CONFIG["ADX_TREND_MIN_CLASS"]["crypto_btc"]
+    assert CONFIG["FACTOR_ADX_HARD_FAIL_CLASS"]["crypto_other"] > CONFIG["FACTOR_ADX_HARD_FAIL_CLASS"]["crypto_btc"]
+    assert CONFIG["ENGINE_A_DIRECTIONAL_RAMP_BY_CLASS"]["crypto_other"]["min_directional"] > (
+        CONFIG["ENGINE_A_DIRECTIONAL_RAMP_BY_CLASS"]["crypto_btc"]["min_directional"]
+    )
+    assert CONFIG["RSI_BOUNDS"]["crypto_other"] == {"ob": 75, "os": 25}
+    assert CONFIG["ADX_TREND_MIN_CLASS"]["forex_exotics"] < CONFIG["ADX_TREND_MIN_CLASS"]["forex_majors"]
+    assert CONFIG["ENGINE_A_DIRECTIONAL_RAMP_BY_CLASS"]["forex_exotics"]["min_directional"] < (
+        CONFIG["ENGINE_A_DIRECTIONAL_RAMP_BY_CLASS"]["forex_majors"]["min_directional"]
+    )
+
+
+def test_engine_a_regime_label_for_threshold_supports_live_result_shapes(monkeypatch):
+    pair = {"display": "EUR/USD", "type": "forex"}
+    base = get_score_threshold(pair)
+    monkeypatch.setitem(
+        CONFIG,
+        "ENGINE_A_REGIME_DYNAMIC_THRESHOLDS",
+        {"ENABLED": True, "TRENDING_MULTIPLIER": 0.90, "RANGING_MULTIPLIER": 1.10},
+    )
+    regime = engine_a_regime_label_for_threshold({"regime": {"label": "RANGING"}})
+    assert get_score_threshold(pair, regime=regime) == pytest.approx(base * 1.10)
 
 
 def test_python_defaults_match_runtime_yaml_for_audit_sensitive_gates():

@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from typing import List, Optional
 
 from config import CONFIG
+from engine_a_groups import ENGINE_A_KNOWN_SCORE_GROUPS
 from indicators import (
     calc_rsi,
 )
@@ -172,36 +173,6 @@ def get_pair_score_group(pair: dict) -> str:
 # Every value returned by get_pair_score_group() must have an explicit entry in
 # ENGINE_A_SCORE_GROUP_THRESHOLDS (config.yaml / config.py). The "default" key is
 # only for forward-compatible unknown groups — not a substitute for listed groups.
-ENGINE_A_KNOWN_SCORE_GROUPS = frozenset({
-    "forex_majors",
-    "forex_crosses",
-    "forex_exotics",
-    "forex_other",
-    "crypto_btc",
-    "crypto_eth",
-    "crypto_doge",
-    "crypto_alt_majors",
-    "crypto_other",
-    "precious_trackers",
-    "energy_oil",
-    "nat_gas",
-    "copper",
-    "pgm_metals",
-    "base_metals",
-    "softs",
-    "commodity_other",
-    "us_indices_trackers",
-    "eu_indices",
-    "asian_indices",
-    "index_other",
-    "us_stock_single",
-    "bond_tlt",
-    "smallcap_em_etf",
-    "stock_other",
-    "unknown",
-})
-
-
 def _resolve_class_keyed(mapping, score_group: str | None, asset_type: str, default):
     """Resolve class-keyed config by score_group, then asset_type, then default."""
     if not isinstance(mapping, dict):
@@ -345,6 +316,23 @@ def get_score_threshold(pair: dict, regime: str | None = None) -> float:
             base_threshold *= high_vol_mult
 
     return base_threshold
+
+
+def engine_a_regime_label_for_threshold(signal_result: dict | None) -> str | None:
+    """Extract the Engine A regime label used by dynamic threshold resolution."""
+    if not isinstance(signal_result, dict):
+        return None
+    label = signal_result.get("regimeName")
+    if label is None:
+        regime = signal_result.get("regime")
+        if isinstance(regime, dict):
+            label = regime.get("label")
+        elif isinstance(regime, str):
+            label = regime
+    if label is None:
+        return None
+    text = str(label).strip().upper()
+    return text or None
 
 
 def get_min_confluence_threshold(pair: dict) -> float:

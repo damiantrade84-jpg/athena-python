@@ -70,6 +70,13 @@ class TestFatalConfigValidation:
         with pytest.raises(ConfigValidationError):
             _fatal_config_validation(bad)
 
+    def test_rejects_missing_engine_a_score_group_threshold(self):
+        thresholds = dict(CONFIG.get("ENGINE_A_SCORE_GROUP_THRESHOLDS") or {})
+        thresholds.pop("crypto_other", None)
+        bad = {**CONFIG, "ENGINE_A_SCORE_GROUP_THRESHOLDS": thresholds}
+        with pytest.raises(ConfigValidationError):
+            _fatal_config_validation(bad)
+
     def test_rejects_inactive_pair_profile_knobs(self):
         bad = {
             **CONFIG,

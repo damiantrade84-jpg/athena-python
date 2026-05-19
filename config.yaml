@@ -204,10 +204,21 @@ BINANCE_KLINE_WS_INTERVALS:
 ADX_TREND_MIN_CLASS:
 
   crypto: 18    # raised from 15 (2026-05-10): linear ramp 10→18, full credit at ADX≥18
+  crypto_btc: 18
+  crypto_eth: 18
+  crypto_alt_majors: 18
+  crypto_doge: 20
+  crypto_other: 20
 
   forex: 20    # ADX 15-20 gets 0.65× soft penalty in factor_scoring; 20 allows developing trends through
+  forex_majors: 20
+  forex_crosses: 20
+  forex_other: 20
+  forex_exotics: 18
 
   commodity: 25
+  nat_gas: 27
+  softs: 25
 
   stock: 25
 
@@ -218,8 +229,19 @@ ADX_TREND_MIN_CLASS:
 # setting crypto to 10 creates a genuine 10-15 soft-penalty band.
 FACTOR_ADX_HARD_FAIL_CLASS:
   crypto: 10
+  crypto_btc: 10
+  crypto_eth: 10
+  crypto_alt_majors: 10
+  crypto_doge: 10
+  crypto_other: 12
   forex: 10
+  forex_majors: 10
+  forex_crosses: 10
+  forex_other: 10
+  forex_exotics: 9
   commodity: 10
+  nat_gas: 12
+  softs: 10
   stock: 10
   index: 10
 
@@ -277,6 +299,15 @@ ENGINE_A_FACTOR_WEIGHTS_BY_CLASS:
   energy_oil: { momentum: 0.40, addon: 0.35, base: 0.25 }
   nat_gas: { momentum: 0.35, addon: 0.35, base: 0.30 }
 ENGINE_A_DIRECTIONAL_RAMP_BY_CLASS:
+  crypto_btc: { min_directional: 0.20, soft_span: 0.30 }
+  crypto_eth: { min_directional: 0.20, soft_span: 0.30 }
+  crypto_alt_majors: { min_directional: 0.20, soft_span: 0.30 }
+  crypto_doge: { min_directional: 0.22, soft_span: 0.28 }
+  crypto_other: { min_directional: 0.24, soft_span: 0.26 }
+  forex_majors: { min_directional: 0.25, soft_span: 0.20 }
+  forex_crosses: { min_directional: 0.25, soft_span: 0.20 }
+  forex_other: { min_directional: 0.25, soft_span: 0.20 }
+  forex_exotics: { min_directional: 0.22, soft_span: 0.22 }
   stock: { min_directional: 0.30, soft_span: 0.20 }
   index: { min_directional: 0.28, soft_span: 0.18 }
   commodity: { min_directional: 0.28, soft_span: 0.25 }
@@ -431,8 +462,17 @@ COUNTER_TREND_PEN:
 RSI_BOUNDS:
 
   crypto:    { ob: 80, os: 20 }
+  crypto_btc: { ob: 80, os: 20 }
+  crypto_eth: { ob: 80, os: 20 }
+  crypto_alt_majors: { ob: 80, os: 20 }
+  crypto_doge: { ob: 82, os: 18 }
+  crypto_other: { ob: 75, os: 25 }
 
   forex:     { ob: 70, os: 30 }
+  forex_majors: { ob: 70, os: 30 }
+  forex_crosses: { ob: 70, os: 30 }
+  forex_other: { ob: 70, os: 30 }
+  forex_exotics: { ob: 75, os: 25 }
 
   commodity: { ob: 75, os: 25 }
 

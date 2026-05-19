@@ -2926,6 +2926,8 @@ from scoring import (  # noqa: E402
     get_pair_score_group,
     get_pair_level_atr_class,
     get_min_confluence_threshold,
+    get_score_threshold,
+    engine_a_regime_label_for_threshold,
     pair_filter_enabled,
     _pair_exchange_closed,
     _build_event_risk,
@@ -11876,6 +11878,8 @@ def analyze_pair(
     fib = calc_fib(h4)
 
     _regime_state = res.get("regime", {}).get("state") if res.get("regime") else None
+    _engine_a_threshold_regime = engine_a_regime_label_for_threshold(res)
+    _threshold = get_score_threshold(pair, regime=_engine_a_threshold_regime)
     _level_atr_class = get_pair_level_atr_class(pair)
     _fd_level = dict(res.get("factorDiagnostics") or {})
     _fd_level["levelAtrFeed"] = level_atr_feed
@@ -11915,7 +11919,7 @@ def analyze_pair(
 
     # --- ENGINE B: NAKED MARKET STRUCTURE OVERLAY ---
     _engine_b_overlay_meta = None
-    if use_naked_engine and res["score"] >= get_min_confluence_threshold(pair):
+    if use_naked_engine and res["score"] >= _threshold:
         try:
             from market_structure import (
                 ENGINE_B_REASON_ADVERSE_DXY,
@@ -12085,8 +12089,6 @@ def analyze_pair(
 
         # Get base score before news
         base_score = float(res.get("score", 0.0) or 0.0)
-        _threshold = get_min_confluence_threshold(pair)
-
         # Apply raw news sentiment first to compute adjustment
         _pre_news_score = base_score
         apply_news_sentiment_to_scan_result(
@@ -12133,7 +12135,6 @@ def analyze_pair(
 
     # Dynamic Confluence Scaling: Anchor the UI 67% mark to the actual pair threshold.
     # This prevents strong Crypto signals (e.g. 1.88) from looking 'WEAK' just because 3.0 is impossible.
-    _threshold = get_min_confluence_threshold(pair)
     _raw_pct = (res["score"] / _threshold) * 67 if _threshold > 0 else 0
     _confluence_pct = min(100, max(0, round(_raw_pct)))
 
