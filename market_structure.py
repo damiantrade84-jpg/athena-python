@@ -21,19 +21,38 @@ ENGINE_B_REGIME_GATE_DEFAULTS = {
 }
 
 
+# Forex pairs whose peak liquidity lies inside Tokyo/Sydney hours. Skipping the
+# Asian session on these pairs removes their primary trading window. The skip
+# stays in effect for European/North-American pairs (EUR/USD, GBP/USD, USD/CHF,
+# USD/CAD, EUR/GBP, etc.) where Asian hours are genuinely thin.
+_ASIAN_ACTIVE_CURRENCIES = ("JPY", "AUD", "NZD", "CNH", "SGD", "HKD")
+
+
+def _pair_has_asian_active_currency(display: str | None) -> bool:
+    if not display:
+        return False
+    sym = str(display).upper()
+    return any(ccy in sym for ccy in _ASIAN_ACTIVE_CURRENCIES)
+
+
 def engine_b_forex_asian_session_blocks_bar(
-    entry_candles: list | None, asset_type: str
+    entry_candles: list | None, asset_type: str, display: str | None = None
 ) -> bool:
     """Return True when Engine B should skip this bar for forex (Asian session UTC).
 
     Gated by ENGINE_B_FOREX_ASIAN_SESSION_SKIP_ENABLED (default True for historical
     backtest parity). Live scan uses the same helper so BT and discovery align.
+
+    Pairs containing an Asian-active currency (JPY/AUD/NZD/CNH/SGD/HKD) are
+    exempt — Tokyo/Sydney is their primary session, not thin time.
     """
     if str(asset_type or "").lower() != "forex":
         return False
     if not bool(
         config.CONFIG.get("ENGINE_B_FOREX_ASIAN_SESSION_SKIP_ENABLED", True)
     ):
+        return False
+    if _pair_has_asian_active_currency(display):
         return False
     if not entry_candles:
         return False
@@ -1232,11 +1251,25 @@ def resolve_engine_b_execution_levels(
     else:
         _atr_reject = "no_atr_config_or_zero_atr"
 
-    # Select execution SL: use the tighter of ATR SL and structural SL.
-    # Tighter SL = closer to entry (LONG: higher value; SHORT: lower value).
-    # This fixes the original bug (wide structural SL → poor structural_rr) while
-    # preserving existing behaviour when structural SL is already inside ATR distance.
-    if _atr_sl_valid and _struct_sl_valid:
+    # Select execution SL.
+    # Preference order:
+    #   1. Keep structural SL when structural levels already satisfy min_rr.
+    #      This preserves structural protection (swing-anchored stops) instead
+    #      of compressing the stop to ATR distance unnecessarily.
+    #   2. Otherwise pick the tighter of ATR SL and structural SL — the
+    #      original "wide structural SL → poor RR" fix, applied only when it
+    #      is actually needed to clear the RR gate.
+    # Tighter = closer to entry (LONG: higher value; SHORT: lower value).
+    _keep_structural_sl = (
+        _struct_sl_valid
+        and _struct_tp_valid
+        and min_rr is not None
+        and _structural_rr >= float(min_rr)
+    )
+    if _keep_structural_sl:
+        _exec_sl = _struct_sl
+        _sl_source = "structural"
+    elif _atr_sl_valid and _struct_sl_valid:
         if direction == "LONG":
             _exec_sl = max(_atr_sl, _struct_sl)
         else:

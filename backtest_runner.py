@@ -4827,6 +4827,7 @@ def backtest_pair_naked(pair: dict, style: str = "naked", validation_mode="stand
         if engine_b_forex_asian_session_blocks_bar(
             [entry_raw[i]] if i < len(entry_raw) else [],
             pair.get("type", ""),
+            display=pair.get("display") or pair.get("symbol"),
         ):
             i += 1
             continue
@@ -5728,6 +5729,7 @@ def backtest_pair_consensus(
         if engine_b_forex_asian_session_blocks_bar(
             [candles_h4[i]] if i < len(candles_h4) else [],
             _ptype,
+            display=pair.get("display") or pair.get("symbol"),
         ):
             i += 1
             continue

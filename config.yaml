@@ -1890,8 +1890,11 @@ NAKED_ENGINE:
 
   score_group_overrides:
 
-    # Forex groups intentionally inherit base style min_score values.
-    # Non-forex groups below override intraday/swing min_score where calibrated.
+    # min_score is intentionally omitted from every override below — all groups
+    # currently calibrate to the base 4.0 floor in style_profiles.* above. Only
+    # min_rr and min_room_atr need per-group differentiation here.
+    # Exception: nat_gas/crypto_doge swing keep min_score: 4.0 to suppress the
+    # per-group code default of 5.0 in config.py.
 
     forex_majors:
 
@@ -1915,123 +1918,71 @@ NAKED_ENGINE:
 
     nat_gas:
 
-      scalp: {min_score: 4.0}
-
-      intraday: {min_score: 4.0, min_rr: 1.6}
+      intraday: {min_rr: 1.6}
 
       swing: {min_score: 4.0, min_rr: 2.0}
 
     crypto_doge:
 
-      scalp: {min_score: 4.0, min_room_atr: 0.5}
+      scalp: {min_room_atr: 0.5}
 
-      intraday: {min_score: 4.0, min_room_atr: 0.9, min_rr: 1.5}
+      intraday: {min_room_atr: 0.9, min_rr: 1.5}
 
       swing: {min_score: 4.0, min_room_atr: 1.2, min_rr: 1.9}
 
     crypto_btc:
 
-      scalp: {min_score: 4.0}
+      intraday: {min_rr: 1.3}
 
-      intraday: {min_score: 4.0, min_rr: 1.3}
-
-      swing: {min_score: 4.0, min_rr: 1.8}
+      swing: {min_rr: 1.8}
 
     crypto_eth:
 
-      scalp: {min_score: 4.0}
+      intraday: {min_rr: 1.3}
 
-      intraday: {min_score: 4.0, min_rr: 1.3}
-
-      swing: {min_score: 4.0, min_rr: 1.8}
+      swing: {min_rr: 1.8}
 
     crypto_alt_majors:
 
-      scalp: {min_score: 4.0}
+      intraday: {min_rr: 1.4}
 
-      intraday: {min_score: 4.0, min_rr: 1.4}
-
-      swing: {min_score: 4.0, min_rr: 1.9}
+      swing: {min_rr: 1.9}
 
     crypto_other:
 
-      scalp: {min_score: 4.0}
+      intraday: {min_rr: 1.4}
 
-      intraday: {min_score: 4.0, min_rr: 1.4}
-
-      swing: {min_score: 4.0, min_rr: 1.9}
-
-    energy_oil:
-
-      scalp: {min_score: 4.0}
-
-      intraday: {min_score: 4.0}
-
-      swing: {min_score: 4.0}
+      swing: {min_rr: 1.9}
 
     precious_trackers:
 
-      scalp: {min_score: 4.0}
+      intraday: {min_rr: 1.3}
 
-      intraday: {min_score: 4.0, min_rr: 1.3}
-
-      swing: {min_score: 4.0, min_rr: 1.8}
-
-    commodity_other:
-
-      scalp: {min_score: 4.0}
-
-      intraday: {min_score: 4.0}
-
-      swing: {min_score: 4.0}
-
-    copper:
-
-      scalp: {min_score: 4.0}
-
-      intraday: {min_score: 4.0}
-
-      swing: {min_score: 4.0}
-
-    pgm_metals:
-
-      scalp: {min_score: 4.0}
-
-      intraday: {min_score: 4.0}
-
-      swing: {min_score: 4.0}
+      swing: {min_rr: 1.8}
 
     us_stock_single:
 
-      scalp: {min_score: 4.0}
+      intraday: {min_rr: 1.4}
 
-      intraday: {min_score: 4.0, min_rr: 1.4}
-
-      swing: {min_score: 4.0, min_rr: 1.9}
+      swing: {min_rr: 1.9}
 
     stock_other:
 
-      scalp: {min_score: 4.0}
+      intraday: {min_rr: 1.4}
 
-      intraday: {min_score: 4.0, min_rr: 1.4}
-
-      swing: {min_score: 4.0, min_rr: 1.9}
+      swing: {min_rr: 1.9}
 
     smallcap_em_etf:
 
-      scalp: {min_score: 4.0}
+      intraday: {min_rr: 1.4}
 
-      intraday: {min_score: 4.0, min_rr: 1.4}
-
-      swing: {min_score: 4.0, min_rr: 1.9}
+      swing: {min_rr: 1.9}
 
     bond_tlt:
 
-      scalp: {min_score: 4.0}
+      intraday: {min_rr: 1.3}
 
-      intraday: {min_score: 4.0, min_rr: 1.3}
-
-      swing: {min_score: 4.0, min_rr: 1.8}
+      swing: {min_rr: 1.8}
 
     us_indices_trackers:
 

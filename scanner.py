@@ -1516,7 +1516,9 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict[s
 
                     if zone_candles_b and entry_candles_b and atr_candles_b:
                         if engine_b_forex_asian_session_blocks_bar(
-                            entry_candles_b, ptype
+                            entry_candles_b,
+                            ptype,
+                            display=pair.get("display") or pair.get("symbol"),
                         ):
                             _eb_funnel_extras["engine_b_skip_stage"] = (
                                 "forex_asian_session_block"
