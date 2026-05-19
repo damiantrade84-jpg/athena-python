@@ -33,3 +33,31 @@ Revisit only after:
 - Accepted exports include real `score_group` where needed.
 - Engine B accepted exports include real `level_mode`, `rr_required`, `rr_passed`, and `fallback_tp_applied`.
 - A held-out/OOS sweep confirms expectancy or risk improvement without trade-count collapse.
+
+---
+---
+
+## DI alignment opposed multiplier (0.3) — audit 2026-05-19
+
+**Status:** REJECTED (insufficient outcome evidence)
+
+**Hypothesis:** `di_align_mult=0.3` (DI opposed to EMA trend by >5 pts) over-penalizes
+forex during momentum transitions; majority of sub-2.1 scores show opposed DI.
+
+**Scan-time diagnostic evidence (same-day cohort audit):**
+- Forex pairs scored: 21
+- Below threshold 2.1: 21
+- Sub-threshold with di_align=0.3: 16
+- DI buckets (all): {'0.3': 16, '0.5': 3, '1.0': 2}
+
+**Feed sanity:** H4 `plusDI`/`minusDI` from `calc_indicators_with_normalized` matches
+`feed_status['di_align']` for all scored pairs (no indicator feed bug detected).
+
+**Git history:** Opposed=0.3 since `3d2c3eed` (2026-05-15); not a May-18 regression.
+Prior opposed=0.0 since `a80898f5` (2026-04-30).
+
+**Reject reason:** n < 30 closed-trade outcomes per di_align bucket.
+Scan-time funnel confirms bottleneck; outcome-linked calibration required before change.
+
+**Future proposal (if evidence supports):** config-gated `ENGINE_A_DI_ALIGN_OPPOSED_MULT`
+default 0.3; optional forex-only neutral band widening. `live_change_allowed=false` until n≥30.

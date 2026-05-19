@@ -635,15 +635,25 @@ def _momentum_quality(
     Does NOT change direction — only sizes conviction.
 
     RSI contribution (0.6 weight):
-      - Confirming zone (not extreme): +0.5
-      - Extreme overbought/oversold (overextended): -0.25 (late entry)
-      - Neutral: 0.0
+      - Confirming side of 50: +0.50
+      - Off-midline but inside [os_, ob]: +0.30  (was +0.10 — too punitive for
+        forex pullbacks where RSI dips through 50 during a SHORT or rises
+        through 50 during a LONG)
+      - Extreme overbought/oversold: -0.25 (late entry)
+      - Outside [os_, ob] on confirming side: 0.0 (reversal zone — let Engine B own)
 
     MACD contribution (0.4 weight):
-      - Histogram aligned with direction: +0.5
-      - Histogram opposing direction: 0.0 (neutral — MACD lags, don't penalise hard)
+      - Histogram aligned with direction: +0.50
+      - Histogram opposing direction: -0.25  (was -0.50 — that doubled the
+        effective penalty vs the prior calibration and crushed forex during
+        normal H1/H4 momentum transitions)
 
-    Final: clamp(weighted_sum, 0.0, 1.0)
+    Divergence:
+      - 35+ bar RSI divergence opposing direction dampens result by 0.4× (was
+        a hard zero). Engine B owns structure-based reversal handling — Engine A
+        treats divergence as a warning, not a disqualification.
+
+    Final: clamp(weighted_sum / max_raw, 0.0, 1.0)
     """
     is_long = direction == "LONG"
     rsi_bounds = _resolve_class_keyed(
@@ -655,8 +665,9 @@ def _momentum_quality(
     os_ = float(rsi_bounds.get("os", 30))
 
     # RSI score — graded by 50-midline so only RSI above 50 (LONG) or below 50 (SHORT)
-    # counts as confirming.  RSI on the wrong side of 50 is weak/non-confirming.
-    # The original os_-to-ob flat +0.50 treated RSI=35 the same as RSI=65 on a LONG.
+    # counts as fully confirming. RSI on the wrong side of 50 is partial/weak,
+    # not negligible — trending forex pairs pull back through 50 frequently
+    # without invalidating the higher-TF trend.
     rsi_score = 0.0
     rsi = h4_snap.get("rsi")
     if rsi is not None:
@@ -668,7 +679,7 @@ def _momentum_quality(
                 elif rsi >= 50:
                     rsi_score = 0.50   # above midline — momentum confirming LONG
                 elif rsi >= os_:
-                    rsi_score = 0.10   # below midline — trend not yet in momentum
+                    rsi_score = 0.30   # below midline pullback — partial confirm
                 # rsi < os_: oversold on LONG is a reversal zone — Engine B handles structure;
                 # leave rsi_score = 0.0 (neutral) here rather than double-counting
             else:
@@ -677,15 +688,16 @@ def _momentum_quality(
                 elif rsi <= 50:
                     rsi_score = 0.50   # below midline — momentum confirming SHORT
                 elif rsi <= ob:
-                    rsi_score = 0.10   # above midline — weak short confirmation
+                    rsi_score = 0.30   # above midline pullback — partial confirm
                 # rsi > ob: overbought on SHORT is reversal zone — leave neutral
         except (TypeError, ValueError):
             pass
 
-    # Stage 2.7: Divergence detection as disqualification.
+    # Stage 2.7: Divergence detection as a soft dampener.
     # If price makes higher highs but RSI/MACD makes lower highs (bearish div),
     # or price makes lower lows but RSI/MACD makes higher lows (bullish div),
-    # momentum quality is zeroed — divergence precedes reversals.
+    # momentum quality is dampened by 0.4× (not zeroed). Engine B owns
+    # structure-based reversal handling; Engine A treats this as a warning.
     _divergence_detected = False
     if isinstance(h4_candles, list) and len(h4_candles) >= 35:
         try:
@@ -699,10 +711,11 @@ def _momentum_quality(
         except Exception as exc:
             log.debug("[EA2] RSI divergence check error: %s", exc)
 
-    # MACD histogram score — aligned confirms, opposing penalises strongly.
-    # Penalty increased from -0.15 to -0.50 (2026-04-30 audit): the old value
-    # was too weak — with RSI weight 0.6 and MACD weight 0.4, opposing MACD
-    # only reduced the weighted sum by 0.06, making MACD divergence irrelevant.
+    # MACD histogram score — aligned confirms, opposing applies a moderate penalty.
+    # Calibrated to -0.25 (between the old -0.15 which was too weak to register
+    # and the -0.50 audit value which crushed forex during normal H1/H4 momentum
+    # transitions). With macd_w=0.4 this contributes -0.10 to raw, ~20% drop
+    # post-rescale — material but not annihilating.
     macd_score = 0.0
     macd_hist = h4_snap.get("macdHist")
     if macd_hist is None:
@@ -715,7 +728,7 @@ def _momentum_quality(
             elif not is_long and hist < 0:
                 macd_score = 0.50
             elif (is_long and hist < 0) or (not is_long and hist > 0):
-                macd_score = -0.50
+                macd_score = -0.25
         except (TypeError, ValueError):
             pass
 
@@ -730,10 +743,6 @@ def _momentum_quality(
                 volume_momentum_score = -0.50 * abs(vol_spread)
         except (TypeError, ValueError):
             pass
-
-    # If divergence detected, override momentum to zero regardless of indicator values
-    if _divergence_detected:
-        return 0.0
 
     # Per-indicator weights from config
     ind_weights = CONFIG.get("INDICATOR_WEIGHTS", {}).get("momentum", {})
@@ -770,6 +779,8 @@ def _momentum_quality(
         + _volume_cap * volume_w
     ) / total_w
     rescaled = raw / _max_raw if _max_raw != 0 else 0.0
+    if _divergence_detected:
+        rescaled *= 0.4
     return max(0.0, min(1.0, rescaled))
 
 

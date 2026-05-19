@@ -114,20 +114,29 @@ def _stochastic_cross_candles():
     ]
 
 
-def test_momentum_quality_rsi_divergence_disqualifies_opposing_direction(monkeypatch):
-    """EA-01: h4_candles must reach calc_rsi_divergence for disqualification."""
+def test_momentum_quality_rsi_divergence_dampens_opposing_direction(monkeypatch):
+    """EA-01: h4_candles must reach calc_rsi_divergence; result is dampened 0.4× (not zeroed)."""
     import indicators
 
     h4_snap = _snap("long", momentum="bullish")
     candles = _candles(80)
-    monkeypatch.setattr(indicators, "calc_rsi_divergence", lambda c, lookback=30: "bearish")
 
+    monkeypatch.setattr(indicators, "calc_rsi_divergence", lambda c, lookback=None: None)
+    mq_baseline_long = _momentum_quality(h4_snap, "LONG", "stock", h4_candles=candles)
+
+    monkeypatch.setattr(indicators, "calc_rsi_divergence", lambda c, lookback=None: "bearish")
     mq_long = _momentum_quality(h4_snap, "LONG", "stock", h4_candles=candles)
-    assert mq_long == 0.0
+    assert mq_long > 0.0  # no longer hard-zeroed
+    assert mq_long < mq_baseline_long  # meaningfully reduced
+    assert math.isclose(mq_long, mq_baseline_long * 0.4, rel_tol=1e-6)
 
-    monkeypatch.setattr(indicators, "calc_rsi_divergence", lambda c, lookback=30: "bullish")
-    mq_short = _momentum_quality(_snap("short", momentum="bearish"), "SHORT", "stock", h4_candles=candles)
-    assert mq_short == 0.0
+    short_snap = _snap("short", momentum="bearish")
+    monkeypatch.setattr(indicators, "calc_rsi_divergence", lambda c, lookback=None: None)
+    mq_baseline_short = _momentum_quality(short_snap, "SHORT", "stock", h4_candles=candles)
+    monkeypatch.setattr(indicators, "calc_rsi_divergence", lambda c, lookback=None: "bullish")
+    mq_short = _momentum_quality(short_snap, "SHORT", "stock", h4_candles=candles)
+    assert mq_short > 0.0
+    assert math.isclose(mq_short, mq_baseline_short * 0.4, rel_tol=1e-6)
 
 
 def test_momentum_quality_skips_divergence_without_enough_candles():
