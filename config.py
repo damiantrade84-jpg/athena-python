@@ -710,6 +710,13 @@ CONFIG: dict = {
         "index": 0.15,
         "commodity": 0.18,
     },
+    "CALIBRATION_DIAGNOSTICS_ENABLED": False,
+    "CALIBRATION_DIAGNOSTICS_PATH": "logs/calibration_diagnostics/calibration_events.jsonl",
+    "RESEARCH_VOL_TARGETING_ENABLED": False,
+    "RESEARCH_VOL_TARGET_ANNUALIZED": 0.12,
+    "RESEARCH_VOL_TARGET_MAX_MULTIPLIER": 1.50,
+    "RESEARCH_VOL_TARGET_MIN_MULTIPLIER": 0.25,
+    "RESEARCH_VOL_TARGET_LOOKBACK": 20,
     # MIN_CONFLUENCE_GROUP removed. Engine A live/backtest thresholds are resolved
     # in scoring.py from profile overrides, pair/group config, then 3-tier fallback.
     # Factor scoring gates — see factor_scoring.py
@@ -789,6 +796,8 @@ CONFIG: dict = {
         "OFF_HOURS_MULT": 0.98,
     },
     "ENGINE_A_STRUCTURE_CONTEXT_ENABLED": False,
+    "ENGINE_A_CORRELATED_OVERLAY_GUARD_ENABLED": True,
+    "ENGINE_A_CORRELATED_OVERLAY_MAX_TOTAL_UPLIFT": 0.20,
     "ENGINE_A": {
         "structure_first_entry": {
             "enabled": False,
@@ -1128,6 +1137,9 @@ CONFIG: dict = {
         "HIGH_VOLATILITY": 0.85,
         "LOW_VOLATILITY": 1.15,
     },
+    # True: regime adjusts Engine B min_score via ENGINE_B_REGIME_MULTIPLIERS.
+    # False: min_score stays at style profile base (multiplier forced to 1.0).
+    "ENGINE_B_REGIME_MULTIPLIERS_ENABLED": True,
     "FOREX_ENGINE": {
         "hurst_gate_enabled": True,
         "hurst_gate_threshold": 0.52,

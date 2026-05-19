@@ -97,6 +97,34 @@ def test_apply_trust_metadata_adds_columns():
     assert out.iloc[1]["trust_tier"] == "SCREEN_ONLY"
 
 
+def test_write_research_summary_csv():
+    import tempfile
+    from pathlib import Path
+    from athena_research.reporting import metrics_to_df, write_research_summary_csv
+    from athena_research.metrics import StrategyMetrics
+
+    tmp_path = Path(tempfile.mkdtemp(prefix="athena_research_test_"))
+    row = StrategyMetrics(
+        run_id="r1",
+        symbol="EUR/USD",
+        timeframe="H1",
+        asset_class="forex",
+        family="mean_reversion",
+        strategy_name="bollinger_touch",
+        params_str="",
+        direction="both",
+        status="STRONG_CANDIDATE",
+        trade_count=40,
+        net_return=0.05,
+        oos_return=0.02,
+        robustness_score=0.7,
+    )
+    df = metrics_to_df([row])
+    path = write_research_summary_csv(df, tmp_path)
+    assert path.exists()
+    assert (tmp_path / "research_summary.csv").exists()
+
+
 def test_build_trust_context_counts():
     df = pd.DataFrame([
         _ready_row(),

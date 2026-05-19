@@ -6,9 +6,15 @@ from datetime import datetime, timezone
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import risk_engine
+import config
 from risk_engine import risk_check
 from indicators import calc_atr
-from market_structure import NakedEngine, resolve_engine_b_execution_levels
+from market_structure import (
+    NakedEngine,
+    aggregate_engine_b_level_cohorts,
+    engine_b_level_cohort,
+    resolve_engine_b_execution_levels,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -31,6 +37,33 @@ def _make_signal(**overrides):
     }
     base.update(overrides)
     return base
+
+
+def test_engine_a_correlated_overlay_guard_config_does_not_change_engine_b_confidence(monkeypatch):
+    engine = NakedEngine()
+    res = {
+        "atr": 5.0,
+        "asset_type": "crypto",
+        "current_swing_sequence": "HH_HL",
+        "macro_swing_sequence": "HH_HL",
+        "zone_touched": True,
+        "trigger_ok": True,
+        "distance_to_res": 20.0,
+        "recommended_stop_loss": 95.0,
+        "recommended_take_profit": 112.0,
+        "bos_confirmed": True,
+        "bos_volume_confirmed": True,
+    }
+    profile = {"style": "intraday", "min_rr": 1.0, "min_room_atr": 0.25}
+
+    baseline = engine.calculate_confidence(dict(res), 100.0, "LONG", style_profile=profile)
+    monkeypatch.setitem(config.CONFIG, "ENGINE_A_CORRELATED_OVERLAY_GUARD_ENABLED", True)
+    monkeypatch.setitem(config.CONFIG, "ENGINE_A_CORRELATED_OVERLAY_MAX_TOTAL_UPLIFT", 0.01)
+    monkeypatch.setitem(config.CONFIG, "ENGINE_A_STRUCTURE_CONTEXT_ENABLED", True)
+    after = engine.calculate_confidence(dict(res), 100.0, "LONG", style_profile=profile)
+
+    for key in ("score", "gate_score", "pct", "passed", "structure_ok", "location_ok", "entry_ok", "space_gate_ok", "rr_ok"):
+        assert after[key] == baseline[key]
 
 def test_long_sl_below_entry():
     # Approved since SL (95) < Entry (100)
@@ -238,6 +271,233 @@ def test_forex_structural_tp_below_min_rr_uses_synthetic_fallback():
     assert out["execution_level_reject_reason"] is None or out["execution_level_reject_reason"] == ""
     assert out["fallback_tp_applied"] is True
     assert out["fallback_tp_reason"] == "structural_tp_below_min_rr"
+
+
+def test_structural_sl_fallback_rr_tp_cohort_when_structural_sl_selected():
+    """Structural SL can remain while TP is replaced by synthetic fallback RR."""
+    out = resolve_engine_b_execution_levels(
+        direction="LONG",
+        entry=100.0,
+        structural_sl=99.0,
+        structural_tp=101.0,
+        atr=1.0,
+        style="intraday",
+        asset_class="forex",
+        min_rr=1.5,
+        fallback_rr=2.0,
+    )
+
+    assert out["sl_source"] == "structural"
+    assert out["tp_source"] == "fallback_rr"
+    assert out["level_mode"] == "structural_sl_fallback_rr_tp"
+    assert out["level_cohort"] == "structural_sl_fallback_rr_tp"
+    assert out["fallback_tp_applied"] is True
+    assert out["synthetic_rr_tp_used"] is True
+
+
+def test_structural_and_fallback_tp_setups_have_separate_cohorts():
+    structural = resolve_engine_b_execution_levels(
+        direction="LONG",
+        entry=100.0,
+        structural_sl=90.0,
+        structural_tp=120.0,
+        atr=1.0,
+        style="intraday",
+        asset_class="forex",
+        min_rr=1.5,
+        fallback_rr=2.0,
+    )
+    fallback = resolve_engine_b_execution_levels(
+        direction="LONG",
+        entry=100.0,
+        structural_sl=90.0,
+        structural_tp=101.0,
+        atr=1.0,
+        style="intraday",
+        asset_class="forex",
+        min_rr=1.5,
+        fallback_rr=2.0,
+    )
+
+    assert structural["level_mode"] == "structural_sl_structural_tp"
+    assert structural["level_cohort"] == "structural_sl_structural_tp"
+    assert structural["fallback_tp_applied"] is False
+    assert fallback["level_mode"] == "atr_sl_fallback_rr_tp"
+    assert fallback["level_cohort"] == "atr_sl_fallback_rr_tp"
+    assert fallback["fallback_tp_applied"] is True
+
+
+def test_fallback_tp_applied_only_when_fallback_rr_target_used():
+    structural = resolve_engine_b_execution_levels(
+        direction="LONG",
+        entry=100.0,
+        structural_sl=90.0,
+        structural_tp=120.0,
+        atr=1.0,
+        style="intraday",
+        asset_class="forex",
+        min_rr=1.5,
+        fallback_rr=2.0,
+    )
+    atr_tp = resolve_engine_b_execution_levels(
+        direction="LONG",
+        entry=100.0,
+        structural_sl=98.0,
+        structural_tp=None,
+        atr=1.0,
+        style="intraday",
+        asset_class="crypto",
+        min_rr=1.5,
+        fallback_rr=2.0,
+    )
+    fallback = resolve_engine_b_execution_levels(
+        direction="LONG",
+        entry=100.0,
+        structural_sl=98.0,
+        structural_tp=None,
+        atr=1.0,
+        style="intraday",
+        asset_class="unknown_class",
+        min_rr=1.5,
+        fallback_rr=2.0,
+    )
+
+    assert structural["tp_source"] == "structural"
+    assert structural["fallback_tp_applied"] is False
+    assert structural["synthetic_rr_tp_used"] is False
+    assert atr_tp["tp_source"] == "atr"
+    assert atr_tp["fallback_tp_applied"] is False
+    assert atr_tp["synthetic_rr_tp_used"] is False
+    assert fallback["tp_source"] == "fallback_rr"
+    assert fallback["fallback_tp_applied"] is True
+    assert fallback["synthetic_rr_tp_used"] is True
+
+
+_ENGINE_B_EXECUTION_METADATA_KEYS = (
+    "level_mode",
+    "level_cohort",
+    "sl_source",
+    "tp_source",
+    "fallback_tp_applied",
+    "structural_tp_available",
+    "synthetic_rr_tp_used",
+    "rr_required",
+    "rr_actual",
+    "rr_passed",
+    "structural_target_distance_atr",
+    "stop_distance_atr",
+)
+
+
+def test_calculate_confidence_emits_execution_level_metadata():
+    engine = NakedEngine()
+    out = engine.calculate_confidence(
+        {
+            "atr": 1.0,
+            "asset_type": "forex",
+            "current_swing_sequence": "HH_HL",
+            "macro_swing_sequence": "HH_HL",
+            "bos_confirmed": True,
+            "trigger_ok": True,
+            "zone_touched": True,
+            "near_active_zone": True,
+            "distance_to_res": 5.0,
+            "recommended_stop_loss": 90.0,
+            "recommended_take_profit": 120.0,
+        },
+        current_price=100.0,
+        direction="LONG",
+        entry_candles=[],
+        style_profile={
+            "style": "intraday",
+            "min_score": 3.0,
+            "min_room_atr": 0.35,
+            "min_rr": 1.5,
+            "fallback_rr": 2.0,
+            "require_macro_align": False,
+        },
+    )
+
+    for key in _ENGINE_B_EXECUTION_METADATA_KEYS:
+        assert key in out
+
+
+def test_level_cohort_tagging_does_not_change_confidence_score_or_pass_result():
+    engine = NakedEngine()
+    payload = {
+        "atr": 1.0,
+        "asset_type": "forex",
+        "current_swing_sequence": "HH_HL",
+        "macro_swing_sequence": "HH_HL",
+        "bos_confirmed": True,
+        "trigger_ok": True,
+        "zone_touched": True,
+        "near_active_zone": True,
+        "distance_to_res": 5.0,
+        "recommended_stop_loss": 90.0,
+        "recommended_take_profit": 120.0,
+        "structural_verdict": "CLEAR",
+    }
+    style_profile = {
+        "style": "intraday",
+        "min_score": 3.0,
+        "min_room_atr": 0.35,
+        "min_rr": 1.5,
+        "fallback_rr": 2.0,
+        "require_macro_align": False,
+    }
+
+    out = engine.calculate_confidence(
+        dict(payload),
+        current_price=100.0,
+        direction="LONG",
+        entry_candles=[],
+        style_profile=style_profile,
+    )
+
+    assert out["score"] == pytest.approx(out["gate_score"] + out["bonus_points"])
+    assert out["passed"] is True
+    assert out["rr_passed"] is out["rr_ok"]
+    assert out["level_cohort"] == out["level_mode"]
+
+
+def test_missing_structural_tp_does_not_crash_level_diagnostics():
+    out = resolve_engine_b_execution_levels(
+        direction="LONG",
+        entry=100.0,
+        structural_sl=98.0,
+        structural_tp=None,
+        atr=1.0,
+        style="intraday",
+        asset_class="crypto",
+        min_rr=1.5,
+        fallback_rr=2.0,
+    )
+
+    assert out["structural_tp_available"] is False
+    assert out["structural_target_distance_atr"] is None
+    assert out["stop_distance_atr"] is not None
+    assert engine_b_level_cohort(out.get("level_mode")) in {
+        "atr_sl_structural_tp",
+        "atr_sl_fallback_rr_tp",
+        "unknown_level_mode",
+    }
+
+
+def test_engine_b_level_cohort_aggregation_counts_sources():
+    rows = [
+        {"level_cohort": "structural_sl_structural_tp", "passed": True, "rr_actual": 2.0},
+        {"level_mode": "atr_sl_fallback_rr_tp", "passed": False, "rr_actual": 1.0},
+        {"level_mode": "not_a_known_mode", "passed": False},
+    ]
+
+    summary = aggregate_engine_b_level_cohorts(rows)
+    assert summary["structural_sl_structural_tp"]["count"] == 1
+    assert summary["structural_sl_structural_tp"]["passed"] == 1
+    assert summary["structural_sl_structural_tp"]["avg_rr_actual"] == pytest.approx(2.0)
+    assert summary["atr_sl_fallback_rr_tp"]["count"] == 1
+    assert summary["atr_sl_fallback_rr_tp"]["failed"] == 1
+    assert summary["unknown_level_mode"]["count"] == 1
 
 
 @pytest.mark.parametrize("asset_class,expected_tp", [

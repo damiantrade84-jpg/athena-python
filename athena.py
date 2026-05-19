@@ -6062,7 +6062,17 @@ def _compute_naked_analysis(
             style_profile=style_profile,
         )
         _gate_ok, _min_score_scaled = engine_b_confidence_passes(
-            conf, style_profile, regime_label, _pair_type
+            conf,
+            style_profile,
+            regime_label,
+            _pair_type,
+            diagnostics_context={
+                "pair": pair_obj.get("display"),
+                "symbol": pair_obj.get("symbol"),
+                "asset_class": _pair_type,
+                "score_group": _pair_score_group,
+                "style": resolved_style,
+            },
         )
         _regime_gate = _engine_b_regime_gate(regime_label, _pair_type)
         res["min_score_used"] = float(_min_score_scaled)
@@ -6765,6 +6775,13 @@ def api_scan_naked():
                     style_profile,
                     regime_label,
                     pair.get("type", ""),
+                    diagnostics_context={
+                        "pair": pair.get("display"),
+                        "symbol": pair.get("symbol"),
+                        "asset_class": pair.get("type", ""),
+                        "score_group": _pair_score_group,
+                        "style": resolved_style,
+                    },
                 )
 
                 _fail_gates = []
@@ -11817,6 +11834,7 @@ def analyze_pair(
     try:
         from market_structure import engine as _structure_engine
         from athena_app.services.structure_context import (
+            apply_engine_a_correlated_overlay_guard,
             apply_structure_context_to_score,
         )
 
@@ -11842,15 +11860,29 @@ def analyze_pair(
             pair=pair,
         )
         if bool(CONFIG.get("ENGINE_A_STRUCTURE_CONTEXT_ENABLED", False)):
+            _pre_structure_score = float(res.get("score", 0.0) or 0.0)
             _structure_adjustment = apply_structure_context_to_score(
                 structure_data,
                 direction=direction,
-                base_score=float(res.get("score", 0.0) or 0.0),
+                base_score=_pre_structure_score,
                 max_score=float(max_score or 0.0),
             )
-            res["score"] = float(_structure_adjustment["adjusted_score"])
             _fd = dict(res.get("factorDiagnostics") or {})
+            _guard = apply_engine_a_correlated_overlay_guard(
+                base_score_before_structure=_pre_structure_score,
+                adjusted_score=float(_structure_adjustment["adjusted_score"]),
+                research_lab_value=_fd.get("researchLabValue", 0.0),
+                research_lab_detail=_fd.get("researchLabDetail") or {},
+                research_score_uplift=_fd.get("researchLabScoreUplift", 0.0),
+                structure_adjustment=_structure_adjustment,
+                max_score=float(max_score or 0.0),
+            )
+            res["score"] = float(_guard.get("adjusted_score", _structure_adjustment["adjusted_score"]))
+            _structure_adjustment = dict(_structure_adjustment)
+            _structure_adjustment["adjusted_score"] = round(float(res["score"]), 6)
+            _structure_adjustment["correlated_overlay_guard"] = _guard
             _fd["explicitStructureContext"] = _structure_adjustment
+            _fd["engineACorrelatedOverlayGuard"] = _guard
             res["factorDiagnostics"] = _fd
 
             _votes = dict(res.get("votes") or {})

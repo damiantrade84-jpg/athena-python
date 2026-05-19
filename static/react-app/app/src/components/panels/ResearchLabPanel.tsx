@@ -34,11 +34,14 @@ interface RunsResponse { runs?: RunSummary[]; error?: string }
 
 interface RunStatusResponse {
   run_id?: string;
-  status?: 'queued' | 'running' | 'complete' | 'failed' | string;
+  status?: 'queued' | 'running' | 'reporting' | 'complete' | 'failed' | 'partial' | string;
+  message?: string;
+  results_count?: number;
+  report_errors?: string[];
+  traceback_tail?: string;
   error?: string;
   traceback?: string;
   mode?: string;
-  results_count?: number;
   summary?: {
     total?: number;
     strong?: number;
@@ -196,6 +199,8 @@ const SESSION_TERMINAL = new Set(['COMPLETE', 'FAILED', 'CANCELLED']);
 function statusBadge(status?: string): string {
   switch ((status || '').toLowerCase()) {
     case 'complete': return 'badge-long';
+    case 'partial': return 'badge-neutral';
+    case 'reporting': return 'badge-neutral';
     case 'running':
     case 'queued': return 'badge-neutral';
     case 'failed': return 'badge-short';
@@ -412,11 +417,21 @@ export default function ResearchLabPanel() {
         const res = await fetch(`/api/research-lab/run/${runId}`);
         const json = (await res.json()) as RunStatusResponse;
         setRunStatus(json);
-        if (json.status === 'complete') {
+        if (json.status === 'reporting') {
+          setRunStatus(json);
+          await fetchRanked(runId);
+        } else if (json.status === 'complete' || json.status === 'partial') {
           stopPolling();
           await fetchRanked(runId);
           refreshRuns();
-          showToast(`Run ${runId} complete — ${json.results_count ?? json.summary?.total ?? '?'} results`, 'success');
+          if (json.status === 'partial') {
+            showToast(
+              json.error || `Run ${runId} finished with partial reports — try Refresh ranked`,
+              'error',
+            );
+          } else {
+            showToast(`Run ${runId} complete — ${json.results_count ?? json.summary?.total ?? '?'} results`, 'success');
+          }
         } else if (json.status === 'failed') {
           stopPolling();
           refreshRuns();
@@ -537,9 +552,10 @@ export default function ResearchLabPanel() {
       const res = await fetch(`/api/research-lab/run/${runId}`);
       const json = (await res.json()) as RunStatusResponse;
       setRunStatus(json);
-      if (json.status === 'complete') {
+      if (json.status === 'complete' || json.status === 'partial' || json.status === 'reporting') {
         await fetchRanked(runId);
-      } else if (json.status === 'running' || json.status === 'queued') {
+      }
+      if (json.status === 'running' || json.status === 'queued' || json.status === 'reporting') {
         pollRun(runId);
       }
     } catch (e) {
@@ -765,9 +781,21 @@ export default function ResearchLabPanel() {
             </CardHeader>
             <CardContent className="space-y-2">
               {runStatus?.error && (
-                <div className="p-2 rounded bg-short/10 border border-short/40 text-[11px] text-short">
+                <div className={`p-2 rounded border text-[11px] ${
+                  runStatus.status === 'partial'
+                    ? 'bg-warning/10 border-warning/40 text-warning'
+                    : 'bg-short/10 border-short/40 text-short'
+                }`}>
                   {runStatus.error}
+                  {runStatus.results_count != null && runStatus.results_count > 0 && (
+                    <p className="mt-1 text-[10px] opacity-90">
+                      Evaluations on disk: {runStatus.results_count}. If ranked data loads below, you can still review results.
+                    </p>
+                  )}
                 </div>
+              )}
+              {runStatus?.message && (
+                <p className="text-[11px] text-muted-foreground">{runStatus.message}</p>
               )}
               {runStatus?.summary && (
                 <div className="grid grid-cols-4 gap-3">
@@ -778,7 +806,7 @@ export default function ResearchLabPanel() {
                 </div>
               )}
               <div className="flex items-center gap-2 flex-wrap">
-                {runStatus?.status === 'complete' && (
+                {(runStatus?.status === 'complete' || runStatus?.status === 'reporting' || runStatus?.status === 'partial') && (
                   <>
                     <Button size="sm" variant="outline" className="h-7 gap-1 text-[10px]" onClick={() => fetchRanked(currentRunId)}>
                       Refresh ranked

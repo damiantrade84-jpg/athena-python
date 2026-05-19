@@ -25,7 +25,10 @@ from athena_app.services.crypto_signal_feed import (
     resolve_crypto_signal_feed,
 )
 from athena_app.services.market_state import market_state_offset_hours, split_market_state
-from athena_app.services.structure_context import apply_structure_context_to_score
+from athena_app.services.structure_context import (
+    apply_engine_a_correlated_overlay_guard,
+    apply_structure_context_to_score,
+)
 from backtest_candle_cache import fetch_backtest_candles, fetch_backtest_eodhd_intraday
 from calibration import calibration_report
 from config import CONFIG, _json_safe, get_optimal_workers
@@ -296,9 +299,22 @@ def _apply_engine_a_structure_context_to_bt_result(
         max_score=float(max_score or 0.0),
     )
     out = dict(res)
-    out["score"] = float(adjusted["adjusted_score"])
     fd = dict(out.get("factorDiagnostics") or {})
+    guard = apply_engine_a_correlated_overlay_guard(
+        base_score_before_structure=float(res.get("score", 0.0) or 0.0),
+        adjusted_score=float(adjusted["adjusted_score"]),
+        research_lab_value=fd.get("researchLabValue", 0.0),
+        research_lab_detail=fd.get("researchLabDetail") or {},
+        research_score_uplift=fd.get("researchLabScoreUplift", 0.0),
+        structure_adjustment=adjusted,
+        max_score=float(max_score or 0.0),
+    )
+    out["score"] = float(guard.get("adjusted_score", adjusted["adjusted_score"]))
+    adjusted = dict(adjusted)
+    adjusted["adjusted_score"] = round(float(out["score"]), 6)
+    adjusted["correlated_overlay_guard"] = guard
     fd["explicitStructureContext"] = adjusted
+    fd["engineACorrelatedOverlayGuard"] = guard
     out["factorDiagnostics"] = fd
 
     votes = dict(out.get("votes") or {})
@@ -590,6 +606,42 @@ def _bt_risk_pct(
     if dd >= dd_reduce:
         return base * 0.5, dd, True
     return base, dd, True
+
+
+def _research_returns_from_candles(candles: list[dict], lookback: int | None = None) -> list[float]:
+    closes: list[float] = []
+    for row in candles or []:
+        try:
+            close = float(row.get("close"))
+        except (AttributeError, TypeError, ValueError):
+            continue
+        if math.isfinite(close) and close > 0:
+            closes.append(close)
+    if lookback is not None and lookback > 0:
+        closes = closes[-(int(lookback) + 1):]
+    returns: list[float] = []
+    for prev, cur in zip(closes, closes[1:]):
+        if prev > 0:
+            returns.append((cur / prev) - 1.0)
+    return returns
+
+
+def _research_vol_target_bt_metadata(
+    *,
+    original_size: float,
+    returns: list[float] | None = None,
+    atr: float | None = None,
+    close: float | None = None,
+) -> dict:
+    from athena_research.volatility_targeting import apply_research_vol_target_size
+
+    return apply_research_vol_target_size(
+        original_size=original_size,
+        returns=returns or [],
+        atr=atr,
+        close=close,
+        cfg=CONFIG,
+    )
 
 
 def _engine_a_level_atr_for_bt(
@@ -2546,6 +2598,15 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
             equity = round(equity * (1 + equity_change), 6)
 
             equity_curve.append(round(equity, 4))
+            _research_vol_meta = _research_vol_target_bt_metadata(
+                original_size=(live_risk_pct * _vol_adj * _score_factor) if _bt_allowed else 0.0,
+                returns=_research_returns_from_candles(
+                    d1_raw[max(0, i - int(CONFIG.get("RESEARCH_VOL_TARGET_LOOKBACK", 20) or 20)): i + 1],
+                    int(CONFIG.get("RESEARCH_VOL_TARGET_LOOKBACK", 20) or 20),
+                ),
+                atr=entry_bar.get("atr") or res.get("atr"),
+                close=entry,
+            )
 
             # R2: Tag trade with regime for segmentation
 
@@ -2590,6 +2651,12 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
                     "wf_fold": _vf["wf_fold"],
                     "validation_mode": _canonical_vm,
                     "volAdj": _vol_adj,
+                    "vol_targeting_applied": _research_vol_meta.get("vol_targeting_applied"),
+                    "original_size": _research_vol_meta.get("original_size"),
+                    "vol_target_adjusted_size": _research_vol_meta.get("vol_target_adjusted_size"),
+                    "vol_target_multiplier": _research_vol_meta.get("multiplier"),
+                    "vol_target_volatility": _research_vol_meta.get("volatility"),
+                    "vol_target_volatility_source": _research_vol_meta.get("volatility_source"),
                     "factors": res.get("factor_scores") or {},
                     "factor_weights": res.get("factor_weights") or {},
                     "rsi": d1_window[-1].get("rsi") if d1_window else None,
@@ -3134,6 +3201,15 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
             equity = round(equity * (1 + equity_change), 6)
 
             equity_curve.append(round(equity, 4))
+            _research_vol_meta = _research_vol_target_bt_metadata(
+                original_size=(live_risk_pct * _vol_adj * _score_factor) if _bt_allowed else 0.0,
+                returns=_research_returns_from_candles(
+                    h4_raw[max(0, i - int(CONFIG.get("RESEARCH_VOL_TARGET_LOOKBACK", 20) or 20)): i + 1],
+                    int(CONFIG.get("RESEARCH_VOL_TARGET_LOOKBACK", 20) or 20),
+                ),
+                atr=entry_bar.get("atr") or res.get("atr"),
+                close=entry,
+            )
 
             _regime = (
                 _ts
@@ -3176,6 +3252,12 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
                     "wf_fold": _vf["wf_fold"],
                     "validation_mode": _canonical_vm,
                     "volAdj": _vol_adj,
+                    "vol_targeting_applied": _research_vol_meta.get("vol_targeting_applied"),
+                    "original_size": _research_vol_meta.get("original_size"),
+                    "vol_target_adjusted_size": _research_vol_meta.get("vol_target_adjusted_size"),
+                    "vol_target_multiplier": _research_vol_meta.get("multiplier"),
+                    "vol_target_volatility": _research_vol_meta.get("volatility"),
+                    "vol_target_volatility_source": _research_vol_meta.get("volatility_source"),
                     "factors": res.get("factor_scores") or {},
                     "factor_weights": res.get("factor_weights") or {},
                     "rsi": h4_window[-1].get("rsi") if h4_window else None,
@@ -3710,6 +3792,15 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
             equity = round(equity * (1 + equity_change), 6)
 
             equity_curve.append(round(equity, 4))
+            _research_vol_meta = _research_vol_target_bt_metadata(
+                original_size=(live_risk_pct * _vol_adj * _score_factor) if _bt_allowed else 0.0,
+                returns=_research_returns_from_candles(
+                    h1_raw[max(0, i - int(CONFIG.get("RESEARCH_VOL_TARGET_LOOKBACK", 20) or 20)): i + 1],
+                    int(CONFIG.get("RESEARCH_VOL_TARGET_LOOKBACK", 20) or 20),
+                ),
+                atr=entry_bar.get("atr") or res.get("atr"),
+                close=entry,
+            )
 
             _regime = (
                 _ts
@@ -3750,6 +3841,12 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
                     "wf_fold": _vf["wf_fold"],
                     "validation_mode": _canonical_vm,
                     "volAdj": _vol_adj,
+                    "vol_targeting_applied": _research_vol_meta.get("vol_targeting_applied"),
+                    "original_size": _research_vol_meta.get("original_size"),
+                    "vol_target_adjusted_size": _research_vol_meta.get("vol_target_adjusted_size"),
+                    "vol_target_multiplier": _research_vol_meta.get("multiplier"),
+                    "vol_target_volatility": _research_vol_meta.get("volatility"),
+                    "vol_target_volatility_source": _research_vol_meta.get("volatility_source"),
                     "factors": res.get("factor_scores") or {},
                     "factor_weights": res.get("factor_weights") or {},
                     **_exit_path,
@@ -5280,6 +5377,15 @@ def backtest_pair_naked(pair: dict, style: str = "naked", validation_mode="stand
             if _nz:
                 _vol_str = _nz.get("volume_strength", 0.0)
         _fvg_bonus = 1.0 if best["res"].get("fvg_overlap") else 0.0
+        _research_vol_meta = _research_vol_target_bt_metadata(
+            original_size=_live_base_risk_pct(pair.get("type", "stock")),
+            returns=_research_returns_from_candles(
+                _monitor_candles[max(0, _monitor_fill_index - int(CONFIG.get("RESEARCH_VOL_TARGET_LOOKBACK", 20) or 20)): _monitor_fill_index + 1],
+                int(CONFIG.get("RESEARCH_VOL_TARGET_LOOKBACK", 20) or 20),
+            ),
+            atr=best["res"].get("atr") or atr,
+            close=entry,
+        )
 
         trades.append(
             {
@@ -5310,6 +5416,12 @@ def backtest_pair_naked(pair: dict, style: str = "naked", validation_mode="stand
                 "wf_fold": _vf["wf_fold"],
                 "validation_mode": _canonical_vm,
                 "volAdj": 1.0,
+                "vol_targeting_applied": _research_vol_meta.get("vol_targeting_applied"),
+                "original_size": _research_vol_meta.get("original_size"),
+                "vol_target_adjusted_size": _research_vol_meta.get("vol_target_adjusted_size"),
+                "vol_target_multiplier": _research_vol_meta.get("multiplier"),
+                "vol_target_volatility": _research_vol_meta.get("volatility"),
+                "vol_target_volatility_source": _research_vol_meta.get("volatility_source"),
                 "r_multiple": r_multiple,
                 "liquidity_sweep": best["res"].get("liquidity_sweep", False),
                 "fvg_overlap": best["res"].get("fvg_overlap", False),

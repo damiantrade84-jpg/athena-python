@@ -1,0 +1,51 @@
+﻿---
+description: Athena/Sentinel Pro repo guardrails for Cursor Agent. Applies to all Athena repo work.
+globs:
+  - "**/*"
+alwaysApply: true
+---
+
+# Athena / Sentinel Pro Cursor Guardrails
+
+Use `AGENTS.md` as the primary repo instruction file for this workspace.
+
+Do not load or use `CLAUDE.md`; that file is for Claude Code only.
+
+Do not use user-profile/global Cursor, Codex, or Claude Athena skills for this repo unless the user explicitly asks.
+
+For this repo, active audit skill material is limited to:
+
+- `.agents/skills/athena-audit/SKILL.md`
+
+Use `.agents/skills/athena-audit/SKILL.md` only when the user explicitly asks for full audit, bug hunt, strict findings, execution-safety review, live/backtest parity review, producer-to-consumer contract review, or end-to-end trace work.
+
+Do not look for or use skills that do not exist under `.agents/skills/`.
+
+For normal targeted fixes:
+
+- read only task-relevant current files
+- do not load logs, old audits, generated artifacts, or historical reports unless named by the user
+- do not run broad tests
+- run targeted tests only
+- do not change trading logic, thresholds, engine logic, or execution behavior unless explicitly requested
+
+Hard safety rules:
+
+- paper-only unless the user explicitly approves live trading
+- never bypass risk gates, freshness gates, kill switches, execution approval gates, broker safety checks, RR checks, SL/TP validation, or audit logging
+- AI is advisory-only and cannot execute trades, approve orders, mutate config, or override deterministic gates
+- Engine A and Engine B are independent signal engines
+- Engine C owns A/B comparison, agreement, conflict, A-only, and B-only logic
+- Engine D is separate scalp logic
+
+## Cursor / Claude separation
+
+`CLAUDE.md` may appear in the workspace because it exists at repo root. For Cursor work, treat it as non-authoritative.
+
+Cursor authority order for this repo:
+
+1. `.cursor/rules/*.mdc`
+2. `AGENTS.md`
+3. `.agents/skills/athena-audit/SKILL.md` only when explicitly requested
+
+Do not apply `CLAUDE.md` instructions in Cursor sessions unless the user is specifically editing or reviewing Claude Code configuration.

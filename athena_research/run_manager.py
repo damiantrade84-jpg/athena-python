@@ -23,7 +23,7 @@ from athena_research.data_loader import (
     asset_class_for, load_ohlcv_multi, vbt_freq,
 )
 from athena_research.metrics import StrategyMetrics, compute_param_sensitivity, evaluate_strategy
-from athena_research.reporting import generate_all_reports
+from athena_research.reporting import generate_all_reports, make_run_dir
 from athena_research.research_context import annotate_research_results
 from athena_research.strategies import StrategySpec, iter_strategy_specs, run_strategy
 
@@ -432,6 +432,14 @@ def run_research(
     # Research-only Engine A/B attribution and group-aware recommendations.
     all_results = annotate_research_results(all_results, cfg)
 
+    # Checkpoint raw results to disk before full report pipeline (large runs can OOM here).
+    run_dir = make_run_dir(output_dir, run_id)
+    try:
+        from athena_research.reporting import metrics_to_df, write_research_summary_csv
+        write_research_summary_csv(metrics_to_df(all_results), run_dir)
+    except Exception as e:
+        log.error("[run_manager] Early research_summary.csv write failed: %s", e, exc_info=True)
+
     # Generate reports
     run_meta = {
         "mode": mode,
@@ -461,6 +469,14 @@ def run_research(
         log.error("[run_manager] generate_all_reports failed: %s", e, exc_info=True)
         run_dir = Path(output_dir) / run_id
         run_dir.mkdir(parents=True, exist_ok=True)
+        summary_path = run_dir / "research_summary.csv"
+        if not summary_path.exists() and all_results:
+            try:
+                from athena_research.reporting import metrics_to_df, write_research_summary_csv
+                write_research_summary_csv(metrics_to_df(all_results), run_dir)
+                log.info("[run_manager] Recovered research_summary.csv after report failure")
+            except Exception as recover_exc:
+                log.error("[run_manager] Could not recover summary CSV: %s", recover_exc)
 
     result = {
         "run_id": run_id,
@@ -534,11 +550,14 @@ def list_runs(output_dir: str | Path = _DEFAULT_OUTPUT) -> list[dict[str, Any]]:
 
 
 def get_run_results(run_id: str, output_dir: str | Path = _DEFAULT_OUTPUT) -> Optional[pd.DataFrame]:
-    """Load research_summary.csv for a given run_id."""
-    p = Path(output_dir) / run_id / "research_summary.csv"
-    if not p.exists():
-        return None
-    try:
-        return pd.read_csv(p)
-    except Exception:
-        return None
+    """Load research_summary.csv for a given run_id (fallback: ranked_strategies.csv)."""
+    run_dir = Path(output_dir) / run_id
+    for name in ("research_summary.csv", "ranked_strategies.csv"):
+        p = run_dir / name
+        if not p.exists():
+            continue
+        try:
+            return pd.read_csv(p)
+        except Exception:
+            log.warning("[run_manager] Failed to read %s for %s", name, run_id, exc_info=True)
+    return None

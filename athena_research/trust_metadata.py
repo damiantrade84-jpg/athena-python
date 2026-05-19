@@ -69,12 +69,19 @@ def trust_legend() -> list[dict[str, str]]:
     return [dict(x) for x in _TRUST_LEGEND]
 
 
+_LIVE_FACTOR_CACHE: tuple[frozenset[str], frozenset[str]] | None = None
+
+
 def _load_live_factor_names() -> tuple[frozenset[str], frozenset[str]]:
-    """Read live research factor allowlists from config.yaml (read-only)."""
+    """Read live research factor allowlists from config.yaml (read-only, cached)."""
+    global _LIVE_FACTOR_CACHE
+    if _LIVE_FACTOR_CACHE is not None:
+        return _LIVE_FACTOR_CACHE
     try:
         cfg = yaml.safe_load(_MAIN_CONFIG.read_text(encoding="utf-8")) or {}
     except Exception:
-        return _LIVE_ENGINE_A_FACTORS, _LIVE_ENGINE_B_FACTORS
+        _LIVE_FACTOR_CACHE = (_LIVE_ENGINE_A_FACTORS, _LIVE_ENGINE_B_FACTORS)
+        return _LIVE_FACTOR_CACHE
 
     a_factors = cfg.get("ENGINE_A_RESEARCH_LAB_FACTORS", {}) or {}
     b_groups = (cfg.get("ENGINE_B_RESEARCH_LAB_FACTORS", {}) or {}).get("GROUPS", {}) or {}
@@ -83,10 +90,11 @@ def _load_live_factor_names() -> tuple[frozenset[str], frozenset[str]]:
     for group_list in b_groups.values():
         if isinstance(group_list, list):
             b_names.update(str(x) for x in group_list)
-    return (
+    _LIVE_FACTOR_CACHE = (
         frozenset(a_names or _LIVE_ENGINE_A_FACTORS),
         frozenset(b_names or _LIVE_ENGINE_B_FACTORS),
     )
+    return _LIVE_FACTOR_CACHE
 
 
 def engine_fidelity_for_row(

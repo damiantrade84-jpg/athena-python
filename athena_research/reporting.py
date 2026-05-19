@@ -50,6 +50,52 @@ def _enrich_with_trust(df: pd.DataFrame, *, validation_run_count: int = 0) -> pd
     return apply_trust_metadata(work, validation_run_count=validation_run_count)
 
 
+def _prepare_report_frame(df: pd.DataFrame) -> pd.DataFrame:
+    """Readiness + recommendations only (trust deferred to API for large runs)."""
+    return _apply_implementation_readiness(_normalise_action_recommendations(df))
+
+
+def sample_operator_source_df(
+    summary_path: Path,
+    *,
+    ranked_path: Path | None = None,
+    limit: int = 2000,
+) -> pd.DataFrame:
+    """Load a capped slice for operator summary (avoid reading/enriching 20k+ rows)."""
+    import pandas as pd
+
+    if ranked_path is not None and ranked_path.exists():
+        try:
+            ranked = pd.read_csv(ranked_path)
+            if not ranked.empty:
+                return ranked.head(limit)
+        except Exception:
+            pass
+
+    if not summary_path.exists():
+        return pd.DataFrame(columns=OUTPUT_COLUMNS)
+
+    try:
+        df = pd.read_csv(summary_path)
+    except Exception:
+        return pd.DataFrame(columns=OUTPUT_COLUMNS)
+
+    if df.empty:
+        return df
+
+    work = df.copy()
+    if "status" in work.columns:
+        order = {"STRONG_CANDIDATE": 0, "WEAK_CANDIDATE": 1, "NEEDS_MORE_DATA": 2, "REJECT": 3}
+        work["_status_order"] = work["status"].map(order).fillna(9)
+        sort_cols = ["_status_order"]
+        if "robustness_score" in work.columns:
+            work["_rob"] = pd.to_numeric(work["robustness_score"], errors="coerce").fillna(-1)
+            sort_cols.append("_rob")
+        work = work.sort_values(sort_cols, ascending=[True] + [False] * (len(sort_cols) - 1))
+        work = work.drop(columns=[c for c in work.columns if c.startswith("_")], errors="ignore")
+    return work.head(limit)
+
+
 # ─── Run folder helpers ───────────────────────────────────────────────────────
 
 def make_run_dir(base_dir: str | Path, run_id: str) -> Path:
@@ -83,6 +129,19 @@ def metrics_to_df(results: list[StrategyMetrics]) -> pd.DataFrame:
         if col not in df.columns:
             df[col] = float("nan")
     return df[OUTPUT_COLUMNS]
+
+
+def write_research_summary_csv(df: pd.DataFrame, run_dir: Path) -> Path:
+    """Persist research_summary.csv as early as possible (survives later report failures)."""
+    run_dir.mkdir(parents=True, exist_ok=True)
+    path = run_dir / "research_summary.csv"
+    out = df.copy()
+    if not out.empty:
+        out.to_csv(path, index=False, float_format="%.6f")
+    else:
+        pd.DataFrame(columns=OUTPUT_COLUMNS).to_csv(path, index=False)
+    log.info("[reporting] wrote research_summary.csv (%d rows)", len(out))
+    return path
 
 
 def _safe_float(v) -> float:
@@ -382,7 +441,8 @@ def build_operator_decision_summary(
 # ─── CSV writers ──────────────────────────────────────────────────────────────
 
 def write_csvs(df: pd.DataFrame, run_dir: Path) -> list[Path]:
-    df = _enrich_with_trust(df)
+    # Trust columns are added on API read for top rows — full-frame enrich is too slow at 20k+ rows.
+    df = _prepare_report_frame(df)
     written = []
 
     def _save(frame: pd.DataFrame, name: str):
@@ -1037,6 +1097,13 @@ def generate_all_reports(
 
     errors: list[str] = []
 
+    # Checkpoint summary before heavier enrichment / markdown (large runs).
+    try:
+        write_research_summary_csv(df, run_dir)
+    except Exception as e:
+        log.error("[reporting] write_research_summary_csv failed: %s", e, exc_info=True)
+        errors.append(f"write_research_summary_csv: {e}")
+
     try:
         write_csvs(df, run_dir)
     except Exception as e:
@@ -1066,7 +1133,7 @@ def generate_all_reports(
         "errors": errors,
     }
     try:
-        df = _enrich_with_trust(df)
+        df = _prepare_report_frame(df)
         warnings = df.get("simulation_warning", pd.Series("", index=df.index)).fillna("").astype(str)
         backends = df.get("simulation_backend", pd.Series("", index=df.index)).fillna("").astype(str)
         readiness = df.get("implementation_verdict", pd.Series("", index=df.index)).fillna("").astype(str)

@@ -1,0 +1,181 @@
+schema_version: 1
+purpose: >
+  Auditable registry of verified references that may inform research notes about
+  indicator and calibration methodology. Entries do not change production
+  thresholds, indicators, scoring, SL/TP, or execution behavior.
+production_support_policy: >
+  A reference marked verified: true may be cited in research/audit notes for the
+  listed used_for purpose. A reference marked verified: false must not be used to
+  justify code or production settings. This registry is not an approval to change
+  live trading behavior.
+sections:
+  ATR:
+    notes: "Origin reference for ATR as a range/volatility measure."
+    references:
+      - id: wilder_1978_new_concepts
+        title: "New Concepts in Technical Trading Systems"
+        author_source: "J. Welles Wilder Jr.; Trend Research"
+        year: 1978
+        verified: true
+        production_supporting: false
+        verified_url_or_identifier: "ISBN 0-89459-027-8; Open Library OL4745184M"
+        citation: "Wilder, J. W. Jr. (1978). New Concepts in Technical Trading Systems. Greensboro, NC: Trend Research. ISBN 0-89459-027-8."
+        used_for: "ATR origin and terminology; ATR may be referenced as a volatility/range input in research notes."
+        limitation: "Does not validate Athena-specific ATR periods, volatility bands, or SL/TP multipliers."
+        directly_mapped_config_keys:
+          - VOLATILITY_SCALER_BANDS
+          - ATR_CLASS
+          - SL_ATR_MULT
+          - TP1_ATR_MULT
+          - TP2_ATR_MULT
+  ADX_DI:
+    notes: "Origin reference for Directional Movement, DI, and ADX concepts."
+    references:
+      - id: wilder_1978_new_concepts
+        title: "New Concepts in Technical Trading Systems"
+        author_source: "J. Welles Wilder Jr.; Trend Research"
+        year: 1978
+        verified: true
+        production_supporting: false
+        verified_url_or_identifier: "ISBN 0-89459-027-8; Open Library OL4745184M"
+        citation: "Wilder, J. W. Jr. (1978). New Concepts in Technical Trading Systems. Greensboro, NC: Trend Research. ISBN 0-89459-027-8."
+        used_for: "ADX/DI origin and terminology; supports research discussion of trend-strength and directional movement indicators."
+        limitation: "Does not validate Athena-specific ADX floors, DI alignment multipliers, or hard-fail values."
+        directly_mapped_config_keys:
+          - ADX_TREND_MIN
+          - ADX_TREND_MIN_CLASS
+          - FACTOR_ADX_HARD_FAIL_CLASS
+  RSI:
+    notes: "Origin reference for RSI."
+    references:
+      - id: wilder_1978_new_concepts
+        title: "New Concepts in Technical Trading Systems"
+        author_source: "J. Welles Wilder Jr.; Trend Research"
+        year: 1978
+        verified: true
+        production_supporting: false
+        verified_url_or_identifier: "ISBN 0-89459-027-8; Open Library OL4745184M"
+        citation: "Wilder, J. W. Jr. (1978). New Concepts in Technical Trading Systems. Greensboro, NC: Trend Research. ISBN 0-89459-027-8."
+        used_for: "RSI origin and terminology; supports research discussion of momentum/overbought/oversold indicators."
+        limitation: "Does not validate Athena-specific RSI thresholds, z-score transforms, or scoring weights."
+        directly_mapped_config_keys: []
+  trend_momentum:
+    notes: "Academic validation context for time-series trend/momentum effects."
+    references:
+      - id: moskowitz_ooi_pedersen_2012_time_series_momentum
+        title: "Time Series Momentum"
+        author_source: "Tobias J. Moskowitz, Yao Hua Ooi, and Lasse Heje Pedersen; Journal of Financial Economics"
+        year: 2012
+        verified: true
+        production_supporting: false
+        verified_url_or_identifier: "DOI 10.1016/j.jfineco.2011.11.003"
+        citation: "Moskowitz, T. J., Ooi, Y. H., & Pedersen, L. H. (2012). Time series momentum. Journal of Financial Economics, 104(2), 228-250. https://doi.org/10.1016/j.jfineco.2011.11.003"
+        used_for: "Research context that trend/momentum effects have been studied across futures asset classes."
+        limitation: "Does not validate Athena's EMA stack, MACD/RSI mix, intraday timeframes, thresholds, or execution rules."
+        directly_mapped_config_keys:
+          - INDICATOR_WEIGHTS
+  volatility_targeting:
+    notes: "Academic context for volatility-managed exposure; research-only in Athena."
+    references:
+      - id: moreira_muir_2017_volatility_managed_portfolios
+        title: "Volatility-Managed Portfolios"
+        author_source: "Alan Moreira and Tyler Muir; Journal of Finance"
+        year: 2017
+        verified: true
+        production_supporting: false
+        verified_url_or_identifier: "DOI 10.1111/jofi.12513"
+        citation: "Moreira, A., & Muir, T. (2017). Volatility-managed portfolios. Journal of Finance, 72(4), 1611-1644. https://doi.org/10.1111/jofi.12513"
+        used_for: "Research context for measuring volatility-managed exposure and inverse-volatility sizing overlays."
+        limitation: "Does not authorize live sizing changes; Athena's volatility-targeting module is research-only unless separately approved."
+        directly_mapped_config_keys:
+          - RESEARCH_VOL_TARGETING_ENABLED
+          - RESEARCH_VOL_TARGET_ANNUALIZED
+          - RESEARCH_VOL_TARGET_MAX_MULTIPLIER
+          - RESEARCH_VOL_TARGET_MIN_MULTIPLIER
+          - RESEARCH_VOL_TARGET_LOOKBACK
+  data_snooping_multiple_testing:
+    notes: "Governance references for multiple testing and data-snooping risk."
+    references:
+      - id: harvey_liu_zhu_2016_cross_section_expected_returns
+        title: "... and the Cross-Section of Expected Returns"
+        author_source: "Campbell R. Harvey, Yan Liu, and Caroline Zhu; Review of Financial Studies"
+        year: 2016
+        verified: true
+        production_supporting: false
+        verified_url_or_identifier: "DOI 10.1093/rfs/hhv059; SSRN 2249314"
+        citation: "Harvey, C. R., Liu, Y., & Zhu, C. (2016). ... and the cross-section of expected returns. Review of Financial Studies, 29(1), 5-68. https://doi.org/10.1093/rfs/hhv059"
+        used_for: "Anti-overfit governance; motivates high scrutiny for many tested factors/thresholds."
+        limitation: "Does not prove any Athena factor is valid; only supports multiple-testing caution."
+        directly_mapped_config_keys:
+          - BT_NUM_VARIANTS_TRIED
+      - id: white_2000_reality_check
+        title: "A Reality Check for Data Snooping"
+        author_source: "Halbert White; Econometrica"
+        year: 2000
+        verified: true
+        production_supporting: false
+        verified_url_or_identifier: "DOI 10.1111/1468-0262.00152"
+        citation: "White, H. (2000). A reality check for data snooping. Econometrica, 68(5), 1097-1126. https://doi.org/10.1111/1468-0262.00152"
+        used_for: "Research validation governance for strategy searches and repeated testing against a benchmark."
+        limitation: "Does not select Athena parameters; requires proper implementation and sample design."
+        directly_mapped_config_keys:
+          - BT_NUM_VARIANTS_TRIED
+      - id: hansen_2005_spa
+        title: "A Test for Superior Predictive Ability"
+        author_source: "Peter Reinhard Hansen; Journal of Business & Economic Statistics"
+        year: 2005
+        verified: true
+        production_supporting: false
+        verified_url_or_identifier: "DOI 10.1198/073500105000000063"
+        citation: "Hansen, P. R. (2005). A test for superior predictive ability. Journal of Business & Economic Statistics, 23(4), 365-380. https://doi.org/10.1198/073500105000000063"
+        used_for: "Research validation governance for data-snooping controls and comparison of many candidate models."
+        limitation: "Does not validate any Athena setting without a correctly specified benchmark and loss/performance series."
+        directly_mapped_config_keys:
+          - BT_NUM_VARIANTS_TRIED
+  ATR_SL_TP_practitioner_calibration:
+    notes: "Verified references here do not justify Athena SL/TP multipliers directly."
+    references:
+      - id: wilder_1978_new_concepts
+        title: "New Concepts in Technical Trading Systems"
+        author_source: "J. Welles Wilder Jr.; Trend Research"
+        year: 1978
+        verified: true
+        production_supporting: false
+        verified_url_or_identifier: "ISBN 0-89459-027-8; Open Library OL4745184M"
+        citation: "Wilder, J. W. Jr. (1978). New Concepts in Technical Trading Systems. Greensboro, NC: Trend Research. ISBN 0-89459-027-8."
+        used_for: "ATR definition for discussing ATR-based stops/targets in research notes."
+        limitation: "Origin of ATR only; not evidence for Athena's stop or target multipliers."
+        directly_mapped_config_keys:
+          - ATR_CLASS
+          - SL_ATR_MULT
+          - TP1_ATR_MULT
+          - TP2_ATR_MULT
+  Engine_B_structure_RR_validation:
+    notes: "Validation governance for Engine B structure/RR experiments; not structure logic justification."
+    references:
+      - id: white_2000_reality_check
+        title: "A Reality Check for Data Snooping"
+        author_source: "Halbert White; Econometrica"
+        year: 2000
+        verified: true
+        production_supporting: false
+        verified_url_or_identifier: "DOI 10.1111/1468-0262.00152"
+        citation: "White, H. (2000). A reality check for data snooping. Econometrica, 68(5), 1097-1126. https://doi.org/10.1111/1468-0262.00152"
+        used_for: "Research validation governance for Engine B RR, fallback-target, and structure-gate sweeps."
+        limitation: "Does not validate BOS/CHoCH/OB/FVG definitions, RR thresholds, fallback TP, or level-selection logic."
+        directly_mapped_config_keys:
+          - ENGINE_B_REGIME_MULTIPLIERS
+          - ENGINE_B_REGIME_MULTIPLIERS_ENABLED
+      - id: hansen_2005_spa
+        title: "A Test for Superior Predictive Ability"
+        author_source: "Peter Reinhard Hansen; Journal of Business & Economic Statistics"
+        year: 2005
+        verified: true
+        production_supporting: false
+        verified_url_or_identifier: "DOI 10.1198/073500105000000063"
+        citation: "Hansen, P. R. (2005). A test for superior predictive ability. Journal of Business & Economic Statistics, 23(4), 365-380. https://doi.org/10.1198/073500105000000063"
+        used_for: "Research validation governance when comparing many Engine B parameter variants."
+        limitation: "Does not provide direct support for any Engine B trading threshold or structural indicator."
+        directly_mapped_config_keys:
+          - ENGINE_B_REGIME_MULTIPLIERS
+          - ENGINE_B_REGIME_MULTIPLIERS_ENABLED

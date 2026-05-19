@@ -881,7 +881,7 @@ def calc_confluence(
     )
     confidence_val = _conf["confidence"]
     # Legacy return dict
-    return {
+    result = {
         "score": score,
         "votes": v,
         "direction": direction,
@@ -934,9 +934,35 @@ def calc_confluence(
             "engineAAssetDiagnostics": factor_result.get("engine_a_asset_diagnostics"),
             "researchLabValue": factor_result.get("research_lab_value"),
             "researchLabDetail": factor_result.get("research_lab_detail"),
+            "researchLabScoreUplift": factor_result.get("research_lab_score_uplift"),
+            "engineACorrelatedOverlayGuard": factor_result.get("engine_a_correlated_overlay_guard"),
         },
         "intermarketConfirmation": factor_result.get("intermarket_confirmation") or {},
     }
+
+    try:
+        from calibration_diagnostics import (
+            build_engine_a_calibration_row,
+            record_calibration_diagnostic,
+        )
+
+        _threshold_regime = engine_a_regime_label_for_threshold(result)
+        _threshold = get_score_threshold(pair, regime=_threshold_regime)
+        _passed = bool(score >= _threshold and direction in ("LONG", "SHORT"))
+        _failure = None if _passed else factor_result.get("abort_reason") or "below_engine_a_threshold"
+        record_calibration_diagnostic(
+            build_engine_a_calibration_row(
+                pair=pair,
+                result=result,
+                factor_result=factor_result,
+                threshold=_threshold,
+                passed=_passed,
+                failure_reason=_failure,
+            )
+        )
+    except Exception as exc:
+        log.debug("[CALIBRATION-DIAG] Engine A diagnostic skipped: %s", exc)
+    return result
 
 
 # ── Scan classification helpers — pure functions, no Flask/athena deps ────────

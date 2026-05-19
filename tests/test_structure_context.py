@@ -1,4 +1,7 @@
-from athena_app.services.structure_context import apply_structure_context_to_score
+from athena_app.services.structure_context import (
+    apply_engine_a_correlated_overlay_guard,
+    apply_structure_context_to_score,
+)
 import config
 
 
@@ -307,3 +310,60 @@ def test_structure_context_confluence_bonus_is_default_off(monkeypatch):
 
     assert out["multiplier"] == 1.22
     assert out["components"]["confluence_bonus"] == 0.0
+
+
+def test_engine_a_correlated_overlay_guard_disabled_preserves_adjusted_score(monkeypatch):
+    monkeypatch.setitem(config.CONFIG, "ENGINE_A_CORRELATED_OVERLAY_GUARD_ENABLED", False)
+    out = apply_engine_a_correlated_overlay_guard(
+        base_score_before_structure=1.0,
+        adjusted_score=1.3,
+        research_lab_value=0.15,
+        research_lab_detail={"enabled": True},
+        research_score_uplift=0.10,
+        structure_adjustment={"applied": True, "multiplier": 1.30},
+        max_score=3.0,
+    )
+
+    assert out["warning"] is True
+    assert out["capped"] is False
+    assert out["adjusted_score"] == 1.3
+
+
+def test_engine_a_correlated_overlay_guard_caps_combined_positive_uplift(monkeypatch):
+    monkeypatch.setitem(config.CONFIG, "ENGINE_A_CORRELATED_OVERLAY_GUARD_ENABLED", True)
+    monkeypatch.setitem(config.CONFIG, "ENGINE_A_CORRELATED_OVERLAY_MAX_TOTAL_UPLIFT", 0.20)
+
+    out = apply_engine_a_correlated_overlay_guard(
+        base_score_before_structure=1.0,
+        adjusted_score=1.3,
+        research_lab_value=0.15,
+        research_lab_detail={"enabled": True},
+        research_score_uplift=0.10,
+        structure_adjustment={"applied": True, "multiplier": 1.30},
+        max_score=3.0,
+    )
+
+    assert out["warning"] is True
+    assert out["capped"] is True
+    assert out["combined_positive_uplift"] == 0.4
+    assert out["adjusted_score"] == 1.1
+
+
+def test_engine_a_correlated_overlay_guard_does_not_remove_negative_penalty(monkeypatch):
+    monkeypatch.setitem(config.CONFIG, "ENGINE_A_CORRELATED_OVERLAY_GUARD_ENABLED", True)
+    monkeypatch.setitem(config.CONFIG, "ENGINE_A_CORRELATED_OVERLAY_MAX_TOTAL_UPLIFT", 0.20)
+
+    out = apply_engine_a_correlated_overlay_guard(
+        base_score_before_structure=1.5,
+        adjusted_score=1.35,
+        research_lab_value=0.15,
+        research_lab_detail={"enabled": True},
+        research_score_uplift=0.25,
+        structure_adjustment={"applied": True, "multiplier": 0.90},
+        max_score=3.0,
+    )
+
+    assert out["warning"] is True
+    assert out["capped"] is True
+    assert out["adjusted_score"] < 1.35
+    assert out["adjusted_score"] < 1.5

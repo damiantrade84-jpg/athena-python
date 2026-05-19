@@ -1857,6 +1857,7 @@ def compute_factor_scores(
     addon_val, addon_type, addon_status = _asset_addon(
         pair, direction, funding_rate, bar_time, oi_context=oi_context
     )
+    addon_val_before_research = addon_val
     feed_status["addon"] = f"{addon_type}:{addon_status}"
     if asset_type == "stock":
         if bool(CONFIG.get("INSIDER_TRADING_DIAGNOSTIC_ENABLED", False)):
@@ -1907,6 +1908,10 @@ def compute_factor_scores(
             float(CONFIG.get("FACTOR_CRYPTO_ADDON_COMBO_AGAINST_CAP", -0.20)),
         )
     addon_val = max(_addon_lo, min(_addon_hi, addon_val))
+    addon_val_without_positive_research = max(
+        _addon_lo,
+        min(_addon_hi, addon_val_before_research),
+    )
 
     # ── FACTOR 4: VWAP Direction Quality Filter (config-gated) ───────────────
     vwap_mult, vwap_detail = _vwap_direction_filter(
@@ -2176,6 +2181,36 @@ def compute_factor_scores(
         return _zero_result(pair, regime, {"error": "final_score_invalid"}, feed_status,
                             reason="final_score_invalid_abort", direction=direction)
     final_score = max(0.0, min(3.0, final_score))
+    research_score_uplift_for_guard = 0.0
+    if research_detail.get("enabled") and research_val > 0:
+        addon_norm_without_positive_research = (
+            addon_val_without_positive_research / _ADDON_CONFIRM
+            if _ADDON_CONFIRM > 0
+            else 0.0
+        )
+        conviction_without_positive_research = (
+            _eff_base_w
+            + _eff_mom_w * mom_quality
+            + _eff_addon_w * addon_norm_without_positive_research
+        )
+        conviction_without_positive_research = max(
+            0.0,
+            min(1.0, conviction_without_positive_research),
+        )
+        score_without_positive_research = base_score * (
+            _eff_floor + (1.0 - _eff_floor) * conviction_without_positive_research
+        )
+        score_without_positive_research = score_without_positive_research * (
+            1.0 + _total_adj
+        )
+        score_without_positive_research = max(
+            0.0,
+            min(3.0, score_without_positive_research + mean_rev_adj),
+        )
+        research_score_uplift_for_guard = max(
+            0.0,
+            final_score - score_without_positive_research,
+        )
 
     intermarket_confirmation = None
     intermarket_engine_a_delta = 0.0
@@ -2208,19 +2243,48 @@ def compute_factor_scores(
         "applied": False,
         "adjusted_score": round(final_score, 6),
     }
+    correlated_overlay_guard = {
+        "enabled": bool(CONFIG.get("ENGINE_A_CORRELATED_OVERLAY_GUARD_ENABLED", True)),
+        "warning": False,
+        "capped": False,
+        "adjusted_score": round(final_score, 6),
+    }
     if structure_adjustment["enabled"] and isinstance(structure_result, dict):
         try:
-            from athena_app.services.structure_context import apply_structure_context_to_score
+            from athena_app.services.structure_context import (
+                apply_engine_a_correlated_overlay_guard,
+                apply_structure_context_to_score,
+            )
 
+            _pre_structure_score = float(final_score or 0.0)
             structure_adjustment = apply_structure_context_to_score(
                 structure_result,
                 direction=direction,
-                base_score=float(final_score or 0.0),
+                base_score=_pre_structure_score,
                 max_score=3.0,
             )
             adjusted = structure_adjustment.get("adjusted_score")
             if isinstance(adjusted, (int, float)):
                 final_score = max(0.0, min(3.0, float(adjusted)))
+            correlated_overlay_guard = apply_engine_a_correlated_overlay_guard(
+                base_score_before_structure=_pre_structure_score,
+                adjusted_score=final_score,
+                research_lab_value=research_val,
+                research_lab_detail=research_detail,
+                research_score_uplift=research_score_uplift_for_guard,
+                structure_adjustment=structure_adjustment,
+                max_score=3.0,
+            )
+            _guard_adjusted = correlated_overlay_guard.get("adjusted_score")
+            if isinstance(_guard_adjusted, (int, float)):
+                final_score = max(0.0, min(3.0, float(_guard_adjusted)))
+                structure_adjustment = dict(structure_adjustment)
+                structure_adjustment["adjusted_score"] = round(final_score, 6)
+                structure_adjustment["correlated_overlay_guard"] = correlated_overlay_guard
+            if correlated_overlay_guard.get("warning"):
+                feed_status["correlated_overlay_guard"] = (
+                    "capped" if correlated_overlay_guard.get("capped") else "warning"
+                )
             feed_status["structure_context"] = "applied" if structure_adjustment.get("applied") else "neutral"
         except Exception as exc:
             log.debug("[EA2] %s structure context skipped: %s", display, exc)
@@ -2228,6 +2292,13 @@ def compute_factor_scores(
             structure_adjustment = {
                 "enabled": True,
                 "applied": False,
+                "adjusted_score": round(final_score, 6),
+                "error": "structure_context_error",
+            }
+            correlated_overlay_guard = {
+                "enabled": bool(CONFIG.get("ENGINE_A_CORRELATED_OVERLAY_GUARD_ENABLED", True)),
+                "warning": False,
+                "capped": False,
                 "adjusted_score": round(final_score, 6),
                 "error": "structure_context_error",
             }
@@ -2288,6 +2359,7 @@ def compute_factor_scores(
         "score_group": score_group,
         "engine_a_asset_diagnostics": asset_diagnostics,
         "structure_context_adjustment": structure_adjustment,
+        "engine_a_correlated_overlay_guard": correlated_overlay_guard,
         "trend_coherence": trend_detail,
         # ── Diagnostic fields (backward compat with Engine C / scoring.py) ───
         "directional_score": round(trend_score, 4),
@@ -2301,6 +2373,7 @@ def compute_factor_scores(
         "addon_value": round(addon_val, 4),
         "research_lab_value": round(research_val, 4),
         "research_lab_detail": research_detail,
+        "research_lab_score_uplift": round(research_score_uplift_for_guard, 6),
         "mean_reversion_value": round(mean_rev_adj, 4),
         "mean_reversion_detail": mean_rev_detail,
         "addon_unsupported": addon_status == "unsupported",
@@ -2397,6 +2470,12 @@ def _zero_result(
             "applied": False,
             "adjusted_score": 0.0,
         },
+        "engine_a_correlated_overlay_guard": {
+            "enabled": bool(CONFIG.get("ENGINE_A_CORRELATED_OVERLAY_GUARD_ENABLED", True)),
+            "warning": False,
+            "capped": False,
+            "adjusted_score": 0.0,
+        },
         "trend_coherence": trend_detail,
         "directional_score": 0.0,
         "nondirectional_score": 0.0,
@@ -2409,6 +2488,7 @@ def _zero_result(
         "addon_value": 0.0,
         "research_lab_value": 0.0,
         "research_lab_detail": {"enabled": bool(CONFIG.get("ENGINE_A_RESEARCH_LAB_FACTORS", {}).get("ENABLED", False))},
+        "research_lab_score_uplift": 0.0,
         "mean_reversion_value": 0.0,
         "mean_reversion_detail": {"enabled": bool(CONFIG.get("ENGINE_A_MEAN_REVERSION", {}).get("ENABLED", False))},
         "session_multiplier": 1.0,

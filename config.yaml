@@ -100,6 +100,20 @@ THRESHOLD_AUDIT:
       - current_minus_5pct
       - current_minus_10pct
 
+# Diagnostic-only Engine A/B calibration telemetry. Disabled by default; when
+# enabled it appends report rows and must not alter thresholds, scores, gates,
+# or execution behavior.
+CALIBRATION_DIAGNOSTICS_ENABLED: false
+CALIBRATION_DIAGNOSTICS_PATH: "logs/calibration_diagnostics/calibration_events.jsonl"
+
+# Research-only portfolio/position volatility targeting diagnostics. Disabled
+# by default and not used by live order sizing.
+RESEARCH_VOL_TARGETING_ENABLED: false
+RESEARCH_VOL_TARGET_ANNUALIZED: 0.12
+RESEARCH_VOL_TARGET_MAX_MULTIPLIER: 1.50
+RESEARCH_VOL_TARGET_MIN_MULTIPLIER: 0.25
+RESEARCH_VOL_TARGET_LOOKBACK: 20
+
 # MT5 broker server UTC offset. Change when DST shifts (EET=2, EEST=3).
 # Used by fetch_mt5() timezone detection and H4 grid offset derivation.
 MT5_BROKER_UTC_OFFSET: 3
@@ -344,6 +358,11 @@ ENGINE_A_EQUITY_SESSION_LIQUIDITY_WEIGHTING:
 # Engine A can consume an explicit Engine B structure payload when callers pass
 # one into compute_factor_scores(). Enabled here for paper/demo testing.
 ENGINE_A_STRUCTURE_CONTEXT_ENABLED: false
+# Safety guard for correlated Engine A overlays. When Research Lab contributes
+# non-zero candidate adjustment and structure context applies a non-neutral
+# multiplier, cap combined positive uplift without changing either formula.
+ENGINE_A_CORRELATED_OVERLAY_GUARD_ENABLED: true
+ENGINE_A_CORRELATED_OVERLAY_MAX_TOTAL_UPLIFT: 0.20
 ENGINE_A:
   structure_first_entry:
     enabled: false
@@ -2077,9 +2096,13 @@ NAKED_ENGINE:
 
 
 
-# Neutralized by default - use the base Engine B min_score directly unless
+# ENGINE_B_REGIME_MULTIPLIERS_ENABLED: true  -> multipliers enabled: regime
+#   adjusts Engine B min_score (base_min_score * regime_multiplier, 1dp ceil).
+# ENGINE_B_REGIME_MULTIPLIERS_ENABLED: false -> multipliers disabled: Engine B
+#   min_score remains the style profile base value (no regime adjustment).
+# Default true preserves backward-compatible live behavior.
 
-# a deliberate regime-specific policy is introduced again.
+ENGINE_B_REGIME_MULTIPLIERS_ENABLED: true
 
 ENGINE_B_REGIME_MULTIPLIERS:
 

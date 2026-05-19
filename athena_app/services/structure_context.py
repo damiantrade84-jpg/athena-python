@@ -223,3 +223,83 @@ def apply_structure_context_to_score(
     out["multiplier"] = round(multiplier, 6)
     out["adjusted_score"] = round(adjusted, 6)
     return out
+
+
+def apply_engine_a_correlated_overlay_guard(
+    *,
+    base_score_before_structure: float,
+    adjusted_score: float,
+    research_lab_value: Any = 0.0,
+    research_lab_detail: dict[str, Any] | None = None,
+    research_score_uplift: Any = 0.0,
+    structure_adjustment: dict[str, Any] | None = None,
+    max_score: float = 3.0,
+) -> dict[str, Any]:
+    """Cap Engine A positive uplift when Research Lab and structure overlays stack.
+
+    This is diagnostic/post-overlay only. It does not change the underlying
+    Research Lab candidate addon, structure multiplier, or Engine A factor math.
+    """
+    enabled = bool(
+        config.CONFIG.get("ENGINE_A_CORRELATED_OVERLAY_GUARD_ENABLED", True)
+    )
+    max_total = max(
+        0.0,
+        _float_value(
+            config.CONFIG.get("ENGINE_A_CORRELATED_OVERLAY_MAX_TOTAL_UPLIFT"),
+            0.20,
+        ),
+    )
+    base = _float_value(base_score_before_structure, 0.0)
+    adjusted = _float_value(adjusted_score, base)
+    cap = max(0.0, _float_value(max_score, 3.0))
+    if cap > 0:
+        adjusted = max(0.0, min(cap, adjusted))
+
+    research_detail = research_lab_detail if isinstance(research_lab_detail, dict) else {}
+    structure_detail = (
+        structure_adjustment if isinstance(structure_adjustment, dict) else {}
+    )
+    research_val = _float_value(research_lab_value, 0.0)
+    research_active = bool(research_detail.get("enabled")) and abs(research_val) > 1e-12
+    structure_multiplier = _float_value(structure_detail.get("multiplier"), 1.0)
+    structure_active = bool(structure_detail.get("applied")) and abs(structure_multiplier - 1.0) > 1e-12
+    structure_positive_uplift = max(0.0, adjusted - base)
+    research_positive_uplift = max(0.0, _float_value(research_score_uplift, 0.0))
+    combined_positive_uplift = research_positive_uplift + structure_positive_uplift
+    warning = bool(research_active and structure_active)
+
+    out: dict[str, Any] = {
+        "enabled": enabled,
+        "warning": warning,
+        "capped": False,
+        "base_score_before_structure": round(base, 6),
+        "input_adjusted_score": round(adjusted, 6),
+        "adjusted_score": round(adjusted, 6),
+        "research_lab_value": round(research_val, 6),
+        "research_score_uplift": round(research_positive_uplift, 6),
+        "structure_multiplier": round(structure_multiplier, 6),
+        "structure_positive_uplift": round(structure_positive_uplift, 6),
+        "combined_positive_uplift": round(combined_positive_uplift, 6),
+        "max_total_positive_uplift": round(max_total, 6),
+        "cap_amount": 0.0,
+        "reason": None,
+    }
+    if warning:
+        out["reason"] = "research_lab_and_structure_context_non_neutral"
+
+    if not enabled or not warning or combined_positive_uplift <= max_total:
+        return out
+
+    cap_amount = combined_positive_uplift - max_total
+    capped_score = max(0.0, min(adjusted, adjusted - cap_amount))
+    if cap > 0:
+        capped_score = min(cap, capped_score)
+    out.update(
+        {
+            "capped": capped_score < adjusted,
+            "adjusted_score": round(capped_score, 6),
+            "cap_amount": round(max(0.0, adjusted - capped_score), 6),
+        }
+    )
+    return out

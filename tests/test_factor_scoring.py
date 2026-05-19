@@ -1220,3 +1220,83 @@ def test_engine_a_structure_context_adjustment_is_optional(monkeypatch):
     assert baseline["structure_context_adjustment"]["enabled"] is False
     assert adjusted["structure_context_adjustment"]["applied"] is True
     assert adjusted["final_score"] > baseline["final_score"]
+
+
+def test_engine_a_structure_context_remains_default_disabled():
+    assert CONFIG.get("ENGINE_A_STRUCTURE_CONTEXT_ENABLED") is False
+
+
+def test_engine_a_correlated_overlay_guard_disabled_preserves_current_score(monkeypatch):
+    pair = {"type": "stock", "display": "AAPL"}
+    candles = _candles(trend=0.2, volume_trend=10.0)
+    structure = {
+        "structural_verdict": "CLEAR",
+        "zone_touched": True,
+        "ob_at_zone": True,
+        "fvg_overlap": True,
+        "engine_b_independent_direction": "LONG",
+        "asset_type": "stock",
+    }
+    monkeypatch.setitem(
+        CONFIG,
+        "ENGINE_A_RESEARCH_LAB_FACTORS",
+        {"ENABLED": True, "BONUS": 0.15, "PENALTY": -0.10, "MAX_ABS": 0.20, "FACTORS": ["obv_divergence"]},
+    )
+    monkeypatch.setitem(CONFIG, "ENGINE_A_STRUCTURE_CONTEXT_ENABLED", True)
+    monkeypatch.setitem(CONFIG, "ENGINE_A_CORRELATED_OVERLAY_GUARD_ENABLED", False)
+    monkeypatch.setitem(CONFIG, "ENGINE_B_STRUCTURE_SCORE_INFLUENCE_ENABLED", True)
+    monkeypatch.setitem(CONFIG, "ENGINE_B_STRUCTURE_SCORE_MULT_BOUNDS", {"min": 0.85, "max": 1.50})
+
+    current = _score(
+        pair=pair,
+        h4=_snap("long", momentum="bullish"),
+        d1_candles=candles,
+        h4_candles=candles,
+        structure_result=structure,
+    )
+
+    assert current["engine_a_correlated_overlay_guard"]["warning"] is True
+    assert current["engine_a_correlated_overlay_guard"]["capped"] is False
+    assert current["final_score"] == pytest.approx(
+        current["structure_context_adjustment"]["correlated_overlay_guard"]["input_adjusted_score"],
+        abs=1e-4,
+    )
+
+
+def test_engine_a_correlated_overlay_guard_enabled_caps_combined_uplift(monkeypatch):
+    pair = {"type": "stock", "display": "AAPL"}
+    candles = _candles(trend=0.2, volume_trend=10.0)
+    structure = {
+        "structural_verdict": "CLEAR",
+        "zone_touched": True,
+        "ob_at_zone": True,
+        "fvg_overlap": True,
+        "liquidity_sweep": True,
+        "engine_b_independent_direction": "LONG",
+        "asset_type": "stock",
+    }
+    monkeypatch.setitem(
+        CONFIG,
+        "ENGINE_A_RESEARCH_LAB_FACTORS",
+        {"ENABLED": True, "BONUS": 0.15, "PENALTY": -0.10, "MAX_ABS": 0.20, "FACTORS": ["obv_divergence"]},
+    )
+    monkeypatch.setitem(CONFIG, "ENGINE_A_STRUCTURE_CONTEXT_ENABLED", True)
+    monkeypatch.setitem(CONFIG, "ENGINE_A_CORRELATED_OVERLAY_GUARD_ENABLED", True)
+    monkeypatch.setitem(CONFIG, "ENGINE_A_CORRELATED_OVERLAY_MAX_TOTAL_UPLIFT", 0.05)
+    monkeypatch.setitem(CONFIG, "ENGINE_B_STRUCTURE_SCORE_INFLUENCE_ENABLED", True)
+    monkeypatch.setitem(CONFIG, "ENGINE_B_STRUCTURE_SCORE_MULT_BOUNDS", {"min": 0.85, "max": 1.50})
+
+    capped = _score(
+        pair=pair,
+        h4=_snap("long", momentum="bullish"),
+        d1_candles=candles,
+        h4_candles=candles,
+        structure_result=structure,
+    )
+    guard = capped["engine_a_correlated_overlay_guard"]
+
+    assert guard["warning"] is True
+    assert guard["capped"] is True
+    assert guard["combined_positive_uplift"] > guard["max_total_positive_uplift"]
+    assert capped["final_score"] < guard["input_adjusted_score"]
+    assert capped["feed_status"]["correlated_overlay_guard"] == "capped"

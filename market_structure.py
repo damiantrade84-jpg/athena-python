@@ -716,6 +716,16 @@ def _adx_from_indicator_snap(snap: dict | None) -> float | None:
 
 
 def _engine_b_regime_gate(regime_label: str | None, asset_type: str = "") -> float:
+    """Return the regime multiplier applied to Engine B ``min_score``.
+
+    - ``ENGINE_B_REGIME_MULTIPLIERS_ENABLED: true`` — use
+      ``ENGINE_B_REGIME_MULTIPLIERS`` (per-asset nested dict supported) with
+      ``ENGINE_B_REGIME_GATE_DEFAULTS`` fallback; unknown regimes return ``1.0``.
+    - ``ENGINE_B_REGIME_MULTIPLIERS_ENABLED: false`` — return ``1.0`` (base
+      ``min_score`` is not adjusted by regime).
+    """
+    if not bool(config.CONFIG.get("ENGINE_B_REGIME_MULTIPLIERS_ENABLED", True)):
+        return 1.0
     regime_key = str(regime_label or "").upper()
     cfg_gate = config.CONFIG.get("ENGINE_B_REGIME_MULTIPLIERS", {}) or {}
     # Try per-asset-class first (nested dict)
@@ -738,18 +748,40 @@ def _engine_b_regime_gate(regime_label: str | None, asset_type: str = "") -> flo
         return float(ENGINE_B_REGIME_GATE_DEFAULTS.get(regime_key, 1.0))
 
 
+def engine_b_min_score_diagnostics(
+    style_profile: dict | None, regime_label: str | None, asset_type: str = ""
+) -> dict:
+    """Return report-only Engine B min-score scaling diagnostics.
+
+    Fields: ``base_min_score``, ``regime_multiplier``, ``scaled_min_score``,
+    ``multipliers_enabled`` (mirrors ``ENGINE_B_REGIME_MULTIPLIERS_ENABLED``).
+    """
+    profile = style_profile if isinstance(style_profile, dict) else {}
+    base_min = float(profile.get("min_score", 0.0) or 0.0)
+    multipliers_enabled = bool(config.CONFIG.get("ENGINE_B_REGIME_MULTIPLIERS_ENABLED", True))
+    regime_multiplier = _engine_b_regime_gate(regime_label, asset_type)
+    scaled = base_min * regime_multiplier
+    if scaled <= 0:
+        scaled_min = 0.0
+    else:
+        scaled_min = float(math.ceil((scaled * 10.0) - 1e-12) / 10.0)
+    return {
+        "base_min_score": base_min,
+        "regime_multiplier": float(regime_multiplier),
+        "scaled_min_score": scaled_min,
+        "multipliers_enabled": multipliers_enabled,
+    }
+
+
 def engine_b_min_score_threshold(
     style_profile: dict | None, regime_label: str | None, asset_type: str = ""
 ) -> float:
     """Return the scaled Engine B score floor for a style/regime combination."""
-    profile = style_profile if isinstance(style_profile, dict) else {}
-    base_min = float(profile.get("min_score", 0.0) or 0.0)
-    scaled = base_min * _engine_b_regime_gate(regime_label, asset_type)
-    if scaled <= 0:
-        return 0.0
-    # Keep one decimal so regime multipliers remain effective without creating
-    # brittle binary-float score boundaries.
-    return float(math.ceil((scaled * 10.0) - 1e-12) / 10.0)
+    return float(
+        engine_b_min_score_diagnostics(
+            style_profile, regime_label, asset_type
+        )["scaled_min_score"]
+    )
 
 
 # FIX 10: Per-gate failure histogram (module-level)
@@ -911,6 +943,7 @@ def engine_b_confidence_passes(
     style_profile: dict | None,
     regime_label: str | None,
     asset_type: str = "",
+    diagnostics_context: dict | None = None,
 ) -> tuple[bool, float]:
     """Return final Engine B gate status including the style/regime score floor."""
     min_score_scaled = engine_b_min_score_threshold(
@@ -923,6 +956,25 @@ def engine_b_confidence_passes(
         score = 0.0
     score_floor_ok = min_score_scaled <= 0 or score >= min_score_scaled
     passed = bool(conf.get("passed", False)) and score_floor_ok
+    try:
+        from calibration_diagnostics import (
+            build_engine_b_calibration_row,
+            record_calibration_diagnostic,
+        )
+
+        record_calibration_diagnostic(
+            build_engine_b_calibration_row(
+                conf=conf,
+                style_profile=style_profile,
+                regime_label=regime_label,
+                asset_type=asset_type,
+                scaled_min_score=min_score_scaled,
+                passed=passed,
+                diagnostics_context=diagnostics_context,
+            )
+        )
+    except Exception as exc:
+        log.debug("[CALIBRATION-DIAG] Engine B diagnostic skipped: %s", exc)
     return passed, min_score_scaled
 
 
@@ -1141,6 +1193,49 @@ def _engine_b_research_lab_candidate_gates(
     }
 
 
+ENGINE_B_LEVEL_COHORTS = {
+    "structural_sl_structural_tp",
+    "atr_sl_structural_tp",
+    "atr_sl_fallback_rr_tp",
+    "structural_sl_fallback_rr_tp",
+}
+
+
+def engine_b_level_cohort(level_mode: str | None) -> str:
+    """Normalize execution-level source modes into stable reporting cohorts."""
+    mode = str(level_mode or "")
+    return mode if mode in ENGINE_B_LEVEL_COHORTS else "unknown_level_mode"
+
+
+def aggregate_engine_b_level_cohorts(rows: list[dict] | tuple[dict, ...]) -> dict[str, dict]:
+    """Aggregate report-only Engine B performance diagnostics by level cohort."""
+    summary: dict[str, dict] = {}
+    for row in rows or []:
+        if not isinstance(row, dict):
+            continue
+        cohort = engine_b_level_cohort(row.get("level_cohort") or row.get("level_mode"))
+        bucket = summary.setdefault(
+            cohort,
+            {"count": 0, "passed": 0, "failed": 0, "rr_actual_sum": 0.0, "rr_actual_count": 0},
+        )
+        bucket["count"] += 1
+        if row.get("passed") is True or row.get("rr_passed") is True:
+            bucket["passed"] += 1
+        elif row.get("passed") is False or row.get("rr_passed") is False:
+            bucket["failed"] += 1
+        try:
+            rr_actual = float(row.get("rr_actual"))
+        except (TypeError, ValueError):
+            rr_actual = None
+        if rr_actual is not None:
+            bucket["rr_actual_sum"] += rr_actual
+            bucket["rr_actual_count"] += 1
+    for bucket in summary.values():
+        count = int(bucket.get("rr_actual_count") or 0)
+        bucket["avg_rr_actual"] = round(bucket["rr_actual_sum"] / count, 4) if count else None
+    return summary
+
+
 def resolve_engine_b_execution_levels(
     *,
     direction: str,
@@ -1206,6 +1301,11 @@ def resolve_engine_b_execution_levels(
 
     if _entry <= 0 or _atr <= 0:
         _reject = "invalid_entry" if _entry <= 0 else "invalid_atr"
+        _structural_target_distance_atr = (
+            round(abs(_struct_tp - _entry) / _atr, 4)
+            if _struct_tp is not None and _entry > 0 and _atr > 0
+            else None
+        )
         return {
             "entry": _entry,
             "structural_sl": _struct_sl,
@@ -1213,17 +1313,27 @@ def resolve_engine_b_execution_levels(
             "structural_rr": round(_structural_rr, 4),
             "structural_sl_valid": _struct_sl_valid,
             "structural_tp_valid": _struct_tp_valid,
+            "structural_tp_available": _struct_tp is not None,
             "execution_sl": None,
             "execution_tp": None,
             "execution_rr": 0.0,
             "rr_used_for_gate": 0.0,
             "rr_source": _reject,
             "level_mode": _reject,
+            "level_cohort": "unknown_level_mode",
+            "sl_source": None,
+            "tp_source": None,
             "execution_levels_valid": False,
             "execution_level_reject_reason": _reject,
             "execution_tp_side_ok": False,
             "fallback_tp_applied": False,
             "fallback_tp_reason": None,
+            "synthetic_rr_tp_used": False,
+            "rr_required": _safe_float(min_rr),
+            "rr_actual": 0.0,
+            "rr_passed": False,
+            "structural_target_distance_atr": _structural_target_distance_atr,
+            "stop_distance_atr": None,
         }
 
     # ATR execution SL
@@ -1396,6 +1506,20 @@ def resolve_engine_b_execution_levels(
                 _exec_valid = False
                 _exec_reject = _fallback_reason
 
+    _structural_target_distance_atr = (
+        round(abs(_struct_tp - _entry) / _atr, 4)
+        if _struct_tp is not None and _entry > 0 and _atr > 0
+        else None
+    )
+    _stop_distance_atr = (
+        round(abs(_entry - _exec_sl) / _atr, 4)
+        if _exec_sl is not None and _entry > 0 and _atr > 0
+        else None
+    )
+    _rr_required = _safe_float(min_rr)
+    _rr_passed = bool(_exec_valid and (_rr_required is None or _exec_rr >= _rr_required))
+    _level_cohort = engine_b_level_cohort(_level_mode)
+
     return {
         "entry": _entry,
         "structural_sl": _struct_sl,
@@ -1403,17 +1527,27 @@ def resolve_engine_b_execution_levels(
         "structural_rr": round(_structural_rr, 4),
         "structural_sl_valid": _struct_sl_valid,
         "structural_tp_valid": _struct_tp_valid,
+        "structural_tp_available": _struct_tp is not None,
         "execution_sl": _exec_sl,
         "execution_tp": _exec_tp,
         "execution_rr": round(_exec_rr, 4),
         "rr_used_for_gate": round(_exec_rr, 4),
         "rr_source": _rr_source,
         "level_mode": _level_mode,
+        "level_cohort": _level_cohort,
+        "sl_source": _sl_source,
+        "tp_source": _tp_source,
         "execution_levels_valid": _exec_valid,
         "execution_level_reject_reason": _exec_reject,
         "execution_tp_side_ok": _exec_tp_side_ok,
         "fallback_tp_applied": _fallback_applied,
         "fallback_tp_reason": _fallback_reason,
+        "synthetic_rr_tp_used": bool(_tp_source == "fallback_rr" and _fallback_applied),
+        "rr_required": _rr_required,
+        "rr_actual": round(_exec_rr, 4),
+        "rr_passed": _rr_passed,
+        "structural_target_distance_atr": _structural_target_distance_atr,
+        "stop_distance_atr": _stop_distance_atr,
     }
 
 
@@ -3779,17 +3913,27 @@ class NakedEngine:
             "rr": round(rr, 2),
             "rr_used_for_gate": round(rr, 2),
             "rr_source": _exec_lvl["rr_source"],
+            "rr_required": _exec_lvl.get("rr_required", min_rr),
+            "rr_actual": _exec_lvl.get("rr_actual", round(rr, 2)),
+            "rr_passed": _exec_lvl.get("rr_passed", rr_ok),
             "structural_sl": _exec_lvl["structural_sl"],
             "structural_tp": _exec_lvl["structural_tp"],
             "structural_rr": _exec_lvl["structural_rr"],
+            "structural_tp_available": _exec_lvl.get("structural_tp_available"),
             "execution_sl": _exec_lvl["execution_sl"],
             "execution_tp": _exec_lvl["execution_tp"],
             "execution_rr": _exec_lvl["execution_rr"],
             "level_mode": _exec_lvl["level_mode"],
+            "level_cohort": _exec_lvl.get("level_cohort", engine_b_level_cohort(_exec_lvl.get("level_mode"))),
+            "sl_source": _exec_lvl.get("sl_source"),
+            "tp_source": _exec_lvl.get("tp_source"),
             "execution_levels_valid": _exec_lvl["execution_levels_valid"],
             "execution_level_reject_reason": _exec_lvl["execution_level_reject_reason"],
             "fallback_tp_applied": _exec_lvl["fallback_tp_applied"],
             "fallback_tp_reason": _exec_lvl["fallback_tp_reason"],
+            "synthetic_rr_tp_used": _exec_lvl.get("synthetic_rr_tp_used"),
+            "structural_target_distance_atr": _exec_lvl.get("structural_target_distance_atr"),
+            "stop_distance_atr": _exec_lvl.get("stop_distance_atr"),
             "passed": passed,
             "structure_ok": structure_ok,
             "structure_gate_original_ok": structure_gate_original_ok,
@@ -3933,6 +4077,13 @@ class NakedEngine:
                 style_profile,
                 regime_label,
                 asset_type,
+                diagnostics_context={
+                    "pair": (pair or {}).get("display") if isinstance(pair, dict) else None,
+                    "symbol": (pair or {}).get("symbol") if isinstance(pair, dict) else None,
+                    "asset_class": asset_type,
+                    "score_group": style_profile.get("score_group") if isinstance(style_profile, dict) else None,
+                    "style": style_profile.get("style") if isinstance(style_profile, dict) else None,
+                },
             )
             if not gate_ok:
                 return None  # No trade signal

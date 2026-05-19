@@ -70,6 +70,71 @@ def _validation_run_count_for_run(run_dir: Path, sessions_dir: Path | None = Non
         return 0
 
 
+def _run_dir_has_summary(run_dir: Path) -> bool:
+    return (run_dir / "research_summary.csv").exists()
+
+
+def _quick_summary_counts(run_dir: Path, meta_data: dict | None = None) -> dict:
+    """Fast summary for UI while reports finish or for large CSVs."""
+    meta_data = meta_data or {}
+    status_path = run_dir / "status.json"
+    if status_path.exists():
+        try:
+            sd = json.loads(status_path.read_text(encoding="utf-8"))
+            rc = int(sd.get("results_count") or 0)
+            if rc > 0:
+                return {
+                    "total": rc,
+                    "strong": None,
+                    "weak": None,
+                    "reject": None,
+                    "files_ok": sd.get("files_ok", True),
+                    "report_errors": sd.get("errors", []),
+                }
+        except Exception:
+            pass
+
+    summary_path = run_dir / "research_summary.csv"
+    if not summary_path.exists():
+        return {
+            "total": int(meta_data.get("results_count") or 0),
+            "strong": 0,
+            "weak": 0,
+            "reject": 0,
+            "files_ok": False,
+            "report_errors": [],
+        }
+
+    try:
+        import pandas as pd
+        df = pd.read_csv(summary_path, usecols=lambda c: c in {"status"})
+        total = len(df)
+        if "status" in df.columns:
+            return {
+                "total": total,
+                "strong": int((df["status"] == "STRONG_CANDIDATE").sum()),
+                "weak": int((df["status"] == "WEAK_CANDIDATE").sum()),
+                "reject": int((df["status"] == "REJECT").sum()),
+                "files_ok": True,
+                "report_errors": [],
+            }
+    except Exception:
+        pass
+
+    try:
+        total = max(0, sum(1 for _ in open(summary_path, encoding="utf-8")) - 1)
+    except Exception:
+        total = int(meta_data.get("results_count") or 0)
+    return {
+        "total": total,
+        "strong": None,
+        "weak": None,
+        "reject": None,
+        "files_ok": True,
+        "report_errors": [],
+    }
+
+
 def _merge_run_meta_tags(output_dir: Path, run_id: str, tags: dict) -> None:
     """Merge non-empty relationship tags into a run_meta.json file."""
     meta_path = output_dir / run_id / "run_meta.json"
@@ -774,6 +839,8 @@ def register_research_lab_routes(app) -> None:
         """Get status and summary for a run."""
         from athena_research.run_manager import get_run_results
 
+        run_dir = _DEFAULT_OUTPUT / run_id
+
         # Check active runs first
         if run_id in _active_runs:
             info = _active_runs[run_id]
@@ -782,8 +849,7 @@ def register_research_lab_routes(app) -> None:
                 result = info.get("result", {})
                 safe = {k: v for k, v in result.items()
                         if k not in ("thread",) and not callable(v)}
-                
-                run_dir = _DEFAULT_OUTPUT / run_id
+
                 meta_path = run_dir / "run_meta.json"
                 if meta_path.exists():
                     try:
@@ -792,6 +858,25 @@ def register_research_lab_routes(app) -> None:
                         pass
 
                 return jsonify({"run_id": run_id, "status": status, **safe})
+
+            # Evaluations done, reports still writing — surface results to UI.
+            if status == "running" and _run_dir_has_summary(run_dir):
+                meta_data = {}
+                meta_path = run_dir / "run_meta.json"
+                if meta_path.exists():
+                    try:
+                        meta_data = json.loads(meta_path.read_text(encoding="utf-8"))
+                    except Exception:
+                        pass
+                return jsonify({
+                    "run_id": run_id,
+                    "status": "reporting",
+                    "message": "Evaluations complete — building reports. Ranked data should load shortly.",
+                    "summary": _quick_summary_counts(run_dir, meta_data),
+                    "results_count": meta_data.get("results_count"),
+                    **meta_data,
+                })
+
             return jsonify({"run_id": run_id, "status": status,
                             "error": info.get("error", ""),
                             "traceback": info.get("traceback", "")})
@@ -813,11 +898,46 @@ def register_research_lab_routes(app) -> None:
 
         df = get_run_results(run_id, _DEFAULT_OUTPUT)
         if df is None:
+            status_path = run_dir / "status.json"
+            partial: dict = {}
+            if status_path.exists():
+                try:
+                    partial = json.loads(status_path.read_text(encoding="utf-8"))
+                except Exception:
+                    partial = {}
+            results_count = int(
+                partial.get("results_count")
+                or meta_data.get("results_count")
+                or meta_data.get("combination_count_executed")
+                or 0
+            )
+            tb_path = run_dir / "error_traceback.txt"
+            tb_hint = ""
+            if tb_path.exists():
+                try:
+                    tb_hint = tb_path.read_text(encoding="utf-8")[-2000:]
+                except Exception:
+                    pass
+            if results_count > 0:
+                return jsonify({
+                    "run_id": run_id,
+                    "status": "partial",
+                    "error": (
+                        f"Evaluations completed ({results_count} rows) but full reports failed. "
+                        "Check logs for generate_all_reports / write_csvs errors. "
+                        "Re-run with fewer symbols or use Fast depth."
+                    ),
+                    "results_count": results_count,
+                    "report_errors": partial.get("errors", []),
+                    "traceback_tail": tb_hint,
+                    **meta_data,
+                })
             return jsonify({
-                "run_id": run_id, 
+                "run_id": run_id,
                 "status": "failed",
                 "error": "Run directory exists but results CSV missing — run may have crashed",
-                **meta_data
+                "traceback_tail": tb_hint,
+                **meta_data,
             })
 
         # Read sentinel if available
@@ -832,14 +952,19 @@ def register_research_lab_routes(app) -> None:
             except Exception:
                 pass
 
-        summary = {
-            "total": int(len(df)),
-            "strong": int((df["status"] == "STRONG_CANDIDATE").sum()) if "status" in df.columns else 0,
-            "weak": int((df["status"] == "WEAK_CANDIDATE").sum()) if "status" in df.columns else 0,
-            "reject": int((df["status"] == "REJECT").sum()) if "status" in df.columns else 0,
-            "files_ok": files_ok,
-            "report_errors": report_errors,
-        }
+        if len(df) > 3000:
+            summary = _quick_summary_counts(run_dir, meta_data)
+            summary["files_ok"] = files_ok
+            summary["report_errors"] = report_errors
+        else:
+            summary = {
+                "total": int(len(df)),
+                "strong": int((df["status"] == "STRONG_CANDIDATE").sum()) if "status" in df.columns else 0,
+                "weak": int((df["status"] == "WEAK_CANDIDATE").sum()) if "status" in df.columns else 0,
+                "reject": int((df["status"] == "REJECT").sum()) if "status" in df.columns else 0,
+                "files_ok": files_ok,
+                "report_errors": report_errors,
+            }
         return jsonify({"run_id": run_id, "status": "complete", "summary": summary, **meta_data})
 
 
@@ -940,42 +1065,46 @@ def register_research_lab_routes(app) -> None:
             _enrich_with_trust,
             _recommendation_table,
             build_operator_decision_summary,
+            sample_operator_source_df,
         )
 
         run_dir = _DEFAULT_OUTPUT / run_id
         ranked_path = run_dir / "ranked_strategies.csv"
+        summary_path = run_dir / "research_summary.csv"
 
         # Run dir exists but file missing → run failed before writing; return empty
-        if not ranked_path.exists():
+        if not ranked_path.exists() and not summary_path.exists():
             if not run_dir.exists():
                 return jsonify({"error": "Run not found", "run_id": run_id}), 404
             return jsonify({"run_id": run_id, "ranked": [], "note": "no ranked results"})
 
         try:
-            df = pd.read_csv(ranked_path).head(50)
-            summary_path = run_dir / "research_summary.csv"
+            if ranked_path.exists():
+                df = pd.read_csv(ranked_path).head(50)
+            else:
+                df = pd.read_csv(summary_path).head(50)
+                df = df[df["status"].isin(["STRONG_CANDIDATE", "WEAK_CANDIDATE"])] if "status" in df.columns else df
             rec_path = run_dir / "add_remove_retest_recommendations.csv"
             next_path = run_dir / "automated_next_tests.csv"
             validation_run_count = _validation_run_count_for_run(run_dir)
             recommendations = []
             next_tests = []
-            operator_source = df.copy()
-            if summary_path.exists():
-                try:
-                    operator_source = pd.read_csv(summary_path)
-                except Exception:
-                    operator_source = df.copy()
+            operator_source = sample_operator_source_df(
+                summary_path,
+                ranked_path=ranked_path if ranked_path.exists() else None,
+                limit=2000,
+            )
             ready_ranked = _enrich_with_trust(df, validation_run_count=validation_run_count)
             records = json.loads(ready_ranked.fillna("").to_json(orient="records"))
-            if summary_path.exists():
+            if rec_path.exists():
+                rec_df = _enrich_with_trust(
+                    pd.read_csv(rec_path).head(50),
+                    validation_run_count=validation_run_count,
+                )
+                recommendations = json.loads(rec_df.fillna("").to_json(orient="records"))
+            elif summary_path.exists():
                 rec_df = _recommendation_table(
                     _enrich_with_trust(operator_source, validation_run_count=validation_run_count)
-                ).head(50)
-                recommendations = json.loads(rec_df.fillna("").to_json(orient="records"))
-            elif rec_path.exists():
-                rec_df = _enrich_with_trust(
-                    pd.read_csv(rec_path),
-                    validation_run_count=validation_run_count,
                 ).head(50)
                 recommendations = json.loads(rec_df.fillna("").to_json(orient="records"))
             if next_path.exists():

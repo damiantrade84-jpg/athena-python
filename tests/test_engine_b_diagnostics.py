@@ -31,6 +31,7 @@ from market_structure import (
     _crypto_structure_adjustment,
     engine,
     engine_b_confidence_passes,
+    engine_b_min_score_diagnostics,
     engine_b_min_score_threshold,
 )
 
@@ -1168,6 +1169,70 @@ def test_engine_b_confidence_passes_enforces_min_score_floor():
 
     assert min_score_scaled == 4.5
     assert gate_ok is False
+
+
+def test_engine_b_regime_multiplier_enabled_scales_min_score(monkeypatch):
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_REGIME_MULTIPLIERS_ENABLED", True)
+    style_profile = {"min_score": 4.0}
+
+    assert engine_b_min_score_threshold(style_profile, "TRENDING", "forex") == 3.6
+    diag = engine_b_min_score_diagnostics(style_profile, "TRENDING", "forex")
+    assert diag == {
+        "base_min_score": 4.0,
+        "regime_multiplier": 0.9,
+        "scaled_min_score": 3.6,
+        "multipliers_enabled": True,
+    }
+
+
+def test_engine_b_regime_multiplier_disabled_uses_base_min_score(monkeypatch):
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_REGIME_MULTIPLIERS_ENABLED", False)
+    style_profile = {"min_score": 4.0}
+
+    assert engine_b_min_score_threshold(style_profile, "TRENDING", "forex") == 4.0
+    diag = engine_b_min_score_diagnostics(style_profile, "TRENDING", "forex")
+    assert diag["base_min_score"] == 4.0
+    assert diag["regime_multiplier"] == 1.0
+    assert diag["scaled_min_score"] == 4.0
+    assert diag["multipliers_enabled"] is False
+
+
+def test_engine_b_unknown_regime_falls_back_to_unscaled_floor(monkeypatch):
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_REGIME_MULTIPLIERS_ENABLED", True)
+    style_profile = {"min_score": 4.0}
+
+    assert engine_b_min_score_threshold(style_profile, "UNKNOWN_NEW_REGIME", "forex") == 4.0
+    diag = engine_b_min_score_diagnostics(style_profile, "UNKNOWN_NEW_REGIME", "forex")
+    assert diag["regime_multiplier"] == 1.0
+    assert diag["scaled_min_score"] == 4.0
+
+
+def test_engine_b_regime_flag_does_not_change_engine_a_threshold(monkeypatch):
+    from scoring import get_score_threshold
+
+    pair = {"display": "EUR/USD", "symbol": "EURUSD", "type": "forex"}
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_REGIME_MULTIPLIERS_ENABLED", True)
+    enabled_threshold = get_score_threshold(pair)
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_REGIME_MULTIPLIERS_ENABLED", False)
+
+    assert get_score_threshold(pair) == enabled_threshold
+
+
+def test_engine_b_confidence_gate_still_requires_checklist_pass_and_score_floor(monkeypatch):
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_REGIME_MULTIPLIERS_ENABLED", True)
+    style_profile = {"min_score": 4.0}
+
+    gate_ok, scaled = engine_b_confidence_passes(
+        {"passed": False, "score": 10.0}, style_profile, regime_label="TRENDING"
+    )
+    assert scaled == 3.6
+    assert gate_ok is False
+
+    gate_ok, scaled = engine_b_confidence_passes(
+        {"passed": True, "score": 3.6}, style_profile, regime_label="TRENDING"
+    )
+    assert scaled == 3.6
+    assert gate_ok is True
 
 
 def test_calculate_confidence_emits_no_trigger_pattern_when_missing():
