@@ -1002,6 +1002,9 @@ def calc_confluence(
             "researchLabDetail": factor_result.get("research_lab_detail"),
             "researchLabScoreUplift": factor_result.get("research_lab_score_uplift"),
             "engineACorrelatedOverlayGuard": factor_result.get("engine_a_correlated_overlay_guard"),
+            "abortReason": factor_result.get("abort_reason"),
+            "engineVersion": "A_V2",
+            "scorerSelected": "factor_scoring.compute_factor_scores",
         },
         "intermarketConfirmation": factor_result.get("intermarket_confirmation") or {},
     }

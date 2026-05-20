@@ -1490,10 +1490,14 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict[s
                     max_score = float(sig_a.get("maxScore", 3.0) or 3.0)
                     direction = str(sig_a.get("direction") or "NONE")
                     pair_type = str(pair.get("type") or "?")
+                    _fd = sig_a.get("factorDiagnostics") or {}
+                    _abort = _fd.get("abortReason") or ""
+                    _abort_tag = f" abort={_abort}" if _abort else ""
                     print(
                         f"[REGRESSION-A] {pair['display']:12s} type={pair_type:8s} "
                         f"D1={d1_count:3d} H4={h4_count:3d} H1={h1_count:3d} "
                         f"score={score:.2f}/{max_score:.1f} dir={direction:5s}"
+                        f" scorer=A_V2{_abort_tag}"
                     )
                 else:
                     pair_type = str(pair.get("type") or "?")
