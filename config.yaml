@@ -1199,6 +1199,57 @@ DRAWDOWN_STOP_THRESHOLD: 0.15     # Stop all trading at 15% drawdown from peak e
 # Master switch for drawdown stop + reduce (both off when false). Paper/debug only — not for live.
 DRAWDOWN_STOP_ENABLED: true   # fail-closed for broker-capable execution paths
 
+# ── Live-quote freshness observability (Fix #1) ─────────────────────────────
+# Per-asset-type maximum live-quote age in seconds. When set, the scanner
+# attaches `quoteAgeEval.stale=true` to signals whose live-quote age exceeds
+# the threshold. This is observability ONLY — it does NOT block scoring or
+# execution. All values null by default (gate disabled per asset type).
+LIVE_PRICE_MAX_AGE_SEC:
+  forex: null
+  commodity: null
+  index: null
+  stock: null
+  etf: null
+  crypto: null
+
+# ── Broker-side tick age check (Fix #3, default disabled) ───────────────────
+# Hard execution guard. When set, mt5_execute / bybit_execute reject the order
+# BEFORE order_send / create_market_order if the broker tick timestamp is older
+# than the limit. Default null = check disabled. Distinct from Fix #1 which
+# inspects the in-memory _live_prices dict; Fix #3 inspects the broker's own
+# tick/ticker response just before submission.
+MAX_BROKER_TICK_AGE_SEC:
+  mt5: null
+  bybit: null
+
+# ── Execution-time spread cap (Fix #4, default disabled) ────────────────────
+# Per-asset-type ask-bid spread ceiling as a fraction of mid (e.g. 0.001 = 10
+# bps). When set, mt5_execute / bybit_execute reject the order BEFORE
+# submission if (ask-bid)/mid exceeds the limit. Default null per asset type =
+# disabled. Engine-agnostic: applies uniformly to A/B/C/D.
+MAX_EXECUTION_SPREAD_PCT:
+  forex: null
+  commodity: null
+  index: null
+  stock: null
+  etf: null
+  crypto: null
+
+# ── Signal-to-execution drift cap (GAP-7, default disabled) ─────────────────
+# Per-asset-type ceiling on |broker_price - signal_price| / signal_price.
+# When set, bybit_execute rejects the order BEFORE submission if drift
+# exceeds the limit (fail-closed). The existing 1% SL/TP rebase still runs
+# below this hard ceiling. Engine-agnostic: applies to any signal routed
+# through bybit_execute. The `providerDrift` field is attached to every
+# bybit_execute result regardless of this gate (observability only).
+MAX_SIGNAL_DRIFT_PCT:
+  forex: null
+  commodity: null
+  index: null
+  stock: null
+  etf: null
+  crypto: null
+
 DATA_FRESHNESS_GATES:
   WARN_ON_STALE_SCAN: true
   BLOCK_EXECUTION_ON_STALE: true

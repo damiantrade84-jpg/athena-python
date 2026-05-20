@@ -187,10 +187,29 @@ def api_prices():
     with _live_prices_lock:
         snapshot = dict(_live_prices)
 
+    # Decorate each entry with ageSec so the UI/diagnostics can detect stalled
+    # live-price feeds. Producers in candle_feeds.py mostly write ts as seconds
+    # since epoch; EODHD WS writes milliseconds — normalize by magnitude.
+    import time as _time_mod
+    _now_s = _time_mod.time()
+    decorated: dict = {}
+    for _k, _v in snapshot.items():
+        if not isinstance(_v, dict):
+            decorated[_k] = _v
+            continue
+        entry = dict(_v)
+        _ts_raw = entry.get("ts")
+        if isinstance(_ts_raw, (int, float)) and _ts_raw > 0:
+            _ts_norm = float(_ts_raw) / 1000.0 if _ts_raw > 1e12 else float(_ts_raw)
+            entry["ageSec"] = round(max(0.0, _now_s - _ts_norm), 3)
+        else:
+            entry["ageSec"] = None
+        decorated[_k] = entry
+
     return jsonify(
         {
-            "prices": snapshot,
-            "count": len(snapshot),
+            "prices": decorated,
+            "count": len(decorated),
             "ts": datetime.now(timezone.utc).isoformat(),
         }
     )

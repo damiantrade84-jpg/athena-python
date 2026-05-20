@@ -6,6 +6,7 @@ type LivePriceEntry = {
   bid?: number | null;
   ask?: number | null;
   ts?: number | string;
+  ageSec?: number | null;
   source?: string;
   [k: string]: unknown;
 };
@@ -76,5 +77,48 @@ export function useLivePrices(intervalMs = 10000) {
     [priceEntryFor],
   );
 
-  return { prices: data?.prices || {}, loading, error, refresh, priceEntryFor, priceFor };
+  // GAP-5: surface freshness/provenance so components can render stale states.
+  // ageSec comes pre-decorated from /api/prices (athena_app/api/routes_market_data.py).
+  const ageSecFor = useCallback(
+    (item: { display?: unknown; pair?: unknown; symbol?: unknown } | string | null | undefined): number | undefined => {
+      const value = priceEntryFor(item)?.ageSec;
+      const num = typeof value === 'number' ? value : Number(value);
+      return Number.isFinite(num) && num >= 0 ? num : undefined;
+    },
+    [priceEntryFor],
+  );
+
+  const sourceFor = useCallback(
+    (item: { display?: unknown; pair?: unknown; symbol?: unknown } | string | null | undefined): string | undefined => {
+      const value = priceEntryFor(item)?.source;
+      return typeof value === 'string' && value.length > 0 ? value : undefined;
+    },
+    [priceEntryFor],
+  );
+
+  // True when ageSec is known AND exceeds thresholdSec. Unknown age returns
+  // false so callers can render a separate "no age" state if they want.
+  const staleFor = useCallback(
+    (
+      item: { display?: unknown; pair?: unknown; symbol?: unknown } | string | null | undefined,
+      thresholdSec: number,
+    ): boolean => {
+      if (!(Number.isFinite(thresholdSec) && thresholdSec > 0)) return false;
+      const age = ageSecFor(item);
+      return age !== undefined && age > thresholdSec;
+    },
+    [ageSecFor],
+  );
+
+  return {
+    prices: data?.prices || {},
+    loading,
+    error,
+    refresh,
+    priceEntryFor,
+    priceFor,
+    ageSecFor,
+    sourceFor,
+    staleFor,
+  };
 }

@@ -10388,13 +10388,14 @@ def api_chart_analysis():
         try:
             from vision_trade_read import parse_vision_trade_read
 
+            _vision_authoritative_tf = "H1" if triple_mode else ("H4" if dual_mode else tf)
             structured_trade_read = parse_vision_trade_read(
                 analysis,
                 structured=structured,
                 chart_timestamp=_chart_generated_at,
                 latest_candle_ts=_latest_candle_ts,
                 image_hash=_stored_vision.get("image_hash"),
-                timeframe=tf,
+                timeframe=_vision_authoritative_tf,
             )
             structured["structured_trade_read"] = structured_trade_read
         except Exception as _vtr_err:
@@ -11798,7 +11799,10 @@ def analyze_pair(
 
     direction = res.get("direction") or "neutral"
 
-    live_px = (_live_prices.get(pair["display"], {}) or {}).get("price")
+    _lp_entry = _live_prices.get(pair["display"]) or {}
+    if not isinstance(_lp_entry, dict):
+        _lp_entry = {}
+    live_px = _lp_entry.get("price")
 
     price = (
         live_px
@@ -12348,6 +12352,52 @@ def analyze_pair(
         "pairSource": pair.get("source"),
     }
     signal["candleFetchMeta"] = _candle_fetch_meta
+
+    # Quote freshness observability: surface which live-price entry (if any) was
+    # available when this signal was built. Read-only — no effect on price
+    # selection, gates, scoring, or risk. Producers in candle_feeds.py mostly
+    # write ts as seconds since epoch; EODHD WS uses milliseconds, so normalize.
+    try:
+        import time as _time_mod
+        _q_ts_raw = _lp_entry.get("ts") if isinstance(_lp_entry, dict) else None
+        _q_ts_norm = None
+        _q_age_sec = None
+        if isinstance(_q_ts_raw, (int, float)) and _q_ts_raw > 0:
+            _q_ts_norm = float(_q_ts_raw) / 1000.0 if _q_ts_raw > 1e12 else float(_q_ts_raw)
+            _q_age_sec = round(max(0.0, _time_mod.time() - _q_ts_norm), 3)
+        if live_px:
+            _price_source = "live_quote"
+        elif h1i["snap"].get("close"):
+            _price_source = "h1_close"
+        elif h4i["snap"].get("close"):
+            _price_source = "h4_close"
+        elif d1i["snap"].get("close"):
+            _price_source = "d1_close"
+        else:
+            _price_source = None
+        signal["priceSource"] = _price_source
+        signal["quoteSource"] = _lp_entry.get("source") if isinstance(_lp_entry, dict) else None
+        signal["quoteTs"] = _q_ts_norm
+        signal["quoteAgeSec"] = _q_age_sec
+    except Exception as _quote_meta_err:
+        log.debug("[ANALYZE] quote metadata unavailable: %s", _quote_meta_err)
+        signal.setdefault("priceSource", None)
+        signal.setdefault("quoteSource", None)
+        signal.setdefault("quoteTs", None)
+        signal.setdefault("quoteAgeSec", None)
+
+    # Fix #1 — observability-only quote-age evaluation. Default-disabled:
+    # surfaces whether the live-quote age exceeds the per-asset-type
+    # LIVE_PRICE_MAX_AGE_SEC threshold. Does NOT block scoring, gates, or
+    # execution. Returns enabled=False when no threshold is configured.
+    try:
+        from athena_app.services.data_freshness import evaluate_live_quote_age
+        signal["quoteAgeEval"] = evaluate_live_quote_age(
+            pair, signal.get("quoteAgeSec"), CONFIG
+        )
+    except Exception as _quote_age_err:
+        log.debug("[ANALYZE] quoteAgeEval unavailable: %s", _quote_age_err)
+        signal.setdefault("quoteAgeEval", None)
 
     try:
         from ai_context import build_ai_calibration_context

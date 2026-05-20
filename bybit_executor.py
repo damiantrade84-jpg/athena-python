@@ -30,6 +30,74 @@ def _is_engine_d_signal(signal: dict) -> bool:
     return engine in ("scalp", "engine d", "scalp_vp")
 
 
+def _bybit_max_tick_age_sec() -> float | None:
+    """Return the configured Bybit broker tick-age limit in seconds, or None when disabled."""
+    cfg = CONFIG.get("MAX_BROKER_TICK_AGE_SEC")
+    if not isinstance(cfg, dict):
+        return None
+    raw = cfg.get("bybit")
+    if isinstance(raw, (int, float)) and raw > 0:
+        return float(raw)
+    return None
+
+
+def _bybit_max_spread_pct(signal: dict) -> float | None:
+    """Return the configured per-asset-type spread ceiling, or None when disabled."""
+    cfg = CONFIG.get("MAX_EXECUTION_SPREAD_PCT")
+    if not isinstance(cfg, dict):
+        return None
+    # Bybit signals are crypto; fall back to "crypto" key when signal lacks type.
+    asset_type = str((signal or {}).get("type") or "crypto").strip().lower()
+    raw = cfg.get(asset_type)
+    if isinstance(raw, (int, float)) and raw > 0:
+        return float(raw)
+    return None
+
+
+def _bybit_max_signal_drift_pct(signal: dict) -> float | None:
+    """Return the configured per-asset-type signal-to-execution drift cap.
+
+    Default null/missing → check disabled. ``providerDrift`` is still attached
+    to bybit_execute results for observability when the gate is disabled.
+    """
+    cfg = CONFIG.get("MAX_SIGNAL_DRIFT_PCT")
+    if not isinstance(cfg, dict):
+        return None
+    asset_type = str((signal or {}).get("type") or "crypto").strip().lower()
+    raw = cfg.get(asset_type)
+    if isinstance(raw, (int, float)) and raw > 0:
+        return float(raw)
+    return None
+
+
+def _bybit_ticker_age_seconds(ticker: dict) -> float | None:
+    """Compute now − ticker timestamp in seconds. ccxt reports timestamp in ms."""
+    if not isinstance(ticker, dict):
+        return None
+    ts_raw = ticker.get("timestamp")
+    if not isinstance(ts_raw, (int, float)) or ts_raw <= 0:
+        return None
+    ts_sec = float(ts_raw) / 1000.0
+    return max(0.0, time.time() - ts_sec)
+
+
+def _bybit_spread_pct(ticker: dict) -> float | None:
+    """Compute (ask-bid)/mid from a ccxt ticker dict. Returns None when either side is missing."""
+    if not isinstance(ticker, dict):
+        return None
+    try:
+        ask = float(ticker.get("ask") or 0)
+        bid = float(ticker.get("bid") or 0)
+    except (TypeError, ValueError):
+        return None
+    if ask <= 0 or bid <= 0 or ask < bid:
+        return None
+    mid = (ask + bid) / 2.0
+    if mid <= 0:
+        return None
+    return (ask - bid) / mid
+
+
 def _uses_trailing_atr_exit(signal: dict) -> bool:
     """True when Engine A/B exits are managed by the timed-exit chandelier trail."""
     mode = str((CONFIG.get("TIMED_EXIT") or {}).get("tp_mode", "fixed")).strip().lower()
@@ -1016,7 +1084,15 @@ def bybit_get_symbol_info(athena_display: str) -> dict:
             }
 
         ticker = exchange.fetch_ticker(ccxt_symbol)
-        price = ticker.get("last", 0) or 0
+        last_px = ticker.get("last", 0) or 0
+        try:
+            bid_px = float(ticker.get("bid") or 0)
+        except (TypeError, ValueError):
+            bid_px = 0.0
+        try:
+            ask_px = float(ticker.get("ask") or 0)
+        except (TypeError, ValueError):
+            ask_px = 0.0
 
         # Correctly extract price precision and tick size from Bybit/CCXT metadata.
         # CCXT 'precision' can be TICK_SIZE (float like 0.0001) or DECIMAL_PLACES (int like 4).
@@ -1043,6 +1119,14 @@ def bybit_get_symbol_info(athena_display: str) -> dict:
         else:
             vol_step = float(v_prec)
 
+        # BUG-3: report the real bid/ask/spread from the fetched ticker rather
+        # than collapsing them to ``last``. Falls back to ``last`` if either
+        # side is missing so downstream code that requires non-zero values
+        # still gets a usable number (matching prior fallback intent).
+        bid_out = bid_px if bid_px > 0 else float(last_px or 0)
+        ask_out = ask_px if ask_px > 0 else float(last_px or 0)
+        spread_out = max(0.0, ask_out - bid_out)
+
         return {
             "error": False,
             "symbol": athena_display,
@@ -1057,9 +1141,9 @@ def bybit_get_symbol_info(athena_display: str) -> dict:
             "trade_contract_size": 1,
             "trade_tick_value": tick_value,
             "trade_tick_size": _point,
-            "bid": price,
-            "ask": price,
-            "spread": 0,
+            "bid": bid_out,
+            "ask": ask_out,
+            "spread": spread_out,
         }
     except Exception as e:
         log.error(f"[BYBIT] Failed to get symbol info for {athena_display}: {e}")
@@ -1115,9 +1199,92 @@ def bybit_execute(signal: dict, approval: "RiskApproval") -> dict:  # noqa: F821
         if price <= 0:
             return {"success": False, "error": f"NO_PRICE_DATA: {ccxt_symbol}"}
 
+        # Fix #3 — broker tick age check (default disabled via config).
+        # GAP-6: when the gate is enabled and the ticker has no timestamp,
+        # fail-closed instead of silently bypassing — an un-attestable tick is
+        # treated as stale.
+        _tick_age_limit = _bybit_max_tick_age_sec()
+        if _tick_age_limit is not None:
+            _tick_age = _bybit_ticker_age_seconds(ticker)
+            if _tick_age is None:
+                log.warning(
+                    f"[BYBIT] {ccxt_symbol}: ticker.timestamp missing — "
+                    f"MAX_BROKER_TICK_AGE_SEC.bybit={_tick_age_limit:.2f}s is enabled; rejecting"
+                )
+                return {
+                    "success": False,
+                    "error": "BROKER_TICK_TIMESTAMP_MISSING",
+                    "tickAgeLimitSec": _tick_age_limit,
+                }
+            if _tick_age > _tick_age_limit:
+                log.warning(
+                    f"[BYBIT] {ccxt_symbol}: ticker age {_tick_age:.2f}s exceeds "
+                    f"MAX_BROKER_TICK_AGE_SEC.bybit={_tick_age_limit:.2f}s — rejecting"
+                )
+                return {
+                    "success": False,
+                    "error": (
+                        f"BROKER_TICK_STALE: {_tick_age:.2f}s > "
+                        f"{_tick_age_limit:.2f}s limit"
+                    ),
+                    "tickAgeSec": round(_tick_age, 3),
+                    "tickAgeLimitSec": _tick_age_limit,
+                }
+
+        # Fix #4 — execution spread cap (default disabled via per-asset config).
+        _spread_limit = _bybit_max_spread_pct(signal)
+        if _spread_limit is not None:
+            _spread_pct = _bybit_spread_pct(ticker)
+            if _spread_pct is not None and _spread_pct > _spread_limit:
+                log.warning(
+                    f"[BYBIT] {ccxt_symbol}: spread {_spread_pct*100:.4f}% exceeds "
+                    f"MAX_EXECUTION_SPREAD_PCT cap {_spread_limit*100:.4f}% — rejecting"
+                )
+                return {
+                    "success": False,
+                    "error": (
+                        f"SPREAD_TOO_WIDE: {_spread_pct*100:.4f}% > "
+                        f"{_spread_limit*100:.4f}% limit"
+                    ),
+                    "spreadPct": round(_spread_pct, 6),
+                    "spreadLimitPct": _spread_limit,
+                }
+
         sl = signal.get("sl", 0)
         tp1 = signal.get("tp1", 0)
         signal_price = float(signal.get("price") or signal.get("livePrice") or 0)
+
+        # GAP-7 — provider drift between the signal price (Binance candle close
+        # at scan time) and the broker side (Bybit ask for LONG / bid for SHORT
+        # taken seconds earlier above). Computed once and reused by both the
+        # hard drift gate below and the existing 1% rebase block further down.
+        if signal_price > 0:
+            _provider_drift_pct = abs(float(price) - signal_price) / signal_price
+        else:
+            _provider_drift_pct = None
+        _drift_limit = _bybit_max_signal_drift_pct(signal)
+        if (
+            _drift_limit is not None
+            and _provider_drift_pct is not None
+            and _provider_drift_pct > _drift_limit
+        ):
+            log.warning(
+                f"[BYBIT] {ccxt_symbol}: signal-to-execution drift "
+                f"{_provider_drift_pct*100:.4f}% exceeds MAX_SIGNAL_DRIFT_PCT "
+                f"cap {_drift_limit*100:.4f}% — rejecting"
+            )
+            return {
+                "success": False,
+                "error": (
+                    f"SIGNAL_DRIFT_TOO_LARGE: {_provider_drift_pct*100:.4f}% > "
+                    f"{_drift_limit*100:.4f}% limit"
+                ),
+                "providerDrift": round(_provider_drift_pct, 6),
+                "signalDriftLimitPct": _drift_limit,
+                "signalPrice": signal_price,
+                "brokerPrice": float(price),
+            }
+
         override_meta = signal.get("level_override")
         if not isinstance(override_meta, dict):
             override_meta = {}
@@ -1141,15 +1308,14 @@ def bybit_execute(signal: dict, approval: "RiskApproval") -> dict:  # noqa: F821
                 )
 
         # Rebase levels when the scanned price is materially stale versus the live fill price.
-        elif signal_price > 0 and sl and tp1:
-            drift = abs(price - signal_price) / signal_price
-            if drift > 0.01:
+        elif signal_price > 0 and sl and tp1 and _provider_drift_pct is not None:
+            if _provider_drift_pct > 0.01:
                 sl_offset = float(sl) - signal_price
                 tp_offset = float(tp1) - signal_price
                 sl = round(price + sl_offset, 8)
                 tp1 = round(price + tp_offset, 8)
                 log.info(
-                    f"[BYBIT] {ccxt_symbol}: price drift {drift:.1%} ({signal_price}→{price}) — rebased SL={sl} TP={tp1}"
+                    f"[BYBIT] {ccxt_symbol}: price drift {_provider_drift_pct:.1%} ({signal_price}→{price}) — rebased SL={sl} TP={tp1}"
                 )
 
         level_error = _validate_exit_levels(
@@ -1438,6 +1604,11 @@ def bybit_execute(signal: dict, approval: "RiskApproval") -> dict:  # noqa: F821
             "feeCost": fee_cost,
             "signalPriceRef": _sig_ref,
             "slippageBps": _slip_bps,
+            "providerDrift": (
+                round(_provider_drift_pct, 6)
+                if _provider_drift_pct is not None
+                else None
+            ),
         }
 
     except Exception as e:

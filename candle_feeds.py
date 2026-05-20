@@ -442,14 +442,25 @@ class BinanceLivePriceWS:
                                     symbol = ticker.get("s", "")
                                     if symbol in crypto_symbols:
                                         display_name = crypto_symbols[symbol]
-                                        price = float(ticker.get("c", 0))
+                                        try:
+                                            price = float(ticker.get("c", 0) or 0)
+                                            bid = float(ticker.get("b", 0) or 0)
+                                            ask = float(ticker.get("a", 0) or 0)
+                                        except (TypeError, ValueError):
+                                            continue
 
                                         if price > 0:
+                                            entry = {
+                                                "price": price,
+                                                "ts": time.time(),
+                                                "source": "binance_ws",
+                                            }
+                                            if bid > 0:
+                                                entry["bid"] = bid
+                                            if ask > 0:
+                                                entry["ask"] = ask
                                             with _live_prices_lock:
-                                                _live_prices[display_name] = {
-                                                    "price": price,
-                                                    "ts": time.time(),
-                                                }
+                                                _live_prices[display_name] = entry
 
                             except asyncio.TimeoutError:
                                 try:
@@ -854,7 +865,19 @@ class EODHDWebSocketManager:
                                 except (ValueError, TypeError):
                                     return None
 
-                            entry = {"ts": msg.get("t", 0)}
+                            # EODHD WS reports `t` in milliseconds; normalize to
+                            # seconds so every _live_prices producer uses the
+                            # same epoch unit. Magnitude check tolerates an
+                            # already-seconds value if the upstream schema ever
+                            # changes.
+                            _t_raw = msg.get("t", 0)
+                            try:
+                                _t_val = float(_t_raw)
+                                _ts_sec = _t_val / 1000.0 if _t_val > 1e12 else _t_val
+                            except (TypeError, ValueError):
+                                _ts_sec = 0
+
+                            entry = {"ts": _ts_sec, "source": f"eodhd_{endpoint}"}
 
                             if endpoint == "forex":
                                 bid, ask = _f("b"), _f("a")

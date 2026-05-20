@@ -47,6 +47,57 @@ def _mt5_should_send_broker_tp(signal: dict) -> bool:
     return bool(_timed_exit_cfg().get("mt5_attach_broker_tp_when_trailing_atr", True))
 
 
+def _mt5_max_tick_age_sec() -> float | None:
+    """Return the configured MT5 broker tick-age limit in seconds, or None when disabled."""
+    cfg = CONFIG.get("MAX_BROKER_TICK_AGE_SEC")
+    if not isinstance(cfg, dict):
+        return None
+    raw = cfg.get("mt5")
+    if isinstance(raw, (int, float)) and raw > 0:
+        return float(raw)
+    return None
+
+
+def _mt5_max_spread_pct(signal: dict) -> float | None:
+    """Return the configured per-asset-type spread ceiling, or None when disabled."""
+    cfg = CONFIG.get("MAX_EXECUTION_SPREAD_PCT")
+    if not isinstance(cfg, dict):
+        return None
+    asset_type = str((signal or {}).get("type") or "").strip().lower()
+    if not asset_type:
+        return None
+    raw = cfg.get(asset_type)
+    if isinstance(raw, (int, float)) and raw > 0:
+        return float(raw)
+    return None
+
+
+def _mt5_tick_age_seconds(tick) -> float | None:
+    """Compute now − tick.time in seconds. Returns None when tick time is missing/zero."""
+    try:
+        tick_time = float(getattr(tick, "time", 0) or 0)
+    except (TypeError, ValueError):
+        return None
+    if tick_time <= 0:
+        return None
+    return max(0.0, time.time() - tick_time)
+
+
+def _mt5_spread_pct(tick) -> float | None:
+    """Compute (ask-bid)/mid from an MT5 tick. Returns None when either side is missing."""
+    try:
+        ask = float(getattr(tick, "ask", 0) or 0)
+        bid = float(getattr(tick, "bid", 0) or 0)
+    except (TypeError, ValueError):
+        return None
+    if ask <= 0 or bid <= 0 or ask < bid:
+        return None
+    mid = (ask + bid) / 2.0
+    if mid <= 0:
+        return None
+    return (ask - bid) / mid
+
+
 def _mt5_entry_slippage_bps(
     direction: str, ref_price: float, fill_price: float
 ) -> tuple[float | None, float | None]:
@@ -1333,6 +1384,44 @@ def mt5_execute(signal: dict, approval: "RiskApproval") -> dict:  # noqa: F821
             "success": False,
             "error": f"MARKET_CLOSED: {mt5_symbol} price is 0 — market likely closed",
         }
+
+    # Fix #3 — broker tick age check (default disabled via config).
+    _tick_age_limit = _mt5_max_tick_age_sec()
+    if _tick_age_limit is not None:
+        _tick_age = _mt5_tick_age_seconds(tick)
+        if _tick_age is not None and _tick_age > _tick_age_limit:
+            log.warning(
+                f"[MT5] {mt5_symbol}: tick age {_tick_age:.2f}s exceeds "
+                f"MAX_BROKER_TICK_AGE_SEC.mt5={_tick_age_limit:.2f}s — rejecting"
+            )
+            return {
+                "success": False,
+                "error": (
+                    f"BROKER_TICK_STALE: {_tick_age:.2f}s > "
+                    f"{_tick_age_limit:.2f}s limit"
+                ),
+                "tickAgeSec": round(_tick_age, 3),
+                "tickAgeLimitSec": _tick_age_limit,
+            }
+
+    # Fix #4 — execution spread cap (default disabled via per-asset config).
+    _spread_limit = _mt5_max_spread_pct(signal)
+    if _spread_limit is not None:
+        _spread_pct = _mt5_spread_pct(tick)
+        if _spread_pct is not None and _spread_pct > _spread_limit:
+            log.warning(
+                f"[MT5] {mt5_symbol}: spread {_spread_pct*100:.4f}% exceeds "
+                f"MAX_EXECUTION_SPREAD_PCT cap {_spread_limit*100:.4f}% — rejecting"
+            )
+            return {
+                "success": False,
+                "error": (
+                    f"SPREAD_TOO_WIDE: {_spread_pct*100:.4f}% > "
+                    f"{_spread_limit*100:.4f}% limit"
+                ),
+                "spreadPct": round(_spread_pct, 6),
+                "spreadLimitPct": _spread_limit,
+            }
 
     # Get symbol info for proper rounding
 

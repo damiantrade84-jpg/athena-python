@@ -101,6 +101,8 @@ def build_live_feed_diagnostic(
     fetch_duration_ms: float | None = None,
     provider_status: str | None = None,
     provider_error: str | None = None,
+    scoring_candles: list[dict[str, Any]] | None = None,
+    market_state: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Return one log/API-safe diagnostic row for a symbol/timeframe."""
     meta = fetch_meta if isinstance(fetch_meta, dict) else {}
@@ -108,6 +110,32 @@ def build_live_feed_diagnostic(
     series, _ = trim_mt5_d1_broker_session_ahead_tail(
         pair, str(timeframe or "").upper(), series, time_now=time_now
     )
+    tf_u = str(timeframe or "").upper()
+    offset_hours = float(market_state_offset_hours(pair, tf_u))
+
+    if scoring_candles is None and isinstance(market_state, dict):
+        scoring_candles = list(market_state.get("confirmed") or [])
+    elif scoring_candles is None:
+        state = split_market_state(
+            series,
+            tf_u,
+            pair.get("display") or pair.get("symbol") or "",
+            time_now=time_now,
+            offset_hours=offset_hours,
+        )
+        scoring_candles = list(state.get("confirmed") or [])
+        market_state = state
+    else:
+        scoring_candles = list(scoring_candles or [])
+
+    scoring_diag = candle_freshness_diagnostic(
+        pair,
+        tf_u,
+        scoring_candles,
+        time_now=time_now,
+        source=source or meta.get("upstream") or pair.get("source"),
+    )
+
     diag = candle_freshness_diagnostic(
         pair,
         timeframe,
@@ -132,17 +160,54 @@ def build_live_feed_diagnostic(
         or meta.get("error")
         or None
     )
+
+    raw_last_epoch = diag.get("lastBarEpoch")
+    scoring_last_epoch = scoring_diag.get("lastBarEpoch")
+    expected_epoch = scoring_diag.get("expectedCurrentBucketEpoch")
+    lag_seconds = None
+    if scoring_last_epoch is not None and time_now is not None:
+        lag_seconds = max(0.0, float(time_now) - float(scoring_last_epoch))
+    elif scoring_last_epoch is not None:
+        import time as _time
+
+        lag_seconds = max(0.0, _time.time() - float(scoring_last_epoch))
+
+    dropped_forming = bool(
+        isinstance(market_state, dict)
+        and market_state.get("forming")
+        and len(series) > len(scoring_candles)
+    )
+
     diag.update(
         {
             "asset_type": pair.get("type"),
             "candle_count": len(series),
+            "raw_count": len(series),
+            "scoring_count": len(scoring_candles),
+            "last_raw_ts": raw_last_epoch,
+            "last_scoring_ts": scoring_last_epoch,
+            "expected_latest_confirmed_ts": expected_epoch,
+            "lag_seconds": round(lag_seconds, 1) if lag_seconds is not None else None,
+            "bucket_lag": scoring_diag.get("bucketLag"),
+            "stale_status": scoring_diag.get("stalenessSeverity"),
+            "stale_reason": scoring_diag.get("stalenessSeverity"),
+            "confirmed_only": True,
+            "dropped_forming_candle": dropped_forming,
+            "fallback_used": bool(meta.get("fallback_used")),
+            "fallback_provider": meta.get("fallback_provider") or meta.get("fallback"),
+            "fallback_reason": meta.get("fallback_reason"),
+            "primary_provider": meta.get("primary_provider") or meta.get("requestedSource"),
+            "broker_offset": offset_hours,
             "isFromCache": bool(meta.get("cacheHit")),
+            "cache_age_seconds": meta.get("cacheAgeSec"),
             "cacheBypassed": bool(meta.get("cacheBypass") or meta.get("cacheWriteSkipped")),
             "fetchDurationMs": round(float(fetch_duration_ms), 3)
             if fetch_duration_ms is not None
             else None,
             "providerStatus": provider_status,
             "providerError": provider_error,
+            "provider_timestamp": meta.get("provider_timestamp") or scoring_last_epoch,
+            "freshness_lag": meta.get("freshness_lag") or scoring_diag.get("bucketLag"),
         }
     )
     return diag
@@ -530,4 +595,65 @@ def evaluate_execution_data_freshness(
         "reason": reason,
         "warnOnStaleScan": bool(gate.get("WARN_ON_STALE_SCAN", True)),
         "blockExecutionOnStale": bool(gate.get("BLOCK_EXECUTION_ON_STALE", True)),
+    }
+
+
+def evaluate_live_quote_age(
+    pair: dict[str, Any] | None,
+    age_sec: float | int | None,
+    config: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Compare a quote's age against the per-asset-type `LIVE_PRICE_MAX_AGE_SEC` config.
+
+    Pure observability — does not block scoring or execution. Default-disabled:
+    when no threshold is configured for the pair's asset type, returns
+    ``{"enabled": False, ...}``. Callers attach the result to signals so the UI
+    and audit log can flag stale-quote signals without changing behavior.
+
+    Returns:
+        dict with keys: enabled, assetType, thresholdSec, ageSec, stale, reason.
+    """
+    asset_type = ""
+    if isinstance(pair, dict):
+        asset_type = str(pair.get("type") or "").strip().lower()
+
+    cfg_root = (config or {}).get("LIVE_PRICE_MAX_AGE_SEC")
+    threshold: float | None = None
+    if isinstance(cfg_root, dict) and asset_type:
+        raw = cfg_root.get(asset_type)
+        if isinstance(raw, (int, float)) and raw > 0:
+            threshold = float(raw)
+
+    age_val: float | None = None
+    if isinstance(age_sec, (int, float)) and age_sec >= 0:
+        age_val = float(age_sec)
+
+    if threshold is None:
+        return {
+            "enabled": False,
+            "assetType": asset_type or None,
+            "thresholdSec": None,
+            "ageSec": age_val,
+            "stale": False,
+            "reason": "DISABLED" if not asset_type else f"NO_THRESHOLD_FOR_{asset_type.upper()}",
+        }
+
+    if age_val is None:
+        return {
+            "enabled": True,
+            "assetType": asset_type,
+            "thresholdSec": threshold,
+            "ageSec": None,
+            "stale": False,
+            "reason": "AGE_UNKNOWN",
+        }
+
+    stale = age_val > threshold
+    return {
+        "enabled": True,
+        "assetType": asset_type,
+        "thresholdSec": threshold,
+        "ageSec": age_val,
+        "stale": stale,
+        "reason": "STALE" if stale else "FRESH",
     }
