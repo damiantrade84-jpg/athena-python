@@ -2,11 +2,19 @@
 
 Primary repo-level startup instructions for Claude Code.
 
-Do not intentionally load `AGENTS.md`. Codex/Cursor use `AGENTS.md`.
+# Claude Code Instruction Boundary
+
+Claude Code must use this file and `.claude/skills/**/SKILL.md` only for repo instructions.
+
+Do not import, read, summarize, follow, or modify `AGENTS.md` unless the user explicitly asks for Codex/AGENTS.md maintenance.
+
+`AGENTS.md` is reserved for Codex and other agent-compatible tooling only.
+
+Do not use `.cursor/**`, `.agents/**`, or global/user-profile agent skills for this repo unless the user explicitly asks.
 
 ## Core rules
 
-- Paper-only unless the user explicitly approves live trading.
+
 - Never bypass risk gates, freshness checks, kill switches, execution approvals, broker safety checks, RR checks, SL/TP validation, audit logging, or deterministic safety rules.
 - AI is advisory only. AI review, Marcus, Vision, Strategist, AI Agent chat, and similar-setup logic cannot execute trades, approve orders, mutate config, or override deterministic gates.
 - Engine A, Engine B, Engine C, and Engine D are separate unless the task explicitly concerns consensus, routing, or cross-engine payload handoff.
@@ -60,12 +68,7 @@ Common entry points only. This is not a complete allowlist.
 5. Run the smallest relevant compile/test command.
 6. Report what changed, what passed, and what was not verified.
 
-## Detailed reference
 
-Use `docs/agent-operating-guide.md` only when the task requires fuller repository operating rules. Do not load it by default for small edits.
-
-- Do not use user-profile Codex skills or memory skills for this repo unless explicitly requested.
-- For this repo, active skill discovery should come from `.claude/skills/` only.
 
 ---
 

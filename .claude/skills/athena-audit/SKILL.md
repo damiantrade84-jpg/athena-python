@@ -30,9 +30,8 @@ Do not use this skill for small fixes, quick edits, simple explanations, or narr
 
 ## Context loading rules
 
-- Start from the active root instruction file for the current tool:
-  - Codex/Cursor: `AGENTS.md`
-  - Claude Code: `CLAUDE.md`
+- Do not load `AGENTS.md`, `.agents/**`, or `.cursor/**`.
+- Use `CLAUDE.md` and `.claude/skills/**/SKILL.md` for repo instruction context.
 - Read current source files before making claims.
 - Do not load `tasks/`, `logs/`, old audits, generated backtest artifacts, historical reports, archived diagnostics, or stale findings unless the user names the artifact or the current audit explicitly requires it.
 - Do not rely on historical findings as current truth. Re-verify against current code.

@@ -1,4 +1,9 @@
 {
+  "claudeMdExcludes": [
+    "**/AGENTS.md",
+    "**/.agents/**",
+    "**/.cursor/**"
+  ],
   "permissions": {
     "allow": [
       "Bash(python:*)",

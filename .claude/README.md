@@ -2,9 +2,10 @@
 
 ## Context hygiene
 
-- Claude Code startup context is `CLAUDE.md`.
-- Codex/Cursor startup context is `AGENTS.md`.
-- Do not import `AGENTS.md` into `CLAUDE.md` unless you intentionally want shared startup context.
+- Claude Code startup context is `CLAUDE.md` and `.claude/skills/**/SKILL.md` only.
+- Codex/Cursor startup context is `AGENTS.md` (Claude Code must not read or follow it).
+- Do not import, read, summarize, or follow `AGENTS.md` from Claude Code unless the user explicitly asks for Codex/AGENTS.md maintenance.
+- Do not use `.cursor/**`, `.agents/**`, or global/user-profile agent skills for this repo unless the user explicitly asks.
 - `.claudeignore` is used only for Claude Code context hygiene. It should not be used as the main source of truth for agent behavior.
 - Runtime DBs/logs, generated research artifacts, `tasks/`, old audits, and heavy diagnostics should stay out of default context unless explicitly needed.
 
