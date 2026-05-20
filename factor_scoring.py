@@ -420,14 +420,15 @@ def _coherent_trend_score(
         return 0.0, None, {"error": "zero_weight", **detail}
 
     if abs(long_w - short_w) < 1e-9:
-        # Perfectly tied — use D1 as tiebreaker; refuse to guess if D1 is absent.
-        d1_vote = next((d for name, d, _ in votes if name == "d1_ema_trend"), None)
-        if d1_vote is None:
-            detail["tie_no_d1"] = True
-            return 0.0, None, {"error": "tied_no_d1_tiebreaker", **detail}
-        dominant_sign = d1_vote
-    else:
-        dominant_sign = 1.0 if long_w > short_w else -1.0
+        # Perfect weighted tie — neither LONG nor SHORT carries majority weight.
+        # Returning no direction here prevents the single highest-weighted TF
+        # (typically D1) from overruling the joint vote of the other timeframes
+        # and producing what looks like a flipped signal.
+        detail["weighted_tf_tie"] = True
+        detail["long_weight"] = round(long_w, 4)
+        detail["short_weight"] = round(short_w, 4)
+        return 0.0, None, {"error": "weighted_tf_tie", **detail}
+    dominant_sign = 1.0 if long_w > short_w else -1.0
 
     dominant_w = long_w if dominant_sign > 0 else short_w
     # coherence_ratio floor removed (was 0.5). A tied or near-tied vote should
@@ -2456,6 +2457,16 @@ def compute_factor_scores(
     }
 
 
+_NON_TRADABLE_ABORT_REASONS = {
+    "atr_invalid_abort",
+    "indeterminate_trend",
+    "min_directional_failed",
+    "adx_hard_abort",
+    "final_score_invalid",
+    "weighted_tf_tie",
+}
+
+
 def _zero_result(
     pair: dict,
     regime: str,
@@ -2467,7 +2478,18 @@ def _zero_result(
     min_directional: float = 0.0,
     min_directional_failed: bool = False,
 ) -> dict:
-    """Return a clean zero-score result with diagnostics."""
+    """Return a clean zero-score result with diagnostics.
+
+    For hard-abort reasons (ADX dead market, min-directional failure, ATR
+    invalid, indeterminate trend, weighted TF tie) the tradable ``direction``
+    field is forced to ``None`` and the executable flag is unset. The
+    attempted direction is preserved in ``diagnostic_direction`` so audit /
+    Marcus Reid output can still describe what evidence existed.
+    """
+    diagnostic_direction = direction
+    is_hard_abort = reason in _NON_TRADABLE_ABORT_REASONS
+    if is_hard_abort:
+        direction = None
     asset_type = pair.get("type", "stock")
     score_group = _resolve_pair_score_group(pair)
     weight_cfg = _resolve_factor_weights(score_group, asset_type)
@@ -2500,6 +2522,9 @@ def _zero_result(
     return {
         "final_score": 0.0,
         "direction": direction,
+        "diagnostic_direction": diagnostic_direction,
+        "signalExecutable": not is_hard_abort,
+        "directionStatus": "diagnostic_only" if is_hard_abort else "ok",
         "regime": regime,
         "factor_scores": {"trend": 0.0, "momentum": 0.0, "addon": 0.0, "research_lab": 0.0, "mean_reversion": 0.0},
         "weights": {"trend": 1.0, **weight_cfg},

@@ -138,7 +138,15 @@ def test_scanner_b_only_watchlist_does_not_override_safety_blocks(monkeypatch):
 
 def test_scanner_applies_engine_b_execution_levels_to_signal(monkeypatch):
     monkeypatch.setitem(scanner.CONFIG, "ENGINE_B_USE_EXECUTION_LEVELS_FOR_SCAN_SIGNALS", True)
-    signal = {"sl": 90.0, "tp1": 110.0, "tp2": 120.0}
+    # Engine identity must be explicitly Engine B for generic SL/TP to be
+    # overwritten — Engine A rows are protected regardless of this flag.
+    signal = {
+        "engine": "B",
+        "engine_source": "ENGINE_B",
+        "sl": 90.0,
+        "tp1": 110.0,
+        "tp2": 120.0,
+    }
 
     scanner._apply_engine_b_scan_levels(
         signal,

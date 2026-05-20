@@ -89,13 +89,33 @@ def _auto_trade_live_gate_display(cfg: dict) -> str:
 
 
 def _signal_engine(signal: dict) -> str:
-    engine = str(signal.get("engine") or signal.get("source_engine") or "").strip().lower()
+    # Explicit engine identity wins over any nested overlay metadata. Engine A
+    # rows routinely carry Engine B overlay diagnostics (engine_b / naked_data
+    # fields) — those must never reclassify the row as Engine B and route it
+    # through Engine B daily caps or calibration scopes.
+    raw_identity = (
+        signal.get("engine")
+        or signal.get("engine_source")
+        or signal.get("source_engine")
+        or ""
+    )
+    engine = str(raw_identity).strip().lower()
     if engine == "scalp":
         return "scalp"
-    if engine in ("engine_c", "consensus"):
+    if engine in ("engine_c", "engine_c_consensus", "consensus", "c"):
         return "engine_c"
-    if engine in ("engine_b", "naked", "naked_structure", "structure", "smc"):
+    if engine in ("engine_b", "naked", "naked_structure", "structure", "smc", "b"):
         return "engine_b"
+    if engine in (
+        "engine_a",
+        "engine_a_v2",
+        "factor_scoring",
+        "forex_scoring",
+        "a",
+    ):
+        return "engine_a"
+    # Fallback only — no explicit engine identity, so nested Engine B
+    # overlay/flag metadata is the strongest available signal.
     if bool(signal.get("is_naked")):
         return "engine_b"
     if isinstance(signal.get("engine_b"), dict) or isinstance(signal.get("naked_data"), dict):
@@ -148,6 +168,70 @@ def _signal_factor_weights(signal: dict) -> dict:
         return raw
     raw = signal.get("factor_weights")
     return raw if isinstance(raw, dict) else {}
+
+
+def _execution_conviction(signal: dict, engine: str) -> float:
+    """Return the engine-specific execution conviction (0-1 scale).
+
+    Engine A rows must be judged on pure Engine A conviction; the scanner
+    deflates Engine A score into ``combinedConviction`` (e.g. multiplied by
+    ``AUTO_TRADE_A_ONLY_WEIGHT`` when Engine B is absent), so reusing the
+    combined value to gate an A-only row would reject otherwise valid Engine A
+    signals. Engine C still uses ``combinedConviction`` (the consensus value)
+    and Engine B uses its own normalized confidence.
+    """
+    eng = (engine or "").strip().lower()
+    if eng == "engine_c":
+        for key in ("combinedConviction", "consensusConviction"):
+            raw = signal.get(key)
+            if raw is None:
+                continue
+            try:
+                return max(0.0, min(1.0, float(raw)))
+            except (TypeError, ValueError):
+                continue
+        return _current_combined_conviction(signal)
+    if eng == "engine_b":
+        for key in ("engine_b_conviction", "engine_b_score_norm"):
+            raw = signal.get(key)
+            if raw is None:
+                continue
+            try:
+                return max(0.0, min(1.0, float(raw)))
+            except (TypeError, ValueError):
+                continue
+        try:
+            b_score = float(signal.get("engine_b_score", 0) or 0)
+            b_max = float(signal.get("engine_b_max", 0) or 0)
+        except (TypeError, ValueError):
+            return 0.0
+        if b_max > 0:
+            return max(0.0, min(b_score / b_max, 1.0))
+        return 0.0
+    # Engine A or unrecognised engine — fall back to pure Engine A norm.
+    for key in ("engine_a_conviction", "scoreNorm", "score_norm"):
+        raw = signal.get(key)
+        if raw is None:
+            continue
+        try:
+            return max(0.0, min(1.0, float(raw)))
+        except (TypeError, ValueError):
+            continue
+    try:
+        score = float(signal.get("confluenceScore", 0) or 0)
+    except (TypeError, ValueError):
+        return 0.0
+    try:
+        max_score = float(
+            signal.get("maxScoreOverride") or signal.get("maxScore") or 0
+        )
+    except (TypeError, ValueError):
+        max_score = 0.0
+    if max_score > 0:
+        return max(0.0, min(score / max_score, 1.0))
+    if 0.0 <= score <= 1.0:
+        return score
+    return 0.0
 
 
 def _current_combined_conviction(signal: dict) -> float:
@@ -704,20 +788,17 @@ class AutoTrader:
         """
 
         asset_type = signal.get("type", "")
+        engine_name = _signal_engine(signal)
 
-        # ── Combined conviction scoring (Engine A + B) ──
-        # combinedConviction is 0-1 scale: (A_norm * 0.6) + (B_norm * 0.4) when aligned
-        # Falls back to A_norm * 0.6 when Engine B has no clear signal
-        combined_conviction = signal.get("combinedConviction")
+        # ── Execution conviction by engine ─────────────────────────────────
+        # Engine A rows must be judged on pure Engine A conviction; scanner
+        # deflates Engine A score into combinedConviction (e.g. A_norm * weight
+        # when Engine B is absent or unaligned), so reusing the combined value
+        # to gate an A-only row would reject otherwise valid Engine A trades.
+        # Engine C keeps the consensus combinedConviction; Engine B uses its
+        # own normalized confidence.
         engines_aligned = signal.get("enginesAligned", False)
-
-        # Fallback: recompute the same execution conviction contract used elsewhere.
-        if combined_conviction is None:
-            combined_conviction = _current_combined_conviction(signal)
-            log.warning(
-                f"[AUTO] {signal.get('pair')} missing combinedConviction — "
-                f"fallback recompute produced {combined_conviction:.3f}"
-            )
+        combined_conviction = _execution_conviction(signal, engine_name)
 
         # Auto-trade minimum conviction (0-1 scale)
         # Default: 0.50 = requires decent Engine A score OR Engine A+B alignment
@@ -735,7 +816,7 @@ class AutoTrader:
         b_verdict = signal.get("engine_b_verdict", "N/A")
         calibration = predict_calibrated_prob(
             combined_conviction,
-            engine=_signal_engine(signal),
+            engine=engine_name,
             asset_class=asset_type,
             style=signal.get("style"),
             max_score=1.0,

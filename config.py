@@ -1048,7 +1048,13 @@ CONFIG: dict = {
         "ASSET_GATE_NEAR_MISS_ENABLED": False,
         "FOREX_MIN_GATE_CONFIRMATIONS": 3,
     },
-    "ENGINE_B_USE_EXECUTION_LEVELS_FOR_SCAN_SIGNALS": True,
+    # Default OFF — Engine A scan rows must keep their Engine A SL/TP1/TP2
+    # even when an Engine B execution overlay is attached. Engine B overlay
+    # levels are always stored separately on the signal (engine_b_execution_*).
+    # Setting this True only opts in Engine B-only rows (or Engine C rows that
+    # explicitly select B execution levels) — Engine A is protected by the
+    # engine-identity gate in scanner._apply_engine_b_scan_levels regardless.
+    "ENGINE_B_USE_EXECUTION_LEVELS_FOR_SCAN_SIGNALS": False,
     "ENGINE_B_STRUCTURE_SCORE_INFLUENCE_ENABLED": False,
     "ENGINE_B_STRUCTURE_SCORE_COMPONENT_BONUSES": {
         "zone_proximity": 0.08,

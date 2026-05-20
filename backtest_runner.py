@@ -4216,9 +4216,12 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
                     __import__("datetime").datetime.utcnow().isoformat(),
                     pair["display"],
                     pair.get("type", ""),
-                    "forex_scoring"
-                    if pair.get("type") == "forex"
-                    else "factor_scoring",
+                    # Live forex Engine A v2 routes through factor_scoring
+                    # (the legacy forex_scoring module is retained for audit
+                    # only and is not in the live path). The backtest engine
+                    # label tracks the live engine name to keep audit joins
+                    # consistent across live and backtest runs.
+                    "factor_scoring",
                     len(trades),
                     round(win_rate, 4),
                     round(profit_factor, 4),

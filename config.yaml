@@ -2281,7 +2281,12 @@ ENGINE_B_STRUCTURE_READY_WATCHLIST:
   FOREX_GATE_NEAR_MISS_ENABLED: true
   ASSET_GATE_NEAR_MISS_ENABLED: true
   FOREX_MIN_GATE_CONFIRMATIONS: 3
-ENGINE_B_USE_EXECUTION_LEVELS_FOR_SCAN_SIGNALS: true
+# Default OFF — Engine A scan rows always keep their Engine A SL/TP1/TP2.
+# Engine B execution levels are kept in engine_b_execution_* overlay fields.
+# Even when set to true, scanner._apply_engine_b_scan_levels only writes
+# generic SL/TP for Engine B-only rows (or Engine C rows that explicitly
+# select B execution levels).
+ENGINE_B_USE_EXECUTION_LEVELS_FOR_SCAN_SIGNALS: false
 
 
 

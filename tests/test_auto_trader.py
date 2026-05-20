@@ -51,13 +51,20 @@ def _base_cfg():
 
 
 def _passing_signal(**overrides):
-    """Return a minimal signal that should pass _can_execute."""
+    """Return a minimal signal that should pass _can_execute.
+
+    Defaults represent an Engine A signal; tests can override ``scoreNorm``
+    (Engine A's pure conviction proxy) to drive the conviction gate. The
+    legacy ``combinedConviction`` field is also set so Engine C/B test
+    overrides keep working when they flip ``engine``.
+    """
     base = {
         "pair": "BTC/USDT",
         "type": "crypto",
         "direction": "LONG",
         "trendState": "TRENDING",
         "regimeName": "TRENDING",
+        "scoreNorm": 0.90,
         "combinedConviction": 0.90,
         "confluenceScore": 2.7,
         "maxScore": 3.0,
@@ -237,20 +244,28 @@ class TestAutoTradeMinConvictionConfig:
 class TestCanExecuteConvictionGate:
     def test_rejects_below_min_conviction(self):
         trader = AutoTrader()
-        ok, reason = trader._can_execute(_passing_signal(combinedConviction=0.54), _base_cfg())
+        sig = _passing_signal(scoreNorm=0.54, combinedConviction=0.54)
+        ok, reason = trader._can_execute(sig, _base_cfg())
         assert not ok
         assert "0.540 < min 0.550" in reason
 
     def test_passes_above_min_conviction(self):
         trader = AutoTrader()
-        ok, reason = trader._can_execute(_passing_signal(combinedConviction=0.56), _base_cfg())
+        sig = _passing_signal(scoreNorm=0.56, combinedConviction=0.56)
+        ok, reason = trader._can_execute(sig, _base_cfg())
         assert ok
         assert reason == ""
 
     def test_aligned_signals_get_discount(self):
         trader = AutoTrader()
         cfg = _base_cfg()
-        sig = _passing_signal(combinedConviction=0.50, enginesAligned=True, engine_b_score=3, engine_b_max=5)
+        sig = _passing_signal(
+            scoreNorm=0.50,
+            combinedConviction=0.50,
+            enginesAligned=True,
+            engine_b_score=3,
+            engine_b_max=5,
+        )
         ok, reason = trader._can_execute(sig, cfg)
         assert ok, f"Aligned signal should pass at discounted threshold: {reason}"
 
@@ -258,7 +273,12 @@ class TestCanExecuteConvictionGate:
         trader = AutoTrader()
         cfg = _base_cfg()
         cfg["AUTO_TRADE_MIN_CONVICTION"] = {"default": 0.5, "forex": 0.8}
-        sig = _passing_signal(type="forex", combinedConviction=0.75, pair="EUR/USD")
+        sig = _passing_signal(
+            type="forex",
+            scoreNorm=0.75,
+            combinedConviction=0.75,
+            pair="EUR/USD",
+        )
         ok, reason = trader._can_execute(sig, cfg)
         assert not ok
         assert "0.750 < min 0.800" in reason

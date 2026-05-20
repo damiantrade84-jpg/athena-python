@@ -114,14 +114,82 @@ def _engine_b_level_pair(conf_b: dict | None, res_b: dict | None) -> tuple[float
         return None, None
 
 
+def _engine_b_levels_apply_to_generic(signal: dict) -> bool:
+    """Return True when Engine B execution levels may overwrite generic SL/TP.
+
+    Engine A rows must keep their Engine A levels even when an Engine B
+    overlay is attached. Generic level overwrite is permitted only when the
+    selected execution engine is explicitly Engine B, or when Engine C has
+    explicitly selected Engine B execution levels.
+    """
+    raw_identity = (
+        signal.get("engine")
+        or signal.get("engine_source")
+        or signal.get("source_engine")
+        or ""
+    )
+    ident = str(raw_identity).strip().lower()
+    if ident in (
+        "engine_b",
+        "b",
+        "naked",
+        "naked_structure",
+        "structure",
+        "smc",
+    ):
+        return True
+    if ident in ("engine_c", "engine_c_consensus", "consensus", "c"):
+        selected = str(signal.get("engine_c_selected_levels") or "").strip().lower()
+        if selected in ("engine_b", "b"):
+            return True
+    return False
+
+
+def _resolve_engine_b_h4_snap(
+    h4_candles: list | None,
+    zone_candles: list | None,
+    asset_type: str,
+) -> dict:
+    """Return the H4 indicator snapshot Engine B should consume.
+
+    Previously the Engine B scanner path computed an ``h4_snap`` from
+    ``zone_candles_b`` and passed it as ``h4_snap=...`` into Engine B. For
+    swing style ``zone_candles_b`` is D1, so Engine B was reading D1
+    indicators (notably ADX) while believing they came from H4. This helper
+    builds the snap from the actual H4 candle series; if H4 candles are
+    unavailable it returns an empty dict so callers fall back to Engine B's
+    internal candle-derived ADX path instead of being silently fed the wrong
+    timeframe.
+    """
+    if not h4_candles:
+        return {}
+    try:
+        snap = (calc_indicators_with_normalized(h4_candles, asset_type) or {}).get("snap")
+    except Exception:
+        return {}
+    return snap or {}
+
+
 def _apply_engine_b_scan_levels(signal: dict, conf_b: dict | None, res_b: dict | None) -> None:
     sl, tp = _engine_b_level_pair(conf_b, res_b)
     if sl is None or tp is None:
         return
+    # Engine B overlay levels are always stored separately so diagnostics,
+    # research, and Engine C have access to them without contaminating
+    # Engine A's generic SL/TP fields.
     signal["engine_b_execution_sl"] = sl
     signal["engine_b_execution_tp"] = tp
+    signal["engine_b_execution_tp1"] = tp
+    signal["engine_b_execution_tp2"] = tp
+    signal["engine_b_level_source"] = "engine_b_execution"
     signal["engine_b_rr_used_for_gate"] = (conf_b or {}).get("rr_used_for_gate")
-    if not bool(CONFIG.get("ENGINE_B_USE_EXECUTION_LEVELS_FOR_SCAN_SIGNALS", True)):
+
+    # Engine identity is the primary gate: generic level overwrite only fires
+    # for explicit Engine B rows (or Engine C with B levels selected). Engine
+    # A rows are protected regardless of the legacy config flag's value.
+    if not _engine_b_levels_apply_to_generic(signal):
+        return
+    if not bool(CONFIG.get("ENGINE_B_USE_EXECUTION_LEVELS_FOR_SCAN_SIGNALS", False)):
         return
     signal["sl"] = sl
     signal["tp1"] = tp
@@ -1655,18 +1723,22 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict[s
                             _eb_funnel_extras["regime_label"] = regime_label
 
                             # Snapshots are needed for both A-driven and Engine
-                            # B-only paths.
+                            # B-only paths. `h4_snap` is computed from the real
+                            # H4 candle series (not zone_candles_b, which can be
+                            # D1 for swing style) so Engine B's H4 ADX matches
+                            # the timeframe it claims to be reading from.
                             _sc_d1_snap = {}
-                            _sc_h4_snap = {}
                             try:
                                 _sc_d1_snap = (
                                     calc_indicators_with_normalized(d1 or [], ptype) or {}
                                 ).get("snap") or {}
-                                _sc_h4_snap = (
-                                    calc_indicators_with_normalized(zone_candles_b, ptype) or {}
-                                ).get("snap") or {}
                             except Exception:
                                 pass
+                            _sc_h4_snap = _resolve_engine_b_h4_snap(
+                                h4_candles=h4 or [],
+                                zone_candles=zone_candles_b,
+                                asset_type=ptype,
+                            )
 
                             # Engine B-only path: when no Engine A direction
                             # exists, probe both directions independently and

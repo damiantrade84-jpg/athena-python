@@ -363,6 +363,58 @@ def pair_filter_enabled(pair: dict, filter_name: str) -> bool:
     return filter_name not in disabled
 
 
+def _resolve_trend_state(
+    factor_result: dict | None,
+    h4_snap: dict | None,
+    pair_type: str,
+) -> tuple[str, str, float | None]:
+    """Build ``(trendState, trendStateAdxSource, adxValue)``.
+
+    Engine A's ``_adx_gate`` may select D1 or max(D1, H4) as the ADX source
+    for scoring (per asset class / score group). Previously ``trendState``
+    always read H4 ADX from the indicator snap which produced inconsistent
+    regime labels and could trigger different downstream behavior than the
+    value that actually gated Engine A scoring. We now reuse the selected
+    ADX value/source from the factor diagnostics whenever available, and
+    fall back to H4 ADX only when those diagnostics are absent.
+    """
+    factor_adx = None
+    factor_source = None
+    if isinstance(factor_result, dict):
+        raw_factor_adx = factor_result.get("adx_value")
+        if raw_factor_adx is not None:
+            try:
+                factor_adx = float(raw_factor_adx)
+            except (TypeError, ValueError):
+                factor_adx = None
+        factor_source = factor_result.get("adx_source")
+
+    if factor_adx is not None:
+        adx_val = factor_adx
+        source = str(factor_source) if factor_source else "unknown"
+    else:
+        raw_h4 = (h4_snap or {}).get("adx") if isinstance(h4_snap, dict) else None
+        try:
+            adx_val = float(raw_h4) if raw_h4 is not None else None
+        except (TypeError, ValueError):
+            adx_val = None
+        source = "h4_fallback"
+
+    if adx_val is None:
+        return "UNKNOWN", source, None
+
+    _rng = CONFIG["RANGING"].get(pair_type, CONFIG["RANGING"]["commodity"])
+    if adx_val >= CONFIG.get("TRENDING_ADX", 35):
+        trend_state = "TRENDING"
+    elif adx_val >= CONFIG.get("DEVELOPING_ADX", 25):
+        trend_state = "DEVELOPING"
+    elif adx_val >= _rng["dead"]:
+        trend_state = "RANGING"
+    else:
+        trend_state = "DEAD RANGING"
+    return trend_state, source, adx_val
+
+
 def classify_signal_setup(
     direction: str,
     entry_mode: str,
@@ -819,10 +871,13 @@ def calc_confluence(
         if val is not None:
             v[f"FACTOR_{factor.upper()}"] = _vote_sign(val)
 
-    # Map legacy vote names for UI compatibility
+    # Map legacy vote names for UI compatibility. The previous "D1 ADX Trend"
+    # label was misleading — it pulled from FACTOR_MOMENTUM, which is a
+    # momentum/quality factor, not an ADX trend factor. Renamed to
+    # "D1 Momentum" so audit / Marcus narrate the actual evidence source.
     legacy_votes = {
         "D1 Trend Gate": v.get("FACTOR_TREND", 0),
-        "D1 ADX Trend": v.get("FACTOR_MOMENTUM", 0),
+        "D1 Momentum": v.get("FACTOR_MOMENTUM", 0),
         "D1 Weinstein Stage": v.get("FACTOR_WEINSTEIN", 0),
         "H4 MACD Momentum": v.get("FACTOR_MOMENTUM", 0),
         "H4 RSI Zone": v.get("FACTOR_RSI", 0),
@@ -837,18 +892,9 @@ def calc_confluence(
 
     # Use factor result; preserve legacy return structure
     score = round(score, 2)
-    adx_val = s4.get("adx")
-    _rng = CONFIG["RANGING"].get(pair["type"], CONFIG["RANGING"]["commodity"])
-    trend_state = "UNKNOWN"
-    if adx_val is not None:
-        if adx_val >= CONFIG.get("TRENDING_ADX", 35):
-            trend_state = "TRENDING"
-        elif adx_val >= CONFIG.get("DEVELOPING_ADX", 25):
-            trend_state = "DEVELOPING"
-        elif adx_val >= _rng["dead"]:
-            trend_state = "RANGING"
-        else:
-            trend_state = "DEAD RANGING"
+    trend_state, trend_state_adx_source, adx_val = _resolve_trend_state(
+        factor_result, s4, pair["type"]
+    )
     # Legacy compatibility values
     bull = max(0.0, score) if direction != "SHORT" else 0.0
     bear = max(0.0, score) if direction == "SHORT" else 0.0
@@ -944,6 +990,8 @@ def calc_confluence(
             "regimeLabelsDualCapture": {
                 "trendState": trend_state,
                 "factorRegime": _regime_str,
+                "trendStateAdxSource": trend_state_adx_source,
+                "trendStateAdxValue": round(adx_val, 2) if adx_val is not None else None,
             },
             "macroContext": macro_context or {},
             "intermarket": factor_result.get("intermarket_confirmation") or {},

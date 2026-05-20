@@ -426,6 +426,11 @@ ENGINE_B_REASON_RESISTANCE_TOO_CLOSE = "resistance_too_close"
 ENGINE_B_REASON_SUPPORT_TOO_CLOSE = "support_too_close"
 ENGINE_B_REASON_ADVERSE_DXY = "adverse_dxy_correlation"
 ENGINE_B_REASON_STRUCTURAL_SL_HARD_CAP = "structural_sl_rejected_hard_cap"
+# Intentionally never emitted. ADX no longer gates Engine B structure (FIX 6:
+# ADX drives regime classification only). Kept as a stable identifier so the
+# negative assertion in tests/test_engine_b_diagnostics.py::
+# test_calculate_confidence_forex_adx_derives_regime_not_blocks_structure
+# pins removal of the legacy gate (audit BUG-B-1 / BUG-B-7).
 ENGINE_B_REASON_FOREX_ADX_LOW = "forex_adx_below_min"
 ENGINE_B_REASON_TP_WRONG_SIDE = "tp_wrong_side"
 ENGINE_B_REASON_SEQUENCE_COUNTER_TREND = "sequence_counter_trend"
