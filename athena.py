@@ -11796,7 +11796,7 @@ def analyze_pair(
                     f"SCALP COUNTER-TREND: D1 EMA stack is {_d1_dir} - trading against higher-TF trend, reduce size"
                 )
 
-    direction = res["direction"]
+    direction = res.get("direction") or "neutral"
 
     live_px = (_live_prices.get(pair["display"], {}) or {}).get("price")
 
@@ -12234,7 +12234,7 @@ def analyze_pair(
         "type": pair["type"],
         "scoreGroup": _score_group,
         "direction": direction,
-        "confluenceScore": round(res["score"], 4),
+        "confluenceScore": round(float(res.get("score") or 0), 4),
         "confluencePct": _confluence_pct,
         "scoreNorm": round(score_norm, 4),
         "votes": res["votes"],

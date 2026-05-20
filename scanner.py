@@ -1486,12 +1486,21 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict[s
                 h4_count = len(raw_candles.get("H4", []))
                 h1_count = len(raw_candles.get("H1", []))
                 if sig_a:
-                    score = sig_a.get("confluenceScore", 0)
-                    max_score = sig_a.get("maxScore", 3.0)
-                    direction = sig_a.get("direction", "NONE")
-                    print(f"[REGRESSION-A] {pair['display']:12s} type={pair.get('type'):8s} D1={d1_count:3d} H4={h4_count:3d} H1={h1_count:3d} score={score:.2f}/{max_score:.1f} dir={direction:5s}")
+                    score = float(sig_a.get("confluenceScore", 0) or 0)
+                    max_score = float(sig_a.get("maxScore", 3.0) or 3.0)
+                    direction = str(sig_a.get("direction") or "NONE")
+                    pair_type = str(pair.get("type") or "?")
+                    print(
+                        f"[REGRESSION-A] {pair['display']:12s} type={pair_type:8s} "
+                        f"D1={d1_count:3d} H4={h4_count:3d} H1={h1_count:3d} "
+                        f"score={score:.2f}/{max_score:.1f} dir={direction:5s}"
+                    )
                 else:
-                    print(f"[REGRESSION-A] {pair['display']:12s} type={pair.get('type'):8s} D1={d1_count:3d} H4={h4_count:3d} H1={h1_count:3d} NO SIGNAL")
+                    pair_type = str(pair.get("type") or "?")
+                    print(
+                        f"[REGRESSION-A] {pair['display']:12s} type={pair_type:8s} "
+                        f"D1={d1_count:3d} H4={h4_count:3d} H1={h1_count:3d} NO SIGNAL"
+                    )
 
                 # Engine separation: when Engine A produces no signal we MUST
                 # still run Engine B and emit either an Engine B-only signal

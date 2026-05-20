@@ -857,12 +857,12 @@ def calc_confluence(
             if div and div.get("warning"):
                 w.append(div["warning"])
     # Map final_score to legacy 'score' field
-    score = factor_result["final_score"]
-    direction = factor_result["direction"]
+    score = float(factor_result.get("final_score") or 0)
+    direction = factor_result.get("direction") or "neutral"
     log.debug(
         f"[FACTOR] {pair.get('display')} score={score:.3f} dir={direction} "
-        f"dir_score={factor_result.get('directional_score', 0):.3f} "
-        f"nondir_score={factor_result.get('nondirectional_score', 0):.3f} "
+        f"dir_score={float(factor_result.get('directional_score', 0) or 0):.3f} "
+        f"nondir_score={float(factor_result.get('nondirectional_score', 0) or 0):.3f} "
         f"factors={factor_result['factor_scores']} regime={factor_result['regime']}"
     )
     # Legacy compatibility: construct votes dict from factor scores
