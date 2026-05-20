@@ -3045,6 +3045,53 @@ def _calc_m15_atr(candles: list, period: int = 14) -> float:
     return sum(window) / len(window) if window else 0.0
 
 
+def _engine_d_atr_diagnostics_block(atr_m15: float, candles_m15: list | None) -> dict:
+    """Engine D ``atrDiagnostics`` block built from the M15 ATR + candle series.
+
+    Pure observability — produces the same shape as the other engines so the
+    diagnostic tool and React signal cards can consume a uniform schema.
+    """
+    try:
+        from atr_diagnostics import build_engine_d_diagnostics
+        return build_engine_d_diagnostics(
+            atr_value=atr_m15,
+            m15_candles=candles_m15,
+        )
+    except Exception:
+        # Fail-open observability: never block scalp signal emission on a diag error.
+        return {
+            "atr_value": round(float(atr_m15), 6) if atr_m15 else None,
+            "atr_tf": "M15",
+            "atr_source": "scalp_m15_candles",
+            "atr_source_engine": "engine_d",
+            "atr_candle_last_ts": (
+                str((candles_m15[-1] or {}).get("time")) if candles_m15 else None
+            ),
+            "atr_age_seconds": None,
+            "atr_confirmed_only": True,
+        }
+
+
+def _engine_d_atr_freshness_block(atr_m15: float, candles_m15: list | None) -> dict | None:
+    """Engine D ``atrFreshness`` block driven by ``CONFIG['ATR_FRESHNESS']``.
+
+    Returns ``None`` on failure rather than raising so a misconfigured
+    freshness policy never aborts the scalp scan.
+    """
+    try:
+        from atr_diagnostics import (
+            build_engine_d_diagnostics,
+            evaluate_freshness_from_config,
+        )
+        diag = build_engine_d_diagnostics(
+            atr_value=atr_m15,
+            m15_candles=candles_m15,
+        )
+        return evaluate_freshness_from_config(diag, CONFIG.get("ATR_FRESHNESS"))
+    except Exception:
+        return None
+
+
 def _scalp_execution_min_grade(cfg: dict) -> str:
     if cfg.get("EXECUTION_MIN_GRADE") is not None:
         return str(cfg.get("EXECUTION_MIN_GRADE")).upper()
@@ -4649,6 +4696,15 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
                 "rr1":             levels["rr"],
                 "sl_distance":     levels["sl_distance"],
                 "sl_method":       levels["sl_method"],
+                # F2: surface Engine D M15 ATR provenance on the signal payload.
+                # Observability-only — execution still uses level fields above.
+                "atr":             round(float(_atr_m15), 6) if _atr_m15 else None,
+                "atrDiagnostics":  _engine_d_atr_diagnostics_block(
+                    _atr_m15, candles_m15
+                ),
+                "atrFreshness":    _engine_d_atr_freshness_block(
+                    _atr_m15, candles_m15
+                ),
                 # Volume source (top-level for UI rendering and stale data logging)
                 "volume_source":   vp.get("volume_source", _vol_src_dominant),
                 # VP fields

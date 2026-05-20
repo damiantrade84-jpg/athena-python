@@ -1243,6 +1243,23 @@ class AutoTrader:
 
             from execution_lifecycle import run_managed_execution
 
+            # F1: parity with api_execute / api_quick_execute. Refresh candle
+            # freshness/consistency/dataFreshness before risk_check so stale scan
+            # metadata cannot reach the risk gate. Default-on via
+            # EXECUTION_HYDRATE_CANDLE_QUALITY; falls back to the lighter
+            # _maybe_prefetch_execution_candle_fetch_meta path on any error.
+            try:
+                from execution import _hydrate_execution_candle_quality
+                from athena_runtime import rt as _auto_rt
+
+                _hydrate_execution_candle_quality(signal, _r=_auto_rt())
+            except Exception as _hydrate_err:
+                log.warning(
+                    "[AUTO] %s: candle quality hydrate skipped (%s)",
+                    pair,
+                    _hydrate_err,
+                )
+
             sizing_override = cfg.get("AUTO_TRADE_SIZING_OVERRIDE", 1.0)
 
             approval = risk_check(

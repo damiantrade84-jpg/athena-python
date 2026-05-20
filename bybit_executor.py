@@ -1311,6 +1311,9 @@ def bybit_execute(signal: dict, approval: "RiskApproval") -> dict:  # noqa: F821
         if not isinstance(override_meta, dict):
             override_meta = {}
 
+        # F4: structural rebase observability marker (default off).
+        _structural_rebase_event: dict | None = None
+
         # Chart-AI execution keeps the live fill as entry and shifts AI levels by the same offset.
         if override_meta.get("entry_rebase") and sl and tp1:
             try:
@@ -1334,11 +1337,60 @@ def bybit_execute(signal: dict, approval: "RiskApproval") -> dict:  # noqa: F821
             if _provider_drift_pct > 0.01:
                 sl_offset = float(sl) - signal_price
                 tp_offset = float(tp1) - signal_price
+                _pre_rebase_sl = float(sl)
+                _pre_rebase_tp = float(tp1)
                 sl = round(price + sl_offset, 8)
                 tp1 = round(price + tp_offset, 8)
                 log.info(
                     f"[BYBIT] {ccxt_symbol}: price drift {_provider_drift_pct:.1%} ({signal_price}→{price}) — rebased SL={sl} TP={tp1}"
                 )
+                # F4: classify this rebase. Engine B / naked structural levels
+                # were placed at specific market structure; parallel-shifting
+                # them by drift loses that structural meaning. Default
+                # behaviour is unchanged (rebase still happens) — we just
+                # surface the event. Optional fail-closed via config.
+                try:
+                    from execution import _is_structural_engine_b_execution
+                    _is_structural = _is_structural_engine_b_execution(signal)
+                except Exception:
+                    _is_structural = False
+                _structural_rebase_event = {
+                    "drift_pct": round(_provider_drift_pct, 6),
+                    "signal_price": signal_price,
+                    "broker_price": float(price),
+                    "pre_rebase_sl": _pre_rebase_sl,
+                    "pre_rebase_tp": _pre_rebase_tp,
+                    "post_rebase_sl": float(sl),
+                    "post_rebase_tp": float(tp1),
+                    "is_structural": bool(_is_structural),
+                    "sl_method": str(
+                        signal.get("sl_method")
+                        or (signal.get("engine_b") or {}).get("sl_method")
+                        or ""
+                    ).lower()
+                    or None,
+                }
+                try:
+                    from config import CONFIG as _bk_cfg
+                    _block_structural = bool(
+                        (_bk_cfg.get("ATR_FRESHNESS") or {}).get(
+                            "BLOCK_STRUCTURAL_REBASE", False
+                        )
+                    )
+                except Exception:
+                    _block_structural = False
+                if _block_structural and _is_structural:
+                    return {
+                        "success": False,
+                        "error": (
+                            "STRUCTURAL_DRIFT_REQUIRES_REFRESH: Engine B/structural levels parallel-shifted"
+                            f" by drift {_provider_drift_pct*100:.4f}% — refuse fail-closed per config"
+                        ),
+                        "structuralRebase": _structural_rebase_event,
+                        "providerDrift": round(_provider_drift_pct, 6),
+                        "signalPrice": signal_price,
+                        "brokerPrice": float(price),
+                    }
 
         level_error = _validate_exit_levels(
             direction, float(price), float(sl or 0), float(tp1 or 0)
@@ -1631,6 +1683,10 @@ def bybit_execute(signal: dict, approval: "RiskApproval") -> dict:  # noqa: F821
                 if _provider_drift_pct is not None
                 else None
             ),
+            # F4: surface the structural rebase event on the success result so
+            # downstream audit logs / dashboards can see when Engine B
+            # structural levels were parallel-shifted by drift.
+            "structuralRebase": _structural_rebase_event,
         }
 
     except Exception as e:

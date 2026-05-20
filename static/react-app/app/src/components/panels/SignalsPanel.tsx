@@ -26,7 +26,7 @@ import {
   BarChart2, Sparkles, Shield, Gauge,
 } from 'lucide-react';
 import { fmtNum, toNum, cn } from '@/lib/utils';
-import { fmtLiveQuoteMeta, fmtPrice } from '@/lib/athenaFormat';
+import { fmtAtrMeta, fmtLiveQuoteMeta, fmtPrice } from '@/lib/athenaFormat';
 import { fetchVisionCandlePayload } from '@/lib/visionReview';
 import apiClient from '@/lib/apiClient';
 import {
@@ -946,7 +946,11 @@ export default function SignalsPanel() {
                           <DetailRow label="SL"     value={fmtPrice(selectedRow.signal.sl, selectedRow.signal.pair, selectedRow.signal.type)} accent="short" />
                           <DetailRow label="TP1"    value={fmtPrice(selectedRow.signal.tp ?? selectedRow.signal.tp1, selectedRow.signal.pair, selectedRow.signal.type)} accent="long" />
                           <DetailRow label="TP2"    value={fmtPrice(selectedRow.signal.tp2, selectedRow.signal.pair, selectedRow.signal.type)} accent="long" />
-                          <DetailRow label="ATR"    value={fmtPrice(selectedRow.signal.atr, selectedRow.signal.pair, selectedRow.signal.type)} />
+                          <DetailRow
+                            label="ATR"
+                            value={fmtPrice(selectedRow.signal.atr, selectedRow.signal.pair, selectedRow.signal.type)}
+                            meta={fmtAtrMeta(selectedRow.signal.atrDiagnostics, selectedRow.signal.atrFreshness)}
+                          />
                           <DetailRow label="R:R"    value={fmtNum(selectedRow.signal.rr ?? selectedRow.signal.rr1, 2)} />
                           <DetailRow label="Scalp SL"    value={fmtPrice(selectedRow.signal.scalp_sl, selectedRow.signal.pair, selectedRow.signal.type)} />
                           <DetailRow label="Scalp TP"    value={fmtPrice(selectedRow.signal.scalp_tp, selectedRow.signal.pair, selectedRow.signal.type)} />

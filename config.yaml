@@ -1143,6 +1143,28 @@ MAX_CORRELATED_POSITIONS: 3   # Allow up to 3 correlated positions (e.g. 3 USD p
 
 SIGNAL_MAX_AGE_SEC: 300       # 5 min freshness window
 
+# ── ATR freshness observability (F3/F5, default disabled) ────────────────────
+# Per-TF maximum age (seconds) for the ATR window that produced SL/TP/RR.
+# When ENABLED is true and an ATR is older than its TF threshold, the signal
+# carries `atrFreshness.stale=true` (additive — observability only).
+#
+# BLOCK_EXECUTION_ON_STALE_ATR is the optional fail-closed enforcement switch.
+# When false (default), nothing is blocked; the diagnostic surface is the only
+# effect. When true, risk_engine and executors reject orders whose `atrFreshness.would_block`
+# is true. Defaults are deliberately disabled — flipping this gate is a real
+# behavior change and must be done deliberately per the audit invariants.
+ATR_FRESHNESS:
+  ENABLED: false
+  BLOCK_EXECUTION_ON_STALE_ATR: false
+  MAX_AGE_SECONDS:
+    M1: 180
+    M5: 600
+    M15: 1800
+    H1: 7200
+    H4: 18000
+    D1: 172800
+
+
 # Refresh candleFetchMeta via fetch_candles immediately before risk/guardian on execute/
 # quick-execute/scalp-execute so long AI-review waits do not block on stale embedded H1/H4 flags.
 QUICK_EXEC_PREFETCH_CANDLE_META: true

@@ -2027,6 +2027,87 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict[s
                                 _eb_snap["conf"] = conf_b
                                 sig_a["engine_b_status"] = conf_b
                                 sig_a["engine_b"] = res_b
+                                # F2: surface Engine B ATR provenance on the overlay
+                                # so dashboards / audits can detect stale or mis-sourced
+                                # structural ATR without parsing the funnel stream.
+                                # Observability-only — does not affect verdicts.
+                                try:
+                                    _eb_last_ts = None
+                                    _eb_age_sec = None
+                                    if atr_candles_b:
+                                        _last_b = atr_candles_b[-1]
+                                        if isinstance(_last_b, dict):
+                                            _eb_ts_raw = (
+                                                _last_b.get("time")
+                                                or _last_b.get("ts")
+                                            )
+                                            if _eb_ts_raw is not None:
+                                                _eb_last_ts = str(_eb_ts_raw)
+                                                try:
+                                                    if isinstance(
+                                                        _eb_ts_raw, (int, float)
+                                                    ):
+                                                        _eb_dt = datetime.fromtimestamp(
+                                                            float(_eb_ts_raw)
+                                                            / (1000.0 if float(_eb_ts_raw) > 1e11 else 1.0),
+                                                            tz=timezone.utc,
+                                                        )
+                                                    else:
+                                                        _eb_dt = datetime.fromisoformat(
+                                                            str(_eb_ts_raw).replace(
+                                                                "Z", "+00:00"
+                                                            )
+                                                        )
+                                                    if _eb_dt.tzinfo is None:
+                                                        _eb_dt = _eb_dt.replace(
+                                                            tzinfo=timezone.utc
+                                                        )
+                                                    _eb_age_sec = (
+                                                        datetime.now(timezone.utc)
+                                                        - _eb_dt
+                                                    ).total_seconds()
+                                                except Exception:
+                                                    _eb_age_sec = None
+                                    res_b["atrDiagnostics"] = {
+                                        "atr_value": (
+                                            round(float(atr), 6)
+                                            if atr
+                                            else None
+                                        ),
+                                        "atr_tf": _atr_tf_b,
+                                        "atr_source": _eb_funnel_extras.get(
+                                            "atr_source"
+                                        ),
+                                        "atr_source_engine": "engine_b",
+                                        "atr_candle_last_ts": _eb_last_ts,
+                                        "atr_age_seconds": (
+                                            round(float(_eb_age_sec), 3)
+                                            if _eb_age_sec is not None
+                                            else None
+                                        ),
+                                        "atr_confirmed_only": True,
+                                        "bybit_atr_available": _eb_funnel_extras.get(
+                                            "bybit_atr_available"
+                                        ),
+                                    }
+                                    try:
+                                        from atr_diagnostics import (
+                                            evaluate_freshness_from_config,
+                                        )
+                                        res_b["atrFreshness"] = (
+                                            evaluate_freshness_from_config(
+                                                res_b["atrDiagnostics"],
+                                                CONFIG.get("ATR_FRESHNESS"),
+                                            )
+                                        )
+                                    except Exception:
+                                        pass
+                                except Exception as _eb_diag_err:
+                                    log.debug(
+                                        "[SCAN+B] %s atrDiagnostics build failed: %s",
+                                        pair.get("display"),
+                                        _eb_diag_err,
+                                    )
 
                                 if _threshold_audit_on:
                                     sig_a["_threshold_audit_b_res"] = res_b

@@ -77,6 +77,38 @@ export interface EngineASignal {
   rr2?: number;
   slPct?: number;
   atr?: number;
+  /**
+   * Optional ATR provenance block emitted by analyze_pair (Engine A), scanner
+   * Engine B overlay, engine_c consensus, and scalp_engine (Engine D).
+   * Observability only — does not influence execution.
+   */
+  atrDiagnostics?: {
+    atr_value?: number | null;
+    atr_tf?: string | null;
+    atr_source?: string | null;
+    atr_source_engine?: string | null;
+    atr_candle_last_ts?: string | null;
+    atr_age_seconds?: number | null;
+    atr_confirmed_only?: boolean;
+    bybit_atr_available?: boolean | null;
+    engine_a_atr_diagnostics?: unknown;
+    engine_b_atr_diagnostics?: unknown;
+    sl_method?: string | null;
+    tp_method?: string | null;
+  };
+  /**
+   * Optional ATR freshness evaluation from CONFIG['ATR_FRESHNESS'].
+   * Observability by default; ``would_block`` only enforced when the policy
+   * enables ``BLOCK_EXECUTION_ON_STALE_ATR``.
+   */
+  atrFreshness?: {
+    enabled?: boolean;
+    stale?: boolean;
+    reason?: string | null;
+    age_seconds?: number | null;
+    threshold_sec?: number | null;
+    would_block?: boolean;
+  };
   scalp_sl?: number;
   scalp_tp?: number;
   intraday_sl?: number;

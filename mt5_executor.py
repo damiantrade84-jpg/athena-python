@@ -1471,6 +1471,9 @@ def mt5_execute(signal: dict, approval: "RiskApproval") -> dict:  # noqa: F821
     if not isinstance(override_meta, dict):
         override_meta = {}
 
+    # F4: structural rebase observability marker (default off).
+    _structural_rebase_event: dict | None = None
+
     if override_meta.get("entry_rebase") and sl != 0 and tp != 0:
         try:
             anchor_entry = float(override_meta.get("anchor_entry") or 0)
@@ -1499,6 +1502,9 @@ def mt5_execute(signal: dict, approval: "RiskApproval") -> dict:  # noqa: F821
 
             tp_offset = float(signal.get("tp1", 0)) - signal_price
 
+            _pre_rebase_sl = float(sl)
+            _pre_rebase_tp = float(tp)
+
             sl = round(price + sl_offset, digits)
 
             tp = round(price + tp_offset, digits)
@@ -1506,6 +1512,53 @@ def mt5_execute(signal: dict, approval: "RiskApproval") -> dict:  # noqa: F821
             log.info(
                 f"[MT5] {mt5_symbol}: price drift {drift:.1%} ({signal_price}→{price}) — rebased SL={sl} TP={tp}"
             )
+            # F4: classify the rebase. Engine B / naked structural levels were
+            # placed at specific market structure; parallel-shifting them by
+            # drift loses that meaning. Default behaviour is unchanged — we
+            # just surface the event for audit logs. Optional fail-closed via
+            # ATR_FRESHNESS.BLOCK_STRUCTURAL_REBASE.
+            try:
+                from execution import _is_structural_engine_b_execution
+                _is_structural = _is_structural_engine_b_execution(signal)
+            except Exception:
+                _is_structural = False
+            _structural_rebase_event = {
+                "drift_pct": round(drift, 6),
+                "signal_price": signal_price,
+                "broker_price": float(price),
+                "pre_rebase_sl": _pre_rebase_sl,
+                "pre_rebase_tp": _pre_rebase_tp,
+                "post_rebase_sl": float(sl),
+                "post_rebase_tp": float(tp),
+                "is_structural": bool(_is_structural),
+                "sl_method": str(
+                    signal.get("sl_method")
+                    or (signal.get("engine_b") or {}).get("sl_method")
+                    or ""
+                ).lower()
+                or None,
+            }
+            try:
+                from config import CONFIG as _mt5_cfg
+                _block_structural = bool(
+                    (_mt5_cfg.get("ATR_FRESHNESS") or {}).get(
+                        "BLOCK_STRUCTURAL_REBASE", False
+                    )
+                )
+            except Exception:
+                _block_structural = False
+            if _block_structural and _is_structural:
+                return {
+                    "success": False,
+                    "error": (
+                        "STRUCTURAL_DRIFT_REQUIRES_REFRESH: Engine B/structural levels parallel-shifted"
+                        f" by drift {drift*100:.4f}% — refuse fail-closed per config"
+                    ),
+                    "structuralRebase": _structural_rebase_event,
+                    "providerDrift": round(drift, 6),
+                    "signalPrice": signal_price,
+                    "brokerPrice": float(price),
+                }
 
     # ── SL/TP validation against live price ────────────────────────────────
 
@@ -1807,6 +1860,8 @@ def mt5_execute(signal: dict, approval: "RiskApproval") -> dict:  # noqa: F821
         "feeCost": _fee_cost,
         "signalPriceRef": _sref,
         "slippageBps": _sbps,
+        # F4: structural rebase event (None when no drift > 1% rebase fired).
+        "structuralRebase": _structural_rebase_event,
     }
 
 

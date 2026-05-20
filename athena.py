@@ -1508,6 +1508,88 @@ def _atr_for_levels(
     return None
 
 
+def _build_engine_a_atr_diagnostics(
+    *,
+    atr_value: float | None,
+    atr_tf: str | None,
+    atr_source: str | None,
+    d1_candles: list | None,
+    h4_candles: list | None,
+    h1_candles: list | None,
+) -> dict:
+    """Thin wrapper around ``atr_diagnostics.build_engine_a_diagnostics``.
+
+    Kept here so existing call sites in ``analyze_pair`` do not need to change
+    imports. The helper itself lives in ``atr_diagnostics.py`` to keep the
+    pure logic testable without loading the full Flask app.
+    """
+    from atr_diagnostics import build_engine_a_diagnostics
+
+    return build_engine_a_diagnostics(
+        atr_value=atr_value,
+        atr_tf=atr_tf,
+        atr_source=atr_source,
+        d1_candles=d1_candles,
+        h4_candles=h4_candles,
+        h1_candles=h1_candles,
+    )
+
+
+def _atr_for_levels_with_diag(
+    d1i: dict, h4i: dict, h1i: dict, pair: dict = None, style: str | None = None
+) -> tuple[float | None, str | None]:
+    """Like ``_atr_for_levels`` but also returns the timeframe that won.
+
+    Observability helper used to populate ``signal.atrDiagnostics``. Behaviour
+    must remain identical to ``_atr_for_levels``: same priority resolution,
+    same fallback defaults, same null behaviour. Returns ``(atr_value, tf)``
+    where ``tf`` is ``None`` when no TF produced a non-zero ATR.
+    """
+    from atr_diagnostics import resolve_atr_for_levels_with_tf
+
+    return resolve_atr_for_levels_with_tf(
+        d1_snap=(d1i or {}).get("snap", {}),
+        h4_snap=(h4i or {}).get("snap", {}),
+        h1_snap=(h1i or {}).get("snap", {}),
+        pair_type=(pair or {}).get("type", ""),
+        style=style,
+        level_atr_priority=CONFIG.get("LEVEL_ATR_PRIORITY", {}) or {},
+    )
+
+
+def _build_atr_freshness_eval(
+    *,
+    atr_value: float | None,
+    atr_tf: str | None,
+    atr_source: str | None,
+    d1_candles: list | None,
+    h4_candles: list | None,
+    h1_candles: list | None,
+) -> dict:
+    """Build the diagnostic-only ``atrFreshness`` block for an Engine A signal.
+
+    Reads ``CONFIG['ATR_FRESHNESS']`` for ENABLED / BLOCK_EXECUTION_ON_STALE_ATR
+    and MAX_AGE_SECONDS. Default behaviour (both flags false) is pure
+    observability — no gating.
+    """
+    from atr_diagnostics import (
+        build_engine_a_diagnostics,
+        evaluate_freshness_from_config,
+    )
+
+    diag = build_engine_a_diagnostics(
+        atr_value=atr_value,
+        atr_tf=atr_tf,
+        atr_source=atr_source,
+        d1_candles=d1_candles,
+        h4_candles=h4_candles,
+        h1_candles=h1_candles,
+    )
+    return evaluate_freshness_from_config(
+        diag, CONFIG.get("ATR_FRESHNESS") if isinstance(CONFIG, dict) else None
+    )
+
+
 def _bybit_atr_for_levels(pair: dict, style: str | None, as_of=None) -> float | None:
     """Fetch Bybit ATR for crypto execution levels when Bybit is the execution venue."""
     symbol = (pair.get("symbol") or pair.get("display") or "").replace("/", "").upper()
@@ -11814,8 +11896,11 @@ def analyze_pair(
         or d1i["snap"].get("close")
     )
 
-    atr = _atr_for_levels(d1i, h4i, h1i, pair=pair, style=_style)
+    atr, _atr_priority_tf = _atr_for_levels_with_diag(
+        d1i, h4i, h1i, pair=pair, style=_style
+    )
     level_atr_feed = "signal"
+    _atr_tf_used = _atr_priority_tf
     if (
         pair.get("type") == "crypto"
         and str(CONFIG.get("ENGINE_A_CRYPTO_LEVELS_FEED", "bybit")).lower() == "bybit"
@@ -11824,6 +11909,10 @@ def analyze_pair(
         if bybit_atr:
             atr = bybit_atr
             level_atr_feed = "bybit"
+            # Bybit ATR resolver maps style -> H1/H4/D1 internally.
+            _atr_tf_used = {
+                "scalp": "H1", "intraday": "H4", "swing": "D1"
+            }.get(_normalize_style(_style or "swing"), "D1")
         elif not bool(CONFIG.get("ENGINE_A_CRYPTO_LEVELS_SIGNAL_FEED_FALLBACK", False)):
             return None
 
@@ -12258,6 +12347,22 @@ def analyze_pair(
         "rr1": round(float(lvl["rr1"]), 2),
         "rr2": round(float(lvl["rr2"]), 2),
         "atr": round(float(atr), 6),
+        "atrDiagnostics": _build_engine_a_atr_diagnostics(
+            atr_value=float(atr),
+            atr_tf=_atr_tf_used,
+            atr_source=level_atr_feed,
+            d1_candles=d1,
+            h4_candles=h4,
+            h1_candles=h1,
+        ),
+        "atrFreshness": _build_atr_freshness_eval(
+            atr_value=float(atr),
+            atr_tf=_atr_tf_used,
+            atr_source=level_atr_feed,
+            d1_candles=d1,
+            h4_candles=h4,
+            h1_candles=h1,
+        ),
         "slDistance": round(abs(float(price) - float(lvl["sl"])), 6),
         "slPips": round(abs(float(price) - float(lvl["sl"])) * (100 if "JPY" in pair.get("display", "") else 10000) if pair.get("type") == "forex" else 1, 1),
         "slPct": risk_pct,

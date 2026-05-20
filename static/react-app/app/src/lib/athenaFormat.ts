@@ -49,6 +49,40 @@ export function fmtLiveQuoteMeta(ageSec: unknown, source?: unknown): string {
   return src ? `${fmtLiveQuoteAge(ageSec)} / ${src}` : fmtLiveQuoteAge(ageSec);
 }
 
+/** Render the meta line for the SignalsPanel ATR row.
+ *
+ *  Shows the timeframe, ATR age and (when CONFIG.ATR_FRESHNESS.ENABLED is true
+ *  on the backend) a "stale" flag. Observability only — the operator can rely
+ *  on this to triage suspected ATR plumbing issues even though the backend
+ *  itself never gates execution on this unless BLOCK_EXECUTION_ON_STALE_ATR is
+ *  flipped in config.
+ */
+export function fmtAtrMeta(
+  diagnostics?: EngineASignal['atrDiagnostics'],
+  freshness?: EngineASignal['atrFreshness'],
+): string | undefined {
+  if (!diagnostics && !freshness) return undefined;
+  const tf = diagnostics?.atr_tf ? String(diagnostics.atr_tf).toUpperCase() : '';
+  const source = diagnostics?.atr_source ? String(diagnostics.atr_source) : '';
+  const ageNum = toNum(diagnostics?.atr_age_seconds, NaN);
+  const ageBit = Number.isFinite(ageNum)
+    ? Math.round(ageNum) < 60
+      ? `${Math.max(0, Math.round(ageNum))}s`
+      : Math.round(ageNum) < 3600
+        ? `${Math.round(ageNum / 60)}m`
+        : `${(ageNum / 3600).toFixed(1)}h`
+    : '';
+  const parts: string[] = [];
+  if (tf) parts.push(tf);
+  if (ageBit) parts.push(ageBit);
+  if (source) parts.push(source);
+  let meta = parts.join(' · ');
+  if (freshness?.enabled && freshness?.stale) {
+    meta = meta ? `${meta} · STALE` : 'STALE';
+  }
+  return meta || undefined;
+}
+
 /** Resolve Engine A scan threshold from API payload (field names differ by route). */
 export function engineAThreshold(sig: EngineASignal | null | undefined): number | null {
   if (!sig) return null;

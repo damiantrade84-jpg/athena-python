@@ -1490,6 +1490,54 @@ def api_engine_c_scan():
             consensus["scoreGroup"] = _pair_score_group
             consensus["style"] = engine_a_style
             consensus["atr"] = round(atr, 6)
+            # F2: surface ATR provenance on the consensus row so the consensus
+            # decision can be audited end-to-end. Inherits from Engine A's
+            # atrDiagnostics; sl_method already records which engine's level won.
+            # Observability-only — does not influence verdict, sl, tp, or rr.
+            _a_atr_diag = (
+                sig_a.get("atrDiagnostics") if isinstance(sig_a, dict) else None
+            )
+            _b_atr_diag = (
+                (sig_b_best or {}).get("atrDiagnostics")
+                if isinstance(sig_b_best, dict)
+                else None
+            )
+            consensus["atrDiagnostics"] = {
+                "atr_value": round(atr, 6),
+                "atr_tf": (
+                    (_a_atr_diag or {}).get("atr_tf")
+                    if isinstance(_a_atr_diag, dict)
+                    else None
+                ),
+                "atr_source": (
+                    (_a_atr_diag or {}).get("atr_source")
+                    if isinstance(_a_atr_diag, dict)
+                    else None
+                ),
+                "atr_source_engine": "engine_c",
+                "atr_candle_last_ts": (
+                    (_a_atr_diag or {}).get("atr_candle_last_ts")
+                    if isinstance(_a_atr_diag, dict)
+                    else None
+                ),
+                "atr_age_seconds": (
+                    (_a_atr_diag or {}).get("atr_age_seconds")
+                    if isinstance(_a_atr_diag, dict)
+                    else None
+                ),
+                "engine_a_atr_diagnostics": _a_atr_diag if isinstance(_a_atr_diag, dict) else None,
+                "engine_b_atr_diagnostics": _b_atr_diag if isinstance(_b_atr_diag, dict) else None,
+                "sl_method": consensus.get("sl_method"),
+                "tp_method": consensus.get("tp_method"),
+            }
+            try:
+                from atr_diagnostics import evaluate_freshness_from_config
+                consensus["atrFreshness"] = evaluate_freshness_from_config(
+                    consensus["atrDiagnostics"],
+                    (_r.CONFIG or {}).get("ATR_FRESHNESS"),
+                )
+            except Exception:
+                pass
             if isinstance(sig_a, dict):
                 for _fresh_key in ("candleFetchMeta", "candleFreshness", "dataFreshness"):
                     if sig_a.get(_fresh_key) is not None:
