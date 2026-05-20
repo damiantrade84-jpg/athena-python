@@ -5,7 +5,7 @@ import { TrendingUp, TrendingDown, Minus, WifiOff } from 'lucide-react';
 
 /**
  * Live price ticker that scrolls horizontally under the global header.
- * Polls /api/prices (via useLivePrices) every 10s and tracks intra-session
+ * Polls /api/prices (via useLivePrices) every 2s and tracks intra-session
  * change vs the first observed price for that pair (so users see a live tick
  * direction, not just an absolute number). Purely a visual aid — never used
  * for any trading decision.
@@ -71,7 +71,7 @@ function formatPrice(value: number): string {
 }
 
 export default function PriceTickerStrip() {
-  const { prices, error } = useLivePrices(10000);
+  const { prices, error } = useLivePrices();
   const [state, dispatch] = useReducer(tickerReducer, INITIAL_STATE);
 
   useEffect(() => {

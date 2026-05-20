@@ -23,6 +23,8 @@ __all__ = [
     "autopilot_session",
     "research_context",
     "research_lab_routes",
+    "fast_gate_lab",
+    "fast_live_gate_replay",
 ]
 
 # Execution import guard — raise immediately if someone accidentally imports live modules

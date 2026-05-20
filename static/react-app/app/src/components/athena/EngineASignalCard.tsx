@@ -5,6 +5,7 @@ import { ArrowUpRight, Play } from 'lucide-react';
 import { cn, fmtNum, toNum } from '@/lib/utils';
 import {
   fmtPrice,
+  fmtLiveQuoteMeta,
   priceDecimals,
   confluencePct,
   convictionTier,
@@ -33,6 +34,12 @@ export default function EngineASignalCard({
   executeLabel,
   compact,
 }: Props) {
+  const raw = signal as Record<string, unknown>;
+  const engineSource = String(raw.engine_source ?? raw.engine ?? '').toUpperCase();
+  const isEngineBOnly = engineSource === 'ENGINE_B' || (
+    engineSource === 'B' && raw.engine_a_present === false
+  );
+  const engineABlockReason = String(raw.engine_a_block_reason ?? '').trim();
   const isLong  = signal.direction === 'LONG';
   const isShort = signal.direction === 'SHORT';
   const dirStyle = isLong
@@ -43,18 +50,33 @@ export default function EngineASignalCard({
   const conf = confluencePct(signal);
   const conv = toNum(signal.conviction, NaN);
   const convT = convictionTier(Number.isFinite(conv) ? conv : null);
-  const score = toNum(signal.confluenceScore ?? signal.score, NaN);
-  const max = toNum(signal.maxScore, NaN);
+  const score = toNum(
+    isEngineBOnly ? raw.engine_a_confluenceScore ?? signal.confluenceScore ?? signal.score : signal.confluenceScore ?? signal.score,
+    NaN,
+  );
+  const max = toNum(
+    isEngineBOnly ? raw.engine_a_maxScore ?? signal.maxScore : signal.maxScore,
+    NaN,
+  );
   const threshold = engineAThreshold(signal);
-  const passed = Number.isFinite(score) && threshold != null && score >= threshold;
-  const fs = signal.factorScores || {};
-  const fd = signal.factorDiagnostics || {};
+  const passed = !isEngineBOnly && Number.isFinite(score) && threshold != null && score >= threshold;
+  const fs = ((
+    (isEngineBOnly && raw.engine_a_factorScores && typeof raw.engine_a_factorScores === 'object')
+      ? raw.engine_a_factorScores
+      : signal.factorScores
+  ) || {}) as NonNullable<EngineASignal['factorScores']>;
+  const fd = ((
+    (isEngineBOnly && raw.engine_a_factorDiagnostics && typeof raw.engine_a_factorDiagnostics === 'object')
+      ? raw.engine_a_factorDiagnostics
+      : signal.factorDiagnostics
+  ) || {}) as NonNullable<EngineASignal['factorDiagnostics']>;
   const diAlign = toNum(fd.diAlignMult, NaN);
   const adxMult = toNum(fd.adxMultiplier, NaN);
   const dirRamp = toNum(fd.directionalRampMult, NaN);
   const pair = signal.display || signal.pair || signal.symbol || '—';
   const type = signal.type;
   const livePrice = toNum(signal.livePrice, NaN);
+  const livePriceMeta = fmtLiveQuoteMeta(signal.livePriceAgeSec, signal.livePriceSource);
   const displayPrice = Number.isFinite(livePrice) ? livePrice : signal.entry ?? signal.price;
   const decimals = priceDecimals(pair, type);
   const intermarketEntries = intermarketConfirmationEntries(signal.intermarketConfirmation);
@@ -107,7 +129,7 @@ export default function EngineASignalCard({
         <div className="space-y-1">
           <div className="flex items-center justify-between text-[10px] text-muted-foreground">
             <span>
-              Confluence{' '}
+              {isEngineBOnly ? 'Engine A' : 'Confluence'}{' '}
               <span className={cn('font-mono', passed ? 'text-long' : 'text-muted-foreground')}>
                 {fmtNum(score, 2)}/{fmtNum(max, 2)}
               </span>
@@ -125,10 +147,16 @@ export default function EngineASignalCard({
               }}
             />
           </div>
-          <p className="text-[9px] text-muted-foreground leading-snug">
-            Final confluence blends trend, momentum quality, ADX/session gates and addon — it is{' '}
-            <span className="font-medium text-foreground/80">not</span> the sum of the factor boxes below.
-          </p>
+          {isEngineBOnly ? (
+            <p className="text-[9px] text-muted-foreground leading-snug">
+              Engine B-only watchlist. Engine A blocked: {engineABlockReason || 'no Engine A trade signal'}.
+            </p>
+          ) : (
+            <p className="text-[9px] text-muted-foreground leading-snug">
+              Final confluence blends trend, momentum quality, ADX/session gates and addon — it is{' '}
+              <span className="font-medium text-foreground/80">not</span> the sum of the factor boxes below.
+            </p>
+          )}
           {(Number.isFinite(diAlign) || Number.isFinite(adxMult) || Number.isFinite(dirRamp)) && (
             <p className="text-[9px] text-muted-foreground leading-snug">
               Score chain:{' '}
@@ -148,7 +176,7 @@ export default function EngineASignalCard({
               )}
             </p>
           )}
-          {signal.engine_b != null && (
+          {!isEngineBOnly && signal.engine_b != null && (
             <p className="text-[9px] text-muted-foreground leading-snug border-t border-border/40 pt-1 mt-1">
               Engine B attached — see detail panel
             </p>
@@ -187,6 +215,7 @@ export default function EngineASignalCard({
             type={type}
             accent="primary"
             decimals={decimals}
+            meta={livePriceMeta}
           />
           <Level label="Entry" value={signal.entry ?? signal.price} pair={pair} type={type} accent="muted" decimals={decimals} />
           <Level label="SL" value={signal.sl} pair={pair} type={type} accent="short" decimals={decimals} />
@@ -300,6 +329,7 @@ function Level({
   type,
   accent,
   decimals,
+  meta,
 }: {
   label: string;
   value: unknown;
@@ -307,6 +337,7 @@ function Level({
   type?: string;
   accent: 'muted' | 'long' | 'short' | 'primary';
   decimals?: number;
+  meta?: string;
 }) {
   const bgStyle = accent === 'long'
     ? 'hsl(var(--long) / 0.10)'
@@ -322,6 +353,7 @@ function Level({
       <p className={cn('text-xs font-mono font-bold', fg)}>
         {decimals != null ? fmtNum(value, decimals) : fmtPrice(value, pair, type)}
       </p>
+      {meta && <p className="text-[9px] font-mono text-muted-foreground truncate">{meta}</p>}
     </div>
   );
 }

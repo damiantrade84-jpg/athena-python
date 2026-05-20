@@ -27,6 +27,7 @@ No live execution imports. No production config writes.
 from __future__ import annotations
 
 import json
+import importlib.util
 import logging
 import os
 import time
@@ -41,6 +42,7 @@ import pandas as pd
 log = logging.getLogger(__name__)
 
 _DEFAULT_CACHE_DIR = Path("logs/research_lab/data_cache")
+_CACHE_ENGINE_WARNING_EMITTED = False
 
 # ── Asset class detection ─────────────────────────────────────────────────────
 
@@ -597,10 +599,57 @@ def _cache_ttl_hours(timeframe: str) -> float:
             "H4": 12.0, "D1": 24.0, "W1": 168.0}.get(timeframe, 4.0)
 
 
+def _available_parquet_engine() -> str:
+    for engine in ("pyarrow", "fastparquet"):
+        if importlib.util.find_spec(engine) is not None:
+            return engine
+    return ""
+
+
+def parquet_cache_health(cache_dir: Path | str | None = None) -> dict:
+    """Return explicit parquet cache status for research tooling."""
+    cache_path = Path(cache_dir) if cache_dir else _DEFAULT_CACHE_DIR
+    engine = _available_parquet_engine()
+    parquet_files = list(cache_path.glob("*.parquet")) if cache_path.exists() else []
+    if not engine:
+        return {
+            "status": "cache_unavailable",
+            "cache_dir": str(cache_path),
+            "parquet_engine": "",
+            "cache_files": len(parquet_files),
+            "reason": "pyarrow_or_fastparquet_missing",
+        }
+    if not parquet_files:
+        return {
+            "status": "cache_miss",
+            "cache_dir": str(cache_path),
+            "parquet_engine": engine,
+            "cache_files": 0,
+            "reason": "no_parquet_files",
+        }
+    return {
+        "status": "cache_ok",
+        "cache_dir": str(cache_path),
+        "parquet_engine": engine,
+        "cache_files": len(parquet_files),
+        "reason": "",
+    }
+
+
 def _load_cache(cache_dir: Path, key: str, timeframe: str) -> Optional[tuple[pd.DataFrame, DataProvenance]]:
+    global _CACHE_ENGINE_WARNING_EMITTED
     parquet = cache_dir / f"{key}.parquet"
     prov_path = cache_dir / f"{key}.provenance.json"
     if not parquet.exists():
+        return None
+    if not _available_parquet_engine():
+        if not _CACHE_ENGINE_WARNING_EMITTED:
+            log.warning(
+                "[data_loader] Parquet cache unavailable: install pyarrow or fastparquet "
+                "to read/write %s",
+                cache_dir,
+            )
+            _CACHE_ENGINE_WARNING_EMITTED = True
         return None
     age_h = (datetime.now() - datetime.fromtimestamp(parquet.stat().st_mtime)).total_seconds() / 3600
     if age_h >= _cache_ttl_hours(timeframe):
@@ -616,6 +665,16 @@ def _load_cache(cache_dir: Path, key: str, timeframe: str) -> Optional[tuple[pd.
 
 
 def _save_cache(cache_dir: Path, key: str, df: pd.DataFrame, prov: DataProvenance) -> None:
+    global _CACHE_ENGINE_WARNING_EMITTED
+    if not _available_parquet_engine():
+        if not _CACHE_ENGINE_WARNING_EMITTED:
+            log.warning(
+                "[data_loader] Parquet cache unavailable: install pyarrow or fastparquet "
+                "to read/write %s",
+                cache_dir,
+            )
+            _CACHE_ENGINE_WARNING_EMITTED = True
+        return
     try:
         df.to_parquet(cache_dir / f"{key}.parquet")
         (cache_dir / f"{key}.provenance.json").write_text(json.dumps(prov.to_dict(), default=str))

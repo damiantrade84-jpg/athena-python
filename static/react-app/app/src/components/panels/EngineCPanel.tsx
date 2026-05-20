@@ -24,7 +24,9 @@ import {
 import { ErrorBanner } from '@/components/shared';
 import { GitMerge, Play, BarChart3, Layers, Activity, Zap, Eye, Clock, Sun, Moon, FileText } from 'lucide-react';
 import { fmtNum, toNum } from '@/lib/utils';
-import { fmtPrice } from '@/lib/athenaFormat';
+import { fmtLiveQuoteMeta, fmtPrice } from '@/lib/athenaFormat';
+import { fetchVisionCandlePayload } from '@/lib/visionReview';
+import { VisionReviewCard } from '@/components/athena';
 import type {
   EngineCConsensusRow,
   EngineCScanResponse,
@@ -215,7 +217,7 @@ export default function EngineCPanel() {
   const { post: postExecute, loading: executing } = useApiPost<{ success?: boolean; ticket?: string; error?: string }>();
   const { post: postVision, loading: visionLoading } = useApiPost<ChartAnalysisResponse>();
   const { post: postAiText, loading: textLoading } = useApiPost<AiTextReviewResponse>();
-  const { priceFor } = useLivePrices(10000);
+  const { priceFor, ageSecFor, sourceFor } = useLivePrices();
 
   const runScan = useCallback(async () => {
     setSelected(null);
@@ -344,12 +346,7 @@ export default function EngineCPanel() {
       const sym = row.symbol || row.display || row.pair;
       if (!sym) { showToast('No symbol for AI review', 'error'); return; }
       try {
-        const candleRes = await fetch(`/api/candles?symbol=${encodeURIComponent(sym)}&tf=H4&limit=300`);
-        const candleJson = await candleRes.json();
-        if (!candleRes.ok || !Array.isArray(candleJson?.candles) || candleJson.candles.length === 0) {
-          showToast(`AI Review: no H4 candles for ${sym}`, 'error');
-          return;
-        }
+        const candlePayload = await fetchVisionCandlePayload(sym);
         const result = await postVision('/api/chart-analysis', {
           symbol: sym,
           tf: 'H4',
@@ -357,7 +354,7 @@ export default function EngineCPanel() {
           engineB: row.engine_b_raw || {},
           server_render: true,
           chart_source: 'engine_c_panel',
-          candles: candleJson.candles,
+          ...candlePayload,
           entry: row.entry,
           sl: row.sl,
           tp: row.tp,
@@ -575,6 +572,8 @@ export default function EngineCPanel() {
                               key={`${row.display || row.symbol || row.pair || key}-${i}`}
                               row={row}
                               livePrice={priceFor(row)}
+                              livePriceAgeSec={ageSecFor(row)}
+                              livePriceSource={sourceFor(row)}
                               bucket={activeBucket}
                               selected={selected === row}
                               onSelect={handleSelect}
@@ -600,7 +599,12 @@ export default function EngineCPanel() {
               {selected ? (
                 <ScrollArea className="h-[600px] pr-2">
                   <ConsensusDetail
-                    row={{ ...selected, livePrice: priceFor(selected) }}
+                    row={{
+                      ...selected,
+                      livePrice: priceFor(selected),
+                      livePriceAgeSec: ageSecFor(selected),
+                      livePriceSource: sourceFor(selected),
+                    }}
                     onExecute={requestExecute}
                     executing={executing}
                     sizingOverride={sizingOverride}
@@ -869,10 +873,12 @@ export default function EngineCPanel() {
 }
 
 function ConsensusRowCard({
-  row, livePrice, bucket, selected, onSelect,
+  row, livePrice, livePriceAgeSec, livePriceSource, bucket, selected, onSelect,
 }: {
   row: EngineCConsensusRow;
   livePrice?: number;
+  livePriceAgeSec?: number;
+  livePriceSource?: string;
   bucket: BucketKey;
   selected: boolean;
   onSelect: (r: EngineCConsensusRow) => void;
@@ -913,7 +919,12 @@ function ConsensusRowCard({
         <div>conv {fmtNum(conviction, 2)}</div>
         <div>A {fmtNum(aNorm, 2)}</div>
         <div>B {fmtNum(bNorm, 2)}</div>
-        <div className="text-primary">live {live > 0 ? fmtPrice(live, row.pair, row.type) : '—'}</div>
+        <div className="text-primary">
+          live {live > 0 ? fmtPrice(live, row.pair, row.type) : '—'}
+          <span className="block text-[9px] text-muted-foreground">
+            {fmtLiveQuoteMeta(livePriceAgeSec, livePriceSource)}
+          </span>
+        </div>
       </div>
 
       {bucket === 'skipped' && (row.reason || row.detail) && (
@@ -1101,62 +1112,7 @@ function ConsensusDetail({
 
       {/* AI Vision Review output */}
       {aiReview && aiReviewMode === 'vision' && (
-        <Card className="border-border/60 bg-card/50">
-          <CardContent className="p-3 space-y-2">
-            <div className="flex items-center justify-between">
-              <p className="text-[10px] uppercase text-muted-foreground">AI Vision Review</p>
-              <span className="text-[10px] text-muted-foreground font-mono">{aiReview.model || 'vision'} - {aiReview.tf || 'H4'}</span>
-            </div>
-
-            {aiReview.chart_image && (
-              <div className="border border-border/50 rounded-md overflow-hidden">
-                <img
-                  src={aiReview.chart_image}
-                  alt={`${aiReview.symbol || 'Chart'} ${aiReview.tf || 'H4'}`}
-                  className="w-full h-auto"
-                  style={{ maxHeight: '280px', objectFit: 'contain' }}
-                />
-              </div>
-            )}
-
-            {aiReview.structured?.style_ratings && (
-              <div className="grid grid-cols-3 gap-2 text-[11px]">
-                <div>
-                  <div className="text-muted-foreground text-[10px]">Scalp</div>
-                  <div className="font-mono">{aiReview.structured.style_ratings.scalp || '-'}</div>
-                </div>
-                <div>
-                  <div className="text-muted-foreground text-[10px]">Intraday</div>
-                  <div className="font-mono">{aiReview.structured.style_ratings.intraday || '-'}</div>
-                </div>
-                <div>
-                  <div className="text-muted-foreground text-[10px]">Swing</div>
-                  <div className="font-mono">{aiReview.structured.style_ratings.swing || '-'}</div>
-                </div>
-              </div>
-            )}
-
-            {(aiReview.structured?.sl_flag === 'too_tight' || aiReview.structured?.tp_flag === 'too_far') && (
-              <div className="text-[11px] text-warning">
-                {aiReview.structured.sl_flag === 'too_tight' && 'SL flagged tight - '}
-                {aiReview.structured.tp_flag === 'too_far' && 'TP flagged far'}
-              </div>
-            )}
-
-            {aiReview.structured?.final_verdict && (
-              <div className="text-[11px]">
-                <span className="text-muted-foreground">Verdict: </span>
-                <span className="font-mono">{aiReview.structured.final_verdict}</span>
-              </div>
-            )}
-
-            {aiReview.analysis && (
-              <pre className="text-[11px] font-mono whitespace-pre-wrap text-foreground/90 max-h-72 overflow-y-auto p-2 bg-muted/20 rounded border border-border/40">
-                {aiReview.analysis}
-              </pre>
-            )}
-          </CardContent>
-        </Card>
+        <VisionReviewCard vision={aiReview} />
       )}
 
       {/* AI Text Review (Marcus Reid) output */}
@@ -1224,7 +1180,11 @@ function ConsensusDetail({
 
         <TabsContent value="levels" className="mt-3">
           <div className="grid grid-cols-2 gap-2 text-xs">
-            <Row k="Live" v={fmtPrice(row.livePrice, row.pair, row.type)} />
+            <Row
+              k="Live"
+              v={fmtPrice(row.livePrice, row.pair, row.type)}
+              meta={fmtLiveQuoteMeta(row.livePriceAgeSec, row.livePriceSource)}
+            />
             <Row k="Entry" v={fmtPrice(row.entry, row.pair, row.type)} />
             <Row k="SL" v={`${fmtPrice(row.sl, row.pair, row.type)}${row.sl_method ? ` · ${row.sl_method}` : ''}`} accent="short" />
             <Row k="TP" v={`${fmtPrice(row.tp, row.pair, row.type)}${row.tp_method ? ` · ${row.tp_method}` : ''}`} accent="long" />
@@ -1313,12 +1273,15 @@ function ConsensusDetail({
   );
 }
 
-function Row({ k, v, accent }: { k: string; v: string | number | null | undefined; accent?: 'long' | 'short' }) {
+function Row({ k, v, accent, meta }: { k: string; v: string | number | null | undefined; accent?: 'long' | 'short'; meta?: string }) {
   const cls = accent === 'long' ? 'text-long' : accent === 'short' ? 'text-short' : 'text-foreground';
   return (
     <div className="flex items-center justify-between gap-2">
       <span className="text-[10px] uppercase text-muted-foreground">{k}</span>
-      <span className={`font-mono ${cls}`}>{v == null || v === '' ? '—' : v}</span>
+      <span className={`font-mono text-right ${cls}`}>
+        {v == null || v === '' ? '—' : v}
+        {meta && <span className="block text-[9px] text-muted-foreground">{meta}</span>}
+      </span>
     </div>
   );
 }

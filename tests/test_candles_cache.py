@@ -82,6 +82,8 @@ def test_mt5_error_payload_fallback_candles_are_blocked_by_default(monkeypatch):
     meta = get_candle_fetch_meta(pair, "H1", 10)
     assert meta["error"] is True
     assert meta["fallback"] == "blocked_mt5_error_candles"
+    assert meta["fallback_used"] is False
+    assert meta["primary_provider"] == "mt5"
     assert meta["bars"] == 0
 
 

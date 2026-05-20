@@ -206,13 +206,15 @@ def api_prices():
             entry["ageSec"] = None
         decorated[_k] = entry
 
-    return jsonify(
+    resp = jsonify(
         {
             "prices": decorated,
             "count": len(decorated),
             "ts": datetime.now(timezone.utc).isoformat(),
         }
     )
+    resp.headers["Cache-Control"] = "no-store, max-age=0, must-revalidate"
+    return resp
 
 def api_yield_curve():
     """Phase E: Yield curve data for dashboard widget."""

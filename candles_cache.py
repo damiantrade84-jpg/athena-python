@@ -13,6 +13,7 @@ from typing import Any, Callable
 
 from config import CONFIG
 from athena_app.services.market_state import (
+    get_bucket_start_epoch,
     market_state_offset_hours,
     trim_mt5_d1_broker_session_ahead_tail,
 )
@@ -179,6 +180,9 @@ def _annotate_fetch_meta_with_bar_freshness(
             fetch_meta["lastBarStale"] = bool(
                 age_exceeds_cap or (live_feed and not has_current_bucket)
             )
+        fetch_meta["stale_status"] = severity
+        fetch_meta["freshness_lag"] = bucket_lag
+        fetch_meta["provider_timestamp"] = int(last_epoch)
     fetch_meta["offsetHours"] = float(offset_hours or 0.0)
     return fetch_meta
 
@@ -358,16 +362,52 @@ def _bucket_start_epoch(tf: str, ts_s: float, offset_hours: float = 0.0) -> int:
     return int(((float(ts_s) - offset_s) // tf_sec) * tf_sec + offset_s)
 
 
-def _ttl_cache_last_bar_stale(candles: list[dict] | None, tf: str, now_s: float) -> bool:
-    """True when the newest cached bar is too old vs ``now_s`` for this timeframe."""
+def _enrich_fallback_meta(
+    fetch_meta: dict,
+    *,
+    primary_provider: str | None,
+    fallback_provider: str | None,
+    fallback_reason: str | None,
+) -> None:
+    """Populate standard fallback observability fields on fetch meta."""
+    if not isinstance(fetch_meta, dict):
+        return
+    if fallback_provider:
+        fetch_meta["primary_provider"] = primary_provider
+        fetch_meta["fallback_provider"] = fallback_provider
+        fetch_meta["fallback_used"] = True
+        fetch_meta["fallback_reason"] = fallback_reason or ""
+    else:
+        fetch_meta.setdefault("primary_provider", primary_provider)
+        fetch_meta.setdefault("fallback_used", False)
+
+
+def _ttl_cache_last_bar_stale(
+    candles: list[dict] | None,
+    tf: str,
+    now_s: float,
+    pair: dict | None = None,
+) -> bool:
+    """True when cached candles must not be served (bucket-boundary-aware)."""
     if not candles:
         return True
-    tf_sec = _TF_SECONDS.get((tf or "").upper())
+    tf_u = (tf or "").upper()
+    tf_sec = _TF_SECONDS.get(tf_u)
     if not tf_sec:
         return False
     last_ts = candle_time_epoch_utc(candles[-1].get("time", candles[-1].get("datetime")))
     if last_ts is None:
         return True
+
+    offset_hours = float(market_state_offset_hours(pair, tf_u)) if pair else 0.0
+    expected_bucket = get_bucket_start_epoch(tf_u, now_s, offset_hours=offset_hours)
+    last_bucket = get_bucket_start_epoch(tf_u, float(last_ts), offset_hours=offset_hours)
+    bucket_lag = max(0, int((int(expected_bucket) - int(last_bucket)) // int(tf_sec)))
+
+    # Allow confirmed-only one-bucket lag; invalidate when lag >= 2 buckets.
+    if bucket_lag <= 1:
+        return False
+
     return (now_s - float(last_ts)) > (2.0 * float(tf_sec))
 
 
@@ -509,13 +549,12 @@ def fetch_candles(
         "fallback": None,
         "liveMerge": False,
         "cacheHit": False,
+        "primary_provider": pair.get("source"),
+        "fallback_used": False,
     }
     ptype = str(pair.get("type") or "").lower()
-    # Must match `candle_freshness_diagnostic` / `market_state_offset_hours` for all MT5 H4
-    # (forex, metals, commodities, indices, stocks — stocks use 3h session offset).
-    offset_hours = (
-        market_state_offset_hours(pair, tf) if (pair.get("source") == "mt5" and tf == "H4") else 0.0
-    )
+    # Must match `candle_freshness_diagnostic` / `market_state_offset_hours` for all TFs.
+    offset_hours = float(market_state_offset_hours(pair, tf))
     is_live_forex_crypto = ptype in {"forex", "crypto"}
     bypass_ttl_cache = ptype in {"forex", "crypto"}
     if bypass_ttl_cache:
@@ -594,6 +633,12 @@ def fetch_candles(
                 CONFIG.get("MT5_CANDLE_FALLBACK_ENABLED", False)
             ):
                 fetch_meta["fallback"] = "blocked_mt5_error_candles"
+                _enrich_fallback_meta(
+                    fetch_meta,
+                    primary_provider="mt5",
+                    fallback_provider=None,
+                    fallback_reason=mt5_resp.get("detail") or "MT5 error candles blocked",
+                )
                 fetch_meta["bars"] = 0
                 _annotate_fetch_meta_with_bar_freshness(
                     fetch_meta,
@@ -647,16 +692,18 @@ def fetch_candles(
                 cached_candles, expiry = entry
 
                 if now < expiry:
-                    if _ttl_cache_last_bar_stale(cached_candles, tf, now):
+                    if _ttl_cache_last_bar_stale(cached_candles, tf, now, pair=pair):
                         _candle_cache.pop(key, None)
                         _candle_fetch_meta.pop(key, None)
                     else:
                         cached_meta = dict(_candle_fetch_meta.get(key, {}))
+                        cache_age = max(0.0, now - (expiry - _CANDLE_CACHE_TTL.get(tf, 55 * 60)))
                         cached_meta.update(
                             {
                                 "resolution": "ttl_cache",
                                 "cacheHit": True,
                                 "cacheUpstream": cached_meta.get("upstream"),
+                                "cacheAgeSec": round(cache_age, 1),
                             }
                         )
                         _store_fetch_meta(key, cached_meta)
@@ -678,16 +725,21 @@ def fetch_candles(
                         cached_candles, expiry = entry
                         _now2 = time.time()
                         if _now2 < expiry:
-                            if _ttl_cache_last_bar_stale(cached_candles, tf, _now2):
+                            if _ttl_cache_last_bar_stale(cached_candles, tf, _now2, pair=pair):
                                 _candle_cache.pop(key, None)
                                 _candle_fetch_meta.pop(key, None)
                             else:
                                 cached_meta = dict(_candle_fetch_meta.get(key, {}))
+                                cache_age = max(
+                                    0.0,
+                                    _now2 - (expiry - _CANDLE_CACHE_TTL.get(tf, 55 * 60)),
+                                )
                                 cached_meta.update(
                                     {
                                         "resolution": "ttl_cache",
                                         "cacheHit": True,
                                         "cacheUpstream": cached_meta.get("upstream"),
+                                        "cacheAgeSec": round(cache_age, 1),
                                     }
                                 )
                                 _store_fetch_meta(key, cached_meta)
@@ -741,6 +793,12 @@ def fetch_candles(
                     f"[CANDLE] {pair.get('display')} EODHD failed, trying yfinance ({_yf_sym})"
                 )
                 fetch_meta["fallback"] = "yfinance"
+                _enrich_fallback_meta(
+                    fetch_meta,
+                    primary_provider="eodhd",
+                    fallback_provider="yfinance",
+                    fallback_reason="EODHD fetch returned no candles",
+                )
                 candles = fetch_yfinance(_yf_sym, tf, limit)
 
         candles = extract_candles(candles)

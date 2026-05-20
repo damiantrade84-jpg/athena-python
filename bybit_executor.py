@@ -98,6 +98,20 @@ def _bybit_spread_pct(ticker: dict) -> float | None:
     return (ask - bid) / mid
 
 
+def _bybit_execution_side_price(ticker: dict, direction: str) -> float | None:
+    """Return the executable side price only: LONG uses ask, SHORT uses bid."""
+    if not isinstance(ticker, dict):
+        return None
+    key = "ask" if direction == "LONG" else "bid" if direction == "SHORT" else ""
+    if not key:
+        return None
+    try:
+        price = float(ticker.get(key) or 0)
+    except (TypeError, ValueError):
+        return None
+    return price if price > 0 else None
+
+
 def _uses_trailing_atr_exit(signal: dict) -> bool:
     """True when Engine A/B exits are managed by the timed-exit chandelier trail."""
     mode = str((CONFIG.get("TIMED_EXIT") or {}).get("tp_mode", "fixed")).strip().lower()
@@ -1191,13 +1205,15 @@ def bybit_execute(signal: dict, approval: "RiskApproval") -> dict:  # noqa: F821
     try:
         volume = approval.volume
 
-        # Resolve live price
+        # Resolve executable side price. Do not fall back to last/mark here:
+        # market buys require ask and market sells require bid.
         ticker = exchange.fetch_ticker(ccxt_symbol)
-        price = ticker.get("ask" if direction == "LONG" else "bid", 0) or ticker.get(
-            "last", 0
-        )
-        if price <= 0:
-            return {"success": False, "error": f"NO_PRICE_DATA: {ccxt_symbol}"}
+        price = _bybit_execution_side_price(ticker, direction)
+        if price is None:
+            return {
+                "success": False,
+                "error": f"EXECUTABLE_QUOTE_SIDE_MISSING: {ccxt_symbol} {direction}",
+            }
 
         # Fix #3 — broker tick age check (default disabled via config).
         # GAP-6: when the gate is enabled and the ticker has no timestamp,
@@ -1235,6 +1251,12 @@ def bybit_execute(signal: dict, approval: "RiskApproval") -> dict:  # noqa: F821
         _spread_limit = _bybit_max_spread_pct(signal)
         if _spread_limit is not None:
             _spread_pct = _bybit_spread_pct(ticker)
+            if _spread_pct is None:
+                return {
+                    "success": False,
+                    "error": "EXECUTABLE_SPREAD_UNAVAILABLE",
+                    "spreadLimitPct": _spread_limit,
+                }
             if _spread_pct is not None and _spread_pct > _spread_limit:
                 log.warning(
                     f"[BYBIT] {ccxt_symbol}: spread {_spread_pct*100:.4f}% exceeds "

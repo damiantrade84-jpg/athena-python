@@ -14,7 +14,8 @@ import { ErrorBanner } from '@/components/shared';
 import { Search, Eye, Newspaper, GitCompare, Zap, Layers, Activity, ExternalLink, AlertTriangle } from 'lucide-react';
 import { fmtNum, cn } from '@/lib/utils';
 import { fmtPrice } from '@/lib/athenaFormat';
-import { EngineASignalCard, EngineBChecklistCard } from '@/components/athena';
+import { fetchVisionCandlePayload } from '@/lib/visionReview';
+import { EngineASignalCard, EngineBChecklistCard, VisionReviewCard } from '@/components/athena';
 import type {
   EngineASignal,
   EngineBNakedResult,
@@ -84,7 +85,7 @@ export default function PairBrowserPanel() {
   const { post: postVision, loading: visionLoading } = useApiPost<ChartAnalysisResponse>();
   const { post: postNews, loading: newsLoading } = useApiPost<NewsApiResponse>();
   const { post: postExecute, loading: executing } = useApiPost<{ success?: boolean; ticket?: string; error?: string }>();
-  const { priceFor } = useLivePrices(10000);
+  const { priceFor, ageSecFor, sourceFor } = useLivePrices();
 
   const groupEntries: Array<[string, Array<{ sym: string; label: string; enabled?: boolean }>]> = useMemo(() => {
     return Object.entries(pairs?.groups || {});
@@ -200,12 +201,7 @@ export default function PairBrowserPanel() {
     }
     const sym = signal.symbol || selectedSym;
     try {
-      const candleRes = await fetch(`/api/candles?symbol=${encodeURIComponent(sym)}&tf=H4&limit=300`);
-      const candleJson = await candleRes.json();
-      if (!candleRes.ok || !Array.isArray(candleJson?.candles) || candleJson.candles.length === 0) {
-        showToast(`Vision: no H4 candles for ${sym}`, 'error');
-        return;
-      }
+      const candlePayload = await fetchVisionCandlePayload(sym);
       const result = await postVision('/api/chart-analysis', {
         symbol: sym,
         tf: 'H4',
@@ -213,7 +209,7 @@ export default function PairBrowserPanel() {
         engineB: engineB,
         server_render: true,
         chart_source: 'pair_browser',
-        candles: candleJson.candles,
+        ...candlePayload,
         entry: signal.entry ?? signal.price,
         sl: signal.sl,
         tp: signal.tp ?? signal.tp1,
@@ -415,7 +411,14 @@ export default function PairBrowserPanel() {
             <TabsContent value="engineA" className="mt-0 space-y-3">
               {engineA ? (
                 <>
-                  <EngineASignalCard signal={{ ...engineA, livePrice: priceFor(engineA) }} />
+                  <EngineASignalCard
+                    signal={{
+                      ...engineA,
+                      livePrice: priceFor(engineA),
+                      livePriceAgeSec: ageSecFor(engineA),
+                      livePriceSource: sourceFor(engineA),
+                    }}
+                  />
                   {engineA.factorDiagnostics && (
                     <Card className="border-border/60 bg-card/50">
                       <CardContent className="p-3 space-y-2">
@@ -448,7 +451,14 @@ export default function PairBrowserPanel() {
 
             <TabsContent value="engineB" className="mt-0">
               {engineB ? (
-                <EngineBChecklistCard data={engineB} pair={selectedLabel} type={engineA?.type} livePrice={priceFor(selectedLabel)} />
+                <EngineBChecklistCard
+                  data={engineB}
+                  pair={selectedLabel}
+                  type={engineA?.type}
+                  livePrice={priceFor(selectedLabel)}
+                  livePriceAgeSec={ageSecFor(selectedLabel)}
+                  livePriceSource={sourceFor(selectedLabel)}
+                />
               ) : (
                 <Empty label='Click "Engine B" to scan' icon={<Layers className="w-8 h-8 opacity-40" />} />
               )}
@@ -456,14 +466,20 @@ export default function PairBrowserPanel() {
 
             <TabsContent value="compare" className="mt-0">
               {compare ? (
-                <CompareView compare={compare} pair={selectedLabel} priceFor={priceFor} />
+                <CompareView
+                  compare={compare}
+                  pair={selectedLabel}
+                  priceFor={priceFor}
+                  ageSecFor={ageSecFor}
+                  sourceFor={sourceFor}
+                />
               ) : (
                 <Empty label='Click "Compare" to run A vs B' icon={<GitCompare className="w-8 h-8 opacity-40" />} />
               )}
             </TabsContent>
 
             <TabsContent value="vision" className="mt-0">
-              {vision ? <VisionView vision={vision} /> : <Empty label='Click "AI Vision" to run' icon={<Eye className="w-8 h-8 opacity-40" />} />}
+              {vision ? <VisionReviewCard vision={vision} /> : <Empty label='Click "AI Vision" to run' icon={<Eye className="w-8 h-8 opacity-40" />} />}
             </TabsContent>
 
             <TabsContent value="news" className="mt-0">
@@ -536,10 +552,14 @@ function CompareView({
   compare,
   pair,
   priceFor,
+  ageSecFor,
+  sourceFor,
 }: {
   compare: CompareResponse;
   pair: string;
   priceFor: (item: { display?: unknown; pair?: unknown; symbol?: unknown } | string | null | undefined) => number | undefined;
+  ageSecFor: (item: { display?: unknown; pair?: unknown; symbol?: unknown } | string | null | undefined) => number | undefined;
+  sourceFor: (item: { display?: unknown; pair?: unknown; symbol?: unknown } | string | null | undefined) => string | undefined;
 }) {
   const verdict = compare.summary?.verdict || '—';
   const verdictBg = verdict === 'ALIGNED' ? 'bg-long/20 text-long' : verdict === 'CONFLICT' ? 'bg-short/20 text-short' : 'bg-muted/40 text-muted-foreground';
@@ -567,12 +587,30 @@ function CompareView({
       <div className="grid grid-cols-2 gap-3">
         <div className="space-y-2">
           <p className="text-[11px] uppercase text-muted-foreground">Engine A</p>
-          {compare.engineA ? <EngineASignalCard signal={{ ...compare.engineA, livePrice: priceFor(compare.engineA) }} compact /> : <Empty label="No Engine A signal" icon={<Zap className="w-6 h-6 opacity-40" />} />}
+          {compare.engineA ? (
+            <EngineASignalCard
+              signal={{
+                ...compare.engineA,
+                livePrice: priceFor(compare.engineA),
+                livePriceAgeSec: ageSecFor(compare.engineA),
+                livePriceSource: sourceFor(compare.engineA),
+              }}
+              compact
+            />
+          ) : <Empty label="No Engine A signal" icon={<Zap className="w-6 h-6 opacity-40" />} />}
         </div>
         <div className="space-y-2">
           <p className="text-[11px] uppercase text-muted-foreground">Engine B</p>
           {compare.engineB ? (
-            <EngineBChecklistCard data={compare.engineB} pair={pair} type={compare.engineA?.type} livePrice={priceFor(pair)} compact />
+            <EngineBChecklistCard
+              data={compare.engineB}
+              pair={pair}
+              type={compare.engineA?.type}
+              livePrice={priceFor(pair)}
+              livePriceAgeSec={ageSecFor(pair)}
+              livePriceSource={sourceFor(pair)}
+              compact
+            />
           ) : (
             <Empty label="No Engine B result" icon={<Layers className="w-6 h-6 opacity-40" />} />
           )}

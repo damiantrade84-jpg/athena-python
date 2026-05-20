@@ -14,6 +14,7 @@ import {
 } from 'lucide-react';
 import { AreaChart, Area, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { fmtNum, toNum } from '@/lib/utils';
+import { fmtLiveQuoteMeta } from '@/lib/athenaFormat';
 import type {
   HealthStatus, MT5Status, BybitStatus, GuardianApiStatus,
   OpenTrade, PerformanceMetrics
@@ -68,7 +69,7 @@ export default function DashboardPanel() {
   const { data: autoTrade, refresh: refreshAutoTrade } = useApiPoll<{ enabled: boolean }>('/api/auto-trade', 15000);
   const { post: postQuickExecute, loading: executingSignal } = useApiPost<{ success?: boolean; ticket?: string; error?: string; approval?: { approved: boolean; reason: string } }>();
   const { post: postAutoTrade, loading: togglingAutoTrade } = useApiPost<{ enabled: boolean; error?: string }>();
-  const { priceFor } = useLivePrices(10000);
+  const { priceFor, ageSecFor, sourceFor } = useLivePrices();
 
   const openTrades = asArray<OpenTrade>(openTradesRaw);
   const recentSignals = (lastScan?.signals || []).slice(0, 6);
@@ -374,8 +375,11 @@ export default function DashboardPanel() {
                           <span className="text-xs font-mono truncate">{label}</span>
                         </div>
                         <div className="flex items-center gap-2 shrink-0">
-                          <span className="text-[10px] text-primary font-mono">
+                          <span className="text-[10px] text-primary font-mono text-right">
                             L {livePrice ? fmtNum(livePrice, livePrice > 100 ? 2 : 5) : '—'}
+                            <span className="block text-[9px] text-muted-foreground">
+                              {fmtLiveQuoteMeta(ageSecFor(sig), sourceFor(sig))}
+                            </span>
                           </span>
                           <span className="text-[10px] text-muted-foreground">
                             {fmtNum(score, 2)}/{fmtNum(max, 1)}

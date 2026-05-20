@@ -2,7 +2,7 @@ import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Check, X, AlertTriangle, Info } from 'lucide-react';
 import { cn, fmtNum } from '@/lib/utils';
-import { fmtPrice } from '@/lib/athenaFormat';
+import { fmtLiveQuoteMeta, fmtPrice } from '@/lib/athenaFormat';
 import type { EngineBNakedResult } from '@/types/athena';
 
 interface Props {
@@ -10,10 +10,12 @@ interface Props {
   pair?: string;
   type?: string;
   livePrice?: number;
+  livePriceAgeSec?: number;
+  livePriceSource?: string;
   compact?: boolean;
 }
 
-export default function EngineBChecklistCard({ data, pair, type, livePrice, compact }: Props) {
+export default function EngineBChecklistCard({ data, pair, type, livePrice, livePriceAgeSec, livePriceSource, compact }: Props) {
   if (!data) {
     return (
       <Card className="border-border/60 bg-card/50">
@@ -98,7 +100,7 @@ export default function EngineBChecklistCard({ data, pair, type, livePrice, comp
         {/* Levels */}
         {(data.entry != null || data.sl != null || data.tp != null) && (
           <div className="grid grid-cols-4 gap-2">
-            <SmallStat label="Live" value={fmtPrice(livePrice, pair, type)} accent="primary" />
+            <SmallStat label="Live" value={fmtPrice(livePrice, pair, type)} accent="primary" meta={fmtLiveQuoteMeta(livePriceAgeSec, livePriceSource)} />
             <SmallStat label="Entry" value={fmtPrice(data.entry, pair, type)} />
             <SmallStat label="SL" value={fmtPrice(data.sl, pair, type)} accent="short" />
             <SmallStat label="TP" value={fmtPrice(data.tp, pair, type)} accent="long" />
@@ -159,12 +161,13 @@ function Gate({ label, ok, dangerLabel }: { label: string; ok: boolean; dangerLa
   );
 }
 
-function SmallStat({ label, value, accent }: { label: string; value: string; accent?: 'short' | 'long' | 'muted' | 'primary' }) {
+function SmallStat({ label, value, accent, meta }: { label: string; value: string; accent?: 'short' | 'long' | 'muted' | 'primary'; meta?: string }) {
   const fg = accent === 'long' ? 'text-long' : accent === 'short' ? 'text-short' : accent === 'primary' ? 'text-primary' : 'text-foreground';
   return (
     <div className="p-2 rounded-md bg-muted/30">
       <p className="text-[10px] uppercase text-muted-foreground">{label}</p>
       <p className={cn('text-xs font-mono font-bold', fg)}>{value}</p>
+      {meta && <p className="text-[9px] font-mono text-muted-foreground truncate">{meta}</p>}
     </div>
   );
 }

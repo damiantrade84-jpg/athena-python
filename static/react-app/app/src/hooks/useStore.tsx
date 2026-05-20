@@ -1,7 +1,8 @@
-import { createContext, useContext, useState, useCallback, useRef, useEffect } from 'react';
+import { createContext, useContext, useState, useCallback, useRef, useEffect, useMemo } from 'react';
 import type { PanelId, Signal, Position, GuardianStatus, NewsItem, SessionHours } from '@/types';
-import { syncPricesToGlobal, syncSignalsToGlobal } from '@/lib/globalState';
+import { syncSignalsToGlobal } from '@/lib/globalState';
 import apiClient from '@/lib/apiClient';
+import { useLivePrices } from '@/hooks/useLivePrices';
 
 interface AppState {
   activePanel: PanelId;
@@ -188,31 +189,17 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     window.AppState.activePanel = activePanel;
   }, [signals, activePanel]);
 
-  const [livePrices, setLivePrices] = useState<Record<string, number>>({});
-
-  useEffect(() => {
-    let timer: ReturnType<typeof setInterval> | null = null;
-    async function fetchPrices() {
-      try {
-        const res = await apiClient.getJson('/api/prices') as { prices?: Record<string, { price?: number }> };
-        if (res && res.prices) {
-          const map: Record<string, number> = {};
-          for (const [key, entry] of Object.entries(res.prices)) {
-            const price = typeof entry === 'object' && entry != null ? (entry as { price?: number }).price : undefined;
-            if (typeof price === 'number' && Number.isFinite(price) && price > 0) {
-              map[key.toUpperCase()] = price;
-            }
-          }
-          setLivePrices(map);
-        }
-      } catch {
-        // Silently ignore price poll errors
+  const { prices } = useLivePrices();
+  const livePrices = useMemo(() => {
+    const map: Record<string, number> = {};
+    for (const [key, entry] of Object.entries(prices)) {
+      const price = typeof entry === 'object' && entry != null ? (entry as { price?: number }).price : undefined;
+      if (typeof price === 'number' && Number.isFinite(price) && price > 0) {
+        map[key.toUpperCase()] = price;
       }
     }
-    fetchPrices();
-    timer = setInterval(fetchPrices, 30000);
-    return () => { if (timer) clearInterval(timer); };
-  }, []);
+    return map;
+  }, [prices]);
 
   const livePriceGetter = useCallback((pair: string) => {
     if (!pair) return undefined;

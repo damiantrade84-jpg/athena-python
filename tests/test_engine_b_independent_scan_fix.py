@@ -83,6 +83,35 @@ def test_blocked_engine_a_row_converts_to_explicit_b_only_stub():
     assert stub["engine_a_candleFetchMeta"] == blocked_a["candleFetchMeta"]
 
 
+def test_blocked_engine_a_stub_preserves_v2_abort_diagnostics():
+    pair = {"display": "XAU/USD", "symbol": "GC=F", "type": "commodity"}
+    blocked_a = {
+        "engine_source": "ENGINE_A",
+        "direction": "neutral",
+        "confluenceScore": 0.0,
+        "maxScore": 3.0,
+        "threshold": 1.5,
+        "scoreNorm": 0.0,
+        "factorDiagnostics": {
+            "abortReason": "indeterminate_trend",
+            "engineVersion": "A_V2",
+            "scorerSelected": "factor_scoring.compute_factor_scores",
+        },
+        "factorScores": {"trend": 0.0, "momentum": 0.0, "addon": 0.0},
+    }
+
+    stub = _make_engine_b_only_signal_stub_from_blocked_engine_a(pair, blocked_a)
+
+    assert stub["engine_source"] == ENGINE_B_SOURCE
+    assert stub["engine_a_blocked"] is True
+    assert stub["engine_a_block_reason"] == "engine_a_abort:indeterminate_trend"
+    assert stub["engine_a_confluenceScore"] == 0.0
+    assert stub["engine_a_maxScore"] == 3.0
+    assert stub["engine_a_threshold"] == 1.5
+    assert stub["engine_a_factorDiagnostics"] == blocked_a["factorDiagnostics"]
+    assert stub["engine_a_factorScores"] == blocked_a["factorScores"]
+
+
 def test_scan_rank_handles_b_only_zero_max_score():
     pair = {"display": "BTCUSDT", "symbol": "BTCUSDT", "type": "crypto"}
     stub = _make_engine_b_only_signal_stub(pair)

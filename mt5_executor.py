@@ -1389,7 +1389,17 @@ def mt5_execute(signal: dict, approval: "RiskApproval") -> dict:  # noqa: F821
     _tick_age_limit = _mt5_max_tick_age_sec()
     if _tick_age_limit is not None:
         _tick_age = _mt5_tick_age_seconds(tick)
-        if _tick_age is not None and _tick_age > _tick_age_limit:
+        if _tick_age is None:
+            log.warning(
+                f"[MT5] {mt5_symbol}: tick timestamp missing; "
+                f"MAX_BROKER_TICK_AGE_SEC.mt5={_tick_age_limit:.2f}s is enabled; rejecting"
+            )
+            return {
+                "success": False,
+                "error": "BROKER_TICK_TIMESTAMP_MISSING",
+                "tickAgeLimitSec": _tick_age_limit,
+            }
+        if _tick_age > _tick_age_limit:
             log.warning(
                 f"[MT5] {mt5_symbol}: tick age {_tick_age:.2f}s exceeds "
                 f"MAX_BROKER_TICK_AGE_SEC.mt5={_tick_age_limit:.2f}s — rejecting"
@@ -1408,6 +1418,12 @@ def mt5_execute(signal: dict, approval: "RiskApproval") -> dict:  # noqa: F821
     _spread_limit = _mt5_max_spread_pct(signal)
     if _spread_limit is not None:
         _spread_pct = _mt5_spread_pct(tick)
+        if _spread_pct is None:
+            return {
+                "success": False,
+                "error": "EXECUTABLE_SPREAD_UNAVAILABLE",
+                "spreadLimitPct": _spread_limit,
+            }
         if _spread_pct is not None and _spread_pct > _spread_limit:
             log.warning(
                 f"[MT5] {mt5_symbol}: spread {_spread_pct*100:.4f}% exceeds "

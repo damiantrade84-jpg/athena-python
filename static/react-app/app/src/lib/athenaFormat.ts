@@ -34,11 +34,27 @@ export function fmtScore(score: unknown, max: unknown, decimals = 2): string {
   return `${fmtNum(score, decimals)} / ${fmtNum(max, decimals)}`;
 }
 
+export function fmtLiveQuoteAge(ageSec: unknown): string {
+  const n = toNum(ageSec, NaN);
+  if (!Number.isFinite(n) || n < 0) return 'age n/a';
+  if (n < 1) return '<1s ago';
+  if (n < 60) return `${Math.round(n)}s ago`;
+  if (n < 3600) return `${Math.round(n / 60)}m ago`;
+  const hours = n / 3600;
+  return `${hours < 10 ? hours.toFixed(1) : Math.round(hours).toString()}h ago`;
+}
+
+export function fmtLiveQuoteMeta(ageSec: unknown, source?: unknown): string {
+  const src = typeof source === 'string' && source.trim() ? source.trim() : '';
+  return src ? `${fmtLiveQuoteAge(ageSec)} / ${src}` : fmtLiveQuoteAge(ageSec);
+}
+
 /** Resolve Engine A scan threshold from API payload (field names differ by route). */
 export function engineAThreshold(sig: EngineASignal | null | undefined): number | null {
   if (!sig) return null;
   const candidates = [
     sig.threshold,
+    (sig as Record<string, unknown>).engine_a_threshold,
     (sig as Record<string, unknown>).liveThreshold,
     (sig as Record<string, unknown>).scanThresholdEffective,
     (sig as Record<string, unknown>).scanThreshold,

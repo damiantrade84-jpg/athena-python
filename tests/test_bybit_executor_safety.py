@@ -71,3 +71,68 @@ class TestBybitPositionRiskFallback:
         # Current code uses 2% fallback: 6000 * 0.02 = 120
         # After fix this should be much higher (e.g., >= notional * 0.5 = 3000)
         assert p["risk_amount"] >= notional * 0.5
+
+
+class TestBybitExecutableQuoteSafety:
+    def _approval(self):
+        from risk_engine import RiskApproval
+
+        return RiskApproval(True, 0.01, 10.0, 0.01, 0.01, 0.0, "OK")
+
+    def test_long_blocks_when_ask_missing_even_if_last_exists(self, monkeypatch):
+        import bybit_executor
+
+        class Exchange:
+            def fetch_ticker(self, symbol):
+                return {"bid": 67000.0, "last": 67010.0, "timestamp": 1_716_200_000_000}
+
+        monkeypatch.setattr(bybit_executor, "_get_exchange", lambda: Exchange())
+        monkeypatch.setattr(bybit_executor, "bybit_map_symbol", lambda symbol: "BTC/USDT:USDT")
+        monkeypatch.setattr(bybit_executor, "_ensure_leverage", lambda exchange, symbol: None)
+
+        result = bybit_executor.bybit_execute(
+            {"pair": "BTC/USDT", "direction": "LONG", "type": "crypto", "price": 67000, "sl": 66000, "tp1": 69000},
+            self._approval(),
+        )
+
+        assert result["success"] is False
+        assert result["error"].startswith("EXECUTABLE_QUOTE_SIDE_MISSING")
+
+    def test_short_blocks_when_bid_missing_even_if_last_exists(self, monkeypatch):
+        import bybit_executor
+
+        class Exchange:
+            def fetch_ticker(self, symbol):
+                return {"ask": 67020.0, "last": 67010.0, "timestamp": 1_716_200_000_000}
+
+        monkeypatch.setattr(bybit_executor, "_get_exchange", lambda: Exchange())
+        monkeypatch.setattr(bybit_executor, "bybit_map_symbol", lambda symbol: "BTC/USDT:USDT")
+        monkeypatch.setattr(bybit_executor, "_ensure_leverage", lambda exchange, symbol: None)
+
+        result = bybit_executor.bybit_execute(
+            {"pair": "BTC/USDT", "direction": "SHORT", "type": "crypto", "price": 67000, "sl": 68000, "tp1": 65000},
+            self._approval(),
+        )
+
+        assert result["success"] is False
+        assert result["error"].startswith("EXECUTABLE_QUOTE_SIDE_MISSING")
+
+    def test_enabled_spread_guard_blocks_when_real_bid_ask_spread_unavailable(self, monkeypatch):
+        import bybit_executor
+
+        class Exchange:
+            def fetch_ticker(self, symbol):
+                return {"ask": 67020.0, "bid": None, "last": 67010.0, "timestamp": 1_716_200_000_000}
+
+        monkeypatch.setattr(bybit_executor, "_get_exchange", lambda: Exchange())
+        monkeypatch.setattr(bybit_executor, "bybit_map_symbol", lambda symbol: "BTC/USDT:USDT")
+        monkeypatch.setattr(bybit_executor, "_ensure_leverage", lambda exchange, symbol: None)
+        monkeypatch.setitem(bybit_executor.CONFIG, "MAX_EXECUTION_SPREAD_PCT", {"crypto": 0.001})
+
+        result = bybit_executor.bybit_execute(
+            {"pair": "BTC/USDT", "direction": "LONG", "type": "crypto", "price": 67000, "sl": 66000, "tp1": 69000},
+            self._approval(),
+        )
+
+        assert result["success"] is False
+        assert result["error"] == "EXECUTABLE_SPREAD_UNAVAILABLE"

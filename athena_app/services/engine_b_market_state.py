@@ -110,3 +110,66 @@ def engine_b_live_market_state(
         result.setdefault("reason", "fetch_market_state_returned_empty")
     return result
 
+
+def engine_b_confirmed_candles_from_raw(
+    pair: dict,
+    tf: str,
+    raw_candles: list[dict[str, Any]] | None,
+    *,
+    time_now: float | None = None,
+) -> list[dict[str, Any]]:
+    """Return confirmed-only candles for Engine B (matches scanner discipline)."""
+    from datetime import datetime, timezone
+
+    from athena_app.services.market_state import (
+        market_state_offset_hours,
+        split_market_state,
+    )
+
+    raw_list = list(raw_candles or [])
+    tf_u = str(tf or "").upper()
+
+    if pair.get("source") == "mt5":
+        state = engine_b_live_market_state(
+            pair,
+            tf_u,
+            len(raw_list),
+            candles=raw_list,
+            time_now=time_now,
+        )
+        return list(state.get("confirmed") or [])
+
+    now_dt = (
+        datetime.fromtimestamp(time_now, tz=timezone.utc)
+        if time_now is not None
+        else datetime.now(timezone.utc)
+    )
+
+    def _should_drop_last(bars: list[dict[str, Any]]) -> bool:
+        if not bars or len(bars) <= 1:
+            return False
+        last_t = bars[-1].get("time") or bars[-1].get("datetime")
+        if not last_t:
+            return True
+        try:
+            ts_str = str(last_t).replace("Z", "+00:00")
+            bar_dt = datetime.fromisoformat(ts_str)
+            if bar_dt.tzinfo is None:
+                bar_dt = bar_dt.replace(tzinfo=timezone.utc)
+            return bar_dt > now_dt
+        except Exception:
+            return True
+
+    work = list(raw_list)
+    if _should_drop_last(work):
+        work = work[:-1]
+
+    state = split_market_state(
+        work,
+        tf_u,
+        pair.get("display") or pair.get("symbol") or "",
+        time_now=time_now,
+        offset_hours=market_state_offset_hours(pair, tf_u),
+    )
+    return list(state.get("confirmed") or [])
+

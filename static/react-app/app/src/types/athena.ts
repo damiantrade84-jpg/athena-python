@@ -304,6 +304,7 @@ export interface ChartVisionStructured {
   selectedStyleGrade?: string;
   executionRisk?: string;
   structuralRisk?: string;
+  structured_trade_read?: AiVisionSummary;
 }
 
 /** /api/chart-analysis response. */
@@ -311,14 +312,15 @@ export interface ChartAnalysisResponse {
   analysis?: string;
   body?: string;
   structured?: ChartVisionStructured;
+  structured_trade_read?: AiVisionSummary;
   model?: string;
   symbol?: string;
   tf?: string;
   dual_tf?: boolean;
   triple_tf?: boolean;
-  chart_image?: string;           // base64 PNG of the H4 chart the AI analyzed
-  chart_image_h1?: string;        // base64 PNG of H1 chart (triple mode)
-  chart_image_d1?: string;        // base64 PNG of D1 chart (triple mode)
+  chart_image?: string;           // base64/data-URI PNG of the H4 chart the AI analyzed
+  chart_image_h1?: string;        // base64/data-URI PNG of H1 chart (triple mode)
+  chart_image_d1?: string;        // base64/data-URI PNG of D1 chart (triple mode)
   chart_timestamp_warnings?: string[];
   latest_candle_ts?: string | number;
   error?: string;

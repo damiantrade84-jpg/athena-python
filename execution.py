@@ -274,6 +274,14 @@ def _quick_audit_context(sig: dict, engine_b: dict | None) -> dict:
                 "scores": b_factors,
             }
 
+    factors["quote"] = {
+        "priceSource": sig.get("priceSource"),
+        "quoteSource": sig.get("quoteSource"),
+        "quoteTs": sig.get("quoteTs"),
+        "quoteAgeSec": sig.get("quoteAgeSec"),
+        "signalPrice": sig.get("price"),
+    }
+
     return {
         "engine": audit_engine,
         "score": score,
@@ -1286,10 +1294,13 @@ def api_engine_c_scan():
                 )
                 continue
 
-            # Fetch candles ONCE — share between Engine A (full) and Engine B (last bar dropped).
-            # Eliminates double-fetching and ensures both engines score identical data.
-            # Engine A always needs real D1/H4/H1; Engine B uses style-resolved TFs.
+            # Fetch candles ONCE — Engine A uses analyze_pair (confirmed inside);
+            # Engine B uses bucket-aware confirmed series (scanner parity).
             _all_tfs_needed = {"D1", "H4", "H1", _zone_tf, _entry_tf, _atr_tf}
+            from athena_app.services.engine_b_market_state import (
+                engine_b_confirmed_candles_from_raw,
+            )
+
             _tf_map: dict[str, list] = {}
             for tf in _all_tfs_needed:
                 if tf in raw_candles:
@@ -1297,10 +1308,7 @@ def api_engine_c_scan():
                 else:
                     limit = _lim.get(tf, _lim.get("H4", 0))
                     raw = _r.fetch_candles(pair, tf, limit)
-                if raw and len(raw) > 1:
-                    _tf_map[tf] = raw[:-1]
-                else:
-                    _tf_map[tf] = raw or []
+                _tf_map[tf] = engine_b_confirmed_candles_from_raw(pair, tf, raw)
             d1 = _tf_map.get("D1", [])
             zone_candles = _tf_map.get(_zone_tf, [])
             entry_candles = _tf_map.get(_entry_tf, [])

@@ -121,3 +121,39 @@ def test_live_forex_fetch_meta_exposes_h4_one_bucket_lag(monkeypatch):
     assert meta["hasCurrentBucket"] is False
     assert meta["stalenessSeverity"] == "stale_1_bucket"
     assert meta.get("lastBarStale") is False
+
+
+def test_live_mt5_d1_fetch_meta_exposes_bucket_fields(monkeypatch):
+    """D1 fetch meta must include bucket alignment fields (not H4-only)."""
+    monkeypatch.setattr(
+        candles_cache.time,
+        "time",
+        lambda: float(_epoch("2026-05-20T14:00:00Z")),
+    )
+    pair = {
+        "display": "AAPL",
+        "symbol": "AAPL.US",
+        "type": "stock",
+        "source": "mt5",
+    }
+    candles = [{"time": _epoch("2026-05-19T00:00:00Z"), "close": 100.0}]
+
+    fetch_candles(
+        pair,
+        "D1",
+        10,
+        fetch_candles_live=lambda *_args, **_kwargs: None,
+        fetch_binance=lambda *_args, **_kwargs: None,
+        fetch_eodhd=lambda *_args, **_kwargs: None,
+        fetch_polygon=lambda *_args, **_kwargs: None,
+        fetch_yfinance=lambda *_args, **_kwargs: None,
+        fetch_mt5=lambda *_args, **_kwargs: list(candles),
+        yfinance_symbol_for_pair=lambda _pair: None,
+        tf_b={"D1": "1d"},
+    )
+    meta = get_candle_fetch_meta(pair, "D1", 10)
+
+    assert meta["upstream"] == "mt5"
+    assert "expectedCurrentBucketEpoch" in meta
+    assert "stalenessSeverity" in meta
+    assert meta.get("stale_status") == meta.get("stalenessSeverity")

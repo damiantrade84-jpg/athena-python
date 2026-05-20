@@ -26,7 +26,7 @@ import {
   BarChart2, Sparkles, Shield, Gauge,
 } from 'lucide-react';
 import { fmtNum, toNum, cn } from '@/lib/utils';
-import { fmtPrice } from '@/lib/athenaFormat';
+import { fmtLiveQuoteMeta, fmtPrice } from '@/lib/athenaFormat';
 import { fetchVisionCandlePayload } from '@/lib/visionReview';
 import apiClient from '@/lib/apiClient';
 import {
@@ -271,7 +271,7 @@ export default function SignalsPanel() {
   const [aiReviewMode, setAiReviewMode] = useState<'vision' | 'text'>('vision');
   const [agentOpen, setAgentOpen] = useState(false);
   const [executing, setExecuting] = useState(false);
-  const { priceFor } = useLivePrices(10000);
+  const { priceFor, ageSecFor, sourceFor } = useLivePrices();
 
   // Build the unified row list from both engine caches.
   const rows: UnifiedRow[] = useMemo(
@@ -287,7 +287,12 @@ export default function SignalsPanel() {
   const filteredRows = useMemo(() => {
     const liveRows = rows.map((r) => ({
       ...r,
-      signal: { ...r.signal, livePrice: priceFor(r.signal) },
+      signal: {
+        ...r.signal,
+        livePrice: priceFor(r.signal),
+        livePriceAgeSec: ageSecFor(r.signal),
+        livePriceSource: sourceFor(r.signal),
+      },
     }));
     const list = liveRows.filter((r) => {
       const pair = (r.signal.display || r.signal.pair || r.signal.symbol || '').toLowerCase();
@@ -343,56 +348,81 @@ export default function SignalsPanel() {
     return counts;
   }, [rows]);
 
+  const scanEngineA = useCallback(async () => {
+    const ac = assetClass === 'all' ? '' : assetClass;
+    try {
+      const result = await postScanA('/api/scan', { asset_class: ac, force: false, style });
+      if (!result) return null;
+      const tradeSignals = Array.isArray(result.signals) ? result.signals : [];
+      const watchlistSignals = Array.isArray(result.watchlist) ? result.watchlist : [];
+      const displaySignals = [
+        ...tradeSignals.map((s) => ({
+          ...s,
+          signalClass: s.signalClass || 'TRADE',
+          signalTier: s.signalTier || 'trade',
+        })),
+        ...watchlistSignals.map((s) => ({
+          ...s,
+          signalClass: s.signalClass || 'WATCHLIST',
+          signalTier: s.signalTier || 'watchlist',
+          trade: false,
+        })),
+      ];
+      setScanCacheA(displaySignals, {
+        count: displaySignals.length,
+        scannedAt: new Date().toISOString(),
+      });
+      return { trade: tradeSignals.length, watchlist: watchlistSignals.length, pairs: result.totalPairs ?? result.pairs_scanned };
+    } catch {
+      return null;
+    }
+  }, [assetClass, style, postScanA, setScanCacheA]);
+
+  const scanEngineB = useCallback(async () => {
+    const ac = assetClass === 'all' ? '' : assetClass;
+    try {
+      const result = await postScanB('/api/scan-naked', { assetClass: ac, style });
+      if (!result || !result.signals) return null;
+      const pairsScanned = result.totalPairs ?? result.activePairs;
+      const funnel = result.scanFunnel as Record<string, number> | undefined;
+      setScanCacheB(result.signals as EngineASignal[], {
+        count: result.signals.length,
+        scannedAt: new Date().toISOString(),
+        ...(pairsScanned != null ? { pairsScanned } : {}),
+        ...(funnel && Object.keys(funnel).length ? { scanFunnel: funnel } : {}),
+      });
+      return { count: result.signals.length, pairs: pairsScanned };
+    } catch {
+      return null;
+    }
+  }, [assetClass, style, postScanB, setScanCacheB]);
+
+  const runScanA = useCallback(async () => {
+    const a = await scanEngineA();
+    setSortBy('score');
+    showToast(
+      a ? `Engine A scan complete · ${a.trade} trade / ${a.watchlist} watch` : 'Engine A scan failed',
+      a ? 'success' : 'error',
+    );
+  }, [scanEngineA, showToast]);
+
+  const runScanB = useCallback(async () => {
+    const b = await scanEngineB();
+    setSortBy('score');
+    showToast(
+      b ? `Engine B scan complete · ${b.count} setups` : 'Engine B scan failed',
+      b ? 'success' : 'error',
+    );
+  }, [scanEngineB, showToast]);
+
   /** Run both scans in parallel — engines stay logically independent on the server. */
   const runScan = useCallback(async () => {
-    const ac = assetClass === 'all' ? '' : assetClass;
-    const promiseA = postScanA('/api/scan', { asset_class: ac, force: false, style })
-      .then((result) => {
-        if (!result) return null;
-        const tradeSignals = Array.isArray(result.signals) ? result.signals : [];
-        const watchlistSignals = Array.isArray(result.watchlist) ? result.watchlist : [];
-        const displaySignals = [
-          ...tradeSignals.map((s) => ({
-            ...s,
-            signalClass: s.signalClass || 'TRADE',
-            signalTier: s.signalTier || 'trade',
-          })),
-          ...watchlistSignals.map((s) => ({
-            ...s,
-            signalClass: s.signalClass || 'WATCHLIST',
-            signalTier: s.signalTier || 'watchlist',
-            trade: false,
-          })),
-        ];
-        setScanCacheA(displaySignals, {
-          count: displaySignals.length,
-          scannedAt: new Date().toISOString(),
-        });
-        return { trade: tradeSignals.length, watchlist: watchlistSignals.length, pairs: result.totalPairs ?? result.pairs_scanned };
-      })
-      .catch(() => null);
-
-    const promiseB = postScanB('/api/scan-naked', { assetClass: ac, style })
-      .then((result) => {
-        if (!result || !result.signals) return null;
-        const pairsScanned = result.totalPairs ?? result.activePairs;
-        const funnel = result.scanFunnel as Record<string, number> | undefined;
-        setScanCacheB(result.signals as EngineASignal[], {
-          count: result.signals.length,
-          scannedAt: new Date().toISOString(),
-          ...(pairsScanned != null ? { pairsScanned } : {}),
-          ...(funnel && Object.keys(funnel).length ? { scanFunnel: funnel } : {}),
-        });
-        return { count: result.signals.length, pairs: pairsScanned };
-      })
-      .catch(() => null);
-
-    const [a, b] = await Promise.all([promiseA, promiseB]);
+    const [a, b] = await Promise.all([scanEngineA(), scanEngineB()]);
     setSortBy('score');
     const aPart = a ? `A ${a.trade} trade / ${a.watchlist} watch` : 'A failed';
     const bPart = b ? `B ${b.count}` : 'B failed';
     showToast(`Scan complete · ${aPart} · ${bPart}`, a || b ? 'success' : 'error');
-  }, [assetClass, style, postScanA, postScanB, setScanCacheA, setScanCacheB, showToast]);
+  }, [scanEngineA, scanEngineB, showToast]);
 
   const isPaper = autoTrade?.enabled ?? false;
   const selectedCanExecute = canExecuteRow(selectedRow);
@@ -602,6 +632,32 @@ export default function SignalsPanel() {
           <div className="flex items-center gap-1 ml-auto">
             <Button
               size="sm"
+              variant="outline"
+              className="h-8 gap-1 text-xs"
+              onClick={runScanA}
+              disabled={scanningA}
+            >
+              {scanningA
+                ? <span className="w-3.5 h-3.5 rounded-full border-2 border-current border-t-transparent animate-spin" />
+                : <Zap className="w-3.5 h-3.5" />
+              }
+              {scanningA ? 'A…' : 'Scan A'}
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-8 gap-1 text-xs"
+              onClick={runScanB}
+              disabled={scanningB}
+            >
+              {scanningB
+                ? <span className="w-3.5 h-3.5 rounded-full border-2 border-current border-t-transparent animate-spin" />
+                : <Layers className="w-3.5 h-3.5" />
+              }
+              {scanningB ? 'B…' : 'Scan B'}
+            </Button>
+            <Button
+              size="sm"
               className="h-8 gap-1 text-xs"
               style={{
                 background: 'linear-gradient(135deg, hsl(var(--gold-dark)), hsl(var(--gold)))',
@@ -805,7 +861,12 @@ export default function SignalsPanel() {
                   {/* ── OVERVIEW TAB ── */}
                   <TabsContent value="overview" className="space-y-3 mt-0">
                     <EngineASignalCard
-                      signal={{ ...selectedRow.signal, livePrice: priceFor(selectedRow.signal) }}
+                      signal={{
+                        ...selectedRow.signal,
+                        livePrice: priceFor(selectedRow.signal),
+                        livePriceAgeSec: ageSecFor(selectedRow.signal),
+                        livePriceSource: sourceFor(selectedRow.signal),
+                      }}
                       onExecute={(s) => requestExecute({ ...selectedRow, signal: s }, pendingStyle)}
                       executeDisabled={executeDisabled}
                       executeLabel={executeLabel}
@@ -876,7 +937,11 @@ export default function SignalsPanel() {
                       <CardContent className="p-3 space-y-2">
                         <p className="text-[10px] uppercase text-muted-foreground">All Levels</p>
                         <div className="grid grid-cols-2 gap-2 text-xs">
-                          <DetailRow label="Live"   value={fmtPrice(priceFor(selectedRow.signal), selectedRow.signal.pair, selectedRow.signal.type)} />
+                          <DetailRow
+                            label="Live"
+                            value={fmtPrice(priceFor(selectedRow.signal), selectedRow.signal.pair, selectedRow.signal.type)}
+                            meta={fmtLiveQuoteMeta(ageSecFor(selectedRow.signal), sourceFor(selectedRow.signal))}
+                          />
                           <DetailRow label="Entry"  value={fmtPrice(selectedRow.signal.entry ?? selectedRow.signal.price, selectedRow.signal.pair, selectedRow.signal.type)} />
                           <DetailRow label="SL"     value={fmtPrice(selectedRow.signal.sl, selectedRow.signal.pair, selectedRow.signal.type)} accent="short" />
                           <DetailRow label="TP1"    value={fmtPrice(selectedRow.signal.tp ?? selectedRow.signal.tp1, selectedRow.signal.pair, selectedRow.signal.type)} accent="long" />
@@ -1049,6 +1114,8 @@ export default function SignalsPanel() {
                         pair={selectedRow.signal.pair || selectedRow.signal.display}
                         type={selectedRow.signal.type}
                         livePrice={priceFor(selectedRow.signal)}
+                        livePriceAgeSec={ageSecFor(selectedRow.signal)}
+                        livePriceSource={sourceFor(selectedRow.signal)}
                       />
                     ) : (
                       <div className="text-[11px] text-muted-foreground border border-border/40 rounded-md p-3 leading-snug">
@@ -1223,12 +1290,15 @@ function UnifiedSignalRow({
   );
 }
 
-function DetailRow({ label, value, accent }: { label: string; value: string; accent?: 'short' | 'long' }) {
+function DetailRow({ label, value, accent, meta }: { label: string; value: string; accent?: 'short' | 'long'; meta?: string }) {
   const fg = accent === 'long' ? 'text-long' : accent === 'short' ? 'text-short' : 'text-foreground';
   return (
     <div className="flex items-center justify-between gap-2">
       <span className="text-[10px] text-muted-foreground capitalize">{label.replace(/_/g, ' ')}</span>
-      <span className={`text-xs font-mono ${fg}`}>{value}</span>
+      <span className={`text-xs font-mono text-right ${fg}`}>
+        {value}
+        {meta && <span className="block text-[9px] text-muted-foreground">{meta}</span>}
+      </span>
     </div>
   );
 }

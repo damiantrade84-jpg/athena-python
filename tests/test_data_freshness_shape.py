@@ -39,6 +39,38 @@ def test_diagnostic_row_has_required_fields():
         assert field in diag, f"Missing required field: {field}"
 
 
+def test_diagnostic_row_includes_scoring_path_fields():
+    """Non-crypto audit fields must be present on build_live_feed_diagnostic output."""
+    pair = {"symbol": "EURUSD=X", "display": "EUR/USD", "type": "forex", "source": "mt5"}
+    candles = [
+        {"time": "2026-05-20T09:00:00Z", "open": 1.08, "high": 1.09, "low": 1.07, "close": 1.085},
+        {"time": "2026-05-20T10:00:00Z", "open": 1.085, "high": 1.095, "low": 1.08, "close": 1.09},
+    ]
+    diag = build_live_feed_diagnostic(
+        pair,
+        "H1",
+        candles,
+        fetch_meta={"primary_provider": "mt5", "fallback_used": False, "cacheHit": False},
+        time_now=1714007200.0,
+    )
+    for field in (
+        "raw_count",
+        "scoring_count",
+        "last_raw_ts",
+        "last_scoring_ts",
+        "expected_latest_confirmed_ts",
+        "lag_seconds",
+        "bucket_lag",
+        "stale_status",
+        "confirmed_only",
+        "dropped_forming_candle",
+        "fallback_used",
+        "primary_provider",
+        "broker_offset",
+    ):
+        assert field in diag, f"Missing scoring-path field: {field}"
+
+
 def test_evaluate_execution_data_freshness_accepts_diagnostic_shape():
     """Verify evaluate_execution_data_freshness can process diagnostic rows."""
     pair = {"symbol": "EURUSD", "display": "EUR/USD", "type": "forex", "source": "mt5"}

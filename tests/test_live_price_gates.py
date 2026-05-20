@@ -128,6 +128,65 @@ def test_mt5_spread_pct_returns_none_when_ask_lt_bid():
     assert mt5_executor._mt5_spread_pct(SimpleNamespace(ask=1.0, bid=1.1)) is None
 
 
+def test_mt5_execute_blocks_missing_tick_timestamp_when_age_guard_enabled(monkeypatch):
+    import mt5_executor
+    from risk_engine import RiskApproval
+
+    class FakeMT5:
+        ORDER_TYPE_BUY = 0
+        ORDER_TYPE_SELL = 1
+
+        def symbol_select(self, symbol, enabled):
+            return True
+
+        def symbol_info_tick(self, symbol):
+            return SimpleNamespace(ask=1.0805, bid=1.0800, time=0)
+
+    monkeypatch.setattr(mt5_executor, "_get_mt5", lambda: FakeMT5())
+    monkeypatch.setattr(mt5_executor, "mt5_connect", lambda: True)
+    monkeypatch.setattr(mt5_executor, "mt5_map_symbol", lambda pair: "EURUSD")
+    monkeypatch.setitem(mt5_executor.CONFIG, "MAX_BROKER_TICK_AGE_SEC", {"mt5": 5.0})
+
+    approval = RiskApproval(True, 0.01, 10.0, 0.01, 0.01, 0.0, "OK")
+    result = mt5_executor.mt5_execute(
+        {"pair": "EUR/USD", "direction": "LONG", "type": "forex", "price": 1.08, "sl": 1.07, "tp1": 1.10},
+        approval,
+    )
+
+    assert result["success"] is False
+    assert result["error"] == "BROKER_TICK_TIMESTAMP_MISSING"
+
+
+def test_mt5_execute_blocks_when_spread_guard_enabled_and_bid_missing(monkeypatch):
+    import mt5_executor
+    from risk_engine import RiskApproval
+
+    class FakeMT5:
+        ORDER_TYPE_BUY = 0
+        ORDER_TYPE_SELL = 1
+
+        def symbol_select(self, symbol, enabled):
+            return True
+
+        def symbol_info_tick(self, symbol):
+            return SimpleNamespace(ask=1.0805, bid=0, time=1_716_200_000)
+
+    monkeypatch.setattr(mt5_executor, "_get_mt5", lambda: FakeMT5())
+    monkeypatch.setattr(mt5_executor, "mt5_connect", lambda: True)
+    monkeypatch.setattr(mt5_executor, "mt5_map_symbol", lambda pair: "EURUSD")
+    monkeypatch.setitem(mt5_executor.CONFIG, "MAX_BROKER_TICK_AGE_SEC", {"mt5": None})
+    monkeypatch.setitem(mt5_executor.CONFIG, "MAX_EXECUTION_SPREAD_PCT", {"forex": 0.001})
+
+    approval = RiskApproval(True, 0.01, 10.0, 0.01, 0.01, 0.0, "OK")
+    result = mt5_executor.mt5_execute(
+        {"pair": "EUR/USD", "direction": "LONG", "type": "forex", "price": 1.08, "sl": 1.07, "tp1": 1.10},
+        approval,
+    )
+
+    assert result["success"] is False
+    assert result["error"] == "EXECUTABLE_SPREAD_UNAVAILABLE"
+
+
 # ─── Fix #3 + Fix #4 (Bybit helpers) ────────────────────────────────────────
 
 def test_bybit_max_tick_age_disabled_by_default(monkeypatch):
@@ -187,6 +246,20 @@ def test_bybit_spread_pct_returns_none_when_either_side_zero():
 
     assert bybit_executor._bybit_spread_pct({"ask": 0, "bid": 100}) is None
     assert bybit_executor._bybit_spread_pct({"ask": 100, "bid": 0}) is None
+
+
+def test_bybit_execution_side_price_requires_ask_for_long():
+    import bybit_executor
+
+    assert bybit_executor._bybit_execution_side_price({"ask": 101, "bid": 100, "last": 100.5}, "LONG") == 101
+    assert bybit_executor._bybit_execution_side_price({"bid": 100, "last": 100.5}, "LONG") is None
+
+
+def test_bybit_execution_side_price_requires_bid_for_short():
+    import bybit_executor
+
+    assert bybit_executor._bybit_execution_side_price({"ask": 101, "bid": 100, "last": 100.5}, "SHORT") == 100
+    assert bybit_executor._bybit_execution_side_price({"ask": 101, "last": 100.5}, "SHORT") is None
 
 
 # ─── Fix #5 (CLI filter logic, no network) ─────────────────────────────────

@@ -5206,7 +5206,10 @@ def _auth_and_rate_limit():
         else _RATE_MAX_REQUESTS
     )
 
-    key = f"{ip}:{path}" if is_sensitive else ip
+    # Dashboard polling fans out across health, prices, positions, auto-trade,
+    # etc. Bucket by path so a busy read-only panel cannot starve unrelated
+    # status endpoints. Sensitive endpoints keep their stricter per-path limit.
+    key = f"{ip}:{path}"
 
     if key not in _rate_limits:
         _rate_limits[key] = []

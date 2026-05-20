@@ -589,10 +589,69 @@ def _engine_a_block_reason(engine_a_signal: dict | None) -> str:
         if reason:
             return str(reason)
 
+    fd = engine_a_signal.get("factorDiagnostics")
+    if isinstance(fd, dict):
+        abort_reason = fd.get("abortReason")
+        if abort_reason:
+            return f"engine_a_abort:{abort_reason}"
+
     direction = engine_a_signal.get("direction")
     if direction:
         return f"engine_a_no_trade_direction:{direction}"
     return "engine_a_no_direction"
+
+
+def _safe_regression_tag_value(value: Any) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    return "_".join(text.split())
+
+
+def _engine_a_regression_tags(engine_a_signal: dict | None) -> str:
+    """Build explicit Engine A provenance tags for the REGRESSION-A scan line."""
+    if not isinstance(engine_a_signal, dict):
+        return " scorer=not_called fallback_used=false failure=no_signal"
+
+    fd = engine_a_signal.get("factorDiagnostics") or {}
+    if isinstance(fd, dict) and fd.get("engineVersion"):
+        tags = [f"scorer={_safe_regression_tag_value(fd.get('engineVersion'))}"]
+        selected = _safe_regression_tag_value(fd.get("scorerSelected"))
+        if selected:
+            tags.append(f"selected={selected}")
+        abort = _safe_regression_tag_value(fd.get("abortReason"))
+        if abort:
+            tags.append(f"abort={abort}")
+    else:
+        tags = ["scorer=not_called"]
+        data_freshness = engine_a_signal.get("dataFreshness")
+        failure = ""
+        if isinstance(data_freshness, dict) and data_freshness.get("allowed") is False:
+            tags.append("selected=pre_scoring_freshness_gate")
+            failure = data_freshness.get("reason") or data_freshness.get("status")
+        if not failure:
+            failure = (
+                engine_a_signal.get("failureReason")
+                or engine_a_signal.get("skipReason")
+                or engine_a_signal.get("reason")
+            )
+        failure = _safe_regression_tag_value(failure)
+        if failure:
+            tags.append(f"failure={failure}")
+
+    fallback_used = bool(
+        engine_a_signal.get("fallback_used")
+        or engine_a_signal.get("fallbackUsed")
+        or engine_a_signal.get("legacyFallbackUsed")
+    )
+    tags.append(f"fallback_used={str(fallback_used).lower()}")
+    return " " + " ".join(tags)
+
+
+def _regression_candle_count(raw_candles: dict | None, tf: str) -> int:
+    if not isinstance(raw_candles, dict):
+        return 0
+    return len(raw_candles.get(tf) or [])
 
 
 def _make_engine_b_only_signal_stub_from_blocked_engine_a(
@@ -612,7 +671,18 @@ def _make_engine_b_only_signal_stub_from_blocked_engine_a(
     if isinstance(engine_a_signal, dict):
         stub["engine_a_direction"] = engine_a_signal.get("direction")
         stub["engine_a_confluenceScore"] = engine_a_signal.get("confluenceScore")
+        stub["engine_a_maxScore"] = engine_a_signal.get("maxScore")
+        stub["engine_a_threshold"] = (
+            engine_a_signal.get("threshold")
+            or engine_a_signal.get("liveThreshold")
+            or engine_a_signal.get("scanThresholdEffective")
+            or engine_a_signal.get("scanThreshold")
+        )
         stub["engine_a_scoreNorm"] = engine_a_signal.get("scoreNorm")
+        if engine_a_signal.get("factorDiagnostics") is not None:
+            stub["engine_a_factorDiagnostics"] = engine_a_signal.get("factorDiagnostics")
+        if engine_a_signal.get("factorScores") is not None:
+            stub["engine_a_factorScores"] = engine_a_signal.get("factorScores")
         if engine_a_signal.get("dataFreshness") is not None:
             stub["engine_a_dataFreshness"] = engine_a_signal.get("dataFreshness")
         if engine_a_signal.get("candleFetchMeta") is not None:
@@ -1482,28 +1552,27 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict[s
                 )
 
                 # REGRESSION CHECK: Log per-pair Engine A details
-                d1_count = len(raw_candles.get("D1", []))
-                h4_count = len(raw_candles.get("H4", []))
-                h1_count = len(raw_candles.get("H1", []))
+                d1_count = _regression_candle_count(raw_candles, "D1")
+                h4_count = _regression_candle_count(raw_candles, "H4")
+                h1_count = _regression_candle_count(raw_candles, "H1")
                 if sig_a:
                     score = float(sig_a.get("confluenceScore", 0) or 0)
                     max_score = float(sig_a.get("maxScore", 3.0) or 3.0)
                     direction = str(sig_a.get("direction") or "NONE")
                     pair_type = str(pair.get("type") or "?")
-                    _fd = sig_a.get("factorDiagnostics") or {}
-                    _abort = _fd.get("abortReason") or ""
-                    _abort_tag = f" abort={_abort}" if _abort else ""
+                    _regression_tags = _engine_a_regression_tags(sig_a)
                     print(
                         f"[REGRESSION-A] {pair['display']:12s} type={pair_type:8s} "
                         f"D1={d1_count:3d} H4={h4_count:3d} H1={h1_count:3d} "
                         f"score={score:.2f}/{max_score:.1f} dir={direction:5s}"
-                        f" scorer=A_V2{_abort_tag}"
+                        f"{_regression_tags}"
                     )
                 else:
                     pair_type = str(pair.get("type") or "?")
                     print(
                         f"[REGRESSION-A] {pair['display']:12s} type={pair_type:8s} "
                         f"D1={d1_count:3d} H4={h4_count:3d} H1={h1_count:3d} NO SIGNAL"
+                        f"{_engine_a_regression_tags(None)}"
                     )
 
                 # Engine separation: when Engine A produces no signal we MUST

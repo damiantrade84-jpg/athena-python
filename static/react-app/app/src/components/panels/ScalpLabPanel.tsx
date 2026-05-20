@@ -14,7 +14,7 @@ import {
 import { ErrorBanner } from '@/components/shared';
 import { Activity, Play, Zap, AlertTriangle, Layers } from 'lucide-react';
 import { fmtNum, toNum } from '@/lib/utils';
-import { fmtPrice } from '@/lib/athenaFormat';
+import { fmtLiveQuoteMeta, fmtPrice } from '@/lib/athenaFormat';
 
 interface DataFidelity {
   vp_source?: string;
@@ -253,7 +253,7 @@ export default function ScalpLabPanel() {
   const { data: pairsData } = useApiPoll<ScalpPairsResponse>('/api/scalp-pairs', 0);
   const { post: postScan, loading: scanning, error: scanError } = useApiPost<ScalpScanResponse>();
   const { post: postExecute, loading: executing } = useApiPost<ScalpExecuteResponse>();
-  const { priceFor } = useLivePrices(10000);
+  const { priceFor, ageSecFor, sourceFor } = useLivePrices();
 
   const universeCount = pairsData?.count ?? pairsData?.pairs?.length ?? 0;
   const scanResult = scalpLabScanCache as ScalpScanResponse | null;
@@ -443,6 +443,8 @@ export default function ScalpLabPanel() {
                                 key={`${s.display || s.pair || s.symbol || i}-${i}`}
                                 sig={s}
                                 livePrice={priceFor(s)}
+                                livePriceAgeSec={ageSecFor(s)}
+                                livePriceSource={sourceFor(s)}
                                 selected={selected === s}
                                 onSelect={setScalpLabSelectedCache}
                                 onExecute={requestExecute}
@@ -464,7 +466,15 @@ export default function ScalpLabPanel() {
               <CardContent>
                 {selected ? (
                   <ScrollArea className="h-[520px] pr-2">
-                    <ScalpDetail sig={{ ...selected, livePrice: priceFor(selected) }} onExecute={requestExecute} />
+                    <ScalpDetail
+                      sig={{
+                        ...selected,
+                        livePrice: priceFor(selected),
+                        livePriceAgeSec: ageSecFor(selected),
+                        livePriceSource: sourceFor(selected),
+                      }}
+                      onExecute={requestExecute}
+                    />
                   </ScrollArea>
                 ) : (
                   <div className="flex flex-col items-center justify-center h-[520px] text-muted-foreground">
@@ -551,10 +561,12 @@ export default function ScalpLabPanel() {
 }
 
 function ScalpCard({
-  sig, livePrice, selected, onSelect, onExecute,
+  sig, livePrice, livePriceAgeSec, livePriceSource, selected, onSelect, onExecute,
 }: {
   sig: ScalpSignal;
   livePrice?: number;
+  livePriceAgeSec?: number;
+  livePriceSource?: string;
   selected: boolean;
   onSelect: (s: ScalpSignal) => void;
   onExecute: (s: ScalpSignal) => void;
@@ -593,7 +605,12 @@ function ScalpCard({
       </div>
 
       <div className="mt-2 grid grid-cols-4 gap-2 text-[10px] text-muted-foreground">
-        <div className="text-primary">Live {live > 0 ? fmtPrice(live, sig.pair, sig.type) : '—'}</div>
+        <div className="text-primary">
+          Live {live > 0 ? fmtPrice(live, sig.pair, sig.type) : '—'}
+          <span className="block text-[9px] text-muted-foreground">
+            {fmtLiveQuoteMeta(livePriceAgeSec, livePriceSource)}
+          </span>
+        </div>
         <div>VAH {fmtNum(sig.vp_vah, 5)}</div>
         <div>POC {fmtNum(sig.vp_poc, 5)}</div>
         <div>VAL {fmtNum(sig.vp_val, 5)}</div>
@@ -709,7 +726,11 @@ function ScalpDetail({ sig, onExecute }: { sig: ScalpSignal; onExecute: (s: Scal
             <Row k="Gate" v={sig.gate_result || '—'} accent={exec ? 'long' : 'short'} />
             <Row k="Status" v={sig.candidate_status || (exec ? 'executable' : 'not executable')} accent={exec ? 'long' : 'short'} />
             <Row k="Entry" v={fmtPrice(sig.entry ?? sig.price, sig.pair, sig.type)} />
-            <Row k="Live" v={fmtPrice(sig.livePrice, sig.pair, sig.type)} />
+            <Row
+              k="Live"
+              v={fmtPrice(sig.livePrice, sig.pair, sig.type)}
+              meta={fmtLiveQuoteMeta(sig.livePriceAgeSec, sig.livePriceSource)}
+            />
             <Row k="SL" v={`${fmtPrice(sig.sl, sig.pair, sig.type)}${sig.sl_method ? ` · ${sig.sl_method}` : ''}`} accent="short" />
             <Row k="TP1" v={fmtPrice(sig.tp1, sig.pair, sig.type)} accent="long" />
             <Row k="TP2" v={fmtPrice(sig.tp2, sig.pair, sig.type)} accent="long" />
@@ -863,12 +884,15 @@ function Kpi({ title, value, accent }: { title: string; value: string | number; 
   );
 }
 
-function Row({ k, v, accent }: { k: string; v: string | number | null | undefined; accent?: 'long' | 'short' }) {
+function Row({ k, v, accent, meta }: { k: string; v: string | number | null | undefined; accent?: 'long' | 'short'; meta?: string }) {
   const cls = accent === 'long' ? 'text-long' : accent === 'short' ? 'text-short' : 'text-foreground';
   return (
     <div className="flex items-center justify-between gap-2">
       <span className="text-[10px] uppercase text-muted-foreground">{k}</span>
-      <span className={`font-mono ${cls}`}>{v == null || v === '' ? '—' : v}</span>
+      <span className={`font-mono text-right ${cls}`}>
+        {v == null || v === '' ? '—' : v}
+        {meta && <span className="block text-[9px] text-muted-foreground">{meta}</span>}
+      </span>
     </div>
   );
 }
