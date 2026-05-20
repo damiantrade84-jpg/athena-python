@@ -2,6 +2,7 @@ import { useCallback, type ElementType } from 'react';
 import { useStore } from '@/hooks/useStore';
 import { useApiPoll, useApiPost } from '@/hooks/useApiData';
 import type { PanelId } from '@/types';
+import type { PerformanceMetrics } from '@/types';
 import { cn, fmtNum, toNum } from '@/lib/utils';
 import { Separator } from '@/components/ui/separator';
 import { Badge } from '@/components/ui/badge';
@@ -36,6 +37,7 @@ const navItems: { id: PanelId; label: string; icon: ElementType; badge?: string 
 export default function Sidebar() {
   const { activePanel, setActivePanel, signals, positions, guardian, showToast, isTestMode, toggleTestMode } = useStore();
   const { data: autoTrade, refresh: refreshAutoTrade } = useApiPoll<{ enabled: boolean }>('/api/auto-trade', 15000);
+  const { data: perfMetrics } = useApiPoll<PerformanceMetrics>('/api/performance', 60000);
   const { post: postAutoTrade, loading: togglingAutoTrade } = useApiPost<{ enabled: boolean; error?: string }>();
 
   const activeSignals  = signals.filter(s => s.status === 'active').length;
@@ -44,6 +46,8 @@ export default function Sidebar() {
   const dailyLossLimit = toNum(guardian?.dailyLossLimit, 1);
   const riskPct        = Math.min(100, (Math.abs(dailyLoss) / Math.max(1, dailyLossLimit)) * 100);
   const serverAutoTradeEnabled = Boolean(autoTrade?.enabled);
+  const winRate        = perfMetrics?.win_rate;
+  const totalTrades    = perfMetrics?.total_trades ?? 0;
 
   const handleAutoTradeToggle = useCallback(async (checked: boolean) => {
     const result = await postAutoTrade('/api/auto-trade', { action: checked ? 'on' : 'off' });
@@ -58,28 +62,17 @@ export default function Sidebar() {
   return (
     <aside className="w-[210px] shrink-0 border-r border-sidebar-border bg-sidebar flex flex-col">
 
-      {/* ── Logo ── */}
-      <div className="p-4 border-b border-sidebar-border/60">
-        <div className="flex items-center gap-2">
-          <span
-            className="text-sm font-bold tracking-widest"
-            style={{
-              fontFamily: "'Rajdhani', sans-serif",
-              letterSpacing: '0.14em',
-              color: 'hsl(var(--gold-light))',
-              textShadow: '0 0 12px hsl(43 90% 46% / 0.5)',
-            }}
-          >
-            SENTINEL PRO
-          </span>
-          <Badge
-            variant="outline"
-            className="text-[9px] h-4 px-1"
-            style={{ borderColor: 'hsl(var(--gold) / 0.5)', color: 'hsl(var(--gold-light))', background: 'hsl(var(--gold) / 0.10)' }}
-          >
-            v4.0
-          </Badge>
-        </div>
+      {/* ── Nav caption (logo lives in Header) ── */}
+      <div className="px-4 pt-3 pb-2 border-b border-sidebar-border/40">
+        <span
+          className="text-[10px] uppercase tracking-[0.2em]"
+          style={{
+            fontFamily: "'Rajdhani', sans-serif",
+            color: 'hsl(var(--muted-foreground))',
+          }}
+        >
+          Navigation
+        </span>
       </div>
 
       {/* ── Stats Bar ── */}
@@ -93,7 +86,10 @@ export default function Sidebar() {
               value: `${dailyLoss >= 0 ? '+' : ''}$${fmtNum(dailyLoss, 0, '0')}`,
               valueClass: dailyLoss >= 0 ? 'text-long' : 'text-short',
             },
-            { label: 'Win Rate', value: '57.3%' },
+            {
+              label: 'Win Rate',
+              value: winRate != null && totalTrades > 0 ? `${fmtNum(winRate, 1)}%` : '—',
+            },
           ].map(({ label, value, valueClass }) => (
             <div
               key={label}

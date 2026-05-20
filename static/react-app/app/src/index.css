@@ -225,3 +225,48 @@
 .animate-glow-gold { animation: glow-pulse-gold 2.5s ease-in-out infinite; }
 .animate-glow-long { animation: glow-pulse-long 1.8s ease-in-out infinite; }
 .animate-slide-in  { animation: slide-in-left 0.2s ease-out; }
+
+/* ── Price ticker marquee ── */
+@keyframes ticker-scroll {
+  0%   { transform: translateX(0); }
+  100% { transform: translateX(-50%); }
+}
+.ticker-track {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 1.75rem;
+  white-space: nowrap;
+  animation: ticker-scroll linear infinite;
+  animation-duration: var(--ticker-duration, 90s);
+  will-change: transform;
+}
+.ticker-strip:hover .ticker-track {
+  animation-play-state: paused;
+}
+.ticker-strip {
+  position: relative;
+  overflow: hidden;
+  border-bottom: 1px solid hsl(var(--gold) / 0.15);
+  background: linear-gradient(180deg,
+    hsl(248 45% 5% / 0.95),
+    hsl(248 50% 4% / 0.95));
+}
+.ticker-strip::before,
+.ticker-strip::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 28px;
+  z-index: 2;
+  pointer-events: none;
+}
+.ticker-strip::before {
+  left: 0;
+  background: linear-gradient(90deg, hsl(248 45% 5%), transparent);
+}
+.ticker-strip::after {
+  right: 0;
+  background: linear-gradient(-90deg, hsl(248 45% 5%), transparent);
+}
