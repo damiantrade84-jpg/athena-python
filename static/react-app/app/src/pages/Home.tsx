@@ -8,6 +8,7 @@ import ScanConfigPanel from '@/components/panels/ScanConfigPanel';
 import TradesPanel from '@/components/panels/TradesPanel';
 import EngineCPanel from '@/components/panels/EngineCPanel';
 import ScalpLabPanel from '@/components/panels/ScalpLabPanel';
+import ScalpWorkbenchPanel from '@/components/panels/ScalpWorkbenchPanel';
 import TVChartPanel from '@/components/panels/TVChartPanel';
 import BacktestPanel from '@/components/panels/BacktestPanel';
 import ScreenerPanel from '@/components/panels/ScreenerPanel';
@@ -27,6 +28,7 @@ const panels: Record<string, React.ComponentType> = {
   trades: TradesPanel,
   engineC: EngineCPanel,
   scalpLab: ScalpLabPanel,
+  scalpWorkbench: ScalpWorkbenchPanel,
   tvChart: TVChartPanel,
   backtest: BacktestPanel,
   screener: ScreenerPanel,
