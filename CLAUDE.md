@@ -22,7 +22,6 @@ Do not use `.cursor/**`, `.agents/**`, or global/user-profile agent skills for t
 - Start with the files relevant to the user's request. The repository map below lists common entry points only; inspect additional current source files when needed to verify the real execution path.
 - Do not load `tasks/`, old audit reports, generated logs, backtest artifacts, historical findings, or archived diagnostics unless the user names them or the current issue directly requires them.
 - Run only targeted tests for the changed behavior. Never run full test suites unless explicitly requested.
-- Minimal changes only. Do not refactor unrelated code.
 - Evidence first. Inspect current source before making claims.
 - If unsure, say `not verified` instead of guessing.
 
@@ -52,12 +51,33 @@ Common entry points only. This is not a complete allowlist.
 - Engine D: `scalp_engine.py`
 - Execution: `execution.py`, `auto_trader.py`, `risk_engine.py`, `guardian.py`, `mt5_executor.py`, `bybit_executor.py`
 - Data/candles: `candles_cache.py`, `candle_feeds.py`, provider-specific feed modules
-- AI/Vision: `ai_agent_safety.py`, AI review modules, chart/Vision payload builders, browser chart code under `static/`
-- AI Agent chat: `ai_trade_chat.py`, `athena_app/api/routes_ai_agent.py`. The chat answer narrative may use an LLM when an AI API key is configured; the deterministic decision card, safety flags, and gates remain authoritative and are never altered by the LLM. With no API key the chat falls back to the deterministic answer.
+- AI/Vision: `ai_agent_safety.py`, native chart AI review modules, provider routers, screenshot/payload builders, browser chart code under `static/`
+- AI Agent chat: `ai_trade_chat.py`, `athena_app/api/routes_ai_agent.py`. LLM narrative optional when configured; deterministic decision card, safety flags, and gates remain authoritative.
 - Research Lab: `athena_research/`, `tools/vectorbt_research_lab.py`, `configs/vectorbt_research_lab.yaml`
 - Backtesting: `backtest_runner.py`, backtest matrix tooling, telemetry/report writers
 - Config: `config.py`, `config.yaml`, `configs/`
 - Tests: targeted `tests/test_*.py` only for touched behavior
+
+## Chart and providers
+
+- Native chart is the active chart surface for chart and AI review work.
+- Do not build new AI review features on the legacy TradingView path.
+- Prefer native chart PNG screenshots; TradingView limits drove the move.
+
+## Engine A baseline
+
+- Engine A / live chart parity is the current priority baseline.
+- Live chart validity: done; `bar_time` wiring verified end-to-end in a live scan.
+- Equity/index session liquidity weighting is not a known fail-open blocker.
+- Do not re-open missing `bar_time` unless new regression evidence.
+
+## Chart AI review contract
+
+- Read-only advisory; must not connect to execution.
+- Input: native chart PNG + server-trusted Engine A diagnostics assembled on the backend.
+- Do not trust the frontend for Engine A score, threshold, ATR, or RR.
+- Review payload must include ATR diagnostics, SL/TP/RR, freshness/provider timestamps, and Engine-A-vs-model concordance.
+- v1 provider target: Anthropic/Claude; OpenAI scaffold only if explicitly requested.
 
 ## Safe workflow
 
@@ -67,7 +87,6 @@ Common entry points only. This is not a complete allowlist.
 4. Apply the smallest safe patch.
 5. Run the smallest relevant compile/test command.
 6. Report what changed, what passed, and what was not verified.
-
 
 
 ---
@@ -137,3 +156,4 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
 ---
 
 **These guidelines are working if:** fewer unnecessary changes in diffs, fewer rewrites due to overcomplication, and clarifying questions come before implementation rather than after mistakes.
+
