@@ -5885,6 +5885,7 @@ def _compute_naked_analysis(
     engine_a_ctx: dict = None,
     force_ai: bool = False,
     execution_mode: bool = False,
+    overlay_only: bool = False,
 ):
     if not isinstance(sig, dict):
         return None, None, "Invalid signal"
@@ -6179,39 +6180,40 @@ def _compute_naked_analysis(
         res["final_take_profit"] = conf.get("execution_tp") or res.get("recommended_take_profit")
         res["rr_used_for_gate"] = conf.get("rr_used_for_gate", conf.get("rr", 0.0))
 
-        try:
-            record_signal_event(
-                engine="engine_b",
-                score=conf.get("score"),
-                max_score=conf.get("max_possible"),
-                passed=bool(_gate_ok),
-                expected_prob=(conf.get("pct", 0) or 0) / 100.0,
-                feature_map={
-                    "structure_ok": conf.get("structure_ok"),
-                    "location_ok": conf.get("location_ok"),
-                    "trigger_ok": conf.get("trigger_ok"),
-                    "rr_ok": conf.get("rr_ok"),
-                    "room_ok": conf.get("room_ok"),
-                    "macro_ok": conf.get("macro_ok"),
-                    "bos_mtf_confirmed": conf.get("bos_mtf_confirmed"),
-                    "ob_at_zone": conf.get("ob_at_zone"),
-                    "rr": conf.get("rr"),
-                },
-                db_path=_AUDIT_DB,
-                meta={
-                    "pair": pair_obj.get("display"),
-                    "style": resolved_style,
-                    "regime": regime_label,
-                    "min_score_used": float(_min_score_scaled),
-                    "lifecycle_state": conf.get("lifecycle_state", "unknown"),
-                    "lifecycle_reason": conf.get("lifecycle_reason", ""),
-                },
-            )
-        except Exception as _ssi_err:
-            log.debug(f"[SSI] Engine B sample skipped: {_ssi_err}")
+        if not overlay_only:
+            try:
+                record_signal_event(
+                    engine="engine_b",
+                    score=conf.get("score"),
+                    max_score=conf.get("max_possible"),
+                    passed=bool(_gate_ok),
+                    expected_prob=(conf.get("pct", 0) or 0) / 100.0,
+                    feature_map={
+                        "structure_ok": conf.get("structure_ok"),
+                        "location_ok": conf.get("location_ok"),
+                        "trigger_ok": conf.get("trigger_ok"),
+                        "rr_ok": conf.get("rr_ok"),
+                        "room_ok": conf.get("room_ok"),
+                        "macro_ok": conf.get("macro_ok"),
+                        "bos_mtf_confirmed": conf.get("bos_mtf_confirmed"),
+                        "ob_at_zone": conf.get("ob_at_zone"),
+                        "rr": conf.get("rr"),
+                    },
+                    db_path=_AUDIT_DB,
+                    meta={
+                        "pair": pair_obj.get("display"),
+                        "style": resolved_style,
+                        "regime": regime_label,
+                        "min_score_used": float(_min_score_scaled),
+                        "lifecycle_state": conf.get("lifecycle_state", "unknown"),
+                        "lifecycle_reason": conf.get("lifecycle_reason", ""),
+                    },
+                )
+            except Exception as _ssi_err:
+                log.debug(f"[SSI] Engine B sample skipped: {_ssi_err}")
 
         # AI execution control
-        _run_ai = force_ai or not CONFIG.get("AI_ON_DEMAND_ONLY", True)
+        _run_ai = (not overlay_only) and (force_ai or not CONFIG.get("AI_ON_DEMAND_ONLY", True))
         if _run_ai:
             # Fetch news context for Engine B AI advisory (if enabled, non-blocking)
             _news_ctx = None
@@ -15044,6 +15046,7 @@ register_market_data_routes(
         resample_from_h1=_resample_from_h1,
         forex_h4_resample_offset_hours=_forex_h4_resample_offset_hours,
         eodhd_ticker_for_pair=_eodhd_ticker_for_pair,
+        compute_naked_analysis=_compute_naked_analysis,
         json_safe=_json_safe,
         log=log,
     ),

@@ -59,6 +59,7 @@ Common entry points only. This is not a complete allowlist.
 ## Chart and providers
 
 - Native chart is the active chart surface for chart and AI review work.
+- Engine B visual overlays belong on the TV Chart tab; Scalp Workbench is Engine D-only.
 - Do not build new AI review features on the legacy TradingView path.
 - Prefer native chart PNG screenshots; TradingView limits drove the move.
 

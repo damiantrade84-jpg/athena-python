@@ -1,16 +1,20 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import {
   createChart,
+  createSeriesMarkers,
   CandlestickSeries,
   HistogramSeries,
   LineSeries,
   LineStyle,
   type IChartApi,
   type IPaneApi,
+  type IPriceLine,
   type ISeriesApi,
+  type ISeriesMarkersPluginApi,
   type CandlestickData,
   type HistogramData,
   type LineData,
+  type SeriesMarker,
   type UTCTimestamp,
   type Time,
 } from 'lightweight-charts';
@@ -180,6 +184,51 @@ interface CandleApiResponse {
   pairType?: string;
   atr_timeframe?: string;
   liveTick?: Record<string, unknown> | null;
+}
+
+interface EngineBZone {
+  lower?: number | string | null;
+  upper?: number | string | null;
+  level?: number | string | null;
+}
+
+interface EngineBRangeZone {
+  type?: string | null;
+  top?: number | string | null;
+  bottom?: number | string | null;
+  mitigated?: boolean | null;
+}
+
+interface EngineBBreakerBlock {
+  type?: string | null;
+  level?: number | string | null;
+}
+
+interface EngineBOverlayPayload {
+  symbol?: string;
+  timeframe?: string;
+  overlay_source?: string;
+  overlay_version?: string;
+  warnings?: string[];
+  nearest_support_zone?: EngineBZone | null;
+  nearest_resistance_zone?: EngineBZone | null;
+  bos_data?: Record<string, unknown>;
+  choch_data?: Record<string, unknown>;
+  order_blocks?: EngineBRangeZone[];
+  active_fvgs?: EngineBRangeZone[];
+  breaker_block?: EngineBBreakerBlock | null;
+  current_swing_sequence?: string | null;
+  macro_swing_sequence?: string | null;
+  bos_confirmed?: boolean;
+  choch_confirmed?: boolean;
+  liquidity_sweep?: boolean;
+}
+
+interface EngineBOverlayLine {
+  label: string;
+  price: number;
+  color: string;
+  style?: LineStyle;
 }
 
 interface LiveTick {
@@ -660,6 +709,136 @@ function titleCaseProvider(value: string | null | undefined): string {
   return value;
 }
 
+function addEngineBZoneLines(
+  lines: EngineBOverlayLine[],
+  label: string,
+  zone: EngineBZone | null | undefined,
+  color: string,
+) {
+  if (!zone) return;
+  const lower = firstNumber(zone.lower, zone.level);
+  const upper = firstNumber(zone.upper, zone.level);
+  if (lower != null) lines.push({ label: `${label} low`, price: lower, color, style: LineStyle.Dashed });
+  if (upper != null && upper !== lower) lines.push({ label: `${label} high`, price: upper, color, style: LineStyle.Dashed });
+}
+
+function addEngineBRangeLines(
+  lines: EngineBOverlayLine[],
+  prefix: string,
+  zones: EngineBRangeZone[] | undefined,
+  limit: number,
+  colorForType: (type: string) => string,
+) {
+  for (const zone of (zones || []).filter((item) => !item?.mitigated).slice(0, limit)) {
+    const top = firstNumber(zone.top);
+    const bottom = firstNumber(zone.bottom);
+    if (top == null || bottom == null) continue;
+    const type = typeof zone.type === 'string' && zone.type ? zone.type : 'zone';
+    const color = colorForType(type.toLowerCase());
+    lines.push({ label: `${prefix} ${type} top`, price: top, color, style: LineStyle.Dotted });
+    if (bottom !== top) lines.push({ label: `${prefix} ${type} bottom`, price: bottom, color, style: LineStyle.Dotted });
+  }
+}
+
+function engineBOverlayLines(payload: EngineBOverlayPayload | null, enabled: boolean): EngineBOverlayLine[] {
+  if (!enabled || payload?.overlay_source !== 'engine_b') return [];
+  const lines: EngineBOverlayLine[] = [];
+  addEngineBZoneLines(lines, 'Engine B support', payload.nearest_support_zone, 'rgba(16, 185, 129, 0.80)');
+  addEngineBZoneLines(lines, 'Engine B resistance', payload.nearest_resistance_zone, 'rgba(244, 63, 94, 0.80)');
+
+  const bos = payload.bos_data || {};
+  const bosHigh = firstNumber(bos.last_broken_high, bos.level, bos.price);
+  const bosLow = firstNumber(bos.last_broken_low);
+  if (bosHigh != null) lines.push({ label: 'Engine B BOS high', price: bosHigh, color: 'rgba(250, 204, 21, 0.90)' });
+  if (bosLow != null && bosLow !== bosHigh) lines.push({ label: 'Engine B BOS low', price: bosLow, color: 'rgba(250, 204, 21, 0.80)' });
+
+  const choch = payload.choch_data || {};
+  const chochLevel = firstNumber(choch.choch_level, choch.level, choch.price);
+  if (chochLevel != null) lines.push({ label: 'Engine B CHOCH', price: chochLevel, color: 'rgba(168, 85, 247, 0.90)' });
+
+  addEngineBRangeLines(lines, 'Engine B OB', payload.order_blocks, 2, (type) =>
+    type.includes('bull') ? 'rgba(20, 184, 166, 0.75)' : 'rgba(251, 113, 133, 0.75)',
+  );
+  addEngineBRangeLines(lines, 'Engine B FVG', payload.active_fvgs, 2, (type) =>
+    type.includes('bull') ? 'rgba(34, 197, 94, 0.68)' : 'rgba(248, 113, 113, 0.68)',
+  );
+
+  const breakerLevel = firstNumber(payload.breaker_block?.level);
+  if (breakerLevel != null) {
+    lines.push({
+      label: `Engine B ${payload.breaker_block?.type || 'breaker'}`,
+      price: breakerLevel,
+      color: 'rgba(56, 189, 248, 0.85)',
+      style: LineStyle.Dashed,
+    });
+  }
+  return lines;
+}
+
+function normalizeSwingText(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const text = value.replace(/_/g, ' ').trim();
+  return text ? text.slice(0, 28) : null;
+}
+
+function engineBMarkers(
+  payload: EngineBOverlayPayload | null,
+  rows: CandlestickData<Time>[],
+  enabled: boolean,
+): SeriesMarker<Time>[] {
+  if (!enabled || payload?.overlay_source !== 'engine_b' || rows.length === 0) return [];
+  const last = rows[rows.length - 1];
+  const markers: SeriesMarker<Time>[] = [];
+  const swing = normalizeSwingText(payload.current_swing_sequence);
+  if (swing) {
+    markers.push({
+      time: last.time,
+      position: 'aboveBar',
+      color: 'rgba(250, 204, 21, 0.95)',
+      shape: 'circle',
+      text: swing,
+    });
+  }
+  const macroSwing = normalizeSwingText(payload.macro_swing_sequence);
+  if (macroSwing && macroSwing !== swing) {
+    markers.push({
+      time: last.time,
+      position: 'belowBar',
+      color: 'rgba(56, 189, 248, 0.95)',
+      shape: 'circle',
+      text: macroSwing,
+    });
+  }
+  if (payload.bos_confirmed || Object.keys(payload.bos_data || {}).length > 0) {
+    markers.push({
+      time: last.time,
+      position: 'belowBar',
+      color: 'rgba(250, 204, 21, 0.95)',
+      shape: 'arrowUp',
+      text: 'BOS',
+    });
+  }
+  if (payload.choch_confirmed || Object.keys(payload.choch_data || {}).length > 0) {
+    markers.push({
+      time: last.time,
+      position: 'aboveBar',
+      color: 'rgba(168, 85, 247, 0.95)',
+      shape: 'arrowDown',
+      text: 'CHOCH',
+    });
+  }
+  if (payload.liquidity_sweep) {
+    markers.push({
+      time: last.time,
+      position: 'inBar',
+      color: 'rgba(56, 189, 248, 0.95)',
+      shape: 'square',
+      text: 'Sweep',
+    });
+  }
+  return markers.slice(0, 6);
+}
+
 function isBybitLiveTickProvider(value: string | null | undefined): boolean {
   return typeof value === 'string' && value.toLowerCase().startsWith('bybit');
 }
@@ -1116,10 +1295,15 @@ export default function TVChartPanel() {
   const [volumeBars, setVolumeBars] = useState(true);
   const [volumeMa, setVolumeMa] = useState(true);
   const [engineAParityVisible, setEngineAParityVisible] = useState(false);
+  const [showQuantDebug, setShowQuantDebug] = useState(false);
+  const [showEngineBOverlays, setShowEngineBOverlays] = useState(true);
 
   const [candles, setCandles] = useState<CandleApiRow[] | null>(null);
   const [chartPayload, setChartPayload] = useState<CandleApiResponse | null>(null);
   const [chartTickPayload, setChartTickPayload] = useState<CandleApiResponse | null>(null);
+  const [engineBOverlay, setEngineBOverlay] = useState<EngineBOverlayPayload | null>(null);
+  const [engineBOverlayLoading, setEngineBOverlayLoading] = useState(false);
+  const [engineBOverlayError, setEngineBOverlayError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [chartError, setChartError] = useState<string | null>(null);
   const [aiReview, setAiReview] = useState<AIChartReviewResponse | null>(null);
@@ -1133,6 +1317,7 @@ export default function TVChartPanel() {
   const defaultCandidate = useMemo(() => pickEngineACandidate(candidateRows), [candidateRows]);
   const chartCandidate = useMemo(() => findEngineACandidateForSymbol(candidateRows, pair), [candidateRows, pair]);
   const backendTf = TF_BACKEND_MAP[timeframe];
+  const engineBDirection = normalizeDirection(chartCandidate?.direction) === 'SHORT' ? 'SHORT' : 'LONG';
   const isCryptoChart = chartPayload?.asset_group === 'crypto' || chartPayload?.pairType === 'crypto';
   const lastCandleConfirmed = candles?.length ? candles[candles.length - 1]?.confirmed : null;
   const chartPayloadLiveTick = useMemo(() => liveTickFromChartPayload(chartPayload), [chartPayload]);
@@ -1173,26 +1358,37 @@ export default function TVChartPanel() {
   ];
   const chartHeaderText = chartHeaderParts.join(CHART_LABEL_SEPARATOR);
   const bottomPanelIdentity = 'Bottom panel identity: forex ATR14; crypto ADX14/ATR14 when enabled';
+  const quantEma20 = showQuantDebug && ema20;
+  const quantEma21 = showQuantDebug && ema21;
+  const quantEma50 = showQuantDebug && ema50;
+  const quantEma200 = showQuantDebug && ema200;
+  const quantDema200 = showQuantDebug && dema200;
+  const quantVwap = showQuantDebug && vwapEnabled;
+  const quantAtr14 = showQuantDebug && atr14;
+  const quantRsi14 = showQuantDebug && rsi14;
+  const quantAdx14 = showQuantDebug && adx14;
+  const quantVolumeBars = showQuantDebug && volumeBars;
+  const quantVolumeMa = showQuantDebug && volumeMa;
   const pricePanelLegendItems = useMemo<IndicatorLegendValue[]>(() => {
     const latest = studySnapshot.latest;
     const items: IndicatorLegendValue[] = [];
     if (isCryptoChart) {
-      if (ema21) items.push({ definition: PRICE_PANEL_INDICATORS.ema21, value: latest.ema21 });
-    } else if (ema20) {
+      if (quantEma21) items.push({ definition: PRICE_PANEL_INDICATORS.ema21, value: latest.ema21 });
+    } else if (quantEma20) {
       items.push({ definition: PRICE_PANEL_INDICATORS.ema20, value: latest.ema20 });
     }
-    if (ema50) items.push({ definition: PRICE_PANEL_INDICATORS.ema50, value: latest.ema50 });
-    if (ema200) items.push({ definition: PRICE_PANEL_INDICATORS.ema200, value: latest.ema200 });
-    if (!isCryptoChart && dema200) items.push({ definition: PRICE_PANEL_INDICATORS.dema200, value: latest.dema200 });
-    if (isCryptoChart && vwapEnabled) items.push({ definition: PRICE_PANEL_INDICATORS.vwap, value: latest.vwap });
+    if (quantEma50) items.push({ definition: PRICE_PANEL_INDICATORS.ema50, value: latest.ema50 });
+    if (quantEma200) items.push({ definition: PRICE_PANEL_INDICATORS.ema200, value: latest.ema200 });
+    if (!isCryptoChart && quantDema200) items.push({ definition: PRICE_PANEL_INDICATORS.dema200, value: latest.dema200 });
+    if (isCryptoChart && quantVwap) items.push({ definition: PRICE_PANEL_INDICATORS.vwap, value: latest.vwap });
     return items;
-  }, [studySnapshot.latest, isCryptoChart, ema20, ema21, ema50, ema200, dema200, vwapEnabled]);
+  }, [studySnapshot.latest, isCryptoChart, quantEma20, quantEma21, quantEma50, quantEma200, quantDema200, quantVwap]);
   const studyPanelLegendItems = useMemo<IndicatorLegendValue[]>(() => {
     const latest = studySnapshot.latest;
     const items: IndicatorLegendValue[] = [];
-    if (rsi14) items.push({ definition: STUDY_PANEL_INDICATORS.rsi14, value: latest.rsi14, precision: 2 });
-    if (isCryptoChart && adx14) items.push({ definition: STUDY_PANEL_INDICATORS.adx14, value: latest.adx14, precision: 2 });
-    if (atr14) {
+    if (quantRsi14) items.push({ definition: STUDY_PANEL_INDICATORS.rsi14, value: latest.rsi14, precision: 2 });
+    if (isCryptoChart && quantAdx14) items.push({ definition: STUDY_PANEL_INDICATORS.adx14, value: latest.adx14, precision: 2 });
+    if (quantAtr14) {
       items.push({
         definition: {
           ...STUDY_PANEL_INDICATORS.atr14,
@@ -1201,17 +1397,17 @@ export default function TVChartPanel() {
         value: latest.atr14,
       });
     }
-    if (isCryptoChart && volumeBars) items.push({ definition: STUDY_PANEL_INDICATORS.volume, value: latest.volume, precision: 0 });
-    if (isCryptoChart && volumeBars && volumeMa) items.push({ definition: STUDY_PANEL_INDICATORS.volumeMa, value: latest.volumeMa, precision: 0 });
+    if (isCryptoChart && quantVolumeBars) items.push({ definition: STUDY_PANEL_INDICATORS.volume, value: latest.volume, precision: 0 });
+    if (isCryptoChart && quantVolumeBars && quantVolumeMa) items.push({ definition: STUDY_PANEL_INDICATORS.volumeMa, value: latest.volumeMa, precision: 0 });
     return items;
-  }, [studySnapshot.latest, isCryptoChart, chartPayload, rsi14, adx14, atr14, volumeBars, volumeMa]);
+  }, [studySnapshot.latest, isCryptoChart, chartPayload, quantRsi14, quantAdx14, quantAtr14, quantVolumeBars, quantVolumeMa]);
   const engineAParityRows = useMemo(
     () => buildEngineAParityRows(chartCandidate, studySnapshot.latest, chartPayload),
     [chartCandidate, studySnapshot.latest, chartPayload],
   );
 
   // Derived preset label: "all" only when every indicator is on, otherwise "custom".
-  const activePreset: PresetValue = (isCryptoChart ? ema21 && vwapEnabled && adx14 && volumeBars && volumeMa : ema20) && ema50 && ema200 && dema200 && rsi14 && atr14 ? 'all' : 'custom';
+  const activePreset: PresetValue = showQuantDebug && (isCryptoChart ? ema21 && vwapEnabled && adx14 && volumeBars && volumeMa : ema20) && ema50 && ema200 && dema200 && rsi14 && atr14 ? 'all' : 'custom';
 
   const applyPreset = (value: PresetValue) => {
     if (value === 'all') {
@@ -1234,6 +1430,7 @@ export default function TVChartPanel() {
     const candidate = chartCandidate || defaultCandidate;
     const candidateSymbol = displaySymbol(candidate);
     if (candidateSymbol) setPair(candidateSymbol);
+    setShowQuantDebug(true);
     setTimeframe(reviewTimeframeFor(candidate));
     setEma20(true);
     setEma21(true);
@@ -1314,12 +1511,52 @@ export default function TVChartPanel() {
     };
   }, [pair, backendTf, chartPayload?.asset_group, chartPayload?.execution_provider]);
 
+  useEffect(() => {
+    if (!pair || !backendTf) {
+      setEngineBOverlay(null);
+      setEngineBOverlayError(null);
+      return;
+    }
+    let cancelled = false;
+    setEngineBOverlayLoading(true);
+    setEngineBOverlayError(null);
+    const url =
+      `/api/engine-b-overlays?symbol=${encodeURIComponent(pair)}` +
+      `&tf=${encodeURIComponent(backendTf)}` +
+      `&direction=${encodeURIComponent(engineBDirection)}&style=auto`;
+    apiClient
+      .getJson(url)
+      .then((res) => {
+        if (cancelled) return;
+        const data = res as EngineBOverlayPayload & { error?: string };
+        if (data?.error) {
+          setEngineBOverlay(null);
+          setEngineBOverlayError(data.error);
+          return;
+        }
+        setEngineBOverlay(data);
+      })
+      .catch((err: unknown) => {
+        if (cancelled) return;
+        setEngineBOverlay(null);
+        setEngineBOverlayError(err instanceof Error ? err.message : 'Failed to load Engine B overlays');
+      })
+      .finally(() => {
+        if (!cancelled) setEngineBOverlayLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [pair, backendTf, engineBDirection]);
+
   // --- Chart lifecycle ---------------------------------------------
   // Pane structure depends on which sub-pane studies are on; recreate the chart
   // whenever rsi14 / atr14 flip so panes appear and disappear cleanly.
   const containerRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const candleSeriesRef = useRef<ISeriesApi<'Candlestick'> | null>(null);
+  const engineBMarkersRef = useRef<ISeriesMarkersPluginApi<Time> | null>(null);
+  const engineBPriceLinesRef = useRef<IPriceLine[]>([]);
   const chartCaptureRef = useRef<HTMLDivElement | null>(null);
   const ema20SeriesRef = useRef<ISeriesApi<'Line'> | null>(null);
   const ema21SeriesRef = useRef<ISeriesApi<'Line'> | null>(null);
@@ -1333,7 +1570,7 @@ export default function TVChartPanel() {
   const volumeSeriesRef = useRef<ISeriesApi<'Histogram'> | null>(null);
   const volumeMaSeriesRef = useRef<ISeriesApi<'Line'> | null>(null);
 
-  const subPaneStudyCount = (rsi14 ? 1 : 0) + (atr14 ? 1 : 0) + (isCryptoChart && adx14 ? 1 : 0) + (isCryptoChart && volumeBars ? 1 : 0);
+  const subPaneStudyCount = (quantRsi14 ? 1 : 0) + (quantAtr14 ? 1 : 0) + (isCryptoChart && quantAdx14 ? 1 : 0) + (isCryptoChart && quantVolumeBars ? 1 : 0);
   const chartHeightPx = PRICE_CHART_HEIGHT_PX + subPaneStudyCount * STUDY_PANE_HEIGHT_PX;
 
   function captureChartCanvas(): HTMLCanvasElement | null {
@@ -1411,16 +1648,17 @@ export default function TVChartPanel() {
       const dataUrl = await canvasToDataUrl(downscaled);
       const tfForBackend = TF_BACKEND_MAP[timeframe] || timeframe;
       const overlays: string[] = ['candles'];
-      if (volumeBars) overlays.push('volume');
-      if (vwapEnabled) overlays.push('vwap');
-      if (ema20) overlays.push('ema20');
-      if (ema21) overlays.push('ema21');
-      if (ema50) overlays.push('ema50');
-      if (ema200) overlays.push('ema200');
-      if (dema200) overlays.push('dema200');
-      if (atr14) overlays.push('atr14');
-      if (rsi14) overlays.push('rsi14');
-      if (adx14) overlays.push('adx14');
+      if (showEngineBOverlays && engineBOverlay?.overlay_source === 'engine_b') overlays.push('engine_b');
+      if (quantVolumeBars) overlays.push('volume');
+      if (quantVwap) overlays.push('vwap');
+      if (quantEma20) overlays.push('ema20');
+      if (quantEma21) overlays.push('ema21');
+      if (quantEma50) overlays.push('ema50');
+      if (quantEma200) overlays.push('ema200');
+      if (quantDema200) overlays.push('dema200');
+      if (quantAtr14) overlays.push('atr14');
+      if (quantRsi14) overlays.push('rsi14');
+      if (quantAdx14) overlays.push('adx14');
       const meta = buildScreenshotMeta({
         width: downscaled.width,
         height: downscaled.height,
@@ -1488,6 +1726,7 @@ export default function TVChartPanel() {
       priceLineVisible: true,
     }, 0);
     candleSeriesRef.current = candleSeries;
+    engineBMarkersRef.current = createSeriesMarkers(candleSeries, [], { zOrder: 'top' });
 
     const overlayLineOpts = { lineWidth: 2 as const, lastValueVisible: true, priceLineVisible: false };
     ema20SeriesRef.current = chart.addSeries(LineSeries, { ...overlayLineOpts, color: PRICE_PANEL_INDICATORS.ema20.color }, 0);
@@ -1498,7 +1737,7 @@ export default function TVChartPanel() {
     vwapSeriesRef.current = chart.addSeries(LineSeries, { ...overlayLineOpts, color: PRICE_PANEL_INDICATORS.vwap.color, lineStyle: LineStyle.Dashed }, 0);
 
     // Sub-panes — created only if their study is on, so an unused pane never sits empty.
-    if (rsi14) {
+    if (quantRsi14) {
       const pane = chart.addPane();
       pane.setStretchFactor(1);
       const paneIdx = pane.paneIndex();
@@ -1512,7 +1751,7 @@ export default function TVChartPanel() {
       series.createPriceLine({ price: 30, color: 'rgba(245,240,232,0.25)', lineWidth: 1, lineStyle: LineStyle.Dashed, axisLabelVisible: true, title: '30' });
       rsiSeriesRef.current = series;
     }
-    if (isCryptoChart && adx14) {
+    if (isCryptoChart && quantAdx14) {
       const pane = chart.addPane();
       pane.setStretchFactor(1);
       const paneIdx = pane.paneIndex();
@@ -1525,7 +1764,7 @@ export default function TVChartPanel() {
       series.createPriceLine({ price: 25, color: 'rgba(245,240,232,0.25)', lineWidth: 1, lineStyle: LineStyle.Dashed, axisLabelVisible: true, title: '25' });
       adxSeriesRef.current = series;
     }
-    if (atr14) {
+    if (quantAtr14) {
       const pane = chart.addPane();
       pane.setStretchFactor(1);
       const paneIdx = pane.paneIndex();
@@ -1536,7 +1775,7 @@ export default function TVChartPanel() {
         lastValueVisible: true,
       }, paneIdx);
     }
-    if (isCryptoChart && volumeBars) {
+    if (isCryptoChart && quantVolumeBars) {
       const pane = chart.addPane();
       pane.setStretchFactor(1);
       const paneIdx = pane.paneIndex();
@@ -1566,6 +1805,8 @@ export default function TVChartPanel() {
       chart.remove();
       chartRef.current = null;
       candleSeriesRef.current = null;
+      engineBMarkersRef.current = null;
+      engineBPriceLinesRef.current = [];
       ema20SeriesRef.current = null;
       ema21SeriesRef.current = null;
       ema50SeriesRef.current = null;
@@ -1580,7 +1821,7 @@ export default function TVChartPanel() {
     };
     // chartHeightPx only seeds the first sizing call; the ResizeObserver takes over after.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rsi14, atr14, adx14, volumeBars, isCryptoChart]);
+  }, [quantRsi14, quantAtr14, quantAdx14, quantVolumeBars, isCryptoChart]);
 
   // --- Push data into the chart ------------------------------------
   useEffect(() => {
@@ -1588,8 +1829,14 @@ export default function TVChartPanel() {
     const candleSeries = candleSeriesRef.current;
     if (!chart || !candleSeries || !backendTf) return;
 
+    for (const line of engineBPriceLinesRef.current) {
+      candleSeries.removePriceLine(line);
+    }
+    engineBPriceLinesRef.current = [];
+
     if (!candles || candles.length === 0) {
       candleSeries.setData([]);
+      engineBMarkersRef.current?.setMarkers([]);
       ema20SeriesRef.current?.setData([]);
       ema21SeriesRef.current?.setData([]);
       ema50SeriesRef.current?.setData([]);
@@ -1609,6 +1856,19 @@ export default function TVChartPanel() {
     const volumes = studySnapshot.volumes;
     const values = studySnapshot.seriesValues;
     candleSeries.setData(rows);
+    engineBMarkersRef.current?.setMarkers(engineBMarkers(engineBOverlay, rows, showEngineBOverlays));
+    for (const level of engineBOverlayLines(engineBOverlay, showEngineBOverlays)) {
+      engineBPriceLinesRef.current.push(
+        candleSeries.createPriceLine({
+          price: level.price,
+          color: level.color,
+          lineWidth: 1,
+          lineStyle: level.style ?? LineStyle.Dashed,
+          axisLabelVisible: true,
+          title: level.label,
+        }),
+      );
+    }
 
     const pushLine = (
       series: ISeriesApi<'Line'> | null,
@@ -1628,17 +1888,17 @@ export default function TVChartPanel() {
       series.setData(data);
     };
 
-    pushLine(ema20SeriesRef.current, ema20, values.ema20 || []);
-    pushLine(ema21SeriesRef.current, isCryptoChart && ema21, values.ema21 || []);
-    pushLine(ema50SeriesRef.current, ema50, values.ema50 || []);
-    pushLine(ema200SeriesRef.current, ema200, values.ema200 || []);
-    pushLine(dema200SeriesRef.current, dema200, values.dema200 || []);
-    pushLine(vwapSeriesRef.current, isCryptoChart && vwapEnabled, values.vwap || []);
-    pushLine(rsiSeriesRef.current, rsi14, values.rsi14 || []);
-    pushLine(adxSeriesRef.current, isCryptoChart && adx14, values.adx14 || []);
-    pushLine(atrSeriesRef.current, atr14, values.atr14 || []);
+    pushLine(ema20SeriesRef.current, quantEma20, values.ema20 || []);
+    pushLine(ema21SeriesRef.current, isCryptoChart && quantEma21, values.ema21 || []);
+    pushLine(ema50SeriesRef.current, quantEma50, values.ema50 || []);
+    pushLine(ema200SeriesRef.current, quantEma200, values.ema200 || []);
+    pushLine(dema200SeriesRef.current, quantDema200, values.dema200 || []);
+    pushLine(vwapSeriesRef.current, isCryptoChart && quantVwap, values.vwap || []);
+    pushLine(rsiSeriesRef.current, quantRsi14, values.rsi14 || []);
+    pushLine(adxSeriesRef.current, isCryptoChart && quantAdx14, values.adx14 || []);
+    pushLine(atrSeriesRef.current, quantAtr14, values.atr14 || []);
     if (volumeSeriesRef.current) {
-      if (isCryptoChart && volumeBars) {
+      if (isCryptoChart && quantVolumeBars) {
         const volumeData: HistogramData[] = rows.map((row, idx) => ({
           time: row.time,
           value: volumes[idx] ?? 0,
@@ -1649,7 +1909,7 @@ export default function TVChartPanel() {
         volumeSeriesRef.current.setData([]);
       }
     }
-    pushLine(volumeMaSeriesRef.current, isCryptoChart && volumeBars && volumeMa, values.volumeMa || []);
+    pushLine(volumeMaSeriesRef.current, isCryptoChart && quantVolumeBars && quantVolumeMa, values.volumeMa || []);
 
     if (rows.length > VISIBLE_BAR_COUNT) {
       chart.timeScale().setVisibleLogicalRange({
@@ -1659,7 +1919,7 @@ export default function TVChartPanel() {
     } else {
       chart.timeScale().fitContent();
     }
-  }, [candles, liveTick, backendTf, isCryptoChart, studySnapshot, ema20, ema21, ema50, ema200, dema200, vwapEnabled, rsi14, adx14, atr14, volumeBars, volumeMa]);
+  }, [candles, liveTick, backendTf, isCryptoChart, studySnapshot, engineBOverlay, showEngineBOverlays, quantEma20, quantEma21, quantEma50, quantEma200, quantDema200, quantVwap, quantRsi14, quantAdx14, quantAtr14, quantVolumeBars, quantVolumeMa]);
 
   return (
     <Card className="h-full">
@@ -1714,18 +1974,22 @@ export default function TVChartPanel() {
                 </Button>
               ))}
             </div>
-            <Select value={activePreset} onValueChange={(v) => applyPreset(v as PresetValue)}>
-              <SelectTrigger className="h-8 w-40 text-xs" aria-label="Indicator preset">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {PRESET_OPTIONS.map((opt) => (
-                  <SelectItem key={opt.value} value={opt.value} className="text-xs">
-                    {opt.label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            <IndicatorSwitch label="Engine B overlays" checked={showEngineBOverlays} onCheckedChange={setShowEngineBOverlays} />
+            <IndicatorSwitch label="Show Quant Debug" checked={showQuantDebug} onCheckedChange={setShowQuantDebug} />
+            {showQuantDebug && (
+              <Select value={activePreset} onValueChange={(v) => applyPreset(v as PresetValue)}>
+                <SelectTrigger className="h-8 w-40 text-xs" aria-label="Indicator preset">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {PRESET_OPTIONS.map((opt) => (
+                    <SelectItem key={opt.value} value={opt.value} className="text-xs">
+                      {opt.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            )}
             <Button size="sm" variant="secondary" className="h-8 gap-2 text-xs" onClick={applyEngineAReviewLayout}>
               <SlidersHorizontal className="h-3.5 w-3.5" />
               Engine A Review Layout
@@ -1766,31 +2030,42 @@ export default function TVChartPanel() {
         </div>
         <div className="flex flex-wrap items-center gap-2 pt-2">
           <CaptureLabel>{chartHeaderText}</CaptureLabel>
-        </div>
-        <div className="flex flex-wrap items-center gap-3 pt-2">
-          {isCryptoChart ? (
-            <IndicatorSwitch label="EMA21" checked={ema21} onCheckedChange={setEma21} />
-          ) : (
-            <IndicatorSwitch label="EMA20" checked={ema20} onCheckedChange={setEma20} />
+          {showEngineBOverlays && engineBOverlay?.overlay_source === 'engine_b' && (
+            <CaptureLabel>
+              {`Engine B ${engineBOverlay.overlay_version || 'overlay'} ${engineBOverlay.symbol || pair} ${engineBOverlay.timeframe || backendTf || timeframe}`}
+            </CaptureLabel>
           )}
-          <IndicatorSwitch label="EMA50" checked={ema50} onCheckedChange={setEma50} />
-          <IndicatorSwitch label="EMA200" checked={ema200} onCheckedChange={setEma200} />
-          {!isCryptoChart && <IndicatorSwitch label="DEMA200" checked={dema200} onCheckedChange={setDema200} />}
-          {isCryptoChart && <IndicatorSwitch label="VWAP" checked={vwapEnabled} onCheckedChange={setVwapEnabled} />}
-          <IndicatorSwitch label="ATR14" checked={atr14} onCheckedChange={setAtr14} />
-          <IndicatorSwitch label="RSI14" checked={rsi14} onCheckedChange={setRsi14} />
-          {isCryptoChart && <IndicatorSwitch label="ADX14" checked={adx14} onCheckedChange={setAdx14} />}
-          {isCryptoChart && <IndicatorSwitch label="Volume" checked={volumeBars} onCheckedChange={setVolumeBars} />}
-          {isCryptoChart && <IndicatorSwitch label="Volume MA" checked={volumeMa} onCheckedChange={setVolumeMa} />}
+          {showEngineBOverlays && engineBOverlayLoading && <CaptureLabel>Engine B loading</CaptureLabel>}
+          {showEngineBOverlays && engineBOverlayError && <CaptureLabel>{`Engine B warning ${engineBOverlayError}`}</CaptureLabel>}
         </div>
-        <div className="flex flex-wrap items-center gap-3 pt-2">
-          {pricePanelLegendItems.map((item) => (
-            <IndicatorLegendItem key={item.definition.key} item={item} />
-          ))}
-          {studyPanelLegendItems.map((item) => (
-            <IndicatorLegendItem key={item.definition.key} item={item} />
-          ))}
-        </div>
+        {showQuantDebug && (
+          <div className="flex flex-wrap items-center gap-3 pt-2">
+            {isCryptoChart ? (
+              <IndicatorSwitch label="EMA21" checked={ema21} onCheckedChange={setEma21} />
+            ) : (
+              <IndicatorSwitch label="EMA20" checked={ema20} onCheckedChange={setEma20} />
+            )}
+            <IndicatorSwitch label="EMA50" checked={ema50} onCheckedChange={setEma50} />
+            <IndicatorSwitch label="EMA200" checked={ema200} onCheckedChange={setEma200} />
+            {!isCryptoChart && <IndicatorSwitch label="DEMA200" checked={dema200} onCheckedChange={setDema200} />}
+            {isCryptoChart && <IndicatorSwitch label="VWAP" checked={vwapEnabled} onCheckedChange={setVwapEnabled} />}
+            <IndicatorSwitch label="ATR14" checked={atr14} onCheckedChange={setAtr14} />
+            <IndicatorSwitch label="RSI14" checked={rsi14} onCheckedChange={setRsi14} />
+            {isCryptoChart && <IndicatorSwitch label="ADX14" checked={adx14} onCheckedChange={setAdx14} />}
+            {isCryptoChart && <IndicatorSwitch label="Volume" checked={volumeBars} onCheckedChange={setVolumeBars} />}
+            {isCryptoChart && <IndicatorSwitch label="Volume MA" checked={volumeMa} onCheckedChange={setVolumeMa} />}
+          </div>
+        )}
+        {showQuantDebug && (
+          <div className="flex flex-wrap items-center gap-3 pt-2">
+            {pricePanelLegendItems.map((item) => (
+              <IndicatorLegendItem key={item.definition.key} item={item} />
+            ))}
+            {studyPanelLegendItems.map((item) => (
+              <IndicatorLegendItem key={item.definition.key} item={item} />
+            ))}
+          </div>
+        )}
       </CardHeader>
       <CardContent className="pb-4">
         <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_320px] xl:items-start">
@@ -1803,18 +2078,25 @@ export default function TVChartPanel() {
             <div className="pointer-events-none absolute left-2 right-2 top-2 z-10 space-y-1">
               <div className="flex flex-wrap items-center gap-1">
                 <CaptureLabel>{chartHeaderText}</CaptureLabel>
+                {showEngineBOverlays && engineBOverlay?.overlay_source === 'engine_b' && (
+                  <CaptureLabel>{`Engine B ${engineBOverlay.overlay_version || 'overlay'}`}</CaptureLabel>
+                )}
               </div>
-              <div className="flex flex-wrap items-center gap-1">
-                {pricePanelLegendItems.map((item) => (
-                  <IndicatorLegendItem key={`capture-${item.definition.key}`} item={item} />
-                ))}
-              </div>
-              <div className="flex flex-wrap items-center gap-1">
-                {studyPanelLegendItems.map((item) => (
-                  <IndicatorLegendItem key={`capture-study-${item.definition.key}`} item={item} />
-                ))}
-                {studyPanelLegendItems.length > 0 && <CaptureLabel>{bottomPanelIdentity}</CaptureLabel>}
-              </div>
+              {showQuantDebug && (
+                <div className="flex flex-wrap items-center gap-1">
+                  {pricePanelLegendItems.map((item) => (
+                    <IndicatorLegendItem key={`capture-${item.definition.key}`} item={item} />
+                  ))}
+                </div>
+              )}
+              {showQuantDebug && (
+                <div className="flex flex-wrap items-center gap-1">
+                  {studyPanelLegendItems.map((item) => (
+                    <IndicatorLegendItem key={`capture-study-${item.definition.key}`} item={item} />
+                  ))}
+                  {studyPanelLegendItems.length > 0 && <CaptureLabel>{bottomPanelIdentity}</CaptureLabel>}
+                </div>
+              )}
               {engineAParityVisible && (
                 <div className="flex max-w-[760px] flex-wrap items-center gap-1">
                   <CaptureLabel>Engine A Parity</CaptureLabel>
