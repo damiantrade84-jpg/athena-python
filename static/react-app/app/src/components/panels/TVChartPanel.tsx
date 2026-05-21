@@ -231,6 +231,9 @@ interface EngineBOverlayPayload {
   bos_confirmed?: boolean;
   choch_confirmed?: boolean;
   liquidity_sweep?: boolean;
+  atr?: number | string | null;
+  atr_value?: number | string | null;
+  struct_atr?: number | string | null;
 }
 
 interface EngineBOverlayLine {
@@ -749,6 +752,99 @@ function addEngineBRangeLines(
   }
 }
 
+const ENGINE_B_MERGED_LABEL_MAX = 28;
+
+function stripEngineBPrefix(label: string): string {
+  return label.startsWith('Engine B ') ? label.slice('Engine B '.length) : label;
+}
+
+function compactEngineBLabel(label: string): string {
+  let text = stripEngineBPrefix(label);
+  text = text.replace(/\bsupport\b/gi, 'Sup').replace(/\bresistance\b/gi, 'Res');
+  if (text.length <= ENGINE_B_MERGED_LABEL_MAX) return text;
+  return `${text.slice(0, ENGINE_B_MERGED_LABEL_MAX - 1)}…`;
+}
+
+function engineBLinePriority(label: string): number {
+  const text = stripEngineBPrefix(label).toLowerCase();
+  if (/choch/i.test(text)) return 1;
+  if (/breaker/i.test(text)) return 2;
+  if (/bos/i.test(text)) return 3;
+  if (/support|resistance/i.test(text)) return 4;
+  if (/\bob\b/i.test(text)) return 5;
+  if (/fvg/i.test(text)) return 6;
+  return 99;
+}
+
+function engineBOverlayCollisionThreshold(
+  payload: EngineBOverlayPayload,
+  lines: EngineBOverlayLine[],
+): number {
+  const prices = lines.map((line) => line.price).filter((price) => Number.isFinite(price));
+  const referencePrice = prices.length > 0
+    ? prices.reduce((sum, price) => sum + price, 0) / prices.length
+    : 1;
+  const atr = firstNumber(payload.atr, payload.atr_value, payload.struct_atr);
+  if (atr != null && atr > 0) return atr * 0.20;
+  return 0.0008 * Math.abs(referencePrice);
+}
+
+function pickHigherPriorityEngineBLine(members: EngineBOverlayLine[]): EngineBOverlayLine {
+  return members.reduce((best, current) =>
+    (engineBLinePriority(current.label) < engineBLinePriority(best.label) ? current : best),
+  );
+}
+
+function formatMergedEngineBLabel(members: EngineBOverlayLine[]): string {
+  const compacted = members.map((member) => compactEngineBLabel(member.label));
+  if (members.length === 2) {
+    const joined = `${compacted[0]} / ${compacted[1]}`;
+    if (joined.length <= ENGINE_B_MERGED_LABEL_MAX) return joined;
+    return `${compacted[0].slice(0, 12)} / ${compacted[1].slice(0, 12)}`;
+  }
+  const first = compacted[0] ?? 'level';
+  const suffix = ` +${members.length - 1}`;
+  const maxFirst = ENGINE_B_MERGED_LABEL_MAX - suffix.length;
+  const trimmed = first.length > maxFirst ? `${first.slice(0, maxFirst - 1)}…` : first;
+  return `${trimmed}${suffix}`;
+}
+
+function mergeEngineBOverlayLines(lines: EngineBOverlayLine[], threshold: number): EngineBOverlayLine[] {
+  if (lines.length <= 1) {
+    return lines.map((line) => ({ ...line, label: stripEngineBPrefix(line.label) }));
+  }
+
+  const sorted = [...lines].sort((a, b) => a.price - b.price);
+  const clusters: EngineBOverlayLine[][] = [];
+  let cluster: EngineBOverlayLine[] = [sorted[0]];
+  for (let i = 1; i < sorted.length; i += 1) {
+    const line = sorted[i];
+    const lastPrice = cluster[cluster.length - 1].price;
+    if (line.price - lastPrice <= threshold) {
+      cluster.push(line);
+    } else {
+      clusters.push(cluster);
+      cluster = [line];
+    }
+  }
+  clusters.push(cluster);
+
+  return clusters.map((members) => {
+    if (members.length === 1) {
+      const member = members[0];
+      return { ...member, label: stripEngineBPrefix(member.label) };
+    }
+    const lead = pickHigherPriorityEngineBLine(members);
+    const meanPrice = members.reduce((sum, member) => sum + member.price, 0) / members.length;
+    return {
+      label: formatMergedEngineBLabel(members),
+      price: meanPrice,
+      color: lead.color,
+      style: lead.style,
+    };
+  });
+}
+
 function engineBOverlayLines(payload: EngineBOverlayPayload | null, enabled: boolean): EngineBOverlayLine[] {
   if (!enabled || payload?.overlay_source !== 'engine_b') return [];
   const lines: EngineBOverlayLine[] = [];
@@ -781,7 +877,9 @@ function engineBOverlayLines(payload: EngineBOverlayPayload | null, enabled: boo
       style: LineStyle.Dashed,
     });
   }
-  return lines;
+  const threshold = engineBOverlayCollisionThreshold(payload, lines);
+  // Collision threshold: relative fallback — EngineBOverlayPayload has no ATR field (see routes_market_data normalizer).
+  return mergeEngineBOverlayLines(lines, threshold);
 }
 
 function normalizeSwingText(value: unknown): string | null {
