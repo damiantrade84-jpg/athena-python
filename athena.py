@@ -12330,6 +12330,7 @@ def analyze_pair(
                 oi_context=_oi_context,
                 macro_context=_usd_relative_strength,
                 intermarket_context=_intermarket_raw_context,
+                bar_time=_bar_time,
                 style=_style,
                 volume_threshold=pair_profile.get(
                     "volume_threshold", CONFIG["VOLUME_THRESHOLD"]
