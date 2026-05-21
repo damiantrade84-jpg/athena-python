@@ -1325,13 +1325,13 @@ export default function TVChartPanel() {
   const subPaneStudyCount = (rsi14 ? 1 : 0) + (atr14 ? 1 : 0) + (isCryptoChart && adx14 ? 1 : 0) + (isCryptoChart && volumeBars ? 1 : 0);
   const chartHeightPx = PRICE_CHART_HEIGHT_PX + subPaneStudyCount * STUDY_PANE_HEIGHT_PX;
 
-  function downloadChartScreenshot() {
+  function captureChartCanvas(): HTMLCanvasElement | null {
     const captureEl = chartCaptureRef.current;
-    if (!captureEl) return;
+    if (!captureEl) return null;
     const canvases = Array.from(captureEl.querySelectorAll('canvas'));
     if (canvases.length === 0) {
       setChartError('Chart screenshot is unavailable until the chart renders');
-      return;
+      return null;
     }
 
     const captureRect = captureEl.getBoundingClientRect();
@@ -1342,7 +1342,7 @@ export default function TVChartPanel() {
     const outputCtx = outputCanvas.getContext('2d');
     if (!outputCtx) {
       setChartError('Chart screenshot failed: canvas context unavailable');
-      return;
+      return null;
     }
 
     outputCtx.scale(scale, scale);
@@ -1360,7 +1360,12 @@ export default function TVChartPanel() {
       );
     }
     drawCaptureLabels(outputCtx, captureEl, captureRect);
+    return outputCanvas;
+  }
 
+  function downloadChartScreenshot() {
+    const outputCanvas = captureChartCanvas();
+    if (!outputCanvas) return;
     outputCanvas.toBlob((blob) => {
       if (!blob) {
         setChartError('Chart screenshot failed: PNG export unavailable');
