@@ -1398,6 +1398,217 @@ def _apply_forex_ema_cluster_penalty(
     return 1.0, cap, True, "ema_cluster_soft_cap"
 
 
+def _h4_volume_vs_ma(h4_candles: list | None, lookback: int) -> tuple[float | None, float | None]:
+    """Return (latest_volume, volume_ma) from H4 candle volume series."""
+    if not isinstance(h4_candles, list) or not h4_candles:
+        return None, None
+    try:
+        from indicators import calc_sma
+
+        vols = [
+            float(c.get("vol", 0) or c.get("volume", 0) or 0)
+            for c in h4_candles
+        ]
+        if not vols or vols[-1] <= 0:
+            return None, None
+        if len(vols) < lookback:
+            return vols[-1], None
+        sma = calc_sma(vols, lookback)
+        if not sma or sma[-1] is None or float(sma[-1]) <= 0:
+            return vols[-1], None
+        return vols[-1], float(sma[-1])
+    except Exception:
+        return None, None
+
+
+def _h4_vwap_distance_metrics(
+    h4_snap: dict,
+    h4_candles: list | None,
+    *,
+    lookback: int = 96,
+) -> dict:
+    """VWAP distance metrics for crypto late-trend diagnostics (H4)."""
+    out = {
+        "vwap_value": None,
+        "price_vs_vwap": None,
+        "vwap_distance_pct": None,
+        "vwap_distance_atr": None,
+    }
+    close = _safe_indicator_float(h4_snap.get("close"))
+    atr = _safe_indicator_float(h4_snap.get("atr"))
+    if close is None or close <= 0 or not isinstance(h4_candles, list) or len(h4_candles) < lookback:
+        return out
+    try:
+        from indicators import calc_vwap
+
+        vwap_candles = h4_candles[-lookback:]
+        vwap_result = calc_vwap(vwap_candles, anchor_index=0)
+        vwap_values = vwap_result.get("vwap", [])
+        if not vwap_values or vwap_values[-1] is None:
+            return out
+        vwap = float(vwap_values[-1])
+        if vwap <= 0:
+            return out
+        vwap_distance_pct = (close - vwap) / vwap
+        out["vwap_value"] = round(vwap, 6)
+        out["vwap_distance_pct"] = round(vwap_distance_pct, 6)
+        if atr is not None and atr > 0:
+            out["vwap_distance_atr"] = round((close - vwap) / atr, 4)
+        if close > vwap:
+            out["price_vs_vwap"] = "above"
+        elif close < vwap:
+            out["price_vs_vwap"] = "below"
+        else:
+            out["price_vs_vwap"] = "at"
+    except Exception as exc:
+        log.debug("[EA2] crypto late-trend VWAP metrics skipped: %s", exc)
+    return out
+
+
+def _crypto_late_trend_diagnostics(
+    h4_snap: dict,
+    h4_candles: list | None,
+    direction: str,
+    trend_detail: dict,
+    adx_quality: dict,
+    adx_val: float | None,
+) -> dict:
+    """H4 late-trend continuation risk diagnostics for Engine A crypto."""
+    adx_strong = _float_cfg(CONFIG.get("ENGINE_A_CRYPTO_ADX_STRONG_THRESHOLD"), 25.0)
+    vwap_warn_atr = _float_cfg(CONFIG.get("ENGINE_A_CRYPTO_VWAP_EXTENSION_ATR_WARN"), 3.0)
+    vol_lookback = int(CONFIG.get("ENGINE_A_CRYPTO_VOLUME_MA_LOOKBACK", 20) or 20)
+    vwap_lookback = int(
+        (CONFIG.get("ENGINE_A_VWAP_FILTER") or {}).get("CANDLE_LOOKBACK", 96) or 96
+    )
+
+    close = _safe_indicator_float(h4_snap.get("close"))
+    ema21 = _safe_indicator_float(h4_snap.get("ema21"))
+    ema50 = _safe_indicator_float(h4_snap.get("ema50"))
+    adx_slope = adx_quality.get("adx_slope")
+    adx_falling = bool(adx_quality.get("adx_falling"))
+    adx_f = _safe_indicator_float(adx_val)
+
+    vol_value, vol_ma = _h4_volume_vs_ma(h4_candles, vol_lookback)
+    volume_below_ma = (
+        vol_value is not None
+        and vol_ma is not None
+        and vol_value < vol_ma
+    )
+
+    vwap_metrics = _h4_vwap_distance_metrics(
+        h4_snap, h4_candles, lookback=max(20, vwap_lookback)
+    )
+    vwap_distance_atr = _safe_indicator_float(vwap_metrics.get("vwap_distance_atr"))
+
+    adx_below_threshold = adx_f is not None and adx_f < adx_strong
+    reasons: list[str] = []
+    if adx_below_threshold:
+        reasons.append("adx_weak")
+    if adx_falling:
+        reasons.append("adx_falling")
+    if volume_below_ma:
+        reasons.append("volume_below_ma")
+
+    coherence = _safe_indicator_float(trend_detail.get("coherence_ratio"))
+    agreement_count = trend_detail.get("agreement_count")
+    full_coherence = (
+        (coherence is not None and abs(coherence - 1.0) < 1e-6)
+        or agreement_count == 3
+    )
+
+    ema_stack_ok = False
+    vwap_extended = False
+    if direction == "LONG":
+        ema_stack_ok = (
+            close is not None
+            and ema21 is not None
+            and ema50 is not None
+            and close > ema21 > ema50
+        )
+        if vwap_metrics.get("price_vs_vwap") == "above" and vwap_distance_atr is not None:
+            if vwap_distance_atr >= vwap_warn_atr:
+                vwap_extended = True
+                reasons.append("vwap_extended")
+    elif direction == "SHORT":
+        ema_stack_ok = (
+            close is not None
+            and ema21 is not None
+            and ema50 is not None
+            and close < ema21 < ema50
+        )
+        if vwap_metrics.get("price_vs_vwap") == "below" and vwap_distance_atr is not None:
+            if abs(vwap_distance_atr) >= vwap_warn_atr:
+                vwap_extended = True
+                reasons.append("vwap_extended")
+
+    adx_weak_or_falling = adx_below_threshold or adx_falling
+    crypto_late_trend_risk = bool(
+        ema_stack_ok
+        and full_coherence
+        and adx_weak_or_falling
+        and vwap_extended
+        and volume_below_ma
+    )
+
+    return {
+        "crypto_late_trend_risk": crypto_late_trend_risk,
+        "crypto_late_trend_reason": ",".join(reasons) if reasons else None,
+        "adx_value": round(adx_f, 4) if adx_f is not None else None,
+        "adx_threshold": round(adx_strong, 4),
+        "adx_below_threshold": adx_below_threshold,
+        "adx_slope": adx_slope,
+        "adx_falling": adx_falling,
+        "vwap_value": vwap_metrics.get("vwap_value"),
+        "price_vs_vwap": vwap_metrics.get("price_vs_vwap"),
+        "vwap_distance_pct": vwap_metrics.get("vwap_distance_pct"),
+        "vwap_distance_atr": vwap_metrics.get("vwap_distance_atr"),
+        "vwap_extension_atr_warn": round(vwap_warn_atr, 4),
+        "volume_value": round(vol_value, 4) if vol_value is not None else None,
+        "volume_ma": round(vol_ma, 4) if vol_ma is not None else None,
+        "volume_below_ma": volume_below_ma,
+        "volume_ma_lookback": vol_lookback,
+        "late_trend_adjustment_applied": False,
+        "late_trend_adjustment_mult": None,
+        "ema_stack_ok": ema_stack_ok,
+        "full_coherence": full_coherence,
+        "vwap_extended": vwap_extended,
+    }
+
+
+def _apply_crypto_late_trend_adjustment(
+    diagnostics: dict,
+    trend_detail: dict,
+    direction: str,
+) -> tuple[float, bool, str | None]:
+    """Return (base_score_mult, applied, reason) for crypto late-trend setups."""
+    if not bool(CONFIG.get("ENGINE_A_CRYPTO_LATE_TREND_ADJUSTMENT_ENABLED", True)):
+        return 1.0, False, None
+
+    if not diagnostics.get("crypto_late_trend_risk"):
+        return 1.0, False, diagnostics.get("crypto_late_trend_reason") or "no_late_trend_risk"
+
+    adx_f = _safe_indicator_float(diagnostics.get("adx_value"))
+    adx_strong = _float_cfg(CONFIG.get("ENGINE_A_CRYPTO_ADX_STRONG_THRESHOLD"), 25.0)
+    if (
+        adx_f is not None
+        and adx_f >= adx_strong
+        and not bool(diagnostics.get("adx_falling"))
+    ):
+        return 1.0, False, "adx_strong_rising"
+
+    if not diagnostics.get("volume_below_ma"):
+        return 1.0, False, "volume_above_ma"
+
+    vwap_warn_atr = _float_cfg(CONFIG.get("ENGINE_A_CRYPTO_VWAP_EXTENSION_ATR_WARN"), 3.0)
+    vwap_distance_atr = _safe_indicator_float(diagnostics.get("vwap_distance_atr"))
+    if vwap_distance_atr is None or abs(vwap_distance_atr) < vwap_warn_atr:
+        return 1.0, False, "vwap_near"
+
+    mult = _float_cfg(CONFIG.get("ENGINE_A_CRYPTO_LATE_TREND_MULT"), 0.85)
+    mult = max(0.0, min(1.0, mult))
+    return mult, True, "crypto_late_trend_multiplier"
+
+
 def _adx_gate(
     d1_snap: dict, h4_snap: dict, asset_type: str,
     score_group: str | None = None,
@@ -2392,6 +2603,7 @@ def compute_factor_scores(
         * (1.0 - _cost_penalty)
     )
 
+    crypto_late_trend = None
     if asset_type == "forex":
         (
             ema_cluster_penalty_mult,
@@ -2404,6 +2616,28 @@ def compute_factor_scores(
             trend_detail["ema_cluster_penalty_reason"] = _ema_pen_reason
             feed_status["ema_cluster_penalty"] = _ema_pen_reason or "applied"
         base_score *= ema_cluster_penalty_mult
+
+    if asset_type == "crypto" and bool(
+        CONFIG.get("ENGINE_A_CRYPTO_LATE_TREND_DIAGNOSTICS_ENABLED", True)
+    ):
+        crypto_late_trend = _crypto_late_trend_diagnostics(
+            h4_snap,
+            h4_candles,
+            direction,
+            trend_detail,
+            adx_quality,
+            adx_val,
+        )
+        _lt_mult, _lt_applied, _lt_reason = _apply_crypto_late_trend_adjustment(
+            crypto_late_trend,
+            trend_detail,
+            direction,
+        )
+        if _lt_applied:
+            base_score *= _lt_mult
+            crypto_late_trend["late_trend_adjustment_applied"] = True
+            crypto_late_trend["late_trend_adjustment_mult"] = round(_lt_mult, 4)
+            feed_status["crypto_late_trend"] = _lt_reason or "applied"
 
     # ── Phase 2 parameter wiring: volume_ratio, macro_context, intermarket_context ──
     # These parameters were previously accepted but silently ignored.  They now
@@ -2697,7 +2931,7 @@ def compute_factor_scores(
         "optional_factor_coverage": 1.0,
         "missing_directional_optional_count": 0,
         "correlation_adjustments": {},
-        "crypto_engine_a_diagnostics": None,
+        "crypto_engine_a_diagnostics": crypto_late_trend,
         "intermarket_confirmation": intermarket_confirmation,
         "intermarket_engine_a_delta": round(intermarket_engine_a_delta, 6),
         "feed_status": feed_status,

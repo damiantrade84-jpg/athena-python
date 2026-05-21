@@ -11842,6 +11842,22 @@ def analyze_pair(
             except Exception as _btc_fetch_err:
                 log.debug("[CORR] BTC benchmark fetch failed: %s", _btc_fetch_err)
 
+    # Wire bar_time from latest available candle so the equity session gate
+    # (and any future bar-time-dependent factor) sees a real timestamp instead
+    # of failing open. H4 -> D1 -> H1 fallback.
+    _bt_src = _cf_h4c or _cf_d1c or _cf_h1c or []
+    _bar_time = None
+    if _bt_src:
+        _bt_last = _bt_src[-1]
+        if isinstance(_bt_last, dict):
+            _bar_time = _bt_last.get("time") or _bt_last.get("t") or _bt_last.get("ts")
+    log.debug(
+        "[EA2 bar_time] %s resolved bar_time=%r from %d candles",
+        pair.get("display", "?"),
+        _bar_time,
+        len(_bt_src),
+    )
+
     res = calc_confluence(
         _cf_d1i,
         _cf_h4i,
@@ -11853,6 +11869,7 @@ def analyze_pair(
         d1_candles=_cf_d1c,
         h4_candles=_cf_h4c,
         h1_candles=_cf_h1c,
+        bar_time=_bar_time,
         funding_rate=_funding_rate,
         volume_threshold=pair_profile.get(
             "volume_threshold", CONFIG["VOLUME_THRESHOLD"]

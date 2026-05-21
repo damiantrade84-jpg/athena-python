@@ -1848,3 +1848,236 @@ def test_engine_a_correlated_overlay_guard_enabled_caps_combined_uplift(monkeypa
     assert guard["combined_positive_uplift"] > guard["max_total_positive_uplift"]
     assert capped["final_score"] < guard["input_adjusted_score"]
     assert capped["feed_status"]["correlated_overlay_guard"] == "capped"
+
+
+def _trx_like_crypto_snaps():
+    """TRX/USDT H4-like bullish EMA stack with weak ADX and stretched price."""
+    base = {
+        "ema21": 0.35781,
+        "ema50": 0.35495,
+        "ema200": 0.34,
+        "close": 0.36342,
+        "atr": 0.0091,
+        "adx": 21.66,
+        "rsi": 62.0,
+        "macdHist": 0.4,
+        "plusDI": 24.0,
+        "minusDI": 16.0,
+    }
+    d1 = dict(base)
+    d1["ema200"] = 0.33
+    h4 = dict(base)
+    h1 = dict(base)
+    return d1, h4, h1
+
+
+def _trx_like_h4_candles(n: int = 100):
+    """Flat low VWAP anchor + late rally; confirms 3TF hysteresis and sub-MA volume."""
+    rows = []
+    ramp_start = n - 25
+    for i in range(n):
+        if i < ramp_start:
+            close = 0.302
+            vol = 5.8e6
+        elif i < n - 1:
+            close = 0.31 + ((i - ramp_start) / max(n - ramp_start - 1, 1)) * 0.05342
+            vol = 5.5e6
+        else:
+            close = 0.36342
+            vol = 3.9e6
+        rows.append(
+            {
+                "open": close - 0.001,
+                "high": close + 0.002,
+                "low": close - 0.002,
+                "close": close,
+                "vol": vol,
+                "volume": vol,
+            }
+        )
+    return rows
+
+
+def _enable_crypto_late_trend(monkeypatch):
+    monkeypatch.setitem(CONFIG, "ENGINE_A_CRYPTO_LATE_TREND_DIAGNOSTICS_ENABLED", True)
+    monkeypatch.setitem(CONFIG, "ENGINE_A_CRYPTO_LATE_TREND_ADJUSTMENT_ENABLED", True)
+    monkeypatch.setitem(CONFIG, "ENGINE_A_CRYPTO_ADX_STRONG_THRESHOLD", 25)
+    monkeypatch.setitem(CONFIG, "ENGINE_A_CRYPTO_LATE_TREND_MULT", 0.85)
+    monkeypatch.setitem(CONFIG, "ENGINE_A_CRYPTO_VWAP_EXTENSION_ATR_WARN", 3.0)
+    monkeypatch.setitem(CONFIG, "ENGINE_A_CRYPTO_VOLUME_MA_LOOKBACK", 20)
+    monkeypatch.setitem(
+        CONFIG,
+        "ENGINE_A_RESEARCH_LAB_FACTORS",
+        {"ENABLED": False, "BONUS": 0.15, "PENALTY": -0.10, "MAX_ABS": 0.20, "FACTORS": []},
+    )
+
+
+def _trx_like_score_inputs():
+    """3TF LONG votes (no hysteresis block) + H4 TRX prices for late-trend diagnostics."""
+    d1 = _snap("long", adx=21.66, momentum="bullish")
+    h1 = _snap("long", adx=21.66, momentum="bullish")
+    h4 = _snap("long", adx=21.66, momentum="bullish")
+    h4.update(
+        {
+            "close": 0.36342,
+            "ema21": 0.35781,
+            "ema50": 0.35495,
+            "atr": 0.0091,
+            "rsi": 62.0,
+            "macdHist": 0.4,
+            "plusDI": 24.0,
+            "minusDI": 16.0,
+        }
+    )
+    candles = _trx_like_h4_candles()
+    pair = {"type": "crypto", "display": "TRX/USDT"}
+    return d1, h4, h1, candles, pair
+
+
+def test_trx_like_late_trend_reduces_score_direction_stays_long(monkeypatch):
+    _enable_crypto_late_trend(monkeypatch)
+    d1, h4, h1, candles, pair = _trx_like_score_inputs()
+
+    _funding = -0.0002
+    monkeypatch.setitem(CONFIG, "ENGINE_A_CRYPTO_LATE_TREND_ADJUSTMENT_ENABLED", False)
+    baseline = _score(
+        d1=d1, h4=h4, h1=h1, pair=pair,
+        d1_candles=[], h4_candles=candles, h1_candles=[],
+        volume_ratio=0.7,
+        funding_rate=_funding,
+    )
+
+    monkeypatch.setitem(CONFIG, "ENGINE_A_CRYPTO_LATE_TREND_ADJUSTMENT_ENABLED", True)
+    penalized = _score(
+        d1=d1, h4=h4, h1=h1, pair=pair,
+        d1_candles=[], h4_candles=candles, h1_candles=[],
+        volume_ratio=0.7,
+        funding_rate=_funding,
+    )
+
+    diag = penalized["crypto_engine_a_diagnostics"]
+    assert diag is not None
+    assert diag["crypto_late_trend_risk"] is True
+    assert diag["late_trend_adjustment_applied"] is True
+    assert "adx_weak" in (diag["crypto_late_trend_reason"] or "")
+    assert "vwap_extended" in (diag["crypto_late_trend_reason"] or "")
+    assert "volume_below_ma" in (diag["crypto_late_trend_reason"] or "")
+    assert penalized["direction"] == "LONG"
+    assert baseline["final_score"] == pytest.approx(3.0, abs=0.05)
+    assert penalized["final_score"] < 3.0
+    assert penalized["final_score"] == pytest.approx(baseline["final_score"] * 0.85, rel=1e-2)
+
+
+def test_late_trend_strong_adx_rising_skips_adjustment(monkeypatch):
+    _enable_crypto_late_trend(monkeypatch)
+    d1, h4, h1, candles, pair = _trx_like_score_inputs()
+    for snap in (d1, h4, h1):
+        snap["adx"] = 28.0
+        snap["adxSlope"] = 0.5
+        snap["adxPrev"] = 26.0
+    result = _score(
+        d1=d1, h4=h4, h1=h1, pair=pair,
+        d1_candles=[], h4_candles=candles, h1_candles=[],
+        funding_rate=-0.0002,
+    )
+    diag = result["crypto_engine_a_diagnostics"]
+    assert diag is not None
+    assert diag.get("late_trend_adjustment_applied") is not True
+    assert result["final_score"] == pytest.approx(3.0, abs=0.05)
+
+
+def test_late_trend_volume_above_ma_skips_adjustment(monkeypatch):
+    _enable_crypto_late_trend(monkeypatch)
+    d1, h4, h1, candles, pair = _trx_like_score_inputs()
+    candles[-1]["vol"] = 8.0e6
+    candles[-1]["volume"] = 8.0e6
+    result = _score(
+        d1=d1, h4=h4, h1=h1, pair=pair,
+        d1_candles=[], h4_candles=candles, h1_candles=[],
+    )
+    diag = result["crypto_engine_a_diagnostics"]
+    assert diag is not None
+    assert diag.get("late_trend_adjustment_applied") is not True
+
+
+def test_late_trend_price_near_vwap_skips_adjustment(monkeypatch):
+    _enable_crypto_late_trend(monkeypatch)
+    d1, h4, h1 = _trx_like_crypto_snaps()
+    flat_price = 0.305
+    candles = []
+    for i in range(100):
+        candles.append(
+            {
+                "open": flat_price,
+                "high": flat_price + 0.001,
+                "low": flat_price - 0.001,
+                "close": flat_price,
+                "vol": 4.0e6,
+                "volume": 4.0e6,
+            }
+        )
+    for snap in (d1, h4, h1):
+        snap["close"] = flat_price
+        snap["ema21"] = flat_price - 0.001
+        snap["ema50"] = flat_price - 0.002
+        snap["adx"] = 21.66
+    result = _score(
+        d1=d1, h4=h4, h1=h1,
+        pair={"type": "crypto", "display": "TRX/USDT"},
+        d1_candles=candles, h4_candles=candles, h1_candles=candles,
+    )
+    diag = result["crypto_engine_a_diagnostics"]
+    assert diag is not None
+    assert diag.get("vwap_extended") is False
+    assert diag.get("late_trend_adjustment_applied") is not True
+
+
+def test_late_trend_non_crypto_unchanged(monkeypatch):
+    _enable_crypto_late_trend(monkeypatch)
+    stock_pair = {"type": "stock", "display": "AAPL"}
+    stock_on = _score(pair=stock_pair, h4=_snap("long", momentum="bullish"))
+    stock_off = _score(pair=stock_pair, h4=_snap("long", momentum="bullish"))
+    monkeypatch.setitem(CONFIG, "ENGINE_A_CRYPTO_LATE_TREND_ADJUSTMENT_ENABLED", False)
+    stock_off2 = _score(pair=stock_pair, h4=_snap("long", momentum="bullish"))
+    assert stock_on["final_score"] == pytest.approx(stock_off2["final_score"])
+    assert stock_on.get("crypto_engine_a_diagnostics") is None
+
+
+def test_late_trend_adjustment_applied_once(monkeypatch):
+    _enable_crypto_late_trend(monkeypatch)
+    mult = float(CONFIG.get("ENGINE_A_CRYPTO_LATE_TREND_MULT", 0.85))
+    d1, h4, h1, candles, pair = _trx_like_score_inputs()
+
+    _funding = -0.0002
+    monkeypatch.setitem(CONFIG, "ENGINE_A_CRYPTO_LATE_TREND_ADJUSTMENT_ENABLED", False)
+    baseline = _score(
+        d1=d1, h4=h4, h1=h1, pair=pair,
+        d1_candles=[], h4_candles=candles, h1_candles=[],
+        funding_rate=_funding,
+    )
+
+    monkeypatch.setitem(CONFIG, "ENGINE_A_CRYPTO_LATE_TREND_ADJUSTMENT_ENABLED", True)
+    penalized = _score(
+        d1=d1, h4=h4, h1=h1, pair=pair,
+        d1_candles=[], h4_candles=candles, h1_candles=[],
+        funding_rate=_funding,
+    )
+
+    assert penalized["final_score"] == pytest.approx(baseline["final_score"] * mult, rel=1e-3)
+    assert penalized["feed_status"].get("crypto_late_trend") == "crypto_late_trend_multiplier"
+    assert "bybit" not in str(penalized["feed_status"]).lower()
+
+
+def test_late_trend_diagnostics_populated_when_adjustment_disabled(monkeypatch):
+    _enable_crypto_late_trend(monkeypatch)
+    monkeypatch.setitem(CONFIG, "ENGINE_A_CRYPTO_LATE_TREND_ADJUSTMENT_ENABLED", False)
+    d1, h4, h1, candles, pair = _trx_like_score_inputs()
+    result = _score(
+        d1=d1, h4=h4, h1=h1, pair=pair,
+        d1_candles=[], h4_candles=candles, h1_candles=[],
+    )
+    diag = result["crypto_engine_a_diagnostics"]
+    assert diag is not None
+    assert diag["adx_value"] == pytest.approx(21.66)
+    assert diag["adx_below_threshold"] is True
+    assert diag["late_trend_adjustment_applied"] is False
