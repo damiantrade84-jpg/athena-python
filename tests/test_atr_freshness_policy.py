@@ -114,6 +114,40 @@ def test_evaluate_freshness_from_config_full_block():
     assert result["threshold_sec"] == 18000
 
 
+def test_h4_confirmed_only_atr_age_follows_explicit_atr_freshness_policy():
+    from atr_diagnostics import evaluate_freshness_from_config
+
+    diag = {
+        "atr_tf": "H4",
+        "atr_age_seconds": 21471.5,
+        "atr_value": 0.00329,
+        "atr_confirmed_only": True,
+    }
+
+    disabled = evaluate_freshness_from_config(
+        diag,
+        {
+            "ENABLED": False,
+            "BLOCK_EXECUTION_ON_STALE_ATR": False,
+            "MAX_AGE_SECONDS": {"H4": 18000},
+        },
+    )
+    enabled = evaluate_freshness_from_config(
+        diag,
+        {
+            "ENABLED": True,
+            "BLOCK_EXECUTION_ON_STALE_ATR": False,
+            "MAX_AGE_SECONDS": {"H4": 18000},
+        },
+    )
+
+    assert disabled["reason"] == "freshness_disabled"
+    assert disabled["stale"] is False
+    assert enabled["stale"] is True
+    assert enabled["reason"] == "atr_age_21471s_exceeds_H4_limit_18000s"
+    assert enabled["would_block"] is False
+
+
 def test_evaluate_freshness_handles_missing_diagnostics():
     from atr_diagnostics import evaluate_freshness
 

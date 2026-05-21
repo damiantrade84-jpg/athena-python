@@ -461,6 +461,17 @@ def _coherent_trend_score(
 
     detail.update({
         "agreement_count": agreement_count,
+        "agreement_components": [
+            name for name, d, _ in votes if d == dominant_sign
+        ],
+        "vote_components": [
+            {
+                "component": name,
+                "direction": "LONG" if d > 0 else "SHORT",
+                "weight": round(w, 4),
+            }
+            for name, d, w in votes
+        ],
         "total_count": len(votes),
         "coherence_ratio": round(coherence_ratio, 4),
         "tf_coverage": round(_tf_coverage, 4),

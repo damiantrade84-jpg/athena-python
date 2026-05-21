@@ -127,6 +127,39 @@ class TestCandleCacheKeys:
         with _candle_cache_lock:
             assert ("EURUSD", "H1", 100) not in _candle_cache
 
+    def test_mt5_forex_does_not_use_live_candle_builder_or_eodhd_ohlc(self):
+        pair = {"symbol": "GBPUSD", "display": "GBP/USD", "source": "mt5", "type": "forex"}
+        live_builder_candles = [
+            {"time": "2026-03-27T14:00:00+00:00", "open": 9.0, "high": 9.1, "low": 8.9, "close": 9.05, "vol": 900}
+        ]
+        mt5_candles = [
+            {"time": "2026-03-27T14:00:00+00:00", "open": 1.1, "high": 1.2, "low": 1.0, "close": 1.15, "vol": 1000}
+        ]
+        fetch_live = Mock(return_value={"error": False, "candles": live_builder_candles})
+        fetch_eodhd = Mock(return_value=live_builder_candles)
+        fetch_mt5 = Mock(return_value=mt5_candles)
+
+        candles = fetch_candles(
+            pair,
+            "H1",
+            100,
+            fetch_candles_live=fetch_live,
+            fetch_binance=_noop_fetch,
+            fetch_eodhd=fetch_eodhd,
+            fetch_polygon=_noop_fetch,
+            fetch_yfinance=_noop_fetch,
+            fetch_mt5=fetch_mt5,
+            yfinance_symbol_for_pair=lambda _pair: None,
+            tf_b={"H1": "1h", "H4": "4h", "D1": "1d"},
+        )
+        meta = get_candle_fetch_meta(pair, "H1", 100)
+
+        assert candles == mt5_candles
+        assert fetch_live.call_count == 0
+        assert fetch_eodhd.call_count == 0
+        assert fetch_mt5.call_count == 1
+        assert meta["upstream"] == "mt5"
+
     def test_forex_eodhd_source_bypasses_existing_ttl_cache_entry(self):
         pair = {"symbol": "EURUSD.FOREX", "display": "EUR/USD", "source": "eodhd", "type": "forex"}
         stale = [{"time": "2026-03-27T13:00:00+00:00", "open": 1.0, "high": 1.1, "low": 0.9, "close": 1.05, "vol": 900}]

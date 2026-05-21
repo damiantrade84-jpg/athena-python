@@ -247,6 +247,94 @@ def test_forex_adx_source_uses_stronger_h4_when_configured(monkeypatch):
     assert result["adx_multiplier"] == pytest.approx(1.0)
 
 
+def test_forex_adx_gate_uses_score_group_threshold_band(monkeypatch):
+    monkeypatch.setitem(CONFIG, "ENGINE_A_ADX_SOURCE_BY_CLASS", {"forex_majors": "max"})
+    monkeypatch.setitem(CONFIG, "ADX_TREND_MIN_CLASS", {"forex_majors": 20})
+    monkeypatch.setitem(CONFIG, "FACTOR_ADX_HARD_FAIL_CLASS", {"forex_majors": 10})
+
+    mult, adx, source = factor_scoring._adx_gate(
+        {"adx": 12.0},
+        {"adx": 15.0},
+        "forex",
+        score_group="forex_majors",
+    )
+
+    assert source == "h4"
+    assert adx == pytest.approx(15.0)
+    assert mult == pytest.approx(0.5)
+
+
+def test_forex_directional_ramp_stays_scaled_for_h1_only_direction(monkeypatch):
+    import carry_feed
+
+    monkeypatch.setattr(carry_feed, "get_carry_z", lambda *_args, **_kwargs: 0.0)
+    monkeypatch.setattr(carry_feed, "get_carry_differential", lambda _display: 0.0)
+
+    result = _score(
+        {"adx": 25.0, "close": 100.0, "atr": 1.0},
+        {
+            "adx": 25.0,
+            "rsi": 55.0,
+            "macdHist": 0.2,
+            "close": 100.0,
+            "atr": 1.0,
+            "plusDI": 25.0,
+            "minusDI": 15.0,
+        },
+        {"ema21": 101.0, "ema50": 100.0, "close": 101.0, "atr": 1.0},
+        pair={"type": "forex", "display": "GBP/USD"},
+    )
+
+    assert result["directional_score"] == pytest.approx(0.4)
+    assert result["directional_ramp_multiplier"] == pytest.approx(0.75)
+    assert result["directional_ramp_multiplier"] < 1.0
+
+
+def test_forex_trend_agreement_reports_exact_components():
+    score, direction, detail = _coherent_trend_score(
+        {"ema21": 110.0, "ema200": 100.0},
+        {"ema21": 95.0, "ema50": 100.0},
+        {"ema21": 110.0, "ema50": 100.0},
+        "forex",
+        score_group="forex_majors",
+    )
+
+    assert score == pytest.approx(2.415)
+    assert direction == "LONG"
+    assert detail["agreement_count"] == 2
+    assert detail["coherence_ratio"] == pytest.approx(0.7)
+    assert detail["agreement_components"] == ["d1_ema_trend", "ema_trend"]
+    assert detail["vote_components"] == [
+        {"component": "d1_ema_trend", "direction": "LONG", "weight": 0.5},
+        {"component": "h4_ema_trend", "direction": "SHORT", "weight": 0.3},
+        {"component": "ema_trend", "direction": "LONG", "weight": 0.2},
+    ]
+
+
+def test_forex_score_ignores_engine_b_fields_on_pair(monkeypatch):
+    import carry_feed
+
+    monkeypatch.setattr(carry_feed, "get_carry_z", lambda *_args, **_kwargs: 0.0)
+    monkeypatch.setattr(carry_feed, "get_carry_differential", lambda _display: 0.0)
+
+    base_pair = {"type": "forex", "display": "GBP/USD"}
+    contaminated_pair = {
+        **base_pair,
+        "engine_b_score": 5.0,
+        "engine_b_bias": "SHORT",
+        "bos_confirmed": True,
+        "ob_at_zone": True,
+        "engine_b_confidence": 1.0,
+    }
+
+    base = _score(pair=base_pair)
+    contaminated = _score(pair=contaminated_pair)
+
+    assert contaminated["final_score"] == pytest.approx(base["final_score"])
+    assert contaminated["direction"] == base["direction"]
+    assert contaminated["directional_score"] == pytest.approx(base["directional_score"])
+
+
 def test_forex_score_reachability_restored_without_lowering_threshold(monkeypatch):
     import carry_feed
     from scoring import get_score_threshold
