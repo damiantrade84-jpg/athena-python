@@ -203,8 +203,9 @@ def test_native_chart_surfaces_live_price_without_overwriting_signal_entry():
 
     assert 'label="Entry" value={firstNumber(signal?.entry, signal?.price)}' in source
     assert 'label="Live price" value={liveTick?.price}' in source
-    assert 'label="Live tick" value={liveTick ? `${fmtNum(liveTick.ageSec, 0)}s ${liveTick.source || \'tick\'}` : null}' in source
-    assert "<EngineASidePanel signal={chartCandidate} liveTick={liveTick} />" in source
+    assert 'label="Live tick"' in source
+    assert 'titleCaseProvider(liveTick.source)' in source
+    assert "<EngineASidePanel signal={chartCandidate} liveTick={liveTick} chartPayload={chartPayload} />" in source
 
 
 def test_native_chart_opens_on_h4_by_default_for_tradingview_parity():
@@ -317,9 +318,29 @@ def test_crypto_chart_uses_payload_live_tick_before_shared_price_fallback():
     assert "liveTickFromChartPayload(chartTickPayload)" in source
     assert "/api/chart-tick?symbol=" in source
     assert "const sharedLiveTick = useMemo(() => liveTickFromEntry(priceEntryFor(pair)), [pair, priceEntryFor]);" in source
+    assert "function isBybitLiveTickProvider" in source
+    assert "value.toLowerCase().startsWith('bybit')" in source
+    assert "function isBybitCryptoExecution" in source
     assert "const usesBybitChartTick =" in source
-    assert "chartPayload?.live_tick_provider === 'bybit_ws'" in source
-    assert "chartPayload?.live_tick_provider === 'bybit_rest'" in source
+    assert "isBybitCryptoExecution(chartPayload)" in source
+    assert "isBybitLiveTickProvider(chartPayload?.live_tick_provider)" in source
+
+
+def test_title_case_provider_maps_binance_and_bybit_ws_rest():
+    source = _read(TV_PANEL)
+
+    assert "binance_ws" in source
+    assert "bybit_rest" in source
+    assert "return 'Binance WS'" in source
+    assert "return 'Bybit REST'" in source
+
+
+def test_engine_a_side_panel_includes_chart_feed_summary():
+    source = _read(TV_PANEL)
+
+    assert "buildChartFeedSummary" in source
+    assert "chartPayload={chartPayload}" in source
+    assert 'label="Chart feeds"' in source
 
 
 def test_engine_a_side_panel_follows_current_chart_symbol_not_first_candidate():
@@ -327,7 +348,7 @@ def test_engine_a_side_panel_follows_current_chart_symbol_not_first_candidate():
 
     assert "function findEngineACandidateForSymbol" in source
     assert "const chartCandidate = useMemo(() => findEngineACandidateForSymbol(candidateRows, pair), [candidateRows, pair]);" in source
-    assert "<EngineASidePanel signal={chartCandidate} liveTick={liveTick} />" in source
+    assert "<EngineASidePanel signal={chartCandidate} liveTick={liveTick} chartPayload={chartPayload} />" in source
     assert "<EngineASidePanel signal={selectedCandidate}" not in source
     assert 'aria-label="Engine A candidate"' in source
 

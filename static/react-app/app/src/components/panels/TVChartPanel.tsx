@@ -628,9 +628,40 @@ function titleCaseProvider(value: string | null | undefined): string {
   if (!value) return 'unknown';
   const lower = value.toLowerCase();
   if (lower === 'mt5') return 'MT5';
-  if (lower === 'bybit') return 'Bybit';
   if (lower === 'eodhd') return 'EODHD';
+  if (lower === 'binance' || lower === 'binance_ws') return 'Binance WS';
+  if (lower === 'binance_rest') return 'Binance REST';
+  if (lower === 'bybit' || lower === 'bybit_ws') return 'Bybit WS';
+  if (lower === 'bybit_rest') return 'Bybit REST';
+  if (lower.startsWith('binance')) return 'Binance';
+  if (lower.startsWith('bybit')) return 'Bybit';
   return value;
+}
+
+function isBybitLiveTickProvider(value: string | null | undefined): boolean {
+  return typeof value === 'string' && value.toLowerCase().startsWith('bybit');
+}
+
+function isBybitCryptoExecution(payload: CandleApiResponse | null | undefined): boolean {
+  return payload?.asset_group === 'crypto' && payload?.execution_provider === 'bybit';
+}
+
+function buildChartFeedSummary(payload: CandleApiResponse | null | undefined): string | null {
+  if (!payload) return null;
+  const parts: string[] = [];
+  const candleProvider = payload.candle_provider || payload.chart_provider;
+  if (candleProvider) parts.push(`candles ${titleCaseProvider(candleProvider)}`);
+  if (payload.live_tick_provider) {
+    let live = `live ${titleCaseProvider(payload.live_tick_provider)}`;
+    if (payload.fallback_used && payload.fallback_reason) {
+      live += ` (${payload.fallback_reason})`;
+    }
+    parts.push(live);
+  }
+  if (payload.execution_provider) {
+    parts.push(`exec ${titleCaseProvider(payload.execution_provider)}`);
+  }
+  return parts.length > 0 ? parts.join(' | ') : null;
 }
 
 function readableCandlePolicy(value: string | null | undefined, lastConfirmed: boolean | null): string {
@@ -723,7 +754,15 @@ function DiagnosticBlock({ label, value }: { label: string; value: unknown }) {
   );
 }
 
-function EngineASidePanel({ signal, liveTick }: { signal: EngineASignal | null; liveTick: LiveTick | null }) {
+function EngineASidePanel({
+  signal,
+  liveTick,
+  chartPayload,
+}: {
+  signal: EngineASignal | null;
+  liveTick: LiveTick | null;
+  chartPayload: CandleApiResponse | null;
+}) {
   const factorScores = asRecord(signal?.factorScores);
   const diagnostics = asRecord(signal?.factorDiagnostics);
   const trendCoherence = asRecord(diagnostics.trendCoherence);
@@ -742,6 +781,7 @@ function EngineASidePanel({ signal, liveTick }: { signal: EngineASignal | null; 
   const feedAddon = resolveFeedAddonDisplay(diagnostics);
   const atrProvenance = resolveAtrProvenanceRows(atrDiagnostics);
   const candleFetchRows = resolveCandleFetchMetaRows(signal?.candleFetchMeta);
+  const chartFeedSummary = buildChartFeedSummary(chartPayload);
   const showDebugFooter = isFrontendDebugVisible();
   const frontendBuildLabel = showDebugFooter ? resolveFrontendBuildLabel() : null;
   const direction = normalizeDirection(signal?.direction);
@@ -768,7 +808,15 @@ function EngineASidePanel({ signal, liveTick }: { signal: EngineASignal | null; 
         <NumberRow label="Threshold" value={threshold} />
         <NumberRow label="Entry" value={firstNumber(signal?.entry, signal?.price)} />
         <NumberRow label="Live price" value={liveTick?.price} />
-        <TextRow label="Live tick" value={liveTick ? `${fmtNum(liveTick.ageSec, 0)}s ${liveTick.source || 'tick'}` : null} />
+        <TextRow
+          label="Live tick"
+          value={
+            liveTick
+              ? `${fmtNum(liveTick.ageSec, 0)}s ${titleCaseProvider(liveTick.source) || 'tick'}`
+              : null
+          }
+        />
+        <TextRow label="Chart feeds" value={chartFeedSummary} />
         <NumberRow label="SL" value={signal?.sl} />
         <NumberRow label="TP" value={firstNumber(signal?.tp, signal?.tp1)} />
       </section>
@@ -873,14 +921,29 @@ function IndicatorSwitch({
 }
 
 function ProviderBadge({ payload }: { payload: CandleApiResponse | null }) {
-  if (!payload?.chart_provider) return null;
-  const provider = payload.chart_provider === 'bybit' ? 'Bybit' : String(payload.chart_provider);
+  if (!payload?.chart_provider && !payload?.candle_provider) return null;
   const status = payload.provider_mismatch ? 'fallback' : 'execution-grade';
+  const candleLabel = titleCaseProvider(payload.candle_provider || payload.chart_provider);
+  const liveLabel = payload.live_tick_provider ? titleCaseProvider(payload.live_tick_provider) : null;
+  const execLabel = payload.execution_provider ? titleCaseProvider(payload.execution_provider) : null;
   return (
-    <Badge variant={payload.provider_mismatch ? 'destructive' : 'secondary'} className="h-7 gap-1 text-[10px]">
-      {provider}
-      <span className="text-muted-foreground">/ {status}</span>
-    </Badge>
+    <div className="flex flex-wrap items-center gap-1">
+      <Badge variant={payload.provider_mismatch ? 'destructive' : 'secondary'} className="h-7 gap-1 text-[10px]">
+        candles {candleLabel}
+        <span className="text-muted-foreground">/ {status}</span>
+      </Badge>
+      {liveLabel && (
+        <Badge variant="outline" className="h-7 text-[10px]">
+          live {liveLabel}
+          {payload.fallback_used && payload.fallback_reason ? ` | ${payload.fallback_reason}` : ''}
+        </Badge>
+      )}
+      {execLabel && (
+        <Badge variant="outline" className="h-7 text-[10px]">
+          exec {execLabel}
+        </Badge>
+      )}
+    </div>
   );
 }
 
@@ -984,9 +1047,7 @@ export default function TVChartPanel() {
   const chartTickLiveTick = useMemo(() => liveTickFromChartPayload(chartTickPayload), [chartTickPayload]);
   const sharedLiveTick = useMemo(() => liveTickFromEntry(priceEntryFor(pair)), [pair, priceEntryFor]);
   const usesBybitChartTick =
-    chartPayload?.live_tick_provider === 'bybit' ||
-    chartPayload?.live_tick_provider === 'bybit_ws' ||
-    chartPayload?.live_tick_provider === 'bybit_rest';
+    isBybitCryptoExecution(chartPayload) || isBybitLiveTickProvider(chartPayload?.live_tick_provider);
   const liveTick = usesBybitChartTick ? (chartTickLiveTick ?? chartPayloadLiveTick) : sharedLiveTick;
   const studySnapshot = useMemo(
     () => buildChartStudySnapshot(candles, liveTick, backendTf, isCryptoChart),
@@ -1004,10 +1065,14 @@ export default function TVChartPanel() {
       : chartPayload?.websocket_active === false && chartPayload?.websocket_stale
         ? ' ws_stale'
         : '';
+  const executionProviderLabel = chartPayload?.execution_provider
+    ? titleCaseProvider(chartPayload.execution_provider)
+    : null;
   const chartHeaderParts = [
     pair,
     backendTf || timeframe,
     assetGroupLabel,
+    ...(executionProviderLabel ? [`exec ${executionProviderLabel}`] : []),
     `chart ${chartProviderLabel}`,
     `candles ${candleProviderLabel}`,
     `live ${liveTickProviderLabel}${liveTickFallbackHint}`,
@@ -1123,8 +1188,7 @@ export default function TVChartPanel() {
   }, [pair, backendTf]);
 
   useEffect(() => {
-    const bybitCryptoChart = chartPayload?.asset_group === 'crypto' && chartPayload?.execution_provider === 'bybit';
-    if (!pair || !backendTf || !bybitCryptoChart) {
+    if (!pair || !backendTf || !isBybitCryptoExecution(chartPayload)) {
       setChartTickPayload(null);
       return;
     }
@@ -1600,7 +1664,7 @@ export default function TVChartPanel() {
             )}
           </div>
           <div className="min-w-0 overflow-y-auto" style={{ maxHeight: `${chartHeightPx}px` }}>
-            <EngineASidePanel signal={chartCandidate} liveTick={liveTick} />
+            <EngineASidePanel signal={chartCandidate} liveTick={liveTick} chartPayload={chartPayload} />
           </div>
         </div>
       </CardContent>

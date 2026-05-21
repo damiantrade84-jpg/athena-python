@@ -1,10 +1,17 @@
 from __future__ import annotations
 
+import sys
+import types
 from types import SimpleNamespace
 import threading
 import time
 
 import pytest
+
+if "eodhd" not in sys.modules:
+    eodhd_stub = types.ModuleType("eodhd")
+    eodhd_stub.APIClient = object
+    sys.modules["eodhd"] = eodhd_stub
 from flask import Flask
 
 from athena_app.api.routes_market_data import register_market_data_routes
