@@ -1,24 +1,27 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import {
   createChart,
   CandlestickSeries,
+  HistogramSeries,
   LineSeries,
   LineStyle,
   type IChartApi,
   type IPaneApi,
   type ISeriesApi,
   type CandlestickData,
+  type HistogramData,
   type LineData,
   type UTCTimestamp,
   type Time,
 } from 'lightweight-charts';
-import { BarChart3, Layers, SlidersHorizontal } from 'lucide-react';
+import { BarChart3, Camera, Layers, SlidersHorizontal } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Switch } from '@/components/ui/switch';
+import { useLivePrices } from '@/hooks/useLivePrices';
 import { useStore } from '@/hooks/useStore';
 import { apiClient } from '@/lib/apiClient';
 import {
@@ -52,12 +55,43 @@ const TF_BACKEND_MAP: Record<string, string> = {
 // Indicator colors — chosen to be distinct and high-contrast on the dark chart background.
 const INDICATOR_COLORS = {
   ema20: 'hsl(200, 95%, 55%)',
+  ema21: 'hsl(190, 95%, 58%)',
   ema50: 'hsl(45, 95%, 58%)',
   ema200: 'hsl(280, 80%, 65%)',
   dema200: 'hsl(15, 90%, 60%)',
+  vwap: 'hsl(120, 70%, 55%)',
   rsi14: 'hsl(45, 95%, 58%)',
+  adx14: 'hsl(24, 95%, 58%)',
   atr14: 'hsl(200, 95%, 55%)',
+  volume: 'hsl(210, 20%, 48%)',
+  volumeMa: 'hsl(340, 85%, 62%)',
 } as const;
+
+type IndicatorKey = keyof typeof INDICATOR_COLORS;
+
+interface IndicatorDefinition {
+  key: IndicatorKey;
+  label: string;
+  period?: number;
+  color: string;
+}
+
+const PRICE_PANEL_INDICATORS = {
+  ema20: { key: 'ema20', label: 'EMA20', period: 20, color: INDICATOR_COLORS.ema20 },
+  ema21: { key: 'ema21', label: 'EMA21', period: 21, color: INDICATOR_COLORS.ema21 },
+  ema50: { key: 'ema50', label: 'EMA50', period: 50, color: INDICATOR_COLORS.ema50 },
+  ema200: { key: 'ema200', label: 'EMA200', period: 200, color: INDICATOR_COLORS.ema200 },
+  dema200: { key: 'dema200', label: 'DEMA200', period: 200, color: INDICATOR_COLORS.dema200 },
+  vwap: { key: 'vwap', label: 'VWAP', color: INDICATOR_COLORS.vwap },
+} satisfies Record<string, IndicatorDefinition>;
+
+const STUDY_PANEL_INDICATORS = {
+  rsi14: { key: 'rsi14', label: 'RSI14 70/30', period: 14, color: INDICATOR_COLORS.rsi14 },
+  adx14: { key: 'adx14', label: 'ADX14', period: 14, color: INDICATOR_COLORS.adx14 },
+  atr14: { key: 'atr14', label: 'ATR14', period: 14, color: INDICATOR_COLORS.atr14 },
+  volume: { key: 'volume', label: 'Volume', color: INDICATOR_COLORS.volume },
+  volumeMa: { key: 'volumeMa', label: 'Volume MA20', period: 20, color: INDICATOR_COLORS.volumeMa },
+} satisfies Record<string, IndicatorDefinition>;
 
 const PRESET_OPTIONS = [
   { value: 'custom', label: 'Custom' },
@@ -65,16 +99,76 @@ const PRESET_OPTIONS = [
 ] as const;
 type PresetValue = (typeof PRESET_OPTIONS)[number]['value'];
 
+const CHART_HISTORY_LIMIT = 1000;
+const VISIBLE_BAR_COUNT = 180;
+const PRICE_CHART_HEIGHT_PX = 340;
+const STUDY_PANE_HEIGHT_PX = 110;
+const LIVE_TICK_MAX_AGE_SEC = 20;
+
+const TF_SECONDS: Record<string, number> = {
+  M1: 60,
+  M5: 5 * 60,
+  M15: 15 * 60,
+  M30: 30 * 60,
+  H1: 60 * 60,
+  H4: 4 * 60 * 60,
+  D1: 24 * 60 * 60,
+  W1: 7 * 24 * 60 * 60,
+};
+
 interface CandleApiRow {
   t?: string | number;
   o?: number | string;
   h?: number | string;
   l?: number | string;
   c?: number | string;
+  v?: number | string;
+  volume?: number | string;
+  volume_ma?: number | string | null;
+  vwap?: number | string | null;
+  ema21?: number | string | null;
+  ema50?: number | string | null;
+  ema200?: number | string | null;
+  rsi14?: number | string | null;
+  adx14?: number | string | null;
+  atr14?: number | string | null;
+  provider?: string;
+  confirmed?: boolean | null;
 }
 interface CandleApiResponse {
   candles?: CandleApiRow[];
   error?: string;
+  symbol?: string;
+  display?: string;
+  tf?: string;
+  candlesSource?: string;
+  asset_group?: string;
+  execution_provider?: string;
+  chart_provider?: string;
+  candle_provider?: string;
+  live_tick_provider?: string;
+  volume_provider?: string;
+  turnover_provider?: string;
+  atr_provider?: string;
+  indicator_provider?: string;
+  provider_mismatch?: boolean;
+  provider_mismatch_reason?: string | null;
+  fallback_used?: boolean;
+  fallback_chain?: string[];
+  candle_confirmed_policy?: string;
+  last_candle_ts?: string | number | null;
+  live_tick_age_seconds?: number | null;
+  chart_status?: string;
+  pairType?: string;
+  atr_timeframe?: string;
+  liveTick?: Record<string, unknown> | null;
+}
+
+interface LiveTick {
+  price: number;
+  ts: number;
+  ageSec: number;
+  source?: string;
 }
 
 function toTimestamp(raw: string | number | undefined): UTCTimestamp | null {
@@ -87,6 +181,95 @@ function toTimestamp(raw: string | number | undefined): UTCTimestamp | null {
     if (Number.isFinite(ms)) return Math.floor(ms / 1000) as UTCTimestamp;
   }
   return null;
+}
+
+function liveTickFromEntry(entry: unknown, nowSeconds = Date.now() / 1000): LiveTick | null {
+  const record = asRecord(entry);
+  const price = toNum(record.price, NaN);
+  if (!(Number.isFinite(price) && price > 0)) return null;
+
+  const ageCandidate = toNum(record.ageSec, NaN);
+  const tsCandidate = toTimestamp(
+    typeof record.ts === 'string' || typeof record.ts === 'number' ? record.ts : undefined,
+  );
+  const ts = tsCandidate ?? (Number.isFinite(ageCandidate) ? Math.floor(nowSeconds - Math.max(0, ageCandidate)) : null);
+  if (ts == null) return null;
+
+  const computedAge = Math.max(0, nowSeconds - ts);
+  const ageSec = Number.isFinite(ageCandidate) && ageCandidate >= 0 ? ageCandidate : computedAge;
+  const source = typeof record.source === 'string' && record.source.length > 0 ? record.source : undefined;
+  return { price, ts, ageSec, source };
+}
+
+function liveTickFromChartPayload(chartPayload: CandleApiResponse | null, nowSeconds = Date.now() / 1000): LiveTick | null {
+  const record = asRecord(chartPayload?.liveTick);
+  const price = toNum(record.price, NaN);
+  if (!(Number.isFinite(price) && price > 0)) return null;
+  const rawTs = record.timestamp;
+  const tsCandidate = toTimestamp(typeof rawTs === 'number' || typeof rawTs === 'string' ? rawTs : undefined);
+  const ageCandidate = toNum(record.age_seconds ?? chartPayload?.live_tick_age_seconds, NaN);
+  const ts = tsCandidate ?? (Number.isFinite(ageCandidate) ? Math.floor(nowSeconds - Math.max(0, ageCandidate)) : null);
+  if (ts == null) return null;
+  const ageSec = Number.isFinite(ageCandidate) && ageCandidate >= 0 ? ageCandidate : Math.max(0, nowSeconds - ts);
+  const source = typeof record.source === 'string' && record.source.length > 0 ? record.source : chartPayload?.live_tick_provider;
+  return { price, ts, ageSec, source };
+}
+
+function timeToEpochSeconds(time: Time): number | null {
+  if (typeof time === 'number' && Number.isFinite(time)) return Math.floor(time);
+  if (typeof time === 'string' && time.length > 0) {
+    const ms = Date.parse(time);
+    if (Number.isFinite(ms)) return Math.floor(ms / 1000);
+  }
+  if (typeof time === 'object' && time !== null && 'year' in time && 'month' in time && 'day' in time) {
+    const businessDay = time as { year: number; month: number; day: number };
+    const ms = Date.UTC(businessDay.year, businessDay.month - 1, businessDay.day);
+    if (Number.isFinite(ms)) return Math.floor(ms / 1000);
+  }
+  return null;
+}
+
+function bucketStartForTick(backendTf: string, tickSec: number, lastTime: number): UTCTimestamp | null {
+  const tfSec = TF_SECONDS[backendTf];
+  if (!(Number.isFinite(tfSec) && tfSec > 0)) return null;
+  const offset = ((lastTime % tfSec) + tfSec) % tfSec;
+  return (Math.floor((tickSec - offset) / tfSec) * tfSec + offset) as UTCTimestamp;
+}
+
+function buildLiveCandleRows(
+  baseRows: CandlestickData[],
+  liveTick: LiveTick | null,
+  backendTf: string,
+): CandlestickData[] {
+  if (!liveTick || baseRows.length === 0) return baseRows;
+  if (liveTick.ageSec > LIVE_TICK_MAX_AGE_SEC) return baseRows;
+
+  const last = baseRows[baseRows.length - 1];
+  const lastTime = timeToEpochSeconds(last.time);
+  if (lastTime == null) return baseRows;
+
+  const bucketStart = bucketStartForTick(backendTf, liveTick.ts, lastTime);
+  if (bucketStart == null || bucketStart < lastTime) return baseRows;
+
+  const out = [...baseRows];
+  if (bucketStart > lastTime) {
+    out.push({
+      time: bucketStart,
+      open: last.close,
+      high: Math.max(last.close, liveTick.price),
+      low: Math.min(last.close, liveTick.price),
+      close: liveTick.price,
+    });
+    return out;
+  }
+
+  out[out.length - 1] = {
+    ...last,
+    high: Math.max(last.high, liveTick.price),
+    low: Math.min(last.low, liveTick.price),
+    close: liveTick.price,
+  };
+  return out;
 }
 
 // --- Indicator math --------------------------------------------------
@@ -180,6 +363,81 @@ export function atr(highs: number[], lows: number[], closes: number[], period = 
   return out;
 }
 
+export function sma(values: number[], period: number): (number | null)[] {
+  const out: (number | null)[] = new Array(values.length).fill(null);
+  if (period <= 0) return out;
+  for (let i = period - 1; i < values.length; i += 1) {
+    let sum = 0;
+    let count = 0;
+    for (let j = i - period + 1; j <= i; j += 1) {
+      if (Number.isFinite(values[j])) {
+        sum += values[j];
+        count += 1;
+      }
+    }
+    out[i] = count > 0 ? sum / count : null;
+  }
+  return out;
+}
+
+export function vwapFromRows(highs: number[], lows: number[], closes: number[], volumes: number[]): (number | null)[] {
+  const out: (number | null)[] = [];
+  let cumValue = 0;
+  let cumVolume = 0;
+  for (let i = 0; i < closes.length; i += 1) {
+    const volume = Number.isFinite(volumes[i]) ? volumes[i] : 0;
+    if (volume <= 0) {
+      out.push(cumVolume > 0 ? cumValue / cumVolume : null);
+      continue;
+    }
+    const typical = (highs[i] + lows[i] + closes[i]) / 3;
+    cumValue += typical * volume;
+    cumVolume += volume;
+    out.push(cumVolume > 0 ? cumValue / cumVolume : null);
+  }
+  return out;
+}
+
+export function adx(highs: number[], lows: number[], closes: number[], period = 14): (number | null)[] {
+  const n = closes.length;
+  const out: (number | null)[] = new Array(n).fill(null);
+  if (n < period * 2 + 1) return out;
+  const tr: number[] = [];
+  const plusDm: number[] = [];
+  const minusDm: number[] = [];
+  for (let i = 1; i < n; i += 1) {
+    const upMove = highs[i] - highs[i - 1];
+    const downMove = lows[i - 1] - lows[i];
+    plusDm.push(upMove > downMove && upMove > 0 ? upMove : 0);
+    minusDm.push(downMove > upMove && downMove > 0 ? downMove : 0);
+    tr.push(Math.max(highs[i] - lows[i], Math.abs(highs[i] - closes[i - 1]), Math.abs(lows[i] - closes[i - 1])));
+  }
+  let smoothTr = tr.slice(0, period).reduce((a, b) => a + b, 0);
+  let smoothPlus = plusDm.slice(0, period).reduce((a, b) => a + b, 0);
+  let smoothMinus = minusDm.slice(0, period).reduce((a, b) => a + b, 0);
+  const dx: number[] = [];
+  for (let i = period; i < tr.length; i += 1) {
+    smoothTr = smoothTr - smoothTr / period + tr[i];
+    smoothPlus = smoothPlus - smoothPlus / period + plusDm[i];
+    smoothMinus = smoothMinus - smoothMinus / period + minusDm[i];
+    const plusDi = smoothTr ? (smoothPlus / smoothTr) * 100 : 0;
+    const minusDi = smoothTr ? (smoothMinus / smoothTr) * 100 : 0;
+    const sum = plusDi + minusDi;
+    dx.push(sum ? (Math.abs(plusDi - minusDi) / sum) * 100 : 0);
+  }
+  if (dx.length >= period) {
+    let avg = dx.slice(0, period).reduce((a, b) => a + b, 0) / period;
+    const first = period * 2 + 1;
+    if (first < n) out[first] = avg;
+    for (let i = period; i < dx.length; i += 1) {
+      avg = (avg * (period - 1) + dx[i]) / period;
+      const idx = first + (i - period + 1);
+      if (idx < n) out[idx] = avg;
+    }
+  }
+  return out;
+}
+
 // --- Engine A candidate helpers (unchanged from prior version) -------
 
 function displaySymbol(signal: EngineASignal | null): string | null {
@@ -249,6 +507,166 @@ function reviewTimeframeFor(signal: EngineASignal | null): string {
   return style === 'scalp' || style === 'intraday' ? '60' : '240';
 }
 
+interface ChartStudySnapshot {
+  rows: CandlestickData[];
+  highs: number[];
+  lows: number[];
+  closes: number[];
+  volumes: number[];
+  seriesValues: Partial<Record<IndicatorKey, (number | null)[]>>;
+  latest: Partial<Record<IndicatorKey, number>>;
+}
+
+function latestFinite(values: (number | null)[]): number | null {
+  for (let i = values.length - 1; i >= 0; i -= 1) {
+    const value = values[i];
+    if (value != null && Number.isFinite(value)) return value;
+  }
+  return null;
+}
+
+function buildChartStudySnapshot(
+  candles: CandleApiRow[] | null,
+  liveTick: LiveTick | null,
+  backendTf: string | undefined,
+  isCryptoChart: boolean,
+): ChartStudySnapshot {
+  const empty: ChartStudySnapshot = { rows: [], highs: [], lows: [], closes: [], volumes: [], seriesValues: {}, latest: {} };
+  if (!candles?.length || !backendTf) return empty;
+
+  const baseRows: CandlestickData[] = [];
+  const baseVolumes: number[] = [];
+  const apiVwap: (number | null)[] = [];
+  const apiVolumeMa: (number | null)[] = [];
+  const apiAdx14: (number | null)[] = [];
+  for (const c of candles) {
+    const t = toTimestamp(c.t);
+    const o = toNum(c.o, NaN);
+    const h = toNum(c.h, NaN);
+    const l = toNum(c.l, NaN);
+    const cl = toNum(c.c, NaN);
+    if (t == null) continue;
+    if (![o, h, l, cl].every(Number.isFinite)) continue;
+    baseRows.push({ time: t, open: o, high: h, low: l, close: cl });
+    baseVolumes.push(toNum(c.volume ?? c.v, 0));
+    apiVwap.push(Number.isFinite(toNum(c.vwap, NaN)) ? toNum(c.vwap, NaN) : null);
+    apiVolumeMa.push(Number.isFinite(toNum(c.volume_ma, NaN)) ? toNum(c.volume_ma, NaN) : null);
+    apiAdx14.push(Number.isFinite(toNum(c.adx14, NaN)) ? toNum(c.adx14, NaN) : null);
+  }
+
+  const rows = buildLiveCandleRows(baseRows, liveTick, backendTf);
+  const highs = rows.map((row) => row.high);
+  const lows = rows.map((row) => row.low);
+  const closes = rows.map((row) => row.close);
+  const volumes = rows.map((_row, idx) => baseVolumes[idx] ?? 0);
+  const ema20Values = ema(closes, 20);
+  const ema21Values = ema(closes, 21);
+  const ema50Values = ema(closes, 50);
+  const ema200Values = ema(closes, 200);
+  const dema200Values = dema(closes, 200);
+  const rsi14Values = rsi(closes, 14);
+  const atr14Values = atr(highs, lows, closes, 14);
+  const vwapValues = apiVwap.some((v) => v != null) ? apiVwap : vwapFromRows(highs, lows, closes, volumes);
+  const adx14Values = apiAdx14.some((v) => v != null) ? apiAdx14 : adx(highs, lows, closes, 14);
+  const volumeMaValues = apiVolumeMa.some((v) => v != null) ? apiVolumeMa : sma(volumes, 20);
+
+  return {
+    rows,
+    highs,
+    lows,
+    closes,
+    volumes,
+    seriesValues: {
+      ema20: ema20Values,
+      ema21: ema21Values,
+      ema50: ema50Values,
+      ema200: ema200Values,
+      dema200: dema200Values,
+      vwap: vwapValues,
+      rsi14: rsi14Values,
+      adx14: adx14Values,
+      atr14: atr14Values,
+      volumeMa: volumeMaValues,
+    },
+    latest: {
+      ema20: latestFinite(ema20Values) ?? undefined,
+      ema21: latestFinite(ema21Values) ?? undefined,
+      ema50: latestFinite(ema50Values) ?? undefined,
+      ema200: latestFinite(ema200Values) ?? undefined,
+      dema200: latestFinite(dema200Values) ?? undefined,
+      vwap: isCryptoChart ? latestFinite(vwapValues) ?? undefined : undefined,
+      rsi14: latestFinite(rsi14Values) ?? undefined,
+      adx14: isCryptoChart ? latestFinite(adx14Values) ?? undefined : undefined,
+      atr14: latestFinite(atr14Values) ?? undefined,
+      volume: latestFinite(volumes) ?? undefined,
+      volumeMa: isCryptoChart ? latestFinite(volumeMaValues) ?? undefined : undefined,
+    },
+  };
+}
+
+function formatIndicatorValue(value: number | undefined, precision = 5): string {
+  return Number.isFinite(value) ? fmtNum(value, precision) : '-';
+}
+
+function formatUtcLabel(value: string | number | null | undefined): string {
+  if (value == null || value === '') return 'last candle unavailable';
+  const ts = toTimestamp(value);
+  if (ts == null) return `last candle ${String(value)}`;
+  const iso = new Date(ts * 1000).toISOString().replace('T', ' ').replace(/\.\d{3}Z$/, ' UTC');
+  return `last candle ${iso.slice(0, 16)} UTC`;
+}
+
+function titleCaseProvider(value: string | null | undefined): string {
+  if (!value) return 'unknown';
+  const lower = value.toLowerCase();
+  if (lower === 'mt5') return 'MT5';
+  if (lower === 'bybit') return 'Bybit';
+  if (lower === 'eodhd') return 'EODHD';
+  return value;
+}
+
+function readableCandlePolicy(value: string | null | undefined, lastConfirmed: boolean | null): string {
+  if (lastConfirmed === true) return 'confirmed';
+  if (lastConfirmed === false) return 'forming';
+  if (!value) return 'policy unknown';
+  return value.replace(/_/g, '-');
+}
+
+function buildEngineAParityRows(signal: EngineASignal | null): { label: string; value: string }[] {
+  const diagnostics = asRecord(signal?.factorDiagnostics);
+  const trendCoherence = asRecord(diagnostics.trendCoherence);
+  const factorScores = asRecord(signal?.factorScores);
+  const candleFetchMeta = asRecord(signal?.candleFetchMeta);
+  const directionalRamp = resolveDirectionalRampDisplay(signal);
+  const trendCoherenceRows = resolveTrendCoherenceRows(diagnostics);
+  const timeframeMap = ['D1', 'H4', 'H1']
+    .map((tf) => {
+      const row = asRecord(candleFetchMeta[tf]);
+      return `${tf}:${firstString(row.primary_provider, row.provider, row.source) || '-'}`;
+    })
+    .join(' ');
+
+  return [
+    { label: 'TF map', value: timeframeMap },
+    { label: 'EMA votes', value: JSON.stringify(trendCoherence.votes || trendCoherence.ema_votes || trendCoherence.emaVotes || []) },
+    { label: 'agreement_count', value: trendCoherenceRows.agreement.text },
+    { label: 'coherence_ratio', value: trendCoherenceRows.ratio.text },
+    { label: 'trend_score', value: formatIndicatorValue(firstNumber(factorScores.trend, diagnostics.directionalScore) ?? undefined, 4) },
+    { label: 'directional_ramp', value: directionalRamp.text },
+    { label: 'price_inside_ema_cluster', value: String(trendCoherence.price_inside_ema_cluster ?? 'Unavailable') },
+    { label: 'at_or_below_resistance', value: String(trendCoherence.at_or_below_resistance ?? 'Unavailable') },
+    { label: 'at_or_above_support', value: String(trendCoherence.at_or_above_support ?? 'Unavailable') },
+    {
+      label: 'nearest_ema_resistance_distance_atr',
+      value: formatIndicatorValue(firstNumber(trendCoherence.nearest_ema_resistance_distance_atr) ?? undefined, 4),
+    },
+    {
+      label: 'nearest_ema_support_distance_atr',
+      value: formatIndicatorValue(firstNumber(trendCoherence.nearest_ema_support_distance_atr) ?? undefined, 4),
+    },
+  ];
+}
+
 // --- Engine A side panel UI (unchanged behavior) ---------------------
 
 function NumberRow({ label, value }: { label: string; value: unknown }) {
@@ -297,7 +715,7 @@ function DiagnosticBlock({ label, value }: { label: string; value: unknown }) {
   );
 }
 
-function EngineASidePanel({ signal }: { signal: EngineASignal | null }) {
+function EngineASidePanel({ signal, liveTick }: { signal: EngineASignal | null; liveTick: LiveTick | null }) {
   const factorScores = asRecord(signal?.factorScores);
   const diagnostics = asRecord(signal?.factorDiagnostics);
   const trendCoherence = asRecord(diagnostics.trendCoherence);
@@ -341,6 +759,8 @@ function EngineASidePanel({ signal }: { signal: EngineASignal | null }) {
         </div>
         <NumberRow label="Threshold" value={threshold} />
         <NumberRow label="Entry" value={firstNumber(signal?.entry, signal?.price)} />
+        <NumberRow label="Live price" value={liveTick?.price} />
+        <TextRow label="Live tick" value={liveTick ? `${fmtNum(liveTick.ageSec, 0)}s ${liveTick.source || 'tick'}` : null} />
         <NumberRow label="SL" value={signal?.sl} />
         <NumberRow label="TP" value={firstNumber(signal?.tp, signal?.tp1)} />
       </section>
@@ -444,12 +864,76 @@ function IndicatorSwitch({
   );
 }
 
-function LegendDot({ color, label }: { color: string; label: string }) {
+function ProviderBadge({ payload }: { payload: CandleApiResponse | null }) {
+  if (!payload?.chart_provider) return null;
+  const provider = payload.chart_provider === 'bybit' ? 'Bybit' : String(payload.chart_provider);
+  const status = payload.provider_mismatch ? 'fallback' : 'execution-grade';
   return (
-    <span className="flex items-center gap-1 text-[10px] text-muted-foreground">
-      <span className="inline-block h-2 w-2 rounded-full" style={{ background: color }} />
-      {label}
+    <Badge variant={payload.provider_mismatch ? 'destructive' : 'secondary'} className="h-7 gap-1 text-[10px]">
+      {provider}
+      <span className="text-muted-foreground">/ {status}</span>
+    </Badge>
+  );
+}
+
+function drawCaptureLabels(
+  outputCtx: CanvasRenderingContext2D,
+  captureEl: HTMLElement,
+  captureRect: DOMRect,
+) {
+  const labels = Array.from(captureEl.querySelectorAll('[data-chart-capture-label]')) as HTMLElement[];
+  for (const label of labels) {
+    const text = (label.textContent || '').trim();
+    if (!text) continue;
+    const rect = label.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) continue;
+    const style = window.getComputedStyle(label);
+    if (style.visibility === 'hidden' || style.display === 'none') continue;
+    const x = rect.left - captureRect.left;
+    const y = rect.top - captureRect.top;
+    const bg = style.backgroundColor;
+    if (bg && bg !== 'rgba(0, 0, 0, 0)' && bg !== 'transparent') {
+      outputCtx.fillStyle = bg;
+      outputCtx.fillRect(x, y, rect.width, rect.height);
+    }
+    outputCtx.font = `${style.fontStyle} ${style.fontWeight} ${style.fontSize} ${style.fontFamily}`;
+    outputCtx.fillStyle = style.color || '#f5f0e8';
+    outputCtx.textBaseline = 'middle';
+    outputCtx.fillText(text, x + 6, y + rect.height / 2, Math.max(10, rect.width - 12));
+  }
+}
+
+function CaptureLabel({
+  children,
+  className = '',
+  style,
+}: {
+  children: string;
+  className?: string;
+  style?: CSSProperties;
+}) {
+  return (
+    <span
+      data-chart-capture-label
+      className={`inline-flex items-center gap-1 rounded-sm border border-border/60 bg-background/90 px-1.5 py-0.5 text-[10px] font-mono text-foreground shadow-sm ${className}`}
+      style={style}
+    >
+      {children}
     </span>
+  );
+}
+
+interface IndicatorLegendValue {
+  definition: IndicatorDefinition;
+  value?: number;
+  precision?: number;
+}
+
+function IndicatorLegendItem({ item }: { item: IndicatorLegendValue }) {
+  return (
+    <CaptureLabel style={{ color: item.definition.color }}>
+      {`${item.definition.label} ${formatIndicatorValue(item.value, item.precision ?? 5)}`}
+    </CaptureLabel>
   );
 }
 
@@ -457,16 +941,25 @@ function LegendDot({ color, label }: { color: string; label: string }) {
 
 export default function TVChartPanel() {
   const { scanCacheA } = useStore();
+  const { priceEntryFor } = useLivePrices();
   const [pair, setPair] = useState('EURUSD');
-  const [timeframe, setTimeframe] = useState('60');
+  const [timeframe, setTimeframe] = useState('240');
   const [ema20, setEma20] = useState(true);
+  const [ema21, setEma21] = useState(true);
   const [ema50, setEma50] = useState(true);
   const [ema200, setEma200] = useState(false);
   const [dema200, setDema200] = useState(false);
+  const [vwapEnabled, setVwapEnabled] = useState(true);
   const [atr14, setAtr14] = useState(false);
   const [rsi14, setRsi14] = useState(false);
+  const [adx14, setAdx14] = useState(true);
+  const [volumeBars, setVolumeBars] = useState(true);
+  const [volumeMa, setVolumeMa] = useState(true);
+  const [engineAParityVisible, setEngineAParityVisible] = useState(true);
 
   const [candles, setCandles] = useState<CandleApiRow[] | null>(null);
+  const [chartPayload, setChartPayload] = useState<CandleApiResponse | null>(null);
+  const [chartTickPayload, setChartTickPayload] = useState<CandleApiResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [chartError, setChartError] = useState<string | null>(null);
 
@@ -476,18 +969,67 @@ export default function TVChartPanel() {
   );
   const defaultCandidate = useMemo(() => pickEngineACandidate(candidateRows), [candidateRows]);
   const chartCandidate = useMemo(() => findEngineACandidateForSymbol(candidateRows, pair), [candidateRows, pair]);
+  const backendTf = TF_BACKEND_MAP[timeframe];
+  const isCryptoChart = chartPayload?.asset_group === 'crypto' || chartPayload?.pairType === 'crypto';
+  const lastCandleConfirmed = candles?.length ? candles[candles.length - 1]?.confirmed : null;
+  const chartPayloadLiveTick = useMemo(() => liveTickFromChartPayload(chartPayload), [chartPayload]);
+  const chartTickLiveTick = useMemo(() => liveTickFromChartPayload(chartTickPayload), [chartTickPayload]);
+  const sharedLiveTick = useMemo(() => liveTickFromEntry(priceEntryFor(pair)), [pair, priceEntryFor]);
+  const liveTick = chartPayload?.live_tick_provider === 'bybit' ? (chartTickLiveTick ?? chartPayloadLiveTick) : sharedLiveTick;
+  const studySnapshot = useMemo(
+    () => buildChartStudySnapshot(candles, liveTick, backendTf, isCryptoChart),
+    [candles, liveTick, backendTf, isCryptoChart],
+  );
+  const assetGroupLabel = chartPayload?.asset_group || chartPayload?.pairType || 'unknown';
+  const chartProviderLabel = titleCaseProvider(chartPayload?.chart_provider || chartPayload?.candlesSource);
+  const candleProviderLabel = titleCaseProvider(chartPayload?.candle_provider || chartPayload?.chart_provider || chartPayload?.candlesSource);
+  const liveTickProviderLabel = titleCaseProvider(chartPayload?.live_tick_provider || liveTick?.source || chartPayload?.chart_provider);
+  const candlePolicyLabel = readableCandlePolicy(chartPayload?.candle_confirmed_policy, lastCandleConfirmed ?? null);
+  const lastCandleLabel = formatUtcLabel(chartPayload?.last_candle_ts ?? candles?.[candles.length - 1]?.t);
+  const chartHeaderText = `${pair} · ${backendTf || timeframe} · ${assetGroupLabel} · chart ${chartProviderLabel} · candles ${candleProviderLabel} · live ${liveTickProviderLabel} · ${candlePolicyLabel} · ${lastCandleLabel}`;
+  const bottomPanelIdentity = 'Bottom panel identity: forex ATR14; crypto ADX14/ATR14 when enabled';
+  const pricePanelLegendItems = useMemo<IndicatorLegendValue[]>(() => {
+    const latest = studySnapshot.latest;
+    const items: IndicatorLegendValue[] = [];
+    if (isCryptoChart) {
+      if (ema21) items.push({ definition: PRICE_PANEL_INDICATORS.ema21, value: latest.ema21 });
+    } else if (ema20) {
+      items.push({ definition: PRICE_PANEL_INDICATORS.ema20, value: latest.ema20 });
+    }
+    if (ema50) items.push({ definition: PRICE_PANEL_INDICATORS.ema50, value: latest.ema50 });
+    if (ema200) items.push({ definition: PRICE_PANEL_INDICATORS.ema200, value: latest.ema200 });
+    if (!isCryptoChart && dema200) items.push({ definition: PRICE_PANEL_INDICATORS.dema200, value: latest.dema200 });
+    if (isCryptoChart && vwapEnabled) items.push({ definition: PRICE_PANEL_INDICATORS.vwap, value: latest.vwap });
+    return items;
+  }, [studySnapshot.latest, isCryptoChart, ema20, ema21, ema50, ema200, dema200, vwapEnabled]);
+  const studyPanelLegendItems = useMemo<IndicatorLegendValue[]>(() => {
+    const latest = studySnapshot.latest;
+    const items: IndicatorLegendValue[] = [];
+    if (rsi14) items.push({ definition: STUDY_PANEL_INDICATORS.rsi14, value: latest.rsi14, precision: 2 });
+    if (isCryptoChart && adx14) items.push({ definition: STUDY_PANEL_INDICATORS.adx14, value: latest.adx14, precision: 2 });
+    if (atr14) items.push({ definition: STUDY_PANEL_INDICATORS.atr14, value: latest.atr14 });
+    if (isCryptoChart && volumeBars) items.push({ definition: STUDY_PANEL_INDICATORS.volume, value: latest.volume, precision: 0 });
+    if (isCryptoChart && volumeBars && volumeMa) items.push({ definition: STUDY_PANEL_INDICATORS.volumeMa, value: latest.volumeMa, precision: 0 });
+    return items;
+  }, [studySnapshot.latest, isCryptoChart, rsi14, adx14, atr14, volumeBars, volumeMa]);
+  const engineAParityRows = useMemo(() => buildEngineAParityRows(chartCandidate), [chartCandidate]);
 
   // Derived preset label: "all" only when every indicator is on, otherwise "custom".
-  const activePreset: PresetValue = ema20 && ema50 && ema200 && dema200 && rsi14 && atr14 ? 'all' : 'custom';
+  const activePreset: PresetValue = (isCryptoChart ? ema21 && vwapEnabled && adx14 && volumeBars && volumeMa : ema20) && ema50 && ema200 && dema200 && rsi14 && atr14 ? 'all' : 'custom';
 
   const applyPreset = (value: PresetValue) => {
     if (value === 'all') {
       setEma20(true);
+      setEma21(true);
       setEma50(true);
       setEma200(true);
       setDema200(true);
+      setVwapEnabled(true);
       setAtr14(true);
       setRsi14(true);
+      setAdx14(true);
+      setVolumeBars(true);
+      setVolumeMa(true);
     }
     // 'custom' is passive — manual switch flips revert the label naturally.
   };
@@ -498,24 +1040,30 @@ export default function TVChartPanel() {
     if (candidateSymbol) setPair(candidateSymbol);
     setTimeframe(reviewTimeframeFor(candidate));
     setEma20(true);
+    setEma21(true);
     setEma50(true);
     setEma200(true);
     setDema200(false);
+    setVwapEnabled(true);
     setAtr14(true);
     setRsi14(true);
+    setAdx14(true);
+    setVolumeBars(true);
+    setVolumeMa(true);
   };
 
   // --- Fetch candles whenever pair/timeframe changes ---------------
   useEffect(() => {
-    const backendTf = TF_BACKEND_MAP[timeframe];
     if (!pair || !backendTf) {
       setCandles(null);
+      setChartPayload(null);
+      setChartTickPayload(null);
       return;
     }
     let cancelled = false;
     setLoading(true);
     setChartError(null);
-    const url = `/api/candles?symbol=${encodeURIComponent(pair)}&tf=${encodeURIComponent(backendTf)}&limit=300`;
+    const url = `/api/candles?symbol=${encodeURIComponent(pair)}&tf=${encodeURIComponent(backendTf)}&limit=${CHART_HISTORY_LIMIT}`;
     apiClient
       .getJson(url)
       .then((res) => {
@@ -524,16 +1072,19 @@ export default function TVChartPanel() {
         if (data?.error) {
           setChartError(data.error);
           setCandles(null);
+          setChartPayload(data);
           return;
         }
         const list = Array.isArray(data?.candles) ? data.candles : [];
         setCandles(list);
+        setChartPayload(data);
         if (list.length === 0) setChartError(`No candle data for ${pair} ${backendTf}`);
       })
       .catch((err: unknown) => {
         if (cancelled) return;
         setChartError(err instanceof Error ? err.message : 'Failed to load candles');
         setCandles(null);
+        setChartPayload(null);
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -541,7 +1092,32 @@ export default function TVChartPanel() {
     return () => {
       cancelled = true;
     };
-  }, [pair, timeframe]);
+  }, [pair, backendTf]);
+
+  useEffect(() => {
+    const bybitCryptoChart = chartPayload?.asset_group === 'crypto' && chartPayload?.execution_provider === 'bybit';
+    if (!pair || !backendTf || !bybitCryptoChart) {
+      setChartTickPayload(null);
+      return;
+    }
+
+    let cancelled = false;
+    const fetchChartTick = async () => {
+      try {
+        const data = await apiClient.getJson(`/api/chart-tick?symbol=${encodeURIComponent(pair)}&tf=${encodeURIComponent(backendTf)}`);
+        if (!cancelled) setChartTickPayload(data as CandleApiResponse);
+      } catch {
+        if (!cancelled) setChartTickPayload(null);
+      }
+    };
+
+    void fetchChartTick();
+    const id = window.setInterval(fetchChartTick, 2000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(id);
+    };
+  }, [pair, backendTf, chartPayload?.asset_group, chartPayload?.execution_provider]);
 
   // --- Chart lifecycle ---------------------------------------------
   // Pane structure depends on which sub-pane studies are on; recreate the chart
@@ -549,16 +1125,75 @@ export default function TVChartPanel() {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const candleSeriesRef = useRef<ISeriesApi<'Candlestick'> | null>(null);
+  const chartCaptureRef = useRef<HTMLDivElement | null>(null);
   const ema20SeriesRef = useRef<ISeriesApi<'Line'> | null>(null);
+  const ema21SeriesRef = useRef<ISeriesApi<'Line'> | null>(null);
   const ema50SeriesRef = useRef<ISeriesApi<'Line'> | null>(null);
   const ema200SeriesRef = useRef<ISeriesApi<'Line'> | null>(null);
   const dema200SeriesRef = useRef<ISeriesApi<'Line'> | null>(null);
+  const vwapSeriesRef = useRef<ISeriesApi<'Line'> | null>(null);
   const rsiSeriesRef = useRef<ISeriesApi<'Line'> | null>(null);
+  const adxSeriesRef = useRef<ISeriesApi<'Line'> | null>(null);
   const atrSeriesRef = useRef<ISeriesApi<'Line'> | null>(null);
+  const volumeSeriesRef = useRef<ISeriesApi<'Histogram'> | null>(null);
+  const volumeMaSeriesRef = useRef<ISeriesApi<'Line'> | null>(null);
 
-  const subPaneStudyCount = (rsi14 ? 1 : 0) + (atr14 ? 1 : 0);
-  const chartMinHeightPx = 480 + subPaneStudyCount * 180;
-  const cardMinHeightPx = chartMinHeightPx + 60;
+  const subPaneStudyCount = (rsi14 ? 1 : 0) + (atr14 ? 1 : 0) + (isCryptoChart && adx14 ? 1 : 0) + (isCryptoChart && volumeBars ? 1 : 0);
+  const chartHeightPx = PRICE_CHART_HEIGHT_PX + subPaneStudyCount * STUDY_PANE_HEIGHT_PX;
+
+  function downloadChartScreenshot() {
+    const captureEl = chartCaptureRef.current;
+    if (!captureEl) return;
+    const canvases = Array.from(captureEl.querySelectorAll('canvas'));
+    if (canvases.length === 0) {
+      setChartError('Chart screenshot is unavailable until the chart renders');
+      return;
+    }
+
+    const captureRect = captureEl.getBoundingClientRect();
+    const scale = window.devicePixelRatio || 1;
+    const outputCanvas = document.createElement('canvas');
+    outputCanvas.width = Math.max(1, Math.round(captureRect.width * scale));
+    outputCanvas.height = Math.max(1, Math.round(captureRect.height * scale));
+    const outputCtx = outputCanvas.getContext('2d');
+    if (!outputCtx) {
+      setChartError('Chart screenshot failed: canvas context unavailable');
+      return;
+    }
+
+    outputCtx.scale(scale, scale);
+    outputCtx.fillStyle = '#0b0f14';
+    outputCtx.fillRect(0, 0, captureRect.width, captureRect.height);
+    for (const canvas of canvases) {
+      const rect = canvas.getBoundingClientRect();
+      if (rect.width <= 0 || rect.height <= 0) continue;
+      outputCtx.drawImage(
+        canvas,
+        rect.left - captureRect.left,
+        rect.top - captureRect.top,
+        rect.width,
+        rect.height,
+      );
+    }
+    drawCaptureLabels(outputCtx, captureEl, captureRect);
+
+    outputCanvas.toBlob((blob) => {
+      if (!blob) {
+        setChartError('Chart screenshot failed: PNG export unavailable');
+        return;
+      }
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      const backendTf = TF_BACKEND_MAP[timeframe] || timeframe;
+      const screenshotSymbol = pair.replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '').toUpperCase() || 'chart';
+      link.href = url;
+      link.download = `${screenshotSymbol}-${backendTf}-chart.png`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+    }, 'image/png');
+  }
 
   useEffect(() => {
     const container = containerRef.current;
@@ -566,7 +1201,7 @@ export default function TVChartPanel() {
 
     const chart = createChart(container, {
       width: container.clientWidth,
-      height: container.clientHeight || chartMinHeightPx,
+      height: container.clientHeight || chartHeightPx,
       layout: {
         background: { color: 'transparent' },
         textColor: 'rgba(245, 240, 232, 0.65)',
@@ -597,15 +1232,18 @@ export default function TVChartPanel() {
       borderDownColor: 'hsl(343, 96%, 60%)',
       wickUpColor: 'hsl(160, 84%, 39%)',
       wickDownColor: 'hsl(343, 96%, 60%)',
-      priceLineVisible: false,
+      lastValueVisible: true,
+      priceLineVisible: true,
     }, 0);
     candleSeriesRef.current = candleSeries;
 
     const overlayLineOpts = { lineWidth: 2 as const, lastValueVisible: true, priceLineVisible: false };
-    ema20SeriesRef.current = chart.addSeries(LineSeries, { ...overlayLineOpts, color: INDICATOR_COLORS.ema20 }, 0);
-    ema50SeriesRef.current = chart.addSeries(LineSeries, { ...overlayLineOpts, color: INDICATOR_COLORS.ema50 }, 0);
-    ema200SeriesRef.current = chart.addSeries(LineSeries, { ...overlayLineOpts, color: INDICATOR_COLORS.ema200 }, 0);
-    dema200SeriesRef.current = chart.addSeries(LineSeries, { ...overlayLineOpts, color: INDICATOR_COLORS.dema200 }, 0);
+    ema20SeriesRef.current = chart.addSeries(LineSeries, { ...overlayLineOpts, color: PRICE_PANEL_INDICATORS.ema20.color }, 0);
+    ema21SeriesRef.current = chart.addSeries(LineSeries, { ...overlayLineOpts, color: PRICE_PANEL_INDICATORS.ema21.color }, 0);
+    ema50SeriesRef.current = chart.addSeries(LineSeries, { ...overlayLineOpts, color: PRICE_PANEL_INDICATORS.ema50.color }, 0);
+    ema200SeriesRef.current = chart.addSeries(LineSeries, { ...overlayLineOpts, color: PRICE_PANEL_INDICATORS.ema200.color }, 0);
+    dema200SeriesRef.current = chart.addSeries(LineSeries, { ...overlayLineOpts, color: PRICE_PANEL_INDICATORS.dema200.color }, 0);
+    vwapSeriesRef.current = chart.addSeries(LineSeries, { ...overlayLineOpts, color: PRICE_PANEL_INDICATORS.vwap.color, lineStyle: LineStyle.Dashed }, 0);
 
     // Sub-panes — created only if their study is on, so an unused pane never sits empty.
     if (rsi14) {
@@ -613,7 +1251,7 @@ export default function TVChartPanel() {
       pane.setStretchFactor(1);
       const paneIdx = pane.paneIndex();
       const series = chart.addSeries(LineSeries, {
-        color: INDICATOR_COLORS.rsi14,
+        color: STUDY_PANEL_INDICATORS.rsi14.color,
         lineWidth: 2,
         priceLineVisible: false,
         lastValueVisible: true,
@@ -622,12 +1260,42 @@ export default function TVChartPanel() {
       series.createPriceLine({ price: 30, color: 'rgba(245,240,232,0.25)', lineWidth: 1, lineStyle: LineStyle.Dashed, axisLabelVisible: true, title: '30' });
       rsiSeriesRef.current = series;
     }
+    if (isCryptoChart && adx14) {
+      const pane = chart.addPane();
+      pane.setStretchFactor(1);
+      const paneIdx = pane.paneIndex();
+      const series = chart.addSeries(LineSeries, {
+        color: STUDY_PANEL_INDICATORS.adx14.color,
+        lineWidth: 2,
+        priceLineVisible: false,
+        lastValueVisible: true,
+      }, paneIdx);
+      series.createPriceLine({ price: 25, color: 'rgba(245,240,232,0.25)', lineWidth: 1, lineStyle: LineStyle.Dashed, axisLabelVisible: true, title: '25' });
+      adxSeriesRef.current = series;
+    }
     if (atr14) {
       const pane = chart.addPane();
       pane.setStretchFactor(1);
       const paneIdx = pane.paneIndex();
       atrSeriesRef.current = chart.addSeries(LineSeries, {
-        color: INDICATOR_COLORS.atr14,
+        color: STUDY_PANEL_INDICATORS.atr14.color,
+        lineWidth: 2,
+        priceLineVisible: false,
+        lastValueVisible: true,
+      }, paneIdx);
+    }
+    if (isCryptoChart && volumeBars) {
+      const pane = chart.addPane();
+      pane.setStretchFactor(1);
+      const paneIdx = pane.paneIndex();
+      volumeSeriesRef.current = chart.addSeries(HistogramSeries, {
+        color: STUDY_PANEL_INDICATORS.volume.color,
+        priceFormat: { type: 'volume' },
+        priceLineVisible: false,
+        lastValueVisible: true,
+      }, paneIdx);
+      volumeMaSeriesRef.current = chart.addSeries(LineSeries, {
+        color: STUDY_PANEL_INDICATORS.volumeMa.color,
         lineWidth: 2,
         priceLineVisible: false,
         lastValueVisible: true,
@@ -647,52 +1315,47 @@ export default function TVChartPanel() {
       chartRef.current = null;
       candleSeriesRef.current = null;
       ema20SeriesRef.current = null;
+      ema21SeriesRef.current = null;
       ema50SeriesRef.current = null;
       ema200SeriesRef.current = null;
       dema200SeriesRef.current = null;
+      vwapSeriesRef.current = null;
       rsiSeriesRef.current = null;
+      adxSeriesRef.current = null;
       atrSeriesRef.current = null;
+      volumeSeriesRef.current = null;
+      volumeMaSeriesRef.current = null;
     };
-    // chartMinHeightPx only seeds the first sizing call; the ResizeObserver takes over after.
+    // chartHeightPx only seeds the first sizing call; the ResizeObserver takes over after.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rsi14, atr14]);
+  }, [rsi14, atr14, adx14, volumeBars, isCryptoChart]);
 
   // --- Push data into the chart ------------------------------------
   useEffect(() => {
     const chart = chartRef.current;
     const candleSeries = candleSeriesRef.current;
-    if (!chart || !candleSeries) return;
+    if (!chart || !candleSeries || !backendTf) return;
 
     if (!candles || candles.length === 0) {
       candleSeries.setData([]);
       ema20SeriesRef.current?.setData([]);
+      ema21SeriesRef.current?.setData([]);
       ema50SeriesRef.current?.setData([]);
       ema200SeriesRef.current?.setData([]);
       dema200SeriesRef.current?.setData([]);
+      vwapSeriesRef.current?.setData([]);
       rsiSeriesRef.current?.setData([]);
+      adxSeriesRef.current?.setData([]);
       atrSeriesRef.current?.setData([]);
+      volumeSeriesRef.current?.setData([]);
+      volumeMaSeriesRef.current?.setData([]);
       return;
     }
 
-    const rows: CandlestickData[] = [];
-    const times: Time[] = [];
-    const highs: number[] = [];
-    const lows: number[] = [];
-    const closes: number[] = [];
-    for (const c of candles) {
-      const t = toTimestamp(c.t);
-      const o = toNum(c.o, NaN);
-      const h = toNum(c.h, NaN);
-      const l = toNum(c.l, NaN);
-      const cl = toNum(c.c, NaN);
-      if (t == null) continue;
-      if (![o, h, l, cl].every(Number.isFinite)) continue;
-      rows.push({ time: t, open: o, high: h, low: l, close: cl });
-      times.push(t);
-      highs.push(h);
-      lows.push(l);
-      closes.push(cl);
-    }
+    const rows = studySnapshot.rows;
+    const times = rows.map((row) => row.time);
+    const volumes = studySnapshot.volumes;
+    const values = studySnapshot.seriesValues;
     candleSeries.setData(rows);
 
     const pushLine = (
@@ -713,15 +1376,38 @@ export default function TVChartPanel() {
       series.setData(data);
     };
 
-    pushLine(ema20SeriesRef.current, ema20, ema(closes, 20));
-    pushLine(ema50SeriesRef.current, ema50, ema(closes, 50));
-    pushLine(ema200SeriesRef.current, ema200, ema(closes, 200));
-    pushLine(dema200SeriesRef.current, dema200, dema(closes, 200));
-    pushLine(rsiSeriesRef.current, rsi14, rsi(closes, 14));
-    pushLine(atrSeriesRef.current, atr14, atr(highs, lows, closes, 14));
+    pushLine(ema20SeriesRef.current, ema20, values.ema20 || []);
+    pushLine(ema21SeriesRef.current, isCryptoChart && ema21, values.ema21 || []);
+    pushLine(ema50SeriesRef.current, ema50, values.ema50 || []);
+    pushLine(ema200SeriesRef.current, ema200, values.ema200 || []);
+    pushLine(dema200SeriesRef.current, dema200, values.dema200 || []);
+    pushLine(vwapSeriesRef.current, isCryptoChart && vwapEnabled, values.vwap || []);
+    pushLine(rsiSeriesRef.current, rsi14, values.rsi14 || []);
+    pushLine(adxSeriesRef.current, isCryptoChart && adx14, values.adx14 || []);
+    pushLine(atrSeriesRef.current, atr14, values.atr14 || []);
+    if (volumeSeriesRef.current) {
+      if (isCryptoChart && volumeBars) {
+        const volumeData: HistogramData[] = rows.map((row, idx) => ({
+          time: row.time,
+          value: volumes[idx] ?? 0,
+          color: row.close >= row.open ? 'rgba(16, 185, 129, 0.45)' : 'rgba(244, 63, 94, 0.45)',
+        }));
+        volumeSeriesRef.current.setData(volumeData);
+      } else {
+        volumeSeriesRef.current.setData([]);
+      }
+    }
+    pushLine(volumeMaSeriesRef.current, isCryptoChart && volumeBars && volumeMa, values.volumeMa || []);
 
-    chart.timeScale().fitContent();
-  }, [candles, ema20, ema50, ema200, dema200, rsi14, atr14]);
+    if (rows.length > VISIBLE_BAR_COUNT) {
+      chart.timeScale().setVisibleLogicalRange({
+        from: rows.length - VISIBLE_BAR_COUNT,
+        to: rows.length - 1,
+      });
+    } else {
+      chart.timeScale().fitContent();
+    }
+  }, [candles, liveTick, backendTf, isCryptoChart, studySnapshot, ema20, ema21, ema50, ema200, dema200, vwapEnabled, rsi14, adx14, atr14, volumeBars, volumeMa]);
 
   return (
     <Card className="h-full">
@@ -738,6 +1424,12 @@ export default function TVChartPanel() {
               className="h-8 w-32 text-xs"
               aria-label="Chart symbol"
             />
+            <ProviderBadge payload={chartPayload} />
+            {isCryptoChart && lastCandleConfirmed != null && (
+              <Badge variant="outline" className="h-7 text-[10px]">
+                {lastCandleConfirmed ? 'Confirmed candle' : 'Forming candle'}
+              </Badge>
+            )}
             <select
               value={displaySymbol(chartCandidate) || ''}
               onChange={(event) => {
@@ -786,32 +1478,88 @@ export default function TVChartPanel() {
               <SlidersHorizontal className="h-3.5 w-3.5" />
               Engine A Review Layout
             </Button>
+            <Button
+              size="sm"
+              variant={engineAParityVisible ? 'default' : 'outline'}
+              className="h-8 text-xs"
+              onClick={() => setEngineAParityVisible((visible) => !visible)}
+              aria-pressed={engineAParityVisible}
+            >
+              Engine A Parity
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-8 gap-2 text-xs"
+              onClick={downloadChartScreenshot}
+              disabled={loading || !candles?.length}
+              aria-label="Download full chart screenshot"
+            >
+              <Camera className="h-3.5 w-3.5" />
+              Screenshot
+            </Button>
           </div>
         </div>
+        <div className="flex flex-wrap items-center gap-2 pt-2">
+          <CaptureLabel>{chartHeaderText}</CaptureLabel>
+        </div>
         <div className="flex flex-wrap items-center gap-3 pt-2">
-          <IndicatorSwitch label="EMA20" checked={ema20} onCheckedChange={setEma20} />
+          {isCryptoChart ? (
+            <IndicatorSwitch label="EMA21" checked={ema21} onCheckedChange={setEma21} />
+          ) : (
+            <IndicatorSwitch label="EMA20" checked={ema20} onCheckedChange={setEma20} />
+          )}
           <IndicatorSwitch label="EMA50" checked={ema50} onCheckedChange={setEma50} />
           <IndicatorSwitch label="EMA200" checked={ema200} onCheckedChange={setEma200} />
-          <IndicatorSwitch label="DEMA200" checked={dema200} onCheckedChange={setDema200} />
+          {!isCryptoChart && <IndicatorSwitch label="DEMA200" checked={dema200} onCheckedChange={setDema200} />}
+          {isCryptoChart && <IndicatorSwitch label="VWAP" checked={vwapEnabled} onCheckedChange={setVwapEnabled} />}
           <IndicatorSwitch label="ATR14" checked={atr14} onCheckedChange={setAtr14} />
           <IndicatorSwitch label="RSI14" checked={rsi14} onCheckedChange={setRsi14} />
+          {isCryptoChart && <IndicatorSwitch label="ADX14" checked={adx14} onCheckedChange={setAdx14} />}
+          {isCryptoChart && <IndicatorSwitch label="Volume" checked={volumeBars} onCheckedChange={setVolumeBars} />}
+          {isCryptoChart && <IndicatorSwitch label="Volume MA" checked={volumeMa} onCheckedChange={setVolumeMa} />}
         </div>
         <div className="flex flex-wrap items-center gap-3 pt-2">
-          {ema20 && <LegendDot color={INDICATOR_COLORS.ema20} label="EMA20" />}
-          {ema50 && <LegendDot color={INDICATOR_COLORS.ema50} label="EMA50" />}
-          {ema200 && <LegendDot color={INDICATOR_COLORS.ema200} label="EMA200" />}
-          {dema200 && <LegendDot color={INDICATOR_COLORS.dema200} label="DEMA200" />}
-          {rsi14 && <LegendDot color={INDICATOR_COLORS.rsi14} label="RSI14 (pane)" />}
-          {atr14 && <LegendDot color={INDICATOR_COLORS.atr14} label="ATR14 (pane)" />}
+          {pricePanelLegendItems.map((item) => (
+            <IndicatorLegendItem key={item.definition.key} item={item} />
+          ))}
+          {studyPanelLegendItems.map((item) => (
+            <IndicatorLegendItem key={item.definition.key} item={item} />
+          ))}
         </div>
       </CardHeader>
-      <CardContent className="h-[calc(100%-160px)]" style={{ minHeight: `${cardMinHeightPx}px` }}>
-        <div className="grid h-full gap-3 xl:grid-cols-[minmax(0,1fr)_320px]">
+      <CardContent className="pb-4">
+        <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_320px] xl:items-start">
           <div
+            ref={chartCaptureRef}
             className="relative overflow-hidden rounded-md border bg-background"
-            style={{ minHeight: `${chartMinHeightPx}px` }}
+            style={{ height: `${chartHeightPx}px` }}
           >
             <div ref={containerRef} className="absolute inset-0" />
+            <div className="pointer-events-none absolute left-2 right-2 top-2 z-10 space-y-1">
+              <div className="flex flex-wrap items-center gap-1">
+                <CaptureLabel>{chartHeaderText}</CaptureLabel>
+              </div>
+              <div className="flex flex-wrap items-center gap-1">
+                {pricePanelLegendItems.map((item) => (
+                  <IndicatorLegendItem key={`capture-${item.definition.key}`} item={item} />
+                ))}
+              </div>
+              <div className="flex flex-wrap items-center gap-1">
+                {studyPanelLegendItems.map((item) => (
+                  <IndicatorLegendItem key={`capture-study-${item.definition.key}`} item={item} />
+                ))}
+                {studyPanelLegendItems.length > 0 && <CaptureLabel>{bottomPanelIdentity}</CaptureLabel>}
+              </div>
+              {engineAParityVisible && (
+                <div className="flex max-w-[760px] flex-wrap items-center gap-1">
+                  <CaptureLabel>Engine A Parity</CaptureLabel>
+                  {engineAParityRows.map((row) => (
+                    <CaptureLabel key={row.label}>{`${row.label} ${row.value}`}</CaptureLabel>
+                  ))}
+                </div>
+              )}
+            </div>
             {loading && (
               <div className="absolute inset-0 flex items-center justify-center bg-card/40 text-[11px] text-muted-foreground backdrop-blur-sm">
                 Loading candles…
@@ -823,7 +1571,9 @@ export default function TVChartPanel() {
               </div>
             )}
           </div>
-          <EngineASidePanel signal={chartCandidate} />
+          <div className="min-w-0 overflow-y-auto" style={{ maxHeight: `${chartHeightPx}px` }}>
+            <EngineASidePanel signal={chartCandidate} liveTick={liveTick} />
+          </div>
         </div>
       </CardContent>
     </Card>

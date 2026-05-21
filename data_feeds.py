@@ -79,11 +79,37 @@ def _bybit_interval(tf: str) -> str | None:
         "H1": "60",
         "H4": "240",
         "D1": "D",
+        "W1": "W",
     }.get(str(tf or "").upper())
 
 
-def _bybit_kline_to_candle(row: list) -> dict:
+def _bybit_interval_ms(tf: str) -> int | None:
+    return {
+        "M1": 60_000,
+        "M5": 5 * 60_000,
+        "M15": 15 * 60_000,
+        "M30": 30 * 60_000,
+        "H1": 60 * 60_000,
+        "H4": 4 * 60 * 60_000,
+        "D1": 24 * 60 * 60_000,
+        "W1": 7 * 24 * 60 * 60_000,
+    }.get(str(tf or "").upper())
+
+
+def _bybit_kline_to_candle(
+    row: list,
+    *,
+    symbol: str | None = None,
+    category: str = "linear",
+    tf: str | None = None,
+    now_ms: int | None = None,
+) -> dict:
     open_time = int(row[0])
+    interval_ms = _bybit_interval_ms(tf or "")
+    confirmed = True
+    if interval_ms:
+        now = int(now_ms if now_ms is not None else time.time() * 1000)
+        confirmed = open_time + interval_ms <= now
     return {
         "open_time": open_time,
         "time": time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime(open_time / 1000)),
@@ -94,6 +120,11 @@ def _bybit_kline_to_candle(row: list) -> dict:
         "volume": float(row[5]),
         "vol": float(row[5]),
         "turnover": float(row[6]) if len(row) > 6 else 0.0,
+        "closed": confirmed,
+        "confirmed": confirmed,
+        "provider": "bybit",
+        "category": str(category or "linear"),
+        "symbol": str(symbol or "").replace("/", "").upper(),
     }
 
 
@@ -104,9 +135,11 @@ def _fetch_bybit_klines(
     interval = _bybit_interval(tf)
     if not symbol or interval is None:
         return None
+    bybit_symbol = symbol.replace("/", "").upper()
+    category = "linear"
     params = {
-        "category": "linear",
-        "symbol": symbol.replace("/", "").upper(),
+        "category": category,
+        "symbol": bybit_symbol,
         "interval": interval,
         "limit": str(min(max(int(limit or 1), 1), 1000)),
     }
@@ -122,11 +155,67 @@ def _fetch_bybit_klines(
             log.warning("[BYBIT-KLINE] %s %s retCode=%s", symbol, tf, data.get("retCode"))
             return None
         rows = (data.get("result") or {}).get("list") or []
-        candles = [_bybit_kline_to_candle(row) for row in rows]
+        now_ms = int(time.time() * 1000)
+        candles = [
+            _bybit_kline_to_candle(
+                row,
+                symbol=bybit_symbol,
+                category=category,
+                tf=tf,
+                now_ms=now_ms,
+            )
+            for row in rows
+        ]
         candles.sort(key=lambda c: int(c.get("open_time", 0)))
         return candles or None
     except Exception as exc:
         log.debug("[BYBIT-KLINE] %s %s fetch failed: %s", symbol, tf, exc)
+        return None
+
+
+def _fetch_bybit_ticker(symbol: str, *, category: str = "linear") -> dict | None:
+    """Fetch a normalized Bybit V5 ticker for chart/live-price diagnostics."""
+    bybit_symbol = str(symbol or "").replace("/", "").upper()
+    if not bybit_symbol:
+        return None
+    params = {
+        "category": str(category or "linear"),
+        "symbol": bybit_symbol,
+    }
+    try:
+        r = http_requests.get(_BYBIT_TICKERS_URL, params=params, timeout=8)
+        if r.status_code != 200:
+            log.warning("[BYBIT-TICKER] %s HTTP %s", bybit_symbol, r.status_code)
+            return None
+        data = r.json()
+        if int(data.get("retCode", -1)) != 0:
+            log.warning("[BYBIT-TICKER] %s retCode=%s", bybit_symbol, data.get("retCode"))
+            return None
+        rows = (data.get("result") or {}).get("list") or []
+        item = rows[0] if rows else {}
+        price_raw = item.get("lastPrice") or item.get("markPrice") or item.get("indexPrice")
+        price = float(price_raw) if price_raw is not None else 0.0
+        if price <= 0:
+            return None
+        bid_raw = item.get("bid1Price") or item.get("bid")
+        ask_raw = item.get("ask1Price") or item.get("ask")
+        ts_raw = item.get("ts") or item.get("timestamp") or data.get("time")
+        ts_ms = int(float(ts_raw)) if ts_raw is not None else int(time.time() * 1000)
+        ts_s = ts_ms / 1000.0 if ts_ms > 1e12 else float(ts_ms)
+        return {
+            "symbol": bybit_symbol,
+            "price": price,
+            "bid": float(bid_raw) if bid_raw not in (None, "") else None,
+            "ask": float(ask_raw) if ask_raw not in (None, "") else None,
+            "timestamp": ts_ms,
+            "ts": ts_s,
+            "provider": "bybit",
+            "source": "bybit_rest",
+            "category": str(category or "linear"),
+            "age_seconds": round(max(0.0, time.time() - ts_s), 3),
+        }
+    except Exception as exc:
+        log.debug("[BYBIT-TICKER] %s fetch failed: %s", bybit_symbol, exc)
         return None
 
 

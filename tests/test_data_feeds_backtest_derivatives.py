@@ -119,6 +119,11 @@ def test_bybit_klines_are_normalized_and_sorted():
     assert [c["open_time"] for c in candles] == [1000, 2000]
     assert candles[0]["open"] == pytest.approx(100.0)
     assert candles[1]["vol"] == pytest.approx(11.0)
+    assert candles[0]["provider"] == "bybit"
+    assert candles[0]["category"] == "linear"
+    assert candles[0]["symbol"] == "BTCUSDT"
+    assert candles[0]["turnover"] == pytest.approx(1010.0)
+    assert candles[0]["confirmed"] is True
 
 
 def test_bybit_open_interest_current_payload_uses_bybit_ticker():

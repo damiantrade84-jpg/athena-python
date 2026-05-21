@@ -9,6 +9,7 @@ from __future__ import annotations
 import logging
 import os
 import re
+import time
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
@@ -27,6 +28,8 @@ _live_prices_lock = None
 fetch_yield_curve = None
 http_requests = None
 fetch_candles = None
+fetch_bybit_klines = None
+fetch_bybit_ticker = None
 fetch_eodhd = None
 _extract_candles = None
 _merge_forex_forming_ws = None
@@ -192,18 +195,35 @@ def api_prices():
     # since epoch; EODHD WS writes milliseconds — normalize by magnitude.
     import time as _time_mod
     _now_s = _time_mod.time()
+
+    def _epoch_seconds(value):
+        try:
+            ts = float(value)
+        except (TypeError, ValueError):
+            return None
+        if ts <= 0:
+            return None
+        return ts / 1000.0 if ts > 1e12 else ts
+
+    def _age_seconds(value):
+        ts = _epoch_seconds(value)
+        if ts is None:
+            return None
+        return round(max(0.0, _now_s - ts), 3)
+
     decorated: dict = {}
     for _k, _v in snapshot.items():
         if not isinstance(_v, dict):
             decorated[_k] = _v
             continue
         entry = dict(_v)
-        _ts_raw = entry.get("ts")
-        if isinstance(_ts_raw, (int, float)) and _ts_raw > 0:
-            _ts_norm = float(_ts_raw) / 1000.0 if _ts_raw > 1e12 else float(_ts_raw)
-            entry["ageSec"] = round(max(0.0, _now_s - _ts_norm), 3)
-        else:
-            entry["ageSec"] = None
+        entry["ageSec"] = _age_seconds(entry.get("ts"))
+        entry["ws_age_sec"] = _age_seconds(entry.get("last_ws_ts"))
+        entry["rest_age_sec"] = _age_seconds(entry.get("last_rest_ts"))
+        if entry.get("preferred_source") is None and entry.get("source") is not None:
+            entry["preferred_source"] = entry.get("source")
+        if entry.get("overwrite_reason") is None and entry.get("source") is not None:
+            entry["overwrite_reason"] = "single_source"
         decorated[_k] = entry
 
     resp = jsonify(
@@ -348,6 +368,370 @@ def api_intermarket_matrix():
         log.error(f"api_intermarket_matrix error: {e}")
         return jsonify({"success": False, "error": str(e)}), 500
 
+
+def _chart_symbol_key(value) -> str:
+    if not isinstance(value, str):
+        return ""
+    raw = value.strip().upper()
+    if not raw:
+        return ""
+    without_provider = raw.split(":")[-1]
+    without_yahoo_fx_suffix = without_provider.replace("=X", "")
+    return re.sub(r"[^A-Z0-9]", "", without_yahoo_fx_suffix)
+
+
+def _find_chart_pair(symbol: str):
+    exact = next(
+        (p for p in ALL_PAIRS if p.get("symbol") == symbol or p.get("display") == symbol),
+        None,
+    )
+    if exact:
+        return exact
+
+    requested_key = _chart_symbol_key(symbol)
+    if not requested_key:
+        return None
+    return next(
+        (
+            p
+            for p in ALL_PAIRS
+            if requested_key
+            in {
+                _chart_symbol_key(p.get("symbol")),
+                _chart_symbol_key(p.get("display")),
+            }
+        ),
+        None,
+    )
+
+
+def _safe_float(value, default=None):
+    try:
+        out = float(value)
+    except (TypeError, ValueError):
+        return default
+    return out if out == out else default
+
+
+def _tf_seconds(tf: str) -> int | None:
+    return {
+        "M1": 60,
+        "M5": 5 * 60,
+        "M15": 15 * 60,
+        "M30": 30 * 60,
+        "H1": 60 * 60,
+        "H4": 4 * 60 * 60,
+        "D1": 24 * 60 * 60,
+        "W1": 7 * 24 * 60 * 60,
+    }.get(str(tf or "").upper())
+
+
+def _execution_provider_for_pair(pair: dict) -> str:
+    asset_group = str(pair.get("type") or "").lower()
+    if asset_group == "crypto":
+        explicit = CONFIG.get("CRYPTO_EXECUTION_PROVIDER")
+        if explicit:
+            return str(explicit).strip().lower()
+        by_class = CONFIG.get("EXECUTION_PROVIDER_BY_ASSET")
+        if isinstance(by_class, dict) and by_class.get("crypto"):
+            return str(by_class.get("crypto")).strip().lower()
+        return "bybit"
+    return str(pair.get("source") or "").strip().lower()
+
+
+def _bybit_category_for_pair(pair: dict) -> str:
+    return str(
+        pair.get("bybit_category")
+        or CONFIG.get("CRYPTO_CHART_BYBIT_CATEGORY")
+        or "linear"
+    ).strip().lower()
+
+
+def _bybit_symbol_for_pair(pair: dict) -> str:
+    return str(pair.get("bybit_symbol") or pair.get("symbol") or pair.get("display") or "").replace("/", "").upper()
+
+
+def _fallback_to_binance_allowed() -> bool:
+    query_value = (request.args.get("allowFallback") or "").strip().lower()
+    if query_value in {"1", "true", "yes", "y"}:
+        return True
+    return bool(CONFIG.get("CRYPTO_CHART_BYBIT_FALLBACK_ENABLED", False))
+
+
+def _iso_timestamp(candle: dict):
+    raw = candle.get("time", candle.get("datetime", ""))
+    if not raw and candle.get("open_time") is not None:
+        open_ms = _safe_float(candle.get("open_time"))
+        if open_ms is not None:
+            raw = datetime.fromtimestamp(open_ms / 1000.0, timezone.utc).isoformat()
+    if isinstance(raw, str):
+        ts = raw.strip().replace(" ", "T")
+        if re.match(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?$", ts):
+            ts += "Z"
+        return ts
+    return raw
+
+
+def _infer_confirmed(candle: dict, tf: str, now_s: float) -> bool | None:
+    raw = candle.get("confirmed", candle.get("closed"))
+    if raw is not None:
+        return bool(raw)
+    open_ms = _safe_float(candle.get("open_time"))
+    tf_s = _tf_seconds(tf)
+    if open_ms is None or not tf_s:
+        return None
+    return (open_ms / 1000.0) + tf_s <= now_s
+
+
+def _volume_ma(values: list[float], period: int = 20) -> list[float | None]:
+    out: list[float | None] = []
+    for i in range(len(values)):
+        if i + 1 < period:
+            out.append(None)
+            continue
+        window = values[i - period + 1 : i + 1]
+        out.append(sum(window) / period)
+    return out
+
+
+def _vwap_values(rows: list[dict]) -> tuple[list[float | None], str]:
+    use_turnover = any(_safe_float(row.get("turnover"), 0.0) > 0 for row in rows)
+    cum_value = 0.0
+    cum_volume = 0.0
+    out: list[float | None] = []
+    for row in rows:
+        volume = _safe_float(row.get("v"), 0.0) or 0.0
+        if volume <= 0:
+            out.append(None if cum_volume <= 0 else cum_value / cum_volume)
+            continue
+        turnover = _safe_float(row.get("turnover"), 0.0) or 0.0
+        if use_turnover and turnover > 0:
+            cum_value += turnover
+        else:
+            typical = (row["h"] + row["l"] + row["c"]) / 3.0
+            cum_value += typical * volume
+        cum_volume += volume
+        out.append(cum_value / cum_volume if cum_volume > 0 else None)
+    formula = (
+        "cumulative_turnover_divided_by_cumulative_volume"
+        if use_turnover
+        else "cumulative_typical_price_times_volume_divided_by_cumulative_volume"
+    )
+    return out, formula
+
+
+def _format_chart_candles(
+    candles: list[dict],
+    *,
+    tf: str,
+    provider: str | None = None,
+    category: str | None = None,
+    bybit_symbol: str | None = None,
+    include_indicators: bool = False,
+) -> tuple[list[dict], dict]:
+    now_s = time.time()
+    rows: list[dict] = []
+    for c in candles:
+        volume = float(c.get("vol", c.get("volume", 0)) or 0)
+        row = {
+            "t": _iso_timestamp(c),
+            "o": float(c.get("open", 0)),
+            "h": float(c.get("high", 0)),
+            "l": float(c.get("low", 0)),
+            "c": float(c.get("close", 0)),
+            "v": volume,
+            "volume": volume,
+        }
+        if provider:
+            row.update(
+                {
+                    "provider": provider,
+                    "category": category,
+                    "symbol": bybit_symbol or c.get("symbol"),
+                    "open_time": c.get("open_time"),
+                    "turnover": float(c.get("turnover", 0) or 0),
+                    "confirmed": _infer_confirmed(c, tf, now_s),
+                    "closed": _infer_confirmed(c, tf, now_s),
+                }
+            )
+        rows.append(row)
+
+    meta = {"vwap_formula": None}
+    if include_indicators and rows:
+        try:
+            from indicators import calc_adx, calc_atr, calc_ema, calc_rsi
+
+            highs = [row["h"] for row in rows]
+            lows = [row["l"] for row in rows]
+            closes = [row["c"] for row in rows]
+            volumes = [row["v"] for row in rows]
+            ema21 = calc_ema(closes, 21)
+            ema50 = calc_ema(closes, 50)
+            ema200 = calc_ema(closes, 200)
+            rsi14 = calc_rsi(closes, 14)
+            atr14 = calc_atr(highs, lows, closes, 14)
+            adx = calc_adx(highs, lows, closes, 14).get("adx", [])
+            vol_ma = _volume_ma(volumes, 20)
+            vwap, formula = _vwap_values(rows)
+            meta["vwap_formula"] = formula
+            for idx, row in enumerate(rows):
+                row["ema21"] = ema21[idx] if idx < len(ema21) else None
+                row["ema50"] = ema50[idx] if idx < len(ema50) else None
+                row["ema200"] = ema200[idx] if idx < len(ema200) else None
+                row["rsi14"] = rsi14[idx] if idx < len(rsi14) else None
+                row["adx14"] = adx[idx] if idx < len(adx) else None
+                row["atr14"] = atr14[idx] if idx < len(atr14) else None
+                row["volume_ma"] = vol_ma[idx] if idx < len(vol_ma) else None
+                row["vwap"] = vwap[idx] if idx < len(vwap) else None
+        except Exception as exc:
+            meta["indicator_error"] = str(exc)
+    return rows, meta
+
+
+def _normalize_bybit_tick(raw: dict | None, *, symbol: str, category: str) -> dict | None:
+    if not isinstance(raw, dict):
+        return None
+    price = _safe_float(raw.get("price") or raw.get("lastPrice") or raw.get("last"))
+    if price is None or price <= 0:
+        return None
+    ts_raw = raw.get("ts", raw.get("timestamp"))
+    ts = _safe_float(ts_raw)
+    if ts is not None and ts > 1e12:
+        ts /= 1000.0
+    if ts is None or ts <= 0:
+        ts = time.time()
+    return {
+        "symbol": str(raw.get("symbol") or symbol).replace("/", "").upper(),
+        "price": price,
+        "bid": _safe_float(raw.get("bid")),
+        "ask": _safe_float(raw.get("ask")),
+        "timestamp": ts,
+        "provider": "bybit",
+        "source": str(raw.get("source") or "bybit_rest"),
+        "category": str(raw.get("category") or category),
+        "age_seconds": round(max(0.0, time.time() - ts), 3),
+    }
+
+
+def _fetch_bybit_chart_tick(symbol: str, category: str) -> dict | None:
+    if not callable(fetch_bybit_ticker):
+        return None
+    try:
+        raw = fetch_bybit_ticker(symbol, category=category)
+    except TypeError:
+        raw = fetch_bybit_ticker(symbol)
+    return _normalize_bybit_tick(raw, symbol=symbol, category=category)
+
+
+def _generic_chart_provider(pair: dict, chart_source: str) -> str:
+    source = str(pair.get("source") or chart_source or "unknown").lower()
+    if chart_source.startswith("eodhd"):
+        return "eodhd"
+    if chart_source.startswith("shared") and source:
+        return source
+    return source or str(chart_source or "unknown").lower()
+
+
+def _generic_candle_policy(pair: dict, chart_source: str) -> str:
+    ptype = str(pair.get("type") or "").lower()
+    source = str(pair.get("source") or "").lower()
+    if ptype == "forex" and source == "mt5":
+        return "confirmed-only"
+    if "+ws" in str(chart_source or "").lower():
+        return "confirmed+forming-ws"
+    if ptype == "forex":
+        return "confirmed-only"
+    return "provider-default"
+
+
+def _crypto_chart_payload(pair: dict, symbol: str, tf: str, limit: int):
+    execution_provider = _execution_provider_for_pair(pair)
+    if execution_provider != "bybit":
+        return None
+
+    bybit_symbol = _bybit_symbol_for_pair(pair)
+    category = _bybit_category_for_pair(pair)
+    fallback_chain = ["bybit"]
+    chart_provider = "bybit"
+    fallback_used = False
+    provider_mismatch = False
+    mismatch_reason = None
+    chart_status = "execution_grade"
+
+    candles = fetch_bybit_klines(bybit_symbol, tf, limit) if callable(fetch_bybit_klines) else None
+    if not candles:
+        if not _fallback_to_binance_allowed():
+            return {
+                "error": f"No Bybit candle data for {symbol} {tf}",
+                "asset_group": "crypto",
+                "execution_provider": execution_provider,
+                "chart_provider": "bybit",
+                "candle_provider": "bybit",
+                "fallback_used": False,
+                "fallback_chain": fallback_chain,
+                "provider_mismatch": False,
+                "chart_status": "unavailable",
+            }, 503
+        candles = fetch_candles(pair, tf, limit)
+        chart_provider = "binance" if str(pair.get("source") or "").lower() == "binance" else str(pair.get("source") or "fallback").lower()
+        fallback_used = True
+        provider_mismatch = True
+        mismatch_reason = "crypto_execution_provider_bybit_chart_fell_back_to_binance"
+        fallback_chain.append(chart_provider)
+        chart_status = "non_execution_grade"
+
+    if not candles:
+        return {"error": f"No candle data for {symbol} {tf}"}, 404
+
+    rows, indicator_meta = _format_chart_candles(
+        candles,
+        tf=tf,
+        provider=chart_provider,
+        category=category if chart_provider == "bybit" else None,
+        bybit_symbol=bybit_symbol if chart_provider == "bybit" else pair.get("symbol"),
+        include_indicators=True,
+    )
+    live_tick = _fetch_bybit_chart_tick(bybit_symbol, category)
+    live_tick_provider = live_tick.get("provider") if live_tick else chart_provider
+    last_candle_ts = rows[-1].get("t") if rows else None
+    payload = {
+        "candles": rows,
+        "symbol": symbol,
+        "display": pair.get("display", symbol),
+        "tf": tf,
+        "pairType": "crypto",
+        "candlesSource": chart_provider,
+        "asset_group": "crypto",
+        "execution_provider": execution_provider,
+        "chart_provider": chart_provider,
+        "candle_provider": chart_provider,
+        "live_tick_provider": live_tick_provider,
+        "volume_provider": chart_provider,
+        "turnover_provider": chart_provider,
+        "atr_provider": chart_provider,
+        "atr_timeframe": tf,
+        "indicator_provider": chart_provider,
+        "indicator_source_candle_provider": chart_provider,
+        "provider_mismatch": provider_mismatch,
+        "provider_mismatch_reason": mismatch_reason,
+        "fallback_used": fallback_used,
+        "fallback_chain": fallback_chain,
+        "chart_status": chart_status,
+        "candle_confirmed_policy": (
+            "bybit_rest_interval_close_inferred"
+            if chart_provider == "bybit"
+            else "fallback_provider_policy"
+        ),
+        "last_candle_ts": last_candle_ts,
+        "live_tick_age_seconds": live_tick.get("age_seconds") if live_tick else None,
+        "liveTick": live_tick,
+        "volume_ma_period": 20,
+        "vwap_formula": indicator_meta.get("vwap_formula"),
+        "indicator_set": ["EMA21", "EMA50", "EMA200", "VWAP", "RSI14", "ADX14", "ATR14", "Volume", "Volume MA"],
+    }
+    return payload, 200
+
+
 def api_candles():
     """Return OHLCV candles for the chart widget."""
     symbol = request.args.get("symbol")
@@ -361,10 +745,7 @@ def api_candles():
     if not symbol:
         return jsonify({"error": "Missing symbol parameter"}), 400
 
-    pair = next(
-        (p for p in ALL_PAIRS if p.get("symbol") == symbol or p.get("display") == symbol),
-        None,
-    )
+    pair = _find_chart_pair(symbol)
     if not pair:
         return jsonify({"error": f"Unknown symbol: {symbol}"}), 404
 
@@ -372,11 +753,18 @@ def api_candles():
     # come from one canonical H1 timeline (EODHD + optional forming WS merge).
     # ?source=live keeps the generic shared fetch path for debugging.
     ptype = pair.get("type") or ""
+    pair_source = str(pair.get("source") or "").lower()
     source_q = (request.args.get("source") or "").strip().lower()
     chart_source = "live" if source_q == "live" else "shared"
     candles = None
 
-    if ptype == "forex" and pair.get("source") == "eodhd" and source_q != "live":
+    if ptype == "crypto":
+        crypto_payload = _crypto_chart_payload(pair, symbol, tf, limit)
+        if crypto_payload is not None:
+            payload, status = crypto_payload
+            return jsonify(_json_safe(payload)), status
+
+    if ptype == "forex" and pair_source == "eodhd" and source_q != "live":
         # Fetch one canonical H1 stream and resample deterministically for H4/D1.
         base_limit = {
             "H1": limit,
@@ -404,7 +792,7 @@ def api_candles():
     if not candles:
         candles = fetch_candles(pair, tf, limit)
         # Optional forming-bar merge for forex on generic/shared path.
-        if candles and ptype == "forex" and pair.get("source") != "polygon":
+        if candles and ptype == "forex" and pair_source not in {"polygon", "mt5"}:
             candles, ws_note = _merge_forex_forming_ws(
                 candles, pair.get("display", ""), tf, limit
             )
@@ -414,28 +802,9 @@ def api_candles():
     if not candles:
         return jsonify({"error": f"No candle data for {symbol} {tf}"}), 404
 
-    _naive_iso_utc = re.compile(
-        r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?$"
-    )
-    result = []
-    for c in candles:
-        _t = c.get("time", c.get("datetime", ""))
-        if isinstance(_t, str):
-            _ts = _t.strip().replace(" ", "T")
-            if _naive_iso_utc.match(_ts):
-                _ts += "Z"
-            _t = _ts
-        result.append(
-            {
-                "t": _t,
-                "o": float(c.get("open", 0)),
-                "h": float(c.get("high", 0)),
-                "l": float(c.get("low", 0)),
-                "c": float(c.get("close", 0)),
-                "v": float(c.get("vol", c.get("volume", 0))),
-            }
-        )
+    result, _indicator_meta = _format_chart_candles(candles, tf=tf)
 
+    provider = _generic_chart_provider(pair, chart_source)
     return jsonify(
         {
             "candles": result,
@@ -444,8 +813,67 @@ def api_candles():
             "tf": tf,
             "pairType": ptype,
             "candlesSource": chart_source,
+            "asset_group": ptype,
+            "chart_provider": provider,
+            "candle_provider": provider,
+            "live_tick_provider": provider,
+            "candle_confirmed_policy": _generic_candle_policy(pair, chart_source),
+            "last_candle_ts": result[-1].get("t") if result else None,
         }
     )
+
+
+def api_chart_tick():
+    """Return chart-scoped live tick diagnostics without touching shared price feeds."""
+    symbol = request.args.get("symbol")
+    if not symbol:
+        return jsonify({"error": "Missing symbol parameter"}), 400
+
+    pair = _find_chart_pair(symbol)
+    if not pair:
+        return jsonify({"error": f"Unknown symbol: {symbol}"}), 404
+
+    asset_group = str(pair.get("type") or "").lower()
+    execution_provider = _execution_provider_for_pair(pair)
+    if asset_group == "crypto" and execution_provider == "bybit":
+        bybit_symbol = _bybit_symbol_for_pair(pair)
+        category = _bybit_category_for_pair(pair)
+        tick = _fetch_bybit_chart_tick(bybit_symbol, category)
+        if not tick:
+            return jsonify(
+                {
+                    "error": f"No Bybit live tick for {symbol}",
+                    "asset_group": asset_group,
+                    "execution_provider": execution_provider,
+                    "live_tick_provider": "bybit",
+                }
+            ), 503
+        return jsonify(
+            _json_safe(
+                {
+                    "symbol": symbol,
+                    "display": pair.get("display", symbol),
+                    "asset_group": asset_group,
+                    "execution_provider": execution_provider,
+                    "chart_provider": "bybit",
+                    "live_tick_provider": "bybit",
+                    "price": tick.get("price"),
+                    "bid": tick.get("bid"),
+                    "ask": tick.get("ask"),
+                    "timestamp": tick.get("timestamp"),
+                    "provider": tick.get("provider"),
+                    "source": tick.get("source"),
+                    "category": tick.get("category"),
+                    "age_seconds": tick.get("age_seconds"),
+                    "provider_mismatch": False,
+                    "fallback_used": False,
+                    "live_tick_age_seconds": tick.get("age_seconds"),
+                    "liveTick": tick,
+                }
+            )
+        )
+
+    return jsonify({"error": f"No chart tick provider for {symbol}"}), 404
 
 
 def api_news_sentiment():
@@ -520,7 +948,7 @@ def register_market_data_routes(app, runtime: SimpleNamespace) -> None:
     """Register market metadata routes using runtime state supplied by athena.py."""
     global CONFIG, ALL_PAIRS, ACTIVE_PAIRS, ETF_PAIRS, JSE_PAIRS
     global _disabled_pairs, _live_prices, _live_prices_lock, log
-    global fetch_yield_curve, http_requests, fetch_candles, fetch_eodhd
+    global fetch_yield_curve, http_requests, fetch_candles, fetch_bybit_klines, fetch_bybit_ticker, fetch_eodhd
     global _extract_candles, _merge_forex_forming_ws, _resample_from_h1
     global _forex_h4_resample_offset_hours, _eodhd_ticker_for_pair, _json_safe
 
@@ -535,6 +963,8 @@ def register_market_data_routes(app, runtime: SimpleNamespace) -> None:
     fetch_yield_curve = runtime.fetch_yield_curve
     http_requests = runtime.http_requests
     fetch_candles = runtime.fetch_candles
+    fetch_bybit_klines = getattr(runtime, "fetch_bybit_klines", None)
+    fetch_bybit_ticker = getattr(runtime, "fetch_bybit_ticker", None)
     fetch_eodhd = runtime.fetch_eodhd
     _extract_candles = runtime.extract_candles
     _merge_forex_forming_ws = runtime.merge_forex_forming_ws
@@ -555,6 +985,7 @@ def register_market_data_routes(app, runtime: SimpleNamespace) -> None:
         api_intermarket_matrix,
     )
     app.add_url_rule("/api/candles", "api_candles", api_candles, methods=["GET"])
+    app.add_url_rule("/api/chart-tick", "api_chart_tick", api_chart_tick, methods=["GET"])
     app.add_url_rule(
         "/api/news-sentiment",
         "api_news_sentiment",

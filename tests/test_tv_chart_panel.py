@@ -140,6 +140,79 @@ def test_indicator_toggles_wire_in_house_series_per_pane():
     assert "Indicator preset" in source
 
 
+def test_native_chart_fetches_warmup_history_but_keeps_latest_window_visible():
+    source = _read(TV_PANEL)
+
+    assert "const CHART_HISTORY_LIMIT = 1000" in source
+    assert "const VISIBLE_BAR_COUNT = 180" in source
+    assert "limit=${CHART_HISTORY_LIMIT}" in source
+    assert "setVisibleLogicalRange" in source
+    assert "rows.length - VISIBLE_BAR_COUNT" in source
+
+
+def test_native_chart_uses_compact_fixed_height_instead_of_stretch_layout():
+    source = _read(TV_PANEL)
+
+    assert "const PRICE_CHART_HEIGHT_PX = 340" in source
+    assert "const STUDY_PANE_HEIGHT_PX = 110" in source
+    assert "const chartHeightPx = PRICE_CHART_HEIGHT_PX + subPaneStudyCount * STUDY_PANE_HEIGHT_PX" in source
+    assert "style={{ height: `${chartHeightPx}px` }}" in source
+    assert 'h-[calc(100%-160px)]' not in source
+    assert "minHeight: `${chartMinHeightPx}px`" not in source
+
+
+def test_native_chart_has_full_chart_screenshot_action():
+    source = _read(TV_PANEL)
+
+    assert "Camera" in source
+    assert "chartCaptureRef" in source
+    assert "function downloadChartScreenshot" in source
+    assert "querySelectorAll('canvas')" in source
+    assert "toBlob" in source
+    assert "Screenshot" in source
+    assert "aria-label=\"Download full chart screenshot\"" in source
+
+
+def test_native_chart_consumes_shared_live_tick_feed():
+    source = _read(TV_PANEL)
+
+    assert "useLivePrices" in source
+    assert "const LIVE_TICK_MAX_AGE_SEC = 20" in source
+    assert "const { priceEntryFor } = useLivePrices()" in source
+    assert "liveTickFromEntry(priceEntryFor(pair))" in source
+    assert "buildLiveCandleRows(baseRows, liveTick, backendTf)" in source
+    assert "lastValueVisible: true" in source
+    assert "priceLineVisible: true" in source
+
+
+def test_live_tick_builds_forming_candle_without_mutating_source_history():
+    source = _read(TV_PANEL)
+
+    assert "function buildLiveCandleRows" in source
+    assert "if (liveTick.ageSec > LIVE_TICK_MAX_AGE_SEC) return baseRows" in source
+    assert "const out = [...baseRows]" in source
+    assert "bucketStart > lastTime" in source
+    assert "open: last.close" in source
+    assert "high: Math.max(last.high, liveTick.price)" in source
+    assert "low: Math.min(last.low, liveTick.price)" in source
+    assert "close: liveTick.price" in source
+
+
+def test_native_chart_surfaces_live_price_without_overwriting_signal_entry():
+    source = _read(TV_PANEL)
+
+    assert 'label="Entry" value={firstNumber(signal?.entry, signal?.price)}' in source
+    assert 'label="Live price" value={liveTick?.price}' in source
+    assert 'label="Live tick" value={liveTick ? `${fmtNum(liveTick.ageSec, 0)}s ${liveTick.source || \'tick\'}` : null}' in source
+    assert "<EngineASidePanel signal={chartCandidate} liveTick={liveTick} />" in source
+
+
+def test_native_chart_opens_on_h4_by_default_for_tradingview_parity():
+    source = _read(TV_PANEL)
+
+    assert "const [timeframe, setTimeframe] = useState('240')" in source
+
+
 def test_engine_a_review_layout_enables_required_lean_indicators():
     source = _read(TV_PANEL)
 
@@ -155,13 +228,95 @@ def test_engine_a_review_layout_enables_required_lean_indicators():
     assert "Stochastic@tv-basicstudies" not in source
 
 
+def test_crypto_chart_exposes_bybit_provider_badge_and_required_indicators():
+    source = _read(TV_PANEL)
+
+    assert "chart_provider" in source
+    assert "provider_mismatch" in source
+    assert "ProviderBadge" in source
+    assert "Bybit" in source
+    assert "EMA21" in source
+    assert "VWAP" in source
+    assert "ADX14" in source
+    assert "Volume" in source
+    assert "Volume MA" in source
+
+
+def test_chart_capture_area_contains_provider_header_and_indicator_labels_for_screenshots():
+    source = _read(TV_PANEL)
+
+    assert "chartCaptureRef" in source
+    assert "data-chart-capture-label" in source
+    assert "chartHeaderText" in source
+    assert "assetGroupLabel" in source
+    assert "candlePolicyLabel" in source
+    assert "lastCandleLabel" in source
+    assert "pricePanelLegendItems" in source
+    assert "studyPanelLegendItems" in source
+    assert "IndicatorLegendItem" in source
+
+
+def test_forex_indicator_legend_uses_series_definitions_and_current_values():
+    source = _read(TV_PANEL)
+
+    assert "PRICE_PANEL_INDICATORS" in source
+    assert "key: 'ema20'" in source
+    assert "key: 'ema50'" in source
+    assert "key: 'ema200'" in source
+    assert "key: 'dema200'" in source
+    assert "formatIndicatorValue(item.value" in source
+    assert "PRICE_PANEL_INDICATORS.ema20.color" in source
+    assert "EMA20" in source
+    assert "DEMA200" in source
+
+
+def test_oscillator_and_bottom_panel_labels_identify_rsi_atr_or_adx():
+    source = _read(TV_PANEL)
+
+    assert "RSI14" in source
+    assert "70/30" in source
+    assert "ATR14" in source
+    assert "ADX14" in source
+    assert "Bottom panel identity: forex ATR14; crypto ADX14/ATR14 when enabled" in source
+
+
+def test_engine_a_parity_toggle_and_overlay_are_dom_visible():
+    source = _read(TV_PANEL)
+
+    assert "Engine A Parity" in source
+    assert "engineAParityVisible" in source
+    assert "engineAParityRows" in source
+    assert "price_inside_ema_cluster" in source
+    assert "at_or_below_resistance" in source
+    assert "nearest_ema_resistance_distance_atr" in source
+    assert "nearest_ema_support_distance_atr" in source
+
+
+def test_chart_screenshot_draws_dom_labels_over_canvas_export():
+    source = _read(TV_PANEL)
+
+    assert "function drawCaptureLabels" in source
+    assert "querySelectorAll('[data-chart-capture-label]')" in source
+    assert "drawCaptureLabels(outputCtx, captureEl, captureRect)" in source
+
+
+def test_crypto_chart_uses_payload_live_tick_before_shared_price_fallback():
+    source = _read(TV_PANEL)
+
+    assert "liveTickFromChartPayload(chartPayload)" in source
+    assert "liveTickFromChartPayload(chartTickPayload)" in source
+    assert "/api/chart-tick?symbol=" in source
+    assert "const sharedLiveTick = useMemo(() => liveTickFromEntry(priceEntryFor(pair)), [pair, priceEntryFor]);" in source
+    assert "const liveTick = chartPayload?.live_tick_provider === 'bybit' ? (chartTickLiveTick ?? chartPayloadLiveTick) : sharedLiveTick" in source
+
+
 def test_engine_a_side_panel_follows_current_chart_symbol_not_first_candidate():
     source = _read(TV_PANEL)
 
     assert "function findEngineACandidateForSymbol" in source
     assert "const chartCandidate = useMemo(() => findEngineACandidateForSymbol(candidateRows, pair), [candidateRows, pair]);" in source
-    assert "<EngineASidePanel signal={chartCandidate} />" in source
-    assert "<EngineASidePanel signal={selectedCandidate} />" not in source
+    assert "<EngineASidePanel signal={chartCandidate} liveTick={liveTick} />" in source
+    assert "<EngineASidePanel signal={selectedCandidate}" not in source
     assert 'aria-label="Engine A candidate"' in source
 
 
