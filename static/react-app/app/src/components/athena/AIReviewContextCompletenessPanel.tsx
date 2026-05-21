@@ -41,10 +41,17 @@ export default function AIReviewContextCompletenessPanel({
   atrDiagnostics,
   resistanceMap,
 }: AIReviewContextCompletenessPanelProps) {
-  if (!completeness) return null;
-  const status = completeness.status || 'unknown';
+  const c = completeness ?? {
+    score: null,
+    status: 'unknown',
+    missingRequired: [],
+    missingOptional: [],
+    notApplicable: [],
+    metadata: {},
+  };
+  const status = c.status || 'unknown';
   const statusClass = STATUS_CLASS[status] ?? 'bg-zinc-500/15 text-zinc-300 border-zinc-500/40';
-  const metadata = completeness.metadata || {};
+  const metadata = c.metadata || {};
 
   return (
     <div className="space-y-2 border border-border/50 rounded-md p-2 bg-muted/10">
@@ -56,7 +63,7 @@ export default function AIReviewContextCompletenessPanel({
           {status}
         </Badge>
         <span className="text-[10px] font-mono text-muted-foreground ml-auto">
-          score {show(completeness.score)}
+          score {show(c.score)}
         </span>
       </div>
 

@@ -21,6 +21,8 @@ from ai_review.persistence import ensure_schema, find_recent_review_by_hash, rec
 from ai_review.prompt_builder import build_chart_review_prompt
 from ai_review.provider_meta import apply_parse_fallback, build_provider_meta
 from ai_review.providers.router import run_chart_review
+from ai_review.engine_a_context import build_engine_a_prompt_context
+from ai_review.engine_a_verdict import build_engine_a_verdict_comparison
 from ai_review.summary import build_ai_review_summary
 from ai_review.context_diagnostics import build_context_diagnostics
 from ai_review.timestamp_contract import evaluate_timestamp_mismatch
@@ -340,9 +342,19 @@ def test_prompt_threshold_not_hardcoded():
             assert "1.5" not in line and "2.0" not in line and "1.7" not in line
 
 
-def test_prompt_includes_factor_diagnostics():
+def test_prompt_includes_engine_a_context_json():
     prompt = build_chart_review_prompt(_engine_a_ctx())
-    assert "trendCoherence" in prompt
+    assert "engineAContext" in prompt
+    assert '"direction": "LONG"' in prompt or '"direction": "LONG",' in prompt
+    assert "engineAVerdictComparison" in prompt
+
+
+def test_build_engine_a_prompt_context_null_when_missing():
+    ctx = _engine_a_ctx(threshold=None, confluence_score=None)
+    ctx["engine_snapshots"] = extract_engine_snapshots({}, ctx)
+    block = build_engine_a_prompt_context(ctx)
+    assert block["threshold"] is None
+    assert block["score"] is None
 
 
 def test_prompt_includes_equity_session_applied_and_multiplier():
@@ -584,6 +596,7 @@ def test_summary_always_present_on_success(tmp_audit_db):
         "providerStatus",
         "fallbackUsed",
         "humanAction",
+        "setupType",
         "overallScore",
         "tradeabilityScore",
         "engineAlignmentScore",
@@ -595,6 +608,8 @@ def test_summary_always_present_on_success(tmp_audit_db):
         "engineA",
     ):
         assert key in summary
+    assert data.get("engineAVerdictComparison") is not None
+    assert data.get("engine_a_verdict_comparison") == data["engineAVerdictComparison"]
 
 
 def test_context_diagnostics_attached_to_success_response(tmp_audit_db):
@@ -750,6 +765,36 @@ def test_parse_fallback_provider_status(tmp_audit_db):
     assert summary["fallbackUsed"] is True
     assert summary["model"] == "deterministic_normalizer"
     assert "opus" not in summary["model"].lower()
+
+
+def test_engine_a_verdict_wait_extension_downgrade():
+    ctx = _engine_a_ctx(passed=True)
+    ctx["engine_snapshots"] = extract_engine_snapshots({}, ctx)
+    ai = normalize_chart_review_response(
+        json.dumps(
+            {
+                "verdict": "CAUTION",
+                "confidence": 55,
+                "human_action": "wait",
+                "visual_confirmation": "direction ok",
+                "visual_contradiction": "",
+                "engine_a_alignment": "aligned with engine",
+                "entry_quality": "resistance cluster entry, poor timing extended above VWAP",
+                "atr_rr_assessment": "acceptable",
+                "freshness_assessment": "fresh",
+                "supporting_reasons": [],
+                "risks": ["late entry", "compression"],
+                "missing_context": [],
+            }
+        )
+    )
+    comparison = build_engine_a_verdict_comparison(ctx, ai, engine_snapshots=ctx["engine_snapshots"])
+    assert comparison["engineABiasValid"] is True
+    assert comparison["chartConfirmsEngineADirection"] is True
+    assert comparison["chartContradictsEntryTiming"] is True
+    assert comparison["aiDowngradedEngineA"] is True
+    assert comparison["comparisonVerdict"] == "engine_a_direction_confirmed_entry_rejected"
+    assert comparison["finalDecision"] == "wait"
 
 
 def test_wait_high_alignment_low_tradeability():

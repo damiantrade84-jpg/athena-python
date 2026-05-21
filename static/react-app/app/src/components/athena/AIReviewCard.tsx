@@ -2,6 +2,7 @@ import { Sparkles } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import AIReviewContextCompletenessPanel from '@/components/athena/AIReviewContextCompletenessPanel';
+import AIReviewEngineAVerdictPanel from '@/components/athena/AIReviewEngineAVerdictPanel';
 import AIReviewSummaryStrip from '@/components/athena/AIReviewSummaryStrip';
 import type {
   AIChartReviewResponse,
@@ -51,6 +52,8 @@ export default function AIReviewCard({ response }: AIReviewCardProps) {
   const ts = response.timestamps;
   const ctx = response.engine_a_context;
   const summary = response.aiReviewSummary ?? response.ai_review_summary;
+  const verdictComparison =
+    response.engineAVerdictComparison ?? response.engine_a_verdict_comparison;
   const atrInfo = ctx?.atr;
   const scanDelta = deltaSeconds(ts.scan_timestamp, ts.chart_captured_at);
   const verdictClass = VERDICT_PILL[ai.verdict] ?? VERDICT_PILL.NO_TRADE;
@@ -95,9 +98,9 @@ export default function AIReviewCard({ response }: AIReviewCardProps) {
           </span>
         </div>
 
-        {summary && (
-          <AIReviewSummaryStrip summary={summary} />
-        )}
+        <AIReviewSummaryStrip summary={summary} />
+
+        <AIReviewEngineAVerdictPanel comparison={verdictComparison} />
 
         <AIReviewContextCompletenessPanel
           completeness={response.contextCompleteness}

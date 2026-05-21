@@ -15,6 +15,7 @@ from ai_review.context_diagnostics import (
     sanitize_ai_review_missing_context,
 )
 from ai_review.engine_a_context import assemble_engine_a_context
+from ai_review.engine_a_verdict import build_engine_a_verdict_comparison
 from ai_review.freshness import classify_atr_freshness
 from ai_review.normalizer import normalize_chart_review_response
 from ai_review.payload_schema import build_payload
@@ -59,6 +60,13 @@ def _attach_review_summary(
     diagnostic_source = diagnostic_ai_review or ai_review
     clean_ai_review = sanitize_ai_review_missing_context(engine_a_ctx, diagnostic_source)
     response["ai_review"] = clean_ai_review
+    structured = clean_ai_review.get("structured") or {}
+    if not isinstance(structured, dict):
+        structured = {}
+    model_summary = structured.get("aiReviewSummary") or structured.get("ai_review_summary")
+    model_comparison = structured.get("engineAVerdictComparison") or structured.get(
+        "engine_a_verdict_comparison"
+    )
     summary = build_ai_review_summary(
         engine_a_ctx,
         clean_ai_review,
@@ -66,10 +74,22 @@ def _attach_review_summary(
         provider_meta,
         engine_snapshots=snapshots,
         mismatch_warnings=mismatch_warnings,
+        model_summary=model_summary if isinstance(model_summary, dict) else None,
+    )
+    verdict_comparison = build_engine_a_verdict_comparison(
+        engine_a_ctx,
+        clean_ai_review,
+        model_comparison=model_comparison if isinstance(model_comparison, dict) else None,
+        engine_snapshots=snapshots,
     )
     response["aiReviewSummary"] = summary
     response["ai_review_summary"] = summary
-    response.update(build_context_diagnostics(engine_a_ctx, diagnostic_source))
+    response["engineAVerdictComparison"] = verdict_comparison
+    response["engine_a_verdict_comparison"] = verdict_comparison
+    ctx_diag = build_context_diagnostics(engine_a_ctx, diagnostic_source)
+    response.update(ctx_diag)
+    response["derivativesContext"] = ctx_diag.get("fundingOi")
+    response["derivatives_context"] = ctx_diag.get("fundingOi")
     return response
 
 

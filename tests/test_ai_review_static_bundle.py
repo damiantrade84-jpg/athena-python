@@ -27,6 +27,8 @@ def test_active_bundle_contains_ai_review_summary_and_context_markers():
     assert "Context completeness" in text
     assert "aiReviewSummary" in text
     assert "contextCompleteness" in text
+    assert "Engine A vs AI verdict" in text
+    assert "engineAVerdictComparison" in text
 
 
 def test_frontend_normalizes_camel_and_snake_review_keys_once():
@@ -38,6 +40,7 @@ def test_frontend_normalizes_camel_and_snake_review_keys_once():
     assert "record.fundingOi ?? record.funding_oi" in text
     assert "record.atrDiagnostics ?? record.atr_diagnostics" in text
     assert "record.resistanceMap ?? record.resistance_map" in text
+    assert "record.engineAVerdictComparison ?? record.engine_a_verdict_comparison" in text
 
 
 def test_frontend_renders_summary_and_context_before_detail_rows():
@@ -45,7 +48,10 @@ def test_frontend_renders_summary_and_context_before_detail_rows():
         encoding="utf-8"
     )
     summary_idx = text.index("<AIReviewSummaryStrip")
+    verdict_idx = text.index("<AIReviewEngineAVerdictPanel")
     context_idx = text.index("<AIReviewContextCompletenessPanel")
     details_idx = text.index('label="Visual confirmation"')
     assert summary_idx < details_idx
+    assert verdict_idx < details_idx
     assert context_idx < details_idx
+    assert summary_idx < verdict_idx

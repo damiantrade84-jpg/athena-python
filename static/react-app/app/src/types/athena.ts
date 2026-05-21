@@ -967,9 +967,43 @@ export type AIChartReviewProviderStatus =
   | 'success'
   | 'failed_auth'
   | 'insufficient_credit'
+  | 'rate_limited'
   | 'timeout'
   | 'fallback_used'
+  | 'parse_error'
   | 'unknown';
+
+export type AIChartReviewComparisonVerdict =
+  | 'engine_a_confirmed'
+  | 'engine_a_direction_confirmed_entry_rejected'
+  | 'engine_a_contradicted'
+  | 'engine_a_missing'
+  | 'mixed'
+  | 'unknown';
+
+export interface AIChartReviewEngineAVerdictComparison {
+  engineAProvided?: boolean;
+  engineABiasValid?: boolean | null;
+  engineAPassed?: boolean | null;
+  engineADirection?: string | null;
+  engineAScore?: number | null;
+  engineAMaxScore?: number | null;
+  engineAThreshold?: number | null;
+  engineANormalizedScore?: number | null;
+  engineAActiveFactors?: string[] | null;
+  chartConfirmsEngineADirection?: boolean | null;
+  chartContradictsEngineADirection?: boolean | null;
+  chartConfirmsEntryTiming?: boolean | null;
+  chartContradictsEntryTiming?: boolean | null;
+  aiAgreesWithEngineA?: boolean | null;
+  aiDowngradedEngineA?: boolean;
+  aiUpgradedEngineA?: boolean;
+  comparisonVerdict?: AIChartReviewComparisonVerdict | string;
+  downgradeReasons?: string[];
+  upgradeReasons?: string[];
+  finalDecision?: AIChartReviewSummaryHumanAction | string | null;
+  finalReason?: string | null;
+}
 
 export interface AIChartReviewEngineSummary {
   score: number | null;
@@ -989,6 +1023,7 @@ export interface AIChartReviewSummary {
   providerStatus: AIChartReviewProviderStatus;
   fallbackUsed: boolean;
   humanAction: AIChartReviewSummaryHumanAction | string | null;
+  setupType?: string | null;
   overallScore: number | null;
   tradeabilityScore: number | null;
   engineAlignmentScore: number | null;
@@ -1171,9 +1206,12 @@ export interface AIChartReviewResponse {
   dedup_hit: boolean;
   ai_review_summary?: AIChartReviewSummary;
   aiReviewSummary?: AIChartReviewSummary;
+  engineAVerdictComparison?: AIChartReviewEngineAVerdictComparison;
+  engine_a_verdict_comparison?: AIChartReviewEngineAVerdictComparison;
   contextCompleteness?: AIChartReviewContextCompleteness;
   missingContextDetailed?: AIChartReviewMissingContextDetailed;
   fundingOi?: AIChartReviewFundingOi;
+  derivativesContext?: AIChartReviewFundingOi;
   atrDiagnostics?: AIChartReviewAtrDiagnostics;
   resistanceMap?: AIChartReviewResistanceMap;
 }

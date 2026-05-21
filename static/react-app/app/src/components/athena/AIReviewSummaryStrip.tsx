@@ -9,8 +9,10 @@ const STATUS_PILL: Record<AIChartReviewProviderStatus, string> = {
   success: 'bg-emerald-500/15 text-emerald-300 border-emerald-500/40',
   failed_auth: 'bg-rose-500/15 text-rose-300 border-rose-500/40',
   insufficient_credit: 'bg-amber-500/15 text-amber-300 border-amber-500/40',
+  rate_limited: 'bg-amber-500/15 text-amber-300 border-amber-500/40',
   timeout: 'bg-amber-500/15 text-amber-300 border-amber-500/40',
   fallback_used: 'bg-amber-500/15 text-amber-300 border-amber-500/40',
+  parse_error: 'bg-rose-500/15 text-rose-300 border-rose-500/40',
   unknown: 'bg-zinc-500/15 text-zinc-300 border-zinc-500/40',
 };
 
@@ -58,18 +60,19 @@ function ScoreCell({ label, value }: { label: string; value: number | null | und
 }
 
 export interface AIReviewSummaryStripProps {
-  summary: AIChartReviewSummary;
+  summary?: AIChartReviewSummary | null;
 }
 
 export default function AIReviewSummaryStrip({ summary }: AIReviewSummaryStripProps) {
-  const providerStatus = summary.providerStatus || 'unknown';
+  const s = summary ?? ({} as AIChartReviewSummary);
+  const providerStatus = s.providerStatus || 'unknown';
   const statusClass =
     STATUS_PILL[providerStatus as AIChartReviewProviderStatus] ?? STATUS_PILL.unknown;
-  const humanAction = summary.humanAction || 'watch';
+  const humanAction = s.humanAction || 'watch';
   const actionClass = ACTION_PILL[String(humanAction)] ?? ACTION_PILL.watch;
-  const provider = summary.provider || 'unknown';
-  const model = summary.model || 'unknown';
-  const setupType = summary.engineD?.setupType || '—';
+  const provider = s.provider || 'unknown';
+  const model = s.model || 'unknown';
+  const setupType = s.setupType || s.engineD?.setupType || '—';
 
   return (
     <div className="space-y-2 border border-border/50 rounded-md p-2 bg-muted/20">
@@ -83,7 +86,7 @@ export default function AIReviewSummaryStrip({ summary }: AIReviewSummaryStripPr
         <Badge className={`${statusClass} text-[10px] border`}>
           {providerStatus.replace(/_/g, ' ')}
         </Badge>
-        {summary.fallbackUsed && (
+        {s.fallbackUsed && (
           <Badge variant="outline" className="text-[10px] border-amber-500/50 text-amber-300">
             fallback
           </Badge>
@@ -94,13 +97,13 @@ export default function AIReviewSummaryStrip({ summary }: AIReviewSummaryStripPr
       </div>
 
       <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-7 gap-1.5">
-        <ScoreCell label="Overall" value={summary.overallScore} />
-        <ScoreCell label="Tradeability" value={summary.tradeabilityScore} />
-        <ScoreCell label="Engine align" value={summary.engineAlignmentScore} />
-        <ScoreCell label="Visual" value={summary.visualConfirmationScore} />
-        <ScoreCell label="Entry" value={summary.entryQualityScore} />
-        <ScoreCell label="Risk" value={summary.riskScore} />
-        <ScoreCell label="Confidence" value={summary.confidence} />
+        <ScoreCell label="Overall" value={s.overallScore} />
+        <ScoreCell label="Tradeability" value={s.tradeabilityScore} />
+        <ScoreCell label="Engine align" value={s.engineAlignmentScore} />
+        <ScoreCell label="Visual" value={s.visualConfirmationScore} />
+        <ScoreCell label="Entry" value={s.entryQualityScore} />
+        <ScoreCell label="Risk" value={s.riskScore} />
+        <ScoreCell label="Confidence" value={s.confidence} />
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-1.5 text-[10px]">
@@ -108,14 +111,14 @@ export default function AIReviewSummaryStrip({ summary }: AIReviewSummaryStripPr
         <SummaryKV label="Setup type" value={setupType} />
         <div className="border border-border/40 rounded-md px-2 py-1">
           <span className="text-muted-foreground">Engine A: </span>
-          <span className="font-mono">{engineALine(summary.engineA)}</span>
+          <span className="font-mono">{engineALine(s.engineA)}</span>
         </div>
         <SummaryKV
           label="Provider"
           value={`${provider} / ${model} / ${providerStatus.replace(/_/g, ' ')}`}
         />
-        <SummaryKV label="Fallback used" value={summary.fallbackUsed ? 'yes' : 'no'} />
-        <SummaryKV label="Final reason" value={summary.finalReason || '—'} />
+        <SummaryKV label="Fallback used" value={s.fallbackUsed ? 'yes' : 'no'} />
+        <SummaryKV label="Final reason" value={s.finalReason || '—'} />
       </div>
     </div>
   );

@@ -15,6 +15,18 @@ _VALID_ACTIONS = {
     "needs_better_rr",
 }
 
+_STRUCTURED_KEYS = (
+    "aiReviewSummary",
+    "ai_review_summary",
+    "engineAVerdictComparison",
+    "engine_a_verdict_comparison",
+    "contextCompleteness",
+    "context_completeness",
+    "missingContextDetailed",
+    "missing_context_detailed",
+    "metadata",
+)
+
 
 def _coerce_list(value: Any) -> list[str]:
     if value is None:
@@ -26,8 +38,19 @@ def _coerce_list(value: Any) -> list[str]:
     return []
 
 
-def _extract_json(raw_text: str) -> tuple[dict[str, Any] | None, str | None]:
+def repair_json_once(raw_text: str) -> str:
+    """Single-pass cleanup before JSON parse."""
     text = (raw_text or "").strip()
+    if not text:
+        return text
+    if text.startswith("```"):
+        text = re.sub(r"^```(?:json)?\s*", "", text, flags=re.IGNORECASE)
+        text = re.sub(r"\s*```\s*$", "", text)
+    return text.strip()
+
+
+def _extract_json(raw_text: str) -> tuple[dict[str, Any] | None, str | None]:
+    text = repair_json_once(raw_text)
     if not text:
         return None, "empty response"
     try:
@@ -38,13 +61,95 @@ def _extract_json(raw_text: str) -> tuple[dict[str, Any] | None, str | None]:
         pass
     match = re.search(r"\{[\s\S]*\}", text)
     if match:
+        candidate = match.group(0)
         try:
-            parsed = json.loads(match.group(0))
+            parsed = json.loads(candidate)
             if isinstance(parsed, dict):
                 return parsed, None
-        except json.JSONDecodeError as exc:
-            return None, str(exc)
+        except json.JSONDecodeError:
+            try:
+                parsed = json.loads(repair_json_once(candidate))
+                if isinstance(parsed, dict):
+                    return parsed, None
+            except json.JSONDecodeError as exc:
+                return None, str(exc)
     return None, "no JSON object found"
+
+
+def _pick_structured(parsed: dict[str, Any]) -> dict[str, Any]:
+    out: dict[str, Any] = {}
+    for key in _STRUCTURED_KEYS:
+        if key in parsed and isinstance(parsed[key], dict):
+            out[key] = parsed[key]
+    aliases = (
+        ("aiReviewSummary", "ai_review_summary"),
+        ("engineAVerdictComparison", "engine_a_verdict_comparison"),
+        ("contextCompleteness", "context_completeness"),
+        ("missingContextDetailed", "missing_context_detailed"),
+    )
+    for camel, snake in aliases:
+        if camel not in out and snake in parsed and isinstance(parsed[snake], dict):
+            out[camel] = parsed[snake]
+    return out
+
+
+def _legacy_from_structured(parsed: dict[str, Any], structured: dict[str, Any]) -> dict[str, Any]:
+    """Map nested model fields onto legacy flat ai_review keys when absent."""
+    summary = structured.get("aiReviewSummary") or structured.get("ai_review_summary") or {}
+    if not isinstance(summary, dict):
+        summary = {}
+    comparison = structured.get("engineAVerdictComparison") or structured.get("engine_a_verdict_comparison") or {}
+    if not isinstance(comparison, dict):
+        comparison = {}
+
+    human_action = parsed.get("human_action")
+    if not human_action and summary.get("humanAction"):
+        ha = str(summary["humanAction"]).lower()
+        rev_map = {"trade": "take", "watch": "needs_fresher_data"}
+        human_action = rev_map.get(ha, ha)
+    if not human_action and comparison.get("finalDecision"):
+        fd = str(comparison["finalDecision"]).lower()
+        rev_map = {"trade": "take", "watch": "wait", "reject": "reject"}
+        human_action = rev_map.get(fd, "wait")
+
+    setup_type = parsed.get("setup_type") or summary.get("setupType") or ""
+    visual_confirmation = parsed.get("visual_confirmation") or parsed.get("visualConfirmation") or ""
+    visual_contradiction = parsed.get("visual_contradiction") or parsed.get("visualContradiction") or ""
+    entry_quality = parsed.get("entry_quality") or parsed.get("entryQuality") or ""
+    atr_rr = parsed.get("atr_rr_assessment") or parsed.get("atrRrAssessment") or ""
+    engine_align = parsed.get("engine_a_alignment") or parsed.get("engineAAlignment") or ""
+    if not engine_align and comparison.get("comparisonVerdict"):
+        engine_align = str(comparison.get("comparisonVerdict")).replace("_", " ")
+
+    confidence = parsed.get("confidence")
+    if confidence is None and summary.get("confidence") is not None:
+        confidence = summary.get("confidence")
+
+    verdict = parsed.get("verdict")
+    if not verdict and summary.get("humanAction"):
+        ha = str(summary["humanAction"]).lower()
+        if ha == "trade":
+            verdict = "VALID"
+        elif ha == "reject":
+            verdict = "INVALID"
+        else:
+            verdict = "CAUTION"
+
+    return {
+        "verdict": verdict,
+        "confidence": confidence,
+        "setup_type": setup_type,
+        "visual_confirmation": str(visual_confirmation or ""),
+        "visual_contradiction": str(visual_contradiction or ""),
+        "engine_a_alignment": str(engine_align or ""),
+        "atr_rr_assessment": str(atr_rr or ""),
+        "freshness_assessment": str(parsed.get("freshness_assessment") or parsed.get("freshnessAssessment") or ""),
+        "entry_quality": str(entry_quality or ""),
+        "supporting_reasons": _coerce_list(parsed.get("supporting_reasons") or parsed.get("supportingReasons")),
+        "risks": _coerce_list(parsed.get("risks")),
+        "missing_context": _coerce_list(parsed.get("missing_context") or parsed.get("missingContext")),
+        "human_action": human_action,
+    }
 
 
 def normalize_chart_review_response(raw_text: str) -> dict[str, Any]:
@@ -66,36 +171,41 @@ def normalize_chart_review_response(raw_text: str) -> dict[str, Any]:
             "human_action": "wait",
             "raw_model_response": raw_text or "",
             "parse_success": False,
+            "structured": {},
         }
 
-    verdict = str(parsed.get("verdict") or "CAUTION").upper()
+    structured = _pick_structured(parsed)
+    legacy_fields = _legacy_from_structured(parsed, structured)
+
+    verdict = str(legacy_fields.get("verdict") or "CAUTION").upper()
     if verdict not in _VALID_VERDICTS:
         verdict = "CAUTION"
 
     try:
-        confidence = int(parsed.get("confidence", 0))
+        confidence = int(legacy_fields.get("confidence", 0))
     except (TypeError, ValueError):
         confidence = 0
     confidence = max(0, min(100, confidence))
 
-    action = str(parsed.get("human_action") or "wait").strip().lower()
+    action = str(legacy_fields.get("human_action") or "wait").strip().lower()
     if action not in _VALID_ACTIONS:
         action = "wait"
 
     return {
         "verdict": verdict,
         "confidence": confidence,
-        "setup_type": str(parsed.get("setup_type") or ""),
-        "visual_confirmation": str(parsed.get("visual_confirmation") or ""),
-        "visual_contradiction": str(parsed.get("visual_contradiction") or ""),
-        "engine_a_alignment": str(parsed.get("engine_a_alignment") or ""),
-        "atr_rr_assessment": str(parsed.get("atr_rr_assessment") or ""),
-        "freshness_assessment": str(parsed.get("freshness_assessment") or ""),
-        "entry_quality": str(parsed.get("entry_quality") or ""),
-        "supporting_reasons": _coerce_list(parsed.get("supporting_reasons")),
-        "risks": _coerce_list(parsed.get("risks")),
-        "missing_context": _coerce_list(parsed.get("missing_context")),
+        "setup_type": str(legacy_fields.get("setup_type") or ""),
+        "visual_confirmation": str(legacy_fields.get("visual_confirmation") or ""),
+        "visual_contradiction": str(legacy_fields.get("visual_contradiction") or ""),
+        "engine_a_alignment": str(legacy_fields.get("engine_a_alignment") or ""),
+        "atr_rr_assessment": str(legacy_fields.get("atr_rr_assessment") or ""),
+        "freshness_assessment": str(legacy_fields.get("freshness_assessment") or ""),
+        "entry_quality": str(legacy_fields.get("entry_quality") or ""),
+        "supporting_reasons": _coerce_list(legacy_fields.get("supporting_reasons")),
+        "risks": _coerce_list(legacy_fields.get("risks")),
+        "missing_context": _coerce_list(legacy_fields.get("missing_context")),
         "human_action": action,
         "raw_model_response": raw_text or "",
         "parse_success": True,
+        "structured": structured,
     }

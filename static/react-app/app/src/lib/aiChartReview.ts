@@ -127,14 +127,22 @@ export function normalizeAIChartReviewResponse(
   const fundingOi = record.fundingOi ?? record.funding_oi;
   const atrDiagnostics = record.atrDiagnostics ?? record.atr_diagnostics;
   const resistanceMap = record.resistanceMap ?? record.resistance_map;
+  const engineAVerdictComparison =
+    record.engineAVerdictComparison ?? record.engine_a_verdict_comparison;
+  const derivativesContext = record.derivativesContext ?? record.derivatives_context;
 
   return {
     ...raw,
     aiReviewSummary: summary as AIChartReviewResponse['aiReviewSummary'],
     ai_review_summary: summary as AIChartReviewResponse['ai_review_summary'],
+    engineAVerdictComparison:
+      engineAVerdictComparison as AIChartReviewResponse['engineAVerdictComparison'],
+    engine_a_verdict_comparison:
+      engineAVerdictComparison as AIChartReviewResponse['engine_a_verdict_comparison'],
     contextCompleteness: contextCompleteness as AIChartReviewResponse['contextCompleteness'],
     missingContextDetailed: missingContextDetailed as AIChartReviewResponse['missingContextDetailed'],
     fundingOi: fundingOi as AIChartReviewResponse['fundingOi'],
+    derivativesContext: (derivativesContext ?? fundingOi) as AIChartReviewResponse['derivativesContext'],
     atrDiagnostics: atrDiagnostics as AIChartReviewResponse['atrDiagnostics'],
     resistanceMap: resistanceMap as AIChartReviewResponse['resistanceMap'],
   };

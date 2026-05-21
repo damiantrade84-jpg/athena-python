@@ -314,3 +314,103 @@ def assemble_engine_a_context(
     }
     ctx["engine_snapshots"] = extract_engine_snapshots(signal, ctx)
     return ctx
+
+
+def _factor_score(fd: dict[str, Any], *keys: str) -> float | None:
+    fs = fd.get("factorScores") or fd.get("factor_scores")
+    if not isinstance(fs, dict):
+        fs = fd
+    for key in keys:
+        val = _to_float(fs.get(key) if isinstance(fs, dict) else None)
+        if val is not None:
+            return val
+    return None
+
+
+def _timeframe_bias(engine_a_ctx: dict[str, Any]) -> dict[str, str | None]:
+    fd = engine_a_ctx.get("factor_diagnostics") or {}
+    if not isinstance(fd, dict):
+        fd = {}
+    regime = str(engine_a_ctx.get("regime") or "").strip() or None
+    trend = fd.get("trendCoherence") or fd.get("trend_coherence")
+    trend_label = None
+    if isinstance(trend, dict):
+        trend_label = trend.get("label") or trend.get("state") or trend.get("alignment")
+    elif trend is not None:
+        trend_label = str(trend)
+    directional = engine_a_ctx.get("directional_alignment") or {}
+    dir_score = None
+    if isinstance(directional, dict):
+        ds = directional.get("directionalScore") or directional.get("directional_score")
+        if ds is not None:
+            dir_score = str(ds)
+    base = trend_label or regime or dir_score
+    return {
+        "D1": base,
+        "H4": base,
+        "H1": dir_score or base,
+    }
+
+
+def _abort_reasons(engine_a_ctx: dict[str, Any]) -> list[str]:
+    fresh = engine_a_ctx.get("freshness") or {}
+    warnings = fresh.get("stale_warnings") if isinstance(fresh, dict) else None
+    if isinstance(warnings, list):
+        return [str(w) for w in warnings if w]
+    if isinstance(warnings, str) and warnings.strip():
+        return [warnings.strip()]
+    return []
+
+
+def build_engine_a_prompt_context(engine_a_ctx: dict[str, Any]) -> dict[str, Any]:
+    """Compact structured Engine A block for the Opus prompt (projection only, no scoring)."""
+    snapshots = engine_a_ctx.get("engine_snapshots") or {}
+    ea = snapshots.get("engineA") or {}
+    fd = engine_a_ctx.get("factor_diagnostics") or {}
+    if not isinstance(fd, dict):
+        fd = {}
+    atr = engine_a_ctx.get("atr") or {}
+    geometry = engine_a_ctx.get("geometry") or {}
+    trend = fd.get("trendCoherence") or fd.get("trend_coherence") or {}
+    vwap_ext = None
+    if isinstance(trend, dict):
+        vwap_ext = trend.get("vwapExtended") or trend.get("vwap_extended")
+    adx_capture = fd.get("regimeLabelsDualCapture") or {}
+    if not isinstance(adx_capture, dict):
+        adx_capture = {}
+
+    return {
+        "direction": engine_a_ctx.get("direction"),
+        "score": ea.get("score") if ea.get("score") is not None else engine_a_ctx.get("confluence_score"),
+        "maxScore": ea.get("maxScore") if ea.get("maxScore") is not None else engine_a_ctx.get("max_score_override"),
+        "threshold": ea.get("threshold") if ea.get("threshold") is not None else engine_a_ctx.get("threshold"),
+        "normalizedScore": ea.get("normalizedScore"),
+        "passed": ea.get("passed") if ea.get("passed") is not None else engine_a_ctx.get("passed"),
+        "activeFactors": ea.get("activeFactors"),
+        "conviction": _to_float(fd.get("conviction") or fd.get("combinedConviction")),
+        "abortReasons": _abort_reasons(engine_a_ctx),
+        "timeframeBias": _timeframe_bias(engine_a_ctx),
+        "diagnostics": {
+            "trendScore": _factor_score(fd, "trend"),
+            "momentumScore": _factor_score(fd, "momentum"),
+            "volatilityScore": _factor_score(fd, "mean_reversion", "volatility"),
+            "volumeScore": _factor_score(fd, "addon"),
+            "structureScore": _to_float(fd.get("structure_context_adjustment")),
+            "vwapDistanceAtr": _to_float(
+                trend.get("vwapDistanceAtr") if isinstance(trend, dict) else None
+            ),
+            "vwapExtended": vwap_ext if isinstance(vwap_ext, bool) else None,
+            "adxD1": _to_float(adx_capture.get("trendStateAdxValue")),
+            "adxH4": _to_float(fd.get("adx_value") or fd.get("adxValue")),
+            "rsi": None,
+            "atrD1": _to_float(atr.get("atr_d1")),
+            "atrH4": _to_float(atr.get("atr_h4")),
+            "rr": _to_float(geometry.get("rr")),
+            "sl": _to_float(geometry.get("stop_loss")),
+            "tp": _to_float(geometry.get("take_profit")),
+            "entry": _to_float(geometry.get("candidate_entry")),
+            "provider": engine_a_ctx.get("engine_a_provider"),
+            "latestCandleTimestamp": engine_a_ctx.get("latest_candle_ts"),
+            "freshnessStatus": atr.get("atr_freshness_status"),
+        },
+    }
