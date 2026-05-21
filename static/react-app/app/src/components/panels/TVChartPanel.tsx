@@ -14,7 +14,7 @@ import {
   type UTCTimestamp,
   type Time,
 } from 'lightweight-charts';
-import { BarChart3, Camera, Layers, SlidersHorizontal } from 'lucide-react';
+import { BarChart3, Camera, Layers, Sparkles, SlidersHorizontal } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -36,7 +36,15 @@ import {
   type DiagnosticDisplay,
 } from '@/lib/engineADiagnosticsDisplay';
 import { fmtNum, toNum } from '@/lib/utils';
-import type { EngineASignal } from '@/types/athena';
+import {
+  AI_CHART_REVIEW_DEFAULTS,
+  buildScreenshotMeta,
+  canvasToDataUrl,
+  downscaleToCap,
+  postChartReview,
+} from '@/lib/aiChartReview';
+import AIReviewCard from '@/components/athena/AIReviewCard';
+import type { AIChartReviewResponse, EngineASignal } from '@/types/athena';
 
 const TIMEFRAMES = ['1', '5', '15', '30', '60', '240', 'D', 'W'];
 
@@ -1114,6 +1122,9 @@ export default function TVChartPanel() {
   const [chartTickPayload, setChartTickPayload] = useState<CandleApiResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [chartError, setChartError] = useState<string | null>(null);
+  const [aiReview, setAiReview] = useState<AIChartReviewResponse | null>(null);
+  const [aiReviewLoading, setAiReviewLoading] = useState<boolean>(false);
+  const [aiReviewError, setAiReviewError] = useState<string | null>(null);
 
   const candidateRows = useMemo(
     () => (Array.isArray(scanCacheA) ? scanCacheA.filter((row): row is EngineASignal => Boolean(row && typeof row === 'object')) : []),
@@ -1382,6 +1393,58 @@ export default function TVChartPanel() {
       link.remove();
       URL.revokeObjectURL(url);
     }, 'image/png');
+  }
+
+  async function runAIReview() {
+    if (aiReviewLoading) return;
+    setAiReviewError(null);
+    setAiReview(null);
+    const sourceCanvas = captureChartCanvas();
+    if (!sourceCanvas) return;
+    const downscaled = downscaleToCap(
+      sourceCanvas,
+      AI_CHART_REVIEW_DEFAULTS.MAX_WIDTH,
+      AI_CHART_REVIEW_DEFAULTS.MAX_HEIGHT,
+    );
+    setAiReviewLoading(true);
+    try {
+      const dataUrl = await canvasToDataUrl(downscaled);
+      const tfForBackend = TF_BACKEND_MAP[timeframe] || timeframe;
+      const overlays: string[] = ['candles'];
+      if (volumeBars) overlays.push('volume');
+      if (vwapEnabled) overlays.push('vwap');
+      if (ema20) overlays.push('ema20');
+      if (ema21) overlays.push('ema21');
+      if (ema50) overlays.push('ema50');
+      if (ema200) overlays.push('ema200');
+      if (dema200) overlays.push('dema200');
+      if (atr14) overlays.push('atr14');
+      if (rsi14) overlays.push('rsi14');
+      if (adx14) overlays.push('adx14');
+      const meta = buildScreenshotMeta({
+        width: downscaled.width,
+        height: downscaled.height,
+        chart_timeframe: tfForBackend,
+        overlays,
+      });
+      const symbol = (pair || '').toUpperCase();
+      if (!symbol) {
+        throw new Error('No symbol selected');
+      }
+      const response = await postChartReview({
+        symbol,
+        timeframe: tfForBackend,
+        provider: 'default',
+        screenshot_base64: dataUrl,
+        screenshot_meta: meta,
+      });
+      setAiReview(response);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'AI review failed';
+      setAiReviewError(msg);
+    } finally {
+      setAiReviewLoading(false);
+    }
   }
 
   useEffect(() => {
@@ -1687,6 +1750,18 @@ export default function TVChartPanel() {
               <Camera className="h-3.5 w-3.5" />
               Screenshot
             </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-8 gap-2 text-xs"
+              onClick={runAIReview}
+              disabled={loading || aiReviewLoading || !candles?.length}
+              aria-label="Run AI chart review"
+              aria-busy={aiReviewLoading}
+            >
+              <Sparkles className="h-3.5 w-3.5" />
+              {aiReviewLoading ? 'Reviewing…' : 'AI Review'}
+            </Button>
           </div>
         </div>
         <div className="flex flex-wrap items-center gap-2 pt-2">
@@ -1764,6 +1839,16 @@ export default function TVChartPanel() {
             <EngineASidePanel signal={chartCandidate} liveTick={liveTick} chartPayload={chartPayload} />
           </div>
         </div>
+        {(aiReview || aiReviewError) && (
+          <div className="mt-3 space-y-2">
+            {aiReviewError && (
+              <div className="text-[11px] text-warning border border-border/40 rounded-md p-2">
+                AI review error: {aiReviewError}
+              </div>
+            )}
+            {aiReview && <AIReviewCard response={aiReview} />}
+          </div>
+        )}
       </CardContent>
     </Card>
   );
