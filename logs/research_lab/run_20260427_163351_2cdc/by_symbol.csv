@@ -1,2 +1,0 @@
-symbol,win_rate_mean,win_rate_count,profit_factor_mean,profit_factor_count,expectancy_mean,expectancy_count,sharpe_mean,sharpe_count,sqn_mean,sqn_count,net_return_mean,net_return_count,oos_return_mean,oos_return_count,robustness_score_mean,robustness_score_count,trade_count_mean,trade_count_count
-EUR/USD,0.476190,1,1.228242,1,0.000237,1,0.460584,1,0.375801,1,0.004910,1,-0.000550,1,0.645626,1,21.000000,1

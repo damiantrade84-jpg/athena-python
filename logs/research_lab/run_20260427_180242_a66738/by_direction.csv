@@ -1,2 +1,0 @@
-direction,win_rate_mean,win_rate_count,profit_factor_mean,profit_factor_count,expectancy_mean,expectancy_count,sharpe_mean,sharpe_count,sqn_mean,sqn_count,net_return_mean,net_return_count,oos_return_mean,oos_return_count,robustness_score_mean,robustness_score_count,trade_count_mean,trade_count_count
-both,0.410802,22,1.290289,22,0.000730,22,0.693431,22,0.501025,22,0.026414,22,-0.021446,22,0.471986,22,38.954545,22

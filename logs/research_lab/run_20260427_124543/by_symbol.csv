@@ -1,3 +1,0 @@
-symbol,win_rate_mean,win_rate_count,profit_factor_mean,profit_factor_count,expectancy_mean,expectancy_count,sharpe_mean,sharpe_count,sqn_mean,sqn_count,net_return_mean,net_return_count,oos_return_mean,oos_return_count,robustness_score_mean,robustness_score_count,trade_count_mean,trade_count_count
-ETH/USDT,0.555952,4,1.894079,4,0.003617,4,2.430396,4,1.015017,4,0.073072,4,-0.007513,4,0.365258,4,20.250000,4
-GBP/USD,0.190476,1,1.263679,1,0.000382,1,0.920175,1,0.375393,1,0.007832,1,-0.007853,1,0.630238,1,21.000000,1

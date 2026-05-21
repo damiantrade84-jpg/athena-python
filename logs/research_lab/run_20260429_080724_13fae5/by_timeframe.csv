@@ -1,4 +1,0 @@
-timeframe,win_rate_mean,win_rate_count,profit_factor_mean,profit_factor_count,expectancy_mean,expectancy_count,sharpe_mean,sharpe_count,sqn_mean,sqn_count,net_return_mean,net_return_count,oos_return_mean,oos_return_count,robustness_score_mean,robustness_score_count,trade_count_mean,trade_count_count
-H1,0.499923,13,3.030133,13,0.002416,13,1.993310,13,1.032782,13,0.087998,13,0.004232,13,0.575812,13,48.076923,13
-H4,0.524010,26,1.574135,26,0.006435,26,1.072570,26,0.895490,26,0.244033,26,0.038862,26,0.551872,26,64.923077,26
-M15,0.737516,5,7.971685,5,0.001565,5,3.079278,5,1.601561,5,0.038908,5,-0.004085,5,0.516713,5,26.800000,5

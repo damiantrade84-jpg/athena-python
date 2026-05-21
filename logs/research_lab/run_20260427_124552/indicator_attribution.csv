@@ -1,3 +1,0 @@
-strategy_name,total_configs,strong,weak,reject,avg_net_return,avg_win_rate,avg_robustness,avg_sqn,avg_oos_return,total_trades,pass_rate,verdict
-atr_compression,24,0,1,0,0.006818,0.190476,0.943397,0.327026,-0.007853,378,0.041667,HURTS
-bb_squeeze_breakout,24,0,4,20,-0.026668,0.328948,0.373131,-1.235498,-0.013839,593,0.166667,HURTS

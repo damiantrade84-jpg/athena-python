@@ -1,2 +1,0 @@
-strategy_name,total_configs,strong,weak,reject,avg_net_return,avg_win_rate,avg_robustness,avg_sqn,avg_oos_return,total_trades,pass_rate,verdict
-pullback_ema,4,0,4,0,0.766588,0.242502,0.679000,0.916980,0.919448,205,1.000000,HELPS

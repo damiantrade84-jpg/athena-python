@@ -1,2 +1,0 @@
-strategy_name,total_configs,strong,weak,reject,avg_net_return,avg_win_rate,avg_robustness,avg_sqn,avg_oos_return,total_trades,pass_rate,verdict
-session_opening_range,4,0,4,0,0.080996,0.448052,0.428419,1.218540,-0.004499,144,1.000000,HURTS

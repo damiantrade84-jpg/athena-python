@@ -1,4 +1,0 @@
-symbol,win_rate_mean,win_rate_count,profit_factor_mean,profit_factor_count,expectancy_mean,expectancy_count,sharpe_mean,sharpe_count,sqn_mean,sqn_count,net_return_mean,net_return_count,oos_return_mean,oos_return_count,robustness_score_mean,robustness_score_count,trade_count_mean,trade_count_count
-NZD/USD,0.366667,2,1.084139,2,0.000370,2,0.198656,2,0.161625,2,0.008807,2,-0.050771,2,0.430000,2,30.000000,2
-USD/CAD,0.473797,5,1.357733,5,0.000796,5,0.785787,5,0.644275,5,0.023317,5,0.005457,5,0.461200,5,30.200000,5
-USD/JPY,0.363077,3,1.100115,3,0.000302,3,0.243930,3,0.198543,3,0.008802,3,-0.040577,3,0.512000,3,35.333333,3

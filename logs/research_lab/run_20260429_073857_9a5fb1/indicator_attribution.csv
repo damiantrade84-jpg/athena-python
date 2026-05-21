@@ -1,4 +1,0 @@
-strategy_name,total_configs,strong,weak,reject,avg_net_return,avg_win_rate,avg_robustness,avg_sqn,avg_oos_return,total_trades,pass_rate,verdict
-rsi_extreme,24,0,1,0,0.072880,0.761905,0.944630,1.529968,0.019677,276,0.041667,HELPS
-vwap_deviation,12,0,2,0,0.234303,0.877381,0.879938,5.678517,0.071768,167,0.166667,HELPS
-bollinger_touch,12,0,5,7,-0.013770,0.623936,0.475396,-0.201706,0.002008,371,0.416667,HELPS

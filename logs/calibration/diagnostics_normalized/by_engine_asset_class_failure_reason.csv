@@ -1,2 +1,0 @@
-engine,asset_class,failure_reason,event_count,passed_count,failed_count
-ENGINE_A,forex,below_engine_a_threshold,21,0,21

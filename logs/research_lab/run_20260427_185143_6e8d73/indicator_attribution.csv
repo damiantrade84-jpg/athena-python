@@ -1,5 +1,0 @@
-strategy_name,total_configs,strong,weak,reject,avg_net_return,avg_win_rate,avg_robustness,avg_sqn,avg_oos_return,total_trades,pass_rate,verdict
-london_breakout,16,0,0,2,-0.018483,0.307692,0.920389,-0.566402,-0.012769,283,0.000000,HURTS
-prev_day_hl,24,0,6,6,-0.020106,0.368562,0.760945,-0.244953,-0.024333,571,0.250000,HURTS
-session_opening_range,32,0,4,28,-0.036732,0.346298,0.468235,-1.069970,-0.031930,1406,0.125000,HURTS
-ny_breakout,16,0,0,0,,,,,,138,0.000000,NEUTRAL

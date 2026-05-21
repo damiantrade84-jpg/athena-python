@@ -1,2 +1,0 @@
-distance_bucket,event_count,passed_count,failed_count,avg_distance_to_threshold,min_distance_to_threshold,max_distance_to_threshold
-below_threshold,21,0,21,-1.624286,-1.98,-0.26

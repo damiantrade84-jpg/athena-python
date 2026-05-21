@@ -1,3 +1,0 @@
-symbol,win_rate_mean,win_rate_count,profit_factor_mean,profit_factor_count,expectancy_mean,expectancy_count,sharpe_mean,sharpe_count,sqn_mean,sqn_count,net_return_mean,net_return_count,oos_return_mean,oos_return_count,robustness_score_mean,robustness_score_count,trade_count_mean,trade_count_count
-NAS100,0.376482,11,1.574523,11,0.001507,11,1.346216,11,0.704141,11,0.048557,11,0.030381,11,0.518781,11,34.272727,11
-US30,0.495752,4,2.985997,4,0.001761,4,1.655460,4,1.481215,4,0.049996,4,0.005589,4,0.506667,4,27.250000,4

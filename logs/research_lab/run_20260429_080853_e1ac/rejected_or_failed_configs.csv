@@ -1,2 +1,0 @@
-run_id,symbol,asset_class,timeframe,family,strategy_name,params_str,direction,session,status,trade_count,win_rate,profit_factor,avg_return,expectancy,max_drawdown,sharpe,sqn,exposure_pct,avg_duration_bars,gross_return,net_return,is_return,oos_return,robustness_score,param_sensitivity,skip_reason,data_source
-run_20260429_080853_e1ac,ADA/USDT,crypto,H1,mean_reversion,vwap_deviation,std_threshold=2.0,both,all,NEEDS_MORE_DATA,15,,,,,,,,,,,,,,,,only 15 trades < min 20,binance_rest

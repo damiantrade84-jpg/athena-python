@@ -1,6 +1,0 @@
-symbol,win_rate_mean,win_rate_count,profit_factor_mean,profit_factor_count,expectancy_mean,expectancy_count,sharpe_mean,sharpe_count,sqn_mean,sqn_count,net_return_mean,net_return_count,oos_return_mean,oos_return_count,robustness_score_mean,robustness_score_count,trade_count_mean,trade_count_count
-ADA/USDT,0.534712,7,1.456703,7,0.004637,7,1.357955,7,0.818735,7,0.177102,7,0.047636,7,0.594582,7,67.428571,7
-BNB/USDT,0.463891,8,1.268118,8,0.001836,8,0.808272,8,0.488179,8,0.070926,8,0.010863,8,0.569824,8,60.625000,8
-BTC/USDT,0.416444,15,1.430897,15,0.003902,15,0.989848,15,0.664184,15,0.138248,15,-0.020456,15,0.476563,15,40.000000,15
-ETH/USDT,0.451116,12,1.482786,12,0.004832,12,1.207179,12,0.764341,12,0.167490,12,-0.005470,12,0.552376,12,52.500000,12
-SOL/USDT,0.614499,5,1.603791,5,0.007575,5,1.200013,5,0.933895,5,0.328479,5,0.102218,5,0.580933,5,119.400000,5

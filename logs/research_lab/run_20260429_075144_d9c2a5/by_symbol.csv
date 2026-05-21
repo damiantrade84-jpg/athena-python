@@ -1,3 +1,0 @@
-symbol,win_rate_mean,win_rate_count,profit_factor_mean,profit_factor_count,expectancy_mean,expectancy_count,sharpe_mean,sharpe_count,sqn_mean,sqn_count,net_return_mean,net_return_count,oos_return_mean,oos_return_count,robustness_score_mean,robustness_score_count,trade_count_mean,trade_count_count
-XAG/USD,0.303692,30,1.757743,30,0.013593,30,0.761437,30,0.806284,30,0.401657,30,0.273201,30,0.583026,30,61.433333,30
-XAU/USD,0.339612,16,1.985969,16,0.007975,16,0.710501,16,0.903878,16,0.260717,16,0.095551,16,0.578179,16,55.750000,16

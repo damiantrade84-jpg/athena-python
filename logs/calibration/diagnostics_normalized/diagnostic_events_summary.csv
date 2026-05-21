@@ -1,2 +1,0 @@
-engine,event_count,passed_count,failed_count,top_failure_reason,malformed_jsonl_lines
-ENGINE_A,21,0,21,below_engine_a_threshold,0

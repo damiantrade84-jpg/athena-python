@@ -1,2 +1,0 @@
-engine,failure_reason,event_count,passed_count,failed_count
-ENGINE_A,below_engine_a_threshold,21,0,21

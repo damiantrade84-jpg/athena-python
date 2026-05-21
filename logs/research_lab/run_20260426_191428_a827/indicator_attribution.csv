@@ -1,2 +1,0 @@
-strategy_name,total_configs,strong,weak,reject,avg_net_return,avg_win_rate,avg_robustness,avg_sqn,avg_oos_return,total_trades,pass_rate,verdict
-structure_filters,4,0,2,2,-0.056104,0.393044,0.485199,0.029263,-0.129967,555,0.500000,HURTS

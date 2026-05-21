@@ -1,7 +1,0 @@
-{
-  "timestamp": "2026-04-26T09:31:58.387571",
-  "warnings": [
-    "INTEGRITY: ENGINE_A is missing from engine breakdown \u2014 raw data may not have been ingested",
-    "INTEGRITY: ENGINE_C has only 0 trades (< 20 minimum for statistical confidence)"
-  ]
-}
