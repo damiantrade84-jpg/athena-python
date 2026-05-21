@@ -129,6 +129,13 @@ const TF_SECONDS: Record<string, number> = {
   W1: 7 * 24 * 60 * 60,
 };
 
+interface ChartPricePrecision {
+  score_group: string;
+  asset_type: string;
+  precision: number;
+  min_move: number;
+}
+
 interface CandleApiRow {
   t?: string | number;
   o?: number | string;
@@ -184,6 +191,7 @@ interface CandleApiResponse {
   pairType?: string;
   atr_timeframe?: string;
   liveTick?: Record<string, unknown> | null;
+  price_precision?: ChartPricePrecision;
 }
 
 interface EngineBZone {
@@ -207,6 +215,7 @@ interface EngineBBreakerBlock {
 interface EngineBOverlayPayload {
   symbol?: string;
   timeframe?: string;
+  price_precision?: ChartPricePrecision;
   overlay_source?: string;
   overlay_version?: string;
   warnings?: string[];
@@ -1572,6 +1581,12 @@ export default function TVChartPanel() {
 
   const subPaneStudyCount = (quantRsi14 ? 1 : 0) + (quantAtr14 ? 1 : 0) + (isCryptoChart && quantAdx14 ? 1 : 0) + (isCryptoChart && quantVolumeBars ? 1 : 0);
   const chartHeightPx = PRICE_CHART_HEIGHT_PX + subPaneStudyCount * STUDY_PANE_HEIGHT_PX;
+  const candlePriceFormat = useMemo(() => {
+    const _pp = chartPayload?.price_precision ?? engineBOverlay?.price_precision;
+    const precision = typeof _pp?.precision === 'number' ? _pp.precision : 5;
+    const minMove = typeof _pp?.min_move === 'number' ? _pp.min_move : 10 ** -precision;
+    return { type: 'price' as const, precision, minMove };
+  }, [chartPayload?.price_precision, engineBOverlay?.price_precision]);
 
   function captureChartCanvas(): HTMLCanvasElement | null {
     const captureEl = chartCaptureRef.current;
@@ -1724,6 +1739,7 @@ export default function TVChartPanel() {
       wickDownColor: 'hsl(343, 96%, 60%)',
       lastValueVisible: true,
       priceLineVisible: true,
+      priceFormat: candlePriceFormat,
     }, 0);
     candleSeriesRef.current = candleSeries;
     engineBMarkersRef.current = createSeriesMarkers(candleSeries, [], { zOrder: 'top' });
@@ -1829,6 +1845,8 @@ export default function TVChartPanel() {
     const candleSeries = candleSeriesRef.current;
     if (!chart || !candleSeries || !backendTf) return;
 
+    candleSeries.applyOptions({ priceFormat: candlePriceFormat });
+
     for (const line of engineBPriceLinesRef.current) {
       candleSeries.removePriceLine(line);
     }
@@ -1919,7 +1937,7 @@ export default function TVChartPanel() {
     } else {
       chart.timeScale().fitContent();
     }
-  }, [candles, liveTick, backendTf, isCryptoChart, studySnapshot, engineBOverlay, showEngineBOverlays, quantEma20, quantEma21, quantEma50, quantEma200, quantDema200, quantVwap, quantRsi14, quantAdx14, quantAtr14, quantVolumeBars, quantVolumeMa]);
+  }, [candles, liveTick, backendTf, isCryptoChart, studySnapshot, chartPayload, candlePriceFormat, engineBOverlay, showEngineBOverlays, quantEma20, quantEma21, quantEma50, quantEma200, quantDema200, quantVwap, quantRsi14, quantAdx14, quantAtr14, quantVolumeBars, quantVolumeMa]);
 
   return (
     <Card className="h-full">

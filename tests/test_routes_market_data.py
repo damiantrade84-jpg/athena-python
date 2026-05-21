@@ -150,6 +150,10 @@ def test_yield_curve_and_candles_use_runtime_fetchers():
     assert payload["symbol"] == "BTCUSDT"
     assert payload["candles"][0]["t"] == "2026-05-05T10:00:00Z"
     assert payload["candles"][0]["v"] == 99.0
+    pp = payload["price_precision"]
+    assert pp["score_group"] == "crypto_btc"
+    assert pp["precision"] == 1
+    assert pp["min_move"] == pytest.approx(0.1)
 
 
 def test_engine_b_overlays_preserve_legacy_structure_contract():
@@ -205,6 +209,10 @@ def test_engine_b_overlays_preserve_legacy_structure_contract():
     assert len(payload["active_fvgs"]) == 2
     assert all(not fvg.get("mitigated") for fvg in payload["active_fvgs"])
     assert payload["breaker_block"]["level"] == 101.25
+    pp = payload["price_precision"]
+    assert pp["score_group"] == "crypto_btc"
+    assert pp["precision"] == 1
+    assert pp["min_move"] == pytest.approx(0.1)
 
 
 def test_crypto_chart_provider_resolves_to_bybit_when_execution_provider_bybit():
@@ -671,6 +679,30 @@ def test_candles_accepts_tradingview_style_forex_alias():
     assert payload["symbol"] == "EURUSD"
     assert payload["display"] == "EUR/USD"
     assert payload["candles"][0]["o"] == pytest.approx(1.1000)
+    assert payload["price_precision"]["score_group"] == "forex_majors"
+    assert payload["price_precision"]["precision"] == 5
+
+
+def test_candles_jpy_forex_precision_override():
+    jpy_pair = {
+        "symbol": "GBPJPY=X",
+        "display": "GBP/JPY",
+        "type": "forex",
+        "source": "mt5",
+        "enabled": True,
+    }
+    client = _client(
+        _runtime(
+            ALL_PAIRS=[jpy_pair],
+            ACTIVE_PAIRS=[jpy_pair],
+        )
+    )
+    resp = client.get("/api/candles?symbol=GBP/JPY&tf=H4&limit=10")
+    assert resp.status_code == 200
+    pp = resp.get_json()["price_precision"]
+    assert pp["score_group"] == "forex_crosses"
+    assert pp["precision"] == 3
+    assert pp["min_move"] == pytest.approx(0.001)
 
 
 def test_candles_keeps_mt5_ohlc_isolated_from_forming_ws_merge():
