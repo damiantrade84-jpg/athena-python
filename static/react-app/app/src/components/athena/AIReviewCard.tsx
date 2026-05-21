@@ -1,0 +1,182 @@
+import { Sparkles } from 'lucide-react';
+import { Card, CardContent } from '@/components/ui/card';
+import { Badge } from '@/components/ui/badge';
+import type {
+  AIChartReviewResponse,
+  AIChartReviewConcordanceState,
+} from '@/types/athena';
+
+const CONCORDANCE_PILL: Record<AIChartReviewConcordanceState, string> = {
+  agree: 'bg-emerald-500/15 text-emerald-300 border-emerald-500/40',
+  partial: 'bg-amber-500/15 text-amber-300 border-amber-500/40',
+  disagree: 'bg-rose-500/15 text-rose-300 border-rose-500/40',
+  unknown: 'bg-zinc-500/15 text-zinc-300 border-zinc-500/40',
+};
+
+const VERDICT_PILL: Record<string, string> = {
+  VALID: 'bg-emerald-500/15 text-emerald-300 border-emerald-500/40',
+  CAUTION: 'bg-amber-500/15 text-amber-300 border-amber-500/40',
+  INVALID: 'bg-rose-500/15 text-rose-300 border-rose-500/40',
+  NO_TRADE: 'bg-zinc-500/15 text-zinc-300 border-zinc-500/40',
+};
+
+function show(value: unknown, fallback = '—'): string {
+  if (value === null || value === undefined) return fallback;
+  if (typeof value === 'string') return value.trim() === '' ? fallback : value;
+  return String(value);
+}
+
+function showList(items: unknown): string[] | null {
+  if (!Array.isArray(items) || items.length === 0) return null;
+  return items.map((it) => String(it));
+}
+
+function deltaSeconds(a?: string | null, b?: string | null): number | null {
+  if (!a || !b) return null;
+  const ta = Date.parse(a);
+  const tb = Date.parse(b);
+  if (Number.isNaN(ta) || Number.isNaN(tb)) return null;
+  return Math.round(Math.abs(ta - tb) / 1000);
+}
+
+export interface AIReviewCardProps {
+  response: AIChartReviewResponse;
+}
+
+export default function AIReviewCard({ response }: AIReviewCardProps) {
+  const ai = response.ai_review;
+  const c = response.concordance;
+  const ts = response.timestamps;
+  const ctx = response.engine_a_context;
+  const atrInfo = ctx?.atr;
+  const scanDelta = deltaSeconds(ts.scan_timestamp, ts.chart_captured_at);
+  const verdictClass = VERDICT_PILL[ai.verdict] ?? VERDICT_PILL.NO_TRADE;
+  const concordanceClass = CONCORDANCE_PILL[c.concordance];
+
+  const supporting = showList(ai.supporting_reasons);
+  const risks = showList(ai.risks);
+  const missing = showList(ai.missing_context);
+  const warnings = showList(response.mismatch_warnings);
+
+  const freshnessFallback = (() => {
+    const status = show(atrInfo?.atr_freshness_status);
+    const tf = show(atrInfo?.atr_tf);
+    const age = atrInfo?.atr_age_seconds;
+    const ageText = age == null ? '—' : `${age}s`;
+    return `ATR ${status} (${tf}, age ${ageText})`;
+  })();
+
+  return (
+    <Card className="border-border/60 bg-card/50">
+      <CardContent className="p-3 space-y-3">
+        <div className="flex items-center gap-2 flex-wrap">
+          <Sparkles className="w-4 h-4 text-primary" />
+          <span className="text-sm font-semibold">AI Chart Review</span>
+          <Badge className={`${verdictClass} text-[10px] border`}>
+            {ai.verdict}
+          </Badge>
+          <Badge variant="outline" className="text-[10px]">
+            confidence: {ai.confidence}
+          </Badge>
+          <Badge className={`${concordanceClass} text-[10px] border`}>
+            {c.concordance}
+          </Badge>
+          {c.divergence_type !== 'none' && (
+            <Badge variant="outline" className="text-[10px]">
+              divergence: {c.divergence_type.replace(/_/g, ' ')}
+            </Badge>
+          )}
+          <span className="text-[10px] text-muted-foreground font-mono ml-auto">
+            {response.provider}/{show(response.model, '—')}
+            {response.dedup_hit ? ' · cached' : ''}
+          </span>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-[11px]">
+          <Row label="Human action" value={show(ai.human_action)} />
+          <Row label="Setup type" value={show(ai.setup_type)} />
+          <Row label="Visual confirmation" value={show(ai.visual_confirmation)} />
+          <Row label="Visual contradiction" value={show(ai.visual_contradiction)} />
+          <Row label="Engine A alignment" value={show(ai.engine_a_alignment)} />
+          <Row label="ATR / RR assessment" value={show(ai.atr_rr_assessment)} />
+          <Row
+            label="Freshness assessment"
+            value={ai.freshness_assessment ? ai.freshness_assessment : freshnessFallback}
+          />
+          <Row label="Entry quality" value={show(ai.entry_quality)} />
+        </div>
+
+        <ListBlock label="Supporting reasons" items={supporting} />
+        <ListBlock label="Risks" items={risks} />
+        <ListBlock label="Missing context" items={missing} />
+
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-2 text-[10px] text-muted-foreground border-t border-border/40 pt-2">
+          <KV label="chart captured" value={show(ts.chart_captured_at)} />
+          <KV
+            label="scan timestamp"
+            value={`${show(ts.scan_timestamp)}${
+              scanDelta == null ? '' : ` (Δ ${scanDelta}s)`
+            }`}
+          />
+          <KV label="latest candle" value={show(ts.latest_candle_ts)} />
+        </div>
+
+        {warnings && (
+          <div className="text-[11px] text-warning border border-border/40 rounded-md p-2">
+            <div className="font-semibold mb-1">Mismatch warnings</div>
+            <ul className="list-disc list-inside space-y-0.5">
+              {warnings.map((w, i) => (
+                <li key={i}>{w}</li>
+              ))}
+            </ul>
+          </div>
+        )}
+
+        {c.divergence_note && (
+          <div className="text-[11px] text-muted-foreground border border-border/40 rounded-md p-2">
+            <span className="font-semibold">Concordance note: </span>
+            {c.divergence_note}
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+function Row({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="border border-border/40 rounded-md px-2 py-1.5">
+      <div className="text-[10px] text-muted-foreground">{label}</div>
+      <div className="text-[11px] break-words">{value}</div>
+    </div>
+  );
+}
+
+function KV({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="font-mono">
+      <span className="text-muted-foreground">{label}: </span>
+      <span>{value}</span>
+    </div>
+  );
+}
+
+function ListBlock({
+  label,
+  items,
+}: {
+  label: string;
+  items: string[] | null;
+}) {
+  if (!items) return null;
+  return (
+    <div className="text-[11px]">
+      <div className="text-[10px] text-muted-foreground mb-1">{label}</div>
+      <ul className="list-disc list-inside space-y-0.5">
+        {items.map((it, i) => (
+          <li key={i}>{it}</li>
+        ))}
+      </ul>
+    </div>
+  );
+}
