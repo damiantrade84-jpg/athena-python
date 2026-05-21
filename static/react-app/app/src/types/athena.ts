@@ -984,23 +984,101 @@ export interface AIChartReviewEngineSummary {
 }
 
 export interface AIChartReviewSummary {
-  provider: string;
-  model: string;
+  provider: string | null;
+  model: string | null;
   providerStatus: AIChartReviewProviderStatus;
   fallbackUsed: boolean;
-  humanAction: AIChartReviewSummaryHumanAction;
-  overallScore: number;
-  tradeabilityScore: number;
-  engineAlignmentScore: number;
-  visualConfirmationScore: number;
-  entryQualityScore: number;
-  riskScore: number;
-  confidence: number;
-  finalReason: string;
-  engineA: AIChartReviewEngineSummary;
-  engineB: AIChartReviewEngineSummary;
-  engineC: AIChartReviewEngineSummary;
-  engineD: AIChartReviewEngineSummary;
+  humanAction: AIChartReviewSummaryHumanAction | string | null;
+  overallScore: number | null;
+  tradeabilityScore: number | null;
+  engineAlignmentScore: number | null;
+  visualConfirmationScore: number | null;
+  entryQualityScore: number | null;
+  riskScore: number | null;
+  confidence: number | null;
+  finalReason: string | null;
+  engineA: AIChartReviewEngineSummary | null;
+  engineB: AIChartReviewEngineSummary | null;
+  engineC: AIChartReviewEngineSummary | null;
+  engineD: AIChartReviewEngineSummary | null;
+}
+
+export interface AIChartReviewContextCompletenessMetadata {
+  chartCapturedAt?: string | null;
+  scanTimestamp?: string | null;
+  latestCandleTimestamp?: string | null;
+  chartProvider?: string | null;
+  engineProvider?: string | null;
+  providerMismatch?: boolean | null;
+}
+
+export interface AIChartReviewContextCompleteness {
+  score: number | null;
+  status: 'complete' | 'partial' | 'insufficient' | string;
+  missingRequired: string[];
+  missingOptional: string[];
+  notApplicable: string[];
+  metadata: AIChartReviewContextCompletenessMetadata;
+}
+
+export interface AIChartReviewMissingContextItem {
+  key: string;
+  label: string;
+  reason: string;
+  impact?: 'high' | 'medium' | 'low' | string;
+  blocksTrade?: boolean;
+}
+
+export interface AIChartReviewNotApplicableContextItem {
+  key: string;
+  label: string;
+  reason: string;
+}
+
+export interface AIChartReviewMissingContextDetailed {
+  required: AIChartReviewMissingContextItem[];
+  optional: AIChartReviewMissingContextItem[];
+  notApplicable: AIChartReviewNotApplicableContextItem[];
+}
+
+export interface AIChartReviewFundingOi {
+  fundingRate?: number | null;
+  fundingRateZ?: number | null;
+  openInterest?: number | null;
+  openInterestDelta?: number | null;
+  openInterestDeltaPct?: number | null;
+  source?: string | null;
+  timestamp?: string | number | null;
+}
+
+export interface AIChartReviewAtrDiagnostics {
+  atrD1?: number | null;
+  atrH4?: number | null;
+  atrChartTf?: number | null;
+  atrSource?: string | null;
+  atrTimeframe?: string | null;
+  atrAgeSeconds?: number | null;
+  atrConfirmedOnly?: boolean | null;
+  atrCandleLastTs?: string | null;
+}
+
+export interface AIChartReviewResistanceMap {
+  nearestResistance?: number | null;
+  distanceToNearestResistance?: number | null;
+  tp?: number | null;
+  tpClearsResistance?: boolean | null;
+  htfSwingHighs: number[];
+  profileLevels: {
+    poc?: number | null;
+    vah?: number | null;
+    val?: number | null;
+  };
+  emaLevels: {
+    ema50?: number | null;
+    ema200?: number | null;
+    dema200?: number | null;
+  };
+  supplyZones: unknown[];
 }
 
 export interface AIChartReviewConcordance {
@@ -1092,6 +1170,12 @@ export interface AIChartReviewResponse {
   mismatch_warnings: string[];
   dedup_hit: boolean;
   ai_review_summary?: AIChartReviewSummary;
+  aiReviewSummary?: AIChartReviewSummary;
+  contextCompleteness?: AIChartReviewContextCompleteness;
+  missingContextDetailed?: AIChartReviewMissingContextDetailed;
+  fundingOi?: AIChartReviewFundingOi;
+  atrDiagnostics?: AIChartReviewAtrDiagnostics;
+  resistanceMap?: AIChartReviewResistanceMap;
 }
 
 export interface AIChartReviewScreenshotMeta {

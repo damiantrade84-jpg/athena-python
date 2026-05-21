@@ -10,6 +10,10 @@ from typing import Any
 from flask import jsonify, request
 
 from ai_review.concordance import compute_engine_a_ai_concordance
+from ai_review.context_diagnostics import (
+    build_context_diagnostics,
+    sanitize_ai_review_missing_context,
+)
 from ai_review.engine_a_context import assemble_engine_a_context
 from ai_review.freshness import classify_atr_freshness
 from ai_review.normalizer import normalize_chart_review_response
@@ -49,16 +53,23 @@ def _attach_review_summary(
     concordance: dict[str, Any],
     provider_meta: dict[str, Any],
     mismatch_warnings: list[str],
+    diagnostic_ai_review: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     snapshots = engine_a_ctx.get("engine_snapshots")
-    response["ai_review_summary"] = build_ai_review_summary(
+    diagnostic_source = diagnostic_ai_review or ai_review
+    clean_ai_review = sanitize_ai_review_missing_context(engine_a_ctx, diagnostic_source)
+    response["ai_review"] = clean_ai_review
+    summary = build_ai_review_summary(
         engine_a_ctx,
-        ai_review,
+        clean_ai_review,
         concordance,
         provider_meta,
         engine_snapshots=snapshots,
         mismatch_warnings=mismatch_warnings,
     )
+    response["aiReviewSummary"] = summary
+    response["ai_review_summary"] = summary
+    response.update(build_context_diagnostics(engine_a_ctx, diagnostic_source))
     return response
 
 
@@ -117,18 +128,31 @@ def register_ai_chart_review_routes(app, runtime: SimpleNamespace) -> None:
         )
         if dedup:
             dedup["dedup_hit"] = True
+            dedup_engine_ctx = dedup.get("engine_a_context") or engine_a_ctx
+            dedup_ai_raw = dedup.get("ai_review") or {}
+            dedup_ai = sanitize_ai_review_missing_context(
+                dedup_engine_ctx,
+                dedup_ai_raw,
+            )
+            dedup["ai_review"] = dedup_ai
+            dedup["concordance"] = compute_engine_a_ai_concordance(
+                dedup_engine_ctx,
+                dedup_ai,
+                cfg=cfg,
+            )
             pmeta = provider_meta_from_persisted(
                 provider=str(dedup.get("provider") or provider),
                 model=str(dedup.get("model") or ""),
-                ai_review=dedup.get("ai_review") or {},
+                ai_review=dedup_ai,
             )
             _attach_review_summary(
                 dedup,
-                engine_a_ctx=dedup.get("engine_a_context") or engine_a_ctx,
-                ai_review=dedup.get("ai_review") or {},
+                engine_a_ctx=dedup_engine_ctx,
+                ai_review=dedup_ai,
                 concordance=dedup.get("concordance") or {},
                 provider_meta=pmeta,
                 mismatch_warnings=list(dedup.get("mismatch_warnings") or []),
+                diagnostic_ai_review=dedup_ai_raw,
             )
             return jsonify(runtime.json_safe(dedup))
 
@@ -152,7 +176,8 @@ def register_ai_chart_review_routes(app, runtime: SimpleNamespace) -> None:
             body, status = provider_error_response(exc, provider=provider)
             return jsonify(body), status
 
-        normalized = normalize_chart_review_response(raw.get("raw_text") or "")
+        normalized_raw = normalize_chart_review_response(raw.get("raw_text") or "")
+        normalized = sanitize_ai_review_missing_context(engine_a_ctx, normalized_raw)
         concordance = compute_engine_a_ai_concordance(
             engine_a_ctx, normalized, cfg=cfg
         )
@@ -211,6 +236,7 @@ def register_ai_chart_review_routes(app, runtime: SimpleNamespace) -> None:
             concordance=concordance,
             provider_meta=provider_meta,
             mismatch_warnings=mismatch_warnings,
+            diagnostic_ai_review=normalized_raw,
         )
 
         return jsonify(runtime.json_safe(response))

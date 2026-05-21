@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 from typing import Any
 
+from ai_review.context_diagnostics import context_tradeability_penalty
 from ai_review.engine_snapshots import extract_engine_snapshots
 
 _HUMAN_ACTION_MAP = {
@@ -161,6 +162,7 @@ def _tradeability_penalties(
         penalty += 12
     if not engine_a_ctx.get("chart_provider_hint") and not engine_a_ctx.get("engine_a_provider"):
         penalty += 8
+    penalty += context_tradeability_penalty(engine_a_ctx, ai_review)
     risks = [str(r).lower() for r in (ai_review.get("risks") or [])]
     for risk in risks:
         if any(p in risk for p in _POOR_ENTRY_PATTERNS + _BAD_RR_PATTERNS):
@@ -279,8 +281,8 @@ def build_ai_review_summary(
         engine_d = {**engine_d, "setupType": setup_type}
 
     return {
-        "provider": str(provider_meta.get("provider") or ""),
-        "model": str(provider_meta.get("model") or ""),
+        "provider": provider_meta.get("provider") or None,
+        "model": provider_meta.get("model") or None,
         "providerStatus": str(provider_meta.get("provider_status") or "unknown"),
         "fallbackUsed": bool(provider_meta.get("fallback_used")),
         "humanAction": human_action,

@@ -26,6 +26,12 @@ function fmtNum(value: number | null | undefined, digits = 0): string {
   return digits > 0 ? value.toFixed(digits) : String(Math.round(value));
 }
 
+function show(value: unknown, fallback = '—'): string {
+  if (value === null || value === undefined) return fallback;
+  if (typeof value === 'string') return value.trim() === '' ? fallback : value;
+  return String(value);
+}
+
 function fmtPass(passed: boolean | null | undefined): string {
   if (passed === true) return 'PASS';
   if (passed === false) return 'FAIL';
@@ -35,9 +41,11 @@ function fmtPass(passed: boolean | null | undefined): string {
 function engineALine(engine: AIChartReviewEngineSummary | null | undefined): string {
   if (!engine) return '—';
   const score = fmtNum(engine.score, 2);
+  const max = fmtNum(engine.maxScore, 2);
   const threshold = fmtNum(engine.threshold, 2);
   const pass = fmtPass(engine.passed);
-  return `${score} / ${threshold} (${pass})`;
+  const direction = show(engine.direction);
+  return `${score} / ${max} · threshold ${threshold} · ${pass} · ${direction}`;
 }
 
 function ScoreCell({ label, value }: { label: string; value: number | null | undefined }) {
@@ -54,9 +62,14 @@ export interface AIReviewSummaryStripProps {
 }
 
 export default function AIReviewSummaryStrip({ summary }: AIReviewSummaryStripProps) {
+  const providerStatus = summary.providerStatus || 'unknown';
   const statusClass =
-    STATUS_PILL[summary.providerStatus] ?? STATUS_PILL.unknown;
-  const actionClass = ACTION_PILL[summary.humanAction] ?? ACTION_PILL.watch;
+    STATUS_PILL[providerStatus as AIChartReviewProviderStatus] ?? STATUS_PILL.unknown;
+  const humanAction = summary.humanAction || 'watch';
+  const actionClass = ACTION_PILL[String(humanAction)] ?? ACTION_PILL.watch;
+  const provider = summary.provider || 'unknown';
+  const model = summary.model || 'unknown';
+  const setupType = summary.engineD?.setupType || '—';
 
   return (
     <div className="space-y-2 border border-border/50 rounded-md p-2 bg-muted/20">
@@ -65,10 +78,10 @@ export default function AIReviewSummaryStrip({ summary }: AIReviewSummaryStripPr
           Review summary
         </span>
         <Badge className={`${actionClass} text-[10px] border`}>
-          {summary.humanAction}
+          {humanAction}
         </Badge>
         <Badge className={`${statusClass} text-[10px] border`}>
-          {summary.providerStatus.replace(/_/g, ' ')}
+          {providerStatus.replace(/_/g, ' ')}
         </Badge>
         {summary.fallbackUsed && (
           <Badge variant="outline" className="text-[10px] border-amber-500/50 text-amber-300">
@@ -76,29 +89,43 @@ export default function AIReviewSummaryStrip({ summary }: AIReviewSummaryStripPr
           </Badge>
         )}
         <span className="text-[10px] text-muted-foreground font-mono ml-auto truncate max-w-[50%]">
-          {summary.provider}/{summary.model || '—'}
+          {provider}/{model}
         </span>
       </div>
 
-      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-1.5">
+      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-7 gap-1.5">
         <ScoreCell label="Overall" value={summary.overallScore} />
         <ScoreCell label="Tradeability" value={summary.tradeabilityScore} />
         <ScoreCell label="Engine align" value={summary.engineAlignmentScore} />
         <ScoreCell label="Visual" value={summary.visualConfirmationScore} />
         <ScoreCell label="Entry" value={summary.entryQualityScore} />
         <ScoreCell label="Risk" value={summary.riskScore} />
+        <ScoreCell label="Confidence" value={summary.confidence} />
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-1.5 text-[10px]">
+        <SummaryKV label="Human action" value={show(humanAction)} />
+        <SummaryKV label="Setup type" value={setupType} />
         <div className="border border-border/40 rounded-md px-2 py-1">
           <span className="text-muted-foreground">Engine A: </span>
           <span className="font-mono">{engineALine(summary.engineA)}</span>
         </div>
-        <div className="border border-border/40 rounded-md px-2 py-1 truncate">
-          <span className="text-muted-foreground">Reason: </span>
-          <span>{summary.finalReason || '—'}</span>
-        </div>
+        <SummaryKV
+          label="Provider"
+          value={`${provider} / ${model} / ${providerStatus.replace(/_/g, ' ')}`}
+        />
+        <SummaryKV label="Fallback used" value={summary.fallbackUsed ? 'yes' : 'no'} />
+        <SummaryKV label="Final reason" value={summary.finalReason || '—'} />
       </div>
+    </div>
+  );
+}
+
+function SummaryKV({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="border border-border/40 rounded-md px-2 py-1 min-w-0">
+      <span className="text-muted-foreground">{label}: </span>
+      <span className="break-words">{value}</span>
     </div>
   );
 }

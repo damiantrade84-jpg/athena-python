@@ -1,6 +1,7 @@
 import { Sparkles } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
+import AIReviewContextCompletenessPanel from '@/components/athena/AIReviewContextCompletenessPanel';
 import AIReviewSummaryStrip from '@/components/athena/AIReviewSummaryStrip';
 import type {
   AIChartReviewResponse,
@@ -49,6 +50,7 @@ export default function AIReviewCard({ response }: AIReviewCardProps) {
   const c = response.concordance;
   const ts = response.timestamps;
   const ctx = response.engine_a_context;
+  const summary = response.aiReviewSummary ?? response.ai_review_summary;
   const atrInfo = ctx?.atr;
   const scanDelta = deltaSeconds(ts.scan_timestamp, ts.chart_captured_at);
   const verdictClass = VERDICT_PILL[ai.verdict] ?? VERDICT_PILL.NO_TRADE;
@@ -93,9 +95,17 @@ export default function AIReviewCard({ response }: AIReviewCardProps) {
           </span>
         </div>
 
-        {response.ai_review_summary && (
-          <AIReviewSummaryStrip summary={response.ai_review_summary} />
+        {summary && (
+          <AIReviewSummaryStrip summary={summary} />
         )}
+
+        <AIReviewContextCompletenessPanel
+          completeness={response.contextCompleteness}
+          detailed={response.missingContextDetailed}
+          fundingOi={response.fundingOi}
+          atrDiagnostics={response.atrDiagnostics}
+          resistanceMap={response.resistanceMap}
+        />
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-[11px]">
           <Row label="Human action" value={show(ai.human_action)} />

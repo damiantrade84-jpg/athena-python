@@ -18,6 +18,13 @@ def _to_float(value: Any) -> float | None:
         return None
 
 
+def _first_present(*values: Any) -> Any:
+    for value in values:
+        if value not in (None, "", [], {}):
+            return value
+    return None
+
+
 def _last_candle_ts(candles: list | None) -> str | None:
     if not candles:
         return None
@@ -26,6 +33,19 @@ def _last_candle_ts(candles: list | None) -> str | None:
         ts = last.get("time") or last.get("t")
         return str(ts) if ts else None
     return None
+
+
+def _last_candle_value(candles: list | None, key: str) -> float | None:
+    if not candles:
+        return None
+    last = candles[-1]
+    if not isinstance(last, dict):
+        return None
+    try:
+        value = last.get(key)
+        return float(value) if value is not None else None
+    except (TypeError, ValueError):
+        return None
 
 
 def _equity_session_block(factor_diag: dict[str, Any]) -> dict[str, Any]:
@@ -70,6 +90,45 @@ def _directional_alignment(factor_diag: dict[str, Any]) -> dict[str, Any]:
         "effectiveMinDirectional",
     )
     return {k: factor_diag.get(k) for k in keys if k in factor_diag}
+
+
+def _funding_oi_block(signal: dict[str, Any]) -> dict[str, Any]:
+    oi = signal.get("oiData") or signal.get("oi_data") or {}
+    if not isinstance(oi, dict):
+        oi = {}
+    oi_ctx = signal.get("oiContext") or signal.get("oi_context") or {}
+    if not isinstance(oi_ctx, dict):
+        oi_ctx = {}
+    return {
+        "fundingRate": _first_present(signal.get("fundingRate"), signal.get("funding_rate")),
+        "fundingRateZ": _first_present(signal.get("fundingRateZ"), signal.get("funding_rate_z")),
+        "openInterest": _first_present(
+            oi.get("oi"), oi.get("openInterest"), oi.get("open_interest")
+        ),
+        "openInterestDelta": _first_present(oi.get("oiDelta"), oi.get("openInterestDelta")),
+        "openInterestDeltaPct": _first_present(
+            oi.get("oiChange"),
+            oi.get("openInterestDeltaPct"),
+            oi_ctx.get("oi_change_pct"),
+        ),
+        "source": oi.get("source"),
+        "timestamp": _first_present(oi.get("timestamp"), oi.get("ts")),
+    }
+
+
+def _ema_levels(signal: dict[str, Any], factor_diag: dict[str, Any]) -> dict[str, Any]:
+    h4 = signal.get("h4")
+    h4_snap = h4.get("snap") if isinstance(h4, dict) else {}
+    if not isinstance(h4_snap, dict):
+        h4_snap = {}
+    trend = factor_diag.get("trendCoherence") or factor_diag.get("trend_coherence") or {}
+    if not isinstance(trend, dict):
+        trend = {}
+    return {
+        "ema50": h4_snap.get("ema50") or trend.get("ema50") or trend.get("ema50_value"),
+        "ema200": h4_snap.get("ema200") or trend.get("ema200") or trend.get("ema200_value"),
+        "dema200": h4_snap.get("dema200") or trend.get("dema200") or trend.get("dema200_value"),
+    }
 
 
 def _engine_a_passed(signal: dict[str, Any]) -> bool:
@@ -214,6 +273,9 @@ def assemble_engine_a_context(
             "atr_candle_last_ts": atr_diag.get("atr_candle_last_ts"),
             "atr_age_seconds": _to_float(atr_diag.get("atr_age_seconds")),
             "atr_confirmed_only": atr_diag.get("atr_confirmed_only", True),
+            "atr_d1": _to_float(atr_diag.get("atr_d1") or atr_diag.get("atrD1")),
+            "atr_h4": _to_float(atr_diag.get("atr_h4") or atr_diag.get("atrH4")),
+            "atr_chart_tf": _to_float(atr_diag.get("atr_chart_tf") or atr_diag.get("atrChartTf")),
             "atr_cache_hit": (candle_meta.get("H4") or {}).get("cacheHit")
             if isinstance(candle_meta.get("H4"), dict)
             else None,
@@ -238,6 +300,17 @@ def assemble_engine_a_context(
         },
         "chart_captured_at": (screenshot_meta or {}).get("captured_at"),
         "mismatch_warnings": [],
+        "funding_oi": _funding_oi_block(signal),
+        "structure_context": signal.get("engine_b") if isinstance(signal.get("engine_b"), dict) else {},
+        "ema_levels": _ema_levels(signal, factor_diag),
+        "htf_swing_highs": [
+            value
+            for value in (
+                _last_candle_value(signal.get("d1Candles"), "high"),
+                _last_candle_value(signal.get("h4Candles"), "high"),
+            )
+            if value is not None
+        ],
     }
     ctx["engine_snapshots"] = extract_engine_snapshots(signal, ctx)
     return ctx
