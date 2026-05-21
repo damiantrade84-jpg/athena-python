@@ -492,9 +492,9 @@ export default function TVChartPanel() {
           <IndicatorSwitch label="RSI14" checked={rsi14} onCheckedChange={setRsi14} />
         </div>
       </CardHeader>
-      <CardContent className="h-[calc(100%-120px)] min-h-[760px]">
+      <CardContent className="h-[calc(100%-120px)] min-h-[620px]">
         <div className="grid h-full gap-3 xl:grid-cols-[minmax(0,1fr)_320px]">
-          <div className="relative min-h-[700px] overflow-hidden rounded-md border bg-background">
+          <div className="relative min-h-[560px] overflow-hidden rounded-md border bg-background">
             <iframe
               key={frameKey}
               title="TradingView Advanced Chart"
