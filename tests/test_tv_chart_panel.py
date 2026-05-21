@@ -285,6 +285,7 @@ def test_engine_a_parity_toggle_and_overlay_are_dom_visible():
 
     assert "Engine A Parity" in source
     assert "engineAParityVisible" in source
+    assert "const [engineAParityVisible, setEngineAParityVisible] = useState(false)" in source
     assert "engineAParityRows" in source
     assert "price_inside_ema_cluster" in source
     assert "at_or_below_resistance" in source
@@ -298,6 +299,15 @@ def test_chart_screenshot_draws_dom_labels_over_canvas_export():
     assert "function drawCaptureLabels" in source
     assert "querySelectorAll('[data-chart-capture-label]')" in source
     assert "drawCaptureLabels(outputCtx, captureEl, captureRect)" in source
+
+
+def test_chart_header_uses_ascii_separator_to_avoid_encoding_artifacts():
+    source = _read(TV_PANEL)
+
+    assert "const CHART_LABEL_SEPARATOR = ' | '" in source
+    assert "chartHeaderParts.join(CHART_LABEL_SEPARATOR)" in source
+    assert "·" not in source
+    assert "Â" not in source
 
 
 def test_crypto_chart_uses_payload_live_tick_before_shared_price_fallback():

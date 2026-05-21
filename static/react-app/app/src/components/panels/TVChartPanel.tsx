@@ -104,6 +104,7 @@ const VISIBLE_BAR_COUNT = 180;
 const PRICE_CHART_HEIGHT_PX = 340;
 const STUDY_PANE_HEIGHT_PX = 110;
 const LIVE_TICK_MAX_AGE_SEC = 20;
+const CHART_LABEL_SEPARATOR = ' | ';
 
 const TF_SECONDS: Record<string, number> = {
   M1: 60,
@@ -962,7 +963,7 @@ export default function TVChartPanel() {
   const [adx14, setAdx14] = useState(true);
   const [volumeBars, setVolumeBars] = useState(true);
   const [volumeMa, setVolumeMa] = useState(true);
-  const [engineAParityVisible, setEngineAParityVisible] = useState(true);
+  const [engineAParityVisible, setEngineAParityVisible] = useState(false);
 
   const [candles, setCandles] = useState<CandleApiRow[] | null>(null);
   const [chartPayload, setChartPayload] = useState<CandleApiResponse | null>(null);
@@ -1003,7 +1004,17 @@ export default function TVChartPanel() {
       : chartPayload?.websocket_active === false && chartPayload?.websocket_stale
         ? ' ws_stale'
         : '';
-  const chartHeaderText = `${pair} · ${backendTf || timeframe} · ${assetGroupLabel} · chart ${chartProviderLabel} · candles ${candleProviderLabel} · live ${liveTickProviderLabel}${liveTickFallbackHint} · ${candlePolicyLabel} · ${lastCandleLabel}`;
+  const chartHeaderParts = [
+    pair,
+    backendTf || timeframe,
+    assetGroupLabel,
+    `chart ${chartProviderLabel}`,
+    `candles ${candleProviderLabel}`,
+    `live ${liveTickProviderLabel}${liveTickFallbackHint}`,
+    candlePolicyLabel,
+    lastCandleLabel,
+  ];
+  const chartHeaderText = chartHeaderParts.join(CHART_LABEL_SEPARATOR);
   const bottomPanelIdentity = 'Bottom panel identity: forex ATR14; crypto ADX14/ATR14 when enabled';
   const pricePanelLegendItems = useMemo<IndicatorLegendValue[]>(() => {
     const latest = studySnapshot.latest;
