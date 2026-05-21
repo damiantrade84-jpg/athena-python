@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 from typing import Any
 
+from ai_review.context_diagnostics import context_tradeability_penalty
 from ai_review.engine_snapshots import extract_engine_snapshots
 
 _HUMAN_ACTION_MAP = {
@@ -42,6 +43,18 @@ _CONCORDANCE_ALIGNMENT = {
 
 def _clamp(score: float) -> int:
     return int(max(0, min(100, round(score))))
+
+
+def _model_score(model_summary: dict[str, Any] | None, key: str, fallback: int) -> int:
+    if not model_summary:
+        return fallback
+    raw = model_summary.get(key)
+    if raw is None:
+        return fallback
+    try:
+        return _clamp(float(raw))
+    except (TypeError, ValueError):
+        return fallback
 
 
 def _text_blob(*parts: Any) -> str:
@@ -161,6 +174,7 @@ def _tradeability_penalties(
         penalty += 12
     if not engine_a_ctx.get("chart_provider_hint") and not engine_a_ctx.get("engine_a_provider"):
         penalty += 8
+    penalty += context_tradeability_penalty(engine_a_ctx, ai_review)
     risks = [str(r).lower() for r in (ai_review.get("risks") or [])]
     for risk in risks:
         if any(p in risk for p in _POOR_ENTRY_PATTERNS + _BAD_RR_PATTERNS):
@@ -245,6 +259,7 @@ def build_ai_review_summary(
     signal: dict[str, Any] | None = None,
     engine_snapshots: dict[str, Any] | None = None,
     mismatch_warnings: list[str] | None = None,
+    model_summary: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build top-level ai_review_summary; augments missing_context on a copy only."""
     snapshots = engine_snapshots
@@ -259,31 +274,42 @@ def build_ai_review_summary(
             existing.append(path)
     ai_copy["missing_context"] = existing
 
-    human_action = _map_human_action(str(ai_review.get("human_action") or "wait"))
-    visual = _score_visual(ai_review)
-    entry = _score_entry(ai_review)
-    risk = _score_risk(ai_review, engine_a_ctx, mismatch_warnings)
-    alignment = _score_engine_alignment(engine_a_ctx, concordance, ai_review)
-    tradeability = _score_tradeability(alignment, visual, entry, ai_review, engine_a_ctx)
-    overall = _overall_score(tradeability, visual, entry, risk)
+    ms = model_summary if isinstance(model_summary, dict) else {}
+    human_raw = ms.get("humanAction") or ai_review.get("human_action") or "wait"
+    human_action = _map_human_action(str(human_raw))
+    visual = _model_score(ms, "visualConfirmationScore", _score_visual(ai_review))
+    entry = _model_score(ms, "entryQualityScore", _score_entry(ai_review))
+    risk = _model_score(ms, "riskScore", _score_risk(ai_review, engine_a_ctx, mismatch_warnings))
+    alignment = _model_score(
+        ms, "engineAlignmentScore", _score_engine_alignment(engine_a_ctx, concordance, ai_review)
+    )
+    tradeability = _model_score(
+        ms,
+        "tradeabilityScore",
+        _score_tradeability(alignment, visual, entry, ai_review, engine_a_ctx),
+    )
+    overall = _model_score(
+        ms, "overallScore", _overall_score(tradeability, visual, entry, risk)
+    )
 
     try:
-        confidence = int(ai_review.get("confidence", 0))
+        confidence = int(ms.get("confidence", ai_review.get("confidence", 0)))
     except (TypeError, ValueError):
         confidence = 0
     confidence = max(0, min(100, confidence))
 
-    setup_type = str(ai_review.get("setup_type") or "").strip() or None
+    setup_type = str(ms.get("setupType") or ai_review.get("setup_type") or "").strip() or None
     engine_d = dict(snapshots.get("engineD") or {})
     if setup_type and engine_d.get("setupType") is None:
         engine_d = {**engine_d, "setupType": setup_type}
 
     return {
-        "provider": str(provider_meta.get("provider") or ""),
-        "model": str(provider_meta.get("model") or ""),
+        "provider": provider_meta.get("provider") or None,
+        "model": provider_meta.get("model") or None,
         "providerStatus": str(provider_meta.get("provider_status") or "unknown"),
         "fallbackUsed": bool(provider_meta.get("fallback_used")),
         "humanAction": human_action,
+        "setupType": setup_type,
         "overallScore": overall,
         "tradeabilityScore": tradeability,
         "engineAlignmentScore": alignment,
@@ -291,7 +317,8 @@ def build_ai_review_summary(
         "entryQualityScore": entry,
         "riskScore": risk,
         "confidence": confidence,
-        "finalReason": _final_reason(ai_review, concordance, human_action),
+        "finalReason": str(ms.get("finalReason") or "").strip()
+        or _final_reason(ai_review, concordance, human_action),
         "engineA": snapshots.get("engineA"),
         "engineB": snapshots.get("engineB"),
         "engineC": snapshots.get("engineC"),

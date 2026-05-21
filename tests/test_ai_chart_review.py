@@ -21,7 +21,10 @@ from ai_review.persistence import ensure_schema, find_recent_review_by_hash, rec
 from ai_review.prompt_builder import build_chart_review_prompt
 from ai_review.provider_meta import apply_parse_fallback, build_provider_meta
 from ai_review.providers.router import run_chart_review
+from ai_review.engine_a_context import build_engine_a_prompt_context
+from ai_review.engine_a_verdict import build_engine_a_verdict_comparison
 from ai_review.summary import build_ai_review_summary
+from ai_review.context_diagnostics import build_context_diagnostics
 from ai_review.timestamp_contract import evaluate_timestamp_mismatch
 from ai_review.validation import validate_request
 from athena_app.api.routes_ai_chart_review import register_ai_chart_review_routes
@@ -167,7 +170,11 @@ def _make_app(tmp_db: str, enabled: bool = True):
                     "multiplier": 1.02,
                     "utc_hour": 14,
                     "reason": "us_cash_open",
-                }
+                },
+                "trendCoherence": {
+                    "ema50_value": 64800.0,
+                    "ema200_value": 62300.0,
+                },
             },
             "atrDiagnostics": {
                 "atr_value": 1200.0,
@@ -175,12 +182,41 @@ def _make_app(tmp_db: str, enabled: bool = True):
                 "atr_source": "h4",
                 "atr_age_seconds": 7200.0,
                 "atr_confirmed_only": True,
+                "atr_h4": 1200.0,
+                "atr_d1": 2100.0,
             },
             "dataFreshness": {"allowed": True},
-            "h1Candles": [{"time": "2026-05-21T16:00:00+00:00"}],
-            "h4Candles": [{"time": "2026-05-21T16:00:00+00:00"}],
-            "d1Candles": [{"time": "2026-05-20T00:00:00+00:00"}],
+            "h1Candles": [{"time": "2026-05-21T16:00:00+00:00", "high": 65300.0}],
+            "h4Candles": [{"time": "2026-05-21T16:00:00+00:00", "high": 65400.0}],
+            "d1Candles": [{"time": "2026-05-20T00:00:00+00:00", "high": 67250.0}],
             "candleFetchMeta": {"pairSource": "binance"},
+            "fundingRate": 0.0001,
+            "oiData": {
+                "oi": 123456.0,
+                "oiChange": 1.5,
+                "source": "bybit",
+                "ts": 1779381000,
+            },
+            "oiContext": {
+                "oi_change_pct": 1.5,
+                "price_change_pct": 0.8,
+            },
+            "engine_b": {
+                "nearest_resistance_zone": {"lower": 66800.0, "upper": 67200.0},
+                "distance_to_res": 1800.0,
+                "recommended_take_profit": 67000.0,
+                "structural_target_candidates": [
+                    {
+                        "target_type": "resistance_zone",
+                        "target_price": 67000.0,
+                        "selected": True,
+                    }
+                ],
+                "prev_session_poc": 65150.0,
+                "prev_session_vah": 66200.0,
+                "prev_session_val": 64200.0,
+                "d1_order_blocks": [],
+            },
         }
 
     runtime = SimpleNamespace(
@@ -306,9 +342,19 @@ def test_prompt_threshold_not_hardcoded():
             assert "1.5" not in line and "2.0" not in line and "1.7" not in line
 
 
-def test_prompt_includes_factor_diagnostics():
+def test_prompt_includes_engine_a_context_json():
     prompt = build_chart_review_prompt(_engine_a_ctx())
-    assert "trendCoherence" in prompt
+    assert "engineAContext" in prompt
+    assert '"direction": "LONG"' in prompt or '"direction": "LONG",' in prompt
+    assert "engineAVerdictComparison" in prompt
+
+
+def test_build_engine_a_prompt_context_null_when_missing():
+    ctx = _engine_a_ctx(threshold=None, confluence_score=None)
+    ctx["engine_snapshots"] = extract_engine_snapshots({}, ctx)
+    block = build_engine_a_prompt_context(ctx)
+    assert block["threshold"] is None
+    assert block["score"] is None
 
 
 def test_prompt_includes_equity_session_applied_and_multiplier():
@@ -543,12 +589,14 @@ def test_summary_always_present_on_success(tmp_audit_db):
     data = resp.get_json()
     summary = data.get("ai_review_summary")
     assert summary is not None
+    assert data.get("aiReviewSummary") == summary
     for key in (
         "provider",
         "model",
         "providerStatus",
         "fallbackUsed",
         "humanAction",
+        "setupType",
         "overallScore",
         "tradeabilityScore",
         "engineAlignmentScore",
@@ -560,6 +608,105 @@ def test_summary_always_present_on_success(tmp_audit_db):
         "engineA",
     ):
         assert key in summary
+    assert data.get("engineAVerdictComparison") is not None
+    assert data.get("engine_a_verdict_comparison") == data["engineAVerdictComparison"]
+
+
+def test_context_diagnostics_attached_to_success_response(tmp_audit_db):
+    app = _make_app(tmp_audit_db)
+    client = app.test_client()
+    body = _base_request()
+    with patch(
+        "ai_review.providers.router.call_anthropic_chart_review",
+        return_value=_mock_provider_payload(
+            ai={
+                "atr_rr_assessment": "H4 ATR confirms risk and TP clears resistance",
+                "missing_context": [
+                    "chart captured timestamp",
+                    "equity_session multiplier unavailable / not applied",
+                ],
+            }
+        ),
+    ):
+        resp = client.post("/api/ai/chart-review", json=body)
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["contextCompleteness"]["metadata"]["chartCapturedAt"] == "2026-05-21T16:31:02+00:00"
+    assert data["contextCompleteness"]["metadata"]["chartProvider"] is None
+    assert "chart captured timestamp" not in data["contextCompleteness"]["missingRequired"]
+    assert "chart captured timestamp" not in data["contextCompleteness"]["missingOptional"]
+    assert "equity_session" in [item["key"] for item in data["missingContextDetailed"]["notApplicable"]]
+    assert data["atrDiagnostics"]["atrH4"] == 1200.0
+    assert data["atrDiagnostics"]["atrChartTf"] == 1200.0
+    assert data["resistanceMap"]["nearestResistance"] == 66800.0
+    assert data["resistanceMap"]["tp"] == 67000.0
+    assert data["resistanceMap"]["tpClearsResistance"] is True
+
+
+def test_context_diagnostics_crypto_equity_session_not_applicable_does_not_penalize():
+    ctx = _engine_a_ctx()
+    ai = normalize_chart_review_response(
+        json.dumps(
+            {
+                "verdict": "VALID",
+                "confidence": 80,
+                "human_action": "take",
+                "missing_context": ["equity_session multiplier unavailable / not applied"],
+            }
+        )
+    )
+    diagnostics = build_context_diagnostics(ctx, ai)
+    assert diagnostics["contextCompleteness"]["score"] == 100
+    assert diagnostics["contextCompleteness"]["status"] == "complete"
+    assert diagnostics["missingContextDetailed"]["required"] == []
+    assert diagnostics["missingContextDetailed"]["optional"] == []
+    assert diagnostics["missingContextDetailed"]["notApplicable"] == [
+        {
+            "key": "equity_session",
+            "label": "Equity session multiplier",
+            "reason": "asset_group crypto does not use equity session multiplier",
+        }
+    ]
+
+
+def test_context_diagnostics_funding_oi_reference_without_numbers_is_missing_optional():
+    ctx = _engine_a_ctx(funding_oi={})
+    ai = normalize_chart_review_response(
+        json.dumps(
+            {
+                "verdict": "CAUTION",
+                "confidence": 55,
+                "human_action": "wait",
+                "supporting_reasons": ["Funding/OI add-on shows ok"],
+            }
+        )
+    )
+    diagnostics = build_context_diagnostics(ctx, ai)
+    assert diagnostics["fundingOi"]["fundingRate"] is None
+    assert "funding_oi_numeric" in [item["key"] for item in diagnostics["missingContextDetailed"]["optional"]]
+    assert "Funding/OI numeric values" in diagnostics["contextCompleteness"]["missingOptional"]
+
+
+def test_context_diagnostics_required_missing_reduces_tradeability():
+    ctx = _engine_a_ctx()
+    ai_base = normalize_chart_review_response(
+        json.dumps({"verdict": "VALID", "confidence": 80, "human_action": "take"})
+    )
+    ai_missing = normalize_chart_review_response(
+        json.dumps(
+            {
+                "verdict": "VALID",
+                "confidence": 80,
+                "human_action": "take",
+                "missing_context": ["No higher-TF resistance map to validate TP 67000"],
+            }
+        )
+    )
+    concordance = compute_engine_a_ai_concordance(ctx, ai_base)
+    meta = build_provider_meta(provider="anthropic", model="claude-opus-4-7")
+    base = build_ai_review_summary(ctx, ai_base, concordance, meta)
+    missing = build_ai_review_summary(ctx, ai_missing, concordance, meta)
+    assert missing["tradeabilityScore"] < base["tradeabilityScore"]
 
 
 def test_summary_engine_a_from_context():
@@ -618,6 +765,36 @@ def test_parse_fallback_provider_status(tmp_audit_db):
     assert summary["fallbackUsed"] is True
     assert summary["model"] == "deterministic_normalizer"
     assert "opus" not in summary["model"].lower()
+
+
+def test_engine_a_verdict_wait_extension_downgrade():
+    ctx = _engine_a_ctx(passed=True)
+    ctx["engine_snapshots"] = extract_engine_snapshots({}, ctx)
+    ai = normalize_chart_review_response(
+        json.dumps(
+            {
+                "verdict": "CAUTION",
+                "confidence": 55,
+                "human_action": "wait",
+                "visual_confirmation": "direction ok",
+                "visual_contradiction": "",
+                "engine_a_alignment": "aligned with engine",
+                "entry_quality": "resistance cluster entry, poor timing extended above VWAP",
+                "atr_rr_assessment": "acceptable",
+                "freshness_assessment": "fresh",
+                "supporting_reasons": [],
+                "risks": ["late entry", "compression"],
+                "missing_context": [],
+            }
+        )
+    )
+    comparison = build_engine_a_verdict_comparison(ctx, ai, engine_snapshots=ctx["engine_snapshots"])
+    assert comparison["engineABiasValid"] is True
+    assert comparison["chartConfirmsEngineADirection"] is True
+    assert comparison["chartContradictsEntryTiming"] is True
+    assert comparison["aiDowngradedEngineA"] is True
+    assert comparison["comparisonVerdict"] == "engine_a_direction_confirmed_entry_rejected"
+    assert comparison["finalDecision"] == "wait"
 
 
 def test_wait_high_alignment_low_tradeability():

@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from ai_review.engine_a_context import build_engine_a_prompt_context
+
 
 def _fmt(value: Any) -> str:
     if value is None:
@@ -22,71 +24,68 @@ def build_chart_review_prompt(context: dict[str, Any]) -> str:
     geometry = context.get("geometry") or {}
     equity = context.get("equity_session") or {}
     mismatch_warnings = context.get("mismatch_warnings") or []
+    engine_a_context = build_engine_a_prompt_context(context)
+    engine_a_json = json.dumps({"engineAContext": engine_a_context}, default=str, indent=2)
 
-    return f"""You are reviewing a trading setup using:
-1. a native chart PNG screenshot (provided as an image input)
-2. server-trusted Engine A diagnostics
-3. ATR / SL / TP / RR / freshness diagnostics
+    return f"""You are not only reviewing the chart image. You are validating the chart against the structured Engine A signal supplied below.
 
-Return strict JSON only, matching this schema exactly:
-{{ verdict, confidence, setup_type, visual_confirmation, visual_contradiction,
-  engine_a_alignment, atr_rr_assessment, freshness_assessment, entry_quality,
-  supporting_reasons, risks, missing_context, human_action }}
+Workflow (required):
+1. Decide whether the chart visually confirms Engine A direction (directional validity).
+2. Decide whether current entry timing is acceptable (entry timing quality) — extended/late entries downgrade tradeability even when direction is correct.
+3. Decide tradeability now (human action: trade | wait | reject | watch). Engine A may pass while the correct action is WAIT.
+
+Return strict JSON only with these top-level keys:
+- aiReviewSummary: {{ humanAction, setupType, overallScore, tradeabilityScore, engineAlignmentScore, visualConfirmationScore, entryQualityScore, riskScore, confidence, finalReason }} (scores 0-100 integers or null)
+- engineAVerdictComparison: {{
+    engineAProvided, engineABiasValid, engineAPassed, engineADirection, engineAScore, engineAMaxScore,
+    engineAThreshold, engineANormalizedScore, engineAActiveFactors,
+    chartConfirmsEngineADirection, chartContradictsEngineADirection,
+    chartConfirmsEntryTiming, chartContradictsEntryTiming,
+    aiAgreesWithEngineA, aiDowngradedEngineA, aiUpgradedEngineA,
+    comparisonVerdict, downgradeReasons, upgradeReasons, finalDecision, finalReason
+  }}
+  comparisonVerdict one of: engine_a_confirmed | engine_a_direction_confirmed_entry_rejected |
+  engine_a_contradicted | engine_a_missing | mixed | unknown
+- contextCompleteness: {{ score, status, missingRequired, missingOptional, notApplicable, metadata }}
+- missingContextDetailed: {{ required: [{{key,label,reason,impact,blocksTrade}}], optional: [...], notApplicable: [...] }}
+- visualConfirmation, visualContradiction, atrRrAssessment, entryQuality (strings)
+- supportingReasons, risks (string arrays)
+- metadata: {{ chartCapturedAt, scanTimestamp, latestCandleTimestamp, chartProvider, engineProvider, providerMismatch }}
+
+Also include legacy flat fields for compatibility:
+verdict (VALID|CAUTION|INVALID|NO_TRADE), confidence (0-100), setup_type, human_action (take|wait|reject|needs_fresher_data|needs_better_rr),
+engine_a_alignment, freshness_assessment, missing_context (string array — see rules below).
 
 Rules:
-- Do not approve a trade only because Engine A score is high.
-- Check whether the screenshot visually agrees with Engine A direction.
-- ATR freshness uses timeframe-aware logic. D1 confirmed-only ATR can naturally
-  be 24–48h old — do not flag it as stale solely on age.
-- Check SL/TP/RR quality and whether price has drifted from candidate entry.
-- Treat any field labelled "unavailable" as uncertainty, not as zero.
-- Treat provider/timestamp mismatch as uncertainty.
+- Do not approve a trade only because Engine A score is high or passed=true.
+- Engine A pass must NOT automatically imply high tradeabilityScore; reduce tradeability when entry is extended/late or visually contradicted.
+- If visual contradiction exists, reduce tradeabilityScore and set chartContradictsEngineADirection when appropriate.
+- If required context is missing, reduce confidence; do not list not-applicable items as missing.
+- Do NOT put chartCapturedAt, scanTimestamp, or latestCandleTimestamp in missing_context — use metadata only.
+- For crypto, equity_session is not applicable — put in notApplicable, not missing.
+- ATR freshness: D1 confirmed-only ATR can be 24–48h old — do not flag stale solely on age.
+- Treat unavailable/null Engine A fields as uncertainty, not zero.
 - This is review-only. Do not issue execution instructions.
+
+== SERVER-TRUSTED engineAContext (JSON) ==
+{engine_a_json}
 
 == SYMBOL ==
 {context.get("symbol")} {context.get("timeframe")} asset_group: {context.get("asset_group")}
 
-== ENGINE A (server-trusted) ==
-direction:           {_fmt(context.get("direction"))}
-confluence_score:    {_fmt(context.get("confluence_score"))}
-threshold:           {_fmt(context.get("threshold"))}
-max_score_override:  {_fmt(context.get("max_score_override"))}
-passed:              {_fmt(context.get("passed"))}
-regime:              {_fmt(context.get("regime"))}
-equity_session:      applied={_fmt(equity.get("applied"))} utc_hour={_fmt(equity.get("utc_hour"))} multiplier={_fmt(equity.get("multiplier"))} reason={_fmt(equity.get("reason"))}
-factor_diagnostics:  {_fmt(context.get("factor_diagnostics"))}
-multiplier_diagnostics: {_fmt(context.get("multiplier_diagnostics"))}
-directional_alignment: {_fmt(context.get("directional_alignment"))}
-
 == ATR ==
-atr_value:           {_fmt(atr.get("atr_value"))}
-atr_tf:              {_fmt(atr.get("atr_tf"))}
-atr_source:          {_fmt(atr.get("atr_source"))}
-atr_confirmed_only:  {_fmt(atr.get("atr_confirmed_only"))}
-atr_age_seconds:     {_fmt(atr.get("atr_age_seconds"))}
-atr_freshness:       {_fmt(atr.get("atr_freshness_status"))} (max_expected={_fmt(atr.get("max_expected_age_seconds"))}s)
-atr_cache_hit:       {_fmt(atr.get("atr_cache_hit"))}
+atr_value: {_fmt(atr.get("atr_value"))} atr_tf: {_fmt(atr.get("atr_tf"))} atr_h4: {_fmt(atr.get("atr_h4"))} atr_d1: {_fmt(atr.get("atr_d1"))}
+atr_age_seconds: {_fmt(atr.get("atr_age_seconds"))} atr_freshness: {_fmt(atr.get("atr_freshness_status"))} (max_expected={_fmt(atr.get("max_expected_age_seconds"))}s)
 
 == GEOMETRY ==
-candidate_entry:     {_fmt(geometry.get("candidate_entry"))}
-current_price:       {_fmt(geometry.get("current_price"))}
-stop_loss:           {_fmt(geometry.get("stop_loss"))}
-take_profit:         {_fmt(geometry.get("take_profit"))}
-risk_points:         {_fmt(geometry.get("risk_points"))}
-reward_points:       {_fmt(geometry.get("reward_points"))}
-rr:                  {_fmt(geometry.get("rr"))}
-price_displacement_from_candidate_entry: {_fmt(geometry.get("price_displacement_from_candidate_entry"))}
-sl_tp_source:        {_fmt(geometry.get("sl_tp_source"))}
+entry: {_fmt(geometry.get("candidate_entry"))} sl: {_fmt(geometry.get("stop_loss"))} tp: {_fmt(geometry.get("take_profit"))} rr: {_fmt(geometry.get("rr"))}
 
-== TIMESTAMPS ==
-scan_timestamp:        {_fmt(context.get("scan_timestamp"))}
-candidate_timestamp:   {_fmt(context.get("candidate_timestamp"))}
-latest_candle_ts:      {_fmt(context.get("latest_candle_ts"))}
-d1_ts / h4_ts / h1_ts: {_fmt(context.get("d1_candle_ts"))} / {_fmt(context.get("h4_candle_ts"))} / {_fmt(context.get("h1_candle_ts"))}
-chart_captured_at:     {_fmt(context.get("chart_captured_at"))}
-provider (engine A):   {_fmt(context.get("engine_a_provider"))}
-provider (chart):      {_fmt(context.get("chart_provider_hint"))}    provider_mismatch={_fmt(context.get("provider_mismatch"))}
-mismatch_warnings:     {_fmt(mismatch_warnings)}
+== TIMESTAMPS / PROVIDERS ==
+scan_timestamp: {_fmt(context.get("scan_timestamp"))} latest_candle_ts: {_fmt(context.get("latest_candle_ts"))}
+chart_captured_at: {_fmt(context.get("chart_captured_at"))} (metadata only — not missing context)
+engine_provider: {_fmt(context.get("engine_a_provider"))} chart_provider: {_fmt(context.get("chart_provider_hint"))}
+equity_session: applied={_fmt(equity.get("applied"))} multiplier={_fmt(equity.get("multiplier"))} reason={_fmt(equity.get("reason"))}
+mismatch_warnings: {_fmt(mismatch_warnings)}
 
-Now analyse the chart and return JSON only.
+Analyse the chart image and return JSON only.
 """

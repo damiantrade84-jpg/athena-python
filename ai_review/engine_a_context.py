@@ -18,6 +18,13 @@ def _to_float(value: Any) -> float | None:
         return None
 
 
+def _first_present(*values: Any) -> Any:
+    for value in values:
+        if value not in (None, "", [], {}):
+            return value
+    return None
+
+
 def _last_candle_ts(candles: list | None) -> str | None:
     if not candles:
         return None
@@ -26,6 +33,19 @@ def _last_candle_ts(candles: list | None) -> str | None:
         ts = last.get("time") or last.get("t")
         return str(ts) if ts else None
     return None
+
+
+def _last_candle_value(candles: list | None, key: str) -> float | None:
+    if not candles:
+        return None
+    last = candles[-1]
+    if not isinstance(last, dict):
+        return None
+    try:
+        value = last.get(key)
+        return float(value) if value is not None else None
+    except (TypeError, ValueError):
+        return None
 
 
 def _equity_session_block(factor_diag: dict[str, Any]) -> dict[str, Any]:
@@ -70,6 +90,45 @@ def _directional_alignment(factor_diag: dict[str, Any]) -> dict[str, Any]:
         "effectiveMinDirectional",
     )
     return {k: factor_diag.get(k) for k in keys if k in factor_diag}
+
+
+def _funding_oi_block(signal: dict[str, Any]) -> dict[str, Any]:
+    oi = signal.get("oiData") or signal.get("oi_data") or {}
+    if not isinstance(oi, dict):
+        oi = {}
+    oi_ctx = signal.get("oiContext") or signal.get("oi_context") or {}
+    if not isinstance(oi_ctx, dict):
+        oi_ctx = {}
+    return {
+        "fundingRate": _first_present(signal.get("fundingRate"), signal.get("funding_rate")),
+        "fundingRateZ": _first_present(signal.get("fundingRateZ"), signal.get("funding_rate_z")),
+        "openInterest": _first_present(
+            oi.get("oi"), oi.get("openInterest"), oi.get("open_interest")
+        ),
+        "openInterestDelta": _first_present(oi.get("oiDelta"), oi.get("openInterestDelta")),
+        "openInterestDeltaPct": _first_present(
+            oi.get("oiChange"),
+            oi.get("openInterestDeltaPct"),
+            oi_ctx.get("oi_change_pct"),
+        ),
+        "source": oi.get("source"),
+        "timestamp": _first_present(oi.get("timestamp"), oi.get("ts")),
+    }
+
+
+def _ema_levels(signal: dict[str, Any], factor_diag: dict[str, Any]) -> dict[str, Any]:
+    h4 = signal.get("h4")
+    h4_snap = h4.get("snap") if isinstance(h4, dict) else {}
+    if not isinstance(h4_snap, dict):
+        h4_snap = {}
+    trend = factor_diag.get("trendCoherence") or factor_diag.get("trend_coherence") or {}
+    if not isinstance(trend, dict):
+        trend = {}
+    return {
+        "ema50": h4_snap.get("ema50") or trend.get("ema50") or trend.get("ema50_value"),
+        "ema200": h4_snap.get("ema200") or trend.get("ema200") or trend.get("ema200_value"),
+        "dema200": h4_snap.get("dema200") or trend.get("dema200") or trend.get("dema200_value"),
+    }
 
 
 def _engine_a_passed(signal: dict[str, Any]) -> bool:
@@ -214,6 +273,9 @@ def assemble_engine_a_context(
             "atr_candle_last_ts": atr_diag.get("atr_candle_last_ts"),
             "atr_age_seconds": _to_float(atr_diag.get("atr_age_seconds")),
             "atr_confirmed_only": atr_diag.get("atr_confirmed_only", True),
+            "atr_d1": _to_float(atr_diag.get("atr_d1") or atr_diag.get("atrD1")),
+            "atr_h4": _to_float(atr_diag.get("atr_h4") or atr_diag.get("atrH4")),
+            "atr_chart_tf": _to_float(atr_diag.get("atr_chart_tf") or atr_diag.get("atrChartTf")),
             "atr_cache_hit": (candle_meta.get("H4") or {}).get("cacheHit")
             if isinstance(candle_meta.get("H4"), dict)
             else None,
@@ -238,6 +300,117 @@ def assemble_engine_a_context(
         },
         "chart_captured_at": (screenshot_meta or {}).get("captured_at"),
         "mismatch_warnings": [],
+        "funding_oi": _funding_oi_block(signal),
+        "structure_context": signal.get("engine_b") if isinstance(signal.get("engine_b"), dict) else {},
+        "ema_levels": _ema_levels(signal, factor_diag),
+        "htf_swing_highs": [
+            value
+            for value in (
+                _last_candle_value(signal.get("d1Candles"), "high"),
+                _last_candle_value(signal.get("h4Candles"), "high"),
+            )
+            if value is not None
+        ],
     }
     ctx["engine_snapshots"] = extract_engine_snapshots(signal, ctx)
     return ctx
+
+
+def _factor_score(fd: dict[str, Any], *keys: str) -> float | None:
+    fs = fd.get("factorScores") or fd.get("factor_scores")
+    if not isinstance(fs, dict):
+        fs = fd
+    for key in keys:
+        val = _to_float(fs.get(key) if isinstance(fs, dict) else None)
+        if val is not None:
+            return val
+    return None
+
+
+def _timeframe_bias(engine_a_ctx: dict[str, Any]) -> dict[str, str | None]:
+    fd = engine_a_ctx.get("factor_diagnostics") or {}
+    if not isinstance(fd, dict):
+        fd = {}
+    regime = str(engine_a_ctx.get("regime") or "").strip() or None
+    trend = fd.get("trendCoherence") or fd.get("trend_coherence")
+    trend_label = None
+    if isinstance(trend, dict):
+        trend_label = trend.get("label") or trend.get("state") or trend.get("alignment")
+    elif trend is not None:
+        trend_label = str(trend)
+    directional = engine_a_ctx.get("directional_alignment") or {}
+    dir_score = None
+    if isinstance(directional, dict):
+        ds = directional.get("directionalScore") or directional.get("directional_score")
+        if ds is not None:
+            dir_score = str(ds)
+    base = trend_label or regime or dir_score
+    return {
+        "D1": base,
+        "H4": base,
+        "H1": dir_score or base,
+    }
+
+
+def _abort_reasons(engine_a_ctx: dict[str, Any]) -> list[str]:
+    fresh = engine_a_ctx.get("freshness") or {}
+    warnings = fresh.get("stale_warnings") if isinstance(fresh, dict) else None
+    if isinstance(warnings, list):
+        return [str(w) for w in warnings if w]
+    if isinstance(warnings, str) and warnings.strip():
+        return [warnings.strip()]
+    return []
+
+
+def build_engine_a_prompt_context(engine_a_ctx: dict[str, Any]) -> dict[str, Any]:
+    """Compact structured Engine A block for the Opus prompt (projection only, no scoring)."""
+    snapshots = engine_a_ctx.get("engine_snapshots") or {}
+    ea = snapshots.get("engineA") or {}
+    fd = engine_a_ctx.get("factor_diagnostics") or {}
+    if not isinstance(fd, dict):
+        fd = {}
+    atr = engine_a_ctx.get("atr") or {}
+    geometry = engine_a_ctx.get("geometry") or {}
+    trend = fd.get("trendCoherence") or fd.get("trend_coherence") or {}
+    vwap_ext = None
+    if isinstance(trend, dict):
+        vwap_ext = trend.get("vwapExtended") or trend.get("vwap_extended")
+    adx_capture = fd.get("regimeLabelsDualCapture") or {}
+    if not isinstance(adx_capture, dict):
+        adx_capture = {}
+
+    return {
+        "direction": engine_a_ctx.get("direction"),
+        "score": ea.get("score") if ea.get("score") is not None else engine_a_ctx.get("confluence_score"),
+        "maxScore": ea.get("maxScore") if ea.get("maxScore") is not None else engine_a_ctx.get("max_score_override"),
+        "threshold": ea.get("threshold") if ea.get("threshold") is not None else engine_a_ctx.get("threshold"),
+        "normalizedScore": ea.get("normalizedScore"),
+        "passed": ea.get("passed") if ea.get("passed") is not None else engine_a_ctx.get("passed"),
+        "activeFactors": ea.get("activeFactors"),
+        "conviction": _to_float(fd.get("conviction") or fd.get("combinedConviction")),
+        "abortReasons": _abort_reasons(engine_a_ctx),
+        "timeframeBias": _timeframe_bias(engine_a_ctx),
+        "diagnostics": {
+            "trendScore": _factor_score(fd, "trend"),
+            "momentumScore": _factor_score(fd, "momentum"),
+            "volatilityScore": _factor_score(fd, "mean_reversion", "volatility"),
+            "volumeScore": _factor_score(fd, "addon"),
+            "structureScore": _to_float(fd.get("structure_context_adjustment")),
+            "vwapDistanceAtr": _to_float(
+                trend.get("vwapDistanceAtr") if isinstance(trend, dict) else None
+            ),
+            "vwapExtended": vwap_ext if isinstance(vwap_ext, bool) else None,
+            "adxD1": _to_float(adx_capture.get("trendStateAdxValue")),
+            "adxH4": _to_float(fd.get("adx_value") or fd.get("adxValue")),
+            "rsi": None,
+            "atrD1": _to_float(atr.get("atr_d1")),
+            "atrH4": _to_float(atr.get("atr_h4")),
+            "rr": _to_float(geometry.get("rr")),
+            "sl": _to_float(geometry.get("stop_loss")),
+            "tp": _to_float(geometry.get("take_profit")),
+            "entry": _to_float(geometry.get("candidate_entry")),
+            "provider": engine_a_ctx.get("engine_a_provider"),
+            "latestCandleTimestamp": engine_a_ctx.get("latest_candle_ts"),
+            "freshnessStatus": atr.get("atr_freshness_status"),
+        },
+    }

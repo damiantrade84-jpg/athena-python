@@ -12412,6 +12412,8 @@ def analyze_pair(
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "aiAnalysis": None,
         "oiDivergence": _oi_divergence,
+        "oiData": _oi_data if pair["type"] == "crypto" else None,
+        "oiContext": _oi_context if pair["type"] == "crypto" else None,
         "fundingRate": res.get("fundingRate"),
         "regime": res.get("regime"),
         "factorScores": res.get("factor_scores"),

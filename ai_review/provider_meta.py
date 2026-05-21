@@ -9,8 +9,10 @@ VALID_PROVIDER_STATUSES = frozenset(
         "success",
         "failed_auth",
         "insufficient_credit",
+        "rate_limited",
         "timeout",
         "fallback_used",
+        "parse_error",
         "unknown",
     }
 )
@@ -44,7 +46,7 @@ def _classify_anthropic_exception(exc: Exception) -> tuple[str, int]:
     if "permission" in name or "forbidden" in msg:
         return "failed_auth", 403
     if "ratelimit" in name or "rate limit" in msg or "rate_limit" in msg:
-        return "insufficient_credit", 503
+        return "rate_limited", 503
     if "credit" in msg or "billing" in msg or "balance" in msg or "insufficient" in msg:
         return "insufficient_credit", 503
     if "timeout" in name or "timed out" in msg:

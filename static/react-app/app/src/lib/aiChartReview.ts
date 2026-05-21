@@ -109,6 +109,45 @@ export function buildScreenshotMeta(args: {
   };
 }
 
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+}
+
+export function normalizeAIChartReviewResponse(
+  raw: AIChartReviewResponse,
+): AIChartReviewResponse {
+  const record = asRecord(raw);
+  const summary = record.aiReviewSummary ?? record.ai_review_summary;
+  const contextCompleteness =
+    record.contextCompleteness ?? record.context_completeness;
+  const missingContextDetailed =
+    record.missingContextDetailed ?? record.missing_context_detailed;
+  const fundingOi = record.fundingOi ?? record.funding_oi;
+  const atrDiagnostics = record.atrDiagnostics ?? record.atr_diagnostics;
+  const resistanceMap = record.resistanceMap ?? record.resistance_map;
+  const engineAVerdictComparison =
+    record.engineAVerdictComparison ?? record.engine_a_verdict_comparison;
+  const derivativesContext = record.derivativesContext ?? record.derivatives_context;
+
+  return {
+    ...raw,
+    aiReviewSummary: summary as AIChartReviewResponse['aiReviewSummary'],
+    ai_review_summary: summary as AIChartReviewResponse['ai_review_summary'],
+    engineAVerdictComparison:
+      engineAVerdictComparison as AIChartReviewResponse['engineAVerdictComparison'],
+    engine_a_verdict_comparison:
+      engineAVerdictComparison as AIChartReviewResponse['engine_a_verdict_comparison'],
+    contextCompleteness: contextCompleteness as AIChartReviewResponse['contextCompleteness'],
+    missingContextDetailed: missingContextDetailed as AIChartReviewResponse['missingContextDetailed'],
+    fundingOi: fundingOi as AIChartReviewResponse['fundingOi'],
+    derivativesContext: (derivativesContext ?? fundingOi) as AIChartReviewResponse['derivativesContext'],
+    atrDiagnostics: atrDiagnostics as AIChartReviewResponse['atrDiagnostics'],
+    resistanceMap: resistanceMap as AIChartReviewResponse['resistanceMap'],
+  };
+}
+
 /**
  * POST to /api/ai/chart-review. The request body intentionally contains only
  * symbol, timeframe, provider, screenshot_base64, screenshot_meta — no Engine A
@@ -117,8 +156,9 @@ export function buildScreenshotMeta(args: {
 export async function postChartReview(
   body: AIChartReviewRequest,
 ): Promise<AIChartReviewResponse> {
-  return apiClient.post<AIChartReviewResponse>(
+  const response = await apiClient.post<AIChartReviewResponse>(
     ENDPOINT,
     body as unknown as Record<string, unknown>,
   );
+  return normalizeAIChartReviewResponse(response);
 }
