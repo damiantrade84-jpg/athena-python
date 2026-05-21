@@ -99,6 +99,25 @@ function pickEngineACandidate(rows: unknown[]): EngineASignal | null {
   return candidates.find((row) => Boolean(normalizeDirection(row.direction))) || candidates[0] || null;
 }
 
+function symbolKey(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const upper = value.trim().toUpperCase();
+  if (!upper) return null;
+  const withoutProvider = upper.includes(':') ? upper.split(':').pop() || upper : upper;
+  const withoutYahooFxSuffix = withoutProvider.replace(/=X$/, '');
+  const key = withoutYahooFxSuffix.replace(/[^A-Z0-9]/g, '');
+  return key || null;
+}
+
+function findEngineACandidateForSymbol(rows: EngineASignal[], symbol: string): EngineASignal | null {
+  const chartKey = symbolKey(symbol);
+  if (!chartKey) return null;
+  return rows.find((row) => {
+    const keys = [displaySymbol(row), row.symbol, row.pair].map(symbolKey);
+    return keys.includes(chartKey);
+  }) || null;
+}
+
 function reviewTimeframeFor(signal: EngineASignal | null): string {
   const rawTimeframe = firstString(signal?.timeframe, signal?.tf, signal?.interval)?.toUpperCase();
   if (rawTimeframe === 'H1' || rawTimeframe === '1H' || rawTimeframe === '60') return '60';
@@ -327,7 +346,12 @@ export default function TVChartPanel() {
   const [atr14, setAtr14] = useState(false);
   const [rsi14, setRsi14] = useState(false);
 
-  const selectedCandidate = useMemo(() => pickEngineACandidate(Array.isArray(scanCacheA) ? scanCacheA : []), [scanCacheA]);
+  const candidateRows = useMemo(
+    () => (Array.isArray(scanCacheA) ? scanCacheA.filter((row): row is EngineASignal => Boolean(row && typeof row === 'object')) : []),
+    [scanCacheA],
+  );
+  const defaultCandidate = useMemo(() => pickEngineACandidate(candidateRows), [candidateRows]);
+  const chartCandidate = useMemo(() => findEngineACandidateForSymbol(candidateRows, pair), [candidateRows, pair]);
 
   const tvSymbol = useMemo(() => formatSymbol(pair), [pair]);
   const studies = useMemo(
@@ -339,9 +363,10 @@ export default function TVChartPanel() {
   const frameKey = useMemo(() => JSON.stringify(widgetConfig), [widgetConfig]);
 
   const applyEngineAReviewLayout = () => {
-    const candidateSymbol = displaySymbol(selectedCandidate);
+    const candidate = chartCandidate || defaultCandidate;
+    const candidateSymbol = displaySymbol(candidate);
     if (candidateSymbol) setPair(candidateSymbol);
-    setTimeframe(reviewTimeframeFor(selectedCandidate));
+    setTimeframe(reviewTimeframeFor(candidate));
     setEma20(true);
     setEma50(true);
     setEma200(true);
@@ -365,6 +390,25 @@ export default function TVChartPanel() {
               className="h-8 w-32 text-xs"
               aria-label="TradingView symbol"
             />
+            <select
+              value={displaySymbol(chartCandidate) || ''}
+              onChange={(event) => {
+                if (event.target.value) setPair(event.target.value);
+              }}
+              className="h-8 w-40 rounded-md border border-input bg-background px-2 text-xs"
+              aria-label="Engine A candidate"
+            >
+              <option value="">No candidate selected</option>
+              {candidateRows.map((candidate, index) => {
+                const candidateSymbol = displaySymbol(candidate) || `Candidate ${index + 1}`;
+                const direction = normalizeDirection(candidate.direction);
+                return (
+                  <option key={`${candidateSymbol}-${index}`} value={candidateSymbol}>
+                    {candidateSymbol}{direction ? ` ${direction}` : ''}
+                  </option>
+                );
+              })}
+            </select>
             <div className="flex flex-wrap gap-1">
               {TIMEFRAMES.map((tf) => (
                 <Button
@@ -404,7 +448,7 @@ export default function TVChartPanel() {
               allow="fullscreen"
             />
           </div>
-          <EngineASidePanel signal={selectedCandidate} />
+          <EngineASidePanel signal={chartCandidate} />
         </div>
       </CardContent>
     </Card>

@@ -70,6 +70,16 @@ def test_engine_a_review_layout_enables_required_lean_indicators():
     assert "Stochastic@tv-basicstudies" not in source
 
 
+def test_engine_a_side_panel_follows_current_chart_symbol_not_first_candidate():
+    source = _read(TV_PANEL)
+
+    assert "function findEngineACandidateForSymbol" in source
+    assert "const chartCandidate = useMemo(() => findEngineACandidateForSymbol(candidateRows, pair), [candidateRows, pair]);" in source
+    assert "<EngineASidePanel signal={chartCandidate} />" in source
+    assert "<EngineASidePanel signal={selectedCandidate} />" not in source
+    assert 'aria-label="Engine A candidate"' in source
+
+
 def test_visual_review_state_is_not_consumed_by_execution_paths():
     execution_files = [
         ROOT / "execution.py",
