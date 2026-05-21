@@ -14522,6 +14522,7 @@ from types import SimpleNamespace  # noqa: E402
 from athena_runtime import set_runtime  # noqa: E402
 from athena_app.api.routes_audit import register_audit_routes  # noqa: E402
 from athena_app.api.routes_ai_agent import register_ai_agent_routes  # noqa: E402
+from athena_app.api.routes_ai_chart_review import register_ai_chart_review_routes  # noqa: E402
 from athena_app.api.routes_backtest import register_backtest_history_routes  # noqa: E402
 from athena_app.api.routes_broker_status import register_broker_status_routes  # noqa: E402
 from athena_app.api.routes_live_dashboard import register_live_dashboard_routes  # noqa: E402
@@ -14614,6 +14615,20 @@ register_ai_agent_routes(
         live_dashboard_scalp_cache_lock=_live_dashboard_scalp_cache_lock,
         json_safe=_json_safe,
         log=log,
+    ),
+)
+register_ai_chart_review_routes(
+    app,
+    SimpleNamespace(
+        CONFIG=CONFIG,
+        AUDIT_DB=_AUDIT_DB,
+        json_safe=_json_safe,
+        log=log,
+        resolve_pair_fn=lambda symbol: _resolve_pair_from_signal({"symbol": symbol}),
+        analyze_pair_fn=lambda pair, btc_bias, style="swing": analyze_pair(
+            pair, btc_bias, style=style
+        ),
+        btc_bias_fn=_current_btc_bias,
     ),
 )
 register_market_data_routes(

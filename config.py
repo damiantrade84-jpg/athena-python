@@ -42,6 +42,23 @@ _AI_BASE_URL_DEFAULT = "https://api.x.ai/v1"
 _AI_MODEL_DEFAULT = os.environ.get("AI_MODEL", "grok-4.3")
 
 
+def _env_bool(name: str, default: bool = False) -> bool:
+    raw = str(os.environ.get(name, "") or "").strip().lower()
+    if not raw:
+        return default
+    return raw in ("1", "true", "yes", "on")
+
+
+def _env_int(name: str, default: int) -> int:
+    raw = str(os.environ.get(name, "") or "").strip()
+    if not raw:
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        return default
+
+
 def _deep_merge_dict(base: dict, overrides: dict) -> dict:
     """Recursively merge nested dicts while preserving unspecified defaults."""
     merged = dict(base)
@@ -323,6 +340,29 @@ CONFIG: dict = {
             "H4": 18000,
             "D1": 97200,
         },
+    },
+    "AI_CHART_REVIEW": {
+        "ENABLED": _env_bool("AI_CHART_REVIEW_ENABLED", False),
+        "DEFAULT_PROVIDER": (
+            os.environ.get("AI_CHART_REVIEW_DEFAULT_PROVIDER", "anthropic").strip().lower()
+            or "anthropic"
+        ),
+        "ANTHROPIC_MODEL": os.environ.get(
+            "AI_CHART_REVIEW_ANTHROPIC_MODEL", "claude-opus-4-7"
+        ),
+        "OPENAI_MODEL": os.environ.get("OPENAI_CHART_REVIEW_MODEL", ""),
+        "MAX_TOKENS": _env_int("AI_CHART_REVIEW_MAX_TOKENS", 1500),
+        "REQUIRE_SCREENSHOT": True,
+        "REQUIRE_ATR_DIAGNOSTICS": False,
+        "REQUIRE_FRESHNESS_DIAGNOSTICS": False,
+        "MAX_IMAGE_BYTES": 2 * 1024 * 1024,
+        "PERSIST_REVIEWS": True,
+        "ALLOW_OPENAI_PROVIDER": _env_bool("AI_CHART_REVIEW_ALLOW_OPENAI_PROVIDER", False),
+        "ALLOW_DUAL_PROVIDER": _env_bool("AI_CHART_REVIEW_ALLOW_DUAL_PROVIDER", False),
+        "MAX_DISPLACEMENT_ATR_MULTIPLE": 1.0,
+        "MISMATCH_WARN_MAX_SECONDS": 120,
+        "ATR_FRESHNESS_MAX_AGE_SEC": None,
+        "DEDUP_WINDOW_SECONDS": 60,
     },
     "AI_PROMPT_STORE_CLEANUP_ENABLED": True,
     "AI_PROMPT_STORE_RETENTION_DAYS": 90,

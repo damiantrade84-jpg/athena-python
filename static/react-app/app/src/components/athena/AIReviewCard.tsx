@@ -1,6 +1,7 @@
 import { Sparkles } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
+import AIReviewSummaryStrip from '@/components/athena/AIReviewSummaryStrip';
 import type {
   AIChartReviewResponse,
   AIChartReviewConcordanceState,
@@ -91,6 +92,10 @@ export default function AIReviewCard({ response }: AIReviewCardProps) {
             {response.dedup_hit ? ' · cached' : ''}
           </span>
         </div>
+
+        {response.ai_review_summary && (
+          <AIReviewSummaryStrip summary={response.ai_review_summary} />
+        )}
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-[11px]">
           <Row label="Human action" value={show(ai.human_action)} />

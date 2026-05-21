@@ -962,6 +962,47 @@ export interface AIChartReviewNormalized {
   raw_model_response?: string;
 }
 
+export type AIChartReviewSummaryHumanAction = 'trade' | 'wait' | 'reject' | 'watch';
+export type AIChartReviewProviderStatus =
+  | 'success'
+  | 'failed_auth'
+  | 'insufficient_credit'
+  | 'timeout'
+  | 'fallback_used'
+  | 'unknown';
+
+export interface AIChartReviewEngineSummary {
+  score: number | null;
+  maxScore: number | null;
+  threshold: number | null;
+  normalizedScore: number | null;
+  passed?: boolean | null;
+  direction?: string | null;
+  activeFactors?: string[] | null;
+  decisionState?: string | null;
+  setupType?: string | null;
+}
+
+export interface AIChartReviewSummary {
+  provider: string;
+  model: string;
+  providerStatus: AIChartReviewProviderStatus;
+  fallbackUsed: boolean;
+  humanAction: AIChartReviewSummaryHumanAction;
+  overallScore: number;
+  tradeabilityScore: number;
+  engineAlignmentScore: number;
+  visualConfirmationScore: number;
+  entryQualityScore: number;
+  riskScore: number;
+  confidence: number;
+  finalReason: string;
+  engineA: AIChartReviewEngineSummary;
+  engineB: AIChartReviewEngineSummary;
+  engineC: AIChartReviewEngineSummary;
+  engineD: AIChartReviewEngineSummary;
+}
+
 export interface AIChartReviewConcordance {
   engine: 'A';
   engine_a_direction?: 'LONG' | 'SHORT' | 'NONE';
@@ -1050,6 +1091,7 @@ export interface AIChartReviewResponse {
   };
   mismatch_warnings: string[];
   dedup_hit: boolean;
+  ai_review_summary?: AIChartReviewSummary;
 }
 
 export interface AIChartReviewScreenshotMeta {
