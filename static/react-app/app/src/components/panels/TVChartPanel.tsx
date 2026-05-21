@@ -143,8 +143,8 @@ export function buildTradingViewStudies(options: StudyOptions): TradingViewStudy
   if (options.ema50) studies.push({ id: TV_STUDY_IDS.ema, inputs: { length: 50 } });
   if (options.ema200) studies.push({ id: TV_STUDY_IDS.ema, inputs: { length: 200 } });
   if (options.dema200) studies.push({ id: TV_STUDY_IDS.dema, inputs: { length: 200 } });
-  if (options.atr14) studies.push({ id: TV_STUDY_IDS.atr, inputs: { length: 14 } });
-  if (options.rsi14) studies.push({ id: TV_STUDY_IDS.rsi, inputs: { length: 14 } });
+  if (options.rsi14) studies.push(TV_STUDY_IDS.rsi);
+  if (options.atr14) studies.push(TV_STUDY_IDS.atr);
   return studies;
 }
 
@@ -492,9 +492,9 @@ export default function TVChartPanel() {
           <IndicatorSwitch label="RSI14" checked={rsi14} onCheckedChange={setRsi14} />
         </div>
       </CardHeader>
-      <CardContent className="h-[calc(100%-120px)] min-h-[620px]">
+      <CardContent className="h-[calc(100%-120px)] min-h-[760px]">
         <div className="grid h-full gap-3 xl:grid-cols-[minmax(0,1fr)_320px]">
-          <div className="relative min-h-[560px] overflow-hidden rounded-md border bg-background">
+          <div className="relative min-h-[700px] overflow-hidden rounded-md border bg-background">
             <iframe
               key={frameKey}
               title="TradingView Advanced Chart"

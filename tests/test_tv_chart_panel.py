@@ -103,7 +103,10 @@ def test_indicator_toggles_update_documented_studies_config():
     assert "inputs: { length: 20 }" in source
     assert "inputs: { length: 50 }" in source
     assert "inputs: { length: 200 }" in source
-    assert "inputs: { length: 14 }" in source
+    assert "studies.push(TV_STUDY_IDS.rsi);" in source
+    assert "studies.push(TV_STUDY_IDS.atr);" in source
+    assert "studies.push(TV_STUDY_IDS.rsi);" in source.split("studies.push(TV_STUDY_IDS.atr);")[0]
+    assert "inputs: { length: 14 }" not in source
 
 
 def test_engine_a_review_layout_enables_required_lean_indicators():
