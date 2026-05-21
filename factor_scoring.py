@@ -1114,6 +1114,290 @@ def _research_aroon_value(direction: str, candles: list, bonus: float, penalty: 
 
 # ── Factor 3: ADX gate ────────────────────────────────────────────────────────
 
+_EMA_CLUSTER_TIGHT_ATR = 0.35
+
+
+def _safe_indicator_float(value) -> float | None:
+    try:
+        out = float(value)
+        return out if math.isfinite(out) else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _select_adx_for_gate(
+    d1_snap: dict, h4_snap: dict, asset_type: str, score_group: str | None
+) -> tuple[float | None, str]:
+    """Return (adx_value, source) for the ADX gate; source is d1/h4/missing."""
+    _d1 = _safe_indicator_float(d1_snap.get("adx"))
+    _h4 = _safe_indicator_float(h4_snap.get("adx"))
+    if _d1 is not None and _h4 is not None:
+        mode = _resolve_adx_source_mode(score_group, asset_type)
+        if mode == "h4_first":
+            return _h4, "h4"
+        if mode == "max" and _h4 > _d1:
+            return _h4, "h4"
+        return _d1, "d1"
+    if _d1 is not None:
+        return _d1, "d1"
+    if _h4 is not None:
+        return _h4, "h4"
+    return None, "missing"
+
+
+def _resolve_adx_thresholds(asset_type: str, score_group: str | None) -> tuple[float, float]:
+    """Return (trend_min, hard_fail) for ADX gate diagnostics and multiplier."""
+    global _adx_fallback_warned
+    _trend_min_cfg = CONFIG.get("ADX_TREND_MIN_CLASS") or {}
+    _hard_fail_cfg = CONFIG.get("FACTOR_ADX_HARD_FAIL_CLASS") or {}
+    trend_min = _resolve_class_keyed(_trend_min_cfg, score_group, asset_type, None)
+    hard_fail = _resolve_class_keyed(_hard_fail_cfg, score_group, asset_type, None)
+    _used_fallback = False
+    if trend_min is None:
+        _used_fallback = True
+        trend_min = 30.0
+    if hard_fail is None:
+        _used_fallback = True
+        hard_fail = 10.0
+    if _used_fallback and not _adx_fallback_warned:
+        _adx_fallback_warned = True
+        warnings.warn(
+            f"ADX thresholds for asset_type='{asset_type}' not found in config. "
+            f"Falling back to hardcoded defaults (hard_fail=10.0, trend_min=30.0) "
+            f"for missing entries. Add ADX_TREND_MIN_CLASS and/or "
+            f"FACTOR_ADX_HARD_FAIL_CLASS entries to config.yaml to silence.",
+            UserWarning,
+            stacklevel=2,
+        )
+    trend_min = float(trend_min)
+    hard_fail = float(hard_fail)
+    if hard_fail >= trend_min:
+        hard_fail = trend_min - 5.0
+    return trend_min, hard_fail
+
+
+def _adx_multiplier_from_value(adx: float, trend_min: float, hard_fail: float) -> float:
+    _range = trend_min - hard_fail
+    if _range <= 0:
+        return 1.0 if adx >= trend_min else 0.0
+    return max(0.0, min(1.0, (adx - hard_fail) / _range))
+
+
+def _price_vs_ema_label(close: float | None, ema: float | None) -> str | None:
+    if close is None or ema is None:
+        return None
+    eps = abs(ema) * 1e-6
+    if close > ema + eps:
+        return "above"
+    if close < ema - eps:
+        return "below"
+    return "at"
+
+
+def _ema_slope_pct_from_candles(candles: list | None, period: int) -> float | None:
+    if not isinstance(candles, list) or len(candles) < 11:
+        return None
+    try:
+        from indicators import calc_ema
+
+        closes = [float(c["close"]) for c in candles]
+        ema_series = calc_ema(closes, period)
+        idx = len(ema_series) - 1
+        if idx < 10 or not ema_series[idx] or not ema_series[idx - 10]:
+            return None
+        return round((ema_series[idx] - ema_series[idx - 10]) / ema_series[idx - 10] * 100, 3)
+    except Exception:
+        return None
+
+
+def _forex_ema_cluster_diagnostics(
+    h4_snap: dict,
+    h4_candles: list | None,
+    direction: str,
+) -> dict:
+    """H4 EMA-stack location diagnostics for Engine A forex (report-only by default)."""
+    close = _safe_indicator_float(h4_snap.get("close"))
+    atr = _safe_indicator_float(h4_snap.get("atr"))
+    ema21 = _safe_indicator_float(h4_snap.get("ema21"))
+    ema50 = _safe_indicator_float(h4_snap.get("ema50"))
+    ema200 = _safe_indicator_float(h4_snap.get("ema200"))
+
+    ema21_slope = _ema_slope_pct_from_candles(h4_candles, 21)
+    ema50_slope = _ema_slope_pct_from_candles(h4_candles, 50)
+    ema200_slope = _safe_indicator_float(h4_snap.get("ema200Slope10"))
+    if ema200_slope is None:
+        ema200_slope = _ema_slope_pct_from_candles(h4_candles, 200)
+
+    out = {
+        "price_vs_ema21": _price_vs_ema_label(close, ema21),
+        "price_vs_ema50": _price_vs_ema_label(close, ema50),
+        "price_vs_ema200": _price_vs_ema_label(close, ema200),
+        "ema21_value": round(ema21, 6) if ema21 is not None else None,
+        "ema50_value": round(ema50, 6) if ema50 is not None else None,
+        "ema200_value": round(ema200, 6) if ema200 is not None else None,
+        "ema21_slope": ema21_slope,
+        "ema50_slope": ema50_slope,
+        "ema200_slope": ema200_slope,
+        "price_inside_ema_cluster": False,
+        "ema_cluster_width_atr": None,
+        "nearest_ema_resistance_distance_atr": None,
+        "nearest_ema_support_distance_atr": None,
+        "at_or_below_resistance": False,
+        "at_or_above_support": False,
+        "clean_continuation": False,
+        "strong_price_contradiction": False,
+        "ema_cluster_penalty_applied": False,
+        "ema_cluster_penalty_reason": None,
+    }
+
+    emas = [v for v in (ema21, ema50, ema200) if v is not None]
+    if len(emas) >= 2 and close is not None and atr is not None and atr > 0:
+        ema_min = min(emas)
+        ema_max = max(emas)
+        out["price_inside_ema_cluster"] = ema_min <= close <= ema_max
+        out["ema_cluster_width_atr"] = round((ema_max - ema_min) / atr, 4)
+        resist = [e for e in emas if e > close]
+        support = [e for e in emas if e < close]
+        if resist:
+            out["nearest_ema_resistance_distance_atr"] = round(
+                min((e - close) / atr for e in resist), 4
+            )
+        else:
+            out["nearest_ema_resistance_distance_atr"] = 0.0
+        if support:
+            out["nearest_ema_support_distance_atr"] = round(
+                min((close - e) / atr for e in support), 4
+            )
+        else:
+            out["nearest_ema_support_distance_atr"] = 0.0
+        out["at_or_below_resistance"] = close <= ema_max
+        out["at_or_above_support"] = close >= ema_min
+
+    if direction == "LONG" and ema21 is not None and ema50 is not None and ema200 is not None and close is not None:
+        out["clean_continuation"] = (
+            close > ema21 and ema21 >= ema50 >= ema200
+        )
+        width = out.get("ema_cluster_width_atr")
+        out["strong_price_contradiction"] = (
+            close < min(ema21, ema50, ema200)
+            or (
+                bool(out.get("price_inside_ema_cluster"))
+                and width is not None
+                and width < _EMA_CLUSTER_TIGHT_ATR
+            )
+        )
+    elif direction == "SHORT" and ema21 is not None and ema50 is not None and ema200 is not None and close is not None:
+        out["clean_continuation"] = (
+            close < ema21 and ema21 <= ema50 <= ema200
+        )
+        width = out.get("ema_cluster_width_atr")
+        out["strong_price_contradiction"] = (
+            close > max(ema21, ema50, ema200)
+            or (
+                bool(out.get("price_inside_ema_cluster"))
+                and width is not None
+                and width < _EMA_CLUSTER_TIGHT_ATR
+            )
+        )
+
+    return out
+
+
+def _adx_quality_diagnostics(
+    d1_snap: dict,
+    h4_snap: dict,
+    asset_type: str,
+    score_group: str | None,
+    adx_mult: float,
+    adx_val: float | None,
+    adx_source: str,
+) -> dict:
+    """ADX gate metadata for audit panels (does not change gate behavior)."""
+    trend_min, hard_fail = _resolve_adx_thresholds(asset_type, score_group)
+    gate_mode = _resolve_adx_source_mode(score_group, asset_type)
+    adx_slope = None
+    adx_prev = None
+    if adx_source == "h4":
+        adx_slope = _safe_indicator_float(h4_snap.get("adxSlope"))
+        adx_prev = _safe_indicator_float(h4_snap.get("adxPrev"))
+    elif adx_source == "d1":
+        adx_slope = _safe_indicator_float(d1_snap.get("adxSlope"))
+        adx_prev = _safe_indicator_float(d1_snap.get("adxPrev"))
+
+    adx_falling = False
+    if adx_slope is not None and adx_slope < 0:
+        adx_falling = True
+    elif adx_val is not None and adx_prev is not None and adx_val < adx_prev:
+        adx_falling = True
+
+    return {
+        "adx_threshold": round(trend_min, 4),
+        "adx_hard_fail": round(hard_fail, 4),
+        "adx_passed": bool(adx_mult > 0),
+        "adx_gate_mode": gate_mode,
+        "adx_slope": adx_slope,
+        "adx_falling": adx_falling,
+        "adx_timeframe_used": adx_source if adx_source in ("d1", "h4") else None,
+    }
+
+
+def _apply_forex_ema_cluster_penalty(
+    trend_detail: dict,
+    adx_quality: dict,
+    direction: str,
+) -> tuple[float, float | None, bool, str | None]:
+    """Return (base_score_mult, final_soft_cap, applied, reason)."""
+    if not bool(CONFIG.get("ENGINE_A_FOREX_EMA_CLUSTER_PENALTY_ENABLED", False)):
+        return 1.0, None, False, None
+
+    coherence = _safe_indicator_float(trend_detail.get("coherence_ratio"))
+    if coherence is None:
+        return 1.0, None, False, None
+
+    min_coherence = _float_cfg(
+        CONFIG.get("ENGINE_A_FOREX_EMA_CLUSTER_MIN_COHERENCE_FOR_NO_PENALTY"), 0.85
+    )
+    agreement_count = trend_detail.get("agreement_count")
+    full_alignment = (
+        agreement_count == 3
+        and coherence is not None
+        and abs(coherence - 1.0) < 1e-6
+    )
+
+    if coherence >= min_coherence and not full_alignment:
+        return 1.0, None, False, "coherence_above_min"
+
+    location_risk = False
+    if direction == "LONG":
+        location_risk = bool(trend_detail.get("at_or_below_resistance")) and not bool(
+            trend_detail.get("clean_continuation")
+        )
+    elif direction == "SHORT":
+        location_risk = bool(trend_detail.get("at_or_above_support")) and not bool(
+            trend_detail.get("clean_continuation")
+        )
+
+    if full_alignment and not bool(trend_detail.get("strong_price_contradiction")):
+        return 1.0, None, False, "full_alignment_clean_location"
+
+    if not location_risk:
+        return 1.0, None, False, "location_ok"
+
+    if bool(CONFIG.get("ENGINE_A_FOREX_EMA_CLUSTER_REQUIRE_ADX_RISING_FOR_NO_PENALTY", False)):
+        if adx_quality.get("adx_falling"):
+            return 1.0, None, False, "adx_rising_required"
+
+    mode = str(CONFIG.get("ENGINE_A_FOREX_EMA_CLUSTER_PENALTY_MODE", "soft_cap") or "soft_cap").strip().lower()
+    if mode == "multiplier":
+        mult = _float_cfg(CONFIG.get("ENGINE_A_FOREX_EMA_CLUSTER_PENALTY_MULT"), 0.85)
+        mult = max(0.0, min(1.0, mult))
+        return mult, None, True, "ema_cluster_multiplier"
+
+    cap = _float_cfg(CONFIG.get("ENGINE_A_FOREX_EMA_CLUSTER_MAX_SCORE_CAP"), 2.0)
+    cap = max(0.0, min(3.0, cap))
+    return 1.0, cap, True, "ema_cluster_soft_cap"
+
+
 def _adx_gate(
     d1_snap: dict, h4_snap: dict, asset_type: str,
     score_group: str | None = None,
@@ -1141,80 +1425,14 @@ def _adx_gate(
 
     Source preference: D1 ADX (structural) first, H4 ADX fallback.
     """
-    global _adx_fallback_warned
-
-    d1_adx = d1_snap.get("adx")
-    h4_adx = h4_snap.get("adx")
-    adx = None
-    source = "missing"
-    try:
-        _d1 = float(d1_adx) if d1_adx is not None else None
-    except (TypeError, ValueError):
-        _d1 = None
-    try:
-        _h4 = float(h4_adx) if h4_adx is not None else None
-    except (TypeError, ValueError):
-        _h4 = None
-
-    if _d1 is not None and _h4 is not None:
-        mode = _resolve_adx_source_mode(score_group, asset_type)
-        if mode == "h4_first":
-            adx, source = _h4, "h4"
-        elif mode == "max" and _h4 > _d1:
-            adx, source = _h4, "h4"
-        else:
-            adx, source = _d1, "d1"
-    elif _d1 is not None:
-        adx, source = _d1, "d1"
-    elif _h4 is not None:
-        adx, source = _h4, "h4"
-
+    adx, source = _select_adx_for_gate(d1_snap, h4_snap, asset_type, score_group)
     if adx is None:
         if CONFIG.get("ADX_MISSING_BOTH_ABORT", False):
             return 0.0, None, "missing_both_abort"
-        # Soft fallback when ADX missing: use 0.5 (neutral)
         return 0.5, None, "missing"
 
-    # ── Read per-class thresholds from config (score_group → asset_type) ────
-    _trend_min_cfg = CONFIG.get("ADX_TREND_MIN_CLASS") or {}
-    _hard_fail_cfg = CONFIG.get("FACTOR_ADX_HARD_FAIL_CLASS") or {}
-
-    trend_min = _resolve_class_keyed(_trend_min_cfg, score_group, asset_type, None)
-    hard_fail = _resolve_class_keyed(_hard_fail_cfg, score_group, asset_type, None)
-
-    # Backward compatibility: fall back individually per missing key
-    _used_fallback = False
-    if trend_min is None:
-        _used_fallback = True
-        trend_min = 30.0
-    if hard_fail is None:
-        _used_fallback = True
-        hard_fail = 10.0
-
-    if _used_fallback and not _adx_fallback_warned:
-        _adx_fallback_warned = True
-        warnings.warn(
-            f"ADX thresholds for asset_type='{asset_type}' not found in config. "
-            f"Falling back to hardcoded defaults (hard_fail=10.0, trend_min=30.0) "
-            f"for missing entries. Add ADX_TREND_MIN_CLASS and/or "
-            f"FACTOR_ADX_HARD_FAIL_CLASS entries to config.yaml to silence.",
-            UserWarning,
-            stacklevel=2,
-        )
-
-    trend_min = float(trend_min)
-    hard_fail = float(hard_fail)
-
-    # Sanity: ensure hard_fail < trend_min so the ramp has positive width
-    if hard_fail >= trend_min:
-        hard_fail = trend_min - 5.0
-
-    # Linear ramp: 0.0 at hard_fail → 1.0 at trend_min
-    _range = trend_min - hard_fail
-    if _range <= 0:
-        mult = 1.0 if adx >= trend_min else 0.0
-    else:
-        mult = max(0.0, min(1.0, (adx - hard_fail) / _range))
+    trend_min, hard_fail = _resolve_adx_thresholds(asset_type, score_group)
+    mult = _adx_multiplier_from_value(adx, trend_min, hard_fail)
     return mult, adx, source
 
 
@@ -1880,6 +2098,16 @@ def compute_factor_scores(
     # ── FACTOR 3: ADX gate ────────────────────────────────────────────────────
     adx_mult, adx_val, adx_source = _adx_gate(d1_snap, h4_snap, asset_type, score_group=score_group)
     feed_status["adx"] = adx_source
+    adx_quality = _adx_quality_diagnostics(
+        d1_snap, h4_snap, asset_type, score_group, adx_mult, adx_val, adx_source
+    )
+    ema_cluster_penalty_mult = 1.0
+    ema_cluster_soft_cap = None
+
+    if asset_type == "forex" and bool(
+        CONFIG.get("ENGINE_A_FOREX_EMA_CLUSTER_DIAGNOSTICS_ENABLED", True)
+    ):
+        trend_detail.update(_forex_ema_cluster_diagnostics(h4_snap, h4_candles, direction))
 
     # Hard abort: dead market (ADX ≤ 10)
     if adx_mult == 0.0:
@@ -2164,6 +2392,19 @@ def compute_factor_scores(
         * (1.0 - _cost_penalty)
     )
 
+    if asset_type == "forex":
+        (
+            ema_cluster_penalty_mult,
+            ema_cluster_soft_cap,
+            _ema_pen_applied,
+            _ema_pen_reason,
+        ) = _apply_forex_ema_cluster_penalty(trend_detail, adx_quality, direction)
+        if _ema_pen_applied:
+            trend_detail["ema_cluster_penalty_applied"] = True
+            trend_detail["ema_cluster_penalty_reason"] = _ema_pen_reason
+            feed_status["ema_cluster_penalty"] = _ema_pen_reason or "applied"
+        base_score *= ema_cluster_penalty_mult
+
     # ── Phase 2 parameter wiring: volume_ratio, macro_context, intermarket_context ──
     # These parameters were previously accepted but silently ignored.  They now
     # contribute small bounded adjustments (±5% of total score max) to avoid
@@ -2234,6 +2475,8 @@ def compute_factor_scores(
         return _zero_result(pair, regime, {"error": "final_score_invalid"}, feed_status,
                             reason="final_score_invalid_abort", direction=direction)
     final_score = max(0.0, min(3.0, final_score))
+    if ema_cluster_soft_cap is not None:
+        final_score = min(final_score, ema_cluster_soft_cap)
     research_score_uplift_for_guard = 0.0
     if research_detail.get("enabled") and research_val > 0:
         addon_norm_without_positive_research = (
@@ -2421,6 +2664,12 @@ def compute_factor_scores(
         "adx_value": adx_val,
         "adx_source": adx_source,
         "adx_multiplier": adx_mult,
+        "adx_threshold": adx_quality.get("adx_threshold"),
+        "adx_passed": adx_quality.get("adx_passed"),
+        "adx_gate_mode": adx_quality.get("adx_gate_mode"),
+        "adx_slope": adx_quality.get("adx_slope"),
+        "adx_falling": adx_quality.get("adx_falling"),
+        "adx_timeframe_used": adx_quality.get("adx_timeframe_used"),
         "momentum_quality": round(mom_quality, 4),
         "addon_type": addon_type,
         "addon_value": round(addon_val, 4),

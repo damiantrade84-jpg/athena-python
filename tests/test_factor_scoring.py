@@ -311,6 +311,360 @@ def test_forex_trend_agreement_reports_exact_components():
     ]
 
 
+def _gbpusd_like_forex_snaps(*, close_inside_cluster=True):
+    """D1 LONG + H1 LONG + H4 SHORT votes; optional H4 close inside EMA band."""
+    d1 = {
+        "ema21": 110.0,
+        "ema200": 100.0,
+        "adx": 25.0,
+        "close": 100.0,
+        "atr": 1.0,
+    }
+    h1 = {
+        "ema21": 110.0,
+        "ema50": 100.0,
+        "close": 100.0,
+        "atr": 1.0,
+    }
+    h4 = {
+        "ema21": 98.0,
+        "ema50": 100.0,
+        "ema200": 101.0,
+        "adx": 25.0,
+        "atr": 1.0,
+        "rsi": 55.0,
+        "macdHist": 0.2,
+        "plusDI": 25.0,
+        "minusDI": 15.0,
+    }
+    if close_inside_cluster:
+        h4["close"] = 99.5
+    else:
+        h4["close"] = 94.0
+    return d1, h4, h1
+
+
+def _full_alignment_clean_forex_snaps():
+    """D1/H4/H1 all LONG with price above bullish H4 EMA stack."""
+    d1 = {
+        "ema21": 110.0,
+        "ema200": 100.0,
+        "adx": 25.0,
+        "close": 111.0,
+        "atr": 1.0,
+    }
+    h4 = {
+        "ema21": 110.0,
+        "ema50": 105.0,
+        "ema200": 100.0,
+        "adx": 25.0,
+        "atr": 1.0,
+        "close": 111.0,
+        "rsi": 55.0,
+        "macdHist": 0.2,
+        "plusDI": 25.0,
+        "minusDI": 15.0,
+    }
+    h1 = {
+        "ema21": 110.0,
+        "ema50": 105.0,
+        "close": 111.0,
+        "atr": 1.0,
+    }
+    return d1, h4, h1
+
+
+def _full_alignment_contradiction_forex_snaps():
+    """D1/H4/H1 all LONG but H4 close inside tight EMA cluster."""
+    d1 = {
+        "ema21": 110.0,
+        "ema200": 100.0,
+        "adx": 25.0,
+        "close": 100.0,
+        "atr": 1.0,
+    }
+    h1 = {
+        "ema21": 110.0,
+        "ema50": 100.0,
+        "close": 100.0,
+        "atr": 1.0,
+    }
+    h4 = {
+        "ema21": 100.25,
+        "ema50": 100.1,
+        "ema200": 100.0,
+        "adx": 25.0,
+        "atr": 1.0,
+        "close": 100.12,
+        "rsi": 55.0,
+        "macdHist": 0.2,
+        "plusDI": 25.0,
+        "minusDI": 15.0,
+    }
+    return d1, h4, h1
+
+
+def _patch_forex_carry(monkeypatch):
+    import carry_feed
+
+    monkeypatch.setattr(carry_feed, "get_carry_z", lambda *_args, **_kwargs: 0.0)
+    monkeypatch.setattr(carry_feed, "get_carry_differential", lambda _display: 0.0)
+
+
+def test_gbpusd_like_cluster_diagnostics_show_risk(monkeypatch):
+    _patch_forex_carry(monkeypatch)
+    monkeypatch.setitem(CONFIG, "ENGINE_A_FOREX_EMA_CLUSTER_PENALTY_ENABLED", False)
+
+    d1, h4, h1 = _gbpusd_like_forex_snaps(close_inside_cluster=True)
+    result = _score(d1, h4, h1, pair={"type": "forex", "display": "GBP/USD"})
+
+    tc = result["trend_coherence"]
+    assert tc["coherence_ratio"] == pytest.approx(0.7)
+    assert tc["agreement_count"] == 2
+    assert tc["price_inside_ema_cluster"] is True
+    assert tc["at_or_below_resistance"] is True
+    assert tc["clean_continuation"] is False
+    assert tc["ema_cluster_penalty_applied"] is False
+    assert result["adx_passed"] is True
+    assert result["adx_timeframe_used"] in ("d1", "h4")
+
+
+def test_gbpusd_like_score_unchanged_with_penalty_disabled(monkeypatch):
+    _patch_forex_carry(monkeypatch)
+    monkeypatch.setitem(CONFIG, "ENGINE_A_FOREX_EMA_CLUSTER_PENALTY_ENABLED", False)
+
+    d1, h4_in, h1 = _gbpusd_like_forex_snaps(close_inside_cluster=True)
+    d1b, h4_out, h1b = _gbpusd_like_forex_snaps(close_inside_cluster=False)
+
+    inside = _score(d1, h4_in, h1, pair={"type": "forex", "display": "GBP/USD"})
+    outside = _score(d1b, h4_out, h1b, pair={"type": "forex", "display": "GBP/USD"})
+
+    assert inside["directional_score"] == pytest.approx(outside["directional_score"])
+    assert inside["final_score"] == pytest.approx(outside["final_score"])
+
+
+def test_gbpusd_like_penalty_soft_cap_when_enabled(monkeypatch):
+    _patch_forex_carry(monkeypatch)
+    monkeypatch.setitem(CONFIG, "ENGINE_A_FOREX_EMA_CLUSTER_PENALTY_ENABLED", False)
+
+    d1, h4, h1 = _gbpusd_like_forex_snaps(close_inside_cluster=True)
+    baseline = _score(d1, h4, h1, pair={"type": "forex", "display": "GBP/USD"})
+    assert baseline["final_score"] > 1.5
+
+    monkeypatch.setitem(CONFIG, "ENGINE_A_FOREX_EMA_CLUSTER_PENALTY_ENABLED", True)
+    monkeypatch.setitem(CONFIG, "ENGINE_A_FOREX_EMA_CLUSTER_PENALTY_MODE", "soft_cap")
+    monkeypatch.setitem(CONFIG, "ENGINE_A_FOREX_EMA_CLUSTER_MAX_SCORE_CAP", 1.5)
+    penalized = _score(d1, h4, h1, pair={"type": "forex", "display": "GBP/USD"})
+
+    assert penalized["trend_coherence"]["ema_cluster_penalty_applied"] is True
+    assert penalized["trend_coherence"]["ema_cluster_penalty_reason"] == "ema_cluster_soft_cap"
+    assert penalized["final_score"] <= 1.5
+    assert penalized["final_score"] < baseline["final_score"]
+
+
+def test_gbpusd_like_penalty_multiplier_when_enabled(monkeypatch):
+    _patch_forex_carry(monkeypatch)
+    monkeypatch.setitem(CONFIG, "ENGINE_A_FOREX_EMA_CLUSTER_PENALTY_ENABLED", False)
+
+    d1, h4, h1 = _gbpusd_like_forex_snaps(close_inside_cluster=True)
+    baseline = _score(d1, h4, h1, pair={"type": "forex", "display": "GBP/USD"})
+
+    monkeypatch.setitem(CONFIG, "ENGINE_A_FOREX_EMA_CLUSTER_PENALTY_ENABLED", True)
+    monkeypatch.setitem(CONFIG, "ENGINE_A_FOREX_EMA_CLUSTER_PENALTY_MODE", "multiplier")
+    monkeypatch.setitem(CONFIG, "ENGINE_A_FOREX_EMA_CLUSTER_PENALTY_MULT", 0.85)
+    penalized = _score(d1, h4, h1, pair={"type": "forex", "display": "GBP/USD"})
+
+    assert penalized["trend_coherence"]["ema_cluster_penalty_reason"] == "ema_cluster_multiplier"
+    assert penalized["final_score"] < baseline["final_score"]
+
+
+def test_clean_long_above_stack_not_penalized(monkeypatch):
+    _patch_forex_carry(monkeypatch)
+    monkeypatch.setitem(CONFIG, "ENGINE_A_FOREX_EMA_CLUSTER_PENALTY_ENABLED", True)
+
+    d1 = _snap("long", adx=25.0)
+    h4 = _snap("long", adx=25.0, momentum="bullish")
+    h1 = _snap("long")
+    result = _score(d1, h4, h1, pair={"type": "forex", "display": "EUR/USD"})
+
+    assert result["direction"] == "LONG"
+    assert result["trend_coherence"]["clean_continuation"] is True
+    assert result["trend_coherence"]["ema_cluster_penalty_applied"] is False
+
+
+def test_clean_short_below_stack_not_penalized(monkeypatch):
+    _patch_forex_carry(monkeypatch)
+    monkeypatch.setitem(CONFIG, "ENGINE_A_FOREX_EMA_CLUSTER_PENALTY_ENABLED", True)
+
+    d1 = _snap("short", adx=25.0)
+    h4 = _snap("short", adx=25.0, momentum="bearish")
+    h1 = _snap("short")
+    result = _score(d1, h4, h1, pair={"type": "forex", "display": "EUR/USD"})
+
+    assert result["direction"] == "SHORT"
+    assert result["trend_coherence"]["clean_continuation"] is True
+    assert result["trend_coherence"]["ema_cluster_penalty_applied"] is False
+
+
+def test_engine_b_fields_do_not_affect_cluster_diagnostics(monkeypatch):
+    _patch_forex_carry(monkeypatch)
+    monkeypatch.setitem(CONFIG, "ENGINE_A_FOREX_EMA_CLUSTER_PENALTY_ENABLED", False)
+
+    d1, h4, h1 = _gbpusd_like_forex_snaps(close_inside_cluster=True)
+    base_pair = {"type": "forex", "display": "GBP/USD"}
+    contaminated_pair = {
+        **base_pair,
+        "engine_b_score": 5.0,
+        "engine_b_bias": "SHORT",
+        "bos_confirmed": True,
+        "ob_at_zone": True,
+        "engine_b_confidence": 1.0,
+    }
+
+    base = _score(d1, h4, h1, pair=base_pair)
+    contaminated = _score(d1, h4, h1, pair=contaminated_pair)
+
+    cluster_keys = (
+        "price_inside_ema_cluster",
+        "at_or_below_resistance",
+        "ema_cluster_width_atr",
+        "nearest_ema_resistance_distance_atr",
+        "price_vs_ema21",
+    )
+    for key in cluster_keys:
+        assert contaminated["trend_coherence"][key] == base["trend_coherence"][key]
+
+
+def test_gbpusd_like_default_config_applies_multiplier_penalty(monkeypatch):
+    _patch_forex_carry(monkeypatch)
+    monkeypatch.setitem(CONFIG, "ENGINE_A_FOREX_EMA_CLUSTER_PENALTY_ENABLED", True)
+    monkeypatch.setitem(CONFIG, "ENGINE_A_FOREX_EMA_CLUSTER_PENALTY_MODE", "multiplier")
+
+    d1, h4, h1 = _gbpusd_like_forex_snaps(close_inside_cluster=True)
+    result = _score(d1, h4, h1, pair={"type": "forex", "display": "GBP/USD"})
+
+    tc = result["trend_coherence"]
+    assert tc["coherence_ratio"] == pytest.approx(0.7)
+    assert tc["ema_cluster_penalty_applied"] is True
+    assert tc["ema_cluster_penalty_reason"] == "ema_cluster_multiplier"
+    assert result["feed_status"].get("ema_cluster_penalty") == "ema_cluster_multiplier"
+
+
+def test_gbpusd_like_default_penalty_reduces_final_score_by_multiplier(monkeypatch):
+    _patch_forex_carry(monkeypatch)
+    mult = float(CONFIG.get("ENGINE_A_FOREX_EMA_CLUSTER_PENALTY_MULT", 0.85))
+
+    d1, h4, h1 = _gbpusd_like_forex_snaps(close_inside_cluster=True)
+    pair = {"type": "forex", "display": "GBP/USD"}
+
+    monkeypatch.setitem(CONFIG, "ENGINE_A_FOREX_EMA_CLUSTER_PENALTY_ENABLED", False)
+    baseline = _score(d1, h4, h1, pair=pair)
+
+    monkeypatch.setitem(CONFIG, "ENGINE_A_FOREX_EMA_CLUSTER_PENALTY_ENABLED", True)
+    monkeypatch.setitem(CONFIG, "ENGINE_A_FOREX_EMA_CLUSTER_PENALTY_MODE", "multiplier")
+    penalized = _score(d1, h4, h1, pair=pair)
+
+    assert penalized["final_score"] == pytest.approx(baseline["final_score"] * mult, rel=1e-3)
+    assert penalized["directional_score"] == pytest.approx(baseline["directional_score"])
+
+
+def test_full_alignment_clean_location_not_penalized_by_default(monkeypatch):
+    _patch_forex_carry(monkeypatch)
+    monkeypatch.setitem(CONFIG, "ENGINE_A_FOREX_EMA_CLUSTER_PENALTY_ENABLED", True)
+    monkeypatch.setitem(CONFIG, "ENGINE_A_FOREX_EMA_CLUSTER_PENALTY_MODE", "multiplier")
+
+    d1, h4, h1 = _full_alignment_clean_forex_snaps()
+    result = _score(d1, h4, h1, pair={"type": "forex", "display": "GBP/JPY"})
+
+    tc = result["trend_coherence"]
+    assert tc["agreement_count"] == 3
+    assert tc["coherence_ratio"] == pytest.approx(1.0)
+    assert tc["clean_continuation"] is True
+    assert tc["ema_cluster_penalty_applied"] is False
+
+
+def test_full_alignment_strong_contradiction_penalized_by_default(monkeypatch):
+    _patch_forex_carry(monkeypatch)
+    mult = float(CONFIG.get("ENGINE_A_FOREX_EMA_CLUSTER_PENALTY_MULT", 0.85))
+
+    d1, h4, h1 = _full_alignment_contradiction_forex_snaps()
+    pair = {"type": "forex", "display": "GBP/JPY"}
+
+    monkeypatch.setitem(CONFIG, "ENGINE_A_FOREX_EMA_CLUSTER_PENALTY_ENABLED", False)
+    baseline = _score(d1, h4, h1, pair=pair)
+
+    monkeypatch.setitem(CONFIG, "ENGINE_A_FOREX_EMA_CLUSTER_PENALTY_ENABLED", True)
+    monkeypatch.setitem(CONFIG, "ENGINE_A_FOREX_EMA_CLUSTER_PENALTY_MODE", "multiplier")
+    penalized = _score(d1, h4, h1, pair=pair)
+
+    tc = penalized["trend_coherence"]
+    assert tc["agreement_count"] == 3
+    assert tc["coherence_ratio"] == pytest.approx(1.0)
+    assert tc["strong_price_contradiction"] is True
+    assert tc["clean_continuation"] is False
+    assert tc["ema_cluster_penalty_applied"] is True
+    assert tc["ema_cluster_penalty_reason"] == "ema_cluster_multiplier"
+    assert penalized["final_score"] == pytest.approx(baseline["final_score"] * mult, rel=1e-3)
+
+
+def test_non_forex_scoring_unchanged_when_forex_penalty_enabled(monkeypatch):
+    stock_pair = {"type": "stock", "display": "AAPL"}
+    crypto_pair = {"type": "crypto", "display": "BTC/USDT"}
+
+    monkeypatch.setitem(CONFIG, "ENGINE_A_FOREX_EMA_CLUSTER_PENALTY_ENABLED", True)
+    monkeypatch.setitem(CONFIG, "ENGINE_A_FOREX_EMA_CLUSTER_PENALTY_MODE", "multiplier")
+    stock_on = _score(pair=stock_pair, h4=_snap("long", momentum="bullish"))
+    crypto_on = _score(pair=crypto_pair, h4=_snap("long", momentum="bullish"), funding_rate=0.0001)
+
+    monkeypatch.setitem(CONFIG, "ENGINE_A_FOREX_EMA_CLUSTER_PENALTY_ENABLED", False)
+    stock_off = _score(pair=stock_pair, h4=_snap("long", momentum="bullish"))
+    crypto_off = _score(pair=crypto_pair, h4=_snap("long", momentum="bullish"), funding_rate=0.0001)
+
+    assert stock_on["final_score"] == pytest.approx(stock_off["final_score"])
+    assert crypto_on["final_score"] == pytest.approx(crypto_off["final_score"])
+
+
+def test_ema_cluster_penalty_applied_once_not_double(monkeypatch):
+    _patch_forex_carry(monkeypatch)
+    mult = float(CONFIG.get("ENGINE_A_FOREX_EMA_CLUSTER_PENALTY_MULT", 0.85))
+
+    d1, h4, h1 = _gbpusd_like_forex_snaps(close_inside_cluster=True)
+    pair = {"type": "forex", "display": "GBP/USD"}
+
+    monkeypatch.setitem(CONFIG, "ENGINE_A_FOREX_EMA_CLUSTER_PENALTY_ENABLED", False)
+    baseline = _score(d1, h4, h1, pair=pair)
+
+    monkeypatch.setitem(CONFIG, "ENGINE_A_FOREX_EMA_CLUSTER_PENALTY_ENABLED", True)
+    monkeypatch.setitem(CONFIG, "ENGINE_A_FOREX_EMA_CLUSTER_PENALTY_MODE", "multiplier")
+    penalized = _score(d1, h4, h1, pair=pair)
+
+    assert penalized["directional_score"] == pytest.approx(baseline["directional_score"])
+    assert penalized["directional_ramp_multiplier"] == pytest.approx(baseline["directional_ramp_multiplier"])
+    assert penalized["final_score"] / baseline["final_score"] == pytest.approx(mult, rel=1e-3)
+    assert penalized["feed_status"].get("ema_cluster_penalty") == "ema_cluster_multiplier"
+
+
+def test_soft_cap_inactive_under_default_multiplier_mode(monkeypatch):
+    _patch_forex_carry(monkeypatch)
+    mult = float(CONFIG.get("ENGINE_A_FOREX_EMA_CLUSTER_PENALTY_MULT", 0.85))
+    cap = float(CONFIG.get("ENGINE_A_FOREX_EMA_CLUSTER_MAX_SCORE_CAP", 2.0))
+
+    d1, h4, h1 = _gbpusd_like_forex_snaps(close_inside_cluster=True)
+    pair = {"type": "forex", "display": "GBP/USD"}
+
+    monkeypatch.setitem(CONFIG, "ENGINE_A_FOREX_EMA_CLUSTER_PENALTY_ENABLED", False)
+    baseline = _score(d1, h4, h1, pair=pair)
+
+    monkeypatch.setitem(CONFIG, "ENGINE_A_FOREX_EMA_CLUSTER_PENALTY_ENABLED", True)
+    monkeypatch.setitem(CONFIG, "ENGINE_A_FOREX_EMA_CLUSTER_PENALTY_MODE", "multiplier")
+    penalized = _score(d1, h4, h1, pair=pair)
+
+    expected = baseline["final_score"] * mult
+    assert penalized["final_score"] == pytest.approx(expected, rel=1e-3)
+    assert penalized["trend_coherence"]["ema_cluster_penalty_reason"] == "ema_cluster_multiplier"
+    assert penalized["final_score"] > cap or expected <= cap
+
+
 def test_forex_score_ignores_engine_b_fields_on_pair(monkeypatch):
     import carry_feed
 
