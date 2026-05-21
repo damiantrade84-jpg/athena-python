@@ -9174,6 +9174,375 @@ def api_feature_toggles():
 # ── Auto-Trade Bot endpoints ──────────────────────────────────────────────────
 
 
+def _scalp_contract_float(value):
+    try:
+        n = float(value)
+    except (TypeError, ValueError):
+        return None
+    return n if math.isfinite(n) else None
+
+
+def _scalp_contract_bool(value):
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized == "true":
+            return True
+        if normalized == "false":
+            return False
+    return None
+
+
+def _scalp_contract_list(value):
+    if isinstance(value, list):
+        return [str(v) for v in value if v is not None and str(v) != ""]
+    if isinstance(value, tuple):
+        return [str(v) for v in value if v is not None and str(v) != ""]
+    if value is None or value == "":
+        return []
+    return [str(value)]
+
+
+def _scalp_contract_source(raw_signal: dict, *keys: str):
+    for key in keys:
+        value = raw_signal.get(key)
+        if value is not None and str(value).strip():
+            return str(value)
+    data_fidelity = raw_signal.get("data_fidelity")
+    if isinstance(data_fidelity, dict):
+        for key in keys:
+            value = data_fidelity.get(key)
+            if value is not None and str(value).strip():
+                return str(value)
+    return None
+
+
+def _scalp_contract_epoch_to_iso(value):
+    n = _scalp_contract_float(value)
+    if n is None:
+        return None
+    try:
+        return datetime.fromtimestamp(n, tz=timezone.utc).isoformat()
+    except (OverflowError, OSError, ValueError):
+        return None
+
+
+def _scalp_contract_latest_candle_ts(raw_signal: dict, timeframe):
+    meta = raw_signal.get("candleFetchMeta")
+    if not isinstance(meta, dict):
+        return None
+    preferred = str(timeframe or "").upper()
+    tf_keys = [preferred] if preferred else []
+    for fallback in ("M1", "M5", "M15"):
+        if fallback not in tf_keys:
+            tf_keys.append(fallback)
+    for tf in tf_keys:
+        row = meta.get(tf)
+        if not isinstance(row, dict):
+            continue
+        for key in ("last_scoring_ts", "last_raw_ts", "provider_timestamp", "lastBarEpoch"):
+            iso = _scalp_contract_epoch_to_iso(row.get(key))
+            if iso:
+                return iso
+    return None
+
+
+def _scalp_contract_source_is_real(source, *, proxy=None, real_hint=None, domain="generic"):
+    if real_hint is True:
+        return True
+    if proxy is True or real_hint is False:
+        return False
+    normalized = str(source or "").strip().lower()
+    if not normalized or normalized in {"unknown", "disabled", "none", "null"}:
+        return False
+    if any(token in normalized for token in ("proxy", "synthetic", "mock", "placeholder", "fallback", "mt5_tick", "candles", "candle_volume", "routed")):
+        return False
+    if domain in {"orderflow", "cvd", "vp"}:
+        return any(token in normalized for token in ("aggtrade", "trade_bucket", "real_trade_bucket", "footprint", "orderbook"))
+    if domain == "volume":
+        return any(token in normalized for token in ("aggtrade", "trade_bucket", "eodhd", "polygon", "ws_tick", "real_vol"))
+    if domain == "candle":
+        return any(token in normalized for token in ("mt5", "binance", "bybit", "eodhd", "polygon", "yfinance"))
+    return False
+
+
+def _scalp_contract_numeric_levels(raw_signal: dict, *keys: str) -> list[float]:
+    for key in keys:
+        value = raw_signal.get(key)
+        if not isinstance(value, list):
+            continue
+        out = []
+        for item in value:
+            n = _scalp_contract_float(item)
+            if n is not None:
+                out.append(n)
+        if out:
+            return out
+    return []
+
+
+def _build_scalp_source_contract(raw_signal: dict, *, skipped: bool = False) -> dict:
+    symbol = str(raw_signal.get("display") or raw_signal.get("pair") or raw_signal.get("symbol") or "")
+    timeframe = raw_signal.get("execution_tf") or raw_signal.get("timeframe") or raw_signal.get("tf")
+    data_fidelity = raw_signal.get("data_fidelity") if isinstance(raw_signal.get("data_fidelity"), dict) else {}
+    candle_meta = raw_signal.get("candleFetchMeta") if isinstance(raw_signal.get("candleFetchMeta"), dict) else {}
+
+    candle_source = _scalp_contract_source(raw_signal, "candle_source", "candleSource") or candle_meta.get("pairSource")
+    volume_source = _scalp_contract_source(raw_signal, "volume_source", "vp_volume_source", "structure_volume_source", "execution_volume_source")
+    orderflow_source = _scalp_contract_source(raw_signal, "orderflow_source", "aaa_source", "aggression_source", "cvd_source")
+    cvd_source = _scalp_contract_source(raw_signal, "cvd_source")
+    absorption_source = _scalp_contract_source(raw_signal, "absorption_source")
+    vp_source = _scalp_contract_source(raw_signal, "vp_source", "vp_volume_source")
+
+    cvd_real_hint = _scalp_contract_bool(raw_signal.get("cvd_uses_real_trade_buckets"))
+    vp_real_hint = _scalp_contract_bool(raw_signal.get("vp_uses_real_trade_buckets"))
+    orderflow_real_hint = _scalp_contract_bool(raw_signal.get("aggression_uses_real_order_flow"))
+
+    candle_is_real = _scalp_contract_source_is_real(candle_source, domain="candle")
+    volume_is_real = _scalp_contract_source_is_real(volume_source, proxy=raw_signal.get("vp_is_proxy"), domain="volume")
+    orderflow_is_real = _scalp_contract_source_is_real(
+        orderflow_source,
+        proxy=raw_signal.get("aggression_source_is_proxy"),
+        real_hint=orderflow_real_hint,
+        domain="orderflow",
+    )
+    cvd_is_real = _scalp_contract_source_is_real(cvd_source, proxy=raw_signal.get("cvd_is_proxy"), real_hint=cvd_real_hint, domain="cvd")
+    absorption_is_real = _scalp_contract_source_is_real(absorption_source, proxy=raw_signal.get("absorption_is_proxy"), domain="orderflow")
+    vp_is_real = _scalp_contract_source_is_real(vp_source, proxy=raw_signal.get("vp_is_proxy"), real_hint=vp_real_hint, domain="vp")
+
+    data_venue = raw_signal.get("analysis_venue") or raw_signal.get("data_venue") or candle_source
+    execution_venue = raw_signal.get("execution_venue") or raw_signal.get("execution_provider")
+    expected_venue = raw_signal.get("expected_venue") or raw_signal.get("expectedVenue")
+    venue = raw_signal.get("venue") or data_venue
+    venue_mismatch = bool(data_venue and execution_venue and str(data_venue).lower() != str(execution_venue).lower())
+    venue_mismatch_reason = None
+    if venue_mismatch:
+        venue_mismatch_reason = f"data_venue={data_venue} execution_venue={execution_venue}"
+    elif not data_venue or not execution_venue:
+        venue_mismatch_reason = "venue_comparison_unavailable"
+
+    latest_candle_ts = _scalp_contract_latest_candle_ts(raw_signal, timeframe)
+    unavailable = []
+    for label, source, is_real in (
+        ("candle", candle_source, candle_is_real),
+        ("volume", volume_source, volume_is_real),
+        ("orderflow", orderflow_source, orderflow_is_real),
+        ("cvd", cvd_source, cvd_is_real),
+        ("absorption", absorption_source, absorption_is_real),
+        ("vp", vp_source, vp_is_real),
+    ):
+        if not source:
+            unavailable.append(f"{label}_source_unavailable")
+        elif not is_real:
+            unavailable.append(f"{label}_source_not_verified_real:{source}")
+    if not data_venue or not execution_venue:
+        unavailable.append("venue_comparison_unavailable")
+    if latest_candle_ts is None:
+        unavailable.append("latest_candle_timestamp_unavailable")
+    if skipped:
+        unavailable.append("row_skipped_no_full_source_contract")
+
+    warnings = []
+    warnings.extend(_scalp_contract_list(raw_signal.get("soft_warnings")))
+    warnings.extend(_scalp_contract_list(raw_signal.get("proxy_warning")))
+    if isinstance(data_fidelity, dict):
+        warnings.extend(_scalp_contract_list(data_fidelity.get("notes")))
+    freshness = raw_signal.get("dataFreshness")
+    if isinstance(freshness, dict) and freshness.get("allowed") is False:
+        warnings.append(str(freshness.get("reason") or "data_freshness_blocked"))
+
+    timestamp_alignment_reason = "only_candle_timestamp_available" if latest_candle_ts else "timestamp_fields_unavailable"
+
+    return {
+        "symbol": symbol,
+        "timeframe": str(timeframe) if timeframe else None,
+        "venue": str(venue) if venue else None,
+        "expectedVenue": str(expected_venue) if expected_venue else None,
+        "executionVenue": str(execution_venue) if execution_venue else None,
+        "dataVenue": str(data_venue) if data_venue else None,
+        "venueMismatch": venue_mismatch,
+        "venueMismatchReason": venue_mismatch_reason,
+        "candleSource": str(candle_source) if candle_source else None,
+        "candleSourceIsReal": bool(candle_is_real),
+        "volumeSource": str(volume_source) if volume_source else None,
+        "volumeSourceIsReal": bool(volume_is_real),
+        "orderflowSource": str(orderflow_source) if orderflow_source else None,
+        "orderflowSourceIsReal": bool(orderflow_is_real),
+        "cvdSource": str(cvd_source) if cvd_source else None,
+        "cvdSourceIsReal": bool(cvd_is_real),
+        "absorptionSource": str(absorption_source) if absorption_source else None,
+        "absorptionSourceIsReal": bool(absorption_is_real),
+        "vpSource": str(vp_source) if vp_source else None,
+        "vpSourceIsReal": bool(vp_is_real),
+        "strictOrderflowSourcePass": bool(orderflow_is_real) if orderflow_source else False,
+        "strictVolumeSourcePass": bool(volume_is_real) if volume_source else False,
+        "strictTimestampAlignmentPass": None,
+        "strictVenuePass": (not venue_mismatch) if data_venue and execution_venue else None,
+        "latestCandleTs": latest_candle_ts,
+        "orderflowTs": None,
+        "cvdTs": None,
+        "vpTs": None,
+        "maxTimestampSkewSeconds": None,
+        "timestampAlignmentReason": timestamp_alignment_reason,
+        "unavailableReasons": sorted(set(unavailable)),
+        "warnings": sorted(set(warnings)),
+    }
+
+
+def _build_scalp_market_location(raw_signal: dict, source_contract: dict | None = None) -> dict:
+    entry = _scalp_contract_float(raw_signal.get("price") or raw_signal.get("entry"))
+    poc = _scalp_contract_float(raw_signal.get("vp_poc") or raw_signal.get("zone_level"))
+    vah = _scalp_contract_float(raw_signal.get("vp_vah") or raw_signal.get("zone_high"))
+    val = _scalp_contract_float(raw_signal.get("vp_val") or raw_signal.get("zone_low"))
+    lvn_levels = _scalp_contract_numeric_levels(raw_signal, "lvn_levels", "vp_lvn_levels", "lvns")
+    hvn_levels = _scalp_contract_numeric_levels(raw_signal, "hvn_levels", "vp_hvn_levels", "hvns")
+
+    def distance(level):
+        if entry is None or level is None:
+            return None
+        return abs(entry - level)
+
+    nearest_lvn = min(lvn_levels, key=lambda x: abs(x - entry)) if entry is not None and lvn_levels else None
+    nearest_hvn = min(hvn_levels, key=lambda x: abs(x - entry)) if entry is not None and hvn_levels else None
+    inside_value = above_value = below_value = None
+    if entry is not None and vah is not None and val is not None:
+        inside_value = val <= entry <= vah
+        above_value = entry > vah
+        below_value = entry < val
+
+    if raw_signal.get("vp_lvn_count") and not lvn_levels and source_contract is not None:
+        source_contract.setdefault("unavailableReasons", []).append("lvn_count_available_but_levels_missing")
+
+    return {
+        "locationLabel": raw_signal.get("location") or raw_signal.get("price_location") or raw_signal.get("vp_location") or None,
+        "locationScore": _scalp_contract_float(raw_signal.get("location_score")),
+        "nearPOC": None,
+        "nearVAH": None,
+        "nearVAL": None,
+        "nearLVN": None if not lvn_levels else False,
+        "nearHVN": None if not hvn_levels else False,
+        "aboveValueArea": above_value,
+        "belowValueArea": below_value,
+        "insideValueArea": inside_value,
+        "poc": poc,
+        "vah": vah,
+        "val": val,
+        "lvnLevels": lvn_levels,
+        "hvnLevels": hvn_levels,
+        "nearestLVN": nearest_lvn,
+        "nearestHVN": nearest_hvn,
+        "distanceToPOC": distance(poc),
+        "distanceToVAH": distance(vah),
+        "distanceToVAL": distance(val),
+        "distanceToNearestLVN": distance(nearest_lvn),
+        "distanceToNearestHVN": distance(nearest_hvn),
+    }
+
+
+def _build_scalp_aggression_context(raw_signal: dict) -> dict:
+    absorption_count = _scalp_contract_float(raw_signal.get("absorption_count"))
+    absorption_detected = None
+    if absorption_count is not None:
+        absorption_detected = absorption_count > 0
+    data_fidelity = raw_signal.get("data_fidelity") if isinstance(raw_signal.get("data_fidelity"), dict) else {}
+    if absorption_detected is None and "absorption_detected" in data_fidelity:
+        absorption_detected = bool(data_fidelity.get("absorption_detected"))
+    aggression_confirmed = _scalp_contract_bool(raw_signal.get("aggression_confirmed"))
+    label = "confirmed" if aggression_confirmed is True else "missing" if aggression_confirmed is False else raw_signal.get("aggression_source") or None
+    return {
+        "aggressionLabel": label,
+        "aggressionScore": _scalp_contract_float(raw_signal.get("aggression_score")),
+        "buyAggression": _scalp_contract_float(raw_signal.get("buy_aggression")),
+        "sellAggression": _scalp_contract_float(raw_signal.get("sell_aggression")),
+        "delta": _scalp_contract_float(raw_signal.get("delta")),
+        "cvd": _scalp_contract_float(raw_signal.get("cvd")),
+        "cvdSlope": _scalp_contract_float(raw_signal.get("cvd_slope")),
+        "absorptionDetected": absorption_detected,
+        "absorptionSide": raw_signal.get("absorption_side") or None,
+        "sweepDetected": _scalp_contract_bool(raw_signal.get("sweep_detected")),
+        "sweepSide": raw_signal.get("sweep_side") or None,
+        "imbalanceDetected": _scalp_contract_bool(raw_signal.get("imbalance_detected")),
+        "imbalanceSide": raw_signal.get("imbalance_side") or None,
+    }
+
+
+def _build_scalp_setup_contract(raw_signal: dict, *, skipped: bool = False) -> dict:
+    entry = _scalp_contract_float(raw_signal.get("price") or raw_signal.get("entry"))
+    sl = _scalp_contract_float(raw_signal.get("sl"))
+    tp1 = _scalp_contract_float(raw_signal.get("tp1"))
+    tp2 = _scalp_contract_float(raw_signal.get("tp2"))
+    risk_distance = _scalp_contract_float(raw_signal.get("sl_distance"))
+    if risk_distance is None and entry is not None and sl is not None:
+        risk_distance = abs(entry - sl)
+    return {
+        "setupType": raw_signal.get("zone_type") or raw_signal.get("trigger_type") or raw_signal.get("setup_type") or None,
+        "direction": raw_signal.get("direction") or None,
+        "entry": entry,
+        "stopLoss": sl,
+        "tp1": tp1,
+        "tp2": tp2,
+        "rr1": _scalp_contract_float(raw_signal.get("rr1") or raw_signal.get("rr")),
+        "rr2": _scalp_contract_float(raw_signal.get("rr2") or raw_signal.get("structural_rr")),
+        "riskDistance": risk_distance,
+        "rewardDistance1": abs(tp1 - entry) if entry is not None and tp1 is not None else None,
+        "rewardDistance2": abs(tp2 - entry) if entry is not None and tp2 is not None else None,
+        "invalidationReason": raw_signal.get("sl_method") or raw_signal.get("invalidation_reason") or None,
+        "strictFabioPass": _scalp_contract_bool(raw_signal.get("strict_fabio_pass")),
+        "strictGateReasons": _scalp_contract_list(raw_signal.get("strict_fabio_missing_pillars")) + _scalp_contract_list(raw_signal.get("fail_reasons")),
+        "skipped": bool(skipped),
+        "skippedReason": raw_signal.get("reason") if skipped else None,
+    }
+
+
+def _attach_scalp_workbench_contracts(row: dict, *, skipped: bool = False) -> dict:
+    source_contract = _build_scalp_source_contract(row, skipped=skipped)
+    row["marketLocation"] = _build_scalp_market_location(row, source_contract=source_contract)
+    source_contract["unavailableReasons"] = sorted(set(source_contract.get("unavailableReasons", [])))
+    row["sourceContract"] = source_contract
+    row["aggressionContext"] = _build_scalp_aggression_context(row)
+    row["scalpSetup"] = _build_scalp_setup_contract(row, skipped=skipped)
+    row.setdefault("analysis_venue", source_contract.get("dataVenue"))
+    row.setdefault("execution_venue", source_contract.get("executionVenue"))
+    row.setdefault("venue_mismatch", source_contract.get("venueMismatch"))
+    row.setdefault("venue_mismatch_reason", source_contract.get("venueMismatchReason"))
+    row.setdefault("orderflow_source", source_contract.get("orderflowSource"))
+    row.setdefault("orderflow_source_is_real", source_contract.get("orderflowSourceIsReal"))
+    row.setdefault("cvd_source_is_real", source_contract.get("cvdSourceIsReal"))
+    row.setdefault("absorption_source_is_real", source_contract.get("absorptionSourceIsReal"))
+    row.setdefault("vp_source", source_contract.get("vpSource"))
+    row.setdefault("vp_source_is_real", source_contract.get("vpSourceIsReal"))
+    row.setdefault("strict_orderflow_source_pass", source_contract.get("strictOrderflowSourcePass"))
+    row.setdefault("strict_volume_source_pass", source_contract.get("strictVolumeSourcePass"))
+    row.setdefault("strict_timestamp_alignment_pass", source_contract.get("strictTimestampAlignmentPass"))
+    row.setdefault("strict_venue_pass", source_contract.get("strictVenuePass"))
+    row.setdefault("strict_fabio_method_pass", row.get("strict_fabio_pass"))
+    row.setdefault("strict_fabio_fail_reasons", row["scalpSetup"].get("strictGateReasons", []))
+    if "source_fidelity_summary" not in row:
+        real_parts = []
+        for key, label in (
+            ("candleSourceIsReal", "candle"),
+            ("volumeSourceIsReal", "volume"),
+            ("orderflowSourceIsReal", "orderflow"),
+            ("cvdSourceIsReal", "cvd"),
+            ("absorptionSourceIsReal", "absorption"),
+            ("vpSourceIsReal", "vp"),
+        ):
+            real_parts.append(f"{label}={'real' if source_contract.get(key) else 'unavailable'}")
+        row["source_fidelity_summary"] = ", ".join(real_parts)
+    if "proxy_warning" not in row and source_contract.get("unavailableReasons"):
+        row["proxy_warning"] = "; ".join(source_contract["unavailableReasons"])
+    return row
+
+
+def _scalp_ui_skipped_row(raw_row: dict) -> dict:
+    row = dict(raw_row or {})
+    row.setdefault("pair", row.get("display") or row.get("symbol") or "")
+    row.setdefault("display", row.get("pair") or row.get("symbol") or "")
+    row.setdefault("gate_result", "NO_SETUP" if str(row.get("reason") or "").startswith("no_setup:") else "BLOCKED")
+    return _attach_scalp_workbench_contracts(row, skipped=True)
+
+
 def _scalp_ui_signal(raw_signal: dict) -> dict:
     """Normalize Engine D output to the shape expected by the scalp tab."""
     ai_grade = str(raw_signal.get("ai_grade", "C") or "C").upper()
@@ -9193,9 +9562,11 @@ def _scalp_ui_signal(raw_signal: dict) -> dict:
         f"{raw_signal.get('trigger_type', 'trigger')} + "
         f"{raw_signal.get('momentum_method', 'momentum confirmation')}"
     )
-    return {
+    out = {
         "symbol": raw_signal.get("pair", ""),
         "pair": raw_signal.get("pair", ""),
+        "display": raw_signal.get("display") or raw_signal.get("pair", ""),
+        "type": raw_signal.get("type"),
         "direction": raw_signal.get("direction", ""),
         "entry": raw_signal.get("price"),
         "price": raw_signal.get("price"),
@@ -9217,6 +9588,11 @@ def _scalp_ui_signal(raw_signal: dict) -> dict:
         "vp_poc": raw_signal.get("vp_poc"),
         "vp_vah": raw_signal.get("vp_vah"),
         "vp_val": raw_signal.get("vp_val"),
+        "vp_lvn_count": raw_signal.get("vp_lvn_count"),
+        "lvn_levels": raw_signal.get("lvn_levels"),
+        "vp_lvn_levels": raw_signal.get("vp_lvn_levels"),
+        "hvn_levels": raw_signal.get("hvn_levels"),
+        "vp_hvn_levels": raw_signal.get("vp_hvn_levels"),
         "vp_volume_source": raw_signal.get("vp_volume_source"),
         "vp_bucket_count": raw_signal.get("vp_bucket_count"),
         "vp_fidelity": raw_signal.get("vp_fidelity"),
@@ -9227,6 +9603,7 @@ def _scalp_ui_signal(raw_signal: dict) -> dict:
         "absorption_fidelity": raw_signal.get("absorption_fidelity"),
         "absorption_is_proxy": raw_signal.get("absorption_is_proxy"),
         "cvd_direction": raw_signal.get("cvd_direction"),
+        "cvd_slope": raw_signal.get("cvd_slope"),
         "cvd_source": raw_signal.get("cvd_source"),
         "cvd_bucket_count": raw_signal.get("cvd_bucket_count"),
         "cvd_fidelity": raw_signal.get("cvd_fidelity"),
@@ -9253,6 +9630,7 @@ def _scalp_ui_signal(raw_signal: dict) -> dict:
         "size_multiplier": raw_signal.get("size_multiplier"),
         "sl_method": raw_signal.get("sl_method"),
         "rr1": raw_signal.get("rr1"),
+        "sl_distance": raw_signal.get("sl_distance"),
         "tp_partial": raw_signal.get("tp_partial"),
         "ai_reasons": raw_signal.get("ai_reasons", []),
         "gate_result": raw_signal.get("gate_result", "PASS"),
@@ -9268,11 +9646,18 @@ def _scalp_ui_signal(raw_signal: dict) -> dict:
         "premarket_delta_proxy_levels": raw_signal.get("premarket_delta_proxy_levels"),
         "engine": raw_signal.get("engine", "SCALP"),
         "session": raw_signal.get("session"),
+        "execution_tf": raw_signal.get("execution_tf"),
+        "context_tf": raw_signal.get("context_tf"),
+        "structure_tf": raw_signal.get("structure_tf"),
+        "volume_source": raw_signal.get("volume_source"),
         "spread_pips": raw_signal.get("spread_pips"),
         "htf_bias": raw_signal.get("htf_bias"),
         "htf_bias_tf": raw_signal.get("htf_bias_tf"),
         "timestamp": raw_signal.get("timestamp"),
+        "candleFetchMeta": raw_signal.get("candleFetchMeta"),
+        "dataFreshness": raw_signal.get("dataFreshness"),
     }
+    return _attach_scalp_workbench_contracts(out, skipped=False)
 
 
 @app.route("/api/scalp-pairs", methods=["GET"])
@@ -9302,14 +9687,18 @@ def api_scalp_scan():
         diagnostic = bool(payload.get("diagnostic", False))
         result = run_scalp_scan(pairs)
         signals = [_scalp_ui_signal(s) for s in (result.get("signals", []) or [])]
-        skipped = result.get("skipped", []) or []
+        raw_skipped = result.get("skipped", []) or []
 
         # In diagnostic mode, enrich skipped rows so UI can show why each failed
         if diagnostic:
-            for row in skipped:
+            for row in raw_skipped:
                 if isinstance(row, dict):
                     row["_diagnostic"] = True
                     row["gate_result"] = row.get("reason", "BLOCKED").split(":")[0]
+        skipped = [
+            _scalp_ui_skipped_row(row) if isinstance(row, dict) else _scalp_ui_skipped_row({"reason": str(row)})
+            for row in raw_skipped
+        ]
 
         # Populate live dashboard scalp cache so snapshot can read Engine D state
         _ts_now = time.time()

@@ -491,6 +491,150 @@ def test_scalp_ui_signal_preserves_flow_fidelity_fields():
     assert out["profile_anchor_mode"] == "trade_bucket_session"
     assert out["profile_anchor_bars"] == 50
     assert out["profile_anchor_shadow"]["report_only"] is True
+    assert "sourceContract" in out
+    assert "marketLocation" in out
+    assert "aggressionContext" in out
+    assert "scalpSetup" in out
+    assert out["sourceContract"]["orderflowSourceIsReal"] is True
+    assert out["sourceContract"]["cvdSourceIsReal"] is True
+    assert out["sourceContract"]["vpSourceIsReal"] is True
+    assert out["orderflow_source_is_real"] is True
+    assert out["cvd_source_is_real"] is True
+    assert out["vp_source_is_real"] is True
+    assert isinstance(out["sourceContract"]["absorptionSourceIsReal"], bool)
+    assert out["scalpSetup"]["skipped"] is False
+
+
+def test_scalp_ui_signal_source_contract_does_not_fabricate_missing_lvn_levels():
+    athena_module = _load_athena_module()
+
+    out = athena_module._scalp_ui_signal(
+        {
+            "pair": "EUR/USD",
+            "direction": "LONG",
+            "price": 1.1,
+            "sl": 1.09,
+            "tp1": 1.12,
+            "tp2": 1.13,
+            "rr1": 2.0,
+            "ai_grade": "B",
+            "vp_poc": 1.101,
+            "vp_vah": 1.105,
+            "vp_val": 1.095,
+            "vp_lvn_count": 3,
+            "vp_volume_source": "mt5_tick",
+            "vp_is_proxy": True,
+            "cvd_source": "candles",
+            "cvd_is_proxy": True,
+            "absorption_source": "mt5_tick",
+            "absorption_is_proxy": True,
+            "aggression_source": "candles",
+            "aggression_source_is_proxy": True,
+            "aggression_uses_real_order_flow": False,
+            "execution_tf": "M1",
+            "candleFetchMeta": {
+                "pairSource": "mt5",
+                "M1": {"last_scoring_ts": 1_700_000_000},
+            },
+        }
+    )
+
+    assert out["marketLocation"]["lvnLevels"] == []
+    assert "lvn_count_available_but_levels_missing" in out["sourceContract"]["unavailableReasons"]
+    assert out["sourceContract"]["orderflowSourceIsReal"] is False
+    assert out["sourceContract"]["strictOrderflowSourcePass"] is False
+    assert out["sourceContract"]["strictVolumeSourcePass"] is False
+    assert out["strict_orderflow_source_pass"] is False
+    assert "source_fidelity_summary" in out
+    assert "proxy_warning" in out
+    assert out["scalpSetup"]["skipped"] is False
+    assert out["sourceContract"]["unavailableReasons"]
+
+
+def test_scalp_scan_route_adds_source_contracts_to_signals_and_skips(monkeypatch):
+    athena_module = _load_athena_module()
+
+    def _fake_scan(pairs):
+        return {
+            "signals": [
+                {
+                    "pair": "BTC/USDT",
+                    "display": "BTC/USDT",
+                    "symbol": "BTCUSDT",
+                    "type": "crypto",
+                    "direction": "LONG",
+                    "price": 100.0,
+                    "sl": 99.0,
+                    "tp1": 102.0,
+                    "tp2": 103.0,
+                    "rr1": 2.0,
+                    "ai_grade": "B",
+                    "ai_score": 72,
+                    "gate_result": "WATCHLIST",
+                    "executable": False,
+                    "fail_reasons": ["rr_below_min"],
+                    "vp_poc": 100.5,
+                    "vp_vah": 101.0,
+                    "vp_val": 99.5,
+                    "vp_lvn_count": 2,
+                    "vp_volume_source": "binance_aggtrade",
+                    "vp_is_proxy": False,
+                    "vp_uses_real_trade_buckets": True,
+                    "cvd_source": "binance_aggtrade",
+                    "cvd_is_proxy": False,
+                    "cvd_uses_real_trade_buckets": True,
+                    "cvd_slope": 3.5,
+                    "absorption_source": "binance_candle",
+                    "absorption_is_proxy": True,
+                    "absorption_count": 1,
+                    "aggression_source": "binance_aggtrade",
+                    "aggression_source_is_proxy": False,
+                    "aggression_confirmed": True,
+                    "aggression_uses_real_order_flow": True,
+                    "strict_fabio_pass": False,
+                    "strict_fabio_missing_pillars": ["location"],
+                    "execution_tf": "M1",
+                    "candleFetchMeta": {
+                        "pairSource": "binance",
+                        "M1": {"last_scoring_ts": 1_700_000_000},
+                    },
+                }
+            ],
+            "skipped": [{"pair": "ETH/USDT", "reason": "no_setup:location"}],
+            "scanned": len(pairs),
+            "session": "london",
+            "sessions_active": ["london"],
+        }
+
+    monkeypatch.setattr(scalp_engine, "run_scalp_scan", _fake_scan)
+    client = athena_module.app.test_client()
+    resp = client.post("/api/scalp-scan", json={"pairs": ["BTC/USDT"], "diagnostic": True})
+
+    assert resp.status_code == 200, resp.get_data(as_text=True)
+    payload = resp.get_json()
+    signal = payload["signals"][0]
+    skipped = payload["skipped"][0]
+
+    for key in ("symbol", "entry", "sl", "tp1", "tp2", "rr", "gate_result", "executable"):
+        assert key in signal
+    for key in ("sourceContract", "marketLocation", "aggressionContext", "scalpSetup"):
+        assert key in signal
+    assert signal["marketLocation"]["lvnLevels"] == []
+    assert "lvn_count_available_but_levels_missing" in signal["sourceContract"]["unavailableReasons"]
+    assert isinstance(signal["sourceContract"]["venueMismatch"], bool)
+    assert isinstance(signal["sourceContract"]["candleSourceIsReal"], bool)
+    assert isinstance(signal["sourceContract"]["orderflowSourceIsReal"], bool)
+    assert signal["sourceContract"]["orderflowSourceIsReal"] is True
+    assert signal["orderflow_source_is_real"] is True
+    assert signal["sourceContract"]["absorptionSourceIsReal"] is False
+    assert signal["absorption_source_is_real"] is False
+    assert "rr_below_min" in signal["scalpSetup"]["strictGateReasons"]
+    assert signal["aggressionContext"]["absorptionDetected"] is True
+    assert signal["aggressionContext"]["cvdSlope"] == 3.5
+    assert skipped["sourceContract"]["strictOrderflowSourcePass"] is False
+    assert skipped["scalpSetup"]["skipped"] is True
+    assert skipped["scalpSetup"]["skippedReason"] == "no_setup:location"
+    assert "sourceContract" in skipped and "scalpSetup" in skipped
 
 
 def test_open_trades_timed_hides_intraday_labels_for_scalp(monkeypatch):
