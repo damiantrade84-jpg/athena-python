@@ -36,6 +36,7 @@ _merge_forex_forming_ws = None
 _resample_from_h1 = None
 _forex_h4_resample_offset_hours = lambda: 0.0
 _eodhd_ticker_for_pair = None
+_compute_naked_analysis = None
 _json_safe = lambda value: value
 log = logging.getLogger(__name__)
 
@@ -403,6 +404,189 @@ def _find_chart_pair(symbol: str):
         ),
         None,
     )
+
+
+def _overlay_zone(value):
+    if not isinstance(value, dict):
+        return None
+    lower = _safe_float(value.get("lower"))
+    upper = _safe_float(value.get("upper"))
+    if lower is None or upper is None:
+        return None
+    out = {
+        "lower": lower,
+        "upper": upper,
+        "center": _safe_float(value.get("center"), (lower + upper) / 2.0),
+    }
+    for key in ("volume_strength", "fvg_overlap", "type", "source", "created_at", "mitigated"):
+        if key in value:
+            out[key] = value.get(key)
+    return out
+
+
+def _overlay_zone_pair(value):
+    if not isinstance(value, dict):
+        return None
+    top = _safe_float(value.get("top"))
+    bottom = _safe_float(value.get("bottom"))
+    if top is None or bottom is None:
+        return None
+    return top, bottom
+
+
+def _overlay_order_block(value):
+    pair = _overlay_zone_pair(value)
+    if pair is None:
+        return None
+    top, bottom = pair
+    out = {
+        "type": str(value.get("type") or "unknown"),
+        "top": top,
+        "bottom": bottom,
+        "strength": _safe_float(value.get("strength"), 0.0),
+        "mitigated": bool(value.get("mitigated", False)),
+    }
+    for key in ("created_at", "mitigated_at", "scan_count", "structure_tf"):
+        if key in value:
+            out[key] = value.get(key)
+    return out
+
+
+def _overlay_fvg(value):
+    pair = _overlay_zone_pair(value)
+    if pair is None:
+        return None
+    top, bottom = pair
+    out = {
+        "type": str(value.get("type") or "unknown"),
+        "top": top,
+        "bottom": bottom,
+        "size": _safe_float(value.get("size"), abs(top - bottom)),
+        "mitigated": bool(value.get("mitigated", False)),
+    }
+    for key in ("bar_index", "created_at", "mitigated_at", "scan_count"):
+        if key in value:
+            out[key] = value.get(key)
+    return out
+
+
+def _normalize_engine_b_overlay_payload(
+    raw: dict | None,
+    *,
+    symbol: str,
+    timeframe: str,
+    direction: str,
+    style: str,
+) -> dict:
+    raw = raw if isinstance(raw, dict) else {}
+    order_blocks = [
+        item
+        for item in (_overlay_order_block(ob) for ob in raw.get("order_blocks", []) or [])
+        if item and not item.get("mitigated")
+    ][:2]
+    active_fvgs = [
+        item
+        for item in (_overlay_fvg(fvg) for fvg in raw.get("active_fvgs", []) or [])
+        if item and not item.get("mitigated")
+    ][:2]
+    support_zone = _overlay_zone(raw.get("nearest_support_zone"))
+    resistance_zone = _overlay_zone(raw.get("nearest_resistance_zone"))
+    has_overlay = any(
+        [
+            support_zone,
+            resistance_zone,
+            raw.get("bos_data"),
+            raw.get("choch_data"),
+            order_blocks,
+            active_fvgs,
+            raw.get("breaker_block"),
+        ]
+    )
+    warnings: list[str] = []
+    if not has_overlay:
+        warnings.append("engine_b_overlays_missing")
+
+    return {
+        "symbol": symbol,
+        "timeframe": timeframe,
+        "direction": direction,
+        "style": style,
+        "confirmed_only": not bool(CONFIG.get("ENGINE_B_USE_FORMING_FOR_STRUCTURE", False)),
+        "overlay_source": "engine_b",
+        "overlay_version": "engine_b_legacy_v1",
+        "warnings": warnings,
+        "nearest_support_zone": support_zone,
+        "nearest_resistance_zone": resistance_zone,
+        "bos_data": raw.get("bos_data") if isinstance(raw.get("bos_data"), dict) else {},
+        "choch_data": raw.get("choch_data") if isinstance(raw.get("choch_data"), dict) else {},
+        "order_blocks": order_blocks,
+        "active_fvgs": active_fvgs,
+        "breaker_block": raw.get("breaker_block") if isinstance(raw.get("breaker_block"), dict) else None,
+        "current_swing_sequence": raw.get("current_swing_sequence"),
+        "macro_swing_sequence": raw.get("macro_swing_sequence"),
+        "bos_confirmed": bool(raw.get("bos_confirmed", False)),
+        "choch_confirmed": bool(raw.get("choch_confirmed", False)),
+        "liquidity_sweep": bool(raw.get("liquidity_sweep", False)),
+        "structural_verdict": raw.get("structural_verdict"),
+        "overlay_limits": {
+            "order_blocks": 2,
+            "active_fvgs": 2,
+            "support_resistance_zones": 2,
+            "mitigated_hidden": True,
+        },
+    }
+
+
+def api_engine_b_overlays():
+    """Return legacy Engine B chart overlay fields normalized for native charts."""
+    symbol = request.args.get("symbol")
+    tf = str(request.args.get("tf") or request.args.get("timeframe") or "H4").upper()
+    direction = str(request.args.get("direction") or "LONG").upper()
+    style = str(request.args.get("style") or "auto").lower()
+    if direction not in {"LONG", "SHORT"}:
+        direction = "LONG"
+
+    if not symbol:
+        return jsonify({"error": "Missing symbol parameter"}), 400
+
+    pair = _find_chart_pair(symbol)
+    if not pair:
+        return jsonify({"error": f"Unknown symbol: {symbol}"}), 404
+
+    if not callable(_compute_naked_analysis):
+        payload = _normalize_engine_b_overlay_payload(
+            None,
+            symbol=symbol,
+            timeframe=tf,
+            direction=direction,
+            style=style,
+        )
+        payload["warnings"].append("engine_b_overlay_source_unavailable")
+        return jsonify(_json_safe(payload)), 503
+
+    signal = {
+        "symbol": pair.get("symbol") or symbol,
+        "pair": pair.get("display") or symbol,
+        "display": pair.get("display") or symbol,
+        "type": pair.get("type"),
+        "direction": direction,
+        "style": style,
+    }
+    raw, _pair_obj, err = _compute_naked_analysis(
+        signal,
+        force_ai=False,
+        overlay_only=True,
+    )
+    payload = _normalize_engine_b_overlay_payload(
+        raw if isinstance(raw, dict) else None,
+        symbol=symbol,
+        timeframe=tf,
+        direction=direction,
+        style=style,
+    )
+    if err:
+        payload["warnings"].append(str(err))
+    return jsonify(_json_safe(payload))
 
 
 def _safe_float(value, default=None):
@@ -1142,7 +1326,7 @@ def register_market_data_routes(app, runtime: SimpleNamespace) -> None:
     global _disabled_pairs, _live_prices, _live_prices_lock, log
     global fetch_yield_curve, http_requests, fetch_candles, fetch_bybit_klines, fetch_bybit_ticker, fetch_eodhd
     global _extract_candles, _merge_forex_forming_ws, _resample_from_h1
-    global _forex_h4_resample_offset_hours, _eodhd_ticker_for_pair, _json_safe
+    global _forex_h4_resample_offset_hours, _eodhd_ticker_for_pair, _compute_naked_analysis, _json_safe
 
     CONFIG = runtime.CONFIG
     ALL_PAIRS = runtime.ALL_PAIRS
@@ -1163,6 +1347,7 @@ def register_market_data_routes(app, runtime: SimpleNamespace) -> None:
     _resample_from_h1 = runtime.resample_from_h1
     _forex_h4_resample_offset_hours = runtime.forex_h4_resample_offset_hours
     _eodhd_ticker_for_pair = runtime.eodhd_ticker_for_pair
+    _compute_naked_analysis = getattr(runtime, "compute_naked_analysis", None)
     _json_safe = runtime.json_safe
     log = runtime.log
 
@@ -1177,6 +1362,12 @@ def register_market_data_routes(app, runtime: SimpleNamespace) -> None:
         api_intermarket_matrix,
     )
     app.add_url_rule("/api/candles", "api_candles", api_candles, methods=["GET"])
+    app.add_url_rule(
+        "/api/engine-b-overlays",
+        "api_engine_b_overlays",
+        api_engine_b_overlays,
+        methods=["GET"],
+    )
     app.add_url_rule("/api/chart-tick", "api_chart_tick", api_chart_tick, methods=["GET"])
     app.add_url_rule(
         "/api/news-sentiment",

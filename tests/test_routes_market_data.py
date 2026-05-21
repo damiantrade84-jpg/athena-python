@@ -87,6 +87,7 @@ def test_market_data_routes_register_expected_methods():
     assert "GET" in methods_by_path["/api/market-hours"]
     assert "GET" in methods_by_path["/api/prices"]
     assert "GET" in methods_by_path["/api/candles"]
+    assert "GET" in methods_by_path["/api/engine-b-overlays"]
     assert "GET" in methods_by_path["/api/chart-tick"]
     assert "POST" in methods_by_path["/api/news-sentiment"]
 
@@ -149,6 +150,61 @@ def test_yield_curve_and_candles_use_runtime_fetchers():
     assert payload["symbol"] == "BTCUSDT"
     assert payload["candles"][0]["t"] == "2026-05-05T10:00:00Z"
     assert payload["candles"][0]["v"] == 99.0
+
+
+def test_engine_b_overlays_preserve_legacy_structure_contract():
+    def _compute_naked_analysis(signal, **_kwargs):
+        assert signal["symbol"] == "BTCUSDT"
+        assert signal["direction"] == "SHORT"
+        return (
+            {
+                "nearest_support_zone": {"lower": 95.0, "upper": 97.0},
+                "nearest_resistance_zone": {"lower": 104.0, "upper": 106.0},
+                "bos_data": {"last_broken_high": 103.5, "last_broken_low": 96.5},
+                "choch_data": {"choch_level": 101.25},
+                "order_blocks": [
+                    {"type": "bearish", "top": 105.0, "bottom": 104.2, "strength": 72, "mitigated": False},
+                    {"type": "bullish", "top": 97.8, "bottom": 97.1, "strength": 61, "mitigated": False},
+                    {"type": "bullish", "top": 96.8, "bottom": 96.2, "strength": 50, "mitigated": False},
+                ],
+                "active_fvgs": [
+                    {"type": "bearish", "top": 103.0, "bottom": 102.4, "mitigated": False},
+                    {"type": "bullish", "top": 98.9, "bottom": 98.3, "mitigated": False},
+                    {"type": "bullish", "top": 98.0, "bottom": 97.7, "mitigated": True},
+                ],
+                "breaker_block": {"type": "bearish_breaker", "level": 101.25},
+                "current_swing_sequence": "LH_LL",
+                "macro_swing_sequence": "LH_LL",
+                "bos_confirmed": True,
+                "choch_confirmed": False,
+            },
+            {"display": "BTC/USDT"},
+            None,
+        )
+
+    client = _client(
+        _runtime(
+            CONFIG={"CRYPTO_EXECUTION_PROVIDER": "binance"},
+            compute_naked_analysis=_compute_naked_analysis,
+        )
+    )
+
+    resp = client.get("/api/engine-b-overlays?symbol=BTCUSDT&tf=M1&direction=SHORT&style=scalp")
+
+    assert resp.status_code == 200
+    payload = resp.get_json()
+    assert payload["overlay_source"] == "engine_b"
+    assert payload["overlay_version"]
+    assert payload["symbol"] == "BTCUSDT"
+    assert payload["timeframe"] == "M1"
+    assert payload["confirmed_only"] is not None
+    assert payload["nearest_support_zone"]["lower"] == 95.0
+    assert payload["bos_data"]["last_broken_high"] == 103.5
+    assert payload["choch_data"]["choch_level"] == 101.25
+    assert len(payload["order_blocks"]) == 2
+    assert len(payload["active_fvgs"]) == 2
+    assert all(not fvg.get("mitigated") for fvg in payload["active_fvgs"])
+    assert payload["breaker_block"]["level"] == 101.25
 
 
 def test_crypto_chart_provider_resolves_to_bybit_when_execution_provider_bybit():
