@@ -916,3 +916,157 @@ export interface EngineCBacktestResponse {
   error?: string;
   [k: string]: unknown;
 }
+
+// ============================================================================
+// AI Chart Review v1 — POST /api/ai/chart-review
+// Mirrors normalized AI response + Engine-A-vs-AI concordance from
+// ai_review/normalizer.py and ai_review/concordance.py.
+// Read-only; never used for execution.
+// ============================================================================
+
+export type AIChartReviewVerdict = 'VALID' | 'CAUTION' | 'INVALID' | 'NO_TRADE';
+export type AIChartReviewHumanAction =
+  | 'take'
+  | 'wait'
+  | 'reject'
+  | 'needs_fresher_data'
+  | 'needs_better_rr';
+export type AIChartReviewConcordanceState =
+  | 'agree'
+  | 'partial'
+  | 'disagree'
+  | 'unknown';
+export type AIChartReviewDivergenceType =
+  | 'none'
+  | 'visual_contradiction'
+  | 'atr_rr_issue'
+  | 'freshness_issue'
+  | 'entry_displacement'
+  | 'missing_context'
+  | 'other';
+
+export interface AIChartReviewNormalized {
+  verdict: AIChartReviewVerdict;
+  confidence: number;
+  setup_type?: string;
+  visual_confirmation?: string;
+  visual_contradiction?: string;
+  engine_a_alignment?: string;
+  atr_rr_assessment?: string;
+  freshness_assessment?: string;
+  entry_quality?: string;
+  supporting_reasons?: string[];
+  risks?: string[];
+  missing_context?: string[];
+  human_action?: AIChartReviewHumanAction;
+  raw_model_response?: string;
+}
+
+export interface AIChartReviewConcordance {
+  engine: 'A';
+  engine_a_direction?: 'LONG' | 'SHORT' | 'NONE';
+  engine_a_score?: number | null;
+  engine_a_threshold?: number | null;
+  engine_a_passed?: boolean;
+  ai_verdict?: AIChartReviewVerdict;
+  ai_human_action?: AIChartReviewHumanAction;
+  concordance: AIChartReviewConcordanceState;
+  divergence_type: AIChartReviewDivergenceType;
+  divergence_note?: string;
+  should_flag_for_review: boolean;
+}
+
+export interface AIChartReviewEngineAContext {
+  symbol?: string;
+  timeframe?: string;
+  asset_class?: string;
+  asset_group?: string;
+  direction?: 'LONG' | 'SHORT' | 'NONE';
+  regime?: string;
+  scan_timestamp?: string;
+  candidate_timestamp?: string;
+  latest_candle_ts?: string;
+  chart_captured_at?: string;
+  engine_a_provider?: string;
+  chart_provider_hint?: string;
+  provider_mismatch?: boolean;
+  confluence_score?: number | null;
+  max_score_override?: number | null;
+  threshold?: number | null;
+  passed?: boolean;
+  factor_diagnostics?: Record<string, unknown>;
+  multiplier_diagnostics?: Record<string, unknown>;
+  equity_session?: {
+    applied?: boolean;
+    reason?: string | null;
+    utc_hour?: number | null;
+    multiplier?: number | null;
+  };
+  session_diagnostics?: Record<string, unknown>;
+  directional_alignment?: Record<string, unknown>;
+  atr?: {
+    atr_value?: number | null;
+    atr_tf?: string;
+    atr_source?: string;
+    atr_candle_last_ts?: string;
+    atr_age_seconds?: number | null;
+    atr_confirmed_only?: boolean;
+    atr_cache_hit?: boolean;
+    atr_freshness_status?: 'fresh' | 'expected_lag' | 'stale' | 'unknown';
+    max_expected_age_seconds?: number;
+  };
+  geometry?: {
+    candidate_entry?: number | null;
+    current_price?: number | null;
+    stop_loss?: number | null;
+    take_profit?: number | null;
+    risk_points?: number | null;
+    reward_points?: number | null;
+    rr?: number | null;
+    price_displacement_from_candidate_entry?: number | null;
+    sl_tp_source?: string;
+  };
+  freshness?: {
+    cache_hit?: boolean;
+    bucket_lag?: number | null;
+    stale_warnings?: string[];
+  };
+  mismatch_warnings?: string[];
+  [k: string]: unknown;
+}
+
+export interface AIChartReviewResponse {
+  review_id: string | null;
+  provider: string;
+  model: string | null;
+  latency_ms?: number | null;
+  engine_a_context: AIChartReviewEngineAContext;
+  ai_review: AIChartReviewNormalized;
+  concordance: AIChartReviewConcordance;
+  timestamps: {
+    scan_timestamp?: string | null;
+    chart_captured_at?: string | null;
+    latest_candle_ts?: string | null;
+  };
+  mismatch_warnings: string[];
+  dedup_hit: boolean;
+}
+
+export interface AIChartReviewScreenshotMeta {
+  width: number;
+  height: number;
+  native_chart: true;
+  visible_range_start?: string;
+  visible_range_end?: string;
+  chart_timeframe: string;
+  overlays: string[];
+  captured_at: string;
+}
+
+export interface AIChartReviewRequest {
+  symbol: string;
+  timeframe: string;
+  provider?: 'default' | 'anthropic';
+  screenshot_base64: string;
+  screenshot_meta: AIChartReviewScreenshotMeta;
+}
