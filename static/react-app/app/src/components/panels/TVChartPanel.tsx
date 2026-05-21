@@ -1777,6 +1777,7 @@ export default function TVChartPanel() {
         height: downscaled.height,
         chart_timeframe: tfForBackend,
         overlays,
+        chart_provider: chartPayload?.chart_provider || chartPayload?.candle_provider || undefined,
       });
       const symbol = (pair || '').toUpperCase();
       if (!symbol) {
