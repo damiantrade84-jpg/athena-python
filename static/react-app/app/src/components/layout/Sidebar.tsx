@@ -23,6 +23,7 @@ const navItems: { id: PanelId; label: string; icon: ElementType; badge?: string 
   { id: 'trades',      label: 'Trades',       icon: TrendingUp },
   { id: 'engineC',     label: 'Engine C',     icon: Layers },
   { id: 'scalpLab',    label: 'Scalp Lab',    icon: Activity },
+  { id: 'scalpWorkbench', label: 'Scalp Workbench', icon: BarChart2 },
   { id: 'tvChart',     label: 'TV Chart',     icon: BarChart2 },
   { id: 'backtest',    label: 'Backtest',     icon: FlaskConical },
   { id: 'screener',    label: 'Screener',     icon: Filter },

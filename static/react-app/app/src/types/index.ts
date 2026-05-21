@@ -180,6 +180,7 @@ export type PanelId =
   | 'trades'
   | 'engineC'
   | 'scalpLab'
+  | 'scalpWorkbench'
   | 'tvChart'
   | 'backtest'
   | 'screener'

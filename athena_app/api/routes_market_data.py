@@ -470,6 +470,58 @@ def _overlay_fvg(value):
     return out
 
 
+_OVERLAY_PRECISION_BY_GROUP = {
+    "forex_majors": 5,
+    "forex_crosses": 5,
+    "forex_exotics": 5,
+    "forex_other": 5,
+    "crypto_btc": 1,
+    "crypto_eth": 2,
+    "crypto_doge": 6,
+    "crypto_alt_majors": 4,
+    "crypto_other": 4,
+    "precious_trackers": 2,
+    "pgm_metals": 2,
+    "base_metals": 4,
+    "copper": 4,
+    "energy_oil": 2,
+    "nat_gas": 3,
+    "softs": 2,
+    "commodity_other": 3,
+    "us_indices_trackers": 2,
+    "eu_indices": 2,
+    "asian_indices": 1,
+    "index_other": 2,
+    "us_stock_single": 2,
+    "bond_tlt": 2,
+    "smallcap_em_etf": 2,
+    "stock_other": 2,
+    "unknown": 4,
+}
+
+
+def _overlay_precision_for(pair: dict | None) -> dict:
+    """Resolve chart display precision by score_group. JPY forex -> 3."""
+    pair = pair if isinstance(pair, dict) else {}
+    try:
+        from scoring import get_pair_score_group
+
+        group = get_pair_score_group(pair)
+    except Exception:
+        group = "unknown"
+    display = str(pair.get("display", "") or "")
+    if pair.get("type") == "forex" and "JPY" in display.upper():
+        precision = 3
+    else:
+        precision = _OVERLAY_PRECISION_BY_GROUP.get(group, 4)
+    return {
+        "score_group": group,
+        "asset_type": str(pair.get("type", "") or ""),
+        "precision": precision,
+        "min_move": float(10 ** -precision),
+    }
+
+
 def _normalize_engine_b_overlay_payload(
     raw: dict | None,
     *,
@@ -477,6 +529,7 @@ def _normalize_engine_b_overlay_payload(
     timeframe: str,
     direction: str,
     style: str,
+    pair: dict | None = None,
 ) -> dict:
     raw = raw if isinstance(raw, dict) else {}
     order_blocks = [
@@ -514,6 +567,7 @@ def _normalize_engine_b_overlay_payload(
         "confirmed_only": not bool(CONFIG.get("ENGINE_B_USE_FORMING_FOR_STRUCTURE", False)),
         "overlay_source": "engine_b",
         "overlay_version": "engine_b_legacy_v1",
+        "price_precision": _overlay_precision_for(pair),
         "warnings": warnings,
         "nearest_support_zone": support_zone,
         "nearest_resistance_zone": resistance_zone,
@@ -560,6 +614,7 @@ def api_engine_b_overlays():
             timeframe=tf,
             direction=direction,
             style=style,
+            pair=pair,
         )
         payload["warnings"].append("engine_b_overlay_source_unavailable")
         return jsonify(_json_safe(payload)), 503
@@ -583,6 +638,7 @@ def api_engine_b_overlays():
         timeframe=tf,
         direction=direction,
         style=style,
+        pair=pair,
     )
     if err:
         payload["warnings"].append(str(err))
@@ -1076,6 +1132,7 @@ def _crypto_chart_payload(pair: dict, symbol: str, tf: str, limit: int):
         "volume_ma_period": 20,
         "vwap_formula": indicator_meta.get("vwap_formula"),
         "indicator_set": ["EMA21", "EMA50", "EMA200", "VWAP", "RSI14", "ADX14", "ATR14", "Volume", "Volume MA"],
+        "price_precision": _overlay_precision_for(pair),
     }
     return payload, 200
 
@@ -1167,6 +1224,7 @@ def api_candles():
             "live_tick_provider": provider,
             "candle_confirmed_policy": _generic_candle_policy(pair, chart_source),
             "last_candle_ts": result[-1].get("t") if result else None,
+            "price_precision": _overlay_precision_for(pair),
         }
     )
 
