@@ -1,11 +1,26 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import {
+  createChart,
+  CandlestickSeries,
+  LineSeries,
+  LineStyle,
+  type IChartApi,
+  type IPaneApi,
+  type ISeriesApi,
+  type CandlestickData,
+  type LineData,
+  type UTCTimestamp,
+  type Time,
+} from 'lightweight-charts';
 import { BarChart3, Layers, SlidersHorizontal } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Switch } from '@/components/ui/switch';
 import { useStore } from '@/hooks/useStore';
+import { apiClient } from '@/lib/apiClient';
 import {
   isFrontendDebugVisible,
   resolveAtrProvenanceRows,
@@ -17,58 +32,155 @@ import {
   resolveTrendCoherenceRows,
   type DiagnosticDisplay,
 } from '@/lib/engineADiagnosticsDisplay';
-import { fmtNum } from '@/lib/utils';
+import { fmtNum, toNum } from '@/lib/utils';
 import type { EngineASignal } from '@/types/athena';
 
 const TIMEFRAMES = ['1', '5', '15', '30', '60', '240', 'D', 'W'];
 
-export const TV_STUDY_IDS = {
-  ema: 'MAExp@tv-basicstudies',
-  dema: 'DoubleEMA@tv-basicstudies',
-  atr: 'ATR@tv-basicstudies',
-  rsi: 'RSI@tv-basicstudies',
+// Map TradingView-style interval codes to the backend /api/candles ?tf= values.
+const TF_BACKEND_MAP: Record<string, string> = {
+  '1': 'M1',
+  '5': 'M5',
+  '15': 'M15',
+  '30': 'M30',
+  '60': 'H1',
+  '240': 'H4',
+  D: 'D1',
+  W: 'W1',
+};
+
+// Indicator colors — chosen to be distinct and high-contrast on the dark chart background.
+const INDICATOR_COLORS = {
+  ema20: 'hsl(200, 95%, 55%)',
+  ema50: 'hsl(45, 95%, 58%)',
+  ema200: 'hsl(280, 80%, 65%)',
+  dema200: 'hsl(15, 90%, 60%)',
+  rsi14: 'hsl(45, 95%, 58%)',
+  atr14: 'hsl(200, 95%, 55%)',
 } as const;
 
-type StudyOptions = {
-  ema20: boolean;
-  ema50: boolean;
-  ema200: boolean;
-  dema200: boolean;
-  atr14: boolean;
-  rsi14: boolean;
-};
+const PRESET_OPTIONS = [
+  { value: 'custom', label: 'Custom' },
+  { value: 'all', label: 'All indicators' },
+] as const;
+type PresetValue = (typeof PRESET_OPTIONS)[number]['value'];
 
-type TradingViewStudy =
-  | string
-  | {
-      id: string;
-      inputs?: Record<string, number | string | boolean>;
-    };
-
-type TradingViewWidgetConfig = {
-  autosize: boolean;
-  symbol: string;
-  interval: string;
-  timezone: string;
-  theme: string;
-  style: string;
-  locale: string;
-  withdateranges: boolean;
-  hide_side_toolbar: boolean;
-  allow_symbol_change: boolean;
-  details: boolean;
-  hotlist: boolean;
-  calendar: boolean;
-  studies: TradingViewStudy[];
-  support_host: string;
-};
-
-function formatSymbol(input: string): string {
-  const clean = input.toUpperCase().replace(/[^A-Z0-9]/g, '');
-  if (clean.endsWith('USDT')) return `BINANCE:${clean}`;
-  if (clean.length === 6 && /^[A-Z]{6}$/.test(clean)) return `FX:${clean}`;
-  return clean.includes(':') ? clean : `FX:${clean}`;
+interface CandleApiRow {
+  t?: string | number;
+  o?: number | string;
+  h?: number | string;
+  l?: number | string;
+  c?: number | string;
 }
+interface CandleApiResponse {
+  candles?: CandleApiRow[];
+  error?: string;
+}
+
+function toTimestamp(raw: string | number | undefined): UTCTimestamp | null {
+  if (raw == null) return null;
+  if (typeof raw === 'number' && Number.isFinite(raw)) {
+    return (raw > 1e12 ? Math.floor(raw / 1000) : Math.floor(raw)) as UTCTimestamp;
+  }
+  if (typeof raw === 'string' && raw.length > 0) {
+    const ms = Date.parse(raw);
+    if (Number.isFinite(ms)) return Math.floor(ms / 1000) as UTCTimestamp;
+  }
+  return null;
+}
+
+// --- Indicator math --------------------------------------------------
+
+export function ema(values: number[], period: number): (number | null)[] {
+  if (period <= 1 || values.length === 0) return values.map(() => null);
+  const k = 2 / (period + 1);
+  const out: (number | null)[] = [];
+  let prev: number | null = null;
+  let seed = 0;
+  let seedCount = 0;
+  for (let i = 0; i < values.length; i += 1) {
+    const v = values[i];
+    if (!Number.isFinite(v)) {
+      out.push(prev);
+      continue;
+    }
+    if (i < period) {
+      seed += v;
+      seedCount += 1;
+      if (i === period - 1) {
+        prev = seed / seedCount;
+        out.push(prev);
+      } else {
+        out.push(null);
+      }
+      continue;
+    }
+    if (prev == null) prev = v;
+    else prev = v * k + prev * (1 - k);
+    out.push(prev);
+  }
+  return out;
+}
+
+export function dema(values: number[], period: number): (number | null)[] {
+  const e1 = ema(values, period);
+  const e1Numeric = e1.map((v) => (v == null ? NaN : v));
+  const e2 = ema(e1Numeric, period);
+  return e1.map((v1, i) => {
+    const v2 = e2[i];
+    if (v1 == null || v2 == null) return null;
+    return 2 * v1 - v2;
+  });
+}
+
+export function rsi(values: number[], period = 14): (number | null)[] {
+  const out: (number | null)[] = new Array(values.length).fill(null);
+  if (values.length <= period) return out;
+  let avgGain = 0;
+  let avgLoss = 0;
+  for (let i = 1; i <= period; i += 1) {
+    const change = values[i] - values[i - 1];
+    if (change >= 0) avgGain += change;
+    else avgLoss -= change;
+  }
+  avgGain /= period;
+  avgLoss /= period;
+  out[period] = avgLoss === 0 ? 100 : 100 - 100 / (1 + avgGain / avgLoss);
+  for (let i = period + 1; i < values.length; i += 1) {
+    const change = values[i] - values[i - 1];
+    const gain = change > 0 ? change : 0;
+    const loss = change < 0 ? -change : 0;
+    avgGain = (avgGain * (period - 1) + gain) / period;
+    avgLoss = (avgLoss * (period - 1) + loss) / period;
+    out[i] = avgLoss === 0 ? 100 : 100 - 100 / (1 + avgGain / avgLoss);
+  }
+  return out;
+}
+
+export function atr(highs: number[], lows: number[], closes: number[], period = 14): (number | null)[] {
+  const n = closes.length;
+  const out: (number | null)[] = new Array(n).fill(null);
+  if (n <= period) return out;
+  const tr: number[] = new Array(n).fill(0);
+  tr[0] = highs[0] - lows[0];
+  for (let i = 1; i < n; i += 1) {
+    const hl = highs[i] - lows[i];
+    const hc = Math.abs(highs[i] - closes[i - 1]);
+    const lc = Math.abs(lows[i] - closes[i - 1]);
+    tr[i] = Math.max(hl, hc, lc);
+  }
+  let prev = 0;
+  for (let i = 1; i <= period; i += 1) prev += tr[i];
+  prev /= period;
+  out[period] = prev;
+  for (let i = period + 1; i < n; i += 1) {
+    prev = (prev * (period - 1) + tr[i]) / period;
+    out[i] = prev;
+  }
+  return out;
+}
+
+// --- Engine A candidate helpers (unchanged from prior version) -------
 
 function displaySymbol(signal: EngineASignal | null): string | null {
   if (!signal) return null;
@@ -137,65 +249,7 @@ function reviewTimeframeFor(signal: EngineASignal | null): string {
   return style === 'scalp' || style === 'intraday' ? '60' : '240';
 }
 
-export function buildTradingViewStudies(options: StudyOptions): TradingViewStudy[] {
-  const studies: TradingViewStudy[] = [];
-  if (options.ema20) studies.push({ id: TV_STUDY_IDS.ema, inputs: { length: 20 } });
-  if (options.ema50) studies.push({ id: TV_STUDY_IDS.ema, inputs: { length: 50 } });
-  if (options.ema200) studies.push({ id: TV_STUDY_IDS.ema, inputs: { length: 200 } });
-  if (options.dema200) studies.push({ id: TV_STUDY_IDS.dema, inputs: { length: 200 } });
-  if (options.rsi14) studies.push(TV_STUDY_IDS.rsi);
-  if (options.atr14) studies.push(TV_STUDY_IDS.atr);
-  return studies;
-}
-
-export function buildTradingViewWidgetConfig(
-  symbol: string,
-  interval: string,
-  studies: TradingViewStudy[],
-): TradingViewWidgetConfig {
-  return {
-    autosize: true,
-    symbol,
-    interval,
-    timezone: 'Etc/UTC',
-    theme: 'dark',
-    style: '1',
-    locale: 'en',
-    withdateranges: true,
-    hide_side_toolbar: false,
-    allow_symbol_change: true,
-    details: true,
-    hotlist: false,
-    calendar: false,
-    studies,
-    support_host: 'https://www.tradingview.com',
-  };
-}
-
-export function buildTradingViewWidgetHtml(config: TradingViewWidgetConfig): string {
-  const payload = JSON.stringify(config).replace(/</g, '\\u003c');
-  return `<!doctype html>
-<html>
-  <head>
-    <meta charset="utf-8" />
-    <style>
-      html, body, .tradingview-widget-container, .tradingview-widget-container__widget {
-        height: 100%;
-        margin: 0;
-        background: #0b0f14;
-      }
-    </style>
-  </head>
-  <body>
-    <div class="tradingview-widget-container">
-      <div class="tradingview-widget-container__widget"></div>
-      <script type="text/javascript" src="https://s3.tradingview.com/external-embedding/embed-widget-advanced-chart.js" async>
-      ${payload}
-      </script>
-    </div>
-  </body>
-</html>`;
-}
+// --- Engine A side panel UI (unchanged behavior) ---------------------
 
 function NumberRow({ label, value }: { label: string; value: unknown }) {
   const numeric = firstNumber(value);
@@ -364,7 +418,7 @@ function EngineASidePanel({ signal }: { signal: EngineASignal | null }) {
       </section>
 
       <p className="text-[11px] leading-4 text-muted-foreground">
-        Entry, SL, TP, and swing levels are side-panel values only. The TradingView iframe is not drawing custom levels.
+        Entry, SL, TP, and swing levels are side-panel values only. The chart is not drawing custom levels.
       </p>
       {showDebugFooter && frontendBuildLabel && (
         <p className="text-[10px] leading-4 text-muted-foreground/70">Frontend bundle: {frontendBuildLabel}</p>
@@ -390,6 +444,17 @@ function IndicatorSwitch({
   );
 }
 
+function LegendDot({ color, label }: { color: string; label: string }) {
+  return (
+    <span className="flex items-center gap-1 text-[10px] text-muted-foreground">
+      <span className="inline-block h-2 w-2 rounded-full" style={{ background: color }} />
+      {label}
+    </span>
+  );
+}
+
+// --- Main panel ------------------------------------------------------
+
 export default function TVChartPanel() {
   const { scanCacheA } = useStore();
   const [pair, setPair] = useState('EURUSD');
@@ -401,6 +466,10 @@ export default function TVChartPanel() {
   const [atr14, setAtr14] = useState(false);
   const [rsi14, setRsi14] = useState(false);
 
+  const [candles, setCandles] = useState<CandleApiRow[] | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [chartError, setChartError] = useState<string | null>(null);
+
   const candidateRows = useMemo(
     () => (Array.isArray(scanCacheA) ? scanCacheA.filter((row): row is EngineASignal => Boolean(row && typeof row === 'object')) : []),
     [scanCacheA],
@@ -408,14 +477,20 @@ export default function TVChartPanel() {
   const defaultCandidate = useMemo(() => pickEngineACandidate(candidateRows), [candidateRows]);
   const chartCandidate = useMemo(() => findEngineACandidateForSymbol(candidateRows, pair), [candidateRows, pair]);
 
-  const tvSymbol = useMemo(() => formatSymbol(pair), [pair]);
-  const studies = useMemo(
-    () => buildTradingViewStudies({ ema20, ema50, ema200, dema200, atr14, rsi14 }),
-    [ema20, ema50, ema200, dema200, atr14, rsi14],
-  );
-  const widgetConfig = useMemo(() => buildTradingViewWidgetConfig(tvSymbol, timeframe, studies), [tvSymbol, timeframe, studies]);
-  const widgetHtml = useMemo(() => buildTradingViewWidgetHtml(widgetConfig), [widgetConfig]);
-  const frameKey = useMemo(() => JSON.stringify(widgetConfig), [widgetConfig]);
+  // Derived preset label: "all" only when every indicator is on, otherwise "custom".
+  const activePreset: PresetValue = ema20 && ema50 && ema200 && dema200 && rsi14 && atr14 ? 'all' : 'custom';
+
+  const applyPreset = (value: PresetValue) => {
+    if (value === 'all') {
+      setEma20(true);
+      setEma50(true);
+      setEma200(true);
+      setDema200(true);
+      setAtr14(true);
+      setRsi14(true);
+    }
+    // 'custom' is passive — manual switch flips revert the label naturally.
+  };
 
   const applyEngineAReviewLayout = () => {
     const candidate = chartCandidate || defaultCandidate;
@@ -430,6 +505,224 @@ export default function TVChartPanel() {
     setRsi14(true);
   };
 
+  // --- Fetch candles whenever pair/timeframe changes ---------------
+  useEffect(() => {
+    const backendTf = TF_BACKEND_MAP[timeframe];
+    if (!pair || !backendTf) {
+      setCandles(null);
+      return;
+    }
+    let cancelled = false;
+    setLoading(true);
+    setChartError(null);
+    const url = `/api/candles?symbol=${encodeURIComponent(pair)}&tf=${encodeURIComponent(backendTf)}&limit=300`;
+    apiClient
+      .getJson(url)
+      .then((res) => {
+        if (cancelled) return;
+        const data = res as CandleApiResponse;
+        if (data?.error) {
+          setChartError(data.error);
+          setCandles(null);
+          return;
+        }
+        const list = Array.isArray(data?.candles) ? data.candles : [];
+        setCandles(list);
+        if (list.length === 0) setChartError(`No candle data for ${pair} ${backendTf}`);
+      })
+      .catch((err: unknown) => {
+        if (cancelled) return;
+        setChartError(err instanceof Error ? err.message : 'Failed to load candles');
+        setCandles(null);
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [pair, timeframe]);
+
+  // --- Chart lifecycle ---------------------------------------------
+  // Pane structure depends on which sub-pane studies are on; recreate the chart
+  // whenever rsi14 / atr14 flip so panes appear and disappear cleanly.
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const chartRef = useRef<IChartApi | null>(null);
+  const candleSeriesRef = useRef<ISeriesApi<'Candlestick'> | null>(null);
+  const ema20SeriesRef = useRef<ISeriesApi<'Line'> | null>(null);
+  const ema50SeriesRef = useRef<ISeriesApi<'Line'> | null>(null);
+  const ema200SeriesRef = useRef<ISeriesApi<'Line'> | null>(null);
+  const dema200SeriesRef = useRef<ISeriesApi<'Line'> | null>(null);
+  const rsiSeriesRef = useRef<ISeriesApi<'Line'> | null>(null);
+  const atrSeriesRef = useRef<ISeriesApi<'Line'> | null>(null);
+
+  const subPaneStudyCount = (rsi14 ? 1 : 0) + (atr14 ? 1 : 0);
+  const chartMinHeightPx = 480 + subPaneStudyCount * 180;
+  const cardMinHeightPx = chartMinHeightPx + 60;
+
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+
+    const chart = createChart(container, {
+      width: container.clientWidth,
+      height: container.clientHeight || chartMinHeightPx,
+      layout: {
+        background: { color: 'transparent' },
+        textColor: 'rgba(245, 240, 232, 0.65)',
+        fontFamily: "'IBM Plex Mono', monospace",
+      },
+      grid: {
+        vertLines: { color: 'rgba(212, 160, 23, 0.06)' },
+        horzLines: { color: 'rgba(212, 160, 23, 0.06)' },
+      },
+      rightPriceScale: { borderColor: 'rgba(212, 160, 23, 0.18)' },
+      timeScale: {
+        borderColor: 'rgba(212, 160, 23, 0.18)',
+        timeVisible: true,
+        secondsVisible: false,
+      },
+      crosshair: { mode: 1 },
+    });
+    chartRef.current = chart;
+
+    // Pane 0 — price + overlay EMAs/DEMA. Stretch=3 so it stays dominant when sub-panes exist.
+    const pricePane = chart.panes()[0] as IPaneApi<Time>;
+    pricePane.setStretchFactor(3);
+
+    const candleSeries = chart.addSeries(CandlestickSeries, {
+      upColor: 'hsl(160, 84%, 39%)',
+      downColor: 'hsl(343, 96%, 60%)',
+      borderUpColor: 'hsl(160, 84%, 39%)',
+      borderDownColor: 'hsl(343, 96%, 60%)',
+      wickUpColor: 'hsl(160, 84%, 39%)',
+      wickDownColor: 'hsl(343, 96%, 60%)',
+      priceLineVisible: false,
+    }, 0);
+    candleSeriesRef.current = candleSeries;
+
+    const overlayLineOpts = { lineWidth: 2 as const, lastValueVisible: true, priceLineVisible: false };
+    ema20SeriesRef.current = chart.addSeries(LineSeries, { ...overlayLineOpts, color: INDICATOR_COLORS.ema20 }, 0);
+    ema50SeriesRef.current = chart.addSeries(LineSeries, { ...overlayLineOpts, color: INDICATOR_COLORS.ema50 }, 0);
+    ema200SeriesRef.current = chart.addSeries(LineSeries, { ...overlayLineOpts, color: INDICATOR_COLORS.ema200 }, 0);
+    dema200SeriesRef.current = chart.addSeries(LineSeries, { ...overlayLineOpts, color: INDICATOR_COLORS.dema200 }, 0);
+
+    // Sub-panes — created only if their study is on, so an unused pane never sits empty.
+    if (rsi14) {
+      const pane = chart.addPane();
+      pane.setStretchFactor(1);
+      const paneIdx = pane.paneIndex();
+      const series = chart.addSeries(LineSeries, {
+        color: INDICATOR_COLORS.rsi14,
+        lineWidth: 2,
+        priceLineVisible: false,
+        lastValueVisible: true,
+      }, paneIdx);
+      series.createPriceLine({ price: 70, color: 'rgba(245,240,232,0.25)', lineWidth: 1, lineStyle: LineStyle.Dashed, axisLabelVisible: true, title: '70' });
+      series.createPriceLine({ price: 30, color: 'rgba(245,240,232,0.25)', lineWidth: 1, lineStyle: LineStyle.Dashed, axisLabelVisible: true, title: '30' });
+      rsiSeriesRef.current = series;
+    }
+    if (atr14) {
+      const pane = chart.addPane();
+      pane.setStretchFactor(1);
+      const paneIdx = pane.paneIndex();
+      atrSeriesRef.current = chart.addSeries(LineSeries, {
+        color: INDICATOR_COLORS.atr14,
+        lineWidth: 2,
+        priceLineVisible: false,
+        lastValueVisible: true,
+      }, paneIdx);
+    }
+
+    const ro = new ResizeObserver(() => {
+      const w = container.clientWidth;
+      const h = container.clientHeight;
+      if (w > 0 && h > 0) chart.applyOptions({ width: w, height: h });
+    });
+    ro.observe(container);
+
+    return () => {
+      ro.disconnect();
+      chart.remove();
+      chartRef.current = null;
+      candleSeriesRef.current = null;
+      ema20SeriesRef.current = null;
+      ema50SeriesRef.current = null;
+      ema200SeriesRef.current = null;
+      dema200SeriesRef.current = null;
+      rsiSeriesRef.current = null;
+      atrSeriesRef.current = null;
+    };
+    // chartMinHeightPx only seeds the first sizing call; the ResizeObserver takes over after.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rsi14, atr14]);
+
+  // --- Push data into the chart ------------------------------------
+  useEffect(() => {
+    const chart = chartRef.current;
+    const candleSeries = candleSeriesRef.current;
+    if (!chart || !candleSeries) return;
+
+    if (!candles || candles.length === 0) {
+      candleSeries.setData([]);
+      ema20SeriesRef.current?.setData([]);
+      ema50SeriesRef.current?.setData([]);
+      ema200SeriesRef.current?.setData([]);
+      dema200SeriesRef.current?.setData([]);
+      rsiSeriesRef.current?.setData([]);
+      atrSeriesRef.current?.setData([]);
+      return;
+    }
+
+    const rows: CandlestickData[] = [];
+    const times: Time[] = [];
+    const highs: number[] = [];
+    const lows: number[] = [];
+    const closes: number[] = [];
+    for (const c of candles) {
+      const t = toTimestamp(c.t);
+      const o = toNum(c.o, NaN);
+      const h = toNum(c.h, NaN);
+      const l = toNum(c.l, NaN);
+      const cl = toNum(c.c, NaN);
+      if (t == null) continue;
+      if (![o, h, l, cl].every(Number.isFinite)) continue;
+      rows.push({ time: t, open: o, high: h, low: l, close: cl });
+      times.push(t);
+      highs.push(h);
+      lows.push(l);
+      closes.push(cl);
+    }
+    candleSeries.setData(rows);
+
+    const pushLine = (
+      series: ISeriesApi<'Line'> | null,
+      enabled: boolean,
+      seriesValues: (number | null)[],
+    ) => {
+      if (!series) return;
+      if (!enabled) {
+        series.setData([]);
+        return;
+      }
+      const data: LineData[] = [];
+      for (let i = 0; i < seriesValues.length; i += 1) {
+        const v = seriesValues[i];
+        if (v != null && Number.isFinite(v)) data.push({ time: times[i], value: v });
+      }
+      series.setData(data);
+    };
+
+    pushLine(ema20SeriesRef.current, ema20, ema(closes, 20));
+    pushLine(ema50SeriesRef.current, ema50, ema(closes, 50));
+    pushLine(ema200SeriesRef.current, ema200, ema(closes, 200));
+    pushLine(dema200SeriesRef.current, dema200, dema(closes, 200));
+    pushLine(rsiSeriesRef.current, rsi14, rsi(closes, 14));
+    pushLine(atrSeriesRef.current, atr14, atr(highs, lows, closes, 14));
+
+    chart.timeScale().fitContent();
+  }, [candles, ema20, ema50, ema200, dema200, rsi14, atr14]);
+
   return (
     <Card className="h-full">
       <CardHeader className="pb-2">
@@ -443,7 +736,7 @@ export default function TVChartPanel() {
               value={pair}
               onChange={(event) => setPair(event.target.value)}
               className="h-8 w-32 text-xs"
-              aria-label="TradingView symbol"
+              aria-label="Chart symbol"
             />
             <select
               value={displaySymbol(chartCandidate) || ''}
@@ -477,6 +770,18 @@ export default function TVChartPanel() {
                 </Button>
               ))}
             </div>
+            <Select value={activePreset} onValueChange={(v) => applyPreset(v as PresetValue)}>
+              <SelectTrigger className="h-8 w-40 text-xs" aria-label="Indicator preset">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {PRESET_OPTIONS.map((opt) => (
+                  <SelectItem key={opt.value} value={opt.value} className="text-xs">
+                    {opt.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
             <Button size="sm" variant="secondary" className="h-8 gap-2 text-xs" onClick={applyEngineAReviewLayout}>
               <SlidersHorizontal className="h-3.5 w-3.5" />
               Engine A Review Layout
@@ -491,17 +796,32 @@ export default function TVChartPanel() {
           <IndicatorSwitch label="ATR14" checked={atr14} onCheckedChange={setAtr14} />
           <IndicatorSwitch label="RSI14" checked={rsi14} onCheckedChange={setRsi14} />
         </div>
+        <div className="flex flex-wrap items-center gap-3 pt-2">
+          {ema20 && <LegendDot color={INDICATOR_COLORS.ema20} label="EMA20" />}
+          {ema50 && <LegendDot color={INDICATOR_COLORS.ema50} label="EMA50" />}
+          {ema200 && <LegendDot color={INDICATOR_COLORS.ema200} label="EMA200" />}
+          {dema200 && <LegendDot color={INDICATOR_COLORS.dema200} label="DEMA200" />}
+          {rsi14 && <LegendDot color={INDICATOR_COLORS.rsi14} label="RSI14 (pane)" />}
+          {atr14 && <LegendDot color={INDICATOR_COLORS.atr14} label="ATR14 (pane)" />}
+        </div>
       </CardHeader>
-      <CardContent className="h-[calc(100%-120px)] min-h-[620px]">
+      <CardContent className="h-[calc(100%-160px)]" style={{ minHeight: `${cardMinHeightPx}px` }}>
         <div className="grid h-full gap-3 xl:grid-cols-[minmax(0,1fr)_320px]">
-          <div className="relative min-h-[560px] overflow-hidden rounded-md border bg-background">
-            <iframe
-              key={frameKey}
-              title="TradingView Advanced Chart"
-              srcDoc={widgetHtml}
-              className="h-full w-full border-0"
-              allow="fullscreen"
-            />
+          <div
+            className="relative overflow-hidden rounded-md border bg-background"
+            style={{ minHeight: `${chartMinHeightPx}px` }}
+          >
+            <div ref={containerRef} className="absolute inset-0" />
+            {loading && (
+              <div className="absolute inset-0 flex items-center justify-center bg-card/40 text-[11px] text-muted-foreground backdrop-blur-sm">
+                Loading candles…
+              </div>
+            )}
+            {chartError && !loading && (
+              <div className="absolute inset-x-0 top-0 bg-destructive/10 px-3 py-1 text-[11px] text-destructive">
+                {chartError}
+              </div>
+            )}
           </div>
           <EngineASidePanel signal={chartCandidate} />
         </div>

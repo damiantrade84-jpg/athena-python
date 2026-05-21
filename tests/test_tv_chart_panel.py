@@ -80,33 +80,64 @@ def _read(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
 
-def test_tv_chart_panel_renders_existing_component_with_advanced_chart_embed():
+def test_tv_chart_panel_renders_with_lightweight_charts():
+    """The panel renders candles via the in-house lightweight-charts pipeline.
+
+    The previous TradingView iframe embed widget capped studies at ~3 for
+    anonymous viewers, so 4+ enabled indicators were silently dropped.
+    This panel must render every enabled indicator deterministically.
+    """
     source = _read(TV_PANEL)
 
     assert "export default function TVChartPanel" in source
-    assert "embed-widget-advanced-chart.js" in source
-    assert "buildTradingViewWidgetHtml" in source
-    assert "srcDoc={widgetHtml}" in source
+    assert "from 'lightweight-charts'" in source
+    assert "createChart" in source
+    assert "CandlestickSeries" in source
+    assert "LineSeries" in source
     assert "EngineASidePanel" in source
+    # The TradingView iframe-embed path must be fully removed — no silent fallback.
+    assert "embed-widget-advanced-chart.js" not in source
+    assert "srcDoc=" not in source
+    assert "MAExp@tv-basicstudies" not in source
 
 
-def test_indicator_toggles_update_documented_studies_config():
+def test_indicator_toggles_wire_in_house_series_per_pane():
+    """Every indicator toggle maps to an in-house series in the correct pane.
+
+    Price pane (0): candles + EMA20/50/200 + DEMA200.
+    Sub-pane (RSI14): created only when rsi14 is on; same for ATR14.
+    """
     source = _read(TV_PANEL)
 
-    assert "EMA@tv-basicstudies(20)" not in source
-    assert "EMA@tv-basicstudies(50)" not in source
-    assert "EMA@tv-basicstudies(200)" not in source
-    assert "MAExp@tv-basicstudies" in source
-    assert "DoubleEMA@tv-basicstudies" in source
-    assert "ATR@tv-basicstudies" in source
-    assert "RSI@tv-basicstudies" in source
-    assert "inputs: { length: 20 }" in source
-    assert "inputs: { length: 50 }" in source
-    assert "inputs: { length: 200 }" in source
-    assert "studies.push(TV_STUDY_IDS.rsi);" in source
-    assert "studies.push(TV_STUDY_IDS.atr);" in source
-    assert "studies.push(TV_STUDY_IDS.rsi);" in source.split("studies.push(TV_STUDY_IDS.atr);")[0]
-    assert "inputs: { length: 14 }" not in source
+    # Indicator math is implemented in-house — no TV study IDs.
+    assert "export function ema(" in source
+    assert "export function dema(" in source
+    assert "export function rsi(" in source
+    assert "export function atr(" in source
+
+    # Each indicator has its own series ref and is pushed into pane 0 or its sub-pane.
+    for ref in (
+        "ema20SeriesRef",
+        "ema50SeriesRef",
+        "ema200SeriesRef",
+        "dema200SeriesRef",
+        "rsiSeriesRef",
+        "atrSeriesRef",
+    ):
+        assert ref in source, f"missing series ref: {ref}"
+
+    # Sub-panes are created only when their study is on (otherwise a pane sits empty).
+    assert "if (rsi14) {" in source
+    assert "if (atr14) {" in source
+    assert "chart.addPane()" in source
+
+    # Backend candle fetch is parameterized by symbol + timeframe.
+    assert "/api/candles?symbol=" in source
+    assert "TF_BACKEND_MAP" in source
+
+    # The indicator-preset selector is in place (replaces the lone layout button).
+    assert "PRESET_OPTIONS" in source
+    assert "Indicator preset" in source
 
 
 def test_engine_a_review_layout_enables_required_lean_indicators():
