@@ -193,6 +193,860 @@ def _fetch_eodhd_live_prices(pairs: list) -> None:
 _binance_ws_last_recv_ts: float = 0.0
 
 
+_BINANCE_WS_PRICE_STALE_SEC_DEFAULT = 10.0
+
+
+def _epoch_seconds(value) -> float | None:
+    try:
+        ts = float(value)
+    except (TypeError, ValueError):
+        return None
+    if ts <= 0:
+        return None
+    return ts / 1000.0 if ts > 1e12 else ts
+
+
+def _age_seconds(now_ts: float, value) -> float | None:
+    ts = _epoch_seconds(value)
+    if ts is None:
+        return None
+    return max(0.0, now_ts - ts)
+
+
+def _binance_ws_price_stale_sec() -> float:
+    try:
+        cfg = getattr(rt(), "CONFIG", {}) or {}
+    except RuntimeError:
+        cfg = {}
+    raw = cfg.get("BINANCE_WS_PRICE_STALE_SEC", _BINANCE_WS_PRICE_STALE_SEC_DEFAULT)
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        value = _BINANCE_WS_PRICE_STALE_SEC_DEFAULT
+    return value if value > 0 else _BINANCE_WS_PRICE_STALE_SEC_DEFAULT
+
+
+def _normalize_binance_symbol(value) -> str:
+    return (
+        str(value or "")
+        .strip()
+        .upper()
+        .replace("/", "")
+        .replace(" ", "")
+        .replace("_", "")
+        .replace("-", "")
+        .replace(":", "")
+    )
+
+
+def _binance_crypto_symbol_map(pairs=None) -> dict[str, str]:
+    if pairs is None:
+        try:
+            pairs = rt().CRYPTO_PAIRS
+        except RuntimeError:
+            pairs = []
+    out: dict[str, str] = {}
+    for pair in pairs or []:
+        if not isinstance(pair, dict) or not pair.get("enabled", True):
+            continue
+        display = str(pair.get("display") or "").strip()
+        if not display:
+            continue
+        for raw in (pair.get("symbol"), display):
+            norm = _normalize_binance_symbol(raw)
+            if norm:
+                out[norm] = display
+    return out
+
+
+def _decorate_binance_price_diagnostics(entry: dict, now_ts: float) -> dict:
+    out = dict(entry)
+    ws_age = _age_seconds(now_ts, out.get("last_ws_ts"))
+    rest_age = _age_seconds(now_ts, out.get("last_rest_ts"))
+    out["ws_age_sec"] = round(ws_age, 3) if ws_age is not None else None
+    out["rest_age_sec"] = round(rest_age, 3) if rest_age is not None else None
+    out.setdefault("preferred_source", out.get("source"))
+    return out
+
+
+def _merge_binance_ws_price(existing, price: float, bid, ask, now_ts: float) -> dict:
+    old = existing if isinstance(existing, dict) else {}
+    entry = {
+        "price": float(price),
+        "ts": now_ts,
+        "source": "binance_ws",
+        "last_ws_ts": now_ts,
+        "ws_price": float(price),
+        "last_rest_ts": old.get("last_rest_ts"),
+        "rest_price": old.get("rest_price"),
+        "preferred_source": "binance_ws",
+        "overwrite_reason": "ws_update_preferred",
+    }
+    if bid is not None and float(bid) > 0:
+        entry["bid"] = float(bid)
+    if ask is not None and float(ask) > 0:
+        entry["ask"] = float(ask)
+    return _decorate_binance_price_diagnostics(entry, now_ts)
+
+
+def _merge_binance_rest_price(
+    existing,
+    price: float,
+    now_ts: float,
+    ws_stale_sec: float | None = None,
+) -> dict:
+    old = existing if isinstance(existing, dict) else {}
+    ws_stale_sec = ws_stale_sec or _binance_ws_price_stale_sec()
+    last_ws_ts = old.get("last_ws_ts")
+    if last_ws_ts is None and old.get("source") == "binance_ws":
+        last_ws_ts = old.get("ts")
+    ws_age = _age_seconds(now_ts, last_ws_ts)
+    ws_price = old.get("ws_price")
+    if ws_price is None and old.get("source") == "binance_ws":
+        ws_price = old.get("price")
+
+    if ws_age is not None and ws_age <= ws_stale_sec and ws_price is not None:
+        entry = dict(old)
+        entry.update(
+            {
+                "price": float(ws_price),
+                "source": "binance_ws",
+                "last_ws_ts": last_ws_ts,
+                "ws_price": float(ws_price),
+                "last_rest_ts": now_ts,
+                "rest_price": float(price),
+                "preferred_source": "binance_ws",
+                "overwrite_reason": "fresh_ws_preferred_over_rest",
+            }
+        )
+        return _decorate_binance_price_diagnostics(entry, now_ts)
+
+    reason = "ws_missing"
+    if ws_age is not None:
+        reason = "ws_stale"
+    entry = {
+        "price": float(price),
+        "ts": now_ts,
+        "source": "binance_rest",
+        "last_ws_ts": last_ws_ts,
+        "ws_price": ws_price,
+        "last_rest_ts": now_ts,
+        "rest_price": float(price),
+        "preferred_source": "binance_rest",
+        "overwrite_reason": reason,
+    }
+    return _decorate_binance_price_diagnostics(entry, now_ts)
+
+
+def _record_binance_ws_price(symbol, price, bid=None, ask=None, *, now_ts=None, pairs=None) -> bool:
+    display = _binance_crypto_symbol_map(pairs).get(_normalize_binance_symbol(symbol))
+    if not display:
+        return False
+    try:
+        price_f = float(price)
+    except (TypeError, ValueError):
+        return False
+    if price_f <= 0:
+        return False
+    now = float(now_ts) if now_ts is not None else time.time()
+    with _live_prices_lock:
+        _live_prices[display] = _merge_binance_ws_price(
+            _live_prices.get(display), price_f, bid, ask, now
+        )
+    return True
+
+
+def _record_binance_rest_price(
+    symbol,
+    price,
+    *,
+    now_ts=None,
+    pairs=None,
+    ws_stale_sec: float | None = None,
+) -> bool:
+    display = _binance_crypto_symbol_map(pairs).get(_normalize_binance_symbol(symbol))
+    if not display:
+        return False
+    try:
+        price_f = float(price)
+    except (TypeError, ValueError):
+        return False
+    if price_f <= 0:
+        return False
+    now = float(now_ts) if now_ts is not None else time.time()
+    with _live_prices_lock:
+        _live_prices[display] = _merge_binance_rest_price(
+            _live_prices.get(display), price_f, now, ws_stale_sec=ws_stale_sec
+        )
+    return True
+
+
+_BYBIT_WS_PRICE_STALE_SEC_DEFAULT = 10.0
+_BYBIT_SYMBOL_MAP = {
+    "MATICUSDT": "POLUSDT",
+}
+_bybit_ws_last_recv_ts: float = 0.0
+_bybit_live_price_ws: "BybitLivePriceWS | None" = None
+
+
+def _bybit_config() -> dict:
+    try:
+        return getattr(rt(), "CONFIG", {}) or {}
+    except RuntimeError:
+        return {}
+
+
+def _crypto_execution_provider(cfg: dict | None = None) -> str:
+    cfg = cfg if cfg is not None else _bybit_config()
+    explicit = cfg.get("CRYPTO_EXECUTION_PROVIDER")
+    if explicit:
+        return str(explicit).strip().lower()
+    by_class = cfg.get("EXECUTION_PROVIDER_BY_ASSET")
+    if isinstance(by_class, dict) and by_class.get("crypto"):
+        return str(by_class.get("crypto")).strip().lower()
+    return "bybit"
+
+
+def _bybit_ws_enabled(cfg: dict | None = None) -> bool:
+    cfg = cfg if cfg is not None else _bybit_config()
+    return bool(cfg.get("BYBIT_WS_ENABLED", True))
+
+
+def _bybit_rest_fallback_enabled(cfg: dict | None = None) -> bool:
+    cfg = cfg if cfg is not None else _bybit_config()
+    return bool(cfg.get("BYBIT_REST_FALLBACK_ENABLED", True))
+
+
+def _bybit_ws_price_stale_sec(cfg: dict | None = None) -> float:
+    cfg = cfg if cfg is not None else _bybit_config()
+    raw = cfg.get("BYBIT_WS_STALE_AFTER_SECONDS", _BYBIT_WS_PRICE_STALE_SEC_DEFAULT)
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        value = _BYBIT_WS_PRICE_STALE_SEC_DEFAULT
+    return value if value > 0 else _BYBIT_WS_PRICE_STALE_SEC_DEFAULT
+
+
+def _normalize_bybit_symbol(value) -> str:
+    return _normalize_binance_symbol(value)
+
+
+def _bybit_stream_symbol(bybit_symbol: str) -> str:
+    sym = _normalize_bybit_symbol(bybit_symbol)
+    return _BYBIT_SYMBOL_MAP.get(sym, sym)
+
+
+def _bybit_category_for_pair(pair: dict, cfg: dict | None = None) -> str:
+    cfg = cfg if cfg is not None else _bybit_config()
+    return str(
+        pair.get("bybit_category") or cfg.get("CRYPTO_CHART_BYBIT_CATEGORY") or "linear"
+    ).strip().lower()
+
+
+def _bybit_ws_public_url(category: str) -> str:
+    cat = str(category or "linear").strip().lower()
+    if cat not in {"linear", "spot", "inverse"}:
+        cat = "linear"
+    return f"wss://stream.bybit.com/v5/public/{cat}"
+
+
+def _bybit_crypto_symbol_map(pairs=None, *, cfg: dict | None = None) -> dict[str, str]:
+    if pairs is None:
+        try:
+            pairs = rt().CRYPTO_PAIRS
+        except RuntimeError:
+            pairs = []
+    cfg = cfg if cfg is not None else _bybit_config()
+    if _crypto_execution_provider(cfg) != "bybit":
+        return {}
+    out: dict[str, str] = {}
+    for pair in pairs or []:
+        if not isinstance(pair, dict) or not pair.get("enabled", True):
+            continue
+        if str(pair.get("type") or "").lower() != "crypto":
+            continue
+        display = str(pair.get("display") or "").strip()
+        if not display:
+            continue
+        for raw in (pair.get("bybit_symbol"), pair.get("symbol"), display):
+            norm = _normalize_bybit_symbol(raw)
+            if norm:
+                out[norm] = display
+    return out
+
+
+def _decorate_bybit_price_diagnostics(entry: dict, now_ts: float) -> dict:
+    out = dict(entry)
+    ws_age = _age_seconds(now_ts, out.get("last_ws_ts"))
+    rest_age = _age_seconds(now_ts, out.get("last_rest_ts"))
+    out["ws_age_sec"] = round(ws_age, 3) if ws_age is not None else None
+    out["rest_age_sec"] = round(rest_age, 3) if rest_age is not None else None
+    out.setdefault("preferred_source", out.get("source"))
+    return out
+
+
+def _merge_bybit_ws_price(
+    existing,
+    price: float,
+    bid,
+    ask,
+    now_ts: float,
+    *,
+    bybit_symbol: str,
+    category: str,
+) -> dict:
+    old = existing if isinstance(existing, dict) else {}
+    entry = {
+        "price": float(price),
+        "ts": now_ts,
+        "source": "bybit_ws",
+        "last_ws_ts": now_ts,
+        "ws_price": float(price),
+        "last_rest_ts": old.get("last_rest_ts"),
+        "rest_price": old.get("rest_price"),
+        "preferred_source": "bybit_ws",
+        "overwrite_reason": "ws_update_preferred",
+        "bybit_symbol": _normalize_bybit_symbol(bybit_symbol),
+        "bybit_category": str(category or "linear").lower(),
+    }
+    if bid is not None and float(bid) > 0:
+        entry["bid"] = float(bid)
+    if ask is not None and float(ask) > 0:
+        entry["ask"] = float(ask)
+    return _decorate_bybit_price_diagnostics(entry, now_ts)
+
+
+def _merge_bybit_rest_price(
+    existing,
+    price: float,
+    now_ts: float,
+    *,
+    bybit_symbol: str,
+    category: str,
+    ws_stale_sec: float | None = None,
+) -> dict:
+    old = existing if isinstance(existing, dict) else {}
+    ws_stale_sec = ws_stale_sec or _bybit_ws_price_stale_sec()
+    last_ws_ts = old.get("last_ws_ts")
+    if last_ws_ts is None and old.get("source") == "bybit_ws":
+        last_ws_ts = old.get("ts")
+    ws_age = _age_seconds(now_ts, last_ws_ts)
+    ws_price = old.get("ws_price")
+    if ws_price is None and old.get("source") == "bybit_ws":
+        ws_price = old.get("price")
+
+    if ws_age is not None and ws_age <= ws_stale_sec and ws_price is not None:
+        entry = dict(old)
+        entry.update(
+            {
+                "price": float(ws_price),
+                "source": "bybit_ws",
+                "last_ws_ts": last_ws_ts,
+                "ws_price": float(ws_price),
+                "last_rest_ts": now_ts,
+                "rest_price": float(price),
+                "preferred_source": "bybit_ws",
+                "overwrite_reason": "fresh_ws_preferred_over_rest",
+                "bybit_symbol": _normalize_bybit_symbol(bybit_symbol),
+                "bybit_category": str(category or "linear").lower(),
+            }
+        )
+        return _decorate_bybit_price_diagnostics(entry, now_ts)
+
+    reason = "ws_missing"
+    if ws_age is not None:
+        reason = "ws_stale"
+    entry = {
+        "price": float(price),
+        "ts": now_ts,
+        "source": "bybit_rest",
+        "last_ws_ts": last_ws_ts,
+        "ws_price": ws_price,
+        "last_rest_ts": now_ts,
+        "rest_price": float(price),
+        "preferred_source": "bybit_rest",
+        "overwrite_reason": reason,
+        "bybit_symbol": _normalize_bybit_symbol(bybit_symbol),
+        "bybit_category": str(category or "linear").lower(),
+    }
+    return _decorate_bybit_price_diagnostics(entry, now_ts)
+
+
+def _record_bybit_ws_price(
+    bybit_symbol,
+    price,
+    bid=None,
+    ask=None,
+    *,
+    now_ts=None,
+    pairs=None,
+    category: str = "linear",
+) -> bool:
+    display = _bybit_crypto_symbol_map(pairs).get(_normalize_bybit_symbol(bybit_symbol))
+    if not display:
+        return False
+    try:
+        price_f = float(price)
+    except (TypeError, ValueError):
+        return False
+    if price_f <= 0:
+        return False
+    now = float(now_ts) if now_ts is not None else time.time()
+    with _live_prices_lock:
+        _live_prices[display] = _merge_bybit_ws_price(
+            _live_prices.get(display),
+            price_f,
+            bid,
+            ask,
+            now,
+            bybit_symbol=bybit_symbol,
+            category=category,
+        )
+    return True
+
+
+def _record_bybit_rest_price(
+    bybit_symbol,
+    price,
+    *,
+    now_ts=None,
+    pairs=None,
+    category: str = "linear",
+    ws_stale_sec: float | None = None,
+) -> bool:
+    display = _bybit_crypto_symbol_map(pairs).get(_normalize_bybit_symbol(bybit_symbol))
+    if not display:
+        return False
+    try:
+        price_f = float(price)
+    except (TypeError, ValueError):
+        return False
+    if price_f <= 0:
+        return False
+    now = float(now_ts) if now_ts is not None else time.time()
+    with _live_prices_lock:
+        _live_prices[display] = _merge_bybit_rest_price(
+            _live_prices.get(display),
+            price_f,
+            now,
+            bybit_symbol=bybit_symbol,
+            category=category,
+            ws_stale_sec=ws_stale_sec,
+        )
+    return True
+
+
+def _bybit_ws_runtime_state() -> dict:
+    ws = _bybit_live_price_ws
+    now = time.time()
+    last_recv = None
+    if ws is not None and ws.last_recv_ts:
+        last_recv = float(ws.last_recv_ts)
+    elif _bybit_ws_last_recv_ts > 0:
+        last_recv = float(_bybit_ws_last_recv_ts)
+    thread_alive = bool(ws and ws._thread and ws._thread.is_alive())
+    recv_age = _age_seconds(now, last_recv) if last_recv else None
+    stale_sec = _bybit_ws_price_stale_sec()
+    websocket_active = bool(
+        _bybit_ws_enabled()
+        and thread_alive
+        and last_recv is not None
+        and recv_age is not None
+        and recv_age <= stale_sec
+    )
+    websocket_stale = bool(
+        _bybit_ws_enabled()
+        and (last_recv is None or recv_age is None or recv_age > stale_sec)
+    )
+    return {
+        "websocket_active": websocket_active,
+        "websocket_stale": websocket_stale,
+        "websocket_last_message_ts": last_recv,
+        "ws_thread_alive": thread_alive,
+        "ws_last_error": getattr(ws, "last_error", None) if ws else None,
+    }
+
+
+def get_bybit_live_tick(
+    display: str,
+    *,
+    bybit_symbol: str,
+    category: str = "linear",
+    pairs=None,
+) -> dict:
+    """Return WS-first live tick diagnostics for chart/API (no REST fetch)."""
+    cfg = _bybit_config()
+    preference = str(cfg.get("CRYPTO_LIVE_TICK_PROVIDER_PREFERENCE") or "bybit_ws").strip().lower()
+    ws_state = _bybit_ws_runtime_state()
+    now = time.time()
+    stale_sec = _bybit_ws_price_stale_sec(cfg)
+
+    with _live_prices_lock:
+        entry = _live_prices.get(display)
+
+    if not _bybit_ws_enabled(cfg) or preference != "bybit_ws":
+        reason = "ws_disabled" if not _bybit_ws_enabled(cfg) else "ws_preference_not_bybit_ws"
+        return {
+            "tick": None,
+            "fallback_reason": reason,
+            **ws_state,
+        }
+
+    if not isinstance(entry, dict):
+        return {
+            "tick": None,
+            "fallback_reason": "ws_missing",
+            **ws_state,
+        }
+
+    source = str(entry.get("source") or "")
+    last_ws_ts = entry.get("last_ws_ts")
+    if last_ws_ts is None and source == "bybit_ws":
+        last_ws_ts = entry.get("ts")
+    ws_age = _age_seconds(now, last_ws_ts)
+    price = entry.get("ws_price")
+    if price is None and source == "bybit_ws":
+        price = entry.get("price")
+
+    if source != "bybit_ws" or price is None or ws_age is None or ws_age > stale_sec:
+        reason = "ws_missing"
+        if source == "bybit_ws" and ws_age is not None and ws_age > stale_sec:
+            reason = "ws_stale"
+        elif source == "bybit_rest":
+            reason = "ws_stale" if entry.get("overwrite_reason") == "ws_stale" else "ws_missing"
+        return {
+            "tick": None,
+            "fallback_reason": reason,
+            **ws_state,
+        }
+
+    ts = _epoch_seconds(last_ws_ts) or now
+    tick = {
+        "symbol": _normalize_bybit_symbol(bybit_symbol),
+        "price": float(price),
+        "bid": entry.get("bid"),
+        "ask": entry.get("ask"),
+        "timestamp": ts,
+        "ts": ts,
+        "provider": "bybit_ws",
+        "source": "bybit_ws",
+        "category": str(entry.get("bybit_category") or category).lower(),
+        "age_seconds": round(ws_age, 3),
+        "bybit_symbol": _normalize_bybit_symbol(bybit_symbol),
+        "bybit_category": str(entry.get("bybit_category") or category).lower(),
+    }
+    return {
+        "tick": tick,
+        "fallback_reason": None,
+        "fallback_used": False,
+        **ws_state,
+    }
+
+
+def _parse_bybit_ticker_payload(data: dict, recv_ts: float) -> tuple[str, float, float | None, float | None] | None:
+    if not isinstance(data, dict):
+        return None
+    symbol = _normalize_bybit_symbol(data.get("symbol") or "")
+    if not symbol:
+        return None
+    price_raw = data.get("lastPrice") or data.get("markPrice") or data.get("indexPrice")
+    try:
+        price = float(price_raw)
+    except (TypeError, ValueError):
+        return None
+    if price <= 0:
+        return None
+    bid = ask = None
+    bid_raw = data.get("bid1Price") or data.get("bid")
+    ask_raw = data.get("ask1Price") or data.get("ask")
+    try:
+        if bid_raw not in (None, ""):
+            bid = float(bid_raw)
+    except (TypeError, ValueError):
+        bid = None
+    try:
+        if ask_raw not in (None, ""):
+            ask = float(ask_raw)
+    except (TypeError, ValueError):
+        ask = None
+    return symbol, price, bid, ask
+
+
+def _run_bybit_price_poller(poll_interval: float = 3.0):
+    """REST poll Bybit tickers for bybit-execution crypto pairs (WS fallback only)."""
+    from data_feeds import _fetch_bybit_ticker
+
+    log.info("[BYBIT-PRICE-POLL] Started — interval=%.1fs", poll_interval)
+    while True:
+        try:
+            if not _bybit_rest_fallback_enabled():
+                time.sleep(poll_interval)
+                continue
+            try:
+                _cp = list(rt().CRYPTO_PAIRS)
+            except RuntimeError:
+                _cp = []
+            symbol_map = _bybit_crypto_symbol_map(_cp)
+            if not symbol_map:
+                time.sleep(poll_interval)
+                continue
+
+            cfg = _bybit_config()
+            now_ts = time.time()
+            updated = 0
+            for bybit_symbol in sorted(symbol_map):
+                pair = next(
+                    (
+                        p
+                        for p in _cp
+                        if _normalize_bybit_symbol(
+                            p.get("bybit_symbol") or p.get("symbol") or p.get("display")
+                        )
+                        == bybit_symbol
+                    ),
+                    {},
+                )
+                category = _bybit_category_for_pair(pair, cfg)
+                raw = _fetch_bybit_ticker(bybit_symbol, category=category)
+                if not raw or not raw.get("price"):
+                    continue
+                if _record_bybit_rest_price(
+                    bybit_symbol,
+                    raw.get("price"),
+                    now_ts=now_ts,
+                    pairs=_cp,
+                    category=category,
+                    ws_stale_sec=max(_bybit_ws_price_stale_sec(cfg), poll_interval * 3.0),
+                ):
+                    updated += 1
+            if updated == 0:
+                log.debug("[BYBIT-PRICE-POLL] no bybit-execution matches updated")
+        except Exception as e:
+            log.warning("[BYBIT-PRICE-POLL] cycle error: %s", e)
+        time.sleep(poll_interval)
+
+
+class BybitLivePriceWS:
+    """Bybit public linear/spot/inverse ticker WebSocket for live crypto execution prices."""
+
+    def __init__(self):
+        self._running = True
+        self._thread = None
+        self._reconnect_attempt = 0
+        self.last_connect_ts: float | None = None
+        self.last_recv_ts: float | None = None
+        self.last_error: str | None = None
+        self.match_symbols: list[str] = []
+
+    def _next_reconnect_delay(self) -> float:
+        base = 2.0
+        cap = 60.0
+        exp = min(cap, base * (2 ** min(self._reconnect_attempt, 6)))
+        jitter = random.uniform(0.0, min(3.0, exp * 0.2))
+        return exp + jitter
+
+    def _subscriptions_by_category(self, pairs: list) -> dict[str, list[str]]:
+        cfg = _bybit_config()
+        if _crypto_execution_provider(cfg) != "bybit" or not _bybit_ws_enabled(cfg):
+            return {}
+        out: dict[str, list[str]] = {}
+        for pair in pairs or []:
+            if not isinstance(pair, dict) or not pair.get("enabled", True):
+                continue
+            if str(pair.get("type") or "").lower() != "crypto":
+                continue
+            sym = _normalize_bybit_symbol(
+                pair.get("bybit_symbol") or pair.get("symbol") or pair.get("display")
+            )
+            if not sym:
+                continue
+            stream_sym = _bybit_stream_symbol(sym)
+            cat = _bybit_category_for_pair(pair, cfg)
+            out.setdefault(cat, [])
+            if stream_sym not in out[cat]:
+                out[cat].append(stream_sym)
+        return out
+
+    def _connect_and_stream_category(self, category: str, stream_symbols: list[str]):
+        import websockets
+
+        url = _bybit_ws_public_url(category)
+        topics = [f"tickers.{s}" for s in stream_symbols]
+
+        while self._running:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                loop.run_until_complete(
+                    self._stream_category(url, category, topics, stream_symbols)
+                )
+            except Exception as e:
+                self.last_error = f"connection_error:{e}"
+                log.error("[BYBIT-WS] %s connection error: %s", category, e)
+                if self._running:
+                    self._reconnect_attempt += 1
+                    delay = self._next_reconnect_delay()
+                    log.warning(
+                        "[BYBIT-WS] %s reconnect attempt=%s delay=%.1fs",
+                        category,
+                        self._reconnect_attempt,
+                        delay,
+                    )
+                    time.sleep(delay)
+            finally:
+                try:
+                    loop.close()
+                except Exception:
+                    pass
+
+    async def _stream_category(
+        self,
+        url: str,
+        category: str,
+        topics: list[str],
+        stream_symbols: list[str],
+    ):
+        import websockets
+
+        try:
+            _cp = list(rt().CRYPTO_PAIRS)
+        except RuntimeError:
+            _cp = []
+
+        async with websockets.connect(
+            url,
+            ping_interval=None,
+            ping_timeout=None,
+            open_timeout=45,
+            close_timeout=10,
+            ssl=default_ssl_context(),
+        ) as ws:
+            self._reconnect_attempt = 0
+            self.last_connect_ts = time.time()
+            self.last_error = None
+            subscribe_msg = {
+                "req_id": str(int(time.time() * 1000)),
+                "op": "subscribe",
+                "args": topics,
+            }
+            await ws.send(json.dumps(subscribe_msg))
+            log.info(
+                "[BYBIT-WS] Connected %s — subscribed %d tickers (%s)",
+                url,
+                len(topics),
+                category,
+            )
+            _last_ping = time.time()
+            reverse_map = {
+                _bybit_stream_symbol(s): _normalize_bybit_symbol(s) for s in stream_symbols
+            }
+            while self._running:
+                try:
+                    raw = await asyncio.wait_for(ws.recv(), timeout=60)
+                except asyncio.TimeoutError:
+                    if time.time() - _last_ping > 40:
+                        try:
+                            await ws.send(json.dumps({"op": "ping"}))
+                            _last_ping = time.time()
+                            continue
+                        except Exception:
+                            pass
+                    self.last_error = "receive_timeout"
+                    log.warning("[BYBIT-WS] %s receive timeout; reconnecting", category)
+                    break
+                if not raw:
+                    continue
+                if isinstance(raw, (bytes, bytearray)):
+                    raw = raw.decode("utf-8", errors="replace")
+                try:
+                    msg = json.loads(raw)
+                except json.JSONDecodeError:
+                    self.last_error = "json_decode"
+                    break
+                if isinstance(msg, dict) and msg.get("op") == "ping":
+                    await ws.send(json.dumps({"op": "pong"}))
+                    _last_ping = time.time()
+                    continue
+                recv_ts = time.time()
+                global _bybit_ws_last_recv_ts
+                _bybit_ws_last_recv_ts = recv_ts
+                self.last_recv_ts = recv_ts
+
+                topic = str(msg.get("topic") or "")
+                if not topic.startswith("tickers."):
+                    continue
+                data = msg.get("data")
+                if isinstance(data, list) and data:
+                    data = data[0]
+                parsed = _parse_bybit_ticker_payload(data if isinstance(data, dict) else {}, recv_ts)
+                if not parsed:
+                    continue
+                symbol, price, bid, ask = parsed
+                cache_symbol = reverse_map.get(symbol, symbol)
+                _record_bybit_ws_price(
+                    cache_symbol,
+                    price,
+                    bid=bid,
+                    ask=ask,
+                    now_ts=recv_ts,
+                    pairs=_cp,
+                    category=category,
+                )
+
+    def _connect_and_stream(self):
+        try:
+            _cp = list(rt().CRYPTO_PAIRS)
+        except RuntimeError:
+            _cp = []
+        subs = self._subscriptions_by_category(_cp)
+        self.match_symbols = sorted(
+            {_bybit_stream_symbol(s) for syms in subs.values() for s in syms}
+        )
+        if not subs:
+            log.info("[BYBIT-WS] No bybit-execution crypto pairs — feed idle")
+            while self._running:
+                time.sleep(5.0)
+            return
+
+        threads: list[threading.Thread] = []
+        for category, stream_symbols in subs.items():
+            if not stream_symbols:
+                continue
+            t = threading.Thread(
+                target=self._connect_and_stream_category,
+                args=(category, stream_symbols),
+                daemon=True,
+                name=f"BybitLivePriceWS-{category}",
+            )
+            t.start()
+            threads.append(t)
+        for t in threads:
+            while self._running and t.is_alive():
+                t.join(timeout=1.0)
+
+    def start(self):
+        global _bybit_live_price_ws
+        if not _bybit_ws_enabled():
+            log.info("[BYBIT-WS] Disabled via BYBIT_WS_ENABLED")
+            return
+        _bybit_live_price_ws = self
+        if self._thread is None or not self._thread.is_alive():
+            self._running = True
+            self._thread = threading.Thread(
+                target=self._connect_and_stream,
+                daemon=True,
+                name="BybitLivePriceWS",
+            )
+            self._thread.start()
+            log.info("[BYBIT-WS] Started Bybit live price feed thread")
+
+    def stop(self):
+        self._running = False
+        if self._thread and self._thread.is_alive():
+            self._thread.join(timeout=5)
+        log.info("[BYBIT-WS] Stopped Bybit live price feed thread")
+
+
 def _run_mt5_tick_poller(poll_interval: float = 1.5):
     """Background daemon: poll MT5 symbol_info_tick for every enabled MT5 pair
     and write bid/ask/mid into _live_prices. Forex/commodity/index/stock prices
@@ -281,8 +1135,8 @@ def _run_binance_price_poller(poll_interval: float = 3.0):
     """Background daemon: REST poll Binance Futures all-tickers price endpoint
     and write crypto pair prices into _live_prices. Acts as a fallback when
     BinanceLivePriceWS (!ticker@arr) is silently failing — the WS still runs
-    in parallel; whichever updates last wins, which is fine since both write
-    the same shape.
+    in parallel. Fresh WS bid/ask/source remains authoritative over REST last
+    prices; REST is preferred only when WS is missing or stale.
     """
     url = "https://fapi.binance.com/fapi/v1/ticker/price"
     log.info("[BINANCE-PRICE-POLL] Started — interval=%.1fs", poll_interval)
@@ -292,11 +1146,7 @@ def _run_binance_price_poller(poll_interval: float = 3.0):
                 _cp = list(rt().CRYPTO_PAIRS)
             except RuntimeError:
                 _cp = []
-            crypto_symbols = {
-                str(p.get("symbol", "")).replace("/", "").upper(): p.get("display")
-                for p in _cp
-                if p.get("enabled", True) and p.get("display")
-            }
+            crypto_symbols = _binance_crypto_symbol_map(_cp)
             if not crypto_symbols:
                 time.sleep(poll_interval)
                 continue
@@ -323,23 +1173,23 @@ def _run_binance_price_poller(poll_interval: float = 3.0):
             now_ts = time.time()
             updated = 0
             for item in items:
-                sym = str(item.get("symbol", "")).upper()
+                sym = _normalize_binance_symbol(item.get("symbol", ""))
                 if sym not in crypto_symbols:
                     continue
-                display = crypto_symbols[sym]
                 try:
                     price = float(item.get("price", 0))
                 except (TypeError, ValueError):
                     continue
                 if price <= 0:
                     continue
-                with _live_prices_lock:
-                    _live_prices[display] = {
-                        "price": price,
-                        "ts": now_ts,
-                        "source": "binance_rest",
-                    }
-                updated += 1
+                if _record_binance_rest_price(
+                    sym,
+                    price,
+                    now_ts=now_ts,
+                    pairs=_cp,
+                    ws_stale_sec=max(_binance_ws_price_stale_sec(), poll_interval * 3.0),
+                ):
+                    updated += 1
             if updated == 0:
                 log.debug("[BINANCE-PRICE-POLL] no crypto matches in response")
         except Exception as e:
@@ -376,6 +1226,10 @@ class BinanceLivePriceWS:
         self._running = True
         self._thread = None
         self._reconnect_attempt = 0
+        self.last_connect_ts: float | None = None
+        self.last_recv_ts: float | None = None
+        self.last_error: str | None = None
+        self.match_symbols: list[str] = []
 
     def _next_reconnect_delay(self) -> float:
         base = 2.0
@@ -397,11 +1251,8 @@ class BinanceLivePriceWS:
             _cp = rt().CRYPTO_PAIRS
         except RuntimeError:
             _cp = []
-        crypto_symbols = {
-            pair["symbol"].replace("/", ""): pair["display"]
-            for pair in _cp
-            if pair.get("enabled", True)
-        }
+        crypto_symbols = _binance_crypto_symbol_map(_cp)
+        self.match_symbols = sorted(crypto_symbols.keys())
 
         while self._running:
             try:
@@ -420,6 +1271,8 @@ class BinanceLivePriceWS:
                         ssl=default_ssl_context(),
                     ) as ws:
                         self._reconnect_attempt = 0
+                        self.last_connect_ts = time.time()
+                        self.last_error = None
                         log.info(
                             "[BINANCE-WS] Connected to fstream.binance.com !ticker@arr"
                         )
@@ -427,6 +1280,10 @@ class BinanceLivePriceWS:
                         while self._running:
                             try:
                                 data = await asyncio.wait_for(ws.recv(), timeout=45)
+                                recv_ts = time.time()
+                                global _binance_ws_last_recv_ts
+                                _binance_ws_last_recv_ts = recv_ts
+                                self.last_recv_ts = recv_ts
                                 
                                 # Proactive heartbeat
                                 if time.time() - _last_ping > 20:
@@ -439,9 +1296,8 @@ class BinanceLivePriceWS:
                                 tickers = json.loads(data)
 
                                 for ticker in tickers:
-                                    symbol = ticker.get("s", "")
+                                    symbol = _normalize_binance_symbol(ticker.get("s", ""))
                                     if symbol in crypto_symbols:
-                                        display_name = crypto_symbols[symbol]
                                         try:
                                             price = float(ticker.get("c", 0) or 0)
                                             bid = float(ticker.get("b", 0) or 0)
@@ -450,17 +1306,14 @@ class BinanceLivePriceWS:
                                             continue
 
                                         if price > 0:
-                                            entry = {
-                                                "price": price,
-                                                "ts": time.time(),
-                                                "source": "binance_ws",
-                                            }
-                                            if bid > 0:
-                                                entry["bid"] = bid
-                                            if ask > 0:
-                                                entry["ask"] = ask
-                                            with _live_prices_lock:
-                                                _live_prices[display_name] = entry
+                                            _record_binance_ws_price(
+                                                symbol,
+                                                price,
+                                                bid=bid,
+                                                ask=ask,
+                                                now_ts=recv_ts,
+                                                pairs=_cp,
+                                            )
 
                             except asyncio.TimeoutError:
                                 try:
@@ -468,27 +1321,32 @@ class BinanceLivePriceWS:
                                     _last_ping = time.time()
                                     continue
                                 except Exception:
+                                    self.last_error = "receive_timeout_ping_failed"
                                     log.warning(
                                         "[BINANCE-WS] Receive timeout + ping failed, reconnecting..."
                                     )
                                     break
                             except json.JSONDecodeError as e:
+                                self.last_error = f"json_decode:{e}"
                                 log.warning(
                                     f"[BINANCE-WS] Non-JSON payload, reconnecting: {e}"
                                 )
                                 break
                             except websockets.exceptions.ConnectionClosed as e:
+                                self.last_error = f"connection_closed:{e}"
                                 log.warning(
                                     f"[BINANCE-WS] Connection closed ({e}), reconnecting..."
                                 )
                                 break
                             except Exception as e:
+                                self.last_error = f"process_error:{e}"
                                 log.error(f"[BINANCE-WS] Process error: {e}")
                                 break
 
                 loop.run_until_complete(_stream())
 
             except Exception as e:
+                self.last_error = f"connection_error:{e}"
                 log.error(f"[BINANCE-WS] Connection error: {e}")
                 if self._running:
                     self._reconnect_attempt += 1

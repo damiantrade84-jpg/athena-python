@@ -147,6 +147,13 @@ interface CandleApiResponse {
   chart_provider?: string;
   candle_provider?: string;
   live_tick_provider?: string;
+  live_tick_source?: string;
+  websocket_active?: boolean;
+  websocket_stale?: boolean;
+  websocket_last_message_ts?: number | null;
+  fallback_reason?: string | null;
+  bybit_symbol?: string;
+  bybit_category?: string;
   volume_provider?: string;
   turnover_provider?: string;
   atr_provider?: string;
@@ -975,7 +982,11 @@ export default function TVChartPanel() {
   const chartPayloadLiveTick = useMemo(() => liveTickFromChartPayload(chartPayload), [chartPayload]);
   const chartTickLiveTick = useMemo(() => liveTickFromChartPayload(chartTickPayload), [chartTickPayload]);
   const sharedLiveTick = useMemo(() => liveTickFromEntry(priceEntryFor(pair)), [pair, priceEntryFor]);
-  const liveTick = chartPayload?.live_tick_provider === 'bybit' ? (chartTickLiveTick ?? chartPayloadLiveTick) : sharedLiveTick;
+  const usesBybitChartTick =
+    chartPayload?.live_tick_provider === 'bybit' ||
+    chartPayload?.live_tick_provider === 'bybit_ws' ||
+    chartPayload?.live_tick_provider === 'bybit_rest';
+  const liveTick = usesBybitChartTick ? (chartTickLiveTick ?? chartPayloadLiveTick) : sharedLiveTick;
   const studySnapshot = useMemo(
     () => buildChartStudySnapshot(candles, liveTick, backendTf, isCryptoChart),
     [candles, liveTick, backendTf, isCryptoChart],
@@ -986,7 +997,13 @@ export default function TVChartPanel() {
   const liveTickProviderLabel = titleCaseProvider(chartPayload?.live_tick_provider || liveTick?.source || chartPayload?.chart_provider);
   const candlePolicyLabel = readableCandlePolicy(chartPayload?.candle_confirmed_policy, lastCandleConfirmed ?? null);
   const lastCandleLabel = formatUtcLabel(chartPayload?.last_candle_ts ?? candles?.[candles.length - 1]?.t);
-  const chartHeaderText = `${pair} · ${backendTf || timeframe} · ${assetGroupLabel} · chart ${chartProviderLabel} · candles ${candleProviderLabel} · live ${liveTickProviderLabel} · ${candlePolicyLabel} · ${lastCandleLabel}`;
+  const liveTickFallbackHint =
+    chartPayload?.fallback_used && chartPayload?.fallback_reason
+      ? ` fallback ${chartPayload.fallback_reason}`
+      : chartPayload?.websocket_active === false && chartPayload?.websocket_stale
+        ? ' ws_stale'
+        : '';
+  const chartHeaderText = `${pair} · ${backendTf || timeframe} · ${assetGroupLabel} · chart ${chartProviderLabel} · candles ${candleProviderLabel} · live ${liveTickProviderLabel}${liveTickFallbackHint} · ${candlePolicyLabel} · ${lastCandleLabel}`;
   const bottomPanelIdentity = 'Bottom panel identity: forex ATR14; crypto ADX14/ATR14 when enabled';
   const pricePanelLegendItems = useMemo<IndicatorLegendValue[]>(() => {
     const latest = studySnapshot.latest;

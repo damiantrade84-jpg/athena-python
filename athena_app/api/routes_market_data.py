@@ -588,7 +588,13 @@ def _format_chart_candles(
     return rows, meta
 
 
-def _normalize_bybit_tick(raw: dict | None, *, symbol: str, category: str) -> dict | None:
+def _normalize_bybit_tick(
+    raw: dict | None,
+    *,
+    symbol: str,
+    category: str,
+    source: str | None = None,
+) -> dict | None:
     if not isinstance(raw, dict):
         return None
     price = _safe_float(raw.get("price") or raw.get("lastPrice") or raw.get("last"))
@@ -600,27 +606,145 @@ def _normalize_bybit_tick(raw: dict | None, *, symbol: str, category: str) -> di
         ts /= 1000.0
     if ts is None or ts <= 0:
         ts = time.time()
+    tick_source = str(source or raw.get("source") or "bybit_rest")
     return {
         "symbol": str(raw.get("symbol") or symbol).replace("/", "").upper(),
         "price": price,
         "bid": _safe_float(raw.get("bid")),
         "ask": _safe_float(raw.get("ask")),
         "timestamp": ts,
-        "provider": "bybit",
-        "source": str(raw.get("source") or "bybit_rest"),
+        "provider": tick_source,
+        "source": tick_source,
         "category": str(raw.get("category") or category),
+        "bybit_symbol": str(raw.get("bybit_symbol") or symbol).replace("/", "").upper(),
+        "bybit_category": str(raw.get("bybit_category") or category),
         "age_seconds": round(max(0.0, time.time() - ts), 3),
     }
 
 
-def _fetch_bybit_chart_tick(symbol: str, category: str) -> dict | None:
+def _bybit_live_tick_diagnostics(
+    *,
+    live_tick: dict | None,
+    live_tick_meta: dict,
+    bybit_symbol: str,
+    category: str,
+) -> dict:
+    tick_source = live_tick.get("source") if live_tick else None
+    provider = tick_source or "bybit_rest"
+    fallback_used = bool(live_tick_meta.get("fallback_used"))
+    return {
+        "live_tick_provider": provider,
+        "live_tick_source": provider,
+        "live_tick_age_seconds": live_tick.get("age_seconds") if live_tick else None,
+        "websocket_active": bool(live_tick_meta.get("websocket_active")),
+        "websocket_stale": bool(live_tick_meta.get("websocket_stale")),
+        "websocket_last_message_ts": live_tick_meta.get("websocket_last_message_ts"),
+        "fallback_used": fallback_used,
+        "fallback_reason": live_tick_meta.get("fallback_reason"),
+        "bybit_symbol": bybit_symbol,
+        "bybit_category": category,
+    }
+
+
+def _fetch_bybit_chart_tick(
+    pair: dict,
+    *,
+    bybit_symbol: str,
+    category: str,
+    display: str,
+) -> tuple[dict | None, dict]:
+    """WS-first live tick for crypto chart; REST only when configured fallback applies."""
+    from candle_feeds import get_bybit_live_tick
+
+    meta: dict = {
+        "fallback_used": False,
+        "fallback_reason": None,
+        "websocket_active": False,
+        "websocket_stale": True,
+        "websocket_last_message_ts": None,
+    }
+
+    ws_enabled = bool(CONFIG.get("BYBIT_WS_ENABLED", True))
+    rest_enabled = bool(CONFIG.get("BYBIT_REST_FALLBACK_ENABLED", True))
+    preference = str(CONFIG.get("CRYPTO_LIVE_TICK_PROVIDER_PREFERENCE") or "bybit_ws").strip().lower()
+
+    if ws_enabled and preference == "bybit_ws":
+        ws_result = get_bybit_live_tick(
+            display,
+            bybit_symbol=bybit_symbol,
+            category=category,
+        )
+        meta.update(
+            {
+                "websocket_active": ws_result.get("websocket_active"),
+                "websocket_stale": ws_result.get("websocket_stale"),
+                "websocket_last_message_ts": ws_result.get("websocket_last_message_ts"),
+            }
+        )
+        ws_tick = ws_result.get("tick")
+        if ws_tick:
+            normalized = _normalize_bybit_tick(
+                ws_tick,
+                symbol=bybit_symbol,
+                category=category,
+                source="bybit_ws",
+            )
+            if normalized:
+                meta["fallback_reason"] = None
+                return normalized, meta
+
+        ws_reason = ws_result.get("fallback_reason") or "ws_unavailable"
+    else:
+        ws_reason = "ws_disabled" if not ws_enabled else "ws_preference_not_bybit_ws"
+        meta["websocket_stale"] = True
+
+    if not rest_enabled:
+        meta["fallback_used"] = True
+        meta["fallback_reason"] = ws_reason if ws_enabled else "rest_fallback_disabled"
+        return None, meta
+
     if not callable(fetch_bybit_ticker):
-        return None
+        meta["fallback_used"] = True
+        meta["fallback_reason"] = "rest_fetch_unavailable"
+        return None, meta
+
     try:
-        raw = fetch_bybit_ticker(symbol, category=category)
+        raw = fetch_bybit_ticker(bybit_symbol, category=category)
     except TypeError:
-        raw = fetch_bybit_ticker(symbol)
-    return _normalize_bybit_tick(raw, symbol=symbol, category=category)
+        raw = fetch_bybit_ticker(bybit_symbol)
+    except Exception as exc:
+        meta["fallback_used"] = True
+        meta["fallback_reason"] = f"rest_fetch_failed:{exc.__class__.__name__}"
+        return None, meta
+
+    if not raw:
+        meta["fallback_used"] = True
+        meta["fallback_reason"] = ws_reason if ws_enabled else "rest_fetch_empty"
+        return None, meta
+
+    normalized = _normalize_bybit_tick(
+        raw,
+        symbol=bybit_symbol,
+        category=category,
+        source="bybit_rest",
+    )
+    if not normalized:
+        meta["fallback_used"] = True
+        meta["fallback_reason"] = "rest_tick_invalid"
+        return None, meta
+
+    meta["fallback_used"] = True
+    meta["fallback_reason"] = ws_reason
+    if CONFIG.get("BYBIT_REST_FALLBACK_WARN", True):
+        _warn = getattr(log, "warning", None) or getattr(log, "error", None)
+        if _warn:
+            _warn(
+                "[BYBIT-TICK] REST fallback for %s (%s): %s",
+                display,
+                bybit_symbol,
+                ws_reason,
+            )
+    return normalized, meta
 
 
 def _generic_chart_provider(pair: dict, chart_source: str) -> str:
@@ -691,13 +815,24 @@ def _crypto_chart_payload(pair: dict, symbol: str, tf: str, limit: int):
         bybit_symbol=bybit_symbol if chart_provider == "bybit" else pair.get("symbol"),
         include_indicators=True,
     )
-    live_tick = _fetch_bybit_chart_tick(bybit_symbol, category)
-    live_tick_provider = live_tick.get("provider") if live_tick else chart_provider
+    display = pair.get("display", symbol)
+    live_tick, live_tick_meta = _fetch_bybit_chart_tick(
+        pair,
+        bybit_symbol=bybit_symbol,
+        category=category,
+        display=display,
+    )
+    tick_diag = _bybit_live_tick_diagnostics(
+        live_tick=live_tick,
+        live_tick_meta=live_tick_meta,
+        bybit_symbol=bybit_symbol,
+        category=category,
+    )
     last_candle_ts = rows[-1].get("t") if rows else None
     payload = {
         "candles": rows,
         "symbol": symbol,
-        "display": pair.get("display", symbol),
+        "display": display,
         "tf": tf,
         "pairType": "crypto",
         "candlesSource": chart_provider,
@@ -705,7 +840,6 @@ def _crypto_chart_payload(pair: dict, symbol: str, tf: str, limit: int):
         "execution_provider": execution_provider,
         "chart_provider": chart_provider,
         "candle_provider": chart_provider,
-        "live_tick_provider": live_tick_provider,
         "volume_provider": chart_provider,
         "turnover_provider": chart_provider,
         "atr_provider": chart_provider,
@@ -714,7 +848,6 @@ def _crypto_chart_payload(pair: dict, symbol: str, tf: str, limit: int):
         "indicator_source_candle_provider": chart_provider,
         "provider_mismatch": provider_mismatch,
         "provider_mismatch_reason": mismatch_reason,
-        "fallback_used": fallback_used,
         "fallback_chain": fallback_chain,
         "chart_status": chart_status,
         "candle_confirmed_policy": (
@@ -723,8 +856,9 @@ def _crypto_chart_payload(pair: dict, symbol: str, tf: str, limit: int):
             else "fallback_provider_policy"
         ),
         "last_candle_ts": last_candle_ts,
-        "live_tick_age_seconds": live_tick.get("age_seconds") if live_tick else None,
         "liveTick": live_tick,
+        **tick_diag,
+        "fallback_used": bool(fallback_used or tick_diag.get("fallback_used")),
         "volume_ma_period": 20,
         "vwap_formula": indicator_meta.get("vwap_formula"),
         "indicator_set": ["EMA21", "EMA50", "EMA200", "VWAP", "RSI14", "ADX14", "ATR14", "Volume", "Volume MA"],
@@ -838,25 +972,42 @@ def api_chart_tick():
     if asset_group == "crypto" and execution_provider == "bybit":
         bybit_symbol = _bybit_symbol_for_pair(pair)
         category = _bybit_category_for_pair(pair)
-        tick = _fetch_bybit_chart_tick(bybit_symbol, category)
+        display = pair.get("display", symbol)
+        tick, tick_meta = _fetch_bybit_chart_tick(
+            pair,
+            bybit_symbol=bybit_symbol,
+            category=category,
+            display=display,
+        )
         if not tick:
             return jsonify(
-                {
-                    "error": f"No Bybit live tick for {symbol}",
-                    "asset_group": asset_group,
-                    "execution_provider": execution_provider,
-                    "live_tick_provider": "bybit",
-                }
+                _json_safe(
+                    {
+                        "error": f"No Bybit live tick for {symbol}",
+                        "asset_group": asset_group,
+                        "execution_provider": execution_provider,
+                        "live_tick_provider": "bybit_rest",
+                        "fallback_used": True,
+                        "fallback_reason": tick_meta.get("fallback_reason"),
+                        "bybit_symbol": bybit_symbol,
+                        "bybit_category": category,
+                    }
+                )
             ), 503
+        tick_diag = _bybit_live_tick_diagnostics(
+            live_tick=tick,
+            live_tick_meta=tick_meta,
+            bybit_symbol=bybit_symbol,
+            category=category,
+        )
         return jsonify(
             _json_safe(
                 {
                     "symbol": symbol,
-                    "display": pair.get("display", symbol),
+                    "display": display,
                     "asset_group": asset_group,
                     "execution_provider": execution_provider,
                     "chart_provider": "bybit",
-                    "live_tick_provider": "bybit",
                     "price": tick.get("price"),
                     "bid": tick.get("bid"),
                     "ask": tick.get("ask"),
@@ -866,9 +1017,8 @@ def api_chart_tick():
                     "category": tick.get("category"),
                     "age_seconds": tick.get("age_seconds"),
                     "provider_mismatch": False,
-                    "fallback_used": False,
-                    "live_tick_age_seconds": tick.get("age_seconds"),
                     "liveTick": tick,
+                    **tick_diag,
                 }
             )
         )

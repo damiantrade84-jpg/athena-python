@@ -307,7 +307,9 @@ def test_crypto_chart_uses_payload_live_tick_before_shared_price_fallback():
     assert "liveTickFromChartPayload(chartTickPayload)" in source
     assert "/api/chart-tick?symbol=" in source
     assert "const sharedLiveTick = useMemo(() => liveTickFromEntry(priceEntryFor(pair)), [pair, priceEntryFor]);" in source
-    assert "const liveTick = chartPayload?.live_tick_provider === 'bybit' ? (chartTickLiveTick ?? chartPayloadLiveTick) : sharedLiveTick" in source
+    assert "const usesBybitChartTick =" in source
+    assert "chartPayload?.live_tick_provider === 'bybit_ws'" in source
+    assert "chartPayload?.live_tick_provider === 'bybit_rest'" in source
 
 
 def test_engine_a_side_panel_follows_current_chart_symbol_not_first_candidate():

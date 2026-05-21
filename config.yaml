@@ -1876,6 +1876,12 @@ BYBIT_TIME_SYNC_ENABLED: false
 
 BYBIT_RECV_WINDOW_MS: 30000
 
+# Crypto live tick: prefer Bybit WebSocket tickers; REST is fallback when WS missing/stale.
+CRYPTO_LIVE_TICK_PROVIDER_PREFERENCE: bybit_ws
+BYBIT_WS_ENABLED: true
+BYBIT_REST_FALLBACK_ENABLED: true
+BYBIT_WS_STALE_AFTER_SECONDS: 10
+BYBIT_REST_FALLBACK_WARN: true
 
 
 # When true, each ENGINE C scan logs ALIGNED tradeable consensus rows to shadow_signals (audit.db).

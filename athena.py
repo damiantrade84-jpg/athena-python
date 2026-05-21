@@ -167,11 +167,14 @@ def _engine_b_cache_get(key: str) -> dict | None:
 from candle_feeds import (  # noqa: E402
     BinanceCandleWS,
     BinanceLivePriceWS,
+    BybitLivePriceWS,
     CandleBuilder,
     EODHDWebSocketManager,
+    _bybit_crypto_symbol_map,
     _live_prices,
     _live_prices_lock,
     _run_binance_price_poller,
+    _run_bybit_price_poller,
     _run_mt5_tick_poller,
     fetch_candles_live,
     get_candle_builder,
@@ -14993,6 +14996,28 @@ def ensure_runtime_services_started() -> None:
             )
     else:
         log.info("[BINANCE-WS] No enabled crypto pairs - Binance Futures WS disabled")
+
+    if crypto_enabled and CONFIG.get("BYBIT_WS_ENABLED", True):
+        bybit_scope = _bybit_crypto_symbol_map(CRYPTO_PAIRS)
+        if bybit_scope:
+            _bybit_live_ws = BybitLivePriceWS()
+            _bybit_live_ws.start()
+            if CONFIG.get("BYBIT_REST_FALLBACK_ENABLED", True):
+                threading.Thread(
+                    target=_run_bybit_price_poller,
+                    daemon=True,
+                    name="bybit-price-poll",
+                ).start()
+            log.info(
+                "[BYBIT-WS] Live tick feed active for %d bybit-execution symbols: %s",
+                len(bybit_scope),
+                ", ".join(sorted(bybit_scope.keys())[:12])
+                + ("..." if len(bybit_scope) > 12 else ""),
+            )
+        else:
+            log.info("[BYBIT-WS] No bybit-execution crypto pairs — live tick WS idle")
+    elif not CONFIG.get("BYBIT_WS_ENABLED", True):
+        log.info("[BYBIT-WS] Disabled via BYBIT_WS_ENABLED")
 
     # Microstructure WebSocket feeds (Binance + Bybit orderbook/trade streams)
     if CONFIG.get("MICROSTRUCTURE_FEEDS_ENABLED", False):

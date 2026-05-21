@@ -217,16 +217,76 @@ def test_crypto_chart_provider_resolves_to_bybit_when_execution_provider_bybit()
     assert payload["execution_provider"] == "bybit"
     assert payload["chart_provider"] == "bybit"
     assert payload["candle_provider"] == "bybit"
-    assert payload["live_tick_provider"] == "bybit"
     assert payload["volume_provider"] == "bybit"
     assert payload["turnover_provider"] == "bybit"
     assert payload["atr_provider"] == "bybit"
     assert payload["indicator_provider"] == "bybit"
     assert payload["provider_mismatch"] is False
-    assert payload["fallback_used"] is False
     assert payload["chart_status"] == "execution_grade"
-    assert payload["liveTick"]["provider"] == "bybit"
+    assert payload["live_tick_provider"] == "bybit_rest"
+    assert payload["live_tick_source"] == "bybit_rest"
+    assert payload["fallback_used"] is True
+    assert payload["fallback_reason"] == "ws_missing"
+    assert payload["bybit_symbol"] == "TRXUSDT"
+    assert payload["bybit_category"] == "linear"
+    assert payload["liveTick"]["provider"] == "bybit_rest"
     assert payload["liveTick"]["source"] == "bybit_rest"
+
+
+def test_crypto_chart_uses_bybit_ws_when_cache_fresh():
+    import candle_feeds
+
+    now = time.time()
+    with candle_feeds._live_prices_lock:
+        candle_feeds._live_prices["TRX/USDT"] = candle_feeds._merge_bybit_ws_price(
+            None,
+            0.294,
+            0.2939,
+            0.2941,
+            now,
+            bybit_symbol="TRXUSDT",
+            category="linear",
+        )
+
+    client = _client(
+        _runtime(
+            CONFIG={"CRYPTO_EXECUTION_PROVIDER": "bybit"},
+            ALL_PAIRS=[
+                {
+                    "symbol": "TRXUSDT",
+                    "display": "TRX/USDT",
+                    "type": "crypto",
+                    "source": "binance",
+                    "enabled": True,
+                }
+            ],
+            fetch_bybit_klines=lambda *_args, **_kwargs: [
+                {
+                    "open_time": 1_779_300_000_000,
+                    "time": "2026-05-20T20:00:00+00:00",
+                    "open": 0.284,
+                    "high": 0.291,
+                    "low": 0.281,
+                    "close": 0.289,
+                    "volume": 1000.0,
+                    "vol": 1000.0,
+                    "turnover": 289.0,
+                    "confirmed": True,
+                    "provider": "bybit",
+                    "category": "linear",
+                }
+            ],
+            fetch_bybit_ticker=lambda *_args, **_kwargs: pytest.fail("REST should not run when WS cache is fresh"),
+        )
+    )
+
+    resp = client.get("/api/candles?symbol=TRX/USDT&tf=H4&limit=100")
+    assert resp.status_code == 200
+    payload = resp.get_json()
+    assert payload["live_tick_provider"] == "bybit_ws"
+    assert payload["fallback_used"] is False
+    assert payload["fallback_reason"] is None
+    assert payload["liveTick"]["source"] == "bybit_ws"
 
 
 def test_crypto_chart_tick_endpoint_uses_bybit_live_tick_provider():
@@ -252,12 +312,14 @@ def test_crypto_chart_tick_endpoint_uses_bybit_live_tick_provider():
     payload = resp.get_json()
     assert payload["asset_group"] == "crypto"
     assert payload["execution_provider"] == "bybit"
-    assert payload["live_tick_provider"] == "bybit"
+    assert payload["live_tick_provider"] == "bybit_rest"
     assert payload["provider_mismatch"] is False
-    assert payload["provider"] == "bybit"
+    assert payload["provider"] == "bybit_rest"
     assert payload["source"] == "bybit_rest"
+    assert payload["fallback_used"] is True
+    assert payload["fallback_reason"] == "ws_missing"
     assert payload["price"] == 100.5
-    assert payload["liveTick"]["provider"] == "bybit"
+    assert payload["liveTick"]["provider"] == "bybit_rest"
     assert payload["liveTick"]["source"] == "bybit_rest"
 
 

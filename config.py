@@ -883,6 +883,11 @@ CONFIG: dict = {
     "MARKET_DATA_WS_SSL_VERIFY": True,
     "BYBIT_TIME_SYNC_ENABLED": False,
     "BYBIT_RECV_WINDOW_MS": 30000,
+    "CRYPTO_LIVE_TICK_PROVIDER_PREFERENCE": "bybit_ws",
+    "BYBIT_WS_ENABLED": True,
+    "BYBIT_REST_FALLBACK_ENABLED": True,
+    "BYBIT_WS_STALE_AFTER_SECONDS": 10,
+    "BYBIT_REST_FALLBACK_WARN": True,
     "PAIR_PROFILES": {},
     "BT_AUTO_TOGGLE": False,  # If False, backtest will never enable/disable live pairs
     "BT_PERCENTILE_FILTER": False,  # If False, disable rolling percentile floor in backtest
