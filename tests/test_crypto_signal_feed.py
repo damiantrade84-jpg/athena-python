@@ -152,6 +152,14 @@ def test_resolve_crypto_signal_feed_supports_engine_specific_override():
     assert resolve_crypto_signal_feed("B", config) == "binance"
 
 
+def test_resolve_crypto_signal_feed_engine_a_defaults_to_bybit_in_repo_config():
+    from config import CONFIG
+
+    assert CONFIG.get("ENGINE_A_CRYPTO_SIGNAL_FEED") == "bybit"
+    assert resolve_crypto_signal_feed("A", CONFIG) == "bybit"
+    assert resolve_crypto_signal_feed("AB", CONFIG) == "binance"
+
+
 def test_bybit_klines_paginated_walks_back_from_earliest_open_time(monkeypatch):
     import data_feeds
 

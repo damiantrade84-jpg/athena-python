@@ -516,6 +516,19 @@ def _merge_bybit_ws_price(
     return _decorate_bybit_price_diagnostics(entry, now_ts)
 
 
+def _bybit_entry_ws_fields(entry: dict | None, now_ts: float) -> tuple[float | None, float | None, float | None]:
+    """Return (ws_price, last_ws_ts, ws_age) from a live-prices cache entry."""
+    old = entry if isinstance(entry, dict) else {}
+    last_ws_ts = old.get("last_ws_ts")
+    if last_ws_ts is None and str(old.get("source") or "") == "bybit_ws":
+        last_ws_ts = old.get("ts")
+    ws_price = old.get("ws_price")
+    if ws_price is None and str(old.get("source") or "") == "bybit_ws":
+        ws_price = old.get("price")
+    ws_age = _age_seconds(now_ts, last_ws_ts)
+    return ws_price, last_ws_ts, ws_age
+
+
 def _merge_bybit_rest_price(
     existing,
     price: float,
@@ -527,13 +540,22 @@ def _merge_bybit_rest_price(
 ) -> dict:
     old = existing if isinstance(existing, dict) else {}
     ws_stale_sec = ws_stale_sec or _bybit_ws_price_stale_sec()
-    last_ws_ts = old.get("last_ws_ts")
-    if last_ws_ts is None and old.get("source") == "bybit_ws":
-        last_ws_ts = old.get("ts")
-    ws_age = _age_seconds(now_ts, last_ws_ts)
-    ws_price = old.get("ws_price")
-    if ws_price is None and old.get("source") == "bybit_ws":
-        ws_price = old.get("price")
+    ws_price, last_ws_ts, ws_age = _bybit_entry_ws_fields(old, now_ts)
+
+    # While the global Bybit WS feed is live, keep WS as the primary cache price.
+    # REST poll updates rest metadata only so chart/API stay on bybit_ws between ticks.
+    if _bybit_ws_runtime_state().get("websocket_active") and ws_price is not None:
+        entry = dict(old)
+        entry.update(
+            {
+                "last_rest_ts": now_ts,
+                "rest_price": float(price),
+                "overwrite_reason": "rest_metadata_while_ws_active",
+                "bybit_symbol": _normalize_bybit_symbol(bybit_symbol),
+                "bybit_category": str(category or "linear").lower(),
+            }
+        )
+        return _decorate_bybit_price_diagnostics(entry, now_ts)
 
     if ws_age is not None and ws_age <= ws_stale_sec and ws_price is not None:
         entry = dict(old)
@@ -699,24 +721,20 @@ def get_bybit_live_tick(
             **ws_state,
         }
 
-    source = str(entry.get("source") or "")
-    last_ws_ts = entry.get("last_ws_ts")
-    if last_ws_ts is None and source == "bybit_ws":
-        last_ws_ts = entry.get("ts")
-    ws_age = _age_seconds(now, last_ws_ts)
-    price = entry.get("ws_price")
-    if price is None and source == "bybit_ws":
-        price = entry.get("price")
+    price, last_ws_ts, ws_age = _bybit_entry_ws_fields(entry, now)
+    ws_active = bool(ws_state.get("websocket_active"))
 
-    if source != "bybit_ws" or price is None or ws_age is None or ws_age > stale_sec:
-        reason = "ws_missing"
-        if source == "bybit_ws" and ws_age is not None and ws_age > stale_sec:
-            reason = "ws_stale"
-        elif source == "bybit_rest":
-            reason = "ws_stale" if entry.get("overwrite_reason") == "ws_stale" else "ws_missing"
+    if price is None or ws_age is None:
         return {
             "tick": None,
-            "fallback_reason": reason,
+            "fallback_reason": "ws_missing",
+            **ws_state,
+        }
+
+    if ws_age > stale_sec and not ws_active:
+        return {
+            "tick": None,
+            "fallback_reason": "ws_stale",
             **ws_state,
         }
 

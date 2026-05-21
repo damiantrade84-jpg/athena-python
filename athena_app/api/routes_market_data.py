@@ -768,6 +768,26 @@ def _generic_candle_policy(pair: dict, chart_source: str) -> str:
     return "provider-default"
 
 
+def _crypto_scoring_provider() -> str:
+    from athena_app.services.crypto_signal_feed import resolve_crypto_signal_feed
+
+    return resolve_crypto_signal_feed("A", CONFIG)
+
+
+def _apply_scoring_provider_mismatch(
+    *,
+    chart_provider: str,
+    scoring_provider: str,
+    provider_mismatch: bool,
+    mismatch_reason: str | None,
+) -> tuple[bool, str | None]:
+    if scoring_provider == chart_provider:
+        return provider_mismatch, mismatch_reason
+    if provider_mismatch and mismatch_reason:
+        return True, mismatch_reason
+    return True, f"scoring_feed_{scoring_provider}_chart_feed_{chart_provider}"
+
+
 def _crypto_chart_payload(pair: dict, symbol: str, tf: str, limit: int):
     execution_provider = _execution_provider_for_pair(pair)
     if execution_provider != "bybit":
@@ -775,6 +795,7 @@ def _crypto_chart_payload(pair: dict, symbol: str, tf: str, limit: int):
 
     bybit_symbol = _bybit_symbol_for_pair(pair)
     category = _bybit_category_for_pair(pair)
+    scoring_provider = _crypto_scoring_provider()
     fallback_chain = ["bybit"]
     chart_provider = "bybit"
     fallback_used = False
@@ -803,6 +824,13 @@ def _crypto_chart_payload(pair: dict, symbol: str, tf: str, limit: int):
         mismatch_reason = "crypto_execution_provider_bybit_chart_fell_back_to_binance"
         fallback_chain.append(chart_provider)
         chart_status = "non_execution_grade"
+
+    provider_mismatch, mismatch_reason = _apply_scoring_provider_mismatch(
+        chart_provider=chart_provider,
+        scoring_provider=scoring_provider,
+        provider_mismatch=provider_mismatch,
+        mismatch_reason=mismatch_reason,
+    )
 
     if not candles:
         return {"error": f"No candle data for {symbol} {tf}"}, 404
@@ -842,6 +870,8 @@ def _crypto_chart_payload(pair: dict, symbol: str, tf: str, limit: int):
         "candle_provider": chart_provider,
         "volume_provider": chart_provider,
         "turnover_provider": chart_provider,
+        "vwap_provider": chart_provider,
+        "scoring_provider": scoring_provider,
         "atr_provider": chart_provider,
         "atr_timeframe": tf,
         "indicator_provider": chart_provider,
@@ -1000,6 +1030,13 @@ def api_chart_tick():
             bybit_symbol=bybit_symbol,
             category=category,
         )
+        scoring_provider = _crypto_scoring_provider()
+        tick_mismatch, tick_mismatch_reason = _apply_scoring_provider_mismatch(
+            chart_provider="bybit",
+            scoring_provider=scoring_provider,
+            provider_mismatch=False,
+            mismatch_reason=None,
+        )
         return jsonify(
             _json_safe(
                 {
@@ -1008,6 +1045,10 @@ def api_chart_tick():
                     "asset_group": asset_group,
                     "execution_provider": execution_provider,
                     "chart_provider": "bybit",
+                    "candle_provider": "bybit",
+                    "scoring_provider": scoring_provider,
+                    "vwap_provider": "bybit",
+                    "indicator_provider": "bybit",
                     "price": tick.get("price"),
                     "bid": tick.get("bid"),
                     "ask": tick.get("ask"),
@@ -1016,7 +1057,8 @@ def api_chart_tick():
                     "source": tick.get("source"),
                     "category": tick.get("category"),
                     "age_seconds": tick.get("age_seconds"),
-                    "provider_mismatch": False,
+                    "provider_mismatch": tick_mismatch,
+                    "provider_mismatch_reason": tick_mismatch_reason,
                     "liveTick": tick,
                     **tick_diag,
                 }

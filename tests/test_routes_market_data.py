@@ -189,7 +189,10 @@ def test_crypto_chart_provider_resolves_to_bybit_when_execution_provider_bybit()
 
     client = _client(
         _runtime(
-            CONFIG={"CRYPTO_EXECUTION_PROVIDER": "bybit"},
+            CONFIG={
+                "CRYPTO_EXECUTION_PROVIDER": "bybit",
+                "ENGINE_A_CRYPTO_SIGNAL_FEED": "bybit",
+            },
             ALL_PAIRS=[
                 {
                     "symbol": "TRXUSDT",
@@ -228,6 +231,8 @@ def test_crypto_chart_provider_resolves_to_bybit_when_execution_provider_bybit()
     assert payload["turnover_provider"] == "bybit"
     assert payload["atr_provider"] == "bybit"
     assert payload["indicator_provider"] == "bybit"
+    assert payload["vwap_provider"] == "bybit"
+    assert payload["scoring_provider"] == "bybit"
     assert payload["provider_mismatch"] is False
     assert payload["chart_status"] == "execution_grade"
     assert payload["live_tick_provider"] == "bybit_rest"
@@ -257,7 +262,10 @@ def test_crypto_chart_uses_bybit_ws_when_cache_fresh():
 
     client = _client(
         _runtime(
-            CONFIG={"CRYPTO_EXECUTION_PROVIDER": "bybit"},
+            CONFIG={
+                "CRYPTO_EXECUTION_PROVIDER": "bybit",
+                "ENGINE_A_CRYPTO_SIGNAL_FEED": "bybit",
+            },
             ALL_PAIRS=[
                 {
                     "symbol": "TRXUSDT",
@@ -299,7 +307,10 @@ def test_crypto_chart_uses_bybit_ws_when_cache_fresh():
 def test_crypto_chart_tick_endpoint_uses_bybit_live_tick_provider():
     client = _client(
         _runtime(
-            CONFIG={"CRYPTO_EXECUTION_PROVIDER": "bybit"},
+            CONFIG={
+                "CRYPTO_EXECUTION_PROVIDER": "bybit",
+                "ENGINE_A_CRYPTO_SIGNAL_FEED": "bybit",
+            },
             fetch_bybit_ticker=lambda symbol, category="linear": {
                 "symbol": symbol,
                 "price": 100.5,
@@ -333,7 +344,10 @@ def test_crypto_chart_tick_endpoint_uses_bybit_live_tick_provider():
 def test_crypto_chart_payload_includes_volume_ma_vwap_and_same_provider_indicators():
     client = _client(
         _runtime(
-            CONFIG={"CRYPTO_EXECUTION_PROVIDER": "bybit"},
+            CONFIG={
+                "CRYPTO_EXECUTION_PROVIDER": "bybit",
+                "ENGINE_A_CRYPTO_SIGNAL_FEED": "bybit",
+            },
             fetch_bybit_klines=lambda *_args, **_kwargs: [
                 {
                     "open_time": 1_779_300_000_000 + idx * 14_400_000,
@@ -379,7 +393,103 @@ def test_crypto_chart_payload_includes_volume_ma_vwap_and_same_provider_indicato
     assert last["adx14"] is not None
     assert last["atr14"] is not None
     assert payload["indicator_source_candle_provider"] == payload["candle_provider"] == "bybit"
+    assert payload["vwap_provider"] == "bybit"
+    assert payload["scoring_provider"] == "bybit"
     assert payload["vwap_formula"] == "cumulative_turnover_divided_by_cumulative_volume"
+
+
+def test_crypto_chart_scoring_provider_mismatch_when_engine_a_feed_binance():
+    trx_pair = {
+        "symbol": "TRXUSDT",
+        "display": "TRX/USDT",
+        "type": "crypto",
+        "source": "binance",
+        "enabled": True,
+    }
+    client = _client(
+        _runtime(
+            CONFIG={
+                "CRYPTO_EXECUTION_PROVIDER": "bybit",
+                "ENGINE_A_CRYPTO_SIGNAL_FEED": "binance",
+                "ENGINE_AB_CRYPTO_SIGNAL_FEED": "binance",
+            },
+            ALL_PAIRS=[trx_pair],
+            ACTIVE_PAIRS=[trx_pair],
+            fetch_bybit_klines=lambda *_args, **_kwargs: [
+                {
+                    "open_time": 1_779_300_000_000,
+                    "time": "2026-05-20T20:00:00+00:00",
+                    "open": 0.284,
+                    "high": 0.291,
+                    "low": 0.281,
+                    "close": 0.289,
+                    "volume": 1000.0,
+                    "vol": 1000.0,
+                    "turnover": 289.0,
+                    "confirmed": True,
+                    "provider": "bybit",
+                    "category": "linear",
+                }
+            ],
+            fetch_bybit_ticker=lambda symbol, category="linear": {
+                "symbol": symbol,
+                "price": 0.29,
+                "timestamp": 1_779_328_800_000,
+                "provider": "bybit",
+                "source": "bybit_rest",
+                "category": category,
+            },
+        )
+    )
+
+    resp = client.get("/api/candles?symbol=TRX/USDT&tf=H4&limit=10")
+    assert resp.status_code == 200
+    payload = resp.get_json()
+    assert payload["candle_provider"] == "bybit"
+    assert payload["scoring_provider"] == "binance"
+    assert payload["provider_mismatch"] is True
+    assert "scoring_feed_binance_chart_feed_bybit" in payload["provider_mismatch_reason"]
+
+
+def test_crypto_chart_vwap_uses_typical_price_when_turnover_missing():
+    client = _client(
+        _runtime(
+            CONFIG={
+                "CRYPTO_EXECUTION_PROVIDER": "bybit",
+                "ENGINE_A_CRYPTO_SIGNAL_FEED": "bybit",
+            },
+            fetch_bybit_klines=lambda *_args, **_kwargs: [
+                {
+                    "open_time": 1_779_300_000_000 + idx * 14_400_000,
+                    "time": f"2026-05-{20 + idx:02d}T00:00:00+00:00",
+                    "open": 100 + idx,
+                    "high": 102 + idx,
+                    "low": 99 + idx,
+                    "close": 101 + idx,
+                    "volume": 1000 + idx,
+                    "vol": 1000 + idx,
+                    "turnover": 0.0,
+                    "confirmed": True,
+                    "provider": "bybit",
+                    "category": "linear",
+                }
+                for idx in range(30)
+            ],
+            fetch_bybit_ticker=lambda symbol, category="linear": {
+                "symbol": symbol,
+                "price": 130.0,
+                "timestamp": 1_779_876_000_000,
+                "provider": "bybit",
+                "source": "bybit_rest",
+                "category": category,
+            },
+        )
+    )
+
+    resp = client.get("/api/candles?symbol=BTCUSDT&tf=H4&limit=30")
+    assert resp.status_code == 200
+    payload = resp.get_json()
+    assert payload["vwap_formula"] == "cumulative_typical_price_times_volume_divided_by_cumulative_volume"
 
 
 def test_crypto_chart_binance_fallback_is_visible_when_bybit_unavailable():
@@ -433,7 +543,10 @@ def test_forex_chart_behavior_remains_on_shared_fetch_path():
 
     client = _client(
         _runtime(
-            CONFIG={"CRYPTO_EXECUTION_PROVIDER": "bybit"},
+            CONFIG={
+                "CRYPTO_EXECUTION_PROVIDER": "bybit",
+                "ENGINE_A_CRYPTO_SIGNAL_FEED": "bybit",
+            },
             ALL_PAIRS=[forex_pair],
             ACTIVE_PAIRS=[forex_pair],
             fetch_bybit_klines=_bybit_klines,

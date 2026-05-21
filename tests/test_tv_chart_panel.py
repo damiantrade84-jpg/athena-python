@@ -233,6 +233,8 @@ def test_crypto_chart_exposes_bybit_provider_badge_and_required_indicators():
     source = _read(TV_PANEL)
 
     assert "chart_provider" in source
+    assert "scoring_provider" in source
+    assert "vwap_provider" in source
     assert "provider_mismatch" in source
     assert "ProviderBadge" in source
     assert "Bybit" in source
@@ -241,6 +243,21 @@ def test_crypto_chart_exposes_bybit_provider_badge_and_required_indicators():
     assert "ADX14" in source
     assert "Volume" in source
     assert "Volume MA" in source
+
+
+def test_crypto_chart_prefers_api_indicator_series_when_present():
+    source = _read(TV_PANEL)
+
+    assert "apiEma21" in source
+    assert "apiAtr14" in source
+    assert "useApiIndicators" in source
+
+
+def test_crypto_atr_legend_includes_timeframe_and_provider():
+    source = _read(TV_PANEL)
+
+    assert "cryptoAtr14LegendLabel" in source
+    assert "ATR14 ${tf}" in source or "ATR14 `" in source or 'ATR14 ${tf}' in source or "atr_timeframe" in source
 
 
 def test_chart_capture_area_contains_provider_header_and_indicator_labels_for_screenshots():

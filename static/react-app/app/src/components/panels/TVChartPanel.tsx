@@ -157,6 +157,8 @@ interface CandleApiResponse {
   bybit_category?: string;
   volume_provider?: string;
   turnover_provider?: string;
+  vwap_provider?: string;
+  scoring_provider?: string;
   atr_provider?: string;
   indicator_provider?: string;
   provider_mismatch?: boolean;
@@ -522,7 +524,7 @@ interface ChartStudySnapshot {
   closes: number[];
   volumes: number[];
   seriesValues: Partial<Record<IndicatorKey, (number | null)[]>>;
-  latest: Partial<Record<IndicatorKey, number>>;
+  latest: Partial<Record<IndicatorKey, number>> & { close?: number };
 }
 
 function latestFinite(values: (number | null)[]): number | null {
@@ -547,6 +549,11 @@ function buildChartStudySnapshot(
   const apiVwap: (number | null)[] = [];
   const apiVolumeMa: (number | null)[] = [];
   const apiAdx14: (number | null)[] = [];
+  const apiEma21: (number | null)[] = [];
+  const apiEma50: (number | null)[] = [];
+  const apiEma200: (number | null)[] = [];
+  const apiRsi14: (number | null)[] = [];
+  const apiAtr14: (number | null)[] = [];
   for (const c of candles) {
     const t = toTimestamp(c.t);
     const o = toNum(c.o, NaN);
@@ -560,6 +567,11 @@ function buildChartStudySnapshot(
     apiVwap.push(Number.isFinite(toNum(c.vwap, NaN)) ? toNum(c.vwap, NaN) : null);
     apiVolumeMa.push(Number.isFinite(toNum(c.volume_ma, NaN)) ? toNum(c.volume_ma, NaN) : null);
     apiAdx14.push(Number.isFinite(toNum(c.adx14, NaN)) ? toNum(c.adx14, NaN) : null);
+    apiEma21.push(Number.isFinite(toNum(c.ema21, NaN)) ? toNum(c.ema21, NaN) : null);
+    apiEma50.push(Number.isFinite(toNum(c.ema50, NaN)) ? toNum(c.ema50, NaN) : null);
+    apiEma200.push(Number.isFinite(toNum(c.ema200, NaN)) ? toNum(c.ema200, NaN) : null);
+    apiRsi14.push(Number.isFinite(toNum(c.rsi14, NaN)) ? toNum(c.rsi14, NaN) : null);
+    apiAtr14.push(Number.isFinite(toNum(c.atr14, NaN)) ? toNum(c.atr14, NaN) : null);
   }
 
   const rows = buildLiveCandleRows(baseRows, liveTick, backendTf);
@@ -567,13 +579,14 @@ function buildChartStudySnapshot(
   const lows = rows.map((row) => row.low);
   const closes = rows.map((row) => row.close);
   const volumes = rows.map((_row, idx) => baseVolumes[idx] ?? 0);
+  const useApiIndicators = isCryptoChart;
   const ema20Values = ema(closes, 20);
-  const ema21Values = ema(closes, 21);
-  const ema50Values = ema(closes, 50);
-  const ema200Values = ema(closes, 200);
+  const ema21Values = useApiIndicators && apiEma21.some((v) => v != null) ? apiEma21 : ema(closes, 21);
+  const ema50Values = useApiIndicators && apiEma50.some((v) => v != null) ? apiEma50 : ema(closes, 50);
+  const ema200Values = useApiIndicators && apiEma200.some((v) => v != null) ? apiEma200 : ema(closes, 200);
   const dema200Values = dema(closes, 200);
-  const rsi14Values = rsi(closes, 14);
-  const atr14Values = atr(highs, lows, closes, 14);
+  const rsi14Values = useApiIndicators && apiRsi14.some((v) => v != null) ? apiRsi14 : rsi(closes, 14);
+  const atr14Values = useApiIndicators && apiAtr14.some((v) => v != null) ? apiAtr14 : atr(highs, lows, closes, 14);
   const vwapValues = apiVwap.some((v) => v != null) ? apiVwap : vwapFromRows(highs, lows, closes, volumes);
   const adx14Values = apiAdx14.some((v) => v != null) ? apiAdx14 : adx(highs, lows, closes, 14);
   const volumeMaValues = apiVolumeMa.some((v) => v != null) ? apiVolumeMa : sma(volumes, 20);
@@ -597,6 +610,7 @@ function buildChartStudySnapshot(
       volumeMa: volumeMaValues,
     },
     latest: {
+      close: closes.length ? closes[closes.length - 1] : undefined,
       ema20: latestFinite(ema20Values) ?? undefined,
       ema21: latestFinite(ema21Values) ?? undefined,
       ema50: latestFinite(ema50Values) ?? undefined,
@@ -646,11 +660,19 @@ function isBybitCryptoExecution(payload: CandleApiResponse | null | undefined): 
   return payload?.asset_group === 'crypto' && payload?.execution_provider === 'bybit';
 }
 
+function cryptoAtr14LegendLabel(payload: CandleApiResponse | null | undefined): string {
+  const tf = payload?.atr_timeframe || payload?.tf;
+  const provider = titleCaseProvider(payload?.atr_provider || payload?.chart_provider);
+  return tf ? `ATR14 ${tf} ${provider}` : STUDY_PANEL_INDICATORS.atr14.label;
+}
+
 function buildChartFeedSummary(payload: CandleApiResponse | null | undefined): string | null {
   if (!payload) return null;
   const parts: string[] = [];
   const candleProvider = payload.candle_provider || payload.chart_provider;
   if (candleProvider) parts.push(`candles ${titleCaseProvider(candleProvider)}`);
+  if (payload.scoring_provider) parts.push(`scoring ${titleCaseProvider(payload.scoring_provider)}`);
+  if (payload.vwap_provider) parts.push(`vwap ${titleCaseProvider(payload.vwap_provider)}`);
   if (payload.live_tick_provider) {
     let live = `live ${titleCaseProvider(payload.live_tick_provider)}`;
     if (payload.fallback_used && payload.fallback_reason) {
@@ -671,7 +693,21 @@ function readableCandlePolicy(value: string | null | undefined, lastConfirmed: b
   return value.replace(/_/g, '-');
 }
 
-function buildEngineAParityRows(signal: EngineASignal | null): { label: string; value: string }[] {
+function parityDelta(chartVal: number | undefined, signalVal: number | null | undefined, precision = 5): string {
+  if (typeof chartVal !== 'number' || !Number.isFinite(chartVal) || signalVal == null || !Number.isFinite(signalVal)) {
+    return 'n/a';
+  }
+  const delta = Math.abs(chartVal - signalVal);
+  const rel = signalVal !== 0 ? delta / Math.abs(signalVal) : delta;
+  if (delta < 10 ** -precision || rel < 0.001) return 'match';
+  return `delta ${fmtNum(delta, precision)}`;
+}
+
+function buildEngineAParityRows(
+  signal: EngineASignal | null,
+  chartLatest?: ChartStudySnapshot['latest'],
+  chartPayload?: CandleApiResponse | null,
+): { label: string; value: string }[] {
   const diagnostics = asRecord(signal?.factorDiagnostics);
   const trendCoherence = asRecord(diagnostics.trendCoherence);
   const factorScores = asRecord(signal?.factorScores);
@@ -681,12 +717,57 @@ function buildEngineAParityRows(signal: EngineASignal | null): { label: string; 
   const timeframeMap = ['D1', 'H4', 'H1']
     .map((tf) => {
       const row = asRecord(candleFetchMeta[tf]);
-      return `${tf}:${firstString(row.primary_provider, row.provider, row.source) || '-'}`;
+      const feed = firstString(row.signalFeed, row.primary_provider, row.provider, row.source);
+      return `${tf}:${feed || '-'}`;
     })
     .join(' ');
+  const signalPrice = firstNumber(signal?.price, signal?.entry);
+  const signalAtr = firstNumber(signal?.atr, signal?.atrDiagnostics?.atr_value);
+  const signalAdx = firstNumber(diagnostics.adxValue, trendCoherence.adx);
+  const numericRows: { label: string; value: string }[] = chartLatest
+    ? [
+        {
+          label: 'close',
+          value: `${formatIndicatorValue(chartLatest.close as number | undefined)} vs ${formatIndicatorValue(signalPrice ?? undefined)} (${parityDelta(chartLatest.close as number | undefined, signalPrice)})`,
+        },
+        {
+          label: 'ema21',
+          value: `${formatIndicatorValue(chartLatest.ema21)} vs scan n/a (${parityDelta(chartLatest.ema21, null)})`,
+        },
+        {
+          label: 'ema50',
+          value: formatIndicatorValue(chartLatest.ema50),
+        },
+        {
+          label: 'vwap',
+          value: formatIndicatorValue(chartLatest.vwap),
+        },
+        {
+          label: 'adx14',
+          value: `${formatIndicatorValue(chartLatest.adx14, 2)} vs ${formatIndicatorValue(signalAdx ?? undefined, 2)} (${parityDelta(chartLatest.adx14, signalAdx, 2)})`,
+        },
+        {
+          label: 'atr14',
+          value: `${formatIndicatorValue(chartLatest.atr14)} vs level ${formatIndicatorValue(signalAtr ?? undefined)} (${parityDelta(chartLatest.atr14, signalAtr)})`,
+        },
+        {
+          label: 'volume',
+          value: formatIndicatorValue(chartLatest.volume, 0),
+        },
+        {
+          label: 'volume_ma',
+          value: formatIndicatorValue(chartLatest.volumeMa, 0),
+        },
+      ]
+    : [];
+  const scoringProvider = chartPayload?.scoring_provider
+    ? titleCaseProvider(chartPayload.scoring_provider)
+    : null;
 
   return [
+    ...(scoringProvider ? [{ label: 'scoring_provider', value: scoringProvider }] : []),
     { label: 'TF map', value: timeframeMap },
+    ...numericRows,
     { label: 'EMA votes', value: JSON.stringify(trendCoherence.votes || trendCoherence.ema_votes || trendCoherence.emaVotes || []) },
     { label: 'agreement_count', value: trendCoherenceRows.agreement.text },
     { label: 'coherence_ratio', value: trendCoherenceRows.ratio.text },
@@ -1100,12 +1181,23 @@ export default function TVChartPanel() {
     const items: IndicatorLegendValue[] = [];
     if (rsi14) items.push({ definition: STUDY_PANEL_INDICATORS.rsi14, value: latest.rsi14, precision: 2 });
     if (isCryptoChart && adx14) items.push({ definition: STUDY_PANEL_INDICATORS.adx14, value: latest.adx14, precision: 2 });
-    if (atr14) items.push({ definition: STUDY_PANEL_INDICATORS.atr14, value: latest.atr14 });
+    if (atr14) {
+      items.push({
+        definition: {
+          ...STUDY_PANEL_INDICATORS.atr14,
+          label: isCryptoChart ? cryptoAtr14LegendLabel(chartPayload) : STUDY_PANEL_INDICATORS.atr14.label,
+        },
+        value: latest.atr14,
+      });
+    }
     if (isCryptoChart && volumeBars) items.push({ definition: STUDY_PANEL_INDICATORS.volume, value: latest.volume, precision: 0 });
     if (isCryptoChart && volumeBars && volumeMa) items.push({ definition: STUDY_PANEL_INDICATORS.volumeMa, value: latest.volumeMa, precision: 0 });
     return items;
-  }, [studySnapshot.latest, isCryptoChart, rsi14, adx14, atr14, volumeBars, volumeMa]);
-  const engineAParityRows = useMemo(() => buildEngineAParityRows(chartCandidate), [chartCandidate]);
+  }, [studySnapshot.latest, isCryptoChart, chartPayload, rsi14, adx14, atr14, volumeBars, volumeMa]);
+  const engineAParityRows = useMemo(
+    () => buildEngineAParityRows(chartCandidate, studySnapshot.latest, chartPayload),
+    [chartCandidate, studySnapshot.latest, chartPayload],
+  );
 
   // Derived preset label: "all" only when every indicator is on, otherwise "custom".
   const activePreset: PresetValue = (isCryptoChart ? ema21 && vwapEnabled && adx14 && volumeBars && volumeMa : ema20) && ema50 && ema200 && dema200 && rsi14 && atr14 ? 'all' : 'custom';

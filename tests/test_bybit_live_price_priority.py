@@ -130,6 +130,72 @@ def test_rest_fills_when_ws_missing_or_stale():
     assert stale_entry["price"] == pytest.approx(0.30)
 
 
+def test_rest_does_not_downgrade_ws_when_global_feed_active():
+    assert candle_feeds._record_bybit_ws_price(
+        "TRXUSDT",
+        0.2935,
+        now_ts=1000.0,
+        pairs=PAIRS,
+        category="linear",
+    )
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(
+        candle_feeds,
+        "_bybit_ws_runtime_state",
+        lambda: {"websocket_active": True, "websocket_stale": False},
+    )
+    try:
+        assert candle_feeds._record_bybit_rest_price(
+            "TRXUSDT",
+            0.30,
+            now_ts=1020.0,
+            pairs=PAIRS,
+            category="linear",
+            ws_stale_sec=10.0,
+        )
+        entry = _entry("TRX/USDT")
+        assert entry["source"] == "bybit_ws"
+        assert entry["price"] == pytest.approx(0.2935)
+        assert entry["rest_price"] == pytest.approx(0.30)
+        assert entry["overwrite_reason"] == "rest_metadata_while_ws_active"
+    finally:
+        monkeypatch.undo()
+
+
+def test_get_bybit_live_tick_keeps_ws_while_global_feed_active_even_if_symbol_stale():
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(
+        candle_feeds,
+        "_bybit_ws_runtime_state",
+        lambda: {"websocket_active": True, "websocket_stale": False},
+    )
+    monkeypatch.setattr(candle_feeds.time, "time", lambda: 1025.0)
+    try:
+        assert candle_feeds._record_bybit_ws_price(
+            "TRXUSDT",
+            0.2935,
+            now_ts=1000.0,
+            pairs=PAIRS,
+            category="linear",
+        )
+        with candle_feeds._live_prices_lock:
+            candle_feeds._live_prices["TRX/USDT"]["source"] = "bybit_rest"
+
+        result = candle_feeds.get_bybit_live_tick(
+            "TRX/USDT",
+            bybit_symbol="TRXUSDT",
+            category="linear",
+            pairs=PAIRS,
+        )
+        assert result["fallback_reason"] is None
+        assert result["tick"]["source"] == "bybit_ws"
+        assert result["tick"]["price"] == pytest.approx(0.2935)
+        assert result["tick"]["age_seconds"] == pytest.approx(25.0)
+    finally:
+        monkeypatch.undo()
+
+
 def test_get_bybit_live_tick_returns_ws_when_fresh():
     import time
 
