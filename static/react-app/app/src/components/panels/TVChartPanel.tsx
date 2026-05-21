@@ -6,6 +6,17 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Switch } from '@/components/ui/switch';
 import { useStore } from '@/hooks/useStore';
+import {
+  isFrontendDebugVisible,
+  resolveAtrProvenanceRows,
+  resolveCandleFetchMetaRows,
+  resolveDirectionalRampDisplay,
+  resolveFeedAddonDisplay,
+  resolveFrontendBuildLabel,
+  resolveNumericDisplay,
+  resolveTrendCoherenceRows,
+  type DiagnosticDisplay,
+} from '@/lib/engineADiagnosticsDisplay';
 import { fmtNum } from '@/lib/utils';
 import type { EngineASignal } from '@/types/athena';
 
@@ -206,6 +217,19 @@ function TextRow({ label, value }: { label: string; value: unknown }) {
   );
 }
 
+function DiagnosticRow({ label, display }: { label: string; display: DiagnosticDisplay }) {
+  return (
+    <div className="flex items-center justify-between gap-3 text-xs">
+      <span className="text-muted-foreground">{label}</span>
+      <span
+        className={`break-words text-right ${display.isUnavailable ? 'text-muted-foreground' : 'font-mono text-foreground'}`}
+      >
+        {display.text}
+      </span>
+    </div>
+  );
+}
+
 function DiagnosticBlock({ label, value }: { label: string; value: unknown }) {
   const record = asRecord(value);
   if (!Object.keys(record).length) return null;
@@ -233,6 +257,13 @@ function EngineASidePanel({ signal }: { signal: EngineASignal | null }) {
     : firstString(feedStatus.addon) || (addonValue === null ? 'missing' : addonValue > 0 ? 'confirming' : addonValue < 0 ? 'opposing' : 'neutral');
   const addonLabel = firstString(signal?.type)?.toLowerCase() === 'forex' ? 'Carry addon' : 'Addon';
   const atrDiagnostics = asRecord(signal?.atrDiagnostics);
+  const directionalRamp = resolveDirectionalRampDisplay(signal);
+  const trendCoherenceRows = resolveTrendCoherenceRows(diagnostics);
+  const feedAddon = resolveFeedAddonDisplay(diagnostics);
+  const atrProvenance = resolveAtrProvenanceRows(atrDiagnostics);
+  const candleFetchRows = resolveCandleFetchMetaRows(signal?.candleFetchMeta);
+  const showDebugFooter = isFrontendDebugVisible();
+  const frontendBuildLabel = showDebugFooter ? resolveFrontendBuildLabel() : null;
   const direction = normalizeDirection(signal?.direction);
   const score = firstNumber(signal?.confluenceScore, signal?.score, signal?.final_score);
   const maxScore = firstNumber(signal?.maxScore, signal?.max_score) ?? 3;
@@ -266,14 +297,25 @@ function EngineASidePanel({ signal }: { signal: EngineASignal | null }) {
           Trend
         </div>
         <NumberRow label="Trend score" value={factorScores.trend} />
-        <NumberRow
-          label="Directional ramp"
-          value={firstNumber(diagnostics.directionalRampMult, diagnostics.directionalRampMultiplier, diagnostics.directional_ramp_multiplier)}
+        <DiagnosticRow label="Directional ramp" display={directionalRamp} />
+        <DiagnosticRow
+          label="Min directional"
+          display={resolveNumericDisplay(
+            firstNumber(diagnostics.minDirectional, diagnostics.minDirectionalThreshold, diagnostics.min_directional_threshold),
+            5,
+            'factorDiagnostics.minDirectional missing from payload',
+          )}
         />
-        <NumberRow label="Min directional" value={firstNumber(diagnostics.minDirectional, diagnostics.minDirectionalThreshold, diagnostics.min_directional_threshold)} />
-        <NumberRow label="Effective min directional" value={firstNumber(diagnostics.effectiveMinDirectional, diagnostics.effective_min_directional)} />
-        <NumberRow label="Agreement count" value={trendCoherence.agreement_count} />
-        <NumberRow label="Coherence ratio" value={trendCoherence.coherence_ratio} />
+        <DiagnosticRow
+          label="Effective min directional"
+          display={resolveNumericDisplay(
+            firstNumber(diagnostics.effectiveMinDirectional, diagnostics.effective_min_directional),
+            5,
+            'factorDiagnostics.effectiveMinDirectional missing from payload',
+          )}
+        />
+        <DiagnosticRow label="Agreement count" display={trendCoherenceRows.agreement} />
+        <DiagnosticRow label="Coherence ratio" display={trendCoherenceRows.ratio} />
         <DiagnosticBlock label="Trend coherence" value={trendCoherence} />
       </section>
 
@@ -286,7 +328,7 @@ function EngineASidePanel({ signal }: { signal: EngineASignal | null }) {
         <NumberRow label="Momentum score" value={factorScores.momentum} />
         <NumberRow label={`${addonLabel} value`} value={addonValue} />
         <TextRow label={`${addonLabel} status`} value={addonStatus} />
-        <TextRow label="Feed addon" value={feedStatus.addon} />
+        <DiagnosticRow label="Feed addon" display={feedAddon} />
         <DiagnosticBlock label="Feed status" value={feedStatus} />
         <DiagnosticBlock label="Engine A asset diagnostics" value={engineAAssetDiagnostics} />
       </section>
@@ -294,10 +336,20 @@ function EngineASidePanel({ signal }: { signal: EngineASignal | null }) {
       <section className="space-y-2 rounded-md border border-border/60 p-2">
         <div className="text-xs font-semibold">Risk</div>
         <NumberRow label="ATR" value={firstNumber(signal?.atr, atrDiagnostics.atr, atrDiagnostics.atr_value)} />
-        <TextRow label="ATR timeframe" value={firstString(atrDiagnostics.atr_tf, atrDiagnostics.atrTimeframe)} />
-        <TextRow label="ATR source" value={firstString(atrDiagnostics.atr_source, atrDiagnostics.atrSource)} />
+        <DiagnosticRow label="ATR timeframe" display={atrProvenance.timeframe} />
+        <DiagnosticRow label="ATR source" display={atrProvenance.source} />
+        <DiagnosticRow label="ATR candle last ts" display={atrProvenance.candleLastTs} />
+        <DiagnosticRow label="ATR age seconds" display={atrProvenance.ageSeconds} />
+        <DiagnosticRow label="ATR confirmed only" display={atrProvenance.confirmedOnly} />
         <NumberRow label="RR" value={firstNumber(signal?.rr, signal?.rr1)} />
         <DiagnosticBlock label="ATR diagnostics" value={atrDiagnostics} />
+      </section>
+
+      <section className="space-y-2 rounded-md border border-border/60 p-2">
+        <div className="text-xs font-semibold">Candle Fetch</div>
+        {candleFetchRows.map((row) => (
+          <DiagnosticRow key={row.label} label={row.label} display={row.display} />
+        ))}
       </section>
 
       <section className="space-y-2 rounded-md border border-border/60 p-2">
@@ -314,6 +366,9 @@ function EngineASidePanel({ signal }: { signal: EngineASignal | null }) {
       <p className="text-[11px] leading-4 text-muted-foreground">
         Entry, SL, TP, and swing levels are side-panel values only. The TradingView iframe is not drawing custom levels.
       </p>
+      {showDebugFooter && frontendBuildLabel && (
+        <p className="text-[10px] leading-4 text-muted-foreground/70">Frontend bundle: {frontendBuildLabel}</p>
+      )}
     </aside>
   );
 }

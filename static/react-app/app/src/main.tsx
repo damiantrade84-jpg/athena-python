@@ -7,8 +7,15 @@ import { initGlobalState } from '@/lib/globalState'
 import { initExecutionFeature } from '@/lib/executionFeature'
 import App from './App.tsx'
 
+function initFrontendBuildMeta() {
+  const buildId = import.meta.env.VITE_APP_BUILD_ID
+  const bundle = import.meta.url.split('/').pop()?.split('?')[0] ?? undefined
+  window.__ATHENA_FRONTEND__ = { buildId, bundle }
+}
+
 // Initialize compatibility globals before React mounts.
 // Order matters: core utils → API client → state container → execution.
+initFrontendBuildMeta()
 initGlobalState();
 initCoreUtils();
 initApiClient();
