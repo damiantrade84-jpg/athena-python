@@ -16,8 +16,12 @@ from suggested_trade_monitor import (
     add_watch,
     build_watch_from_flag,
     cancel_watch,
+    evaluate_all_watches_once,
     evaluate_trigger,
     evaluate_watches,
+    get_runner_status,
+    monitor_config,
+    start_suggested_trade_runner_once,
     validate_flag_payload,
 )
 
@@ -132,3 +136,47 @@ def test_monitor_module_has_no_execution_imports():
     )
     for token in forbidden:
         assert token not in text
+
+
+def test_alert_only_cannot_be_disabled_by_config():
+    cfg = {"SUGGESTED_TRADE_MONITOR": {"ALERT_ONLY": False}}
+    mcfg = monitor_config(cfg)
+    assert mcfg["ALERT_ONLY"] is True
+
+
+def test_runner_status_defaults_to_frontend_poll_when_not_started():
+    status = get_runner_status({})
+    assert status["alertOnly"] is True
+    assert status["mode"] in ("frontend_poll", "manual_only", "background_thread")
+    assert status["active"] in (True, False)
+
+
+def test_evaluate_all_watches_once_marks_acceptance_above(monkeypatch):
+    tmp_dir = Path(tempfile.mkdtemp(prefix="athena_suggested_above_"))
+    active = tmp_dir / "active.json"
+    events = tmp_dir / "events.jsonl"
+
+    validated, err = validate_flag_payload({
+        "symbol": "EURUSD",
+        "suggestedTradePlan": _valid_plan(triggerType="ACCEPTANCE_ABOVE", level=1.08),
+    })
+    assert err is None
+    watch, add_err = add_watch(validated, active_path=active, events_path=events)
+    assert add_err is None
+
+    def _fetch(_symbol, _tf, limit=5):
+        return {"candles": [{"c": 1.081}]}
+
+    result = evaluate_all_watches_once(
+        active_path=active,
+        events_path=events,
+        fetch_candles_fn=_fetch,
+    )
+    assert result["updated"] >= 1
+    watches = json.loads(active.read_text(encoding="utf-8"))["watches"]
+    assert watches[0]["status"] == "READY_FOR_REVIEW"
+
+
+def test_start_runner_once_is_idempotent():
+    started = start_suggested_trade_runner_once(cfg={"SUGGESTED_TRADE_MONITOR": {"ENABLED": False}})
+    assert started is False

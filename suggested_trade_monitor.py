@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+import threading
+import time
 import uuid
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
@@ -25,6 +27,12 @@ WATCH_STATUSES = frozenset({
 
 DEFAULT_ACTIVE_PATH = Path("logs/suggested_trades/active.json")
 DEFAULT_EVENTS_PATH = Path("logs/suggested_trades/events.jsonl")
+
+_runner_lock = threading.Lock()
+_runner_thread: threading.Thread | None = None
+_runner_started = False
+_runner_last_tick_at: str | None = None
+_runner_last_error: str | None = None
 
 
 def _utc_now_iso() -> str:
@@ -75,6 +83,7 @@ def monitor_config(cfg: dict[str, Any] | None) -> dict[str, Any]:
     base = {
         "ENABLED": True,
         "ALERT_ONLY": True,
+        "RUNNER_ENABLED": True,
         "POLL_SECONDS": 5,
         "DEFAULT_EXPIRY_SECONDS": 1800,
         "MAX_ACTIVE_WATCHES": 25,
@@ -423,3 +432,166 @@ def evaluate_watches(
         save_active_watches(watches, active_path)
 
     return {"evaluated": evaluated, "updated": updated, "alert_only": True}
+
+
+def count_watches_by_status(watches: list[dict[str, Any]]) -> dict[str, int]:
+    counts = {
+        "active": 0,
+        "ready": 0,
+        "expired": 0,
+        "cancelled": 0,
+        "invalidated": 0,
+    }
+    for watch in watches:
+        status = str(watch.get("status") or "").upper()
+        if status in ("FLAGGED", "WATCHING", "LEVEL_REACHED"):
+            counts["active"] += 1
+        elif status == "READY_FOR_REVIEW":
+            counts["ready"] += 1
+        elif status == "EXPIRED":
+            counts["expired"] += 1
+        elif status == "CANCELLED":
+            counts["cancelled"] += 1
+        elif status == "INVALIDATED":
+            counts["invalidated"] += 1
+    return counts
+
+
+def mark_runner_tick(*, error: str | None = None) -> None:
+    global _runner_last_tick_at, _runner_last_error
+    with _runner_lock:
+        _runner_last_tick_at = _utc_now_iso()
+        _runner_last_error = error
+
+
+def get_runner_status(cfg: dict[str, Any] | None = None) -> dict[str, Any]:
+    mcfg = monitor_config(cfg)
+    poll_seconds = int(mcfg.get("POLL_SECONDS", 5) or 5)
+    monitor_enabled = bool(mcfg.get("ENABLED", True))
+    runner_enabled = bool(mcfg.get("RUNNER_ENABLED", True))
+
+    with _runner_lock:
+        last_tick = _runner_last_tick_at
+        last_error = _runner_last_error
+        thread_alive = _runner_thread is not None and _runner_thread.is_alive()
+
+    last_tick_dt = _parse_ts(last_tick)
+    last_tick_age: float | None = None
+    if last_tick_dt is not None:
+        last_tick_age = max(0.0, (datetime.now(timezone.utc) - last_tick_dt).total_seconds())
+
+    if not monitor_enabled:
+        mode = "manual_only"
+        active = False
+    elif not runner_enabled:
+        mode = "frontend_poll"
+        active = False
+    elif thread_alive:
+        mode = "background_thread"
+        active = True
+    else:
+        mode = "frontend_poll"
+        active = False
+
+    next_poll: int | None = None
+    if last_tick_age is not None:
+        next_poll = max(0, poll_seconds - int(last_tick_age))
+
+    return {
+        "enabled": monitor_enabled,
+        "alertOnly": True,
+        "mode": mode,
+        "active": active,
+        "lastTickAt": last_tick,
+        "lastTickAgeSeconds": last_tick_age,
+        "nextPollSeconds": next_poll,
+        "pollSeconds": poll_seconds,
+        "error": last_error,
+    }
+
+
+def evaluate_all_watches_once(
+    *,
+    cfg: dict[str, Any] | None = None,
+    active_path: Path | None = None,
+    events_path: Path | None = None,
+    fetch_candles_fn: Callable[..., Any] | None = None,
+    live_prices: dict[str, Any] | None = None,
+    live_prices_lock: Any | None = None,
+) -> dict[str, Any]:
+    try:
+        result = evaluate_watches(
+            cfg=cfg,
+            active_path=active_path,
+            events_path=events_path,
+            fetch_candles_fn=fetch_candles_fn,
+            live_prices=live_prices,
+            live_prices_lock=live_prices_lock,
+        )
+        mark_runner_tick()
+        return result
+    except Exception as exc:
+        mark_runner_tick(error=str(exc))
+        raise
+
+
+def _runner_loop(
+    cfg: dict[str, Any] | None,
+    fetch_candles_fn: Callable[..., Any] | None,
+    live_prices: dict[str, Any] | None,
+    live_prices_lock: Any | None,
+    active_path: Path,
+    events_path: Path,
+) -> None:
+    while True:
+        mcfg = monitor_config(cfg)
+        if not mcfg.get("ENABLED", True) or not mcfg.get("RUNNER_ENABLED", True):
+            break
+        poll_seconds = max(1, int(mcfg.get("POLL_SECONDS", 5) or 5))
+        try:
+            evaluate_all_watches_once(
+                cfg=cfg,
+                active_path=active_path,
+                events_path=events_path,
+                fetch_candles_fn=fetch_candles_fn,
+                live_prices=live_prices,
+                live_prices_lock=live_prices_lock,
+            )
+        except Exception as exc:
+            mark_runner_tick(error=str(exc))
+        time.sleep(poll_seconds)
+
+
+def start_suggested_trade_runner_once(
+    *,
+    cfg: dict[str, Any] | None = None,
+    fetch_candles_fn: Callable[..., Any] | None = None,
+    live_prices: dict[str, Any] | None = None,
+    live_prices_lock: Any | None = None,
+    active_path: Path | None = None,
+    events_path: Path | None = None,
+) -> bool:
+    global _runner_thread, _runner_started
+    mcfg = monitor_config(cfg)
+    if not mcfg.get("ENABLED", True) or not mcfg.get("RUNNER_ENABLED", True):
+        return False
+
+    with _runner_lock:
+        if _runner_started and _runner_thread is not None and _runner_thread.is_alive():
+            return True
+        _runner_started = True
+        _runner_thread = threading.Thread(
+            target=_runner_loop,
+            args=(
+                cfg,
+                fetch_candles_fn,
+                live_prices,
+                live_prices_lock,
+                active_path or DEFAULT_ACTIVE_PATH,
+                events_path or DEFAULT_EVENTS_PATH,
+            ),
+            name="suggested-trade-monitor",
+            daemon=True,
+        )
+        _runner_thread.start()
+    return True

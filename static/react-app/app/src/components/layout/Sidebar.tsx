@@ -11,7 +11,7 @@ import { Switch } from '@/components/ui/switch';
 import {
   LayoutDashboard, Zap, Search, Settings, TrendingUp,
   Layers, Activity, BarChart2, FlaskConical, Filter, Ticket,
-  Microscope, PieChart, Globe, ShieldCheck, Radio, BrainCircuit,
+  Microscope, PieChart, Globe, ShieldCheck, Radio, BrainCircuit, ListChecks,
 } from 'lucide-react';
 
 const navItems: { id: PanelId; label: string; icon: ElementType; badge?: string }[] = [
@@ -25,6 +25,7 @@ const navItems: { id: PanelId; label: string; icon: ElementType; badge?: string 
   { id: 'scalpLab',    label: 'Scalp Lab',    icon: Activity },
   { id: 'scalpWorkbench', label: 'Scalp Workbench', icon: BarChart2 },
   { id: 'tvChart',     label: 'TV Chart',     icon: BarChart2 },
+  { id: 'suggestedTrades', label: 'Suggested Trades', icon: ListChecks },
   { id: 'backtest',    label: 'Backtest',     icon: FlaskConical },
   { id: 'screener',    label: 'Screener',     icon: Filter },
   { id: 'lotteryLab',  label: 'Lottery Lab',  icon: Ticket },

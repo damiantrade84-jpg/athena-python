@@ -18,6 +18,7 @@ import PerformancePanel from '@/components/panels/PerformancePanel';
 import MarketsPanel from '@/components/panels/MarketsPanel';
 import GuardianPanel from '@/components/panels/GuardianPanel';
 import AiPerformancePanel from '@/components/panels/AiPerformancePanel';
+import SuggestedTradesPanel from '@/components/panels/SuggestedTradesPanel';
 
 const panels: Record<string, React.ComponentType> = {
   dashboard: DashboardPanel,
@@ -38,6 +39,7 @@ const panels: Record<string, React.ComponentType> = {
   markets: MarketsPanel,
   guardian: GuardianPanel,
   aiPerformance: AiPerformancePanel,
+  suggestedTrades: SuggestedTradesPanel,
 };
 
 export default function Home() {

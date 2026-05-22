@@ -105,6 +105,8 @@ function aiHumanAction(review: AIChartReviewResponse | null): string {
 export function aiReviewEntryTimingRejected(review: AIChartReviewResponse | null): boolean {
   if (!review) return false;
   const comparison = review.engineAVerdictComparison ?? review.engine_a_verdict_comparison;
+  const comparisonVerdict = String(comparison?.comparisonVerdict || '').trim();
+  if (comparisonVerdict === 'engine_a_direction_confirmed_entry_rejected') return true;
   if (comparison?.chartContradictsEntryTiming === true) return true;
   const entryQuality = String(review.ai_review?.entry_quality || '').toLowerCase();
   return entryQuality.includes('poor') || entryQuality.includes('extended') || entryQuality.includes('late');
@@ -143,7 +145,7 @@ export function evaluateTvChartExecuteBlock(args: {
   if (isTestMode) return 'Test mode';
   if (!signal) return 'No selected signal';
   const signalKey = normalizeSymbolKey(signal.symbol || signal.pair || signal.display);
-  if (chartSymbolKey && signalKey && chartSymbolKey !== signalKey) return 'No selected signal';
+  if (chartSymbolKey && signalKey && chartSymbolKey !== signalKey) return 'Symbol mismatch';
   const direction = String(signal.direction || '').toUpperCase();
   if (direction !== 'LONG' && direction !== 'SHORT') return 'No selected signal';
   const entry = signal.entry ?? signal.price;

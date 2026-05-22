@@ -59,6 +59,9 @@ def app_client(monkeypatch):
 
     app = Flask(__name__)
     cfg = dict(CONFIG)
+    monitor_cfg = dict(cfg.get("SUGGESTED_TRADE_MONITOR") or {})
+    monitor_cfg["RUNNER_ENABLED"] = False
+    cfg["SUGGESTED_TRADE_MONITOR"] = monitor_cfg
     register_suggested_trade_routes(
         app,
         SimpleNamespace(
@@ -91,8 +94,46 @@ def test_list_route_returns_active_watches(app_client):
     resp = client.get("/api/suggested-trades")
     assert resp.status_code == 200
     data = resp.get_json()
+    assert data["ok"] is True
     assert data["count"] >= 1
     assert data["alert_only"] is True
+    assert "counts" in data
+    assert "runner" in data
+    assert data["runner"]["alertOnly"] is True
+
+
+def test_status_route_returns_runner_and_counts(app_client):
+    client, _ = app_client
+    client.post("/api/suggested-trades/flag", json=_valid_flag_body())
+    resp = client.get("/api/suggested-trades/status")
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["ok"] is True
+    assert "counts" in data
+    assert "runner" in data
+    assert data["runner"]["alertOnly"] is True
+
+
+def test_evaluate_now_includes_runner_and_counts(app_client):
+    client, _ = app_client
+    client.post("/api/suggested-trades/flag", json=_valid_flag_body())
+    resp = client.post("/api/suggested-trades/evaluate-now")
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["success"] is True
+    assert data["evaluation"]["alert_only"] is True
+    assert "counts" in data
+    assert "runner" in data
+    watches = data["watches"]
+    assert any(w.get("status") == "READY_FOR_REVIEW" for w in watches)
+
+
+def test_routes_module_has_no_execution_calls():
+    source = Path(__file__).resolve().parents[1] / "athena_app/api/routes_suggested_trades.py"
+    text = source.read_text(encoding="utf-8")
+    assert "quick_execute" not in text
+    assert "scalp_execute" not in text
+    assert "execution.py" not in text
 
 
 def test_cancel_route_cancels_watch(app_client):

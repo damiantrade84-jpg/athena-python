@@ -33,13 +33,61 @@ export interface SuggestedTradeWatch {
   direction?: string;
   action?: string;
   trigger_type?: string;
+  triggerType?: string;
   status?: string;
+  source?: string;
   level?: number;
   zone_low?: number;
   zone_high?: number;
-  reached_at?: string | null;
+  zoneLow?: number;
+  zoneHigh?: number;
+  context_tf?: string;
+  contextTf?: string;
+  entry_tf?: string;
+  entryTf?: string;
+  execution_tf?: string;
+  executionTf?: string;
+  created_at?: string;
+  createdAt?: string;
   expires_at?: string | null;
+  expiresAt?: string | null;
+  reached_at?: string | null;
+  reachedAt?: string | null;
+  last_evaluated_at?: string | null;
+  lastCheckedAt?: string | null;
+  cancelled_at?: string | null;
+  notes?: string | null;
+  signal?: unknown;
   suggested_trade_plan?: SuggestedTradePlan;
+  suggestedTradePlan?: SuggestedTradePlan;
+  ai_review_summary?: Record<string, unknown>;
+}
+
+export interface SuggestedTradeRunnerStatus {
+  enabled?: boolean;
+  alertOnly?: boolean;
+  mode?: 'background_thread' | 'frontend_poll' | 'manual_only' | string;
+  active?: boolean;
+  lastTickAt?: string | null;
+  lastTickAgeSeconds?: number | null;
+  nextPollSeconds?: number | null;
+  pollSeconds?: number;
+  error?: string | null;
+}
+
+export interface SuggestedTradesListResponse {
+  ok?: boolean;
+  watches?: SuggestedTradeWatch[];
+  count?: number;
+  counts?: {
+    active?: number;
+    ready?: number;
+    expired?: number;
+    cancelled?: number;
+    invalidated?: number;
+  };
+  runner?: SuggestedTradeRunnerStatus;
+  alert_only?: boolean;
 }
 
 export interface TvChartIntent {

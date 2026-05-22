@@ -189,7 +189,8 @@ export type PanelId =
   | 'performance'
   | 'markets'
   | 'guardian'
-  | 'aiPerformance';
+  | 'aiPerformance'
+  | 'suggestedTrades';
 
 export interface LotteryNumber {
   numbers: number[];

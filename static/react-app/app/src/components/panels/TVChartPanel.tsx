@@ -663,6 +663,49 @@ function timeframeRouteKey(symbol: string | null, route: TimeframeRoute): string
   ].join(':');
 }
 
+const CHART_CAPTURE_BACKGROUND = { r: 11, g: 15, b: 20 };
+
+function waitForChartPaint(): Promise<void> {
+  return new Promise((resolve) => {
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => resolve());
+    });
+  });
+}
+
+function chartRenderGenerationKey(
+  pair: string,
+  backendTf: string | undefined,
+  candleCount: number,
+): string {
+  return `${pair}:${backendTf || ''}:${candleCount}`;
+}
+
+function canvasHasNonBackgroundContent(
+  canvas: HTMLCanvasElement,
+  background = CHART_CAPTURE_BACKGROUND,
+  tolerance = 8,
+): boolean {
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  if (!ctx) return false;
+  const sampleW = Math.min(canvas.width, 96);
+  const sampleH = Math.min(canvas.height, 96);
+  if (sampleW <= 0 || sampleH <= 0) return false;
+  const { data } = ctx.getImageData(0, 0, sampleW, sampleH);
+  for (let i = 0; i < data.length; i += 4) {
+    const alpha = data[i + 3];
+    if (alpha < 10) continue;
+    if (
+      Math.abs(data[i] - background.r) > tolerance
+      || Math.abs(data[i + 1] - background.g) > tolerance
+      || Math.abs(data[i + 2] - background.b) > tolerance
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
 interface ChartStudySnapshot {
   rows: CandlestickData[];
   highs: number[];
@@ -1767,7 +1810,7 @@ function buildCleanLegendChips(args: {
 // --- Main panel ------------------------------------------------------
 
 export default function TVChartPanel() {
-  const { scanCacheA, tvChartIntent, clearTvChartIntent, showToast, isTestMode } = useStore();
+  const { scanCacheA, tvChartIntent, clearTvChartIntent, showToast, isTestMode, setActivePanel } = useStore();
   const { data: autoTrade } = useApiPoll<{ enabled: boolean }>('/api/auto-trade', 60_000);
   const { priceEntryFor } = useLivePrices();
   const [pair, setPair] = useState('EURUSD');
@@ -1816,6 +1859,9 @@ export default function TVChartPanel() {
   const appliedIntentIdRef = useRef<string | null>(null);
   const pendingAutoReviewRef = useRef(false);
   const autoReviewRanForIntentRef = useRef<string | null>(null);
+  const chartRenderGenerationRef = useRef('');
+  const chartPaintReadyGenerationRef = useRef<string | null>(null);
+  const [chartPaintReadyTick, setChartPaintReadyTick] = useState(0);
 
   const candidateRows = useMemo(
     () => (Array.isArray(scanCacheA) ? scanCacheA.filter((row): row is EngineASignal => Boolean(row && typeof row === 'object')) : []),
@@ -2023,13 +2069,15 @@ export default function TVChartPanel() {
 
   useEffect(() => {
     if (!pendingAutoReviewRef.current || loading || !candles?.length || aiReviewLoading) return;
+    const generation = chartRenderGenerationKey(pair, backendTf, candles.length);
+    if (chartPaintReadyGenerationRef.current !== generation) return;
     const intentId = appliedIntentIdRef.current;
     if (!intentId || autoReviewRanForIntentRef.current === intentId) return;
     autoReviewRanForIntentRef.current = intentId;
     pendingAutoReviewRef.current = false;
     setAutoReviewStatus('running');
     void runAIReview().finally(() => setAutoReviewStatus('done'));
-  }, [loading, candles, aiReviewLoading, pair]);
+  }, [loading, candles, aiReviewLoading, pair, backendTf, chartPaintReadyTick]);
 
   useEffect(() => {
     let cancelled = false;
@@ -2064,6 +2112,13 @@ export default function TVChartPanel() {
     && ['WAIT_FOR_LEVEL', 'WAIT_FOR_ZONE'].includes(String(suggestedPlan?.action || '').toUpperCase()),
   );
 
+  const symbolWatches = useMemo(
+    () => activeWatches.filter((watch) => {
+      const watchKey = symbolKey(watch.symbol);
+      return !currentSymbolKey || !watchKey || watchKey === currentSymbolKey;
+    }),
+    [activeWatches, currentSymbolKey],
+  );
   const isPaper = autoTrade?.enabled ?? false;
   const executeBlockReason = useMemo(
     () => evaluateTvChartExecuteBlock({
@@ -2127,7 +2182,7 @@ export default function TVChartPanel() {
       }) as { success?: boolean; error?: string };
       if (res?.success) {
         setFlagStatus('Watching setup flagged (alert-only)');
-        showToast('Setup flagged for watch — alert only', 'success');
+        showToast('Setup flagged', 'success');
       } else {
         setFlagStatus(res?.error || 'Flag failed');
       }
@@ -2327,7 +2382,7 @@ export default function TVChartPanel() {
     }
 
     outputCtx.scale(scale, scale);
-    outputCtx.fillStyle = '#0b0f14';
+    outputCtx.fillStyle = `rgb(${CHART_CAPTURE_BACKGROUND.r}, ${CHART_CAPTURE_BACKGROUND.g}, ${CHART_CAPTURE_BACKGROUND.b})`;
     outputCtx.fillRect(0, 0, captureRect.width, captureRect.height);
     for (const canvas of canvases) {
       const rect = canvas.getBoundingClientRect();
@@ -2365,11 +2420,34 @@ export default function TVChartPanel() {
     }, 'image/png');
   }
 
+  async function captureReviewCanvas(allowRetry: boolean): Promise<HTMLCanvasElement | null> {
+    await waitForChartPaint();
+    let sourceCanvas = captureChartCanvas();
+    if (!sourceCanvas) return null;
+    if (canvasHasNonBackgroundContent(sourceCanvas)) {
+      return sourceCanvas;
+    }
+    if (!allowRetry) {
+      setChartError('Chart screenshot failed: chart has not painted yet');
+      return null;
+    }
+    setChartError('Chart not painted yet — retrying…');
+    await waitForChartPaint();
+    sourceCanvas = captureChartCanvas();
+    if (!sourceCanvas) return null;
+    if (!canvasHasNonBackgroundContent(sourceCanvas)) {
+      setChartError('Chart screenshot failed: chart has not painted yet');
+      return null;
+    }
+    setChartError(null);
+    return sourceCanvas;
+  }
+
   async function runAIReview() {
     if (aiReviewLoading) return;
     setAiReviewError(null);
     setAiReview(null);
-    const sourceCanvas = captureChartCanvas();
+    const sourceCanvas = await captureReviewCanvas(true);
     if (!sourceCanvas) return;
     const downscaled = downscaleToCap(
       sourceCanvas,
@@ -2380,6 +2458,7 @@ export default function TVChartPanel() {
     try {
       const dataUrl = await canvasToDataUrl(downscaled);
       const tfForBackend = TF_BACKEND_MAP[timeframe] || timeframe;
+      const visibleRange = chartRef.current?.timeScale().getVisibleRange() ?? null;
       const overlays: string[] = ['candles'];
       if (showEngineBOverlays && engineBOverlay?.overlay_source === 'engine_b') overlays.push('engine_b');
       if (quantVolumeBars) overlays.push('volume');
@@ -2397,6 +2476,8 @@ export default function TVChartPanel() {
         height: downscaled.height,
         chart_timeframe: tfForBackend,
         overlays,
+        visible_range_start: visibleRange?.from != null ? String(visibleRange.from) : undefined,
+        visible_range_end: visibleRange?.to != null ? String(visibleRange.to) : undefined,
         chart_provider: chartPayload?.chart_provider || chartPayload?.candle_provider || undefined,
       });
       const symbol = (pair || '').toUpperCase();
@@ -2597,6 +2678,7 @@ export default function TVChartPanel() {
       atrSeriesRef.current?.setData([]);
       volumeSeriesRef.current?.setData([]);
       volumeMaSeriesRef.current?.setData([]);
+      chartPaintReadyGenerationRef.current = null;
       return;
     }
 
@@ -2690,7 +2772,20 @@ export default function TVChartPanel() {
     } else {
       chart.timeScale().fitContent();
     }
-  }, [candles, liveTick, backendTf, isCryptoChart, studySnapshot, chartPayload, candlePriceFormat, engineBOverlay, showEngineBOverlays, chartMode, quantEma20, quantEma21, quantEma50, quantEma200, quantDema200, quantVwap, quantRsi14, quantAdx14, quantAtr14, quantVolumeBars, quantVolumeMa]);
+
+    const generation = chartRenderGenerationKey(pair, backendTf, rows.length);
+    chartRenderGenerationRef.current = generation;
+    chartPaintReadyGenerationRef.current = null;
+    let cancelled = false;
+    void waitForChartPaint().then(() => {
+      if (cancelled || chartRenderGenerationRef.current !== generation) return;
+      chartPaintReadyGenerationRef.current = generation;
+      setChartPaintReadyTick((tick) => tick + 1);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [pair, candles, liveTick, backendTf, isCryptoChart, studySnapshot, chartPayload, candlePriceFormat, engineBOverlay, showEngineBOverlays, chartMode, quantEma20, quantEma21, quantEma50, quantEma200, quantDema200, quantVwap, quantRsi14, quantAdx14, quantAtr14, quantVolumeBars, quantVolumeMa]);
 
   return (
     <>
@@ -2842,13 +2937,25 @@ export default function TVChartPanel() {
               Auto Review: {autoReviewStatus}
             </Badge>
           )}
-          {activeWatches.map((watch) => (
+          {symbolWatches.map((watch) => (
             <Badge
               key={watch.watch_id || `${watch.symbol}-${watch.status}`}
               variant="outline"
-              className={`h-7 text-[10px] ${watch.status === 'READY_FOR_REVIEW' ? 'border-long/50 text-long' : ''}`}
+              className={`h-7 text-[10px] ${
+                watch.status === 'READY_FOR_REVIEW'
+                  ? 'border-long/50 text-long'
+                  : watch.status === 'EXPIRED' || watch.status === 'CANCELLED'
+                    ? 'border-muted-foreground/40 text-muted-foreground'
+                    : ''
+              }`}
             >
-              {watch.status === 'READY_FOR_REVIEW' ? 'Ready for review' : watchLabel(watch)}
+              {watch.status === 'READY_FOR_REVIEW'
+                ? 'Ready for review'
+                : watch.status === 'EXPIRED'
+                  ? 'Expired'
+                  : watch.status === 'CANCELLED'
+                    ? 'Cancelled'
+                    : watchLabel(watch)}
             </Badge>
           ))}
           {showEngineBOverlays && engineBOverlay?.overlay_source === 'engine_b' && (
@@ -2980,6 +3087,16 @@ export default function TVChartPanel() {
                     onClick={() => void flagWatchSetup()}
                   >
                     Flag / Watch Setup
+                  </Button>
+                )}
+                {flagStatus && (
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="h-8 text-xs"
+                    onClick={() => setActivePanel('suggestedTrades')}
+                  >
+                    View Suggested Trades
                   </Button>
                 )}
                 {flagStatus && <span className="text-[10px] text-muted-foreground">{flagStatus}</span>}

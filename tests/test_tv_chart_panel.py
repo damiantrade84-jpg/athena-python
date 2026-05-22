@@ -224,6 +224,33 @@ def test_tv_chart_panel_auto_review_guard_exists():
 
     assert "autoReviewRanForIntentRef" in source
     assert "pendingAutoReviewRef.current" in source
+    assert "chartPaintReadyGenerationRef" in source
+    assert "chartPaintReadyTick" in source
+    assert "waitForChartPaint" in source
+    assert "chartRenderGenerationKey" in source
+
+
+def test_tv_chart_panel_auto_review_waits_for_chart_paint():
+    source = _read(TV_PANEL)
+
+    assert "chartPaintReadyGenerationRef.current !== generation" in source
+    assert "requestAnimationFrame" in source
+
+
+def test_tv_chart_panel_ai_review_sends_visible_range_meta():
+    source = _read(TV_PANEL)
+
+    assert "getVisibleRange()" in source
+    assert "visible_range_start" in source
+    assert "visible_range_end" in source
+
+
+def test_tv_chart_panel_ai_review_rejects_blank_capture():
+    source = _read(TV_PANEL)
+
+    assert "canvasHasNonBackgroundContent" in source
+    assert "captureReviewCanvas" in source
+    assert "Chart not painted yet — retrying" in source
 
 
 def test_tv_chart_panel_flag_watch_setup_button():
@@ -231,8 +258,9 @@ def test_tv_chart_panel_flag_watch_setup_button():
 
     assert "Flag / Watch Setup" in source
     assert "/api/suggested-trades/flag" in source
+    assert "View Suggested Trades" in source
     flag_idx = source.index("Flag / Watch Setup")
-    flag_section = source[flag_idx:flag_idx + 600]
+    flag_section = source[flag_idx:flag_idx + 800]
     assert "postJson('/api/quick-execute'" not in flag_section
     assert "onConfirmExecute" not in flag_section
 

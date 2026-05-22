@@ -37,6 +37,7 @@ import {
 import {
   buildScalpExecutePayload,
   evaluateScalpExecuteBlock,
+  normalizeSymbolKey,
 } from '@/lib/manualExecuteHelpers';
 import ScalpAIReviewCard from '@/components/athena/ScalpAIReviewCard';
 import type { ScalpAIChartReviewResponse, SuggestedTradePlan, SuggestedTradeWatch } from '@/types/athena';
@@ -921,6 +922,7 @@ export default function ScalpWorkbenchPanel() {
     clearScalpWorkbenchIntent,
     showToast,
     isTestMode,
+    setActivePanel,
   } = useStore();
   const { post: postScan, loading: scanLoading, error: scanError } = useApiPost<ScalpScanResponse>();
   const { post: postExecute, loading: executingScalp } = useApiPost<ScalpExecuteResponse>();
@@ -979,6 +981,14 @@ export default function ScalpWorkbenchPanel() {
       || null;
   }, [activeSymbolKey, scanSignals, selectedCache]);
   const chartSymbol = signalSymbol(activeSignal);
+  const symbolWatches = useMemo(
+    () => activeWatches.filter((watch) => {
+      const watchKey = normalizeSymbolKey(watch.symbol);
+      const chartKey = normalizeSymbolKey(chartSymbol);
+      return !chartKey || !watchKey || watchKey === chartKey;
+    }),
+    [activeWatches, chartSymbol],
+  );
   const activeUi = useMemo(() => normalizeScalpWorkbenchRow(activeSignal), [activeSignal]);
   const executionTf = useMemo(() => {
     const raw = activeUi.timeframe || activeSignal?.execution_tf || activeSignal?.timeframe || 'M1';
@@ -1103,7 +1113,7 @@ export default function ScalpWorkbenchPanel() {
       }) as { success?: boolean; error?: string };
       if (res?.success) {
         setFlagStatus('Watching setup flagged (alert-only)');
-        showToast('Scalp setup flagged for watch — alert only', 'success');
+        showToast('Setup flagged', 'success');
       } else {
         setFlagStatus(res?.error || 'Flag failed');
       }
@@ -1530,13 +1540,25 @@ export default function ScalpWorkbenchPanel() {
                     Auto Review: {autoReviewStatus}
                   </Badge>
                 )}
-                {activeWatches.map((watch) => (
+                {symbolWatches.map((watch) => (
                   <Badge
                     key={watch.watch_id || `${watch.symbol}-${watch.status}`}
                     variant="outline"
-                    className={`text-[10px] ${watch.status === 'READY_FOR_REVIEW' ? 'border-long/50 text-long' : ''}`}
+                    className={`text-[10px] ${
+                      watch.status === 'READY_FOR_REVIEW'
+                        ? 'border-long/50 text-long'
+                        : watch.status === 'EXPIRED' || watch.status === 'CANCELLED'
+                          ? 'border-muted-foreground/40 text-muted-foreground'
+                          : ''
+                    }`}
                   >
-                    {watch.status === 'READY_FOR_REVIEW' ? 'Ready for review' : watchLabel(watch)}
+                    {watch.status === 'READY_FOR_REVIEW'
+                      ? 'Ready for review'
+                      : watch.status === 'EXPIRED'
+                        ? 'Expired'
+                        : watch.status === 'CANCELLED'
+                          ? 'Cancelled'
+                          : watchLabel(watch)}
                   </Badge>
                 ))}
               </div>
@@ -1783,6 +1805,16 @@ export default function ScalpWorkbenchPanel() {
               >
                 Flag / Watch Setup
               </Button>
+              {flagStatus && (
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="h-8 text-xs"
+                  onClick={() => setActivePanel('suggestedTrades')}
+                >
+                  View Suggested Trades
+                </Button>
+              )}
               {flagStatus && <span className="text-[10px] text-muted-foreground">{flagStatus}</span>}
             </div>
           )}

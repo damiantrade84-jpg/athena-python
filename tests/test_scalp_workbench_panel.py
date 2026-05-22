@@ -88,8 +88,9 @@ def test_scalp_workbench_flag_watch_setup_button():
 
     assert "Flag / Watch Setup" in source
     assert "/api/suggested-trades/flag" in source
+    assert "View Suggested Trades" in source
     flag_idx = source.index("Flag / Watch Setup")
-    flag_section = source[flag_idx:flag_idx + 600]
+    flag_section = source[flag_idx:flag_idx + 800]
     assert "postExecute('/api/scalp-execute'" not in flag_section
 
 
