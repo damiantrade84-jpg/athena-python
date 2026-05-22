@@ -24,6 +24,8 @@ import type { PerformanceMetrics, PerformanceEngineRow } from '@/types';
 
 interface OpenTradesTimedResp {
   positions?: Record<string, unknown>[];
+  audit_unresolved?: Record<string, unknown>[];
+  audit_unresolved_count?: number;
   count?: number;
   error?: string;
 }
@@ -87,6 +89,10 @@ export default function TradesPanel() {
     () => asArray(openTradesResp),
     [openTradesResp],
   );
+  const unresolvedAudit = useMemo<AnyPos[]>(() => {
+    if (!openTradesResp || Array.isArray(openTradesResp)) return [];
+    return Array.isArray(openTradesResp.audit_unresolved) ? openTradesResp.audit_unresolved : [];
+  }, [openTradesResp]);
 
   // Equity curve: backend returns flat number[] of cumulative R. Convert to recharts shape.
   const equityData = useMemo(() => {
@@ -145,7 +151,14 @@ export default function TradesPanel() {
             <CardHeader className="pb-2">
               <CardTitle className="text-xs font-semibold flex items-center justify-between uppercase tracking-wider" style={{ fontFamily: "'Rajdhani', sans-serif", letterSpacing: '0.12em' }}>
                 <span>Open Positions</span>
-                <Badge variant="outline" className="text-[10px]">{openTrades.length} open</Badge>
+                <div className="flex items-center gap-2">
+                  <Badge variant="outline" className="text-[10px]">{openTrades.length} live</Badge>
+                  {unresolvedAudit.length > 0 && (
+                    <Badge variant="outline" className="text-[10px] text-warning border-warning/50">
+                      {unresolvedAudit.length} audit
+                    </Badge>
+                  )}
+                </div>
               </CardTitle>
             </CardHeader>
             <CardContent>
@@ -154,9 +167,11 @@ export default function TradesPanel() {
                   <div className="space-y-2">
                     {Array.from({ length: 5 }).map((_, i) => <Skeleton key={i} className="h-10 w-full" />)}
                   </div>
-                ) : openTrades.length === 0 ? (
+                ) : openTrades.length === 0 && unresolvedAudit.length === 0 ? (
                   <div className="text-center text-muted-foreground py-12 text-sm">No open positions</div>
                 ) : (
+                  <div className="space-y-4">
+                  {openTrades.length > 0 && (
                   <Table>
                     <TableHeader>
                       <TableRow className="hover:bg-transparent">
@@ -222,6 +237,54 @@ export default function TradesPanel() {
                       })}
                     </TableBody>
                   </Table>
+                  )}
+                  {unresolvedAudit.length > 0 && (
+                    <div className="rounded-md border border-warning/30 bg-warning/5">
+                      <div className="flex items-center gap-2 px-3 py-2 text-[10px] uppercase tracking-wider text-warning">
+                        <AlertTriangle className="h-3.5 w-3.5" />
+                        Audit rows without exit price
+                      </div>
+                      <Table>
+                        <TableHeader>
+                          <TableRow className="hover:bg-transparent">
+                            <TableHead className="text-[10px] uppercase">Symbol</TableHead>
+                            <TableHead className="text-[10px] uppercase">Dir</TableHead>
+                            <TableHead className="text-[10px] uppercase">Ticket</TableHead>
+                            <TableHead className="text-[10px] uppercase">State</TableHead>
+                            <TableHead className="text-[10px] uppercase text-right">Entry</TableHead>
+                            <TableHead className="text-[10px] uppercase text-right">SL</TableHead>
+                            <TableHead className="text-[10px] uppercase text-right">TP</TableHead>
+                            <TableHead className="text-[10px] uppercase">Style</TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {unresolvedAudit.map((row, idx) => {
+                            const direction = String(row.direction || '');
+                            const ticket = String(row.ticket || row.id || idx);
+                            return (
+                              <TableRow key={`audit-${ticket}`}>
+                                <TableCell className="text-xs font-mono">{String(row.pair || '-')}</TableCell>
+                                <TableCell>
+                                  <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${direction === 'LONG' ? 'bg-long/20 text-long' : 'bg-short/20 text-short'}`}>
+                                    {direction || '-'}
+                                  </span>
+                                </TableCell>
+                                <TableCell className="text-[10px] font-mono text-muted-foreground">{ticket}</TableCell>
+                                <TableCell className="text-[10px] uppercase text-warning">
+                                  {row.broker_live ? 'broker live' : 'audit only'}
+                                </TableCell>
+                                <TableCell className="text-xs font-mono text-right">{fmtNum(num(row.entry_price), 5)}</TableCell>
+                                <TableCell className="text-xs font-mono text-right text-short">{fmtNum(num(row.sl), 5)}</TableCell>
+                                <TableCell className="text-xs font-mono text-right text-long">{fmtNum(num(row.tp), 5)}</TableCell>
+                                <TableCell className="text-[10px] font-mono text-muted-foreground">{String(row.style || row.engine || '-')}</TableCell>
+                              </TableRow>
+                            );
+                          })}
+                        </TableBody>
+                      </Table>
+                    </div>
+                  )}
+                  </div>
                 )}
               </ScrollArea>
             </CardContent>

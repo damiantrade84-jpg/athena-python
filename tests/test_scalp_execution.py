@@ -730,6 +730,86 @@ def test_open_trades_timed_engine_scalp_overrides_stale_intraday_style(monkeypat
     assert row["close_trigger_min"] is None
 
 
+def test_open_trades_timed_exposes_unresolved_audit_rows(monkeypatch, tmp_path):
+    athena_module = _load_athena_module()
+    db_path = tmp_path / "audit.db"
+    with sqlite3.connect(db_path) as con:
+        con.execute(
+            """
+            CREATE TABLE audit_log (
+                id INTEGER PRIMARY KEY,
+                ts TEXT,
+                pair TEXT,
+                direction TEXT,
+                entry_price REAL,
+                sl REAL,
+                tp REAL,
+                volume REAL,
+                engine TEXT,
+                style TEXT,
+                ticket TEXT,
+                asset_class TEXT,
+                exit_price REAL
+            )
+            """
+        )
+        con.executemany(
+            """
+            INSERT INTO audit_log (
+                id, ts, pair, direction, entry_price, sl, tp, volume, engine,
+                style, ticket, asset_class, exit_price
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            [
+                (1, "2026-05-22T08:00:00+00:00", "EUR/CHF", "SHORT", 0.91624, 0.92118, 0.90816, 0.18, "engine_a", "swing", "309018151", "forex", None),
+                (2, "2026-05-22T08:01:00+00:00", "EUR/USD", "LONG", 1.1, 1.09, 1.12, 0.01, "engine_a", "swing", "123", "forex", None),
+                (3, "2026-05-22T08:02:00+00:00", "EUR/USD", "LONG", 1.1, 1.09, 1.12, 0.01, "engine_a", "swing", "123", "forex", None),
+            ],
+        )
+
+    monkeypatch.setattr(athena_module, "_AUDIT_DB", str(db_path))
+    monkeypatch.setattr(
+        mt5_executor,
+        "mt5_get_positions",
+        lambda: {
+            "error": False,
+            "positions": [
+                {
+                    "ticket": "309018151",
+                    "pair": "EUR/CHF",
+                    "direction": "SHORT",
+                    "profit": 90.0,
+                    "entry": 0.91624,
+                    "sl": 0.92118,
+                    "tp": 0.90816,
+                    "volume": 0.18,
+                    "open_time": 1710000000,
+                }
+            ],
+        },
+    )
+    import bybit_executor
+    monkeypatch.setattr(bybit_executor, "bybit_get_positions", lambda: {"error": False, "positions": []})
+    import timed_exit_monitor
+    monkeypatch.setattr(timed_exit_monitor, "_load_recent_audit_rows", lambda _db: [])
+    monkeypatch.setattr(timed_exit_monitor, "_match_audit_row_for_position", lambda p, rows: {})
+
+    client = athena_module.app.test_client()
+    resp = client.get("/api/open-trades-timed")
+
+    assert resp.status_code == 200
+    payload = resp.get_json()
+    assert payload["count"] == 1
+    assert payload["audit_unresolved_count"] == 2
+    rows = {row["ticket"]: row for row in payload["audit_unresolved"]}
+    assert rows["309018151"]["broker_live"] is True
+    assert rows["309018151"]["status"] == "live_broker_position"
+    assert rows["123"]["broker_live"] is False
+    assert rows["123"]["status"] == "audit_only_no_broker_match"
+    assert rows["123"]["duplicate_count"] == 2
+    assert rows["123"]["close_action_enabled"] is False
+
+
 def test_live_dashboard_engine_d_pass_can_be_paper_candidate():
     freshness = {"gateDecision": "ALLOW"}
     engine_c = {"decisionState": "NO_SETUP", "reason": "No A/B setup"}

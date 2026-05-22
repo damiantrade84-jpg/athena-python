@@ -11447,6 +11447,80 @@ def api_feed_health():
 
 
 
+def _unresolved_audit_rows_for_display(
+    db_path: str,
+    *,
+    mt5_open_tickets: set[str] | None = None,
+    bybit_open_ids: set[str] | None = None,
+) -> list[dict]:
+    """Return unresolved audit rows for UI traceability, separate from live broker positions."""
+
+    mt5_open_tickets = mt5_open_tickets or set()
+    bybit_open_ids = bybit_open_ids or set()
+
+    with sqlite3.connect(db_path, timeout=15.0) as con:
+        con.row_factory = sqlite3.Row
+        rows = con.execute(
+            """
+            SELECT id, ts, pair, direction, entry_price, sl, tp, volume, engine,
+                   style, ticket, asset_class
+            FROM audit_log
+            WHERE exit_price IS NULL
+              AND ticket IS NOT NULL
+              AND TRIM(ticket) != ''
+            ORDER BY id ASC
+            """
+        ).fetchall()
+
+    by_ticket: dict[str, sqlite3.Row] = {}
+    duplicate_counts: dict[str, int] = {}
+    for row in rows:
+        ticket = str(row["ticket"] or "").strip()
+        if not ticket:
+            continue
+        duplicate_counts[ticket] = duplicate_counts.get(ticket, 0) + 1
+        by_ticket[ticket] = row
+
+    out: list[dict] = []
+    for ticket, row in by_ticket.items():
+        is_mt5_ticket = ticket.isdigit()
+        is_bybit_or_paper_id = ("-" in ticket and len(ticket) >= 32)
+        broker_live = (
+            (is_mt5_ticket and ticket in mt5_open_tickets)
+            or (not is_mt5_ticket and ticket in bybit_open_ids)
+        )
+        if is_mt5_ticket:
+            exchange_hint = "mt5"
+        elif is_bybit_or_paper_id:
+            exchange_hint = "bybit/paper"
+        else:
+            exchange_hint = "unknown"
+
+        out.append(
+            {
+                "id": row["id"],
+                "ts": row["ts"],
+                "pair": row["pair"],
+                "direction": row["direction"],
+                "entry_price": row["entry_price"],
+                "sl": row["sl"],
+                "tp": row["tp"],
+                "volume": row["volume"],
+                "engine": row["engine"],
+                "style": row["style"],
+                "ticket": ticket,
+                "asset_class": row["asset_class"],
+                "duplicate_count": duplicate_counts.get(ticket, 1),
+                "exchange_hint": exchange_hint,
+                "broker_live": broker_live,
+                "status": "live_broker_position" if broker_live else "audit_only_no_broker_match",
+                "close_action_enabled": False,
+            }
+        )
+
+    return sorted(out, key=lambda r: str(r.get("pair") or ""))
+
+
 @app.route("/api/open-trades-timed")
 def api_open_trades_timed():
     """
@@ -11510,6 +11584,17 @@ def api_open_trades_timed():
         p["_bybit"] = True
 
     all_positions = mt5_positions + bybit_positions
+    mt5_open_tickets = {
+        str(p.get("ticket")).strip()
+        for p in mt5_positions
+        if p.get("ticket") is not None and str(p.get("ticket")).strip()
+    }
+    bybit_open_ids = {
+        str(p.get(key)).strip()
+        for p in bybit_positions
+        for key in ("ticket", "id", "position_id", "order_id", "orderId")
+        if p.get(key) is not None and str(p.get(key)).strip()
+    }
 
     audit_rows = _load_recent_audit_rows(_AUDIT_DB)
 
@@ -11642,7 +11727,22 @@ def api_open_trades_timed():
 
         out.append(res_p)
 
-    return jsonify({"positions": out, "count": len(out)})
+    try:
+        audit_unresolved = _unresolved_audit_rows_for_display(
+            _AUDIT_DB,
+            mt5_open_tickets=mt5_open_tickets,
+            bybit_open_ids=bybit_open_ids,
+        )
+    except Exception as e:
+        log.warning("[OPEN-TRADES] unresolved audit row load failed: %s", e)
+        audit_unresolved = []
+
+    return jsonify({
+        "positions": out,
+        "count": len(out),
+        "audit_unresolved": audit_unresolved,
+        "audit_unresolved_count": len(audit_unresolved),
+    })
 
 
 def _check_api_keys() -> None:

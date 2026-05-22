@@ -28,6 +28,11 @@ interface LastScanResponse {
   generated_at?: string;
 }
 
+interface OpenTradesTimedResponse {
+  positions?: OpenTrade[];
+  audit_unresolved?: Record<string, unknown>[];
+}
+
 const SESSIONS: { name: string; startUtc: number; endUtc: number; emoji?: string }[] = [
   { name: 'Sydney', startUtc: 22, endUtc: 7 },
   { name: 'Tokyo', startUtc: 0, endUtc: 9 },
@@ -61,7 +66,7 @@ export default function DashboardPanel() {
   const { data: guardianStatus, loading: guardianLoading, error: guardianError, refresh: refreshGuardian }
     = useApiPoll<GuardianApiStatus>('/api/guardian/status', 15000);
   const { data: openTradesRaw, loading: tradesLoading, error: tradesError, refresh: refreshTrades }
-    = useApiPoll<OpenTrade[] | { positions?: OpenTrade[] }>('/api/open-trades-timed', 15000);
+    = useApiPoll<OpenTrade[] | OpenTradesTimedResponse>('/api/open-trades-timed', 15000);
   const { data: lastScan, error: lastScanError, refresh: refreshScan }
     = useApiPoll<LastScanResponse>('/api/last-scan?limit=6', 60000);
   const { data: performance, error: perfError }
@@ -72,6 +77,9 @@ export default function DashboardPanel() {
   const { priceFor, ageSecFor, sourceFor } = useLivePrices();
 
   const openTrades = asArray<OpenTrade>(openTradesRaw);
+  const unresolvedAudit = openTradesRaw && !Array.isArray(openTradesRaw) && Array.isArray(openTradesRaw.audit_unresolved)
+    ? openTradesRaw.audit_unresolved
+    : [];
   const recentSignals = (lastScan?.signals || []).slice(0, 6);
   const serverAutoTradeEnabled = Boolean(autoTrade?.enabled);
 
@@ -239,7 +247,7 @@ export default function DashboardPanel() {
           value={`${totalLiveProfit >= 0 ? '+' : ''}$${fmtNum(totalLiveProfit, 2)}`}
           icon={<TrendingUp className="w-5 h-5 text-primary" />}
           valueClass={totalLiveProfit >= 0 ? 'text-long' : 'text-short'}
-          subtitle={`Open ${openTrades.length}`}
+          subtitle={`Live ${openTrades.length} / Audit ${unresolvedAudit.length}`}
         />
       </div>
 
@@ -405,6 +413,11 @@ export default function DashboardPanel() {
           <CardHeader className="pb-2">
             <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Rajdhani', sans-serif", letterSpacing: '0.12em' }}>
               <BarChart3 className="w-4 h-4 text-primary" /> Open Positions
+              {unresolvedAudit.length > 0 && (
+                <Badge variant="outline" className="ml-auto text-[10px] text-warning border-warning/50">
+                  {unresolvedAudit.length} audit
+                </Badge>
+              )}
             </CardTitle>
           </CardHeader>
           <CardContent>
@@ -412,7 +425,9 @@ export default function DashboardPanel() {
               <div className="space-y-2">
                 {tradesLoading ? (
                   <Skeleton className="h-8 w-full" />
-                ) : openTrades.length > 0 ? (
+                ) : openTrades.length > 0 || unresolvedAudit.length > 0 ? (
+                  <>
+                  {openTrades.length > 0 && (
                   openTrades.map((trade, i) => {
                     const t = trade as OpenTrade & { pair?: string; profit?: number };
                     const label = t.symbol || t.pair || '—';
@@ -432,6 +447,26 @@ export default function DashboardPanel() {
                       </div>
                     );
                   })
+                  )}
+                  {unresolvedAudit.map((row, i) => {
+                    const ticket = String(row.ticket || row.id || i);
+                    const direction = String(row.direction || '');
+                    return (
+                      <div key={`audit-${ticket}`} className="flex items-center justify-between p-2 rounded-md border border-warning/30 bg-warning/5">
+                        <div className="flex items-center gap-2">
+                          <AlertTriangle className="h-3.5 w-3.5 text-warning" />
+                          <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${direction === 'LONG' ? 'bg-long/20 text-long' : 'bg-short/20 text-short'}`}>
+                            {direction || '-'}
+                          </span>
+                          <span className="text-xs font-mono">{String(row.pair || '-')}</span>
+                        </div>
+                        <span className="text-[10px] uppercase text-warning">
+                          {row.broker_live ? 'broker live' : 'audit only'}
+                        </span>
+                      </div>
+                    );
+                  })}
+                  </>
                 ) : (
                   <div className="text-xs text-muted-foreground text-center py-8">No open positions</div>
                 )}
