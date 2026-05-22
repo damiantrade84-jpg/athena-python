@@ -208,6 +208,56 @@ def test_native_chart_surfaces_live_price_without_overwriting_signal_entry():
     assert "<EngineASidePanel signal={chartCandidate} liveTick={liveTick} chartPayload={chartPayload} />" in source
 
 
+def test_tv_chart_panel_consumes_tv_chart_intent():
+    source = _read(TV_PANEL)
+
+    assert "tvChartIntent" in source
+    assert "appliedIntentIdRef" in source
+    assert "pendingAutoReviewRef" in source
+    assert "Opened from Signals" in source
+    assert "Auto Review:" in source
+    assert "clearTvChartIntent" in source
+
+
+def test_tv_chart_panel_auto_review_guard_exists():
+    source = _read(TV_PANEL)
+
+    assert "autoReviewRanForIntentRef" in source
+    assert "pendingAutoReviewRef.current" in source
+
+
+def test_tv_chart_panel_flag_watch_setup_button():
+    source = _read(TV_PANEL)
+
+    assert "Flag / Watch Setup" in source
+    assert "/api/suggested-trades/flag" in source
+    flag_idx = source.index("Flag / Watch Setup")
+    flag_section = source[flag_idx:flag_idx + 600]
+    assert "postJson('/api/quick-execute'" not in flag_section
+    assert "onConfirmExecute" not in flag_section
+
+
+def test_tv_chart_panel_execute_now_button():
+    source = _read(TV_PANEL)
+
+    assert "Execute Now" in source
+    assert "buildQuickExecutePayload" in source
+    assert "/api/quick-execute" in source
+    assert "evaluateTvChartExecuteBlock" in source
+    assert "shouldHideTvChartExecuteNow" in source
+    assert "Confirm Execute Now" in source
+
+
+def test_tv_chart_panel_execute_disabled_when_ai_says_wait():
+    source = _read(TV_PANEL)
+    helper = _read(ROOT / "static/react-app/app/src/lib/manualExecuteHelpers.ts")
+
+    assert "evaluateTvChartExecuteBlock" in source
+    assert "shouldHideTvChartExecuteNow" in source
+    assert "AI says wait" in helper
+    assert "aiReviewBlocksManualExecute" in helper
+
+
 def test_native_chart_opens_on_h4_by_default_for_tradingview_parity():
     source = _read(TV_PANEL)
 

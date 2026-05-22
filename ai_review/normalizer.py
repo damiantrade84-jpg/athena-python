@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import re
-from typing import Any
+from ai_review.suggested_trade_plan import sanitize_suggested_trade_plan
 
 _VALID_VERDICTS = {"VALID", "CAUTION", "INVALID", "NO_TRADE"}
 _VALID_ACTIONS = {
@@ -191,6 +191,16 @@ def normalize_chart_review_response(raw_text: str) -> dict[str, Any]:
     if action not in _VALID_ACTIONS:
         action = "wait"
 
+    suggested_plan = sanitize_suggested_trade_plan(
+        parsed,
+        source="ai_chart_review",
+        symbol=str(parsed.get("symbol") or ""),
+    )
+    structured_out = structured
+    if suggested_plan:
+        structured_out = dict(structured)
+        structured_out["suggestedTradePlan"] = suggested_plan
+
     return {
         "verdict": verdict,
         "confidence": confidence,
@@ -207,5 +217,7 @@ def normalize_chart_review_response(raw_text: str) -> dict[str, Any]:
         "human_action": action,
         "raw_model_response": raw_text or "",
         "parse_success": True,
-        "structured": structured,
+        "structured": structured_out,
+        "suggestedTradePlan": suggested_plan,
+        "suggested_trade_plan": suggested_plan,
     }

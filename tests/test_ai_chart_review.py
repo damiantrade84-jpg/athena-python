@@ -1082,3 +1082,45 @@ def test_prompt_includes_engine_b_context_block():
     prompt = build_chart_review_prompt(ctx)
     assert "engineBContext" in prompt
     assert "engineAContext" in prompt
+
+
+def test_normalizer_sanitizes_suggested_trade_plan():
+    raw = json.dumps({
+        "verdict": "CAUTION",
+        "confidence": 60,
+        "human_action": "wait",
+        "suggestedTradePlan": {
+            "schemaVersion": "suggested_trade_plan.v1",
+            "armable": True,
+            "source": "ai_chart_review",
+            "symbol": "BTCUSDT",
+            "direction": "LONG",
+            "action": "WAIT_FOR_LEVEL",
+            "triggerType": "ACCEPTANCE_ABOVE",
+            "level": 65000,
+            "expiresInSeconds": 1200,
+        },
+    })
+    out = normalize_chart_review_response(raw)
+    plan = out.get("suggestedTradePlan")
+    assert isinstance(plan, dict)
+    assert plan.get("armable") is True
+    assert plan.get("level") == 65000
+
+
+def test_normalizer_strips_malformed_suggested_trade_plan():
+    raw = json.dumps({
+        "verdict": "CAUTION",
+        "confidence": 40,
+        "human_action": "wait",
+        "suggestedTradePlan": {
+            "direction": "MAYBE",
+            "action": "WAIT_FOR_LEVEL",
+            "triggerType": "ACCEPTANCE_ABOVE",
+        },
+    })
+    out = normalize_chart_review_response(raw)
+    plan = out.get("suggestedTradePlan")
+    assert isinstance(plan, dict)
+    assert plan.get("armable") is False
+

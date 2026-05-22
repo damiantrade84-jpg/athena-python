@@ -1450,6 +1450,14 @@ AI_VISION_CAN_UPGRADE_TRADE: false  # Vision CONFIRM cannot create trade=True; d
 # Default false: incomplete AI review must not imply approval (_vision_blocks_execution checks execution_allowed is False).
 AI_NEUTRAL_ALLOWS_EXECUTION: false
 
+# Alert-only suggested trade watch monitor (no auto-execution).
+SUGGESTED_TRADE_MONITOR:
+  ENABLED: true
+  ALERT_ONLY: true
+  POLL_SECONDS: 5
+  DEFAULT_EXPIRY_SECONDS: 1800
+  MAX_ACTIVE_WATCHES: 25
+
 TIMEFRAME_ROUTING:
   ENABLED: true
   DEFAULT:

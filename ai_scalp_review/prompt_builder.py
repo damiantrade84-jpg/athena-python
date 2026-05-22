@@ -48,6 +48,12 @@ Return strict JSON only with these top-level keys:
 - visualConfirmation, visualContradiction, entryQuality, sourceQualityAssessment (strings)
 - supportingReasons, risks (string arrays)
 - metadata: {{ chartCapturedAt, latestCandleTimestamp, candleSource, orderflowSource, vpSource }}
+- suggestedTradePlan (optional, advisory only): when human_action is wait and a level/zone trigger applies, return {{
+    schemaVersion: "suggested_trade_plan.v1", armable: true, source: "ai_scalp_chart_review", symbol, direction: LONG|SHORT,
+    action: WAIT_FOR_LEVEL|WAIT_FOR_ZONE|NO_TRADE, triggerType: ACCEPTANCE_ABOVE|ACCEPTANCE_BELOW|PULLBACK_TO_ZONE|REJECTION_FROM_ZONE|SWEEP_RECLAIM,
+    level?, zoneLow?, zoneHigh?, contextTf?, entryTf?, executionTf?, invalidateAbove?, invalidateBelow?, expiresInSeconds?, reason?
+  }}
+  Omit if no valid numeric level/zone. Never ENTRY_NOW. Alert-only — not execution permission.
 
 Also include legacy flat fields:
 verdict (VALID|CAUTION|INVALID|NO_TRADE), confidence (0-100), setup_type, human_action (take|wait|reject|needs_fresher_data|needs_better_rr),

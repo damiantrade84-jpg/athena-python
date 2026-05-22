@@ -5,6 +5,64 @@
 
 export type Direction = 'LONG' | 'SHORT';
 
+/** Advisory-only structured wait plan from AI chart/scalp review. */
+export interface SuggestedTradePlan {
+  schemaVersion?: string;
+  armable?: boolean;
+  source?: 'ai_chart_review' | 'ai_scalp_chart_review' | string;
+  symbol?: string;
+  direction?: Direction;
+  action?: 'WAIT_FOR_LEVEL' | 'WAIT_FOR_ZONE' | 'NO_TRADE' | 'ENTRY_NOW' | string;
+  triggerType?: string;
+  level?: number;
+  zoneLow?: number;
+  zoneHigh?: number;
+  contextTf?: string;
+  entryTf?: string;
+  executionTf?: string;
+  invalidateAbove?: number;
+  invalidateBelow?: number;
+  expiresInSeconds?: number;
+  reason?: string;
+}
+
+export interface SuggestedTradeWatch {
+  watch_id?: string;
+  symbol?: string;
+  display?: string;
+  direction?: string;
+  action?: string;
+  trigger_type?: string;
+  status?: string;
+  level?: number;
+  zone_low?: number;
+  zone_high?: number;
+  reached_at?: string | null;
+  expires_at?: string | null;
+  suggested_trade_plan?: SuggestedTradePlan;
+}
+
+export interface TvChartIntent {
+  id: string;
+  source: 'signals' | 'engine_a' | 'engine_b' | 'manual';
+  symbol: string;
+  display?: string;
+  signal?: unknown;
+  preferredTf?: string;
+  autoReview?: boolean;
+  createdAt: string;
+}
+
+export interface ScalpWorkbenchIntent {
+  id: string;
+  source: 'scalp_lab' | 'manual';
+  symbol: string;
+  signal?: unknown;
+  preferredTf?: string;
+  autoReview?: boolean;
+  createdAt: string;
+}
+
 /** Engine A v2 signal — emitted by `analyze_pair()` (camelCase keys). */
 export interface EngineASignal {
   id?: string;
@@ -1232,6 +1290,8 @@ export interface AIChartReviewResponse {
   derivativesContext?: AIChartReviewFundingOi;
   atrDiagnostics?: AIChartReviewAtrDiagnostics;
   resistanceMap?: AIChartReviewResistanceMap;
+  suggestedTradePlan?: SuggestedTradePlan | null;
+  suggested_trade_plan?: SuggestedTradePlan | null;
 }
 
 export interface AIChartReviewScreenshotMeta {
@@ -1397,6 +1457,8 @@ export interface ScalpAIChartReviewResponse {
   context_completeness?: ScalpContextCompleteness;
   strategy_layer?: Record<string, unknown>;
   strategyLayer?: Record<string, unknown>;
+  suggestedTradePlan?: SuggestedTradePlan | null;
+  suggested_trade_plan?: SuggestedTradePlan | null;
 }
 
 export interface ScalpAIChartReviewScreenshotMeta {

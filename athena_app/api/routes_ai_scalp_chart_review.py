@@ -90,6 +90,10 @@ def _attach_scalp_review_summary(
     response["scalpVerdictComparison"] = verdict_comparison
     response["scalp_verdict_comparison"] = verdict_comparison
     response.update(ctx_diag)
+    plan = ai_review.get("suggestedTradePlan") or ai_review.get("suggested_trade_plan")
+    if isinstance(plan, dict):
+        response["suggestedTradePlan"] = plan
+        response["suggested_trade_plan"] = plan
     return response
 
 

@@ -8,7 +8,17 @@ import {
   type ISeriesApi,
   type UTCTimestamp,
 } from 'lightweight-charts';
-import { AlertTriangle, BarChart3, Camera, CheckCircle2, Copy, RefreshCw, ShieldCheck, Sparkles } from 'lucide-react';
+import { AlertTriangle, BarChart3, Camera, CheckCircle2, Copy, Play, RefreshCw, ShieldCheck, Sparkles } from 'lucide-react';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -24,8 +34,12 @@ import {
   downscaleToCap,
   postScalpChartReview,
 } from '@/lib/aiScalpChartReview';
+import {
+  buildScalpExecutePayload,
+  evaluateScalpExecuteBlock,
+} from '@/lib/manualExecuteHelpers';
 import ScalpAIReviewCard from '@/components/athena/ScalpAIReviewCard';
-import type { ScalpAIChartReviewResponse } from '@/types/athena';
+import type { ScalpAIChartReviewResponse, SuggestedTradePlan, SuggestedTradeWatch } from '@/types/athena';
 import { cn, fmtNum, toNum } from '@/lib/utils';
 
 const TIMEFRAMES = ['M1', 'M5', 'M15'] as const;
@@ -159,6 +173,13 @@ interface ScalpScanResponse {
   diagnostic?: boolean;
   reason?: string;
   error?: string;
+}
+
+interface ScalpExecuteResponse {
+  success?: boolean;
+  ticket?: string;
+  error?: string;
+  fresh_scan?: ScalpScanResponse;
 }
 
 type BadgeTone = 'real' | 'proxy' | 'danger' | 'ok' | 'muted' | 'warn';
@@ -473,6 +494,14 @@ function signalSymbol(signal: ScalpWorkbenchSignal | null | undefined): string {
 
 function signalKey(signal: ScalpWorkbenchSignal | null | undefined): string {
   return signalSymbol(signal).toUpperCase();
+}
+
+function preferredScalpDisplayTf(signal: ScalpWorkbenchSignal | null | undefined): (typeof TIMEFRAMES)[number] {
+  const ctx = String(signal?.context_tf || '').toUpperCase();
+  if (ctx === 'M5' || ctx === 'M15') {
+    return ctx as (typeof TIMEFRAMES)[number];
+  }
+  return 'M5';
 }
 
 function toCandleData(rows: CandleApiRow[] | undefined): CandlestickData[] {
@@ -888,11 +917,15 @@ export default function ScalpWorkbenchPanel() {
     scalpLabSelectedCache,
     setScalpLabScanCache,
     setScalpLabSelectedCache,
+    scalpWorkbenchIntent,
+    clearScalpWorkbenchIntent,
     showToast,
+    isTestMode,
   } = useStore();
   const { post: postScan, loading: scanLoading, error: scanError } = useApiPost<ScalpScanResponse>();
+  const { post: postExecute, loading: executingScalp } = useApiPost<ScalpExecuteResponse>();
   const [symbolOverride, setSymbolOverride] = useState('');
-  const [timeframe, setTimeframe] = useState<(typeof TIMEFRAMES)[number]>('M1');
+  const [timeframe, setTimeframe] = useState<(typeof TIMEFRAMES)[number]>('M5');
   const [candlePayload, setCandlePayload] = useState<CandleApiResponse | null>(null);
   const [chartLoading, setChartLoading] = useState(false);
   const [chartError, setChartError] = useState<string | null>(null);
@@ -901,6 +934,16 @@ export default function ScalpWorkbenchPanel() {
   const [scalpAiReviewResponse, setScalpAiReviewResponse] = useState<ScalpAIChartReviewResponse | null>(null);
   const [scalpAiReviewPreview, setScalpAiReviewPreview] = useState<ScalpAIReviewPreview | null>(null);
   const [tfDisplayOverride, setTfDisplayOverride] = useState(false);
+  const [intentSourceBadge, setIntentSourceBadge] = useState<string | null>(null);
+  const [autoReviewStatus, setAutoReviewStatus] = useState<'idle' | 'pending' | 'running' | 'done'>('idle');
+  const [activeWatches, setActiveWatches] = useState<SuggestedTradeWatch[]>([]);
+  const [flagStatus, setFlagStatus] = useState<string | null>(null);
+  const [flagLoading, setFlagLoading] = useState(false);
+  const [confirmExecOpen, setConfirmExecOpen] = useState(false);
+  const [sizingOverride] = useState(1.0);
+  const appliedIntentIdRef = useRef<string | null>(null);
+  const pendingAutoReviewRef = useRef(false);
+  const autoReviewRanForIntentRef = useRef<string | null>(null);
   const [showTradeLevels, setShowTradeLevels] = useState(true);
   const [showProfileLevels, setShowProfileLevels] = useState(true);
   const [showLvnLevels, setShowLvnLevels] = useState(true);
@@ -947,9 +990,140 @@ export default function ScalpWorkbenchPanel() {
 
   useEffect(() => {
     if (!tfDisplayOverride) {
-      setTimeframe(executionTf);
+      setTimeframe(preferredScalpDisplayTf(activeSignal));
     }
-  }, [executionTf, tfDisplayOverride, activeSymbolKey]);
+  }, [activeSignal, activeSymbolKey, tfDisplayOverride]);
+
+  useEffect(() => {
+    if (!scalpWorkbenchIntent?.id || scalpWorkbenchIntent.id === appliedIntentIdRef.current) return;
+    appliedIntentIdRef.current = scalpWorkbenchIntent.id;
+    const intentSymbol = String(scalpWorkbenchIntent.symbol || '').toUpperCase().trim();
+    if (intentSymbol) {
+      setSymbolOverride(intentSymbol);
+      if (scalpWorkbenchIntent.signal) {
+        setScalpLabSelectedCache(scalpWorkbenchIntent.signal);
+      }
+    }
+    if (!tfDisplayOverride) {
+      const pref = scalpWorkbenchIntent.preferredTf?.toUpperCase();
+      if (pref === 'M1' || pref === 'M5' || pref === 'M15') {
+        setTimeframe(pref);
+      } else {
+        setTimeframe(preferredScalpDisplayTf(scalpWorkbenchIntent.signal as ScalpWorkbenchSignal));
+      }
+    }
+    setScalpAiReviewResponse(null);
+    pendingAutoReviewRef.current = scalpWorkbenchIntent.autoReview === true;
+    autoReviewRanForIntentRef.current = null;
+    setIntentSourceBadge(
+      scalpWorkbenchIntent.source === 'scalp_lab' ? 'Opened from Scalp Lab' : 'Opened from manual',
+    );
+    setAutoReviewStatus(scalpWorkbenchIntent.autoReview ? 'pending' : 'idle');
+    clearScalpWorkbenchIntent();
+  }, [scalpWorkbenchIntent, clearScalpWorkbenchIntent, setScalpLabSelectedCache, tfDisplayOverride]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const poll = async () => {
+      try {
+        await apiClient.postJson('/api/suggested-trades/evaluate-now', {});
+        const res = await apiClient.getJson('/api/suggested-trades') as { watches?: SuggestedTradeWatch[] };
+        if (!cancelled && Array.isArray(res?.watches)) {
+          setActiveWatches(res.watches.filter((w) => ['WATCHING', 'READY_FOR_REVIEW', 'LEVEL_REACHED'].includes(String(w.status))));
+        }
+      } catch {
+        /* alert-only poll */
+      }
+    };
+    void poll();
+    const timer = window.setInterval(poll, 8000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, []);
+
+  const suggestedPlan = useMemo((): SuggestedTradePlan | null => {
+    const top = scalpAiReviewResponse?.suggestedTradePlan ?? scalpAiReviewResponse?.suggested_trade_plan;
+    if (top && typeof top === 'object') return top;
+    const nested = scalpAiReviewResponse?.ai_review as { suggestedTradePlan?: SuggestedTradePlan } | undefined;
+    return nested?.suggestedTradePlan ?? null;
+  }, [scalpAiReviewResponse]);
+
+  const canFlagWatch = Boolean(
+    suggestedPlan?.armable
+    && ['WAIT_FOR_LEVEL', 'WAIT_FOR_ZONE'].includes(String(suggestedPlan?.action || '').toUpperCase()),
+  );
+
+  const executeBlockReason = useMemo(
+    () => evaluateScalpExecuteBlock({
+      signal: activeSignal
+        ? {
+            ...activeSignal,
+            strictOrderflowSourcePass: activeUi.sourceContract.strictOrderflowSourcePass,
+          }
+        : null,
+      aiReview: scalpAiReviewResponse,
+      isTestMode,
+    }),
+    [activeSignal, activeUi.sourceContract.strictOrderflowSourcePass, scalpAiReviewResponse, isTestMode],
+  );
+
+  const onConfirmScalpExecute = useCallback(async () => {
+    if (!activeSignal || !chartSymbol || executeBlockReason) return;
+    const payload = buildScalpExecutePayload({
+      symbol: chartSymbol,
+      signal: activeSignal,
+      sizingOverride,
+    });
+    const result = await postExecute('/api/scalp-execute', payload);
+    if (!result) {
+      showToast('Execution failed (no response)', 'error');
+    } else if (result.success) {
+      showToast(`Scalp executed — ticket ${result.ticket || '?'}`, 'success');
+    } else {
+      showToast(`Scalp rejected: ${result.error || 'unknown'}`, 'error');
+    }
+    setConfirmExecOpen(false);
+  }, [activeSignal, chartSymbol, executeBlockReason, postExecute, showToast, sizingOverride]);
+
+  const flagWatchSetup = useCallback(async () => {
+    if (!canFlagWatch || !suggestedPlan || flagLoading) return;
+    setFlagLoading(true);
+    setFlagStatus(null);
+    try {
+      const res = await apiClient.postJson('/api/suggested-trades/flag', {
+        symbol: chartSymbol,
+        display: activeSignal?.display || activeSignal?.pair || chartSymbol,
+        signal: activeSignal,
+        suggestedTradePlan: suggestedPlan,
+        aiReviewSummary: scalpAiReviewResponse?.aiReviewSummary ?? scalpAiReviewResponse?.ai_review_summary,
+        source: 'ai_scalp_chart_review',
+        createdAt: new Date().toISOString(),
+      }) as { success?: boolean; error?: string };
+      if (res?.success) {
+        setFlagStatus('Watching setup flagged (alert-only)');
+        showToast('Scalp setup flagged for watch — alert only', 'success');
+      } else {
+        setFlagStatus(res?.error || 'Flag failed');
+      }
+    } catch (err) {
+      setFlagStatus(err instanceof Error ? err.message : 'Flag failed');
+    } finally {
+      setFlagLoading(false);
+    }
+  }, [activeSignal, canFlagWatch, chartSymbol, flagLoading, scalpAiReviewResponse, showToast, suggestedPlan]);
+
+  function watchLabel(watch: SuggestedTradeWatch): string {
+    const dir = watch.direction || '';
+    if (watch.zone_low != null && watch.zone_high != null) {
+      return `Watching: ${watch.zone_low}-${watch.zone_high} ${dir} zone`;
+    }
+    if (watch.level != null) {
+      return `Watching: ${watch.level} ${dir}`;
+    }
+    return `Watching: ${watch.symbol || ''} ${dir}`.trim();
+  }
 
   const candleRows = useMemo(() => toCandleData(candlePayload?.candles), [candlePayload]);
   const dataFidelity = asRecord(activeSignal?.data_fidelity);
@@ -1063,7 +1237,7 @@ export default function ScalpWorkbenchPanel() {
     const visibleRange = chartRef.current?.timeScale().getVisibleRange() ?? null;
     const scalpChartSnapshot = buildScalpChartSnapshot(activeUi, {
       symbol: chartSymbol,
-      timeframe: executionTf,
+      timeframe,
       visibleRange: visibleRange as { from?: unknown; to?: unknown } | null,
     });
     const sourceCanvas = captureNativeChartCanvas(chartCaptureRef.current);
@@ -1083,7 +1257,7 @@ export default function ScalpWorkbenchPanel() {
       const screenshotMeta = buildScalpScreenshotMeta({
         width: outputCanvas.width,
         height: outputCanvas.height,
-        chart_timeframe: executionTf,
+        chart_timeframe: timeframe,
         execution_tf: executionTf,
         overlays,
         visible_range_start: visibleRange?.from != null ? String(visibleRange.from) : undefined,
@@ -1106,7 +1280,7 @@ export default function ScalpWorkbenchPanel() {
       });
       const response = await postScalpChartReview({
         symbol: chartSymbol,
-        timeframe: executionTf,
+        timeframe,
         provider: 'default',
         screenshot_base64: screenshotBase64,
         screenshot_meta: screenshotMeta,
@@ -1125,11 +1299,22 @@ export default function ScalpWorkbenchPanel() {
     candlePayload,
     chartSymbol,
     executionTf,
+    timeframe,
     showLvnLevels,
     showProfileLevels,
     showTradeLevels,
     showToast,
   ]);
+
+  useEffect(() => {
+    if (!pendingAutoReviewRef.current || chartLoading || aiReviewLoading || !activeSignal || !chartSymbol) return;
+    const intentId = appliedIntentIdRef.current;
+    if (!intentId || autoReviewRanForIntentRef.current === intentId) return;
+    autoReviewRanForIntentRef.current = intentId;
+    pendingAutoReviewRef.current = false;
+    setAutoReviewStatus('running');
+    void captureScalpChartForAIReview().finally(() => setAutoReviewStatus('done'));
+  }, [chartLoading, aiReviewLoading, activeSignal, chartSymbol, candlePayload, captureScalpChartForAIReview]);
 
   useEffect(() => {
     if (!chartSymbol) {
@@ -1298,6 +1483,15 @@ export default function ScalpWorkbenchPanel() {
             <Camera className={cn('mr-2 h-4 w-4', aiReviewLoading && 'animate-pulse')} />
             {aiReviewLoading ? 'Reviewing…' : 'Capture for AI review'}
           </Button>
+          <Button
+            variant="default"
+            size="sm"
+            disabled={Boolean(executeBlockReason) || executingScalp || !activeSignal}
+            onClick={() => setConfirmExecOpen(true)}
+          >
+            <Play className={cn('mr-2 h-4 w-4', executingScalp && 'animate-pulse')} />
+            {executeBlockReason || 'Execute Scalp'}
+          </Button>
           <Button variant="outline" size="sm" onClick={copyPayload} disabled={!activeSignal}>
             <Copy className="mr-2 h-4 w-4" />
             Copy JSON
@@ -1318,8 +1512,34 @@ export default function ScalpWorkbenchPanel() {
             <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
               <CardTitle className="flex items-center gap-2 text-base">
                 <BarChart3 className="h-4 w-4 text-primary" />
-                {executionTf} Execution Chart
+                M5 Context Chart
+                {executionTf === 'M1' && (
+                  <Badge variant="outline" className="text-[10px] font-normal">
+                    Execution TF: M1
+                  </Badge>
+                )}
               </CardTitle>
+              <div className="flex flex-wrap items-center gap-2">
+                {intentSourceBadge && (
+                  <Badge variant="outline" className="text-[10px] border-primary/40 text-primary">
+                    {intentSourceBadge}
+                  </Badge>
+                )}
+                {autoReviewStatus !== 'idle' && (
+                  <Badge variant="outline" className="text-[10px]">
+                    Auto Review: {autoReviewStatus}
+                  </Badge>
+                )}
+                {activeWatches.map((watch) => (
+                  <Badge
+                    key={watch.watch_id || `${watch.symbol}-${watch.status}`}
+                    variant="outline"
+                    className={`text-[10px] ${watch.status === 'READY_FOR_REVIEW' ? 'border-long/50 text-long' : ''}`}
+                  >
+                    {watch.status === 'READY_FOR_REVIEW' ? 'Ready for review' : watchLabel(watch)}
+                  </Badge>
+                ))}
+              </div>
               <div className="flex flex-wrap items-center gap-2">
                 <Select value={activeSymbolKey || EMPTY_SYMBOL_SELECT_VALUE} onValueChange={selectSymbol}>
                   <SelectTrigger className="h-8 w-[190px]">
@@ -1552,6 +1772,20 @@ export default function ScalpWorkbenchPanel() {
             </div>
           )}
           {scalpAiReviewResponse && <ScalpAIReviewCard response={scalpAiReviewResponse} />}
+          {canFlagWatch && (
+            <div className="flex flex-wrap items-center gap-2 pt-2">
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-8 text-xs"
+                disabled={flagLoading}
+                onClick={() => void flagWatchSetup()}
+              >
+                Flag / Watch Setup
+              </Button>
+              {flagStatus && <span className="text-[10px] text-muted-foreground">{flagStatus}</span>}
+            </div>
+          )}
           {scalpAiReviewPreview && (
             <Card className="border-border/60 bg-card/70">
               <CardHeader className="px-4 py-3">
@@ -1677,6 +1911,39 @@ export default function ScalpWorkbenchPanel() {
           </div>
         </CardContent>
       </Card>
+
+      <AlertDialog open={confirmExecOpen} onOpenChange={setConfirmExecOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Confirm Scalp Execution · Engine D</AlertDialogTitle>
+            <AlertDialogDescription asChild>
+              <div className="space-y-2 text-sm">
+                <p>
+                  Execute scalp setup? Backend will refresh/revalidate before order.
+                </p>
+                <p>
+                  Execute <b>{activeSignal?.direction}</b>{' '}
+                  {activeSignal?.display || activeSignal?.pair || chartSymbol} · grade{' '}
+                  <span className="font-mono">{activeSignal?.ai_grade || '—'}</span>
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  Entry {fmtNum(activeSignal?.entry ?? activeSignal?.price, 6)} · SL {fmtNum(activeSignal?.sl, 6)} · TP1{' '}
+                  {fmtNum(activeSignal?.tp1, 6)}
+                </p>
+              </div>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={executingScalp}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => void onConfirmScalpExecute()}
+              disabled={executingScalp || Boolean(executeBlockReason)}
+            >
+              {executingScalp ? 'Executing…' : 'Confirm Execute Scalp'}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

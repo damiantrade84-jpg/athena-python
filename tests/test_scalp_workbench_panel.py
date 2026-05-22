@@ -37,14 +37,13 @@ def test_scalp_workbench_ai_capture_posts_server_trusted_review():
     assert "scalpAiReviewResponse" in panel
     assert "postChartReview" not in panel
     assert "/api/ai/chart-review" not in panel
-    assert "/api/scalp-execute" not in panel
     assert "/api/auto-trade" not in panel
 
     capture_body = panel[panel.index("const captureScalpChartForAIReview"):]
     capture_body = capture_body[: capture_body.index("useEffect", 1)]
     assert "postScan('/api/scalp-scan'" not in capture_body
-    assert "executionTf" in capture_body
-    assert "execution_tf" in capture_body
+    assert "execution_tf: executionTf" in capture_body
+    assert "chart_timeframe: timeframe" in capture_body
 
 
 def test_scalp_workbench_refresh_remains_only_scan_trigger():
@@ -59,14 +58,66 @@ def test_scalp_workbench_refresh_remains_only_scan_trigger():
     assert "postScan('/api/scalp-scan'" not in capture_body
 
 
+def test_scalp_workbench_defaults_to_m5_display():
+    source = _read(SCALP_WORKBENCH)
+
+    assert "preferredScalpDisplayTf" in source
+    assert "useState<(typeof TIMEFRAMES)[number]>('M5')" in source
+    assert "M5 Context Chart" in source
+    assert "Execution TF: M1" in source
+
+
+def test_scalp_workbench_m1_still_available():
+    source = _read(SCALP_WORKBENCH)
+
+    assert "const TIMEFRAMES = ['M1', 'M5', 'M15']" in source
+    assert "Display override" in source
+
+
 def test_scalp_workbench_execution_tf_lock_present():
     source = _read(SCALP_WORKBENCH)
 
     assert "executionTf" in source
     assert "tfDisplayOverride" in source
-    assert "Display override" in source
     assert "disabled={!tfDisplayOverride}" in source
-    assert "setTimeframe(executionTf)" in source
+    assert "setTimeframe(executionTf)" not in source
+
+
+def test_scalp_workbench_flag_watch_setup_button():
+    source = _read(SCALP_WORKBENCH)
+
+    assert "Flag / Watch Setup" in source
+    assert "/api/suggested-trades/flag" in source
+    flag_idx = source.index("Flag / Watch Setup")
+    flag_section = source[flag_idx:flag_idx + 600]
+    assert "postExecute('/api/scalp-execute'" not in flag_section
+
+
+def test_scalp_workbench_execute_scalp_button():
+    source = _read(SCALP_WORKBENCH)
+
+    assert "Execute Scalp" in source
+    assert "/api/scalp-execute" in source
+    assert "buildScalpExecutePayload" in source
+    assert "evaluateScalpExecuteBlock" in source
+    assert "Confirm Scalp Execution" in source
+    assert "refresh/revalidate before order" in source
+
+
+def test_scalp_workbench_execute_disabled_unless_executable():
+    source = _read(SCALP_WORKBENCH)
+
+    assert "executeBlockReason" in source
+    assert "strict_fabio_pass" in source or "Fabio gate failed" in source
+    assert "Gate failed" in source or "gate_result" in source
+
+
+def test_scalp_workbench_consumes_scalp_workbench_intent():
+    source = _read(SCALP_WORKBENCH)
+
+    assert "scalpWorkbenchIntent" in source
+    assert "appliedIntentIdRef" in source
+    assert "Opened from Scalp Lab" in source
 
 
 def test_scalp_workbench_symbol_select_stays_controlled_before_refresh():

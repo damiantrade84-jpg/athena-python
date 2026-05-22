@@ -99,6 +99,10 @@ def _attach_review_summary(
     response.update(ctx_diag)
     response["derivativesContext"] = ctx_diag.get("fundingOi")
     response["derivatives_context"] = ctx_diag.get("fundingOi")
+    plan = clean_ai_review.get("suggestedTradePlan") or clean_ai_review.get("suggested_trade_plan")
+    if isinstance(plan, dict):
+        response["suggestedTradePlan"] = plan
+        response["suggested_trade_plan"] = plan
     return response
 
 

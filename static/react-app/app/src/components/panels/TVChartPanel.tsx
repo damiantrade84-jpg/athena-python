@@ -23,7 +23,17 @@ import {
   type Time,
 } from 'lightweight-charts';
 import type { CanvasRenderingTarget2D } from 'fancy-canvas';
-import { BarChart3, Camera, Layers, Sparkles, SlidersHorizontal } from 'lucide-react';
+import { BarChart3, Camera, Layers, Play, Sparkles, SlidersHorizontal } from 'lucide-react';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -31,6 +41,7 @@ import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Switch } from '@/components/ui/switch';
 import { useLivePrices } from '@/hooks/useLivePrices';
+import { useApiPoll } from '@/hooks/useApiData';
 import { useStore } from '@/hooks/useStore';
 import { apiClient } from '@/lib/apiClient';
 import {
@@ -52,8 +63,13 @@ import {
   downscaleToCap,
   postChartReview,
 } from '@/lib/aiChartReview';
+import {
+  buildQuickExecutePayload,
+  evaluateTvChartExecuteBlock,
+  shouldHideTvChartExecuteNow,
+} from '@/lib/manualExecuteHelpers';
 import AIReviewCard from '@/components/athena/AIReviewCard';
-import type { AIChartReviewResponse, EngineASignal, TimeframeRoute } from '@/types/athena';
+import type { AIChartReviewResponse, EngineASignal, SuggestedTradePlan, SuggestedTradeWatch, TimeframeRoute } from '@/types/athena';
 
 const TIMEFRAMES = ['1', '5', '15', '30', '60', '240', 'D', 'W'];
 
@@ -1751,7 +1767,8 @@ function buildCleanLegendChips(args: {
 // --- Main panel ------------------------------------------------------
 
 export default function TVChartPanel() {
-  const { scanCacheA } = useStore();
+  const { scanCacheA, tvChartIntent, clearTvChartIntent, showToast, isTestMode } = useStore();
+  const { data: autoTrade } = useApiPoll<{ enabled: boolean }>('/api/auto-trade', 60_000);
   const { priceEntryFor } = useLivePrices();
   const [pair, setPair] = useState('EURUSD');
   const [timeframe, setTimeframe] = useState('240');
@@ -1784,10 +1801,21 @@ export default function TVChartPanel() {
   const [aiReview, setAiReview] = useState<AIChartReviewResponse | null>(null);
   const [aiReviewLoading, setAiReviewLoading] = useState<boolean>(false);
   const [aiReviewError, setAiReviewError] = useState<string | null>(null);
+  const [intentSourceBadge, setIntentSourceBadge] = useState<string | null>(null);
+  const [autoReviewStatus, setAutoReviewStatus] = useState<'idle' | 'pending' | 'running' | 'done'>('idle');
+  const [activeWatches, setActiveWatches] = useState<SuggestedTradeWatch[]>([]);
+  const [flagStatus, setFlagStatus] = useState<string | null>(null);
+  const [flagLoading, setFlagLoading] = useState(false);
+  const [confirmExecuteOpen, setConfirmExecuteOpen] = useState(false);
+  const [executing, setExecuting] = useState(false);
+  const [sizingOverride, setSizingOverride] = useState(1.0);
   const [timeframeAutoMode, setTimeframeAutoMode] = useState(true);
   const lastAppliedRouteKeyRef = useRef<string | null>(null);
   const aiReviewSymbolKeyRef = useRef<string | null>(null);
   const currentPairKeyRef = useRef<string | null>(symbolKey(pair));
+  const appliedIntentIdRef = useRef<string | null>(null);
+  const pendingAutoReviewRef = useRef(false);
+  const autoReviewRanForIntentRef = useRef<string | null>(null);
 
   const candidateRows = useMemo(
     () => (Array.isArray(scanCacheA) ? scanCacheA.filter((row): row is EngineASignal => Boolean(row && typeof row === 'object')) : []),
@@ -1962,6 +1990,162 @@ export default function TVChartPanel() {
   useEffect(() => {
     currentPairKeyRef.current = currentSymbolKey;
   }, [currentSymbolKey]);
+
+  useEffect(() => {
+    if (!tvChartIntent?.id || tvChartIntent.id === appliedIntentIdRef.current) return;
+    appliedIntentIdRef.current = tvChartIntent.id;
+    const intentSymbol = String(tvChartIntent.symbol || '').toUpperCase().trim();
+    if (!intentSymbol) return;
+    if (currentSymbolKey && intentSymbol !== currentSymbolKey) {
+      setAiReview(null);
+      setAiReviewError(null);
+      lastAppliedRouteKeyRef.current = null;
+    }
+    setPair(intentSymbol);
+    const preferredCode = tfCodeForBackend(tvChartIntent.preferredTf);
+    if (preferredCode) {
+      setTimeframe(preferredCode);
+      setTimeframeAutoMode(false);
+      lastAppliedRouteKeyRef.current = null;
+    }
+    setAiReview(null);
+    setAiReviewError(null);
+    pendingAutoReviewRef.current = tvChartIntent.autoReview === true;
+    autoReviewRanForIntentRef.current = null;
+    setIntentSourceBadge(
+      tvChartIntent.source === 'signals' ? 'Opened from Signals' : `Opened from ${tvChartIntent.source}`,
+    );
+    setAutoReviewStatus(tvChartIntent.autoReview ? 'pending' : 'idle');
+    clearTvChartIntent();
+  }, [tvChartIntent, clearTvChartIntent, currentSymbolKey]);
+
+  useEffect(() => {
+    if (!pendingAutoReviewRef.current || loading || !candles?.length || aiReviewLoading) return;
+    const intentId = appliedIntentIdRef.current;
+    if (!intentId || autoReviewRanForIntentRef.current === intentId) return;
+    autoReviewRanForIntentRef.current = intentId;
+    pendingAutoReviewRef.current = false;
+    setAutoReviewStatus('running');
+    void runAIReview().finally(() => setAutoReviewStatus('done'));
+  }, [loading, candles, aiReviewLoading, pair]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const poll = async () => {
+      try {
+        await apiClient.postJson('/api/suggested-trades/evaluate-now', {});
+        const res = await apiClient.getJson('/api/suggested-trades') as { watches?: SuggestedTradeWatch[] };
+        if (!cancelled && Array.isArray(res?.watches)) {
+          setActiveWatches(res.watches.filter((w) => ['WATCHING', 'READY_FOR_REVIEW', 'LEVEL_REACHED'].includes(String(w.status))));
+        }
+      } catch {
+        /* alert-only poll — ignore transient errors */
+      }
+    };
+    void poll();
+    const timer = window.setInterval(poll, 8000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, []);
+
+  const suggestedPlan = useMemo((): SuggestedTradePlan | null => {
+    const top = aiReview?.suggestedTradePlan ?? aiReview?.suggested_trade_plan;
+    if (top && typeof top === 'object') return top;
+    const nested = aiReview?.ai_review as { suggestedTradePlan?: SuggestedTradePlan } | undefined;
+    return nested?.suggestedTradePlan ?? null;
+  }, [aiReview]);
+
+  const canFlagWatch = Boolean(
+    suggestedPlan?.armable
+    && ['WAIT_FOR_LEVEL', 'WAIT_FOR_ZONE'].includes(String(suggestedPlan?.action || '').toUpperCase()),
+  );
+
+  const isPaper = autoTrade?.enabled ?? false;
+  const executeBlockReason = useMemo(
+    () => evaluateTvChartExecuteBlock({
+      signal: chartCandidate,
+      chartSymbolKey: currentSymbolKey,
+      aiReview,
+      isTestMode,
+      isPaper,
+    }),
+    [chartCandidate, currentSymbolKey, aiReview, isTestMode, isPaper],
+  );
+  const hideExecuteNow = shouldHideTvChartExecuteNow({ aiReview, canFlagWatch });
+  const showExecuteNow = !hideExecuteNow && Boolean(chartCandidate);
+
+  async function onConfirmExecute() {
+    if (!chartCandidate || executeBlockReason) return;
+    setExecuting(true);
+    try {
+      const payload = buildQuickExecutePayload({
+        signal: chartCandidate,
+        pipMode: String(chartCandidate.style || 'swing'),
+        sizingOverride,
+      });
+      const result = await apiClient.postJson('/api/quick-execute', payload) as {
+        success?: boolean;
+        ticket?: string;
+        error?: string;
+        approval?: { approved: boolean; reason: string };
+      };
+      if (result.approval && !result.approval.approved) {
+        showToast(`Rejected: ${result.approval.reason}`, 'error');
+      } else if (result.success || result.ticket) {
+        showToast(
+          `Executed ${chartCandidate.display || chartCandidate.pair || pair} — ticket ${result.ticket || '?'}`,
+          'success',
+        );
+      } else {
+        showToast(`Error: ${result.error || 'Unknown'}`, 'error');
+      }
+    } catch (err) {
+      showToast(`Execution failed: ${err instanceof Error ? err.message : 'unknown'}`, 'error');
+    } finally {
+      setExecuting(false);
+      setConfirmExecuteOpen(false);
+    }
+  }
+
+  async function flagWatchSetup() {
+    if (!canFlagWatch || !suggestedPlan || flagLoading) return;
+    setFlagLoading(true);
+    setFlagStatus(null);
+    try {
+      const res = await apiClient.postJson('/api/suggested-trades/flag', {
+        symbol: (pair || '').toUpperCase(),
+        display: chartCandidate?.display || chartCandidate?.pair || pair,
+        signal: chartCandidate,
+        suggestedTradePlan: suggestedPlan,
+        aiReviewSummary: aiReview?.aiReviewSummary ?? aiReview?.ai_review_summary,
+        source: 'ai_chart_review',
+        createdAt: new Date().toISOString(),
+      }) as { success?: boolean; error?: string };
+      if (res?.success) {
+        setFlagStatus('Watching setup flagged (alert-only)');
+        showToast('Setup flagged for watch — alert only', 'success');
+      } else {
+        setFlagStatus(res?.error || 'Flag failed');
+      }
+    } catch (err) {
+      setFlagStatus(err instanceof Error ? err.message : 'Flag failed');
+    } finally {
+      setFlagLoading(false);
+    }
+  }
+
+  function watchLabel(watch: SuggestedTradeWatch): string {
+    const dir = watch.direction || '';
+    if (watch.zone_low != null && watch.zone_high != null) {
+      return `Watching: ${watch.zone_low}-${watch.zone_high} ${dir} zone`;
+    }
+    if (watch.level != null) {
+      return `Watching: ${watch.level} ${dir}`;
+    }
+    return `Watching: ${watch.symbol || ''} ${dir}`.trim();
+  }
 
   useEffect(() => {
     if (!aiReview) return;
@@ -2507,6 +2691,7 @@ export default function TVChartPanel() {
   }, [candles, liveTick, backendTf, isCryptoChart, studySnapshot, chartPayload, candlePriceFormat, engineBOverlay, showEngineBOverlays, chartMode, quantEma20, quantEma21, quantEma50, quantEma200, quantDema200, quantVwap, quantRsi14, quantAdx14, quantAtr14, quantVolumeBars, quantVolumeMa]);
 
   return (
+    <>
     <Card className="h-full">
       <CardHeader className="pb-2">
         <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
@@ -2645,6 +2830,25 @@ export default function TVChartPanel() {
               Reset to recommended
             </Button>
           )}
+          {intentSourceBadge && (
+            <Badge variant="outline" className="h-7 text-[10px] border-primary/40 text-primary">
+              {intentSourceBadge}
+            </Badge>
+          )}
+          {autoReviewStatus !== 'idle' && (
+            <Badge variant="outline" className="h-7 text-[10px]">
+              Auto Review: {autoReviewStatus}
+            </Badge>
+          )}
+          {activeWatches.map((watch) => (
+            <Badge
+              key={watch.watch_id || `${watch.symbol}-${watch.status}`}
+              variant="outline"
+              className={`h-7 text-[10px] ${watch.status === 'READY_FOR_REVIEW' ? 'border-long/50 text-long' : ''}`}
+            >
+              {watch.status === 'READY_FOR_REVIEW' ? 'Ready for review' : watchLabel(watch)}
+            </Badge>
+          ))}
           {showEngineBOverlays && engineBOverlay?.overlay_source === 'engine_b' && (
             <CaptureLabel>
               {`Engine B ${engineBOverlay.overlay_version || 'overlay'} ${engineBOverlay.symbol || pair} ${engineBOverlay.timeframe || backendTf || timeframe}`}
@@ -2751,9 +2955,63 @@ export default function TVChartPanel() {
               </div>
             )}
             {aiReview && <AIReviewCard response={aiReview} />}
+            {(showExecuteNow || canFlagWatch) && (
+              <div className="flex flex-wrap items-center gap-2 pt-2">
+                {showExecuteNow && (
+                  <Button
+                    size="sm"
+                    variant="default"
+                    className="h-8 gap-1 text-xs"
+                    disabled={Boolean(executeBlockReason) || executing}
+                    onClick={() => setConfirmExecuteOpen(true)}
+                  >
+                    <Play className="h-3.5 w-3.5" />
+                    {executeBlockReason || 'Execute Now'}
+                  </Button>
+                )}
+                {canFlagWatch && (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="h-8 text-xs"
+                    disabled={flagLoading}
+                    onClick={() => void flagWatchSetup()}
+                  >
+                    Flag / Watch Setup
+                  </Button>
+                )}
+                {flagStatus && <span className="text-[10px] text-muted-foreground">{flagStatus}</span>}
+              </div>
+            )}
           </div>
         )}
       </CardContent>
     </Card>
+    <AlertDialog open={confirmExecuteOpen} onOpenChange={setConfirmExecuteOpen}>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>Confirm Execute Now</AlertDialogTitle>
+          <AlertDialogDescription asChild>
+            <div className="space-y-2 text-sm">
+              <p>
+                Execute <b>{chartCandidate?.direction}</b>{' '}
+                {chartCandidate?.display || chartCandidate?.pair || pair} at{' '}
+                {fmtNum(chartCandidate?.entry ?? chartCandidate?.price, 5)}?
+              </p>
+              <p className="text-xs text-muted-foreground">
+                Backend will recompute SL/TP via /api/quick-execute. Manual user action only.
+              </p>
+            </div>
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel disabled={executing}>Cancel</AlertDialogCancel>
+          <AlertDialogAction onClick={() => void onConfirmExecute()} disabled={executing || Boolean(executeBlockReason)}>
+            {executing ? 'Executing…' : 'Confirm Execute'}
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+    </>
   );
 }

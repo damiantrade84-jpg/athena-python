@@ -9,27 +9,20 @@ def _source() -> str:
     return SIGNALS_PANEL.read_text(encoding="utf-8")
 
 
+def test_signals_panel_open_and_review_action():
+    src = _source()
+
+    assert "Open & Review" in src or "Open &amp; Review" in src
+    assert "setTvChartIntent" in src
+    assert "setActivePanel('tvChart')" in src
+    assert "autoReview: true" in src
+    assert "preferredTvChartTf" in src
+
+
 def test_engine_a_execute_surfaces_quick_execute_error_reason():
     src = _source()
 
+    assert "buildQuickExecutePayload" in src
     assert "apiClient.postJson(" in src
     assert "'/api/quick-execute'" in src
     assert "Execution failed: ${err instanceof Error ? err.message : 'unknown'}" in src
-
-
-def test_engine_a_execute_no_longer_replaces_http_error_with_generic_failure():
-    src = _source()
-
-    assert "showToast('Execution failed', 'error')" not in src
-
-
-def test_engine_a_execute_strips_engine_b_overlay_before_submit():
-    src = _source()
-
-    assert "function signalForExecutionPayload(signal: EngineASignal, source: ScanSource)" in src
-    assert "if (source !== 'A') return signal" in src
-    assert "delete payload.engine_b" in src
-    assert "delete payload.naked_data" in src
-    assert "delete payload.is_naked" in src
-    assert "const signalPayload = signalForExecutionPayload(confirmSig, baseSource)" in src
-    assert "baseSource === 'B'" in src

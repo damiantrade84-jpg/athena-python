@@ -372,6 +372,15 @@ CONFIG: dict = {
             "AI_CHART_REVIEW_STRATEGY_LAYER_OHLCV_LIMIT", 80
         ),
     },
+    "SUGGESTED_TRADE_MONITOR": {
+        "ENABLED": _env_bool("SUGGESTED_TRADE_MONITOR_ENABLED", True),
+        "ALERT_ONLY": True,
+        "POLL_SECONDS": _env_int("SUGGESTED_TRADE_MONITOR_POLL_SECONDS", 5),
+        "DEFAULT_EXPIRY_SECONDS": _env_int(
+            "SUGGESTED_TRADE_MONITOR_DEFAULT_EXPIRY_SECONDS", 1800
+        ),
+        "MAX_ACTIVE_WATCHES": _env_int("SUGGESTED_TRADE_MONITOR_MAX_ACTIVE_WATCHES", 25),
+    },
     "TIMEFRAME_ROUTING": {
         "ENABLED": True,
         "DEFAULT": {

@@ -23,12 +23,13 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { ErrorBanner, RefreshButton } from '@/components/shared';
 import {
   Search, Zap, Filter, Layers, Activity, Eye, Clock, Sun, Moon, FileText, Bot,
-  BarChart2, Sparkles, Shield, Gauge,
+  BarChart2, Shield, Gauge, Sparkles,
 } from 'lucide-react';
 import { fmtNum, toNum, cn } from '@/lib/utils';
 import { fmtAtrMeta, fmtLiveQuoteMeta, fmtPrice } from '@/lib/athenaFormat';
 import { fetchVisionCandlePayload } from '@/lib/visionReview';
 import apiClient from '@/lib/apiClient';
+import { buildQuickExecutePayload } from '@/lib/manualExecuteHelpers';
 import {
   EngineASignalCard,
   EngineBChecklistCard,
@@ -44,7 +45,7 @@ import type {
   AiTextReviewResponse,
 } from '@/types/athena';
 
-type EngineSource = 'A' | 'B' | 'A+B';
+type EngineSource = 'A' | 'B';
 
 type ExecuteResponse = {
   success?: boolean;
@@ -196,9 +197,8 @@ function unifyScanResults(
 }
 
 function unifiedEngineLabel(engines: Set<'A' | 'B'>): EngineSource {
-  if (engines.has('A') && engines.has('B')) return 'A+B';
-  if (engines.has('B')) return 'B';
-  return 'A';
+  if (engines.has('A')) return 'A';
+  return 'B';
 }
 
 function canExecuteRow(row: UnifiedRow | null): boolean {
@@ -238,19 +238,40 @@ function preferredExecutionSignal(row: UnifiedRow): EngineASignal {
   return row.signal;
 }
 
+function resolveSignalSymbol(signal: EngineASignal): string {
+  return String(signal.symbol || signal.pair || signal.display || '').toUpperCase().trim();
+}
+
+function preferredTvChartTf(signal: EngineASignal): string {
+  const route = (signal as { timeframe_route?: { autoSelectTf?: string } }).timeframe_route?.autoSelectTf;
+  const direct = signal.timeframe || route;
+  if (direct && typeof direct === 'string') {
+    return direct.toUpperCase();
+  }
+  const style = String(signal.style || signal.requestedStyle || '').toLowerCase();
+  if (style === 'scalp' || style === 'intraday') return 'H1';
+  return 'H4';
+}
+
+function intentSourceForRow(row: UnifiedRow): 'signals' | 'engine_a' | 'engine_b' {
+  if (row.engines.has('A') && row.engines.has('B')) return 'signals';
+  if (row.engines.has('B')) return 'engine_b';
+  return 'engine_a';
+}
+
 export default function SignalsPanel() {
   const {
     showToast, isTestMode,
     scanCacheA, scanCacheB,
     scanCacheAMeta, scanCacheBMeta,
     setScanCacheA, setScanCacheB,
+    setActivePanel, setTvChartIntent,
   } = useStore();
   const [filter, setFilter] = useState('');
   const [directionFilter, setDirectionFilter] = useState<string>('all');
   const [assetClass, setAssetClass] = useState<string>('all');
   const [style, setStyle] = useState<string>('auto');
   const [sortBy, setSortBy] = useState<string>('score');
-  const [engineFilter, setEngineFilter] = useState<'all' | 'A' | 'B' | 'A+B'>('all');
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [detailTab, setDetailTab] = useState<string>('overview');
   const [confirmRow, setConfirmRow] = useState<UnifiedRow | null>(null);
@@ -299,15 +320,11 @@ export default function SignalsPanel() {
       if (filter && !pair.includes(filter.toLowerCase())) return false;
       if (directionFilter !== 'all' && r.signal.direction !== directionFilter) return false;
       if (assetClass !== 'all' && (r.signal.type || '').toLowerCase() !== assetClass) return false;
-      if (engineFilter !== 'all') {
-        const label = unifiedEngineLabel(r.engines);
-        if (label !== engineFilter) return false;
-      }
       return true;
     });
     list.sort((a, b) => compareUnified(a, b, sortBy));
     return list;
-  }, [rows, priceFor, filter, directionFilter, assetClass, engineFilter, sortBy]);
+  }, [rows, priceFor, filter, directionFilter, assetClass, sortBy]);
 
   /** Grouped by scoreGroup (Engine A) or asset type. Watchlist falls within its group. */
   const groupedRows = useMemo(() => {
@@ -337,16 +354,6 @@ export default function SignalsPanel() {
       ?? rows.find((r) => r.id === selectedId)
       ?? null;
   }, [selectedId, filteredRows, rows]);
-
-  /** Counters for the engine-filter chips. Recompute against unfiltered rows. */
-  const engineCounts = useMemo(() => {
-    const counts = { all: rows.length, A: 0, B: 0, 'A+B': 0 } as Record<'all' | 'A' | 'B' | 'A+B', number>;
-    for (const r of rows) {
-      const label = unifiedEngineLabel(r.engines);
-      counts[label] = (counts[label] || 0) + 1;
-    }
-    return counts;
-  }, [rows]);
 
   const scanEngineA = useCallback(async () => {
     const ac = assetClass === 'all' ? '' : assetClass;
@@ -415,16 +422,28 @@ export default function SignalsPanel() {
     );
   }, [scanEngineB, showToast]);
 
-  /** Run both scans in parallel — engines stay logically independent on the server. */
-  const runScan = useCallback(async () => {
-    const [a, b] = await Promise.all([scanEngineA(), scanEngineB()]);
-    setSortBy('score');
-    const aPart = a ? `A ${a.trade} trade / ${a.watchlist} watch` : 'A failed';
-    const bPart = b ? `B ${b.count}` : 'B failed';
-    showToast(`Scan complete · ${aPart} · ${bPart}`, a || b ? 'success' : 'error');
-  }, [scanEngineA, scanEngineB, showToast]);
-
   const isPaper = autoTrade?.enabled ?? false;
+  const onOpenAndReview = useCallback((row: UnifiedRow) => {
+    const sig = row.signal;
+    const symbol = resolveSignalSymbol(sig);
+    if (!symbol) {
+      showToast('Cannot open chart: missing symbol', 'error');
+      return;
+    }
+    setTvChartIntent({
+      id: `tv-${symbol}-${Date.now()}`,
+      source: intentSourceForRow(row),
+      symbol,
+      display: sig.display || sig.pair || symbol,
+      signal: sig,
+      preferredTf: preferredTvChartTf(sig),
+      autoReview: true,
+      createdAt: new Date().toISOString(),
+    });
+    setActivePanel('tvChart');
+    showToast(`Opening ${sig.display || symbol} on TV Chart for AI review`, 'info');
+  }, [setActivePanel, setTvChartIntent, showToast]);
+
   const selectedCanExecute = canExecuteRow(selectedRow);
   const executeDisabled = isTestMode || !selectedCanExecute;
   const executeLabel = isTestMode
@@ -522,31 +541,16 @@ export default function SignalsPanel() {
     const effectiveStyle = pendingStyle === 'auto'
       ? (sig.style || (style === 'auto' ? 'swing' : style))
       : pendingStyle;
-    const signalPayload = preferredExecutionSignal(confirmRow);
     const isEngineBOnly = confirmRow.engines.has('B') && !confirmRow.engines.has('A');
-    const nakedData = (isEngineBOnly
-      ? (sig.naked_data ?? sig.engine_b ?? {})
-      : {}) as Record<string, unknown>;
-    const payload = {
-      signal: {
-        ...signalPayload,
-        symbol: sig.symbol || sig.pair || sig.display,
-        pair: sig.pair || sig.display,
-        display: sig.display || sig.pair,
-        type: sig.type,
-        direction: sig.direction,
-        price: sig.entry ?? sig.price,
-        entry: sig.entry ?? sig.price,
-        sl: sig.sl,
-        tp1: sig.tp1 ?? sig.tp,
-        tp2: sig.tp2 ?? sig.tp,
-        style: effectiveStyle,
-        source: isEngineBOnly ? 'engine_b' : 'engine_a',
-      },
-      engine_b: nakedData,
-      pip_mode: effectiveStyle,
-      sizing_override: Math.max(0.25, Math.min(1.0, sizingOverride || 1.0)),
-    };
+    const payload = buildQuickExecutePayload({
+      signal: preferredExecutionSignal(confirmRow),
+      engineBOverlay: (isEngineBOnly
+        ? (sig.naked_data ?? sig.engine_b ?? {})
+        : {}) as Record<string, unknown>,
+      isEngineBOnly,
+      pipMode: String(effectiveStyle),
+      sizingOverride,
+    });
     setExecuting(true);
     try {
       const result = await apiClient.postJson(
@@ -656,73 +660,10 @@ export default function SignalsPanel() {
               }
               {scanningB ? 'B…' : 'Scan B'}
             </Button>
-            <Button
-              size="sm"
-              className="h-8 gap-1 text-xs"
-              style={{
-                background: 'linear-gradient(135deg, hsl(var(--gold-dark)), hsl(var(--gold)))',
-                color: 'hsl(var(--primary-foreground))',
-                border: 'none',
-              }}
-              onClick={runScan}
-              disabled={scanning}
-            >
-              {scanning
-                ? <span className="w-3.5 h-3.5 rounded-full border-2 border-current border-t-transparent animate-spin" />
-                : <Sparkles className="w-3.5 h-3.5" />
-              }
-              {scanning ? 'Scanning…' : 'Scan A + B'}
-            </Button>
             <RefreshButton onClick={refreshLast} loading={lastLoading} />
           </div>
         </CardContent>
       </Card>
-
-      {/* -- ENGINE FILTER CHIPS (visual only — A and B never blended in scoring) -- */}
-      <div className="flex items-center gap-2 flex-wrap text-[11px]">
-        <span className="text-[10px] uppercase tracking-wider text-muted-foreground">
-          Engine
-        </span>
-        {(['all', 'A', 'B', 'A+B'] as const).map((key) => {
-          const active = engineFilter === key;
-          const count = engineCounts[key] ?? 0;
-          const label = key === 'all'
-            ? 'All'
-            : key === 'A'
-              ? 'Engine A'
-              : key === 'B'
-                ? 'Engine B'
-                : 'A + B';
-          return (
-            <button
-              key={key}
-              type="button"
-              onClick={() => setEngineFilter(key)}
-              className={cn(
-                'inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md border transition-colors',
-                active
-                  ? 'border-gold text-foreground'
-                  : 'border-border/60 text-muted-foreground hover:text-foreground',
-              )}
-              style={active
-                ? { background: 'hsl(var(--gold) / 0.12)', color: 'hsl(var(--gold-light))' }
-                : { background: 'transparent' }
-              }
-            >
-              {key === 'B'
-                ? <Layers className="w-3 h-3" />
-                : key === 'A+B'
-                  ? <Sparkles className="w-3 h-3" />
-                  : <Zap className="w-3 h-3" />
-              }
-              {label}
-              <Badge variant="outline" className="text-[9px] font-mono h-4 px-1 ml-1">
-                {count}
-              </Badge>
-            </button>
-          );
-        })}
-      </div>
 
       {lastError && <ErrorBanner message={lastError} onRetry={refreshLast} />}
 
@@ -776,14 +717,14 @@ export default function SignalsPanel() {
                     <>
                       <p className="text-sm">No signals yet</p>
                       <p className="text-[11px] mt-1">
-                        Click <span className="font-mono">Scan A + B</span> to run both engines.
+                        Run Engine A or Engine B from the controls above.
                       </p>
                     </>
                   ) : (
                     <>
                       <p className="text-sm">No signals match your filters</p>
                       <p className="text-[11px] mt-1">
-                        {rows.length} signals total — adjust pair / direction / engine / asset filters.
+                        {rows.length} signals total — adjust pair / direction / asset filters.
                       </p>
                     </>
                   )}
@@ -871,6 +812,16 @@ export default function SignalsPanel() {
                       executeDisabled={executeDisabled}
                       executeLabel={executeLabel}
                     />
+
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      className="w-full gap-2"
+                      onClick={() => onOpenAndReview(selectedRow)}
+                    >
+                      <Sparkles className="w-3.5 h-3.5" />
+                      Open &amp; Review
+                    </Button>
 
                     {/* Per-style execute toolbar */}
                     <Card className="border-border/60 bg-card/50">
@@ -1266,11 +1217,9 @@ function UnifiedSignalRow({
   onSelect: (row: UnifiedRow) => void;
 }) {
   const label = unifiedEngineLabel(row.engines);
-  const badge = label === 'A+B'
-    ? { text: 'A + B', icon: <Sparkles className="w-3 h-3" />, bg: 'hsl(var(--gold) / 0.18)', fg: 'hsl(var(--gold-light))' }
-    : label === 'B'
-      ? { text: 'B',     icon: <Layers className="w-3 h-3" />,    bg: 'hsl(var(--info) / 0.18)',  fg: 'hsl(var(--info))' }
-      : { text: 'A',     icon: <Zap className="w-3 h-3" />,        bg: 'hsl(var(--gold) / 0.12)',  fg: 'hsl(var(--gold-light))' };
+  const badge = label === 'B'
+    ? { text: 'B', icon: <Layers className="w-3 h-3" />, bg: 'hsl(var(--info) / 0.18)', fg: 'hsl(var(--info))' }
+    : { text: 'A', icon: <Zap className="w-3 h-3" />, bg: 'hsl(var(--gold) / 0.12)', fg: 'hsl(var(--gold-light))' };
 
   return (
     <div className="flex items-stretch gap-2">

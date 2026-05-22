@@ -12,7 +12,7 @@ import {
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
 import { ErrorBanner } from '@/components/shared';
-import { Activity, Play, Zap, AlertTriangle, Layers } from 'lucide-react';
+import { Activity, Play, Zap, AlertTriangle, Layers, Sparkles } from 'lucide-react';
 import { fmtNum, toNum } from '@/lib/utils';
 import { fmtLiveQuoteMeta, fmtPrice } from '@/lib/athenaFormat';
 
@@ -246,6 +246,8 @@ export default function ScalpLabPanel() {
     scalpLabSelectedCache,
     setScalpLabScanCache,
     setScalpLabSelectedCache,
+    setActivePanel,
+    setScalpWorkbenchIntent,
   } = useStore();
   const [diagnostic, setDiagnostic] = useState(false);
   const [confirmExec, setConfirmExec] = useState<ScalpSignal | null>(null);
@@ -258,6 +260,26 @@ export default function ScalpLabPanel() {
   const universeCount = pairsData?.count ?? pairsData?.pairs?.length ?? 0;
   const scanResult = scalpLabScanCache as ScalpScanResponse | null;
   const selected = scalpLabSelectedCache as ScalpSignal | null;
+
+  const openWorkbenchAndReview = useCallback((sig: ScalpSignal) => {
+    setScalpLabSelectedCache(sig);
+    const symbol = String(sig.symbol || sig.pair || sig.display || '').toUpperCase().trim();
+    if (!symbol) {
+      showToast('Cannot open workbench: missing symbol', 'error');
+      return;
+    }
+    setScalpWorkbenchIntent({
+      id: `scalp-${symbol}-${Date.now()}`,
+      source: 'scalp_lab',
+      symbol,
+      signal: sig,
+      preferredTf: 'M5',
+      autoReview: true,
+      createdAt: new Date().toISOString(),
+    });
+    setActivePanel('scalpWorkbench');
+    showToast(`Opening ${sig.display || symbol} workbench for AI review`, 'info');
+  }, [setActivePanel, setScalpLabSelectedCache, setScalpWorkbenchIntent, showToast]);
 
   const runScan = useCallback(async () => {
     setScalpLabSelectedCache(null);
@@ -474,6 +496,7 @@ export default function ScalpLabPanel() {
                         livePriceSource: sourceFor(selected),
                       }}
                       onExecute={requestExecute}
+                      onOpenWorkbenchAndReview={openWorkbenchAndReview}
                     />
                   </ScrollArea>
                 ) : (
@@ -695,7 +718,15 @@ function anchorCandidateText(candidate?: AnchorCandidate): string {
   return bits.join(' / ') || 'valid';
 }
 
-function ScalpDetail({ sig, onExecute }: { sig: ScalpSignal; onExecute: (s: ScalpSignal) => void }) {
+function ScalpDetail({
+  sig,
+  onExecute,
+  onOpenWorkbenchAndReview,
+}: {
+  sig: ScalpSignal;
+  onExecute: (s: ScalpSignal) => void;
+  onOpenWorkbenchAndReview: (s: ScalpSignal) => void;
+}) {
   const display = sig.display || sig.pair || sig.symbol || '—';
   const grade = String(sig.ai_grade || 'D').toUpperCase();
   const activeAnchor = sig.profile_anchor_shadow?.active_anchor;
@@ -861,6 +892,16 @@ function ScalpDetail({ sig, onExecute }: { sig: ScalpSignal; onExecute: (s: Scal
           </CardContent>
         </Card>
       )}
+
+      <Button
+        size="sm"
+        variant="secondary"
+        className="w-full gap-2"
+        onClick={() => onOpenWorkbenchAndReview(sig)}
+      >
+        <Sparkles className="w-3.5 h-3.5" />
+        Open Workbench &amp; Review
+      </Button>
 
       <Button
         size="sm"

@@ -387,3 +387,42 @@ def test_summary_and_verdict_fallbacks():
     assert 0 <= summary["overallScore"] <= 100
     verdict = build_scalp_verdict_comparison(ctx, ai)
     assert verdict["setupProvided"] is True
+
+
+def test_scalp_normalizer_sanitizes_suggested_trade_plan():
+    raw = json.dumps({
+        "verdict": "CAUTION",
+        "confidence": 62,
+        "human_action": "wait",
+        "suggestedTradePlan": {
+            "schemaVersion": "suggested_trade_plan.v1",
+            "armable": True,
+            "source": "ai_scalp_chart_review",
+            "symbol": "BTCUSDT",
+            "direction": "SHORT",
+            "action": "WAIT_FOR_ZONE",
+            "triggerType": "PULLBACK_TO_ZONE",
+            "zoneLow": 64900,
+            "zoneHigh": 65100,
+            "expiresInSeconds": 900,
+        },
+    })
+    out = normalize_scalp_chart_review_response(raw)
+    plan = out.get("suggestedTradePlan")
+    assert isinstance(plan, dict)
+    assert plan.get("armable") is True
+    assert plan.get("zoneLow") == 64900
+
+
+def test_scalp_normalizer_malformed_suggested_trade_plan_not_armable():
+    raw = json.dumps({
+        "verdict": "CAUTION",
+        "confidence": 40,
+        "human_action": "wait",
+        "suggestedTradePlan": {"action": "ENTRY_NOW", "direction": "LONG", "triggerType": "ACCEPTANCE_ABOVE", "level": 1},
+    })
+    out = normalize_scalp_chart_review_response(raw)
+    plan = out.get("suggestedTradePlan")
+    assert isinstance(plan, dict)
+    assert plan.get("armable") is False
+

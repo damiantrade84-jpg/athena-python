@@ -314,3 +314,10 @@ export interface FactorAttribution {
   win_rate: number;
   trades: number;
 }
+
+export type {
+  SuggestedTradePlan,
+  SuggestedTradeWatch,
+  TvChartIntent,
+  ScalpWorkbenchIntent,
+} from './athena';

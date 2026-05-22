@@ -15311,6 +15311,7 @@ from athena_app.api.routes_audit import register_audit_routes  # noqa: E402
 from athena_app.api.routes_ai_agent import register_ai_agent_routes  # noqa: E402
 from athena_app.api.routes_ai_chart_review import register_ai_chart_review_routes  # noqa: E402
 from athena_app.api.routes_ai_scalp_chart_review import register_ai_scalp_chart_review_routes  # noqa: E402
+from athena_app.api.routes_suggested_trades import register_suggested_trade_routes  # noqa: E402
 from athena_app.api.routes_backtest import register_backtest_history_routes  # noqa: E402
 from athena_app.api.routes_broker_status import register_broker_status_routes  # noqa: E402
 from athena_app.api.routes_live_dashboard import register_live_dashboard_routes  # noqa: E402
@@ -15431,6 +15432,17 @@ register_ai_scalp_chart_review_routes(
             "scalp_engine", fromlist=["run_scalp_scan"]
         ).run_scalp_scan(pairs),
         scalp_ui_signal_fn=_scalp_ui_signal,
+    ),
+)
+register_suggested_trade_routes(
+    app,
+    SimpleNamespace(
+        CONFIG=CONFIG,
+        json_safe=_json_safe,
+        log=log,
+        fetch_candles=fetch_candles,
+        live_prices=_live_prices,
+        live_prices_lock=_live_prices_lock,
     ),
 )
 register_market_data_routes(
