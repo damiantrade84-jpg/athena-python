@@ -173,3 +173,56 @@ def test_scalp_workbench_shows_ai_grade_and_score():
 
     assert 'label="AI grade"' in source
     assert 'label="AI score"' in source
+
+
+def test_scalp_workbench_ai_review_in_main_review_rail():
+    source = _read(SCALP_WORKBENCH)
+
+    assert 'data-review-rail' in source
+    rail_idx = source.index('data-review-rail')
+    ai_idx = source.index("<ScalpAIReviewCard")
+    grid_idx = source.index("xl:grid-cols-[minmax(0,1fr)_360px]")
+    assert ai_idx > grid_idx
+    assert ai_idx > rail_idx
+
+
+def test_scalp_workbench_execute_and_flag_near_ai_review():
+    source = _read(SCALP_WORKBENCH)
+
+    ai_idx = source.index("<ScalpAIReviewCard")
+    execute_idx = source.index("Execute Scalp")
+    flag_idx = source.index("Flag / Watch Setup")
+    assert execute_idx < ai_idx + 800
+    assert flag_idx < ai_idx + 800
+    assert 'data-review-action-strip' in source
+
+
+def test_scalp_workbench_diagnostics_collapsed():
+    source = _read(SCALP_WORKBENCH)
+
+    assert "Engine D diagnostics" in source
+    assert "Candidate context and logs" in source
+    assert "<details" in source
+
+
+def test_scalp_workbench_debug_json_closed_by_default():
+    source = _read(SCALP_WORKBENCH)
+
+    assert "open={!scalpAiReviewResponse}" not in source
+    assert "AI review debug" in source
+
+
+def test_scalp_workbench_right_edge_label_layout():
+    source = _read(SCALP_WORKBENCH)
+
+    assert "ChartRightEdgeLabelPrimitive" in source
+    assert "layoutRightEdgeLabels" in _read(ROOT / "static/react-app/app/src/lib/chartRightEdgeLabels.ts")
+    assert "axisLabelVisible: false" in source
+
+
+def test_scalp_workbench_compact_header_chips():
+    source = _read(SCALP_WORKBENCH)
+
+    assert "ChartFeedHeaderChips" in source
+    assert "scalpFeedIdentityChips" in source
+    assert "scalpFeedDiagnosticsChips" in source

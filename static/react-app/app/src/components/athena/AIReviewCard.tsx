@@ -115,60 +115,84 @@ export default function AIReviewCard({ response }: AIReviewCardProps) {
           }
         />
 
-        <AIReviewContextCompletenessPanel
-          completeness={response.contextCompleteness}
-          detailed={response.missingContextDetailed}
-          fundingOi={response.fundingOi}
-          atrDiagnostics={response.atrDiagnostics}
-          resistanceMap={response.resistanceMap}
-        />
-
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-[11px]">
-          <Row label="Human action" value={showReviewValue(ai.human_action)} />
-          <Row label="Setup type" value={showReviewValue(ai.setup_type)} />
-          <Row label="Visual confirmation" value={showReviewValue(ai.visual_confirmation)} />
-          <Row label="Visual contradiction" value={showReviewValue(ai.visual_contradiction)} />
-          <Row label="Engine A alignment" value={showReviewValue(ai.engine_a_alignment)} />
-          <Row label="ATR / RR assessment" value={showReviewValue(ai.atr_rr_assessment)} />
-          <Row
-            label="Freshness assessment"
-            value={ai.freshness_assessment ? ai.freshness_assessment : freshnessFallback}
-          />
-          <Row label="Entry quality" value={showReviewValue(ai.entry_quality)} />
-        </div>
-
-        <ListBlock label="Supporting reasons" items={supporting} />
-        <ListBlock label="Risks" items={risks} />
-        <ListBlock label="Missing context" items={missing} />
-
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-2 text-[10px] text-muted-foreground border-t border-border/40 pt-2">
-          <KV label="chart captured" value={showReviewValue(ts.chart_captured_at)} />
-          <KV
-            label="scan timestamp"
-            value={`${showReviewValue(ts.scan_timestamp)}${
-              scanDelta == null ? '' : ` (delta ${scanDelta}s)`
-            }`}
-          />
-          <KV label="latest candle" value={showReviewValue(ts.latest_candle_ts)} />
-        </div>
-
-        {warnings && (
-          <div className="text-[11px] text-warning border border-border/40 rounded-md p-2">
-            <div className="font-semibold mb-1">Mismatch warnings</div>
-            <ul className="list-disc list-inside space-y-0.5">
-              {warnings.map((w, i) => (
-                <li key={i}>{w}</li>
-              ))}
-            </ul>
+        <details className="rounded-md border border-border/40 bg-background/20 px-2 py-1.5">
+          <summary className="cursor-pointer text-[11px] font-medium text-muted-foreground">
+            Context completeness and resistance map
+          </summary>
+          <div className="mt-2">
+            <AIReviewContextCompletenessPanel
+              completeness={response.contextCompleteness}
+              detailed={response.missingContextDetailed}
+              fundingOi={response.fundingOi}
+              atrDiagnostics={response.atrDiagnostics}
+              resistanceMap={response.resistanceMap}
+            />
           </div>
-        )}
+        </details>
 
-        {c.divergence_note && (
-          <div className="text-[11px] text-muted-foreground border border-border/40 rounded-md p-2">
-            <span className="font-semibold">Concordance note: </span>
-            {c.divergence_note}
+        <details className="rounded-md border border-border/40 bg-background/20 px-2 py-1.5">
+          <summary className="cursor-pointer text-[11px] font-medium text-muted-foreground">
+            Review detail fields
+          </summary>
+          <div className="mt-2 grid grid-cols-1 md:grid-cols-2 gap-2 text-[11px]">
+            <Row label="Human action" value={showReviewValue(ai.human_action)} />
+            <Row label="Setup type" value={showReviewValue(ai.setup_type)} />
+            <Row label="Visual confirmation" value={showReviewValue(ai.visual_confirmation)} />
+            <Row label="Visual contradiction" value={showReviewValue(ai.visual_contradiction)} />
+            <Row label="Engine A alignment" value={showReviewValue(ai.engine_a_alignment)} />
+            <Row label="ATR / RR assessment" value={showReviewValue(ai.atr_rr_assessment)} />
+            <Row
+              label="Freshness assessment"
+              value={ai.freshness_assessment ? ai.freshness_assessment : freshnessFallback}
+            />
+            <Row label="Entry quality" value={showReviewValue(ai.entry_quality)} />
           </div>
-        )}
+        </details>
+
+        <details className="rounded-md border border-border/40 bg-background/20 px-2 py-1.5">
+          <summary className="cursor-pointer text-[11px] font-medium text-muted-foreground">
+            Supporting reasons, risks, and missing context
+          </summary>
+          <div className="mt-2 space-y-2">
+            <ListBlock label="Supporting reasons" items={supporting} />
+            <ListBlock label="Risks" items={risks} />
+            <ListBlock label="Missing context" items={missing} />
+          </div>
+        </details>
+
+        <details className="rounded-md border border-border/40 bg-background/20 px-2 py-1.5">
+          <summary className="cursor-pointer text-[11px] font-medium text-muted-foreground">
+            Timestamps and warnings
+          </summary>
+          <div className="mt-2 space-y-2">
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-2 text-[10px] text-muted-foreground">
+              <KV label="chart captured" value={showReviewValue(ts.chart_captured_at)} />
+              <KV
+                label="scan timestamp"
+                value={`${showReviewValue(ts.scan_timestamp)}${
+                  scanDelta == null ? '' : ` (delta ${scanDelta}s)`
+                }`}
+              />
+              <KV label="latest candle" value={showReviewValue(ts.latest_candle_ts)} />
+            </div>
+            {warnings && (
+              <div className="text-[11px] text-warning border border-border/40 rounded-md p-2">
+                <div className="font-semibold mb-1">Mismatch warnings</div>
+                <ul className="list-disc list-inside space-y-0.5">
+                  {warnings.map((w, i) => (
+                    <li key={i}>{w}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            {c.divergence_note && (
+              <div className="text-[11px] text-muted-foreground border border-border/40 rounded-md p-2">
+                <span className="font-semibold">Concordance note: </span>
+                {c.divergence_note}
+              </div>
+            )}
+          </div>
+        </details>
       </CardContent>
     </Card>
   );
@@ -185,7 +209,7 @@ function Row({ label, value }: { label: string; value: string }) {
 
 function KV({ label, value }: { label: string; value: string }) {
   return (
-    <div className="font-mono">
+    <div className="font-mono break-words">
       <span className="text-muted-foreground">{label}: </span>
       <span>{value}</span>
     </div>
@@ -203,7 +227,7 @@ function ListBlock({
   return (
     <div className="text-[11px]">
       <div className="text-[10px] text-muted-foreground mb-1">{label}</div>
-      <ul className="list-disc list-inside space-y-0.5">
+      <ul className="list-disc list-inside space-y-0.5 break-words">
         {items.map((it, i) => (
           <li key={i}>{it}</li>
         ))}

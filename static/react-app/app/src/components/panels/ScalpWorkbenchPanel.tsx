@@ -42,6 +42,14 @@ import {
 import { runnerBadgeClass, runnerBadgeLabel } from '@/lib/suggestedTradeRunnerDisplay';
 import { useSuggestedTradeRunnerStatus } from '@/hooks/useSuggestedTradeRunnerStatus';
 import ScalpAIReviewCard from '@/components/athena/ScalpAIReviewCard';
+import ChartFeedHeaderChips, { type ChartFeedHeaderChipSpec } from '@/components/athena/ChartFeedHeaderChips';
+import CompactSuggestedWatchStatus from '@/components/athena/CompactSuggestedWatchStatus';
+import { ChartRightEdgeLabelPrimitive } from '@/lib/chartRightEdgeLabelPrimitive';
+import {
+  labelPriorityForText,
+  RIGHT_EDGE_LABEL_PRIORITY,
+  type RightEdgeLabel,
+} from '@/lib/chartRightEdgeLabels';
 import type { ScalpAIChartReviewResponse, SuggestedTradePlan, SuggestedTradeWatch } from '@/types/athena';
 import { cn, fmtNum, toNum } from '@/lib/utils';
 
@@ -955,6 +963,7 @@ export default function ScalpWorkbenchPanel() {
   const chartCaptureRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const candleSeriesRef = useRef<ISeriesApi<'Candlestick'> | null>(null);
+  const rightEdgeLabelPrimitiveRef = useRef<ChartRightEdgeLabelPrimitive | null>(null);
 
   const scanResult = scalpLabScanCache as ScalpScanResponse | null;
   const selectedCache = scalpLabSelectedCache as ScalpWorkbenchSignal | null;
@@ -1128,17 +1137,6 @@ export default function ScalpWorkbenchPanel() {
       setFlagLoading(false);
     }
   }, [activeSignal, canFlagWatch, chartSymbol, flagLoading, scalpAiReviewResponse, showToast, suggestedPlan]);
-
-  function watchLabel(watch: SuggestedTradeWatch): string {
-    const dir = watch.direction || '';
-    if (watch.zone_low != null && watch.zone_high != null) {
-      return `Watching: ${watch.zone_low}-${watch.zone_high} ${dir} zone`;
-    }
-    if (watch.level != null) {
-      return `Watching: ${watch.level} ${dir}`;
-    }
-    return `Watching: ${watch.symbol || ''} ${dir}`.trim();
-  }
 
   const candleRows = useMemo(() => toCandleData(candlePayload?.candles), [candlePayload]);
   const dataFidelity = asRecord(activeSignal?.data_fidelity);
@@ -1410,6 +1408,9 @@ export default function ScalpWorkbenchPanel() {
       priceLineVisible: true,
     });
     candleSeriesRef.current = candleSeries;
+    const labelPrimitive = new ChartRightEdgeLabelPrimitive();
+    candleSeries.attachPrimitive(labelPrimitive);
+    rightEdgeLabelPrimitiveRef.current = labelPrimitive;
     candleSeries.setData(candleRows);
 
     for (const level of priceLevels) {
@@ -1418,10 +1419,39 @@ export default function ScalpWorkbenchPanel() {
         color: level.color,
         lineWidth: 1,
         lineStyle: level.style ?? LineStyle.Dashed,
-        axisLabelVisible: true,
-        title: level.label,
+        axisLabelVisible: false,
+        title: '',
       });
     }
+
+    const paneHeightPx = container.clientHeight || 540;
+    const latestClose = candleRows.length > 0 ? candleRows[candleRows.length - 1].close : null;
+    const edgeLabels: RightEdgeLabel[] = priceLevels.flatMap((level, index) => {
+      const y = candleSeries.priceToCoordinate(level.price);
+      if (y == null || !Number.isFinite(y)) return [];
+      return [{
+        id: `scalp-level-${index}-${level.label}`,
+        text: level.label,
+        y,
+        priority: labelPriorityForText(level.label),
+        color: level.color,
+        side: 'right' as const,
+      }];
+    });
+    if (latestClose != null && Number.isFinite(latestClose)) {
+      const y = candleSeries.priceToCoordinate(latestClose);
+      if (y != null && Number.isFinite(y)) {
+        edgeLabels.push({
+          id: 'scalp-current-price',
+          text: 'PRICE',
+          y,
+          priority: RIGHT_EDGE_LABEL_PRIORITY.currentPrice,
+          color: 'rgba(245, 240, 232, 0.92)',
+          side: 'right',
+        });
+      }
+    }
+    labelPrimitive.setLabels(edgeLabels, paneHeightPx);
 
     if (candleRows.length > 0) chart.timeScale().fitContent();
 
@@ -1438,6 +1468,7 @@ export default function ScalpWorkbenchPanel() {
       chart.remove();
       chartRef.current = null;
       candleSeriesRef.current = null;
+      rightEdgeLabelPrimitiveRef.current = null;
     };
   }, [candleRows, priceLevels]);
 
@@ -1479,39 +1510,50 @@ export default function ScalpWorkbenchPanel() {
       screenshotBase64: 'base64 hidden',
     };
   }, [scalpAiReviewPreview]);
+  const scalpFeedIdentityChips = useMemo((): ChartFeedHeaderChipSpec[] => [
+    { key: 'symbol', label: chartSymbol || 'No symbol', title: `Symbol ${chartSymbol || 'none'}` },
+    { key: 'tf', label: timeframe, title: `Display timeframe ${timeframe}` },
+    {
+      key: 'exec-tf',
+      label: `Exec TF: ${executionTf}`,
+      title: `Execution timeframe ${executionTf}`,
+    },
+    { key: 'engine', label: 'Engine D', title: 'Engine D scalp workbench' },
+  ], [chartSymbol, timeframe, executionTf]);
+  const scalpFeedDiagnosticsChips = useMemo((): ChartFeedHeaderChipSpec[] => {
+    const chartProvider = candlePayload?.chart_provider || candlePayload?.candle_provider || 'unknown';
+    const chips: ChartFeedHeaderChipSpec[] = [
+      { key: 'chart', label: `Chart: ${chartProvider}`, title: `Chart provider ${chartProvider}` },
+      { key: 'status', label: `Status: ${candlePayload?.chart_status || 'unknown'}`, title: candlePayload?.chart_status || 'unknown' },
+    ];
+    if (candlePayload?.execution_provider) {
+      chips.push({
+        key: 'exec',
+        label: `Exec: ${candlePayload.execution_provider}`,
+        title: `Execution provider ${candlePayload.execution_provider}`,
+      });
+    }
+    return chips;
+  }, [candlePayload]);
 
   return (
     <div className="space-y-4">
       <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-        <div>
+        <div className="min-w-0 space-y-2">
           <h2 className="text-xl font-semibold tracking-tight text-foreground">Engine D Naked Scalp Workbench</h2>
-          <p className="mt-1 max-w-3xl text-xs text-muted-foreground">
+          <p className="max-w-3xl text-xs text-muted-foreground">
             Read-only native chart shell for Market State, Location, and Aggression review.
           </p>
+          <ChartFeedHeaderChips
+            identityChips={scalpFeedIdentityChips}
+            feedChips={scalpFeedDiagnosticsChips}
+          />
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <Button variant="outline" size="sm" onClick={refreshScan} disabled={scanLoading}>
             <RefreshCw className={cn('mr-2 h-4 w-4', scanLoading && 'animate-spin')} />
             Refresh
           </Button>
-          <Button variant="outline" size="sm" onClick={captureScalpChartForAIReview} disabled={!activeSignal || chartLoading || aiReviewLoading}>
-            <Camera className={cn('mr-2 h-4 w-4', aiReviewLoading && 'animate-pulse')} />
-            {aiReviewLoading ? 'Reviewing…' : 'Capture for AI review'}
-          </Button>
-          <div className="flex flex-col gap-0.5">
-            <Button
-              variant="default"
-              size="sm"
-              disabled={Boolean(executeBlockReason) || executingScalp || !activeSignal}
-              onClick={() => setConfirmExecOpen(true)}
-            >
-              <Play className={cn('mr-2 h-4 w-4', executingScalp && 'animate-pulse')} />
-              Execute Scalp
-            </Button>
-            {executeBlockReason && (
-              <span className="text-[10px] text-muted-foreground">{executeBlockReason}</span>
-            )}
-          </div>
           <Button variant="outline" size="sm" onClick={copyPayload} disabled={!activeSignal}>
             <Copy className="mr-2 h-4 w-4" />
             Copy JSON
@@ -1548,32 +1590,6 @@ export default function ScalpWorkbenchPanel() {
                 {autoReviewStatus !== 'idle' && (
                   <Badge variant="outline" className="text-[10px]">
                     Auto Review: {autoReviewStatus}
-                  </Badge>
-                )}
-                {symbolWatches.map((watch) => (
-                  <Badge
-                    key={watch.watch_id || `${watch.symbol}-${watch.status}`}
-                    variant="outline"
-                    className={`text-[10px] ${
-                      watch.status === 'READY_FOR_REVIEW'
-                        ? 'border-long/50 text-long'
-                        : watch.status === 'EXPIRED' || watch.status === 'CANCELLED'
-                          ? 'border-muted-foreground/40 text-muted-foreground'
-                          : ''
-                    }`}
-                  >
-                    {watch.status === 'READY_FOR_REVIEW'
-                      ? 'Ready for review'
-                      : watch.status === 'EXPIRED'
-                        ? 'Expired'
-                        : watch.status === 'CANCELLED'
-                          ? 'Cancelled'
-                          : watchLabel(watch)}
-                  </Badge>
-                ))}
-                {suggestedTradeRunner && (
-                  <Badge variant="outline" className={`text-[10px] ${runnerBadgeClass(suggestedTradeRunner)}`}>
-                    Runner: {runnerBadgeLabel(suggestedTradeRunner)}
                   </Badge>
                 )}
               </div>
@@ -1651,12 +1667,96 @@ export default function ScalpWorkbenchPanel() {
           </CardContent>
         </Card>
 
-        <div className="space-y-4">
+        <div className="min-w-0 space-y-3 xl:sticky xl:top-0" data-review-rail style={{ maxHeight: '540px' }}>
+          <div className="flex flex-wrap items-center gap-2">
+            <CompactSuggestedWatchStatus watches={symbolWatches} />
+            {suggestedTradeRunner && (
+              <Badge variant="outline" className={`h-7 text-[10px] ${runnerBadgeClass(suggestedTradeRunner)}`}>
+                Runner: {runnerBadgeLabel(suggestedTradeRunner)}
+              </Badge>
+            )}
+          </div>
+          <div className="flex flex-wrap items-center gap-2" data-review-action-strip>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={captureScalpChartForAIReview}
+              disabled={!activeSignal || chartLoading || aiReviewLoading}
+            >
+              <Camera className={cn('mr-2 h-4 w-4', aiReviewLoading && 'animate-pulse')} />
+              {aiReviewLoading ? 'Reviewing…' : 'AI Scalp Review'}
+            </Button>
+            <Button
+              variant="default"
+              size="sm"
+              disabled={Boolean(executeBlockReason) || executingScalp || !activeSignal}
+              onClick={() => setConfirmExecOpen(true)}
+            >
+              <Play className={cn('mr-2 h-4 w-4', executingScalp && 'animate-pulse')} />
+              Execute Scalp
+            </Button>
+            {canFlagWatch && (
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-8 text-xs"
+                disabled={flagLoading}
+                onClick={() => void flagWatchSetup()}
+              >
+                Flag / Watch Setup
+              </Button>
+            )}
+            {showViewSuggestedTrades && (
+              <Button
+                size="sm"
+                variant="ghost"
+                className="h-8 text-xs"
+                onClick={() => setActivePanel('suggestedTrades')}
+              >
+                View Suggested Trades
+              </Button>
+            )}
+          </div>
+          {executeBlockReason && (
+            <span className="block text-[10px] text-muted-foreground">{executeBlockReason}</span>
+          )}
+          {flagStatus && <span className="block text-[10px] text-muted-foreground">{flagStatus}</span>}
+          {aiCaptureError && (
+            <div className="rounded-md border border-warning/35 bg-warning/10 px-3 py-2 text-xs text-warning break-words">
+              {aiCaptureError}
+            </div>
+          )}
+          {scalpAiReviewResponse && <ScalpAIReviewCard response={scalpAiReviewResponse} />}
+          <Card className="border-border/60 bg-card/70">
+            <CardHeader className="px-4 py-3">
+              <CardTitle className="flex items-center gap-2 text-base">
+                <ShieldCheck className="h-4 w-4 text-primary" />
+                Candidate
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-1 px-4 pb-3 pt-0">
+              <FieldRow label="Symbol" value={chartSymbol || '—'} />
+              <FieldRow label="Timeframe" value={activeUi.timeframe || executionTf} />
+              <FieldRow label="AI grade" value={textValue(activeUi.raw?.ai_grade ?? activeSignal?.ai_grade ?? null, '—')} />
+              <FieldRow label="Market state" value={marketState} tone={marketState === 'unknown' ? 'muted' : 'ok'} />
+              <FieldRow label="Entry" value={numberValue(activeUi.scalpSetup.entry)} />
+              <FieldRow label="SL" value={numberValue(activeUi.scalpSetup.stopLoss)} tone={activeUi.scalpSetup.stopLoss == null ? 'muted' : 'danger'} />
+              <FieldRow label="TP1" value={numberValue(activeUi.scalpSetup.tp1)} tone={activeUi.scalpSetup.tp1 == null ? 'muted' : 'ok'} />
+            </CardContent>
+          </Card>
+        </div>
+      </div>
+
+      <details className="rounded-md border border-border/60 bg-card/70 p-3">
+        <summary className="cursor-pointer text-sm font-medium text-muted-foreground">
+          Engine D diagnostics
+        </summary>
+        <div className="mt-3 space-y-4">
           <Card className="border-border/60 bg-card/70">
           <CardHeader className="px-4 py-3">
               <CardTitle className="flex items-center gap-2 text-base">
                 <ShieldCheck className="h-4 w-4 text-primary" />
-                Candidate
+                Candidate detail
               </CardTitle>
             </CardHeader>
             <CardContent className="space-y-1 px-4 pb-3 pt-0">
@@ -1799,79 +1899,40 @@ export default function ScalpWorkbenchPanel() {
             </CardContent>
           </Card>
         </div>
-      </div>
+      </details>
 
-      {(aiCaptureError || scalpAiReviewResponse || scalpAiReviewPreview) && (
-        <div className="space-y-3">
-          {aiCaptureError && (
-            <div className="rounded-md border border-warning/35 bg-warning/10 px-3 py-2 text-xs text-warning">
-              {aiCaptureError}
-            </div>
-          )}
-          {scalpAiReviewResponse && executeBlockReason && (
-            <div className="rounded-md border border-amber-500/35 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
-              Execute Scalp disabled — {executeBlockReason}. M5 = context chart; M1 = execution zoom. AI review is advisory only.
-            </div>
-          )}
-          {scalpAiReviewResponse && <ScalpAIReviewCard response={scalpAiReviewResponse} />}
-          {(canFlagWatch || showViewSuggestedTrades) && (
-            <div className="flex flex-wrap items-center gap-2 pt-2">
-              {canFlagWatch && (
-                <Button
-                  size="sm"
-                  variant="outline"
-                  className="h-8 text-xs"
-                  disabled={flagLoading}
-                  onClick={() => void flagWatchSetup()}
-                >
-                  Flag / Watch Setup
-                </Button>
-              )}
-              {showViewSuggestedTrades && (
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  className="h-8 text-xs"
-                  onClick={() => setActivePanel('suggestedTrades')}
-                >
-                  View Suggested Trades
-                </Button>
-              )}
-              {flagStatus && <span className="text-[10px] text-muted-foreground">{flagStatus}</span>}
-            </div>
-          )}
-          {scalpAiReviewPreview && (
-            <Card className="border-border/60 bg-card/70">
-              <CardHeader className="px-4 py-3">
-                <CardTitle className="flex items-center gap-2 text-base">
-                  <Sparkles className="h-4 w-4 text-primary" />
-                  AI review debug
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-3 px-4 pb-4 pt-0">
-                {scalpAiReviewDebugPayload && (
-                  <details className="rounded-md border border-border/50 bg-background/40 px-3 py-2 text-xs" open={!scalpAiReviewResponse}>
-                    <summary className="cursor-pointer font-medium text-muted-foreground">Snapshot payload</summary>
-                    <pre className="mt-2 max-h-[260px] overflow-auto whitespace-pre-wrap break-words text-[11px] text-foreground/80">
-                      {JSON.stringify(scalpAiReviewDebugPayload, null, 2)}
-                    </pre>
-                  </details>
-                )}
-                {scalpAiReviewResponse && (
-                  <details className="rounded-md border border-border/50 bg-background/40 px-3 py-2 text-xs">
-                    <summary className="cursor-pointer font-medium text-muted-foreground">Copy JSON</summary>
-                    <pre className="mt-2 max-h-[260px] overflow-auto whitespace-pre-wrap break-words text-[11px] text-foreground/80">
-                      {JSON.stringify(scalpAiReviewResponse, null, 2)}
-                    </pre>
-                  </details>
-                )}
-              </CardContent>
-            </Card>
-          )}
-        </div>
+      {scalpAiReviewPreview && (
+        <details className="rounded-md border border-border/60 bg-card/70 p-3">
+          <summary className="cursor-pointer text-sm font-medium text-muted-foreground">
+            AI review debug
+          </summary>
+          <div className="mt-3 space-y-3">
+            {scalpAiReviewDebugPayload && (
+              <details className="rounded-md border border-border/50 bg-background/40 px-3 py-2 text-xs">
+                <summary className="cursor-pointer font-medium text-muted-foreground">Snapshot payload</summary>
+                <pre className="mt-2 max-h-[260px] overflow-auto whitespace-pre-wrap break-words text-[11px] text-foreground/80">
+                  {JSON.stringify(scalpAiReviewDebugPayload, null, 2)}
+                </pre>
+              </details>
+            )}
+            {scalpAiReviewResponse && (
+              <details className="rounded-md border border-border/50 bg-background/40 px-3 py-2 text-xs">
+                <summary className="cursor-pointer font-medium text-muted-foreground">Copy JSON</summary>
+                <pre className="mt-2 max-h-[260px] overflow-auto whitespace-pre-wrap break-words text-[11px] text-foreground/80">
+                  {JSON.stringify(scalpAiReviewResponse, null, 2)}
+                </pre>
+              </details>
+            )}
+          </div>
+        </details>
       )}
 
-      <Card className="border-border/60 bg-card/70">
+      <details className="rounded-md border border-border/60 bg-card/70 p-3">
+        <summary className="cursor-pointer text-sm font-medium text-muted-foreground">
+          Candidate context and logs
+        </summary>
+        <div className="mt-3">
+        <Card className="border-border/60 bg-card/70">
         <CardHeader className="px-4 py-3">
           <CardTitle className="flex items-center gap-2 text-base">
             <CheckCircle2 className="h-4 w-4 text-primary" />
@@ -1965,6 +2026,8 @@ export default function ScalpWorkbenchPanel() {
           </div>
         </CardContent>
       </Card>
+        </div>
+      </details>
 
       <AlertDialog open={confirmExecOpen} onOpenChange={setConfirmExecOpen}>
         <AlertDialogContent>

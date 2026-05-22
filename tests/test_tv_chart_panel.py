@@ -437,7 +437,8 @@ def test_chart_capture_area_contains_provider_header_and_indicator_labels_for_sc
 
     assert "chartCaptureRef" in source
     assert "data-chart-capture-label" in source
-    assert "chartHeaderText" in source
+    assert "chartFeedIdentityChips" in source
+    assert "ChartFeedHeaderChips" in source
     assert "assetGroupLabel" in source
     assert "candlePolicyLabel" in source
     assert "lastCandleLabel" in source
@@ -494,8 +495,8 @@ def test_chart_screenshot_draws_dom_labels_over_canvas_export():
 def test_chart_header_uses_ascii_separator_to_avoid_encoding_artifacts():
     source = _read(TV_PANEL)
 
-    assert "const CHART_LABEL_SEPARATOR = ' | '" in source
-    assert "chartHeaderParts.join(CHART_LABEL_SEPARATOR)" in source
+    assert "ChartFeedHeaderChips" in source
+    assert "FeedCaptureChip" in _read(ROOT / "static/react-app/app/src/components/athena/ChartFeedHeaderChips.tsx")
     assert "·" not in source
     assert "Â" not in source
 
@@ -713,3 +714,67 @@ def test_key_engine_a_diagnostics_are_not_truncated_or_hidden():
     assert 'label="ATR diagnostics" value={atrDiagnostics}' in source
     assert "engineAAssetDiagnostics" in source
     assert "resolveAtrProvenanceRows" in source
+
+
+def test_engine_b_filled_zone_style_preserved():
+    source = _read(TV_PANEL)
+
+    assert "Do not replace filled support/resistance/FVG zones with line-only overlays" in source
+    assert "ENGINE_B_ZONE_STYLE" in source
+    assert "rgba(16, 185, 129, 0.18)" in source
+    assert "rgba(244, 63, 94, 0.18)" in source
+    assert "EngineBZonePrimitive" in source
+    assert "context.fillRect(0, y1, mediaSize.width, h)" in source
+    assert "buildEngineBZones" in source
+
+
+def test_tv_chart_right_edge_label_layout_helper_wired():
+    source = _read(TV_PANEL)
+    labels = _read(ROOT / "static/react-app/app/src/lib/chartRightEdgeLabels.ts")
+    primitive = _read(ROOT / "static/react-app/app/src/lib/chartRightEdgeLabelPrimitive.ts")
+
+    assert "layoutRightEdgeLabels" in labels
+    assert "RIGHT_EDGE_LABEL_PRIORITY" in labels
+    assert "resolveRightEdgeLabels" in source
+    assert "ChartRightEdgeLabelPrimitive" in source
+    assert "ChartRightEdgeLabelPrimitive" in primitive
+    assert "axisLabelVisible: false" in source
+
+
+def test_tv_chart_compact_header_chips():
+    source = _read(TV_PANEL)
+
+    assert "ChartFeedHeaderChips" in source
+    assert "chartFeedIdentityChips" in source
+    assert "chartFeedDiagnosticsChips" in source
+    assert "Exec:" in source
+    assert "Candles:" in source
+
+
+def test_tv_chart_review_rail_groups_ai_and_actions():
+    source = _read(TV_PANEL)
+
+    assert "data-review-rail" in source
+    assert "data-review-action-strip" in source
+    ai_idx = source.index("<AIReviewCard")
+    execute_idx = source.index("Execute Now")
+    rail_idx = source.index("data-review-rail")
+    assert ai_idx > rail_idx
+    assert execute_idx > rail_idx
+    assert execute_idx < ai_idx + 1200
+
+
+def test_tv_chart_engine_a_diagnostics_collapsed_by_default():
+    source = _read(TV_PANEL)
+
+    assert "Engine A diagnostics" in source
+    assert "<details" in source
+    assert "EngineASidePanel" in source
+
+
+def test_ai_review_card_collapses_verbose_sections():
+    source = _read(ROOT / "static/react-app/app/src/components/athena/AIReviewCard.tsx")
+
+    assert "<details" in source
+    assert "Context completeness and resistance map" in source
+    assert "Timestamps and warnings" in source

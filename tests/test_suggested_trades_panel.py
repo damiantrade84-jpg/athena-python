@@ -49,6 +49,15 @@ def test_suggested_trades_panel_does_not_execute():
     assert "/api/scalp-execute" not in source
 
 
+def test_suggested_trades_panel_keeps_full_watch_table():
+    source = _read(PANEL)
+
+    assert "watches.map" in source or "watches)" in source
+    assert "Cancel Watch" in source
+    assert "Evaluate now" in source or "evaluateNow" in source
+    assert "watchProgressText" in source or "Ready for review" in source or "LEVEL_REACHED" in source
+
+
 def test_panel_id_includes_suggested_trades():
     source = _read(TYPES)
     assert "'suggestedTrades'" in source

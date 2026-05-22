@@ -70,6 +70,14 @@ import {
 import { runnerBadgeClass, runnerBadgeLabel } from '@/lib/suggestedTradeRunnerDisplay';
 import { useSuggestedTradeRunnerStatus } from '@/hooks/useSuggestedTradeRunnerStatus';
 import AIReviewCard from '@/components/athena/AIReviewCard';
+import ChartFeedHeaderChips, { type ChartFeedHeaderChipSpec } from '@/components/athena/ChartFeedHeaderChips';
+import CompactSuggestedWatchStatus from '@/components/athena/CompactSuggestedWatchStatus';
+import { ChartRightEdgeLabelPrimitive } from '@/lib/chartRightEdgeLabelPrimitive';
+import {
+  labelPriorityForText,
+  RIGHT_EDGE_LABEL_PRIORITY,
+  type RightEdgeLabel,
+} from '@/lib/chartRightEdgeLabels';
 import type { AIChartReviewResponse, EngineASignal, SuggestedTradePlan, SuggestedTradeWatch, TimeframeRoute } from '@/types/athena';
 
 const TIMEFRAMES = ['1', '5', '15', '30', '60', '240', 'D', 'W'];
@@ -149,7 +157,6 @@ const VISIBLE_BAR_COUNT = 180;
 const PRICE_CHART_HEIGHT_PX = 340;
 const STUDY_PANE_HEIGHT_PX = 110;
 const LIVE_TICK_MAX_AGE_SEC = 20;
-const CHART_LABEL_SEPARATOR = ' | ';
 
 const TF_SECONDS: Record<string, number> = {
   M1: 60,
@@ -828,6 +835,14 @@ function formatUtcLabel(value: string | number | null | undefined): string {
   return `last candle ${iso.slice(0, 16)} UTC`;
 }
 
+function formatLastCandleChip(value: string | number | null | undefined): string {
+  if (value == null || value === '') return 'Last: unavailable';
+  const ts = toTimestamp(value);
+  if (ts == null) return `Last: ${String(value)}`;
+  const iso = new Date(ts * 1000).toISOString();
+  return `Last: ${iso.slice(11, 16)} UTC`;
+}
+
 function titleCaseProvider(value: string | null | undefined): string {
   if (!value) return 'unknown';
   const lower = value.toLowerCase();
@@ -1032,6 +1047,8 @@ interface EngineBSingleLevel {
   style?: LineStyle;
 }
 
+// Do not replace filled support/resistance/FVG zones with line-only overlays;
+// this filled-zone style is the preferred readable Engine B visual.
 const ENGINE_B_ZONE_STYLE: Record<EngineBZoneCategory, { fill: string; stroke: string }> = {
   support: { fill: 'rgba(16, 185, 129, 0.18)', stroke: 'rgba(16, 185, 129, 0.55)' },
   resistance: { fill: 'rgba(244, 63, 94, 0.18)', stroke: 'rgba(244, 63, 94, 0.55)' },
@@ -1140,6 +1157,89 @@ function engineBSingleLevelLines(
   return lines;
 }
 
+interface RightEdgeLabelInput {
+  id: string;
+  text: string;
+  price: number;
+  color: string;
+  priority: number;
+}
+
+function compactOverlayAxisLabel(label: string): string {
+  const text = stripEngineBPrefix(label);
+  if (/choch/i.test(text)) return 'CHOCH';
+  if (/bos/i.test(text)) return 'BOS';
+  if (/breaker/i.test(text)) return 'Breaker';
+  if (/support/i.test(text)) return 'SUP';
+  if (/resistance/i.test(text)) return 'RES';
+  if (/fvg/i.test(text)) return 'FVG';
+  if (/\bob\b/i.test(text)) return 'OB';
+  return compactEngineBLabel(text);
+}
+
+function buildEngineBRightEdgeLabelInputs(
+  payload: EngineBOverlayPayload | null,
+  enabled: boolean,
+  cleanMode: boolean,
+): RightEdgeLabelInput[] {
+  if (!enabled || payload?.overlay_source !== 'engine_b') return [];
+  const lines = cleanMode
+    ? engineBSingleLevelLines(payload, enabled).map((line) => ({
+        label: line.label,
+        price: line.price,
+        color: line.color,
+      }))
+    : engineBOverlayLines(payload, enabled).map((line) => ({
+        label: line.label,
+        price: line.price,
+        color: line.color,
+      }));
+
+  return lines.map((line, index) => ({
+    id: `engine-b-${index}-${line.label}-${line.price}`,
+    text: compactOverlayAxisLabel(line.label),
+    price: line.price,
+    color: line.color,
+    priority: labelPriorityForText(compactOverlayAxisLabel(line.label)),
+  }));
+}
+
+function resolveRightEdgeLabels(
+  series: ISeriesApi<'Candlestick', Time> | null,
+  inputs: RightEdgeLabelInput[],
+  currentPrice: number | null | undefined,
+  paneHeightPx: number,
+): RightEdgeLabel[] {
+  if (!series) return [];
+  const labels: RightEdgeLabel[] = [];
+  for (const input of inputs) {
+    const y = series.priceToCoordinate(input.price);
+    if (y == null || !Number.isFinite(y)) continue;
+    labels.push({
+      id: input.id,
+      text: input.text,
+      y,
+      priority: input.priority,
+      color: input.color,
+      side: 'right',
+    });
+  }
+  if (currentPrice != null && Number.isFinite(currentPrice)) {
+    const y = series.priceToCoordinate(currentPrice);
+    if (y != null && Number.isFinite(y)) {
+      labels.push({
+        id: 'current-price',
+        text: 'PRICE',
+        y,
+        priority: RIGHT_EDGE_LABEL_PRIORITY.currentPrice,
+        color: 'rgba(245, 240, 232, 0.92)',
+        side: 'right',
+      });
+    }
+  }
+  return labels;
+}
+
 // ISeriesPrimitive that paints translucent horizontal bands for Engine B zones
 // across the full pane width. Drawn at z-order 'bottom' so candles remain
 // readable on top of the band fill.
@@ -1169,6 +1269,8 @@ class EngineBZoneRenderer implements IPrimitivePaneRenderer {
     const series = this.primitive.series();
     if (!series || zones.length === 0) return;
 
+    // Do not replace filled support/resistance/FVG zones with line-only overlays;
+    // this filled-zone style is the preferred readable Engine B visual.
     target.useMediaCoordinateSpace(({ context, mediaSize }) => {
       for (const zone of zones) {
         const yTop = series.priceToCoordinate(zone.top);
@@ -1902,18 +2004,44 @@ export default function TVChartPanel() {
   const executionProviderLabel = chartPayload?.execution_provider
     ? titleCaseProvider(chartPayload.execution_provider)
     : null;
-  const chartHeaderParts = [
-    pair,
-    backendTf || timeframe,
-    assetGroupLabel,
-    ...(executionProviderLabel ? [`exec ${executionProviderLabel}`] : []),
-    `chart ${chartProviderLabel}`,
-    `candles ${candleProviderLabel}`,
-    `live ${liveTickProviderLabel}${liveTickFallbackHint}`,
+  const lastCandleChipLabel = formatLastCandleChip(chartPayload?.last_candle_ts ?? candles?.[candles.length - 1]?.t);
+  const chartFeedIdentityChips = useMemo((): ChartFeedHeaderChipSpec[] => [
+    { key: 'symbol', label: pair, title: `Symbol ${pair}` },
+    { key: 'tf', label: backendTf || timeframe, title: `Timeframe ${backendTf || timeframe}` },
+    { key: 'asset', label: assetGroupLabel, title: `Asset group ${assetGroupLabel}` },
+    { key: 'engine', label: 'Engine A', title: 'Engine A chart surface' },
+  ], [pair, backendTf, timeframe, assetGroupLabel]);
+  const chartFeedDiagnosticsChips = useMemo((): ChartFeedHeaderChipSpec[] => {
+    const chips: ChartFeedHeaderChipSpec[] = [];
+    if (executionProviderLabel) {
+      chips.push({
+        key: 'exec',
+        label: `Exec: ${executionProviderLabel}`,
+        title: `Execution provider ${executionProviderLabel}`,
+      });
+    }
+    chips.push(
+      { key: 'chart', label: `Chart: ${chartProviderLabel}`, title: `Chart provider ${chartProviderLabel}` },
+      { key: 'candles', label: `Candles: ${candleProviderLabel}`, title: `Candle provider ${candleProviderLabel}` },
+      {
+        key: 'live',
+        label: `Live: ${liveTickProviderLabel}${liveTickFallbackHint}`,
+        title: `Live tick provider ${liveTickProviderLabel}${liveTickFallbackHint}`,
+      },
+      { key: 'candle', label: `Candle: ${candlePolicyLabel}`, title: `Candle policy ${candlePolicyLabel}` },
+      { key: 'last', label: lastCandleChipLabel, title: lastCandleLabel },
+    );
+    return chips;
+  }, [
+    executionProviderLabel,
+    chartProviderLabel,
+    candleProviderLabel,
+    liveTickProviderLabel,
+    liveTickFallbackHint,
     candlePolicyLabel,
+    lastCandleChipLabel,
     lastCandleLabel,
-  ];
-  const chartHeaderText = chartHeaderParts.join(CHART_LABEL_SEPARATOR);
+  ]);
   const bottomPanelIdentity = 'Bottom panel identity: forex ATR14; crypto ADX14/ATR14 when enabled';
   const quantEma20 = showQuantDebug && ema20;
   const quantEma21 = showQuantDebug && ema21;
@@ -2195,17 +2323,6 @@ export default function TVChartPanel() {
     }
   }
 
-  function watchLabel(watch: SuggestedTradeWatch): string {
-    const dir = watch.direction || '';
-    if (watch.zone_low != null && watch.zone_high != null) {
-      return `Watching: ${watch.zone_low}-${watch.zone_high} ${dir} zone`;
-    }
-    if (watch.level != null) {
-      return `Watching: ${watch.level} ${dir}`;
-    }
-    return `Watching: ${watch.symbol || ''} ${dir}`.trim();
-  }
-
   useEffect(() => {
     if (!aiReview) return;
     const reviewSymbolKey = aiReviewSymbolKeyRef.current || symbolKey(aiReview.engine_a_context?.symbol);
@@ -2341,6 +2458,7 @@ export default function TVChartPanel() {
   const engineBMarkersRef = useRef<ISeriesMarkersPluginApi<Time> | null>(null);
   const engineBPriceLinesRef = useRef<IPriceLine[]>([]);
   const engineBZonePrimitiveRef = useRef<EngineBZonePrimitive | null>(null);
+  const rightEdgeLabelPrimitiveRef = useRef<ChartRightEdgeLabelPrimitive | null>(null);
   const chartCaptureRef = useRef<HTMLDivElement | null>(null);
   const ema20SeriesRef = useRef<ISeriesApi<'Line'> | null>(null);
   const ema21SeriesRef = useRef<ISeriesApi<'Line'> | null>(null);
@@ -2556,6 +2674,9 @@ export default function TVChartPanel() {
     const zonePrimitive = new EngineBZonePrimitive();
     candleSeries.attachPrimitive(zonePrimitive);
     engineBZonePrimitiveRef.current = zonePrimitive;
+    const labelPrimitive = new ChartRightEdgeLabelPrimitive();
+    candleSeries.attachPrimitive(labelPrimitive);
+    rightEdgeLabelPrimitiveRef.current = labelPrimitive;
 
     const overlayLineOpts = { lineWidth: 2 as const, lastValueVisible: true, priceLineVisible: false };
     ema20SeriesRef.current = chart.addSeries(LineSeries, { ...overlayLineOpts, color: PRICE_PANEL_INDICATORS.ema20.color }, 0);
@@ -2637,6 +2758,7 @@ export default function TVChartPanel() {
       engineBMarkersRef.current = null;
       engineBPriceLinesRef.current = [];
       engineBZonePrimitiveRef.current = null;
+      rightEdgeLabelPrimitiveRef.current = null;
       ema20SeriesRef.current = null;
       ema21SeriesRef.current = null;
       ema50SeriesRef.current = null;
@@ -2691,9 +2813,11 @@ export default function TVChartPanel() {
     candleSeries.setData(rows);
     engineBMarkersRef.current?.setMarkers(engineBMarkers(engineBOverlay, rows, showEngineBOverlays));
     if (chartMode === 'clean') {
+      // Do not replace filled support/resistance/FVG zones with line-only overlays;
+      // this filled-zone style is the preferred readable Engine B visual.
       // Clean mode: render zones as translucent bands via the primitive and keep
       // only single-level structural lines (BOS / CHOCH / breaker) as thin colored
-      // lines with no right-axis labels. Identity is conveyed by the legend.
+      // lines with no right-axis labels. Identity is conveyed by the legend + label primitive.
       engineBZonePrimitiveRef.current?.setZones(buildEngineBZones(engineBOverlay, showEngineBOverlays));
       for (const level of engineBSingleLevelLines(engineBOverlay, showEngineBOverlays)) {
         engineBPriceLinesRef.current.push(
@@ -2708,8 +2832,8 @@ export default function TVChartPanel() {
         );
       }
     } else {
-      // Debug mode: legacy behaviour — every Engine B line gets a right-axis title
-      // for verification work.
+      // Debug mode: filled zones hidden; structural levels use the label primitive
+      // instead of native right-axis titles to avoid label collisions.
       engineBZonePrimitiveRef.current?.setZones([]);
       for (const level of engineBOverlayLines(engineBOverlay, showEngineBOverlays)) {
         engineBPriceLinesRef.current.push(
@@ -2718,12 +2842,20 @@ export default function TVChartPanel() {
             color: level.color,
             lineWidth: 1,
             lineStyle: level.style ?? LineStyle.Dashed,
-            axisLabelVisible: true,
-            title: level.label,
+            axisLabelVisible: false,
+            title: '',
           }),
         );
       }
     }
+
+    const paneHeightPx = containerRef.current?.clientHeight ?? chartHeightPx;
+    const currentPrice = firstNumber(liveTick?.price, studySnapshot.latest.close);
+    const labelInputs = buildEngineBRightEdgeLabelInputs(engineBOverlay, showEngineBOverlays, chartMode === 'clean');
+    rightEdgeLabelPrimitiveRef.current?.setLabels(
+      resolveRightEdgeLabels(candleSeries, labelInputs, currentPrice, paneHeightPx),
+      paneHeightPx,
+    );
 
     const pushLine = (
       series: ISeriesApi<'Line'> | null,
@@ -2898,22 +3030,13 @@ export default function TVChartPanel() {
               <Camera className="h-3.5 w-3.5" />
               Screenshot
             </Button>
-            <Button
-              size="sm"
-              variant="outline"
-              className="h-8 gap-2 text-xs"
-              onClick={runAIReview}
-              disabled={loading || aiReviewLoading || !candles?.length}
-              aria-label="Run AI chart review"
-              aria-busy={aiReviewLoading}
-            >
-              <Sparkles className="h-3.5 w-3.5" />
-              {aiReviewLoading ? 'Reviewing…' : 'AI Review'}
-            </Button>
           </div>
         </div>
         <div className="flex flex-wrap items-center gap-2 pt-2">
-          <CaptureLabel>{chartHeaderText}</CaptureLabel>
+          <ChartFeedHeaderChips
+            identityChips={chartFeedIdentityChips}
+            feedChips={chartFeedDiagnosticsChips}
+          />
           {timeframeRouteLabel && (
             <Badge variant="outline" className="h-7 text-[10px]" title={timeframeRoute?.reason || undefined}>
               {timeframeRouteLabel}
@@ -2939,27 +3062,6 @@ export default function TVChartPanel() {
               Auto Review: {autoReviewStatus}
             </Badge>
           )}
-          {symbolWatches.map((watch) => (
-            <Badge
-              key={watch.watch_id || `${watch.symbol}-${watch.status}`}
-              variant="outline"
-              className={`h-7 text-[10px] ${
-                watch.status === 'READY_FOR_REVIEW'
-                  ? 'border-long/50 text-long'
-                  : watch.status === 'EXPIRED' || watch.status === 'CANCELLED'
-                    ? 'border-muted-foreground/40 text-muted-foreground'
-                    : ''
-              }`}
-            >
-              {watch.status === 'READY_FOR_REVIEW'
-                ? 'Ready for review'
-                : watch.status === 'EXPIRED'
-                  ? 'Expired'
-                  : watch.status === 'CANCELLED'
-                    ? 'Cancelled'
-                    : watchLabel(watch)}
-            </Badge>
-          ))}
           {suggestedTradeRunner && (
             <Badge variant="outline" className={`h-7 text-[10px] ${runnerBadgeClass(suggestedTradeRunner)}`}>
               Runner: {runnerBadgeLabel(suggestedTradeRunner)}
@@ -3003,7 +3105,7 @@ export default function TVChartPanel() {
         )}
       </CardHeader>
       <CardContent className="pb-4">
-        <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_320px] xl:items-start">
+        <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_min(340px,36%)]">
           <div
             ref={chartCaptureRef}
             className="relative overflow-hidden rounded-md border bg-background"
@@ -3011,12 +3113,13 @@ export default function TVChartPanel() {
           >
             <div ref={containerRef} className="absolute inset-0" />
             <div className="pointer-events-none absolute left-2 right-2 top-2 z-10 space-y-1">
-              <div className="flex flex-wrap items-center gap-1">
-                <CaptureLabel>{chartHeaderText}</CaptureLabel>
-                {showEngineBOverlays && engineBOverlay?.overlay_source === 'engine_b' && (
-                  <CaptureLabel>{`Engine B ${engineBOverlay.overlay_version || 'overlay'}`}</CaptureLabel>
-                )}
-              </div>
+              <ChartFeedHeaderChips
+                identityChips={chartFeedIdentityChips}
+                feedChips={chartFeedDiagnosticsChips}
+              />
+              {showEngineBOverlays && engineBOverlay?.overlay_source === 'engine_b' && (
+                <CaptureLabel>{`Engine B ${engineBOverlay.overlay_version || 'overlay'}`}</CaptureLabel>
+              )}
               {cleanLegendChips.length > 0 && (
                 <div className="flex flex-wrap items-center gap-1">
                   {cleanLegendChips.map((chip) => (
@@ -3059,61 +3162,88 @@ export default function TVChartPanel() {
               </div>
             )}
           </div>
-          <div className="min-w-0 overflow-y-auto" style={{ maxHeight: `${chartHeightPx}px` }}>
-            <EngineASidePanel signal={chartCandidate} liveTick={liveTick} chartPayload={chartPayload} />
-          </div>
-        </div>
-        {(aiReview || aiReviewError) && (
-          <div className="mt-3 space-y-2">
+          <div
+            className="min-w-0 space-y-3 overflow-y-auto lg:sticky lg:top-0"
+            style={{ maxHeight: `${chartHeightPx}px` }}
+            data-review-rail
+          >
+            <div className="flex flex-wrap items-center gap-2">
+              <CompactSuggestedWatchStatus watches={symbolWatches} />
+              {suggestedTradeRunner && (
+                <Badge variant="outline" className={`h-7 text-[10px] ${runnerBadgeClass(suggestedTradeRunner)}`}>
+                  Runner: {runnerBadgeLabel(suggestedTradeRunner)}
+                </Badge>
+              )}
+            </div>
+            <div className="flex flex-wrap items-center gap-2" data-review-action-strip>
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-8 gap-2 text-xs"
+                onClick={runAIReview}
+                disabled={loading || aiReviewLoading || !candles?.length}
+                aria-label="Run AI chart review"
+                aria-busy={aiReviewLoading}
+              >
+                <Sparkles className="h-3.5 w-3.5" />
+                {aiReviewLoading ? 'Reviewing…' : 'AI Review'}
+              </Button>
+              {chartCandidate && (
+                <>
+                  <Button
+                    size="sm"
+                    variant="default"
+                    className="h-8 gap-1 text-xs"
+                    disabled={Boolean(executeBlockReason) || executing}
+                    onClick={() => setConfirmExecuteOpen(true)}
+                  >
+                    <Play className="h-3.5 w-3.5" />
+                    Execute Now
+                  </Button>
+                  {canFlagWatch && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="h-8 text-xs"
+                      disabled={flagLoading}
+                      onClick={() => void flagWatchSetup()}
+                    >
+                      Flag / Watch Setup
+                    </Button>
+                  )}
+                  {showViewSuggestedTrades && (
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="h-8 text-xs"
+                      onClick={() => setActivePanel('suggestedTrades')}
+                    >
+                      View Suggested Trades
+                    </Button>
+                  )}
+                </>
+              )}
+            </div>
+            {executeBlockReason && (
+              <span className="block text-[10px] text-muted-foreground">{executeBlockReason}</span>
+            )}
+            {flagStatus && <span className="block text-[10px] text-muted-foreground">{flagStatus}</span>}
             {aiReviewError && (
-              <div className="text-[11px] text-warning border border-border/40 rounded-md p-2">
+              <div className="text-[11px] text-warning border border-border/40 rounded-md p-2 break-words">
                 AI review error: {aiReviewError}
               </div>
             )}
             {aiReview && <AIReviewCard response={aiReview} />}
+            <details className="rounded-md border border-border/60 bg-card/70 p-2">
+              <summary className="cursor-pointer text-xs font-medium text-muted-foreground">
+                Engine A diagnostics
+              </summary>
+              <div className="mt-2">
+                <EngineASidePanel signal={chartCandidate} liveTick={liveTick} chartPayload={chartPayload} />
+              </div>
+            </details>
           </div>
-        )}
-        {chartCandidate && (
-          <div className="mt-3 flex flex-wrap items-center gap-2">
-            <div className="flex flex-col gap-0.5">
-              <Button
-                size="sm"
-                variant="default"
-                className="h-8 gap-1 text-xs"
-                disabled={Boolean(executeBlockReason) || executing}
-                onClick={() => setConfirmExecuteOpen(true)}
-              >
-                <Play className="h-3.5 w-3.5" />
-                Execute Now
-              </Button>
-              {executeBlockReason && (
-                <span className="text-[10px] text-muted-foreground">{executeBlockReason}</span>
-              )}
-            </div>
-            {canFlagWatch && (
-              <Button
-                size="sm"
-                variant="outline"
-                className="h-8 text-xs"
-                disabled={flagLoading}
-                onClick={() => void flagWatchSetup()}
-              >
-                Flag / Watch Setup
-              </Button>
-            )}
-            {showViewSuggestedTrades && (
-              <Button
-                size="sm"
-                variant="ghost"
-                className="h-8 text-xs"
-                onClick={() => setActivePanel('suggestedTrades')}
-              >
-                View Suggested Trades
-              </Button>
-            )}
-            {flagStatus && <span className="text-[10px] text-muted-foreground">{flagStatus}</span>}
-          </div>
-        )}
+        </div>
       </CardContent>
     </Card>
     <AlertDialog open={confirmExecuteOpen} onOpenChange={setConfirmExecuteOpen}>

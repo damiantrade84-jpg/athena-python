@@ -55,7 +55,7 @@ function Row({ label, value }: { label: string; value: string }) {
   return (
     <div className="rounded border border-border/40 bg-background/30 px-2 py-1.5">
       <div className="text-[10px] uppercase tracking-wide text-muted-foreground">{label}</div>
-      <div className="mt-0.5 text-[11px] text-foreground/85">{value}</div>
+      <div className="mt-0.5 text-[11px] text-foreground/85 break-words">{value}</div>
     </div>
   );
 }
@@ -151,58 +151,77 @@ export default function ScalpAIReviewCard({ response }: ScalpAIReviewCardProps) 
           variant="engine_d_scalp"
         />
 
-        <AIReviewContextCompletenessPanel
-          completeness={normalizeContextCompleteness(
-            response.contextCompleteness ?? response.context_completeness,
-          )}
-        />
+        <details className="rounded-md border border-border/40 bg-background/20 px-2 py-1.5">
+          <summary className="cursor-pointer text-[11px] font-medium text-muted-foreground">
+            Context completeness
+          </summary>
+          <div className="mt-2">
+            <AIReviewContextCompletenessPanel
+              completeness={normalizeContextCompleteness(
+                response.contextCompleteness ?? response.context_completeness,
+              )}
+            />
+          </div>
+        </details>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-[11px]">
-          <Row label="Human action" value={showReviewValue(ai.human_action)} />
-          <Row label="Setup type" value={showReviewValue(ai.setup_type)} />
-          <Row label="Visual confirmation" value={showReviewValue(ai.visual_confirmation)} />
-          <Row label="Visual contradiction" value={showReviewValue(ai.visual_contradiction)} />
-          <Row label="Entry quality" value={showReviewValue(ai.entry_quality)} />
-          <Row label="Source quality" value={showReviewValue(ai.source_quality_assessment)} />
-          <Row label="Execution TF" value={showReviewValue(ctx?.execution_tf)} />
-          <Row label="Setup direction" value={showReviewValue(ctx?.direction)} />
-        </div>
+        <details className="rounded-md border border-border/40 bg-background/20 px-2 py-1.5">
+          <summary className="cursor-pointer text-[11px] font-medium text-muted-foreground">
+            Review detail fields
+          </summary>
+          <div className="mt-2 grid grid-cols-1 md:grid-cols-2 gap-2 text-[11px]">
+            <Row label="Human action" value={showReviewValue(ai.human_action)} />
+            <Row label="Setup type" value={showReviewValue(ai.setup_type)} />
+            <Row label="Visual confirmation" value={showReviewValue(ai.visual_confirmation)} />
+            <Row label="Visual contradiction" value={showReviewValue(ai.visual_contradiction)} />
+            <Row label="Entry quality" value={showReviewValue(ai.entry_quality)} />
+            <Row label="Source quality" value={showReviewValue(ai.source_quality_assessment)} />
+            <Row label="Execution TF" value={showReviewValue(ctx?.execution_tf)} />
+            <Row label="Setup direction" value={showReviewValue(ctx?.direction)} />
+          </div>
+        </details>
 
-        {supporting && (
-          <div className="text-[11px]">
-            <div className="font-medium text-muted-foreground">Supporting</div>
-            <ul className="mt-1 list-disc pl-4 text-foreground/80">
-              {supporting.map((item) => (
-                <li key={item}>{item}</li>
-              ))}
-            </ul>
+        <details className="rounded-md border border-border/40 bg-background/20 px-2 py-1.5">
+          <summary className="cursor-pointer text-[11px] font-medium text-muted-foreground">
+            Supporting reasons, risks, and warnings
+          </summary>
+          <div className="mt-2 space-y-2">
+            {supporting && (
+              <div className="text-[11px]">
+                <div className="font-medium text-muted-foreground">Supporting</div>
+                <ul className="mt-1 list-disc pl-4 text-foreground/80 break-words">
+                  {supporting.map((item) => (
+                    <li key={item}>{item}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            {risks && (
+              <div className="text-[11px]">
+                <div className="font-medium text-muted-foreground">Risks</div>
+                <ul className="mt-1 list-disc pl-4 text-foreground/80 break-words">
+                  {risks.map((item) => (
+                    <li key={item}>{item}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            {missing && (
+              <div className="text-[11px]">
+                <div className="font-medium text-muted-foreground">Missing context</div>
+                <ul className="mt-1 list-disc pl-4 text-foreground/80 break-words">
+                  {missing.map((item) => (
+                    <li key={item}>{item}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            {warnings && (
+              <div className="text-[11px] text-warning">
+                Warnings: {warnings.join(', ')}
+              </div>
+            )}
           </div>
-        )}
-        {risks && (
-          <div className="text-[11px]">
-            <div className="font-medium text-muted-foreground">Risks</div>
-            <ul className="mt-1 list-disc pl-4 text-foreground/80">
-              {risks.map((item) => (
-                <li key={item}>{item}</li>
-              ))}
-            </ul>
-          </div>
-        )}
-        {missing && (
-          <div className="text-[11px]">
-            <div className="font-medium text-muted-foreground">Missing context</div>
-            <ul className="mt-1 list-disc pl-4 text-foreground/80">
-              {missing.map((item) => (
-                <li key={item}>{item}</li>
-              ))}
-            </ul>
-          </div>
-        )}
-        {warnings && (
-          <div className="text-[11px] text-warning">
-            Warnings: {warnings.join(', ')}
-          </div>
-        )}
+        </details>
       </CardContent>
     </Card>
   );
