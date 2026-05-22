@@ -2145,11 +2145,12 @@ export default function TVChartPanel() {
         vertLines: { color: 'rgba(212, 160, 23, 0.06)' },
         horzLines: { color: 'rgba(212, 160, 23, 0.06)' },
       },
-      rightPriceScale: { borderColor: 'rgba(212, 160, 23, 0.18)' },
+      rightPriceScale: { borderColor: 'rgba(212, 160, 23, 0.18)', minimumWidth: 80 },
       timeScale: {
         borderColor: 'rgba(212, 160, 23, 0.18)',
         timeVisible: true,
         secondsVisible: false,
+        rightOffset: 3,
       },
       crosshair: { mode: 1 },
     });
@@ -2216,15 +2217,14 @@ export default function TVChartPanel() {
       adxSeriesRef.current = series;
     }
     if (quantAtr14) {
-      const pane = chart.addPane();
-      pane.setStretchFactor(1);
-      const paneIdx = pane.paneIndex();
+      const atrPane = chart.addPane();
+      atrPane.setStretchFactor(1);
       atrSeriesRef.current = chart.addSeries(LineSeries, {
         color: STUDY_PANEL_INDICATORS.atr14.color,
         lineWidth: 2,
         priceLineVisible: false,
         lastValueVisible: true,
-      }, paneIdx);
+      }, atrPane);
     }
     if (isCryptoChart && quantVolumeBars) {
       const pane = chart.addPane();
