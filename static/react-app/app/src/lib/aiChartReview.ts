@@ -96,7 +96,9 @@ export function buildScreenshotMeta(args: {
   overlays: string[];
   visible_range_start?: string;
   visible_range_end?: string;
+  chart_provider?: string;
 }): AIChartReviewScreenshotMeta {
+  const provider = args.chart_provider;
   return {
     width: args.width,
     height: args.height,
@@ -106,6 +108,7 @@ export function buildScreenshotMeta(args: {
     visible_range_start: args.visible_range_start,
     visible_range_end: args.visible_range_end,
     captured_at: new Date().toISOString(),
+    ...(provider ? { provider, chart_provider: provider } : {}),
   };
 }
 

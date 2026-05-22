@@ -1225,6 +1225,8 @@ export interface AIChartReviewScreenshotMeta {
   chart_timeframe: string;
   overlays: string[];
   captured_at: string;
+  provider?: string;
+  chart_provider?: string;
 }
 
 export interface AIChartReviewRequest {

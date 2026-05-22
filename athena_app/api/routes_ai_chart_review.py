@@ -9,6 +9,11 @@ from typing import Any
 
 from flask import jsonify, request
 
+from athena_ai.ai_review_payload_builder import (
+    build_strategy_layer,
+    render_strategy_block_for_prompt,
+)
+
 from ai_review.concordance import compute_engine_a_ai_concordance
 from ai_review.context_diagnostics import (
     build_context_diagnostics,
@@ -91,6 +96,43 @@ def _attach_review_summary(
     response["derivativesContext"] = ctx_diag.get("fundingOi")
     response["derivatives_context"] = ctx_diag.get("fundingOi")
     return response
+
+
+def _build_strategy_layer_safely(
+    *,
+    cfg: dict[str, Any],
+    engine_a_ctx: dict[str, Any],
+    symbol: str,
+    timeframe: str,
+) -> dict[str, Any] | None:
+    """Build the additive strategy-playbook layer behind STRATEGY_LAYER_ENABLED.
+
+    Read-only and best-effort: any failure here returns None and leaves the
+    rest of the AI chart-review pipeline untouched. Never executes trades,
+    never mutates engine_a_ctx.
+    """
+    if not cfg.get("STRATEGY_LAYER_ENABLED", True):
+        return None
+    try:
+        limit = int(cfg.get("STRATEGY_LAYER_OHLCV_LIMIT") or 80)
+        return build_strategy_layer(
+            engine_a_ctx=engine_a_ctx,
+            ohlcv_window=None,  # OHLCV wiring is the next Vision-routing step
+            engine_b_summary=None,
+            engine_d_summary=None,
+            symbol=symbol,
+            timeframe=timeframe,
+            asset_group=engine_a_ctx.get("asset_group"),
+            direction=engine_a_ctx.get("direction"),
+            ohlcv_limit=limit,
+        )
+    except Exception:
+        log.exception(
+            "Strategy layer build failed for %s %s; continuing without it",
+            symbol,
+            timeframe,
+        )
+        return None
 
 
 def register_ai_chart_review_routes(app, runtime: SimpleNamespace) -> None:
@@ -177,11 +219,25 @@ def register_ai_chart_review_routes(app, runtime: SimpleNamespace) -> None:
             return jsonify(runtime.json_safe(dedup))
 
         prompt = build_chart_review_prompt(engine_a_ctx)
+        strategy_layer = _build_strategy_layer_safely(
+            cfg=cfg,
+            engine_a_ctx=engine_a_ctx,
+            symbol=symbol,
+            timeframe=timeframe,
+        )
+        if strategy_layer:
+            try:
+                strategy_block = render_strategy_block_for_prompt(strategy_layer)
+                if strategy_block:
+                    prompt = prompt + "\n" + strategy_block
+            except Exception:
+                log.exception("Failed to render strategy block; using unmodified prompt")
         payload = build_payload(
             data,
             engine_a_ctx,
             prompt=prompt,
             mismatch_warnings=mismatch_warnings,
+            strategy_layer=strategy_layer,
         )
 
         try:
@@ -258,5 +314,9 @@ def register_ai_chart_review_routes(app, runtime: SimpleNamespace) -> None:
             mismatch_warnings=mismatch_warnings,
             diagnostic_ai_review=normalized_raw,
         )
+
+        if strategy_layer is not None:
+            response["strategy_layer"] = strategy_layer
+            response["strategyLayer"] = strategy_layer
 
         return jsonify(runtime.json_safe(response))

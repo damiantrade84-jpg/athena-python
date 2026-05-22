@@ -1,0 +1,184 @@
+# AI Strategy Playbooks
+#
+# Read by athena_ai.strategy_playbook_loader. These are NOT execution rules —
+# they are the universe of trading models the AI reviewer may classify a setup
+# under. The deterministic classifier ranks candidates from this list; the AI
+# may override that ranking with explicit justification.
+#
+# Required fields per playbook (loader will reject if missing):
+#   id, enabled, engines, asset_groups, description,
+#   required_context, confirmation, invalid_if,
+#   invalidation_logic, target_logic, ai_review_rule
+#
+# asset_groups: free list of group tags ("crypto", "forex", "fx_majors",
+#   "equities", "index", "metal", "*" for any). Matched case-insensitively
+#   against the symbol's resolved asset_group.
+
+schema_version: 1
+
+playbooks:
+  - id: TREND_CONTINUATION_PULLBACK
+    enabled: true
+    engines: [A, B]
+    asset_groups: ["*"]
+    description: >
+      Existing trend pulls back into a value area (EMA, prior breakout retest,
+      VWAP) and then resumes. Engine A bias must align with trend; entry is on
+      a reaction at the pullback level, not on the impulse.
+    required_context:
+      - trend_state_aligned_with_direction
+      - pullback_to_named_level
+      - rejection_or_displacement_at_level
+    confirmation:
+      - close_back_in_direction_of_trend
+      - momentum_returning (rsi_recovery_or_macd_cross_back)
+    invalid_if:
+      - close_through_pullback_level_against_direction
+      - higher_low_broken_on_long_or_lower_high_broken_on_short
+      - trend_state_flips_during_pullback
+    invalidation_logic: >
+      Hard invalidation at the swing point that defined the pullback
+      (most recent HL on long / LH on short). SL should sit one ATR
+      beyond that swing, not at the pullback level itself.
+    target_logic: >
+      TP1 = prior swing high (long) / low (short). TP2 = measured
+      move equal to the impulse that preceded the pullback.
+    ai_review_rule: >
+      Only valid if BOTH trend alignment AND a meaningful pullback level are
+      present. A high Engine A score without a defined pullback level is NOT
+      a TREND_CONTINUATION_PULLBACK — classify as no_setup or wait.
+
+  - id: FAILED_BREAKOUT_REVERSAL
+    enabled: true
+    engines: [A, B]
+    asset_groups: ["*"]
+    description: >
+      Price breaks a key level, fails to hold, and closes back inside the
+      prior range. Direction is OPPOSITE to the failed break.
+    required_context:
+      - clearly_defined_level_that_was_broken
+      - close_back_inside_prior_range
+      - rejection_wick_or_engulfing_back_inside
+    confirmation:
+      - second_candle_holds_back_inside_range
+      - volume_on_failure_higher_than_breakout_attempt
+    invalid_if:
+      - price_reclaims_broken_level_in_original_break_direction
+      - no_clear_level (level inferred not visible)
+    invalidation_logic: >
+      Hard invalidation if price closes back through the broken level
+      in the original breakout direction. SL one ATR beyond the failed
+      breakout extreme.
+    target_logic: >
+      TP1 = midpoint of the prior range (or POC if available).
+      TP2 = opposite side of the prior range.
+    ai_review_rule: >
+      A breakout that closed back inside is NOT a continuation setup. Reject
+      any TREND_CONTINUATION classification if the most recent move is a
+      failed breakout in the trade direction.
+
+  - id: LIQUIDITY_SWEEP_REVERSAL
+    enabled: true
+    engines: [A, B, D]
+    asset_groups: ["*"]
+    description: >
+      Price sweeps an obvious liquidity pool (equal highs/lows, prior swing,
+      session high/low) and reverses. Distinct from FAILED_BREAKOUT_REVERSAL
+      in that the sweep is of a liquidity cluster, not a structural level.
+    required_context:
+      - identifiable_liquidity_pool
+      - sweep_through_pool_followed_by_immediate_reversal
+      - close_back_inside_pre_sweep_range
+    confirmation:
+      - displacement_candle_back_inside_range
+      - order_flow_or_volume_spike_at_sweep
+    invalid_if:
+      - price_continues_through_pool_without_closing_back
+      - pool_definition_unclear
+    invalidation_logic: >
+      Hard invalidation at the sweep extreme + 0.25 ATR. If price
+      revisits and exceeds the sweep extreme, the sweep failed.
+    target_logic: >
+      TP1 = opposite side of pre-sweep range or nearest internal liquidity.
+      TP2 = next liquidity cluster on the opposite side.
+    ai_review_rule: >
+      Requires a NAMED liquidity pool. A wick at random mid-range price
+      is not a liquidity sweep — reject if the pool cannot be pointed to.
+
+  - id: WICK_REJECTION_AT_KEY_LEVEL
+    enabled: true
+    engines: [A, B]
+    asset_groups: ["*"]
+    description: >
+      A long-wick candle at a pre-identified key level (HTF S/R, VAH/VAL,
+      anchored VWAP, EMA cluster) that rejects price away from the level.
+    required_context:
+      - key_level_present_within_one_atr_of_wick
+      - wick_size_at_least_1_atr_or_2x_body
+    confirmation:
+      - follow_through_candle_in_rejection_direction
+      - momentum_aligned_with_rejection
+    invalid_if:
+      - no_key_level_in_proximity (wick in mid-range)
+      - next_candle_closes_back_through_wick_extreme
+    invalidation_logic: >
+      Hard invalidation 0.25 ATR beyond the wick extreme.
+    target_logic: >
+      TP1 = nearest structural level in rejection direction.
+      TP2 = midpoint of the broader range / opposite VA edge.
+    ai_review_rule: >
+      A wick is only a rejection if it occurred AT a level. Wicks in the
+      middle of a range or chop are noise — reject this playbook if no
+      key level is present.
+
+  - id: RETURN_TO_POC_MEAN_REVERSION
+    enabled: true
+    engines: [A, D]
+    asset_groups: ["*"]
+    description: >
+      Price has extended away from the volume profile POC and is rotating
+      back toward it. Valid in balanced/rotational regimes only.
+    required_context:
+      - vp_poc_known
+      - price_outside_value_area
+      - regime_balanced_or_rotational
+    confirmation:
+      - rejection_at_extreme_of_value_area
+      - decelerating_momentum_away_from_poc
+    invalid_if:
+      - regime_trending (strong directional regime invalidates mean reversion)
+      - price_breaks_value_area_in_opposite_direction
+    invalidation_logic: >
+      Hard invalidation if price extends another 0.5 ATR beyond the
+      VA extreme it was rejecting from.
+    target_logic: >
+      TP1 = POC. TP2 = opposite VA edge if momentum carries.
+    ai_review_rule: >
+      Do not classify as RETURN_TO_POC in a strong trending regime, even
+      if POC is overhead/underneath. Trending regimes resolve through POC
+      rather than rotating back to it.
+
+  - id: BALANCE_CHOP_NO_TRADE
+    enabled: true
+    engines: [A, B, D]
+    asset_groups: ["*"]
+    description: >
+      Market is balanced around POC with no clean edge break, no displacement,
+      and overlapping candles. Explicit no-trade classification — exists so
+      the classifier has a positive label for "do nothing" rather than
+      forcing a directional model.
+    required_context:
+      - price_oscillating_around_poc_within_value_area
+      - no_displacement_in_last_n_candles
+    confirmation: []
+    invalid_if:
+      - clean_edge_break_with_displacement
+      - structural_shift_during_balance
+    invalidation_logic: >
+      Not a tradable setup; no invalidation level required.
+    target_logic: >
+      No targets. Wait for edge break or sweep.
+    ai_review_rule: >
+      Prefer this classification over any directional model when price is
+      chopping around POC with no displacement, even if Engine A score is
+      above threshold.
