@@ -1,4 +1,11 @@
 import { Badge } from '@/components/ui/badge';
+import {
+  AI_REVIEW_EMPTY,
+  AI_REVIEW_SEP,
+  fmtReviewPass,
+  fmtReviewBool,
+  showReviewValue,
+} from '@/lib/aiReviewDisplay';
 import type { AIChartReviewEngineAVerdictComparison } from '@/types/athena';
 
 const VERDICT_CLASS: Record<string, string> = {
@@ -11,35 +18,15 @@ const VERDICT_CLASS: Record<string, string> = {
   unknown: 'bg-zinc-500/15 text-zinc-300 border-zinc-500/40',
 };
 
-function show(value: unknown, fallback = '—'): string {
-  if (value === null || value === undefined) return fallback;
-  if (typeof value === 'boolean') return value ? 'yes' : 'no';
-  if (typeof value === 'string') return value.trim() === '' ? fallback : value;
-  if (typeof value === 'number') return Number.isFinite(value) ? String(value) : fallback;
-  return String(value);
-}
-
-function fmtBool(value: boolean | null | undefined): string {
-  if (value === true) return 'yes';
-  if (value === false) return 'no';
-  return '—';
-}
-
-function fmtPass(passed: boolean | null | undefined): string {
-  if (passed === true) return 'PASS';
-  if (passed === false) return 'FAIL';
-  return '—';
-}
-
 function fmtScoreLine(v: AIChartReviewEngineAVerdictComparison): string {
   const score = v.engineAScore;
   const max = v.engineAMaxScore;
   const threshold = v.engineAThreshold;
   const scoreText =
     score == null && max == null
-      ? '—'
-      : `${score ?? '—'} / ${max ?? '—'} · threshold ${threshold ?? '—'}`;
-  return `${scoreText} · ${fmtPass(v.engineAPassed)} · ${show(v.engineADirection)}`;
+      ? AI_REVIEW_EMPTY
+      : `${score ?? AI_REVIEW_EMPTY} / ${max ?? AI_REVIEW_EMPTY}${AI_REVIEW_SEP}threshold ${threshold ?? AI_REVIEW_EMPTY}`;
+  return `${scoreText}${AI_REVIEW_SEP}${fmtReviewPass(v.engineAPassed)}${AI_REVIEW_SEP}${showReviewValue(v.engineADirection)}`;
 }
 
 export interface AIReviewEngineAVerdictPanelProps {
@@ -80,13 +67,13 @@ export default function AIReviewEngineAVerdictPanel({
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-1.5 text-[10px]">
         <VerdictKV label="Engine A" value={fmtScoreLine(v)} />
-        <VerdictKV label="Chart confirms direction" value={fmtBool(v.chartConfirmsEngineADirection)} />
-        <VerdictKV label="Chart confirms entry timing" value={fmtBool(v.chartConfirmsEntryTiming)} />
-        <VerdictKV label="Chart contradicts entry timing" value={fmtBool(v.chartContradictsEntryTiming)} />
-        <VerdictKV label="Chart contradicts direction" value={fmtBool(v.chartContradictsEngineADirection)} />
-        <VerdictKV label="AI agrees with Engine A" value={fmtBool(v.aiAgreesWithEngineA)} />
-        <VerdictKV label="Final decision" value={show(v.finalDecision, 'unknown')} />
-        <VerdictKV label="Final reason" value={show(v.finalReason)} />
+        <VerdictKV label="Chart confirms direction" value={fmtReviewBool(v.chartConfirmsEngineADirection)} />
+        <VerdictKV label="Chart confirms entry timing" value={fmtReviewBool(v.chartConfirmsEntryTiming)} />
+        <VerdictKV label="Chart contradicts entry timing" value={fmtReviewBool(v.chartContradictsEntryTiming)} />
+        <VerdictKV label="Chart contradicts direction" value={fmtReviewBool(v.chartContradictsEngineADirection)} />
+        <VerdictKV label="AI agrees with Engine A" value={fmtReviewBool(v.aiAgreesWithEngineA)} />
+        <VerdictKV label="Final decision" value={showReviewValue(v.finalDecision, 'unknown')} />
+        <VerdictKV label="Final reason" value={showReviewValue(v.finalReason)} />
       </div>
 
       {(v.downgradeReasons?.length ?? 0) > 0 && (

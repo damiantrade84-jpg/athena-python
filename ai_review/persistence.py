@@ -38,11 +38,13 @@ CREATE TABLE IF NOT EXISTS ai_chart_reviews (
 CREATE INDEX IF NOT EXISTS idx_ai_chart_reviews_symbol_tf
   ON ai_chart_reviews(symbol, timeframe, created_at DESC);
 
-CREATE INDEX IF NOT EXISTS idx_ai_chart_reviews_dedup
-  ON ai_chart_reviews(symbol, timeframe, screenshot_hash, review_type, created_at DESC);
-
 CREATE INDEX IF NOT EXISTS idx_ai_chart_reviews_concordance
   ON ai_chart_reviews(json_extract(concordance_json, '$.concordance'), created_at DESC);
+"""
+
+_DEDUP_INDEX_SQL = """
+CREATE INDEX IF NOT EXISTS idx_ai_chart_reviews_dedup
+  ON ai_chart_reviews(symbol, timeframe, screenshot_hash, review_type, created_at DESC);
 """
 
 
@@ -63,6 +65,7 @@ def ensure_schema(audit_db: str | None = None) -> None:
             con.execute(
                 "ALTER TABLE ai_chart_reviews ADD COLUMN review_type TEXT NOT NULL DEFAULT 'engine_a'"
             )
+        con.executescript(_DEDUP_INDEX_SQL)
         con.commit()
 
 

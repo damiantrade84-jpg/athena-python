@@ -451,6 +451,7 @@ def assemble_engine_a_context(
             "stale_warnings": data_freshness.get("blocked") or data_freshness.get("warnings") or [],
         },
         "chart_captured_at": (screenshot_meta or {}).get("captured_at"),
+        "screenshot_overlays": list((screenshot_meta or {}).get("overlays") or []),
         "mismatch_warnings": [],
         "funding_oi": _funding_oi_block(signal),
         "structure_context": signal.get("engine_b") if isinstance(signal.get("engine_b"), dict) else {},

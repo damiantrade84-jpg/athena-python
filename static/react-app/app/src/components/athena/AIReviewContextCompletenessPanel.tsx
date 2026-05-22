@@ -1,4 +1,10 @@
 import { Badge } from '@/components/ui/badge';
+import {
+  AI_REVIEW_EMPTY,
+  AI_REVIEW_SEP,
+  fmtReviewNum,
+  showReviewValue,
+} from '@/lib/aiReviewDisplay';
 import type {
   AIChartReviewAtrDiagnostics,
   AIChartReviewContextCompleteness,
@@ -12,19 +18,6 @@ const STATUS_CLASS: Record<string, string> = {
   partial: 'bg-amber-500/15 text-amber-300 border-amber-500/40',
   insufficient: 'bg-rose-500/15 text-rose-300 border-rose-500/40',
 };
-
-function show(value: unknown, fallback = '—'): string {
-  if (value === null || value === undefined) return fallback;
-  if (typeof value === 'string') return value.trim() === '' ? fallback : value;
-  if (typeof value === 'number') return Number.isFinite(value) ? String(value) : fallback;
-  if (typeof value === 'boolean') return value ? 'yes' : 'no';
-  return String(value);
-}
-
-function fmtNum(value: number | null | undefined, digits = 4): string {
-  if (value === null || value === undefined || Number.isNaN(value)) return '—';
-  return value.toFixed(digits).replace(/\.?0+$/, '');
-}
 
 export interface AIReviewContextCompletenessPanelProps {
   completeness?: AIChartReviewContextCompleteness;
@@ -52,6 +45,13 @@ export default function AIReviewContextCompletenessPanel({
   const status = c.status || 'unknown';
   const statusClass = STATUS_CLASS[status] ?? 'bg-zinc-500/15 text-zinc-300 border-zinc-500/40';
   const metadata = c.metadata || {};
+  const requiredItems = detailed?.required || [];
+  const optionalItems = detailed?.optional || [];
+  const notApplicableItems = detailed?.notApplicable || [];
+  const showNotApplicableNote =
+    requiredItems.length === 0 &&
+    optionalItems.length === 0 &&
+    notApplicableItems.length > 0;
 
   return (
     <div className="space-y-2 border border-border/50 rounded-md p-2 bg-muted/10">
@@ -63,36 +63,45 @@ export default function AIReviewContextCompletenessPanel({
           {status}
         </Badge>
         <span className="text-[10px] font-mono text-muted-foreground ml-auto">
-          score {show(c.score)}
+          score {showReviewValue(c.score)}
         </span>
       </div>
 
+      {showNotApplicableNote && (
+        <div className="text-[10px] text-muted-foreground">
+          Some context fields are not applicable for this asset or chart surface.
+        </div>
+      )}
+
       <div className="grid grid-cols-1 md:grid-cols-3 gap-2 text-[11px]">
-        <ContextList title="Required missing context" items={detailed?.required || []} />
-        <ContextList title="Optional missing context" items={detailed?.optional || []} />
-        <ContextList title="Not applicable context" items={detailed?.notApplicable || []} />
+        <ContextList title="Required missing context" items={requiredItems} />
+        <ContextList title="Optional missing context" items={optionalItems} />
+        <ContextList title="Not applicable context" items={notApplicableItems} />
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-[10px]">
         <div className="border border-border/40 rounded-md p-2 space-y-1">
           <div className="text-muted-foreground uppercase">Metadata</div>
-          <KV label="chart captured" value={show(metadata.chartCapturedAt)} />
-          <KV label="scan timestamp" value={show(metadata.scanTimestamp)} />
-          <KV label="latest candle" value={show(metadata.latestCandleTimestamp)} />
-          <KV label="chart provider" value={show(metadata.chartProvider, 'unknown')} />
-          <KV label="engine provider" value={show(metadata.engineProvider, 'unknown')} />
-          <KV label="provider mismatch" value={show(metadata.providerMismatch)} />
+          <KV label="chart captured" value={showReviewValue(metadata.chartCapturedAt)} />
+          <KV label="scan timestamp" value={showReviewValue(metadata.scanTimestamp)} />
+          <KV label="latest candle" value={showReviewValue(metadata.latestCandleTimestamp)} />
+          <KV label="chart provider" value={showReviewValue(metadata.chartProvider, 'unknown')} />
+          <KV label="engine provider" value={showReviewValue(metadata.engineProvider, 'unknown')} />
+          <KV label="provider mismatch" value={showReviewValue(metadata.providerMismatch)} />
         </div>
 
         <div className="border border-border/40 rounded-md p-2 space-y-1">
           <div className="text-muted-foreground uppercase">Structured diagnostics</div>
-          <KV label="funding rate" value={fmtNum(fundingOi?.fundingRate)} />
-          <KV label="funding z" value={fmtNum(fundingOi?.fundingRateZ, 2)} />
-          <KV label="open interest" value={fmtNum(fundingOi?.openInterest, 2)} />
-          <KV label="OI delta pct" value={fmtNum(fundingOi?.openInterestDeltaPct, 2)} />
-          <KV label="ATR D1 / H4 / chart" value={`${fmtNum(atrDiagnostics?.atrD1, 6)} / ${fmtNum(atrDiagnostics?.atrH4, 6)} / ${fmtNum(atrDiagnostics?.atrChartTf, 6)}`} />
-          <KV label="nearest resistance" value={fmtNum(resistanceMap?.nearestResistance, 6)} />
-          <KV label="TP clears resistance" value={show(resistanceMap?.tpClearsResistance)} />
+          <KV label="funding rate" value={fmtReviewNum(fundingOi?.fundingRate, 4)} />
+          <KV label="funding z" value={fmtReviewNum(fundingOi?.fundingRateZ, 2)} />
+          <KV label="open interest" value={fmtReviewNum(fundingOi?.openInterest, 2)} />
+          <KV label="OI delta pct" value={fmtReviewNum(fundingOi?.openInterestDeltaPct, 2)} />
+          <KV
+            label="ATR D1 / H4 / chart"
+            value={`${fmtReviewNum(atrDiagnostics?.atrD1, 6)} / ${fmtReviewNum(atrDiagnostics?.atrH4, 6)} / ${fmtReviewNum(atrDiagnostics?.atrChartTf, 6)}`}
+          />
+          <KV label="nearest resistance" value={fmtReviewNum(resistanceMap?.nearestResistance, 6)} />
+          <KV label="TP clears resistance" value={showReviewValue(resistanceMap?.tpClearsResistance)} />
         </div>
       </div>
     </div>
@@ -110,14 +119,24 @@ function ContextList({
     <div className="border border-border/40 rounded-md p-2 min-h-[72px]">
       <div className="text-[10px] text-muted-foreground mb-1">{title}</div>
       {items.length === 0 ? (
-        <div className="text-muted-foreground">—</div>
+        <div className="text-muted-foreground">{AI_REVIEW_EMPTY}</div>
       ) : (
         <ul className="space-y-1">
           {items.map((item, i) => (
             <li key={`${item.label}-${i}`} className="leading-snug">
               <span className="font-medium">{item.label}</span>
-              {item.impact && <span className="text-muted-foreground"> · {item.impact}</span>}
-              {item.blocksTrade && <span className="text-rose-300"> · blocks trade</span>}
+              {item.impact && (
+                <span className="text-muted-foreground">
+                  {AI_REVIEW_SEP}
+                  {item.impact}
+                </span>
+              )}
+              {item.blocksTrade && (
+                <span className="text-rose-300">
+                  {AI_REVIEW_SEP}
+                  blocks trade
+                </span>
+              )}
               <div className="text-muted-foreground">{item.reason}</div>
             </li>
           ))}

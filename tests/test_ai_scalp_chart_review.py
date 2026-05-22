@@ -332,6 +332,44 @@ def test_dedup_scoped_by_review_type():
     assert miss is None
 
 
+def test_ensure_schema_migrates_legacy_table_without_review_type():
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
+        tmp_db = tmp.name
+    legacy_sql = """
+    CREATE TABLE ai_chart_reviews (
+      review_id TEXT PRIMARY KEY,
+      created_at TEXT NOT NULL,
+      symbol TEXT NOT NULL,
+      timeframe TEXT NOT NULL,
+      asset_group TEXT,
+      provider TEXT NOT NULL,
+      model TEXT NOT NULL,
+      latency_ms INTEGER,
+      screenshot_hash TEXT NOT NULL,
+      screenshot_bytes INTEGER,
+      screenshot_meta_json TEXT NOT NULL,
+      engine_a_snapshot_json TEXT NOT NULL,
+      ai_review_json TEXT NOT NULL,
+      concordance_json TEXT NOT NULL,
+      scan_timestamp TEXT,
+      chart_captured_at TEXT,
+      latest_candle_ts TEXT,
+      mismatch_warnings_json TEXT,
+      parse_success INTEGER NOT NULL
+    );
+    """
+    with sqlite3.connect(tmp_db) as con:
+        con.executescript(legacy_sql)
+    ensure_schema(tmp_db)
+    with sqlite3.connect(tmp_db) as con:
+        cols = {row[1] for row in con.execute("PRAGMA table_info(ai_chart_reviews)").fetchall()}
+        assert "review_type" in cols
+        idx = con.execute(
+            "SELECT name FROM sqlite_master WHERE name='idx_ai_chart_reviews_dedup'"
+        ).fetchone()
+        assert idx is not None
+
+
 def test_build_engine_d_prompt_context_fields():
     ctx = _engine_d_ctx()
     prompt_ctx = build_engine_d_prompt_context(ctx)

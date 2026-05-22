@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from ai_review.context_diagnostics import build_context_diagnostics
+
 _DOWNGRADE = {
     "agree": "partial",
     "partial": "disagree",
@@ -30,11 +32,23 @@ def _missing_diagnostics(engine_a_ctx: dict[str, Any]) -> bool:
     return False
 
 
-def _divergence_from_ai(ai_review: dict[str, Any]) -> str:
-    risks = [str(r).lower() for r in (ai_review.get("risks") or [])]
-    missing = ai_review.get("missing_context") or []
-    if missing:
+def _has_required_missing_context(
+    engine_a_ctx: dict[str, Any],
+    ai_review: dict[str, Any],
+) -> bool:
+    diagnostics = build_context_diagnostics(engine_a_ctx, ai_review)
+    required = diagnostics.get("missingContextDetailed", {}).get("required") or []
+    return bool(required)
+
+
+def _divergence_from_ai(
+    engine_a_ctx: dict[str, Any],
+    ai_review: dict[str, Any],
+) -> str:
+    if _has_required_missing_context(engine_a_ctx, ai_review):
         return "missing_context"
+
+    risks = [str(r).lower() for r in (ai_review.get("risks") or [])]
     if ai_review.get("visual_contradiction"):
         return "visual_contradiction"
     for risk in risks:
@@ -42,8 +56,19 @@ def _divergence_from_ai(ai_review: dict[str, Any]) -> str:
             return "freshness_issue"
         if "rr" in risk or "risk reward" in risk:
             return "atr_rr_issue"
-        if "displacement" in risk or "entry" in risk:
+        if "displacement" in risk or "entry" in risk or "chasing" in risk or "late" in risk:
             return "entry_displacement"
+
+    entry_text = str(ai_review.get("entry_quality") or "").lower()
+    if any(
+        marker in entry_text
+        for marker in ("late", "chasing", "extended", "poor entry", "bad entry")
+    ):
+        return "entry_displacement"
+
+    human_action = str(ai_review.get("human_action") or "wait").lower()
+    if human_action in ("wait", "needs_fresher_data", "needs_better_rr"):
+        return "entry_displacement"
     return "other"
 
 
@@ -78,10 +103,10 @@ def compute_engine_a_ai_concordance(
             concordance = "agree"
     elif passed and ai_verdict == "CAUTION":
         concordance = "partial"
-        divergence_type = _divergence_from_ai(ai_review)
+        divergence_type = _divergence_from_ai(engine_a_ctx, ai_review)
     elif passed and ai_verdict in ("INVALID", "NO_TRADE"):
         concordance = "disagree"
-        divergence_type = _divergence_from_ai(ai_review)
+        divergence_type = _divergence_from_ai(engine_a_ctx, ai_review)
     elif not passed and ai_verdict == "VALID":
         concordance = "disagree"
         divergence_type = "other"
@@ -90,7 +115,7 @@ def compute_engine_a_ai_concordance(
         concordance = "agree"
     else:
         concordance = "partial"
-        divergence_type = _divergence_from_ai(ai_review)
+        divergence_type = _divergence_from_ai(engine_a_ctx, ai_review)
 
     atr = engine_a_ctx.get("atr") or {}
     if str(atr.get("atr_freshness_status") or "").lower() == "stale":

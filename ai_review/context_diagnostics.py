@@ -7,6 +7,7 @@ from typing import Any
 
 
 _EQUITY_GROUPS = {"equity", "equities", "stock", "stocks"}
+_CRYPTO_GROUPS = {"crypto", "cryptocurrency", "perp", "perpetual"}
 
 
 def _to_float(value: Any) -> float | None:
@@ -68,6 +69,68 @@ def _detail(
 
 def _not_applicable(key: str, label: str, reason: str) -> dict[str, str]:
     return {"key": key, "label": label, "reason": reason}
+
+
+def _asset_group(engine_a_ctx: dict[str, Any]) -> str:
+    return str(engine_a_ctx.get("asset_group") or engine_a_ctx.get("asset_class") or "").lower()
+
+
+def _is_crypto_asset(engine_a_ctx: dict[str, Any]) -> bool:
+    group = _asset_group(engine_a_ctx)
+    return group in _CRYPTO_GROUPS or group.startswith("crypto")
+
+
+def _engine_b_in_review(engine_a_ctx: dict[str, Any]) -> bool:
+    overlays = engine_a_ctx.get("screenshot_overlays") or []
+    if isinstance(overlays, list) and "engine_b" in overlays:
+        return True
+    struct = engine_a_ctx.get("structure_context") or engine_a_ctx.get("engine_b") or {}
+    return isinstance(struct, dict) and bool(
+        struct.get("structural_verdict")
+        or struct.get("nearest_support_zone")
+        or struct.get("nearest_resistance_zone")
+    )
+
+
+def _engine_snapshot_not_applicable(engine_key: str, engine_a_ctx: dict[str, Any]) -> bool:
+    if engine_key == "engineB":
+        return not _engine_b_in_review(engine_a_ctx)
+    if engine_key in ("engineC", "engineD"):
+        return True
+    return False
+
+
+def _classify_engine_snapshot_missing(
+    item: str,
+    engine_a_ctx: dict[str, Any],
+    not_applicable: list[dict[str, str]],
+) -> bool:
+    lower = item.lower().replace(" ", "")
+    for engine_key in ("engineB", "engineC", "engineD"):
+        prefix = engine_key.lower()
+        if lower.startswith(f"{prefix}.") or lower.startswith(prefix):
+            if _engine_snapshot_not_applicable(engine_key, engine_a_ctx):
+                _append_unique(
+                    not_applicable,
+                    _not_applicable(
+                        f"{engine_key.lower()}_snapshot",
+                        f"{engine_key} snapshot",
+                        "Not part of this chart review surface",
+                    ),
+                )
+                return True
+    if "engineb" in lower or "engine b" in item.lower():
+        if _engine_snapshot_not_applicable("engineB", engine_a_ctx):
+            _append_unique(
+                not_applicable,
+                _not_applicable(
+                    "engine_b_snapshot",
+                    "Engine B snapshot",
+                    "Engine B overlays were not included in this review",
+                ),
+            )
+            return True
+    return False
 
 
 def _append_unique(items: list[dict[str, Any]], item: dict[str, Any]) -> None:
@@ -258,7 +321,17 @@ def _classify_missing_items(
     required: list[dict[str, Any]] = []
     optional: list[dict[str, Any]] = []
     not_applicable: list[dict[str, str]] = []
-    asset_group = str(engine_a_ctx.get("asset_group") or engine_a_ctx.get("asset_class") or "").lower()
+    asset_group = _asset_group(engine_a_ctx)
+
+    if not _is_crypto_asset(engine_a_ctx):
+        _append_unique(
+            not_applicable,
+            _not_applicable(
+                "funding_oi_asset_class",
+                "Funding / open interest",
+                f"Not used for asset group {asset_group or 'unknown'}",
+            ),
+        )
 
     text = _text_blob(ai_review)
     references_funding_oi = any(
@@ -269,9 +342,11 @@ def _classify_missing_items(
 
     for raw in ai_review.get("missing_context") or []:
         item = str(raw or "").strip()
-        lower = item.lower()
         if not item:
             continue
+        if _classify_engine_snapshot_missing(item, engine_a_ctx, not_applicable):
+            continue
+        lower = item.lower()
         if "chart captured" in lower or "captured timestamp" in lower or lower == "timestamp":
             continue
         if "equity_session" in lower or "equity session" in lower:

@@ -1405,8 +1405,8 @@ export default function ScalpWorkbenchPanel() {
             <CardContent className="space-y-1 px-4 pb-3 pt-0">
               <FieldRow label="Symbol" value={chartSymbol || '—'} />
               <FieldRow label="Timeframe" value={activeUi.timeframe || executionTf} />
-              <FieldRow label="AI grade" value={textValue(activeUi.raw?.ai_grade ?? activeSignal?.ai_grade, '—')} />
-              <FieldRow label="AI score" value={numberValue(activeUi.raw?.ai_score ?? activeSignal?.ai_score)} />
+              <FieldRow label="AI grade" value={textValue(activeUi.raw?.ai_grade ?? activeSignal?.ai_grade ?? null, '—')} />
+              <FieldRow label="AI score" value={numberValue(activeUi.raw?.ai_score ?? activeSignal?.ai_score ?? null)} />
               <FieldRow label="Engine D" value={textValue(activeUi.engineStatus)} tone={activeUi.executable ? 'ok' : 'muted'} />
               <FieldRow label="Market state" value={marketState} tone={marketState === 'unknown' ? 'muted' : 'ok'} />
               <FieldRow label="Location" value={location} tone={location === 'unknown' ? 'muted' : 'ok'} />

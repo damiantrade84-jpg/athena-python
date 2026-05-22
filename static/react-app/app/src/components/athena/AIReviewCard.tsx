@@ -4,6 +4,11 @@ import { Badge } from '@/components/ui/badge';
 import AIReviewContextCompletenessPanel from '@/components/athena/AIReviewContextCompletenessPanel';
 import AIReviewEngineAVerdictPanel from '@/components/athena/AIReviewEngineAVerdictPanel';
 import AIReviewSummaryStrip from '@/components/athena/AIReviewSummaryStrip';
+import {
+  AI_REVIEW_EMPTY,
+  AI_REVIEW_SEP,
+  showReviewValue,
+} from '@/lib/aiReviewDisplay';
 import type {
   AIChartReviewResponse,
   AIChartReviewConcordanceState,
@@ -22,12 +27,6 @@ const VERDICT_PILL: Record<string, string> = {
   INVALID: 'bg-rose-500/15 text-rose-300 border-rose-500/40',
   NO_TRADE: 'bg-zinc-500/15 text-zinc-300 border-zinc-500/40',
 };
-
-function show(value: unknown, fallback = '—'): string {
-  if (value === null || value === undefined) return fallback;
-  if (typeof value === 'string') return value.trim() === '' ? fallback : value;
-  return String(value);
-}
 
 function showList(items: unknown): string[] | null {
   if (!Array.isArray(items) || items.length === 0) return null;
@@ -65,10 +64,10 @@ export default function AIReviewCard({ response }: AIReviewCardProps) {
   const warnings = showList(response.mismatch_warnings);
 
   const freshnessFallback = (() => {
-    const status = show(atrInfo?.atr_freshness_status);
-    const tf = show(atrInfo?.atr_tf);
+    const status = showReviewValue(atrInfo?.atr_freshness_status);
+    const tf = showReviewValue(atrInfo?.atr_tf);
     const age = atrInfo?.atr_age_seconds;
-    const ageText = age == null ? '—' : `${age}s`;
+    const ageText = age == null ? AI_REVIEW_EMPTY : `${age}s`;
     return `ATR ${status} (${tf}, age ${ageText})`;
   })();
 
@@ -93,8 +92,8 @@ export default function AIReviewCard({ response }: AIReviewCardProps) {
             </Badge>
           )}
           <span className="text-[10px] text-muted-foreground font-mono ml-auto">
-            {response.provider}/{show(response.model, '—')}
-            {response.dedup_hit ? ' · cached' : ''}
+            {response.provider}/{showReviewValue(response.model)}
+            {response.dedup_hit ? `${AI_REVIEW_SEP}cached` : ''}
           </span>
         </div>
 
@@ -111,17 +110,17 @@ export default function AIReviewCard({ response }: AIReviewCardProps) {
         />
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-[11px]">
-          <Row label="Human action" value={show(ai.human_action)} />
-          <Row label="Setup type" value={show(ai.setup_type)} />
-          <Row label="Visual confirmation" value={show(ai.visual_confirmation)} />
-          <Row label="Visual contradiction" value={show(ai.visual_contradiction)} />
-          <Row label="Engine A alignment" value={show(ai.engine_a_alignment)} />
-          <Row label="ATR / RR assessment" value={show(ai.atr_rr_assessment)} />
+          <Row label="Human action" value={showReviewValue(ai.human_action)} />
+          <Row label="Setup type" value={showReviewValue(ai.setup_type)} />
+          <Row label="Visual confirmation" value={showReviewValue(ai.visual_confirmation)} />
+          <Row label="Visual contradiction" value={showReviewValue(ai.visual_contradiction)} />
+          <Row label="Engine A alignment" value={showReviewValue(ai.engine_a_alignment)} />
+          <Row label="ATR / RR assessment" value={showReviewValue(ai.atr_rr_assessment)} />
           <Row
             label="Freshness assessment"
             value={ai.freshness_assessment ? ai.freshness_assessment : freshnessFallback}
           />
-          <Row label="Entry quality" value={show(ai.entry_quality)} />
+          <Row label="Entry quality" value={showReviewValue(ai.entry_quality)} />
         </div>
 
         <ListBlock label="Supporting reasons" items={supporting} />
@@ -129,14 +128,14 @@ export default function AIReviewCard({ response }: AIReviewCardProps) {
         <ListBlock label="Missing context" items={missing} />
 
         <div className="grid grid-cols-1 md:grid-cols-3 gap-2 text-[10px] text-muted-foreground border-t border-border/40 pt-2">
-          <KV label="chart captured" value={show(ts.chart_captured_at)} />
+          <KV label="chart captured" value={showReviewValue(ts.chart_captured_at)} />
           <KV
             label="scan timestamp"
-            value={`${show(ts.scan_timestamp)}${
-              scanDelta == null ? '' : ` (Δ ${scanDelta}s)`
+            value={`${showReviewValue(ts.scan_timestamp)}${
+              scanDelta == null ? '' : ` (delta ${scanDelta}s)`
             }`}
           />
-          <KV label="latest candle" value={show(ts.latest_candle_ts)} />
+          <KV label="latest candle" value={showReviewValue(ts.latest_candle_ts)} />
         </div>
 
         {warnings && (

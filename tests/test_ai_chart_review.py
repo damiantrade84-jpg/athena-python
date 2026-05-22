@@ -25,7 +25,7 @@ from ai_review.providers.router import run_chart_review
 from ai_review.engine_a_context import build_engine_a_prompt_context
 from ai_review.engine_a_verdict import build_engine_a_verdict_comparison
 from ai_review.summary import build_ai_review_summary
-from ai_review.context_diagnostics import build_context_diagnostics
+from ai_review.context_diagnostics import build_context_diagnostics, sanitize_ai_review_missing_context
 from ai_review.timestamp_contract import evaluate_timestamp_mismatch
 from ai_review.validation import validate_request
 from athena_app.api.routes_ai_chart_review import register_ai_chart_review_routes
@@ -480,6 +480,26 @@ def test_concordance_partial_when_passed_and_caution():
     )
     out = compute_engine_a_ai_concordance(_engine_a_ctx(), ai)
     assert out["concordance"] == "partial"
+    assert out["divergence_type"] != "missing_context"
+
+
+def test_concordance_optional_missing_does_not_set_missing_context_divergence():
+    ctx = _engine_a_ctx(asset_group="forex")
+    ctx["screenshot_overlays"] = []
+    ai = normalize_chart_review_response(
+        json.dumps(
+            {
+                "verdict": "CAUTION",
+                "confidence": 55,
+                "human_action": "wait",
+                "missing_context": ["engineB.score"],
+            }
+        )
+    )
+    ai = sanitize_ai_review_missing_context(ctx, ai)
+    out = compute_engine_a_ai_concordance(ctx, ai)
+    assert out["concordance"] == "partial"
+    assert out["divergence_type"] != "missing_context"
 
 
 def test_concordance_disagree_when_passed_and_invalid():
@@ -660,6 +680,25 @@ def test_context_diagnostics_attached_to_success_response(tmp_audit_db):
     assert data["resistanceMap"]["nearestResistance"] == 66800.0
     assert data["resistanceMap"]["tp"] == 67000.0
     assert data["resistanceMap"]["tpClearsResistance"] is True
+
+
+def test_context_diagnostics_forex_engine_b_missing_not_optional():
+    ctx = _engine_a_ctx(asset_group="forex")
+    ctx["screenshot_overlays"] = []
+    ai = normalize_chart_review_response(
+        json.dumps(
+            {
+                "verdict": "CAUTION",
+                "confidence": 55,
+                "human_action": "wait",
+                "missing_context": ["engineB.score"],
+            }
+        )
+    )
+    diag = build_context_diagnostics(ctx, ai)
+    assert "engineB.score" not in diag["contextCompleteness"]["missingOptional"]
+    na_labels = diag["contextCompleteness"]["notApplicable"]
+    assert any("Engine B" in label or "Funding" in label for label in na_labels)
 
 
 def test_context_diagnostics_crypto_equity_session_not_applicable_does_not_penalize():

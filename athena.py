@@ -5217,6 +5217,21 @@ _auto_trader.configure(
 
 app = Flask(__name__, static_folder="static")
 
+
+@app.after_request
+def _ensure_utf8_content_type(response):
+    content_type = response.headers.get("Content-Type") or response.content_type or ""
+    if content_type and "charset=" not in content_type.lower():
+        lowered = content_type.lower()
+        if (
+            lowered.startswith("text/")
+            or "javascript" in lowered
+            or lowered.startswith("application/json")
+            or "css" in lowered
+        ):
+            response.headers["Content-Type"] = f"{content_type}; charset=utf-8"
+    return response
+
 app.config["PERMANENT_SESSION_LIFETIME"] = 86400  # 24 hours
 
 try:

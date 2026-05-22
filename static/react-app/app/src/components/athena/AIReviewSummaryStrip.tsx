@@ -1,4 +1,11 @@
 import { Badge } from '@/components/ui/badge';
+import {
+  AI_REVIEW_EMPTY,
+  AI_REVIEW_SEP,
+  fmtReviewNum,
+  fmtReviewPass,
+  showReviewValue,
+} from '@/lib/aiReviewDisplay';
 import type {
   AIChartReviewEngineSummary,
   AIChartReviewProviderStatus,
@@ -23,45 +30,28 @@ const ACTION_PILL: Record<string, string> = {
   watch: 'bg-sky-500/15 text-sky-300 border-sky-500/40',
 };
 
-function fmtNum(value: number | null | undefined, digits = 0): string {
-  if (value === null || value === undefined || Number.isNaN(value)) return '—';
-  return digits > 0 ? value.toFixed(digits) : String(Math.round(value));
-}
-
-function show(value: unknown, fallback = '—'): string {
-  if (value === null || value === undefined) return fallback;
-  if (typeof value === 'string') return value.trim() === '' ? fallback : value;
-  return String(value);
-}
-
-function fmtPass(passed: boolean | null | undefined): string {
-  if (passed === true) return 'PASS';
-  if (passed === false) return 'FAIL';
-  return '—';
-}
-
 function engineALine(engine: AIChartReviewEngineSummary | null | undefined): string {
-  if (!engine) return '—';
-  const score = fmtNum(engine.score, 2);
-  const max = fmtNum(engine.maxScore, 2);
-  const threshold = fmtNum(engine.threshold, 2);
-  const pass = fmtPass(engine.passed);
-  const direction = show(engine.direction);
+  if (!engine) return AI_REVIEW_EMPTY;
+  const score = fmtReviewNum(engine.score, 2);
+  const max = fmtReviewNum(engine.maxScore, 2);
+  const threshold = fmtReviewNum(engine.threshold, 2);
+  const pass = fmtReviewPass(engine.passed);
+  const direction = showReviewValue(engine.direction);
   const norm =
     engine.normalizedScore != null && !Number.isNaN(engine.normalizedScore)
       ? `${Math.round(engine.normalizedScore)}%`
       : null;
-  const normText = norm ? ` · ${norm} norm` : '';
-  return `${score} / ${max} · threshold ${threshold} · ${pass} · ${direction}${normText}`;
+  const normText = norm ? `${AI_REVIEW_SEP}${norm} norm` : '';
+  return `${score} / ${max}${AI_REVIEW_SEP}threshold ${threshold}${AI_REVIEW_SEP}${pass}${AI_REVIEW_SEP}${direction}${normText}`;
 }
 
 function ScoreCell({ label, value }: { label: string; value: number | null | undefined }) {
-  const display = fmtNum(value);
+  const display = fmtReviewNum(value);
   return (
     <div className="border border-border/40 rounded-md px-2 py-1.5 min-w-0">
       <div className="text-[10px] text-muted-foreground truncate">{label}</div>
       <div className="text-[11px] font-mono font-semibold">
-        {display === '—' ? display : `${display}/100`}
+        {display === AI_REVIEW_EMPTY ? display : `${display}/100`}
       </div>
     </div>
   );
@@ -80,7 +70,7 @@ export default function AIReviewSummaryStrip({ summary }: AIReviewSummaryStripPr
   const actionClass = ACTION_PILL[String(humanAction)] ?? ACTION_PILL.watch;
   const provider = s.provider || 'unknown';
   const model = s.model || 'unknown';
-  const setupType = s.setupType || s.engineD?.setupType || '—';
+  const setupType = s.setupType || s.engineD?.setupType || AI_REVIEW_EMPTY;
 
   return (
     <div className="space-y-2 border border-border/50 rounded-md p-2 bg-muted/20">
@@ -118,14 +108,14 @@ export default function AIReviewSummaryStrip({ summary }: AIReviewSummaryStripPr
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-1.5 text-[10px]">
-        <SummaryKV label="Human action" value={show(humanAction)} />
+        <SummaryKV label="Human action" value={showReviewValue(humanAction)} />
         <SummaryKV label="Setup type" value={setupType} />
         <div className="border border-border/40 rounded-md px-2 py-1">
           {s.engineD ? (
             <>
               <span className="text-muted-foreground">Engine D: </span>
               <span className="font-mono">
-                {show(s.engineD.direction)} grade {show(s.engineD.aiGrade)} / {fmtNum(s.engineD.aiScore, 1)}
+                {showReviewValue(s.engineD.direction)} grade {showReviewValue((s.engineD as { aiGrade?: string | null }).aiGrade)} / {fmtReviewNum((s.engineD as { aiScore?: number | null }).aiScore, 1)}
               </span>
             </>
           ) : (
@@ -140,7 +130,7 @@ export default function AIReviewSummaryStrip({ summary }: AIReviewSummaryStripPr
           value={`${provider} / ${model} / ${providerStatus.replace(/_/g, ' ')}`}
         />
         <SummaryKV label="Fallback used" value={s.fallbackUsed ? 'yes' : 'no'} />
-        <SummaryKV label="Final reason" value={s.finalReason || '—'} />
+        <SummaryKV label="Final reason" value={s.finalReason || AI_REVIEW_EMPTY} />
       </div>
     </div>
   );

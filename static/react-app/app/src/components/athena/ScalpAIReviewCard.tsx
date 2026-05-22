@@ -3,10 +3,33 @@ import { Badge } from '@/components/ui/badge';
 import { Card, CardContent } from '@/components/ui/card';
 import AIReviewContextCompletenessPanel from '@/components/athena/AIReviewContextCompletenessPanel';
 import AIReviewSummaryStrip from '@/components/athena/AIReviewSummaryStrip';
+import {
+  AI_REVIEW_EMPTY,
+  AI_REVIEW_SEP,
+  fmtReviewBool,
+  showReviewValue,
+} from '@/lib/aiReviewDisplay';
 import type {
+  AIChartReviewContextCompleteness,
+  AIChartReviewSummary,
   ScalpAIChartReviewResponse,
+  ScalpContextCompleteness,
   ScalpVerdictComparison,
 } from '@/types/athena';
+
+function normalizeContextCompleteness(
+  raw: ScalpContextCompleteness | undefined,
+): AIChartReviewContextCompleteness | undefined {
+  if (!raw) return undefined;
+  return {
+    score: raw.score ?? null,
+    status: raw.status ?? 'unknown',
+    missingRequired: raw.missingRequired ?? [],
+    missingOptional: raw.missingOptional ?? [],
+    notApplicable: raw.notApplicable ?? [],
+    metadata: raw.metadata ?? {},
+  };
+}
 
 const CONCORDANCE_PILL: Record<string, string> = {
   agree: 'bg-emerald-500/15 text-emerald-300 border-emerald-500/40',
@@ -21,12 +44,6 @@ const VERDICT_PILL: Record<string, string> = {
   INVALID: 'bg-rose-500/15 text-rose-300 border-rose-500/40',
   NO_TRADE: 'bg-zinc-500/15 text-zinc-300 border-zinc-500/40',
 };
-
-function show(value: unknown, fallback = '—'): string {
-  if (value === null || value === undefined) return fallback;
-  if (typeof value === 'string') return value.trim() === '' ? fallback : value;
-  return String(value);
-}
 
 function showList(items: unknown): string[] | null {
   if (!Array.isArray(items) || items.length === 0) return null;
@@ -50,17 +67,17 @@ function ScalpVerdictPanel({ comparison }: { comparison: ScalpVerdictComparison 
         Setup vs chart
       </div>
       <div className="grid grid-cols-2 gap-2 text-[11px]">
-        <Row label="Setup direction" value={show(comparison.setupDirection)} />
-        <Row label="Setup grade" value={show(comparison.setupGrade)} />
-        <Row label="Verdict" value={show(comparison.comparisonVerdict)} />
-        <Row label="Final decision" value={show(comparison.finalDecision)} />
+        <Row label="Setup direction" value={showReviewValue(comparison.setupDirection)} />
+        <Row label="Setup grade" value={showReviewValue(comparison.setupGrade)} />
+        <Row label="Verdict" value={showReviewValue(comparison.comparisonVerdict)} />
+        <Row label="Final decision" value={showReviewValue(comparison.finalDecision)} />
         <Row
           label="Chart confirms direction"
-          value={comparison.chartConfirmsDirection == null ? '—' : comparison.chartConfirmsDirection ? 'yes' : 'no'}
+          value={fmtReviewBool(comparison.chartConfirmsDirection)}
         />
         <Row
           label="Entry timing ok"
-          value={comparison.chartConfirmsEntryTiming == null ? '—' : comparison.chartConfirmsEntryTiming ? 'yes' : 'no'}
+          value={fmtReviewBool(comparison.chartConfirmsEntryTiming)}
         />
       </div>
       {comparison.downgradeReasons && comparison.downgradeReasons.length > 0 && (
@@ -101,13 +118,13 @@ export default function ScalpAIReviewCard({ response }: ScalpAIReviewCardProps) 
           <Sparkles className="w-4 h-4 text-primary" />
           <span className="text-sm font-semibold">Engine D AI Review</span>
           <Badge className={`${verdictClass} text-[10px] border`}>
-            {show(ai.verdict, 'CAUTION')}
+            {showReviewValue(ai.verdict, 'CAUTION')}
           </Badge>
           <Badge variant="outline" className="text-[10px]">
-            confidence: {show(ai.confidence, '0')}
+            confidence: {showReviewValue(ai.confidence, '0')}
           </Badge>
           <Badge className={`${concordanceClass} text-[10px] border`}>
-            {show(c.concordance, 'unknown')}
+            {showReviewValue(c.concordance, 'unknown')}
           </Badge>
           {ctx?.ai_grade && (
             <Badge variant="outline" className="text-[10px]">
@@ -116,28 +133,30 @@ export default function ScalpAIReviewCard({ response }: ScalpAIReviewCardProps) 
             </Badge>
           )}
           <span className="text-[10px] text-muted-foreground font-mono ml-auto">
-            {response.provider}/{show(response.model, '—')}
-            {response.dedup_hit ? ' · cached' : ''}
+            {response.provider}/{showReviewValue(response.model)}
+            {response.dedup_hit ? `${AI_REVIEW_SEP}cached` : ''}
           </span>
         </div>
 
-        <AIReviewSummaryStrip summary={summary} />
+        <AIReviewSummaryStrip summary={summary as AIChartReviewSummary | null | undefined} />
 
         <ScalpVerdictPanel comparison={verdictComparison} />
 
         <AIReviewContextCompletenessPanel
-          completeness={response.contextCompleteness ?? response.context_completeness}
+          completeness={normalizeContextCompleteness(
+            response.contextCompleteness ?? response.context_completeness,
+          )}
         />
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-[11px]">
-          <Row label="Human action" value={show(ai.human_action)} />
-          <Row label="Setup type" value={show(ai.setup_type)} />
-          <Row label="Visual confirmation" value={show(ai.visual_confirmation)} />
-          <Row label="Visual contradiction" value={show(ai.visual_contradiction)} />
-          <Row label="Entry quality" value={show(ai.entry_quality)} />
-          <Row label="Source quality" value={show(ai.source_quality_assessment)} />
-          <Row label="Execution TF" value={show(ctx?.execution_tf)} />
-          <Row label="Setup direction" value={show(ctx?.direction)} />
+          <Row label="Human action" value={showReviewValue(ai.human_action)} />
+          <Row label="Setup type" value={showReviewValue(ai.setup_type)} />
+          <Row label="Visual confirmation" value={showReviewValue(ai.visual_confirmation)} />
+          <Row label="Visual contradiction" value={showReviewValue(ai.visual_contradiction)} />
+          <Row label="Entry quality" value={showReviewValue(ai.entry_quality)} />
+          <Row label="Source quality" value={showReviewValue(ai.source_quality_assessment)} />
+          <Row label="Execution TF" value={showReviewValue(ctx?.execution_tf)} />
+          <Row label="Setup direction" value={showReviewValue(ctx?.direction)} />
         </div>
 
         {supporting && (
