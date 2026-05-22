@@ -61,10 +61,10 @@ export default function Sidebar() {
   }, [postAutoTrade, refreshAutoTrade, showToast]);
 
   return (
-    <aside className="w-[210px] shrink-0 border-r border-sidebar-border bg-sidebar flex flex-col">
+    <aside className="w-[210px] shrink-0 h-full min-h-0 overflow-hidden border-r border-sidebar-border bg-sidebar flex flex-col">
 
       {/* ── Nav caption (logo lives in Header) ── */}
-      <div className="px-4 pt-3 pb-2 border-b border-sidebar-border/40">
+      <div className="shrink-0 px-4 pt-3 pb-2 border-b border-sidebar-border/40">
         <span
           className="text-[10px] uppercase tracking-[0.2em]"
           style={{
@@ -77,7 +77,7 @@ export default function Sidebar() {
       </div>
 
       {/* ── Stats Bar ── */}
-      <div className="p-3 border-b border-sidebar-border/40">
+      <div className="shrink-0 p-3 border-b border-sidebar-border/40">
         <div className="grid grid-cols-2 gap-2">
           {[
             { label: 'Signals',   value: activeSignals },
@@ -107,10 +107,10 @@ export default function Sidebar() {
         </div>
       </div>
 
-      <Separator className="bg-sidebar-border/40" />
+      <Separator className="shrink-0 bg-sidebar-border/40" />
 
       {/* ── Navigation ── */}
-      <ScrollArea className="flex-1 py-2">
+      <ScrollArea className="flex-1 min-h-0 py-2">
         <nav className="px-2 space-y-0.5">
           {navItems.map(item => {
             const isActive = activePanel === item.id;
@@ -176,10 +176,10 @@ export default function Sidebar() {
         </nav>
       </ScrollArea>
 
-      <Separator className="bg-sidebar-border/40" />
+      <Separator className="shrink-0 bg-sidebar-border/40" />
 
       {/* ── Footer Controls ── */}
-      <div className="p-3 space-y-3">
+      <div className="shrink-0 p-3 space-y-3">
         {/* Risk block */}
         <div className="rounded-md p-2.5 space-y-2" style={{ background: 'hsl(var(--gold) / 0.05)', border: '1px solid hsl(var(--gold) / 0.12)' }}>
           <div className="flex items-center justify-between">

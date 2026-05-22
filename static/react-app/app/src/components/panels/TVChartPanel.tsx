@@ -2004,8 +2004,10 @@ export default function TVChartPanel() {
     setPair(intentSymbol);
     const preferredCode = tfCodeForBackend(tvChartIntent.preferredTf);
     if (preferredCode) {
+      // autoReview: keep auto TF mode so server timeframe_route can apply after review.
+      // Otherwise lock to the caller's preferred TF until the user resets manually.
+      setTimeframeAutoMode(tvChartIntent.autoReview === true);
       setTimeframe(preferredCode);
-      setTimeframeAutoMode(false);
       lastAppliedRouteKeyRef.current = null;
     }
     setAiReview(null);

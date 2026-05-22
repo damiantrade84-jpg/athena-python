@@ -35,6 +35,8 @@ export default defineConfig({
   },
   build: {
     outDir: '../../',
+    // Preserve non-Vite files in static/ (conductor widgets, backups). Hashed bundles
+    // are cleaned by scripts/clean-frontend-assets.mjs before each production build.
     emptyOutDir: false,
   },
   resolve: {

@@ -277,6 +277,13 @@ def test_tv_chart_panel_applies_server_timeframe_route_once():
     assert "setTimeframe(recommendedCode)" in source
 
 
+def test_tv_chart_panel_applies_intent_timeframe_policy():
+    source = _read(TV_PANEL)
+
+    assert "setTimeframeAutoMode(tvChartIntent.autoReview === true)" in source
+    assert "autoReview: keep auto TF mode so server timeframe_route can apply after review" in source
+
+
 def test_tv_chart_panel_manual_tf_override_and_reset_are_present():
     source = _read(TV_PANEL)
 

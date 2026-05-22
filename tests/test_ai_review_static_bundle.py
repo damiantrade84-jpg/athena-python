@@ -21,6 +21,35 @@ def _active_js_assets() -> list[Path]:
     return assets
 
 
+def _active_bundle_refs() -> set[str]:
+    index_html = ROOT / "static" / "index.html"
+    html = index_html.read_text(encoding="utf-8")
+    js_refs = set(re.findall(r'src="/static/([^"]+\.js)"', html))
+    css_refs = set(re.findall(r'href="/static/([^"]+\.css)"', html))
+    refs = js_refs | css_refs
+    assert js_refs, "static/index.html does not reference a JS bundle"
+    assert css_refs, "static/index.html does not reference a CSS bundle"
+    missing = [ref for ref in refs if not (ROOT / "static" / ref).exists()]
+    assert not missing, f"static/index.html references missing asset(s): {missing}"
+    return refs
+
+
+def test_static_assets_contain_only_active_bundle_files():
+    active_refs = _active_bundle_refs()
+    assets_dir = ROOT / "static" / "assets"
+    on_disk = {
+        f"assets/{path.name}"
+        for path in assets_dir.iterdir()
+        if path.is_file() and re.match(r"^index-.*\.(js|css)$", path.name)
+    }
+    extra = sorted(on_disk - active_refs)
+    missing = sorted(active_refs - on_disk)
+    assert not extra and not missing, (
+        "static/assets must contain only the hashed bundles referenced by static/index.html; "
+        f"extra={extra}, missing={missing}"
+    )
+
+
 def test_active_bundle_contains_ai_review_summary_and_context_markers():
     text = "\n".join(path.read_text(encoding="utf-8") for path in _active_js_assets())
     assert "Review summary" in text
