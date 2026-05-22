@@ -11496,11 +11496,13 @@ def _unresolved_audit_rows_for_display(
     *,
     mt5_open_tickets: set[str] | None = None,
     bybit_open_ids: set[str] | None = None,
+    matched_audit_tickets: set[str] | None = None,
 ) -> list[dict]:
     """Return unresolved audit rows for UI traceability, separate from live broker positions."""
 
     mt5_open_tickets = mt5_open_tickets or set()
     bybit_open_ids = bybit_open_ids or set()
+    matched_audit_tickets = matched_audit_tickets or set()
 
     with sqlite3.connect(db_path, timeout=15.0) as con:
         con.row_factory = sqlite3.Row
@@ -11532,6 +11534,7 @@ def _unresolved_audit_rows_for_display(
         broker_live = (
             (is_mt5_ticket and ticket in mt5_open_tickets)
             or (not is_mt5_ticket and ticket in bybit_open_ids)
+            or (not is_mt5_ticket and ticket in matched_audit_tickets)
         )
         if is_mt5_ticket:
             exchange_hint = "mt5"
@@ -11641,10 +11644,14 @@ def api_open_trades_timed():
     }
 
     audit_rows = _load_recent_audit_rows(_AUDIT_DB)
+    matched_audit_tickets: set[str] = set()
 
     for p in all_positions:
         ticket = str(p.get("ticket", ""))
         audit = _match_audit_row_for_position(p, audit_rows) or {}
+        audit_ticket = str(audit.get("ticket") or "").strip()
+        if audit_ticket:
+            matched_audit_tickets.add(audit_ticket)
         audit_engine = str(audit.get("engine") or "").strip().lower()
         is_engine_d = audit_engine in ("scalp", "engine d", "scalp_vp")
 
@@ -11776,6 +11783,7 @@ def api_open_trades_timed():
             _AUDIT_DB,
             mt5_open_tickets=mt5_open_tickets,
             bybit_open_ids=bybit_open_ids,
+            matched_audit_tickets=matched_audit_tickets,
         )
     except Exception as e:
         log.warning("[OPEN-TRADES] unresolved audit row load failed: %s", e)

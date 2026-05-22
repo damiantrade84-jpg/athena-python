@@ -810,6 +810,107 @@ def test_open_trades_timed_exposes_unresolved_audit_rows(monkeypatch, tmp_path):
     assert rows["123"]["close_action_enabled"] is False
 
 
+def test_open_trades_timed_marks_bybit_uuid_audit_row_live_by_position_match(monkeypatch, tmp_path):
+    athena_module = _load_athena_module()
+    db_path = tmp_path / "audit.db"
+    with sqlite3.connect(db_path) as con:
+        con.execute(
+            """
+            CREATE TABLE audit_log (
+                id INTEGER PRIMARY KEY,
+                ts TEXT,
+                pair TEXT,
+                direction TEXT,
+                entry_price REAL,
+                sl REAL,
+                tp REAL,
+                volume REAL,
+                engine TEXT,
+                style TEXT,
+                ticket TEXT,
+                asset_class TEXT,
+                exit_price REAL
+            )
+            """
+        )
+        con.execute(
+            """
+            INSERT INTO audit_log (
+                id, ts, pair, direction, entry_price, sl, tp, volume, engine,
+                style, ticket, asset_class, exit_price
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                1,
+                "2026-05-22T12:38:30+00:00",
+                "TRX/USDT",
+                "LONG",
+                0.36369,
+                0.36079,
+                0.37044,
+                9157.0,
+                "engine_a",
+                "intraday",
+                "f7d90954-34a1-47b3-8d3c-4b94021bc4e4",
+                "crypto",
+                None,
+            ),
+        )
+
+    monkeypatch.setattr(athena_module, "_AUDIT_DB", str(db_path))
+    monkeypatch.setattr(mt5_executor, "mt5_get_positions", lambda: {"error": False, "positions": []})
+    import bybit_executor
+    monkeypatch.setattr(
+        bybit_executor,
+        "bybit_get_positions",
+        lambda: {
+            "error": False,
+            "positions": [
+                {
+                    "ticket": "0",
+                    "pair": "TRX/USDT",
+                    "symbol": "TRX/USDT:USDT",
+                    "direction": "LONG",
+                    "side": "long",
+                    "profit": 0.73,
+                    "entry": 0.36369,
+                    "entryPrice": 0.36369,
+                    "sl": 0.36079,
+                    "tp": 0.37044,
+                    "volume": 9157.0,
+                    "contracts": 9157.0,
+                }
+            ],
+        },
+    )
+    import timed_exit_monitor
+    audit_row = {
+        "ticket": "f7d90954-34a1-47b3-8d3c-4b94021bc4e4",
+        "pair": "TRX/USDT",
+        "direction": "LONG",
+        "entry_price": 0.36369,
+        "volume": 9157.0,
+        "style": "intraday",
+        "engine": "engine_a",
+        "ts": "2026-05-22T12:38:30+00:00",
+    }
+    monkeypatch.setattr(timed_exit_monitor, "_load_recent_audit_rows", lambda _db: [audit_row])
+    monkeypatch.setattr(timed_exit_monitor, "_match_audit_row_for_position", lambda p, rows: rows[0])
+
+    client = athena_module.app.test_client()
+    resp = client.get("/api/open-trades-timed")
+
+    assert resp.status_code == 200
+    payload = resp.get_json()
+    assert payload["count"] == 1
+    assert payload["audit_unresolved_count"] == 1
+    row = payload["audit_unresolved"][0]
+    assert row["pair"] == "TRX/USDT"
+    assert row["broker_live"] is True
+    assert row["status"] == "live_broker_position"
+    assert row["exchange_hint"] == "bybit/paper"
+
+
 def test_live_dashboard_engine_d_pass_can_be_paper_candidate():
     freshness = {"gateDecision": "ALLOW"}
     engine_c = {"decisionState": "NO_SETUP", "reason": "No A/B setup"}
