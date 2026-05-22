@@ -651,6 +651,65 @@ def test_summary_always_present_on_success(tmp_audit_db):
     assert data.get("engine_a_verdict_comparison") == data["engineAVerdictComparison"]
 
 
+def test_timeframe_route_attached_to_success_response(tmp_audit_db):
+    app = _make_app(tmp_audit_db)
+    client = app.test_client()
+    body = _base_request(timeframe="H4")
+    with patch(
+        "ai_review.providers.router.call_anthropic_chart_review",
+        return_value=_mock_provider_payload(
+            ai={
+                "verdict": "CAUTION",
+                "human_action": "wait",
+                "visual_confirmation": "direction ok",
+                "engine_a_alignment": "aligned with engine",
+                "entry_quality": "poor timing extended above VWAP",
+                "risks": ["late entry"],
+            }
+        ),
+    ):
+        resp = client.post("/api/ai/chart-review", json=body)
+    assert resp.status_code == 200
+    data = resp.get_json()
+    route = data["timeframeRoute"]
+    assert data["timeframe_route"] == route
+    assert data["engine_a_context"]["timeframe_route"] == route
+    assert route["contextTf"] == "H4"
+    assert route["entryTf"] == "H1"
+    assert route["executionTf"] == "M15"
+    assert route["autoSelectTf"] == "H1"
+    assert route["mode"] == "entry_wait"
+
+
+def test_timeframe_route_dedup_response_has_route(tmp_audit_db):
+    app = _make_app(tmp_audit_db)
+    client = app.test_client()
+    body = _base_request(timeframe="H4")
+    with patch(
+        "ai_review.providers.router.call_anthropic_chart_review",
+        return_value=_mock_provider_payload(
+            ai={
+                "verdict": "CAUTION",
+                "human_action": "wait",
+                "visual_confirmation": "direction ok",
+                "engine_a_alignment": "aligned with engine",
+                "entry_quality": "poor timing extended above VWAP",
+                "risks": ["late entry"],
+            }
+        ),
+    ) as mock_call:
+        first = client.post("/api/ai/chart-review", json=body)
+        second = client.post("/api/ai/chart-review", json=body)
+    assert first.status_code == 200
+    assert second.status_code == 200
+    data = second.get_json()
+    assert data["dedup_hit"] is True
+    assert data["timeframeRoute"]["autoSelectTf"] == "H1"
+    assert data["timeframe_route"] == data["timeframeRoute"]
+    assert data["engine_a_context"]["timeframe_route"] == data["timeframeRoute"]
+    assert mock_call.call_count == 1
+
+
 def test_context_diagnostics_attached_to_success_response(tmp_audit_db):
     app = _make_app(tmp_audit_db)
     client = app.test_client()

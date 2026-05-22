@@ -53,7 +53,7 @@ import {
   postChartReview,
 } from '@/lib/aiChartReview';
 import AIReviewCard from '@/components/athena/AIReviewCard';
-import type { AIChartReviewResponse, EngineASignal } from '@/types/athena';
+import type { AIChartReviewResponse, EngineASignal, TimeframeRoute } from '@/types/athena';
 
 const TIMEFRAMES = ['1', '5', '15', '30', '60', '240', 'D', 'W'];
 
@@ -67,6 +67,17 @@ const TF_BACKEND_MAP: Record<string, string> = {
   '240': 'H4',
   D: 'D1',
   W: 'W1',
+};
+
+const TF_UI_CODE_MAP: Record<string, string> = {
+  M1: '1',
+  M5: '5',
+  M15: '15',
+  M30: '30',
+  H1: '60',
+  H4: '240',
+  D1: 'D',
+  W1: 'W',
 };
 
 // Indicator colors — chosen to be distinct and high-contrast on the dark chart background.
@@ -589,6 +600,51 @@ function reviewTimeframeFor(signal: EngineASignal | null): string {
   if (rawTimeframe === 'H4' || rawTimeframe === '4H' || rawTimeframe === '240') return '240';
   const style = firstString(signal?.style, signal?.trade_style)?.toLowerCase();
   return style === 'scalp' || style === 'intraday' ? '60' : '240';
+}
+
+function normalizeBackendTf(tf: string | null | undefined): string | null {
+  if (!tf) return null;
+  const raw = tf.trim().toUpperCase().replace(/\s+/g, '');
+  if (!raw) return null;
+  if (raw === '240' || raw === '4H') return 'H4';
+  if (raw === '60' || raw === '1H') return 'H1';
+  if (raw === '15' || raw === '15M') return 'M15';
+  if (raw === '5' || raw === '5M') return 'M5';
+  if (raw === '1' || raw === '1M') return 'M1';
+  if (raw === 'D' || raw === '1D') return 'D1';
+  if (raw === 'W' || raw === '1W') return 'W1';
+  return raw;
+}
+
+function tfCodeForBackend(tf: string | null | undefined): string | null {
+  const normalized = normalizeBackendTf(tf);
+  if (!normalized) return null;
+  return TF_UI_CODE_MAP[normalized] || null;
+}
+
+function reviewTimeframeRoute(response: AIChartReviewResponse | null): TimeframeRoute | null {
+  if (!response) return null;
+  const route =
+    response.timeframeRoute ??
+    response.timeframe_route ??
+    response.engine_a_context?.timeframe_route;
+  if (!route || route.enabled === false) return route ?? null;
+  return route;
+}
+
+function timeframeRouteDisplay(route: TimeframeRoute | null): string | null {
+  if (!route?.contextTf || !route.entryTf || !route.executionTf) return null;
+  return `${route.contextTf} Context -> ${route.entryTf} Entry -> ${route.executionTf} Execution`;
+}
+
+function timeframeRouteKey(symbol: string | null, route: TimeframeRoute): string {
+  return [
+    symbol || '',
+    route.contextTf || '',
+    route.entryTf || '',
+    route.autoSelectTf || '',
+    route.mode || '',
+  ].join(':');
 }
 
 interface ChartStudySnapshot {
@@ -1728,6 +1784,10 @@ export default function TVChartPanel() {
   const [aiReview, setAiReview] = useState<AIChartReviewResponse | null>(null);
   const [aiReviewLoading, setAiReviewLoading] = useState<boolean>(false);
   const [aiReviewError, setAiReviewError] = useState<string | null>(null);
+  const [timeframeAutoMode, setTimeframeAutoMode] = useState(true);
+  const lastAppliedRouteKeyRef = useRef<string | null>(null);
+  const aiReviewSymbolKeyRef = useRef<string | null>(null);
+  const currentPairKeyRef = useRef<string | null>(symbolKey(pair));
 
   const candidateRows = useMemo(
     () => (Array.isArray(scanCacheA) ? scanCacheA.filter((row): row is EngineASignal => Boolean(row && typeof row === 'object')) : []),
@@ -1736,6 +1796,9 @@ export default function TVChartPanel() {
   const defaultCandidate = useMemo(() => pickEngineACandidate(candidateRows), [candidateRows]);
   const chartCandidate = useMemo(() => findEngineACandidateForSymbol(candidateRows, pair), [candidateRows, pair]);
   const backendTf = TF_BACKEND_MAP[timeframe];
+  const currentSymbolKey = symbolKey(pair);
+  const timeframeRoute = useMemo(() => reviewTimeframeRoute(aiReview), [aiReview]);
+  const timeframeRouteLabel = useMemo(() => timeframeRouteDisplay(timeframeRoute), [timeframeRoute]);
   const engineBDirection = normalizeDirection(chartCandidate?.direction) === 'SHORT' ? 'SHORT' : 'LONG';
   const isCryptoChart = chartPayload?.asset_group === 'crypto' || chartPayload?.pairType === 'crypto';
   const lastCandleConfirmed = candles?.length ? candles[candles.length - 1]?.confirmed : null;
@@ -1845,6 +1908,19 @@ export default function TVChartPanel() {
   // Derived preset label: "all" only when every indicator is on, otherwise "custom".
   const activePreset: PresetValue = showQuantDebug && (isCryptoChart ? ema21 && vwapEnabled && adx14 && volumeBars && volumeMa : ema20) && ema50 && ema200 && dema200 && rsi14 && atr14 ? 'all' : 'custom';
 
+  function applyRecommendedTimeframe() {
+    const recommendedCode = tfCodeForBackend(timeframeRoute?.autoSelectTf);
+    if (!recommendedCode) return;
+    setTimeframeAutoMode(true);
+    lastAppliedRouteKeyRef.current = null;
+    setTimeframe(recommendedCode);
+  }
+
+  function handleManualTimeframeSelect(tf: string) {
+    setTimeframeAutoMode(false);
+    setTimeframe(tf);
+  }
+
   const applyPreset = (value: PresetValue) => {
     if (value === 'all') {
       setEma20(true);
@@ -1867,6 +1943,8 @@ export default function TVChartPanel() {
     const candidateSymbol = displaySymbol(candidate);
     if (candidateSymbol) setPair(candidateSymbol);
     setShowQuantDebug(true);
+    setTimeframeAutoMode(true);
+    lastAppliedRouteKeyRef.current = null;
     setTimeframe(reviewTimeframeFor(candidate));
     setEma20(true);
     setEma21(true);
@@ -1880,6 +1958,32 @@ export default function TVChartPanel() {
     setVolumeBars(true);
     setVolumeMa(true);
   };
+
+  useEffect(() => {
+    currentPairKeyRef.current = currentSymbolKey;
+  }, [currentSymbolKey]);
+
+  useEffect(() => {
+    if (!aiReview) return;
+    const reviewSymbolKey = aiReviewSymbolKeyRef.current || symbolKey(aiReview.engine_a_context?.symbol);
+    if (currentSymbolKey && (!reviewSymbolKey || reviewSymbolKey !== currentSymbolKey)) {
+      setAiReview(null);
+      setAiReviewError(null);
+      lastAppliedRouteKeyRef.current = null;
+    }
+  }, [aiReview, currentSymbolKey]);
+
+  useEffect(() => {
+    if (!timeframeAutoMode || !timeframeRoute || timeframeRoute.enabled === false) return;
+    const routeSymbolKey = symbolKey(aiReview?.engine_a_context?.symbol);
+    if (!routeSymbolKey || !currentSymbolKey || routeSymbolKey !== currentSymbolKey) return;
+    const recommendedCode = tfCodeForBackend(timeframeRoute.autoSelectTf);
+    if (!recommendedCode) return;
+    const routeKey = timeframeRouteKey(currentSymbolKey, timeframeRoute);
+    if (routeKey === lastAppliedRouteKeyRef.current) return;
+    lastAppliedRouteKeyRef.current = routeKey;
+    if (timeframe !== recommendedCode) setTimeframe(recommendedCode);
+  }, [aiReview?.engine_a_context?.symbol, currentSymbolKey, timeframe, timeframeAutoMode, timeframeRoute]);
 
   // --- Fetch candles whenever pair/timeframe changes ---------------
   useEffect(() => {
@@ -2120,6 +2224,10 @@ export default function TVChartPanel() {
         screenshot_base64: dataUrl,
         screenshot_meta: meta,
       });
+      const responseSymbolKey = symbolKey(response.engine_a_context?.symbol) || symbolKey(symbol);
+      if (responseSymbolKey && currentPairKeyRef.current && responseSymbolKey !== currentPairKeyRef.current) return;
+      aiReviewSymbolKeyRef.current = responseSymbolKey;
+      lastAppliedRouteKeyRef.current = null;
       setAiReview(response);
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'AI review failed';
@@ -2219,12 +2327,13 @@ export default function TVChartPanel() {
     if (quantAtr14) {
       const atrPane = chart.addPane();
       atrPane.setStretchFactor(1);
+      const atrPaneIdx = atrPane.paneIndex();
       atrSeriesRef.current = chart.addSeries(LineSeries, {
         color: STUDY_PANEL_INDICATORS.atr14.color,
         lineWidth: 2,
         priceLineVisible: false,
         lastValueVisible: true,
-      }, atrPane);
+      }, atrPaneIdx);
     }
     if (isCryptoChart && quantVolumeBars) {
       const pane = chart.addPane();
@@ -2444,7 +2553,7 @@ export default function TVChartPanel() {
                   size="sm"
                   variant={timeframe === tf ? 'default' : 'outline'}
                   className="h-8 px-2 text-xs"
-                  onClick={() => setTimeframe(tf)}
+                  onClick={() => handleManualTimeframeSelect(tf)}
                 >
                   {tf}
                 </Button>
@@ -2521,6 +2630,21 @@ export default function TVChartPanel() {
         </div>
         <div className="flex flex-wrap items-center gap-2 pt-2">
           <CaptureLabel>{chartHeaderText}</CaptureLabel>
+          {timeframeRouteLabel && (
+            <Badge variant="outline" className="h-7 text-[10px]" title={timeframeRoute?.reason || undefined}>
+              {timeframeRouteLabel}
+            </Badge>
+          )}
+          {timeframeRoute?.autoSelectTf && (
+            <Badge variant="outline" className="h-7 text-[10px]" title={timeframeRoute?.reason || undefined}>
+              {timeframeAutoMode ? `Auto TF: ${timeframeRoute.autoSelectTf}` : 'Manual TF override'}
+            </Badge>
+          )}
+          {timeframeRoute && !timeframeAutoMode && (
+            <Button size="sm" variant="secondary" className="h-7 px-2 text-[10px]" onClick={applyRecommendedTimeframe}>
+              Reset to recommended
+            </Button>
+          )}
           {showEngineBOverlays && engineBOverlay?.overlay_source === 'engine_b' && (
             <CaptureLabel>
               {`Engine B ${engineBOverlay.overlay_version || 'overlay'} ${engineBOverlay.symbol || pair} ${engineBOverlay.timeframe || backendTf || timeframe}`}

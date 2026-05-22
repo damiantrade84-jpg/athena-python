@@ -127,8 +127,8 @@ def test_indicator_toggles_wire_in_house_series_per_pane():
         assert ref in source, f"missing series ref: {ref}"
 
     # Sub-panes are created only when their study is on (otherwise a pane sits empty).
-    assert "if (rsi14) {" in source
-    assert "if (atr14) {" in source
+    assert "if (quantRsi14) {" in source
+    assert "if (quantAtr14) {" in source
     assert "chart.addPane()" in source
 
     # Backend candle fetch is parameterized by symbol + timeframe.
@@ -212,6 +212,49 @@ def test_native_chart_opens_on_h4_by_default_for_tradingview_parity():
     source = _read(TV_PANEL)
 
     assert "const [timeframe, setTimeframe] = useState('240')" in source
+
+
+def test_tv_chart_panel_applies_server_timeframe_route_once():
+    source = _read(TV_PANEL)
+
+    assert "TF_UI_CODE_MAP" in source
+    assert "function tfCodeForBackend" in source
+    assert "timeframeRoute" in source
+    assert "timeframe_route" in source
+    assert "engine_a_context?.timeframe_route" in source
+    assert "lastAppliedRouteKeyRef" in source
+    assert "routeKey === lastAppliedRouteKeyRef.current" in source
+    assert "setTimeframe(recommendedCode)" in source
+
+
+def test_tv_chart_panel_manual_tf_override_and_reset_are_present():
+    source = _read(TV_PANEL)
+
+    assert "const [timeframeAutoMode, setTimeframeAutoMode] = useState(true)" in source
+    assert "function handleManualTimeframeSelect" in source
+    assert "setTimeframeAutoMode(false)" in source
+    assert "Reset to recommended" in source
+    assert "applyRecommendedTimeframe" in source
+    assert "Manual TF override" in source
+
+
+def test_tv_chart_panel_displays_timeframe_route_badge():
+    source = _read(TV_PANEL)
+
+    assert "timeframeRouteLabel" in source
+    assert "Context ->" in source
+    assert "Entry ->" in source
+    assert "Auto TF:" in source
+    assert "timeframeRoute?.reason" in source
+
+
+def test_tv_chart_panel_clears_stale_ai_review_on_pair_change():
+    source = _read(TV_PANEL)
+
+    assert "aiReviewSymbolKeyRef" in source
+    assert "setAiReview(null)" in source
+    assert "setAiReviewError(null)" in source
+    assert "routeSymbolKey !== currentSymbolKey" in source
 
 
 def test_engine_a_review_layout_enables_required_lean_indicators():

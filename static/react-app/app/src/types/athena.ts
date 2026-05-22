@@ -1131,6 +1131,20 @@ export interface AIChartReviewConcordance {
   should_flag_for_review: boolean;
 }
 
+export interface TimeframeRoute {
+  schemaVersion?: string;
+  enabled?: boolean;
+  engine?: string;
+  assetGroup?: string;
+  sourceGroup?: string;
+  contextTf?: string;
+  entryTf?: string;
+  executionTf?: string;
+  autoSelectTf?: string;
+  mode?: string;
+  reason?: string;
+}
+
 export interface AIChartReviewEngineAContext {
   symbol?: string;
   timeframe?: string;
@@ -1186,6 +1200,7 @@ export interface AIChartReviewEngineAContext {
     bucket_lag?: number | null;
     stale_warnings?: string[];
   };
+  timeframe_route?: TimeframeRoute;
   mismatch_warnings?: string[];
   [k: string]: unknown;
 }
@@ -1209,6 +1224,8 @@ export interface AIChartReviewResponse {
   aiReviewSummary?: AIChartReviewSummary;
   engineAVerdictComparison?: AIChartReviewEngineAVerdictComparison;
   engine_a_verdict_comparison?: AIChartReviewEngineAVerdictComparison;
+  timeframeRoute?: TimeframeRoute;
+  timeframe_route?: TimeframeRoute;
   contextCompleteness?: AIChartReviewContextCompleteness;
   missingContextDetailed?: AIChartReviewMissingContextDetailed;
   fundingOi?: AIChartReviewFundingOi;

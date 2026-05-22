@@ -41,6 +41,7 @@ from ai_review.provider_meta import (
 )
 from ai_review.providers.router import run_chart_review
 from ai_review.summary import build_ai_review_summary
+from ai_review.timeframe_routing import resolve_timeframe_route
 from ai_review.timestamp_contract import evaluate_timestamp_mismatch
 from ai_review.validation import decode_screenshot_bytes, validate_request
 
@@ -98,6 +99,33 @@ def _attach_review_summary(
     response.update(ctx_diag)
     response["derivativesContext"] = ctx_diag.get("fundingOi")
     response["derivatives_context"] = ctx_diag.get("fundingOi")
+    return response
+
+
+def _attach_timeframe_route(
+    response: dict[str, Any],
+    *,
+    engine_a_ctx: dict[str, Any],
+    ai_review: dict[str, Any],
+    routing_cfg: dict[str, Any] | None,
+) -> dict[str, Any]:
+    response_ctx = response.get("engine_a_context")
+    if not isinstance(response_ctx, dict):
+        response_ctx = engine_a_ctx
+        response["engine_a_context"] = response_ctx
+    comparison = response.get("engineAVerdictComparison") or response.get(
+        "engine_a_verdict_comparison"
+    )
+    route = resolve_timeframe_route(
+        asset_group=response_ctx.get("asset_group"),
+        context_tf=response_ctx.get("timeframe") or response_ctx.get("chart_timeframe"),
+        ai_review=ai_review,
+        verdict_comparison=comparison if isinstance(comparison, dict) else None,
+        cfg=routing_cfg,
+    )
+    response_ctx["timeframe_route"] = route
+    response["timeframeRoute"] = route
+    response["timeframe_route"] = route
     return response
 
 
@@ -243,6 +271,12 @@ def register_ai_chart_review_routes(app, runtime: SimpleNamespace) -> None:
                 mismatch_warnings=list(dedup.get("mismatch_warnings") or []),
                 diagnostic_ai_review=dedup_ai_raw,
             )
+            _attach_timeframe_route(
+                dedup,
+                engine_a_ctx=dedup_engine_ctx,
+                ai_review=dedup_ai,
+                routing_cfg=runtime.CONFIG.get("TIMEFRAME_ROUTING"),
+            )
             return jsonify(runtime.json_safe(dedup))
 
         prompt = build_chart_review_prompt(engine_a_ctx)
@@ -341,6 +375,12 @@ def register_ai_chart_review_routes(app, runtime: SimpleNamespace) -> None:
             provider_meta=provider_meta,
             mismatch_warnings=mismatch_warnings,
             diagnostic_ai_review=normalized_raw,
+        )
+        _attach_timeframe_route(
+            response,
+            engine_a_ctx=engine_a_ctx,
+            ai_review=normalized,
+            routing_cfg=runtime.CONFIG.get("TIMEFRAME_ROUTING"),
         )
 
         if strategy_layer is not None:

@@ -372,6 +372,39 @@ CONFIG: dict = {
             "AI_CHART_REVIEW_STRATEGY_LAYER_OHLCV_LIMIT", 80
         ),
     },
+    "TIMEFRAME_ROUTING": {
+        "ENABLED": True,
+        "DEFAULT": {
+            "D1": {"entry_tf": "H4", "execution_tf": "H1"},
+            "H4": {"entry_tf": "H1", "execution_tf": "M15"},
+            "H1": {"entry_tf": "M15", "execution_tf": "M15"},
+            "M15": {"entry_tf": "M15", "execution_tf": "M5"},
+            "M5": {"entry_tf": "M5", "execution_tf": "M5"},
+            "M1": {"entry_tf": "M1", "execution_tf": "M1"},
+        },
+        "BY_ASSET_GROUP": {
+            "forex": {
+                "H4": {"entry_tf": "H1", "execution_tf": "M15"},
+                "H1": {"entry_tf": "M15", "execution_tf": "M15"},
+            },
+            "crypto": {
+                "H4": {"entry_tf": "H1", "execution_tf": "M15"},
+                "H1": {"entry_tf": "M15", "execution_tf": "M15"},
+            },
+            "commodities": {
+                "H4": {"entry_tf": "H1", "execution_tf": "M15"},
+                "H1": {"entry_tf": "M15", "execution_tf": "M15"},
+            },
+            "indices": {
+                "H4": {"entry_tf": "H1", "execution_tf": "M15"},
+                "H1": {"entry_tf": "M15", "execution_tf": "M15"},
+            },
+            "stocks": {
+                "D1": {"entry_tf": "H4", "execution_tf": "H1"},
+                "H4": {"entry_tf": "H1", "execution_tf": "M15"},
+            },
+        },
+    },
     "AI_SCALP_CHART_REVIEW": {
         "ENABLED": _env_bool("AI_SCALP_CHART_REVIEW_ENABLED", False),
         "DEFAULT_PROVIDER": (
