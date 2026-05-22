@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from datetime import datetime, timezone
 from typing import Any, Callable
 
@@ -147,6 +148,17 @@ def _engine_a_passed(signal: dict[str, Any]) -> bool:
     return score >= threshold
 
 
+def _pair_lookup_key(value: Any) -> str:
+    if not isinstance(value, str):
+        return ""
+    raw = value.strip().upper()
+    if not raw:
+        return ""
+    without_provider = raw.split(":")[-1]
+    without_yahoo_fx_suffix = without_provider.replace("=X", "")
+    return re.sub(r"[^A-Z0-9]", "", without_yahoo_fx_suffix)
+
+
 def _default_resolve_pair(symbol: str) -> dict[str, Any] | None:
     from athena import ALL_PAIRS, CONFIG
 
@@ -159,6 +171,21 @@ def _default_resolve_pair(symbol: str) -> dict[str, Any] | None:
         ),
         None,
     )
+    if not pair_obj:
+        requested_key = _pair_lookup_key(symbol)
+        if requested_key:
+            pair_obj = next(
+                (
+                    p
+                    for p in ALL_PAIRS
+                    if requested_key
+                    in {
+                        _pair_lookup_key(p.get("symbol")),
+                        _pair_lookup_key(p.get("display")),
+                    }
+                ),
+                None,
+            )
     if pair_obj:
         return pair_obj
     return {

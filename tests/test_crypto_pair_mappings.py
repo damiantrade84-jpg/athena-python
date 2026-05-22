@@ -62,3 +62,39 @@ def test_crypto_scoring_and_correlation_sets_handle_pol_and_new_pairs():
     cluster = set(CORR_CLUSTERS["crypto_major"])
     for display in _EXPECTED_CRYPTOS:
         assert display in cluster
+
+
+def test_signal_pair_resolver_accepts_slashless_forex_alias():
+    pair = _ATHENA_MOD._resolve_pair_from_signal({"symbol": "EURCHF"})
+
+    assert pair["display"] == "EUR/CHF"
+    assert pair["symbol"] == "EURCHF=X"
+    assert pair["type"] == "forex"
+    assert pair["source"] == "mt5"
+
+
+def test_signal_pair_resolver_aliases_never_change_pair_source_or_type():
+    checked = 0
+    for expected in _ATHENA_MOD.ALL_PAIRS:
+        aliases = {
+            str(expected.get("symbol") or ""),
+            str(expected.get("display") or ""),
+        }
+        display = expected.get("display")
+        if display:
+            slashless = str(display).replace("/", "")
+            aliases.update({slashless, f"BINANCE:{slashless}", f"FX:{slashless}"})
+        symbol = expected.get("symbol")
+        if symbol:
+            aliases.add(str(symbol).replace("=X", ""))
+
+        for alias in {alias for alias in aliases if alias}:
+            checked += 1
+            pair = _ATHENA_MOD._resolve_pair_from_signal({"symbol": alias})
+            assert pair is not None, alias
+            assert pair["display"] == expected["display"], alias
+            assert pair["symbol"] == expected["symbol"], alias
+            assert pair["type"] == expected["type"], alias
+            assert pair["source"] == expected["source"], alias
+
+    assert checked > len(_ATHENA_MOD.ALL_PAIRS)

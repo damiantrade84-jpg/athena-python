@@ -5725,6 +5725,17 @@ def _current_btc_bias() -> str:
     return btc_bias
 
 
+def _pair_lookup_key(value) -> str:
+    if not isinstance(value, str):
+        return ""
+    raw = value.strip().upper()
+    if not raw:
+        return ""
+    without_provider = raw.split(":")[-1]
+    without_yahoo_fx_suffix = without_provider.replace("=X", "")
+    return re.sub(r"[^A-Z0-9]", "", without_yahoo_fx_suffix)
+
+
 def _resolve_pair_from_signal(sig: dict) -> dict | None:
     symbol = sig.get("symbol") or sig.get("pair") or sig.get("display")
     if not symbol:
@@ -5737,6 +5748,21 @@ def _resolve_pair_from_signal(sig: dict) -> dict | None:
         ),
         None,
     )
+    if not pair_obj:
+        requested_key = _pair_lookup_key(symbol)
+        if requested_key:
+            pair_obj = next(
+                (
+                    p
+                    for p in ALL_PAIRS
+                    if requested_key
+                    in {
+                        _pair_lookup_key(p.get("symbol")),
+                        _pair_lookup_key(p.get("display")),
+                    }
+                ),
+                None,
+            )
     if pair_obj:
         return pair_obj
     return {

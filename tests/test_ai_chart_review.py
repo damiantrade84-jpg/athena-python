@@ -6,8 +6,9 @@ import base64
 import json
 import os
 import sqlite3
+import sys
 import tempfile
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -330,6 +331,24 @@ def test_anthropic_uses_max_tokens_from_config():
 def test_prompt_includes_engine_a_score():
     prompt = build_chart_review_prompt(_engine_a_ctx())
     assert "2.4" in prompt
+
+
+def test_default_resolve_pair_accepts_slashless_forex_alias(monkeypatch):
+    fake_athena = ModuleType("athena")
+    fake_athena.ALL_PAIRS = [
+        {"symbol": "EURCHF=X", "display": "EUR/CHF", "type": "forex", "source": "mt5"}
+    ]
+    fake_athena.CONFIG = {"EXCHANGE_SOURCE": "binance"}
+    monkeypatch.setitem(sys.modules, "athena", fake_athena)
+
+    from ai_review.engine_a_context import _default_resolve_pair
+
+    pair = _default_resolve_pair("EURCHF")
+
+    assert pair["display"] == "EUR/CHF"
+    assert pair["symbol"] == "EURCHF=X"
+    assert pair["type"] == "forex"
+    assert pair["source"] == "mt5"
 
 
 def test_prompt_threshold_not_hardcoded():
