@@ -15,9 +15,9 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { useStore } from '@/hooks/useStore';
 import { apiClient } from '@/lib/apiClient';
 import { cn } from '@/lib/utils';
+import { runnerBadgeClass, runnerBadgeLabel } from '@/lib/suggestedTradeRunnerDisplay';
 import type {
   ScalpWorkbenchIntent,
-  SuggestedTradeRunnerStatus,
   SuggestedTradesListResponse,
   SuggestedTradeWatch,
   TvChartIntent,
@@ -92,23 +92,6 @@ function sourceLabel(source: string | undefined): string {
   if (key.includes('ai_chart')) return 'AI Chart Review';
   if (key.includes('tv')) return 'TV Chart';
   return source || 'Unknown';
-}
-
-function runnerBadgeLabel(runner: SuggestedTradeRunnerStatus | undefined): string {
-  if (!runner?.enabled) return 'INACTIVE';
-  if (runner.error) return 'ERROR';
-  if (runner.mode === 'background_thread' && runner.active) return 'ACTIVE';
-  if (runner.mode === 'frontend_poll') return 'POLLING ONLY';
-  if (runner.mode === 'manual_only') return 'INACTIVE';
-  return runner.active ? 'ACTIVE' : 'POLLING ONLY';
-}
-
-function runnerBadgeClass(runner: SuggestedTradeRunnerStatus | undefined): string {
-  const label = runnerBadgeLabel(runner);
-  if (label === 'ACTIVE') return 'border-long/40 text-long';
-  if (label === 'ERROR') return 'border-short/40 text-short';
-  if (label === 'POLLING ONLY') return 'border-warning/40 text-warning';
-  return 'border-muted-foreground/30 text-muted-foreground';
 }
 
 function formatTs(value: string | null | undefined): string {

@@ -103,6 +103,22 @@ def test_scalp_workbench_execute_scalp_button():
     assert "evaluateScalpExecuteBlock" in source
     assert "Confirm Scalp Execution" in source
     assert "refresh/revalidate before order" in source
+    assert "{executeBlockReason &&" in source
+    assert "executeBlockReason || 'Execute Scalp'" not in source
+
+
+def test_scalp_workbench_view_suggested_trades_when_watches_exist():
+    source = _read(SCALP_WORKBENCH)
+
+    assert "showViewSuggestedTrades" in source
+    assert "symbolWatches.length > 0" in source
+
+
+def test_scalp_workbench_runner_status_badge():
+    source = _read(SCALP_WORKBENCH)
+
+    assert "useSuggestedTradeRunnerStatus" in source
+    assert "Runner:" in source
 
 
 def test_scalp_workbench_execute_disabled_unless_executable():

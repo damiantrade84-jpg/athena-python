@@ -66,8 +66,9 @@ import {
 import {
   buildQuickExecutePayload,
   evaluateTvChartExecuteBlock,
-  shouldHideTvChartExecuteNow,
 } from '@/lib/manualExecuteHelpers';
+import { runnerBadgeClass, runnerBadgeLabel } from '@/lib/suggestedTradeRunnerDisplay';
+import { useSuggestedTradeRunnerStatus } from '@/hooks/useSuggestedTradeRunnerStatus';
 import AIReviewCard from '@/components/athena/AIReviewCard';
 import type { AIChartReviewResponse, EngineASignal, SuggestedTradePlan, SuggestedTradeWatch, TimeframeRoute } from '@/types/athena';
 
@@ -2125,13 +2126,14 @@ export default function TVChartPanel() {
       signal: chartCandidate,
       chartSymbolKey: currentSymbolKey,
       aiReview,
+      suggestedTradePlan: suggestedPlan,
       isTestMode,
       isPaper,
     }),
-    [chartCandidate, currentSymbolKey, aiReview, isTestMode, isPaper],
+    [chartCandidate, currentSymbolKey, aiReview, suggestedPlan, isTestMode, isPaper],
   );
-  const hideExecuteNow = shouldHideTvChartExecuteNow({ aiReview, canFlagWatch });
-  const showExecuteNow = !hideExecuteNow && Boolean(chartCandidate);
+  const showViewSuggestedTrades = Boolean(flagStatus) || symbolWatches.length > 0;
+  const { runner: suggestedTradeRunner } = useSuggestedTradeRunnerStatus();
 
   async function onConfirmExecute() {
     if (!chartCandidate || executeBlockReason) return;
@@ -2958,6 +2960,11 @@ export default function TVChartPanel() {
                     : watchLabel(watch)}
             </Badge>
           ))}
+          {suggestedTradeRunner && (
+            <Badge variant="outline" className={`h-7 text-[10px] ${runnerBadgeClass(suggestedTradeRunner)}`}>
+              Runner: {runnerBadgeLabel(suggestedTradeRunner)}
+            </Badge>
+          )}
           {showEngineBOverlays && engineBOverlay?.overlay_source === 'engine_b' && (
             <CaptureLabel>
               {`Engine B ${engineBOverlay.overlay_version || 'overlay'} ${engineBOverlay.symbol || pair} ${engineBOverlay.timeframe || backendTf || timeframe}`}
@@ -3064,44 +3071,47 @@ export default function TVChartPanel() {
               </div>
             )}
             {aiReview && <AIReviewCard response={aiReview} />}
-            {(showExecuteNow || canFlagWatch) && (
-              <div className="flex flex-wrap items-center gap-2 pt-2">
-                {showExecuteNow && (
-                  <Button
-                    size="sm"
-                    variant="default"
-                    className="h-8 gap-1 text-xs"
-                    disabled={Boolean(executeBlockReason) || executing}
-                    onClick={() => setConfirmExecuteOpen(true)}
-                  >
-                    <Play className="h-3.5 w-3.5" />
-                    {executeBlockReason || 'Execute Now'}
-                  </Button>
-                )}
-                {canFlagWatch && (
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    className="h-8 text-xs"
-                    disabled={flagLoading}
-                    onClick={() => void flagWatchSetup()}
-                  >
-                    Flag / Watch Setup
-                  </Button>
-                )}
-                {flagStatus && (
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    className="h-8 text-xs"
-                    onClick={() => setActivePanel('suggestedTrades')}
-                  >
-                    View Suggested Trades
-                  </Button>
-                )}
-                {flagStatus && <span className="text-[10px] text-muted-foreground">{flagStatus}</span>}
-              </div>
+          </div>
+        )}
+        {chartCandidate && (
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            <div className="flex flex-col gap-0.5">
+              <Button
+                size="sm"
+                variant="default"
+                className="h-8 gap-1 text-xs"
+                disabled={Boolean(executeBlockReason) || executing}
+                onClick={() => setConfirmExecuteOpen(true)}
+              >
+                <Play className="h-3.5 w-3.5" />
+                Execute Now
+              </Button>
+              {executeBlockReason && (
+                <span className="text-[10px] text-muted-foreground">{executeBlockReason}</span>
+              )}
+            </div>
+            {canFlagWatch && (
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-8 text-xs"
+                disabled={flagLoading}
+                onClick={() => void flagWatchSetup()}
+              >
+                Flag / Watch Setup
+              </Button>
             )}
+            {showViewSuggestedTrades && (
+              <Button
+                size="sm"
+                variant="ghost"
+                className="h-8 text-xs"
+                onClick={() => setActivePanel('suggestedTrades')}
+              >
+                View Suggested Trades
+              </Button>
+            )}
+            {flagStatus && <span className="text-[10px] text-muted-foreground">{flagStatus}</span>}
           </div>
         )}
       </CardContent>

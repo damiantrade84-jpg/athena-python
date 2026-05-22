@@ -1,9 +1,11 @@
 import { useCallback, type ElementType } from 'react';
 import { useStore } from '@/hooks/useStore';
 import { useApiPoll, useApiPost } from '@/hooks/useApiData';
+import { useSuggestedTradeRunnerStatus } from '@/hooks/useSuggestedTradeRunnerStatus';
 import type { PanelId } from '@/types';
 import type { PerformanceMetrics } from '@/types';
 import { cn, fmtNum, toNum } from '@/lib/utils';
+import { runnerBadgeClass, runnerBadgeLabel } from '@/lib/suggestedTradeRunnerDisplay';
 import { Separator } from '@/components/ui/separator';
 import { Badge } from '@/components/ui/badge';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -41,6 +43,7 @@ export default function Sidebar() {
   const { data: autoTrade, refresh: refreshAutoTrade } = useApiPoll<{ enabled: boolean }>('/api/auto-trade', 15000);
   const { data: perfMetrics } = useApiPoll<PerformanceMetrics>('/api/performance', 60000);
   const { post: postAutoTrade, loading: togglingAutoTrade } = useApiPost<{ enabled: boolean; error?: string }>();
+  const { runner: suggestedTradeRunner } = useSuggestedTradeRunnerStatus();
 
   const activeSignals  = signals.filter(s => s.status === 'active').length;
   const openPositions  = positions.filter(p => p.status === 'open').length;
@@ -170,6 +173,15 @@ export default function Sidebar() {
                   >
                     {openPositions}
                   </span>
+                )}
+                {item.id === 'suggestedTrades' && suggestedTradeRunner && (
+                  <Badge
+                    variant="outline"
+                    className={cn('text-[8px] h-4 px-1', runnerBadgeClass(suggestedTradeRunner))}
+                    title={`Suggested trade runner: ${runnerBadgeLabel(suggestedTradeRunner)}`}
+                  >
+                    {runnerBadgeLabel(suggestedTradeRunner)}
+                  </Badge>
                 )}
               </button>
             );

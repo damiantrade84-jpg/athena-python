@@ -64,3 +64,5 @@ def test_sidebar_includes_suggested_trades_nav():
     source = _read(SIDEBAR)
     assert "Suggested Trades" in source
     assert "'suggestedTrades'" in source
+    assert "useSuggestedTradeRunnerStatus" in source
+    assert "runnerBadgeLabel" in source

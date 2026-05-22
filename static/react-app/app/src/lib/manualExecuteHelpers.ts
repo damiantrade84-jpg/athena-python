@@ -2,6 +2,7 @@ import type {
   AIChartReviewResponse,
   EngineASignal,
   ScalpAIChartReviewResponse,
+  SuggestedTradePlan,
 } from '@/types/athena';
 
 export type QuickExecuteStyle = 'scalp' | 'intraday' | 'swing' | 'auto';
@@ -138,10 +139,11 @@ export function evaluateTvChartExecuteBlock(args: {
   signal: EngineASignal | null;
   chartSymbolKey: string | null;
   aiReview: AIChartReviewResponse | null;
+  suggestedTradePlan?: SuggestedTradePlan | null;
   isTestMode: boolean;
   isPaper?: boolean;
 }): string | null {
-  const { signal, chartSymbolKey, aiReview, isTestMode, isPaper } = args;
+  const { signal, chartSymbolKey, aiReview, suggestedTradePlan, isTestMode, isPaper } = args;
   if (isTestMode) return 'Test mode';
   if (!signal) return 'No selected signal';
   const signalKey = normalizeSymbolKey(signal.symbol || signal.pair || signal.display);
@@ -160,6 +162,9 @@ export function evaluateTvChartExecuteBlock(args: {
     return 'Review not current';
   }
   if (aiReviewBlocksManualExecute(aiReview)) return 'AI says wait';
+  const planAction = String(suggestedTradePlan?.action || '').toUpperCase();
+  if (planAction === 'WAIT_FOR_LEVEL') return 'Waiting for level';
+  if (planAction === 'WAIT_FOR_ZONE') return 'Waiting for zone';
   return null;
 }
 

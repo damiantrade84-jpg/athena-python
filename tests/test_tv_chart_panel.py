@@ -272,8 +272,40 @@ def test_tv_chart_panel_execute_now_button():
     assert "buildQuickExecutePayload" in source
     assert "/api/quick-execute" in source
     assert "evaluateTvChartExecuteBlock" in source
-    assert "shouldHideTvChartExecuteNow" in source
     assert "Confirm Execute Now" in source
+    assert "chartCandidate &&" in source
+    assert "{executeBlockReason &&" in source
+    assert "executeBlockReason || 'Execute Now'" not in source
+
+
+def test_tv_chart_panel_execute_shown_when_can_flag_watch():
+    source = _read(TV_PANEL)
+
+    assert "canFlagWatch" in source
+    assert "Execute Now" in source
+    assert "showExecuteNow" not in source
+
+
+def test_tv_chart_panel_view_suggested_trades_when_watches_exist():
+    source = _read(TV_PANEL)
+
+    assert "showViewSuggestedTrades" in source
+    assert "symbolWatches.length > 0" in source
+
+
+def test_tv_chart_panel_does_not_execute_from_watch_action():
+    source = _read(TV_PANEL)
+    flag_idx = source.index("Flag / Watch Setup")
+    flag_section = source[flag_idx:flag_idx + 1200]
+    assert "onConfirmExecute" not in flag_section
+    assert "postJson('/api/quick-execute'" not in flag_section
+
+
+def test_tv_chart_panel_runner_status_badge():
+    source = _read(TV_PANEL)
+
+    assert "useSuggestedTradeRunnerStatus" in source
+    assert "Runner:" in source
 
 
 def test_tv_chart_panel_execute_disabled_when_ai_says_wait():
@@ -281,8 +313,9 @@ def test_tv_chart_panel_execute_disabled_when_ai_says_wait():
     helper = _read(ROOT / "static/react-app/app/src/lib/manualExecuteHelpers.ts")
 
     assert "evaluateTvChartExecuteBlock" in source
-    assert "shouldHideTvChartExecuteNow" in source
     assert "AI says wait" in helper
+    assert "Waiting for level" in helper
+    assert "Waiting for zone" in helper
     assert "aiReviewBlocksManualExecute" in helper
 
 

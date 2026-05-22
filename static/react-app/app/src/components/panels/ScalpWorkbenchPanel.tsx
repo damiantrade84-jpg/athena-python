@@ -39,6 +39,8 @@ import {
   evaluateScalpExecuteBlock,
   normalizeSymbolKey,
 } from '@/lib/manualExecuteHelpers';
+import { runnerBadgeClass, runnerBadgeLabel } from '@/lib/suggestedTradeRunnerDisplay';
+import { useSuggestedTradeRunnerStatus } from '@/hooks/useSuggestedTradeRunnerStatus';
 import ScalpAIReviewCard from '@/components/athena/ScalpAIReviewCard';
 import type { ScalpAIChartReviewResponse, SuggestedTradePlan, SuggestedTradeWatch } from '@/types/athena';
 import { cn, fmtNum, toNum } from '@/lib/utils';
@@ -1078,6 +1080,8 @@ export default function ScalpWorkbenchPanel() {
     }),
     [activeSignal, activeUi.sourceContract.strictOrderflowSourcePass, scalpAiReviewResponse, isTestMode],
   );
+  const showViewSuggestedTrades = Boolean(flagStatus) || symbolWatches.length > 0;
+  const { runner: suggestedTradeRunner } = useSuggestedTradeRunnerStatus();
 
   const onConfirmScalpExecute = useCallback(async () => {
     if (!activeSignal || !chartSymbol || executeBlockReason) return;
@@ -1493,15 +1497,20 @@ export default function ScalpWorkbenchPanel() {
             <Camera className={cn('mr-2 h-4 w-4', aiReviewLoading && 'animate-pulse')} />
             {aiReviewLoading ? 'Reviewing…' : 'Capture for AI review'}
           </Button>
-          <Button
-            variant="default"
-            size="sm"
-            disabled={Boolean(executeBlockReason) || executingScalp || !activeSignal}
-            onClick={() => setConfirmExecOpen(true)}
-          >
-            <Play className={cn('mr-2 h-4 w-4', executingScalp && 'animate-pulse')} />
-            {executeBlockReason || 'Execute Scalp'}
-          </Button>
+          <div className="flex flex-col gap-0.5">
+            <Button
+              variant="default"
+              size="sm"
+              disabled={Boolean(executeBlockReason) || executingScalp || !activeSignal}
+              onClick={() => setConfirmExecOpen(true)}
+            >
+              <Play className={cn('mr-2 h-4 w-4', executingScalp && 'animate-pulse')} />
+              Execute Scalp
+            </Button>
+            {executeBlockReason && (
+              <span className="text-[10px] text-muted-foreground">{executeBlockReason}</span>
+            )}
+          </div>
           <Button variant="outline" size="sm" onClick={copyPayload} disabled={!activeSignal}>
             <Copy className="mr-2 h-4 w-4" />
             Copy JSON
@@ -1561,6 +1570,11 @@ export default function ScalpWorkbenchPanel() {
                           : watchLabel(watch)}
                   </Badge>
                 ))}
+                {suggestedTradeRunner && (
+                  <Badge variant="outline" className={`text-[10px] ${runnerBadgeClass(suggestedTradeRunner)}`}>
+                    Runner: {runnerBadgeLabel(suggestedTradeRunner)}
+                  </Badge>
+                )}
               </div>
               <div className="flex flex-wrap items-center gap-2">
                 <Select value={activeSymbolKey || EMPTY_SYMBOL_SELECT_VALUE} onValueChange={selectSymbol}>
@@ -1794,18 +1808,20 @@ export default function ScalpWorkbenchPanel() {
             </div>
           )}
           {scalpAiReviewResponse && <ScalpAIReviewCard response={scalpAiReviewResponse} />}
-          {canFlagWatch && (
+          {(canFlagWatch || showViewSuggestedTrades) && (
             <div className="flex flex-wrap items-center gap-2 pt-2">
-              <Button
-                size="sm"
-                variant="outline"
-                className="h-8 text-xs"
-                disabled={flagLoading}
-                onClick={() => void flagWatchSetup()}
-              >
-                Flag / Watch Setup
-              </Button>
-              {flagStatus && (
+              {canFlagWatch && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-8 text-xs"
+                  disabled={flagLoading}
+                  onClick={() => void flagWatchSetup()}
+                >
+                  Flag / Watch Setup
+                </Button>
+              )}
+              {showViewSuggestedTrades && (
                 <Button
                   size="sm"
                   variant="ghost"
