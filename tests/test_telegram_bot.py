@@ -47,6 +47,9 @@ def test_position_detail_card_marks_winning_and_timed_state():
             "mins_open": 75,
             "mins_to_be": 0,
             "mins_to_close": 15,
+            "be_trigger_min": 60,
+            "close_trigger_min": 90,
+            "timed_close_style_enabled": True,
             "be_reached": True,
             "close_reached": False,
             "ticket": "1",
@@ -58,6 +61,43 @@ def test_position_detail_card_marks_winning_and_timed_state():
     assert "P&L: `+12.35`" in card
     assert "Open: `1.2h`" in card
     assert "Timed exit: BE `hit` | close `in 15m`" in card
+
+
+def test_position_detail_card_shows_trail_mode():
+    card = telegram_bot._fmt_position_detail_card(
+        {
+            "pair": "EUR/USD",
+            "direction": "LONG",
+            "profit": 2.0,
+            "entry": 1.1,
+            "timed_tp_mode": "trailing_atr",
+            "trail_activation_r": 0.5,
+            "style": "intraday",
+        },
+        "mt5",
+    )
+    assert "chandelier trail" in card
+    assert "`0.5R`" in card
+    assert "Timed exit:" not in card
+
+
+def test_position_detail_card_scalp_hides_legacy_timers():
+    card = telegram_bot._fmt_position_detail_card(
+        {
+            "pair": "BTC/USDT",
+            "direction": "LONG",
+            "profit": 1.0,
+            "is_engine_d": True,
+            "live_milestone_management": True,
+            "tp_partial": 101.5,
+            "mins_to_be": 0,
+            "mins_to_close": 0,
+        },
+        "bybit",
+    )
+    assert "TP partial (1R)" in card
+    assert "milestone" in card
+    assert "Timed exit:" not in card
 
 
 def test_filter_positions_winning_and_losing():
@@ -80,15 +120,20 @@ def test_fetch_open_positions_prefers_timed_endpoint():
                     "positions": [
                         {"pair": "EUR/USD", "exchange": "mt5", "profit": 3.0},
                         {"pair": "ETH/USDT", "exchange": "bybit", "profit": -1.0},
-                    ]
+                    ],
+                    "audit_unresolved": [{"pair": "GBP/USD", "ticket": "99", "broker_live": False}],
+                    "audit_unresolved_count": 1,
                 }
             ),
         }
     )
 
-    positions, meta = telegram_bot._fetch_open_positions_sync(req)
+    positions, meta, audit_unresolved = telegram_bot._fetch_open_positions_sync(req)
 
     assert meta["source"] == "open-trades-timed"
+    assert meta["audit_unresolved_count"] == 1
+    assert len(audit_unresolved) == 1
+    assert audit_unresolved[0]["ticket"] == "99"
     assert [(p["pair"], ex) for p, ex in positions] == [
         ("EUR/USD", "mt5"),
         ("ETH/USDT", "bybit"),
@@ -105,9 +150,10 @@ def test_fetch_open_positions_falls_back_to_brokers():
         }
     )
 
-    positions, meta = telegram_bot._fetch_open_positions_sync(req)
+    positions, meta, audit_unresolved = telegram_bot._fetch_open_positions_sync(req)
 
     assert meta["source"] == "broker-fallback"
+    assert audit_unresolved == []
     assert [(p["pair"], ex) for p, ex in positions] == [
         ("XAU/USD", "mt5"),
         ("BTC/USDT", "bybit"),
@@ -138,12 +184,47 @@ def test_engine_b_card_formats_naked_signal():
     assert "TF `H4/H1`" in card
 
 
-def test_telegram_command_specs_include_engine_b_menu_entry():
+def test_scalp_card_includes_strict_fabio_and_gate():
+    card = telegram_bot._fmt_scalp_card(
+        {
+            "pair": "BTC/USDT",
+            "direction": "LONG",
+            "ai_grade": "B",
+            "ai_score": 72,
+            "price": 65000,
+            "sl": 64500,
+            "tp1": 65500,
+            "rr1": 1.0,
+            "zone_type": "lvn",
+            "trigger_type": "absorption",
+            "gate_result": "PASS",
+            "executable": True,
+            "strict_fabio_pass": False,
+            "strict_fabio_reason": "missing_aggression",
+            "structural_tp": 66000,
+            "sessions_active": ["NY"],
+        }
+    )
+    assert "Strict Fabio: `FAIL`" in card
+    assert "Gate: `PASS`" in card
+    assert "Struct TP: `66000`" in card
+
+
+def test_telegram_command_specs_include_ops_commands():
     commands = dict(telegram_bot._telegram_command_specs())
 
     assert commands["engineb"] == "Engine B naked-structure scan"
     assert "scan" in commands
     assert "enginec" in commands
+    assert "guardian" in commands
+    assert "feeds" in commands
+    assert "lastscan" in commands
+
+
+def test_audit_orphan_reconcileable():
+    assert telegram_bot._audit_orphan_reconcileable({"broker_live": False}) is True
+    assert telegram_bot._audit_orphan_reconcileable({"broker_live": True}) is False
+    assert telegram_bot._audit_orphan_reconcileable({"close_action_enabled": False}) is False
 
 
 def test_telegram_error_handler_logs_transient_polling_error_without_traceback(caplog):

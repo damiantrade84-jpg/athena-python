@@ -1,22 +1,13 @@
 """
 telegram_bot.py — Interactive Telegram command centre for Sentinel Pro
 
-Commands:
-  /scan [class]    — Engine A full scan (crypto/forex/commodity/stock/index)
-  /engineb [class] — Engine B naked-structure scan
-  /signal <pair>   — Analyse a specific pair
-  /positions       — All open positions (MT5 + Bybit) with P&L
-  /close <pair>    — Close a position (with confirmation)
-  /status          — System health: connections, auto-trader, kill switch
-  /forensics       — Signal truth, drift, and execution hygiene summary
-  /balance         — MT5 + Bybit balances
-  /pnl             — Performance stats from completed trades
-  /auto on|off     — Toggle auto-trader
-  /kill            — Emergency kill switch
-  /resume          — Resume (lift kill switch)
-  /decay           — Score decay for open positions
-  /bt <pair>       — Quick backtest result
-  /help            — This message
+Commands (see /help for full list):
+  /scan, /engineb, /enginec, /scalp — engine scans
+  /signal, /execute — pair analysis and execution
+  /positions, /trade, /close — open trades
+  /status, /guardian, /feeds, /forensics, /lastscan — ops and health
+  /balance, /pnl, /auto, /decay, /bt — account and tools
+  /kill, /resume — emergency controls
 """
 
 import logging
@@ -24,8 +15,14 @@ import threading
 import asyncio
 from datetime import datetime, timezone, timedelta
 from typing import Optional
+from urllib.parse import quote
 
-from telegram_notify import get_configured_chat_ids, get_runtime_config, send_signal_alert
+from telegram_notify import (
+    get_configured_chat_ids,
+    get_delivery_state,
+    get_runtime_config,
+    send_signal_alert,
+)
 
 log = logging.getLogger("sentinel")
 
@@ -55,6 +52,9 @@ def _telegram_command_specs() -> list[tuple[str, str]]:
         ("decay", "Score decay for open trades"),
         ("bt", "Quick backtest"),
         ("execute", "Scan pair and execute trade"),
+        ("guardian", "Guardian and shield status"),
+        ("feeds", "Live candle feed diagnostics"),
+        ("lastscan", "Recent scan preview"),
         ("kill", "Emergency stop"),
         ("resume", "Lift kill switch"),
         ("help", "Show command help"),
@@ -204,6 +204,77 @@ def _summarize_positions(all_pos: list[tuple[dict, str]]) -> dict:
     }
 
 
+def _audit_orphan_reconcileable(row: dict) -> bool:
+    if not isinstance(row, dict):
+        return False
+    if row.get("broker_live"):
+        return False
+    return row.get("close_action_enabled") is not False
+
+
+def _fmt_audit_orphan_line(row: dict) -> str:
+    pair = str(row.get("pair") or row.get("symbol") or "?")
+    ticket = str(row.get("ticket") or row.get("id") or "?")
+    direction = str(row.get("direction") or "?")
+    style = str(row.get("style") or row.get("audit_engine") or "—")
+    state = "broker live" if row.get("broker_live") else "audit-only"
+    return f"• *{pair}* {direction} ticket `{ticket}` | `{style}` | {state}"
+
+
+def _fmt_exit_management_lines(pos: dict) -> list[str]:
+    """Timed-exit / trail / Engine D management lines for position cards."""
+    lines: list[str] = []
+    is_engine_d = bool(pos.get("is_engine_d"))
+    timed_tp_mode = str(pos.get("timed_tp_mode") or "").lower()
+    timed_close_enabled = pos.get("timed_close_style_enabled")
+
+    if is_engine_d or pos.get("live_milestone_management"):
+        tp_partial = pos.get("tp_partial")
+        if tp_partial not in (None, ""):
+            lines.append(f"TP partial (1R): `{tp_partial}`")
+        if pos.get("live_milestone_management"):
+            lines.append("Mgmt: `milestone` (Engine D)")
+
+    if timed_tp_mode == "trailing_atr" and not is_engine_d:
+        act_r = pos.get("trail_activation_r")
+        if act_r is not None:
+            lines.append(f"Exit: `chandelier trail` @ `{act_r}R` activation")
+        return lines
+
+    be_trigger = pos.get("be_trigger_min")
+    close_trigger = pos.get("close_trigger_min")
+    if (
+        be_trigger is not None
+        and close_trigger is not None
+        and timed_close_enabled is not False
+    ):
+        be = _fmt_minutes(pos.get("mins_to_be", 0))
+        close = _fmt_minutes(pos.get("mins_to_close", 0))
+        be_state = "hit" if pos.get("be_reached") else f"in {be}"
+        close_state = "hit" if pos.get("close_reached") else f"in {close}"
+        lines.append(f"Timed exit: BE `{be_state}` | close `{close_state}`")
+    elif (
+        timed_tp_mode == "fixed"
+        and not is_engine_d
+        and timed_close_enabled is False
+    ):
+        lines.append("Timed close: `disabled` for style")
+
+    return lines
+
+
+def _fmt_feed_row(row: dict) -> str:
+    pair = str(row.get("display") or row.get("pair") or row.get("symbol") or "?")
+    tf = str(row.get("timeframe") or row.get("tf") or "?")
+    stale = str(row.get("stale_status") or row.get("stalenessSeverity") or "?")
+    lag = row.get("lag_seconds")
+    lag_note = f" lag `{lag}s`" if lag is not None else ""
+    consistency = row.get("consistency") if isinstance(row.get("consistency"), dict) else {}
+    c_status = consistency.get("status")
+    c_note = f" | consistency `{c_status}`" if c_status else ""
+    return f"• *{pair}* `{tf}` — `{stale}`{lag_note}{c_note}"
+
+
 def _fmt_signal_card(sig: dict) -> str:
     """Format a signal dict as a clean Telegram card."""
     pair = sig.get("pair", sig.get("display", "?"))
@@ -237,6 +308,22 @@ def _fmt_signal_card(sig: dict) -> str:
             (direction == "SHORT" and btc_bias == "bearish")
         ) else "✗"
         lines.append(f"BTC:    `{btc_bias.capitalize()}` {b_emoji}")
+    style = sig.get("style")
+    if style:
+        lines.append(f"Style:  `{style}`")
+    score_group = sig.get("score_group") or sig.get("scoreGroup")
+    if score_group:
+        lines.append(f"Group:  `{score_group}`")
+    freshness = sig.get("dataFreshness")
+    if isinstance(freshness, dict):
+        f_status = freshness.get("status") or freshness.get("allowed")
+        f_reason = freshness.get("reason") or freshness.get("blockReason")
+        if f_status is not None:
+            if isinstance(f_status, bool):
+                f_label = "OK" if f_status else "BLOCKED"
+            else:
+                f_label = str(f_status)
+            lines.append(f"Fresh:  `{f_label}`" + (f" — {f_reason}" if f_reason else ""))
     return "\n".join(lines)
 
 
@@ -279,6 +366,10 @@ def _fmt_position_detail_card(pos: dict, exchange: str = "") -> str:
     volume = _position_volume(pos)
     risk_amount = pos.get("risk_amount")
     style = str(pos.get("style") or "").upper()
+    if not style and pos.get("is_engine_d"):
+        style = "SCALP"
+    elif not style and pos.get("audit_engine"):
+        style = str(pos.get("audit_engine")).upper()
     ticket = _position_ticket(pos)
 
     lines = [
@@ -296,12 +387,7 @@ def _fmt_position_detail_card(pos: dict, exchange: str = "") -> str:
         lines.append(f"Risk: `{risk_amount}`")
     if pos.get("mins_open") is not None:
         lines.append(f"Open: `{_fmt_minutes(pos.get('mins_open'))}`")
-    if pos.get("mins_to_be") is not None or pos.get("mins_to_close") is not None:
-        be = _fmt_minutes(pos.get("mins_to_be", 0))
-        close = _fmt_minutes(pos.get("mins_to_close", 0))
-        be_state = "hit" if pos.get("be_reached") else f"in {be}"
-        close_state = "hit" if pos.get("close_reached") else f"in {close}"
-        lines.append(f"Timed exit: BE `{be_state}` | close `{close_state}`")
+    lines.extend(_fmt_exit_management_lines(pos))
     if ticket:
         lines.append(f"Ticket: `{ticket}`")
     return "\n".join(lines)
@@ -329,6 +415,9 @@ def _fmt_engine_c_card(sig: dict) -> str:
         lines.append(f"B: `{b_raw.get('direction') or '-'} {b_raw.get('score')}/{b_raw.get('max_possible')}`")
     if sig.get("sl") or sig.get("tp"):
         lines.append(f"SL: `{sig.get('sl')}` | TP: `{sig.get('tp')}`")
+    skip_reason = sig.get("skip_reason") or sig.get("reason") or sig.get("conflict_reason")
+    if skip_reason and str(sig.get("verdict") or "").lower() in ("conflict", "skip", "skipped"):
+        lines.append(f"Note: `{str(skip_reason)[:120]}`")
     return "\n".join(lines)
 
 
@@ -361,21 +450,45 @@ def _fmt_scalp_card(sig: dict) -> str:
     direction = sig.get("direction") or "?"
     grade = sig.get("ai_grade") or "?"
     score = sig.get("ai_score")
-    price = sig.get("price")
+    price = sig.get("price") or sig.get("entry")
     sl = sig.get("sl")
     tp1 = sig.get("tp1")
-    rr = sig.get("rr1")
+    rr = sig.get("rr1") or sig.get("rr")
     zone = sig.get("zone_type") or "?"
     trigger = sig.get("trigger_type") or "?"
-    return "\n".join([
+    gate = sig.get("gate_result") or sig.get("gateResult")
+    executable = sig.get("executable")
+    strict_pass = sig.get("strict_fabio_pass")
+    strict_reason = sig.get("strict_fabio_reason")
+    structural_tp = sig.get("structural_tp")
+    sessions = sig.get("sessions_active") or []
+    session = sig.get("session")
+    fidelity = sig.get("data_fidelity")
+
+    lines = [
         f"*{pair}* - {direction} - Scalp",
         f"Grade: `{grade}` | Score: `{score}` | RR: `{rr}`",
         f"Entry: `{price}` | SL: `{sl}` | TP1: `{tp1}`",
         f"Zone: `{zone}` | Trigger: `{trigger}`",
-    ])
+    ]
+    if gate is not None or executable is not None:
+        exec_label = "YES" if executable else "NO"
+        lines.append(f"Gate: `{gate or '?'}` | Exec: `{exec_label}`")
+    if strict_pass is not None:
+        sf = "PASS" if strict_pass else "FAIL"
+        reason_note = f" — `{str(strict_reason)[:80]}`" if strict_reason and not strict_pass else ""
+        lines.append(f"Strict Fabio: `{sf}`{reason_note}")
+    if structural_tp:
+        lines.append(f"Struct TP: `{structural_tp}`")
+    sess_note = ", ".join(str(s) for s in sessions[:3]) if sessions else session
+    if sess_note:
+        lines.append(f"Session: `{sess_note}`")
+    if fidelity:
+        lines.append(f"Fidelity: `{str(fidelity)[:80]}`")
+    return "\n".join(lines)
 
 
-def _fetch_open_positions_sync(req) -> tuple[list[tuple[dict, str]], dict]:
+def _fetch_open_positions_sync(req) -> tuple[list[tuple[dict, str]], dict, list]:
     """Fetch enriched open trades, falling back to broker status endpoints if needed."""
     meta = {"source": "open-trades-timed", "error": ""}
     timed = _safe_json(req.get(f"{_BASE}/api/open-trades-timed", timeout=_TIMEOUT_FAST))
@@ -384,10 +497,15 @@ def _fetch_open_positions_sync(req) -> tuple[list[tuple[dict, str]], dict]:
         for pos in timed.get("positions", []):
             exchange = _position_exchange(pos) or "mt5"
             out.append((pos, exchange))
-        return out, meta
+        audit_unresolved = list(timed.get("audit_unresolved") or [])
+        meta["audit_unresolved_count"] = int(
+            timed.get("audit_unresolved_count") or len(audit_unresolved)
+        )
+        return out, meta, audit_unresolved
 
     meta["source"] = "broker-fallback"
     meta["error"] = timed.get("error", "")
+    meta["audit_unresolved_count"] = 0
     mt5_resp = _safe_json(req.get(f"{_BASE}/api/mt5-positions", timeout=_TIMEOUT_FAST))
     bybit_resp = _safe_json(req.get(f"{_BASE}/api/bybit-status", timeout=_TIMEOUT_FAST))
     out = []
@@ -399,7 +517,7 @@ def _fetch_open_positions_sync(req) -> tuple[list[tuple[dict, str]], dict]:
         out.append((pos, "bybit"))
     if not out and (mt5_resp.get("error") or bybit_resp.get("error")):
         meta["error"] = mt5_resp.get("error") or bybit_resp.get("error") or meta["error"]
-    return out, meta
+    return out, meta, []
 
 
 def _is_transient_telegram_error(error: object) -> bool:
@@ -557,6 +675,9 @@ def _build_and_run(token: str, chat_ids: list[str]):
             "`/trade ETH/USDT`     One open trade card\n"
             "`/close ETH/USDT`    Close a position\n"
             "`/status`            System health\n"
+            "`/guardian`          Guardian + shield detail\n"
+            "`/feeds [SYMBOL]`    Candle freshness diagnostics\n"
+            "`/lastscan`          Recent scan preview\n"
             "`/forensics`         Trust/degradation summary\n"
             "`/balance`           MT5 + Bybit balances\n"
             "`/pnl`               Performance stats\n"
@@ -596,13 +717,36 @@ def _build_and_run(token: str, chat_ids: list[str]):
             f_overall = str(forensic.get("overall", "unknown")).upper()
             f_icon = "🟢" if f_overall == "HEALTHY" else ("🔴" if f_overall == "CRITICAL" else "🟡")
 
+            guardian = await _run_in_thread(lambda: _safe_json(req.get(f"{_BASE}/api/guardian/status", timeout=_TIMEOUT_FAST)))
+            g_overall = str(guardian.get("overall", "unknown")).upper()
+            g_icon = "🟢" if g_overall == "HEALTHY" else ("🔴" if g_overall == "CRITICAL" else "🟡")
+            shield = guardian.get("shield") if isinstance(guardian.get("shield"), dict) else {}
+            cb_open = shield.get("circuit_breaker_open")
+            cb_note = ""
+            if cb_open is True:
+                cb_note = "\n⚡ Shield circuit breaker: `OPEN`"
+            elif cb_open is False:
+                cb_note = "\n⚡ Shield circuit breaker: `closed`"
+            div = guardian.get("divergence") if isinstance(guardian.get("divergence"), dict) else {}
+            div_crit = div.get("critical_count")
+            div_note = f"\n📉 Divergence critical: `{div_crit}`" if div_crit not in (None, 0) else ""
+
+            delivery = get_delivery_state()
+            tg_note = (
+                f"\n📨 Telegram queue: `{delivery.get('queue_size', 0)}` "
+                f"(sent `{delivery.get('sent', 0)}` / fail `{delivery.get('failed', 0)}`)"
+            )
+            if delivery.get("last_error"):
+                tg_note += f"\n📨 Last TG error: `{str(delivery.get('last_error'))[:80]}`"
+
             text = (
                 f"📊 *Sentinel Pro Status*\n\n"
                 f"{mt5_icon} *MT5*: `{mt5_bal:,.2f}` | {mt5_pos} pos\n"
                 f"{bybit_icon} *Bybit*: `{bybit_bal:,.2f} USDT` | {bybit_pos} pos\n\n"
                 f"🤖 Auto-trader: *{auto_icon}*\n"
                 f"📅 Trades today: `{trades_today}/{max_daily}`\n"
-                f"{f_icon} Forensics: *{f_overall}*{ks_note}"
+                f"{f_icon} Forensics: *{f_overall}*\n"
+                f"{g_icon} Guardian: *{g_overall}*{cb_note}{div_note}{ks_note}{tg_note}"
             )
             await update.message.reply_text(text, parse_mode="Markdown")
         except Exception as e:
@@ -630,6 +774,130 @@ def _build_and_run(token: str, chat_ids: list[str]):
             await update.message.reply_text(msg, parse_mode="Markdown")
         except Exception:
             await update.message.reply_text("⚠️ Athena offline — check server")
+
+    async def cmd_guardian(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if not _guard(update):
+            return
+        try:
+            resp = await _run_in_thread(
+                lambda: _safe_json(req.get(f"{_BASE}/api/guardian/status", timeout=_TIMEOUT_FAST))
+            )
+            overall = str(resp.get("overall", "unknown")).upper()
+            icon = "🟢" if overall == "HEALTHY" else ("🔴" if overall == "CRITICAL" else "🟡")
+            guardian = resp.get("guardian") if isinstance(resp.get("guardian"), dict) else {}
+            shield = resp.get("shield") if isinstance(resp.get("shield"), dict) else {}
+            divergence = resp.get("divergence") if isinstance(resp.get("divergence"), dict) else {}
+            forensics = resp.get("forensics") if isinstance(resp.get("forensics"), dict) else {}
+
+            g_pass = guardian.get("passed")
+            g_status = "PASS" if g_pass is True else ("FAIL" if g_pass is False else "?")
+            failures = guardian.get("failures") or []
+            fail_note = f"\nGuardian checks: `{g_status}`"
+            if failures:
+                fail_note += f"\nFailures: `{'; '.join(str(f) for f in failures[:3])}`"
+
+            cb = shield.get("circuit_breaker_open")
+            shield_note = f"\nShield CB: `{'OPEN' if cb else 'closed' if cb is False else '?'}`"
+            div_note = (
+                f"\nDivergence: `{divergence.get('divergence_count', 0)}` "
+                f"(critical `{divergence.get('critical_count', 0)}`)"
+            )
+            f_note = ""
+            brief = forensics.get("telegram_brief") if isinstance(forensics, dict) else None
+            if isinstance(brief, list) and brief:
+                f_note = "\n" + "\n".join(str(line) for line in brief[:3])
+
+            await update.message.reply_text(
+                f"{icon} *Guardian — {overall}*{fail_note}{shield_note}{div_note}{f_note}",
+                parse_mode="Markdown",
+            )
+        except Exception as e:
+            await update.message.reply_text(
+                f"Guardian unavailable: `{str(e)[:120]}`",
+                parse_mode="Markdown",
+            )
+
+    async def cmd_feeds(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if not _guard(update):
+            return
+        symbols: list[str] = []
+        if context.args:
+            symbols = [_resolve_pair(" ".join(context.args)) or ""]
+            symbols = [s for s in symbols if s]
+        else:
+            try:
+                all_pos, _meta, _audit = await _run_in_thread(
+                    lambda: _fetch_open_positions_sync(req)
+                )
+                symbols = list(dict.fromkeys(_position_pair(p) for p, _ in all_pos))[:5]
+            except Exception:
+                symbols = []
+
+        params = {}
+        if symbols:
+            params["symbols"] = ",".join(symbols)
+        try:
+            url = f"{_BASE}/api/live-feed-diagnostics"
+            if params:
+                url += "?" + "&".join(
+                    f"{k}={quote(str(v), safe=',')}" for k, v in params.items()
+                )
+            resp = await _run_in_thread(
+                lambda: _safe_json(req.get(url, timeout=_TIMEOUT_SCAN))
+            )
+            if resp.get("error"):
+                await update.message.reply_text(f"Feeds error: {resp['error']}")
+                return
+            rows = resp.get("rows") or []
+            if not rows:
+                await update.message.reply_text("No feed diagnostics returned")
+                return
+            worst = sorted(
+                rows,
+                key=lambda r: str(r.get("stale_status") or r.get("stalenessSeverity") or "OK"),
+                reverse=True,
+            )[:8]
+            label = symbols[0] if len(symbols) == 1 else f"{len(symbols) or 'watchlist'} symbol(s)"
+            lines = [f"*Feed diagnostics — {label}*", ""]
+            lines.extend(_fmt_feed_row(row) for row in worst)
+            await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+        except Exception as e:
+            await update.message.reply_text(
+                f"Feeds unavailable: `{str(e)[:120]}`",
+                parse_mode="Markdown",
+            )
+
+    async def cmd_lastscan(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if not _guard(update):
+            return
+        try:
+            resp = await _run_in_thread(
+                lambda: _safe_json(req.get(f"{_BASE}/api/last-scan?limit=6", timeout=_TIMEOUT_FAST))
+            )
+            if not resp.get("available"):
+                reason = resp.get("reason") or "no scan in memory"
+                await update.message.reply_text(f"No recent scan: `{reason}`", parse_mode="Markdown")
+                return
+            signals = resp.get("signals") or []
+            scanned_at = resp.get("scannedAt") or resp.get("scanned_at") or "?"
+            lines = [
+                f"*Last scan* — `{scanned_at}`",
+                f"Signals preview: `{len(signals)}`",
+                "",
+            ]
+            for sig in signals[:6]:
+                if not isinstance(sig, dict):
+                    continue
+                pair = sig.get("pair") or sig.get("display") or "?"
+                direction = sig.get("direction") or "?"
+                score = sig.get("confluenceScore", sig.get("score", "?"))
+                lines.append(f"• *{pair}* {direction} score `{score}`")
+            await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+        except Exception as e:
+            await update.message.reply_text(
+                f"Last scan unavailable: `{str(e)[:120]}`",
+                parse_mode="Markdown",
+            )
 
     # ── /balance ──────────────────────────────────────────────────────────────
 
@@ -667,9 +935,11 @@ def _build_and_run(token: str, chat_ids: list[str]):
             )
             return
         try:
-            all_pos, meta = await _run_in_thread(lambda: _fetch_open_positions_sync(req))
+            all_pos, meta, audit_unresolved = await _run_in_thread(
+                lambda: _fetch_open_positions_sync(req)
+            )
             filtered = _filter_positions(all_pos, mode)
-            if not filtered:
+            if not filtered and not audit_unresolved:
                 suffix = "" if mode == "all" else f" matching `{mode}`"
                 await update.message.reply_text(f"No open positions{suffix}", parse_mode="Markdown")
                 return
@@ -679,16 +949,54 @@ def _build_and_run(token: str, chat_ids: list[str]):
             source_note = ""
             if meta.get("source") == "broker-fallback":
                 source_note = "\nTimed-trade enrichment unavailable; showing broker fallback."
+            orphan_count = int(meta.get("audit_unresolved_count") or len(audit_unresolved))
+            orphan_note = ""
+            if orphan_count:
+                orphan_note = f"\nAudit orphans: `{orphan_count}` (no broker match)"
             await update.message.reply_text(
                 "*Open Trades*\n"
                 f"Showing: `{filtered_summary['count']}` / `{summary['count']}`\n"
                 f"Winning: `{summary['winning']}` | Losing: `{summary['losing']}` | Flat: `{summary['flat']}`\n"
-                f"Total P&L: `{_fmt_money(summary['total'])}`{source_note}",
+                f"Total P&L: `{_fmt_money(summary['total'])}`{source_note}{orphan_note}",
                 parse_mode="Markdown",
             )
 
             for pos, exchange in filtered:
                 await _send_position_card(update.effective_chat.id, pos, exchange, context)
+
+            if audit_unresolved:
+                reconcileable = [r for r in audit_unresolved if _audit_orphan_reconcileable(r)]
+                lines = ["*Audit rows without exit price*"]
+                for row in audit_unresolved[:5]:
+                    lines.append(_fmt_audit_orphan_line(row))
+                if len(audit_unresolved) > 5:
+                    lines.append(f"_…and {len(audit_unresolved) - 5} more_")
+                keyboard = None
+                if reconcileable:
+                    buttons = []
+                    if len(reconcileable) > 1:
+                        buttons.append([
+                            InlineKeyboardButton(
+                                "Reconcile all audit-only",
+                                callback_data="audit_reconcile_bulk",
+                            )
+                        ])
+                    first = reconcileable[0]
+                    ticket = str(first.get("ticket") or first.get("id") or "")
+                    if ticket:
+                        buttons.append([
+                            InlineKeyboardButton(
+                                f"Reconcile {first.get('pair', ticket)}",
+                                callback_data=f"audit_reconcile:{ticket}",
+                            )
+                        ])
+                    keyboard = InlineKeyboardMarkup(buttons)
+                await context.bot.send_message(
+                    chat_id=update.effective_chat.id,
+                    text="\n".join(lines),
+                    parse_mode="Markdown",
+                    reply_markup=keyboard,
+                )
         except Exception as e:
             await update.message.reply_text(
                 f"Athena open-trade view unavailable: `{str(e)[:120]}`",
@@ -703,7 +1011,9 @@ def _build_and_run(token: str, chat_ids: list[str]):
             return
         pair = _resolve_pair(" ".join(context.args))
         try:
-            all_pos, _meta = await _run_in_thread(lambda: _fetch_open_positions_sync(req))
+            all_pos, _meta, _audit = await _run_in_thread(
+                lambda: _fetch_open_positions_sync(req)
+            )
             matches = [(p, ex) for p, ex in all_pos if _position_matches_pair(p, pair)]
             if not matches:
                 await update.message.reply_text(f"No open trade found for *{pair}*", parse_mode="Markdown")
@@ -887,9 +1197,16 @@ def _build_and_run(token: str, chat_ids: list[str]):
             await msg.edit_text(
                 "*Scalp Scan*\n"
                 f"Signals: `{len(signals)}` | Skipped: `{len(skipped)}` | Scanned: `{scanned}`\n"
+                f"Pass: `{resp.get('pass_count', '?')}` | Skip count: `{resp.get('skip_count', len(skipped))}`\n"
                 f"Session: `{resp.get('session', '?')}`",
                 parse_mode="Markdown",
             )
+            diag_summary = resp.get("diagnostic_summary")
+            if diag_summary:
+                await update.message.reply_text(
+                    f"Diagnostic: `{str(diag_summary)[:350]}`",
+                    parse_mode="Markdown",
+                )
             if not signals and skipped and requested != "all":
                 reason = skipped[0].get("reason", "?") if isinstance(skipped[0], dict) else str(skipped[0])
                 await update.message.reply_text(f"No scalp setup for *{label}*: `{reason}`", parse_mode="Markdown")
@@ -1379,7 +1696,9 @@ def _build_and_run(token: str, chat_ids: list[str]):
                 await query.message.reply_text("Position data expired - run /positions again")
                 return
             try:
-                all_pos, _meta = await _run_in_thread(lambda: _fetch_open_positions_sync(req))
+                all_pos, _meta, _audit = await _run_in_thread(
+                    lambda: _fetch_open_positions_sync(req)
+                )
                 match = next(
                     (
                         (p, ex)
@@ -1418,6 +1737,63 @@ def _build_and_run(token: str, chat_ids: list[str]):
                 await _send_signal_card(query.message.chat.id, sig, context)
             except Exception:
                 await query.message.reply_text("Athena offline - check server")
+            return
+
+        if action == "audit_reconcile_bulk":
+            keyboard = InlineKeyboardMarkup([[
+                InlineKeyboardButton("Confirm reconcile all", callback_data="audit_reconcile_confirm:bulk"),
+                InlineKeyboardButton("Cancel", callback_data="audit_reconcile_cancel:bulk"),
+            ]])
+            await query.message.reply_text(
+                "Close *all* audit-only rows as scratch (exit=entry, pnl=0)?\n"
+                "No broker positions will be touched.",
+                parse_mode="Markdown",
+                reply_markup=keyboard,
+            )
+            return
+
+        if action == "audit_reconcile":
+            ticket = key
+            keyboard = InlineKeyboardMarkup([[
+                InlineKeyboardButton("Confirm reconcile", callback_data=f"audit_reconcile_confirm:{ticket}"),
+                InlineKeyboardButton("Cancel", callback_data=f"audit_reconcile_cancel:{ticket}"),
+            ]])
+            await query.message.reply_text(
+                f"Close audit row ticket `{ticket}` as scratch?",
+                parse_mode="Markdown",
+                reply_markup=keyboard,
+            )
+            return
+
+        if action == "audit_reconcile_confirm":
+            payload = (
+                {"reconcile_all_audit_only": True}
+                if key == "bulk"
+                else {"ticket": key}
+            )
+            try:
+                resp = await _run_in_thread(lambda: _safe_json(req.post(
+                    f"{_BASE}/api/audit/reconcile-orphan",
+                    json=payload,
+                    timeout=_TIMEOUT_EXEC,
+                )))
+                if resp.get("success"):
+                    closed = resp.get("closed", 1)
+                    await query.message.reply_text(
+                        f"Reconciled `{closed}` audit row(s) (scratch)",
+                        parse_mode="Markdown",
+                    )
+                else:
+                    await query.message.reply_text(
+                        f"Reconcile failed: {resp.get('error', '?')}",
+                        parse_mode="Markdown",
+                    )
+            except Exception:
+                await query.message.reply_text("Athena offline - check server")
+            return
+
+        if action == "audit_reconcile_cancel":
+            await query.message.reply_text("Audit reconcile cancelled")
             return
 
         if action == "close_request":
@@ -1495,6 +1871,9 @@ def _build_and_run(token: str, chat_ids: list[str]):
     app.add_handler(CommandHandler("close", cmd_close))
     app.add_handler(CommandHandler("status", cmd_status))
     app.add_handler(CommandHandler("forensics", cmd_forensics))
+    app.add_handler(CommandHandler("guardian", cmd_guardian))
+    app.add_handler(CommandHandler("feeds", cmd_feeds))
+    app.add_handler(CommandHandler("lastscan", cmd_lastscan))
     app.add_handler(CommandHandler("balance", cmd_balance))
     app.add_handler(CommandHandler("bal", cmd_balance))
     app.add_handler(CommandHandler("pnl", cmd_pnl))

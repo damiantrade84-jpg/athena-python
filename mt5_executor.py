@@ -1828,6 +1828,9 @@ def mt5_execute(signal: dict, approval: "RiskApproval") -> dict:  # noqa: F821
             entry_price=result.price,
             stop_loss=sl,
             take_profit=tp,
+            style=str(signal.get("style") or ""),
+            engine=str(signal.get("engine") or ""),
+            exchange="mt5",
         )
     except Exception as _tn_e:
         log.debug(f"[TELEGRAM] Trade open notification failed: {_tn_e}")

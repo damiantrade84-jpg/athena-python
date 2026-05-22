@@ -2023,6 +2023,10 @@ TELEGRAM:
 
   fallback_plaintext: true
 
+  notify_exit_reason: true
+
+  notify_trail_only: false
+
 
 
 # ── External API Keys ────────────────────────────────────────────────

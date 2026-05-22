@@ -43,6 +43,16 @@ _DEFAULT_CONFIG: Dict[str, Any] = {
     "max_message_chars": 3900,
     "parse_mode": "Markdown",
     "fallback_plaintext": True,
+    "notify_exit_reason": True,
+    "notify_trail_only": False,
+}
+
+_EXIT_REASON_LABELS: Dict[str, str] = {
+    "TRAIL_CLOSE": "Chandelier trail",
+    "TRAIL_GIVEBACK": "Trail giveback",
+    "TRAIL_PROFIT_ROUNDTRIP": "Trail profit roundtrip",
+    "TIMED_CLOSE": "Timed close",
+    "LOCK_SL_HIT": "Profit lock SL",
 }
 _delivery_queue: Optional[queue.Queue] = None
 _delivery_thread: Optional[threading.Thread] = None
@@ -121,6 +131,8 @@ def _apply_env_overrides(config: Dict[str, Any]) -> None:
         "TELEGRAM_MAX_MESSAGE_CHARS": "max_message_chars",
         "TELEGRAM_PARSE_MODE": "parse_mode",
         "TELEGRAM_FALLBACK_PLAINTEXT": "fallback_plaintext",
+        "TELEGRAM_NOTIFY_EXIT_REASON": "notify_exit_reason",
+        "TELEGRAM_NOTIFY_TRAIL_ONLY": "notify_trail_only",
     }
     for env_name, key in env_map.items():
         value = os.environ.get(env_name)
@@ -149,6 +161,12 @@ def _normalize_config(config: Dict[str, Any]) -> Dict[str, Any]:
     )
     config["fallback_plaintext"] = _coerce_bool(
         config.get("fallback_plaintext"), _DEFAULT_CONFIG["fallback_plaintext"]
+    )
+    config["notify_exit_reason"] = _coerce_bool(
+        config.get("notify_exit_reason"), _DEFAULT_CONFIG["notify_exit_reason"]
+    )
+    config["notify_trail_only"] = _coerce_bool(
+        config.get("notify_trail_only"), _DEFAULT_CONFIG["notify_trail_only"]
     )
     if config.get("parse_mode") in (None, ""):
         config["parse_mode"] = None
@@ -523,7 +541,15 @@ def notify_signal_with_ai(
 
 
 def notify_trade_opened(
-    pair: str, direction: str, entry_price: float, stop_loss: float, take_profit: float
+    pair: str,
+    direction: str,
+    entry_price: float,
+    stop_loss: float,
+    take_profit: float,
+    *,
+    style: Optional[str] = None,
+    engine: Optional[str] = None,
+    exchange: Optional[str] = None,
 ) -> None:
     """Notify when a trade is opened"""
     if not _is_enabled():
@@ -538,6 +564,15 @@ def notify_trade_opened(
         f"Stop Loss: `{stop_loss:.5f}`\n"
         f"Take Profit: `{take_profit:.5f}`"
     )
+    meta_bits = []
+    if style:
+        meta_bits.append(f"Style: `{style}`")
+    if engine:
+        meta_bits.append(f"Engine: `{engine}`")
+    if exchange:
+        meta_bits.append(f"Exch: `{exchange.upper()}`")
+    if meta_bits:
+        message += "\n" + " | ".join(meta_bits)
 
     _send_message_async(message)
 
@@ -553,10 +588,22 @@ def notify_trade_opened(
 
 
 def notify_trade_closed(
-    pair: str, pnl_r: float, is_win: bool, duration_minutes: float
+    pair: str,
+    pnl_r: float,
+    is_win: bool,
+    duration_minutes: float,
+    *,
+    exit_reason: Optional[str] = None,
+    style: Optional[str] = None,
+    exchange: Optional[str] = None,
 ) -> None:
     """Notify when a trade is closed"""
     if not _is_enabled():
+        return
+
+    config = _load_config()
+    reason_key = str(exit_reason or "").strip().upper()
+    if config.get("notify_trail_only") and reason_key and not reason_key.startswith("TRAIL"):
         return
 
     emoji = "✅" if is_win else "❌"
@@ -567,6 +614,16 @@ def notify_trade_closed(
         f"P&L: `{pnl_r:+.2f}R` | Result: `{result}`\n"
         f"Duration: `{duration_minutes:.0f} min`"
     )
+    if reason_key and config.get("notify_exit_reason", True):
+        label = _EXIT_REASON_LABELS.get(reason_key, reason_key.replace("_", " ").title())
+        message += f"\nExit: `{label}`"
+    meta_bits = []
+    if style:
+        meta_bits.append(f"Style: `{style}`")
+    if exchange:
+        meta_bits.append(f"Exch: `{exchange.upper()}`")
+    if meta_bits:
+        message += "\n" + " | ".join(meta_bits)
 
     _send_message_async(message)
 

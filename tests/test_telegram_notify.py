@@ -32,6 +32,8 @@ def _set_config(monkeypatch, **overrides):
         "TELEGRAM_MAX_MESSAGE_CHARS",
         "TELEGRAM_PARSE_MODE",
         "TELEGRAM_FALLBACK_PLAINTEXT",
+        "TELEGRAM_NOTIFY_EXIT_REASON",
+        "TELEGRAM_NOTIFY_TRAIL_ONLY",
     ):
         monkeypatch.delenv(name, raising=False)
     config = {
@@ -161,3 +163,69 @@ def test_start_telegram_bot_uses_shared_config_chat_ids(monkeypatch):
     assert captured["args"] == ("token", ["123", "456"])
     assert captured["daemon"] is True
     assert captured["started"] is True
+
+
+def test_notify_trade_closed_includes_exit_reason(monkeypatch):
+    _set_config(monkeypatch)
+    sent = []
+    monkeypatch.setattr(telegram_notify, "_send_message_async", lambda message: sent.append(message) or True)
+
+    telegram_notify.notify_trade_closed(
+        pair="EUR/USD",
+        pnl_r=1.2,
+        is_win=True,
+        duration_minutes=45,
+        exit_reason="TRAIL_CLOSE",
+        style="intraday",
+        exchange="mt5",
+    )
+
+    assert sent
+    assert "Chandelier trail" in sent[0]
+    assert "Style: `intraday`" in sent[0]
+    assert "Exch: `MT5`" in sent[0]
+
+
+def test_notify_trade_closed_trail_only_skips_timed_close(monkeypatch):
+    _set_config(monkeypatch, notify_trail_only=True)
+    sent = []
+    monkeypatch.setattr(telegram_notify, "_send_message_async", lambda message: sent.append(message) or True)
+
+    telegram_notify.notify_trade_closed(
+        pair="EUR/USD",
+        pnl_r=-0.5,
+        is_win=False,
+        duration_minutes=30,
+        exit_reason="TIMED_CLOSE",
+    )
+    assert sent == []
+
+    telegram_notify.notify_trade_closed(
+        pair="EUR/USD",
+        pnl_r=0.8,
+        is_win=True,
+        duration_minutes=30,
+        exit_reason="TRAIL_GIVEBACK",
+    )
+    assert len(sent) == 1
+
+
+def test_notify_trade_opened_includes_style_and_exchange(monkeypatch):
+    _set_config(monkeypatch)
+    sent = []
+    monkeypatch.setattr(telegram_notify, "_send_message_async", lambda message: sent.append(message) or True)
+
+    telegram_notify.notify_trade_opened(
+        pair="BTC/USDT",
+        direction="LONG",
+        entry_price=65000,
+        stop_loss=64500,
+        take_profit=66000,
+        style="scalp",
+        engine="scalp",
+        exchange="bybit",
+    )
+
+    assert "Style: `scalp`" in sent[0]
+    assert "Engine: `scalp`" in sent[0]
+    assert "Exch: `BYBIT`" in sent[0]

@@ -1628,7 +1628,15 @@ def _handle_mt5_row(row: dict, tcfg: dict, db_path: str | None = None) -> None:
                     f"style={style} mins={mins:.0f} profit=${live_pnl:.2f} R={pnl_r}"
                 )
                 try:
-                    telegram_notify.notify_trade_closed(pair=row["pair"], pnl_r=pnl_r, is_win=live_pnl > 0, duration_minutes=mins)
+                    telegram_notify.notify_trade_closed(
+                        pair=row["pair"],
+                        pnl_r=pnl_r,
+                        is_win=live_pnl > 0,
+                        duration_minutes=mins,
+                        exit_reason=close_reason,
+                        style=style,
+                        exchange="mt5",
+                    )
                 except Exception:
                     pass
             return
@@ -1711,7 +1719,15 @@ def _handle_mt5_row(row: dict, tcfg: dict, db_path: str | None = None) -> None:
                     f"fill={actual_close_price} entry={entry_price}"
                 )
                 try:
-                    telegram_notify.notify_trade_closed(pair=row["pair"], pnl_r=pnl_r, is_win=live_pnl > 0, duration_minutes=mins)
+                    telegram_notify.notify_trade_closed(
+                        pair=row["pair"],
+                        pnl_r=pnl_r,
+                        is_win=live_pnl > 0,
+                        duration_minutes=mins,
+                        exit_reason="TIMED_CLOSE",
+                        style=style,
+                        exchange="mt5",
+                    )
                 except Exception:
                     pass
                 return
@@ -1815,7 +1831,15 @@ def _handle_mt5_row(row: dict, tcfg: dict, db_path: str | None = None) -> None:
                 f"fill={actual_close_price} entry={entry_price}"
             )
             try:
-                telegram_notify.notify_trade_closed(pair=row["pair"], pnl_r=pnl_r, is_win=live_pnl > 0, duration_minutes=mins)
+                telegram_notify.notify_trade_closed(
+                    pair=row["pair"],
+                    pnl_r=pnl_r,
+                    is_win=live_pnl > 0,
+                    duration_minutes=mins,
+                    exit_reason="TIMED_CLOSE",
+                    style=style,
+                    exchange="mt5",
+                )
             except Exception:
                 pass
         else:
@@ -1910,7 +1934,13 @@ def _handle_bybit_row(row: dict, tcfg: dict, db_path: str | None = None) -> None
                 )
                 try:
                     telegram_notify.notify_trade_closed(
-                        pair=pair, pnl_r=pnl_r, is_win=profit > 0, duration_minutes=mins,
+                        pair=pair,
+                        pnl_r=pnl_r,
+                        is_win=profit > 0,
+                        duration_minutes=mins,
+                        exit_reason="TRAIL_PROFIT_ROUNDTRIP",
+                        style=style,
+                        exchange="bybit",
                     )
                 except Exception:
                     pass
@@ -1971,7 +2001,15 @@ def _handle_bybit_row(row: dict, tcfg: dict, db_path: str | None = None) -> None
                     f"mins={mins:.0f} profit=${profit:.2f} R={pnl_r}"
                 )
                 try:
-                    telegram_notify.notify_trade_closed(pair=pair, pnl_r=pnl_r, is_win=profit > 0, duration_minutes=mins)
+                    telegram_notify.notify_trade_closed(
+                        pair=pair,
+                        pnl_r=pnl_r,
+                        is_win=profit > 0,
+                        duration_minutes=mins,
+                        exit_reason=close_reason,
+                        style=style,
+                        exchange="bybit",
+                    )
                 except Exception:
                     pass
             return
@@ -2063,7 +2101,15 @@ def _handle_bybit_row(row: dict, tcfg: dict, db_path: str | None = None) -> None
                     f"mins={mins:.0f} profit=${profit:.2f} R={pnl_r}"
                 )
                 try:
-                    telegram_notify.notify_trade_closed(pair=pair, pnl_r=pnl_r, is_win=profit > 0, duration_minutes=mins)
+                    telegram_notify.notify_trade_closed(
+                        pair=pair,
+                        pnl_r=pnl_r,
+                        is_win=profit > 0,
+                        duration_minutes=mins,
+                        exit_reason="TIMED_CLOSE",
+                        style=style,
+                        exchange="bybit",
+                    )
                 except Exception:
                     pass
                 return
@@ -2159,7 +2205,15 @@ def _handle_bybit_row(row: dict, tcfg: dict, db_path: str | None = None) -> None
                 f"mins={mins:.0f} profit=${profit:.2f} R={pnl_r}"
             )
             try:
-                telegram_notify.notify_trade_closed(pair=pair, pnl_r=pnl_r, is_win=profit > 0, duration_minutes=mins)
+                telegram_notify.notify_trade_closed(
+                    pair=pair,
+                    pnl_r=pnl_r,
+                    is_win=profit > 0,
+                    duration_minutes=mins,
+                    exit_reason="TIMED_CLOSE",
+                    style=style,
+                    exchange="bybit",
+                )
             except Exception:
                 pass
         else:
