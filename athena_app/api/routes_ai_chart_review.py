@@ -19,7 +19,10 @@ from ai_review.context_diagnostics import (
     build_context_diagnostics,
     sanitize_ai_review_missing_context,
 )
-from ai_review.engine_a_context import assemble_engine_a_context
+from ai_review.engine_a_context import (
+    assemble_engine_a_context,
+    build_engine_b_summary_for_strategy,
+)
 from ai_review.engine_a_verdict import build_engine_a_verdict_comparison
 from ai_review.freshness import classify_atr_freshness
 from ai_review.normalizer import normalize_chart_review_response
@@ -104,6 +107,7 @@ def _build_strategy_layer_safely(
     engine_a_ctx: dict[str, Any],
     symbol: str,
     timeframe: str,
+    screenshot_meta: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     """Build the additive strategy-playbook layer behind STRATEGY_LAYER_ENABLED.
 
@@ -115,10 +119,17 @@ def _build_strategy_layer_safely(
         return None
     try:
         limit = int(cfg.get("STRATEGY_LAYER_OHLCV_LIMIT") or 80)
+        ohlcv_window = engine_a_ctx.get("ohlcv_bars")
+        if not isinstance(ohlcv_window, list) or not ohlcv_window:
+            ohlcv_window = None
+        overlays = (screenshot_meta or {}).get("overlays") or []
+        engine_b_summary = build_engine_b_summary_for_strategy(engine_a_ctx)
+        if isinstance(overlays, list) and "engine_b" not in overlays:
+            engine_b_summary = {**engine_b_summary, "available": False}
         return build_strategy_layer(
             engine_a_ctx=engine_a_ctx,
-            ohlcv_window=None,  # OHLCV wiring is the next Vision-routing step
-            engine_b_summary=None,
+            ohlcv_window=ohlcv_window,
+            engine_b_summary=engine_b_summary,
             engine_d_summary=None,
             symbol=symbol,
             timeframe=timeframe,
@@ -175,6 +186,22 @@ def register_ai_chart_review_routes(app, runtime: SimpleNamespace) -> None:
         atr["max_expected_age_seconds"] = freshness.get("max_expected_age_seconds")
 
         mismatch_warnings = evaluate_timestamp_mismatch(engine_a_ctx, screenshot_meta, cfg)
+        overlays = screenshot_meta.get("overlays") or []
+        if isinstance(overlays, list) and "engine_b" in overlays:
+            struct = engine_a_ctx.get("structure_context") or {}
+            if not isinstance(struct, dict) or not any(
+                struct.get(k)
+                for k in (
+                    "structural_verdict",
+                    "nearest_support_zone",
+                    "nearest_resistance_zone",
+                    "bos_data",
+                    "choch_data",
+                )
+            ):
+                mismatch_warnings.append(
+                    "engine_b_overlays_enabled_but_server_structure_context_empty"
+                )
         engine_a_ctx["mismatch_warnings"] = mismatch_warnings
         engine_a_ctx["chart_captured_at"] = screenshot_meta.get("captured_at")
 
@@ -224,6 +251,7 @@ def register_ai_chart_review_routes(app, runtime: SimpleNamespace) -> None:
             engine_a_ctx=engine_a_ctx,
             symbol=symbol,
             timeframe=timeframe,
+            screenshot_meta=screenshot_meta,
         )
         if strategy_layer:
             try:

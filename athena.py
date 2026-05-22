@@ -9351,6 +9351,24 @@ def _build_scalp_source_contract(raw_signal: dict, *, skipped: bool = False) -> 
         venue_mismatch_reason = "venue_comparison_unavailable"
 
     latest_candle_ts = _scalp_contract_latest_candle_ts(raw_signal, timeframe)
+    candle_tf_key = str(timeframe or "M1").upper()
+    meta_block = candle_meta.get(candle_tf_key) if isinstance(candle_meta.get(candle_tf_key), dict) else {}
+    orderflow_ts = raw_signal.get("cvd_ts") or raw_signal.get("orderflow_ts")
+    cvd_ts = raw_signal.get("cvd_ts")
+    vp_ts = raw_signal.get("vp_ts") or meta_block.get("last_scoring_ts")
+    max_skew = None
+    ts_values = [t for t in (latest_candle_ts, orderflow_ts, cvd_ts, vp_ts) if t is not None]
+    if len(ts_values) >= 2:
+        try:
+            numeric = sorted(float(t) for t in ts_values)
+            max_skew = numeric[-1] - numeric[0]
+        except (TypeError, ValueError):
+            max_skew = None
+    strict_ts_pass = None
+    if max_skew is not None:
+        strict_ts_pass = max_skew <= 900.0
+    elif latest_candle_ts is not None:
+        strict_ts_pass = True
     unavailable = []
     for label, source, is_real in (
         ("candle", candle_source, candle_is_real),
@@ -9405,13 +9423,13 @@ def _build_scalp_source_contract(raw_signal: dict, *, skipped: bool = False) -> 
         "vpSourceIsReal": bool(vp_is_real),
         "strictOrderflowSourcePass": bool(orderflow_is_real) if orderflow_source else False,
         "strictVolumeSourcePass": bool(volume_is_real) if volume_source else False,
-        "strictTimestampAlignmentPass": None,
+        "strictTimestampAlignmentPass": strict_ts_pass,
         "strictVenuePass": (not venue_mismatch) if data_venue and execution_venue else None,
         "latestCandleTs": latest_candle_ts,
-        "orderflowTs": None,
-        "cvdTs": None,
-        "vpTs": None,
-        "maxTimestampSkewSeconds": None,
+        "orderflowTs": orderflow_ts,
+        "cvdTs": cvd_ts,
+        "vpTs": vp_ts,
+        "maxTimestampSkewSeconds": max_skew,
         "timestampAlignmentReason": timestamp_alignment_reason,
         "unavailableReasons": sorted(set(unavailable)),
         "warnings": sorted(set(warnings)),
@@ -9442,13 +9460,24 @@ def _build_scalp_market_location(raw_signal: dict, source_contract: dict | None 
     if raw_signal.get("vp_lvn_count") and not lvn_levels and source_contract is not None:
         source_contract.setdefault("unavailableReasons", []).append("lvn_count_available_but_levels_missing")
 
+    location_label = (
+        raw_signal.get("location")
+        or raw_signal.get("price_location")
+        or raw_signal.get("vp_location")
+    )
+
+    def _near_from_location(label: str | None) -> bool | None:
+        if not label:
+            return None
+        return location_label == label
+
     return {
-        "locationLabel": raw_signal.get("location") or raw_signal.get("price_location") or raw_signal.get("vp_location") or None,
+        "locationLabel": location_label,
         "locationScore": _scalp_contract_float(raw_signal.get("location_score")),
-        "nearPOC": None,
-        "nearVAH": None,
-        "nearVAL": None,
-        "nearLVN": None if not lvn_levels else False,
+        "nearPOC": _near_from_location("at_poc"),
+        "nearVAH": _near_from_location("at_vah"),
+        "nearVAL": _near_from_location("at_val"),
+        "nearLVN": _near_from_location("at_lvn") if lvn_levels else None,
         "nearHVN": None if not hvn_levels else False,
         "aboveValueArea": above_value,
         "belowValueArea": below_value,
@@ -15042,6 +15071,7 @@ from athena_runtime import set_runtime  # noqa: E402
 from athena_app.api.routes_audit import register_audit_routes  # noqa: E402
 from athena_app.api.routes_ai_agent import register_ai_agent_routes  # noqa: E402
 from athena_app.api.routes_ai_chart_review import register_ai_chart_review_routes  # noqa: E402
+from athena_app.api.routes_ai_scalp_chart_review import register_ai_scalp_chart_review_routes  # noqa: E402
 from athena_app.api.routes_backtest import register_backtest_history_routes  # noqa: E402
 from athena_app.api.routes_broker_status import register_broker_status_routes  # noqa: E402
 from athena_app.api.routes_live_dashboard import register_live_dashboard_routes  # noqa: E402
@@ -15148,6 +15178,20 @@ register_ai_chart_review_routes(
             pair, btc_bias, style=style
         ),
         btc_bias_fn=_current_btc_bias,
+    ),
+)
+register_ai_scalp_chart_review_routes(
+    app,
+    SimpleNamespace(
+        CONFIG=CONFIG,
+        AUDIT_DB=_AUDIT_DB,
+        json_safe=_json_safe,
+        log=log,
+        resolve_pair_fn=lambda symbol: _resolve_pair_from_signal({"symbol": symbol}),
+        run_scalp_scan_fn=lambda pairs: __import__(
+            "scalp_engine", fromlist=["run_scalp_scan"]
+        ).run_scalp_scan(pairs),
+        scalp_ui_signal_fn=_scalp_ui_signal,
     ),
 )
 register_market_data_routes(

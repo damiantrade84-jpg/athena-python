@@ -884,3 +884,103 @@ def test_dedup_recomputes_summary(tmp_audit_db):
     assert second.status_code == 200
     assert second.get_json().get("ai_review_summary") is not None
     assert second.get_json()["ai_review_summary"]["providerStatus"] == "success"
+
+
+def test_resolve_chart_review_analyze_style_maps_h4_to_intraday():
+    from ai_review.engine_a_context import resolve_chart_review_analyze_style
+
+    assert resolve_chart_review_analyze_style("H4", {"chart_timeframe": "H4"}, {"type": "crypto"}) == "intraday"
+    assert resolve_chart_review_analyze_style("H4", {"chart_timeframe": "M1"}, {"type": "crypto"}) == "scalp"
+    assert resolve_chart_review_analyze_style("D1", {"chart_timeframe": "D1"}, {"type": "stock"}) == "swing"
+
+
+def test_build_engine_a_prompt_context_includes_factor_scores():
+    from ai_review.engine_a_context import build_engine_a_prompt_context
+
+    ctx = _engine_a_ctx()
+    ctx["factor_diagnostics"] = {
+        **ctx["factor_diagnostics"],
+        "factorScores": {"trend": 0.82, "momentum": 0.61, "addon": 0.15},
+    }
+    ctx["indicator_snapshots"] = {"rsi": 54.2}
+    ctx["engine_snapshots"] = extract_engine_snapshots({}, ctx)
+    prompt_ctx = build_engine_a_prompt_context(ctx)
+    assert prompt_ctx["diagnostics"]["trendScore"] == 0.82
+    assert prompt_ctx["diagnostics"]["momentumScore"] == 0.61
+    assert prompt_ctx["diagnostics"]["addonScore"] == 0.15
+    assert prompt_ctx["diagnostics"]["rsi"] == 54.2
+
+
+def test_build_engine_b_prompt_context_from_structure():
+    from ai_review.engine_a_context import build_engine_b_prompt_context
+
+    ctx = _engine_a_ctx()
+    ctx["structure_context"] = {
+        "structural_verdict": "CLEAR",
+        "bos_confirmed": True,
+        "nearest_resistance_zone": {"level": 67000.0},
+    }
+    ctx["engine_snapshots"] = {
+        "engineB": {
+            "score": 3.5,
+            "maxScore": 5.0,
+            "threshold": 3.0,
+            "passed": True,
+            "direction": "LONG",
+        }
+    }
+    eb_ctx = build_engine_b_prompt_context(ctx)
+    assert eb_ctx["passed"] is True
+    assert eb_ctx["nearestResistance"] == 67000.0
+    assert eb_ctx["structuralVerdict"] == "CLEAR"
+
+
+def test_default_resolve_pair_unknown_symbol_returns_none(monkeypatch):
+    fake_athena = ModuleType("athena")
+    fake_athena.ALL_PAIRS = []
+    fake_athena.CONFIG = {"EXCHANGE_SOURCE": "binance"}
+    monkeypatch.setitem(sys.modules, "athena", fake_athena)
+
+    from ai_review.engine_a_context import _default_resolve_pair
+
+    assert _default_resolve_pair("NOTAREALSYMBOL999") is None
+
+
+def test_strategy_layer_receives_engine_b_summary():
+    from ai_review.engine_a_context import build_engine_b_summary_for_strategy
+
+    ctx = _engine_a_ctx()
+    ctx["structure_context"] = {"structural_verdict": "CLEAR"}
+    ctx["engine_snapshots"] = {"engineB": {"score": 4.0, "passed": True, "direction": "LONG"}}
+    summary = build_engine_b_summary_for_strategy(ctx)
+    assert summary["available"] is True
+    assert summary["structural_verdict"] == "CLEAR"
+
+
+def test_price_action_facts_reads_flat_engine_b_poc_keys():
+    from athena_ai.price_action_facts import derive_price_action_facts
+
+    facts = derive_price_action_facts(
+        engine_a_ctx={
+            "structure_context": {
+                "prev_session_poc": 65000.0,
+                "prev_session_vah": 65500.0,
+                "prev_session_val": 64500.0,
+            },
+            "atr": {"atr_value": 500.0, "atr_chart_tf": 500.0},
+        },
+        ohlcv_window=[{"open": 65100, "high": 65200, "low": 65050, "close": 65150}],
+    )
+    assert facts["profile_location"]["poc"] == 65000.0
+    assert facts["profile_location"]["confidence"] in ("high", "medium", "low")
+
+
+def test_prompt_includes_engine_b_context_block():
+    from ai_review.prompt_builder import build_chart_review_prompt
+
+    ctx = _engine_a_ctx()
+    ctx["structure_context"] = {"structural_verdict": "CLEAR", "bos_confirmed": True}
+    ctx["engine_snapshots"] = extract_engine_snapshots({}, ctx)
+    prompt = build_chart_review_prompt(ctx)
+    assert "engineBContext" in prompt
+    assert "engineAContext" in prompt

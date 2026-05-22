@@ -160,7 +160,7 @@ def _pair_lookup_key(value: Any) -> str:
 
 
 def _default_resolve_pair(symbol: str) -> dict[str, Any] | None:
-    from athena import ALL_PAIRS, CONFIG
+    from athena import ALL_PAIRS
 
     symbol = str(symbol or "").strip()
     pair_obj = next(
@@ -186,14 +186,7 @@ def _default_resolve_pair(symbol: str) -> dict[str, Any] | None:
                 ),
                 None,
             )
-    if pair_obj:
-        return pair_obj
-    return {
-        "symbol": symbol,
-        "display": symbol,
-        "type": "crypto",
-        "source": CONFIG.get("EXCHANGE_SOURCE", "binance"),
-    }
+    return pair_obj
 
 
 def _default_btc_bias() -> str:
@@ -209,6 +202,138 @@ def _default_analyze_pair(pair: dict[str, Any], btc_bias: str, style: str) -> di
     from scanner import analyze_pair
 
     return analyze_pair(pair, btc_bias, style=style)
+
+
+def resolve_chart_review_analyze_style(
+    timeframe: str,
+    screenshot_meta: dict[str, Any] | None,
+    pair: dict[str, Any] | None,
+) -> str:
+    """Map chart timeframe (or explicit meta) to analyze_pair style."""
+    meta = screenshot_meta or {}
+    explicit = str(meta.get("analyze_style") or "").strip().lower()
+    if explicit in ("scalp", "intraday", "swing"):
+        return explicit
+
+    raw_tf = str(meta.get("chart_timeframe") or timeframe or "").strip()
+    tf_upper = raw_tf.upper()
+    if tf_upper in ("M1", "M2", "M3", "M5", "M15"):
+        return "scalp"
+    if tf_upper in ("M30", "H1", "H2", "H3", "H4"):
+        return "intraday"
+    if tf_upper in ("D1", "D2", "W1", "MN", "MONTHLY"):
+        return "swing"
+
+    lowered = raw_tf.lower()
+    if lowered in ("scalp", "intraday", "swing"):
+        return lowered
+
+    ptype = str((pair or {}).get("type") or "").lower()
+    if ptype in ("crypto", "forex"):
+        return "intraday"
+    return "swing"
+
+
+def _merge_factor_diagnostics(
+    factor_diag: dict[str, Any],
+    signal: dict[str, Any],
+) -> dict[str, Any]:
+    merged = dict(factor_diag)
+    factor_scores = signal.get("factorScores") or signal.get("factor_scores")
+    if isinstance(factor_scores, dict) and factor_scores:
+        merged["factorScores"] = dict(factor_scores)
+    return merged
+
+
+def _rsi_from_signal(signal: dict[str, Any]) -> float | None:
+    for key in ("h4", "h1", "d1"):
+        block = signal.get(key)
+        if not isinstance(block, dict):
+            continue
+        snap = block.get("snap")
+        if not isinstance(snap, dict):
+            continue
+        rsi = _to_float(snap.get("rsi"))
+        if rsi is not None:
+            return rsi
+    return None
+
+
+def select_ohlcv_bars_for_chart(
+    signal: dict[str, Any],
+    timeframe: str,
+    screenshot_meta: dict[str, Any] | None,
+) -> list[dict[str, Any]]:
+    """Pick candle series aligned to the chart timeframe for strategy facts."""
+    tf = str((screenshot_meta or {}).get("chart_timeframe") or timeframe or "H4").upper()
+    if tf in ("M1", "M2", "M3", "M5", "M15"):
+        raw = signal.get("m1Candles") or signal.get("m5Candles") or signal.get("h1Candles")
+    elif tf in ("M30", "H1", "H2", "H3"):
+        raw = signal.get("h1Candles") or signal.get("h4Candles")
+    elif tf == "H4":
+        raw = signal.get("h4Candles") or signal.get("h1Candles")
+    else:
+        raw = signal.get("d1Candles") or signal.get("h4Candles")
+    if not isinstance(raw, list):
+        return []
+    return [c for c in raw if isinstance(c, dict)]
+
+
+def build_engine_b_summary_for_strategy(engine_a_ctx: dict[str, Any]) -> dict[str, Any]:
+    snapshots = engine_a_ctx.get("engine_snapshots") or {}
+    eb = snapshots.get("engineB") or {}
+    struct = engine_a_ctx.get("structure_context") or {}
+    if not isinstance(struct, dict):
+        struct = {}
+    has_data = any(
+        eb.get(key) is not None for key in ("score", "passed", "direction")
+    ) or bool(struct)
+    return {
+        "available": bool(has_data),
+        "passed": eb.get("passed"),
+        "score": eb.get("score"),
+        "max_score": eb.get("maxScore"),
+        "threshold": eb.get("threshold"),
+        "normalized_score": eb.get("normalizedScore"),
+        "direction": eb.get("direction"),
+        "structural_verdict": struct.get("structural_verdict"),
+        "bos_confirmed": struct.get("bos_confirmed"),
+        "choch_confirmed": struct.get("choch_confirmed"),
+    }
+
+
+def build_engine_b_prompt_context(engine_a_ctx: dict[str, Any]) -> dict[str, Any]:
+    """Compact Engine B block for Opus prompt (projection only)."""
+    snapshots = engine_a_ctx.get("engine_snapshots") or {}
+    eb = snapshots.get("engineB") or {}
+    struct = engine_a_ctx.get("structure_context") or {}
+    if not isinstance(struct, dict):
+        struct = {}
+
+    def _zone_level(zone: Any) -> float | None:
+        if isinstance(zone, dict):
+            return _to_float(zone.get("level") or zone.get("price") or zone.get("top"))
+        return _to_float(zone)
+
+    return {
+        "score": eb.get("score"),
+        "maxScore": eb.get("maxScore"),
+        "threshold": eb.get("threshold"),
+        "normalizedScore": eb.get("normalizedScore"),
+        "passed": eb.get("passed"),
+        "direction": eb.get("direction"),
+        "structuralVerdict": struct.get("structural_verdict"),
+        "bosConfirmed": struct.get("bos_confirmed"),
+        "chochConfirmed": struct.get("choch_confirmed"),
+        "liquiditySweep": struct.get("liquidity_sweep"),
+        "nearestSupport": _zone_level(struct.get("nearest_support_zone")),
+        "nearestResistance": _zone_level(struct.get("nearest_resistance_zone")),
+        "breakerLevel": _to_float(
+            (struct.get("breaker_block") or {}).get("level")
+            if isinstance(struct.get("breaker_block"), dict)
+            else struct.get("breaker_block")
+        ),
+    }
 
 
 def assemble_engine_a_context(
@@ -228,15 +353,13 @@ def assemble_engine_a_context(
     if not pair:
         return None
 
-    style = str((screenshot_meta or {}).get("chart_timeframe") or timeframe or "swing").lower()
-    if style not in ("scalp", "intraday", "swing"):
-        style = "swing"
+    style = resolve_chart_review_analyze_style(timeframe, screenshot_meta, pair)
 
     signal = analyze_pair(pair, btc_bias, style=style)
     if not signal:
         return None
 
-    factor_diag = dict(signal.get("factorDiagnostics") or {})
+    factor_diag = _merge_factor_diagnostics(dict(signal.get("factorDiagnostics") or {}), signal)
     atr_diag = dict(signal.get("atrDiagnostics") or {})
     data_freshness = dict(signal.get("dataFreshness") or {})
     candle_meta = dict(signal.get("candleFetchMeta") or {})
@@ -264,6 +387,8 @@ def assemble_engine_a_context(
     ctx = {
         "symbol": signal.get("symbol") or pair.get("symbol"),
         "timeframe": timeframe,
+        "analyze_style": style,
+        "chart_timeframe": (screenshot_meta or {}).get("chart_timeframe") or timeframe,
         "asset_class": pair.get("type"),
         "asset_group": get_pair_score_group(pair),
         "direction": str(signal.get("direction") or "NONE").upper(),
@@ -338,7 +463,9 @@ def assemble_engine_a_context(
             )
             if value is not None
         ],
+        "indicator_snapshots": {"rsi": _rsi_from_signal(signal)},
     }
+    ctx["ohlcv_bars"] = select_ohlcv_bars_for_chart(signal, timeframe, screenshot_meta)
     ctx["engine_snapshots"] = extract_engine_snapshots(signal, ctx)
     return ctx
 
@@ -360,11 +487,24 @@ def _timeframe_bias(engine_a_ctx: dict[str, Any]) -> dict[str, str | None]:
         fd = {}
     regime = str(engine_a_ctx.get("regime") or "").strip() or None
     trend = fd.get("trendCoherence") or fd.get("trend_coherence")
+    trend_detail = None
+    if isinstance(trend, dict):
+        trend_detail = trend.get("detail") or trend.get("votes") or trend.get("per_tf")
     trend_label = None
     if isinstance(trend, dict):
         trend_label = trend.get("label") or trend.get("state") or trend.get("alignment")
     elif trend is not None:
         trend_label = str(trend)
+
+    def _tf_label(tf_key: str) -> str | None:
+        if isinstance(trend_detail, dict):
+            raw = trend_detail.get(tf_key) or trend_detail.get(tf_key.lower())
+            if isinstance(raw, dict):
+                return str(raw.get("label") or raw.get("state") or raw.get("alignment") or raw)
+            if raw is not None:
+                return str(raw)
+        return None
+
     directional = engine_a_ctx.get("directional_alignment") or {}
     dir_score = None
     if isinstance(directional, dict):
@@ -373,9 +513,9 @@ def _timeframe_bias(engine_a_ctx: dict[str, Any]) -> dict[str, str | None]:
             dir_score = str(ds)
     base = trend_label or regime or dir_score
     return {
-        "D1": base,
-        "H4": base,
-        "H1": dir_score or base,
+        "D1": _tf_label("d1") or _tf_label("D1") or base,
+        "H4": _tf_label("h4") or _tf_label("H4") or base,
+        "H1": _tf_label("h1") or _tf_label("H1") or dir_score or base,
     }
 
 
@@ -405,6 +545,8 @@ def build_engine_a_prompt_context(engine_a_ctx: dict[str, Any]) -> dict[str, Any
     adx_capture = fd.get("regimeLabelsDualCapture") or {}
     if not isinstance(adx_capture, dict):
         adx_capture = {}
+    addon_score = _factor_score(fd, "addon")
+    indicators = engine_a_ctx.get("indicator_snapshots") or {}
 
     return {
         "direction": engine_a_ctx.get("direction"),
@@ -421,7 +563,8 @@ def build_engine_a_prompt_context(engine_a_ctx: dict[str, Any]) -> dict[str, Any
             "trendScore": _factor_score(fd, "trend"),
             "momentumScore": _factor_score(fd, "momentum"),
             "volatilityScore": _factor_score(fd, "mean_reversion", "volatility"),
-            "volumeScore": _factor_score(fd, "addon"),
+            "addonScore": addon_score,
+            "volumeScore": addon_score,
             "structureScore": _to_float(fd.get("structure_context_adjustment")),
             "vwapDistanceAtr": _to_float(
                 trend.get("vwapDistanceAtr") if isinstance(trend, dict) else None
@@ -429,7 +572,7 @@ def build_engine_a_prompt_context(engine_a_ctx: dict[str, Any]) -> dict[str, Any
             "vwapExtended": vwap_ext if isinstance(vwap_ext, bool) else None,
             "adxD1": _to_float(adx_capture.get("trendStateAdxValue")),
             "adxH4": _to_float(fd.get("adx_value") or fd.get("adxValue")),
-            "rsi": None,
+            "rsi": _to_float(indicators.get("rsi")),
             "atrD1": _to_float(atr.get("atr_d1")),
             "atrH4": _to_float(atr.get("atr_h4")),
             "rr": _to_float(geometry.get("rr")),

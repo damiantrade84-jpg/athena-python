@@ -365,18 +365,27 @@ def normalise_engine_a(signal_a: dict) -> dict:
         regime_label = "RANGING"
 
     votes = signal_a.get("votes", {})
-    factor_scores = signal_a.get("factor_scores", {})
+    factor_scores = signal_a.get("factorScores") or signal_a.get("factor_scores") or {}
+    fd = signal_a.get("factorDiagnostics") or signal_a.get("factor_diagnostics") or {}
+    feed = fd.get("feedStatus") or fd.get("feed_status") or {}
+    if not isinstance(feed, dict):
+        feed = {}
+    addon_type = str(feed.get("addon") or fd.get("addon_type") or "").lower()
     cot_active = any([
         votes.get("FACTOR_DERIVATIVES"),
         votes.get("COT Boost"),
         factor_scores.get("derivatives"),
-        factor_scores.get("cot_boost")
+        factor_scores.get("cot_boost"),
+        addon_type == "cot",
+        bool(factor_scores.get("addon")) and addon_type == "cot",
     ])
     carry_active = any([
         votes.get("FACTOR_CARRY"),
         votes.get("Carry Tilt"),
         factor_scores.get("carry"),
-        factor_scores.get("carry_tilt")
+        factor_scores.get("carry_tilt"),
+        addon_type == "carry",
+        bool(factor_scores.get("addon")) and addon_type == "carry",
     ])
 
     # Floor for signal participation: norm must exceed the floor to count as a full signal.

@@ -1,0 +1,181 @@
+import { Sparkles } from 'lucide-react';
+import { Badge } from '@/components/ui/badge';
+import { Card, CardContent } from '@/components/ui/card';
+import AIReviewContextCompletenessPanel from '@/components/athena/AIReviewContextCompletenessPanel';
+import AIReviewSummaryStrip from '@/components/athena/AIReviewSummaryStrip';
+import type {
+  ScalpAIChartReviewResponse,
+  ScalpVerdictComparison,
+} from '@/types/athena';
+
+const CONCORDANCE_PILL: Record<string, string> = {
+  agree: 'bg-emerald-500/15 text-emerald-300 border-emerald-500/40',
+  partial: 'bg-amber-500/15 text-amber-300 border-amber-500/40',
+  disagree: 'bg-rose-500/15 text-rose-300 border-rose-500/40',
+  unknown: 'bg-zinc-500/15 text-zinc-300 border-zinc-500/40',
+};
+
+const VERDICT_PILL: Record<string, string> = {
+  VALID: 'bg-emerald-500/15 text-emerald-300 border-emerald-500/40',
+  CAUTION: 'bg-amber-500/15 text-amber-300 border-amber-500/40',
+  INVALID: 'bg-rose-500/15 text-rose-300 border-rose-500/40',
+  NO_TRADE: 'bg-zinc-500/15 text-zinc-300 border-zinc-500/40',
+};
+
+function show(value: unknown, fallback = '—'): string {
+  if (value === null || value === undefined) return fallback;
+  if (typeof value === 'string') return value.trim() === '' ? fallback : value;
+  return String(value);
+}
+
+function showList(items: unknown): string[] | null {
+  if (!Array.isArray(items) || items.length === 0) return null;
+  return items.map((it) => String(it));
+}
+
+function Row({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded border border-border/40 bg-background/30 px-2 py-1.5">
+      <div className="text-[10px] uppercase tracking-wide text-muted-foreground">{label}</div>
+      <div className="mt-0.5 text-[11px] text-foreground/85">{value}</div>
+    </div>
+  );
+}
+
+function ScalpVerdictPanel({ comparison }: { comparison: ScalpVerdictComparison | undefined }) {
+  if (!comparison) return null;
+  return (
+    <div className="rounded-md border border-border/50 bg-background/30 p-2 space-y-2">
+      <div className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+        Setup vs chart
+      </div>
+      <div className="grid grid-cols-2 gap-2 text-[11px]">
+        <Row label="Setup direction" value={show(comparison.setupDirection)} />
+        <Row label="Setup grade" value={show(comparison.setupGrade)} />
+        <Row label="Verdict" value={show(comparison.comparisonVerdict)} />
+        <Row label="Final decision" value={show(comparison.finalDecision)} />
+        <Row
+          label="Chart confirms direction"
+          value={comparison.chartConfirmsDirection == null ? '—' : comparison.chartConfirmsDirection ? 'yes' : 'no'}
+        />
+        <Row
+          label="Entry timing ok"
+          value={comparison.chartConfirmsEntryTiming == null ? '—' : comparison.chartConfirmsEntryTiming ? 'yes' : 'no'}
+        />
+      </div>
+      {comparison.downgradeReasons && comparison.downgradeReasons.length > 0 && (
+        <div className="text-[11px] text-muted-foreground">
+          Downgrades: {comparison.downgradeReasons.join(', ')}
+        </div>
+      )}
+      {comparison.finalReason && (
+        <div className="text-[11px] text-foreground/80">{comparison.finalReason}</div>
+      )}
+    </div>
+  );
+}
+
+export interface ScalpAIReviewCardProps {
+  response: ScalpAIChartReviewResponse;
+}
+
+export default function ScalpAIReviewCard({ response }: ScalpAIReviewCardProps) {
+  const ai = response.ai_review || {};
+  const c = response.concordance || {};
+  const ctx = response.engine_d_context ?? response.engineDContext;
+  const summary = response.aiReviewSummary ?? response.ai_review_summary;
+  const verdictComparison =
+    response.scalpVerdictComparison ?? response.scalp_verdict_comparison;
+  const verdictClass = VERDICT_PILL[String(ai.verdict || 'NO_TRADE')] ?? VERDICT_PILL.NO_TRADE;
+  const concordanceClass = CONCORDANCE_PILL[String(c.concordance || 'unknown')] ?? CONCORDANCE_PILL.unknown;
+
+  const supporting = showList(ai.supporting_reasons);
+  const risks = showList(ai.risks);
+  const missing = showList(ai.missing_context);
+  const warnings = showList(response.mismatch_warnings);
+
+  return (
+    <Card className="border-border/60 bg-card/50">
+      <CardContent className="p-3 space-y-3">
+        <div className="flex items-center gap-2 flex-wrap">
+          <Sparkles className="w-4 h-4 text-primary" />
+          <span className="text-sm font-semibold">Engine D AI Review</span>
+          <Badge className={`${verdictClass} text-[10px] border`}>
+            {show(ai.verdict, 'CAUTION')}
+          </Badge>
+          <Badge variant="outline" className="text-[10px]">
+            confidence: {show(ai.confidence, '0')}
+          </Badge>
+          <Badge className={`${concordanceClass} text-[10px] border`}>
+            {show(c.concordance, 'unknown')}
+          </Badge>
+          {ctx?.ai_grade && (
+            <Badge variant="outline" className="text-[10px]">
+              grade {ctx.ai_grade}
+              {ctx.ai_score != null ? ` / ${ctx.ai_score}` : ''}
+            </Badge>
+          )}
+          <span className="text-[10px] text-muted-foreground font-mono ml-auto">
+            {response.provider}/{show(response.model, '—')}
+            {response.dedup_hit ? ' · cached' : ''}
+          </span>
+        </div>
+
+        <AIReviewSummaryStrip summary={summary} />
+
+        <ScalpVerdictPanel comparison={verdictComparison} />
+
+        <AIReviewContextCompletenessPanel
+          completeness={response.contextCompleteness ?? response.context_completeness}
+        />
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-[11px]">
+          <Row label="Human action" value={show(ai.human_action)} />
+          <Row label="Setup type" value={show(ai.setup_type)} />
+          <Row label="Visual confirmation" value={show(ai.visual_confirmation)} />
+          <Row label="Visual contradiction" value={show(ai.visual_contradiction)} />
+          <Row label="Entry quality" value={show(ai.entry_quality)} />
+          <Row label="Source quality" value={show(ai.source_quality_assessment)} />
+          <Row label="Execution TF" value={show(ctx?.execution_tf)} />
+          <Row label="Setup direction" value={show(ctx?.direction)} />
+        </div>
+
+        {supporting && (
+          <div className="text-[11px]">
+            <div className="font-medium text-muted-foreground">Supporting</div>
+            <ul className="mt-1 list-disc pl-4 text-foreground/80">
+              {supporting.map((item) => (
+                <li key={item}>{item}</li>
+              ))}
+            </ul>
+          </div>
+        )}
+        {risks && (
+          <div className="text-[11px]">
+            <div className="font-medium text-muted-foreground">Risks</div>
+            <ul className="mt-1 list-disc pl-4 text-foreground/80">
+              {risks.map((item) => (
+                <li key={item}>{item}</li>
+              ))}
+            </ul>
+          </div>
+        )}
+        {missing && (
+          <div className="text-[11px]">
+            <div className="font-medium text-muted-foreground">Missing context</div>
+            <ul className="mt-1 list-disc pl-4 text-foreground/80">
+              {missing.map((item) => (
+                <li key={item}>{item}</li>
+              ))}
+            </ul>
+          </div>
+        )}
+        {warnings && (
+          <div className="text-[11px] text-warning">
+            Warnings: {warnings.join(', ')}
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}

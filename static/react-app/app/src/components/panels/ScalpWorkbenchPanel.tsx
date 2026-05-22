@@ -18,6 +18,14 @@ import { Switch } from '@/components/ui/switch';
 import { useApiPost } from '@/hooks/useApiData';
 import { useStore } from '@/hooks/useStore';
 import apiClient from '@/lib/apiClient';
+import {
+  buildScalpScreenshotMeta,
+  canvasToDataUrl,
+  downscaleToCap,
+  postScalpChartReview,
+} from '@/lib/aiScalpChartReview';
+import ScalpAIReviewCard from '@/components/athena/ScalpAIReviewCard';
+import type { ScalpAIChartReviewResponse } from '@/types/athena';
 import { cn, fmtNum, toNum } from '@/lib/utils';
 
 const TIMEFRAMES = ['M1', 'M5', 'M15'] as const;
@@ -801,27 +809,6 @@ function captureNativeChartCanvas(captureEl: HTMLElement | null): HTMLCanvasElem
   return outputCanvas;
 }
 
-function canvasToPngDataUrl(canvas: HTMLCanvasElement): Promise<string> {
-  return new Promise((resolve, reject) => {
-    canvas.toBlob((blob) => {
-      if (!blob) {
-        reject(new Error('Chart capture failed: PNG export unavailable'));
-        return;
-      }
-      const reader = new FileReader();
-      reader.onerror = () => reject(new Error('Chart capture failed: image read failed'));
-      reader.onload = () => {
-        if (typeof reader.result !== 'string') {
-          reject(new Error('Chart capture failed: image encoder returned no data'));
-          return;
-        }
-        resolve(reader.result);
-      };
-      reader.readAsDataURL(blob);
-    }, 'image/png');
-  });
-}
-
 function estimateDataUrlBytes(dataUrl: string | null): number | null {
   if (!dataUrl) return null;
   const b64 = dataUrl.split(',', 2)[1] || '';
@@ -910,7 +897,10 @@ export default function ScalpWorkbenchPanel() {
   const [chartLoading, setChartLoading] = useState(false);
   const [chartError, setChartError] = useState<string | null>(null);
   const [aiCaptureError, setAiCaptureError] = useState<string | null>(null);
+  const [aiReviewLoading, setAiReviewLoading] = useState(false);
+  const [scalpAiReviewResponse, setScalpAiReviewResponse] = useState<ScalpAIChartReviewResponse | null>(null);
   const [scalpAiReviewPreview, setScalpAiReviewPreview] = useState<ScalpAIReviewPreview | null>(null);
+  const [tfDisplayOverride, setTfDisplayOverride] = useState(false);
   const [showTradeLevels, setShowTradeLevels] = useState(true);
   const [showProfileLevels, setShowProfileLevels] = useState(true);
   const [showLvnLevels, setShowLvnLevels] = useState(true);
@@ -947,6 +937,19 @@ export default function ScalpWorkbenchPanel() {
   }, [activeSymbolKey, scanSignals, selectedCache]);
   const chartSymbol = signalSymbol(activeSignal);
   const activeUi = useMemo(() => normalizeScalpWorkbenchRow(activeSignal), [activeSignal]);
+  const executionTf = useMemo(() => {
+    const raw = activeUi.timeframe || activeSignal?.execution_tf || activeSignal?.timeframe || 'M1';
+    const normalized = String(raw).toUpperCase();
+    return TIMEFRAMES.includes(normalized as (typeof TIMEFRAMES)[number])
+      ? (normalized as (typeof TIMEFRAMES)[number])
+      : 'M1';
+  }, [activeSignal, activeUi.timeframe]);
+
+  useEffect(() => {
+    if (!tfDisplayOverride) {
+      setTimeframe(executionTf);
+    }
+  }, [executionTf, tfDisplayOverride, activeSymbolKey]);
 
   const candleRows = useMemo(() => toCandleData(candlePayload?.candles), [candlePayload]);
   const dataFidelity = asRecord(activeSignal?.data_fidelity);
@@ -1051,7 +1054,8 @@ export default function ScalpWorkbenchPanel() {
 
   const captureScalpChartForAIReview = useCallback(async () => {
     setAiCaptureError(null);
-    if (!activeSignal) {
+    setScalpAiReviewResponse(null);
+    if (!activeSignal || !chartSymbol) {
       setAiCaptureError('Select an Engine D candidate before capturing the chart');
       return;
     }
@@ -1059,17 +1063,33 @@ export default function ScalpWorkbenchPanel() {
     const visibleRange = chartRef.current?.timeScale().getVisibleRange() ?? null;
     const scalpChartSnapshot = buildScalpChartSnapshot(activeUi, {
       symbol: chartSymbol,
-      timeframe,
+      timeframe: executionTf,
       visibleRange: visibleRange as { from?: unknown; to?: unknown } | null,
     });
-    const outputCanvas = captureNativeChartCanvas(chartCaptureRef.current);
-    if (!outputCanvas) {
+    const sourceCanvas = captureNativeChartCanvas(chartCaptureRef.current);
+    if (!sourceCanvas) {
       setAiCaptureError('Chart capture failed: native chart canvas is not rendered yet');
       return;
     }
 
+    setAiReviewLoading(true);
     try {
-      const screenshotBase64 = await canvasToPngDataUrl(outputCanvas);
+      const outputCanvas = downscaleToCap(sourceCanvas);
+      const screenshotBase64 = await canvasToDataUrl(outputCanvas);
+      const overlays: string[] = [];
+      if (showTradeLevels) overlays.push('entry_sl_tp');
+      if (showProfileLevels) overlays.push('poc_vah_val');
+      if (showLvnLevels) overlays.push('lvn_hvn');
+      const screenshotMeta = buildScalpScreenshotMeta({
+        width: outputCanvas.width,
+        height: outputCanvas.height,
+        chart_timeframe: executionTf,
+        execution_tf: executionTf,
+        overlays,
+        visible_range_start: visibleRange?.from != null ? String(visibleRange.from) : undefined,
+        visible_range_end: visibleRange?.to != null ? String(visibleRange.to) : undefined,
+        chart_provider: candlePayload?.chart_provider || candlePayload?.candle_provider,
+      });
       setScalpAiReviewPreview({
         scalpChartSnapshot,
         screenshotCaptured: true,
@@ -1080,15 +1100,36 @@ export default function ScalpWorkbenchPanel() {
         expectedResultShape: null,
         stagePlan: {
           visionInput: ['chart screenshot', 'symbol/timeframe', 'selected direction/setup'],
-          compilerInput: ['scalpChartSnapshot', 'vision facts JSON', 'source/location/aggression/setup context'],
+          compilerInput: ['server engine_d_context', 'vision facts JSON', 'source/location/aggression/setup context'],
           outputContract: 'scalpAIReview',
         },
       });
-      showToast('Scalp chart AI review payload captured', 'success');
+      const response = await postScalpChartReview({
+        symbol: chartSymbol,
+        timeframe: executionTf,
+        provider: 'default',
+        screenshot_base64: screenshotBase64,
+        screenshot_meta: screenshotMeta,
+      });
+      setScalpAiReviewResponse(response);
+      showToast('Engine D AI chart review complete', 'success');
     } catch (err) {
-      setAiCaptureError(err instanceof Error ? err.message : 'Chart capture failed');
+      setAiCaptureError(err instanceof Error ? err.message : 'AI chart review failed');
+      showToast('Engine D AI chart review failed', 'error');
+    } finally {
+      setAiReviewLoading(false);
     }
-  }, [activeSignal, activeUi, chartSymbol, timeframe, showToast]);
+  }, [
+    activeSignal,
+    activeUi,
+    candlePayload,
+    chartSymbol,
+    executionTf,
+    showLvnLevels,
+    showProfileLevels,
+    showTradeLevels,
+    showToast,
+  ]);
 
   useEffect(() => {
     if (!chartSymbol) {
@@ -1253,9 +1294,9 @@ export default function ScalpWorkbenchPanel() {
             <RefreshCw className={cn('mr-2 h-4 w-4', scanLoading && 'animate-spin')} />
             Refresh
           </Button>
-          <Button variant="outline" size="sm" onClick={captureScalpChartForAIReview} disabled={!activeSignal || chartLoading}>
-            <Camera className="mr-2 h-4 w-4" />
-            Capture for AI review
+          <Button variant="outline" size="sm" onClick={captureScalpChartForAIReview} disabled={!activeSignal || chartLoading || aiReviewLoading}>
+            <Camera className={cn('mr-2 h-4 w-4', aiReviewLoading && 'animate-pulse')} />
+            {aiReviewLoading ? 'Reviewing…' : 'Capture for AI review'}
           </Button>
           <Button variant="outline" size="sm" onClick={copyPayload} disabled={!activeSignal}>
             <Copy className="mr-2 h-4 w-4" />
@@ -1277,7 +1318,7 @@ export default function ScalpWorkbenchPanel() {
             <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
               <CardTitle className="flex items-center gap-2 text-base">
                 <BarChart3 className="h-4 w-4 text-primary" />
-                {timeframe} Execution Chart
+                {executionTf} Execution Chart
               </CardTitle>
               <div className="flex flex-wrap items-center gap-2">
                 <Select value={activeSymbolKey || EMPTY_SYMBOL_SELECT_VALUE} onValueChange={selectSymbol}>
@@ -1297,7 +1338,11 @@ export default function ScalpWorkbenchPanel() {
                     ))}
                   </SelectContent>
                 </Select>
-                <Select value={timeframe} onValueChange={(value) => setTimeframe(value as (typeof TIMEFRAMES)[number])}>
+                <Select
+                  value={timeframe}
+                  onValueChange={(value) => setTimeframe(value as (typeof TIMEFRAMES)[number])}
+                  disabled={!tfDisplayOverride}
+                >
                   <SelectTrigger className="h-8 w-[92px]">
                     <SelectValue />
                   </SelectTrigger>
@@ -1309,6 +1354,10 @@ export default function ScalpWorkbenchPanel() {
                     ))}
                   </SelectContent>
                 </Select>
+                <label className="flex items-center gap-2 text-[11px] text-muted-foreground">
+                  <Switch checked={tfDisplayOverride} onCheckedChange={setTfDisplayOverride} />
+                  Display override
+                </label>
               </div>
             </div>
             <div className="flex flex-wrap gap-4 text-xs text-muted-foreground">
@@ -1355,7 +1404,9 @@ export default function ScalpWorkbenchPanel() {
             </CardHeader>
             <CardContent className="space-y-1 px-4 pb-3 pt-0">
               <FieldRow label="Symbol" value={chartSymbol || '—'} />
-              <FieldRow label="Timeframe" value={activeUi.timeframe || timeframe} />
+              <FieldRow label="Timeframe" value={activeUi.timeframe || executionTf} />
+              <FieldRow label="AI grade" value={textValue(activeUi.raw?.ai_grade ?? activeSignal?.ai_grade, '—')} />
+              <FieldRow label="AI score" value={numberValue(activeUi.raw?.ai_score ?? activeSignal?.ai_score)} />
               <FieldRow label="Engine D" value={textValue(activeUi.engineStatus)} tone={activeUi.executable ? 'ok' : 'muted'} />
               <FieldRow label="Market state" value={marketState} tone={marketState === 'unknown' ? 'muted' : 'ok'} />
               <FieldRow label="Location" value={location} tone={location === 'unknown' ? 'muted' : 'ok'} />
@@ -1493,69 +1544,43 @@ export default function ScalpWorkbenchPanel() {
         </div>
       </div>
 
-      {(aiCaptureError || scalpAiReviewPreview) && (
-        <Card className="border-border/60 bg-card/70">
-          <CardHeader className="px-4 py-3">
-            <CardTitle className="flex items-center gap-2 text-base">
-              <Sparkles className="h-4 w-4 text-primary" />
-              AI review payload preview
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-3 px-4 pb-4 pt-0">
-            {aiCaptureError && (
-              <div className="rounded-md border border-warning/35 bg-warning/10 px-3 py-2 text-xs text-warning">
-                {aiCaptureError}
-              </div>
-            )}
-            {scalpAiReviewPreview && (
-              <div className="grid gap-3 text-xs text-muted-foreground lg:grid-cols-4">
-                <div>
-                  <span className="uppercase tracking-wide">Screenshot</span>
-                  <div className="mt-1 text-foreground/80">
-                    {scalpAiReviewPreview.screenshotCaptured ? 'captured' : 'not captured'}
-                    {scalpAiReviewPreview.screenshotSize
-                      ? ` / ${scalpAiReviewPreview.screenshotSize.width}x${scalpAiReviewPreview.screenshotSize.height}`
-                      : ''}
-                  </div>
-                </div>
-                <div>
-                  <span className="uppercase tracking-wide">Selected</span>
-                  <div className="mt-1 text-foreground/80">
-                    {textValue(scalpAiReviewPreview.scalpChartSnapshot.symbol, 'unknown')} {textValue(scalpAiReviewPreview.scalpChartSnapshot.timeframe, 'unknown')}
-                  </div>
-                </div>
-                <div>
-                  <span className="uppercase tracking-wide">Setup</span>
-                  <div className="mt-1 text-foreground/80">
-                    {textValue(scalpAiReviewPreview.scalpChartSnapshot.selectedSignal.setupType, '—')} / {textValue(scalpAiReviewPreview.scalpChartSnapshot.selectedSignal.direction, '—')}
-                  </div>
-                </div>
-                <div>
-                  <span className="uppercase tracking-wide">Source quality</span>
-                  <div className="mt-1 text-foreground/80">{scalpAiReviewPreview.sourceQualitySummary}</div>
-                </div>
-              </div>
-            )}
-            {scalpAiReviewPreview && (
-              <div className="text-xs text-muted-foreground">
-                <span className="uppercase tracking-wide">Unavailable reasons</span>
-                <div className="mt-1 text-foreground/80">
-                  {scalpAiReviewPreview.scalpChartSnapshot.sourceContract.unavailableReasons.length
-                    ? scalpAiReviewPreview.scalpChartSnapshot.sourceContract.unavailableReasons.join(', ')
-                    : '—'}
-                </div>
-              </div>
-            )}
-            {scalpAiReviewDebugPayload && (
-              <details className="rounded-md border border-border/50 bg-background/40 px-3 py-2 text-xs">
-                <summary className="cursor-pointer font-medium text-muted-foreground">Snapshot payload</summary>
-                <pre className="mt-2 max-h-[260px] overflow-auto whitespace-pre-wrap break-words text-[11px] text-foreground/80">
-                  {JSON.stringify(scalpAiReviewDebugPayload, null, 2)}
-                </pre>
-              </details>
-            )}
-          </CardContent>
-        </Card>
+      {(aiCaptureError || scalpAiReviewResponse || scalpAiReviewPreview) && (
+        <div className="space-y-3">
+          {aiCaptureError && (
+            <div className="rounded-md border border-warning/35 bg-warning/10 px-3 py-2 text-xs text-warning">
+              {aiCaptureError}
+            </div>
+          )}
+          {scalpAiReviewResponse && <ScalpAIReviewCard response={scalpAiReviewResponse} />}
+          {scalpAiReviewPreview && (
+            <Card className="border-border/60 bg-card/70">
+              <CardHeader className="px-4 py-3">
+                <CardTitle className="flex items-center gap-2 text-base">
+                  <Sparkles className="h-4 w-4 text-primary" />
+                  AI review debug
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-3 px-4 pb-4 pt-0">
+                {scalpAiReviewDebugPayload && (
+                  <details className="rounded-md border border-border/50 bg-background/40 px-3 py-2 text-xs" open={!scalpAiReviewResponse}>
+                    <summary className="cursor-pointer font-medium text-muted-foreground">Snapshot payload</summary>
+                    <pre className="mt-2 max-h-[260px] overflow-auto whitespace-pre-wrap break-words text-[11px] text-foreground/80">
+                      {JSON.stringify(scalpAiReviewDebugPayload, null, 2)}
+                    </pre>
+                  </details>
+                )}
+                {scalpAiReviewResponse && (
+                  <details className="rounded-md border border-border/50 bg-background/40 px-3 py-2 text-xs">
+                    <summary className="cursor-pointer font-medium text-muted-foreground">Copy JSON</summary>
+                    <pre className="mt-2 max-h-[260px] overflow-auto whitespace-pre-wrap break-words text-[11px] text-foreground/80">
+                      {JSON.stringify(scalpAiReviewResponse, null, 2)}
+                    </pre>
+                  </details>
+                )}
+              </CardContent>
+            </Card>
+          )}
+        </div>
       )}
 
       <Card className="border-border/60 bg-card/70">

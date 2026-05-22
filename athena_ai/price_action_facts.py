@@ -431,9 +431,29 @@ def derive_price_action_facts(
         profile = engine_a_ctx.get("profile") or {}
     if not isinstance(profile, dict):
         profile = {}
-    poc = _to_float(profile.get("poc") or profile.get("vp_poc"))
-    vah = _to_float(profile.get("vah") or profile.get("vp_vah"))
-    val = _to_float(profile.get("val") or profile.get("vp_val"))
+    if isinstance(structure_ctx, dict):
+        poc = _to_float(
+            profile.get("poc")
+            or profile.get("vp_poc")
+            or structure_ctx.get("prev_session_poc")
+            or structure_ctx.get("vp_poc")
+        )
+        vah = _to_float(
+            profile.get("vah")
+            or profile.get("vp_vah")
+            or structure_ctx.get("prev_session_vah")
+            or structure_ctx.get("vp_vah")
+        )
+        val = _to_float(
+            profile.get("val")
+            or profile.get("vp_val")
+            or structure_ctx.get("prev_session_val")
+            or structure_ctx.get("vp_val")
+        )
+    else:
+        poc = _to_float(profile.get("poc") or profile.get("vp_poc"))
+        vah = _to_float(profile.get("vah") or profile.get("vp_vah"))
+        val = _to_float(profile.get("val") or profile.get("vp_val"))
 
     named_levels = named_levels or {}
     breakout_level = _to_float(named_levels.get("breakout_level"))

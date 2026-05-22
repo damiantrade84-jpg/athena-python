@@ -47,14 +47,22 @@ function engineALine(engine: AIChartReviewEngineSummary | null | undefined): str
   const threshold = fmtNum(engine.threshold, 2);
   const pass = fmtPass(engine.passed);
   const direction = show(engine.direction);
-  return `${score} / ${max} · threshold ${threshold} · ${pass} · ${direction}`;
+  const norm =
+    engine.normalizedScore != null && !Number.isNaN(engine.normalizedScore)
+      ? `${Math.round(engine.normalizedScore)}%`
+      : null;
+  const normText = norm ? ` · ${norm} norm` : '';
+  return `${score} / ${max} · threshold ${threshold} · ${pass} · ${direction}${normText}`;
 }
 
 function ScoreCell({ label, value }: { label: string; value: number | null | undefined }) {
+  const display = fmtNum(value);
   return (
     <div className="border border-border/40 rounded-md px-2 py-1.5 min-w-0">
       <div className="text-[10px] text-muted-foreground truncate">{label}</div>
-      <div className="text-[11px] font-mono font-semibold">{fmtNum(value)}</div>
+      <div className="text-[11px] font-mono font-semibold">
+        {display === '—' ? display : `${display}/100`}
+      </div>
     </div>
   );
 }
@@ -99,7 +107,10 @@ export default function AIReviewSummaryStrip({ summary }: AIReviewSummaryStripPr
       <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-7 gap-1.5">
         <ScoreCell label="Overall" value={s.overallScore} />
         <ScoreCell label="Tradeability" value={s.tradeabilityScore} />
-        <ScoreCell label="Engine align" value={s.engineAlignmentScore} />
+        <ScoreCell
+          label={s.sourceQualityScore != null && s.engineAlignmentScore == null ? 'Source' : 'Engine align'}
+          value={s.sourceQualityScore ?? s.engineAlignmentScore}
+        />
         <ScoreCell label="Visual" value={s.visualConfirmationScore} />
         <ScoreCell label="Entry" value={s.entryQualityScore} />
         <ScoreCell label="Risk" value={s.riskScore} />
@@ -110,8 +121,19 @@ export default function AIReviewSummaryStrip({ summary }: AIReviewSummaryStripPr
         <SummaryKV label="Human action" value={show(humanAction)} />
         <SummaryKV label="Setup type" value={setupType} />
         <div className="border border-border/40 rounded-md px-2 py-1">
-          <span className="text-muted-foreground">Engine A: </span>
-          <span className="font-mono">{engineALine(s.engineA)}</span>
+          {s.engineD ? (
+            <>
+              <span className="text-muted-foreground">Engine D: </span>
+              <span className="font-mono">
+                {show(s.engineD.direction)} grade {show(s.engineD.aiGrade)} / {fmtNum(s.engineD.aiScore, 1)}
+              </span>
+            </>
+          ) : (
+            <>
+              <span className="text-muted-foreground">Engine A: </span>
+              <span className="font-mono">{engineALine(s.engineA)}</span>
+            </>
+          )}
         </div>
         <SummaryKV
           label="Provider"

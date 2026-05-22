@@ -201,6 +201,7 @@ def extract_engine_d_snapshot(signal: dict[str, Any]) -> dict[str, Any]:
         ed.get("score"),
         ed.get("scalp_score"),
         signal.get("scalp_score"),
+        signal.get("ai_score"),
         signal.get("engine_d_score"),
     )
     max_score = _first_float(ed.get("max_score"), ed.get("maxScore"))
@@ -214,8 +215,14 @@ def extract_engine_d_snapshot(signal: dict[str, Any]) -> dict[str, Any]:
         or ed.get("setupType")
         or signal.get("setup_type")
         or signal.get("setupType")
+        or signal.get("zone_type")
+        or signal.get("zoneType")
     )
-    direction = ed.get("direction") or signal.get("scalp_direction")
+    direction = (
+        ed.get("direction")
+        or signal.get("scalp_direction")
+        or signal.get("direction")
+    )
 
     return {
         "score": score,

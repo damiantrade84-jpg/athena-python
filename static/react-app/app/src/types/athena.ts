@@ -1032,6 +1032,7 @@ export interface AIChartReviewSummary {
   riskScore: number | null;
   confidence: number | null;
   finalReason: string | null;
+  sourceQualityScore?: number | null;
   engineA: AIChartReviewEngineSummary | null;
   engineB: AIChartReviewEngineSummary | null;
   engineC: AIChartReviewEngineSummary | null;
@@ -1235,4 +1236,169 @@ export interface AIChartReviewRequest {
   provider?: 'default' | 'anthropic';
   screenshot_base64: string;
   screenshot_meta: AIChartReviewScreenshotMeta;
+}
+
+export type ScalpAIReviewHumanAction = 'trade' | 'wait' | 'reject' | 'watch';
+
+export type ScalpAIReviewComparisonVerdict =
+  | 'setup_confirmed'
+  | 'direction_confirmed_entry_rejected'
+  | 'setup_contradicted'
+  | 'source_quality_insufficient'
+  | 'setup_missing'
+  | 'mixed'
+  | 'unknown';
+
+export interface ScalpAIReviewSummary {
+  provider?: string | null;
+  model?: string | null;
+  providerStatus?: string | null;
+  fallbackUsed?: boolean;
+  humanAction?: ScalpAIReviewHumanAction | string | null;
+  setupType?: string | null;
+  overallScore?: number | null;
+  tradeabilityScore?: number | null;
+  visualConfirmationScore?: number | null;
+  entryQualityScore?: number | null;
+  riskScore?: number | null;
+  sourceQualityScore?: number | null;
+  confidence?: number | null;
+  finalReason?: string | null;
+  engineD?: {
+    aiGrade?: string | null;
+    aiScore?: number | null;
+    direction?: string | null;
+    executable?: boolean | null;
+    executionTf?: string | null;
+  } | null;
+}
+
+export interface ScalpVerdictComparison {
+  setupProvided?: boolean;
+  setupDirection?: string | null;
+  setupGrade?: string | null;
+  setupScore?: number | null;
+  setupPassed?: boolean | null;
+  chartConfirmsDirection?: boolean | null;
+  chartContradictsDirection?: boolean | null;
+  chartConfirmsEntryTiming?: boolean | null;
+  chartContradictsEntryTiming?: boolean | null;
+  sourceQualitySupportsReview?: boolean | null;
+  aiDowngradedSetup?: boolean;
+  comparisonVerdict?: ScalpAIReviewComparisonVerdict | string;
+  downgradeReasons?: string[];
+  finalDecision?: string | null;
+  finalReason?: string | null;
+}
+
+export interface ScalpContextCompleteness {
+  score?: number;
+  status?: 'complete' | 'partial' | 'insufficient' | string;
+  missingRequired?: string[];
+  missingOptional?: string[];
+  notApplicable?: string[];
+  metadata?: {
+    chartCapturedAt?: string | null;
+    latestCandleTimestamp?: string | null;
+    latestCandleTs?: string | null;
+    candleSource?: string | null;
+    orderflowSource?: string | null;
+    vpSource?: string | null;
+  };
+}
+
+export interface ScalpAIReviewConcordance {
+  engine?: 'D';
+  setup_direction?: string | null;
+  setup_grade?: string | null;
+  setup_executable?: boolean;
+  ai_verdict?: string;
+  ai_human_action?: string;
+  concordance?: 'agree' | 'partial' | 'disagree' | 'unknown';
+  divergence_type?: string;
+  divergence_note?: string;
+  should_flag_for_review?: boolean;
+}
+
+export interface ScalpAIReviewNormalized {
+  verdict?: string;
+  confidence?: number;
+  setup_type?: string;
+  visual_confirmation?: string;
+  visual_contradiction?: string;
+  entry_quality?: string;
+  source_quality_assessment?: string;
+  supporting_reasons?: string[];
+  risks?: string[];
+  missing_context?: string[];
+  human_action?: string;
+  parse_success?: boolean;
+}
+
+export interface ScalpEngineDContext {
+  symbol?: string;
+  timeframe?: string;
+  execution_tf?: string;
+  direction?: string;
+  ai_grade?: string | null;
+  ai_score?: number | null;
+  executable?: boolean;
+  gate_result?: string | null;
+  strict_fabio_pass?: boolean | null;
+  setup_available?: boolean;
+  scan_timestamp?: string;
+  latest_candle_ts?: string;
+  chart_captured_at?: string;
+  scalpSetup?: Record<string, unknown>;
+  marketLocation?: Record<string, unknown>;
+  aggressionContext?: Record<string, unknown>;
+  sourceContract?: Record<string, unknown>;
+  mismatch_warnings?: string[];
+}
+
+export interface ScalpAIChartReviewResponse {
+  review_id: string | null;
+  provider: string;
+  model: string | null;
+  latency_ms?: number | null;
+  dedup_hit?: boolean;
+  engine_d_context?: ScalpEngineDContext;
+  engineDContext?: ScalpEngineDContext;
+  ai_review?: ScalpAIReviewNormalized;
+  concordance?: ScalpAIReviewConcordance;
+  timestamps?: {
+    scan_timestamp?: string | null;
+    chart_captured_at?: string | null;
+    latest_candle_ts?: string | null;
+  };
+  mismatch_warnings?: string[];
+  aiReviewSummary?: ScalpAIReviewSummary;
+  ai_review_summary?: ScalpAIReviewSummary;
+  scalpVerdictComparison?: ScalpVerdictComparison;
+  scalp_verdict_comparison?: ScalpVerdictComparison;
+  contextCompleteness?: ScalpContextCompleteness;
+  context_completeness?: ScalpContextCompleteness;
+  strategy_layer?: Record<string, unknown>;
+  strategyLayer?: Record<string, unknown>;
+}
+
+export interface ScalpAIChartReviewScreenshotMeta {
+  width: number;
+  height: number;
+  native_chart: true;
+  chart_timeframe: string;
+  overlays: string[];
+  captured_at: string;
+  execution_tf?: string;
+  visible_range_start?: string;
+  visible_range_end?: string;
+  chart_provider?: string;
+}
+
+export interface ScalpAIChartReviewRequest {
+  symbol: string;
+  timeframe: string;
+  provider?: 'default' | 'anthropic';
+  screenshot_base64: string;
+  screenshot_meta: ScalpAIChartReviewScreenshotMeta;
 }

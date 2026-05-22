@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from ai_review.engine_a_context import build_engine_a_prompt_context
+from ai_review.engine_a_context import build_engine_a_prompt_context, build_engine_b_prompt_context
 
 
 def _fmt(value: Any) -> str:
@@ -25,14 +25,17 @@ def build_chart_review_prompt(context: dict[str, Any]) -> str:
     equity = context.get("equity_session") or {}
     mismatch_warnings = context.get("mismatch_warnings") or []
     engine_a_context = build_engine_a_prompt_context(context)
+    engine_b_context = build_engine_b_prompt_context(context)
     engine_a_json = json.dumps({"engineAContext": engine_a_context}, default=str, indent=2)
+    engine_b_json = json.dumps({"engineBContext": engine_b_context}, default=str, indent=2)
 
     return f"""You are not only reviewing the chart image. You are validating the chart against the structured Engine A signal supplied below.
 
 Workflow (required):
 1. Decide whether the chart visually confirms Engine A direction (directional validity).
-2. Decide whether current entry timing is acceptable (entry timing quality) — extended/late entries downgrade tradeability even when direction is correct.
-3. Decide tradeability now (human action: trade | wait | reject | watch). Engine A may pass while the correct action is WAIT.
+2. If Engine B context is present, assess whether chart structure (zones, BOS/CHOCH, OB/FVG if visible) aligns with engineBContext.
+3. Decide whether current entry timing is acceptable (entry timing quality) — extended/late entries downgrade tradeability even when direction is correct.
+4. Decide tradeability now (human action: trade | wait | reject | watch). Engine A may pass while the correct action is WAIT.
 
 Return strict JSON only with these top-level keys:
 - aiReviewSummary: {{ humanAction, setupType, overallScore, tradeabilityScore, engineAlignmentScore, visualConfirmationScore, entryQualityScore, riskScore, confidence, finalReason }} (scores 0-100 integers or null)
@@ -69,6 +72,9 @@ Rules:
 
 == SERVER-TRUSTED engineAContext (JSON) ==
 {engine_a_json}
+
+== SERVER-TRUSTED engineBContext (JSON) ==
+{engine_b_json}
 
 == SYMBOL ==
 {context.get("symbol")} {context.get("timeframe")} asset_group: {context.get("asset_group")}

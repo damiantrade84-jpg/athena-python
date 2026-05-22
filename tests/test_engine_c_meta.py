@@ -290,3 +290,27 @@ def test_normalise_engine_a_uses_config_when_maxscore_missing(monkeypatch):
     out = engine_c.normalise_engine_a(sig)
     assert out["max_score"] == 2.5
     assert abs(out["score_norm"] - (1.25 / 2.5)) < 1e-6
+
+
+def test_normalise_engine_a_detects_carry_via_camelcase_factor_scores():
+    sig = {
+        "confluenceScore": 1.5,
+        "maxScore": 3.0,
+        "direction": "LONG",
+        "factorScores": {"carry": 0.2, "trend": 0.8},
+        "factorDiagnostics": {"feedStatus": {"addon": "carry"}},
+    }
+    out = normalise_engine_a(sig)
+    assert out["carry_active"] is True
+
+
+def test_normalise_engine_a_detects_cot_via_addon_type():
+    sig = {
+        "confluenceScore": 1.5,
+        "maxScore": 3.0,
+        "direction": "LONG",
+        "factorScores": {"addon": 0.3},
+        "factorDiagnostics": {"feedStatus": {"addon": "cot"}},
+    }
+    out = normalise_engine_a(sig)
+    assert out["cot_active"] is True

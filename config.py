@@ -372,6 +372,29 @@ CONFIG: dict = {
             "AI_CHART_REVIEW_STRATEGY_LAYER_OHLCV_LIMIT", 80
         ),
     },
+    "AI_SCALP_CHART_REVIEW": {
+        "ENABLED": _env_bool("AI_SCALP_CHART_REVIEW_ENABLED", False),
+        "DEFAULT_PROVIDER": (
+            os.environ.get("AI_SCALP_CHART_REVIEW_DEFAULT_PROVIDER", "anthropic").strip().lower()
+            or "anthropic"
+        ),
+        "ANTHROPIC_MODEL": os.environ.get(
+            "AI_SCALP_CHART_REVIEW_ANTHROPIC_MODEL",
+            os.environ.get("AI_CHART_REVIEW_ANTHROPIC_MODEL", "claude-opus-4-7"),
+        ),
+        "MAX_TOKENS": _env_int("AI_SCALP_CHART_REVIEW_MAX_TOKENS", 1500),
+        "REQUIRE_SCREENSHOT": True,
+        "MAX_IMAGE_BYTES": 2 * 1024 * 1024,
+        "PERSIST_REVIEWS": True,
+        "ALLOW_OPENAI_PROVIDER": _env_bool("AI_SCALP_CHART_REVIEW_ALLOW_OPENAI_PROVIDER", False),
+        "DEDUP_WINDOW_SECONDS": 60,
+        "STRATEGY_LAYER_ENABLED": _env_bool(
+            "AI_SCALP_CHART_REVIEW_STRATEGY_LAYER_ENABLED", True
+        ),
+        "STRATEGY_LAYER_OHLCV_LIMIT": _env_int(
+            "AI_SCALP_CHART_REVIEW_STRATEGY_LAYER_OHLCV_LIMIT", 80
+        ),
+    },
     "AI_PROMPT_STORE_CLEANUP_ENABLED": True,
     "AI_PROMPT_STORE_RETENTION_DAYS": 90,
     "AI_PROMPT_STORE_MIN_DELETE_AGE_DAYS": 7,
