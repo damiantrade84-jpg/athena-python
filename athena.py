@@ -11561,11 +11561,227 @@ def _unresolved_audit_rows_for_display(
                 "exchange_hint": exchange_hint,
                 "broker_live": broker_live,
                 "status": "live_broker_position" if broker_live else "audit_only_no_broker_match",
-                "close_action_enabled": False,
+                "close_action_enabled": not broker_live,
             }
         )
 
     return sorted(out, key=lambda r: str(r.get("pair") or ""))
+
+
+def _audit_ticket_broker_live(
+    ticket: str,
+    *,
+    mt5_open_tickets: set[str],
+    bybit_open_ids: set[str],
+    matched_audit_tickets: set[str] | None = None,
+) -> bool:
+    ticket = str(ticket or "").strip()
+    if not ticket:
+        return False
+    is_mt5_ticket = ticket.isdigit()
+    matched = matched_audit_tickets or set()
+    return (
+        (is_mt5_ticket and ticket in mt5_open_tickets)
+        or (not is_mt5_ticket and ticket in bybit_open_ids)
+        or (not is_mt5_ticket and ticket in matched)
+    )
+
+
+def _broker_open_context_for_audit(db_path: str) -> tuple[set[str], set[str], set[str]]:
+    """Return MT5 tickets, Bybit open IDs, and audit tickets matched to live positions."""
+
+    from mt5_executor import mt5_get_positions
+    from bybit_executor import bybit_get_positions
+    from timed_exit_monitor import _load_recent_audit_rows, _match_audit_row_for_position
+
+    mt5_res = mt5_get_positions()
+    bybit_res = bybit_get_positions()
+    if isinstance(mt5_res, dict) and mt5_res.get("error"):
+        raise RuntimeError(str(mt5_res.get("error")))
+    if isinstance(bybit_res, dict) and bybit_res.get("error"):
+        raise RuntimeError(str(bybit_res.get("error")))
+
+    mt5_positions = mt5_res.get("positions", []) if isinstance(mt5_res, dict) else (mt5_res or [])
+    bybit_positions = bybit_res.get("positions", []) if isinstance(bybit_res, dict) else (bybit_res or [])
+    all_positions = list(mt5_positions) + list(bybit_positions)
+
+    mt5_open_tickets = {
+        str(p.get("ticket")).strip()
+        for p in mt5_positions
+        if p.get("ticket") is not None and str(p.get("ticket")).strip()
+    }
+    bybit_open_ids = {
+        str(p.get(key)).strip()
+        for p in bybit_positions
+        for key in ("ticket", "id", "position_id", "order_id", "orderId")
+        if p.get(key) is not None and str(p.get(key)).strip()
+    }
+
+    audit_rows = _load_recent_audit_rows(db_path)
+    matched_audit_tickets: set[str] = set()
+    for p in all_positions:
+        audit = _match_audit_row_for_position(p, audit_rows) or {}
+        audit_ticket = str(audit.get("ticket") or "").strip()
+        if audit_ticket:
+            matched_audit_tickets.add(audit_ticket)
+
+    return mt5_open_tickets, bybit_open_ids, matched_audit_tickets
+
+
+def _reconcile_audit_orphan(
+    ticket: str,
+    *,
+    db_path: str,
+    mt5_open_tickets: set[str],
+    bybit_open_ids: set[str],
+    matched_audit_tickets: set[str] | None = None,
+) -> dict:
+    """Scratch-close an audit-only orphan row (exit=entry, pnl=0). No broker orders."""
+
+    ticket = str(ticket or "").strip()
+    if not ticket:
+        return {"ticket": ticket, "status": "error", "error": "missing_ticket"}
+
+    if _audit_ticket_broker_live(
+        ticket,
+        mt5_open_tickets=mt5_open_tickets,
+        bybit_open_ids=bybit_open_ids,
+        matched_audit_tickets=matched_audit_tickets,
+    ):
+        return {"ticket": ticket, "status": "error", "error": "broker_position_still_open"}
+
+    with sqlite3.connect(db_path, timeout=15.0) as con:
+        con.row_factory = sqlite3.Row
+        row = con.execute(
+            "SELECT id, ts, pair, entry_price, sl FROM audit_log "
+            "WHERE ticket=? AND exit_price IS NULL ORDER BY id DESC LIMIT 1",
+            (ticket,),
+        ).fetchone()
+        if not row:
+            return {"ticket": ticket, "status": "error", "error": "not_found_or_already_closed"}
+
+        entry_price = row["entry_price"]
+        exit_price = entry_price
+        exit_time = datetime.now(timezone.utc).isoformat()
+        exit_reason = "AUDIT_ORPHAN_RECONCILE"
+        pnl = 0.0
+        r_multiple = 0.0 if entry_price is not None else None
+
+        holding_hours = None
+        if row["ts"]:
+            try:
+                t_entry = datetime.fromisoformat(str(row["ts"]).replace("Z", "+00:00"))
+                holding_hours = round(
+                    (datetime.now(timezone.utc) - t_entry).total_seconds() / 3600,
+                    2,
+                )
+            except Exception:
+                holding_hours = None
+
+        cur = con.execute(
+            "UPDATE audit_log SET exit_price=?, exit_time=?, pnl=?, r_multiple=?, "
+            "exit_reason=?, holding_period_hours=? WHERE ticket=? AND exit_price IS NULL",
+            (
+                exit_price,
+                exit_time,
+                pnl,
+                r_multiple,
+                exit_reason,
+                holding_hours,
+                ticket,
+            ),
+        )
+        con.commit()
+        updated = cur.rowcount or 0
+
+    if updated <= 0:
+        return {"ticket": ticket, "status": "error", "error": "update_failed"}
+
+    log.info(
+        f"[AUDIT] Orphan reconcile scratch close: ticket={ticket} pair={row['pair']}"
+    )
+    return {"ticket": ticket, "pair": row["pair"], "status": "closed"}
+
+
+def _reconcile_audit_orphans_audit_only(
+    db_path: str,
+    *,
+    mt5_open_tickets: set[str],
+    bybit_open_ids: set[str],
+    matched_audit_tickets: set[str] | None = None,
+) -> dict:
+    unresolved = _unresolved_audit_rows_for_display(
+        db_path,
+        mt5_open_tickets=mt5_open_tickets,
+        bybit_open_ids=bybit_open_ids,
+        matched_audit_tickets=matched_audit_tickets,
+    )
+    tickets = [
+        str(row.get("ticket") or "").strip()
+        for row in unresolved
+        if not row.get("broker_live") and str(row.get("ticket") or "").strip()
+    ]
+    results = [
+        _reconcile_audit_orphan(
+            ticket,
+            db_path=db_path,
+            mt5_open_tickets=mt5_open_tickets,
+            bybit_open_ids=bybit_open_ids,
+            matched_audit_tickets=matched_audit_tickets,
+        )
+        for ticket in tickets
+    ]
+    closed = sum(1 for r in results if r.get("status") == "closed")
+    return {"closed": closed, "results": results}
+
+
+@app.route("/api/audit/reconcile-orphan", methods=["POST"])
+def api_audit_reconcile_orphan():
+    """Scratch-close audit-only orphan rows (bookkeeping cleanup; no broker orders)."""
+
+    data = request.get_json(force=True) or {}
+    ticket = str(data.get("ticket") or "").strip()
+    reconcile_all = bool(data.get("reconcile_all_audit_only"))
+
+    if not ticket and not reconcile_all:
+        return jsonify(
+            {"success": False, "error": "ticket or reconcile_all_audit_only required"}
+        ), 400
+
+    try:
+        mt5_open, bybit_open, matched = _broker_open_context_for_audit(_AUDIT_DB)
+    except Exception as e:
+        return jsonify({"success": False, "error": f"broker_fetch_failed: {e}"}), 503
+
+    if reconcile_all:
+        payload = _reconcile_audit_orphans_audit_only(
+            _AUDIT_DB,
+            mt5_open_tickets=mt5_open,
+            bybit_open_ids=bybit_open,
+            matched_audit_tickets=matched,
+        )
+        return jsonify({"success": True, **payload})
+
+    result = _reconcile_audit_orphan(
+        ticket,
+        db_path=_AUDIT_DB,
+        mt5_open_tickets=mt5_open,
+        bybit_open_ids=bybit_open,
+        matched_audit_tickets=matched,
+    )
+    if result.get("status") == "closed":
+        return jsonify({"success": True, "closed": 1, "results": [result]})
+    if result.get("error") == "broker_position_still_open":
+        return jsonify(
+            {"success": False, "error": result["error"], "results": [result]}
+        ), 409
+    return jsonify(
+        {
+            "success": False,
+            "error": result.get("error") or "reconcile_failed",
+            "results": [result],
+        }
+    ), 400
 
 
 @app.route("/api/open-trades-timed")

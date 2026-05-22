@@ -53,6 +53,8 @@ export default function TradesPanel() {
   const [closeVolume, setCloseVolume] = useState<number>(0);
   const [closeExchange, setCloseExchange] = useState<string>('mt5');
   const [closeDirection, setCloseDirection] = useState<string>('LONG');
+  const [auditOrphanTicket, setAuditOrphanTicket] = useState<string | null>(null);
+  const [auditOrphanBulk, setAuditOrphanBulk] = useState(false);
 
   const { data: openTradesResp, loading: openLoading, error: openError, refresh: refreshOpen } = useApiPoll<OpenTradesTimedResp>('/api/open-trades-timed', 30000);
   const { data: performance, loading: perfLoading, error: perfError, refresh: refreshPerf } = useApiPoll<PerformanceMetrics>('/api/performance', 0);
@@ -60,6 +62,11 @@ export default function TradesPanel() {
   const { data: failedExecs } = useApiPoll<unknown>('/api/failed-executions', 0);
 
   const { post: postClose, loading: closing } = useApiPost<{ success: boolean; error?: string }>();
+  const { post: postReconcileOrphan, loading: reconcilingOrphan } = useApiPost<{
+    success?: boolean;
+    closed?: number;
+    error?: string;
+  }>();
 
   const handleClose = useCallback(async () => {
     if (!closeTicket) return;
@@ -93,6 +100,39 @@ export default function TradesPanel() {
     if (!openTradesResp || Array.isArray(openTradesResp)) return [];
     return Array.isArray(openTradesResp.audit_unresolved) ? openTradesResp.audit_unresolved : [];
   }, [openTradesResp]);
+  const auditOnlyRows = useMemo(
+    () => unresolvedAudit.filter((row) => !row.broker_live && row.close_action_enabled !== false),
+    [unresolvedAudit],
+  );
+
+  const handleReconcileAuditOrphan = useCallback(async () => {
+    const payload = auditOrphanBulk
+      ? { reconcile_all_audit_only: true }
+      : auditOrphanTicket
+        ? { ticket: auditOrphanTicket }
+        : null;
+    if (!payload) return;
+
+    const result = await postReconcileOrphan('/api/audit/reconcile-orphan', payload);
+    if (result?.success) {
+      const closed = Number(result.closed ?? (auditOrphanBulk ? auditOnlyRows.length : 1));
+      showToast(`Closed ${closed} audit row${closed === 1 ? '' : 's'} (scratch)`, 'success');
+      refreshOpen();
+      refreshPerf();
+    } else {
+      showToast(`Audit close failed: ${result?.error || 'Unknown'}`, 'error');
+    }
+    setAuditOrphanTicket(null);
+    setAuditOrphanBulk(false);
+  }, [
+    auditOrphanBulk,
+    auditOrphanTicket,
+    auditOnlyRows.length,
+    postReconcileOrphan,
+    refreshOpen,
+    refreshPerf,
+    showToast,
+  ]);
 
   // Equity curve: backend returns flat number[] of cumulative R. Convert to recharts shape.
   const equityData = useMemo(() => {
@@ -243,6 +283,16 @@ export default function TradesPanel() {
                       <div className="flex items-center gap-2 px-3 py-2 text-[10px] uppercase tracking-wider text-warning">
                         <AlertTriangle className="h-3.5 w-3.5" />
                         Audit rows without exit price
+                        {auditOnlyRows.length > 0 && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="ml-auto h-6 text-[10px] border-warning/40 text-warning hover:bg-warning/10"
+                            onClick={() => setAuditOrphanBulk(true)}
+                          >
+                            Close all audit-only
+                          </Button>
+                        )}
                       </div>
                       <Table>
                         <TableHeader>
@@ -255,12 +305,14 @@ export default function TradesPanel() {
                             <TableHead className="text-[10px] uppercase text-right">SL</TableHead>
                             <TableHead className="text-[10px] uppercase text-right">TP</TableHead>
                             <TableHead className="text-[10px] uppercase">Style</TableHead>
+                            <TableHead className="text-[10px] uppercase text-right">Action</TableHead>
                           </TableRow>
                         </TableHeader>
                         <TableBody>
                           {unresolvedAudit.map((row, idx) => {
                             const direction = String(row.direction || '');
                             const ticket = String(row.ticket || row.id || idx);
+                            const canCloseAudit = !row.broker_live && row.close_action_enabled !== false;
                             return (
                               <TableRow key={`audit-${ticket}`}>
                                 <TableCell className="text-xs font-mono">{String(row.pair || '-')}</TableCell>
@@ -277,6 +329,20 @@ export default function TradesPanel() {
                                 <TableCell className="text-xs font-mono text-right text-short">{fmtNum(num(row.sl), 5)}</TableCell>
                                 <TableCell className="text-xs font-mono text-right text-long">{fmtNum(num(row.tp), 5)}</TableCell>
                                 <TableCell className="text-[10px] font-mono text-muted-foreground">{String(row.style || row.engine || '-')}</TableCell>
+                                <TableCell className="text-right">
+                                  {canCloseAudit ? (
+                                    <Button
+                                      size="sm"
+                                      variant="ghost"
+                                      className="h-6 w-6 p-0"
+                                      onClick={() => setAuditOrphanTicket(ticket)}
+                                    >
+                                      <X className="w-3 h-3 text-warning" />
+                                    </Button>
+                                  ) : (
+                                    <span className="text-[10px] text-muted-foreground">—</span>
+                                  )}
+                                </TableCell>
                               </TableRow>
                             );
                           })}
@@ -481,6 +547,31 @@ export default function TradesPanel() {
             <AlertDialogCancel>Cancel</AlertDialogCancel>
             <AlertDialogAction onClick={handleClose} disabled={closing}>
               {closing ? 'Closing...' : 'Confirm Close'}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog
+        open={!!auditOrphanTicket || auditOrphanBulk}
+        onOpenChange={() => {
+          setAuditOrphanTicket(null);
+          setAuditOrphanBulk(false);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Close audit row</AlertDialogTitle>
+            <AlertDialogDescription>
+              {auditOrphanBulk
+                ? `Close ${auditOnlyRows.length} audit-only row${auditOnlyRows.length === 1 ? '' : 's'} as scratch (exit=entry, pnl=0)? No broker positions will be touched.`
+                : `Close audit row ${auditOrphanTicket} as scratch (exit=entry, pnl=0)? No broker position will be touched.`}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={handleReconcileAuditOrphan} disabled={reconcilingOrphan}>
+              {reconcilingOrphan ? 'Closing...' : 'Confirm Close'}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

@@ -1,4 +1,4 @@
-import { useCallback, useMemo } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { useStore } from '@/hooks/useStore';
 import { useApiPoll, useApiPost } from '@/hooks/useApiData';
 import { useLivePrices } from '@/hooks/useLivePrices';
@@ -10,7 +10,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { StatCard, ErrorBanner } from '@/components/shared';
 import {
   TrendingUp, TrendingDown, Activity, Zap, Target,
-  Clock, Globe, AlertTriangle, BarChart3, Play, Square
+  Clock, Globe, AlertTriangle, BarChart3, Play, Square, X
 } from 'lucide-react';
 import { AreaChart, Area, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { fmtNum, toNum } from '@/lib/utils';
@@ -74,6 +74,8 @@ export default function DashboardPanel() {
   const { data: autoTrade, refresh: refreshAutoTrade } = useApiPoll<{ enabled: boolean }>('/api/auto-trade', 15000);
   const { post: postQuickExecute, loading: executingSignal } = useApiPost<{ success?: boolean; ticket?: string; error?: string; approval?: { approved: boolean; reason: string } }>();
   const { post: postAutoTrade, loading: togglingAutoTrade } = useApiPost<{ enabled: boolean; error?: string }>();
+  const { post: postReconcileOrphan } = useApiPost<{ success?: boolean; error?: string }>();
+  const [reconcilingAuditTicket, setReconcilingAuditTicket] = useState<string | null>(null);
   const { priceFor, ageSecFor, sourceFor } = useLivePrices();
 
   const openTrades = asArray<OpenTrade>(openTradesRaw);
@@ -82,6 +84,21 @@ export default function DashboardPanel() {
     : [];
   const recentSignals = (lastScan?.signals || []).slice(0, 6);
   const serverAutoTradeEnabled = Boolean(autoTrade?.enabled);
+
+  const handleDismissAuditOrphan = useCallback(async (ticket: string) => {
+    if (!window.confirm(`Close audit row as scratch (exit=entry, pnl=0)? No broker position will be touched.`)) {
+      return;
+    }
+    setReconcilingAuditTicket(ticket);
+    const result = await postReconcileOrphan('/api/audit/reconcile-orphan', { ticket });
+    setReconcilingAuditTicket(null);
+    if (result?.success) {
+      showToast('Audit row closed (scratch)', 'success');
+      await refreshTrades();
+    } else {
+      showToast(`Audit close failed: ${result?.error || 'Unknown'}`, 'error');
+    }
+  }, [postReconcileOrphan, refreshTrades, showToast]);
 
   const handleAutoTradeToggle = useCallback(async () => {
     const action = serverAutoTradeEnabled ? 'off' : 'on';
@@ -451,6 +468,7 @@ export default function DashboardPanel() {
                   {unresolvedAudit.map((row, i) => {
                     const ticket = String(row.ticket || row.id || i);
                     const direction = String(row.direction || '');
+                    const canCloseAudit = !row.broker_live && row.close_action_enabled !== false;
                     return (
                       <div key={`audit-${ticket}`} className="flex items-center justify-between p-2 rounded-md border border-warning/30 bg-warning/5">
                         <div className="flex items-center gap-2">
@@ -460,9 +478,22 @@ export default function DashboardPanel() {
                           </span>
                           <span className="text-xs font-mono">{String(row.pair || '-')}</span>
                         </div>
-                        <span className="text-[10px] uppercase text-warning">
-                          {row.broker_live ? 'broker live' : 'audit only'}
-                        </span>
+                        <div className="flex items-center gap-2">
+                          <span className="text-[10px] uppercase text-warning">
+                            {row.broker_live ? 'broker live' : 'audit only'}
+                          </span>
+                          {canCloseAudit && (
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              className="h-6 w-6 p-0"
+                              disabled={reconcilingAuditTicket === ticket}
+                              onClick={() => handleDismissAuditOrphan(ticket)}
+                            >
+                              <X className="w-3 h-3 text-warning" />
+                            </Button>
+                          )}
+                        </div>
                       </div>
                     );
                   })}

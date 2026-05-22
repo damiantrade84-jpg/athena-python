@@ -807,7 +807,224 @@ def test_open_trades_timed_exposes_unresolved_audit_rows(monkeypatch, tmp_path):
     assert rows["123"]["broker_live"] is False
     assert rows["123"]["status"] == "audit_only_no_broker_match"
     assert rows["123"]["duplicate_count"] == 2
-    assert rows["123"]["close_action_enabled"] is False
+    assert rows["123"]["close_action_enabled"] is True
+
+
+def _seed_audit_orphan_table(db_path, rows):
+    with sqlite3.connect(db_path) as con:
+        con.execute(
+            """
+            CREATE TABLE audit_log (
+                id INTEGER PRIMARY KEY,
+                ts TEXT,
+                pair TEXT,
+                direction TEXT,
+                entry_price REAL,
+                sl REAL,
+                tp REAL,
+                volume REAL,
+                engine TEXT,
+                style TEXT,
+                ticket TEXT,
+                asset_class TEXT,
+                exit_price REAL,
+                exit_time TEXT,
+                pnl REAL,
+                r_multiple REAL,
+                exit_reason TEXT,
+                holding_period_hours REAL
+            )
+            """
+        )
+        for row in rows:
+            con.execute(
+                """
+                INSERT INTO audit_log (
+                    id, ts, pair, direction, entry_price, sl, tp, volume, engine,
+                    style, ticket, asset_class, exit_price
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                row,
+            )
+
+
+def test_reconcile_orphan_scratch_closes_audit_only_row(monkeypatch, tmp_path):
+    athena_module = _load_athena_module()
+    orphan_ticket = str(uuid.uuid4())
+    db_path = tmp_path / "audit.db"
+    _seed_audit_orphan_table(
+        db_path,
+        [
+            (
+                1,
+                "2026-05-22T08:00:00+00:00",
+                "AAVE/USDT",
+                "SHORT",
+                185.5,
+                190.0,
+                175.0,
+                1.0,
+                "scalp",
+                "scalp",
+                orphan_ticket,
+                "crypto",
+                None,
+            ),
+        ],
+    )
+    monkeypatch.setattr(athena_module, "_AUDIT_DB", str(db_path))
+    monkeypatch.setattr(
+        athena_module,
+        "_broker_open_context_for_audit",
+        lambda _db: (set(), set(), set()),
+    )
+
+    client = athena_module.app.test_client()
+    resp = client.post("/api/audit/reconcile-orphan", json={"ticket": orphan_ticket})
+
+    assert resp.status_code == 200
+    payload = resp.get_json()
+    assert payload["success"] is True
+    assert payload["closed"] == 1
+    assert payload["results"][0]["status"] == "closed"
+
+    with sqlite3.connect(db_path) as con:
+        row = con.execute(
+            "SELECT exit_price, pnl, exit_reason FROM audit_log WHERE ticket=?",
+            (orphan_ticket,),
+        ).fetchone()
+    assert row[0] == 185.5
+    assert row[1] == 0.0
+    assert row[2] == "AUDIT_ORPHAN_RECONCILE"
+
+
+def test_reconcile_orphan_rejects_broker_live_ticket(monkeypatch, tmp_path):
+    athena_module = _load_athena_module()
+    db_path = tmp_path / "audit.db"
+    _seed_audit_orphan_table(
+        db_path,
+        [
+            (
+                1,
+                "2026-05-22T08:00:00+00:00",
+                "EUR/CHF",
+                "SHORT",
+                0.91624,
+                0.92118,
+                0.90816,
+                0.18,
+                "engine_a",
+                "swing",
+                "309818151",
+                "forex",
+                None,
+            ),
+        ],
+    )
+    monkeypatch.setattr(athena_module, "_AUDIT_DB", str(db_path))
+    monkeypatch.setattr(
+        athena_module,
+        "_broker_open_context_for_audit",
+        lambda _db: ({"309818151"}, set(), set()),
+    )
+
+    client = athena_module.app.test_client()
+    resp = client.post("/api/audit/reconcile-orphan", json={"ticket": "309818151"})
+
+    assert resp.status_code == 409
+    payload = resp.get_json()
+    assert payload["success"] is False
+    assert payload["error"] == "broker_position_still_open"
+
+    with sqlite3.connect(db_path) as con:
+        row = con.execute(
+            "SELECT exit_price FROM audit_log WHERE ticket=?",
+            ("309818151",),
+        ).fetchone()
+    assert row[0] is None
+
+
+def test_reconcile_all_audit_only_bulk(monkeypatch, tmp_path):
+    athena_module = _load_athena_module()
+    orphan_a = str(uuid.uuid4())
+    orphan_b = str(uuid.uuid4())
+    db_path = tmp_path / "audit.db"
+    _seed_audit_orphan_table(
+        db_path,
+        [
+            (
+                1,
+                "2026-05-22T08:00:00+00:00",
+                "AAVE/USDT",
+                "SHORT",
+                185.5,
+                190.0,
+                175.0,
+                1.0,
+                "scalp",
+                "scalp",
+                orphan_a,
+                "crypto",
+                None,
+            ),
+            (
+                2,
+                "2026-05-22T08:01:00+00:00",
+                "APT/USDT",
+                "LONG",
+                8.5,
+                8.3,
+                9.0,
+                10.0,
+                "scalp",
+                "scalp",
+                orphan_b,
+                "crypto",
+                None,
+            ),
+            (
+                3,
+                "2026-05-22T08:02:00+00:00",
+                "EUR/CHF",
+                "SHORT",
+                0.91624,
+                0.92118,
+                0.90816,
+                0.18,
+                "engine_a",
+                "swing",
+                "309818151",
+                "forex",
+                None,
+            ),
+        ],
+    )
+    monkeypatch.setattr(athena_module, "_AUDIT_DB", str(db_path))
+    monkeypatch.setattr(
+        athena_module,
+        "_broker_open_context_for_audit",
+        lambda _db: ({"309818151"}, set(), set()),
+    )
+
+    client = athena_module.app.test_client()
+    resp = client.post(
+        "/api/audit/reconcile-orphan",
+        json={"reconcile_all_audit_only": True},
+    )
+
+    assert resp.status_code == 200
+    payload = resp.get_json()
+    assert payload["success"] is True
+    assert payload["closed"] == 2
+
+    with sqlite3.connect(db_path) as con:
+        rows = con.execute(
+            "SELECT ticket, exit_price, exit_reason FROM audit_log ORDER BY id"
+        ).fetchall()
+    closed = {ticket: (exit_price, exit_reason) for ticket, exit_price, exit_reason in rows}
+    assert closed[orphan_a][1] == "AUDIT_ORPHAN_RECONCILE"
+    assert closed[orphan_b][1] == "AUDIT_ORPHAN_RECONCILE"
+    assert closed["309818151"][0] is None
 
 
 def test_open_trades_timed_marks_bybit_uuid_audit_row_live_by_position_match(monkeypatch, tmp_path):
