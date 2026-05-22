@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from ai_playbooks import get_engine_a_playbook, get_engine_b_playbook, render_playbook_prompt_block
+from ai_playbooks.trade_skill_normalizer import render_trade_skill_prompt_schema
 from ai_review.engine_a_context import build_engine_a_prompt_context, build_engine_b_prompt_context
 
 
@@ -29,15 +31,31 @@ def build_chart_review_prompt(context: dict[str, Any]) -> str:
     engine_a_json = json.dumps({"engineAContext": engine_a_context}, default=str, indent=2)
     engine_b_json = json.dumps({"engineBContext": engine_b_context}, default=str, indent=2)
 
-    return f"""You are not only reviewing the chart image. You are validating the chart against the structured Engine A signal supplied below.
+    playbooks = [get_engine_a_playbook()]
+    has_engine_b = bool(engine_b_context and engine_b_context.get("available") is not False)
+    if has_engine_b or engine_b_context:
+        playbooks.append(get_engine_b_playbook())
+    playbook_block = render_playbook_prompt_block(playbooks, compact=True)
+    trade_skill_schema = render_trade_skill_prompt_schema("engine_a_chart")
+
+    return f"""You are not only reviewing the chart image. You are validating the chart against the structured Engine A signal supplied below using Athena trade playbooks.
 
 Workflow (required):
-1. Decide whether the chart visually confirms Engine A direction (directional validity).
-2. If Engine B context is present, assess whether chart structure (zones, BOS/CHOCH, OB/FVG if visible) aligns with engineBContext.
-3. Decide whether current entry timing is acceptable (entry timing quality) — extended/late entries downgrade tradeability even when direction is correct.
-4. Decide tradeability now (human action: trade | wait | reject | watch). Engine A may pass while the correct action is WAIT.
+1. Follow Engine A playbook: confluence, factor alignment, direction quality, entry timing.
+2. If Engine B context is present, follow Engine B playbook: structure, liquidity, zones, invalidation.
+3. Decide whether the chart visually confirms Engine A direction (directional validity).
+4. Decide whether current entry timing is acceptable — extended/late entries downgrade tradeability even when direction is correct.
+5. Output structured trade-skill fields (decision, entryAllowedNow) per schema below. Never grant execution permission.
+
+{playbook_block}
+
+== TRADE SKILL OUTPUT (required top-level fields) ==
+{trade_skill_schema}
 
 Return strict JSON only with these top-level keys:
+- tradeSkillVersion, reviewType, decision, direction, confidence, entryAllowedNow, waitReason, noTradeReason, chartReadSummary
+- locationAssessment (optional), marketState (optional), entryModel (optional), invalidationLevel, invalidationReason
+- requiredConfirmation (string[]), riskNotes (string[]), suggestedTradePlan (optional, wait-only)
 - aiReviewSummary: {{ humanAction, setupType, overallScore, tradeabilityScore, engineAlignmentScore, visualConfirmationScore, entryQualityScore, riskScore, confidence, finalReason }} (scores 0-100 integers or null)
 - engineAVerdictComparison: {{
     engineAProvided, engineABiasValid, engineAPassed, engineADirection, engineAScore, engineAMaxScore,

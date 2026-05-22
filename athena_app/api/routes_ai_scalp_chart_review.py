@@ -234,7 +234,16 @@ def register_ai_scalp_chart_review_routes(app, runtime: SimpleNamespace) -> None
             body, status = provider_error_response(exc, provider=provider)
             return jsonify(body), status
 
-        normalized = normalize_scalp_chart_review_response(raw.get("raw_text") or "")
+        setup = engine_d_ctx.get("scalpSetup") or {}
+        backend_levels = {
+            "stop_loss": setup.get("stopLoss"),
+            "stopLoss": setup.get("stopLoss"),
+            "entry": setup.get("entry"),
+        }
+        normalized = normalize_scalp_chart_review_response(
+            raw.get("raw_text") or "",
+            backend_levels=backend_levels,
+        )
         concordance = compute_scalp_ai_concordance(engine_d_ctx, normalized)
         provider_meta = apply_parse_fallback(
             {

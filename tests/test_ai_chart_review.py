@@ -1084,11 +1084,41 @@ def test_prompt_includes_engine_b_context_block():
     assert "engineAContext" in prompt
 
 
+def test_prompt_includes_trade_skill_version_and_playbooks():
+    prompt = build_chart_review_prompt(_engine_a_ctx())
+    assert "tradeSkillVersion" in prompt
+    assert "athena_trade_skill.v1" in prompt
+    assert "ATHENA TRADE PLAYBOOKS" in prompt
+    assert "Engine A Confluence" in prompt or "engine" in prompt.lower()
+
+
+def test_normalizer_direction_valid_timing_poor_entry_not_allowed():
+    raw = json.dumps({
+        "verdict": "CAUTION",
+        "confidence": 72,
+        "human_action": "wait",
+        "decision": "WAIT_FOR_PULLBACK",
+        "direction": "LONG",
+        "entryAllowedNow": True,
+        "waitReason": "Extended entry — wait for pullback",
+        "engineAVerdictComparison": {
+            "comparisonVerdict": "engine_a_direction_confirmed_entry_rejected",
+            "chartContradictsEntryTiming": True,
+        },
+    })
+    out = normalize_chart_review_response(raw)
+    assert out["entryAllowedNow"] is False
+    assert out["decision"] == "WAIT_FOR_PULLBACK"
+
+
 def test_normalizer_sanitizes_suggested_trade_plan():
     raw = json.dumps({
         "verdict": "CAUTION",
         "confidence": 60,
         "human_action": "wait",
+        "decision": "WAIT_FOR_PULLBACK",
+        "direction": "LONG",
+        "entryAllowedNow": False,
         "suggestedTradePlan": {
             "schemaVersion": "suggested_trade_plan.v1",
             "armable": True,
@@ -1113,6 +1143,9 @@ def test_normalizer_strips_malformed_suggested_trade_plan():
         "verdict": "CAUTION",
         "confidence": 40,
         "human_action": "wait",
+        "decision": "WAIT_FOR_ACCEPTANCE",
+        "direction": "LONG",
+        "entryAllowedNow": False,
         "suggestedTradePlan": {
             "direction": "MAYBE",
             "action": "WAIT_FOR_LEVEL",

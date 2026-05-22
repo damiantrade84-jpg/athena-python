@@ -1076,9 +1076,10 @@ export default function ScalpWorkbenchPanel() {
           }
         : null,
       aiReview: scalpAiReviewResponse,
+      suggestedTradePlan: suggestedPlan,
       isTestMode,
     }),
-    [activeSignal, activeUi.sourceContract.strictOrderflowSourcePass, scalpAiReviewResponse, isTestMode],
+    [activeSignal, activeUi.sourceContract.strictOrderflowSourcePass, scalpAiReviewResponse, suggestedPlan, isTestMode],
   );
   const showViewSuggestedTrades = Boolean(flagStatus) || symbolWatches.length > 0;
   const { runner: suggestedTradeRunner } = useSuggestedTradeRunnerStatus();
@@ -1805,6 +1806,11 @@ export default function ScalpWorkbenchPanel() {
           {aiCaptureError && (
             <div className="rounded-md border border-warning/35 bg-warning/10 px-3 py-2 text-xs text-warning">
               {aiCaptureError}
+            </div>
+          )}
+          {scalpAiReviewResponse && executeBlockReason && (
+            <div className="rounded-md border border-amber-500/35 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
+              Execute Scalp disabled — {executeBlockReason}. M5 = context chart; M1 = execution zoom. AI review is advisory only.
             </div>
           )}
           {scalpAiReviewResponse && <ScalpAIReviewCard response={scalpAiReviewResponse} />}

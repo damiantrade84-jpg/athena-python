@@ -17,6 +17,8 @@ _VALID_TRIGGERS = frozenset({
     "SWEEP_RECLAIM",
 })
 _VALID_SOURCES = frozenset({"ai_chart_review", "ai_scalp_chart_review"})
+_VALID_SCALP_CONTEXT_TF = frozenset({"M5", "M15"})
+_VALID_SCALP_ENTRY_EXEC_TF = frozenset({"M1", "M5"})
 
 
 def _coerce_float(value: Any) -> float | None:
@@ -150,6 +152,25 @@ def sanitize_suggested_trade_plan(
         out["invalidateAbove"] = inv_above
     if inv_below is not None:
         out["invalidateBelow"] = inv_below
+
+    if src == "ai_scalp_chart_review" and action in _VALID_WATCH_ACTIONS:
+        ctx_tf = str(out.get("contextTf") or "").upper()
+        entry_tf = str(out.get("entryTf") or "").upper()
+        exec_tf = str(out.get("executionTf") or "").upper()
+        if ctx_tf and ctx_tf not in _VALID_SCALP_CONTEXT_TF:
+            armable = False
+            reason_parts.append("invalid contextTf for scalp")
+        if entry_tf and entry_tf not in _VALID_SCALP_ENTRY_EXEC_TF:
+            armable = False
+            reason_parts.append("invalid entryTf for scalp")
+        if exec_tf and exec_tf not in _VALID_SCALP_ENTRY_EXEC_TF:
+            armable = False
+            reason_parts.append("invalid executionTf for scalp")
+        if inv_above is None and inv_below is None:
+            armable = False
+            reason_parts.append("invalidateAbove or invalidateBelow required for scalp plan")
+        out["armable"] = armable
+
     if expires is not None and expires > 0:
         out["expiresInSeconds"] = expires
     plan_reason = plan_src.get("reason")

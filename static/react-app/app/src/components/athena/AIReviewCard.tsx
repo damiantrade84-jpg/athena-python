@@ -4,6 +4,7 @@ import { Badge } from '@/components/ui/badge';
 import AIReviewContextCompletenessPanel from '@/components/athena/AIReviewContextCompletenessPanel';
 import AIReviewEngineAVerdictPanel from '@/components/athena/AIReviewEngineAVerdictPanel';
 import AIReviewSummaryStrip from '@/components/athena/AIReviewSummaryStrip';
+import TradeSkillReviewPanel from '@/components/athena/TradeSkillReviewPanel';
 import {
   AI_REVIEW_EMPTY,
   AI_REVIEW_SEP,
@@ -62,6 +63,8 @@ export default function AIReviewCard({ response }: AIReviewCardProps) {
   const risks = showList(ai.risks);
   const missing = showList(ai.missing_context);
   const warnings = showList(response.mismatch_warnings);
+  const suggestedPlan =
+    response.suggestedTradePlan ?? response.suggested_trade_plan ?? ai.suggestedTradePlan;
 
   const freshnessFallback = (() => {
     const status = showReviewValue(atrInfo?.atr_freshness_status);
@@ -100,6 +103,17 @@ export default function AIReviewCard({ response }: AIReviewCardProps) {
         <AIReviewSummaryStrip summary={summary} />
 
         <AIReviewEngineAVerdictPanel comparison={verdictComparison} />
+
+        <TradeSkillReviewPanel
+          skill={ai}
+          suggestedPlan={suggestedPlan}
+          variant="engine_a_chart"
+          timeframeRoute={
+            (response as { timeframeRoute?: { route?: string } }).timeframeRoute?.route
+            ?? (response as { timeframe_route?: { route?: string } }).timeframe_route?.route
+            ?? null
+          }
+        />
 
         <AIReviewContextCompletenessPanel
           completeness={response.contextCompleteness}

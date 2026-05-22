@@ -146,6 +146,28 @@ def test_scalp_workbench_symbol_select_stays_controlled_before_refresh():
     assert '<SelectItem value={EMPTY_SYMBOL_SELECT_VALUE} disabled>' in source
 
 
+def test_scalp_workbench_trade_skill_panel_fields():
+    card = _read(ROOT / "static/react-app/app/src/components/athena/ScalpAIReviewCard.tsx")
+    panel = _read(ROOT / "static/react-app/app/src/components/athena/TradeSkillReviewPanel.tsx")
+
+    assert "TradeSkillReviewPanel" in card
+    assert "Market state" in panel
+    assert "Location" in panel
+    assert "Aggression" in panel
+    assert "Entry model" in panel
+    assert "Invalidation" in panel
+
+
+def test_scalp_workbench_execute_disabled_for_trade_skill_wait():
+    helper = _read(ROOT / "static/react-app/app/src/lib/manualExecuteHelpers.ts")
+
+    assert "tradeSkillBlocksExecute" in helper
+    assert "WAIT_FOR_PULLBACK" in helper
+    assert "WATCH_ONLY" in helper
+    assert "NO_TRADE" in helper
+    assert "entryAllowedNow" in helper
+
+
 def test_scalp_workbench_shows_ai_grade_and_score():
     source = _read(SCALP_WORKBENCH)
 

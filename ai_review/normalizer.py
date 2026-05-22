@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import json
 import re
+from typing import Any
+
+from ai_playbooks.trade_skill_normalizer import normalize_trade_skill_output, trade_skill_parse_failure
 from ai_review.suggested_trade_plan import sanitize_suggested_trade_plan
 
 _VALID_VERDICTS = {"VALID", "CAUTION", "INVALID", "NO_TRADE"}
@@ -152,11 +155,33 @@ def _legacy_from_structured(parsed: dict[str, Any], structured: dict[str, Any]) 
     }
 
 
-def normalize_chart_review_response(raw_text: str) -> dict[str, Any]:
+_WAIT_DECISIONS = frozenset({"WAIT_FOR_PULLBACK", "WAIT_FOR_ACCEPTANCE"})
+
+
+def _merge_trade_skill_fields(
+    parsed: dict[str, Any],
+    *,
+    review_type: str,
+    backend_levels: dict[str, Any] | None,
+) -> dict[str, Any]:
+    trade_skill, warnings = normalize_trade_skill_output(
+        parsed,
+        review_type=review_type,  # type: ignore[arg-type]
+        backend_levels=backend_levels,
+    )
+    return trade_skill
+
+
+def normalize_chart_review_response(
+    raw_text: str,
+    *,
+    backend_levels: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     parsed, err = _extract_json(raw_text)
     if parsed is None:
+        fail_skill = trade_skill_parse_failure("engine_a_chart")
         return {
-            "verdict": "CAUTION",
+            "verdict": fail_skill.get("verdict", "CAUTION"),
             "confidence": 0,
             "setup_type": "",
             "visual_confirmation": "",
@@ -168,40 +193,53 @@ def normalize_chart_review_response(raw_text: str) -> dict[str, Any]:
             "supporting_reasons": [],
             "risks": [f"AI response JSON parse failed: {err}"],
             "missing_context": [],
-            "human_action": "wait",
+            "human_action": fail_skill.get("human_action", "wait"),
             "raw_model_response": raw_text or "",
             "parse_success": False,
             "structured": {},
+            "entryAllowedNow": False,
+            "decision": fail_skill.get("decision", "WATCH_ONLY"),
+            "tradeSkillVersion": fail_skill.get("tradeSkillVersion"),
+            "reviewType": "engine_a_chart",
+            "tradeSkillWarnings": fail_skill.get("tradeSkillWarnings", []),
         }
 
     structured = _pick_structured(parsed)
     legacy_fields = _legacy_from_structured(parsed, structured)
+    trade_skill = _merge_trade_skill_fields(
+        parsed,
+        review_type="engine_a_chart",
+        backend_levels=backend_levels,
+    )
 
-    verdict = str(legacy_fields.get("verdict") or "CAUTION").upper()
+    verdict = str(trade_skill.get("verdict") or legacy_fields.get("verdict") or "CAUTION").upper()
     if verdict not in _VALID_VERDICTS:
         verdict = "CAUTION"
 
     try:
-        confidence = int(legacy_fields.get("confidence", 0))
+        confidence = int(trade_skill.get("confidence", legacy_fields.get("confidence", 0)))
     except (TypeError, ValueError):
         confidence = 0
     confidence = max(0, min(100, confidence))
 
-    action = str(legacy_fields.get("human_action") or "wait").strip().lower()
+    action = str(trade_skill.get("human_action") or legacy_fields.get("human_action") or "wait").strip().lower()
     if action not in _VALID_ACTIONS:
         action = "wait"
 
-    suggested_plan = sanitize_suggested_trade_plan(
-        parsed,
-        source="ai_chart_review",
-        symbol=str(parsed.get("symbol") or ""),
-    )
+    decision = str(trade_skill.get("decision") or "WATCH_ONLY").upper()
+    suggested_plan = None
+    if decision in _WAIT_DECISIONS:
+        suggested_plan = sanitize_suggested_trade_plan(
+            parsed,
+            source="ai_chart_review",
+            symbol=str(parsed.get("symbol") or ""),
+        )
     structured_out = structured
     if suggested_plan:
         structured_out = dict(structured)
         structured_out["suggestedTradePlan"] = suggested_plan
 
-    return {
+    result: dict[str, Any] = {
         "verdict": verdict,
         "confidence": confidence,
         "setup_type": str(legacy_fields.get("setup_type") or ""),
@@ -221,3 +259,5 @@ def normalize_chart_review_response(raw_text: str) -> dict[str, Any]:
         "suggestedTradePlan": suggested_plan,
         "suggested_trade_plan": suggested_plan,
     }
+    result.update(trade_skill)
+    return result

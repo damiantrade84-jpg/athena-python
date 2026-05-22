@@ -3,6 +3,7 @@ import { Badge } from '@/components/ui/badge';
 import { Card, CardContent } from '@/components/ui/card';
 import AIReviewContextCompletenessPanel from '@/components/athena/AIReviewContextCompletenessPanel';
 import AIReviewSummaryStrip from '@/components/athena/AIReviewSummaryStrip';
+import TradeSkillReviewPanel from '@/components/athena/TradeSkillReviewPanel';
 import {
   AI_REVIEW_EMPTY,
   AI_REVIEW_SEP,
@@ -110,6 +111,8 @@ export default function ScalpAIReviewCard({ response }: ScalpAIReviewCardProps) 
   const risks = showList(ai.risks);
   const missing = showList(ai.missing_context);
   const warnings = showList(response.mismatch_warnings);
+  const suggestedPlan =
+    response.suggestedTradePlan ?? response.suggested_trade_plan ?? ai.suggestedTradePlan;
 
   return (
     <Card className="border-border/60 bg-card/50">
@@ -141,6 +144,12 @@ export default function ScalpAIReviewCard({ response }: ScalpAIReviewCardProps) 
         <AIReviewSummaryStrip summary={summary as AIChartReviewSummary | null | undefined} />
 
         <ScalpVerdictPanel comparison={verdictComparison} />
+
+        <TradeSkillReviewPanel
+          skill={ai}
+          suggestedPlan={suggestedPlan}
+          variant="engine_d_scalp"
+        />
 
         <AIReviewContextCompletenessPanel
           completeness={normalizeContextCompleteness(

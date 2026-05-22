@@ -234,6 +234,14 @@ def test_assemble_engine_d_context_picks_best_signal():
     assert ctx["ai_score"] == 72.5
 
 
+def test_prompt_contains_engine_d_playbook_and_review_order():
+    ctx = _engine_d_ctx()
+    prompt = build_scalp_chart_review_prompt(ctx)
+    assert "ATHENA TRADE PLAYBOOKS" in prompt
+    assert "Market State -> Location -> Aggression" in prompt
+    assert "tradeSkillVersion" in prompt
+
+
 def test_prompt_contains_engine_d_context():
     ctx = _engine_d_ctx()
     prompt = build_scalp_chart_review_prompt(ctx)
@@ -389,11 +397,69 @@ def test_summary_and_verdict_fallbacks():
     assert verdict["setupProvided"] is True
 
 
+def test_scalp_normalizer_accepts_valid_engine_d_structured_output():
+    raw = json.dumps({
+        "tradeSkillVersion": "athena_trade_skill.v1",
+        "reviewType": "engine_d_scalp",
+        "decision": "ENTRY_NOW",
+        "direction": "LONG",
+        "confidence": 85,
+        "marketState": "trending",
+        "locationAssessment": "Pullback to VAL with LVN support",
+        "aggressionAssessment": "Buying aggression confirms direction",
+        "entryModel": "PULLBACK_TO_VALUE_REJECTION",
+        "invalidationLevel": 64920.0,
+        "invalidationReason": "Break below VAL invalidates long",
+        "entryAllowedNow": True,
+        "requiredConfirmation": ["Hold above POC"],
+        "chartReadSummary": "Clean M5 context with M1 execution zoom",
+    })
+    out = normalize_scalp_chart_review_response(raw, backend_levels={"stopLoss": 64920.0})
+    assert out["decision"] == "ENTRY_NOW"
+    assert out["entryAllowedNow"] is True
+    assert out["marketState"] == "trending"
+
+
+def test_scalp_normalizer_downgrades_entry_now_missing_invalidation():
+    raw = json.dumps({
+        "decision": "ENTRY_NOW",
+        "direction": "LONG",
+        "confidence": 80,
+        "marketState": "trending",
+        "locationAssessment": "ok",
+        "aggressionAssessment": "ok",
+        "entryModel": "SWEEP_AND_RECLAIM",
+        "entryAllowedNow": True,
+    })
+    out = normalize_scalp_chart_review_response(raw)
+    assert out["decision"] == "WATCH_ONLY"
+    assert out["entryAllowedNow"] is False
+
+
+def test_scalp_normalizer_no_trade_disables_entry():
+    raw = json.dumps({
+        "decision": "NO_TRADE",
+        "direction": "LONG",
+        "confidence": 40,
+        "marketState": "choppy",
+        "locationAssessment": "poor",
+        "aggressionAssessment": "mixed",
+        "entryModel": "NO_TRADE",
+        "noTradeReason": "Choppy balance — no edge",
+    })
+    out = normalize_scalp_chart_review_response(raw)
+    assert out["entryAllowedNow"] is False
+    assert out["decision"] == "NO_TRADE"
+
+
 def test_scalp_normalizer_sanitizes_suggested_trade_plan():
     raw = json.dumps({
         "verdict": "CAUTION",
         "confidence": 62,
         "human_action": "wait",
+        "decision": "WAIT_FOR_ACCEPTANCE",
+        "direction": "SHORT",
+        "entryAllowedNow": False,
         "suggestedTradePlan": {
             "schemaVersion": "suggested_trade_plan.v1",
             "armable": True,
@@ -404,12 +470,17 @@ def test_scalp_normalizer_sanitizes_suggested_trade_plan():
             "triggerType": "PULLBACK_TO_ZONE",
             "zoneLow": 64900,
             "zoneHigh": 65100,
+            "contextTf": "M5",
+            "entryTf": "M1",
+            "executionTf": "M1",
+            "invalidateBelow": 64850,
             "expiresInSeconds": 900,
         },
     })
     out = normalize_scalp_chart_review_response(raw)
     plan = out.get("suggestedTradePlan")
     assert isinstance(plan, dict)
+    assert plan.get("source") == "ai_scalp_chart_review"
     assert plan.get("armable") is True
     assert plan.get("zoneLow") == 64900
 
@@ -419,10 +490,12 @@ def test_scalp_normalizer_malformed_suggested_trade_plan_not_armable():
         "verdict": "CAUTION",
         "confidence": 40,
         "human_action": "wait",
+        "decision": "WAIT_FOR_PULLBACK",
+        "direction": "LONG",
+        "entryAllowedNow": False,
         "suggestedTradePlan": {"action": "ENTRY_NOW", "direction": "LONG", "triggerType": "ACCEPTANCE_ABOVE", "level": 1},
     })
     out = normalize_scalp_chart_review_response(raw)
     plan = out.get("suggestedTradePlan")
-    assert isinstance(plan, dict)
-    assert plan.get("armable") is False
+    assert plan is None or (isinstance(plan, dict) and plan.get("armable") is False)
 

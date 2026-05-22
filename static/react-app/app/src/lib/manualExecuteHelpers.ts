@@ -93,6 +93,26 @@ function isPositiveNumber(value: unknown): boolean {
   return typeof value === 'number' && Number.isFinite(value) && value > 0;
 }
 
+const _BLOCKING_TRADE_SKILL_DECISIONS = new Set([
+  'WAIT_FOR_PULLBACK',
+  'WAIT_FOR_ACCEPTANCE',
+  'WATCH_ONLY',
+  'NO_TRADE',
+  'INVALIDATED',
+]);
+
+export function tradeSkillBlocksExecute(
+  aiReview: { ai_review?: { decision?: string; entryAllowedNow?: boolean } | null } | null,
+): boolean {
+  if (!aiReview?.ai_review) return false;
+  const review = aiReview.ai_review;
+  if (review.entryAllowedNow === false) return true;
+  const decision = String(review.decision || '').toUpperCase();
+  if (decision && decision !== 'ENTRY_NOW') return true;
+  if (_BLOCKING_TRADE_SKILL_DECISIONS.has(decision)) return true;
+  return false;
+}
+
 function aiHumanAction(review: AIChartReviewResponse | null): string {
   if (!review) return '';
   const summary = review.aiReviewSummary ?? review.ai_review_summary;
@@ -115,6 +135,7 @@ export function aiReviewEntryTimingRejected(review: AIChartReviewResponse | null
 
 export function aiReviewBlocksManualExecute(review: AIChartReviewResponse | null): boolean {
   if (!review) return false;
+  if (tradeSkillBlocksExecute(review)) return true;
   const verdict = String(review.ai_review?.verdict || '').toUpperCase();
   if (verdict === 'NO_TRADE' || verdict === 'INVALID') return true;
   const action = aiHumanAction(review);
@@ -180,6 +201,11 @@ export function shouldHideTvChartExecuteNow(args: {
 
 export function scalpAiReviewBlocksExecute(review: ScalpAIChartReviewResponse | null): boolean {
   if (!review) return false;
+  if (tradeSkillBlocksExecute(review)) return true;
+  const comparison = review.scalpVerdictComparison ?? review.scalp_verdict_comparison;
+  const finalDecision = String(comparison?.finalDecision || '').toLowerCase();
+  if (finalDecision === 'reject' || finalDecision === 'watch') return true;
+  if (comparison?.chartContradictsEntryTiming === true) return true;
   const verdict = String(review.ai_review?.verdict || '').toUpperCase();
   if (verdict === 'NO_TRADE' || verdict === 'INVALID') return true;
   const summary = review.aiReviewSummary ?? review.ai_review_summary;
@@ -216,9 +242,10 @@ export function scalpSourceFidelityHardFail(signal: ScalpExecuteSignalLike | nul
 export function evaluateScalpExecuteBlock(args: {
   signal: ScalpExecuteSignalLike | null;
   aiReview: ScalpAIChartReviewResponse | null;
+  suggestedTradePlan?: SuggestedTradePlan | null;
   isTestMode?: boolean;
 }): string | null {
-  const { signal, aiReview, isTestMode } = args;
+  const { signal, aiReview, suggestedTradePlan, isTestMode } = args;
   if (isTestMode) return 'Test mode';
   if (!signal) return 'No scalp candidate';
   const direction = String(signal.direction || '').toUpperCase();
@@ -233,6 +260,9 @@ export function evaluateScalpExecuteBlock(args: {
     return 'Missing levels';
   }
   if (scalpAiReviewBlocksExecute(aiReview)) return 'AI says wait';
+  const planAction = String(suggestedTradePlan?.action || '').toUpperCase();
+  if (planAction === 'WAIT_FOR_LEVEL') return 'Waiting for level';
+  if (planAction === 'WAIT_FOR_ZONE') return 'Waiting for zone';
   return null;
 }
 

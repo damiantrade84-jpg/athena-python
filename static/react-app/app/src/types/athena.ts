@@ -5,6 +5,36 @@
 
 export type Direction = 'LONG' | 'SHORT';
 
+export type TradeSkillDecision =
+  | 'ENTRY_NOW'
+  | 'WAIT_FOR_PULLBACK'
+  | 'WAIT_FOR_ACCEPTANCE'
+  | 'WATCH_ONLY'
+  | 'NO_TRADE'
+  | 'INVALIDATED';
+
+export interface TradeSkillReview {
+  tradeSkillVersion?: string;
+  reviewType?: 'engine_a_chart' | 'engine_d_scalp';
+  decision?: TradeSkillDecision | string;
+  direction?: Direction | 'NEUTRAL' | string;
+  confidence?: number;
+  entryAllowedNow?: boolean;
+  marketState?: string;
+  locationAssessment?: string;
+  aggressionAssessment?: string;
+  entryModel?: string;
+  invalidationLevel?: number | null;
+  invalidationReason?: string;
+  waitReason?: string;
+  noTradeReason?: string;
+  requiredConfirmation?: string[];
+  riskNotes?: string[];
+  chartReadSummary?: string;
+  tradeSkillWarnings?: string[];
+  suggestedTradePlan?: SuggestedTradePlan | null;
+}
+
 /** Advisory-only structured wait plan from AI chart/scalp review. */
 export interface SuggestedTradePlan {
   schemaVersion?: string;
@@ -1051,7 +1081,7 @@ export type AIChartReviewDivergenceType =
   | 'missing_context'
   | 'other';
 
-export interface AIChartReviewNormalized {
+export interface AIChartReviewNormalized extends TradeSkillReview {
   verdict: AIChartReviewVerdict;
   confidence: number;
   setup_type?: string;
@@ -1445,7 +1475,7 @@ export interface ScalpAIReviewConcordance {
   should_flag_for_review?: boolean;
 }
 
-export interface ScalpAIReviewNormalized {
+export interface ScalpAIReviewNormalized extends TradeSkillReview {
   verdict?: string;
   confidence?: number;
   setup_type?: string;

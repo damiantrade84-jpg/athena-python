@@ -308,6 +308,17 @@ def test_tv_chart_panel_runner_status_badge():
     assert "Runner:" in source
 
 
+def test_tv_chart_panel_trade_skill_display_and_execute_gating():
+    card = _read(ROOT / "static/react-app/app/src/components/athena/AIReviewCard.tsx")
+    helper = _read(ROOT / "static/react-app/app/src/lib/manualExecuteHelpers.ts")
+
+    assert "TradeSkillReviewPanel" in card
+    assert "entry allowed" in card.lower() or "TradeSkillReviewPanel" in card
+    assert "tradeSkillBlocksExecute" in helper
+    assert "entryAllowedNow" in helper
+    assert "WAIT_FOR_PULLBACK" in helper
+
+
 def test_tv_chart_panel_execute_disabled_when_ai_says_wait():
     source = _read(TV_PANEL)
     helper = _read(ROOT / "static/react-app/app/src/lib/manualExecuteHelpers.ts")

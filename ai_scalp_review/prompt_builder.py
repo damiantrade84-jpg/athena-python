@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from ai_playbooks import get_engine_d_scalp_playbook, render_playbook_prompt_block
+from ai_playbooks.trade_skill_normalizer import render_trade_skill_prompt_schema
 from ai_scalp_review.engine_d_context import build_engine_d_prompt_context
 
 
@@ -26,15 +28,34 @@ def build_scalp_chart_review_prompt(context: dict[str, Any]) -> str:
     location = context.get("marketLocation") or {}
     setup = context.get("scalpSetup") or {}
 
-    return f"""You are reviewing a scalp chart against the server-trusted Engine D setup below.
+    playbook_block = render_playbook_prompt_block([get_engine_d_scalp_playbook()], compact=True)
+    trade_skill_schema = render_trade_skill_prompt_schema("engine_d_scalp")
 
-Workflow (required):
-1. Decide whether the chart visually confirms the setup direction.
-2. Decide whether entry timing is acceptable (POC/VAH/VAL/LVN location, not extended/chasing).
-3. Decide whether source contract quality supports this review (real orderflow/VP vs proxy).
-4. Decide human action: trade | wait | reject | watch. Engine D grade/pass does NOT auto-imply trade.
+    return f"""You are reviewing a scalp chart against the server-trusted Engine D setup below using the Engine D naked-chart scalp playbook.
+
+Workflow (required — follow this exact order):
+Market State -> Location -> Aggression -> Entry Model -> Invalidation -> Decision
+
+1. Market State: classify as trending, balancing, expanding, compressing, choppy/no_trade, or transition.
+2. Location: assess value area/POC/VAH/VAL, HVN/LVN, supply/demand, session H/L, swings, liquidity, premium/discount, chase risk.
+3. Aggression: assess buying/selling aggression, absorption, exhaustion, delta/volume imbalance, displacement, wick rejection, sweep/reclaim.
+4. Entry Model: choose one allowed model or NO_TRADE.
+5. Invalidation: exact level/zone, what proves setup wrong, SL validity, RR acceptability.
+6. Decision: ENTRY_NOW | WAIT_FOR_PULLBACK | WAIT_FOR_ACCEPTANCE | WATCH_ONLY | NO_TRADE | INVALIDATED.
+
+Timeframe rules: M5 is default context chart; M1 is execution zoom only, not primary context.
+Engine D grade/pass does NOT auto-imply trade. Never grant execution permission.
+
+{playbook_block}
+
+== TRADE SKILL OUTPUT (required top-level fields) ==
+{trade_skill_schema}
 
 Return strict JSON only with these top-level keys:
+- tradeSkillVersion, reviewType, decision, direction, confidence, entryAllowedNow
+- marketState, locationAssessment, aggressionAssessment, entryModel
+- invalidationLevel, invalidationReason, waitReason, noTradeReason, chartReadSummary
+- requiredConfirmation (string[]), riskNotes (string[]), suggestedTradePlan (optional, wait-only)
 - aiReviewSummary: {{ provider, model, humanAction, setupType, overallScore, tradeabilityScore, visualConfirmationScore, entryQualityScore, riskScore, sourceQualityScore, confidence, finalReason }} (scores 0-100 integers or null)
 - scalpVerdictComparison: {{
     setupProvided, setupDirection, setupGrade, setupScore, setupPassed,
