@@ -363,6 +363,14 @@ CONFIG: dict = {
         "MISMATCH_WARN_MAX_SECONDS": 120,
         "ATR_FRESHNESS_MAX_AGE_SEC": None,
         "DEDUP_WINDOW_SECONDS": 60,
+        # AI strategy-playbook layer is additive and read-only; it never
+        # approves, sizes, or blocks trades. Default ON.
+        "STRATEGY_LAYER_ENABLED": _env_bool(
+            "AI_CHART_REVIEW_STRATEGY_LAYER_ENABLED", True
+        ),
+        "STRATEGY_LAYER_OHLCV_LIMIT": _env_int(
+            "AI_CHART_REVIEW_STRATEGY_LAYER_OHLCV_LIMIT", 80
+        ),
     },
     "AI_PROMPT_STORE_CLEANUP_ENABLED": True,
     "AI_PROMPT_STORE_RETENTION_DAYS": 90,
