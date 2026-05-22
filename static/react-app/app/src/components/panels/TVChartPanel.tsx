@@ -9,15 +9,20 @@ import {
   type IChartApi,
   type IPaneApi,
   type IPriceLine,
+  type IPrimitivePaneRenderer,
+  type IPrimitivePaneView,
   type ISeriesApi,
   type ISeriesMarkersPluginApi,
+  type ISeriesPrimitive,
   type CandlestickData,
   type HistogramData,
   type LineData,
+  type SeriesAttachedParameter,
   type SeriesMarker,
   type UTCTimestamp,
   type Time,
 } from 'lightweight-charts';
+import type { CanvasRenderingTarget2D } from 'fancy-canvas';
 import { BarChart3, Camera, Layers, Sparkles, SlidersHorizontal } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -882,6 +887,230 @@ function engineBOverlayLines(payload: EngineBOverlayPayload | null, enabled: boo
   return mergeEngineBOverlayLines(lines, threshold);
 }
 
+// --- Engine B clean-mode zone rendering ------------------------------
+// Visual-only: replaces the dense stack of right-axis text labels with translucent
+// horizontal bands (support/resistance) and boxes (FVG, order blocks). The payload
+// itself is untouched — these are render-time helpers built from the same fields
+// the existing line-based rendering consumes.
+
+type EngineBZoneCategory =
+  | 'support'
+  | 'resistance'
+  | 'fvg_bull'
+  | 'fvg_bear'
+  | 'ob_bull'
+  | 'ob_bear';
+
+interface EngineBZoneFill {
+  top: number;
+  bottom: number;
+  fill: string;
+  stroke: string;
+  category: EngineBZoneCategory;
+}
+
+interface EngineBSingleLevel {
+  label: string;
+  price: number;
+  color: string;
+  style?: LineStyle;
+}
+
+const ENGINE_B_ZONE_STYLE: Record<EngineBZoneCategory, { fill: string; stroke: string }> = {
+  support: { fill: 'rgba(16, 185, 129, 0.18)', stroke: 'rgba(16, 185, 129, 0.55)' },
+  resistance: { fill: 'rgba(244, 63, 94, 0.18)', stroke: 'rgba(244, 63, 94, 0.55)' },
+  fvg_bull: { fill: 'rgba(34, 197, 94, 0.16)', stroke: 'rgba(34, 197, 94, 0.50)' },
+  fvg_bear: { fill: 'rgba(248, 113, 113, 0.16)', stroke: 'rgba(248, 113, 113, 0.50)' },
+  ob_bull: { fill: 'rgba(20, 184, 166, 0.14)', stroke: 'rgba(20, 184, 166, 0.50)' },
+  ob_bear: { fill: 'rgba(251, 113, 133, 0.14)', stroke: 'rgba(251, 113, 133, 0.50)' },
+};
+
+function pushZoneFromPair(
+  zones: EngineBZoneFill[],
+  category: EngineBZoneCategory,
+  upper: number | null,
+  lower: number | null,
+) {
+  if (upper == null && lower == null) return;
+  const top = upper ?? lower!;
+  const bottom = lower ?? upper!;
+  if (!Number.isFinite(top) || !Number.isFinite(bottom)) return;
+  const style = ENGINE_B_ZONE_STYLE[category];
+  zones.push({
+    top: Math.max(top, bottom),
+    bottom: Math.min(top, bottom),
+    fill: style.fill,
+    stroke: style.stroke,
+    category,
+  });
+}
+
+function buildEngineBZones(payload: EngineBOverlayPayload | null, enabled: boolean): EngineBZoneFill[] {
+  if (!enabled || payload?.overlay_source !== 'engine_b') return [];
+  const zones: EngineBZoneFill[] = [];
+
+  const support = payload.nearest_support_zone;
+  if (support) {
+    pushZoneFromPair(
+      zones,
+      'support',
+      firstNumber(support.upper, support.level),
+      firstNumber(support.lower, support.level),
+    );
+  }
+
+  const resistance = payload.nearest_resistance_zone;
+  if (resistance) {
+    pushZoneFromPair(
+      zones,
+      'resistance',
+      firstNumber(resistance.upper, resistance.level),
+      firstNumber(resistance.lower, resistance.level),
+    );
+  }
+
+  for (const zone of (payload.active_fvgs || []).filter((item) => !item?.mitigated).slice(0, 2)) {
+    const top = firstNumber(zone.top);
+    const bottom = firstNumber(zone.bottom);
+    if (top == null || bottom == null) continue;
+    const type = typeof zone.type === 'string' ? zone.type.toLowerCase() : '';
+    pushZoneFromPair(zones, type.includes('bull') ? 'fvg_bull' : 'fvg_bear', top, bottom);
+  }
+
+  for (const zone of (payload.order_blocks || []).filter((item) => !item?.mitigated).slice(0, 2)) {
+    const top = firstNumber(zone.top);
+    const bottom = firstNumber(zone.bottom);
+    if (top == null || bottom == null) continue;
+    const type = typeof zone.type === 'string' ? zone.type.toLowerCase() : '';
+    pushZoneFromPair(zones, type.includes('bull') ? 'ob_bull' : 'ob_bear', top, bottom);
+  }
+
+  return zones;
+}
+
+// Engine B single-level markers that survive in clean mode as thin colored lines
+// (no axis labels). Zone-style overlays (support/resistance/FVG/OB) are skipped
+// here because the band primitive covers them.
+function engineBSingleLevelLines(
+  payload: EngineBOverlayPayload | null,
+  enabled: boolean,
+): EngineBSingleLevel[] {
+  if (!enabled || payload?.overlay_source !== 'engine_b') return [];
+  const lines: EngineBSingleLevel[] = [];
+
+  const bos = payload.bos_data || {};
+  const bosHigh = firstNumber(bos.last_broken_high, bos.level, bos.price);
+  const bosLow = firstNumber(bos.last_broken_low);
+  if (bosHigh != null) lines.push({ label: 'BOS', price: bosHigh, color: 'rgba(96, 165, 250, 0.85)' });
+  if (bosLow != null && bosLow !== bosHigh) {
+    lines.push({ label: 'BOS', price: bosLow, color: 'rgba(96, 165, 250, 0.65)' });
+  }
+
+  const choch = payload.choch_data || {};
+  const chochLevel = firstNumber(choch.choch_level, choch.level, choch.price);
+  if (chochLevel != null) {
+    lines.push({ label: 'CHOCH', price: chochLevel, color: 'rgba(168, 85, 247, 0.85)' });
+  }
+
+  const breakerLevel = firstNumber(payload.breaker_block?.level);
+  if (breakerLevel != null) {
+    lines.push({
+      label: 'Breaker',
+      price: breakerLevel,
+      color: 'rgba(56, 189, 248, 0.80)',
+      style: LineStyle.Dashed,
+    });
+  }
+  return lines;
+}
+
+// ISeriesPrimitive that paints translucent horizontal bands for Engine B zones
+// across the full pane width. Drawn at z-order 'bottom' so candles remain
+// readable on top of the band fill.
+class EngineBZonePaneView implements IPrimitivePaneView {
+  private readonly primitive: EngineBZonePrimitive;
+
+  constructor(primitive: EngineBZonePrimitive) {
+    this.primitive = primitive;
+  }
+
+  zOrder(): 'bottom' { return 'bottom'; }
+
+  renderer(): IPrimitivePaneRenderer | null {
+    return new EngineBZoneRenderer(this.primitive);
+  }
+}
+
+class EngineBZoneRenderer implements IPrimitivePaneRenderer {
+  private readonly primitive: EngineBZonePrimitive;
+
+  constructor(primitive: EngineBZonePrimitive) {
+    this.primitive = primitive;
+  }
+
+  draw(target: CanvasRenderingTarget2D): void {
+    const zones = this.primitive.zones();
+    const series = this.primitive.series();
+    if (!series || zones.length === 0) return;
+
+    target.useMediaCoordinateSpace(({ context, mediaSize }) => {
+      for (const zone of zones) {
+        const yTop = series.priceToCoordinate(zone.top);
+        const yBot = series.priceToCoordinate(zone.bottom);
+        if (yTop == null || yBot == null) continue;
+        const y1 = Math.min(yTop, yBot);
+        const y2 = Math.max(yTop, yBot);
+        const h = Math.max(1, y2 - y1);
+        context.save();
+        context.fillStyle = zone.fill;
+        context.fillRect(0, y1, mediaSize.width, h);
+        context.strokeStyle = zone.stroke;
+        context.lineWidth = 1;
+        context.beginPath();
+        context.moveTo(0, y1 + 0.5);
+        context.lineTo(mediaSize.width, y1 + 0.5);
+        context.moveTo(0, y2 - 0.5);
+        context.lineTo(mediaSize.width, y2 - 0.5);
+        context.stroke();
+        context.restore();
+      }
+    });
+  }
+}
+
+class EngineBZonePrimitive implements ISeriesPrimitive<Time> {
+  private _series: ISeriesApi<'Candlestick', Time> | null = null;
+  private _requestUpdate: (() => void) | null = null;
+  private _zones: EngineBZoneFill[] = [];
+  private readonly _paneViews: readonly IPrimitivePaneView[];
+
+  constructor() {
+    this._paneViews = [new EngineBZonePaneView(this)];
+  }
+
+  attached({ series, requestUpdate }: SeriesAttachedParameter<Time>): void {
+    this._series = series as ISeriesApi<'Candlestick', Time>;
+    this._requestUpdate = requestUpdate;
+  }
+
+  detached(): void {
+    this._series = null;
+    this._requestUpdate = null;
+  }
+
+  setZones(zones: EngineBZoneFill[]): void {
+    this._zones = zones;
+    this._requestUpdate?.();
+  }
+
+  zones(): EngineBZoneFill[] { return this._zones; }
+  series(): ISeriesApi<'Candlestick', Time> | null { return this._series; }
+
+  updateAllViews(): void { /* views read directly from primitive state */ }
+
+  paneViews(): readonly IPrimitivePaneView[] { return this._paneViews; }
+}
+
 function normalizeSwingText(value: unknown): string | null {
   if (typeof value !== 'string') return null;
   const text = value.replace(/_/g, ' ').trim();
@@ -1383,6 +1612,86 @@ function IndicatorLegendItem({ item }: { item: IndicatorLegendValue }) {
   );
 }
 
+// Compact color-identity chip used by the clean-mode legend strip. Color square
+// + label, no value — values live in the IndicatorLegendItem strip when Quant
+// Debug is on.
+interface LegendChipSpec {
+  key: string;
+  label: string;
+  color: string;
+  swatch: 'line' | 'band';
+}
+
+function LegendChip({ spec }: { spec: LegendChipSpec }) {
+  // Use a coloured glyph prefix so the chip's identity survives the screenshot
+  // rasterizer in drawCaptureLabels (which only paints text + bg, not nested
+  // swatch divs). The chip text is single-coloured to match the swatch.
+  const glyph = spec.swatch === 'band' ? '■' : '─'; // ■ or ─
+  return (
+    <CaptureLabel style={{ color: spec.color }}>{`${glyph} ${spec.label}`}</CaptureLabel>
+  );
+}
+
+function buildCleanLegendChips(args: {
+  isCryptoChart: boolean;
+  ema20: boolean;
+  ema21: boolean;
+  ema50: boolean;
+  ema200: boolean;
+  dema200: boolean;
+  vwap: boolean;
+  engineBEnabled: boolean;
+  engineBPayload: EngineBOverlayPayload | null;
+}): LegendChipSpec[] {
+  const chips: LegendChipSpec[] = [];
+  if (args.isCryptoChart) {
+    if (args.ema21) chips.push({ key: 'ema21', label: 'EMA21', color: INDICATOR_COLORS.ema21, swatch: 'line' });
+  } else if (args.ema20) {
+    chips.push({ key: 'ema20', label: 'EMA20', color: INDICATOR_COLORS.ema20, swatch: 'line' });
+  }
+  if (args.ema50) chips.push({ key: 'ema50', label: 'EMA50', color: INDICATOR_COLORS.ema50, swatch: 'line' });
+  if (args.ema200) chips.push({ key: 'ema200', label: 'EMA200', color: INDICATOR_COLORS.ema200, swatch: 'line' });
+  if (!args.isCryptoChart && args.dema200) {
+    chips.push({ key: 'dema200', label: 'DEMA200', color: INDICATOR_COLORS.dema200, swatch: 'line' });
+  }
+  if (args.isCryptoChart && args.vwap) {
+    chips.push({ key: 'vwap', label: 'VWAP', color: INDICATOR_COLORS.vwap, swatch: 'line' });
+  }
+  if (args.engineBEnabled && args.engineBPayload?.overlay_source === 'engine_b') {
+    const payload = args.engineBPayload;
+    if (payload.nearest_support_zone) {
+      chips.push({ key: 'support', label: 'Support', color: ENGINE_B_ZONE_STYLE.support.stroke, swatch: 'band' });
+    }
+    if (payload.nearest_resistance_zone) {
+      chips.push({ key: 'resistance', label: 'Resistance', color: ENGINE_B_ZONE_STYLE.resistance.stroke, swatch: 'band' });
+    }
+    const fvgs = (payload.active_fvgs || []).filter((item) => !item?.mitigated);
+    if (fvgs.some((zone) => typeof zone.type === 'string' && zone.type.toLowerCase().includes('bull'))) {
+      chips.push({ key: 'fvg_bull', label: 'FVG bull', color: ENGINE_B_ZONE_STYLE.fvg_bull.stroke, swatch: 'band' });
+    }
+    if (fvgs.some((zone) => !(typeof zone.type === 'string' && zone.type.toLowerCase().includes('bull')))) {
+      chips.push({ key: 'fvg_bear', label: 'FVG bear', color: ENGINE_B_ZONE_STYLE.fvg_bear.stroke, swatch: 'band' });
+    }
+    const obs = (payload.order_blocks || []).filter((item) => !item?.mitigated);
+    if (obs.some((zone) => typeof zone.type === 'string' && zone.type.toLowerCase().includes('bull'))) {
+      chips.push({ key: 'ob_bull', label: 'OB bull', color: ENGINE_B_ZONE_STYLE.ob_bull.stroke, swatch: 'band' });
+    }
+    if (obs.some((zone) => !(typeof zone.type === 'string' && zone.type.toLowerCase().includes('bull')))) {
+      chips.push({ key: 'ob_bear', label: 'OB bear', color: ENGINE_B_ZONE_STYLE.ob_bear.stroke, swatch: 'band' });
+    }
+    if (payload.bos_confirmed || Object.keys(payload.bos_data || {}).length > 0) {
+      chips.push({ key: 'bos', label: 'BOS', color: 'rgba(96, 165, 250, 0.85)', swatch: 'line' });
+    }
+    if (payload.choch_confirmed || Object.keys(payload.choch_data || {}).length > 0) {
+      chips.push({ key: 'choch', label: 'CHOCH', color: 'rgba(168, 85, 247, 0.85)', swatch: 'line' });
+    }
+    if (firstNumber(payload.breaker_block?.level) != null) {
+      chips.push({ key: 'breaker', label: 'Breaker', color: 'rgba(56, 189, 248, 0.80)', swatch: 'line' });
+    }
+  }
+  return chips;
+}
+
 // --- Main panel ------------------------------------------------------
 
 export default function TVChartPanel() {
@@ -1404,6 +1713,9 @@ export default function TVChartPanel() {
   const [engineAParityVisible, setEngineAParityVisible] = useState(false);
   const [showQuantDebug, setShowQuantDebug] = useState(false);
   const [showEngineBOverlays, setShowEngineBOverlays] = useState(true);
+  // Full Stack Clean (default) = bands + compact legend, no repeated axis labels.
+  // Debug = legacy behaviour where every Engine B line gets a right-axis title.
+  const [chartMode, setChartMode] = useState<'clean' | 'debug'>('clean');
 
   const [candles, setCandles] = useState<CandleApiRow[] | null>(null);
   const [chartPayload, setChartPayload] = useState<CandleApiResponse | null>(null);
@@ -1511,6 +1823,23 @@ export default function TVChartPanel() {
   const engineAParityRows = useMemo(
     () => buildEngineAParityRows(chartCandidate, studySnapshot.latest, chartPayload),
     [chartCandidate, studySnapshot.latest, chartPayload],
+  );
+  // Compact color-identity legend for clean mode. Always shows the lines actually
+  // drawn on the chart and the Engine B band/marker colors currently present in
+  // the overlay payload, so the AI screenshot includes the colour key.
+  const cleanLegendChips = useMemo(
+    () => buildCleanLegendChips({
+      isCryptoChart,
+      ema20: quantEma20,
+      ema21: quantEma21,
+      ema50: quantEma50,
+      ema200: quantEma200,
+      dema200: quantDema200,
+      vwap: quantVwap,
+      engineBEnabled: showEngineBOverlays,
+      engineBPayload: engineBOverlay,
+    }),
+    [isCryptoChart, quantEma20, quantEma21, quantEma50, quantEma200, quantDema200, quantVwap, showEngineBOverlays, engineBOverlay],
   );
 
   // Derived preset label: "all" only when every indicator is on, otherwise "custom".
@@ -1664,6 +1993,7 @@ export default function TVChartPanel() {
   const candleSeriesRef = useRef<ISeriesApi<'Candlestick'> | null>(null);
   const engineBMarkersRef = useRef<ISeriesMarkersPluginApi<Time> | null>(null);
   const engineBPriceLinesRef = useRef<IPriceLine[]>([]);
+  const engineBZonePrimitiveRef = useRef<EngineBZonePrimitive | null>(null);
   const chartCaptureRef = useRef<HTMLDivElement | null>(null);
   const ema20SeriesRef = useRef<ISeriesApi<'Line'> | null>(null);
   const ema21SeriesRef = useRef<ISeriesApi<'Line'> | null>(null);
@@ -1842,6 +2172,12 @@ export default function TVChartPanel() {
     }, 0);
     candleSeriesRef.current = candleSeries;
     engineBMarkersRef.current = createSeriesMarkers(candleSeries, [], { zOrder: 'top' });
+    // Engine B zone primitive: paints translucent support/resistance/FVG/OB bands
+    // under the candles. Lives for the chart instance's lifetime; data pushed via
+    // setZones() from the data-push effect below.
+    const zonePrimitive = new EngineBZonePrimitive();
+    candleSeries.attachPrimitive(zonePrimitive);
+    engineBZonePrimitiveRef.current = zonePrimitive;
 
     const overlayLineOpts = { lineWidth: 2 as const, lastValueVisible: true, priceLineVisible: false };
     ema20SeriesRef.current = chart.addSeries(LineSeries, { ...overlayLineOpts, color: PRICE_PANEL_INDICATORS.ema20.color }, 0);
@@ -1922,6 +2258,7 @@ export default function TVChartPanel() {
       candleSeriesRef.current = null;
       engineBMarkersRef.current = null;
       engineBPriceLinesRef.current = [];
+      engineBZonePrimitiveRef.current = null;
       ema20SeriesRef.current = null;
       ema21SeriesRef.current = null;
       ema50SeriesRef.current = null;
@@ -1974,17 +2311,39 @@ export default function TVChartPanel() {
     const values = studySnapshot.seriesValues;
     candleSeries.setData(rows);
     engineBMarkersRef.current?.setMarkers(engineBMarkers(engineBOverlay, rows, showEngineBOverlays));
-    for (const level of engineBOverlayLines(engineBOverlay, showEngineBOverlays)) {
-      engineBPriceLinesRef.current.push(
-        candleSeries.createPriceLine({
-          price: level.price,
-          color: level.color,
-          lineWidth: 1,
-          lineStyle: level.style ?? LineStyle.Dashed,
-          axisLabelVisible: true,
-          title: level.label,
-        }),
-      );
+    if (chartMode === 'clean') {
+      // Clean mode: render zones as translucent bands via the primitive and keep
+      // only single-level structural lines (BOS / CHOCH / breaker) as thin colored
+      // lines with no right-axis labels. Identity is conveyed by the legend.
+      engineBZonePrimitiveRef.current?.setZones(buildEngineBZones(engineBOverlay, showEngineBOverlays));
+      for (const level of engineBSingleLevelLines(engineBOverlay, showEngineBOverlays)) {
+        engineBPriceLinesRef.current.push(
+          candleSeries.createPriceLine({
+            price: level.price,
+            color: level.color,
+            lineWidth: 1,
+            lineStyle: level.style ?? LineStyle.Dotted,
+            axisLabelVisible: false,
+            title: '',
+          }),
+        );
+      }
+    } else {
+      // Debug mode: legacy behaviour — every Engine B line gets a right-axis title
+      // for verification work.
+      engineBZonePrimitiveRef.current?.setZones([]);
+      for (const level of engineBOverlayLines(engineBOverlay, showEngineBOverlays)) {
+        engineBPriceLinesRef.current.push(
+          candleSeries.createPriceLine({
+            price: level.price,
+            color: level.color,
+            lineWidth: 1,
+            lineStyle: level.style ?? LineStyle.Dashed,
+            axisLabelVisible: true,
+            title: level.label,
+          }),
+        );
+      }
     }
 
     const pushLine = (
@@ -2036,7 +2395,7 @@ export default function TVChartPanel() {
     } else {
       chart.timeScale().fitContent();
     }
-  }, [candles, liveTick, backendTf, isCryptoChart, studySnapshot, chartPayload, candlePriceFormat, engineBOverlay, showEngineBOverlays, quantEma20, quantEma21, quantEma50, quantEma200, quantDema200, quantVwap, quantRsi14, quantAdx14, quantAtr14, quantVolumeBars, quantVolumeMa]);
+  }, [candles, liveTick, backendTf, isCryptoChart, studySnapshot, chartPayload, candlePriceFormat, engineBOverlay, showEngineBOverlays, chartMode, quantEma20, quantEma21, quantEma50, quantEma200, quantDema200, quantVwap, quantRsi14, quantAdx14, quantAtr14, quantVolumeBars, quantVolumeMa]);
 
   return (
     <Card className="h-full">
@@ -2092,6 +2451,21 @@ export default function TVChartPanel() {
               ))}
             </div>
             <IndicatorSwitch label="Engine B overlays" checked={showEngineBOverlays} onCheckedChange={setShowEngineBOverlays} />
+            <div className="flex items-center gap-1 rounded-md border border-input bg-background p-0.5">
+              {(['clean', 'debug'] as const).map((mode) => (
+                <Button
+                  key={mode}
+                  size="sm"
+                  variant={chartMode === mode ? 'default' : 'ghost'}
+                  className="h-7 px-2 text-[11px]"
+                  onClick={() => setChartMode(mode)}
+                  aria-pressed={chartMode === mode}
+                  aria-label={`${mode === 'clean' ? 'Full Stack Clean' : 'Debug Full Stack'} chart mode`}
+                >
+                  {mode === 'clean' ? 'Clean' : 'Debug'}
+                </Button>
+              ))}
+            </div>
             <IndicatorSwitch label="Show Quant Debug" checked={showQuantDebug} onCheckedChange={setShowQuantDebug} />
             {showQuantDebug && (
               <Select value={activePreset} onValueChange={(v) => applyPreset(v as PresetValue)}>
@@ -2199,6 +2573,13 @@ export default function TVChartPanel() {
                   <CaptureLabel>{`Engine B ${engineBOverlay.overlay_version || 'overlay'}`}</CaptureLabel>
                 )}
               </div>
+              {cleanLegendChips.length > 0 && (
+                <div className="flex flex-wrap items-center gap-1">
+                  {cleanLegendChips.map((chip) => (
+                    <LegendChip key={`capture-legend-${chip.key}`} spec={chip} />
+                  ))}
+                </div>
+              )}
               {showQuantDebug && (
                 <div className="flex flex-wrap items-center gap-1">
                   {pricePanelLegendItems.map((item) => (
