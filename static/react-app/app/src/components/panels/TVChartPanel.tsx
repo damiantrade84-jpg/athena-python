@@ -609,6 +609,22 @@ function symbolKey(value: unknown): string | null {
   return key || null;
 }
 
+function isEngineSignalLike(value: unknown): value is EngineASignal {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const signal = value as EngineASignal;
+  const hasSymbol = Boolean(symbolKey(displaySymbol(signal) || signal.symbol || signal.pair));
+  const hasTradeShape = Boolean(
+    normalizeDirection(signal.direction)
+      || signal.trade !== undefined
+      || signal.executable !== undefined
+      || signal.confluenceScore !== undefined
+      || signal.score !== undefined
+      || signal.engine_b
+      || signal.naked_data,
+  );
+  return hasSymbol && hasTradeShape;
+}
+
 function findEngineACandidateForSymbol(rows: EngineASignal[], symbol: string): EngineASignal | null {
   const chartKey = symbolKey(symbol);
   if (!chartKey) return null;
@@ -1956,6 +1972,7 @@ export default function TVChartPanel() {
   const [executing, setExecuting] = useState(false);
   const [sizingOverride, setSizingOverride] = useState(1.0);
   const [timeframeAutoMode, setTimeframeAutoMode] = useState(true);
+  const [intentSignal, setIntentSignal] = useState<EngineASignal | null>(null);
   const lastAppliedRouteKeyRef = useRef<string | null>(null);
   const aiReviewSymbolKeyRef = useRef<string | null>(null);
   const currentPairKeyRef = useRef<string | null>(symbolKey(pair));
@@ -1970,8 +1987,12 @@ export default function TVChartPanel() {
     () => (Array.isArray(scanCacheA) ? scanCacheA.filter((row): row is EngineASignal => Boolean(row && typeof row === 'object')) : []),
     [scanCacheA],
   );
-  const defaultCandidate = useMemo(() => pickEngineACandidate(candidateRows), [candidateRows]);
-  const chartCandidate = useMemo(() => findEngineACandidateForSymbol(candidateRows, pair), [candidateRows, pair]);
+  const intentCandidateRows = useMemo(
+    () => (intentSignal ? [intentSignal, ...candidateRows] : candidateRows),
+    [intentSignal, candidateRows],
+  );
+  const defaultCandidate = useMemo(() => pickEngineACandidate(intentCandidateRows), [intentCandidateRows]);
+  const chartCandidate = useMemo(() => findEngineACandidateForSymbol(intentCandidateRows, pair), [intentCandidateRows, pair]);
   const backendTf = TF_BACKEND_MAP[timeframe];
   const currentSymbolKey = symbolKey(pair);
   const timeframeRoute = useMemo(() => reviewTimeframeRoute(aiReview), [aiReview]);
@@ -2171,6 +2192,7 @@ export default function TVChartPanel() {
     appliedIntentIdRef.current = tvChartIntent.id;
     const intentSymbol = String(tvChartIntent.symbol || '').toUpperCase().trim();
     if (!intentSymbol) return;
+    setIntentSignal(isEngineSignalLike(tvChartIntent.signal) ? tvChartIntent.signal : null);
     if (currentSymbolKey && intentSymbol !== currentSymbolKey) {
       setAiReview(null);
       setAiReviewError(null);

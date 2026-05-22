@@ -1341,6 +1341,17 @@ export interface AIChartReviewEngineAContext {
   [k: string]: unknown;
 }
 
+export interface ReviewInputMeta {
+  symbol?: string | null;
+  signalEngine?: 'A' | 'B' | 'D' | 'unknown' | string;
+  signalTimeframe?: string | null;
+  chartTimeframe?: string | null;
+  hasEngineASignal?: boolean;
+  hasEngineBOverlay?: boolean;
+  hasChartImage?: boolean;
+  timeframeRouteApplied?: boolean;
+}
+
 export interface AIChartReviewResponse {
   review_id: string | null;
   provider: string;
@@ -1362,6 +1373,7 @@ export interface AIChartReviewResponse {
   engine_a_verdict_comparison?: AIChartReviewEngineAVerdictComparison;
   timeframeRoute?: TimeframeRoute;
   timeframe_route?: TimeframeRoute;
+  reviewInputMeta?: ReviewInputMeta;
   contextCompleteness?: AIChartReviewContextCompleteness;
   missingContextDetailed?: AIChartReviewMissingContextDetailed;
   fundingOi?: AIChartReviewFundingOi;
@@ -1531,6 +1543,7 @@ export interface ScalpAIChartReviewResponse {
   ai_review_summary?: ScalpAIReviewSummary;
   scalpVerdictComparison?: ScalpVerdictComparison;
   scalp_verdict_comparison?: ScalpVerdictComparison;
+  reviewInputMeta?: ReviewInputMeta;
   contextCompleteness?: ScalpContextCompleteness;
   context_completeness?: ScalpContextCompleteness;
   strategy_layer?: Record<string, unknown>;

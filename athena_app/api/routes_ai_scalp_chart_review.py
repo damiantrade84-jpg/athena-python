@@ -56,6 +56,19 @@ def _reject_extra_request_keys(data: dict[str, Any]) -> str | None:
     return None
 
 
+def _build_scalp_review_input_meta(engine_d_ctx: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "symbol": engine_d_ctx.get("symbol"),
+        "signalEngine": "D",
+        "signalTimeframe": engine_d_ctx.get("execution_tf") or engine_d_ctx.get("timeframe"),
+        "chartTimeframe": engine_d_ctx.get("timeframe"),
+        "hasEngineASignal": False,
+        "hasEngineBOverlay": False,
+        "hasChartImage": True,
+        "timeframeRouteApplied": False,
+    }
+
+
 def _attach_scalp_review_summary(
     response: dict[str, Any],
     *,
@@ -90,6 +103,7 @@ def _attach_scalp_review_summary(
     response["scalpVerdictComparison"] = verdict_comparison
     response["scalp_verdict_comparison"] = verdict_comparison
     response.update(ctx_diag)
+    response["reviewInputMeta"] = _build_scalp_review_input_meta(engine_d_ctx)
     plan = ai_review.get("suggestedTradePlan") or ai_review.get("suggested_trade_plan")
     if isinstance(plan, dict):
         response["suggestedTradePlan"] = plan

@@ -132,6 +132,7 @@ def normalize_trade_skill_output(
     src = _pick_trade_skill(parsed)
 
     decision = _coerce_str(src.get("decision")).upper()
+    source_decision = decision
     if decision not in _VALID_DECISIONS:
         inferred = _infer_decision_from_legacy(parsed)
         decision = inferred or "WATCH_ONLY"
@@ -163,21 +164,10 @@ def normalize_trade_skill_output(
     if entry_allowed is None:
         entry_allowed = decision == "ENTRY_NOW"
 
-    # Engine D required fields — only enforce when model supplied partial trade-skill output
+    downgraded_no_trade_without_hard_reason = False
+
+    # Engine D ENTRY_NOW always requires the required scalp review fields.
     if review_type == "engine_d_scalp":
-        has_trade_skill_signal = any(
-            src.get(k) or parsed.get(k)
-            for k in (
-                "marketState",
-                "market_state",
-                "locationAssessment",
-                "location_assessment",
-                "aggressionAssessment",
-                "aggression_assessment",
-                "entryModel",
-                "entry_model",
-            )
-        )
         missing_d = []
         if not market_state:
             missing_d.append("marketState")
@@ -187,10 +177,9 @@ def normalize_trade_skill_output(
             missing_d.append("aggressionAssessment")
         if not entry_model:
             missing_d.append("entryModel")
-        if has_trade_skill_signal and missing_d:
+        if missing_d and decision == "ENTRY_NOW":
             warnings.append("engine_d_required_fields_missing")
-            if decision == "ENTRY_NOW":
-                decision = "WATCH_ONLY"
+            decision = "WATCH_ONLY"
             entry_allowed = False
             if not no_trade_reason and not wait_reason:
                 wait_reason = "Required Engine D fields missing: " + ", ".join(missing_d)
@@ -198,6 +187,23 @@ def normalize_trade_skill_output(
     # Blocking decisions always disable entry
     if decision in _BLOCKING_DECISIONS:
         entry_allowed = False
+
+    source_declared_no_trade = (
+        source_decision == "NO_TRADE"
+        or _coerce_str(src.get("verdict") or parsed.get("verdict")).upper() == "NO_TRADE"
+    )
+    hard_no_trade_reason = (
+        bool(no_trade_reason)
+        or invalidation_level is not None
+        or bool(invalidation_reason)
+    )
+    if decision == "NO_TRADE" and source_declared_no_trade and not hard_no_trade_reason:
+        decision = "WATCH_ONLY"
+        entry_allowed = False
+        downgraded_no_trade_without_hard_reason = True
+        warnings.append("no_trade_without_hard_reason_downgraded")
+        if not wait_reason:
+            wait_reason = "NO_TRADE requires a hard invalidation or concrete noTradeReason"
 
     # Direction must be LONG/SHORT for ENTRY_NOW
     if decision == "ENTRY_NOW" and direction not in ("LONG", "SHORT"):
@@ -231,9 +237,15 @@ def normalize_trade_skill_output(
     # Preserve explicit legacy human_action/verdict when trade skill inferred from them
     legacy_human = _coerce_str(parsed.get("human_action")).lower()
     legacy_verdict = _coerce_str(parsed.get("verdict")).upper()
-    if legacy_human in {"take", "wait", "reject", "needs_fresher_data", "needs_better_rr"}:
+    if (
+        not downgraded_no_trade_without_hard_reason
+        and legacy_human in {"take", "wait", "reject", "needs_fresher_data", "needs_better_rr"}
+    ):
         human_action = legacy_human
-    if legacy_verdict in {"VALID", "CAUTION", "INVALID", "NO_TRADE"}:
+    if (
+        not downgraded_no_trade_without_hard_reason
+        and legacy_verdict in {"VALID", "CAUTION", "INVALID", "NO_TRADE"}
+    ):
         verdict = legacy_verdict
 
     out: dict[str, Any] = {

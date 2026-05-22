@@ -240,6 +240,8 @@ def test_prompt_contains_engine_d_playbook_and_review_order():
     assert "ATHENA TRADE PLAYBOOKS" in prompt
     assert "Market State -> Location -> Aggression" in prompt
     assert "tradeSkillVersion" in prompt
+    assert "Do not use NO_TRADE as generic caution" in prompt
+    assert "Use NO_TRADE only with hard invalidation or a concrete noTradeReason" in prompt
 
 
 def test_prompt_contains_engine_d_context():
@@ -297,6 +299,16 @@ def test_route_normalizes_opus_response(mock_run):
     assert data["scalpVerdictComparison"]["comparisonVerdict"] == "setup_confirmed"
     assert data["engine_d_context"]["ai_grade"] == "B"
     assert data["concordance"]["engine"] == "D"
+    assert data["reviewInputMeta"] == {
+        "symbol": "BTCUSDT",
+        "signalEngine": "D",
+        "signalTimeframe": "M1",
+        "chartTimeframe": "M1",
+        "hasEngineASignal": False,
+        "hasEngineBOverlay": False,
+        "hasChartImage": True,
+        "timeframeRouteApplied": False,
+    }
 
 
 def test_strategy_layer_receives_engine_d_summary():

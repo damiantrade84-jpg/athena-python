@@ -368,6 +368,12 @@ def test_prompt_includes_engine_a_context_json():
     assert "engineAVerdictComparison" in prompt
 
 
+def test_prompt_instructs_no_trade_only_for_hard_reasons():
+    prompt = build_chart_review_prompt(_engine_a_ctx())
+    assert "Do not use NO_TRADE as generic caution" in prompt
+    assert "Use NO_TRADE only with hard invalidation or a concrete noTradeReason" in prompt
+
+
 def test_build_engine_a_prompt_context_null_when_missing():
     ctx = _engine_a_ctx(threshold=None, confluence_score=None)
     ctx["engine_snapshots"] = extract_engine_snapshots({}, ctx)
@@ -649,6 +655,16 @@ def test_summary_always_present_on_success(tmp_audit_db):
         assert key in summary
     assert data.get("engineAVerdictComparison") is not None
     assert data.get("engine_a_verdict_comparison") == data["engineAVerdictComparison"]
+    assert data["reviewInputMeta"] == {
+        "symbol": "BTCUSDT",
+        "signalEngine": "A",
+        "signalTimeframe": "H4",
+        "chartTimeframe": "H4",
+        "hasEngineASignal": True,
+        "hasEngineBOverlay": True,
+        "hasChartImage": True,
+        "timeframeRouteApplied": bool(data["timeframeRoute"].get("enabled")),
+    }
 
 
 def test_timeframe_route_attached_to_success_response(tmp_audit_db):
@@ -707,6 +723,8 @@ def test_timeframe_route_dedup_response_has_route(tmp_audit_db):
     assert data["timeframeRoute"]["autoSelectTf"] == "H1"
     assert data["timeframe_route"] == data["timeframeRoute"]
     assert data["engine_a_context"]["timeframe_route"] == data["timeframeRoute"]
+    assert data["reviewInputMeta"]["symbol"] == "BTCUSDT"
+    assert data["reviewInputMeta"]["timeframeRouteApplied"] is True
     assert mock_call.call_count == 1
 
 

@@ -212,6 +212,8 @@ def test_tv_chart_panel_consumes_tv_chart_intent():
     source = _read(TV_PANEL)
 
     assert "tvChartIntent" in source
+    assert "const [intentSignal, setIntentSignal] = useState<EngineASignal | null>(null)" in source
+    assert "function isEngineSignalLike(value: unknown): value is EngineASignal" in source
     assert "appliedIntentIdRef" in source
     assert "pendingAutoReviewRef" in source
     assert "Opened from Signals" in source
@@ -537,7 +539,9 @@ def test_engine_a_side_panel_follows_current_chart_symbol_not_first_candidate():
     source = _read(TV_PANEL)
 
     assert "function findEngineACandidateForSymbol" in source
-    assert "const chartCandidate = useMemo(() => findEngineACandidateForSymbol(candidateRows, pair), [candidateRows, pair]);" in source
+    assert "const intentCandidateRows = useMemo(" in source
+    assert "() => (intentSignal ? [intentSignal, ...candidateRows] : candidateRows)" in source
+    assert "const chartCandidate = useMemo(() => findEngineACandidateForSymbol(intentCandidateRows, pair), [intentCandidateRows, pair]);" in source
     assert "<EngineASidePanel signal={chartCandidate} liveTick={liveTick} chartPayload={chartPayload} />" in source
     assert "<EngineASidePanel signal={selectedCandidate}" not in source
     assert 'aria-label="Engine A candidate"' in source

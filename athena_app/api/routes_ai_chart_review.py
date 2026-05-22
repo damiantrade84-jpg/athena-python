@@ -55,6 +55,27 @@ def _resolve_provider_name(data: dict[str, Any], cfg: dict[str, Any]) -> str:
     return provider
 
 
+def _attach_review_input_meta(
+    response: dict[str, Any],
+    *,
+    engine_a_ctx: dict[str, Any],
+) -> None:
+    structure_context = engine_a_ctx.get("structure_context")
+    route = response.get("timeframeRoute") or response.get("timeframe_route") or {}
+    has_engine_a = "passed" in engine_a_ctx
+    has_engine_b = isinstance(structure_context, dict) and bool(structure_context)
+    response["reviewInputMeta"] = {
+        "symbol": engine_a_ctx.get("symbol"),
+        "signalEngine": "A" if has_engine_a else "B" if has_engine_b else "unknown",
+        "signalTimeframe": engine_a_ctx.get("timeframe"),
+        "chartTimeframe": engine_a_ctx.get("chart_timeframe") or engine_a_ctx.get("timeframe"),
+        "hasEngineASignal": has_engine_a,
+        "hasEngineBOverlay": has_engine_b,
+        "hasChartImage": True,
+        "timeframeRouteApplied": bool(isinstance(route, dict) and route.get("enabled")),
+    }
+
+
 def _attach_review_summary(
     response: dict[str, Any],
     *,
@@ -130,6 +151,7 @@ def _attach_timeframe_route(
     response_ctx["timeframe_route"] = route
     response["timeframeRoute"] = route
     response["timeframe_route"] = route
+    _attach_review_input_meta(response, engine_a_ctx=response_ctx)
     return response
 
 

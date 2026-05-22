@@ -84,6 +84,7 @@ Rules:
 - Do not approve a trade only because aiGrade is A/B or executable=true.
 - Reduce tradeabilityScore when entry is at poor location or source contract is proxy/unverified.
 - Reduce sourceQualityScore when strictOrderflowSourcePass is false or unavailableReasons exist.
+- Do not use NO_TRADE as generic caution. Use WAIT_FOR_PULLBACK / WAIT_FOR_ACCEPTANCE / WATCH_ONLY when direction is acceptable but timing is poor. Use NO_TRADE only with hard invalidation or a concrete noTradeReason.
 - This is review-only. Do not issue execution instructions.
 
 == SERVER-TRUSTED engineDContext (JSON) ==

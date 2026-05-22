@@ -47,6 +47,13 @@ def test_engine_d_playbook_states_m5_context_m1_execution() -> None:
     )
 
 
+def test_engine_d_playbook_separates_watch_only_from_no_trade() -> None:
+    pb = get_engine_d_scalp_playbook()
+    principles = " ".join(pb["principles"])
+    assert "Use WATCH_ONLY when state is unclear" in principles
+    assert "Use NO_TRADE only for hard invalidation" in principles
+
+
 def test_engine_a_and_b_playbooks_have_required_shape() -> None:
     for getter in (get_engine_a_playbook, get_engine_b_playbook):
         pb = getter()
@@ -95,3 +102,51 @@ def test_normalize_trade_skill_engine_d_missing_fields() -> None:
     )
     assert out["entryAllowedNow"] is False
     assert "engine_d_required_fields_missing" in warnings
+
+
+def test_normalize_trade_skill_engine_d_entry_now_requires_all_fields_even_with_invalidation() -> None:
+    out, warnings = normalize_trade_skill_output(
+        {
+            "decision": "ENTRY_NOW",
+            "direction": "LONG",
+            "confidence": 70,
+            "invalidationLevel": 64920.0,
+            "invalidationReason": "Break below structure invalidates",
+            "entryAllowedNow": True,
+        },
+        review_type="engine_d_scalp",
+    )
+    assert out["decision"] == "WATCH_ONLY"
+    assert out["entryAllowedNow"] is False
+    assert "engine_d_required_fields_missing" in warnings
+
+
+def test_normalize_trade_skill_downgrades_no_trade_without_hard_reason() -> None:
+    out, warnings = normalize_trade_skill_output(
+        {
+            "decision": "NO_TRADE",
+            "direction": "LONG",
+            "confidence": 55,
+            "entryAllowedNow": False,
+        },
+        review_type="engine_a_chart",
+    )
+    assert out["decision"] == "WATCH_ONLY"
+    assert out["entryAllowedNow"] is False
+    assert "no_trade_without_hard_reason_downgraded" in warnings
+
+
+def test_normalize_trade_skill_preserves_no_trade_with_hard_reason() -> None:
+    out, warnings = normalize_trade_skill_output(
+        {
+            "decision": "NO_TRADE",
+            "direction": "LONG",
+            "confidence": 55,
+            "noTradeReason": "Invalidated below daily demand",
+            "entryAllowedNow": False,
+        },
+        review_type="engine_a_chart",
+    )
+    assert out["decision"] == "NO_TRADE"
+    assert out["entryAllowedNow"] is False
+    assert "no_trade_without_hard_reason_downgraded" not in warnings

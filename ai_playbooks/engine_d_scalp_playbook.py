@@ -17,10 +17,10 @@ def get_engine_d_scalp_playbook() -> dict:
             "Do not long directly into supply or HVN resistance.",
             "Do not short directly into demand or HVN support.",
             "Do not trade when market state, location, and aggression do not align.",
-            "If market state is unclear, output NO_TRADE or WATCH_ONLY.",
+            "Use WATCH_ONLY when state is unclear. Use NO_TRADE only for hard invalidation or a concrete no-trade reason.",
             "If location is poor, output WAIT, not ENTRY_NOW.",
-            "If aggression contradicts direction, output NO_TRADE or WAIT.",
-            "If RR is poor after waiting for confirmation, output NO_TRADE.",
+            "If aggression contradicts direction, output WAIT unless it creates hard invalidation.",
+            "If RR is poor after waiting for confirmation, output NO_TRADE with a concrete noTradeReason.",
             "AI review is advisory only and never grants execution permission.",
         ],
         "marketStates": [
