@@ -12,17 +12,13 @@ def _read(path: Path) -> str:
 
 def test_scalp_workbench_builds_compact_ai_snapshot_from_structured_contracts():
     source = _read(SCALP_WORKBENCH)
+    chart_snapshot = _read(ROOT / "static/react-app/app/src/lib/scalpWorkbenchChart/chartSnapshot.ts")
 
-    assert "interface ScalpChartSnapshot" in source
-    assert "function buildScalpChartSnapshot" in source
-    assert "selectedSignal: {" in source
-    assert "marketLocation: {" in source
-    assert "aggressionContext: {" in source
-    assert "sourceContract: {" in source
-    assert "chartCapturedAt: new Date().toISOString()" in source
-    assert "lvnLevels: [...ui.marketLocation.lvnLevels]" in source
-    assert "hvnLevels: [...ui.marketLocation.hvnLevels]" in source
-    assert "vp_lvn_count" not in source[source.index("function buildScalpChartSnapshot"):]
+    assert "buildScalpChartSnapshot" in chart_snapshot
+    assert "profile:" in chart_snapshot
+    assert "renderedLayers" in chart_snapshot
+    assert "buildScalpChartSnapshot" in source
+    assert "chart_snapshot:" in _read(AI_SCALP_HELPER)
 
 
 def test_scalp_workbench_ai_capture_posts_server_trusted_review():
@@ -224,9 +220,54 @@ def test_scalp_workbench_right_edge_label_layout():
     assert "axisLabelVisible: false" in source
 
 
-def test_scalp_workbench_compact_header_chips():
+def test_scalp_workbench_builds_chart_snapshot_with_profile_liquidity_engineb_orderflow():
     source = _read(SCALP_WORKBENCH)
+    helper_dir = ROOT / "static/react-app/app/src/lib/scalpWorkbenchChart"
+    assert helper_dir.joinpath("chartSnapshot.ts").is_file()
+    assert "buildScalpChartSnapshot" in helper_dir.joinpath("chartSnapshot.ts").read_text(encoding="utf-8")
+    assert "profile:" in helper_dir.joinpath("chartSnapshot.ts").read_text(encoding="utf-8")
+    assert "liquidity:" in helper_dir.joinpath("chartSnapshot.ts").read_text(encoding="utf-8")
+    assert "engineBContext" in helper_dir.joinpath("chartSnapshot.ts").read_text(encoding="utf-8")
+    assert "orderFlow:" in helper_dir.joinpath("chartSnapshot.ts").read_text(encoding="utf-8")
+    assert "buildScalpChartSnapshot" in source
+    assert "liquidityContext" in source
 
-    assert "ChartFeedHeaderChips" in source
-    assert "scalpFeedIdentityChips" in source
-    assert "scalpFeedDiagnosticsChips" in source
+
+def test_scalp_workbench_review_button_enabled_for_ai_review_eligible_even_when_executable_false():
+    source = _read(SCALP_WORKBENCH)
+    helper = _read(ROOT / "static/react-app/app/src/lib/manualExecuteHelpers.ts")
+    assert "isScalpAiReviewEligible" in helper
+    assert "aiReviewEligible" in source
+    assert "disabled={!aiReviewEligible" in source
+
+
+def test_scalp_workbench_screenshot_meta_contains_rendered_layers():
+    helper = _read(AI_SCALP_HELPER)
+    source = _read(SCALP_WORKBENCH)
+    assert "rendered_layers" in helper
+    assert "chart_snapshot" in helper
+    assert "renderedLayers" in source
+    assert "missing_layers" in source
+
+
+def test_scalp_workbench_execute_block_requires_ai_review():
+    helper = _read(ROOT / "static/react-app/app/src/lib/manualExecuteHelpers.ts")
+    assert "requiresScalpAiEntryNow" in helper
+    assert "AI ENTRY_NOW required" in helper
+
+
+def test_scalp_workbench_layout_keeps_chart_and_ai_verdict_visible():
+    source = _read(SCALP_WORKBENCH)
+    assert "data-review-rail" in source
+    assert "ScalpAIReviewCard" in source
+    assert "Order flow / source" in source
+    assert "xl:grid-cols-[minmax(0,1fr)_360px]" in source
+
+
+def test_scalp_workbench_overlay_toggles_present():
+    source = _read(SCALP_WORKBENCH)
+    assert "overlayToggles" in source
+    assert "Auction Levels" in source
+    assert "Engine B Structure" in source
+    assert "ScalpThesisBadge" in source
+

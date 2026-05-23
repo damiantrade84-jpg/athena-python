@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+from datetime import datetime, timezone
 import json
 import sqlite3
 import tempfile
@@ -40,6 +41,30 @@ def _png_data_url() -> str:
     return f"data:image/png;base64,{_PNG_1X1}"
 
 
+def _recent_iso(seconds_ago: int = 5) -> str:
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+
+
+def _minimal_chart_snapshot(**overrides):
+    snap = {
+        "symbol": "BTCUSDT",
+        "timeframe": "M1",
+        "latestCandleTs": _recent_iso(30),
+        "selectedSignal": {
+            "direction": "LONG",
+            "grade": "B",
+            "entry": 65000.0,
+            "stopLoss": 64920.0,
+            "tp1": 65120.0,
+            "setup_type": "lvn_reclaim",
+        },
+        "profile": {"poc": 64980.0, "vah": 65100.0, "val": 64850.0, "lvns": [], "hvns": []},
+        "renderedLayers": {"candles": True, "profile": True, "candidateLevels": True},
+    }
+    snap.update(overrides)
+    return snap
+
+
 def _base_request(**overrides):
     body = {
         "symbol": "BTCUSDT",
@@ -50,10 +75,12 @@ def _base_request(**overrides):
             "width": 1280,
             "height": 720,
             "native_chart": True,
-            "captured_at": "2026-05-21T16:31:02+00:00",
+            "captured_at": _recent_iso(2),
             "chart_timeframe": "M1",
             "overlays": ["entry_sl_tp", "poc_vah_val"],
             "execution_tf": "M1",
+            "chart_snapshot": _minimal_chart_snapshot(),
+            "rendered_layers": {"candles": True, "profile": True, "candidateLevels": True},
         },
     }
     body.update(overrides)
@@ -240,7 +267,8 @@ def test_prompt_contains_engine_d_playbook_and_review_order():
     ctx = _engine_d_ctx()
     prompt = build_scalp_chart_review_prompt(ctx)
     assert "ATHENA TRADE PLAYBOOKS" in prompt
-    assert "Market State -> Location -> Aggression" in prompt
+    assert "Session Context" in prompt
+    assert "sessionContext" in prompt
     assert "tradeSkillVersion" in prompt
     assert "Do not use NO_TRADE as generic caution" in prompt
     assert "Use NO_TRADE only with hard invalidation or a concrete noTradeReason" in prompt
@@ -441,6 +469,34 @@ def test_build_engine_d_prompt_context_fields():
     prompt_ctx = build_engine_d_prompt_context(ctx)
     assert prompt_ctx["aiGrade"] == "B"
     assert prompt_ctx["sourceContract"]["strictOrderflowSourcePass"] is True
+    assert "sessionContext" in prompt_ctx
+    assert prompt_ctx["sessionContext"]["currentSession"]
+
+
+def test_engine_d_context_passes_session_context():
+    ctx = _engine_d_ctx()
+    ctx["scan_timestamp"] = "2026-01-15T18:00:00+00:00"
+    ctx["signal"] = dict(ctx.get("signal") or {})
+    ctx["signal"]["type"] = "forex"
+    ctx["signal"]["market_state"] = "balance"
+    prompt_ctx = build_engine_d_prompt_context(ctx)
+    sc = prompt_ctx["sessionContext"]
+    assert sc["currentSession"] == "NY_MIDDAY"
+    assert sc["deliveryWindow"] == "COMPRESSION_WINDOW"
+    assert prompt_ctx["sessionConvictionHint"]["sessionConvictionAdjustment"] == "DOWNGRADE"
+
+
+def test_midday_session_context_downgrades_marginal_setup():
+    ctx = _engine_d_ctx()
+    ctx["scan_timestamp"] = "2026-01-15T18:00:00+00:00"
+    ctx["signal"] = dict(ctx.get("signal") or {})
+    ctx["signal"]["type"] = "forex"
+    ctx["signal"]["market_state"] = "balance"
+    prompt = build_scalp_chart_review_prompt(ctx)
+    assert "NY_MIDDAY" in prompt
+    assert "COMPRESSION_WINDOW" in prompt or "DOWNGRADE" in prompt
+    prompt_ctx = build_engine_d_prompt_context(ctx)
+    assert prompt_ctx["sessionContext"]["sessionConvictionAdjustment"] == "DOWNGRADE"
 
 
 def test_summary_and_verdict_fallbacks():
@@ -556,4 +612,44 @@ def test_scalp_normalizer_malformed_suggested_trade_plan_not_armable():
     out = normalize_scalp_chart_review_response(raw)
     plan = out.get("suggestedTradePlan")
     assert plan is None or (isinstance(plan, dict) and plan.get("armable") is False)
+
+
+def test_ai_scalp_review_warns_on_client_server_profile_mismatch():
+    meta = _base_request()["screenshot_meta"]
+    meta["chart_snapshot"]["profile"]["poc"] = 1.0
+    ctx = _engine_d_ctx()
+    warnings = __import__("ai_scalp_review.engine_d_context", fromlist=["_validate_chart_snapshot_warnings"])._validate_chart_snapshot_warnings(ctx, meta)
+    assert "client_server_profile_poc_mismatch" in warnings
+
+
+def test_ai_scalp_review_rejects_severe_direction_mismatch():
+    from ai_scalp_review.engine_d_context import severe_chart_snapshot_reject_reason
+
+    meta = _base_request()["screenshot_meta"]
+    meta["chart_snapshot"]["selectedSignal"]["direction"] = "SHORT"
+    reason = severe_chart_snapshot_reject_reason("BTCUSDT", _engine_d_ctx(), meta, has_screenshot=True)
+    assert reason == "direction_mismatch"
+
+
+def test_ai_scalp_review_receives_chart_snapshot_layers():
+    ctx = assemble_engine_d_context(
+        "BTCUSDT",
+        "M1",
+        screenshot_meta=_base_request()["screenshot_meta"],
+        resolve_pair_fn=lambda _s: {"display": "BTCUSDT"},
+        run_scalp_scan_fn=lambda _pairs: {"signals": [_mock_scan_signal()]},
+        scalp_ui_signal_fn=lambda s: s,
+    )
+    assert ctx is not None
+    assert isinstance(ctx.get("clientChartSnapshot"), dict)
+    assert ctx["clientChartSnapshot"].get("renderedLayers")
+
+
+def test_ai_prompt_contains_fabio_carmine_chart_layer_rules():
+    ctx = _engine_d_ctx()
+    ctx["clientChartSnapshot"] = _minimal_chart_snapshot()
+    prompt = build_scalp_chart_review_prompt(ctx)
+    assert "Fabio / Carmine" in prompt
+    assert "ENTRY_NOW" in prompt
+    assert "middle-of-value" in prompt
 

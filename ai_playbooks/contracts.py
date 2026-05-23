@@ -100,6 +100,22 @@ class TradeSkillOutput(TypedDict, total=False):
     tradeSkillWarnings: list[str]
 
 
+def extended_output_fields_for(review_type: ReviewType) -> list[str]:
+    """Advisory Fabio/Carmine fields — prompt-required but not fail-closed on missing."""
+    if review_type == "engine_d_scalp":
+        return [
+            "aggressionClassification",
+            "effortVsResultClassification",
+            "trappedTraderAssessment",
+            "targetLogic",
+            "sessionQuality",
+            "sessionConvictionAdjustment",
+            "invalidationAssessment",
+            "managementPlan",
+        ]
+    return []
+
+
 def required_output_fields_for(review_type: ReviewType) -> list[str]:
     base = [
         "tradeSkillVersion",

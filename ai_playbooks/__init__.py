@@ -47,7 +47,20 @@ def render_playbook_prompt_block(
                 "mustRejectIf": pb.get("mustRejectIf", [])[:8],
                 "requiredOutputFields": pb.get("requiredOutputFields", []),
             }
-            for extra in ("marketStates", "locationChecklist", "aggressionChecklist", "decisions"):
+            for extra in (
+                "marketStates",
+                "locationChecklist",
+                "aggressionChecklist",
+                "decisions",
+                "sessionModelSwitch",
+                "effortVsResultDecisionTable",
+                "trappedTraderRules",
+                "pocTargetMagnetRules",
+                "casinoTimeDegradationRules",
+                "structuralStopGeometry",
+                "tradeManagementRules",
+                "extendedOutputFields",
+            ):
                 if extra in pb:
                     entry[extra] = pb[extra]
             slim.append(entry)

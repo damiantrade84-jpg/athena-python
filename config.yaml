@@ -1440,6 +1440,25 @@ NEWS_PAIR_CAP: 40   # Max pairs to fetch per-pair EODHD news and word weights pe
 
 AI_STRUCTURED_OUTPUTS: true
 
+# Engine D scalp chart AI review — session context for Fabio/Carmine model (server-resolved, not screenshot)
+AI_SCALP_CHART_REVIEW:
+  SESSION_CONTEXT:
+    ENABLED: true
+    NY_PREMARKET_START_ET: "08:00"
+    NY_OPEN_START_ET: "09:30"
+    NY_OPEN_END_ET: "10:30"
+    NY_MIDDAY_END_ET: "14:00"
+    NY_AFTERNOON_END_ET: "15:30"
+    NY_CLOSE_END_ET: "16:00"
+    LONDON_START_LOCAL: "07:00"
+    LONDON_END_LOCAL: "16:00"
+    ASIA_START_UTC_HOUR: 1
+    ASIA_END_UTC_HOUR: 9
+    PROFIT_LOCK_NET_R: 2.0
+    ATR_PCT_LOW_MAX: 0.08
+    ATR_PCT_NORMAL_MAX: 0.15
+    ATR_PCT_HIGH_MAX: 0.30
+
 AI_TEMPERATURE: 0.3
 
 AI_VISION_TEMPERATURE: 0.2
@@ -2577,6 +2596,16 @@ SCALP_ENGINE:
     A: 80
     B: 60
     C: 40
+
+  WORKBENCH_CHART:
+    NEAR_LVN_HVN_COUNT: 3
+    ENGINE_B_PRICE_WINDOW_ATR_K: 1.5
+    RENDER_READY_TIMEOUT_MS: 3000
+
+  WORKBENCH_ORDERFLOW:
+    LARGE_TRADE_PERCENTILE: 95
+    MIN_NOTIONAL_USD: 10000
+    MAX_EVENTS_PER_TYPE: 20
 
   # ── Spread Limits ─────────────────────────────────────────
 

@@ -1,11 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   createChart,
+  createSeriesMarkers,
   CandlestickSeries,
   LineStyle,
   type CandlestickData,
   type IChartApi,
   type ISeriesApi,
+  type ISeriesMarkersPluginApi,
+  type Time,
   type UTCTimestamp,
 } from 'lightweight-charts';
 import { AlertTriangle, BarChart3, Camera, CheckCircle2, Copy, Play, RefreshCw, ShieldCheck, Sparkles } from 'lucide-react';
@@ -37,8 +40,15 @@ import {
 import {
   buildScalpExecutePayload,
   evaluateScalpExecuteBlock,
+  isScalpAiReviewEligible,
   normalizeSymbolKey,
 } from '@/lib/manualExecuteHelpers';
+import { buildScalpChartLevels, buildOrderFlowMarkers, DEFAULT_SCALP_OVERLAY_TOGGLES, type EngineBOverlayLike, type OrderFlowPayloadLike, type ScalpOverlayToggles } from '@/lib/scalpWorkbenchChart/layers';
+import { buildScalpChartSnapshot, buildRenderedLayers } from '@/lib/scalpWorkbenchChart/chartSnapshot';
+import { waitForScalpChartRenderReady } from '@/lib/scalpWorkbenchChart/renderReady';
+import { ScalpThesisBadge } from '@/lib/scalpWorkbenchChart/thesisBadge';
+import { ScalpAdvisoryBadge } from '@/lib/scalpWorkbenchChart/advisoryBadge';
+import { ScalpChartLegend } from '@/lib/scalpWorkbenchChart/legend';
 import { runnerBadgeClass, runnerBadgeLabel } from '@/lib/suggestedTradeRunnerDisplay';
 import { useSuggestedTradeRunnerStatus } from '@/hooks/useSuggestedTradeRunnerStatus';
 import ScalpAIReviewCard from '@/components/athena/ScalpAIReviewCard';
@@ -51,7 +61,7 @@ import {
   RIGHT_EDGE_LABEL_PRIORITY,
   type RightEdgeLabel,
 } from '@/lib/chartRightEdgeLabels';
-import type { ScalpAIChartReviewResponse, SuggestedTradePlan, SuggestedTradeWatch } from '@/types/athena';
+import type { ScalpAIChartReviewResponse, ScalpChartSnapshot, SuggestedTradePlan, SuggestedTradeWatch } from '@/types/athena';
 import { cn, fmtNum, toNum } from '@/lib/utils';
 
 const TIMEFRAMES = ['M1', 'M5', 'M15'] as const;
@@ -298,71 +308,22 @@ interface NormalizedScalpRow {
   engineStatus: string | null;
   executable: boolean | null;
   marketState: string | null;
+  candidatePhase: string | null;
+  setupModel: string | null;
+  aggressionClassification: string | null;
+  sourceQualityLabel: string | null;
+  liquidityContext: Record<string, number | null | undefined>;
+  advisoryContext: { warnings: string[]; oldGateResult?: string | null; oldExecutable?: boolean };
   sourceContract: NormalizedSourceContract;
-  marketLocation: NormalizedMarketLocation;
+  marketLocation: NormalizedMarketLocation & {
+    priorPoc?: number | null;
+    priorVah?: number | null;
+    priorVal?: number | null;
+    lvnLevelsNear?: number[];
+    hvnLevelsNear?: number[];
+  };
   aggressionContext: NormalizedAggressionContext;
   scalpSetup: NormalizedScalpSetup;
-}
-
-interface ScalpChartSnapshot {
-  symbol: string | null;
-  timeframe: string | null;
-  chartCapturedAt: string;
-  visibleRange: {
-    from: string | null;
-    to: string | null;
-  };
-  selectedSignal: {
-    direction: string | null;
-    setupType: string | null;
-    entry: number | null;
-    stopLoss: number | null;
-    tp1: number | null;
-    tp2: number | null;
-    rr1: number | null;
-    rr2: number | null;
-  };
-  marketLocation: {
-    locationLabel: string | null;
-    locationScore: number | null;
-    poc: number | null;
-    vah: number | null;
-    val: number | null;
-    nearestLVN: number | null;
-    nearestHVN: number | null;
-    lvnLevels: number[];
-    hvnLevels: number[];
-  };
-  aggressionContext: {
-    aggressionLabel: string | null;
-    aggressionScore: number | null;
-    delta: number | null;
-    cvd: number | null;
-    cvdSlope: number | null;
-    absorptionDetected: boolean | null;
-    absorptionSide: string | null;
-    sweepDetected: boolean | null;
-    sweepSide: string | null;
-    imbalanceDetected: boolean | null;
-    imbalanceSide: string | null;
-  };
-  sourceContract: {
-    candleSource: string | null;
-    candleSourceIsReal: boolean | null;
-    volumeSource: string | null;
-    volumeSourceIsReal: boolean | null;
-    orderflowSource: string | null;
-    orderflowSourceIsReal: boolean | null;
-    cvdSource: string | null;
-    cvdSourceIsReal: boolean | null;
-    vpSource: string | null;
-    vpSourceIsReal: boolean | null;
-    strictOrderflowSourcePass: boolean | null;
-    strictVolumeSourcePass: boolean | null;
-    strictTimestampAlignmentPass: boolean | null;
-    strictVenuePass: boolean | null;
-    unavailableReasons: string[];
-  };
 }
 
 interface ScalpAIReview {
@@ -649,7 +610,7 @@ function normalizeScalpWorkbenchRow(row: ScalpWorkbenchSignal | null): Normalize
     warnings: recordArray(source, ['warnings']).concat(recordArray(raw, ['soft_warnings'])),
   };
 
-  const marketLocation: NormalizedMarketLocation = {
+  const marketLocation = {
     locationLabel: recordText(location, ['locationLabel']) ?? recordText(raw, ['location', 'price_location', 'vp_location', 'zone_type']),
     locationScore: recordNumber(location, ['locationScore']) ?? recordNumber(raw, ['location_score']),
     nearPOC: recordBool(location, ['nearPOC']) ?? recordBool(raw, ['near_poc']),
@@ -663,12 +624,17 @@ function normalizeScalpWorkbenchRow(row: ScalpWorkbenchSignal | null): Normalize
     poc: recordNumber(location, ['poc']) ?? recordNumber(raw, ['vp_poc', 'poc']),
     vah: recordNumber(location, ['vah']) ?? recordNumber(raw, ['vp_vah', 'vah']),
     val: recordNumber(location, ['val']) ?? recordNumber(raw, ['vp_val', 'val']),
+    priorPoc: recordNumber(location, ['priorPoc']) ?? recordNumber(raw, ['prior_vp_poc']),
+    priorVah: recordNumber(location, ['priorVah']) ?? recordNumber(raw, ['prior_vp_vah']),
+    priorVal: recordNumber(location, ['priorVal']) ?? recordNumber(raw, ['prior_vp_val']),
     lvnLevels: recordNumberArray(location, ['lvnLevels']).length > 0
       ? recordNumberArray(location, ['lvnLevels'])
       : recordNumberArray(raw, ['lvn_levels', 'vp_lvn_levels', 'lvns']),
     hvnLevels: recordNumberArray(location, ['hvnLevels']).length > 0
       ? recordNumberArray(location, ['hvnLevels'])
       : recordNumberArray(raw, ['hvn_levels', 'vp_hvn_levels', 'hvns']),
+    lvnLevelsNear: recordNumberArray(location, ['lvnLevelsNear']),
+    hvnLevelsNear: recordNumberArray(location, ['hvnLevelsNear']),
     nearestLVN: recordNumber(location, ['nearestLVN']) ?? recordNumber(raw, ['nearest_lvn']),
     nearestHVN: recordNumber(location, ['nearestHVN']) ?? recordNumber(raw, ['nearest_hvn']),
     distanceToPOC: recordNumber(location, ['distanceToPOC']) ?? recordNumber(raw, ['distance_to_poc']),
@@ -677,6 +643,9 @@ function normalizeScalpWorkbenchRow(row: ScalpWorkbenchSignal | null): Normalize
     distanceToNearestLVN: recordNumber(location, ['distanceToNearestLVN']) ?? recordNumber(raw, ['distance_to_nearest_lvn']),
     distanceToNearestHVN: recordNumber(location, ['distanceToNearestHVN']) ?? recordNumber(raw, ['distance_to_nearest_hvn']),
   };
+
+  const liquidityRaw = asRecord(raw.liquidityContext);
+  const advisoryRaw = asRecord(raw.advisoryContext);
 
   const aggressionContext: NormalizedAggressionContext = {
     aggressionLabel: recordText(aggression, ['aggressionLabel']) ?? recordText(raw, ['aggression_label', 'aggression_source']),
@@ -720,6 +689,29 @@ function normalizeScalpWorkbenchRow(row: ScalpWorkbenchSignal | null): Normalize
     engineStatus: recordText(raw, ['candidate_status', 'gate_result']),
     executable: recordBool(raw, ['executable']),
     marketState: recordText(raw, ['market_state']),
+    candidatePhase: recordText(raw, ['candidatePhase']) ?? recordText(raw, ['candidate_phase']),
+    setupModel: recordText(raw, ['setupModel']) ?? recordText(raw, ['setup_model']),
+    aggressionClassification: recordText(raw, ['aggressionClassification']) ?? recordText(raw, ['aggression_classification']),
+    sourceQualityLabel: recordText(raw, ['sourceQualityLabel']) ?? recordText(raw, ['source_quality_label']),
+    liquidityContext: {
+      priorDayHigh: recordNumber(liquidityRaw, ['priorDayHigh']),
+      priorDayLow: recordNumber(liquidityRaw, ['priorDayLow']),
+      sessionHigh: recordNumber(liquidityRaw, ['sessionHigh']),
+      sessionLow: recordNumber(liquidityRaw, ['sessionLow']),
+      premarketHigh: recordNumber(liquidityRaw, ['premarketHigh']),
+      premarketLow: recordNumber(liquidityRaw, ['premarketLow']),
+      asiaHigh: recordNumber(liquidityRaw, ['asiaHigh']),
+      asiaLow: recordNumber(liquidityRaw, ['asiaLow']),
+      londonHigh: recordNumber(liquidityRaw, ['londonHigh']),
+      londonLow: recordNumber(liquidityRaw, ['londonLow']),
+      sweepLevel: recordNumber(liquidityRaw, ['sweepLevel']),
+      reclaimLevel: recordNumber(liquidityRaw, ['reclaimLevel']),
+    },
+    advisoryContext: {
+      warnings: recordArray(advisoryRaw, ['warnings']).concat(recordArray(raw, ['fail_reasons'])).concat(recordArray(raw, ['soft_warnings'])),
+      oldGateResult: recordText(advisoryRaw, ['oldGateResult']) ?? recordText(raw, ['gate_result']),
+      oldExecutable: recordBool(advisoryRaw, ['oldExecutable']) ?? recordBool(raw, ['executable']),
+    },
     sourceContract,
     marketLocation,
     aggressionContext,
@@ -733,76 +725,6 @@ function isoFromLogicalTime(value: unknown): string | null {
   }
   if (typeof value === 'string' && value.trim()) return value;
   return null;
-}
-
-function buildScalpChartSnapshot(
-  ui: NormalizedScalpRow,
-  args: {
-    symbol: string | null;
-    timeframe: string;
-    visibleRange: { from?: unknown; to?: unknown } | null;
-  },
-): ScalpChartSnapshot {
-  return {
-    symbol: args.symbol,
-    timeframe: ui.timeframe ?? args.timeframe,
-    chartCapturedAt: new Date().toISOString(),
-    visibleRange: {
-      from: isoFromLogicalTime(args.visibleRange?.from),
-      to: isoFromLogicalTime(args.visibleRange?.to),
-    },
-    selectedSignal: {
-      direction: ui.scalpSetup.direction,
-      setupType: ui.scalpSetup.setupType,
-      entry: ui.scalpSetup.entry,
-      stopLoss: ui.scalpSetup.stopLoss,
-      tp1: ui.scalpSetup.tp1,
-      tp2: ui.scalpSetup.tp2,
-      rr1: ui.scalpSetup.rr1,
-      rr2: ui.scalpSetup.rr2,
-    },
-    marketLocation: {
-      locationLabel: ui.marketLocation.locationLabel,
-      locationScore: ui.marketLocation.locationScore,
-      poc: ui.marketLocation.poc,
-      vah: ui.marketLocation.vah,
-      val: ui.marketLocation.val,
-      nearestLVN: ui.marketLocation.nearestLVN,
-      nearestHVN: ui.marketLocation.nearestHVN,
-      lvnLevels: [...ui.marketLocation.lvnLevels],
-      hvnLevels: [...ui.marketLocation.hvnLevels],
-    },
-    aggressionContext: {
-      aggressionLabel: ui.aggressionContext.aggressionLabel,
-      aggressionScore: ui.aggressionContext.aggressionScore,
-      delta: ui.aggressionContext.delta,
-      cvd: ui.aggressionContext.cvd,
-      cvdSlope: ui.aggressionContext.cvdSlope,
-      absorptionDetected: ui.aggressionContext.absorptionDetected,
-      absorptionSide: ui.aggressionContext.absorptionSide,
-      sweepDetected: ui.aggressionContext.sweepDetected,
-      sweepSide: ui.aggressionContext.sweepSide,
-      imbalanceDetected: ui.aggressionContext.imbalanceDetected,
-      imbalanceSide: ui.aggressionContext.imbalanceSide,
-    },
-    sourceContract: {
-      candleSource: ui.sourceContract.candleSource,
-      candleSourceIsReal: ui.sourceContract.candleSourceIsReal,
-      volumeSource: ui.sourceContract.volumeSource,
-      volumeSourceIsReal: ui.sourceContract.volumeSourceIsReal,
-      orderflowSource: ui.sourceContract.orderflowSource,
-      orderflowSourceIsReal: ui.sourceContract.orderflowSourceIsReal,
-      cvdSource: ui.sourceContract.cvdSource,
-      cvdSourceIsReal: ui.sourceContract.cvdSourceIsReal,
-      vpSource: ui.sourceContract.vpSource,
-      vpSourceIsReal: ui.sourceContract.vpSourceIsReal,
-      strictOrderflowSourcePass: ui.sourceContract.strictOrderflowSourcePass,
-      strictVolumeSourcePass: ui.sourceContract.strictVolumeSourcePass,
-      strictTimestampAlignmentPass: ui.sourceContract.strictTimestampAlignmentPass,
-      strictVenuePass: ui.sourceContract.strictVenuePass,
-      unavailableReasons: [...ui.sourceContract.unavailableReasons],
-    },
-  };
 }
 
 function sourceQualitySummaryFor(source: NormalizedSourceContract): string {
@@ -959,9 +881,10 @@ export default function ScalpWorkbenchPanel() {
   const appliedIntentIdRef = useRef<string | null>(null);
   const pendingAutoReviewRef = useRef(false);
   const autoReviewRanForIntentRef = useRef<string | null>(null);
-  const [showTradeLevels, setShowTradeLevels] = useState(true);
-  const [showProfileLevels, setShowProfileLevels] = useState(true);
-  const [showLvnLevels, setShowLvnLevels] = useState(true);
+  const [overlayToggles, setOverlayToggles] = useState<ScalpOverlayToggles>(DEFAULT_SCALP_OVERLAY_TOGGLES);
+  const [engineBOverlay, setEngineBOverlay] = useState<EngineBOverlayLike | null>(null);
+  const [orderFlowPayload, setOrderFlowPayload] = useState<OrderFlowPayloadLike | null>(null);
+  const orderFlowMarkersRef = useRef<ISeriesMarkersPluginApi<Time> | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const chartCaptureRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<IChartApi | null>(null);
@@ -1182,36 +1105,51 @@ export default function ScalpWorkbenchPanel() {
 
   const sourceSummaryTone: BadgeTone = sourceSummary.includes('real') ? 'real' : sourceSummary.includes('proxy') || sourceSummary.includes('mixed') ? 'proxy' : 'muted';
 
-  const priceLevels = useMemo<PriceLevel[]>(() => {
-    const levels: PriceLevel[] = [];
-    if (showTradeLevels) {
-      const entry = activeUi.scalpSetup.entry;
-      const sl = activeUi.scalpSetup.stopLoss;
-      const tp1 = activeUi.scalpSetup.tp1;
-      const tp2 = activeUi.scalpSetup.tp2;
-      if (entry != null) levels.push({ label: 'ENTRY', price: entry, color: 'hsl(45, 95%, 58%)' });
-      if (sl != null) levels.push({ label: 'SL', price: sl, color: 'hsl(343, 96%, 60%)' });
-      if (tp1 != null) levels.push({ label: 'TP1', price: tp1, color: 'hsl(160, 84%, 39%)' });
-      if (tp2 != null) levels.push({ label: 'TP2', price: tp2, color: 'hsl(160, 84%, 48%)', style: LineStyle.Dotted });
-    }
-    if (showProfileLevels) {
-      const poc = activeUi.marketLocation.poc;
-      const vah = activeUi.marketLocation.vah;
-      const val = activeUi.marketLocation.val;
-      if (poc != null) levels.push({ label: 'POC', price: poc, color: 'hsl(200, 95%, 55%)' });
-      if (vah != null) levels.push({ label: 'VAH', price: vah, color: 'hsl(265, 80%, 68%)', style: LineStyle.Dashed });
-      if (val != null) levels.push({ label: 'VAL', price: val, color: 'hsl(265, 80%, 68%)', style: LineStyle.Dashed });
-    }
-    if (showLvnLevels) {
-      for (const [index, price] of activeUi.marketLocation.lvnLevels.entries()) {
-        levels.push({ label: `LVN ${index + 1}`, price, color: 'hsl(30, 92%, 58%)', style: LineStyle.Dotted });
-      }
-      for (const [index, price] of activeUi.marketLocation.hvnLevels.entries()) {
-        levels.push({ label: `HVN ${index + 1}`, price, color: 'hsl(190, 82%, 52%)', style: LineStyle.Dotted });
-      }
-    }
-    return levels;
-  }, [activeUi, showLvnLevels, showProfileLevels, showTradeLevels]);
+  const aiReviewEligible = useMemo(
+    () => isScalpAiReviewEligible(activeSignal ? { ...activeSignal, ai_grade: activeSignal.ai_grade } : null),
+    [activeSignal],
+  );
+
+  const aiVerdictOverlay = useMemo(() => {
+    const structured = scalpAiReviewResponse?.ai_review?.structured as Record<string, unknown> | undefined;
+    const decision = String(structured?.decision || scalpAiReviewResponse?.ai_review?.verdict || '').toUpperCase();
+    const plan = suggestedPlan;
+    return {
+      decision,
+      waitZoneLow: plan?.zoneLow ?? null,
+      waitZoneHigh: plan?.zoneHigh ?? null,
+      acceptanceLevel: plan?.level ?? null,
+    };
+  }, [scalpAiReviewResponse, suggestedPlan]);
+
+  const structuralTp = useMemo(
+    () => numberOrNull(activeSignal?.structural_tp),
+    [activeSignal],
+  );
+
+  const priceLevels = useMemo(() => buildScalpChartLevels({
+    toggles: overlayToggles,
+    marketLocation: activeUi.marketLocation,
+    liquidity: activeUi.liquidityContext,
+    setup: activeUi.scalpSetup,
+    structuralTp,
+    engineB: engineBOverlay,
+    engineBSimplified: true,
+    aiVerdict: overlayToggles.aiVerdict ? aiVerdictOverlay : null,
+    anchorPrice: activeUi.scalpSetup.entry,
+  }), [activeUi, aiVerdictOverlay, engineBOverlay, overlayToggles, structuralTp]);
+
+  const orderFlowMarkers = useMemo(
+    () => (overlayToggles.orderFlow ? buildOrderFlowMarkers(orderFlowPayload) : []),
+    [orderFlowPayload, overlayToggles.orderFlow],
+  );
+
+  const advisoryWarnings = useMemo(() => {
+    const codes = new Set(activeUi.advisoryContext.warnings);
+    if (activeSignal?.executable === false) codes.add('old_executable');
+    if (activeSignal?.strict_fabio_pass === false) codes.add('strict_fabio_failed');
+    return Array.from(codes);
+  }, [activeSignal, activeUi.advisoryContext.warnings]);
   const refreshScan = useCallback(async () => {
     const result = await postScan('/api/scalp-scan', { diagnostic: true });
     if (!result) {
@@ -1250,26 +1188,82 @@ export default function ScalpWorkbenchPanel() {
       return;
     }
 
-    const visibleRange = chartRef.current?.timeScale().getVisibleRange() ?? null;
-    const scalpChartSnapshot = buildScalpChartSnapshot(activeUi, {
-      symbol: chartSymbol,
-      timeframe,
-      visibleRange: visibleRange as { from?: unknown; to?: unknown } | null,
-    });
-    const sourceCanvas = captureNativeChartCanvas(chartCaptureRef.current);
-    if (!sourceCanvas) {
-      setAiCaptureError('Chart capture failed: native chart canvas is not rendered yet');
-      return;
-    }
-
     setAiReviewLoading(true);
     try {
+      const renderReady = await waitForScalpChartRenderReady(() => {
+        const captureEl = chartCaptureRef.current;
+        const rect = captureEl?.getBoundingClientRect();
+        const profileAvailable = activeUi.marketLocation.poc != null || activeUi.marketLocation.vah != null;
+        return {
+          candleCount: candleRows.length,
+          candidateLevelsReady: activeUi.scalpSetup.entry != null && activeUi.scalpSetup.stopLoss != null,
+          profileReady: profileAvailable ? true : 'unavailable',
+          sourceBadgeReady: Boolean(activeUi.sourceQualityLabel || activeUi.sourceContract.orderflowSource),
+          captureWidth: rect?.width ?? 0,
+          captureHeight: rect?.height ?? 0,
+        };
+      });
+
+      const visibleRange = chartRef.current?.timeScale().getVisibleRange() ?? null;
+      const latestCandleTs = candleRows.length > 0
+        ? isoFromLogicalTime(candleRows[candleRows.length - 1].time)
+        : activeUi.sourceContract.latestCandleTs;
+
+      const renderedLayers = buildRenderedLayers(overlayToggles, {
+        candlesLoaded: candleRows.length > 0,
+        profileAvailable: activeUi.marketLocation.poc != null,
+        liquidityAvailable: activeUi.liquidityContext.sessionHigh != null || activeUi.liquidityContext.priorDayHigh != null,
+        engineBAvailable: Boolean(engineBOverlay?.nearest_support_zone || engineBOverlay?.nearest_resistance_zone),
+        orderFlowAvailable: orderFlowPayload?.source != null && orderFlowPayload.source !== 'UNAVAILABLE',
+        candidateAvailable: activeUi.scalpSetup.entry != null,
+        advisoryAvailable: advisoryWarnings.length > 0,
+      });
+
+      const scalpChartSnapshot = buildScalpChartSnapshot({
+        symbol: chartSymbol,
+        timeframe,
+        visibleRange: {
+          from: isoFromLogicalTime(visibleRange?.from),
+          to: isoFromLogicalTime(visibleRange?.to),
+        },
+        latestCandleTs,
+        setup: {
+          ...activeUi.scalpSetup,
+          grade: activeSignal.ai_grade ?? null,
+          candidatePhase: activeUi.candidatePhase,
+          setupModel: activeUi.setupModel,
+        },
+        marketLocation: activeUi.marketLocation,
+        liquidity: activeUi.liquidityContext,
+        engineB: engineBOverlay,
+        orderFlow: orderFlowPayload,
+        advisory: {
+          oldGateResult: activeUi.advisoryContext.oldGateResult ?? null,
+          oldExecutable: activeUi.advisoryContext.oldExecutable ?? false,
+          warnings: advisoryWarnings,
+          riskAdvisory: { rrOk: activeSignal.rr_ok, feeGuard: activeSignal.fee_guard },
+          sourceAdvisory: {
+            strictOrderflowSourcePass: activeUi.sourceContract.strictOrderflowSourcePass,
+            unavailableReasons: activeUi.sourceContract.unavailableReasons,
+          },
+        },
+        renderedLayers,
+        aggressionClassification: activeUi.aggressionClassification,
+        sourceQualityLabel: activeUi.sourceQualityLabel,
+        marketState: activeUi.marketState,
+      });
+
+      const sourceCanvas = captureNativeChartCanvas(chartCaptureRef.current);
+      if (!sourceCanvas) {
+        setAiCaptureError('Chart capture failed: native chart canvas is not rendered yet');
+        return;
+      }
+
       const outputCanvas = downscaleToCap(sourceCanvas);
       const screenshotBase64 = await canvasToDataUrl(outputCanvas);
-      const overlays: string[] = [];
-      if (showTradeLevels) overlays.push('entry_sl_tp');
-      if (showProfileLevels) overlays.push('poc_vah_val');
-      if (showLvnLevels) overlays.push('lvn_hvn');
+      const overlays = Object.entries(renderedLayers)
+        .filter(([, on]) => on)
+        .map(([key]) => key);
       const screenshotMeta = buildScalpScreenshotMeta({
         width: outputCanvas.width,
         height: outputCanvas.height,
@@ -1279,6 +1273,10 @@ export default function ScalpWorkbenchPanel() {
         visible_range_start: visibleRange?.from != null ? String(visibleRange.from) : undefined,
         visible_range_end: visibleRange?.to != null ? String(visibleRange.to) : undefined,
         chart_provider: candlePayload?.chart_provider || candlePayload?.candle_provider,
+        chart_snapshot: scalpChartSnapshot,
+        rendered_layers: renderedLayers,
+        missing_layers: renderReady.missing,
+        source_fidelity_label: activeUi.sourceQualityLabel || orderFlowPayload?.source || undefined,
       });
       setScalpAiReviewPreview({
         scalpChartSnapshot,
@@ -1312,14 +1310,16 @@ export default function ScalpWorkbenchPanel() {
   }, [
     activeSignal,
     activeUi,
+    advisoryWarnings,
     aiReviewProvider,
     candlePayload,
+    candleRows,
     chartSymbol,
+    engineBOverlay,
     executionTf,
+    orderFlowPayload,
+    overlayToggles,
     timeframe,
-    showLvnLevels,
-    showProfileLevels,
-    showTradeLevels,
     showToast,
   ]);
 
@@ -1376,6 +1376,37 @@ export default function ScalpWorkbenchPanel() {
   }, [chartSymbol, timeframe]);
 
   useEffect(() => {
+    if (!chartSymbol) {
+      setEngineBOverlay(null);
+      return;
+    }
+    let cancelled = false;
+    const direction = String(activeUi.scalpSetup.direction || 'LONG').toUpperCase();
+    const url = `/api/engine-b-overlays?symbol=${encodeURIComponent(chartSymbol)}&tf=${encodeURIComponent(timeframe)}&direction=${encodeURIComponent(direction)}&style=scalp`;
+    apiClient.getJson(url).then((res) => {
+      if (!cancelled) setEngineBOverlay(res as EngineBOverlayLike);
+    }).catch(() => {
+      if (!cancelled) setEngineBOverlay(null);
+    });
+    return () => { cancelled = true; };
+  }, [chartSymbol, timeframe, activeUi.scalpSetup.direction]);
+
+  useEffect(() => {
+    if (!chartSymbol) {
+      setOrderFlowPayload(null);
+      return;
+    }
+    let cancelled = false;
+    const url = `/api/scalp-orderflow?symbol=${encodeURIComponent(chartSymbol)}&timeframe=${encodeURIComponent(timeframe)}`;
+    apiClient.getJson(url).then((res) => {
+      if (!cancelled) setOrderFlowPayload(res as OrderFlowPayloadLike);
+    }).catch(() => {
+      if (!cancelled) setOrderFlowPayload(null);
+    });
+    return () => { cancelled = true; };
+  }, [chartSymbol, timeframe]);
+
+  useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
 
@@ -1415,6 +1446,7 @@ export default function ScalpWorkbenchPanel() {
     const labelPrimitive = new ChartRightEdgeLabelPrimitive();
     candleSeries.attachPrimitive(labelPrimitive);
     rightEdgeLabelPrimitiveRef.current = labelPrimitive;
+    orderFlowMarkersRef.current = createSeriesMarkers(candleSeries, [], { zOrder: 'top' });
     candleSeries.setData(candleRows);
 
     for (const level of priceLevels) {
@@ -1456,6 +1488,7 @@ export default function ScalpWorkbenchPanel() {
       }
     }
     labelPrimitive.setLabels(edgeLabels, paneHeightPx);
+    orderFlowMarkersRef.current?.setMarkers(orderFlowMarkers);
 
     if (candleRows.length > 0) chart.timeScale().fitContent();
 
@@ -1473,8 +1506,9 @@ export default function ScalpWorkbenchPanel() {
       chartRef.current = null;
       candleSeriesRef.current = null;
       rightEdgeLabelPrimitiveRef.current = null;
+      orderFlowMarkersRef.current = null;
     };
-  }, [candleRows, priceLevels]);
+  }, [candleRows, priceLevels, orderFlowMarkers]);
 
   const warnings = useMemo(() => {
     const items: Array<{ text: string; tone: BadgeTone }> = [];
@@ -1502,7 +1536,7 @@ export default function ScalpWorkbenchPanel() {
     () => (Array.isArray(scanResult?.skipped) ? scanResult.skipped.slice(0, 6).map((row) => normalizeScalpWorkbenchRow(row)) : []),
     [scanResult],
   );
-  const noLvnLevels = showLvnLevels && activeSignal && activeUi.marketLocation.lvnLevels.length === 0;
+  const noLvnLevels = overlayToggles.auctionLevels && activeSignal && activeUi.marketLocation.lvnLevels.length === 0;
   const chartProviderRows = [
     ['Chart provider', candlePayload?.chart_provider || candlePayload?.candle_provider || 'unknown'],
     ['Chart status', candlePayload?.chart_status || 'unknown'],
@@ -1637,24 +1671,46 @@ export default function ScalpWorkbenchPanel() {
                 </label>
               </div>
             </div>
-            <div className="flex flex-wrap gap-4 text-xs text-muted-foreground">
-              <label className="flex items-center gap-2">
-                <Switch checked={showTradeLevels} onCheckedChange={setShowTradeLevels} />
-                Entry / SL / TP
-              </label>
-              <label className="flex items-center gap-2">
-                <Switch checked={showProfileLevels} onCheckedChange={setShowProfileLevels} />
-                POC / VAH / VAL
-              </label>
-              <label className="flex items-center gap-2">
-                <Switch checked={showLvnLevels} onCheckedChange={setShowLvnLevels} />
-                LVN zones
-              </label>
+            <div className="flex flex-wrap gap-3 text-xs text-muted-foreground">
+              {([
+                ['auctionLevels', 'Auction Levels'],
+                ['liquidity', 'Liquidity'],
+                ['engineB', 'Engine B Structure'],
+                ['orderFlow', 'Order Flow'],
+                ['candidateLevels', 'Candidate Levels'],
+                ['warnings', 'Warnings'],
+                ['aiVerdict', 'AI Verdict'],
+              ] as const).map(([key, label]) => (
+                <label key={key} className="flex items-center gap-2">
+                  <Switch
+                    checked={overlayToggles[key]}
+                    onCheckedChange={(checked) => setOverlayToggles((prev) => ({ ...prev, [key]: checked }))}
+                  />
+                  {label}
+                </label>
+              ))}
             </div>
           </CardHeader>
           <CardContent className="pt-0">
             <div ref={chartCaptureRef} className="relative h-[540px] min-h-[420px] overflow-hidden rounded-md border border-border/50 bg-[#080c10]">
               <div ref={containerRef} className="absolute inset-0" />
+              <ScalpThesisBadge
+                grade={activeSignal?.ai_grade ?? null}
+                candidatePhase={activeUi.candidatePhase}
+                setupModel={activeUi.setupModel}
+                marketState={activeUi.marketState}
+                location={activeUi.marketLocation.locationLabel}
+                aggressionClassification={activeUi.aggressionClassification}
+                sourceQuality={activeUi.sourceQualityLabel || orderFlowPayload?.source || null}
+              />
+              {overlayToggles.warnings && (
+                <ScalpAdvisoryBadge warnings={advisoryWarnings} />
+              )}
+              <ScalpChartLegend
+                sourceLabel={orderFlowPayload?.source || activeUi.sourceQualityLabel}
+                grade={activeSignal?.ai_grade ?? null}
+                aiDecision={aiVerdictOverlay.decision || null}
+              />
               {(chartLoading || chartError || !chartSymbol || candleRows.length === 0) && (
                 <div className="pointer-events-none absolute left-3 top-3 max-w-[75%] rounded-md border border-border/60 bg-background/85 px-3 py-2 text-xs text-muted-foreground shadow-lg">
                   {chartLoading
@@ -1667,6 +1723,15 @@ export default function ScalpWorkbenchPanel() {
                   LVN overlay levels pending backend source-contract patch
                 </div>
               )}
+            </div>
+            <div className="mt-2 rounded-md border border-border/50 bg-muted/20 px-3 py-2 text-[11px] text-muted-foreground">
+              <div className="font-medium text-foreground/80">Order flow / source</div>
+              <div className="mt-1 flex flex-wrap gap-3">
+                <span>Source: {orderFlowPayload?.source || 'UNAVAILABLE'}</span>
+                <span>Large trades: {orderFlowPayload?.largeTradeEvents?.length ?? 0}</span>
+                <span>Absorption: {orderFlowPayload?.absorptionEvents?.length ?? 0}</span>
+                <span>CVD points: {orderFlowPayload?.cvd?.length ?? 0}</span>
+              </div>
             </div>
           </CardContent>
         </Card>
@@ -1686,7 +1751,7 @@ export default function ScalpWorkbenchPanel() {
               variant="outline"
               size="sm"
               onClick={captureScalpChartForAIReview}
-              disabled={!activeSignal || chartLoading || aiReviewLoading}
+              disabled={!aiReviewEligible || chartLoading || aiReviewLoading}
             >
               <Camera className={cn('mr-2 h-4 w-4', aiReviewLoading && 'animate-pulse')} />
               {aiReviewLoading ? 'Reviewing…' : 'AI Scalp Review'}

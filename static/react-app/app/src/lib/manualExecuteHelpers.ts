@@ -199,6 +199,24 @@ export function shouldHideTvChartExecuteNow(args: {
   return false;
 }
 
+export function isScalpAiReviewEligible(signal: ScalpExecuteSignalLike | null): boolean {
+  if (!signal) return false;
+  const direction = String(signal.direction || '').toUpperCase();
+  if (direction !== 'LONG' && direction !== 'SHORT') return false;
+  const grade = String(signal.ai_grade || '').toUpperCase();
+  return grade === 'A' || grade === 'B';
+}
+
+export function requiresScalpAiEntryNow(review: ScalpAIChartReviewResponse | null): boolean {
+  if (!review) return true;
+  const structured = review.ai_review?.structured as Record<string, unknown> | undefined;
+  const decision = String(structured?.decision || review.ai_review?.verdict || '').toUpperCase();
+  const entryAllowed = structured?.entryAllowedNow;
+  if (decision !== 'ENTRY_NOW') return true;
+  if (entryAllowed === false) return true;
+  return false;
+}
+
 export function scalpAiReviewBlocksExecute(review: ScalpAIChartReviewResponse | null): boolean {
   if (!review) return false;
   if (tradeSkillBlocksExecute(review)) return true;
@@ -250,15 +268,11 @@ export function evaluateScalpExecuteBlock(args: {
   if (!signal) return 'No scalp candidate';
   const direction = String(signal.direction || '').toUpperCase();
   if (direction !== 'LONG' && direction !== 'SHORT') return 'Direction missing';
-  const gate = String(signal.gate_result || '').toUpperCase();
-  if (signal.executable === false) return 'Not executable';
-  if (gate && gate !== 'PASS') return 'Gate failed';
-  if ('strict_fabio_pass' in signal && signal.strict_fabio_pass !== true) return 'Fabio gate failed';
-  if (scalpSourceFidelityHardFail(signal)) return 'Source fidelity failed';
   const entry = signal.entry ?? signal.price;
   if (!isPositiveNumber(entry) || !isPositiveNumber(signal.sl) || !isPositiveNumber(signal.tp1 ?? signal.tp)) {
     return 'Missing levels';
   }
+  if (requiresScalpAiEntryNow(aiReview)) return 'AI ENTRY_NOW required';
   if (scalpAiReviewBlocksExecute(aiReview)) return 'AI says wait';
   const planAction = String(suggestedTradePlan?.action || '').toUpperCase();
   if (planAction === 'WAIT_FOR_LEVEL') return 'Waiting for level';

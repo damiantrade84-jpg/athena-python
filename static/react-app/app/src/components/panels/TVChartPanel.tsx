@@ -2283,6 +2283,12 @@ export default function TVChartPanel() {
     }),
     [chartCandidate, currentSymbolKey, aiReview, suggestedPlan, isTestMode, isPaper],
   );
+  const showFlagWatchAction = Boolean(aiReview || suggestedPlan || flagStatus);
+  const flagWatchDisabledReason = !suggestedPlan
+    ? 'AI review did not return a suggested trade plan'
+    : !canFlagWatch
+      ? 'Suggested trade plan is not watchable'
+      : undefined;
   const showViewSuggestedTrades = Boolean(flagStatus) || symbolWatches.length > 0;
   const { runner: suggestedTradeRunner } = useSuggestedTradeRunnerStatus();
 
@@ -3213,39 +3219,39 @@ export default function TVChartPanel() {
                 {aiReviewLoading ? 'Reviewing…' : 'AI Review'}
               </Button>
               {chartCandidate && (
-                <>
-                  <Button
-                    size="sm"
-                    variant="default"
-                    className="h-8 gap-1 text-xs"
-                    disabled={Boolean(executeBlockReason) || executing}
-                    onClick={() => setConfirmExecuteOpen(true)}
-                  >
-                    <Play className="h-3.5 w-3.5" />
-                    Execute Now
-                  </Button>
-                  {canFlagWatch && (
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      className="h-8 text-xs"
-                      disabled={flagLoading}
-                      onClick={() => void flagWatchSetup()}
-                    >
-                      Flag / Watch Setup
-                    </Button>
-                  )}
-                  {showViewSuggestedTrades && (
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      className="h-8 text-xs"
-                      onClick={() => setActivePanel('suggestedTrades')}
-                    >
-                      View Suggested Trades
-                    </Button>
-                  )}
-                </>
+                <Button
+                  size="sm"
+                  variant="default"
+                  className="h-8 gap-1 text-xs"
+                  disabled={Boolean(executeBlockReason) || executing}
+                  onClick={() => setConfirmExecuteOpen(true)}
+                >
+                  <Play className="h-3.5 w-3.5" />
+                  Execute Now
+                </Button>
+              )}
+              {showFlagWatchAction && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-8 text-xs"
+                  disabled={!canFlagWatch || flagLoading}
+                  onClick={() => void flagWatchSetup()}
+                  title={flagWatchDisabledReason}
+                  data-suggested-watch-action
+                >
+                  Flag / Watch Setup
+                </Button>
+              )}
+              {showViewSuggestedTrades && (
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="h-8 text-xs"
+                  onClick={() => setActivePanel('suggestedTrades')}
+                >
+                  View Suggested Trades
+                </Button>
               )}
             </div>
             {executeBlockReason && (
