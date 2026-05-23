@@ -5,6 +5,17 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any, Callable
 
+from ai_scalp_review.session_context import (
+    resolve_engine_d_session_context,
+    resolve_session_conviction_hint,
+)
+from config import CONFIG
+
+
+def _chart_snapshot_cfg(key: str, default: Any) -> Any:
+    cfg = CONFIG.get("AI_SCALP_CHART_REVIEW") or {}
+    return cfg.get(key, default)
+
 
 def _to_float(value: Any) -> float | None:
     if isinstance(value, bool):
@@ -68,6 +79,22 @@ def build_engine_d_prompt_context(engine_d_ctx: dict[str, Any]) -> dict[str, Any
     location = engine_d_ctx.get("marketLocation") or signal.get("marketLocation") or {}
     aggression = engine_d_ctx.get("aggressionContext") or signal.get("aggressionContext") or {}
     source = engine_d_ctx.get("sourceContract") or signal.get("sourceContract") or {}
+
+    when_raw = (
+        engine_d_ctx.get("chart_captured_at")
+        or engine_d_ctx.get("scan_timestamp")
+        or engine_d_ctx.get("latest_candle_ts")
+        or source.get("latestCandleTs")
+    )
+    asset_type = str(signal.get("type") or engine_d_ctx.get("asset_type") or "forex").lower()
+    session_context = resolve_engine_d_session_context(
+        when=_parse_iso_ts(when_raw),
+        asset_type=asset_type,
+        signal=signal,
+        session_risk_state=signal.get("session_risk_state"),
+    )
+    session_conviction_hint = resolve_session_conviction_hint(session_context)
+
     return {
         "symbol": engine_d_ctx.get("symbol"),
         "timeframe": engine_d_ctx.get("timeframe"),
@@ -92,6 +119,9 @@ def build_engine_d_prompt_context(engine_d_ctx: dict[str, Any]) -> dict[str, Any
         "cvd": aggression.get("cvd"),
         "cvdSlope": aggression.get("cvdSlope"),
         "absorptionDetected": aggression.get("absorptionDetected"),
+        "marketState": signal.get("market_state") or signal.get("marketState"),
+        "sessionContext": session_context,
+        "sessionConvictionHint": session_conviction_hint,
         "sourceContract": {
             "candleSourceIsReal": source.get("candleSourceIsReal"),
             "volumeSourceIsReal": source.get("volumeSourceIsReal"),
@@ -121,7 +151,133 @@ def _build_mismatch_warnings(engine_d_ctx: dict[str, Any], screenshot_meta: dict
     exec_tf = str(engine_d_ctx.get("execution_tf") or "").upper()
     if chart_tf and exec_tf and chart_tf != exec_tf:
         warnings.append(f"chart_tf_{chart_tf}_differs_from_execution_tf_{exec_tf}")
+    warnings.extend(_validate_chart_snapshot_warnings(engine_d_ctx, screenshot_meta))
     return warnings
+
+
+def _parse_iso_ts(value: Any) -> datetime | None:
+    if not value:
+        return None
+    try:
+        text = str(value).replace("Z", "+00:00")
+        dt = datetime.fromisoformat(text)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt
+    except (TypeError, ValueError):
+        return None
+
+
+def _level_close(a: Any, b: Any, tol_pct: float = 0.0015) -> bool:
+    fa, fb = _to_float(a), _to_float(b)
+    if fa is None or fb is None:
+        return True
+    tol = max(abs(fa) * tol_pct, 1e-8)
+    return abs(fa - fb) <= tol
+
+
+def _validate_chart_snapshot_warnings(
+    engine_d_ctx: dict[str, Any],
+    screenshot_meta: dict[str, Any] | None,
+) -> list[str]:
+    warnings: list[str] = []
+    snapshot = (screenshot_meta or {}).get("chart_snapshot")
+    if not isinstance(snapshot, dict):
+        return warnings
+    selected = snapshot.get("selectedSignal") or {}
+    setup = engine_d_ctx.get("scalpSetup") or {}
+    location = engine_d_ctx.get("marketLocation") or {}
+    profile = snapshot.get("profile") or {}
+
+    snap_dir = str(selected.get("direction") or "").upper()
+    srv_dir = str(engine_d_ctx.get("direction") or "").upper()
+    if snap_dir and srv_dir and snap_dir != srv_dir:
+        warnings.append("client_server_direction_mismatch")
+
+    for field, snap_key, srv_key in (
+        ("entry", "entry", "entry"),
+        ("stopLoss", "stopLoss", "stopLoss"),
+        ("tp1", "tp1", "tp1"),
+    ):
+        if not _level_close(selected.get(snap_key), setup.get(srv_key)):
+            warnings.append(f"client_server_{field}_mismatch")
+
+    for field, snap_key, srv_key in (("poc", "poc", "poc"), ("vah", "vah", "vah"), ("val", "val", "val")):
+        if not _level_close(profile.get(snap_key), location.get(srv_key)):
+            warnings.append(f"client_server_profile_{field}_mismatch")
+
+    snap_grade = str(selected.get("grade") or selected.get("ai_grade") or "").upper()
+    srv_grade = str(engine_d_ctx.get("ai_grade") or "").upper()
+    if snap_grade and srv_grade and snap_grade != srv_grade:
+        warnings.append("client_server_grade_mismatch")
+
+    snap_candle = _parse_iso_ts(snapshot.get("latestCandleTs"))
+    srv_candle = _parse_iso_ts(engine_d_ctx.get("latest_candle_ts"))
+    if snap_candle and srv_candle and snap_candle < srv_candle:
+        warnings.append("client_chart_older_than_server_latest_candle")
+
+    return warnings
+
+
+def severe_chart_snapshot_reject_reason(
+    symbol: str,
+    engine_d_ctx: dict[str, Any],
+    screenshot_meta: dict[str, Any] | None,
+    *,
+    has_screenshot: bool = True,
+) -> str | None:
+    if not has_screenshot:
+        return "missing_screenshot"
+    snapshot = (screenshot_meta or {}).get("chart_snapshot")
+    if not isinstance(snapshot, dict):
+        return "missing_chart_snapshot"
+    selected = snapshot.get("selectedSignal")
+    if not isinstance(selected, dict):
+        return "missing_selected_signal"
+
+    snap_symbol = str(snapshot.get("symbol") or "").strip().upper()
+    srv_symbol = str(engine_d_ctx.get("symbol") or symbol or "").strip().upper()
+    snap_compact = snap_symbol.replace("/", "").replace("-", "")
+    srv_compact = srv_symbol.replace("/", "").replace("-", "")
+    if snap_symbol and srv_symbol and snap_compact != srv_compact and snap_symbol != srv_symbol:
+        keys = _symbol_keys(symbol)
+        if snap_symbol not in keys and snap_compact not in {k.replace("/", "").replace("-", "") for k in keys}:
+            return "symbol_mismatch"
+
+    snap_dir = str(selected.get("direction") or "").upper()
+    srv_dir = str(engine_d_ctx.get("direction") or "").upper()
+    if snap_dir and srv_dir and snap_dir != srv_dir:
+        return "direction_mismatch"
+
+    captured_at = _parse_iso_ts((screenshot_meta or {}).get("captured_at"))
+    latest = _parse_iso_ts(snapshot.get("latestCandleTs") or engine_d_ctx.get("latest_candle_ts"))
+    max_age = int(_chart_snapshot_cfg("MAX_CHART_AGE_SECONDS", 120))
+    now = datetime.now(timezone.utc)
+    if captured_at and (now - captured_at).total_seconds() > max_age:
+        return "chart_capture_too_old"
+    if latest and captured_at and (captured_at - latest).total_seconds() > max_age:
+        return "chart_data_stale"
+
+    return None
+
+
+def sanitize_client_chart_snapshot(screenshot_meta: dict[str, Any] | None) -> dict[str, Any] | None:
+    snapshot = (screenshot_meta or {}).get("chart_snapshot")
+    if not isinstance(snapshot, dict):
+        return None
+    return {
+        "symbol": snapshot.get("symbol"),
+        "timeframe": snapshot.get("timeframe"),
+        "latestCandleTs": snapshot.get("latestCandleTs"),
+        "selectedSignal": snapshot.get("selectedSignal"),
+        "profile": snapshot.get("profile"),
+        "liquidity": snapshot.get("liquidity"),
+        "engineBContext": snapshot.get("engineBContext"),
+        "orderFlow": snapshot.get("orderFlow"),
+        "advisory": snapshot.get("advisory"),
+        "renderedLayers": snapshot.get("renderedLayers"),
+        "thesisBadge": snapshot.get("thesisBadge"),
+    }
 
 
 def assemble_engine_d_context(
@@ -186,4 +342,8 @@ def assemble_engine_d_context(
         "ohlcv_bars": [],
     }
     ctx["mismatch_warnings"] = _build_mismatch_warnings(ctx, screenshot_meta)
+    ctx["clientChartSnapshot"] = sanitize_client_chart_snapshot(screenshot_meta)
+    rendered = (screenshot_meta or {}).get("rendered_layers")
+    if isinstance(rendered, dict):
+        ctx["rendered_layers"] = rendered
     return ctx

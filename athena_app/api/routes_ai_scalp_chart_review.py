@@ -22,6 +22,7 @@ from ai_scalp_review.context_diagnostics import build_scalp_context_diagnostics
 from ai_scalp_review.engine_d_context import (
     assemble_engine_d_context,
     build_engine_d_summary_for_strategy,
+    severe_chart_snapshot_reject_reason,
 )
 from ai_scalp_review.normalizer import normalize_scalp_chart_review_response
 from ai_scalp_review.payload_schema import build_scalp_payload
@@ -57,13 +58,14 @@ def _reject_extra_request_keys(data: dict[str, Any]) -> str | None:
 
 
 def _build_scalp_review_input_meta(engine_d_ctx: dict[str, Any]) -> dict[str, Any]:
+    rendered = engine_d_ctx.get("rendered_layers") if isinstance(engine_d_ctx.get("rendered_layers"), dict) else {}
     return {
         "symbol": engine_d_ctx.get("symbol"),
         "signalEngine": "D",
         "signalTimeframe": engine_d_ctx.get("execution_tf") or engine_d_ctx.get("timeframe"),
         "chartTimeframe": engine_d_ctx.get("timeframe"),
         "hasEngineASignal": False,
-        "hasEngineBOverlay": False,
+        "hasEngineBOverlay": bool(rendered.get("engineB")),
         "hasChartImage": True,
         "timeframeRouteApplied": False,
     }
@@ -179,6 +181,17 @@ def register_ai_scalp_chart_review_routes(app, runtime: SimpleNamespace) -> None
         )
         if engine_d_ctx is None:
             return jsonify({"error": "Engine D returned no result for symbol"}), 422
+
+        cfg_reject = cfg.get("REJECT_ON_SEVERE_SNAPSHOT_MISMATCH", True)
+        if cfg_reject:
+            severe = severe_chart_snapshot_reject_reason(
+                symbol,
+                engine_d_ctx,
+                screenshot_meta,
+                has_screenshot=bool(data.get("screenshot_base64")),
+            )
+            if severe:
+                return jsonify({"error": f"chart_snapshot_rejected:{severe}"}), 400
 
         mismatch_warnings = list(engine_d_ctx.get("mismatch_warnings") or [])
         engine_d_ctx["chart_captured_at"] = screenshot_meta.get("captured_at")

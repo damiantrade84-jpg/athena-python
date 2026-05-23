@@ -9568,12 +9568,15 @@ def _build_scalp_setup_contract(raw_signal: dict, *, skipped: bool = False) -> d
 
 
 def _attach_scalp_workbench_contracts(row: dict, *, skipped: bool = False) -> dict:
+    from scalp_workbench_contracts import attach_scalp_workbench_extensions
+
     source_contract = _build_scalp_source_contract(row, skipped=skipped)
     row["marketLocation"] = _build_scalp_market_location(row, source_contract=source_contract)
     source_contract["unavailableReasons"] = sorted(set(source_contract.get("unavailableReasons", [])))
     row["sourceContract"] = source_contract
     row["aggressionContext"] = _build_scalp_aggression_context(row)
     row["scalpSetup"] = _build_scalp_setup_contract(row, skipped=skipped)
+    attach_scalp_workbench_extensions(row, source_contract=source_contract)
     row.setdefault("analysis_venue", source_contract.get("dataVenue"))
     row.setdefault("execution_venue", source_contract.get("executionVenue"))
     row.setdefault("venue_mismatch", source_contract.get("venueMismatch"))
@@ -15311,6 +15314,7 @@ from athena_app.api.routes_audit import register_audit_routes  # noqa: E402
 from athena_app.api.routes_ai_agent import register_ai_agent_routes  # noqa: E402
 from athena_app.api.routes_ai_chart_review import register_ai_chart_review_routes  # noqa: E402
 from athena_app.api.routes_ai_scalp_chart_review import register_ai_scalp_chart_review_routes  # noqa: E402
+from athena_app.api.routes_scalp_orderflow import register_scalp_orderflow_routes  # noqa: E402
 from athena_app.api.routes_suggested_trades import register_suggested_trade_routes  # noqa: E402
 from athena_app.api.routes_backtest import register_backtest_history_routes  # noqa: E402
 from athena_app.api.routes_broker_status import register_broker_status_routes  # noqa: E402
@@ -15432,6 +15436,12 @@ register_ai_scalp_chart_review_routes(
             "scalp_engine", fromlist=["run_scalp_scan"]
         ).run_scalp_scan(pairs),
         scalp_ui_signal_fn=_scalp_ui_signal,
+    ),
+)
+register_scalp_orderflow_routes(
+    app,
+    SimpleNamespace(
+        find_pair_fn=lambda symbol: _resolve_pair_from_signal({"symbol": symbol}),
     ),
 )
 register_suggested_trade_routes(

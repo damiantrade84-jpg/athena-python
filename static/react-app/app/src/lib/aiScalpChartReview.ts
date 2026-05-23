@@ -30,6 +30,10 @@ export function buildScalpScreenshotMeta(args: {
   visible_range_start?: string;
   visible_range_end?: string;
   chart_provider?: string;
+  chart_snapshot?: import('@/types/athena').ScalpChartSnapshot;
+  rendered_layers?: Record<string, boolean>;
+  missing_layers?: string[];
+  source_fidelity_label?: string;
 }): ScalpAIChartReviewScreenshotMeta {
   return {
     width: args.width,
@@ -42,6 +46,10 @@ export function buildScalpScreenshotMeta(args: {
     visible_range_start: args.visible_range_start,
     visible_range_end: args.visible_range_end,
     ...(args.chart_provider ? { chart_provider: args.chart_provider } : {}),
+    ...(args.chart_snapshot ? { chart_snapshot: args.chart_snapshot } : {}),
+    ...(args.rendered_layers ? { rendered_layers: args.rendered_layers } : {}),
+    ...(args.missing_layers?.length ? { missing_layers: [...args.missing_layers] } : {}),
+    ...(args.source_fidelity_label ? { source_fidelity_label: args.source_fidelity_label } : {}),
   };
 }
 

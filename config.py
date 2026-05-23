@@ -437,6 +437,27 @@ CONFIG: dict = {
         "STRATEGY_LAYER_OHLCV_LIMIT": _env_int(
             "AI_SCALP_CHART_REVIEW_STRATEGY_LAYER_OHLCV_LIMIT", 80
         ),
+        "MAX_CHART_AGE_SECONDS": _env_int("AI_SCALP_CHART_REVIEW_MAX_CHART_AGE_SECONDS", 120),
+        "REJECT_ON_SEVERE_SNAPSHOT_MISMATCH": _env_bool(
+            "AI_SCALP_CHART_REVIEW_REJECT_ON_SEVERE_SNAPSHOT_MISMATCH", True
+        ),
+        "SESSION_CONTEXT": {
+            "ENABLED": _env_bool("AI_SCALP_CHART_REVIEW_SESSION_CONTEXT_ENABLED", True),
+            "NY_PREMARKET_START_ET": "08:00",
+            "NY_OPEN_START_ET": "09:30",
+            "NY_OPEN_END_ET": "10:30",
+            "NY_MIDDAY_END_ET": "14:00",
+            "NY_AFTERNOON_END_ET": "15:30",
+            "NY_CLOSE_END_ET": "16:00",
+            "LONDON_START_LOCAL": "07:00",
+            "LONDON_END_LOCAL": "16:00",
+            "ASIA_START_UTC_HOUR": 1,
+            "ASIA_END_UTC_HOUR": 9,
+            "PROFIT_LOCK_NET_R": 2.0,
+            "ATR_PCT_LOW_MAX": 0.08,
+            "ATR_PCT_NORMAL_MAX": 0.15,
+            "ATR_PCT_HIGH_MAX": 0.30,
+        },
     },
     "AI_PROMPT_STORE_CLEANUP_ENABLED": True,
     "AI_PROMPT_STORE_RETENTION_DAYS": 90,

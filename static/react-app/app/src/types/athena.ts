@@ -1554,6 +1554,60 @@ export interface ScalpAIChartReviewResponse {
   suggested_trade_plan?: SuggestedTradePlan | null;
 }
 
+export interface ScalpChartSnapshot {
+  symbol: string | null;
+  timeframe: string | null;
+  chartCapturedAt: string;
+  visibleRange: { from: string | null; to: string | null };
+  latestCandleTs?: string | null;
+  selectedSignal: {
+    direction: string | null;
+    setupType: string | null;
+    entry: number | null;
+    stopLoss: number | null;
+    tp1: number | null;
+    tp2: number | null;
+    rr1: number | null;
+    rr2: number | null;
+    grade?: string | null;
+    candidate_phase?: string | null;
+    setup_type?: string | null;
+  };
+  profile: {
+    poc: number | null;
+    vah: number | null;
+    val: number | null;
+    priorPoc: number | null;
+    priorVah: number | null;
+    priorVal: number | null;
+    lvns: number[];
+    hvns: number[];
+  };
+  liquidity: Record<string, number | null | undefined>;
+  engineBContext: Record<string, unknown>;
+  orderFlow: {
+    source: string;
+    largeTradeEvents: unknown[];
+    absorptionEvents: unknown[];
+    initiativeEvents: unknown[];
+    exhaustionEvents: unknown[];
+    cvdSeriesAvailable: boolean;
+    liquidationEventsAvailable: boolean;
+  };
+  advisory: {
+    oldGateResult: string | null;
+    oldExecutable: boolean;
+    warnings: string[];
+    riskAdvisory: Record<string, unknown>;
+    sourceAdvisory: Record<string, unknown>;
+  };
+  renderedLayers: Record<string, boolean>;
+  thesisBadge?: Record<string, string | null | undefined>;
+  marketLocation?: Record<string, unknown>;
+  aggressionContext?: Record<string, unknown>;
+  sourceContract?: Record<string, unknown>;
+}
+
 export interface ScalpAIChartReviewScreenshotMeta {
   width: number;
   height: number;
@@ -1565,6 +1619,10 @@ export interface ScalpAIChartReviewScreenshotMeta {
   visible_range_start?: string;
   visible_range_end?: string;
   chart_provider?: string;
+  chart_snapshot?: ScalpChartSnapshot;
+  rendered_layers?: Record<string, boolean>;
+  missing_layers?: string[];
+  source_fidelity_label?: string;
 }
 
 export interface ScalpAIChartReviewRequest {

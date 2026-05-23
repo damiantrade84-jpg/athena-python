@@ -10,6 +10,7 @@ from ai_playbooks.contracts import (
     _VALID_DECISIONS,
     _VALID_DIRECTIONS,
     _VALID_ENTRY_MODELS,
+    extended_output_fields_for,
     required_output_fields_for,
 )
 
@@ -119,6 +120,41 @@ def _infer_decision_from_legacy(parsed: dict[str, Any]) -> str | None:
     if human == "wait" or verdict == "CAUTION":
         return "WAIT_FOR_PULLBACK"
     return None
+
+
+def _passthrough_dict(value: Any) -> dict[str, Any] | None:
+    if isinstance(value, dict) and value:
+        return dict(value)
+    return None
+
+
+def _attach_engine_d_extended_fields(out: dict[str, Any], src: dict[str, Any]) -> None:
+    """Passthrough advisory Fabio/Carmine fields without fail-closed gates."""
+    agg_class = _coerce_str(src.get("aggressionClassification") or src.get("aggression_classification"))
+    if agg_class:
+        out["aggressionClassification"] = agg_class.upper()
+    effort = _coerce_str(
+        src.get("effortVsResultClassification") or src.get("effort_vs_result_classification")
+    )
+    if effort:
+        out["effortVsResultClassification"] = effort.upper()
+    for key, snake in (
+        ("trappedTraderAssessment", "trapped_trader_assessment"),
+        ("targetLogic", "target_logic"),
+        ("invalidationAssessment", "invalidation_assessment"),
+        ("managementPlan", "management_plan"),
+    ):
+        nested = _passthrough_dict(src.get(key) or src.get(snake))
+        if nested:
+            out[key] = nested
+    session_quality = _coerce_str(src.get("sessionQuality") or src.get("session_quality"))
+    if session_quality:
+        out["sessionQuality"] = session_quality.upper()
+    session_adj = _coerce_str(
+        src.get("sessionConvictionAdjustment") or src.get("session_conviction_adjustment")
+    )
+    if session_adj:
+        out["sessionConvictionAdjustment"] = session_adj.upper()
 
 
 def normalize_trade_skill_output(
@@ -279,6 +315,9 @@ def normalize_trade_skill_output(
     if no_trade_reason:
         out["noTradeReason"] = no_trade_reason
 
+    if review_type == "engine_d_scalp":
+        _attach_engine_d_extended_fields(out, src)
+
     return out, warnings
 
 
@@ -321,9 +360,17 @@ def render_trade_skill_prompt_schema(review_type: ReviewType) -> str:
                 "marketState: trending|balancing|expanding|compressing|choppy|no_trade|transition",
                 "locationAssessment: string",
                 "aggressionAssessment: string",
+                "aggressionClassification: ABSORPTION|INITIATIVE_AGGRESSION|EXHAUSTION|NO_CLEAR_FLOW",
+                "effortVsResultClassification: HIGH_EFFORT_NO_RESULT|HIGH_EFFORT_HIGH_RESULT|LOW_EFFORT_STALLED_RESULT|LOW_EFFORT_HIGH_RESULT|UNKNOWN",
                 "entryModel: LVN_REJECTION_CONTINUATION|PULLBACK_TO_VALUE_REJECTION|SWEEP_AND_RECLAIM|BREAK_RETEST_HOLD|FAILED_BREAKOUT_REVERSAL|ABSORPTION_REVERSAL|MOMENTUM_CONTINUATION_AFTER_PULLBACK|NO_TRADE",
                 "invalidationLevel: number|null",
                 "invalidationReason: string",
+                "invalidationAssessment: { structuralInvalidationLevel, proposedStopLevel, stopPlacementValid, stopProblem, expectedBehavior }",
+                "trappedTraderAssessment: { trappedSide, trapTrigger, squeezeFuelScore, explanation }",
+                "targetLogic: { primaryTargetType, primaryTargetPrice, targetJustification, structuralRR }",
+                "sessionQuality: CLEAN_DELIVERY|ACCEPTABLE|CHOP_RISK|NO_TRADE_WINDOW",
+                "sessionConvictionAdjustment: UPGRADE|NEUTRAL|DOWNGRADE|HARD_REJECT",
+                "managementPlan (required when decision=ENTRY_NOW): { moveToBETrigger, scaleOutPlan, invalidationExit, maxTimeInTradeReasoning }",
                 "requiredConfirmation: string[]",
             ]
         )
@@ -335,4 +382,7 @@ def render_trade_skill_prompt_schema(review_type: ReviewType) -> str:
             "requiredOutputFields: " + ", ".join(fields),
         ]
     )
+    if review_type == "engine_d_scalp":
+        ext = extended_output_fields_for(review_type)
+        lines.append("extendedOutputFields (advisory): " + ", ".join(ext))
     return "\n".join(f"- {line}" for line in lines)

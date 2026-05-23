@@ -289,6 +289,8 @@ def test_tv_chart_panel_flag_watch_setup_button():
     assert "Flag / Watch Setup" in source
     assert "/api/suggested-trades/flag" in source
     assert "View Suggested Trades" in source
+    assert "showFlagWatchAction" in source
+    assert "data-suggested-watch-action" in source
     flag_idx = source.index("Flag / Watch Setup")
     flag_section = source[flag_idx:flag_idx + 800]
     assert "postJson('/api/quick-execute'" not in flag_section
@@ -314,6 +316,16 @@ def test_tv_chart_panel_execute_shown_when_can_flag_watch():
     assert "canFlagWatch" in source
     assert "Execute Now" in source
     assert "showExecuteNow" not in source
+
+
+def test_tv_chart_panel_watch_action_not_gated_by_chart_candidate():
+    source = _read(TV_PANEL)
+
+    action_idx = source.index("data-suggested-watch-action")
+    action_strip = source[source.rfind('data-review-action-strip', 0, action_idx):action_idx]
+    execute_idx = action_strip.index("{chartCandidate &&")
+    flag_idx = action_strip.index("{showFlagWatchAction &&")
+    assert execute_idx < flag_idx
 
 
 def test_tv_chart_panel_view_suggested_trades_when_watches_exist():

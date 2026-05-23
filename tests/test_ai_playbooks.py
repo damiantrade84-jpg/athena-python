@@ -42,9 +42,8 @@ def test_engine_d_playbook_states_m5_context_m1_execution() -> None:
     principles = " ".join(pb["principles"]).lower()
     assert "m5" in principles
     assert "m1" in principles
-    assert pb["reviewOrder"] == (
-        "Market State -> Location -> Aggression -> Entry Model -> Invalidation -> Decision"
-    )
+    assert "session context" in pb["reviewOrder"].lower() or "Session Context" in pb["reviewOrder"]
+    assert "sessioncontext" in principles
 
 
 def test_engine_d_playbook_separates_watch_only_from_no_trade() -> None:
@@ -66,7 +65,142 @@ def test_engine_a_and_b_playbooks_have_required_shape() -> None:
 def test_render_playbook_prompt_block_includes_review_order() -> None:
     text = render_playbook_prompt_block([get_engine_d_scalp_playbook()])
     assert "ATHENA TRADE PLAYBOOKS" in text
-    assert "Market State -> Location -> Aggression" in text
+    assert "Session Context" in text
+    assert "sessionModelSwitch" in text
+
+
+def test_ai_playbook_contains_session_model_switch() -> None:
+    pb = get_engine_d_scalp_playbook()
+    assert "sessionModelSwitch" in pb
+    switch = pb["sessionModelSwitch"]
+    assert "modelA" in switch
+    assert "modelB" in switch
+    assert switch["modelA"]["name"] == "NY_TREND_SQUEEZE"
+    assert switch["modelB"]["name"] == "LONDON_MEAN_REVERSION"
+
+
+def test_ai_prompt_contains_effort_vs_result_decision_table() -> None:
+    from ai_scalp_review.prompt_builder import build_scalp_chart_review_prompt
+
+    ctx = {
+        "symbol": "BTCUSDT",
+        "direction": "LONG",
+        "scalpSetup": {},
+        "marketLocation": {},
+        "sourceContract": {},
+        "signal": {"type": "crypto"},
+        "scan_timestamp": "2026-01-15T18:00:00+00:00",
+    }
+    prompt = build_scalp_chart_review_prompt(ctx)
+    assert "HIGH_EFFORT_NO_RESULT" in prompt
+    assert "effortVsResultClassification" in prompt
+
+
+def test_ai_prompt_contains_trapped_trader_squeeze_logic() -> None:
+    from ai_scalp_review.prompt_builder import build_scalp_chart_review_prompt
+
+    ctx = {
+        "symbol": "BTCUSDT",
+        "direction": "LONG",
+        "scalpSetup": {},
+        "marketLocation": {},
+        "sourceContract": {},
+        "signal": {"type": "crypto"},
+        "scan_timestamp": "2026-01-15T18:00:00+00:00",
+    }
+    prompt = build_scalp_chart_review_prompt(ctx)
+    assert "squeezeFuelScore" in prompt
+    assert "trappedTraderAssessment" in prompt
+
+
+def test_ai_prompt_contains_poc_target_magnet_rules() -> None:
+    from ai_scalp_review.prompt_builder import build_scalp_chart_review_prompt
+
+    ctx = {
+        "symbol": "BTCUSDT",
+        "direction": "LONG",
+        "scalpSetup": {},
+        "marketLocation": {},
+        "sourceContract": {},
+        "signal": {"type": "crypto"},
+        "scan_timestamp": "2026-01-15T18:00:00+00:00",
+    }
+    prompt = build_scalp_chart_review_prompt(ctx)
+    assert "POC TARGET MAGNET" in prompt
+    assert "POC is primary structural target" in prompt
+
+
+def test_ai_prompt_contains_casino_time_degradation() -> None:
+    from ai_scalp_review.prompt_builder import build_scalp_chart_review_prompt
+
+    ctx = {
+        "symbol": "BTCUSDT",
+        "direction": "LONG",
+        "scalpSetup": {},
+        "marketLocation": {},
+        "sourceContract": {},
+        "signal": {"type": "crypto"},
+        "scan_timestamp": "2026-01-15T18:00:00+00:00",
+    }
+    prompt = build_scalp_chart_review_prompt(ctx)
+    assert "CASINO / TIME DEGRADATION" in prompt
+    assert "NY_MIDDAY" in prompt
+    assert "DOWNGRADE" in prompt
+
+
+def test_ai_prompt_contains_tight_structural_stop_geometry() -> None:
+    from ai_scalp_review.prompt_builder import build_scalp_chart_review_prompt
+
+    ctx = {
+        "symbol": "BTCUSDT",
+        "direction": "LONG",
+        "scalpSetup": {},
+        "marketLocation": {},
+        "sourceContract": {},
+        "signal": {"type": "crypto"},
+        "scan_timestamp": "2026-01-15T18:00:00+00:00",
+    }
+    prompt = build_scalp_chart_review_prompt(ctx)
+    assert "stopPlacementValid" in prompt
+    assert "STRUCTURAL STOP GEOMETRY" in prompt
+
+
+def test_ai_output_schema_includes_effort_vs_result_trapped_target_invalidation_management() -> None:
+    from ai_playbooks.trade_skill_normalizer import render_trade_skill_prompt_schema
+
+    schema = render_trade_skill_prompt_schema("engine_d_scalp")
+    for token in (
+        "effortVsResultClassification",
+        "trappedTraderAssessment",
+        "targetLogic",
+        "invalidationAssessment",
+        "managementPlan",
+        "aggressionClassification",
+        "sessionQuality",
+    ):
+        assert token in schema
+
+
+def test_sweep_reclaim_requires_structural_stop_behind_sweep() -> None:
+    pb = get_engine_d_scalp_playbook()
+    geometry = pb["structuralStopGeometry"]
+    assert "SWEEP_AND_RECLAIM" in geometry["byEntryModel"]
+    assert "swept wick" in geometry["byEntryModel"]["SWEEP_AND_RECLAIM"].lower()
+
+    from ai_scalp_review.prompt_builder import build_scalp_chart_review_prompt
+
+    ctx = {
+        "symbol": "BTCUSDT",
+        "direction": "LONG",
+        "scalpSetup": {},
+        "marketLocation": {},
+        "sourceContract": {},
+        "signal": {"type": "crypto"},
+        "scan_timestamp": "2026-01-15T18:00:00+00:00",
+    }
+    prompt = build_scalp_chart_review_prompt(ctx)
+    assert "SWEEP_AND_RECLAIM" in prompt
+    assert "swept wick" in prompt.lower()
 
 
 def test_normalize_trade_skill_downgrades_entry_now_without_invalidation() -> None:
@@ -119,6 +253,50 @@ def test_normalize_trade_skill_engine_d_entry_now_requires_all_fields_even_with_
     assert out["decision"] == "WATCH_ONLY"
     assert out["entryAllowedNow"] is False
     assert "engine_d_required_fields_missing" in warnings
+
+
+def test_normalize_trade_skill_passthrough_extended_engine_d_fields() -> None:
+    out, _ = normalize_trade_skill_output(
+        {
+            "decision": "WAIT_FOR_PULLBACK",
+            "direction": "LONG",
+            "confidence": 70,
+            "marketState": "balancing",
+            "locationAssessment": "at VAL",
+            "aggressionAssessment": "absorption",
+            "entryModel": "SWEEP_AND_RECLAIM",
+            "aggressionClassification": "ABSORPTION",
+            "effortVsResultClassification": "HIGH_EFFORT_NO_RESULT",
+            "trappedTraderAssessment": {
+                "trappedSide": "SHORTS",
+                "trapTrigger": "SWEEP_AND_RECLAIM",
+                "squeezeFuelScore": 75,
+                "explanation": "reclaim after sweep",
+            },
+            "targetLogic": {
+                "primaryTargetType": "POC",
+                "primaryTargetPrice": 100.0,
+                "targetJustification": "mean reversion magnet",
+                "structuralRR": 1.5,
+            },
+            "invalidationAssessment": {
+                "structuralInvalidationLevel": 99.0,
+                "proposedStopLevel": 98.5,
+                "stopPlacementValid": True,
+                "stopProblem": "NONE",
+                "expectedBehavior": "IMMEDIATE_GREEN_OR_BAIL",
+            },
+            "sessionQuality": "CHOP_RISK",
+            "sessionConvictionAdjustment": "DOWNGRADE",
+        },
+        review_type="engine_d_scalp",
+    )
+    assert out["aggressionClassification"] == "ABSORPTION"
+    assert out["effortVsResultClassification"] == "HIGH_EFFORT_NO_RESULT"
+    assert out["trappedTraderAssessment"]["squeezeFuelScore"] == 75
+    assert out["targetLogic"]["primaryTargetType"] == "POC"
+    assert out["invalidationAssessment"]["stopPlacementValid"] is True
+    assert out["sessionQuality"] == "CHOP_RISK"
 
 
 def test_normalize_trade_skill_downgrades_no_trade_without_hard_reason() -> None:
