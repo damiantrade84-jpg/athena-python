@@ -338,7 +338,7 @@ def test_engine_d_playbook_adjudication_sections() -> None:
         "trappedTraderLogic",
         "pocMagnet",
         "casinoTimeDegradation",
-        "structuralStopGeometry",
+        "structuralStopPrinciples",
     ):
         assert key in pb
         assert len(pb[key]) >= 2

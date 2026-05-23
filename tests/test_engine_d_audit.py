@@ -43,7 +43,7 @@ def test_engine_d_playbook_contains_adjudication_sections():
         "trappedTraderLogic",
         "pocMagnet",
         "casinoTimeDegradation",
-        "structuralStopGeometry",
+        "structuralStopPrinciples",
     ):
         assert key in playbook
         assert isinstance(playbook[key], list)

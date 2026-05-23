@@ -251,7 +251,7 @@ def get_engine_d_scalp_playbook() -> dict:
             "Reduce tradeabilityScore when session time favors random chop ('casino time') without clear location edge.",
             "Prefer WATCH_ONLY or WAIT when time-of-day and market state both suggest degraded follow-through.",
         ],
-        "structuralStopGeometry": [
+        "structuralStopPrinciples": [
             "Stop must sit beyond the structural invalidation (swing, LVN edge, sweep wick), not inside noise.",
             "Flag micro-stops inside the current candle range or inside fee-guard minimum distance.",
             "Compare stop distance to recent ATR: too tight = noise stop; too wide = poor scalp RR.",

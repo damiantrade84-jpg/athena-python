@@ -2,6 +2,7 @@ from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
 import sqlite3
 import sys
+import tempfile
 import uuid
 
 from flask import Flask
@@ -214,6 +215,18 @@ def test_scalp_execute_accepts_watchlist_with_fresh_ai_review(monkeypatch):
     from datetime import datetime, timezone
 
     ensure_schema(audit_db)
+    with sqlite3.connect(audit_db) as con:
+        con.execute(
+            """
+            CREATE TABLE IF NOT EXISTS audit_log (
+                ts TEXT, pair TEXT, score REAL, max_score REAL, engine TEXT, direction TEXT,
+                grade TEXT, risk TEXT, style TEXT, entry_price REAL, sl REAL, tp REAL,
+                tp_partial REAL, tp2 REAL, volume REAL, ticket TEXT, risk_amount REAL,
+                risk_pct REAL, asset_class TEXT, regime TEXT, factors_json TEXT
+            )
+            """
+        )
+        con.commit()
     engine_d_ctx = {
         "symbol": "EUR/USD",
         "direction": "LONG",
@@ -271,6 +284,8 @@ def test_scalp_execute_accepts_watchlist_with_fresh_ai_review(monkeypatch):
     class _Approval:
         approved = True
         reason = "OK"
+        risk_amount = 10.0
+        risk_pct = 0.001
 
         @staticmethod
         def to_dict():

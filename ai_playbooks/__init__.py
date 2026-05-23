@@ -58,6 +58,7 @@ def render_playbook_prompt_block(
                 "pocTargetMagnetRules",
                 "casinoTimeDegradationRules",
                 "structuralStopGeometry",
+                "structuralStopPrinciples",
                 "tradeManagementRules",
                 "extendedOutputFields",
             ):

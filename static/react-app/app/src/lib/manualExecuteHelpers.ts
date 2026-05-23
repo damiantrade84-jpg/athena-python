@@ -286,7 +286,9 @@ export function evaluateScalpExecuteBlock(args: {
   if (direction !== 'LONG' && direction !== 'SHORT') return 'Direction missing';
   const grade = scalpSignalGrade(signal);
   if (grade === 'D') return 'Grade D not executable';
-  if (!aiReview?.review_id && !aiReview?.ai_review) return 'AI review required';
+  if ((grade === 'A' || grade === 'B') && !aiReview?.review_id && !aiReview?.ai_review) {
+    return 'AI review required';
+  }
   const entry = signal.entry ?? signal.price;
   if (!isPositiveNumber(entry) || !isPositiveNumber(signal.sl) || !isPositiveNumber(signal.tp1 ?? signal.tp)) {
     return 'Missing levels';
