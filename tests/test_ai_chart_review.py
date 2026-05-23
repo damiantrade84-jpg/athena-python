@@ -614,6 +614,88 @@ def test_router_default_resolves_to_anthropic():
         mock_anthropic.assert_called_once()
 
 
+def test_router_resolves_xai_provider():
+    payload = MagicMock()
+    payload.screenshot_base64 = _png_data_url()
+    payload.prompt = "review"
+    with patch(
+        "ai_review.providers.router.call_xai_chart_review",
+        return_value=_mock_provider_payload(
+            raw_text="{}",
+            provider="xai",
+            model="grok-4.3",
+        ),
+        create=True,
+    ) as mock_xai:
+        out = run_chart_review("xai", payload)
+        mock_xai.assert_called_once()
+    assert out["provider"] == "xai"
+    assert out["model"] == "grok-4.3"
+
+
+def test_router_aliases_grok_to_xai_provider():
+    payload = MagicMock()
+    payload.screenshot_base64 = _png_data_url()
+    payload.prompt = "review"
+    with patch(
+        "ai_review.providers.router.call_xai_chart_review",
+        return_value=_mock_provider_payload(
+            raw_text="{}",
+            provider="xai",
+            model="grok-4.3",
+        ),
+        create=True,
+    ) as mock_xai:
+        run_chart_review("grok", payload)
+        mock_xai.assert_called_once()
+
+
+def test_xai_provider_missing_key_fails_closed(monkeypatch):
+    from ai_review.providers.xai_provider import call_xai_chart_review
+    from ai_review.provider_meta import ProviderChartReviewError
+
+    payload = MagicMock()
+    payload.screenshot_base64 = _png_data_url()
+    payload.prompt = "review"
+    monkeypatch.delenv("XAI_API_KEY", raising=False)
+    with patch.dict(CONFIG, {"XAI_API_KEY": ""}, clear=False):
+        with pytest.raises(ProviderChartReviewError) as excinfo:
+            call_xai_chart_review(payload)
+    assert excinfo.value.provider_status == "failed_auth"
+    assert excinfo.value.provider == "xai"
+
+
+def test_xai_provider_posts_png_data_url_as_image_url(monkeypatch):
+    from ai_review.providers.xai_provider import call_xai_chart_review
+
+    payload = MagicMock()
+    payload.screenshot_base64 = _png_data_url()
+    payload.prompt = "review this chart"
+    monkeypatch.setenv("XAI_API_KEY", "test-xai-key")
+
+    mock_client = MagicMock()
+    mock_resp = MagicMock()
+    mock_resp.model = "grok-4.3"
+    mock_choice = MagicMock()
+    mock_choice.message.content = '{"verdict":"VALID","confidence":80,"human_action":"take"}'
+    mock_resp.choices = [mock_choice]
+    mock_client.chat.completions.create.return_value = mock_resp
+
+    with patch(
+        "ai_review.providers.xai_provider.create_ai_client",
+        return_value=mock_client,
+    ):
+        out = call_xai_chart_review(payload)
+
+    kwargs = mock_client.chat.completions.create.call_args.kwargs
+    content = kwargs["messages"][0]["content"]
+    assert content[0] == {"type": "text", "text": "review this chart"}
+    assert content[1] == {"type": "image_url", "image_url": {"url": payload.screenshot_base64}}
+    assert kwargs["model"] == "grok-4.3"
+    assert out["provider"] == "xai"
+    assert out["raw_text"].startswith('{"verdict"')
+
+
 def test_validate_request_disabled_provider():
     cfg = dict(CONFIG["AI_CHART_REVIEW"])
     err = validate_request(_base_request(provider="openai"), cfg)

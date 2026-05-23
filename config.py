@@ -82,7 +82,7 @@ def _clean_ai_value(value: object) -> str:
 
 
 def get_ai_api_key(cfg: dict | None = None) -> str:
-    cfg = cfg or CONFIG
+    cfg = CONFIG if cfg is None else cfg
     candidates = (
         os.environ.get("XAI_API_KEY", ""),
         cfg.get("XAI_API_KEY", ""),
@@ -112,7 +112,7 @@ def ai_key_configured(cfg: dict | None = None) -> bool:
 
 
 def get_ai_base_url(cfg: dict | None = None) -> str:
-    cfg = cfg or CONFIG
+    cfg = CONFIG if cfg is None else cfg
     return (
         str(os.environ.get("AI_BASE_URL", "") or "").strip()
         or str(cfg.get("AI_BASE_URL", "") or "").strip()
@@ -125,7 +125,7 @@ def get_ai_model(
     preferred_key: str = "AI_MODEL",
     fallback: str = "grok-4.3",
 ) -> str:
-    cfg = cfg or CONFIG
+    cfg = CONFIG if cfg is None else cfg
     candidates = []
     if preferred_key:
         candidates.extend(
@@ -154,7 +154,7 @@ def get_ai_timeout_sec(
     preferred_key: str = "AI_REQUEST_TIMEOUT_SEC",
     fallback: float = 30.0,
 ) -> float:
-    cfg = cfg or CONFIG
+    cfg = CONFIG if cfg is None else cfg
     candidates = []
     if preferred_key:
         candidates.append(cfg.get(preferred_key))
@@ -174,7 +174,7 @@ def get_ai_max_retries(
     preferred_key: str = "AI_SDK_MAX_RETRIES",
     fallback: int = 2,
 ) -> int:
-    cfg = cfg or CONFIG
+    cfg = CONFIG if cfg is None else cfg
     candidates = []
     if preferred_key:
         candidates.append(cfg.get(preferred_key))
@@ -211,7 +211,7 @@ def ai_runtime_descriptor(
     preferred_model_key: str = "AI_MODEL",
     fallback_model: str = "grok-4.3",
 ) -> dict:
-    resolved_cfg = cfg or CONFIG
+    resolved_cfg = CONFIG if cfg is None else cfg
     return {
         "provider": get_ai_provider_label(resolved_cfg),
         "base_url": get_ai_base_url(resolved_cfg),
