@@ -41,12 +41,31 @@ def _has_required_missing_context(
     return bool(required)
 
 
+def _engine_a_comparison(ai_review: dict[str, Any]) -> dict[str, Any]:
+    structured = ai_review.get("structured") or {}
+    if not isinstance(structured, dict):
+        return {}
+    comparison = structured.get("engineAVerdictComparison") or structured.get(
+        "engine_a_verdict_comparison"
+    )
+    return comparison if isinstance(comparison, dict) else {}
+
+
 def _divergence_from_ai(
     engine_a_ctx: dict[str, Any],
     ai_review: dict[str, Any],
 ) -> str:
     if _has_required_missing_context(engine_a_ctx, ai_review):
         return "missing_context"
+
+    comparison = _engine_a_comparison(ai_review)
+    if comparison.get("chartContradictsEngineADirection") is True:
+        return "visual_contradiction"
+    if (
+        comparison.get("chartContradictsEntryTiming") is True
+        or comparison.get("comparisonVerdict") == "engine_a_direction_confirmed_entry_rejected"
+    ):
+        return "entry_displacement"
 
     risks = [str(r).lower() for r in (ai_review.get("risks") or [])]
     if ai_review.get("visual_contradiction"):

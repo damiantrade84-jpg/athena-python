@@ -1014,6 +1014,74 @@ def test_engine_a_verdict_wait_extension_downgrade():
     assert comparison["finalDecision"] == "wait"
 
 
+def test_engine_a_verdict_invalid_model_final_decision_falls_back_to_human_action():
+    ctx = _engine_a_ctx(passed=True)
+    ctx["engine_snapshots"] = extract_engine_snapshots({}, ctx)
+    ai = normalize_chart_review_response(
+        json.dumps(
+            {
+                "verdict": "INVALID",
+                "confidence": 35,
+                "human_action": "reject",
+                "decision": "NO_TRADE",
+                "direction": "SHORT",
+                "entryAllowedNow": False,
+                "noTradeReason": "Stale HTF data and extended timing",
+                "visual_confirmation": "direction aligned",
+                "visual_contradiction": "entry timing contradicted after sharp drop",
+                "engine_a_alignment": "direction aligned but execution context invalid",
+                "entry_quality": "extended entry timing after sharp drop",
+                "risks": ["stale HTF data", "late entry"],
+                "engineAVerdictComparison": {
+                    "comparisonVerdict": "engine_a_direction_confirmed_entry_rejected",
+                    "chartConfirmsEngineADirection": True,
+                    "chartContradictsEngineADirection": False,
+                    "chartConfirmsEntryTiming": False,
+                    "chartContradictsEntryTiming": True,
+                    "finalDecision": "unknown",
+                    "finalReason": "Direction aligned but execution context invalid",
+                },
+            }
+        )
+    )
+
+    comparison = build_engine_a_verdict_comparison(ctx, ai, engine_snapshots=ctx["engine_snapshots"])
+
+    assert comparison["finalDecision"] == "reject"
+    assert comparison["comparisonVerdict"] == "engine_a_direction_confirmed_entry_rejected"
+
+
+def test_concordance_prefers_structured_entry_timing_over_visual_contradiction_text():
+    ctx = _engine_a_ctx(passed=True)
+    ai = normalize_chart_review_response(
+        json.dumps(
+            {
+                "verdict": "INVALID",
+                "confidence": 35,
+                "human_action": "reject",
+                "decision": "NO_TRADE",
+                "direction": "SHORT",
+                "entryAllowedNow": False,
+                "noTradeReason": "Entry extended after sharp drop",
+                "visual_confirmation": "direction aligned",
+                "visual_contradiction": "entry timing contradicted after sharp drop",
+                "entry_quality": "extended entry timing after sharp drop",
+                "risks": ["late entry"],
+                "engineAVerdictComparison": {
+                    "chartConfirmsEngineADirection": True,
+                    "chartContradictsEngineADirection": False,
+                    "chartContradictsEntryTiming": True,
+                },
+            }
+        )
+    )
+
+    concordance = compute_engine_a_ai_concordance(ctx, ai, cfg={})
+
+    assert concordance["concordance"] == "disagree"
+    assert concordance["divergence_type"] == "entry_displacement"
+
+
 def test_wait_high_alignment_low_tradeability():
     ctx = _engine_a_ctx(passed=True)
     ctx["engine_snapshots"] = extract_engine_snapshots({}, ctx)
