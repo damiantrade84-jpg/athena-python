@@ -60,6 +60,14 @@ def test_active_bundle_contains_ai_review_summary_and_context_markers():
     assert "engineAVerdictComparison" in text
 
 
+def test_active_bundle_posts_scalp_chart_snapshot_metadata():
+    text = "\n".join(path.read_text(encoding="utf-8") for path in _active_js_assets())
+    assert "/api/ai/scalp-chart-review" in text
+    assert "scalpChartSnapshot" in text
+    assert "chart_snapshot" in text
+    assert "rendered_layers" in text
+
+
 def test_frontend_normalizes_camel_and_snake_review_keys_once():
     text = (FRONTEND_SRC / "lib" / "aiChartReview.ts").read_text(encoding="utf-8")
     assert "normalizeAIChartReviewResponse" in text

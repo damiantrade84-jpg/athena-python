@@ -36,7 +36,7 @@ def test_scalp_workbench_ai_capture_posts_server_trusted_review():
     assert "/api/ai/scalp-chart-review" in helper
     assert "postScalpChartReview" in helper
     assert "chart_snapshot" in helper
-    assert "renderedLayers" in helper
+    assert "rendered_layers" in helper
     assert "ScalpAIReviewCard" in panel
     assert "scalpAiReviewResponse" in panel
     assert "postChartReview" not in panel

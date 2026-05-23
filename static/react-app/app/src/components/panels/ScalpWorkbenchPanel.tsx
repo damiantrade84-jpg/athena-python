@@ -313,7 +313,7 @@ interface NormalizedScalpRow {
   aggressionClassification: string | null;
   sourceQualityLabel: string | null;
   liquidityContext: Record<string, number | null | undefined>;
-  advisoryContext: { warnings: string[]; oldGateResult?: string | null; oldExecutable?: boolean };
+  advisoryContext: { warnings: string[]; oldGateResult?: string | null; oldExecutable?: boolean | null };
   sourceContract: NormalizedSourceContract;
   marketLocation: NormalizedMarketLocation & {
     priorPoc?: number | null;

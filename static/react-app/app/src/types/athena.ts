@@ -1502,6 +1502,7 @@ export interface ScalpAIReviewNormalized extends TradeSkillReview {
   missing_context?: string[];
   human_action?: string;
   parse_success?: boolean;
+  structured?: Record<string, unknown>;
 }
 
 export interface ScalpEngineDContext {
