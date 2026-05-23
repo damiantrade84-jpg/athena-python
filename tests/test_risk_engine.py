@@ -394,6 +394,35 @@ class TestExecutionStateSafety:
         assert result.approved is False
         assert result.reason == "DUPLICATE_PAIR"
 
+    def test_duplicate_pair_blocks_compact_crypto_alias(self):
+        result = risk_check(
+            _make_signal(pair="BTCUSDT"),
+            100000,
+            100000,
+            [{"pair": "BTC/USDT", "symbol": "BTC/USDT:USDT", "risk_amount": 10}],
+        )
+        assert result.approved is False
+        assert result.reason == "DUPLICATE_PAIR"
+
+    def test_duplicate_pair_blocks_yahoo_forex_alias(self):
+        result = risk_check(
+            _make_signal(pair="EURUSD=X", type="forex", price=1.1, sl=1.095, tp1=1.11, tp2=1.12),
+            100000,
+            100000,
+            [{"pair": "EUR/USD", "symbol": "EURUSD", "risk_amount": 10}],
+        )
+        assert result.approved is False
+        assert result.reason == "DUPLICATE_PAIR"
+
+    def test_duplicate_pair_does_not_match_shared_crypto_settlement_suffix(self):
+        result = risk_check(
+            _make_signal(pair="ETH/USDT:USDT"),
+            100000,
+            100000,
+            [{"pair": "BTC/USDT:USDT", "symbol": "BTC/USDT:USDT", "risk_amount": 10}],
+        )
+        assert result.reason != "DUPLICATE_PAIR"
+
     def test_aligned_with_failed_engine_b_checklist_blocks_execution(self):
         result = risk_check(
             _make_signal(

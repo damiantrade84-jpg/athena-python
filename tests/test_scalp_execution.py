@@ -232,6 +232,8 @@ def test_scalp_execute_accepts_watchlist_with_fresh_ai_review(monkeypatch):
         "direction": "LONG",
         "execution_tf": "M1",
         "scan_timestamp": datetime.now(timezone.utc).isoformat(),
+        "latest_candle_ts": datetime.now(timezone.utc).isoformat(),
+        "scalpSetup": {"entry": 1.1, "stopLoss": 1.095, "tp1": 1.11},
     }
     review_row = record_review(
         symbol="EUR/USD",
@@ -313,6 +315,69 @@ def test_scalp_execute_accepts_watchlist_with_fresh_ai_review(monkeypatch):
     assert data["success"] is True
 
 
+def test_scalp_execute_rejects_disabled_pair_before_scan(monkeypatch):
+    athena_module = _load_athena_module()
+    monkeypatch.setattr(athena_module, "_disabled_pairs", {"EUR/USD"})
+
+    def _unexpected_scan(_pairs):
+        raise AssertionError("disabled pair should be rejected before Engine D scan")
+
+    monkeypatch.setattr(scalp_engine, "run_scalp_scan", _unexpected_scan)
+
+    client = athena_module.app.test_client()
+    resp = client.post(
+        "/api/scalp-execute",
+        json={"symbol": "EUR/USD", "signal": {"symbol": "EUR/USD", "direction": "LONG"}},
+    )
+
+    assert resp.status_code == 200, resp.get_data(as_text=True)
+    data = resp.get_json()
+    assert data["success"] is False
+    assert data["error"] == "PAIR_DISABLED"
+
+
+def test_scalp_execute_rejects_disabled_pair_yahoo_symbol_before_scan(monkeypatch):
+    athena_module = _load_athena_module()
+    monkeypatch.setattr(athena_module, "_disabled_pairs", {"EUR/USD"})
+
+    def _unexpected_scan(_pairs):
+        raise AssertionError("disabled Yahoo-format pair should be rejected before Engine D scan")
+
+    monkeypatch.setattr(scalp_engine, "run_scalp_scan", _unexpected_scan)
+
+    client = athena_module.app.test_client()
+    resp = client.post(
+        "/api/scalp-execute",
+        json={"symbol": "EURUSD=X", "signal": {"symbol": "EURUSD=X", "direction": "LONG"}},
+    )
+
+    assert resp.status_code == 200, resp.get_data(as_text=True)
+    data = resp.get_json()
+    assert data["success"] is False
+    assert data["error"] == "PAIR_DISABLED"
+
+
+def test_scalp_execute_does_not_reject_different_disabled_crypto_settlement_symbol(monkeypatch):
+    athena_module = _load_athena_module()
+    monkeypatch.setattr(athena_module, "_disabled_pairs", {"BTC/USDT:USDT"})
+
+    def _fake_scan(_pairs):
+        return {"signals": [], "skipped": [{"pair": "ETH/USDT:USDT", "reason": "no_setup"}]}
+
+    monkeypatch.setattr(scalp_engine, "run_scalp_scan", _fake_scan)
+
+    client = athena_module.app.test_client()
+    resp = client.post(
+        "/api/scalp-execute",
+        json={"symbol": "ETH/USDT:USDT", "signal": {"symbol": "ETH/USDT:USDT", "direction": "LONG"}},
+    )
+
+    assert resp.status_code == 200, resp.get_data(as_text=True)
+    data = resp.get_json()
+    assert data["success"] is False
+    assert data["error"] == "no_setup"
+
+
 def test_modular_scalp_execute_rejects_non_executable_signal():
     assert (
         execution._engine_d_execution_block_reason(
@@ -363,6 +428,7 @@ def test_modular_scalp_execute_rebase_uses_pair_score_group_min_rr(monkeypatch, 
 
     class _Runtime:
         log = _Log()
+        CONFIG = {"AI_SCALP_CHART_REVIEW": {"EXECUTE_REQUIRES_AI_REVIEW": False}}
         ALL_PAIRS = [{"display": "USD/ZAR", "type": "forex"}]
         AUDIT_DB = str(audit_db)
 

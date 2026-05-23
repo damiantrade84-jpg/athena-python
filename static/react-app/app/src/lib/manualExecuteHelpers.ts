@@ -108,8 +108,9 @@ export function tradeSkillBlocksExecute(
 ): boolean {
   if (!aiReview?.ai_review) return false;
   const review = aiReview.ai_review;
-  if (review.entryAllowedNow === false) return true;
   const decision = String(review.decision || '').toUpperCase();
+  if (decision === 'ENTRY_NOW' && review.entryAllowedNow !== true) return true;
+  if (review.entryAllowedNow === false) return true;
   if (decision && decision !== 'ENTRY_NOW') return true;
   if (_BLOCKING_TRADE_SKILL_DECISIONS.has(decision)) return true;
   return false;
@@ -212,10 +213,12 @@ export function isScalpAiReviewEligible(signal: ScalpExecuteSignalLike | null): 
 export function requiresScalpAiEntryNow(review: ScalpAIChartReviewResponse | null): boolean {
   if (!review) return true;
   const structured = review.ai_review?.structured as Record<string, unknown> | undefined;
-  const decision = String(structured?.decision || review.ai_review?.verdict || '').toUpperCase();
-  const entryAllowed = structured?.entryAllowedNow;
+  const decision = String(review.ai_review?.decision || structured?.decision || '').toUpperCase();
+  const entryAllowed = review.ai_review && 'entryAllowedNow' in review.ai_review
+    ? review.ai_review.entryAllowedNow
+    : structured?.entryAllowedNow;
   if (decision !== 'ENTRY_NOW') return true;
-  if (entryAllowed === false) return true;
+  if (entryAllowed !== true) return true;
   return false;
 }
 
@@ -294,6 +297,8 @@ export function evaluateScalpExecuteBlock(args: {
     return 'Missing levels';
   }
   if (grade === 'A' || grade === 'B') {
+    const mechanical = scalpMechanicalGateBlock(signal);
+    if (mechanical === 'Blocked') return mechanical;
     if (requiresScalpAiEntryNow(aiReview)) return 'AI ENTRY_NOW required';
     if (scalpAiReviewBlocksExecute(aiReview)) return 'AI says wait';
   } else {

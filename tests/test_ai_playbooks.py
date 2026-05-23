@@ -224,6 +224,31 @@ def test_normalize_trade_skill_downgrades_entry_now_without_invalidation() -> No
     assert "invalidation_missing" in warnings
 
 
+def test_normalize_trade_skill_downgrade_overrides_legacy_take_valid() -> None:
+    out, warnings = normalize_trade_skill_output(
+        {
+            "tradeSkillVersion": TRADE_SKILL_VERSION,
+            "reviewType": "engine_d_scalp",
+            "decision": "ENTRY_NOW",
+            "direction": "LONG",
+            "confidence": 80,
+            "marketState": "trending",
+            "locationAssessment": "good location at VAL",
+            "aggressionAssessment": "buying aggression confirms",
+            "entryModel": "PULLBACK_TO_VALUE_REJECTION",
+            "entryAllowedNow": True,
+            "human_action": "take",
+            "verdict": "VALID",
+        },
+        review_type="engine_d_scalp",
+    )
+    assert out["decision"] == "WATCH_ONLY"
+    assert out["entryAllowedNow"] is False
+    assert out["human_action"] != "take"
+    assert out["verdict"] != "VALID"
+    assert "invalidation_missing" in warnings
+
+
 def test_normalize_trade_skill_engine_d_missing_fields() -> None:
     out, warnings = normalize_trade_skill_output(
         {

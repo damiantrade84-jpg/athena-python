@@ -1037,7 +1037,7 @@ export default function ScalpWorkbenchPanel() {
       showToast(`Scalp rejected: ${result.error || 'unknown'}`, 'error');
     }
     setConfirmExecOpen(false);
-  }, [activeSignal, chartSymbol, executeBlockReason, postExecute, showToast, sizingOverride]);
+  }, [activeSignal, chartSymbol, executeBlockReason, postExecute, scalpAiReviewResponse?.review_id, showToast, sizingOverride]);
 
   const flagWatchSetup = useCallback(async () => {
     if (!canFlagWatch || !suggestedPlan || flagLoading) return;
@@ -1114,7 +1114,12 @@ export default function ScalpWorkbenchPanel() {
 
   const aiVerdictOverlay = useMemo(() => {
     const structured = scalpAiReviewResponse?.ai_review?.structured as Record<string, unknown> | undefined;
-    const decision = String(structured?.decision || scalpAiReviewResponse?.ai_review?.verdict || '').toUpperCase();
+    const decision = String(
+      scalpAiReviewResponse?.ai_review?.decision
+      || structured?.decision
+      || scalpAiReviewResponse?.ai_review?.verdict
+      || '',
+    ).toUpperCase();
     const plan = suggestedPlan;
     return {
       decision,

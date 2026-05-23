@@ -6,43 +6,118 @@ from datetime import datetime, timezone
 from typing import Any
 
 from ai_review.persistence import find_scalp_review_by_id
+from symbol_matching import symbol_match_keys, symbols_match
 
 
 def _normalize_symbol_keys(symbol: str) -> set[str]:
-    val = str(symbol or "").strip().upper()
-    if not val:
-        return set()
-    compact = val.replace("/", "").replace("-", "").replace(" ", "")
-    return {val, compact}
+    return symbol_match_keys(symbol)
 
 
 def _symbols_match(a: str, b: str) -> bool:
-    if not a or not b:
-        return False
-    return bool(_normalize_symbol_keys(a) & _normalize_symbol_keys(b))
+    return symbols_match(a, b)
 
 
 def scalp_ai_review_allows_entry(ai_review: dict[str, Any] | None) -> bool:
     """True when persisted AI review authorizes immediate entry."""
     if not isinstance(ai_review, dict):
         return False
+    if ai_review.get("parse_success") is not True:
+        return False
     structured = ai_review.get("structured") or {}
     if not isinstance(structured, dict):
         structured = {}
     decision = str(
-        structured.get("decision") or ai_review.get("decision") or ""
+        ai_review.get("decision") or structured.get("decision") or ""
     ).upper()
-    entry_allowed = structured.get("entryAllowedNow")
-    if entry_allowed is None:
+    if "entryAllowedNow" in ai_review:
         entry_allowed = ai_review.get("entryAllowedNow")
-    if entry_allowed is False:
-        return False
+    else:
+        entry_allowed = structured.get("entryAllowedNow")
     if decision != "ENTRY_NOW":
+        return False
+    if entry_allowed is not True:
         return False
     verdict = str(ai_review.get("verdict") or "").upper()
     if verdict in ("NO_TRADE", "INVALID"):
         return False
     return True
+
+
+def _to_float(value: Any) -> float | None:
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        out = float(value)
+    elif isinstance(value, str) and value.strip():
+        try:
+            out = float(value.strip())
+        except ValueError:
+            return None
+    else:
+        return None
+    if out != out or abs(out) == float("inf"):
+        return None
+    return out
+
+
+def _dict(value: Any) -> dict[str, Any]:
+    return value if isinstance(value, dict) else {}
+
+
+def _first_float(sources: list[dict[str, Any]], keys: tuple[str, ...]) -> float | None:
+    for source in sources:
+        for key in keys:
+            val = _to_float(source.get(key))
+            if val is not None:
+                return val
+    return None
+
+
+def _signal_level(signal: dict[str, Any], name: str) -> float | None:
+    setup = _dict(signal.get("scalpSetup"))
+    if name == "entry":
+        return _first_float([signal, setup], ("entry", "price"))
+    if name == "sl":
+        return _first_float([signal, setup], ("sl", "stopLoss"))
+    if name == "tp1":
+        return _first_float([signal, setup], ("tp1", "tp", "takeProfit1"))
+    if name == "tp2":
+        return _first_float([signal, setup], ("tp2", "takeProfit2"))
+    return None
+
+
+def _review_level(ctx: dict[str, Any], name: str) -> float | None:
+    setup = _dict(ctx.get("scalpSetup"))
+    signal = _dict(ctx.get("signal"))
+    if name == "entry":
+        return _first_float([ctx, setup, signal], ("entry", "price"))
+    if name == "sl":
+        return _first_float([ctx, setup, signal], ("sl", "stopLoss"))
+    if name == "tp1":
+        return _first_float([ctx, setup, signal], ("tp1", "tp", "takeProfit1"))
+    if name == "tp2":
+        return _first_float([ctx, setup, signal], ("tp2", "takeProfit2"))
+    return None
+
+
+def _levels_close(a: float, b: float) -> bool:
+    return abs(a - b) <= max(1e-9, abs(a) * 1e-6)
+
+
+def _ai_review_level_block(signal: dict[str, Any], ctx: dict[str, Any]) -> str | None:
+    for name in ("entry", "sl", "tp1"):
+        fresh = _signal_level(signal, name)
+        reviewed = _review_level(ctx, name)
+        if fresh is None or reviewed is None:
+            return "AI_REVIEW_LEVEL_CONTEXT_MISSING"
+        if not _levels_close(fresh, reviewed):
+            return "AI_REVIEW_LEVEL_MISMATCH"
+    for name in ("tp2",):
+        fresh = _signal_level(signal, name)
+        reviewed = _review_level(ctx, name)
+        if fresh is not None and reviewed is not None and not _levels_close(fresh, reviewed):
+            return "AI_REVIEW_LEVEL_MISMATCH"
+    return None
 
 
 def engine_d_signal_hard_block(signal: dict[str, Any]) -> str | None:
@@ -123,11 +198,15 @@ def resolve_engine_d_execute_gate(
     symbol = str(signal.get("pair") or signal.get("symbol") or signal.get("display") or "")
     direction = str(signal.get("direction") or "").upper()
     ctx = review.get("engine_d_context") or {}
+    if not isinstance(ctx, dict):
+        return "AI_REVIEW_CONTEXT_MISSING", None
     ctx_symbol = str(ctx.get("symbol") or "")
     ctx_direction = str(ctx.get("direction") or "").upper()
-    if ctx_direction and ctx_direction != direction:
+    if not symbol or not ctx_symbol or not ctx_direction:
+        return "AI_REVIEW_CONTEXT_MISSING", None
+    if ctx_direction != direction:
         return "AI_REVIEW_DIRECTION_MISMATCH", None
-    if ctx_symbol and symbol and not _symbols_match(ctx_symbol, symbol):
+    if symbol and not _symbols_match(ctx_symbol, symbol):
         return "AI_REVIEW_SYMBOL_MISMATCH", None
 
     ai_review = review.get("ai_review") or {}
@@ -136,6 +215,9 @@ def resolve_engine_d_execute_gate(
 
     grade = str(signal.get("ai_grade") or signal.get("grade") or "").upper()
     if grade in ("A", "B"):
+        level_block = _ai_review_level_block(signal, ctx)
+        if level_block:
+            return level_block, None
         return None, review
 
     return _legacy_mechanical_block(signal), None

@@ -270,17 +270,21 @@ def normalize_trade_skill_output(
         entry_allowed = False
 
     human_action, verdict = _map_decision_to_legacy(decision, entry_allowed)
-    # Preserve explicit legacy human_action/verdict when trade skill inferred from them
+    # Preserve explicit legacy fields only when they still agree with the final
+    # fail-closed decision after all downgrades.
     legacy_human = _coerce_str(parsed.get("human_action")).lower()
     legacy_verdict = _coerce_str(parsed.get("verdict")).upper()
+    mapped_human, mapped_verdict = _map_decision_to_legacy(decision, entry_allowed)
     if (
         not downgraded_no_trade_without_hard_reason
         and legacy_human in {"take", "wait", "reject", "needs_fresher_data", "needs_better_rr"}
+        and legacy_human == mapped_human
     ):
         human_action = legacy_human
     if (
         not downgraded_no_trade_without_hard_reason
         and legacy_verdict in {"VALID", "CAUTION", "INVALID", "NO_TRADE"}
+        and legacy_verdict == mapped_verdict
     ):
         verdict = legacy_verdict
 

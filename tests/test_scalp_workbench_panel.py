@@ -261,6 +261,32 @@ def test_scalp_workbench_execute_block_requires_ai_review():
     assert "AI ENTRY_NOW required" in helper
 
 
+def test_scalp_workbench_execute_lock_reads_normalized_ai_decision():
+    helper = _read(ROOT / "static/react-app/app/src/lib/manualExecuteHelpers.ts")
+    start = helper.index("export function requiresScalpAiEntryNow")
+    body = helper[start: helper.index("\n}\n", start) + 3]
+    assert "review.ai_review?.decision" in body
+    assert "entryAllowed !== true" in body
+    assert "review.ai_review?.verdict" not in body
+
+
+def test_scalp_workbench_ab_execute_lock_keeps_hard_block_fail_closed():
+    helper = _read(ROOT / "static/react-app/app/src/lib/manualExecuteHelpers.ts")
+    body_start = helper.index("export function evaluateScalpExecuteBlock")
+    body = helper[body_start: helper.index("\n}\n", body_start) + 3]
+    ab_branch = body[body.index("if (grade === 'A' || grade === 'B')"):]
+    assert "scalpMechanicalGateBlock(signal)" in ab_branch
+    assert "if (mechanical === 'Blocked') return mechanical" in ab_branch
+
+
+def test_scalp_workbench_execute_callback_depends_on_review_id():
+    source = _read(SCALP_WORKBENCH)
+    start = source.index("const onConfirmScalpExecute = useCallback")
+    body = source[start: source.index("const flagWatchSetup", start)]
+    assert "reviewId: scalpAiReviewResponse?.review_id ?? null" in body
+    assert "scalpAiReviewResponse?.review_id" in body[body.rindex("}, ["):]
+
+
 def test_scalp_workbench_layout_keeps_chart_and_ai_verdict_visible():
     source = _read(SCALP_WORKBENCH)
     assert "data-review-rail" in source
