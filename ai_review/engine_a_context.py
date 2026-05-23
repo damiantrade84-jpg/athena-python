@@ -445,11 +445,7 @@ def assemble_engine_a_context(
             "price_displacement_from_candidate_entry": 0.0 if price is not None else None,
             "sl_tp_source": signal.get("entryMode") or "engine_a_levels",
         },
-        "freshness": {
-            "cache_hit": data_freshness.get("cacheHit"),
-            "bucket_lag": data_freshness.get("bucketLag"),
-            "stale_warnings": data_freshness.get("blocked") or data_freshness.get("warnings") or [],
-        },
+        "freshness": _build_freshness_block(signal, data_freshness, pair=pair),
         "chart_captured_at": (screenshot_meta or {}).get("captured_at"),
         "screenshot_overlays": list((screenshot_meta or {}).get("overlays") or []),
         "mismatch_warnings": [],
@@ -520,14 +516,142 @@ def _timeframe_bias(engine_a_ctx: dict[str, Any]) -> dict[str, str | None]:
     }
 
 
+def _consistency_status(candle_consistency: dict[str, Any] | None, tf: str) -> str | None:
+    if not isinstance(candle_consistency, dict):
+        return None
+    entry = candle_consistency.get(tf) or candle_consistency.get(tf.upper())
+    if isinstance(entry, dict):
+        return str(entry.get("status") or "") or None
+    if isinstance(entry, str) and entry.strip():
+        return entry.strip()
+    return None
+
+
+def _is_policy_normal_stale_1(
+    *,
+    severity: str | None,
+    consistency_status: str | None,
+) -> bool:
+    sev = str(severity or "").lower()
+    if sev != "stale_1_bucket":
+        return False
+    return consistency_status == "CONFIRMED_ONLY_OK"
+
+
+def _build_candle_freshness_summary(
+    signal: dict[str, Any],
+    data_freshness: dict[str, Any],
+) -> dict[str, Any]:
+    candle_fresh = signal.get("candleFreshness") if isinstance(signal.get("candleFreshness"), dict) else {}
+    candle_consistency = (
+        signal.get("candleConsistency") if isinstance(signal.get("candleConsistency"), dict) else {}
+    )
+    per_tf: dict[str, dict[str, Any]] = {}
+    for tf in ("D1", "H4", "H1"):
+        diag = candle_fresh.get(tf) if isinstance(candle_fresh.get(tf), dict) else {}
+        severity = diag.get("stalenessSeverity")
+        cons_status = _consistency_status(candle_consistency, tf)
+        policy_note = None
+        if _is_policy_normal_stale_1(severity=str(severity or ""), consistency_status=cons_status):
+            policy_note = "policy_ok_not_stale"
+        elif str(severity or "").lower() == "fresh":
+            policy_note = "live_fresh"
+        elif str(severity or "").lower() in ("stale_multi_bucket", "missing_current_bucket"):
+            policy_note = "execution_stale"
+        per_tf[tf] = {
+            "severity": severity,
+            "bucketLag": diag.get("bucketLag"),
+            "consistencyStatus": cons_status,
+            "policyNote": policy_note,
+        }
+    return {
+        "dataFreshnessAllowed": data_freshness.get("allowed"),
+        "perTimeframe": per_tf,
+    }
+
+
+def _execution_abort_reasons(
+    data_freshness: dict[str, Any],
+    candle_consistency: dict[str, Any] | None,
+) -> list[str]:
+    """Human-readable abort reasons for AI prompt — execution blocks only."""
+    reasons: list[str] = []
+    for item in data_freshness.get("blocked") or []:
+        if not isinstance(item, dict):
+            text = str(item or "").strip()
+            if text:
+                reasons.append(text)
+            continue
+        tf = str(item.get("timeframe") or "").upper()
+        sev = str(item.get("severity") or "").lower()
+        if _is_policy_normal_stale_1(
+            severity=sev,
+            consistency_status=_consistency_status(candle_consistency, tf),
+        ):
+            continue
+        reasons.append(f"{tf}:{sev}" if tf else sev)
+    if not reasons and data_freshness.get("allowed") is False:
+        fallback = str(data_freshness.get("reason") or "").strip()
+        if fallback:
+            reasons.append(fallback)
+    return reasons
+
+
+def _build_freshness_block(
+    signal: dict[str, Any],
+    data_freshness: dict[str, Any],
+    *,
+    pair: dict[str, Any],
+) -> dict[str, Any]:
+    candle_consistency = (
+        signal.get("candleConsistency") if isinstance(signal.get("candleConsistency"), dict) else {}
+    )
+    return {
+        "cache_hit": data_freshness.get("cacheHit"),
+        "bucket_lag": data_freshness.get("bucketLag"),
+        "data_freshness_allowed": data_freshness.get("allowed"),
+        "execution_blocked": _execution_abort_reasons(data_freshness, candle_consistency),
+        "candleFreshnessSummary": _build_candle_freshness_summary(signal, data_freshness),
+        "asset_class": pair.get("type"),
+    }
+
+
 def _abort_reasons(engine_a_ctx: dict[str, Any]) -> list[str]:
     fresh = engine_a_ctx.get("freshness") or {}
+    blocked = fresh.get("execution_blocked") if isinstance(fresh, dict) else None
+    if isinstance(blocked, list):
+        return [str(w) for w in blocked if w]
     warnings = fresh.get("stale_warnings") if isinstance(fresh, dict) else None
     if isinstance(warnings, list):
         return [str(w) for w in warnings if w]
     if isinstance(warnings, str) and warnings.strip():
         return [warnings.strip()]
     return []
+
+
+def freshness_is_policy_ok(engine_a_ctx: dict[str, Any]) -> bool:
+    """True when execution freshness allows and HTF lag is policy-normal only."""
+    fresh = engine_a_ctx.get("freshness") or {}
+    if not isinstance(fresh, dict):
+        return True
+    if fresh.get("data_freshness_allowed") is False:
+        return False
+    summary = fresh.get("candleFreshnessSummary") or {}
+    per_tf = summary.get("perTimeframe") if isinstance(summary, dict) else {}
+    if not isinstance(per_tf, dict):
+        return True
+    for tf_entry in per_tf.values():
+        if not isinstance(tf_entry, dict):
+            continue
+        note = tf_entry.get("policyNote")
+        severity = str(tf_entry.get("severity") or "").lower()
+        if note == "execution_stale":
+            return False
+        if severity in ("stale_multi_bucket", "missing_current_bucket"):
+            return False
+        if severity == "stale_1_bucket" and note != "policy_ok_not_stale":
+            return False
+    return True
 
 
 def build_engine_a_prompt_context(engine_a_ctx: dict[str, Any]) -> dict[str, Any]:
@@ -548,6 +672,7 @@ def build_engine_a_prompt_context(engine_a_ctx: dict[str, Any]) -> dict[str, Any
         adx_capture = {}
     addon_score = _factor_score(fd, "addon")
     indicators = engine_a_ctx.get("indicator_snapshots") or {}
+    fresh = engine_a_ctx.get("freshness") or {}
 
     return {
         "direction": engine_a_ctx.get("direction"),
@@ -559,6 +684,8 @@ def build_engine_a_prompt_context(engine_a_ctx: dict[str, Any]) -> dict[str, Any
         "activeFactors": ea.get("activeFactors"),
         "conviction": _to_float(fd.get("conviction") or fd.get("combinedConviction")),
         "abortReasons": _abort_reasons(engine_a_ctx),
+        "candleFreshnessSummary": fresh.get("candleFreshnessSummary"),
+        "dataFreshnessAllowed": fresh.get("data_freshness_allowed"),
         "timeframeBias": _timeframe_bias(engine_a_ctx),
         "diagnostics": {
             "trendScore": _factor_score(fd, "trend"),

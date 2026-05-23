@@ -1060,6 +1060,8 @@ export interface EngineCBacktestResponse {
 // Read-only; never used for execution.
 // ============================================================================
 
+export type AIReviewProvider = 'xai' | 'anthropic';
+export type AIChartReviewProvider = 'default' | 'anthropic' | 'xai' | 'grok';
 export type AIChartReviewVerdict = 'VALID' | 'CAUTION' | 'INVALID' | 'NO_TRADE';
 export type AIChartReviewHumanAction =
   | 'take'
@@ -1400,7 +1402,7 @@ export interface AIChartReviewScreenshotMeta {
 export interface AIChartReviewRequest {
   symbol: string;
   timeframe: string;
-  provider?: 'default' | 'anthropic';
+  provider?: AIChartReviewProvider;
   screenshot_base64: string;
   screenshot_meta: AIChartReviewScreenshotMeta;
 }
@@ -1568,7 +1570,7 @@ export interface ScalpAIChartReviewScreenshotMeta {
 export interface ScalpAIChartReviewRequest {
   symbol: string;
   timeframe: string;
-  provider?: 'default' | 'anthropic';
+  provider?: AIChartReviewProvider;
   screenshot_base64: string;
   screenshot_meta: ScalpAIChartReviewScreenshotMeta;
 }

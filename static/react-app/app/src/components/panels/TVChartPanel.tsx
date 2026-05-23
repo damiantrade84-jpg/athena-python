@@ -70,6 +70,7 @@ import {
 import { runnerBadgeClass, runnerBadgeLabel } from '@/lib/suggestedTradeRunnerDisplay';
 import { useSuggestedTradeRunnerStatus } from '@/hooks/useSuggestedTradeRunnerStatus';
 import AIReviewCard from '@/components/athena/AIReviewCard';
+import { AIReviewProviderToggle } from '@/components/athena/AIReviewProviderToggle';
 import ChartFeedHeaderChips, { type ChartFeedHeaderChipSpec } from '@/components/athena/ChartFeedHeaderChips';
 import CompactSuggestedWatchStatus from '@/components/athena/CompactSuggestedWatchStatus';
 import { ChartRightEdgeLabelPrimitive } from '@/lib/chartRightEdgeLabelPrimitive';
@@ -1929,7 +1930,7 @@ function buildCleanLegendChips(args: {
 // --- Main panel ------------------------------------------------------
 
 export default function TVChartPanel() {
-  const { scanCacheA, tvChartIntent, clearTvChartIntent, showToast, isTestMode, setActivePanel } = useStore();
+  const { scanCacheA, tvChartIntent, clearTvChartIntent, showToast, isTestMode, setActivePanel, aiReviewProvider, setAiReviewProvider } = useStore();
   const { data: autoTrade } = useApiPoll<{ enabled: boolean }>('/api/auto-trade', 60_000);
   const { priceEntryFor } = useLivePrices();
   const [pair, setPair] = useState('EURUSD');
@@ -2629,7 +2630,7 @@ export default function TVChartPanel() {
       const response = await postChartReview({
         symbol,
         timeframe: tfForBackend,
-        provider: 'default',
+        provider: aiReviewProvider,
         screenshot_base64: dataUrl,
         screenshot_meta: meta,
       });
@@ -3032,6 +3033,7 @@ export default function TVChartPanel() {
               <SlidersHorizontal className="h-3.5 w-3.5" />
               Engine A Review Layout
             </Button>
+            <AIReviewProviderToggle value={aiReviewProvider} onChange={setAiReviewProvider} />
             <Button
               size="sm"
               variant={engineAParityVisible ? 'default' : 'outline'}

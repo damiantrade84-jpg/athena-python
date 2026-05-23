@@ -1,5 +1,6 @@
 import { createContext, useContext, useState, useCallback, useRef, useEffect, useMemo } from 'react';
 import type { PanelId, Signal, Position, GuardianStatus, NewsItem, SessionHours, TvChartIntent, ScalpWorkbenchIntent } from '@/types';
+import type { AIReviewProvider } from '@/types/athena';
 import { syncSignalsToGlobal } from '@/lib/globalState';
 import apiClient from '@/lib/apiClient';
 import { useLivePrices } from '@/hooks/useLivePrices';
@@ -26,6 +27,7 @@ interface AppState {
   /** Workflow intents — local only, not persisted */
   tvChartIntent: TvChartIntent | null;
   scalpWorkbenchIntent: ScalpWorkbenchIntent | null;
+  aiReviewProvider: AIReviewProvider;
 }
 
 interface AppActions {
@@ -47,6 +49,7 @@ interface AppActions {
   clearTvChartIntent: () => void;
   setScalpWorkbenchIntent: (intent: ScalpWorkbenchIntent) => void;
   clearScalpWorkbenchIntent: () => void;
+  setAiReviewProvider: (provider: AIReviewProvider) => void;
 }
 
 const StoreContext = createContext<(AppState & AppActions) | null>(null);
@@ -86,6 +89,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   const [scanCacheBMeta, setScanCacheBMeta] = useState<{ count: number; scannedAt: string; pairsScanned?: number; scanFunnel?: Record<string, number> } | null>(null);
   const [tvChartIntent, setTvChartIntentState] = useState<TvChartIntent | null>(null);
   const [scalpWorkbenchIntent, setScalpWorkbenchIntentState] = useState<ScalpWorkbenchIntent | null>(null);
+  const [aiReviewProvider, setAiReviewProvider] = useState<AIReviewProvider>('xai');
 
   const setTvChartIntent = useCallback((intent: TvChartIntent) => {
     setTvChartIntentState(intent);
@@ -237,12 +241,13 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       activePanel, signals, positions, guardian, news, sessions,
       isAutoTrade, isTestMode, isLoading, toast,
       scanCacheA, scanCacheB, scalpLabScanCache, scalpLabSelectedCache, scanCacheAMeta, scanCacheBMeta,
-      tvChartIntent, scalpWorkbenchIntent,
+      tvChartIntent, scalpWorkbenchIntent, aiReviewProvider,
       setActivePanel, refreshSignals, refreshPositions,
       refreshGuardian, toggleAutoTrade, toggleTestMode, executeSignal,
       closePosition, showToast, getLivePrice: livePriceGetter,
       setScanCacheA, setScanCacheB, setScalpLabScanCache, setScalpLabSelectedCache,
       setTvChartIntent, clearTvChartIntent, setScalpWorkbenchIntent, clearScalpWorkbenchIntent,
+      setAiReviewProvider,
     }}>
       {children}
     </StoreContext.Provider>

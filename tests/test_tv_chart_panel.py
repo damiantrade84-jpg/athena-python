@@ -9,6 +9,9 @@ TV_PANEL = ROOT / "static/react-app/app/src/components/panels/TVChartPanel.tsx"
 DISPLAY_HELPERS = ROOT / "static/react-app/app/src/lib/engineADiagnosticsDisplay.ts"
 VITE_CONFIG = ROOT / "static/react-app/app/vite.config.ts"
 MAIN_TSX = ROOT / "static/react-app/app/src/main.tsx"
+STORE = ROOT / "static/react-app/app/src/hooks/useStore.tsx"
+ATHENA_TYPES = ROOT / "static/react-app/app/src/types/athena.ts"
+PROVIDER_TOGGLE = ROOT / "static/react-app/app/src/components/athena/AIReviewProviderToggle.tsx"
 
 ENGINE_A_DIAGNOSTIC_FIXTURE = {
     "type": "forex",
@@ -78,6 +81,31 @@ def _resolve_directional_ramp_display(signal):
 
 def _read(path: Path) -> str:
     return path.read_text(encoding="utf-8")
+
+
+def test_ai_review_provider_state_defaults_to_grok_and_types_allow_xai():
+    store = _read(STORE)
+    types = _read(ATHENA_TYPES)
+
+    assert "AIReviewProvider" in store
+    assert "aiReviewProvider: AIReviewProvider" in store
+    assert "useState<AIReviewProvider>('xai')" in store
+    assert "setAiReviewProvider" in store
+    assert "export type AIChartReviewProvider" in types
+    assert "'xai'" in types
+    assert "'grok'" in types
+
+
+def test_tv_chart_ai_review_uses_shared_provider_toggle():
+    source = _read(TV_PANEL)
+    toggle = _read(PROVIDER_TOGGLE)
+
+    assert "AIReviewProviderToggle" in source
+    assert "aiReviewProvider" in source
+    assert "setAiReviewProvider" in source
+    assert "provider: aiReviewProvider" in source
+    assert "Grok" in toggle
+    assert "Claude" in toggle
 
 
 def test_tv_chart_panel_renders_with_lightweight_charts():

@@ -8,6 +8,7 @@ from config import CONFIG
 
 from ai_review.providers.anthropic_provider import call_anthropic_chart_review
 from ai_review.providers.openai_provider import call_openai_chart_review
+from ai_review.providers.xai_provider import call_xai_chart_review
 
 
 def run_chart_review(provider: str | None, payload: Any) -> dict[str, Any]:
@@ -19,6 +20,10 @@ def run_chart_review(provider: str | None, payload: Any) -> dict[str, Any]:
     if resolved == "anthropic":
         out = call_anthropic_chart_review(payload)
         out.setdefault("provider", "anthropic")
+        return out
+    if resolved in ("xai", "grok"):
+        out = call_xai_chart_review(payload)
+        out.setdefault("provider", "xai")
         return out
     if resolved == "openai":
         if not cfg.get("ALLOW_OPENAI_PROVIDER"):

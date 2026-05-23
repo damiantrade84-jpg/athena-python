@@ -30,6 +30,10 @@ def test_scalp_workbench_ai_capture_posts_server_trusted_review():
     helper = _read(AI_SCALP_HELPER)
 
     assert "postScalpChartReview" in panel
+    assert "AIReviewProviderToggle" in panel
+    assert "aiReviewProvider" in panel
+    assert "setAiReviewProvider" in panel
+    assert "provider: aiReviewProvider" in panel
     assert "downscaleToCap" in panel
     assert "/api/ai/scalp-chart-review" in helper
     assert "postScalpChartReview" in helper

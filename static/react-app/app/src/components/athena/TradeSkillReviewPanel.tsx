@@ -28,7 +28,7 @@ function SuggestedPlanBlock({ plan }: { plan: SuggestedTradePlan | null | undefi
       <div className="grid grid-cols-2 gap-2">
         <Row label="Action" value={showReviewValue(plan.action)} />
         <Row label="Trigger" value={showReviewValue(plan.triggerType)} />
-        <Row label="Level" value={plan.level != null ? String(plan.level) : '—'} />
+        <Row label="Level" value={plan.level != null ? String(plan.level) : 'n/a'} />
         <Row label="Context TF" value={showReviewValue(plan.contextTf)} />
         <Row label="Entry TF" value={showReviewValue(plan.entryTf)} />
         <Row label="Execution TF" value={showReviewValue(plan.executionTf)} />
@@ -87,7 +87,7 @@ export default function TradeSkillReviewPanel({
           label="Invalidation"
           value={
             skill.invalidationLevel != null
-              ? `${skill.invalidationLevel}${skill.invalidationReason ? ` — ${skill.invalidationReason}` : ''}`
+              ? `${skill.invalidationLevel}${skill.invalidationReason ? ` - ${skill.invalidationReason}` : ''}`
               : showReviewValue(skill.invalidationReason)
           }
         />
@@ -120,7 +120,7 @@ export default function TradeSkillReviewPanel({
       <SuggestedPlanBlock plan={suggestedPlan ?? skill.suggestedTradePlan} />
 
       <div className="text-[10px] text-muted-foreground italic">
-        AI review is advisory only — does not grant execution permission.
+        AI review is advisory only - does not grant execution permission.
       </div>
     </div>
   );

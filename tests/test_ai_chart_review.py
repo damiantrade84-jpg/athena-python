@@ -614,6 +614,88 @@ def test_router_default_resolves_to_anthropic():
         mock_anthropic.assert_called_once()
 
 
+def test_router_resolves_xai_provider():
+    payload = MagicMock()
+    payload.screenshot_base64 = _png_data_url()
+    payload.prompt = "review"
+    with patch(
+        "ai_review.providers.router.call_xai_chart_review",
+        return_value=_mock_provider_payload(
+            raw_text="{}",
+            provider="xai",
+            model="grok-4.3",
+        ),
+        create=True,
+    ) as mock_xai:
+        out = run_chart_review("xai", payload)
+        mock_xai.assert_called_once()
+    assert out["provider"] == "xai"
+    assert out["model"] == "grok-4.3"
+
+
+def test_router_aliases_grok_to_xai_provider():
+    payload = MagicMock()
+    payload.screenshot_base64 = _png_data_url()
+    payload.prompt = "review"
+    with patch(
+        "ai_review.providers.router.call_xai_chart_review",
+        return_value=_mock_provider_payload(
+            raw_text="{}",
+            provider="xai",
+            model="grok-4.3",
+        ),
+        create=True,
+    ) as mock_xai:
+        run_chart_review("grok", payload)
+        mock_xai.assert_called_once()
+
+
+def test_xai_provider_missing_key_fails_closed(monkeypatch):
+    from ai_review.providers.xai_provider import call_xai_chart_review
+    from ai_review.provider_meta import ProviderChartReviewError
+
+    payload = MagicMock()
+    payload.screenshot_base64 = _png_data_url()
+    payload.prompt = "review"
+    monkeypatch.delenv("XAI_API_KEY", raising=False)
+    with patch.dict(CONFIG, {"XAI_API_KEY": ""}, clear=False):
+        with pytest.raises(ProviderChartReviewError) as excinfo:
+            call_xai_chart_review(payload)
+    assert excinfo.value.provider_status == "failed_auth"
+    assert excinfo.value.provider == "xai"
+
+
+def test_xai_provider_posts_png_data_url_as_image_url(monkeypatch):
+    from ai_review.providers.xai_provider import call_xai_chart_review
+
+    payload = MagicMock()
+    payload.screenshot_base64 = _png_data_url()
+    payload.prompt = "review this chart"
+    monkeypatch.setenv("XAI_API_KEY", "test-xai-key")
+
+    mock_client = MagicMock()
+    mock_resp = MagicMock()
+    mock_resp.model = "grok-4.3"
+    mock_choice = MagicMock()
+    mock_choice.message.content = '{"verdict":"VALID","confidence":80,"human_action":"take"}'
+    mock_resp.choices = [mock_choice]
+    mock_client.chat.completions.create.return_value = mock_resp
+
+    with patch(
+        "ai_review.providers.xai_provider.create_ai_client",
+        return_value=mock_client,
+    ):
+        out = call_xai_chart_review(payload)
+
+    kwargs = mock_client.chat.completions.create.call_args.kwargs
+    content = kwargs["messages"][0]["content"]
+    assert content[0] == {"type": "text", "text": "review this chart"}
+    assert content[1] == {"type": "image_url", "image_url": {"url": payload.screenshot_base64}}
+    assert kwargs["model"] == "grok-4.3"
+    assert out["provider"] == "xai"
+    assert out["raw_text"].startswith('{"verdict"')
+
+
 def test_validate_request_disabled_provider():
     cfg = dict(CONFIG["AI_CHART_REVIEW"])
     err = validate_request(_base_request(provider="openai"), cfg)
@@ -932,6 +1014,74 @@ def test_engine_a_verdict_wait_extension_downgrade():
     assert comparison["finalDecision"] == "wait"
 
 
+def test_engine_a_verdict_invalid_model_final_decision_falls_back_to_human_action():
+    ctx = _engine_a_ctx(passed=True)
+    ctx["engine_snapshots"] = extract_engine_snapshots({}, ctx)
+    ai = normalize_chart_review_response(
+        json.dumps(
+            {
+                "verdict": "INVALID",
+                "confidence": 35,
+                "human_action": "reject",
+                "decision": "NO_TRADE",
+                "direction": "SHORT",
+                "entryAllowedNow": False,
+                "noTradeReason": "Stale HTF data and extended timing",
+                "visual_confirmation": "direction aligned",
+                "visual_contradiction": "entry timing contradicted after sharp drop",
+                "engine_a_alignment": "direction aligned but execution context invalid",
+                "entry_quality": "extended entry timing after sharp drop",
+                "risks": ["stale HTF data", "late entry"],
+                "engineAVerdictComparison": {
+                    "comparisonVerdict": "engine_a_direction_confirmed_entry_rejected",
+                    "chartConfirmsEngineADirection": True,
+                    "chartContradictsEngineADirection": False,
+                    "chartConfirmsEntryTiming": False,
+                    "chartContradictsEntryTiming": True,
+                    "finalDecision": "unknown",
+                    "finalReason": "Direction aligned but execution context invalid",
+                },
+            }
+        )
+    )
+
+    comparison = build_engine_a_verdict_comparison(ctx, ai, engine_snapshots=ctx["engine_snapshots"])
+
+    assert comparison["finalDecision"] == "reject"
+    assert comparison["comparisonVerdict"] == "engine_a_direction_confirmed_entry_rejected"
+
+
+def test_concordance_prefers_structured_entry_timing_over_visual_contradiction_text():
+    ctx = _engine_a_ctx(passed=True)
+    ai = normalize_chart_review_response(
+        json.dumps(
+            {
+                "verdict": "INVALID",
+                "confidence": 35,
+                "human_action": "reject",
+                "decision": "NO_TRADE",
+                "direction": "SHORT",
+                "entryAllowedNow": False,
+                "noTradeReason": "Entry extended after sharp drop",
+                "visual_confirmation": "direction aligned",
+                "visual_contradiction": "entry timing contradicted after sharp drop",
+                "entry_quality": "extended entry timing after sharp drop",
+                "risks": ["late entry"],
+                "engineAVerdictComparison": {
+                    "chartConfirmsEngineADirection": True,
+                    "chartContradictsEngineADirection": False,
+                    "chartContradictsEntryTiming": True,
+                },
+            }
+        )
+    )
+
+    concordance = compute_engine_a_ai_concordance(ctx, ai, cfg={})
+
+    assert concordance["concordance"] == "disagree"
+    assert concordance["divergence_type"] == "entry_displacement"
+
+
 def test_wait_high_alignment_low_tradeability():
     ctx = _engine_a_ctx(passed=True)
     ctx["engine_snapshots"] = extract_engine_snapshots({}, ctx)
@@ -1174,4 +1324,116 @@ def test_normalizer_strips_malformed_suggested_trade_plan():
     plan = out.get("suggestedTradePlan")
     assert isinstance(plan, dict)
     assert plan.get("armable") is False
+
+
+def _crypto_policy_fresh_ctx(**overrides):
+    ctx = _engine_a_ctx(asset_group="crypto")
+    ctx["freshness"] = {
+        "data_freshness_allowed": True,
+        "execution_blocked": [],
+        "candleFreshnessSummary": {
+            "dataFreshnessAllowed": True,
+            "perTimeframe": {
+                "H4": {
+                    "severity": "stale_1_bucket",
+                    "bucketLag": 1,
+                    "consistencyStatus": "CONFIRMED_ONLY_OK",
+                    "policyNote": "policy_ok_not_stale",
+                },
+                "D1": {
+                    "severity": "stale_1_bucket",
+                    "bucketLag": 1,
+                    "consistencyStatus": "CONFIRMED_ONLY_OK",
+                    "policyNote": "policy_ok_not_stale",
+                },
+                "H1": {
+                    "severity": "stale_1_bucket",
+                    "bucketLag": 1,
+                    "consistencyStatus": "CONFIRMED_ONLY_OK",
+                    "policyNote": "policy_ok_not_stale",
+                },
+            },
+        },
+    }
+    ctx.update(overrides)
+    return ctx
+
+
+def test_crypto_confirmed_only_stale_1_not_in_abort_reasons():
+    from ai_review.engine_a_context import (
+        _execution_abort_reasons,
+        build_engine_a_prompt_context,
+    )
+
+    data_freshness = {
+        "allowed": True,
+        "blocked": [
+            {"timeframe": "H4", "severity": "stale_1_bucket"},
+            {"timeframe": "D1", "severity": "stale_1_bucket"},
+        ],
+    }
+    candle_consistency = {
+        "H4": {"status": "CONFIRMED_ONLY_OK"},
+        "D1": {"status": "CONFIRMED_ONLY_OK"},
+    }
+    assert _execution_abort_reasons(data_freshness, candle_consistency) == []
+
+    ctx = _crypto_policy_fresh_ctx()
+    prompt_ctx = build_engine_a_prompt_context(ctx)
+    assert prompt_ctx["abortReasons"] == []
+    assert prompt_ctx["dataFreshnessAllowed"] is True
+    assert prompt_ctx["candleFreshnessSummary"]["perTimeframe"]["H4"]["policyNote"] == "policy_ok_not_stale"
+
+
+def test_prompt_includes_crypto_confirmed_only_freshness_wording():
+    ctx = _engine_a_ctx(asset_group="crypto")
+    ctx["freshness"] = _crypto_policy_fresh_ctx()["freshness"]
+    prompt = build_chart_review_prompt(ctx)
+    assert "policy_ok_not_stale" in prompt or "policyNote=policy_ok_not_stale" in prompt
+    assert "do NOT list H4/D1/H1 as stale" in prompt
+
+
+def test_verdict_strips_false_h4_d1_stale_downgrade_when_policy_ok():
+    ctx = _crypto_policy_fresh_ctx(passed=True)
+    model_comparison = {
+        "comparisonVerdict": "engine_a_direction_confirmed_entry_rejected",
+        "downgradeReasons": [
+            "entry extended after impulse",
+            "H4/D1 stale",
+        ],
+        "finalDecision": "wait",
+    }
+    ai_review = {
+        "human_action": "wait",
+        "visual_confirmation": "aligned",
+        "entry_quality": "extended after impulse",
+    }
+    comparison = build_engine_a_verdict_comparison(
+        ctx, ai_review, model_comparison=model_comparison
+    )
+    reasons = comparison.get("downgradeReasons") or []
+    assert "H4/D1 stale" not in reasons
+    assert "entry extended after impulse" in reasons
+
+
+def test_verdict_keeps_h4_d1_stale_when_execution_blocked():
+    ctx = _crypto_policy_fresh_ctx(passed=True)
+    ctx["freshness"]["data_freshness_allowed"] = False
+    ctx["freshness"]["execution_blocked"] = ["H4:stale_multi_bucket"]
+    ctx["freshness"]["candleFreshnessSummary"]["perTimeframe"]["H4"] = {
+        "severity": "stale_multi_bucket",
+        "bucketLag": 3,
+        "consistencyStatus": "ERROR_STALE_MULTI_BUCKET",
+        "policyNote": "execution_stale",
+    }
+    ai_review = {"human_action": "reject"}
+    comparison = build_engine_a_verdict_comparison(
+        ctx,
+        ai_review,
+        model_comparison={
+            "downgradeReasons": ["H4/D1 stale"],
+            "finalDecision": "reject",
+        },
+    )
+    assert "H4/D1 stale" in (comparison.get("downgradeReasons") or [])
 

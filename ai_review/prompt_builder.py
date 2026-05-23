@@ -91,6 +91,7 @@ Rules:
 - Do NOT put chartCapturedAt, scanTimestamp, or latestCandleTimestamp in missing_context — use metadata only.
 - For crypto, equity_session is not applicable — put in notApplicable, not missing.
 - ATR freshness: D1 confirmed-only ATR can be 24–48h old — do not flag stale solely on age.
+- Candle freshness (crypto 24/7): when engineAContext.candleFreshnessSummary shows policyNote=policy_ok_not_stale or dataFreshnessAllowed=true with only stale_1_bucket on confirmed-only paths, do NOT list H4/D1/H1 as stale in downgradeReasons or freshness_assessment. Reserve stale downgrade for stale_multi_bucket, missing_current_bucket, or dataFreshnessAllowed=false.
 - Treat unavailable/null Engine A fields as uncertainty, not zero.
 - Do not use NO_TRADE as generic caution. Use WAIT_FOR_PULLBACK / WAIT_FOR_ACCEPTANCE / WATCH_ONLY when direction is acceptable but timing is poor. Use NO_TRADE only with hard invalidation or a concrete noTradeReason.
 - This is review-only. Do not issue execution instructions.

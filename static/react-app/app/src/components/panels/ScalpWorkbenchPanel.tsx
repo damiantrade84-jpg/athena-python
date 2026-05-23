@@ -42,6 +42,7 @@ import {
 import { runnerBadgeClass, runnerBadgeLabel } from '@/lib/suggestedTradeRunnerDisplay';
 import { useSuggestedTradeRunnerStatus } from '@/hooks/useSuggestedTradeRunnerStatus';
 import ScalpAIReviewCard from '@/components/athena/ScalpAIReviewCard';
+import { AIReviewProviderToggle } from '@/components/athena/AIReviewProviderToggle';
 import ChartFeedHeaderChips, { type ChartFeedHeaderChipSpec } from '@/components/athena/ChartFeedHeaderChips';
 import CompactSuggestedWatchStatus from '@/components/athena/CompactSuggestedWatchStatus';
 import { ChartRightEdgeLabelPrimitive } from '@/lib/chartRightEdgeLabelPrimitive';
@@ -933,6 +934,8 @@ export default function ScalpWorkbenchPanel() {
     showToast,
     isTestMode,
     setActivePanel,
+    aiReviewProvider,
+    setAiReviewProvider,
   } = useStore();
   const { post: postScan, loading: scanLoading, error: scanError } = useApiPost<ScalpScanResponse>();
   const { post: postExecute, loading: executingScalp } = useApiPost<ScalpExecuteResponse>();
@@ -1294,7 +1297,7 @@ export default function ScalpWorkbenchPanel() {
       const response = await postScalpChartReview({
         symbol: chartSymbol,
         timeframe,
-        provider: 'default',
+        provider: aiReviewProvider,
         screenshot_base64: screenshotBase64,
         screenshot_meta: screenshotMeta,
       });
@@ -1309,6 +1312,7 @@ export default function ScalpWorkbenchPanel() {
   }, [
     activeSignal,
     activeUi,
+    aiReviewProvider,
     candlePayload,
     chartSymbol,
     executionTf,
@@ -1677,6 +1681,7 @@ export default function ScalpWorkbenchPanel() {
             )}
           </div>
           <div className="flex flex-wrap items-center gap-2" data-review-action-strip>
+            <AIReviewProviderToggle value={aiReviewProvider} onChange={setAiReviewProvider} />
             <Button
               variant="outline"
               size="sm"
