@@ -5,11 +5,19 @@ export interface RenderReadyInput {
   sourceBadgeReady: boolean;
   captureWidth: number;
   captureHeight: number;
+  nativeCanvasReady: boolean;
 }
 
 export interface RenderReadyResult {
   ready: boolean;
   missing: string[];
+}
+
+export function hasScalpNativeCanvas(captureEl: HTMLElement | null): boolean {
+  if (!captureEl) return false;
+  return Array.from(captureEl.querySelectorAll('canvas')).some(
+    (canvas) => canvas.width > 0 && canvas.height > 0,
+  );
 }
 
 export function checkScalpChartRenderReady(input: RenderReadyInput): RenderReadyResult {
@@ -19,12 +27,13 @@ export function checkScalpChartRenderReady(input: RenderReadyInput): RenderReady
   if (input.profileReady === false) missing.push('profile');
   if (!input.sourceBadgeReady) missing.push('sourceBadge');
   if (input.captureWidth <= 0 || input.captureHeight <= 0) missing.push('screenshotDimensions');
+  if (!input.nativeCanvasReady) missing.push('nativeCanvas');
   return { ready: missing.length === 0, missing };
 }
 
 export function waitForScalpChartRenderReady(
   getInput: () => RenderReadyInput,
-  timeoutMs = 3000,
+  timeoutMs = 8000,
   intervalMs = 50,
 ): Promise<RenderReadyResult> {
   return new Promise((resolve) => {

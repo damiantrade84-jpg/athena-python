@@ -45,7 +45,7 @@ import {
 } from '@/lib/manualExecuteHelpers';
 import { buildScalpChartLevels, buildOrderFlowMarkers, DEFAULT_SCALP_OVERLAY_TOGGLES, type EngineBOverlayLike, type OrderFlowPayloadLike, type ScalpOverlayToggles } from '@/lib/scalpWorkbenchChart/layers';
 import { buildScalpChartSnapshot, buildRenderedLayers } from '@/lib/scalpWorkbenchChart/chartSnapshot';
-import { waitForScalpChartRenderReady } from '@/lib/scalpWorkbenchChart/renderReady';
+import { hasScalpNativeCanvas, waitForScalpChartRenderReady } from '@/lib/scalpWorkbenchChart/renderReady';
 import { ScalpThesisBadge } from '@/lib/scalpWorkbenchChart/thesisBadge';
 import { ScalpAdvisoryBadge } from '@/lib/scalpWorkbenchChart/advisoryBadge';
 import { ScalpChartLegend } from '@/lib/scalpWorkbenchChart/legend';
@@ -873,6 +873,7 @@ export default function ScalpWorkbenchPanel() {
   const [tfDisplayOverride, setTfDisplayOverride] = useState(false);
   const [intentSourceBadge, setIntentSourceBadge] = useState<string | null>(null);
   const [autoReviewStatus, setAutoReviewStatus] = useState<'idle' | 'pending' | 'running' | 'done'>('idle');
+  const [chartReady, setChartReady] = useState(false);
   const [activeWatches, setActiveWatches] = useState<SuggestedTradeWatch[]>([]);
   const [flagStatus, setFlagStatus] = useState<string | null>(null);
   const [flagLoading, setFlagLoading] = useState(false);
@@ -1202,8 +1203,16 @@ export default function ScalpWorkbenchPanel() {
           sourceBadgeReady: Boolean(activeUi.sourceQualityLabel || activeUi.sourceContract.orderflowSource),
           captureWidth: rect?.width ?? 0,
           captureHeight: rect?.height ?? 0,
+          nativeCanvasReady: hasScalpNativeCanvas(captureEl),
         };
       });
+
+      if (!renderReady.ready) {
+        if (renderReady.missing.includes('nativeCanvas')) {
+          setAiCaptureError('Chart capture failed: chart canvas not ready yet — retry after candles finish loading');
+          return;
+        }
+      }
 
       const visibleRange = chartRef.current?.timeScale().getVisibleRange() ?? null;
       const latestCandleTs = candleRows.length > 0
@@ -1256,7 +1265,7 @@ export default function ScalpWorkbenchPanel() {
 
       const sourceCanvas = captureNativeChartCanvas(chartCaptureRef.current);
       if (!sourceCanvas) {
-        setAiCaptureError('Chart capture failed: native chart canvas is not rendered yet');
+        setAiCaptureError('Chart capture failed: chart canvas not ready yet — retry after candles finish loading');
         return;
       }
 
@@ -1325,14 +1334,14 @@ export default function ScalpWorkbenchPanel() {
   ]);
 
   useEffect(() => {
-    if (!pendingAutoReviewRef.current || chartLoading || aiReviewLoading || !activeSignal || !chartSymbol) return;
+    if (!pendingAutoReviewRef.current || chartLoading || aiReviewLoading || !activeSignal || !chartSymbol || !chartReady) return;
     const intentId = appliedIntentIdRef.current;
     if (!intentId || autoReviewRanForIntentRef.current === intentId) return;
     autoReviewRanForIntentRef.current = intentId;
     pendingAutoReviewRef.current = false;
     setAutoReviewStatus('running');
     void captureScalpChartForAIReview().finally(() => setAutoReviewStatus('done'));
-  }, [chartLoading, aiReviewLoading, activeSignal, chartSymbol, candlePayload, captureScalpChartForAIReview]);
+  }, [chartLoading, aiReviewLoading, activeSignal, chartSymbol, chartReady, candlePayload, captureScalpChartForAIReview]);
 
   useEffect(() => {
     if (!chartSymbol) {
@@ -1374,6 +1383,10 @@ export default function ScalpWorkbenchPanel() {
       cancelled = true;
       window.clearTimeout(id);
     };
+  }, [chartSymbol, timeframe]);
+
+  useEffect(() => {
+    setChartReady(false);
   }, [chartSymbol, timeframe]);
 
   useEffect(() => {
@@ -1493,6 +1506,8 @@ export default function ScalpWorkbenchPanel() {
 
     if (candleRows.length > 0) chart.timeScale().fitContent();
 
+    setChartReady(true);
+
     const resizeObserver = new ResizeObserver(() => {
       chart.applyOptions({
         width: container.clientWidth,
@@ -1502,6 +1517,7 @@ export default function ScalpWorkbenchPanel() {
     resizeObserver.observe(container);
 
     return () => {
+      setChartReady(false);
       resizeObserver.disconnect();
       chart.remove();
       chartRef.current = null;
@@ -1752,7 +1768,7 @@ export default function ScalpWorkbenchPanel() {
               variant="outline"
               size="sm"
               onClick={captureScalpChartForAIReview}
-              disabled={!aiReviewEligible || chartLoading || aiReviewLoading}
+              disabled={!aiReviewEligible || chartLoading || aiReviewLoading || !chartReady}
             >
               <Camera className={cn('mr-2 h-4 w-4', aiReviewLoading && 'animate-pulse')} />
               {aiReviewLoading ? 'Reviewing…' : 'AI Scalp Review'}
