@@ -1325,3 +1325,115 @@ def test_normalizer_strips_malformed_suggested_trade_plan():
     assert isinstance(plan, dict)
     assert plan.get("armable") is False
 
+
+def _crypto_policy_fresh_ctx(**overrides):
+    ctx = _engine_a_ctx(asset_group="crypto")
+    ctx["freshness"] = {
+        "data_freshness_allowed": True,
+        "execution_blocked": [],
+        "candleFreshnessSummary": {
+            "dataFreshnessAllowed": True,
+            "perTimeframe": {
+                "H4": {
+                    "severity": "stale_1_bucket",
+                    "bucketLag": 1,
+                    "consistencyStatus": "CONFIRMED_ONLY_OK",
+                    "policyNote": "policy_ok_not_stale",
+                },
+                "D1": {
+                    "severity": "stale_1_bucket",
+                    "bucketLag": 1,
+                    "consistencyStatus": "CONFIRMED_ONLY_OK",
+                    "policyNote": "policy_ok_not_stale",
+                },
+                "H1": {
+                    "severity": "stale_1_bucket",
+                    "bucketLag": 1,
+                    "consistencyStatus": "CONFIRMED_ONLY_OK",
+                    "policyNote": "policy_ok_not_stale",
+                },
+            },
+        },
+    }
+    ctx.update(overrides)
+    return ctx
+
+
+def test_crypto_confirmed_only_stale_1_not_in_abort_reasons():
+    from ai_review.engine_a_context import (
+        _execution_abort_reasons,
+        build_engine_a_prompt_context,
+    )
+
+    data_freshness = {
+        "allowed": True,
+        "blocked": [
+            {"timeframe": "H4", "severity": "stale_1_bucket"},
+            {"timeframe": "D1", "severity": "stale_1_bucket"},
+        ],
+    }
+    candle_consistency = {
+        "H4": {"status": "CONFIRMED_ONLY_OK"},
+        "D1": {"status": "CONFIRMED_ONLY_OK"},
+    }
+    assert _execution_abort_reasons(data_freshness, candle_consistency) == []
+
+    ctx = _crypto_policy_fresh_ctx()
+    prompt_ctx = build_engine_a_prompt_context(ctx)
+    assert prompt_ctx["abortReasons"] == []
+    assert prompt_ctx["dataFreshnessAllowed"] is True
+    assert prompt_ctx["candleFreshnessSummary"]["perTimeframe"]["H4"]["policyNote"] == "policy_ok_not_stale"
+
+
+def test_prompt_includes_crypto_confirmed_only_freshness_wording():
+    ctx = _engine_a_ctx(asset_group="crypto")
+    ctx["freshness"] = _crypto_policy_fresh_ctx()["freshness"]
+    prompt = build_chart_review_prompt(ctx)
+    assert "policy_ok_not_stale" in prompt or "policyNote=policy_ok_not_stale" in prompt
+    assert "do NOT list H4/D1/H1 as stale" in prompt
+
+
+def test_verdict_strips_false_h4_d1_stale_downgrade_when_policy_ok():
+    ctx = _crypto_policy_fresh_ctx(passed=True)
+    model_comparison = {
+        "comparisonVerdict": "engine_a_direction_confirmed_entry_rejected",
+        "downgradeReasons": [
+            "entry extended after impulse",
+            "H4/D1 stale",
+        ],
+        "finalDecision": "wait",
+    }
+    ai_review = {
+        "human_action": "wait",
+        "visual_confirmation": "aligned",
+        "entry_quality": "extended after impulse",
+    }
+    comparison = build_engine_a_verdict_comparison(
+        ctx, ai_review, model_comparison=model_comparison
+    )
+    reasons = comparison.get("downgradeReasons") or []
+    assert "H4/D1 stale" not in reasons
+    assert "entry extended after impulse" in reasons
+
+
+def test_verdict_keeps_h4_d1_stale_when_execution_blocked():
+    ctx = _crypto_policy_fresh_ctx(passed=True)
+    ctx["freshness"]["data_freshness_allowed"] = False
+    ctx["freshness"]["execution_blocked"] = ["H4:stale_multi_bucket"]
+    ctx["freshness"]["candleFreshnessSummary"]["perTimeframe"]["H4"] = {
+        "severity": "stale_multi_bucket",
+        "bucketLag": 3,
+        "consistencyStatus": "ERROR_STALE_MULTI_BUCKET",
+        "policyNote": "execution_stale",
+    }
+    ai_review = {"human_action": "reject"}
+    comparison = build_engine_a_verdict_comparison(
+        ctx,
+        ai_review,
+        model_comparison={
+            "downgradeReasons": ["H4/D1 stale"],
+            "finalDecision": "reject",
+        },
+    )
+    assert "H4/D1 stale" in (comparison.get("downgradeReasons") or [])
+

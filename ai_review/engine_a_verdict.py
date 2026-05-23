@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from ai_review.engine_a_context import freshness_is_policy_ok
 from ai_review.engine_snapshots import extract_engine_snapshots
 from ai_review.summary import _HUMAN_ACTION_MAP, _POOR_ENTRY_PATTERNS
 
@@ -19,6 +20,34 @@ _VALID_VERDICTS = frozenset(
 )
 
 _FINAL_DECISIONS = frozenset({"trade", "wait", "reject", "watch"})
+
+_FALSE_STALE_DOWNGRADE_MARKERS = (
+    "h4/d1 stale",
+    "h4 stale",
+    "d1 stale",
+    "stale h4",
+    "stale d1",
+    "htf stale",
+    "data stale",
+    "stale data",
+    "candle stale",
+    "stale candle",
+)
+
+
+def _filter_false_stale_downgrades(
+    downgrade_reasons: list[str],
+    engine_a_ctx: dict[str, Any],
+) -> list[str]:
+    if not downgrade_reasons or not freshness_is_policy_ok(engine_a_ctx):
+        return downgrade_reasons
+    filtered: list[str] = []
+    for reason in downgrade_reasons:
+        lower = str(reason or "").strip().lower()
+        if lower and any(marker in lower for marker in _FALSE_STALE_DOWNGRADE_MARKERS):
+            continue
+        filtered.append(reason)
+    return filtered
 
 
 def _to_float(value: Any) -> float | None:
@@ -295,6 +324,7 @@ def build_engine_a_verdict_comparison(
             downgrade_reasons.append("Chart contradicts Engine A direction")
         if final_decision in ("wait", "watch") and passed:
             downgrade_reasons.append("Engine A passed but human action is wait/watch")
+    downgrade_reasons = _filter_false_stale_downgrades(downgrade_reasons, engine_a_ctx)
 
     upgrade_reasons = _coerce_str_list(model.get("upgradeReasons"))
 
