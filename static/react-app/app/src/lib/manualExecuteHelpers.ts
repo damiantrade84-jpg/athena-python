@@ -20,6 +20,8 @@ export interface ScalpExecuteSignalLike {
   tp?: number;
   executable?: boolean;
   gate_result?: string;
+  ai_grade?: string;
+  grade?: string;
   strict_fabio_pass?: boolean;
   strict_fabio_pillars?: Record<string, boolean>;
   strictOrderflowSourcePass?: boolean | null;
@@ -218,7 +220,7 @@ export function requiresScalpAiEntryNow(review: ScalpAIChartReviewResponse | nul
 }
 
 export function scalpAiReviewBlocksExecute(review: ScalpAIChartReviewResponse | null): boolean {
-  if (!review) return false;
+  if (!review) return true;
   if (tradeSkillBlocksExecute(review)) return true;
   const comparison = review.scalpVerdictComparison ?? review.scalp_verdict_comparison;
   const finalDecision = String(comparison?.finalDecision || '').toLowerCase();
@@ -257,6 +259,20 @@ export function scalpSourceFidelityHardFail(signal: ScalpExecuteSignalLike | nul
   return false;
 }
 
+function scalpSignalGrade(signal: ScalpExecuteSignalLike): string {
+  return String(signal.ai_grade || signal.grade || '').toUpperCase();
+}
+
+function scalpMechanicalGateBlock(signal: ScalpExecuteSignalLike): string | null {
+  const gate = String(signal.gate_result || '').toUpperCase();
+  if (gate === 'BLOCKED') return 'Blocked';
+  if (signal.executable === false) return 'Not executable';
+  if (gate && gate !== 'PASS') return 'Gate failed';
+  if ('strict_fabio_pass' in signal && signal.strict_fabio_pass !== true) return 'Fabio gate failed';
+  if (scalpSourceFidelityHardFail(signal)) return 'Source fidelity failed';
+  return null;
+}
+
 export function evaluateScalpExecuteBlock(args: {
   signal: ScalpExecuteSignalLike | null;
   aiReview: ScalpAIChartReviewResponse | null;
@@ -268,12 +284,22 @@ export function evaluateScalpExecuteBlock(args: {
   if (!signal) return 'No scalp candidate';
   const direction = String(signal.direction || '').toUpperCase();
   if (direction !== 'LONG' && direction !== 'SHORT') return 'Direction missing';
+  const grade = scalpSignalGrade(signal);
+  if (grade === 'D') return 'Grade D not executable';
+  if (!aiReview?.review_id && !aiReview?.ai_review) return 'AI review required';
   const entry = signal.entry ?? signal.price;
   if (!isPositiveNumber(entry) || !isPositiveNumber(signal.sl) || !isPositiveNumber(signal.tp1 ?? signal.tp)) {
     return 'Missing levels';
   }
-  if (requiresScalpAiEntryNow(aiReview)) return 'AI ENTRY_NOW required';
-  if (scalpAiReviewBlocksExecute(aiReview)) return 'AI says wait';
+  if (grade === 'A' || grade === 'B') {
+    if (requiresScalpAiEntryNow(aiReview)) return 'AI ENTRY_NOW required';
+    if (scalpAiReviewBlocksExecute(aiReview)) return 'AI says wait';
+  } else {
+    const mechanical = scalpMechanicalGateBlock(signal);
+    if (mechanical) return mechanical;
+    if (requiresScalpAiEntryNow(aiReview)) return 'AI ENTRY_NOW required';
+    if (scalpAiReviewBlocksExecute(aiReview)) return 'AI says wait';
+  }
   const planAction = String(suggestedTradePlan?.action || '').toUpperCase();
   if (planAction === 'WAIT_FOR_LEVEL') return 'Waiting for level';
   if (planAction === 'WAIT_FOR_ZONE') return 'Waiting for zone';
@@ -284,10 +310,15 @@ export function buildScalpExecutePayload(args: {
   symbol: string;
   signal: ScalpExecuteSignalLike;
   sizingOverride: number;
+  reviewId?: string | null;
 }): Record<string, unknown> {
-  return {
+  const payload: Record<string, unknown> = {
     symbol: args.symbol,
     signal: args.signal,
     sizing_override: Math.max(0.25, Math.min(1.0, args.sizingOverride || 1.0)),
   };
+  if (args.reviewId) {
+    payload.review_id = args.reviewId;
+  }
+  return payload;
 }

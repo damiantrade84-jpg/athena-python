@@ -95,6 +95,34 @@ def _row_to_response(row: sqlite3.Row) -> dict[str, Any]:
     return out
 
 
+def find_scalp_review_by_id(
+    review_id: str,
+    *,
+    audit_db: str | None = None,
+    review_type: str = "engine_d",
+) -> dict[str, Any] | None:
+    """Load a persisted scalp chart review by review_id."""
+    if not review_id:
+        return None
+    ensure_schema(audit_db)
+    path = _audit_db_path(audit_db)
+    with sqlite3.connect(path, timeout=15.0) as con:
+        con.row_factory = sqlite3.Row
+        row = con.execute(
+            """
+            SELECT * FROM ai_chart_reviews
+            WHERE review_id = ? AND review_type = ?
+            LIMIT 1
+            """,
+            (review_id, review_type),
+        ).fetchone()
+    if not row:
+        return None
+    out = _row_to_response(row)
+    out["created_at"] = row["created_at"]
+    return out
+
+
 def find_recent_review_by_hash(
     symbol: str,
     timeframe: str,

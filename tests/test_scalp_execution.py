@@ -115,6 +115,11 @@ def test_scan_style_auto_resolution_contract():
 def test_scalp_execute_passes_size_multiplier_to_risk_engine(monkeypatch):
     athena_module = _load_athena_module()
     captured = {}
+    monkeypatch.setitem(
+        athena_module.CONFIG["AI_SCALP_CHART_REVIEW"],
+        "EXECUTE_REQUIRES_AI_REVIEW",
+        False,
+    )
 
     monkeypatch.setattr(
         scalp_engine,
@@ -167,17 +172,144 @@ def test_scalp_execute_passes_size_multiplier_to_risk_engine(monkeypatch):
     assert captured["sizing_override"] == 0.25
 
 
+def test_scalp_execute_rejects_without_ai_review(monkeypatch):
+    athena_module = _load_athena_module()
+    monkeypatch.setattr(
+        scalp_engine,
+        "run_scalp_scan",
+        lambda pairs: {
+            "signals": [
+                {
+                    "pair": "EUR/USD",
+                    "direction": "LONG",
+                    "type": "forex",
+                    "price": 1.1,
+                    "sl": 1.095,
+                    "tp1": 1.11,
+                    "ai_grade": "B",
+                    "gate_result": "PASS",
+                    "executable": True,
+                }
+            ]
+        },
+    )
+    client = athena_module.app.test_client()
+    resp = client.post(
+        "/api/scalp-execute",
+        json={"symbol": "EUR/USD", "signal": {"symbol": "EUR/USD", "direction": "LONG"}},
+    )
+    assert resp.status_code == 200, resp.get_data(as_text=True)
+    data = resp.get_json()
+    assert data["success"] is False
+    assert data["error"] == "AI_REVIEW_REQUIRED"
+
+
+def test_scalp_execute_accepts_watchlist_with_fresh_ai_review(monkeypatch):
+    athena_module = _load_athena_module()
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
+        audit_db = tmp.name
+    monkeypatch.setattr(athena_module, "_AUDIT_DB", audit_db)
+
+    from ai_review.persistence import ensure_schema, record_review
+    from datetime import datetime, timezone
+
+    ensure_schema(audit_db)
+    engine_d_ctx = {
+        "symbol": "EUR/USD",
+        "direction": "LONG",
+        "execution_tf": "M1",
+        "scan_timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+    review_row = record_review(
+        symbol="EUR/USD",
+        timeframe="M5",
+        asset_group=None,
+        provider="anthropic",
+        model="test",
+        latency_ms=1,
+        screenshot_hash="hash1",
+        screenshot_bytes=10,
+        screenshot_meta={"native_chart": True},
+        engine_d_context=engine_d_ctx,
+        ai_review={
+            "decision": "ENTRY_NOW",
+            "entryAllowedNow": True,
+            "structured": {"decision": "ENTRY_NOW", "entryAllowedNow": True},
+            "verdict": "VALID",
+            "parse_success": True,
+        },
+        concordance={},
+        mismatch_warnings=[],
+        audit_db=audit_db,
+        review_type="engine_d",
+    )
+
+    monkeypatch.setattr(
+        scalp_engine,
+        "run_scalp_scan",
+        lambda pairs: {
+            "signals": [
+                {
+                    "pair": "EUR/USD",
+                    "direction": "LONG",
+                    "type": "forex",
+                    "price": 1.1,
+                    "sl": 1.095,
+                    "tp1": 1.11,
+                    "ai_grade": "B",
+                    "gate_result": "WATCHLIST",
+                    "executable": False,
+                    "soft_warnings": ["rr_below_min"],
+                }
+            ]
+        },
+    )
+    monkeypatch.setattr(mt5_executor, "mt5_get_account", lambda: {"balance": 10000.0, "equity": 10000.0})
+    monkeypatch.setattr(mt5_executor, "mt5_get_positions", lambda: {"positions": []})
+    monkeypatch.setattr(mt5_executor, "mt5_get_symbol_info", lambda symbol: {"digits": 5, "point": 0.00001})
+
+    class _Approval:
+        approved = True
+        reason = "OK"
+
+        @staticmethod
+        def to_dict():
+            return {"approved": True, "reason": "OK"}
+
+    monkeypatch.setattr(risk_engine, "risk_check", lambda **kwargs: _Approval())
+    monkeypatch.setattr(
+        execution_lifecycle,
+        "run_managed_execution",
+        lambda venue, signal, approval: {"success": True, "ticket": "999", "volume": 0.01, "entry_price": 1.1},
+    )
+    monkeypatch.setattr(athena_module, "_guardian_pre_trade", lambda *args, **kwargs: (True, None))
+
+    client = athena_module.app.test_client()
+    resp = client.post(
+        "/api/scalp-execute",
+        json={
+            "symbol": "EUR/USD",
+            "review_id": review_row["review_id"],
+            "signal": {"symbol": "EUR/USD", "direction": "LONG"},
+        },
+    )
+    assert resp.status_code == 200, resp.get_data(as_text=True)
+    data = resp.get_json()
+    assert data["success"] is True
+
+
 def test_modular_scalp_execute_rejects_non_executable_signal():
     assert (
         execution._engine_d_execution_block_reason(
             {
                 "pair": "EUR/USD",
                 "direction": "LONG",
+                "ai_grade": "D",
                 "executable": False,
                 "candidate_status": "grade_D_context_only",
             }
         )
-        == "grade_D_context_only"
+        == "ENGINE_D_GRADE_D_NOT_EXECUTABLE"
     )
 
 

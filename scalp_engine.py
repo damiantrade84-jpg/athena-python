@@ -3702,6 +3702,23 @@ def ai_quality_grade(
     return out
 
 
+def _append_engine_d_gate_issue(
+    reason: str,
+    *,
+    fail_reasons: list[str],
+    soft_warnings: list[str],
+    advisory_mode: bool,
+    advisory_mechanical_issues: list[str] | None = None,
+) -> None:
+    """Route mechanical gate issues to soft warnings when AI review adjudicates."""
+    if advisory_mode:
+        soft_warnings.append(reason)
+        if advisory_mechanical_issues is not None:
+            advisory_mechanical_issues.append(reason)
+    else:
+        fail_reasons.append(reason)
+
+
 def _build_engine_d_advisory(
     *,
     market_state: str,
@@ -4489,9 +4506,15 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
 
             candidate_fail_reasons: list[str] = []
             candidate_soft_warnings: list[str] = []
+            advisory_mechanical_issues: list[str] = []
+            advisory_gates = bool(cfg.get("ADVISORY_GATES_FOR_AI_REVIEW", True))
             if trade_bucket_vp_fallback_reason:
                 candidate_soft_warnings.append(trade_bucket_vp_fallback_reason)
-            candidate_fail_reasons.extend(_data_fail_reasons)
+            if advisory_gates:
+                candidate_soft_warnings.extend(_data_fail_reasons)
+                advisory_mechanical_issues.extend(_data_fail_reasons)
+            else:
+                candidate_fail_reasons.extend(_data_fail_reasons)
             if use_bias and htf_bias and direction != htf_bias:
                 _ct_reason = f"counter_trend:{direction}_vs_{bias_tf}_{htf_bias}"
                 candidate_soft_warnings.append(_ct_reason)
@@ -4526,7 +4549,13 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
                     f"[SCALP] {display}: {setup['setup_type']} RR {levels['rr']:.2f} < MIN_RR "
                     f"- surfacing as watchlist candidate (mechanical 1R TP invalid)"
                 )
-                candidate_fail_reasons.append("rr_below_min")
+                _append_engine_d_gate_issue(
+                    "rr_below_min",
+                    fail_reasons=candidate_fail_reasons,
+                    soft_warnings=candidate_soft_warnings,
+                    advisory_mode=advisory_gates,
+                    advisory_mechanical_issues=advisory_mechanical_issues,
+                )
             if levels.get("structure_target_close"):
                 candidate_soft_warnings.append("structure_target_close")
 
@@ -4571,7 +4600,13 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
                         cost_as_R,
                         max_cost_R,
                     )
-                    candidate_fail_reasons.append(_fee_reason)
+                    _append_engine_d_gate_issue(
+                        _fee_reason,
+                        fail_reasons=candidate_fail_reasons,
+                        soft_warnings=candidate_soft_warnings,
+                        advisory_mode=advisory_gates,
+                        advisory_mechanical_issues=advisory_mechanical_issues,
+                    )
                     fee_guard_metrics["engine_d_reject_reason"] = _fee_reason
                 _funnel["diagnostic_notes"].update(fee_guard_metrics)
 
@@ -4597,8 +4632,12 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
                 current_gate_result="CANDIDATE",
             )
             if cfg.get("STRICT_FABIO_GATE_ENABLED", True) and not strict_fabio_shadow.get("strict_fabio_pass"):
-                candidate_fail_reasons.append(
-                    f"strict_fabio:{strict_fabio_shadow.get('strict_fabio_reason', 'failed')}"
+                _append_engine_d_gate_issue(
+                    f"strict_fabio:{strict_fabio_shadow.get('strict_fabio_reason', 'failed')}",
+                    fail_reasons=candidate_fail_reasons,
+                    soft_warnings=candidate_soft_warnings,
+                    advisory_mode=advisory_gates,
+                    advisory_mechanical_issues=advisory_mechanical_issues,
                 )
             proxy_cfg = CONFIG.get("SCALP_ENGINE", {})
             if asset_type == "stock":
@@ -4648,10 +4687,22 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
                 executable = False
                 candidate_status_reason = "grade_D_context_only"
                 candidate_fail_reasons.append("grade_D_context_only")
-            elif candidate_fail_reasons or grade_rank < execution_rank:
+            elif (
+                candidate_fail_reasons
+                or grade_rank < execution_rank
+                or (advisory_gates and advisory_mechanical_issues)
+            ):
                 gate_result = "WATCHLIST"
                 executable = False
-                candidate_status_reason = ",".join(candidate_fail_reasons) if candidate_fail_reasons else f"grade_{grade}_watchlist"
+                candidate_status_reason = (
+                    ",".join(candidate_fail_reasons)
+                    if candidate_fail_reasons
+                    else (
+                        ",".join(advisory_mechanical_issues)
+                        if advisory_mechanical_issues
+                        else f"grade_{grade}_watchlist"
+                    )
+                )
                 if grade_rank < execution_rank:
                     candidate_soft_warnings.append(f"grade_{grade}_below_execution_min_{execution_min_grade}")
             # TVQ execution gate (additive, default no-op via cfg flag).

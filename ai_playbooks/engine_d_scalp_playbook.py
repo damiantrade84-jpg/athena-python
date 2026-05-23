@@ -225,6 +225,38 @@ def get_engine_d_scalp_playbook() -> dict:
             "Flag if SL is too tight or too wide for current structure.",
             "Populate invalidationAssessment with stopPlacementValid and stopProblem.",
         ],
+        "sessionRegimeSwitch": [
+            "Identify current session (Asia / London / NY) and whether a session open or regime switch is in progress.",
+            "Treat the first 15-30 minutes after a major session open as transition — downgrade entry timing unless structure is clean.",
+            "When regime switches from balancing to trending (or vice versa), require fresh acceptance before ENTRY_NOW.",
+            "Do not assume the prior session's POC or value area still governs after a regime switch without displacement confirmation.",
+        ],
+        "effortVsResult": [
+            "Compare volume/delta effort to price result: high effort with little progress suggests absorption or trap risk.",
+            "Effort without result at a key level favors WAIT or WATCH_ONLY, not ENTRY_NOW.",
+            "Effort aligned with displacement through a level supports continuation entries after pullback.",
+        ],
+        "trappedTraderLogic": [
+            "Look for stop-runs, failed breakouts, and quick reclaim that trap late entrants on the wrong side.",
+            "When trapped-trader behavior is visible (sweep + reclaim + opposing delta), favor reversal models or WAIT.",
+            "Do not ENTRY_NOW into obvious trap zones without acceptance confirmation.",
+        ],
+        "pocMagnet": [
+            "Treat POC as a magnet in balancing regimes — expect mean reversion toward POC unless displacement expands value.",
+            "Avoid chasing away from POC when price is extended; prefer pullback entries toward POC/VAL/VAH.",
+            "When price sits at POC, require aggression confirmation before directional ENTRY_NOW.",
+        ],
+        "casinoTimeDegradation": [
+            "Degrade entry quality during low-liquidity windows (late Asia, pre-London, last hour before NY close) unless structure is exceptional.",
+            "Reduce tradeabilityScore when session time favors random chop ('casino time') without clear location edge.",
+            "Prefer WATCH_ONLY or WAIT when time-of-day and market state both suggest degraded follow-through.",
+        ],
+        "structuralStopGeometry": [
+            "Stop must sit beyond the structural invalidation (swing, LVN edge, sweep wick), not inside noise.",
+            "Flag micro-stops inside the current candle range or inside fee-guard minimum distance.",
+            "Compare stop distance to recent ATR: too tight = noise stop; too wide = poor scalp RR.",
+            "For longs, SL below demand/sweep low; for shorts, SL above supply/sweep high — never arbitrary mid-range.",
+        ],
         "decisions": [
             "ENTRY_NOW",
             "WAIT_FOR_PULLBACK",

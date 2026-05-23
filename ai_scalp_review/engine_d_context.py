@@ -132,6 +132,8 @@ def build_engine_d_prompt_context(engine_d_ctx: dict[str, Any]) -> dict[str, Any
             "strictTimestampAlignmentPass": source.get("strictTimestampAlignmentPass"),
             "unavailableReasons": source.get("unavailableReasons") or [],
         },
+        "chartSnapshot": engine_d_ctx.get("chart_snapshot"),
+        "renderedLayers": engine_d_ctx.get("rendered_layers"),
     }
 
 
@@ -334,6 +336,9 @@ def assemble_engine_d_context(
         "scan_timestamp": scan_ts,
         "latest_candle_ts": latest_candle_ts,
         "chart_captured_at": (screenshot_meta or {}).get("captured_at"),
+        "chart_snapshot": (screenshot_meta or {}).get("chart_snapshot"),
+        "rendered_layers": (screenshot_meta or {}).get("renderedLayers")
+        or (screenshot_meta or {}).get("rendered_layers"),
         "signal": picked,
         "scalpSetup": picked.get("scalpSetup") or {},
         "marketLocation": picked.get("marketLocation") or {},

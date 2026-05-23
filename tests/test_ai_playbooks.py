@@ -328,3 +328,17 @@ def test_normalize_trade_skill_preserves_no_trade_with_hard_reason() -> None:
     assert out["decision"] == "NO_TRADE"
     assert out["entryAllowedNow"] is False
     assert "no_trade_without_hard_reason_downgraded" not in warnings
+
+
+def test_engine_d_playbook_adjudication_sections() -> None:
+    pb = get_engine_d_scalp_playbook()
+    for key in (
+        "sessionRegimeSwitch",
+        "effortVsResult",
+        "trappedTraderLogic",
+        "pocMagnet",
+        "casinoTimeDegradation",
+        "structuralStopGeometry",
+    ):
+        assert key in pb
+        assert len(pb[key]) >= 2

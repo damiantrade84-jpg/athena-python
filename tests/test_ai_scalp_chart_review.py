@@ -653,3 +653,118 @@ def test_ai_prompt_contains_fabio_carmine_chart_layer_rules():
     assert "ENTRY_NOW" in prompt
     assert "middle-of-value" in prompt
 
+
+def test_assemble_engine_d_context_watchlist_candidate():
+    ctx = assemble_engine_d_context(
+        "BTCUSDT",
+        "M1",
+        screenshot_meta={"captured_at": "2026-05-21T16:31:02+00:00", "chart_timeframe": "M1"},
+        resolve_pair_fn=lambda s: {"display": "BTCUSDT"},
+        run_scalp_scan_fn=lambda pairs: {
+            "signals": [
+                _mock_scan_signal(
+                    gate_result="WATCHLIST",
+                    executable=False,
+                    strict_fabio_pass=False,
+                    fail_reasons=[],
+                    soft_warnings=["rr_below_min", "strict_fabio:proxy_aggression"],
+                )
+            ]
+        },
+        scalp_ui_signal_fn=lambda s: s,
+    )
+    assert ctx is not None
+    assert ctx["gate_result"] == "WATCHLIST"
+    assert ctx["executable"] is False
+
+
+def test_assemble_engine_d_context_skipped_fallback():
+    skipped_row = _mock_scan_signal(
+        gate_result="WATCHLIST",
+        executable=False,
+        soft_warnings=["fee_guard_high_cost"],
+    )
+    ctx = assemble_engine_d_context(
+        "BTCUSDT",
+        "M1",
+        resolve_pair_fn=lambda s: {"display": "BTCUSDT"},
+        run_scalp_scan_fn=lambda pairs: {"signals": [], "skipped": [skipped_row]},
+        scalp_ui_signal_fn=lambda s: s,
+    )
+    assert ctx is not None
+    assert ctx["direction"] == "LONG"
+
+
+def test_mismatch_warnings_chart_snapshot_direction():
+    from ai_scalp_review.engine_d_context import _build_mismatch_warnings
+
+    warnings = _build_mismatch_warnings(
+        {"symbol": "BTCUSDT", "direction": "LONG", "execution_tf": "M1"},
+        {
+            "chart_timeframe": "M1",
+            "chart_snapshot": {
+                "symbol": "BTCUSDT",
+                "selectedSignal": {"direction": "SHORT"},
+            },
+            "rendered_layers": {"candles": True},
+        },
+    )
+    assert "client_server_direction_mismatch" in warnings
+
+
+@patch("athena_app.api.routes_ai_scalp_chart_review.run_scalp_chart_review")
+def test_route_accepts_watchlist_candidate(mock_run):
+    mock_run.return_value = _mock_provider_payload()
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
+        tmp_db = tmp.name
+    app = Flask(__name__)
+    cfg = dict(CONFIG)
+    scalp_cfg = dict(cfg["AI_SCALP_CHART_REVIEW"])
+    scalp_cfg["ENABLED"] = True
+    cfg["AI_SCALP_CHART_REVIEW"] = scalp_cfg
+
+    def resolve_pair(symbol: str):
+        return {"display": "BTCUSDT", "symbol": "BTCUSDT"}
+
+    def run_scalp_scan(pairs):
+        return {
+            "signals": [
+                _mock_scan_signal(
+                    gate_result="WATCHLIST",
+                    executable=False,
+                    strict_fabio_pass=False,
+                    soft_warnings=["rr_below_min"],
+                )
+            ]
+        }
+
+    register_ai_scalp_chart_review_routes(
+        app,
+        SimpleNamespace(
+            CONFIG=cfg,
+            AUDIT_DB=tmp_db,
+            json_safe=lambda x: x,
+            resolve_pair_fn=resolve_pair,
+            run_scalp_scan_fn=run_scalp_scan,
+            scalp_ui_signal_fn=lambda s: s,
+        ),
+    )
+    body = _base_request()
+    resp = app.test_client().post("/api/ai/scalp-chart-review", json=body)
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["engine_d_context"]["gate_result"] == "WATCHLIST"
+
+
+def test_prompt_contains_scalp_adjudication_topics():
+    prompt = build_scalp_chart_review_prompt(_engine_d_ctx())
+    lowered = prompt.lower()
+    for phrase in (
+        "session context",
+        "effort vs result",
+        "trapped traders",
+        "poc magnet",
+        "structural stop geometry",
+    ):
+        assert phrase in lowered
+

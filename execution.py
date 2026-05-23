@@ -368,20 +368,22 @@ def _apply_level_override(sig: dict, override: dict) -> str | None:
     return None
 
 
-def _engine_d_execution_block_reason(sig: dict) -> str | None:
+def _engine_d_execution_block_reason(
+    sig: dict,
+    *,
+    review_id: str | None = None,
+    audit_db: str | None = None,
+    cfg: dict | None = None,
+) -> str | None:
     """Return the fail-closed reason for non-executable Engine D candidates."""
-    gate_result = str(sig.get("gate_result", "PASS") or "PASS").upper()
-    if sig.get("executable") is False:
-        return str(sig.get("candidate_status") or "ENGINE_D_NOT_EXECUTABLE")
-    if gate_result != "PASS":
-        return str(sig.get("candidate_status") or gate_result or "ENGINE_D_GATE_FAILED")
-    grade = str(sig.get("ai_grade") or sig.get("grade") or "").upper()
-    if grade == "D":
-        return "ENGINE_D_GRADE_D_NOT_EXECUTABLE"
-    fail_reasons = sig.get("fail_reasons")
-    if isinstance(fail_reasons, list) and fail_reasons:
-        return str(sig.get("candidate_status") or ",".join(map(str, fail_reasons)))
-    return None
+    from ai_scalp_review.execute_gate import engine_d_execution_block_reason
+
+    return engine_d_execution_block_reason(
+        sig,
+        review_id=review_id,
+        audit_db=audit_db,
+        cfg=cfg or {},
+    )
 
 
 def _is_structural_engine_b_execution(sig: dict, engine_b: dict | None = None) -> bool:
@@ -2209,7 +2211,13 @@ def api_scalp_execute():
     if not sig:
         return jsonify({"error": "Missing signal data"}), 400
 
-    _block_reason = _engine_d_execution_block_reason(sig)
+    review_id = str(d.get("review_id") or d.get("ai_review_id") or "").strip() or None
+    _block_reason = _engine_d_execution_block_reason(
+        sig,
+        review_id=review_id,
+        audit_db=getattr(_r, "AUDIT_DB", None),
+        cfg=_r.CONFIG,
+    )
     if _block_reason:
         return jsonify({"error": _block_reason, "success": False}), 400
         

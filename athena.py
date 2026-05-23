@@ -9903,15 +9903,24 @@ def api_scalp_execute():
         else:
             signal = raw_signals[0]
 
-        if signal.get("gate_result", "PASS") != "PASS" or signal.get("executable") is False:
+        from ai_scalp_review.execute_gate import resolve_engine_d_execute_gate
+
+        review_id = str(payload.get("review_id") or payload.get("ai_review_id") or "").strip() or None
+        exec_block, _ai_review_row = resolve_engine_d_execute_gate(
+            signal,
+            review_id=review_id,
+            audit_db=_AUDIT_DB,
+            cfg=CONFIG,
+        )
+        if exec_block:
             return jsonify(
                 {
                     "success": False,
-                    "error": signal.get("candidate_status") or "ENGINE_D_NOT_EXECUTABLE",
+                    "error": exec_block,
                     "skipped": [
                         {
                             "pair": signal.get("pair") or symbol,
-                            "reason": signal.get("candidate_status") or "ENGINE_D_NOT_EXECUTABLE",
+                            "reason": exec_block,
                             "gate_result": signal.get("gate_result"),
                             "ai_grade": signal.get("ai_grade"),
                             "ai_score": signal.get("ai_score"),

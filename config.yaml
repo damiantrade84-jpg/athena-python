@@ -2926,6 +2926,10 @@ SCALP_ENGINE:
   STRICT_FABIO_GATE_ENABLED: true
   STRICT_TREND_LOCATION_LVN_ONLY: true
 
+  # When true, fee/RR/Fabio/source mechanical issues surface as advisory soft_warnings
+  # (WATCHLIST label retained) so AI chart review can adjudicate A/B candidates.
+  ADVISORY_GATES_FOR_AI_REVIEW: true
+
   # Legacy fallback only when STRICT_FABIO_GATE_ENABLED=false: neutral CVD can count as preliminary confirmation.
   ALLOW_NEUTRAL_CVD_AT_VA_EXTREME: true
 

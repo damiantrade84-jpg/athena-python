@@ -30,9 +30,13 @@ def test_scalp_workbench_ai_capture_posts_server_trusted_review():
     assert "aiReviewProvider" in panel
     assert "setAiReviewProvider" in panel
     assert "provider: aiReviewProvider" in panel
+    assert "chart_snapshot:" in panel
+    assert "rendered_layers" in panel
     assert "downscaleToCap" in panel
     assert "/api/ai/scalp-chart-review" in helper
     assert "postScalpChartReview" in helper
+    assert "chart_snapshot" in helper
+    assert "renderedLayers" in helper
     assert "ScalpAIReviewCard" in panel
     assert "scalpAiReviewResponse" in panel
     assert "postChartReview" not in panel
@@ -123,10 +127,11 @@ def test_scalp_workbench_runner_status_badge():
 
 def test_scalp_workbench_execute_disabled_unless_executable():
     source = _read(SCALP_WORKBENCH)
+    helper = _read(ROOT / "static/react-app/app/src/lib/manualExecuteHelpers.ts")
 
     assert "executeBlockReason" in source
-    assert "strict_fabio_pass" in source or "Fabio gate failed" in source
-    assert "Gate failed" in source or "gate_result" in source
+    assert "AI review required" in helper
+    assert "scalpMechanicalGateBlock" in helper or "Grade D not executable" in helper
 
 
 def test_scalp_workbench_consumes_scalp_workbench_intent():

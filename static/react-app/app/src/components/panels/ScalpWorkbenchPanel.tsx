@@ -1025,6 +1025,7 @@ export default function ScalpWorkbenchPanel() {
       symbol: chartSymbol,
       signal: activeSignal,
       sizingOverride,
+      reviewId: scalpAiReviewResponse?.review_id ?? null,
     });
     const result = await postExecute('/api/scalp-execute', payload);
     if (!result) {
