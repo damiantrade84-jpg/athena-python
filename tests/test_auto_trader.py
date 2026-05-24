@@ -41,6 +41,10 @@ def _base_cfg():
         "AUTO_TRADE_MIN_SCORE": {"crypto": 1.5, "forex": 1.6},
         "AUTO_TRADE_MIN_CONVICTION": {"default": 0.55},
         "AUTO_TRADE_MAX_DAILY": 3,
+        "AUTO_TRADE_SCHEDULER_MODE": "interval",
+        "EXECUTION_ENABLED": True,
+        "MT5_EXECUTION_ENABLED": True,
+        "BYBIT_EXECUTION_ENABLED": True,
         "AUTO_TRADE_SESSIONS": {"crypto": ["always"]},
         "AUTO_TRADE_BLOCKED_TREND_STATES": {"default": [], "crypto": []},
         "AUTO_TRADE_BLOCKED_REGIMES": {"default": [], "crypto": []},
@@ -481,6 +485,7 @@ class TestCanExecuteSentimentGate:
         trader = AutoTrader()
         cfg = _base_cfg()
         cfg["SENTIMENT_GATE_ENABLED"] = True
+        cfg["AUTO_TRADE_SENTIMENT_GATE_MODE"] = "always_when_enabled"
         cfg["EVENT_RISK_ENABLED"] = False
         cfg["SIGNAL_DEBATE_ENABLED"] = False
         monkeypatch.setattr(
@@ -496,6 +501,7 @@ class TestCanExecuteSentimentGate:
         trader = AutoTrader()
         cfg = _base_cfg()
         cfg["SENTIMENT_GATE_ENABLED"] = True
+        cfg["AUTO_TRADE_SENTIMENT_GATE_MODE"] = "always_when_enabled"
         cfg["EVENT_RISK_ENABLED"] = False
         cfg["SIGNAL_DEBATE_ENABLED"] = False
         monkeypatch.setattr(
@@ -511,6 +517,7 @@ class TestCanExecuteSentimentGate:
         trader = AutoTrader()
         cfg = _base_cfg()
         cfg["SENTIMENT_GATE_ENABLED"] = True
+        cfg["AUTO_TRADE_SENTIMENT_GATE_MODE"] = "always_when_enabled"
         cfg["EVENT_RISK_ENABLED"] = False
         cfg["SIGNAL_DEBATE_ENABLED"] = False
         monkeypatch.setattr(
@@ -525,6 +532,7 @@ class TestCanExecuteSentimentGate:
         trader = AutoTrader()
         cfg = _base_cfg()
         cfg["SENTIMENT_GATE_ENABLED"] = True
+        cfg["AUTO_TRADE_SENTIMENT_GATE_MODE"] = "always_when_enabled"
         cfg["EVENT_RISK_ENABLED"] = False
         cfg["SIGNAL_DEBATE_ENABLED"] = False
         # Remove the module so the local import inside _can_execute triggers ImportError
@@ -1305,7 +1313,12 @@ class TestGetStatus:
         assert "minConviction" in status
         assert "liveGateMetric" in status
         assert "liveGateDisplay" in status
-        assert status["liveGateMetric"] == "combinedConviction"
+        assert status["liveGateMetric"] == "executionConvictionEffective"
+        assert status["EXECUTION_ENABLED"] is True
+        assert status["MT5_EXECUTION_ENABLED"] is True
+        assert status["BYBIT_EXECUTION_ENABLED"] is True
+        assert status["aiDebate"]["scoreMutationEnabled"] is False
+        assert status["engineDBackgroundAutopilot"]["status"] == "disabled_by_design"
         assert status["minScoreDeprecated"] is True
         assert "DEPRECATED" in status["minScoreExecutionNote"]
 

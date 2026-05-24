@@ -1483,7 +1483,7 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict[s
                 }
                 preloaded_market_state = {}
                 preloaded_candles_for_a = dict(raw_candles)
-                if pair.get("source") == "mt5" and pair.get("type") == "forex":
+                if pair.get("source") == "mt5":
                     try:
                         from athena_app.services.market_state import (
                             candle_timestamp_epoch,

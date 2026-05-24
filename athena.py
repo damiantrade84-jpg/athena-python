@@ -10232,7 +10232,8 @@ def api_auto_trade_log():
             con.row_factory = sqlite3.Row
 
             rows = con.execute(
-                """SELECT ts, pair, direction, score, asset_class, grade, error_tag, ticket, volume, entry_price
+                """SELECT ts, pair, direction, score, asset_class, grade, error_tag, ticket, volume, entry_price,
+                          factors_json
 
                    FROM audit_log
 
@@ -10241,7 +10242,44 @@ def api_auto_trade_log():
                    ORDER BY id DESC LIMIT 30"""
             ).fetchall()
 
-        return jsonify([dict(r) for r in rows])
+        out = []
+        for row in rows:
+            item = dict(row)
+            factors = {}
+            raw_factors = item.pop("factors_json", None)
+            if raw_factors:
+                try:
+                    parsed = json.loads(raw_factors)
+                    if isinstance(parsed, dict):
+                        factors = parsed
+                except Exception:
+                    factors = {}
+            trace = factors.get("autoDecisionTrace") if isinstance(factors.get("autoDecisionTrace"), dict) else {}
+            item.update(
+                {
+                    "failedStage": trace.get("failedStage"),
+                    "blockReason": trace.get("blockReason") or item.get("error_tag"),
+                    "executionConvictionBase": factors.get("executionConvictionBase"),
+                    "executionConvictionEffective": factors.get("executionConvictionEffective"),
+                    "scoreAttribution": factors.get("scoreAttribution"),
+                    "conductorRouting": factors.get("conductorRouting"),
+                    "riskReason": factors.get("riskReason")
+                    or (
+                        factors.get("riskApproval", {}).get("reason")
+                        if isinstance(factors.get("riskApproval"), dict)
+                        else None
+                    ),
+                    "guardianReason": factors.get("guardianReason")
+                    or (
+                        factors.get("guardianDecision", {}).get("reason")
+                        if isinstance(factors.get("guardianDecision"), dict)
+                        else None
+                    ),
+                }
+            )
+            out.append(item)
+
+        return jsonify(out)
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -12163,6 +12201,17 @@ def analyze_pair(
     preloaded_market_state = preloaded_market_state or {}
     preloaded_fetch_meta = preloaded_fetch_meta or {}
     from athena_app.services.candle_service import engine_a_scoring_candles_from_state
+    _confirmed_split_failures: set[str] = set()
+
+    def _mark_confirmed_split_failed(tf: str, detail: str) -> None:
+        tf_u = str(tf or "").upper()
+        _confirmed_split_failures.add(tf_u)
+        meta = preloaded_fetch_meta.get(tf_u)
+        if not isinstance(meta, dict):
+            meta = {}
+        meta["confirmedSplitFailed"] = True
+        meta["confirmedSplitError"] = detail
+        preloaded_fetch_meta[tf_u] = meta
 
     def _engine_a_confirmed_candles(tf: str, raw: list | None, state: dict | None = None) -> list:
         if isinstance(state, dict):
@@ -12171,22 +12220,27 @@ def analyze_pair(
         if not raw_candles:
             return []
         try:
-            from athena_app.services.market_state import split_market_state
+            from athena_app.services.market_state import (
+                market_state_offset_hours,
+                split_market_state,
+            )
 
             _state = split_market_state(
                 raw_candles,
                 tf,
                 pair.get("display") or pair.get("symbol") or "",
+                offset_hours=market_state_offset_hours(pair, tf),
             )
             return engine_a_scoring_candles_from_state(pair, _state, fallback=raw_candles)
         except Exception as _split_err:
+            _mark_confirmed_split_failed(tf, str(_split_err))
             log.debug(
-                "[ANALYZE] %s %s confirmed-candle split skipped: %s",
+                "[ANALYZE] %s %s confirmed-candle split failed: %s",
                 pair.get("display", "?"),
                 tf,
                 _split_err,
             )
-            return raw_candles
+            return []
 
     # Determine if the primary timeframe (H1) is currently forming.
     _h1_state = preloaded_market_state.get("H1")
@@ -12196,16 +12250,22 @@ def analyze_pair(
         is_forming = bool(_h1_state.get("is_live"))
     elif h1:
         try:
-            from athena_app.services.market_state import split_market_state
+            from athena_app.services.market_state import (
+                market_state_offset_hours,
+                split_market_state,
+            )
 
             _h1_state = split_market_state(
                 h1,
                 "H1",
                 pair.get("display") or pair.get("symbol") or "",
+                offset_hours=market_state_offset_hours(pair, "H1"),
             )
             h1 = engine_a_scoring_candles_from_state(pair, _h1_state, fallback=h1)
             is_forming = bool(_h1_state.get("is_live"))
-        except Exception:
+        except Exception as _h1_split_err:
+            _mark_confirmed_split_failed("H1", str(_h1_split_err))
+            h1 = []
             is_forming = False
     else:
         try:
@@ -13058,47 +13118,19 @@ def analyze_pair(
     try:
         from news_sentiment_feed import apply_news_sentiment_to_scan_result
 
-        MAX_NEWS_IMPACT = 0.30
-
-        # Get base score before news
-        base_score = float(res.get("score", 0.0) or 0.0)
-        # Apply raw news sentiment first to compute adjustment
-        _pre_news_score = base_score
         apply_news_sentiment_to_scan_result(
             res,
             pair,
             config=CONFIG,
             eodhd_ticker_for_pair=_eodhd_ticker_for_pair,
             current_price=float(price),
+            threshold=_threshold,
+            max_score=max_score,
         )
-        _post_news_score = float(res.get("score", 0.0) or 0.0)
-        news_adjustment = _post_news_score - _pre_news_score
-        raw_news_adjustment = news_adjustment
-
-        # GUARD 1: Don't let news rescue a weak setup to trade-tier
-        if base_score < _threshold * 0.8:
-            news_adjustment = min(0.0, news_adjustment)  # Only negative adjustments apply
-
-        # GUARD 2: Cap total impact
-        news_adjustment = max(-MAX_NEWS_IMPACT, min(MAX_NEWS_IMPACT, news_adjustment))
-
-        # Apply guarded adjustment
-        final_score = max(0.0, min(3.0, base_score + news_adjustment))
-        res["score"] = round(final_score, 4)
-        if res.get("final_score") is not None:
-            res["final_score"] = res["score"]
-
-        # LOG for audit trail
-        res["news_adjustment"] = round(news_adjustment, 4)
-        res["pre_news_score"] = round(_pre_news_score, 4)
-        res["newsSentimentDelta"] = round(news_adjustment, 6)
-        if round(raw_news_adjustment, 6) != round(news_adjustment, 6):
-            res["newsSentimentRawDelta"] = round(raw_news_adjustment, 6)
-            res.setdefault("warnings", []).append(
-                f"News AI guard: raw score change {raw_news_adjustment:+.4f} guarded to {news_adjustment:+.4f}"
-            )
     except Exception as _ns_err:
         log.debug("[NewsAI] scan blend skipped: %s", _ns_err)
+
+    warn_list = list(dict.fromkeys(warn_list + list(res.get("warnings", []))))
 
     score_norm = (
         min(1.0, float(res["score"]) / float(max_score))
@@ -13130,6 +13162,14 @@ def analyze_pair(
         )
     except Exception as _ssi_err:
         log.debug(f"[SSI] Engine A sample skipped: {_ssi_err}")
+
+    _execution_tf = "H4"
+    _execution_candles = {"H4": h4, "D1": d1, "H1": h1}.get(_execution_tf, h4)
+    _last_confirmed_candle_ts = None
+    if _execution_candles:
+        _last_confirmed_candle_ts = (_execution_candles[-1] or {}).get("time") or (
+            _execution_candles[-1] or {}
+        ).get("datetime")
 
     if (
         CONFIG.get("ENGINE_A_DIVERGENCE_MONITOR_ENABLED", True)
@@ -13183,6 +13223,10 @@ def analyze_pair(
         "maxScore": max_score,
         "threshold": _threshold,
         "liveThreshold": _threshold,
+        "executionTimeframe": _execution_tf,
+        "lastConfirmedCandleTs": _last_confirmed_candle_ts,
+        "confirmedSplitFailed": bool(_confirmed_split_failures),
+        "confirmedSplitFailedTimeframes": sorted(_confirmed_split_failures),
         "rawScorePct": round((float(res["score"]) / float(max_score) * 100) if max_score else 0, 2),
         "thresholdProgressPct": _confluence_pct,
         "engine_b": structure_data if structure_data else {},
@@ -13252,6 +13296,8 @@ def analyze_pair(
         "newsSentimentRawDelta": res.get("newsSentimentRawDelta"),
         "preNewsScore": res.get("pre_news_score"),
         "newsSentimentSummary": res.get("newsSentimentSummary"),
+        "news_adjustment": res.get("news_adjustment"),
+        "majorEventRisk": res.get("majorEventRisk"),
         "usdRelativeStrength": _usd_relative_strength,
         "intermarketConfirmation": res.get("intermarketConfirmation", {}),
         "pairProfile": pair_profile,
@@ -13379,13 +13425,8 @@ def analyze_pair(
                     time_now=time_now,
                     offset_hours=market_state_offset_hours(pair, tf_u),
                 )
-            # Build engine input paths for consistency check
-            if pair.get("source") == "mt5" and pair.get("type") == "forex":
-                engine_a_input = list(state.get("confirmed") or [])
-            else:
-                engine_a_input = list(state.get("confirmed") or [])
-                if state.get("forming"):
-                    engine_a_input.append(state["forming"])
+            # Engine A scoring input is confirmed-only for every asset class.
+            engine_a_input = list(state.get("confirmed") or [])
             engine_b_input = list(state.get("confirmed") or [])
             scanner_input = list(engine_a_input)
 

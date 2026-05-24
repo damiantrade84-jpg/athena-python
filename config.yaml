@@ -1101,7 +1101,7 @@ AUTO_TRADE_MIN_SCORE:
 
 # AUTO_TRADE_MIN_CONVICTION is the real live gate used inside auto_trader.py.
 
-# Metric: combinedConviction on a 0-1 scale. When Engine A + B align, the live
+# Metric: executionConvictionEffective on a 0-1 scale. When Engine A + B align, the live
 
 # gate gets a 15% discount (effective min = configured min * 0.85).
 
@@ -1119,11 +1119,19 @@ AUTO_TRADE_A_ONLY_WEIGHT:
 # Live auto-execution still enforces AUTO_TRADE_MIN_CONVICTION.
 ENGINE_A_SCAN_A_ONLY_AUTO_GATE_ENABLED: false
 
-AUTO_TRADE_MAX_DAILY: 10           # Demo mode: max auto-executions per day
+AUTO_TRADE_MAX_DAILY: 2            # Live-safe default: max auto-executions per day
 
 AUTO_TRADE_MAX_PER_SCAN: 1         # Max per scan cycle; raise to 2 only with >10 active pairs
 
 AUTO_TRADE_SCAN_INTERVAL_MIN: 30   # Scan every 30 minutes
+
+AUTO_TRADE_SCHEDULER_MODE: confirmed_close
+
+AUTO_TRADE_EXECUTION_GRACE_MIN: 5
+
+AUTO_TRADE_ALLOW_INTRABAR_REVIEW: true
+
+AUTO_TRADE_ALLOW_INTRABAR_EXECUTION: false
 
 AUTO_TRADE_BLOCKED_TREND_STATES:
 
@@ -1155,11 +1163,11 @@ AUTO_TRADE_BLOCKED_REGIMES:
 
 # Demo/testing: 1.0 = up to 100% of balance in simultaneous stop-risk (cap effectively off).
 # For live/paper discipline use ~0.06–0.12 (validated max 1.0 in config.py).
-MAX_PORTFOLIO_HEAT: 1.0
+MAX_PORTFOLIO_HEAT: 0.06
 
-MAX_OPEN_POSITIONS: 20        # Testing only - revert before live
+MAX_OPEN_POSITIONS: 3
 
-MAX_CORRELATED_POSITIONS: 3   # Allow up to 3 correlated positions (e.g. 3 USD pairs)
+MAX_CORRELATED_POSITIONS: 1
 
 SIGNAL_MAX_AGE_SEC: 300       # 5 min freshness window
 
@@ -1323,6 +1331,8 @@ ENGINE_B_ALLOW_SYNTHETIC_FALLBACK_RR_TP: true
 
 SENTIMENT_GATE_ENABLED: true       # Check news sentiment before auto-trades
 
+AUTO_TRADE_SENTIMENT_GATE_MODE: severe_opposition_only
+
 SENTIMENT_BLOCK_THRESHOLD: 0.4     # Block if sentiment opposes direction by >0.4
 
 SENTIMENT_ALIGN_THRESHOLD: 0.3     # Mark as aligned when sentiment supports direction beyond this level
@@ -1338,6 +1348,20 @@ EVENT_RISK_ENABLED: false          # EODHD economic-events calls disabled; do no
 EVENT_RISK_HOURS: 4                # Hours ahead to check for events
 
 EVENT_RISK_API_FAIL_CLOSED: false  # If true, blocks auto-execution if the event calendar API fails
+
+AUTO_TRADE_INTERMARKET_SEVERE_BLOCK: false
+
+AUTO_TRADE_CHART_AI_GATE_ENABLED: false
+
+AUTO_TRADE_CHART_AI_GATE_MODE: advisory
+
+AUTO_TRADE_CHART_AI_MAX_AGE_SEC: 180
+
+AUTO_SCALP_ENABLED: false
+
+AUTO_SCALP_REQUIRE_FRESH_AI_ENTRY_NOW: true
+
+AUTO_SCALP_MAX_DAILY: 1
 
 
 
@@ -1435,6 +1459,22 @@ NEWS_SENTIMENT_CACHE_TTL_SEC: 900                # seconds; same pair reuses vot
 NEWS_SENTIMENT_SCORE_IMPACT: 0.06               # delta = impact * maxScore * vote (vote ~ -1..1)
 
 NEWS_SENTIMENT_ATTACH_SUMMARY: true             # attach short summary on each signal JSON
+
+NEWS_SENTIMENT_MACRO_CONTEXT_ENABLED: false     # When true, add configured macro news sources/tags per pair.
+
+NEWS_SENTIMENT_MAX_ARTICLE_AGE_HOURS: 72
+
+NEWS_SENTIMENT_MAX_ARTICLES_TOTAL: 12
+
+NEWS_SENTIMENT_MAX_ARTICLES_PER_SOURCE: 6
+
+NEWS_SENTIMENT_USE_EODHD_NORMALIZED: false      # Combine EODHD normalized sentiment after LLM output; never inject into prompt.
+
+NEWS_SENTIMENT_MAJOR_EVENT_MODE: advisory       # advisory | negative_delta_only | block_auto_execution
+
+NEWS_SENTIMENT_MAX_DELTA: 0.30
+
+NEWS_SENTIMENT_DRIVER_MAP: {}
 
 NEWS_PAIR_CAP: 40   # Max pairs to fetch per-pair EODHD news and word weights per refresh
 
@@ -3364,7 +3404,8 @@ CONDUCTOR:
   VISION_ON_STOP_RUN: true
   SENTIMENT_ON_NEWS: true          # News risk detected -> sentiment
   # Engine weighting
-  DYNAMIC_WEIGHTING_ENABLED: true  # Adjust A/B weights from DB performance
+  DYNAMIC_WEIGHTING_ENABLED: false # Conductor routes AI only; meta_learner owns live adaptive trust
+  DIAGNOSTIC_WEIGHTS_ENABLED: false
   DYNAMIC_WEIGHT_BLEND: 0.40      # % empirical vs default (0.4 = 40% empirical, 60% default)
   MIN_SAMPLE_SIZE: 10             # Min trades before using empirical weights
 # Display + paper/demo monitoring ONLY. No execution. No real orders.

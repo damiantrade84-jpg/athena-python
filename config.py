@@ -474,6 +474,14 @@ CONFIG: dict = {
     "NEWS_SENTIMENT_CACHE_TTL_SEC": 900,
     "NEWS_SENTIMENT_SCORE_IMPACT": 0.06,
     "NEWS_SENTIMENT_ATTACH_SUMMARY": True,
+    "NEWS_SENTIMENT_MACRO_CONTEXT_ENABLED": False,
+    "NEWS_SENTIMENT_MAX_ARTICLE_AGE_HOURS": 72,
+    "NEWS_SENTIMENT_MAX_ARTICLES_TOTAL": 12,
+    "NEWS_SENTIMENT_MAX_ARTICLES_PER_SOURCE": 6,
+    "NEWS_SENTIMENT_USE_EODHD_NORMALIZED": False,
+    "NEWS_SENTIMENT_MAJOR_EVENT_MODE": "advisory",
+    "NEWS_SENTIMENT_MAX_DELTA": 0.30,
+    "NEWS_SENTIMENT_DRIVER_MAP": {},
     "NEWS_PAIR_CAP": 40,  # Max pairs for EODHD per-pair news + word-weights in news cache refresh
     "AI_STRUCTURED_OUTPUTS": True,
     "AI_TEMPERATURE": 0.3,
@@ -1072,8 +1080,8 @@ CONFIG: dict = {
     "AUTO_EXECUTE_MIN_SCORE": 8.0,  # Minimum confluence score for auto-execute
     "AUTO_EXECUTE_MIN_GRADE": "B",  # Minimum AI grade for auto-execute
     "MAX_PORTFOLIO_HEAT": 0.06,  # 6% total risk across all positions
-    "MAX_OPEN_POSITIONS": 20,  # Max simultaneous open trades
-    "MAX_CORRELATED_POSITIONS": 2,  # Max positions in same correlation cluster
+    "MAX_OPEN_POSITIONS": 3,  # Max simultaneous open trades
+    "MAX_CORRELATED_POSITIONS": 1,  # Max positions in same correlation cluster
     "SIGNAL_MAX_AGE_SEC": 1800,  # Reject signals older than 30 minutes
     "MAX_RISK_PER_TRADE": 0.03,  # Hard cap: never risk > 3% on single trade
     "MAX_SL_PCT": {
@@ -1109,7 +1117,7 @@ CONFIG: dict = {
         "stock": 1.8,
         "index": 1.8,
     },
-    "AUTO_TRADE_MIN_CONVICTION": {  # Live auto-execute gate on combinedConviction (0-1 scale)
+    "AUTO_TRADE_MIN_CONVICTION": {  # Live auto-execute gate on executionConvictionEffective
         "default": 0.50,
     },
     "AUTO_TRADE_A_ONLY_WEIGHT": {
@@ -1117,10 +1125,14 @@ CONFIG: dict = {
         "crypto": 0.60,
     },
     "ENGINE_A_SCAN_A_ONLY_AUTO_GATE_ENABLED": False,
-    "AUTO_TRADE_MAX_DAILY": 20,  # Max auto-trades per calendar day (UTC)
+    "AUTO_TRADE_MAX_DAILY": 2,  # Max auto-trades per calendar day (UTC)
     "AUTO_TRADE_MAX_PER_SCAN": 1,  # Max executions per single scan run
     "AUTO_TRADE_SIZING_OVERRIDE": 1.0,  # Full live-level sizing on demo
     "AUTO_TRADE_SCAN_INTERVAL_MIN": 30,  # Scan every N minutes (30 = twice per hour)
+    "AUTO_TRADE_SCHEDULER_MODE": "confirmed_close",
+    "AUTO_TRADE_EXECUTION_GRACE_MIN": 5,
+    "AUTO_TRADE_ALLOW_INTRABAR_REVIEW": True,
+    "AUTO_TRADE_ALLOW_INTRABAR_EXECUTION": False,
     "AUTO_TRADE_SESSIONS": {  # Sessions per asset class; "always" = 24/7
         "forex": ["london", "new_york", "london_ny_overlap"],
         "crypto": ["always"],
@@ -1152,12 +1164,20 @@ CONFIG: dict = {
     },
     "SIGNAL_DEBATE_ENABLED": True,
     "SENTIMENT_GATE_ENABLED": True,
+    "AUTO_TRADE_SENTIMENT_GATE_MODE": "severe_opposition_only",
     "SENTIMENT_BLOCK_THRESHOLD": 0.4,
     "SENTIMENT_ALIGN_THRESHOLD": 0.3,
     "SENTIMENT_API_FAIL_CLOSED": False,
     "EVENT_RISK_ENABLED": True,
     "EVENT_RISK_HOURS": 4,
     "EVENT_RISK_API_FAIL_CLOSED": False,
+    "AUTO_TRADE_INTERMARKET_SEVERE_BLOCK": False,
+    "AUTO_TRADE_CHART_AI_GATE_ENABLED": False,
+    "AUTO_TRADE_CHART_AI_GATE_MODE": "advisory",
+    "AUTO_TRADE_CHART_AI_MAX_AGE_SEC": 180,
+    "AUTO_SCALP_ENABLED": False,
+    "AUTO_SCALP_REQUIRE_FRESH_AI_ENTRY_NOW": True,
+    "AUTO_SCALP_MAX_DAILY": 1,
     # ── AI Self-Learning ──────────────────────────────────────────────────────
     "LEARNING_ENABLED": True,  # Extract learning data after each trade closes
     "LEARNING_MIN_TRADES": 5,  # Min trades before context injected into AI
