@@ -21,6 +21,11 @@ log = logging.getLogger("sentinel.event_risk")
 # Cache: { "US": { "events": [...], "ts": time.time() } }
 _cache: dict = {}
 _CACHE_TTL = 3600  # 60 minutes
+_last_fetch_status: dict = {
+    "status": "never_run",
+    "error": None,
+    "ts": None,
+}
 
 # Map currency codes to EODHD country codes
 _CURRENCY_TO_COUNTRY = {
@@ -134,6 +139,51 @@ def _is_high_impact(event: dict) -> bool:
     return any(kw in name for kw in _HIGH_IMPACT_KEYWORDS)
 
 
+def _event_risk_status(
+    *,
+    enabled: bool,
+    countries: list[str],
+    status: str,
+    error: str | None = None,
+    fail_closed: bool = False,
+    effective_action: str = "allow",
+) -> dict:
+    return {
+        "enabled": bool(enabled),
+        "apiKeyPresent": bool(os.environ.get("EODHD_KEY", "")),
+        "eodhdPackageAvailable": status != "library_unavailable",
+        "lastFetchStatus": status,
+        "lastFetchError": error,
+        "countriesMapped": list(countries or []),
+        "failPolicy": "fail_closed" if fail_closed else "fail_open",
+        "effectiveAction": effective_action,
+    }
+
+
+def _provider_unavailable_result(reason: str, countries: list[str], status: str) -> dict:
+    from config import CONFIG
+
+    fail_closed = bool(CONFIG.get("EVENT_RISK_API_FAIL_CLOSED", False))
+    action = "provider_unavailable_fail_closed" if fail_closed else "provider_unavailable_fail_open"
+    _last_fetch_status.update(
+        {"status": status, "error": reason, "ts": datetime.now(timezone.utc).isoformat()}
+    )
+    return {
+        "allowed": not fail_closed,
+        "events": [],
+        "reason": reason,
+        "providerUnavailable": True,
+        "eventRiskStatus": _event_risk_status(
+            enabled=bool(CONFIG.get("EVENT_RISK_ENABLED", False)),
+            countries=countries,
+            status=status,
+            error=reason,
+            fail_closed=fail_closed,
+            effective_action=action,
+        ),
+    }
+
+
 def check_event_risk(pair: str, asset_type: str, lookahead_hours: int = 4) -> dict:
     """Check if high-impact economic events are scheduled soon.
 
@@ -149,12 +199,36 @@ def check_event_risk(pair: str, asset_type: str, lookahead_hours: int = 4) -> di
             "reason": str
         }
     """
+    from config import CONFIG
+
+    enabled = bool(CONFIG.get("EVENT_RISK_ENABLED", False))
     countries = _pair_to_countries(pair, asset_type)
+    fail_closed = bool(CONFIG.get("EVENT_RISK_API_FAIL_CLOSED", False))
+    if not enabled:
+        return {
+            "allowed": True,
+            "events": [],
+            "reason": "EVENT_RISK_ENABLED=false",
+            "eventRiskStatus": _event_risk_status(
+                enabled=False,
+                countries=countries,
+                status="disabled",
+                fail_closed=fail_closed,
+                effective_action="skipped_disabled",
+            ),
+        }
     if not countries:
         return {
             "allowed": True,
             "events": [],
             "reason": f"No economic calendar for {asset_type}",
+            "eventRiskStatus": _event_risk_status(
+                enabled=enabled,
+                countries=[],
+                status="not_applicable",
+                fail_closed=fail_closed,
+                effective_action="allow_not_applicable",
+            ),
         }
 
     try:
@@ -162,11 +236,11 @@ def check_event_risk(pair: str, asset_type: str, lookahead_hours: int = 4) -> di
 
         api_key = os.environ.get("EODHD_KEY", "")
         if not api_key:
-            return {
-                "allowed": True,
-                "events": [],
-                "reason": "No EODHD_KEY — event risk skipped",
-            }
+            return _provider_unavailable_result(
+                "No EODHD_KEY - event risk provider unavailable",
+                countries,
+                "missing_api_key",
+            )
 
         api = APIClient(api_key)
         now = datetime.now(timezone.utc)
@@ -174,6 +248,8 @@ def check_event_risk(pair: str, asset_type: str, lookahead_hours: int = 4) -> di
         date_to = (now + timedelta(days=1)).strftime("%Y-%m-%d")
 
         high_impact_events = []
+        provider_errors: list[str] = []
+        successful_fetches = 0
 
         for country in countries:
             # Check cache
@@ -196,7 +272,10 @@ def check_event_risk(pair: str, asset_type: str, lookahead_hours: int = 4) -> di
                     _cache[cache_key] = {"events": events, "ts": time.time()}
                 except Exception as e:
                     log.warning(f"[EVENT_RISK] API error for {country}: {e}")
+                    provider_errors.append(f"{country}: {e}")
                     continue
+            if cache_key in _cache:
+                successful_fetches += 1
 
             # Filter for high-impact events within lookahead window
             for ev in events:
@@ -237,21 +316,56 @@ def check_event_risk(pair: str, asset_type: str, lookahead_hours: int = 4) -> di
                 f"in {hours_min:.1f}h — {ev_names}"
             )
             log.warning(f"[EVENT_RISK] {pair}: {reason}")
-            return {"allowed": False, "events": high_impact_events, "reason": reason}
+            _last_fetch_status.update(
+                {"status": "blocked", "error": None, "ts": datetime.now(timezone.utc).isoformat()}
+            )
+            return {
+                "allowed": False,
+                "events": high_impact_events,
+                "reason": reason,
+                "eventRiskStatus": _event_risk_status(
+                    enabled=enabled,
+                    countries=countries,
+                    status="blocked",
+                    fail_closed=fail_closed,
+                    effective_action="block_event_risk",
+                ),
+            }
 
+        if provider_errors:
+            err_text = "; ".join(provider_errors)
+            if successful_fetches <= 0:
+                return _provider_unavailable_result(
+                    f"Event risk provider unavailable: {err_text}",
+                    countries,
+                    "api_error",
+                )
+            if fail_closed:
+                return _provider_unavailable_result(
+                    f"Event risk provider partial error: {err_text}",
+                    countries,
+                    "partial_api_error",
+                )
+
+        _last_fetch_status.update(
+            {"status": "ok", "error": None, "ts": datetime.now(timezone.utc).isoformat()}
+        )
         return {
             "allowed": True,
             "events": [],
             "reason": f"No high-impact events for {'/'.join(countries)} within {lookahead_hours}h",
+            "eventRiskStatus": _event_risk_status(
+                enabled=enabled,
+                countries=countries,
+                status="ok",
+                fail_closed=fail_closed,
+                effective_action="allow_clear",
+            ),
         }
 
     except ImportError:
-        from config import CONFIG
-        fail_closed = CONFIG.get("EVENT_RISK_API_FAIL_CLOSED", False)
         log.warning(f"[EVENT_RISK] eodhd library not installed — fail closed: {fail_closed}")
-        return {"allowed": not fail_closed, "events": [], "reason": "eodhd library not available"}
+        return _provider_unavailable_result("eodhd library not available", countries, "library_unavailable")
     except Exception as e:
-        from config import CONFIG
-        fail_closed = CONFIG.get("EVENT_RISK_API_FAIL_CLOSED", False)
         log.error(f"[EVENT_RISK] Unexpected error: {e} — fail closed: {fail_closed}")
-        return {"allowed": not fail_closed, "events": [], "reason": f"Error: {e}"}
+        return _provider_unavailable_result(f"Error: {e}", countries, "error")

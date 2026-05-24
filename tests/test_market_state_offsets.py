@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+from pathlib import Path
 
 from athena_app.services.engine_b_market_state import engine_b_live_market_state
 from athena_app.services.market_state import (
@@ -103,6 +104,56 @@ def test_mt5_forex_scan_helpers_use_offset_aware_confirmed_h4(monkeypatch):
     assert engine_b_state["forming"]["time"] == "2026-04-24T09:00:00Z"
 
 
+def test_mt5_stock_h4_uses_three_hour_confirmed_split():
+    pair = {
+        "display": "AAPL",
+        "symbol": "AAPL",
+        "type": "stock",
+        "source": "mt5",
+    }
+    candles = [
+        _candle("2026-04-24T15:00:00Z"),
+        _candle("2026-04-24T19:00:00Z"),
+    ]
+
+    state = get_tf_market_state(
+        pair,
+        "H4",
+        candles=candles,
+        time_now=_epoch("2026-04-24T19:15:00Z"),
+    )
+
+    assert market_state_offset_hours(pair, "H4") == 3.0
+    assert [c["time"] for c in state["confirmed"]] == ["2026-04-24T15:00:00Z"]
+    assert state["forming"]["time"] == "2026-04-24T19:00:00Z"
+
+
+def test_mt5_commodity_and_index_h4_use_broker_offset(monkeypatch):
+    monkeypatch.setitem(CONFIG, "FOREX_H4_RESAMPLE_OFFSET_HOURS", 2.0)
+    for asset_type, symbol in (("commodity", "XAU/USD"), ("index", "NAS100")):
+        pair = {
+            "display": symbol,
+            "symbol": symbol.replace("/", ""),
+            "type": asset_type,
+            "source": "mt5",
+        }
+        candles = [
+            _candle("2026-04-24T06:00:00Z"),
+            _candle("2026-04-24T10:00:00Z"),
+        ]
+
+        state = get_tf_market_state(
+            pair,
+            "H4",
+            candles=candles,
+            time_now=_epoch("2026-04-24T10:30:00Z"),
+        )
+
+        assert market_state_offset_hours(pair, "H4") == 2.0
+        assert [c["time"] for c in state["confirmed"]] == ["2026-04-24T06:00:00Z"]
+        assert state["forming"]["time"] == "2026-04-24T10:00:00Z"
+
+
 def test_mt5_forex_d1_offset_defaults_zero_without_override(monkeypatch):
     pair = {
         "display": "EUR/USD",
@@ -134,6 +185,25 @@ def test_d1_offset_top_level_wins_over_scalp_nested(monkeypatch):
     assert market_state_offset_hours(pair, "D1") == 0.75
 
 
+def test_d1_offset_split_marks_session_tail_forming(monkeypatch):
+    monkeypatch.setitem(CONFIG, "D1_RESAMPLE_OFFSET_HOURS", 2.0)
+    pair = {"display": "XAU/USD", "source": "mt5", "type": "commodity"}
+    candles = [
+        _candle("2026-05-06T02:00:00Z"),
+        _candle("2026-05-07T02:00:00Z"),
+    ]
+
+    state = get_tf_market_state(
+        pair,
+        "D1",
+        candles=candles,
+        time_now=_epoch("2026-05-07T12:00:00Z"),
+    )
+
+    assert [c["time"] for c in state["confirmed"]] == ["2026-05-06T02:00:00Z"]
+    assert state["forming"]["time"] == "2026-05-07T02:00:00Z"
+
+
 def test_engine_b_mt5_d1_trims_broker_session_ahead_tail():
     pair = {
         "display": "EUR/USD",
@@ -157,3 +227,15 @@ def test_engine_b_mt5_d1_trims_broker_session_ahead_tail():
 
     assert [c["time"] for c in state["confirmed"]] == ["2026-05-06T00:00:00Z"]
     assert state["forming"]["time"] == "2026-05-07T00:00:00Z"
+
+
+def test_scanner_preloads_engine_a_market_state_for_all_mt5_assets():
+    src = Path("scanner.py").read_text(encoding="utf-8")
+    assert 'if pair.get("source") == "mt5":' in src
+    assert 'pair.get("type") == "forex"' not in src[src.index('preloaded_market_state = {}'):src.index('fetch_meta = {')]
+
+
+def test_analyze_pair_fallback_split_uses_pair_timeframe_offset():
+    src = Path("athena.py").read_text(encoding="utf-8")
+    assert "offset_hours=market_state_offset_hours(pair, tf)" in src
+    assert "confirmedSplitFailed" in src

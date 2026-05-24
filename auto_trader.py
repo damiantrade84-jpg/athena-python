@@ -2,9 +2,10 @@
 
 
 
-Fires at H4 candle closes, runs the full scan, and auto-executes qualifying
+Runs interval monitoring scans and, by default, only executes qualifying
 
-signals through the same risk engine + executor path as manual execution.
+signals on fresh confirmed candle-close slots through the same risk engine +
+executor path as manual execution.
 
 
 
@@ -27,6 +28,7 @@ import logging
 import threading
 
 import time
+import uuid
 
 from datetime import datetime, timezone, timedelta
 
@@ -74,7 +76,7 @@ def _auto_trade_live_gate_display(cfg: dict) -> str:
     if list(conf.keys()) == ["default"]:
         base = conf["default"]
         return (
-            f"combinedConviction >= {base:.2f} "
+            f"executionConvictionEffective >= {base:.2f} "
             f"(aligned >= {base * 0.85:.3f})"
         )
 
@@ -85,7 +87,445 @@ def _auto_trade_live_gate_display(cfg: dict) -> str:
         parts.append(f"{key} {value:.2f}")
     if "default" in conf:
         parts.append(f"default {conf['default']:.2f}")
-    return "combinedConviction by asset (" + ", ".join(parts) + "; aligned x0.85)"
+    return "executionConvictionEffective by asset (" + ", ".join(parts) + "; aligned x0.85)"
+
+
+def _cfg_bool(cfg: dict, key: str, default: bool = False) -> bool:
+    raw = cfg.get(key, default)
+    if isinstance(raw, str):
+        return raw.strip().lower() in ("1", "true", "yes", "on")
+    return bool(raw)
+
+
+def _clamp01(value, default: float = 0.0) -> float:
+    try:
+        return max(0.0, min(1.0, float(value)))
+    except (TypeError, ValueError):
+        return default
+
+
+def _num(value, default: float | None = None) -> float | None:
+    try:
+        if value is None:
+            return default
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _first_dict(*values) -> dict:
+    for value in values:
+        if isinstance(value, dict):
+            return value
+    return {}
+
+
+def _json_safe(value):
+    try:
+        return json.loads(json.dumps(value, default=str))
+    except Exception:
+        return value
+
+
+def _tf_seconds(tf: str) -> int:
+    return {
+        "M1": 60,
+        "M5": 300,
+        "M15": 900,
+        "H1": 3600,
+        "H4": 14400,
+        "D1": 86400,
+    }.get(str(tf or "").upper(), 14400)
+
+
+def _parse_dt(value) -> datetime | None:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        dt = value
+    elif isinstance(value, (int, float)):
+        raw = float(value)
+        if raw > 1e12:
+            raw = raw / 1000.0
+        dt = datetime.fromtimestamp(raw, timezone.utc)
+    else:
+        try:
+            dt = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        except Exception:
+            return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
+def _score_attribution(signal: dict) -> dict:
+    return _first_dict(
+        signal.get("scoreAttribution"),
+        signal.get("engineAScoreAttribution"),
+        signal.get("score_attribution"),
+        signal.get("engine_a_score_attribution"),
+        _first_dict(signal.get("engine_a_context")).get("score_attribution"),
+    )
+
+
+def _non_visual_context(signal: dict) -> dict:
+    return _first_dict(
+        signal.get("nonVisualContext"),
+        signal.get("engineANonVisualContext"),
+        signal.get("non_visual_context"),
+        signal.get("engine_a_non_visual_context"),
+        _first_dict(signal.get("engine_a_context")).get("non_visual_context"),
+    )
+
+
+def extract_auto_trade_context(signal: dict) -> dict:
+    """Normalize server-side Engine A context for auto-execution trace only."""
+    fd = _first_dict(signal.get("factorDiagnostics"), signal.get("factor_diagnostics"))
+    non_visual = _non_visual_context(signal)
+    derivatives = _first_dict(
+        signal.get("fundingOi"),
+        signal.get("derivativesContext"),
+        non_visual.get("derivativesContext"),
+        fd.get("derivativesContext"),
+    )
+    microstructure = _first_dict(
+        signal.get("microstructureContext"),
+        non_visual.get("microstructureContext"),
+        fd.get("microstructureContext"),
+        fd.get("microstructure"),
+    )
+    intermarket = _first_dict(
+        signal.get("intermarketConfirmation"),
+        non_visual.get("intermarketContext"),
+        fd.get("intermarketConfirmation"),
+        fd.get("intermarket"),
+    )
+    news_summary = _first_dict(signal.get("newsSentimentSummary"), non_visual.get("newsContext"))
+    major_event = _first_dict(signal.get("majorEventRisk"), news_summary.get("majorEventRisk"))
+    return {
+        "scoreAttribution": _score_attribution(signal),
+        "nonVisualContext": non_visual,
+        "engineANonVisualContext": non_visual,
+        "newsSentimentSummary": news_summary,
+        "majorEventRisk": major_event,
+        "intermarketConfirmation": intermarket,
+        "fundingOi": derivatives,
+        "derivativesContext": derivatives,
+        "microstructureContext": microstructure,
+        "factorDiagnostics": fd,
+    }
+
+
+def _engine_a_weight(cfg: dict, asset_type: str) -> float:
+    raw = cfg.get("AUTO_TRADE_A_ONLY_WEIGHT", {"default": 0.60})
+    value = None
+    if isinstance(raw, dict):
+        value = raw.get(asset_type, raw.get("default", 0.60))
+    else:
+        value = raw
+    return _clamp01(value, 0.60)
+
+
+def _execution_conviction_base_with_source(
+    signal: dict,
+    engine: str,
+    cfg: dict,
+) -> tuple[float, str]:
+    eng = (engine or "").strip().lower()
+    if eng == "engine_c":
+        for key in ("combinedConviction", "consensusConviction"):
+            raw = signal.get(key)
+            if raw is not None:
+                return _clamp01(raw), key
+        return _clamp01(signal.get("executionConvictionBase")), "executionConvictionBase"
+
+    if eng == "engine_b":
+        for key in ("engine_b_conviction", "engine_b_score_norm"):
+            raw = signal.get(key)
+            if raw is not None:
+                return _clamp01(raw), key
+        b_score = _num(signal.get("engine_b_score"), 0.0) or 0.0
+        b_max = _num(signal.get("engine_b_max"), 0.0) or 0.0
+        if b_max > 0:
+            return _clamp01(b_score / b_max), "engine_b_score/engine_b_max"
+        return 0.0, "engine_b_missing"
+
+    attr = _score_attribution(signal)
+    final_score = _num(
+        attr.get("finalEngineAScore", attr.get("final_engine_a_score")),
+        None,
+    )
+    max_score = _num(
+        attr.get("maxScore", attr.get("max_score", signal.get("maxScore"))),
+        None,
+    )
+    if final_score is not None and max_score and max_score > 0:
+        return _clamp01(final_score / max_score), "scoreAttribution.finalEngineAScore/maxScore"
+
+    for key in ("scoreNorm", "score_norm", "engine_a_conviction"):
+        raw = signal.get(key)
+        if raw is not None:
+            return _clamp01(raw), key
+
+    score = _num(signal.get("confluenceScore"), 0.0) or 0.0
+    max_score = _num(signal.get("maxScoreOverride") or signal.get("maxScore"), 0.0) or 0.0
+    if max_score > 0:
+        return _clamp01(score / max_score), "confluenceScore/maxScore"
+    if 0.0 <= score <= 1.0:
+        return _clamp01(score), "confluenceScore"
+    return 0.0, "engine_a_missing"
+
+
+def _execution_conviction_base(signal: dict, engine: str, cfg: dict) -> float:
+    return _execution_conviction_base_with_source(signal, engine, cfg)[0]
+
+
+def _execution_rank_score(signal: dict, engine: str, cfg: dict) -> float:
+    eng = (engine or "").strip().lower()
+    base = _execution_conviction_base(signal, eng, cfg)
+    if eng in ("engine_b", "engine_c"):
+        return round(base, 4)
+
+    asset_type = str(signal.get("type") or signal.get("assetType") or "").lower()
+    a_weight = _engine_a_weight(cfg, asset_type)
+    if signal.get("enginesAligned", False):
+        b_score = _num(signal.get("engine_b_score"), 0.0) or 0.0
+        b_max = _num(signal.get("engine_b_max"), 0.0) or 0.0
+        b_norm = _clamp01(b_score / b_max) if b_max > 0 else 0.0
+        return round((base * a_weight) + (b_norm * (1.0 - a_weight)), 4)
+    return round(base * a_weight, 4)
+
+
+def _set_execution_conviction_fields(signal: dict, engine: str, cfg: dict) -> dict:
+    base, source = _execution_conviction_base_with_source(signal, engine, cfg)
+    signal["executionConvictionBase"] = round(base, 6)
+    signal["executionConvictionSource"] = source
+    if signal.get("executionConvictionEffective") is None:
+        signal["executionConvictionEffective"] = round(base, 6)
+    else:
+        signal["executionConvictionEffective"] = round(
+            _clamp01(signal.get("executionConvictionEffective")), 6
+        )
+    signal["executionRankScore"] = _execution_rank_score(signal, engine, cfg)
+    return signal
+
+
+def _required_execution_tf(signal: dict) -> str:
+    for key in ("executionTimeframe", "execution_tf", "timeframe", "tf", "chartTimeframe"):
+        value = signal.get(key)
+        if value:
+            return str(value).upper()
+    return "H4"
+
+
+def _last_confirmed_ts_for_execution(signal: dict, tf: str):
+    tf_u = str(tf or "").upper()
+    candidates = [
+        signal.get("lastConfirmedCandleTs"),
+        signal.get("latest_confirmed_trigger_candle_time"),
+        signal.get("latestConfirmedCandleTs"),
+        signal.get("confirmedCandleTs"),
+        signal.get("bar_time"),
+        signal.get("barTime"),
+    ]
+    freshness = _first_dict(signal.get("dataFreshness"))
+    for block in (
+        _first_dict(signal.get("candleConsistency")).get(tf_u),
+        _first_dict(signal.get("candleFreshness")).get(tf_u),
+        _first_dict(signal.get("candleFetchMeta")).get(tf_u),
+    ):
+        if isinstance(block, dict):
+            candidates.extend(
+                [
+                    block.get("last_scoring_ts"),
+                    block.get("lastScoringTs"),
+                    block.get("expected_latest_confirmed_ts"),
+                    block.get("expectedLatestConfirmedTs"),
+                    block.get("lastBarEpoch"),
+                    block.get("lastBarIso"),
+                ]
+            )
+            detail = block.get("detail")
+            if isinstance(detail, dict):
+                candidates.extend(
+                    [
+                        detail.get("last_scoring_ts"),
+                        detail.get("expected_latest_confirmed_ts"),
+                    ]
+                )
+    for block in freshness.get("blocked", []) + freshness.get("warnings", []):
+        if isinstance(block, dict) and str(block.get("timeframe") or "").upper() == tf_u:
+            detail = block.get("detail")
+            if isinstance(detail, dict):
+                candidates.extend(
+                    [
+                        detail.get("last_scoring_ts"),
+                        detail.get("expected_latest_confirmed_ts"),
+                    ]
+                )
+
+    candles_key = {"H1": "h1Candles", "H4": "h4Candles", "D1": "d1Candles"}.get(tf_u)
+    if candles_key and isinstance(signal.get(candles_key), list) and signal[candles_key]:
+        last = signal[candles_key][-1]
+        if isinstance(last, dict):
+            candidates.append(last.get("t") or last.get("time"))
+
+    for value in candidates:
+        dt = _parse_dt(value)
+        if dt is not None:
+            return dt.isoformat()
+    return None
+
+
+def _auto_trade_slot_key(signal: dict, tf: str, last_confirmed_ts) -> tuple:
+    return (
+        _signal_pair_key(signal),
+        str(signal.get("direction") or "").upper(),
+        _signal_engine(signal),
+        str(tf or "").upper(),
+        str(last_confirmed_ts or ""),
+    )
+
+
+def _confirmed_close_execution_allowed(signal: dict, cfg: dict, now: datetime) -> tuple[bool, str, dict]:
+    mode = str(cfg.get("AUTO_TRADE_SCHEDULER_MODE", "confirmed_close") or "confirmed_close").lower()
+    tf = _required_execution_tf(signal)
+    detail = {"mode": mode, "timeframe": tf, "allowed": True}
+    if mode == "interval":
+        detail["reason"] = "interval_mode"
+        return True, "", detail
+
+    last_ts = _last_confirmed_ts_for_execution(signal, tf)
+    detail["lastConfirmedCandleTs"] = last_ts
+    if not last_ts:
+        if _cfg_bool(cfg, "AUTO_TRADE_ALLOW_INTRABAR_EXECUTION", False):
+            detail["reason"] = "missing_confirmed_ts_intrabar_allowed"
+            return True, "", detail
+        detail.update({"allowed": False, "reason": "confirmed_candle_unavailable"})
+        return False, "CONFIRMED_CANDLE_UNAVAILABLE", detail
+
+    last_dt = _parse_dt(last_ts)
+    if last_dt is None:
+        detail.update({"allowed": False, "reason": "confirmed_candle_ts_invalid"})
+        return False, "CONFIRMED_CANDLE_TS_INVALID", detail
+    grace_min = _num(cfg.get("AUTO_TRADE_EXECUTION_GRACE_MIN"), 5.0) or 5.0
+    grace_sec = max(0.0, grace_min * 60.0)
+    tf_sec = _tf_seconds(tf)
+    seconds_from_open = (now - last_dt).total_seconds()
+    seconds_from_close = (now - (last_dt + timedelta(seconds=tf_sec))).total_seconds()
+    fresh_as_close = 0 <= seconds_from_open <= grace_sec
+    fresh_as_open = 0 <= seconds_from_close <= grace_sec
+    detail.update(
+        {
+            "secondsFromOpen": round(seconds_from_open, 3),
+            "secondsFromClose": round(seconds_from_close, 3),
+            "graceSeconds": grace_sec,
+            "freshAsCloseTimestamp": fresh_as_close,
+            "freshAsOpenTimestamp": fresh_as_open,
+        }
+    )
+    if not (fresh_as_close or fresh_as_open):
+        detail.update({"allowed": False, "reason": "outside_confirmed_close_grace"})
+        return False, "CONFIRMED_CLOSE_WINDOW_MISSED", detail
+    return True, "", detail
+
+
+def _build_auto_trade_decision_trace(
+    signal: dict,
+    cfg: dict,
+    *,
+    candidate_rank: int | None = None,
+    scheduler_mode: str | None = None,
+) -> dict:
+    existing = signal.get("autoDecisionTrace") if isinstance(signal.get("autoDecisionTrace"), dict) else {}
+    trace_id = existing.get("traceId") or signal.get("trace_id") or signal.get("traceId") or uuid.uuid4().hex
+    engine = _signal_engine(signal)
+    context = extract_auto_trade_context(signal)
+    trace = {
+        "traceId": trace_id,
+        "pair": signal.get("pair") or signal.get("display") or signal.get("symbol"),
+        "direction": signal.get("direction"),
+        "assetType": signal.get("type") or signal.get("assetType"),
+        "engine": engine,
+        "scanTimestamp": signal.get("timestamp") or datetime.now(timezone.utc).isoformat(),
+        "schedulerMode": scheduler_mode or cfg.get("AUTO_TRADE_SCHEDULER_MODE", "confirmed_close"),
+        "candidateRank": candidate_rank,
+        "scoreAttribution": context.get("scoreAttribution"),
+        "nonVisualContext": context.get("nonVisualContext"),
+        "engineANonVisualContext": context.get("engineANonVisualContext"),
+        "executionConvictionBase": signal.get("executionConvictionBase"),
+        "executionConvictionEffective": signal.get("executionConvictionEffective"),
+        "executionConvictionSource": signal.get("executionConvictionSource"),
+        "executionRankScore": signal.get("executionRankScore"),
+        "minConviction": signal.get("autoMinConviction"),
+        "alignedDiscountApplied": bool(signal.get("alignedDiscountApplied")),
+        "calibration": signal.get("calibration"),
+        "metaPolicy": {
+            "metaEngineWeight": signal.get("metaEngineWeight"),
+            "metaThresholdDelta": signal.get("metaThresholdDelta"),
+            "metaSuspended": signal.get("metaSuspended"),
+        },
+        "deterministicGates": existing.get("deterministicGates", {}),
+        "conductorRouting": signal.get("conductor"),
+        "sentimentGate": signal.get("sentimentGate"),
+        "eventRiskGate": signal.get("eventRiskGate"),
+        "intermarketExecutionGate": signal.get("intermarketExecutionGate"),
+        "microstructureGate": signal.get("microstructureGate"),
+        "aiDebateGate": signal.get("aiDebateGate"),
+        "aiChartGate": signal.get("aiChartGate"),
+        "brokerPrecheck": signal.get("brokerPrecheck"),
+        "candleHydration": signal.get("candleHydration"),
+        "riskApproval": signal.get("riskApproval"),
+        "guardianDecision": signal.get("guardianDecision"),
+        "executionResult": signal.get("executionResult"),
+        "finalAction": existing.get("finalAction"),
+        "blockReason": existing.get("blockReason"),
+        "failedStage": existing.get("failedStage"),
+    }
+    trace.update({k: v for k, v in existing.items() if k not in trace or trace[k] is None})
+    signal["trace_id"] = trace_id
+    signal["autoDecisionTrace"] = _json_safe(trace)
+    return signal["autoDecisionTrace"]
+
+
+def _ensure_auto_decision_trace(
+    signal: dict,
+    cfg: dict,
+    *,
+    candidate_rank: int | None = None,
+) -> dict:
+    return _build_auto_trade_decision_trace(
+        signal,
+        cfg,
+        candidate_rank=candidate_rank,
+        scheduler_mode=str(cfg.get("AUTO_TRADE_SCHEDULER_MODE", "confirmed_close")),
+    )
+
+
+def _trace_update(signal: dict, cfg: dict, **updates) -> dict:
+    trace = _ensure_auto_decision_trace(signal, cfg)
+    for key, value in updates.items():
+        trace[key] = _json_safe(value)
+    signal["autoDecisionTrace"] = trace
+    return trace
+
+
+def _trace_gate(signal: dict, cfg: dict, name: str, data: dict) -> dict:
+    trace = _ensure_auto_decision_trace(signal, cfg)
+    gates = trace.setdefault("deterministicGates", {})
+    gates[name] = _json_safe(data)
+    signal["autoDecisionTrace"] = trace
+    return trace
+
+
+def _finalize_trace(signal: dict, cfg: dict, *, action: str, stage: str, reason: str) -> dict:
+    return _trace_update(
+        signal,
+        cfg,
+        finalAction=action,
+        failedStage=stage,
+        blockReason=reason,
+    )
 
 
 def _signal_engine(signal: dict) -> str:
@@ -234,7 +674,7 @@ def _execution_conviction(signal: dict, engine: str) -> float:
     return 0.0
 
 
-def _current_combined_conviction(signal: dict) -> float:
+def _current_combined_conviction(signal: dict, cfg: dict | None = None) -> float:
     """Return the execution conviction implied by the signal's current scores."""
     try:
         score = float(signal.get("confluenceScore", 0) or 0)
@@ -249,6 +689,9 @@ def _current_combined_conviction(signal: dict) -> float:
     else:
         a_norm = 0.0
 
+    asset_type = str(signal.get("type") or signal.get("assetType") or "").lower()
+    a_weight = _engine_a_weight(cfg or {}, asset_type)
+
     if signal.get("enginesAligned", False):
         try:
             b_score = float(signal.get("engine_b_score", 0) or 0)
@@ -257,9 +700,9 @@ def _current_combined_conviction(signal: dict) -> float:
             b_score = 0.0
             b_max = 0.0
         b_norm = max(0.0, min(b_score / b_max, 1.0)) if b_max > 0 else 0.0
-        return round((a_norm * 0.6) + (b_norm * 0.4), 4)
+        return round((a_norm * a_weight) + (b_norm * (1.0 - a_weight)), 4)
 
-    return round(a_norm * 0.6, 4)
+    return round(a_norm * a_weight, 4)
 
 
 def _a_only_reject_reason(
@@ -314,11 +757,6 @@ def _signal_matches_position(signal: dict, position: dict) -> bool:
     signal_keys.discard("")
     position_keys.discard("")
     return bool(signal_keys & position_keys)
-
-
-# ── H4 + D1 schedule: (hour, minute) UTC ─────────────────────────────────────
-
-_SCHEDULE = [(0, 5), (4, 5), (8, 5), (12, 5), (16, 5), (20, 5)]
 
 
 # ── Session windows (UTC) for session-aware filtering ────────────────────────
@@ -435,23 +873,79 @@ class AutoTrader:
         cfg = self._config_fn() if self._config_fn else {}
         scan_min_score = cfg.get("AUTO_TRADE_MIN_SCORE", {})
         min_conviction = _auto_trade_min_conviction_config(cfg)
+        kill_active = bool(self._kill_switch_fn()) if self._kill_switch_fn else False
+        conductor_cfg = cfg.get("CONDUCTOR", {}) or {}
 
         return {
             "enabled": self._enabled,
+            "AUTO_TRADE_ENABLED": bool(cfg.get("AUTO_TRADE_ENABLED", self._enabled)),
+            "EXECUTION_ENABLED": bool(cfg.get("EXECUTION_ENABLED", True)),
+            "MT5_EXECUTION_ENABLED": bool(cfg.get("MT5_EXECUTION_ENABLED", True)),
+            "BYBIT_EXECUTION_ENABLED": bool(cfg.get("BYBIT_EXECUTION_ENABLED", True)),
+            "killSwitch": kill_active,
+            "executorMode": cfg.get("EXECUTOR_MODE"),
+            "paperSoak": cfg.get("PAPER_SOAK"),
             "tradesToday": self._trades_today,
             "maxDaily": cfg.get("AUTO_TRADE_MAX_DAILY", 3),
+            "maxPerScan": cfg.get("AUTO_TRADE_MAX_PER_SCAN", 1),
             "minScore": scan_min_score,
             "scanMinScore": scan_min_score,
             "minScoreExecutionNote": (
                 "DEPRECATED — informational only. Changing this has no effect on execution. "
-                "Live execution uses combinedConviction and AUTO_TRADE_MIN_CONVICTION."
+                "Live execution uses executionConvictionEffective and AUTO_TRADE_MIN_CONVICTION."
             ),
             "minScoreDeprecatedForExecution": True,
             "minScoreDeprecated": True,
             "minConviction": min_conviction,
-            "liveGateMetric": "combinedConviction",
+            "liveGateMetric": "executionConvictionEffective",
+            "liveGateMetricByEngine": {
+                "engine_a": "executionConvictionEffective from Engine A score attribution/scoreNorm",
+                "engine_b": "executionConvictionEffective from Engine B conviction/score",
+                "engine_c": "executionConvictionEffective from combinedConviction",
+            },
             "liveGateAlignedDiscount": 0.85,
             "liveGateDisplay": _auto_trade_live_gate_display(cfg),
+            "aiDebate": {
+                "enabled": bool(cfg.get("SIGNAL_DEBATE_ENABLED", True)),
+                "scoreMutationEnabled": False,
+                "negativeAdjustmentsReduce": "executionConvictionEffective",
+            },
+            "newsIntermarket": {
+                "newsSentimentEnabled": bool(cfg.get("NEWS_SENTIMENT_CONFLUENCE_ENABLED", False)),
+                "sentimentGateEnabled": bool(cfg.get("SENTIMENT_GATE_ENABLED", True)),
+                "sentimentGateMode": cfg.get("AUTO_TRADE_SENTIMENT_GATE_MODE", "severe_opposition_only"),
+                "intermarketEnabled": bool((cfg.get("INTERMARKET_CONFIRMATION") or {}).get("enabled", False)),
+                "intermarketSevereBlock": bool(cfg.get("AUTO_TRADE_INTERMARKET_SEVERE_BLOCK", False)),
+            },
+            "chartAiGate": {
+                "enabled": bool(cfg.get("AUTO_TRADE_CHART_AI_GATE_ENABLED", False)),
+                "mode": cfg.get("AUTO_TRADE_CHART_AI_GATE_MODE", "advisory"),
+                "maxAgeSec": cfg.get("AUTO_TRADE_CHART_AI_MAX_AGE_SEC", 180),
+                "scoreMutationEnabled": False,
+            },
+            "riskProfile": {
+                "maxPortfolioHeat": cfg.get("MAX_PORTFOLIO_HEAT"),
+                "maxOpenPositions": cfg.get("MAX_OPEN_POSITIONS"),
+                "maxCorrelatedPositions": cfg.get("MAX_CORRELATED_POSITIONS"),
+                "maxRiskPerTrade": cfg.get("MAX_RISK_PER_TRADE"),
+                "dailyLossLimit": cfg.get("DAILY_LOSS_LIMIT"),
+            },
+            "scheduler": {
+                "mode": cfg.get("AUTO_TRADE_SCHEDULER_MODE", "confirmed_close"),
+                "executionGraceMin": cfg.get("AUTO_TRADE_EXECUTION_GRACE_MIN", 5),
+                "allowIntrabarReview": bool(cfg.get("AUTO_TRADE_ALLOW_INTRABAR_REVIEW", True)),
+                "allowIntrabarExecution": bool(cfg.get("AUTO_TRADE_ALLOW_INTRABAR_EXECUTION", False)),
+            },
+            "conductor": {
+                "enabled": bool(conductor_cfg.get("ENABLED", True)),
+                "dynamicWeightingEnabled": bool(conductor_cfg.get("DYNAMIC_WEIGHTING_ENABLED", False)),
+                "diagnosticWeightsEnabled": bool(conductor_cfg.get("DIAGNOSTIC_WEIGHTS_ENABLED", False)),
+                "engineWeightsAdvisoryOnly": True,
+            },
+            "engineDBackgroundAutopilot": {
+                "status": "disabled_by_design",
+                "reason": "requires separate scalp autopilot with fresh AI ENTRY_NOW gate",
+            },
             "lastScanAt": self._last_scan_at.isoformat()
             if self._last_scan_at
             else None,
@@ -594,6 +1088,218 @@ class AutoTrader:
         except Exception as _me:
             log.warning(f"[AUTO] Weekly meta-analysis failed: {_me}")
 
+    def _execution_master_block_reason(self, signal: dict | None, cfg: dict) -> str | None:
+        if self._kill_switch_fn and self._kill_switch_fn():
+            return "KILL_SWITCH"
+        if cfg.get("EXECUTION_ENABLED") is False:
+            return "AUTO_EXECUTION_DISABLED"
+        asset_type = str((signal or {}).get("type") or (signal or {}).get("assetType") or "").lower()
+        if asset_type == "crypto":
+            if cfg.get("BYBIT_EXECUTION_ENABLED") is False:
+                return "BYBIT_EXECUTION_DISABLED"
+        elif signal is not None:
+            if cfg.get("MT5_EXECUTION_ENABLED") is False:
+                return "MT5_EXECUTION_DISABLED"
+        return None
+
+    def _mark_executed_slot(self, signal: dict, cfg: dict) -> None:
+        mode = str(cfg.get("AUTO_TRADE_SCHEDULER_MODE", "confirmed_close") or "confirmed_close").lower()
+        if mode == "interval":
+            return
+        tf = _required_execution_tf(signal)
+        last_ts = _last_confirmed_ts_for_execution(signal, tf)
+        if not last_ts:
+            return
+        with self._lock:
+            self._executed_slots.add(_auto_trade_slot_key(signal, tf, last_ts))
+
+    def _sl_distance_precheck(self, signal: dict, asset_type: str, cfg: dict) -> tuple[bool, str, dict]:
+        _entry = float(signal.get("price") or signal.get("livePrice") or 0)
+        _sl = float(signal.get("sl") or 0)
+        detail = {"checked": bool(_entry and _sl and _entry != _sl), "allowed": True}
+        if not detail["checked"]:
+            detail["skippedReason"] = "missing_entry_or_sl"
+            return True, "", detail
+        _sl_pct = abs(_entry - _sl) / abs(_entry)
+        try:
+            from risk_engine import resolve_max_sl_pct
+
+            _max_sl_pct, _max_sl_source = resolve_max_sl_pct(signal, asset_type, cfg)
+        except Exception:
+            _max_sl_pct = float((cfg.get("MAX_SL_PCT") or {}).get(asset_type, 0.05))
+            _max_sl_source = f"asset:{asset_type}"
+        detail.update(
+            {
+                "slPct": round(_sl_pct, 6),
+                "maxSlPct": _max_sl_pct,
+                "source": _max_sl_source,
+            }
+        )
+        if _sl_pct > _max_sl_pct:
+            detail["allowed"] = False
+            reason = (
+                f"SL distance {_sl_pct:.1%} exceeds MAX_SL_PCT {_max_sl_pct:.1%} "
+                f"for {asset_type} ({_max_sl_source})"
+            )
+            return False, reason, detail
+        return True, "", detail
+
+    def _intermarket_execution_gate(self, signal: dict, cfg: dict, context: dict) -> tuple[bool, str]:
+        im = context.get("intermarketConfirmation") if isinstance(context, dict) else {}
+        severe = bool(
+            isinstance(im, dict)
+            and (
+                im.get("severeContradiction")
+                or im.get("severe_contradiction")
+                or _first_dict(im.get("verdict")).get("severeContradiction")
+            )
+        )
+        gate = {
+            "checked": True,
+            "severeContradiction": severe,
+            "blockEnabled": bool(cfg.get("AUTO_TRADE_INTERMARKET_SEVERE_BLOCK", False)),
+            "context": im,
+        }
+        signal["intermarketExecutionGate"] = gate
+        if severe and gate["blockEnabled"]:
+            return False, "INTERMARKET_SEVERE_CONTRADICTION"
+        return True, ""
+
+    def _microstructure_execution_gate(self, signal: dict, cfg: dict, context: dict) -> tuple[bool, str]:
+        micro = context.get("microstructureContext") if isinstance(context, dict) else {}
+        stale_or_missing = False
+        if isinstance(micro, dict) and micro:
+            status = str(micro.get("status") or "").lower()
+            stale_or_missing = status in ("stale", "unavailable", "missing", "error")
+        material = bool(isinstance(micro, dict) and micro.get("materialToScore"))
+        gate = {
+            "checked": True,
+            "materialToScore": material,
+            "staleOrUnavailable": stale_or_missing,
+            "blockEnabled": bool(cfg.get("AUTO_TRADE_MICROSTRUCTURE_STALE_BLOCK", False)),
+            "penalty": 0.0,
+            "context": micro,
+        }
+        if material and stale_or_missing:
+            if gate["blockEnabled"]:
+                signal["microstructureGate"] = gate
+                return False, "MICROSTRUCTURE_CONTEXT_STALE"
+            penalty = _num(cfg.get("AUTO_TRADE_MICROSTRUCTURE_STALE_PENALTY"), 0.0) or 0.0
+            if penalty > 0:
+                cur = _clamp01(signal.get("executionConvictionEffective"))
+                signal["executionConvictionEffective"] = round(max(0.0, cur - penalty), 6)
+                gate["penalty"] = penalty
+        signal["microstructureGate"] = gate
+        return True, ""
+
+    def _news_risk_text(self, context: dict) -> str | None:
+        major = _first_dict(context.get("majorEventRisk"))
+        summary = _first_dict(context.get("newsSentimentSummary"))
+        parts = []
+        for key in ("reason", "majorEventDescription", "description"):
+            value = major.get(key)
+            if value:
+                parts.append(str(value))
+        if summary.get("majorEventDetected"):
+            for key in ("reasoningSummary", "reason", "majorEventDescription"):
+                value = summary.get(key)
+                if value:
+                    parts.append(str(value))
+        return " | ".join(dict.fromkeys(parts)) or None
+
+    def _sentiment_gate_allowed(
+        self,
+        signal: dict,
+        cfg: dict,
+        context: dict,
+        routing: dict,
+        asset_type: str,
+    ) -> tuple[bool, str]:
+        mode = str(cfg.get("AUTO_TRADE_SENTIMENT_GATE_MODE", "severe_opposition_only") or "severe_opposition_only").lower()
+        gate = {
+            "enabled": bool(cfg.get("SENTIMENT_GATE_ENABLED", True)),
+            "mode": mode,
+            "routedBy": "config",
+            "checked": False,
+            "skippedReason": None,
+            "result": None,
+            "newsScoreAlreadyApplied": bool(_score_attribution(signal).get("newsSentimentDelta") is not None),
+        }
+        signal["sentimentGate"] = gate
+        if not gate["enabled"] or mode == "off":
+            gate["skippedReason"] = "disabled"
+            return True, ""
+        if mode == "major_event_only":
+            gate["skippedReason"] = "major_event_risk_checked_separately"
+            return True, ""
+        if mode == "conductor_routed":
+            gate["routedBy"] = "conductor"
+            if not bool(routing.get("run_sentiment", True)):
+                gate["skippedReason"] = "conductor_run_sentiment_false"
+                return True, ""
+        elif mode not in ("always_when_enabled", "severe_opposition_only", "conductor_routed"):
+            gate["skippedReason"] = f"unknown_mode:{mode}"
+            return True, ""
+
+        try:
+            from sentiment_gate import check_sentiment
+
+            gate["checked"] = True
+            sent = check_sentiment(
+                signal.get("pair", ""), signal.get("direction", ""), asset_type
+            )
+            gate["result"] = sent
+            if not sent.get("allowed", False):
+                return False, sent.get("reason", "Sentiment block")
+            return True, ""
+        except ImportError:
+            gate["result"] = {"allowed": False, "reason": "Sentiment gate unavailable"}
+            return False, "Sentiment gate unavailable"
+
+    def _chart_ai_gate_allowed(self, signal: dict, cfg: dict) -> tuple[bool, str]:
+        gate = {
+            "enabled": bool(cfg.get("AUTO_TRADE_CHART_AI_GATE_ENABLED", False)),
+            "mode": cfg.get("AUTO_TRADE_CHART_AI_GATE_MODE", "advisory"),
+            "checked": False,
+            "fresh": False,
+            "scoreMutationEnabled": False,
+            "result": None,
+        }
+        signal["aiChartGate"] = gate
+        if not gate["enabled"]:
+            gate["skippedReason"] = "disabled"
+            return True, ""
+        review = _first_dict(
+            signal.get("aiChartReview"),
+            signal.get("chartAiReview"),
+            signal.get("ai_review"),
+            signal.get("latestAiChartReview"),
+        )
+        if not review:
+            gate["skippedReason"] = "no_server_trusted_review"
+            return True, ""
+        created = _parse_dt(review.get("created_at") or review.get("createdAt") or review.get("timestamp"))
+        max_age = _num(cfg.get("AUTO_TRADE_CHART_AI_MAX_AGE_SEC"), 180.0) or 180.0
+        if created is not None:
+            age = max(0.0, (datetime.now(timezone.utc) - created).total_seconds())
+            gate["ageSec"] = round(age, 3)
+            gate["fresh"] = age <= max_age
+        else:
+            gate["fresh"] = False
+        gate["checked"] = True
+        gate["result"] = review
+        if not gate["fresh"]:
+            gate["skippedReason"] = "review_stale_or_unparseable"
+            return True, ""
+        verdict = str(review.get("verdict") or review.get("human_action") or "").lower()
+        action = str(review.get("human_action") or review.get("action") or "").lower()
+        mode = str(gate["mode"] or "advisory").lower()
+        if mode == "block_on_reject" and any(x in verdict for x in ("reject", "invalid", "avoid")):
+            return False, "AI_CHART_REJECT"
+        if mode == "require_entry_now" and action not in ("entry_now", "take", "execute"):
+            return False, "AI_CHART_WAIT"
+        return True, ""
+
     def _run_auto_scan(self):
         """Run a full scan and auto-execute qualifying signals."""
 
@@ -608,6 +1314,11 @@ class AutoTrader:
             return
 
         cfg = self._config_fn() if self._config_fn else {}
+
+        master_block = self._execution_master_block_reason(None, cfg)
+        if master_block:
+            log.warning("[AUTO] Auto execution blocked before scan: %s", master_block)
+            return
 
         max_daily = cfg.get("AUTO_TRADE_MAX_DAILY", 3)
 
@@ -682,10 +1393,16 @@ class AutoTrader:
                     f"(> {_max_scan_window}s cap) — not re-stamping; will be rejected by risk_check"
                 )
 
-        # Sort by combined conviction (Engine A+B) descending — best signal first
-        # Falls back to normalized confluenceScore if combinedConviction not present
-
-        signals = sorted(signals, key=_current_combined_conviction, reverse=True)
+        # Rank by executionRankScore. Scanner combinedConviction remains display
+        # metadata; ranking no longer recomputes hardcoded A/B weights here.
+        for _s in signals:
+            _eng = _signal_engine(_s)
+            _set_execution_conviction_fields(_s, _eng, cfg)
+        signals = sorted(
+            signals,
+            key=lambda _s: float(_s.get("executionRankScore", 0.0) or 0.0),
+            reverse=True,
+        )
 
         max_per_scan = cfg.get("AUTO_TRADE_MAX_PER_SCAN", 1)
         try:
@@ -696,7 +1413,8 @@ class AutoTrader:
         executed = 0
         positions_cache: dict[str, list[dict] | None] = {}
 
-        for sig in signals:
+        for candidate_rank, sig in enumerate(signals, start=1):
+            _ensure_auto_decision_trace(sig, cfg, candidate_rank=candidate_rank)
             if executed >= max_per_scan:
                 break
 
@@ -710,12 +1428,28 @@ class AutoTrader:
                             f"[AUTO] {sig.get('pair')} skipped: Engine B daily pair cap "
                             f"{naked_max_daily} reached"
                         )
+                        _finalize_trace(
+                            sig,
+                            cfg,
+                            action="block",
+                            stage="daily_pair_cap",
+                            reason=f"NAKED_MAX_DAILY:{naked_max_daily}",
+                        )
+                        self._write_error(sig, f"NAKED_MAX_DAILY:{naked_max_daily}")
                         continue
 
             ok, reason = self._can_execute(sig, cfg)
 
             if not ok:
                 log.info(f"[AUTO] {sig.get('pair')} skipped: {reason}")
+                _finalize_trace(
+                    sig,
+                    cfg,
+                    action="block",
+                    stage=sig.get("autoDecisionTrace", {}).get("failedStage") or "can_execute",
+                    reason=reason,
+                )
+                self._write_error(sig, reason)
 
                 continue
 
@@ -728,6 +1462,20 @@ class AutoTrader:
                     log.info(
                         f"[AUTO] {sig.get('pair')} skipped: already holding open position"
                     )
+                    signal_precheck = {
+                        "checked": True,
+                        "allowed": False,
+                        "reason": "already_holding_open_position",
+                    }
+                    sig["brokerPrecheck"] = signal_precheck
+                    _finalize_trace(
+                        sig,
+                        cfg,
+                        action="block",
+                        stage="brokerPrecheck",
+                        reason="ALREADY_HOLDING_OPEN_POSITION",
+                    )
+                    self._write_error(sig, "ALREADY_HOLDING_OPEN_POSITION")
                     continue
 
                 # Block when venue is already at max positions — avoids wasting the full
@@ -738,7 +1486,28 @@ class AutoTrader:
                         f"[AUTO] {sig.get('pair')} skipped: {len(open_positions)} open "
                         f"positions >= MAX_OPEN_POSITIONS {_max_open}"
                     )
+                    sig["brokerPrecheck"] = {
+                        "checked": True,
+                        "allowed": False,
+                        "reason": "max_open_positions",
+                        "openPositions": len(open_positions),
+                        "maxOpenPositions": _max_open,
+                    }
+                    _finalize_trace(
+                        sig,
+                        cfg,
+                        action="block",
+                        stage="brokerPrecheck",
+                        reason=f"MAX_OPEN_POSITIONS:{len(open_positions)}/{_max_open}",
+                    )
+                    self._write_error(sig, f"MAX_OPEN_POSITIONS:{len(open_positions)}/{_max_open}")
                     continue
+                sig["brokerPrecheck"] = {
+                    "checked": True,
+                    "allowed": True,
+                    "openPositions": len(open_positions),
+                    "maxOpenPositions": int(cfg.get("MAX_OPEN_POSITIONS", 5)),
+                }
 
             success = self._execute_signal(sig, cfg)
 
@@ -765,57 +1534,69 @@ class AutoTrader:
         try:
             from conductor import conductor_orchestrate, extract_conductor_microstructure
 
+            context = extract_auto_trade_context(signal)
             _vd, _sr = extract_conductor_microstructure(signal)
+            micro = context.get("microstructureContext") if isinstance(context, dict) else {}
+            if isinstance(micro, dict) and micro:
+                if _sr is None and micro.get("liquidityWallDetection"):
+                    _sr = {
+                        "stop_run": True,
+                        "source": "engine_a_microstructure",
+                        "detail": micro.get("liquidityWallDetection"),
+                    }
+                if _vd is None and micro.get("volumeMomentumSpread") is not None:
+                    _vd = {
+                        "divergence": bool(micro.get("volumeMomentumSpread")),
+                        "source": "engine_a_microstructure",
+                        "value": micro.get("volumeMomentumSpread"),
+                    }
+            news_risk = self._news_risk_text(context)
             plan = conductor_orchestrate(
                 signal,
                 signal.get("regime", "UNKNOWN"),
                 _audit,
+                news_ctx=context.get("newsSentimentSummary"),
                 volume_divergence=_vd,
                 stop_run=_sr,
-                news_risk=None,
+                news_risk=news_risk,
             )
             signal["conductor"] = plan.get("routing", {})
             signal["conductor_context"] = plan.get("context", {})
+            if isinstance(signal["conductor"], dict):
+                signal["conductor"].setdefault("advisoryOnly", True)
+                signal["conductor"].setdefault("notUsedForExecution", True)
         except Exception as _e:
             log.warning("[AUTO] conductor hydrate failed: %s", _e)
 
     def _can_execute(self, signal: dict, cfg: dict) -> tuple[bool, str]:
-        """Check score gate + session filter. Uses combined Engine A+B conviction when available.
-
-        Full-scan trade-tier labeling does not require Engine B alignment when
-        ``ENGINE_B_SCAN_CONFIRMATION_GATE_ENABLED`` is false; autopilot still
-        evaluates ``combinedConviction`` and alignment bonus independently here.
-        """
+        """Check deterministic auto-execution gates without mutating Engine A score."""
 
         asset_type = signal.get("type", "")
         engine_name = _signal_engine(signal)
+        context = extract_auto_trade_context(signal)
+        _set_execution_conviction_fields(signal, engine_name, cfg)
+        _ensure_auto_decision_trace(signal, cfg)
 
-        # ── Execution conviction by engine ─────────────────────────────────
-        # Engine A rows must be judged on pure Engine A conviction; scanner
-        # deflates Engine A score into combinedConviction (e.g. A_norm * weight
-        # when Engine B is absent or unaligned), so reusing the combined value
-        # to gate an A-only row would reject otherwise valid Engine A trades.
-        # Engine C keeps the consensus combinedConviction; Engine B uses its
-        # own normalized confidence.
+        master_block = self._execution_master_block_reason(signal, cfg)
+        if master_block:
+            signal["masterExecutionGate"] = {"allowed": False, "reason": master_block}
+            _trace_gate(signal, cfg, "masterExecution", signal["masterExecutionGate"])
+            _finalize_trace(signal, cfg, action="block", stage="masterExecution", reason=master_block)
+            return False, master_block
+        signal["masterExecutionGate"] = {"allowed": True}
+        _trace_gate(signal, cfg, "masterExecution", signal["masterExecutionGate"])
+
         engines_aligned = signal.get("enginesAligned", False)
-        combined_conviction = _execution_conviction(signal, engine_name)
-
-        # Auto-trade minimum conviction (0-1 scale)
-        # Default: 0.50 = requires decent Engine A score OR Engine A+B alignment
-        # Higher values (0.60-0.70) = stricter, prefer aligned signals
+        effective_conviction = _clamp01(signal.get("executionConvictionEffective"))
         auto_min_conviction = _auto_trade_min_conviction(cfg, asset_type)
-
-        # Bonus threshold for aligned signals (both engines agree)
-        # Aligned signals can pass at lower conviction since structure confirms
+        aligned_discount_applied = False
         if engines_aligned:
-            auto_min_conviction = auto_min_conviction * 0.85  # 15% discount for alignment
+            auto_min_conviction = auto_min_conviction * 0.85
+            aligned_discount_applied = True
+        signal["alignedDiscountApplied"] = aligned_discount_applied
 
-        # Engine B data for logging
-        b_score = signal.get("engine_b_score", 0)
-        b_max = signal.get("engine_b_max", 5)
-        b_verdict = signal.get("engine_b_verdict", "N/A")
         calibration = predict_calibrated_prob(
-            combined_conviction,
+            effective_conviction,
             engine=engine_name,
             asset_class=asset_type,
             style=signal.get("style"),
@@ -828,9 +1609,30 @@ class AutoTrader:
         signal.update(apply_meta_policy(signal, meta))
         meta_delta = float(signal.get("metaThresholdDelta", 0.0) or 0.0)
         auto_min_conviction = max(0.0, min(1.0, auto_min_conviction + meta_delta))
+        signal["autoMinConviction"] = round(auto_min_conviction, 6)
+        _trace_update(
+            signal,
+            cfg,
+            executionConvictionBase=signal.get("executionConvictionBase"),
+            executionConvictionEffective=signal.get("executionConvictionEffective"),
+            executionConvictionSource=signal.get("executionConvictionSource"),
+            executionRankScore=signal.get("executionRankScore"),
+            minConviction=signal.get("autoMinConviction"),
+            alignedDiscountApplied=aligned_discount_applied,
+            calibration=calibration,
+            metaPolicy={
+                "metaEngineWeight": signal.get("metaEngineWeight"),
+                "metaThresholdDelta": signal.get("metaThresholdDelta"),
+                "metaSuspended": signal.get("metaSuspended"),
+            },
+        )
 
+        b_score = signal.get("engine_b_score", 0)
+        b_max = signal.get("engine_b_max", 5)
+        b_verdict = signal.get("engine_b_verdict", "N/A")
         log.info(
-            f"[AUTO] {signal.get('pair')} candidate: conviction={combined_conviction:.3f} min={auto_min_conviction:.3f} "
+            f"[AUTO] {signal.get('pair')} candidate: execConviction={effective_conviction:.3f} min={auto_min_conviction:.3f} "
+            f"source={signal.get('executionConvictionSource')} rank={signal.get('executionRankScore')} "
             f"cal={calibration.get('calibrated_prob')} scope={calibration.get('scope_used')} "
             f"fallback={calibration.get('fallback_reason')} "
             f"meta_w={signal.get('metaEngineWeight')} meta_d={signal.get('metaThresholdDelta')} "
@@ -840,17 +1642,18 @@ class AutoTrader:
         )
 
         if signal.get("metaSuspended"):
+            _finalize_trace(signal, cfg, action="block", stage="metaPolicy", reason="META_POLICY_SUSPENDED")
             return False, "meta policy suspended this engine bucket"
 
-        if combined_conviction < auto_min_conviction:
+        if effective_conviction < auto_min_conviction:
             a_only_reason = _a_only_reject_reason(
                 signal,
-                float(combined_conviction),
+                float(effective_conviction),
                 float(auto_min_conviction),
             )
-            if a_only_reason:
-                return False, a_only_reason
-            return False, f"conviction {combined_conviction:.3f} < min {auto_min_conviction:.3f}"
+            reason = a_only_reason or f"conviction {effective_conviction:.3f} < min {auto_min_conviction:.3f}"
+            _finalize_trace(signal, cfg, action="block", stage="conviction", reason=reason)
+            return False, reason
 
         # Regime filter — only execute in TRENDING regime (37% WR vs 11% RANGING, 0% DEVELOPING)
         _trend_state = signal.get("trendState", "UNKNOWN")
@@ -886,9 +1689,11 @@ class AutoTrader:
         # filter has little practical effect on forex. If forex-specific regime blocking
         # is needed, filter on signal.get("regimeName") instead.
         if _trend_state in _blocked_states or _regime.upper() in _blocked_regimes:
+            reason = f"Regime filter: {_trend_state}/{_regime} blocked for auto-trade"
+            _finalize_trace(signal, cfg, action="block", stage="regime", reason=reason)
             return (
                 False,
-                f"Regime filter: {_trend_state}/{_regime} blocked for auto-trade",
+                reason,
             )
 
         now = datetime.now(timezone.utc)
@@ -905,16 +1710,22 @@ class AutoTrader:
                 or (utc_weekday == 4 and utc_total >= 22 * 60)  # Friday after 22:00
             )
             if forex_closed:
-                return False, f"MARKET_CLOSED: {asset_type} market is closed (weekend)"
+                reason = f"MARKET_CLOSED: {asset_type} market is closed (weekend)"
+                _finalize_trace(signal, cfg, action="block", stage="marketHours", reason=reason)
+                return False, reason
 
         if asset_type in ("stock", "index"):
             # Equity markets: only Mon-Fri
             if utc_weekday >= 5:
-                return False, f"MARKET_CLOSED: {asset_type} market is closed (weekend)"
+                reason = f"MARKET_CLOSED: {asset_type} market is closed (weekend)"
+                _finalize_trace(signal, cfg, action="block", stage="marketHours", reason=reason)
+                return False, reason
             # JSE/LSE/DAX: 07:00–15:30 UTC | NYSE: 13:30–20:00 UTC
             # Use a broad window Mon-Fri 07:00–21:00 UTC to cover all equity sessions
             if not (7 * 60 <= utc_total < 21 * 60):
-                return False, f"MARKET_CLOSED: {asset_type} market hours are 07:00–21:00 UTC"
+                reason = f"MARKET_CLOSED: {asset_type} market hours are 07:00-21:00 UTC"
+                _finalize_trace(signal, cfg, action="block", stage="marketHours", reason=reason)
+                return False, reason
 
         # crypto is always open — no guard needed
 
@@ -926,30 +1737,76 @@ class AutoTrader:
             current_sessions = _current_sessions(now)
 
             if not any(s in current_sessions for s in allowed_sessions):
-                return False, f"outside trading session ({current_sessions})"
+                reason = f"outside trading session ({current_sessions})"
+                _finalize_trace(signal, cfg, action="block", stage="session", reason=reason)
+                return False, reason
+
+        slot_ok, slot_reason, slot_detail = _confirmed_close_execution_allowed(signal, cfg, now)
+        slot_key = _auto_trade_slot_key(
+            signal,
+            slot_detail.get("timeframe"),
+            slot_detail.get("lastConfirmedCandleTs"),
+        )
+        slot_detail["slotKey"] = list(slot_key)
+        with self._lock:
+            already_executed = slot_key in self._executed_slots
+        if already_executed:
+            slot_ok = False
+            slot_reason = "CONFIRMED_CLOSE_SLOT_ALREADY_EXECUTED"
+            slot_detail.update({"allowed": False, "reason": "slot_already_executed"})
+        _trace_gate(signal, cfg, "confirmedClose", slot_detail)
+        if not slot_ok:
+            _finalize_trace(signal, cfg, action="block", stage="confirmedClose", reason=slot_reason)
+            return False, slot_reason
+
+        sl_ok, sl_reason, sl_detail = self._sl_distance_precheck(signal, asset_type, cfg)
+        _trace_gate(signal, cfg, "slDistance", sl_detail)
+        if not sl_ok:
+            _finalize_trace(signal, cfg, action="block", stage="slDistance", reason=sl_reason)
+            return False, sl_reason
+
+        major_risk = context.get("majorEventRisk") if isinstance(context, dict) else {}
+        if isinstance(major_risk, dict) and major_risk.get("blocksAutoExecution"):
+            signal["eventRiskGate"] = {
+                "checked": False,
+                "source": "majorEventRisk",
+                "result": major_risk,
+            }
+            reason = major_risk.get("reason") or "MAJOR_EVENT_RISK_BLOCK"
+            _finalize_trace(signal, cfg, action="block", stage="majorEventRisk", reason=reason)
+            return False, reason
+
+        im_ok, im_reason = self._intermarket_execution_gate(signal, cfg, context)
+        _trace_update(signal, cfg, intermarketExecutionGate=signal.get("intermarketExecutionGate"))
+        if not im_ok:
+            _finalize_trace(signal, cfg, action="block", stage="intermarket", reason=im_reason)
+            return False, im_reason
+
+        micro_ok, micro_reason = self._microstructure_execution_gate(signal, cfg, context)
+        _trace_update(
+            signal,
+            cfg,
+            microstructureGate=signal.get("microstructureGate"),
+            executionConvictionEffective=signal.get("executionConvictionEffective"),
+        )
+        if not micro_ok:
+            _finalize_trace(signal, cfg, action="block", stage="microstructure", reason=micro_reason)
+            return False, micro_reason
 
         self._hydrate_conductor_routing(signal)
         _routing_pre = signal.get("conductor") if isinstance(signal.get("conductor"), dict) else {}
+        _trace_update(signal, cfg, conductorRouting=_routing_pre)
         if _routing_pre.get("skip_signal"):
             _rsn = _routing_pre.get("reasons", [])
-            return False, f"CONDUCTOR_SKIP: {'; '.join(str(x) for x in _rsn)}"
+            reason = f"CONDUCTOR_SKIP: {'; '.join(str(x) for x in _rsn)}"
+            _finalize_trace(signal, cfg, action="block", stage="conductor", reason=reason)
+            return False, reason
 
-        if cfg.get("SENTIMENT_GATE_ENABLED", True):
-            try:
-                from sentiment_gate import check_sentiment
-
-                _cond = signal.get("conductor")
-                _do_sent = not isinstance(_cond, dict) or _cond.get("run_sentiment", True)
-                if _do_sent:
-                    sent = check_sentiment(
-                        signal.get("pair", ""), signal.get("direction", ""), asset_type
-                    )
-
-                    if not sent.get("allowed", False):
-                        return False, sent.get("reason", "Sentiment block")
-
-            except ImportError:
-                return False, "Sentiment gate unavailable"
+        sent_ok, sent_reason = self._sentiment_gate_allowed(signal, cfg, context, _routing_pre, asset_type)
+        _trace_update(signal, cfg, sentimentGate=signal.get("sentimentGate"))
+        if not sent_ok:
+            _finalize_trace(signal, cfg, action="block", stage="sentiment", reason=sent_reason)
+            return False, sent_reason
 
         if cfg.get("EVENT_RISK_ENABLED", True):
             try:
@@ -960,12 +1817,25 @@ class AutoTrader:
                     asset_type,
                     lookahead_hours=cfg.get("EVENT_RISK_HOURS", 4),
                 )
+                signal["eventRiskGate"] = ev_risk
+                _trace_update(signal, cfg, eventRiskGate=ev_risk)
 
                 if not ev_risk.get("allowed", False):
-                    return False, ev_risk.get("reason", "Event risk block")
+                    reason = ev_risk.get("reason", "Event risk block")
+                    _finalize_trace(signal, cfg, action="block", stage="eventRisk", reason=reason)
+                    return False, reason
 
             except ImportError:
-                return False, "Event risk gate unavailable"
+                reason = "Event risk gate unavailable"
+                _finalize_trace(signal, cfg, action="block", stage="eventRisk", reason=reason)
+                return False, reason
+        else:
+            signal["eventRiskGate"] = {
+                "allowed": True,
+                "reason": "EVENT_RISK_ENABLED=false",
+                "eventRiskStatus": {"enabled": False, "effectiveAction": "skipped_disabled"},
+            }
+            _trace_update(signal, cfg, eventRiskGate=signal["eventRiskGate"])
 
         # Signal debate gate — AI Bull/Bear/Judge evaluation before auto-execution
         if cfg.get("SIGNAL_DEBATE_ENABLED", True):
@@ -995,10 +1865,22 @@ class AutoTrader:
                 _allowed = bool(_ai_decision.get("execution_allowed"))
                 _reasoning = debate.get("reasoning", "")
                 log.info(f"[AUTO] {signal.get('pair')} debate: {_grade} — {_reasoning}")
+                signal["aiDebateGate"] = {
+                    "checked": True,
+                    "grade": _grade,
+                    "allowed": _allowed,
+                    "arbitration": _ai_decision,
+                    "reasoning": _reasoning,
+                    "scoreMutationEnabled": False,
+                }
                 # AI debate Telegram notification disabled
                 if not _allowed:
-                    return False, f"AI arbitration: {_ai_decision.get('reason')} (debate={_grade})"
-                # Apply score adjustment — central clamp in signal_debate; defense-in-depth
+                    reason = f"AI arbitration: {_ai_decision.get('reason')} (debate={_grade})"
+                    _trace_update(signal, cfg, aiDebateGate=signal["aiDebateGate"])
+                    _finalize_trace(signal, cfg, action="block", stage="aiDebate", reason="AI_ARBITRATION_BLOCK")
+                    return False, reason
+                # Debate may only reduce execution conviction. Engine A score fields
+                # remain server/scoring-owned and are never mutated here.
                 _adj_eff = float(
                     debate.get("score_penalty", debate.get("score_adjustment", 0.0)) or 0.0
                 )
@@ -1017,16 +1899,38 @@ class AutoTrader:
                 _adj = _adj_eff
                 _debate_adjustment_clamped = _adj_raw > 0.0 and _adj == 0.0
                 if _adj != 0.0:
-                    signal["confluenceScore"] = max(
-                        0, signal.get("confluenceScore", 0) + _adj
+                    max_score = _num(signal.get("maxScore"), 1.0) or 1.0
+                    penalty = abs(_adj) / max_score if max_score > 1.0 else abs(_adj)
+                    penalty = _clamp01(penalty)
+                    before_ai = _clamp01(signal.get("executionConvictionEffective"))
+                    after_ai = max(0.0, before_ai - penalty)
+                    signal["aiDebatePenalty"] = round(penalty, 6)
+                    signal["executionConvictionAfterAi"] = round(after_ai, 6)
+                    signal["executionConvictionEffective"] = round(after_ai, 6)
+                    signal["aiDebateGate"].update(
+                        {
+                            "scoreAdjustmentRaw": _adj_raw,
+                            "scoreAdjustmentAppliedToScore": 0.0,
+                            "executionConvictionBefore": round(before_ai, 6),
+                            "executionConvictionPenalty": round(penalty, 6),
+                            "executionConvictionAfter": round(after_ai, 6),
+                        }
                     )
-                    signal["combinedConviction"] = _current_combined_conviction(signal)
-                    if float(signal.get("confluenceScore", 0) or 0) <= 0:
-                        return False, "Debate reduced Engine A score to 0.0"
-                    if signal["combinedConviction"] < auto_min_conviction:
+                    if signal["executionConvictionEffective"] < auto_min_conviction:
+                        _trace_update(
+                            signal,
+                            cfg,
+                            aiDebateGate=signal["aiDebateGate"],
+                            executionConvictionEffective=signal.get("executionConvictionEffective"),
+                        )
+                        reason = (
+                            f"debate-adjusted execution conviction {signal['executionConvictionEffective']:.3f} "
+                            f"< min {auto_min_conviction:.3f}"
+                        )
+                        _finalize_trace(signal, cfg, action="block", stage="aiDebate", reason=reason)
                         return (
                             False,
-                            f"debate-adjusted conviction {signal['combinedConviction']:.3f} < min {auto_min_conviction:.3f}",
+                            reason,
                         )
                 if _debate_adjustment_clamped:
                     log.debug(
@@ -1034,6 +1938,13 @@ class AutoTrader:
                         signal.get("pair"), _adj_raw,
                     )
                 signal["_debate_adjustment_clamped"] = _debate_adjustment_clamped
+                signal["aiDebateGate"]["positiveAdjustmentClamped"] = _debate_adjustment_clamped
+                _trace_update(
+                    signal,
+                    cfg,
+                    aiDebateGate=signal["aiDebateGate"],
+                    executionConvictionEffective=signal.get("executionConvictionEffective"),
+                )
 
                 try:
                     from ai_review_logger import (
@@ -1060,6 +1971,7 @@ class AutoTrader:
                             "bear_conviction": debate.get("bear_conviction"),
                             "score": signal.get("confluenceScore"),
                             "score_adjustment": debate.get("score_adjustment"),
+                            "execution_conviction_effective": signal.get("executionConvictionEffective"),
                             "arbitration": _ai_decision,
                         },
                         has_chart_image=False,
@@ -1068,7 +1980,7 @@ class AutoTrader:
                         ),
                         engine_a_state=signal.get("confluenceScore"),
                         engine_b_state=None,
-                        engine_c_state=signal.get("combinedConviction"),
+                        engine_c_state=signal.get("executionConvictionEffective"),
                         engine_d_state=extract_engine_d_audit_state(signal),
                         risk_state=None,
                         ai_review_state=map_debate_grade_to_ai_state(_grade),
@@ -1087,32 +1999,25 @@ class AutoTrader:
 
             except ImportError:
                 log.debug("[AUTO] signal_debate not available — skipping")
-                return False, "AI debate unavailable"
+                reason = "AI debate unavailable"
+                _finalize_trace(signal, cfg, action="block", stage="aiDebate", reason=reason)
+                return False, reason
             except Exception as _debate_err:
                 log.warning(f"[AUTO] Debate failed (blocking): {_debate_err}")
-                return False, f"AI debate failed: {_debate_err}"
+                reason = f"AI debate failed: {_debate_err}"
+                _finalize_trace(signal, cfg, action="block", stage="aiDebate", reason=reason)
+                return False, reason
+        else:
+            signal["aiDebateGate"] = {"checked": False, "skippedReason": "disabled"}
+            _trace_update(signal, cfg, aiDebateGate=signal["aiDebateGate"])
 
-        # ── SL distance pre-check (mirrors risk_engine MAX_SL_PCT gate) ──────
-        # Reject here — before AI debate, sentiment, and event-risk calls —
-        # so over-wide stops on volatile pairs (XAG/USD, Sugar) don't waste
-        # the full execution pipeline only to fail at risk_check.
-        _entry = float(signal.get("price") or signal.get("livePrice") or 0)
-        _sl = float(signal.get("sl") or 0)
-        if _entry and _sl and _entry != _sl:
-            _sl_pct = abs(_entry - _sl) / abs(_entry)
-            try:
-                from risk_engine import resolve_max_sl_pct
+        chart_ok, chart_reason = self._chart_ai_gate_allowed(signal, cfg)
+        _trace_update(signal, cfg, aiChartGate=signal.get("aiChartGate"))
+        if not chart_ok:
+            _finalize_trace(signal, cfg, action="block", stage="aiChart", reason=chart_reason)
+            return False, chart_reason
 
-                _max_sl_pct, _max_sl_source = resolve_max_sl_pct(signal, asset_type, cfg)
-            except Exception:
-                _max_sl_pct = float((cfg.get("MAX_SL_PCT") or {}).get(asset_type, 0.05))
-                _max_sl_source = f"asset:{asset_type}"
-            if _sl_pct > _max_sl_pct:
-                return (
-                    False,
-                    f"SL distance {_sl_pct:.1%} exceeds MAX_SL_PCT {_max_sl_pct:.1%} for {asset_type} ({_max_sl_source})",
-                )
-
+        _finalize_trace(signal, cfg, action="allow", stage="", reason="")
         return True, ""
 
     def _get_cached_open_positions(
@@ -1171,6 +2076,13 @@ class AutoTrader:
 
         is_crypto = signal.get("type") == "crypto"
         ssi_engine = _signal_engine(signal)
+        _ensure_auto_decision_trace(signal, cfg)
+
+        master_block = self._execution_master_block_reason(signal, cfg)
+        if master_block:
+            _finalize_trace(signal, cfg, action="block", stage="masterExecution", reason=master_block)
+            self._write_error(signal, master_block)
+            return False
 
         try:
             from risk_engine import risk_check
@@ -1185,12 +2097,14 @@ class AutoTrader:
                 account = bybit_get_account()
 
                 if not account:
+                    signal["brokerPrecheck"] = {"allowed": False, "stage": "account", "reason": "BYBIT_NOT_CONNECTED"}
                     self._write_error(signal, "BYBIT_NOT_CONNECTED")
 
                     return False
 
                 pos_result = bybit_get_positions()
                 if isinstance(pos_result, dict) and pos_result.get("error"):
+                    signal["brokerPrecheck"] = {"allowed": False, "stage": "positions", "reason": "BYBIT_POSITIONS_UNAVAILABLE"}
                     self._write_error(signal, "BYBIT_POSITIONS_UNAVAILABLE")
                     return False
                 positions = (
@@ -1202,11 +2116,13 @@ class AutoTrader:
                 symbol_info = bybit_get_symbol_info(pair)
 
                 if not symbol_info or symbol_info.get("error"):
+                    signal["brokerPrecheck"] = {"allowed": False, "stage": "symbol", "reason": "BYBIT_SYMBOL_UNAVAILABLE"}
                     self._write_error(signal, "BYBIT_SYMBOL_UNAVAILABLE")
 
                     return False
 
                 _exec_venue = "bybit"
+                signal["brokerPrecheck"] = {"allowed": True, "venue": _exec_venue}
 
             else:
                 from mt5_executor import (
@@ -1218,12 +2134,14 @@ class AutoTrader:
                 account = mt5_get_account()
 
                 if not account or account.get("error"):
+                    signal["brokerPrecheck"] = {"allowed": False, "stage": "account", "reason": "MT5_NOT_CONNECTED"}
                     self._write_error(signal, "MT5_NOT_CONNECTED")
 
                     return False
 
                 pos_result = mt5_get_positions()
                 if isinstance(pos_result, dict) and pos_result.get("error"):
+                    signal["brokerPrecheck"] = {"allowed": False, "stage": "positions", "reason": "MT5_POSITIONS_UNAVAILABLE"}
                     self._write_error(signal, "MT5_POSITIONS_UNAVAILABLE")
                     return False
                 positions = (
@@ -1235,11 +2153,13 @@ class AutoTrader:
                 symbol_info = mt5_get_symbol_info(pair)
 
                 if not symbol_info:
+                    signal["brokerPrecheck"] = {"allowed": False, "stage": "symbol", "reason": f"SYMBOL_NOT_ON_BROKER:{pair}"}
                     self._write_error(signal, f"SYMBOL_NOT_ON_BROKER:{pair}")
 
                     return False
 
                 _exec_venue = "mt5"
+                signal["brokerPrecheck"] = {"allowed": True, "venue": _exec_venue}
 
             from execution_lifecycle import run_managed_execution
 
@@ -1253,12 +2173,18 @@ class AutoTrader:
                 from athena_runtime import rt as _auto_rt
 
                 _hydrate_execution_candle_quality(signal, _r=_auto_rt())
+                signal["candleHydration"] = {"attempted": True, "status": "ok"}
             except Exception as _hydrate_err:
                 log.warning(
                     "[AUTO] %s: candle quality hydrate skipped (%s)",
                     pair,
                     _hydrate_err,
                 )
+                signal["candleHydration"] = {
+                    "attempted": True,
+                    "status": "error",
+                    "reason": str(_hydrate_err),
+                }
 
             sizing_override = cfg.get("AUTO_TRADE_SIZING_OVERRIDE", 1.0)
 
@@ -1274,18 +2200,36 @@ class AutoTrader:
             )
 
             if not approval.approved:
+                signal["riskApproval"] = {
+                    "approved": False,
+                    "reason": approval.reason,
+                    "riskAmount": getattr(approval, "risk_amount", None),
+                    "riskPct": getattr(approval, "risk_pct", None),
+                }
                 self._write_error(signal, f"RISK:{approval.reason}")
 
                 return False
+            signal["riskApproval"] = {
+                "approved": True,
+                "reason": approval.reason,
+                "riskAmount": getattr(approval, "risk_amount", None),
+                "riskPct": getattr(approval, "risk_pct", None),
+                "volume": getattr(approval, "volume", None),
+            }
 
             from guardian import pre_trade_check as _guardian_pre_trade
             _ptc_ok, _ptc_reason = _guardian_pre_trade(signal, positions, account, pos_result)
+            signal["guardianDecision"] = {
+                "allowed": bool(_ptc_ok),
+                "reason": _ptc_reason,
+            }
             if not _ptc_ok:
                 log.warning(f"[AUTO] {pair} GUARDIAN BLOCKED: {_ptc_reason}")
                 self._write_error(signal, f"GUARDIAN:{_ptc_reason}")
                 return False
 
             result = run_managed_execution(_exec_venue, signal, approval)
+            signal["executionResult"] = result
 
             if result.get("success"):
                 with self._lock:
@@ -1294,6 +2238,8 @@ class AutoTrader:
                     self._last_exec_pair = pair
                     self._last_exec_dir = direction
 
+                self._mark_executed_slot(signal, cfg)
+                _finalize_trace(signal, cfg, action="execute", stage="execution", reason="")
                 self._write_audit(signal, approval, result, cfg)
                 record_execution_event(
                     engine=ssi_engine,
@@ -1348,11 +2294,13 @@ class AutoTrader:
             else:
                 err = result.get("error", "UNKNOWN")
 
+                _finalize_trace(signal, cfg, action="block", stage="execution", reason=f"EXEC:{err}")
                 self._write_error(signal, f"EXEC:{err}")
 
                 return False
 
         except Exception as e:
+            _finalize_trace(signal, cfg, action="block", stage="exception", reason=f"EXCEPTION:{str(e)[:120]}")
             self._write_error(signal, f"EXCEPTION:{str(e)[:120]}")
 
             log.error(f"[AUTO] _execute_signal error for {pair}: {e}")
@@ -1437,7 +2385,19 @@ class AutoTrader:
                 "disabled": signal.get("disabledFactors"),
                 "regime": signal.get("regimeName"),
                 "combined_conviction": signal.get("combinedConviction"),
+                "executionConvictionBase": signal.get("executionConvictionBase"),
+                "executionConvictionEffective": signal.get("executionConvictionEffective"),
+                "executionRankScore": signal.get("executionRankScore"),
                 "calibrated_probability": signal.get("calibratedProbability"),
+                "scoreAttribution": _score_attribution(signal),
+                "nonVisualContext": _non_visual_context(signal),
+                "newsSentimentSummary": signal.get("newsSentimentSummary"),
+                "majorEventRisk": signal.get("majorEventRisk"),
+                "intermarketConfirmation": signal.get("intermarketConfirmation"),
+                "conductorRouting": signal.get("conductor"),
+                "conductorContext": signal.get("conductor_context"),
+                "aiArbitration": signal.get("ai_arbitration"),
+                "autoDecisionTrace": signal.get("autoDecisionTrace"),
             }
             _max_score = (
                 _eng_b_data.get("max_possible")
@@ -1485,7 +2445,7 @@ class AutoTrader:
                             result.get("slippageBps"),
                             _max_score,
                             _score_pct,
-                            json.dumps(_factors),
+                            json.dumps(_json_safe(_factors)),
                             signal.get("calibratedProbability", signal.get("edgeProbability")),
                             _resolve_audit_style(signal.get("style"), signal.get("type")),
                             result.get("feeCost"),
@@ -1507,6 +2467,44 @@ class AutoTrader:
         is_demo = self._test_mode_fn() if self._test_mode_fn else False
 
         log.warning(f"[AUTO] {signal.get('pair')} FAILED — {error_tag}")
+        cfg = self._config_fn() if self._config_fn else {}
+        if not isinstance(cfg, dict):
+            cfg = {}
+        trace = _ensure_auto_decision_trace(signal, cfg)
+        if not trace.get("finalAction"):
+            _finalize_trace(
+                signal,
+                cfg,
+                action="block",
+                stage=trace.get("failedStage") or "unknown",
+                reason=error_tag,
+            )
+        _factors = {
+            "scores": _signal_factor_scores(signal),
+            "weights": _signal_factor_weights(signal),
+            "combined_conviction": signal.get("combinedConviction"),
+            "executionConvictionBase": signal.get("executionConvictionBase"),
+            "executionConvictionEffective": signal.get("executionConvictionEffective"),
+            "executionRankScore": signal.get("executionRankScore"),
+            "scoreAttribution": _score_attribution(signal),
+            "nonVisualContext": _non_visual_context(signal),
+            "newsSentimentSummary": signal.get("newsSentimentSummary"),
+            "majorEventRisk": signal.get("majorEventRisk"),
+            "intermarketConfirmation": signal.get("intermarketConfirmation"),
+            "conductorRouting": signal.get("conductor"),
+            "aiArbitration": signal.get("ai_arbitration"),
+            "riskReason": (
+                _first_dict(signal.get("riskApproval")).get("reason")
+                if isinstance(signal.get("riskApproval"), dict)
+                else None
+            ),
+            "guardianReason": (
+                _first_dict(signal.get("guardianDecision")).get("reason")
+                if isinstance(signal.get("guardianDecision"), dict)
+                else None
+            ),
+            "autoDecisionTrace": signal.get("autoDecisionTrace"),
+        }
 
         try:
             record_execution_event(
@@ -1537,9 +2535,9 @@ class AutoTrader:
 
                        (ts, pair, score, engine, direction, asset_class, regime,
 
-                        entry_price, sl, tp, grade, error_tag)
+                        entry_price, sl, tp, grade, error_tag, factors_json)
 
-                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                     (
                         datetime.now(timezone.utc).isoformat(),
                         signal.get("pair"),
@@ -1553,6 +2551,7 @@ class AutoTrader:
                         signal.get("tp1"),
                         "AUTO-ERR" + ("-DEMO" if is_demo else ""),
                         error_tag,
+                        json.dumps(_json_safe(_factors)),
                     ),
                     label="auto.audit_error.insert",
                 )

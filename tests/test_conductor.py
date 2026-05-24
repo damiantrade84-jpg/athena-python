@@ -138,3 +138,93 @@ def test_skip_debate_above_band_without_strong_score_gap(monkeypatch):
     r = conductor_mod.route_ai_functions(sig, "TRENDING", db_path=None)
     assert r["score_pct"] == pytest.approx(77.0, rel=0, abs=0.1)
     assert r["run_debate"] is False
+
+
+def test_news_risk_routes_sentiment(monkeypatch):
+    monkeypatch.setitem(
+        conductor_mod.CONFIG,
+        "CONDUCTOR",
+        {"ENABLED": True, "SENTIMENT_ON_NEWS": True, "DYNAMIC_WEIGHTING_ENABLED": False},
+    )
+    sig = {
+        "pair": "EUR/USD",
+        "display": "EUR/USD",
+        "confluenceScore": 2.0,
+        "maxScore": 3.0,
+        "direction": "LONG",
+    }
+
+    r = conductor_mod.route_ai_functions(sig, "TRENDING", news_risk="FOMC risk", db_path=None)
+
+    assert r["run_sentiment"] is True
+    assert r["advisoryOnly"] is True
+    assert r["notUsedForExecution"] is True
+
+
+def test_dynamic_weights_disabled_does_not_query_learning_log(monkeypatch):
+    calls = {"perf": 0}
+
+    def fake_perf(*_args, **_kwargs):
+        calls["perf"] += 1
+        return {"sample_size": 99, "engine_a_wr": 1.0, "engine_b_wr": 0.0}
+
+    monkeypatch.setattr(conductor_mod, "_get_recent_performance", fake_perf)
+    monkeypatch.setitem(
+        conductor_mod.CONFIG,
+        "CONDUCTOR",
+        {
+            "ENABLED": True,
+            "DYNAMIC_WEIGHTING_ENABLED": False,
+            "DIAGNOSTIC_WEIGHTS_ENABLED": False,
+            "MIN_SAMPLE_SIZE": 1,
+        },
+    )
+    sig = {
+        "pair": "EUR/USD",
+        "display": "EUR/USD",
+        "confluenceScore": 2.0,
+        "maxScore": 3.0,
+        "direction": "LONG",
+    }
+
+    r = conductor_mod.route_ai_functions(sig, "TRENDING", db_path="audit.db")
+
+    assert calls["perf"] == 0
+    assert r["engine_weights"] == conductor_mod.DEFAULT_REGIME_WEIGHTS["TRENDING"]
+    assert r["engineWeightsAdvisoryOnly"] is True
+
+
+def test_diagnostic_weights_are_marked_advisory(monkeypatch):
+    monkeypatch.setattr(
+        conductor_mod,
+        "_get_recent_performance",
+        lambda *_args, **_kwargs: {
+            "sample_size": 20,
+            "engine_a_wr": 1.0,
+            "engine_b_wr": 0.0,
+        },
+    )
+    monkeypatch.setitem(
+        conductor_mod.CONFIG,
+        "CONDUCTOR",
+        {
+            "ENABLED": True,
+            "DYNAMIC_WEIGHTING_ENABLED": False,
+            "DIAGNOSTIC_WEIGHTS_ENABLED": True,
+            "DYNAMIC_WEIGHT_BLEND": 0.5,
+            "MIN_SAMPLE_SIZE": 1,
+        },
+    )
+    sig = {
+        "pair": "EUR/USD",
+        "display": "EUR/USD",
+        "confluenceScore": 2.0,
+        "maxScore": 3.0,
+        "direction": "LONG",
+    }
+
+    r = conductor_mod.route_ai_functions(sig, "TRENDING", db_path="audit.db")
+
+    assert r["engine_weights"] == conductor_mod.DEFAULT_REGIME_WEIGHTS["TRENDING"]
+    assert r["engine_weights_advisory"]["engine_a"] > r["engine_weights"]["engine_a"]
+    assert r["notUsedForExecution"] is True

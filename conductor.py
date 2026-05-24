@@ -230,6 +230,10 @@ def route_ai_functions(
             "run_sentiment": True,
             "run_marcus": True,
             "engine_weights": {"engine_a": 0.5, "engine_b": 0.5},
+            "engine_weights_advisory": {"engine_a": 0.5, "engine_b": 0.5},
+            "engineWeightsAdvisoryOnly": True,
+            "advisoryOnly": True,
+            "notUsedForExecution": True,
             "reasons": ["conductor_disabled"],
             "skip_signal": False,
         }
@@ -268,6 +272,10 @@ def route_ai_functions(
             "run_sentiment": False,
             "run_marcus": False,
             "engine_weights": {"engine_a": 0.0, "engine_b": 0.0},
+            "engine_weights_advisory": {"engine_a": 0.0, "engine_b": 0.0},
+            "engineWeightsAdvisoryOnly": True,
+            "advisoryOnly": True,
+            "notUsedForExecution": True,
             "reasons": reasons,
             "skip_signal": True,
         }
@@ -308,7 +316,8 @@ def route_ai_functions(
 
     weights = DEFAULT_REGIME_WEIGHTS.get(regime, {"engine_a": 0.5, "engine_b": 0.5}).copy()
 
-    dyn_on = cfg.get("DYNAMIC_WEIGHTING_ENABLED", True)
+    dyn_on = bool(cfg.get("DYNAMIC_WEIGHTING_ENABLED", False))
+    diagnostic_weights = bool(cfg.get("DIAGNOSTIC_WEIGHTS_ENABLED", False))
     min_n = cfg.get("MIN_SAMPLE_SIZE", 10)
     try:
         min_n = max(1, int(min_n))
@@ -321,20 +330,32 @@ def route_ai_functions(
     blend = max(0.0, min(1.0, blend))
     default_w = 1.0 - blend
 
-    if dyn_on and db_path and pair and regime:
+    advisory_weights = weights.copy()
+    recent_perf = None
+    if (dyn_on or diagnostic_weights) and db_path and pair and regime:
         perf = _get_recent_performance(db_path, pair, regime)
+        recent_perf = perf
         if perf["sample_size"] >= min_n:
             a_wr = perf["engine_a_wr"]
             b_wr = perf["engine_b_wr"]
             total = a_wr + b_wr
             if total > 0:
                 empirical_a = a_wr / total
-                weights["engine_a"] = default_w * weights["engine_a"] + blend * empirical_a
-                weights["engine_b"] = 1.0 - weights["engine_a"]
-                reasons.append(
-                    f"Dynamic weighting: A={weights['engine_a']:.2f} (WR{a_wr:.0%}), "
-                    f"B={weights['engine_b']:.2f} (WR{b_wr:.0%}) from {perf['sample_size']} trades"
-                )
+                advisory_weights["engine_a"] = default_w * weights["engine_a"] + blend * empirical_a
+                advisory_weights["engine_b"] = 1.0 - advisory_weights["engine_a"]
+                if dyn_on:
+                    weights = advisory_weights.copy()
+                    reasons.append(
+                        f"Dynamic weighting advisory applied by conductor config: A={weights['engine_a']:.2f} "
+                        f"(WR{a_wr:.0%}), B={weights['engine_b']:.2f} (WR{b_wr:.0%}) "
+                        f"from {perf['sample_size']} trades"
+                    )
+                else:
+                    reasons.append(
+                        f"Diagnostic weights only: A={advisory_weights['engine_a']:.2f} "
+                        f"(WR{a_wr:.0%}), B={advisory_weights['engine_b']:.2f} "
+                        f"from {perf['sample_size']} trades"
+                    )
 
     total_w = weights["engine_a"] + weights["engine_b"]
     if total_w > 0:
@@ -350,6 +371,13 @@ def route_ai_functions(
         "run_sentiment": run_sentiment,
         "run_marcus": run_marcus,
         "engine_weights": weights,
+        "engine_weights_advisory": advisory_weights,
+        "engineWeightsAdvisoryOnly": True,
+        "advisoryOnly": True,
+        "notUsedForExecution": True,
+        "dynamicWeightingEnabled": dyn_on,
+        "diagnosticWeightsEnabled": diagnostic_weights,
+        "recent_performance": recent_perf,
         "reasons": reasons,
         "skip_signal": False,
         "score_pct": score_pct,
@@ -386,9 +414,15 @@ def build_conductor_context_packet(
         "run_marcus": routing.get("run_marcus"),
         "reasons": routing.get("reasons", []),
         "engine_weights": routing.get("engine_weights", {}),
+        "engine_weights_advisory": routing.get("engine_weights_advisory", {}),
+        "advisoryOnly": True,
+        "notUsedForExecution": True,
     }
 
-    if db_path:
+    c_cfg = CONFIG.get("CONDUCTOR", {}) or {}
+    if routing.get("recent_performance") is not None:
+        ctx["recent_performance"] = routing.get("recent_performance")
+    elif db_path and c_cfg.get("DIAGNOSTIC_WEIGHTS_ENABLED", False):
         pair = str(ctx.get("identity", {}).get("pair", "")).replace("/", "")
         perf = _get_recent_performance(db_path, pair, regime)
         ctx["recent_performance"] = perf
@@ -436,6 +470,8 @@ def conductor_orchestrate(
     )
 
     context = build_conductor_context_packet(signal, regime, routing, db_path)
+    if isinstance(news_ctx, dict) and news_ctx:
+        context["news_context"] = news_ctx
 
     result = {
         "routing": routing,

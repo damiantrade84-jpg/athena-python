@@ -107,6 +107,13 @@ _EXEC_DEFAULTS = {
 def _signal_quality_factor(signal: dict) -> float:
     """Return the live quality multiplier used for risk sizing."""
     try:
+        effective = signal.get("executionConvictionEffective")
+        if effective is not None:
+            return max(0.25, min(1.0, float(effective)))
+    except (TypeError, ValueError):
+        pass
+
+    try:
         combined = signal.get("combinedConviction")
         if combined is not None:
             return max(0.25, min(1.0, float(combined)))

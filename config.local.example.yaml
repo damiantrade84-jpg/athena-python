@@ -11,3 +11,8 @@
 PAPER_SOAK:
   ENABLED: false
   REAL_ORDERS_ALLOWED: true
+
+# Loose demo soak overrides only. Keep tracked config.yaml live-safe.
+# AUTO_TRADE_MAX_DAILY: 10
+# MAX_PORTFOLIO_HEAT: 1.0
+# MAX_OPEN_POSITIONS: 20
