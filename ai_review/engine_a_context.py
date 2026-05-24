@@ -417,6 +417,30 @@ def _macro_context(
     }
 
 
+def build_score_attribution(
+    signal: dict[str, Any],
+    *,
+    factor_diagnostics: dict[str, Any] | None = None,
+    threshold: float | None = None,
+    max_score: float | None = None,
+) -> dict[str, Any]:
+    """Build unified Engine A score attribution for scan payloads and AI review."""
+    fd = factor_diagnostics if isinstance(factor_diagnostics, dict) else {}
+    if not fd:
+        raw_fd = signal.get("factorDiagnostics") or signal.get("factor_diagnostics")
+        fd = raw_fd if isinstance(raw_fd, dict) else {}
+    ctx = {
+        "confluence_score": _to_float(
+            signal.get("confluenceScore") or signal.get("score") or signal.get("final_score")
+        ),
+        "threshold": _to_float(threshold if threshold is not None else signal.get("threshold")),
+        "max_score_override": _to_float(
+            max_score if max_score is not None else signal.get("maxScore") or signal.get("maxScoreOverride")
+        ),
+    }
+    return _score_attribution(signal, fd, ctx)
+
+
 def _score_attribution(
     signal: dict[str, Any],
     factor_diag: dict[str, Any],

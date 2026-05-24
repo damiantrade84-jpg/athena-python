@@ -1460,7 +1460,7 @@ NEWS_SENTIMENT_SCORE_IMPACT: 0.06               # delta = impact * maxScore * vo
 
 NEWS_SENTIMENT_ATTACH_SUMMARY: true             # attach short summary on each signal JSON
 
-NEWS_SENTIMENT_MACRO_CONTEXT_ENABLED: false     # When true, add configured macro news sources/tags per pair.
+NEWS_SENTIMENT_MACRO_CONTEXT_ENABLED: true     # When true, add configured macro news sources/tags per pair.
 
 NEWS_SENTIMENT_MAX_ARTICLE_AGE_HOURS: 72
 
@@ -1474,7 +1474,34 @@ NEWS_SENTIMENT_MAJOR_EVENT_MODE: advisory       # advisory | negative_delta_only
 
 NEWS_SENTIMENT_MAX_DELTA: 0.30
 
-NEWS_SENTIMENT_DRIVER_MAP: {}
+NEWS_SENTIMENT_DRIVER_MAP:
+  XAU/USD:
+    - tag:usd
+    - tag:dxy
+    - tag:fed-rates
+    - tag:rates
+    - tag:cpi
+    - tag:pce
+    - tag:nfp
+    - tag:real-yields
+    - tag:safe-haven
+    - tag:geopolitics
+    - tag:central-bank-demand
+  XAUUSD:
+    - tag:usd
+    - tag:dxy
+    - tag:fed-rates
+    - tag:rates
+    - tag:cpi
+    - tag:pce
+    - tag:nfp
+    - tag:real-yields
+    - tag:safe-haven
+    - tag:geopolitics
+    - tag:central-bank-demand
+  commodity:
+    - tag:inflation
+    - tag:safe-haven
 
 NEWS_PAIR_CAP: 40   # Max pairs to fetch per-pair EODHD news and word weights per refresh
 

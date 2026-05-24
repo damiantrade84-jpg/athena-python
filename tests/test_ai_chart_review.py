@@ -1216,6 +1216,28 @@ def test_build_engine_a_prompt_context_includes_factor_scores():
     assert prompt_ctx["diagnostics"]["rsi"] == 54.2
 
 
+def test_build_score_attribution_for_scan_payload():
+    from ai_review.engine_a_context import build_score_attribution
+
+    signal = {
+        "confluenceScore": 2.4,
+        "threshold": 2.0,
+        "maxScore": 3.0,
+        "preNewsScore": 2.33,
+        "newsSentimentDelta": 0.07,
+        "factorDiagnostics": {
+            "intermarket_engine_a_delta": 0.08,
+            "intermarket": {"engineADelta": 0.08},
+        },
+        "intermarketConfirmation": {"engineADelta": 0.08},
+    }
+    attr = build_score_attribution(signal)
+    assert attr["finalEngineAScore"] == pytest.approx(2.4)
+    assert attr["newsSentimentDelta"] == pytest.approx(0.07)
+    assert attr["intermarketDelta"] == pytest.approx(0.08)
+    assert attr["aiReviewCanMutateScore"] is False
+
+
 def test_build_engine_a_prompt_context_includes_non_visual_context_and_score_attribution():
     ctx = _engine_a_ctx(
         asset_group="crypto",

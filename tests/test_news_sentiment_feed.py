@@ -52,7 +52,7 @@ def test_parse_news_ai_json_plain():
 
 
 def test_parse_news_ai_json_after_prose():
-    raw = 'Here is the analysis.\n\n{"pair": "EUR/USD", "sentiment_score": 0.0, "confidence": 0.5, "direction": "neutral", "key_themes": [], "major_event_detected": false, "major_event_description": null, "reasoning_summary": "x", "article_count_used": 1, "eodhd_pre_score": null, "eodhd_agreement": "unavailable"}'
+    raw = 'Here is the analysis.\n\n{"pair": "EUR/USD", "sentiment_score": 0.0, "confidence": 0.5, "direction": "neutral", "key_themes": [], "major_event_detected": false, "major_event_description": null, "reasoning_summary": "x", "article_count_used": 1}'
     out = _parse_news_ai_json(raw)
     assert out["pair"] == "EUR/USD"
     assert out["direction"] == "neutral"
@@ -307,6 +307,45 @@ def test_major_event_risk_and_guards_are_single_owner(monkeypatch):
         "reason": "FOMC surprise",
         "blocksAutoExecution": False,
     }
+
+
+def test_major_event_block_auto_execution_mode(monkeypatch):
+    monkeypatch.setenv("EODHD_KEY", "test")
+    monkeypatch.setenv("XAI_API_KEY", "test")
+    res = {"score": 2.0, "maxScoreOverride": 3.0, "warnings": [], "final_score": 2.0}
+
+    monkeypatch.setattr(
+        nsf,
+        "get_cached_news_confluence_vote",
+        lambda *_a, **_k: (
+            0.5,
+            {
+                "direction": "bullish",
+                "confidence": 0.8,
+                "sentiment_score": 0.5,
+                "major_event_detected": True,
+                "major_event_description": "Emergency rate hike",
+                "article_count_used": 3,
+            },
+        ),
+    )
+    apply_news_sentiment_to_scan_result(
+        res,
+        {"display": "XAU/USD", "type": "commodity"},
+        config={
+            "NEWS_SENTIMENT_CONFLUENCE_ENABLED": True,
+            "NEWS_SENTIMENT_SCORE_IMPACT": 0.06,
+            "NEWS_SENTIMENT_MAJOR_EVENT_MODE": "block_auto_execution",
+        },
+        eodhd_ticker_for_pair=lambda _p: "XAUUSD.FOREX",
+        threshold=1.5,
+        max_score=3.0,
+    )
+
+    assert res["majorEventRisk"]["mode"] == "block_auto_execution"
+    assert res["majorEventRisk"]["action"] == "block_auto_execution"
+    assert res["majorEventRisk"]["blocksAutoExecution"] is True
+    assert res["majorEventRisk"]["reason"] == "Emergency rate hike"
 
 
 def test_news_delta_is_capped(monkeypatch):

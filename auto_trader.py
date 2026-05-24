@@ -7,7 +7,19 @@ Runs interval monitoring scans and, by default, only executes qualifying
 signals on fresh confirmed candle-close slots through the same risk engine +
 executor path as manual execution.
 
+Scheduler modes (AUTO_TRADE_SCHEDULER_MODE):
+- confirmed_close (default): execute only within grace window after a confirmed
+  candle close; duplicate slots blocked via _executed_slots.
+- interval: scan on AUTO_TRADE_SCAN_INTERVAL_MIN; confirmed-close slot gate skipped.
+  There is no separate "hybrid" mode string — interval timing and confirmed-close
+  execution gating are the supported modes.
 
+Runtime toggle: self._enabled is set via API enable/disable. Editing
+AUTO_TRADE_ENABLED in config.yaml alone does not stop an already-enabled trader
+until restart or POST /api/auto-trade off.
+
+Meta learner: apply_meta_policy adjusts autoMinConviction (execution gate) only.
+It does not mutate Engine A confluenceScore, scoreNorm, threshold, or maxScore.
 
 Thread-safe. All athena references are passed in via factory functions to
 
@@ -1061,6 +1073,8 @@ class AutoTrader:
 
             self._naked_trades_today_by_pair.clear()
 
+            self._executed_slots.clear()
+
     def _next_scan_time(self) -> datetime:
 
         cfg = self._config_fn() if self._config_fn else {}
@@ -1080,7 +1094,7 @@ class AutoTrader:
             _meta_result = run_meta_analysis(
                 self._audit_db,
                 cfg.get("XAI_API_KEY", ""),
-                cfg.get("XAI_MODEL", "grok-4.20-0309-reasoning"),
+                cfg.get("XAI_MODEL", "grok-4.3"),
             )
             log.info(
                 f"[AUTO] Weekly meta-analysis complete: {_meta_result.get('summary', '')[:100]}"

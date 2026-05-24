@@ -24,6 +24,11 @@ def test_event_risk_disabled_skips_clearly(monkeypatch):
 
 
 def test_enabled_no_key_fail_open_marks_provider_unavailable(monkeypatch):
+    class _NoKeyClient:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+    _install_eodhd(monkeypatch, _NoKeyClient)
     monkeypatch.setitem(CONFIG, "EVENT_RISK_ENABLED", True)
     monkeypatch.setitem(CONFIG, "EVENT_RISK_API_FAIL_CLOSED", False)
     monkeypatch.delenv("EODHD_KEY", raising=False)
@@ -38,6 +43,11 @@ def test_enabled_no_key_fail_open_marks_provider_unavailable(monkeypatch):
 
 
 def test_enabled_no_key_fail_closed_blocks(monkeypatch):
+    class _NoKeyClient:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+    _install_eodhd(monkeypatch, _NoKeyClient)
     monkeypatch.setitem(CONFIG, "EVENT_RISK_ENABLED", True)
     monkeypatch.setitem(CONFIG, "EVENT_RISK_API_FAIL_CLOSED", True)
     monkeypatch.delenv("EODHD_KEY", raising=False)
