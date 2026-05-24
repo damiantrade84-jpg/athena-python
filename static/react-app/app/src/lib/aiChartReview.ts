@@ -15,6 +15,7 @@
 
 import { apiClient } from './apiClient';
 import type {
+  AIChartReviewChartSnapshot,
   AIChartReviewRequest,
   AIChartReviewResponse,
   AIChartReviewScreenshotMeta,
@@ -97,6 +98,7 @@ export function buildScreenshotMeta(args: {
   visible_range_start?: string;
   visible_range_end?: string;
   chart_provider?: string;
+  chart_snapshot?: AIChartReviewChartSnapshot;
 }): AIChartReviewScreenshotMeta {
   const provider = args.chart_provider;
   return {
@@ -107,6 +109,7 @@ export function buildScreenshotMeta(args: {
     overlays: [...args.overlays],
     visible_range_start: args.visible_range_start,
     visible_range_end: args.visible_range_end,
+    chart_snapshot: args.chart_snapshot,
     captured_at: new Date().toISOString(),
     ...(provider ? { provider, chart_provider: provider } : {}),
   };
@@ -133,6 +136,17 @@ export function normalizeAIChartReviewResponse(
   const engineAVerdictComparison =
     record.engineAVerdictComparison ?? record.engine_a_verdict_comparison;
   const derivativesContext = record.derivativesContext ?? record.derivatives_context;
+  const nonVisualContext =
+    record.nonVisualContext ??
+    record.engineANonVisualContext ??
+    record.engine_a_non_visual_context ??
+    asRecord(record.engine_a_context).non_visual_context ??
+    asRecord(record.engine_a_context).engine_a_non_visual_context;
+  const scoreAttribution =
+    record.scoreAttribution ??
+    record.engineAScoreAttribution ??
+    record.engine_a_score_attribution ??
+    asRecord(record.engine_a_context).score_attribution;
 
   return {
     ...raw,
@@ -146,6 +160,10 @@ export function normalizeAIChartReviewResponse(
     missingContextDetailed: missingContextDetailed as AIChartReviewResponse['missingContextDetailed'],
     fundingOi: fundingOi as AIChartReviewResponse['fundingOi'],
     derivativesContext: (derivativesContext ?? fundingOi) as AIChartReviewResponse['derivativesContext'],
+    nonVisualContext: nonVisualContext as AIChartReviewResponse['nonVisualContext'],
+    engineANonVisualContext: nonVisualContext as AIChartReviewResponse['engineANonVisualContext'],
+    scoreAttribution: scoreAttribution as AIChartReviewResponse['scoreAttribution'],
+    engineAScoreAttribution: scoreAttribution as AIChartReviewResponse['engineAScoreAttribution'],
     atrDiagnostics: atrDiagnostics as AIChartReviewResponse['atrDiagnostics'],
     resistanceMap: resistanceMap as AIChartReviewResponse['resistanceMap'],
   };

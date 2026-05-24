@@ -88,6 +88,16 @@ Rules:
 - Engine A pass must NOT automatically imply high tradeabilityScore; reduce tradeability when entry is extended/late or visually contradicted.
 - If visual contradiction exists, reduce tradeabilityScore and set chartContradictsEngineADirection when appropriate.
 - If required context is missing, reduce confidence; do not list not-applicable items as missing.
+- COT/carry/funding/OI/intermarket/news/microstructure are non-visual Engine A context.
+- Do not reject a trade just because a non-visual factor is not visible on the chart.
+- Use the chart image for visual direction and timing validation.
+- Use non-visual context to understand why Engine A scored the setup.
+- Never change Engine A score or threshold. AI review may validate or downgrade timing only.
+- Never claim addonScore is volume. addonScore is the asset add-on only; volumeScore is separate and may be null.
+- Do not mark funding/OI missing for non-crypto assets.
+- Do not mark carry missing for non-forex assets.
+- Do not mark COT missing for assets where addonType is not cot/cot_proxy.
+- If nonVisualContext says a driver is unavailable, report it as unavailable, not as bearish/bullish.
 - Do NOT put chartCapturedAt, scanTimestamp, or latestCandleTimestamp in missing_context — use metadata only.
 - For crypto, equity_session is not applicable — put in notApplicable, not missing.
 - ATR freshness: D1 confirmed-only ATR can be 24–48h old — do not flag stale solely on age.
@@ -98,6 +108,9 @@ Rules:
 
 == SERVER-TRUSTED engineAContext (JSON) ==
 {engine_a_json}
+
+== SERVER-TRUSTED NON-VISUAL ENGINE A CONTEXT ==
+nonVisualContext and scoreAttribution are included inside engineAContext above. They are server-trusted diagnostics only; they explain Engine A scoring inputs and do not grant score mutation authority.
 
 == SERVER-TRUSTED engineBContext (JSON) ==
 {engine_b_json}

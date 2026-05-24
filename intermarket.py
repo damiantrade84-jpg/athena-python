@@ -77,6 +77,12 @@ _SPECIAL_PROXY_PAIRS = {
     },
 }
 
+_US10Y_REAL_YIELD_SERIES = "DFII10"
+_REAL_YIELD_CACHE: dict[str, Any] = {"fetched_at": 0.0, "series": None}
+_REAL_YIELD_FAIL_UNTIL = 0.0
+_REAL_YIELD_CACHE_TTL_SEC = 6 * 3600
+_REAL_YIELD_FAIL_COOLDOWN_SEC = 3600
+
 _FILTER_ALIASES = {
     "commodities": "commodity",
     "indices": "index",
@@ -300,6 +306,141 @@ def _coerce_return_series(item: Any, label: str) -> tuple[pd.Series | None, dict
         return None, meta
     returns = np.log(close.astype(float)).diff().dropna()
     return returns, meta
+
+
+def _fetch_fred_daily_series(series_id: str, *, blocking: bool = False) -> list[tuple[str, float]]:
+    """Read a daily FRED series using carry_feed's DB/cache helpers."""
+    from carry_feed import _ensure_series, _get_series_rows_cached
+
+    _ensure_series(series_id, blocking=blocking)
+    dates, values = _get_series_rows_cached(series_id)
+    return [(str(d), float(v)) for d, v in zip(dates, values)]
+
+
+def resolve_us10y_real_yield_proxy(
+    *,
+    blocking: bool = False,
+    now: float | None = None,
+) -> dict | None:
+    """Return a daily US 10Y real-yield proxy series for intermarket confirmation."""
+    global _REAL_YIELD_FAIL_UNTIL
+    now_ts = time.time() if now is None else float(now)
+    cached = _REAL_YIELD_CACHE.get("series")
+    if cached is not None and now_ts - float(_REAL_YIELD_CACHE.get("fetched_at", 0.0)) < _REAL_YIELD_CACHE_TTL_SEC:
+        return cached
+    if now_ts < _REAL_YIELD_FAIL_UNTIL and cached is not None:
+        return cached
+    if now_ts < _REAL_YIELD_FAIL_UNTIL:
+        return None
+    try:
+        rows = _fetch_fred_daily_series(_US10Y_REAL_YIELD_SERIES, blocking=blocking)
+    except Exception as exc:
+        log.debug("[INTERMARKET] FRED %s real-yield fetch failed: %s", _US10Y_REAL_YIELD_SERIES, exc)
+        _REAL_YIELD_FAIL_UNTIL = now_ts + _REAL_YIELD_FAIL_COOLDOWN_SEC
+        return cached
+    cleaned: list[tuple[str, float]] = []
+    for date_str, value in rows:
+        try:
+            cleaned.append((str(date_str)[:10], float(value)))
+        except (TypeError, ValueError):
+            continue
+    if len(cleaned) < 2:
+        _REAL_YIELD_FAIL_UNTIL = now_ts + _REAL_YIELD_FAIL_COOLDOWN_SEC
+        return cached
+    index = pd.to_datetime([d for d, _ in cleaned], utc=True, errors="coerce")
+    values = pd.to_numeric([v for _, v in cleaned], errors="coerce")
+    frame = pd.DataFrame({"close": values}, index=index).dropna()
+    frame = frame[~frame.index.duplicated(keep="last")].sort_index()
+    if len(frame) < 2:
+        _REAL_YIELD_FAIL_UNTIL = now_ts + _REAL_YIELD_FAIL_COOLDOWN_SEC
+        return cached
+    close = frame["close"].astype(float)
+    returns = close.diff().dropna()
+    latest = close.index[-1]
+    age_days = (datetime.now(timezone.utc) - latest.to_pydatetime()).total_seconds() / 86400.0
+    meta = {
+        "source": f"FRED:{_US10Y_REAL_YIELD_SERIES}",
+        "latestDate": latest.strftime("%Y-%m-%d"),
+        "latestTs": latest.isoformat(),
+        "ageDays": round(max(0.0, age_days), 3),
+        "validBars": int(len(close)),
+        "rawBars": int(len(cleaned)),
+        "stepSeconds": 86400,
+        "frequency": "daily",
+        "status": "ok",
+    }
+    series = {
+        "pair": {
+            "display": "US10Y_REAL_YIELD_PROXY",
+            "symbol": _US10Y_REAL_YIELD_SERIES,
+            "type": "macro",
+            "assetClass": "macro",
+            "is_macro_proxy": True,
+        },
+        "label": "US10Y_REAL_YIELD_PROXY",
+        "close": close,
+        "returns": returns,
+        "meta": meta,
+        "candles": [],
+        "assetClass": "macro",
+        "sourceType": "macro_proxy",
+        "frequency": "daily",
+    }
+    _REAL_YIELD_CACHE["series"] = series
+    _REAL_YIELD_CACHE["fetched_at"] = now_ts
+    return series
+
+
+def _is_daily_series(entry: Any) -> bool:
+    if not isinstance(entry, dict):
+        return False
+    meta = entry.get("meta") if isinstance(entry.get("meta"), dict) else {}
+    freq = str(entry.get("frequency") or meta.get("frequency") or "").lower()
+    if freq == "daily":
+        return True
+    step = meta.get("stepSeconds")
+    try:
+        return float(step) >= 18 * 3600
+    except (TypeError, ValueError):
+        return False
+
+
+def _daily_macro_aligned_return_frame(
+    target_label: str,
+    target_entry: dict,
+    driver_label: str,
+    driver_entry: dict,
+    *,
+    min_overlap_bars: int,
+) -> dict:
+    target_close, target_meta = _coerce_close_series(target_entry, target_label)
+    driver_close, driver_meta = _coerce_close_series(driver_entry, driver_label)
+    if target_close is None or driver_close is None:
+        return {
+            "ok": False,
+            "reason": "missing_returns",
+            "frame": pd.DataFrame(),
+            "meta": {target_label: target_meta, driver_label: driver_meta},
+        }
+    target_daily = target_close.astype(float).resample("1D").last().dropna()
+    driver_daily = driver_close.astype(float).resample("1D").last().dropna()
+    target_returns = np.log(target_daily).diff().dropna()
+    driver_returns = driver_daily.diff().dropna()
+    frame = pd.concat({target_label: target_returns, driver_label: driver_returns}, axis=1, join="inner").dropna()
+    if frame.empty or len(frame) < int(min_overlap_bars):
+        return {
+            "ok": False,
+            "reason": "insufficient_overlap",
+            "frame": frame,
+            "meta": {target_label: target_meta, driver_label: driver_meta},
+        }
+    return {
+        "ok": True,
+        "reason": None,
+        "frame": frame.sort_index(),
+        "meta": {target_label: target_meta, driver_label: driver_meta},
+        "alignmentFrequency": "daily",
+    }
 
 
 def build_aligned_return_frame(
@@ -918,7 +1059,15 @@ def _resolve_macro_driver(
             }
         return None
     if driver == "US10Y_REAL_YIELD_PROXY":
-        return None
+        proxy = resolve_us10y_real_yield_proxy()
+        if proxy is None:
+            return None
+        return {
+            "label": "US10Y_REAL_YIELD_PROXY",
+            "series": proxy,
+            "effectiveRelation": None,
+            "resolvedFrom": "fred_real_yield_proxy",
+        }
     if driver == "RISK_SENTIMENT_PROXY":
         composite = _composite_proxy_series(
             [
@@ -981,6 +1130,10 @@ def _pair_priors(target_label: str, cfg: dict) -> list[dict]:
     return out
 
 
+def _unavailable_prior(driver: str, reason: str) -> dict[str, str]:
+    return {"driver": driver, "reason": reason}
+
+
 def build_symbol_context(
     pair: dict,
     snapshot: dict | None,
@@ -1035,7 +1188,7 @@ def build_symbol_context(
             }
         )
 
-    unavailable_priors: list[str] = []
+    unavailable_priors: list[dict[str, str]] = []
     for prior in _pair_priors(target_label, cfg):
         driver_name = str(prior.get("driver") or "").strip()
         relation = str(prior.get("relation") or "").strip().lower()
@@ -1045,7 +1198,7 @@ def build_symbol_context(
             series_store=series_store,
         )
         if not resolved:
-            unavailable_priors.append(driver_name)
+            unavailable_priors.append(_unavailable_prior(driver_name, "unresolved"))
             continue
 
         driver_label = resolved["label"]
@@ -1053,12 +1206,24 @@ def build_symbol_context(
         if existing is None:
             target_series = series_store.get(target_label)
             driver_series = resolved.get("series")
-            aligned = build_aligned_return_frame(
-                {target_label: target_series, driver_label: driver_series},
-                min_overlap_bars=max(5, int(cfg.get("min_overlap_bars", 100) or 100)),
-            )
+            min_overlap = max(5, int(cfg.get("min_overlap_bars", 100) or 100))
+            if _is_daily_series(driver_series):
+                aligned = _daily_macro_aligned_return_frame(
+                    target_label,
+                    target_series,
+                    driver_label,
+                    driver_series,
+                    min_overlap_bars=min_overlap,
+                )
+            else:
+                aligned = build_aligned_return_frame(
+                    {target_label: target_series, driver_label: driver_series},
+                    min_overlap_bars=min_overlap,
+                )
             if not aligned.get("ok"):
-                unavailable_priors.append(driver_name)
+                unavailable_priors.append(
+                    _unavailable_prior(driver_name, str(aligned.get("reason") or "alignment_failed"))
+                )
                 continue
             window_metrics: dict[int, dict] = {}
             for window in cfg.get("windows", [20, 50, 90]):
@@ -1072,7 +1237,7 @@ def build_symbol_context(
                 if wm:
                     window_metrics[int(window)] = wm
             if not window_metrics:
-                unavailable_priors.append(driver_name)
+                unavailable_priors.append(_unavailable_prior(driver_name, "insufficient_window_metrics"))
                 continue
             driver_entry = dict(
                 (driver_series or {}).get("pair")
@@ -1246,6 +1411,7 @@ def score_confirmation(
             "lastBarContradiction": False,
             "flippedDrivers": [],
         },
+        "severeContradiction": False,
         "unavailablePriors": list((raw_context or {}).get("unavailablePriors") or []),
         "explanation": "Intermarket confirmation neutral: insufficient or unstable evidence.",
         "driversConsidered": 0,
@@ -1355,6 +1521,7 @@ def score_confirmation(
             ),
             "flippedDrivers": flipped_drivers,
         },
+        "severeContradiction": bool(severe_contradiction),
         "unavailablePriors": list(raw_context.get("unavailablePriors") or []),
         "explanation": explanation,
         "driversConsidered": len(scored),

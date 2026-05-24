@@ -4,6 +4,7 @@ import { Badge } from '@/components/ui/badge';
 import AIReviewContextCompletenessPanel from '@/components/athena/AIReviewContextCompletenessPanel';
 import AIReviewEngineAVerdictPanel from '@/components/athena/AIReviewEngineAVerdictPanel';
 import AIReviewSummaryStrip from '@/components/athena/AIReviewSummaryStrip';
+import EngineANonVisualContextPanel from '@/components/athena/EngineANonVisualContextPanel';
 import TradeSkillReviewPanel from '@/components/athena/TradeSkillReviewPanel';
 import {
   AI_REVIEW_EMPTY,
@@ -65,6 +66,15 @@ export default function AIReviewCard({ response }: AIReviewCardProps) {
   const warnings = showList(response.mismatch_warnings);
   const suggestedPlan =
     response.suggestedTradePlan ?? response.suggested_trade_plan ?? ai.suggestedTradePlan;
+  const nonVisualContext =
+    response.nonVisualContext ??
+    response.engineANonVisualContext ??
+    ctx?.non_visual_context ??
+    ctx?.engine_a_non_visual_context;
+  const scoreAttribution =
+    response.scoreAttribution ??
+    response.engineAScoreAttribution ??
+    ctx?.score_attribution;
 
   const freshnessFallback = (() => {
     const status = showReviewValue(atrInfo?.atr_freshness_status);
@@ -103,6 +113,18 @@ export default function AIReviewCard({ response }: AIReviewCardProps) {
         <AIReviewSummaryStrip summary={summary} />
 
         <AIReviewEngineAVerdictPanel comparison={verdictComparison} />
+
+        <details className="rounded-md border border-border/40 bg-background/20 px-2 py-1.5">
+          <summary className="cursor-pointer text-[11px] font-medium text-muted-foreground">
+            Engine A non-visual context
+          </summary>
+          <div className="mt-2">
+            <EngineANonVisualContextPanel
+              context={nonVisualContext}
+              scoreAttribution={scoreAttribution}
+            />
+          </div>
+        </details>
 
         <TradeSkillReviewPanel
           skill={ai}

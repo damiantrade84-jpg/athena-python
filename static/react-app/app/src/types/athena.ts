@@ -1225,6 +1225,83 @@ export interface AIChartReviewFundingOi {
   timestamp?: string | number | null;
 }
 
+export interface AddonContext {
+  addonType?: string | null;
+  addonValue?: number | null;
+  addonStatus?: string | null;
+  addonUnsupported?: boolean | null;
+  feedStatus?: Record<string, unknown> | null;
+  appliesToAssetClass?: boolean | null;
+  interpretation?: string | null;
+}
+
+export interface DerivativesContext extends AIChartReviewFundingOi {
+  status?: 'ok' | 'unavailable' | 'not_applicable' | string;
+}
+
+export interface MicrostructureContext {
+  orderBookImbalance?: number | null;
+  liquidityWallDetection?: number | null;
+  orderflowDelta?: number | null;
+  liquidityPressure?: number | null;
+  volumeMomentumSpread?: number | null;
+  source?: string | null;
+  ageSeconds?: number | null;
+  status?: 'ok' | 'unavailable' | 'not_applicable' | string;
+}
+
+export interface IntermarketContext {
+  verdict?: string | null;
+  score?: number | null;
+  engineADelta?: number | null;
+  supportDirection?: string | null;
+  supportStrength?: string | null;
+  stable?: boolean | null;
+  flippedRecently?: boolean | null;
+  activeWindow?: number | string | null;
+  topSupporting?: unknown[];
+  topContradictory?: unknown[];
+  unavailablePriors?: unknown[];
+  severeContradiction?: boolean | null;
+  explanation?: string | null;
+}
+
+export interface NewsContext {
+  vote?: number | null;
+  sentimentScore?: number | null;
+  confidence?: number | null;
+  direction?: string | null;
+  delta?: number | null;
+  rawDelta?: number | null;
+  articleCountUsed?: number | null;
+  freshArticleCount?: number | null;
+  majorEventDetected?: boolean | null;
+  majorEventDescription?: string | null;
+  keyThemes?: string[];
+  reasoningSummary?: string | null;
+}
+
+export interface EngineANonVisualContext {
+  addonContext?: AddonContext;
+  derivativesContext?: DerivativesContext;
+  microstructureContext?: MicrostructureContext;
+  intermarketContext?: IntermarketContext;
+  newsContext?: NewsContext;
+  macroContext?: Record<string, unknown>;
+}
+
+export interface ScoreAttribution {
+  technicalScoreRaw?: number | null;
+  intermarketDelta?: number | null;
+  scoreAfterIntermarket?: number | null;
+  newsSentimentDelta?: number | null;
+  finalEngineAScore?: number | null;
+  threshold?: number | null;
+  maxScore?: number | null;
+  scoreSource?: string | null;
+  aiReviewCanMutateScore?: boolean;
+}
+
 export interface AIChartReviewAtrDiagnostics {
   atrD1?: number | null;
   atrH4?: number | null;
@@ -1338,6 +1415,9 @@ export interface AIChartReviewEngineAContext {
     bucket_lag?: number | null;
     stale_warnings?: string[];
   };
+  non_visual_context?: EngineANonVisualContext;
+  engine_a_non_visual_context?: EngineANonVisualContext;
+  score_attribution?: ScoreAttribution;
   timeframe_route?: TimeframeRoute;
   mismatch_warnings?: string[];
   [k: string]: unknown;
@@ -1379,7 +1459,11 @@ export interface AIChartReviewResponse {
   contextCompleteness?: AIChartReviewContextCompleteness;
   missingContextDetailed?: AIChartReviewMissingContextDetailed;
   fundingOi?: AIChartReviewFundingOi;
-  derivativesContext?: AIChartReviewFundingOi;
+  derivativesContext?: DerivativesContext;
+  nonVisualContext?: EngineANonVisualContext;
+  engineANonVisualContext?: EngineANonVisualContext;
+  scoreAttribution?: ScoreAttribution;
+  engineAScoreAttribution?: ScoreAttribution;
   atrDiagnostics?: AIChartReviewAtrDiagnostics;
   resistanceMap?: AIChartReviewResistanceMap;
   suggestedTradePlan?: SuggestedTradePlan | null;
@@ -1397,6 +1481,23 @@ export interface AIChartReviewScreenshotMeta {
   captured_at: string;
   provider?: string;
   chart_provider?: string;
+  chart_snapshot?: AIChartReviewChartSnapshot;
+}
+
+export interface AIChartReviewChartSnapshot {
+  renderedLayers: string[];
+  visibleRange?: {
+    from?: string | number | null;
+    to?: string | number | null;
+  } | null;
+  visibleCandleCount?: number | null;
+  indicatorLayerStates?: Record<string, boolean>;
+  engineBOverlayCount?: number;
+  priceRange?: {
+    min?: number | null;
+    max?: number | null;
+  } | null;
+  provider?: string | null;
 }
 
 export interface AIChartReviewRequest {

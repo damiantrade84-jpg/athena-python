@@ -80,6 +80,20 @@ def _is_crypto_asset(engine_a_ctx: dict[str, Any]) -> bool:
     return group in _CRYPTO_GROUPS or group.startswith("crypto")
 
 
+def _is_forex_asset(engine_a_ctx: dict[str, Any]) -> bool:
+    return _asset_group(engine_a_ctx) == "forex"
+
+
+def _non_visual_context(engine_a_ctx: dict[str, Any]) -> dict[str, Any]:
+    raw = engine_a_ctx.get("non_visual_context") or engine_a_ctx.get("engine_a_non_visual_context")
+    return raw if isinstance(raw, dict) else {}
+
+
+def _score_attribution(engine_a_ctx: dict[str, Any]) -> dict[str, Any]:
+    raw = engine_a_ctx.get("score_attribution") or engine_a_ctx.get("scoreAttribution")
+    return raw if isinstance(raw, dict) else {}
+
+
 def _engine_b_in_review(engine_a_ctx: dict[str, Any]) -> bool:
     overlays = engine_a_ctx.get("screenshot_overlays") or []
     if isinstance(overlays, list) and "engine_b" in overlays:
@@ -372,6 +386,16 @@ def _classify_missing_items(
                 )
             continue
         if "funding" in lower or "open interest" in lower or "oi" in lower:
+            if not _is_crypto_asset(engine_a_ctx):
+                _append_unique(
+                    not_applicable,
+                    _not_applicable(
+                        "funding_oi_asset_class",
+                        "Funding / open interest",
+                        f"Not used for asset group {asset_group or 'unknown'}",
+                    ),
+                )
+                continue
             if not _funding_oi_complete(funding_oi):
                 _append_unique(
                     optional,
@@ -379,6 +403,52 @@ def _classify_missing_items(
                         key="funding_oi_numeric",
                         label="Funding/OI numeric values",
                         reason="AI review referenced funding/OI but numeric values were unavailable",
+                        impact="medium",
+                        blocks_trade=False,
+                    ),
+                )
+            continue
+        if "carry" in lower:
+            if not _is_forex_asset(engine_a_ctx):
+                _append_unique(
+                    not_applicable,
+                    _not_applicable(
+                        "carry_asset_class",
+                        "Carry add-on",
+                        f"Not used for asset group {asset_group or 'unknown'}",
+                    ),
+                )
+            else:
+                _append_unique(
+                    optional,
+                    _detail(
+                        key="carry_context",
+                        label="Carry add-on context",
+                        reason=item,
+                        impact="medium",
+                        blocks_trade=False,
+                    ),
+                )
+            continue
+        if "cot" in lower or "commitments of traders" in lower:
+            addon = (_non_visual_context(engine_a_ctx).get("addonContext") or {})
+            addon_type = str(addon.get("addonType") or "").lower()
+            if addon_type not in {"cot", "cot_proxy"}:
+                _append_unique(
+                    not_applicable,
+                    _not_applicable(
+                        "cot_asset_class",
+                        "COT add-on",
+                        f"addonType {addon_type or 'unavailable'} is not cot/cot_proxy",
+                    ),
+                )
+            else:
+                _append_unique(
+                    optional,
+                    _detail(
+                        key="cot_context",
+                        label="COT add-on context",
+                        reason=item,
                         impact="medium",
                         blocks_trade=False,
                     ),
@@ -421,7 +491,7 @@ def _classify_missing_items(
             ),
         )
 
-    if references_funding_oi and not _funding_oi_complete(funding_oi):
+    if references_funding_oi and not _funding_oi_complete(funding_oi) and _is_crypto_asset(engine_a_ctx):
         _append_unique(
             optional,
             _detail(
@@ -506,6 +576,10 @@ def build_context_diagnostics(
             "notApplicable": not_applicable,
         },
         "fundingOi": funding_oi,
+        "nonVisualContext": _non_visual_context(engine_a_ctx),
+        "engineANonVisualContext": _non_visual_context(engine_a_ctx),
+        "scoreAttribution": _score_attribution(engine_a_ctx),
+        "engineAScoreAttribution": _score_attribution(engine_a_ctx),
         "atrDiagnostics": atr,
         "resistanceMap": resistance,
     }

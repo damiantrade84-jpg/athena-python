@@ -1152,6 +1152,44 @@ def test_dedup_recomputes_summary(tmp_audit_db):
     assert second.get_json()["ai_review_summary"]["providerStatus"] == "success"
 
 
+def test_route_response_exposes_non_visual_context_and_score_attribution(tmp_audit_db):
+    app = _make_app(tmp_audit_db)
+    client = app.test_client()
+    body = _base_request()
+    with patch(
+        "ai_review.providers.router.call_anthropic_chart_review",
+        return_value=_mock_provider_payload(),
+    ):
+        resp = client.post("/api/ai/chart-review", json=body)
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["nonVisualContext"] == data["engineANonVisualContext"]
+    assert data["scoreAttribution"] == data["engineAScoreAttribution"]
+    assert data["scoreAttribution"]["aiReviewCanMutateScore"] is False
+    assert data["engine_a_context"]["score_attribution"]["aiReviewCanMutateScore"] is False
+    assert "derivativesContext" in data
+    assert data["derivativesContext"]["fundingRate"] == pytest.approx(0.0001)
+
+
+def test_route_dedup_response_exposes_non_visual_context_and_score_attribution(tmp_audit_db):
+    app = _make_app(tmp_audit_db)
+    client = app.test_client()
+    body = _base_request()
+    with patch(
+        "ai_review.providers.router.call_anthropic_chart_review",
+        return_value=_mock_provider_payload(),
+    ):
+        first = client.post("/api/ai/chart-review", json=body)
+        second = client.post("/api/ai/chart-review", json=body)
+    assert first.status_code == 200
+    assert second.status_code == 200
+    data = second.get_json()
+    assert data["dedup_hit"] is True
+    assert data["nonVisualContext"] == data["engineANonVisualContext"]
+    assert data["scoreAttribution"] == data["engineAScoreAttribution"]
+    assert data["scoreAttribution"]["finalEngineAScore"] == data["engine_a_context"]["confluence_score"]
+
+
 def test_resolve_chart_review_analyze_style_maps_h4_to_intraday():
     from ai_review.engine_a_context import resolve_chart_review_analyze_style
 
@@ -1166,7 +1204,7 @@ def test_build_engine_a_prompt_context_includes_factor_scores():
     ctx = _engine_a_ctx()
     ctx["factor_diagnostics"] = {
         **ctx["factor_diagnostics"],
-        "factorScores": {"trend": 0.82, "momentum": 0.61, "addon": 0.15},
+        "factorScores": {"trend": 0.82, "momentum": 0.61, "addon": 0.15, "volume": 0.22},
     }
     ctx["indicator_snapshots"] = {"rsi": 54.2}
     ctx["engine_snapshots"] = extract_engine_snapshots({}, ctx)
@@ -1174,7 +1212,125 @@ def test_build_engine_a_prompt_context_includes_factor_scores():
     assert prompt_ctx["diagnostics"]["trendScore"] == 0.82
     assert prompt_ctx["diagnostics"]["momentumScore"] == 0.61
     assert prompt_ctx["diagnostics"]["addonScore"] == 0.15
+    assert prompt_ctx["diagnostics"]["volumeScore"] == 0.22
     assert prompt_ctx["diagnostics"]["rsi"] == 54.2
+
+
+def test_build_engine_a_prompt_context_includes_non_visual_context_and_score_attribution():
+    ctx = _engine_a_ctx(
+        asset_group="crypto",
+        factor_diagnostics={
+            "factorScores": {"trend": 0.82, "momentum": 0.61, "addon": 0.15, "volume": 0.22},
+            "addon_type": "funding+oi",
+            "addon_value": 0.15,
+            "addon_unsupported": False,
+            "feedStatus": {"addon": "funding+oi:ok", "intermarket": "supportive"},
+            "intermarket": {
+                "verdict": "supportive",
+                "score": 0.31,
+                "engineADelta": 0.08,
+                "supportDirection": "LONG",
+                "supportStrength": "moderate",
+                "stable": True,
+                "flippedRecently": False,
+                "activeWindow": 50,
+                "topSupporting": [{"driver": "DXY"}],
+                "topContradictory": [],
+                "unavailablePriors": [{"driver": "US10Y_REAL_YIELD_PROXY", "reason": "insufficient_overlap"}],
+                "severeContradiction": False,
+                "explanation": "DXY supports.",
+            },
+            "macroContext": {
+                "state": "usd_weaker",
+                "proxyLabel": "DXY",
+                "status": "ok",
+            },
+        },
+        funding_oi={
+            "fundingRate": 0.0001,
+            "fundingRateZ": -0.4,
+            "openInterest": 123456.0,
+            "openInterestDelta": 1000.0,
+            "openInterestDeltaPct": 1.5,
+            "source": "bybit",
+            "timestamp": "2026-05-21T16:00:00+00:00",
+        },
+        h4={"snap": {
+            "order_book_imbalance": 0.2,
+            "liquidity_wall_detection": -0.1,
+            "orderflow_delta": 0.34,
+            "liquidity_pressure": 0.12,
+            "volume_momentum_spread": 0.08,
+            "microstructure_exchange": "binance",
+            "microstructure_age_sec": 12.0,
+        }},
+        newsSentimentVote=0.4,
+        newsSentimentDelta=0.07,
+        newsSentimentRawDelta=0.12,
+        preNewsScore=2.33,
+        newsSentimentSummary={
+            "sentiment_score": 0.6,
+            "confidence": 0.7,
+            "direction": "bullish",
+            "article_count_used": 4,
+            "fresh_article_count": 3,
+            "major_event_detected": True,
+            "major_event_description": "ETF decision",
+            "key_themes": ["ETF"],
+            "reasoning_summary": "ETF flow supports risk.",
+        },
+    )
+    ctx["engine_snapshots"] = extract_engine_snapshots({}, ctx)
+
+    prompt_ctx = build_engine_a_prompt_context(ctx)
+    non_visual = prompt_ctx["nonVisualContext"]
+    assert prompt_ctx["engineANonVisualContext"] == non_visual
+    assert non_visual["addonContext"]["addonType"] == "funding+oi"
+    assert non_visual["derivativesContext"]["fundingRate"] == pytest.approx(0.0001)
+    assert non_visual["microstructureContext"]["orderflowDelta"] == pytest.approx(0.34)
+    assert non_visual["intermarketContext"]["engineADelta"] == pytest.approx(0.08)
+    assert non_visual["newsContext"]["freshArticleCount"] == 3
+    assert non_visual["macroContext"]["macroContext"]["proxyLabel"] == "DXY"
+    assert prompt_ctx["scoreAttribution"]["technicalScoreRaw"] == pytest.approx(2.25)
+    assert prompt_ctx["scoreAttribution"]["scoreAfterIntermarket"] == pytest.approx(2.33)
+    assert prompt_ctx["scoreAttribution"]["newsSentimentDelta"] == pytest.approx(0.07)
+    assert prompt_ctx["scoreAttribution"]["finalEngineAScore"] == pytest.approx(2.4)
+    assert prompt_ctx["scoreAttribution"]["aiReviewCanMutateScore"] is False
+
+
+def test_non_visual_context_marks_asset_specific_inputs_not_applicable():
+    forex_ctx = _engine_a_ctx(
+        asset_group="forex",
+        factor_diagnostics={
+            "addon_type": "carry",
+            "addon_value": 0.05,
+            "feedStatus": {"addon": "carry:ok", "forex_carry_cost": "ok"},
+        },
+    )
+    forex_block = build_engine_a_prompt_context(forex_ctx)["nonVisualContext"]
+    assert forex_block["addonContext"]["addonType"] == "carry"
+    assert forex_block["derivativesContext"]["status"] == "not_applicable"
+
+    gold_ctx = _engine_a_ctx(
+        symbol="XAUUSD",
+        asset_group="commodity",
+        factor_diagnostics={
+            "addon_type": "cot_proxy",
+            "addon_value": 0.12,
+            "feedStatus": {"addon": "cot_proxy:ok"},
+            "intermarket": {"verdict": "neutral", "unavailablePriors": ["US10Y_REAL_YIELD_PROXY"]},
+        },
+    )
+    gold_block = build_engine_a_prompt_context(gold_ctx)["nonVisualContext"]
+    assert gold_block["addonContext"]["addonType"] == "cot_proxy"
+    assert gold_block["intermarketContext"]["unavailablePriors"] == ["US10Y_REAL_YIELD_PROXY"]
+
+
+def test_prompt_includes_non_visual_context_section_and_score_mutation_rules():
+    prompt = build_chart_review_prompt(_engine_a_ctx())
+    assert "== SERVER-TRUSTED NON-VISUAL ENGINE A CONTEXT ==" in prompt
+    assert "Never change Engine A score or threshold" in prompt
+    assert "Never claim addonScore is volume" in prompt
 
 
 def test_build_engine_b_prompt_context_from_structure():
