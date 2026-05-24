@@ -65,6 +65,7 @@ from advisory_thresholds import (
 from lottery_service import ensure_lottery_schema
 from lottery_engine import set_lottery_db_path
 from guardian import pre_trade_check as _guardian_pre_trade
+from symbol_matching import symbol_match_keys
 
 from data_feeds import (  # noqa: E402
     http_requests,
@@ -3053,6 +3054,21 @@ _test_mode = (
 )
 
 _disabled_pairs: set = set()  # per-pair kill-switch - display names of pairs to exclude
+
+
+def _athena_symbol_keys(value) -> set[str]:
+    return symbol_match_keys(value)
+
+
+def _is_pair_disabled_for_execution(symbol: str) -> bool:
+    requested = _athena_symbol_keys(symbol)
+    if not requested:
+        return False
+    for disabled in _disabled_pairs:
+        if requested & _athena_symbol_keys(disabled):
+            return True
+    return False
+
 
 # Per-scan DXY H4 cache to avoid redundant yfinance fetches in Engine B overlay
 _dxy_h4_cache: tuple[list[float], float] | None = None  # (closes, timestamp)
@@ -9837,6 +9853,17 @@ def api_scalp_execute():
         client_signal = payload.get("signal") if isinstance(payload.get("signal"), dict) else None
         if not symbol:
             return jsonify({"error": "Missing symbol"}), 400
+        if _is_pair_disabled_for_execution(symbol):
+            return jsonify({
+                "success": False,
+                "error": "PAIR_DISABLED",
+                "skipped": [{"pair": symbol, "reason": "PAIR_DISABLED"}],
+                "fresh_scan": {
+                    "signals": [],
+                    "skipped": [{"pair": symbol, "reason": "PAIR_DISABLED"}],
+                    "reason": "PAIR_DISABLED",
+                },
+            }), 200
 
         scan = run_scalp_scan([symbol])
         raw_signals = scan.get("signals", []) or []

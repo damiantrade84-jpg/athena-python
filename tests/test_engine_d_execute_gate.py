@@ -21,24 +21,38 @@ def _cfg(*, requires_ai: bool = True) -> dict:
     }
 
 
-def _seed_review(*, direction: str = "LONG", decision: str = "ENTRY_NOW") -> tuple[str, str]:
+_DEFAULT_CTX = object()
+_DEFAULT_AI_REVIEW = object()
+
+
+def _seed_review(
+    *,
+    direction: str = "LONG",
+    decision: str = "ENTRY_NOW",
+    engine_d_ctx: dict | object = _DEFAULT_CTX,
+    ai_review: dict | object = _DEFAULT_AI_REVIEW,
+) -> tuple[str, str]:
     with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
         audit_db = tmp.name
     ensure_schema(audit_db)
-    engine_d_ctx = {
-        "symbol": "EUR/USD",
-        "direction": direction,
-        "execution_tf": "M1",
-        "scan_timestamp": datetime.now(timezone.utc).isoformat(),
-        "chart_captured_at": datetime.now(timezone.utc).isoformat(),
-    }
-    ai_review = {
-        "parse_success": True,
-        "decision": decision,
-        "entryAllowedNow": decision == "ENTRY_NOW",
-        "structured": {"decision": decision, "entryAllowedNow": decision == "ENTRY_NOW"},
-        "verdict": "VALID" if decision == "ENTRY_NOW" else "NO_TRADE",
-    }
+    if engine_d_ctx is _DEFAULT_CTX:
+        engine_d_ctx = {
+            "symbol": "EUR/USD",
+            "direction": direction,
+            "execution_tf": "M1",
+            "scan_timestamp": datetime.now(timezone.utc).isoformat(),
+            "chart_captured_at": datetime.now(timezone.utc).isoformat(),
+            "latest_candle_ts": datetime.now(timezone.utc).isoformat(),
+            "scalpSetup": {"entry": 1.1, "stopLoss": 1.095, "tp1": 1.11},
+        }
+    if ai_review is _DEFAULT_AI_REVIEW:
+        ai_review = {
+            "parse_success": True,
+            "decision": decision,
+            "entryAllowedNow": decision == "ENTRY_NOW",
+            "structured": {"decision": decision, "entryAllowedNow": decision == "ENTRY_NOW"},
+            "verdict": "VALID" if decision == "ENTRY_NOW" else "NO_TRADE",
+        }
     row = record_review(
         symbol="EUR/USD",
         timeframe="M5",
@@ -61,10 +75,36 @@ def _seed_review(*, direction: str = "LONG", decision: str = "ENTRY_NOW") -> tup
 
 def test_scalp_ai_review_allows_entry_now():
     assert scalp_ai_review_allows_entry(
-        {"decision": "ENTRY_NOW", "entryAllowedNow": True, "verdict": "VALID"}
+        {
+            "parse_success": True,
+            "decision": "ENTRY_NOW",
+            "entryAllowedNow": True,
+            "verdict": "VALID",
+        }
     )
     assert not scalp_ai_review_allows_entry(
         {"decision": "WATCH_ONLY", "entryAllowedNow": False, "verdict": "VALID"}
+    )
+
+
+def test_scalp_ai_review_entry_now_requires_exact_bool_and_parse_success():
+    assert not scalp_ai_review_allows_entry(
+        {"decision": "ENTRY_NOW", "entryAllowedNow": True, "verdict": "VALID"}
+    )
+    assert not scalp_ai_review_allows_entry(
+        {
+            "parse_success": True,
+            "decision": "ENTRY_NOW",
+            "entryAllowedNow": "false",
+            "verdict": "VALID",
+        }
+    )
+    assert not scalp_ai_review_allows_entry(
+        {
+            "parse_success": True,
+            "decision": "ENTRY_NOW",
+            "verdict": "VALID",
+        }
     )
 
 
@@ -78,6 +118,9 @@ def test_watchlist_ab_candidate_allowed_with_fresh_ai_review():
         "executable": False,
         "fail_reasons": [],
         "soft_warnings": ["rr_below_min"],
+        "price": 1.1,
+        "sl": 1.095,
+        "tp1": 1.11,
     }
     reason, review = resolve_engine_d_execute_gate(
         signal,
@@ -160,3 +203,159 @@ def test_ai_review_direction_mismatch():
         cfg=_cfg(),
     )
     assert reason == "AI_REVIEW_DIRECTION_MISMATCH"
+
+
+def test_ai_review_requires_symbol_and_direction_context():
+    review_id, audit_db = _seed_review(engine_d_ctx={})
+    signal = {
+        "pair": "EUR/USD",
+        "direction": "LONG",
+        "ai_grade": "B",
+        "gate_result": "WATCHLIST",
+        "executable": False,
+        "price": 1.1,
+        "sl": 1.095,
+        "tp1": 1.11,
+    }
+    reason, _ = resolve_engine_d_execute_gate(
+        signal,
+        review_id=review_id,
+        audit_db=audit_db,
+        cfg=_cfg(),
+    )
+    assert reason == "AI_REVIEW_CONTEXT_MISSING"
+
+
+def test_ai_review_rejects_missing_signal_symbol_context():
+    review_id, audit_db = _seed_review()
+    signal = {
+        "direction": "LONG",
+        "ai_grade": "B",
+        "gate_result": "WATCHLIST",
+        "executable": False,
+        "price": 1.1,
+        "sl": 1.095,
+        "tp1": 1.11,
+    }
+    reason, _ = resolve_engine_d_execute_gate(
+        signal,
+        review_id=review_id,
+        audit_db=audit_db,
+        cfg=_cfg(),
+    )
+    assert reason == "AI_REVIEW_CONTEXT_MISSING"
+
+
+def test_ai_review_matches_yahoo_forex_symbol_suffix():
+    review_id, audit_db = _seed_review()
+    signal = {
+        "symbol": "EURUSD=X",
+        "direction": "LONG",
+        "ai_grade": "B",
+        "gate_result": "WATCHLIST",
+        "executable": False,
+        "price": 1.1,
+        "sl": 1.095,
+        "tp1": 1.11,
+    }
+    reason, review = resolve_engine_d_execute_gate(
+        signal,
+        review_id=review_id,
+        audit_db=audit_db,
+        cfg=_cfg(),
+    )
+    assert reason is None
+    assert review is not None
+
+
+def test_ai_review_rejects_different_crypto_symbol_with_same_settlement_suffix():
+    review_id, audit_db = _seed_review(
+        engine_d_ctx={
+            "symbol": "BTC/USDT:USDT",
+            "direction": "LONG",
+            "execution_tf": "M1",
+            "scan_timestamp": datetime.now(timezone.utc).isoformat(),
+            "chart_captured_at": datetime.now(timezone.utc).isoformat(),
+            "latest_candle_ts": datetime.now(timezone.utc).isoformat(),
+            "scalpSetup": {"entry": 1.1, "stopLoss": 1.095, "tp1": 1.11},
+        }
+    )
+    signal = {
+        "symbol": "ETH/USDT:USDT",
+        "direction": "LONG",
+        "ai_grade": "B",
+        "gate_result": "WATCHLIST",
+        "executable": False,
+        "price": 1.1,
+        "sl": 1.095,
+        "tp1": 1.11,
+    }
+    reason, _ = resolve_engine_d_execute_gate(
+        signal,
+        review_id=review_id,
+        audit_db=audit_db,
+        cfg=_cfg(),
+    )
+    assert reason == "AI_REVIEW_SYMBOL_MISMATCH"
+
+
+def test_ai_review_rejects_different_crypto_symbol_with_same_provider_prefix():
+    review_id, audit_db = _seed_review(
+        engine_d_ctx={
+            "symbol": "BINANCE:BTCUSDT",
+            "direction": "LONG",
+            "execution_tf": "M1",
+            "scan_timestamp": datetime.now(timezone.utc).isoformat(),
+            "chart_captured_at": datetime.now(timezone.utc).isoformat(),
+            "latest_candle_ts": datetime.now(timezone.utc).isoformat(),
+            "scalpSetup": {"entry": 1.1, "stopLoss": 1.095, "tp1": 1.11},
+        }
+    )
+    signal = {
+        "symbol": "BINANCE:ETHUSDT",
+        "direction": "LONG",
+        "ai_grade": "B",
+        "gate_result": "WATCHLIST",
+        "executable": False,
+        "price": 1.1,
+        "sl": 1.095,
+        "tp1": 1.11,
+    }
+    reason, _ = resolve_engine_d_execute_gate(
+        signal,
+        review_id=review_id,
+        audit_db=audit_db,
+        cfg=_cfg(),
+    )
+    assert reason == "AI_REVIEW_SYMBOL_MISMATCH"
+
+
+def test_ai_review_rejects_review_level_mismatch():
+    review_id, audit_db = _seed_review(
+        engine_d_ctx={
+            "symbol": "EUR/USD",
+            "direction": "LONG",
+            "execution_tf": "M1",
+            "scan_timestamp": datetime.now(timezone.utc).isoformat(),
+            "chart_captured_at": datetime.now(timezone.utc).isoformat(),
+            "latest_candle_ts": datetime.now(timezone.utc).isoformat(),
+            "scalpSetup": {"entry": 1.2, "stopLoss": 1.195, "tp1": 1.21},
+        }
+    )
+    signal = {
+        "pair": "EUR/USD",
+        "direction": "LONG",
+        "ai_grade": "B",
+        "gate_result": "WATCHLIST",
+        "executable": False,
+        "price": 1.1,
+        "sl": 1.095,
+        "tp1": 1.11,
+    }
+    reason, _ = resolve_engine_d_execute_gate(
+        signal,
+        review_id=review_id,
+        audit_db=audit_db,
+        cfg=_cfg(),
+    )
+    assert reason == "AI_REVIEW_LEVEL_MISMATCH"
