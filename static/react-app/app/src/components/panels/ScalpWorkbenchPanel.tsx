@@ -28,7 +28,13 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Switch } from '@/components/ui/switch';
+import VolumeModeField from '@/components/execution/VolumeModeField';
 import { useApiPost } from '@/hooks/useApiData';
+import {
+  fetchRiskPreview,
+  formatRiskPreviewLine,
+  useExecutionVolumeState,
+} from '@/hooks/useExecutionVolumeState';
 import { useStore } from '@/hooks/useStore';
 import apiClient from '@/lib/apiClient';
 import {
@@ -878,7 +884,13 @@ export default function ScalpWorkbenchPanel() {
   const [flagStatus, setFlagStatus] = useState<string | null>(null);
   const [flagLoading, setFlagLoading] = useState(false);
   const [confirmExecOpen, setConfirmExecOpen] = useState(false);
-  const [sizingOverride] = useState(1.0);
+  const {
+    volumeMode,
+    setVolumeMode,
+    sizingOverride,
+    setSizingOverride,
+  } = useExecutionVolumeState('min_lot');
+  const [riskPreviewLine, setRiskPreviewLine] = useState<string | null>(null);
   const appliedIntentIdRef = useRef<string | null>(null);
   const pendingAutoReviewRef = useRef(false);
   const autoReviewRanForIntentRef = useRef<string | null>(null);
@@ -1035,11 +1047,40 @@ export default function ScalpWorkbenchPanel() {
   const showViewSuggestedTrades = Boolean(flagStatus) || symbolWatches.length > 0;
   const { runner: suggestedTradeRunner } = useSuggestedTradeRunnerStatus();
 
+  useEffect(() => {
+    if (!confirmExecOpen || !activeSignal || !chartSymbol) {
+      setRiskPreviewLine(null);
+      return;
+    }
+    let cancelled = false;
+    void fetchRiskPreview({
+      pair: chartSymbol,
+      display: activeSignal.display || chartSymbol,
+      symbol: chartSymbol,
+      type: activeSignal.type,
+      direction: activeSignal.direction,
+      entry: activeSignal.entry ?? activeSignal.price,
+      price: activeSignal.entry ?? activeSignal.price,
+      sl: activeSignal.sl,
+      volume_mode: volumeMode,
+      sizing_override: volumeMode === 'calculated' ? sizingOverride : 1.0,
+      style: 'scalp',
+    }).then((preview) => {
+      if (!cancelled) {
+        setRiskPreviewLine(formatRiskPreviewLine(preview));
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [confirmExecOpen, activeSignal, chartSymbol, volumeMode, sizingOverride]);
+
   const onConfirmScalpExecute = useCallback(async () => {
     if (!activeSignal || !chartSymbol || executeBlockReason) return;
     const payload = buildScalpExecutePayload({
       symbol: chartSymbol,
       signal: activeSignal,
+      volumeMode,
       sizingOverride,
       reviewId: scalpAiReviewResponse?.review_id ?? null,
     });
@@ -1052,7 +1093,7 @@ export default function ScalpWorkbenchPanel() {
       showToast(`Scalp rejected: ${result.error || 'unknown'}`, 'error');
     }
     setConfirmExecOpen(false);
-  }, [activeSignal, chartSymbol, executeBlockReason, postExecute, scalpAiReviewResponse?.review_id, showToast, sizingOverride]);
+  }, [activeSignal, chartSymbol, executeBlockReason, postExecute, scalpAiReviewResponse?.review_id, showToast, volumeMode, sizingOverride]);
 
   const flagWatchSetup = useCallback(async () => {
     if (!canFlagWatch || !suggestedPlan || flagLoading) return;
@@ -2154,6 +2195,15 @@ export default function ScalpWorkbenchPanel() {
                   Entry {fmtNum(activeSignal?.entry ?? activeSignal?.price, 6)} · SL {fmtNum(activeSignal?.sl, 6)} · TP1{' '}
                   {fmtNum(activeSignal?.tp1, 6)}
                 </p>
+                <VolumeModeField
+                  volumeMode={volumeMode}
+                  onVolumeModeChange={setVolumeMode}
+                  sizingOverride={sizingOverride}
+                  onSizingOverrideChange={setSizingOverride}
+                />
+                {riskPreviewLine && (
+                  <p className="font-mono text-[10px] text-muted-foreground">{riskPreviewLine}</p>
+                )}
               </div>
             </AlertDialogDescription>
           </AlertDialogHeader>

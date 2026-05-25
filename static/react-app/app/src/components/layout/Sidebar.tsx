@@ -225,6 +225,9 @@ export default function Sidebar() {
           <span className="text-[10px]" style={{ color: 'hsl(var(--muted-foreground))' }}>Auto-Trade</span>
           <Switch checked={serverAutoTradeEnabled} onCheckedChange={handleAutoTradeToggle} disabled={togglingAutoTrade} />
         </div>
+        <p className="px-1 text-[9px] text-muted-foreground">
+          Autotrade volume: Minimum (broker min)
+        </p>
         <div className="flex items-center justify-between px-1">
           <span className="text-[10px]" style={{ color: 'hsl(var(--muted-foreground))' }}>Test Mode</span>
           <Switch checked={isTestMode} onCheckedChange={toggleTestMode} />

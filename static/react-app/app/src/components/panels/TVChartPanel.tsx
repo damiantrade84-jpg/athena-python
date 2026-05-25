@@ -63,6 +63,12 @@ import {
   downscaleToCap,
   postChartReview,
 } from '@/lib/aiChartReview';
+import VolumeModeField from '@/components/execution/VolumeModeField';
+import {
+  fetchRiskPreview,
+  formatRiskPreviewLine,
+  useExecutionVolumeState,
+} from '@/hooks/useExecutionVolumeState';
 import {
   buildQuickExecutePayload,
   evaluateTvChartExecuteBlock,
@@ -1979,7 +1985,13 @@ export default function TVChartPanel() {
   const [flagLoading, setFlagLoading] = useState(false);
   const [confirmExecuteOpen, setConfirmExecuteOpen] = useState(false);
   const [executing, setExecuting] = useState(false);
-  const [sizingOverride, setSizingOverride] = useState(1.0);
+  const {
+    volumeMode,
+    setVolumeMode,
+    sizingOverride,
+    setSizingOverride,
+  } = useExecutionVolumeState('min_lot');
+  const [riskPreviewLine, setRiskPreviewLine] = useState<string | null>(null);
   const [timeframeAutoMode, setTimeframeAutoMode] = useState(true);
   const [intentSignal, setIntentSignal] = useState<EngineASignal | null>(null);
   const lastAppliedRouteKeyRef = useRef<string | null>(null);
@@ -2282,7 +2294,7 @@ export default function TVChartPanel() {
 
     if (!aiReview) return null;
     const review = aiReview.ai_review;
-    const dir = String(review?.direction || aiReview.concordance?.ai_direction || '').toUpperCase();
+    const dir = String(review?.direction || aiReview.concordance?.engine_a_direction || '').toUpperCase();
     if (dir !== 'LONG' && dir !== 'SHORT') return null;
     return {
       schemaVersion: 'suggested_trade_plan.v1',
@@ -2330,6 +2342,38 @@ export default function TVChartPanel() {
   const showViewSuggestedTrades = Boolean(flagStatus) || symbolWatches.length > 0;
   const { runner: suggestedTradeRunner } = useSuggestedTradeRunnerStatus();
 
+  useEffect(() => {
+    if (!confirmExecuteOpen || !chartCandidate) {
+      setRiskPreviewLine(null);
+      return;
+    }
+    const effectiveStyle = String(chartCandidate.style || 'swing');
+    let cancelled = false;
+    void fetchRiskPreview({
+      pair: chartCandidate.pair || chartCandidate.display || pair,
+      display: chartCandidate.display || chartCandidate.pair || pair,
+      symbol: chartCandidate.symbol || chartCandidate.pair || pair,
+      type: chartCandidate.type,
+      direction: chartCandidate.direction,
+      entry: chartCandidate.entry ?? chartCandidate.price,
+      price: chartCandidate.entry ?? chartCandidate.price,
+      sl: chartCandidate.sl,
+      volume_mode: volumeMode,
+      sizing_override: volumeMode === 'calculated' ? sizingOverride : 1.0,
+      style: effectiveStyle,
+      confluenceScore: chartCandidate.confluenceScore,
+      maxScore: chartCandidate.maxScore,
+      combinedConviction: chartCandidate.combinedConviction,
+    }).then((preview) => {
+      if (!cancelled) {
+        setRiskPreviewLine(formatRiskPreviewLine(preview));
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [confirmExecuteOpen, chartCandidate, pair, volumeMode, sizingOverride]);
+
   async function onConfirmExecute() {
     if (!chartCandidate || executeBlockReason) return;
     setExecuting(true);
@@ -2337,6 +2381,7 @@ export default function TVChartPanel() {
       const payload = buildQuickExecutePayload({
         signal: chartCandidate,
         pipMode: String(chartCandidate.style || 'swing'),
+        volumeMode,
         sizingOverride,
       });
       const result = await apiClient.postJson('/api/quick-execute', payload) as {
@@ -3367,6 +3412,15 @@ export default function TVChartPanel() {
                 {chartCandidate?.display || chartCandidate?.pair || pair} at{' '}
                 {fmtNum(chartCandidate?.entry ?? chartCandidate?.price, 5)}?
               </p>
+              <VolumeModeField
+                volumeMode={volumeMode}
+                onVolumeModeChange={setVolumeMode}
+                sizingOverride={sizingOverride}
+                onSizingOverrideChange={setSizingOverride}
+              />
+              {riskPreviewLine && (
+                <p className="font-mono text-[10px] text-muted-foreground">{riskPreviewLine}</p>
+              )}
               <p className="text-xs text-muted-foreground">
                 Backend will recompute SL/TP via /api/quick-execute. Manual user action only.
               </p>

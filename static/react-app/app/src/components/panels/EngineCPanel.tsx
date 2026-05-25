@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useStore } from '@/hooks/useStore';
 import { useApiPoll, useApiPost } from '@/hooks/useApiData';
 import { useLivePrices } from '@/hooks/useLivePrices';
@@ -22,6 +22,13 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
 import { ErrorBanner } from '@/components/shared';
+import VolumeModeField from '@/components/execution/VolumeModeField';
+import {
+  fetchRiskPreview,
+  formatRiskPreviewLine,
+  useExecutionVolumeState,
+} from '@/hooks/useExecutionVolumeState';
+import { buildQuickExecutePayload } from '@/lib/manualExecuteHelpers';
 import { GitMerge, Play, BarChart3, Layers, Activity, Zap, Eye, Clock, Sun, Moon, FileText } from 'lucide-react';
 import { fmtNum, toNum } from '@/lib/utils';
 import { fmtLiveQuoteMeta, fmtPrice } from '@/lib/athenaFormat';
@@ -201,7 +208,13 @@ export default function EngineCPanel() {
   // Execution state
   const [confirmRow, setConfirmRow] = useState<EngineCConsensusRow | null>(null);
   const [pendingStyle, setPendingStyle] = useState<'scalp' | 'intraday' | 'swing'>('swing');
-  const [sizingOverride, setSizingOverride] = useState<number>(1.0);
+  const {
+    volumeMode,
+    setVolumeMode,
+    sizingOverride,
+    setSizingOverride,
+  } = useExecutionVolumeState('min_lot');
+  const [riskPreviewLine, setRiskPreviewLine] = useState<string | null>(null);
 
   // AI Review state
   const [aiReview, setAiReview] = useState<ChartAnalysisResponse | null>(null);
@@ -301,13 +314,49 @@ export default function EngineCPanel() {
     [],
   );
 
+  useEffect(() => {
+    if (!confirmRow) {
+      setRiskPreviewLine(null);
+      return;
+    }
+    const display = confirmRow.display || confirmRow.symbol || confirmRow.pair || '';
+    const rowSizing = toNum(confirmRow.sizing_override, 1);
+    const effectiveSizing = volumeMode === 'calculated'
+      ? Math.max(0.25, Math.min(1.0, sizingOverride * rowSizing))
+      : 1.0;
+    let cancelled = false;
+    void fetchRiskPreview({
+      pair: display,
+      display,
+      symbol: confirmRow.symbol || display,
+      type: confirmRow.type,
+      direction: confirmRow.direction,
+      entry: confirmRow.entry,
+      price: confirmRow.entry,
+      sl: confirmRow.sl,
+      volume_mode: volumeMode,
+      sizing_override: effectiveSizing,
+      style: pendingStyle,
+      confluenceScore: confirmRow.conviction,
+    }).then((preview) => {
+      if (!cancelled) {
+        setRiskPreviewLine(formatRiskPreviewLine(preview));
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [confirmRow, pendingStyle, volumeMode, sizingOverride]);
+
   const onConfirmExecute = useCallback(async () => {
     if (!confirmRow) return;
     const display = confirmRow.display || confirmRow.symbol || confirmRow.pair || '';
     const engineB = (confirmRow.engine_b_raw || {}) as Record<string, unknown>;
     const rowSizing = toNum(confirmRow.sizing_override, 1);
-    const combined = Math.max(0.25, Math.min(1.0, sizingOverride * rowSizing));
-    const payload = {
+    const effectiveSizing = volumeMode === 'calculated'
+      ? Math.max(0.25, Math.min(1.0, sizingOverride * rowSizing))
+      : 1.0;
+    const payload = buildQuickExecutePayload({
       signal: {
         pair: display,
         display,
@@ -315,17 +364,19 @@ export default function EngineCPanel() {
         type: confirmRow.type,
         direction: confirmRow.direction,
         price: confirmRow.entry,
+        entry: confirmRow.entry,
         sl: confirmRow.sl,
         tp1: confirmRow.tp,
         tp2: confirmRow.tp,
         style: pendingStyle,
         confluenceScore: confirmRow.conviction,
         ts: new Date().toISOString(),
-      },
-      engine_b: engineB,
-      pip_mode: pendingStyle,
-      sizing_override: combined,
-    };
+      } as import('@/types/athena').EngineASignal,
+      engineBOverlay: engineB,
+      pipMode: pendingStyle,
+      volumeMode,
+      sizingOverride: effectiveSizing,
+    });
     const result = await postExecute('/api/quick-execute', payload as unknown as Record<string, unknown>);
     if (result) {
       if (result.success || result.ticket) {
@@ -337,7 +388,7 @@ export default function EngineCPanel() {
       showToast('Execution failed', 'error');
     }
     setConfirmRow(null);
-  }, [confirmRow, pendingStyle, sizingOverride, postExecute, showToast]);
+  }, [confirmRow, pendingStyle, volumeMode, sizingOverride, postExecute, showToast]);
 
   // AI Vision Review
   const runAiReview = useCallback(
@@ -607,8 +658,10 @@ export default function EngineCPanel() {
                     }}
                     onExecute={requestExecute}
                     executing={executing}
+                    volumeMode={volumeMode}
+                    onVolumeModeChange={setVolumeMode}
                     sizingOverride={sizingOverride}
-                    onSizingChange={setSizingOverride}
+                    onSizingOverrideChange={setSizingOverride}
                     aiReview={aiReview}
                     aiTextReview={aiTextReview}
                     aiReviewMode={aiReviewMode}
@@ -849,8 +902,16 @@ export default function EngineCPanel() {
                   TP: {fmtPrice(confirmRow?.tp, confirmRow?.pair, confirmRow?.type)} ·
                   RR: {fmtNum(confirmRow?.rr, 2)}
                 </div>
+                <VolumeModeField
+                  volumeMode={volumeMode}
+                  onVolumeModeChange={setVolumeMode}
+                  sizingOverride={sizingOverride}
+                  onSizingOverrideChange={setSizingOverride}
+                />
+                {riskPreviewLine && (
+                  <div className="font-mono text-[10px] text-muted-foreground">{riskPreviewLine}</div>
+                )}
                 <div className="text-[10px] text-muted-foreground">
-                  Sizing: <span className="font-mono">{fmtNum(sizingOverride, 2)}x</span> ·
                   Tier: {confirmRow?.tier || '—'} · Conviction: {fmtNum(confirmRow?.conviction, 2)}
                 </div>
                 <div className="text-[10px] text-muted-foreground">
@@ -945,8 +1006,10 @@ function ConsensusDetail({
   row,
   onExecute,
   executing,
+  volumeMode,
+  onVolumeModeChange,
   sizingOverride,
-  onSizingChange,
+  onSizingOverrideChange,
   aiReview,
   aiTextReview,
   aiReviewMode,
@@ -959,8 +1022,10 @@ function ConsensusDetail({
   row: EngineCConsensusRow;
   onExecute: (row: EngineCConsensusRow, style: 'scalp' | 'intraday' | 'swing') => void;
   executing: boolean;
+  volumeMode: import('@/lib/manualExecuteHelpers').ExecutionVolumeMode;
+  onVolumeModeChange: (mode: import('@/lib/manualExecuteHelpers').ExecutionVolumeMode) => void;
   sizingOverride: number;
-  onSizingChange: (v: number) => void;
+  onSizingOverrideChange: (v: number) => void;
   aiReview: ChartAnalysisResponse | null;
   aiTextReview: AiTextReviewResponse | null;
   aiReviewMode: 'vision' | 'text';
@@ -993,19 +1058,14 @@ function ConsensusDetail({
         <CardContent className="p-3 space-y-3">
           <div className="flex items-center justify-between gap-2">
             <p className="text-[10px] uppercase text-muted-foreground">Execute by Style</p>
-            <div className="flex items-center gap-2 text-[10px] text-muted-foreground">
-              <span>Sizing</span>
-              <Input
-                type="number"
-                min={0.25}
-                max={1}
-                step={0.25}
-                value={sizingOverride}
-                onChange={(e) => onSizingChange(Math.max(0.25, Math.min(1.0, Number(e.target.value) || 1.0)))}
-                className="w-16 h-7 text-xs font-mono text-center"
-              />
-            </div>
           </div>
+          <VolumeModeField
+            compact
+            volumeMode={volumeMode}
+            onVolumeModeChange={onVolumeModeChange}
+            sizingOverride={sizingOverride}
+            onSizingOverrideChange={onSizingOverrideChange}
+          />
           <div className="flex items-center gap-2">
             <Button
               size="sm"

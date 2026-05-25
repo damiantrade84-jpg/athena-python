@@ -1159,7 +1159,18 @@ CONFIG: dict = {
     "ENGINE_A_SCAN_A_ONLY_AUTO_GATE_ENABLED": False,
     "AUTO_TRADE_MAX_DAILY": 2,  # Max auto-trades per calendar day (UTC)
     "AUTO_TRADE_MAX_PER_SCAN": 1,  # Max executions per single scan run
-    "AUTO_TRADE_SIZING_OVERRIDE": 1.0,  # Full live-level sizing on demo
+    "AUTO_TRADE_SIZING_OVERRIDE": 1.0,  # Legacy multiplier; volume follows EXECUTION_VOLUME.AUTO_TRADE_MODE
+    "EXECUTION_VOLUME": {
+        "DEFAULT_MODE": "min_lot",
+        "AUTO_TRADE_MODE": "min_lot",
+        "MANUAL_ALLOW_INCREASE": True,
+        "MIN_LOT_OVERRIDE": {
+            "forex": 0.01,
+            "commodity": 0.01,
+            "crypto": None,
+            "stock": None,
+        },
+    },
     "AUTO_TRADE_SCAN_INTERVAL_MIN": 30,  # Scan every N minutes (30 = twice per hour)
     "AUTO_TRADE_SCHEDULER_MODE": "confirmed_close",
     "AUTO_TRADE_EXECUTION_GRACE_MIN": 5,

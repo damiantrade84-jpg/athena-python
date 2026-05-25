@@ -27,6 +27,23 @@
     return _resolveSignal(signalRef);
   }
 
+  function getExecutionVolumeMode() {
+    var elMode = document.getElementById("execVolumeMode");
+    var mode = elMode ? String(elMode.value || "").toLowerCase() : "";
+    if (mode === "calculated" || mode === "increase") return "calculated";
+    if (window.__execVolumeMode === "calculated") return "calculated";
+    return "min_lot";
+  }
+
+  function buildVolumePayload() {
+    var volumeMode = getExecutionVolumeMode();
+    var sizing = getExecutionSizingOverride();
+    return {
+      volume_mode: volumeMode,
+      sizing_override: volumeMode === "calculated" ? sizing : 1.0,
+    };
+  }
+
   function getExecutionSizingOverride() {
     var el = document.getElementById("execRiskSizing");
     var v = el ? parseFloat(el.value, 10) : NaN;
@@ -84,8 +101,8 @@
       signal: window.buildLiveSignalPayload(sig),
       engine_b: {},
       pip_mode: pipMode || "swing",
-      sizing_override: getExecutionSizingOverride(),
     };
+    Object.assign(payload, buildVolumePayload());
     await postQuickExecute(
       payload,
       btn,
@@ -160,12 +177,17 @@
     var userSz = getExecutionSizingOverride();
     var co = consensus.sizing_override;
     var mult = co != null && !isNaN(Number(co)) ? Number(co) : 1;
-    var combined = Math.max(0.25, Math.min(1.0, userSz * mult));
+    var volumePayload = buildVolumePayload();
+    var combined =
+      volumePayload.volume_mode === "calculated"
+        ? Math.max(0.25, Math.min(1.0, userSz * mult))
+        : 1.0;
     await postQuickExecute(
       {
         signal: signal,
         engine_b: engineB,
         pip_mode: pipMode || "swing",
+        volume_mode: volumePayload.volume_mode,
         sizing_override: combined,
       },
       null,
@@ -187,6 +209,8 @@
     quickExecute,
     executeEngineC,
     getExecutionSizingOverride,
+    getExecutionVolumeMode,
+    buildVolumePayload,
   };
 })();
 

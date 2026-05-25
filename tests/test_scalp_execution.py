@@ -154,7 +154,7 @@ def test_scalp_execute_passes_size_multiplier_to_risk_engine(monkeypatch):
             return {"approved": True, "reason": "OK"}
 
     def _fake_risk_check(**kwargs):
-        captured["sizing_override"] = kwargs["sizing_override"]
+        captured.update(kwargs)
         return _Approval()
 
     monkeypatch.setattr(risk_engine, "risk_check", _fake_risk_check)
@@ -170,7 +170,71 @@ def test_scalp_execute_passes_size_multiplier_to_risk_engine(monkeypatch):
     assert resp.status_code == 200, resp.get_data(as_text=True)
     data = resp.get_json()
     assert data["success"] is True
+    assert captured["sizing_override"] == 1.0
+    assert captured.get("volume_mode") in (None, "min_lot")
+
+
+def test_scalp_execute_calculated_mode_uses_grade_multiplier(monkeypatch):
+    athena_module = _load_athena_module()
+    captured = {}
+    monkeypatch.setitem(
+        athena_module.CONFIG["AI_SCALP_CHART_REVIEW"],
+        "EXECUTE_REQUIRES_AI_REVIEW",
+        False,
+    )
+
+    monkeypatch.setattr(
+        scalp_engine,
+        "run_scalp_scan",
+        lambda pairs: {
+            "signals": [
+                {
+                    "pair": "EUR/USD",
+                    "direction": "LONG",
+                    "type": "forex",
+                    "price": 1.1,
+                    "sl": 1.095,
+                    "tp1": 1.11,
+                    "size_multiplier": 0.25,
+                }
+            ]
+        },
+    )
+    monkeypatch.setattr(mt5_executor, "mt5_get_account", lambda: {"balance": 10000.0, "equity": 10000.0})
+    monkeypatch.setattr(mt5_executor, "mt5_get_positions", lambda: {"positions": []})
+    monkeypatch.setattr(mt5_executor, "mt5_get_symbol_info", lambda symbol: {"digits": 5, "point": 0.00001})
+
+    class _Approval:
+        approved = True
+        reason = "OK"
+        risk_amount = 10.0
+        risk_pct = 0.001
+
+        @staticmethod
+        def to_dict():
+            return {"approved": True, "reason": "OK"}
+
+    def _fake_risk_check(**kwargs):
+        captured.update(kwargs)
+        return _Approval()
+
+    monkeypatch.setattr(risk_engine, "risk_check", _fake_risk_check)
+    monkeypatch.setattr(
+        execution_lifecycle,
+        "run_managed_execution",
+        lambda venue, signal, approval: {"success": True, "ticket": "123", "volume": 0.01, "entry_price": 1.1},
+    )
+
+    client = athena_module.app.test_client()
+    resp = client.post(
+        "/api/scalp-execute",
+        json={"symbol": "EUR/USD", "volume_mode": "calculated", "sizing_override": 1.0},
+    )
+
+    assert resp.status_code == 200, resp.get_data(as_text=True)
+    assert resp.get_json()["success"] is True
     assert captured["sizing_override"] == 0.25
+    assert captured["volume_mode"] == "calculated"
 
 
 def test_scalp_execute_rejects_without_ai_review(monkeypatch):

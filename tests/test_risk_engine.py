@@ -12,6 +12,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from risk_engine import (
     join_peak_audit_queue,
     resolve_max_sl_pct,
+    resolve_min_lot_volume,
+    resolve_volume_mode,
     risk_check,
     _cfg,
     _signal_quality_factor,
@@ -633,6 +635,7 @@ class TestApproval:
             100000,
             100000,
             [],
+            volume_mode="calculated",
         )
 
         assert result.approved is True
@@ -839,3 +842,148 @@ class TestConsensusMinRR:
         r = risk_check(sig, 10000, 10000, [])
         assert r.approved is False
         assert r.reason == "ENGINE_B_CHECKLIST_MISSING"
+
+
+class TestVolumeMode:
+    @pytest.fixture(autouse=True)
+    def _volume_cfg(self, monkeypatch):
+        monkeypatch.setitem(
+            risk_engine.CONFIG,
+            "EXECUTION_VOLUME",
+            {
+                "DEFAULT_MODE": "min_lot",
+                "AUTO_TRADE_MODE": "min_lot",
+                "MANUAL_ALLOW_INCREASE": True,
+                "MIN_LOT_OVERRIDE": {"forex": 0.01, "commodity": 0.01},
+            },
+        )
+
+    def test_min_lot_forex_uses_broker_minimum(self):
+        symbol_info = {
+            "volume_min": 0.01,
+            "volume_step": 0.01,
+            "volume_max": 100.0,
+            "trade_tick_size": 0.00001,
+            "trade_tick_value": 1.0,
+        }
+        result = risk_check(
+            _make_signal(
+                pair="EUR/USD",
+                type="forex",
+                price=1.1000,
+                sl=1.0900,
+                tp1=1.1200,
+                tp2=1.1400,
+            ),
+            10000,
+            10000,
+            [],
+            symbol_info=symbol_info,
+            volume_mode="min_lot",
+        )
+        assert result.approved is True
+        assert result.volume == 0.01
+        assert result.volume_mode == "min_lot"
+        assert result.volume_source == "min_lot"
+
+    def test_min_lot_crypto_respects_symbol_min(self):
+        symbol_info = {
+            "volume_min": 0.001,
+            "volume_step": 0.001,
+            "volume_max": 100.0,
+            "trade_tick_size": 0.01,
+            "trade_tick_value": 0.01,
+        }
+        result = risk_check(
+            _make_signal(
+                pair="BTCUSDT",
+                type="crypto",
+                price=60000,
+                sl=59000,
+                tp1=62000,
+            ),
+            10000,
+            10000,
+            [],
+            symbol_info=symbol_info,
+            volume_mode="min_lot",
+        )
+        assert result.approved is True
+        assert result.volume == pytest.approx(0.001)
+
+    def test_auto_context_forces_min_lot_despite_calculated_request(self, monkeypatch):
+        monkeypatch.setattr(risk_engine, "_calc_volume", lambda *args, **kwargs: 2.0)
+        symbol_info = {
+            "volume_min": 0.01,
+            "volume_step": 0.01,
+            "volume_max": 100.0,
+            "trade_tick_size": 0.00001,
+            "trade_tick_value": 1.0,
+        }
+        result = risk_check(
+            _make_signal(
+                pair="EUR/USD",
+                type="forex",
+                price=1.1000,
+                sl=1.0900,
+                tp1=1.1200,
+            ),
+            100000,
+            100000,
+            [],
+            symbol_info=symbol_info,
+            volume_mode="calculated",
+            execution_context="auto",
+            sizing_override=1.0,
+        )
+        assert result.approved is True
+        assert result.volume == 0.01
+        assert result.volume_mode == "min_lot"
+
+    def test_calculated_mode_applies_sizing_override(self, monkeypatch):
+        monkeypatch.setattr(risk_engine, "_calc_volume", lambda *args, **kwargs: 1.0)
+        result = risk_check(
+            _make_signal(confluenceScore=3.0, maxScore=3.0),
+            100000,
+            100000,
+            [],
+            volume_mode="calculated",
+            sizing_override=0.5,
+        )
+        assert result.approved is True
+        assert result.volume == pytest.approx(0.5, abs=1e-9)
+        assert result.volume_mode == "calculated"
+
+    def test_resolve_min_lot_volume_helper(self):
+        assert resolve_min_lot_volume(
+            {"volume_min": 0.01, "volume_step": 0.01, "volume_max": 100},
+            "forex",
+        ) == 0.01
+
+    def test_resolve_volume_mode_defaults_to_min_lot(self):
+        assert resolve_volume_mode(None, "manual", {}) == "min_lot"
+        assert resolve_volume_mode("calculated", "manual", {}) == "calculated"
+        assert resolve_volume_mode("calculated", "auto", {}) == "min_lot"
+
+    def test_preview_execution_volume_min_lot_forex(self):
+        symbol_info = {
+            "volume_min": 0.01,
+            "volume_step": 0.01,
+            "volume_max": 100.0,
+            "trade_tick_size": 0.00001,
+            "trade_tick_value": 1.0,
+        }
+        preview = risk_engine.preview_execution_volume(
+            _make_signal(
+                pair="EUR/USD",
+                type="forex",
+                price=1.1000,
+                sl=1.0900,
+            ),
+            10000,
+            symbol_info=symbol_info,
+            volume_mode="min_lot",
+        )
+        assert preview["approved"] is True
+        assert preview["volume"] == 0.01
+        assert preview["venue"] == "mt5"

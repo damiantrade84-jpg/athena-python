@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useStore } from '@/hooks/useStore';
 import { useApiPoll, useApiPost } from '@/hooks/useApiData';
 import { useLivePrices } from '@/hooks/useLivePrices';
@@ -30,6 +30,12 @@ import { fmtAtrMeta, fmtLiveQuoteMeta, fmtPrice } from '@/lib/athenaFormat';
 import { fetchVisionCandlePayload } from '@/lib/visionReview';
 import apiClient from '@/lib/apiClient';
 import { buildQuickExecutePayload } from '@/lib/manualExecuteHelpers';
+import VolumeModeField from '@/components/execution/VolumeModeField';
+import {
+  fetchRiskPreview,
+  formatRiskPreviewLine,
+  useExecutionVolumeState,
+} from '@/hooks/useExecutionVolumeState';
 import {
   EngineASignalCard,
   EngineBChecklistCard,
@@ -276,7 +282,13 @@ export default function SignalsPanel() {
   const [detailTab, setDetailTab] = useState<string>('overview');
   const [confirmRow, setConfirmRow] = useState<UnifiedRow | null>(null);
   const [pendingStyle, setPendingStyle] = useState<'scalp' | 'intraday' | 'swing' | 'auto'>('auto');
-  const [sizingOverride, setSizingOverride] = useState<number>(1.0);
+  const {
+    volumeMode,
+    setVolumeMode,
+    sizingOverride,
+    setSizingOverride,
+  } = useExecutionVolumeState('min_lot');
+  const [riskPreviewLine, setRiskPreviewLine] = useState<string | null>(null);
 
   // Hot-cached snapshot from server-side last scan (Engine A only).
   const { data: lastScan, loading: lastLoading, error: lastError, refresh: refreshLast } =
@@ -535,6 +547,41 @@ export default function SignalsPanel() {
     [],
   );
 
+  useEffect(() => {
+    if (!confirmRow) {
+      setRiskPreviewLine(null);
+      return;
+    }
+    const sig = confirmRow.signal;
+    const effectiveStyle = pendingStyle === 'auto'
+      ? (sig.style || (style === 'auto' ? 'swing' : style))
+      : pendingStyle;
+    let cancelled = false;
+    void fetchRiskPreview({
+      pair: sig.pair || sig.display,
+      display: sig.display || sig.pair,
+      symbol: sig.symbol || sig.pair,
+      type: sig.type,
+      direction: sig.direction,
+      entry: sig.entry ?? sig.price,
+      price: sig.entry ?? sig.price,
+      sl: sig.sl,
+      volume_mode: volumeMode,
+      sizing_override: volumeMode === 'calculated' ? sizingOverride : 1.0,
+      style: effectiveStyle,
+      confluenceScore: sig.confluenceScore,
+      maxScore: sig.maxScore,
+      combinedConviction: sig.combinedConviction,
+    }).then((preview) => {
+      if (!cancelled) {
+        setRiskPreviewLine(formatRiskPreviewLine(preview));
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [confirmRow, pendingStyle, style, volumeMode, sizingOverride]);
+
   const onConfirmExecute = useCallback(async () => {
     if (!confirmRow) return;
     const sig = confirmRow.signal;
@@ -549,6 +596,7 @@ export default function SignalsPanel() {
         : {}) as Record<string, unknown>,
       isEngineBOnly,
       pipMode: String(effectiveStyle),
+      volumeMode,
       sizingOverride,
     });
     setExecuting(true);
@@ -574,7 +622,7 @@ export default function SignalsPanel() {
       setConfirmRow(null);
       setPendingStyle('auto');
     }
-  }, [confirmRow, style, pendingStyle, sizingOverride, showToast]);
+  }, [confirmRow, style, pendingStyle, volumeMode, sizingOverride, showToast]);
 
   const lastScannedAtA = scanCacheAMeta?.scannedAt ?? (lastScan as ScanResponse | null)?.scannedAt;
   const lastScannedAtB = scanCacheBMeta?.scannedAt;
@@ -828,23 +876,14 @@ export default function SignalsPanel() {
                       <CardContent className="p-3 space-y-3">
                         <div className="flex items-center justify-between gap-2">
                           <p className="text-[10px] uppercase text-muted-foreground">Execute by Style</p>
-                          <div className="flex items-center gap-2 text-[10px] text-muted-foreground">
-                            <span>Sizing</span>
-                            <Input
-                              type="number"
-                              min={0.25}
-                              max={1.0}
-                              step={0.05}
-                              className="h-7 w-16 text-xs font-mono"
-                              value={sizingOverride}
-                              onChange={(e) => {
-                                const v = parseFloat(e.target.value);
-                                setSizingOverride(Number.isFinite(v) ? Math.max(0.25, Math.min(1.0, v)) : 1.0);
-                              }}
-                            />
-                            <span className="font-mono">x</span>
-                          </div>
                         </div>
+                        <VolumeModeField
+                          compact
+                          volumeMode={volumeMode}
+                          onVolumeModeChange={setVolumeMode}
+                          sizingOverride={sizingOverride}
+                          onSizingOverrideChange={setSizingOverride}
+                        />
                         <div className="grid grid-cols-3 gap-2">
                           <Button
                             size="sm"
@@ -1177,10 +1216,18 @@ export default function SignalsPanel() {
                   TP: {fmtPrice(confirmRow?.signal.tp ?? confirmRow?.signal.tp1, confirmRow?.signal.pair, confirmRow?.signal.type)} ·{' '}
                   R:R {fmtNum(confirmRow?.signal.rr ?? confirmRow?.signal.rr1, 2)}
                 </div>
+                <VolumeModeField
+                  volumeMode={volumeMode}
+                  onVolumeModeChange={setVolumeMode}
+                  sizingOverride={sizingOverride}
+                  onSizingOverrideChange={setSizingOverride}
+                />
+                {riskPreviewLine && (
+                  <div className="font-mono text-[10px] text-muted-foreground">{riskPreviewLine}</div>
+                )}
                 <div className="text-muted-foreground">
                   Engine: <span className="font-mono">{confirmRow ? unifiedEngineLabel(confirmRow.engines) : '—'}</span>{' · '}
-                  Style: <span className="font-mono">{(pendingStyle === 'auto' ? confirmRow?.signal.style || 'auto' : pendingStyle).toUpperCase()}</span>{' · '}
-                  Sizing: <span className="font-mono">{fmtNum(sizingOverride, 2)}x</span>
+                  Style: <span className="font-mono">{(pendingStyle === 'auto' ? confirmRow?.signal.style || 'auto' : pendingStyle).toUpperCase()}</span>
                 </div>
                 <div className="text-[10px] text-muted-foreground">
                   Backend will recompute SL/TP for the selected style via /api/quick-execute (recompute_levels_for_style),

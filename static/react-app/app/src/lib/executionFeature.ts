@@ -78,6 +78,26 @@ function _signalSid(sig: SignalLike, fallback?: string): string {
 
 // ── Public functions ─────────────────────────────────────────────────────────
 
+export function getExecutionVolumeMode(): 'min_lot' | 'calculated' {
+  const reactMode = (window as unknown as Record<string, unknown>).__execVolumeMode;
+  if (reactMode === 'calculated' || reactMode === 'min_lot') {
+    return reactMode;
+  }
+  const el = document.getElementById('execVolumeMode') as HTMLInputElement | null;
+  const v = el?.value?.toLowerCase();
+  if (v === 'calculated' || v === 'increase') return 'calculated';
+  return 'min_lot';
+}
+
+function _volumePayload(): { volume_mode: 'min_lot' | 'calculated'; sizing_override: number } {
+  const volumeMode = getExecutionVolumeMode();
+  const sizingOverride = getExecutionSizingOverride();
+  return {
+    volume_mode: volumeMode,
+    sizing_override: volumeMode === 'calculated' ? sizingOverride : 1.0,
+  };
+}
+
 export function getExecutionSizingOverride(): number {
   // React app path: global override set by React components
   const reactGlobal = (window as unknown as Record<string, unknown>).__execRiskSizing;
@@ -150,7 +170,7 @@ export async function executeSignalStyle(
     signal: buildPayload ? buildPayload(sig) : sig,
     engine_b: {},
     pip_mode: pipMode || 'swing',
-    sizing_override: getExecutionSizingOverride(),
+    ..._volumePayload(),
   };
   await postQuickExecute(
     payload,
@@ -177,7 +197,7 @@ export async function quickExecute(
     signal: buildPayload ? buildPayload(sig) : sig,
     engine_b: engineBData || {},
     pip_mode: pipMode || 'swing',
-    sizing_override: getExecutionSizingOverride(),
+    ..._volumePayload(),
   };
   await postQuickExecute(
     payload,
@@ -212,7 +232,10 @@ export async function executeEngineC(sid: string, pipMode?: string): Promise<voi
   const userSz = getExecutionSizingOverride();
   const co = found.sizing_override;
   const mult = co != null && !isNaN(Number(co)) ? Number(co) : 1;
-  const combined = Math.max(0.25, Math.min(1.0, userSz * mult));
+  const volumePayload = _volumePayload();
+  const combined = volumePayload.volume_mode === 'calculated'
+    ? Math.max(0.25, Math.min(1.0, userSz * mult))
+    : 1.0;
 
   await postQuickExecute(
     {
@@ -242,6 +265,7 @@ export async function executeEngineC(sid: string, pipMode?: string): Promise<voi
       },
       engine_b: engineB,
       pip_mode: pipMode || 'swing',
+      volume_mode: volumePayload.volume_mode,
       sizing_override: combined,
     },
     null,

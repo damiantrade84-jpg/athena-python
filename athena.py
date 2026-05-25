@@ -43,7 +43,11 @@ from datetime import datetime, timezone, timedelta
 from flask import Flask, jsonify, request
 from athena_app.api.routes_scan import api_scan_impl
 from athena_app.api.routes_backtest import api_backtest_impl
-from athena_app.api.routes_execution import normalize_pip_mode
+from athena_app.api.routes_execution import (
+    merge_scalp_sizing_override,
+    normalize_pip_mode,
+    parse_execution_volume_args,
+)
 from athena_app.services.scan_backtest_service import (
     handle_scan_request,
     handle_backtest_request,
@@ -7527,6 +7531,8 @@ def api_webhook():
 
         from execution_lifecycle import run_managed_execution
 
+        _volume_mode, _exec_context, _sizing_override = parse_execution_volume_args(d)
+
         approval = risk_check(
             signal=sig,
             account_balance=account["balance"],
@@ -7534,8 +7540,10 @@ def api_webhook():
             open_positions=positions,
             symbol_info=symbol_info,
             kill_switch=_kill_switch,
-            sizing_override=float(d.get("sizingOverride", 1.0)),
+            sizing_override=_sizing_override,
             account_domain=account.get("risk_domain"),
+            volume_mode=_volume_mode,
+            execution_context=_exec_context,
         )
 
         if not approval.approved:
@@ -10013,6 +10021,9 @@ def api_scalp_execute():
 
         from execution_lifecycle import run_managed_execution
 
+        _volume_mode, _exec_context, _ = parse_execution_volume_args(payload)
+        _sizing_override = merge_scalp_sizing_override(_volume_mode, payload, signal)
+
         approval = risk_check(
             signal=signal,
             account_balance=account["balance"],
@@ -10020,8 +10031,10 @@ def api_scalp_execute():
             open_positions=positions,
             symbol_info=symbol_info,
             kill_switch=_kill_switch,
-            sizing_override=float(signal.get("size_multiplier", 1.0) or 1.0),
+            sizing_override=_sizing_override,
             account_domain=account.get("risk_domain"),
+            volume_mode=_volume_mode,
+            execution_context=_exec_context,
         )
         if not approval.approved:
             return jsonify(

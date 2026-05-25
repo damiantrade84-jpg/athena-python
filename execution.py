@@ -11,7 +11,11 @@ from datetime import datetime, timezone
 
 from flask import Flask, jsonify, request
 
-from athena_app.api.routes_execution import normalize_pip_mode
+from athena_app.api.routes_execution import (
+    merge_scalp_sizing_override,
+    normalize_pip_mode,
+    parse_execution_volume_args,
+)
 from athena_app.repositories.audit_repo import insert_manual_error
 from athena_app.services.candle_service import recompute_levels_for_style
 from athena_runtime import executed_signals, rt
@@ -826,10 +830,7 @@ def api_quick_execute():
     level_override = d.get("level_override") or sig.get("level_override")
 
     pip_mode = normalize_pip_mode(d.get("pip_mode"))
-    try:
-        _sizing_override = max(0.25, min(1.0, float(d.get("sizing_override", 1.0))))
-    except (TypeError, ValueError):
-        _sizing_override = 1.0
+    _volume_mode, _exec_context, _sizing_override = parse_execution_volume_args(d)
     sig["style"] = pip_mode or sig.get("style", "swing")
 
     _sig_age = 9999
@@ -1026,6 +1027,8 @@ def api_quick_execute():
             sizing_override=_sizing_override,
             is_manual_override=True,
             account_domain=account.get("risk_domain"),
+            volume_mode=_volume_mode,
+            execution_context=_exec_context,
         )
 
         pair_name = sig.get("pair", sig.get("symbol", "N/A"))
@@ -1929,6 +1932,7 @@ def api_execute():
 
             _exec_venue = "mt5"
 
+        _volume_mode, _exec_context, _payload_sizing = parse_execution_volume_args(d)
         _raw_so = d.get("sizing_override")
         _sizing_override = None
         if _raw_so is not None:
@@ -1952,7 +1956,7 @@ def api_execute():
                 _sizing_override = 0.75
 
             else:
-                _sizing_override = 1.0
+                _sizing_override = _payload_sizing
 
         _hydrate_execution_candle_quality(sig, _r=_r)
 
@@ -1965,6 +1969,8 @@ def api_execute():
             kill_switch=_r.kill_switch(),
             sizing_override=_sizing_override,
             account_domain=account.get("risk_domain"),
+            volume_mode=_volume_mode,
+            execution_context=_exec_context,
         )
 
         if not approval.approved:
@@ -2090,6 +2096,83 @@ def api_execute():
         return jsonify({"error": "Execution failed — check logs"}), 500
 
 
+def api_risk_preview():
+    """Preview broker volume and dollar risk before manual execution."""
+    _r = rt()
+    d = request.get_json() or {}
+    pair = d.get("pair") or d.get("display") or d.get("symbol") or ""
+    if not pair:
+        return jsonify({"error": "Missing pair/symbol"}), 400
+
+    asset_type = str(d.get("type") or "").lower()
+    if not asset_type:
+        _pair_obj = next(
+            (p for p in _r.ALL_PAIRS if p.get("display") == pair or p.get("symbol") == pair),
+            None,
+        )
+        asset_type = str((_pair_obj or {}).get("type") or "forex").lower()
+
+    try:
+        entry = float(d.get("entry") or d.get("price") or 0)
+        sl = float(d.get("sl") or 0)
+    except (TypeError, ValueError):
+        return jsonify({"error": "Invalid entry or sl"}), 400
+    if entry <= 0 or sl <= 0:
+        return jsonify({"error": "Missing entry or sl"}), 400
+
+    _volume_mode, _exec_context, _sizing_override = parse_execution_volume_args(d)
+    signal = {
+        "pair": pair,
+        "display": d.get("display") or pair,
+        "symbol": d.get("symbol") or pair,
+        "direction": d.get("direction") or "LONG",
+        "price": entry,
+        "entry": entry,
+        "sl": sl,
+        "type": asset_type,
+        "confluenceScore": d.get("confluenceScore"),
+        "maxScore": d.get("maxScore"),
+        "combinedConviction": d.get("combinedConviction"),
+        "executionConvictionEffective": d.get("executionConvictionEffective"),
+    }
+
+    try:
+        if asset_type == "crypto":
+            from bybit_executor import bybit_get_account, bybit_get_symbol_info
+
+            account = bybit_get_account()
+            if not account or account.get("error"):
+                return jsonify({"error": "Bybit not connected"}), 503
+            symbol_info = bybit_get_symbol_info(pair)
+        else:
+            from mt5_executor import mt5_get_account, mt5_get_symbol_info
+
+            account = mt5_get_account()
+            if not account or account.get("error"):
+                return jsonify({"error": "MT5 not connected"}), 503
+            symbol_info = mt5_get_symbol_info(d.get("display") or pair)
+
+        if not symbol_info or symbol_info.get("error"):
+            return jsonify({"error": "Symbol not on broker"}), 400
+
+        from risk_engine import preview_execution_volume
+
+        preview = preview_execution_volume(
+            signal=signal,
+            account_balance=account["balance"],
+            symbol_info=symbol_info,
+            volume_mode=_volume_mode,
+            execution_context=_exec_context,
+            sizing_override=_sizing_override,
+        )
+        preview["pair"] = pair
+        preview["asset_type"] = asset_type
+        return jsonify(preview)
+    except Exception as e:
+        _r.log.warning(f"[RISK PREVIEW] {pair}: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
 def register_execution_routes(app: Flask) -> None:
     """Attach execution + Engine C handlers (idempotent endpoint names)."""
     rules = {r.rule for r in app.url_map.iter_rules()}
@@ -2135,6 +2218,13 @@ def register_execution_routes(app: Flask) -> None:
             "/api/scalp-execute",
             "api_scalp_execute",
             api_scalp_execute,
+            methods=["POST"],
+        )
+    if "/api/risk-preview" not in rules:
+        app.add_url_rule(
+            "/api/risk-preview",
+            "api_risk_preview",
+            api_risk_preview,
             methods=["POST"],
         )
 
@@ -2203,10 +2293,8 @@ def api_scalp_execute():
     _r = rt()
     d = request.get_json() or {}
     sig = d.get("signal")
-    try:
-        _sizing_override = max(0.25, min(1.0, float(d.get("sizing_override", 1.0))))
-    except (TypeError, ValueError):
-        _sizing_override = 1.0
+    _volume_mode, _exec_context, _ = parse_execution_volume_args(d)
+    _sizing_override = merge_scalp_sizing_override(_volume_mode, d, sig or {})
 
     if not sig:
         return jsonify({"error": "Missing signal data"}), 400
@@ -2341,6 +2429,8 @@ def api_scalp_execute():
             sizing_override=_sizing_override,
             is_manual_override=True,
             account_domain=account.get("risk_domain"),
+            volume_mode=_volume_mode,
+            execution_context=_exec_context,
         )
         
         if not approval.approved:

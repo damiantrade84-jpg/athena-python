@@ -1063,6 +1063,16 @@ INDICATOR_CORRELATION_ENABLED: false
 
 EXECUTION_ENABLED: true       # Enable manual execution via dashboard
 
+EXECUTION_VOLUME:
+  DEFAULT_MODE: min_lot          # min_lot | calculated — manual default
+  AUTO_TRADE_MODE: min_lot       # autopilot always uses broker minimum
+  MANUAL_ALLOW_INCREASE: true     # UI may request calculated sizing
+  MIN_LOT_OVERRIDE:
+    forex: 0.01
+    commodity: 0.01
+    crypto: null                  # use broker symbol_info.volume_min
+    stock: null                   # use broker min shares (often 1)
+
 EXECUTOR_MODE: demo            # paper | demo | live — demo aligns with Bybit demo keys
 
 AUTO_EXECUTE: false            # Manual click only (no auto-fire)
@@ -1079,7 +1089,7 @@ ETORO:
 
 # ── Auto-Trader ────────────────────────────────────────────
 
-AUTO_TRADE_ENABLED: false          # Start auto-trader on server boot
+AUTO_TRADE_ENABLED: true          # Start auto-trader on server boot
 
 # AUTO_TRADE_MIN_SCORE is informational operator metadata. Engine A scan gates
 # are resolved by ENGINE_A_SCORE_GROUP_THRESHOLDS/get_score_threshold(), and

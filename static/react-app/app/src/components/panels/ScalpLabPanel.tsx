@@ -1,7 +1,14 @@
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useStore } from '@/hooks/useStore';
 import { useApiPoll, useApiPost } from '@/hooks/useApiData';
 import { useLivePrices } from '@/hooks/useLivePrices';
+import VolumeModeField from '@/components/execution/VolumeModeField';
+import {
+  fetchRiskPreview,
+  formatRiskPreviewLine,
+  useExecutionVolumeState,
+} from '@/hooks/useExecutionVolumeState';
+import { buildScalpExecutePayload } from '@/lib/manualExecuteHelpers';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -251,6 +258,13 @@ export default function ScalpLabPanel() {
   } = useStore();
   const [diagnostic, setDiagnostic] = useState(false);
   const [confirmExec, setConfirmExec] = useState<ScalpSignal | null>(null);
+  const {
+    volumeMode,
+    setVolumeMode,
+    sizingOverride,
+    setSizingOverride,
+  } = useExecutionVolumeState('min_lot');
+  const [riskPreviewLine, setRiskPreviewLine] = useState<string | null>(null);
 
   const { data: pairsData } = useApiPoll<ScalpPairsResponse>('/api/scalp-pairs', 0);
   const { post: postScan, loading: scanning, error: scanError } = useApiPost<ScalpScanResponse>();
@@ -297,6 +311,39 @@ export default function ScalpLabPanel() {
 
   const requestExecute = useCallback((s: ScalpSignal) => setConfirmExec(s), []);
 
+  useEffect(() => {
+    if (!confirmExec) {
+      setRiskPreviewLine(null);
+      return;
+    }
+    const symbol = String(confirmExec.pair || confirmExec.display || confirmExec.symbol || '').trim();
+    if (!symbol) {
+      setRiskPreviewLine(null);
+      return;
+    }
+    let cancelled = false;
+    void fetchRiskPreview({
+      pair: symbol,
+      display: confirmExec.display || symbol,
+      symbol,
+      type: confirmExec.type,
+      direction: confirmExec.direction,
+      entry: confirmExec.entry ?? confirmExec.price,
+      price: confirmExec.entry ?? confirmExec.price,
+      sl: confirmExec.sl,
+      volume_mode: volumeMode,
+      sizing_override: volumeMode === 'calculated' ? sizingOverride : 1.0,
+      style: 'scalp',
+    }).then((preview) => {
+      if (!cancelled) {
+        setRiskPreviewLine(formatRiskPreviewLine(preview));
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [confirmExec, volumeMode, sizingOverride]);
+
   const onConfirmExecute = useCallback(async () => {
     if (!confirmExec) return;
     const symbol = String(confirmExec.pair || confirmExec.display || confirmExec.symbol || '').trim();
@@ -305,7 +352,7 @@ export default function ScalpLabPanel() {
       setConfirmExec(null);
       return;
     }
-    const result = await postExecute('/api/scalp-execute', {
+    const payload = buildScalpExecutePayload({
       symbol,
       signal: {
         symbol,
@@ -314,8 +361,15 @@ export default function ScalpLabPanel() {
         direction: confirmExec.direction,
         type: confirmExec.type,
         ai_grade: confirmExec.ai_grade,
+        entry: confirmExec.entry ?? confirmExec.price,
+        price: confirmExec.entry ?? confirmExec.price,
+        sl: confirmExec.sl,
+        tp1: confirmExec.tp1,
       },
+      volumeMode,
+      sizingOverride,
     });
+    const result = await postExecute('/api/scalp-execute', payload);
     if (!result) {
       showToast('Execution failed (no response)', 'error');
     } else if (result.success) {
@@ -344,6 +398,8 @@ export default function ScalpLabPanel() {
     setScalpLabScanCache,
     setScalpLabSelectedCache,
     showToast,
+    volumeMode,
+    sizingOverride,
   ]);
 
   const signals = useMemo(() => scanResult?.signals || [], [scanResult?.signals]);
@@ -568,6 +624,15 @@ export default function ScalpLabPanel() {
                   Backend re-runs run_scalp_scan() against this single pair, applies risk_check(), and routes to
                   Bybit (crypto) or MT5 (others).
                 </div>
+                <VolumeModeField
+                  volumeMode={volumeMode}
+                  onVolumeModeChange={setVolumeMode}
+                  sizingOverride={sizingOverride}
+                  onSizingOverrideChange={setSizingOverride}
+                />
+                {riskPreviewLine && (
+                  <div className="font-mono text-[10px] text-muted-foreground">{riskPreviewLine}</div>
+                )}
               </div>
             </AlertDialogDescription>
           </AlertDialogHeader>

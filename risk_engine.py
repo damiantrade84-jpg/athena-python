@@ -145,6 +145,8 @@ class RiskApproval:
     portfolio_heat: float  # Total portfolio risk after this trade (fraction)
     drawdown_pct: float  # Current drawdown at decision time (fraction)
     reason: str  # "OK" or rejection reason code
+    volume_mode: str = ""  # min_lot | calculated
+    volume_source: str = ""  # min_lot | calculated
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -719,6 +721,103 @@ def _calc_volume(
     return volume
 
 
+def _execution_volume_cfg() -> dict:
+    raw = _cfg("EXECUTION_VOLUME", {}) or {}
+    return raw if isinstance(raw, dict) else {}
+
+
+def _volume_asset_defaults(asset_type: str) -> tuple[float, float, float, int]:
+    """Return (vol_min, vol_max, vol_step, decimals) when symbol_info is partial."""
+    if asset_type == "crypto":
+        return 0.001, 9999.0, 0.001, 6
+    if asset_type == "stock":
+        return 1.0, 5000.0, 1.0, 0
+    return 0.01, 100.0, 0.01, 2
+
+
+def _symbol_volume_constraints(
+    symbol_info: dict | None,
+    asset_type: str,
+) -> tuple[float, float, float, int]:
+    vol_min, vol_max, vol_step, decimals = _volume_asset_defaults(asset_type)
+    if symbol_info:
+        vol_min = float(symbol_info.get("volume_min", vol_min) or vol_min)
+        vol_max = float(symbol_info.get("volume_max", vol_max) or vol_max)
+        vol_step = float(symbol_info.get("volume_step", vol_step) or vol_step)
+    overrides = _execution_volume_cfg().get("MIN_LOT_OVERRIDE") or {}
+    if isinstance(overrides, dict):
+        override = overrides.get(asset_type)
+        if override is not None:
+            try:
+                vol_min = max(vol_min, float(override))
+            except (TypeError, ValueError):
+                pass
+    return vol_min, vol_max, vol_step, decimals
+
+
+def _round_volume_down(volume: float, vol_step: float, decimals: int) -> float:
+    if vol_step > 0:
+        volume = math.floor(volume / vol_step) * vol_step
+    return round(volume, decimals)
+
+
+def resolve_min_lot_volume(
+    symbol_info: dict | None,
+    asset_type: str,
+) -> float:
+    """Broker minimum volume stepped down to volume_step."""
+    vol_min, vol_max, vol_step, decimals = _symbol_volume_constraints(
+        symbol_info, asset_type
+    )
+    volume = _round_volume_down(vol_min, vol_step, decimals)
+    if volume < vol_min:
+        return 0.0
+    return min(volume, vol_max)
+
+
+def resolve_volume_mode(
+    volume_mode: str | None = None,
+    execution_context: str | None = None,
+    signal: dict | None = None,
+) -> str:
+    """Resolve effective volume mode from config, context, and payload."""
+    ev = _execution_volume_cfg()
+    if execution_context == "auto":
+        mode = str(ev.get("AUTO_TRADE_MODE") or "min_lot").lower()
+    elif volume_mode:
+        mode = str(volume_mode).lower()
+    elif signal:
+        mode = str(
+            signal.get("volume_mode") or signal.get("volumeMode") or ""
+        ).lower()
+    else:
+        mode = ""
+    if mode not in ("min_lot", "calculated"):
+        mode = str(ev.get("DEFAULT_MODE") or "min_lot").lower()
+    if mode not in ("min_lot", "calculated"):
+        mode = "min_lot"
+    if execution_context == "auto":
+        forced = str(ev.get("AUTO_TRADE_MODE") or "min_lot").lower()
+        if forced in ("min_lot", "calculated"):
+            mode = forced
+    elif mode == "calculated" and not ev.get("MANUAL_ALLOW_INCREASE", True):
+        mode = "min_lot"
+    return mode
+
+
+def resolve_execution_volume(
+    *,
+    volume_mode: str,
+    symbol_info: dict | None,
+    asset_type: str,
+    calculated_volume: float,
+) -> tuple[float, str]:
+    """Pick final volume from min-lot policy or calculated risk sizing."""
+    if volume_mode == "min_lot":
+        return resolve_min_lot_volume(symbol_info, asset_type), "min_lot"
+    return calculated_volume, "calculated"
+
+
 def _calc_portfolio_heat(open_positions: list, account_balance: float) -> float:
     """Sum risk of all open positions as fraction of account balance."""
     if account_balance <= 0:
@@ -751,6 +850,8 @@ def risk_check(
     sizing_override: float = 1.0,
     is_manual_override: bool = False,
     account_domain: str | None = None,
+    volume_mode: str | None = None,
+    execution_context: str | None = None,
 ) -> RiskApproval:
     """Mandatory risk gateway. Every execution path calls this first.
 
@@ -1077,7 +1178,17 @@ def risk_check(
             "LOW_VOLATILITY",
         ):
             _risk_regime = _trend_state
-    volume = _calc_volume(
+    is_crypto = asset_type == "crypto"
+    is_stock = asset_type == "stock"
+    is_commodity = asset_type == "commodity"
+    _decimals = 6 if is_crypto else (0 if is_stock else 2)
+    _default_step = 0.001 if is_crypto else (1.0 if is_stock else 0.01)
+    vol_step = (
+        symbol_info.get("volume_step", _default_step) if symbol_info else _default_step
+    )
+
+    effective_mode = resolve_volume_mode(volume_mode, execution_context, signal)
+    raw_calculated = _calc_volume(
         account_balance,
         entry,
         sl,
@@ -1086,37 +1197,34 @@ def risk_check(
         pair=signal,
         regime=_risk_regime or "",
     )
-    is_crypto = asset_type == "crypto"
-    is_stock = asset_type == "stock"
-    is_commodity = asset_type == "commodity"
 
-    # Score-scaled sizing: prefer the live execution conviction when available.
-    score_factor = _signal_quality_factor(signal)
-    # Also apply AI sizing override (1.0=full, 0.75=normal, 0.5=half, 0.25=quarter)
-    combined_factor = dd_factor * score_factor * max(0.25, min(1.0, sizing_override))
-    _decimals = 6 if is_crypto else (0 if is_stock else 2)
-    volume = round(volume * combined_factor, _decimals)
-    log.info(
-        f"{prefix} sizing: score_factor={score_factor:.2f}, sizing_override={sizing_override:.2f}, dd_factor={dd_factor:.2f} → combined={combined_factor:.2f}"
-    )
-
-    # Re-clamp after scaling
-    _default_step = 0.001 if is_crypto else (1.0 if is_stock else 0.01)
-    vol_step = (
-        symbol_info.get("volume_step", _default_step) if symbol_info else _default_step
-    )
-    volume = math.floor(volume / vol_step) * vol_step if vol_step > 0 else volume
-    volume = round(volume, _decimals)
-
-    # Stocks: ensure minimum 1 share (can't trade fractional on MT5)
-    if is_stock and 0 < volume < 1:
-        volume = 1.0
+    if effective_mode == "min_lot":
+        volume = resolve_min_lot_volume(symbol_info, asset_type)
+        volume_source = "min_lot"
+        log.info(f"{prefix} volume_mode=min_lot → volume={volume}")
+    else:
+        volume = raw_calculated
+        score_factor = _signal_quality_factor(signal)
+        combined_factor = (
+            dd_factor * score_factor * max(0.25, min(1.0, sizing_override))
+        )
+        volume = round(volume * combined_factor, _decimals)
+        volume_source = "calculated"
+        log.info(
+            f"{prefix} volume_mode=calculated: score_factor={score_factor:.2f}, "
+            f"sizing_override={sizing_override:.2f}, dd_factor={dd_factor:.2f} → "
+            f"combined={combined_factor:.2f}"
+        )
+        volume = math.floor(volume / vol_step) * vol_step if vol_step > 0 else volume
+        volume = round(volume, _decimals)
+        if is_stock and 0 < volume < 1:
+            volume = 1.0
 
     if volume <= 0:
         log.warning(
-            f"{prefix} REJECTED: calculated volume is 0 — raw_vol from _calc_volume scaled by combined_factor={combined_factor:.2f}, "
-            f"balance={account_balance}, entry={entry}, SL={sl}, dist={abs(entry - sl):.6f}, asset={asset_type}, "
-            f"symbol_info={'yes' if symbol_info else 'no'}"
+            f"{prefix} REJECTED: volume is 0 — mode={effective_mode}, "
+            f"balance={account_balance}, entry={entry}, SL={sl}, dist={abs(entry - sl):.6f}, "
+            f"asset={asset_type}, symbol_info={'yes' if symbol_info else 'no'}"
         )
         return RiskApproval(False, 0.0, 0.0, 0.0, 0.0, dd, "ZERO_VOLUME")
 
@@ -1181,4 +1289,103 @@ def risk_check(
         portfolio_heat=round(new_heat, 4),
         drawdown_pct=round(dd, 4),
         reason="OK",
+        volume_mode=effective_mode,
+        volume_source=volume_source,
     )
+
+
+def preview_execution_volume(
+    signal: dict,
+    account_balance: float,
+    symbol_info: dict | None = None,
+    volume_mode: str | None = None,
+    execution_context: str | None = "manual",
+    sizing_override: float = 1.0,
+) -> dict:
+    """Lightweight volume/risk preview for manual confirm dialogs."""
+    asset_type = signal.get("type", "") or "unknown"
+    try:
+        entry = float(signal.get("price") or signal.get("entry") or 0)
+        sl = float(signal.get("sl") or 0)
+        account_balance = float(account_balance)
+    except (TypeError, ValueError):
+        return {
+            "approved": False,
+            "reason": "INVALID_INPUT",
+            "volume": 0.0,
+            "volume_mode": "",
+            "volume_source": "",
+            "risk_amount": 0.0,
+            "risk_pct": 0.0,
+            "vol_min": 0.0,
+            "vol_step": 0.0,
+            "venue": "bybit" if asset_type == "crypto" else "mt5",
+        }
+
+    effective_mode = resolve_volume_mode(volume_mode, execution_context, signal)
+    vol_min, _vol_max, vol_step, decimals = _symbol_volume_constraints(
+        symbol_info, asset_type
+    )
+    venue = "bybit" if asset_type == "crypto" else "mt5"
+
+    if effective_mode == "min_lot":
+        volume = resolve_min_lot_volume(symbol_info, asset_type)
+        volume_source = "min_lot"
+    else:
+        raw = _calc_volume(
+            account_balance,
+            entry,
+            sl,
+            symbol_info,
+            asset_type,
+            pair=signal,
+        )
+        score_factor = _signal_quality_factor(signal)
+        combined = score_factor * max(0.25, min(1.0, sizing_override))
+        volume = round(raw * combined, decimals)
+        volume = math.floor(volume / vol_step) * vol_step if vol_step > 0 else volume
+        if asset_type == "stock" and 0 < volume < 1:
+            volume = 1.0
+        volume_source = "calculated"
+
+    is_crypto = asset_type == "crypto"
+    is_stock = asset_type == "stock"
+    sl_distance = abs(entry - sl)
+    if is_crypto:
+        _default_tick = 0.01
+        _default_tick_val = 0.01
+    elif asset_type == "commodity":
+        _default_tick = 0.01
+        _default_tick_val = 1.0
+    elif is_stock:
+        _default_tick = 0.01
+        _default_tick_val = 0.01
+    else:
+        _default_tick = 0.00001
+        _default_tick_val = 1.0
+    tick_size = (
+        symbol_info.get("trade_tick_size", _default_tick)
+        if symbol_info
+        else _default_tick
+    )
+    tick_value = (
+        symbol_info.get("trade_tick_value", _default_tick_val)
+        if symbol_info
+        else _default_tick_val
+    )
+    ticks_in_sl = sl_distance / tick_size if tick_size > 0 else 0
+    risk_amount = ticks_in_sl * tick_value * volume if volume > 0 else 0.0
+    risk_pct = risk_amount / account_balance if account_balance > 0 else 0.0
+
+    return {
+        "approved": volume > 0,
+        "reason": "OK" if volume > 0 else "ZERO_VOLUME",
+        "volume": volume,
+        "volume_mode": effective_mode,
+        "volume_source": volume_source,
+        "risk_amount": round(risk_amount, 2),
+        "risk_pct": round(risk_pct, 4),
+        "vol_min": vol_min,
+        "vol_step": vol_step,
+        "venue": venue,
+    }

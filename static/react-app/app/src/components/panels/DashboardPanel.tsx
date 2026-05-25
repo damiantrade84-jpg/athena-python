@@ -20,6 +20,7 @@ import type {
   OpenTrade, PerformanceMetrics
 } from '@/types';
 import type { EngineASignal } from '@/types/athena';
+import { buildExecutionVolumePayload } from '@/lib/manualExecuteHelpers';
 
 interface LastScanResponse {
   signals?: EngineASignal[];
@@ -151,6 +152,7 @@ export default function DashboardPanel() {
     }
 
     const style = String(sig.style || 'swing');
+    const volumePayload = buildExecutionVolumePayload({ volumeMode: 'min_lot' });
     const payload = {
       signal: {
         ...sig,
@@ -161,7 +163,7 @@ export default function DashboardPanel() {
       },
       engine_b: sig.naked_data ?? sig.engine_b ?? {},
       pip_mode: style,
-      sizing_override: sig.sizing_override ?? 1.0,
+      ...volumePayload,
     };
     const result = await postQuickExecute('/api/quick-execute', payload as unknown as Record<string, unknown>);
     if (!result) {
@@ -352,11 +354,16 @@ export default function DashboardPanel() {
                 {serverAutoTradeEnabled ? 'Stop Auto-Trade' : 'Start Auto-Trade'}
               </Button>
               {autoTrade && (
-                <div className="flex items-center justify-between text-[10px] text-muted-foreground px-1">
-                  <span>Server Auto-Trade</span>
-                  <Badge variant={autoTrade.enabled ? 'default' : 'outline'} className="text-[9px] h-4">
-                    {autoTrade.enabled ? 'ON' : 'OFF'}
-                  </Badge>
+                <div className="space-y-1">
+                  <div className="flex items-center justify-between text-[10px] text-muted-foreground px-1">
+                    <span>Server Auto-Trade</span>
+                    <Badge variant={autoTrade.enabled ? 'default' : 'outline'} className="text-[9px] h-4">
+                      {autoTrade.enabled ? 'ON' : 'OFF'}
+                    </Badge>
+                  </div>
+                  <p className="px-1 text-[9px] text-muted-foreground">
+                    Autotrade volume: Minimum (broker min)
+                  </p>
                 </div>
               )}
             </CardContent>

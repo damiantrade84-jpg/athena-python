@@ -6,6 +6,61 @@ import type {
 } from '@/types/athena';
 
 export type QuickExecuteStyle = 'scalp' | 'intraday' | 'swing' | 'auto';
+export type ExecutionVolumeMode = 'min_lot' | 'calculated';
+
+export interface ExecutionVolumeArgs {
+  volumeMode?: ExecutionVolumeMode;
+  sizingOverride?: number;
+}
+
+export function buildExecutionVolumePayload(args: ExecutionVolumeArgs = {}): {
+  volume_mode: ExecutionVolumeMode;
+  sizing_override: number;
+} {
+  const volumeMode = args.volumeMode ?? 'min_lot';
+  const sizingOverride = Math.max(0.25, Math.min(1.0, args.sizingOverride ?? 1.0));
+  return {
+    volume_mode: volumeMode,
+    sizing_override: volumeMode === 'calculated' ? sizingOverride : 1.0,
+  };
+}
+
+export interface RiskPreviewResponse {
+  approved?: boolean;
+  reason?: string;
+  volume?: number;
+  volume_mode?: string;
+  volume_source?: string;
+  risk_amount?: number;
+  risk_pct?: number;
+  vol_min?: number;
+  vol_step?: number;
+  venue?: string;
+  pair?: string;
+  asset_type?: string;
+  error?: string;
+}
+
+export function formatRiskPreviewLine(preview: RiskPreviewResponse | null): string | null {
+  if (!preview || preview.error) return null;
+  if (!preview.approved) {
+    return preview.reason ? `Volume unavailable: ${preview.reason}` : 'Volume unavailable';
+  }
+  const unit = preview.asset_type === 'stock'
+    ? 'shares'
+    : preview.asset_type === 'crypto'
+      ? 'units'
+      : 'lots';
+  const vol = typeof preview.volume === 'number' ? preview.volume : null;
+  const riskAmt = typeof preview.risk_amount === 'number' ? preview.risk_amount : null;
+  const riskPct = typeof preview.risk_pct === 'number' ? preview.risk_pct * 100 : null;
+  const venue = preview.venue ? preview.venue.toUpperCase() : '—';
+  if (vol == null) return null;
+  const riskPart = riskAmt != null && riskPct != null
+    ? ` · Risk: $${riskAmt.toFixed(2)} (${riskPct.toFixed(2)}%)`
+    : '';
+  return `Volume: ${vol} ${unit}${riskPart} · Venue: ${venue}`;
+}
 
 export interface ScalpExecuteSignalLike {
   symbol?: string | null;
@@ -61,14 +116,16 @@ export function buildQuickExecutePayload(args: {
   engineBOverlay?: Record<string, unknown>;
   isEngineBOnly?: boolean;
   pipMode: string;
-  sizingOverride: number;
+  volumeMode?: ExecutionVolumeMode;
+  sizingOverride?: number;
 }): Record<string, unknown> {
-  const { signal, engineBOverlay, isEngineBOnly, pipMode, sizingOverride } = args;
+  const { signal, engineBOverlay, isEngineBOnly, pipMode, volumeMode, sizingOverride } = args;
   const signalPayload = isEngineBOnly ? signal : stripEngineBFromSignal(signal);
   const nakedData = isEngineBOnly
     ? (signal.naked_data ?? signal.engine_b ?? {})
     : {};
   const effectiveStyle = pipMode || signal.style || 'swing';
+  const volumePayload = buildExecutionVolumePayload({ volumeMode, sizingOverride });
   return {
     signal: {
       ...signalPayload,
@@ -87,7 +144,7 @@ export function buildQuickExecutePayload(args: {
     },
     engine_b: (engineBOverlay ?? nakedData) as Record<string, unknown>,
     pip_mode: effectiveStyle,
-    sizing_override: Math.max(0.25, Math.min(1.0, sizingOverride || 1.0)),
+    ...volumePayload,
   };
 }
 
@@ -317,13 +374,18 @@ export function evaluateScalpExecuteBlock(args: {
 export function buildScalpExecutePayload(args: {
   symbol: string;
   signal: ScalpExecuteSignalLike;
-  sizingOverride: number;
+  volumeMode?: ExecutionVolumeMode;
+  sizingOverride?: number;
   reviewId?: string | null;
 }): Record<string, unknown> {
+  const volumePayload = buildExecutionVolumePayload({
+    volumeMode: args.volumeMode,
+    sizingOverride: args.sizingOverride,
+  });
   const payload: Record<string, unknown> = {
     symbol: args.symbol,
     signal: args.signal,
-    sizing_override: Math.max(0.25, Math.min(1.0, args.sizingOverride || 1.0)),
+    ...volumePayload,
   };
   if (args.reviewId) {
     payload.review_id = args.reviewId;

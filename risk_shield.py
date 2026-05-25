@@ -214,6 +214,8 @@ def shielded_execute(
     kill_switch: bool = False,
     sizing_override: float = 1.0,
     is_manual: bool = False,
+    volume_mode: str | None = None,
+    execution_context: str | None = None,
 ) -> dict:
     """Execute a trade with full state verification and circuit breaking.
 
@@ -319,6 +321,8 @@ def shielded_execute(
             kill_switch=kill_switch,
             sizing_override=sizing_override,
             is_manual_override=is_manual,
+            volume_mode=volume_mode,
+            execution_context=execution_context or ("manual" if is_manual else "auto"),
         )
     except Exception as e:
         _record_failure(f"RISK_CHECK_EXCEPTION: {e}")
