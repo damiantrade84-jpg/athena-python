@@ -1584,6 +1584,10 @@ TIMEFRAME_ROUTING:
       H4: {entry_tf: H1, execution_tf: M15}
 
 ENGINE_B_PROFILE_SCORING_ENABLED: true
+# Engine B VP (POC/VAH/VAL) only for asset types with reliable volume feeds.
+ENGINE_B_PROFILE_TRUSTED_ASSET_TYPES:
+  - crypto
+  - stock
 
 # Engine contextual room gate: require structural distance-to-level (fail closed when unknown).
 ENGINE_B_ROOM_GATE_REQUIRE_DISTANCE: true

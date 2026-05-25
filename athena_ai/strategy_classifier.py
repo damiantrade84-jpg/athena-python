@@ -116,6 +116,7 @@ def classify_strategy(
     wick = facts.get("wick_event") or {}
     breakout = facts.get("breakout_state") or {}
     profile_loc = facts.get("profile_location") or {}
+    profile_vp_ctx = facts.get("profile_vp_context") or {}
 
     del symbol, timeframe  # reserved for future per-symbol/tf gating
 
@@ -169,6 +170,17 @@ def classify_strategy(
                 affinity[pid] += weight
 
     warnings: list[str] = list(deferred_engine_warnings)
+
+    if not profile_vp_ctx.get("enabled", True):
+        if "RETURN_TO_POC_MEAN_REVERSION" in affinity:
+            rejected.append({
+                "id": "RETURN_TO_POC_MEAN_REVERSION",
+                "rejection_reason": (
+                    "Engine B volume profile (POC/VAH/VAL) is disabled for this asset class "
+                    "due to unreliable volume feeds."
+                ),
+            })
+            affinity.pop("RETURN_TO_POC_MEAN_REVERSION", None)
 
     failed_in_direction = _has_failed_breakout_in_direction(breakout, direction)
 

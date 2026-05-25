@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from typing import Any, Callable
 
 from ai_review.engine_snapshots import extract_engine_snapshots
+from market_structure import build_engine_b_profile_vp_context, sanitize_engine_b_structure_profile_fields
 from scoring import get_pair_score_group
 
 
@@ -720,6 +721,8 @@ def build_engine_b_prompt_context(engine_a_ctx: dict[str, Any]) -> dict[str, Any
             if isinstance(struct.get("breaker_block"), dict)
             else struct.get("breaker_block")
         ),
+        "volumeProfileContext": struct.get("profile_vp_context")
+        or build_engine_b_profile_vp_context(str(engine_a_ctx.get("asset_class") or "")),
     }
 
 
@@ -837,7 +840,10 @@ def assemble_engine_a_context(
         "screenshot_overlays": list((screenshot_meta or {}).get("overlays") or []),
         "mismatch_warnings": [],
         "funding_oi": _funding_oi_block(signal),
-        "structure_context": signal.get("engine_b") if isinstance(signal.get("engine_b"), dict) else {},
+        "structure_context": sanitize_engine_b_structure_profile_fields(
+            signal.get("engine_b") if isinstance(signal.get("engine_b"), dict) else {},
+            str(pair.get("type") or ""),
+        ),
         "ema_levels": _ema_levels(signal, factor_diag),
         "htf_swing_highs": [
             value

@@ -53,6 +53,15 @@ export default function EngineBChecklistCard({ data, pair, type, livePrice, live
   const diagNotes =
     (conf.diagnostic_notes as string[] | undefined) || (data.diagnostic_notes as string[] | undefined) || [];
 
+  const profileCtx = (
+    (conf.profile_context as EngineBNakedResult['profile_context'])
+    || (data.profile_context as EngineBNakedResult['profile_context'])
+  );
+  const profilePoints = (conf.profile_points ?? data.profile_points) as number | undefined;
+  const profileOk = Boolean(conf.profile_ok ?? data.profile_ok);
+  const profileUnavailable = profileCtx?.trusted === false;
+  const profileActive = Boolean(profileCtx?.enabled);
+
   return (
     <Card className="border-border/60 bg-card/50">
       <CardContent className={compact ? 'p-3 space-y-2' : 'p-4 space-y-3'}>
@@ -68,6 +77,11 @@ export default function EngineBChecklistCard({ data, pair, type, livePrice, live
                 {data.style}
               </Badge>
             )}
+            {profileActive && profileOk && typeof profilePoints === 'number' && profilePoints > 0 && (
+              <Badge variant="outline" className="text-[10px] bg-long/10 text-long border-long/30">
+                Profile +{fmtNum(profilePoints, 2)}
+              </Badge>
+            )}
           </div>
           <div className="text-[10px] text-muted-foreground font-mono">
             {fmtNum(score, 2)} / {fmtNum(max, 2)} {minScore != null && <span>(min {fmtNum(minScore, 2)})</span>}
@@ -80,6 +94,12 @@ export default function EngineBChecklistCard({ data, pair, type, livePrice, live
           <SmallStat label="Swing Seq" value={String(data.current_swing_sequence || '—')} />
           <SmallStat label="Macro Seq" value={String(data.macro_swing_sequence || '—')} />
         </div>
+
+        {profileUnavailable && (
+          <div className="text-[10px] text-muted-foreground border border-border/40 rounded-md p-2 leading-snug">
+            Volume profile (POC/VAH/VAL) not used for this asset — unreliable volume feed.
+          </div>
+        )}
 
         {/* Checklist gates */}
         <div className="grid grid-cols-2 gap-2">

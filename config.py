@@ -521,6 +521,7 @@ CONFIG: dict = {
     # When False, debate/vision sources classified as neutral (e.g. SKIP/REVIEW) block execution_allowed.
     "AI_NEUTRAL_ALLOWS_EXECUTION": False,
     "ENGINE_B_PROFILE_SCORING_ENABLED": True,
+    "ENGINE_B_PROFILE_TRUSTED_ASSET_TYPES": ["crypto", "stock"],
     "ENGINE_B_FAST_FVG_DETECTION": True,
     "CHART_VISION_DATASET_ENABLED": False,
     "CHART_VISION_V2_SHADOW_ENABLED": False,
@@ -2018,6 +2019,16 @@ def _fatal_config_validation(cfg: dict) -> None:
                     errors.append(
                         f"Engine A DI alignment multiplier {key}.{state}={mult_value} must be in [0.10, 1.0]"
                     )
+
+    _trusted_vp = cfg.get("ENGINE_B_PROFILE_TRUSTED_ASSET_TYPES")
+    if _trusted_vp is None:
+        pass
+    elif not isinstance(_trusted_vp, (list, tuple)) or not _trusted_vp:
+        errors.append("ENGINE_B_PROFILE_TRUSTED_ASSET_TYPES must be a non-empty list")
+    else:
+        for entry in _trusted_vp:
+            if not str(entry or "").strip():
+                errors.append("ENGINE_B_PROFILE_TRUSTED_ASSET_TYPES entries must be non-empty strings")
 
     # 6. Definition guards — Engine B max_possible must be defined
     _b_max = cfg.get("ENGINE_B_MAX_POSSIBLE")

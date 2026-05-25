@@ -753,6 +753,101 @@ def _engine_b_regime_gate(regime_label: str | None, asset_type: str = "") -> flo
         return float(ENGINE_B_REGIME_GATE_DEFAULTS.get(regime_key, 1.0))
 
 
+def engine_b_profile_trusted_asset_types(cfg: dict | None = None) -> frozenset[str]:
+    """Asset types allowed to use Engine B previous-session volume profile."""
+    raw_cfg = cfg if isinstance(cfg, dict) else config.CONFIG
+    raw = raw_cfg.get("ENGINE_B_PROFILE_TRUSTED_ASSET_TYPES")
+    if raw is None:
+        raw = ["crypto", "stock"]
+    if not isinstance(raw, (list, tuple)):
+        return frozenset({"crypto", "stock"})
+    return frozenset(str(item).strip().lower() for item in raw if str(item or "").strip())
+
+
+def engine_b_profile_context_enabled(asset_type: str, cfg: dict | None = None) -> bool:
+    """True when Engine B may compute/score previous-session VP for this asset type."""
+    raw_cfg = cfg if isinstance(cfg, dict) else config.CONFIG
+    if not bool(raw_cfg.get("ENGINE_B_PROFILE_SCORING_ENABLED", False)):
+        return False
+    asset_key = str(asset_type or "").strip().lower()
+    return asset_key in engine_b_profile_trusted_asset_types(raw_cfg)
+
+
+def build_engine_b_profile_vp_context(asset_type: str, cfg: dict | None = None) -> dict:
+    """Metadata for UI/AI: whether Engine B VP context is active for this asset."""
+    raw_cfg = cfg if isinstance(cfg, dict) else config.CONFIG
+    scoring_on = bool(raw_cfg.get("ENGINE_B_PROFILE_SCORING_ENABLED", False))
+    trusted = engine_b_profile_context_enabled(asset_type, raw_cfg)
+    reason = None
+    if not scoring_on:
+        reason = "profile_scoring_disabled"
+    elif not trusted:
+        reason = "asset_type_untrusted_for_volume_profile"
+    return {
+        "enabled": bool(scoring_on and trusted),
+        "trusted": bool(trusted),
+        "reason": reason,
+    }
+
+
+def sanitize_engine_b_structure_profile_fields(
+    structure: dict | None, asset_type: str, cfg: dict | None = None
+) -> dict:
+    """Remove untrusted VP levels from Engine B structure payloads (AI review path)."""
+    out = dict(structure) if isinstance(structure, dict) else {}
+    vp_ctx = build_engine_b_profile_vp_context(asset_type, cfg)
+    out["profile_vp_context"] = vp_ctx
+    if vp_ctx.get("enabled"):
+        return out
+    for key in (
+        "prev_session_profile_valid",
+        "prev_session_poc",
+        "prev_session_vah",
+        "prev_session_val",
+        "prev_session_profile_high",
+        "prev_session_profile_low",
+        "prev_session_total_volume",
+        "prev_session_start",
+        "prev_session_end",
+        "prev_session_profile_source_tf",
+        "profile_in_play",
+        "profile_level_in_play",
+        "inside_prev_value_area",
+        "above_prev_value_area",
+        "below_prev_value_area",
+        "touched_poc",
+        "touched_vah",
+        "touched_val",
+        "rejected_from_poc",
+        "rejected_from_vah",
+        "rejected_from_val",
+        "accepted_at_poc",
+        "accepted_inside_value",
+        "returned_to_value",
+        "failed_return_to_value",
+        "profile_bias",
+        "profile_reaction_strength",
+        "profile_notes",
+    ):
+        if key.endswith("_valid"):
+            out[key] = False
+        elif key in {"profile_in_play", "inside_prev_value_area", "above_prev_value_area",
+                     "below_prev_value_area", "touched_poc", "touched_vah", "touched_val",
+                     "rejected_from_poc", "rejected_from_vah", "rejected_from_val",
+                     "accepted_at_poc", "accepted_inside_value", "returned_to_value",
+                     "failed_return_to_value"}:
+            out[key] = False
+        elif key in {"profile_reaction_strength"}:
+            out[key] = 0.0
+        elif key in {"profile_bias"}:
+            out[key] = "neutral"
+        elif key in {"profile_notes"}:
+            out[key] = ""
+        else:
+            out[key] = None
+    return out
+
+
 def engine_b_min_score_diagnostics(
     style_profile: dict | None, regime_label: str | None, asset_type: str = ""
 ) -> dict:
@@ -2971,6 +3066,10 @@ class NakedEngine:
         if str(asset_type or "").lower() == "crypto":
             _structure_quality_score = crypto_struct_diag.get("structure_quality_score")
 
+        enable_profile_context = bool(enable_profile_context) and engine_b_profile_context_enabled(
+            asset_type
+        )
+
         # Volume profile: precompute profile candles and VP once (direction-independent part)
         _vp_profile = None
         _vp_source_tf = None
@@ -3811,7 +3910,9 @@ class NakedEngine:
         gate_max_possible = float(len(gate_confirmations)) if gate_confirmations else 1.0
         total_score = gate_score + bonus_points
         # FIX 4: Dynamic max_possible
-        _profile_points_max = 1.0 if config.CONFIG.get("ENGINE_B_PROFILE_SCORING_ENABLED", False) else 0.0
+        _profile_vp_context = build_engine_b_profile_vp_context(asset_type_lower)
+        _profile_scoring_active = bool(_profile_vp_context.get("enabled"))
+        _profile_points_max = 1.0 if _profile_scoring_active else 0.0
         bonus_count = 3 + _profile_points_max  # bos_mtf, ob_at_zone, volume_ok + profile
         if _ft_enabled:
             bonus_count += abs(float(_ft_cfg.get("MAX_BONUS", 1.5)))
@@ -3819,8 +3920,8 @@ class NakedEngine:
         _profile_points = 0.0
         _profile_ok = False
         _profile_alignment = "none"
-        _profile_context = str(res.get("profile_notes") or "")
-        if config.CONFIG.get("ENGINE_B_PROFILE_SCORING_ENABLED", False):
+        _profile_notes = str(res.get("profile_notes") or "")
+        if _profile_scoring_active:
             _profile_valid = bool(res.get("prev_session_profile_valid", False))
             _profile_in_play = bool(res.get("profile_in_play", False))
             try:
@@ -4005,7 +4106,8 @@ class NakedEngine:
             "profile_points": round(_profile_points, 2),
             "profile_ok": _profile_ok,
             "profile_alignment": _profile_alignment,
-            "profile_context": _profile_context,
+            "profile_notes": _profile_notes,
+            "profile_context": _profile_vp_context,
             "lifecycle_state": lifecycle_state,
             "lifecycle_reason": lifecycle_reason,
             "d1_pd_conflict_penalty": round(_d1_penalty, 2),

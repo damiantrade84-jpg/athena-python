@@ -5,6 +5,8 @@ from __future__ import annotations
 import copy
 from typing import Any
 
+from market_structure import build_engine_b_profile_vp_context
+
 
 _EQUITY_GROUPS = {"equity", "equities", "stock", "stocks"}
 _CRYPTO_GROUPS = {"crypto", "cryptocurrency", "perp", "perpetual"}
@@ -252,10 +254,21 @@ def _ema_levels(engine_a_ctx: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _profile_levels_trusted(engine_a_ctx: dict[str, Any], structure: dict[str, Any]) -> bool:
+    vp_ctx = structure.get("profile_vp_context")
+    if isinstance(vp_ctx, dict) and "enabled" in vp_ctx:
+        return bool(vp_ctx.get("enabled"))
+    asset = str(engine_a_ctx.get("asset_class") or engine_a_ctx.get("asset_group") or "")
+    return bool(build_engine_b_profile_vp_context(asset).get("enabled"))
+
+
 def _resistance_map(engine_a_ctx: dict[str, Any]) -> dict[str, Any]:
     structure = engine_a_ctx.get("structure_context")
     if not isinstance(structure, dict):
         structure = engine_a_ctx.get("engine_b") if isinstance(engine_a_ctx.get("engine_b"), dict) else {}
+    if not isinstance(structure, dict):
+        structure = {}
+    profile_trusted = _profile_levels_trusted(engine_a_ctx, structure)
     direction = str(engine_a_ctx.get("direction") or "").upper()
     nearest_zone = structure.get("nearest_resistance_zone")
     nearest = _zone_price(nearest_zone, direction)
@@ -283,17 +296,24 @@ def _resistance_map(engine_a_ctx: dict[str, Any]) -> dict[str, Any]:
         if parsed is not None:
             highs.append(parsed)
 
+    profile_levels = (
+        {
+            "poc": _to_float(structure.get("prev_session_poc")),
+            "vah": _to_float(structure.get("prev_session_vah")),
+            "val": _to_float(structure.get("prev_session_val")),
+        }
+        if profile_trusted
+        else {"poc": None, "vah": None, "val": None}
+    )
+
     return {
         "nearestResistance": nearest,
         "distanceToNearestResistance": distance,
         "tp": tp,
         "tpClearsResistance": tp_clears,
         "htfSwingHighs": highs,
-        "profileLevels": {
-            "poc": _to_float(structure.get("prev_session_poc")),
-            "vah": _to_float(structure.get("prev_session_vah")),
-            "val": _to_float(structure.get("prev_session_val")),
-        },
+        "profileLevels": profile_levels,
+        "profileLevelsTrusted": profile_trusted,
         "emaLevels": _ema_levels(engine_a_ctx),
         "supplyZones": list(
             structure.get("supply_zones")
@@ -337,6 +357,16 @@ def _classify_missing_items(
     not_applicable: list[dict[str, str]] = []
     asset_group = _asset_group(engine_a_ctx)
 
+    if not resistance.get("profileLevelsTrusted", True):
+        _append_unique(
+            not_applicable,
+            _not_applicable(
+                "engine_b_volume_profile_asset_class",
+                "Engine B volume profile (POC/VAH/VAL)",
+                f"Not used for asset group {asset_group or 'unknown'} — unreliable volume feed",
+            ),
+        )
+
     if not _is_crypto_asset(engine_a_ctx):
         _append_unique(
             not_applicable,
@@ -353,6 +383,9 @@ def _classify_missing_items(
     )
     references_atr = "atr" in text
     references_resistance = any(marker in text for marker in ("resistance", "supply", "tp "))
+    references_profile = any(
+        marker in text for marker in (" poc", "poc ", "vah", "val", "value area", "volume profile")
+    )
 
     for raw in ai_review.get("missing_context") or []:
         item = str(raw or "").strip()
@@ -454,6 +487,17 @@ def _classify_missing_items(
                     ),
                 )
             continue
+        if references_profile and not resistance.get("profileLevelsTrusted", True):
+            if any(token in lower for token in ("poc", "vah", "val", "value area", "volume profile")):
+                _append_unique(
+                    not_applicable,
+                    _not_applicable(
+                        "engine_b_volume_profile_asset_class",
+                        "Engine B volume profile (POC/VAH/VAL)",
+                        f"Not used for asset group {asset_group or 'unknown'}",
+                    ),
+                )
+                continue
         if "h4 atr" in lower or " atr" in f" {lower}":
             if not _atr_available(atr):
                 _append_unique(

@@ -78,6 +78,7 @@ from stability_monitor import record_backtest_summary
 
 from market_structure import (
     engine_b_forex_asian_session_blocks_bar,
+    engine_b_profile_context_enabled,
     resolve_engine_b_asset_class,
 )
 
@@ -4829,7 +4830,7 @@ def backtest_pair_naked(pair: dict, style: str = "naked", validation_mode="stand
     _zone_tf = style_profile.get("zone_tf", "H4")
     _entry_tf = style_profile.get("entry_tf", "H1")
     _atr_tf = style_profile.get("atr_tf", "H4")
-    _bt_enable_profile_context = bool(CONFIG.get("ENGINE_B_PROFILE_SCORING_ENABLED", False))
+    _bt_enable_profile_context = engine_b_profile_context_enabled(_pair_type)
     _b_funnel = {
         "bars_evaluated": 0,
         "fail_verdict":   0,
@@ -5741,7 +5742,7 @@ def backtest_pair_consensus(
     _zone_tf = style_profile.get("zone_tf", "H4")
     _entry_tf = style_profile.get("entry_tf", "H1")
     _atr_tf = style_profile.get("atr_tf", "H4")
-    _bt_enable_profile_context = bool(CONFIG.get("ENGINE_B_PROFILE_SCORING_ENABLED", False))
+    _bt_enable_profile_context = engine_b_profile_context_enabled(_pair_type)
 
     _h4_need = max(50, CONFIG.get("H4_CANDLES", 1001))
     _h1_need = max(50, CONFIG.get("H1_CANDLES", 1001))

@@ -860,6 +860,34 @@ def test_context_diagnostics_forex_engine_b_missing_not_optional():
     assert any("Engine B" in label or "Funding" in label for label in na_labels)
 
 
+def test_context_diagnostics_forex_profile_levels_untrusted(monkeypatch):
+    monkeypatch.setitem(CONFIG, "ENGINE_B_PROFILE_SCORING_ENABLED", True)
+    monkeypatch.setitem(
+        CONFIG,
+        "ENGINE_B_PROFILE_TRUSTED_ASSET_TYPES",
+        ["crypto", "stock"],
+    )
+    from market_structure import sanitize_engine_b_structure_profile_fields
+
+    ctx = _engine_a_ctx(asset_group="forex")
+    ctx["asset_class"] = "forex"
+    ctx["structure_context"] = sanitize_engine_b_structure_profile_fields(
+        {
+            "prev_session_poc": 65150.0,
+            "prev_session_vah": 66200.0,
+            "prev_session_val": 64200.0,
+        },
+        "forex",
+    )
+    diag = build_context_diagnostics(ctx, {"missing_context": []})
+    assert diag["resistanceMap"]["profileLevelsTrusted"] is False
+    assert diag["resistanceMap"]["profileLevels"]["poc"] is None
+    assert any(
+        "volume profile" in label.lower()
+        for label in diag["contextCompleteness"]["notApplicable"]
+    )
+
+
 def test_context_diagnostics_crypto_equity_session_not_applicable_does_not_penalize():
     ctx = _engine_a_ctx()
     ai = normalize_chart_review_response(

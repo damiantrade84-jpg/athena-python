@@ -347,6 +347,15 @@ export interface EngineBNakedResult {
   diagnostic_notes?: string[];
   no_trigger_classification?: string;
   d1_conflict?: boolean | string;
+  profile_points?: number;
+  profile_ok?: boolean;
+  profile_alignment?: string;
+  profile_notes?: string;
+  profile_context?: {
+    enabled?: boolean;
+    trusted?: boolean;
+    reason?: string | null;
+  };
   [k: string]: unknown;
 }
 
@@ -1324,6 +1333,7 @@ export interface AIChartReviewResistanceMap {
     vah?: number | null;
     val?: number | null;
   };
+  profileLevelsTrusted?: boolean;
   emaLevels: {
     ema50?: number | null;
     ema200?: number | null;

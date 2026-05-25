@@ -19,6 +19,14 @@ def test_signals_panel_open_and_review_action():
     assert "preferredTvChartTf" in src
 
 
+def test_engine_b_checklist_shows_profile_unavailable_note():
+    src = (ROOT / "static" / "react-app" / "app" / "src" / "components" / "athena" / "EngineBChecklistCard.tsx").read_text(
+        encoding="utf-8"
+    )
+    assert "Volume profile (POC/VAH/VAL) not used for this asset" in src
+    assert "profileUnavailable" in src
+
+
 def test_engine_a_execute_surfaces_quick_execute_error_reason():
     src = _source()
 
