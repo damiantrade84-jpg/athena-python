@@ -86,6 +86,8 @@ def test_health_uses_runtime_getters():
     assert data["dataSources"] == ["binance", "mt5"]
     assert data["activePairs"] == 1
     assert data["mt5"]["connected"] is True
+    assert "paper_mode" in data
+    assert "real_orders_allowed" in data
 
 
 def test_last_scan_reflects_runtime_state_changes():

@@ -13,6 +13,7 @@ from types import SimpleNamespace
 
 from flask import jsonify, request, send_from_directory
 
+from athena_app.services.paper_mode import get_paper_mode
 from config import ai_key_configured
 
 CONFIG: dict = {}
@@ -148,12 +149,26 @@ def api_conductor_pairs():
     return jsonify({"pairs": pairs, "scan_type": _stype})
 
 
+def _paper_mode_snapshot() -> tuple[bool, bool]:
+    """Return (paper_mode, real_orders_allowed) from the runtime enforcer or CONFIG."""
+    enforcer = get_paper_mode()
+    if enforcer is not None:
+        return enforcer.is_paper_mode(), enforcer.allow_real_orders()
+    paper_soak = CONFIG.get("PAPER_SOAK") or {}
+    paper_mode = bool(paper_soak.get("ENABLED", False))
+    if paper_mode:
+        return True, False
+    real_orders_allowed = paper_soak.get("REAL_ORDERS_ALLOWED", True)
+    return False, bool(real_orders_allowed if real_orders_allowed is not None else True)
+
+
 def health():
     all_pairs = _all_pairs_getter()
     active_pairs = _active_pairs_getter()
     kill_switch = bool(_kill_switch_getter())
     data_sources = _configured_data_sources(all_pairs)
     mt5_status = _mt5_connection_health_getter()
+    paper_mode, real_orders_allowed = _paper_mode_snapshot()
 
     return jsonify(
         {
@@ -169,6 +184,8 @@ def health():
             ),
             "aiKey": ai_key_configured(CONFIG),
             "xaiKey": ai_key_configured(CONFIG),
+            "paper_mode": paper_mode,
+            "real_orders_allowed": real_orders_allowed,
         }
     )
 

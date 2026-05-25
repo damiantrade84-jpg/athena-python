@@ -1945,7 +1945,7 @@ function buildCleanLegendChips(args: {
 
 export default function TVChartPanel() {
   const { scanCacheA, tvChartIntent, clearTvChartIntent, showToast, isTestMode, setActivePanel, aiReviewProvider, setAiReviewProvider } = useStore();
-  const { data: autoTrade } = useApiPoll<{ enabled: boolean }>('/api/auto-trade', 60_000);
+  const { data: health } = useApiPoll<{ paper_mode?: boolean }>('/api/health', 60_000);
   const { priceEntryFor } = useLivePrices();
   const [pair, setPair] = useState('EURUSD');
   const [timeframe, setTimeframe] = useState('240');
@@ -2320,7 +2320,7 @@ export default function TVChartPanel() {
     }),
     [activeWatches, currentSymbolKey],
   );
-  const isPaper = autoTrade?.enabled ?? false;
+  const isPaper = Boolean(health?.paper_mode);
   const executeBlockReason = useMemo(
     () => evaluateTvChartExecuteBlock({
       signal: chartCandidate,

@@ -50,6 +50,7 @@ import type {
   ChartAnalysisResponse,
   AiTextReviewResponse,
 } from '@/types/athena';
+import type { HealthStatus } from '@/types';
 
 type EngineSource = 'A' | 'B';
 
@@ -294,7 +295,7 @@ export default function SignalsPanel() {
   const { data: lastScan, loading: lastLoading, error: lastError, refresh: refreshLast } =
     useApiPoll<ScanResponse>('/api/last-scan', 60_000);
 
-  const { data: autoTrade } = useApiPoll<{ enabled: boolean }>('/api/auto-trade', 60_000);
+  const { data: health } = useApiPoll<HealthStatus>('/api/health', 60_000);
   const { post: postScanA, loading: scanningA } = useApiPost<ScanResponse>();
   const { post: postScanB, loading: scanningB } = useApiPost<NakedScanResponse>();
   const { post: postVision, loading: visionLoading } = useApiPost<ChartAnalysisResponse>();
@@ -434,7 +435,7 @@ export default function SignalsPanel() {
     );
   }, [scanEngineB, showToast]);
 
-  const isPaper = autoTrade?.enabled ?? false;
+  const isPaper = Boolean(health?.paper_mode);
   const onOpenAndReview = useCallback((row: UnifiedRow) => {
     const sig = row.signal;
     const symbol = resolveSignalSymbol(sig);
