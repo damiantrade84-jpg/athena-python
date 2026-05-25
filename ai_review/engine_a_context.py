@@ -128,6 +128,15 @@ def _asset_group_from(signal: dict[str, Any], engine_a_ctx: dict[str, Any]) -> s
     ).lower()
 
 
+def _volume_type_for(asset_class: str) -> str:
+    ac = str(asset_class or "").lower()
+    if ac in ("crypto", "stock", "index", "etf"):
+        return "real"
+    if ac == "forex":
+        return "tick"
+    return "mixed"
+
+
 def _feed_status(factor_diag: dict[str, Any]) -> dict[str, Any]:
     feed = (
         factor_diag.get("feedStatus")
@@ -1155,6 +1164,7 @@ def build_engine_a_prompt_context(engine_a_ctx: dict[str, Any]) -> dict[str, Any
             "addonScore": addon_score,
             "volumeScore": volume_score,
             "volumeRatio": volume_ratio,
+            "volumeType": _volume_type_for(engine_a_ctx.get("asset_class") or ""),
             "structureScore": _to_float(fd.get("structure_context_adjustment")),
             "vwapDistanceAtr": _to_float(
                 trend.get("vwapDistanceAtr") if isinstance(trend, dict) else None

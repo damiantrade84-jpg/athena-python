@@ -38,6 +38,13 @@ def build_chart_review_prompt(context: dict[str, Any]) -> str:
     playbook_block = render_playbook_prompt_block(playbooks, compact=True)
     trade_skill_schema = render_trade_skill_prompt_schema("engine_a_chart")
 
+    _ac = str(context.get("asset_class") or "").lower()
+    _vol_note = ""
+    if _ac == "forex":
+        _vol_note = " volume_type: tick (not real traded volume)"
+    elif _ac == "commodity":
+        _vol_note = " volume_type: mixed (may be tick volume)"
+
     return f"""You are not only reviewing the chart image. You are validating the chart against the structured Engine A signal supplied below using Athena trade playbooks.
 
 Workflow (required):
@@ -94,6 +101,7 @@ Rules:
 - Use non-visual context to understand why Engine A scored the setup.
 - Never change Engine A score or threshold. AI review may validate or downgrade timing only.
 - Never claim addonScore is volume. addonScore is the asset add-on only; volumeScore is separate and may be null.
+- For forex pairs, volumeScore and volumeRatio reflect tick volume, not real traded volume. Do not penalize or downgrade based on volume metrics for forex.
 - Do not mark funding/OI missing for non-crypto assets.
 - Do not mark carry missing for non-forex assets.
 - Do not mark COT missing for assets where addonType is not cot/cot_proxy.
@@ -116,7 +124,7 @@ nonVisualContext and scoreAttribution are included inside engineAContext above. 
 {engine_b_json}
 
 == SYMBOL ==
-{context.get("symbol")} {context.get("timeframe")} asset_group: {context.get("asset_group")}
+{context.get("symbol")} {context.get("timeframe")} asset_group: {context.get("asset_group")}{_vol_note}
 
 == ATR ==
 atr_value: {_fmt(atr.get("atr_value"))} atr_tf: {_fmt(atr.get("atr_tf"))} atr_h4: {_fmt(atr.get("atr_h4"))} atr_d1: {_fmt(atr.get("atr_d1"))}

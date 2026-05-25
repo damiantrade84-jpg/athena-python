@@ -2173,6 +2173,7 @@ export default function TVChartPanel() {
 
   const applyEngineAReviewLayout = () => {
     const candidate = chartCandidate || defaultCandidate;
+    const isCrypto = String(candidate?.type || '').toLowerCase() === 'crypto';
     const candidateSymbol = displaySymbol(candidate);
     if (candidateSymbol) setPair(candidateSymbol);
     setShowQuantDebug(true);
@@ -2183,13 +2184,13 @@ export default function TVChartPanel() {
     setEma21(true);
     setEma50(true);
     setEma200(true);
-    setDema200(false);
-    setVwapEnabled(true);
+    setDema200(!isCrypto);
+    setVwapEnabled(isCrypto);
     setAtr14(true);
     setRsi14(true);
-    setAdx14(true);
-    setVolumeBars(true);
-    setVolumeMa(true);
+    setAdx14(isCrypto);
+    setVolumeBars(isCrypto);
+    setVolumeMa(isCrypto);
   };
 
   useEffect(() => {
@@ -2217,11 +2218,17 @@ export default function TVChartPanel() {
       lastAppliedRouteKeyRef.current = null;
     }
     if (tvChartIntent.autoReview) {
+      const sig = isEngineSignalLike(tvChartIntent.signal) ? tvChartIntent.signal : null;
+      const isCrypto = String(sig?.type || '').toLowerCase() === 'crypto';
       setShowQuantDebug(true);
       setEma200(true);
-      setDema200(true);
+      setDema200(!isCrypto);
       setRsi14(true);
       setAtr14(true);
+      setVwapEnabled(isCrypto);
+      setAdx14(isCrypto);
+      setVolumeBars(isCrypto);
+      setVolumeMa(isCrypto);
     }
     setAiReview(null);
     setAiReviewError(null);
