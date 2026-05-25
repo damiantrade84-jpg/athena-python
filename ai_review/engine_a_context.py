@@ -647,6 +647,50 @@ def _rsi_from_signal(signal: dict[str, Any]) -> float | None:
     return None
 
 
+def _intermarket_block(signal: dict[str, Any], factor_diag: dict[str, Any]) -> dict[str, Any]:
+    ic = signal.get("intermarketConfirmation")
+    if isinstance(ic, dict) and ic:
+        return {
+            "verdict": ic.get("verdict"),
+            "delta": _to_float(ic.get("engineADelta")),
+            "correlations": ic.get("correlations"),
+            "divergence": ic.get("divergence"),
+        }
+    fd_im = factor_diag.get("intermarket")
+    if isinstance(fd_im, dict) and fd_im:
+        return {
+            "verdict": fd_im.get("verdict"),
+            "delta": _to_float(fd_im.get("engineADelta")),
+            "correlations": fd_im.get("correlations"),
+            "divergence": fd_im.get("divergence"),
+        }
+    return {}
+
+
+def _news_sentiment_block(signal: dict[str, Any]) -> dict[str, Any]:
+    vote = signal.get("newsSentimentVote")
+    delta = _to_float(signal.get("newsSentimentDelta"))
+    summary = signal.get("newsSentimentSummary")
+    if vote is None and delta is None and summary is None:
+        return {}
+    block: dict[str, Any] = {}
+    if vote is not None:
+        block["vote"] = vote
+    if delta is not None:
+        block["delta"] = delta
+    if isinstance(summary, dict):
+        for key in (
+            "direction", "confidence", "sentiment_score",
+            "article_count_used", "key_themes",
+            "major_event_detected", "major_event_description",
+            "reasoning_summary",
+        ):
+            val = summary.get(key)
+            if val is not None:
+                block[key] = val
+    return block
+
+
 def select_ohlcv_bars_for_chart(
     signal: dict[str, Any],
     timeframe: str,
@@ -854,6 +898,8 @@ def assemble_engine_a_context(
             if value is not None
         ],
         "indicator_snapshots": {"rsi": _rsi_from_signal(signal)},
+        "intermarket": _intermarket_block(signal, factor_diag),
+        "news_sentiment": _news_sentiment_block(signal),
     }
     ctx["ohlcv_bars"] = select_ohlcv_bars_for_chart(signal, timeframe, screenshot_meta)
     ctx["engine_snapshots"] = extract_engine_snapshots(signal, ctx)
@@ -1127,4 +1173,6 @@ def build_engine_a_prompt_context(engine_a_ctx: dict[str, Any]) -> dict[str, Any
             "latestCandleTimestamp": engine_a_ctx.get("latest_candle_ts"),
             "freshnessStatus": atr.get("atr_freshness_status"),
         },
+        "intermarket": engine_a_ctx.get("intermarket") or {},
+        "newsSentiment": engine_a_ctx.get("news_sentiment") or {},
     }

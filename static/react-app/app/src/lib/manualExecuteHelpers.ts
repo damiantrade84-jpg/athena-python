@@ -95,25 +95,14 @@ function isPositiveNumber(value: unknown): boolean {
   return typeof value === 'number' && Number.isFinite(value) && value > 0;
 }
 
-const _BLOCKING_TRADE_SKILL_DECISIONS = new Set([
-  'WAIT_FOR_PULLBACK',
-  'WAIT_FOR_ACCEPTANCE',
-  'WATCH_ONLY',
-  'NO_TRADE',
-  'INVALIDATED',
-]);
+const _HARD_BLOCK_DECISIONS = new Set(['NO_TRADE', 'INVALIDATED']);
 
 export function tradeSkillBlocksExecute(
   aiReview: { ai_review?: { decision?: string; entryAllowedNow?: boolean } | null } | null,
 ): boolean {
   if (!aiReview?.ai_review) return false;
-  const review = aiReview.ai_review;
-  const decision = String(review.decision || '').toUpperCase();
-  if (decision === 'ENTRY_NOW' && review.entryAllowedNow !== true) return true;
-  if (review.entryAllowedNow === false) return true;
-  if (decision && decision !== 'ENTRY_NOW') return true;
-  if (_BLOCKING_TRADE_SKILL_DECISIONS.has(decision)) return true;
-  return false;
+  const decision = String(aiReview.ai_review.decision || '').toUpperCase();
+  return _HARD_BLOCK_DECISIONS.has(decision);
 }
 
 function aiHumanAction(review: AIChartReviewResponse | null): string {
@@ -142,12 +131,26 @@ export function aiReviewBlocksManualExecute(review: AIChartReviewResponse | null
   const verdict = String(review.ai_review?.verdict || '').toUpperCase();
   if (verdict === 'NO_TRADE' || verdict === 'INVALID') return true;
   const action = aiHumanAction(review);
-  if (['wait', 'reject', 'needs_fresher_data', 'needs_better_rr', 'watch'].includes(action)) return true;
-  if (aiReviewEntryTimingRejected(review)) return true;
+  if (action === 'reject') return true;
+  return false;
+}
+
+export function aiReviewWarningForExecute(review: AIChartReviewResponse | null): string | null {
+  if (!review) return null;
+  const action = aiHumanAction(review);
+  if (['wait', 'needs_fresher_data', 'needs_better_rr', 'watch'].includes(action)) {
+    return `AI suggests: ${action.replace(/_/g, ' ')}`;
+  }
+  if (aiReviewEntryTimingRejected(review)) return 'AI: entry timing concern';
+  const decision = String(review.ai_review?.decision || '').toUpperCase();
+  if (decision === 'WAIT_FOR_PULLBACK' || decision === 'WAIT_FOR_ACCEPTANCE' || decision === 'WATCH_ONLY') {
+    return `AI decision: ${decision.replace(/_/g, ' ').toLowerCase()}`;
+  }
   const finalDecision = String(
     (review.engineAVerdictComparison ?? review.engine_a_verdict_comparison)?.finalDecision || '',
   ).toLowerCase();
-  return finalDecision === 'reject' || finalDecision === 'watch';
+  if (finalDecision === 'watch') return 'AI: watch only';
+  return null;
 }
 
 export function canExecuteEngineASignalTier(signal: EngineASignal | null): boolean {
@@ -167,7 +170,7 @@ export function evaluateTvChartExecuteBlock(args: {
   isTestMode: boolean;
   isPaper?: boolean;
 }): string | null {
-  const { signal, chartSymbolKey, aiReview, suggestedTradePlan, isTestMode, isPaper } = args;
+  const { signal, chartSymbolKey, aiReview, isTestMode, isPaper } = args;
   if (isTestMode) return 'Test mode';
   if (!signal) return 'No selected signal';
   const signalKey = normalizeSymbolKey(signal.symbol || signal.pair || signal.display);
@@ -185,10 +188,7 @@ export function evaluateTvChartExecuteBlock(args: {
   if (aiReview && reviewSymbolKey && chartSymbolKey && reviewSymbolKey !== chartSymbolKey) {
     return 'Review not current';
   }
-  if (aiReviewBlocksManualExecute(aiReview)) return 'AI says wait';
-  const planAction = String(suggestedTradePlan?.action || '').toUpperCase();
-  if (planAction === 'WAIT_FOR_LEVEL') return 'Waiting for level';
-  if (planAction === 'WAIT_FOR_ZONE') return 'Waiting for zone';
+  if (aiReviewBlocksManualExecute(aiReview)) return 'AI review: no trade';
   return null;
 }
 

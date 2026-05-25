@@ -66,6 +66,7 @@ import {
 import {
   buildQuickExecutePayload,
   evaluateTvChartExecuteBlock,
+  aiReviewWarningForExecute,
 } from '@/lib/manualExecuteHelpers';
 import { runnerBadgeClass, runnerBadgeLabel } from '@/lib/suggestedTradeRunnerDisplay';
 import { useSuggestedTradeRunnerStatus } from '@/hooks/useSuggestedTradeRunnerStatus';
@@ -2215,6 +2216,13 @@ export default function TVChartPanel() {
       setTimeframe(preferredCode);
       lastAppliedRouteKeyRef.current = null;
     }
+    if (tvChartIntent.autoReview) {
+      setShowQuantDebug(true);
+      setEma200(true);
+      setDema200(true);
+      setRsi14(true);
+      setAtr14(true);
+    }
     setAiReview(null);
     setAiReviewError(null);
     pendingAutoReviewRef.current = tvChartIntent.autoReview === true;
@@ -2290,6 +2298,7 @@ export default function TVChartPanel() {
     }),
     [chartCandidate, currentSymbolKey, aiReview, suggestedPlan, isTestMode, isPaper],
   );
+  const executeWarning = useMemo(() => aiReviewWarningForExecute(aiReview), [aiReview]);
   const showFlagWatchAction = Boolean(aiReview || suggestedPlan || flagStatus);
   const flagWatchDisabledReason = !suggestedPlan
     ? 'AI review did not return a suggested trade plan'
@@ -3302,6 +3311,9 @@ export default function TVChartPanel() {
             </div>
             {executeBlockReason && (
               <span className="block text-[10px] text-muted-foreground">{executeBlockReason}</span>
+            )}
+            {!executeBlockReason && executeWarning && (
+              <span className="block text-[10px] text-yellow-500">{executeWarning}</span>
             )}
             {flagStatus && <span className="block text-[10px] text-muted-foreground">{flagStatus}</span>}
             {aiReviewError && (
