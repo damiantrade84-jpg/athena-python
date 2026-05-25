@@ -80,6 +80,13 @@ Common entry points only. This is not a complete allowlist.
 - Review payload must include ATR diagnostics, SL/TP/RR, freshness/provider timestamps, and Engine-A-vs-model concordance.
 - v1 provider target: Anthropic/Claude; OpenAI scaffold only if explicitly requested.
 
+## Auto-trade contract
+
+- `auto_trader.py` is the live auto-execution orchestrator; `conductor.py` routes AI calls only.
+- Auto execution must honor execution switches, kill switch, risk engine, and guardian gates.
+- AI may block, wait, or reduce `executionConvictionEffective`, but must never mutate Engine A score fields.
+- Browser chart metadata is diagnostic only.
+
 ## Safe workflow
 
 1. Restate the exact user request in operational terms.

@@ -10255,6 +10255,10 @@ def api_auto_trade_log():
                 except Exception:
                     factors = {}
             trace = factors.get("autoDecisionTrace") if isinstance(factors.get("autoDecisionTrace"), dict) else {}
+            event_gate = factors.get("eventRiskGate") if isinstance(factors.get("eventRiskGate"), dict) else {}
+            if not event_gate and isinstance(trace.get("eventRiskGate"), dict):
+                event_gate = trace.get("eventRiskGate") or {}
+            event_status = event_gate.get("eventRiskStatus") if isinstance(event_gate.get("eventRiskStatus"), dict) else {}
             item.update(
                 {
                     "failedStage": trace.get("failedStage"),
@@ -10263,6 +10267,9 @@ def api_auto_trade_log():
                     "executionConvictionEffective": factors.get("executionConvictionEffective"),
                     "scoreAttribution": factors.get("scoreAttribution"),
                     "conductorRouting": factors.get("conductorRouting"),
+                    "eventRiskProviderUnavailable": event_gate.get("providerUnavailable"),
+                    "eventRiskEffectiveAction": event_status.get("effectiveAction")
+                    or event_gate.get("effectiveAction"),
                     "riskReason": factors.get("riskReason")
                     or (
                         factors.get("riskApproval", {}).get("reason")
@@ -13354,6 +13361,19 @@ def analyze_pair(
         "pairSource": pair.get("source"),
     }
     signal["candleFetchMeta"] = _candle_fetch_meta
+
+    try:
+        from ai_review.engine_a_context import build_score_attribution
+
+        _attribution = build_score_attribution(
+            signal,
+            threshold=_threshold,
+            max_score=max_score,
+        )
+        signal["scoreAttribution"] = _attribution
+        signal["engineAScoreAttribution"] = _attribution
+    except Exception as _attr_err:
+        log.debug("[EngineA] scoreAttribution build skipped: %s", _attr_err)
 
     # Quote freshness observability: surface which live-price entry (if any) was
     # available when this signal was built. Read-only — no effect on price

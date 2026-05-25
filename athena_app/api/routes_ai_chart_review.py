@@ -120,6 +120,12 @@ def _attach_review_summary(
     response.update(ctx_diag)
     response["derivativesContext"] = ctx_diag.get("fundingOi")
     response["derivatives_context"] = ctx_diag.get("fundingOi")
+    response["nonVisualContext"] = ctx_diag.get("nonVisualContext")
+    response["engineANonVisualContext"] = ctx_diag.get("engineANonVisualContext")
+    response["scoreAttribution"] = ctx_diag.get("scoreAttribution")
+    response["engineAScoreAttribution"] = ctx_diag.get("engineAScoreAttribution")
+    response["engine_a_non_visual_context"] = ctx_diag.get("engineANonVisualContext")
+    response["engine_a_score_attribution"] = ctx_diag.get("engineAScoreAttribution")
     plan = clean_ai_review.get("suggestedTradePlan") or clean_ai_review.get("suggested_trade_plan")
     if isinstance(plan, dict):
         response["suggestedTradePlan"] = plan

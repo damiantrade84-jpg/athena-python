@@ -358,6 +358,41 @@ def test_confirmed_close_mode_allows_fresh_confirmed_slot():
     assert ok, reason
 
 
+def test_confirmed_close_mode_blocks_mid_candle_outside_grace():
+    stale = datetime.now(timezone.utc) - timedelta(hours=6)
+    sig = _signal(lastConfirmedCandleTs=stale.isoformat(), executionTimeframe="H4")
+
+    ok, reason = AutoTrader()._can_execute(
+        sig,
+        _cfg(
+            AUTO_TRADE_SCHEDULER_MODE="confirmed_close",
+            AUTO_TRADE_ALLOW_INTRABAR_EXECUTION=False,
+            AUTO_TRADE_EXECUTION_GRACE_MIN=5,
+        ),
+    )
+
+    assert ok is False
+    assert reason == "CONFIRMED_CLOSE_WINDOW_MISSED"
+
+
+def test_major_event_risk_blocks_when_blocks_auto_execution_set():
+    sig = _signal(
+        majorEventRisk={
+            "majorEventDetected": True,
+            "mode": "block_auto_execution",
+            "action": "block_auto_execution",
+            "blocksAutoExecution": True,
+            "reason": "Emergency rate hike",
+        },
+    )
+
+    ok, reason = AutoTrader()._can_execute(sig, _cfg())
+
+    assert ok is False
+    assert reason == "Emergency rate hike"
+    assert sig.get("eventRiskGate", {}).get("source") == "majorEventRisk"
+
+
 def test_chart_ai_gate_can_only_block_not_upgrade_or_mutate_score():
     fresh = datetime.now(timezone.utc).isoformat()
     low = _signal(

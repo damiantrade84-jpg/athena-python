@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import threading
 import time
 from collections.abc import Callable
@@ -141,6 +142,239 @@ def fetch_news(
         return []
 
 
+def _config_value(config: dict | None, key: str, default: Any) -> Any:
+    if isinstance(config, dict) and key in config:
+        return config.get(key)
+    return CONFIG.get(key, default)
+
+
+def _as_int(value: Any, default: int) -> int:
+    try:
+        return int(float(value))
+    except (TypeError, ValueError):
+        return default
+
+
+def _as_float(value: Any, default: float) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _source_key(kind: str, value: str) -> tuple[str, str]:
+    return str(kind or "ticker").lower(), str(value or "").strip()
+
+
+def _normalize_news_source(raw: Any, *, role: str = "macro") -> dict[str, Any] | None:
+    if isinstance(raw, dict):
+        kind = str(raw.get("kind") or raw.get("type") or "").strip().lower()
+        value = raw.get("value") or raw.get("ticker") or raw.get("s") or raw.get("tag") or raw.get("topic")
+        if not kind:
+            kind = "tag" if raw.get("tag") or raw.get("topic") else "ticker"
+        value = str(value or "").strip()
+        if not value:
+            return None
+        return {
+            "kind": kind,
+            "value": value,
+            "label": raw.get("label") or raw.get("name") or value,
+            "role": raw.get("role") or role,
+        }
+    text = str(raw or "").strip()
+    if not text:
+        return None
+    if ":" in text:
+        prefix, value = text.split(":", 1)
+        prefix = prefix.strip().lower()
+        value = value.strip()
+        if prefix in {"tag", "topic"} and value:
+            return {"kind": "tag", "value": value, "label": value, "role": role}
+        if prefix in {"ticker", "symbol", "s"} and value:
+            return {"kind": "ticker", "value": value, "label": value, "role": role}
+        if prefix in {"query", "q"} and value:
+            return {"kind": "query", "value": value, "label": value, "role": role}
+    kind = "tag" if re.search(r"\s", text) else "ticker"
+    return {"kind": kind, "value": text, "label": text, "role": role}
+
+
+def _driver_map_values(driver_map: Any, keys: list[str]) -> list[Any]:
+    if not isinstance(driver_map, dict):
+        return []
+    out: list[Any] = []
+    for key in keys:
+        if key in driver_map:
+            value = driver_map.get(key)
+            if isinstance(value, list):
+                out.extend(value)
+            else:
+                out.append(value)
+    return out
+
+
+def resolve_news_sources_for_pair(
+    pair: dict,
+    eodhd_ticker_for_pair: Callable[[dict], Optional[str]],
+    config: dict | None = None,
+) -> list[dict[str, Any]]:
+    """Resolve direct plus config-driven macro news sources for a pair."""
+    sources: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+
+    def add(src: dict[str, Any] | None) -> None:
+        if not src:
+            return
+        kind = str(src.get("kind") or "ticker").lower()
+        value = str(src.get("value") or "").strip()
+        if not value:
+            return
+        key = _source_key(kind, value)
+        if key in seen:
+            return
+        seen.add(key)
+        sources.append({**src, "kind": kind, "value": value})
+
+    direct = eodhd_ticker_for_pair(pair)
+    if direct:
+        add({"kind": "ticker", "value": direct, "label": "direct", "role": "direct"})
+
+    if not _config_value(config, "NEWS_SENTIMENT_MACRO_CONTEXT_ENABLED", False):
+        return sources
+
+    display = str(pair.get("display") or pair.get("symbol") or "").strip()
+    asset_class = _asset_class_for_pair(pair)
+    base = quote = ""
+    if "/" in display:
+        base, quote = [part.strip().upper() for part in display.split("/", 1)]
+    driver_map = _config_value(config, "NEWS_SENTIMENT_DRIVER_MAP", {}) or {}
+    keys = [
+        display,
+        display.upper(),
+        display.replace("/", ""),
+        asset_class,
+        base,
+        quote,
+        f"{asset_class}:{base}" if base else "",
+        f"{asset_class}:{quote}" if quote else "",
+        "default",
+    ]
+    for item in _driver_map_values(driver_map, [k for k in keys if k]):
+        add(_normalize_news_source(item, role="macro"))
+    return sources
+
+
+def _parse_article_dt(article: dict[str, Any]) -> datetime | None:
+    raw = article.get("date") or article.get("published_at") or article.get("publishedAt")
+    if not raw:
+        return None
+    text = str(raw).strip()
+    try:
+        if text.endswith("Z"):
+            text = text[:-1] + "+00:00"
+        dt = datetime.fromisoformat(text)
+        return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+    except ValueError:
+        try:
+            return datetime.strptime(text[:10], "%Y-%m-%d").replace(tzinfo=timezone.utc)
+        except ValueError:
+            return None
+
+
+def _article_dedupe_key(article: dict[str, Any]) -> tuple[str, str, str]:
+    url = str(article.get("link") or article.get("url") or "").strip().lower()
+    title = str(article.get("title") or article.get("headline") or "").strip().lower()
+    date = str(article.get("date") or article.get("published_at") or "")[:10]
+    return url, title, date
+
+
+def fetch_news_sources(
+    sources: list[dict[str, Any]],
+    api_key: str,
+    config: dict | None = None,
+    *,
+    now: datetime | None = None,
+    timeout: float = 12.0,
+) -> dict[str, Any]:
+    """Fetch and freshness-filter EODHD news for resolved ticker/tag/query sources."""
+    now = now or datetime.now(timezone.utc)
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
+    max_age_hours = _as_float(
+        _config_value(config, "NEWS_SENTIMENT_MAX_ARTICLE_AGE_HOURS", 72), 72.0
+    )
+    max_total = max(1, _as_int(_config_value(config, "NEWS_SENTIMENT_MAX_ARTICLES_TOTAL", 12), 12))
+    per_source = max(1, _as_int(_config_value(config, "NEWS_SENTIMENT_MAX_ARTICLES_PER_SOURCE", 6), 6))
+    from_date = (now - timedelta(hours=max_age_hours)).strftime("%Y-%m-%d")
+    to_date = now.strftime("%Y-%m-%d")
+
+    articles: list[dict[str, Any]] = []
+    source_meta: list[dict[str, Any]] = []
+    seen: set[tuple[str, str, str]] = set()
+    stale_count = 0
+    for source in sources:
+        kind = str(source.get("kind") or "ticker").lower()
+        value = str(source.get("value") or "").strip()
+        if not value:
+            continue
+        params = {
+            "limit": per_source,
+            "from": from_date,
+            "to": to_date,
+            "api_token": api_key,
+            "fmt": "json",
+        }
+        if kind == "tag":
+            params["t"] = value
+        elif kind == "query":
+            params["q"] = value
+        else:
+            params["s"] = value
+        try:
+            r = http_requests.get("https://eodhd.com/api/news", params=params, timeout=timeout)
+            r.raise_for_status()
+            data = r.json()
+        except Exception as exc:
+            log.error("[NewsAI] News source fetch failed [%s:%s]: %s", kind, value, exc)
+            source_meta.append({**source, "status": "error", "articleCount": 0})
+            continue
+        rows = data if isinstance(data, list) else []
+        kept_for_source = 0
+        for article in rows:
+            if not isinstance(article, dict):
+                continue
+            dt = _parse_article_dt(article)
+            stale = bool(dt and (now - dt).total_seconds() > max_age_hours * 3600.0)
+            if stale:
+                stale_count += 1
+                continue
+            key = _article_dedupe_key(article)
+            if key in seen:
+                continue
+            seen.add(key)
+            enriched = dict(article)
+            enriched["source"] = {
+                "kind": kind,
+                "value": value,
+                "label": source.get("label") or value,
+                "role": source.get("role"),
+            }
+            enriched["stale"] = False
+            articles.append(enriched)
+            kept_for_source += 1
+            if len(articles) >= max_total:
+                break
+        source_meta.append({**source, "status": "ok", "articleCount": kept_for_source})
+        if len(articles) >= max_total:
+            break
+    return {
+        "articles": articles[:max_total],
+        "sourceMetadata": source_meta,
+        "freshArticleCount": len(articles[:max_total]),
+        "staleArticleCount": stale_count,
+        "maxArticleAgeHours": max_age_hours,
+    }
+
+
 def _latest_normalized_sentiment(data: Any, ticker: str) -> Optional[float]:
     """Parse EODHD /api/sentiments payload (dict or list of rows) — align with fetch_news_context."""
     if not data:
@@ -224,6 +458,27 @@ def build_news_block(articles: list) -> str:
         snippet = content[:450].replace("\n", " ") if content else "(no content)"
         blocks.append(f"[{i}] {date} | {title}\n{snippet}")
     return "\n\n".join(blocks)
+
+
+def _combine_llm_and_eodhd_vote(
+    llm_vote: Optional[float],
+    eodhd_score: Optional[float],
+) -> tuple[Optional[float], str]:
+    if llm_vote is None:
+        return None, "unavailable"
+    if eodhd_score is None:
+        return llm_vote, "unavailable"
+    eodhd_vote = max(-1.0, min(1.0, float(eodhd_score)))
+    if abs(float(llm_vote)) < 0.05 or abs(eodhd_vote) < 0.05:
+        agreement = "neutral"
+    elif (float(llm_vote) > 0) == (eodhd_vote > 0):
+        agreement = "agree"
+    else:
+        agreement = "conflict"
+    llm_weight = 0.75 if agreement != "conflict" else 0.65
+    eodhd_weight = 1.0 - llm_weight
+    combined = (float(llm_vote) * llm_weight) + (eodhd_vote * eodhd_weight)
+    return round(max(-1.0, min(1.0, combined)), 4), agreement
 
 
 SYSTEM_PROMPT = """You are a senior quantitative analyst embedded in the Athena trading system.
@@ -344,6 +599,7 @@ def get_news_sentiment(
     current_price: Optional[float] = None,
     news_limit: int = 8,
     model: str = "grok-4.3",
+    config: dict | None = None,
 ) -> Optional[dict]:
     """Resolve EODHD ticker → fetch news → LLM structured sentiment JSON.
 
@@ -356,7 +612,16 @@ def get_news_sentiment(
 
     display = pair.get("display") or pair.get("symbol") or ticker
     asset_class = _asset_class_for_pair(pair)
-    articles = fetch_news(ticker, eodhd_api_key, limit=news_limit)
+    sources = resolve_news_sources_for_pair(pair, eodhd_ticker_for_pair, config)
+    if not sources and ticker:
+        sources = [{"kind": "ticker", "value": ticker, "label": "direct", "role": "direct"}]
+    source_bundle = fetch_news_sources(
+        sources,
+        eodhd_api_key,
+        config,
+        timeout=_as_float(_config_value(config, "NEWS_SENTIMENT_FETCH_TIMEOUT_SEC", 12.0), 12.0),
+    )
+    articles = list(source_bundle.get("articles") or [])[: max(1, int(news_limit or 8))]
 
     if not articles:
         log.warning("[NewsAI] No articles for %s (%s)", display, ticker)
@@ -445,6 +710,22 @@ def get_news_sentiment(
             result.get("confidence"),
             result.get("major_event_detected"),
         )
+        result["source_metadata"] = source_bundle.get("sourceMetadata", [])
+        result["fresh_article_count"] = source_bundle.get("freshArticleCount", len(articles))
+        result["stale_article_count"] = source_bundle.get("staleArticleCount", 0)
+        result["max_article_age_hours"] = source_bundle.get("maxArticleAgeHours")
+        result["article_count_used"] = result.get("article_count_used") or len(articles)
+        eodhd_normalized = None
+        if _config_value(config, "NEWS_SENTIMENT_USE_EODHD_NORMALIZED", False):
+            eodhd_normalized = fetch_eodhd_sentiment(ticker, eodhd_api_key)
+        llm_vote = news_to_confluence_vote(result)
+        combined_vote, agreement = _combine_llm_and_eodhd_vote(llm_vote, eodhd_normalized)
+        result["eodhd_normalized_score"] = eodhd_normalized
+        result["eodhd_agreement"] = agreement
+        result["eodhd_source_date"] = None
+        result["eodhd_article_count"] = len(articles) if eodhd_normalized is not None else None
+        if combined_vote is not None:
+            result["combined_vote"] = combined_vote
         return result
     except Exception as e:
         log.error("[NewsAI] AI provider error for %s: %s", display, e)
@@ -464,6 +745,11 @@ def news_to_confluence_vote(result: Optional[dict]) -> Optional[float]:
     """Map structured result to a single vote; None if low confidence or missing."""
     if not result:
         return None
+    if result.get("combined_vote") is not None:
+        try:
+            return round(max(-1.0, min(1.0, float(result["combined_vote"]))), 4)
+        except (TypeError, ValueError):
+            pass
     try:
         score = float(result.get("sentiment_score", 0.0))
         confidence = float(result.get("confidence", 0.0))
@@ -497,6 +783,7 @@ def get_cached_news_confluence_vote(
     ttl_sec: float,
     model: str,
     current_price: Optional[float] = None,
+    config: dict | None = None,
 ) -> tuple[Optional[float], Optional[dict]]:
     """Return (vote, structured_result) using TTL cache; refreshes on expiry per display."""
     display = pair.get("display") or ""
@@ -525,6 +812,7 @@ def get_cached_news_confluence_vote(
             eodhd_ticker_for_pair=eodhd_ticker_for_pair,
             current_price=current_price,
             model=model,
+            config=config,
         )
         vote = news_to_confluence_vote(result)
         with _cache_registry_lock:
@@ -539,6 +827,8 @@ def apply_news_sentiment_to_scan_result(
     config: dict,
     eodhd_ticker_for_pair: Callable[[dict], Optional[str]],
     current_price: Optional[float] = None,
+    threshold: Optional[float] = None,
+    max_score: Optional[float] = None,
 ) -> None:
     """If enabled and keys present, blend cached News AI vote into ``res['score']`` (mutates ``res``).
 
@@ -567,6 +857,7 @@ def apply_news_sentiment_to_scan_result(
         ttl_sec=ttl,
         model=model,
         current_price=current_price,
+        config=config,
     )
 
     res["newsSentimentVote"] = vote
@@ -576,29 +867,69 @@ def apply_news_sentiment_to_scan_result(
             "confidence": detail.get("confidence"),
             "sentiment_score": detail.get("sentiment_score"),
             "article_count_used": detail.get("article_count_used"),
+            "fresh_article_count": detail.get("fresh_article_count"),
+            "stale_article_count": detail.get("stale_article_count"),
+            "source_metadata": detail.get("source_metadata"),
             "key_themes": list(detail.get("key_themes") or [])[:6],
             "major_event_detected": detail.get("major_event_detected"),
             "major_event_description": detail.get("major_event_description"),
-            "eodhd_pre_score": detail.get("eodhd_pre_score"),
+            "eodhd_normalized_score": detail.get("eodhd_normalized_score"),
             "eodhd_agreement": detail.get("eodhd_agreement"),
+            "eodhd_source_date": detail.get("eodhd_source_date"),
+            "eodhd_article_count": detail.get("eodhd_article_count"),
             "reasoning_summary": (detail.get("reasoning_summary") or "")[:400],
         }
     elif vote is not None:
         res["newsSentimentSummary"] = None
 
+    major_detected = bool((detail or {}).get("major_event_detected"))
+    major_mode = str(config.get("NEWS_SENTIMENT_MAJOR_EVENT_MODE") or "advisory").strip().lower()
+    if major_mode not in {"advisory", "negative_delta_only", "block_auto_execution"}:
+        major_mode = "advisory"
+    major_reason = (detail or {}).get("major_event_description") or "major event detected"
+    major_action = "none"
+    blocks_auto = False
+    if major_detected:
+        if major_mode == "block_auto_execution":
+            major_action = "block_auto_execution"
+            blocks_auto = True
+        elif major_mode == "negative_delta_only":
+            major_action = "negative_delta_only"
+        else:
+            major_action = "advisory_only"
+    res["majorEventRisk"] = {
+        "majorEventDetected": major_detected,
+        "mode": major_mode,
+        "action": major_action,
+        "reason": major_reason if major_detected else None,
+        "blocksAutoExecution": blocks_auto,
+    }
+
     if vote is None:
         return
 
-    max_s = float(res.get("maxScoreOverride") or 3.0)
+    max_s = float(max_score if max_score is not None else res.get("maxScoreOverride") or 3.0)
     impact = float(config.get("NEWS_SENTIMENT_SCORE_IMPACT", 0.06))
-    delta = impact * max_s * float(vote)
-    old = float(res["score"])
-    new = max(0.0, min(max_s, old + delta))
+    raw_delta = impact * max_s * float(vote)
+    delta = raw_delta
+    base_score = float(res.get("score", 0.0) or 0.0)
+    threshold_value = float(threshold if threshold is not None else res.get("threshold") or 0.0)
+    if threshold_value > 0 and base_score < threshold_value * 0.8:
+        delta = min(0.0, delta)
+    if major_detected and major_mode == "negative_delta_only":
+        delta = min(0.0, delta)
+    max_delta = abs(float(config.get("NEWS_SENTIMENT_MAX_DELTA", 0.30) or 0.30))
+    delta = max(-max_delta, min(max_delta, delta))
+    new = max(0.0, min(max_s, base_score + delta))
     res["score"] = round(new, 4)
     if res.get("final_score") is not None:
         res["final_score"] = res["score"]
 
+    res["pre_news_score"] = round(base_score, 4)
+    res["news_adjustment"] = round(delta, 4)
     res["newsSentimentDelta"] = round(delta, 6)
+    if round(raw_delta, 6) != round(delta, 6):
+        res["newsSentimentRawDelta"] = round(raw_delta, 6)
     res.setdefault("warnings", []).append(
-        f"News AI: vote {vote:+.4f} → score change {'+' if delta >= 0 else ''}{delta:.4f} (max {max_s})"
+        f"News AI: vote {vote:+.4f} -> score change {'+' if delta >= 0 else ''}{delta:.4f} (max {max_s})"
     )

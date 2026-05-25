@@ -79,7 +79,14 @@ import {
   RIGHT_EDGE_LABEL_PRIORITY,
   type RightEdgeLabel,
 } from '@/lib/chartRightEdgeLabels';
-import type { AIChartReviewResponse, EngineASignal, SuggestedTradePlan, SuggestedTradeWatch, TimeframeRoute } from '@/types/athena';
+import type {
+  AIChartReviewChartSnapshot,
+  AIChartReviewResponse,
+  EngineASignal,
+  SuggestedTradePlan,
+  SuggestedTradeWatch,
+  TimeframeRoute,
+} from '@/types/athena';
 
 const TIMEFRAMES = ['1', '5', '15', '30', '60', '240', 'D', 'W'];
 
@@ -2620,6 +2627,44 @@ export default function TVChartPanel() {
       if (quantAtr14) overlays.push('atr14');
       if (quantRsi14) overlays.push('rsi14');
       if (quantAdx14) overlays.push('adx14');
+      const priceValues = (candles ?? [])
+        .flatMap((row) => [toNum(row.l, NaN), toNum(row.h, NaN)])
+        .filter((value) => Number.isFinite(value));
+      const chartSnapshot: AIChartReviewChartSnapshot = {
+        renderedLayers: [...overlays],
+        visibleRange: visibleRange
+          ? {
+              from: visibleRange.from != null ? String(visibleRange.from) : null,
+              to: visibleRange.to != null ? String(visibleRange.to) : null,
+            }
+          : null,
+        visibleCandleCount: candles?.length ?? 0,
+        indicatorLayerStates: {
+          engineB: showEngineBOverlays && engineBOverlay?.overlay_source === 'engine_b',
+          volume: Boolean(quantVolumeBars),
+          volumeMa: Boolean(quantVolumeBars && quantVolumeMa),
+          vwap: Boolean(quantVwap),
+          ema20: Boolean(quantEma20),
+          ema21: Boolean(quantEma21),
+          ema50: Boolean(quantEma50),
+          ema200: Boolean(quantEma200),
+          dema200: Boolean(quantDema200),
+          atr14: Boolean(quantAtr14),
+          rsi14: Boolean(quantRsi14),
+          adx14: Boolean(quantAdx14),
+        },
+        engineBOverlayCount:
+          showEngineBOverlays && engineBOverlay?.overlay_source === 'engine_b'
+            ? engineBOverlayLines(engineBOverlay, true).length + buildEngineBZones(engineBOverlay, true).length
+            : 0,
+        priceRange: priceValues.length
+          ? {
+              min: Math.min(...priceValues),
+              max: Math.max(...priceValues),
+            }
+          : null,
+        provider: chartPayload?.chart_provider || chartPayload?.candle_provider || null,
+      };
       const meta = buildScreenshotMeta({
         width: downscaled.width,
         height: downscaled.height,
@@ -2628,6 +2673,7 @@ export default function TVChartPanel() {
         visible_range_start: visibleRange?.from != null ? String(visibleRange.from) : undefined,
         visible_range_end: visibleRange?.to != null ? String(visibleRange.to) : undefined,
         chart_provider: chartPayload?.chart_provider || chartPayload?.candle_provider || undefined,
+        chart_snapshot: chartSnapshot,
       });
       const symbol = (pair || '').toUpperCase();
       if (!symbol) {

@@ -426,12 +426,16 @@ def derive_price_action_facts(
     atr_value = _to_float(atr_block.get("atr_chart_tf") or atr_block.get("atr_value"))
 
     structure_ctx = engine_a_ctx.get("structure_context") or {}
+    profile_vp_context = {}
+    if isinstance(structure_ctx, dict):
+        profile_vp_context = structure_ctx.get("profile_vp_context") or {}
+    profile_vp_enabled = bool(profile_vp_context.get("enabled"))
     profile = structure_ctx.get("profile") if isinstance(structure_ctx, dict) else None
     if not isinstance(profile, dict):
         profile = engine_a_ctx.get("profile") or {}
     if not isinstance(profile, dict):
         profile = {}
-    if isinstance(structure_ctx, dict):
+    if profile_vp_enabled and isinstance(structure_ctx, dict):
         poc = _to_float(
             profile.get("poc")
             or profile.get("vp_poc")
@@ -450,10 +454,12 @@ def derive_price_action_facts(
             or structure_ctx.get("prev_session_val")
             or structure_ctx.get("vp_val")
         )
-    else:
+    elif profile_vp_enabled:
         poc = _to_float(profile.get("poc") or profile.get("vp_poc"))
         vah = _to_float(profile.get("vah") or profile.get("vp_vah"))
         val = _to_float(profile.get("val") or profile.get("vp_val"))
+    else:
+        poc = vah = val = None
 
     named_levels = named_levels or {}
     breakout_level = _to_float(named_levels.get("breakout_level"))
@@ -488,9 +494,11 @@ def derive_price_action_facts(
         "profile_location": profile_loc,
         "volume_behavior": volume,
         "setup_candidates": candidates,
+        "profile_vp_context": profile_vp_context,
         "_meta": {
             "atr_value": atr_value,
             "breakout_level_used": breakout_level,
             "bars_provided": len(ohlcv_window) if ohlcv_window else 0,
+            "profile_vp_trusted": profile_vp_enabled,
         },
     }

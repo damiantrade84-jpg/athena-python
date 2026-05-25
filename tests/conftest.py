@@ -9,6 +9,22 @@ the token here via setdefault (does not override an explicit user env).
 from __future__ import annotations
 
 import os
+import sys
+from types import ModuleType
+
+# Optional runtime dep: stub before data_feeds/news_sentiment_feed import eodhd at collection time.
+if "eodhd" not in sys.modules:
+    try:
+        import eodhd  # noqa: F401
+    except ModuleNotFoundError:
+        _eodhd_stub = ModuleType("eodhd")
+
+        class _StubEODHDClient:
+            def __init__(self, *_args, **_kwargs):
+                pass
+
+        _eodhd_stub.APIClient = _StubEODHDClient
+        sys.modules["eodhd"] = _eodhd_stub
 
 os.environ.setdefault(
     "ATHENA_REAL_ORDERS_CONFIRM",

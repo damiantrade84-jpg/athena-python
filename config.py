@@ -474,14 +474,45 @@ CONFIG: dict = {
     "NEWS_SENTIMENT_CACHE_TTL_SEC": 900,
     "NEWS_SENTIMENT_SCORE_IMPACT": 0.06,
     "NEWS_SENTIMENT_ATTACH_SUMMARY": True,
-    "NEWS_SENTIMENT_MACRO_CONTEXT_ENABLED": False,
+    "NEWS_SENTIMENT_MACRO_CONTEXT_ENABLED": True,
     "NEWS_SENTIMENT_MAX_ARTICLE_AGE_HOURS": 72,
     "NEWS_SENTIMENT_MAX_ARTICLES_TOTAL": 12,
     "NEWS_SENTIMENT_MAX_ARTICLES_PER_SOURCE": 6,
     "NEWS_SENTIMENT_USE_EODHD_NORMALIZED": False,
     "NEWS_SENTIMENT_MAJOR_EVENT_MODE": "advisory",
     "NEWS_SENTIMENT_MAX_DELTA": 0.30,
-    "NEWS_SENTIMENT_DRIVER_MAP": {},
+    "NEWS_SENTIMENT_DRIVER_MAP": {
+        "XAU/USD": [
+            "tag:usd",
+            "tag:dxy",
+            "tag:fed-rates",
+            "tag:rates",
+            "tag:cpi",
+            "tag:pce",
+            "tag:nfp",
+            "tag:real-yields",
+            "tag:safe-haven",
+            "tag:geopolitics",
+            "tag:central-bank-demand",
+        ],
+        "XAUUSD": [
+            "tag:usd",
+            "tag:dxy",
+            "tag:fed-rates",
+            "tag:rates",
+            "tag:cpi",
+            "tag:pce",
+            "tag:nfp",
+            "tag:real-yields",
+            "tag:safe-haven",
+            "tag:geopolitics",
+            "tag:central-bank-demand",
+        ],
+        "commodity": [
+            "tag:inflation",
+            "tag:safe-haven",
+        ],
+    },
     "NEWS_PAIR_CAP": 40,  # Max pairs for EODHD per-pair news + word-weights in news cache refresh
     "AI_STRUCTURED_OUTPUTS": True,
     "AI_TEMPERATURE": 0.3,
@@ -490,6 +521,7 @@ CONFIG: dict = {
     # When False, debate/vision sources classified as neutral (e.g. SKIP/REVIEW) block execution_allowed.
     "AI_NEUTRAL_ALLOWS_EXECUTION": False,
     "ENGINE_B_PROFILE_SCORING_ENABLED": True,
+    "ENGINE_B_PROFILE_TRUSTED_ASSET_TYPES": ["crypto", "stock"],
     "ENGINE_B_FAST_FVG_DETECTION": True,
     "CHART_VISION_DATASET_ENABLED": False,
     "CHART_VISION_V2_SHADOW_ENABLED": False,
@@ -1987,6 +2019,16 @@ def _fatal_config_validation(cfg: dict) -> None:
                     errors.append(
                         f"Engine A DI alignment multiplier {key}.{state}={mult_value} must be in [0.10, 1.0]"
                     )
+
+    _trusted_vp = cfg.get("ENGINE_B_PROFILE_TRUSTED_ASSET_TYPES")
+    if _trusted_vp is None:
+        pass
+    elif not isinstance(_trusted_vp, (list, tuple)) or not _trusted_vp:
+        errors.append("ENGINE_B_PROFILE_TRUSTED_ASSET_TYPES must be a non-empty list")
+    else:
+        for entry in _trusted_vp:
+            if not str(entry or "").strip():
+                errors.append("ENGINE_B_PROFILE_TRUSTED_ASSET_TYPES entries must be non-empty strings")
 
     # 6. Definition guards — Engine B max_possible must be defined
     _b_max = cfg.get("ENGINE_B_MAX_POSSIBLE")

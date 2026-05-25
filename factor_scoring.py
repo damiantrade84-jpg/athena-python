@@ -2691,6 +2691,10 @@ def compute_factor_scores(
         for key in ("confirmation", "matrix", "relationships", "engineAContext", "enabled")
     )
     if isinstance(intermarket_context, dict) and not _has_rich_intermarket_context:
+        _has_rich_intermarket_context = any(
+            key in intermarket_context for key in ("drivers", "unavailablePriors")
+        )
+    if isinstance(intermarket_context, dict) and not _has_rich_intermarket_context:
         if intermarket_context.get("divergence") is True:
             _inter_adj = _inter_adj_min
         _divergence_score = intermarket_context.get("divergence_score")

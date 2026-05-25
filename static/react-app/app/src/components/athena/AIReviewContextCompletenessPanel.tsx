@@ -102,6 +102,14 @@ export default function AIReviewContextCompletenessPanel({
           />
           <KV label="nearest resistance" value={fmtReviewNum(resistanceMap?.nearestResistance, 6)} />
           <KV label="TP clears resistance" value={showReviewValue(resistanceMap?.tpClearsResistance)} />
+          {resistanceMap?.profileLevelsTrusted === false ? (
+            <KV label="VP POC / VAH / VAL" value="N/A — not used for this asset class" />
+          ) : (
+            <KV
+              label="VP POC / VAH / VAL"
+              value={`${fmtReviewNum(resistanceMap?.profileLevels?.poc, 6)} / ${fmtReviewNum(resistanceMap?.profileLevels?.vah, 6)} / ${fmtReviewNum(resistanceMap?.profileLevels?.val, 6)}`}
+            />
+          )}
         </div>
       </div>
     </div>

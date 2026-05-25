@@ -732,6 +732,50 @@ def test_frontend_build_marker_wired():
     assert "isFrontendDebugVisible" in panel_source
 
 
+def test_ai_review_types_include_engine_a_non_visual_context_fields():
+    types_source = _read(ATHENA_TYPES)
+
+    for token in [
+        "EngineANonVisualContext",
+        "AddonContext",
+        "DerivativesContext",
+        "MicrostructureContext",
+        "IntermarketContext",
+        "NewsContext",
+        "ScoreAttribution",
+        "nonVisualContext?: EngineANonVisualContext",
+        "engineANonVisualContext?: EngineANonVisualContext",
+        "scoreAttribution?: ScoreAttribution",
+        "engineAScoreAttribution?: ScoreAttribution",
+    ]:
+        assert token in types_source
+
+
+def test_ai_review_card_renders_engine_a_non_visual_context_panel():
+    source = _read(ROOT / "static/react-app/app/src/components/athena/AIReviewCard.tsx")
+    panel_source = _read(ROOT / "static/react-app/app/src/components/athena/EngineANonVisualContextPanel.tsx")
+
+    assert "EngineANonVisualContextPanel" in source
+    assert "Engine A non-visual context" in source
+    assert "AI score mutation" in panel_source
+    assert "Intermarket" in panel_source
+    assert "Major event" in panel_source
+
+
+def test_tv_chart_panel_sends_diagnostic_chart_snapshot_in_screenshot_meta():
+    panel_source = _read(TV_PANEL)
+    helper_source = _read(ROOT / "static/react-app/app/src/lib/aiChartReview.ts")
+
+    assert "chart_snapshot:" in panel_source
+    assert "renderedLayers" in panel_source
+    assert "visibleCandleCount" in panel_source
+    assert "indicatorLayerStates" in panel_source
+    assert "engineBOverlayCount" in panel_source
+    assert "priceRange" in panel_source
+    assert "chart_snapshot?: AIChartReviewChartSnapshot" in _read(ATHENA_TYPES)
+    assert "chart_snapshot: args.chart_snapshot" in helper_source
+
+
 def test_carry_addon_fixture_displays_feed_status_when_missing_or_neutral():
     source = _read(TV_PANEL)
     assert ENGINE_A_DIAGNOSTIC_FIXTURE["type"] == "forex"

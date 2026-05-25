@@ -45,6 +45,52 @@ function num(v: unknown, fallback = 0): number {
   return Number.isFinite(n) ? n : fallback;
 }
 
+function str(v: unknown): string {
+  if (v == null || v === '') return '—';
+  return String(v);
+}
+
+function AutoTradeLogRow({ entry }: { entry: Record<string, unknown> }) {
+  const providerUnavailable = entry.eventRiskProviderUnavailable === true;
+  const effectiveAction = str(entry.eventRiskEffectiveAction);
+  const showEventWarning =
+    providerUnavailable || (effectiveAction !== '—' && effectiveAction.includes('provider_unavailable'));
+
+  return (
+    <div className="p-2 rounded-md bg-muted/30 text-xs space-y-1">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="font-mono font-semibold">{str(entry.ts)}</span>
+        <Badge variant="outline" className="text-[10px] h-5">{str(entry.grade)}</Badge>
+        <span className="font-mono">{str(entry.pair)} {str(entry.direction)}</span>
+        {entry.score != null ? (
+          <span className="text-muted-foreground">score={str(entry.score)}</span>
+        ) : null}
+      </div>
+      {(entry.failedStage || entry.blockReason) ? (
+        <div className="font-mono text-short">
+          {entry.failedStage ? `stage=${str(entry.failedStage)}` : null}
+          {entry.failedStage && entry.blockReason ? ' · ' : null}
+          {entry.blockReason ? `reason=${str(entry.blockReason)}` : null}
+        </div>
+      ) : null}
+      {(entry.executionConvictionBase != null || entry.executionConvictionEffective != null) ? (
+        <div className="text-muted-foreground font-mono">
+          conviction base={str(entry.executionConvictionBase)} effective={str(entry.executionConvictionEffective)}
+        </div>
+      ) : null}
+      {showEventWarning ? (
+        <div className="font-mono text-amber-600 dark:text-amber-400">
+          event risk: provider unavailable
+          {effectiveAction !== '—' ? ` (${effectiveAction})` : ''}
+        </div>
+      ) : null}
+      {entry.error_tag ? (
+        <div className="font-mono text-muted-foreground break-all">{str(entry.error_tag)}</div>
+      ) : null}
+    </div>
+  );
+}
+
 export default function TradesPanel() {
   const { showToast } = useStore();
   const [activeTab, setActiveTab] = useState('open');
@@ -494,9 +540,7 @@ export default function TradesPanel() {
                 {autoLogList.length > 0 ? (
                   <div className="space-y-2">
                     {autoLogList.map((entry, i) => (
-                      <div key={i} className="p-2 rounded-md bg-muted/30 text-xs font-mono break-all">
-                        {JSON.stringify(entry)}
-                      </div>
+                      <AutoTradeLogRow key={i} entry={entry} />
                     ))}
                   </div>
                 ) : (

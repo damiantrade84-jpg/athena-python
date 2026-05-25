@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from typing import Any, Callable
 
 from ai_review.engine_snapshots import extract_engine_snapshots
+from market_structure import build_engine_b_profile_vp_context, sanitize_engine_b_structure_profile_fields
 from scoring import get_pair_score_group
 
 
@@ -114,6 +115,393 @@ def _funding_oi_block(signal: dict[str, Any]) -> dict[str, Any]:
         ),
         "source": oi.get("source"),
         "timestamp": _first_present(oi.get("timestamp"), oi.get("ts")),
+    }
+
+
+def _asset_group_from(signal: dict[str, Any], engine_a_ctx: dict[str, Any]) -> str:
+    return str(
+        engine_a_ctx.get("asset_group")
+        or engine_a_ctx.get("asset_class")
+        or signal.get("scoreGroup")
+        or signal.get("type")
+        or ""
+    ).lower()
+
+
+def _feed_status(factor_diag: dict[str, Any]) -> dict[str, Any]:
+    feed = (
+        factor_diag.get("feedStatus")
+        or factor_diag.get("feed_status")
+        or factor_diag.get("feed_statuses")
+        or {}
+    )
+    return feed if isinstance(feed, dict) else {}
+
+
+def _addon_context(
+    signal: dict[str, Any],
+    factor_diag: dict[str, Any],
+    engine_a_ctx: dict[str, Any],
+) -> dict[str, Any]:
+    feed = _feed_status(factor_diag)
+    addon_type = _first_present(
+        factor_diag.get("addon_type"),
+        factor_diag.get("addonType"),
+        signal.get("addon_type"),
+        signal.get("addonType"),
+    )
+    addon_value = _to_float(
+        _first_present(
+            factor_diag.get("addon_value"),
+            factor_diag.get("addonValue"),
+            signal.get("addon_value"),
+            signal.get("addonValue"),
+            _factor_score(factor_diag, "addon"),
+        )
+    )
+    addon_status = _first_present(
+        factor_diag.get("addon_status"),
+        factor_diag.get("addonStatus"),
+        feed.get("addon"),
+    )
+    asset_group = _asset_group_from(signal, engine_a_ctx)
+    applies = None
+    if addon_type:
+        at = str(addon_type).lower()
+        if at in {"funding", "funding+oi"}:
+            applies = asset_group.startswith("crypto")
+        elif at == "carry":
+            applies = asset_group == "forex"
+        elif at in {"cot", "cot_proxy"}:
+            applies = asset_group in {"commodity", "commodities", "stock", "stocks", "index", "indices", "etf"}
+    unsupported = bool(
+        factor_diag.get("addon_unsupported")
+        or factor_diag.get("addonUnsupported")
+        or str(addon_status or "").lower().endswith(":unsupported")
+        or str(addon_status or "").lower() == "unsupported"
+    )
+    interpretation = "unavailable"
+    if unsupported:
+        interpretation = "unsupported_for_asset_or_feed"
+    elif addon_value is None:
+        interpretation = "missing"
+    elif addon_value > 0:
+        interpretation = "supportive"
+    elif addon_value < 0:
+        interpretation = "contradictory"
+    else:
+        interpretation = "neutral"
+    return {
+        "addonType": addon_type,
+        "addonValue": addon_value,
+        "addonStatus": addon_status,
+        "addonUnsupported": unsupported,
+        "feedStatus": feed,
+        "appliesToAssetClass": applies,
+        "interpretation": interpretation,
+    }
+
+
+def _derivatives_context(
+    signal: dict[str, Any],
+    factor_diag: dict[str, Any],
+    engine_a_ctx: dict[str, Any],
+) -> dict[str, Any]:
+    asset_group = _asset_group_from(signal, engine_a_ctx)
+    raw = engine_a_ctx.get("funding_oi") if isinstance(engine_a_ctx.get("funding_oi"), dict) else None
+    if raw is None:
+        raw = _funding_oi_block(signal)
+    has_value = any(
+        _first_present(
+            raw.get(key),
+            raw.get(key[0].lower() + key[1:]) if isinstance(key, str) and key else None,
+        )
+        is not None
+        for key in (
+            "fundingRate",
+            "fundingRateZ",
+            "openInterest",
+            "openInterestDelta",
+            "openInterestDeltaPct",
+        )
+    )
+    if not asset_group.startswith("crypto"):
+        status = "not_applicable"
+    elif has_value:
+        status = "ok"
+    else:
+        status = "unavailable"
+    return {
+        "fundingRate": _to_float(_first_present(raw.get("fundingRate"), raw.get("funding_rate"))),
+        "fundingRateZ": _to_float(_first_present(raw.get("fundingRateZ"), raw.get("funding_rate_z"))),
+        "openInterest": _to_float(
+            _first_present(raw.get("openInterest"), raw.get("open_interest"), raw.get("oi"))
+        ),
+        "openInterestDelta": _to_float(
+            _first_present(raw.get("openInterestDelta"), raw.get("open_interest_delta"))
+        ),
+        "openInterestDeltaPct": _to_float(
+            _first_present(
+                raw.get("openInterestDeltaPct"),
+                raw.get("open_interest_delta_pct"),
+                raw.get("oiChange"),
+                raw.get("oi_change_pct"),
+            )
+        ),
+        "source": raw.get("source"),
+        "timestamp": _first_present(raw.get("timestamp"), raw.get("ts"), raw.get("time")),
+        "status": status,
+    }
+
+
+def _snap_from_signal_or_ctx(signal: dict[str, Any], engine_a_ctx: dict[str, Any], key: str) -> dict[str, Any]:
+    for container in (signal, engine_a_ctx):
+        block = container.get(key)
+        if isinstance(block, dict):
+            snap = block.get("snap")
+            if isinstance(snap, dict):
+                return snap
+            return block
+    return {}
+
+
+def _microstructure_context(
+    signal: dict[str, Any],
+    factor_diag: dict[str, Any],
+    engine_a_ctx: dict[str, Any],
+) -> dict[str, Any]:
+    asset_group = _asset_group_from(signal, engine_a_ctx)
+    snap = _snap_from_signal_or_ctx(signal, engine_a_ctx, "h4")
+    source = _first_present(
+        snap.get("microstructure_exchange"),
+        signal.get("microstructure_exchange"),
+        signal.get("microstructureSource"),
+    )
+    values = {
+        "orderBookImbalance": _to_float(
+            _first_present(snap.get("order_book_imbalance"), snap.get("orderBookImbalance"))
+        ),
+        "liquidityWallDetection": _to_float(
+            _first_present(snap.get("liquidity_wall_detection"), snap.get("liquidityWallDetection"))
+        ),
+        "orderflowDelta": _to_float(
+            _first_present(snap.get("orderflow_delta"), snap.get("orderflowDelta"))
+        ),
+        "liquidityPressure": _to_float(
+            _first_present(snap.get("liquidity_pressure"), snap.get("liquidityPressure"))
+        ),
+        "volumeMomentumSpread": _to_float(
+            _first_present(snap.get("volume_momentum_spread"), snap.get("volumeMomentumSpread"))
+        ),
+    }
+    if not asset_group.startswith("crypto"):
+        status = "not_applicable"
+    elif any(v is not None for v in values.values()):
+        status = "ok"
+    else:
+        status = "unavailable"
+    return {
+        **values,
+        "source": source,
+        "ageSeconds": _to_float(
+            _first_present(snap.get("microstructure_age_sec"), snap.get("microstructureAgeSeconds"))
+        ),
+        "status": status,
+    }
+
+
+def _intermarket_context(
+    signal: dict[str, Any],
+    factor_diag: dict[str, Any],
+    engine_a_ctx: dict[str, Any],
+) -> dict[str, Any]:
+    raw = (
+        signal.get("intermarketConfirmation")
+        or factor_diag.get("intermarket")
+        or factor_diag.get("intermarketConfirmation")
+        or engine_a_ctx.get("intermarketConfirmation")
+        or {}
+    )
+    if not isinstance(raw, dict):
+        raw = {}
+    flags = raw.get("contradictionFlags") if isinstance(raw.get("contradictionFlags"), dict) else {}
+    severe = raw.get("severeContradiction")
+    if severe is None:
+        severe = flags.get("severeContradiction")
+    return {
+        "verdict": raw.get("verdict"),
+        "score": _to_float(raw.get("score")),
+        "engineADelta": _to_float(
+            _first_present(
+                raw.get("engineADelta"),
+                raw.get("engine_a_delta"),
+                factor_diag.get("intermarket_engine_a_delta"),
+            )
+        ),
+        "supportDirection": raw.get("supportDirection"),
+        "supportStrength": raw.get("supportStrength"),
+        "stable": raw.get("stable") if raw.get("stable") is None else bool(raw.get("stable")),
+        "flippedRecently": bool(raw.get("flippedRecently")),
+        "activeWindow": raw.get("activeWindow"),
+        "topSupporting": list(raw.get("topSupporting") or []),
+        "topContradictory": list(raw.get("topContradictory") or []),
+        "unavailablePriors": list(raw.get("unavailablePriors") or []),
+        "severeContradiction": bool(severe),
+        "explanation": raw.get("explanation"),
+    }
+
+
+def _news_context(
+    signal: dict[str, Any],
+    factor_diag: dict[str, Any],
+    engine_a_ctx: dict[str, Any],
+) -> dict[str, Any]:
+    summary = signal.get("newsSentimentSummary") or engine_a_ctx.get("newsSentimentSummary") or {}
+    if not isinstance(summary, dict):
+        summary = {}
+    risk = signal.get("majorEventRisk") or summary.get("majorEventRisk") or {}
+    if not isinstance(risk, dict):
+        risk = {}
+    return {
+        "vote": _to_float(signal.get("newsSentimentVote") or engine_a_ctx.get("newsSentimentVote")),
+        "sentimentScore": _to_float(
+            _first_present(summary.get("sentiment_score"), summary.get("sentimentScore"))
+        ),
+        "confidence": _to_float(summary.get("confidence")),
+        "direction": summary.get("direction"),
+        "delta": _to_float(signal.get("newsSentimentDelta") or engine_a_ctx.get("newsSentimentDelta")),
+        "rawDelta": _to_float(signal.get("newsSentimentRawDelta") or engine_a_ctx.get("newsSentimentRawDelta")),
+        "articleCountUsed": summary.get("article_count_used") or summary.get("articleCountUsed"),
+        "freshArticleCount": summary.get("fresh_article_count") or summary.get("freshArticleCount"),
+        "majorEventDetected": bool(
+            _first_present(
+                summary.get("major_event_detected"),
+                summary.get("majorEventDetected"),
+                risk.get("majorEventDetected"),
+            )
+        ),
+        "majorEventDescription": _first_present(
+            summary.get("major_event_description"),
+            summary.get("majorEventDescription"),
+            risk.get("reason"),
+        ),
+        "keyThemes": list(summary.get("key_themes") or summary.get("keyThemes") or [])[:6],
+        "reasoningSummary": summary.get("reasoning_summary") or summary.get("reasoningSummary"),
+    }
+
+
+def _macro_context(
+    signal: dict[str, Any],
+    factor_diag: dict[str, Any],
+    engine_a_ctx: dict[str, Any],
+) -> dict[str, Any]:
+    macro = factor_diag.get("macroContext") or factor_diag.get("macro_context") or {}
+    if not isinstance(macro, dict):
+        macro = {"value": macro} if macro not in (None, "") else {}
+    usd = signal.get("usdRelativeStrength") or engine_a_ctx.get("usdRelativeStrength")
+    if not isinstance(usd, dict):
+        usd = {}
+    intermarket = _intermarket_context(signal, factor_diag, engine_a_ctx)
+    unavailable = intermarket.get("unavailablePriors") or []
+    real_yield_unavailable = any(
+        (
+            item.get("driver") if isinstance(item, dict) else str(item)
+        )
+        == "US10Y_REAL_YIELD_PROXY"
+        for item in unavailable
+    )
+    return {
+        "macroContext": macro,
+        "usdRelativeStrength": usd or None,
+        "dxyStatus": macro.get("status") if str(macro.get("proxyLabel") or "").upper() == "DXY" else None,
+        "realYieldStatus": "unavailable" if real_yield_unavailable else None,
+    }
+
+
+def build_score_attribution(
+    signal: dict[str, Any],
+    *,
+    factor_diagnostics: dict[str, Any] | None = None,
+    threshold: float | None = None,
+    max_score: float | None = None,
+) -> dict[str, Any]:
+    """Build unified Engine A score attribution for scan payloads and AI review."""
+    fd = factor_diagnostics if isinstance(factor_diagnostics, dict) else {}
+    if not fd:
+        raw_fd = signal.get("factorDiagnostics") or signal.get("factor_diagnostics")
+        fd = raw_fd if isinstance(raw_fd, dict) else {}
+    ctx = {
+        "confluence_score": _to_float(
+            signal.get("confluenceScore") or signal.get("score") or signal.get("final_score")
+        ),
+        "threshold": _to_float(threshold if threshold is not None else signal.get("threshold")),
+        "max_score_override": _to_float(
+            max_score if max_score is not None else signal.get("maxScore") or signal.get("maxScoreOverride")
+        ),
+    }
+    return _score_attribution(signal, fd, ctx)
+
+
+def _score_attribution(
+    signal: dict[str, Any],
+    factor_diag: dict[str, Any],
+    engine_a_ctx: dict[str, Any],
+) -> dict[str, Any]:
+    final_score = _to_float(
+        _first_present(
+            engine_a_ctx.get("confluence_score"),
+            signal.get("confluenceScore"),
+            signal.get("score"),
+            signal.get("final_score"),
+        )
+    )
+    intermarket = _intermarket_context(signal, factor_diag, engine_a_ctx)
+    inter_delta = _to_float(intermarket.get("engineADelta")) or 0.0
+    news_delta = _to_float(
+        _first_present(signal.get("newsSentimentDelta"), engine_a_ctx.get("newsSentimentDelta"))
+    )
+    score_after_intermarket = _to_float(
+        _first_present(
+            signal.get("preNewsScore"),
+            signal.get("pre_news_score"),
+            engine_a_ctx.get("preNewsScore"),
+            engine_a_ctx.get("pre_news_score"),
+        )
+    )
+    if score_after_intermarket is None and final_score is not None and news_delta is not None:
+        score_after_intermarket = round(final_score - news_delta, 6)
+    technical_raw = None
+    if score_after_intermarket is not None:
+        technical_raw = round(float(score_after_intermarket) - float(inter_delta), 6)
+    elif final_score is not None:
+        technical_raw = round(float(final_score) - float(inter_delta) - float(news_delta or 0.0), 6)
+    return {
+        "technicalScoreRaw": technical_raw,
+        "intermarketDelta": round(float(inter_delta), 6),
+        "scoreAfterIntermarket": score_after_intermarket,
+        "newsSentimentDelta": news_delta,
+        "finalEngineAScore": final_score,
+        "threshold": _to_float(engine_a_ctx.get("threshold") or signal.get("threshold")),
+        "maxScore": _to_float(
+            _first_present(engine_a_ctx.get("max_score_override"), signal.get("maxScore"), signal.get("maxScoreOverride"))
+        ),
+        "scoreSource": "backend_engine_a",
+        "aiReviewCanMutateScore": False,
+    }
+
+
+def _non_visual_context(
+    signal: dict[str, Any],
+    factor_diag: dict[str, Any],
+    engine_a_ctx: dict[str, Any],
+) -> dict[str, Any]:
+    return {
+        "addonContext": _addon_context(signal, factor_diag, engine_a_ctx),
+        "derivativesContext": _derivatives_context(signal, factor_diag, engine_a_ctx),
+        "microstructureContext": _microstructure_context(signal, factor_diag, engine_a_ctx),
+        "intermarketContext": _intermarket_context(signal, factor_diag, engine_a_ctx),
+        "newsContext": _news_context(signal, factor_diag, engine_a_ctx),
+        "macroContext": _macro_context(signal, factor_diag, engine_a_ctx),
     }
 
 
@@ -333,6 +721,8 @@ def build_engine_b_prompt_context(engine_a_ctx: dict[str, Any]) -> dict[str, Any
             if isinstance(struct.get("breaker_block"), dict)
             else struct.get("breaker_block")
         ),
+        "volumeProfileContext": struct.get("profile_vp_context")
+        or build_engine_b_profile_vp_context(str(engine_a_ctx.get("asset_class") or "")),
     }
 
 
@@ -450,7 +840,10 @@ def assemble_engine_a_context(
         "screenshot_overlays": list((screenshot_meta or {}).get("overlays") or []),
         "mismatch_warnings": [],
         "funding_oi": _funding_oi_block(signal),
-        "structure_context": signal.get("engine_b") if isinstance(signal.get("engine_b"), dict) else {},
+        "structure_context": sanitize_engine_b_structure_profile_fields(
+            signal.get("engine_b") if isinstance(signal.get("engine_b"), dict) else {},
+            str(pair.get("type") or ""),
+        ),
         "ema_levels": _ema_levels(signal, factor_diag),
         "htf_swing_highs": [
             value
@@ -464,6 +857,9 @@ def assemble_engine_a_context(
     }
     ctx["ohlcv_bars"] = select_ohlcv_bars_for_chart(signal, timeframe, screenshot_meta)
     ctx["engine_snapshots"] = extract_engine_snapshots(signal, ctx)
+    ctx["non_visual_context"] = _non_visual_context(signal, factor_diag, ctx)
+    ctx["engine_a_non_visual_context"] = ctx["non_visual_context"]
+    ctx["score_attribution"] = _score_attribution(signal, factor_diag, ctx)
     return ctx
 
 
@@ -671,8 +1067,24 @@ def build_engine_a_prompt_context(engine_a_ctx: dict[str, Any]) -> dict[str, Any
     if not isinstance(adx_capture, dict):
         adx_capture = {}
     addon_score = _factor_score(fd, "addon")
+    volume_score = _factor_score(fd, "volume", "volumeScore", "volume_score")
+    volume_ratio = _to_float(
+        _first_present(
+            engine_a_ctx.get("volRatio"),
+            engine_a_ctx.get("volumeRatio"),
+            engine_a_ctx.get("volume_ratio"),
+            fd.get("volumeRatio"),
+            fd.get("volume_ratio"),
+        )
+    )
     indicators = engine_a_ctx.get("indicator_snapshots") or {}
     fresh = engine_a_ctx.get("freshness") or {}
+    non_visual = engine_a_ctx.get("non_visual_context") or engine_a_ctx.get("engine_a_non_visual_context")
+    if not isinstance(non_visual, dict):
+        non_visual = _non_visual_context({}, fd, engine_a_ctx)
+    score_attribution = engine_a_ctx.get("score_attribution")
+    if not isinstance(score_attribution, dict):
+        score_attribution = _score_attribution({}, fd, engine_a_ctx)
 
     return {
         "direction": engine_a_ctx.get("direction"),
@@ -687,12 +1099,16 @@ def build_engine_a_prompt_context(engine_a_ctx: dict[str, Any]) -> dict[str, Any
         "candleFreshnessSummary": fresh.get("candleFreshnessSummary"),
         "dataFreshnessAllowed": fresh.get("data_freshness_allowed"),
         "timeframeBias": _timeframe_bias(engine_a_ctx),
+        "nonVisualContext": non_visual,
+        "engineANonVisualContext": non_visual,
+        "scoreAttribution": score_attribution,
         "diagnostics": {
             "trendScore": _factor_score(fd, "trend"),
             "momentumScore": _factor_score(fd, "momentum"),
             "volatilityScore": _factor_score(fd, "mean_reversion", "volatility"),
             "addonScore": addon_score,
-            "volumeScore": addon_score,
+            "volumeScore": volume_score,
+            "volumeRatio": volume_ratio,
             "structureScore": _to_float(fd.get("structure_context_adjustment")),
             "vwapDistanceAtr": _to_float(
                 trend.get("vwapDistanceAtr") if isinstance(trend, dict) else None
