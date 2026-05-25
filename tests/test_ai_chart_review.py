@@ -474,7 +474,14 @@ def test_normalizer_caution_on_parse_fail():
 
 def test_concordance_agree_when_passed_and_valid():
     ai = normalize_chart_review_response(
-        json.dumps({"verdict": "VALID", "confidence": 80, "human_action": "take"})
+        json.dumps(
+            {
+                "verdict": "VALID",
+                "confidence": 80,
+                "human_action": "take",
+                "direction": "LONG",
+            }
+        )
     )
     out = compute_engine_a_ai_concordance(_engine_a_ctx(), ai)
     assert out["concordance"] == "agree"
@@ -517,7 +524,16 @@ def test_concordance_disagree_when_passed_and_invalid():
 
 
 def test_persistence_stores_engine_a_ai_concordance(tmp_audit_db):
-    ai = normalize_chart_review_response(json.dumps({"verdict": "VALID", "confidence": 80, "human_action": "take"}))
+    ai = normalize_chart_review_response(
+        json.dumps(
+            {
+                "verdict": "VALID",
+                "confidence": 80,
+                "human_action": "take",
+                "direction": "LONG",
+            }
+        )
+    )
     concordance = compute_engine_a_ai_concordance(_engine_a_ctx(), ai)
     record_review(
         symbol="BTCUSDT",
@@ -1435,6 +1451,7 @@ def test_price_action_facts_reads_flat_engine_b_poc_keys():
     facts = derive_price_action_facts(
         engine_a_ctx={
             "structure_context": {
+                "profile_vp_context": {"enabled": True, "trusted": True, "reason": "crypto"},
                 "prev_session_poc": 65000.0,
                 "prev_session_vah": 65500.0,
                 "prev_session_val": 64500.0,

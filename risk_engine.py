@@ -17,6 +17,7 @@ from datetime import datetime, timezone
 from config import CONFIG
 from athena_app.services.data_freshness import evaluate_execution_data_freshness
 from scoring import CORR_CLUSTERS, _PAIR_TO_CLUSTER
+from symbol_matching import symbol_match_keys
 from sqlite_instrumentation import (
     timed_sqlite_connect,
     timed_sqlite_commit,
@@ -726,6 +727,20 @@ def _calc_portfolio_heat(open_positions: list, account_balance: float) -> float:
     return total_risk / account_balance
 
 
+def _symbol_match_keys(value) -> set[str]:
+    return symbol_match_keys(value)
+
+
+def _position_matches_pair(pos: dict, pair: str) -> bool:
+    target = _symbol_match_keys(pair)
+    if not target:
+        return False
+    for key in ("pair", "symbol", "display", "ccxt_symbol", "venue_symbol"):
+        if target & _symbol_match_keys(pos.get(key)):
+            return True
+    return False
+
+
 def risk_check(
     signal: dict,
     account_balance: float,
@@ -944,7 +959,9 @@ def risk_check(
     # ── Check 4b: Same-pair duplicate guard ─────────────────────────────────
     # Block opening a second position on a pair we already hold.
     # Prevents position stacking on persistent signals (DOT/USDT, USO pattern).
-    _existing_same_pair = sum(1 for pos in open_positions if pos.get("pair") == pair)
+    _existing_same_pair = sum(
+        1 for pos in open_positions if isinstance(pos, dict) and _position_matches_pair(pos, pair)
+    )
     if _existing_same_pair >= 1:
         log.warning(
             f"{prefix} REJECTED: already holding {_existing_same_pair} position(s) on {pair}"
