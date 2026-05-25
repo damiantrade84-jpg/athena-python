@@ -17,8 +17,8 @@
 # Or override only on this machine via the same keys in config.local.yaml.
 
 PAPER_SOAK:
-  ENABLED: true
-  REAL_ORDERS_ALLOWED: false
+  ENABLED: false
+  REAL_ORDERS_ALLOWED: true
   LOG_ALL_SIGNALS: true
   LOG_BLOCKED_SIGNALS: true
   LOG_EXECUTION_DECISIONS: true
