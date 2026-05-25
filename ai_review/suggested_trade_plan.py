@@ -7,8 +7,8 @@ from typing import Any
 SCHEMA_VERSION = "suggested_trade_plan.v1"
 
 _VALID_DIRECTIONS = frozenset({"LONG", "SHORT"})
-_VALID_ACTIONS = frozenset({"WAIT_FOR_LEVEL", "WAIT_FOR_ZONE", "NO_TRADE", "ENTRY_NOW"})
-_VALID_WATCH_ACTIONS = frozenset({"WAIT_FOR_LEVEL", "WAIT_FOR_ZONE"})
+_VALID_ACTIONS = frozenset({"WAIT_FOR_LEVEL", "WAIT_FOR_ZONE", "NO_TRADE", "ENTRY_NOW", "WATCH_ONLY"})
+_VALID_WATCH_ACTIONS = frozenset({"WAIT_FOR_LEVEL", "WAIT_FOR_ZONE", "WATCH_ONLY"})
 _VALID_TRIGGERS = frozenset({
     "ACCEPTANCE_ABOVE",
     "ACCEPTANCE_BELOW",
@@ -99,7 +99,7 @@ def sanitize_suggested_trade_plan(
     if action not in _VALID_ACTIONS:
         armable = False
         reason_parts.append("invalid action")
-    if trigger not in _VALID_TRIGGERS:
+    if action != "WATCH_ONLY" and trigger not in _VALID_TRIGGERS:
         armable = False
         reason_parts.append("invalid triggerType")
     if not sym:
@@ -119,6 +119,9 @@ def sanitize_suggested_trade_plan(
 
     if action in ("ENTRY_NOW", "NO_TRADE"):
         armable = False
+
+    if action == "WATCH_ONLY":
+        armable = True
 
     if action in _VALID_WATCH_ACTIONS and not expires:
         expires = None  # expiry may be filled by monitor default on flag
@@ -153,7 +156,7 @@ def sanitize_suggested_trade_plan(
     if inv_below is not None:
         out["invalidateBelow"] = inv_below
 
-    if src == "ai_scalp_chart_review" and action in _VALID_WATCH_ACTIONS:
+    if src == "ai_scalp_chart_review" and action in _VALID_WATCH_ACTIONS and action != "WATCH_ONLY":
         ctx_tf = str(out.get("contextTf") or "").upper()
         entry_tf = str(out.get("entryTf") or "").upper()
         exec_tf = str(out.get("executionTf") or "").upper()
@@ -196,6 +199,8 @@ def is_watchable_plan(plan: dict[str, Any] | None) -> bool:
     action = str(plan.get("action") or "").upper()
     if action not in _VALID_WATCH_ACTIONS:
         return False
+    if action == "WATCH_ONLY":
+        return True
     trigger = str(plan.get("triggerType") or "").upper()
     if trigger in ("ACCEPTANCE_ABOVE", "ACCEPTANCE_BELOW"):
         return _coerce_float(plan.get("level")) is not None

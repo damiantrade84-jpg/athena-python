@@ -995,12 +995,27 @@ export default function ScalpWorkbenchPanel() {
     const top = scalpAiReviewResponse?.suggestedTradePlan ?? scalpAiReviewResponse?.suggested_trade_plan;
     if (top && typeof top === 'object') return top;
     const nested = scalpAiReviewResponse?.ai_review as { suggestedTradePlan?: SuggestedTradePlan } | undefined;
-    return nested?.suggestedTradePlan ?? null;
-  }, [scalpAiReviewResponse]);
+    if (nested?.suggestedTradePlan) return nested.suggestedTradePlan;
+
+    if (!scalpAiReviewResponse) return null;
+    const review = scalpAiReviewResponse.ai_review;
+    const dir = String(review?.direction || scalpAiReviewResponse.concordance || '').toUpperCase();
+    if (dir !== 'LONG' && dir !== 'SHORT') return null;
+    return {
+      schemaVersion: 'suggested_trade_plan.v1',
+      armable: true,
+      source: 'ai_scalp_chart_review',
+      symbol: String(chartSymbol || '').toUpperCase(),
+      direction: dir as 'LONG' | 'SHORT',
+      action: 'WATCH_ONLY',
+      triggerType: 'ACCEPTANCE_ABOVE',
+      reason: review?.waitReason || review?.chartReadSummary || 'AI-reviewed scalp setup',
+    };
+  }, [scalpAiReviewResponse, chartSymbol]);
 
   const canFlagWatch = Boolean(
     suggestedPlan?.armable
-    && ['WAIT_FOR_LEVEL', 'WAIT_FOR_ZONE'].includes(String(suggestedPlan?.action || '').toUpperCase()),
+    && ['WAIT_FOR_LEVEL', 'WAIT_FOR_ZONE', 'WATCH_ONLY'].includes(String(suggestedPlan?.action || '').toUpperCase()),
   );
 
   const executeBlockReason = useMemo(

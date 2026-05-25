@@ -437,7 +437,7 @@ def test_engine_a_review_layout_enables_required_lean_indicators():
     assert "setEma200(true)" in source
     assert "setAtr14(true)" in source
     assert "setRsi14(true)" in source
-    assert "setDema200(false)" in source
+    assert "setDema200(!isCrypto)" in source
     assert "MACD@tv-basicstudies" not in source
     assert "BB@tv-basicstudies" not in source
     assert "Stochastic@tv-basicstudies" not in source

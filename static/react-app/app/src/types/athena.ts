@@ -42,7 +42,7 @@ export interface SuggestedTradePlan {
   source?: 'ai_chart_review' | 'ai_scalp_chart_review' | string;
   symbol?: string;
   direction?: Direction;
-  action?: 'WAIT_FOR_LEVEL' | 'WAIT_FOR_ZONE' | 'NO_TRADE' | 'ENTRY_NOW' | string;
+  action?: 'WAIT_FOR_LEVEL' | 'WAIT_FOR_ZONE' | 'WATCH_ONLY' | 'NO_TRADE' | 'ENTRY_NOW' | string;
   triggerType?: string;
   level?: number;
   zoneLow?: number;

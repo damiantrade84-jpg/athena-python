@@ -195,8 +195,9 @@ export function evaluateTvChartExecuteBlock(args: {
 export function shouldHideTvChartExecuteNow(args: {
   aiReview: AIChartReviewResponse | null;
   canFlagWatch: boolean;
+  suggestedAction?: string;
 }): boolean {
-  if (args.canFlagWatch) return true;
+  if (args.canFlagWatch && args.suggestedAction !== 'WATCH_ONLY') return true;
   if (aiReviewEntryTimingRejected(args.aiReview)) return true;
   if (aiReviewBlocksManualExecute(args.aiReview)) return true;
   return false;

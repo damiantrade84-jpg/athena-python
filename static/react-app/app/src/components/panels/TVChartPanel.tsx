@@ -2278,12 +2278,27 @@ export default function TVChartPanel() {
     const top = aiReview?.suggestedTradePlan ?? aiReview?.suggested_trade_plan;
     if (top && typeof top === 'object') return top;
     const nested = aiReview?.ai_review as { suggestedTradePlan?: SuggestedTradePlan } | undefined;
-    return nested?.suggestedTradePlan ?? null;
-  }, [aiReview]);
+    if (nested?.suggestedTradePlan) return nested.suggestedTradePlan;
+
+    if (!aiReview) return null;
+    const review = aiReview.ai_review;
+    const dir = String(review?.direction || aiReview.concordance?.ai_direction || '').toUpperCase();
+    if (dir !== 'LONG' && dir !== 'SHORT') return null;
+    return {
+      schemaVersion: 'suggested_trade_plan.v1',
+      armable: true,
+      source: 'ai_chart_review',
+      symbol: String(aiReview.engine_a_context?.symbol || pair || '').toUpperCase(),
+      direction: dir as 'LONG' | 'SHORT',
+      action: 'WATCH_ONLY',
+      triggerType: 'ACCEPTANCE_ABOVE',
+      reason: review?.waitReason || review?.chartReadSummary || 'AI-reviewed setup',
+    };
+  }, [aiReview, pair]);
 
   const canFlagWatch = Boolean(
     suggestedPlan?.armable
-    && ['WAIT_FOR_LEVEL', 'WAIT_FOR_ZONE'].includes(String(suggestedPlan?.action || '').toUpperCase()),
+    && ['WAIT_FOR_LEVEL', 'WAIT_FOR_ZONE', 'WATCH_ONLY'].includes(String(suggestedPlan?.action || '').toUpperCase()),
   );
 
   const symbolWatches = useMemo(
