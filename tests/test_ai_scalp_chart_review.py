@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import base64
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import json
 import sqlite3
 import tempfile
@@ -629,6 +629,32 @@ def test_ai_scalp_review_rejects_severe_direction_mismatch():
     meta["chart_snapshot"]["selectedSignal"]["direction"] = "SHORT"
     reason = severe_chart_snapshot_reject_reason("BTCUSDT", _engine_d_ctx(), meta, has_screenshot=True)
     assert reason == "direction_mismatch"
+
+
+def test_chart_data_stale_allows_normal_m5_bar_lag():
+    from ai_scalp_review.engine_d_context import severe_chart_snapshot_reject_reason
+
+    now = datetime.now(timezone.utc).replace(microsecond=0)
+    meta = _base_request()["screenshot_meta"]
+    meta["captured_at"] = now.isoformat()
+    meta["chart_timeframe"] = "M5"
+    meta["chart_snapshot"]["timeframe"] = "M5"
+    meta["chart_snapshot"]["latestCandleTs"] = (now - timedelta(seconds=240)).isoformat()
+    reason = severe_chart_snapshot_reject_reason("BTCUSDT", _engine_d_ctx(), meta, has_screenshot=True)
+    assert reason is None
+
+
+def test_chart_data_stale_rejects_m1_bar_far_behind_capture():
+    from ai_scalp_review.engine_d_context import severe_chart_snapshot_reject_reason
+
+    now = datetime.now(timezone.utc).replace(microsecond=0)
+    meta = _base_request()["screenshot_meta"]
+    meta["captured_at"] = now.isoformat()
+    meta["chart_timeframe"] = "M1"
+    meta["chart_snapshot"]["timeframe"] = "M1"
+    meta["chart_snapshot"]["latestCandleTs"] = (now - timedelta(seconds=400)).isoformat()
+    reason = severe_chart_snapshot_reject_reason("BTCUSDT", _engine_d_ctx(), meta, has_screenshot=True)
+    assert reason == "chart_data_stale"
 
 
 def test_ai_scalp_review_receives_chart_snapshot_layers():

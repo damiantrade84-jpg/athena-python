@@ -221,6 +221,33 @@ def _validate_chart_snapshot_warnings(
     return warnings
 
 
+def _timeframe_bar_seconds(timeframe: str | None) -> int:
+    raw = str(timeframe or "").strip().upper()
+    if raw.startswith("M") and raw[1:].isdigit():
+        return int(raw[1:]) * 60
+    if raw.startswith("H") and raw[1:].isdigit():
+        return int(raw[1:]) * 3600
+    if raw in {"D", "D1", "1D"}:
+        return 86400
+    return 60
+
+
+def _chart_data_staleness_budget_seconds(
+    timeframe: str | None,
+    *,
+    max_age: int | None = None,
+) -> int:
+    """Max allowed lag between chart bar open time and capture time."""
+    base = int(
+        max_age
+        if max_age is not None
+        else _chart_snapshot_cfg("MAX_CHART_AGE_SECONDS", 120)
+    )
+    bar_seconds = _timeframe_bar_seconds(timeframe)
+    # One full bar can still be forming; allow two bars plus a small clock-skew buffer.
+    return max(base, (bar_seconds * 2) + 30)
+
+
 def severe_chart_snapshot_reject_reason(
     symbol: str,
     engine_d_ctx: dict[str, Any],
@@ -254,10 +281,21 @@ def severe_chart_snapshot_reject_reason(
     captured_at = _parse_iso_ts((screenshot_meta or {}).get("captured_at"))
     latest = _parse_iso_ts(snapshot.get("latestCandleTs") or engine_d_ctx.get("latest_candle_ts"))
     max_age = int(_chart_snapshot_cfg("MAX_CHART_AGE_SECONDS", 120))
+    chart_tf = str(
+        snapshot.get("timeframe")
+        or (screenshot_meta or {}).get("chart_timeframe")
+        or engine_d_ctx.get("timeframe")
+        or ""
+    ).upper()
+    data_staleness_budget = _chart_data_staleness_budget_seconds(chart_tf, max_age=max_age)
     now = datetime.now(timezone.utc)
     if captured_at and (now - captured_at).total_seconds() > max_age:
         return "chart_capture_too_old"
-    if latest and captured_at and (captured_at - latest).total_seconds() > max_age:
+    if (
+        latest
+        and captured_at
+        and (captured_at - latest).total_seconds() > data_staleness_budget
+    ):
         return "chart_data_stale"
 
     return None

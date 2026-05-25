@@ -176,7 +176,12 @@
       "PowerShell(.\\\\.venv\\\\Scripts\\\\python.exe -m pytest tests/test_ai_strategy_playbook_loader.py tests/test_price_action_facts.py tests/test_ai_review_schema.py tests/test_strategy_classifier.py tests/test_ai_review_payload_builder.py --basetemp=tests/.tmp/all -q 2>&1 | Select-Object -Last 15)",
       "PowerShell(.\\\\.venv\\\\Scripts\\\\python.exe -c \"import athena_app.api.routes_ai_chart_review as m; print\\('route module ok'\\); print\\('helper present:', hasattr\\(m, '_build_strategy_layer_safely'\\)\\)\")",
       "PowerShell($env:ATHENA_REAL_ORDERS_CONFIRM = 'I_UNDERSTAND_REAL_ORDER_RISK'; .\\\\.venv\\\\Scripts\\\\python.exe -c \"from athena_ai.ai_review_payload_builder import build_strategy_layer, render_strategy_block_for_prompt; layer = build_strategy_layer\\(engine_a_ctx={'asset_group':'crypto','direction':'LONG','regime':'balance','confluence_score':6,'max_score_override':10,'atr':{'atr_chart_tf':1.5}}\\); print\\('layer keys:', sorted\\(layer.keys\\(\\)\\)\\); print\\('candidates:', [c['id'] for c in layer['candidate_models']]\\); print\\('rejected:', [r['id'] for r in layer['rejected_models']]\\); print\\('vision_todo:', layer['vision_routing_todo'][:60]\\)\")",
-      "PowerShell(Get-ChildItem -Path C:\\\\dev\\\\athena-python -Recurse -Directory | Select-Object -First 30 | ForEach-Object { $_.FullName })"
+      "PowerShell(Get-ChildItem -Path C:\\\\dev\\\\athena-python -Recurse -Directory | Select-Object -First 30 | ForEach-Object { $_.FullName })",
+      "Bash(find C:\\\\dev\\\\athena-python *)",
+      "Bash(npx vite *)",
+      "PowerShell($env:ATHENA_REAL_ORDERS_CONFIRM = 'I_UNDERSTAND_REAL_ORDER_RISK'; Set-Location C:\\\\dev\\\\athena-python; .\\\\.venv\\\\Scripts\\\\python.exe -m pytest tests/test_suggested_trade_routes.py tests/test_tv_chart_panel.py tests/test_scalp_workbench_panel.py --basetemp=tests/.tmp/flag -q 2>&1 | Select-Object -Last 15)",
+      "PowerShell($env:ATHENA_REAL_ORDERS_CONFIRM = 'I_UNDERSTAND_REAL_ORDER_RISK'; Set-Location C:\\\\dev\\\\athena-python; .\\\\.venv\\\\Scripts\\\\python.exe -m pytest tests/test_suggested_trade_routes.py tests/test_tv_chart_panel.py tests/test_scalp_workbench_panel.py --basetemp=tests/.tmp/flag2 -q 2>&1 | Select-Object -Last 10)",
+      "PowerShell($env:ATHENA_REAL_ORDERS_CONFIRM = 'I_UNDERSTAND_REAL_ORDER_RISK'; Set-Location C:\\\\dev\\\\athena-python; .\\\\.venv\\\\Scripts\\\\python.exe -m pytest tests/test_suggested_trade_routes.py tests/test_tv_chart_panel.py tests/test_scalp_workbench_panel.py --basetemp=tests/.tmp/flag3 -q 2>&1 | Select-Object -Last 5)"
     ]
   },
   "disabledMcpjsonServers": [
