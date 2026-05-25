@@ -267,7 +267,7 @@ export default function TradesPanel() {
                         <TableHead className="text-[10px] uppercase text-right">Volume</TableHead>
                         <TableHead className="text-[10px] uppercase text-right">Open</TableHead>
                         <TableHead className="text-[10px] uppercase text-right">P&amp;L</TableHead>
-                        <TableHead className="text-[10px] uppercase text-right">SL</TableHead>
+                        <TableHead className="text-[10px] uppercase text-right">SL / Close</TableHead>
                         <TableHead className="text-[10px] uppercase text-right">TP</TableHead>
                         <TableHead className="text-[10px] uppercase">Style</TableHead>
                         <TableHead className="text-[10px] uppercase text-right">Action</TableHead>
@@ -285,6 +285,11 @@ export default function TradesPanel() {
                         const sl = num(p.sl);
                         const tp = num(p.tp);
                         const style = String(p.style || p.audit_engine || '—');
+                        const slCloseLine = String(
+                          (p as { sl_close_line?: string }).sl_close_line
+                          || (sl > 0 ? `Closes ${fmtNum(sl, 5)}` : '—'),
+                        );
+                        const pctToSl = (p as { pct_to_sl?: number }).pct_to_sl;
                         return (
                           <TableRow key={ticket}>
                             <TableCell className="text-xs font-mono">{pairLabel}</TableCell>
@@ -299,7 +304,12 @@ export default function TradesPanel() {
                             <TableCell className={`text-xs font-mono font-bold text-right ${pnl >= 0 ? 'text-long' : 'text-short'}`}>
                               {pnl >= 0 ? '+' : ''}${fmtNum(pnl, 2)}
                             </TableCell>
-                            <TableCell className="text-xs font-mono text-right text-short">{fmtNum(sl, 5)}</TableCell>
+                            <TableCell className="text-xs font-mono text-right text-short">
+                              <div>{fmtNum(sl, 5)}</div>
+                              <div className="text-[9px] text-muted-foreground">
+                                {pctToSl != null ? `${fmtNum(pctToSl, 2)}% to SL` : slCloseLine}
+                              </div>
+                            </TableCell>
                             <TableCell className="text-xs font-mono text-right text-long">{fmtNum(tp, 5)}</TableCell>
                             <TableCell className="text-[10px] font-mono text-muted-foreground">{style}</TableCell>
                             <TableCell className="text-right">

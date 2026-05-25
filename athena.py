@@ -11881,6 +11881,149 @@ def api_audit_reconcile_orphan():
     ), 400
 
 
+def _recompute_sl_diagnostic_levels(audit: dict, style: str) -> dict | None:
+    """Recompute Engine A SL/TP for diagnostic display (read-only)."""
+    from risk_engine import resolve_max_sl_pct
+
+    pair_disp = audit.get("pair") or audit.get("display")
+    if not pair_disp:
+        return None
+    pair_obj = _resolve_pair_from_signal(
+        {
+            "pair": pair_disp,
+            "display": pair_disp,
+            "symbol": audit.get("symbol") or pair_disp,
+            "type": audit.get("asset_class") or audit.get("type") or "crypto",
+        }
+    )
+    if not pair_obj:
+        pair_obj = next((p for p in ALL_PAIRS if p.get("display") == pair_disp), None)
+    if not pair_obj:
+        return None
+    resolved_style = _normalize_style(style or audit.get("style") or "swing")
+    if resolved_style == "auto":
+        resolved_style = "swing"
+    sig = {
+        "pair": pair_disp,
+        "display": pair_disp,
+        "symbol": pair_obj.get("symbol") or pair_disp,
+        "type": pair_obj.get("type"),
+        "direction": audit.get("direction") or "LONG",
+        "price": audit.get("entry_price"),
+        "entry": audit.get("entry_price"),
+    }
+    try:
+        out = recompute_levels_for_style(
+            sig,
+            resolved_style,
+            resolve_pair_from_signal=_resolve_pair_from_signal,
+            fetch_candles=fetch_candles,
+            calc_indicators_with_normalized=calc_indicators_with_normalized,
+            atr_for_levels=_atr_for_levels,
+            calc_levels=calc_levels,
+            config=CONFIG,
+            get_pair_level_atr_class=get_pair_level_atr_class,
+            bybit_atr_for_levels=_bybit_atr_for_levels,
+        )
+    except Exception as exc:
+        log.debug("[SL DIAG] recompute failed for %s: %s", pair_disp, exc)
+        return None
+    lvl = out.get("levels") or {}
+    mults = lvl.get("mults_effective") or lvl.get("mults") or {}
+    max_sl_pct, _src = resolve_max_sl_pct(sig, pair_obj.get("type", ""), CONFIG)
+    return {
+        "sl": lvl.get("sl"),
+        "atr": out.get("atr"),
+        "sl_mult": mults.get("sl"),
+        "regime_factor": lvl.get("regimeFactor"),
+        "max_sl_pct": max_sl_pct,
+    }
+
+
+def _build_position_sl_diagnostic_for_pair(
+    pair: str,
+    *,
+    position: dict | None = None,
+    audit: dict | None = None,
+) -> dict:
+    from athena_app.services.position_sl_diagnostic import (
+        build_position_sl_diagnostic,
+        pairs_match,
+    )
+    from timed_exit_monitor import _get_timed_cfg, _load_recent_audit_rows, _match_audit_row_for_position
+
+    tcfg = _get_timed_cfg(lambda: CONFIG)
+    audit_rows = _load_recent_audit_rows(_AUDIT_DB)
+    if audit is None and position is not None:
+        audit = _match_audit_row_for_position(position, audit_rows) or {}
+    if audit is None or not audit:
+        audit = next(
+            (
+                row for row in audit_rows
+                if pairs_match(row.get("pair"), pair) and not row.get("exit_time")
+            ),
+            {},
+        )
+    if position is None:
+        try:
+            from bybit_executor import bybit_get_positions
+            from mt5_executor import mt5_get_positions
+
+            for fetcher, is_bybit in ((bybit_get_positions, True), (mt5_get_positions, False)):
+                res = fetcher()
+                if isinstance(res, dict) and res.get("error"):
+                    continue
+                for pos in res.get("positions") or []:
+                    if pairs_match(pos.get("pair") or pos.get("symbol"), pair):
+                        position = dict(pos)
+                        if is_bybit:
+                            position["exchange"] = "bybit"
+                        else:
+                            position["exchange"] = "mt5"
+                        break
+                if position:
+                    break
+        except Exception as exc:
+            log.debug("[SL DIAG] broker position fetch failed for %s: %s", pair, exc)
+            position = position or {}
+
+    style = str(
+        (position or {}).get("style")
+        or (audit or {}).get("style")
+        or "swing"
+    ).lower()
+    if style not in ("scalp", "intraday", "swing"):
+        style = "swing"
+    venue = str((position or {}).get("exchange") or "bybit")
+    recomputed = _recompute_sl_diagnostic_levels(audit or {}, style) if audit else None
+    max_sl_pct = (recomputed or {}).get("max_sl_pct")
+    return build_position_sl_diagnostic(
+        position=position,
+        audit=audit,
+        tcfg=tcfg,
+        style=style,
+        venue=venue,
+        recomputed_levels=recomputed,
+        max_sl_pct=max_sl_pct,
+    )
+
+
+@app.route("/api/position-sl-diagnostic")
+def api_position_sl_diagnostic():
+    """Read-only SL diagnostic for an open or recent pair (e.g. TRX/USDT)."""
+    pair = request.args.get("pair") or request.args.get("display") or request.args.get("symbol") or ""
+    if not pair:
+        return jsonify({"error": "Missing pair query parameter"}), 400
+    try:
+        diag = _build_position_sl_diagnostic_for_pair(pair)
+        if not diag.get("audit") and not diag.get("broker", {}).get("sl"):
+            return jsonify({"error": f"No open or recent audit row for {pair}", "pair": pair}), 404
+        return jsonify(diag)
+    except Exception as exc:
+        log.warning("[SL DIAG] %s: %s", pair, exc)
+        return jsonify({"error": str(exc)}), 500
+
+
 @app.route("/api/open-trades-timed")
 def api_open_trades_timed():
     """
@@ -11894,6 +12037,8 @@ def api_open_trades_timed():
     Used by the dashboard countdown timer on each position card.
     """
     from datetime import datetime, timezone as _tz
+    from athena_app.services.position_sl_diagnostic import enrich_open_trade_with_sl_diagnostic
+    from risk_engine import resolve_max_sl_pct
     from timed_exit_monitor import (
         _activation_r_for,
         _get_timed_cfg,
@@ -11902,6 +12047,9 @@ def api_open_trades_timed():
     )
 
     tcfg = _get_timed_cfg(lambda: CONFIG)
+
+    def _recompute_for_trade(audit_row: dict, trade_style: str) -> dict | None:
+        return _recompute_sl_diagnostic_levels(audit_row, trade_style)
 
     out = []
     now_ts = datetime.now(_tz.utc).timestamp()
@@ -12052,6 +12200,7 @@ def api_open_trades_timed():
             "entry":           p.get("entry", 0),
             "sl":              p.get("sl", 0),
             "tp":              p.get("tp", 0),
+            "mark":            p.get("markPrice") or p.get("lastPrice") or 0,
             "volume":          p.get("volume", 0),
             "exchange":        "bybit" if p.get("_bybit") else "mt5",
             "open_time_iso":   open_iso,
@@ -12088,6 +12237,24 @@ def api_open_trades_timed():
                 "be_trigger_min":  None,
                 "close_trigger_min": None,
             })
+
+        _max_sl_pct = None
+        if audit:
+            try:
+                _max_sl_pct, _ = resolve_max_sl_pct(
+                    {"pair": res_p.get("pair"), "type": audit.get("asset_class")},
+                    audit.get("asset_class") or "",
+                    CONFIG,
+                )
+            except Exception:
+                _max_sl_pct = None
+        enrich_open_trade_with_sl_diagnostic(
+            res_p,
+            audit,
+            tcfg,
+            recompute_levels_fn=_recompute_for_trade,
+            max_sl_pct=_max_sl_pct,
+        )
 
         out.append(res_p)
 

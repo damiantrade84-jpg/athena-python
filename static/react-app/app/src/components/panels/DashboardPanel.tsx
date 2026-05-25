@@ -453,19 +453,37 @@ export default function DashboardPanel() {
                   <>
                   {openTrades.length > 0 && (
                   openTrades.map((trade, i) => {
-                    const t = trade as OpenTrade & { pair?: string; profit?: number };
+                    const t = trade as OpenTrade & {
+                      pair?: string;
+                      profit?: number;
+                      sl_close_line?: string;
+                      closes_at_sl?: number;
+                      pct_to_sl?: number;
+                      current_r?: number;
+                    };
                     const label = t.symbol || t.pair || '—';
                     const profit = toNum(t.profit);
                     const ticketKey = t.ticket || `${label}-${i}`;
+                    const slLine = t.sl_close_line
+                      || (t.closes_at_sl
+                        ? `SL ${fmtNum(t.closes_at_sl, 5)}${t.pct_to_sl != null ? ` · ${fmtNum(t.pct_to_sl, 2)}% to SL` : ''}`
+                        : null);
                     return (
                       <div key={ticketKey} className="flex items-center justify-between p-2 rounded-md bg-muted/30">
-                        <div className="flex items-center gap-2">
-                          <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${t.direction === 'LONG' ? 'bg-long/20 text-long' : 'bg-short/20 text-short'}`}>
-                            {t.direction || '—'}
-                          </span>
-                          <span className="text-xs font-mono">{label}</span>
+                        <div className="flex flex-col gap-0.5 min-w-0">
+                          <div className="flex items-center gap-2">
+                            <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${t.direction === 'LONG' ? 'bg-long/20 text-long' : 'bg-short/20 text-short'}`}>
+                              {t.direction || '—'}
+                            </span>
+                            <span className="text-xs font-mono truncate">{label}</span>
+                          </div>
+                          {slLine && (
+                            <span className="text-[9px] font-mono text-muted-foreground truncate" title={slLine}>
+                              {slLine}
+                            </span>
+                          )}
                         </div>
-                        <span className={`text-xs font-mono font-bold ${profit >= 0 ? 'text-long' : 'text-short'}`}>
+                        <span className={`text-xs font-mono font-bold shrink-0 ${profit >= 0 ? 'text-long' : 'text-short'}`}>
                           {profit >= 0 ? '+' : ''}${fmtNum(profit, 2)}
                         </span>
                       </div>
