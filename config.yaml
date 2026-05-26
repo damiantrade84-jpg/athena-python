@@ -483,10 +483,17 @@ ENGINE_A_MACD_PARAMS_BY_CLASS:
 # existing ATR% scaler; it is disabled by default and class/score_group keyed.
 ENGINE_A_VOLATILITY_REGIME_ADJUSTMENT_ENABLED: true
 ENGINE_A_VOLATILITY_REGIME_MULTIPLIERS:
-  stock: { HIGH_VOLATILITY: 0.95, LOW_VOLATILITY: 1.02 }
-  index: { HIGH_VOLATILITY: 0.97, LOW_VOLATILITY: 1.01 }
-  commodity: { HIGH_VOLATILITY: 0.94, LOW_VOLATILITY: 1.02 }
-  nat_gas: { HIGH_VOLATILITY: 1.03, LOW_VOLATILITY: 1.00 }
+  # PHASE 1: report-only. All 1.0 -> applied:false, zero score impact.
+  # Phase 2 sets real values from backtest regime distribution. DO NOT set
+  # live values until the verification backtest in Step 2 is reviewed.
+  forex:     { TRENDING: 1.00, RANGING: 1.00, HIGH_VOLATILITY: 1.00, LOW_VOLATILITY: 1.00 }
+  crypto:    { TRENDING: 1.00, RANGING: 1.00, HIGH_VOLATILITY: 1.00, LOW_VOLATILITY: 1.00 }
+  stock:     { TRENDING: 1.00, RANGING: 1.00, HIGH_VOLATILITY: 1.00, LOW_VOLATILITY: 1.00 }
+  index:     { TRENDING: 1.00, RANGING: 1.00, HIGH_VOLATILITY: 1.00, LOW_VOLATILITY: 1.00 }
+  commodity: { TRENDING: 1.00, RANGING: 1.00, HIGH_VOLATILITY: 1.00, LOW_VOLATILITY: 1.00 }
+  nat_gas:   { TRENDING: 1.00, RANGING: 1.00, HIGH_VOLATILITY: 1.00, LOW_VOLATILITY: 1.00 }
+  bond:      { TRENDING: 1.00, RANGING: 1.00, HIGH_VOLATILITY: 1.00, LOW_VOLATILITY: 1.00 }
+  etf:       { TRENDING: 1.00, RANGING: 1.00, HIGH_VOLATILITY: 1.00, LOW_VOLATILITY: 1.00 }
 ENGINE_A_VOLATILITY_REGIME_MULT_BOUNDS: { min: 0.90, max: 1.05 }
 
 # Optional US cash-session weighting for stocks/indices/ETFs. UTC hours are

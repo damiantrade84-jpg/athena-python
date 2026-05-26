@@ -49,13 +49,36 @@ def test_pair_profile_weight_overrides_do_not_change_live_factor_engine_output()
         CONFIG["PAIR_PROFILES"] = original_profiles
 
 
-def test_score_group_metadata_does_not_change_live_factor_engine_output():
-    pair, d1, h4, h1 = _sample_factor_inputs()
-    baseline = compute_factor_scores(d1, h4, h1, pair, [], [], [], 1.0)
+def test_score_group_metadata_does_not_change_output_when_flag_off():
+    """With group adjustments disabled, score_group is pure metadata."""
+    original = CONFIG.get("ENGINE_A_SCORE_GROUP_ADJUSTMENTS_ENABLED")
+    try:
+        CONFIG["ENGINE_A_SCORE_GROUP_ADJUSTMENTS_ENABLED"] = False
+        pair, d1, h4, h1 = _sample_factor_inputs()
+        baseline = compute_factor_scores(d1, h4, h1, pair, [], [], [], 1.0)
 
-    pair_with_group = dict(pair)
-    pair_with_group["score_group"] = "forex_exotics"
-    grouped = compute_factor_scores(d1, h4, h1, pair_with_group, [], [], [], 1.0)
+        pair_with_group = dict(pair)
+        pair_with_group["score_group"] = "forex_exotics"
+        grouped = compute_factor_scores(d1, h4, h1, pair_with_group, [], [], [], 1.0)
 
-    assert grouped["final_score"] == baseline["final_score"]
-    assert grouped["factor_scores"] == baseline["factor_scores"]
+        assert grouped["final_score"] == baseline["final_score"]
+        assert grouped["factor_scores"] == baseline["factor_scores"]
+    finally:
+        CONFIG["ENGINE_A_SCORE_GROUP_ADJUSTMENTS_ENABLED"] = original
+
+
+def test_score_group_differentiates_output_when_flag_on():
+    """With group adjustments enabled, forex_exotics config diverges from forex."""
+    original = CONFIG.get("ENGINE_A_SCORE_GROUP_ADJUSTMENTS_ENABLED")
+    try:
+        CONFIG["ENGINE_A_SCORE_GROUP_ADJUSTMENTS_ENABLED"] = True
+        pair, d1, h4, h1 = _sample_factor_inputs()
+        baseline = compute_factor_scores(d1, h4, h1, pair, [], [], [], 1.0)
+
+        pair_with_group = dict(pair)
+        pair_with_group["score_group"] = "forex_exotics"
+        grouped = compute_factor_scores(d1, h4, h1, pair_with_group, [], [], [], 1.0)
+
+        assert grouped["final_score"] != baseline["final_score"]
+    finally:
+        CONFIG["ENGINE_A_SCORE_GROUP_ADJUSTMENTS_ENABLED"] = original
