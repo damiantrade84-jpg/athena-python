@@ -1055,28 +1055,53 @@ def calc_indicators(candles: list, *, _bundle: dict | None = None) -> dict:
     }
 
 
-def _calc_indicator_bundle(candles: list) -> dict:
-    """Shared raw-series calculation used by calc_indicators* helpers."""
+def _calc_indicator_bundle(candles: list, periods: dict | None = None) -> dict:
+    """Shared raw-series calculation used by calc_indicators* helpers.
+
+    periods: optional dict from Engine A group resolvers (e.g. {'ema_trend':21, 'ema_long':200, ...}).
+    When omitted or incomplete, falls back to the long-standing universal defaults (zero behavior change).
+    """
     cl = [c["close"] for c in candles]
     hi = [c["high"] for c in candles]
     lo = [c["low"] for c in candles]
+    p = periods or {}
+    # Exact historical defaults preserved when key missing — this is the safe default path.
     return {
         "close": cl,
         "high": hi,
         "low": lo,
-        "ema21": calc_ema(cl, 21),
-        "ema50": calc_ema(cl, 50),
-        "ema200": calc_ema(cl, 200),
-        "rsi": calc_rsi(cl, 14),
-        "macd": calc_macd(cl),
-        "atr": calc_atr(hi, lo, cl, 14),
-        "adx": calc_adx(hi, lo, cl, 14),
+        "ema21": calc_ema(cl, int(p.get("ema_trend", 21))),
+        "ema50": calc_ema(cl, int(p.get("ema_momentum", p.get("ema_trend", 50)))),
+        "ema200": calc_ema(cl, int(p.get("ema_long", 200))),
+        "rsi": calc_rsi(cl, int(p.get("rsi", 14))),
+        "macd": calc_macd(cl),  # MACD periods are applied at call site via wrapper for now (macd default 12/26/9)
+        "atr": calc_atr(hi, lo, cl, int(p.get("atr", 14))),
+        "adx": calc_adx(hi, lo, cl, int(p.get("adx", 14))),
         "bb": calc_bb(cl, 20, 2),
     }
 
 
-def calc_indicators_with_normalized(candles: list, asset_type: str = "crypto") -> dict:
-    """Compute indicators and return raw + normalized fields for factor scoring."""
+def calc_indicators_with_normalized(
+    candles: list,
+    asset_type: str = "crypto",
+    score_group: str | None = None,
+) -> dict:
+    """Compute indicators and return raw + normalized fields for factor scoring.
+
+    When score_group is provided and ENGINE_A_SCORE_GROUP_ADJUSTMENTS_ENABLED is true,
+    uses the group-calibrated period path (from the 2026 calibration review fix).
+    This broadens adoption for backtests, research, and any Engine A paths calling
+    this function without changing behavior for existing callers that omit score_group.
+    """
+
+    if score_group:
+        # Use the group-aware path when explicitly requested (safe opt-in)
+        try:
+            from factor_scoring import _engine_a_group_adjustments_enabled
+            if _engine_a_group_adjustments_enabled():
+                return calc_indicators_for_engine_a(candles, score_group=score_group, asset_type=asset_type)
+        except Exception:
+            pass  # fall through to universal
 
     bundle = _calc_indicator_bundle(candles)
     base = calc_indicators(candles, _bundle=bundle)
@@ -1170,6 +1195,65 @@ def calc_indicators_with_normalized(candles: list, asset_type: str = "crypto") -
     )
 
     return result
+
+
+# ── Engine A group-calibrated entry point (2026 calibration review) ───────────
+# Thin wrapper that resolves per-score_group / asset_type periods via the
+# existing factor_scoring resolvers and produces a snap using those lengths.
+# All existing callers (scanner, backtest, etc.) continue to use the universal
+# calc_indicators / calc_indicators_with_normalized paths — zero behavior change.
+# When ENGINE_A_SCORE_GROUP_ADJUSTMENTS_ENABLED is false, this returns identical
+# results to the classic path.
+def calc_indicators_for_engine_a(
+    candles: list,
+    score_group: str | None = None,
+    asset_type: str = "other",
+) -> dict:
+    """Compute indicators using group-resolved periods when the calibration flag is on.
+
+    Returns the same shape as calc_indicators(...).
+    Safe to call from any Engine A path; falls back gracefully.
+    """
+    try:
+        from factor_scoring import (
+            _resolve_ema_periods,
+            _resolve_rsi_period,
+            _resolve_macd_params,
+            _engine_a_group_adjustments_enabled,
+        )
+
+        if not _engine_a_group_adjustments_enabled():
+            # Fast path — identical to historical behavior
+            bundle = _calc_indicator_bundle(candles)
+            return calc_indicators(candles, _bundle=bundle)
+
+        ema_p = _resolve_ema_periods(score_group, asset_type)
+        rsi_p = _resolve_rsi_period(score_group, asset_type)
+        macd_p = _resolve_macd_params(score_group, asset_type)
+
+        # Build periods dict that _calc_indicator_bundle understands
+        periods = {
+            "ema_trend": ema_p.get("trend", 21),
+            "ema_momentum": ema_p.get("momentum", 50),
+            "ema_long": ema_p.get("long", 200),
+            "rsi": rsi_p,
+            "macd_fast": macd_p.get("fast", 12),
+            "macd_slow": macd_p.get("slow", 26),
+            "macd_signal": macd_p.get("signal", 9),
+            "atr": 14,
+            "adx": 14,
+        }
+
+        bundle = _calc_indicator_bundle(candles, periods=periods)
+        # Note: full MACD period override would require a small enhancement to calc_macd;
+        # for v1 we keep the proven 12/26/9 while still exposing the resolver for future use.
+        return calc_indicators(candles, _bundle=bundle)
+
+    except Exception as exc:
+        # Absolute safety: never break scoring because of the new calibration path
+        log.warning("[EA-CAL] group period resolution failed, falling back to universal: %s", exc)
+        bundle = _calc_indicator_bundle(candles)
+        return calc_indicators(candles, _bundle=bundle)
 
 
 def _pct_change(series: list, lookback: int) -> float | None:

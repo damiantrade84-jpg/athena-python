@@ -373,6 +373,112 @@ ENGINE_A_DI_ALIGNMENT_MULT_BY_CLASS:
     balanced: 0.85
     opposed: 0.65
 
+# ── 2026 Engine A Group Calibration Review — Indicator Periods (additive only) ─
+# These maps extend the proven ENGINE_A_*_BY_CLASS resolver pattern (see
+# factor_scoring.py _resolve_class_keyed + _engine_a_group_adjustments_enabled)
+# to the core periods that feed Factor 1 (EMA trend) and Factor 2 (RSI/MACD momentum).
+#
+# ALL VALUES BELOW ARE THE HISTORICAL UNIVERSAL DEFAULTS.
+# Adding the maps + explicit entries for every ENGINE_A_KNOWN_SCORE_GROUP produces
+# zero behavior change today. This is the required safe foundation before any
+# research-lab-driven differentiation.
+#
+# Future values for specific groups (e.g., shorter EMA for high-frequency crypto,
+# longer RSI for slow forex majors, regime-specific MACD) should be proposed via
+# tools/vectorbt_research_lab.py + configs/proposed_calibration_overlay.yaml,
+# reviewed for evidence strength / overfit risk, then manually promoted here.
+# The proposed_overlay is deliberately inert (see its header).
+#
+# Every get_pair_score_group() result must have an explicit entry.
+# "default" is only for forward-compat unknown groups.
+ENGINE_A_EMA_PERIODS_BY_CLASS:
+  # Universal defaults (current behavior for all groups until differentiated)
+  default:               { trend: 21, long: 200, momentum: 50 }
+  forex_majors:          { trend: 21, long: 200, momentum: 50 }
+  forex_crosses:         { trend: 21, long: 200, momentum: 50 }
+  forex_exotics:         { trend: 21, long: 200, momentum: 50 }
+  forex_other:           { trend: 21, long: 200, momentum: 50 }
+  crypto_btc:            { trend: 21, long: 200, momentum: 50 }
+  crypto_eth:            { trend: 21, long: 200, momentum: 50 }
+  crypto_doge:           { trend: 21, long: 200, momentum: 50 }
+  crypto_alt_majors:     { trend: 21, long: 200, momentum: 50 }
+  crypto_other:          { trend: 21, long: 200, momentum: 50 }
+  precious_trackers:     { trend: 21, long: 200, momentum: 50 }
+  energy_oil:            { trend: 21, long: 200, momentum: 50 }
+  nat_gas:               { trend: 21, long: 200, momentum: 50 }
+  copper:                { trend: 21, long: 200, momentum: 50 }
+  pgm_metals:            { trend: 21, long: 200, momentum: 50 }
+  base_metals:           { trend: 21, long: 200, momentum: 50 }
+  softs:                 { trend: 21, long: 200, momentum: 50 }
+  commodity_other:       { trend: 21, long: 200, momentum: 50 }
+  us_indices_trackers:   { trend: 21, long: 200, momentum: 50 }
+  eu_indices:            { trend: 21, long: 200, momentum: 50 }
+  asian_indices:         { trend: 21, long: 200, momentum: 50 }
+  index_other:           { trend: 21, long: 200, momentum: 50 }
+  us_stock_single:       { trend: 21, long: 200, momentum: 50 }
+  bond_tlt:              { trend: 21, long: 200, momentum: 50 }
+  smallcap_em_etf:       { trend: 21, long: 200, momentum: 50 }
+  stock_other:           { trend: 21, long: 200, momentum: 50 }
+  unknown:               { trend: 21, long: 200, momentum: 50 }
+
+ENGINE_A_RSI_PERIOD_BY_CLASS:
+  default: 14
+  forex_majors: 14
+  forex_crosses: 14
+  forex_exotics: 14
+  forex_other: 14
+  crypto_btc: 14
+  crypto_eth: 14
+  crypto_doge: 14
+  crypto_alt_majors: 14
+  crypto_other: 14
+  precious_trackers: 14
+  energy_oil: 14
+  nat_gas: 14
+  copper: 14
+  pgm_metals: 14
+  base_metals: 14
+  softs: 14
+  commodity_other: 14
+  us_indices_trackers: 14
+  eu_indices: 14
+  asian_indices: 14
+  index_other: 14
+  us_stock_single: 14
+  bond_tlt: 14
+  smallcap_em_etf: 14
+  stock_other: 14
+  unknown: 14
+
+ENGINE_A_MACD_PARAMS_BY_CLASS:
+  default:               { fast: 12, slow: 26, signal: 9 }
+  forex_majors:          { fast: 12, slow: 26, signal: 9 }
+  forex_crosses:         { fast: 12, slow: 26, signal: 9 }
+  forex_exotics:         { fast: 12, slow: 26, signal: 9 }
+  forex_other:           { fast: 12, slow: 26, signal: 9 }
+  crypto_btc:            { fast: 12, slow: 26, signal: 9 }
+  crypto_eth:            { fast: 12, slow: 26, signal: 9 }
+  crypto_doge:           { fast: 12, slow: 26, signal: 9 }
+  crypto_alt_majors:     { fast: 12, slow: 26, signal: 9 }
+  crypto_other:          { fast: 12, slow: 26, signal: 9 }
+  precious_trackers:     { fast: 12, slow: 26, signal: 9 }
+  energy_oil:            { fast: 12, slow: 26, signal: 9 }
+  nat_gas:               { fast: 12, slow: 26, signal: 9 }
+  copper:                { fast: 12, slow: 26, signal: 9 }
+  pgm_metals:            { fast: 12, slow: 26, signal: 9 }
+  base_metals:           { fast: 12, slow: 26, signal: 9 }
+  softs:                 { fast: 12, slow: 26, signal: 9 }
+  commodity_other:       { fast: 12, slow: 26, signal: 9 }
+  us_indices_trackers:   { fast: 12, slow: 26, signal: 9 }
+  eu_indices:            { fast: 12, slow: 26, signal: 9 }
+  asian_indices:         { fast: 12, slow: 26, signal: 9 }
+  index_other:           { fast: 12, slow: 26, signal: 9 }
+  us_stock_single:       { fast: 12, slow: 26, signal: 9 }
+  bond_tlt:              { fast: 12, slow: 26, signal: 9 }
+  smallcap_em_etf:       { fast: 12, slow: 26, signal: 9 }
+  stock_other:           { fast: 12, slow: 26, signal: 9 }
+  unknown:               { fast: 12, slow: 26, signal: 9 }
+
 # Optional regime-aware score quality multiplier. This is separate from the
 # existing ATR% scaler; it is disabled by default and class/score_group keyed.
 ENGINE_A_VOLATILITY_REGIME_ADJUSTMENT_ENABLED: true

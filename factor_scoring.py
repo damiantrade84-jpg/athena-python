@@ -189,6 +189,66 @@ def _resolve_research_lab_profile(
         return resolved, source, True
     return resolved, source, False
 
+
+# ── Group-aware indicator periods (2026 calibration review fix) ──────────────
+# Extends the proven _resolve_class_keyed + ENGINE_A_SCORE_GROUP_ADJUSTMENTS_ENABLED
+# pattern to core periods/lengths that feed the 3 factors. This directly addresses
+# the "universal + light adjustment only" shortfall identified in the expert review.
+# Behavior is 100% unchanged when the flag is false (or keys absent). Research Lab
+# + proposed_calibration_overlay.yaml are the intended future source for differentiated values.
+# All 20+ ENGINE_A_KNOWN_SCORE_GROUPS must eventually have explicit entries in config.
+
+
+def _resolve_ema_periods(score_group: str | None, asset_type: str) -> dict:
+    """Return EMA periods for the multi-TF trend factor (D1 long, H4/H1 momentum/entry)."""
+    defaults = {"trend": 21, "long": 200, "momentum": 50}
+    if not _engine_a_group_adjustments_enabled():
+        return defaults
+
+    keyed = CONFIG.get("ENGINE_A_EMA_PERIODS_BY_CLASS") or {}
+    overrides = _resolve_class_keyed(keyed, score_group, asset_type, {})
+    if isinstance(overrides, dict):
+        for k in ("trend", "long", "momentum"):
+            if k in overrides:
+                try:
+                    defaults[k] = int(overrides[k])
+                except (TypeError, ValueError):
+                    pass
+    return defaults
+
+
+def _resolve_rsi_period(score_group: str | None, asset_type: str) -> int:
+    """Return RSI period used in momentum factor."""
+    period = 14
+    if not _engine_a_group_adjustments_enabled():
+        return period
+
+    keyed = CONFIG.get("ENGINE_A_RSI_PERIOD_BY_CLASS") or {}
+    override = _resolve_class_keyed(keyed, score_group, asset_type, period)
+    try:
+        return int(override)
+    except (TypeError, ValueError):
+        return period
+
+
+def _resolve_macd_params(score_group: str | None, asset_type: str) -> dict:
+    """Return MACD (fast, slow, signal) tuple for momentum factor."""
+    params = {"fast": 12, "slow": 26, "signal": 9}
+    if not _engine_a_group_adjustments_enabled():
+        return params
+
+    keyed = CONFIG.get("ENGINE_A_MACD_PARAMS_BY_CLASS") or {}
+    overrides = _resolve_class_keyed(keyed, score_group, asset_type, {})
+    if isinstance(overrides, dict):
+        for k in ("fast", "slow", "signal"):
+            if k in overrides:
+                try:
+                    params[k] = int(overrides[k])
+                except (TypeError, ValueError):
+                    pass
+    return params
+
+
 # ADX gate thresholds (Wilder 1978 standard) — tunable via config.yaml FACTOR_ADX_*
 # NOTE: Read lazily inside _adx_gate() so config reloads take effect without restart.
 _ADX_HARD_FAIL_DEFAULT = 15.0    # below this → dead market, abort
@@ -481,14 +541,24 @@ def _coherent_trend_score(
     return trend_score, direction, detail
 
 
-def _previous_indicator_snap(candles: list | None) -> dict | None:
-    """Return the prior confirmed indicator snapshot for EMA hysteresis."""
+def _previous_indicator_snap(
+    candles: list | None,
+    score_group: str | None = None,
+    asset_type: str = "other",
+) -> dict | None:
+    """Return the prior confirmed indicator snapshot for EMA hysteresis.
+
+    Uses the group-calibrated path when score_group + adjustments flag are active.
+    Falls back to universal behavior in all other cases (zero regression risk).
+    """
     if not isinstance(candles, list) or len(candles) < 2:
         return None
     try:
-        from indicators import calc_indicators
+        from indicators import calc_indicators_for_engine_a
 
-        prev_indicators = calc_indicators(candles[:-1])
+        prev_indicators = calc_indicators_for_engine_a(
+            candles[:-1], score_group=score_group, asset_type=asset_type
+        )
         prev_snap = prev_indicators.get("snap") if isinstance(prev_indicators, dict) else None
         return prev_snap if isinstance(prev_snap, dict) else None
     except Exception as exc:
@@ -2258,9 +2328,9 @@ def compute_factor_scores(
                             reason="atr_invalid_abort", direction=None)
 
     # ── FACTOR 1: Trend ───────────────────────────────────────────────────────
-    d1_prev = _previous_indicator_snap(d1_candles)
-    h4_prev = _previous_indicator_snap(h4_candles)
-    h1_prev = _previous_indicator_snap(h1_candles)
+    d1_prev = _previous_indicator_snap(d1_candles, score_group=score_group, asset_type=asset_type)
+    h4_prev = _previous_indicator_snap(h4_candles, score_group=score_group, asset_type=asset_type)
+    h1_prev = _previous_indicator_snap(h1_candles, score_group=score_group, asset_type=asset_type)
     trend_score, direction, trend_detail = _coherent_trend_score(
         d1_snap, h4_snap, h1_snap, asset_type,
         d1_prev=d1_prev,
