@@ -28,7 +28,7 @@ from indicators import calc_atr, calc_indicators_with_normalized
 from intermarket import build_scan_snapshot
 from market_structure import NakedEngine, engine_b_confidence_passes
 from guardian import pre_trade_check as _guardian_pre_trade
-from scoring import CORR_CLUSTERS, get_pair_score_group
+from scoring import get_pair_score_group
 from sqlite_instrumentation import (
     timed_sqlite_connect,
     timed_sqlite_commit,
@@ -1035,28 +1035,6 @@ def api_quick_execute():
         if not approval.approved:
             _r.log.warning(f"[QUICK EXEC] {pair_name} REJECTED: {approval.reason}")
             err_msg = f"Risk Blocked: {approval.reason}"
-            if approval.reason == "CORRELATED_CLUSTER_FULL":
-                try:
-                    _cluster = None
-                    _members = set()
-                    for _cname, _pairs in CORR_CLUSTERS.items():
-                        if pair_name in _pairs:
-                            _cluster = _cname
-                            _members = set(_pairs)
-                            break
-                    _corr_count = (
-                        sum(1 for _p in positions if _p.get("pair") in _members)
-                        if _members
-                        else 0
-                    )
-                    _corr_max = int(_r.CONFIG.get("MAX_CORRELATED_POSITIONS", 2))
-                    if _cluster:
-                        err_msg = (
-                            f"Risk Blocked: {approval.reason} "
-                            f"({_cluster} {_corr_count}/{_corr_max})"
-                        )
-                except Exception:
-                    pass
             try:
                 insert_manual_error(
                     _r.AUDIT_DB,

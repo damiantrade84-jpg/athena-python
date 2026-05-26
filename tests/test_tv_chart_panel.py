@@ -503,14 +503,19 @@ def test_forex_indicator_legend_uses_series_definitions_and_current_values():
     assert "DEMA200" in source
 
 
-def test_oscillator_and_bottom_panel_labels_identify_rsi_atr_or_adx():
+def test_study_panel_legend_labels_identify_rsi_atr_or_adx_in_metadata_strip():
     source = _read(TV_PANEL)
 
     assert "RSI14" in source
     assert "70/30" in source
     assert "ATR14" in source
     assert "ADX14" in source
-    assert "Bottom panel identity: forex ATR14; crypto ADX14/ATR14 when enabled" in source
+    assert "STUDY_PANEL_INDICATORS" in source
+    assert "studyPanelLegendItems" in source
+    assert "ChartMetadataStrip" in source
+    assert "studyPanelLegendItems.map" in source
+    assert "pointer-events-none absolute left-2" not in source
+    assert "Bottom panel identity: forex ATR14; crypto ADX14/ATR14 when enabled" not in source
 
 
 def test_engine_a_parity_toggle_and_overlay_are_dom_visible():

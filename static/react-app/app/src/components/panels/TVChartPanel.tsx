@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import {
   createChart,
   createSeriesMarkers,
@@ -1839,11 +1839,20 @@ function CaptureLabel({
   return (
     <span
       data-chart-capture-label
-      className={`inline-flex items-center gap-1 rounded-sm border border-border/60 bg-background/90 px-1.5 py-0.5 text-[10px] font-mono text-foreground shadow-sm ${className}`}
+      className={`inline-flex items-center gap-1 rounded border border-border/50 bg-muted/80 px-1.5 py-0.5 text-[10px] font-mono leading-none text-foreground ${className}`}
       style={style}
     >
       {children}
     </span>
+  );
+}
+
+/** Metadata strip above the candle canvas — never absolutely positioned over price. */
+function ChartMetadataStrip({ children }: { children: ReactNode }) {
+  return (
+    <div className="shrink-0 border-b border-border/50 bg-card/95 px-2.5 py-2">
+      <div className="flex min-w-0 flex-col gap-2">{children}</div>
+    </div>
   );
 }
 
@@ -2084,7 +2093,6 @@ export default function TVChartPanel() {
     lastCandleChipLabel,
     lastCandleLabel,
   ]);
-  const bottomPanelIdentity = 'Bottom panel identity: forex ATR14; crypto ADX14/ATR14 when enabled';
   const quantEma20 = showQuantDebug && ema20;
   const quantEma21 = showQuantDebug && ema21;
   const quantEma50 = showQuantDebug && ema50;
@@ -3185,10 +3193,6 @@ export default function TVChartPanel() {
           </div>
         </div>
         <div className="flex flex-wrap items-center gap-2 pt-2">
-          <ChartFeedHeaderChips
-            identityChips={chartFeedIdentityChips}
-            feedChips={chartFeedDiagnosticsChips}
-          />
           {timeframeRouteLabel && (
             <Badge variant="outline" className="h-7 text-[10px]" title={timeframeRoute?.reason || undefined}>
               {timeframeRouteLabel}
@@ -3219,16 +3223,9 @@ export default function TVChartPanel() {
               Runner: {runnerBadgeLabel(suggestedTradeRunner)}
             </Badge>
           )}
-          {showEngineBOverlays && engineBOverlay?.overlay_source === 'engine_b' && (
-            <CaptureLabel>
-              {`Engine B ${engineBOverlay.overlay_version || 'overlay'} ${engineBOverlay.symbol || pair} ${engineBOverlay.timeframe || backendTf || timeframe}`}
-            </CaptureLabel>
-          )}
-          {showEngineBOverlays && engineBOverlayLoading && <CaptureLabel>Engine B loading</CaptureLabel>}
-          {showEngineBOverlays && engineBOverlayError && <CaptureLabel>{`Engine B warning ${engineBOverlayError}`}</CaptureLabel>}
         </div>
         {showQuantDebug && (
-          <div className="flex flex-wrap items-center gap-3 pt-2">
+          <div className="flex flex-wrap items-center gap-3 border-t border-border/40 pt-2">
             {isCryptoChart ? (
               <IndicatorSwitch label="EMA21" checked={ema21} onCheckedChange={setEma21} />
             ) : (
@@ -3245,74 +3242,71 @@ export default function TVChartPanel() {
             {isCryptoChart && <IndicatorSwitch label="Volume MA" checked={volumeMa} onCheckedChange={setVolumeMa} />}
           </div>
         )}
-        {showQuantDebug && (
-          <div className="flex flex-wrap items-center gap-3 pt-2">
-            {pricePanelLegendItems.map((item) => (
-              <IndicatorLegendItem key={item.definition.key} item={item} />
-            ))}
-            {studyPanelLegendItems.map((item) => (
-              <IndicatorLegendItem key={item.definition.key} item={item} />
-            ))}
-          </div>
-        )}
       </CardHeader>
       <CardContent className="pb-4">
         <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_min(340px,36%)]">
           <div
             ref={chartCaptureRef}
-            className="relative overflow-hidden rounded-md border bg-background"
-            style={{ height: `${chartHeightPx}px` }}
+            className="flex flex-col overflow-hidden rounded-md border bg-background"
           >
-            <div ref={containerRef} className="absolute inset-0" />
-            <div className="pointer-events-none absolute left-2 right-2 top-2 z-10 space-y-1">
+            <ChartMetadataStrip>
               <ChartFeedHeaderChips
                 identityChips={chartFeedIdentityChips}
                 feedChips={chartFeedDiagnosticsChips}
               />
-              {showEngineBOverlays && engineBOverlay?.overlay_source === 'engine_b' && (
-                <CaptureLabel>{`Engine B ${engineBOverlay.overlay_version || 'overlay'}`}</CaptureLabel>
-              )}
-              {cleanLegendChips.length > 0 && (
-                <div className="flex flex-wrap items-center gap-1">
+              {(cleanLegendChips.length > 0
+                || (showEngineBOverlays && engineBOverlay?.overlay_source === 'engine_b')
+                || (showEngineBOverlays && (engineBOverlayLoading || engineBOverlayError))) && (
+                <div className="flex flex-wrap items-center gap-1 border-t border-border/30 pt-2">
                   {cleanLegendChips.map((chip) => (
-                    <LegendChip key={`capture-legend-${chip.key}`} spec={chip} />
+                    <LegendChip key={`legend-${chip.key}`} spec={chip} />
                   ))}
+                  {showEngineBOverlays && engineBOverlay?.overlay_source === 'engine_b' && (
+                    <CaptureLabel>{`Engine B ${engineBOverlay.overlay_version || 'overlay'}`}</CaptureLabel>
+                  )}
+                  {showEngineBOverlays && engineBOverlayLoading && (
+                    <CaptureLabel>Engine B loading</CaptureLabel>
+                  )}
+                  {showEngineBOverlays && engineBOverlayError && (
+                    <CaptureLabel>{`Engine B warning ${engineBOverlayError}`}</CaptureLabel>
+                  )}
                 </div>
               )}
-              {showQuantDebug && (
-                <div className="flex flex-wrap items-center gap-1">
+              {showQuantDebug && (pricePanelLegendItems.length > 0 || studyPanelLegendItems.length > 0) && (
+                <div className="flex max-h-14 flex-wrap items-center gap-1 overflow-y-auto border-t border-border/30 pt-2">
                   {pricePanelLegendItems.map((item) => (
-                    <IndicatorLegendItem key={`capture-${item.definition.key}`} item={item} />
+                    <IndicatorLegendItem key={`meta-${item.definition.key}`} item={item} />
                   ))}
-                </div>
-              )}
-              {showQuantDebug && (
-                <div className="flex flex-wrap items-center gap-1">
                   {studyPanelLegendItems.map((item) => (
-                    <IndicatorLegendItem key={`capture-study-${item.definition.key}`} item={item} />
+                    <IndicatorLegendItem key={`meta-study-${item.definition.key}`} item={item} />
                   ))}
-                  {studyPanelLegendItems.length > 0 && <CaptureLabel>{bottomPanelIdentity}</CaptureLabel>}
                 </div>
               )}
-              {engineAParityVisible && (
-                <div className="flex max-w-[760px] flex-wrap items-center gap-1">
+              {engineAParityVisible && engineAParityRows.length > 0 && (
+                <div className="flex max-h-16 flex-wrap items-center gap-1 overflow-y-auto border-t border-border/30 pt-2">
                   <CaptureLabel>Engine A Parity</CaptureLabel>
                   {engineAParityRows.map((row) => (
                     <CaptureLabel key={row.label}>{`${row.label} ${row.value}`}</CaptureLabel>
                   ))}
                 </div>
               )}
+            </ChartMetadataStrip>
+            <div
+              className="relative min-h-0 w-full"
+              style={{ height: `${chartHeightPx}px` }}
+            >
+              <div ref={containerRef} className="absolute inset-0" />
+              {loading && (
+                <div className="absolute inset-0 flex items-center justify-center bg-card/40 text-[11px] text-muted-foreground backdrop-blur-sm">
+                  Loading candles…
+                </div>
+              )}
+              {chartError && !loading && (
+                <div className="absolute inset-x-0 top-0 z-10 bg-destructive/10 px-3 py-1 text-[11px] text-destructive">
+                  {chartError}
+                </div>
+              )}
             </div>
-            {loading && (
-              <div className="absolute inset-0 flex items-center justify-center bg-card/40 text-[11px] text-muted-foreground backdrop-blur-sm">
-                Loading candles…
-              </div>
-            )}
-            {chartError && !loading && (
-              <div className="absolute inset-x-0 top-0 bg-destructive/10 px-3 py-1 text-[11px] text-destructive">
-                {chartError}
-              </div>
-            )}
           </div>
           <div
             className="min-w-0 space-y-3 overflow-y-auto lg:sticky lg:top-0"

@@ -15,7 +15,7 @@ export function FeedCaptureChip({
     <span
       data-chart-capture-label
       title={title}
-      className={`inline-flex items-center rounded-sm border border-border/60 bg-background/90 px-1.5 py-0.5 text-[10px] font-mono text-foreground shadow-sm ${className}`}
+      className={`inline-flex items-center rounded border border-border/50 bg-muted/80 px-1.5 py-0.5 text-[10px] font-mono leading-none text-foreground ${className}`}
       style={style}
     >
       {children}
@@ -41,22 +41,21 @@ export default function ChartFeedHeaderChips({
   className = '',
 }: ChartFeedHeaderChipsProps) {
   return (
-    <div className={`flex min-w-0 flex-col gap-1 ${className}`}>
-      <div className="flex flex-wrap items-center gap-1">
-        {identityChips.map((chip) => (
-          <FeedCaptureChip key={chip.key} title={chip.title}>
-            {chip.label}
-          </FeedCaptureChip>
-        ))}
-      </div>
+    <div className={`flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1 ${className}`}>
+      {identityChips.map((chip) => (
+        <FeedCaptureChip key={chip.key} title={chip.title}>
+          {chip.label}
+        </FeedCaptureChip>
+      ))}
       {feedChips.length > 0 && (
-        <div className="flex flex-wrap items-center gap-1">
+        <>
+          <span className="mx-0.5 hidden h-3 w-px shrink-0 bg-border/70 sm:inline" aria-hidden />
           {feedChips.map((chip) => (
             <FeedCaptureChip key={chip.key} title={chip.title}>
               {chip.label}
             </FeedCaptureChip>
           ))}
-        </div>
+        </>
       )}
     </div>
   );
