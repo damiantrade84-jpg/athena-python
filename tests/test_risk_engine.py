@@ -1044,6 +1044,37 @@ class TestVolumeMode:
         assert preview["volume"] == 1.0
         assert preview["venue"] == "mt5"
 
+    def test_calculated_stock_low_score_still_approves_one_share(self):
+        """Stock with low score_factor should still get 1 share, not ZERO_VOLUME."""
+        symbol_info = {
+            "volume_min": 0.01,
+            "volume_step": 1.0,
+            "volume_max": 5000.0,
+            "trade_tick_size": 0.01,
+            "trade_tick_value": 0.01,
+            "trade_contract_size": 1,
+            "point": 0.01,
+        }
+        result = risk_check(
+            _make_signal(
+                pair="AMZN",
+                type="stock",
+                price=200.0,
+                sl=195.0,
+                tp1=210.0,
+                tp2=220.0,
+                confluenceScore=2.0,
+                maxScore=8.0,
+            ),
+            5000,
+            5000,
+            [],
+            symbol_info=symbol_info,
+            volume_mode="calculated",
+        )
+        assert result.approved is True
+        assert result.volume >= 1.0
+
     def test_resolve_volume_mode_defaults_to_min_lot(self):
         assert resolve_volume_mode(None, "manual", {}) == "min_lot"
         assert resolve_volume_mode("calculated", "manual", {}) == "calculated"

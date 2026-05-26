@@ -1237,8 +1237,8 @@ def risk_check(
         )
         volume = math.floor(volume / vol_step) * vol_step if vol_step > 0 else volume
         volume = round(volume, _decimals)
-        if is_stock and 0 < volume < 1:
-            volume = 1.0
+        if is_stock and volume < 1 and raw_calculated > 0:
+            volume = max(vol_step, 1.0)
 
     if volume <= 0:
         _si_vol_min = symbol_info.get("volume_min") if symbol_info else None
