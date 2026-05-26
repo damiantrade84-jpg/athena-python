@@ -481,6 +481,11 @@ CONFIG: dict = {
     "NEWS_SENTIMENT_USE_EODHD_NORMALIZED": False,
     "NEWS_SENTIMENT_MAJOR_EVENT_MODE": "advisory",
     "NEWS_SENTIMENT_MAX_DELTA": 0.30,
+    # Group-aware overrides for news sentiment score adjustment (post-Engine-A, advisory only).
+    # Keys: score_group (e.g. "forex_majors", "precious_trackers") or asset_type or "default".
+    # When absent/empty, falls back to the scalar NEWS_SENTIMENT_* globals above.
+    "NEWS_SENTIMENT_IMPACT_BY_CLASS": {},
+    "NEWS_SENTIMENT_MAX_DELTA_BY_CLASS": {},
     "NEWS_SENTIMENT_DRIVER_MAP": {
         "XAU/USD": [
             "tag:usd",

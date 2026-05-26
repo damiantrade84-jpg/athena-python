@@ -3799,6 +3799,13 @@ def _refresh_news_cache(pairs: list | None = None) -> dict:
                 )
                 _total_batches = max(1, math.ceil(len(_tickers) / _batch_size))
 
+                # FIX 1 (EOD news freshness): bound the batch /api/sentiments to recent window
+                # and pick the latest dated entry (matches _latest_normalized_sentiment contract
+                # used by the primary news_sentiment_feed path). Previously unbounded + raw [0].
+                _sentiment_days = int(CONFIG.get("EODHD_SENTIMENT_DAYS", 3) or 3)
+                _date_to = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+                _date_from = (datetime.now(timezone.utc) - timedelta(days=_sentiment_days)).strftime("%Y-%m-%d")
+
                 for _idx in range(0, len(_tickers), _batch_size):
                     _batch = _tickers[_idx : _idx + _batch_size]
                     try:
@@ -3806,6 +3813,8 @@ def _refresh_news_cache(pairs: list | None = None) -> dict:
                             "https://eodhd.com/api/sentiments",
                             params={
                                 "s": ",".join(_batch),
+                                "from": _date_from,
+                                "to": _date_to,
                                 "api_token": _eodhd_key,
                                 "fmt": "json",
                             },
@@ -3849,20 +3858,29 @@ def _refresh_news_cache(pairs: list | None = None) -> dict:
                     else:
                         scores = []
 
-                    if scores and scores[0].get("normalized") is not None:
-                        sc = scores[0]["normalized"]
+                    # Date-aware latest pick (prevents using old EODHD rows when multi-day returned)
+                    if not scores:
+                        continue
+                    dated = [s for s in scores if isinstance(s, dict) and s.get("date")]
+                    pool = dated if dated else [s for s in scores if isinstance(s, dict)]
+                    if not pool:
+                        continue
+                    latest = sorted(pool, key=lambda x: str(x.get("date", "")), reverse=True)[0]
+                    sc = latest.get("normalized")
+                    if sc is None:
+                        continue
 
-                        label = (
-                            "bullish"
-                            if sc > 0.6
-                            else "bearish"
-                            if sc < 0.4
-                            else "neutral"
-                        )
+                    label = (
+                        "bullish"
+                        if sc > 0.6
+                        else "bearish"
+                        if sc < 0.4
+                        else "neutral"
+                    )
 
-                        sentiments[display] = round(sc, 3)
+                    sentiments[display] = round(sc, 3)
 
-                        log.info(f"[SENT] {display:12s} {sc:.2f} {label}")
+                    log.info(f"[SENT] {display:12s} {sc:.2f} {label}")
 
                 if sentiments:
                     ctx["pairSentiment"] = sentiments
@@ -3989,8 +4007,21 @@ def _fetch_pair_news_on_demand(
     pair_news: list = []
     word_weights: list = []
     try:
+        # FIX 2: date-bound the on-demand AI news fetch (was unbounded limit-only).
+        # Uses the same MAX_ARTICLE_AGE_HOURS as the primary dated news path.
+        _news_max_age_h = float(CONFIG.get("NEWS_SENTIMENT_MAX_ARTICLE_AGE_HOURS", 72) or 72)
+        _ai_from = (datetime.now(timezone.utc) - timedelta(hours=_news_max_age_h)).strftime("%Y-%m-%d")
+        _ai_to = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         ndata = http_requests.get(
-            f"https://eodhd.com/api/news?s={sticker}&limit=3&api_token={_eodhd_key}&fmt=json",
+            "https://eodhd.com/api/news",
+            params={
+                "s": sticker,
+                "limit": 3,
+                "from": _ai_from,
+                "to": _ai_to,
+                "api_token": _eodhd_key,
+                "fmt": "json",
+            },
             timeout=10,
         ).json()
         if ndata and isinstance(ndata, list):

@@ -124,7 +124,12 @@ def fetch_news(
     limit: int = 8,
     *,
     timeout: float = 12.0,
+    from_date: str | None = None,
+    to_date: str | None = None,
 ) -> list:
+    """Fetch news; now accepts optional from_date/to_date for freshness (EODHD supports).
+    Existing callers unaffected (defaults preserve prior behavior when omitted).
+    """
     url = "https://eodhd.com/api/news"
     params = {
         "s": eodhd_ticker,
@@ -132,6 +137,10 @@ def fetch_news(
         "api_token": api_key,
         "fmt": "json",
     }
+    if from_date:
+        params["from"] = from_date
+    if to_date:
+        params["to"] = to_date
     try:
         r = http_requests.get(url, params=params, timeout=timeout)
         r.raise_for_status()
@@ -160,6 +169,30 @@ def _as_float(value: Any, default: float) -> float:
         return float(value)
     except (TypeError, ValueError):
         return default
+
+
+# Minimal class-keyed resolver (exact same logic as factor_scoring._resolve_class_keyed / _resolve_pair_score_group)
+# so NEWS_SENTIMENT_IMPACT_BY_CLASS and MAX_DELTA_BY_CLASS can honor per-group overrides
+# (forex_majors, precious_trackers, crypto_*, etc.) exactly like factor weights/ADX/periods.
+# No import to avoid any cross-module coupling for this advisory post-A path.
+def _resolve_class_keyed(mapping, score_group: str | None, asset_type: str, default):
+    if not isinstance(mapping, dict):
+        return default
+    if score_group and score_group in mapping:
+        return mapping[score_group]
+    if asset_type in mapping:
+        return mapping[asset_type]
+    if "default" in mapping:
+        return mapping["default"]
+    return default
+
+
+def _resolve_pair_score_group(pair: dict) -> str | None:
+    try:
+        from scoring import get_pair_score_group
+        return get_pair_score_group(pair)
+    except Exception:
+        return pair.get("score_group")
 
 
 def _source_key(kind: str, value: str) -> tuple[str, str]:
@@ -909,7 +942,16 @@ def apply_news_sentiment_to_scan_result(
         return
 
     max_s = float(max_score if max_score is not None else res.get("maxScoreOverride") or 3.0)
-    impact = float(config.get("NEWS_SENTIMENT_SCORE_IMPACT", 0.06))
+
+    # FIX 3: group-aware impact (BY_CLASS > score_group > asset_type > default > global scalar).
+    # Preserves all existing clamps, major-event guards, pre_news_score, and bounded delta exactly.
+    _sg = _resolve_pair_score_group(pair)
+    _asset = str(pair.get("type") or "stock").lower()
+    _impact_map = _config_value(config, "NEWS_SENTIMENT_IMPACT_BY_CLASS", {}) or {}
+    _delta_map = _config_value(config, "NEWS_SENTIMENT_MAX_DELTA_BY_CLASS", {}) or {}
+    impact = float(_resolve_class_keyed(_impact_map, _sg, _asset, _config_value(config, "NEWS_SENTIMENT_SCORE_IMPACT", 0.06)) or 0.06)
+    max_delta = abs(float(_resolve_class_keyed(_delta_map, _sg, _asset, _config_value(config, "NEWS_SENTIMENT_MAX_DELTA", 0.30)) or 0.30))
+
     raw_delta = impact * max_s * float(vote)
     delta = raw_delta
     base_score = float(res.get("score", 0.0) or 0.0)
@@ -918,7 +960,6 @@ def apply_news_sentiment_to_scan_result(
         delta = min(0.0, delta)
     if major_detected and major_mode == "negative_delta_only":
         delta = min(0.0, delta)
-    max_delta = abs(float(config.get("NEWS_SENTIMENT_MAX_DELTA", 0.30) or 0.30))
     delta = max(-max_delta, min(max_delta, delta))
     new = max(0.0, min(max_s, base_score + delta))
     res["score"] = round(new, 4)
