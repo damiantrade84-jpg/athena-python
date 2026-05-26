@@ -1907,7 +1907,15 @@ def _stock_real_volume_fail_reasons(data_fidelity: dict, *volume_sources: Any) -
     normalized_sources = {str(src or "").strip().lower() for src in volume_sources}
     if _EODHD_STOCK_SUFFIX_UNMAPPED_SOURCE in normalized_sources:
         reasons.append(_EODHD_STOCK_SUFFIX_UNMAPPED_SOURCE)
-    if (data_fidelity or {}).get("vp_is_proxy") or (data_fidelity or {}).get("absorption_is_proxy"):
+
+    fidelity = data_fidelity or {}
+    vp_missing_real_volume = bool(fidelity.get("vp_is_proxy")) and not bool(
+        fidelity.get("vp_is_delayed_real")
+    )
+    absorption_missing_real_volume = bool(
+        fidelity.get("absorption_is_proxy")
+    ) and not bool(fidelity.get("absorption_is_delayed_real"))
+    if vp_missing_real_volume or absorption_missing_real_volume:
         reasons.append("real_volume_required_for_stock")
     return reasons
 

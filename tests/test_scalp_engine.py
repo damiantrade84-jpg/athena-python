@@ -551,6 +551,24 @@ def test_stock_real_volume_fail_reasons_preserve_suffix_unmapped_reason():
     assert "real_volume_required_for_stock" in reasons
 
 
+def test_stock_real_volume_accepts_eodhd_delayed_real_volume():
+    data_fidelity = {
+        "vp_is_proxy": True,
+        "vp_is_delayed_real": True,
+        "absorption_is_proxy": True,
+        "absorption_is_delayed_real": True,
+    }
+
+    reasons = scalp_engine._stock_real_volume_fail_reasons(
+        data_fidelity,
+        "eodhd_1m",
+        "eodhd_1m",
+        "eodhd_1m",
+    )
+
+    assert reasons == []
+
+
 def test_summarize_engine_d_scan_counts_skipped_diagnostic_reasons():
     summary = summarize_engine_d_scan(
         {
