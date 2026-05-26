@@ -12200,7 +12200,7 @@ def api_open_trades_timed():
             "entry":           p.get("entry", 0),
             "sl":              p.get("sl", 0),
             "tp":              p.get("tp", 0),
-            "mark":            p.get("markPrice") or p.get("lastPrice") or 0,
+            "mark":            p.get("markPrice") or p.get("lastPrice") or p.get("currentPrice") or 0,
             "volume":          p.get("volume", 0),
             "exchange":        "bybit" if p.get("_bybit") else "mt5",
             "open_time_iso":   open_iso,

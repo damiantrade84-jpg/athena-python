@@ -35,6 +35,8 @@ import time
 from collections.abc import Callable
 from datetime import datetime, timezone
 
+from symbol_matching import symbols_match
+
 log = logging.getLogger("timed_exit")
 
 _be_done: set = set()
@@ -51,6 +53,8 @@ _scalp_profit_lock_state: dict[str, float] = {}
 _state_hydrated: bool = False
 # DB path captured by the monitor; persistence helpers use this when set.
 _state_db_path: str | None = None
+# Throttle unmatched-position warnings (key -> last warn monotonic time).
+_unmatched_position_last_warn: dict[str, float] = {}
 
 _DEFAULT_CFG: dict = {
     "enabled": True,
@@ -773,22 +777,38 @@ def _state_key(venue: str, audit_id, ticket) -> str:
 
 
 def _load_recent_audit_rows(db_path: str) -> list[dict]:
-    """Load recent non-error audit rows for ticket and fallback position matching."""
+    """Load audit rows for ticket/fallback matching.
+
+    Includes all open executed rows (exit_time IS NULL with ticket) plus the
+    400 most recent rows so long-held swings stay correlated with live positions.
+    """
+    select_cols = """
+        SELECT id, ticket, pair, engine, style, ts, direction, entry_price, sl, tp,
+               tp_partial, volume, risk_amount, asset_class, exit_time, grade
+        FROM   audit_log
+        WHERE  pair IS NOT NULL
+          AND  grade NOT LIKE '%ERR%'
+    """
     try:
         with sqlite3.connect(db_path, timeout=10.0) as con:
             con.row_factory = sqlite3.Row
-            rows = con.execute(
-                """
-                SELECT id, ticket, pair, engine, style, ts, direction, entry_price, sl, tp,
-                       tp_partial, volume, risk_amount, asset_class, exit_time, grade
-                FROM   audit_log
-                WHERE  pair IS NOT NULL
-                  AND  grade NOT LIKE '%ERR%'
-                ORDER  BY ts DESC
-                LIMIT  400
+            open_rows = con.execute(
+                select_cols
+                + """
+                  AND exit_time IS NULL
+                  AND ticket IS NOT NULL
+                  AND TRIM(ticket) != ''
+                  AND TRIM(ticket) != '0'
+                ORDER BY ts DESC
                 """
             ).fetchall()
-            return [dict(r) for r in rows]
+            recent_rows = con.execute(
+                select_cols + " ORDER BY ts DESC LIMIT 400"
+            ).fetchall()
+            merged: dict[int, dict] = {}
+            for row in open_rows + recent_rows:
+                merged[int(row["id"])] = dict(row)
+            return list(merged.values())
     except Exception as e:
         log.debug(f"[TIMED_EXIT] audit read failed: {e}")
         return []
@@ -942,8 +962,8 @@ def _match_audit_row_for_position(position: dict, audit_rows: list[dict]) -> dic
     for row in audit_rows:
         if row.get("exit_time") is not None:
             continue
-        row_pair = str(row.get("pair") or "").upper()
-        if row_pair != pos_pair:
+        row_pair = str(row.get("pair") or "")
+        if not symbols_match(row_pair, pos_pair):
             continue
 
         row_dir = str(row.get("direction") or "").upper()
@@ -1513,6 +1533,60 @@ def _should_trail_close(
     return res.get("action") == "close"
 
 
+def _warn_unmatched_live_position(pos: dict, *, venue: str) -> None:
+    """Log when a live broker position has no audit correlation (throttled)."""
+    ticket = str(pos.get("ticket") or "").strip()
+    pair = str(pos.get("pair") or pos.get("symbol") or "").strip()
+    key = f"{venue}:{ticket or pair}"
+    now = time.monotonic()
+    last = _unmatched_position_last_warn.get(key, 0.0)
+    if now - last < 300.0:
+        return
+    _unmatched_position_last_warn[key] = now
+    log.warning(
+        "[TIMED_EXIT] No audit match for live %s position ticket=%s pair=%s — "
+        "software exits (trail/BE/timed) will not run for this position",
+        venue,
+        ticket or "?",
+        pair or "?",
+    )
+
+
+def _maybe_repair_mt5_broker_sl(row: dict, live: dict) -> None:
+    """Re-apply audit SL when broker stop is missing (fail-closed protective repair)."""
+    audit_sl = _safe_float(row.get("sl"))
+    live_sl = _safe_float(live.get("sl"))
+    if audit_sl <= 0 or live_sl > 0:
+        return
+    try:
+        from mt5_executor import mt5_modify_protective_stops
+    except ImportError:
+        return
+    ticket = int(row["ticket"])
+    audit_tp = _safe_float(row.get("tp"))
+    live_tp = _safe_float(live.get("tp"))
+    tp = live_tp if live_tp > 0 else audit_tp
+    res = mt5_modify_protective_stops(
+        ticket,
+        sl=audit_sl,
+        tp=tp if tp > 0 else None,
+    )
+    if res.get("success"):
+        log.warning(
+            "[TIMED_EXIT] Repaired missing broker SL ticket=%s pair=%s sl=%.5f",
+            ticket,
+            row.get("pair"),
+            audit_sl,
+        )
+    else:
+        log.warning(
+            "[TIMED_EXIT] Failed to repair missing broker SL ticket=%s pair=%s: %s",
+            ticket,
+            row.get("pair"),
+            res.get("error") or res.get("detail") or "unknown",
+        )
+
+
 def _handle_mt5_row(row: dict, tcfg: dict, db_path: str | None = None) -> None:
     """Apply timed exit logic to a single MT5 trade row."""
     try:
@@ -1532,18 +1606,10 @@ def _handle_mt5_row(row: dict, tcfg: dict, db_path: str | None = None) -> None:
     style  = (row.get("style") or "intraday").lower()
     entry  = float(row.get("entry_price") or 0)
 
-    # Engine D / Scalp Lab trades use broker TP1/SL management.
-    # Do not treat generic Engine A/B "style=scalp" trades as Engine D.
-    if engine in ("scalp", "engine d", "scalp_vp"):
-        return
-
     if style not in ("scalp", "intraday", "swing"):
         style = "intraday"
 
-    scfg = tcfg[style]
-    mins = _minutes_open(row["ts"])
-
-    # Get live position data
+    # Get live position data (once per tick — also used for SL repair on all engines)
     pos_result = mt5_get_positions()
     if pos_result.get("error"):
         log.warning(
@@ -1559,6 +1625,16 @@ def _handle_mt5_row(row: dict, tcfg: dict, db_path: str | None = None) -> None:
     )
     if not live:
         return  # position already closed
+
+    _maybe_repair_mt5_broker_sl(row, live)
+
+    # Engine D / Scalp Lab trades use broker TP1/SL management.
+    # Do not treat generic Engine A/B "style=scalp" trades as Engine D.
+    if engine in ("scalp", "engine d", "scalp_vp"):
+        return
+
+    scfg = tcfg[style]
+    mins = _minutes_open(row["ts"])
 
     profit    = float(live.get("profit", 0))
     cur_price = _live_current_price(live, entry)
@@ -1882,7 +1958,7 @@ def _handle_bybit_row(row: dict, tcfg: dict, db_path: str | None = None) -> None
         return
     live = next(
         (p for p in pos_result.get("positions", [])
-         if p.get("pair", "").upper() == pair.upper()),
+         if symbols_match(p.get("pair"), pair)),
         None,
     )
     if not live:
@@ -2249,6 +2325,7 @@ def _run_check(db_path: str, config_fn) -> None:
     for pos in mt5_positions:
         row = _row_for_live_position(pos, audit_rows)
         if not row:
+            _warn_unmatched_live_position(pos, venue="mt5")
             continue
         try:
             _handle_mt5_row(row, tcfg, db_path)
@@ -2266,6 +2343,7 @@ def _run_check(db_path: str, config_fn) -> None:
     for pos in bybit_positions:
         row = _row_for_live_position(pos, audit_rows)
         if not row:
+            _warn_unmatched_live_position(pos, venue="bybit")
             continue
         try:
             _handle_bybit_row(row, tcfg, db_path)

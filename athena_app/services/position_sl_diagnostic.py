@@ -150,7 +150,11 @@ def build_position_sl_diagnostic(
     broker_sl = _safe_float(pos.get("sl"))
     broker_tp = _safe_float(pos.get("tp") or aud.get("tp"))
     mark = _safe_float(
-        pos.get("markPrice") or pos.get("lastPrice") or pos.get("mark") or 0
+        pos.get("markPrice")
+        or pos.get("lastPrice")
+        or pos.get("currentPrice")
+        or pos.get("mark")
+        or 0
     )
     profit = _safe_float(pos.get("profit") or pos.get("unrealizedPnl"))
     pair = str(pos.get("pair") or pos.get("symbol") or aud.get("pair") or "")

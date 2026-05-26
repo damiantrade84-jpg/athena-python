@@ -13,7 +13,10 @@ import execution_lifecycle
 from ai_reconciliation import arbitrate_ai
 from engine_c import compute_consensus
 from risk_engine import RiskApproval, risk_check
-from timed_exit_monitor import _match_audit_row_for_position
+from timed_exit_monitor import (
+    _load_recent_audit_rows,
+    _match_audit_row_for_position,
+)
 
 
 def _fresh_meta() -> dict:
@@ -415,3 +418,91 @@ def test_generic_mt5_backtest_branch_has_no_price_vendor_fallbacks():
     assert "fetch_eodhd" not in mt5_branch
     assert "_bt_cached_eodhd_intraday" not in mt5_branch
     assert "fetch_yfinance" not in mt5_branch
+
+
+def test_timed_exit_symbols_match_fallback_when_ticket_missing():
+    now = datetime.now(timezone.utc).isoformat()
+    row = {
+        "id": 1,
+        "ticket": None,
+        "pair": "EUR/USD",
+        "direction": "LONG",
+        "entry_price": 1.10000,
+        "volume": 0.1,
+        "grade": "EXECUTED",
+        "ts": now,
+        "exit_time": None,
+    }
+    pos = {
+        "ticket": "0",
+        "pair": "EURUSD",
+        "direction": "LONG",
+        "entry": 1.10005,
+    }
+    matched = _match_audit_row_for_position(pos, [row])
+    assert matched is not None
+    assert matched["pair"] == "EUR/USD"
+
+
+def test_load_recent_audit_rows_includes_open_tickets_outside_recent_window():
+    import sqlite3
+    import tempfile
+    from pathlib import Path
+
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+        db_path = Path(tmp) / "audit.db"
+        with sqlite3.connect(str(db_path)) as conn:
+            conn.execute(
+                """
+                CREATE TABLE audit_log (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    ticket TEXT,
+                    pair TEXT,
+                    engine TEXT,
+                    style TEXT,
+                    ts TEXT,
+                    direction TEXT,
+                    entry_price REAL,
+                    sl REAL,
+                    tp REAL,
+                    tp_partial REAL,
+                    volume REAL,
+                    risk_amount REAL,
+                    asset_class TEXT,
+                    exit_time TEXT,
+                    grade TEXT
+                )
+                """
+            )
+            conn.execute(
+                """
+                INSERT INTO audit_log (
+                    pair, ticket, exit_time, ts, direction, entry_price, grade
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                ("OLDOPEN", "42", None, "2020-01-01T00:00:00+00:00", "LONG", 100.0, "EXECUTED"),
+            )
+            for i in range(450):
+                conn.execute(
+                    """
+                    INSERT INTO audit_log (
+                        pair, ticket, exit_time, ts, direction, entry_price, grade
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        f"REC{i}",
+                        str(1000 + i),
+                        "2026-01-01T00:00:00+00:00",
+                        f"2026-01-01T00:{i % 60:02d}:00+00:00",
+                        "LONG",
+                        100.0 + i,
+                        "EXECUTED",
+                    ),
+                )
+            conn.commit()
+
+        rows = _load_recent_audit_rows(str(db_path))
+        tickets = {str(r["ticket"]) for r in rows if r.get("ticket")}
+        assert "42" in tickets
+        assert len(rows) == 401
+
