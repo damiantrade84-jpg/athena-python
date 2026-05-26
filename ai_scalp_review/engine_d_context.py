@@ -119,6 +119,8 @@ def build_engine_d_prompt_context(engine_d_ctx: dict[str, Any]) -> dict[str, Any
         "cvd": aggression.get("cvd"),
         "cvdSlope": aggression.get("cvdSlope"),
         "absorptionDetected": aggression.get("absorptionDetected"),
+        "htfBias": engine_d_ctx.get("htf_bias") or signal.get("htf_bias"),
+        "htfEngineA": engine_d_ctx.get("htf_engine_a") or signal.get("htf_engine_a"),
         "marketState": signal.get("market_state") or signal.get("marketState"),
         "sessionContext": session_context,
         "sessionConvictionHint": session_conviction_hint,

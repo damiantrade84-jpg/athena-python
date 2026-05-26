@@ -2937,6 +2937,18 @@ SCALP_ENGINE:
   GRADE_DELAYED_REAL_AAA_MAX: 10             # ≥ GRADE_PROXY_AAA_MAX to take effect
   GRADE_DELAYED_REAL_AAA_ACCUM_MAX: 5        # ≥ GRADE_PROXY_AAA_ACCUM_MAX to take effect
 
+  # Engine A HTF diagnostics enrichment into Engine D (validated improvement #1).
+  # When caller supplies lightweight {"regime", "adx_bucket", "mom_quality"} via pair input,
+  # and GRADE_HTF_ENGINE_A_BONUS > 0, adds tiny advisory points (max 5) when A aligns with D's EMA bias.
+  # Default 0 preserves exact legacy grading. Data-only; D never invokes Engine A scoring.
+  # A and B remain fully non-blocking by design.
+  GRADE_HTF_ENGINE_A_BONUS: 0
+
+  # CVD divergence as explicit numeric in Engine D grading (validated improvement #2).
+  # When true (default), the small CVD slope vs location contribution is active in ai_quality_grade.
+  # Complements the pre-existing volume_divergence path. Proxy caps respected.
+  CVD_DIVERGENCE_IN_GRADE_ENABLED: true
+
   # Per-score-group spread caps (precedence: MAX_SPREAD_*_OVERRIDES per-symbol >
   # _BY_SCORE_GROUP > asset-class default). Empty maps = no group routing (legacy).
   # Keys are score_group strings from scoring.get_pair_score_group()

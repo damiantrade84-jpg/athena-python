@@ -3359,6 +3359,7 @@ def ai_quality_grade(
     data_fidelity: Optional[dict] = None,
     tick_vol_quality: Optional[dict] = None,
     score_group: Optional[str] = None,
+    htf_engine_a: Optional[dict] = None,
 ) -> dict:
     """Rule-based quality scoring (0–100). No API call — instant.
 
@@ -3382,8 +3383,10 @@ def ai_quality_grade(
         "vwap": 0,
         "session": 0,
         "htf_bias": 0,
+        "htf_engine_a": 0,
         "spread": 0,
         "volume_divergence": 0,
+        "cvd_divergence": 0,
         "stop_run": 0,
         "time_of_day": 0,
     }
@@ -3551,6 +3554,21 @@ def ai_quality_grade(
         reasons.append(f"HTF EMA bias aligned ({htf_bias})")
     score += components["htf_bias"]
 
+    # ── Engine A HTF enrichment (additive only, tiny, data-only) ─────────
+    # Accepts lightweight diagnostics from upstream (regime/ADX/mom) when caller supplies via pair.
+    # Never calls Engine A. Zero effect unless GRADE_HTF_ENGINE_A_BONUS > 0 in config (legacy default 0).
+    if htf_engine_a and isinstance(htf_engine_a, dict) and htf_bias and htf_bias == setup_dir:
+        _ea_bonus = 0
+        try:
+            _ea_bonus = int(cfg.get("GRADE_HTF_ENGINE_A_BONUS", 0) or 0)
+        except Exception:
+            _ea_bonus = 0
+        if _ea_bonus > 0:
+            components["htf_engine_a"] = min(5, _ea_bonus)
+            reg = htf_engine_a.get("regime") or htf_engine_a.get("trend_regime")
+            reasons.append(f"Engine A HTF aligned (regime={reg})")
+    score += components.get("htf_engine_a", 0)
+
     # ── Spread penalty (−5 to +5) ────────────────────────────────────────
     # Keep units aligned with check_spread(): non-forex uses raw MT5 points,
     # forex uses pip-converted spread. Precedence:
@@ -3612,6 +3630,32 @@ def ai_quality_grade(
                 components["volume_divergence"] = -penalty
                 reasons.append(f"Volume divergence warns exhaustion (−{penalty})")
     score += components["volume_divergence"]
+
+    # ── CVD divergence numeric (promoted explicit pillar, validated item) ──
+    # Uses cvd_slope + location for price-delta divergence contribution.
+    # Small, proxy-capped, flag default 0 (no behavior change). Complements existing volume_divergence.
+    _cvd_div = 0
+    _cvd_s = (cvd or {}).get("cvd_slope")
+    _cvd_loc = (price_loc or {}).get("location", "")
+    if _cvd_s is not None and _cvd_loc and setup_dir:
+        try:
+            s = float(_cvd_s)
+            if _cvd_loc in ("at_vah", "outside_va") and s < -0.05 and setup_dir == "SHORT":
+                _cvd_div = 5
+            elif _cvd_loc in ("at_val", "outside_va") and s > 0.05 and setup_dir == "LONG":
+                _cvd_div = 5
+            elif _cvd_loc == "at_lvn" and ((setup_dir == "LONG" and s > 0.02) or (setup_dir == "SHORT" and s < -0.02)):
+                _cvd_div = 3
+        except Exception:
+            _cvd_div = 0
+    _cvd_div_enabled = bool(cfg.get("CVD_DIVERGENCE_IN_GRADE_ENABLED", True))
+    if _cvd_div_enabled:
+        if is_proxy and _cvd_div > 0:
+            _cvd_div = min(_cvd_div, int(cfg.get("GRADE_PROXY_CVD_MAX", 7) or 7))
+        components["cvd_divergence"] = _cvd_div
+        if _cvd_div:
+            reasons.append(f"CVD divergence ({_cvd_div:+d})")
+    score += components.get("cvd_divergence", 0)
 
     # ── Stop-run penalty (−20 to 0) ──────────────────────────────────────
     stop_run_grade = setup.get("stop_run", {})
@@ -4045,6 +4089,10 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
                 _scalp_score_group = _gpsg({"display": display, "type": asset_type})
             except Exception:
                 _scalp_score_group = None
+            # Engine A HTF enrichment (item 1, data-only, non-blocking): accept from caller-provided dict if present.
+            # D never calls Engine A; enrichment is purely optional payload from upstream scan context.
+            input_meta = display if isinstance(display, dict) else {"display": display}
+            htf_engine_a = input_meta.get("engine_a_htf") or input_meta.get("htf_engine_a")
             session_ok, active_session = scalp_session_window(asset_type)
             if not session_ok:
                 reason = active_session if active_session == "NY_OPEN_COOLDOWN" else "OUTSIDE_SESSION"
@@ -4661,7 +4709,7 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
                 tick_vol_quality = None
                 if asset_type and asset_type != "crypto" and cfg.get("TICK_VOL_QUALITY_GRADING_ENABLED", True):
                     tick_vol_quality = _tick_volume_quality_score(candles_m5, asset_type)
-                quality = ai_quality_grade(vp, price_loc, absorption, cvd, aaa, vwap, setup, grade_sessions, spread_pips, htf_bias, asset_type, display, data_fidelity=data_fidelity, tick_vol_quality=tick_vol_quality, score_group=_scalp_score_group)
+                quality = ai_quality_grade(vp, price_loc, absorption, cvd, aaa, vwap, setup, grade_sessions, spread_pips, htf_bias, asset_type, display, data_fidelity=data_fidelity, tick_vol_quality=tick_vol_quality, score_group=_scalp_score_group, htf_engine_a=htf_engine_a)
             else:
                 quality = {"score": 50, "grade": "C", "reasons": ["grading_disabled"], "size_multiplier": 1.0}
 
@@ -4834,6 +4882,7 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
                 "profile_anchor_shadow": profile_anchor_shadow,
                 "htf_bias":        htf_bias,
                 "htf_bias_tf":     bias_tf if use_bias else None,
+                "htf_engine_a":    htf_engine_a if htf_engine_a else None,
                 "advisory":        advisory,
                 "advisory_summary": advisory.get("summary"),
                 "premarket_delta_cluster_type": "proxy",
