@@ -429,7 +429,7 @@ def test_tracked_auto_trade_config_defaults_are_live_safe():
     assert CONFIG["AUTO_TRADE_MAX_DAILY"] == 2
     assert CONFIG["AUTO_TRADE_MAX_PER_SCAN"] == 1
     assert CONFIG["MAX_PORTFOLIO_HEAT"] == pytest.approx(0.06)
-    assert CONFIG["MAX_OPEN_POSITIONS"] == 3
+    assert CONFIG["MAX_OPEN_POSITIONS"] == 10
     assert CONFIG["MAX_CORRELATED_POSITIONS"] == 10
     assert CONFIG["AUTO_TRADE_SCHEDULER_MODE"] == "confirmed_close"
     assert CONFIG["CONDUCTOR"]["DYNAMIC_WEIGHTING_ENABLED"] is False

@@ -1112,7 +1112,7 @@ CONFIG: dict = {
     "AUTO_EXECUTE_MIN_SCORE": 8.0,  # Minimum confluence score for auto-execute
     "AUTO_EXECUTE_MIN_GRADE": "B",  # Minimum AI grade for auto-execute
     "MAX_PORTFOLIO_HEAT": 0.06,  # 6% total risk across all positions
-    "MAX_OPEN_POSITIONS": 3,  # Max simultaneous open trades
+    "MAX_OPEN_POSITIONS": 10,  # Max simultaneous open trades
     "MAX_CORRELATED_POSITIONS": 10,  # Max positions in same correlation cluster
     "SIGNAL_MAX_AGE_SEC": 1800,  # Reject signals older than 30 minutes
     "MAX_RISK_PER_TRADE": 0.03,  # Hard cap: never risk > 3% on single trade
