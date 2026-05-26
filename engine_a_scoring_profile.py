@@ -146,6 +146,17 @@ def resolve_engine_a_scoring_profile(
     ).upper()
 
     trend_timeframes = [str(layer.get("tf")).upper() for layer in layers]
+    active_weight_keys = {
+        str(layer.get("weight_key")).strip()
+        for layer in layers
+        if layer.get("weight_key")
+    }
+    if active_weight_keys:
+        trend_weights = {
+            key: float(trend_weights[key])
+            for key in active_weight_keys
+            if key in trend_weights
+        }
 
     return {
         "enabled": scoring_profile_enabled(),

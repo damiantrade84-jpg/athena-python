@@ -55,6 +55,64 @@ def pre_scoring_allows_confirmed_only_stale_1(pair: dict[str, Any] | None) -> bo
     return pair_type in CONFIRMED_ONLY_PRE_SCORING_TYPES
 
 
+def _mt5_intraday_calendar_gap_grace_buckets(tf: str) -> int:
+    """Max H4/H1 bucket lag tolerated as session calendar gaps for MT5 equities."""
+    cfg = CONFIG.get("MT5_INTRADAY_CALENDAR_GAP_GRACE_BUCKETS") or {}
+    if isinstance(cfg, dict):
+        raw = cfg.get(str(tf or "").upper()) or cfg.get("default")
+    else:
+        raw = cfg
+    try:
+        return max(0, int(raw or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _us_equity_off_hours_now() -> bool:
+    """True when US cash session is off-hours (UTC approximation)."""
+    from datetime import datetime, timezone
+
+    from market_structure import _equity_session_bucket
+
+    bucket = _equity_session_bucket(datetime.now(timezone.utc))
+    return bucket.get("session") == "off_hours"
+
+
+def pre_scoring_allows_intraday_calendar_gap(
+    pair: dict[str, Any] | None,
+    tf: str,
+    diagnostic: dict[str, Any] | None,
+) -> bool:
+    """Allow expected H4/H1 lag for stock/index/commodity when the cash session is closed."""
+    if not isinstance(pair, dict) or not isinstance(diagnostic, dict):
+        return False
+    tf_u = str(tf or "").upper()
+    if tf_u not in ("H4", "H1"):
+        return False
+    if str(pair.get("source") or "").lower() != "mt5":
+        return False
+    pair_type = str(pair.get("type") or "").strip().lower()
+    if pair_type not in ("stock", "index", "commodity", "etf", "etf_bond"):
+        return False
+
+    severity = str(diagnostic.get("stalenessSeverity") or diagnostic.get("stale_status") or "")
+    if severity == "intraday_calendar_gap_policy_ok":
+        return True
+
+    if severity != "stale_multi_bucket":
+        return False
+
+    if pair_type in ("stock", "index", "etf", "etf_bond") and _us_equity_off_hours_now():
+        return True
+
+    try:
+        bucket_lag = int(diagnostic.get("bucketLag") or diagnostic.get("bucket_lag") or 0)
+    except (TypeError, ValueError):
+        bucket_lag = 0
+    grace = _mt5_intraday_calendar_gap_grace_buckets(tf_u)
+    return grace >= 2 and 2 <= bucket_lag <= grace
+
+
 def _tf_seconds(tf: str) -> int:
     return {
         "M1": 60,

@@ -552,8 +552,11 @@ def _make_engine_b_only_signal_stub(pair: dict) -> dict:
     B-only result. Engine A scoring fields are zeroed/absent — the row is
     never auto-traded and is classified by ``_classify_engine_b_only_signal``.
     """
+    from engine_a_analyze_abort import build_abort_stub_fields, pop_analyze_pair_abort
+    from scoring import get_pair_score_group
+
     display = pair.get("display") or pair.get("symbol")
-    return {
+    stub = {
         "engine_source": ENGINE_B_SOURCE,
         "engine": "B",
         "engine_name": "Engine B",
@@ -562,6 +565,7 @@ def _make_engine_b_only_signal_stub(pair: dict) -> dict:
         "display": display,
         "type": pair.get("type"),
         "asset_type": pair.get("type"),
+        "scoreGroup": get_pair_score_group(pair),
         "direction": None,
         "confluenceScore": 0.0,
         "scoreNorm": 0.0,
@@ -572,6 +576,10 @@ def _make_engine_b_only_signal_stub(pair: dict) -> dict:
         "scanDiagnostics": [],
         "warnings": [],
     }
+    abort = pop_analyze_pair_abort(pair)
+    if abort:
+        stub.update(build_abort_stub_fields(abort))
+    return stub
 
 
 def _engine_a_block_reason(engine_a_signal: dict | None) -> str:
@@ -631,7 +639,8 @@ def _engine_a_regression_tags(engine_a_signal: dict | None) -> str:
             failure = data_freshness.get("reason") or data_freshness.get("status")
         if not failure:
             failure = (
-                engine_a_signal.get("failureReason")
+                engine_a_signal.get("engineAAbortReason")
+                or engine_a_signal.get("failureReason")
                 or engine_a_signal.get("skipReason")
                 or engine_a_signal.get("reason")
             )

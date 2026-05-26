@@ -972,6 +972,11 @@ CONFIG: dict = {
     # Engine A class/score_group overrides. Disabled by default so the unified
     # factor formula keeps historical behavior unless a class is explicitly tuned.
     "ENGINE_A_SCORE_GROUP_ADJUSTMENTS_ENABLED": False,
+    "MT5_INTRADAY_CALENDAR_GAP_GRACE_BUCKETS": {"H4": 30, "H1": 120, "default": 24},
+    "MT5_INTRADAY_CALENDAR_GAP_TYPES": ["stock", "index", "commodity", "etf", "etf_bond"],
+    "ENGINE_A_MIN_D1_BARS": 220,
+    "ENGINE_A_MIN_H4_BARS": 50,
+    "ENGINE_A_MIN_H1_BARS": 50,
     "ENGINE_A_SCORING_PROFILE": {
         "ENABLED": True,
         "DEFAULT_BY_CLASS": {
@@ -1000,6 +1005,26 @@ CONFIG: dict = {
                 "trend_weights": {"d1_ema_trend": 0.25, "h4_ema_trend": 0.35, "ema_trend": 0.40},
                 "execution_tf": "H1",
                 "chart_tf": "H1",
+            },
+        },
+        "BY_SCORE_GROUP": {
+            "energy_oil": {
+                "trend_layers": [
+                    {"tf": "H4", "weight_key": "h4_ema_trend", "fast_ema": "ema21", "slow_ema": "ema50"},
+                    {"tf": "H1", "weight_key": "ema_trend", "fast_ema": "ema21", "slow_ema": "ema50"},
+                ],
+                "trend_weights": {"h4_ema_trend": 0.55, "ema_trend": 0.45},
+                "momentum_tf": "H4",
+                "regime_tf": "H4",
+            },
+            "commodity_other": {
+                "trend_layers": [
+                    {"tf": "H4", "weight_key": "h4_ema_trend", "fast_ema": "ema21", "slow_ema": "ema50"},
+                    {"tf": "H1", "weight_key": "ema_trend", "fast_ema": "ema21", "slow_ema": "ema50"},
+                ],
+                "trend_weights": {"h4_ema_trend": 0.55, "ema_trend": 0.45},
+                "momentum_tf": "H4",
+                "regime_tf": "H4",
             },
         },
     },

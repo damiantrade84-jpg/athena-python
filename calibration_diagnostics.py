@@ -87,6 +87,41 @@ def _engine_b_cohort_performance(rows: list[dict[str, Any]]) -> dict[str, dict]:
     return aggregate_engine_b_level_cohorts(engine_b_rows)
 
 
+def record_engine_a_analyze_skip(
+    pair: dict[str, Any],
+    *,
+    abort_reason: str,
+    detail: str | None = None,
+    score_group: str | None = None,
+    path: Path | str | None = None,
+) -> bool:
+    """Record Engine A skip when analyze_pair aborts before calc_confluence."""
+    if not calibration_diagnostics_enabled():
+        return False
+    try:
+        from scoring import get_score_threshold
+
+        threshold = get_score_threshold(pair)
+    except Exception:
+        threshold = None
+    row = {
+        "engine": "engine_a",
+        "pair": pair.get("display") or pair.get("symbol"),
+        "symbol": pair.get("symbol"),
+        "asset_class": pair.get("type"),
+        "score_group": score_group or pair.get("score_group"),
+        "passed": False,
+        "failure_reason": abort_reason,
+        "abort_reason": abort_reason,
+        "threshold": threshold,
+        "final_score": 0.0,
+        "raw_score": 0.0,
+        "trend_score": 0.0,
+        "skip_detail": detail,
+    }
+    return record_calibration_diagnostic(row, path=path)
+
+
 def record_calibration_diagnostic(
     row: dict[str, Any],
     path: Path | str | None = None,
@@ -102,6 +137,15 @@ def record_calibration_diagnostic(
         with out.open("a", encoding="utf-8") as fh:
             fh.write(json.dumps(payload, sort_keys=True, default=str) + "\n")
     return True
+
+
+def _resolve_score_group(pair: dict[str, Any]) -> str | None:
+    try:
+        from scoring import get_pair_score_group
+
+        return get_pair_score_group(pair)
+    except Exception:
+        return None
 
 
 def build_engine_a_calibration_row(
@@ -130,7 +174,12 @@ def build_engine_a_calibration_row(
         "pair": pair.get("display") or result.get("pair") or pair.get("symbol"),
         "symbol": pair.get("symbol") or result.get("symbol"),
         "asset_class": pair.get("type") or result.get("type"),
-        "score_group": result.get("scoreGroup") or result.get("score_group") or pair.get("score_group"),
+        "score_group": (
+            result.get("scoreGroup")
+            or result.get("score_group")
+            or pair.get("score_group")
+            or _resolve_score_group(pair)
+        ),
         "regime": result.get("regimeName") or ((result.get("regime") or {}).get("label") if isinstance(result.get("regime"), dict) else result.get("regime")),
         "timeframe": timeframe or result.get("timeframe") or "D1/H4/H1",
         "raw_score": raw_score,

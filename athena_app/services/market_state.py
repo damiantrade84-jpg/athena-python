@@ -80,6 +80,30 @@ def _epoch_iso(epoch: int | None) -> str | None:
     return datetime.fromtimestamp(int(epoch), timezone.utc).isoformat().replace("+00:00", "Z")
 
 
+def _mt5_intraday_calendar_gap_grace_buckets(tf: str) -> int:
+    """Max H4/H1 buckets of lag tolerated as session calendar gaps."""
+    cfg = CONFIG.get("MT5_INTRADAY_CALENDAR_GAP_GRACE_BUCKETS") or {}
+    if isinstance(cfg, dict):
+        raw = cfg.get(str(tf or "").upper()) or cfg.get("default")
+    else:
+        raw = cfg
+    try:
+        cap = int(raw or 0)
+    except (TypeError, ValueError):
+        cap = 0
+    return max(0, cap)
+
+
+def _mt5_intraday_calendar_gap_types() -> set[str]:
+    raw = CONFIG.get(
+        "MT5_INTRADAY_CALENDAR_GAP_TYPES",
+        ["stock", "index", "commodity", "etf", "etf_bond"],
+    )
+    if isinstance(raw, str):
+        raw = [raw]
+    return {str(x).lower() for x in (raw or []) if str(x).strip()}
+
+
 def _mt5_d1_calendar_gap_grace_buckets() -> int:
     """Max D1 buckets of lag tolerated as session calendar gaps (Sat/Sun, etc.)."""
     raw = CONFIG.get("MT5_D1_CALENDAR_GAP_GRACE_BUCKETS")
@@ -294,6 +318,19 @@ def candle_freshness_diagnostic(
         severity = "stale_multi_bucket"
     else:
         severity = "missing_current_bucket"
+
+    if (
+        severity == "stale_multi_bucket"
+        and tf in ("H4", "H1")
+        and str(pair.get("source") or "").lower() == "mt5"
+        and str(pair.get("type") or "").lower() in _mt5_intraday_calendar_gap_types()
+        and bucket_lag is not None
+        and last_bucket is not None
+    ):
+        grace_cap = _mt5_intraday_calendar_gap_grace_buckets(tf)
+        blag = int(bucket_lag)
+        if grace_cap >= 2 and 2 <= blag <= grace_cap:
+            severity = "intraday_calendar_gap_policy_ok"
 
     if (
         severity == "stale_multi_bucket"

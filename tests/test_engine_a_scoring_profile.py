@@ -45,6 +45,18 @@ def test_snap_for_tf_maps_snaps():
     assert snap_for_tf(profile, d1_snap=d1, h4_snap=h4, h1_snap=h1, tf="H1") is h1
 
 
+def test_energy_oil_profile_uses_h4_h1_only_trend_stack():
+    profile = resolve_engine_a_scoring_profile(
+        score_group="energy_oil",
+        asset_type="commodity",
+        style="swing",
+    )
+    assert profile["trend_timeframes"] == ["H4", "H1"]
+    assert "d1_ema_trend" not in profile["trend_weights"]
+    assert profile["trend_weights"]["h4_ema_trend"] == 0.55
+    assert profile["trend_weights"]["ema_trend"] == 0.45
+
+
 def test_public_dict_camel_case_keys():
     profile = resolve_engine_a_scoring_profile(
         score_group="forex_majors", asset_type="forex", style="intraday"

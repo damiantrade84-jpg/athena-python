@@ -12554,16 +12554,57 @@ def analyze_pair(
             f"[ANALYZE] {pair.get('display', '?')} no candles - "
             f"D1={len(d1) if d1 else 0} H4={len(h4) if h4 else 0} H1={len(h1) if h1 else 0}"
         )
+        from engine_a_analyze_abort import record_analyze_pair_abort
+
+        _abort_detail = (
+            f"D1={len(d1) if d1 else 0} H4={len(h4) if h4 else 0} H1={len(h1) if h1 else 0}"
+        )
+        record_analyze_pair_abort(
+            pair, "no_candles", detail=_abort_detail, score_group=_score_group
+        )
+        try:
+            from calibration_diagnostics import record_engine_a_analyze_skip
+
+            record_engine_a_analyze_skip(
+                pair,
+                abort_reason="no_candles",
+                detail=_abort_detail,
+                score_group=_score_group,
+            )
+        except Exception:
+            pass
         return None
 
     # Engine A scores confirmed candles only. Forming-bar state remains diagnostic
     # for UI/freshness, but indicators and two-bar confirmation use closed bars.
 
-    if len(d1) < 220 or len(h4) < 50 or len(h1) < 50:
+    _min_d1 = int(CONFIG.get("ENGINE_A_MIN_D1_BARS", 220) or 220)
+    _min_h4 = int(CONFIG.get("ENGINE_A_MIN_H4_BARS", 50) or 50)
+    _min_h1 = int(CONFIG.get("ENGINE_A_MIN_H1_BARS", 50) or 50)
+    if len(d1) < _min_d1 or len(h4) < _min_h4 or len(h1) < _min_h1:
         log.warning(
             f"[ANALYZE] {pair.get('display', '?')} insufficient bars - "
-            f"D1={len(d1)}/220 H4={len(h4)}/50 H1={len(h1)}/50"
+            f"D1={len(d1)}/{_min_d1} H4={len(h4)}/{_min_h4} H1={len(h1)}/{_min_h1}"
         )
+        from engine_a_analyze_abort import record_analyze_pair_abort
+
+        _abort_detail = (
+            f"D1={len(d1)}/{_min_d1} H4={len(h4)}/{_min_h4} H1={len(h1)}/{_min_h1}"
+        )
+        record_analyze_pair_abort(
+            pair, "insufficient_bars", detail=_abort_detail, score_group=_score_group
+        )
+        try:
+            from calibration_diagnostics import record_engine_a_analyze_skip
+
+            record_engine_a_analyze_skip(
+                pair,
+                abort_reason="insufficient_bars",
+                detail=_abort_detail,
+                score_group=_score_group,
+            )
+        except Exception:
+            pass
         return None
 
     # Pre-scoring freshness gate: skip indicator calculation if any required
@@ -12573,6 +12614,7 @@ def analyze_pair(
         try:
             from athena_app.services.data_freshness import (
                 pre_scoring_allows_confirmed_only_stale_1,
+                pre_scoring_allows_intraday_calendar_gap,
             )
             from athena_app.services.market_state import candle_freshness_diagnostic
 
@@ -12595,6 +12637,9 @@ def analyze_pair(
                 # Confirmed-only Engine A scoring: stale_1_bucket is expected
                 # while the current forming bar is intentionally excluded.
                 if _allow_confirmed_only_stale_1 and _sev == "stale_1_bucket":
+                    continue
+
+                if pre_scoring_allows_intraday_calendar_gap(pair, _tf, _diag):
                     continue
 
                 # D1 weekend gap tolerance: forex markets close Fri ~21:00 UTC,
@@ -12653,14 +12698,35 @@ def analyze_pair(
                     pair.get("display", "?"),
                     _reason,
                 )
+                from engine_a_analyze_abort import record_analyze_pair_abort
+
+                record_analyze_pair_abort(
+                    pair,
+                    "pre_scoring_freshness",
+                    detail=_reason,
+                    score_group=_score_group,
+                )
+                try:
+                    from calibration_diagnostics import record_engine_a_analyze_skip
+
+                    record_engine_a_analyze_skip(
+                        pair,
+                        abort_reason="pre_scoring_freshness",
+                        detail=_reason,
+                        score_group=_score_group,
+                    )
+                except Exception:
+                    pass
                 return {
                     "pair": pair.get("display"),
                     "symbol": pair.get("symbol"),
+                    "scoreGroup": _score_group,
                     "score": 0,
                     "confluenceScore": 0,
                     "maxScore": 3.0,
                     "direction": "neutral",
                     "trendState": "neutral",
+                    "engineAAbortReason": "pre_scoring_freshness",
                     "executable": False,
                     "dataFreshness": {
                         "allowed": False,
@@ -13039,9 +13105,39 @@ def analyze_pair(
                 "scalp": "H1", "intraday": "H4", "swing": "D1"
             }.get(_normalize_style(_style or "swing"), "D1")
         elif not bool(CONFIG.get("ENGINE_A_CRYPTO_LEVELS_SIGNAL_FEED_FALLBACK", False)):
+            from engine_a_analyze_abort import record_analyze_pair_abort
+
+            record_analyze_pair_abort(
+                pair, "no_bybit_atr", score_group=_score_group
+            )
+            try:
+                from calibration_diagnostics import record_engine_a_analyze_skip
+
+                record_engine_a_analyze_skip(
+                    pair, abort_reason="no_bybit_atr", score_group=_score_group
+                )
+            except Exception:
+                pass
             return None
 
     if price is None or not atr:
+        from engine_a_analyze_abort import record_analyze_pair_abort
+
+        _abort_detail = f"price={price} atr={atr}"
+        record_analyze_pair_abort(
+            pair, "no_price_atr", detail=_abort_detail, score_group=_score_group
+        )
+        try:
+            from calibration_diagnostics import record_engine_a_analyze_skip
+
+            record_engine_a_analyze_skip(
+                pair,
+                abort_reason="no_price_atr",
+                detail=_abort_detail,
+                score_group=_score_group,
+            )
+        except Exception:
+            pass
         return None
 
     # Engine A v2: unified 0-3.0 scale for all asset classes including forex
