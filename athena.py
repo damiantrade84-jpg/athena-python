@@ -6538,8 +6538,13 @@ def api_scan_naked():
             continue
         if p["display"] in _disabled_pairs:
             continue
-        if asset_class and p.get("type", "").lower() != asset_class:
-            continue
+        ptype = str(p.get("type", "")).lower()
+        if asset_class:
+            if asset_class == "etf":
+                if ptype not in ("etf", "etf_bond"):
+                    continue
+            elif ptype != asset_class:
+                continue
         candidate_pairs.append(p)
 
     results = []
@@ -12640,6 +12645,10 @@ def analyze_pair(
                     continue
 
                 if pre_scoring_allows_intraday_calendar_gap(pair, _tf, _diag):
+                    continue
+
+                # Policy-downgraded severities: market_state already applied gap grace.
+                if _sev in ("d1_calendar_gap_policy_ok", "intraday_calendar_gap_policy_ok"):
                     continue
 
                 # D1 weekend gap tolerance: forex markets close Fri ~21:00 UTC,

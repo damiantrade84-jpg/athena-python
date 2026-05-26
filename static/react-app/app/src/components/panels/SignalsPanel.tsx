@@ -332,7 +332,14 @@ export default function SignalsPanel() {
       const pair = (r.signal.display || r.signal.pair || r.signal.symbol || '').toLowerCase();
       if (filter && !pair.includes(filter.toLowerCase())) return false;
       if (directionFilter !== 'all' && r.signal.direction !== directionFilter) return false;
-      if (assetClass !== 'all' && (r.signal.type || '').toLowerCase() !== assetClass) return false;
+      if (assetClass !== 'all') {
+        const t = (r.signal.type || '').toLowerCase();
+        if (assetClass === 'etf') {
+          if (t !== 'etf' && t !== 'etf_bond') return false;
+        } else if (t !== assetClass) {
+          return false;
+        }
+      }
       return true;
     });
     list.sort((a, b) => compareUnified(a, b, sortBy));

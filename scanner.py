@@ -676,6 +676,13 @@ def _make_engine_b_only_signal_stub_from_blocked_engine_a(
     stub = _make_engine_b_only_signal_stub(pair)
     stub["engine_a_blocked"] = True
     stub["engine_a_block_reason"] = _engine_a_block_reason(engine_a_signal)
+    # UI row keys require LONG/SHORT; keep display direction when A scored but
+    # was demoted (e.g. indeterminate_trend) without using it for execution.
+    if isinstance(engine_a_signal, dict):
+        _a_dir = engine_a_signal.get("direction")
+        if _a_dir in ("LONG", "SHORT"):
+            stub["direction"] = _a_dir
+            stub["engine_a_direction"] = _a_dir
 
     if isinstance(engine_a_signal, dict):
         stub["engine_a_direction"] = engine_a_signal.get("direction")
@@ -1253,7 +1260,7 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict[s
 
     _requested_style = _normalize_style(style)
 
-    _valid_classes = {"crypto", "forex", "stock", "commodity", "index"}
+    _valid_classes = {"crypto", "forex", "stock", "commodity", "index", "etf"}
 
     _ac = asset_class.lower().strip() if asset_class else None
 
@@ -1316,7 +1323,12 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict[s
         ]
 
         if _ac:
-            candidate_pairs = [p for p in candidate_pairs if p.get("type") == _ac]
+            if _ac == "etf":
+                candidate_pairs = [
+                    p for p in candidate_pairs if p.get("type") in ("etf", "etf_bond")
+                ]
+            else:
+                candidate_pairs = [p for p in candidate_pairs if p.get("type") == _ac]
 
         active_pairs = [p for p in candidate_pairs if p.get("enabled", True)]
 
