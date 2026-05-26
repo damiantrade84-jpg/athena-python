@@ -44,6 +44,8 @@ CONFIRMED_ONLY_PRE_SCORING_TYPES = {
     "stock",
     "index",
     "commodity",
+    "etf",
+    "etf_bond",
 }
 
 

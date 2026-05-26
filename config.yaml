@@ -262,6 +262,9 @@ ADX_TREND_MIN_CLASS:
 
   index: 25
 
+  etf: 25
+  etf_bond: 25
+
 # Per-class ADX hard-fail override.  Global default is 15 (from code).
 # Crypto class_min=15 collides with global hard_fail=15 leaving zero soft zone;
 # setting crypto to 10 creates a genuine 10-15 soft-penalty band.
@@ -282,6 +285,8 @@ FACTOR_ADX_HARD_FAIL_CLASS:
   softs: 10
   stock: 10
   index: 10
+  etf: 10
+  etf_bond: 10
 
 # Engine A fail-safe: when both D1 and H4 ADX are unavailable, block the signal
 # instead of assigning the old neutral 0.5 multiplier.

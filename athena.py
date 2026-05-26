@@ -12652,7 +12652,7 @@ def analyze_pair(
             _stale_tfs = []
             _freshness_diag = {}
             _pair_type = pair.get("type", "")
-            _is_forex_stock = _pair_type in ("forex", "stock", "index", "commodity")
+            _is_forex_stock = _pair_type in ("forex", "stock", "index", "commodity", "etf", "etf_bond")
             _allow_confirmed_only_stale_1 = pre_scoring_allows_confirmed_only_stale_1(pair)
 
             for _tf, _candles in (("D1", d1), ("H4", h4), ("H1", h1)):

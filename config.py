@@ -1183,6 +1183,8 @@ CONFIG: dict = {
         "commodity": 0.04,
         "index":     0.04,
         "stock":     0.08,
+        "etf":       0.08,
+        "etf_bond":  0.08,
     },
     "MAX_SL_PCT_SCORE_GROUP_OVERRIDES": {},
     "MAX_SL_PCT_SYMBOL_OVERRIDES": {},

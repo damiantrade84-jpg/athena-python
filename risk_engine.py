@@ -13,6 +13,7 @@ import threading
 import time as _time
 from dataclasses import dataclass, asdict
 from datetime import datetime, timezone
+from decimal import Decimal, InvalidOperation, ROUND_FLOOR
 
 from config import CONFIG
 from athena_app.services.data_freshness import evaluate_execution_data_freshness
@@ -494,6 +495,8 @@ def _adaptive_risk_pct(asset_type: str, regime: str = "") -> float:
         "stock": 0.010,  # 1.0% for stocks
         "commodity": 0.010,  # 1.0% for commodities
         "index": 0.010,  # 1.0% for indices
+        "etf": 0.010,
+        "etf_bond": 0.010,
     }
     base_risk = asset_risk_map.get(asset_type, _cfg("RISK_PCT", 0.01))
 
@@ -741,6 +744,16 @@ def _volume_asset_defaults(asset_type: str) -> tuple[float, float, float, int]:
     return 0.01, 100.0, 0.01, 2
 
 
+def _volume_step_decimals(vol_step: float, default: int) -> int:
+    try:
+        step_dec = Decimal(str(vol_step)).normalize()
+    except (InvalidOperation, TypeError, ValueError):
+        return default
+    if step_dec <= 0:
+        return default
+    return max(default, max(0, -step_dec.as_tuple().exponent))
+
+
 def _symbol_volume_constraints(
     symbol_info: dict | None,
     asset_type: str,
@@ -758,13 +771,22 @@ def _symbol_volume_constraints(
                 vol_min = max(vol_min, float(override))
             except (TypeError, ValueError):
                 pass
+    decimals = _volume_step_decimals(vol_step, decimals)
     return vol_min, vol_max, vol_step, decimals
 
 
 def _round_volume_down(volume: float, vol_step: float, decimals: int) -> float:
-    if vol_step > 0:
-        volume = math.floor(volume / vol_step) * vol_step
-    return round(volume, decimals)
+    try:
+        volume_dec = Decimal(str(volume))
+        step_dec = Decimal(str(vol_step))
+        if step_dec > 0:
+            steps = (volume_dec / step_dec).to_integral_value(rounding=ROUND_FLOOR)
+            volume_dec = steps * step_dec
+        return round(float(volume_dec), decimals)
+    except (InvalidOperation, TypeError, ValueError, ZeroDivisionError):
+        if vol_step > 0:
+            volume = math.floor(volume / vol_step) * vol_step
+        return round(volume, decimals)
 
 
 def _stock_whole_share_min(

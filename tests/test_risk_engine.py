@@ -1021,6 +1021,31 @@ class TestVolumeMode:
         assert result.approved is True
         assert result.volume == 1.0
 
+    def test_min_lot_stock_fractional_step_approves_broker_min(self):
+        symbol_info = {
+            "volume_min": 0.1,
+            "volume_step": 0.1,
+            "volume_max": 5000.0,
+            "trade_tick_size": 0.01,
+            "trade_tick_value": 0.01,
+        }
+        result = risk_check(
+            _make_signal(
+                pair="AAPL",
+                type="stock",
+                price=311.267,
+                sl=300.3200743080203,
+                tp1=333.1608513839594,
+            ),
+            45611.59,
+            45611.59,
+            [],
+            symbol_info=symbol_info,
+            volume_mode="min_lot",
+        )
+        assert result.approved is True
+        assert result.volume == 0.1
+
     def test_preview_execution_volume_min_lot_stock(self):
         symbol_info = {
             "volume_min": 0.01,
