@@ -1,0 +1,55 @@
+"""Engine A scoring profile resolver tests."""
+
+from __future__ import annotations
+
+from engine_a_scoring_profile import (
+    resolve_engine_a_scoring_profile,
+    scoring_profile_public_dict,
+    snap_for_tf,
+)
+
+
+def test_default_profile_preserves_d1_h4_h1_stack():
+    profile = resolve_engine_a_scoring_profile(
+        score_group="forex_majors",
+        asset_type="forex",
+        style="swing",
+    )
+    assert profile["trend_timeframes"] == ["D1", "H4", "H1"]
+    assert profile["momentum_tf"] == "H4"
+    assert profile["regime_tf"] == "H4"
+    assert profile["execution_tf"] == "D1"
+
+
+def test_style_adjusts_trend_weights():
+    swing = resolve_engine_a_scoring_profile(
+        score_group="crypto_btc", asset_type="crypto", style="swing"
+    )
+    scalp = resolve_engine_a_scoring_profile(
+        score_group="crypto_btc", asset_type="crypto", style="scalp"
+    )
+    assert swing["trend_weights"]["d1_ema_trend"] > scalp["trend_weights"]["d1_ema_trend"]
+    assert scalp["trend_weights"]["ema_trend"] > swing["trend_weights"]["ema_trend"]
+    assert scalp["execution_tf"] == "H1"
+    assert swing["execution_tf"] == "D1"
+
+
+def test_snap_for_tf_maps_snaps():
+    d1 = {"close": 1.0, "rsi": 55.0}
+    h4 = {"close": 2.0, "rsi": 60.0}
+    h1 = {"close": 3.0, "rsi": 65.0}
+    profile = resolve_engine_a_scoring_profile(
+        score_group="forex_majors", asset_type="forex", style="intraday"
+    )
+    assert snap_for_tf(profile, d1_snap=d1, h4_snap=h4, h1_snap=h1, tf="H4") is h4
+    assert snap_for_tf(profile, d1_snap=d1, h4_snap=h4, h1_snap=h1, tf="H1") is h1
+
+
+def test_public_dict_camel_case_keys():
+    profile = resolve_engine_a_scoring_profile(
+        score_group="forex_majors", asset_type="forex", style="intraday"
+    )
+    public = scoring_profile_public_dict(profile)
+    assert public["style"] == "intraday"
+    assert public["trendTimeframes"] == ["D1", "H4", "H1"]
+    assert public["executionTf"] == "H4"

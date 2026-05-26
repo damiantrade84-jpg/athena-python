@@ -734,6 +734,7 @@ def calc_confluence(
     structure_result: dict | None = None,
     asset_prices: list | None = None,
     benchmark_prices: list | None = None,
+    style: str | None = None,
 ) -> dict:
     """Factor-based confluence using normalized indicators, regime-aware weights, and correlation filtering.
     Preserves legacy API and raw-threshold warnings for human readability.
@@ -765,6 +766,7 @@ def calc_confluence(
         intermarket_context=intermarket_context,
         structure_result=structure_result,
         volume_threshold=volume_threshold,
+        style=style,
     )
 
     # FIX 2: BTC Bias Conditional on Correlation
@@ -1009,6 +1011,10 @@ def calc_confluence(
             "abortReason": factor_result.get("abort_reason"),
             "engineVersion": "A_V2",
             "scorerSelected": "factor_scoring.compute_factor_scores",
+            "scoringProfile": factor_result.get("scoring_profile"),
+            "scoringStyle": factor_result.get("scoring_style"),
+            "momentumTimeframe": factor_result.get("momentum_timeframe"),
+            "regimeTimeframe": factor_result.get("regime_timeframe"),
         },
         "intermarketConfirmation": factor_result.get("intermarket_confirmation") or {},
     }

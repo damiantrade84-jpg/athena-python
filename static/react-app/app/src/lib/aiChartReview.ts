@@ -99,6 +99,12 @@ export function buildScreenshotMeta(args: {
   visible_range_end?: string;
   chart_provider?: string;
   chart_snapshot?: AIChartReviewChartSnapshot;
+  analyze_style?: string;
+  signal_style?: string;
+  scoring_timeframes?: string[];
+  momentum_timeframe?: string;
+  regime_timeframe?: string;
+  execution_timeframe?: string;
 }): AIChartReviewScreenshotMeta {
   const provider = args.chart_provider;
   return {
@@ -112,6 +118,12 @@ export function buildScreenshotMeta(args: {
     chart_snapshot: args.chart_snapshot,
     captured_at: new Date().toISOString(),
     ...(provider ? { provider, chart_provider: provider } : {}),
+    ...(args.analyze_style ? { analyze_style: args.analyze_style } : {}),
+    ...(args.signal_style ? { signal_style: args.signal_style } : {}),
+    ...(args.scoring_timeframes?.length ? { scoring_timeframes: [...args.scoring_timeframes] } : {}),
+    ...(args.momentum_timeframe ? { momentum_timeframe: args.momentum_timeframe } : {}),
+    ...(args.regime_timeframe ? { regime_timeframe: args.regime_timeframe } : {}),
+    ...(args.execution_timeframe ? { execution_timeframe: args.execution_timeframe } : {}),
   };
 }
 

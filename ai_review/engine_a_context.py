@@ -612,6 +612,10 @@ def resolve_chart_review_analyze_style(
     if explicit in ("scalp", "intraday", "swing"):
         return explicit
 
+    signal_style = str(meta.get("signal_style") or meta.get("scoring_style") or "").strip().lower()
+    if signal_style in ("scalp", "intraday", "swing"):
+        return signal_style
+
     raw_tf = str(meta.get("chart_timeframe") or timeframe or "").strip()
     tf_upper = raw_tf.upper()
     if tf_upper in ("M1", "M2", "M3", "M5", "M15"):
@@ -832,6 +836,16 @@ def assemble_engine_a_context(
         "timeframe": timeframe,
         "analyze_style": style,
         "chart_timeframe": (screenshot_meta or {}).get("chart_timeframe") or timeframe,
+        "scoring_profile": signal.get("scoringProfile")
+        or (screenshot_meta or {}).get("scoring_profile"),
+        "scoring_timeframes": signal.get("scoringTimeframes")
+        or (screenshot_meta or {}).get("scoring_timeframes"),
+        "momentum_timeframe": signal.get("momentumTimeframe")
+        or (screenshot_meta or {}).get("momentum_timeframe"),
+        "regime_timeframe": signal.get("regimeTimeframe")
+        or (screenshot_meta or {}).get("regime_timeframe"),
+        "execution_timeframe": signal.get("executionTimeframe")
+        or (screenshot_meta or {}).get("execution_timeframe"),
         "asset_class": pair.get("type"),
         "asset_group": get_pair_score_group(pair),
         "direction": str(signal.get("direction") or "NONE").upper(),

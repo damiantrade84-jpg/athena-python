@@ -150,6 +150,20 @@ export interface EngineASignal {
   symbol?: string;
   type?: string; // forex | crypto | commodity | index | stock | etf
   scoreGroup?: string;
+  scoringProfile?: {
+    enabled?: boolean;
+    style?: string;
+    trendTimeframes?: string[];
+    momentumTf?: string;
+    regimeTf?: string;
+    executionTf?: string;
+    chartTf?: string;
+    trendWeights?: Record<string, number>;
+  };
+  scoringTimeframes?: string[];
+  momentumTimeframe?: string;
+  regimeTimeframe?: string;
+  executionTimeframe?: string;
   direction?: Direction;
   price?: number;
 
@@ -1492,6 +1506,13 @@ export interface AIChartReviewScreenshotMeta {
   provider?: string;
   chart_provider?: string;
   chart_snapshot?: AIChartReviewChartSnapshot;
+  /** Advisory routing hints for server-side analyze_pair style (not trusted for scoring). */
+  analyze_style?: string;
+  signal_style?: string;
+  scoring_timeframes?: string[];
+  momentum_timeframe?: string;
+  regime_timeframe?: string;
+  execution_timeframe?: string;
 }
 
 export interface AIChartReviewChartSnapshot {

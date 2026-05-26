@@ -125,6 +125,7 @@ nonVisualContext and scoreAttribution are included inside engineAContext above. 
 
 == SYMBOL ==
 {context.get("symbol")} {context.get("timeframe")} asset_group: {context.get("asset_group")}{_vol_note}
+analyze_style: {_fmt(context.get("analyze_style"))} scoring_tfs: {_fmt(context.get("scoring_timeframes"))} momentum_tf: {_fmt(context.get("momentum_timeframe"))} regime_tf: {_fmt(context.get("regime_timeframe"))} execution_tf: {_fmt(context.get("execution_timeframe"))}
 
 == ATR ==
 atr_value: {_fmt(atr.get("atr_value"))} atr_tf: {_fmt(atr.get("atr_tf"))} atr_h4: {_fmt(atr.get("atr_h4"))} atr_d1: {_fmt(atr.get("atr_d1"))}

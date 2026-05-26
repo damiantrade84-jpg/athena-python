@@ -28,6 +28,11 @@ from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
 from config import CONFIG
+from engine_a_scoring_profile import (
+    resolve_engine_a_scoring_profile,
+    scoring_profile_public_dict,
+    snap_for_tf,
+)
 from regime import detect_regime
 
 log = logging.getLogger("athena")
@@ -409,25 +414,12 @@ def _ema_cross_confirmed(current_snap: dict, prev_snap: dict, fast_key: str, slo
     return None
 
 
-def _coherent_trend_score(
+def _coherent_trend_score_legacy(
     d1_snap: dict, h4_snap: dict, h1_snap: dict, asset_type: str,
     d1_prev: dict | None = None, h4_prev: dict | None = None, h1_prev: dict | None = None,
     score_group: str | None = None,
 ) -> tuple:
-    """Multi-TF EMA alignment trend score.
-
-    Returns (trend_score, direction, trend_detail).
-    trend_score  : float in [-3.0, +3.0]; 0.0 means indeterminate.
-    direction    : "LONG" | "SHORT" | None
-    trend_detail : dict with per-TF votes and coherence ratio.
-
-    D1 weight 0.50 (tide), H4 weight 0.30 (momentum), H1 weight 0.20 (entry).
-    All 3 aligned → ±3.0; 2-of-3 dominant → ±(0.35+0.65*coherence)*3.0.
-    All split (1.5 LONG / 1.5 SHORT with equal weights) → 0.0, direction=None.
-
-    Stage 3.3: EMA hysteresis — 2-bar confirmation required. Pass previous-bar
-    snaps as d1_prev/h4_prev/h1_prev to enable; missing prev = gap check fallback.
-    """
+    """Legacy multi-TF trend score using INDICATOR_WEIGHTS class-keyed weights."""
     tf_weights_raw = CONFIG.get("INDICATOR_WEIGHTS", {}).get("trend", {})
     tf_weights = _resolve_class_keyed(tf_weights_raw, score_group, asset_type, {})
     if not isinstance(tf_weights, dict):
@@ -444,7 +436,6 @@ def _coherent_trend_score(
     votes = []
     detail = {}
 
-    # D1 — primary trend (EMA21 vs EMA200 for cleaner signal)
     d1_sign = _ema_cross_confirmed(d1_snap, d1_prev, "ema21", "ema200")
     if d1_sign is not None:
         votes.append(("d1_ema_trend", d1_sign, _w("d1_ema_trend")))
@@ -454,7 +445,6 @@ def _coherent_trend_score(
     elif d1_snap.get("ema21") is not None and d1_snap.get("ema200") is not None:
         detail["d1_hysteresis_pending"] = True
 
-    # H4 — momentum confirmation (EMA21 vs EMA50)
     h4_sign = _ema_cross_confirmed(h4_snap, h4_prev, "ema21", "ema50")
     if h4_sign is not None:
         votes.append(("h4_ema_trend", h4_sign, _w("h4_ema_trend")))
@@ -462,7 +452,6 @@ def _coherent_trend_score(
     elif h4_snap.get("ema21") is not None and h4_snap.get("ema50") is not None:
         detail["h4_hysteresis_pending"] = True
 
-    # H1 — entry quality (EMA21 vs EMA50)
     h1_sign = _ema_cross_confirmed(h1_snap, h1_prev, "ema21", "ema50")
     if h1_sign is not None:
         votes.append(("ema_trend", h1_sign, _w("ema_trend")))
@@ -470,6 +459,54 @@ def _coherent_trend_score(
     elif h1_snap.get("ema21") is not None and h1_snap.get("ema50") is not None:
         detail["h1_hysteresis_pending"] = True
 
+    return _finalize_coherent_trend_score(votes, detail)
+
+
+def _coherent_trend_score_from_profile(
+    d1_snap: dict,
+    h4_snap: dict,
+    h1_snap: dict,
+    *,
+    d1_prev: dict | None,
+    h4_prev: dict | None,
+    h1_prev: dict | None,
+    scoring_profile: dict,
+) -> tuple:
+    """Multi-TF trend score driven by ENGINE_A_SCORING_PROFILE layers/weights."""
+    snaps = {"D1": d1_snap, "H4": h4_snap, "H1": h1_snap}
+    prevs = {"D1": d1_prev, "H4": h4_prev, "H1": h1_prev}
+    trend_weights = scoring_profile.get("trend_weights") or {}
+    layers = scoring_profile.get("trend_layers") or []
+
+    def _w(key):
+        try:
+            return float(trend_weights.get(key, 0.0))
+        except (TypeError, ValueError):
+            return 0.0
+
+    votes = []
+    detail = {"scoring_profile_style": scoring_profile.get("style")}
+    for layer in layers:
+        tf = str(layer.get("tf") or "").upper()
+        snap = snaps.get(tf) or {}
+        prev = prevs.get(tf)
+        weight_key = str(layer.get("weight_key") or "")
+        fast_ema = str(layer.get("fast_ema") or "ema21")
+        slow_ema = str(layer.get("slow_ema") or "ema50")
+        sign = _ema_cross_confirmed(snap, prev, fast_ema, slow_ema)
+        tf_key = tf.lower()
+        if sign is not None:
+            votes.append((weight_key, sign, _w(weight_key)))
+            detail[tf_key] = "LONG" if sign > 0 else "SHORT"
+        elif snap.get(fast_ema) is not None and snap.get(slow_ema) is not None:
+            detail[f"{tf_key}_hysteresis_pending"] = True
+
+    detail["trend_timeframes"] = list(scoring_profile.get("trend_timeframes") or [])
+    return _finalize_coherent_trend_score(votes, detail)
+
+
+def _finalize_coherent_trend_score(votes: list, detail: dict) -> tuple:
+    """Shared vote aggregation for legacy and profile-driven trend scoring."""
     if not votes:
         return 0.0, None, {"error": "no_ema_data", **detail}
 
@@ -504,11 +541,8 @@ def _coherent_trend_score(
     # so D1-only > H4-only > H1-only.
     active_votes = len(votes)
     if active_votes == 1:
-        max_single_weight = max(
-            _w("d1_ema_trend"),
-            _w("h4_ema_trend"),
-            _w("ema_trend"),
-        )
+        vote_weights = [w for _, _, w in votes]
+        max_single_weight = max(vote_weights) if vote_weights else dominant_w
         if max_single_weight <= 0:
             max_single_weight = dominant_w
         dominant_weight = dominant_w
@@ -539,6 +573,39 @@ def _coherent_trend_score(
         "weighted_balance": round((long_w - short_w) / total_w, 4),
     })
     return trend_score, direction, detail
+
+
+def _coherent_trend_score(
+    d1_snap: dict, h4_snap: dict, h1_snap: dict, asset_type: str,
+    d1_prev: dict | None = None, h4_prev: dict | None = None, h1_prev: dict | None = None,
+    score_group: str | None = None,
+    scoring_profile: dict | None = None,
+) -> tuple:
+    """Multi-TF EMA alignment trend score.
+
+    When ``scoring_profile`` is enabled, uses ENGINE_A_SCORING_PROFILE layers/weights.
+    Otherwise falls back to legacy INDICATOR_WEIGHTS class-keyed resolution.
+    """
+    if scoring_profile and scoring_profile.get("enabled"):
+        return _coherent_trend_score_from_profile(
+            d1_snap,
+            h4_snap,
+            h1_snap,
+            d1_prev=d1_prev,
+            h4_prev=h4_prev,
+            h1_prev=h1_prev,
+            scoring_profile=scoring_profile,
+        )
+    return _coherent_trend_score_legacy(
+        d1_snap,
+        h4_snap,
+        h1_snap,
+        asset_type,
+        d1_prev=d1_prev,
+        h4_prev=h4_prev,
+        h1_prev=h1_prev,
+        score_group=score_group,
+    )
 
 
 def _previous_indicator_snap(
@@ -2300,6 +2367,7 @@ def compute_factor_scores(
     intermarket_context: Optional[dict] = None,
     volume_threshold: Optional[float] = None,
     structure_result: Optional[dict] = None,
+    style: str | None = None,
 ) -> Dict:
     """Compute Engine A v2 factor scores and aggregate to final conviction score.
 
@@ -2315,6 +2383,25 @@ def compute_factor_scores(
     # RSI bounds for GLD-as-stock) can override asset_type lookups everywhere
     # Engine A reads class-keyed config.
     score_group = _resolve_pair_score_group(pair)
+    scoring_profile = resolve_engine_a_scoring_profile(
+        score_group=score_group,
+        asset_type=asset_type,
+        style=style,
+    )
+    _regime_snap = snap_for_tf(
+        scoring_profile,
+        d1_snap=d1_snap,
+        h4_snap=h4_snap,
+        h1_snap=h1_snap,
+        tf=scoring_profile.get("regime_tf", "H4"),
+    )
+    _mom_snap = snap_for_tf(
+        scoring_profile,
+        d1_snap=d1_snap,
+        h4_snap=h4_snap,
+        h1_snap=h1_snap,
+        tf=scoring_profile.get("momentum_tf", "H4"),
+    )
 
     # ── Data quality guard ────────────────────────────────────────────────────
     _close = h4_snap.get("close")
@@ -2326,7 +2413,7 @@ def compute_factor_scores(
     if _close and (_atr_float is None or not math.isfinite(_atr_float) or _atr_float <= 0):
         log.warning("[EA2] %s ATR=0 — frozen candle data suspected", display)
         feed_status["atr"] = "invalid"
-        regime_raw = detect_regime(h4_snap, asset_type).get("regime", "UNKNOWN")
+        regime_raw = detect_regime(_regime_snap, asset_type).get("regime", "UNKNOWN")
         regime = _get_smoothed_regime(regime_context, pair_id, regime_raw)
         return _zero_result(pair, regime, {"error": "atr_invalid"}, feed_status,
                             reason="atr_invalid_abort", direction=None)
@@ -2341,6 +2428,7 @@ def compute_factor_scores(
         h4_prev=h4_prev,
         h1_prev=h1_prev,
         score_group=score_group,
+        scoring_profile=scoring_profile,
     )
     trend_detail["hysteresis_prev_available"] = {
         "d1": d1_prev is not None,
@@ -2351,7 +2439,7 @@ def compute_factor_scores(
     # Hard abort: no direction determinable
     if direction is None or abs(trend_score) < 1e-9:
         log.debug("[EA2] %s trend indeterminate — score=0", display)
-        regime_raw = detect_regime(h4_snap, asset_type).get("regime", "UNKNOWN")
+        regime_raw = detect_regime(_regime_snap, asset_type).get("regime", "UNKNOWN")
         regime = _get_smoothed_regime(regime_context, pair_id, regime_raw)
         return _zero_result(pair, regime, trend_detail, feed_status, reason="indeterminate_trend")
 
@@ -2367,7 +2455,7 @@ def compute_factor_scores(
             "[EA2] %s abs(trend)=%.3f < min_directional=%.3f — abort",
             display, _abs_trend, _min_directional,
         )
-        regime_raw = detect_regime(h4_snap, asset_type).get("regime", "UNKNOWN")
+        regime_raw = detect_regime(_regime_snap, asset_type).get("regime", "UNKNOWN")
         regime = _get_smoothed_regime(regime_context, pair_id, regime_raw)
         return _zero_result(
             pair, regime, trend_detail, feed_status,
@@ -2397,14 +2485,14 @@ def compute_factor_scores(
     # Hard abort: dead market (ADX ≤ 10)
     if adx_mult == 0.0:
         log.debug("[EA2] %s ADX=%.1f hard abort — dead market", display, adx_val or 0)
-        regime_raw = detect_regime(h4_snap, asset_type).get("regime", "UNKNOWN")
+        regime_raw = detect_regime(_regime_snap, asset_type).get("regime", "UNKNOWN")
         regime = _get_smoothed_regime(regime_context, pair_id, regime_raw)
         return _zero_result(pair, regime, trend_detail, feed_status, reason="adx_hard_abort",
                             adx_val=adx_val, direction=direction)
 
     # ── FACTOR 2: Momentum quality ────────────────────────────────────────────
     mom_quality = _momentum_quality(
-        h4_snap,
+        _mom_snap,
         direction,
         asset_type,
         score_group=score_group,
@@ -2594,7 +2682,7 @@ def compute_factor_scores(
     _bbw_pct = h4_snap.get("bbWidth_pct")
     if _bbw_pct is None:
         _bbw_pct = h4_snap.get("bb_width_pct")
-    regime_raw = detect_regime(h4_snap, asset_type, bb_width_pct=_bbw_pct).get("regime", "UNKNOWN")
+    regime_raw = detect_regime(_regime_snap, asset_type, bb_width_pct=_bbw_pct).get("regime", "UNKNOWN")
     regime = _get_smoothed_regime(regime_context, pair_id, regime_raw)
 
     # ── Final score ───────────────────────────────────────────────────────────
@@ -2965,6 +3053,10 @@ def compute_factor_scores(
         "weights": {"trend": 1.0, "momentum": _eff_mom_w, "addon": _eff_addon_w, "base": _eff_base_w},
         "asset_type": asset_type,
         "score_group": score_group,
+        "scoring_profile": scoring_profile_public_dict(scoring_profile),
+        "scoring_style": scoring_profile.get("style"),
+        "momentum_timeframe": scoring_profile.get("momentum_tf"),
+        "regime_timeframe": scoring_profile.get("regime_tf"),
         "engine_a_asset_diagnostics": asset_diagnostics,
         "structure_context_adjustment": structure_adjustment,
         "engine_a_correlated_overlay_guard": correlated_overlay_guard,

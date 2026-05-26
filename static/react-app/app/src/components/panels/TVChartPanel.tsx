@@ -2749,10 +2749,32 @@ export default function TVChartPanel() {
           : null,
         provider: chartPayload?.chart_provider || chartPayload?.candle_provider || null,
       };
+      const candidateStyle = firstString(chartCandidate?.style)?.toLowerCase();
+      const scoringProfile = asRecord(chartCandidate?.scoringProfile);
       const meta = buildScreenshotMeta({
         width: downscaled.width,
         height: downscaled.height,
         chart_timeframe: tfForBackend,
+        analyze_style:
+          candidateStyle && ['scalp', 'intraday', 'swing'].includes(candidateStyle)
+            ? candidateStyle
+            : undefined,
+        scoring_timeframes: Array.isArray(chartCandidate?.scoringTimeframes)
+          ? chartCandidate.scoringTimeframes
+          : undefined,
+        momentum_timeframe: firstString(
+          chartCandidate?.momentumTimeframe,
+          scoringProfile.momentumTf as string | undefined,
+        ),
+        regime_timeframe: firstString(
+          chartCandidate?.regimeTimeframe,
+          scoringProfile.regimeTf as string | undefined,
+        ),
+        execution_timeframe: firstString(
+          chartCandidate?.executionTimeframe,
+          scoringProfile.executionTf as string | undefined,
+        ),
+        signal_style: candidateStyle,
         overlays,
         visible_range_start: visibleRange?.from != null ? String(visibleRange.from) : undefined,
         visible_range_end: visibleRange?.to != null ? String(visibleRange.to) : undefined,

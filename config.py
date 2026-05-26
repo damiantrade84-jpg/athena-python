@@ -972,6 +972,37 @@ CONFIG: dict = {
     # Engine A class/score_group overrides. Disabled by default so the unified
     # factor formula keeps historical behavior unless a class is explicitly tuned.
     "ENGINE_A_SCORE_GROUP_ADJUSTMENTS_ENABLED": False,
+    "ENGINE_A_SCORING_PROFILE": {
+        "ENABLED": True,
+        "DEFAULT_BY_CLASS": {
+            "default": {
+                "trend_layers": [
+                    {"tf": "D1", "weight_key": "d1_ema_trend", "fast_ema": "ema21", "slow_ema": "ema200"},
+                    {"tf": "H4", "weight_key": "h4_ema_trend", "fast_ema": "ema21", "slow_ema": "ema50"},
+                    {"tf": "H1", "weight_key": "ema_trend", "fast_ema": "ema21", "slow_ema": "ema50"},
+                ],
+                "momentum_tf": "H4",
+                "regime_tf": "H4",
+            },
+        },
+        "BY_STYLE": {
+            "swing": {
+                "trend_weights": {"d1_ema_trend": 0.50, "h4_ema_trend": 0.30, "ema_trend": 0.20},
+                "execution_tf": "D1",
+                "chart_tf": "D1",
+            },
+            "intraday": {
+                "trend_weights": {"d1_ema_trend": 0.42, "h4_ema_trend": 0.33, "ema_trend": 0.25},
+                "execution_tf": "H4",
+                "chart_tf": "H4",
+            },
+            "scalp": {
+                "trend_weights": {"d1_ema_trend": 0.25, "h4_ema_trend": 0.35, "ema_trend": 0.40},
+                "execution_tf": "H1",
+                "chart_tf": "H1",
+            },
+        },
+    },
     "ENGINE_A_FACTOR_WEIGHTS_BY_CLASS": {},
     "ENGINE_A_DIRECTIONAL_RAMP_BY_CLASS": {},
     "ENGINE_A_ADDON_UNSUPPORTED_SPLIT_BY_CLASS": {},

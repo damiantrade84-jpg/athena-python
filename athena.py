@@ -12762,7 +12762,7 @@ def analyze_pair(
 
     # SCALP:            D1 trend gate, H4 momentum, H1 entry + H1 stochastic
 
-    _style = (style or "swing").lower()
+    _style = _resolve_scan_style(_normalize_style(style or "auto"), pair)
 
     if _style == "intraday":
         _cf_d1i, _cf_h4i, _cf_h1i = d1i, h4i, h1i
@@ -12984,6 +12984,7 @@ def analyze_pair(
         intermarket_context=_intermarket_raw_context,
         asset_prices=_asset_prices,
         benchmark_prices=_benchmark_prices,
+        style=_style,
     )
 
     # For SCALP: warn if D1 trend disagrees with signal direction
@@ -13382,7 +13383,17 @@ def analyze_pair(
     except Exception as _ssi_err:
         log.debug(f"[SSI] Engine A sample skipped: {_ssi_err}")
 
-    _execution_tf = "H4"
+    from engine_a_scoring_profile import (
+        resolve_engine_a_scoring_profile,
+        scoring_profile_public_dict,
+    )
+
+    _scoring_profile = resolve_engine_a_scoring_profile(
+        score_group=_score_group,
+        asset_type=pair.get("type", "other"),
+        style=_style,
+    )
+    _execution_tf = str(_scoring_profile.get("execution_tf") or "H4")
     _execution_candles = {"H4": h4, "D1": d1, "H1": h1}.get(_execution_tf, h4)
     _last_confirmed_candle_ts = None
     if _execution_candles:
@@ -13443,6 +13454,10 @@ def analyze_pair(
         "threshold": _threshold,
         "liveThreshold": _threshold,
         "executionTimeframe": _execution_tf,
+        "scoringProfile": scoring_profile_public_dict(_scoring_profile),
+        "scoringTimeframes": list(_scoring_profile.get("trend_timeframes") or []),
+        "momentumTimeframe": _scoring_profile.get("momentum_tf"),
+        "regimeTimeframe": _scoring_profile.get("regime_tf"),
         "lastConfirmedCandleTs": _last_confirmed_candle_ts,
         "confirmedSplitFailed": bool(_confirmed_split_failures),
         "confirmedSplitFailedTimeframes": sorted(_confirmed_split_failures),
