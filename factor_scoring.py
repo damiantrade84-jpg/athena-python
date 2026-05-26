@@ -1966,12 +1966,100 @@ def _oi_addon(oi_context: dict, direction: str) -> float:
         return _ADDON_NEUTRAL
 
 
+def _volume_price_concordance(
+    h4_candles: list | None,
+    direction: str,
+    lookback: int = 5,
+) -> float:
+    """Fraction of recent bars where volume aligns with direction. Returns -1..+1."""
+    if not h4_candles or len(h4_candles) < lookback + 1:
+        return 0.0
+    window = h4_candles[-(lookback + 1):]
+    aligned = 0
+    total = 0
+    is_long = direction.upper() == "LONG"
+    for i in range(1, len(window)):
+        vol = float(window[i].get("vol", 0) or 0)
+        if vol <= 0:
+            continue
+        price_up = float(window[i].get("close", 0)) > float(window[i - 1].get("close", 0))
+        total += 1
+        if (is_long and price_up) or (not is_long and not price_up):
+            aligned += 1
+    if total == 0:
+        return 0.0
+    return (aligned / total) * 2.0 - 1.0
+
+
+def _stock_volume_addon_with_status(
+    h4_candles: list | None,
+    direction: str,
+    volume_ratio: float | None,
+) -> tuple[float, str]:
+    """Volume confirmation addon for stocks/ETFs using EODHD-overlaid H4 candles."""
+    cfg = CONFIG.get("ENGINE_A_STOCK_VOLUME_ADDON") or {}
+    min_vol_bars = int(cfg.get("MIN_VOLUME_BARS", 10))
+
+    if not h4_candles or len(h4_candles) < 20:
+        return _ADDON_NEUTRAL, "unsupported"
+
+    vols = [float(c.get("vol", 0) or 0) for c in h4_candles[-20:]]
+    nonzero = sum(1 for v in vols if v > 0)
+    if nonzero < min_vol_bars:
+        return _ADDON_NEUTRAL, "unsupported"
+
+    vol_hi = float(cfg.get("VOL_RATIO_HIGH", 1.5))
+    vol_lo = float(cfg.get("VOL_RATIO_LOW", 0.5))
+    obv_lookback = int(cfg.get("OBV_LOOKBACK", 20))
+    conc_lookback = int(cfg.get("CONCORDANCE_LOOKBACK", 5))
+
+    # Sub-signal 1: volume ratio vs SMA
+    latest_vol, vol_ma = _h4_volume_vs_ma(h4_candles, obv_lookback)
+    vr_score = 0.0
+    if latest_vol is not None and vol_ma is not None and vol_ma > 0:
+        ratio = latest_vol / vol_ma
+        if ratio >= vol_hi:
+            vr_score = 1.0
+        elif ratio <= vol_lo:
+            vr_score = -1.0
+        else:
+            vr_score = (ratio - 1.0) / (vol_hi - 1.0) if ratio >= 1.0 else (ratio - 1.0) / (1.0 - vol_lo)
+
+    # Sub-signal 2: OBV trend alignment
+    from indicators import calc_obv_trend
+    obv_trend = calc_obv_trend(h4_candles, lookback=obv_lookback)
+    obv_score = 0.0
+    if obv_trend == "confirming":
+        obv_score = 1.0
+    elif obv_trend == "diverging_bearish" and direction.upper() == "LONG":
+        obv_score = -1.0
+    elif obv_trend == "diverging_bullish" and direction.upper() == "SHORT":
+        obv_score = -1.0
+
+    # Sub-signal 3: volume-price concordance
+    conc_score = _volume_price_concordance(h4_candles, direction, lookback=conc_lookback)
+
+    w_vr = float(cfg.get("WEIGHT_VOL_RATIO", 0.50))
+    w_obv = float(cfg.get("WEIGHT_OBV", 0.30))
+    w_conc = float(cfg.get("WEIGHT_VOL_PRICE_CONCORDANCE", 0.20))
+    combined = vr_score * w_vr + obv_score * w_obv + conc_score * w_conc
+
+    if combined > 0:
+        val = round(combined * _ADDON_CONFIRM, 4)
+    else:
+        val = round(combined * abs(_ADDON_AGAINST), 4)
+    val = max(_ADDON_AGAINST, min(_ADDON_CONFIRM, val))
+    return val, "ok"
+
+
 def _asset_addon(
     pair: dict,
     direction: str,
     funding_rate: Optional[float],
     bar_time: Optional[str],
     oi_context: Optional[dict] = None,
+    h4_candles: list | None = None,
+    volume_ratio: float | None = None,
 ) -> tuple:
     """Resolve the single asset-class-specific addon factor.
 
@@ -2011,12 +2099,22 @@ def _asset_addon(
     cot_asset_types = set(CONFIG.get("ENGINE_A_COT_ADDON_ASSET_TYPES", ["commodity"]) or [])
     if asset_type in cot_asset_types:
         addon_type = "cot_proxy" if asset_type in ("stock", "index") else "cot"
-        if not _cot_formula_supported(display):
-            return _ADDON_NEUTRAL, addon_type, "unsupported"
-        val, status = _cot_addon_with_status(display, asset_type, direction, bar_time)
-        return val, addon_type, status
+        if _cot_formula_supported(display):
+            val, status = _cot_addon_with_status(display, asset_type, direction, bar_time)
+            return val, addon_type, status
+        vol_addon_cfg = CONFIG.get("ENGINE_A_STOCK_VOLUME_ADDON") or {}
+        vol_addon_types = set(vol_addon_cfg.get("ASSET_TYPES", ["stock", "etf", "etf_bond", "index"]))
+        if vol_addon_cfg.get("ENABLED", False) and asset_type in vol_addon_types:
+            val, status = _stock_volume_addon_with_status(h4_candles, direction, volume_ratio)
+            return val, "volume", status
+        return _ADDON_NEUTRAL, addon_type, "unsupported"
 
-    # stock / index — no addon
+    vol_addon_cfg = CONFIG.get("ENGINE_A_STOCK_VOLUME_ADDON") or {}
+    vol_addon_types = set(vol_addon_cfg.get("ASSET_TYPES", ["stock", "etf", "etf_bond", "index"]))
+    if vol_addon_cfg.get("ENABLED", False) and asset_type in vol_addon_types:
+        val, status = _stock_volume_addon_with_status(h4_candles, direction, volume_ratio)
+        return val, "volume", status
+
     return _ADDON_NEUTRAL, "none", "unsupported"
 
 
@@ -2507,7 +2605,8 @@ def compute_factor_scores(
 
     # ── ADDON: Asset-specific secondary factor ────────────────────────────────
     addon_val, addon_type, addon_status = _asset_addon(
-        pair, direction, funding_rate, bar_time, oi_context=oi_context
+        pair, direction, funding_rate, bar_time, oi_context=oi_context,
+        h4_candles=h4_candles, volume_ratio=volume_ratio,
     )
     addon_val_before_research = addon_val
     feed_status["addon"] = f"{addon_type}:{addon_status}"

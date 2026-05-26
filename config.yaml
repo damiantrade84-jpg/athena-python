@@ -555,6 +555,17 @@ ENGINE_A_VOLATILITY_REGIME_MULTIPLIERS:
 ENGINE_A_VOLATILITY_REGIME_MULT_BOUNDS: { min: 0.90, max: 1.05 }
 
 # Optional US cash-session weighting for stocks/indices/ETFs. UTC hours are
+# Volume confirmation addon for stocks/ETFs. Uses EODHD exchange volume overlaid
+# onto H4 candles. Activates the addon weight that was previously dead for stocks.
+ENGINE_A_STOCK_VOLUME_ADDON:
+  ENABLED: true
+  ASSET_TYPES: ["stock", "etf", "etf_bond", "index"]
+  VOL_RATIO_HIGH: 1.5
+  VOL_RATIO_LOW: 0.5
+  OBV_LOOKBACK: 20
+  CONCORDANCE_LOOKBACK: 5
+  MIN_VOLUME_BARS: 10
+
 # config values so DST/session experiments do not require code changes.
 ENGINE_A_EQUITY_SESSION_LIQUIDITY_WEIGHTING:
   ENABLED: true

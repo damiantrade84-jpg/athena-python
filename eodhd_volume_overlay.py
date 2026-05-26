@@ -5,7 +5,7 @@ from __future__ import annotations
 from candles_cache import candle_time_epoch_utc
 from config import CONFIG
 
-_EODHD_VOLUME_TYPES = {"stock", "commodity", "index", "forex"}
+_EODHD_VOLUME_TYPES = {"stock", "commodity", "index", "forex", "etf", "etf_bond"}
 _EODHD_VOLUME_TIMEFRAMES = {"M1", "M5", "M15", "H1", "H4", "D1"}
 _INTRADAY_TFS = {"M1", "M5", "M15", "H1", "H4"}
 
@@ -179,7 +179,7 @@ def is_eodhd_volume_whitelisted(pair: dict | None, tf: str) -> bool:
     display = str((pair or {}).get("display") or "")
     tf_key = str(tf or "").upper()
     keys = [symbol, display]
-    if str((pair or {}).get("type") or "").lower() == "stock":
+    if str((pair or {}).get("type") or "").lower() in ("stock", "etf", "etf_bond"):
         keys.extend([f"{symbol}.US", f"{display}.US"])
     allowed = None
     for key in keys:

@@ -12100,18 +12100,20 @@ def api_open_trades_timed():
         _t0 = _time.perf_counter()
         from mt5_executor import mt5_get_positions
         _res = mt5_get_positions()
-        _timing_ms["mt5_ms"] = round((_time.perf_counter() - _t0) * 1000, 1)
         if isinstance(_res, dict) and _res.get("error"):
+            _timing_ms["mt5_ms"] = round((_time.perf_counter() - _t0) * 1000, 1)
             return {"error": _res["error"]}
+        _timing_ms["mt5_ms"] = round((_time.perf_counter() - _t0) * 1000, 1)
         return _res
 
     def _fetch_bybit_positions():
         _t0 = _time.perf_counter()
         from bybit_executor import bybit_get_positions
         _res = bybit_get_positions()
-        _timing_ms["bybit_ms"] = round((_time.perf_counter() - _t0) * 1000, 1)
         if isinstance(_res, dict) and _res.get("error"):
+            _timing_ms["bybit_ms"] = round((_time.perf_counter() - _t0) * 1000, 1)
             return {"error": _res["error"]}
+        _timing_ms["bybit_ms"] = round((_time.perf_counter() - _t0) * 1000, 1)
         return _res
 
     try:
@@ -12816,7 +12818,7 @@ def analyze_pair(
     vols = [c["vol"] for c in h1]
     _ptype = _asset_type
 
-    if _ptype in ("stock", "index"):
+    if _ptype in ("stock", "index", "etf", "etf_bond"):
         # TOD Z-Scoring for U-Shaped Volume (compare current hour to same-hour history)
         try:
             current_dt = datetime.fromisoformat(

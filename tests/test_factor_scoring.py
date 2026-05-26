@@ -2138,3 +2138,95 @@ def test_late_trend_diagnostics_populated_when_adjustment_disabled(monkeypatch):
     assert diag["adx_value"] == pytest.approx(21.66)
     assert diag["adx_below_threshold"] is True
     assert diag["late_trend_adjustment_applied"] is False
+
+
+# ── Stock/ETF Volume Addon ───────────────────────────────────────────────────
+
+
+def _rising_volume_candles(n=30, direction="LONG"):
+    """H4 candles with rising volume aligned with direction."""
+    rows = []
+    close = 200.0
+    vol = 500.0
+    step = 0.5 if direction == "LONG" else -0.5
+    for i in range(n):
+        close += step
+        vol += 20.0
+        rows.append({
+            "open": close - step,
+            "high": close + 0.3,
+            "low": close - 0.3,
+            "close": close,
+            "vol": vol,
+        })
+    return rows
+
+
+def test_stock_volume_addon_disabled_returns_unsupported(monkeypatch):
+    monkeypatch.setitem(CONFIG, "ENGINE_A_STOCK_VOLUME_ADDON", {"ENABLED": False})
+    monkeypatch.setitem(CONFIG, "ENGINE_A_COT_ADDON_ASSET_TYPES", ["commodity"])
+    result = _score(
+        pair={"type": "stock", "display": "PLTR"},
+        h4_candles=_rising_volume_candles(),
+    )
+    assert result["addon_unsupported"] is True
+
+
+def test_stock_volume_addon_with_volume_data(monkeypatch):
+    monkeypatch.setitem(CONFIG, "ENGINE_A_COT_ADDON_ASSET_TYPES", ["commodity"])
+    monkeypatch.setitem(CONFIG, "ENGINE_A_STOCK_VOLUME_ADDON", {
+        "ENABLED": True,
+        "ASSET_TYPES": ["stock", "etf", "etf_bond", "index"],
+        "MIN_VOLUME_BARS": 5,
+    })
+    result = _score(
+        pair={"type": "stock", "display": "PLTR"},
+        h4_candles=_rising_volume_candles(30, "LONG"),
+    )
+    assert result["addon_unsupported"] is False
+    assert result.get("addon_type") == "volume"
+
+
+def test_stock_volume_addon_zero_volume_fallback(monkeypatch):
+    monkeypatch.setitem(CONFIG, "ENGINE_A_COT_ADDON_ASSET_TYPES", ["commodity"])
+    monkeypatch.setitem(CONFIG, "ENGINE_A_STOCK_VOLUME_ADDON", {
+        "ENABLED": True,
+        "ASSET_TYPES": ["stock"],
+        "MIN_VOLUME_BARS": 10,
+    })
+    zero_vol_candles = [
+        {"open": 100, "high": 101, "low": 99, "close": 100.5, "vol": 0}
+        for _ in range(30)
+    ]
+    result = _score(
+        pair={"type": "stock", "display": "PLTR"},
+        h4_candles=zero_vol_candles,
+    )
+    assert result["addon_unsupported"] is True
+
+
+def test_stock_volume_addon_confirms_long(monkeypatch):
+    monkeypatch.setitem(CONFIG, "ENGINE_A_STOCK_VOLUME_ADDON", {
+        "ENABLED": True,
+        "ASSET_TYPES": ["stock"],
+        "MIN_VOLUME_BARS": 5,
+    })
+    candles = _rising_volume_candles(30, "LONG")
+    from factor_scoring import _stock_volume_addon_with_status
+    val, status = _stock_volume_addon_with_status(candles, "LONG", 1.8)
+    assert status == "ok"
+    assert val > 0
+
+
+def test_etf_volume_addon_activates(monkeypatch):
+    monkeypatch.setitem(CONFIG, "ENGINE_A_STOCK_VOLUME_ADDON", {
+        "ENABLED": True,
+        "ASSET_TYPES": ["stock", "etf", "etf_bond"],
+        "MIN_VOLUME_BARS": 5,
+    })
+    result = _score(
+        pair={"type": "etf", "display": "SPY"},
+        h4_candles=_rising_volume_candles(30, "LONG"),
+    )
+    assert result["addon_unsupported"] is False
+    assert result.get("addon_type") == "volume"
