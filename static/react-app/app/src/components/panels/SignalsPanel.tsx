@@ -102,6 +102,22 @@ function isWatchlist(s: EngineASignal): boolean {
   return tier.includes('watch') || tier === 'skip' || tier === 'blocked';
 }
 
+/** MT5 ETF universe (matches athena.ETF_PAIRS displays). Used when legacy scans tagged type=stock. */
+const KNOWN_ETF_DISPLAYS = new Set([
+  'SPY', 'QQQ', 'GLD', 'TLT', 'IWM', 'EEM', 'DIA', 'GDX', 'SOXX', 'XLE', 'SLV', 'USO',
+]);
+
+function isEtfSignalType(signal: EngineASignal): boolean {
+  const t = (signal.type || '').trim().toLowerCase();
+  if (t === 'etf' || t === 'etf_bond') return true;
+  const display = String(signal.display || signal.pair || signal.symbol || '')
+    .toUpperCase()
+    .replace(/\.US$/i, '')
+    .split('/')[0]
+    .trim();
+  return KNOWN_ETF_DISPLAYS.has(display);
+}
+
 /** Labels for Engine B scanFunnel keys returned by /api/scan-naked. */
 const ENGINE_B_FUNNEL_LABELS: Record<string, string> = {
   passed: 'Passed',
@@ -335,7 +351,7 @@ export default function SignalsPanel() {
       if (assetClass !== 'all') {
         const t = (r.signal.type || '').toLowerCase();
         if (assetClass === 'etf') {
-          if (t !== 'etf' && t !== 'etf_bond') return false;
+          if (!isEtfSignalType(r.signal)) return false;
         } else if (t !== assetClass) {
           return false;
         }

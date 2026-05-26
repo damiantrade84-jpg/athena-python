@@ -769,14 +769,14 @@ US_STOCK_PAIRS = [
 ETF_PAIRS = [
     {
         "symbol": "SPY.US",
-        "type": "stock",
+        "type": "etf",
         "display": "SPY",
         "source": "mt5",
         "enabled": True,
     },  # SQN +1.03 ✓
     {
         "symbol": "QQQ.US",
-        "type": "stock",
+        "type": "etf",
         "display": "QQQ",
         "source": "mt5",
         "enabled": True,
@@ -784,7 +784,7 @@ ETF_PAIRS = [
     },  # SQN +0.38
     {
         "symbol": "GLD.US",
-        "type": "stock",
+        "type": "etf",
         "display": "GLD",
         "source": "mt5",
         "enabled": True,
@@ -792,7 +792,7 @@ ETF_PAIRS = [
     },  # SQN +2.08, OOS:+2.98 ✓
     {
         "symbol": "TLT.US",
-        "type": "stock",
+        "type": "etf_bond",
         "display": "TLT",
         "source": "mt5",
         "enabled": True,
@@ -800,42 +800,42 @@ ETF_PAIRS = [
     },  # Treasury ETF
     {
         "symbol": "IWM.US",
-        "type": "stock",
+        "type": "etf",
         "display": "IWM",
         "source": "mt5",
         "enabled": True,
     },  # Russell 2000 ETF
     {
         "symbol": "EEM.US",
-        "type": "stock",
+        "type": "etf",
         "display": "EEM",
         "source": "mt5",
         "enabled": True,
     },  # Emerging Markets ETF
     {
         "symbol": "DIA.US",
-        "type": "stock",
+        "type": "etf",
         "display": "DIA",
         "source": "mt5",
         "enabled": True,
     },  # Pepperstone MT5 verified 2026-04-03
     {
         "symbol": "GDX.US",
-        "type": "stock",
+        "type": "etf",
         "display": "GDX",
         "source": "mt5",
         "enabled": True,
     },  # Pepperstone MT5 verified 2026-04-03
     {
         "symbol": "SOXX.US",
-        "type": "stock",
+        "type": "etf",
         "display": "SOXX",
         "source": "mt5",
         "enabled": True,
     },  # Pepperstone MT5 verified 2026-04-03
     {
         "symbol": "XLE.US",
-        "type": "stock",
+        "type": "etf",
         "display": "XLE",
         "source": "mt5",
         "enabled": True,
@@ -843,14 +843,14 @@ ETF_PAIRS = [
     },  # Energy Sector ETF
     {
         "symbol": "SLV.US",
-        "type": "stock",
+        "type": "etf",
         "display": "SLV",
         "source": "mt5",
         "enabled": True,
     },  # Silver ETF
     {
         "symbol": "USO.US",
-        "type": "stock",
+        "type": "etf",
         "display": "USO",
         "source": "mt5",
         "enabled": True,

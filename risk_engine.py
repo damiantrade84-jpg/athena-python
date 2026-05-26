@@ -710,13 +710,19 @@ def _calc_volume(
             volume = float(_cfg_max)
 
     if volume < vol_min:
-        log.warning(f"[RISK] volume {volume:.6f} < vol_min {vol_min} — too small")
-        return 0.0  # Too small — reject rather than round up
+        if is_stock and vol_step >= 1.0:
+            volume = max(vol_step, 1.0)
+        else:
+            log.warning(f"[RISK] volume {volume:.6f} < vol_min {vol_min} — too small")
+            return 0.0  # Too small — reject rather than round up
 
     # Round down to nearest step
     volume = math.floor(volume / vol_step) * vol_step if vol_step > 0 else volume
     volume = min(volume, vol_max)
     volume = round(volume, 6 if is_crypto else (0 if is_stock else 2))
+
+    if is_stock and vol_step >= 1.0 and volume <= 0:
+        volume = min(max(vol_step, 1.0), vol_max)
 
     return volume
 
@@ -761,6 +767,17 @@ def _round_volume_down(volume: float, vol_step: float, decimals: int) -> float:
     return round(volume, decimals)
 
 
+def _stock_whole_share_min(
+    asset_type: str,
+    vol_min: float,
+    vol_step: float,
+) -> float:
+    """When MT5 reports fractional volume_min but whole-share volume_step, use 1 share."""
+    if asset_type != "stock" or vol_step < 1.0:
+        return vol_min
+    return max(vol_min, vol_step, 1.0)
+
+
 def resolve_min_lot_volume(
     symbol_info: dict | None,
     asset_type: str,
@@ -769,8 +786,11 @@ def resolve_min_lot_volume(
     vol_min, vol_max, vol_step, decimals = _symbol_volume_constraints(
         symbol_info, asset_type
     )
+    vol_min = _stock_whole_share_min(asset_type, vol_min, vol_step)
     volume = _round_volume_down(vol_min, vol_step, decimals)
     if volume < vol_min:
+        if asset_type == "stock" and vol_step >= 1.0:
+            return min(max(vol_step, 1.0), vol_max)
         return 0.0
     return min(volume, vol_max)
 
@@ -1221,10 +1241,13 @@ def risk_check(
             volume = 1.0
 
     if volume <= 0:
+        _si_vol_min = symbol_info.get("volume_min") if symbol_info else None
+        _si_vol_step = symbol_info.get("volume_step") if symbol_info else None
         log.warning(
             f"{prefix} REJECTED: volume is 0 — mode={effective_mode}, "
             f"balance={account_balance}, entry={entry}, SL={sl}, dist={abs(entry - sl):.6f}, "
-            f"asset={asset_type}, symbol_info={'yes' if symbol_info else 'no'}"
+            f"asset={asset_type}, symbol_info={'yes' if symbol_info else 'no'}, "
+            f"vol_min={_si_vol_min}, vol_step={_si_vol_step}, volume_source={volume_source}"
         )
         return RiskApproval(False, 0.0, 0.0, 0.0, 0.0, dd, "ZERO_VOLUME")
 

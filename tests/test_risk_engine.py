@@ -960,6 +960,90 @@ class TestVolumeMode:
             "forex",
         ) == 0.01
 
+    def test_resolve_min_lot_volume_stock_fractional_min_whole_step(self):
+        """MT5 CFD stocks often report volume_min=0.01 but volume_step=1."""
+        symbol_info = {
+            "volume_min": 0.01,
+            "volume_step": 1.0,
+            "volume_max": 5000.0,
+        }
+        assert resolve_min_lot_volume(symbol_info, "stock") == 1.0
+
+    def test_min_lot_stock_approves_one_share(self):
+        symbol_info = {
+            "volume_min": 0.01,
+            "volume_step": 1.0,
+            "volume_max": 5000.0,
+            "trade_tick_size": 0.01,
+            "trade_tick_value": 0.01,
+        }
+        result = risk_check(
+            _make_signal(
+                pair="SPY",
+                type="stock",
+                price=500.0,
+                sl=490.0,
+                tp1=520.0,
+                tp2=540.0,
+            ),
+            10000,
+            10000,
+            [],
+            symbol_info=symbol_info,
+            volume_mode="min_lot",
+        )
+        assert result.approved is True
+        assert result.volume == 1.0
+        assert result.volume_mode == "min_lot"
+
+    def test_min_lot_stock_tick_value_zero_still_one_share(self):
+        symbol_info = {
+            "volume_min": 0.01,
+            "volume_step": 1.0,
+            "volume_max": 5000.0,
+            "trade_tick_size": 0.01,
+            "trade_tick_value": 0.0,
+        }
+        result = risk_check(
+            _make_signal(
+                pair="PYPL",
+                type="stock",
+                price=60.0,
+                sl=58.0,
+                tp1=64.0,
+            ),
+            10000,
+            10000,
+            [],
+            symbol_info=symbol_info,
+            volume_mode="min_lot",
+        )
+        assert result.approved is True
+        assert result.volume == 1.0
+
+    def test_preview_execution_volume_min_lot_stock(self):
+        symbol_info = {
+            "volume_min": 0.01,
+            "volume_step": 1.0,
+            "volume_max": 5000.0,
+            "trade_tick_size": 0.01,
+            "trade_tick_value": 0.01,
+        }
+        preview = risk_engine.preview_execution_volume(
+            _make_signal(
+                pair="SPY",
+                type="stock",
+                price=500.0,
+                sl=490.0,
+            ),
+            10000,
+            symbol_info=symbol_info,
+            volume_mode="min_lot",
+        )
+        assert preview["approved"] is True
+        assert preview["volume"] == 1.0
+        assert preview["venue"] == "mt5"
+
     def test_resolve_volume_mode_defaults_to_min_lot(self):
         assert resolve_volume_mode(None, "manual", {}) == "min_lot"
         assert resolve_volume_mode("calculated", "manual", {}) == "calculated"
