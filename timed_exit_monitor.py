@@ -1372,17 +1372,23 @@ def _evaluate_trail(
         peak_r_pre = prev_peak_pre if prev_peak_pre is not None else current_r
         if current_r > peak_r_pre:
             peak_r_pre = current_r
-        if arm_r > 0 and peak_r_pre >= arm_r:
-            if prev_peak_pre is None or current_r > prev_peak_pre:
-                _peak_r_state[state_key] = current_r
-                _persist_peak_r(state_key, current_r)
-                peak_r_pre = current_r
-            else:
-                _peak_r_state.setdefault(state_key, prev_peak_pre)
 
+        # Persist peak from first positive tick — not gated on arm_r —
+        # so protection survives between monitor cycles and restarts.
+        if peak_r_pre > 0 and (prev_peak_pre is None or peak_r_pre > prev_peak_pre):
+            _peak_r_state[state_key] = peak_r_pre
+            _persist_peak_r(state_key, peak_r_pre)
+        elif prev_peak_pre is not None:
+            _peak_r_state.setdefault(state_key, prev_peak_pre)
+
+        # Roundtrip close: arms once trade was ever in profit (peak > 0).
+        # Giveback close: requires peak reached arm_r (larger threshold).
+        if peak_r_pre > 0:
             roundtrip_close = current_r <= close_r
             giveback_close_pre = (
-                giveback_r_pre > 0 and (peak_r_pre - current_r) >= giveback_r_pre
+                peak_r_pre >= arm_r
+                and giveback_r_pre > 0
+                and (peak_r_pre - current_r) >= giveback_r_pre
             )
             if current_r < activation_r and (roundtrip_close or giveback_close_pre):
                 log.info(

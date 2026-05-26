@@ -831,6 +831,45 @@ class TestEvaluateTrail:
         assert roundtrip["peak_r"] == pytest.approx(0.4)
         assert roundtrip["current_r"] == pytest.approx(-0.05)
 
+    def test_pre_activation_roundtrip_closes_when_peak_below_arm_r(self, monkeypatch):
+        """Peak below arm_r still triggers roundtrip close at breakeven."""
+        import timed_exit_monitor as tem
+
+        tcfg = _get_timed_cfg(_cfg_fn({
+            "tp_mode": "trailing_atr",
+            "trail_activation_r": {"intraday": 1.0},
+            "pre_activation_profit_protect_enabled": True,
+            "pre_activation_profit_arm_r": {"intraday": 0.30},
+            "pre_activation_profit_close_r": {"intraday": 0.0},
+            "pre_activation_profit_giveback_r": {"intraday": 0.35},
+        }))
+        row = {"ticket": "T2", "pair": "EUR/USD", "audit_id": 1900}
+        state_key = "mt5:aid:1900"
+        monkeypatch.setattr(
+            tem,
+            "_compute_chandelier_trail",
+            lambda *a, **kw: pytest.fail("trail should not compute below activation"),
+        )
+
+        # Tick 1: trade peaks at 0.15R — below arm_r 0.30
+        armed = _evaluate_trail(
+            row, "intraday", "LONG", 1.1000, 1.0950, 1.10075, tcfg,
+            state_key=state_key, venue="mt5",
+        )
+        assert armed["action"] == "none"
+        assert armed["reason"] == "below_activation"
+        assert tem._peak_r_state[state_key] == pytest.approx(0.15)
+
+        # Tick 2: trade reverses to -0.10R — should close at roundtrip
+        roundtrip = _evaluate_trail(
+            row, "intraday", "LONG", 1.1000, 1.0950, 1.0995, tcfg,
+            state_key=state_key, venue="mt5",
+        )
+        assert roundtrip["action"] == "close"
+        assert roundtrip["reason"] == "profit_roundtrip"
+        assert roundtrip["peak_r"] == pytest.approx(0.15)
+        assert roundtrip["current_r"] == pytest.approx(-0.10)
+
 
 # ── Trail-fail-holds-previous-level (suggestion #4) ──────────────────────────
 
