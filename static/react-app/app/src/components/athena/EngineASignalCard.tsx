@@ -73,6 +73,33 @@ export default function EngineASignalCard({
   const diAlign = toNum(fd.diAlignMult, NaN);
   const adxMult = toNum(fd.adxMultiplier, NaN);
   const dirRamp = toNum(fd.directionalRampMult, NaN);
+  const trendCoherence = (fd.trendCoherence || {}) as Record<string, unknown>;
+  const trendAbortError = String(trendCoherence.error || '').trim();
+  const showDiChain =
+    !trendAbortError
+    && (Number.isFinite(diAlign) || Number.isFinite(adxMult) || Number.isFinite(dirRamp));
+  const trendAbortNote = (() => {
+    if (trendAbortError === 'weighted_tf_tie') {
+      const d1 = trendCoherence.d1;
+      const h4 = trendCoherence.h4;
+      const h1 = trendCoherence.h1;
+      const parts = [
+        d1 ? `D1 ${d1}` : null,
+        h4 ? `H4 ${h4}` : null,
+        h1 ? `H1 ${h1}` : null,
+      ].filter(Boolean);
+      return parts.length
+        ? `Multi-TF EMA vote tie (${parts.join(', ')}) — Engine A cannot pick LONG vs SHORT.`
+        : 'Multi-TF EMA vote tie — Engine A cannot pick LONG vs SHORT.';
+    }
+    if (trendAbortError === 'no_ema_data') {
+      return 'Missing EMA data on one or more timeframes.';
+    }
+    if (engineABlockReason.includes('indeterminate_trend')) {
+      return 'Engine A trend vote did not produce a tradable direction.';
+    }
+    return null;
+  })();
   const pair = signal.display || signal.pair || signal.symbol || '—';
   const type = signal.type;
   const livePrice = toNum(signal.livePrice, NaN);
@@ -157,7 +184,10 @@ export default function EngineASignalCard({
               <span className="font-medium text-foreground/80">not</span> the sum of the factor boxes below.
             </p>
           )}
-          {(Number.isFinite(diAlign) || Number.isFinite(adxMult) || Number.isFinite(dirRamp)) && (
+          {trendAbortNote && (
+            <p className="text-[9px] text-muted-foreground leading-snug">{trendAbortNote}</p>
+          )}
+          {showDiChain && (
             <p className="text-[9px] text-muted-foreground leading-snug">
               Score chain:{' '}
               {Number.isFinite(diAlign) && (

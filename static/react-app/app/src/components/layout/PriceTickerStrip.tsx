@@ -9,6 +9,9 @@ import { TrendingUp, TrendingDown, Minus, WifiOff } from 'lucide-react';
  * change vs the first observed price for that pair (so users see a live tick
  * direction, not just an absolute number). Purely a visual aid — never used
  * for any trading decision.
+ *
+ * Intentionally not mounted from MainLayout (global strip removed for perf).
+ * Re-mount from DashboardPanel only if a compact dashboard variant is requested.
  */
 
 type TickerRow = {

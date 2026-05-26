@@ -12071,7 +12071,10 @@ def api_open_trades_timed():
     - timed_tp_mode / trail_activation_r: global TIMED_EXIT TP policy
     - be_trigger_min / close_trigger_min: hybrid timed exit windows (omitted for Engine D)
     Used by the dashboard countdown timer on each position card.
+
+    Response includes read-only ``_server_timing_ms`` (diagnostic; safe to ignore).
     """
+    import time as _time
     from datetime import datetime, timezone as _tz
     from athena_app.services.position_sl_diagnostic import enrich_open_trade_with_sl_diagnostic
     from risk_engine import resolve_max_sl_pct
@@ -12082,6 +12085,9 @@ def api_open_trades_timed():
         _match_audit_row_for_position,
     )
 
+    _t_request = _time.perf_counter()
+    _timing_ms: dict[str, float | int] = {}
+
     tcfg = _get_timed_cfg(lambda: CONFIG)
 
     def _recompute_for_trade(audit_row: dict, trade_style: str) -> dict | None:
@@ -12091,15 +12097,19 @@ def api_open_trades_timed():
     now_ts = datetime.now(_tz.utc).timestamp()
 
     def _fetch_mt5_positions():
+        _t0 = _time.perf_counter()
         from mt5_executor import mt5_get_positions
         _res = mt5_get_positions()
+        _timing_ms["mt5_ms"] = round((_time.perf_counter() - _t0) * 1000, 1)
         if isinstance(_res, dict) and _res.get("error"):
             return {"error": _res["error"]}
         return _res
 
     def _fetch_bybit_positions():
+        _t0 = _time.perf_counter()
         from bybit_executor import bybit_get_positions
         _res = bybit_get_positions()
+        _timing_ms["bybit_ms"] = round((_time.perf_counter() - _t0) * 1000, 1)
         if isinstance(_res, dict) and _res.get("error"):
             return {"error": _res["error"]}
         return _res
@@ -12109,11 +12119,13 @@ def api_open_trades_timed():
 
         # Both broker reads are independent and read-only. Fetching them in
         # parallel keeps dashboard latency at max(MT5, Bybit), not MT5+Bybit.
+        _t_brokers = _time.perf_counter()
         with ThreadPoolExecutor(max_workers=2) as pool:
             mt5_future = pool.submit(_fetch_mt5_positions)
             bybit_future = pool.submit(_fetch_bybit_positions)
             mt5_res = mt5_future.result()
             bybit_res = bybit_future.result()
+        _timing_ms["brokers_parallel_ms"] = round((_time.perf_counter() - _t_brokers) * 1000, 1)
     except Exception as e:
         return jsonify({"error": f"Broker position fetch failed: {e}"}), 500
 
@@ -12140,8 +12152,11 @@ def api_open_trades_timed():
         if p.get(key) is not None and str(p.get(key)).strip()
     }
 
+    _t_audit = _time.perf_counter()
     audit_rows = _load_recent_audit_rows(_AUDIT_DB)
+    _timing_ms["audit_load_ms"] = round((_time.perf_counter() - _t_audit) * 1000, 1)
     matched_audit_tickets: set[str] = set()
+    _enrich_elapsed_s = 0.0
 
     for p in all_positions:
         ticket = str(p.get("ticket", ""))
@@ -12284,6 +12299,7 @@ def api_open_trades_timed():
                 )
             except Exception:
                 _max_sl_pct = None
+        _t_enrich = _time.perf_counter()
         enrich_open_trade_with_sl_diagnostic(
             res_p,
             audit,
@@ -12291,25 +12307,35 @@ def api_open_trades_timed():
             recompute_levels_fn=_recompute_for_trade,
             max_sl_pct=_max_sl_pct,
         )
+        _enrich_elapsed_s += _time.perf_counter() - _t_enrich
 
         out.append(res_p)
 
+    _timing_ms["enrich_ms"] = round(_enrich_elapsed_s * 1000, 1)
+    _timing_ms["position_count"] = len(all_positions)
+
     try:
+        _t_unresolved = _time.perf_counter()
         audit_unresolved = _unresolved_audit_rows_for_display(
             _AUDIT_DB,
             mt5_open_tickets=mt5_open_tickets,
             bybit_open_ids=bybit_open_ids,
             matched_audit_tickets=matched_audit_tickets,
         )
+        _timing_ms["unresolved_ms"] = round((_time.perf_counter() - _t_unresolved) * 1000, 1)
     except Exception as e:
         log.warning("[OPEN-TRADES] unresolved audit row load failed: %s", e)
         audit_unresolved = []
+        _timing_ms["unresolved_ms"] = 0.0
+
+    _timing_ms["total_ms"] = round((_time.perf_counter() - _t_request) * 1000, 1)
 
     return jsonify({
         "positions": out,
         "count": len(out),
         "audit_unresolved": audit_unresolved,
         "audit_unresolved_count": len(audit_unresolved),
+        "_server_timing_ms": _timing_ms,
     })
 
 

@@ -2762,18 +2762,21 @@ export default function TVChartPanel() {
         scoring_timeframes: Array.isArray(chartCandidate?.scoringTimeframes)
           ? chartCandidate.scoringTimeframes
           : undefined,
-        momentum_timeframe: firstString(
-          chartCandidate?.momentumTimeframe,
-          scoringProfile.momentumTf as string | undefined,
-        ),
-        regime_timeframe: firstString(
-          chartCandidate?.regimeTimeframe,
-          scoringProfile.regimeTf as string | undefined,
-        ),
-        execution_timeframe: firstString(
-          chartCandidate?.executionTimeframe,
-          scoringProfile.executionTf as string | undefined,
-        ),
+        momentum_timeframe:
+          firstString(
+            chartCandidate?.momentumTimeframe,
+            scoringProfile.momentumTf as string | undefined,
+          ) ?? undefined,
+        regime_timeframe:
+          firstString(
+            chartCandidate?.regimeTimeframe,
+            scoringProfile.regimeTf as string | undefined,
+          ) ?? undefined,
+        execution_timeframe:
+          firstString(
+            chartCandidate?.executionTimeframe,
+            scoringProfile.executionTf as string | undefined,
+          ) ?? undefined,
         signal_style: candidateStyle,
         overlays,
         visible_range_start: visibleRange?.from != null ? String(visibleRange.from) : undefined,
