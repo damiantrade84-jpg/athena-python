@@ -548,16 +548,20 @@ def _previous_indicator_snap(
 ) -> dict | None:
     """Return the prior confirmed indicator snapshot for EMA hysteresis.
 
-    Uses the group-calibrated path when score_group + adjustments flag are active.
-    Falls back to universal behavior in all other cases (zero regression risk).
+    Must use the same indicator entry point as live ``analyze_pair`` (which calls
+    ``calc_indicators_with_normalized`` with ``score_group``). Using only
+    ``calc_indicators_for_engine_a`` on bar N-1 while the current bar stayed on
+    the universal path broke 2-bar EMA confirmation and zeroed forex trend votes.
     """
     if not isinstance(candles, list) or len(candles) < 2:
         return None
     try:
-        from indicators import calc_indicators_for_engine_a
+        from indicators import calc_indicators_with_normalized
 
-        prev_indicators = calc_indicators_for_engine_a(
-            candles[:-1], score_group=score_group, asset_type=asset_type
+        prev_indicators = calc_indicators_with_normalized(
+            candles[:-1],
+            asset_type or "other",
+            score_group=score_group,
         )
         prev_snap = prev_indicators.get("snap") if isinstance(prev_indicators, dict) else None
         return prev_snap if isinstance(prev_snap, dict) else None

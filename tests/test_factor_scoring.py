@@ -9,10 +9,12 @@ from factor_scoring import (
     _coherent_trend_score,
     _momentum_quality,
     _oi_addon,
+    _previous_indicator_snap,
     build_oi_context_for_factor_scoring,
     compute_factor_scores,
     make_regime_smoothing_context,
 )
+from indicators import calc_indicators_with_normalized
 
 
 def _snap(direction="long", *, adx=30.0, include_adx=True, momentum=None):
@@ -855,6 +857,61 @@ def test_compute_factor_scores_uses_prior_candle_snapshots_for_hysteresis():
         "h4": True,
         "h1": True,
     }
+
+
+def _trending_forex_candles(n: int = 120, *, start: float = 1.10, step: float = 0.0008):
+    """Monotonic uptrend series long enough for EMA200 on D1-style windows."""
+    candles = []
+    price = start
+    for i in range(n):
+        candles.append(
+            {
+                "open": price,
+                "high": price + 0.0005,
+                "low": price - 0.0003,
+                "close": price,
+                "vol": 1000.0,
+                "time": f"2026-01-{(i % 28) + 1:02d}T12:00:00+00:00",
+            }
+        )
+        price += step
+    return candles
+
+
+def test_previous_indicator_snap_matches_live_analyze_pair_indicator_path():
+    """Regression: prev bar must use calc_indicators_with_normalized + score_group."""
+    candles = _trending_forex_candles(120)
+    score_group = "forex_majors"
+    prev = _previous_indicator_snap(candles, score_group=score_group, asset_type="forex")
+    expected = calc_indicators_with_normalized(
+        candles[:-1], "forex", score_group=score_group
+    ).get("snap")
+    assert isinstance(prev, dict)
+    assert isinstance(expected, dict)
+    for key in ("ema21", "ema50", "ema200"):
+        assert prev.get(key) == expected.get(key)
+
+
+def test_forex_trending_candles_not_indeterminate_when_group_adjustments_on(monkeypatch):
+    """May 2026 regression: path-split hysteresis aborted all forex trend votes."""
+    monkeypatch.setitem(CONFIG, "ENGINE_A_SCORE_GROUP_ADJUSTMENTS_ENABLED", True)
+    candles = _trending_forex_candles(240)
+    pair = {"type": "forex", "display": "EUR/USD", "symbol": "EURUSD"}
+    d1 = calc_indicators_with_normalized(candles, "forex", score_group="forex_majors")
+    h4 = calc_indicators_with_normalized(candles, "forex", score_group="forex_majors")
+    h1 = calc_indicators_with_normalized(candles, "forex", score_group="forex_majors")
+    result = compute_factor_scores(
+        d1["snap"],
+        h4["snap"],
+        h1["snap"],
+        pair,
+        candles,
+        candles,
+        candles,
+        1.0,
+    )
+    assert result.get("abort_reason") != "indeterminate_trend"
+    assert result.get("direction") in ("LONG", "SHORT")
 
 
 def test_intermarket_confirmation_adjusts_engine_a_when_enabled(monkeypatch):

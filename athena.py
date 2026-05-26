@@ -12651,9 +12651,10 @@ def analyze_pair(
                 _prefresh_err,
             )
 
-    d1i = calc_indicators_with_normalized(d1, pair.get("type", "stock"))
+    _asset_type = pair.get("type", "stock")
+    d1i = calc_indicators_with_normalized(d1, _asset_type, score_group=_score_group)
 
-    h4i = calc_indicators_with_normalized(h4, pair.get("type", "stock"))
+    h4i = calc_indicators_with_normalized(h4, _asset_type, score_group=_score_group)
 
     # Inject fib proximity into H4 snap so structure factor in compute_factor_scores() is non-None
     try:
@@ -12678,10 +12679,10 @@ def analyze_pair(
         h4i["snap"]["microstructure_exchange"] = _msig.get("_exchange")
         h4i["snap"]["microstructure_age_sec"] = round(_msig_age, 3)
 
-    h1i = calc_indicators_with_normalized(h1, pair.get("type", "stock"))
+    h1i = calc_indicators_with_normalized(h1, _asset_type, score_group=_score_group)
 
     vols = [c["vol"] for c in h1]
-    _ptype = pair.get("type", "stock")
+    _ptype = _asset_type
 
     if _ptype in ("stock", "index"):
         # TOD Z-Scoring for U-Shaped Volume (compare current hour to same-hour history)
