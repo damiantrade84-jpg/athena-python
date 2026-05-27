@@ -872,8 +872,34 @@ def _coerce_utc_datetime(value: Any) -> Optional[datetime]:
     return None
 
 
-def get_sessions_for_time(asset_type: str = "forex", when: Any = None) -> list:
-    """Return active session names using DST-aware local market clocks."""
+def get_sessions_for_time(asset_type: str = "forex", when: Any = None, *, symbol: str = "") -> list:
+    """Return active session names using DST-aware local market clocks.
+
+    When SESSION_QUALITY_ENABLED is true, delegates to session_contract and derives
+    active session names from the classification result.
+    """
+    if CONFIG.get("SESSION_QUALITY_ENABLED", False):
+        try:
+            from session_contract import classify_session
+            sc = classify_session(symbol=symbol, asset_class=asset_type, timestamp_utc=when)
+            n = sc.session_name
+            active = []
+            if "london" in n and ("ny" in n or "new_york" in n):
+                active = ["london", "new_york"]
+            elif "london" in n or "pre_london" in n:
+                active = ["london"]
+            elif "ny" in n or "new_york" in n or "us_" in n:
+                active = ["new_york"]
+            elif "asia" in n:
+                active = ["asia"]
+            if active:
+                return active
+            if asset_type == "crypto" and not sc.is_closed:
+                return ["off_hours_crypto"]
+            return ["off_hours"]
+        except Exception:
+            pass
+
     now_utc = (_coerce_utc_datetime(when) or _current_utc_datetime()).astimezone(timezone.utc)
     now_london_h = now_utc.astimezone(_TZ_LONDON).hour
     now_ny_h = now_utc.astimezone(_TZ_NEW_YORK).hour

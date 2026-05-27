@@ -59,18 +59,43 @@ _ASIAN_SESSION_PAIRS = {
 
 
 def _session_state(utc_hour: int, pair_display: str = "") -> dict:
-    """Evaluate session state using soft/strict modes."""
+    """Evaluate session state using soft/strict modes.
+
+    When SESSION_QUALITY_ENABLED is true, delegates to session_contract and maps
+    quality → {is_active, multiplier} preserving the existing return shape.
+    """
     try:
         from config import CONFIG
-        
+
+        if CONFIG.get("SESSION_QUALITY_ENABLED", False):
+            try:
+                from session_contract import classify_session, QUALITY_PREMIUM, QUALITY_NORMAL
+                sc = classify_session(symbol=pair_display, asset_class="forex")
+                is_active = sc.session_quality in (QUALITY_PREMIUM, QUALITY_NORMAL)
+                fx_cfg = CONFIG.get("FOREX_ENGINE", {}) or {}
+                soft_mult = float(fx_cfg.get("session_soft_multiplier", 0.75))
+                mode = fx_cfg.get("session_mode", "strict")
+                if sc.is_premium:
+                    mult = 1.0
+                elif sc.is_normal:
+                    mult = 0.90
+                elif mode == "soft":
+                    mult = soft_mult
+                    is_active = True
+                else:
+                    mult = 0.0
+                return {"is_active": is_active, "multiplier": mult}
+            except Exception:
+                log.debug("session_contract fallback to legacy _session_state", exc_info=True)
+
         if not CONFIG.get("FOREX_SESSION_FILTER", True):
             return {"is_active": True, "multiplier": 1.0}
-            
+
         fx_cfg = CONFIG.get("FOREX_ENGINE", {}) or {}
         mode = fx_cfg.get("session_mode", "strict")
         if mode == "off":
             return {"is_active": True, "multiplier": 1.0}
-        
+
         soft_mult = float(fx_cfg.get("session_soft_multiplier", 0.75))
         shoulder_enabled = bool(fx_cfg.get("session_shoulder_enabled", True))
         shoulder_mult = float(fx_cfg.get("session_shoulder_multiplier", 0.90))
@@ -107,10 +132,10 @@ def _session_state(utc_hour: int, pair_display: str = "") -> dict:
         return {"is_active": True, "multiplier": 1.0}
     if in_shoulder:
         return {"is_active": True, "multiplier": shoulder_mult}
-        
+
     if mode == "soft":
         return {"is_active": True, "multiplier": soft_mult}
-        
+
     return {"is_active": False, "multiplier": 0.0}
 
 

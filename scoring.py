@@ -441,12 +441,34 @@ def classify_signal_setup(
     return "trend_continuation"
 
 
-def get_session(bar_time: str | None = None) -> dict:
-    """Determine forex session label from UTC hour (liquidity buckets for UI).
+def get_session(
+    bar_time: str | None = None,
+    *,
+    asset_class: str = "forex",
+    symbol: str = "",
+    venue: str | None = None,
+) -> dict:
+    """Determine session label (liquidity bucket for UI).
 
     bar_time: ISO timestamp of a specific bar (e.g. backtests). If omitted, uses
               current UTC — use this for live scans so the badge matches scan time.
+
+    When SESSION_QUALITY_ENABLED is true, delegates to session_contract.classify_session
+    and maps the result to the legacy {name, quality, color} shape.
     """
+    if CONFIG.get("SESSION_QUALITY_ENABLED", False):
+        try:
+            from session_contract import classify_session, session_to_legacy_dict
+            sc = classify_session(
+                symbol=symbol,
+                asset_class=asset_class,
+                timestamp_utc=bar_time,
+                venue=venue,
+            )
+            return session_to_legacy_dict(sc)
+        except Exception:
+            log.debug("session_contract fallback to legacy get_session", exc_info=True)
+
     if bar_time:
         try:
             dt = datetime.fromisoformat(bar_time.replace("Z", "+00:00"))

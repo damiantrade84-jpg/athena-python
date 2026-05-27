@@ -2580,8 +2580,30 @@ class AutoTrader:
 # ── Session helpers ───────────────────────────────────────────────────────────
 
 
-def _current_sessions(now: datetime) -> list[str]:
-    """Return list of currently active session names."""
+def _current_sessions(now: datetime, *, asset_type: str = "forex", symbol: str = "") -> list[str]:
+    """Return list of currently active session names.
+
+    When SESSION_QUALITY_ENABLED is true, delegates to session_contract and maps
+    the result back to the coarse bucket names expected by AUTO_TRADE_SESSIONS config.
+    """
+    try:
+        from config import CONFIG
+        if CONFIG.get("SESSION_QUALITY_ENABLED", False):
+            from session_contract import classify_session
+            sc = classify_session(symbol=symbol, asset_class=asset_type, timestamp_utc=now)
+            n = sc.session_name
+            mapped: list[str] = []
+            if "london" in n and ("ny" in n or "new_york" in n):
+                mapped = ["london", "new_york", "london_ny_overlap"]
+            elif "london" in n or "pre_london" in n:
+                mapped = ["london"]
+            elif "ny" in n or "new_york" in n or "us_regular" in n:
+                mapped = ["new_york"]
+            elif "jse" in n:
+                mapped = ["jse"]
+            return mapped or ["off_hours"]
+    except Exception:
+        pass
 
     h = now.hour
 

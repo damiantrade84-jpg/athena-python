@@ -86,7 +86,34 @@ def _parse_utc_candle_time(value):
         return None
 
 
-def _forex_session_bucket(candle_time) -> dict:
+def _forex_session_bucket(candle_time, *, symbol: str = "") -> dict:
+    if config.CONFIG.get("SESSION_QUALITY_ENABLED", False):
+        try:
+            from session_contract import classify_session, session_quality_to_legacy
+            dt = _parse_utc_candle_time(candle_time)
+            sc = classify_session(symbol=symbol, asset_class="forex", timestamp_utc=dt or candle_time)
+            q = session_quality_to_legacy(sc.session_quality)
+            active = []
+            n = sc.session_name
+            if "london" in n and "ny" in n:
+                active = ["london", "new_york"]
+            elif "london" in n or "pre_london" in n:
+                active = ["london"]
+            elif "ny" in n or "new_york" in n:
+                active = ["new_york"]
+            elif "asian" in n or "asia" in n:
+                active = ["asia"]
+            else:
+                active = ["asia"] if q == "low" else []
+            return {
+                "session": sc.session_name,
+                "session_quality": q,
+                "sessions_active": active,
+                "utc_hour": dt.hour if dt else None,
+            }
+        except Exception:
+            pass
+
     dt = _parse_utc_candle_time(candle_time)
     if dt is None:
         return {
@@ -192,7 +219,27 @@ def _engine_b_forex_session_structure_context(
     }
 
 
-def _equity_session_bucket(candle_time) -> dict:
+def _equity_session_bucket(candle_time, *, asset_class: str = "stock", symbol: str = "", venue: str | None = None) -> dict:
+    if config.CONFIG.get("SESSION_QUALITY_ENABLED", False):
+        try:
+            from session_contract import classify_session, session_quality_to_legacy
+            dt = _parse_utc_candle_time(candle_time)
+            sc = classify_session(
+                symbol=symbol, asset_class=asset_class,
+                timestamp_utc=dt or candle_time, venue=venue,
+            )
+            q = session_quality_to_legacy(sc.session_quality)
+            active = ["us_cash"] if q in ("high", "medium") else []
+            decimal_hour = round(dt.hour + (dt.minute / 60.0), 2) if dt else None
+            return {
+                "session": sc.session_name,
+                "session_quality": q,
+                "sessions_active": active,
+                "utc_hour": decimal_hour,
+            }
+        except Exception:
+            pass
+
     dt = _parse_utc_candle_time(candle_time)
     if dt is None:
         return {
