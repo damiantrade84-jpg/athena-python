@@ -16,6 +16,7 @@ __all__ = [
     "strategies",
     "metrics",
     "reporting",
+    "reproducibility",
     "ai_analyst",
     "prompt_builder",
     "run_manager",

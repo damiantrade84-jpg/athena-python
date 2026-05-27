@@ -1353,7 +1353,11 @@ def _yfinance_symbol_for_pair(pair: dict) -> str | None:
         return override
 
     sym = pair.get("symbol")
-    if pair.get("type") == "stock" and isinstance(sym, str) and sym.endswith(".US"):
+    if (
+        pair.get("type") in {"stock", "etf", "etf_bond"}
+        and isinstance(sym, str)
+        and sym.endswith(".US")
+    ):
         return sym[:-3]
 
     return sym

@@ -49,8 +49,12 @@ def test_scalp_trades_excluded_from_timed_exit_when_profit_protect_off(monkeypat
     }
 
     with patch("mt5_executor.mt5_get_positions") as mock_get_pos:
+        mock_get_pos.return_value = {
+            "error": None,
+            "positions": [{"ticket": 12345, "sl": 1.0400, "tp": 1.0600, "profit": 0.0, "volume": 1.0}],
+        }
         timed_exit_monitor._handle_mt5_row(row, cfg)
-        mock_get_pos.assert_not_called()
+        mock_get_pos.assert_called_once()
 
     with patch("bybit_executor.bybit_get_positions") as mock_get_pos:
         timed_exit_monitor._handle_bybit_row(row, cfg)

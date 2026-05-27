@@ -51,9 +51,9 @@ _EXPECTED_NEW_SYMBOLS = {
     "EURX": {"symbol": "EURX", "type": "index", "mt5": "EURX"},
     "JPYX": {"symbol": "JPYX", "type": "index", "mt5": "JPYX"},
     "USDX": {"symbol": "USDX", "type": "index", "mt5": "USDX"},
-    "DIA": {"symbol": "DIA.US", "type": "stock", "mt5": "DIA.US"},
-    "GDX": {"symbol": "GDX.US", "type": "stock", "mt5": "GDX.US"},
-    "SOXX": {"symbol": "SOXX.US", "type": "stock", "mt5": "SOXX.US"},
+    "DIA": {"symbol": "DIA.US", "type": "etf", "mt5": "DIA.US"},
+    "GDX": {"symbol": "GDX.US", "type": "etf", "mt5": "GDX.US"},
+    "SOXX": {"symbol": "SOXX.US", "type": "etf", "mt5": "SOXX.US"},
 }
 
 

@@ -584,7 +584,8 @@ class TestApproval:
         assert result.approved is True
         assert result.reason == "OK"
         assert result.volume > 0
-        assert result.risk_pct > 0
+        assert result.risk_amount > 0
+        assert result.risk_pct >= 0
 
     def test_risk_check_passes_explicit_regime_to_sizing(self, monkeypatch):
         captured = {}

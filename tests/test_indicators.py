@@ -1,5 +1,5 @@
 """Unit tests for Sentinel v4.0 core indicator functions.
-Run with: py -m pytest test_indicators.py -v
+Run with: py -m pytest tests/test_indicators.py -v
 """
 
 # Import indicator functions from pure module to avoid booting the full Flask app in tests

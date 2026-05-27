@@ -768,15 +768,15 @@ def test_full_bearish_alignment_is_stronger_than_partial_alignment():
     assert abs(full["factor_scores"]["trend"]) > abs(d1_only["factor_scores"]["trend"])
 
 
-def test_h4_h1_against_d1_perfect_tie_returns_weak_short():
+def test_h4_h1_against_d1_perfect_tie_returns_no_direction():
     full_short = _score(_snap("short"), _snap("short"), _snap("short"))
     conflicted = _score(_snap("long"), _snap("short"), _snap("short"))
 
     assert full_short["direction"] == "SHORT"
-    assert conflicted["direction"] == "SHORT"
-    assert conflicted["final_score"] > 0.0
+    assert conflicted["direction"] is None
+    assert conflicted["final_score"] == 0.0
     assert conflicted["trend_coherence"]["weighted_tf_tie"] is True
-    assert "error" not in conflicted["trend_coherence"]
+    assert conflicted["trend_coherence"]["error"] == "weighted_tf_tie"
     assert abs(conflicted["factor_scores"]["trend"]) < abs(full_short["factor_scores"]["trend"])
 
 

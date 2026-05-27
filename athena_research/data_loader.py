@@ -18,7 +18,8 @@ DATA_UNAVAILABLE — it is never silently dropped or substituted.
 
 Every loaded dataset carries full DataProvenance metadata:
   data_source, symbol, timeframe, start_time, end_time, candle_count,
-  missing_candle_count, timezone, cached (bool).
+  missing_candle_count, timezone, cached (bool), data_hash,
+  source_fetch_timestamp, loaded_at, provider details.
 
 Do NOT mix data sources within one comparison without recording it.
 No live execution imports. No production config writes.
@@ -120,18 +121,38 @@ class DataProvenance:
     timezone: str
     cached: bool
     fetch_timestamp: str = ""
+    source_fetch_timestamp: str = ""
+    loaded_at: str = ""
+    data_hash: str = ""
+    provider_symbol: Optional[str] = None
+    provider_interval: Optional[str] = None
+    provider_endpoint_family: Optional[str] = None
+    broker_server: Optional[str] = None
+    cache_key: str = ""
+    limit: Optional[int] = None
+    resampled_from: Optional[str] = None
     notes: str = ""
+
+    def __post_init__(self) -> None:
+        if not self.source_fetch_timestamp and self.fetch_timestamp:
+            self.source_fetch_timestamp = self.fetch_timestamp
+        if not self.fetch_timestamp and self.source_fetch_timestamp:
+            self.fetch_timestamp = self.source_fetch_timestamp
 
     def to_dict(self) -> dict:
         return asdict(self)
 
     @staticmethod
     def unavailable(symbol: str, timeframe: str, reason: str) -> "DataProvenance":
+        now = datetime.now(timezone.utc).isoformat()
         return DataProvenance(
             symbol=symbol, timeframe=timeframe, data_source="DATA_UNAVAILABLE",
             candle_count=0, missing_candle_count=-1, start_time=None, end_time=None,
             timezone="UTC", cached=False,
-            fetch_timestamp=datetime.now(timezone.utc).isoformat(),
+            fetch_timestamp=now,
+            source_fetch_timestamp=now,
+            loaded_at=now,
+            cache_key=_cache_key(symbol, timeframe),
             notes=reason,
         )
 
@@ -147,8 +168,22 @@ def _compute_missing(df: pd.DataFrame, timeframe: str) -> int:
     return max(0, expected - len(df))
 
 
-def _provenance(df: pd.DataFrame, symbol: str, timeframe: str,
-                source: str, cached: bool, notes: str = "") -> DataProvenance:
+def _provenance(
+    df: pd.DataFrame,
+    symbol: str,
+    timeframe: str,
+    source: str,
+    cached: bool,
+    notes: str = "",
+    limit: Optional[int] = None,
+) -> DataProvenance:
+    now = datetime.now(timezone.utc).isoformat()
+    provider = _provider_details(symbol, timeframe, source)
+    try:
+        from athena_research.reproducibility import hash_ohlcv_frame
+        data_hash = hash_ohlcv_frame(df)
+    except Exception:
+        data_hash = None
     return DataProvenance(
         symbol=symbol,
         timeframe=timeframe,
@@ -159,9 +194,52 @@ def _provenance(df: pd.DataFrame, symbol: str, timeframe: str,
         end_time=df.index[-1].isoformat() if not df.empty else None,
         timezone="UTC",
         cached=cached,
-        fetch_timestamp=datetime.now(timezone.utc).isoformat(),
+        fetch_timestamp=now,
+        source_fetch_timestamp=now,
+        loaded_at=now,
+        data_hash=data_hash or "",
+        provider_symbol=provider.get("provider_symbol"),
+        provider_interval=provider.get("provider_interval"),
+        provider_endpoint_family=provider.get("provider_endpoint_family"),
+        broker_server=provider.get("broker_server"),
+        cache_key=_cache_key(symbol, timeframe),
+        limit=limit,
+        resampled_from=provider.get("resampled_from"),
         notes=notes,
     )
+
+
+def _apply_loaded_frame_metadata(
+    prov: DataProvenance,
+    df: pd.DataFrame,
+    symbol: str,
+    timeframe: str,
+    cache_key: str,
+    limit: int,
+) -> DataProvenance:
+    """Update provenance fields that must describe the frame used by this run."""
+    prov.symbol = prov.symbol or symbol
+    prov.timeframe = prov.timeframe or timeframe
+    prov.candle_count = len(df)
+    prov.missing_candle_count = _compute_missing(df, timeframe)
+    prov.start_time = df.index[0].isoformat() if not df.empty else None
+    prov.end_time = df.index[-1].isoformat() if not df.empty else None
+    prov.timezone = prov.timezone or "UTC"
+    prov.cache_key = prov.cache_key or cache_key
+    prov.limit = limit
+    prov.loaded_at = datetime.now(timezone.utc).isoformat()
+    provider = _provider_details(symbol, timeframe, prov.data_source)
+    prov.provider_symbol = prov.provider_symbol or provider.get("provider_symbol")
+    prov.provider_interval = prov.provider_interval or provider.get("provider_interval")
+    prov.provider_endpoint_family = prov.provider_endpoint_family or provider.get("provider_endpoint_family")
+    prov.broker_server = prov.broker_server or provider.get("broker_server")
+    prov.resampled_from = prov.resampled_from or provider.get("resampled_from")
+    try:
+        from athena_research.reproducibility import hash_ohlcv_frame
+        prov.data_hash = hash_ohlcv_frame(df) or ""
+    except Exception:
+        prov.data_hash = prov.data_hash or ""
+    return prov
 
 
 # ── Timeframe helpers ─────────────────────────────────────────────────────────
@@ -178,6 +256,83 @@ _MT5_TF_STR: dict[str, int] = {
 _EODHD_INTRA_TF: dict[str, str] = {
     "M1": "1m", "M5": "5m", "M15": "15m", "H1": "1h",
 }
+
+
+def _provider_details(symbol: str, timeframe: str, source: str) -> dict[str, Optional[str]]:
+    details: dict[str, Optional[str]] = {
+        "provider_symbol": None,
+        "provider_interval": None,
+        "provider_endpoint_family": None,
+        "broker_server": None,
+        "resampled_from": None,
+    }
+    if source == "binance_rest":
+        details.update(
+            provider_symbol=_binance_symbol(symbol),
+            provider_interval=_BINANCE_TF.get(timeframe),
+            provider_endpoint_family="binance_futures_klines",
+        )
+    elif source == "mt5":
+        details.update(
+            provider_symbol=_MT5_SYMBOL_MAP.get(symbol, symbol.replace("/", "").replace(" ", "")),
+            provider_interval=str(_MT5_TF_STR.get(timeframe, timeframe)),
+            provider_endpoint_family="mt5_copy_rates_from_pos",
+        )
+    elif source == "eodhd":
+        details.update(
+            provider_symbol=_EODHD_SYMBOL_MAP.get(symbol),
+            provider_interval=("1h" if timeframe == "H4" else ("eod" if timeframe == "D1" else _EODHD_INTRA_TF.get(timeframe))),
+            provider_endpoint_family=("eodhd_h1_resampled" if timeframe == "H4" else ("eodhd_eod" if timeframe == "D1" else "eodhd_intraday")),
+            resampled_from=("H1" if timeframe == "H4" else None),
+        )
+    elif source == "yfinance_fallback":
+        details.update(
+            provider_symbol=symbol,
+            provider_interval=timeframe,
+            provider_endpoint_family="yfinance_download",
+        )
+    return details
+
+
+def candle_policy_metadata(max_bars_by_timeframe: Optional[dict[str, int]] = None) -> dict:
+    return {
+        "timezone": "UTC",
+        "columns": ["open", "high", "low", "close", "volume"],
+        "cleaning": {
+            "drop_missing_ohlc": True,
+            "volume_missing_filled_zero": True,
+            "negative_volume_clipped_zero": True,
+        },
+        "missing_candle_count": "estimated_from_first_last_timestamp_and_timeframe",
+        "cache_ttl_hours": {"M1": 0.25, "M5": 1.0, "M15": 2.0, "H1": 4.0, "H4": 12.0, "D1": 24.0, "W1": 168.0},
+        "max_bars_by_timeframe": dict(max_bars_by_timeframe or {}),
+        "providers": {
+            "binance_rest": {
+                "endpoint_family": "binance_futures_klines",
+                "intervals": dict(_BINANCE_TF),
+            },
+            "mt5": {
+                "endpoint_family": "mt5_copy_rates_from_pos",
+                "timeframe_minutes": dict(_MT5_TF_STR),
+            },
+            "eodhd": {
+                "endpoint_family": "eodhd_eod_or_intraday",
+                "intraday_intervals": dict(_EODHD_INTRA_TF),
+                "h4_resampled_from": "H1",
+                "h4_resample_aggregation": {
+                    "open": "first",
+                    "high": "max",
+                    "low": "min",
+                    "close": "last",
+                    "volume": "sum",
+                },
+            },
+            "yfinance_fallback": {
+                "enabled_only_when_allow_yfinance_fallback_true": True,
+                "endpoint_family": "yfinance_download",
+            },
+        },
+    }
 
 _TF_TO_FREQ: dict[str, str] = {
     "M1": "1min", "M5": "5min", "M15": "15min",
@@ -659,6 +814,13 @@ def _load_cache(cache_dir: Path, key: str, timeframe: str) -> Optional[tuple[pd.
         prov = DataProvenance(**json.loads(prov_path.read_text())) if prov_path.exists() else None
         if prov:
             prov.cached = True
+            prov.loaded_at = datetime.now(timezone.utc).isoformat()
+            if not prov.data_hash:
+                try:
+                    from athena_research.reproducibility import hash_ohlcv_frame
+                    prov.data_hash = hash_ohlcv_frame(df) or ""
+                except Exception:
+                    prov.data_hash = ""
         return df, prov
     except Exception:
         return None
@@ -719,14 +881,10 @@ def load_ohlcv(
             log.debug("[data_loader] Cache hit %s %s (%d bars, source=%s)",
                       symbol, timeframe, len(df), prov.data_source if prov else "?")
             cleaned = _clean(df).tail(limit)
-            prov = _provenance(
-                cleaned,
-                symbol,
-                timeframe,
-                prov.data_source if prov else "cache",
-                cached=True,
-                notes=prov.notes if prov else "loaded from cache",
-            )
+            if prov is None:
+                prov = _provenance(cleaned, symbol, timeframe, "cache", cached=True, notes="loaded from cache", limit=limit)
+            else:
+                prov = _apply_loaded_frame_metadata(prov, cleaned, symbol, timeframe, key, limit)
             return cleaned, prov
 
     # Fetch from source
@@ -737,7 +895,7 @@ def load_ohlcv(
         return None, prov
 
     df = _clean(df)
-    prov = _provenance(df, symbol, timeframe, source, cached=False, notes=notes)
+    prov = _provenance(df, symbol, timeframe, source, cached=False, notes=notes, limit=limit)
     _save_cache(cache_dir, key, df, prov)
     return df, prov
 
@@ -818,12 +976,23 @@ def synthetic_ohlcv(n: int = 500, seed: int = 42, trend: float = 0.0001,
     )
     df.index.name = "time"
 
+    now = datetime.now(timezone.utc).isoformat()
+    try:
+        from athena_research.reproducibility import hash_ohlcv_frame
+        data_hash = hash_ohlcv_frame(df) or ""
+    except Exception:
+        data_hash = ""
     prov = DataProvenance(
         symbol=symbol, timeframe=timeframe, data_source="synthetic_test",
         candle_count=n, missing_candle_count=0,
         start_time=str(idx[0]), end_time=str(idx[-1]),
         timezone="UTC", cached=False,
-        fetch_timestamp=datetime.now(timezone.utc).isoformat(),
+        fetch_timestamp=now,
+        source_fetch_timestamp=now,
+        loaded_at=now,
+        data_hash=data_hash,
+        cache_key=_cache_key(symbol, timeframe),
+        limit=n,
         notes="synthetic test data — not real market data",
     )
     return df, prov

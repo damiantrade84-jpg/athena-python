@@ -108,6 +108,8 @@ def _walk_bool_paths(obj: Any, prefix: tuple[str, ...] = ()) -> list[tuple[tuple
 def _check_not_auto_imported(errors: list[str]) -> None:
     for path in (CONFIG_PY, CONFIG_YAML):
         text = path.read_text(encoding="utf-8")
+        if path.suffix.lower() in {".yaml", ".yml"}:
+            text = "\n".join(line for line in text.splitlines() if not line.lstrip().startswith("#"))
         if "proposed_calibration_overlay" in text:
             errors.append(f"{path} references proposed_calibration_overlay — must not auto-import overlay")
 

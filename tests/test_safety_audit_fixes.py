@@ -102,9 +102,9 @@ def test_bos_volume_confirmed_defaults_false_in_result_dict():
     import inspect
 
     try:
-        src = inspect.getsource(NakedEngine.analyze_structure)
+        src = inspect.getsource(NakedEngine.analyze_structure_direction)
     except (OSError, TypeError):
-        pytest.skip("analyze_structure source unavailable")
+        pytest.skip("analyze_structure_direction source unavailable")
 
     assert 'bos_data.get("bos_volume_confirmed", False)' in src, (
         "M2 fix missing: bos_volume_confirmed should default to False in result dict"

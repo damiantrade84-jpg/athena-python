@@ -1955,6 +1955,9 @@ def _handle_bybit_row(row: dict, tcfg: dict, db_path: str | None = None) -> None
     if style not in ("scalp", "intraday", "swing"):
         style = "intraday"
 
+    if _is_engine_d_engine(engine) and not tcfg.get("scalp_live_profit_protect", True):
+        return
+
     scfg = tcfg[style]
     mins = _minutes_open(row["ts"])
 

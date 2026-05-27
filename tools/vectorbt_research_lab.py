@@ -31,12 +31,15 @@ _ROOT = Path(__file__).resolve().parent.parent
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
-# ── Safety guard: abort if live execution modules detected ────────────────────
 _FORBIDDEN = {"athena", "execution", "mt5_executor", "bybit_executor", "auto_trader"}
-_already = [m for m in _FORBIDDEN if m in sys.modules]
-if _already:
-    print(f"ERROR: Live execution modules detected in sys.modules: {_already}", file=sys.stderr)
-    sys.exit(1)
+
+
+def _abort_if_live_execution_modules_loaded() -> None:
+    """CLI safety guard; imports remain safe for tests and registry inspection."""
+    already = [m for m in _FORBIDDEN if m in sys.modules]
+    if already:
+        print(f"ERROR: Live execution modules detected in sys.modules: {already}", file=sys.stderr)
+        sys.exit(1)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -243,4 +246,5 @@ def main():
 
 
 if __name__ == "__main__":
+    _abort_if_live_execution_modules_loaded()
     main()

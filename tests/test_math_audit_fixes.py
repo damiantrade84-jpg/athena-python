@@ -8,7 +8,7 @@ Covers:
   - H3: coherence_ratio floor configurable
   - H4: calc_stochastic None-safe SMA
   - M1: per-asset-class RSI bounds
-  - M2: MACD opposing penalty increased
+  - M2: MACD opposing penalty calibrated
   - M5: zscore_normalize clamp parameter
   - L3: calc_squeeze consecutive bars
 """
@@ -160,38 +160,135 @@ class TestTimeframeAlignment:
 
 # ── H3: coherence_ratio floor ────────────────────────────────────────────────
 
+def _d1_trend_snap(direction: str) -> dict:
+    if direction == "LONG":
+        return {"ema21": 110.0, "ema200": 100.0}
+    return {"ema21": 90.0, "ema200": 100.0}
+
+
+def _intraday_trend_snap(direction: str) -> dict:
+    if direction == "LONG":
+        return {"ema21": 110.0, "ema50": 100.0}
+    return {"ema21": 90.0, "ema50": 100.0}
+
+
+def _unit_trend_profile(weights: dict) -> dict:
+    return {
+        "enabled": True,
+        "style": "unit",
+        "trend_layers": [
+            {"tf": "D1", "weight_key": "d1_ema_trend", "fast_ema": "ema21", "slow_ema": "ema200"},
+            {"tf": "H4", "weight_key": "h4_ema_trend", "fast_ema": "ema21", "slow_ema": "ema50"},
+            {"tf": "H1", "weight_key": "ema_trend", "fast_ema": "ema21", "slow_ema": "ema50"},
+        ],
+        "trend_weights": weights,
+    }
+
+
 class TestCoherenceRatioFloor:
-    def test_tied_vote_with_default_floor_zero(self):
-        """With default floor=0.0, a tied vote should produce near-zero magnitude."""
-        d1_snap = {"ema21": 100.0, "ema200": 90.0}   # LONG
-        h4_snap = {"ema21": 100.0, "ema50": 110.0}   # SHORT
-        h1_snap = {"ema21": 100.0, "ema50": 110.0}   # SHORT
+    def test_perfect_weighted_tie_returns_no_direction(self, monkeypatch):
+        """A perfect weighted tie exits before COHERENCE_RATIO_FLOOR is applied."""
+        monkeypatch.setitem(CONFIG, "COHERENCE_RATIO_FLOOR", 0.7)
 
-        score, direction, detail = _coherent_trend_score(d1_snap, h4_snap, h1_snap, "crypto")
-        # D1 weight 0.5 LONG, H4 weight 0.3 SHORT, H1 weight 0.2 SHORT
-        # long_w = 0.5, short_w = 0.5 → tied
-        # D1 tiebreaker → LONG
-        # coherence_ratio with floor=0: dominant_w/total_w = 0.5/1.0 = 0.5
-        # magnitude = (0.35 + 0.65*0.5) * 3.0 * (3/3) = 0.675 * 3.0 = 2.025
+        score, direction, detail = _coherent_trend_score(
+            _d1_trend_snap("LONG"),
+            _intraday_trend_snap("SHORT"),
+            _intraday_trend_snap("SHORT"),
+            "crypto",
+            scoring_profile=_unit_trend_profile(
+                {"d1_ema_trend": 0.50, "h4_ema_trend": 0.30, "ema_trend": 0.20}
+            ),
+        )
+
+        assert score == 0.0
+        assert direction is None
+        assert detail["error"] == "weighted_tf_tie"
+        assert detail["weighted_tf_tie"] is True
+        assert detail["long_weight"] == pytest.approx(0.5)
+        assert detail["short_weight"] == pytest.approx(0.5)
+        assert detail.get("coherence_ratio") is None
+
+    def test_near_tie_non_perfect_low_confidence_by_default(self, monkeypatch):
+        """A non-perfect near tie has direction but low vote-margin confidence."""
+        monkeypatch.setitem(CONFIG, "COHERENCE_RATIO_FLOOR", 0.0)
+
+        score, direction, detail = _coherent_trend_score(
+            _d1_trend_snap("LONG"),
+            _intraday_trend_snap("SHORT"),
+            _intraday_trend_snap("SHORT"),
+            "crypto",
+            scoring_profile=_unit_trend_profile(
+                {"d1_ema_trend": 0.51, "h4_ema_trend": 0.29, "ema_trend": 0.20}
+            ),
+        )
+
         assert direction == "LONG"
-        assert abs(score) < 2.5  # not maxed out
+        assert detail["weighted_balance"] == pytest.approx(0.02)
+        assert detail["coherence_ratio"] == pytest.approx(0.02)
+        assert 0.0 < score < 0.25
 
-    def test_configurable_floor(self):
-        """COHERENCE_RATIO_FLOOR config is respected."""
-        # Save original
-        orig = CONFIG.get("COHERENCE_RATIO_FLOOR", 0.0)
-        try:
-            CONFIG["COHERENCE_RATIO_FLOOR"] = 0.7
-            d1_snap = {"ema21": 100.0, "ema200": 90.0}
-            h4_snap = {"ema21": 100.0, "ema50": 110.0}
-            h1_snap = {"ema21": 100.0, "ema50": 110.0}
+    def test_configurable_floor_applies_to_non_tied_below_floor(self, monkeypatch):
+        """COHERENCE_RATIO_FLOOR can lift a non-tied vote-margin result."""
+        monkeypatch.setitem(CONFIG, "COHERENCE_RATIO_FLOOR", 0.7)
 
-            score, direction, detail = _coherent_trend_score(d1_snap, h4_snap, h1_snap, "crypto")
-            # With floor=0.7, coherence_ratio = max(0.7, 0.5) = 0.7
-            # magnitude = (0.35 + 0.65*0.7) * 3.0 = 0.805 * 3.0 = 2.415
-            assert abs(score) > 2.0  # higher than with floor=0
-        finally:
-            CONFIG["COHERENCE_RATIO_FLOOR"] = orig
+        score, direction, detail = _coherent_trend_score(
+            _d1_trend_snap("LONG"),
+            _intraday_trend_snap("SHORT"),
+            _intraday_trend_snap("SHORT"),
+            "crypto",
+            scoring_profile=_unit_trend_profile(
+                {"d1_ema_trend": 0.51, "h4_ema_trend": 0.29, "ema_trend": 0.20}
+            ),
+        )
+
+        assert direction == "LONG"
+        assert detail["weighted_balance"] == pytest.approx(0.02)
+        assert detail["coherence_ratio"] == pytest.approx(0.7)
+        assert score == pytest.approx(2.1)
+
+    def test_non_tied_above_floor_uses_weighted_margin(self, monkeypatch):
+        """When vote margin is above the floor, the floor does not change it."""
+        monkeypatch.setitem(CONFIG, "COHERENCE_RATIO_FLOOR", 0.3)
+
+        score, direction, detail = _coherent_trend_score(
+            _d1_trend_snap("LONG"),
+            _intraday_trend_snap("LONG"),
+            _intraday_trend_snap("SHORT"),
+            "crypto",
+        )
+
+        assert direction == "LONG"
+        assert detail["weighted_balance"] == pytest.approx(0.6)
+        assert detail["coherence_ratio"] == pytest.approx(0.6)
+        assert score == pytest.approx(1.8)
+
+    def test_strong_majority_scores_below_full_alignment(self, monkeypatch):
+        monkeypatch.setitem(CONFIG, "COHERENCE_RATIO_FLOOR", 0.0)
+
+        score, direction, detail = _coherent_trend_score(
+            _d1_trend_snap("LONG"),
+            _intraday_trend_snap("LONG"),
+            _intraday_trend_snap("SHORT"),
+            "crypto",
+        )
+
+        assert direction == "LONG"
+        assert detail["coherence_ratio"] == pytest.approx(0.6)
+        assert 1.5 < score < 3.0
+
+    def test_full_alignment_scores_at_max_confidence(self, monkeypatch):
+        monkeypatch.setitem(CONFIG, "COHERENCE_RATIO_FLOOR", 0.0)
+
+        score, direction, detail = _coherent_trend_score(
+            _d1_trend_snap("LONG"),
+            _intraday_trend_snap("LONG"),
+            _intraday_trend_snap("LONG"),
+            "crypto",
+        )
+
+        assert direction == "LONG"
+        assert detail["coherence_ratio"] == pytest.approx(1.0)
+        assert score == pytest.approx(3.0)
 
 
 # ── H4: calc_stochastic None-safe ────────────────────────────────────────────
@@ -268,15 +365,15 @@ class TestRSIBounds:
 # ── M2: MACD opposing penalty ────────────────────────────────────────────────
 
 class TestMACDOpposingPenalty:
-    def test_opposing_macd_reduces_score_strongly(self):
-        """With penalty -0.50, opposing MACD should significantly reduce score."""
+    def test_opposing_macd_applies_moderate_penalty(self):
+        """Opposing MACD uses the documented -0.25 penalty."""
         h4_snap = {"rsi": 55, "macdHist": -0.5}  # RSI confirming, MACD opposing
 
         score = _momentum_quality(h4_snap, "LONG", "forex")
         # RSI = 55 → +0.50 (weight 0.6)
-        # MACD = -0.5 (opposing) → -0.50 (weight 0.4)
-        # Weighted = (0.50*0.6 + (-0.50)*0.4) / 1.0 = 0.30 - 0.20 = 0.10
-        assert score < 0.2  # significantly reduced
+        # MACD opposing → -0.25 (weight 0.4)
+        # Weighted raw = 0.30 - 0.10 = 0.20; rescaled by max raw 0.50 → 0.40
+        assert score == pytest.approx(0.4)
 
     def test_confirming_macd_full_score(self):
         """Both confirming → high score."""

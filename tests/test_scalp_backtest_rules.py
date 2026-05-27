@@ -40,10 +40,62 @@ def _timed_candles(count, tf_minutes, *, start=None, close=100.005, high=100.006
     ]
 
 
+def _patch_valid_scalp_bt_pipeline(monkeypatch):
+    monkeypatch.setattr(scalp_engine, "_classify_market_state", lambda _vp: "balance")
+    monkeypatch.setattr(
+        scalp_engine,
+        "_locate_price_vs_vp",
+        lambda *_args, **_kwargs: {"location": "at_val", "nearest_level": 99.0, "distance_pct": 0.0},
+    )
+    monkeypatch.setattr(
+        scalp_engine,
+        "_check_absorption",
+        lambda *_args, **_kwargs: {"detected": True, "count": 2, "bars": [{}]},
+    )
+    monkeypatch.setattr(
+        scalp_engine,
+        "_check_cvd",
+        lambda *_args, **_kwargs: {"direction": "LONG", "cvd_slope": 1.0},
+    )
+    monkeypatch.setattr(
+        scalp_engine,
+        "_check_aaa_sequence",
+        lambda *_args, **_kwargs: {"complete": False, "phase": "absorption_only"},
+    )
+    monkeypatch.setattr(
+        scalp_engine,
+        "_check_vwap_lean",
+        lambda *_args, **_kwargs: {"lean": "LONG", "vwap_value": 100.0},
+    )
+    monkeypatch.setattr(
+        scalp_engine,
+        "_classify_setup",
+        lambda *_args, **_kwargs: {"valid": True, "direction": "LONG", "setup_type": "mean_reversion", "reasons": []},
+    )
+    monkeypatch.setattr(
+        scalp_engine,
+        "calculate_scalp_levels",
+        lambda direction, entry, *_args, **_kwargs: {
+            "sl": entry - 1.0 if direction == "LONG" else entry + 1.0,
+            "tp_partial": entry + 1.0 if direction == "LONG" else entry - 1.0,
+            "tp1": entry + 2.0 if direction == "LONG" else entry - 2.0,
+            "tp2": entry + 3.0 if direction == "LONG" else entry - 3.0,
+            "rr": 2.0,
+            "rr_below_min": False,
+        },
+    )
+    monkeypatch.setattr(
+        scalp_engine,
+        "ai_quality_grade",
+        lambda *_args, **_kwargs: {"score": 75, "grade": "B", "reasons": [], "size_multiplier": 0.5},
+    )
+
+
 def test_backtest_pair_scalp_uses_stable_m15_execution_proxy(monkeypatch):
     candles_m15 = _timed_candles(140, 15)
     candles_m5 = _timed_candles(420, 5)
     candles_m1 = _timed_candles(2100, 1)
+    _patch_valid_scalp_bt_pipeline(monkeypatch)
     monkeypatch.setitem(
         backtest_runner.CONFIG,
         "SCALP_ENGINE",
@@ -59,6 +111,7 @@ def test_backtest_pair_scalp_uses_stable_m15_execution_proxy(monkeypatch):
             "BIAS_TIMEFRAME": "M15",
             "MIN_GRADE_AUTO_EXECUTE": "C",
             "VP_PROXIMITY_USE_ATR": False,
+            "ENGINE_D_MAX_COST_R": 1.0,
         },
     )
     monkeypatch.setattr(mt5_executor, "mt5_map_symbol", lambda display: "EURUSD")
@@ -137,6 +190,7 @@ def test_backtest_pair_scalp_crypto_tuple_fetch_drops_forming_bar(monkeypatch):
 def test_backtest_pair_scalp_uses_asset_aware_cost_assumptions(monkeypatch):
     candles = _timed_candles(140, 15)
     calls = []
+    _patch_valid_scalp_bt_pipeline(monkeypatch)
     monkeypatch.setitem(
         backtest_runner.CONFIG,
         "SCALP_ENGINE",
@@ -153,6 +207,7 @@ def test_backtest_pair_scalp_uses_asset_aware_cost_assumptions(monkeypatch):
             "BIAS_TIMEFRAME": "M15",
             "MIN_GRADE_AUTO_EXECUTE": "C",
             "VP_PROXIMITY_USE_ATR": False,
+            "ENGINE_D_MAX_COST_R": 1.0,
         },
     )
     monkeypatch.setattr(mt5_executor, "mt5_map_symbol", lambda display: "XAUUSD")
@@ -210,6 +265,7 @@ def test_backtest_pair_scalp_uses_asset_aware_cost_assumptions(monkeypatch):
 def test_backtest_pair_scalp_uses_h1_bias_context_when_configured(monkeypatch):
     candles_m15 = _timed_candles(840, 15)
     captured = []
+    _patch_valid_scalp_bt_pipeline(monkeypatch)
     monkeypatch.setitem(
         backtest_runner.CONFIG,
         "SCALP_ENGINE",
@@ -273,6 +329,7 @@ def test_backtest_pair_scalp_uses_h1_bias_context_when_configured(monkeypatch):
 
 def test_backtest_pair_scalp_scratches_when_no_follow_through(monkeypatch):
     candles = _m15_candles(120)
+    _patch_valid_scalp_bt_pipeline(monkeypatch)
     monkeypatch.setitem(
         backtest_runner.CONFIG,
         "SCALP_ENGINE",
@@ -334,6 +391,7 @@ def test_backtest_pair_scalp_scratches_when_no_follow_through(monkeypatch):
 @pytest.mark.parametrize("scratch_bars, expected_w", [(2, 2), (3, 3)])
 def test_backtest_pair_scalp_scratch_clock_2_vs_3_bars(monkeypatch, scratch_bars, expected_w):
     candles = _m15_candles(120)
+    _patch_valid_scalp_bt_pipeline(monkeypatch)
     monkeypatch.setitem(
         backtest_runner.CONFIG,
         "SCALP_ENGINE",

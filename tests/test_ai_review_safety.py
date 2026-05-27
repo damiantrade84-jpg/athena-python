@@ -25,7 +25,7 @@ Rules being tested:
   - Audit logger records correct schema; never raises on I/O failure.
   - Candle freshness and timestamps are currently absent from AI input packets
     (documented gap — not a breaking failure, but must be flagged).
-  - Paper mode config: REAL_ORDERS_ALLOWED must remain false.
+  - Real-order config must be guarded by explicit startup confirmation.
 """
 
 import json
@@ -1010,12 +1010,13 @@ class TestAiReviewLogger:
 
 
 class TestPaperModeSafety:
-    """REAL_ORDERS_ALLOWED must remain false in config.yaml regardless of AI output."""
+    """Real-order config must be blocked unless explicit startup confirmation is present."""
 
     def test_paper_mode_real_orders_disallowed(self):
-        """REAL_ORDERS_ALLOWED must be false — AI cannot override this config key."""
+        """REAL_ORDERS_ALLOWED false is safe; true must require explicit startup confirmation."""
         import os
         import yaml  # type: ignore
+        from config import _REAL_ORDER_CONFIRM_ENV, _critical_safety_config_errors
 
         cfg_path = os.path.join(os.path.dirname(__file__), "..", "config.yaml")
         if not os.path.exists(cfg_path):
@@ -1025,13 +1026,18 @@ class TestPaperModeSafety:
             cfg = yaml.safe_load(f)
 
         paper = cfg.get("PAPER_SOAK", {})
-        assert paper.get("REAL_ORDERS_ALLOWED") is False, (
-            "REAL_ORDERS_ALLOWED must be false. AI must not override paper mode."
+        if paper.get("REAL_ORDERS_ALLOWED") is False:
+            return
+
+        errors = _critical_safety_config_errors(cfg, env={})
+        assert any(_REAL_ORDER_CONFIRM_ENV in err for err in errors), (
+            "REAL_ORDERS_ALLOWED=true must require explicit startup confirmation"
         )
 
     def test_paper_mode_enabled(self):
         import os
         import yaml  # type: ignore
+        from config import _REAL_ORDER_CONFIRM_ENV, _critical_safety_config_errors
 
         cfg_path = os.path.join(os.path.dirname(__file__), "..", "config.yaml")
         if not os.path.exists(cfg_path):
@@ -1041,7 +1047,13 @@ class TestPaperModeSafety:
             cfg = yaml.safe_load(f)
 
         paper = cfg.get("PAPER_SOAK", {})
-        assert paper.get("ENABLED") is True, "PAPER_SOAK.ENABLED must be true"
+        if paper.get("ENABLED") is True:
+            return
+
+        errors = _critical_safety_config_errors(cfg, env={})
+        assert any(_REAL_ORDER_CONFIRM_ENV in err for err in errors), (
+            "PAPER_SOAK.ENABLED=false must require explicit startup confirmation"
+        )
 
     def test_ai_vision_cannot_upgrade_trade_is_false_by_default(self):
         """AI_VISION_CAN_UPGRADE_TRADE must be false in config.yaml (downgrade-only by default)."""

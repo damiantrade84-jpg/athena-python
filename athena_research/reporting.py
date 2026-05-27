@@ -21,7 +21,7 @@ from athena_research.metrics import StrategyMetrics
 log = logging.getLogger(__name__)
 
 MIN_IMPLEMENTATION_TRADES = 30
-RUN_META_SCHEMA_VERSION = 1
+RUN_META_SCHEMA_VERSION = 2
 
 OUTPUT_COLUMNS = [
     "run_id", "symbol", "asset_class", "timeframe", "zone", "family", "strategy_name",
@@ -30,6 +30,7 @@ OUTPUT_COLUMNS = [
     "max_drawdown", "sharpe", "sqn", "exposure_pct", "avg_duration_bars",
     "gross_return", "net_return", "is_return", "oos_return",
     "robustness_score", "param_sensitivity", "skip_reason", "data_source",
+    "data_hash", "fee_per_side", "slippage",
     "entry_signal_count", "short_entry_signal_count", "exit_signal_count",
     "short_exit_signal_count", "simulation_backend", "simulation_warning",
     "engine", "engine_component", "candidate_action", "source_indicator",

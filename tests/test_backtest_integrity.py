@@ -252,7 +252,7 @@ def test_backtest_pair_naked_enters_on_next_bar_open_with_slippage(monkeypatch):
 
     slip_calls = []
 
-    def _track_slip(bar, ptype):
+    def _track_slip(bar, ptype, **_kwargs):
         slip_calls.append((float(bar.get("open", bar.get("close", 0))), ptype))
         return 0.001
 
@@ -318,6 +318,20 @@ def test_backtest_pair_naked_enters_on_next_bar_open_with_slippage(monkeypatch):
             "passed": direction == "LONG",
             "trigger_pattern": "NONE",
             "max_possible": 5.0,
+            "structure_ok": direction == "LONG",
+            "macro_ok": True,
+            "zone_ok": True,
+            "breakout_ok": False,
+            "location_ok": direction == "LONG",
+            "trigger_ok": direction == "LONG",
+            "entry_ok": direction == "LONG",
+            "room_ok": direction == "LONG",
+            "rr_ok": direction == "LONG",
+            "tp_side_ok": direction == "LONG",
+            "space_ok": direction == "LONG",
+            "execution_sl": _px - 1.0 if direction == "LONG" else _px + 1.0,
+            "execution_tp": _px + 2.0 if direction == "LONG" else _px - 2.0,
+            "rr_source": "test_fixture",
         },
     )
 
@@ -613,11 +627,22 @@ def test_backtest_pair_naked_caps_post_fill_rr_to_style_fallback(monkeypatch):
             "passed": direction == "LONG",
             "trigger_pattern": "NONE",
             "max_possible": 5.0,
+            "structure_ok": direction == "LONG",
+            "macro_ok": True,
+            "zone_ok": True,
+            "breakout_ok": False,
+            "location_ok": direction == "LONG",
+            "trigger_ok": direction == "LONG",
+            "entry_ok": direction == "LONG",
+            "room_ok": direction == "LONG",
+            "rr_ok": direction == "LONG",
+            "tp_side_ok": direction == "LONG",
+            "space_ok": direction == "LONG",
             # Engine B execution levels feed straight into BT now (live parity).
             # Wide structural targets get capped to fallback_rr at fill time.
-            "execution_sl": 95.0 if direction == "LONG" else px + 5.0,
-            "execution_tp": 120.0 if direction == "LONG" else px - 25.0,
-            "rr_used_for_gate": 2.4 if direction == "LONG" else 0.0,
+            "execution_sl": px - 1.0 if direction == "LONG" else px + 1.0,
+            "execution_tp": px + 4.0 if direction == "LONG" else px - 4.0,
+            "rr_used_for_gate": 4.0 if direction == "LONG" else 0.0,
             "rr_source": "atr_sl_structural_tp",
         },
     )
@@ -889,13 +914,13 @@ def test_backtest_pair_naked_telemetry_captures_non_zero_values(monkeypatch):
             "ob_at_zone": False,
             "bos_mtf_confirmed": False,
             "breaker_active": False,
-            "execution_sl": 95.0,
-            "execution_tp": 120.0,
-            "execution_rr": 2.5,
-            "structural_sl": 95.0,
-            "structural_tp": 120.0,
-            "structural_rr": 2.5,
-            "rr_used_for_gate": 2.5,
+            "execution_sl": _px - 1.0,
+            "execution_tp": _px + 4.0,
+            "execution_rr": 4.0,
+            "structural_sl": _px - 1.0,
+            "structural_tp": _px + 4.0,
+            "structural_rr": 4.0,
+            "rr_used_for_gate": 4.0,
             "rr_source": "structural",
             "level_mode": "structural",
             "execution_levels_valid": True,

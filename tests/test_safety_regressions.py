@@ -51,6 +51,7 @@ def test_lifecycle_paper_soak_blocks_before_broker(monkeypatch):
     )
     monkeypatch.setitem(config.CONFIG, "EXECUTOR_MODE", "paper")
     monkeypatch.delenv("MT5_SERVER", raising=False)
+    monkeypatch.setattr(execution_lifecycle, "_paper_soak_blocks_real_orders", lambda _venue: True)
 
     fake = types.ModuleType("mt5_executor")
 

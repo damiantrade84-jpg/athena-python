@@ -1554,7 +1554,7 @@ def test_run_scalp_scan_surfaces_fee_guard_candidate(monkeypatch):
     sig = result["signals"][0]
     assert sig["gate_result"] == "WATCHLIST"
     assert sig["executable"] is False
-    assert "fee_guard_micro_stop" in sig["fail_reasons"]
+    assert "fee_guard_micro_stop" in sig["soft_warnings"]
     assert sig["fee_guard"]["cost_as_R"] > 0.20
 
 
@@ -1994,12 +1994,13 @@ def test_scalp_fetch_candles_crypto_m1_prefers_ws(monkeypatch):
         lambda: datetime(2026, 3, 26, 13, 40, tzinfo=timezone.utc),
     )
     monkeypatch.setattr(athena_runtime, "rt", lambda: types.SimpleNamespace(fetch_candles=lambda *args, **kwargs: []))
-    out = scalp_engine._scalp_fetch_candles(
+    out, source = scalp_engine._scalp_fetch_candles(
         {"display": "BTC/USDT", "type": "crypto", "source": "binance"},
         "M1",
         300,
     )
     assert out == ws_candles
+    assert source == "binance_ws"
 
 
 def test_scalp_fetch_candles_crypto_m1_falls_back_when_ws_stale(monkeypatch):
@@ -2012,12 +2013,13 @@ def test_scalp_fetch_candles_crypto_m1_falls_back_when_ws_stale(monkeypatch):
         lambda: datetime(2026, 3, 26, 13, 40, tzinfo=timezone.utc),
     )
     monkeypatch.setattr(athena_runtime, "rt", lambda: types.SimpleNamespace(fetch_candles=lambda *args, **kwargs: routed))
-    out = scalp_engine._scalp_fetch_candles(
+    out, source = scalp_engine._scalp_fetch_candles(
         {"display": "BTC/USDT", "type": "crypto", "source": "binance"},
         "M1",
         300,
     )
     assert out == routed
+    assert source == "binance_candle"
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

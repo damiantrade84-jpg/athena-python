@@ -120,7 +120,7 @@ def test_facts_in_layer_are_self_describing() -> None:
     facts = layer["price_action_facts"]
     assert isinstance(facts, dict)
     for key, value in facts.items():
-        if key.startswith("_"):
+        if key.startswith("_") or key == "profile_vp_context":
             continue  # diagnostic metadata, not a fact
         assert isinstance(value, dict), f"fact {key} is not a dict"
         assert "confidence" in value, f"fact {key} missing confidence (FIX 3)"

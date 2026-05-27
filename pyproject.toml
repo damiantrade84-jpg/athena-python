@@ -19,6 +19,7 @@ norecursedirs = [
     ".pytest_tmp",
     ".ruff_cache",
     "tests/.tmp",
+    "tests/manual_probes",
     ".tmp-engine-ab-boundary-commit",
     ".tmp-engine-ab-commit",
     ".tmp-engine-ab-final",

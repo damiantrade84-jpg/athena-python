@@ -22,6 +22,7 @@ _LIVE_V2_URL = "https://eodhd.com/api/us-quote-delayed"
 
 _live_v2_batcher: LiveV2VolumeBatcher | None = None
 _batcher_lock = threading.Lock()
+_NON_WS_US_EQUITY_TYPES = {"stock", "etf", "etf_bond"}
 
 
 def get_live_v2_batcher() -> "LiveV2VolumeBatcher | None":
@@ -57,7 +58,7 @@ class LiveV2VolumeBatcher:
         for pair in pairs or []:
             if not pair.get("enabled", True):
                 continue
-            if str(pair.get("type") or "").lower() != "stock":
+            if str(pair.get("type") or "").lower() not in _NON_WS_US_EQUITY_TYPES:
                 continue
             symbol = str(pair.get("symbol") or "").strip().upper()
             display = str(pair.get("display") or pair.get("symbol") or "").strip()
@@ -280,7 +281,7 @@ def build_non_ws_stock_pairs(all_pairs: list[dict]) -> list[dict]:
         pair
         for pair in (all_pairs or [])
         if pair.get("enabled", True)
-        and str(pair.get("type") or "").lower() == "stock"
+        and str(pair.get("type") or "").lower() in _NON_WS_US_EQUITY_TYPES
         and str(pair.get("symbol") or "").upper().endswith(".US")
         and not pair.get("ws", True)
     ]

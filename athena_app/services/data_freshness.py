@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from config import CONFIG
+
 from athena_app.services.market_state import (
     candle_freshness_diagnostic,
     candle_timestamp_epoch,

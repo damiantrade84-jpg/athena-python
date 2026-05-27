@@ -22,6 +22,14 @@ _cache: dict = {}
 _CACHE_TTL = 1800  # 30 minutes
 
 
+def _sentiment_api_fail_closed() -> bool:
+    try:
+        from config import CONFIG
+        return bool(CONFIG.get("SENTIMENT_API_FAIL_CLOSED", False))
+    except Exception:
+        return False
+
+
 def _get_eodhd_ticker(pair: str, asset_type: str) -> str | None:
     """Convert internal pair symbol to EODHD news ticker format."""
     if asset_type == "crypto":
@@ -103,12 +111,13 @@ def check_sentiment(pair: str, direction: str, asset_type: str) -> dict:
                 s=ticker, from_date=date_from, to_date=date_to, limit="20"
             )
         except Exception as e:
+            fail_closed = _sentiment_api_fail_closed()
             log.warning(f"[SENTIMENT] News API error for {ticker}: {e}")
             return {
-                "allowed": True,
+                "allowed": not fail_closed,
                 "score": 0.0,
                 "count": 0,
-                "reason": f"API error: {e}",
+                "reason": f"API error: {e} — fail closed: {fail_closed}",
             }
 
         if not news or not isinstance(news, list):
@@ -193,8 +202,7 @@ def check_sentiment(pair: str, direction: str, asset_type: str) -> dict:
         return result
 
     except ImportError:
-        from config import CONFIG
-        fail_closed = CONFIG.get("SENTIMENT_API_FAIL_CLOSED", False)
+        fail_closed = _sentiment_api_fail_closed()
         log.warning(f"[SENTIMENT] API failed — fail closed: {fail_closed}")
         return {
             "allowed": not fail_closed,
@@ -203,8 +211,7 @@ def check_sentiment(pair: str, direction: str, asset_type: str) -> dict:
             "reason": f"Sentiment API unavailable — fail closed: {fail_closed}",
         }
     except Exception as e:
-        from config import CONFIG
-        fail_closed = CONFIG.get("SENTIMENT_API_FAIL_CLOSED", False)
+        fail_closed = _sentiment_api_fail_closed()
         log.warning(f"[SENTIMENT] API error — fail closed: {fail_closed} | Error: {e}")
         return {"allowed": not fail_closed, "score": 0.0, "count": 0, "reason": f"Sentiment API error — fail closed: {fail_closed}"}
 

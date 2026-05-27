@@ -111,6 +111,9 @@ class StrategyMetrics:
     status: str = "NEEDS_MORE_DATA"   # STRONG_CANDIDATE | WEAK_CANDIDATE | REJECT | NEEDS_MORE_DATA
     skip_reason: str = ""
     data_source: str = ""   # "binance_rest"|"mt5"|"eodhd"|"yfinance_fallback"|"synthetic_test"|"DATA_UNAVAILABLE"
+    data_hash: str = ""
+    fee_per_side: float = float("nan")
+    slippage: float = float("nan")
     entry_signal_count: int = 0
     short_entry_signal_count: int = 0
     exit_signal_count: int = 0
@@ -605,6 +608,7 @@ def evaluate_strategy(
     min_trades: int = 20,
     freq: str = "1h",
     data_source: str = "",
+    data_hash: str = "",
     backtest_exit_config: Optional[dict] = None,
 ) -> StrategyMetrics:
     """Compute full StrategyMetrics for one strategy run."""
@@ -621,6 +625,7 @@ def evaluate_strategy(
             timeframe=timeframe, family=spec.family, strategy_name=spec.name,
             params_str=params_str, direction=direction,
             status="REJECT", skip_reason=skip, data_source=data_source,
+            data_hash=data_hash, fee_per_side=fees, slippage=slippage,
         )
 
     close = df["close"]
@@ -678,6 +683,9 @@ def evaluate_strategy(
             trade_count=n, status="NEEDS_MORE_DATA",
             skip_reason=f"only {n} trades < min {min_trades}",
             data_source=data_source,
+            data_hash=data_hash,
+            fee_per_side=fees,
+            slippage=slippage,
             entry_signal_count=entry_signal_count,
             short_entry_signal_count=short_entry_signal_count,
             exit_signal_count=exit_signal_count,
@@ -740,6 +748,9 @@ def evaluate_strategy(
         robustness_score=robustness,
         status=status,
         data_source=data_source,
+        data_hash=data_hash,
+        fee_per_side=fees,
+        slippage=slippage,
         entry_signal_count=entry_signal_count,
         short_entry_signal_count=short_entry_signal_count,
         exit_signal_count=exit_signal_count,

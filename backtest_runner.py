@@ -5742,7 +5742,7 @@ def backtest_pair_consensus(
     _zone_tf = style_profile.get("zone_tf", "H4")
     _entry_tf = style_profile.get("entry_tf", "H1")
     _atr_tf = style_profile.get("atr_tf", "H4")
-    _bt_enable_profile_context = engine_b_profile_context_enabled(_pair_type)
+    _bt_enable_profile_context = engine_b_profile_context_enabled(_ptype)
 
     _h4_need = max(50, CONFIG.get("H4_CANDLES", 1001))
     _h1_need = max(50, CONFIG.get("H1_CANDLES", 1001))

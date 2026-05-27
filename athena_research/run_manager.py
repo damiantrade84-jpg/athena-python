@@ -20,11 +20,21 @@ import pandas as pd
 import yaml
 
 from athena_research.data_loader import (
-    asset_class_for, load_ohlcv_multi, vbt_freq,
+    asset_class_for, candle_policy_metadata, load_ohlcv_multi, vbt_freq,
 )
 from athena_research.metrics import StrategyMetrics, compute_param_sensitivity, evaluate_strategy
 from athena_research.reporting import generate_all_reports, make_run_dir
 from athena_research.research_context import annotate_research_results
+from athena_research.reproducibility import (
+    build_config_metadata,
+    build_cost_metadata,
+    build_session_calendar_metadata,
+    build_strategy_registry_metadata,
+    collect_environment_metadata,
+    collect_git_metadata,
+    collect_source_hashes,
+    hash_ohlcv_frame,
+)
 from athena_research.strategies import StrategySpec, iter_strategy_specs, run_strategy
 
 log = logging.getLogger(__name__)
@@ -122,6 +132,50 @@ def _zones_for_timeframes(cfg: dict, timeframes: list[str]) -> list[str]:
     return zones
 
 
+_REPRO_SOURCE_FILES = [
+    "athena_research/run_manager.py",
+    "athena_research/data_loader.py",
+    "athena_research/strategies.py",
+    "athena_research/metrics.py",
+    "athena_research/reporting.py",
+    "athena_research/reproducibility.py",
+    "tools/vectorbt_research_lab.py",
+]
+
+
+def _dataset_manifest(all_data: dict[tuple[str, str], tuple]) -> list[dict[str, Any]]:
+    datasets: list[dict[str, Any]] = []
+    for (symbol, timeframe), (df, prov) in sorted(all_data.items()):
+        if prov is not None and hasattr(prov, "to_dict"):
+            row = prov.to_dict()
+        else:
+            row = {"symbol": symbol, "timeframe": timeframe}
+        row.setdefault("symbol", symbol)
+        row.setdefault("timeframe", timeframe)
+        if not row.get("data_hash") and df is not None:
+            row["data_hash"] = hash_ohlcv_frame(df)
+        datasets.append(row)
+    return datasets
+
+
+def _strategy_spec_payload(specs_by_pair: dict[tuple[str, str], list[StrategySpec]]) -> list[dict[str, Any]]:
+    payload: list[dict[str, Any]] = []
+    for (symbol, timeframe), pair_specs in sorted(specs_by_pair.items()):
+        for spec in pair_specs:
+            payload.append(
+                {
+                    "symbol": symbol,
+                    "timeframe": timeframe,
+                    "family": spec.family,
+                    "name": spec.name,
+                    "params": spec.params,
+                    "direction": spec.direction,
+                    "tags": spec.tags,
+                }
+            )
+    return payload
+
+
 # ─── Single-symbol single-TF worker ──────────────────────────────────────────
 
 def _run_symbol_tf(
@@ -136,6 +190,7 @@ def _run_symbol_tf(
     min_trades: int,
     data_source: str = "",
     backtest_exit_config: Optional[dict] = None,
+    data_hash: str = "",
 ) -> list[StrategyMetrics]:
     """Run all strategy specs on one symbol/TF combination."""
     results = []
@@ -162,6 +217,7 @@ def _run_symbol_tf(
                 min_trades=min_trades,
                 freq=freq,
                 data_source=data_source,
+                data_hash=data_hash,
                 backtest_exit_config=backtest_exit_config,
             )
             results.append(metrics)
@@ -345,6 +401,7 @@ def run_research(
             all_data[(sym, tf)] = (df, prov)
 
     log.info("[run_manager] Loaded data for %d symbol/TF pairs", len(all_data))
+    datasets_meta = _dataset_manifest(all_data)
 
     specs_by_pair: dict[tuple[str, str], list[StrategySpec]] = {}
     remaining = combination_cap
@@ -383,7 +440,7 @@ def run_research(
                 _run_symbol_tf,
                 symbol, tf, ohlcv, pair_specs,
                 run_id, fees_cfg, slippage, is_pct, min_trades,
-                prov.data_source, backtest_exit_config,
+                prov.data_source, backtest_exit_config, getattr(prov, "data_hash", ""),
             )
             tasks.append(future)
             executed_combination_count += len(pair_specs)
@@ -441,9 +498,13 @@ def run_research(
         log.error("[run_manager] Early research_summary.csv write failed: %s", e, exc_info=True)
 
     # Generate reports
+    repo_root = Path(__file__).resolve().parents[1]
+    slippage_cfg = cfg.get("slippage", {}) or {}
+    strategy_registry_meta = build_strategy_registry_metadata(_strategy_spec_payload(specs_by_pair))
     run_meta = {
         "mode": mode,
         "symbol_count": len(symbols),
+        "symbols": symbols,
         "timeframes": timeframes,
         "families": families,
         "specs_count": len(specs),
@@ -462,6 +523,22 @@ def run_research(
         "trading_style": trading_style,
         "backtest_exit_mode": (backtest_exit_config or {}).get("BACKTEST_EXIT_MODE", "triple_barrier"),
         "backtest_exit_config": backtest_exit_config,
+        "code": {
+            **collect_git_metadata(repo_root),
+            "source_hashes": collect_source_hashes(_REPRO_SOURCE_FILES, repo_root=repo_root),
+        },
+        "config": build_config_metadata(config_path, cfg),
+        "environment": collect_environment_metadata(),
+        "costs": build_cost_metadata(fees_cfg, slippage_cfg),
+        "data": {
+            "cache_dir": str(cache_dir),
+            "force_refresh": bool(force_refresh),
+            "allow_yfinance_fallback": bool(allow_yfinance),
+            "candle_policy": candle_policy_metadata(max_bars_by_timeframe),
+            "datasets": datasets_meta,
+        },
+        "strategy_registry": strategy_registry_meta,
+        "session_calendar": build_session_calendar_metadata(),
     }
     try:
         run_dir = generate_all_reports(all_results, output_dir, run_id, run_meta)

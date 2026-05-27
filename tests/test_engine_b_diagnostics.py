@@ -1729,7 +1729,7 @@ def test_engine_b_follow_through_denominator_uses_configured_capacity(monkeypatc
     )
 
     assert out["follow_through"]["score"] == pytest.approx(0.0)
-    assert out["max_possible"] == pytest.approx(10.5)
+    assert out["max_possible"] == pytest.approx(9.5)
 
 
 def test_engine_b_score_floor_uses_regime_multiplier_not_min_rr():

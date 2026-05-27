@@ -3,7 +3,7 @@ from types import SimpleNamespace
 from datetime import datetime, timezone
 
 import sentiment_gate
-from config import CONFIG
+import config as config_module
 from unittest.mock import patch
 
 class DummyException(Exception):
@@ -28,7 +28,7 @@ def mock_eodhd(monkeypatch):
     sentiment_gate._cache.clear()
 
 def test_sentiment_gate_threshold_long_blocked(mock_eodhd, monkeypatch):
-    CONFIG["SENTIMENT_BLOCK_THRESHOLD"] = 0.4
+    monkeypatch.setitem(config_module.CONFIG, "SENTIMENT_BLOCK_THRESHOLD", 0.4)
     
     client = DummyAPIClient()
     client._responses = {"BTC-USD.CC": [{"sentiment": {"polarity": -0.5}}]}
@@ -44,7 +44,7 @@ def test_sentiment_gate_threshold_long_blocked(mock_eodhd, monkeypatch):
     assert "strongly bearish" in result["reason"]
 
 def test_sentiment_gate_threshold_long_allowed(mock_eodhd, monkeypatch):
-    CONFIG["SENTIMENT_BLOCK_THRESHOLD"] = 0.4
+    monkeypatch.setitem(config_module.CONFIG, "SENTIMENT_BLOCK_THRESHOLD", 0.4)
     
     client = DummyAPIClient()
     client._responses = {"BTC-USD.CC": [{"sentiment": {"polarity": -0.3}}]}
@@ -60,7 +60,7 @@ def test_sentiment_gate_threshold_long_allowed(mock_eodhd, monkeypatch):
     assert "strongly bearish" not in result["reason"]
 
 def test_sentiment_gate_threshold_short_blocked(mock_eodhd, monkeypatch):
-    CONFIG["SENTIMENT_BLOCK_THRESHOLD"] = 0.5
+    monkeypatch.setitem(config_module.CONFIG, "SENTIMENT_BLOCK_THRESHOLD", 0.5)
     
     client = DummyAPIClient()
     client._responses = {"BTC-USD.CC": [{"sentiment": {"polarity": 0.6}}]}
@@ -76,7 +76,7 @@ def test_sentiment_gate_threshold_short_blocked(mock_eodhd, monkeypatch):
     assert "strongly bullish" in result["reason"]
 
 def test_sentiment_gate_failure_policy_open(mock_eodhd, monkeypatch):
-    CONFIG["SENTIMENT_API_FAIL_CLOSED"] = False
+    monkeypatch.setattr(sentiment_gate, "_sentiment_api_fail_closed", lambda: False)
 
     def buggy_client(*args, **kwargs):
         raise DummyException("API offline")
@@ -90,7 +90,7 @@ def test_sentiment_gate_failure_policy_open(mock_eodhd, monkeypatch):
     assert result["allowed"] is True
 
 def test_sentiment_gate_failure_policy_closed(mock_eodhd, monkeypatch):
-    CONFIG["SENTIMENT_API_FAIL_CLOSED"] = True
+    monkeypatch.setattr(sentiment_gate, "_sentiment_api_fail_closed", lambda: True)
 
     def buggy_client(*args, **kwargs):
         raise DummyException("API offline")

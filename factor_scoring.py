@@ -524,31 +524,20 @@ def _finalize_coherent_trend_score(votes: list, detail: dict) -> tuple:
         return 0.0, None, {"error": "zero_weight", **detail}
 
     if abs(long_w - short_w) < 1e-9:
-        # Weighted tie — return weak tradable score instead of hard abort.
-        dominant_sign = 1.0 if long_w > short_w else -1.0
-        dominant_w = long_w if dominant_sign > 0 else short_w
-        coherence_ratio = max(0.1, dominant_w / total_w)
-        active_votes = len(votes)
-        if active_votes == 1:
-            vote_weights = [w for _, _, w in votes]
-            max_single_weight = max(vote_weights) if vote_weights else dominant_w
-            if max_single_weight <= 0:
-                max_single_weight = dominant_w
-            dominant_weight = dominant_w
-            _tf_coverage = (1.0 / 3.0) * (dominant_weight / max_single_weight)
-        else:
-            _tf_coverage = active_votes / 3.0
-        magnitude = (0.35 + 0.65 * coherence_ratio) * 3.0 * _tf_coverage * 0.35
-        trend_score = dominant_sign * magnitude
-        direction = "LONG" if dominant_sign > 0 else "SHORT"
+        # Perfect weighted tie exits before COHERENCE_RATIO_FLOOR: no direction.
         detail["weighted_tf_tie"] = True
         detail["long_weight"] = round(long_w, 4)
         detail["short_weight"] = round(short_w, 4)
-        detail["coherence_ratio"] = round(coherence_ratio, 4)
-        detail["tf_coverage"] = round(_tf_coverage, 4)
-        detail["dominant_direction"] = direction
-        detail["weighted_balance"] = round((long_w - short_w) / total_w, 4)
-        return trend_score, direction, detail
+        detail["weighted_balance"] = 0.0
+        detail["vote_components"] = [
+            {
+                "component": name,
+                "direction": "LONG" if d > 0 else "SHORT",
+                "weight": round(w, 4),
+            }
+            for name, d, w in votes
+        ]
+        return 0.0, None, {"error": "weighted_tf_tie", **detail}
     dominant_sign = 1.0 if long_w > short_w else -1.0
 
     dominant_w = long_w if dominant_sign > 0 else short_w
