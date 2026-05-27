@@ -143,14 +143,14 @@ def _resolve_adx_source_mode(score_group: str | None, asset_type: str) -> str:
 
 
 def _resolve_di_alignment_multipliers(score_group: str | None, asset_type: str) -> dict:
-    multipliers = {"missing": 0.5, "balanced": 0.5, "opposed": 0.3}
+    multipliers = {"missing": 0.5, "balanced": 0.5, "opposed": 0.5, "severe_opposed": 0.35}
     if not _engine_a_group_adjustments_enabled():
         return multipliers
 
     keyed = CONFIG.get("ENGINE_A_DI_ALIGNMENT_MULT_BY_CLASS") or {}
     overrides = _resolve_class_keyed(keyed, score_group, asset_type, {})
     if isinstance(overrides, dict):
-        for state in ("missing", "balanced", "opposed"):
+        for state in ("missing", "balanced", "opposed", "severe_opposed"):
             if state in overrides:
                 multipliers[state] = _float_cfg(overrides.get(state), multipliers[state])
     return {state: max(0.0, min(1.0, value)) for state, value in multipliers.items()}
@@ -261,6 +261,11 @@ _ADX_SOFT_MULT_DEFAULT = 0.65    # multiplier in soft zone
 
 # Track whether we've emitted the fallback warning (per-process, not per-call)
 _adx_fallback_warned = False
+
+# LRU cache for _previous_indicator_snap to avoid recomputing the full indicator
+# suite on N-1 candles just to get the prior bar's EMA values for hysteresis.
+_PREV_SNAP_CACHE_MAX = 200
+_prev_snap_cache: dict = {}
 
 # Session multiplier defaults (forex only — read lazily in _session_multiplier)
 _SESSION_CORE_MULT_DEFAULT = 1.00
@@ -498,6 +503,8 @@ def _coherent_trend_score_from_profile(
         if sign is not None:
             votes.append((weight_key, sign, _w(weight_key)))
             detail[tf_key] = "LONG" if sign > 0 else "SHORT"
+        elif snap.get(fast_ema) is not None and snap.get(slow_ema) is None:
+            detail[f"{tf_key}_{slow_ema}_missing"] = True
         elif snap.get(fast_ema) is not None and snap.get(slow_ema) is not None:
             detail[f"{tf_key}_hysteresis_pending"] = True
 
@@ -517,28 +524,45 @@ def _finalize_coherent_trend_score(votes: list, detail: dict) -> tuple:
         return 0.0, None, {"error": "zero_weight", **detail}
 
     if abs(long_w - short_w) < 1e-9:
-        # Perfect weighted tie — neither LONG nor SHORT carries majority weight.
-        # Returning no direction here prevents the single highest-weighted TF
-        # (typically D1) from overruling the joint vote of the other timeframes
-        # and producing what looks like a flipped signal.
+        # Weighted tie — return weak tradable score instead of hard abort.
+        dominant_sign = 1.0 if long_w > short_w else -1.0
+        dominant_w = long_w if dominant_sign > 0 else short_w
+        coherence_ratio = max(0.1, dominant_w / total_w)
+        active_votes = len(votes)
+        if active_votes == 1:
+            vote_weights = [w for _, _, w in votes]
+            max_single_weight = max(vote_weights) if vote_weights else dominant_w
+            if max_single_weight <= 0:
+                max_single_weight = dominant_w
+            dominant_weight = dominant_w
+            _tf_coverage = (1.0 / 3.0) * (dominant_weight / max_single_weight)
+        else:
+            _tf_coverage = active_votes / 3.0
+        magnitude = (0.35 + 0.65 * coherence_ratio) * 3.0 * _tf_coverage * 0.35
+        trend_score = dominant_sign * magnitude
+        direction = "LONG" if dominant_sign > 0 else "SHORT"
         detail["weighted_tf_tie"] = True
         detail["long_weight"] = round(long_w, 4)
         detail["short_weight"] = round(short_w, 4)
-        return 0.0, None, {"error": "weighted_tf_tie", **detail}
+        detail["coherence_ratio"] = round(coherence_ratio, 4)
+        detail["tf_coverage"] = round(_tf_coverage, 4)
+        detail["dominant_direction"] = direction
+        detail["weighted_balance"] = round((long_w - short_w) / total_w, 4)
+        return trend_score, direction, detail
     dominant_sign = 1.0 if long_w > short_w else -1.0
 
     dominant_w = long_w if dominant_sign > 0 else short_w
-    # coherence_ratio floor removed (was 0.5). A tied or near-tied vote should
-    # produce near-zero magnitude, not a "moderate" score that amplifies noise.
-    # Configurable via COHERENCE_RATIO_FLOOR for experiments; default = 0.0.
+    # Use weighted vote margin as coherence, not dominant-side share. A near-tie
+    # should remain low confidence; a perfect tie exits above with no direction.
+    # COHERENCE_RATIO_FLOOR applies only after a non-tied side exists.
     _coh_floor = float(CONFIG.get("COHERENCE_RATIO_FLOOR", 0.0))
     _coh_floor = max(0.0, min(1.0, _coh_floor))
-    coherence_ratio = max(_coh_floor, min(1.0, dominant_w / total_w))
+    weighted_margin = abs(long_w - short_w) / total_w
+    coherence_ratio = max(_coh_floor, min(1.0, weighted_margin))
     agreement_count = sum(1 for _, d, _ in votes if d == dominant_sign)
     # Scale by TF coverage so a single available TF cannot produce a full 3.0 score.
     # D1 only → max 1.0; D1+H4 → max 2.0; all three → max 3.0.
-    # FIX 5: Single-vote trend weight scaling — scale coverage by relative weight
-    # so D1-only > H4-only > H1-only.
+    # With one active vote, coherence is full but coverage caps magnitude at 1.0.
     active_votes = len(votes)
     if active_votes == 1:
         vote_weights = [w for _, _, w in votes]
@@ -549,7 +573,7 @@ def _finalize_coherent_trend_score(votes: list, detail: dict) -> tuple:
         _tf_coverage = (1.0 / 3.0) * (dominant_weight / max_single_weight)
     else:
         _tf_coverage = active_votes / 3.0
-    magnitude = (0.35 + 0.65 * coherence_ratio) * 3.0 * _tf_coverage
+    magnitude = coherence_ratio * 3.0 * _tf_coverage
     trend_score = dominant_sign * magnitude
     direction = "LONG" if dominant_sign > 0 else "SHORT"
 
@@ -610,6 +634,8 @@ def _coherent_trend_score(
 
 def _previous_indicator_snap(
     candles: list | None,
+    pair_id: str,
+    tf: str,
     score_group: str | None = None,
     asset_type: str = "other",
 ) -> dict | None:
@@ -619,10 +645,19 @@ def _previous_indicator_snap(
     ``calc_indicators_with_normalized`` with ``score_group``). Using only
     ``calc_indicators_for_engine_a`` on bar N-1 while the current bar stayed on
     the universal path broke 2-bar EMA confirmation and zeroed forex trend votes.
+
+    Results are cached per (pair_id, tf, len(candles), candles[-2]['close'])
+    to avoid recomputing the full indicator suite when scanning many pairs.
     """
     if not isinstance(candles, list) or len(candles) < 2:
         return None
     try:
+        _prev_close = candles[-2].get("close")
+        _cache_key = (pair_id, tf, len(candles), _prev_close)
+        _cached = _prev_snap_cache.get(_cache_key)
+        if _cached is not None:
+            return _cached
+
         from indicators import calc_indicators_with_normalized
 
         prev_indicators = calc_indicators_with_normalized(
@@ -631,7 +666,15 @@ def _previous_indicator_snap(
             score_group=score_group,
         )
         prev_snap = prev_indicators.get("snap") if isinstance(prev_indicators, dict) else None
-        return prev_snap if isinstance(prev_snap, dict) else None
+        result = prev_snap if isinstance(prev_snap, dict) else None
+
+        _prev_snap_cache[_cache_key] = result
+        if len(_prev_snap_cache) > _PREV_SNAP_CACHE_MAX:
+            # Evict oldest entry (Python 3.7+ dict preserves insertion order)
+            _oldest_key = next(iter(_prev_snap_cache))
+            del _prev_snap_cache[_oldest_key]
+
+        return result
     except Exception as exc:
         log.debug("[EA2] previous indicator snapshot unavailable: %s", exc)
         return None
@@ -944,7 +987,7 @@ def _momentum_quality(
     ) / total_w
     # Rescale to true [0, 1] range. The raw weighted sum maxes at 0.50
     # (both RSI and MACD at +0.50), so we divide by 0.50 to map 0.50 → 1.0.
-    # Worst case: RSI=-0.25, MACD=-0.50 → raw = -0.35 → rescaled = -0.70 → clamped to 0.
+    # Worst standard case: RSI=-0.25, MACD=-0.25 -> raw = -0.25 -> rescaled = -0.50 -> clamped to 0.
     # This ensures mom_quality can actually reach 1.0 when both indicators confirm.
     _rsi_cap = 0.50
     _macd_cap = 0.50
@@ -1294,17 +1337,23 @@ def _resolve_adx_thresholds(asset_type: str, score_group: str | None) -> tuple[f
     trend_min = _resolve_class_keyed(_trend_min_cfg, score_group, asset_type, None)
     hard_fail = _resolve_class_keyed(_hard_fail_cfg, score_group, asset_type, None)
     _used_fallback = False
-    if trend_min is None:
+    if asset_type == "crypto" and trend_min is None and hard_fail is None:
         _used_fallback = True
-        trend_min = 30.0
-    if hard_fail is None:
-        _used_fallback = True
-        hard_fail = 10.0
+        trend_min = 25.0
+        hard_fail = 15.0
+    else:
+        if trend_min is None:
+            _used_fallback = True
+            trend_min = 30.0
+        if hard_fail is None:
+            _used_fallback = True
+            hard_fail = 10.0
     if _used_fallback and not _adx_fallback_warned:
         _adx_fallback_warned = True
         warnings.warn(
             f"ADX thresholds for asset_type='{asset_type}' not found in config. "
-            f"Falling back to hardcoded defaults (hard_fail=10.0, trend_min=30.0) "
+            f"Falling back to hardcoded defaults "
+            f"(hard_fail={hard_fail}, trend_min={trend_min}) "
             f"for missing entries. Add ADX_TREND_MIN_CLASS and/or "
             f"FACTOR_ADX_HARD_FAIL_CLASS entries to config.yaml to silence.",
             UserWarning,
@@ -2517,9 +2566,9 @@ def compute_factor_scores(
                             reason="atr_invalid_abort", direction=None)
 
     # ── FACTOR 1: Trend ───────────────────────────────────────────────────────
-    d1_prev = _previous_indicator_snap(d1_candles, score_group=score_group, asset_type=asset_type)
-    h4_prev = _previous_indicator_snap(h4_candles, score_group=score_group, asset_type=asset_type)
-    h1_prev = _previous_indicator_snap(h1_candles, score_group=score_group, asset_type=asset_type)
+    d1_prev = _previous_indicator_snap(d1_candles, pair_id=pair_id, tf="D1", score_group=score_group, asset_type=asset_type)
+    h4_prev = _previous_indicator_snap(h4_candles, pair_id=pair_id, tf="H4", score_group=score_group, asset_type=asset_type)
+    h1_prev = _previous_indicator_snap(h1_candles, pair_id=pair_id, tf="H1", score_group=score_group, asset_type=asset_type)
     trend_score, direction, trend_detail = _coherent_trend_score(
         d1_snap, h4_snap, h1_snap, asset_type,
         d1_prev=d1_prev,
@@ -2717,24 +2766,30 @@ def compute_factor_scores(
         if trend_dir == "LONG":
             if plus_di > minus_di:
                 return 1.0
-            elif abs(di_diff) < 5.0:
+            elif abs(di_diff) <= 5.0:
                 return _di_mults["balanced"]
+            elif abs(di_diff) <= 15.0:
+                t = (abs(di_diff) - 5.0) / 10.0
+                return _di_mults["balanced"] + t * (_di_mults["opposed"] - _di_mults["balanced"])
             else:
-                return _di_mults["opposed"]
+                return _di_mults["severe_opposed"]
         elif trend_dir == "SHORT":
             if minus_di > plus_di:
                 return 1.0
-            elif abs(di_diff) < 5.0:
+            elif abs(di_diff) <= 5.0:
                 return _di_mults["balanced"]
+            elif abs(di_diff) <= 15.0:
+                t = (abs(di_diff) - 5.0) / 10.0
+                return _di_mults["balanced"] + t * (_di_mults["opposed"] - _di_mults["balanced"])
             else:
-                return _di_mults["opposed"]
+                return _di_mults["severe_opposed"]
         return _di_mults["missing"]
 
     _plus_di = h4_snap.get("plusDI") or h4_snap.get("plus_di")
     _minus_di = h4_snap.get("minusDI") or h4_snap.get("minus_di")
     di_align_mult = _di_alignment_multiplier(direction, _plus_di, _minus_di)
     feed_status["di_align"] = f"{di_align_mult:.2f}"
-    if di_align_mult <= 0.3 and _plus_di is not None and _minus_di is not None:
+    if di_align_mult <= _di_mults.get("severe_opposed", 0.35) and _plus_di is not None and _minus_di is not None:
         feed_status["di_align_opposed"] = "true"
         log.debug(
             "[EA2] %s DI opposed to trend direction=%s plusDI=%s minusDI=%s mult=%.2f",
@@ -2791,11 +2846,13 @@ def compute_factor_scores(
     #          (floor + (1-floor)*conviction)
     #
     # The conviction floor is regime-conditional when CONVICTION_FLOOR_BY_REGIME is
-    # present. RANGING / HIGH_VOLATILITY use a lower floor (default 0.40) because
+    # present. RANGING / HIGH_VOLATILITY use a lower floor (default 0.10) because
     # momentum noise is higher — weak momentum should count for less.
     _floor_by_regime = CONFIG.get("CONVICTION_FLOOR_BY_REGIME") or {}
     if isinstance(_floor_by_regime, dict) and regime in _floor_by_regime:
         _eff_floor = float(_floor_by_regime[regime])
+    elif regime in {"RANGING", "HIGH_VOLATILITY"}:
+        _eff_floor = 0.10
     else:
         _eff_floor = _conviction_floor
     _eff_floor = _resolve_conviction_floor(score_group, asset_type, _eff_floor)

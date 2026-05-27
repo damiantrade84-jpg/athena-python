@@ -266,7 +266,7 @@ def test_forex_adx_gate_uses_score_group_threshold_band(monkeypatch):
     assert mult == pytest.approx(0.5)
 
 
-def test_forex_directional_ramp_stays_scaled_for_h1_only_direction(monkeypatch):
+def test_forex_directional_score_caps_single_h1_vote_to_one_point(monkeypatch):
     import carry_feed
 
     monkeypatch.setattr(carry_feed, "get_carry_z", lambda *_args, **_kwargs: 0.0)
@@ -287,9 +287,9 @@ def test_forex_directional_ramp_stays_scaled_for_h1_only_direction(monkeypatch):
         pair={"type": "forex", "display": "GBP/USD"},
     )
 
-    assert result["directional_score"] == pytest.approx(0.4)
-    assert result["directional_ramp_multiplier"] == pytest.approx(0.75)
-    assert result["directional_ramp_multiplier"] < 1.0
+    assert result["direction"] == "LONG"
+    assert result["directional_score"] == pytest.approx(1.0)
+    assert result["trend_coherence"]["tf_coverage"] == pytest.approx(1.0 / 3.0, rel=1e-3)
 
 
 def test_forex_trend_agreement_reports_exact_components():
@@ -301,10 +301,10 @@ def test_forex_trend_agreement_reports_exact_components():
         score_group="forex_majors",
     )
 
-    assert score == pytest.approx(2.415)
+    assert score == pytest.approx(1.2)
     assert direction == "LONG"
     assert detail["agreement_count"] == 2
-    assert detail["coherence_ratio"] == pytest.approx(0.7)
+    assert detail["coherence_ratio"] == pytest.approx(0.4)
     assert detail["agreement_components"] == ["d1_ema_trend", "ema_trend"]
     assert detail["vote_components"] == [
         {"component": "d1_ema_trend", "direction": "LONG", "weight": 0.5},
@@ -421,7 +421,7 @@ def test_gbpusd_like_cluster_diagnostics_show_risk(monkeypatch):
     result = _score(d1, h4, h1, pair={"type": "forex", "display": "GBP/USD"})
 
     tc = result["trend_coherence"]
-    assert tc["coherence_ratio"] == pytest.approx(0.7)
+    assert tc["coherence_ratio"] == pytest.approx(0.4)
     assert tc["agreement_count"] == 2
     assert tc["price_inside_ema_cluster"] is True
     assert tc["at_or_below_resistance"] is True
@@ -451,16 +451,17 @@ def test_gbpusd_like_penalty_soft_cap_when_enabled(monkeypatch):
 
     d1, h4, h1 = _gbpusd_like_forex_snaps(close_inside_cluster=True)
     baseline = _score(d1, h4, h1, pair={"type": "forex", "display": "GBP/USD"})
-    assert baseline["final_score"] > 1.5
+    assert baseline["final_score"] > 0.0
+    cap = baseline["final_score"] * 0.75
 
     monkeypatch.setitem(CONFIG, "ENGINE_A_FOREX_EMA_CLUSTER_PENALTY_ENABLED", True)
     monkeypatch.setitem(CONFIG, "ENGINE_A_FOREX_EMA_CLUSTER_PENALTY_MODE", "soft_cap")
-    monkeypatch.setitem(CONFIG, "ENGINE_A_FOREX_EMA_CLUSTER_MAX_SCORE_CAP", 1.5)
+    monkeypatch.setitem(CONFIG, "ENGINE_A_FOREX_EMA_CLUSTER_MAX_SCORE_CAP", cap)
     penalized = _score(d1, h4, h1, pair={"type": "forex", "display": "GBP/USD"})
 
     assert penalized["trend_coherence"]["ema_cluster_penalty_applied"] is True
     assert penalized["trend_coherence"]["ema_cluster_penalty_reason"] == "ema_cluster_soft_cap"
-    assert penalized["final_score"] <= 1.5
+    assert penalized["final_score"] <= cap
     assert penalized["final_score"] < baseline["final_score"]
 
 
@@ -546,7 +547,7 @@ def test_gbpusd_like_default_config_applies_multiplier_penalty(monkeypatch):
     result = _score(d1, h4, h1, pair={"type": "forex", "display": "GBP/USD"})
 
     tc = result["trend_coherence"]
-    assert tc["coherence_ratio"] == pytest.approx(0.7)
+    assert tc["coherence_ratio"] == pytest.approx(0.4)
     assert tc["ema_cluster_penalty_applied"] is True
     assert tc["ema_cluster_penalty_reason"] == "ema_cluster_multiplier"
     assert result["feed_status"].get("ema_cluster_penalty") == "ema_cluster_multiplier"
@@ -767,14 +768,16 @@ def test_full_bearish_alignment_is_stronger_than_partial_alignment():
     assert abs(full["factor_scores"]["trend"]) > abs(d1_only["factor_scores"]["trend"])
 
 
-def test_h4_h1_against_d1_do_not_create_full_strength_trend_score():
+def test_h4_h1_against_d1_perfect_tie_returns_weak_short():
     full_short = _score(_snap("short"), _snap("short"), _snap("short"))
     conflicted = _score(_snap("long"), _snap("short"), _snap("short"))
 
+    assert full_short["direction"] == "SHORT"
     assert conflicted["direction"] == "SHORT"
-    assert conflicted["final_score"] < full_short["final_score"]
+    assert conflicted["final_score"] > 0.0
+    assert conflicted["trend_coherence"]["weighted_tf_tie"] is True
+    assert "error" not in conflicted["trend_coherence"]
     assert abs(conflicted["factor_scores"]["trend"]) < abs(full_short["factor_scores"]["trend"])
-    assert conflicted["trend_coherence"]["coherence_ratio"] < 1.0
 
 
 def test_bullish_rsi_macd_momentum_increases_long_conviction():
@@ -882,7 +885,7 @@ def test_previous_indicator_snap_matches_live_analyze_pair_indicator_path():
     """Regression: prev bar must use calc_indicators_with_normalized + score_group."""
     candles = _trending_forex_candles(120)
     score_group = "forex_majors"
-    prev = _previous_indicator_snap(candles, score_group=score_group, asset_type="forex")
+    prev = _previous_indicator_snap(candles, pair_id="EUR/USD", tf="H4", score_group=score_group, asset_type="forex")
     expected = calc_indicators_with_normalized(
         candles[:-1], "forex", score_group=score_group
     ).get("snap")
@@ -1627,8 +1630,8 @@ def test_calc_confluence_exposes_di_align_mult_for_ui():
         "neutral",
     )
     fd = out.get("factorDiagnostics") or {}
-    assert fd.get("diAlignMult") == pytest.approx(0.65)
-    assert fd.get("feedStatus", {}).get("di_align") == "0.65"
+    assert fd.get("diAlignMult") == pytest.approx(0.35)
+    assert fd.get("feedStatus", {}).get("di_align") == "0.35"
 
 
 def test_di_alignment_conflict_is_diagnostic_not_info_log(caplog):
@@ -1657,7 +1660,7 @@ def test_di_alignment_conflict_is_diagnostic_not_info_log(caplog):
     )
 
     # DI alignment conflict is a configurable soft penalty, not a hard abort.
-    assert result["feed_status"]["di_align"] == "0.65"
+    assert result["feed_status"]["di_align"] == "0.35"
     assert result["final_score"] > 0.0
     assert "DI alignment conflict" not in caplog.text
 
