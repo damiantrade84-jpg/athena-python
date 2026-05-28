@@ -11,6 +11,7 @@ from ai_review.provider_meta import ProviderChartReviewError, build_provider_met
 from config import (
     CONFIG,
     get_ai_base_url,
+    get_ai_max_retries,
     get_ai_model,
 )
 
@@ -130,10 +131,16 @@ def call_openai_chart_review(
         or CONFIG.get("OPENAI_REVIEW_TIMEOUT_SECONDS", 120)
         or 120
     )
+    max_retries = get_ai_max_retries(
+        CONFIG,
+        preferred_key="OPENAI_REVIEW_SDK_MAX_RETRIES",
+        fallback=0,
+    )
     request_payload = build_openai_responses_payload(payload, cfg=CONFIG, cfg_key=cfg_key)
     client = openai.OpenAI(
         api_key=api_key,
         base_url=get_ai_base_url(CONFIG, provider="openai"),
+        max_retries=max_retries,
     )
     t0 = time.monotonic()
     try:
@@ -145,9 +152,11 @@ def call_openai_chart_review(
     raw_text = extract_openai_response_text(resp)
     model_used = str(getattr(resp, "model", "") or request_payload["model"])
     log.info(
-        "[AI_REVIEW] openai model=%s latency_ms=%s data_url_len=%s",
+        "[AI_REVIEW] openai model=%s latency_ms=%s timeout=%s sdk_retries=%s data_url_len=%s",
         model_used,
         latency_ms,
+        timeout,
+        max_retries,
         len(str(payload.screenshot_base64 or "")),
     )
     meta = build_provider_meta(

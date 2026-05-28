@@ -775,6 +775,46 @@ def test_openai_provider_builds_responses_payload_with_reasoning_and_image():
     assert content[1] == {"type": "input_image", "image_url": payload.screenshot_base64}
 
 
+def test_openai_provider_disables_sdk_retries_for_chart_review(monkeypatch):
+    from ai_review.providers.openai_provider import call_openai_chart_review
+
+    payload = MagicMock()
+    payload.screenshot_base64 = _png_data_url()
+    payload.prompt = "review this chart"
+    calls = {}
+
+    class _FakeResponses:
+        def create(self, **kwargs):
+            calls["create_kwargs"] = kwargs
+            return SimpleNamespace(
+                output_text='{"verdict":"VALID","confidence":80,"human_action":"take"}',
+                model="gpt-5.5",
+            )
+
+    class _FakeOpenAI:
+        def __init__(self, **kwargs):
+            calls["client_kwargs"] = kwargs
+            self.responses = _FakeResponses()
+
+    monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(OpenAI=_FakeOpenAI))
+    monkeypatch.setenv("OPENAI_API_KEY", "test-openai-key")
+    with patch.dict(
+        CONFIG,
+        {
+            "OPENAI_REVIEW_ENABLED": True,
+            "OPENAI_REVIEW_TIMEOUT_SECONDS": 7,
+            "OPENAI_REVIEW_SDK_MAX_RETRIES": 0,
+            "AI_CHART_REVIEW": {"OPENAI_MODEL": "gpt-5.5"},
+        },
+        clear=False,
+    ):
+        out = call_openai_chart_review(payload)
+
+    assert calls["client_kwargs"]["max_retries"] == 0
+    assert calls["create_kwargs"]["timeout"] == 7.0
+    assert out["provider"] == "openai"
+
+
 def test_validate_request_disabled_provider():
     cfg = dict(CONFIG["AI_CHART_REVIEW"])
     cfg["OPENAI_REVIEW_ENABLED"] = False
