@@ -10,7 +10,7 @@ from typing import Optional
 
 from ai_schemas import EngineBResponse
 from ai_utils import parse_json_object
-from config import CONFIG, AITemperatureConfig, create_ai_client, get_ai_model
+from config import CONFIG, AITemperatureConfig, create_ai_client, get_ai_model, resolve_ai_review_runtime
 
 log = logging.getLogger("athena")
 VALID_ENGINE_B_GRADES = {"A+", "A", "B", "C", "D", "F"}
@@ -499,12 +499,22 @@ def get_engine_b_ai_verdict(
         - verdict: text analysis
         - error: if failed
     """
-    if not xai_api_key:
+    runtime = resolve_ai_review_runtime(CONFIG)
+    active_provider = str(runtime.get("provider") or runtime.get("selectedProvider") or "grok")
+    api_key = str(xai_api_key or "").strip()
+    if not api_key:
         log.info("[ENGINE_B_AI] AI API key not provided, skipping AI analysis")
-        return {"error": "API key not configured"}
+        return {
+            "error": "API key not configured",
+            "provider": active_provider,
+            "selectedProvider": runtime.get("selectedProvider") or active_provider,
+            "fallbackUsed": False,
+        }
 
     try:
-        client = create_ai_client(CONFIG, api_key=xai_api_key)
+        client = create_ai_client(CONFIG, api_key=api_key, provider=active_provider)
+        model_override = None if runtime.get("fallbackUsed") else xai_model
+        model = str(model_override or get_ai_model(CONFIG, "AI_MODEL", provider=active_provider)).strip()
 
         message = build_engine_b_signal_message(
             pair,
@@ -551,7 +561,7 @@ def get_engine_b_ai_verdict(
 
         parsed_dict, raw_text = _call_ai_with_retry(
             client,
-            model=str(xai_model or get_ai_model(CONFIG, "AI_MODEL")).strip(),
+            model=model,
             messages=[
                 {"role": "system", "content": expert_prompt},
                 {"role": "user", "content": message},
@@ -569,6 +579,12 @@ def get_engine_b_ai_verdict(
             return {"error": "Invalid AI response format"}
 
         parsed = _normalise_engine_b_ai_payload(parsed)
+        parsed.setdefault("provider", active_provider)
+        parsed.setdefault("selectedProvider", runtime.get("selectedProvider") or active_provider)
+        parsed.setdefault("model", model)
+        parsed.setdefault("fallbackUsed", bool(runtime.get("fallbackUsed")))
+        if runtime.get("providerFailure"):
+            parsed.setdefault("providerFailure", runtime.get("providerFailure"))
 
         # Validate required keys
         required = {"grade", "edgeProbability", "riskLevel", "verdict", "reviewSource"}
@@ -609,8 +625,8 @@ def get_engine_b_ai_verdict(
                     or "unknown"
                 ),
                 review_type=REVIEW_TYPE_ENGINE_B_AI,
-                model=str(xai_model or get_ai_model(CONFIG, "AI_MODEL")).strip(),
-                provider="xAI",
+                model=model,
+                provider=active_provider,
                 prompt_version=get_prompt_version("engine_b_ai"),
                 input_packet={
                     "pair": pair,

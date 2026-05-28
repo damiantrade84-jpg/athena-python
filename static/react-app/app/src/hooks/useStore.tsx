@@ -54,6 +54,15 @@ interface AppActions {
 
 const StoreContext = createContext<(AppState & AppActions) | null>(null);
 
+function normalizeAiReviewProvider(value: unknown): AIReviewProvider | null {
+  const text = String(value ?? '').trim().toLowerCase();
+  if (text === 'xai') return 'grok';
+  if (text === 'anthropic') return 'claude';
+  if (text === 'chatgpt' || text === 'gpt') return 'openai';
+  if (text === 'grok' || text === 'claude' || text === 'openai') return text;
+  return null;
+}
+
 export function StoreProvider({ children }: { children: React.ReactNode }) {
   const [activePanel, setActivePanel] = useState<PanelId>('dashboard');
   const [signals, setSignals] = useState<Signal[]>([]);
@@ -89,7 +98,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   const [scanCacheBMeta, setScanCacheBMeta] = useState<{ count: number; scannedAt: string; pairsScanned?: number; scanFunnel?: Record<string, number> } | null>(null);
   const [tvChartIntent, setTvChartIntentState] = useState<TvChartIntent | null>(null);
   const [scalpWorkbenchIntent, setScalpWorkbenchIntentState] = useState<ScalpWorkbenchIntent | null>(null);
-  const [aiReviewProvider, setAiReviewProvider] = useState<AIReviewProvider>('xai');
+  const [aiReviewProvider, setAiReviewProviderState] = useState<AIReviewProvider>('openai');
 
   const setTvChartIntent = useCallback((intent: TvChartIntent) => {
     setTvChartIntentState(intent);
@@ -124,6 +133,16 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     setToast({ message, type });
     toastTimeout.current = setTimeout(() => setToast(null), 4000);
   }, []);
+
+  const setAiReviewProvider = useCallback((provider: AIReviewProvider) => {
+    const normalized = normalizeAiReviewProvider(provider) ?? 'openai';
+    setAiReviewProviderState(normalized);
+    void apiClient
+      .postJson('/api/ai-review/provider', { provider: normalized })
+      .catch(() => {
+        showToast('Failed to update AI review provider', 'error');
+      });
+  }, [showToast]);
 
   const refreshSignals = useCallback(async () => {
     try {
@@ -170,6 +189,24 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     refreshPositions();
     refreshGuardian();
   }, [refreshSignals, refreshPositions, refreshGuardian]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void apiClient
+      .getJson('/api/ai-review/provider')
+      .then((res) => {
+        if (cancelled || !res || typeof res !== 'object') return;
+        const payload = res as { selectedProvider?: unknown; provider?: unknown };
+        const provider = normalizeAiReviewProvider(payload.selectedProvider ?? payload.provider);
+        if (provider) setAiReviewProviderState(provider);
+      })
+      .catch(() => {
+        // Keep the config default if the optional settings endpoint is unavailable.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const toggleAutoTrade = useCallback(() => {
     setIsAutoTrade(prev => {

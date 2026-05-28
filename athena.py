@@ -214,6 +214,7 @@ from config import (
     get_mt5_fetch_stale_unshifted_age_sec,
     scan_candle_limits,
     get_optimal_workers,
+    resolve_ai_review_runtime,
 )  # noqa: E402
 from athena.datafeeds.ws_ssl import configure_process_ca_bundle  # noqa: E402
 from ai_safe_wrappers import ai_call_with_safe_default  # noqa: E402
@@ -4694,12 +4695,21 @@ def run_ai(
     signal = _normalize_ai_analyze_signal(signal)
     ensure_trace_id(signal)
 
-    if not ai_key_configured(CONFIG):
+    _ai_runtime = resolve_ai_review_runtime(CONFIG)
+    _selected_provider = str(_ai_runtime.get("selectedProvider") or "")
+    _active_provider = str(_ai_runtime.get("provider") or _selected_provider or "grok")
+    _provider = get_ai_provider_label(CONFIG, provider=_active_provider)
+    _model = get_ai_model(CONFIG, "AI_MODEL", "grok-4.3", provider=_active_provider)
+    if not _ai_runtime.get("api_key"):
         log.error("[AI] AI API key is not configured")
-        return {"error": "AI API key not configured"}
+        return {
+            "error": f"{_selected_provider or _active_provider} API key not configured",
+            "provider": _active_provider,
+            "selectedProvider": _selected_provider or _active_provider,
+            "model": _model,
+            "fallbackUsed": False,
+        }
 
-    _provider = get_ai_provider_label(CONFIG)
-    _model = get_ai_model(CONFIG, "AI_MODEL", "grok-4.3")
     _timeout_sec = None
     _sdk_max_retries = None
     _prompt_sec = None
@@ -4717,7 +4727,12 @@ def run_ai(
             preferred_key="MARCUS_AI_SDK_MAX_RETRIES",
             fallback=0,
         )
-        c = create_ai_client(CONFIG, max_retries=_sdk_max_retries)
+        c = create_ai_client(
+            CONFIG,
+            api_key=str(_ai_runtime.get("api_key") or ""),
+            max_retries=_sdk_max_retries,
+            provider=_active_provider,
+        )
         _temp = float(AITemperatureConfig.get_temperature("marcus"))
 
         style_labels = {
@@ -4827,6 +4842,15 @@ def run_ai(
             )
             return {"error": "AI response was not valid JSON"}
 
+        result.setdefault("provider", _active_provider)
+        result.setdefault("selectedProvider", _selected_provider or _active_provider)
+        result.setdefault("model", _model)
+        result.setdefault("fallbackUsed", bool(_ai_runtime.get("fallbackUsed")))
+        result.setdefault("fallback_used", bool(_ai_runtime.get("fallback_used")))
+        if _ai_runtime.get("providerFailure"):
+            result.setdefault("providerFailure", _ai_runtime.get("providerFailure"))
+            result.setdefault("provider_failure", _ai_runtime.get("provider_failure"))
+
         try:
             from ai_schemas import (
                 EngineAResponse,
@@ -4918,7 +4942,7 @@ def run_ai(
                 asset_type=signal.get("type", "?"),
                 review_type=REVIEW_TYPE_MARCUS_REID,
                 model=_model,
-                provider=get_ai_provider_label(CONFIG),
+                provider=_active_provider,
                 prompt_version=get_prompt_version("marcus_expert"),
                 input_packet={"pair": signal.get("pair"), "score": signal.get("confluenceScore")},
                 has_chart_image=False,
@@ -6323,6 +6347,12 @@ def _compute_naked_analysis(
             try:
                 from engine_b_ai import get_engine_b_ai_verdict
 
+                _engine_b_ai_runtime = resolve_ai_review_runtime(CONFIG)
+                _engine_b_ai_provider = str(
+                    _engine_b_ai_runtime.get("provider")
+                    or _engine_b_ai_runtime.get("selectedProvider")
+                    or "grok"
+                )
                 ai_verdict = get_engine_b_ai_verdict(
                     pair=pair_obj.get("display"),
                     direction=direction,
@@ -6330,8 +6360,13 @@ def _compute_naked_analysis(
                     structure_result=res,
                     confidence_result=conf,
                     learning_ctx=learning_ctx,
-                    xai_api_key=get_ai_api_key(CONFIG),
-                    xai_model=get_ai_model(CONFIG, "AI_MODEL", "grok-4.3"),
+                    xai_api_key=str(_engine_b_ai_runtime.get("api_key") or ""),
+                    xai_model=get_ai_model(
+                        CONFIG,
+                        "AI_MODEL",
+                        "grok-4.3",
+                        provider=_engine_b_ai_provider,
+                    ),
                     engine_a_ctx=engine_a_ctx,
                     news_ctx=_news_ctx,
                     freshness_ctx=engine_a_ctx if isinstance(engine_a_ctx, dict) else None,
@@ -10236,10 +10271,16 @@ def api_meta_analysis():
     try:
         from ai_learning import run_meta_analysis
 
+        _ai_runtime = resolve_ai_review_runtime(CONFIG)
         result = run_meta_analysis(
             _AUDIT_DB,
-            get_ai_api_key(CONFIG),
-            get_ai_model(CONFIG, "AI_MODEL", "grok-4.3"),
+            str(_ai_runtime.get("api_key") or ""),
+            get_ai_model(
+                CONFIG,
+                "AI_MODEL",
+                "grok-4.3",
+                provider=str(_ai_runtime.get("provider") or _ai_runtime.get("selectedProvider") or "grok"),
+            ),
         )
 
         return jsonify(result)
@@ -10944,14 +10985,25 @@ def api_chart_analysis():
     )
 
     try:
-        _ai_key = get_ai_api_key(CONFIG)
+        _ai_runtime = resolve_ai_review_runtime(CONFIG)
+        _selected_provider = str(_ai_runtime.get("selectedProvider") or "")
+        _active_provider = str(_ai_runtime.get("provider") or _selected_provider or "grok")
+        _ai_key = str(_ai_runtime.get("api_key") or "")
         if not _ai_key:
-            return jsonify({"error": "AI API key not set"}), 500
+            return jsonify(
+                {
+                    "error": f"{_selected_provider or _active_provider} API key not configured",
+                    "provider": _active_provider,
+                    "selectedProvider": _selected_provider or _active_provider,
+                    "fallbackUsed": False,
+                }
+            ), 503
 
-        client = create_ai_client(CONFIG, api_key=_ai_key)
+        client = create_ai_client(CONFIG, api_key=_ai_key, provider=_active_provider)
         log.info(
-            f"[AI CHART] provider={get_ai_provider_label(CONFIG)} "
-            f"base_url={get_ai_base_url(CONFIG)} model={get_ai_model(CONFIG, 'VISION_MODEL', 'grok-4.3')}"
+            f"[AI CHART] provider={get_ai_provider_label(CONFIG, provider=_active_provider)} "
+            f"base_url={get_ai_base_url(CONFIG, provider=_active_provider)} "
+            f"model={get_ai_model(CONFIG, 'VISION_MODEL', 'grok-4.3', provider=_active_provider)}"
         )
 
         img_h4 = str(data["image"])
@@ -11037,7 +11089,12 @@ def api_chart_analysis():
         # Token budgets cut accordingly: triple 1100->450, dual/single 800->350.
         _vision_default_max = 450 if triple_mode else 350
         _max_tokens = int(CONFIG.get("VISION_MAX_TOKENS", _vision_default_max) or _vision_default_max)
-        _vision_model = get_ai_model(CONFIG, "VISION_MODEL", "grok-4.3")
+        _vision_model = get_ai_model(
+            CONFIG,
+            "VISION_MODEL",
+            "grok-4.3",
+            provider=_active_provider,
+        )
         _vision_temp = float(AITemperatureConfig.get_temperature("vision"))
         _user_parts = _chart_blocks_to_openai_user_content(content)
         _completion = _xai_chat_completions_retry(
@@ -11201,9 +11258,14 @@ def api_chart_analysis():
             "analysis": analysis,
             "structured": structured,
             "model": _vision_model,
+            "provider": _active_provider,
+            "selectedProvider": _selected_provider or _active_provider,
+            "fallbackUsed": bool(_ai_runtime.get("fallbackUsed")),
             "symbol": symbol,
             "tf": _tf_label,
         }
+        if _ai_runtime.get("providerFailure"):
+            _vision_payload["providerFailure"] = _ai_runtime.get("providerFailure")
         # Cache vision result for AI reconciliation. Execution-adjacent keys include
         # trace/latest/image; incomplete keys are retained only for UI reconciliation.
         try:
@@ -11241,7 +11303,7 @@ def api_chart_analysis():
                 asset_type=(pair or {}).get("type", "unknown") if pair else "unknown",
                 review_type=REVIEW_TYPE_CHART_VISION,
                 model=_vision_model,
-                provider="xAI",
+                provider=_active_provider,
                 prompt_version=get_prompt_version("chart_vision_audit"),
                 input_packet={"symbol": symbol, "tf": _tf_label},
                 has_chart_image=True,
@@ -11275,11 +11337,17 @@ def api_chart_analysis():
             "structured": structured,
             "structured_trade_read": structured_trade_read,
             "model": _vision_model,
+            "provider": _active_provider,
+            "selectedProvider": _selected_provider or _active_provider,
+            "fallbackUsed": bool(_ai_runtime.get("fallbackUsed")),
             "symbol": symbol,
             "tf": _tf_label,
             "dual_tf": dual_mode,
             "triple_tf": triple_mode,
         }
+        if _ai_runtime.get("providerFailure"):
+            _response_payload["providerFailure"] = _ai_runtime.get("providerFailure")
+            _response_payload["provider_failure"] = _ai_runtime.get("provider_failure")
         # Return the rendered chart image so the UI can display what the AI analyzed
         if img_h4:
             _response_payload["chart_image"] = img_h4
@@ -14794,7 +14862,9 @@ def _get_decay_ai_verdict(
     Skips gracefully if no AI API key is configured.
     Results are cached 30 min per pair unless decay worsens by >= 0.5.
     """
-    api_key = get_ai_api_key(CONFIG)
+    _ai_runtime = resolve_ai_review_runtime(CONFIG)
+    _active_provider = str(_ai_runtime.get("provider") or _ai_runtime.get("selectedProvider") or "grok")
+    api_key = str(_ai_runtime.get("api_key") or "")
     if not api_key:
         return {}
 
@@ -14834,8 +14904,8 @@ def _get_decay_ai_verdict(
     try:
         from ai_utils import parse_json_object
 
-        client = create_ai_client(CONFIG, api_key=api_key)
-        _model = get_ai_model(CONFIG, "DEBATE_MODEL", "grok-4.3")
+        client = create_ai_client(CONFIG, api_key=api_key, provider=_active_provider)
+        _model = get_ai_model(CONFIG, "DEBATE_MODEL", "grok-4.3", provider=_active_provider)
         _temp = float(AITemperatureConfig.get_temperature("decay"))
 
         result = None
@@ -14875,7 +14945,7 @@ def _get_decay_ai_verdict(
                     asset_type=str(signal_context.get("type") or "?"),
                     review_type=REVIEW_TYPE_DECAY_AI,
                     model=_model,
-                    provider=get_ai_provider_label(CONFIG),
+                    provider=_active_provider,
                     prompt_version="score_decay_ai_v1",
                     input_packet=prompt,
                     has_chart_image=False,
@@ -14912,6 +14982,12 @@ def _get_decay_ai_verdict(
             verdict = "WATCH"
         result["verdict"] = verdict
         result["urgency"] = str(result.get("urgency", "MEDIUM")).upper()
+        result.setdefault("provider", _active_provider)
+        result.setdefault("selectedProvider", _ai_runtime.get("selectedProvider") or _active_provider)
+        result.setdefault("model", _model)
+        result.setdefault("fallbackUsed", bool(_ai_runtime.get("fallbackUsed")))
+        if _ai_runtime.get("providerFailure"):
+            result.setdefault("providerFailure", _ai_runtime.get("providerFailure"))
 
         try:
             from ai_review_logger import (
@@ -14935,7 +15011,7 @@ def _get_decay_ai_verdict(
                 asset_type=str(signal_context.get("type") or "?"),
                 review_type=REVIEW_TYPE_DECAY_AI,
                 model=_model,
-                provider=get_ai_provider_label(CONFIG),
+                provider=_active_provider,
                 prompt_version="score_decay_ai_v1",
                 input_packet=prompt,
                 has_chart_image=False,

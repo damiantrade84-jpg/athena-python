@@ -503,6 +503,7 @@ Reply in JSON only:
 def _log_meta_ai_review(
     *,
     model: str,
+    provider: str | None = None,
     context: str,
     result: dict | None,
     parse_success: bool,
@@ -515,14 +516,14 @@ def _log_meta_ai_review(
             REVIEW_TYPE_META_ANALYSIS,
             log_ai_review,
         )
-        from config import CONFIG, get_ai_provider_label
+        from config import CONFIG, get_ai_review_provider
 
         log_ai_review(
             symbol="PORTFOLIO",
             asset_type="portfolio",
             review_type=REVIEW_TYPE_META_ANALYSIS,
             model=model,
-            provider=get_ai_provider_label(CONFIG),
+            provider=provider or get_ai_review_provider(CONFIG),
             prompt_version="weekly_meta_analysis_v1",
             input_packet=context,
             has_chart_image=False,
@@ -548,7 +549,12 @@ def _log_meta_ai_review(
 
 def run_meta_analysis(db_path: str, xai_key: str, model: str, days: int = 7) -> dict:
     """Ask the configured AI provider to review recent outcomes and identify systematic biases."""
-    if not xai_key:
+    from config import CONFIG, resolve_ai_review_runtime
+
+    runtime = resolve_ai_review_runtime(CONFIG)
+    active_provider = str(runtime.get("provider") or runtime.get("selectedProvider") or "grok")
+    api_key = str(xai_key or runtime.get("api_key") or "")
+    if not api_key:
         return {"error": "AI API key not configured"}
 
     context = get_meta_analysis_context(db_path, days=days)
@@ -556,9 +562,9 @@ def run_meta_analysis(db_path: str, xai_key: str, model: str, days: int = 7) -> 
         return {"error": context or "No data"}
 
     try:
-        from config import CONFIG, create_ai_client
+        from config import create_ai_client
 
-        client = create_ai_client(CONFIG, api_key=xai_key)
+        client = create_ai_client(CONFIG, api_key=api_key, provider=active_provider)
         _temp = float(CONFIG.get("AI_TEMPERATURE", 0.3))
         _json = json
         completion = client.chat.completions.create(
@@ -583,6 +589,7 @@ def run_meta_analysis(db_path: str, xai_key: str, model: str, days: int = 7) -> 
         }
         _log_meta_ai_review(
             model=model,
+            provider=active_provider,
             context=context,
             result=result,
             parse_success=parsed is not None,
@@ -613,6 +620,7 @@ def run_meta_analysis(db_path: str, xai_key: str, model: str, days: int = 7) -> 
         log.error(f"[LEARN] Meta-analysis failed: {e}")
         _log_meta_ai_review(
             model=model,
+            provider=active_provider if "active_provider" in locals() else None,
             context=context if "context" in locals() else "",
             result=None,
             parse_success=False,

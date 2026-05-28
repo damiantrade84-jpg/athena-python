@@ -141,11 +141,14 @@ def _mock_provider_payload(**overrides):
     return base
 
 
-def _make_app(tmp_db: str, enabled: bool = True):
+def _make_app(tmp_db: str, enabled: bool = True, allow_openai: bool = True):
     app = Flask(__name__)
     cfg = dict(CONFIG)
+    cfg["AI_REVIEW_PROVIDER"] = "claude"
+    cfg["AI_REVIEW_FALLBACK_PROVIDERS"] = ""
     ai_cfg = dict(cfg["AI_CHART_REVIEW"])
     ai_cfg["ENABLED"] = enabled
+    ai_cfg["ALLOW_OPENAI_PROVIDER"] = allow_openai
     cfg["AI_CHART_REVIEW"] = ai_cfg
 
     def _resolve(symbol: str):
@@ -274,7 +277,7 @@ def test_route_rejects_non_png_data_url(tmp_audit_db):
 
 
 def test_route_rejects_openai_when_disabled(tmp_audit_db):
-    app = _make_app(tmp_audit_db)
+    app = _make_app(tmp_audit_db, allow_openai=False)
     client = app.test_client()
     body = _base_request(provider="openai")
     resp = client.post("/api/ai/chart-review", json=body)
@@ -618,16 +621,16 @@ def test_dedup_within_window_skips_api_call(tmp_audit_db):
         assert mock_call.call_count == 1
 
 
-def test_router_default_resolves_to_anthropic():
+def test_router_default_resolves_to_global_provider():
     payload = MagicMock()
     payload.screenshot_base64 = _png_data_url()
     payload.prompt = "review"
     with patch(
-        "ai_review.providers.router.call_anthropic_chart_review",
+        "ai_review.providers.router.call_xai_chart_review",
         return_value=_mock_provider_payload(raw_text="{}"),
-    ) as mock_anthropic:
+    ) as mock_grok:
         run_chart_review("default", payload)
-        mock_anthropic.assert_called_once()
+        mock_grok.assert_called_once()
 
 
 def test_router_resolves_xai_provider():
@@ -645,7 +648,7 @@ def test_router_resolves_xai_provider():
     ) as mock_xai:
         out = run_chart_review("xai", payload)
         mock_xai.assert_called_once()
-    assert out["provider"] == "xai"
+    assert out["provider"] == "grok"
     assert out["model"] == "grok-4.3"
 
 
@@ -666,6 +669,24 @@ def test_router_aliases_grok_to_xai_provider():
         mock_xai.assert_called_once()
 
 
+def test_router_resolves_openai_provider():
+    payload = MagicMock()
+    payload.screenshot_base64 = _png_data_url()
+    payload.prompt = "review"
+    with patch(
+        "ai_review.providers.router.call_openai_chart_review",
+        return_value=_mock_provider_payload(
+            raw_text="{}",
+            provider="openai",
+            model="gpt-5.5",
+        ),
+    ) as mock_openai:
+        out = run_chart_review("openai", payload)
+        mock_openai.assert_called_once()
+    assert out["provider"] == "openai"
+    assert out["model"] == "gpt-5.5"
+
+
 def test_xai_provider_missing_key_fails_closed(monkeypatch):
     from ai_review.providers.xai_provider import call_xai_chart_review
     from ai_review.provider_meta import ProviderChartReviewError
@@ -674,11 +695,12 @@ def test_xai_provider_missing_key_fails_closed(monkeypatch):
     payload.screenshot_base64 = _png_data_url()
     payload.prompt = "review"
     monkeypatch.delenv("XAI_API_KEY", raising=False)
-    with patch.dict(CONFIG, {"XAI_API_KEY": ""}, clear=False):
+    monkeypatch.delenv("MOONSHOT_API_KEY", raising=False)
+    with patch.dict(CONFIG, {"XAI_API_KEY": "", "MOONSHOT_API_KEY": ""}, clear=False):
         with pytest.raises(ProviderChartReviewError) as excinfo:
             call_xai_chart_review(payload)
     assert excinfo.value.provider_status == "failed_auth"
-    assert excinfo.value.provider == "xai"
+    assert excinfo.value.provider == "grok"
 
 
 def test_xai_provider_posts_png_data_url_as_image_url(monkeypatch):
@@ -708,12 +730,51 @@ def test_xai_provider_posts_png_data_url_as_image_url(monkeypatch):
     assert content[0] == {"type": "text", "text": "review this chart"}
     assert content[1] == {"type": "image_url", "image_url": {"url": payload.screenshot_base64}}
     assert kwargs["model"] == "grok-4.3"
-    assert out["provider"] == "xai"
+    assert out["provider"] == "grok"
     assert out["raw_text"].startswith('{"verdict"')
+
+
+def test_openai_provider_missing_key_fails_closed(monkeypatch):
+    from ai_review.provider_meta import ProviderChartReviewError
+    from ai_review.providers.openai_provider import call_openai_chart_review
+
+    payload = MagicMock()
+    payload.screenshot_base64 = _png_data_url()
+    payload.prompt = "review"
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    with patch.dict(CONFIG, {"OPENAI_API_KEY": "", "OPENAI_REVIEW_ENABLED": True}, clear=False):
+        with pytest.raises(ProviderChartReviewError) as excinfo:
+            call_openai_chart_review(payload)
+    assert excinfo.value.provider_status == "failed_auth"
+    assert excinfo.value.provider == "openai"
+    assert "OPENAI_API_KEY" in str(excinfo.value)
+
+
+def test_openai_provider_builds_responses_payload_with_reasoning_and_image():
+    from ai_review.providers.openai_provider import build_openai_responses_payload
+
+    payload = MagicMock()
+    payload.screenshot_base64 = _png_data_url()
+    payload.prompt = "review this chart"
+    cfg = {
+        "OPENAI_REVIEW_MODEL": "gpt-5.5",
+        "OPENAI_REVIEW_REASONING_EFFORT": "xhigh",
+        "OPENAI_REVIEW_MAX_OUTPUT_TOKENS": 12000,
+        "AI_CHART_REVIEW": {"OPENAI_MODEL": "gpt-5.5"},
+    }
+    out = build_openai_responses_payload(payload, cfg=cfg)
+
+    assert out["model"] == "gpt-5.5"
+    assert out["reasoning"] == {"effort": "xhigh"}
+    assert out["max_output_tokens"] == 12000
+    content = out["input"][0]["content"]
+    assert content[0] == {"type": "input_text", "text": "review this chart"}
+    assert content[1] == {"type": "input_image", "image_url": payload.screenshot_base64}
 
 
 def test_validate_request_disabled_provider():
     cfg = dict(CONFIG["AI_CHART_REVIEW"])
+    cfg["ALLOW_OPENAI_PROVIDER"] = False
     err = validate_request(_base_request(provider="openai"), cfg)
     assert err is not None
     assert err.status == 403
@@ -1002,8 +1063,9 @@ def test_provider_status_not_success_on_missing_key(tmp_audit_db):
     body = _base_request()
     env = os.environ.copy()
     env.pop("ANTHROPIC_API_KEY", None)
-    with patch.dict(os.environ, env, clear=True):
-        resp = client.post("/api/ai/chart-review", json=body)
+    with patch.dict(CONFIG, {"AI_REVIEW_FALLBACK_PROVIDERS": ""}, clear=False):
+        with patch.dict(os.environ, env, clear=True):
+            resp = client.post("/api/ai/chart-review", json=body)
     assert resp.status_code == 503
     data = resp.get_json()
     assert data.get("provider_status") != "success"

@@ -1596,7 +1596,23 @@ KELLY_FRACTION: 0.5                # Half-Kelly (safety proven)
 
 SIGNAL_DEBATE_ENABLED: true        # Run LLM debate before auto-trades (needs XAI_API_KEY)
 
+AI_REVIEW_PROVIDER: "openai"        # Global AI review provider: openai | claude | grok
+
+AI_REVIEW_FALLBACK_PROVIDERS: "claude,grok"
+
 AI_BASE_URL: "https://api.x.ai/v1"
+
+OPENAI_BASE_URL: "https://api.openai.com/v1"
+
+OPENAI_REVIEW_ENABLED: true
+
+OPENAI_REVIEW_MODEL: "gpt-5.5"
+
+OPENAI_REVIEW_REASONING_EFFORT: "xhigh"
+
+OPENAI_REVIEW_MAX_OUTPUT_TOKENS: 12000
+
+OPENAI_REVIEW_TIMEOUT_SECONDS: 120
 
 AI_MODEL: "grok-4.3"
 

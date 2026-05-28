@@ -17,6 +17,7 @@ from config import (
     get_ai_api_key,
     get_ai_model,
     get_ai_provider_label,
+    resolve_ai_review_runtime,
 )
 
 log = logging.getLogger("sentinel")
@@ -186,6 +187,7 @@ def _log_engine_c_ai_review(
     confidence_b: Optional[dict],
     asset_type: str,
     model: str,
+    provider: str | None = None,
     user_msg: str,
     verdict: dict | None,
     parse_success: bool,
@@ -208,7 +210,7 @@ def _log_engine_c_ai_review(
             asset_type=asset_type or str(signal_a.get("type") or "?"),
             review_type=REVIEW_TYPE_ENGINE_C_AI,
             model=model,
-            provider=get_ai_provider_label(CONFIG),
+            provider=provider or get_ai_provider_label(CONFIG),
             prompt_version="engine_c_ai_weight_v1",
             input_packet=user_msg,
             has_chart_image=False,
@@ -257,9 +259,17 @@ def get_engine_c_weight_verdict(
     """
     Call xAI for a trust verdict. Returns dict (normalized) or {error: str}.
     """
-    key = (xai_api_key or get_ai_api_key(CONFIG) or "").strip()
+    runtime = resolve_ai_review_runtime(CONFIG)
+    active_provider = str(runtime.get("provider") or runtime.get("selectedProvider") or "grok")
+    key = (xai_api_key or str(runtime.get("api_key") or "") or get_ai_api_key(CONFIG) or "").strip()
     if not key:
-        return {"error": "API key not configured", "trust_verdict": None}
+        return {
+            "error": f"{runtime.get('selectedProvider') or active_provider} API key not configured",
+            "trust_verdict": None,
+            "provider": active_provider,
+            "selectedProvider": runtime.get("selectedProvider") or active_provider,
+            "fallbackUsed": False,
+        }
 
     bw = base_weights or {"A": 0.5, "B": 0.5}
     user_msg = _build_weight_verdict_user_message(
@@ -275,8 +285,9 @@ def get_engine_c_weight_verdict(
     try:
         from engine_b_ai import _call_ai_with_retry
 
-        model = str(xai_model or get_ai_model(CONFIG, "AI_MODEL")).strip()
-        client = create_ai_client(CONFIG, api_key=key)
+        model_override = None if runtime.get("fallbackUsed") else xai_model
+        model = str(model_override or get_ai_model(CONFIG, "AI_MODEL", provider=active_provider)).strip()
+        client = create_ai_client(CONFIG, api_key=key, provider=active_provider)
         _temp = float(CONFIG.get("AI_TEMPERATURE", 0.3))
         parsed_dict, raw_text = _call_ai_with_retry(
             client,
@@ -297,6 +308,7 @@ def get_engine_c_weight_verdict(
                 confidence_b=confidence_b,
                 asset_type=asset_type,
                 model=model,
+                provider=active_provider,
                 user_msg=user_msg,
                 verdict={"trust_verdict": None},
                 parse_success=False,
@@ -307,6 +319,12 @@ def get_engine_c_weight_verdict(
         w_max = float(CONFIG.get("ENGINE_C_AI_WEIGHT_MAX", 0.80) or 0.80)
         out = normalize_engine_c_ai_weight_verdict(parsed, w_min=w_min, w_max=w_max)
         out["reviewSource"] = "engine_c_marcus_weight"
+        out.setdefault("provider", active_provider)
+        out.setdefault("selectedProvider", runtime.get("selectedProvider") or active_provider)
+        out.setdefault("model", model)
+        out.setdefault("fallbackUsed", bool(runtime.get("fallbackUsed")))
+        if runtime.get("providerFailure"):
+            out.setdefault("providerFailure", runtime.get("providerFailure"))
         _log_engine_c_ai_review(
             signal_a=signal_a or {},
             signal_b=signal_b or {},
@@ -314,6 +332,7 @@ def get_engine_c_weight_verdict(
             confidence_b=confidence_b,
             asset_type=asset_type,
             model=model,
+            provider=active_provider,
             user_msg=user_msg,
             verdict=out,
             parse_success=True,
@@ -329,7 +348,8 @@ def get_engine_c_weight_verdict(
                 consensus_snapshot=consensus_snapshot or {},
                 confidence_b=confidence_b,
                 asset_type=asset_type,
-                model=str(xai_model or get_ai_model(CONFIG, "AI_MODEL")).strip(),
+                model=str(xai_model or get_ai_model(CONFIG, "AI_MODEL", provider=active_provider)).strip(),
+                provider=active_provider,
                 user_msg=user_msg,
                 verdict={"trust_verdict": None, "error": str(exc)},
                 parse_success=False,

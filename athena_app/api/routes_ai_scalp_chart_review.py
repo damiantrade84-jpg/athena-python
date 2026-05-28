@@ -8,6 +8,7 @@ from types import SimpleNamespace
 from typing import Any
 
 from flask import jsonify, request
+from config import get_ai_review_provider
 
 from ai_review.persistence import ensure_schema, find_recent_review_by_hash, record_review
 from ai_review.provider_meta import (
@@ -43,11 +44,15 @@ _ALLOWED_REQUEST_KEYS = frozenset(
 _REVIEW_TYPE = "engine_d"
 
 
-def _resolve_provider_name(data: dict[str, Any], cfg: dict[str, Any]) -> str:
-    provider = str(data.get("provider") or cfg.get("DEFAULT_PROVIDER") or "anthropic")
-    if provider in ("", "default", "none"):
-        provider = cfg.get("DEFAULT_PROVIDER") or "anthropic"
-    return provider
+def _resolve_provider_name(
+    data: dict[str, Any],
+    cfg: dict[str, Any],
+    root_cfg: dict[str, Any] | None = None,
+) -> str:
+    provider = data.get("provider")
+    if provider in (None, "", "default", "none"):
+        provider = None
+    return get_ai_review_provider(root_cfg or cfg, requested=provider)
 
 
 def _reject_extra_request_keys(data: dict[str, Any]) -> str | None:
@@ -169,7 +174,7 @@ def register_ai_scalp_chart_review_routes(app, runtime: SimpleNamespace) -> None
         symbol = str(data["symbol"]).strip()
         timeframe = str(data["timeframe"]).strip()
         screenshot_meta = dict(data.get("screenshot_meta") or {})
-        provider = _resolve_provider_name(data, cfg)
+        provider = _resolve_provider_name(data, cfg, runtime.CONFIG)
 
         engine_d_ctx = assemble_engine_d_context(
             symbol,
@@ -217,6 +222,9 @@ def register_ai_scalp_chart_review_routes(app, runtime: SimpleNamespace) -> None
                 model=str(dedup.get("model") or ""),
                 ai_review=dedup_ai,
             )
+            dedup["selectedProvider"] = provider
+            dedup["fallbackUsed"] = bool(pmeta.get("fallback_used"))
+            dedup["fallback_used"] = dedup["fallbackUsed"]
             _attach_scalp_review_summary(
                 dedup,
                 engine_d_ctx=dedup_engine_ctx,
@@ -250,7 +258,7 @@ def register_ai_scalp_chart_review_routes(app, runtime: SimpleNamespace) -> None
         )
 
         try:
-            raw = run_scalp_chart_review(data.get("provider"), payload)
+            raw = run_scalp_chart_review(provider, payload)
         except (
             ProviderChartReviewError,
             PermissionError,
@@ -288,7 +296,7 @@ def register_ai_scalp_chart_review_routes(app, runtime: SimpleNamespace) -> None
                 symbol=symbol,
                 timeframe=timeframe,
                 asset_group=None,
-                provider=provider,
+                provider=str(provider_meta.get("provider") or provider),
                 model=str(provider_meta.get("model") or cfg.get("ANTHROPIC_MODEL") or ""),
                 latency_ms=raw.get("latency_ms"),
                 screenshot_hash=screenshot_hash,
@@ -304,7 +312,7 @@ def register_ai_scalp_chart_review_routes(app, runtime: SimpleNamespace) -> None
         else:
             response = {
                 "review_id": None,
-                "provider": provider,
+                "provider": provider_meta.get("provider") or provider,
                 "model": provider_meta.get("model"),
                 "latency_ms": raw.get("latency_ms"),
                 "engine_d_context": engine_d_ctx,
@@ -318,6 +326,13 @@ def register_ai_scalp_chart_review_routes(app, runtime: SimpleNamespace) -> None
                 "mismatch_warnings": mismatch_warnings,
                 "dedup_hit": False,
             }
+
+        response["selectedProvider"] = raw.get("selectedProvider") or provider
+        response["fallbackUsed"] = bool(raw.get("fallbackUsed") or provider_meta.get("fallback_used"))
+        response["fallback_used"] = response["fallbackUsed"]
+        if raw.get("providerFailure"):
+            response["providerFailure"] = raw.get("providerFailure")
+            response["provider_failure"] = raw.get("providerFailure")
 
         _attach_scalp_review_summary(
             response,

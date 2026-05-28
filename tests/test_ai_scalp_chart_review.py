@@ -217,6 +217,8 @@ def _mock_provider_payload(**overrides):
 def _make_app(tmp_db: str, enabled: bool = True):
     app = Flask(__name__)
     cfg = dict(CONFIG)
+    cfg["AI_REVIEW_PROVIDER"] = "claude"
+    cfg["AI_REVIEW_FALLBACK_PROVIDERS"] = ""
     scalp_cfg = dict(cfg["AI_SCALP_CHART_REVIEW"])
     scalp_cfg["ENABLED"] = enabled
     cfg["AI_SCALP_CHART_REVIEW"] = scalp_cfg
@@ -354,7 +356,7 @@ def test_scalp_router_resolves_xai_provider():
     ) as mock_xai:
         out = run_scalp_chart_review("xai", payload)
         mock_xai.assert_called_once()
-    assert out["provider"] == "xai"
+    assert out["provider"] == "grok"
     assert out["model"] == "grok-4.3"
 
 
@@ -378,11 +380,29 @@ def test_xai_scalp_provider_missing_key_fails_closed(monkeypatch):
 
     payload = SimpleNamespace(screenshot_base64=_png_data_url(), prompt="review")
     monkeypatch.delenv("XAI_API_KEY", raising=False)
-    with patch.dict(CONFIG, {"XAI_API_KEY": ""}, clear=False):
+    monkeypatch.delenv("MOONSHOT_API_KEY", raising=False)
+    with patch.dict(CONFIG, {"XAI_API_KEY": "", "MOONSHOT_API_KEY": ""}, clear=False):
         with pytest.raises(ProviderChartReviewError) as excinfo:
             call_xai_scalp_chart_review(payload)
     assert excinfo.value.provider_status == "failed_auth"
-    assert excinfo.value.provider == "xai"
+    assert excinfo.value.provider == "grok"
+
+
+def test_scalp_router_resolves_openai_provider():
+    payload = SimpleNamespace(screenshot_base64=_png_data_url(), prompt="review")
+    with patch(
+        "ai_scalp_review.provider.call_openai_chart_review",
+        return_value=_mock_provider_payload(
+            raw_text="{}",
+            provider="openai",
+            model="gpt-5.5",
+        ),
+        create=True,
+    ) as mock_openai:
+        out = run_scalp_chart_review("openai", payload)
+        mock_openai.assert_called_once()
+    assert out["provider"] == "openai"
+    assert out["model"] == "gpt-5.5"
 
 
 def test_strategy_layer_receives_engine_d_summary():

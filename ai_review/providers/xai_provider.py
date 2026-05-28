@@ -37,23 +37,28 @@ def classify_xai_exception(exc: Exception) -> ProviderChartReviewError:
     return ProviderChartReviewError(
         str(exc),
         provider_status=status,
-        provider="xai",
+        provider="grok",
         http_status=http_status,
     )
 
 
 def call_xai_chart_review(payload: Any) -> dict[str, Any]:
-    api_key = get_ai_api_key(CONFIG)
+    api_key = get_ai_api_key(CONFIG, provider="grok")
     if not api_key:
         raise ProviderChartReviewError(
             "XAI_API_KEY not configured",
             provider_status="failed_auth",
-            provider="xai",
+            provider="grok",
             http_status=503,
         )
 
     cfg = CONFIG["AI_CHART_REVIEW"]
-    model = get_ai_model(CONFIG, preferred_key="AI_CHART_REVIEW_XAI_MODEL", fallback="grok-4.3")
+    model = get_ai_model(
+        CONFIG,
+        preferred_key="AI_CHART_REVIEW_XAI_MODEL",
+        fallback="grok-4.3",
+        provider="grok",
+    )
     max_tokens = int(cfg.get("MAX_TOKENS", 1500))
     timeout = get_ai_timeout_sec(CONFIG, preferred_key="AI_CHART_REVIEW_TIMEOUT_SEC")
 
@@ -65,6 +70,7 @@ def call_xai_chart_review(payload: Any) -> dict[str, Any]:
         CONFIG,
         api_key=api_key,
         max_retries=get_ai_max_retries(CONFIG),
+        provider="grok",
     )
     t0 = time.monotonic()
     try:
@@ -97,7 +103,7 @@ def call_xai_chart_review(payload: Any) -> dict[str, Any]:
         len(data_url),
     )
     meta = build_provider_meta(
-        provider="xai",
+        provider="grok",
         model=model_used,
         provider_status="success",
         fallback_used=False,

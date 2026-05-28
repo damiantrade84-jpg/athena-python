@@ -11,8 +11,9 @@ type ProviderOption = {
 };
 
 const OPTIONS: ProviderOption[] = [
-  { value: 'xai', label: 'Grok', title: 'Use xAI Grok for AI chart review' },
-  { value: 'anthropic', label: 'Claude', title: 'Use Claude for AI chart review' },
+  { value: 'grok', label: 'Grok', title: 'Use Grok for AI review' },
+  { value: 'claude', label: 'Claude', title: 'Use Claude for AI review' },
+  { value: 'openai', label: 'ChatGPT / GPT-5.5', title: 'Use OpenAI GPT-5.5 for AI review' },
 ];
 
 export function AIReviewProviderToggle({
@@ -36,7 +37,7 @@ export function AIReviewProviderToggle({
           type="button"
           size="sm"
           variant={value === option.value ? 'default' : 'ghost'}
-          className="h-7 px-2 text-[11px]"
+          className="h-7 px-2 text-[11px] whitespace-nowrap"
           onClick={() => onChange(option.value)}
           aria-pressed={value === option.value}
           title={option.title}

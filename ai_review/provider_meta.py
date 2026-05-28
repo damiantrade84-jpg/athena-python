@@ -59,7 +59,7 @@ def classify_anthropic_exception(exc: Exception) -> ProviderChartReviewError:
     return ProviderChartReviewError(
         str(exc),
         provider_status=status,
-        provider="anthropic",
+        provider="claude",
         http_status=http_status,
     )
 

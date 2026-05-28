@@ -12,6 +12,7 @@ from ai_review.provider_meta import (
     build_provider_meta,
     classify_anthropic_exception,
 )
+from ai_review.providers.openai_provider import call_openai_chart_review
 from ai_review.providers.xai_provider import classify_xai_exception
 from config import (
     CONFIG,
@@ -31,7 +32,7 @@ def call_anthropic_scalp_chart_review(payload: Any) -> dict[str, Any]:
         raise ProviderChartReviewError(
             "ANTHROPIC_API_KEY not configured",
             provider_status="failed_auth",
-            provider="anthropic",
+            provider="claude",
             http_status=503,
         )
 
@@ -83,7 +84,7 @@ def call_anthropic_scalp_chart_review(payload: Any) -> dict[str, Any]:
         len(raw_b64),
     )
     meta = build_provider_meta(
-        provider="anthropic",
+        provider="claude",
         model=resp.model,
         provider_status="success",
         fallback_used=False,
@@ -98,12 +99,12 @@ def call_anthropic_scalp_chart_review(payload: Any) -> dict[str, Any]:
 
 
 def call_xai_scalp_chart_review(payload: Any) -> dict[str, Any]:
-    api_key = get_ai_api_key(CONFIG)
+    api_key = get_ai_api_key(CONFIG, provider="grok")
     if not api_key:
         raise ProviderChartReviewError(
             "XAI_API_KEY not configured",
             provider_status="failed_auth",
-            provider="xai",
+            provider="grok",
             http_status=503,
         )
 
@@ -112,6 +113,7 @@ def call_xai_scalp_chart_review(payload: Any) -> dict[str, Any]:
         CONFIG,
         preferred_key="AI_SCALP_CHART_REVIEW_XAI_MODEL",
         fallback="grok-4.3",
+        provider="grok",
     )
     max_tokens = int(cfg.get("MAX_TOKENS", 1500))
     timeout = get_ai_timeout_sec(CONFIG, preferred_key="AI_SCALP_CHART_REVIEW_TIMEOUT_SEC")
@@ -124,6 +126,7 @@ def call_xai_scalp_chart_review(payload: Any) -> dict[str, Any]:
         CONFIG,
         api_key=api_key,
         max_retries=get_ai_max_retries(CONFIG),
+        provider="grok",
     )
     t0 = time.monotonic()
     try:
@@ -156,7 +159,7 @@ def call_xai_scalp_chart_review(payload: Any) -> dict[str, Any]:
         len(data_url),
     )
     meta = build_provider_meta(
-        provider="xai",
+        provider="grok",
         model=model_used,
         provider_status="success",
         fallback_used=False,
@@ -170,21 +173,59 @@ def call_xai_scalp_chart_review(payload: Any) -> dict[str, Any]:
     }
 
 
-def run_scalp_chart_review(provider: str | None, payload: Any) -> dict[str, Any]:
+def _apply_scalp_fallback_meta(out: dict[str, Any], selected: str, failure: dict[str, Any] | None) -> dict[str, Any]:
+    if failure:
+        out["selectedProvider"] = selected
+        out["fallbackUsed"] = True
+        out["fallback_used"] = True
+        out["providerFailure"] = failure
+        out["provider_failure"] = failure
+    else:
+        out.setdefault("selectedProvider", selected)
+        out.setdefault("fallbackUsed", False)
+    return out
+
+
+def _run_scalp_provider(resolved: str, payload: Any) -> dict[str, Any]:
     cfg = CONFIG["AI_SCALP_CHART_REVIEW"]
-    resolved = str(provider or "default").strip().lower()
-    if resolved in ("", "default", "none"):
-        resolved = str(cfg.get("DEFAULT_PROVIDER") or "anthropic").lower()
-    if resolved == "anthropic":
+    if resolved in ("anthropic", "claude"):
         out = call_anthropic_scalp_chart_review(payload)
-        out.setdefault("provider", "anthropic")
+        out["provider"] = "claude"
         return out
     if resolved in ("xai", "grok"):
         out = call_xai_scalp_chart_review(payload)
-        out.setdefault("provider", "xai")
+        out["provider"] = "grok"
         return out
     if resolved == "openai":
         if not cfg.get("ALLOW_OPENAI_PROVIDER"):
             raise PermissionError("OpenAI provider disabled")
-        raise NotImplementedError("OpenAI scalp chart review not implemented")
+        return call_openai_chart_review(payload, cfg_key="AI_SCALP_CHART_REVIEW")
+    raise ValueError(f"Unknown provider: {resolved!r}")
+
+
+def run_scalp_chart_review(provider: str | None, payload: Any) -> dict[str, Any]:
+    from config import get_ai_review_fallback_providers, get_ai_review_provider
+
+    selected = get_ai_review_provider(CONFIG, requested=provider)
+    candidates = [selected]
+    for fallback in get_ai_review_fallback_providers(CONFIG):
+        if fallback not in candidates:
+            candidates.append(fallback)
+    first_failure: dict[str, Any] | None = None
+    for candidate in candidates:
+        try:
+            return _apply_scalp_fallback_meta(
+                _run_scalp_provider(candidate, payload),
+                selected,
+                first_failure,
+            )
+        except (ProviderChartReviewError, PermissionError, RuntimeError, NotImplementedError) as exc:
+            if first_failure is None:
+                first_failure = {
+                    "provider": candidate,
+                    "error": str(exc),
+                    "providerStatus": getattr(exc, "provider_status", "unknown"),
+                }
+            if candidate == candidates[-1]:
+                raise
     raise ValueError(f"Unknown provider: {provider!r}")

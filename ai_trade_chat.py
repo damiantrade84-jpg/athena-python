@@ -16,11 +16,11 @@ import ai_tools as _ai_tools
 from config import (
     CONFIG,
     AITemperatureConfig,
-    ai_key_configured,
     create_ai_client,
     get_ai_max_retries,
     get_ai_model,
     get_ai_timeout_sec,
+    resolve_ai_review_runtime,
 )
 
 
@@ -582,12 +582,17 @@ def _try_marcus_chat_llm(
     Deterministic gates, decision, and safety flags are never altered here.
     """
     try:
-        if not ai_key_configured(CONFIG):
+        runtime = resolve_ai_review_runtime(CONFIG)
+        active_provider = str(runtime.get("provider") or runtime.get("selectedProvider") or "grok")
+        api_key = str(runtime.get("api_key") or "")
+        if not api_key:
             return None, "deterministic_fallback"
-        model = get_ai_model(CONFIG, preferred_key="MARCUS_MODEL")
+        model = get_ai_model(CONFIG, preferred_key="MARCUS_MODEL", provider=active_provider)
         client = create_ai_client(
             CONFIG,
+            api_key=api_key,
             max_retries=get_ai_max_retries(CONFIG, preferred_key="AI_SDK_MAX_RETRIES"),
+            provider=active_provider,
         )
         user_content = _build_marcus_user_message(user_message, response, tool_results, packet)
         completion = client.chat.completions.create(
@@ -675,11 +680,21 @@ def run_trade_chat_turn(request: dict) -> dict[str, Any]:
     )
 
     llm_text, model_used = _try_marcus_chat_llm(message, response, tool_results, packet)
+    runtime = resolve_ai_review_runtime(CONFIG)
     if llm_text:
         response["answer"] = llm_text
         response["llm_answer"] = True
+        response["provider"] = runtime.get("provider")
+        response["selectedProvider"] = runtime.get("selectedProvider")
+        response["fallbackUsed"] = bool(runtime.get("fallbackUsed"))
+        if runtime.get("providerFailure"):
+            response["providerFailure"] = runtime.get("providerFailure")
     else:
         response["llm_answer"] = False
+        response.setdefault("provider", runtime.get("selectedProvider"))
+        response.setdefault("selectedProvider", runtime.get("selectedProvider"))
+        response.setdefault("fallbackUsed", False)
+    response["model"] = model_used
 
     response = validate_ai_chat_response(response, packet)
 

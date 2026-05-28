@@ -23,7 +23,7 @@ def call_anthropic_chart_review(payload: Any) -> dict[str, Any]:
         raise ProviderChartReviewError(
             "ANTHROPIC_API_KEY not configured",
             provider_status="failed_auth",
-            provider="anthropic",
+            provider="claude",
             http_status=503,
         )
 
@@ -75,7 +75,7 @@ def call_anthropic_chart_review(payload: Any) -> dict[str, Any]:
         len(raw_b64),
     )
     meta = build_provider_meta(
-        provider="anthropic",
+        provider="claude",
         model=resp.model,
         provider_status="success",
         fallback_used=False,

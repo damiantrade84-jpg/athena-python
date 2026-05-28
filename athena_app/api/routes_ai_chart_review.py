@@ -8,6 +8,7 @@ from types import SimpleNamespace
 from typing import Any
 
 from flask import jsonify, request
+from config import get_ai_review_provider
 
 from athena_ai.ai_review_payload_builder import (
     build_strategy_layer,
@@ -48,11 +49,15 @@ from ai_review.validation import decode_screenshot_bytes, validate_request
 log = logging.getLogger("sentinel.ai_chart_review")
 
 
-def _resolve_provider_name(data: dict[str, Any], cfg: dict[str, Any]) -> str:
-    provider = str(data.get("provider") or cfg.get("DEFAULT_PROVIDER") or "anthropic")
-    if provider in ("", "default", "none"):
-        provider = cfg.get("DEFAULT_PROVIDER") or "anthropic"
-    return provider
+def _resolve_provider_name(
+    data: dict[str, Any],
+    cfg: dict[str, Any],
+    root_cfg: dict[str, Any] | None = None,
+) -> str:
+    provider = data.get("provider")
+    if provider in (None, "", "default", "none"):
+        provider = None
+    return get_ai_review_provider(root_cfg or cfg, requested=provider)
 
 
 def _attach_review_input_meta(
@@ -223,7 +228,7 @@ def register_ai_chart_review_routes(app, runtime: SimpleNamespace) -> None:
         symbol = str(data["symbol"]).strip()
         timeframe = str(data["timeframe"]).strip()
         screenshot_meta = dict(data.get("screenshot_meta") or {})
-        provider = _resolve_provider_name(data, cfg)
+        provider = _resolve_provider_name(data, cfg, runtime.CONFIG)
 
         engine_a_ctx = assemble_engine_a_context(
             symbol,
@@ -294,6 +299,9 @@ def register_ai_chart_review_routes(app, runtime: SimpleNamespace) -> None:
                 model=str(dedup.get("model") or ""),
                 ai_review=dedup_ai,
             )
+            dedup["selectedProvider"] = provider
+            dedup["fallbackUsed"] = bool(pmeta.get("fallback_used"))
+            dedup["fallback_used"] = dedup["fallbackUsed"]
             _attach_review_summary(
                 dedup,
                 engine_a_ctx=dedup_engine_ctx,
@@ -335,7 +343,7 @@ def register_ai_chart_review_routes(app, runtime: SimpleNamespace) -> None:
         )
 
         try:
-            raw = run_chart_review(data.get("provider"), payload)
+            raw = run_chart_review(provider, payload)
         except (
             ProviderChartReviewError,
             PermissionError,
@@ -369,7 +377,7 @@ def register_ai_chart_review_routes(app, runtime: SimpleNamespace) -> None:
                 symbol=symbol,
                 timeframe=timeframe,
                 asset_group=engine_a_ctx.get("asset_group"),
-                provider=provider,
+                provider=str(provider_meta.get("provider") or provider),
                 model=str(provider_meta.get("model") or cfg.get("ANTHROPIC_MODEL") or ""),
                 latency_ms=raw.get("latency_ms"),
                 screenshot_hash=screenshot_hash,
@@ -384,7 +392,7 @@ def register_ai_chart_review_routes(app, runtime: SimpleNamespace) -> None:
         else:
             response = {
                 "review_id": None,
-                "provider": provider,
+                "provider": provider_meta.get("provider") or provider,
                 "model": provider_meta.get("model"),
                 "latency_ms": raw.get("latency_ms"),
                 "engine_a_context": engine_a_ctx,
@@ -398,6 +406,13 @@ def register_ai_chart_review_routes(app, runtime: SimpleNamespace) -> None:
                 "mismatch_warnings": mismatch_warnings,
                 "dedup_hit": False,
             }
+
+        response["selectedProvider"] = raw.get("selectedProvider") or provider
+        response["fallbackUsed"] = bool(raw.get("fallbackUsed") or provider_meta.get("fallback_used"))
+        response["fallback_used"] = response["fallbackUsed"]
+        if raw.get("providerFailure"):
+            response["providerFailure"] = raw.get("providerFailure")
+            response["provider_failure"] = raw.get("providerFailure")
 
         _attach_review_summary(
             response,

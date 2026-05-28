@@ -200,9 +200,18 @@ def test_llm_unsafe_execution_language_falls_back_to_deterministic(monkeypatch):
     class _FakeClient:
         chat = _FakeChat()
 
-    monkeypatch.setattr(ai_trade_chat, "ai_key_configured", lambda cfg=None: True)
+    monkeypatch.setattr(
+        ai_trade_chat,
+        "resolve_ai_review_runtime",
+        lambda cfg=None: {
+            "provider": "grok",
+            "selectedProvider": "grok",
+            "api_key": "test-key",
+            "fallbackUsed": False,
+        },
+    )
     monkeypatch.setattr(ai_trade_chat, "create_ai_client", lambda cfg=None, **kw: _FakeClient())
-    monkeypatch.setattr(ai_trade_chat, "get_ai_model", lambda cfg=None, preferred_key="AI_MODEL": "test-model")
+    monkeypatch.setattr(ai_trade_chat, "get_ai_model", lambda cfg=None, preferred_key="AI_MODEL", provider=None: "test-model")
     monkeypatch.setattr(ai_trade_chat, "get_ai_timeout_sec", lambda cfg=None, preferred_key=None: 5.0)
     monkeypatch.setattr(ai_trade_chat, "get_ai_max_retries", lambda cfg=None, preferred_key=None: 0)
 
@@ -218,7 +227,16 @@ def test_llm_unsafe_execution_language_falls_back_to_deterministic(monkeypatch):
 
 
 def test_llm_disabled_when_api_key_missing(monkeypatch):
-    monkeypatch.setattr(ai_trade_chat, "ai_key_configured", lambda cfg=None: False)
+    monkeypatch.setattr(
+        ai_trade_chat,
+        "resolve_ai_review_runtime",
+        lambda cfg=None: {
+            "provider": "grok",
+            "selectedProvider": "grok",
+            "api_key": "",
+            "fallbackUsed": False,
+        },
+    )
 
     text, model_used = ai_trade_chat._try_marcus_chat_llm(
         "Anything to add?",

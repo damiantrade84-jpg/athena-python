@@ -83,17 +83,19 @@ def _read(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
 
-def test_ai_review_provider_state_defaults_to_grok_and_types_allow_xai():
+def test_ai_review_provider_state_defaults_to_openai_and_types_allow_all_providers():
     store = _read(STORE)
     types = _read(ATHENA_TYPES)
 
     assert "AIReviewProvider" in store
     assert "aiReviewProvider: AIReviewProvider" in store
-    assert "useState<AIReviewProvider>('xai')" in store
+    assert "useState<AIReviewProvider>('openai')" in store
     assert "setAiReviewProvider" in store
+    assert "/api/ai-review/provider" in store
     assert "export type AIChartReviewProvider" in types
-    assert "'xai'" in types
     assert "'grok'" in types
+    assert "'claude'" in types
+    assert "'openai'" in types
 
 
 def test_tv_chart_ai_review_uses_shared_provider_toggle():
@@ -106,6 +108,7 @@ def test_tv_chart_ai_review_uses_shared_provider_toggle():
     assert "provider: aiReviewProvider" in source
     assert "Grok" in toggle
     assert "Claude" in toggle
+    assert "ChatGPT / GPT-5.5" in toggle
 
 
 def test_tv_chart_panel_renders_with_lightweight_charts():

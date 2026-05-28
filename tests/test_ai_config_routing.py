@@ -2,8 +2,14 @@
 
 import os
 import sys
+from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
+from flask import Flask
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+ROOT = Path(__file__).resolve().parents[1]
 
 from config import (
     CONFIG,
@@ -15,10 +21,13 @@ from config import (
     get_ai_base_url,
     get_ai_model,
     get_ai_provider_label,
+    get_ai_review_provider,
+    resolve_ai_review_runtime,
 )
 
 
 def test_get_ai_api_key_prefers_xai_over_moonshot(monkeypatch):
+    monkeypatch.delenv("AI_REVIEW_PROVIDER", raising=False)
     monkeypatch.setenv("XAI_API_KEY", "xai-live-key")
     monkeypatch.setenv("MOONSHOT_API_KEY", "moonshot-key")
 
@@ -26,6 +35,7 @@ def test_get_ai_api_key_prefers_xai_over_moonshot(monkeypatch):
 
 
 def test_get_ai_api_key_uses_moonshot_as_legacy_fallback(monkeypatch):
+    monkeypatch.delenv("AI_REVIEW_PROVIDER", raising=False)
     monkeypatch.delenv("XAI_API_KEY", raising=False)
     monkeypatch.setenv("MOONSHOT_API_KEY", "moonshot-key")
 
@@ -75,6 +85,109 @@ def test_ai_helpers_do_not_drift_to_kimi_when_grok_mode_is_intended():
     assert get_ai_model(cfg, "AI_MODEL", "fallback") == "grok-4.3"
     assert get_ai_model(cfg, "VISION_MODEL", "fallback") == "grok-4.3"
     assert get_ai_model(cfg, "DEBATE_MODEL", "fallback") == "grok-4.3"
+
+
+def test_provider_resolver_returns_openai_when_selected(monkeypatch):
+    monkeypatch.delenv("AI_REVIEW_PROVIDER", raising=False)
+    cfg = {
+        "AI_REVIEW_PROVIDER": "openai",
+        "OPENAI_REVIEW_MODEL": "gpt-5.5",
+        "OPENAI_BASE_URL": "https://api.openai.com/v1",
+    }
+
+    assert get_ai_review_provider(cfg) == "openai"
+    assert get_ai_provider_label(cfg) == "OpenAI"
+    assert get_ai_base_url(cfg) == "https://api.openai.com/v1"
+    assert get_ai_model(cfg, provider="openai") == "gpt-5.5"
+
+
+def test_openai_missing_key_has_clear_runtime_error(monkeypatch):
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    cfg = {"AI_REVIEW_PROVIDER": "openai", "OPENAI_API_KEY": ""}
+    runtime = resolve_ai_review_runtime(cfg)
+
+    assert runtime["provider"] == "openai"
+    assert runtime["api_key"] == ""
+    assert runtime["providerFailure"]["provider"] == "openai"
+    assert "API key not configured" in runtime["providerFailure"]["error"]
+
+    client = create_ai_client(cfg, api_key="", provider="openai")
+    with pytest.raises(RuntimeError, match="OPENAI_API_KEY not configured"):
+        client.chat.completions.create(
+            model="gpt-5.5",
+            messages=[{"role": "user", "content": "hello"}],
+        )
+
+
+def test_explicit_fallback_provider_is_marked(monkeypatch):
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    cfg = {
+        "AI_REVIEW_PROVIDER": "openai",
+        "AI_REVIEW_FALLBACK_PROVIDERS": "claude,grok",
+        "OPENAI_API_KEY": "",
+        "ANTHROPIC_API_KEY": "claude-key",
+    }
+
+    runtime = resolve_ai_review_runtime(cfg)
+
+    assert runtime["selectedProvider"] == "openai"
+    assert runtime["provider"] == "claude"
+    assert runtime["api_key"] == "claude-key"
+    assert runtime["fallbackUsed"] is True
+    assert runtime["providerFailure"]["provider"] == "openai"
+
+
+def test_ai_review_provider_endpoint_updates_runtime_config(tmp_path, monkeypatch):
+    from athena_app.api.routes_ai_agent import register_ai_agent_routes
+
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    cfg = dict(CONFIG)
+    cfg["AI_REVIEW_PROVIDER"] = "grok"
+    cfg["AI_REVIEW_FALLBACK_PROVIDERS"] = ""
+    cfg["OPENAI_API_KEY"] = ""
+    cfg["AI_CHART_REVIEW"] = dict(CONFIG["AI_CHART_REVIEW"])
+    cfg["AI_SCALP_CHART_REVIEW"] = dict(CONFIG["AI_SCALP_CHART_REVIEW"])
+    app = Flask(__name__)
+    register_ai_agent_routes(
+        app,
+        SimpleNamespace(
+            CONFIG=cfg,
+            AUDIT_DB=str(tmp_path / "audit.db"),
+            json_safe=lambda x: x,
+            last_scan_results=lambda: {"signals": []},
+        ),
+    )
+
+    post = app.test_client().post("/api/ai-review/provider", json={"provider": "openai"})
+    assert post.status_code == 200
+    body = post.get_json()
+    assert body["selectedProvider"] == "openai"
+    assert body["provider"] == "openai"
+    assert body["keyConfigured"] is False
+    assert cfg["AI_REVIEW_PROVIDER"] == "openai"
+    assert cfg["AI_CHART_REVIEW"]["DEFAULT_PROVIDER"] == "openai"
+    assert cfg["AI_SCALP_CHART_REVIEW"]["DEFAULT_PROVIDER"] == "openai"
+
+    get = app.test_client().get("/api/ai-review/provider")
+    assert get.status_code == 200
+    assert get.get_json()["selectedProvider"] == "openai"
+
+
+def test_known_ai_review_paths_use_shared_provider_resolver():
+    files = [
+        ROOT / "athena_app/api/routes_ai_chart_review.py",
+        ROOT / "athena_app/api/routes_ai_scalp_chart_review.py",
+        ROOT / "athena_app/api/routes_ai_agent.py",
+        ROOT / "athena.py",
+        ROOT / "engine_b_ai.py",
+        ROOT / "engine_c_ai.py",
+        ROOT / "ai_trade_chat.py",
+        ROOT / "ai_lee_confirmation.py",
+    ]
+    for path in files:
+        source = path.read_text(encoding="utf-8")
+        assert "get_ai_review_provider" in source or "resolve_ai_review_runtime" in source
 
 
 def test_marcus_ai_timeout_default_is_bounded():

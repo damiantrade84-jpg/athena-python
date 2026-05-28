@@ -349,14 +349,17 @@ class HermesLeeReasoningAdapter:
 
     def draft(self, evidence_packet: dict[str, Any]) -> dict[str, Any] | None:
         try:
-            from config import CONFIG, ai_key_configured
+            from config import CONFIG, resolve_ai_review_runtime
 
             # External Lee/Hermes reasoning is opt-in at runtime; deterministic
             # fallback keeps the endpoint fast and fail-closed when the app has
             # not explicitly enabled or wired a reasoning adapter yet.
             if not bool(CONFIG.get("AI_LEE_CONFIRMATION_LLM_ENABLED", False)):
                 return None
-            if not ai_key_configured(CONFIG):
+            runtime = resolve_ai_review_runtime(CONFIG)
+            active_provider = str(runtime.get("provider") or runtime.get("selectedProvider") or "grok")
+            api_key = str(runtime.get("api_key") or "")
+            if not api_key:
                 return None
 
             from config import AITemperatureConfig, create_ai_client, get_ai_model, get_ai_timeout_sec
@@ -367,8 +370,8 @@ class HermesLeeReasoningAdapter:
             if len(evidence_json) > max_chars:
                 evidence_json = evidence_json[:max_chars]
 
-            model = get_ai_model(CONFIG, preferred_key="LEE_MODEL")
-            client = create_ai_client(CONFIG)
+            model = get_ai_model(CONFIG, preferred_key="LEE_MODEL", provider=active_provider)
+            client = create_ai_client(CONFIG, api_key=api_key, provider=active_provider)
             completion = client.chat.completions.create(
                 model=model,
                 max_tokens=500,
@@ -395,7 +398,15 @@ class HermesLeeReasoningAdapter:
             text = (completion.choices[0].message.content or "").strip()
             if not text:
                 return None
-            return json.loads(text)
+            draft = json.loads(text)
+            if isinstance(draft, dict):
+                draft.setdefault("model_used", model)
+                draft.setdefault("provider", active_provider)
+                draft.setdefault("selectedProvider", runtime.get("selectedProvider") or active_provider)
+                draft.setdefault("fallbackUsed", bool(runtime.get("fallbackUsed")))
+                if runtime.get("providerFailure"):
+                    draft.setdefault("providerFailure", runtime.get("providerFailure"))
+            return draft
         except Exception as exc:
             log.warning("[LEE_CONFIRMATION] Lee reasoning adapter failed after being enabled; failing closed: %s", exc)
             return LeeReasoningDraft(
@@ -614,6 +625,10 @@ def run_lee_confirmation(
         selected_signal=_selected_signal_summary(signal, packet),
         context_resolution=context_resolution,
         model_used=str(draft.get("model_used") or "deterministic_fallback"),
+        provider=str(draft.get("provider") or draft.get("selectedProvider") or ""),
+        selectedProvider=str(draft.get("selectedProvider") or draft.get("provider") or ""),
+        fallbackUsed=bool(draft.get("fallbackUsed")),
+        providerFailure=draft.get("providerFailure"),
         trade_specific_confirmation_allowed=trade_specific_allowed,
     )
     return response.model_dump(mode="json")

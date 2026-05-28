@@ -17,6 +17,15 @@ from ai_lee_confirmation import run_lee_confirmation
 from ai_strategist import strategist_morning_brief, strategist_pre_trade_check, weekly_strategy_retrospective
 from ai_tools import set_ai_tools_runtime
 from ai_trade_chat import run_trade_chat_turn
+from config import (
+    CONFIG,
+    ai_key_configured,
+    get_ai_model,
+    get_ai_review_fallback_providers,
+    get_ai_review_provider,
+    normalize_ai_review_provider,
+    resolve_ai_review_runtime,
+)
 
 
 def _now() -> str:
@@ -297,6 +306,60 @@ def register_ai_agent_routes(app, runtime) -> None:
         json_safe = getattr(runtime, "json_safe", None)
         safe_answer = json_safe(answer) if callable(json_safe) else answer
         return jsonify(safe_answer)
+
+    @app.get("/api/ai-review/provider")
+    def api_ai_review_provider_get():
+        cfg = getattr(runtime, "CONFIG", CONFIG)
+        selected = get_ai_review_provider(cfg)
+        provider_runtime = resolve_ai_review_runtime(cfg)
+        active = str(provider_runtime.get("provider") or selected)
+        return jsonify(
+            {
+                "selectedProvider": selected,
+                "provider": active,
+                "model": get_ai_model(cfg, provider=active),
+                "fallbackProviders": get_ai_review_fallback_providers(cfg),
+                "keyConfigured": ai_key_configured(cfg),
+                "fallbackUsed": bool(provider_runtime.get("fallbackUsed")),
+                "providerFailure": provider_runtime.get("providerFailure"),
+                "availableProviders": [
+                    {"value": "grok", "label": "Grok"},
+                    {"value": "claude", "label": "Claude"},
+                    {"value": "openai", "label": "ChatGPT / GPT-5.5"},
+                ],
+            }
+        )
+
+    @app.post("/api/ai-review/provider")
+    def api_ai_review_provider_post():
+        cfg = getattr(runtime, "CONFIG", CONFIG)
+        payload = request.get_json(silent=True) or {}
+        selected = normalize_ai_review_provider(payload.get("provider") or payload.get("selectedProvider"))
+        if selected not in {"openai", "claude", "grok"}:
+            return jsonify({"error": "provider must be one of: openai, claude, grok"}), 400
+        cfg["AI_REVIEW_PROVIDER"] = selected
+        if isinstance(cfg.get("AI_CHART_REVIEW"), dict):
+            cfg["AI_CHART_REVIEW"]["DEFAULT_PROVIDER"] = selected
+        if isinstance(cfg.get("AI_SCALP_CHART_REVIEW"), dict):
+            cfg["AI_SCALP_CHART_REVIEW"]["DEFAULT_PROVIDER"] = selected
+        provider_runtime = resolve_ai_review_runtime(cfg)
+        active = str(provider_runtime.get("provider") or selected)
+        return jsonify(
+            {
+                "selectedProvider": selected,
+                "provider": active,
+                "model": get_ai_model(cfg, provider=active),
+                "fallbackProviders": get_ai_review_fallback_providers(cfg),
+                "keyConfigured": ai_key_configured(cfg),
+                "fallbackUsed": bool(provider_runtime.get("fallbackUsed")),
+                "providerFailure": provider_runtime.get("providerFailure"),
+                "availableProviders": [
+                    {"value": "grok", "label": "Grok"},
+                    {"value": "claude", "label": "Claude"},
+                    {"value": "openai", "label": "ChatGPT / GPT-5.5"},
+                ],
+            }
+        )
 
     @app.post("/api/ai/lee-confirmation")
     def api_ai_lee_confirmation():

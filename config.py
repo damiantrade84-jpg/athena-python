@@ -9,6 +9,7 @@ Import CONFIG from here; never import from athena.py directly.
 import math
 import os
 import logging
+from types import SimpleNamespace
 
 log = logging.getLogger("sentinel")
 
@@ -40,6 +41,27 @@ AI_API_KEY_PLACEHOLDER = "YOUR_XAI_API_KEY"
 _LEGACY_AI_API_KEY_PLACEHOLDER = "YOUR_MOONSHOT_API_KEY"
 _AI_BASE_URL_DEFAULT = "https://api.x.ai/v1"
 _AI_MODEL_DEFAULT = os.environ.get("AI_MODEL", "grok-4.3")
+_OPENAI_BASE_URL_DEFAULT = "https://api.openai.com/v1"
+_OPENAI_REVIEW_MODEL_DEFAULT = "gpt-5.5"
+_CLAUDE_REVIEW_MODEL_DEFAULT = "claude-opus-4-7"
+_AI_REVIEW_PROVIDER_ALIASES = {
+    "": "",
+    "default": "",
+    "none": "",
+    "xai": "grok",
+    "grok": "grok",
+    "grok/xai": "grok",
+    "anthropic": "claude",
+    "claude": "claude",
+    "openai": "openai",
+    "chatgpt": "openai",
+    "gpt": "openai",
+}
+_AI_REVIEW_PROVIDER_LABELS = {
+    "grok": "xAI",
+    "claude": "Claude",
+    "openai": "OpenAI",
+}
 
 
 def _env_bool(name: str, default: bool = False) -> bool:
@@ -81,14 +103,85 @@ def _clean_ai_value(value: object) -> str:
     return text
 
 
-def get_ai_api_key(cfg: dict | None = None) -> str:
+def normalize_ai_review_provider(value: object) -> str:
+    text = str(value or "").strip().lower()
+    return _AI_REVIEW_PROVIDER_ALIASES.get(text, text)
+
+
+def _provider_from_base_url(base_url: str) -> str:
+    url = str(base_url or "").strip().lower()
+    if "api.openai.com" in url or "openai" in url:
+        return "openai"
+    if "anthropic" in url or "claude" in url:
+        return "claude"
+    if "api.x.ai" in url or "x.ai" in url or "grok" in url:
+        return "grok"
+    if "moonshot" in url:
+        return "grok"
+    return ""
+
+
+def get_ai_review_provider(
+    cfg: dict | None = None,
+    requested: object | None = None,
+) -> str:
     cfg = CONFIG if cfg is None else cfg
+    requested_provider = normalize_ai_review_provider(requested)
+    if requested_provider:
+        return requested_provider
     candidates = (
-        os.environ.get("XAI_API_KEY", ""),
-        cfg.get("XAI_API_KEY", ""),
-        os.environ.get("MOONSHOT_API_KEY", ""),
-        cfg.get("MOONSHOT_API_KEY", ""),
+        os.environ.get("AI_REVIEW_PROVIDER", ""),
+        cfg.get("AI_REVIEW_PROVIDER", ""),
+        os.environ.get("AI_PROVIDER", ""),
+        cfg.get("AI_PROVIDER", ""),
+        os.environ.get("LLM_PROVIDER", ""),
+        cfg.get("LLM_PROVIDER", ""),
+        os.environ.get("HERMES_PROVIDER", ""),
+        cfg.get("HERMES_PROVIDER", ""),
+        os.environ.get("AI_VISION_PROVIDER", ""),
+        cfg.get("AI_VISION_PROVIDER", ""),
     )
+    for candidate in candidates:
+        provider = normalize_ai_review_provider(candidate)
+        if provider:
+            return provider
+    return _provider_from_base_url(get_ai_base_url(cfg)) or "grok"
+
+
+def get_ai_review_fallback_providers(cfg: dict | None = None) -> list[str]:
+    cfg = CONFIG if cfg is None else cfg
+    raw = (
+        os.environ.get("AI_REVIEW_FALLBACK_PROVIDERS", "")
+        or str(cfg.get("AI_REVIEW_FALLBACK_PROVIDERS", "") or "")
+    )
+    out: list[str] = []
+    for part in str(raw).split(","):
+        provider = normalize_ai_review_provider(part)
+        if provider and provider not in out:
+            out.append(provider)
+    return out
+
+
+def get_ai_api_key(cfg: dict | None = None, provider: object | None = None) -> str:
+    cfg = CONFIG if cfg is None else cfg
+    resolved_provider = get_ai_review_provider(cfg, requested=provider)
+    if resolved_provider == "openai":
+        candidates = (
+            os.environ.get("OPENAI_API_KEY", ""),
+            cfg.get("OPENAI_API_KEY", ""),
+        )
+    elif resolved_provider == "claude":
+        candidates = (
+            os.environ.get("ANTHROPIC_API_KEY", ""),
+            cfg.get("ANTHROPIC_API_KEY", ""),
+        )
+    else:
+        candidates = (
+            os.environ.get("XAI_API_KEY", ""),
+            cfg.get("XAI_API_KEY", ""),
+            os.environ.get("MOONSHOT_API_KEY", ""),
+            cfg.get("MOONSHOT_API_KEY", ""),
+        )
     for candidate in candidates:
         cleaned = _clean_ai_value(candidate)
         if cleaned:
@@ -96,23 +189,80 @@ def get_ai_api_key(cfg: dict | None = None) -> str:
     return ""
 
 
-def get_ai_provider_label(cfg: dict | None = None) -> str:
-    base_url = str(get_ai_base_url(cfg) or "").strip().lower()
-    if "api.x.ai" in base_url or "x.ai" in base_url:
-        return "xAI"
-    if "moonshot" in base_url:
-        return "Moonshot"
-    if not base_url:
-        return "Unknown"
-    return base_url
+def get_ai_provider_label(cfg: dict | None = None, provider: object | None = None) -> str:
+    resolved_provider = get_ai_review_provider(cfg, requested=provider)
+    if resolved_provider in _AI_REVIEW_PROVIDER_LABELS:
+        return _AI_REVIEW_PROVIDER_LABELS[resolved_provider]
+    base_url = str(get_ai_base_url(cfg, provider=provider) or "").strip().lower()
+    return base_url or "Unknown"
 
 
 def ai_key_configured(cfg: dict | None = None) -> bool:
-    return bool(get_ai_api_key(cfg))
-
-
-def get_ai_base_url(cfg: dict | None = None) -> str:
     cfg = CONFIG if cfg is None else cfg
+    if get_ai_api_key(cfg):
+        return True
+    for provider in get_ai_review_fallback_providers(cfg):
+        if get_ai_api_key(cfg, provider=provider):
+            return True
+    return False
+
+
+def resolve_ai_review_runtime(
+    cfg: dict | None = None,
+    requested: object | None = None,
+) -> dict:
+    cfg = CONFIG if cfg is None else cfg
+    selected = get_ai_review_provider(cfg, requested=requested)
+    candidates = [selected]
+    for fallback in get_ai_review_fallback_providers(cfg):
+        if fallback not in candidates:
+            candidates.append(fallback)
+
+    first_failure: dict | None = None
+    for provider in candidates:
+        key = get_ai_api_key(cfg, provider=provider)
+        if key:
+            return {
+                "selectedProvider": selected,
+                "provider": provider,
+                "api_key": key,
+                "fallbackUsed": provider != selected,
+                "fallback_used": provider != selected,
+                "providerFailure": first_failure,
+                "provider_failure": first_failure,
+            }
+        if provider == selected and first_failure is None:
+            first_failure = {
+                "provider": provider,
+                "error": f"{provider} API key not configured",
+                "providerStatus": "failed_auth",
+            }
+
+    return {
+        "selectedProvider": selected,
+        "provider": selected,
+        "api_key": "",
+        "fallbackUsed": False,
+        "fallback_used": False,
+        "providerFailure": first_failure,
+        "provider_failure": first_failure,
+    }
+
+
+def get_ai_base_url(cfg: dict | None = None, provider: object | None = None) -> str:
+    cfg = CONFIG if cfg is None else cfg
+    resolved_provider = normalize_ai_review_provider(provider)
+    if not resolved_provider:
+        env_provider = normalize_ai_review_provider(
+            os.environ.get("AI_REVIEW_PROVIDER", "") or cfg.get("AI_REVIEW_PROVIDER", "")
+        )
+        resolved_provider = env_provider
+    if resolved_provider == "openai":
+        return (
+            str(os.environ.get("OPENAI_BASE_URL", "") or "").strip()
+            or str(cfg.get("OPENAI_BASE_URL", "") or "").strip()
+            or _OPENAI_BASE_URL_DEFAULT
+        )
     return (
         str(os.environ.get("AI_BASE_URL", "") or "").strip()
         or str(cfg.get("AI_BASE_URL", "") or "").strip()
@@ -124,9 +274,29 @@ def get_ai_model(
     cfg: dict | None = None,
     preferred_key: str = "AI_MODEL",
     fallback: str = "grok-4.3",
+    provider: object | None = None,
 ) -> str:
     cfg = CONFIG if cfg is None else cfg
+    resolved_provider = get_ai_review_provider(cfg, requested=provider)
     candidates = []
+    if resolved_provider == "openai":
+        candidates.extend(
+            [
+                os.environ.get("OPENAI_REVIEW_MODEL", ""),
+                cfg.get("OPENAI_REVIEW_MODEL", ""),
+                cfg.get("OPENAI_MODEL", ""),
+                _OPENAI_REVIEW_MODEL_DEFAULT,
+            ]
+        )
+    elif resolved_provider == "claude":
+        candidates.extend(
+            [
+                os.environ.get("CLAUDE_MODEL", ""),
+                cfg.get("CLAUDE_MODEL", ""),
+                cfg.get("ANTHROPIC_MODEL", ""),
+                _CLAUDE_REVIEW_MODEL_DEFAULT,
+            ]
+        )
     if preferred_key:
         candidates.extend(
             [
@@ -189,17 +359,280 @@ def get_ai_max_retries(
     return max(0, int(fallback))
 
 
+def _chat_response(text: str, *, model: str):
+    message = SimpleNamespace(content=text, parsed=None)
+    return SimpleNamespace(
+        model=model,
+        choices=[SimpleNamespace(message=message)],
+    )
+
+
+def _response_text(resp) -> str:
+    direct = getattr(resp, "output_text", None)
+    if isinstance(direct, str):
+        return direct
+    output = getattr(resp, "output", None)
+    if isinstance(resp, dict):
+        direct = resp.get("output_text")
+        if isinstance(direct, str):
+            return direct
+        output = resp.get("output")
+    parts: list[str] = []
+    for item in output or []:
+        content = item.get("content") if isinstance(item, dict) else getattr(item, "content", None)
+        for block in content or []:
+            btype = block.get("type") if isinstance(block, dict) else getattr(block, "type", None)
+            text = block.get("text") if isinstance(block, dict) else getattr(block, "text", None)
+            if btype in ("output_text", "text") and isinstance(text, str):
+                parts.append(text)
+    return "".join(parts)
+
+
+def _as_openai_response_content(content) -> list[dict]:
+    if isinstance(content, str):
+        return [{"type": "input_text", "text": content}]
+    out: list[dict] = []
+    if not isinstance(content, list):
+        return [{"type": "input_text", "text": str(content or "")}]
+    for part in content:
+        if isinstance(part, str):
+            out.append({"type": "input_text", "text": part})
+            continue
+        if not isinstance(part, dict):
+            out.append({"type": "input_text", "text": str(part)})
+            continue
+        ptype = str(part.get("type") or "").strip()
+        if ptype in ("text", "input_text"):
+            out.append({"type": "input_text", "text": str(part.get("text") or "")})
+        elif ptype in ("image_url", "input_image"):
+            image_url = part.get("image_url")
+            if isinstance(image_url, dict):
+                image_url = image_url.get("url")
+            image_url = image_url or part.get("image_url")
+            if image_url:
+                out.append({"type": "input_image", "image_url": str(image_url)})
+    return out
+
+
+def _messages_to_openai_responses_input(messages) -> tuple[str | None, list[dict]]:
+    instructions: list[str] = []
+    response_input: list[dict] = []
+    for msg in messages or []:
+        if not isinstance(msg, dict):
+            continue
+        role = str(msg.get("role") or "user").strip().lower()
+        content = msg.get("content") or ""
+        if role == "system":
+            if isinstance(content, str):
+                instructions.append(content)
+            else:
+                instructions.append(" ".join(part.get("text", "") for part in content if isinstance(part, dict)))
+            continue
+        response_input.append(
+            {
+                "role": "assistant" if role == "assistant" else "user",
+                "content": _as_openai_response_content(content),
+            }
+        )
+    return ("\n\n".join(p for p in instructions if p).strip() or None), response_input
+
+
+class _BetaChatCompletionsCompat:
+    def parse(self, **_kwargs):
+        raise NotImplementedError("structured chat parse is not available for this provider adapter")
+
+
+class _OpenAIResponsesChatCompletionsCompat:
+    def __init__(self, owner):
+        self._owner = owner
+
+    def create(self, **kwargs):
+        if not self._owner.api_key:
+            raise RuntimeError("OPENAI_API_KEY not configured")
+        model = str(kwargs.get("model") or self._owner.model or _OPENAI_REVIEW_MODEL_DEFAULT)
+        instructions, response_input = _messages_to_openai_responses_input(kwargs.get("messages") or [])
+        max_output_tokens = int(
+            kwargs.get("max_output_tokens")
+            or kwargs.get("max_tokens")
+            or self._owner.max_output_tokens
+            or 12000
+        )
+        request_payload = {
+            "model": model,
+            "input": response_input,
+            "reasoning": {"effort": self._owner.reasoning_effort},
+            "max_output_tokens": max_output_tokens,
+        }
+        if instructions:
+            request_payload["instructions"] = instructions
+        timeout = kwargs.get("timeout") or self._owner.timeout_seconds
+        resp = self._owner._client.responses.create(**request_payload, timeout=timeout)
+        text = _response_text(resp)
+        model_used = str(getattr(resp, "model", "") or model)
+        return _chat_response(text, model=model_used)
+
+
+class _OpenAIResponsesCompatClient:
+    def __init__(self, *, cfg: dict, api_key: str, max_retries: int | None = None):
+        import openai
+
+        self.api_key = _clean_ai_value(api_key)
+        self.model = get_ai_model(cfg, provider="openai")
+        self.reasoning_effort = str(
+            os.environ.get("OPENAI_REVIEW_REASONING_EFFORT", "")
+            or cfg.get("OPENAI_REVIEW_REASONING_EFFORT", "xhigh")
+            or "xhigh"
+        ).strip().lower()
+        self.max_output_tokens = int(
+            os.environ.get("OPENAI_REVIEW_MAX_OUTPUT_TOKENS", "")
+            or cfg.get("OPENAI_REVIEW_MAX_OUTPUT_TOKENS", 12000)
+            or 12000
+        )
+        self.timeout_seconds = float(
+            os.environ.get("OPENAI_REVIEW_TIMEOUT_SECONDS", "")
+            or cfg.get("OPENAI_REVIEW_TIMEOUT_SECONDS", 120)
+            or 120
+        )
+        client_kwargs = {
+            "api_key": self.api_key or "missing-openai-api-key",
+            "base_url": get_ai_base_url(cfg, provider="openai"),
+        }
+        if max_retries is not None:
+            client_kwargs["max_retries"] = max(0, int(max_retries))
+        self._client = openai.OpenAI(**client_kwargs)
+        self.max_retries = getattr(self._client, "max_retries", max_retries)
+        self.chat = SimpleNamespace(
+            completions=_OpenAIResponsesChatCompletionsCompat(self)
+        )
+        self.beta = SimpleNamespace(
+            chat=SimpleNamespace(completions=_BetaChatCompletionsCompat())
+        )
+
+
+def _as_anthropic_content(content) -> list[dict]:
+    if isinstance(content, str):
+        return [{"type": "text", "text": content}]
+    out: list[dict] = []
+    if not isinstance(content, list):
+        return [{"type": "text", "text": str(content or "")}]
+    for part in content:
+        if isinstance(part, str):
+            out.append({"type": "text", "text": part})
+            continue
+        if not isinstance(part, dict):
+            out.append({"type": "text", "text": str(part)})
+            continue
+        ptype = str(part.get("type") or "").strip()
+        if ptype in ("text", "input_text"):
+            out.append({"type": "text", "text": str(part.get("text") or "")})
+        elif ptype in ("image_url", "input_image"):
+            image_url = part.get("image_url")
+            if isinstance(image_url, dict):
+                image_url = image_url.get("url")
+            if isinstance(image_url, str) and image_url.startswith("data:image/") and ";base64," in image_url:
+                head, raw = image_url.split(",", 1)
+                media_type = head.split(":", 1)[1].split(";", 1)[0]
+                out.append(
+                    {
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "media_type": media_type,
+                            "data": raw,
+                        },
+                    }
+                )
+    return out
+
+
+def _messages_to_anthropic(messages) -> tuple[str | None, list[dict]]:
+    instructions: list[str] = []
+    anth_messages: list[dict] = []
+    for msg in messages or []:
+        if not isinstance(msg, dict):
+            continue
+        role = str(msg.get("role") or "user").strip().lower()
+        content = msg.get("content") or ""
+        if role == "system":
+            if isinstance(content, str):
+                instructions.append(content)
+            continue
+        anth_messages.append(
+            {
+                "role": "assistant" if role == "assistant" else "user",
+                "content": _as_anthropic_content(content),
+            }
+        )
+    return ("\n\n".join(p for p in instructions if p).strip() or None), anth_messages
+
+
+class _AnthropicChatCompletionsCompat:
+    def __init__(self, owner):
+        self._owner = owner
+
+    def create(self, **kwargs):
+        if not self._owner.api_key:
+            raise RuntimeError("ANTHROPIC_API_KEY not configured")
+        model = str(kwargs.get("model") or self._owner.model or _CLAUDE_REVIEW_MODEL_DEFAULT)
+        system, messages = _messages_to_anthropic(kwargs.get("messages") or [])
+        request_payload = {
+            "model": model,
+            "max_tokens": int(kwargs.get("max_tokens") or 1200),
+            "messages": messages,
+        }
+        if system:
+            request_payload["system"] = system
+        temperature = kwargs.get("temperature")
+        if temperature is not None:
+            request_payload["temperature"] = float(temperature)
+        resp = self._owner._client.messages.create(**request_payload)
+        text = "".join(
+            block.text for block in getattr(resp, "content", []) if getattr(block, "type", None) == "text"
+        )
+        model_used = str(getattr(resp, "model", "") or model)
+        return _chat_response(text, model=model_used)
+
+
+class _AnthropicChatCompatClient:
+    def __init__(self, *, cfg: dict, api_key: str, max_retries: int | None = None):
+        import anthropic
+
+        self.api_key = _clean_ai_value(api_key)
+        self.model = get_ai_model(cfg, provider="claude")
+        self._client = anthropic.Anthropic(api_key=self.api_key or "missing-anthropic-api-key")
+        self.max_retries = max_retries
+        self.chat = SimpleNamespace(completions=_AnthropicChatCompletionsCompat(self))
+        self.beta = SimpleNamespace(
+            chat=SimpleNamespace(completions=_BetaChatCompletionsCompat())
+        )
+
+
 def create_ai_client(
     cfg: dict | None = None,
     api_key: str | None = None,
     max_retries: int | None = None,
+    provider: object | None = None,
 ):
     import openai
 
-    resolved_key = _clean_ai_value(api_key) or get_ai_api_key(cfg)
+    cfg = CONFIG if cfg is None else cfg
+    resolved_provider = get_ai_review_provider(cfg, requested=provider)
+    resolved_key = _clean_ai_value(api_key) or get_ai_api_key(cfg, provider=resolved_provider)
+    if resolved_provider == "openai":
+        return _OpenAIResponsesCompatClient(
+            cfg=cfg,
+            api_key=resolved_key,
+            max_retries=max_retries,
+        )
+    if resolved_provider == "claude":
+        return _AnthropicChatCompatClient(
+            cfg=cfg,
+            api_key=resolved_key,
+            max_retries=max_retries,
+        )
     client_kwargs = {
         "api_key": resolved_key,
-        "base_url": get_ai_base_url(cfg),
+        "base_url": get_ai_base_url(cfg, provider=resolved_provider),
     }
     if max_retries is not None:
         client_kwargs["max_retries"] = max(0, int(max_retries))
@@ -212,13 +645,16 @@ def ai_runtime_descriptor(
     fallback_model: str = "grok-4.3",
 ) -> dict:
     resolved_cfg = CONFIG if cfg is None else cfg
+    provider = get_ai_review_provider(resolved_cfg)
     return {
         "provider": get_ai_provider_label(resolved_cfg),
+        "selectedProvider": provider,
         "base_url": get_ai_base_url(resolved_cfg),
         "model": get_ai_model(
             resolved_cfg,
             preferred_key=preferred_model_key,
             fallback=fallback_model,
+            provider=provider,
         ),
         "key_configured": ai_key_configured(resolved_cfg),
     }
@@ -306,9 +742,36 @@ except Exception as _e:
 CONFIG: dict = {
     "MOONSHOT_API_KEY": os.environ.get("MOONSHOT_API_KEY", AI_API_KEY_PLACEHOLDER),
     "XAI_API_KEY": os.environ.get("XAI_API_KEY", ""),
+    "ANTHROPIC_API_KEY": os.environ.get("ANTHROPIC_API_KEY", ""),
+    "OPENAI_API_KEY": os.environ.get("OPENAI_API_KEY", ""),
     "AI_BASE_URL": os.environ.get("AI_BASE_URL", _AI_BASE_URL_DEFAULT),
+    "OPENAI_BASE_URL": os.environ.get("OPENAI_BASE_URL", _OPENAI_BASE_URL_DEFAULT),
+    "AI_REVIEW_PROVIDER": normalize_ai_review_provider(
+        os.environ.get("AI_REVIEW_PROVIDER", "")
+        or os.environ.get("AI_PROVIDER", "")
+        or os.environ.get("LLM_PROVIDER", "")
+        or os.environ.get("HERMES_PROVIDER", "")
+        or os.environ.get("AI_VISION_PROVIDER", "")
+    ),
+    "AI_REVIEW_FALLBACK_PROVIDERS": os.environ.get(
+        "AI_REVIEW_FALLBACK_PROVIDERS", ""
+    ),
+    "OPENAI_REVIEW_ENABLED": _env_bool("OPENAI_REVIEW_ENABLED", True),
+    "OPENAI_REVIEW_MODEL": os.environ.get(
+        "OPENAI_REVIEW_MODEL", _OPENAI_REVIEW_MODEL_DEFAULT
+    ),
+    "OPENAI_REVIEW_REASONING_EFFORT": os.environ.get(
+        "OPENAI_REVIEW_REASONING_EFFORT", "xhigh"
+    ),
+    "OPENAI_REVIEW_MAX_OUTPUT_TOKENS": _env_int(
+        "OPENAI_REVIEW_MAX_OUTPUT_TOKENS", 12000
+    ),
+    "OPENAI_REVIEW_TIMEOUT_SECONDS": _env_int(
+        "OPENAI_REVIEW_TIMEOUT_SECONDS", 120
+    ),
     "AI_MODEL": _AI_MODEL_DEFAULT,
     "XAI_MODEL": os.environ.get("XAI_MODEL", _AI_MODEL_DEFAULT),
+    "CLAUDE_MODEL": os.environ.get("CLAUDE_MODEL", _CLAUDE_REVIEW_MODEL_DEFAULT),
     "LOTTERY_AI_MODEL": os.environ.get("LOTTERY_AI_MODEL", ""),  # empty → use AI_MODEL for /api/lottery/ai-analysis
     "DEBATE_MODEL": os.environ.get("DEBATE_MODEL", _AI_MODEL_DEFAULT),
     "VISION_MODEL": os.environ.get("VISION_MODEL", _AI_MODEL_DEFAULT),
@@ -343,21 +806,29 @@ CONFIG: dict = {
     },
     "AI_CHART_REVIEW": {
         "ENABLED": _env_bool("AI_CHART_REVIEW_ENABLED", False),
-        "DEFAULT_PROVIDER": (
-            os.environ.get("AI_CHART_REVIEW_DEFAULT_PROVIDER", "anthropic").strip().lower()
-            or "anthropic"
-        ),
+        "DEFAULT_PROVIDER": normalize_ai_review_provider(
+            os.environ.get("AI_CHART_REVIEW_DEFAULT_PROVIDER", "")
+            or os.environ.get("AI_REVIEW_PROVIDER", "")
+            or "claude"
+        )
+        or "claude",
         "ANTHROPIC_MODEL": os.environ.get(
             "AI_CHART_REVIEW_ANTHROPIC_MODEL", "claude-opus-4-7"
         ),
-        "OPENAI_MODEL": os.environ.get("OPENAI_CHART_REVIEW_MODEL", ""),
+        "OPENAI_MODEL": os.environ.get(
+            "OPENAI_CHART_REVIEW_MODEL",
+            os.environ.get("OPENAI_REVIEW_MODEL", _OPENAI_REVIEW_MODEL_DEFAULT),
+        ),
         "MAX_TOKENS": _env_int("AI_CHART_REVIEW_MAX_TOKENS", 1500),
         "REQUIRE_SCREENSHOT": True,
         "REQUIRE_ATR_DIAGNOSTICS": False,
         "REQUIRE_FRESHNESS_DIAGNOSTICS": False,
         "MAX_IMAGE_BYTES": 2 * 1024 * 1024,
         "PERSIST_REVIEWS": True,
-        "ALLOW_OPENAI_PROVIDER": _env_bool("AI_CHART_REVIEW_ALLOW_OPENAI_PROVIDER", False),
+        "ALLOW_OPENAI_PROVIDER": _env_bool(
+            "AI_CHART_REVIEW_ALLOW_OPENAI_PROVIDER",
+            _env_bool("OPENAI_REVIEW_ENABLED", True),
+        ),
         "ALLOW_DUAL_PROVIDER": _env_bool("AI_CHART_REVIEW_ALLOW_DUAL_PROVIDER", False),
         "MAX_DISPLACEMENT_ATR_MULTIPLE": 1.0,
         "MISMATCH_WARN_MAX_SECONDS": 120,
@@ -417,19 +888,28 @@ CONFIG: dict = {
     },
     "AI_SCALP_CHART_REVIEW": {
         "ENABLED": _env_bool("AI_SCALP_CHART_REVIEW_ENABLED", False),
-        "DEFAULT_PROVIDER": (
-            os.environ.get("AI_SCALP_CHART_REVIEW_DEFAULT_PROVIDER", "anthropic").strip().lower()
-            or "anthropic"
-        ),
+        "DEFAULT_PROVIDER": normalize_ai_review_provider(
+            os.environ.get("AI_SCALP_CHART_REVIEW_DEFAULT_PROVIDER", "")
+            or os.environ.get("AI_REVIEW_PROVIDER", "")
+            or "claude"
+        )
+        or "claude",
         "ANTHROPIC_MODEL": os.environ.get(
             "AI_SCALP_CHART_REVIEW_ANTHROPIC_MODEL",
             os.environ.get("AI_CHART_REVIEW_ANTHROPIC_MODEL", "claude-opus-4-7"),
+        ),
+        "OPENAI_MODEL": os.environ.get(
+            "OPENAI_SCALP_CHART_REVIEW_MODEL",
+            os.environ.get("OPENAI_REVIEW_MODEL", _OPENAI_REVIEW_MODEL_DEFAULT),
         ),
         "MAX_TOKENS": _env_int("AI_SCALP_CHART_REVIEW_MAX_TOKENS", 1500),
         "REQUIRE_SCREENSHOT": True,
         "MAX_IMAGE_BYTES": 2 * 1024 * 1024,
         "PERSIST_REVIEWS": True,
-        "ALLOW_OPENAI_PROVIDER": _env_bool("AI_SCALP_CHART_REVIEW_ALLOW_OPENAI_PROVIDER", False),
+        "ALLOW_OPENAI_PROVIDER": _env_bool(
+            "AI_SCALP_CHART_REVIEW_ALLOW_OPENAI_PROVIDER",
+            _env_bool("OPENAI_REVIEW_ENABLED", True),
+        ),
         "DEDUP_WINDOW_SECONDS": 60,
         "EXECUTE_REQUIRES_AI_REVIEW": _env_bool(
             "AI_SCALP_CHART_REVIEW_EXECUTE_REQUIRES_AI_REVIEW", True

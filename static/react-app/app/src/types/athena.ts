@@ -1083,8 +1083,8 @@ export interface EngineCBacktestResponse {
 // Read-only; never used for execution.
 // ============================================================================
 
-export type AIReviewProvider = 'xai' | 'anthropic';
-export type AIChartReviewProvider = 'default' | 'anthropic' | 'xai' | 'grok';
+export type AIReviewProvider = 'grok' | 'claude' | 'openai';
+export type AIChartReviewProvider = 'default' | 'grok' | 'claude' | 'openai' | 'anthropic' | 'xai';
 export type AIChartReviewVerdict = 'VALID' | 'CAUTION' | 'INVALID' | 'NO_TRADE';
 export type AIChartReviewHumanAction =
   | 'take'
@@ -1461,6 +1461,11 @@ export interface ReviewInputMeta {
 export interface AIChartReviewResponse {
   review_id: string | null;
   provider: string;
+  selectedProvider?: string | null;
+  fallbackUsed?: boolean;
+  fallback_used?: boolean;
+  providerFailure?: Record<string, unknown> | null;
+  provider_failure?: Record<string, unknown> | null;
   model: string | null;
   latency_ms?: number | null;
   engine_a_context: AIChartReviewEngineAContext;
@@ -1661,6 +1666,11 @@ export interface ScalpEngineDContext {
 export interface ScalpAIChartReviewResponse {
   review_id: string | null;
   provider: string;
+  selectedProvider?: string | null;
+  fallbackUsed?: boolean;
+  fallback_used?: boolean;
+  providerFailure?: Record<string, unknown> | null;
+  provider_failure?: Record<string, unknown> | null;
   model: string | null;
   latency_ms?: number | null;
   dedup_hit?: boolean;

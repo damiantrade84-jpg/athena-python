@@ -51,6 +51,10 @@ def validate_request(data: dict[str, Any], cfg: dict[str, Any]) -> ValidationErr
         return ValidationError("screenshot_meta.native_chart must be true", 400)
 
     provider = str(data.get("provider") or "default").strip().lower()
+    if provider == "claude":
+        provider = "anthropic"
+    if provider == "grok":
+        provider = "xai"
     if provider == "openai" and not cfg.get("ALLOW_OPENAI_PROVIDER"):
         return ValidationError("OpenAI provider is disabled", 403)
     if provider == "dual" and not cfg.get("ALLOW_DUAL_PROVIDER"):
