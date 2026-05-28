@@ -10,20 +10,24 @@ Manual, evidence-first audit. Follow repo `AGENTS.md` safety rules.
 ## Before starting
 
 1. Restate the user's exact question and scope (engine/surface/files).
-2. List files to read and files intentionally skipped.
-3. Read `references/invariants.md`.
+2. Read `references/invariants.md` and `docs/codex-code-review-discipline.md`.
+3. For verification or "nothing missed" reviews, also follow `.agents/skills/athena-anti-miss-review/SKILL.md`.
+4. Build the required **coverage map** before any verdict (see discipline doc).
 
 ## Procedure
 
-1. Trace producer → consumer on the real execution path.
+1. Trace producer → consumer on the real execution path (entry point → output contract).
 2. Check missing, null, false, stale, malformed, empty, and wrong-type cases separately.
 3. Verify fail-closed behavior with code evidence, not assumptions.
-4. Separate confirmed bugs from suspicious patterns.
-5. Propose minimal fixes only after findings; recommend focused regression tests.
+4. Run the **negative-check pass** from `docs/codex-code-review-discipline.md`.
+5. Separate confirmed bugs from suspicious patterns.
+6. Propose minimal fixes only after findings; recommend focused regression tests.
+
+Do not say "looks good", "no issues found", or "implemented correctly" without traced coverage. If incomplete, say **"Coverage incomplete"** and list missing areas.
 
 ## Output per finding
 
-severity (CRITICAL/HIGH/MEDIUM/LOW), file:region, behavior, risk, reproduction path, minimal fix, targeted test.
+severity (CRITICAL/HIGH/MEDIUM/LOW), file path, function/class/route/component, line anchor, why it is real, expected behavior, minimal fix, regression test required.
 
 Label any unchecked mandatory area as `not verified`.
 

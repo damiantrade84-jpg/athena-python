@@ -343,6 +343,10 @@ Task files are not startup context and do not replace running targeted tests or 
 
 Use the manual audit skill only when the user explicitly asks for an audit, bug hunt, full trace, or strict finding format. Keep the root guide limited to scope and safety rules; the audit `SKILL.md` owns detailed audit procedure and checks.
 
+All audits and code reviews must follow **`docs/codex-code-review-discipline.md`**: build a coverage map before any verdict, no summary-only reviews, run the negative-check pass, and say **"Coverage incomplete"** with missing areas when proof is insufficient.
+
+For audit, verification, shipped-change validation, or "make sure nothing was missed" asks, invoke **`.agents/skills/athena-anti-miss-review/SKILL.md`** (review map, required search pass, adversarial pass, structured verdict).
+
 ### Implementation mode
 
 Short plan when non-trivial; smallest safe diff; config-gated where needed; targeted tests only; summarize risk.

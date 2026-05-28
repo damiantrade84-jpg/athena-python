@@ -18,6 +18,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 CODEX_SKILLS = [
     "athena-audit",
+    "athena-anti-miss-review",
     "athena-engine-parity",
     "athena-research-lab",
     "athena-ui-chart-review",
@@ -37,6 +38,7 @@ REQUIRED_FILES = [
     ROOT / "CLAUDE.md",
     ROOT / "docs" / "codex-guidance.md",
     ROOT / "docs" / "codex-memory-policy.md",
+    ROOT / "docs" / "codex-code-review-discipline.md",
     ROOT / "static" / "react-app" / "AGENTS.md",
     ROOT / "athena_research" / "AGENTS.md",
     ROOT / "tests" / "AGENTS.md",

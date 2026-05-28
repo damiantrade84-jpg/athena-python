@@ -28,6 +28,16 @@ Athena / Sentinel Pro v4: multi-engine trading analysis and execution-support. *
 
 Every final response includes: summary, files inspected/changed, tests/checks run, remaining risks or `not verified` areas.
 
+## Code review discipline
+
+No sampled, surface-level, or summary-only audits. Build a **coverage map** before any verdict (entry points, caller/callee path, config/env keys, tests, UI/API contract when relevant, files not inspected, assumptions/unknowns).
+
+Do not say "looks good", "no issues found", or "implemented correctly" without tracing entry point → output contract. If coverage is incomplete, say **"Coverage incomplete"** and list missing areas.
+
+Every finding: severity, file path, function/class/route/component, line anchor, why it is real, expected behavior, minimal fix, regression test required. Run a **negative-check pass** (duplicate paths, hardcoded thresholds, stale fallbacks, swallowed exceptions, bypassed gates, UI/backend drift, stale tests, dead config/env keys).
+
+Engine reviews: trace provider → candle policy → scoring → gates → SL/TP/RR → payload → consumer → tests. Current source and tests are proof — not memory, old audits, or comments. Full checklist: **`docs/codex-code-review-discipline.md`**. For audit/verification/"nothing missed" asks, use **`athena-anti-miss-review`** (review map, search pass, adversarial pass, PASS/PASS WITH GAPS/FAIL/BLOCKED verdict).
+
 ## Repo skills (on demand)
 
 Discover under `.agents/skills/<name>/SKILL.md`. Load a skill only when the task matches its description; do not preload all skills.
@@ -35,6 +45,7 @@ Discover under `.agents/skills/<name>/SKILL.md`. Load a skill only when the task
 | Skill | Invoke for |
 |-------|------------|
 | `athena-audit` | Full audit, bug hunt, strict findings, e2e trace, producer-to-consumer contract review |
+| `athena-anti-miss-review` | Audit, verification, shipped-change validation, missed-issue detection, regression check, "nothing missed" |
 | `athena-engine-parity` | Live/backtest or chart parity across engines, candles, ATR, scoring drift, UI payloads |
 | `athena-research-lab` | `athena_research/`, vectorbt lab, backtest discovery, indicator calibration |
 | `athena-ui-chart-review` | React/native chart UI, chart AI review payloads, Vision (not execution) |
@@ -59,6 +70,7 @@ Discover under `.agents/skills/<name>/SKILL.md`. Load a skill only when the task
 ## Reference (not startup context)
 
 - `docs/codex-guidance.md` — AGENTS vs skills vs PLANS vs MCP
+- `docs/codex-code-review-discipline.md` — coverage map, finding format, negative-check pass
 - `docs/codex-memory-policy.md` — repo vs local Codex memory; troubleshooting stale context
 - `docs/agent-operating-guide.md` — detailed repo map and safety tables
 

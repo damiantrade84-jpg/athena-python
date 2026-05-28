@@ -11,6 +11,7 @@ How Athena repo instructions are split for **Codex (app)**, **Codex CLI**, **Cur
 | Large plans | `PLANS.md` (optional, repo root) | Multi-step refactors or audit plans; not loaded by default |
 | Tool access | `.codex/config.toml`, MCP servers | Databases, browser, docs — **not** behavior rules (Codex/CLI only) |
 | Memory policy | `docs/codex-memory-policy.md` | Repo vs `~/.codex/memories/`; archive rules — read when stale context appears |
+| Review discipline | `docs/codex-code-review-discipline.md` | Coverage map, finding format, negative-check pass — read for audits/reviews |
 | Deep reference | `docs/agent-operating-guide.md` | Repo map, engine tables, Vision tokens — read when needed, not at startup |
 
 **Not instruction files:** `memory.md`, `memories.md`, `MEMORY.md`, or `docs/archive/*memory*` — archive only. See `docs/codex-memory-policy.md`.
@@ -49,7 +50,7 @@ python tools/sync_agent_docs.py
 
 ### Codex CLI / app verification
 
-In a new thread: *List repo skills you see and their descriptions.* — expect all six Athena skills.
+In a new thread: *List repo skills you see and their descriptions.* — expect all seven Athena skills.
 
 ### Claude Code (if used in this repo)
 
@@ -74,6 +75,7 @@ Long domain detail belongs in `references/` under the skill folder, not in root 
 | Skill | Use when |
 |-------|----------|
 | `athena-audit` | Full audit, bug hunt, strict findings, e2e trace |
+| `athena-anti-miss-review` | Verification, shipped-change validation, missed-issue detection, regression check |
 | `athena-engine-parity` | Live/backtest/chart/engine payload parity |
 | `athena-research-lab` | Research Lab, vectorbt, calibration |
 | `athena-ui-chart-review` | React/native chart, Vision/review UI |
