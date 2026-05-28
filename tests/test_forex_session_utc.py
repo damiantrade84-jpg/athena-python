@@ -8,7 +8,7 @@ from unittest.mock import patch
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from config import CONFIG
-from forex_scoring import _session_state, _local_to_utc_hour
+from legacy.forex_scoring import _session_state, _local_to_utc_hour
 
 
 class TestForexSessionUtc:

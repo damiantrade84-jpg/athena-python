@@ -10,7 +10,7 @@ log = logging.getLogger("athena")
 # Add current dir to path
 sys.path.insert(0, os.getcwd())
 
-from forex_scoring import compute_forex_score
+from legacy.forex_scoring import compute_forex_score
 
 def reproduce_forex():
     d1_snap = {"adx": 30, "ema200": 1.05, "close": 1.10}

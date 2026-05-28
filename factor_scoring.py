@@ -77,6 +77,8 @@ def _resolve_pair_score_group(pair: dict) -> str | None:
 
 
 def _engine_a_group_adjustments_enabled() -> bool:
+    # Code fallback is False (fail-closed), but config.yaml sets this to true
+    # at runtime so per-group indicator differentiation is active in production.
     return bool(CONFIG.get("ENGINE_A_SCORE_GROUP_ADJUSTMENTS_ENABLED", False))
 
 
@@ -2370,14 +2372,15 @@ def _volatility_scaler(
 
 
 def _session_multiplier(bar_time: Optional[str], asset_type: str) -> float:
-    """Forex session liquidity multiplier — off unless ``FACTOR_FOREX_SESSION_MULT.ENABLED``.
+    """Forex session liquidity multiplier — enabled by default for forex.
 
     Uses UTC hour buckets from ``scoring.get_session`` (same labels as scan UI).
+    Disabled for non-forex assets (returns 1.0).
     """
     if str(asset_type or "").lower() != "forex":
         return 1.0
     cfg = CONFIG.get("FACTOR_FOREX_SESSION_MULT") or {}
-    if not bool(cfg.get("ENABLED", False)):
+    if not bool(cfg.get("ENABLED", True)):
         return 1.0
     try:
         from scoring import get_session
@@ -2573,9 +2576,13 @@ def compute_factor_scores(
     }
 
     # Hard abort: no direction determinable
+    # direction=None from _coherent_trend_score means D1/H4/H1 trend votes are
+    # perfectly balanced (weighted tie) or no EMA data was available.  This is an
+    # intentional hard abort — the engine genuinely cannot determine direction.
     if direction is None or abs(trend_score) < 1e-9:
         log.debug("[EA2] %s trend indeterminate — score=0", display)
-        regime_raw = detect_regime(_regime_snap, asset_type).get("regime", "UNKNOWN")
+        _bbw_pct_for_exit = h4_snap.get("bbWidth_pct") or h4_snap.get("bb_width_pct")
+        regime_raw = detect_regime(_regime_snap, asset_type, bb_width_pct=_bbw_pct_for_exit).get("regime", "UNKNOWN")
         regime = _get_smoothed_regime(regime_context, pair_id, regime_raw)
         return _zero_result(pair, regime, trend_detail, feed_status, reason="indeterminate_trend")
 

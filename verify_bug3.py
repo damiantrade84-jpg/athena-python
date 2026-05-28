@@ -15,7 +15,7 @@ config.CONFIG = {
     "FOREX_ENGINE": {"trend_gate_adx_min": 20.0}
 }
 
-from forex_scoring import compute_forex_score, ForexScoreResult
+from legacy.forex_scoring import compute_forex_score, ForexScoreResult
 
 def test_bug3_parity():
     print("Testing BUG 3 — Forex session parity...")
@@ -53,7 +53,7 @@ def test_bug3_parity():
     # 3. Live mode (backtest_mode=False) - always respects sessions
     print("Case 3: Live mode, expect session filter to be active (mocking current hour to 22)")
     config.CONFIG["BACKTEST_IGNORE_SESSIONS"] = False # reset
-    import forex_scoring
+    from legacy import forex_scoring
     original_local_to_utc_hour = forex_scoring._local_to_utc_hour
     forex_scoring._local_to_utc_hour = lambda: 22 # force off-session
     

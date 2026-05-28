@@ -20,7 +20,7 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-import forex_scoring
+from legacy import forex_scoring
 import indicators
 
 

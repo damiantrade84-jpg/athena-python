@@ -6,7 +6,7 @@ import indicators
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-import forex_scoring
+from legacy import forex_scoring
 
 
 def _make_h1_candles(count: int = 80, base: float = 1.1000, step: float = 0.0002) -> list[dict]:

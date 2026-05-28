@@ -121,6 +121,8 @@ def get_pair_score_group(pair: dict) -> str:
     if profile.get("score_group"):
         return str(profile.get("score_group"))
 
+    from engine_a_groups import ENGINE_A_KNOWN_SCORE_GROUPS
+
     display = pair.get("display", "")
     ptype = pair.get("type", "")
 
@@ -180,7 +182,14 @@ def get_pair_score_group(pair: dict) -> str:
         if display in _US_INDICES_TRACKERS:
             return "us_indices_trackers"
         return "stock_other"
-    return f"{ptype}_other" if ptype else "unknown"
+    _fallback = f"{ptype}_other" if ptype else "unknown"
+    if _fallback not in ENGINE_A_KNOWN_SCORE_GROUPS:
+        log.warning(
+            "get_pair_score_group: unknown group '%s' for %s (type=%s) — "
+            "no ENGINE_A_SCORE_GROUP_THRESHOLDS entry; falling back to legacy tier",
+            _fallback, display, ptype,
+        )
+    return _fallback
 
 
 # Every value returned by get_pair_score_group() must have an explicit entry in
@@ -426,9 +435,11 @@ def classify_signal_setup(
 
     Uses structured flags (squeeze_bonus, atr_breakout) set during scoring rather
     than re-parsing warning strings, so renaming warning text never silently breaks classification.
+
+    NOTE: entry_mode is accepted for API stability but the only caller (calc_confluence)
+    always passes "trend". Mean reversion classification is handled by the factor engine's
+    mean_reversion factor, not here.
     """
-    if entry_mode == "mean_revert":
-        return "mean_reversion"
     if squeeze_bonus or atr_breakout:
         return "breakout"
     dir_vote = 1 if direction == "LONG" else -1
@@ -608,6 +619,9 @@ CORR_CLUSTERS: dict = {
     ],
     "us_tech": ["AAPL", "TSLA", "NVDA", "MSFT", "AMZN", "META", "GOOG"],
     "us_sp500": ["SPY", "QQQ", "S&P 500", "Nasdaq"],
+    "nat_gas": ["Nat Gas"],
+    "softs": ["Cocoa", "Coffee", "Corn", "Cotton", "Soybeans", "Sugar", "Wheat"],
+    "base_metals": ["Aluminium", "Lead", "Nickel", "Zinc"],
 }
 
 # Reverse lookup: pair_display → cluster_name (built once at import time)
@@ -699,21 +713,13 @@ def _get_30d_correlation(
         r = cov / denom
         return max(-1.0, min(1.0, r))
 
-    # ── Legacy fallback path (no price data available) ───────────────────────
+    # ── No price data available: return neutral (no BTC bias adjustment) ──────
     log.warning(
-        "heuristic BTC correlation fallback used for %s; pass price series to use real Pearson r",
+        "no price series for %s correlation — BTC bias multiplier set to 1.0 (neutral). "
+        "Pass asset_prices + benchmark_prices for real Pearson r.",
         pair_display or "unknown",
     )
-    # Known high-correlation majors
-    if pair_display in ("ETH/USDT", "ETHUSDT"):
-        return 0.90
-    if pair_display in ("BTC/USDT", "BTCUSDT"):
-        return 1.0
-    # Known low-correlation alts
-    if pair_display in ("SOL/USDT", "SOLUSDT", "DOGE/USDT", "DOGEUSDT"):
-        return 0.30
-    # Default: moderate correlation
-    return 0.65
+    return 1.0
 
 
 def apply_correlation_cap(signals: list) -> list:
@@ -855,8 +861,7 @@ def calc_confluence(
     _fs_feed_early = factor_result.get("feed_status") or {}
     if _fs_feed_early.get("adx") == "missing":
         w.append(
-            "ADX unavailable on both D1 and H4 — legacy neutral multiplier (0.5×) applied; "
-            "set ADX_MISSING_BOTH_ABORT true (recommended) for fail-closed scoring."
+            "ADX unavailable on both D1 and H4 — scoring aborted (ADX_MISSING_BOTH_ABORT=true)."
         )
     # Crypto OI divergence (parity with analyze_pair — uses D1[-2] vs H1 close)
     if oi_data is not None and pair.get("type") == "crypto":

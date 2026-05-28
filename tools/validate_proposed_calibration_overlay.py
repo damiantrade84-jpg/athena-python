@@ -46,7 +46,7 @@ _PROTECTED_LIVE_FILES = (
     "config.yaml",
     "scoring.py",
     "factor_scoring.py",
-    "forex_scoring.py",
+    "legacy/forex_scoring.py",
     "market_structure.py",
     "execution.py",
     "risk_engine.py",

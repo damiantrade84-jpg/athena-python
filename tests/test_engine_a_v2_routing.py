@@ -59,7 +59,7 @@ class TestAllAssetV2Routing:
     @pytest.fixture(autouse=True)
     def _block_legacy(self, monkeypatch):
         """Monkeypatch compute_forex_score to raise if called."""
-        import forex_scoring
+        from legacy import forex_scoring
         def _explode(*a, **kw):
             raise AssertionError("Legacy forex_scoring.compute_forex_score was called!")
         monkeypatch.setattr(forex_scoring, "compute_forex_score", _explode)
@@ -197,7 +197,7 @@ class TestZeroScoreDiagnostics:
 class TestNoSilentFallback:
     def test_v2_exception_does_not_call_legacy(self, monkeypatch):
         """If V2 raises, the route must NOT silently call forex_scoring."""
-        import forex_scoring
+        from legacy import forex_scoring
         legacy_called = {"val": False}
 
         def _legacy_spy(*a, **kw):
