@@ -853,6 +853,42 @@ def get_cached_news_confluence_vote(
         return vote, result
 
 
+def _max_positive_news_sentiment_delta(
+    pair: dict,
+    *,
+    config: dict,
+    max_score: Optional[float],
+) -> float:
+    max_s = float(max_score if max_score is not None else 3.0)
+    _sg = _resolve_pair_score_group(pair)
+    _asset = str(pair.get("type") or "stock").lower()
+    _impact_map = _config_value(config, "NEWS_SENTIMENT_IMPACT_BY_CLASS", {}) or {}
+    _delta_map = _config_value(config, "NEWS_SENTIMENT_MAX_DELTA_BY_CLASS", {}) or {}
+    impact = abs(
+        float(
+            _resolve_class_keyed(
+                _impact_map,
+                _sg,
+                _asset,
+                _config_value(config, "NEWS_SENTIMENT_SCORE_IMPACT", 0.06),
+            )
+            or 0.06
+        )
+    )
+    max_delta = abs(
+        float(
+            _resolve_class_keyed(
+                _delta_map,
+                _sg,
+                _asset,
+                _config_value(config, "NEWS_SENTIMENT_MAX_DELTA", 0.30),
+            )
+            or 0.30
+        )
+    )
+    return max(0.0, min(max_delta, impact * max_s))
+
+
 def apply_news_sentiment_to_scan_result(
     res: dict,
     pair: dict,
@@ -882,6 +918,35 @@ def apply_news_sentiment_to_scan_result(
         or config.get("AI_MODEL")
         or config.get("VISION_MODEL", "grok-4.3")
     )
+    max_s = float(max_score if max_score is not None else res.get("maxScoreOverride") or 3.0)
+    threshold_value = float(threshold if threshold is not None else res.get("threshold") or 0.0)
+    major_mode_for_filter = str(
+        config.get("NEWS_SENTIMENT_MAJOR_EVENT_MODE") or "advisory"
+    ).strip().lower()
+    if (
+        bool(config.get("NEWS_SENTIMENT_SKIP_UNREACHABLE_SCAN_ROWS", True))
+        and threshold_value > 0
+        and major_mode_for_filter == "advisory"
+        and not bool(config.get("SCAN_QUANTILE_ENABLED", False))
+    ):
+        base_score = float(res.get("score", 0.0) or 0.0)
+        max_positive_delta = _max_positive_news_sentiment_delta(
+            pair,
+            config=config,
+            max_score=max_s,
+        )
+        if base_score < threshold_value and (base_score + max_positive_delta) < (threshold_value - 1e-9):
+            res["newsSentimentVote"] = None
+            if config.get("NEWS_SENTIMENT_ATTACH_SUMMARY", True):
+                res["newsSentimentSummary"] = None
+            res["newsSentimentSkipped"] = {
+                "reason": "below_relevance_floor",
+                "baseScore": round(base_score, 6),
+                "threshold": round(threshold_value, 6),
+                "maxPositiveDelta": round(max_positive_delta, 6),
+            }
+            return
+
     vote, detail = get_cached_news_confluence_vote(
         pair,
         eodhd_api_key=eod,
@@ -941,8 +1006,6 @@ def apply_news_sentiment_to_scan_result(
     if vote is None:
         return
 
-    max_s = float(max_score if max_score is not None else res.get("maxScoreOverride") or 3.0)
-
     # FIX 3: group-aware impact (BY_CLASS > score_group > asset_type > default > global scalar).
     # Preserves all existing clamps, major-event guards, pre_news_score, and bounded delta exactly.
     _sg = _resolve_pair_score_group(pair)
@@ -955,7 +1018,6 @@ def apply_news_sentiment_to_scan_result(
     raw_delta = impact * max_s * float(vote)
     delta = raw_delta
     base_score = float(res.get("score", 0.0) or 0.0)
-    threshold_value = float(threshold if threshold is not None else res.get("threshold") or 0.0)
     if threshold_value > 0 and base_score < threshold_value * 0.8:
         delta = min(0.0, delta)
     if major_detected and major_mode == "negative_delta_only":

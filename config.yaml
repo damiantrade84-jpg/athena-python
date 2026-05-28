@@ -1663,6 +1663,8 @@ NEWS_SENTIMENT_SCORE_IMPACT: 0.06               # delta = impact * maxScore * vo
 
 NEWS_SENTIMENT_ATTACH_SUMMARY: true             # attach short summary on each signal JSON
 
+NEWS_SENTIMENT_SKIP_UNREACHABLE_SCAN_ROWS: true # Skip cold News AI calls when max positive delta cannot reach scan floor.
+
 NEWS_SENTIMENT_MACRO_CONTEXT_ENABLED: true     # When true, add configured macro news sources/tags per pair.
 
 NEWS_SENTIMENT_MAX_ARTICLE_AGE_HOURS: 72

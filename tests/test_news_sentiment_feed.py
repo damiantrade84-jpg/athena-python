@@ -119,6 +119,68 @@ def test_apply_news_sentiment_blends_score(monkeypatch):
     assert any("News AI" in w for w in res["warnings"])
 
 
+def test_apply_news_sentiment_skips_unreachable_scan_row(monkeypatch):
+    monkeypatch.setenv("EODHD_KEY", "test")
+    monkeypatch.setenv("XAI_API_KEY", "test")
+    res = {"score": 0.5, "maxScoreOverride": 3.0, "warnings": []}
+
+    def _unexpected_fetch(*_a, **_k):
+        raise AssertionError("unreachable scan row should not call News AI")
+
+    monkeypatch.setattr(nsf, "get_cached_news_confluence_vote", _unexpected_fetch)
+
+    apply_news_sentiment_to_scan_result(
+        res,
+        {"display": "EUR/USD", "type": "forex"},
+        config={
+            "NEWS_SENTIMENT_CONFLUENCE_ENABLED": True,
+            "NEWS_SENTIMENT_SCORE_IMPACT": 0.06,
+            "NEWS_SENTIMENT_MAX_DELTA": 0.30,
+            "NEWS_SENTIMENT_SKIP_UNREACHABLE_SCAN_ROWS": True,
+        },
+        eodhd_ticker_for_pair=lambda _p: "EURUSD.FOREX",
+        threshold=1.5,
+        max_score=3.0,
+    )
+
+    assert res["score"] == pytest.approx(0.5)
+    assert res["newsSentimentVote"] is None
+    assert res["newsSentimentSkipped"]["reason"] == "below_relevance_floor"
+    assert res["newsSentimentSkipped"]["maxPositiveDelta"] == pytest.approx(0.18)
+    assert "newsSentimentDelta" not in res
+
+
+def test_apply_news_sentiment_still_fetches_when_news_can_reach_floor(monkeypatch):
+    monkeypatch.setenv("EODHD_KEY", "test")
+    monkeypatch.setenv("XAI_API_KEY", "test")
+    res = {"score": 1.35, "maxScoreOverride": 3.0, "warnings": []}
+    calls = {"count": 0}
+
+    def _fake_cached(*_a, **_k):
+        calls["count"] += 1
+        return (1.0, {"direction": "bullish", "confidence": 0.9})
+
+    monkeypatch.setattr(nsf, "get_cached_news_confluence_vote", _fake_cached)
+
+    apply_news_sentiment_to_scan_result(
+        res,
+        {"display": "EUR/USD", "type": "forex"},
+        config={
+            "NEWS_SENTIMENT_CONFLUENCE_ENABLED": True,
+            "NEWS_SENTIMENT_SCORE_IMPACT": 0.06,
+            "NEWS_SENTIMENT_MAX_DELTA": 0.30,
+            "NEWS_SENTIMENT_SKIP_UNREACHABLE_SCAN_ROWS": True,
+        },
+        eodhd_ticker_for_pair=lambda _p: "EURUSD.FOREX",
+        threshold=1.5,
+        max_score=3.0,
+    )
+
+    assert calls["count"] == 1
+    assert res["newsSentimentDelta"] == pytest.approx(0.18)
+    assert res["score"] == pytest.approx(1.53)
+
+
 def test_resolve_news_sources_expands_direct_and_configured_macro_sources():
     pair = {"display": "XAU/USD", "symbol": "XAUUSD", "type": "commodity"}
     config = {

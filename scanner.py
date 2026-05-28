@@ -95,6 +95,18 @@ def _fetch_ab_crypto_signal_candles(runtime, pair: dict, tf: str, limit: int):
     return result.candles, result.meta
 
 
+def _fetch_scan_h4_candles(runtime, pair: dict, limit: int, preloaded_h4: list | None):
+    """Return H4 scan candles, reusing intermarket preloads when feed policy allows it."""
+    crypto_bybit_signal_feed = (
+        str((pair or {}).get("type") or "").lower() == "crypto"
+        and resolve_crypto_signal_feed("AB", CONFIG) == "bybit"
+    )
+    if preloaded_h4 is not None and not crypto_bybit_signal_feed:
+        return preloaded_h4, None, crypto_bybit_signal_feed
+    candles, meta = _fetch_ab_crypto_signal_candles(runtime, pair, "H4", limit)
+    return candles, meta, crypto_bybit_signal_feed
+
+
 def _engine_b_level_pair(conf_b: dict | None, res_b: dict | None) -> tuple[float | None, float | None]:
     conf_b = conf_b or {}
     res_b = res_b or {}
@@ -1484,15 +1496,11 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict[s
                     .get(pair.get("display"), {})
                     .get("candles")
                 )
-                _crypto_bybit_signal_feed = (
-                    pair.get("type") == "crypto"
-                    and resolve_crypto_signal_feed("AB", CONFIG) == "bybit"
-                )
                 _d1_res, _d1_meta = _fetch_ab_crypto_signal_candles(
                     r, pair, "D1", _lim["D1"]
                 )
-                _h4_res, _h4_meta = _fetch_ab_crypto_signal_candles(
-                    r, pair, "H4", _lim["H4"]
+                _h4_res, _h4_meta, _crypto_bybit_signal_feed = _fetch_scan_h4_candles(
+                    r, pair, _lim["H4"], _im_h4
                 )
                 _h1_res, _h1_meta = _fetch_ab_crypto_signal_candles(
                     r, pair, "H1", _lim["H1"]
