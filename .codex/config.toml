@@ -1,3 +1,7 @@
+# Repo instructions: AGENTS.md only (see docs/codex-memory-policy.md).
+# Do not add memory.md / memories.md / AGENT.md as instruction fallbacks here.
+# User-level memory (~/.codex/memories/) is configured in %USERPROFILE%\.codex\config.toml.
+
 [mcp_servers.athena-audit]
 args = [
     "mcp-server-sqlite",

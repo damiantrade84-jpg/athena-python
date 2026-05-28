@@ -47,9 +47,19 @@ Discover under `.agents/skills/<name>/SKILL.md`. Load a skill only when the task
 - `athena_research/AGENTS.md` — Research Lab
 - `tests/AGENTS.md` — pytest conventions
 
+## Memory and instruction source of truth
+
+- **AGENTS.md** is the active Codex/Cursor repo instruction file.
+- **`.agents/skills/<name>/SKILL.md`** files are task-specific workflows — load only when the task matches.
+- **`memory.md`**, **`memories.md`**, **`MEMORY.md`**, and **`docs/archive/*memory*`** are historical notes only — not active rules.
+- Do not treat archived memory files as active guidance. If old memory conflicts with **AGENTS.md**, **AGENTS.md** wins.
+- Do not infer current Athena architecture from memory files without inspecting current source files.
+- Local Codex-generated memory lives outside the repo (`~/.codex/memories/`). See **`docs/codex-memory-policy.md`** if stale context persists.
+
 ## Reference (not startup context)
 
 - `docs/codex-guidance.md` — AGENTS vs skills vs PLANS vs MCP
+- `docs/codex-memory-policy.md` — repo vs local Codex memory; troubleshooting stale context
 - `docs/agent-operating-guide.md` — detailed repo map and safety tables
 
 ## Tool boundaries

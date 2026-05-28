@@ -10,7 +10,10 @@ How Athena repo instructions are split for **Codex (app)**, **Codex CLI**, **Cur
 | On-demand workflows | `.agents/skills/<name>/SKILL.md` | Audits, parity, research lab, UI review, test repair, execution safety |
 | Large plans | `PLANS.md` (optional, repo root) | Multi-step refactors or audit plans; not loaded by default |
 | Tool access | `.codex/config.toml`, MCP servers | Databases, browser, docs — **not** behavior rules (Codex/CLI only) |
+| Memory policy | `docs/codex-memory-policy.md` | Repo vs `~/.codex/memories/`; archive rules — read when stale context appears |
 | Deep reference | `docs/agent-operating-guide.md` | Repo map, engine tables, Vision tokens — read when needed, not at startup |
+
+**Not instruction files:** `memory.md`, `memories.md`, `MEMORY.md`, or `docs/archive/*memory*` — archive only. See `docs/codex-memory-policy.md`.
 
 ## Multi-tool setup (Codex app, Codex CLI, Cursor)
 

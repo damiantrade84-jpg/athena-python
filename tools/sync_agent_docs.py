@@ -25,10 +25,18 @@ CODEX_SKILLS = [
     "athena-risk-execution",
 ]
 
+DISALLOWED_ROOT_INSTRUCTION_FILES = [
+    ROOT / "memory.md",
+    ROOT / "memories.md",
+    ROOT / "MEMORY.md",
+    ROOT / "AGENT.md",
+]
+
 REQUIRED_FILES = [
     ROOT / "AGENTS.md",
     ROOT / "CLAUDE.md",
     ROOT / "docs" / "codex-guidance.md",
+    ROOT / "docs" / "codex-memory-policy.md",
     ROOT / "static" / "react-app" / "AGENTS.md",
     ROOT / "athena_research" / "AGENTS.md",
     ROOT / "tests" / "AGENTS.md",
@@ -46,6 +54,13 @@ FORBIDDEN_REFERENCES = [
     "backtest-analysis/SKILL.md",
     "engine-entry-design/SKILL.md",
     "docs/claude-code-guide.md",
+    "memory.md as repo instructions",
+    "memories.md as repo instructions",
+    "MEMORY.md as repo instructions",
+    "startup: memory.md",
+    "startup: memories.md",
+    "load memory.md",
+    "load memories.md",
 ]
 
 CHECK_FILES = [
@@ -83,6 +98,13 @@ def main() -> None:
         raise SystemExit("Missing required agent/skill files:\n- " + "\n- ".join(missing))
 
     violations: list[str] = []
+    for path in DISALLOWED_ROOT_INSTRUCTION_FILES:
+        if path.exists():
+            violations.append(
+                f"{path.relative_to(ROOT)} must not exist at repo root; "
+                "archive to docs/archive/ and use AGENTS.md (see docs/codex-memory-policy.md)"
+            )
+
     for path in CHECK_FILES:
         if not path.exists():
             continue

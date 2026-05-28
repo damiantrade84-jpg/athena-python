@@ -12,6 +12,8 @@
 
 - Codex and Cursor start with `AGENTS.md` for repository instructions.
 - Codex/Cursor start from `AGENTS.md`; Claude Code starts from `CLAUDE.md`. Do not intentionally cross-load these startup files.
+- `memory.md`, `memories.md`, and `MEMORY.md` are not active repo instructions. Archive under `docs/archive/` if kept for history. See `docs/codex-memory-policy.md`.
+- Local Codex-generated memory (`~/.codex/memories/`) is outside the repo and may be stale; user-level cleanup is separate from git.
 - Codex repo skills must live under `.agents/skills/<skill-name>/SKILL.md` for repository skill discovery.
 - Codex should not rely on `tools/skills/*` for automatic repo skill discovery.
 - Claude Code project skills belong under `.claude/skills/<skill-name>/SKILL.md`.
