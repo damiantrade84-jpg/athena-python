@@ -3551,9 +3551,9 @@ TIMED_EXIT:
     intraday: 0.0
     swing: 0.0
   pre_activation_profit_giveback_r:
-    scalp: 0.25
-    intraday: 0.35
-    swing: 0.50
+    scalp: 0.15
+    intraday: 0.20
+    swing: 0.30
   pre_activation_profit_arm_r_by_venue:
     bybit:
       scalp: 0.15
@@ -3565,13 +3565,13 @@ TIMED_EXIT:
       swing: 0.40
   pre_activation_profit_giveback_r_by_venue:
     bybit:
-      scalp: 0.20
-      intraday: 0.25
-      swing: 0.40
+      scalp: 0.10
+      intraday: 0.15
+      swing: 0.25
     mt5:
-      scalp: 0.25
-      intraday: 0.35
-      swing: 0.50
+      scalp: 0.15
+      intraday: 0.20
+      swing: 0.30
 
   # Peak-R give-back close. Once chandelier is active, track the highest R
   # the trade reaches; if current R drops below peak by giveback_r, close

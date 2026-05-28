@@ -1383,11 +1383,14 @@ def _evaluate_trail(
 
         # Roundtrip close: arms once trade was ever in profit (peak > 0).
         # Giveback close: requires peak reached arm_r (larger threshold).
+        # Floor: giveback close never fires below breakeven (current_r > 0 guard)
+        # to prevent closing at a loss when giveback_r > arm_r.
         if peak_r_pre > 0:
             roundtrip_close = current_r <= close_r
             giveback_close_pre = (
                 peak_r_pre >= arm_r
                 and giveback_r_pre > 0
+                and current_r > 0
                 and (peak_r_pre - current_r) >= giveback_r_pre
             )
             if current_r < activation_r and (roundtrip_close or giveback_close_pre):
