@@ -218,14 +218,13 @@ The AI Agent stack is a tool-using desk assistant, not an execution layer:
 
 ## 7. Skills and audit mode
 
-Detailed repeatable audit methodology lives in repo skills.
+Detailed repeatable workflows live in repo skills. See `docs/codex-guidance.md` for how layers fit together.
 
 - Codex discovers repo skills under `.agents/skills/<skill-name>/SKILL.md`.
 - Claude Code discovers project skills under `.claude/skills/<skill-name>/SKILL.md`.
-- Current installed repo skill: `athena-audit` only.
-- `athena-audit` is manual-only and should be used only for explicit full audit, bug hunt, strict findings, execution-safety review, live/backtest parity review, producer-to-consumer contract review, or end-to-end trace work.
+- Codex repo skills: `athena-audit`, `athena-engine-parity`, `athena-research-lab`, `athena-ui-chart-review`, `athena-test-repair`, `athena-risk-execution`.
+- `athena-audit` is manual-only for explicit full audit, bug hunt, strict findings, execution-safety review, live/backtest parity review, producer-to-consumer contract review, or end-to-end trace work.
 - Do not reference or search for skills that do not exist in the current repo skill folders.
-- Use only the current repo skill folders documented above as automatic repo-skill discovery locations.
 
 ---
 
@@ -376,11 +375,13 @@ Shared operating guidance lives in **`docs/agent-operating-guide.md`**. Root **`
 
 Root **`CLAUDE.md`** is maintained directly as the Claude Code startup guide. Root **`AGENTS.md`** is maintained separately for Codex/Cursor.
 
-After edits to startup files or this guide, validate the instruction layout:
+After edits to startup files, skills, or this guide, validate the instruction layout:
 
 ```bash
 python tools/sync_agent_docs.py
 ```
+
+See also `docs/codex-guidance.md` for AGENTS vs skills vs PLANS vs MCP.
 
 ---
 

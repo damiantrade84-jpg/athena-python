@@ -11,17 +11,33 @@ that previously reintroduced stale cross-tool context and referenced a missing
 """
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 
+CODEX_SKILLS = [
+    "athena-audit",
+    "athena-engine-parity",
+    "athena-research-lab",
+    "athena-ui-chart-review",
+    "athena-test-repair",
+    "athena-risk-execution",
+]
+
 REQUIRED_FILES = [
     ROOT / "AGENTS.md",
     ROOT / "CLAUDE.md",
-    ROOT / ".agents" / "skills" / "athena-audit" / "SKILL.md",
-    ROOT / ".agents" / "skills" / "athena-audit" / "agents" / "openai.yaml",
+    ROOT / "docs" / "codex-guidance.md",
+    ROOT / "static" / "react-app" / "AGENTS.md",
+    ROOT / "athena_research" / "AGENTS.md",
+    ROOT / "tests" / "AGENTS.md",
     ROOT / ".claude" / "skills" / "athena-audit" / "SKILL.md",
+    ROOT / ".agents" / "skills" / "athena-audit" / "agents" / "openai.yaml",
 ]
+REQUIRED_FILES.extend(
+    ROOT / ".agents" / "skills" / name / "SKILL.md" for name in CODEX_SKILLS
+)
 
 FORBIDDEN_REFERENCES = [
     ".Codex/skills",
@@ -36,9 +52,29 @@ CHECK_FILES = [
     ROOT / "AGENTS.md",
     ROOT / "CLAUDE.md",
     ROOT / "docs" / "agent-operating-guide.md",
+    ROOT / "docs" / "codex-guidance.md",
     ROOT / ".codex" / "agents" / "execution-safety-reviewer.toml",
     ROOT / ".claude" / "README.md",
 ]
+CHECK_FILES.extend(
+    ROOT / ".agents" / "skills" / name / "SKILL.md" for name in CODEX_SKILLS
+)
+
+FRONTMATTER_RE = re.compile(r"^---\s*\n(.*?)\n---\s*\n", re.DOTALL)
+MAX_AGENTS_KIB = 12
+
+
+def _parse_frontmatter(text: str) -> dict[str, str]:
+    match = FRONTMATTER_RE.match(text)
+    if not match:
+        return {}
+    data: dict[str, str] = {}
+    for line in match.group(1).splitlines():
+        if ":" not in line:
+            continue
+        key, value = line.split(":", 1)
+        data[key.strip()] = value.strip()
+    return data
 
 
 def main() -> None:
@@ -54,6 +90,26 @@ def main() -> None:
         for needle in FORBIDDEN_REFERENCES:
             if needle in text:
                 violations.append(f"{path.relative_to(ROOT)} contains stale reference: {needle}")
+
+    agents_size = (ROOT / "AGENTS.md").stat().st_size
+    if agents_size > MAX_AGENTS_KIB * 1024:
+        violations.append(
+            f"AGENTS.md is {agents_size} bytes; keep under {MAX_AGENTS_KIB} KiB and move detail to skills"
+        )
+
+    for skill_name in CODEX_SKILLS:
+        skill_path = ROOT / ".agents" / "skills" / skill_name / "SKILL.md"
+        text = skill_path.read_text(encoding="utf-8")
+        fm = _parse_frontmatter(text)
+        if fm.get("name") != skill_name:
+            violations.append(f"{skill_path.relative_to(ROOT)} frontmatter name must be {skill_name!r}")
+        if not fm.get("description"):
+            violations.append(f"{skill_path.relative_to(ROOT)} missing description in frontmatter")
+        extra_keys = set(fm) - {"name", "description"}
+        if extra_keys:
+            violations.append(
+                f"{skill_path.relative_to(ROOT)} frontmatter must only contain name and description; found {sorted(extra_keys)}"
+            )
 
     codex_policy = ROOT / ".agents" / "skills" / "athena-audit" / "agents" / "openai.yaml"
     if "allow_implicit_invocation: false" not in codex_policy.read_text(encoding="utf-8"):

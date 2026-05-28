@@ -13,11 +13,7 @@ Do not load or use `CLAUDE.md`; that file is for Claude Code only.
 
 Do not use user-profile/global Cursor, Codex, or Claude Athena skills for this repo unless the user explicitly asks.
 
-For this repo, active audit skill material is limited to:
-
-- `.agents/skills/athena-audit/SKILL.md`
-
-Use `.agents/skills/athena-audit/SKILL.md` only when the user explicitly asks for full audit, bug hunt, strict findings, execution-safety review, live/backtest parity review, producer-to-consumer contract review, or end-to-end trace work.
+Repo skills live under `.agents/skills/<name>/SKILL.md`. Load a skill only when the task matches its description (see root `AGENTS.md` skill table).
 
 Do not look for or use skills that do not exist under `.agents/skills/`.
 
@@ -46,6 +42,6 @@ Cursor authority order for this repo:
 
 1. `.cursor/rules/*.mdc`
 2. `AGENTS.md`
-3. `.agents/skills/athena-audit/SKILL.md` only when explicitly requested
+3. `.agents/skills/<name>/SKILL.md` when the task matches that skill
 
 Do not apply `CLAUDE.md` instructions in Cursor sessions unless the user is specifically editing or reviewing Claude Code configuration.
