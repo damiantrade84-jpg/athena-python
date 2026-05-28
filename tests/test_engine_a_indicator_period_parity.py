@@ -1,11 +1,20 @@
 """Engine A indicator parity / differentiation test.
 
-Proves the v12 design contract for Engine A indicators:
+Proves the current design contract for Engine A indicators:
 
-  (1) RAW periods are UNIVERSAL — ema21/ema50/ema200/rsi/macd are identical
-      across every ENGINE_A_KNOWN_SCORE_GROUP for the same candle series.
-      This confirms no silent per-group period override has crept in and that
-      the universal-period design (research-supported) is intact.
+  (1) RAW periods are CONFIG-DRIVEN PER CLASS, gated by
+      ENGINE_A_SCORE_GROUP_ADJUSTMENTS_ENABLED:
+        - With the flag OFF, ema21/ema50/ema200/rsi/macd are UNIVERSAL across
+          every ENGINE_A_KNOWN_SCORE_GROUP for the same candle series. This
+          catches a silent per-group period override that leaks past the flag.
+        - With the flag ON, classes configured with distinct periods in
+          ENGINE_A_EMA_PERIODS_BY_CLASS / ENGINE_A_RSI_PERIOD_BY_CLASS produce
+          distinct raw snaps (the per-class calibration actually fires), while
+          classes sharing the same tier still match each other.
+      NOTE: the per-class period values are UNVALIDATED starting points (2026
+      calibration review, shipped by explicit operator authorization). They are
+      fully reversible by clearing the BY_CLASS maps or turning the flag off,
+      which restores the historical universal-period behavior.
 
   (2) The DIFFERENTIATION layer fires per group where it is supposed to:
         (2a) RSI overbought/oversold *bounds* resolve differently by group
@@ -14,9 +23,9 @@ Proves the v12 design contract for Engine A indicators:
         (2b) NORMALIZATION_LOOKBACK differs by asset_type, so z-scored factor
              values differ across asset classes on the same series.
 
-If (1) fails -> a per-group period override leaked in (regression).
-If (2a)/(2b) fail -> the differentiation layer is NOT firing (the real bug the
-operator was worried about), even though raw periods look fine.
+If (1) flag-OFF universality fails -> a per-group override leaked past the flag.
+If (1) flag-ON differentiation fails -> per-class periods are NOT firing.
+If (2a)/(2b) fail -> the differentiation layer is NOT firing.
 
 Run:  py -m pytest tests/test_engine_a_indicator_period_parity.py -v
 """
@@ -64,9 +73,6 @@ _GROUP_TO_ASSET = {
 }
 
 _RAW_SNAP_KEYS = ("ema21", "ema50", "ema200", "rsi", "macdLine", "macdHist", "adx")
-
-# Groups with intentional per-class RSI period overrides (see ENGINE_A_RSI_PERIOD_BY_CLASS).
-_PERIOD_OVERRIDE_GROUPS = frozenset({"bond_tlt"})
 
 
 def _make_candles(n: int = 520) -> list:
@@ -157,46 +163,69 @@ def test_raw_snap_identical_across_asset_types():
     )
 
 
-def test_raw_snap_identical_across_all_score_groups_production_path():
-    """Production call shape: asset_type + score_group for every known group.
-
-    Matches athena.py analyze path when ENGINE_A_SCORE_GROUP_ADJUSTMENTS_ENABLED
-    is on. Fails if per-group period maps diverge without an intentional change.
-    """
-    ref_group = "forex_majors"
-    ref_asset = _GROUP_TO_ASSET[ref_group]
-    ref = _raw_snap(
+def _snap_for_group(group: str) -> dict:
+    asset = _GROUP_TO_ASSET[group]
+    return _raw_snap(
         calc_indicators_with_normalized(
-            CANDLES, asset_type=ref_asset, score_group=ref_group
+            CANDLES, asset_type=asset, score_group=group
         )["snap"]
     )
 
+
+def test_raw_snap_universal_across_groups_when_adjustments_disabled(monkeypatch):
+    """Flag OFF -> raw periods must collapse to universal for every group.
+
+    This is the preserved regression guard: a per-group period override that
+    leaks past ENGINE_A_SCORE_GROUP_ADJUSTMENTS_ENABLED would surface here.
+    """
+    monkeypatch.setitem(CONFIG, "ENGINE_A_SCORE_GROUP_ADJUSTMENTS_ENABLED", False)
+    ref = _snap_for_group("forex_majors")
+
     mismatches = []
     for group in sorted(ENGINE_A_KNOWN_SCORE_GROUPS):
-        if group in _PERIOD_OVERRIDE_GROUPS:
-            continue
-        asset = _GROUP_TO_ASSET[group]
-        snap = _raw_snap(
-            calc_indicators_with_normalized(
-                CANDLES, asset_type=asset, score_group=group
-            )["snap"]
-        )
+        snap = _snap_for_group(group)
         for key, ref_val in ref.items():
             val = snap.get(key)
             if not _raw_snaps_equal(ref_val, val):
-                mismatches.append(f"{group}/{asset}: raw {key} {val} != ref {ref_val}")
+                mismatches.append(f"{group}: raw {key} {val} != ref {ref_val}")
     assert not mismatches, (
-        "Raw periods differ across score groups on production path (regression!):\n"
-        + "\n".join(mismatches)
+        "Raw periods diverged with adjustments DISABLED — a per-group override is "
+        "leaking past the flag (regression):\n" + "\n".join(mismatches)
     )
 
 
+def test_raw_periods_differentiate_by_class_when_enabled(monkeypatch):
+    """Flag ON -> classes with distinct configured periods produce distinct snaps,
+    while classes sharing the same tier still match. Confirms the per-class
+    calibration actually reaches the production indicator path."""
+    monkeypatch.setitem(CONFIG, "ENGINE_A_SCORE_GROUP_ADJUSTMENTS_ENABLED", True)
+
+    default_ref = _snap_for_group("us_stock_single")  # default tier: ema21/50, rsi14
+
+    # forex (ema26/60, rsi18) and crypto (ema18/40, rsi12) must differ from default tier.
+    assert not _raw_snaps_equal(
+        default_ref["ema21"], _snap_for_group("forex_majors")["ema21"]
+    ), "forex_majors EMA-trend period override not firing on production path"
+    assert not _raw_snaps_equal(
+        default_ref["rsi"], _snap_for_group("crypto_btc")["rsi"]
+    ), "crypto_btc RSI period override not firing on production path"
+
+    # Same-tier groups (both default) must still match each other exactly.
+    same_tier = _snap_for_group("energy_oil")  # also default tier
+    for key, ref_val in default_ref.items():
+        assert _raw_snaps_equal(ref_val, same_tier.get(key)), (
+            f"same-tier groups diverged unexpectedly on raw {key}"
+        )
+
+
 def test_bond_tlt_rsi_period_override():
-    """bond_tlt uses a slower RSI (21) per ENGINE_A_RSI_PERIOD_BY_CLASS."""
+    """Per-class RSI periods resolve from ENGINE_A_RSI_PERIOD_BY_CLASS (UNVALIDATED)."""
     from factor_scoring import _resolve_rsi_period
 
     assert _resolve_rsi_period("bond_tlt", "stock") == 21
-    assert _resolve_rsi_period("forex_majors", "forex") == 14
+    assert _resolve_rsi_period("forex_majors", "forex") == 18
+    assert _resolve_rsi_period("crypto_btc", "crypto") == 12
+    assert _resolve_rsi_period("us_stock_single", "stock") == 14  # default tier control
 
 
 # ════════════════════════════════════════════════════════════════════════════

@@ -30,7 +30,7 @@ def test_representative_thresholds_per_tier():
         ("EUR/USD", "forex_majors", 2.1),
         ("USD/MXN", "forex_exotics", 1.7),
         ("BTC/USDT", "crypto_btc", 2.0),
-        ("XAU/USD", "precious_trackers", 1.5),
+        ("XAU/USD", "precious_trackers", 1.7),
         ("Nat Gas", "nat_gas", 2.0),
         ("S&P 500", "us_indices_trackers", 1.5),
         ("AAPL", "us_stock_single", 1.5),

@@ -135,6 +135,31 @@ def _resolve_conviction_floor(score_group: str | None, asset_type: str, default:
     return max(0.0, min(1.0, floor))
 
 
+def _apply_regime_floor_sensitivity(
+    class_floor: float,
+    regime: str | None,
+    score_group: str | None,
+    asset_type: str,
+    regime_floor: float,
+) -> float:
+    """Re-apply the RANGING/HIGH_VOLATILITY floor reduction for regime-sensitive classes.
+
+    An explicit ENGINE_A_CONVICTION_FLOOR_BY_CLASS entry otherwise SUPERSEDES the
+    regime-conditional floor, so weak momentum in noisy regimes would count as much
+    as in a clean trend. For classes listed in
+    ENGINE_A_CONVICTION_FLOOR_REGIME_SENSITIVE_CLASSES we instead take the lower of
+    the class floor and the regime floor (never raising it), restoring the
+    noisy-regime skepticism. Forex is deliberately omitted so its strict flat floor
+    keeps score reachability. Only lowers; classes not listed are unchanged.
+    """
+    if regime not in {"RANGING", "HIGH_VOLATILITY"}:
+        return float(class_floor)
+    sensitive = set(CONFIG.get("ENGINE_A_CONVICTION_FLOOR_REGIME_SENSITIVE_CLASSES") or [])
+    if (score_group in sensitive) or (asset_type in sensitive):
+        return min(float(class_floor), float(regime_floor))
+    return float(class_floor)
+
+
 def _resolve_adx_source_mode(score_group: str | None, asset_type: str) -> str:
     keyed = CONFIG.get("ENGINE_A_ADX_SOURCE_BY_CLASS") or {}
     mode = _resolve_class_keyed(keyed, score_group, asset_type, "d1_first")
@@ -2851,15 +2876,19 @@ def compute_factor_scores(
         _eff_floor = 0.10
     else:
         _eff_floor = _conviction_floor
-    # NOTE: an explicit ENGINE_A_CONVICTION_FLOOR_BY_CLASS entry SUPERSEDES the
-    # regime-conditional floor above — it replaces, not blends. So for every class
-    # that has a class floor (forex 0.55-0.60, stock 0.22, index 0.24, commodity
-    # 0.20) the RANGING / HIGH_VOLATILITY reduction is NOT applied; only crypto and
-    # unlisted groups still get regime sensitivity. This is intended for forex
-    # score reachability; whether stock/index/commodity should instead keep the
-    # noisy-regime reduction is an open, evidence-gated calibration question
-    # (conviction floors require n>=30 closed-trade outcomes per bucket).
+    # An explicit ENGINE_A_CONVICTION_FLOOR_BY_CLASS entry replaces the
+    # regime-conditional floor above. _apply_regime_floor_sensitivity then re-applies
+    # the RANGING / HIGH_VOLATILITY reduction for classes listed in
+    # ENGINE_A_CONVICTION_FLOOR_REGIME_SENSITIVE_CLASSES (stock/index/commodity/crypto),
+    # so their weak momentum counts less in noisy regimes; forex is omitted and keeps
+    # its strict flat floor for score reachability.
+    _regime_floor = 0.10
+    if isinstance(_floor_by_regime, dict) and regime in _floor_by_regime:
+        _regime_floor = float(_floor_by_regime[regime])
     _eff_floor = _resolve_conviction_floor(score_group, asset_type, _eff_floor)
+    _eff_floor = _apply_regime_floor_sensitivity(
+        _eff_floor, regime, score_group, asset_type, _regime_floor
+    )
 
     vol_regime_mult, vol_regime_detail = _volatility_regime_multiplier(
         regime, asset_type, score_group

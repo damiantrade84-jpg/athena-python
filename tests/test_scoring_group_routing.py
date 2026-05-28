@@ -240,7 +240,7 @@ def test_equity_and_commodity_groups_use_explicit_stable_floor():
     examples = [
         ({"display": "AAPL", "type": "stock"}, "us_stock_single", 1.5),
         ({"display": "SPY", "type": "stock"}, "us_indices_trackers", 1.5),
-        ({"display": "XAU/USD", "type": "commodity"}, "precious_trackers", 1.5),
+        ({"display": "XAU/USD", "type": "commodity"}, "precious_trackers", 1.7),
         ({"display": "Copper", "type": "commodity"}, "copper", 1.5),
         ({"display": "DAX 40", "type": "index"}, "eu_indices", 1.5),
     ]

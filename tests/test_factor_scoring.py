@@ -1422,6 +1422,54 @@ def test_conviction_floor_default_is_explicit_and_no_momentum_uses_floor_blend(m
     assert result["factor_scores"]["momentum"] == pytest.approx(0.0)
 
 
+class TestRegimeFloorSensitivity:
+    """#4: an explicit class conviction floor should NOT fully clobber the
+    RANGING/HIGH_VOLATILITY floor reduction for regime-sensitive classes.
+
+    Forex (and any class not in ENGINE_A_CONVICTION_FLOOR_REGIME_SENSITIVE_CLASSES)
+    keeps its flat class floor for score reachability; stock/index/commodity/crypto
+    re-apply the reduced regime floor in noisy regimes so weak momentum counts less.
+    """
+
+    SENSITIVE = ["crypto", "stock", "index", "commodity"]
+
+    def _set(self, monkeypatch):
+        monkeypatch.setitem(
+            CONFIG, "ENGINE_A_CONVICTION_FLOOR_REGIME_SENSITIVE_CLASSES", self.SENSITIVE
+        )
+
+    def test_forex_keeps_flat_floor_in_ranging(self, monkeypatch):
+        from factor_scoring import _apply_regime_floor_sensitivity
+        self._set(monkeypatch)
+        assert _apply_regime_floor_sensitivity(0.60, "RANGING", "forex_majors", "forex", 0.10) == pytest.approx(0.60)
+
+    def test_stock_reduced_in_ranging(self, monkeypatch):
+        from factor_scoring import _apply_regime_floor_sensitivity
+        self._set(monkeypatch)
+        assert _apply_regime_floor_sensitivity(0.22, "RANGING", "us_stock_single", "stock", 0.10) == pytest.approx(0.10)
+
+    def test_index_reduced_in_high_volatility(self, monkeypatch):
+        from factor_scoring import _apply_regime_floor_sensitivity
+        self._set(monkeypatch)
+        assert _apply_regime_floor_sensitivity(0.24, "HIGH_VOLATILITY", "us_indices_trackers", "index", 0.10) == pytest.approx(0.10)
+
+    def test_crypto_reduced_in_ranging(self, monkeypatch):
+        from factor_scoring import _apply_regime_floor_sensitivity
+        self._set(monkeypatch)
+        assert _apply_regime_floor_sensitivity(0.15, "RANGING", "crypto_btc", "crypto", 0.10) == pytest.approx(0.10)
+
+    def test_sensitive_class_unchanged_in_trending(self, monkeypatch):
+        from factor_scoring import _apply_regime_floor_sensitivity
+        self._set(monkeypatch)
+        assert _apply_regime_floor_sensitivity(0.22, "TRENDING", "us_stock_single", "stock", 0.10) == pytest.approx(0.22)
+
+    def test_only_lowers_never_raises(self, monkeypatch):
+        from factor_scoring import _apply_regime_floor_sensitivity
+        self._set(monkeypatch)
+        # class floor already below the regime floor → keep the lower class floor
+        assert _apply_regime_floor_sensitivity(0.05, "RANGING", "stock", "stock", 0.10) == pytest.approx(0.05)
+
+
 def test_final_score_is_clamped_to_zero_to_three_contract():
     high = _score(
         _snap("long"),
@@ -1718,10 +1766,22 @@ def test_score_group_adjustments_change_stock_only_when_enabled(monkeypatch):
 def test_score_group_adjustments_do_not_change_forex_or_crypto_without_matching_maps(monkeypatch):
     forex_pair = {"type": "forex", "display": "EUR/USD"}
     crypto_pair = {"type": "crypto", "display": "BTC/USDT"}
-    forex_base = _score(pair=forex_pair, h4=_snap("long", momentum="bullish"))
-    crypto_base = _score(pair=crypto_pair, h4=_snap("long", momentum="bullish"), funding_rate=0.0001)
 
-    monkeypatch.setitem(CONFIG, "ENGINE_A_SCORE_GROUP_ADJUSTMENTS_ENABLED", True)
+    # The class-keyed maps now carry real forex/crypto entries (EMA/RSI/weights/floor),
+    # so isolate the invariant under test by neutralizing every gated map to target
+    # only us_stock_single/stock. With no forex/crypto entry, enabling adjustments must
+    # leave them on universal defaults — identical to the adjustments-disabled baseline.
+    for key in (
+        "ENGINE_A_EMA_PERIODS_BY_CLASS",
+        "ENGINE_A_RSI_PERIOD_BY_CLASS",
+        "ENGINE_A_MACD_PARAMS_BY_CLASS",
+        "ENGINE_A_CONVICTION_FLOOR_BY_CLASS",
+        "ENGINE_A_ADDON_UNSUPPORTED_SPLIT_BY_CLASS",
+        "ENGINE_A_DI_ALIGNMENT_MULT_BY_CLASS",
+        "ENGINE_A_RESEARCH_LAB_FACTORS_BY_CLASS",
+        "ENGINE_A_CONVICTION_FLOOR_REGIME_SENSITIVE_CLASSES",
+    ):
+        monkeypatch.setitem(CONFIG, key, {})
     monkeypatch.setitem(
         CONFIG,
         "ENGINE_A_FACTOR_WEIGHTS_BY_CLASS",
@@ -1729,6 +1789,11 @@ def test_score_group_adjustments_do_not_change_forex_or_crypto_without_matching_
     )
     monkeypatch.setitem(CONFIG, "ENGINE_A_DIRECTIONAL_RAMP_BY_CLASS", {"stock": {"min_directional": 0.9, "soft_span": 0.1}})
 
+    monkeypatch.setitem(CONFIG, "ENGINE_A_SCORE_GROUP_ADJUSTMENTS_ENABLED", False)
+    forex_base = _score(pair=forex_pair, h4=_snap("long", momentum="bullish"))
+    crypto_base = _score(pair=crypto_pair, h4=_snap("long", momentum="bullish"), funding_rate=0.0001)
+
+    monkeypatch.setitem(CONFIG, "ENGINE_A_SCORE_GROUP_ADJUSTMENTS_ENABLED", True)
     forex_grouped = _score(pair=forex_pair, h4=_snap("long", momentum="bullish"))
     crypto_grouped = _score(pair=crypto_pair, h4=_snap("long", momentum="bullish"), funding_rate=0.0001)
 
