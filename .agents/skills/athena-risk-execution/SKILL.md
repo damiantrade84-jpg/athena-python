@@ -21,7 +21,7 @@ signal/autopilot entry → risk gates → sizing → SL/TP construction → brok
 
 ## Before editing
 
-Consider invoking `athena-audit` when the user asked for execution-safety review or strict findings, not for small mechanical fixes.
+Consider invoking `athena-audit` when the user asked for execution-safety review or strict findings, not for small mechanical fixes. For shipped-change verification on execution paths, use `athena-anti-miss-review` (coverage map, search/adversarial pass, no PASS without traced gates).
 
 Align with `AGENTS.md` and `references/invariants.md` under `athena-audit` when checking invariants.
 

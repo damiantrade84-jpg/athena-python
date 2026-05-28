@@ -345,7 +345,7 @@ Use the manual audit skill only when the user explicitly asks for an audit, bug 
 
 All audits and code reviews must follow **`docs/codex-code-review-discipline.md`**: build a coverage map before any verdict, no summary-only reviews, run the negative-check pass, and say **"Coverage incomplete"** with missing areas when proof is insufficient.
 
-For audit, verification, shipped-change validation, or "make sure nothing was missed" asks, invoke **`.agents/skills/athena-anti-miss-review/SKILL.md`** (review map, required search pass, adversarial pass, structured verdict).
+For audit, verification, shipped-change validation, or "make sure nothing was missed" asks, invoke **`.agents/skills/athena-anti-miss-review/SKILL.md`** (review map, parallel lanes when multi-surface, required search pass, adversarial pass, structured verdict). Lane definitions: **`references/review-lanes.md`** under that skill.
 
 ### Implementation mode
 

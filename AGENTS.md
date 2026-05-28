@@ -32,11 +32,11 @@ Every final response includes: summary, files inspected/changed, tests/checks ru
 
 No sampled, surface-level, or summary-only audits. Build a **coverage map** before any verdict (entry points, caller/callee path, config/env keys, tests, UI/API contract when relevant, files not inspected, assumptions/unknowns).
 
-Do not say "looks good", "no issues found", or "implemented correctly" without tracing entry point → output contract. If coverage is incomplete, say **"Coverage incomplete"** and list missing areas.
+Do not say "looks good", "no issues found", or "implemented correctly" without tracing entry point → output contract. If coverage is incomplete, say **"Coverage incomplete"** and list missing files/paths.
 
-Every finding: severity, file path, function/class/route/component, line anchor, why it is real, expected behavior, minimal fix, regression test required. Run a **negative-check pass** (duplicate paths, hardcoded thresholds, stale fallbacks, swallowed exceptions, bypassed gates, UI/backend drift, stale tests, dead config/env keys).
+Every finding: severity, file path, function/class/route/component, line anchor, why it is real, expected behavior, minimal fix, regression test required. Current source and tests are proof — not memory, old audits, prior summaries, or comments.
 
-Engine reviews: trace provider → candle policy → scoring → gates → SL/TP/RR → payload → consumer → tests. Current source and tests are proof — not memory, old audits, or comments. Full checklist: **`docs/codex-code-review-discipline.md`**. For audit/verification/"nothing missed" asks, use **`athena-anti-miss-review`** (review map, search pass, adversarial pass, PASS/PASS WITH GAPS/FAIL/BLOCKED verdict).
+Multi-surface audits: spawn **parallel lane subagents** (Engine A, Engine B, Engine D/Scalp Workbench, UI/API, tests/imports); each returns coverage, findings, and not-reviewed areas; **consolidate only after all return**. Search pass, adversarial pass, and verdict rules: **`athena-anti-miss-review`**. Summary checklist: **`docs/codex-code-review-discipline.md`**.
 
 ## Repo skills (on demand)
 

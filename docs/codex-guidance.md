@@ -75,7 +75,7 @@ Long domain detail belongs in `references/` under the skill folder, not in root 
 | Skill | Use when |
 |-------|----------|
 | `athena-audit` | Full audit, bug hunt, strict findings, e2e trace |
-| `athena-anti-miss-review` | Verification, shipped-change validation, missed-issue detection, regression check |
+| `athena-anti-miss-review` | Verification, shipped-change validation, missed-issue detection, regression check, parallel lane reviews |
 | `athena-engine-parity` | Live/backtest/chart/engine payload parity |
 | `athena-research-lab` | Research Lab, vectorbt, calibration |
 | `athena-ui-chart-review` | React/native chart, Vision/review UI |

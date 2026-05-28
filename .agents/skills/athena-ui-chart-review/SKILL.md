@@ -18,8 +18,12 @@ UI and read-only review surfaces only.
 ## Steps
 
 1. Trace API route → payload builder → React consumer.
-2. Compare UI display fields to backend contract and focused tests.
-3. Run targeted frontend checks for touched packages only.
+2. Build a **coverage map** before verdict; follow `docs/codex-code-review-discipline.md` for reviews.
+3. Compare UI display fields to backend contract and focused tests.
+4. Run targeted frontend checks for touched packages only.
+5. Adversarial pass: alternate endpoints, stale fallbacks, client-only values masquerading as server truth.
+
+For shipped-change verification, use `athena-anti-miss-review` (UI/API lane).
 
 ## Inspect
 

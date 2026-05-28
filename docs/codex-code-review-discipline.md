@@ -59,6 +59,10 @@ When reviewing Athena engine logic, inspect the full relevant chain:
 - UI/API/AI review consumer
 - tests
 
+## Parallel lane review
+
+For multi-surface audits, spawn one subagent per lane (Engine A, Engine B, Engine D/Scalp Workbench, UI/API contracts, tests/imports). Each lane returns coverage, findings, and not-reviewed areas. Consolidate only after all lanes return. Lane details: `.agents/skills/athena-anti-miss-review/references/review-lanes.md`.
+
 ## Source of truth
 
 Do not rely on memory, prior summaries, old audit notes, or comments in code as proof. **Current source files and current tests** are the source of truth.
