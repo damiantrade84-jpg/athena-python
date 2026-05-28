@@ -2851,6 +2851,14 @@ def compute_factor_scores(
         _eff_floor = 0.10
     else:
         _eff_floor = _conviction_floor
+    # NOTE: an explicit ENGINE_A_CONVICTION_FLOOR_BY_CLASS entry SUPERSEDES the
+    # regime-conditional floor above — it replaces, not blends. So for every class
+    # that has a class floor (forex 0.55-0.60, stock 0.22, index 0.24, commodity
+    # 0.20) the RANGING / HIGH_VOLATILITY reduction is NOT applied; only crypto and
+    # unlisted groups still get regime sensitivity. This is intended for forex
+    # score reachability; whether stock/index/commodity should instead keep the
+    # noisy-regime reduction is an open, evidence-gated calibration question
+    # (conviction floors require n>=30 closed-trade outcomes per bucket).
     _eff_floor = _resolve_conviction_floor(score_group, asset_type, _eff_floor)
 
     vol_regime_mult, vol_regime_detail = _volatility_regime_multiplier(

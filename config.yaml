@@ -1872,6 +1872,31 @@ RANGING:
     choppy: 21
 
 
+# ── Per-class TRENDING / DEVELOPING ADX cutoffs (regime classifier) ───────────
+# Mirrors the per-class RANGING.dead/choppy structure above so the TRENDING /
+# DEVELOPING regime label (scoring._resolve_trend_state) can be class-aware like
+# the ADX *gate* (ADX_TREND_MIN_CLASS) already is. Without these the classifier
+# applied the universal TRENDING_ADX=35 / DEVELOPING_ADX=25 cutoffs to crypto and
+# forex too, mislabelling trends the gate fully credits at ADX 18-20.
+#
+# ALL VALUES BELOW ARE THE HISTORICAL UNIVERSAL DEFAULTS (35 / 25) → zero behavior
+# change today; this is the safe foundation. Per-class values (e.g. lower crypto/
+# forex cutoffs) are evidence-gated: promote only with n>=30 closed-trade outcomes
+# per bucket via tools/vectorbt_research_lab.py + the proposed calibration overlay.
+# Unlisted classes fall back to the universal TRENDING_ADX / DEVELOPING_ADX scalars.
+TRENDING_ADX_CLASS:
+  crypto: 35
+  forex: 35
+  commodity: 35
+  stock: 35
+  index: 35
+DEVELOPING_ADX_CLASS:
+  crypto: 25
+  forex: 25
+  commodity: 25
+  stock: 25
+  index: 25
+
 
 # Live crypto microstructure (WS-injected order book / flow) as an Engine A factor.
 

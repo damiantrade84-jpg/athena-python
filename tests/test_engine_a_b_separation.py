@@ -432,6 +432,45 @@ class TestTask6_TrendStateAdxSource:
         assert value is None
 
 
+class TestTrendStateClassAwareThresholds:
+    """The TRENDING/DEVELOPING regime classifier must honour per-asset-class ADX
+    cutoffs (TRENDING_ADX_CLASS / DEVELOPING_ADX_CLASS), mirroring the existing
+    per-class RANGING.dead structure, so a crypto/forex trend that the class-aware
+    ADX *gate* fully credits is not mislabelled by stock-grade universal cutoffs.
+    Defaults remain the universal scalars (TRENDING_ADX / DEVELOPING_ADX)."""
+
+    def _factor(self, adx):
+        return {"adx_value": adx, "adx_source": "d1"}
+
+    def test_class_trending_cutoff_overrides_universal_scalar(self, monkeypatch):
+        # Universal TRENDING_ADX is 35; crypto at adx 27 would be DEVELOPING.
+        # A per-class crypto TRENDING cutoff of 25 must promote it to TRENDING.
+        monkeypatch.setitem(scoring.CONFIG, "TRENDING_ADX_CLASS", {"crypto": 25})
+        ts, _, value = scoring._resolve_trend_state(
+            self._factor(27.0), {"adx": 27.0}, pair_type="crypto"
+        )
+        assert value == pytest.approx(27.0)
+        assert ts == "TRENDING"
+
+    def test_class_developing_cutoff_overrides_universal_scalar(self, monkeypatch):
+        # Universal DEVELOPING_ADX is 25; forex at adx 21 would be RANGING.
+        # A per-class forex DEVELOPING cutoff of 20 must promote it to DEVELOPING.
+        monkeypatch.setitem(scoring.CONFIG, "DEVELOPING_ADX_CLASS", {"forex": 20})
+        ts, _, _value = scoring._resolve_trend_state(
+            self._factor(21.0), {"adx": 21.0}, pair_type="forex"
+        )
+        assert ts == "DEVELOPING"
+
+    def test_unlisted_class_falls_back_to_universal_scalar(self, monkeypatch):
+        # stock has no class entry → universal scalars apply (adx 27 → DEVELOPING).
+        monkeypatch.setitem(scoring.CONFIG, "TRENDING_ADX_CLASS", {"crypto": 25})
+        monkeypatch.setitem(scoring.CONFIG, "DEVELOPING_ADX_CLASS", {"forex": 20})
+        ts, _, _ = scoring._resolve_trend_state(
+            self._factor(27.0), {"adx": 27.0}, pair_type="stock"
+        )
+        assert ts == "DEVELOPING"
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Task 7 — Engine B scanner h4_snap is built from real H4 candles.
 # ─────────────────────────────────────────────────────────────────────────────

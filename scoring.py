@@ -413,9 +413,19 @@ def _resolve_trend_state(
         return "UNKNOWN", source, None
 
     _rng = CONFIG["RANGING"].get(pair_type, CONFIG["RANGING"]["commodity"])
-    if adx_val >= CONFIG.get("TRENDING_ADX", 35):
+    # Per-asset-class TRENDING/DEVELOPING ADX cutoffs mirror RANGING's per-class
+    # structure so a crypto/forex trend that the class-aware ADX *gate* fully
+    # credits (ADX_TREND_MIN_CLASS: crypto 18 / forex 20) is not mislabelled by
+    # the stock-grade universal cutoffs (35/25). Absent a class entry these fall
+    # back to the universal scalars, so default behavior is unchanged; per-class
+    # values are evidence-gated (n>=30 closed-trade outcomes per bucket).
+    _trending_cls = CONFIG.get("TRENDING_ADX_CLASS") or {}
+    _developing_cls = CONFIG.get("DEVELOPING_ADX_CLASS") or {}
+    _trending_adx = float(_trending_cls.get(pair_type, CONFIG.get("TRENDING_ADX", 35)))
+    _developing_adx = float(_developing_cls.get(pair_type, CONFIG.get("DEVELOPING_ADX", 25)))
+    if adx_val >= _trending_adx:
         trend_state = "TRENDING"
-    elif adx_val >= CONFIG.get("DEVELOPING_ADX", 25):
+    elif adx_val >= _developing_adx:
         trend_state = "DEVELOPING"
     elif adx_val >= _rng["dead"]:
         trend_state = "RANGING"
