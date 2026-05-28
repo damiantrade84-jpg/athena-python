@@ -26,38 +26,43 @@ from config import (
 )
 
 
-def test_get_ai_api_key_prefers_xai_over_moonshot(monkeypatch):
+def test_get_ai_api_key_prefers_xai_over_moonshot_for_grok(monkeypatch):
     monkeypatch.delenv("AI_REVIEW_PROVIDER", raising=False)
     monkeypatch.setenv("XAI_API_KEY", "xai-live-key")
     monkeypatch.setenv("MOONSHOT_API_KEY", "moonshot-key")
 
-    assert get_ai_api_key({}) == "xai-live-key"
+    assert get_ai_api_key({}, provider="grok") == "xai-live-key"
 
 
-def test_get_ai_api_key_uses_moonshot_as_legacy_fallback(monkeypatch):
+def test_get_ai_api_key_uses_moonshot_as_legacy_grok_fallback(monkeypatch):
     monkeypatch.delenv("AI_REVIEW_PROVIDER", raising=False)
     monkeypatch.delenv("XAI_API_KEY", raising=False)
     monkeypatch.setenv("MOONSHOT_API_KEY", "moonshot-key")
 
-    assert get_ai_api_key({}) == "moonshot-key"
+    assert get_ai_api_key({}, provider="grok") == "moonshot-key"
 
 
-def test_ai_runtime_descriptor_defaults_to_xai_grok(monkeypatch):
+def test_ai_runtime_descriptor_defaults_to_openai_gpt55(monkeypatch):
+    monkeypatch.delenv("AI_REVIEW_PROVIDER", raising=False)
     monkeypatch.delenv("AI_BASE_URL", raising=False)
     monkeypatch.delenv("AI_MODEL", raising=False)
+    monkeypatch.delenv("OPENAI_REVIEW_MODEL", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     monkeypatch.delenv("XAI_API_KEY", raising=False)
     monkeypatch.delenv("MOONSHOT_API_KEY", raising=False)
 
     desc = ai_runtime_descriptor({})
 
-    assert desc["provider"] == "xAI"
-    assert desc["base_url"] == "https://api.x.ai/v1"
-    assert desc["model"] == "grok-4.3"
+    assert desc["provider"] == "OpenAI"
+    assert desc["selectedProvider"] == "openai"
+    assert desc["base_url"] == "https://api.openai.com/v1"
+    assert desc["model"] == "gpt-5.5"
     assert desc["key_configured"] is False
 
 
 def test_ai_runtime_descriptor_uses_explicit_xai_config():
     cfg = {
+        "AI_REVIEW_PROVIDER": "grok",
         "AI_BASE_URL": "https://api.x.ai/v1",
         "AI_MODEL": "grok-4.3",
         "XAI_API_KEY": "abc",
@@ -73,6 +78,7 @@ def test_ai_runtime_descriptor_uses_explicit_xai_config():
 
 def test_ai_helpers_do_not_drift_to_kimi_when_grok_mode_is_intended():
     cfg = {
+        "AI_REVIEW_PROVIDER": "grok",
         "AI_BASE_URL": "https://api.x.ai/v1",
         "AI_MODEL": "grok-4.3",
         "XAI_MODEL": "grok-4.3",
@@ -99,6 +105,15 @@ def test_provider_resolver_returns_openai_when_selected(monkeypatch):
     assert get_ai_provider_label(cfg) == "OpenAI"
     assert get_ai_base_url(cfg) == "https://api.openai.com/v1"
     assert get_ai_model(cfg, provider="openai") == "gpt-5.5"
+
+
+def test_startup_chart_review_defaults_allow_openai():
+    assert CONFIG["AI_REVIEW_PROVIDER"] == "openai"
+    assert CONFIG["OPENAI_REVIEW_ENABLED"] is True
+    assert CONFIG["AI_CHART_REVIEW"]["DEFAULT_PROVIDER"] == "openai"
+    assert CONFIG["AI_SCALP_CHART_REVIEW"]["DEFAULT_PROVIDER"] == "openai"
+    assert CONFIG["AI_CHART_REVIEW"]["OPENAI_REVIEW_ENABLED"] is True
+    assert CONFIG["AI_SCALP_CHART_REVIEW"]["OPENAI_REVIEW_ENABLED"] is True
 
 
 def test_openai_missing_key_has_clear_runtime_error(monkeypatch):

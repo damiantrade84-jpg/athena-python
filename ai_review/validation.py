@@ -13,6 +13,23 @@ class ValidationError:
     status: int
 
 
+def _bool_config(value: Any, default: bool = False) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, str):
+        text = value.strip().lower()
+        if not text:
+            return default
+        return text in ("1", "true", "yes", "on")
+    return bool(value)
+
+
+def openai_review_enabled(cfg: dict[str, Any]) -> bool:
+    if "OPENAI_REVIEW_ENABLED" in cfg:
+        return _bool_config(cfg.get("OPENAI_REVIEW_ENABLED"), True)
+    return _bool_config(cfg.get("ALLOW_OPENAI_PROVIDER"), False)
+
+
 def _decode_png_bytes(data_url: str) -> bytes | None:
     if not data_url.startswith("data:image/png;base64,"):
         return None
@@ -55,7 +72,7 @@ def validate_request(data: dict[str, Any], cfg: dict[str, Any]) -> ValidationErr
         provider = "anthropic"
     if provider == "grok":
         provider = "xai"
-    if provider == "openai" and not cfg.get("ALLOW_OPENAI_PROVIDER"):
+    if provider == "openai" and not openai_review_enabled(cfg):
         return ValidationError("OpenAI provider is disabled", 403)
     if provider == "dual" and not cfg.get("ALLOW_DUAL_PROVIDER"):
         return ValidationError("Dual provider is disabled", 403)

@@ -14,6 +14,7 @@ from ai_review.provider_meta import (
 )
 from ai_review.providers.openai_provider import call_openai_chart_review
 from ai_review.providers.xai_provider import classify_xai_exception
+from ai_review.validation import openai_review_enabled
 from config import (
     CONFIG,
     create_ai_client,
@@ -197,7 +198,9 @@ def _run_scalp_provider(resolved: str, payload: Any) -> dict[str, Any]:
         out["provider"] = "grok"
         return out
     if resolved == "openai":
-        if not cfg.get("ALLOW_OPENAI_PROVIDER"):
+        enabled_cfg = dict(cfg)
+        enabled_cfg.setdefault("OPENAI_REVIEW_ENABLED", CONFIG.get("OPENAI_REVIEW_ENABLED", True))
+        if not openai_review_enabled(enabled_cfg):
             raise PermissionError("OpenAI provider disabled")
         return call_openai_chart_review(payload, cfg_key="AI_SCALP_CHART_REVIEW")
     raise ValueError(f"Unknown provider: {resolved!r}")

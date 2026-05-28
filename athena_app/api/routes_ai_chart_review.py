@@ -217,6 +217,11 @@ def register_ai_chart_review_routes(app, runtime: SimpleNamespace) -> None:
     @app.post("/api/ai/chart-review")
     def api_ai_chart_review():
         cfg = runtime.CONFIG["AI_CHART_REVIEW"]
+        if isinstance(cfg, dict):
+            cfg["OPENAI_REVIEW_ENABLED"] = runtime.CONFIG.get(
+                "OPENAI_REVIEW_ENABLED",
+                cfg.get("OPENAI_REVIEW_ENABLED", True),
+            )
         if not cfg.get("ENABLED"):
             return jsonify({"error": "AI chart review disabled"}), 503
 

@@ -43,6 +43,7 @@ _AI_BASE_URL_DEFAULT = "https://api.x.ai/v1"
 _AI_MODEL_DEFAULT = os.environ.get("AI_MODEL", "grok-4.3")
 _OPENAI_BASE_URL_DEFAULT = "https://api.openai.com/v1"
 _OPENAI_REVIEW_MODEL_DEFAULT = "gpt-5.5"
+_AI_REVIEW_PROVIDER_DEFAULT = "openai"
 _CLAUDE_REVIEW_MODEL_DEFAULT = "claude-opus-4-7"
 _AI_REVIEW_PROVIDER_ALIASES = {
     "": "",
@@ -145,7 +146,8 @@ def get_ai_review_provider(
         provider = normalize_ai_review_provider(candidate)
         if provider:
             return provider
-    return _provider_from_base_url(get_ai_base_url(cfg)) or "grok"
+    base_hint = str(os.environ.get("AI_BASE_URL", "") or cfg.get("AI_BASE_URL", "") or "").strip()
+    return _provider_from_base_url(base_hint) or _AI_REVIEW_PROVIDER_DEFAULT
 
 
 def get_ai_review_fallback_providers(cfg: dict | None = None) -> list[str]:
@@ -256,7 +258,7 @@ def get_ai_base_url(cfg: dict | None = None, provider: object | None = None) -> 
         env_provider = normalize_ai_review_provider(
             os.environ.get("AI_REVIEW_PROVIDER", "") or cfg.get("AI_REVIEW_PROVIDER", "")
         )
-        resolved_provider = env_provider
+        resolved_provider = env_provider or _AI_REVIEW_PROVIDER_DEFAULT
     if resolved_provider == "openai":
         return (
             str(os.environ.get("OPENAI_BASE_URL", "") or "").strip()
@@ -752,6 +754,7 @@ CONFIG: dict = {
         or os.environ.get("LLM_PROVIDER", "")
         or os.environ.get("HERMES_PROVIDER", "")
         or os.environ.get("AI_VISION_PROVIDER", "")
+        or _AI_REVIEW_PROVIDER_DEFAULT
     ),
     "AI_REVIEW_FALLBACK_PROVIDERS": os.environ.get(
         "AI_REVIEW_FALLBACK_PROVIDERS", ""
@@ -809,9 +812,9 @@ CONFIG: dict = {
         "DEFAULT_PROVIDER": normalize_ai_review_provider(
             os.environ.get("AI_CHART_REVIEW_DEFAULT_PROVIDER", "")
             or os.environ.get("AI_REVIEW_PROVIDER", "")
-            or "claude"
+            or _AI_REVIEW_PROVIDER_DEFAULT
         )
-        or "claude",
+        or _AI_REVIEW_PROVIDER_DEFAULT,
         "ANTHROPIC_MODEL": os.environ.get(
             "AI_CHART_REVIEW_ANTHROPIC_MODEL", "claude-opus-4-7"
         ),
@@ -825,6 +828,7 @@ CONFIG: dict = {
         "REQUIRE_FRESHNESS_DIAGNOSTICS": False,
         "MAX_IMAGE_BYTES": 2 * 1024 * 1024,
         "PERSIST_REVIEWS": True,
+        "OPENAI_REVIEW_ENABLED": _env_bool("OPENAI_REVIEW_ENABLED", True),
         "ALLOW_OPENAI_PROVIDER": _env_bool(
             "AI_CHART_REVIEW_ALLOW_OPENAI_PROVIDER",
             _env_bool("OPENAI_REVIEW_ENABLED", True),
@@ -891,9 +895,9 @@ CONFIG: dict = {
         "DEFAULT_PROVIDER": normalize_ai_review_provider(
             os.environ.get("AI_SCALP_CHART_REVIEW_DEFAULT_PROVIDER", "")
             or os.environ.get("AI_REVIEW_PROVIDER", "")
-            or "claude"
+            or _AI_REVIEW_PROVIDER_DEFAULT
         )
-        or "claude",
+        or _AI_REVIEW_PROVIDER_DEFAULT,
         "ANTHROPIC_MODEL": os.environ.get(
             "AI_SCALP_CHART_REVIEW_ANTHROPIC_MODEL",
             os.environ.get("AI_CHART_REVIEW_ANTHROPIC_MODEL", "claude-opus-4-7"),
@@ -906,6 +910,7 @@ CONFIG: dict = {
         "REQUIRE_SCREENSHOT": True,
         "MAX_IMAGE_BYTES": 2 * 1024 * 1024,
         "PERSIST_REVIEWS": True,
+        "OPENAI_REVIEW_ENABLED": _env_bool("OPENAI_REVIEW_ENABLED", True),
         "ALLOW_OPENAI_PROVIDER": _env_bool(
             "AI_SCALP_CHART_REVIEW_ALLOW_OPENAI_PROVIDER",
             _env_bool("OPENAI_REVIEW_ENABLED", True),

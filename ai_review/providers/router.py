@@ -11,6 +11,7 @@ from ai_review.providers.anthropic_provider import call_anthropic_chart_review
 from ai_review.providers.openai_provider import call_openai_chart_review
 from ai_review.providers.xai_provider import call_xai_chart_review
 from ai_review.provider_meta import ProviderChartReviewError
+from ai_review.validation import openai_review_enabled
 
 
 def _apply_fallback_meta(
@@ -43,7 +44,9 @@ def _run_provider(provider: str, payload: Any) -> dict[str, Any]:
         out["provider"] = "grok"
         return out
     if resolved == "openai":
-        if not cfg.get("ALLOW_OPENAI_PROVIDER"):
+        enabled_cfg = dict(cfg)
+        enabled_cfg.setdefault("OPENAI_REVIEW_ENABLED", CONFIG.get("OPENAI_REVIEW_ENABLED", True))
+        if not openai_review_enabled(enabled_cfg):
             raise PermissionError("OpenAI provider disabled")
         return call_openai_chart_review(payload)
     if resolved == "dual":

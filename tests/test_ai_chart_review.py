@@ -141,14 +141,15 @@ def _mock_provider_payload(**overrides):
     return base
 
 
-def _make_app(tmp_db: str, enabled: bool = True, allow_openai: bool = True):
+def _make_app(tmp_db: str, enabled: bool = True, openai_enabled: bool = True):
     app = Flask(__name__)
     cfg = dict(CONFIG)
     cfg["AI_REVIEW_PROVIDER"] = "claude"
     cfg["AI_REVIEW_FALLBACK_PROVIDERS"] = ""
     ai_cfg = dict(cfg["AI_CHART_REVIEW"])
     ai_cfg["ENABLED"] = enabled
-    ai_cfg["ALLOW_OPENAI_PROVIDER"] = allow_openai
+    cfg["OPENAI_REVIEW_ENABLED"] = openai_enabled
+    ai_cfg["OPENAI_REVIEW_ENABLED"] = openai_enabled
     cfg["AI_CHART_REVIEW"] = ai_cfg
 
     def _resolve(symbol: str):
@@ -277,7 +278,7 @@ def test_route_rejects_non_png_data_url(tmp_audit_db):
 
 
 def test_route_rejects_openai_when_disabled(tmp_audit_db):
-    app = _make_app(tmp_audit_db, allow_openai=False)
+    app = _make_app(tmp_audit_db, openai_enabled=False)
     client = app.test_client()
     body = _base_request(provider="openai")
     resp = client.post("/api/ai/chart-review", json=body)
@@ -626,11 +627,13 @@ def test_router_default_resolves_to_global_provider():
     payload.screenshot_base64 = _png_data_url()
     payload.prompt = "review"
     with patch(
-        "ai_review.providers.router.call_xai_chart_review",
-        return_value=_mock_provider_payload(raw_text="{}"),
-    ) as mock_grok:
-        run_chart_review("default", payload)
-        mock_grok.assert_called_once()
+        "ai_review.providers.router.call_openai_chart_review",
+        return_value=_mock_provider_payload(raw_text="{}", provider="openai", model="gpt-5.5"),
+    ) as mock_openai:
+        with patch.dict(CONFIG, {"AI_REVIEW_PROVIDER": "openai", "AI_REVIEW_FALLBACK_PROVIDERS": ""}, clear=False):
+            out = run_chart_review("default", payload)
+        mock_openai.assert_called_once()
+    assert out["provider"] == "openai"
 
 
 def test_router_resolves_xai_provider():
@@ -774,10 +777,18 @@ def test_openai_provider_builds_responses_payload_with_reasoning_and_image():
 
 def test_validate_request_disabled_provider():
     cfg = dict(CONFIG["AI_CHART_REVIEW"])
-    cfg["ALLOW_OPENAI_PROVIDER"] = False
+    cfg["OPENAI_REVIEW_ENABLED"] = False
     err = validate_request(_base_request(provider="openai"), cfg)
     assert err is not None
     assert err.status == 403
+
+
+def test_validate_request_uses_canonical_openai_enabled_over_legacy_allow_flag():
+    cfg = dict(CONFIG["AI_CHART_REVIEW"])
+    cfg["OPENAI_REVIEW_ENABLED"] = True
+    cfg["ALLOW_OPENAI_PROVIDER"] = False
+    err = validate_request(_base_request(provider="openai"), cfg)
+    assert err is None
 
 
 def test_summary_always_present_on_success(tmp_audit_db):
