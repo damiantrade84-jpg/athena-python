@@ -8,7 +8,7 @@ from types import SimpleNamespace
 from typing import Any
 
 from flask import jsonify, request
-from config import get_ai_review_provider
+from config import get_ai_review_provider, normalize_ai_review_provider
 
 from ai_review.persistence import ensure_schema, find_recent_review_by_hash, record_review
 from ai_review.provider_meta import (
@@ -107,6 +107,31 @@ def _attach_scalp_review_summary(
     response["ai_review"] = ai_review
     response["aiReviewSummary"] = summary
     response["ai_review_summary"] = summary
+    selected = response.get("selectedProvider")
+    if selected:
+        summary["selectedProvider"] = selected
+    if response.get("fallbackUsed") is not None or response.get("fallback_used") is not None:
+        summary["fallbackUsed"] = bool(
+            response.get("fallbackUsed") or response.get("fallback_used")
+        )
+    failure = response.get("providerFailure") or response.get("provider_failure")
+    if failure:
+        summary["providerFailure"] = failure
+        summary["provider_failure"] = failure
+    elif selected and summary.get("provider"):
+        selected_norm = normalize_ai_review_provider(selected)
+        active_norm = normalize_ai_review_provider(summary.get("provider"))
+        if selected_norm and active_norm and selected_norm != active_norm:
+            mismatch = {
+                "provider": selected_norm,
+                "error": (
+                    f"Selected provider {selected_norm} but active provider is {active_norm}"
+                ),
+                "providerStatus": "fallback_used",
+            }
+            summary["providerFailure"] = mismatch
+            summary["provider_failure"] = mismatch
+            summary["fallbackUsed"] = True
     response["scalpVerdictComparison"] = verdict_comparison
     response["scalp_verdict_comparison"] = verdict_comparison
     response.update(ctx_diag)
@@ -218,6 +243,16 @@ def register_ai_scalp_chart_review_routes(app, runtime: SimpleNamespace) -> None
             review_type=_REVIEW_TYPE,
         )
         if dedup:
+            cached_provider = normalize_ai_review_provider(dedup.get("provider"))
+            requested_provider = normalize_ai_review_provider(provider)
+            if (
+                cached_provider
+                and requested_provider
+                and cached_provider != requested_provider
+            ):
+                dedup = None
+
+        if dedup:
             dedup["dedup_hit"] = True
             dedup_engine_ctx = dedup.get("engine_d_context") or engine_d_ctx
             dedup_ai = dedup.get("ai_review") or {}
@@ -290,7 +325,7 @@ def register_ai_scalp_chart_review_routes(app, runtime: SimpleNamespace) -> None
                 "provider": raw.get("provider") or provider,
                 "model": raw.get("model"),
                 "provider_status": raw.get("provider_status") or "success",
-                "fallback_used": bool(raw.get("fallback_used")),
+                "fallback_used": bool(raw.get("fallback_used") or raw.get("fallbackUsed")),
                 "latency_ms": raw.get("latency_ms"),
             },
             normalized,
@@ -333,7 +368,11 @@ def register_ai_scalp_chart_review_routes(app, runtime: SimpleNamespace) -> None
             }
 
         response["selectedProvider"] = raw.get("selectedProvider") or provider
-        response["fallbackUsed"] = bool(raw.get("fallbackUsed") or provider_meta.get("fallback_used"))
+        response["fallbackUsed"] = bool(
+            raw.get("fallbackUsed")
+            or raw.get("fallback_used")
+            or provider_meta.get("fallback_used")
+        )
         response["fallback_used"] = response["fallbackUsed"]
         if raw.get("providerFailure"):
             response["providerFailure"] = raw.get("providerFailure")

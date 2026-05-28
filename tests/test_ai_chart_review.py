@@ -622,6 +622,37 @@ def test_dedup_within_window_skips_api_call(tmp_audit_db):
         assert mock_call.call_count == 1
 
 
+def test_dedup_skips_cache_when_requested_provider_differs(tmp_audit_db):
+    app = _make_app(tmp_audit_db)
+    client = app.test_client()
+    body_claude = _base_request(provider="claude")
+    body_openai = _base_request(provider="openai")
+    chart_cfg = dict(CONFIG["AI_CHART_REVIEW"])
+    chart_cfg["OPENAI_REVIEW_ENABLED"] = True
+    with patch(
+        "ai_review.providers.router.call_anthropic_chart_review",
+        return_value=_mock_provider_payload(),
+    ) as mock_claude, patch(
+        "ai_review.providers.router.call_openai_chart_review",
+        return_value=_mock_provider_payload(
+            raw_text='{"verdict":"VALID","confidence":80,"human_action":"take"}',
+            provider="openai",
+            model="gpt-5.5",
+        ),
+    ) as mock_openai, patch.dict(
+        CONFIG,
+        {"AI_REVIEW_FALLBACK_PROVIDERS": "", "AI_CHART_REVIEW": chart_cfg},
+        clear=False,
+    ):
+        first = client.post("/api/ai/chart-review", json=body_claude)
+        assert first.status_code == 200
+        second = client.post("/api/ai/chart-review", json=body_openai)
+        assert second.status_code == 200
+        assert second.get_json()["dedup_hit"] is False
+        assert mock_claude.call_count == 1
+        assert mock_openai.call_count == 1
+
+
 def test_router_default_resolves_to_global_provider():
     payload = MagicMock()
     payload.screenshot_base64 = _png_data_url()
@@ -829,6 +860,47 @@ def test_validate_request_uses_canonical_openai_enabled_over_legacy_allow_flag()
     cfg["ALLOW_OPENAI_PROVIDER"] = False
     err = validate_request(_base_request(provider="openai"), cfg)
     assert err is None
+
+
+def test_summary_includes_provider_failure_when_fallback_used(tmp_audit_db):
+    from ai_review.provider_meta import ProviderChartReviewError
+
+    app = _make_app(tmp_audit_db)
+    client = app.test_client()
+    body = _base_request(provider="openai")
+    openai_error = ProviderChartReviewError(
+        "OPENAI_API_KEY not configured",
+        provider_status="failed_auth",
+        provider="openai",
+    )
+    chart_cfg = dict(CONFIG["AI_CHART_REVIEW"])
+    chart_cfg["OPENAI_REVIEW_ENABLED"] = True
+    with patch(
+        "ai_review.providers.router.call_openai_chart_review",
+        side_effect=openai_error,
+    ), patch(
+        "ai_review.providers.router.call_anthropic_chart_review",
+        return_value=_mock_provider_payload(),
+    ), patch.dict(
+        CONFIG,
+        {
+            "AI_REVIEW_FALLBACK_PROVIDERS": "claude",
+            "AI_CHART_REVIEW": chart_cfg,
+        },
+        clear=False,
+    ):
+        resp = client.post("/api/ai/chart-review", json=body)
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["fallbackUsed"] is True
+    assert data["selectedProvider"] == "openai"
+    assert data["providerFailure"]["provider"] == "openai"
+    summary = data.get("aiReviewSummary") or data.get("ai_review_summary")
+    assert summary is not None
+    assert summary["selectedProvider"] == "openai"
+    assert summary["fallbackUsed"] is True
+    assert summary["providerFailure"]["provider"] == "openai"
+    assert "OPENAI_API_KEY" in summary["providerFailure"]["error"]
 
 
 def test_summary_always_present_on_success(tmp_audit_db):

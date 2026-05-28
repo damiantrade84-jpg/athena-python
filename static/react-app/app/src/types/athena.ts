@@ -1178,11 +1178,20 @@ export interface AIChartReviewEngineSummary {
   setupType?: string | null;
 }
 
+export interface AIChartReviewProviderFailure {
+  provider?: string | null;
+  error?: string | null;
+  providerStatus?: string | null;
+}
+
 export interface AIChartReviewSummary {
   provider: string | null;
   model: string | null;
   providerStatus: AIChartReviewProviderStatus;
   fallbackUsed: boolean;
+  selectedProvider?: string | null;
+  providerFailure?: AIChartReviewProviderFailure | null;
+  provider_failure?: AIChartReviewProviderFailure | null;
   humanAction: AIChartReviewSummaryHumanAction | string | null;
   setupType?: string | null;
   overallScore: number | null;

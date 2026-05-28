@@ -482,8 +482,8 @@ class _OpenAIResponsesCompatClient:
         self.model = get_ai_model(cfg, provider="openai")
         self.reasoning_effort = str(
             os.environ.get("OPENAI_REVIEW_REASONING_EFFORT", "")
-            or cfg.get("OPENAI_REVIEW_REASONING_EFFORT", "xhigh")
-            or "xhigh"
+            or cfg.get("OPENAI_REVIEW_REASONING_EFFORT", "high")
+            or "high"
         ).strip().lower()
         self.max_output_tokens = int(
             os.environ.get("OPENAI_REVIEW_MAX_OUTPUT_TOKENS", "")
@@ -764,13 +764,13 @@ CONFIG: dict = {
         "OPENAI_REVIEW_MODEL", _OPENAI_REVIEW_MODEL_DEFAULT
     ),
     "OPENAI_REVIEW_REASONING_EFFORT": os.environ.get(
-        "OPENAI_REVIEW_REASONING_EFFORT", "xhigh"
+        "OPENAI_REVIEW_REASONING_EFFORT", "high"
     ),
     "OPENAI_REVIEW_MAX_OUTPUT_TOKENS": _env_int(
         "OPENAI_REVIEW_MAX_OUTPUT_TOKENS", 12000
     ),
     "OPENAI_REVIEW_TIMEOUT_SECONDS": _env_int(
-        "OPENAI_REVIEW_TIMEOUT_SECONDS", 120
+        "OPENAI_REVIEW_TIMEOUT_SECONDS", 240
     ),
     "OPENAI_REVIEW_SDK_MAX_RETRIES": _env_int(
         "OPENAI_REVIEW_SDK_MAX_RETRIES", 0

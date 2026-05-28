@@ -8,7 +8,7 @@ from types import SimpleNamespace
 from typing import Any
 
 from flask import jsonify, request
-from config import get_ai_review_provider
+from config import get_ai_review_provider, normalize_ai_review_provider
 
 from athena_ai.ai_review_payload_builder import (
     build_strategy_layer,
@@ -119,6 +119,31 @@ def _attach_review_summary(
     )
     response["aiReviewSummary"] = summary
     response["ai_review_summary"] = summary
+    selected = response.get("selectedProvider")
+    if selected:
+        summary["selectedProvider"] = selected
+    if response.get("fallbackUsed") is not None or response.get("fallback_used") is not None:
+        summary["fallbackUsed"] = bool(
+            response.get("fallbackUsed") or response.get("fallback_used")
+        )
+    failure = response.get("providerFailure") or response.get("provider_failure")
+    if failure:
+        summary["providerFailure"] = failure
+        summary["provider_failure"] = failure
+    elif selected and summary.get("provider"):
+        selected_norm = normalize_ai_review_provider(selected)
+        active_norm = normalize_ai_review_provider(summary.get("provider"))
+        if selected_norm and active_norm and selected_norm != active_norm:
+            mismatch = {
+                "provider": selected_norm,
+                "error": (
+                    f"Selected provider {selected_norm} but active provider is {active_norm}"
+                ),
+                "providerStatus": "fallback_used",
+            }
+            summary["providerFailure"] = mismatch
+            summary["provider_failure"] = mismatch
+            summary["fallbackUsed"] = True
     response["engineAVerdictComparison"] = verdict_comparison
     response["engine_a_verdict_comparison"] = verdict_comparison
     ctx_diag = build_context_diagnostics(engine_a_ctx, diagnostic_source)
@@ -286,6 +311,16 @@ def register_ai_chart_review_routes(app, runtime: SimpleNamespace) -> None:
             audit_db=getattr(runtime, "AUDIT_DB", None),
         )
         if dedup:
+            cached_provider = normalize_ai_review_provider(dedup.get("provider"))
+            requested_provider = normalize_ai_review_provider(provider)
+            if (
+                cached_provider
+                and requested_provider
+                and cached_provider != requested_provider
+            ):
+                dedup = None
+
+        if dedup:
             dedup["dedup_hit"] = True
             dedup_engine_ctx = dedup.get("engine_a_context") or engine_a_ctx
             dedup_ai_raw = dedup.get("ai_review") or {}
@@ -370,7 +405,7 @@ def register_ai_chart_review_routes(app, runtime: SimpleNamespace) -> None:
                 "provider": raw.get("provider") or provider,
                 "model": raw.get("model"),
                 "provider_status": raw.get("provider_status") or "success",
-                "fallback_used": bool(raw.get("fallback_used")),
+                "fallback_used": bool(raw.get("fallback_used") or raw.get("fallbackUsed")),
                 "latency_ms": raw.get("latency_ms"),
             },
             normalized,
@@ -413,7 +448,11 @@ def register_ai_chart_review_routes(app, runtime: SimpleNamespace) -> None:
             }
 
         response["selectedProvider"] = raw.get("selectedProvider") or provider
-        response["fallbackUsed"] = bool(raw.get("fallbackUsed") or provider_meta.get("fallback_used"))
+        response["fallbackUsed"] = bool(
+            raw.get("fallbackUsed")
+            or raw.get("fallback_used")
+            or provider_meta.get("fallback_used")
+        )
         response["fallback_used"] = response["fallbackUsed"]
         if raw.get("providerFailure"):
             response["providerFailure"] = raw.get("providerFailure")

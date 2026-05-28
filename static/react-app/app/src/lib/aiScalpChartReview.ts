@@ -59,11 +59,42 @@ function asRecord(value: unknown): Record<string, unknown> {
     : {};
 }
 
+function mergeReviewDiagnostics(
+  record: Record<string, unknown>,
+  summary: unknown,
+): ScalpAIChartReviewResponse['aiReviewSummary'] {
+  const base = asRecord(summary);
+  const selected =
+    record.selectedProvider ??
+    record.selected_provider ??
+    base.selectedProvider;
+  const failure =
+    record.providerFailure ??
+    record.provider_failure ??
+    base.providerFailure ??
+    base.provider_failure;
+  const fallbackUsed =
+    record.fallbackUsed ??
+    record.fallback_used ??
+    base.fallbackUsed;
+  return {
+    ...base,
+    ...(selected ? { selectedProvider: String(selected) } : {}),
+    ...(failure && typeof failure === 'object'
+      ? { providerFailure: failure, provider_failure: failure }
+      : {}),
+    ...(fallbackUsed != null ? { fallbackUsed: Boolean(fallbackUsed) } : {}),
+  } as ScalpAIChartReviewResponse['aiReviewSummary'];
+}
+
 export function normalizeScalpAIChartReviewResponse(
   raw: ScalpAIChartReviewResponse,
 ): ScalpAIChartReviewResponse {
   const record = asRecord(raw);
-  const summary = record.aiReviewSummary ?? record.ai_review_summary;
+  const summary = mergeReviewDiagnostics(
+    record,
+    record.aiReviewSummary ?? record.ai_review_summary,
+  );
   const verdictComparison =
     record.scalpVerdictComparison ?? record.scalp_verdict_comparison;
   const contextCompleteness =

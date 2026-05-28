@@ -70,7 +70,29 @@ export default function AIReviewSummaryStrip({ summary }: AIReviewSummaryStripPr
   const actionClass = ACTION_PILL[String(humanAction)] ?? ACTION_PILL.watch;
   const provider = s.provider || 'unknown';
   const model = s.model || 'unknown';
+  const selectedProvider = s.selectedProvider || null;
+  const providerFailure = s.providerFailure ?? s.provider_failure ?? null;
   const setupType = s.setupType || s.engineD?.setupType || AI_REVIEW_EMPTY;
+
+  const providerLine =
+    selectedProvider && selectedProvider !== provider
+      ? `selected: ${selectedProvider} → active: ${provider} / ${model} / ${providerStatus.replace(/_/g, ' ')}`
+      : `${provider} / ${model} / ${providerStatus.replace(/_/g, ' ')}`;
+
+  const fallbackReasonLine = (() => {
+    if (s.fallbackUsed && providerFailure) {
+      const failedProvider = providerFailure.provider || selectedProvider || 'unknown';
+      const error = providerFailure.error || 'unknown error';
+      const status = providerFailure.providerStatus
+        ? ` (${String(providerFailure.providerStatus).replace(/_/g, ' ')})`
+        : '';
+      return `${failedProvider} → "${error}"${status}`;
+    }
+    if (selectedProvider && selectedProvider !== provider) {
+      return `${selectedProvider} was selected but ${provider} answered (provider mismatch)`;
+    }
+    return null;
+  })();
 
   return (
     <div className="space-y-2 border border-border/50 rounded-md p-2 bg-muted/20">
@@ -87,6 +109,11 @@ export default function AIReviewSummaryStrip({ summary }: AIReviewSummaryStripPr
         {s.fallbackUsed && (
           <Badge variant="outline" className="text-[10px] border-amber-500/50 text-amber-300">
             fallback
+          </Badge>
+        )}
+        {selectedProvider && selectedProvider !== provider && !s.fallbackUsed && (
+          <Badge variant="outline" className="text-[10px] border-amber-500/50 text-amber-300">
+            provider mismatch
           </Badge>
         )}
         <span className="text-[10px] text-muted-foreground font-mono ml-auto truncate max-w-[50%]">
@@ -127,8 +154,11 @@ export default function AIReviewSummaryStrip({ summary }: AIReviewSummaryStripPr
         </div>
         <SummaryKV
           label="Provider"
-          value={`${provider} / ${model} / ${providerStatus.replace(/_/g, ' ')}`}
+          value={providerLine}
         />
+        {fallbackReasonLine ? (
+          <SummaryKV label="Fallback reason" value={fallbackReasonLine} />
+        ) : null}
         <SummaryKV label="Fallback used" value={s.fallbackUsed ? 'yes' : 'no'} />
         <SummaryKV label="Final reason" value={s.finalReason || AI_REVIEW_EMPTY} />
       </div>
