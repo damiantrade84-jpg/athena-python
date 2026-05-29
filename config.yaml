@@ -2852,6 +2852,25 @@ ENGINE_B_USE_EXECUTION_LEVELS_FOR_SCAN_SIGNALS: false
 ENGINE_A_STRUCTURAL_SL_FLOOR_ATR: true
 
 
+# Engine A exit-mode selector (Plan 2). Per-score-group default exit mode + global
+# fallback. Ships global=traditional_static and an empty per-group map, so every
+# Engine A score group defaults to traditional_static (user-authorized Engine-A
+# default flip — see docs/superpowers/specs/2026-05-29-exit-mode-selector-design.md).
+# Valid values: traditional_static | adaptive_trail | manual | time_based
+ENGINE_A_EXIT_MODE_GLOBAL_DEFAULT: traditional_static
+ENGINE_A_EXIT_MODE_BY_SCORE_GROUP: {}        # e.g. {forex_majors: adaptive_trail}
+
+# Engine A advisable-pip guardrail (Plan 2). Per-score-group SL min/max in pips.
+# Ships empty = no clamp. Applied to every mode EXCEPT manual.
+ENGINE_A_ADVISABLE_PIP_BY_SCORE_GROUP: {}    # e.g. {forex_majors: {min_pip: 8, max_pip: 60}}
+
+# time_based exit: bars of the style timeframe to hold before the timed close.
+ENGINE_A_TIME_EXIT_BARS:
+  scalp: 12
+  intraday: 18
+  swing: 10
+
+
 
 # AI usage control - when true, AI only runs on explicit user actions
 
