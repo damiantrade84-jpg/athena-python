@@ -30,3 +30,27 @@ def normalize_mode(mode: str | None) -> str | None:
         return None
     m = str(mode).strip().lower()
     return m if m in VALID_EXIT_MODES else None
+
+
+def group_default_for(group_key: str | None, group_map: dict | None) -> str | None:
+    """Look up a group's default exit mode from a config map; normalized or None."""
+    if not group_key or not isinstance(group_map, dict):
+        return None
+    return normalize_mode(group_map.get(group_key))
+
+
+def resolve_exit_mode(
+    per_trade: str | None = None,
+    group_default: str | None = None,
+    global_default: str | None = DEFAULT_EXIT_MODE,
+) -> str:
+    """Effective mode = per-trade override -> per-group default -> global default.
+
+    Unrecognized values at any level are skipped (fall through). Always returns a
+    valid mode; final fallback is DEFAULT_EXIT_MODE.
+    """
+    for candidate in (per_trade, group_default, global_default):
+        norm = normalize_mode(candidate)
+        if norm is not None:
+            return norm
+    return DEFAULT_EXIT_MODE
