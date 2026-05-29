@@ -675,6 +675,8 @@ def _get_timed_cfg(config_fn) -> dict:
         merged["timer_tighten_factor"] = float(_DEFAULT_CFG["timer_tighten_factor"])
     scalp_raw = cfg.get("SCALP_ENGINE") or {}
     merged["scalp_live_profit_protect"] = bool(scalp_raw.get("LIVE_PROFIT_PROTECT", True))
+    # Engine A time_based exit: bars-per-style for the timed close (Plan 2).
+    merged["engine_a_time_exit_bars"] = cfg.get("ENGINE_A_TIME_EXIT_BARS") or _TIME_EXIT_BARS_DEFAULT
     return merged
 
 
@@ -1688,6 +1690,45 @@ def _handle_mt5_row(row: dict, tcfg: dict, db_path: str | None = None) -> None:
     scfg = tcfg[style]
     mins = _minutes_open(row["ts"])
 
+    # Engine A exit-mode dispatch (Plan 2). Runs AFTER broker-SL repair (above) so
+    # static/manual trades keep SL protection. static/manual -> pure broker bracket
+    # (no trail/profit-protect); time_based -> close after N bars; everything else
+    # (adaptive Engine A, non-Engine-A, unknown/legacy mode) falls through unchanged.
+    _ea_dispatch = _engine_a_exit_dispatch(
+        engine, row.get("exit_mode"), mins, _time_close_after_min(tcfg, style)
+    )
+    if _ea_dispatch == "hold":
+        return
+    if _ea_dispatch == "timed_close":
+        _close = mt5_close_position(ticket)
+        if _close.get("success"):
+            _live_pnl = _close.get("liveProfit", 0.0)
+            _pnl_r = (
+                round(_live_pnl / float(row["risk_amount"]), 2)
+                if row.get("risk_amount") and float(row["risk_amount"]) > 0
+                else 0.0
+            )
+            if db_path:
+                _mark_timed_close(
+                    db_path, row, "mt5",
+                    actual_close_price=_close.get("closePrice"),
+                    live_pnl=_live_pnl,
+                    reason="TIME_EXIT",
+                )
+            log.info(
+                f"[TIMED_EXIT] TIME_EXIT: {row['pair']} ticket={ticket} "
+                f"style={style} mins={mins:.0f} profit=${_live_pnl:.2f} R={_pnl_r}"
+            )
+            try:
+                telegram_notify.notify_trade_closed(
+                    pair=row["pair"], pnl_r=_pnl_r, is_win=_live_pnl > 0,
+                    duration_minutes=mins, exit_reason="TIME_EXIT",
+                    style=style, exchange="mt5",
+                )
+            except Exception:
+                pass
+        return
+
     profit    = float(live.get("profit", 0))
     cur_price = _live_current_price(live, entry)
     tp        = float(row.get("tp") or live.get("tp") or 0)
@@ -2028,6 +2069,39 @@ def _handle_bybit_row(row: dict, tcfg: dict, db_path: str | None = None) -> None
     _sl_raw = float(row.get("sl") or 0)
     _live_sl_for_trail = _safe_float(live.get("sl"))
     state_key = _state_key("bybit", row.get("audit_id"), ticket)
+
+    # Engine A exit-mode dispatch (Plan 2): static/manual -> broker SL+TP bracket
+    # only; time_based -> close after N bars; else (adaptive / non-Engine-A /
+    # unknown mode) fall through unchanged.
+    _ea_dispatch = _engine_a_exit_dispatch(
+        engine, row.get("exit_mode"), mins, _time_close_after_min(tcfg, style)
+    )
+    if _ea_dispatch == "hold":
+        return
+    if _ea_dispatch == "timed_close":
+        result = bybit_close_position(pair, direction, volume)
+        if result.get("success"):
+            pnl_r = _live_pnl_r(row, entry, _sl_raw, volume, profit)
+            if db_path:
+                _mark_timed_close(
+                    db_path, row, "bybit",
+                    actual_close_price=cur_price,
+                    live_pnl=profit,
+                    reason="TIME_EXIT",
+                )
+            log.info(
+                f"[TIMED_EXIT] TIME_EXIT: {pair} style={style} mins={mins:.0f} "
+                f"profit=${profit:.2f} R={pnl_r}"
+            )
+            try:
+                telegram_notify.notify_trade_closed(
+                    pair=pair, pnl_r=pnl_r, is_win=profit > 0,
+                    duration_minutes=mins, exit_reason="TIME_EXIT",
+                    style=style, exchange="bybit",
+                )
+            except Exception:
+                pass
+        return
 
     # Engine D / Scalp Lab: broker TP1/SL + optional milestones; pre_activation
     # giveback when LIVE_PROFIT_PROTECT is enabled (no chandelier / timed close).
