@@ -95,13 +95,13 @@ ENGINE_A_TIME_EXIT_BARS:
   swing: 10
 ```
 
-In `config.py`, add matching defaults so `CONFIG.get(...)` is safe even if the YAML key is removed (mirror how other `ENGINE_A_*` defaults are declared in that file):
+In `config.py`, register the four keys in the `_KNOWN_YAML_ONLY_KEYS` set (`~:2008-2061`), mirroring the `ENGINE_A_STRUCTURAL_SL_FLOOR_ATR` precedent at `:2029`. Mechanism (verified): `config.yaml` values load into `CONFIG` unconditionally via the apply loop at `:2063`; the whitelist only controls whether `_report_unknown_top_level_config_keys` (`:2313`) logs a startup "unknown key" warning (it does **not** raise). The runtime reads these via `CONFIG.get(key, <explicit default>)`, so no defaults-dict entry is required — registration just silences the warning.
 
 ```python
-"ENGINE_A_EXIT_MODE_GLOBAL_DEFAULT": "traditional_static",
-"ENGINE_A_EXIT_MODE_BY_SCORE_GROUP": {},
-"ENGINE_A_ADVISABLE_PIP_BY_SCORE_GROUP": {},
-"ENGINE_A_TIME_EXIT_BARS": {"scalp": 12, "intraday": 18, "swing": 10},
+    "ENGINE_A_EXIT_MODE_GLOBAL_DEFAULT",
+    "ENGINE_A_EXIT_MODE_BY_SCORE_GROUP",
+    "ENGINE_A_ADVISABLE_PIP_BY_SCORE_GROUP",
+    "ENGINE_A_TIME_EXIT_BARS",
 ```
 
 - [ ] **Step 4: Run test to verify it passes**
