@@ -827,7 +827,7 @@ def _load_recent_audit_rows(db_path: str) -> list[dict]:
     """
     select_cols = """
         SELECT id, ticket, pair, engine, style, ts, direction, entry_price, sl, tp,
-               tp_partial, volume, risk_amount, asset_class, exit_time, grade
+               tp_partial, volume, risk_amount, asset_class, exit_time, grade, exit_mode
         FROM   audit_log
         WHERE  pair IS NOT NULL
           AND  grade NOT LIKE '%ERR%'

@@ -5134,6 +5134,8 @@ def _init_audit_db(db_path: str) -> None:
 
             exit_reason           TEXT,
 
+            exit_mode             TEXT,
+
             holding_period_hours  REAL,
 
             asset_class           TEXT,
@@ -5241,6 +5243,7 @@ def _init_audit_db(db_path: str) -> None:
         ("slippage_bps", "REAL"),  # Adverse slippage in basis points (sign = bad for trader)
         ("tp_partial", "REAL"),
         ("tp2", "REAL"),
+        ("exit_mode", "TEXT"),  # Engine A exit-mode selector (Plan 2)
     ]:
         if col not in existing:
             con.execute(f"ALTER TABLE audit_log ADD COLUMN {col} {defn}")
