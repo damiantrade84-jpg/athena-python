@@ -57,3 +57,11 @@ def test_lottery_lab_react_has_shared_filter_state():
     src = _panel_source()
     for token in ["startDate", "endDate", "includeBonus", "limit", "windowSize"]:
         assert token in src
+
+
+def test_lottery_lab_react_wires_ai_to_wheel_to_score_workflow():
+    src = _panel_source()
+    assert "sendAiPoolToWheel" in src
+    assert "Send to Wheel" in src
+    assert "scoreWheelTicket" in src
+    assert "scoreTicketNumbers" in src

@@ -424,6 +424,10 @@ function parseNumberList(value: string) {
     .filter((number) => Number.isFinite(number));
 }
 
+function formatNumberList(numbers: number[] | undefined) {
+  return (numbers ?? []).join(', ');
+}
+
 function formatValue(value: unknown, digits = 2) {
   if (value === null || value === undefined || value === '') return 'n/a';
   if (typeof value === 'number') return Number.isInteger(value) ? String(value) : value.toFixed(digits);
@@ -841,19 +845,19 @@ export default function LotteryLabPanel() {
     }
   }, [buildFilters, effectiveIncludeBonus, endDate, game, generatorMode, postLottery, showToast, startDate, ticketCount]);
 
-  const handleScoreTicket = useCallback(async () => {
-    const numbers = parseNumberList(scoreInput);
+  const scoreTicketNumbers = useCallback(async (numbers: number[], bonus?: number) => {
+    const bonusValue = bonus !== undefined ? bonus : optionalInt(scoreBonus);
     const validation = validateMainNumbers(numbers, config);
-    const bonusValue = optionalInt(scoreBonus);
     const bonusValidation = effectiveIncludeBonus ? validateBonusNumber(bonusValue, config) : null;
     if (validation) {
       showToast(validation, 'error');
-      return;
+      return null;
     }
     if (bonusValidation) {
       showToast(bonusValidation, 'error');
-      return;
+      return null;
     }
+    setScoreInput(formatNumberList(numbers));
     const ticket: Record<string, unknown> = { numbers };
     if (effectiveIncludeBonus) ticket.bonus = bonusValue;
     const result = await postLottery<ScoreTicketResponse>(
@@ -869,7 +873,34 @@ export default function LotteryLabPanel() {
       setScoreError,
     );
     if (result) setScoredTicket(result);
-  }, [config, effectiveIncludeBonus, endDate, game, postLottery, scoreBonus, scoreInput, showToast, startDate]);
+    return result;
+  }, [config, effectiveIncludeBonus, endDate, game, postLottery, scoreBonus, showToast, startDate]);
+
+  const handleScoreTicket = useCallback(async () => {
+    await scoreTicketNumbers(parseNumberList(scoreInput));
+  }, [scoreInput, scoreTicketNumbers]);
+
+  const scoreWheelTicket = useCallback(async (ticket: number[]) => {
+    const result = await scoreTicketNumbers(ticket);
+    if (result) showToast('Ticket scored', 'success');
+  }, [scoreTicketNumbers, showToast]);
+
+  const sendAiPoolToWheel = useCallback(() => {
+    const pool = aiAnalysis?.recommended_pool;
+    if (!pool?.length) {
+      showToast('No recommended pool to export', 'error');
+      return;
+    }
+    setWheelNumbers(formatNumberList(pool));
+    const mode = aiAnalysis?.generator_mode as GeneratorMode | undefined;
+    if (mode && GENERATOR_MODES.some((item) => item.value === mode)) {
+      setGeneratorMode(mode);
+    }
+    setWheelResult(null);
+    setWheelError(null);
+    setActiveTab('tools');
+    showToast('Recommended pool sent to Wheel', 'success');
+  }, [aiAnalysis, showToast]);
 
   const handleWheel = useCallback(async () => {
     const chosenNumbers = parseNumberList(wheelNumbers);
@@ -1826,8 +1857,18 @@ export default function LotteryLabPanel() {
                     <ScrollArea className="h-[220px]">
                       <div className="space-y-2 pr-2">
                         {(wheelResult.tickets || []).map((ticket, index) => (
-                          <div key={`${ticket.join('-')}-${index}`} className="rounded-md bg-muted/30 p-2">
+                          <div key={`${ticket.join('-')}-${index}`} className="flex items-center justify-between gap-2 rounded-md bg-muted/30 p-2">
                             <NumberPills numbers={ticket} size="sm" />
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="sm"
+                              className="h-7 shrink-0 text-xs"
+                              onClick={() => scoreWheelTicket(ticket)}
+                              disabled={scoreLoading}
+                            >
+                              Score
+                            </Button>
                           </div>
                         ))}
                       </div>
@@ -1939,7 +1980,19 @@ export default function LotteryLabPanel() {
                 <div className="space-y-4">
                   <div className="grid gap-3 md:grid-cols-3">
                     <div className="rounded-md bg-muted/30 p-3">
-                      <p className="mb-2 text-[10px] uppercase text-muted-foreground">Recommended pool</p>
+                      <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                        <p className="text-[10px] uppercase text-muted-foreground">Recommended pool</p>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          className="h-7 text-xs"
+                          onClick={sendAiPoolToWheel}
+                          disabled={!aiAnalysis.recommended_pool?.length}
+                        >
+                          Send to Wheel
+                        </Button>
+                      </div>
                       <NumberPills numbers={aiAnalysis.recommended_pool} size="sm" />
                     </div>
                     <div className="rounded-md bg-muted/30 p-3">

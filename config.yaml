@@ -1680,9 +1680,13 @@ AI_MODEL: "grok-4.3"
 
 XAI_MODEL: "grok-4.3"  # Legacy alias kept aligned with AI_MODEL for compatibility.
 
-# Optional: POST /api/lottery/ai-analysis model (defaults to AI_MODEL). Same OpenAI SDK + xAI base URL.
-
-# LOTTERY_AI_MODEL: "grok-4.3"
+# Lottery Lab AI Pattern Analysis (/api/lottery/ai-analysis) — separate from chart vision.
+# Defaults to xAI/Grok even when AI_REVIEW_PROVIDER is openai.
+LOTTERY_AI_PROVIDER: "grok"
+LOTTERY_AI_MAX_TOKENS: 4000
+LOTTERY_AI_REASONING_EFFORT: "low"   # OpenAI Responses path only
+# LOTTERY_AI_TIMEOUT_SEC: 30         # optional; falls back to AI_REQUEST_TIMEOUT_SEC
+# LOTTERY_AI_MODEL: "grok-4.3"       # optional; defaults to AI_MODEL for selected provider
 
 DEBATE_MODEL: "grok-4.3"
 
