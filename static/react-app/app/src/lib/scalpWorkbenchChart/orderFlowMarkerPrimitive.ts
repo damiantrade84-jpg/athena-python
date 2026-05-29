@@ -6,6 +6,7 @@ import type {
   ISeriesPrimitive,
   SeriesAttachedParameter,
   Time,
+  UTCTimestamp,
 } from 'lightweight-charts';
 import type { CanvasRenderingTarget2D } from 'fancy-canvas';
 
@@ -33,7 +34,7 @@ const GLYPH_RADIUS = 5;
 const LABEL_PAD_X = 3;
 const LABEL_GAP = 8;
 
-function nearestBarTime(barTimes: number[], target: number): number | null {
+function nearestBarTime(barTimes: UTCTimestamp[], target: UTCTimestamp): UTCTimestamp | null {
   if (barTimes.length === 0) return null;
   let best = barTimes[0];
   let bestDelta = Math.abs(best - target);
@@ -65,14 +66,14 @@ class OrderFlowMarkerRenderer implements IPrimitivePaneRenderer {
     // so the x coordinate always resolves; the y coordinate stays exact (price).
     const barTimes = (series.data() as ReadonlyArray<{ time: Time }>)
       .map((d) => d.time)
-      .filter((t): t is number => typeof t === 'number');
+      .filter((t): t is UTCTimestamp => typeof t === 'number');
 
     target.useMediaCoordinateSpace(({ context, mediaSize }) => {
       for (const marker of markers) {
         let x = timeScale.timeToCoordinate(marker.time);
         if (x == null && typeof marker.time === 'number') {
           const snapped = nearestBarTime(barTimes, marker.time);
-          if (snapped != null) x = timeScale.timeToCoordinate(snapped as Time);
+          if (snapped != null) x = timeScale.timeToCoordinate(snapped);
         }
         const y = series.priceToCoordinate(marker.price);
         if (x == null || y == null) continue;

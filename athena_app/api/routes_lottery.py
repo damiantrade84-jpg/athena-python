@@ -146,7 +146,14 @@ def _lottery_ai_openai_message_text(content) -> str:
     return "\n".join(parts).strip()
 
 
-def _lottery_ai_prompt_payload(game: str, start_date=None, end_date=None, window: int = 50, z_threshold: float = 2.5):
+def _lottery_ai_prompt_payload(
+    game: str,
+    start_date=None,
+    end_date=None,
+    window: int = 50,
+    z_threshold: float = 2.5,
+    db_path: str | None = None,
+):
     game_key = str(game or "").strip().lower()
     rules = LOTTERY_GAME_RULES[game_key]
     board = build_lottery_dashboard(
@@ -154,16 +161,25 @@ def _lottery_ai_prompt_payload(game: str, start_date=None, end_date=None, window
         start_date=start_date,
         end_date=end_date,
         include_bonus=True,
+        db_path=db_path,
     )
     if not board.get("total_draws"):
         raise ValueError("No draw history found - please import draws first")
 
-    rolling = compute_rolling_frequency(game_key, window=window, start_date=start_date, end_date=end_date)
-    pair_lift = compute_pair_lift(game_key, start_date=start_date, end_date=end_date, limit=50)
-    anomalies = flag_anomalous_draws(game_key, z_threshold=z_threshold, start_date=start_date, end_date=end_date)
-    bonus = compute_bonus_intelligence(game_key, window=window, start_date=start_date, end_date=end_date)
-    entropy = compute_entropy_analysis(game_key, start_date=start_date, end_date=end_date)
-    recent = lottery_history_rows(game_key, start_date=start_date, end_date=end_date, limit=10)
+    rolling = compute_rolling_frequency(
+        game_key, window=window, start_date=start_date, end_date=end_date, db_path=db_path
+    )
+    pair_lift = compute_pair_lift(
+        game_key, start_date=start_date, end_date=end_date, limit=50, db_path=db_path
+    )
+    anomalies = flag_anomalous_draws(
+        game_key, z_threshold=z_threshold, start_date=start_date, end_date=end_date, db_path=db_path
+    )
+    bonus = compute_bonus_intelligence(
+        game_key, window=window, start_date=start_date, end_date=end_date, db_path=db_path
+    )
+    entropy = compute_entropy_analysis(game_key, start_date=start_date, end_date=end_date, db_path=db_path)
+    recent = lottery_history_rows(game_key, start_date=start_date, end_date=end_date, limit=10, db_path=db_path)
 
     recent_draws = "\n".join(
         [
@@ -384,6 +400,7 @@ def api_lottery_dashboard():
             start_date=start_date,
             end_date=end_date,
             include_bonus=include_bonus,
+            db_path=_AUDIT_DB,
         )
         return jsonify(payload)
     except ValueError as e:
@@ -400,12 +417,14 @@ def api_lottery_frequency():
             start_date=start_date,
             end_date=end_date,
             include_bonus=include_bonus,
+            db_path=_AUDIT_DB,
         )
         overdue = compute_overdue_numbers(
             game,
             start_date=start_date,
             end_date=end_date,
             include_bonus=include_bonus,
+            db_path=_AUDIT_DB,
         )
         return jsonify(
             {
@@ -433,6 +452,7 @@ def api_lottery_pairs():
                 start_date=start_date,
                 end_date=end_date,
                 limit=limit,
+                db_path=_AUDIT_DB,
             )
         )
     except ValueError as e:
@@ -450,6 +470,7 @@ def api_lottery_triplets():
                 start_date=start_date,
                 end_date=end_date,
                 limit=limit,
+                db_path=_AUDIT_DB,
             )
         )
     except ValueError as e:
@@ -467,6 +488,7 @@ def api_lottery_history():
                 start_date=start_date,
                 end_date=end_date,
                 limit=limit,
+                db_path=_AUDIT_DB,
             )
         )
     except ValueError as e:
@@ -482,19 +504,19 @@ def api_lottery_distributions():
             {
                 "game": game,
                 "sum_distribution": compute_sum_distribution(
-                    game, start_date=start_date, end_date=end_date
+                    game, start_date=start_date, end_date=end_date, db_path=_AUDIT_DB
                 ),
                 "odd_even_distribution": compute_odd_even_distribution(
-                    game, start_date=start_date, end_date=end_date
+                    game, start_date=start_date, end_date=end_date, db_path=_AUDIT_DB
                 ),
                 "low_high_distribution": compute_low_high_distribution(
-                    game, start_date=start_date, end_date=end_date
+                    game, start_date=start_date, end_date=end_date, db_path=_AUDIT_DB
                 ),
                 "consecutive": compute_consecutive_stats(
-                    game, start_date=start_date, end_date=end_date
+                    game, start_date=start_date, end_date=end_date, db_path=_AUDIT_DB
                 ),
                 "repeat_from_last_draw": compute_repeat_from_last_draw_stats(
-                    game, start_date=start_date, end_date=end_date
+                    game, start_date=start_date, end_date=end_date, db_path=_AUDIT_DB
                 ),
             }
         )
@@ -512,6 +534,7 @@ def api_lottery_sum_range():
                 game,
                 start_date=start_date,
                 end_date=end_date,
+                db_path=_AUDIT_DB,
             )
         )
     except ValueError as e:
@@ -528,6 +551,7 @@ def api_lottery_positional():
                 game,
                 start_date=start_date,
                 end_date=end_date,
+                db_path=_AUDIT_DB,
             )
         )
     except ValueError as e:
@@ -549,6 +573,7 @@ def api_lottery_rolling_frequency():
                 window=window,
                 start_date=start_date,
                 end_date=end_date,
+                db_path=_AUDIT_DB,
             )
         )
     except ValueError as e:
@@ -566,6 +591,7 @@ def api_lottery_pair_lift():
                 start_date=start_date,
                 end_date=end_date,
                 limit=limit,
+                db_path=_AUDIT_DB,
             )
         )
     except ValueError as e:
@@ -587,6 +613,7 @@ def api_lottery_anomalous_draws():
                 z_threshold=z_threshold,
                 start_date=start_date,
                 end_date=end_date,
+                db_path=_AUDIT_DB,
             )
         )
     except ValueError as e:
@@ -608,6 +635,7 @@ def api_lottery_bonus_intelligence():
                 window=window,
                 start_date=start_date,
                 end_date=end_date,
+                db_path=_AUDIT_DB,
             )
         )
     except ValueError as e:
@@ -643,6 +671,7 @@ def api_lottery_ai_analysis():
             end_date=end_date,
             window=window,
             z_threshold=z_threshold,
+            db_path=_AUDIT_DB,
         )
         _lottery_model = (
             str(CONFIG.get("LOTTERY_AI_MODEL") or "").strip()
@@ -782,6 +811,7 @@ def api_lottery_draws():
                 start_date=start_date,
                 end_date=end_date,
                 limit=limit,
+                db_path=_AUDIT_DB,
             )
         )
     except ValueError as e:
@@ -800,6 +830,7 @@ def api_lottery_stats():
                 start_date=start_date,
                 end_date=end_date,
                 include_bonus=include_bonus,
+                db_path=_AUDIT_DB,
             )
         )
     except ValueError as e:
@@ -898,6 +929,7 @@ def api_lottery_generate():
             filters=filters,
             start_date=start_date,
             end_date=end_date,
+            db_path=_AUDIT_DB,
         )
         return jsonify(result)
     except ValueError as e:
@@ -917,6 +949,7 @@ def api_lottery_wheel():
                 game,
                 chosen_numbers=chosen_numbers,
                 guarantee_if=guarantee_if,
+                db_path=_AUDIT_DB,
             )
         )
     except ValueError as e:
@@ -940,6 +973,7 @@ def api_lottery_score_ticket():
                 include_bonus=include_bonus,
                 start_date=start_date,
                 end_date=end_date,
+                db_path=_AUDIT_DB,
             )
         )
     except ValueError as e:
@@ -994,6 +1028,7 @@ def api_lottery_simulate():
             payout_table=payout_table,
             filters=filters,
             seed=seed,
+            db_path=_AUDIT_DB,
         )
         serialize_started = time.perf_counter()
         response = jsonify(result)
@@ -1053,6 +1088,7 @@ def api_lottery_compare_modes():
             payout_table=payout_table,
             filters=filters,
             seed=seed,
+            db_path=_AUDIT_DB,
         )
         return jsonify(result)
     except ValueError as e:
