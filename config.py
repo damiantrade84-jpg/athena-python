@@ -390,6 +390,36 @@ def _response_text(resp) -> str:
     return "".join(parts)
 
 
+def _responses_text_config_from_response_format(response_format) -> dict | None:
+    if not isinstance(response_format, dict):
+        return None
+    fmt_type = str(response_format.get("type") or "").strip()
+    if fmt_type == "json_object":
+        return {"format": {"type": "json_object"}}
+    if fmt_type == "text":
+        return {"format": {"type": "text"}}
+    if fmt_type != "json_schema":
+        return None
+
+    schema_cfg = response_format.get("json_schema")
+    if not isinstance(schema_cfg, dict):
+        schema_cfg = response_format
+    name = str(schema_cfg.get("name") or "").strip()
+    schema = schema_cfg.get("schema")
+    if not name or not isinstance(schema, dict):
+        return None
+    out = {
+        "type": "json_schema",
+        "name": name,
+        "schema": schema,
+    }
+    if "description" in schema_cfg:
+        out["description"] = str(schema_cfg.get("description") or "")
+    if "strict" in schema_cfg:
+        out["strict"] = bool(schema_cfg.get("strict"))
+    return {"format": out}
+
+
 def _as_openai_response_content(content) -> list[dict]:
     if isinstance(content, str):
         return [{"type": "input_text", "text": content}]
@@ -467,6 +497,15 @@ class _OpenAIResponsesChatCompletionsCompat:
         }
         if instructions:
             request_payload["instructions"] = instructions
+        text_config = kwargs.get("text")
+        if isinstance(text_config, dict):
+            request_payload["text"] = text_config
+        else:
+            response_text_config = _responses_text_config_from_response_format(
+                kwargs.get("response_format")
+            )
+            if response_text_config:
+                request_payload["text"] = response_text_config
         timeout = kwargs.get("timeout") or self._owner.timeout_seconds
         resp = self._owner._client.responses.create(**request_payload, timeout=timeout)
         text = _response_text(resp)

@@ -257,3 +257,51 @@ def test_create_ai_client_accepts_explicit_sdk_retry_count():
     )
 
     assert client.max_retries == 0
+
+
+def test_openai_responses_adapter_forwards_json_schema_response_format(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "test-openai-key")
+    captured = {}
+
+    class _FakeResponses:
+        @staticmethod
+        def create(**kwargs):
+            captured.update(kwargs)
+            return SimpleNamespace(output_text='{"ok": true}', model="gpt-5.5")
+
+    class _FakeOpenAI:
+        def __init__(self, **_kwargs):
+            self.responses = _FakeResponses()
+            self.max_retries = 0
+
+    monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(OpenAI=_FakeOpenAI))
+    client = create_ai_client(
+        {
+            "AI_REVIEW_PROVIDER": "openai",
+            "OPENAI_REVIEW_MODEL": "gpt-5.5",
+            "OPENAI_API_KEY": "test-openai-key",
+        },
+        provider="openai",
+    )
+
+    client.chat.completions.create(
+        model="gpt-5.5",
+        messages=[{"role": "user", "content": "return json"}],
+        response_format={
+            "type": "json_schema",
+            "json_schema": {
+                "name": "example_schema",
+                "strict": True,
+                "schema": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "properties": {"ok": {"type": "boolean"}},
+                    "required": ["ok"],
+                },
+            },
+        },
+    )
+
+    assert captured["text"]["format"]["type"] == "json_schema"
+    assert captured["text"]["format"]["name"] == "example_schema"
+    assert captured["text"]["format"]["strict"] is True

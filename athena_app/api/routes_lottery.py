@@ -174,6 +174,89 @@ def _lottery_ai_schema_error(parsed: dict) -> str | None:
     return None
 
 
+def _lottery_ai_response_format() -> dict:
+    return {
+        "type": "json_schema",
+        "json_schema": {
+            "name": "lottery_ai_analysis",
+            "strict": True,
+            "schema": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "recommended_pool": {
+                        "type": "array",
+                        "items": {"type": "integer"},
+                    },
+                    "avoid_numbers": {
+                        "type": "array",
+                        "items": {"type": "integer"},
+                    },
+                    "generator_mode": {"type": "string"},
+                    "bonus_picks": {
+                        "type": "array",
+                        "items": {"type": "integer"},
+                    },
+                    "sum_filter": {
+                        "type": "object",
+                        "additionalProperties": False,
+                        "properties": {
+                            "min": {"type": "integer"},
+                            "max": {"type": "integer"},
+                        },
+                        "required": ["min", "max"],
+                    },
+                    "entropy_assessment": {
+                        "type": "object",
+                        "additionalProperties": False,
+                        "properties": {
+                            "fairness": {"type": "string"},
+                            "interpretation": {"type": "string"},
+                            "impact_on_selection": {"type": "string"},
+                        },
+                        "required": [
+                            "fairness",
+                            "interpretation",
+                            "impact_on_selection",
+                        ],
+                    },
+                    "confidence": {"type": "string"},
+                    "reasoning": {
+                        "type": "object",
+                        "additionalProperties": False,
+                        "properties": {
+                            "pool_reasoning": {"type": "string"},
+                            "avoid_reasoning": {"type": "string"},
+                            "mode_reasoning": {"type": "string"},
+                            "bonus_reasoning": {"type": "string"},
+                            "entropy_reasoning": {"type": "string"},
+                            "confidence_reasoning": {"type": "string"},
+                        },
+                        "required": [
+                            "pool_reasoning",
+                            "avoid_reasoning",
+                            "mode_reasoning",
+                            "bonus_reasoning",
+                            "entropy_reasoning",
+                            "confidence_reasoning",
+                        ],
+                    },
+                },
+                "required": [
+                    "recommended_pool",
+                    "avoid_numbers",
+                    "generator_mode",
+                    "bonus_picks",
+                    "sum_filter",
+                    "entropy_assessment",
+                    "confidence",
+                    "reasoning",
+                ],
+            },
+        },
+    }
+
+
 def _lottery_ai_prompt_payload(
     game: str,
     start_date=None,
@@ -711,6 +794,7 @@ def api_lottery_ai_analysis():
             model=_lottery_model,
             max_tokens=1800,
             temperature=_temp,
+            response_format=_lottery_ai_response_format(),
             messages=[
                 {
                     "role": "system",

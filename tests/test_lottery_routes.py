@@ -270,3 +270,44 @@ def test_lottery_ai_route_rejects_schema_empty_model_response(monkeypatch):
     body = resp.get_json()
     assert "required field" in body["error"]
     assert "recommended_pool" in body["error"]
+
+
+def test_lottery_ai_route_requests_json_schema_response(monkeypatch):
+    db_path = _db_path()
+    _seed_lotto(db_path)
+    client, _app = _client(db_path)
+    captured = {}
+
+    class _FakeCompletions:
+        @staticmethod
+        def create(**kwargs):
+            captured.update(kwargs)
+            message = SimpleNamespace(
+                content=(
+                    '{"recommended_pool":[1,2,3,4,5,6,7,8,9,10],'
+                    '"avoid_numbers":[11,12,13],"generator_mode":"balanced_mix",'
+                    '"bonus_picks":[1,2],"sum_filter":{"min":90,"max":180},'
+                    '"entropy_assessment":{"fairness":"normal"},'
+                    '"confidence":"Low","reasoning":{"summary":"test"}}'
+                )
+            )
+            return SimpleNamespace(choices=[SimpleNamespace(message=message)])
+
+    fake_client = SimpleNamespace(
+        chat=SimpleNamespace(completions=_FakeCompletions())
+    )
+    monkeypatch.setattr(
+        "athena_app.api.routes_lottery.get_ai_api_key",
+        lambda _config: "test-key",
+    )
+    monkeypatch.setattr(
+        "athena_app.api.routes_lottery.create_ai_client",
+        lambda *_args, **_kwargs: fake_client,
+    )
+
+    resp = client.post("/api/lottery/ai-analysis", json={"game": "lotto"})
+
+    assert resp.status_code == 200
+    assert captured["response_format"]["type"] == "json_schema"
+    assert captured["response_format"]["json_schema"]["name"] == "lottery_ai_analysis"
+    assert captured["response_format"]["json_schema"]["strict"] is True
