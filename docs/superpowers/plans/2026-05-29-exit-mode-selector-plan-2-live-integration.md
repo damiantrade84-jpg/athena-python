@@ -515,6 +515,36 @@ git commit -m "feat(exit_mode): Engine A exit-mode dispatch in the Bybit timed-e
 
 ---
 
+## Implementation record (audit-reconciled, 2026-05-29)
+
+`/athena-audit` was run before the execution edits. Finding **H1** (mode silently
+ignored on 2 of 3 Engine A paths) changed the design: instead of one path, a shared
+helper `exit_mode_apply.apply_engine_a_exit_mode` is called before `risk_check` in
+**all three** Engine A paths, and `exit_mode` is persisted in all three success
+INSERTs (AST-verified col/placeholder counts: quick_execute 23/23, execute 25/25,
+auto_trader 24/24). Finding **M1** (place the MT5 dispatch after broker-SL repair)
+was applied. Clearances: clamp runs before `risk_check` (no gate bypass); sizing
+uses the clamped SL; broker TP is placed (static/manual keep it); NULL/unknown mode
+fails safe to `trail`.
+
+Built in stages (each committed, TDD):
+1. `exit_mode_apply.py` shared helper (+ `tests/test_exit_mode_apply.py`).
+2. Monitor pure helpers `_is_engine_a_engine` / `_engine_a_exit_dispatch` /
+   `_time_close_after_min` (+ `tests/test_exit_mode_monitor.py`).
+3. `audit_log.exit_mode` column + migration; monitor SELECT (+ `tests/test_exit_mode_persistence.py`).
+4. Config keys (Task 1) — `tests/test_exit_mode_config.py`.
+5–7. Resolve+clamp+persist wired into `execution.py` quick_execute + execute and
+   `auto_trader.py` (before `risk_check`); `exit_mode` in all 3 success INSERTs.
+8. MT5 + Bybit handler dispatch (`hold`/`timed_close`/`trail`); `ENGINE_A_TIME_EXIT_BARS`
+   threaded into `tcfg`.
+
+Final test surface: 122 passed across exit-mode + adjacent regression suites (4
+pre-existing Windows `.pytest_tmp` teardown errors are unrelated).
+
+**Deferred:** Plan 3 (backtest parity — the `live_exit` simulation must call the same
+`_engine_a_exit_dispatch`) and Plan 4 (frontend Exit Strategy tab + per-trade field).
+L1 (webhook path) intentionally not covered.
+
 ## Self-Review
 
 **Spec coverage:**
