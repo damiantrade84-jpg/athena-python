@@ -1543,6 +1543,19 @@ export interface AIChartReviewChartSnapshot {
     max?: number | null;
   } | null;
   provider?: string | null;
+  /**
+   * Diagnostics-only snapshot of the indicator values drawn on the chart, used
+   * by the backend to flag chart-vs-Engine-A indicator divergence. Never trusted
+   * for scoring; the backend re-runs Engine A from server state.
+   */
+  chartIndicators?: {
+    timeframe?: string | null;
+    ema50?: number | null;
+    ema200?: number | null;
+    rsi14?: number | null;
+    atr14?: number | null;
+    adx14?: number | null;
+  } | null;
 }
 
 export interface AIChartReviewRequest {

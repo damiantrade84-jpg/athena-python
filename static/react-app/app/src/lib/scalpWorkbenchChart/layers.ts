@@ -1,5 +1,6 @@
 import { LineStyle } from 'lightweight-charts';
-import type { SeriesMarker, Time } from 'lightweight-charts';
+import type { Time } from 'lightweight-charts';
+import type { OrderFlowPrimitiveMarker } from './orderFlowMarkerPrimitive';
 
 export interface ScalpPriceLevel {
   label: string;
@@ -213,48 +214,66 @@ function parseMarkerTime(ts: string | undefined): Time | null {
   return Math.floor(ms / 1000) as Time;
 }
 
-export function buildOrderFlowMarkers(payload: OrderFlowPayloadLike | null | undefined): SeriesMarker<Time>[] {
+function isFinitePrice(price: number | undefined | null): price is number {
+  return typeof price === 'number' && Number.isFinite(price);
+}
+
+/**
+ * Build price-anchored order-flow markers for the OrderFlowMarkerPrimitive.
+ * Each marker is placed at the event's actual (time, price) rather than merely
+ * above/below the bar; events without a finite price are skipped because they
+ * cannot be price-anchored.
+ */
+export function buildOrderFlowPrimitiveMarkers(
+  payload: OrderFlowPayloadLike | null | undefined,
+): OrderFlowPrimitiveMarker[] {
   if (!payload) return [];
-  const markers: SeriesMarker<Time>[] = [];
+  const markers: OrderFlowPrimitiveMarker[] = [];
   for (const event of payload.largeTradeEvents || []) {
     const time = parseMarkerTime(event.ts);
-    if (time == null || event.price == null) continue;
+    if (time == null || !isFinitePrice(event.price)) continue;
+    const isSell = event.side === 'SELL';
     markers.push({
       time,
-      position: event.side === 'SELL' ? 'aboveBar' : 'belowBar',
-      color: event.side === 'SELL' ? 'hsl(343, 96%, 60%)' : 'hsl(160, 84%, 39%)',
+      price: event.price,
+      color: isSell ? 'hsl(343, 96%, 60%)' : 'hsl(160, 84%, 39%)',
       shape: 'circle',
-      text: event.side === 'SELL' ? 'SELL' : 'BUY',
+      text: isSell ? 'SELL' : 'BUY',
+      labelPlacement: isSell ? 'above' : 'below',
     });
   }
   for (const event of payload.absorptionEvents || []) {
     const time = parseMarkerTime(event.ts);
-    if (time == null) continue;
+    if (time == null || !isFinitePrice(event.price)) continue;
+    const side = String(event.sideAbsorbed || '').toUpperCase();
+    const text = side === 'BUY' || side === 'SELL' ? `ABSORPTION ${side}` : 'ABSORPTION';
     markers.push({
       time,
-      position: 'inBar',
+      price: event.price,
       color: 'hsl(280, 80%, 60%)',
       shape: 'square',
-      text: 'ABSORPTION',
+      text,
     });
   }
   for (const event of payload.initiativeEvents || []) {
     const time = parseMarkerTime(event.ts);
-    if (time == null) continue;
+    if (time == null || !isFinitePrice(event.price)) continue;
+    const isSell = event.side === 'SELL';
     markers.push({
       time,
-      position: event.side === 'SELL' ? 'aboveBar' : 'belowBar',
+      price: event.price,
       color: 'hsl(45, 95%, 58%)',
-      shape: 'arrowDown',
-      text: 'INITIATIVE',
+      shape: isSell ? 'arrowDown' : 'arrowUp',
+      text: isSell ? 'INITIATIVE SELL' : 'INITIATIVE BUY',
+      labelPlacement: isSell ? 'above' : 'below',
     });
   }
   for (const event of payload.exhaustionEvents || []) {
     const time = parseMarkerTime(event.ts);
-    if (time == null) continue;
+    if (time == null || !isFinitePrice(event.price)) continue;
     markers.push({
       time,
-      position: 'inBar',
+      price: event.price,
       color: 'hsl(200, 70%, 55%)',
       shape: 'circle',
       text: 'EXHAUSTION',

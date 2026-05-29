@@ -734,12 +734,35 @@ def _volume_ma(values: list[float], period: int = 20) -> list[float | None]:
     return out
 
 
-def _vwap_values(rows: list[dict]) -> tuple[list[float | None], str]:
+def _row_utc_day(row: dict) -> str | None:
+    open_ms = _safe_float(row.get("open_time"))
+    if open_ms is not None:
+        return datetime.fromtimestamp(open_ms / 1000.0, timezone.utc).strftime("%Y-%m-%d")
+    t = row.get("t")
+    if isinstance(t, str) and len(t) >= 10:
+        return t[:10]
+    return None
+
+
+def _vwap_values(rows: list[dict], tf: str | None = None) -> tuple[list[float | None], str]:
     use_turnover = any(_safe_float(row.get("turnover"), 0.0) > 0 for row in rows)
+    tf_sec = _tf_seconds(tf) if tf else None
+    # VWAP is an intraday tool: anchor (reset) at each UTC day for sub-daily
+    # timeframes; leave it cumulative for D1+ where a per-bar daily reset would
+    # be meaningless.
+    session_anchored = bool(tf_sec and tf_sec < 86400)
     cum_value = 0.0
     cum_volume = 0.0
     out: list[float | None] = []
+    prev_day: str | None = None
     for row in rows:
+        if session_anchored:
+            day = _row_utc_day(row)
+            if day is not None:
+                if prev_day is not None and day != prev_day:
+                    cum_value = 0.0
+                    cum_volume = 0.0
+                prev_day = day
         volume = _safe_float(row.get("v"), 0.0) or 0.0
         if volume <= 0:
             out.append(None if cum_volume <= 0 else cum_value / cum_volume)
@@ -752,11 +775,12 @@ def _vwap_values(rows: list[dict]) -> tuple[list[float | None], str]:
             cum_value += typical * volume
         cum_volume += volume
         out.append(cum_value / cum_volume if cum_volume > 0 else None)
-    formula = (
+    base_formula = (
         "cumulative_turnover_divided_by_cumulative_volume"
         if use_turnover
         else "cumulative_typical_price_times_volume_divided_by_cumulative_volume"
     )
+    formula = ("session_anchored_utc_day:" + base_formula) if session_anchored else base_formula
     return out, formula
 
 
@@ -812,7 +836,7 @@ def _format_chart_candles(
             atr14 = calc_atr(highs, lows, closes, 14)
             adx = calc_adx(highs, lows, closes, 14).get("adx", [])
             vol_ma = _volume_ma(volumes, 20)
-            vwap, formula = _vwap_values(rows)
+            vwap, formula = _vwap_values(rows, tf)
             meta["vwap_formula"] = formula
             for idx, row in enumerate(rows):
                 row["ema21"] = ema21[idx] if idx < len(ema21) else None
@@ -1207,7 +1231,7 @@ def api_candles():
     if not candles:
         return jsonify({"error": f"No candle data for {symbol} {tf}"}), 404
 
-    result, _indicator_meta = _format_chart_candles(candles, tf=tf)
+    result, indicator_meta = _format_chart_candles(candles, tf=tf, include_indicators=True)
 
     provider = _generic_chart_provider(pair, chart_source)
     return jsonify(

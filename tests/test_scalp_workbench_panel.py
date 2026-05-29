@@ -62,13 +62,15 @@ def test_scalp_workbench_refresh_remains_only_scan_trigger():
     assert "postScan('/api/scalp-scan'" not in capture_body
 
 
-def test_scalp_workbench_defaults_to_m5_display():
+def test_scalp_workbench_defaults_to_m1_execution_display():
     source = _read(SCALP_WORKBENCH)
 
     assert "preferredScalpDisplayTf" in source
-    assert "useState<(typeof TIMEFRAMES)[number]>('M5')" in source
-    assert "M5 Context Chart" in source
-    assert "Execution TF: M1" in source
+    # Display TF defaults to Engine D's execution TF so the bar structure shown
+    # matches the timeframe the gate/trigger actually used.
+    assert "useState<(typeof TIMEFRAMES)[number]>('M1')" in source
+    assert "{timeframe} Chart" in source
+    assert "Execution TF: {executionTf}" in source
 
 
 def test_scalp_workbench_m1_still_available():

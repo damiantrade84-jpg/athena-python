@@ -459,7 +459,10 @@ def test_crypto_chart_payload_includes_volume_ma_vwap_and_same_provider_indicato
     assert payload["indicator_source_candle_provider"] == payload["candle_provider"] == "bybit"
     assert payload["vwap_provider"] == "bybit"
     assert payload["scoring_provider"] == "bybit"
-    assert payload["vwap_formula"] == "cumulative_turnover_divided_by_cumulative_volume"
+    assert (
+        payload["vwap_formula"]
+        == "session_anchored_utc_day:cumulative_turnover_divided_by_cumulative_volume"
+    )
 
 
 def test_crypto_chart_scoring_provider_mismatch_when_engine_a_feed_binance():
@@ -553,7 +556,10 @@ def test_crypto_chart_vwap_uses_typical_price_when_turnover_missing():
     resp = client.get("/api/candles?symbol=BTCUSDT&tf=H4&limit=30")
     assert resp.status_code == 200
     payload = resp.get_json()
-    assert payload["vwap_formula"] == "cumulative_typical_price_times_volume_divided_by_cumulative_volume"
+    assert (
+        payload["vwap_formula"]
+        == "session_anchored_utc_day:cumulative_typical_price_times_volume_divided_by_cumulative_volume"
+    )
 
 
 def test_crypto_chart_binance_fallback_is_visible_when_bybit_unavailable():

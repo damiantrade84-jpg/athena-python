@@ -26,6 +26,8 @@ def build_chart_review_prompt(context: dict[str, Any]) -> str:
     geometry = context.get("geometry") or {}
     equity = context.get("equity_session") or {}
     mismatch_warnings = context.get("mismatch_warnings") or []
+    review_style = context.get("review_style_diagnostic") or {}
+    indicator_parity = context.get("indicator_parity") or {}
     engine_a_context = build_engine_a_prompt_context(context)
     engine_b_context = build_engine_b_prompt_context(context)
     engine_a_json = json.dumps({"engineAContext": engine_a_context}, default=str, indent=2)
@@ -140,6 +142,12 @@ chart_captured_at: {_fmt(context.get("chart_captured_at"))} (metadata only — n
 engine_provider: {_fmt(context.get("engine_a_provider"))} chart_provider: {_fmt(context.get("chart_provider_hint"))}
 equity_session: applied={_fmt(equity.get("applied"))} multiplier={_fmt(equity.get("multiplier"))} reason={_fmt(equity.get("reason"))}
 mismatch_warnings: {_fmt(mismatch_warnings)}
+
+== REVIEW STYLE / INDICATOR PARITY (advisory, server-trusted) ==
+review_analyze_style: {_fmt(review_style.get("review_analyze_style"))} candidate_signal_style: {_fmt(review_style.get("candidate_signal_style"))} style_matches_candidate: {_fmt(review_style.get("style_matches_candidate"))}
+review_style_note: {_fmt(review_style.get("note"))}
+indicator_parity: chart_tf={_fmt(indicator_parity.get("chart_timeframe"))} engine_a_indicator_tf={_fmt(indicator_parity.get("engine_a_indicator_timeframe"))} status={_fmt(indicator_parity.get("status"))} mismatches={_fmt(indicator_parity.get("mismatches"))}
+(Chart indicators are computed on the visible timeframe; Engine A trend EMAs are H4. When status is not_comparable_timeframe or values_differ, do not read the chart's drawn EMA/ATR/ADX as Engine A's values.)
 
 Analyse the chart image and return JSON only.
 """

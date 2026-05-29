@@ -783,6 +783,101 @@ def build_engine_b_prompt_context(engine_a_ctx: dict[str, Any]) -> dict[str, Any
     }
 
 
+def _review_style_diagnostic(
+    style: str,
+    screenshot_meta: dict[str, Any] | None,
+    timeframe: str,
+) -> dict[str, Any]:
+    """Surface how the review re-scored Engine A vs the candidate's own style.
+
+    Advisory only: the review re-runs Engine A in the analyze_style derived from
+    the chart timeframe, which can differ from the style that produced the scan
+    candidate. This records the difference; it never changes scoring.
+    """
+    meta = screenshot_meta or {}
+    candidate_style = (
+        str(meta.get("signal_style") or meta.get("scoring_style") or "").strip().lower()
+        or None
+    )
+    chart_tf = str(meta.get("chart_timeframe") or timeframe or "").upper() or None
+    matches = candidate_style is None or candidate_style == str(style or "").lower()
+    return {
+        "review_analyze_style": style,
+        "candidate_signal_style": candidate_style,
+        "style_matches_candidate": matches,
+        "chart_timeframe": chart_tf,
+        "scoring_timeframes": list(meta.get("scoring_timeframes") or []),
+        "note": (
+            None
+            if matches
+            else (
+                "Engine A re-scored in the chart timeframe's style "
+                f"('{style}'); candidate's original style was '{candidate_style}'."
+            )
+        ),
+    }
+
+
+def _chart_indicator_parity(
+    screenshot_meta: dict[str, Any] | None,
+    ema_levels: dict[str, Any],
+) -> tuple[dict[str, Any], list[str]]:
+    """Compare chart-drawn (visible-TF) indicators against Engine A's basis.
+
+    Engine A's trend EMAs come from the H4 snapshot, so the chart's visible-TF
+    lines are only directly comparable when the chart is on H4. Advisory only —
+    never affects scoring.
+    """
+    meta = screenshot_meta or {}
+    snap = meta.get("chart_snapshot") if isinstance(meta.get("chart_snapshot"), dict) else {}
+    chart_ind = snap.get("chartIndicators") if isinstance(snap.get("chartIndicators"), dict) else {}
+    chart_tf = str(
+        (chart_ind.get("timeframe") if chart_ind else None)
+        or meta.get("chart_timeframe")
+        or ""
+    ).upper() or None
+    engine_tf = "H4"
+    comparable = bool(chart_tf and chart_tf == engine_tf)
+    warnings: list[str] = []
+    mismatches: dict[str, Any] = {}
+
+    if chart_ind and comparable:
+        def _cmp(name: str, chart_val: Any, eng_val: Any) -> None:
+            cv = _to_float(chart_val)
+            ev = _to_float(eng_val)
+            if cv is None or ev is None:
+                return
+            tol = max(abs(ev) * 0.0025, 1e-9)
+            if abs(cv - ev) > tol:
+                mismatches[name] = {"chart": cv, "engineA": ev}
+
+        _cmp("ema50", chart_ind.get("ema50"), ema_levels.get("ema50"))
+        _cmp("ema200", chart_ind.get("ema200"), ema_levels.get("ema200"))
+        if mismatches:
+            warnings.append("chart_indicators_differ_from_engine_a")
+
+    if not chart_ind:
+        status = "unavailable"
+    elif mismatches:
+        status = "values_differ"
+    elif comparable:
+        status = "ok"
+    else:
+        status = "not_comparable_timeframe"
+
+    return (
+        {
+            "chart_timeframe": chart_tf,
+            "engine_a_indicator_timeframe": engine_tf,
+            "comparable": comparable,
+            "chart_indicators_present": bool(chart_ind),
+            "status": status,
+            "mismatches": mismatches,
+        },
+        warnings,
+    )
+
+
 def assemble_engine_a_context(
     symbol: str,
     timeframe: str,
@@ -929,6 +1024,11 @@ def assemble_engine_a_context(
     ctx["non_visual_context"] = _non_visual_context(signal, factor_diag, ctx)
     ctx["engine_a_non_visual_context"] = ctx["non_visual_context"]
     ctx["score_attribution"] = _score_attribution(signal, factor_diag, ctx)
+    ctx["review_style_diagnostic"] = _review_style_diagnostic(style, screenshot_meta, timeframe)
+    parity, parity_warnings = _chart_indicator_parity(screenshot_meta, ctx["ema_levels"])
+    ctx["indicator_parity"] = parity
+    if parity_warnings:
+        ctx["mismatch_warnings"] = list(ctx.get("mismatch_warnings") or []) + parity_warnings
     return ctx
 
 

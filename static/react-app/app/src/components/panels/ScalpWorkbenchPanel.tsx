@@ -1,14 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   createChart,
-  createSeriesMarkers,
   CandlestickSeries,
   LineStyle,
   type CandlestickData,
   type IChartApi,
   type ISeriesApi,
-  type ISeriesMarkersPluginApi,
-  type Time,
   type UTCTimestamp,
 } from 'lightweight-charts';
 import { AlertTriangle, BarChart3, Camera, CheckCircle2, Copy, Play, RefreshCw, ShieldCheck, Sparkles } from 'lucide-react';
@@ -49,7 +46,7 @@ import {
   isScalpAiReviewEligible,
   normalizeSymbolKey,
 } from '@/lib/manualExecuteHelpers';
-import { buildScalpChartLevels, buildOrderFlowMarkers, DEFAULT_SCALP_OVERLAY_TOGGLES, type EngineBOverlayLike, type OrderFlowPayloadLike, type ScalpOverlayToggles } from '@/lib/scalpWorkbenchChart/layers';
+import { buildScalpChartLevels, buildOrderFlowPrimitiveMarkers, DEFAULT_SCALP_OVERLAY_TOGGLES, type EngineBOverlayLike, type OrderFlowPayloadLike, type ScalpOverlayToggles } from '@/lib/scalpWorkbenchChart/layers';
 import { buildScalpChartSnapshot, buildRenderedLayers } from '@/lib/scalpWorkbenchChart/chartSnapshot';
 import { hasScalpNativeCanvas, waitForScalpChartRenderReady } from '@/lib/scalpWorkbenchChart/renderReady';
 import { ScalpThesisBadge } from '@/lib/scalpWorkbenchChart/thesisBadge';
@@ -62,6 +59,7 @@ import { AIReviewProviderToggle } from '@/components/athena/AIReviewProviderTogg
 import ChartFeedHeaderChips, { type ChartFeedHeaderChipSpec } from '@/components/athena/ChartFeedHeaderChips';
 import CompactSuggestedWatchStatus from '@/components/athena/CompactSuggestedWatchStatus';
 import { ChartRightEdgeLabelPrimitive } from '@/lib/chartRightEdgeLabelPrimitive';
+import { OrderFlowMarkerPrimitive } from '@/lib/scalpWorkbenchChart/orderFlowMarkerPrimitive';
 import {
   labelPriorityForText,
   RIGHT_EDGE_LABEL_PRIORITY,
@@ -476,11 +474,17 @@ function signalKey(signal: ScalpWorkbenchSignal | null | undefined): string {
 }
 
 function preferredScalpDisplayTf(signal: ScalpWorkbenchSignal | null | undefined): (typeof TIMEFRAMES)[number] {
+  // Default the visible chart to Engine D's execution timeframe so the bar
+  // structure shown matches the timeframe the gate/trigger actually used.
+  const exec = String(signal?.execution_tf || signal?.timeframe || '').toUpperCase();
+  if (exec === 'M1' || exec === 'M5' || exec === 'M15') {
+    return exec as (typeof TIMEFRAMES)[number];
+  }
   const ctx = String(signal?.context_tf || '').toUpperCase();
   if (ctx === 'M5' || ctx === 'M15') {
     return ctx as (typeof TIMEFRAMES)[number];
   }
-  return 'M5';
+  return 'M1';
 }
 
 function toCandleData(rows: CandleApiRow[] | undefined): CandlestickData[] {
@@ -868,7 +872,7 @@ export default function ScalpWorkbenchPanel() {
   const { post: postScan, loading: scanLoading, error: scanError } = useApiPost<ScalpScanResponse>();
   const { post: postExecute, loading: executingScalp } = useApiPost<ScalpExecuteResponse>();
   const [symbolOverride, setSymbolOverride] = useState('');
-  const [timeframe, setTimeframe] = useState<(typeof TIMEFRAMES)[number]>('M5');
+  const [timeframe, setTimeframe] = useState<(typeof TIMEFRAMES)[number]>('M1');
   const [candlePayload, setCandlePayload] = useState<CandleApiResponse | null>(null);
   const [chartLoading, setChartLoading] = useState(false);
   const [chartError, setChartError] = useState<string | null>(null);
@@ -897,7 +901,7 @@ export default function ScalpWorkbenchPanel() {
   const [overlayToggles, setOverlayToggles] = useState<ScalpOverlayToggles>(DEFAULT_SCALP_OVERLAY_TOGGLES);
   const [engineBOverlay, setEngineBOverlay] = useState<EngineBOverlayLike | null>(null);
   const [orderFlowPayload, setOrderFlowPayload] = useState<OrderFlowPayloadLike | null>(null);
-  const orderFlowMarkersRef = useRef<ISeriesMarkersPluginApi<Time> | null>(null);
+  const orderFlowPrimitiveRef = useRef<OrderFlowMarkerPrimitive | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const chartCaptureRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<IChartApi | null>(null);
@@ -1203,7 +1207,7 @@ export default function ScalpWorkbenchPanel() {
   }), [activeUi, aiVerdictOverlay, engineBOverlay, overlayToggles, structuralTp]);
 
   const orderFlowMarkers = useMemo(
-    () => (overlayToggles.orderFlow ? buildOrderFlowMarkers(orderFlowPayload) : []),
+    () => (overlayToggles.orderFlow ? buildOrderFlowPrimitiveMarkers(orderFlowPayload) : []),
     [orderFlowPayload, overlayToggles.orderFlow],
   );
 
@@ -1521,7 +1525,9 @@ export default function ScalpWorkbenchPanel() {
     const labelPrimitive = new ChartRightEdgeLabelPrimitive();
     candleSeries.attachPrimitive(labelPrimitive);
     rightEdgeLabelPrimitiveRef.current = labelPrimitive;
-    orderFlowMarkersRef.current = createSeriesMarkers(candleSeries, [], { zOrder: 'top' });
+    const orderFlowPrimitive = new OrderFlowMarkerPrimitive();
+    candleSeries.attachPrimitive(orderFlowPrimitive);
+    orderFlowPrimitiveRef.current = orderFlowPrimitive;
     candleSeries.setData(candleRows);
 
     for (const level of priceLevels) {
@@ -1563,7 +1569,7 @@ export default function ScalpWorkbenchPanel() {
       }
     }
     labelPrimitive.setLabels(edgeLabels, paneHeightPx);
-    orderFlowMarkersRef.current?.setMarkers(orderFlowMarkers);
+    orderFlowPrimitiveRef.current?.setMarkers(orderFlowMarkers);
 
     if (candleRows.length > 0) chart.timeScale().fitContent();
 
@@ -1584,7 +1590,7 @@ export default function ScalpWorkbenchPanel() {
       chartRef.current = null;
       candleSeriesRef.current = null;
       rightEdgeLabelPrimitiveRef.current = null;
-      orderFlowMarkersRef.current = null;
+      orderFlowPrimitiveRef.current = null;
     };
   }, [candleRows, priceLevels, orderFlowMarkers]);
 
@@ -1690,12 +1696,10 @@ export default function ScalpWorkbenchPanel() {
             <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
               <CardTitle className="flex items-center gap-2 text-base">
                 <BarChart3 className="h-4 w-4 text-primary" />
-                M5 Context Chart
-                {executionTf === 'M1' && (
-                  <Badge variant="outline" className="text-[10px] font-normal">
-                    Execution TF: M1
-                  </Badge>
-                )}
+                {timeframe} Chart
+                <Badge variant="outline" className="text-[10px] font-normal">
+                  Execution TF: {executionTf}
+                </Badge>
               </CardTitle>
               <div className="flex flex-wrap items-center gap-2">
                 {intentSourceBadge && (

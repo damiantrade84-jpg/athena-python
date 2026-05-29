@@ -514,11 +514,29 @@ export function sma(values: number[], period: number): (number | null)[] {
   return out;
 }
 
-export function vwapFromRows(highs: number[], lows: number[], closes: number[], volumes: number[]): (number | null)[] {
+export function vwapFromRows(
+  highs: number[],
+  lows: number[],
+  closes: number[],
+  volumes: number[],
+  times?: number[],
+): (number | null)[] {
   const out: (number | null)[] = [];
   let cumValue = 0;
   let cumVolume = 0;
+  let prevDay: number | null = null;
   for (let i = 0; i < closes.length; i += 1) {
+    // Session-anchor: reset the cumulative sums at each UTC-day boundary when
+    // bar times are supplied, so VWAP is a daily measure rather than a
+    // window-cumulative line drifting from the first fetched bar.
+    if (times && Number.isFinite(times[i])) {
+      const day = Math.floor(times[i] / 86400);
+      if (prevDay != null && day !== prevDay) {
+        cumValue = 0;
+        cumVolume = 0;
+      }
+      prevDay = day;
+    }
     const volume = Number.isFinite(volumes[i]) ? volumes[i] : 0;
     if (volume <= 0) {
       out.push(cumVolume > 0 ? cumValue / cumVolume : null);
@@ -807,17 +825,29 @@ function buildChartStudySnapshot(
   const lows = rows.map((row) => row.low);
   const closes = rows.map((row) => row.close);
   const volumes = rows.map((_row, idx) => baseVolumes[idx] ?? 0);
-  const useApiIndicators = isCryptoChart;
-  const ema20Values = ema(closes, 20);
-  const ema21Values = useApiIndicators && apiEma21.some((v) => v != null) ? apiEma21 : ema(closes, 21);
-  const ema50Values = useApiIndicators && apiEma50.some((v) => v != null) ? apiEma50 : ema(closes, 50);
-  const ema200Values = useApiIndicators && apiEma200.some((v) => v != null) ? apiEma200 : ema(closes, 200);
-  const dema200Values = dema(closes, 200);
-  const rsi14Values = useApiIndicators && apiRsi14.some((v) => v != null) ? apiRsi14 : rsi(closes, 14);
-  const atr14Values = useApiIndicators && apiAtr14.some((v) => v != null) ? apiAtr14 : atr(highs, lows, closes, 14);
-  const vwapValues = apiVwap.some((v) => v != null) ? apiVwap : vwapFromRows(highs, lows, closes, volumes);
-  const adx14Values = apiAdx14.some((v) => v != null) ? apiAdx14 : adx(highs, lows, closes, 14);
-  const volumeMaValues = apiVolumeMa.some((v) => v != null) ? apiVolumeMa : sma(volumes, 20);
+  // Confirmed-only indicator inputs: exclude the live/forming bar so chart
+  // indicators match Engine A's confirmed-only series. The live bar is still
+  // drawn for price (rows) but carries no indicator point.
+  const cHighs = baseRows.map((row) => row.high);
+  const cLows = baseRows.map((row) => row.low);
+  const cCloses = baseRows.map((row) => row.close);
+  const cVolumes = baseVolumes.slice();
+  const cTimes = baseRows.map((row) => timeToEpochSeconds(row.time) ?? 0);
+  // Prefer server-computed indicators (same calc_* library as Engine A) for all
+  // asset classes; fall back to local math only when the API omitted them.
+  const useApiIndicators = true;
+  const ema20Values = ema(cCloses, 20);
+  const ema21Values = useApiIndicators && apiEma21.some((v) => v != null) ? apiEma21 : ema(cCloses, 21);
+  const ema50Values = useApiIndicators && apiEma50.some((v) => v != null) ? apiEma50 : ema(cCloses, 50);
+  const ema200Values = useApiIndicators && apiEma200.some((v) => v != null) ? apiEma200 : ema(cCloses, 200);
+  const dema200Values = dema(cCloses, 200);
+  const rsi14Values = useApiIndicators && apiRsi14.some((v) => v != null) ? apiRsi14 : rsi(cCloses, 14);
+  const atr14Values = useApiIndicators && apiAtr14.some((v) => v != null) ? apiAtr14 : atr(cHighs, cLows, cCloses, 14);
+  const vwapAnchorTimes =
+    backendTf && (TF_SECONDS[backendTf] ?? 0) > 0 && (TF_SECONDS[backendTf] as number) < 86400 ? cTimes : undefined;
+  const vwapValues = apiVwap.some((v) => v != null) ? apiVwap : vwapFromRows(cHighs, cLows, cCloses, cVolumes, vwapAnchorTimes);
+  const adx14Values = apiAdx14.some((v) => v != null) ? apiAdx14 : adx(cHighs, cLows, cCloses, 14);
+  const volumeMaValues = apiVolumeMa.some((v) => v != null) ? apiVolumeMa : sma(cVolumes, 20);
 
   return {
     rows,
@@ -846,9 +876,9 @@ function buildChartStudySnapshot(
       dema200: latestFinite(dema200Values) ?? undefined,
       vwap: isCryptoChart ? latestFinite(vwapValues) ?? undefined : undefined,
       rsi14: latestFinite(rsi14Values) ?? undefined,
-      adx14: isCryptoChart ? latestFinite(adx14Values) ?? undefined : undefined,
+      adx14: latestFinite(adx14Values) ?? undefined,
       atr14: latestFinite(atr14Values) ?? undefined,
-      volume: latestFinite(volumes) ?? undefined,
+      volume: isCryptoChart ? latestFinite(cVolumes) ?? undefined : undefined,
       volumeMa: isCryptoChart ? latestFinite(volumeMaValues) ?? undefined : undefined,
     },
   };
@@ -2121,13 +2151,29 @@ export default function TVChartPanel() {
   const studyPanelLegendItems = useMemo<IndicatorLegendValue[]>(() => {
     const latest = studySnapshot.latest;
     const items: IndicatorLegendValue[] = [];
-    if (quantRsi14) items.push({ definition: STUDY_PANEL_INDICATORS.rsi14, value: latest.rsi14, precision: 2 });
-    if (isCryptoChart && quantAdx14) items.push({ definition: STUDY_PANEL_INDICATORS.adx14, value: latest.adx14, precision: 2 });
+    // Study indicators are computed on the visible chart timeframe — tag the
+    // label with that TF so they are not read as Engine A's gate values
+    // (Engine A trend ADX is D1/H4 and trend EMAs/ATR are H4).
+    const tfSuffix = backendTf ? ` ${backendTf}` : '';
+    if (quantRsi14) {
+      items.push({
+        definition: { ...STUDY_PANEL_INDICATORS.rsi14, label: `${STUDY_PANEL_INDICATORS.rsi14.label}${tfSuffix}` },
+        value: latest.rsi14,
+        precision: 2,
+      });
+    }
+    if (quantAdx14) {
+      items.push({
+        definition: { ...STUDY_PANEL_INDICATORS.adx14, label: `${STUDY_PANEL_INDICATORS.adx14.label}${tfSuffix}` },
+        value: latest.adx14,
+        precision: 2,
+      });
+    }
     if (quantAtr14) {
       items.push({
         definition: {
           ...STUDY_PANEL_INDICATORS.atr14,
-          label: isCryptoChart ? cryptoAtr14LegendLabel(chartPayload) : STUDY_PANEL_INDICATORS.atr14.label,
+          label: isCryptoChart ? cryptoAtr14LegendLabel(chartPayload) : `${STUDY_PANEL_INDICATORS.atr14.label}${tfSuffix}`,
         },
         value: latest.atr14,
       });
@@ -2135,7 +2181,7 @@ export default function TVChartPanel() {
     if (isCryptoChart && quantVolumeBars) items.push({ definition: STUDY_PANEL_INDICATORS.volume, value: latest.volume, precision: 0 });
     if (isCryptoChart && quantVolumeBars && quantVolumeMa) items.push({ definition: STUDY_PANEL_INDICATORS.volumeMa, value: latest.volumeMa, precision: 0 });
     return items;
-  }, [studySnapshot.latest, isCryptoChart, chartPayload, quantRsi14, quantAdx14, quantAtr14, quantVolumeBars, quantVolumeMa]);
+  }, [studySnapshot.latest, isCryptoChart, chartPayload, backendTf, quantRsi14, quantAdx14, quantAtr14, quantVolumeBars, quantVolumeMa]);
   const engineAParityRows = useMemo(
     () => buildEngineAParityRows(chartCandidate, studySnapshot.latest, chartPayload),
     [chartCandidate, studySnapshot.latest, chartPayload],
@@ -2748,6 +2794,16 @@ export default function TVChartPanel() {
             }
           : null,
         provider: chartPayload?.chart_provider || chartPayload?.candle_provider || null,
+        // Diagnostics-only: the indicator values actually drawn on the chart, so
+        // the backend can flag chart-vs-Engine-A divergence. Not trusted for scoring.
+        chartIndicators: {
+          timeframe: tfForBackend,
+          ema50: studySnapshot.latest.ema50 ?? null,
+          ema200: studySnapshot.latest.ema200 ?? null,
+          rsi14: studySnapshot.latest.rsi14 ?? null,
+          atr14: studySnapshot.latest.atr14 ?? null,
+          adx14: studySnapshot.latest.adx14 ?? null,
+        },
       };
       const candidateStyle = firstString(chartCandidate?.style)?.toLowerCase();
       const scoringProfile = asRecord(chartCandidate?.scoringProfile);
@@ -2885,7 +2941,7 @@ export default function TVChartPanel() {
       series.createPriceLine({ price: 30, color: 'rgba(245,240,232,0.25)', lineWidth: 1, lineStyle: LineStyle.Dashed, axisLabelVisible: true, title: '30' });
       rsiSeriesRef.current = series;
     }
-    if (isCryptoChart && quantAdx14) {
+    if (quantAdx14) {
       const pane = chart.addPane();
       pane.setStretchFactor(1);
       const paneIdx = pane.paneIndex();
@@ -3066,7 +3122,7 @@ export default function TVChartPanel() {
     pushLine(dema200SeriesRef.current, quantDema200, values.dema200 || []);
     pushLine(vwapSeriesRef.current, isCryptoChart && quantVwap, values.vwap || []);
     pushLine(rsiSeriesRef.current, quantRsi14, values.rsi14 || []);
-    pushLine(adxSeriesRef.current, isCryptoChart && quantAdx14, values.adx14 || []);
+    pushLine(adxSeriesRef.current, quantAdx14, values.adx14 || []);
     pushLine(atrSeriesRef.current, quantAtr14, values.atr14 || []);
     if (volumeSeriesRef.current) {
       if (isCryptoChart && quantVolumeBars) {
