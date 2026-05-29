@@ -54,3 +54,53 @@ def resolve_exit_mode(
         if norm is not None:
             return norm
     return DEFAULT_EXIT_MODE
+
+
+def clamp_to_advisable_pip(
+    direction: str,
+    entry: float,
+    sl: float,
+    tp1: float,
+    tp2: float,
+    pip_size: float,
+    min_pip: float | None = None,
+    max_pip: float | None = None,
+) -> dict:
+    """Clamp SL distance to a per-group advisable-pip band, RR-preserving.
+
+    Returns {"sl", "tp1", "tp2", "clamped": bool}. No-op (clamped=False) when
+    pip_size<=0, SL distance is 0, or neither bound is a positive number.
+    direction: "LONG" or "SHORT". If max_pip < min_pip, max wins.
+    """
+    out = {"sl": sl, "tp1": tp1, "tp2": tp2, "clamped": False}
+    if not pip_size or pip_size <= 0:
+        return out
+    sl_dist = abs(entry - sl)
+    if sl_dist <= 0:
+        return out
+
+    lo = min_pip * pip_size if (min_pip is not None and min_pip > 0) else None
+    hi = max_pip * pip_size if (max_pip is not None and max_pip > 0) else None
+    if lo is None and hi is None:
+        return out
+
+    new_dist = sl_dist
+    if lo is not None and new_dist < lo:
+        new_dist = lo
+    if hi is not None and new_dist > hi:  # max wins even if hi < lo
+        new_dist = hi
+    if new_dist == sl_dist:
+        return out
+
+    rr1 = abs(tp1 - entry) / sl_dist
+    rr2 = abs(tp2 - entry) / sl_dist
+    d = str(direction).upper()
+    if d == "LONG":
+        new_sl = entry - new_dist
+        new_tp1 = entry + rr1 * new_dist
+        new_tp2 = entry + rr2 * new_dist
+    else:
+        new_sl = entry + new_dist
+        new_tp1 = entry - rr1 * new_dist
+        new_tp2 = entry - rr2 * new_dist
+    return {"sl": new_sl, "tp1": new_tp1, "tp2": new_tp2, "clamped": True}
