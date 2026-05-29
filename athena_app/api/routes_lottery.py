@@ -146,6 +146,34 @@ def _lottery_ai_openai_message_text(content) -> str:
     return "\n".join(parts).strip()
 
 
+_LOTTERY_AI_REQUIRED_FIELDS = {
+    "recommended_pool",
+    "avoid_numbers",
+    "generator_mode",
+    "confidence",
+    "reasoning",
+}
+
+
+def _lottery_ai_schema_error(parsed: dict) -> str | None:
+    if not isinstance(parsed, dict):
+        return "AI response was not a JSON object"
+    missing = sorted(_LOTTERY_AI_REQUIRED_FIELDS.difference(parsed.keys()))
+    if missing:
+        return "AI response did not include required field(s): " + ", ".join(missing)
+    if not isinstance(parsed.get("recommended_pool"), list) or not parsed.get("recommended_pool"):
+        return "AI response recommended_pool must be a non-empty list"
+    if not isinstance(parsed.get("avoid_numbers"), list) or not parsed.get("avoid_numbers"):
+        return "AI response avoid_numbers must be a non-empty list"
+    if not str(parsed.get("generator_mode") or "").strip():
+        return "AI response generator_mode is empty"
+    if not str(parsed.get("confidence") or "").strip():
+        return "AI response confidence is empty"
+    if not isinstance(parsed.get("reasoning"), dict) or not parsed.get("reasoning"):
+        return "AI response reasoning must be a non-empty object"
+    return None
+
+
 def _lottery_ai_prompt_payload(
     game: str,
     start_date=None,
@@ -739,17 +767,12 @@ def api_lottery_ai_analysis():
         try:
             from ai_review_logger import (
                 AI_STATE_CAUTION,
+                AI_STATE_REVIEW_INCOMPLETE,
                 REVIEW_TYPE_LOTTERY_AI,
                 log_ai_review,
             )
 
-            _required = {
-                "recommended_pool",
-                "avoid_numbers",
-                "generator_mode",
-                "confidence",
-                "reasoning",
-            }
+            schema_error = _lottery_ai_schema_error(parsed)
             log_ai_review(
                 symbol=game,
                 asset_type="lottery",
@@ -765,18 +788,21 @@ def api_lottery_ai_analysis():
                 engine_c_state=None,
                 engine_d_state=None,
                 risk_state=None,
-                ai_review_state=AI_STATE_CAUTION,
+                ai_review_state=AI_STATE_REVIEW_INCOMPLETE if schema_error else AI_STATE_CAUTION,
                 ai_confidence=None,
                 contradictions_count=0,
-                missing_information_count=0,
+                missing_information_count=1 if schema_error else 0,
                 parse_success=True,
-                schema_valid=_required.issubset(parsed.keys()),
+                schema_valid=schema_error is None,
                 execution_allowed_before_ai=True,
                 execution_allowed_after_ai=True,
                 final_action="advisory",
             )
         except Exception as _log_exc:
             log.debug("[LOTTERY-AI] audit log failed: %s", _log_exc)
+            schema_error = _lottery_ai_schema_error(parsed)
+        if schema_error:
+            return jsonify({"error": schema_error, "raw_analysis_text": raw_text}), 400
         recommended_pool = [int(x) for x in (parsed.get("recommended_pool") or []) if str(x).strip()]
         avoid_numbers = [int(x) for x in (parsed.get("avoid_numbers") or []) if str(x).strip()]
         bonus_picks = [int(x) for x in (parsed.get("bonus_picks") or []) if str(x).strip()]

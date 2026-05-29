@@ -239,3 +239,34 @@ def test_lottery_ai_route_fails_closed_without_configured_key():
 
     assert resp.status_code == 500
     assert resp.get_json()["error"] == "AI API key not configured"
+
+
+def test_lottery_ai_route_rejects_schema_empty_model_response(monkeypatch):
+    db_path = _db_path()
+    _seed_lotto(db_path)
+    client, _app = _client(db_path)
+
+    class _FakeCompletions:
+        @staticmethod
+        def create(**_kwargs):
+            message = SimpleNamespace(content="{}")
+            return SimpleNamespace(choices=[SimpleNamespace(message=message)])
+
+    fake_client = SimpleNamespace(
+        chat=SimpleNamespace(completions=_FakeCompletions())
+    )
+    monkeypatch.setattr(
+        "athena_app.api.routes_lottery.get_ai_api_key",
+        lambda _config: "test-key",
+    )
+    monkeypatch.setattr(
+        "athena_app.api.routes_lottery.create_ai_client",
+        lambda *_args, **_kwargs: fake_client,
+    )
+
+    resp = client.post("/api/lottery/ai-analysis", json={"game": "lotto"})
+
+    assert resp.status_code == 400
+    body = resp.get_json()
+    assert "required field" in body["error"]
+    assert "recommended_pool" in body["error"]
