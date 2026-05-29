@@ -2816,6 +2816,35 @@ def fetch_mt5(pair: dict, tf: str, limit: int):
         err = mt5.last_error()
         return _mt5_fallback(f"MT5 failed: {err}")
 
+    # One-shot refetch for forex H4 when the newest bar is >1 bucket stale. MT5 can
+    # briefly omit the just-closed/forming H4 bar right after a boundary, which would
+    # otherwise surface as a STALE_DATA_PRE_SCORING:H4 false positive on confirmed-only
+    # scoring. Bounded by a small lag cap so weekend / dead-feed gaps are NOT retried;
+    # read-only refetch only — no gate, scoring, or timestamp behavior change.
+    if tf == "H4":
+        try:
+            from athena_app.services.market_state import should_refetch_forex_h4
+
+            _h4_retry, _h4_lag = should_refetch_forex_h4(pair, float(bars[-1]["time"]))
+            if _h4_retry:
+                _retry_sleep_ms = int(CONFIG.get("MT5_H4_FETCH_RETRY_SLEEP_MS", 400) or 0)
+                if _retry_sleep_ms > 0:
+                    time.sleep(min(_retry_sleep_ms, 2000) / 1000.0)
+                _retry_bars = mt5.copy_rates_from_pos(mt5_symbol, mt5_tf, 0, request_limit)
+                if _retry_bars is not None and len(_retry_bars) > 0:
+                    _, _retry_lag = should_refetch_forex_h4(
+                        pair, float(_retry_bars[-1]["time"])
+                    )
+                    log.debug(
+                        "[MT5] %s H4: one-shot refetch (lag %d->%d buckets) after stale newest bar",
+                        symbol,
+                        _h4_lag,
+                        _retry_lag,
+                    )
+                    bars = _retry_bars
+        except Exception:
+            pass
+
     # Timezone alignment: MT5 bars may use broker-aligned stamps. When the newest bar
     # is severely stale (illiquid exotics), legacy tick TZ fallback hallucinated ±60h
     # shifts — see infer_mt5_rates_time_shift_seconds + MT5_FETCH_STALE_UNSHIFTED_AGE_SEC.
@@ -2878,6 +2907,55 @@ def fetch_mt5(pair: dict, tf: str, limit: int):
                 _broker_offset_cfg,
                 shift_tag,
             )
+
+        # #region agent log — forex H4 timestamp-alignment diagnostic (read-only)
+        # Records the raw copy_rates H4 bar stamps vs the chosen shift decision so a
+        # GMT+3 broker series left unshifted (shiftTag=utc_assumed_recent) can be told
+        # apart from a genuinely lagging feed. Scoped to forex H4; no behavior change.
+        if (
+            tf == "H4"
+            and str(pair.get("type") or "").lower() == "forex"
+            and CONFIG.get("MT5_H4_ALIGN_DIAG_ENABLED", True)
+        ):
+            try:
+                from athena_app.debug_ndjson_agent import append_agent_ndjson
+
+                _broker_shift_s = _broker_offset_cfg * 3600
+                _shifted_age = _utc_now - (_newest_ts - _broker_shift_s)
+
+                def _align_iso(_e: float) -> str:
+                    return datetime.fromtimestamp(int(_e), tz=timezone.utc).isoformat()
+
+                _raw_tail = [int(b["time"]) for b in bars[-6:]]
+                append_agent_ndjson(
+                    {
+                        "hypothesisId": "H_mt5_h4_align",
+                        "location": "athena.fetch_mt5",
+                        "message": "forex_h4_shift_decision",
+                        "runId": "verify",
+                        "data": {
+                            "symbol": symbol,
+                            "mt5Symbol": mt5_symbol,
+                            "tf": tf,
+                            "shiftTag": shift_tag,
+                            "offsetSeconds": int(offset_seconds),
+                            "brokerOffsetCfgHours": _broker_offset_cfg,
+                            "utcNowEpoch": int(_utc_now),
+                            "utcNowIso": _align_iso(_utc_now),
+                            "rawNewestEpoch": int(_newest_ts),
+                            "rawNewestIso": _align_iso(_newest_ts),
+                            "shiftedNewestIso": _align_iso(_newest_ts - offset_seconds),
+                            "unshiftedAgeSec": round(_unshifted_age, 1),
+                            "shiftedAgeSec": round(_shifted_age, 1),
+                            "rawTailEpochs": _raw_tail,
+                            "rawTailIso": [_align_iso(e) for e in _raw_tail],
+                            "rawBarCount": int(len(bars)),
+                        },
+                    }
+                )
+            except Exception:
+                pass
+        # #endregion
 
     candles = []
     for b in bars:

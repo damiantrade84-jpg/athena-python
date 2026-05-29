@@ -456,3 +456,48 @@ def get_tf_market_state(
         time_now=time_now,
         offset_hours=offset_hours,
     )
+
+
+def should_refetch_forex_h4(
+    pair: dict[str, Any] | None,
+    newest_bar_epoch: float | int | None,
+    *,
+    time_now: Optional[float] = None,
+    config: dict[str, Any] | None = None,
+) -> tuple[bool, int]:
+    """Decide whether a one-shot forex H4 refetch is warranted.
+
+    MT5 can briefly omit the just-closed/forming H4 bar right after a boundary, so the
+    newest fetched bar lags the current bucket and would surface as
+    ``STALE_DATA_PRE_SCORING:H4`` on confirmed-only scoring. Returns
+    ``(should_retry, bucket_lag)``. A retry is warranted only when the lag is in
+    ``2..MT5_H4_FETCH_RETRY_MAX_LAG`` buckets — the cap excludes weekend / dead-feed
+    gaps. Bucket math is offset-aware and shift-invariant, so the raw broker-stamped bar
+    time can be passed directly. Pure decision helper (no I/O).
+    """
+    cfg = config if isinstance(config, dict) else CONFIG
+    if not isinstance(pair, dict):
+        return False, 0
+    if str(pair.get("type") or "").lower() != "forex":
+        return False, 0
+    if not cfg.get("MT5_H4_FETCH_RETRY_ENABLED", True):
+        return False, 0
+    try:
+        newest = float(newest_bar_epoch)
+    except (TypeError, ValueError):
+        return False, 0
+    if newest <= 0:
+        return False, 0
+
+    now = time_now if time_now is not None else time.time()
+    offset_hours = market_state_offset_hours(pair, "H4")
+    now_bucket = get_bucket_start_epoch("H4", now, offset_hours=offset_hours)
+    last_bucket = get_bucket_start_epoch("H4", newest, offset_hours=offset_hours)
+    lag = max(0, int((int(now_bucket) - int(last_bucket)) // _timeframe_seconds("H4")))
+
+    try:
+        max_lag = int(cfg.get("MT5_H4_FETCH_RETRY_MAX_LAG", 3) or 3)
+    except (TypeError, ValueError):
+        max_lag = 3
+
+    return (2 <= lag <= max_lag), lag

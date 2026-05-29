@@ -137,6 +137,21 @@ MT5_BROKER_UTC_OFFSET: 3
 # Set to "auto" or remove to let market_state.py compute from MT5_BROKER_UTC_OFFSET.
 FOREX_H4_RESAMPLE_OFFSET_HOURS: 1.0
 
+# Read-only diagnostic: log raw MT5 copy_rates H4 bar stamps + the chosen time-shift
+# decision (shiftTag) for forex into debug NDJSON, to distinguish broker-stamped
+# (GMT+3) unshifted bars from a genuinely lagging feed. No behavior change. Toggle off
+# once the forex H4 stale_multi_bucket false-positive cause is confirmed.
+MT5_H4_ALIGN_DIAG_ENABLED: true
+
+# Forex H4 one-shot refetch: MT5 can briefly omit the just-closed/forming H4 bar right
+# after a boundary, which surfaces as a STALE_DATA_PRE_SCORING:H4 false positive. When
+# the newest fetched H4 bar lags 2..MAX_LAG buckets, refetch once (after SLEEP_MS) to
+# pick up the missing recent bar. The lag cap keeps weekend / dead-feed gaps from being
+# retried. Read-only refetch — does not change gates, scoring, or timestamp handling.
+MT5_H4_FETCH_RETRY_ENABLED: true
+MT5_H4_FETCH_RETRY_MAX_LAG: 3
+MT5_H4_FETCH_RETRY_SLEEP_MS: 400
+
 # Broker candle safety: do not turn MT5 error payloads with Polygon/yfinance
 # fallback candles into execution-eligible Engine A candles.
 MT5_CANDLE_FALLBACK_ENABLED: false
