@@ -428,6 +428,30 @@ function formatNumberList(numbers: number[] | undefined) {
   return (numbers ?? []).join(', ');
 }
 
+function firstValidBonusPick(picks: number[] | undefined, config: GameConfig) {
+  for (const pick of picks ?? []) {
+    if (!Number.isFinite(pick)) continue;
+    if (config.bonusMin !== undefined && config.bonusMax !== undefined) {
+      if (pick >= config.bonusMin && pick <= config.bonusMax) return pick;
+      continue;
+    }
+    return pick;
+  }
+  return undefined;
+}
+
+function resolveScoreBonus(
+  config: GameConfig,
+  scoreBonusInput: string,
+  aiBonusPicks: number[] | undefined,
+  explicit?: number,
+) {
+  if (explicit !== undefined && Number.isFinite(explicit)) return explicit;
+  const fromInput = optionalInt(scoreBonusInput);
+  if (fromInput !== undefined) return fromInput;
+  return firstValidBonusPick(aiBonusPicks, config);
+}
+
 function formatValue(value: unknown, digits = 2) {
   if (value === null || value === undefined || value === '') return 'n/a';
   if (typeof value === 'number') return Number.isInteger(value) ? String(value) : value.toFixed(digits);
@@ -846,7 +870,7 @@ export default function LotteryLabPanel() {
   }, [buildFilters, effectiveIncludeBonus, endDate, game, generatorMode, postLottery, showToast, startDate, ticketCount]);
 
   const scoreTicketNumbers = useCallback(async (numbers: number[], bonus?: number) => {
-    const bonusValue = bonus !== undefined ? bonus : optionalInt(scoreBonus);
+    const bonusValue = resolveScoreBonus(config, scoreBonus, aiAnalysis?.bonus_picks, bonus);
     const validation = validateMainNumbers(numbers, config);
     const bonusValidation = effectiveIncludeBonus ? validateBonusNumber(bonusValue, config) : null;
     if (validation) {
@@ -858,6 +882,9 @@ export default function LotteryLabPanel() {
       return null;
     }
     setScoreInput(formatNumberList(numbers));
+    if (effectiveIncludeBonus && bonusValue !== undefined) {
+      setScoreBonus(String(bonusValue));
+    }
     const ticket: Record<string, unknown> = { numbers };
     if (effectiveIncludeBonus) ticket.bonus = bonusValue;
     const result = await postLottery<ScoreTicketResponse>(
@@ -874,16 +901,21 @@ export default function LotteryLabPanel() {
     );
     if (result) setScoredTicket(result);
     return result;
-  }, [config, effectiveIncludeBonus, endDate, game, postLottery, scoreBonus, showToast, startDate]);
+  }, [aiAnalysis?.bonus_picks, config, effectiveIncludeBonus, endDate, game, postLottery, scoreBonus, showToast, startDate]);
 
   const handleScoreTicket = useCallback(async () => {
     await scoreTicketNumbers(parseNumberList(scoreInput));
   }, [scoreInput, scoreTicketNumbers]);
 
   const scoreWheelTicket = useCallback(async (ticket: number[]) => {
-    const result = await scoreTicketNumbers(ticket);
+    const bonusValue = resolveScoreBonus(config, scoreBonus, aiAnalysis?.bonus_picks);
+    if (effectiveIncludeBonus && bonusValue === undefined) {
+      showToast('Bonus required — set it in Score Ticket or run AI analysis first', 'error');
+      return;
+    }
+    const result = await scoreTicketNumbers(ticket, bonusValue);
     if (result) showToast('Ticket scored', 'success');
-  }, [scoreTicketNumbers, showToast]);
+  }, [aiAnalysis?.bonus_picks, config, effectiveIncludeBonus, scoreBonus, scoreTicketNumbers, showToast]);
 
   const sendAiPoolToWheel = useCallback(() => {
     const pool = aiAnalysis?.recommended_pool;
@@ -896,11 +928,22 @@ export default function LotteryLabPanel() {
     if (mode && GENERATOR_MODES.some((item) => item.value === mode)) {
       setGeneratorMode(mode);
     }
+    const bonusPick = firstValidBonusPick(aiAnalysis?.bonus_picks, config);
+    if (bonusPick !== undefined) {
+      setScoreBonus(String(bonusPick));
+    }
+    const sumFilter = aiAnalysis?.sum_filter;
+    if (sumFilter && typeof sumFilter === 'object') {
+      const min = (sumFilter as { min?: number }).min;
+      const max = (sumFilter as { max?: number }).max;
+      if (typeof min === 'number' && Number.isFinite(min)) setMinSum(String(min));
+      if (typeof max === 'number' && Number.isFinite(max)) setMaxSum(String(max));
+    }
     setWheelResult(null);
     setWheelError(null);
     setActiveTab('tools');
     showToast('Recommended pool sent to Wheel', 'success');
-  }, [aiAnalysis, showToast]);
+  }, [aiAnalysis, config, showToast]);
 
   const handleWheel = useCallback(async () => {
     const chosenNumbers = parseNumberList(wheelNumbers);
