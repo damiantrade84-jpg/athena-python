@@ -37,6 +37,8 @@ from datetime import datetime, timezone
 
 from symbol_matching import symbols_match
 
+import exit_policy
+
 log = logging.getLogger("timed_exit")
 
 _be_done: set = set()
@@ -678,6 +680,47 @@ def _get_timed_cfg(config_fn) -> dict:
 
 def _is_engine_d_engine(engine: str) -> bool:
     return str(engine or "").strip().lower() in ("scalp", "engine d", "scalp_vp")
+
+
+# Style-timeframe minutes for time_based exit (N bars * tf minutes).
+_TF_MINUTES = {"M1": 1, "M5": 5, "M15": 15, "M30": 30, "H1": 60, "H4": 240, "D1": 1440}
+_TIME_EXIT_BARS_DEFAULT = {"scalp": 12, "intraday": 18, "swing": 10}
+
+
+def _is_engine_a_engine(engine: str | None) -> bool:
+    return str(engine or "").strip().lower() in ("engine_a", "engine a")
+
+
+def _engine_a_exit_dispatch(
+    engine, exit_mode, mins_open: float, close_after_min: float
+) -> str:
+    """Decide monitor handling for one trade row. Returns:
+      'trail'       -> run today's trail/profit-protect logic (adaptive Engine A,
+                       any non-Engine-A, or an unknown/legacy mode — fail-safe to
+                       current behavior).
+      'hold'        -> broker SL/TP bracket only; monitor takes no action this tick
+                       (traditional_static / manual).
+      'timed_close' -> close now (time_based and the N-bar window has elapsed).
+    """
+    if not _is_engine_a_engine(engine):
+        return "trail"
+    em = exit_policy.normalize_mode(exit_mode)
+    if em is None or exit_policy.uses_trail_management(em):
+        return "trail"
+    if exit_policy.uses_timed_close(em):
+        return "timed_close" if mins_open >= close_after_min else "hold"
+    return "hold"  # traditional_static / manual
+
+
+def _time_close_after_min(tcfg: dict, style: str) -> float:
+    """N bars * style-timeframe minutes. Bars from the merged tcfg
+    ('engine_a_time_exit_bars'); timeframe from tcfg['trail_timeframe'][style]
+    (falls back to H4=240)."""
+    bars_map = (tcfg or {}).get("engine_a_time_exit_bars") or _TIME_EXIT_BARS_DEFAULT
+    bars = float(bars_map.get(style, bars_map.get("intraday", 18)))
+    tf_map = (tcfg or {}).get("trail_timeframe") or {}
+    tf = str(tf_map.get(style, "H4")).upper()
+    return bars * float(_TF_MINUTES.get(tf, 240))
 
 
 def _activation_r_for(tcfg: dict, style: str) -> float:
