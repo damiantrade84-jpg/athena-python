@@ -952,6 +952,27 @@ def calc_levels(
     }
 
 
+def select_overlay_sl(
+    direction: str, math_sl: float, struct_sl: float, floor_atr: bool
+) -> float:
+    """Combine the ATR (math) SL with an Engine B structural SL for Engine A.
+
+    direction: "LONG" or "SHORT".
+    math_sl:   ATR-based SL from calc_levels (the baseline distance).
+    struct_sl: structural SL recommended by Engine B.
+
+    floor_atr=False (legacy/default): pick the tighter stop (closer to price).
+        LONG -> max(...), SHORT -> min(...).
+    floor_atr=True: floor the stop at the ATR distance — the structural SL may
+        only WIDEN the stop, never tighten it inside the ATR baseline. This
+        avoids placing the stop on swing/sweep liquidity that gets hunted.
+        LONG -> min(...) (lower = wider), SHORT -> max(...) (higher = wider).
+    """
+    if floor_atr:
+        return min(math_sl, struct_sl) if direction == "LONG" else max(math_sl, struct_sl)
+    return max(math_sl, struct_sl) if direction == "LONG" else min(math_sl, struct_sl)
+
+
 def calc_fib(candles: list) -> dict:
     """Calculate Fibonacci retracement levels from last 50 candles' high/low range."""
 

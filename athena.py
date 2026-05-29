@@ -3084,6 +3084,7 @@ from indicators import (  # noqa: E402
     calc_fib_proximity,
     calc_stochastic,
     calc_levels,
+    select_overlay_sl,
     calc_indicators,
     calc_fib,
     calc_indicators_with_normalized,
@@ -13544,12 +13545,15 @@ def analyze_pair(
                 if structure_data.get("recommended_stop_loss"):
                     _struct_sl = float(structure_data["recommended_stop_loss"])
                     _math_sl = float(lvl["sl"])
-                    # LONG: SL below price - max() picks closer (higher) = tighter
-                    # SHORT: SL above price - min() picks closer (lower) = tighter
-                    lvl["sl"] = (
-                        max(_math_sl, _struct_sl)
-                        if direction == "LONG"
-                        else min(_math_sl, _struct_sl)
+                    # Legacy (floor off): pick the tighter stop (closer to price).
+                    # Floor on (ENGINE_A_STRUCTURAL_SL_FLOOR_ATR): structural SL may
+                    # only widen the ATR stop, never tighten it inside the ATR
+                    # baseline — avoids stop-hunt-prone stops on swing/sweep levels.
+                    lvl["sl"] = select_overlay_sl(
+                        direction,
+                        _math_sl,
+                        _struct_sl,
+                        bool(CONFIG.get("ENGINE_A_STRUCTURAL_SL_FLOOR_ATR", False)),
                     )
 
                     # Hard SL distance cap - prevents runaway structural overrides.
