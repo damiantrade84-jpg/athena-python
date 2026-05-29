@@ -29,6 +29,7 @@ from intermarket import build_scan_snapshot
 from market_structure import NakedEngine, engine_b_confidence_passes
 from guardian import pre_trade_check as _guardian_pre_trade
 from scoring import get_pair_score_group
+from exit_mode_apply import apply_engine_a_exit_mode
 from sqlite_instrumentation import (
     timed_sqlite_connect,
     timed_sqlite_commit,
@@ -1017,6 +1018,13 @@ def api_quick_execute():
 
         _hydrate_execution_candle_quality(sig, _r=_r)
 
+        # Engine A exit-mode selector (Plan 2): resolve mode + advisable-pip clamp
+        # BEFORE risk_check, so the clamped SL/TP is sized and gated normally.
+        # No-op for non-Engine-A signals (exit_mode stays unset -> monitor trails).
+        apply_engine_a_exit_mode(
+            sig, _audit_engine_from_signal(sig), symbol_info, _r.CONFIG, level_override
+        )
+
         approval = risk_check(
             signal=sig,
             account_balance=account["balance"],
@@ -1091,6 +1099,7 @@ def api_quick_execute():
                         json.dumps(_audit["factors"]),
                         _audit["max_score"],
                         _audit["score_pct"],
+                        sig.get("exit_mode"),
                     ))
                 with timed_sqlite_connect(
                     _r.AUDIT_DB, timeout=15.0, label="quick_execute.audit_success.connect"
@@ -1099,8 +1108,8 @@ def api_quick_execute():
                         con,
                         "INSERT INTO audit_log(ts,pair,score,engine,direction,trend,grade,edge_prob,risk,style,"
                         "entry_price,sl,tp,volume,regime,risk_amount,risk_pct,ticket,fee_cost,factors_json,"
-                        "max_score,score_pct) "
-                        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                        "max_score,score_pct,exit_mode) "
+                        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                         _audit_rows,
                         label="quick_execute.audit_success.insert",
                     )
@@ -1938,6 +1947,12 @@ def api_execute():
 
         _hydrate_execution_candle_quality(sig, _r=_r)
 
+        # Engine A exit-mode selector (Plan 2): resolve mode + advisable-pip clamp
+        # before risk_check (audit H1 — same as quick_execute path).
+        apply_engine_a_exit_mode(
+            sig, _audit_engine_from_signal(sig), symbol_info, _r.CONFIG, level_override
+        )
+
         approval = risk_check(
             signal=sig,
             account_balance=account["balance"],
@@ -2034,13 +2049,14 @@ def api_execute():
                             result.get("slippageBps"),
                             _eng_b_data.get("max_possible") if _audit_engine == "engine_b" else sig.get("maxScore"),
                             _eng_b_data.get("pct") if _audit_engine == "engine_b" else None,
+                            sig.get("exit_mode"),
                         ))
                     timed_sqlite_executemany_write(
                         con,
                         "INSERT INTO audit_log(ts,pair,score,engine,direction,trend,grade,edge_prob,risk,style,"
                         "entry_price,sl,tp,volume,regime,risk_amount,risk_pct,ticket,fee_cost,factors_json,"
-                        "signal_price_ref,slippage_bps,max_score,score_pct) "
-                        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                        "signal_price_ref,slippage_bps,max_score,score_pct,exit_mode) "
+                        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                         _audit_rows,
                         label="execute.audit_success.insert",
                     )

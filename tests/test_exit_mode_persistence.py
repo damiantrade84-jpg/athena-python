@@ -20,6 +20,18 @@ def test_exit_mode_in_monitor_select():
     assert "FROM   audit_log" in mon_src
 
 
+def test_exit_mode_wired_into_all_three_engine_a_paths():
+    exec_src = _read("execution.py")
+    at_src = _read("auto_trader.py")
+    # helper called in quick_execute + execute (execution.py) and auto_trader
+    assert exec_src.count("apply_engine_a_exit_mode(") == 2
+    assert "apply_engine_a_exit_mode(" in at_src
+    # exit_mode present in each success-INSERT column list
+    assert "max_score,score_pct,exit_mode" in exec_src                       # quick_execute
+    assert "signal_price_ref,slippage_bps,max_score,score_pct,exit_mode" in exec_src  # execute
+    assert "fee_cost, exit_mode)" in at_src                                  # auto_trader
+
+
 def test_alter_adds_exit_mode_when_missing():
     con = sqlite3.connect(":memory:")
     con.execute("CREATE TABLE audit_log (id INTEGER PRIMARY KEY, ts TEXT)")

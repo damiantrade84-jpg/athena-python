@@ -2202,6 +2202,14 @@ class AutoTrader:
 
             sizing_override = cfg.get("AUTO_TRADE_SIZING_OVERRIDE", 1.0)
 
+            # Engine A exit-mode selector (Plan 2): resolve mode + advisable-pip
+            # clamp before risk_check so auto-traded Engine A signals honor the
+            # selected mode (audit H1). No-op for non-Engine-A signals.
+            from exit_mode_apply import apply_engine_a_exit_mode
+            apply_engine_a_exit_mode(
+                signal, _signal_engine(signal), symbol_info, cfg, None
+            )
+
             approval = risk_check(
                 signal=signal,
                 account_balance=account["balance"],
@@ -2438,8 +2446,8 @@ class AutoTrader:
                         "(ts, pair, score, engine, direction, asset_class, regime,"
                         " entry_price, sl, tp, volume, risk_amount, risk_pct,"
                         " ticket, grade, signal_price_ref, slippage_bps,"
-                        " max_score, score_pct, factors_json, edge_prob, style, fee_cost)"
-                        " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                        " max_score, score_pct, factors_json, edge_prob, style, fee_cost, exit_mode)"
+                        " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                         (
                             datetime.now(timezone.utc).isoformat(),
                             signal.get("pair"),
@@ -2464,6 +2472,7 @@ class AutoTrader:
                             signal.get("calibratedProbability", signal.get("edgeProbability")),
                             _resolve_audit_style(signal.get("style"), signal.get("type")),
                             result.get("feeCost"),
+                            signal.get("exit_mode"),
                         ),
                         label="auto.audit_success.insert",
                     )
