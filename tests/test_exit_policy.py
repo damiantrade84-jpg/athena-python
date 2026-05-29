@@ -117,3 +117,22 @@ def test_clamp_noop_when_within_band():
 def test_clamp_noop_when_sl_dist_zero():
     r = ep.clamp_to_advisable_pip("LONG", 100.0, 100.0, 102.0, 103.0, pip_size=0.01, min_pip=10)
     assert r["clamped"] is False
+
+
+def test_uses_trail_management_only_for_adaptive():
+    assert ep.uses_trail_management("adaptive_trail") is True
+    for m in ("traditional_static", "manual", "time_based", "junk", None):
+        assert ep.uses_trail_management(m) is False
+
+
+def test_uses_fixed_broker_tp_for_static_manual_time():
+    for m in ("traditional_static", "manual", "time_based"):
+        assert ep.uses_fixed_broker_tp(m) is True
+    for m in ("adaptive_trail", "junk", None):
+        assert ep.uses_fixed_broker_tp(m) is False
+
+
+def test_uses_timed_close_only_for_time_based():
+    assert ep.uses_timed_close("time_based") is True
+    for m in ("traditional_static", "manual", "adaptive_trail", "junk", None):
+        assert ep.uses_timed_close(m) is False

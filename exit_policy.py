@@ -104,3 +104,18 @@ def clamp_to_advisable_pip(
         new_tp1 = entry - rr1 * new_dist
         new_tp2 = entry - rr2 * new_dist
     return {"sl": new_sl, "tp1": new_tp1, "tp2": new_tp2, "clamped": True}
+
+
+def uses_trail_management(mode: str | None) -> bool:
+    """True only for adaptive_trail — the only mode the chandelier/profit-protect runs for."""
+    return normalize_mode(mode) == EXIT_MODE_ADAPTIVE
+
+
+def uses_fixed_broker_tp(mode: str | None) -> bool:
+    """True when the broker order carries a fixed TP and no trailing manages it."""
+    return normalize_mode(mode) in (EXIT_MODE_STATIC, EXIT_MODE_MANUAL, EXIT_MODE_TIME)
+
+
+def uses_timed_close(mode: str | None) -> bool:
+    """True only for time_based — a timed close runs alongside the fixed SL/TP bracket."""
+    return normalize_mode(mode) == EXIT_MODE_TIME
