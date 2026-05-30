@@ -64,6 +64,8 @@ import {
   postChartReview,
 } from '@/lib/aiChartReview';
 import VolumeModeField from '@/components/execution/VolumeModeField';
+import ExitModeField from '@/components/execution/ExitModeField';
+import { useExitModeState } from '@/hooks/useExitModeState';
 import {
   fetchRiskPreview,
   formatRiskPreviewLine,
@@ -2030,6 +2032,7 @@ export default function TVChartPanel() {
     sizingOverride,
     setSizingOverride,
   } = useExecutionVolumeState('min_lot');
+  const { exitMode, setExitMode } = useExitModeState('default');
   const [riskPreviewLine, setRiskPreviewLine] = useState<string | null>(null);
   const [timeframeAutoMode, setTimeframeAutoMode] = useState(true);
   const [intentSignal, setIntentSignal] = useState<EngineASignal | null>(null);
@@ -2437,6 +2440,7 @@ export default function TVChartPanel() {
         pipMode: String(chartCandidate.style || 'swing'),
         volumeMode,
         sizingOverride,
+        exitMode,
       });
       const result = await apiClient.postJson('/api/quick-execute', payload) as {
         success?: boolean;
@@ -3492,6 +3496,11 @@ export default function TVChartPanel() {
                 onVolumeModeChange={setVolumeMode}
                 sizingOverride={sizingOverride}
                 onSizingOverrideChange={setSizingOverride}
+              />
+              <ExitModeField
+                compact
+                exitMode={exitMode}
+                onExitModeChange={setExitMode}
               />
               {riskPreviewLine && (
                 <p className="font-mono text-[10px] text-muted-foreground">{riskPreviewLine}</p>

@@ -31,6 +31,8 @@ import { fetchVisionCandlePayload } from '@/lib/visionReview';
 import apiClient from '@/lib/apiClient';
 import { buildQuickExecutePayload } from '@/lib/manualExecuteHelpers';
 import VolumeModeField from '@/components/execution/VolumeModeField';
+import ExitModeField from '@/components/execution/ExitModeField';
+import { useExitModeState } from '@/hooks/useExitModeState';
 import {
   fetchRiskPreview,
   formatRiskPreviewLine,
@@ -305,6 +307,7 @@ export default function SignalsPanel() {
     sizingOverride,
     setSizingOverride,
   } = useExecutionVolumeState('min_lot');
+  const { exitMode, setExitMode } = useExitModeState('default');
   const [riskPreviewLine, setRiskPreviewLine] = useState<string | null>(null);
 
   // Hot-cached snapshot from server-side last scan (Engine A only).
@@ -622,6 +625,7 @@ export default function SignalsPanel() {
       pipMode: String(effectiveStyle),
       volumeMode,
       sizingOverride,
+      exitMode,
     });
     setExecuting(true);
     try {
@@ -646,7 +650,7 @@ export default function SignalsPanel() {
       setConfirmRow(null);
       setPendingStyle('auto');
     }
-  }, [confirmRow, style, pendingStyle, volumeMode, sizingOverride, showToast]);
+  }, [confirmRow, style, pendingStyle, volumeMode, sizingOverride, exitMode, showToast]);
 
   const lastScannedAtA = scanCacheAMeta?.scannedAt ?? (lastScan as ScanResponse | null)?.scannedAt;
   const lastScannedAtB = scanCacheBMeta?.scannedAt;
@@ -907,6 +911,11 @@ export default function SignalsPanel() {
                           onVolumeModeChange={setVolumeMode}
                           sizingOverride={sizingOverride}
                           onSizingOverrideChange={setSizingOverride}
+                        />
+                        <ExitModeField
+                          compact
+                          exitMode={exitMode}
+                          onExitModeChange={setExitMode}
                         />
                         <div className="grid grid-cols-3 gap-2">
                           <Button
@@ -1245,6 +1254,11 @@ export default function SignalsPanel() {
                   onVolumeModeChange={setVolumeMode}
                   sizingOverride={sizingOverride}
                   onSizingOverrideChange={setSizingOverride}
+                />
+                <ExitModeField
+                  compact
+                  exitMode={exitMode}
+                  onExitModeChange={setExitMode}
                 />
                 {riskPreviewLine && (
                   <div className="font-mono text-[10px] text-muted-foreground">{riskPreviewLine}</div>
