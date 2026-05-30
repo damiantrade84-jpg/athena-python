@@ -8,6 +8,17 @@ import type {
 export type QuickExecuteStyle = 'scalp' | 'intraday' | 'swing' | 'auto';
 export type ExecutionVolumeMode = 'min_lot' | 'calculated';
 
+export type ExitMode = 'traditional_static' | 'adaptive_trail' | 'manual' | 'time_based';
+// 'default' = no per-trade override; backend resolves per-group -> global.
+export type ExitModeSelection = ExitMode | 'default';
+
+export function buildExitModePayload(
+  args: { exitMode?: ExitModeSelection } = {},
+): { exit_mode?: ExitMode } {
+  const m = args.exitMode;
+  return m && m !== 'default' ? { exit_mode: m } : {};
+}
+
 export interface ExecutionVolumeArgs {
   volumeMode?: ExecutionVolumeMode;
   sizingOverride?: number;
@@ -118,14 +129,17 @@ export function buildQuickExecutePayload(args: {
   pipMode: string;
   volumeMode?: ExecutionVolumeMode;
   sizingOverride?: number;
+  exitMode?: ExitModeSelection;
 }): Record<string, unknown> {
-  const { signal, engineBOverlay, isEngineBOnly, pipMode, volumeMode, sizingOverride } = args;
+  const { signal, engineBOverlay, isEngineBOnly, pipMode, volumeMode, sizingOverride, exitMode } = args;
   const signalPayload = isEngineBOnly ? signal : stripEngineBFromSignal(signal);
   const nakedData = isEngineBOnly
     ? (signal.naked_data ?? signal.engine_b ?? {})
     : {};
   const effectiveStyle = pipMode || signal.style || 'swing';
   const volumePayload = buildExecutionVolumePayload({ volumeMode, sizingOverride });
+  // Per-trade exit-mode override is Engine-A only (backend no-ops it for engine_b).
+  const exitModePayload = isEngineBOnly ? {} : buildExitModePayload({ exitMode });
   return {
     signal: {
       ...signalPayload,
@@ -141,6 +155,7 @@ export function buildQuickExecutePayload(args: {
       tp2: signal.tp2 ?? signal.tp,
       style: effectiveStyle,
       source: isEngineBOnly ? 'engine_b' : 'engine_a',
+      ...exitModePayload,
     },
     engine_b: (engineBOverlay ?? nakedData) as Record<string, unknown>,
     pip_mode: effectiveStyle,
