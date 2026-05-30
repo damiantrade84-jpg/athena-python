@@ -12,6 +12,8 @@ import math
 from dataclasses import replace
 from typing import Iterable
 
+import exit_policy
+
 
 _ZONE_BY_TF = {
     "M1": "scalp",
@@ -339,6 +341,9 @@ def recommendation_from_fields(
 
 def annotate_research_results(results: Iterable, cfg: dict | None = None) -> list:
     """Return result objects enriched with engine/group/context recommendation fields."""
+    cfg = cfg or {}
+    _group_map = cfg.get("engine_a_exit_mode_by_score_group") or {}
+    _global_default = cfg.get("engine_a_exit_mode_global_default") or exit_policy.DEFAULT_EXIT_MODE
     enriched = []
     for m in results:
         meta = strategy_research_meta(getattr(m, "strategy_name", ""), getattr(m, "family", ""))
@@ -346,6 +351,17 @@ def annotate_research_results(results: Iterable, cfg: dict | None = None) -> lis
         pair_group = infer_pair_group(getattr(m, "symbol", ""), getattr(m, "asset_class", ""))
         zone = infer_zone(getattr(m, "timeframe", ""), getattr(m, "zone", ""))
         session_bucket = infer_session_bucket(getattr(m, "timeframe", ""))
+        # Report-only: which live exit mode this Engine-A row would use, and whether
+        # the research backtest faithfully represents it. Empty for non-Engine-A rows.
+        _ea_mode = ""
+        _ea_parity = ""
+        if meta["engine"] == "ENGINE_A":
+            _ea_mode = exit_policy.resolve_exit_mode(
+                per_trade=None,
+                group_default=exit_policy.group_default_for(pair_group, _group_map),
+                global_default=_global_default,
+            )
+            _ea_parity = exit_policy.exit_parity_label(_ea_mode)
         enriched.append(replace(
             m,
             engine=meta["engine"],
@@ -358,6 +374,8 @@ def annotate_research_results(results: Iterable, cfg: dict | None = None) -> lis
             zone=zone,
             session_bucket=session_bucket,
             structure_context=meta["structure_context"],
+            engine_a_exit_mode=_ea_mode,
+            engine_a_exit_parity=_ea_parity,
         ))
 
     baselines: dict[tuple[str, str, str, str], list] = {}

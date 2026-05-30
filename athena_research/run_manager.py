@@ -486,6 +486,19 @@ def run_research(
     for m in all_results:
         m.zone = tf_to_zone.get(m.timeframe, "")
 
+    # Surface the live Engine-A exit-mode config in research reports (read-only).
+    try:
+        import yaml as _yaml
+        _cfg_path = Path(__file__).resolve().parents[1] / "config.yaml"
+        with open(_cfg_path, encoding="utf-8") as _fh:
+            _live = _yaml.safe_load(_fh) or {}
+        cfg.setdefault("engine_a_exit_mode_by_score_group",
+                       _live.get("ENGINE_A_EXIT_MODE_BY_SCORE_GROUP") or {})
+        cfg.setdefault("engine_a_exit_mode_global_default",
+                       _live.get("ENGINE_A_EXIT_MODE_GLOBAL_DEFAULT") or "traditional_static")
+    except Exception as _exc:
+        log.debug("[run_manager] exit-mode map load skipped: %s", _exc)
+
     # Research-only Engine A/B attribution and group-aware recommendations.
     all_results = annotate_research_results(all_results, cfg)
 
