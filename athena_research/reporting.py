@@ -38,6 +38,7 @@ OUTPUT_COLUMNS = [
     "structure_context", "baseline_delta_pf", "baseline_delta_oos",
     "sample_ok", "recommendation",
     "backtest_exit_mode", "exit_reason_breakdown", "same_bar_policy", "atr_length",
+    "engine_a_exit_mode", "engine_a_exit_parity",
     "implementation_verdict", "implementation_scope", "implementation_blockers",
     "engine_fidelity", "fidelity_note", "trust_tier", "trust_summary",
 ]
@@ -504,6 +505,8 @@ def write_csvs(df: pd.DataFrame, run_dir: Path) -> list[Path]:
         )
     if "backtest_exit_mode" in df.columns:
         _save(_group_agg(df, "backtest_exit_mode"), "by_backtest_exit_mode.csv")
+    if "engine_a_exit_mode" in df.columns:
+        _save(_group_agg(df, "engine_a_exit_mode"), "by_engine_a_exit_mode.csv")
 
     if "market_group" in df.columns:
         _save(_group_context_breakdown(df), "group_breakdown.csv")
