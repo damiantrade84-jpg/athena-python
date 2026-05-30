@@ -136,3 +136,12 @@ def test_uses_timed_close_only_for_time_based():
     assert ep.uses_timed_close("time_based") is True
     for m in ("traditional_static", "manual", "adaptive_trail", "junk", None):
         assert ep.uses_timed_close(m) is False
+
+
+def test_exit_parity_label_by_mode():
+    assert ep.exit_parity_label("traditional_static") == "faithful"
+    assert ep.exit_parity_label("manual") == "faithful"
+    assert ep.exit_parity_label("time_based") == "timeout_proxy"
+    assert ep.exit_parity_label("adaptive_trail") == "trail_not_simulated"
+    assert ep.exit_parity_label(None) == ""
+    assert ep.exit_parity_label("junk") == ""

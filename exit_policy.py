@@ -119,3 +119,23 @@ def uses_fixed_broker_tp(mode: str | None) -> bool:
 def uses_timed_close(mode: str | None) -> bool:
     """True only for time_based — a timed close runs alongside the fixed SL/TP bracket."""
     return normalize_mode(mode) == EXIT_MODE_TIME
+
+
+def exit_parity_label(mode: str | None) -> str:
+    """Backtest-vs-live fidelity for a resolved exit mode (research reporting only).
+
+    'faithful'            -> research fixed SL/TP matches the live static bracket
+                             (traditional_static, and manual as an ATR-level proxy)
+    'timeout_proxy'       -> time_based: research times out, but at the research
+                             max-hold, not necessarily ENGINE_A_TIME_EXIT_BARS
+    'trail_not_simulated' -> adaptive_trail: live trailing is not modeled in research
+    ''                    -> unknown/None
+    """
+    m = normalize_mode(mode)
+    if m in (EXIT_MODE_STATIC, EXIT_MODE_MANUAL):
+        return "faithful"
+    if m == EXIT_MODE_TIME:
+        return "timeout_proxy"
+    if m == EXIT_MODE_ADAPTIVE:
+        return "trail_not_simulated"
+    return ""
