@@ -190,6 +190,7 @@ export type PanelId =
   | 'markets'
   | 'guardian'
   | 'aiPerformance'
+  | 'exitStrategy'
   | 'suggestedTrades';
 
 export interface LotteryNumber {
