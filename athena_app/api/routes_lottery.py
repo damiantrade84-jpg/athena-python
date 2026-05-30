@@ -14,7 +14,13 @@ from types import SimpleNamespace
 
 from flask import jsonify, request
 
-from config import create_ai_client, get_ai_api_key, get_ai_model, get_ai_provider_label
+from config import (
+    create_ai_client,
+    get_ai_model,
+    get_ai_provider_label,
+    get_ai_timeout_sec,
+    resolve_ai_review_runtime,
+)
 from lottery_service import (
     add_lottery_draw,
     clear_lottery_draws,
@@ -113,19 +119,95 @@ def _lottery_filter_args():
 def _lottery_ai_extract_json(raw_text: str) -> dict:
     text = str(raw_text or "").strip()
     if not text:
-        return {}
+        raise ValueError("AI returned empty response")
     fenced = re.sub(r"^```(?:json)?\s*|\s*```$", "", text, flags=re.IGNORECASE | re.DOTALL).strip()
     candidates = [fenced, text]
     for candidate in candidates:
         try:
-            return json.loads(candidate)
+            parsed = json.loads(candidate)
+            if isinstance(parsed, dict):
+                return parsed
         except Exception:
             pass
     start = text.find("{")
     end = text.rfind("}")
     if start >= 0 and end > start:
-        return json.loads(text[start : end + 1])
+        parsed = json.loads(text[start : end + 1])
+        if isinstance(parsed, dict):
+            return parsed
     raise ValueError("AI response was not valid JSON")
+
+
+def _lottery_ai_error_payload(
+    error: str,
+    *,
+    provider: str,
+    model: str,
+    raw_text: str = "",
+    fallback_used: bool = False,
+) -> dict:
+    return {
+        "error": error,
+        "provider": provider,
+        "model": model,
+        "fallback_used": fallback_used,
+        "raw_analysis_text": str(raw_text or "")[:2000],
+    }
+
+
+def _lottery_ai_runtime(cfg: dict) -> dict:
+    requested = str(cfg.get("LOTTERY_AI_PROVIDER") or "grok").strip() or "grok"
+    runtime = resolve_ai_review_runtime(cfg, requested=requested)
+    provider = str(runtime.get("provider") or requested).strip() or requested
+    model = (
+        str(cfg.get("LOTTERY_AI_MODEL") or "").strip()
+        or get_ai_model(cfg, "AI_MODEL", "grok-4.3", provider=provider)
+    )
+    try:
+        max_tokens = int(cfg.get("LOTTERY_AI_MAX_TOKENS") or 4000)
+    except (TypeError, ValueError):
+        max_tokens = 4000
+    max_tokens = max(256, min(max_tokens, 16000))
+    reasoning_effort = str(cfg.get("LOTTERY_AI_REASONING_EFFORT") or "low").strip().lower() or "low"
+    timeout_sec = get_ai_timeout_sec(cfg, "LOTTERY_AI_TIMEOUT_SEC")
+    return {
+        "provider": provider,
+        "api_key": str(runtime.get("api_key") or ""),
+        "fallback_used": bool(runtime.get("fallbackUsed") or runtime.get("fallback_used")),
+        "model": model,
+        "max_tokens": max_tokens,
+        "reasoning_effort": reasoning_effort,
+        "timeout_sec": timeout_sec,
+        "provider_label": get_ai_provider_label(cfg, provider=provider),
+    }
+
+
+def _lottery_ai_completion_kwargs(cfg: dict, runtime: dict, prompt: str) -> dict:
+    temp = float(cfg.get("AI_TEMPERATURE", 0.3))
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "You are a lottery number analyst. Reply with a single valid JSON object "
+                "exactly matching the schema the user requested. No markdown fences, no preamble."
+            ),
+        },
+        {"role": "user", "content": prompt},
+    ]
+    kwargs = {
+        "model": runtime["model"],
+        "max_tokens": runtime["max_tokens"],
+        "temperature": temp,
+        "messages": messages,
+    }
+    provider = runtime["provider"]
+    if provider in ("openai", "grok"):
+        kwargs["response_format"] = _lottery_ai_response_format()
+    if provider == "openai":
+        kwargs["reasoning"] = {"effort": runtime["reasoning_effort"]}
+    if provider == "grok":
+        kwargs["timeout"] = runtime["timeout_sec"]
+    return kwargs
 
 
 def _lottery_ai_openai_message_text(content) -> str:
@@ -757,8 +839,8 @@ def api_lottery_bonus_intelligence():
 
 def api_lottery_ai_analysis():
     try:
-        ai_key = get_ai_api_key(CONFIG)
-        if not ai_key:
+        runtime = _lottery_ai_runtime(CONFIG)
+        if not runtime["api_key"]:
             return jsonify({"error": "AI API key not configured"}), 500
 
         data = request.get_json(silent=True) or {}
@@ -784,34 +866,28 @@ def api_lottery_ai_analysis():
             z_threshold=z_threshold,
             db_path=_AUDIT_DB,
         )
-        _lottery_model = (
-            str(CONFIG.get("LOTTERY_AI_MODEL") or "").strip()
-            or get_ai_model(CONFIG, "AI_MODEL", "grok-4.3")
+        _lottery_model = runtime["model"]
+        _lottery_provider = runtime["provider"]
+        _lottery_provider_label = runtime["provider_label"]
+        _fallback_used = runtime["fallback_used"]
+        client = create_ai_client(
+            CONFIG,
+            api_key=runtime["api_key"],
+            provider=_lottery_provider,
         )
-        _temp = float(CONFIG.get("AI_TEMPERATURE", 0.3))
-        client = create_ai_client(CONFIG, api_key=ai_key)
         completion = client.chat.completions.create(
-            model=_lottery_model,
-            max_tokens=1800,
-            temperature=_temp,
-            response_format=_lottery_ai_response_format(),
-            messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        "You are a lottery number analyst. Reply with a single valid JSON object "
-                        "exactly matching the schema the user requested. No markdown fences, no preamble."
-                    ),
-                },
-                {"role": "user", "content": analytics["prompt"]},
-            ],
+            **_lottery_ai_completion_kwargs(CONFIG, runtime, analytics["prompt"])
         )
         choice = completion.choices[0].message if completion.choices else None
+        parsed_obj = getattr(choice, "parsed", None) if choice else None
         raw_text = _lottery_ai_openai_message_text(
             getattr(choice, "content", None) if choice else None
         )
         try:
-            parsed = _lottery_ai_extract_json(raw_text)
+            if isinstance(parsed_obj, dict):
+                parsed = parsed_obj
+            else:
+                parsed = _lottery_ai_extract_json(raw_text)
         except ValueError as e:
             try:
                 from ai_review_logger import (
@@ -825,7 +901,7 @@ def api_lottery_ai_analysis():
                     asset_type="lottery",
                     review_type=REVIEW_TYPE_LOTTERY_AI,
                     model=_lottery_model,
-                    provider=get_ai_provider_label(CONFIG),
+                    provider=_lottery_provider_label,
                     prompt_version="lottery_ai_v1",
                     input_packet=analytics.get("prompt", ""),
                     has_chart_image=False,
@@ -847,7 +923,15 @@ def api_lottery_ai_analysis():
                 )
             except Exception as _log_exc:
                 log.debug("[LOTTERY-AI] audit log failed: %s", _log_exc)
-            return jsonify({"error": str(e)}), 400
+            return jsonify(
+                _lottery_ai_error_payload(
+                    str(e),
+                    provider=_lottery_provider,
+                    model=_lottery_model,
+                    raw_text=raw_text,
+                    fallback_used=_fallback_used,
+                )
+            ), 400
         try:
             from ai_review_logger import (
                 AI_STATE_CAUTION,
@@ -862,7 +946,7 @@ def api_lottery_ai_analysis():
                 asset_type="lottery",
                 review_type=REVIEW_TYPE_LOTTERY_AI,
                 model=_lottery_model,
-                provider=get_ai_provider_label(CONFIG),
+                provider=_lottery_provider_label,
                 prompt_version="lottery_ai_v1",
                 input_packet=analytics.get("prompt", ""),
                 has_chart_image=False,
@@ -886,7 +970,15 @@ def api_lottery_ai_analysis():
             log.debug("[LOTTERY-AI] audit log failed: %s", _log_exc)
             schema_error = _lottery_ai_schema_error(parsed)
         if schema_error:
-            return jsonify({"error": schema_error, "raw_analysis_text": raw_text}), 400
+            return jsonify(
+                _lottery_ai_error_payload(
+                    schema_error,
+                    provider=_lottery_provider,
+                    model=_lottery_model,
+                    raw_text=raw_text,
+                    fallback_used=_fallback_used,
+                )
+            ), 400
         recommended_pool = [int(x) for x in (parsed.get("recommended_pool") or []) if str(x).strip()]
         avoid_numbers = [int(x) for x in (parsed.get("avoid_numbers") or []) if str(x).strip()]
         bonus_picks = [int(x) for x in (parsed.get("bonus_picks") or []) if str(x).strip()]

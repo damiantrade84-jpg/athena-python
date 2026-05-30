@@ -489,10 +489,13 @@ class _OpenAIResponsesChatCompletionsCompat:
             or self._owner.max_output_tokens
             or 12000
         )
+        reasoning = kwargs.get("reasoning")
+        if not isinstance(reasoning, dict):
+            reasoning = {"effort": self._owner.reasoning_effort}
         request_payload = {
             "model": model,
             "input": response_input,
-            "reasoning": {"effort": self._owner.reasoning_effort},
+            "reasoning": reasoning,
             "max_output_tokens": max_output_tokens,
         }
         if instructions:
@@ -818,6 +821,10 @@ CONFIG: dict = {
     "XAI_MODEL": os.environ.get("XAI_MODEL", _AI_MODEL_DEFAULT),
     "CLAUDE_MODEL": os.environ.get("CLAUDE_MODEL", _CLAUDE_REVIEW_MODEL_DEFAULT),
     "LOTTERY_AI_MODEL": os.environ.get("LOTTERY_AI_MODEL", ""),  # empty → use AI_MODEL for /api/lottery/ai-analysis
+    "LOTTERY_AI_PROVIDER": os.environ.get("LOTTERY_AI_PROVIDER", "grok"),
+    "LOTTERY_AI_MAX_TOKENS": _env_int("LOTTERY_AI_MAX_TOKENS", 4000),
+    "LOTTERY_AI_REASONING_EFFORT": os.environ.get("LOTTERY_AI_REASONING_EFFORT", "low"),
+    "LOTTERY_AI_TIMEOUT_SEC": _env_int("LOTTERY_AI_TIMEOUT_SEC", 0) or None,
     "DEBATE_MODEL": os.environ.get("DEBATE_MODEL", _AI_MODEL_DEFAULT),
     "VISION_MODEL": os.environ.get("VISION_MODEL", _AI_MODEL_DEFAULT),
     "NEWS_SENTIMENT_MODEL": os.environ.get("NEWS_SENTIMENT_MODEL", _AI_MODEL_DEFAULT),
@@ -2027,6 +2034,10 @@ _KNOWN_YAML_ONLY_KEYS = {
     "ENGINE_B_SCAN_GATE_FUNNEL_ENABLED",
     "ENGINE_B_STRUCTURAL_SL_USE_STYLE_ATR_MULTS",
     "ENGINE_A_STRUCTURAL_SL_FLOOR_ATR",
+    "ENGINE_A_EXIT_MODE_GLOBAL_DEFAULT",
+    "ENGINE_A_EXIT_MODE_BY_SCORE_GROUP",
+    "ENGINE_A_ADVISABLE_PIP_BY_SCORE_GROUP",
+    "ENGINE_A_TIME_EXIT_BARS",
     "ENGINE_B_FOLLOW_THROUGH",
     "ENGINE_B_FOREX_ADX_MIN",
     "ENGINE_B_RESEARCH_LAB_FACTORS",

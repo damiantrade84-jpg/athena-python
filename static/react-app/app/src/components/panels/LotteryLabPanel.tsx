@@ -424,6 +424,34 @@ function parseNumberList(value: string) {
     .filter((number) => Number.isFinite(number));
 }
 
+function formatNumberList(numbers: number[] | undefined) {
+  return (numbers ?? []).join(', ');
+}
+
+function firstValidBonusPick(picks: number[] | undefined, config: GameConfig) {
+  for (const pick of picks ?? []) {
+    if (!Number.isFinite(pick)) continue;
+    if (config.bonusMin !== undefined && config.bonusMax !== undefined) {
+      if (pick >= config.bonusMin && pick <= config.bonusMax) return pick;
+      continue;
+    }
+    return pick;
+  }
+  return undefined;
+}
+
+function resolveScoreBonus(
+  config: GameConfig,
+  scoreBonusInput: string,
+  aiBonusPicks: number[] | undefined,
+  explicit?: number,
+) {
+  if (explicit !== undefined && Number.isFinite(explicit)) return explicit;
+  const fromInput = optionalInt(scoreBonusInput);
+  if (fromInput !== undefined) return fromInput;
+  return firstValidBonusPick(aiBonusPicks, config);
+}
+
 function formatValue(value: unknown, digits = 2) {
   if (value === null || value === undefined || value === '') return 'n/a';
   if (typeof value === 'number') return Number.isInteger(value) ? String(value) : value.toFixed(digits);
@@ -841,18 +869,21 @@ export default function LotteryLabPanel() {
     }
   }, [buildFilters, effectiveIncludeBonus, endDate, game, generatorMode, postLottery, showToast, startDate, ticketCount]);
 
-  const handleScoreTicket = useCallback(async () => {
-    const numbers = parseNumberList(scoreInput);
+  const scoreTicketNumbers = useCallback(async (numbers: number[], bonus?: number) => {
+    const bonusValue = resolveScoreBonus(config, scoreBonus, aiAnalysis?.bonus_picks, bonus);
     const validation = validateMainNumbers(numbers, config);
-    const bonusValue = optionalInt(scoreBonus);
     const bonusValidation = effectiveIncludeBonus ? validateBonusNumber(bonusValue, config) : null;
     if (validation) {
       showToast(validation, 'error');
-      return;
+      return null;
     }
     if (bonusValidation) {
       showToast(bonusValidation, 'error');
-      return;
+      return null;
+    }
+    setScoreInput(formatNumberList(numbers));
+    if (effectiveIncludeBonus && bonusValue !== undefined) {
+      setScoreBonus(String(bonusValue));
     }
     const ticket: Record<string, unknown> = { numbers };
     if (effectiveIncludeBonus) ticket.bonus = bonusValue;
@@ -869,7 +900,50 @@ export default function LotteryLabPanel() {
       setScoreError,
     );
     if (result) setScoredTicket(result);
-  }, [config, effectiveIncludeBonus, endDate, game, postLottery, scoreBonus, scoreInput, showToast, startDate]);
+    return result;
+  }, [aiAnalysis?.bonus_picks, config, effectiveIncludeBonus, endDate, game, postLottery, scoreBonus, showToast, startDate]);
+
+  const handleScoreTicket = useCallback(async () => {
+    await scoreTicketNumbers(parseNumberList(scoreInput));
+  }, [scoreInput, scoreTicketNumbers]);
+
+  const scoreWheelTicket = useCallback(async (ticket: number[]) => {
+    const bonusValue = resolveScoreBonus(config, scoreBonus, aiAnalysis?.bonus_picks);
+    if (effectiveIncludeBonus && bonusValue === undefined) {
+      showToast('Bonus required — set it in Score Ticket or run AI analysis first', 'error');
+      return;
+    }
+    const result = await scoreTicketNumbers(ticket, bonusValue);
+    if (result) showToast('Ticket scored', 'success');
+  }, [aiAnalysis?.bonus_picks, config, effectiveIncludeBonus, scoreBonus, scoreTicketNumbers, showToast]);
+
+  const sendAiPoolToWheel = useCallback(() => {
+    const pool = aiAnalysis?.recommended_pool;
+    if (!pool?.length) {
+      showToast('No recommended pool to export', 'error');
+      return;
+    }
+    setWheelNumbers(formatNumberList(pool));
+    const mode = aiAnalysis?.generator_mode as GeneratorMode | undefined;
+    if (mode && GENERATOR_MODES.some((item) => item.value === mode)) {
+      setGeneratorMode(mode);
+    }
+    const bonusPick = firstValidBonusPick(aiAnalysis?.bonus_picks, config);
+    if (bonusPick !== undefined) {
+      setScoreBonus(String(bonusPick));
+    }
+    const sumFilter = aiAnalysis?.sum_filter;
+    if (sumFilter && typeof sumFilter === 'object') {
+      const min = (sumFilter as { min?: number }).min;
+      const max = (sumFilter as { max?: number }).max;
+      if (typeof min === 'number' && Number.isFinite(min)) setMinSum(String(min));
+      if (typeof max === 'number' && Number.isFinite(max)) setMaxSum(String(max));
+    }
+    setWheelResult(null);
+    setWheelError(null);
+    setActiveTab('tools');
+    showToast('Recommended pool sent to Wheel', 'success');
+  }, [aiAnalysis, config, showToast]);
 
   const handleWheel = useCallback(async () => {
     const chosenNumbers = parseNumberList(wheelNumbers);
@@ -1826,8 +1900,18 @@ export default function LotteryLabPanel() {
                     <ScrollArea className="h-[220px]">
                       <div className="space-y-2 pr-2">
                         {(wheelResult.tickets || []).map((ticket, index) => (
-                          <div key={`${ticket.join('-')}-${index}`} className="rounded-md bg-muted/30 p-2">
+                          <div key={`${ticket.join('-')}-${index}`} className="flex items-center justify-between gap-2 rounded-md bg-muted/30 p-2">
                             <NumberPills numbers={ticket} size="sm" />
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="sm"
+                              className="h-7 shrink-0 text-xs"
+                              onClick={() => scoreWheelTicket(ticket)}
+                              disabled={scoreLoading}
+                            >
+                              Score
+                            </Button>
                           </div>
                         ))}
                       </div>
@@ -1939,7 +2023,19 @@ export default function LotteryLabPanel() {
                 <div className="space-y-4">
                   <div className="grid gap-3 md:grid-cols-3">
                     <div className="rounded-md bg-muted/30 p-3">
-                      <p className="mb-2 text-[10px] uppercase text-muted-foreground">Recommended pool</p>
+                      <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                        <p className="text-[10px] uppercase text-muted-foreground">Recommended pool</p>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          className="h-7 text-xs"
+                          onClick={sendAiPoolToWheel}
+                          disabled={!aiAnalysis.recommended_pool?.length}
+                        >
+                          Send to Wheel
+                        </Button>
+                      </div>
                       <NumberPills numbers={aiAnalysis.recommended_pool} size="sm" />
                     </div>
                     <div className="rounded-md bg-muted/30 p-3">

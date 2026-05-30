@@ -1680,9 +1680,13 @@ AI_MODEL: "grok-4.3"
 
 XAI_MODEL: "grok-4.3"  # Legacy alias kept aligned with AI_MODEL for compatibility.
 
-# Optional: POST /api/lottery/ai-analysis model (defaults to AI_MODEL). Same OpenAI SDK + xAI base URL.
-
-# LOTTERY_AI_MODEL: "grok-4.3"
+# Lottery Lab AI Pattern Analysis (/api/lottery/ai-analysis) — separate from chart vision.
+# Defaults to xAI/Grok even when AI_REVIEW_PROVIDER is openai.
+LOTTERY_AI_PROVIDER: "grok"
+LOTTERY_AI_MAX_TOKENS: 4000
+LOTTERY_AI_REASONING_EFFORT: "low"   # OpenAI Responses path only
+# LOTTERY_AI_TIMEOUT_SEC: 30         # optional; falls back to AI_REQUEST_TIMEOUT_SEC
+# LOTTERY_AI_MODEL: "grok-4.3"       # optional; defaults to AI_MODEL for selected provider
 
 DEBATE_MODEL: "grok-4.3"
 
@@ -2852,6 +2856,25 @@ ENGINE_B_USE_EXECUTION_LEVELS_FOR_SCAN_SIGNALS: false
 ENGINE_A_STRUCTURAL_SL_FLOOR_ATR: true
 
 
+# Engine A exit-mode selector (Plan 2). Per-score-group default exit mode + global
+# fallback. Ships global=traditional_static and an empty per-group map, so every
+# Engine A score group defaults to traditional_static (user-authorized Engine-A
+# default flip — see docs/superpowers/specs/2026-05-29-exit-mode-selector-design.md).
+# Valid values: traditional_static | adaptive_trail | manual | time_based
+ENGINE_A_EXIT_MODE_GLOBAL_DEFAULT: traditional_static
+ENGINE_A_EXIT_MODE_BY_SCORE_GROUP: {}        # e.g. {forex_majors: adaptive_trail}
+
+# Engine A advisable-pip guardrail (Plan 2). Per-score-group SL min/max in pips.
+# Ships empty = no clamp. Applied to every mode EXCEPT manual.
+ENGINE_A_ADVISABLE_PIP_BY_SCORE_GROUP: {}    # e.g. {forex_majors: {min_pip: 8, max_pip: 60}}
+
+# time_based exit: bars of the style timeframe to hold before the timed close.
+ENGINE_A_TIME_EXIT_BARS:
+  scalp: 12
+  intraday: 18
+  swing: 10
+
+
 
 # AI usage control - when true, AI only runs on explicit user actions
 
@@ -3670,15 +3693,16 @@ TIMED_EXIT:
     scalp: 0.0
     intraday: 0.0
     swing: 0.0
-  # Widened from 0.15/0.20/0.30. Diagnosis of closed Engine A trades showed
-  # winners peaking at a median ~0.61R then being closed near scratch by this
-  # pre-activation give-back, well below the 1.0R chandelier activation. A wider
-  # budget lets winners breathe toward activation/TP. The close_r=0.0 round-trip
-  # floor still backstops green->red, so this cannot close at a loss via giveback.
+  # Reverted to pre-commit 0.15/0.20/0.30 (was widened to 0.25/0.40/0.50 in
+  # 02f1cfa5). Re-diagnosis of closed Engine A trades (tools/diagnose_engine_a_stops.py)
+  # showed give-back/round-trip trades peak at a median ~0.28R, not ~0.61R, so the
+  # wider budget stopped the early small-profit lock-in (giveback_close) from firing
+  # and let modest-peak winners ride back to the break-even round-trip floor (scratch
+  # -> small loss after fees). The tighter budget restores the early lock-in.
   pre_activation_profit_giveback_r:
-    scalp: 0.25
-    intraday: 0.40
-    swing: 0.50
+    scalp: 0.15
+    intraday: 0.20
+    swing: 0.30
   pre_activation_profit_arm_r_by_venue:
     bybit:
       scalp: 0.15
@@ -3688,18 +3712,18 @@ TIMED_EXIT:
       scalp: 0.20
       intraday: 0.30
       swing: 0.40
-  # Widened in step with pre_activation_profit_giveback_r above (was
-  # bybit 0.10/0.15/0.25, mt5 0.15/0.20/0.30) so per-venue overrides do not
-  # re-impose the tight pre-activation give-back that round-tripped winners.
+  # Reverted in step with pre_activation_profit_giveback_r above to the
+  # pre-commit per-venue values (was widened to bybit 0.20/0.30/0.45,
+  # mt5 0.25/0.40/0.50 in 02f1cfa5).
   pre_activation_profit_giveback_r_by_venue:
     bybit:
-      scalp: 0.20
-      intraday: 0.30
-      swing: 0.45
+      scalp: 0.10
+      intraday: 0.15
+      swing: 0.25
     mt5:
-      scalp: 0.25
-      intraday: 0.40
-      swing: 0.50
+      scalp: 0.15
+      intraday: 0.20
+      swing: 0.30
 
   # Peak-R give-back close. Once chandelier is active, track the highest R
   # the trade reaches; if current R drops below peak by giveback_r, close

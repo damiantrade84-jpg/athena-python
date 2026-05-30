@@ -5134,6 +5134,8 @@ def _init_audit_db(db_path: str) -> None:
 
             exit_reason           TEXT,
 
+            exit_mode             TEXT,
+
             holding_period_hours  REAL,
 
             asset_class           TEXT,
@@ -5241,6 +5243,7 @@ def _init_audit_db(db_path: str) -> None:
         ("slippage_bps", "REAL"),  # Adverse slippage in basis points (sign = bad for trader)
         ("tp_partial", "REAL"),
         ("tp2", "REAL"),
+        ("exit_mode", "TEXT"),  # Engine A exit-mode selector (Plan 2)
     ]:
         if col not in existing:
             con.execute(f"ALTER TABLE audit_log ADD COLUMN {col} {defn}")
@@ -7963,6 +7966,61 @@ def api_execution_config():
         payload["errors"] = errors
         return jsonify(payload), 400
     return jsonify(payload)
+
+
+@app.route("/api/exit-mode-config", methods=["GET", "POST"])
+def api_exit_mode_config():
+    """Get/update the Engine A exit-mode + advisable-pip config (Exit Strategy tab).
+
+    Advisory config only: mutates the four CONFIG keys the deterministic exit path
+    reads; it cannot execute, size, or bypass a gate.
+    """
+    import exit_mode_config
+    import exit_policy
+    from engine_a_groups import ENGINE_A_KNOWN_SCORE_GROUPS
+
+    if request.method == "GET":
+        return jsonify(
+            {
+                "globalDefault": CONFIG.get(
+                    "ENGINE_A_EXIT_MODE_GLOBAL_DEFAULT", exit_policy.DEFAULT_EXIT_MODE
+                ),
+                "byScoreGroup": CONFIG.get("ENGINE_A_EXIT_MODE_BY_SCORE_GROUP") or {},
+                "advisablePipByScoreGroup": CONFIG.get(
+                    "ENGINE_A_ADVISABLE_PIP_BY_SCORE_GROUP"
+                )
+                or {},
+                "knownScoreGroups": sorted(ENGINE_A_KNOWN_SCORE_GROUPS),
+                "validModes": sorted(exit_policy.VALID_EXIT_MODES),
+            }
+        )
+
+    d = request.get_json(silent=True) or {}
+    updates, errors = exit_mode_config.validate_exit_mode_updates(
+        d, ENGINE_A_KNOWN_SCORE_GROUPS
+    )
+    if errors:
+        return jsonify({"success": False, "errors": errors}), 400
+
+    for key, value in updates.items():
+        CONFIG[key] = value
+    try:
+        cfg_path = os.path.join(os.path.dirname(__file__), "config.yaml")
+        exit_mode_config.persist_exit_mode_config_yaml(cfg_path, updates)
+    except Exception as exc:  # persistence failure must surface, not write a half file silently
+        log.error(f"[EXIT MODE] config persist failed: {exc}")
+        return jsonify({"success": False, "errors": [f"persist failed: {exc}"]}), 500
+
+    log.info(f"[EXIT MODE] config updated: {sorted(updates)}")
+    return jsonify(
+        {
+            "success": True,
+            "globalDefault": CONFIG.get("ENGINE_A_EXIT_MODE_GLOBAL_DEFAULT"),
+            "byScoreGroup": CONFIG.get("ENGINE_A_EXIT_MODE_BY_SCORE_GROUP") or {},
+            "advisablePipByScoreGroup": CONFIG.get("ENGINE_A_ADVISABLE_PIP_BY_SCORE_GROUP")
+            or {},
+        }
+    )
 
 
 @app.route("/api/screener-scan", methods=["POST"])

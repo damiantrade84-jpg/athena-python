@@ -139,6 +139,8 @@ class StrategyMetrics:
     exit_reason_breakdown: str = ""
     same_bar_policy: str = ""
     atr_length: float = float("nan")
+    engine_a_exit_mode: str = ""
+    engine_a_exit_parity: str = ""
 
     def to_dict(self) -> dict:
         return asdict(self)
