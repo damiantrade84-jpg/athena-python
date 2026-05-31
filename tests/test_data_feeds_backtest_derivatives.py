@@ -47,6 +47,19 @@ def test_oi_data_for_divergence_uses_latest_at_or_before():
     assert d["point_in_time"] is True
 
 
+def test_oi_data_for_divergence_includes_point_in_time_smoothed_change():
+    oi_rows = [
+        {"ts_ms": 1000, "oi": 100.0},
+        {"ts_ms": 2000, "oi": 110.0},
+        {"ts_ms": 3000, "oi": 99.0},
+        {"ts_ms": 4000, "oi": 108.9},
+    ]
+    d = data_feeds.build_oi_data_for_divergence(oi_rows, bar_ms=4500, prev_bar_ms=3500)
+    assert d is not None
+    assert d["oiChange"] == pytest.approx(10.0)
+    assert d["oiChangeSmoothed"] == pytest.approx(2.97)
+
+
 def test_oi_data_none_when_no_record_before_bar():
     oi_rows = [{"ts_ms": 5000, "oi": 1.0}]
     assert data_feeds.build_oi_data_for_divergence(oi_rows, bar_ms=2000, prev_bar_ms=1000) is None

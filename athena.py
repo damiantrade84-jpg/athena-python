@@ -3371,6 +3371,27 @@ def fetch_usd_relative_strength_context(
         return None
 
 
+def enrich_vol_skew_macro_context(
+    pair: dict, macro_context: dict | None, as_of_date: str | None = None
+) -> dict | None:
+    """Attach latest vol_skew to Engine A macro context when ortho votes are enabled."""
+    if not CONFIG.get("ENGINE_A_ORTHO_VOTE_ENABLED", False):
+        return macro_context
+    try:
+        from vol_skew_feed import get_vol_skew_z
+
+        _as_of = str(as_of_date)[:10] if as_of_date else None
+        vol_skew = get_vol_skew_z(pair.get("display"), as_of_date=_as_of)
+        if vol_skew is None:
+            return macro_context
+        out = dict(macro_context) if isinstance(macro_context, dict) else {}
+        out["vol_skew"] = vol_skew
+        return out
+    except Exception as exc:
+        log.debug("[MACRO] vol_skew unavailable for %s: %s", pair.get("display"), exc)
+        return macro_context
+
+
 # Phase A: UST Yield Curve cache (1hr TTL - rates change slowly)
 
 _yield_cache = {"data": None, "ts": 0}
@@ -13271,6 +13292,11 @@ def analyze_pair(
         pair.get("display", "?"),
         _bar_time,
         len(_bt_src),
+    )
+    _usd_relative_strength = enrich_vol_skew_macro_context(
+        pair,
+        _usd_relative_strength,
+        _bar_time,
     )
 
     res = calc_confluence(

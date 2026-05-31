@@ -372,6 +372,28 @@ def test_prompt_includes_engine_a_context_json():
     assert "engineAVerdictComparison" in prompt
 
 
+def test_prompt_includes_chart_capture_metadata():
+    prompt = build_chart_review_prompt(
+        _engine_a_ctx(
+            screenshot_overlays=["candles", "engine_b", "vwap"],
+            chart_snapshot={
+                "visibleCandleCount": 120,
+                "visibleRange": {"from": "100", "to": "220"},
+                "renderedLayers": ["candles", "engine_b", "vwap"],
+                "engineBOverlayCount": 4,
+                "engineBOverlayStatus": "ready",
+                "indicatorLayerStates": {"engineB": True, "vwap": True},
+            },
+        )
+    )
+
+    assert "== CHART CAPTURE METADATA ==" in prompt
+    assert "rendered_layers: candles, engine_b, vwap" in prompt
+    assert "visible_candle_count: 120" in prompt
+    assert "engine_b_overlay_status: ready" in prompt
+    assert "engine_b_overlay_count: 4" in prompt
+
+
 def test_prompt_instructs_no_trade_only_for_hard_reasons():
     prompt = build_chart_review_prompt(_engine_a_ctx())
     assert "Do not use NO_TRADE as generic caution" in prompt

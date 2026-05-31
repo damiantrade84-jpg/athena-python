@@ -1,5 +1,7 @@
-import time
 import math
+import sys
+import time
+import types
 
 import pytest
 
@@ -2298,3 +2300,348 @@ def test_etf_volume_addon_activates(monkeypatch):
     )
     assert result["addon_unsupported"] is False
     assert result.get("addon_type") == "volume"
+
+
+def test_orthogonal_vote_providers_scale_and_fail_closed(monkeypatch):
+    monkeypatch.setitem(
+        sys.modules,
+        "carry_feed",
+        types.SimpleNamespace(get_carry_z=lambda _display, as_of_date=None: 2.5),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "cot_feed",
+        types.SimpleNamespace(get_cot_z=lambda _display, as_of_date=None: -2.5),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "vol_skew_feed",
+        types.SimpleNamespace(get_vol_skew_z=lambda _display, as_of_date=None: None),
+    )
+
+    assert factor_scoring._vote_carry("EUR/USD", "LONG", "2024-01-02T00:00:00Z") == (1.0, "ok")
+    assert factor_scoring._vote_carry("EUR/USD", "SHORT", "2024-01-02T00:00:00Z") == (-1.0, "ok")
+    assert factor_scoring._vote_cot("EUR/USD", "LONG", "2024-01-02T00:00:00Z") == (-1.0, "ok")
+    assert factor_scoring._vote_cot("EUR/USD", "SHORT", "2024-01-02T00:00:00Z") == (1.0, "ok")
+
+    assert factor_scoring._vote_funding(0.03, "LONG", {"mean": 0.0, "std": 0.01}) == (-1.0, "ok")
+    assert factor_scoring._vote_funding(0.03, "SHORT", {"mean": 0.0, "std": 0.01}) == (1.0, "ok")
+    assert factor_scoring._vote_funding(None, "LONG") == (0.0, "neutral")
+
+    oi_ctx = {"oi_change_pct": 5.0, "price_change_pct": 2.0}
+    assert factor_scoring._vote_oi_divergence(oi_ctx, "LONG") == (1.0, "ok")
+    assert factor_scoring._vote_oi_divergence(oi_ctx, "SHORT") == (-1.0, "ok")
+    assert factor_scoring._vote_oi_divergence(None, "LONG") == (0.0, "neutral")
+
+    macro_ctx = {"vol_skew": 2.5}
+    assert factor_scoring._vote_vol_skew("XAU/USD", "commodity", "LONG", None, macro_ctx) == (-1.0, "ok")
+    assert factor_scoring._vote_vol_skew("XAU/USD", "commodity", "SHORT", None, macro_ctx) == (1.0, "ok")
+    assert factor_scoring._vote_vol_skew("XAU/USD", "commodity", "LONG", None, {}) == (0.0, "neutral")
+
+
+def test_continuous_funding_vote_scales_and_matches_discrete_direction(monkeypatch):
+    monkeypatch.setitem(CONFIG, "FACTOR_FUNDING_SCALE", 0.0005)
+    monkeypatch.setitem(CONFIG, "FACTOR_FUNDING_Z_REF", 2.0)
+    monkeypatch.setitem(CONFIG, "FACTOR_FUNDING_BASELINE", 0.0001)
+    monkeypatch.setitem(CONFIG, "FACTOR_FUNDING_NOISE_BAND", 0.0001)
+    monkeypatch.setitem(CONFIG, "FACTOR_FUNDING_USE_ZSCORE", False)
+
+    assert factor_scoring._funding_vote_continuous(0.05, "LONG", None) < -0.5
+    assert factor_scoring._funding_vote_continuous(-0.05, "LONG", None) > 0.5
+    assert factor_scoring._funding_vote_continuous(0.0001, "LONG", None) == pytest.approx(0.0)
+
+    for rate in (0.0003, -0.0002):
+        for direction in ("LONG", "SHORT"):
+            discrete = factor_scoring._funding_addon(rate, direction)
+            continuous = factor_scoring._funding_vote_continuous(rate, direction, None)
+            assert (continuous > 0) == (discrete == factor_scoring._ADDON_CONFIRM)
+            assert (continuous < 0) == (discrete == factor_scoring._ADDON_AGAINST)
+
+    monkeypatch.setitem(CONFIG, "FACTOR_FUNDING_USE_ZSCORE", True)
+    monkeypatch.setitem(CONFIG, "FACTOR_FUNDING_Z_THRESHOLD", 1.0)
+    assert factor_scoring._funding_vote_continuous(0.005, "LONG", {"mean": 0.0, "std": 0.01}) == 0.0
+    assert factor_scoring._funding_vote_continuous(0.03, "LONG", {"mean": 0.0, "std": 0.01}) < -0.5
+
+
+def test_continuous_oi_vote_matches_discrete_semantics_and_prefers_smoothed(monkeypatch):
+    monkeypatch.setitem(CONFIG, "FACTOR_OI_REF_PCT", 5.0)
+    monkeypatch.setitem(CONFIG, "FACTOR_OI_USE_SMOOTHED", True)
+
+    long_confirm = {"oi_change_pct": 6.0, "price_change_pct": 2.0}
+    assert factor_scoring._oi_addon(long_confirm, "LONG") == factor_scoring._ADDON_CONFIRM
+    assert factor_scoring._oi_vote_continuous(long_confirm, "LONG") == pytest.approx(1.0)
+    assert factor_scoring._oi_vote_continuous({"oi_change_pct": 0.2, "price_change_pct": 1.0}, "LONG") == 0.0
+
+    short_covering = {"oi_change_pct": -6.0, "price_change_pct": 2.0}
+    assert factor_scoring._oi_addon(short_covering, "LONG") == factor_scoring._ADDON_NEUTRAL
+    assert factor_scoring._oi_vote_continuous(short_covering, "LONG") == 0.0
+
+    smoothed = {"oi_change_pct": 6.0, "oi_change_pct_smoothed": -6.0, "price_change_pct": 2.0}
+    assert factor_scoring._oi_vote_continuous(smoothed, "LONG") == 0.0
+    assert factor_scoring._oi_vote_continuous(smoothed, "SHORT") == pytest.approx(-0.5)
+
+
+def test_cot_votes_and_addons_stay_confirming_at_extremes(monkeypatch):
+    def _fake_cot_z(display, as_of_date=None):
+        return {"CROWDED": 2.6, "MID": 1.0}[display]
+
+    monkeypatch.setitem(
+        sys.modules,
+        "cot_feed",
+        types.SimpleNamespace(
+            get_cot_z=_fake_cot_z,
+            _PAIR_FORMULA={"CROWDED": object(), "MID": object()},
+        ),
+    )
+
+    assert factor_scoring._vote_cot("CROWDED", "LONG", "2025-01-15") == (1.0, "ok")
+    assert factor_scoring._vote_cot("CROWDED", "SHORT", "2025-01-15") == (-1.0, "ok")
+    assert factor_scoring._vote_cot("MID", "LONG", "2025-01-15") == (0.5, "ok")
+    assert factor_scoring._cot_addon_with_status("CROWDED", "commodity", "LONG", "2025-01-15") == (
+        factor_scoring._ADDON_CONFIRM,
+        "ok",
+    )
+
+
+def test_orthogonal_vote_vector_weights_and_squashes_once(monkeypatch):
+    monkeypatch.setitem(
+        CONFIG,
+        "ENGINE_A_ORTHO_FACTOR_WEIGHTS",
+        {"crypto": {"carry": 0.0, "cot": 0.10, "funding": 0.45, "oi_divergence": 0.35, "vol_skew": 0.0}},
+    )
+    monkeypatch.setitem(CONFIG, "ENGINE_A_ORTHO_VOTE_TANH_K", 1.0)
+    monkeypatch.setattr(factor_scoring, "_vote_carry", lambda *_args: (0.4, "ok"))
+    monkeypatch.setattr(factor_scoring, "_vote_cot", lambda *_args: (0.5, "ok"))
+    monkeypatch.setattr(factor_scoring, "_vote_funding", lambda *_args: (-1.0, "ok"))
+    monkeypatch.setattr(factor_scoring, "_vote_oi_divergence", lambda *_args: (0.5, "ok"))
+    monkeypatch.setattr(factor_scoring, "_vote_vol_skew", lambda *_args: (0.2, "ok"))
+
+    ortho_term, detail = factor_scoring._orthogonal_vote_vector(
+        {"type": "crypto", "display": "BTC/USDT"},
+        "LONG",
+        "2024-01-02T00:00:00Z",
+        funding_rate=0.01,
+        oi_context={"oi_change_pct": 5.0, "price_change_pct": 2.0},
+        funding_stats=None,
+        macro_context={},
+    )
+
+    assert set(detail["votes"]) == {"carry", "cot", "funding", "oi_divergence", "vol_skew"}
+    assert detail["weighted_sum"] == pytest.approx(-0.225)
+    assert ortho_term == pytest.approx(math.tanh(-0.225))
+    assert detail["ortho_term"] == pytest.approx(round(math.tanh(-0.225), 4))
+    assert detail["enabled"] is True
+
+
+def test_orthogonal_vote_vector_debug_writes_jsonl(monkeypatch, tmp_path):
+    debug_path = tmp_path / "nested" / "ortho_votes.jsonl"
+    monkeypatch.setitem(CONFIG, "ENGINE_A_ORTHO_FACTOR_WEIGHTS", {"crypto": {"funding": 0.45}})
+    monkeypatch.setitem(CONFIG, "ENGINE_A_ORTHO_VOTE_TANH_K", 1.0)
+    monkeypatch.setitem(CONFIG, "ENGINE_A_ORTHO_VOTE_DEBUG", True)
+    monkeypatch.setitem(CONFIG, "ENGINE_A_ORTHO_VOTE_DEBUG_PATH", str(debug_path))
+    monkeypatch.setattr(factor_scoring, "_vote_carry", lambda *_args: (0.0, "neutral"))
+    monkeypatch.setattr(factor_scoring, "_vote_cot", lambda *_args: (0.0, "neutral"))
+    monkeypatch.setattr(factor_scoring, "_vote_funding", lambda *_args: (-0.75, "ok"))
+    monkeypatch.setattr(factor_scoring, "_vote_oi_divergence", lambda *_args: (0.0, "neutral"))
+    monkeypatch.setattr(factor_scoring, "_vote_vol_skew", lambda *_args: (0.0, "neutral"))
+
+    _term, detail = factor_scoring._orthogonal_vote_vector(
+        {"type": "crypto", "display": "BTC/USDT", "symbol": "BTCUSDT"},
+        "LONG",
+        "2025-02-03T04:00:00Z",
+        funding_rate=0.01,
+        oi_context={},
+        funding_stats=None,
+        macro_context={},
+    )
+
+    lines = debug_path.read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 1
+    rec = __import__("json").loads(lines[0])
+    assert rec["display"] == "BTC/USDT"
+    assert rec["score_group"] == "crypto_btc"
+    assert rec["direction"] == "LONG"
+    assert rec["bar_time"] == "2025-02-03T04:00:00Z"
+    assert rec["weighted_sum"] == detail["weighted_sum"]
+    assert rec["ortho_term"] == detail["ortho_term"]
+    assert rec["votes"]["funding"] == {"vote": -0.75, "weight": 0.45, "status": "ok"}
+
+
+def test_orthogonal_vote_vector_prefers_crypto_score_group_weights(monkeypatch):
+    monkeypatch.setitem(
+        CONFIG,
+        "ENGINE_A_ORTHO_FACTOR_WEIGHTS",
+        {
+            "crypto": {"funding": 0.99, "oi_divergence": 0.99, "cot": 0.99},
+            "crypto_btc": {"funding": 0.45, "oi_divergence": 0.35, "cot": 0.15},
+            "crypto_alt_majors": {"funding": 0.25, "oi_divergence": 0.20, "cot": 0.0},
+        },
+    )
+    monkeypatch.setitem(CONFIG, "ENGINE_A_ORTHO_VOTE_TANH_K", 1.0)
+    monkeypatch.setattr(factor_scoring, "_vote_carry", lambda *_args: (0.0, "neutral"))
+    monkeypatch.setattr(factor_scoring, "_vote_cot", lambda *_args: (0.0, "neutral"))
+    monkeypatch.setattr(factor_scoring, "_vote_funding", lambda *_args: (0.0, "neutral"))
+    monkeypatch.setattr(factor_scoring, "_vote_oi_divergence", lambda *_args: (0.0, "neutral"))
+    monkeypatch.setattr(factor_scoring, "_vote_vol_skew", lambda *_args: (0.0, "neutral"))
+
+    _btc_term, btc = factor_scoring._orthogonal_vote_vector(
+        {"type": "crypto", "display": "BTC/USDT", "symbol": "BTCUSDT"},
+        "LONG",
+        None,
+        funding_rate=0.01,
+        oi_context={},
+        funding_stats=None,
+        macro_context={},
+    )
+    _sol_term, sol = factor_scoring._orthogonal_vote_vector(
+        {"type": "crypto", "display": "SOL/USDT", "symbol": "SOLUSDT"},
+        "LONG",
+        None,
+        funding_rate=0.01,
+        oi_context={},
+        funding_stats=None,
+        macro_context={},
+    )
+
+    assert btc["votes"]["funding"]["weight"] == pytest.approx(0.45)
+    assert btc["votes"]["oi_divergence"]["weight"] == pytest.approx(0.35)
+    assert btc["votes"]["cot"]["weight"] == pytest.approx(0.15)
+    assert sol["votes"]["funding"]["weight"] == pytest.approx(0.25)
+    assert sol["votes"]["oi_divergence"]["weight"] == pytest.approx(0.20)
+    assert sol["votes"]["cot"]["weight"] == pytest.approx(0.0)
+
+
+def test_vol_skew_vote_uses_feed_when_macro_context_is_absent(monkeypatch):
+    fake_feed = types.SimpleNamespace(
+        get_vol_skew_z=lambda display, as_of_date=None: 2.0
+        if display == "XAU/USD" and as_of_date == "2025-01-02"
+        else None
+    )
+    monkeypatch.setitem(sys.modules, "vol_skew_feed", fake_feed)
+
+    vote, status = factor_scoring._vote_vol_skew(
+        "XAU/USD",
+        "commodity",
+        "LONG",
+        "2025-01-02T00:00:00Z",
+        None,
+    )
+
+    assert vote == pytest.approx(-1.0)
+    assert status == "ok"
+
+
+def test_ortho_disabled_preserves_legacy_score_and_skips_vector(monkeypatch):
+    pair = {"type": "crypto", "display": "BTC/USDT"}
+    monkeypatch.setitem(CONFIG, "ENGINE_A_ORTHO_VOTE_ENABLED", False)
+
+    def fail_if_called(*_args, **_kwargs):
+        raise AssertionError("orthogonal vote vector must not run when disabled")
+
+    monkeypatch.setattr(factor_scoring, "_orthogonal_vote_vector", fail_if_called)
+    disabled = _score(
+        _snap("long", momentum="bullish"),
+        _snap("long", momentum="bullish"),
+        _snap("long", momentum="bullish"),
+        pair=pair,
+        funding_rate=-0.0002,
+    )
+
+    monkeypatch.delitem(CONFIG, "ENGINE_A_ORTHO_VOTE_ENABLED", raising=False)
+    absent = _score(
+        _snap("long", momentum="bullish"),
+        _snap("long", momentum="bullish"),
+        _snap("long", momentum="bullish"),
+        pair=pair,
+        funding_rate=-0.0002,
+    )
+
+    assert disabled["final_score"] == absent["final_score"]
+    assert disabled["conviction"] == absent["conviction"]
+    assert disabled["factor_scores"]["addon"] == absent["factor_scores"]["addon"]
+    assert disabled["orthoEnabled"] is False
+    assert disabled["orthoVote"] is None
+    assert "ortho" not in disabled["factor_scores"]
+    assert "ortho_term" not in disabled["factor_scores"]
+
+
+def test_ortho_enabled_replaces_addon_term_and_exposes_votes(monkeypatch):
+    pair = {"type": "crypto", "display": "BTC/USDT"}
+    detail = {
+        "votes": {
+            "carry": {"vote": 0.0, "weight": 0.0, "status": "neutral"},
+            "cot": {"vote": 0.5, "weight": 0.1, "status": "ok"},
+            "funding": {"vote": 1.0, "weight": 0.45, "status": "ok"},
+            "oi_divergence": {"vote": 0.5, "weight": 0.35, "status": "ok"},
+            "vol_skew": {"vote": 0.0, "weight": 0.0, "status": "neutral"},
+        },
+        "weighted_sum": 0.675,
+        "ortho_term": 1.0,
+        "enabled": True,
+    }
+
+    monkeypatch.setitem(CONFIG, "ENGINE_A_ORTHO_VOTE_ENABLED", True)
+    monkeypatch.setitem(CONFIG, "ENGINE_A_ORTHO_CONVICTION_WEIGHT_BY_CLASS", {"crypto": 0.25})
+    monkeypatch.setattr(factor_scoring, "_orthogonal_vote_vector", lambda *_args, **_kwargs: (1.0, detail))
+
+    enabled = _score(
+        _snap("long", momentum="bullish"),
+        _snap("long", momentum="bullish"),
+        _snap("long", momentum="bullish"),
+        pair=pair,
+        funding_rate=0.02,
+        oi_context={"oi_change_pct": 5.0, "price_change_pct": 2.0},
+    )
+
+    assert enabled["orthoEnabled"] is True
+    assert enabled["orthoVote"] == detail
+    assert enabled["factor_scores"]["ortho"] == {
+        "carry": 0.0,
+        "cot": 0.5,
+        "funding": 1.0,
+        "oi_divergence": 0.5,
+        "vol_skew": 0.0,
+    }
+    assert enabled["factor_scores"]["ortho_term"] == 1.0
+    assert enabled["weights"]["ortho"] == pytest.approx(0.25)
+
+
+def test_calc_confluence_bridges_ortho_diagnostics_without_signing_nested_votes(monkeypatch):
+    from scoring import calc_confluence
+
+    pair = {"type": "crypto", "display": "BTC/USDT"}
+    snap = _snap("long", momentum="bullish")
+    detail = {
+        "votes": {
+            "carry": {"vote": 0.0, "weight": 0.0, "status": "neutral"},
+            "cot": {"vote": 0.5, "weight": 0.1, "status": "ok"},
+            "funding": {"vote": 1.0, "weight": 0.45, "status": "ok"},
+            "oi_divergence": {"vote": 0.5, "weight": 0.35, "status": "ok"},
+            "vol_skew": {"vote": 0.0, "weight": 0.0, "status": "neutral"},
+        },
+        "weighted_sum": 0.675,
+        "ortho_term": 1.0,
+        "enabled": True,
+    }
+
+    monkeypatch.setitem(CONFIG, "ENGINE_A_ORTHO_VOTE_ENABLED", True)
+    monkeypatch.setitem(CONFIG, "ENGINE_A_ORTHO_CONVICTION_WEIGHT_BY_CLASS", {"crypto": 0.25})
+    monkeypatch.setattr(factor_scoring, "_orthogonal_vote_vector", lambda *_args, **_kwargs: (1.0, detail))
+
+    out = calc_confluence(
+        {"snap": snap},
+        {"snap": snap},
+        {"snap": snap},
+        1.0,
+        {},
+        pair,
+        "neutral",
+        funding_rate=0.02,
+        oi_context={"oi_change_pct": 5.0, "price_change_pct": 2.0},
+    )
+
+    assert out["factor_scores"]["ortho"]["funding"] == 1.0
+    fd = out["factorDiagnostics"]
+    assert fd["orthoEnabled"] is True
+    assert fd["orthoVote"] == detail
+    assert "FACTOR_ORTHO" not in out["votes"]

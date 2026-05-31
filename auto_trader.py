@@ -36,6 +36,7 @@ run_full_scan() which produces Engine A/B/C signals exclusively.
 import json
 
 import logging
+import os
 
 import threading
 
@@ -844,8 +845,9 @@ class AutoTrader:
 
         self._config_fn = config_fn
 
-        # Start timed exit monitor (hybrid triple-barrier C-barrier)
-        if audit_db:
+        # Start timed exit monitor (hybrid triple-barrier C-barrier).
+        # Diagnostics import athena.py for backtests; they must not start broker threads.
+        if audit_db and not os.environ.get("ATHENA_DIAGNOSTIC_MODE"):
             start_monitor(audit_db, config_fn)
 
     # ── Public control ────────────────────────────────────────────────────────

@@ -810,6 +810,25 @@ def _bt_gold_macro_context(
     )
 
 
+def _bt_inject_vol_skew(ctx: dict | None, pair: dict, cutoff_ts) -> dict | None:
+    """Attach point-in-time vol_skew to backtest macro context when ortho is enabled."""
+    if not CONFIG.get("ENGINE_A_ORTHO_VOTE_ENABLED", False):
+        return ctx
+    try:
+        from vol_skew_feed import get_vol_skew_z
+
+        as_of_date = str(cutoff_ts)[:10] if cutoff_ts is not None else None
+        vol_skew = get_vol_skew_z(pair.get("display"), as_of_date=as_of_date)
+        if vol_skew is None:
+            return ctx
+        out = dict(ctx) if isinstance(ctx, dict) else {}
+        out["vol_skew"] = vol_skew
+        return out
+    except Exception as exc:
+        log.debug("bt vol_skew inject skipped: %s", exc)
+        return ctx
+
+
 def _bt_crypto_funding_oi_for_bar(
     ptype: str,
     funding_rows: list | None,
@@ -2224,6 +2243,11 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
                         _bt_dxy_h4_raw,
                         _bt_dxy_h4_times,
                     )
+                    _bt_macro_ctx = _bt_inject_vol_skew(
+                        _bt_macro_ctx,
+                        _pair_ctx,
+                        intraday_cutoff,
+                    )
                     _bt_asset_prices = _bt_price_series_before(
                         h4_raw, h4_times, intraday_cutoff, limit=220
                     )
@@ -2837,6 +2861,11 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
                         _bt_dxy_h4_raw,
                         _bt_dxy_h4_times,
                     )
+                    _bt_macro_ctx = _bt_inject_vol_skew(
+                        _bt_macro_ctx,
+                        _pair_ctx,
+                        entry_ts,
+                    )
                     _bt_asset_prices = _bt_price_series_before(
                         h4_raw, h4_times, entry_ts, limit=220
                     )
@@ -3429,6 +3458,11 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
                         h4_ctx,
                         _bt_dxy_h4_raw,
                         _bt_dxy_h4_times,
+                    )
+                    _bt_macro_ctx = _bt_inject_vol_skew(
+                        _bt_macro_ctx,
+                        _pair_ctx,
+                        entry_ts,
                     )
                     _bt_asset_prices = _bt_price_series_before(
                         h4_raw, h4_ts_sc, entry_ts, limit=220

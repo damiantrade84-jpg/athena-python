@@ -140,6 +140,8 @@ def test_crypto_signal_feed_uses_paginated_bybit_fetcher_for_large_backtest_requ
     assert len(result.candles) == 1200
     assert result.candles[-1]["source_tag"] == "bybit_paginated"
     assert paginated_calls == [("BTCUSDT", "H1", 1200)]
+    assert result.meta["paginated"] is True
+    assert result.meta["estimatedRequests"] == 2
 
 
 def test_resolve_crypto_signal_feed_supports_engine_specific_override():

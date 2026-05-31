@@ -93,9 +93,11 @@ def fetch_crypto_signal_candles(
         return CryptoSignalCandles(candles, meta)
 
     if feed == "bybit":
+        paginated = limit_i > 1000 and callable(bybit_paginated_fetch)
+        estimated_requests = max(1, (limit_i + 999) // 1000)
         fetcher = (
             bybit_paginated_fetch
-            if limit_i > 1000 and callable(bybit_paginated_fetch)
+            if paginated
             else bybit_fetch
         )
         candles = fetcher(_symbol(pair), tf_u, limit_i) if callable(fetcher) else None
@@ -104,6 +106,8 @@ def fetch_crypto_signal_candles(
                 {
                     "upstream": "bybit_linear_kline",
                     "bars": len(candles),
+                    "paginated": paginated,
+                    "estimatedRequests": estimated_requests if paginated else 1,
                 }
             )
             return CryptoSignalCandles(candles, meta)
@@ -130,6 +134,8 @@ def fetch_crypto_signal_candles(
                 "bars": 0,
                 "error": True,
                 "detail": "bybit_signal_feed_unavailable",
+                "paginated": paginated,
+                "estimatedRequests": estimated_requests if paginated else 1,
             }
         )
         return CryptoSignalCandles(None, meta)

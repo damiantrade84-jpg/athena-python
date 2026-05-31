@@ -387,10 +387,16 @@ def build_oi_context_for_factor_scoring(
         return None
     if not prev:
         return None
-    return {
+    ctx = {
         "oi_change_pct": float(oi_data["oiChange"]),
         "price_change_pct": (cur - prev) / prev * 100.0,
     }
+    if oi_data.get("oiChangeSmoothed") is not None:
+        try:
+            ctx["oi_change_pct_smoothed"] = float(oi_data["oiChangeSmoothed"])
+        except (TypeError, ValueError):
+            pass
+    return ctx
 
 
 # ── Factor 1: Trend (multi-TF EMA alignment) ─────────────────────────────────
@@ -1900,25 +1906,6 @@ def _cot_addon_with_status(
         if cot is None or cot == 0.0:
             return _ADDON_NEUTRAL, "neutral"
         cot = float(cot)
-        # Fade the herd at extremes — linear taper avoids the sharp discontinuity
-        # that previously flipped the sign at exactly |z|=2.0.
-        # z < 1.5  → confirm direction
-        # 1.5..2.5 → linear blend from confirm toward fade
-        # z > 2.5  → full fade (opposing direction, 1.5× magnitude)
-        cot_fade_cfg = CONFIG.get("ENGINE_A_COT_CONTRARIAN_FADE", {}) or {}
-        fade_enabled = bool(cot_fade_cfg.get("ENABLED", True))
-        fade_assets = set(cot_fade_cfg.get("ASSET_TYPES", ["forex", "commodity"]) or [])
-        _fade_lo = float(cot_fade_cfg.get("FADE_START_Z", 1.5))
-        _fade_hi = float(cot_fade_cfg.get("FULL_FADE_Z", 2.5))
-        if fade_enabled and asset_type in fade_assets and abs(cot) > _fade_lo:
-            _abs_cot = abs(cot)
-            if _abs_cot >= _fade_hi:
-                cot = -cot * 1.5
-            else:
-                _blend = (_abs_cot - _fade_lo) / (_fade_hi - _fade_lo)
-                _confirm = cot
-                _fade = -cot * 1.5
-                cot = _confirm * (1.0 - _blend) + _fade * _blend
         if abs(cot) < 1.0:
             return _ADDON_NEUTRAL, "neutral"  # insignificant signal
         is_long = direction == "LONG"
@@ -1994,6 +1981,48 @@ def _funding_addon(funding_rate: Optional[float], direction: str,
         return _ADDON_NEUTRAL
 
 
+def _funding_vote_continuous(
+    funding_rate: Optional[float],
+    direction: str,
+    funding_stats: Optional[dict] = None,
+) -> float:
+    """Continuous funding vote in [-1,+1], sign-aligned with _funding_addon."""
+    if funding_rate is None:
+        return 0.0
+    try:
+        fr = float(funding_rate)
+        if (
+            CONFIG.get("FACTOR_FUNDING_USE_ZSCORE", False)
+            and funding_stats
+            and isinstance(funding_stats, dict)
+        ):
+            mean = float(funding_stats.get("mean", 0.0))
+            std = float(funding_stats.get("std", 0.0))
+            if std <= 1e-9:
+                return 0.0
+            z = (fr - mean) / std
+            z_thresh = float(CONFIG.get("FACTOR_FUNDING_Z_THRESHOLD", 1.0))
+            if abs(z) < z_thresh:
+                return 0.0
+            z_ref = max(1e-9, abs(float(CONFIG.get("FACTOR_FUNDING_Z_REF", 2.0))))
+            raw = math.tanh(abs(z) / z_ref)
+            funding_bullish = z < -z_thresh
+        else:
+            baseline = float(CONFIG.get("FACTOR_FUNDING_BASELINE", 0.0001))
+            noise_band = float(CONFIG.get("FACTOR_FUNDING_NOISE_BAND", 0.0001))
+            adjusted = fr - baseline
+            if abs(adjusted) < noise_band:
+                return 0.0
+            scale = max(1e-9, abs(float(CONFIG.get("FACTOR_FUNDING_SCALE", 0.0005))))
+            raw = math.tanh(abs(adjusted) / scale)
+            funding_bullish = adjusted < 0
+        long_vote = raw if funding_bullish else -raw
+        vote = long_vote if direction == "LONG" else -long_vote
+        return max(-1.0, min(1.0, float(vote)))
+    except (TypeError, ValueError):
+        return 0.0
+
+
 def _oi_addon(oi_context: dict, direction: str) -> float:
     """Open-interest divergence addon for crypto. Returns _ADDON_* constant.
 
@@ -2029,6 +2058,201 @@ def _oi_addon(oi_context: dict, direction: str) -> float:
         return _ADDON_NEUTRAL
     except (TypeError, ValueError, KeyError):
         return _ADDON_NEUTRAL
+
+
+def _oi_vote_continuous(oi_context: Optional[dict], direction: str) -> float:
+    """Continuous OI divergence vote in [-1,+1], using _oi_addon's direction semantics."""
+    if not oi_context:
+        return 0.0
+    try:
+        use_smoothed = bool(CONFIG.get("FACTOR_OI_USE_SMOOTHED", True))
+        oi_raw = (
+            oi_context.get("oi_change_pct_smoothed")
+            if use_smoothed and oi_context.get("oi_change_pct_smoothed") is not None
+            else oi_context.get("oi_change_pct")
+        )
+        oi_chg = float(oi_raw)
+        if abs(oi_chg) < 0.5:
+            return 0.0
+        ctx = dict(oi_context)
+        ctx["oi_change_pct"] = oi_chg
+        discrete = _oi_addon(ctx, direction)
+        if discrete == _ADDON_CONFIRM:
+            sign = 1.0
+        elif discrete == _ADDON_AGAINST:
+            sign = -1.0
+        else:
+            return 0.0
+        ref = max(1e-9, abs(float(CONFIG.get("FACTOR_OI_REF_PCT", 5.0))))
+        weak_mult = 0.5 if oi_chg < 0 and float(ctx["price_change_pct"]) > 0 else 1.0
+        return sign * weak_mult * min(1.0, abs(oi_chg) / ref)
+    except (TypeError, ValueError, KeyError):
+        return 0.0
+
+
+def _vote_carry(display: str, direction: str, bar_time: Optional[str]) -> tuple[float, str]:
+    """Carry vote in [-1,+1]. Reuses get_carry_z; sign vs direction."""
+    try:
+        from carry_feed import get_carry_z as _gcz
+
+        _as_of = (bar_time or "")[:10] or None
+        z = _gcz(display, as_of_date=_as_of)
+        if z is None:
+            return 0.0, "neutral"
+        v = max(-1.0, min(1.0, float(z) / 2.0))
+        return (v if direction == "LONG" else -v), "ok"
+    except Exception as exc:
+        log.warning("[EA2] %s carry vote error: %s", display, exc)
+        return 0.0, "error"
+
+
+def _vote_cot(display: str, direction: str, bar_time: Optional[str]) -> tuple[float, str]:
+    """COT speculator positioning vote in [-1,+1]."""
+    try:
+        from cot_feed import get_cot_z as _gcz
+
+        _as_of = (bar_time or "")[:10] or None
+        z = _gcz(display, as_of_date=_as_of)
+        if z is None or z == 0.0:
+            return 0.0, "neutral"
+        v = max(-1.0, min(1.0, float(z) / 2.0))
+        return (v if direction == "LONG" else -v), "ok"
+    except Exception as exc:
+        log.warning("[EA2] %s cot vote error: %s", display, exc)
+        return 0.0, "error"
+
+
+def _vote_funding(
+    funding_rate: Optional[float],
+    direction: str,
+    funding_stats: Optional[dict] = None,
+) -> tuple[float, str]:
+    """Funding extreme vote in [-1,+1]; positive funding fades new longs."""
+    if funding_rate is None:
+        return 0.0, "neutral"
+    try:
+        return _funding_vote_continuous(funding_rate, direction, funding_stats), "ok"
+    except Exception as exc:
+        log.warning("[EA2] funding vote error: %s", exc)
+        return 0.0, "error"
+
+
+def _vote_oi_divergence(oi_context: Optional[dict], direction: str) -> tuple[float, str]:
+    """OI vs price divergence vote in [-1,+1]."""
+    if not oi_context:
+        return 0.0, "neutral"
+    try:
+        v = _oi_vote_continuous(oi_context, direction)
+        return v, "ok" if v != 0.0 else "neutral"
+    except Exception as exc:
+        log.warning("[EA2] oi vote error: %s", exc)
+        return 0.0, "error"
+
+
+def _vote_vol_skew(
+    display: str,
+    asset_type: str,
+    direction: str,
+    bar_time: Optional[str],
+    macro_context: Optional[dict],
+) -> tuple[float, str]:
+    """Options/vol-term-structure vote in [-1,+1]. Neutral when feed is absent."""
+    try:
+        sk = macro_context.get("vol_skew") if isinstance(macro_context, dict) else None
+        if sk is None:
+            from vol_skew_feed import get_vol_skew_z as _gvz
+
+            _as_of = (bar_time or "")[:10] or None
+            sk = _gvz(display, as_of_date=_as_of)
+        if sk is None:
+            return 0.0, "neutral"
+        v = -max(-1.0, min(1.0, float(sk) / 2.0))
+        return (v if direction == "LONG" else -v), "ok"
+    except Exception as exc:
+        log.warning("[EA2] %s vol_skew vote error: %s", display, exc)
+        return 0.0, "error"
+
+
+def _orthogonal_vote_vector(
+    pair: dict,
+    direction: str,
+    bar_time: Optional[str],
+    funding_rate: Optional[float],
+    oi_context: Optional[dict],
+    funding_stats: Optional[dict],
+    macro_context: Optional[dict],
+) -> tuple[float, dict]:
+    """Weighted independent orthogonal votes, squashed once via tanh."""
+    asset_type = pair.get("type", "stock")
+    display = pair.get("display", "")
+    try:
+        from scoring import get_pair_score_group
+
+        score_group = get_pair_score_group(pair)
+    except Exception:
+        score_group = _resolve_pair_score_group(pair)
+    weight_map = CONFIG.get("ENGINE_A_ORTHO_FACTOR_WEIGHTS", {}) or {}
+    weights = (weight_map.get(score_group) or weight_map.get(asset_type) or {})
+    k = float(CONFIG.get("ENGINE_A_ORTHO_VOTE_TANH_K", 1.0))
+
+    votes: dict[str, dict] = {}
+
+    def _add(name: str, fn_result: tuple[float, str], weight: float) -> None:
+        v, st = fn_result
+        votes[name] = {"vote": round(float(v), 4), "weight": float(weight), "status": st}
+
+    _add("carry", _vote_carry(display, direction, bar_time), weights.get("carry", 0.0))
+    _add("cot", _vote_cot(display, direction, bar_time), weights.get("cot", 0.0))
+    _add(
+        "funding",
+        _vote_funding(funding_rate, direction, funding_stats),
+        weights.get("funding", 0.0),
+    )
+    _add(
+        "oi_divergence",
+        _vote_oi_divergence(oi_context, direction),
+        weights.get("oi_divergence", 0.0),
+    )
+    _add(
+        "vol_skew",
+        _vote_vol_skew(display, asset_type, direction, bar_time, macro_context),
+        weights.get("vol_skew", 0.0),
+    )
+
+    weighted_sum = sum(d["vote"] * d["weight"] for d in votes.values())
+    ortho_term = math.tanh(k * weighted_sum)
+    detail = {
+        "votes": votes,
+        "weighted_sum": round(weighted_sum, 4),
+        "ortho_term": round(ortho_term, 4),
+        "enabled": True,
+    }
+    if CONFIG.get("ENGINE_A_ORTHO_VOTE_DEBUG", False):
+        try:
+            import json as _json
+            import os as _os
+
+            _path = CONFIG.get("ENGINE_A_ORTHO_VOTE_DEBUG_PATH", "tmp/ortho_votes.jsonl")
+            _dir = _os.path.dirname(_path)
+            if _dir:
+                _os.makedirs(_dir, exist_ok=True)
+            _rec = {
+                "display": pair.get("display"),
+                "score_group": score_group,
+                "direction": direction,
+                "bar_time": bar_time,
+                "weighted_sum": detail["weighted_sum"],
+                "ortho_term": detail["ortho_term"],
+                "votes": {
+                    k: {"vote": v["vote"], "weight": v["weight"], "status": v["status"]}
+                    for k, v in detail["votes"].items()
+                },
+            }
+            with open(_path, "a", encoding="utf-8") as _fh:
+                _fh.write(_json.dumps(_rec) + "\n")
+        except Exception:
+            pass
+    return ortho_term, detail
 
 
 def _volume_price_concordance(
@@ -2832,6 +3056,9 @@ def compute_factor_scores(
     # Base floor + momentum quality + addon (addon_val can be negative → reduces conviction).
     # Normalise addon: +0.20 → +1.0, 0.00 → 0.0, -0.15 → -0.75 (penalty preserved, not floored).
     addon_norm = (addon_val / _ADDON_CONFIRM) if _ADDON_CONFIRM > 0 else 0.0
+    _ortho_enabled = bool(CONFIG.get("ENGINE_A_ORTHO_VOTE_ENABLED", False))
+    ortho_detail = None
+    _ortho_w = 0.0
 
     # When addon is unsupported (stock/index), redistribute addon weight.
     # ADDON_UNSUPPORTED_SPLIT (default 0.5): fraction of addon weight that goes
@@ -2840,17 +3067,36 @@ def compute_factor_scores(
     _eff_mom_w = _momentum_w
     _eff_addon_w = _addon_w
     _eff_base_w = _base_w
-    if addon_status == "unsupported":
+    if (not _ortho_enabled) and addon_status == "unsupported":
         _split_to_base = _resolve_addon_split(score_group, asset_type)
         _eff_base_w = _base_w + _addon_w * _split_to_base
         _eff_mom_w = _momentum_w + _addon_w * (1.0 - _split_to_base)
         _eff_addon_w = 0.0
 
-    conviction = (
-        _eff_base_w
-        + _eff_mom_w * mom_quality
-        + _eff_addon_w * addon_norm
-    )
+    if _ortho_enabled:
+        _ortho_w_by_class = CONFIG.get("ENGINE_A_ORTHO_CONVICTION_WEIGHT_BY_CLASS", {}) or {}
+        _ortho_w = float(_ortho_w_by_class.get(asset_type, 0.20))
+        ortho_term, ortho_detail = _orthogonal_vote_vector(
+            pair,
+            direction,
+            bar_time,
+            funding_rate,
+            oi_context,
+            funding_stats=None,
+            macro_context=macro_context,
+        )
+        _eff_addon_w = 0.0
+        conviction = (
+            _eff_base_w
+            + _eff_mom_w * mom_quality
+            + _ortho_w * ((ortho_term + 1.0) / 2.0)
+        )
+    else:
+        conviction = (
+            _eff_base_w
+            + _eff_mom_w * mom_quality
+            + _eff_addon_w * addon_norm
+        )
     conviction = max(0.0, min(1.0, conviction))
 
     # ── Regime detection (informational — not used for weight modification) ───
@@ -3067,7 +3313,7 @@ def compute_factor_scores(
     if ema_cluster_soft_cap is not None:
         final_score = min(final_score, ema_cluster_soft_cap)
     research_score_uplift_for_guard = 0.0
-    if research_detail.get("enabled") and research_val > 0:
+    if (not _ortho_enabled) and research_detail.get("enabled") and research_val > 0:
         addon_norm_without_positive_research = (
             addon_val_without_positive_research / _ADDON_CONFIRM
             if _ADDON_CONFIRM > 0
@@ -3225,6 +3471,20 @@ def compute_factor_scores(
         "research_lab": round(research_val, 4),
         "mean_reversion": round(mean_rev_adj, 4),
     }
+    if ortho_detail is not None:
+        factor_scores["ortho"] = {
+            name: d["vote"] for name, d in ortho_detail["votes"].items()
+        }
+        factor_scores["ortho_term"] = ortho_detail["ortho_term"]
+
+    weights_payload = {
+        "trend": 1.0,
+        "momentum": _eff_mom_w,
+        "addon": _eff_addon_w,
+        "base": _eff_base_w,
+    }
+    if _ortho_enabled:
+        weights_payload["ortho"] = _ortho_w
 
     log.debug(
         "[EA2] %s dir=%s score=%.3f trend=%.3f adx=%.1f(%s) mom=%.3f addon=%.3f(%s) mean_rev=%.3f sess=%.2f regime=%s",
@@ -3239,7 +3499,7 @@ def compute_factor_scores(
         "regime": regime,
         # ── Factor breakdown (UI + AI) ────────────────────────────────────────
         "factor_scores": factor_scores,
-        "weights": {"trend": 1.0, "momentum": _eff_mom_w, "addon": _eff_addon_w, "base": _eff_base_w},
+        "weights": weights_payload,
         "asset_type": asset_type,
         "score_group": score_group,
         "scoring_profile": scoring_profile_public_dict(scoring_profile),
@@ -3266,6 +3526,8 @@ def compute_factor_scores(
         "momentum_quality": round(mom_quality, 4),
         "addon_type": addon_type,
         "addon_value": round(addon_val, 4),
+        "orthoVote": ortho_detail,
+        "orthoEnabled": _ortho_enabled,
         "research_lab_value": round(research_val, 4),
         "research_lab_detail": research_detail,
         "research_lab_score_uplift": round(research_score_uplift_for_guard, 6),

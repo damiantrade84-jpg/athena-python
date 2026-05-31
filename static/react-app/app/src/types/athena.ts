@@ -181,11 +181,27 @@ export interface EngineASignal {
   factorScores?: {
     trend?: number;
     momentum?: number;
-    addon?: number;
+    addon?: number; // legacy
     research_lab?: number;
-    [k: string]: number | undefined;
+    mean_reversion?: number;
+    ortho?: Record<string, number>;
+    ortho_term?: number;
+    [k: string]: number | Record<string, number> | undefined;
   };
   factorWeights?: Record<string, number>;
+  orthoEnabled?: boolean;
+  orthoVote?: {
+    votes?: Record<string, {
+      vote?: number;
+      weight?: number;
+      status?: string;
+      [k: string]: unknown;
+    }>;
+    weighted_sum?: number;
+    ortho_term?: number;
+    enabled?: boolean;
+    [k: string]: unknown;
+  } | null;
   factorDiagnostics?: {
     trendDirection?: Direction | string;
     trendCoherence?: number;
@@ -1538,6 +1554,8 @@ export interface AIChartReviewChartSnapshot {
   visibleCandleCount?: number | null;
   indicatorLayerStates?: Record<string, boolean>;
   engineBOverlayCount?: number;
+  engineBOverlayStatus?: 'disabled' | 'loading' | 'ready' | 'error' | 'unavailable';
+  engineBOverlayError?: string | null;
   priceRange?: {
     min?: number | null;
     max?: number | null;

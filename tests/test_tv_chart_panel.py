@@ -270,6 +270,14 @@ def test_tv_chart_panel_auto_review_waits_for_chart_paint():
     assert "requestAnimationFrame" in source
 
 
+def test_tv_chart_panel_auto_review_waits_for_engine_b_overlay_state():
+    source = _read(TV_PANEL)
+
+    assert "engineBOverlayPendingForReview" in source
+    assert "if (!pendingAutoReviewRef.current || loading || !candles?.length || aiReviewLoading || engineBOverlayPendingForReview) return" in source
+    assert "engineBOverlayStatus" in source
+
+
 def test_tv_chart_panel_ai_review_sends_visible_range_meta():
     source = _read(TV_PANEL)
 

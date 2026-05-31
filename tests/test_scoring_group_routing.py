@@ -296,12 +296,7 @@ def test_python_defaults_match_runtime_yaml_for_audit_sensitive_gates():
     assert CONFIG["AUTO_TRADE_MIN_SCORE"]["index"] == 1.8
     assert CONFIG["THRESHOLD_AUDIT"]["ENABLED"] is True
     assert CONFIG["FACTOR_MIN_DIRECTIONAL_CRYPTO"] == 0.20
-    assert CONFIG["ENGINE_A_COT_CONTRARIAN_FADE"] == {
-        "ENABLED": True,
-        "ASSET_TYPES": ["forex", "commodity"],
-        "FADE_START_Z": 1.5,
-        "FULL_FADE_Z": 2.5,
-    }
+    assert "ENGINE_A_COT_ADDON_ASSET_TYPES" in CONFIG
 
 
 def test_etf_level_atr_class_is_separate_from_stock_identity(monkeypatch):

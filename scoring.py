@@ -907,7 +907,7 @@ def calc_confluence(
     # Legacy compatibility: construct votes dict from factor scores
     v = {}
     for factor, val in factor_result["factor_scores"].items():
-        if val is not None:
+        if isinstance(val, (int, float)) and not isinstance(val, bool):
             v[f"FACTOR_{factor.upper()}"] = _vote_sign(val)
 
     # Map legacy vote names for UI compatibility. The previous "D1 ADX Trend"
@@ -1024,6 +1024,8 @@ def calc_confluence(
             "addon_type": factor_result.get("addon_type"),
             "addon_value": factor_result.get("addon_value"),
             "addon_unsupported": factor_result.get("addon_unsupported"),
+            "orthoEnabled": factor_result.get("orthoEnabled", False),
+            "orthoVote": factor_result.get("orthoVote"),
             "momentumQuality": factor_result.get("momentum_quality"),
             "adxMultiplier": factor_result.get("adx_multiplier"),
             "directionalRampMult": factor_result.get("directional_ramp_multiplier"),

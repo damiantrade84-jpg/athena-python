@@ -332,7 +332,7 @@ def build_oi_data_for_divergence(
     if oi_prev <= 0:
         return None
     oi_change = (oi_now - oi_prev) / oi_prev * 100
-    return {
+    out = {
         "oi": oi_now,
         "oiChange": round(oi_change, 2),
         "price": 0.0,
@@ -342,6 +342,18 @@ def build_oi_data_for_divergence(
         "symbol": "",
         "detail": "",
     }
+    hist = sorted(
+        (r for r in oi_rows if int(r.get("ts_ms", 0)) <= int(rec_now["ts_ms"])),
+        key=lambda r: int(r["ts_ms"]),
+    )
+    if len(hist) >= 4:
+        try:
+            oi_start = float(hist[-4]["oi"])
+            if oi_start > 0:
+                out["oiChangeSmoothed"] = round(((oi_now - oi_start) / oi_start * 100.0) / 3.0, 2)
+        except (TypeError, ValueError, KeyError):
+            pass
+    return out
 
 
 def _merge_dedupe_by_ts(rows: list[dict], ts_key: str = "ts_ms") -> list[dict]:

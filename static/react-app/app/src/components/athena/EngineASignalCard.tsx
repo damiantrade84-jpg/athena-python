@@ -25,6 +25,14 @@ interface Props {
   compact?: boolean;
 }
 
+const ORTHO_LABELS: Record<string, string> = {
+  carry: 'Carry',
+  cot: 'COT',
+  funding: 'Funding',
+  oi_divergence: 'OI Div',
+  vol_skew: 'Vol Skew',
+};
+
 export default function EngineASignalCard({
   signal,
   onExecute,
@@ -65,6 +73,12 @@ export default function EngineASignalCard({
       ? raw.engine_a_factorScores
       : signal.factorScores
   ) || {}) as NonNullable<EngineASignal['factorScores']>;
+  const orthoScores = (
+    fs.ortho && typeof fs.ortho === 'object' && !Array.isArray(fs.ortho)
+      ? fs.ortho
+      : undefined
+  );
+  const hasOrthoScores = Boolean(orthoScores && Object.keys(orthoScores).length > 0);
   const fd = ((
     (isEngineBOnly && raw.engine_a_factorDiagnostics && typeof raw.engine_a_factorDiagnostics === 'object')
       ? raw.engine_a_factorDiagnostics
@@ -180,7 +194,9 @@ export default function EngineASignalCard({
             </p>
           ) : (
             <p className="text-[9px] text-muted-foreground leading-snug">
-              Final confluence blends trend, momentum quality, ADX/session gates and addon — it is{' '}
+              Final confluence blends trend, momentum quality, ADX/session gates and a weighted vote of
+              orthogonal factors (carry, COT, funding, OI divergence, vol skew) squashed into the
+              conviction term — it is{' '}
               <span className="font-medium text-foreground/80">not</span> the sum of the factor boxes below.
             </p>
           )}
@@ -214,12 +230,28 @@ export default function EngineASignalCard({
         </div>
 
         {/* Factor breakdown */}
-        {(fs.trend != null || fs.momentum != null || fs.addon != null) && (
-          <div className="grid grid-cols-3 gap-2 text-center">
-            <FactorBox label="Trend" value={fs.trend} accent="long" />
-            <FactorBox label="Momentum" value={fs.momentum} accent="primary" />
-            <FactorBox label="Addon" value={fs.addon} accent="warning" />
-          </div>
+        {(fs.trend != null || fs.momentum != null || fs.addon != null || hasOrthoScores) && (
+          hasOrthoScores && orthoScores ? (
+            <div className="grid grid-cols-2 gap-1 text-center">
+              <FactorBox label="Trend" value={fs.trend} accent="long" />
+              <FactorBox label="Momentum" value={fs.momentum} accent="primary" />
+              {Object.entries(orthoScores).map(([name, v]) => (
+                <FactorBox
+                  key={name}
+                  label={ORTHO_LABELS[name] ?? name}
+                  value={v}
+                  accent={v >= 0 ? 'long' : 'short'}
+                />
+              ))}
+              <FactorBox label="Ortho Σ" value={fs.ortho_term} accent="warning" />
+            </div>
+          ) : (
+            <div className="grid grid-cols-3 gap-2 text-center">
+              <FactorBox label="Trend" value={fs.trend} accent="long" />
+              <FactorBox label="Momentum" value={fs.momentum} accent="primary" />
+              <FactorBox label="Addon" value={fs.addon} accent="warning" />
+            </div>
+          )
         )}
 
         {!compact && intermarketEntries.length > 0 && (
@@ -316,10 +348,18 @@ function FactorBox({
 }: {
   label: string;
   value: number | undefined;
-  accent: 'long' | 'primary' | 'warning';
+  accent: 'long' | 'short' | 'primary' | 'warning';
 }) {
-  const fg = accent === 'long' ? 'text-long' : accent === 'warning' ? 'text-warning' : 'text-primary';
-  const bg = accent === 'long' ? 'hsl(var(--long) / 0.10)' : accent === 'warning' ? 'hsl(var(--warning) / 0.10)' : 'hsl(var(--gold) / 0.10)';
+  const fg =
+    accent === 'long' ? 'text-long'
+    : accent === 'short' ? 'text-short'
+    : accent === 'warning' ? 'text-warning'
+    : 'text-primary';
+  const bg =
+    accent === 'long' ? 'hsl(var(--long) / 0.10)'
+    : accent === 'short' ? 'hsl(var(--short) / 0.10)'
+    : accent === 'warning' ? 'hsl(var(--warning) / 0.10)'
+    : 'hsl(var(--gold) / 0.10)';
   return (
     <div className="p-2 rounded-md" style={{ background: bg }}>
       <p className="text-[10px] text-muted-foreground uppercase">{label}</p>

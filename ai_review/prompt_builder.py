@@ -21,6 +21,12 @@ def _fmt(value: Any) -> str:
     return str(value)
 
 
+def _fmt_list(value: Any) -> str:
+    if not isinstance(value, list) or not value:
+        return "unavailable"
+    return ", ".join(str(item) for item in value)
+
+
 def build_chart_review_prompt(context: dict[str, Any]) -> str:
     atr = context.get("atr") or {}
     geometry = context.get("geometry") or {}
@@ -28,6 +34,12 @@ def build_chart_review_prompt(context: dict[str, Any]) -> str:
     mismatch_warnings = context.get("mismatch_warnings") or []
     review_style = context.get("review_style_diagnostic") or {}
     indicator_parity = context.get("indicator_parity") or {}
+    chart_snapshot = context.get("chart_snapshot") or {}
+    if not isinstance(chart_snapshot, dict):
+        chart_snapshot = {}
+    rendered_layers = chart_snapshot.get("renderedLayers")
+    if not rendered_layers:
+        rendered_layers = context.get("screenshot_overlays") or []
     engine_a_context = build_engine_a_prompt_context(context)
     engine_b_context = build_engine_b_prompt_context(context)
     engine_a_json = json.dumps({"engineAContext": engine_a_context}, default=str, indent=2)
@@ -148,6 +160,14 @@ review_analyze_style: {_fmt(review_style.get("review_analyze_style"))} candidate
 review_style_note: {_fmt(review_style.get("note"))}
 indicator_parity: chart_tf={_fmt(indicator_parity.get("chart_timeframe"))} engine_a_indicator_tf={_fmt(indicator_parity.get("engine_a_indicator_timeframe"))} status={_fmt(indicator_parity.get("status"))} mismatches={_fmt(indicator_parity.get("mismatches"))}
 (Chart indicators are computed on the visible timeframe; Engine A trend EMAs are H4. When status is not_comparable_timeframe or values_differ, do not read the chart's drawn EMA/ATR/ADX as Engine A's values.)
+
+== CHART CAPTURE METADATA ==
+rendered_layers: {_fmt_list(rendered_layers)}
+visible_candle_count: {_fmt(chart_snapshot.get("visibleCandleCount"))}
+visible_range: {_fmt(chart_snapshot.get("visibleRange"))}
+engine_b_overlay_status: {_fmt(chart_snapshot.get("engineBOverlayStatus"))}
+engine_b_overlay_count: {_fmt(chart_snapshot.get("engineBOverlayCount"))}
+indicator_layer_states: {_fmt(chart_snapshot.get("indicatorLayerStates"))}
 
 Analyse the chart image and return JSON only.
 """

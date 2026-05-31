@@ -312,6 +312,10 @@ ADX_MISSING_BOTH_ABORT: true
 # are treated as signal rather than noise.
 FACTOR_FUNDING_BASELINE: 0.0001
 FACTOR_FUNDING_NOISE_BAND: 0.0001
+FACTOR_FUNDING_Z_REF: 2.0
+FACTOR_FUNDING_SCALE: 0.0005
+FACTOR_OI_REF_PCT: 5.0
+FACTOR_OI_USE_SMOOTHED: true
 
 # ── Multi-Exchange Funding Composite (Binance + Bybit) ───────────────────────
 # When enabled, fetches funding rates from both Binance and Bybit and composites
@@ -366,6 +370,83 @@ ENGINE_A_FACTOR_WEIGHTS_BY_CLASS:
   # two rows to restore the 0.50 / 0.30 / 0.20 code defaults.
   crypto: { momentum: 0.50, addon: 0.20, base: 0.30 }
   forex:  { momentum: 0.50, addon: 0.20, base: 0.30 }
+
+# -- Orthogonal-factor vote vector (v13) --------------------------------------
+# Replaces the single capped _asset_addon scalar with independent weighted votes.
+# Each factor outputs a vote in [-1,+1]; votes are weighted-summed then squashed
+# ONCE (tanh) into the conviction's orthogonal term. Master flag falls back to the
+# legacy single-addon behaviour when false (for A/B backtesting).
+# WEIGHTS ARE UNVALIDATED JUDGMENT VALUES (NOT n>=30 outcome-backed). Reversible.
+ENGINE_A_ORTHO_VOTE_ENABLED: false   # flip to true only for the A/B backtest run
+
+# Per-asset-class factor weights. Missing factor => weight 0 (factor not voted).
+# Sum need NOT equal 1; the squash handles magnitude. Tune individually.
+ENGINE_A_ORTHO_FACTOR_WEIGHTS:
+  forex:
+    carry: 0.35        # FRED rate differential (get_carry_z)
+    cot: 0.40          # CFTC speculator positioning (get_cot_z) - NEW for forex
+    vol_skew: 0.00     # n/a for forex (no listed-option skew feed)
+  crypto:
+    funding: 0.45      # perp funding extreme (mean-reverting fade)
+    oi_divergence: 0.35 # OI vs price divergence (conviction/exhaustion)
+    carry: 0.00        # n/a
+    cot: 0.10          # BTC/ETH CME COT (light - already in cot_feed)
+  # Per-crypto score-group weights are UNVALIDATED starting points for A/B only.
+  # BTC improved at the v13 crypto weights; SOL/alt-majors regressed, so dial down.
+  crypto_btc:
+    funding: 0.45
+    oi_divergence: 0.35
+    cot: 0.15          # BTC has real CME COT
+  crypto_eth:
+    funding: 0.45
+    oi_divergence: 0.35
+    cot: 0.15
+  crypto_alt_majors:
+    funding: 0.25
+    oi_divergence: 0.20
+    cot: 0.00          # no CME COT for alts
+  crypto_doge:
+    funding: 0.20
+    oi_divergence: 0.20
+    cot: 0.00
+  crypto_other:
+    funding: 0.25
+    oi_divergence: 0.20
+    cot: 0.00
+  commodity:
+    cot: 0.45          # managed-money positioning (gold/silver crowded-long)
+    carry: 0.00
+    vol_skew: 0.30     # GVZ / term-structure (NEW - gold)
+  index:
+    cot: 0.30          # futures-proxy positioning
+    carry: 0.20        # 10Y yield risk signal (existing inverted carry)
+    vol_skew: 0.30     # VIX term structure (NEW)
+  stock:
+    cot: 0.20
+    vol_skew: 0.25     # options skew proxy if available, else 0 at runtime
+
+# Squash steepness for the weighted vote sum -> [-1,+1]. Higher = more saturating.
+ENGINE_A_ORTHO_VOTE_TANH_K: 1.0
+
+# Optional per-bar orthogonal vote diagnostics. Debug only; never enable by default.
+ENGINE_A_ORTHO_VOTE_DEBUG: false
+ENGINE_A_ORTHO_VOTE_DEBUG_PATH: tmp/ortho_votes.jsonl
+
+# The orthogonal block's contribution weight inside conviction (replaces addon_w
+# ONLY when ortho enabled). Keep modest; trend/momentum still dominate.
+ENGINE_A_ORTHO_CONVICTION_WEIGHT_BY_CLASS:
+  forex: 0.22
+  crypto: 0.25
+  commodity: 0.35
+  index: 0.22
+  stock: 0.20
+
+# FRED-backed options/volatility regime feed for vol_skew orthogonal vote.
+# Positive z = elevated/backwardated vol (risk-off), used only as confluence.
+ENGINE_A_VOL_SKEW_Z_WINDOW: 252
+ENGINE_A_VOL_SKEW_TERM_WEIGHT: 0.3
+ENGINE_A_VOL_SKEW_REFRESH_TTL_HOURS: 24
+
 ENGINE_A_DIRECTIONAL_RAMP_BY_CLASS:
   crypto_btc: { min_directional: 0.20, soft_span: 0.30 }
   crypto_eth: { min_directional: 0.20, soft_span: 0.30 }
@@ -1194,11 +1275,14 @@ ENGINE_A_ATR_LEVEL_CLASS_BY_DISPLAY:
 ENGINE_A_ATR_LEVEL_CLASS_BY_SCORE_GROUP: {}
 
 ENGINE_A_COT_ADDON_ASSET_TYPES:
+  # Add forex for the new orthogonal COT vote path. Legacy single-addon forex
+  # still uses carry because _asset_addon returns before this COT branch.
   # COT for indices uses futures proxies where defined in cot_feed._PAIR_FORMULA
   # (e.g. S&P 500, NASDAQ-100, DAX 40); unsupported displays stay neutral.
   - commodity
   - index
   - stock
+  - forex
 
 
 
@@ -2078,16 +2162,6 @@ FACTOR_DIRECTIONAL_SOFT_SPAN_CRYPTO: 0.30
 FACTOR_CRYPTO_ADDON_COMBO_CONFIRM_CAP: 0.25
 
 FACTOR_CRYPTO_ADDON_COMBO_AGAINST_CAP: -0.20
-
-ENGINE_A_COT_CONTRARIAN_FADE:
-
-  ENABLED: true
-
-  ASSET_TYPES: [forex, commodity]
-
-  FADE_START_Z: 1.5
-
-  FULL_FADE_Z: 2.5
 
 EODHD_COMMODITY_TICKERS:
 

@@ -1000,6 +1000,9 @@ def assemble_engine_a_context(
         "freshness": _build_freshness_block(signal, data_freshness, pair=pair),
         "chart_captured_at": (screenshot_meta or {}).get("captured_at"),
         "screenshot_overlays": list((screenshot_meta or {}).get("overlays") or []),
+        "chart_snapshot": dict((screenshot_meta or {}).get("chart_snapshot") or {})
+        if isinstance((screenshot_meta or {}).get("chart_snapshot"), dict)
+        else {},
         "mismatch_warnings": [],
         "funding_oi": _funding_oi_block(signal),
         "structure_context": sanitize_engine_b_structure_profile_fields(

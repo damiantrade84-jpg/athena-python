@@ -2062,6 +2062,16 @@ export default function TVChartPanel() {
   const timeframeRouteLabel = useMemo(() => timeframeRouteDisplay(timeframeRoute), [timeframeRoute]);
   const engineBDirection = normalizeDirection(chartCandidate?.direction) === 'SHORT' ? 'SHORT' : 'LONG';
   const isCryptoChart = chartPayload?.asset_group === 'crypto' || chartPayload?.pairType === 'crypto';
+  const engineBOverlayPendingForReview = showEngineBOverlays && engineBOverlayLoading;
+  const engineBOverlayStatus = !showEngineBOverlays
+    ? 'disabled'
+    : engineBOverlayLoading
+      ? 'loading'
+      : engineBOverlay?.overlay_source === 'engine_b'
+        ? 'ready'
+        : engineBOverlayError
+          ? 'error'
+          : 'unavailable';
   const lastCandleConfirmed = candles?.length ? candles[candles.length - 1]?.confirmed : null;
   const chartPayloadLiveTick = useMemo(() => liveTickFromChartPayload(chartPayload), [chartPayload]);
   const chartTickLiveTick = useMemo(() => liveTickFromChartPayload(chartTickPayload), [chartTickPayload]);
@@ -2311,7 +2321,7 @@ export default function TVChartPanel() {
   }, [tvChartIntent, clearTvChartIntent, currentSymbolKey]);
 
   useEffect(() => {
-    if (!pendingAutoReviewRef.current || loading || !candles?.length || aiReviewLoading) return;
+    if (!pendingAutoReviewRef.current || loading || !candles?.length || aiReviewLoading || engineBOverlayPendingForReview) return;
     const generation = chartRenderGenerationKey(pair, backendTf, candles.length);
     if (chartPaintReadyGenerationRef.current !== generation) return;
     const intentId = appliedIntentIdRef.current;
@@ -2320,7 +2330,7 @@ export default function TVChartPanel() {
     pendingAutoReviewRef.current = false;
     setAutoReviewStatus('running');
     void runAIReview().finally(() => setAutoReviewStatus('done'));
-  }, [loading, candles, aiReviewLoading, pair, backendTf, chartPaintReadyTick]);
+  }, [loading, candles, aiReviewLoading, engineBOverlayPendingForReview, pair, backendTf, chartPaintReadyTick]);
 
   useEffect(() => {
     let cancelled = false;
@@ -2791,6 +2801,8 @@ export default function TVChartPanel() {
           showEngineBOverlays && engineBOverlay?.overlay_source === 'engine_b'
             ? engineBOverlayLines(engineBOverlay, true).length + buildEngineBZones(engineBOverlay, true).length
             : 0,
+        engineBOverlayStatus,
+        engineBOverlayError: engineBOverlayError ?? null,
         priceRange: priceValues.length
           ? {
               min: Math.min(...priceValues),
@@ -3412,12 +3424,12 @@ export default function TVChartPanel() {
                 variant="outline"
                 className="h-8 gap-2 text-xs"
                 onClick={runAIReview}
-                disabled={loading || aiReviewLoading || !candles?.length}
+                disabled={loading || aiReviewLoading || engineBOverlayPendingForReview || !candles?.length}
                 aria-label="Run AI chart review"
-                aria-busy={aiReviewLoading}
+                aria-busy={aiReviewLoading || engineBOverlayPendingForReview}
               >
                 <Sparkles className="h-3.5 w-3.5" />
-                {aiReviewLoading ? 'Reviewing…' : 'AI Review'}
+                {engineBOverlayPendingForReview ? 'Preparing...' : aiReviewLoading ? 'Reviewing...' : 'AI Review'}
               </Button>
               {chartCandidate && (
                 <Button

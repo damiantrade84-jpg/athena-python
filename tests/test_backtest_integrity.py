@@ -37,6 +37,47 @@ def _make_bars(start_dt, count, hours, base=100.0):
     return bars
 
 
+def test_bt_inject_vol_skew_enriches_context_when_ortho_enabled(monkeypatch):
+    calls = []
+
+    def _fake_get_vol_skew_z(display, as_of_date=None):
+        calls.append((display, as_of_date))
+        return 0.75
+
+    monkeypatch.setitem(backtest_runner.CONFIG, "ENGINE_A_ORTHO_VOTE_ENABLED", True)
+    monkeypatch.setitem(
+        sys.modules,
+        "vol_skew_feed",
+        SimpleNamespace(get_vol_skew_z=_fake_get_vol_skew_z),
+    )
+
+    ctx = backtest_runner._bt_inject_vol_skew(
+        {"usd_relative_strength": {"state": "risk_on"}},
+        {"display": "XAU/USD"},
+        "2025-06-01 04:00:00+00:00",
+    )
+
+    assert calls == [("XAU/USD", "2025-06-01")]
+    assert ctx["usd_relative_strength"] == {"state": "risk_on"}
+    assert ctx["vol_skew"] == pytest.approx(0.75)
+
+
+def test_bt_inject_vol_skew_skips_when_ortho_disabled(monkeypatch):
+    def _raise_if_called(_display, as_of_date=None):
+        raise AssertionError("vol_skew feed should not run when ortho is disabled")
+
+    monkeypatch.setitem(backtest_runner.CONFIG, "ENGINE_A_ORTHO_VOTE_ENABLED", False)
+    monkeypatch.setitem(
+        sys.modules,
+        "vol_skew_feed",
+        SimpleNamespace(get_vol_skew_z=_raise_if_called),
+    )
+
+    ctx = {"usd_relative_strength": {"state": "risk_on"}}
+
+    assert backtest_runner._bt_inject_vol_skew(ctx, {"display": "XAU/USD"}, "2025-06-01") is ctx
+
+
 def _source_block(src: str, start_marker: str, end_marker: str) -> str:
     start = src.index(start_marker)
     end = src.index(end_marker, start)
