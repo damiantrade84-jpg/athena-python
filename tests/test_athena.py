@@ -255,7 +255,8 @@ class TestDetectDiv:
 
 
 class TestScanClassification:
-    def test_trade_signal_requires_enabled_and_unblocked(self):
+    def test_trade_signal_requires_enabled_and_unblocked(self, monkeypatch):
+        monkeypatch.setitem(CONFIG, "ENGINE_A_TRADE_ELIGIBILITY_ENABLED", False)
         pair = {"type": "stock", "enabled": True}
         signal = {
             "scanThreshold": 6.0,
@@ -268,6 +269,32 @@ class TestScanClassification:
         tier, reason = _classify_signal(signal, pair)
         assert tier == "trade"
         assert reason == "Trade-ready"
+
+    def test_engine_a_trade_gate_downgrades_disabled_forex_to_watchlist(self, monkeypatch):
+        monkeypatch.setitem(CONFIG, "ENGINE_A_TRADE_ELIGIBILITY_ENABLED", True)
+        monkeypatch.setitem(CONFIG, "ENGINE_A_TRADE_ENABLED_DEFAULT", False)
+        monkeypatch.setitem(CONFIG, "ENGINE_A_TRADE_ENABLED_BY_CLASS", {"forex": False})
+        monkeypatch.setitem(CONFIG, "ENGINE_A_TRADE_ENABLED_BY_SCORE_GROUP", {})
+        monkeypatch.setitem(CONFIG, "ENGINE_A_TRADE_ENABLED_OVERRIDES", {})
+        pair = {"display": "EUR/USD", "symbol": "EURUSD=X", "type": "forex", "enabled": True}
+        signal = {
+            "scanThreshold": 2.0,
+            "confluenceScore": 2.4,
+            "direction": "LONG",
+            "eventRisk": {"hardBlock": False},
+            "macroEventRisk": {"blocked": False},
+            "exchangeClosed": False,
+            "trendState": "TRENDING",
+            "scanDiagnostics": [],
+        }
+
+        tier, reason = _classify_signal(signal, pair)
+
+        assert tier == "watchlist"
+        assert "research-only" in reason
+        assert signal["engineATradeEnabled"] is False
+        assert signal["trade"] is False
+        assert signal["executable"] is False
 
     def test_disabled_pair_becomes_watchlist(self):
         pair = {"type": "stock", "enabled": False}

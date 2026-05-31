@@ -55,6 +55,56 @@ def test_backtest_candle_cache_reuses_fresh_series(monkeypatch):
     assert [c["close"] for c in second] == [c["close"] for c in first]
 
 
+def test_backtest_candle_cache_separates_crypto_signal_providers(monkeypatch):
+    _use_workspace_db(monkeypatch)
+    pair = {"display": "BTC/USDT", "symbol": "BTCUSDT", "source": "binance", "type": "crypto"}
+    now = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
+
+    cache.fetch_backtest_candles(
+        pair,
+        "H1",
+        5,
+        lambda _limit: _bars(now - timedelta(hours=4), 5, 1, base=1.0),
+        provider="binance_futures",
+        min_bars=5,
+    )
+
+    bybit_calls = []
+
+    def bybit_fetch(limit):
+        bybit_calls.append(limit)
+        return _bars(now - timedelta(hours=4), 5, 1, base=50.0)
+
+    bybit = cache.fetch_backtest_candles(
+        pair,
+        "H1",
+        5,
+        bybit_fetch,
+        provider="bybit_linear_kline",
+        min_bars=5,
+    )
+
+    assert bybit_calls == [5]
+    assert bybit[0]["close"] >= 50.0
+
+    binance_again = cache.fetch_backtest_candles(
+        pair,
+        "H1",
+        5,
+        lambda _limit: (_ for _ in ()).throw(AssertionError("binance cache miss")),
+        provider="binance_futures",
+        min_bars=5,
+    )
+
+    binance_count, binance_newest, _ = cache._cache_state(pair, "H1", "binance_futures")
+    bybit_count, bybit_newest, _ = cache._cache_state(pair, "H1", "bybit_linear_kline")
+
+    assert [c["close"] for c in binance_again] == [1.0, 1.01, 1.02, 1.03, 1.04]
+    assert binance_count == 5
+    assert bybit_count == 5
+    assert binance_newest == bybit_newest
+
+
 def test_backtest_candle_cache_topups_stale_series(monkeypatch):
     _use_workspace_db(monkeypatch)
     pair = {"display": "ETH/USDT", "symbol": "ETHUSDT", "source": "binance", "type": "crypto"}

@@ -16,10 +16,12 @@ from datetime import datetime, timezone
 from typing import Callable
 
 from runtime_paths import resolve_backtest_candle_cache_db_path
+from frozen_data import active_data_as_of, read_frozen_candles
 
 log = logging.getLogger("sentinel")
 
 _LOCK = threading.Lock()
+_CACHE_VERSION = "v2"
 _TF_SECONDS = {
     "M1": 60,
     "M5": 300,
@@ -64,16 +66,14 @@ def _init_db() -> None:
         )
 
 
-def _cache_key(pair: dict) -> str:
+def _provider_key(provider: str | None) -> str:
+    return str(provider or "").strip().lower() or "unknown"
+
+
+def _cache_key(pair: dict, provider: str | None) -> str:
     source = str(pair.get("source") or "").strip().lower() or "unknown"
     symbol = str(pair.get("symbol") or pair.get("display") or "").strip()
-    return f"{source}:{symbol}"
-
-
-def _scoped_pair(pair: dict, scope: str) -> dict:
-    scoped = dict(pair)
-    scoped["source"] = f"{pair.get('source') or 'unknown'}:{scope}"
-    return scoped
+    return f"{_CACHE_VERSION}:{source}:{_provider_key(provider)}:{symbol}"
 
 
 def _parse_epoch(value) -> float | None:
@@ -110,20 +110,21 @@ def _canonical_time(value, tf: str) -> str | None:
     return dt.isoformat()
 
 
-def _read_rows(pair: dict, tf: str, limit: int) -> list[dict]:
+def _read_rows(pair: dict, tf: str, limit: int, provider: str) -> list[dict]:
     _init_db()
-    key = _cache_key(pair)
+    provider_key = _provider_key(provider)
+    key = _cache_key(pair, provider_key)
     with sqlite3.connect(_db_path(), timeout=15.0) as con:
         con.row_factory = sqlite3.Row
         rows = con.execute(
             """
             SELECT bar_time, open, high, low, close, volume
             FROM backtest_candles
-            WHERE cache_key=? AND timeframe=?
+            WHERE cache_key=? AND timeframe=? AND provider=?
             ORDER BY bar_time DESC
             LIMIT ?
             """,
-            (key, tf, int(limit)),
+            (key, tf, provider_key, int(limit)),
         ).fetchall()
     candles = [
         {
@@ -139,17 +140,18 @@ def _read_rows(pair: dict, tf: str, limit: int) -> list[dict]:
     return candles
 
 
-def _cache_state(pair: dict, tf: str) -> tuple[int, str | None, float | None]:
+def _cache_state(pair: dict, tf: str, provider: str) -> tuple[int, str | None, float | None]:
     _init_db()
-    key = _cache_key(pair)
+    provider_key = _provider_key(provider)
+    key = _cache_key(pair, provider_key)
     with sqlite3.connect(_db_path(), timeout=15.0) as con:
         row = con.execute(
             """
             SELECT COUNT(*), MAX(bar_time)
             FROM backtest_candles
-            WHERE cache_key=? AND timeframe=?
+            WHERE cache_key=? AND timeframe=? AND provider=?
             """,
-            (key, tf),
+            (key, tf, provider_key),
         ).fetchone()
     count = int(row[0] or 0) if row else 0
     newest = row[1] if row else None
@@ -178,7 +180,8 @@ def _store_rows(pair: dict, tf: str, candles: list[dict] | None, provider: str) 
     if not candles:
         return 0
     _init_db()
-    key = _cache_key(pair)
+    provider_key = _provider_key(provider)
+    key = _cache_key(pair, provider_key)
     now = time.time()
     rows = []
     for candle in candles:
@@ -200,7 +203,7 @@ def _store_rows(pair: dict, tf: str, candles: list[dict] | None, provider: str) 
                     float(candle.get("low")),
                     float(candle.get("close")),
                     float(candle.get("vol", candle.get("volume", 0)) or 0),
-                    provider,
+                    provider_key,
                     now,
                 )
             )
@@ -235,12 +238,22 @@ def fetch_backtest_candles(
     """Return backtest candles from disk, fetching only missing recent bars when possible."""
     tf = str(tf or "").upper()
     need = int(min_bars or limit)
+    data_as_of = active_data_as_of()
+    if data_as_of:
+        return read_frozen_candles(
+            data_as_of,
+            pair,
+            tf,
+            provider,
+            limit=int(limit),
+            min_bars=need,
+        )
     try:
-        count, newest, newest_epoch = _cache_state(pair, tf)
+        count, newest, newest_epoch = _cache_state(pair, tf, provider)
         display = pair.get("display", pair.get("symbol", "unknown"))
         if count >= need and _is_fresh(tf, newest_epoch):
             log.info("[BT-CACHE] hit %s %s bars=%s newest=%s", display, tf, count, newest)
-            return _read_rows(pair, tf, limit)
+            return _read_rows(pair, tf, limit, provider)
 
         fetch_limit = int(limit) if count < need else _topup_limit(tf, newest_epoch, int(limit))
         log.info(
@@ -254,7 +267,7 @@ def fetch_backtest_candles(
         )
         fresh = fetcher(fetch_limit)
         _store_rows(pair, tf, fresh, provider)
-        rows = _read_rows(pair, tf, limit)
+        rows = _read_rows(pair, tf, limit, provider)
         return rows if rows else fresh
     except Exception as exc:
         log.warning(
@@ -276,10 +289,20 @@ def fetch_backtest_eodhd_intraday(
     h1_limit: int = 17600,
 ) -> tuple[list[dict] | None, list[dict] | None]:
     """Cache EODHD backtest H1/H4 intraday pulls and top up stale history."""
-    cache_pair = _scoped_pair(pair, "eodhd_intraday")
+    provider = "eodhd_intraday"
+    data_as_of = active_data_as_of()
+    if data_as_of:
+        return (
+            read_frozen_candles(
+                data_as_of, pair, "H4", provider, limit=int(h4_limit), min_bars=min(h4_limit, int(days) * 5)
+            ),
+            read_frozen_candles(
+                data_as_of, pair, "H1", provider, limit=int(h1_limit), min_bars=min(h1_limit, int(days) * 20)
+            ),
+        )
     try:
-        h1_count, h1_newest, h1_epoch = _cache_state(cache_pair, "H1")
-        h4_count, h4_newest, h4_epoch = _cache_state(cache_pair, "H4")
+        h1_count, h1_newest, h1_epoch = _cache_state(pair, "H1", provider)
+        h4_count, h4_newest, h4_epoch = _cache_state(pair, "H4", provider)
         h1_ok = h1_count >= min(h1_limit, int(days) * 20) and _is_fresh("H1", h1_epoch)
         h4_ok = h4_count >= min(h4_limit, int(days) * 5) and _is_fresh("H4", h4_epoch)
         display = pair.get("display", pair.get("symbol", "unknown"))
@@ -292,7 +315,9 @@ def fetch_backtest_eodhd_intraday(
                 h1_newest,
                 h4_newest,
             )
-            return _read_rows(cache_pair, "H4", h4_limit), _read_rows(cache_pair, "H1", h1_limit)
+            return _read_rows(pair, "H4", h4_limit, provider), _read_rows(
+                pair, "H1", h1_limit, provider
+            )
 
         newest_epoch = min([e for e in (h1_epoch, h4_epoch) if e is not None], default=None)
         if h1_count <= 0 or h4_count <= 0:
@@ -308,10 +333,10 @@ def fetch_backtest_eodhd_intraday(
             fetch_days,
         )
         h4, h1 = fetcher(fetch_days)
-        _store_rows(cache_pair, "H4", h4, "eodhd_intraday")
-        _store_rows(cache_pair, "H1", h1, "eodhd_intraday")
-        cached_h4 = _read_rows(cache_pair, "H4", h4_limit)
-        cached_h1 = _read_rows(cache_pair, "H1", h1_limit)
+        _store_rows(pair, "H4", h4, provider)
+        _store_rows(pair, "H1", h1, provider)
+        cached_h4 = _read_rows(pair, "H4", h4_limit, provider)
+        cached_h1 = _read_rows(pair, "H1", h1_limit, provider)
         return cached_h4 if cached_h4 else h4, cached_h1 if cached_h1 else h1
     except Exception as exc:
         log.warning(

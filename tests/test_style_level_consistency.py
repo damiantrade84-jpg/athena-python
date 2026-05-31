@@ -219,6 +219,23 @@ def test_engine_c_normalise_engine_a_uses_raw_score_ratio_not_confluence_pct():
     assert norm["score_norm"] == 0.5
 
 
+def test_engine_c_normalise_engine_a_disabled_trade_gate_is_not_a_signal():
+    norm = normalise_engine_a(
+        {
+            "confluenceScore": 2.4,
+            "maxScore": 3.0,
+            "direction": "LONG",
+            "engineATradeEnabled": False,
+            "engineATradeGate": {"reason": "research-only"},
+        }
+    )
+
+    assert norm["score_norm"] == 0.8
+    assert norm["has_signal"] is False
+    assert norm["has_partial_signal"] is False
+    assert norm["trade_enabled"] is False
+
+
 def test_engine_c_normalise_engine_b_uses_checklist_ratio_when_pct_missing():
     norm = normalise_engine_b(
         {

@@ -550,6 +550,13 @@ def get_carry_z(display: str, as_of_date: str = None) -> float:
     Returns:
         float in [-3.0, 3.0]; 0.0 = neutral / no coverage
     """
+    from frozen_data import active_data_as_of, read_frozen_factor_value
+
+    data_as_of = active_data_as_of()
+    if data_as_of:
+        value = read_frozen_factor_value(data_as_of, display, "carry_z", as_of_date)
+        return 0.0 if value is None else float(value)
+
     now = time.time()
     if not as_of_date:
         cached = _mem_cache.get(display)

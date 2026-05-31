@@ -166,6 +166,21 @@ export interface EngineASignal {
   executionTimeframe?: string;
   direction?: Direction;
   price?: number;
+  trade?: boolean;
+  executable?: boolean | null;
+  signalTier?: string;
+  engineATradeEnabled?: boolean;
+  engineATradeGate?: {
+    enabled?: boolean;
+    research_only?: boolean;
+    source?: string;
+    reason?: string;
+    display?: string | null;
+    symbol?: string | null;
+    score_group?: string | null;
+    asset_type?: string | null;
+    [k: string]: unknown;
+  };
 
   // Scoring (Engine A v2: 0–3.0 scale, all asset classes)
   score?: number;

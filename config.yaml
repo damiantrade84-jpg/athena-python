@@ -64,6 +64,7 @@ NEWS_PAIR_CACHE_TTL_SEC: 14400 # How long per-pair news/word-weights are cached 
 
 BACKTEST_MAX_WORKERS: 10      # Parallel workers for backtesting (Engine A & B). (Conservative: 10 for i7/16GB)
 BT_VECTORIZED: true           # Speed path: exact-window indicator caching for Engine A/B backtests (parity-safe target).
+BACKTEST_DATA_AS_OF: null     # Optional YYYY-MM-DD frozen dataset manifest. Null = normal live/cache-backed backtest data.
 ENGINE_B_FAST_FVG_DETECTION: true
 
 SCAN_TIMEOUT_SEC: 45          # Per-pair scan timeout in seconds (faster fail for stalled pairs)
@@ -440,6 +441,23 @@ ENGINE_A_ORTHO_CONVICTION_WEIGHT_BY_CLASS:
   commodity: 0.35
   index: 0.22
   stock: 0.20
+
+# -- Engine A trade-eligibility gate (evidence gate) --------------------------
+# Engine A still scores all instruments for research. This gate controls only
+# whether a scored Engine A signal may become trade-ready. It does not change
+# trend direction, score math, SL/TP, risk_check, or sizing.
+# Defaults are intentionally conservative after frozen AB6: no pair/class had
+# n>=30 AND SQN>2.0. Enable by display or score_group only after that evidence.
+ENGINE_A_TRADE_ELIGIBILITY_ENABLED: true
+ENGINE_A_TRADE_ENABLED_DEFAULT: false
+ENGINE_A_TRADE_ENABLED_BY_CLASS:
+  forex: false       # FX majors were n>=30 and negative; research-only for Engine A.
+  commodity: false   # promising XAU, but n<30 in AB6.
+  index: false       # promising subset, but n<30 in AB6.
+  stock: false       # promising subset, but n<30 in AB6.
+  crypto: false      # n>=30, but no crypto pair cleared SQN>2.0 in AB6.
+ENGINE_A_TRADE_ENABLED_BY_SCORE_GROUP: {}
+ENGINE_A_TRADE_ENABLED_OVERRIDES: {}
 
 # FRED-backed options/volatility regime feed for vol_skew orthogonal vote.
 # Positive z = elevated/backwardated vol (risk-off), used only as confluence.

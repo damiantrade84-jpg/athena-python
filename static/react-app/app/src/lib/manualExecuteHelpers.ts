@@ -227,6 +227,7 @@ export function aiReviewWarningForExecute(review: AIChartReviewResponse | null):
 
 export function canExecuteEngineASignalTier(signal: EngineASignal | null): boolean {
   if (!signal) return false;
+  if (signal.engineATradeEnabled === false) return false;
   const tier = String(
     signal.signalTier || signal.scan_tier || signal.signalClass || '',
   ).toLowerCase();
@@ -254,6 +255,7 @@ export function evaluateTvChartExecuteBlock(args: {
   if (!isPositiveNumber(entry) || !isPositiveNumber(signal.sl) || !isPositiveNumber(tp)) {
     return 'Missing SL/TP';
   }
+  if (signal.engineATradeEnabled === false) return 'Research-only';
   if (!canExecuteEngineASignalTier(signal)) return 'Watchlist only';
   if (isPaper) return 'Paper mode';
   const reviewSymbolKey = normalizeSymbolKey(aiReview?.engine_a_context?.symbol);

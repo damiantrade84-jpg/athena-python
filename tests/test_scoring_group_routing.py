@@ -428,6 +428,7 @@ def test_backtest_no_dual_threshold_flag():
 
 def test_auto_trade_min_score_does_not_change_trade_tier_reason(monkeypatch):
     monkeypatch.setitem(CONFIG, "AUTO_TRADE_MIN_SCORE", {"crypto": 2.4})
+    monkeypatch.setitem(CONFIG, "ENGINE_A_TRADE_ELIGIBILITY_ENABLED", False)
     signal = {
         "confluenceScore": 2.1,
         "scanThreshold": 2.0,
@@ -442,6 +443,14 @@ def test_auto_trade_min_score_does_not_change_trade_tier_reason(monkeypatch):
 
     assert tier == "trade"
     assert reason == "Trade-ready"
+
+
+def test_engine_a_trade_gate_has_backtest_integration_points():
+    src = Path(__file__).resolve().parents[1] / "backtest_runner.py"
+    text = src.read_text(encoding="utf-8")
+
+    assert "resolve_engine_a_trade_eligibility" in text
+    assert text.count("fail_trade_enabled") >= 3
 
 
 def test_scanner_persists_tier_reason_field():

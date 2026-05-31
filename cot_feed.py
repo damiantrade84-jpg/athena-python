@@ -581,6 +581,13 @@ def get_cot_z(display: str, as_of_date: str = None) -> float:
     Positive = speculators net long the base currency / asset (bullish signal).
     Returns 0.0 if no CFTC coverage or data unavailable.
     """
+    from frozen_data import active_data_as_of, read_frozen_factor_value
+
+    data_as_of = active_data_as_of()
+    if data_as_of:
+        value = read_frozen_factor_value(data_as_of, display, "cot_z", as_of_date)
+        return 0.0 if value is None else float(value)
+
     formula = _PAIR_FORMULA.get(display, [])
     if not formula:
         return 0.0

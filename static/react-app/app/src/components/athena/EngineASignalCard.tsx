@@ -114,6 +114,8 @@ export default function EngineASignalCard({
     }
     return null;
   })();
+  const isResearchOnly = signal.engineATradeEnabled === false;
+  const tradeGateReason = String(signal.engineATradeGate?.reason || '').trim();
   const pair = signal.display || signal.pair || signal.symbol || '—';
   const type = signal.type;
   const livePrice = toNum(signal.livePrice, NaN);
@@ -153,6 +155,11 @@ export default function EngineASignalCard({
             {signal.style && (
               <Badge variant="outline" className="text-[9px]">
                 {signal.style}
+              </Badge>
+            )}
+            {isResearchOnly && (
+              <Badge variant="outline" className="text-[9px] text-muted-foreground">
+                Research-only
               </Badge>
             )}
           </div>
@@ -202,6 +209,12 @@ export default function EngineASignalCard({
           )}
           {trendAbortNote && (
             <p className="text-[9px] text-muted-foreground leading-snug">{trendAbortNote}</p>
+          )}
+          {isResearchOnly && (
+            <p className="text-[9px] text-muted-foreground leading-snug">
+              Research-only: trend engine disabled for trade-ready status on this instrument.
+              {tradeGateReason ? ` ${tradeGateReason}` : ''}
+            </p>
           )}
           {showDiChain && (
             <p className="text-[9px] text-muted-foreground leading-snug">

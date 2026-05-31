@@ -656,6 +656,19 @@ def _engine_a_level_atr_for_bt(
     """
     p = pair or {}
     if str(p.get("type") or "").lower() == "crypto":
+        try:
+            from frozen_data import active_data_as_of
+
+            _frozen_data_as_of = active_data_as_of()
+        except Exception:
+            _frozen_data_as_of = None
+        if _frozen_data_as_of:
+            if signal_atr is not None:
+                try:
+                    return float(signal_atr), "signal_frozen"
+                except (TypeError, ValueError):
+                    pass
+            return None, "signal_frozen_unavailable"
         if str(CONFIG.get("ENGINE_A_CRYPTO_LEVELS_FEED", "bybit")).lower() == "bybit":
             bybit_atr_for_levels = getattr(_rt(), "bybit_atr_for_levels", None)
             bybit_atr = None
@@ -760,6 +773,27 @@ def _engine_a_bt_gate_note() -> str:
     return note
 
 
+def _engine_a_bt_trade_gate_allows(pair: dict, signal: dict | None = None) -> tuple[bool, dict]:
+    """Backtest-side Engine A trade-eligibility gate.
+
+    The scoring result remains research-valid; this only decides whether the
+    backtest should instantiate a simulated trade.
+    """
+    try:
+        from engine_a_trade_gate import resolve_engine_a_trade_eligibility
+
+        detail = resolve_engine_a_trade_eligibility(pair, signal or {}, config=CONFIG)
+        return bool(detail.get("enabled")), detail
+    except Exception as exc:
+        log.debug("[ENGINE_A_TRADE_GATE] backtest gate skipped: %s", exc)
+        return False, {
+            "enabled": False,
+            "research_only": True,
+            "source": "error_closed",
+            "reason": "Engine A trade gate unavailable in backtest; research-only fail-closed.",
+        }
+
+
 def _bt_btc_bias(d1_window: list, pair: dict) -> str:
     """Derive BTC bias from the D1 window available at this bar.
 
@@ -808,6 +842,31 @@ def _bt_gold_macro_context(
         proxy_label="DXY",
         tf="H4",
     )
+
+
+def _bt_load_dxy_h4_for_gold(pair: dict) -> list | None:
+    if pair.get("display") != "XAU/USD":
+        return None
+    from frozen_data import active_data_as_of, read_frozen_candles
+
+    data_as_of = active_data_as_of()
+    dxy_pair = {
+        "display": "DX-Y.NYB",
+        "symbol": "DX-Y.NYB",
+        "source": "yfinance",
+        "type": "macro",
+    }
+    if data_as_of:
+        return read_frozen_candles(
+            data_as_of,
+            dxy_pair,
+            "H4",
+            "yfinance",
+            limit=4400,
+            min_bars=1,
+        )
+    dxy_h4, _ = _rt().fetch_bt_yfinance("DX-Y.NYB")
+    return dxy_h4
 
 
 def _bt_inject_vol_skew(ctx: dict | None, pair: dict, cutoff_ts) -> dict | None:
@@ -908,6 +967,11 @@ def _bt_broker_spread_floor(pair: dict | None) -> float:
     cached = _BROKER_SPREAD_CACHE.get(display)
     if cached is not None:
         return cached
+    from frozen_data import active_data_as_of
+
+    if active_data_as_of():
+        _BROKER_SPREAD_CACHE[display] = 0.0
+        return 0.0
     try:
         from mt5_executor import mt5_get_symbol_info
 
@@ -1951,6 +2015,7 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
         "fail_score": 0,
         "fail_macro": 0,
         "fail_regime": 0,
+        "fail_trade_enabled": 0,
         "taken": 0,
         "skip_window": 0,
         "h4ParseFail": h4_time_quality["parse_fail"],
@@ -2037,7 +2102,7 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
     _bt_dxy_h4_times = None
     if pair.get("display") == "XAU/USD":
         try:
-            _bt_dxy_h4_raw, _ = _rt().fetch_bt_yfinance("DX-Y.NYB")
+            _bt_dxy_h4_raw = _bt_load_dxy_h4_for_gold(pair)
             if _bt_dxy_h4_raw:
                 _bt_dxy_h4_times = pd.to_datetime(
                     [c["time"] for c in _bt_dxy_h4_raw], utc=True, errors="coerce"
@@ -2375,6 +2440,17 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
 
             if is_trend_state_blocked(_ts, _pair_ctx, scope="backtest"):
                 funnel["fail_regime"] = funnel.get("fail_regime", 0) + 1
+                i += 1
+                continue
+
+            _trade_gate_ok, _trade_gate_detail = _engine_a_bt_trade_gate_allows(_pair_ctx, res)
+            if not _trade_gate_ok:
+                funnel["fail_trade_enabled"] = funnel.get("fail_trade_enabled", 0) + 1
+                log.debug(
+                    "[ENGINE_A_TRADE_GATE] %s D1 skipped: %s",
+                    pair.get("display"),
+                    _trade_gate_detail.get("reason"),
+                )
                 i += 1
                 continue
 
@@ -2996,6 +3072,17 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
                 i += 1
                 continue
 
+            _trade_gate_ok, _trade_gate_detail = _engine_a_bt_trade_gate_allows(_pair_ctx, res)
+            if not _trade_gate_ok:
+                funnel["fail_trade_enabled"] = funnel.get("fail_trade_enabled", 0) + 1
+                log.debug(
+                    "[ENGINE_A_TRADE_GATE] %s H4 skipped: %s",
+                    pair.get("display"),
+                    _trade_gate_detail.get("reason"),
+                )
+                i += 1
+                continue
+
             direction = res["direction"]
 
             # Indicator windows end at i-1, so the first non-lookahead fill is bar i open.
@@ -3591,6 +3678,17 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
 
             if is_trend_state_blocked(_ts, _pair_ctx, scope="backtest"):
                 funnel["fail_regime"] = funnel.get("fail_regime", 0) + 1
+                i += 1
+                continue
+
+            _trade_gate_ok, _trade_gate_detail = _engine_a_bt_trade_gate_allows(_pair_ctx, res)
+            if not _trade_gate_ok:
+                funnel["fail_trade_enabled"] = funnel.get("fail_trade_enabled", 0) + 1
+                log.debug(
+                    "[ENGINE_A_TRADE_GATE] %s H1 skipped: %s",
+                    pair.get("display"),
+                    _trade_gate_detail.get("reason"),
+                )
                 i += 1
                 continue
 

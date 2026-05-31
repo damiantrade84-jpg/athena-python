@@ -393,8 +393,10 @@ def normalise_engine_a(signal_a: dict) -> dict:
     _a_has_floor = float(CONFIG.get("ENGINE_C_A_HAS_FLOOR", 0.30))
     _a_partial_floor = float(CONFIG.get("ENGINE_C_A_PARTIAL_FLOOR", 0.20))
     _dir_ok = signal_a.get("direction") in ("LONG", "SHORT")
-    _is_full = norm > _a_has_floor and _dir_ok
-    _is_partial = (not _is_full) and norm > _a_partial_floor and _dir_ok
+    _trade_enabled = signal_a.get("engineATradeEnabled")
+    _trade_gate_allows = _trade_enabled is not False
+    _is_full = norm > _a_has_floor and _dir_ok and _trade_gate_allows
+    _is_partial = (not _is_full) and norm > _a_partial_floor and _dir_ok and _trade_gate_allows
     _cf = None
     _cdetail = signal_a.get("confidenceDetail")
     if isinstance(_cdetail, dict) and _cdetail.get("confidence") is not None:
@@ -414,6 +416,8 @@ def normalise_engine_a(signal_a: dict) -> dict:
         "max_score": max_score,
         "has_signal": _is_full,
         "has_partial_signal": _is_partial,
+        "trade_enabled": bool(_trade_gate_allows),
+        "trade_gate": signal_a.get("engineATradeGate"),
         "cot_active": bool(cot_active),
         "carry_active": bool(carry_active),
         "style": signal_a.get("style", signal_a.get("tradeStyle", "swing")),

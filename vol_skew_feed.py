@@ -291,6 +291,13 @@ def get_vol_skew_z(display: str, as_of_date: str | None = None) -> float | None:
     Positive = elevated/backwardated vol, a risk-off headwind for LONG risk assets.
     Returns None when no mapping, no data, insufficient history, or fetch errors.
     """
+    from frozen_data import active_data_as_of, read_frozen_factor_value
+
+    data_as_of = active_data_as_of()
+    if data_as_of:
+        value = read_frozen_factor_value(data_as_of, display, "vol_skew_z", as_of_date)
+        return None if value is None else float(value)
+
     display_key = str(display or "").strip()
     series_id = _PAIR_VOL_INDEX.get(display_key)
     if not series_id:

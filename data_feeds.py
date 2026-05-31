@@ -13,6 +13,7 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry as _Retry
 
 from eodhd import APIClient as _EODHDClient
+from frozen_data import active_data_as_of, read_frozen_rows
 
 log = logging.getLogger("sentinel")
 
@@ -707,6 +708,13 @@ def prepare_crypto_backtest_derivative_series(
     """Load normalized funding + OI rows for the candle range (Bybit with Binance fallback)."""
     if pair.get("type") != "crypto":
         return [], []
+    data_as_of = active_data_as_of()
+    if data_as_of:
+        provider = "crypto_derivatives"
+        return (
+            read_frozen_rows(data_as_of, pair, "funding", provider),
+            read_frozen_rows(data_as_of, pair, "oi", provider),
+        )
     sym = (pair.get("symbol") or "").replace("/", "").upper()
     if not sym:
         return [], []

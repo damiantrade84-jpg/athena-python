@@ -1271,6 +1271,22 @@ def _classify_signal(signal: dict, pair: dict) -> tuple[str, str]:
         and score >= threshold
     )
     if scan_ready:
+        try:
+            from engine_a_trade_gate import annotate_engine_a_trade_eligibility
+
+            annotate_engine_a_trade_eligibility(signal, pair, config=CONFIG)
+        except Exception as exc:
+            log.debug("[ENGINE_A_TRADE_GATE] classification gate skipped: %s", exc)
+            signal["engineATradeEnabled"] = False
+            signal["engineATradeGate"] = {
+                "enabled": False,
+                "research_only": True,
+                "source": "error_closed",
+                "reason": "Engine A trade-eligibility gate unavailable; research-only fail-closed.",
+            }
+        if signal.get("engineATradeEnabled") is False:
+            detail = signal.get("engineATradeGate") or {}
+            return "watchlist", detail.get("reason") or "Engine A research-only"
         if signal.get("enginesAligned") is False:
             if bool(CONFIG.get("ENGINE_A_SCAN_A_ONLY_AUTO_GATE_ENABLED", False)):
                 required = _a_only_required_score(pair, signal)
