@@ -12290,6 +12290,64 @@ def api_position_sl_diagnostic():
         return jsonify({"error": str(exc)}), 500
 
 
+# ── Caches for /api/open-trades-timed hot path ──
+import time as _ott_time
+from concurrent.futures import ThreadPoolExecutor as _OTT_Pool
+from threading import Lock as _OTT_Lock
+
+_ott_pool = _OTT_Pool(max_workers=2)
+_ott_audit_cache: dict = {"rows": [], "ts": 0.0}
+_ott_audit_lock = _OTT_Lock()
+_OTT_AUDIT_TTL = 5.0  # seconds — audit rows rarely change faster than this
+
+_ott_mt5_cache: dict = {"result": None, "ts": 0.0}
+_ott_mt5_lock = _OTT_Lock()
+_OTT_MT5_TTL = 1.5  # seconds — mt5.symbol_info per position is expensive
+
+_ott_bybit_cache: dict = {"result": None, "ts": 0.0}
+_ott_bybit_lock = _OTT_Lock()
+_OTT_BYBIT_TTL = 1.5  # seconds — absorbs ccxt rate-limiter spikes
+
+
+def _ott_load_audit_cached(db_path: str) -> list[dict]:
+    now = _ott_time.monotonic()
+    with _ott_audit_lock:
+        if _ott_audit_cache["rows"] and (now - _ott_audit_cache["ts"]) < _OTT_AUDIT_TTL:
+            return _ott_audit_cache["rows"]
+    from timed_exit_monitor import _load_recent_audit_rows
+    rows = _load_recent_audit_rows(db_path)
+    with _ott_audit_lock:
+        _ott_audit_cache["rows"] = rows
+        _ott_audit_cache["ts"] = _ott_time.monotonic()
+    return rows
+
+
+def _ott_mt5_cached() -> dict:
+    now = _ott_time.monotonic()
+    with _ott_mt5_lock:
+        if _ott_mt5_cache["result"] is not None and (now - _ott_mt5_cache["ts"]) < _OTT_MT5_TTL:
+            return _ott_mt5_cache["result"]
+    from mt5_executor import mt5_get_positions
+    result = mt5_get_positions(attempt_connect=False)
+    with _ott_mt5_lock:
+        _ott_mt5_cache["result"] = result
+        _ott_mt5_cache["ts"] = _ott_time.monotonic()
+    return result
+
+
+def _ott_bybit_cached() -> dict:
+    now = _ott_time.monotonic()
+    with _ott_bybit_lock:
+        if _ott_bybit_cache["result"] is not None and (now - _ott_bybit_cache["ts"]) < _OTT_BYBIT_TTL:
+            return _ott_bybit_cache["result"]
+    from bybit_executor import bybit_get_positions
+    result = bybit_get_positions()
+    with _ott_bybit_lock:
+        _ott_bybit_cache["result"] = result
+        _ott_bybit_cache["ts"] = _ott_time.monotonic()
+    return result
+
+
 @app.route("/api/open-trades-timed")
 def api_open_trades_timed():
     """
@@ -12311,7 +12369,6 @@ def api_open_trades_timed():
     from timed_exit_monitor import (
         _activation_r_for,
         _get_timed_cfg,
-        _load_recent_audit_rows,
         _match_audit_row_for_position,
     )
 
@@ -12332,36 +12389,27 @@ def api_open_trades_timed():
 
     def _fetch_mt5_positions():
         _t0 = _time.perf_counter()
-        from mt5_executor import mt5_get_positions
-        # Fast read-only poll: never block Bybit on MT5 initialize/reconnect.
-        _res = mt5_get_positions(attempt_connect=False)
+        _res = _ott_mt5_cached()
         _timing_ms["mt5_ms"] = round((_time.perf_counter() - _t0) * 1000, 1)
+        _timing_ms["mt5_cache_hit"] = ((_time.perf_counter() - _t0) * 1000) < 5
         return _res
 
     def _fetch_bybit_positions():
         _t0 = _time.perf_counter()
-        from bybit_executor import bybit_get_positions
-        _res = bybit_get_positions()
-        if isinstance(_res, dict) and _res.get("error"):
-            _timing_ms["bybit_ms"] = round((_time.perf_counter() - _t0) * 1000, 1)
-            return {"error": _res["error"]}
+        _res = _ott_bybit_cached()
         _timing_ms["bybit_ms"] = round((_time.perf_counter() - _t0) * 1000, 1)
+        _timing_ms["bybit_cache_hit"] = ((_time.perf_counter() - _t0) * 1000) < 5
         return _res
 
+    _t_brokers = _time.perf_counter()
     try:
-        from concurrent.futures import ThreadPoolExecutor
-
-        # Both broker reads are independent and read-only. Fetching them in
-        # parallel keeps dashboard latency at max(MT5, Bybit), not MT5+Bybit.
-        _t_brokers = _time.perf_counter()
-        with ThreadPoolExecutor(max_workers=2) as pool:
-            mt5_future = pool.submit(_fetch_mt5_positions)
-            bybit_future = pool.submit(_fetch_bybit_positions)
-            mt5_res = mt5_future.result()
-            bybit_res = bybit_future.result()
-        _timing_ms["brokers_parallel_ms"] = round((_time.perf_counter() - _t_brokers) * 1000, 1)
+        mt5_future = _ott_pool.submit(_fetch_mt5_positions)
+        bybit_future = _ott_pool.submit(_fetch_bybit_positions)
+        mt5_res = mt5_future.result(timeout=10)
+        bybit_res = bybit_future.result(timeout=10)
     except Exception as e:
         return jsonify({"error": f"Broker position fetch failed: {e}"}), 500
+    _timing_ms["brokers_parallel_ms"] = round((_time.perf_counter() - _t_brokers) * 1000, 1)
 
     broker_errors: dict[str, str] = {}
     if isinstance(mt5_res, dict) and mt5_res.get("error"):
@@ -12393,7 +12441,7 @@ def api_open_trades_timed():
     }
 
     _t_audit = _time.perf_counter()
-    audit_rows = _load_recent_audit_rows(_AUDIT_DB)
+    audit_rows = _ott_load_audit_cached(_AUDIT_DB)
     _timing_ms["audit_load_ms"] = round((_time.perf_counter() - _t_audit) * 1000, 1)
     matched_audit_tickets: set[str] = set()
     _enrich_elapsed_s = 0.0

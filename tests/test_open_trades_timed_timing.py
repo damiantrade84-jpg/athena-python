@@ -10,6 +10,14 @@ from tests.test_scalp_execution import _load_athena_module
 def test_open_trades_timed_includes_server_timing_ms(monkeypatch):
     athena_module = _load_athena_module()
 
+    # Reset module-level caches so test gets fresh mock data
+    athena_module._ott_audit_cache["rows"] = []
+    athena_module._ott_audit_cache["ts"] = 0.0
+    athena_module._ott_mt5_cache["result"] = None
+    athena_module._ott_mt5_cache["ts"] = 0.0
+    athena_module._ott_bybit_cache["result"] = None
+    athena_module._ott_bybit_cache["ts"] = 0.0
+
     monkeypatch.setattr(
         mt5_executor,
         "mt5_get_positions",
@@ -72,6 +80,14 @@ def test_open_trades_timed_includes_server_timing_ms(monkeypatch):
 
 def _open_trades_timed_client(monkeypatch):
     athena_module = _load_athena_module()
+
+    # Reset module-level caches so tests always get fresh mock data
+    athena_module._ott_audit_cache["rows"] = []
+    athena_module._ott_audit_cache["ts"] = 0.0
+    athena_module._ott_mt5_cache["result"] = None
+    athena_module._ott_mt5_cache["ts"] = 0.0
+    athena_module._ott_bybit_cache["result"] = None
+    athena_module._ott_bybit_cache["ts"] = 0.0
 
     monkeypatch.setattr(
         mt5_executor,
