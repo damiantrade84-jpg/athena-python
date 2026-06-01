@@ -224,3 +224,25 @@ def test_existing_ai_calibration_context_still_builds():
 
     assert ctx["identity"]["pair"] == "EUR/USD"
     assert ctx["engine_a"]["confluenceScore"] == 1.2
+
+
+def test_deterministic_gate_context_exposes_engine_a_trade_gate_fields():
+    packet = build_ai_review_packet(
+        {
+            "pair": "EUR/USD",
+            "direction": "LONG",
+            "type": "forex",
+            "engineATradeEnabled": False,
+            "engineATradeGate": {
+                "enabled": False,
+                "research_only": True,
+                "source": "class:forex",
+                "reason": "Engine A research-only for EUR/USD",
+            },
+        }
+    )
+
+    gates = packet["deterministic_gates"]
+    assert gates["engine_a_trade_enabled"] is False
+    assert gates["engine_a_trade_gate"]["source"] == "class:forex"
+    assert gates["engine_a_trade_gate_reason"] == "Engine A research-only for EUR/USD"

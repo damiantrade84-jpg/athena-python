@@ -137,6 +137,84 @@ def engine_a_trade_enabled(
     return bool(resolve_engine_a_trade_eligibility(pair, signal, config=config)["enabled"])
 
 
+def _is_engine_b_only_execution_signal(sig: dict | None) -> bool:
+    """True for naked / B-only structural execution payloads (not Engine A gate scope)."""
+    sig = sig or {}
+    if sig.get("is_naked"):
+        return True
+    eng = str(sig.get("engine") or sig.get("source_engine") or "").strip().lower()
+    if eng in ("engine_b", "naked", "naked_structure", "structure", "smc", "b"):
+        return True
+    verdict = str(sig.get("verdict") or "").strip().upper()
+    if verdict in ("B_ONLY", "B_ONLY_SCORED", "B_ONLY_VISION_CONFIRMED"):
+        return True
+    engine_a_row = eng in ("a", "engine_a", "scalp", "scalp_vp", "engine_d")
+    eb = sig.get("engine_b")
+    if isinstance(eb, dict) and eb and not engine_a_row:
+        return True
+    if sig.get("naked_data") and not engine_a_row:
+        return True
+    return False
+
+
+def _looks_like_engine_a_signal(sig: dict | None) -> bool:
+    sig = sig or {}
+    if _is_engine_b_only_execution_signal(sig):
+        return False
+    if sig.get("confluenceScore") is not None:
+        return True
+    eng = str(sig.get("engine") or sig.get("source_engine") or "").strip().lower()
+    return eng in (
+        "a",
+        "engine_a",
+        "engine_a_v2",
+        "factor_scoring",
+        "forex_scoring",
+        "engine_c",
+        "engine_c_consensus",
+        "consensus",
+        "c",
+    )
+
+
+def engine_a_trade_gate_block_reason(
+    sig: dict | None,
+    pair_obj: dict | None = None,
+    *,
+    config: dict | None = None,
+) -> str | None:
+    """Return a fail-closed block reason for Engine A execution, or None if allowed."""
+    sig = sig or {}
+    if _is_engine_b_only_execution_signal(sig):
+        return None
+    if not _looks_like_engine_a_signal(sig):
+        return None
+
+    cfg = config if isinstance(config, dict) else CONFIG
+    trade_enabled = sig.get("engineATradeEnabled")
+    if trade_enabled is False:
+        detail = sig.get("engineATradeGate") or {}
+        reason = detail.get("reason") or "Engine A research-only; trade eligibility disabled."
+        return f"ENGINE_A_RESEARCH_ONLY: {reason}"
+
+    if not _as_bool(cfg.get("ENGINE_A_TRADE_ELIGIBILITY_ENABLED", True), True):
+        return None
+
+    if trade_enabled is not True:
+        pair = pair_obj if isinstance(pair_obj, dict) else {}
+        if not pair:
+            pair = {
+                "display": sig.get("display") or sig.get("pair"),
+                "symbol": sig.get("symbol"),
+                "type": sig.get("type"),
+                "scoreGroup": sig.get("scoreGroup") or sig.get("score_group"),
+            }
+        detail = resolve_engine_a_trade_eligibility(pair, sig, config=cfg)
+        if not detail.get("enabled"):
+            return f"ENGINE_A_RESEARCH_ONLY: {detail.get('reason', 'Engine A research-only')}"
+    return None
+
+
 def annotate_engine_a_trade_eligibility(
     signal: dict,
     pair: dict | None,
@@ -154,4 +232,29 @@ def annotate_engine_a_trade_eligibility(
             warning = f"{_DISABLED_WARNING_PREFIX}: {detail['reason']}"
             if warning not in warnings:
                 warnings.append(warning)
+    return signal
+
+
+def apply_fail_closed_engine_a_trade_gate(
+    signal: dict,
+    *,
+    source: str = "error_closed",
+    reason: str | None = None,
+) -> dict:
+    """Mark a signal research-only when trade-eligibility annotation fails."""
+    reason = reason or "Engine A trade-eligibility gate unavailable; research-only fail-closed."
+    signal["engineATradeEnabled"] = False
+    signal["engineATradeGate"] = {
+        "enabled": False,
+        "research_only": True,
+        "source": source,
+        "reason": reason,
+    }
+    signal["trade"] = False
+    signal["executable"] = False
+    warnings = signal.setdefault("warnings", [])
+    if isinstance(warnings, list):
+        warning = f"{_DISABLED_WARNING_PREFIX}: {reason}"
+        if warning not in warnings:
+            warnings.append(warning)
     return signal

@@ -682,6 +682,7 @@ def _build_data_quality_context(signal: Dict[str, Any]) -> Dict[str, Any]:
 
 def _build_deterministic_gate_context(signal: Dict[str, Any]) -> Dict[str, Any]:
     engine_c = _engine_dict(signal, "engine_c", "engineC")
+    gate_detail = _as_dict(signal.get("engineATradeGate"))
     data = {
         "trade": _first_present(_pick(signal, "trade"), _pick(engine_c, "trade")),
         "advisory_rule_trade_allowed": _pick(signal, "advisory_rule_trade_allowed"),
@@ -693,6 +694,9 @@ def _build_deterministic_gate_context(signal: Dict[str, Any]) -> Dict[str, Any]:
         "final_state": _pick(signal, "finalState", "final_state"),
         "block_reason": _pick(signal, "blockReason", "block_reason"),
         "engine_c_decision_state": _first_present(_pick(engine_c, "decision_state"), _pick(signal, "decision_state")),
+        "engine_a_trade_enabled": _pick(signal, "engineATradeEnabled", "engine_a_trade_enabled"),
+        "engine_a_trade_gate": gate_detail or None,
+        "engine_a_trade_gate_reason": gate_detail.get("reason") if gate_detail else None,
     }
     for key, value in list(data.items()):
         if value is _MISSING:

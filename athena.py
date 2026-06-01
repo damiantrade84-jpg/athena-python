@@ -13961,11 +13961,12 @@ def analyze_pair(
     signal["candleFetchMeta"] = _candle_fetch_meta
 
     try:
-        from engine_a_trade_gate import annotate_engine_a_trade_eligibility
+        from engine_a_trade_gate import annotate_engine_a_trade_eligibility, apply_fail_closed_engine_a_trade_gate
 
         annotate_engine_a_trade_eligibility(signal, pair, config=CONFIG)
     except Exception as _trade_gate_err:
         log.debug("[ENGINE_A_TRADE_GATE] %s annotation skipped: %s", pair.get("display"), _trade_gate_err)
+        apply_fail_closed_engine_a_trade_gate(signal)
 
     try:
         from ai_review.engine_a_context import build_score_attribution

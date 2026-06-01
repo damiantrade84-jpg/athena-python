@@ -236,6 +236,33 @@ def test_engine_c_normalise_engine_a_disabled_trade_gate_is_not_a_signal():
     assert norm["trade_enabled"] is False
 
 
+def test_engine_c_normalise_engine_a_missing_trade_gate_blocks_when_evidence_active(monkeypatch):
+    monkeypatch.setitem(__import__("config").CONFIG, "ENGINE_A_TRADE_ELIGIBILITY_ENABLED", True)
+    norm = normalise_engine_a(
+        {
+            "confluenceScore": 2.4,
+            "maxScore": 3.0,
+            "direction": "LONG",
+        }
+    )
+    assert norm["has_signal"] is False
+    assert norm["has_partial_signal"] is False
+    assert norm["trade_enabled"] is False
+
+
+def test_engine_c_normalise_engine_a_missing_trade_gate_legacy_when_master_disabled(monkeypatch):
+    monkeypatch.setitem(__import__("config").CONFIG, "ENGINE_A_TRADE_ELIGIBILITY_ENABLED", False)
+    norm = normalise_engine_a(
+        {
+            "confluenceScore": 2.4,
+            "maxScore": 3.0,
+            "direction": "LONG",
+        }
+    )
+    assert norm["has_signal"] is True
+    assert norm["trade_enabled"] is True
+
+
 def test_engine_c_normalise_engine_b_uses_checklist_ratio_when_pct_missing():
     norm = normalise_engine_b(
         {

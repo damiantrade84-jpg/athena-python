@@ -391,6 +391,17 @@ def _engine_d_execution_block_reason(
     )
 
 
+def _engine_a_trade_gate_block_reason(
+    sig: dict,
+    pair_obj: dict | None = None,
+    config: dict | None = None,
+) -> str | None:
+    """Fail-closed Engine A trade-eligibility gate for manual execution paths."""
+    from engine_a_trade_gate import engine_a_trade_gate_block_reason
+
+    return engine_a_trade_gate_block_reason(sig, pair_obj, config=config or rt().CONFIG)
+
+
 def _is_structural_engine_b_execution(sig: dict, engine_b: dict | None = None) -> bool:
     """True when execution should apply Engine B level / stale-B refresh semantics.
 
@@ -967,6 +978,14 @@ def api_quick_execute():
         )
 
     is_crypto = sig.get("type") == "crypto"
+
+    _pair_obj = next(
+        (p for p in _r.ALL_PAIRS if p.get("display") == _quick_pair or p.get("symbol") == _quick_pair),
+        None,
+    )
+    _ea_block = _engine_a_trade_gate_block_reason(sig, _pair_obj, config=_r.CONFIG)
+    if _ea_block:
+        return jsonify({"error": _ea_block, "pair": sig.get("pair")}), 422
 
     try:
         from risk_engine import risk_check
@@ -1840,6 +1859,14 @@ def api_execute():
             f"[EXEC] {pair}: applied {sig.get('level_source')} levels "
             f"for style={sig.get('style')} SL={sig.get('sl')} TP1={sig.get('tp1')}"
         )
+
+    _pair_obj = next(
+        (p for p in _r.ALL_PAIRS if p.get("display") == pair or p.get("symbol") == pair),
+        None,
+    )
+    _ea_block = _engine_a_trade_gate_block_reason(sig, _pair_obj, config=_r.CONFIG)
+    if _ea_block:
+        return jsonify({"error": _ea_block, "pair": pair}), 422
 
     try:
         from risk_engine import risk_check

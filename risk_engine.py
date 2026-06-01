@@ -928,6 +928,10 @@ def risk_check(
         log.warning(f"{prefix} REJECTED: invalid direction '{signal.get('direction')}'")
         return RiskApproval(False, 0.0, 0.0, 0.0, 0.0, 0.0, "INVALID_DIRECTION")
 
+    if signal.get("engineATradeEnabled") is False:
+        log.warning(f"{prefix} REJECTED: Engine A research-only signal")
+        return RiskApproval(False, 0.0, 0.0, 0.0, 0.0, 0.0, "ENGINE_A_RESEARCH_ONLY")
+
     asset_type = signal.get("type", "") or "unknown"
     account_domain = (
         account_domain

@@ -394,7 +394,11 @@ def normalise_engine_a(signal_a: dict) -> dict:
     _a_partial_floor = float(CONFIG.get("ENGINE_C_A_PARTIAL_FLOOR", 0.20))
     _dir_ok = signal_a.get("direction") in ("LONG", "SHORT")
     _trade_enabled = signal_a.get("engineATradeEnabled")
-    _trade_gate_allows = _trade_enabled is not False
+    _evidence_gate_active = bool(CONFIG.get("ENGINE_A_TRADE_ELIGIBILITY_ENABLED", True))
+    if _evidence_gate_active:
+        _trade_gate_allows = _trade_enabled is True
+    else:
+        _trade_gate_allows = _trade_enabled is not False
     _is_full = norm > _a_has_floor and _dir_ok and _trade_gate_allows
     _is_partial = (not _is_full) and norm > _a_partial_floor and _dir_ok and _trade_gate_allows
     _cf = None

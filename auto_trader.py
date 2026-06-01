@@ -1602,6 +1602,16 @@ class AutoTrader:
         signal["masterExecutionGate"] = {"allowed": True}
         _trace_gate(signal, cfg, "masterExecution", signal["masterExecutionGate"])
 
+        if _signal_engine(signal) not in ("engine_b", "scalp"):
+            from engine_a_trade_gate import engine_a_trade_gate_block_reason
+
+            _ea_block = engine_a_trade_gate_block_reason(signal, config=cfg)
+            if _ea_block:
+                signal["engineATradeGateBlock"] = {"allowed": False, "reason": _ea_block}
+                _trace_gate(signal, cfg, "engineATradeGate", signal["engineATradeGateBlock"])
+                _finalize_trace(signal, cfg, action="block", stage="engineATradeGate", reason=_ea_block)
+                return False, _ea_block
+
         engines_aligned = signal.get("enginesAligned", False)
         effective_conviction = _clamp01(signal.get("executionConvictionEffective"))
         auto_min_conviction = _auto_trade_min_conviction(cfg, asset_type)

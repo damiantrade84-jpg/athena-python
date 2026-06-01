@@ -28,3 +28,12 @@ def test_manual_execute_helper_blocks_research_only_engine_a_signal():
 
     assert "engineATradeEnabled === false" in src
     assert "Research-only" in src
+
+
+def test_signals_panel_can_execute_row_blocks_engine_a_research_only():
+    src = (ROOT / "static/react-app/app/src/components/panels/SignalsPanel.tsx").read_text(
+        encoding="utf-8"
+    )
+
+    assert "function canExecuteRow" in src
+    assert "row.engines.has('A') && row.signal.engineATradeEnabled === false" in src

@@ -228,6 +228,7 @@ function unifiedEngineLabel(engines: Set<'A' | 'B'>): EngineSource {
 
 function canExecuteRow(row: UnifiedRow | null): boolean {
   if (!row) return false;
+  if (row.engines.has('A') && row.signal.engineATradeEnabled === false) return false;
   // Engine B alone is always executable (it has its own gates). Engine A
   // watchlist tier is display-only.
   if (row.engines.has('B') && !row.engines.has('A')) return true;
