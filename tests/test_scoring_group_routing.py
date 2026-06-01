@@ -249,6 +249,30 @@ def test_equity_and_commodity_groups_use_explicit_stable_floor():
         assert get_score_threshold(pair) == expected_threshold
 
 
+def test_etf_pairs_map_to_existing_score_groups(caplog):
+    """ETF universe uses type=etf; must not resolve to unknown etf_other."""
+    thresholds = CONFIG.get("ENGINE_A_SCORE_GROUP_THRESHOLDS") or {}
+    examples = [
+        ({"display": "DIA", "type": "etf"}, "us_indices_trackers"),
+        ({"display": "QQQ", "type": "etf"}, "us_indices_trackers"),
+        ({"display": "SPY", "type": "etf"}, "us_indices_trackers"),
+        ({"display": "SOXX", "type": "etf"}, "us_indices_trackers"),
+        ({"display": "GLD", "type": "etf"}, "precious_trackers"),
+        ({"display": "SLV", "type": "etf"}, "precious_trackers"),
+        ({"display": "GDX", "type": "etf"}, "precious_trackers"),
+        ({"display": "USO", "type": "etf"}, "energy_oil"),
+        ({"display": "XLE", "type": "etf"}, "energy_oil"),
+        ({"display": "EEM", "type": "etf"}, "smallcap_em_etf"),
+        ({"display": "IWM", "type": "etf"}, "smallcap_em_etf"),
+        ({"display": "TLT", "type": "etf_bond"}, "bond_tlt"),
+    ]
+    for pair, expected_group in examples:
+        assert get_pair_score_group(pair) == expected_group
+        expected_threshold = float(thresholds[expected_group])
+        assert get_score_threshold(pair) == expected_threshold
+    assert "etf_other" not in caplog.text
+
+
 def test_auto_trade_min_score_does_not_override_engine_a_scan_threshold(monkeypatch):
     """AUTO_TRADE_MIN_SCORE is informational; Engine A scan uses score-group thresholds only."""
     pair = {"display": "BTC/USDT", "symbol": "BTCUSDT", "type": "crypto"}

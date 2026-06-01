@@ -123,7 +123,7 @@ _ENERGY_OIL = {"WTI Oil", "Brent Oil", "USO", "XLE"}
 _BASE_METALS = {"Aluminium", "Lead", "Nickel", "Zinc"}
 # Soft commodities + livestock — Athena edge unaudited; route to EXOTIC tier.
 _SOFTS = {"Cattle", "Cocoa", "Coffee", "Corn", "Cotton", "Soybeans", "Sugar", "Wheat"}
-_US_INDICES_TRACKERS = {"NASDAQ-100", "S&P 500", "Dow Jones", "SPY", "QQQ", "DIA"}
+_US_INDICES_TRACKERS = {"NASDAQ-100", "S&P 500", "Dow Jones", "SPY", "QQQ", "DIA", "SOXX"}
 _EU_INDICES = {"DAX 40", "UK100"}
 _ASIAN_INDICES = {"ASX 200", "Nikkei 225", "Hang Seng"}
 _US_STOCK_CUSTOM = {
@@ -202,6 +202,18 @@ def get_pair_score_group(pair: dict) -> str:
         if display in _US_STOCK_CUSTOM:
             return "us_stock_single"
         if display == "TLT":
+            return "bond_tlt"
+        if display in {"IWM", "EEM"}:
+            return "smallcap_em_etf"
+        if display in _PRECIOUS_TRACKERS:
+            return "precious_trackers"
+        if display in _ENERGY_OIL:
+            return "energy_oil"
+        if display in _US_INDICES_TRACKERS:
+            return "us_indices_trackers"
+        return "stock_other"
+    if ptype in ("etf", "etf_bond"):
+        if display == "TLT" or ptype == "etf_bond":
             return "bond_tlt"
         if display in {"IWM", "EEM"}:
             return "smallcap_em_etf"
