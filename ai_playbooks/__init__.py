@@ -48,6 +48,8 @@ def render_playbook_prompt_block(
                 "requiredOutputFields": pb.get("requiredOutputFields", []),
             }
             for extra in (
+                "indicatorUsage",
+                "strategyMapping",
                 "marketStates",
                 "locationChecklist",
                 "aggressionChecklist",

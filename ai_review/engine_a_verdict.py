@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from ai_review.engine_a_context import freshness_is_policy_ok
@@ -171,21 +172,34 @@ def _infer_chart_contradicts_direction(ai_review: dict[str, Any]) -> bool | None
     return None
 
 
+# Whole-word timing signals not already covered by _POOR_ENTRY_PATTERNS.
+# Matched on word boundaries so "late" does not hit "latest"/"correlated"
+# and "extended" does not hit unrelated prose. "vwap" is NOT a poor-entry
+# signal — a reference to VWAP says nothing about whether timing is bad.
+_POOR_TIMING_WORDS = ("extended", "overextended", "exhausted", "exhaustion")
+_GOOD_TIMING_WORDS = ("pullback", "retest", "acceptance", "reclaim")
+_GOOD_TIMING_PHRASES = ("good entry", "clean entry", "acceptable entry")
+
+
+def _has_word(text: str, words: tuple[str, ...]) -> bool:
+    return bool(text) and any(re.search(rf"\b{w}\b", text) for w in words)
+
+
 def _infer_entry_timing(ai_review: dict[str, Any]) -> tuple[bool | None, bool | None]:
     text = _text_blob(ai_review)
-    confirms = None
-    contradicts = None
-    for pattern in _POOR_ENTRY_PATTERNS:
-        if pattern in text:
-            contradicts = True
-            confirms = False
-            break
-    if any(w in text for w in ("good entry", "clean entry", "acceptable entry", "pullback")):
-        confirms = True
-        contradicts = False
-    if any(w in text for w in ("extended", "late", "chasing", "exhaustion", "vwap")):
-        contradicts = True
-    return confirms, contradicts
+    has_poor = any(pattern in text for pattern in _POOR_ENTRY_PATTERNS) or _has_word(
+        text, _POOR_TIMING_WORDS
+    )
+    has_good = _has_word(text, _GOOD_TIMING_WORDS) or any(
+        phrase in text for phrase in _GOOD_TIMING_PHRASES
+    )
+    if has_good and not has_poor:
+        return True, False
+    if has_poor and not has_good:
+        return False, True
+    # No signal, or mixed/conflicting signals: stay indeterminate rather than
+    # defaulting to "timing poor".
+    return None, None
 
 
 def _comparison_verdict(

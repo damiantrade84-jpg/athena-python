@@ -1231,10 +1231,18 @@ def build_engine_a_prompt_context(engine_a_ctx: dict[str, Any]) -> dict[str, Any
         fd = {}
     atr = engine_a_ctx.get("atr") or {}
     geometry = engine_a_ctx.get("geometry") or {}
-    trend = fd.get("trendCoherence") or fd.get("trend_coherence") or {}
-    vwap_ext = None
-    if isinstance(trend, dict):
-        vwap_ext = trend.get("vwapExtended") or trend.get("vwap_extended")
+    ema_levels = engine_a_ctx.get("ema_levels") or {}
+    if not isinstance(ema_levels, dict):
+        ema_levels = {}
+    # VWAP extension lives in the crypto late-trend diagnostics, exposed as
+    # cryptoEngineADiagnostics with snake-case sub-keys — not in trendCoherence.
+    # Crypto-only; null for other asset classes.
+    crypto_diag = fd.get("cryptoEngineADiagnostics") or fd.get("crypto_engine_a_diagnostics") or {}
+    if not isinstance(crypto_diag, dict):
+        crypto_diag = {}
+    vwap_ext = crypto_diag.get("vwap_extended")
+    if vwap_ext is None:
+        vwap_ext = crypto_diag.get("vwapExtended")
     adx_capture = fd.get("regimeLabelsDualCapture") or {}
     if not isinstance(adx_capture, dict):
         adx_capture = {}
@@ -1283,9 +1291,11 @@ def build_engine_a_prompt_context(engine_a_ctx: dict[str, Any]) -> dict[str, Any
             "volumeRatio": volume_ratio,
             "volumeType": _volume_type_for(engine_a_ctx.get("asset_class") or ""),
             "structureScore": _to_float(fd.get("structure_context_adjustment")),
-            "vwapDistanceAtr": _to_float(
-                trend.get("vwapDistanceAtr") if isinstance(trend, dict) else None
-            ),
+            "ema50": _to_float(ema_levels.get("ema50")),
+            "ema200": _to_float(ema_levels.get("ema200")),
+            "dema200": _to_float(ema_levels.get("dema200")),
+            "emaTimeframe": "H4",
+            "vwapDistanceAtr": _to_float(crypto_diag.get("vwap_distance_atr")),
             "vwapExtended": vwap_ext if isinstance(vwap_ext, bool) else None,
             "adxD1": _to_float(adx_capture.get("trendStateAdxValue")),
             "adxH4": _to_float(fd.get("adx_value") or fd.get("adxValue")),

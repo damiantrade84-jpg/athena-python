@@ -52,6 +52,10 @@ Discover under `.agents/skills/<name>/SKILL.md`. Load a skill only when the task
 | `athena-test-repair` | Targeted pytest repair for touched behavior |
 | `athena-risk-execution` | `execution.py`, `risk_engine.py`, `guardian.py`, `auto_trader.py`, broker executors |
 
+## Chart AI review
+
+Engine A playbook (`ai_playbooks/engine_a_playbook.py`) drives indicator/strategy usage; entry-timing downgrades must be evidence-based (price-vs-EMA distance in ATR, RSI/ADX; VWAP extension is crypto-only). Advisory only — never connects to execution.
+
 ## Nested scope guides
 
 - `static/react-app/AGENTS.md` — frontend / native chart

@@ -65,19 +65,13 @@ Common entry points only. This is not a complete allowlist.
 - Do not build new AI review features on the legacy TradingView path.
 - Prefer native chart PNG screenshots; TradingView limits drove the move.
 
-## Engine A baseline
-
-- Engine A / live chart parity is the current priority baseline.
-- Live chart validity: done; `bar_time` wiring verified end-to-end in a live scan.
-- Equity/index session liquidity weighting is not a known fail-open blocker.
-- Do not re-open missing `bar_time` unless new regression evidence.
-
 ## Chart AI review contract
 
 - Read-only advisory; must not connect to execution.
 - Input: native chart PNG + server-trusted Engine A diagnostics assembled on the backend.
 - Do not trust the frontend for Engine A score, threshold, ATR, or RR.
 - Review payload must include ATR diagnostics, SL/TP/RR, freshness/provider timestamps, and Engine-A-vs-model concordance.
+- Engine A playbook (`ai_playbooks/engine_a_playbook.py`) drives indicator/strategy usage; entry-timing downgrades must be evidence-based (price-vs-EMA distance in ATR, RSI/ADX; VWAP extension is crypto-only).
 - v1 provider target: Anthropic/Claude; OpenAI scaffold only if explicitly requested.
 
 ## Auto-trade contract
