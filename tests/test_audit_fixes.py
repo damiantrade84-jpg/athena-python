@@ -42,19 +42,31 @@ def test_scoring_backtest_gating():
     }
     
     # 3a. Live mode (RESEARCH_MODE=False) -> Should block
-    with patch.dict(CONFIG, {"RESEARCH_MODE": False, "BACKTEST_RUNNING": False}):
+    with patch.dict(CONFIG, {"RESEARCH_MODE": False, "BACKTEST_RUNNING": False, "ENGINE_A_TRADE_ELIGIBILITY_ENABLED": False}):
         tier, reason = _classify_signal(signal, pair)
         assert tier == "watchlist"
         assert "Blocked by Macro Event Gate" in reason
+
+    # Process-global BACKTEST_RUNNING must not leak into live classification
+    # unless the signal itself is explicitly marked as research/backtest.
+    with patch.dict(CONFIG, {"RESEARCH_MODE": False, "BACKTEST_RUNNING": True, "BACKTEST_EVENT_RISK_GATING": False, "ENGINE_A_TRADE_ELIGIBILITY_ENABLED": False}):
+        tier, reason = _classify_signal(signal, pair)
+        assert tier == "watchlist"
+        assert "Blocked by Macro Event Gate" in reason
+
+    with patch.dict(CONFIG, {"RESEARCH_MODE": False, "BACKTEST_RUNNING": False, "BACKTEST_EVENT_RISK_GATING": False, "ENGINE_A_TRADE_ELIGIBILITY_ENABLED": False}):
+        tier, reason = _classify_signal({**signal, "backtestRunning": True}, pair)
+        assert tier == "trade"
+        assert "Trade-ready" in reason
         
     # 3b. Backtest mode (RESEARCH_MODE=True), Gate OFF -> Should NOT block
-    with patch.dict(CONFIG, {"RESEARCH_MODE": True, "BACKTEST_EVENT_RISK_GATING": False}):
+    with patch.dict(CONFIG, {"RESEARCH_MODE": True, "BACKTEST_EVENT_RISK_GATING": False, "ENGINE_A_TRADE_ELIGIBILITY_ENABLED": False}):
         tier, reason = _classify_signal(signal, pair)
         assert tier == "trade"
         assert "Trade-ready" in reason
 
     # 3c. Backtest mode (RESEARCH_MODE=True), Gate ON -> Should block
-    with patch.dict(CONFIG, {"RESEARCH_MODE": True, "BACKTEST_EVENT_RISK_GATING": True}):
+    with patch.dict(CONFIG, {"RESEARCH_MODE": True, "BACKTEST_EVENT_RISK_GATING": True, "ENGINE_A_TRADE_ELIGIBILITY_ENABLED": False}):
         tier, reason = _classify_signal(signal, pair)
         assert tier == "watchlist"
         assert "Blocked by Macro Event Gate" in reason
@@ -76,19 +88,30 @@ def test_scoring_sentiment_gating():
     }
     
     # 4a. Live mode -> Should block
-    with patch.dict(CONFIG, {"RESEARCH_MODE": False, "BACKTEST_RUNNING": False}):
+    with patch.dict(CONFIG, {"RESEARCH_MODE": False, "BACKTEST_RUNNING": False, "ENGINE_A_TRADE_ELIGIBILITY_ENABLED": False}):
         tier, reason = _classify_signal(signal, pair)
         assert tier == "watchlist"
         assert "Blocked by Sentiment Gate" in reason
         
     # 4b. Backtest mode, Gate OFF -> Should NOT block
-    with patch.dict(CONFIG, {"RESEARCH_MODE": True, "BACKTEST_SENTIMENT_GATING": False}):
+    with patch.dict(CONFIG, {"RESEARCH_MODE": True, "BACKTEST_SENTIMENT_GATING": False, "ENGINE_A_TRADE_ELIGIBILITY_ENABLED": False}):
         tier, reason = _classify_signal(signal, pair)
         assert tier == "trade"
         assert "Trade-ready" in reason
 
     # 4c. Backtest mode, Gate ON -> Should block
-    with patch.dict(CONFIG, {"RESEARCH_MODE": True, "BACKTEST_SENTIMENT_GATING": True}):
+    with patch.dict(CONFIG, {"RESEARCH_MODE": True, "BACKTEST_SENTIMENT_GATING": True, "ENGINE_A_TRADE_ELIGIBILITY_ENABLED": False}):
         tier, reason = _classify_signal(signal, pair)
         assert tier == "watchlist"
         assert "Blocked by Sentiment Gate" in reason
+
+
+def test_correlation_clusters_can_be_configured():
+    from scoring import apply_correlation_cap
+    from config import CONFIG
+
+    signals = [{"pair": "AAA", "warnings": []}, {"pair": "BBB", "warnings": []}]
+    with patch.dict(CONFIG, {"ENGINE_A_CORR_CLUSTERS": {"custom": ["AAA", "BBB"]}}):
+        out = apply_correlation_cap(signals)
+
+    assert out[1]["correlationWarning"] == "custom"

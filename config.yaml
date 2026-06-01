@@ -313,6 +313,8 @@ ADX_MISSING_BOTH_ABORT: true
 # are treated as signal rather than noise.
 FACTOR_FUNDING_BASELINE: 0.0001
 FACTOR_FUNDING_NOISE_BAND: 0.0001
+FACTOR_FUNDING_HIGH_BPS_8H: 10
+FACTOR_FUNDING_LOW_BPS_8H: -10
 FACTOR_FUNDING_Z_REF: 2.0
 FACTOR_FUNDING_SCALE: 0.0005
 FACTOR_OI_REF_PCT: 5.0
@@ -458,6 +460,10 @@ ENGINE_A_TRADE_ENABLED_BY_CLASS:
   crypto: false      # n>=30, but no crypto pair cleared SQN>2.0 in AB6.
 ENGINE_A_TRADE_ENABLED_BY_SCORE_GROUP: {}
 ENGINE_A_TRADE_ENABLED_OVERRIDES: {}
+ENGINE_A_TRADE_EVIDENCE_REQUIRED: true
+ENGINE_A_TRADE_EVIDENCE_MIN_N: 30
+ENGINE_A_TRADE_EVIDENCE_MIN_SQN: 2.0
+ENGINE_A_TRADE_ENABLED_EVIDENCE: {}
 
 # FRED-backed options/volatility regime feed for vol_skew orthogonal vote.
 # Positive z = elevated/backwardated vol (risk-off), used only as confluence.
@@ -530,6 +536,10 @@ ENGINE_A_DI_ALIGNMENT_MULT_BY_CLASS:
     missing: 1.0
     balanced: 0.85
     opposed: 0.65
+  crypto: { missing: 1.0, balanced: 0.85, opposed: 0.65, severe_opposed: 0.35 }
+  commodity: { missing: 1.0, balanced: 0.85, opposed: 0.65, severe_opposed: 0.35 }
+  stock: { missing: 1.0, balanced: 0.85, opposed: 0.65, severe_opposed: 0.35 }
+  index: { missing: 1.0, balanced: 0.85, opposed: 0.65, severe_opposed: 0.35 }
 
 # ── 2026 Engine A Group Calibration Review — Indicator Periods ────────────────
 # These maps extend the proven ENGINE_A_*_BY_CLASS resolver pattern (see
@@ -2179,7 +2189,7 @@ FACTOR_DIRECTIONAL_SOFT_SPAN_CRYPTO: 0.30
 
 FACTOR_CRYPTO_ADDON_COMBO_CONFIRM_CAP: 0.25
 
-FACTOR_CRYPTO_ADDON_COMBO_AGAINST_CAP: -0.20
+FACTOR_CRYPTO_ADDON_COMBO_AGAINST_CAP: -0.25
 
 EODHD_COMMODITY_TICKERS:
 
