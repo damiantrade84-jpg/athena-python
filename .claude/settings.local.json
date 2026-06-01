@@ -181,7 +181,9 @@
       "Bash(npx vite *)",
       "PowerShell($env:ATHENA_REAL_ORDERS_CONFIRM = 'I_UNDERSTAND_REAL_ORDER_RISK'; Set-Location C:\\\\dev\\\\athena-python; .\\\\.venv\\\\Scripts\\\\python.exe -m pytest tests/test_suggested_trade_routes.py tests/test_tv_chart_panel.py tests/test_scalp_workbench_panel.py --basetemp=tests/.tmp/flag -q 2>&1 | Select-Object -Last 15)",
       "PowerShell($env:ATHENA_REAL_ORDERS_CONFIRM = 'I_UNDERSTAND_REAL_ORDER_RISK'; Set-Location C:\\\\dev\\\\athena-python; .\\\\.venv\\\\Scripts\\\\python.exe -m pytest tests/test_suggested_trade_routes.py tests/test_tv_chart_panel.py tests/test_scalp_workbench_panel.py --basetemp=tests/.tmp/flag2 -q 2>&1 | Select-Object -Last 10)",
-      "PowerShell($env:ATHENA_REAL_ORDERS_CONFIRM = 'I_UNDERSTAND_REAL_ORDER_RISK'; Set-Location C:\\\\dev\\\\athena-python; .\\\\.venv\\\\Scripts\\\\python.exe -m pytest tests/test_suggested_trade_routes.py tests/test_tv_chart_panel.py tests/test_scalp_workbench_panel.py --basetemp=tests/.tmp/flag3 -q 2>&1 | Select-Object -Last 5)"
+      "PowerShell($env:ATHENA_REAL_ORDERS_CONFIRM = 'I_UNDERSTAND_REAL_ORDER_RISK'; Set-Location C:\\\\dev\\\\athena-python; .\\\\.venv\\\\Scripts\\\\python.exe -m pytest tests/test_suggested_trade_routes.py tests/test_tv_chart_panel.py tests/test_scalp_workbench_panel.py --basetemp=tests/.tmp/flag3 -q 2>&1 | Select-Object -Last 5)",
+      "Bash(npx eslint *)",
+      "PowerShell($gh = \\(Get-Command gh -ErrorAction SilentlyContinue\\); if \\($gh\\) { \"gh at: $\\($gh.Source\\)\" } else { \"gh not found\" })"
     ]
   },
   "disabledMcpjsonServers": [

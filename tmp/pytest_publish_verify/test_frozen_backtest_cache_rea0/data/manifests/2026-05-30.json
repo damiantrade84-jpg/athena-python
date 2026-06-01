@@ -1,0 +1,20 @@
+{
+  "data_as_of": "2026-05-30",
+  "schema_version": 1,
+  "series": {
+    "candles|BTC/USDT|H1|bybit_linear_kline": {
+      "asset_type": "crypto",
+      "display": "BTC/USDT",
+      "first_bar_time": "2026-05-30T08:00:00+00:00",
+      "kind": "candles",
+      "last_bar_time": "2026-05-30T10:00:00+00:00",
+      "path": "data/frozen/2026-05-30/candles/BTC_USDT__H1__bybit_linear_kline.json",
+      "provider": "bybit_linear_kline",
+      "row_count": 3,
+      "sha256": "75033a51a884f60aaf9716815a2ad528fc0095ccf0b2fd5ba0f1a894884a478a",
+      "source": "binance",
+      "symbol": "BTCUSDT",
+      "timeframe": "H1"
+    }
+  }
+}

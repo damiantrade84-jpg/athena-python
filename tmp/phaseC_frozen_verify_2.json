@@ -1,0 +1,74 @@
+[
+  {
+    "error": null,
+    "expectancy": -0.399,
+    "maxDrawdownPct": 9.5,
+    "pair": "EUR/USD",
+    "profitFactor": 0.52,
+    "sharpe": -1.67,
+    "sortino": -1.93,
+    "sqn": -2.4,
+    "totalTrades": 63,
+    "winRate": 25.4
+  },
+  {
+    "error": null,
+    "expectancy": -0.025,
+    "maxDrawdownPct": 1.8,
+    "pair": "GBP/JPY",
+    "profitFactor": 0.96,
+    "sharpe": -0.11,
+    "sortino": -0.13,
+    "sqn": -0.15,
+    "totalTrades": 70,
+    "winRate": 42.9
+  },
+  {
+    "error": null,
+    "expectancy": 0,
+    "maxDrawdownPct": 0,
+    "pair": "BTC/USDT",
+    "profitFactor": null,
+    "sharpe": 0,
+    "sortino": 0,
+    "sqn": 0,
+    "totalTrades": 0,
+    "winRate": 0
+  },
+  {
+    "error": null,
+    "expectancy": 0,
+    "maxDrawdownPct": 0,
+    "pair": "SOL/USDT",
+    "profitFactor": null,
+    "sharpe": 0,
+    "sortino": 0,
+    "sqn": 0,
+    "totalTrades": 0,
+    "winRate": 0
+  },
+  {
+    "error": null,
+    "expectancy": 0.407,
+    "maxDrawdownPct": 6.8,
+    "pair": "XAU/USD",
+    "profitFactor": 1.96,
+    "sharpe": 1.15,
+    "sortino": 1.3,
+    "sqn": 1.43,
+    "totalTrades": 20,
+    "winRate": 60.0
+  },
+  {
+    "error": null,
+    "expectancy": 0.1,
+    "maxDrawdownPct": 3.3,
+    "pair": "NASDAQ-100",
+    "profitFactor": 1.2,
+    "sharpe": 0.24,
+    "sortino": 0.26,
+    "sqn": 0.34,
+    "totalTrades": 16,
+    "winRate": 50.0
+  }
+]

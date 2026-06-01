@@ -1,0 +1,20 @@
+{
+  "data_as_of": "2026-05-30",
+  "schema_version": 1,
+  "series": {
+    "candles|DX-Y.NYB|H4|yfinance": {
+      "asset_type": "macro",
+      "display": "DX-Y.NYB",
+      "first_bar_time": "2026-05-30T08:00:00+00:00",
+      "kind": "candles",
+      "last_bar_time": "2026-05-30T09:00:00+00:00",
+      "path": "data/frozen/2026-05-30/candles/DX-Y.NYB__H4__yfinance.json",
+      "provider": "yfinance",
+      "row_count": 2,
+      "sha256": "6fe04f52a02a94839b1bd376d3084cb1e9d929cccea9d3dc8b9b3c0e035515c1",
+      "source": "yfinance",
+      "symbol": "DX-Y.NYB",
+      "timeframe": "H4"
+    }
+  }
+}

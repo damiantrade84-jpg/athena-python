@@ -1,0 +1,8 @@
+BTC/USDT bars 86
+   funding mean 0.002 min -0.0055 max 0.006 status {'ok': 86}
+   oi_divergence mean 0.028 min -1.0 max 1.0 status {'ok': 60, 'neutral': 26}
+   cot mean -0.212 min -1.0 max -0.0455 status {'ok': 86}
+SOL/USDT bars 108
+   funding mean 0.001 min -0.0097 max 0.006 status {'ok': 108}
+   oi_divergence mean 0.027 min -0.626 max 0.658 status {'neutral': 33, 'ok': 75}
+   cot mean 0.0 min 0.0 max 0.0 status {'neutral': 108}

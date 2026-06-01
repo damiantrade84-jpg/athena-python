@@ -1,0 +1,200 @@
+[
+  {
+    "fixed": {
+      "cache_db": "tmp\\phaseB_fixed_ETHUSDT.db",
+      "first_fixed_closes": [
+        1.0,
+        2.0,
+        3.0
+      ],
+      "first_provider": "binance_futures",
+      "first_state_count": 3,
+      "pair": "ETH/USDT",
+      "second_fixed_closes": [
+        50.0,
+        51.0,
+        52.0
+      ],
+      "second_provider": "bybit_linear_kline",
+      "second_state_count": 3
+    },
+    "old": {
+      "first_after_second_write": {
+        "closes": [
+          50.0,
+          51.0,
+          52.0
+        ],
+        "requested_provider": "binance_futures",
+        "stored_providers": [
+          "bybit_linear_kline",
+          "bybit_linear_kline",
+          "bybit_linear_kline"
+        ]
+      },
+      "first_before": {
+        "closes": [
+          1.0,
+          2.0,
+          3.0
+        ],
+        "requested_provider": "binance_futures",
+        "stored_providers": [
+          "binance_futures",
+          "binance_futures",
+          "binance_futures"
+        ]
+      },
+      "first_provider": "binance_futures",
+      "old_key": "binance:ETHUSDT",
+      "pair": "ETH/USDT",
+      "second_after_second_write": {
+        "closes": [
+          50.0,
+          51.0,
+          52.0
+        ],
+        "requested_provider": "bybit_linear_kline",
+        "stored_providers": [
+          "bybit_linear_kline",
+          "bybit_linear_kline",
+          "bybit_linear_kline"
+        ]
+      },
+      "second_provider": "bybit_linear_kline"
+    },
+    "pair": "ETH/USDT"
+  },
+  {
+    "fixed": {
+      "cache_db": "tmp\\phaseB_fixed_SOLUSDT.db",
+      "first_fixed_closes": [
+        1.0,
+        2.0,
+        3.0
+      ],
+      "first_provider": "binance_futures",
+      "first_state_count": 3,
+      "pair": "SOL/USDT",
+      "second_fixed_closes": [
+        50.0,
+        51.0,
+        52.0
+      ],
+      "second_provider": "bybit_linear_kline",
+      "second_state_count": 3
+    },
+    "old": {
+      "first_after_second_write": {
+        "closes": [
+          50.0,
+          51.0,
+          52.0
+        ],
+        "requested_provider": "binance_futures",
+        "stored_providers": [
+          "bybit_linear_kline",
+          "bybit_linear_kline",
+          "bybit_linear_kline"
+        ]
+      },
+      "first_before": {
+        "closes": [
+          1.0,
+          2.0,
+          3.0
+        ],
+        "requested_provider": "binance_futures",
+        "stored_providers": [
+          "binance_futures",
+          "binance_futures",
+          "binance_futures"
+        ]
+      },
+      "first_provider": "binance_futures",
+      "old_key": "binance:SOLUSDT",
+      "pair": "SOL/USDT",
+      "second_after_second_write": {
+        "closes": [
+          50.0,
+          51.0,
+          52.0
+        ],
+        "requested_provider": "bybit_linear_kline",
+        "stored_providers": [
+          "bybit_linear_kline",
+          "bybit_linear_kline",
+          "bybit_linear_kline"
+        ]
+      },
+      "second_provider": "bybit_linear_kline"
+    },
+    "pair": "SOL/USDT"
+  },
+  {
+    "fixed": {
+      "cache_db": "tmp\\phaseB_fixed_XRPUSDT.db",
+      "first_fixed_closes": [
+        1.0,
+        2.0,
+        3.0
+      ],
+      "first_provider": "binance_futures",
+      "first_state_count": 3,
+      "pair": "XRP/USDT",
+      "second_fixed_closes": [
+        50.0,
+        51.0,
+        52.0
+      ],
+      "second_provider": "bybit_linear_kline",
+      "second_state_count": 3
+    },
+    "old": {
+      "first_after_second_write": {
+        "closes": [
+          50.0,
+          51.0,
+          52.0
+        ],
+        "requested_provider": "binance_futures",
+        "stored_providers": [
+          "bybit_linear_kline",
+          "bybit_linear_kline",
+          "bybit_linear_kline"
+        ]
+      },
+      "first_before": {
+        "closes": [
+          1.0,
+          2.0,
+          3.0
+        ],
+        "requested_provider": "binance_futures",
+        "stored_providers": [
+          "binance_futures",
+          "binance_futures",
+          "binance_futures"
+        ]
+      },
+      "first_provider": "binance_futures",
+      "old_key": "binance:XRPUSDT",
+      "pair": "XRP/USDT",
+      "second_after_second_write": {
+        "closes": [
+          50.0,
+          51.0,
+          52.0
+        ],
+        "requested_provider": "bybit_linear_kline",
+        "stored_providers": [
+          "bybit_linear_kline",
+          "bybit_linear_kline",
+          "bybit_linear_kline"
+        ]
+      },
+      "second_provider": "bybit_linear_kline"
+    },
+    "pair": "XRP/USDT"
+  }
+]

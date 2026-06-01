@@ -1,0 +1,523 @@
+{
+  "majors_aggregate": {
+    "avg_mae_r": -1.072,
+    "avg_mfe_r": 0.991,
+    "avg_r": -0.344,
+    "exit_breakdown_pct": {
+      "SL": 69.3,
+      "TIMEOUT": 9.9,
+      "TP1": 18.2,
+      "TP2": 2.6
+    },
+    "mfe_ge_1r_then_nonpositive_pct_all": 14.6,
+    "n": 192,
+    "next10_entry_way_hit_pct": 40.6,
+    "next5_entry_way_hit_pct": 43.2,
+    "pairs": [
+      "EUR/USD",
+      "USD/JPY",
+      "GBP/USD"
+    ],
+    "reverse_gross_avg_r": 0.438,
+    "reverse_gross_sqn": 3.73,
+    "reverse_gross_total_r": 84.0,
+    "sqn": -3.7,
+    "total_r": -66.05,
+    "trade_regime": {
+      "neutral": {
+        "avg_r": -0.009,
+        "n": 23,
+        "total_r": -0.2,
+        "win_rate": 34.8
+      },
+      "ranging": {
+        "avg_r": -0.454,
+        "n": 56,
+        "total_r": -25.4,
+        "win_rate": 21.4
+      },
+      "trending": {
+        "avg_r": -0.358,
+        "n": 113,
+        "total_r": -40.45,
+        "win_rate": 26.5
+      },
+      "unknown": {
+        "avg_r": 0,
+        "n": 0,
+        "total_r": 0,
+        "win_rate": 0.0
+      }
+    },
+    "win_rate": 26.0,
+    "window_regime_pct": {
+      "neutral": 19.1,
+      "ranging": 34.2,
+      "trending": 46.7
+    }
+  },
+  "pairs": {
+    "EUR/USD": {
+      "actual_r": {
+        "avg": -0.395,
+        "n": 63,
+        "sqn": -2.38,
+        "sum": -24.91
+      },
+      "direction": {
+        "LONG": {
+          "avg_r": -0.473,
+          "n": 40,
+          "next10_entry_way_hit_pct": 40.0,
+          "next5_entry_way_hit_pct": 40.0,
+          "total_r": -18.92,
+          "win_rate": 22.5
+        },
+        "SHORT": {
+          "avg_r": -0.26,
+          "n": 23,
+          "next10_entry_way_hit_pct": 34.8,
+          "next5_entry_way_hit_pct": 43.5,
+          "total_r": -5.99,
+          "win_rate": 30.4
+        }
+      },
+      "exit_breakdown": {
+        "SL": 46,
+        "TIMEOUT": 5,
+        "TP1": 9,
+        "TP2": 3
+      },
+      "exit_breakdown_pct": {
+        "SL": 73.0,
+        "TIMEOUT": 7.9,
+        "TP1": 14.3,
+        "TP2": 4.8
+      },
+      "levels": {
+        "avg_loss_r": -1.119,
+        "avg_mae_r": -1.052,
+        "avg_mfe_r": 1.04,
+        "avg_win_r": 1.731,
+        "median_mfe_r": 0.76,
+        "mfe_ge_1r_count": 24,
+        "mfe_ge_1r_pct": 38.1,
+        "mfe_ge_1r_then_nonpositive_count": 10,
+        "mfe_ge_1r_then_nonpositive_pct_of_all": 15.9,
+        "mfe_ge_1r_then_nonpositive_pct_of_mfe_ge_1r": 41.7,
+        "mfe_ge_1r_then_sl_count": 9,
+        "payoff_ratio_abs_avg_win_to_loss": 1.547,
+        "win_rate": 25.4
+      },
+      "regime_trades": {
+        "neutral": {
+          "avg_r": -0.04,
+          "n": 7,
+          "total_r": -0.28,
+          "win_rate": 28.6
+        },
+        "ranging": {
+          "avg_r": -0.682,
+          "n": 19,
+          "total_r": -12.96,
+          "win_rate": 15.8
+        },
+        "trending": {
+          "avg_r": -0.315,
+          "n": 37,
+          "total_r": -11.67,
+          "win_rate": 29.7
+        },
+        "unknown": {
+          "avg_r": 0,
+          "n": 0,
+          "total_r": 0,
+          "win_rate": 0.0
+        }
+      },
+      "reverse_gross_r": {
+        "avg": 0.238,
+        "n": 63,
+        "sqn": 1.17,
+        "sum": 15.0
+      },
+      "summary": {
+        "error": null,
+        "expectancy": -0.395,
+        "maxDrawdownPct": 9.4,
+        "pair": "EUR/USD",
+        "profitFactor": 0.53,
+        "sharpe": -1.66,
+        "sortino": -1.92,
+        "sqn": -2.38,
+        "totalTrades": 63,
+        "type": "forex",
+        "winRate": 25.4
+      },
+      "window_regime_counts": {
+        "neutral": 95,
+        "ranging": 183,
+        "trending": 252
+      }
+    },
+    "GBP/USD": {
+      "actual_r": {
+        "avg": -0.235,
+        "n": 68,
+        "sqn": -1.42,
+        "sum": -16.01
+      },
+      "direction": {
+        "LONG": {
+          "avg_r": -0.099,
+          "n": 52,
+          "next10_entry_way_hit_pct": 38.5,
+          "next5_entry_way_hit_pct": 44.2,
+          "total_r": -5.15,
+          "win_rate": 32.7
+        },
+        "SHORT": {
+          "avg_r": -0.679,
+          "n": 16,
+          "next10_entry_way_hit_pct": 50.0,
+          "next5_entry_way_hit_pct": 37.5,
+          "total_r": -10.86,
+          "win_rate": 12.5
+        }
+      },
+      "exit_breakdown": {
+        "SL": 45,
+        "TIMEOUT": 6,
+        "TP1": 15,
+        "TP2": 2
+      },
+      "exit_breakdown_pct": {
+        "SL": 66.2,
+        "TIMEOUT": 8.8,
+        "TP1": 22.1,
+        "TP2": 2.9
+      },
+      "levels": {
+        "avg_loss_r": -1.059,
+        "avg_mae_r": -0.989,
+        "avg_mfe_r": 0.989,
+        "avg_win_r": 1.888,
+        "median_mfe_r": 0.58,
+        "mfe_ge_1r_count": 26,
+        "mfe_ge_1r_pct": 38.2,
+        "mfe_ge_1r_then_nonpositive_count": 7,
+        "mfe_ge_1r_then_nonpositive_pct_of_all": 10.3,
+        "mfe_ge_1r_then_nonpositive_pct_of_mfe_ge_1r": 26.9,
+        "mfe_ge_1r_then_sl_count": 3,
+        "payoff_ratio_abs_avg_win_to_loss": 1.783,
+        "win_rate": 27.9
+      },
+      "regime_trades": {
+        "neutral": {
+          "avg_r": 0.371,
+          "n": 8,
+          "total_r": 2.97,
+          "win_rate": 50.0
+        },
+        "ranging": {
+          "avg_r": 0.012,
+          "n": 12,
+          "total_r": 0.14,
+          "win_rate": 33.3
+        },
+        "trending": {
+          "avg_r": -0.398,
+          "n": 48,
+          "total_r": -19.12,
+          "win_rate": 22.9
+        },
+        "unknown": {
+          "avg_r": 0,
+          "n": 0,
+          "total_r": 0,
+          "win_rate": 0.0
+        }
+      },
+      "reverse_gross_r": {
+        "avg": 0.779,
+        "n": 68,
+        "sqn": 3.97,
+        "sum": 53.0
+      },
+      "summary": {
+        "error": null,
+        "expectancy": -0.235,
+        "maxDrawdownPct": 9.0,
+        "pair": "GBP/USD",
+        "profitFactor": 0.69,
+        "sharpe": -0.99,
+        "sortino": -1.24,
+        "sqn": -1.42,
+        "totalTrades": 68,
+        "type": "forex",
+        "winRate": 27.9
+      },
+      "window_regime_counts": {
+        "neutral": 116,
+        "ranging": 127,
+        "trending": 287
+      }
+    },
+    "USD/JPY": {
+      "actual_r": {
+        "avg": -0.412,
+        "n": 61,
+        "sqn": -2.73,
+        "sum": -25.13
+      },
+      "direction": {
+        "LONG": {
+          "avg_r": -0.357,
+          "n": 35,
+          "next10_entry_way_hit_pct": 48.6,
+          "next5_entry_way_hit_pct": 51.4,
+          "total_r": -12.49,
+          "win_rate": 25.7
+        },
+        "SHORT": {
+          "avg_r": -0.486,
+          "n": 26,
+          "next10_entry_way_hit_pct": 34.6,
+          "next5_entry_way_hit_pct": 38.5,
+          "total_r": -12.64,
+          "win_rate": 23.1
+        }
+      },
+      "exit_breakdown": {
+        "SL": 42,
+        "TIMEOUT": 8,
+        "TP1": 11
+      },
+      "exit_breakdown_pct": {
+        "SL": 68.9,
+        "TIMEOUT": 13.1,
+        "TP1": 18.0
+      },
+      "levels": {
+        "avg_loss_r": -1.046,
+        "avg_mae_r": -1.186,
+        "avg_mfe_r": 0.942,
+        "avg_win_r": 1.532,
+        "median_mfe_r": 0.65,
+        "mfe_ge_1r_count": 25,
+        "mfe_ge_1r_pct": 41.0,
+        "mfe_ge_1r_then_nonpositive_count": 11,
+        "mfe_ge_1r_then_nonpositive_pct_of_all": 18.0,
+        "mfe_ge_1r_then_nonpositive_pct_of_mfe_ge_1r": 44.0,
+        "mfe_ge_1r_then_sl_count": 7,
+        "payoff_ratio_abs_avg_win_to_loss": 1.465,
+        "win_rate": 24.6
+      },
+      "regime_trades": {
+        "neutral": {
+          "avg_r": -0.361,
+          "n": 8,
+          "total_r": -2.89,
+          "win_rate": 25.0
+        },
+        "ranging": {
+          "avg_r": -0.503,
+          "n": 25,
+          "total_r": -12.58,
+          "win_rate": 20.0
+        },
+        "trending": {
+          "avg_r": -0.345,
+          "n": 28,
+          "total_r": -9.66,
+          "win_rate": 28.6
+        },
+        "unknown": {
+          "avg_r": 0,
+          "n": 0,
+          "total_r": 0,
+          "win_rate": 0.0
+        }
+      },
+      "reverse_gross_r": {
+        "avg": 0.262,
+        "n": 61,
+        "sqn": 1.28,
+        "sum": 16.0
+      },
+      "summary": {
+        "error": null,
+        "expectancy": -0.412,
+        "maxDrawdownPct": 9.7,
+        "pair": "USD/JPY",
+        "profitFactor": 0.48,
+        "sharpe": -1.88,
+        "sortino": -2.02,
+        "sqn": -2.73,
+        "totalTrades": 61,
+        "type": "forex",
+        "winRate": 24.6
+      },
+      "window_regime_counts": {
+        "neutral": 93,
+        "ranging": 233,
+        "trending": 204
+      }
+    },
+    "XAU/USD": {
+      "actual_r": {
+        "avg": 0.407,
+        "n": 20,
+        "sqn": 1.42,
+        "sum": 8.13
+      },
+      "direction": {
+        "LONG": {
+          "avg_r": 0.407,
+          "n": 20,
+          "next10_entry_way_hit_pct": 60.0,
+          "next5_entry_way_hit_pct": 60.0,
+          "total_r": 8.13,
+          "win_rate": 60.0
+        },
+        "SHORT": {
+          "avg_r": 0,
+          "n": 0,
+          "next10_entry_way_hit_pct": 0.0,
+          "next5_entry_way_hit_pct": 0.0,
+          "total_r": 0,
+          "win_rate": 0.0
+        }
+      },
+      "exit_breakdown": {
+        "SL": 8,
+        "TIMEOUT": 3,
+        "TP1": 9
+      },
+      "exit_breakdown_pct": {
+        "SL": 40.0,
+        "TIMEOUT": 15.0,
+        "TP1": 45.0
+      },
+      "levels": {
+        "avg_loss_r": -1.059,
+        "avg_mae_r": -0.714,
+        "avg_mfe_r": 1.276,
+        "avg_win_r": 1.383,
+        "median_mfe_r": 1.32,
+        "mfe_ge_1r_count": 12,
+        "mfe_ge_1r_pct": 60.0,
+        "mfe_ge_1r_then_nonpositive_count": 2,
+        "mfe_ge_1r_then_nonpositive_pct_of_all": 10.0,
+        "mfe_ge_1r_then_nonpositive_pct_of_mfe_ge_1r": 16.7,
+        "mfe_ge_1r_then_sl_count": 2,
+        "payoff_ratio_abs_avg_win_to_loss": 1.307,
+        "win_rate": 60.0
+      },
+      "regime_trades": {
+        "neutral": {
+          "avg_r": 0.86,
+          "n": 4,
+          "total_r": 3.44,
+          "win_rate": 75.0
+        },
+        "ranging": {
+          "avg_r": 0.823,
+          "n": 3,
+          "total_r": 2.47,
+          "win_rate": 100.0
+        },
+        "trending": {
+          "avg_r": 0.171,
+          "n": 13,
+          "total_r": 2.22,
+          "win_rate": 46.2
+        },
+        "unknown": {
+          "avg_r": 0,
+          "n": 0,
+          "total_r": 0,
+          "win_rate": 0.0
+        }
+      },
+      "reverse_gross_r": {
+        "avg": -0.413,
+        "n": 20,
+        "sqn": -1.82,
+        "sum": -8.26
+      },
+      "summary": {
+        "error": null,
+        "expectancy": 0.407,
+        "maxDrawdownPct": 6.8,
+        "pair": "XAU/USD",
+        "profitFactor": 1.96,
+        "sharpe": 1.15,
+        "sortino": 1.3,
+        "sqn": 1.43,
+        "totalTrades": 20,
+        "type": "commodity",
+        "winRate": 60.0
+      },
+      "window_regime_counts": {
+        "neutral": 91,
+        "ranging": 196,
+        "trending": 243
+      }
+    }
+  },
+  "xau_comparator": {
+    "avg_mae_r": -0.714,
+    "avg_mfe_r": 1.276,
+    "avg_r": 0.407,
+    "exit_breakdown_pct": {
+      "SL": 40.0,
+      "TIMEOUT": 15.0,
+      "TP1": 45.0
+    },
+    "mfe_ge_1r_then_nonpositive_pct_all": 10.0,
+    "n": 20,
+    "next10_entry_way_hit_pct": 60.0,
+    "next5_entry_way_hit_pct": 60.0,
+    "pairs": [
+      "XAU/USD"
+    ],
+    "reverse_gross_avg_r": -0.413,
+    "reverse_gross_sqn": -1.82,
+    "reverse_gross_total_r": -8.26,
+    "sqn": 1.42,
+    "total_r": 8.13,
+    "trade_regime": {
+      "neutral": {
+        "avg_r": 0.86,
+        "n": 4,
+        "total_r": 3.44,
+        "win_rate": 75.0
+      },
+      "ranging": {
+        "avg_r": 0.823,
+        "n": 3,
+        "total_r": 2.47,
+        "win_rate": 100.0
+      },
+      "trending": {
+        "avg_r": 0.171,
+        "n": 13,
+        "total_r": 2.22,
+        "win_rate": 46.2
+      },
+      "unknown": {
+        "avg_r": 0,
+        "n": 0,
+        "total_r": 0,
+        "win_rate": 0.0
+      }
+    },
+    "win_rate": 60.0,
+    "window_regime_pct": {
+      "neutral": 17.2,
+      "ranging": 37.0,
+      "trending": 45.8
+    }
+  }
+}

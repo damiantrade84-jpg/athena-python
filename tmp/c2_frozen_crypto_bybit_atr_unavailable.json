@@ -1,0 +1,58 @@
+[
+  {
+    "error": null,
+    "evalThreshold": 2.0,
+    "funnel": {
+      "fail_macro": 0,
+      "fail_regime": 509,
+      "fail_score": 3206,
+      "fail_structure": 0,
+      "h1DuplicateTs": 0,
+      "h1Monotonic": true,
+      "h1ParseFail": 0,
+      "h4DuplicateTs": 0,
+      "h4Monotonic": true,
+      "h4ParseFail": 0,
+      "liveParityExecutionStress": false,
+      "skip_window": 0,
+      "structureFirstEnabled": false,
+      "taken": 0,
+      "temporalValidationMode": "standard",
+      "timeAlignmentWarnings": [],
+      "total_setups": 4146,
+      "validationMode": "standard"
+    },
+    "pair": "BTC/USDT",
+    "profitFactor": null,
+    "sqn": 0,
+    "totalTrades": 0
+  },
+  {
+    "error": null,
+    "evalThreshold": 2.0,
+    "funnel": {
+      "fail_macro": 0,
+      "fail_regime": 475,
+      "fail_score": 3338,
+      "fail_structure": 0,
+      "h1DuplicateTs": 0,
+      "h1Monotonic": true,
+      "h1ParseFail": 0,
+      "h4DuplicateTs": 0,
+      "h4Monotonic": true,
+      "h4ParseFail": 0,
+      "liveParityExecutionStress": false,
+      "skip_window": 0,
+      "structureFirstEnabled": false,
+      "taken": 0,
+      "temporalValidationMode": "standard",
+      "timeAlignmentWarnings": [],
+      "total_setups": 4146,
+      "validationMode": "standard"
+    },
+    "pair": "SOL/USDT",
+    "profitFactor": null,
+    "sqn": 0,
+    "totalTrades": 0
+  }
+]

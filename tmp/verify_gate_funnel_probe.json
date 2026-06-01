@@ -1,0 +1,32 @@
+[
+  {
+    "error": null,
+    "funnel_fail_regime": 185,
+    "funnel_fail_score": 3636,
+    "funnel_fail_trade_enabled": 328,
+    "funnel_taken": 0,
+    "funnel_total_setups": 4149,
+    "pair": "EUR/USD",
+    "totalTrades": 0
+  },
+  {
+    "error": null,
+    "funnel_fail_regime": 72,
+    "funnel_fail_score": 385,
+    "funnel_fail_trade_enabled": 72,
+    "funnel_taken": 0,
+    "funnel_total_setups": 529,
+    "pair": "XAU/USD",
+    "totalTrades": 0
+  },
+  {
+    "error": null,
+    "funnel_fail_regime": 510,
+    "funnel_fail_score": 3203,
+    "funnel_fail_trade_enabled": 431,
+    "funnel_taken": 0,
+    "funnel_total_setups": 4144,
+    "pair": "BTC/USDT",
+    "totalTrades": 0
+  }
+]

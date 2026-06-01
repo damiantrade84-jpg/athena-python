@@ -1,0 +1,20 @@
+{
+  "data_as_of": "2026-05-30",
+  "schema_version": 1,
+  "series": {
+    "candles|BTC/USDT|H1|binance_futures": {
+      "asset_type": "crypto",
+      "display": "BTC/USDT",
+      "first_bar_time": "2026-05-30T08:00:00+00:00",
+      "kind": "candles",
+      "last_bar_time": "2026-05-30T10:00:00+00:00",
+      "path": "data/frozen/2026-05-30/candles/BTC_USDT__H1__binance_futures.json",
+      "provider": "binance_futures",
+      "row_count": 3,
+      "sha256": "e9cdfe14ffcfe72ae80a19a5c096ccab81511b4dc42c5618d68ac5ccb092b9f3",
+      "source": "binance",
+      "symbol": "BTCUSDT",
+      "timeframe": "H1"
+    }
+  }
+}

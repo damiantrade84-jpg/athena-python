@@ -1,0 +1,125 @@
+{
+  "default": [
+    {
+      "backtest_enabled": false,
+      "backtest_reason": "Engine A research-only for EUR/USD: trend engine disabled by class:forex until n>=30 and SQN>2.0 evidence qualifies it.",
+      "backtest_source": "class:forex",
+      "direct_enabled": false,
+      "label": "default",
+      "live_enabled": false,
+      "live_reason": "Engine A research-only for EUR/USD: trend engine disabled by class:forex until n>=30 and SQN>2.0 evidence qualifies it.",
+      "live_source": "class:forex",
+      "live_tier": "watchlist",
+      "pair": "EUR/USD",
+      "parity": true
+    },
+    {
+      "backtest_enabled": false,
+      "backtest_reason": "Engine A research-only for XAU/USD: trend engine disabled by class:commodity until n>=30 and SQN>2.0 evidence qualifies it.",
+      "backtest_source": "class:commodity",
+      "direct_enabled": false,
+      "label": "default",
+      "live_enabled": false,
+      "live_reason": "Engine A research-only for XAU/USD: trend engine disabled by class:commodity until n>=30 and SQN>2.0 evidence qualifies it.",
+      "live_source": "class:commodity",
+      "live_tier": "watchlist",
+      "pair": "XAU/USD",
+      "parity": true
+    },
+    {
+      "backtest_enabled": false,
+      "backtest_reason": "Engine A research-only for BTC/USDT: trend engine disabled by class:crypto until n>=30 and SQN>2.0 evidence qualifies it.",
+      "backtest_source": "class:crypto",
+      "direct_enabled": false,
+      "label": "default",
+      "live_enabled": false,
+      "live_reason": "Engine A research-only for BTC/USDT: trend engine disabled by class:crypto until n>=30 and SQN>2.0 evidence qualifies it.",
+      "live_source": "class:crypto",
+      "live_tier": "watchlist",
+      "pair": "BTC/USDT",
+      "parity": true
+    }
+  ],
+  "override_xau": [
+    {
+      "backtest_enabled": false,
+      "backtest_reason": "Engine A research-only for EUR/USD: trend engine disabled by class:forex until n>=30 and SQN>2.0 evidence qualifies it.",
+      "backtest_source": "class:forex",
+      "direct_enabled": false,
+      "label": "override_xau",
+      "live_enabled": false,
+      "live_reason": "Engine A research-only for EUR/USD: trend engine disabled by class:forex until n>=30 and SQN>2.0 evidence qualifies it.",
+      "live_source": "class:forex",
+      "live_tier": "watchlist",
+      "pair": "EUR/USD",
+      "parity": true
+    },
+    {
+      "backtest_enabled": true,
+      "backtest_reason": "Engine A trade eligible by override:XAU/USD.",
+      "backtest_source": "override:XAU/USD",
+      "direct_enabled": true,
+      "label": "override_xau",
+      "live_enabled": true,
+      "live_reason": "Trade-ready",
+      "live_source": "override:XAU/USD",
+      "live_tier": "trade",
+      "pair": "XAU/USD",
+      "parity": true
+    },
+    {
+      "backtest_enabled": false,
+      "backtest_reason": "Engine A research-only for BTC/USDT: trend engine disabled by class:crypto until n>=30 and SQN>2.0 evidence qualifies it.",
+      "backtest_source": "class:crypto",
+      "direct_enabled": false,
+      "label": "override_xau",
+      "live_enabled": false,
+      "live_reason": "Engine A research-only for BTC/USDT: trend engine disabled by class:crypto until n>=30 and SQN>2.0 evidence qualifies it.",
+      "live_source": "class:crypto",
+      "live_tier": "watchlist",
+      "pair": "BTC/USDT",
+      "parity": true
+    }
+  ],
+  "reverted": [
+    {
+      "backtest_enabled": false,
+      "backtest_reason": "Engine A research-only for EUR/USD: trend engine disabled by class:forex until n>=30 and SQN>2.0 evidence qualifies it.",
+      "backtest_source": "class:forex",
+      "direct_enabled": false,
+      "label": "reverted",
+      "live_enabled": false,
+      "live_reason": "Engine A research-only for EUR/USD: trend engine disabled by class:forex until n>=30 and SQN>2.0 evidence qualifies it.",
+      "live_source": "class:forex",
+      "live_tier": "watchlist",
+      "pair": "EUR/USD",
+      "parity": true
+    },
+    {
+      "backtest_enabled": false,
+      "backtest_reason": "Engine A research-only for XAU/USD: trend engine disabled by class:commodity until n>=30 and SQN>2.0 evidence qualifies it.",
+      "backtest_source": "class:commodity",
+      "direct_enabled": false,
+      "label": "reverted",
+      "live_enabled": false,
+      "live_reason": "Engine A research-only for XAU/USD: trend engine disabled by class:commodity until n>=30 and SQN>2.0 evidence qualifies it.",
+      "live_source": "class:commodity",
+      "live_tier": "watchlist",
+      "pair": "XAU/USD",
+      "parity": true
+    },
+    {
+      "backtest_enabled": false,
+      "backtest_reason": "Engine A research-only for BTC/USDT: trend engine disabled by class:crypto until n>=30 and SQN>2.0 evidence qualifies it.",
+      "backtest_source": "class:crypto",
+      "direct_enabled": false,
+      "label": "reverted",
+      "live_enabled": false,
+      "live_reason": "Engine A research-only for BTC/USDT: trend engine disabled by class:crypto until n>=30 and SQN>2.0 evidence qualifies it.",
+      "live_source": "class:crypto",
+      "live_tier": "watchlist",
+      "pair": "BTC/USDT",
+      "parity": true
+    }
+  ]
+}

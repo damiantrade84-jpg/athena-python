@@ -1,0 +1,23 @@
+[CFG] Unknown top-level config key(s) accepted without schema defaults: ADDON_UNSUPPORTED_SPLIT_TO_BASE, ATR_FRESHNESS, CANDLE_FRESHNESS_ENABLED, CRYPTO_D1_MAX_STALE_HOURS, D1_RESAMPLE_OFFSET_HOURS, DEVELOPING_ADX_CLASS, ENGINE_A_CONVICTION_FLOOR_REGIME_SENSITIVE_CLASSES, ENGINE_A_COT_CONTRARIAN_Z, ENGINE_A_COT_MODE, ENGINE_A_EMA_PERIODS_BY_CLASS, ENGINE_A_MACD_PARAMS_BY_CLASS, ENGINE_A_ORTHO_CONVICTION_WEIGHT_BY_CLASS, ENGINE_A_ORTHO_FACTOR_WEIGHTS, ENGINE_A_ORTHO_VOTE_DEBUG, ENGINE_A_ORTHO_VOTE_DEBUG_PATH, ENGINE_A_ORTHO_VOTE_ENABLED, ENGINE_A_ORTHO_VOTE_TANH_K, ENGINE_A_REGIME_DYNAMIC_THRESHOLDS, ENGINE_A_RSI_PERIOD_BY_CLASS, ENGINE_A_STOCHASTIC_RSI, ENGINE_A_STOCK_VOLUME_ADDON, ENGINE_A_VOL_SKEW_REFRESH_TTL_HOURS, ENGINE_A_VOL_SKEW_TERM_WEIGHT, ENGINE_A_VOL_SKEW_Z_WINDOW, ENGINE_A_VWAP_FILTER, ENGINE_B_STRIP_FORMING_STRUCT, ENGINE_B_STRUCT_CONFIRMED_MIN_BARS, LIVE_PRICE_MAX_AGE_SEC, MARCUS_AI_MAX_RETRIES, MARCUS_AI_RETRY_BACKOFF_SEC, MAX_BROKER_TICK_AGE_SEC, MAX_EXECUTION_SPREAD_PCT, MAX_SIGNAL_DRIFT_PCT, MICROSTRUCTURE_BINANCE_COMBINED_STREAM, MICROSTRUCTURE_BINANCE_STALE_SYMBOL_SEC, MT5_FETCH_STALE_UNSHIFTED_AGE_SEC, MT5_H4_ALIGN_DIAG_ENABLED, MT5_H4_FETCH_RETRY_ENABLED, MT5_H4_FETCH_RETRY_MAX_LAG, MT5_H4_FETCH_RETRY_SLEEP_MS, PRE_SCORING_FRESHNESS_GATE_ENABLED, SCAN_TIMEOUT_SEC, SESSION_EXECUTION_BLOCK_AVOID, SESSION_EXECUTION_BLOCK_CLOSED, SESSION_QUALITY_ENABLED, SIGNAL_EXECUTABLE_FALSE_WHEN_FRESHNESS_BLOCKS, TRENDING_ADX_CLASS, VOLATILITY_SCALER_BANDS
+08:03:33 [INFO] [TIMED_EXIT] Monitor thread started
+[KIMI] Bridge routes registered at /api/kimi/*  (+ /api/conductor/last mirror)
+08:03:33 [INFO] [research_lab_routes] Session Autopilot routes registered
+08:03:33 [INFO] [research_lab_routes] Research Lab routes registered
+08:03:33 [INFO] [research_agent_routes] Research Agent routes registered
+08:03:33 [INFO] [ai_evaluation_routes] AI Evaluation routes registered
+08:03:54 [WARNING] [BT] BTC/USDT done: 2 trades, WR 50.0%, PF 1.53, Expect 0.315R, SQN 0.21, Sharpe 4.03, Sortino 0.0, IS:0.21/OOS:0, MC-P95 DD 1.2%, MaxRec 1 bars
+08:04:03 [INFO] [TIMED_EXIT] State hydrated from db: 48 trail entries, 1 lock entries, 74 peak_r entries, 42 tp_cleared entries
+08:04:03 [INFO] [MT5] Logged in to Pepperstone-Demo (account 61525285)
+08:04:03 [INFO] [MT5] Account: 61525285 | Balance: 45388.92 | Equity: 45489.75 | Server: Pepperstone-Demo
+08:04:03 [INFO] [TIMED_EXIT] below_activation watch: SPY style=swing dir=LONG current_r=0.31 peak_r=0.44000000000000167 activation_r=1.50 mode=full
+08:04:04 [WARNING] [MT5] Breakeven SL failed ticket=313438151: Market closed (requested=753.75766 current_sl=742.47000 current_price=756.54000)
+08:04:15 [WARNING] No signals generated for SOL/USDT — setups=108 skip_window=0 fail_score=63 evalThreshold=2.0 max_score_seen=3.0 d1=260 h4=359 h1=959
+RESULTS {"BTC/USDT": {"error": null, "profitFactor": 1.53, "sqn": 0.21, "totalTrades": 2, "winRate": 50.0}, "SOL/USDT": {"error": null, "profitFactor": null, "sqn": 0, "totalTrades": 0, "winRate": 0}}
+BTC/USDT bars 86
+   funding mean 0.002 min -0.0055 max 0.006 status {'ok': 86}
+   oi_divergence mean 0.028 min -1.0 max 1.0 status {'ok': 60, 'neutral': 26}
+   cot mean -0.212 min -1.0 max -0.0455 status {'ok': 86}
+SOL/USDT bars 108
+   funding mean 0.001 min -0.0097 max 0.006 status {'ok': 108}
+   oi_divergence mean 0.027 min -0.626 max 0.658 status {'neutral': 33, 'ok': 75}
+   cot mean 0.0 min 0.0 max 0.0 status {'neutral': 108}

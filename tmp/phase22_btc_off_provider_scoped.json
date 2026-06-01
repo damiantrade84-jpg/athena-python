@@ -1,0 +1,13 @@
+{
+  "error": null,
+  "expectancy": -0.108,
+  "maxDrawdownPct": 11.1,
+  "pair": "BTC/USDT",
+  "profitFactor": 0.85,
+  "sharpe": -0.47,
+  "sortino": -0.58,
+  "sqn": -0.64,
+  "totalTrades": 68,
+  "type": "crypto",
+  "winRate": 35.3
+}

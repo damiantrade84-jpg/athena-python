@@ -1,0 +1,2609 @@
+[
+  {
+    "derivative_providers": [],
+    "display": "EUR/USD",
+    "high_risk": false,
+    "mismatch": false,
+    "mismatch_providers": [],
+    "multi_provider": false,
+    "notes": "",
+    "ohlc_providers": [
+      "mt5"
+    ],
+    "providers": [
+      "mt5"
+    ],
+    "source": "mt5",
+    "type": "forex"
+  },
+  {
+    "derivative_providers": [],
+    "display": "GBP/USD",
+    "high_risk": false,
+    "mismatch": false,
+    "mismatch_providers": [],
+    "multi_provider": false,
+    "notes": "",
+    "ohlc_providers": [
+      "mt5"
+    ],
+    "providers": [
+      "mt5"
+    ],
+    "source": "mt5",
+    "type": "forex"
+  },
+  {
+    "derivative_providers": [],
+    "display": "USD/JPY",
+    "high_risk": false,
+    "mismatch": false,
+    "mismatch_providers": [],
+    "multi_provider": false,
+    "notes": "",
+    "ohlc_providers": [
+      "mt5"
+    ],
+    "providers": [
+      "mt5"
+    ],
+    "source": "mt5",
+    "type": "forex"
+  },
+  {
+    "derivative_providers": [],
+    "display": "AUD/USD",
+    "high_risk": false,
+    "mismatch": false,
+    "mismatch_providers": [],
+    "multi_provider": false,
+    "notes": "",
+    "ohlc_providers": [
+      "mt5"
+    ],
+    "providers": [
+      "mt5"
+    ],
+    "source": "mt5",
+    "type": "forex"
+  },
+  {
+    "derivative_providers": [],
+    "display": "AUD/CHF",
+    "high_risk": false,
+    "mismatch": false,
+    "mismatch_providers": [],
+    "multi_provider": false,
+    "notes": "",
+    "ohlc_providers": [
+      "mt5"
+    ],
+    "providers": [
+      "mt5"
+    ],
+    "source": "mt5",
+    "type": "forex"
+  },
+  {
+    "derivative_providers": [],
+    "display": "AUD/NZD",
+    "high_risk": false,
+    "mismatch": false,
+    "mismatch_providers": [],
+    "multi_provider": false,
+    "notes": "",
+    "ohlc_providers": [
+      "mt5"
+    ],
+    "providers": [
+      "mt5"
+    ],
+    "source": "mt5",
+    "type": "forex"
+  },
+  {
+    "derivative_providers": [],
+    "display": "NZD/USD",
+    "high_risk": false,
+    "mismatch": false,
+    "mismatch_providers": [],
+    "multi_provider": false,
+    "notes": "",
+    "ohlc_providers": [
+      "mt5"
+    ],
+    "providers": [
+      "mt5"
+    ],
+    "source": "mt5",
+    "type": "forex"
+  },
+  {
+    "derivative_providers": [],
+    "display": "EUR/GBP",
+    "high_risk": false,
+    "mismatch": false,
+    "mismatch_providers": [],
+    "multi_provider": false,
+    "notes": "",
+    "ohlc_providers": [
+      "mt5"
+    ],
+    "providers": [
+      "mt5"
+    ],
+    "source": "mt5",
+    "type": "forex"
+  },
+  {
+    "derivative_providers": [],
+    "display": "USD/CAD",
+    "high_risk": false,
+    "mismatch": false,
+    "mismatch_providers": [],
+    "multi_provider": false,
+    "notes": "",
+    "ohlc_providers": [
+      "mt5"
+    ],
+    "providers": [
+      "mt5"
+    ],
+    "source": "mt5",
+    "type": "forex"
+  },
+  {
+    "derivative_providers": [],
+    "display": "USD/CHF",
+    "high_risk": false,
+    "mismatch": false,
+    "mismatch_providers": [],
+    "multi_provider": false,
+    "notes": "",
+    "ohlc_providers": [
+      "mt5"
+    ],
+    "providers": [
+      "mt5"
+    ],
+    "source": "mt5",
+    "type": "forex"
+  },
+  {
+    "derivative_providers": [],
+    "display": "EUR/JPY",
+    "high_risk": false,
+    "mismatch": false,
+    "mismatch_providers": [],
+    "multi_provider": false,
+    "notes": "",
+    "ohlc_providers": [
+      "mt5"
+    ],
+    "providers": [
+      "mt5"
+    ],
+    "source": "mt5",
+    "type": "forex"
+  },
+  {
+    "derivative_providers": [],
+    "display": "GBP/JPY",
+    "high_risk": false,
+    "mismatch": false,
+    "mismatch_providers": [],
+    "multi_provider": false,
+    "notes": "",
+    "ohlc_providers": [
+      "mt5"
+    ],
+    "providers": [
+      "mt5"
+    ],
+    "source": "mt5",
+    "type": "forex"
+  },
+  {
+    "derivative_providers": [],
+    "display": "AUD/JPY",
+    "high_risk": false,
+    "mismatch": false,
+    "mismatch_providers": [],
+    "multi_provider": false,
+    "notes": "",
+    "ohlc_providers": [
+      "mt5"
+    ],
+    "providers": [
+      "mt5"
+    ],
+    "source": "mt5",
+    "type": "forex"
+  },
+  {
+    "derivative_providers": [],
+    "display": "EUR/AUD",
+    "high_risk": false,
+    "mismatch": false,
+    "mismatch_providers": [],
+    "multi_provider": false,
+    "notes": "",
+    "ohlc_providers": [
+      "mt5"
+    ],
+    "providers": [
+      "mt5"
+    ],
+    "source": "mt5",
+    "type": "forex"
+  },
+  {
+    "derivative_providers": [],
+    "display": "GBP/AUD",
+    "high_risk": false,
+    "mismatch": false,
+    "mismatch_providers": [],
+    "multi_provider": false,
+    "notes": "",
+    "ohlc_providers": [
+      "mt5"
+    ],
+    "providers": [
+      "mt5"
+    ],
+    "source": "mt5",
+    "type": "forex"
+  },
+  {
+    "derivative_providers": [],
+    "display": "USD/ZAR",
+    "high_risk": false,
+    "mismatch": false,
+    "mismatch_providers": [],
+    "multi_provider": false,
+    "notes": "",
+    "ohlc_providers": [
+      "mt5"
+    ],
+    "providers": [
+      "mt5"
+    ],
+    "source": "mt5",
+    "type": "forex"
+  },
+  {
+    "derivative_providers": [],
+    "display": "EUR/CHF",
+    "high_risk": false,
+    "mismatch": false,
+    "mismatch_providers": [],
+    "multi_provider": false,
+    "notes": "",
+    "ohlc_providers": [
+      "mt5"
+    ],
+    "providers": [
+      "mt5"
+    ],
+    "source": "mt5",
+    "type": "forex"
+  },
+  {
+    "derivative_providers": [],
+    "display": "USD/MXN",
+    "high_risk": false,
+    "mismatch": false,
+    "mismatch_providers": [],
+    "multi_provider": false,
+    "notes": "",
+    "ohlc_providers": [
+      "mt5"
+    ],
+    "providers": [
+      "mt5"
+    ],
+    "source": "mt5",
+    "type": "forex"
+  },
+  {
+    "derivative_providers": [],
+    "display": "USD/SGD",
+    "high_risk": false,
+    "mismatch": false,
+    "mismatch_providers": [],
+    "multi_provider": false,
+    "notes": "",
+    "ohlc_providers": [
+      "mt5"
+    ],
+    "providers": [
+      "mt5"
+    ],
+    "source": "mt5",
+    "type": "forex"
+  },
+  {
+    "derivative_providers": [],
+    "display": "USD/BRL",
+    "high_risk": false,
+    "mismatch": false,
+    "mismatch_providers": [],
+    "multi_provider": false,
+    "notes": "",
+    "ohlc_providers": [
+      "mt5"
+    ],
+    "providers": [
+      "mt5"
+    ],
+    "source": "mt5",
+    "type": "forex"
+  },
+  {
+    "derivative_providers": [],
+    "display": "USD/INR",
+    "high_risk": false,
+    "mismatch": false,
+    "mismatch_providers": [],
+    "multi_provider": false,
+    "notes": "",
+    "ohlc_providers": [
+      "mt5"
+    ],
+    "providers": [
+      "mt5"
+    ],
+    "source": "mt5",
+    "type": "forex"
+  },
+  {
+    "derivative_providers": [],
+    "display": "XAU/USD",
+    "high_risk": false,
+    "mismatch": false,
+    "mismatch_providers": [],
+    "multi_provider": false,
+    "notes": "",
+    "ohlc_providers": [
+      "mt5"
+    ],
+    "providers": [
+      "mt5"
+    ],
+    "source": "mt5",
+    "type": "commodity"
+  },
+  {
+    "derivative_providers": [],
+    "display": "XAG/USD",
+    "high_risk": false,
+    "mismatch": false,
+    "mismatch_providers": [],
+    "multi_provider": false,
+    "notes": "",
+    "ohlc_providers": [
+      "mt5"
+    ],
+    "providers": [
+      "mt5"
+    ],
+    "source": "mt5",
+    "type": "commodity"
+  },
+  {
+    "derivative_providers": [],
+    "display": "WTI Oil",
+    "high_risk": false,
+    "mismatch": false,
+    "mismatch_providers": [],
+    "multi_provider": false,
+    "notes": "",
+    "ohlc_providers": [
+      "mt5"
+    ],
+    "providers": [
+      "mt5"
+    ],
+    "source": "mt5",
+    "type": "commodity"
+  },
+  {
+    "derivative_providers": [],
+    "display": "Brent Oil",
+    "high_risk": false,
+    "mismatch": false,
+    "mismatch_providers": [],
+    "multi_provider": false,
+    "notes": "",
+    "ohlc_providers": [
+      "mt5"
+    ],
+    "providers": [
+      "mt5"
+    ],
+    "source": "mt5",
+    "type": "commodity"
+  },
+  {
+    "derivative_providers": [],
+    "display": "Nat Gas",
+    "high_risk": false,
+    "mismatch": false,
+    "mismatch_providers": [],
+    "multi_provider": false,
+    "notes": "",
+    "ohlc_providers": [
+      "mt5"
+    ],
+    "providers": [
+      "mt5"
+    ],
+    "source": "mt5",
+    "type": "commodity"
+  },
+  {
+    "derivative_providers": [],
+    "display": "Copper",
+    "high_risk": false,
+    "mismatch": false,
+    "mismatch_providers": [],
+    "multi_provider": false,
+    "notes": "",
+    "ohlc_providers": [
+      "mt5"
+    ],
+    "providers": [
+      "mt5"
+    ],
+    "source": "mt5",
+    "type": "commodity"
+  },
+  {
+    "derivative_providers": [],
+    "display": "Aluminium",
+    "high_risk": false,
+    "mismatch": false,
+    "mismatch_providers": [],
+    "multi_provider": false,
+    "notes": "",
+    "ohlc_providers": [
+      "mt5"
+    ],
+    "providers": [
+      "mt5"
+    ],
+    "source": "mt5",
+    "type": "commodity"
+  },
+  {
+    "derivative_providers": [],
+    "display": "Lead",
+    "high_risk": false,
+    "mismatch": false,
+    "mismatch_providers": [],
+    "multi_provider": false,
+    "notes": "",
+    "ohlc_providers": [
+      "mt5"
+    ],
+    "providers": [
+      "mt5"
+    ],
+    "source": "mt5",
+    "type": "commodity"
+  },
+  {
+    "derivative_providers": [],
+    "display": "Nickel",
+    "high_risk": false,
+    "mismatch": false,
+    "mismatch_providers": [],
+    "multi_provider": false,
+    "notes": "",
+    "ohlc_providers": [
+      "mt5"
+    ],
+    "providers": [
+      "mt5"
+    ],
+    "source": "mt5",
+    "type": "commodity"
+  },
+  {
+    "derivative_providers": [],
+    "display": "Zinc",
+    "high_risk": false,
+    "mismatch": false,
+    "mismatch_providers": [],
+    "multi_provider": false,
+    "notes": "",
+    "ohlc_providers": [
+      "mt5"
+    ],
+    "providers": [
+      "mt5"
+    ],
+    "source": "mt5",
+    "type": "commodity"
+  },
+  {
+    "derivative_providers": [],
+    "display": "XPT/USD",
+    "high_risk": false,
+    "mismatch": false,
+    "mismatch_providers": [],
+    "multi_provider": false,
+    "notes": "",
+    "ohlc_providers": [
+      "mt5"
+    ],
+    "providers": [
+      "mt5"
+    ],
+    "source": "mt5",
+    "type": "commodity"
+  },
+  {
+    "derivative_providers": [],
+    "display": "XPD/USD",
+    "high_risk": false,
+    "mismatch": false,
+    "mismatch_providers": [],
+    "multi_provider": false,
+    "notes": "",
+    "ohlc_providers": [
+      "mt5"
+    ],
+    "providers": [
+      "mt5"
+    ],
+    "source": "mt5",
+    "type": "commodity"
+  },
+  {
+    "derivative_providers": [],
+    "display": "Gasoline",
+    "high_risk": false,
+    "mismatch": false,
+    "mismatch_providers": [],
+    "multi_provider": false,
+    "notes": "",
+    "ohlc_providers": [
+      "mt5"
+    ],
+    "providers": [
+      "mt5"
+    ],
+    "source": "mt5",
+    "type": "commodity"
+  },
+  {
+    "derivative_providers": [],
+    "display": "Cattle",
+    "high_risk": false,
+    "mismatch": false,
+    "mismatch_providers": [],
+    "multi_provider": false,
+    "notes": "",
+    "ohlc_providers": [
+      "mt5"
+    ],
+    "providers": [
+      "mt5"
+    ],
+    "source": "mt5",
+    "type": "commodity"
+  },
+  {
+    "derivative_providers": [],
+    "display": "Cocoa",
+    "high_risk": false,
+    "mismatch": false,
+    "mismatch_providers": [],
+    "multi_provider": false,
+    "notes": "",
+    "ohlc_providers": [
+      "mt5"
+    ],
+    "providers": [
+      "mt5"
+    ],
+    "source": "mt5",
+    "type": "commodity"
+  },
+  {
+    "derivative_providers": [],
+    "display": "Coffee",
+    "high_risk": false,
+    "mismatch": false,
+    "mismatch_providers": [],
+    "multi_provider": false,
+    "notes": "",
+    "ohlc_providers": [
+      "mt5"
+    ],
+    "providers": [
+      "mt5"
+    ],
+    "source": "mt5",
+    "type": "commodity"
+  },
+  {
+    "derivative_providers": [],
+    "display": "Corn",
+    "high_risk": false,
+    "mismatch": false,
+    "mismatch_providers": [],
+    "multi_provider": false,
+    "notes": "",
+    "ohlc_providers": [
+      "mt5"
+    ],
+    "providers": [
+      "mt5"
+    ],
+    "source": "mt5",
+    "type": "commodity"
+  },
+  {
+    "derivative_providers": [],
+    "display": "Cotton",
+    "high_risk": false,
+    "mismatch": false,
+    "mismatch_providers": [],
+    "multi_provider": false,
+    "notes": "",
+    "ohlc_providers": [
+      "mt5"
+    ],
+    "providers": [
+      "mt5"
+    ],
+    "source": "mt5",
+    "type": "commodity"
+  },
+  {
+    "derivative_providers": [],
+    "display": "Soybeans",
+    "high_risk": false,
+    "mismatch": false,
+    "mismatch_providers": [],
+    "multi_provider": false,
+    "notes": "",
+    "ohlc_providers": [
+      "mt5"
+    ],
+    "providers": [
+      "mt5"
+    ],
+    "source": "mt5",
+    "type": "commodity"
+  },
+  {
+    "derivative_providers": [],
+    "display": "Sugar",
+    "high_risk": false,
+    "mismatch": false,
+    "mismatch_providers": [],
+    "multi_provider": false,
+    "notes": "",
+    "ohlc_providers": [
+      "mt5"
+    ],
+    "providers": [
+      "mt5"
+    ],
+    "source": "mt5",
+    "type": "commodity"
+  },
+  {
+    "derivative_providers": [],
+    "display": "Wheat",
+    "high_risk": false,
+    "mismatch": false,
+    "mismatch_providers": [],
+    "multi_provider": false,
+    "notes": "",
+    "ohlc_providers": [
+      "mt5"
+    ],
+    "providers": [
+      "mt5"
+    ],
+    "source": "mt5",
+    "type": "commodity"
+  },
+  {
+    "derivative_providers": [],
+    "display": "NASDAQ-100",
+    "high_risk": false,
+    "mismatch": false,
+    "mismatch_providers": [],
+    "multi_provider": false,
+    "notes": "",
+    "ohlc_providers": [
+      "mt5"
+    ],
+    "providers": [
+      "mt5"
+    ],
+    "source": "mt5",
+    "type": "index"
+  },
+  {
+    "derivative_providers": [],
+    "display": "S&P 500",
+    "high_risk": false,
+    "mismatch": false,
+    "mismatch_providers": [],
+    "multi_provider": false,
+    "notes": "",
+    "ohlc_providers": [
+      "mt5"
+    ],
+    "providers": [
+      "mt5"
+    ],
+    "source": "mt5",
+    "type": "index"
+  },
+  {
+    "derivative_providers": [],
+    "display": "Dow Jones",
+    "high_risk": false,
+    "mismatch": false,
+    "mismatch_providers": [],
+    "multi_provider": false,
+    "notes": "",
+    "ohlc_providers": [
+      "mt5"
+    ],
+    "providers": [
+      "mt5"
+    ],
+    "source": "mt5",
+    "type": "index"
+  },
+  {
+    "derivative_providers": [],
+    "display": "DAX 40",
+    "high_risk": false,
+    "mismatch": false,
+    "mismatch_providers": [],
+    "multi_provider": false,
+    "notes": "",
+    "ohlc_providers": [
+      "mt5"
+    ],
+    "providers": [
+      "mt5"
+    ],
+    "source": "mt5",
+    "type": "index"
+  },
+  {
+    "derivative_providers": [],
+    "display": "UK100",
+    "high_risk": false,
+    "mismatch": false,
+    "mismatch_providers": [],
+    "multi_provider": false,
+    "notes": "",
+    "ohlc_providers": [
+      "mt5"
+    ],
+    "providers": [
+      "mt5"
+    ],
+    "source": "mt5",
+    "type": "index"
+  },
+  {
+    "derivative_providers": [],
+    "display": "ASX 200",
+    "high_risk": false,
+    "mismatch": false,
+    "mismatch_providers": [],
+    "multi_provider": false,
+    "notes": "",
+    "ohlc_providers": [
+      "mt5"
+    ],
+    "providers": [
+      "mt5"
+    ],
+    "source": "mt5",
+    "type": "index"
+  },
+  {
+    "derivative_providers": [],
+    "display": "Nikkei 225",
+    "high_risk": false,
+    "mismatch": false,
+    "mismatch_providers": [],
+    "multi_provider": false,
+    "notes": "",
+    "ohlc_providers": [
+      "mt5"
+    ],
+    "providers": [
+      "mt5"
+    ],
+    "source": "mt5",
+    "type": "index"
+  },
+  {
+    "derivative_providers": [],
+    "display": "Hang Seng",
+    "high_risk": false,
+    "mismatch": false,
+    "mismatch_providers": [],
+    "multi_provider": false,
+    "notes": "",
+    "ohlc_providers": [
+      "mt5"
+    ],
+    "providers": [
+      "mt5"
+    ],
+    "source": "mt5",
+    "type": "index"
+  },
+  {
+    "derivative_providers": [],
+    "display": "EURX",
+    "high_risk": false,
+    "mismatch": false,
+    "mismatch_providers": [],
+    "multi_provider": false,
+    "notes": "",
+    "ohlc_providers": [
+      "mt5"
+    ],
+    "providers": [
+      "mt5"
+    ],
+    "source": "mt5",
+    "type": "index"
+  },
+  {
+    "derivative_providers": [],
+    "display": "JPYX",
+    "high_risk": false,
+    "mismatch": false,
+    "mismatch_providers": [],
+    "multi_provider": false,
+    "notes": "",
+    "ohlc_providers": [
+      "mt5"
+    ],
+    "providers": [
+      "mt5"
+    ],
+    "source": "mt5",
+    "type": "index"
+  },
+  {
+    "derivative_providers": [],
+    "display": "USDX",
+    "high_risk": false,
+    "mismatch": false,
+    "mismatch_providers": [],
+    "multi_provider": false,
+    "notes": "",
+    "ohlc_providers": [
+      "mt5"
+    ],
+    "providers": [
+      "mt5"
+    ],
+    "source": "mt5",
+    "type": "index"
+  },
+  {
+    "derivative_providers": [],
+    "display": "AAPL",
+    "high_risk": false,
+    "mismatch": false,
+    "mismatch_providers": [],
+    "multi_provider": false,
+    "notes": "",
+    "ohlc_providers": [
+      "mt5"
+    ],
+    "providers": [
+      "mt5"
+    ],
+    "source": "mt5",
+    "type": "stock"
+  },
+  {
+    "derivative_providers": [],
+    "display": "TSLA",
+    "high_risk": false,
+    "mismatch": false,
+    "mismatch_providers": [],
+    "multi_provider": false,
+    "notes": "",
+    "ohlc_providers": [
+      "mt5"
+    ],
+    "providers": [
+      "mt5"
+    ],
+    "source": "mt5",
+    "type": "stock"
+  },
+  {
+    "derivative_providers": [],
+    "display": "NVDA",
+    "high_risk": false,
+    "mismatch": false,
+    "mismatch_providers": [],
+    "multi_provider": false,
+    "notes": "",
+    "ohlc_providers": [
+      "mt5"
+    ],
+    "providers": [
+      "mt5"
+    ],
+    "source": "mt5",
+    "type": "stock"
+  },
+  {
+    "derivative_providers": [],
+    "display": "MSFT",
+    "high_risk": false,
+    "mismatch": false,
+    "mismatch_providers": [],
+    "multi_provider": false,
+    "notes": "",
+    "ohlc_providers": [
+      "mt5"
+    ],
+    "providers": [
+      "mt5"
+    ],
+    "source": "mt5",
+    "type": "stock"
+  },
+  {
+    "derivative_providers": [],
+    "display": "AMZN",
+    "high_risk": false,
+    "mismatch": false,
+    "mismatch_providers": [],
+    "multi_provider": false,
+    "notes": "",
+    "ohlc_providers": [
+      "mt5"
+    ],
+    "providers": [
+      "mt5"
+    ],
+    "source": "mt5",
+    "type": "stock"
+  },
+  {
+    "derivative_providers": [],
+    "display": "META",
+    "high_risk": false,
+    "mismatch": false,
+    "mismatch_providers": [],
+    "multi_provider": false,
+    "notes": "",
+    "ohlc_providers": [
+      "mt5"
+    ],
+    "providers": [
+      "mt5"
+    ],
+    "source": "mt5",
+    "type": "stock"
+  },
+  {
+    "derivative_providers": [],
+    "display": "GOOG",
+    "high_risk": false,
+    "mismatch": false,
+    "mismatch_providers": [],
+    "multi_provider": false,
+    "notes": "",
+    "ohlc_providers": [
+      "mt5"
+    ],
+    "providers": [
+      "mt5"
+    ],
+    "source": "mt5",
+    "type": "stock"
+  },
+  {
+    "derivative_providers": [],
+    "display": "JPM",
+    "high_risk": false,
+    "mismatch": false,
+    "mismatch_providers": [],
+    "multi_provider": false,
+    "notes": "",
+    "ohlc_providers": [
+      "mt5"
+    ],
+    "providers": [
+      "mt5"
+    ],
+    "source": "mt5",
+    "type": "stock"
+  },
+  {
+    "derivative_providers": [],
+    "display": "V",
+    "high_risk": false,
+    "mismatch": false,
+    "mismatch_providers": [],
+    "multi_provider": false,
+    "notes": "",
+    "ohlc_providers": [
+      "mt5"
+    ],
+    "providers": [
+      "mt5"
+    ],
+    "source": "mt5",
+    "type": "stock"
+  },
+  {
+    "derivative_providers": [],
+    "display": "XOM",
+    "high_risk": false,
+    "mismatch": false,
+    "mismatch_providers": [],
+    "multi_provider": false,
+    "notes": "",
+    "ohlc_providers": [
+      "mt5"
+    ],
+    "providers": [
+      "mt5"
+    ],
+    "source": "mt5",
+    "type": "stock"
+  },
+  {
+    "derivative_providers": [],
+    "display": "NFLX",
+    "high_risk": false,
+    "mismatch": false,
+    "mismatch_providers": [],
+    "multi_provider": false,
+    "notes": "",
+    "ohlc_providers": [
+      "mt5"
+    ],
+    "providers": [
+      "mt5"
+    ],
+    "source": "mt5",
+    "type": "stock"
+  },
+  {
+    "derivative_providers": [],
+    "display": "AMD",
+    "high_risk": false,
+    "mismatch": false,
+    "mismatch_providers": [],
+    "multi_provider": false,
+    "notes": "",
+    "ohlc_providers": [
+      "mt5"
+    ],
+    "providers": [
+      "mt5"
+    ],
+    "source": "mt5",
+    "type": "stock"
+  },
+  {
+    "derivative_providers": [],
+    "display": "CRM",
+    "high_risk": false,
+    "mismatch": false,
+    "mismatch_providers": [],
+    "multi_provider": false,
+    "notes": "",
+    "ohlc_providers": [
+      "mt5"
+    ],
+    "providers": [
+      "mt5"
+    ],
+    "source": "mt5",
+    "type": "stock"
+  },
+  {
+    "derivative_providers": [],
+    "display": "DIS",
+    "high_risk": false,
+    "mismatch": false,
+    "mismatch_providers": [],
+    "multi_provider": false,
+    "notes": "",
+    "ohlc_providers": [
+      "mt5"
+    ],
+    "providers": [
+      "mt5"
+    ],
+    "source": "mt5",
+    "type": "stock"
+  },
+  {
+    "derivative_providers": [],
+    "display": "BA",
+    "high_risk": false,
+    "mismatch": false,
+    "mismatch_providers": [],
+    "multi_provider": false,
+    "notes": "",
+    "ohlc_providers": [
+      "mt5"
+    ],
+    "providers": [
+      "mt5"
+    ],
+    "source": "mt5",
+    "type": "stock"
+  },
+  {
+    "derivative_providers": [],
+    "display": "COIN",
+    "high_risk": false,
+    "mismatch": false,
+    "mismatch_providers": [],
+    "multi_provider": false,
+    "notes": "",
+    "ohlc_providers": [
+      "mt5"
+    ],
+    "providers": [
+      "mt5"
+    ],
+    "source": "mt5",
+    "type": "stock"
+  },
+  {
+    "derivative_providers": [],
+    "display": "PYPL",
+    "high_risk": false,
+    "mismatch": false,
+    "mismatch_providers": [],
+    "multi_provider": false,
+    "notes": "",
+    "ohlc_providers": [
+      "mt5"
+    ],
+    "providers": [
+      "mt5"
+    ],
+    "source": "mt5",
+    "type": "stock"
+  },
+  {
+    "derivative_providers": [],
+    "display": "INTC",
+    "high_risk": false,
+    "mismatch": false,
+    "mismatch_providers": [],
+    "multi_provider": false,
+    "notes": "",
+    "ohlc_providers": [
+      "mt5"
+    ],
+    "providers": [
+      "mt5"
+    ],
+    "source": "mt5",
+    "type": "stock"
+  },
+  {
+    "derivative_providers": [],
+    "display": "UBER",
+    "high_risk": false,
+    "mismatch": false,
+    "mismatch_providers": [],
+    "multi_provider": false,
+    "notes": "",
+    "ohlc_providers": [
+      "mt5"
+    ],
+    "providers": [
+      "mt5"
+    ],
+    "source": "mt5",
+    "type": "stock"
+  },
+  {
+    "derivative_providers": [],
+    "display": "PLTR",
+    "high_risk": false,
+    "mismatch": false,
+    "mismatch_providers": [],
+    "multi_provider": false,
+    "notes": "",
+    "ohlc_providers": [
+      "mt5"
+    ],
+    "providers": [
+      "mt5"
+    ],
+    "source": "mt5",
+    "type": "stock"
+  },
+  {
+    "derivative_providers": [],
+    "display": "SPY",
+    "high_risk": false,
+    "mismatch": false,
+    "mismatch_providers": [],
+    "multi_provider": false,
+    "notes": "",
+    "ohlc_providers": [
+      "mt5"
+    ],
+    "providers": [
+      "mt5"
+    ],
+    "source": "mt5",
+    "type": "etf"
+  },
+  {
+    "derivative_providers": [],
+    "display": "QQQ",
+    "high_risk": false,
+    "mismatch": false,
+    "mismatch_providers": [],
+    "multi_provider": false,
+    "notes": "",
+    "ohlc_providers": [
+      "mt5"
+    ],
+    "providers": [
+      "mt5"
+    ],
+    "source": "mt5",
+    "type": "etf"
+  },
+  {
+    "derivative_providers": [],
+    "display": "GLD",
+    "high_risk": false,
+    "mismatch": false,
+    "mismatch_providers": [],
+    "multi_provider": false,
+    "notes": "",
+    "ohlc_providers": [
+      "mt5"
+    ],
+    "providers": [
+      "mt5"
+    ],
+    "source": "mt5",
+    "type": "etf"
+  },
+  {
+    "derivative_providers": [],
+    "display": "TLT",
+    "high_risk": false,
+    "mismatch": false,
+    "mismatch_providers": [],
+    "multi_provider": false,
+    "notes": "",
+    "ohlc_providers": [
+      "mt5"
+    ],
+    "providers": [
+      "mt5"
+    ],
+    "source": "mt5",
+    "type": "etf_bond"
+  },
+  {
+    "derivative_providers": [],
+    "display": "IWM",
+    "high_risk": false,
+    "mismatch": false,
+    "mismatch_providers": [],
+    "multi_provider": false,
+    "notes": "",
+    "ohlc_providers": [
+      "mt5"
+    ],
+    "providers": [
+      "mt5"
+    ],
+    "source": "mt5",
+    "type": "etf"
+  },
+  {
+    "derivative_providers": [],
+    "display": "EEM",
+    "high_risk": false,
+    "mismatch": false,
+    "mismatch_providers": [],
+    "multi_provider": false,
+    "notes": "",
+    "ohlc_providers": [
+      "mt5"
+    ],
+    "providers": [
+      "mt5"
+    ],
+    "source": "mt5",
+    "type": "etf"
+  },
+  {
+    "derivative_providers": [],
+    "display": "DIA",
+    "high_risk": false,
+    "mismatch": false,
+    "mismatch_providers": [],
+    "multi_provider": false,
+    "notes": "",
+    "ohlc_providers": [
+      "mt5"
+    ],
+    "providers": [
+      "mt5"
+    ],
+    "source": "mt5",
+    "type": "etf"
+  },
+  {
+    "derivative_providers": [],
+    "display": "GDX",
+    "high_risk": false,
+    "mismatch": false,
+    "mismatch_providers": [],
+    "multi_provider": false,
+    "notes": "",
+    "ohlc_providers": [
+      "mt5"
+    ],
+    "providers": [
+      "mt5"
+    ],
+    "source": "mt5",
+    "type": "etf"
+  },
+  {
+    "derivative_providers": [],
+    "display": "SOXX",
+    "high_risk": false,
+    "mismatch": false,
+    "mismatch_providers": [],
+    "multi_provider": false,
+    "notes": "",
+    "ohlc_providers": [
+      "mt5"
+    ],
+    "providers": [
+      "mt5"
+    ],
+    "source": "mt5",
+    "type": "etf"
+  },
+  {
+    "derivative_providers": [],
+    "display": "XLE",
+    "high_risk": false,
+    "mismatch": false,
+    "mismatch_providers": [],
+    "multi_provider": false,
+    "notes": "",
+    "ohlc_providers": [
+      "mt5"
+    ],
+    "providers": [
+      "mt5"
+    ],
+    "source": "mt5",
+    "type": "etf"
+  },
+  {
+    "derivative_providers": [],
+    "display": "SLV",
+    "high_risk": false,
+    "mismatch": false,
+    "mismatch_providers": [],
+    "multi_provider": false,
+    "notes": "",
+    "ohlc_providers": [
+      "mt5"
+    ],
+    "providers": [
+      "mt5"
+    ],
+    "source": "mt5",
+    "type": "etf"
+  },
+  {
+    "derivative_providers": [],
+    "display": "USO",
+    "high_risk": false,
+    "mismatch": false,
+    "mismatch_providers": [],
+    "multi_provider": false,
+    "notes": "",
+    "ohlc_providers": [
+      "mt5"
+    ],
+    "providers": [
+      "mt5"
+    ],
+    "source": "mt5",
+    "type": "etf"
+  },
+  {
+    "derivative_providers": [],
+    "display": "Naspers",
+    "high_risk": true,
+    "mismatch": true,
+    "mismatch_providers": [
+      "eodhd_intraday"
+    ],
+    "multi_provider": true,
+    "notes": "A/C use eodhd D1 + eodhd_intraday H4/H1; fallback uses pair source",
+    "ohlc_providers": [
+      "eodhd",
+      "eodhd_intraday"
+    ],
+    "providers": [
+      "eodhd",
+      "eodhd_intraday"
+    ],
+    "source": "eodhd",
+    "type": "stock"
+  },
+  {
+    "derivative_providers": [],
+    "display": "Sasol",
+    "high_risk": true,
+    "mismatch": true,
+    "mismatch_providers": [
+      "eodhd_intraday"
+    ],
+    "multi_provider": true,
+    "notes": "A/C use eodhd D1 + eodhd_intraday H4/H1; fallback uses pair source",
+    "ohlc_providers": [
+      "eodhd",
+      "eodhd_intraday"
+    ],
+    "providers": [
+      "eodhd",
+      "eodhd_intraday"
+    ],
+    "source": "eodhd",
+    "type": "stock"
+  },
+  {
+    "derivative_providers": [],
+    "display": "Std Bank",
+    "high_risk": true,
+    "mismatch": true,
+    "mismatch_providers": [
+      "eodhd_intraday"
+    ],
+    "multi_provider": true,
+    "notes": "A/C use eodhd D1 + eodhd_intraday H4/H1; fallback uses pair source",
+    "ohlc_providers": [
+      "eodhd",
+      "eodhd_intraday"
+    ],
+    "providers": [
+      "eodhd",
+      "eodhd_intraday"
+    ],
+    "source": "eodhd",
+    "type": "stock"
+  },
+  {
+    "derivative_providers": [],
+    "display": "Anglo Am",
+    "high_risk": true,
+    "mismatch": true,
+    "mismatch_providers": [
+      "eodhd_intraday"
+    ],
+    "multi_provider": true,
+    "notes": "A/C use eodhd D1 + eodhd_intraday H4/H1; fallback uses pair source",
+    "ohlc_providers": [
+      "eodhd",
+      "eodhd_intraday"
+    ],
+    "providers": [
+      "eodhd",
+      "eodhd_intraday"
+    ],
+    "source": "eodhd",
+    "type": "stock"
+  },
+  {
+    "derivative_providers": [],
+    "display": "MTN Group",
+    "high_risk": true,
+    "mismatch": true,
+    "mismatch_providers": [
+      "eodhd_intraday"
+    ],
+    "multi_provider": true,
+    "notes": "A/C use eodhd D1 + eodhd_intraday H4/H1; fallback uses pair source",
+    "ohlc_providers": [
+      "eodhd",
+      "eodhd_intraday"
+    ],
+    "providers": [
+      "eodhd",
+      "eodhd_intraday"
+    ],
+    "source": "eodhd",
+    "type": "stock"
+  },
+  {
+    "derivative_providers": [],
+    "display": "Shoprite",
+    "high_risk": true,
+    "mismatch": true,
+    "mismatch_providers": [
+      "eodhd_intraday"
+    ],
+    "multi_provider": true,
+    "notes": "A/C use eodhd D1 + eodhd_intraday H4/H1; fallback uses pair source",
+    "ohlc_providers": [
+      "eodhd",
+      "eodhd_intraday"
+    ],
+    "providers": [
+      "eodhd",
+      "eodhd_intraday"
+    ],
+    "source": "eodhd",
+    "type": "stock"
+  },
+  {
+    "derivative_providers": [],
+    "display": "Richemont",
+    "high_risk": true,
+    "mismatch": true,
+    "mismatch_providers": [
+      "eodhd_intraday"
+    ],
+    "multi_provider": true,
+    "notes": "A/C use eodhd D1 + eodhd_intraday H4/H1; fallback uses pair source",
+    "ohlc_providers": [
+      "eodhd",
+      "eodhd_intraday"
+    ],
+    "providers": [
+      "eodhd",
+      "eodhd_intraday"
+    ],
+    "source": "eodhd",
+    "type": "stock"
+  },
+  {
+    "derivative_providers": [],
+    "display": "FirstRand",
+    "high_risk": true,
+    "mismatch": true,
+    "mismatch_providers": [
+      "eodhd_intraday"
+    ],
+    "multi_provider": true,
+    "notes": "A/C use eodhd D1 + eodhd_intraday H4/H1; fallback uses pair source",
+    "ohlc_providers": [
+      "eodhd",
+      "eodhd_intraday"
+    ],
+    "providers": [
+      "eodhd",
+      "eodhd_intraday"
+    ],
+    "source": "eodhd",
+    "type": "stock"
+  },
+  {
+    "derivative_providers": [],
+    "display": "Absa",
+    "high_risk": true,
+    "mismatch": true,
+    "mismatch_providers": [
+      "eodhd_intraday"
+    ],
+    "multi_provider": true,
+    "notes": "A/C use eodhd D1 + eodhd_intraday H4/H1; fallback uses pair source",
+    "ohlc_providers": [
+      "eodhd",
+      "eodhd_intraday"
+    ],
+    "providers": [
+      "eodhd",
+      "eodhd_intraday"
+    ],
+    "source": "eodhd",
+    "type": "stock"
+  },
+  {
+    "derivative_providers": [],
+    "display": "Capitec",
+    "high_risk": true,
+    "mismatch": true,
+    "mismatch_providers": [
+      "eodhd_intraday"
+    ],
+    "multi_provider": true,
+    "notes": "A/C use eodhd D1 + eodhd_intraday H4/H1; fallback uses pair source",
+    "ohlc_providers": [
+      "eodhd",
+      "eodhd_intraday"
+    ],
+    "providers": [
+      "eodhd",
+      "eodhd_intraday"
+    ],
+    "source": "eodhd",
+    "type": "stock"
+  },
+  {
+    "derivative_providers": [],
+    "display": "Prosus",
+    "high_risk": true,
+    "mismatch": true,
+    "mismatch_providers": [
+      "eodhd_intraday"
+    ],
+    "multi_provider": true,
+    "notes": "A/C use eodhd D1 + eodhd_intraday H4/H1; fallback uses pair source",
+    "ohlc_providers": [
+      "eodhd",
+      "eodhd_intraday"
+    ],
+    "providers": [
+      "eodhd",
+      "eodhd_intraday"
+    ],
+    "source": "eodhd",
+    "type": "stock"
+  },
+  {
+    "derivative_providers": [],
+    "display": "Gold Fields",
+    "high_risk": true,
+    "mismatch": true,
+    "mismatch_providers": [
+      "eodhd_intraday"
+    ],
+    "multi_provider": true,
+    "notes": "A/C use eodhd D1 + eodhd_intraday H4/H1; fallback uses pair source",
+    "ohlc_providers": [
+      "eodhd",
+      "eodhd_intraday"
+    ],
+    "providers": [
+      "eodhd",
+      "eodhd_intraday"
+    ],
+    "source": "eodhd",
+    "type": "stock"
+  },
+  {
+    "derivative_providers": [],
+    "display": "AngloGold",
+    "high_risk": true,
+    "mismatch": true,
+    "mismatch_providers": [
+      "eodhd_intraday"
+    ],
+    "multi_provider": true,
+    "notes": "A/C use eodhd D1 + eodhd_intraday H4/H1; fallback uses pair source",
+    "ohlc_providers": [
+      "eodhd",
+      "eodhd_intraday"
+    ],
+    "providers": [
+      "eodhd",
+      "eodhd_intraday"
+    ],
+    "source": "eodhd",
+    "type": "stock"
+  },
+  {
+    "derivative_providers": [],
+    "display": "Sibanye",
+    "high_risk": true,
+    "mismatch": true,
+    "mismatch_providers": [
+      "eodhd_intraday"
+    ],
+    "multi_provider": true,
+    "notes": "A/C use eodhd D1 + eodhd_intraday H4/H1; fallback uses pair source",
+    "ohlc_providers": [
+      "eodhd",
+      "eodhd_intraday"
+    ],
+    "providers": [
+      "eodhd",
+      "eodhd_intraday"
+    ],
+    "source": "eodhd",
+    "type": "stock"
+  },
+  {
+    "derivative_providers": [
+      "binance",
+      "bybit"
+    ],
+    "display": "BTC/USDT",
+    "high_risk": true,
+    "mismatch": true,
+    "mismatch_providers": [
+      "binance_futures",
+      "bybit",
+      "bybit_linear_kline"
+    ],
+    "multi_provider": true,
+    "notes": "crypto A/B signal feed config-gated; C uses binance; derivatives bybit->binance fallback",
+    "ohlc_providers": [
+      "binance_futures",
+      "bybit_linear_kline"
+    ],
+    "providers": [
+      "binance",
+      "binance_futures",
+      "bybit",
+      "bybit_linear_kline"
+    ],
+    "source": "binance",
+    "type": "crypto"
+  },
+  {
+    "derivative_providers": [
+      "binance",
+      "bybit"
+    ],
+    "display": "ETH/USDT",
+    "high_risk": true,
+    "mismatch": true,
+    "mismatch_providers": [
+      "binance_futures",
+      "bybit",
+      "bybit_linear_kline"
+    ],
+    "multi_provider": true,
+    "notes": "crypto A/B signal feed config-gated; C uses binance; derivatives bybit->binance fallback",
+    "ohlc_providers": [
+      "binance_futures",
+      "bybit_linear_kline"
+    ],
+    "providers": [
+      "binance",
+      "binance_futures",
+      "bybit",
+      "bybit_linear_kline"
+    ],
+    "source": "binance",
+    "type": "crypto"
+  },
+  {
+    "derivative_providers": [
+      "binance",
+      "bybit"
+    ],
+    "display": "XRP/USDT",
+    "high_risk": true,
+    "mismatch": true,
+    "mismatch_providers": [
+      "binance_futures",
+      "bybit",
+      "bybit_linear_kline"
+    ],
+    "multi_provider": true,
+    "notes": "crypto A/B signal feed config-gated; C uses binance; derivatives bybit->binance fallback",
+    "ohlc_providers": [
+      "binance_futures",
+      "bybit_linear_kline"
+    ],
+    "providers": [
+      "binance",
+      "binance_futures",
+      "bybit",
+      "bybit_linear_kline"
+    ],
+    "source": "binance",
+    "type": "crypto"
+  },
+  {
+    "derivative_providers": [
+      "binance",
+      "bybit"
+    ],
+    "display": "SOL/USDT",
+    "high_risk": true,
+    "mismatch": true,
+    "mismatch_providers": [
+      "binance_futures",
+      "bybit",
+      "bybit_linear_kline"
+    ],
+    "multi_provider": true,
+    "notes": "crypto A/B signal feed config-gated; C uses binance; derivatives bybit->binance fallback",
+    "ohlc_providers": [
+      "binance_futures",
+      "bybit_linear_kline"
+    ],
+    "providers": [
+      "binance",
+      "binance_futures",
+      "bybit",
+      "bybit_linear_kline"
+    ],
+    "source": "binance",
+    "type": "crypto"
+  },
+  {
+    "derivative_providers": [
+      "binance",
+      "bybit"
+    ],
+    "display": "ADA/USDT",
+    "high_risk": true,
+    "mismatch": true,
+    "mismatch_providers": [
+      "binance_futures",
+      "bybit",
+      "bybit_linear_kline"
+    ],
+    "multi_provider": true,
+    "notes": "crypto A/B signal feed config-gated; C uses binance; derivatives bybit->binance fallback",
+    "ohlc_providers": [
+      "binance_futures",
+      "bybit_linear_kline"
+    ],
+    "providers": [
+      "binance",
+      "binance_futures",
+      "bybit",
+      "bybit_linear_kline"
+    ],
+    "source": "binance",
+    "type": "crypto"
+  },
+  {
+    "derivative_providers": [
+      "binance",
+      "bybit"
+    ],
+    "display": "DOGE/USDT",
+    "high_risk": true,
+    "mismatch": true,
+    "mismatch_providers": [
+      "binance_futures",
+      "bybit",
+      "bybit_linear_kline"
+    ],
+    "multi_provider": true,
+    "notes": "crypto A/B signal feed config-gated; C uses binance; derivatives bybit->binance fallback",
+    "ohlc_providers": [
+      "binance_futures",
+      "bybit_linear_kline"
+    ],
+    "providers": [
+      "binance",
+      "binance_futures",
+      "bybit",
+      "bybit_linear_kline"
+    ],
+    "source": "binance",
+    "type": "crypto"
+  },
+  {
+    "derivative_providers": [
+      "binance",
+      "bybit"
+    ],
+    "display": "AVAX/USDT",
+    "high_risk": true,
+    "mismatch": true,
+    "mismatch_providers": [
+      "binance_futures",
+      "bybit",
+      "bybit_linear_kline"
+    ],
+    "multi_provider": true,
+    "notes": "crypto A/B signal feed config-gated; C uses binance; derivatives bybit->binance fallback",
+    "ohlc_providers": [
+      "binance_futures",
+      "bybit_linear_kline"
+    ],
+    "providers": [
+      "binance",
+      "binance_futures",
+      "bybit",
+      "bybit_linear_kline"
+    ],
+    "source": "binance",
+    "type": "crypto"
+  },
+  {
+    "derivative_providers": [
+      "binance",
+      "bybit"
+    ],
+    "display": "LINK/USDT",
+    "high_risk": true,
+    "mismatch": true,
+    "mismatch_providers": [
+      "binance_futures",
+      "bybit",
+      "bybit_linear_kline"
+    ],
+    "multi_provider": true,
+    "notes": "crypto A/B signal feed config-gated; C uses binance; derivatives bybit->binance fallback",
+    "ohlc_providers": [
+      "binance_futures",
+      "bybit_linear_kline"
+    ],
+    "providers": [
+      "binance",
+      "binance_futures",
+      "bybit",
+      "bybit_linear_kline"
+    ],
+    "source": "binance",
+    "type": "crypto"
+  },
+  {
+    "derivative_providers": [
+      "binance",
+      "bybit"
+    ],
+    "display": "POL/USDT",
+    "high_risk": true,
+    "mismatch": true,
+    "mismatch_providers": [
+      "binance_futures",
+      "bybit",
+      "bybit_linear_kline"
+    ],
+    "multi_provider": true,
+    "notes": "crypto A/B signal feed config-gated; C uses binance; derivatives bybit->binance fallback",
+    "ohlc_providers": [
+      "binance_futures",
+      "bybit_linear_kline"
+    ],
+    "providers": [
+      "binance",
+      "binance_futures",
+      "bybit",
+      "bybit_linear_kline"
+    ],
+    "source": "binance",
+    "type": "crypto"
+  },
+  {
+    "derivative_providers": [
+      "binance",
+      "bybit"
+    ],
+    "display": "BNB/USDT",
+    "high_risk": true,
+    "mismatch": true,
+    "mismatch_providers": [
+      "binance_futures",
+      "bybit",
+      "bybit_linear_kline"
+    ],
+    "multi_provider": true,
+    "notes": "crypto A/B signal feed config-gated; C uses binance; derivatives bybit->binance fallback",
+    "ohlc_providers": [
+      "binance_futures",
+      "bybit_linear_kline"
+    ],
+    "providers": [
+      "binance",
+      "binance_futures",
+      "bybit",
+      "bybit_linear_kline"
+    ],
+    "source": "binance",
+    "type": "crypto"
+  },
+  {
+    "derivative_providers": [
+      "binance",
+      "bybit"
+    ],
+    "display": "DOT/USDT",
+    "high_risk": true,
+    "mismatch": true,
+    "mismatch_providers": [
+      "binance_futures",
+      "bybit",
+      "bybit_linear_kline"
+    ],
+    "multi_provider": true,
+    "notes": "crypto A/B signal feed config-gated; C uses binance; derivatives bybit->binance fallback",
+    "ohlc_providers": [
+      "binance_futures",
+      "bybit_linear_kline"
+    ],
+    "providers": [
+      "binance",
+      "binance_futures",
+      "bybit",
+      "bybit_linear_kline"
+    ],
+    "source": "binance",
+    "type": "crypto"
+  },
+  {
+    "derivative_providers": [
+      "binance",
+      "bybit"
+    ],
+    "display": "LTC/USDT",
+    "high_risk": true,
+    "mismatch": true,
+    "mismatch_providers": [
+      "binance_futures",
+      "bybit",
+      "bybit_linear_kline"
+    ],
+    "multi_provider": true,
+    "notes": "crypto A/B signal feed config-gated; C uses binance; derivatives bybit->binance fallback",
+    "ohlc_providers": [
+      "binance_futures",
+      "bybit_linear_kline"
+    ],
+    "providers": [
+      "binance",
+      "binance_futures",
+      "bybit",
+      "bybit_linear_kline"
+    ],
+    "source": "binance",
+    "type": "crypto"
+  },
+  {
+    "derivative_providers": [
+      "binance",
+      "bybit"
+    ],
+    "display": "SUI/USDT",
+    "high_risk": true,
+    "mismatch": true,
+    "mismatch_providers": [
+      "binance_futures",
+      "bybit",
+      "bybit_linear_kline"
+    ],
+    "multi_provider": true,
+    "notes": "crypto A/B signal feed config-gated; C uses binance; derivatives bybit->binance fallback",
+    "ohlc_providers": [
+      "binance_futures",
+      "bybit_linear_kline"
+    ],
+    "providers": [
+      "binance",
+      "binance_futures",
+      "bybit",
+      "bybit_linear_kline"
+    ],
+    "source": "binance",
+    "type": "crypto"
+  },
+  {
+    "derivative_providers": [
+      "binance",
+      "bybit"
+    ],
+    "display": "NEAR/USDT",
+    "high_risk": true,
+    "mismatch": true,
+    "mismatch_providers": [
+      "binance_futures",
+      "bybit",
+      "bybit_linear_kline"
+    ],
+    "multi_provider": true,
+    "notes": "crypto A/B signal feed config-gated; C uses binance; derivatives bybit->binance fallback",
+    "ohlc_providers": [
+      "binance_futures",
+      "bybit_linear_kline"
+    ],
+    "providers": [
+      "binance",
+      "binance_futures",
+      "bybit",
+      "bybit_linear_kline"
+    ],
+    "source": "binance",
+    "type": "crypto"
+  },
+  {
+    "derivative_providers": [
+      "binance",
+      "bybit"
+    ],
+    "display": "APT/USDT",
+    "high_risk": true,
+    "mismatch": true,
+    "mismatch_providers": [
+      "binance_futures",
+      "bybit",
+      "bybit_linear_kline"
+    ],
+    "multi_provider": true,
+    "notes": "crypto A/B signal feed config-gated; C uses binance; derivatives bybit->binance fallback",
+    "ohlc_providers": [
+      "binance_futures",
+      "bybit_linear_kline"
+    ],
+    "providers": [
+      "binance",
+      "binance_futures",
+      "bybit",
+      "bybit_linear_kline"
+    ],
+    "source": "binance",
+    "type": "crypto"
+  },
+  {
+    "derivative_providers": [
+      "binance",
+      "bybit"
+    ],
+    "display": "INJ/USDT",
+    "high_risk": true,
+    "mismatch": true,
+    "mismatch_providers": [
+      "binance_futures",
+      "bybit",
+      "bybit_linear_kline"
+    ],
+    "multi_provider": true,
+    "notes": "crypto A/B signal feed config-gated; C uses binance; derivatives bybit->binance fallback",
+    "ohlc_providers": [
+      "binance_futures",
+      "bybit_linear_kline"
+    ],
+    "providers": [
+      "binance",
+      "binance_futures",
+      "bybit",
+      "bybit_linear_kline"
+    ],
+    "source": "binance",
+    "type": "crypto"
+  },
+  {
+    "derivative_providers": [
+      "binance",
+      "bybit"
+    ],
+    "display": "RENDER/USDT",
+    "high_risk": true,
+    "mismatch": true,
+    "mismatch_providers": [
+      "binance_futures",
+      "bybit",
+      "bybit_linear_kline"
+    ],
+    "multi_provider": true,
+    "notes": "crypto A/B signal feed config-gated; C uses binance; derivatives bybit->binance fallback",
+    "ohlc_providers": [
+      "binance_futures",
+      "bybit_linear_kline"
+    ],
+    "providers": [
+      "binance",
+      "binance_futures",
+      "bybit",
+      "bybit_linear_kline"
+    ],
+    "source": "binance",
+    "type": "crypto"
+  },
+  {
+    "derivative_providers": [
+      "binance",
+      "bybit"
+    ],
+    "display": "AAVE/USDT",
+    "high_risk": true,
+    "mismatch": true,
+    "mismatch_providers": [
+      "binance_futures",
+      "bybit",
+      "bybit_linear_kline"
+    ],
+    "multi_provider": true,
+    "notes": "crypto A/B signal feed config-gated; C uses binance; derivatives bybit->binance fallback",
+    "ohlc_providers": [
+      "binance_futures",
+      "bybit_linear_kline"
+    ],
+    "providers": [
+      "binance",
+      "binance_futures",
+      "bybit",
+      "bybit_linear_kline"
+    ],
+    "source": "binance",
+    "type": "crypto"
+  },
+  {
+    "derivative_providers": [
+      "binance",
+      "bybit"
+    ],
+    "display": "ALGO/USDT",
+    "high_risk": true,
+    "mismatch": true,
+    "mismatch_providers": [
+      "binance_futures",
+      "bybit",
+      "bybit_linear_kline"
+    ],
+    "multi_provider": true,
+    "notes": "crypto A/B signal feed config-gated; C uses binance; derivatives bybit->binance fallback",
+    "ohlc_providers": [
+      "binance_futures",
+      "bybit_linear_kline"
+    ],
+    "providers": [
+      "binance",
+      "binance_futures",
+      "bybit",
+      "bybit_linear_kline"
+    ],
+    "source": "binance",
+    "type": "crypto"
+  },
+  {
+    "derivative_providers": [
+      "binance",
+      "bybit"
+    ],
+    "display": "ATOM/USDT",
+    "high_risk": true,
+    "mismatch": true,
+    "mismatch_providers": [
+      "binance_futures",
+      "bybit",
+      "bybit_linear_kline"
+    ],
+    "multi_provider": true,
+    "notes": "crypto A/B signal feed config-gated; C uses binance; derivatives bybit->binance fallback",
+    "ohlc_providers": [
+      "binance_futures",
+      "bybit_linear_kline"
+    ],
+    "providers": [
+      "binance",
+      "binance_futures",
+      "bybit",
+      "bybit_linear_kline"
+    ],
+    "source": "binance",
+    "type": "crypto"
+  },
+  {
+    "derivative_providers": [
+      "binance",
+      "bybit"
+    ],
+    "display": "BCH/USDT",
+    "high_risk": true,
+    "mismatch": true,
+    "mismatch_providers": [
+      "binance_futures",
+      "bybit",
+      "bybit_linear_kline"
+    ],
+    "multi_provider": true,
+    "notes": "crypto A/B signal feed config-gated; C uses binance; derivatives bybit->binance fallback",
+    "ohlc_providers": [
+      "binance_futures",
+      "bybit_linear_kline"
+    ],
+    "providers": [
+      "binance",
+      "binance_futures",
+      "bybit",
+      "bybit_linear_kline"
+    ],
+    "source": "binance",
+    "type": "crypto"
+  },
+  {
+    "derivative_providers": [
+      "binance",
+      "bybit"
+    ],
+    "display": "ETC/USDT",
+    "high_risk": true,
+    "mismatch": true,
+    "mismatch_providers": [
+      "binance_futures",
+      "bybit",
+      "bybit_linear_kline"
+    ],
+    "multi_provider": true,
+    "notes": "crypto A/B signal feed config-gated; C uses binance; derivatives bybit->binance fallback",
+    "ohlc_providers": [
+      "binance_futures",
+      "bybit_linear_kline"
+    ],
+    "providers": [
+      "binance",
+      "binance_futures",
+      "bybit",
+      "bybit_linear_kline"
+    ],
+    "source": "binance",
+    "type": "crypto"
+  },
+  {
+    "derivative_providers": [
+      "binance",
+      "bybit"
+    ],
+    "display": "TRX/USDT",
+    "high_risk": true,
+    "mismatch": true,
+    "mismatch_providers": [
+      "binance_futures",
+      "bybit",
+      "bybit_linear_kline"
+    ],
+    "multi_provider": true,
+    "notes": "crypto A/B signal feed config-gated; C uses binance; derivatives bybit->binance fallback",
+    "ohlc_providers": [
+      "binance_futures",
+      "bybit_linear_kline"
+    ],
+    "providers": [
+      "binance",
+      "binance_futures",
+      "bybit",
+      "bybit_linear_kline"
+    ],
+    "source": "binance",
+    "type": "crypto"
+  },
+  {
+    "derivative_providers": [
+      "binance",
+      "bybit"
+    ],
+    "display": "XLM/USDT",
+    "high_risk": true,
+    "mismatch": true,
+    "mismatch_providers": [
+      "binance_futures",
+      "bybit",
+      "bybit_linear_kline"
+    ],
+    "multi_provider": true,
+    "notes": "crypto A/B signal feed config-gated; C uses binance; derivatives bybit->binance fallback",
+    "ohlc_providers": [
+      "binance_futures",
+      "bybit_linear_kline"
+    ],
+    "providers": [
+      "binance",
+      "binance_futures",
+      "bybit",
+      "bybit_linear_kline"
+    ],
+    "source": "binance",
+    "type": "crypto"
+  },
+  {
+    "derivative_providers": [
+      "binance",
+      "bybit"
+    ],
+    "display": "UNI/USDT",
+    "high_risk": true,
+    "mismatch": true,
+    "mismatch_providers": [
+      "binance_futures",
+      "bybit",
+      "bybit_linear_kline"
+    ],
+    "multi_provider": true,
+    "notes": "crypto A/B signal feed config-gated; C uses binance; derivatives bybit->binance fallback",
+    "ohlc_providers": [
+      "binance_futures",
+      "bybit_linear_kline"
+    ],
+    "providers": [
+      "binance",
+      "binance_futures",
+      "bybit",
+      "bybit_linear_kline"
+    ],
+    "source": "binance",
+    "type": "crypto"
+  },
+  {
+    "derivative_providers": [
+      "binance",
+      "bybit"
+    ],
+    "display": "FIL/USDT",
+    "high_risk": true,
+    "mismatch": true,
+    "mismatch_providers": [
+      "binance_futures",
+      "bybit",
+      "bybit_linear_kline"
+    ],
+    "multi_provider": true,
+    "notes": "crypto A/B signal feed config-gated; C uses binance; derivatives bybit->binance fallback",
+    "ohlc_providers": [
+      "binance_futures",
+      "bybit_linear_kline"
+    ],
+    "providers": [
+      "binance",
+      "binance_futures",
+      "bybit",
+      "bybit_linear_kline"
+    ],
+    "source": "binance",
+    "type": "crypto"
+  },
+  {
+    "derivative_providers": [
+      "binance",
+      "bybit"
+    ],
+    "display": "ICP/USDT",
+    "high_risk": true,
+    "mismatch": true,
+    "mismatch_providers": [
+      "binance_futures",
+      "bybit",
+      "bybit_linear_kline"
+    ],
+    "multi_provider": true,
+    "notes": "crypto A/B signal feed config-gated; C uses binance; derivatives bybit->binance fallback",
+    "ohlc_providers": [
+      "binance_futures",
+      "bybit_linear_kline"
+    ],
+    "providers": [
+      "binance",
+      "binance_futures",
+      "bybit",
+      "bybit_linear_kline"
+    ],
+    "source": "binance",
+    "type": "crypto"
+  },
+  {
+    "derivative_providers": [
+      "binance",
+      "bybit"
+    ],
+    "display": "HBAR/USDT",
+    "high_risk": true,
+    "mismatch": true,
+    "mismatch_providers": [
+      "binance_futures",
+      "bybit",
+      "bybit_linear_kline"
+    ],
+    "multi_provider": true,
+    "notes": "crypto A/B signal feed config-gated; C uses binance; derivatives bybit->binance fallback",
+    "ohlc_providers": [
+      "binance_futures",
+      "bybit_linear_kline"
+    ],
+    "providers": [
+      "binance",
+      "binance_futures",
+      "bybit",
+      "bybit_linear_kline"
+    ],
+    "source": "binance",
+    "type": "crypto"
+  },
+  {
+    "derivative_providers": [
+      "binance",
+      "bybit"
+    ],
+    "display": "ARB/USDT",
+    "high_risk": true,
+    "mismatch": true,
+    "mismatch_providers": [
+      "binance_futures",
+      "bybit",
+      "bybit_linear_kline"
+    ],
+    "multi_provider": true,
+    "notes": "crypto A/B signal feed config-gated; C uses binance; derivatives bybit->binance fallback",
+    "ohlc_providers": [
+      "binance_futures",
+      "bybit_linear_kline"
+    ],
+    "providers": [
+      "binance",
+      "binance_futures",
+      "bybit",
+      "bybit_linear_kline"
+    ],
+    "source": "binance",
+    "type": "crypto"
+  },
+  {
+    "derivative_providers": [
+      "binance",
+      "bybit"
+    ],
+    "display": "OP/USDT",
+    "high_risk": true,
+    "mismatch": true,
+    "mismatch_providers": [
+      "binance_futures",
+      "bybit",
+      "bybit_linear_kline"
+    ],
+    "multi_provider": true,
+    "notes": "crypto A/B signal feed config-gated; C uses binance; derivatives bybit->binance fallback",
+    "ohlc_providers": [
+      "binance_futures",
+      "bybit_linear_kline"
+    ],
+    "providers": [
+      "binance",
+      "binance_futures",
+      "bybit",
+      "bybit_linear_kline"
+    ],
+    "source": "binance",
+    "type": "crypto"
+  },
+  {
+    "derivative_providers": [
+      "binance",
+      "bybit"
+    ],
+    "display": "SEI/USDT",
+    "high_risk": true,
+    "mismatch": true,
+    "mismatch_providers": [
+      "binance_futures",
+      "bybit",
+      "bybit_linear_kline"
+    ],
+    "multi_provider": true,
+    "notes": "crypto A/B signal feed config-gated; C uses binance; derivatives bybit->binance fallback",
+    "ohlc_providers": [
+      "binance_futures",
+      "bybit_linear_kline"
+    ],
+    "providers": [
+      "binance",
+      "binance_futures",
+      "bybit",
+      "bybit_linear_kline"
+    ],
+    "source": "binance",
+    "type": "crypto"
+  }
+]

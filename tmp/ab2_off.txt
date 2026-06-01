@@ -1,0 +1,155 @@
+[CFG] Unknown top-level config key(s) accepted without schema defaults: ADDON_UNSUPPORTED_SPLIT_TO_BASE, ATR_FRESHNESS, CANDLE_FRESHNESS_ENABLED, CRYPTO_D1_MAX_STALE_HOURS, D1_RESAMPLE_OFFSET_HOURS, DEVELOPING_ADX_CLASS, ENGINE_A_CONVICTION_FLOOR_REGIME_SENSITIVE_CLASSES, ENGINE_A_COT_CONTRARIAN_Z, ENGINE_A_COT_MODE, ENGINE_A_EMA_PERIODS_BY_CLASS, ENGINE_A_MACD_PARAMS_BY_CLASS, ENGINE_A_ORTHO_CONVICTION_WEIGHT_BY_CLASS, ENGINE_A_ORTHO_FACTOR_WEIGHTS, ENGINE_A_ORTHO_VOTE_ENABLED, ENGINE_A_ORTHO_VOTE_TANH_K, ENGINE_A_REGIME_DYNAMIC_THRESHOLDS, ENGINE_A_RSI_PERIOD_BY_CLASS, ENGINE_A_STOCHASTIC_RSI, ENGINE_A_STOCK_VOLUME_ADDON, ENGINE_A_VOL_SKEW_REFRESH_TTL_HOURS, ENGINE_A_VOL_SKEW_TERM_WEIGHT, ENGINE_A_VOL_SKEW_Z_WINDOW, ENGINE_A_VWAP_FILTER, ENGINE_B_STRIP_FORMING_STRUCT, ENGINE_B_STRUCT_CONFIRMED_MIN_BARS, LIVE_PRICE_MAX_AGE_SEC, MARCUS_AI_MAX_RETRIES, MARCUS_AI_RETRY_BACKOFF_SEC, MAX_BROKER_TICK_AGE_SEC, MAX_EXECUTION_SPREAD_PCT, MAX_SIGNAL_DRIFT_PCT, MICROSTRUCTURE_BINANCE_COMBINED_STREAM, MICROSTRUCTURE_BINANCE_STALE_SYMBOL_SEC, MT5_FETCH_STALE_UNSHIFTED_AGE_SEC, MT5_H4_ALIGN_DIAG_ENABLED, MT5_H4_FETCH_RETRY_ENABLED, MT5_H4_FETCH_RETRY_MAX_LAG, MT5_H4_FETCH_RETRY_SLEEP_MS, PRE_SCORING_FRESHNESS_GATE_ENABLED, SCAN_TIMEOUT_SEC, SESSION_EXECUTION_BLOCK_AVOID, SESSION_EXECUTION_BLOCK_CLOSED, SESSION_QUALITY_ENABLED, SIGNAL_EXECUTABLE_FALSE_WHEN_FRESHNESS_BLOCKS, TRENDING_ADX_CLASS, VOLATILITY_SCALER_BANDS
+23:59:18 [INFO] [TIMED_EXIT] Monitor thread started
+[KIMI] Bridge routes registered at /api/kimi/*  (+ /api/conductor/last mirror)
+23:59:18 [INFO] [research_lab_routes] Session Autopilot routes registered
+23:59:18 [INFO] [research_lab_routes] Research Lab routes registered
+23:59:18 [INFO] [research_agent_routes] Research Agent routes registered
+23:59:18 [INFO] [ai_evaluation_routes] AI Evaluation routes registered
+=== Engine A orthogonal vote A/B: arm off ===
+ENGINE_A_ORTHO_VOTE_ENABLED before set: False
+ENGINE_A_COT_MODE before set: 'confirm'
+ENGINE_A_ORTHO_VOTE_ENABLED active: False
+ENGINE_A_COT_MODE active: 'confirm'
+Pairs: EUR/USD, GBP/JPY, BTC/USDT, SOL/USDT, XAU/USD, NASDAQ-100
+
+--- EUR/USD (forex, source=mt5) ---
+23:59:18 [INFO] [MT5] Logged in to Pepperstone-Demo (account 61525285)
+23:59:18 [INFO] [MT5] Account: 61525285 | Balance: 45388.92 | Equity: 45489.75 | Server: Pepperstone-Demo
+23:59:18 [WARNING] [MT5] EUR/USD H4: tick TZ inference out-of-band vs clock (unshifted_age=93559s); offset kept 0
+23:59:18 [WARNING] [MT5] EUR/USD H1: tick TZ inference out-of-band vs clock (unshifted_age=82759s); offset kept 0
+23:59:48 [INFO] [TIMED_EXIT] State hydrated from db: 48 trail entries, 1 lock entries, 74 peak_r entries, 42 tp_cleared entries
+23:59:48 [INFO] [TIMED_EXIT] below_activation watch: SPY style=swing dir=LONG current_r=0.31 peak_r=0.44000000000000167 activation_r=1.50 mode=full
+00:00:32 [INFO] [TIMED_EXIT] below_activation watch: SPY style=swing dir=LONG current_r=0.31 peak_r=0.44000000000000167 activation_r=1.50 mode=full
+00:01:03 [INFO] [TIMED_EXIT] below_activation watch: SPY style=swing dir=LONG current_r=0.31 peak_r=0.44000000000000167 activation_r=1.50 mode=full
+00:01:15 [WARNING] [BT] EUR/USD done: 48 trades, WR 29.2%, PF 0.59, Expect -0.318R, SQN -1.66, Sharpe -1.3, Sortino -1.54, IS:-1.4/OOS:-0.85, MC-P95 DD 10.7%, MaxRec 9 bars
+RESULT trades=48 winRate=29.2 profitFactor=0.59 sqn=-1.66 sharpe=-1.3 sortino=-1.54 maxDrawdownPct=6.7 expectancy=-0.318
+
+--- GBP/JPY (forex, source=mt5) ---
+00:01:15 [WARNING] [MT5] GBP/JPY H4: tick TZ inference out-of-band vs clock (unshifted_age=93676s); offset kept 0
+00:01:15 [WARNING] [MT5] GBP/JPY H1: tick TZ inference out-of-band vs clock (unshifted_age=82876s); offset kept 0
+00:01:33 [INFO] [TIMED_EXIT] below_activation watch: SPY style=swing dir=LONG current_r=0.31 peak_r=0.44000000000000167 activation_r=1.50 mode=full
+00:02:04 [INFO] [TIMED_EXIT] below_activation watch: SPY style=swing dir=LONG current_r=0.31 peak_r=0.44000000000000167 activation_r=1.50 mode=full
+00:02:34 [INFO] [TIMED_EXIT] below_activation watch: SPY style=swing dir=LONG current_r=0.31 peak_r=0.44000000000000167 activation_r=1.50 mode=full
+00:03:05 [INFO] [TIMED_EXIT] below_activation watch: SPY style=swing dir=LONG current_r=0.31 peak_r=0.44000000000000167 activation_r=1.50 mode=full
+00:03:17 [WARNING] [BT] GBP/JPY done: 70 trades, WR 44.3%, PF 0.99, Expect -0.006R, SQN -0.04, Sharpe -0.02, Sortino -0.03, IS:0.08/OOS:-0.16, MC-P95 DD 8.4%, MaxRec 27 bars
+RESULT trades=70 winRate=44.3 profitFactor=0.99 sqn=-0.04 sharpe=-0.02 sortino=-0.03 maxDrawdownPct=1.8 expectancy=-0.006
+
+--- BTC/USDT (crypto, source=binance) ---
+00:03:35 [INFO] [TIMED_EXIT] below_activation watch: SPY style=swing dir=LONG current_r=0.31 peak_r=0.44000000000000167 activation_r=1.50 mode=full
+00:04:06 [INFO] [TIMED_EXIT] below_activation watch: SPY style=swing dir=LONG current_r=0.31 peak_r=0.44000000000000167 activation_r=1.50 mode=full
+00:04:37 [INFO] [TIMED_EXIT] below_activation watch: SPY style=swing dir=LONG current_r=0.31 peak_r=0.44000000000000167 activation_r=1.50 mode=full
+00:05:07 [INFO] [TIMED_EXIT] below_activation watch: SPY style=swing dir=LONG current_r=0.31 peak_r=0.44000000000000167 activation_r=1.50 mode=full
+00:05:38 [INFO] [TIMED_EXIT] below_activation watch: SPY style=swing dir=LONG current_r=0.31 peak_r=0.44000000000000167 activation_r=1.50 mode=full
+00:06:09 [INFO] [TIMED_EXIT] below_activation watch: SPY style=swing dir=LONG current_r=0.31 peak_r=0.44000000000000167 activation_r=1.50 mode=full
+00:06:39 [INFO] [TIMED_EXIT] below_activation watch: SPY style=swing dir=LONG current_r=0.31 peak_r=0.44000000000000167 activation_r=1.50 mode=full
+00:07:01 [WARNING] [BT] BTC/USDT done: 66 trades, WR 33.3%, PF 0.78, Expect -0.165R, SQN -0.98, Sharpe -0.72, Sortino -0.87, IS:-1.55/OOS:0.1, MC-P95 DD 15.3%, MaxRec 1 bars
+RESULT trades=66 winRate=33.3 profitFactor=0.78 sqn=-0.98 sharpe=-0.72 sortino=-0.87 maxDrawdownPct=12.1 expectancy=-0.165
+
+--- SOL/USDT (crypto, source=binance) ---
+00:07:10 [INFO] [TIMED_EXIT] below_activation watch: SPY style=swing dir=LONG current_r=0.31 peak_r=0.44000000000000167 activation_r=1.50 mode=full
+00:07:40 [INFO] [TIMED_EXIT] below_activation watch: SPY style=swing dir=LONG current_r=0.31 peak_r=0.44000000000000167 activation_r=1.50 mode=full
+00:08:11 [INFO] [TIMED_EXIT] below_activation watch: SPY style=swing dir=LONG current_r=0.31 peak_r=0.44000000000000167 activation_r=1.50 mode=full
+00:08:41 [INFO] [TIMED_EXIT] below_activation watch: SPY style=swing dir=LONG current_r=0.31 peak_r=0.44000000000000167 activation_r=1.50 mode=full
+00:09:12 [INFO] [TIMED_EXIT] below_activation watch: SPY style=swing dir=LONG current_r=0.31 peak_r=0.44000000000000167 activation_r=1.50 mode=full
+00:09:42 [INFO] [TIMED_EXIT] below_activation watch: SPY style=swing dir=LONG current_r=0.31 peak_r=0.44000000000000167 activation_r=1.50 mode=full
+00:10:13 [INFO] [TIMED_EXIT] below_activation watch: SPY style=swing dir=LONG current_r=0.31 peak_r=0.44000000000000167 activation_r=1.50 mode=full
+00:10:30 [WARNING] [BT] SOL/USDT done: 46 trades, WR 34.8%, PF 0.9, Expect -0.062R, SQN -0.31, Sharpe -0.28, Sortino -0.37, IS:-1.54/OOS:0.68, MC-P95 DD 12.6%, MaxRec 34 bars
+RESULT trades=46 winRate=34.8 profitFactor=0.9 sqn=-0.31 sharpe=-0.28 sortino=-0.37 maxDrawdownPct=9.5 expectancy=-0.062
+
+--- XAU/USD (commodity, source=mt5) ---
+00:10:30 [WARNING] [MT5] XAU/USD H4: tick TZ inference out-of-band vs clock (unshifted_age=94230s); offset kept 0
+00:10:34 [WARNING] [MT5] XAU/USD H1: tick TZ inference out-of-band vs clock (unshifted_age=83435s); offset kept 0
+00:10:43 [INFO] [TIMED_EXIT] below_activation watch: SPY style=swing dir=LONG current_r=0.31 peak_r=0.44000000000000167 activation_r=1.50 mode=full
+00:11:00 [WARNING] [BT] XAU/USD done: 20 trades, WR 65.0%, PF 2.59, Expect 0.586R, SQN 2.07, Sharpe 1.77, Sortino 1.98, IS:1.55/OOS:0, MC-P95 DD 4.2%, MaxRec 9 bars
+RESULT trades=20 winRate=65.0 profitFactor=2.59 sqn=2.07 sharpe=1.77 sortino=1.98 maxDrawdownPct=5.5 expectancy=0.586
+
+--- NASDAQ-100 (index, source=mt5) ---
+00:11:01 [WARNING] [MT5] NASDAQ-100 H4: tick TZ inference out-of-band vs clock (unshifted_age=94261s); offset kept 0
+00:11:01 [WARNING] [MT5] NASDAQ-100 H1: tick TZ inference out-of-band vs clock (unshifted_age=83461s); offset kept 0
+00:11:13 [INFO] [TIMED_EXIT] below_activation watch: SPY style=swing dir=LONG current_r=0.31 peak_r=0.44000000000000167 activation_r=1.50 mode=full
+00:11:19 [WARNING] [BT] NASDAQ-100 done: 19 trades, WR 47.4%, PF 1.06, Expect 0.028R, SQN 0.11, Sharpe 0.09, Sortino 0.1, IS:-0.09/OOS:0.24, MC-P95 DD 6.7%, MaxRec 0 bars
+RESULT trades=19 winRate=47.4 profitFactor=1.06 sqn=0.11 sharpe=0.09 sortino=0.1 maxDrawdownPct=3.3 expectancy=0.028
+
+=== JSON SUMMARY ===
+[
+  {
+    "error": null,
+    "expectancy": -0.318,
+    "maxDrawdownPct": 6.7,
+    "pair": "EUR/USD",
+    "profitFactor": 0.59,
+    "sharpe": -1.3,
+    "sortino": -1.54,
+    "sqn": -1.66,
+    "totalTrades": 48,
+    "type": "forex",
+    "winRate": 29.2
+  },
+  {
+    "error": null,
+    "expectancy": -0.006,
+    "maxDrawdownPct": 1.8,
+    "pair": "GBP/JPY",
+    "profitFactor": 0.99,
+    "sharpe": -0.02,
+    "sortino": -0.03,
+    "sqn": -0.04,
+    "totalTrades": 70,
+    "type": "forex",
+    "winRate": 44.3
+  },
+  {
+    "error": null,
+    "expectancy": -0.165,
+    "maxDrawdownPct": 12.1,
+    "pair": "BTC/USDT",
+    "profitFactor": 0.78,
+    "sharpe": -0.72,
+    "sortino": -0.87,
+    "sqn": -0.98,
+    "totalTrades": 66,
+    "type": "crypto",
+    "winRate": 33.3
+  },
+  {
+    "error": null,
+    "expectancy": -0.062,
+    "maxDrawdownPct": 9.5,
+    "pair": "SOL/USDT",
+    "profitFactor": 0.9,
+    "sharpe": -0.28,
+    "sortino": -0.37,
+    "sqn": -0.31,
+    "totalTrades": 46,
+    "type": "crypto",
+    "winRate": 34.8
+  },
+  {
+    "error": null,
+    "expectancy": 0.586,
+    "maxDrawdownPct": 5.5,
+    "pair": "XAU/USD",
+    "profitFactor": 2.59,
+    "sharpe": 1.77,
+    "sortino": 1.98,
+    "sqn": 2.07,
+    "totalTrades": 20,
+    "type": "commodity",
+    "winRate": 65.0
+  },
+  {
+    "error": null,
+    "expectancy": 0.028,
+    "maxDrawdownPct": 3.3,
+    "pair": "NASDAQ-100",
+    "profitFactor": 1.06,
+    "sharpe": 0.09,
+    "sortino": 0.1,
+    "sqn": 0.11,
+    "totalTrades": 19,
+    "type": "index",
+    "winRate": 47.4
+  }
+]
+wrote tmp/ab2_off.json
+wrote tmp/ab2_combined.json
