@@ -16,7 +16,13 @@ from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
-from config import CONFIG, create_ai_client, get_ai_api_key, get_ai_provider_label
+from config import (
+    CONFIG,
+    create_ai_client,
+    get_ai_model,
+    get_ai_provider_label,
+    resolve_ai_review_runtime,
+)
 from data_feeds import http_requests
 
 log = logging.getLogger("athena")
@@ -623,6 +629,25 @@ def _parse_news_ai_json(raw: str) -> dict:
     raise json.JSONDecodeError("no JSON object in model output", s, 0)
 
 
+def news_sentiment_ai_runtime(config: dict | None = None) -> dict:
+    """Resolve xAI/Grok provider, API key, and model for News AI (independent of AI_REVIEW_PROVIDER)."""
+    cfg = CONFIG if config is None else config
+    requested = str(_config_value(cfg, "NEWS_SENTIMENT_AI_PROVIDER", "grok") or "grok").strip() or "grok"
+    runtime = resolve_ai_review_runtime(cfg, requested=requested)
+    provider = str(runtime.get("provider") or requested).strip() or requested
+    model = get_ai_model(
+        cfg,
+        "NEWS_SENTIMENT_MODEL",
+        "grok-4.3",
+        provider=provider,
+    )
+    return {
+        **runtime,
+        "provider": provider,
+        "model": model,
+    }
+
+
 def get_news_sentiment(
     pair: dict,
     *,
@@ -631,13 +656,22 @@ def get_news_sentiment(
     eodhd_ticker_for_pair: Callable[[dict], Optional[str]],
     current_price: Optional[float] = None,
     news_limit: int = 8,
-    model: str = "grok-4.3",
+    model: str | None = None,
     config: dict | None = None,
 ) -> Optional[dict]:
     """Resolve EODHD ticker → fetch news → LLM structured sentiment JSON.
 
     Returns parsed result dict or None on failure / no articles.
     """
+    cfg = CONFIG if config is None else config
+    runtime = news_sentiment_ai_runtime(cfg)
+    resolved_model = str(model or runtime.get("model") or "grok-4.3").strip() or "grok-4.3"
+    api_key = str(xai_api_key or "").strip() or str(runtime.get("api_key") or "").strip()
+    if not api_key:
+        display = pair.get("display") or pair.get("symbol") or ""
+        log.warning("[NewsAI] No xAI API key for pair display=%s", display)
+        return None
+
     ticker = eodhd_ticker_for_pair(pair)
     if not ticker:
         log.warning("[NewsAI] No EODHD ticker for pair display=%s", pair.get("display"))
@@ -666,11 +700,15 @@ def get_news_sentiment(
     )
 
     try:
-        client = create_ai_client(CONFIG, api_key=xai_api_key)
-        _temp = float(CONFIG.get("AI_TEMPERATURE", 0.3))
-        _max_tokens = int(CONFIG.get("NEWS_SENTIMENT_MAX_TOKENS", 400) or 400)
+        client = create_ai_client(
+            cfg,
+            api_key=api_key,
+            provider=runtime.get("provider") or "grok",
+        )
+        _temp = float(cfg.get("AI_TEMPERATURE", 0.3))
+        _max_tokens = int(cfg.get("NEWS_SENTIMENT_MAX_TOKENS", 400) or 400)
         response = client.chat.completions.create(
-            model=model,
+            model=resolved_model,
             max_tokens=_max_tokens,
             temperature=_temp,
             messages=[
@@ -694,7 +732,7 @@ def get_news_sentiment(
             _log_news_ai_review(
                 display=display,
                 asset_class=asset_class,
-                model=model,
+                model=resolved_model,
                 user_prompt=user_prompt,
                 result=None,
                 parse_success=False,
@@ -712,7 +750,7 @@ def get_news_sentiment(
             _log_news_ai_review(
                 display=display,
                 asset_class=asset_class,
-                model=model,
+                model=resolved_model,
                 user_prompt=user_prompt,
                 result=None,
                 parse_success=False,
@@ -729,7 +767,7 @@ def get_news_sentiment(
         _log_news_ai_review(
             display=display,
             asset_class=asset_class,
-            model=model,
+            model=resolved_model,
             user_prompt=user_prompt,
             result=result,
             parse_success=True,
@@ -765,7 +803,7 @@ def get_news_sentiment(
         _log_news_ai_review(
             display=display,
             asset_class=asset_class,
-            model=model,
+            model=resolved_model,
             user_prompt=user_prompt,
             result=None,
             parse_success=False,
@@ -908,16 +946,13 @@ def apply_news_sentiment_to_scan_result(
         return
 
     eod = os.environ.get("EODHD_KEY", "").strip()
-    xai = get_ai_api_key(config)
+    runtime = news_sentiment_ai_runtime(config)
+    xai = str(runtime.get("api_key") or "").strip()
     if not eod or not xai:
         return
 
     ttl = float(config.get("NEWS_SENTIMENT_CACHE_TTL_SEC", 900))
-    model = str(
-        config.get("NEWS_SENTIMENT_MODEL")
-        or config.get("AI_MODEL")
-        or config.get("VISION_MODEL", "grok-4.3")
-    )
+    model = str(runtime.get("model") or "grok-4.3")
     max_s = float(max_score if max_score is not None else res.get("maxScoreOverride") or 3.0)
     threshold_value = float(threshold if threshold is not None else res.get("threshold") or 0.0)
     major_mode_for_filter = str(

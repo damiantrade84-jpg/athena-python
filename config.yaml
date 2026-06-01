@@ -1804,6 +1804,8 @@ DEBATE_MODEL: "grok-4.3"
 
 VISION_MODEL: "grok-4.3"          # /api/chart-analysis
 
+NEWS_SENTIMENT_AI_PROVIDER: "grok"  # Always xAI for news; independent of AI_REVIEW_PROVIDER
+
 NEWS_SENTIMENT_MODEL: "grok-4.3"  # News AI text; defaults to AI_MODEL if empty - uses XAI_API_KEY
 
 # Default OpenAI-compatible SDK read timeout is much longer; keep advisory AI bounded.

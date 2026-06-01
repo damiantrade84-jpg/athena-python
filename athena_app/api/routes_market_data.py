@@ -1339,7 +1339,11 @@ def api_news_sentiment():
 
     Uses ``EODHD_KEY`` and the configured AI API key. Model: ``NEWS_SENTIMENT_MODEL`` or ``AI_MODEL``.
     """
-    from news_sentiment_feed import get_news_sentiment, news_to_confluence_vote
+    from news_sentiment_feed import (
+        get_news_sentiment,
+        news_sentiment_ai_runtime,
+        news_to_confluence_vote,
+    )
 
     sym = request.args.get("symbol")
     if not sym and request.method == "POST":
@@ -1359,9 +1363,10 @@ def api_news_sentiment():
     if not eod_key:
         return jsonify({"error": "EODHD_KEY not set"}), 503
 
-    ai_key = get_ai_api_key(CONFIG)
+    runtime = news_sentiment_ai_runtime(CONFIG)
+    ai_key = str(runtime.get("api_key") or "").strip()
     if not ai_key:
-        return jsonify({"error": "AI API key not set"}), 500
+        return jsonify({"error": "XAI_API_KEY not set"}), 503
 
     price = None
     disp = pair.get("display", "")
@@ -1373,14 +1378,13 @@ def api_news_sentiment():
     except Exception:
         pass
 
-    model = get_ai_model(CONFIG, "NEWS_SENTIMENT_MODEL", "grok-4.3")
     result = get_news_sentiment(
         pair,
         eodhd_api_key=eod_key,
         xai_api_key=ai_key,
         eodhd_ticker_for_pair=_eodhd_ticker_for_pair,
         current_price=price,
-        model=model,
+        model=str(runtime.get("model") or "grok-4.3"),
     )
     if not result:
         return (

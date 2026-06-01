@@ -436,3 +436,95 @@ def test_news_delta_is_capped(monkeypatch):
     assert res["newsSentimentRawDelta"] == pytest.approx(3.0)
     assert res["newsSentimentDelta"] == pytest.approx(0.25)
     assert res["score"] == pytest.approx(2.25)
+
+
+def test_news_sentiment_ai_runtime_pins_grok_when_global_openai(monkeypatch):
+    monkeypatch.setenv("AI_REVIEW_PROVIDER", "openai")
+    monkeypatch.setenv("OPENAI_API_KEY", "openai-key")
+    monkeypatch.setenv("XAI_API_KEY", "xai-key")
+    cfg = {
+        "AI_REVIEW_PROVIDER": "openai",
+        "NEWS_SENTIMENT_AI_PROVIDER": "grok",
+        "NEWS_SENTIMENT_MODEL": "grok-4.3",
+    }
+    runtime = nsf.news_sentiment_ai_runtime(cfg)
+    assert runtime["provider"] == "grok"
+    assert runtime["api_key"] == "xai-key"
+    assert runtime["model"] == "grok-4.3"
+
+
+def test_get_news_sentiment_create_ai_client_uses_grok_provider(monkeypatch):
+    monkeypatch.setenv("AI_REVIEW_PROVIDER", "openai")
+    monkeypatch.setenv("OPENAI_API_KEY", "openai-key")
+    monkeypatch.setenv("XAI_API_KEY", "xai-key")
+    create_calls = []
+
+    class FakeResponse:
+        choices = [
+            type(
+                "Choice",
+                (),
+                {
+                    "message": type(
+                        "Message",
+                        (),
+                        {
+                            "content": json.dumps(
+                                {
+                                    "sentiment_score": 0.1,
+                                    "confidence": 0.8,
+                                    "direction": "neutral",
+                                    "key_themes": [],
+                                    "major_event_detected": False,
+                                    "major_event_description": None,
+                                    "reasoning_summary": "ok",
+                                    "article_count_used": 1,
+                                }
+                            )
+                        },
+                    )()
+                },
+            )()
+        ]
+
+    class FakeCompletions:
+        def create(self, **_kwargs):
+            return FakeResponse()
+
+    class FakeClient:
+        chat = type("Chat", (), {"completions": FakeCompletions()})()
+
+    def _capture_create(_cfg, api_key=None, provider=None, **_kwargs):
+        create_calls.append({"api_key": api_key, "provider": provider})
+        return FakeClient()
+
+    monkeypatch.setattr(nsf, "create_ai_client", _capture_create)
+    monkeypatch.setattr(
+        nsf,
+        "fetch_news_sources",
+        lambda *_a, **_k: {
+            "articles": [{"date": "2026-05-24", "title": "SPY headline", "content": "Body"}],
+            "sourceMetadata": [],
+            "freshArticleCount": 1,
+            "staleArticleCount": 0,
+        },
+    )
+
+    cfg = {
+        "AI_REVIEW_PROVIDER": "openai",
+        "NEWS_SENTIMENT_AI_PROVIDER": "grok",
+        "NEWS_SENTIMENT_MODEL": "grok-4.3",
+    }
+    result = nsf.get_news_sentiment(
+        {"display": "SPY", "symbol": "SPY", "type": "stock"},
+        eodhd_api_key="eod",
+        xai_api_key="",
+        eodhd_ticker_for_pair=lambda _p: "SPY.US",
+        config=cfg,
+    )
+
+    assert len(create_calls) == 1
+    assert create_calls[0]["provider"] == "grok"
+    assert create_calls[0]["api_key"] == "xai-key"
+    assert result is not None
+    assert result["direction"] == "neutral"
