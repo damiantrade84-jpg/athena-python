@@ -450,7 +450,7 @@ ENGINE_A_ORTHO_CONVICTION_WEIGHT_BY_CLASS:
 # trend direction, score math, SL/TP, risk_check, or sizing.
 # Defaults are intentionally conservative after frozen AB6: no pair/class had
 # n>=30 AND SQN>2.0. Enable by display or score_group only after that evidence.
-ENGINE_A_TRADE_ELIGIBILITY_ENABLED: true
+ENGINE_A_TRADE_ELIGIBILITY_ENABLED: false
 ENGINE_A_TRADE_ENABLED_DEFAULT: false
 ENGINE_A_TRADE_ENABLED_BY_CLASS:
   forex: false       # FX majors were n>=30 and negative; research-only for Engine A.
