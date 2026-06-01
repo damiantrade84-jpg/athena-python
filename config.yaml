@@ -3792,46 +3792,42 @@ TIMED_EXIT:
   # Pre-activation profit protection. Before the chandelier activates, remember
   # the best R reached after a small profit threshold. If price gives that back
   # to the configured floor, close instead of letting a green trade turn red.
-  pre_activation_profit_protect_enabled: true
+  #
+  # DISABLED: close_r=0.0 was closing every trade at breakeven on normal noise.
+  # All recent Engine A/B trades exited as TRAIL_PROFIT_ROUNDTRIP at ~0R instead
+  # of riding to SL or TP. Re-enable only after calibrating close_r/giveback_r
+  # with wider thresholds (close_r ≤ -0.15, giveback_r ≥ 0.40).
+  pre_activation_profit_protect_enabled: false
   pre_activation_profit_arm_r:
-    scalp: 0.20
-    intraday: 0.25
-    swing: 0.35
+    scalp: 0.30
+    intraday: 0.40
+    swing: 0.50
   pre_activation_profit_close_r:
-    scalp: 0.0
-    intraday: 0.0
-    swing: 0.0
-  # Reverted to pre-commit 0.15/0.20/0.30 (was widened to 0.25/0.40/0.50 in
-  # 02f1cfa5). Re-diagnosis of closed Engine A trades (tools/diagnose_engine_a_stops.py)
-  # showed give-back/round-trip trades peak at a median ~0.28R, not ~0.61R, so the
-  # wider budget stopped the early small-profit lock-in (giveback_close) from firing
-  # and let modest-peak winners ride back to the break-even round-trip floor (scratch
-  # -> small loss after fees). The tighter budget restores the early lock-in.
+    scalp: -0.15
+    intraday: -0.15
+    swing: -0.15
   pre_activation_profit_giveback_r:
-    scalp: 0.15
-    intraday: 0.20
-    swing: 0.30
+    scalp: 0.40
+    intraday: 0.50
+    swing: 0.60
   pre_activation_profit_arm_r_by_venue:
     bybit:
-      scalp: 0.15
-      intraday: 0.20
-      swing: 0.30
+      scalp: 0.25
+      intraday: 0.35
+      swing: 0.45
     mt5:
-      scalp: 0.20
-      intraday: 0.30
-      swing: 0.40
-  # Reverted in step with pre_activation_profit_giveback_r above to the
-  # pre-commit per-venue values (was widened to bybit 0.20/0.30/0.45,
-  # mt5 0.25/0.40/0.50 in 02f1cfa5).
+      scalp: 0.30
+      intraday: 0.40
+      swing: 0.50
   pre_activation_profit_giveback_r_by_venue:
     bybit:
-      scalp: 0.10
-      intraday: 0.15
-      swing: 0.25
+      scalp: 0.30
+      intraday: 0.40
+      swing: 0.50
     mt5:
-      scalp: 0.15
-      intraday: 0.20
-      swing: 0.30
+      scalp: 0.35
+      intraday: 0.45
+      swing: 0.55
 
   # Peak-R give-back close. Once chandelier is active, track the highest R
   # the trade reaches; if current R drops below peak by giveback_r, close
