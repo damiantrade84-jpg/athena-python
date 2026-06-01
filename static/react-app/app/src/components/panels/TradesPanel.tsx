@@ -32,6 +32,8 @@ interface OpenTradesTimedResp {
 
 type AnyPos = Record<string, unknown>;
 
+const OPEN_TRADES_POLL_MS = 2000;
+
 function asArray<T = AnyPos>(x: unknown): T[] {
   if (Array.isArray(x)) return x as T[];
   if (x && typeof x === 'object' && Array.isArray((x as { positions?: unknown }).positions)) {
@@ -102,7 +104,7 @@ export default function TradesPanel() {
   const [auditOrphanTicket, setAuditOrphanTicket] = useState<string | null>(null);
   const [auditOrphanBulk, setAuditOrphanBulk] = useState(false);
 
-  const { data: openTradesResp, loading: openLoading, error: openError, refresh: refreshOpen } = useApiPoll<OpenTradesTimedResp>('/api/open-trades-timed', 30000);
+  const { data: openTradesResp, loading: openLoading, error: openError, refresh: refreshOpen } = useApiPoll<OpenTradesTimedResp>('/api/open-trades-timed', OPEN_TRADES_POLL_MS);
   const { data: performance, loading: perfLoading, error: perfError, refresh: refreshPerf } = useApiPoll<PerformanceMetrics>('/api/performance', 0);
   const { data: autoLog } = useApiPoll<unknown>('/api/auto-trade/log', 0);
   const { data: failedExecs } = useApiPoll<unknown>('/api/failed-executions', 0);

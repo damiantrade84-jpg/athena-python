@@ -34,6 +34,8 @@ interface OpenTradesTimedResponse {
   audit_unresolved?: Record<string, unknown>[];
 }
 
+const OPEN_TRADES_POLL_MS = 2000;
+
 const SESSIONS: { name: string; startUtc: number; endUtc: number; emoji?: string }[] = [
   { name: 'Sydney', startUtc: 22, endUtc: 7 },
   { name: 'Tokyo', startUtc: 0, endUtc: 9 },
@@ -67,7 +69,7 @@ export default function DashboardPanel() {
   const { data: guardianStatus, loading: guardianLoading, error: guardianError, refresh: refreshGuardian }
     = useApiPoll<GuardianApiStatus>('/api/guardian/status', 15000);
   const { data: openTradesRaw, loading: tradesLoading, error: tradesError, refresh: refreshTrades }
-    = useApiPoll<OpenTrade[] | OpenTradesTimedResponse>('/api/open-trades-timed', 15000);
+    = useApiPoll<OpenTrade[] | OpenTradesTimedResponse>('/api/open-trades-timed', OPEN_TRADES_POLL_MS);
   const { data: lastScan, error: lastScanError, refresh: refreshScan }
     = useApiPoll<LastScanResponse>('/api/last-scan?limit=6', 60000);
   const { data: performance, error: perfError }

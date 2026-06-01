@@ -1641,7 +1641,12 @@ def _maybe_repair_mt5_broker_sl(row: dict, live: dict) -> None:
         )
 
 
-def _handle_mt5_row(row: dict, tcfg: dict, db_path: str | None = None) -> None:
+def _handle_mt5_row(
+    row: dict,
+    tcfg: dict,
+    db_path: str | None = None,
+    live_position: dict | None = None,
+) -> None:
     """Apply timed exit logic to a single MT5 trade row."""
     try:
         from mt5_executor import (
@@ -1663,20 +1668,30 @@ def _handle_mt5_row(row: dict, tcfg: dict, db_path: str | None = None) -> None:
     if style not in ("scalp", "intraday", "swing"):
         style = "intraday"
 
-    # Get live position data (once per tick — also used for SL repair on all engines)
-    pos_result = mt5_get_positions()
-    if pos_result.get("error"):
-        log.warning(
-            "[TIMED_EXIT] mt5_get_positions error for ticket=%s pair=%s — skip tick (%s)",
-            ticket,
-            row.get("pair"),
-            pos_result.get("error"),
+    if live_position is not None:
+        live = live_position
+        if str(live.get("ticket", "")).strip() != str(ticket):
+            log.warning(
+                "[TIMED_EXIT] MT5 live snapshot mismatch for ticket=%s pair=%s — skip tick",
+                ticket,
+                row.get("pair"),
+            )
+            return
+    else:
+        # Get live position data (used for SL repair and software exits)
+        pos_result = mt5_get_positions()
+        if pos_result.get("error"):
+            log.warning(
+                "[TIMED_EXIT] mt5_get_positions error for ticket=%s pair=%s — skip tick (%s)",
+                ticket,
+                row.get("pair"),
+                pos_result.get("error"),
+            )
+            return
+        live = next(
+            (p for p in pos_result.get("positions", []) if p.get("ticket") == ticket),
+            None,
         )
-        return
-    live = next(
-        (p for p in pos_result.get("positions", []) if p.get("ticket") == ticket),
-        None,
-    )
     if not live:
         return  # position already closed
 
@@ -2018,7 +2033,12 @@ def _handle_mt5_row(row: dict, tcfg: dict, db_path: str | None = None) -> None:
             )
 
 
-def _handle_bybit_row(row: dict, tcfg: dict, db_path: str | None = None) -> None:
+def _handle_bybit_row(
+    row: dict,
+    tcfg: dict,
+    db_path: str | None = None,
+    live_position: dict | None = None,
+) -> None:
     """Apply timed exit logic to a single Bybit trade row."""
     try:
         from bybit_executor import (
@@ -2048,15 +2068,25 @@ def _handle_bybit_row(row: dict, tcfg: dict, db_path: str | None = None) -> None
     scfg = tcfg[style]
     mins = _minutes_open(row["ts"])
 
-    # Get live position data
-    pos_result = bybit_get_positions()
-    if pos_result.get("error"):
-        return
-    live = next(
-        (p for p in pos_result.get("positions", [])
-         if symbols_match(p.get("pair"), pair)),
-        None,
-    )
+    if live_position is not None:
+        live = live_position
+        if not symbols_match(live.get("pair"), pair):
+            log.warning(
+                "[TIMED_EXIT] Bybit live snapshot mismatch for pair=%s live_pair=%s — skip tick",
+                pair,
+                live.get("pair"),
+            )
+            return
+    else:
+        # Get live position data
+        pos_result = bybit_get_positions()
+        if pos_result.get("error"):
+            return
+        live = next(
+            (p for p in pos_result.get("positions", [])
+             if symbols_match(p.get("pair"), pair)),
+            None,
+        )
     if not live:
         return  # already closed
 
@@ -2457,7 +2487,7 @@ def _run_check(db_path: str, config_fn) -> None:
             _warn_unmatched_live_position(pos, venue="mt5")
             continue
         try:
-            _handle_mt5_row(row, tcfg, db_path)
+            _handle_mt5_row(row, tcfg, db_path, live_position=pos)
         except Exception as e:
             log.debug(f"[TIMED_EXIT] mt5 row error pair={row.get('pair')}: {e}")
 
@@ -2475,7 +2505,7 @@ def _run_check(db_path: str, config_fn) -> None:
             _warn_unmatched_live_position(pos, venue="bybit")
             continue
         try:
-            _handle_bybit_row(row, tcfg, db_path)
+            _handle_bybit_row(row, tcfg, db_path, live_position=pos)
         except Exception as e:
             log.debug(f"[TIMED_EXIT] bybit row error pair={row.get('pair')}: {e}")
 

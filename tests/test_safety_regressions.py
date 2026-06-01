@@ -445,6 +445,91 @@ def test_timed_exit_symbols_match_fallback_when_ticket_missing():
     assert matched["pair"] == "EUR/USD"
 
 
+def test_timed_exit_reuses_cycle_position_snapshots(monkeypatch):
+    import bybit_executor
+    import mt5_executor
+    import timed_exit_monitor
+
+    now = datetime.now(timezone.utc).isoformat()
+    audit_rows = [
+        {
+            "id": 1,
+            "ticket": "123",
+            "pair": "EUR/USD",
+            "direction": "LONG",
+            "entry_price": 1.1000,
+            "sl": 1.0900,
+            "tp": 1.1200,
+            "volume": 0.01,
+            "grade": "EXECUTED",
+            "engine": "engine_a",
+            "exit_mode": "traditional_static",
+            "style": "intraday",
+            "ts": now,
+            "exit_time": None,
+        },
+        {
+            "id": 2,
+            "ticket": "bybit-exec",
+            "pair": "BTC/USDT",
+            "direction": "LONG",
+            "entry_price": 100.0,
+            "sl": 99.0,
+            "tp": 104.0,
+            "volume": 0.1,
+            "grade": "EXECUTED",
+            "engine": "engine_a",
+            "exit_mode": "traditional_static",
+            "style": "intraday",
+            "ts": now,
+            "exit_time": None,
+        },
+    ]
+    mt5_position = {
+        "ticket": "123",
+        "pair": "EUR/USD",
+        "direction": "LONG",
+        "entry": 1.1000,
+        "currentPrice": 1.1010,
+        "sl": 1.0900,
+        "tp": 1.1200,
+        "profit": 1.0,
+        "volume": 0.01,
+    }
+    bybit_position = {
+        "ticket": "0",
+        "pair": "BTC/USDT",
+        "symbol": "BTC/USDT:USDT",
+        "direction": "LONG",
+        "entry": 100.0,
+        "markPrice": 101.0,
+        "sl": 99.0,
+        "tp": 104.0,
+        "profit": 2.0,
+        "volume": 0.1,
+    }
+    calls = {"mt5": 0, "bybit": 0}
+
+    def fake_mt5_get_positions():
+        calls["mt5"] += 1
+        return {"error": False, "positions": [dict(mt5_position)]}
+
+    def fake_bybit_get_positions():
+        calls["bybit"] += 1
+        return {"error": False, "positions": [dict(bybit_position)]}
+
+    monkeypatch.setattr(timed_exit_monitor, "_state_db_path", "hydrated")
+    monkeypatch.setattr(timed_exit_monitor, "_load_recent_audit_rows", lambda _db: audit_rows)
+    monkeypatch.setattr(mt5_executor, "mt5_get_positions", fake_mt5_get_positions)
+    monkeypatch.setattr(bybit_executor, "bybit_get_positions", fake_bybit_get_positions)
+    monkeypatch.setattr(mt5_executor, "mt5_close_position", lambda *_a, **_k: pytest.fail("unexpected MT5 close"))
+    monkeypatch.setattr(bybit_executor, "bybit_close_position", lambda *_a, **_k: pytest.fail("unexpected Bybit close"))
+
+    timed_exit_monitor._run_check("audit.db", lambda: {"TIMED_EXIT": {"enabled": True}})
+
+    assert calls == {"mt5": 1, "bybit": 1}
+
+
 def test_load_recent_audit_rows_includes_open_tickets_outside_recent_window():
     import sqlite3
     import tempfile
