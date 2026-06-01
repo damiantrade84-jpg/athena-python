@@ -6,7 +6,7 @@ Depends on: config.CONFIG, indicators (calc_* functions).
 import logging
 import warnings
 from datetime import datetime, timezone
-from typing import List, Optional
+from typing import Any, List, Optional, TypedDict
 
 from config import CONFIG
 from engine_a_groups import ENGINE_A_KNOWN_SCORE_GROUPS
@@ -15,6 +15,22 @@ from indicators import (
 )
 
 log = logging.getLogger("athena")
+
+
+class FactorDiagnosticsPayload(TypedDict, total=False):
+    directionalScore: float | None
+    nondirectionalScore: float | None
+    feedStatus: dict[str, Any]
+    addon_type: str | None
+    addon_value: float | None
+    momentumQuality: float | None
+    adxMultiplier: float | None
+    conviction: float | None
+    signalStatus: str | None
+    factorBreakdown: dict[str, Any]
+    abortReason: str | None
+    engineVersion: str
+    scorerSelected: str
 
 
 def _safe_feed_mult(feed_status: dict, key: str) -> float | None:
@@ -78,6 +94,20 @@ def _vote_sign(val) -> int:
     if val < 0:
         return -1
     return 0
+
+
+_LEGACY_VOTE_FACTOR_MAP = {
+    "D1 Trend Gate": "trend",
+    "D1 Momentum": "momentum",
+    "D1 Weinstein Stage": "weinstein",
+    "H4 MACD Momentum": "momentum",
+    "H4 RSI Zone": "rsi",
+    "H4 Stochastic": "stoch",
+    "H4 Fib Level": "fib",
+    "H1 EMA Entry": "ema",
+    "H1 BB Pullback": "bb",
+    "H1 RSI Divergence": "rsi_div",
+}
 
 _MAJOR_FOREX = {
     "EUR/USD", "GBP/USD", "USD/JPY", "AUD/USD", "NZD/USD", "USD/CAD", "USD/CHF"
@@ -321,6 +351,13 @@ def get_score_threshold(pair: dict, regime: str | None = None) -> float:
     if profile.get("min_confluence") is not None:
         profile_threshold = float(profile.get("min_confluence"))
         if profile_threshold >= base_threshold or profile.get("allow_lower_threshold") is True:
+            if profile_threshold < base_threshold:
+                log.warning(
+                    "[ENGINE_A_THRESHOLD] %s lowered score threshold %.4f -> %.4f via explicit allow_lower_threshold",
+                    pair.get("display") or pair.get("symbol") or "?",
+                    base_threshold,
+                    profile_threshold,
+                )
             base_threshold = profile_threshold
 
     # Apply regime-dependent dynamic thresholds if enabled
@@ -642,6 +679,19 @@ _PAIR_TO_CLUSTER: dict = {
 }
 
 
+def _configured_corr_clusters() -> dict:
+    cfg = CONFIG.get("ENGINE_A_CORR_CLUSTERS")
+    return cfg if isinstance(cfg, dict) and cfg else CORR_CLUSTERS
+
+
+def _pair_to_cluster() -> dict:
+    return {
+        pair: cluster
+        for cluster, members in _configured_corr_clusters().items()
+        for pair in (members or [])
+    }
+
+
 def _get_30d_correlation(
     asset_prices: Optional[List[float]] = None,
     benchmark_prices: Optional[List[float]] = None,
@@ -735,9 +785,10 @@ def _get_30d_correlation(
 def apply_correlation_cap(signals: list) -> list:
     """Tag signals with correlationWarning if cluster already has 2+ active signals."""
     cluster_counts: dict = {}
+    pair_to_cluster = _pair_to_cluster()
     for sig in signals:
         pair_name = sig["pair"]
-        cluster = _PAIR_TO_CLUSTER.get(pair_name)
+        cluster = pair_to_cluster.get(pair_name)
         if cluster is not None:
             cluster_counts[cluster] = cluster_counts.get(cluster, 0) + 1
             if cluster_counts[cluster] >= 2:
@@ -869,7 +920,7 @@ def calc_confluence(
         elif r4 <= _rsi_b["os"]:
             w.append(f"H4 RSI oversold ({r4:.0f} <= {_rsi_b['os']}) — wait for bounce")
     _fs_feed_early = factor_result.get("feed_status") or {}
-    if _fs_feed_early.get("adx") == "missing":
+    if _fs_feed_early.get("adx") in {"missing", "missing_both_abort"}:
         w.append(
             "ADX unavailable on both D1 and H4 — scoring aborted (ADX_MISSING_BOTH_ABORT=true)."
         )
@@ -915,16 +966,8 @@ def calc_confluence(
     # momentum/quality factor, not an ADX trend factor. Renamed to
     # "D1 Momentum" so audit / Marcus narrate the actual evidence source.
     legacy_votes = {
-        "D1 Trend Gate": v.get("FACTOR_TREND", 0),
-        "D1 Momentum": v.get("FACTOR_MOMENTUM", 0),
-        "D1 Weinstein Stage": v.get("FACTOR_WEINSTEIN", 0),
-        "H4 MACD Momentum": v.get("FACTOR_MOMENTUM", 0),
-        "H4 RSI Zone": v.get("FACTOR_RSI", 0),
-        "H4 Stochastic": v.get("FACTOR_STOCH", 0),
-        "H4 Fib Level": v.get("FACTOR_FIB", 0),
-        "H1 EMA Entry": v.get("FACTOR_EMA", 0),
-        "H1 BB Pullback": v.get("FACTOR_BB", 0),
-        "H1 RSI Divergence": v.get("FACTOR_RSI_DIV", 0),
+        label: v.get(f"FACTOR_{factor.upper()}", 0)
+        for label, factor in _LEGACY_VOTE_FACTOR_MAP.items()
     }
     # Update votes dict with legacy names (remove FACTOR_ prefix)
     v.update(legacy_votes)
@@ -968,15 +1011,38 @@ def calc_confluence(
     _d1_proxy = _tf_score_proxy(d1["snap"])
     _h4_proxy = _tf_score_proxy(h4["snap"])
     _h1_proxy = _tf_score_proxy(h1["snap"])
-    _conf = compute_confidence(
-        factor_result=factor_result,
-        d1_factor_result=_d1_proxy,
-        h4_factor_result=_h4_proxy,
-        h1_factor_result=_h1_proxy,
-        signal_type=_signal_type,
-        volume_ratio=vr,
-        session_quality=get_session(bar_time)["quality"],
+    _hard_abort = (
+        factor_result.get("signalExecutable") is False
+        or factor_result.get("directionStatus") == "diagnostic_only"
+        or factor_result.get("abort_reason") in {
+            "atr_invalid_abort",
+            "indeterminate_trend",
+            "min_directional_failed",
+            "adx_hard_abort",
+            "adx_missing_both_abort",
+            "final_score_invalid",
+            "weighted_tf_tie",
+        }
     )
+    if _hard_abort:
+        _conf = {
+            "confidence": 0.0,
+            "components": {},
+            "available_count": 0,
+            "degraded": True,
+            "reason": factor_result.get("abort_reason") or "engine_a_hard_abort",
+            "session_quality": get_session(bar_time)["quality"],
+        }
+    else:
+        _conf = compute_confidence(
+            factor_result=factor_result,
+            d1_factor_result=_d1_proxy,
+            h4_factor_result=_h4_proxy,
+            h1_factor_result=_h1_proxy,
+            signal_type=_signal_type,
+            volume_ratio=vr,
+            session_quality=get_session(bar_time)["quality"],
+        )
     confidence_val = _conf["confidence"]
     # Legacy return dict
     result = {
@@ -1047,6 +1113,8 @@ def calc_confluence(
             "researchLabDetail": factor_result.get("research_lab_detail"),
             "researchLabScoreUplift": factor_result.get("research_lab_score_uplift"),
             "engineACorrelatedOverlayGuard": factor_result.get("engine_a_correlated_overlay_guard"),
+            "signalStatus": factor_result.get("signal_status"),
+            "factorBreakdown": factor_result.get("factor_breakdown", {}),
             "abortReason": factor_result.get("abort_reason"),
             "engineVersion": "A_V2",
             "scorerSelected": "factor_scoring.compute_factor_scores",
@@ -1079,7 +1147,7 @@ def calc_confluence(
             )
         )
     except Exception as exc:
-        log.debug("[CALIBRATION-DIAG] Engine A diagnostic skipped: %s", exc)
+        log.warning("[CALIBRATION-DIAG] Engine A diagnostic skipped: %s", exc)
     return result
 
 
@@ -1243,7 +1311,11 @@ def _classify_signal(signal: dict, pair: dict) -> tuple[str, str]:
     trend_state = signal.get("trendState")
     trend_blocked = is_trend_state_blocked(trend_state, pair, scope="live")
     # Risk Gating Parity — allow backtests to skip live blockers unless config-gated ON
-    is_research = CONFIG.get("RESEARCH_MODE", False) or CONFIG.get("BACKTEST_RUNNING", False)
+    is_research = bool(
+        CONFIG.get("RESEARCH_MODE", False)
+        or signal.get("researchMode", False)
+        or signal.get("backtestRunning", False)
+    )
     
     event_blocked = False
     if macro_event_blocked:

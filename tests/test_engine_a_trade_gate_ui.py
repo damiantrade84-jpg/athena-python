@@ -1,3 +1,10 @@
+"""UI contract pins for Engine A research-only gate (grep-based).
+
+These React/TypeScript surfaces are not exercised by pytest without a Playwright
+E2E harness. Behavioral backend coverage lives in tests/test_engine_a_trade_gate.py
+(execution, risk, auto_trader, engine_c, apply_fail_closed helper).
+"""
+
 from pathlib import Path
 
 
@@ -28,6 +35,8 @@ def test_manual_execute_helper_blocks_research_only_engine_a_signal():
 
     assert "engineATradeEnabled === false" in src
     assert "Research-only" in src
+    assert "evaluateTvChartExecuteBlock" in src
+    assert "canExecuteEngineASignalTier" in src
 
 
 def test_signals_panel_can_execute_row_blocks_engine_a_research_only():

@@ -61,6 +61,36 @@ def test_display_override_can_enable_specific_evidence_qualified_pair():
     assert engine_a_trade_enabled(pair, config=cfg) is True
 
 
+def test_enabled_trade_gate_requires_evidence_when_enforced():
+    pair = {"display": "XAU/USD", "symbol": "XAUUSD=X", "type": "commodity"}
+    cfg = _cfg(
+        ENGINE_A_TRADE_EVIDENCE_REQUIRED=True,
+        ENGINE_A_TRADE_ENABLED_OVERRIDES={"XAU/USD": True},
+        ENGINE_A_TRADE_ENABLED_EVIDENCE={},
+    )
+
+    detail = resolve_engine_a_trade_eligibility(pair, config=cfg)
+
+    assert detail["enabled"] is False
+    assert detail["research_only"] is True
+    assert detail["source"] == "override:XAU/USD:evidence_missing"
+
+
+def test_enabled_trade_gate_accepts_n_and_sqn_evidence():
+    pair = {"display": "XAU/USD", "symbol": "XAUUSD=X", "type": "commodity"}
+    cfg = _cfg(
+        ENGINE_A_TRADE_EVIDENCE_REQUIRED=True,
+        ENGINE_A_TRADE_ENABLED_OVERRIDES={"XAU/USD": True},
+        ENGINE_A_TRADE_ENABLED_EVIDENCE={"XAU/USD": {"n": 30, "sqn": 2.01}},
+    )
+
+    detail = resolve_engine_a_trade_eligibility(pair, config=cfg)
+
+    assert detail["enabled"] is True
+    assert detail["research_only"] is False
+    assert detail["source"] == "override:XAU/USD"
+
+
 def test_score_group_override_precedes_asset_class():
     pair = {
         "display": "BTC/USDT",
@@ -190,8 +220,12 @@ def test_apply_fail_closed_engine_a_trade_gate_sets_research_only_fields():
 
 
 def test_athena_annotation_exception_uses_fail_closed_helper():
+    # AGENTS.md forbids importing athena.py in tests; pin the except-path wiring
+    # via source contract. Behavioral fail-closed fields are covered by
+    # test_apply_fail_closed_engine_a_trade_gate_sets_research_only_fields.
     src = (Path(__file__).resolve().parents[1] / "athena.py").read_text(encoding="utf-8")
     assert "apply_fail_closed_engine_a_trade_gate(signal)" in src
+    assert "annotate_engine_a_trade_eligibility(signal, pair, config=CONFIG)" in src
 
 
 def test_risk_check_rejects_engine_a_research_only_even_when_trade_tier():

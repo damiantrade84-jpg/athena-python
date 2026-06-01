@@ -286,8 +286,11 @@ def _resolve_macd_params(score_group: str | None, asset_type: str) -> dict:
 _ADX_HARD_FAIL_DEFAULT = 15.0    # below this → dead market, abort
 _ADX_SOFT_MULT_DEFAULT = 0.65    # multiplier in soft zone
 
-# Track whether we've emitted the fallback warning (per-process, not per-call)
-_adx_fallback_warned = False
+# Track warnings by key so one missing class does not suppress diagnostics for
+# another missing class later in the same process.
+_adx_fallback_warned_keys: set[tuple[str, str | None]] = set()
+_adx_invalid_range_warned_keys: set[tuple[float, float]] = set()
+_cot_formula_exception_warned = False
 
 # LRU cache for _previous_indicator_snap to avoid recomputing the full indicator
 # suite on N-1 candles just to get the prior bar's EMA values for hysteresis.
@@ -870,7 +873,7 @@ def _momentum_quality(
     score_group: str | None = None,
     h4_candles: list | None = None,
 ) -> float:
-    """RSI + MACD confirmation quality score in [0.0, 1.0].
+    """RSI + MACD confirmation quality score in [-1.0, 1.0].
 
     Checks whether momentum indicators confirm the trend direction.
     Does NOT change direction — only sizes conviction.
@@ -1011,6 +1014,8 @@ def _momentum_quality(
     # (both RSI and MACD at +0.50), so we divide by 0.50 to map 0.50 → 1.0.
     # Worst standard case: RSI=-0.25, MACD=-0.25 -> raw = -0.25 -> rescaled = -0.50 -> clamped to 0.
     # This ensures mom_quality can actually reach 1.0 when both indicators confirm.
+    # Opposing momentum remains negative after rescale so it can reduce
+    # conviction below neutral instead of being floored away.
     _rsi_cap = 0.50
     _macd_cap = 0.50
     _volume_cap = 0.50
@@ -1020,9 +1025,9 @@ def _momentum_quality(
         + _volume_cap * volume_w
     ) / total_w
     rescaled = raw / _max_raw if _max_raw != 0 else 0.0
-    if _divergence_detected:
+    if _divergence_detected and rescaled > 0:
         rescaled *= 0.4
-    return max(0.0, min(1.0, rescaled))
+    return max(-1.0, min(1.0, rescaled))
 
 
 def _research_lab_candidate_addon(
@@ -1123,9 +1128,11 @@ def _research_factor_value(
         # Legacy factors — still callable but not in default factor list
         if name == "stochastic_cross":
             return _research_stochastic_value(direction, candles, bonus, penalty, cfg=cfg, pair=pair, asset_type=asset_type)
-        if name == "chandelier_trend":
-            return _research_chandelier_value(direction, candles, bonus, penalty)
-        if name == "aroon_trend":
+        if name in {"chandelier_trend", "aroon_trend"}:
+            if not bool(CONFIG.get("ENGINE_A_RESEARCH_LAB_ALLOW_LEGACY_FACTORS", False)):
+                return 0.0, {"signal": "unsupported_legacy", "value": 0.0}
+            if name == "chandelier_trend":
+                return _research_chandelier_value(direction, candles, bonus, penalty)
             return _research_aroon_value(direction, candles, bonus, penalty)
     except Exception as e:
         return 0.0, {"signal": "error", "value": 0.0, "error": str(e)}
@@ -1353,7 +1360,6 @@ def _select_adx_for_gate(
 
 def _resolve_adx_thresholds(asset_type: str, score_group: str | None) -> tuple[float, float]:
     """Return (trend_min, hard_fail) for ADX gate diagnostics and multiplier."""
-    global _adx_fallback_warned
     _trend_min_cfg = CONFIG.get("ADX_TREND_MIN_CLASS") or {}
     _hard_fail_cfg = CONFIG.get("FACTOR_ADX_HARD_FAIL_CLASS") or {}
     trend_min = _resolve_class_keyed(_trend_min_cfg, score_group, asset_type, None)
@@ -1370,8 +1376,9 @@ def _resolve_adx_thresholds(asset_type: str, score_group: str | None) -> tuple[f
         if hard_fail is None:
             _used_fallback = True
             hard_fail = 10.0
-    if _used_fallback and not _adx_fallback_warned:
-        _adx_fallback_warned = True
+    _warn_key = (str(asset_type), str(score_group) if score_group else None)
+    if _used_fallback and _warn_key not in _adx_fallback_warned_keys:
+        _adx_fallback_warned_keys.add(_warn_key)
         warnings.warn(
             f"ADX thresholds for asset_type='{asset_type}' not found in config. "
             f"Falling back to hardcoded defaults "
@@ -1384,6 +1391,17 @@ def _resolve_adx_thresholds(asset_type: str, score_group: str | None) -> tuple[f
     trend_min = float(trend_min)
     hard_fail = float(hard_fail)
     if hard_fail >= trend_min:
+        _range_key = (hard_fail, trend_min)
+        if _range_key not in _adx_invalid_range_warned_keys:
+            _adx_invalid_range_warned_keys.add(_range_key)
+            log.warning(
+                "[EA2] ADX hard_fail %.4f >= trend_min %.4f for asset_type=%s score_group=%s; "
+                "clamping hard_fail to keep soft zone non-binary",
+                hard_fail,
+                trend_min,
+                asset_type,
+                score_group,
+            )
         hard_fail = trend_min - 5.0
     return trend_min, hard_fail
 
@@ -1926,12 +1944,26 @@ def _cot_addon(pair_display: str, asset_type: str, direction: str, bar_time: Opt
 
 def _cot_formula_supported(pair_display: str) -> bool:
     """Return whether this display has an explicit COT/proxy formula."""
+    global _cot_formula_exception_warned
     try:
         from cot_feed import _PAIR_FORMULA as _COT_FORMULA
         formula = _COT_FORMULA.get(pair_display)
         return bool(formula)
-    except Exception:
+    except Exception as exc:
+        if not _cot_formula_exception_warned:
+            _cot_formula_exception_warned = True
+            log.debug("[EA2] COT formula lookup unavailable: %s", exc)
         return False
+
+
+def _funding_threshold_decimal(new_key: str, old_key: str, default_decimal: float) -> float:
+    """Return funding threshold as decimal rate, preferring explicit bps config."""
+    if new_key in CONFIG:
+        try:
+            return float(CONFIG.get(new_key)) / 10000.0
+        except (TypeError, ValueError):
+            return default_decimal
+    return float(CONFIG.get(old_key, default_decimal))
 
 
 def _funding_addon(funding_rate: Optional[float], direction: str,
@@ -2375,7 +2407,7 @@ def _asset_addon(
             if same_side_combo:
                 combo_val = funding_val + oi_val
                 combo_hi = float(CONFIG.get("FACTOR_CRYPTO_ADDON_COMBO_CONFIRM_CAP", 0.25))
-                combo_lo = float(CONFIG.get("FACTOR_CRYPTO_ADDON_COMBO_AGAINST_CAP", -0.20))
+                combo_lo = -abs(float(CONFIG.get("FACTOR_CRYPTO_ADDON_COMBO_AGAINST_CAP", -combo_hi)))
                 val = max(combo_lo, min(combo_hi, combo_val))
             else:
                 val = max(_ADDON_AGAINST, min(_ADDON_CONFIRM, val))
@@ -2393,9 +2425,12 @@ def _asset_addon(
             return val, addon_type, status
         vol_addon_cfg = CONFIG.get("ENGINE_A_STOCK_VOLUME_ADDON") or {}
         vol_addon_types = set(vol_addon_cfg.get("ASSET_TYPES", ["stock", "etf", "etf_bond", "index"]))
-        if vol_addon_cfg.get("ENABLED", False) and asset_type in vol_addon_types:
+        if vol_addon_cfg.get("ENABLED", False) and h4_candles:
             val, status = _stock_volume_addon_with_status(h4_candles, direction, volume_ratio)
-            return val, "volume", status
+            if status != "missing":
+                return val, "volume", status
+            if asset_type in vol_addon_types:
+                return val, "volume", status
         return _ADDON_NEUTRAL, addon_type, "unsupported"
 
     vol_addon_cfg = CONFIG.get("ENGINE_A_STOCK_VOLUME_ADDON") or {}
@@ -2432,6 +2467,15 @@ def _vwap_direction_filter(
 
     if not h4_candles or len(h4_candles) < lookback:
         return 1.0, {"enabled": True, "applied": False, "reason": "insufficient_candles"}
+
+    latest = h4_candles[-1]
+    if isinstance(latest, dict) and (
+        latest.get("is_final") is False
+        or latest.get("isFinal") is False
+        or latest.get("confirmed") is False
+        or latest.get("complete") is False
+    ):
+        return 1.0, {"enabled": True, "applied": False, "reason": "unfinalized_bar"}
 
     # Use last N candles for VWAP calculation
     vwap_candles = h4_candles[-lookback:]
@@ -2874,12 +2918,17 @@ def compute_factor_scores(
     ):
         trend_detail.update(_forex_ema_cluster_diagnostics(h4_snap, h4_candles, direction))
 
-    # Hard abort: dead market (ADX ≤ 10)
+    # Hard abort: dead market or fail-closed missing ADX data.
     if adx_mult == 0.0:
-        log.debug("[EA2] %s ADX=%.1f hard abort — dead market", display, adx_val or 0)
+        if adx_source == "missing_both_abort":
+            abort_reason = "adx_missing_both_abort"
+            log.debug("[EA2] %s ADX unavailable on D1/H4 — fail-closed abort", display)
+        else:
+            abort_reason = "adx_hard_abort"
+            log.debug("[EA2] %s ADX=%.1f hard abort — dead market", display, adx_val or 0)
         regime_raw = detect_regime(_regime_snap, asset_type).get("regime", "UNKNOWN")
         regime = _get_smoothed_regime(regime_context, pair_id, regime_raw)
-        return _zero_result(pair, regime, trend_detail, feed_status, reason="adx_hard_abort",
+        return _zero_result(pair, regime, trend_detail, feed_status, reason=abort_reason,
                             adx_val=adx_val, direction=direction)
 
     # ── FACTOR 2: Momentum quality ────────────────────────────────────────────
@@ -2893,7 +2942,7 @@ def compute_factor_scores(
 
     # Apply Stochastic RSI modifier (experimental, config-gated)
     stoch_rsi_adj = _stochastic_rsi_modifier(h4_candles, direction, asset_type)
-    mom_quality = max(0.0, min(1.0, mom_quality + stoch_rsi_adj))
+    mom_quality = max(-1.0, min(1.0, mom_quality + stoch_rsi_adj))
     if stoch_rsi_adj != 0.0:
         feed_status["stoch_rsi"] = f"{stoch_rsi_adj:.2f}"
 
@@ -2909,6 +2958,7 @@ def compute_factor_scores(
             feed_status["insider_trading"] = "advisory_only"
         if bool(CONFIG.get("FUNDAMENTALS_DIAGNOSTIC_ENABLED", False)):
             feed_status["fundamentals"] = "advisory_only"
+    _ortho_enabled = bool(CONFIG.get("ENGINE_A_ORTHO_VOTE_ENABLED", False))
 
     research_val, research_detail = _research_lab_candidate_addon(
         pair, direction, h4_candles, d1_candles, asset_type, score_group
@@ -2921,8 +2971,12 @@ def compute_factor_scores(
     # If Engine B research lab is also active for this pair, the two labs may
     # double-count the same price-action evidence. Cap total research contribution
     # so it cannot exceed the standalone research bonus by more than 50%.
-    _engine_b_rl_enabled = bool(
-        (CONFIG.get("ENGINE_B_RESEARCH_LAB_FACTORS") or {}).get("ENABLED", False)
+    _engine_b_rl_cfg = CONFIG.get("ENGINE_B_RESEARCH_LAB_FACTORS") or {}
+    _engine_b_groups = _engine_b_rl_cfg.get("GROUPS") if isinstance(_engine_b_rl_cfg, dict) else {}
+    _engine_b_rl_enabled = (
+        bool(_engine_b_rl_cfg.get("ENABLED", False))
+        and isinstance(_engine_b_groups, dict)
+        and bool(_engine_b_groups.get(score_group))
     )
     if _engine_b_rl_enabled and research_detail.get("enabled"):
         _standalone_max = float(CONFIG.get("ENGINE_A_RESEARCH_MAX", _RESEARCH_BONUS_DEFAULT))
@@ -2938,6 +2992,8 @@ def compute_factor_scores(
     # Check exceeds-single-cap AFTER research lab is added so the wider combo
     # cap applies when the post-research total exceeds the single-signal band.
     _asset_addon_exceeds_single_cap = (
+        not _ortho_enabled
+        and
         asset_type == "crypto"
         and (addon_val > _ADDON_CONFIRM or addon_val < _ADDON_AGAINST)
     )
@@ -2952,7 +3008,8 @@ def compute_factor_scores(
             _ADDON_AGAINST,
             float(CONFIG.get("FACTOR_CRYPTO_ADDON_COMBO_AGAINST_CAP", -0.20)),
         )
-    addon_val = max(_addon_lo, min(_addon_hi, addon_val))
+    if not _ortho_enabled:
+        addon_val = max(_addon_lo, min(_addon_hi, addon_val))
     addon_val_without_positive_research = max(
         _addon_lo,
         min(_addon_hi, addon_val_before_research),
@@ -2971,6 +3028,8 @@ def compute_factor_scores(
     )
     if mean_rev_detail.get("enabled"):
         feed_status["mean_reversion"] = f"{mean_rev_adj:.2f}"
+    else:
+        feed_status["mean_reversion"] = "disabled"
 
     # ── Volatility scaler (Stage 3.4) ─────────────────────────────────────────
     _close_for_vol = h4_snap.get("close")
@@ -2982,19 +3041,23 @@ def compute_factor_scores(
         _atr if _atr else 0.0, _close_for_vol, asset_type, score_group
     )
 
-    # nat_gas and crypto_doge are structurally-volatile subgroups. Their
-    # VOLATILITY_SCALER_BANDS config entries already set wider ATR% bands,
-    # so the quality scaler naturally stays near-neutral for normal trading
-    # conditions. No clamp needed.
+    # Structurally volatile subgroups use score_group-specific ATR% bands when
+    # configured; otherwise they fall back to their asset-type bands. No extra
+    # clamp is applied here.
 
     feed_status["vol_scaler"] = f"{vol_scaler:.2f}"
 
-    # ── Session multiplier (deprecated, now returns 1.0) ──────────────────────
+    # ── Session multiplier (forex only, config-gated) ────────────────────────
     session_mult = _session_multiplier(bar_time, asset_type)
-    feed_status["session"] = f"{session_mult:.2f}"
+    _session_cfg = CONFIG.get("FACTOR_FOREX_SESSION_MULT") or {}
+    if asset_type == "forex" and not bool(_session_cfg.get("ENABLED", True)):
+        feed_status["session"] = "disabled"
+    else:
+        feed_status["session"] = f"{session_mult:.2f}"
 
     # Optional equity-session weighting is isolated from the existing forex
-    # session multiplier and is default-off to preserve current Engine A scores.
+    # session multiplier and is config-gated; runtime YAML currently enables a
+    # small +/-2% stock/index/ETF liquidity nudge.
     equity_session_mult, equity_session_detail = _equity_session_multiplier(bar_time, asset_type)
     if equity_session_detail.get("enabled"):
         feed_status["equity_session"] = str(equity_session_detail.get("session") or equity_session_detail.get("reason") or "neutral")
@@ -3056,7 +3119,6 @@ def compute_factor_scores(
     # Base floor + momentum quality + addon (addon_val can be negative → reduces conviction).
     # Normalise addon: +0.20 → +1.0, 0.00 → 0.0, -0.15 → -0.75 (penalty preserved, not floored).
     addon_norm = (addon_val / _ADDON_CONFIRM) if _ADDON_CONFIRM > 0 else 0.0
-    _ortho_enabled = bool(CONFIG.get("ENGINE_A_ORTHO_VOTE_ENABLED", False))
     ortho_detail = None
     _ortho_w = 0.0
 
@@ -3146,8 +3208,8 @@ def compute_factor_scores(
     # Computed before base_score so the cost factor participates in the
     # multiplier chain (boosts are no longer wasted near the 3.0 cap).
     _cost_penalty = 0.0
-    _fund_high = float(CONFIG.get("FACTOR_FUNDING_HIGH_PCT", 0.01))
-    _fund_low = float(CONFIG.get("FACTOR_FUNDING_LOW_PCT", -0.01))
+    _fund_high = _funding_threshold_decimal("FACTOR_FUNDING_HIGH_BPS_8H", "FACTOR_FUNDING_HIGH_PCT", 0.001)
+    _fund_low = _funding_threshold_decimal("FACTOR_FUNDING_LOW_BPS_8H", "FACTOR_FUNDING_LOW_PCT", -0.001)
     _fund_pen_cap = float(CONFIG.get("FACTOR_FUNDING_PENALTY_CAP", 0.10))
     _fund_pen_mult = float(CONFIG.get("FACTOR_FUNDING_PENALTY_MULT", 5.0))
     _fund_bonus_cap = float(CONFIG.get("FACTOR_FUNDING_BONUS_CAP", 0.05))
@@ -3366,7 +3428,7 @@ def compute_factor_scores(
                 intermarket_engine_a_delta = float(_confirmation.get("engineADelta", 0.0) or 0.0)
                 feed_status["intermarket"] = str(_confirmation.get("verdict", "neutral"))
         except Exception as exc:
-            log.debug("[EA2] %s intermarket confirmation skipped: %s", display, exc)
+            log.warning("[EA2] %s intermarket confirmation skipped: %s", display, exc)
             feed_status["intermarket"] = "error"
 
     structure_adjustment = {
@@ -3497,8 +3559,19 @@ def compute_factor_scores(
         "final_score": round(final_score, 4),
         "direction": direction,
         "regime": regime,
+        "signal_status": "ok",
         # ── Factor breakdown (UI + AI) ────────────────────────────────────────
         "factor_scores": factor_scores,
+        "factor_breakdown": {
+            "trend": round(trend_score, 4),
+            "momentum": round(mom_quality, 4),
+            "addon": round(addon_val, 4),
+            "research_lab": round(research_val, 4),
+            "mean_reversion": round(mean_rev_adj, 4),
+            "adx_multiplier": round(adx_mult, 4),
+            "conviction": round(conviction, 4),
+            "final_score": round(final_score, 4),
+        },
         "weights": weights_payload,
         "asset_type": asset_type,
         "score_group": score_group,
@@ -3577,6 +3650,7 @@ _NON_TRADABLE_ABORT_REASONS = {
     "indeterminate_trend",
     "min_directional_failed",
     "adx_hard_abort",
+    "adx_missing_both_abort",
     "final_score_invalid",
     "weighted_tf_tie",
 }
@@ -3641,7 +3715,19 @@ def _zero_result(
         "signalExecutable": not is_hard_abort,
         "directionStatus": "diagnostic_only" if is_hard_abort else "ok",
         "regime": regime,
+        "signal_status": "blocked" if is_hard_abort else "zero",
         "factor_scores": {"trend": 0.0, "momentum": 0.0, "addon": 0.0, "research_lab": 0.0, "mean_reversion": 0.0},
+        "factor_breakdown": {
+            "trend": 0.0,
+            "momentum": 0.0,
+            "addon": 0.0,
+            "research_lab": 0.0,
+            "mean_reversion": 0.0,
+            "adx_multiplier": 0.0,
+            "conviction": 0.0,
+            "final_score": 0.0,
+            "abort_reason": reason,
+        },
         "weights": {"trend": 1.0, **weight_cfg},
         "asset_type": asset_type,
         "score_group": score_group,

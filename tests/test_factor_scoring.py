@@ -143,6 +143,15 @@ def test_momentum_quality_rsi_divergence_dampens_opposing_direction(monkeypatch)
     assert math.isclose(mq_short, mq_baseline_short * 0.4, rel_tol=1e-6)
 
 
+def test_momentum_quality_opposing_macd_can_penalize_below_neutral():
+    h4_snap = _snap("long")
+    h4_snap.update({"rsi": 70.0, "macdHist": -1.0})
+
+    mq = _momentum_quality(h4_snap, "LONG", "stock", h4_candles=_candles(10))
+
+    assert mq < 0.0
+
+
 def test_momentum_quality_skips_divergence_without_enough_candles():
     h4_snap = _snap("long", momentum="bullish")
     short_candles = _candles(10)
@@ -207,7 +216,7 @@ def test_missing_adx_blocks_when_configured_fail_safe_enabled(monkeypatch):
     assert result["adx_source"] == "missing_both_abort"
     assert result["adx_multiplier"] == pytest.approx(0.0)
     assert result["final_score"] == 0.0
-    assert result["abort_reason"] == "adx_hard_abort"
+    assert result["abort_reason"] == "adx_missing_both_abort"
 
 
 def test_missing_adx_can_use_legacy_soft_multiplier_when_explicitly_disabled(monkeypatch):
@@ -221,6 +230,121 @@ def test_missing_adx_can_use_legacy_soft_multiplier_when_explicitly_disabled(mon
     assert result["adx_source"] == "missing"
     assert result["adx_multiplier"] == pytest.approx(0.5)
     assert result["final_score"] > 0.0
+
+
+def test_crypto_combo_against_cap_matches_confirm_cap(monkeypatch):
+    monkeypatch.setitem(CONFIG, "FACTOR_CRYPTO_ADDON_COMBO_CONFIRM_CAP", 0.25)
+    monkeypatch.setitem(CONFIG, "FACTOR_CRYPTO_ADDON_COMBO_AGAINST_CAP", -0.25)
+
+    value, addon_type, status = factor_scoring._asset_addon(
+        {"type": "crypto", "display": "BTC/USDT"},
+        "LONG",
+        funding_rate=0.02,
+        bar_time=None,
+        oi_context={"oi_change_pct": 2.0, "price_change_pct": -1.0},
+    )
+
+    assert addon_type == "funding+oi"
+    assert status == "ok"
+    assert value == pytest.approx(-0.25)
+
+
+def test_cot_unsupported_commodity_can_fallback_to_real_volume(monkeypatch):
+    monkeypatch.setitem(CONFIG, "ENGINE_A_COT_ADDON_ASSET_TYPES", ["commodity"])
+    monkeypatch.setitem(
+        CONFIG,
+        "ENGINE_A_STOCK_VOLUME_ADDON",
+        {"ENABLED": True, "ASSET_TYPES": ["stock", "index"]},
+    )
+    monkeypatch.setattr(factor_scoring, "_cot_formula_supported", lambda _display: False)
+
+    value, addon_type, status = factor_scoring._asset_addon(
+        {"type": "commodity", "display": "WTI Oil"},
+        "LONG",
+        funding_rate=None,
+        bar_time=None,
+        h4_candles=_candles(80, trend=0.4, volume_trend=25.0),
+        volume_ratio=1.8,
+    )
+
+    assert addon_type == "volume"
+    assert status == "ok"
+    assert value > 0
+
+
+def test_vwap_filter_skips_explicit_unfinalized_last_bar(monkeypatch):
+    monkeypatch.setitem(
+        CONFIG,
+        "ENGINE_A_VWAP_FILTER",
+        {"ENABLED": True, "CANDLE_LOOKBACK": 3, "MAX_BOOST": 0.03, "MAX_PENALTY": -0.03},
+    )
+    candles = _candles(5)
+    candles[-1]["is_final"] = False
+
+    mult, detail = factor_scoring._vwap_direction_filter(candles, "LONG", "stock")
+
+    assert mult == pytest.approx(1.0)
+    assert detail["applied"] is False
+    assert detail["reason"] == "unfinalized_bar"
+
+
+def test_zero_and_success_results_expose_signal_status_and_breakdown(monkeypatch):
+    out = _score(
+        d1=_snap("long", momentum="bullish"),
+        h4=_snap("long", momentum="bullish"),
+        h1=_snap("long", momentum="bullish"),
+        h4_candles=_candles(80),
+        pair={"type": "stock", "display": "TEST"},
+    )
+
+    assert out["signal_status"] == "ok"
+    assert out["factor_breakdown"]["trend"] == out["factor_scores"]["trend"]
+
+    z = factor_scoring._zero_result(
+        {"type": "stock", "display": "TEST"},
+        "RANGING",
+        {},
+        {},
+        reason="adx_missing_both_abort",
+        direction="LONG",
+    )
+
+    assert z["signal_status"] == "blocked"
+    assert z["factor_breakdown"]["abort_reason"] == "adx_missing_both_abort"
+
+
+def test_calc_confluence_hard_abort_confidence_is_zero(monkeypatch):
+    """A hard-aborted Engine A signal must not regain confidence from proxy/session components."""
+    monkeypatch.setitem(CONFIG, "ADX_MISSING_BOTH_ABORT", True)
+
+    def _unexpected_confidence(**_kwargs):
+        raise AssertionError("hard-abort confidence path should not call compute_confidence")
+
+    monkeypatch.setattr("confidence_engine.compute_confidence", _unexpected_confidence)
+    from scoring import calc_confluence
+
+    d1 = {"snap": _snap("long", include_adx=False)}
+    h4 = {"snap": _snap("long", include_adx=False)}
+    h1 = {"snap": _snap("long", include_adx=False)}
+    candles = _candles(trend=0.2, volume_trend=10.0)
+
+    out = calc_confluence(
+        d1,
+        h4,
+        h1,
+        vr=1.0,
+        stoch={"k": [], "d": []},
+        pair={"type": "forex", "display": "EUR/USD"},
+        btc_bias="neutral",
+        d1_candles=candles,
+        h4_candles=candles,
+        h1_candles=candles,
+    )
+
+    assert out["confidence"] == pytest.approx(0.0)
+    assert out["confidenceDetail"]["reason"] == "adx_missing_both_abort"
+    assert out["factorDiagnostics"]["abortReason"] == "adx_missing_both_abort"
+    assert any("ADX unavailable" in str(w) for w in out.get("warnings", []))
 
 
 def test_forex_adx_source_uses_stronger_h4_when_configured(monkeypatch):
@@ -1309,9 +1433,9 @@ def test_research_lab_factor_supports_commodity_group_candidates(monkeypatch):
         d1_candles=_candles(trend=0.2, volume_trend=0.0),
     )
 
-    assert result["research_lab_value"] == pytest.approx(0.15)
+    assert result["research_lab_value"] == pytest.approx(0.0)
     assert result["research_lab_detail"]["score_group"] == "universal"
-    assert result["research_lab_detail"]["components"]["aroon_trend"]["signal"] == "bull_trend"
+    assert result["research_lab_detail"]["components"]["aroon_trend"]["signal"] == "unsupported_legacy"
 
 
 def test_calc_confluence_factor_diagnostics_includes_research_lab(monkeypatch):

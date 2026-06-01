@@ -6,11 +6,13 @@ trade-ready. It must not alter scoring, direction, sizing, SL/TP, or risk checks
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from config import CONFIG
 
 
+log = logging.getLogger("athena")
 _DISABLED_WARNING_PREFIX = "ENGINE_A_RESEARCH_ONLY"
 
 
@@ -42,6 +44,33 @@ def _lookup_bool(mapping: Any, keys: list[str]) -> tuple[bool | None, str | None
         if key in mapping:
             return _as_bool(mapping.get(key), False), key
     return None, None
+
+
+def _lookup_mapping(mapping: Any, keys: list[str]) -> tuple[dict | None, str | None]:
+    if not isinstance(mapping, dict):
+        return None, None
+    for key in keys:
+        if key and isinstance(mapping.get(key), dict):
+            return mapping.get(key), key
+    return None, None
+
+
+def _evidence_qualified(cfg: dict, keys: list[str]) -> tuple[bool, str]:
+    evidence, key = _lookup_mapping(cfg.get("ENGINE_A_TRADE_ENABLED_EVIDENCE"), keys)
+    if evidence is None:
+        return False, "evidence_missing"
+    try:
+        n = int(evidence.get("n", 0) or 0)
+        sqn = float(evidence.get("sqn", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        return False, "evidence_invalid"
+    min_n = int(cfg.get("ENGINE_A_TRADE_EVIDENCE_MIN_N", 30) or 30)
+    min_sqn = float(cfg.get("ENGINE_A_TRADE_EVIDENCE_MIN_SQN", 2.0) or 2.0)
+    if n < min_n:
+        return False, f"evidence_n_lt_{min_n}"
+    if sqn <= min_sqn:
+        return False, f"evidence_sqn_lte_{min_sqn:g}"
+    return True, key or "evidence"
 
 
 def resolve_engine_a_trade_eligibility(
@@ -88,6 +117,12 @@ def resolve_engine_a_trade_eligibility(
     if override_value is not None:
         source = f"override:{override_key}"
         enabled = override_value
+        log.info(
+            "[ENGINE_A_TRADE_GATE] consumed trade eligibility override %s=%s for %s",
+            override_key,
+            enabled,
+            display or symbol or "instrument",
+        )
     else:
         group_value, group_key = _lookup_bool(
             cfg.get("ENGINE_A_TRADE_ENABLED_BY_SCORE_GROUP"),
@@ -107,6 +142,16 @@ def resolve_engine_a_trade_eligibility(
             else:
                 enabled = _as_bool(cfg.get("ENGINE_A_TRADE_ENABLED_DEFAULT", False), False)
                 source = "default"
+
+    evidence_reason = None
+    if enabled and _as_bool(cfg.get("ENGINE_A_TRADE_EVIDENCE_REQUIRED", False), False):
+        qualified, evidence_reason = _evidence_qualified(
+            cfg,
+            [display, symbol, score_group, asset_type, "default"],
+        )
+        if not qualified:
+            enabled = False
+            source = f"{source}:{evidence_reason}"
 
     if enabled:
         reason = f"Engine A trade eligible by {source}."
