@@ -1704,6 +1704,12 @@ CONFIG: dict = {
     "AUTO_EXECUTE_MIN_GRADE": "B",  # Minimum AI grade for auto-execute
     "MAX_PORTFOLIO_HEAT": 0.06,  # 6% total risk across all positions
     "MAX_OPEN_POSITIONS": 10,  # Max simultaneous open trades
+    "OPEN_TRADES": {
+        # When false (default), /api/open-trades-timed skips candle-based SL recompute
+        # on each poll so broker P&L refreshes stay fast. Use /api/position-sl-diagnostic
+        # for on-demand Engine A SL recompute.
+        "SL_RECOMPUTE_ON_POLL": False,
+    },
     "MAX_CORRELATED_POSITIONS": 10,  # Max positions in same correlation cluster
     "SIGNAL_MAX_AGE_SEC": 1800,  # Reject signals older than 30 minutes
     "MAX_RISK_PER_TRADE": 0.03,  # Hard cap: never risk > 3% on single trade

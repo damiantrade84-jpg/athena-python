@@ -3674,6 +3674,10 @@ SCALP_ENGINE:
 
 # Set enabled: false to disable the entire monitor without removing the config.
 
+# Open-trades dashboard polling: keep SL recompute off the hot path (default).
+OPEN_TRADES:
+  SL_RECOMPUTE_ON_POLL: false
+
 TIMED_EXIT:
 
   enabled: true

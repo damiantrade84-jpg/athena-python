@@ -12319,9 +12319,13 @@ def api_open_trades_timed():
     _timing_ms: dict[str, float | int] = {}
 
     tcfg = _get_timed_cfg(lambda: CONFIG)
+    _open_trades_cfg = CONFIG.get("OPEN_TRADES") or {}
+    _sl_recompute_on_poll = bool(_open_trades_cfg.get("SL_RECOMPUTE_ON_POLL", False))
 
     def _recompute_for_trade(audit_row: dict, trade_style: str) -> dict | None:
         return _recompute_sl_diagnostic_levels(audit_row, trade_style)
+
+    _recompute_fn = _recompute_for_trade if _sl_recompute_on_poll else None
 
     out = []
     now_ts = datetime.now(_tz.utc).timestamp()
@@ -12329,10 +12333,8 @@ def api_open_trades_timed():
     def _fetch_mt5_positions():
         _t0 = _time.perf_counter()
         from mt5_executor import mt5_get_positions
-        _res = mt5_get_positions()
-        if isinstance(_res, dict) and _res.get("error"):
-            _timing_ms["mt5_ms"] = round((_time.perf_counter() - _t0) * 1000, 1)
-            return {"error": _res["error"]}
+        # Fast read-only poll: never block Bybit on MT5 initialize/reconnect.
+        _res = mt5_get_positions(attempt_connect=False)
         _timing_ms["mt5_ms"] = round((_time.perf_counter() - _t0) * 1000, 1)
         return _res
 
@@ -12361,13 +12363,19 @@ def api_open_trades_timed():
     except Exception as e:
         return jsonify({"error": f"Broker position fetch failed: {e}"}), 500
 
-    if mt5_res.get("error"):
-        return jsonify(mt5_res), 500
-    if bybit_res.get("error"):
-        return jsonify(bybit_res), 500
-
-    mt5_positions = mt5_res.get("positions", [])
-    bybit_positions = bybit_res.get("positions", [])
+    broker_errors: dict[str, str] = {}
+    if isinstance(mt5_res, dict) and mt5_res.get("error"):
+        broker_errors["mt5"] = str(mt5_res.get("detail") or "MT5 fetch failed")
+        mt5_positions = []
+        _timing_ms["mt5_error"] = broker_errors["mt5"]
+    else:
+        mt5_positions = (mt5_res or {}).get("positions", []) if isinstance(mt5_res, dict) else []
+    if isinstance(bybit_res, dict) and bybit_res.get("error"):
+        broker_errors["bybit"] = str(bybit_res.get("detail") or "Bybit fetch failed")
+        bybit_positions = []
+        _timing_ms["bybit_error"] = broker_errors["bybit"]
+    else:
+        bybit_positions = (bybit_res or {}).get("positions", []) if isinstance(bybit_res, dict) else []
     for p in bybit_positions:
         p["_bybit"] = True
 
@@ -12536,7 +12544,7 @@ def api_open_trades_timed():
             res_p,
             audit,
             tcfg,
-            recompute_levels_fn=_recompute_for_trade,
+            recompute_levels_fn=_recompute_fn,
             max_sl_pct=_max_sl_pct,
         )
         _enrich_elapsed_s += _time.perf_counter() - _t_enrich
@@ -12562,13 +12570,16 @@ def api_open_trades_timed():
 
     _timing_ms["total_ms"] = round((_time.perf_counter() - _t_request) * 1000, 1)
 
-    return jsonify({
+    payload = {
         "positions": out,
         "count": len(out),
         "audit_unresolved": audit_unresolved,
         "audit_unresolved_count": len(audit_unresolved),
         "_server_timing_ms": _timing_ms,
-    })
+    }
+    if broker_errors:
+        payload["broker_errors"] = broker_errors
+    return jsonify(payload)
 
 
 def _check_api_keys() -> None:

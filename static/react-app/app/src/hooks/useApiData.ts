@@ -9,10 +9,14 @@ export function useApiPoll<T>(url: string, interval = 0, enabled = true) {
   const staleRef = useRef(false);
   const fetchedRef = useRef(false);
   const inFlightRef = useRef(false);
+  const pendingRef = useRef(false);
 
   const fetch = useCallback(async () => {
     if (!enabled) return;
-    if (inFlightRef.current) return;
+    if (inFlightRef.current) {
+      pendingRef.current = true;
+      return;
+    }
     inFlightRef.current = true;
     const isSubsequent = fetchedRef.current;
     if (isSubsequent) setIsRefreshing(true);
@@ -35,12 +39,17 @@ export function useApiPoll<T>(url: string, interval = 0, enabled = true) {
         setIsRefreshing(false);
       }
       inFlightRef.current = false;
+      if (pendingRef.current) {
+        pendingRef.current = false;
+        void fetch();
+      }
     }
   }, [url, enabled]);
 
   useEffect(() => {
     staleRef.current = true;
     fetchedRef.current = false;
+    pendingRef.current = false;
     setLoading(true);
     setIsRefreshing(false);
   }, [url]);

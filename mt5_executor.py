@@ -681,18 +681,38 @@ def mt5_get_account() -> dict:
     }
 
 
-def mt5_get_positions() -> dict:
-    """Get all open positions. Returns dict with standardized error format."""
+def mt5_get_positions(*, attempt_connect: bool = True) -> dict:
+    """Get all open positions. Returns dict with standardized error format.
+
+    When ``attempt_connect`` is False (dashboard polling), skip MT5 initialize/
+    reconnect so a slow/offline terminal cannot block Bybit position reads.
+    """
 
     mt5 = _get_mt5()
 
-    if not mt5 or not mt5_connect():
+    if not mt5:
         return {
-            "error": True,
+            "error": False,
             "symbol": "MT5",
-            "detail": "MT5 not connected",
+            "detail": "MT5 unavailable",
             "positions": [],
         }
+
+    if not _connected:
+        if not attempt_connect:
+            return {
+                "error": False,
+                "symbol": "MT5",
+                "detail": "not_connected",
+                "positions": [],
+            }
+        if not mt5_connect():
+            return {
+                "error": True,
+                "symbol": "MT5",
+                "detail": "MT5 not connected",
+                "positions": [],
+            }
 
     positions = mt5.positions_get()
 
