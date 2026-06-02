@@ -5553,6 +5553,22 @@ def api_scan():
     return jsonify(_json_safe(result))
 
 
+@app.route("/api/cascade-scan", methods=["POST"])
+def api_cascade_scan():
+    d = request.get_json(force=True, silent=True) or {}
+    from cascade_scan import run_cascade_scan
+
+    result = run_cascade_scan(
+        asset_class=d.get("asset_class", "forex"),
+        style=d.get("style", "auto"),
+        enable_triage=bool(d.get("enable_triage", False)),
+        top_n=d.get("top_n", 5),
+        rules=d.get("rules") if isinstance(d.get("rules"), dict) else None,
+        run_full_scan_fn=run_full_scan,
+    )
+    return jsonify(_json_safe(result))
+
+
 @app.route("/api/analyze", methods=["POST"])
 def api_analyze():
 
@@ -13902,6 +13918,7 @@ def analyze_pair(
         "tp2": round(float(lvl["tp2"]), 6),
         "rr1": round(float(lvl["rr1"]), 2),
         "rr2": round(float(lvl["rr2"]), 2),
+        "rr": round(float(lvl["rr2"]), 2),
         "atr": round(float(atr), 6),
         "atrDiagnostics": _build_engine_a_atr_diagnostics(
             atr_value=float(atr),
