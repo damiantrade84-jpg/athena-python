@@ -509,6 +509,28 @@ class _OpenAIResponsesChatCompletionsCompat:
             )
             if response_text_config:
                 request_payload["text"] = response_text_config
+        # The Responses API validates that "json" appears in the input messages
+        # (not instructions) when json_object format is used. System-prompt-only
+        # callers pass json_object in response_format; their system content goes to
+        # instructions and the user message may not contain the word. Append a
+        # minimal hint to the last user input when needed.
+        if (
+            isinstance(request_payload.get("text"), dict)
+            and request_payload["text"].get("format", {}).get("type") == "json_object"
+            and response_input
+            and not any(
+                "json" in part.get("text", "").lower()
+                for msg in response_input
+                for part in (msg.get("content") or [])
+                if isinstance(part, dict)
+            )
+        ):
+            last = response_input[-1]
+            patched_content = list(last.get("content") or []) + [
+                {"type": "input_text", "text": "\n\nRespond with valid JSON."}
+            ]
+            response_input = response_input[:-1] + [{**last, "content": patched_content}]
+            request_payload["input"] = response_input
         timeout = kwargs.get("timeout") or self._owner.timeout_seconds
         resp = self._owner._client.responses.create(**request_payload, timeout=timeout)
         text = _response_text(resp)
