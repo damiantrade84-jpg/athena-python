@@ -12342,6 +12342,8 @@ def _ott_bybit_cached() -> dict:
             return _ott_bybit_cache["result"]
     from bybit_executor import bybit_get_positions
     result = bybit_get_positions()
+    if result.get("error"):
+        return result
     with _ott_bybit_lock:
         _ott_bybit_cache["result"] = result
         _ott_bybit_cache["ts"] = _ott_time.monotonic()
