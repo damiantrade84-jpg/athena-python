@@ -1,5 +1,8 @@
 import { createContext, useContext, useState, useCallback, useRef, useEffect, useMemo } from 'react';
-import type { PanelId, Signal, Position, GuardianStatus, NewsItem, SessionHours, TvChartIntent, ScalpWorkbenchIntent } from '@/types';
+import type {
+  PanelId, Signal, Position, GuardianStatus, NewsItem, SessionHours,
+  TvChartIntent, ScalpWorkbenchIntent, CascadeScanResponse, CascadeScanMeta,
+} from '@/types';
 import type { AIReviewProvider } from '@/types/athena';
 import { syncSignalsToGlobal } from '@/lib/globalState';
 import apiClient from '@/lib/apiClient';
@@ -24,6 +27,10 @@ interface AppState {
   scanCacheAMeta: { count: number; scannedAt: string } | null;
   /** Engine B: `pairsScanned` comes from API `totalPairs` (universe size for this scan). */
   scanCacheBMeta: { count: number; scannedAt: string; pairsScanned?: number; scanFunnel?: Record<string, number> } | null;
+  /** Cascade Scan shortlist — survives panel navigation */
+  cascadeScanCache: CascadeScanResponse | null;
+  cascadeScanMeta: CascadeScanMeta | null;
+  cascadeScanReviewStatus: Record<string, 'OPENED'>;
   /** Workflow intents — local only, not persisted */
   tvChartIntent: TvChartIntent | null;
   scalpWorkbenchIntent: ScalpWorkbenchIntent | null;
@@ -45,6 +52,13 @@ interface AppActions {
   setScanCacheB: (signals: unknown[], meta?: { count: number; scannedAt: string; pairsScanned?: number; scanFunnel?: Record<string, number> }) => void;
   setScalpLabScanCache: (result: unknown | null) => void;
   setScalpLabSelectedCache: (signal: unknown | null) => void;
+  setCascadeScanCache: (
+    result: CascadeScanResponse | null,
+    meta?: CascadeScanMeta,
+    options?: { resetReviewStatus?: boolean },
+  ) => void;
+  setCascadeScanMeta: (meta: CascadeScanMeta | null) => void;
+  markCascadeReviewOpened: (symbol: string) => void;
   setTvChartIntent: (intent: TvChartIntent) => void;
   clearTvChartIntent: () => void;
   setScalpWorkbenchIntent: (intent: ScalpWorkbenchIntent) => void;
@@ -96,6 +110,9 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   const [scalpLabSelectedCache, setScalpLabSelectedCache] = useState<unknown | null>(null);
   const [scanCacheAMeta, setScanCacheAMeta] = useState<{ count: number; scannedAt: string } | null>(null);
   const [scanCacheBMeta, setScanCacheBMeta] = useState<{ count: number; scannedAt: string; pairsScanned?: number; scanFunnel?: Record<string, number> } | null>(null);
+  const [cascadeScanCache, setCascadeScanCacheState] = useState<CascadeScanResponse | null>(null);
+  const [cascadeScanMeta, setCascadeScanMetaState] = useState<CascadeScanMeta | null>(null);
+  const [cascadeScanReviewStatus, setCascadeScanReviewStatusState] = useState<Record<string, 'OPENED'>>({});
   const [tvChartIntent, setTvChartIntentState] = useState<TvChartIntent | null>(null);
   const [scalpWorkbenchIntent, setScalpWorkbenchIntentState] = useState<ScalpWorkbenchIntent | null>(null);
   const [aiReviewProvider, setAiReviewProviderState] = useState<AIReviewProvider>('openai');
@@ -124,6 +141,26 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   const setScanCacheB = useCallback((signals: unknown[], meta?: { count: number; scannedAt: string; pairsScanned?: number; scanFunnel?: Record<string, number> }) => {
     setScanCacheBState(signals);
     if (meta) setScanCacheBMeta(meta);
+  }, []);
+
+  const setCascadeScanCache = useCallback((
+    result: CascadeScanResponse | null,
+    meta?: CascadeScanMeta,
+    options?: { resetReviewStatus?: boolean },
+  ) => {
+    setCascadeScanCacheState(result);
+    if (meta !== undefined) setCascadeScanMetaState(meta);
+    if (options?.resetReviewStatus) setCascadeScanReviewStatusState({});
+  }, []);
+
+  const setCascadeScanMeta = useCallback((meta: CascadeScanMeta | null) => {
+    setCascadeScanMetaState(meta);
+  }, []);
+
+  const markCascadeReviewOpened = useCallback((symbol: string) => {
+    const key = symbol.trim();
+    if (!key) return;
+    setCascadeScanReviewStatusState((prev) => ({ ...prev, [key]: 'OPENED' }));
   }, []);
 
   const toastTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -278,11 +315,13 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       activePanel, signals, positions, guardian, news, sessions,
       isAutoTrade, isTestMode, isLoading, toast,
       scanCacheA, scanCacheB, scalpLabScanCache, scalpLabSelectedCache, scanCacheAMeta, scanCacheBMeta,
+      cascadeScanCache, cascadeScanMeta, cascadeScanReviewStatus,
       tvChartIntent, scalpWorkbenchIntent, aiReviewProvider,
       setActivePanel, refreshSignals, refreshPositions,
       refreshGuardian, toggleAutoTrade, toggleTestMode, executeSignal,
       closePosition, showToast, getLivePrice: livePriceGetter,
       setScanCacheA, setScanCacheB, setScalpLabScanCache, setScalpLabSelectedCache,
+      setCascadeScanCache, setCascadeScanMeta, markCascadeReviewOpened,
       setTvChartIntent, clearTvChartIntent, setScalpWorkbenchIntent, clearScalpWorkbenchIntent,
       setAiReviewProvider,
     }}>

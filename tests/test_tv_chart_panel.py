@@ -266,7 +266,8 @@ def test_tv_chart_panel_auto_review_guard_exists():
 def test_tv_chart_panel_auto_review_waits_for_chart_paint():
     source = _read(TV_PANEL)
 
-    assert "chartPaintReadyGenerationRef.current !== generation" in source
+    assert "chartPaintReadyForReview" in source
+    assert "chartPaintReadyGenerationRef.current === chartRenderGeneration" in source
     assert "requestAnimationFrame" in source
 
 
@@ -276,6 +277,25 @@ def test_tv_chart_panel_auto_review_waits_for_engine_b_overlay_state():
     assert "engineBOverlayPendingForReview" in source
     assert "if (!pendingAutoReviewRef.current || loading || !candles?.length || aiReviewLoading || engineBOverlayPendingForReview) return" in source
     assert "engineBOverlayStatus" in source
+
+
+def test_tv_chart_panel_auto_review_waits_for_indicator_readiness_and_settle_window():
+    source = _read(TV_PANEL)
+
+    assert "AUTO_REVIEW_CHART_SETTLE_MS = 10_000" in source
+    assert "chartIndicatorsReadyForReview" in source
+    assert "autoReviewEarliestRunAtRef" in source
+    assert "remainingSettleMs" in source
+    assert "setAutoReviewDelayTick" in source
+
+
+def test_tv_chart_panel_manual_review_cancels_pending_auto_review():
+    source = _read(TV_PANEL)
+
+    assert "function runManualAIReview()" in source
+    assert "pendingAutoReviewRef.current = false" in source
+    assert "autoReviewEarliestRunAtRef.current = null" in source
+    assert "onClick={runManualAIReview}" in source
 
 
 def test_tv_chart_panel_ai_review_sends_visible_range_meta():
@@ -452,6 +472,23 @@ def test_engine_a_review_layout_enables_required_lean_indicators():
     assert "MACD@tv-basicstudies" not in source
     assert "BB@tv-basicstudies" not in source
     assert "Stochastic@tv-basicstudies" not in source
+
+
+def test_tv_chart_auto_review_enables_required_lean_indicators():
+    source = _read(TV_PANEL)
+    auto_review_idx = source.index("if (tvChartIntent.autoReview)")
+    auto_review_block = source[auto_review_idx:auto_review_idx + 700]
+
+    assert "setShowQuantDebug(true)" in auto_review_block
+    assert "setEma20(true)" in auto_review_block
+    assert "setEma21(true)" in auto_review_block
+    assert "setEma50(true)" in auto_review_block
+    assert "setEma200(true)" in auto_review_block
+    assert "setDema200(!isCrypto)" in auto_review_block
+    assert "setVwapEnabled(isCrypto)" in auto_review_block
+    assert "setAdx14(isCrypto)" in auto_review_block
+    assert "setVolumeBars(isCrypto)" in auto_review_block
+    assert "setVolumeMa(isCrypto)" in auto_review_block
 
 
 def test_crypto_chart_exposes_bybit_provider_badge_and_required_indicators():

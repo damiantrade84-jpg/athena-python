@@ -245,6 +245,15 @@ export interface CascadeCandidate {
   actionState: CascadeActionState;
 }
 
+/** Persisted cascade scan session metadata (survives panel navigation). */
+export interface CascadeScanMeta {
+  scannedAt: string;
+  assetClass: string;
+  enableTriage: boolean;
+  topN: number;
+  lastError?: string | null;
+}
+
 /** POST /api/cascade-scan response (run + busy shapes). */
 export interface CascadeScanResponse {
   success?: boolean;

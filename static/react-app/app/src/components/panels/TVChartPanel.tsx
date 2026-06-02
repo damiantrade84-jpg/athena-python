@@ -174,6 +174,7 @@ const VISIBLE_BAR_COUNT = 180;
 const PRICE_CHART_HEIGHT_PX = 340;
 const STUDY_PANE_HEIGHT_PX = 110;
 const LIVE_TICK_MAX_AGE_SEC = 20;
+const AUTO_REVIEW_CHART_SETTLE_MS = 10_000;
 
 const TF_SECONDS: Record<string, number> = {
   M1: 60,
@@ -2060,9 +2061,11 @@ export default function TVChartPanel() {
   const appliedIntentIdRef = useRef<string | null>(null);
   const pendingAutoReviewRef = useRef(false);
   const autoReviewRanForIntentRef = useRef<string | null>(null);
+  const autoReviewEarliestRunAtRef = useRef<number | null>(null);
   const chartRenderGenerationRef = useRef('');
   const chartPaintReadyGenerationRef = useRef<string | null>(null);
   const [chartPaintReadyTick, setChartPaintReadyTick] = useState(0);
+  const [autoReviewDelayTick, setAutoReviewDelayTick] = useState(0);
 
   const candidateRows = useMemo(
     () => (Array.isArray(scanCacheA) ? scanCacheA.filter((row): row is EngineASignal => Boolean(row && typeof row === 'object')) : []),
@@ -2183,6 +2186,50 @@ export default function TVChartPanel() {
   const quantAdx14 = showQuantDebug && adx14;
   const quantVolumeBars = showQuantDebug && volumeBars;
   const quantVolumeMa = showQuantDebug && volumeMa;
+  const chartRenderGeneration = candles?.length
+    ? chartRenderGenerationKey(pair, backendTf, candles.length)
+    : null;
+  const chartPaintReadyForReview = Boolean(
+    chartRenderGeneration && chartPaintReadyGenerationRef.current === chartRenderGeneration,
+  );
+  const chartIndicatorsReadyForReview = useMemo(() => {
+    if (!candles?.length) return false;
+    const latest = studySnapshot.latest;
+    const hasLatest = (key: IndicatorKey) => Number.isFinite(latest[key]);
+    if (quantEma20 && !hasLatest('ema20')) return false;
+    if (isCryptoChart && quantEma21 && !hasLatest('ema21')) return false;
+    if (quantEma50 && !hasLatest('ema50')) return false;
+    if (quantEma200 && !hasLatest('ema200')) return false;
+    if (!isCryptoChart && quantDema200 && !hasLatest('dema200')) return false;
+    if (isCryptoChart && quantVwap && !hasLatest('vwap')) return false;
+    if (quantAtr14 && !hasLatest('atr14')) return false;
+    if (quantRsi14 && !hasLatest('rsi14')) return false;
+    if (quantAdx14 && !hasLatest('adx14')) return false;
+    if (isCryptoChart && quantVolumeBars && !Number.isFinite(latest.volume)) return false;
+    if (isCryptoChart && quantVolumeBars && quantVolumeMa && !hasLatest('volumeMa')) return false;
+    return true;
+  }, [
+    candles?.length,
+    studySnapshot.latest,
+    isCryptoChart,
+    quantEma20,
+    quantEma21,
+    quantEma50,
+    quantEma200,
+    quantDema200,
+    quantVwap,
+    quantAtr14,
+    quantRsi14,
+    quantAdx14,
+    quantVolumeBars,
+    quantVolumeMa,
+  ]);
+  const chartReviewPendingForReview =
+    loading ||
+    engineBOverlayPendingForReview ||
+    !candles?.length ||
+    !chartPaintReadyForReview ||
+    !chartIndicatorsReadyForReview;
   const pricePanelLegendItems = useMemo<IndicatorLegendValue[]>(() => {
     const latest = studySnapshot.latest;
     const items: IndicatorLegendValue[] = [];
@@ -2337,6 +2384,9 @@ export default function TVChartPanel() {
       const sig = isEngineSignalLike(tvChartIntent.signal) ? tvChartIntent.signal : null;
       const isCrypto = String(sig?.type || '').toLowerCase() === 'crypto';
       setShowQuantDebug(true);
+      setEma20(true);
+      setEma21(true);
+      setEma50(true);
       setEma200(true);
       setDema200(!isCrypto);
       setRsi14(true);
@@ -2350,6 +2400,7 @@ export default function TVChartPanel() {
     setAiReviewError(null);
     pendingAutoReviewRef.current = tvChartIntent.autoReview === true;
     autoReviewRanForIntentRef.current = null;
+    autoReviewEarliestRunAtRef.current = null;
     setIntentSourceBadge(
       tvChartIntent.source === 'signals' ? 'Opened from Signals' : `Opened from ${tvChartIntent.source}`,
     );
@@ -2359,15 +2410,37 @@ export default function TVChartPanel() {
 
   useEffect(() => {
     if (!pendingAutoReviewRef.current || loading || !candles?.length || aiReviewLoading || engineBOverlayPendingForReview) return;
-    const generation = chartRenderGenerationKey(pair, backendTf, candles.length);
-    if (chartPaintReadyGenerationRef.current !== generation) return;
+    const generation = chartRenderGeneration;
+    if (!generation || !chartPaintReadyForReview || !chartIndicatorsReadyForReview) return;
     const intentId = appliedIntentIdRef.current;
     if (!intentId || autoReviewRanForIntentRef.current === intentId) return;
+    if (autoReviewEarliestRunAtRef.current == null) {
+      autoReviewEarliestRunAtRef.current = Date.now() + AUTO_REVIEW_CHART_SETTLE_MS;
+    }
+    const remainingSettleMs = autoReviewEarliestRunAtRef.current - Date.now();
+    if (remainingSettleMs > 0) {
+      const timerId = window.setTimeout(
+        () => setAutoReviewDelayTick((tick) => tick + 1),
+        remainingSettleMs,
+      );
+      return () => window.clearTimeout(timerId);
+    }
     autoReviewRanForIntentRef.current = intentId;
     pendingAutoReviewRef.current = false;
+    autoReviewEarliestRunAtRef.current = null;
     setAutoReviewStatus('running');
     void runAIReview().finally(() => setAutoReviewStatus('done'));
-  }, [loading, candles, aiReviewLoading, engineBOverlayPendingForReview, pair, backendTf, chartPaintReadyTick]);
+  }, [
+    loading,
+    candles,
+    aiReviewLoading,
+    engineBOverlayPendingForReview,
+    chartRenderGeneration,
+    chartPaintReadyForReview,
+    chartIndicatorsReadyForReview,
+    chartPaintReadyTick,
+    autoReviewDelayTick,
+  ]);
 
   useEffect(() => {
     let cancelled = false;
@@ -2782,6 +2855,10 @@ export default function TVChartPanel() {
 
   async function runAIReview() {
     if (aiReviewLoading) return;
+    if (chartReviewPendingForReview) {
+      setChartError('Chart is still preparing indicators for review');
+      return;
+    }
     setAiReviewError(null);
     setAiReview(null);
     const sourceCanvas = await captureReviewCanvas(true);
@@ -2915,6 +2992,13 @@ export default function TVChartPanel() {
     } finally {
       setAiReviewLoading(false);
     }
+  }
+
+  function runManualAIReview() {
+    pendingAutoReviewRef.current = false;
+    autoReviewEarliestRunAtRef.current = null;
+    if (autoReviewStatus === 'pending') setAutoReviewStatus('idle');
+    void runAIReview();
   }
 
   useEffect(() => {
@@ -3460,13 +3544,13 @@ export default function TVChartPanel() {
                 size="sm"
                 variant="outline"
                 className="h-8 gap-2 text-xs"
-                onClick={runAIReview}
-                disabled={loading || aiReviewLoading || engineBOverlayPendingForReview || !candles?.length}
+                onClick={runManualAIReview}
+                disabled={aiReviewLoading || chartReviewPendingForReview}
                 aria-label="Run AI chart review"
-                aria-busy={aiReviewLoading || engineBOverlayPendingForReview}
+                aria-busy={aiReviewLoading || chartReviewPendingForReview}
               >
                 <Sparkles className="h-3.5 w-3.5" />
-                {engineBOverlayPendingForReview ? 'Preparing...' : aiReviewLoading ? 'Reviewing...' : 'AI Review'}
+                {chartReviewPendingForReview ? 'Preparing...' : aiReviewLoading ? 'Reviewing...' : 'AI Review'}
               </Button>
               {chartCandidate && (
                 <Button

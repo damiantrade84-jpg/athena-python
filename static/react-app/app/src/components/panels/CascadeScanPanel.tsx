@@ -18,9 +18,6 @@ import type { EngineASignal } from '@/types/athena';
 import apiClient from '@/lib/apiClient';
 import type { CascadeActionState, CascadeCandidate, CascadeScanResponse } from '@/types';
 
-/** Local-only chart-review status overlay. Cascade results never auto-run Vision. */
-type LocalReviewStatus = 'OPENED';
-
 const ACTION_STATE_CLASS: Record<CascadeActionState, string> = {
   READY_FOR_CHART_REVIEW: 'badge-long',
   ENGINE_A_ONLY: 'badge-neutral',
@@ -52,18 +49,30 @@ function compactList(items: string[] | undefined, max = 3): { text: string; titl
 }
 
 export default function CascadeScanPanel() {
-  const { showToast, setActivePanel, setTvChartIntent } = useStore();
-  const [assetClass, setAssetClass] = useState<string>('forex');
-  const [enableTriage, setEnableTriage] = useState<boolean>(false);
-  const [topN, setTopN] = useState<number>(5);
+  const {
+    showToast,
+    setActivePanel,
+    setTvChartIntent,
+    cascadeScanCache,
+    cascadeScanMeta,
+    cascadeScanReviewStatus,
+    setCascadeScanCache,
+    setCascadeScanMeta,
+    markCascadeReviewOpened,
+  } = useStore();
+  const [assetClass, setAssetClass] = useState(() => cascadeScanMeta?.assetClass ?? 'forex');
+  const [enableTriage, setEnableTriage] = useState(() => cascadeScanMeta?.enableTriage ?? false);
+  const [topN, setTopN] = useState(() => cascadeScanMeta?.topN ?? 5);
   const [loading, setLoading] = useState<boolean>(false);
-  const [error, setError] = useState<string | null>(null);
-  const [result, setResult] = useState<CascadeScanResponse | null>(null);
-  const [reviewStatus, setReviewStatus] = useState<Record<string, LocalReviewStatus>>({});
+  const result = cascadeScanCache;
+  const error = cascadeScanMeta?.lastError ?? null;
+  const reviewStatus = cascadeScanReviewStatus;
 
   const runScan = useCallback(async () => {
     setLoading(true);
-    setError(null);
+    const scannedAt = new Date().toISOString();
+    const metaBase = { scannedAt, assetClass, enableTriage, topN };
+    setCascadeScanMeta({ ...metaBase, lastError: null });
     try {
       const resp = (await apiClient.postJson('/api/cascade-scan', {
         asset_class: assetClass,
@@ -73,29 +82,30 @@ export default function CascadeScanPanel() {
       })) as CascadeScanResponse;
 
       if (resp?.busy) {
-        setError('A scan is already in progress. Try again shortly.');
+        const busyMsg = 'A scan is already in progress. Try again shortly.';
+        setCascadeScanMeta({ ...metaBase, lastError: busyMsg });
         showToast('Cascade scan busy — another scan is running', 'error');
         return;
       }
       if (resp?.success === false || resp?.error) {
-        setError(resp.error || 'Cascade scan failed');
-        showToast(`Cascade scan failed: ${resp.error || 'unknown'}`, 'error');
+        const failMsg = resp.error || 'Cascade scan failed';
+        setCascadeScanMeta({ ...metaBase, lastError: failMsg });
+        showToast(`Cascade scan failed: ${failMsg}`, 'error');
         return;
       }
-      setResult(resp);
-      setReviewStatus({});
+      setCascadeScanCache(resp, { ...metaBase, lastError: null }, { resetReviewStatus: true });
       showToast(
         `Cascade scan complete · ${resp.shortlistCount} shortlisted of ${resp.engineACandidateCount} Engine A candidates`,
         'success',
       );
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'unknown';
-      setError(msg);
+      setCascadeScanMeta({ ...metaBase, lastError: msg });
       showToast(`Cascade scan error: ${msg}`, 'error');
     } finally {
       setLoading(false);
     }
-  }, [assetClass, enableTriage, topN, showToast]);
+  }, [assetClass, enableTriage, topN, setCascadeScanCache, setCascadeScanMeta, showToast]);
 
   /**
    * Reuse the existing client-side chart flow: load the symbol + reviewTimeframe
@@ -121,13 +131,13 @@ export default function CascadeScanPanel() {
       });
       setActivePanel('tvChart');
       if (autoReview) {
-        setReviewStatus((prev) => ({ ...prev, [symbol]: 'OPENED' }));
+        markCascadeReviewOpened(symbol);
         showToast(`Opening ${symbol} (${candidate.reviewTimeframe}) for chart AI review`, 'info');
       } else {
         showToast(`Opening ${symbol} (${candidate.reviewTimeframe}) on TV Chart`, 'info');
       }
     },
-    [setActivePanel, setTvChartIntent, showToast],
+    [setActivePanel, setTvChartIntent, markCascadeReviewOpened, showToast],
   );
 
   const candidates = result?.candidates ?? [];
