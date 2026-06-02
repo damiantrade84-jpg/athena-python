@@ -191,6 +191,11 @@ interface ChartPricePrecision {
   asset_type: string;
   precision: number;
   min_move: number;
+  // Per-group EMA/RSI periods Engine A actually scores with (config
+  // ENGINE_A_EMA_PERIODS_BY_CLASS / ENGINE_A_RSI_PERIOD_BY_CLASS). Drives the
+  // chart's trend/momentum/long EMA lines so they match Engine A scoring.
+  ema_periods?: { trend?: number; long?: number; momentum?: number };
+  rsi_period?: number;
 }
 
 interface CandleApiRow {
@@ -788,6 +793,7 @@ function buildChartStudySnapshot(
   liveTick: LiveTick | null,
   backendTf: string | undefined,
   isCryptoChart: boolean,
+  emaPeriods: { trend: number; momentum: number; long: number },
 ): ChartStudySnapshot {
   const empty: ChartStudySnapshot = { rows: [], highs: [], lows: [], closes: [], volumes: [], seriesValues: {}, latest: {} };
   if (!candles?.length || !backendTf) return empty;
@@ -838,11 +844,22 @@ function buildChartStudySnapshot(
   // Prefer server-computed indicators (same calc_* library as Engine A) for all
   // asset classes; fall back to local math only when the API omitted them.
   const useApiIndicators = true;
-  const ema20Values = ema(cCloses, 20);
-  const ema21Values = useApiIndicators && apiEma21.some((v) => v != null) ? apiEma21 : ema(cCloses, 21);
-  const ema50Values = useApiIndicators && apiEma50.some((v) => v != null) ? apiEma50 : ema(cCloses, 50);
-  const ema200Values = useApiIndicators && apiEma200.some((v) => v != null) ? apiEma200 : ema(cCloses, 200);
-  const dema200Values = dema(cCloses, 200);
+  // Draw the trend/momentum/long EMA lines at the per-group periods Engine A
+  // scores with (see ChartPricePrecision.ema_periods). The local ema() matches
+  // the server calc_ema exactly, so recomputed (overridden) periods stay
+  // parity-faithful; prefer the API series only when the period is the standard
+  // 21/50/200 the API rows carry. The fast trend line (ema20 non-crypto /
+  // ema21 crypto) is unified onto the resolved trend period; DEMA tracks long.
+  const { trend: trendPeriod, momentum: momentumPeriod, long: longPeriod } = emaPeriods;
+  const emaTrendValues =
+    useApiIndicators && trendPeriod === 21 && apiEma21.some((v) => v != null) ? apiEma21 : ema(cCloses, trendPeriod);
+  const ema20Values = emaTrendValues;
+  const ema21Values = emaTrendValues;
+  const ema50Values =
+    useApiIndicators && momentumPeriod === 50 && apiEma50.some((v) => v != null) ? apiEma50 : ema(cCloses, momentumPeriod);
+  const ema200Values =
+    useApiIndicators && longPeriod === 200 && apiEma200.some((v) => v != null) ? apiEma200 : ema(cCloses, longPeriod);
+  const dema200Values = dema(cCloses, longPeriod);
   const rsi14Values = useApiIndicators && apiRsi14.some((v) => v != null) ? apiRsi14 : rsi(cCloses, 14);
   const atr14Values = useApiIndicators && apiAtr14.some((v) => v != null) ? apiAtr14 : atr(cHighs, cLows, cCloses, 14);
   const vwapAnchorTimes =
@@ -1930,19 +1947,20 @@ function buildCleanLegendChips(args: {
   ema200: boolean;
   dema200: boolean;
   vwap: boolean;
+  emaLabels: { trend: string; momentum: string; long: string; demaLong: string };
   engineBEnabled: boolean;
   engineBPayload: EngineBOverlayPayload | null;
 }): LegendChipSpec[] {
   const chips: LegendChipSpec[] = [];
   if (args.isCryptoChart) {
-    if (args.ema21) chips.push({ key: 'ema21', label: 'EMA21', color: INDICATOR_COLORS.ema21, swatch: 'line' });
+    if (args.ema21) chips.push({ key: 'ema21', label: args.emaLabels.trend, color: INDICATOR_COLORS.ema21, swatch: 'line' });
   } else if (args.ema20) {
-    chips.push({ key: 'ema20', label: 'EMA20', color: INDICATOR_COLORS.ema20, swatch: 'line' });
+    chips.push({ key: 'ema20', label: args.emaLabels.trend, color: INDICATOR_COLORS.ema20, swatch: 'line' });
   }
-  if (args.ema50) chips.push({ key: 'ema50', label: 'EMA50', color: INDICATOR_COLORS.ema50, swatch: 'line' });
-  if (args.ema200) chips.push({ key: 'ema200', label: 'EMA200', color: INDICATOR_COLORS.ema200, swatch: 'line' });
+  if (args.ema50) chips.push({ key: 'ema50', label: args.emaLabels.momentum, color: INDICATOR_COLORS.ema50, swatch: 'line' });
+  if (args.ema200) chips.push({ key: 'ema200', label: args.emaLabels.long, color: INDICATOR_COLORS.ema200, swatch: 'line' });
   if (!args.isCryptoChart && args.dema200) {
-    chips.push({ key: 'dema200', label: 'DEMA200', color: INDICATOR_COLORS.dema200, swatch: 'line' });
+    chips.push({ key: 'dema200', label: args.emaLabels.demaLong, color: INDICATOR_COLORS.dema200, swatch: 'line' });
   }
   if (args.isCryptoChart && args.vwap) {
     chips.push({ key: 'vwap', label: 'VWAP', color: INDICATOR_COLORS.vwap, swatch: 'line' });
@@ -2079,9 +2097,27 @@ export default function TVChartPanel() {
   const usesBybitChartTick =
     isBybitCryptoExecution(chartPayload) || isBybitLiveTickProvider(chartPayload?.live_tick_provider);
   const liveTick = usesBybitChartTick ? (chartTickLiveTick ?? chartPayloadLiveTick) : sharedLiveTick;
+  const emaPeriods = useMemo(() => {
+    const pp = chartPayload?.price_precision ?? engineBOverlay?.price_precision;
+    const p = pp?.ema_periods ?? {};
+    return {
+      trend: typeof p.trend === 'number' ? p.trend : 21,
+      momentum: typeof p.momentum === 'number' ? p.momentum : 50,
+      long: typeof p.long === 'number' ? p.long : 200,
+    };
+  }, [chartPayload?.price_precision, engineBOverlay?.price_precision]);
+  const emaLabels = useMemo(
+    () => ({
+      trend: `EMA${emaPeriods.trend}`,
+      momentum: `EMA${emaPeriods.momentum}`,
+      long: `EMA${emaPeriods.long}`,
+      demaLong: `DEMA${emaPeriods.long}`,
+    }),
+    [emaPeriods],
+  );
   const studySnapshot = useMemo(
-    () => buildChartStudySnapshot(candles, liveTick, backendTf, isCryptoChart),
-    [candles, liveTick, backendTf, isCryptoChart],
+    () => buildChartStudySnapshot(candles, liveTick, backendTf, isCryptoChart, emaPeriods),
+    [candles, liveTick, backendTf, isCryptoChart, emaPeriods],
   );
   const assetGroupLabel = chartPayload?.asset_group || chartPayload?.pairType || 'unknown';
   const chartProviderLabel = titleCaseProvider(chartPayload?.chart_provider || chartPayload?.candlesSource);
@@ -2151,16 +2187,16 @@ export default function TVChartPanel() {
     const latest = studySnapshot.latest;
     const items: IndicatorLegendValue[] = [];
     if (isCryptoChart) {
-      if (quantEma21) items.push({ definition: PRICE_PANEL_INDICATORS.ema21, value: latest.ema21 });
+      if (quantEma21) items.push({ definition: { ...PRICE_PANEL_INDICATORS.ema21, label: emaLabels.trend }, value: latest.ema21 });
     } else if (quantEma20) {
-      items.push({ definition: PRICE_PANEL_INDICATORS.ema20, value: latest.ema20 });
+      items.push({ definition: { ...PRICE_PANEL_INDICATORS.ema20, label: emaLabels.trend }, value: latest.ema20 });
     }
-    if (quantEma50) items.push({ definition: PRICE_PANEL_INDICATORS.ema50, value: latest.ema50 });
-    if (quantEma200) items.push({ definition: PRICE_PANEL_INDICATORS.ema200, value: latest.ema200 });
-    if (!isCryptoChart && quantDema200) items.push({ definition: PRICE_PANEL_INDICATORS.dema200, value: latest.dema200 });
+    if (quantEma50) items.push({ definition: { ...PRICE_PANEL_INDICATORS.ema50, label: emaLabels.momentum }, value: latest.ema50 });
+    if (quantEma200) items.push({ definition: { ...PRICE_PANEL_INDICATORS.ema200, label: emaLabels.long }, value: latest.ema200 });
+    if (!isCryptoChart && quantDema200) items.push({ definition: { ...PRICE_PANEL_INDICATORS.dema200, label: emaLabels.demaLong }, value: latest.dema200 });
     if (isCryptoChart && quantVwap) items.push({ definition: PRICE_PANEL_INDICATORS.vwap, value: latest.vwap });
     return items;
-  }, [studySnapshot.latest, isCryptoChart, quantEma20, quantEma21, quantEma50, quantEma200, quantDema200, quantVwap]);
+  }, [studySnapshot.latest, isCryptoChart, quantEma20, quantEma21, quantEma50, quantEma200, quantDema200, quantVwap, emaLabels]);
   const studyPanelLegendItems = useMemo<IndicatorLegendValue[]>(() => {
     const latest = studySnapshot.latest;
     const items: IndicatorLegendValue[] = [];
@@ -2211,10 +2247,11 @@ export default function TVChartPanel() {
       ema200: quantEma200,
       dema200: quantDema200,
       vwap: quantVwap,
+      emaLabels,
       engineBEnabled: showEngineBOverlays,
       engineBPayload: engineBOverlay,
     }),
-    [isCryptoChart, quantEma20, quantEma21, quantEma50, quantEma200, quantDema200, quantVwap, showEngineBOverlays, engineBOverlay],
+    [isCryptoChart, quantEma20, quantEma21, quantEma50, quantEma200, quantDema200, quantVwap, emaLabels, showEngineBOverlays, engineBOverlay],
   );
 
   // Derived preset label: "all" only when every indicator is on, otherwise "custom".
@@ -3324,13 +3361,13 @@ export default function TVChartPanel() {
         {showQuantDebug && (
           <div className="flex flex-wrap items-center gap-3 border-t border-border/40 pt-2">
             {isCryptoChart ? (
-              <IndicatorSwitch label="EMA21" checked={ema21} onCheckedChange={setEma21} />
+              <IndicatorSwitch label={emaLabels.trend} checked={ema21} onCheckedChange={setEma21} />
             ) : (
-              <IndicatorSwitch label="EMA20" checked={ema20} onCheckedChange={setEma20} />
+              <IndicatorSwitch label={emaLabels.trend} checked={ema20} onCheckedChange={setEma20} />
             )}
-            <IndicatorSwitch label="EMA50" checked={ema50} onCheckedChange={setEma50} />
-            <IndicatorSwitch label="EMA200" checked={ema200} onCheckedChange={setEma200} />
-            {!isCryptoChart && <IndicatorSwitch label="DEMA200" checked={dema200} onCheckedChange={setDema200} />}
+            <IndicatorSwitch label={emaLabels.momentum} checked={ema50} onCheckedChange={setEma50} />
+            <IndicatorSwitch label={emaLabels.long} checked={ema200} onCheckedChange={setEma200} />
+            {!isCryptoChart && <IndicatorSwitch label={emaLabels.demaLong} checked={dema200} onCheckedChange={setDema200} />}
             {isCryptoChart && <IndicatorSwitch label="VWAP" checked={vwapEnabled} onCheckedChange={setVwapEnabled} />}
             <IndicatorSwitch label="ATR14" checked={atr14} onCheckedChange={setAtr14} />
             <IndicatorSwitch label="RSI14" checked={rsi14} onCheckedChange={setRsi14} />
