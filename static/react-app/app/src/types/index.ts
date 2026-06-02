@@ -191,7 +191,73 @@ export type PanelId =
   | 'guardian'
   | 'aiPerformance'
   | 'exitStrategy'
+  | 'cascadeScan'
   | 'suggestedTrades';
+
+/**
+ * Derived data-fidelity diagnostic for a Cascade Scan candidate.
+ * Always an OBJECT (never a string) — render score%, pairSource, and freshness.
+ */
+export interface CascadeSourceFidelity {
+  score: number;
+  pairSource: string;
+  dataFreshness: string;
+  derived: boolean;
+}
+
+export type CascadeTriageVerdict = 'FULL_CHART_REVIEW' | 'WATCHLIST_ONLY' | 'SKIP';
+export type CascadeActionState =
+  | 'ENGINE_A_ONLY'
+  | 'WATCHLIST_ONLY'
+  | 'READY_FOR_CHART_REVIEW'
+  | 'BLOCKED';
+
+/** Single candidate from POST /api/cascade-scan (mirrors docs/cascade_scan_contract.md). */
+export interface CascadeCandidate {
+  symbol: string;
+  analysisTimeframes: string[];
+  displayTimeframe: string;
+  reviewTimeframe: string;
+  direction: string;
+  confluenceScore: number;
+  engineAVerdict: string;
+  shortlistRank: number;
+  shortlistPassed: boolean;
+  shortlistReasons: string[];
+  shortlistBlockers: string[];
+  rr: number | null;
+  regime: string | null;
+  session: string | null;
+  /** Optional ranking diagnostics (present in the contract, neutral for forex). */
+  sessionQualityScore?: number;
+  sessionQualityReason?: string;
+  freshnessDiagnostics: unknown;
+  sourceFidelity: CascadeSourceFidelity;
+  coherenceScore: number;
+  coherenceReason: string;
+  triageVerdict: CascadeTriageVerdict | null;
+  triageReason: string | null;
+  triageConfidence: number | null;
+  triagePriority?: number | null;
+  readyForChartReview: boolean;
+  reviewAction: 'OPEN_CHART_REVIEW';
+  chartAiStatus: 'NOT_RUN';
+  actionState: CascadeActionState;
+}
+
+/** POST /api/cascade-scan response (run + busy shapes). */
+export interface CascadeScanResponse {
+  success?: boolean;
+  busy?: boolean;
+  error?: string;
+  scanRunId: string;
+  assetClass: string;
+  universeCount: number;
+  engineACandidateCount: number;
+  shortlistCount: number;
+  triageEnabled: boolean;
+  candidates: CascadeCandidate[];
+}
 
 export interface LotteryNumber {
   numbers: number[];

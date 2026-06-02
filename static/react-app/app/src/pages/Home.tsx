@@ -20,6 +20,7 @@ import GuardianPanel from '@/components/panels/GuardianPanel';
 import AiPerformancePanel from '@/components/panels/AiPerformancePanel';
 import SuggestedTradesPanel from '@/components/panels/SuggestedTradesPanel';
 import ExitStrategyPanel from '@/components/panels/ExitStrategyPanel';
+import CascadeScanPanel from '@/components/panels/CascadeScanPanel';
 
 const panels: Record<string, React.ComponentType> = {
   dashboard: DashboardPanel,
@@ -41,6 +42,7 @@ const panels: Record<string, React.ComponentType> = {
   guardian: GuardianPanel,
   aiPerformance: AiPerformancePanel,
   exitStrategy: ExitStrategyPanel,
+  cascadeScan: CascadeScanPanel,
   suggestedTrades: SuggestedTradesPanel,
 };
 

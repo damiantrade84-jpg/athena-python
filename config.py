@@ -469,6 +469,45 @@ def _messages_to_openai_responses_input(messages) -> tuple[str | None, list[dict
     return ("\n\n".join(p for p in instructions if p).strip() or None), response_input
 
 
+_JSON_OBJECT_INPUT_HINT = "Respond with valid JSON only."
+
+
+def _responses_input_contains_json_keyword(response_input: list[dict]) -> bool:
+    for msg in response_input:
+        for block in msg.get("content") or []:
+            if not isinstance(block, dict):
+                continue
+            text = block.get("text")
+            if isinstance(text, str) and "json" in text.lower():
+                return True
+    return False
+
+
+def _ensure_json_keyword_in_responses_input(response_input: list[dict]) -> None:
+    """OpenAI Responses API requires 'json' in input when using json_object format."""
+    if _responses_input_contains_json_keyword(response_input):
+        return
+    if not response_input:
+        response_input.append(
+            {
+                "role": "user",
+                "content": [{"type": "input_text", "text": _JSON_OBJECT_INPUT_HINT}],
+            }
+        )
+        return
+    last = response_input[-1]
+    content = list(last.get("content") or [])
+    if content and isinstance(content[-1], dict) and content[-1].get("type") == "input_text":
+        existing = str(content[-1].get("text") or "")
+        content[-1] = {
+            "type": "input_text",
+            "text": f"{existing}\n\n{_JSON_OBJECT_INPUT_HINT}".strip(),
+        }
+    else:
+        content.append({"type": "input_text", "text": _JSON_OBJECT_INPUT_HINT})
+    last["content"] = content
+
+
 class _BetaChatCompletionsCompat:
     def parse(self, **_kwargs):
         raise NotImplementedError("structured chat parse is not available for this provider adapter")
@@ -509,27 +548,11 @@ class _OpenAIResponsesChatCompletionsCompat:
             )
             if response_text_config:
                 request_payload["text"] = response_text_config
-        # The Responses API validates that "json" appears in the input messages
-        # (not instructions) when json_object format is used. System-prompt-only
-        # callers pass json_object in response_format; their system content goes to
-        # instructions and the user message may not contain the word. Append a
-        # minimal hint to the last user input when needed.
-        if (
-            isinstance(request_payload.get("text"), dict)
-            and request_payload["text"].get("format", {}).get("type") == "json_object"
-            and response_input
-            and not any(
-                "json" in part.get("text", "").lower()
-                for msg in response_input
-                for part in (msg.get("content") or [])
-                if isinstance(part, dict)
-            )
-        ):
-            last = response_input[-1]
-            patched_content = list(last.get("content") or []) + [
-                {"type": "input_text", "text": "\n\nRespond with valid JSON."}
-            ]
-            response_input = response_input[:-1] + [{**last, "content": patched_content}]
+        text_format_type = (
+            (request_payload.get("text") or {}).get("format") or {}
+        ).get("type")
+        if text_format_type == "json_object":
+            _ensure_json_keyword_in_responses_input(response_input)
             request_payload["input"] = response_input
         timeout = kwargs.get("timeout") or self._owner.timeout_seconds
         resp = self._owner._client.responses.create(**request_payload, timeout=timeout)

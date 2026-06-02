@@ -13,12 +13,13 @@ import { Switch } from '@/components/ui/switch';
 import {
   LayoutDashboard, Zap, Search, Settings, TrendingUp,
   Layers, Activity, BarChart2, FlaskConical, Filter, Ticket,
-  Microscope, PieChart, Globe, ShieldCheck, Radio, BrainCircuit, ListChecks, LogOut,
+  Microscope, PieChart, Globe, ShieldCheck, Radio, BrainCircuit, ListChecks, LogOut, Workflow,
 } from 'lucide-react';
 
 const navItems: { id: PanelId; label: string; icon: ElementType; badge?: string }[] = [
   { id: 'dashboard',   label: 'Dashboard',   icon: LayoutDashboard },
   { id: 'signals',     label: 'Signals',      icon: Zap,        badge: 'LIVE' },
+  { id: 'cascadeScan', label: 'Cascade Scan', icon: Workflow,   badge: 'NEW' },
   { id: 'pairBrowser', label: 'Pair Browser', icon: Search },
   { id: 'liveCockpit', label: 'Live Cockpit', icon: Radio,      badge: 'CYBER' },
   { id: 'scanConfig',  label: 'Scan Config',  icon: Settings },
