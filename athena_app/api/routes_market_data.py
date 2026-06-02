@@ -514,11 +514,24 @@ def _overlay_precision_for(pair: dict | None) -> dict:
         precision = 3
     else:
         precision = _OVERLAY_PRECISION_BY_GROUP.get(group, 4)
+    asset_type = str(pair.get("type", "") or "")
+    # Per-group EMA/RSI periods Engine A scores with, so the chart can draw the
+    # actual scoring periods instead of fixed 50/200/14 lines.
+    try:
+        from factor_scoring import _resolve_ema_periods, _resolve_rsi_period
+
+        ema_periods = _resolve_ema_periods(group, asset_type)
+        rsi_period = _resolve_rsi_period(group, asset_type)
+    except Exception:
+        ema_periods = {"trend": 21, "long": 200, "momentum": 50}
+        rsi_period = 14
     return {
         "score_group": group,
-        "asset_type": str(pair.get("type", "") or ""),
+        "asset_type": asset_type,
         "precision": precision,
         "min_move": float(10 ** -precision),
+        "ema_periods": ema_periods,
+        "rsi_period": rsi_period,
     }
 
 

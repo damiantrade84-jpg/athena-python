@@ -1467,6 +1467,52 @@ def test_build_engine_a_prompt_context_includes_factor_scores():
     assert prompt_ctx["diagnostics"]["rsi"] == 54.2
 
 
+def test_build_engine_a_prompt_context_surfaces_per_group_indicator_periods():
+    """Engine A's per-group scoring periods (not the chart's fixed 50/200) reach the model."""
+    ctx = _engine_a_ctx(asset_group="forex_majors", asset_class="forex")
+    ctx["indicator_snapshots"] = {"rsi": 55.0, "rsi_tf": "H4"}
+    ctx["engine_snapshots"] = extract_engine_snapshots({}, ctx)
+    diag = build_engine_a_prompt_context(ctx)["diagnostics"]
+    assert diag["emaTrendPeriod"] == 26
+    assert diag["emaMomentumPeriod"] == 60
+    assert diag["emaLongPeriod"] == 200
+    assert diag["rsiPeriod"] == 18
+    assert diag["rsiTimeframe"] == "H4"
+
+
+def test_chart_indicator_parity_compares_rsi_atr_adx():
+    """Chart-sent rsi14/atr14/adx14 are compared against Engine A H4 refs, not dropped."""
+    from ai_review.engine_a_context import _chart_indicator_parity
+
+    screenshot_meta = {
+        "chart_snapshot": {
+            "chartIndicators": {
+                "timeframe": "H4",
+                "ema50": 100.0,
+                "ema200": 95.0,
+                "rsi14": 70.0,
+                "atr14": 5.0,
+                "adx14": 40.0,
+            }
+        }
+    }
+    ema_levels = {"ema50": 100.0, "ema200": 95.0}
+    engine_refs = {
+        "rsi14": 55.0,
+        "atr14": 4.0,
+        "adx14": 20.0,
+        "ema_periods": {"trend": 26, "long": 200, "momentum": 60},
+        "rsi_tf": "H4",
+    }
+    block, warnings = _chart_indicator_parity(screenshot_meta, ema_levels, engine_refs)
+    assert block["status"] == "values_differ"
+    assert "chart_indicators_differ_from_engine_a" in warnings
+    assert set(block["mismatches"]) == {"rsi14", "atr14", "adx14"}
+    assert "ema50" not in block["mismatches"]
+    assert block["engine_a_ema_periods"]["trend"] == 26
+    assert block["rsi_timeframe"] == "H4"
+
+
 def test_build_score_attribution_for_scan_payload():
     from ai_review.engine_a_context import build_score_attribution
 

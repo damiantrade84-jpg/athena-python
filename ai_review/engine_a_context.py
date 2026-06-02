@@ -646,7 +646,8 @@ def _merge_factor_diagnostics(
     return merged
 
 
-def _rsi_from_signal(signal: dict[str, Any]) -> float | None:
+def _rsi_from_signal(signal: dict[str, Any]) -> tuple[float | None, str | None]:
+    """Return (rsi, timeframe) from the first TF snapshot that carries RSI."""
     for key in ("h4", "h1", "d1"):
         block = signal.get(key)
         if not isinstance(block, dict):
@@ -656,8 +657,8 @@ def _rsi_from_signal(signal: dict[str, Any]) -> float | None:
             continue
         rsi = _to_float(snap.get("rsi"))
         if rsi is not None:
-            return rsi
-    return None
+            return rsi, key.upper()
+    return None, None
 
 
 def _intermarket_block(signal: dict[str, Any], factor_diag: dict[str, Any]) -> dict[str, Any]:
@@ -821,13 +822,21 @@ def _review_style_diagnostic(
 def _chart_indicator_parity(
     screenshot_meta: dict[str, Any] | None,
     ema_levels: dict[str, Any],
+    engine_refs: dict[str, Any] | None = None,
 ) -> tuple[dict[str, Any], list[str]]:
     """Compare chart-drawn (visible-TF) indicators against Engine A's basis.
 
     Engine A's trend EMAs come from the H4 snapshot, so the chart's visible-TF
-    lines are only directly comparable when the chart is on H4. Advisory only —
-    never affects scoring.
+    lines are only directly comparable when the chart is on H4. The chart sends
+    ema50/ema200/rsi14/atr14/adx14; all five are compared against Engine A's H4
+    references here. Advisory only — never affects scoring.
+
+    The chart draws fixed EMA50/EMA200 lines, but Engine A's trend/momentum EMAs
+    use per-group periods (engine_a_ema_periods); a value mismatch on ema50 can
+    therefore be expected for non-default groups, so the scoring periods are
+    surfaced alongside the comparison for the model to reconcile.
     """
+    refs = engine_refs or {}
     meta = screenshot_meta or {}
     snap = meta.get("chart_snapshot") if isinstance(meta.get("chart_snapshot"), dict) else {}
     chart_ind = snap.get("chartIndicators") if isinstance(snap.get("chartIndicators"), dict) else {}
@@ -842,17 +851,25 @@ def _chart_indicator_parity(
     mismatches: dict[str, Any] = {}
 
     if chart_ind and comparable:
-        def _cmp(name: str, chart_val: Any, eng_val: Any) -> None:
+        def _cmp(name: str, chart_val: Any, eng_val: Any, tol: float) -> None:
             cv = _to_float(chart_val)
             ev = _to_float(eng_val)
             if cv is None or ev is None:
                 return
-            tol = max(abs(ev) * 0.0025, 1e-9)
             if abs(cv - ev) > tol:
                 mismatches[name] = {"chart": cv, "engineA": ev}
 
-        _cmp("ema50", chart_ind.get("ema50"), ema_levels.get("ema50"))
-        _cmp("ema200", chart_ind.get("ema200"), ema_levels.get("ema200"))
+        def _rel(eng_val: Any, frac: float) -> float:
+            ev = _to_float(eng_val)
+            return max(abs(ev) * frac, 1e-9) if ev is not None else 1e-9
+
+        # Price-scale indicators: relative tolerance.
+        _cmp("ema50", chart_ind.get("ema50"), ema_levels.get("ema50"), _rel(ema_levels.get("ema50"), 0.0025))
+        _cmp("ema200", chart_ind.get("ema200"), ema_levels.get("ema200"), _rel(ema_levels.get("ema200"), 0.0025))
+        _cmp("atr14", chart_ind.get("atr14"), refs.get("atr14"), _rel(refs.get("atr14"), 0.05))
+        # Bounded 0-100 oscillators: absolute tolerance.
+        _cmp("rsi14", chart_ind.get("rsi14"), refs.get("rsi14"), 2.0)
+        _cmp("adx14", chart_ind.get("adx14"), refs.get("adx14"), 2.0)
         if mismatches:
             warnings.append("chart_indicators_differ_from_engine_a")
 
@@ -873,6 +890,8 @@ def _chart_indicator_parity(
             "chart_indicators_present": bool(chart_ind),
             "status": status,
             "mismatches": mismatches,
+            "engine_a_ema_periods": refs.get("ema_periods"),
+            "rsi_timeframe": refs.get("rsi_tf"),
         },
         warnings,
     )
@@ -925,6 +944,8 @@ def assemble_engine_a_context(
     latest_candle_ts = h1_ts or h4_ts or d1_ts
 
     scan_timestamp = signal.get("timestamp") or datetime.now(timezone.utc).isoformat()
+
+    rsi_value, rsi_tf = _rsi_from_signal(signal)
 
     ctx = {
         "symbol": signal.get("symbol") or pair.get("symbol"),
@@ -1018,7 +1039,7 @@ def assemble_engine_a_context(
             )
             if value is not None
         ],
-        "indicator_snapshots": {"rsi": _rsi_from_signal(signal)},
+        "indicator_snapshots": {"rsi": rsi_value, "rsi_tf": rsi_tf},
         "intermarket": _intermarket_block(signal, factor_diag),
         "news_sentiment": _news_sentiment_block(signal),
     }
@@ -1028,7 +1049,19 @@ def assemble_engine_a_context(
     ctx["engine_a_non_visual_context"] = ctx["non_visual_context"]
     ctx["score_attribution"] = _score_attribution(signal, factor_diag, ctx)
     ctx["review_style_diagnostic"] = _review_style_diagnostic(style, screenshot_meta, timeframe)
-    parity, parity_warnings = _chart_indicator_parity(screenshot_meta, ctx["ema_levels"])
+    h4_snap = (signal.get("h4") or {}).get("snap") or {}
+    from factor_scoring import _resolve_ema_periods
+
+    engine_refs = {
+        "rsi14": _to_float(h4_snap.get("rsi")),
+        "atr14": _to_float(ctx["atr"].get("atr_h4")) if h4_snap.get("atr") is None else _to_float(h4_snap.get("atr")),
+        "adx14": _to_float(factor_diag.get("adx_value") or factor_diag.get("adxValue") or h4_snap.get("adx")),
+        "ema_periods": _resolve_ema_periods(ctx.get("asset_group"), str(pair.get("type") or "")),
+        "rsi_tf": "H4",
+    }
+    parity, parity_warnings = _chart_indicator_parity(
+        screenshot_meta, ctx["ema_levels"], engine_refs
+    )
     ctx["indicator_parity"] = parity
     if parity_warnings:
         ctx["mismatch_warnings"] = list(ctx.get("mismatch_warnings") or []) + parity_warnings
@@ -1266,6 +1299,17 @@ def build_engine_a_prompt_context(engine_a_ctx: dict[str, Any]) -> dict[str, Any
     if not isinstance(score_attribution, dict):
         score_attribution = _score_attribution({}, fd, engine_a_ctx)
 
+    # Per-group indicator periods Engine A actually scored with. The chart draws
+    # fixed EMA50/EMA200, but for most groups Engine A's trend/momentum EMAs and
+    # RSI use different periods (e.g. forex 26/60/rsi18, crypto 18/40/rsi12), so
+    # the model must reconcile against these, not the chart's fixed lines.
+    from factor_scoring import _resolve_ema_periods, _resolve_rsi_period
+
+    score_group = engine_a_ctx.get("asset_group")
+    asset_type = str(engine_a_ctx.get("asset_class") or "")
+    ema_periods = _resolve_ema_periods(score_group, asset_type)
+    rsi_period = _resolve_rsi_period(score_group, asset_type)
+
     return {
         "direction": engine_a_ctx.get("direction"),
         "score": ea.get("score") if ea.get("score") is not None else engine_a_ctx.get("confluence_score"),
@@ -1295,6 +1339,11 @@ def build_engine_a_prompt_context(engine_a_ctx: dict[str, Any]) -> dict[str, Any
             "ema200": _to_float(ema_levels.get("ema200")),
             "dema200": _to_float(ema_levels.get("dema200")),
             "emaTimeframe": "H4",
+            "emaTrendPeriod": ema_periods.get("trend"),
+            "emaMomentumPeriod": ema_periods.get("momentum"),
+            "emaLongPeriod": ema_periods.get("long"),
+            "rsiPeriod": rsi_period,
+            "rsiTimeframe": indicators.get("rsi_tf"),
             "vwapDistanceAtr": _to_float(crypto_diag.get("vwap_distance_atr")),
             "vwapExtended": vwap_ext if isinstance(vwap_ext, bool) else None,
             "adxD1": _to_float(adx_capture.get("trendStateAdxValue")),
