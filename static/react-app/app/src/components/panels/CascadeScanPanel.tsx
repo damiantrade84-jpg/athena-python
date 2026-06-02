@@ -13,6 +13,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { ErrorBanner } from '@/components/shared';
 import { Workflow, BarChart2, Eye, RefreshCw, Filter } from 'lucide-react';
 import { fmtNum, cn } from '@/lib/utils';
+import { regimeLabel, sessionLabel } from '@/lib/athenaFormat';
+import type { EngineASignal } from '@/types/athena';
 import apiClient from '@/lib/apiClient';
 import type { CascadeActionState, CascadeCandidate, CascadeScanResponse } from '@/types';
 
@@ -264,7 +266,10 @@ export default function CascadeScanPanel() {
                           {c.rr == null ? '—' : fmtNum(c.rr, 2)}
                         </TableCell>
                         <TableCell className="text-[11px]">
-                          {(c.regime || '—')}<span className="text-muted-foreground"> / {c.session || '—'}</span>
+                          {regimeLabel(c.regime as EngineASignal['regime'])}
+                          <span className="text-muted-foreground">
+                            {' '}/ {sessionLabel(c.session as EngineASignal['session'])}
+                          </span>
                         </TableCell>
                         <TableCell className="text-xs font-mono text-right" title={c.coherenceReason}>
                           {fmtNum(c.coherenceScore, 2)}

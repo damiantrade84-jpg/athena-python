@@ -140,11 +140,15 @@ export function convictionTier(c: number | null | undefined): {
 export function regimeLabel(regime: EngineASignal['regime']): string {
   if (!regime) return '—';
   if (typeof regime === 'string') return regime;
-  return regime.label || regime.smoothed || '—';
+  const row = regime as { label?: string; state?: string; smoothed?: string };
+  return row.label || row.state || row.smoothed || '—';
 }
 
 export function sessionLabel(session: EngineASignal['session']): string {
   if (!session) return '—';
   if (typeof session === 'string') return session;
-  return session.name || '—';
+  const row = session as { name?: string; session?: string };
+  if (row.name) return row.name;
+  if (typeof row.session === 'string') return row.session;
+  return '—';
 }
