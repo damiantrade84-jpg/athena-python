@@ -595,10 +595,33 @@ def _default_btc_bias() -> str:
         return "neutral"
 
 
-def _default_analyze_pair(pair: dict[str, Any], btc_bias: str, style: str) -> dict[str, Any] | None:
+def _default_analyze_pair(
+    pair: dict[str, Any],
+    btc_bias: str,
+    style: str,
+    **kwargs: Any,
+) -> dict[str, Any] | None:
     from scanner import analyze_pair
 
-    return analyze_pair(pair, btc_bias, style=style)
+    # Capture candle fetch metadata from candles_cache before analyze_pair's own
+    # fetch overwrites it, so AI-review payloads can surface cacheHit when the
+    # cache already holds the bars. Diagnostics only — does not affect scoring.
+    if "preloaded_fetch_meta" not in kwargs:
+        from candles_cache import get_candle_fetch_meta
+        from config import scan_candle_limits
+
+        _lim = scan_candle_limits()
+        kwargs["preloaded_fetch_meta"] = {
+            tf: get_candle_fetch_meta(pair, tf, _lim[tf])
+            for tf in ("D1", "H4", "H1")
+        }
+
+    return analyze_pair(
+        pair,
+        btc_bias,
+        style=style,
+        **kwargs,
+    )
 
 
 def resolve_chart_review_analyze_style(
