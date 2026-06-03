@@ -3340,8 +3340,9 @@ def fetch_dxy_context():
 def fetch_usd_relative_strength_context(
     pair: dict, asset_candles: list | None, tf: str = "H4"
 ) -> dict | None:
-    """USD macro context for XAU/USD using DXY as the USD proxy."""
-    if not pair or pair.get("display") != "XAU/USD" or not asset_candles:
+    """USD macro context for precious metals using DXY as the USD proxy."""
+    from scoring import _PRECIOUS_TRACKERS
+    if not pair or pair.get("display") not in _PRECIOUS_TRACKERS or not asset_candles:
         return None
 
     try:

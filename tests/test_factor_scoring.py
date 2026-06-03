@@ -2840,3 +2840,33 @@ def test_price_momentum_volatility_normalization(monkeypatch):
     )
     assert val_lo == 0.15  # Dynamic threshold of 0.71% cleared by 5% ROC
     assert detail_lo["threshold"] == pytest.approx(0.0071, abs=1e-4)
+
+
+def test_macro_context_usd_relative_strength_score(monkeypatch):
+    monkeypatch.setitem(CONFIG, "ENGINE_A_SCORE_GROUP_ADJUSTMENTS_ENABLED", True)
+    
+    d1 = _snap("long")
+    h1 = _snap("long")
+    h4 = _snap("long")
+    pair = {"type": "commodity", "display": "XAU/USD", "symbol": "GC=F"}
+    
+    # 1. Macro score = 3.0 (bullish for LONG)
+    macro_bullish = {"usd_proxy_score": 3.0}
+    res_bullish = compute_factor_scores(
+        d1, h4, h1, pair, [], [], [], 1.0,
+        macro_context=macro_bullish
+    )
+    
+    # 2. Macro score = -3.0 (bearish for LONG)
+    macro_bearish = {"usd_proxy_score": -3.0}
+    res_bearish = compute_factor_scores(
+        d1, h4, h1, pair, [], [], [], 1.0,
+        macro_context=macro_bearish
+    )
+    
+    assert res_bullish["final_score"] > res_bearish["final_score"]
+    # Check that they differ by the expected amount.
+    # Base score * (1 + 0.02) vs Base score * (1 - 0.02)
+    # The relative difference is ~4% of base score.
+    diff_pct = (res_bullish["final_score"] - res_bearish["final_score"]) / res_bearish["final_score"]
+    assert pytest.approx(diff_pct, abs=1e-2) == 0.04

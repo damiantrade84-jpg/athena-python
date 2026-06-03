@@ -3368,6 +3368,12 @@ def compute_factor_scores(
             _macro_adj = _macro_adj_max
         elif _macro_state == "risk_off":
             _macro_adj = _macro_adj_min
+        else:
+            _macro_score = macro_context.get("usd_proxy_score") if macro_context.get("usd_proxy_score") is not None else macro_context.get("score")
+            if isinstance(_macro_score, (int, float)):
+                _dir_sign = 1 if direction == "LONG" else -1
+                _normalized_score = max(-1.0, min(1.0, _macro_score / 3.0))
+                _macro_adj = _normalized_score * _dir_sign * _macro_adj_max
     elif isinstance(macro_context, str):
         _macro_s = macro_context.lower()
         if _macro_s == "risk_on":
