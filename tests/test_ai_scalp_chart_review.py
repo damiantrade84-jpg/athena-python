@@ -651,6 +651,20 @@ def test_ai_scalp_review_rejects_severe_direction_mismatch():
     assert reason == "direction_mismatch"
 
 
+def test_ai_scalp_review_allows_direction_none_on_server():
+    from ai_scalp_review.engine_d_context import severe_chart_snapshot_reject_reason, _validate_chart_snapshot_warnings
+
+    meta = _base_request()["screenshot_meta"]
+    meta["chart_snapshot"]["selectedSignal"]["direction"] = "SHORT"
+
+    ctx = _engine_d_ctx(direction="NONE")
+    reason = severe_chart_snapshot_reject_reason("BTCUSDT", ctx, meta, has_screenshot=True)
+    assert reason is None
+
+    warnings = _validate_chart_snapshot_warnings(ctx, meta)
+    assert "client_server_direction_mismatch" not in warnings
+
+
 def test_chart_data_stale_allows_normal_m5_bar_lag():
     from ai_scalp_review.engine_d_context import severe_chart_snapshot_reject_reason
 

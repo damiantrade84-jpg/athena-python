@@ -189,13 +189,17 @@ def _validate_chart_snapshot_warnings(
     if not isinstance(snapshot, dict):
         return warnings
     selected = snapshot.get("selectedSignal") or {}
+
+    snap_dir = str(selected.get("direction") or "").upper()
+    srv_dir = str(engine_d_ctx.get("direction") or "").upper()
+    if not snap_dir or not srv_dir or snap_dir == "NONE" or srv_dir == "NONE":
+        return warnings
+
     setup = engine_d_ctx.get("scalpSetup") or {}
     location = engine_d_ctx.get("marketLocation") or {}
     profile = snapshot.get("profile") or {}
 
-    snap_dir = str(selected.get("direction") or "").upper()
-    srv_dir = str(engine_d_ctx.get("direction") or "").upper()
-    if snap_dir and srv_dir and snap_dir != srv_dir:
+    if snap_dir != srv_dir:
         warnings.append("client_server_direction_mismatch")
 
     for field, snap_key, srv_key in (
@@ -277,7 +281,7 @@ def severe_chart_snapshot_reject_reason(
 
     snap_dir = str(selected.get("direction") or "").upper()
     srv_dir = str(engine_d_ctx.get("direction") or "").upper()
-    if snap_dir and srv_dir and snap_dir != srv_dir:
+    if snap_dir and srv_dir and srv_dir != "NONE" and snap_dir != "NONE" and snap_dir != srv_dir:
         return "direction_mismatch"
 
     captured_at = _parse_iso_ts((screenshot_meta or {}).get("captured_at"))
