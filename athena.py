@@ -16208,7 +16208,15 @@ register_ai_chart_review_routes(
         log=log,
         resolve_pair_fn=lambda symbol: _resolve_pair_from_signal({"symbol": symbol}),
         analyze_pair_fn=lambda pair, btc_bias, style="swing": analyze_pair(
-            pair, btc_bias, style=style
+            pair,
+            btc_bias,
+            style=style,
+            # Capture cache metadata before analyze_pair's own fetch overwrites it
+            # so AI-review payloads surface cacheHit. Diagnostics only, advisory path.
+            preloaded_fetch_meta={
+                tf: _get_candle_fetch_meta(pair, tf, scan_candle_limits()[tf])
+                for tf in ("D1", "H4", "H1")
+            },
         ),
         btc_bias_fn=_current_btc_bias,
     ),
