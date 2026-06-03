@@ -787,6 +787,7 @@ ENGINE_A_RESEARCH_LAB_FACTORS:
   BONUS: 0.15
   PENALTY: -0.10
   MAX_ABS: 0.20
+  ROC_VOL_NORM: false
   FACTORS:
     - obv_divergence
     - bollinger_touch

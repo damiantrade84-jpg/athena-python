@@ -2769,3 +2769,74 @@ def test_calc_confluence_bridges_ortho_diagnostics_without_signing_nested_votes(
     assert fd["orthoEnabled"] is True
     assert fd["orthoVote"] == detail
     assert "FACTOR_ORTHO" not in out["votes"]
+
+
+def test_di_alignment_multiplier_is_smooth(monkeypatch):
+    monkeypatch.setitem(CONFIG, "ENGINE_A_SCORE_GROUP_ADJUSTMENTS_ENABLED", True)
+    
+    d1 = _snap("long")
+    h1 = _snap("long")
+    pair = {"type": "forex", "display": "EUR/USD", "symbol": "EURUSD"}
+    
+    # Run at 2.5 adverse (di_diff = -2.5)
+    h4_minor = _snap("long")
+    h4_minor["plusDI"] = 20.0
+    h4_minor["minusDI"] = 22.5
+    
+    res_minor = compute_factor_scores(
+        d1, h4_minor, h1, pair, [], [], [], 1.0
+    )
+    
+    # Run at 5.0 adverse (di_diff = -5.0)
+    h4_limit = _snap("long")
+    h4_limit["plusDI"] = 20.0
+    h4_limit["minusDI"] = 25.0
+    
+    res_limit = compute_factor_scores(
+        d1, h4_limit, h1, pair, [], [], [], 1.0
+    )
+    
+    assert res_limit["feed_status"]["di_align"] == "0.85"
+    assert res_minor["feed_status"]["di_align"] == "0.93"
+
+
+def test_volume_price_concordance_correct_weighting():
+    candles = [
+        {"close": 10.0, "vol": 100},
+        {"close": 11.0, "vol": 100},
+        {"close": 12.0, "vol": 100},
+        {"close": 13.0, "vol": 100},
+        {"close": 14.0, "vol": 100},
+        {"close": 13.0, "vol": 1000},  # Down bar on huge volume
+    ]
+    concordance = factor_scoring._volume_price_concordance(candles, "LONG", lookback=5)
+    assert concordance < 0.0
+    assert concordance == pytest.approx(-0.42857, abs=1e-4)
+
+
+def test_price_momentum_volatility_normalization(monkeypatch):
+    monkeypatch.setitem(CONFIG, "ENGINE_A_RESEARCH_LAB_FACTORS", {
+        "ENABLED": True,
+        "BONUS": 0.15,
+        "PENALTY": -0.10,
+        "MAX_ABS": 0.20,
+        "FACTORS": ["price_momentum"],
+        "ROC_VOL_NORM": True
+    })
+    
+    snap_hi = {"atr": 4.0, "close": 100.0}
+    candles = [{"close": 100.0} for _ in range(15)]
+    candles[-1] = {"close": 105.0} # ROC = 5%
+    
+    val_hi, detail_hi = factor_scoring._research_price_momentum_value(
+        "LONG", candles, 0.15, -0.10, snap=snap_hi
+    )
+    assert val_hi == 0.0  # Dynamic threshold of 5% (max capped) not cleared by 5% ROC (strictly > threshold)
+    assert detail_hi["threshold"] == 0.05
+    
+    snap_lo = {"atr": 0.5, "close": 100.0}
+    val_lo, detail_lo = factor_scoring._research_price_momentum_value(
+        "LONG", candles, 0.15, -0.10, snap=snap_lo
+    )
+    assert val_lo == 0.15  # Dynamic threshold of 0.71% cleared by 5% ROC
+    assert detail_lo["threshold"] == pytest.approx(0.0071, abs=1e-4)

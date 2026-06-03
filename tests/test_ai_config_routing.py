@@ -305,3 +305,79 @@ def test_openai_responses_adapter_forwards_json_schema_response_format(monkeypat
     assert captured["text"]["format"]["type"] == "json_schema"
     assert captured["text"]["format"]["name"] == "example_schema"
     assert captured["text"]["format"]["strict"] is True
+
+
+def test_openai_responses_json_object_injects_json_hint_when_input_missing_keyword(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "test-openai-key")
+    captured = {}
+
+    class _FakeResponses:
+        @staticmethod
+        def create(**kwargs):
+            captured.update(kwargs)
+            return SimpleNamespace(output_text='{"grade": "B"}', model="gpt-5.5")
+
+    class _FakeOpenAI:
+        def __init__(self, **_kwargs):
+            self.responses = _FakeResponses()
+            self.max_retries = 0
+
+    monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(OpenAI=_FakeOpenAI))
+    client = create_ai_client(
+        {
+            "AI_REVIEW_PROVIDER": "openai",
+            "OPENAI_REVIEW_MODEL": "gpt-5.5",
+            "OPENAI_API_KEY": "test-openai-key",
+        },
+        provider="openai",
+    )
+
+    client.chat.completions.create(
+        model="gpt-5.5",
+        messages=[
+            {"role": "system", "content": "Output ONLY valid JSON."},
+            {"role": "user", "content": "Pair: MSFT | Direction: LONG"},
+        ],
+        response_format={"type": "json_object"},
+    )
+
+    assert captured["text"]["format"]["type"] == "json_object"
+    user_text = captured["input"][-1]["content"][-1]["text"]
+    assert "json" in user_text.lower()
+    assert "Pair: MSFT | Direction: LONG" in user_text
+
+
+def test_openai_responses_json_object_does_not_duplicate_when_present(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "test-openai-key")
+    captured = {}
+
+    class _FakeResponses:
+        @staticmethod
+        def create(**kwargs):
+            captured.update(kwargs)
+            return SimpleNamespace(output_text='{"grade": "B"}', model="gpt-5.5")
+
+    class _FakeOpenAI:
+        def __init__(self, **_kwargs):
+            self.responses = _FakeResponses()
+            self.max_retries = 0
+
+    monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(OpenAI=_FakeOpenAI))
+    client = create_ai_client(
+        {
+            "AI_REVIEW_PROVIDER": "openai",
+            "OPENAI_REVIEW_MODEL": "gpt-5.5",
+            "OPENAI_API_KEY": "test-openai-key",
+        },
+        provider="openai",
+    )
+
+    original_user = "Return JSON with grade field."
+    client.chat.completions.create(
+        model="gpt-5.5",
+        messages=[{"role": "user", "content": original_user}],
+        response_format={"type": "json_object"},
+    )
+
+    user_text = captured["input"][-1]["content"][-1]["text"]
+    assert user_text == original_user

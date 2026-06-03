@@ -1037,6 +1037,8 @@ def _research_lab_candidate_addon(
     d1_candles: list,
     asset_type: str,
     score_group: str | None = None,
+    h4_snap: dict | None = None,
+    d1_snap: dict | None = None,
 ) -> tuple[float, dict]:
     """Research Lab candidate factor, config-gated and bounded.
 
@@ -1052,6 +1054,7 @@ def _research_lab_candidate_addon(
     )
 
     default_candles = d1_candles if len(d1_candles or []) >= 60 else h4_candles
+    default_snap = d1_snap if len(d1_candles or []) >= 60 else h4_snap
     if not default_candles or len(default_candles) < 60:
         return 0.0, {
             "enabled": True,
@@ -1073,6 +1076,7 @@ def _research_lab_candidate_addon(
     for name in allowed:
         factor_name = str(name)
         candles = h4_candles if factor_name == "stochastic_cross" else default_candles
+        snap_to_use = h4_snap if factor_name == "stochastic_cross" else default_snap
         val, detail = _research_factor_value(
             factor_name,
             direction,
@@ -1082,6 +1086,7 @@ def _research_lab_candidate_addon(
             cfg=cfg,
             pair=pair,
             asset_type=asset_type,
+            snap=snap_to_use,
         )
         components[str(name)] = detail
         total += val
@@ -1110,6 +1115,7 @@ def _research_factor_value(
     cfg: dict | None = None,
     pair: dict | None = None,
     asset_type: str = "",
+    snap: dict | None = None,
 ) -> tuple[float, dict]:
     """Stage 2.6: Universal research lab factors.
 
@@ -1124,7 +1130,7 @@ def _research_factor_value(
         if name == "bollinger_touch":
             return _research_bollinger_value(direction, candles, bonus, penalty)
         if name == "price_momentum":
-            return _research_price_momentum_value(direction, candles, bonus, penalty)
+            return _research_price_momentum_value(direction, candles, bonus, penalty, snap=snap)
         # Legacy factors — still callable but not in default factor list
         if name == "stochastic_cross":
             return _research_stochastic_value(direction, candles, bonus, penalty, cfg=cfg, pair=pair, asset_type=asset_type)
@@ -1288,23 +1294,43 @@ def _research_bollinger_value(direction: str, candles: list, bonus: float, penal
     return 0.0, {"signal": "inside_bands", "value": 0.0}
 
 
-def _research_price_momentum_value(direction: str, candles: list, bonus: float, penalty: float) -> tuple[float, dict]:
-    """10-period rate of change momentum factor.
-
-    Replaces stochastic_cross + chandelier_trend with a single
-    universal momentum measure.
-    """
+def _research_price_momentum_value(
+    direction: str,
+    candles: list,
+    bonus: float,
+    penalty: float,
+    *,
+    snap: dict | None = None,
+) -> tuple[float, dict]:
+    """10-period rate of change momentum factor, normalized by volatility when gated."""
     closes = [float(c["close"]) for c in candles if c.get("close") is not None]
     if len(closes) < 15:
         return 0.0, {"signal": "missing", "value": 0.0}
     roc = (closes[-1] - closes[-11]) / abs(closes[-11]) if closes[-11] != 0 else 0.0
-    if direction == "LONG" and roc > 0.02:
-        return bonus, {"signal": "positive_momentum", "roc": round(roc, 4), "value": bonus}
-    if direction == "SHORT" and roc < -0.02:
-        return bonus, {"signal": "negative_momentum", "roc": round(roc, 4), "value": bonus}
-    if (direction == "LONG" and roc < -0.02) or (direction == "SHORT" and roc > 0.02):
-        return penalty, {"signal": "opposing_momentum", "roc": round(roc, 4), "value": penalty}
-    return 0.0, {"signal": "neutral_momentum", "roc": round(roc, 4), "value": 0.0}
+
+    # Volatility-normalized threshold
+    rl_cfg = CONFIG.get("ENGINE_A_RESEARCH_LAB_FACTORS", {}) or {}
+    vol_norm = bool(rl_cfg.get("ROC_VOL_NORM", False))
+    
+    if vol_norm:
+        atr_val = None
+        if isinstance(snap, dict):
+            atr_val = snap.get("atr")
+        if atr_val is not None and closes[-1] > 0:
+            atr_pct = float(atr_val) / closes[-1]
+        else:
+            atr_pct = 0.02
+        dynamic_threshold = max(0.005, min(0.05, atr_pct * 1.5))
+    else:
+        dynamic_threshold = 0.02
+
+    if direction == "LONG" and roc > dynamic_threshold:
+        return bonus, {"signal": "positive_momentum", "roc": round(roc, 4), "threshold": round(dynamic_threshold, 4), "value": bonus}
+    if direction == "SHORT" and roc < -dynamic_threshold:
+        return bonus, {"signal": "negative_momentum", "roc": round(roc, 4), "threshold": round(dynamic_threshold, 4), "value": bonus}
+    if (direction == "LONG" and roc < -dynamic_threshold) or (direction == "SHORT" and roc > dynamic_threshold):
+        return penalty, {"signal": "opposing_momentum", "roc": round(roc, 4), "threshold": round(dynamic_threshold, 4), "value": penalty}
+    return 0.0, {"signal": "neutral_momentum", "roc": round(roc, 4), "threshold": round(dynamic_threshold, 4), "value": 0.0}
 
 
 def _research_aroon_value(direction: str, candles: list, bonus: float, penalty: float) -> tuple[float, dict]:
@@ -2292,24 +2318,31 @@ def _volume_price_concordance(
     direction: str,
     lookback: int = 5,
 ) -> float:
-    """Fraction of recent bars where volume aligns with direction. Returns -1..+1."""
+    """Compare volume on up-bars vs down-bars. Returns -1..+1."""
     if not h4_candles or len(h4_candles) < lookback + 1:
         return 0.0
     window = h4_candles[-(lookback + 1):]
-    aligned = 0
-    total = 0
-    is_long = direction.upper() == "LONG"
+    up_vol_sum = 0.0
+    down_vol_sum = 0.0
     for i in range(1, len(window)):
         vol = float(window[i].get("vol", 0) or 0)
         if vol <= 0:
             continue
         price_up = float(window[i].get("close", 0)) > float(window[i - 1].get("close", 0))
-        total += 1
-        if (is_long and price_up) or (not is_long and not price_up):
-            aligned += 1
-    if total == 0:
+        if price_up:
+            up_vol_sum += vol
+        else:
+            down_vol_sum += vol
+
+    total_vol = up_vol_sum + down_vol_sum
+    if total_vol <= 0:
         return 0.0
-    return (aligned / total) * 2.0 - 1.0
+
+    is_long = direction.upper() == "LONG"
+    if is_long:
+        return (up_vol_sum - down_vol_sum) / total_vol
+    else:
+        return (down_vol_sum - up_vol_sum) / total_vol
 
 
 def _stock_volume_addon_with_status(
@@ -2961,7 +2994,8 @@ def compute_factor_scores(
     _ortho_enabled = bool(CONFIG.get("ENGINE_A_ORTHO_VOTE_ENABLED", False))
 
     research_val, research_detail = _research_lab_candidate_addon(
-        pair, direction, h4_candles, d1_candles, asset_type, score_group
+        pair, direction, h4_candles, d1_candles, asset_type, score_group,
+        h4_snap=h4_snap, d1_snap=d1_snap
     )
     if research_detail.get("enabled"):
         addon_val += research_val
@@ -3075,7 +3109,8 @@ def compute_factor_scores(
             if plus_di > minus_di:
                 return 1.0
             elif abs(di_diff) <= 5.0:
-                return _di_mults["balanced"]
+                t = abs(di_diff) / 5.0
+                return 1.0 + t * (_di_mults["balanced"] - 1.0)
             elif abs(di_diff) <= 15.0:
                 t = (abs(di_diff) - 5.0) / 10.0
                 return _di_mults["balanced"] + t * (_di_mults["opposed"] - _di_mults["balanced"])
@@ -3085,7 +3120,8 @@ def compute_factor_scores(
             if minus_di > plus_di:
                 return 1.0
             elif abs(di_diff) <= 5.0:
-                return _di_mults["balanced"]
+                t = abs(di_diff) / 5.0
+                return 1.0 + t * (_di_mults["balanced"] - 1.0)
             elif abs(di_diff) <= 15.0:
                 t = (abs(di_diff) - 5.0) / 10.0
                 return _di_mults["balanced"] + t * (_di_mults["opposed"] - _di_mults["balanced"])
