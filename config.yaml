@@ -1249,7 +1249,9 @@ ENGINE_A_SCORE_GROUP_THRESHOLDS:
   # outcome-backed): oil 1.8 (between SPY 1.5 and nat_gas 2.0), precious 1.7 (slightly
   # lower vol than oil). The ATR% vol scaler partly compensates, so keep the move
   # modest. copper/pgm/base_metals left at 1.5 (not flagged). Reversible: reset to 1.5.
-  precious_trackers: 1.7
+  # 2026-06-03: precious reverted 1.7 -> 1.5 (ungated bump; restored to config.py default
+  # pending n>=30 validation). oil/nat_gas bumps left in place.
+  precious_trackers: 1.5
   energy_oil: 1.8
   nat_gas: 2.0
   copper: 1.5
