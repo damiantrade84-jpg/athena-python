@@ -1819,7 +1819,7 @@ CONFIG: dict = {
     },
     "AUTO_TRADE_SCAN_INTERVAL_MIN": 30,  # Scan every N minutes (30 = twice per hour)
     "AUTO_TRADE_SCHEDULER_MODE": "confirmed_close",
-    "AUTO_TRADE_EXECUTION_GRACE_MIN": 5,
+    "AUTO_TRADE_EXECUTION_GRACE_MIN": 120,
     "AUTO_TRADE_ALLOW_INTRABAR_REVIEW": True,
     "AUTO_TRADE_ALLOW_INTRABAR_EXECUTION": False,
     "AUTO_TRADE_SESSIONS": {  # Sessions per asset class; "always" = 24/7

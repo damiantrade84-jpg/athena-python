@@ -51,6 +51,7 @@ def _base_cfg():
         "SENTIMENT_GATE_ENABLED": False,
         "EVENT_RISK_ENABLED": False,
         "SIGNAL_DEBATE_ENABLED": False,
+        "ENGINE_A_TRADE_ELIGIBILITY_ENABLED": False,
     }
 
 
@@ -93,7 +94,7 @@ def _temp_audit_db():
         "volume REAL, risk_amount REAL, risk_pct REAL, ticket TEXT, "
         "grade TEXT, signal_price_ref REAL, slippage_bps REAL, "
         "max_score REAL, score_pct REAL, factors_json TEXT, "
-        "edge_prob REAL, style TEXT, fee_cost REAL, error_tag TEXT"
+        "edge_prob REAL, style TEXT, fee_cost REAL, error_tag TEXT, exit_mode TEXT"
         ")"
     )
     con.execute(

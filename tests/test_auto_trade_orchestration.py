@@ -34,6 +34,7 @@ def _cfg(**overrides):
         "SIGNAL_DEBATE_ENABLED": False,
         "AUTO_TRADE_A_ONLY_WEIGHT": {"default": 0.60},
         "MAX_SL_PCT": {"crypto": 0.08, "forex": 0.025},
+        "ENGINE_A_TRADE_ELIGIBILITY_ENABLED": False,
     }
     base.update(overrides)
     return base
@@ -71,7 +72,7 @@ def _audit_db():
             "volume REAL, risk_amount REAL, risk_pct REAL, ticket TEXT, "
             "grade TEXT, signal_price_ref REAL, slippage_bps REAL, "
             "max_score REAL, score_pct REAL, factors_json TEXT, "
-            "edge_prob REAL, style TEXT, fee_cost REAL, error_tag TEXT"
+            "edge_prob REAL, style TEXT, fee_cost REAL, error_tag TEXT, exit_mode TEXT"
             ")"
         )
         con.execute(
@@ -432,4 +433,5 @@ def test_tracked_auto_trade_config_defaults_are_live_safe():
     assert CONFIG["MAX_OPEN_POSITIONS"] == 10
     assert CONFIG["MAX_CORRELATED_POSITIONS"] == 10
     assert CONFIG["AUTO_TRADE_SCHEDULER_MODE"] == "confirmed_close"
+    assert CONFIG["AUTO_TRADE_EXECUTION_GRACE_MIN"] >= CONFIG["AUTO_TRADE_SCAN_INTERVAL_MIN"]
     assert CONFIG["CONDUCTOR"]["DYNAMIC_WEIGHTING_ENABLED"] is False
