@@ -454,6 +454,7 @@ _MT5_SYMBOL_MAP = {
     "Wheat": "Wheat",  # Pepperstone Wheat CFD
     # Indices
     "S&P 500": "US500",
+    "US2000": "US2000",
     "Nasdaq": "NAS100",
     "NASDAQ-100": "NAS100",
     "Dow Jones": "US30",
@@ -473,7 +474,8 @@ _MT5_SYMBOL_MAP = {
     "MSFT": "MSFT.US",
     "AMZN": "AMZN.US",
     "META": "META.US",
-    "GOOG": "GOOG.US",
+    "GOOGL": "GOOGL.US",
+    "AVGO": "AVGO.US",
     "JPM": "JPM.US",
     "V": "V.US",
     "XOM": "XOM.US",
@@ -490,6 +492,8 @@ _MT5_SYMBOL_MAP = {
     # ETFs
     "SPY": "SPY.US",
     "QQQ": "QQQ.US",
+    "TQQQ": "TQQQ.US",
+    "SQQQ": "SQQQ.US",
     "GLD": "GLD.US",
     "TLT": "TLT.US",
     "IWM": "IWM.US",

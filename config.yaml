@@ -1281,6 +1281,10 @@ ENGINE_A_ATR_LEVEL_CLASS_BY_DISPLAY:
 
   QQQ: etf
 
+  TQQQ: etf
+
+  SQQQ: etf
+
   GLD: etf
 
   TLT: etf_bond
@@ -3349,7 +3353,8 @@ SCALP_ENGINE:
     "MSFT": "US"
     "AMZN": "US"
     "META": "US"
-    "GOOG": "US"
+    "GOOGL": "US"
+    "AVGO": "US"
     "JPM": "US"
     "V": "US"
     "XOM": "US"
@@ -3365,6 +3370,8 @@ SCALP_ENGINE:
     "PLTR": "US"
     "SPY": "US"
     "QQQ": "US"
+    "TQQQ": "US"
+    "SQQQ": "US"
     "GLD": "US"
     "TLT": "US"
     "IWM": "US"

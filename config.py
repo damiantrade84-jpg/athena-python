@@ -1527,6 +1527,8 @@ CONFIG: dict = {
     "ENGINE_A_ATR_LEVEL_CLASS_BY_DISPLAY": {
         "SPY": "etf",
         "QQQ": "etf",
+        "TQQQ": "etf",
+        "SQQQ": "etf",
         "GLD": "etf",
         "TLT": "etf_bond",
         "IWM": "etf",

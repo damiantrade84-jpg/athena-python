@@ -552,6 +552,13 @@ INDEX_PAIRS = [
         "enabled": True,
     },  # SQN +1.23 WR 60.0% (10T) <- WS: us endpoint GSPC.INDX
     {
+        "symbol": "US2000",
+        "type": "index",
+        "display": "US2000",
+        "source": "mt5",
+        "enabled": True,
+    },  # Pepperstone Russell 2000 CFD
+    {
         "symbol": "^DJI",
         "type": "index",
         "display": "Dow Jones",
@@ -662,12 +669,19 @@ US_STOCK_PAIRS = [
         "enabled": True,
     },  # SQN -0.29
     {
-        "symbol": "GOOG.US",
+        "symbol": "GOOGL.US",
         "type": "stock",
-        "display": "GOOG",
+        "display": "GOOGL",
         "source": "mt5",
         "enabled": True,
     },  # SQN +1.61, OOS:+1.01 ✓
+    {
+        "symbol": "AVGO.US",
+        "type": "stock",
+        "display": "AVGO",
+        "source": "mt5",
+        "enabled": True,
+    },  # Broadcom CFD
     {
         "symbol": "JPM.US",
         "type": "stock",
@@ -783,6 +797,20 @@ ETF_PAIRS = [
         "enabled": True,
         "ws": False,
     },  # SQN +0.38
+    {
+        "symbol": "TQQQ.US",
+        "type": "etf",
+        "display": "TQQQ",
+        "source": "mt5",
+        "enabled": False,
+    },  # Disabled: not available on Pepperstone MT5 demo
+    {
+        "symbol": "SQQQ.US",
+        "type": "etf",
+        "display": "SQQQ",
+        "source": "mt5",
+        "enabled": False,
+    },  # Disabled: not available on Pepperstone MT5 demo
     {
         "symbol": "GLD.US",
         "type": "etf",
