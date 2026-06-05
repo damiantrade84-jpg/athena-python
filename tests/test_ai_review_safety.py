@@ -1265,7 +1265,7 @@ class TestMarcusTextReviewTimeoutContract:
         with open(athena_path, encoding="utf-8") as f:
             text = f.read()
         start = text.index("def run_ai(")
-        end = text.index("t = (completion.choices[0].message.content", start)
+        end = text.index("if result is None:", start)
         run_ai_body = text[start:end]
         assert 'preferred_key="MARCUS_AI_SDK_MAX_RETRIES"' in run_ai_body
         assert "create_ai_client(" in run_ai_body
@@ -1276,6 +1276,18 @@ class TestMarcusTextReviewTimeoutContract:
         assert "[AI] %s timing: prompt_build" in run_ai_body
         assert "elapsed=%.2fs timeout=%.1fs sdk_retries=%s" in text
         assert "prompt_build=%.2fs prompt_chars=%s" in text
+
+    def test_marcus_parse_failure_retries_then_returns_review_incomplete(self):
+        athena_path = os.path.join(os.path.dirname(__file__), "..", "athena.py")
+        with open(athena_path, encoding="utf-8") as f:
+            text = f.read()
+        start = text.index("def run_ai(")
+        end = text.index("except Exception as e:", start)
+        run_ai_body = text[start:end]
+        assert "build_marcus_review_incomplete_result" in run_ai_body
+        assert 'return {"error": "AI response was not valid JSON"}' not in run_ai_body
+        assert "parse_success=bool(result.get(\"parse_success\", True))" in run_ai_body
+        assert "Marcus parse failed" in run_ai_body
 
 
 class TestMarcusNewsFreshnessContract:

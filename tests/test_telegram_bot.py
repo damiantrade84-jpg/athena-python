@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass
+from pathlib import Path
 from types import SimpleNamespace
 
 import telegram_bot
@@ -238,6 +239,42 @@ def test_telegram_error_handler_logs_transient_polling_error_without_traceback(c
 
     record = next(rec for rec in caplog.records if "Transient polling/update error handled" in rec.message)
     assert record.exc_info is None
+
+
+def test_telegram_execute_payload_preserves_full_signal_for_quick_execute():
+    signal = {
+        "pair": "BTC/USDT",
+        "display": "BTC/USDT",
+        "symbol": "BTCUSDT",
+        "type": "crypto",
+        "direction": "SHORT",
+        "price": 100.0,
+        "sl": 105.0,
+        "tp1": 90.0,
+        "timestamp": "2026-06-05T13:17:00+00:00",
+        "candleFetchMeta": {"H1": {"stalenessSeverity": "fresh"}},
+        "candleFreshness": {"H1": {"severity": "fresh"}},
+        "dataFreshness": {"allowed": True, "reason": "fresh"},
+    }
+
+    payload = telegram_bot._build_quick_execute_payload(signal, "scalp")
+
+    assert payload["pip_mode"] == "scalp"
+    assert payload["signal"]["dataFreshness"] == {"allowed": True, "reason": "fresh"}
+    assert payload["signal"]["candleFetchMeta"] == {"H1": {"stalenessSeverity": "fresh"}}
+    assert payload["signal"]["style"] == "scalp"
+    assert "pair" not in payload
+
+
+def test_telegram_execute_buttons_use_quick_execute_not_webhook():
+    source = Path(telegram_bot.__file__).read_text(encoding="utf-8")
+    start = source.index('if action.startswith("exec_"):')
+    end = source.index('if action == "ai_analyse":', start)
+    execute_block = source[start:end]
+
+    assert 'f"{_BASE}/api/quick-execute"' in execute_block
+    assert "_build_quick_execute_payload" in execute_block
+    assert "/api/webhook" not in execute_block
 
 
 def test_telegram_error_handler_logs_update_failure_with_traceback(caplog):

@@ -119,3 +119,83 @@ def parse_json_object(text: str) -> dict | None:
 
     return None
 
+
+def build_marcus_review_incomplete_result(
+    signal: dict,
+    *,
+    reason: str,
+    provider: str = "",
+    selected_provider: str = "",
+    model: str = "",
+    fallback_used: bool = False,
+) -> dict[str, Any]:
+    """Fail-closed Marcus text-review result for empty or unparseable provider output."""
+    pair = str(
+        signal.get("pair") or signal.get("display") or signal.get("symbol") or "UNKNOWN"
+    )
+    symbol = str(signal.get("symbol") or pair.replace("/", ""))
+    direction = str(signal.get("direction") or "").strip().lower()
+    if direction not in ("long", "short"):
+        direction = "neutral"
+    style = str(
+        signal.get("style")
+        or signal.get("tradeStyle")
+        or signal.get("trade_style")
+        or "unknown"
+    )
+    style_upper = style.upper() if style else "UNKNOWN"
+    timeframe = str(
+        signal.get("timeframe")
+        or signal.get("tf")
+        or signal.get("execution_tf")
+        or signal.get("context_tf")
+        or "unknown"
+    )
+    entry = signal.get("price") or signal.get("entry") or "unknown"
+    sl = signal.get("sl") or signal.get("stop") or signal.get("stopLoss") or "unknown"
+    tp = signal.get("tp1") or signal.get("tp") or signal.get("takeProfit") or "unknown"
+    warning = f"AI review incomplete: {reason}. No AI approval was produced."
+    style_rating = {"grade": "F", "edgeProbability": 0, "riskLevel": "High"}
+
+    return {
+        "symbol": symbol,
+        "timeframe": timeframe,
+        "bias": direction,
+        "setup_type": "review_incomplete",
+        "trend_score": 0,
+        "structure_score": 0,
+        "momentum_score": 0,
+        "liquidity_score": 0,
+        "risk_score": 0,
+        "confirmation_score": 0,
+        "total_score": 0,
+        "grade": "F",
+        "ai_action": "reject",
+        "blocking_reasons": ["ai_review_incomplete"],
+        "reason": warning,
+        "verdict": "AI review incomplete; do not treat this as advisory approval.",
+        "narrative": (
+            f"{pair} {direction.upper()} could not be reviewed because the AI provider "
+            "returned no parseable JSON. Deterministic Athena gates remain authoritative."
+        ),
+        "entryZone": str(entry),
+        "invalidation": str(sl),
+        "keyLevels": f"entry={entry} sl={sl} tp={tp}",
+        "positionSizing": "No AI sizing recommendation",
+        "tradeStyle": style_upper,
+        "tradeStyleReason": "AI review did not complete.",
+        "warnings": [warning],
+        "edgeProbability": 0,
+        "riskLevel": "High",
+        "style_ratings": {
+            "scalp": dict(style_rating),
+            "intraday": dict(style_rating),
+            "swing": dict(style_rating),
+        },
+        "parse_success": False,
+        "provider": provider,
+        "selectedProvider": selected_provider or provider,
+        "model": model,
+        "fallbackUsed": bool(fallback_used),
+        "fallback_used": bool(fallback_used),
+    }

@@ -4922,20 +4922,47 @@ def run_ai(
         _backoff_base = float(CONFIG.get("MARCUS_AI_RETRY_BACKOFF_SEC", 2.0) or 2.0)
         _last_exc = None
         completion = None
+        result = None
+        t = ""
         for _attempt in range(_max_ai_retries + 1):
             try:
+                _messages = [
+                    {"role": "system", "content": EXPERT_PROMPT},
+                    {"role": "user", "content": msg},
+                ]
+                if _attempt > 0:
+                    _messages.append(
+                        {
+                            "role": "user",
+                            "content": (
+                                "Marcus parse failed on the previous attempt. "
+                                "Return exactly one valid JSON object matching the requested schema. "
+                                "Do not include markdown, prose, or code fences."
+                            ),
+                        }
+                    )
                 completion = c.chat.completions.create(
                     model=_model,
                     max_tokens=1100,
                     temperature=_temp,
-                    messages=[
-                        {"role": "system", "content": EXPERT_PROMPT},
-                        {"role": "user", "content": msg},
-                    ],
+                    messages=_messages,
                     response_format={"type": "json_object"},
                     timeout=_timeout_sec,
                 )
-                break
+                t = (completion.choices[0].message.content or "").strip()
+                result = _parse_ai_json(t, signal["pair"])
+                if result is not None:
+                    break
+                log.warning(
+                    "[AI] %s Marcus parse failed attempt %s/%s raw_len=%d preview=%r",
+                    signal.get("pair", "?"),
+                    _attempt + 1,
+                    _max_ai_retries + 1,
+                    len(t),
+                    t[:120],
+                )
+                if _attempt >= _max_ai_retries:
+                    break
             except Exception as _e:
                 _last_exc = _e
                 if _attempt >= _max_ai_retries or not _is_retryable_ai_error(_e):
@@ -4962,14 +4989,25 @@ def run_ai(
             _timeout_sec,
             _prompt_chars,
         )
-        t = (completion.choices[0].message.content or "").strip()
-        result = _parse_ai_json(t, signal["pair"])
-
         if result is None:
+            from ai_utils import build_marcus_review_incomplete_result
+
+            _parse_reason = (
+                "empty provider response"
+                if not (t or "").strip()
+                else "AI response was not valid JSON"
+            )
             log.error(
                 f"[AI] {signal['pair']}: could not parse JSON from response: {t[:200]}"
             )
-            return {"error": "AI response was not valid JSON"}
+            result = build_marcus_review_incomplete_result(
+                signal,
+                reason=_parse_reason,
+                provider=_active_provider,
+                selected_provider=_selected_provider or _active_provider,
+                model=_model,
+                fallback_used=bool(_ai_runtime.get("fallbackUsed")),
+            )
 
         result.setdefault("provider", _active_provider)
         result.setdefault("selectedProvider", _selected_provider or _active_provider)
@@ -5058,7 +5096,9 @@ def run_ai(
                 AI_STATE_REJECT,
             )
             _grade = (result.get("grade") or "").upper()
-            if _grade in ("A+", "A"):
+            if not bool(result.get("parse_success", True)):
+                _ai_state = AI_STATE_REVIEW_INCOMPLETE
+            elif _grade in ("A+", "A"):
                 _ai_state = AI_STATE_CONFIRM
             elif _grade == "B":
                 _ai_state = AI_STATE_CAUTION
@@ -5087,8 +5127,12 @@ def run_ai(
                 ai_confidence=result.get("edgeProbability"),
                 contradictions_count=0,
                 missing_information_count=0,
-                parse_success=True,
-                schema_valid=bool(_schema_valid) and not bool(_missing),
+                parse_success=bool(result.get("parse_success", True)),
+                schema_valid=(
+                    bool(_schema_valid)
+                    and not bool(_missing)
+                    and bool(result.get("parse_success", True))
+                ),
                 execution_allowed_before_ai=True,
                 execution_allowed_after_ai=True,
                 final_action="advisory",

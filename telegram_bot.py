@@ -124,6 +124,17 @@ def _safe_json(resp) -> dict:
     return data
 
 
+def _build_quick_execute_payload(sig: dict, style: str) -> dict:
+    signal = dict(sig or {})
+    signal["style"] = style
+    return {
+        "signal": signal,
+        "pip_mode": style,
+        "sizing_override": 1.0,
+        "execution_context": "manual",
+    }
+
+
 def _safe_float(value, default: float = 0.0) -> float:
     try:
         return float(value)
@@ -1561,21 +1572,8 @@ def _build_and_run(token: str, chat_ids: list[str]):
                 _sig_ref = sig
                 _style_ref = style
                 resp = await _run_in_thread(lambda: _safe_json(req.post(
-                    f"{_BASE}/api/webhook",
-                    json={
-                        "pair":         _sig_ref.get("pair") or _sig_ref.get("display"),
-                        "type":         _sig_ref.get("type", ""),
-                        "direction":    _sig_ref.get("direction"),
-                        "price":        _sig_ref.get("price", 0),
-                        "sl":           _sig_ref.get("sl", 0),
-                        "tp1":          _sig_ref.get("tp1", 0),
-                        "tp2":          _sig_ref.get("tp2", _sig_ref.get("tp1", 0)),
-                        "score":        _sig_ref.get("confluenceScore", 0),
-                        "maxScore":     _sig_ref.get("maxScore", 3.0),
-                        "trendState":   _sig_ref.get("trendState", "DEVELOPING"),
-                        "style":        _style_ref,
-                        "sizingOverride": 1.0,
-                    },
+                    f"{_BASE}/api/quick-execute",
+                    json=_build_quick_execute_payload(_sig_ref, _style_ref),
                     timeout=_TIMEOUT_EXEC,
                 )))
                 if resp.get("success"):
