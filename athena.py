@@ -10968,20 +10968,51 @@ def api_chart_analysis():
     algo_context = "\n".join(context_parts) if context_parts else "No algorithmic data available."
 
     try:
-        from vision_candle_features import extract_candle_features
-        _candle_ctx_lines = []
-        _cf_prim = extract_candle_features(data.get("candles") or [], direction_str)
-        if _cf_prim: _candle_ctx_lines.append(f"CANDLE FEATURES - PRIMARY RIGHT EDGE:\n- {_cf_prim['candle_summary']}")
-        _cf_h1 = extract_candle_features(data.get("candles_h1") or [], direction_str)
-        if _cf_h1: _candle_ctx_lines.append(f"CANDLE FEATURES - H1 RIGHT EDGE:\n- {_cf_h1['candle_summary']}")
-        _cf_h4 = extract_candle_features(data.get("candles_h4") or [], direction_str)
-        if _cf_h4: _candle_ctx_lines.append(f"CANDLE FEATURES - H4 RIGHT EDGE:\n- {_cf_h4['candle_summary']}")
-        _cf_d1 = extract_candle_features(data.get("candles_d1") or [], direction_str)
-        if _cf_d1: _candle_ctx_lines.append(f"CANDLE FEATURES - D1 RIGHT EDGE:\n- {_cf_d1['candle_summary']}")
-        if _candle_ctx_lines:
-            algo_context += "\n\n" + "\n\n".join(_candle_ctx_lines)
+        from config import CONFIG as _vision_cfg
+        if _vision_cfg.get("CANDLE_UNDERSTANDING_ENABLED", True):
+            from athena_ai.candle_understanding import (
+                derive_candle_understanding,
+                render_candle_understanding_summary,
+            )
+            _candle_ctx_lines = []
+            _engine_ctx = {
+                "direction": direction_str,
+                "timeframe": tf,
+                "structure_context": (sig or {}).get("structure_context") or (sig or {}).get("engine_b") or {},
+                "atr": {"atr_chart_tf": (sig or {}).get("atr")},
+                "regime": (sig or {}).get("regime"),
+                "adx_value": (sig or {}).get("adx_value"),
+            }
+            for _label, _bars in (
+                ("PRIMARY", data.get("candles") or []),
+                ("H1", data.get("candles_h1") or []),
+                ("H4", data.get("candles_h4") or []),
+                ("D1", data.get("candles_d1") or []),
+            ):
+                if not _bars:
+                    continue
+                _block = derive_candle_understanding(
+                    candles=_bars,
+                    engine_ctx=_engine_ctx,
+                    direction=direction_str,
+                    timeframe=tf if _label == "PRIMARY" else _label,
+                    engine="A",
+                )
+                _summary = render_candle_understanding_summary(_block)
+                if _summary:
+                    _candle_ctx_lines.append(f"{_summary}\n  tf_context={_label}")
+            if _candle_ctx_lines:
+                algo_context += "\n\n" + "\n\n".join(_candle_ctx_lines)
+        else:
+            from vision_candle_features import extract_candle_features
+            _candle_ctx_lines = []
+            _cf_prim = extract_candle_features(data.get("candles") or [], direction_str)
+            if _cf_prim:
+                _candle_ctx_lines.append(f"CANDLE FEATURES - PRIMARY RIGHT EDGE:\n- {_cf_prim['candle_summary']}")
+            if _candle_ctx_lines:
+                algo_context += "\n\n" + "\n\n".join(_candle_ctx_lines)
     except Exception as _cf_err:
-        log.debug("[CHART-VISION] Failed to extract candle features context: %s", _cf_err)
+        log.debug("[CHART-VISION] Failed to extract candle understanding context: %s", _cf_err)
 
     system_prompt = build_system_prompt()
 

@@ -73,6 +73,17 @@ def build_engine_d_summary_for_strategy(engine_d_ctx: dict[str, Any]) -> dict[st
     }
 
 
+def _resolve_candle_understanding(engine_d_ctx: dict[str, Any]) -> dict[str, Any] | None:
+    signal = engine_d_ctx.get("signal") or {}
+    block = (
+        engine_d_ctx.get("candle_understanding")
+        or engine_d_ctx.get("candleUnderstanding")
+        or signal.get("candle_understanding")
+        or signal.get("candleUnderstanding")
+    )
+    return block if isinstance(block, dict) else None
+
+
 def build_engine_d_prompt_context(engine_d_ctx: dict[str, Any]) -> dict[str, Any]:
     signal = engine_d_ctx.get("signal") or {}
     setup = engine_d_ctx.get("scalpSetup") or signal.get("scalpSetup") or {}
@@ -136,6 +147,7 @@ def build_engine_d_prompt_context(engine_d_ctx: dict[str, Any]) -> dict[str, Any
         },
         "chartSnapshot": engine_d_ctx.get("chart_snapshot"),
         "renderedLayers": engine_d_ctx.get("rendered_layers"),
+        "candleUnderstanding": _resolve_candle_understanding(engine_d_ctx),
     }
 
 

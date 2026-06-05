@@ -18,6 +18,7 @@ from __future__ import annotations
 from typing import Any
 
 from athena_ai.ai_review_schema import schema_metadata
+from athena_ai.candle_understanding import derive_candle_understanding
 from athena_ai.price_action_facts import derive_price_action_facts
 from athena_ai.strategy_classifier import classify_strategy
 from athena_ai.strategy_playbook_loader import (
@@ -51,6 +52,17 @@ def _bounded_ohlcv(window: list[dict[str, Any]] | None, limit: int) -> list[dict
             "volume": bar.get("volume") or bar.get("v"),
         })
     return cleaned
+
+
+def engine_a_summary_has_data(engine_a_ctx: dict[str, Any] | None) -> bool:
+    if not isinstance(engine_a_ctx, dict) or not engine_a_ctx:
+        return False
+    return bool(
+        engine_a_ctx.get("regime")
+        or engine_a_ctx.get("confluence_score")
+        or engine_a_ctx.get("structure_context")
+        or engine_a_ctx.get("atr")
+    )
 
 
 def _engine_a_summary_from_ctx(engine_a_ctx: dict[str, Any]) -> dict[str, Any]:
@@ -113,6 +125,19 @@ def build_strategy_layer(
         liquidity_pools=liquidity_pools,
     )
 
+    candle_understanding = facts.get("candle_understanding")
+    if candle_understanding is None and bounded_bars:
+        engine_label = "D" if engine_d_summary and not engine_a_summary_has_data(engine_a_ctx) else "A"
+        candle_understanding = derive_candle_understanding(
+            candles=bounded_bars,
+            engine_ctx=engine_a_ctx or {},
+            direction=str(resolved_direction) if resolved_direction else None,
+            timeframe=timeframe,
+            engine=engine_label,
+            named_levels=named_levels,
+            liquidity_pools=liquidity_pools,
+        )
+
     engine_a_summary = _engine_a_summary_from_ctx(engine_a_ctx or {})
 
     classification = classify_strategy(
@@ -149,6 +174,7 @@ def build_strategy_layer(
         "playbook_universe": playbook_index,
         "loaded_playbook_ids": list(loaded_playbook_ids(path=playbook_path)),
         "price_action_facts": facts,
+        "candle_understanding": candle_understanding,
         "candidate_models": classification.get("candidate_models", []),
         "rejected_models": classification.get("rejected_models", []),
         "classification_warnings": classification.get("classification_warnings", []),
@@ -210,9 +236,24 @@ def render_strategy_block_for_prompt(strategy_layer: dict[str, Any]) -> str:
         for w in warnings:
             lines.append(f"  ! {w}")
 
+    candle_u = strategy_layer.get("candle_understanding") or facts.get("candle_understanding") or {}
+    lines.append("")
+    lines.append("CANDLE UNDERSTANDING read order (mandatory — use structured facts, do not invent patterns):")
+    lines.append("  1. Regime gate (trend/range/unknown, ADX, HA streak, allow_long/allow_short)")
+    lines.append("  2. Location (POC/VAH/VAL, named levels, distance to liquidity pool)")
+    lines.append("  3. Last 3 candle anatomy (body/wick ratios, rejection/displacement shapes)")
+    lines.append("  4. Sweep / reclaim / BOS / CHoCH / FVG / OB context")
+    lines.append("  5. Volume / effort-vs-result / absorption")
+    lines.append("  6. Directional bias, entry quality, invalidation, RR — advisory only")
+    lines.append("  Distinguish: confirmed sweep | possible sweep | clean BOS | random wick/noise | regime-suppressed candle")
+    if candle_u:
+        lines.append(f"  Structured candle_understanding: {candle_u}")
+
     lines.append("")
     lines.append("Price-action facts (self-describing - FIX 3):")
     for key, value in facts.items():
+        if key == "candle_understanding":
+            continue
         lines.append(f"  {key}: {value}")
 
     lines.append("")

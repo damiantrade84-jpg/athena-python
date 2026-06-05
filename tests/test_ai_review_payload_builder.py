@@ -48,6 +48,7 @@ def test_layer_includes_all_required_top_level_keys() -> None:
         "playbook_universe",
         "loaded_playbook_ids",
         "price_action_facts",
+        "candle_understanding",
         "candidate_models",
         "rejected_models",
         "classification_warnings",
@@ -57,6 +58,21 @@ def test_layer_includes_all_required_top_level_keys() -> None:
         "advisory_only_notice",
     ):
         assert key in layer, f"missing top-level key: {key}"
+
+
+def test_candle_understanding_in_strategy_layer() -> None:
+    bars = [_bar(100 + i * 0.1, 101 + i * 0.1, 99 + i * 0.1, 100 + i * 0.1) for i in range(10)]
+    layer = build_strategy_layer(engine_a_ctx=_engine_a_ctx(), ohlcv_window=bars)
+    cu = layer.get("candle_understanding") or {}
+    assert cu.get("enabled") is True
+    assert cu.get("facts", {}).get("candle_anatomy") is not None
+
+
+def test_prompt_includes_candle_read_order() -> None:
+    layer = build_strategy_layer(engine_a_ctx=_engine_a_ctx())
+    text = render_strategy_block_for_prompt(layer)
+    assert "CANDLE UNDERSTANDING read order" in text
+    assert "Regime gate" in text
 
 
 def test_advisory_notice_states_read_only() -> None:
@@ -120,8 +136,8 @@ def test_facts_in_layer_are_self_describing() -> None:
     facts = layer["price_action_facts"]
     assert isinstance(facts, dict)
     for key, value in facts.items():
-        if key.startswith("_") or key == "profile_vp_context":
-            continue  # diagnostic metadata, not a fact
+        if key.startswith("_") or key in ("profile_vp_context", "candle_understanding"):
+            continue  # diagnostic metadata / nested block, not a flat fact
         assert isinstance(value, dict), f"fact {key} is not a dict"
         assert "confidence" in value, f"fact {key} missing confidence (FIX 3)"
 

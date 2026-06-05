@@ -39,7 +39,14 @@ def build_scalp_chart_review_prompt(context: dict[str, Any]) -> str:
     return f"""You are reviewing a scalp chart against the server-trusted Engine D setup below using the Engine D naked-chart scalp playbook.
 
 Workflow (required — follow this exact order):
-Session Context -> Market State -> Effort vs Result -> Location -> Trapped Traders -> Entry Model -> Target -> Invalidation -> Management -> Decision
+Session Context -> Regime/Location (server candleUnderstanding) -> Market State -> Effort vs Result -> Location -> Trapped Traders -> Entry Model -> Target -> Invalidation -> Management -> Decision
+
+CANDLE UNDERSTANDING (server-trusted, read before visual pattern naming):
+- Use engineDContext.candleUnderstanding structured facts when present.
+- Read order: regime gate -> location (POC/VAH/VAL/named pool) -> last 3 anatomy -> sweep/reclaim/BOS/FVG/OB -> effort-vs-result/absorption -> directional view (advisory only).
+- Do NOT invent candle patterns when structured facts exist.
+- Distinguish: confirmed sweep | possible sweep | clean BOS acceptance | random wick/noise | regime-suppressed candle.
+- candleUnderstanding is report-only and must NOT grant execution permission by itself.
 
 0. Session Context: use server-trusted engineDContext.sessionContext (currentSession, deliveryWindow, preferredModel). Do NOT guess session from screenshot.
 1. Market State: classify as trending, balancing, expanding, compressing, choppy/no_trade, or transition.

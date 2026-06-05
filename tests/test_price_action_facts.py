@@ -11,6 +11,7 @@ from typing import Any
 from athena_ai.price_action_facts import (
     derive_acceptance_state,
     derive_breakout_state,
+    derive_candle_anatomy,
     derive_liquidity_event,
     derive_price_action_facts,
     derive_profile_location,
@@ -33,6 +34,16 @@ def _is_self_describing(fact: dict[str, Any]) -> bool:
     # must carry SOMETHING beyond the categorical label + confidence
     raw_keys = [k for k in fact.keys() if k not in ("confidence", "state", "type", "event", "location", "reason")]
     return len(raw_keys) > 0 or fact.get("state") == "unknown"
+
+
+# ----- candle_anatomy ---------------------------------------------------------
+
+
+def test_candle_anatomy_last_3_count() -> None:
+    bars = [_bar(100 + i, 101 + i, 99 + i, 100 + i) for i in range(5)]
+    fact = derive_candle_anatomy(bars)
+    assert len(fact["last_3"]) == 3
+    assert fact["last"]["direction"] in ("bullish", "bearish", "neutral")
 
 
 # ----- wick_event -------------------------------------------------------------

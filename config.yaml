@@ -718,6 +718,31 @@ ENGINE_A_VOLATILITY_REGIME_MULTIPLIERS:
   etf:       { TRENDING: 1.00, RANGING: 1.00, HIGH_VOLATILITY: 1.00, LOW_VOLATILITY: 1.00 }
 ENGINE_A_VOLATILITY_REGIME_MULT_BOUNDS: { min: 0.90, max: 1.05 }
 
+# Diagnostic-first candle understanding layer (report-only by default).
+# Does NOT change Engine A/B/D live scoring unless CANDLE_UNDERSTANDING_LIVE_WEIGHT > 0.
+CANDLE_UNDERSTANDING_ENABLED: true
+CANDLE_UNDERSTANDING_REPORT_ONLY: true
+CANDLE_UNDERSTANDING_LIVE_WEIGHT: 0.0
+CANDLE_UNDERSTANDING:
+  HA_TREND_STREAK_MIN: 3
+  SWEEP_WICK_MIN_RANGE_RATIO: 0.25
+  ABSORPTION_VOL_RATIO_MIN: 1.75
+  ABSORPTION_MAX_BODY_RATIO: 0.35
+
+ENGINE_A_CANDLE_TIMEFRAME_CONFIDENCE:
+  D1: 1.00
+  H4: 0.85
+  H1: 0.65
+  M15: 0.45
+  M5: 0.30
+  M1: 0.20
+
+ENGINE_D_CANDLE_EXECUTION_CONFIDENCE:
+  M15: 0.80
+  M5: 1.00
+  M3: 1.00
+  M1: 0.90
+
 # Optional US cash-session weighting for stocks/indices/ETFs. UTC hours are
 # Volume confirmation addon for stocks/ETFs. Uses EODHD exchange volume overlaid
 # onto H4 candles. Activates the addon weight that was previously dead for stocks.

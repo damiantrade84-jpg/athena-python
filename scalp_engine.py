@@ -1928,6 +1928,66 @@ def _engine_d_data_fidelity(
     }
 
 
+def _build_candle_understanding_advisory(
+    *,
+    candles: list,
+    direction: str | None,
+    execution_tf: str | None,
+    vp: dict,
+    price_loc: dict,
+    cvd: dict,
+    absorption: dict,
+    atr: float = 0.0,
+    htf_engine_a: dict | None = None,
+) -> dict:
+    """Report-only candle understanding diagnostics for Engine D payloads."""
+    if not CONFIG.get("CANDLE_UNDERSTANDING_ENABLED", True):
+        return {"enabled": False, "advisory_only": True, "report_only": True}
+    try:
+        from athena_ai.candle_understanding import derive_candle_understanding
+
+        named_levels = {
+            "poc": vp.get("poc"),
+            "vah": vp.get("vah"),
+            "val": vp.get("val"),
+        }
+        nearest = price_loc.get("nearest_level")
+        if nearest is not None:
+            loc = price_loc.get("location")
+            if loc in ("above_vah", "near_vah"):
+                named_levels["vah"] = nearest
+            elif loc in ("below_val", "near_val"):
+                named_levels["val"] = nearest
+
+        engine_ctx = {
+            "atr": {"atr_chart_tf": atr, "atr_value": atr},
+            "regime": (htf_engine_a or {}).get("regime"),
+            "adx_value": (htf_engine_a or {}).get("adx_value"),
+            "structure_context": {"profile": {"poc": vp.get("poc"), "vah": vp.get("vah"), "val": vp.get("val")}},
+        }
+        block = derive_candle_understanding(
+            candles=candles,
+            engine_ctx=engine_ctx,
+            direction=direction,
+            timeframe=execution_tf or "M5",
+            engine="D",
+            named_levels=named_levels,
+            cvd={"slope": cvd.get("cvd_slope")},
+        )
+        block["advisory_only"] = True
+        block["report_only"] = True
+        if absorption.get("detected"):
+            facts = block.setdefault("facts", {})
+            evr = facts.get("effort_vs_result") or {}
+            if not evr.get("has_absorption"):
+                evr = {**evr, "scalp_absorption_detected": True, "scalp_absorption_count": absorption.get("count")}
+                facts["effort_vs_result"] = evr
+        return block
+    except Exception as exc:
+        log.debug("[SCALP] candle_understanding advisory failed: %s", exc)
+        return {"enabled": False, "advisory_only": True, "report_only": True, "error": str(exc)}
+
+
 def _stock_real_volume_fail_reasons(data_fidelity: dict, *volume_sources: Any) -> list[str]:
     reasons: list[str] = []
     normalized_sources = {str(src or "").strip().lower() for src in volume_sources}
@@ -4809,6 +4869,18 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
             )
             _funnel["diagnostic_notes"].update(strict_fabio_shadow)
 
+            _candle_understanding = _build_candle_understanding_advisory(
+                candles=candles_exec,
+                direction=direction,
+                execution_tf=execution_tf,
+                vp=vp,
+                price_loc=price_loc,
+                cvd=cvd,
+                absorption=absorption,
+                atr=_atr_m15,
+                htf_engine_a=htf_engine_a,
+            )
+
             # ── Build signal dict (preserves keys required by athena.py) ─
             signal = {
                 "pair":            display,
@@ -4904,6 +4976,7 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
                 "aggression_components": aggression_fidelity.get("aggression_components"),
                 "aggression_uses_real_order_flow": data_fidelity.get("aggression_uses_real_order_flow"),
                 "data_fidelity": data_fidelity,
+                "candle_understanding": _candle_understanding,
                 "strict_fabio_pass": strict_fabio_shadow.get("strict_fabio_pass"),
                 "strict_fabio_reason": strict_fabio_shadow.get("strict_fabio_reason"),
                 "strict_fabio_missing_pillars": strict_fabio_shadow.get("strict_fabio_missing_pillars"),
