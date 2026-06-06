@@ -1304,6 +1304,40 @@ ENGINE_A_SCORE_GROUP_THRESHOLDS:
 
   unknown: 1.5
 
+# Engine A trade tier: demote to watchlist when confidence engine score is below minimum.
+# Resolution: pair display/symbol override, then score_group, then default.
+ENGINE_A_TRADE_MIN_CONFIDENCE_ENABLED: true
+ENGINE_A_PAIR_MIN_CONFIDENCE: {}
+ENGINE_A_CRYPTO_LATE_TREND_CONF_MULT: 0.85
+ENGINE_A_SCORE_GROUP_MIN_CONFIDENCE:
+  default: 0.55
+  forex_majors: 0.52
+  forex_crosses: 0.52
+  forex_other: 0.52
+  forex_exotics: 0.48
+  crypto_btc: 0.58
+  crypto_eth: 0.58
+  crypto_alt_majors: 0.63
+  crypto_doge: 0.61
+  crypto_other: 0.63
+  precious_trackers: 0.55
+  energy_oil: 0.56
+  nat_gas: 0.58
+  copper: 0.55
+  pgm_metals: 0.55
+  base_metals: 0.55
+  softs: 0.56
+  commodity_other: 0.55
+  us_indices_trackers: 0.54
+  eu_indices: 0.54
+  asian_indices: 0.54
+  index_other: 0.54
+  us_stock_single: 0.54
+  bond_tlt: 0.54
+  smallcap_em_etf: 0.54
+  stock_other: 0.54
+  unknown: 0.55
+
 ENGINE_A_ATR_LEVEL_CLASS_BY_DISPLAY:
 
   SPY: etf

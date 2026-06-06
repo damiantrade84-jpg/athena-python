@@ -5992,6 +5992,7 @@ def api_pair_scan():
                         "type": pair_obj.get("type"),
                         "enabled": bool(pair_obj.get("enabled", True)),
                         "source": pair_obj.get("source"),
+                        "score_group": get_pair_score_group(pair_obj),
                     },
                     "signal": signal,
                     "style": resolved_style,

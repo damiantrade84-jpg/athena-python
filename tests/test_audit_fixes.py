@@ -152,3 +152,59 @@ def test_correlation_clusters_can_be_configured():
         out = apply_correlation_cap(signals)
 
     assert out[1]["correlationWarning"] == "custom"
+
+
+def test_get_min_confidence_threshold_resolves_score_group():
+    from scoring import get_min_confidence_threshold
+    from config import CONFIG
+
+    pair = {"display": "LTC/USDT", "type": "crypto", "enabled": True}
+    with patch.dict(
+        CONFIG,
+        {
+            "ENGINE_A_SCORE_GROUP_MIN_CONFIDENCE": {
+                "crypto_alt_majors": 0.63,
+                "default": 0.55,
+            },
+            "ENGINE_A_PAIR_MIN_CONFIDENCE": {},
+        },
+    ):
+        assert get_min_confidence_threshold(pair) == pytest.approx(0.63)
+
+
+def test_classify_signal_confidence_gate_uses_score_group_minimum():
+    from scoring import _classify_signal
+    from config import CONFIG
+
+    pair = {"display": "LTC/USDT", "type": "crypto", "enabled": True}
+    signal = {
+        "confluenceScore": 2.87,
+        "scanThreshold": 2.0,
+        "confidence": 0.6175,
+        "eventRisk": {"hardBlock": False},
+        "macroEventRisk": {"blocked": False},
+        "exchangeClosed": False,
+        "scanDiagnostics": [],
+    }
+    with patch.dict(
+        CONFIG,
+        {
+            "ENGINE_A_TRADE_MIN_CONFIDENCE_ENABLED": True,
+            "ENGINE_A_SCORE_GROUP_MIN_CONFIDENCE": {
+                "crypto_alt_majors": 0.63,
+                "default": 0.55,
+            },
+            "ENGINE_A_TRADE_ELIGIBILITY_ENABLED": False,
+        },
+    ):
+        tier, reason = _classify_signal(signal, pair)
+        assert tier == "watchlist"
+        assert "crypto_alt_majors" in reason
+        assert "0.63" in reason
+
+
+def test_crypto_session_not_forex_off_hours_low():
+    from scoring import get_session
+
+    session = get_session("2026-06-06T20:00:00+00:00", asset_class="crypto", symbol="BNB/USDT")
+    assert session["quality"] != "low"

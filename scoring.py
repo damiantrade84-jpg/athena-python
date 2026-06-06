@@ -411,6 +411,28 @@ def get_min_confluence_threshold(pair: dict) -> float:
     return get_score_threshold(pair)
 
 
+def get_min_confidence_threshold(pair: dict) -> float:
+    """Resolve Engine A trade-tier minimum confidence (0-1) by pair/group."""
+    display = pair.get("display", "")
+    symbol = pair.get("symbol", "")
+    score_group = get_pair_score_group(pair)
+
+    pair_mins = CONFIG.get("ENGINE_A_PAIR_MIN_CONFIDENCE", {}) or {}
+    for key in (display, symbol):
+        if key in pair_mins:
+            return float(pair_mins[key])
+
+    group_mins = CONFIG.get("ENGINE_A_SCORE_GROUP_MIN_CONFIDENCE", {}) or {}
+    for key in (score_group, "default"):
+        if key in group_mins:
+            return float(group_mins[key])
+
+    legacy = CONFIG.get("ENGINE_A_TRADE_MIN_CONFIDENCE")
+    if legacy is not None:
+        return float(legacy)
+    return float(CONFIG.get("CONFIDENCE_THRESHOLD", 0.55))
+
+
 def get_backtest_min_score_threshold(pair: dict) -> float:
     """Legacy wrapper for Engine A backtest gate (parity with live)."""
     return get_score_threshold(pair)
@@ -555,6 +577,17 @@ def get_session(
         return {"name": "London", "quality": "medium", "color": "#3b82f6"}
     if 16 <= h < 22:
         return {"name": "New York", "quality": "medium", "color": "#3b82f6"}
+    if asset_class == "crypto":
+        # Crypto is 24/7 — do not apply forex off-hours "low" bucket to confidence.
+        if 14 <= h < 19:
+            return {"name": "EU/US Crypto Peak", "quality": "high", "color": "#22c55e"}
+        if 1 <= h < 5:
+            return {"name": "Asia Crypto", "quality": "medium", "color": "#3b82f6"}
+        if 9 <= h < 14:
+            return {"name": "EU Morning Crypto", "quality": "medium", "color": "#3b82f6"}
+        if 19 <= h < 22:
+            return {"name": "US Afternoon Crypto", "quality": "medium", "color": "#3b82f6"}
+        return {"name": "Crypto Transition", "quality": "medium", "color": "#3b82f6"}
     return {"name": "Asian / Off-Hours", "quality": "low", "color": "#f59e0b"}
 
 
@@ -1036,6 +1069,13 @@ def calc_confluence(
             "weighted_tf_tie",
         }
     )
+    _pair_type = pair.get("type", "forex")
+    _pair_label = pair.get("display", "") or pair.get("symbol", "")
+    _session_quality = get_session(
+        bar_time,
+        asset_class=_pair_type,
+        symbol=_pair_label,
+    )["quality"]
     if _hard_abort:
         _conf = {
             "confidence": 0.0,
@@ -1043,7 +1083,7 @@ def calc_confluence(
             "available_count": 0,
             "degraded": True,
             "reason": factor_result.get("abort_reason") or "engine_a_hard_abort",
-            "session_quality": get_session(bar_time)["quality"],
+            "session_quality": _session_quality,
         }
     else:
         _conf = compute_confidence(
@@ -1053,9 +1093,15 @@ def calc_confluence(
             h1_factor_result=_h1_proxy,
             signal_type=_signal_type,
             volume_ratio=vr,
-            session_quality=get_session(bar_time)["quality"],
+            session_quality=_session_quality,
         )
     confidence_val = _conf["confidence"]
+    _crypto_diag = factor_result.get("crypto_engine_a_diagnostics") or {}
+    if _crypto_diag.get("late_trend_adjustment_applied"):
+        _lt_conf_mult = float(CONFIG.get("ENGINE_A_CRYPTO_LATE_TREND_CONF_MULT", 0.85))
+        confidence_val = round(confidence_val * _lt_conf_mult, 4)
+        _conf["confidence"] = confidence_val
+        _conf["late_trend_confidence_mult"] = _lt_conf_mult
     # Legacy return dict
     result = {
         "score": score,
@@ -1405,12 +1451,13 @@ def _classify_signal(signal: dict, pair: dict) -> tuple[str, str]:
                         f"score {float(score):.2f} clears scan floor {float(threshold):.2f} only",
                     )
         if bool(CONFIG.get("ENGINE_A_TRADE_MIN_CONFIDENCE_ENABLED", False)):
-            min_conf = float(CONFIG.get("ENGINE_A_TRADE_MIN_CONFIDENCE", 0.60))
+            min_conf = get_min_confidence_threshold(pair)
             conf = _signal_confidence_for_gate(signal)
             if conf is not None and conf < min_conf:
+                score_group = get_pair_score_group(pair)
                 return (
                     "watchlist",
-                    f"Engine A confidence {conf:.2f} below trade minimum {min_conf:.2f}",
+                    f"Engine A confidence {conf:.2f} below {score_group} minimum {min_conf:.2f}",
                 )
         return "trade", "Trade-ready"
     watch_floor = max(round(threshold - 0.3, 2), 0.2)

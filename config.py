@@ -1528,6 +1528,38 @@ CONFIG: dict = {
         "stock_other": 1.5,
         "unknown": 1.5,
     },
+    "ENGINE_A_TRADE_MIN_CONFIDENCE_ENABLED": True,
+    "ENGINE_A_PAIR_MIN_CONFIDENCE": {},
+    "ENGINE_A_CRYPTO_LATE_TREND_CONF_MULT": 0.85,
+    "ENGINE_A_SCORE_GROUP_MIN_CONFIDENCE": {
+        "default": 0.55,
+        "forex_majors": 0.52,
+        "forex_crosses": 0.52,
+        "forex_other": 0.52,
+        "forex_exotics": 0.48,
+        "crypto_btc": 0.58,
+        "crypto_eth": 0.58,
+        "crypto_alt_majors": 0.63,
+        "crypto_doge": 0.61,
+        "crypto_other": 0.63,
+        "precious_trackers": 0.55,
+        "energy_oil": 0.56,
+        "nat_gas": 0.58,
+        "copper": 0.55,
+        "pgm_metals": 0.55,
+        "base_metals": 0.55,
+        "softs": 0.56,
+        "commodity_other": 0.55,
+        "us_indices_trackers": 0.54,
+        "eu_indices": 0.54,
+        "asian_indices": 0.54,
+        "index_other": 0.54,
+        "us_stock_single": 0.54,
+        "bond_tlt": 0.54,
+        "smallcap_em_etf": 0.54,
+        "stock_other": 0.54,
+        "unknown": 0.55,
+    },
     "ENGINE_A_ATR_LEVEL_CLASS_BY_DISPLAY": {
         "SPY": "etf",
         "QQQ": "etf",
@@ -2604,6 +2636,33 @@ def _fatal_config_validation(cfg: dict) -> None:
                 log.warning(
                     "[CFG] ENGINE_A_SCORE_GROUP_THRESHOLDS has unknown score_group key %r",
                     key,
+                )
+
+    _group_conf = cfg.get("ENGINE_A_SCORE_GROUP_MIN_CONFIDENCE") or {}
+    if not isinstance(_group_conf, dict):
+        errors.append("ENGINE_A_SCORE_GROUP_MIN_CONFIDENCE must be a dict")
+    else:
+        for group in sorted(ENGINE_A_KNOWN_SCORE_GROUPS):
+            if group not in _group_conf:
+                errors.append(
+                    f"ENGINE_A_SCORE_GROUP_MIN_CONFIDENCE missing score_group {group!r}"
+                )
+        for key, raw in _group_conf.items():
+            if key == "default":
+                continue
+            if key not in ENGINE_A_KNOWN_SCORE_GROUPS:
+                log.warning(
+                    "[CFG] ENGINE_A_SCORE_GROUP_MIN_CONFIDENCE has unknown score_group key %r",
+                    key,
+                )
+            try:
+                val = float(raw)
+            except (TypeError, ValueError):
+                errors.append(f"ENGINE_A_SCORE_GROUP_MIN_CONFIDENCE[{key!r}] must be numeric")
+                continue
+            if not (0.0 <= val <= 1.0):
+                errors.append(
+                    f"ENGINE_A_SCORE_GROUP_MIN_CONFIDENCE[{key!r}] must be in [0, 1], got {val}"
                 )
 
     # 2. Bound non-contradiction

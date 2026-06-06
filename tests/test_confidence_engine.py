@@ -40,3 +40,32 @@ def test_compute_confidence_treats_adx_as_trend_strength_not_trend_alignment():
 
     assert result["components"]["indicator_agreement"] == 1.0
     assert result["confidence"] == 1.0
+
+
+def test_session_quality_low_multiplier_reduces_confidence():
+    factor_result = {
+        "regime": "TRENDING",
+        "factor_scores": {"trend": 1.0},
+        "filtered_indicators": {
+            "ema_trend": 1.0,
+            "h4_ema_trend": 1.0,
+            "d1_ema_trend": 1.0,
+        },
+    }
+    high = compute_confidence(
+        factor_result=factor_result,
+        d1_factor_result={"final_score": 1.0},
+        h4_factor_result={"final_score": 1.0},
+        h1_factor_result={"final_score": 1.0},
+        signal_type="trend",
+        session_quality="high",
+    )
+    low = compute_confidence(
+        factor_result=factor_result,
+        d1_factor_result={"final_score": 1.0},
+        h4_factor_result={"final_score": 1.0},
+        h1_factor_result={"final_score": 1.0},
+        signal_type="trend",
+        session_quality="low",
+    )
+    assert low["confidence"] < high["confidence"]
