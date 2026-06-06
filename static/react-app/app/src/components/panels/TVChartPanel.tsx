@@ -1671,6 +1671,10 @@ function EngineASidePanel({
   const trendCoherence = asRecord(diagnostics.trendCoherence);
   const feedStatus = asRecord(diagnostics.feedStatus);
   const engineAAssetDiagnostics = asRecord(diagnostics.engineAAssetDiagnostics);
+  const cryptoEngineADiagnostics = asRecord(
+    diagnostics.cryptoEngineADiagnostics ?? diagnostics.crypto_engine_a_diagnostics,
+  );
+  const isCryptoSignal = firstString(signal?.type)?.toLowerCase() === 'crypto';
   const momentumQuality = firstNumber(diagnostics.momentumQuality, diagnostics.momentum_quality, factorScores.momentum);
   const addonUnsupported = Boolean(diagnostics.addonUnsupported || diagnostics.addon_unsupported);
   const addonValue = firstNumber(diagnostics.addon_value, diagnostics.addonValue, factorScores.addon);
@@ -1765,6 +1769,47 @@ function EngineASidePanel({
         <DiagnosticBlock label="Feed status" value={feedStatus} />
         <DiagnosticBlock label="Engine A asset diagnostics" value={engineAAssetDiagnostics} />
       </section>
+
+      {isCryptoSignal && Object.keys(cryptoEngineADiagnostics).length > 0 && (
+        <section className="space-y-2 rounded-md border border-border/60 p-2">
+          <div className="text-xs font-semibold">Crypto late-trend</div>
+          <TextRow
+            label="Late-trend risk"
+            value={String(cryptoEngineADiagnostics.crypto_late_trend_risk ?? cryptoEngineADiagnostics.cryptoLateTrendRisk ?? '-')}
+          />
+          <TextRow
+            label="Adjustment applied"
+            value={String(
+              cryptoEngineADiagnostics.late_trend_adjustment_applied
+                ?? cryptoEngineADiagnostics.lateTrendAdjustmentApplied
+                ?? '-',
+            )}
+          />
+          <TextRow
+            label="VWAP extended"
+            value={String(cryptoEngineADiagnostics.vwap_extended ?? cryptoEngineADiagnostics.vwapExtended ?? '-')}
+          />
+          <NumberRow
+            label="VWAP distance (ATR)"
+            value={firstNumber(
+              cryptoEngineADiagnostics.vwap_distance_atr,
+              cryptoEngineADiagnostics.vwapDistanceAtr,
+            )}
+          />
+          <TextRow
+            label="ADX falling"
+            value={String(cryptoEngineADiagnostics.adx_falling ?? cryptoEngineADiagnostics.adxFalling ?? '-')}
+          />
+          <TextRow
+            label="Reason"
+            value={firstString(
+              cryptoEngineADiagnostics.crypto_late_trend_reason,
+              cryptoEngineADiagnostics.cryptoLateTrendReason,
+            )}
+          />
+          <DiagnosticBlock label="Crypto engine A diagnostics" value={cryptoEngineADiagnostics} />
+        </section>
+      )}
 
       <section className="space-y-2 rounded-md border border-border/60 p-2">
         <div className="text-xs font-semibold">Risk</div>

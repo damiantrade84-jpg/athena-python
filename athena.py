@@ -5972,6 +5972,17 @@ def api_pair_scan():
                 jsonify({"error": "Engine A analysis unavailable for this pair"}),
                 422,
             )
+        _conf_detail = signal.get("confidenceDetail") or {}
+        if _conf_detail.get("confidence") is not None:
+            signal["confidence"] = _conf_detail.get("confidence")
+        signal.setdefault(
+            "scanThreshold",
+            signal.get("threshold") or get_min_confluence_threshold(pair_obj),
+        )
+        _tier, _tier_reason = _classify_signal(signal, pair_obj)
+        signal["tier"] = _tier
+        signal["scanTier"] = _tier
+        signal["tierReason"] = _tier_reason
         return jsonify(
             _json_safe(
                 {

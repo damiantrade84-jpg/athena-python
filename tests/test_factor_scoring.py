@@ -2237,18 +2237,30 @@ def test_late_trend_strong_adx_rising_skips_adjustment(monkeypatch):
     assert result["final_score"] == pytest.approx(3.0, abs=0.05)
 
 
-def test_late_trend_volume_above_ma_skips_adjustment(monkeypatch):
+def test_late_trend_volume_above_ma_still_applies_penalty(monkeypatch):
+    """Elevated volume must not bypass late-trend penalty (BNB audit fix)."""
     _enable_crypto_late_trend(monkeypatch)
     d1, h4, h1, candles, pair = _trx_like_score_inputs()
     candles[-1]["vol"] = 8.0e6
     candles[-1]["volume"] = 8.0e6
+    monkeypatch.setitem(CONFIG, "ENGINE_A_CRYPTO_LATE_TREND_ADJUSTMENT_ENABLED", False)
+    baseline = _score(
+        d1=d1, h4=h4, h1=h1, pair=pair,
+        d1_candles=[], h4_candles=candles, h1_candles=[],
+        funding_rate=-0.0002,
+    )
+    monkeypatch.setitem(CONFIG, "ENGINE_A_CRYPTO_LATE_TREND_ADJUSTMENT_ENABLED", True)
     result = _score(
         d1=d1, h4=h4, h1=h1, pair=pair,
         d1_candles=[], h4_candles=candles, h1_candles=[],
+        funding_rate=-0.0002,
     )
     diag = result["crypto_engine_a_diagnostics"]
     assert diag is not None
-    assert diag.get("late_trend_adjustment_applied") is not True
+    assert diag["crypto_late_trend_risk"] is True
+    assert diag["volume_below_ma"] is False
+    assert diag["late_trend_adjustment_applied"] is True
+    assert result["final_score"] == pytest.approx(baseline["final_score"] * 0.85, rel=1e-2)
 
 
 def test_late_trend_price_near_vwap_skips_adjustment(monkeypatch):

@@ -785,13 +785,13 @@ def _get_30d_correlation(
         r = cov / denom
         return max(-1.0, min(1.0, r))
 
-    # ── No price data available: return neutral (no BTC bias adjustment) ──────
+    # ── No price data: neutral correlation (no BTC bias adjustment) ───────────
     log.warning(
-        "no price series for %s correlation — BTC bias multiplier set to 1.0 (neutral). "
+        "no price series for %s correlation — returning 0.0 (neutral, no BTC bias). "
         "Pass asset_prices + benchmark_prices for real Pearson r.",
         pair_display or "unknown",
     )
-    return 1.0
+    return 0.0
 
 
 def apply_correlation_cap(signals: list) -> list:
@@ -1313,6 +1313,26 @@ def _a_only_required_score(pair: dict, signal: dict) -> float | None:
     return (min_conviction / a_only_weight) * max_score
 
 
+def _signal_confidence_for_gate(signal: dict) -> float | None:
+    """Resolve Engine A confidence (0-1) for trade-tier gating."""
+    for key in ("confidence",):
+        raw = signal.get(key)
+        if raw is not None:
+            try:
+                return float(raw)
+            except (TypeError, ValueError):
+                pass
+    detail = signal.get("confidenceDetail")
+    if isinstance(detail, dict):
+        raw = detail.get("confidence")
+        if raw is not None:
+            try:
+                return float(raw)
+            except (TypeError, ValueError):
+                pass
+    return None
+
+
 def _classify_signal(signal: dict, pair: dict) -> tuple[str, str]:
     """Return (tier, reason) where tier is 'trade' | 'watchlist' | 'skip'."""
     threshold = signal.get("scanThreshold", get_min_confluence_threshold(pair))
@@ -1384,6 +1404,14 @@ def _classify_signal(signal: dict, pair: dict) -> tuple[str, str]:
                         f"A-only auto gate requires about {required:.2f}/{max_score:.1f}; "
                         f"score {float(score):.2f} clears scan floor {float(threshold):.2f} only",
                     )
+        if bool(CONFIG.get("ENGINE_A_TRADE_MIN_CONFIDENCE_ENABLED", False)):
+            min_conf = float(CONFIG.get("ENGINE_A_TRADE_MIN_CONFIDENCE", 0.60))
+            conf = _signal_confidence_for_gate(signal)
+            if conf is not None and conf < min_conf:
+                return (
+                    "watchlist",
+                    f"Engine A confidence {conf:.2f} below trade minimum {min_conf:.2f}",
+                )
         return "trade", "Trade-ready"
     watch_floor = max(round(threshold - 0.3, 2), 0.2)
     reasons = [d["detail"] for d in signal.get("scanDiagnostics", [])]

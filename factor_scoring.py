@@ -1798,12 +1798,15 @@ def _crypto_late_trend_diagnostics(
                 reasons.append("vwap_extended")
 
     adx_weak_or_falling = adx_below_threshold or adx_falling
+    # Extended mature-trend chase: penalize when structure is aligned but ADX is
+    # weak/falling and price is VWAP-extended. Do not require volume_below_ma —
+    # elevated volume on extended moves is often climax participation, not a
+    # reason to keep full confluence (BNB/USDT audit 2026-06).
     crypto_late_trend_risk = bool(
         ema_stack_ok
         and full_coherence
         and adx_weak_or_falling
         and vwap_extended
-        and volume_below_ma
     )
 
     return {
@@ -1851,9 +1854,6 @@ def _apply_crypto_late_trend_adjustment(
         and not bool(diagnostics.get("adx_falling"))
     ):
         return 1.0, False, "adx_strong_rising"
-
-    if not diagnostics.get("volume_below_ma"):
-        return 1.0, False, "volume_above_ma"
 
     vwap_warn_atr = _float_cfg(CONFIG.get("ENGINE_A_CRYPTO_VWAP_EXTENSION_ATR_WARN"), 3.0)
     vwap_distance_atr = _safe_indicator_float(diagnostics.get("vwap_distance_atr"))
