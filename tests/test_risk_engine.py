@@ -10,6 +10,7 @@ import pytest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from risk_engine import (
+    clamp_execution_sl_to_max_sl_pct,
     join_peak_audit_queue,
     resolve_max_sl_pct,
     resolve_min_lot_volume,
@@ -499,7 +500,7 @@ class TestMaxSlPct:
             pair="Commodity Other",
             type="commodity",
             price=100.0,
-            sl=95.5,
+            sl=94.0,
             tp1=110.0,
             tp2=115.0,
         )
@@ -533,6 +534,63 @@ class TestMaxSlPct:
         assert source == "symbol:Gasoline"
         result = risk_check(sig, 100000, 100000, [])
         assert result.reason != "MAX_SL_EXCEEDED"
+
+    def test_risk_check_clamps_borderline_crypto_sl_all_pairs(self, monkeypatch):
+        """Any crypto pair with SL slightly over cap must clamp inside risk_check."""
+        monkeypatch.setitem(risk_engine.CONFIG, "MAX_SL_PCT", {"crypto": 0.08})
+        for pair in ("BCH/USDT", "LTC/USDT", "SOL/USDT"):
+            sig = _make_signal(
+                pair=pair,
+                price=250.0,
+                sl=229.75,
+                tp1=290.5,
+                tp2=310.0,
+                direction="LONG",
+                type="crypto",
+            )
+            before_pct = abs(sig["price"] - sig["sl"]) / sig["price"]
+            assert before_pct == pytest.approx(0.081, abs=1e-4)
+
+            result = risk_check(sig, 100000, 100000, [])
+            assert result.reason != "MAX_SL_EXCEEDED", pair
+            after_pct = abs(sig["price"] - sig["sl"]) / sig["price"]
+            assert after_pct <= 0.08 + 1e-9, pair
+
+    def test_risk_check_clamps_borderline_forex_sl(self, monkeypatch):
+        """Forex pairs use asset-specific MAX_SL_PCT cap, not BCH-only logic."""
+        monkeypatch.setitem(risk_engine.CONFIG, "MAX_SL_PCT", {"forex": 0.025})
+        sig = _make_signal(
+            pair="EUR/USD",
+            type="forex",
+            price=1.1000,
+            sl=1.07225,
+            tp1=1.1555,
+            tp2=1.1660,
+            direction="LONG",
+        )
+        before_pct = abs(sig["price"] - sig["sl"]) / sig["price"]
+        assert before_pct == pytest.approx(0.02525, abs=1e-4)
+
+        result = risk_check(sig, 100000, 100000, [])
+        assert result.reason != "MAX_SL_EXCEEDED"
+        after_pct = abs(sig["price"] - sig["sl"]) / sig["price"]
+        assert after_pct <= 0.025 + 1e-9
+
+    def test_clamp_helper_preserves_rr(self, monkeypatch):
+        monkeypatch.setitem(risk_engine.CONFIG, "MAX_SL_PCT", {"crypto": 0.08})
+        sig = _make_signal(
+            pair="ETC/USDT",
+            price=250.0,
+            sl=229.75,
+            tp1=290.5,
+            tp2=310.0,
+            direction="LONG",
+            type="crypto",
+        )
+        orig_rr = abs(sig["tp1"] - sig["price"]) / abs(sig["price"] - sig["sl"])
+        assert clamp_execution_sl_to_max_sl_pct(sig, risk_engine.CONFIG) is True
+        new_rr = abs(sig["tp1"] - sig["price"]) / abs(sig["price"] - sig["sl"])
+        assert new_rr == pytest.approx(orig_rr, rel=1e-6)
 
 
 class TestInvalidLevels:

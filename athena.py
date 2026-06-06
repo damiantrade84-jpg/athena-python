@@ -7808,9 +7808,12 @@ def api_webhook():
 
             _exec_venue = "mt5"
 
+        from execution import _hydrate_execution_candle_quality
         from execution_lifecycle import run_managed_execution
 
         _volume_mode, _exec_context, _sizing_override = parse_execution_volume_args(d)
+
+        _hydrate_execution_candle_quality(sig, _r=rt())
 
         approval = risk_check(
             signal=sig,
@@ -10398,10 +10401,13 @@ def api_scalp_execute():
                 return jsonify({"error": f"Symbol '{symbol}' not available on MT5"}), 200
             _exec_venue = "mt5"
 
+        from execution import _hydrate_execution_candle_quality
         from execution_lifecycle import run_managed_execution
 
         _volume_mode, _exec_context, _ = parse_execution_volume_args(payload)
         _sizing_override = merge_scalp_sizing_override(_volume_mode, payload, signal)
+
+        _hydrate_execution_candle_quality(signal, _r=rt())
 
         approval = risk_check(
             signal=signal,

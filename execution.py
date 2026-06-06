@@ -19,7 +19,11 @@ from athena_app.api.routes_execution import (
 from athena_app.repositories.audit_repo import insert_manual_error
 from athena_app.services.candle_service import recompute_levels_for_style
 from athena_runtime import executed_signals, rt
-from candles_cache import extract_candles, get_candle_fetch_meta
+from candles_cache import (
+    _annotate_fetch_meta_with_bar_freshness,
+    extract_candles,
+    get_candle_fetch_meta,
+)
 from config import _json_safe, scan_candle_limits
 from engine_c import compute_consensus, normalise_engine_a
 from execution_lifecycle import run_managed_execution
@@ -593,16 +597,29 @@ def _maybe_prefetch_execution_candle_fetch_meta(sig: dict, *, _r) -> None:
         fetch = getattr(_r, "fetch_candles", None)
         if not callable(fetch):
             return
+        from athena_app.services.market_state import market_state_offset_hours
+
+        time_now = datetime.now(timezone.utc).timestamp()
+        meta_by_tf: dict[str, dict] = {}
         for tf in ("H1", "H4", "D1"):
             lim = int(limits[tf])
-            fetch(pair_obj, tf, lim)
-        d1_m = get_candle_fetch_meta(pair_obj, "D1", limits["D1"])
-        h4_m = get_candle_fetch_meta(pair_obj, "H4", limits["H4"])
-        h1_m = get_candle_fetch_meta(pair_obj, "H1", limits["H1"])
+            raw = fetch(pair_obj, tf, lim)
+            tf_candles = list(extract_candles(raw) or [])
+            offset_h = market_state_offset_hours(pair_obj, tf)
+            base_meta = get_candle_fetch_meta(pair_obj, tf, lim) or {}
+            meta_by_tf[tf] = _annotate_fetch_meta_with_bar_freshness(
+                dict(base_meta) if isinstance(base_meta, dict) else {},
+                tf_candles,
+                tf,
+                now=time_now,
+                offset_hours=offset_h,
+                live_feed=True,
+                pair=pair_obj,
+            )
         sig["candleFetchMeta"] = {
-            "D1": d1_m if isinstance(d1_m, dict) else {},
-            "H4": h4_m if isinstance(h4_m, dict) else {},
-            "H1": h1_m if isinstance(h1_m, dict) else {},
+            "D1": meta_by_tf.get("D1") or {},
+            "H4": meta_by_tf.get("H4") or {},
+            "H1": meta_by_tf.get("H1") or {},
             "pairSource": pair_obj.get("source"),
         }
         _r.log.info(
@@ -679,13 +696,28 @@ def _hydrate_execution_candle_quality(sig: dict, *, _r) -> None:
             _maybe_prefetch_execution_candle_fetch_meta(sig, _r=_r)
             return
 
-        d1_m = get_candle_fetch_meta(pair_obj, "D1", limits["D1"])
-        h4_m = get_candle_fetch_meta(pair_obj, "H4", limits["H4"])
-        h1_m = get_candle_fetch_meta(pair_obj, "H1", limits["H1"])
+        from athena_app.services.market_state import market_state_offset_hours
+
+        time_now = datetime.now(timezone.utc).timestamp()
+
+        meta_by_tf: dict[str, dict] = {}
+        for tf_u in ("D1", "H4", "H1"):
+            tf_candles = list(candles.get(tf_u) or [])
+            offset_h = market_state_offset_hours(pair_obj, tf_u)
+            base_meta = get_candle_fetch_meta(pair_obj, tf_u, limits[tf_u]) or {}
+            meta_by_tf[tf_u] = _annotate_fetch_meta_with_bar_freshness(
+                dict(base_meta) if isinstance(base_meta, dict) else {},
+                tf_candles,
+                tf_u,
+                now=time_now,
+                offset_hours=offset_h,
+                live_feed=True,
+                pair=pair_obj,
+            )
         sig["candleFetchMeta"] = {
-            "D1": d1_m if isinstance(d1_m, dict) else {},
-            "H4": h4_m if isinstance(h4_m, dict) else {},
-            "H1": h1_m if isinstance(h1_m, dict) else {},
+            "D1": meta_by_tf.get("D1") or {},
+            "H4": meta_by_tf.get("H4") or {},
+            "H1": meta_by_tf.get("H1") or {},
             "pairSource": pair_obj.get("source"),
         }
 
@@ -698,8 +730,6 @@ def _hydrate_execution_candle_quality(sig: dict, *, _r) -> None:
             market_state_offset_hours,
             split_market_state,
         )
-
-        time_now = datetime.now(timezone.utc).timestamp()
 
         candle_consistency: dict = {}
         states_by_tf: dict[str, dict] = {}

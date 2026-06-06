@@ -91,6 +91,70 @@ def resolve_max_sl_pct(
     return max(0.0, cap), source
 
 
+def clamp_execution_sl_to_max_sl_pct(signal: dict, cfg: dict | None = None) -> bool:
+    """Clamp SL to MAX_SL_PCT cap; rescale TP1/TP2 to preserve RR.
+
+    Returns True when levels were clamped. No-op when entry/SL missing or already
+    within cap. Mutates ``signal`` in place.
+    """
+    signal = signal or {}
+    cfg = cfg or CONFIG
+    try:
+        entry = float(signal.get("price") or 0.0)
+        sl = float(signal.get("sl") or 0.0)
+    except (TypeError, ValueError):
+        return False
+    if entry <= 0 or sl <= 0 or entry == sl:
+        return False
+
+    tp1_raw = signal.get("tp1")
+    tp2_raw = signal.get("tp2")
+    try:
+        tp1 = float(tp1_raw) if tp1_raw is not None else 0.0
+    except (TypeError, ValueError):
+        tp1 = 0.0
+    try:
+        tp2 = float(tp2_raw) if tp2_raw is not None else 0.0
+    except (TypeError, ValueError):
+        tp2 = 0.0
+
+    asset_type = signal.get("type") or signal.get("asset_type")
+    max_sl_pct, _source = resolve_max_sl_pct(signal, asset_type, cfg)
+    if max_sl_pct <= 0:
+        return False
+
+    sl_dist = abs(entry - sl)
+    sl_pct = sl_dist / abs(entry)
+    if sl_pct <= max_sl_pct + 1e-12:
+        return False
+    # Borderline only (e.g. 8.1% vs 8.0% cap). Materially wide stops fail Check 5.
+    _borderline_margin = 0.005
+    if sl_pct > max_sl_pct + _borderline_margin:
+        return False
+
+    direction = str(signal.get("direction") or "LONG").upper()
+    new_dist = abs(entry) * max_sl_pct
+    rr1 = abs(tp1 - entry) / sl_dist if sl_dist > 0 and tp1 else 0.0
+    rr2 = abs(tp2 - entry) / sl_dist if sl_dist > 0 and tp2 else rr1
+
+    if direction == "LONG":
+        signal["sl"] = entry - new_dist
+        if tp1:
+            signal["tp1"] = entry + rr1 * new_dist
+        if tp2:
+            signal["tp2"] = entry + rr2 * new_dist
+    else:
+        signal["sl"] = entry + new_dist
+        if tp1:
+            signal["tp1"] = entry - rr1 * new_dist
+        if tp2:
+            signal["tp2"] = entry - rr2 * new_dist
+
+    ls = str(signal.get("level_source") or "").strip()
+    signal["level_source"] = f"{ls}_max_sl_clamped" if ls else "max_sl_clamped"
+    return True
+
+
 # Legacy alias kept for backward compat — reads live
 _EXEC_DEFAULTS = {
     "RISK_PCT": 0.01,
@@ -1167,6 +1231,8 @@ def risk_check(
     # ── Check 5: Calculate position size ────────────────────────────────────
     entry = float(signal.get("price") or signal.get("livePrice") or 0)
     sl = float(signal.get("sl") or 0)
+    if clamp_execution_sl_to_max_sl_pct(signal, CONFIG):
+        sl = float(signal.get("sl") or 0)
     if not entry or not sl or entry == sl:
         log.warning(f"{prefix} REJECTED: invalid entry={entry} or sl={sl}")
         return RiskApproval(False, 0.0, 0.0, 0.0, 0.0, dd, "INVALID_LEVELS")
@@ -1249,14 +1315,14 @@ def risk_check(
                     False, 0.0, 0.0, 0.0, 0.0, dd, "RR_BELOW_MINIMUM"
                 )
 
-    # ── Check 5: SL distance within MAX_SL_PCT ──────────────────────────────
+    # ── Check 5b: SL distance within MAX_SL_PCT ─────────────────────────────
     # BUG 4 fix: Enforce hard rejection for over-wide stops before volume calc.
     # Matches implementation in executors to prevent late-stage rejections.
     max_sl_pct, max_sl_source = resolve_max_sl_pct(signal, asset_type, CONFIG)
-    
+
     if entry != 0:
         sl_pct = abs(entry - sl) / abs(entry)
-        if sl_pct > max_sl_pct:
+        if sl_pct > max_sl_pct + 1e-9:
             log.warning(
                 f"{prefix} REJECTED: SL distance {sl_pct:.1%} exceeds MAX_SL_PCT "
                 f"{max_sl_pct:.1%} for {asset_type} ({max_sl_source})"

@@ -153,6 +153,70 @@ def test_hydrate_nonempty_fetch_repairs_poison_staleness(monkeypatch) -> None:
         assert tf in sig.get("candleFreshness", {}), sig.get("candleFreshness")
 
 
+def test_hydrate_reannotates_cache_meta_at_execution_time(monkeypatch) -> None:
+    """Fresh candle hydrate must align cache meta bucket with execution time_now."""
+    import execution
+    from athena_app.services.market_state import get_bucket_start_epoch
+
+    frozen = datetime(2026, 6, 6, 14, 1, 19, tzinfo=timezone.utc)
+
+    class _MockDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return frozen
+
+    monkeypatch.setattr(execution, "datetime", _MockDateTime)
+
+    def _series(seconds: int, n: int) -> list[dict]:
+        base = int(frozen.timestamp()) - n * seconds
+        return [
+            {"time": base + i * seconds, "open": 25.0, "high": 25.5, "low": 24.8, "close": 25.2}
+            for i in range(n)
+        ]
+
+    buckets = {"H1": _series(3600, 60), "H4": _series(14400, 60), "D1": _series(86400, 120)}
+
+    def _fake_fetch(_pair: dict, tf: str, lim: int):
+        lst = buckets.get(tf, [])
+        return lst[-lim:] if lim else lst
+
+    mock_r = MagicMock()
+    mock_r.CONFIG = {
+        "EXECUTION_HYDRATE_CANDLE_QUALITY": True,
+        "QUICK_EXEC_PREFETCH_CANDLE_META": False,
+        "CANDLE_FRESHNESS_ENABLED": True,
+        "DATA_FRESHNESS_GATES": {"BLOCK_EXECUTION_ON_STALE": False},
+    }
+    mock_r.ALL_PAIRS = [
+        {"display": "ETC/USDT", "symbol": "ETCUSDT", "source": "bybit", "type": "crypto"}
+    ]
+    mock_r.fetch_candles = _fake_fetch
+    mock_r.log = MagicMock()
+    monkeypatch.setattr(execution, "scan_candle_limits", lambda: {"H1": 100, "H4": 100, "D1": 110})
+
+    t_now = frozen.timestamp()
+    stale_h1_bucket = int(get_bucket_start_epoch("H1", t_now - 7200, 0.0))
+    sig = {
+        "pair": "ETC/USDT",
+        "display": "ETC/USDT",
+        "type": "crypto",
+        "candleFetchMeta": {
+            "H1": {
+                "expectedCurrentBucketEpoch": stale_h1_bucket,
+                "offsetHours": 0.0,
+                "stalenessSeverity": "fresh",
+            }
+        },
+    }
+
+    execution._hydrate_execution_candle_quality(sig, _r=mock_r)
+    h1_meta = sig.get("candleFetchMeta", {}).get("H1", {})
+    assert h1_meta.get("expectedCurrentBucketEpoch") == int(
+        get_bucket_start_epoch("H1", t_now, 0.0)
+    )
+    assert "candleConsistency" in sig
+
+
 def test_execution_freshness_allows_d1_calendar_gap_policy_ok() -> None:
     """d1_calendar_gap_policy_ok must not block execution."""
     from athena_app.services.data_freshness import evaluate_execution_data_freshness

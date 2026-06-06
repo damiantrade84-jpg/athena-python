@@ -286,6 +286,13 @@ def _normalise_path(
     tf = str(timeframe or "").upper()
     if isinstance(payload, dict) and "expectedCurrentBucketEpoch" in payload:
         out = dict(payload)
+        if name == "cache":
+            offset_h = market_state_offset_hours(pair, tf)
+            out["offsetHours"] = offset_h
+            if time_now is not None:
+                out["expectedCurrentBucketEpoch"] = int(
+                    get_bucket_start_epoch(tf, time_now, offset_h)
+                )
     elif isinstance(payload, dict) and ("confirmed" in payload or "forming" in payload):
         candles = list(payload.get("confirmed") or [])
         if payload.get("forming"):
