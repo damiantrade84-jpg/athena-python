@@ -214,6 +214,7 @@ from config import (
     get_mt5_fetch_stale_unshifted_age_sec,
     scan_candle_limits,
     get_optimal_workers,
+    normalize_ai_review_provider,
     resolve_ai_review_runtime,
 )  # noqa: E402
 from athena.datafeeds.ws_ssl import configure_process_ca_bundle  # noqa: E402
@@ -4824,7 +4825,11 @@ def run_ai(
     signal = _normalize_ai_analyze_signal(signal)
     ensure_trace_id(signal)
 
-    _ai_runtime = resolve_ai_review_runtime(CONFIG)
+    _marcus_provider = normalize_ai_review_provider(CONFIG.get("MARCUS_AI_PROVIDER"))
+    _ai_runtime = resolve_ai_review_runtime(
+        CONFIG,
+        requested=_marcus_provider or None,
+    )
     _selected_provider = str(_ai_runtime.get("selectedProvider") or "")
     _active_provider = str(_ai_runtime.get("provider") or _selected_provider or "grok")
     _provider = get_ai_provider_label(CONFIG, provider=_active_provider)
