@@ -15,6 +15,9 @@ import os
 import time
 from datetime import datetime, timedelta, timezone
 
+from eodhd_ticker_resolver import eodhd_ticker_from_signal
+from news_sentiment_feed import _parse_article_dt
+
 log = logging.getLogger("sentinel.sentiment_gate")
 
 # In-memory cache: { "AAPL.US": { "score": 0.42, "count": 5, "ts": time.time() } }
@@ -30,37 +33,49 @@ def _sentiment_api_fail_closed() -> bool:
         return False
 
 
-def _get_eodhd_ticker(pair: str, asset_type: str) -> str | None:
-    """Convert internal pair symbol to EODHD news ticker format."""
-    if asset_type == "crypto":
-        # Crypto: BTCUSD -> BTC-USD.CC
-        base = pair.replace("USDT", "").replace("USD", "").replace("/", "")
-        return f"{base}-USD.CC"
-    elif asset_type == "forex":
-        # Forex: EURUSD=X -> EURUSD.FOREX
-        clean = pair.replace("=X", "").replace("/", "")
-        return f"{clean}.FOREX"
-    elif asset_type in ("stock", "index"):
-        # Stocks: AAPL -> AAPL.US
-        clean = pair.replace(".US", "")
-        return f"{clean}.US"
-    elif asset_type == "commodity":
-        # Commodities: GC=F -> GC.COMEX  (gold)
-        mapping = {
-            "GC=F": "GC.COMEX",
-            "SI=F": "SI.COMEX",
-            "CL=F": "CL.COMEX",
-            "BZ=F": "BZ.COMEX",
-            "NG.US": "NG.COMEX",
-            "PL=F": "PL.COMEX",
-            "PA=F": "PA.COMEX",
-            "HG=F": "HG.COMEX",
-        }
-        return mapping.get(pair, None)
-    return None
+def _max_article_age_hours() -> float:
+    try:
+        from config import CONFIG
+
+        raw = CONFIG.get(
+            "SENTIMENT_GATE_MAX_ARTICLE_AGE_HOURS",
+            CONFIG.get("NEWS_SENTIMENT_MAX_ARTICLE_AGE_HOURS", 72),
+        )
+        return max(1.0, float(raw or 72))
+    except (TypeError, ValueError):
+        return 72.0
 
 
-def check_sentiment(pair: str, direction: str, asset_type: str) -> dict:
+def _fresh_articles(
+    articles: list,
+    *,
+    now: datetime,
+    max_age_hours: float,
+) -> tuple[list[dict], int]:
+    fresh: list[dict] = []
+    stale_count = 0
+    for article in articles or []:
+        if not isinstance(article, dict):
+            continue
+        dt = _parse_article_dt(article)
+        if dt and (now - dt).total_seconds() > max_age_hours * 3600.0:
+            stale_count += 1
+            continue
+        fresh.append(article)
+    fresh.sort(
+        key=lambda art: _parse_article_dt(art) or datetime.min.replace(tzinfo=timezone.utc),
+        reverse=True,
+    )
+    return fresh, stale_count
+
+
+def check_sentiment(
+    pair: str,
+    direction: str,
+    asset_type: str,
+    *,
+    symbol: str | None = None,
+) -> dict:
     """Check news sentiment for a trading signal.
 
     Returns:
@@ -91,7 +106,7 @@ def check_sentiment(pair: str, direction: str, asset_type: str) -> dict:
                 "reason": "No EODHD_KEY — sentiment gate skipped",
             }
 
-        ticker = _get_eodhd_ticker(pair, asset_type)
+        ticker = eodhd_ticker_from_signal(pair, asset_type, symbol=symbol)
         if not ticker:
             return {
                 "allowed": True,
@@ -102,9 +117,10 @@ def check_sentiment(pair: str, direction: str, asset_type: str) -> dict:
 
         api = APIClient(api_key)
 
-        # Get news from the last 3 days
-        date_to = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-        date_from = (datetime.now(timezone.utc) - timedelta(days=3)).strftime("%Y-%m-%d")
+        now = datetime.now(timezone.utc)
+        max_age_hours = _max_article_age_hours()
+        date_to = now.strftime("%Y-%m-%d")
+        date_from = (now - timedelta(hours=max_age_hours)).strftime("%Y-%m-%d")
 
         try:
             news = api.financial_news(
@@ -128,9 +144,25 @@ def check_sentiment(pair: str, direction: str, asset_type: str) -> dict:
                 "reason": "No news articles found",
             }
 
-        # Extract sentiment scores from articles
+        fresh_news, stale_count = _fresh_articles(
+            news,
+            now=now,
+            max_age_hours=max_age_hours,
+        )
+        if not fresh_news:
+            result = {
+                "allowed": True,
+                "score": 0.0,
+                "count": 0,
+                "reason": f"No fresh articles within {max_age_hours:.0f}h ({stale_count} stale skipped)",
+            }
+            _cache[cache_key] = {"result": result, "ts": time.time()}
+            log.info(f"[SENTIMENT] {pair} {direction}: {result['reason']}")
+            return result
+
+        # Extract sentiment scores from fresh articles only
         sentiments = []
-        for article in news:
+        for article in fresh_news:
             sent = article.get("sentiment", {})
             if isinstance(sent, dict):
                 polarity = sent.get("polarity", 0)
@@ -141,8 +173,8 @@ def check_sentiment(pair: str, direction: str, asset_type: str) -> dict:
             result = {
                 "allowed": True,
                 "score": 0.0,
-                "count": len(news),
-                "reason": f"{len(news)} articles, no sentiment scores",
+                "count": len(fresh_news),
+                "reason": f"{len(fresh_news)} fresh articles, no sentiment scores",
             }
         else:
             avg_score = sum(sentiments) / len(sentiments)
@@ -193,6 +225,8 @@ def check_sentiment(pair: str, direction: str, asset_type: str) -> dict:
                 "score": round(avg_score, 3),
                 "count": count,
                 "reason": reason,
+                "staleArticleCount": stale_count,
+                "maxArticleAgeHours": max_age_hours,
             }
 
         # Cache the result
