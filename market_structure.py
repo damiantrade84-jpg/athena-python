@@ -1422,6 +1422,41 @@ def aggregate_engine_b_level_cohorts(rows: list[dict] | tuple[dict, ...]) -> dic
     return summary
 
 
+def _engine_b_sl_distance_pct(entry: float, sl: float | None) -> float | None:
+    try:
+        _entry = float(entry)
+        _sl = float(sl)
+    except (TypeError, ValueError):
+        return None
+    if _entry <= 0 or _sl is None:
+        return None
+    return abs(_entry - _sl) / abs(_entry)
+
+
+def _engine_b_resolve_max_sl_pct(asset_class: str, pair: str | None = None) -> tuple[float, str]:
+    from risk_engine import resolve_max_sl_pct
+
+    _asset = str(asset_class or "forex").lower()
+    sig_ctx: dict = {"type": _asset, "asset_type": _asset}
+    if pair:
+        sig_ctx["pair"] = pair
+        sig_ctx["display"] = pair
+    return resolve_max_sl_pct(sig_ctx, _asset, config.CONFIG)
+
+
+def _engine_b_sl_within_max_sl_pct(
+    entry: float,
+    sl: float | None,
+    max_sl_pct: float | None,
+) -> bool:
+    if max_sl_pct is None or sl is None:
+        return True
+    pct = _engine_b_sl_distance_pct(entry, sl)
+    if pct is None:
+        return False
+    return pct <= float(max_sl_pct) + 1e-12
+
+
 def resolve_engine_b_execution_levels(
     *,
     direction: str,
@@ -1433,6 +1468,7 @@ def resolve_engine_b_execution_levels(
     asset_class: str = "forex",
     min_rr: float | None = None,
     fallback_rr: float | None = None,
+    pair: str | None = None,
 ) -> dict:
     """Resolve final Engine B execution SL/TP for RR gating.
 
@@ -1547,6 +1583,12 @@ def resolve_engine_b_execution_levels(
     else:
         _atr_reject = "no_atr_config_or_zero_atr"
 
+    _enforce_max_sl = bool(config.CONFIG.get("ENGINE_B_ENFORCE_MAX_SL_PCT", True))
+    _max_sl_pct = None
+    _max_sl_source = None
+    if _enforce_max_sl and _entry > 0:
+        _max_sl_pct, _max_sl_source = _engine_b_resolve_max_sl_pct(_asset, pair=pair)
+
     # Select execution SL.
     # Preference order:
     #   1. Keep structural SL when structural levels already satisfy min_rr.
@@ -1561,6 +1603,7 @@ def resolve_engine_b_execution_levels(
         and _struct_tp_valid
         and min_rr is not None
         and _structural_rr >= float(min_rr)
+        and _engine_b_sl_within_max_sl_pct(_entry, _struct_sl, _max_sl_pct)
     )
     if _keep_structural_sl:
         _exec_sl = _struct_sl
@@ -1691,6 +1734,65 @@ def resolve_engine_b_execution_levels(
                 # For TP-only failures with flag off, leave the original reject reason.
                 _exec_valid = False
                 _exec_reject = _fallback_reason
+
+    # MAX_SL enforcement — align Engine B execution SL with risk_engine gate.
+    if (
+        _enforce_max_sl
+        and _max_sl_pct is not None
+        and _exec_sl is not None
+        and _entry > 0
+    ):
+        _cur_sl_pct = _engine_b_sl_distance_pct(_entry, _exec_sl)
+        if _cur_sl_pct is not None and _cur_sl_pct > float(_max_sl_pct) + 1e-12:
+            if _atr_sl_valid and _engine_b_sl_within_max_sl_pct(_entry, _atr_sl, _max_sl_pct):
+                _exec_sl = _atr_sl
+                _sl_source = "atr_max_sl_clamp"
+                _level_mode = f"{_sl_source}_sl_{_tp_source}_tp"
+                _rr_source = _level_mode
+                _exec_rr, _exec_valid, _exec_reject, _exec_tp_side_ok = _compute_exec_rr(
+                    _exec_sl, _exec_tp
+                )
+                try:
+                    _min_rr_after = float(min_rr) if min_rr is not None else None
+                except (TypeError, ValueError):
+                    _min_rr_after = None
+                if (
+                    fallback_rr is not None
+                    and _sl_valid_for_synthetic
+                    and bool(config.CONFIG.get("ENGINE_B_ALLOW_SYNTHETIC_FALLBACK_RR_TP", False))
+                    and _exec_valid
+                    and _min_rr_after is not None
+                    and _exec_rr + 1e-12 < _min_rr_after
+                ):
+                    try:
+                        _fallback_rr_after = float(fallback_rr)
+                    except (TypeError, ValueError):
+                        _fallback_rr_after = 0.0
+                    if _fallback_rr_after > 0:
+                        _sl_dist = abs(_entry - _exec_sl)
+                        if _sl_dist > 0:
+                            _target_rr = max(_fallback_rr_after, _min_rr_after)
+                            _exec_tp = (
+                                _entry + (_sl_dist * _target_rr)
+                                if direction == "LONG"
+                                else _entry - (_sl_dist * _target_rr)
+                            )
+                            _tp_source = "fallback_rr"
+                            _level_mode = f"{_sl_source}_sl_{_tp_source}_tp"
+                            _rr_source = _level_mode
+                            _fallback_applied = True
+                            _fallback_reason = "max_sl_clamp_tp_resynthesized"
+                            _exec_rr, _exec_valid, _exec_reject, _exec_tp_side_ok = _compute_exec_rr(
+                                _exec_sl, _exec_tp
+                            )
+            else:
+                _exec_sl = None
+                _exec_tp = None
+                _exec_valid = False
+                _exec_reject = "max_sl_exceeded"
+                _exec_rr = 0.0
+                _level_mode = "max_sl_exceeded"
+                _rr_source = "max_sl_exceeded"
 
     _structural_target_distance_atr = (
         round(abs(_struct_tp - _entry) / _atr, 4)
@@ -3823,6 +3925,7 @@ class NakedEngine:
             asset_class=_exec_asset_class,
             min_rr=min_rr,
             fallback_rr=profile.get("fallback_rr"),
+            pair=res.get("pair") or res.get("display") or res.get("symbol"),
         )
         # Structural TP side check — kept for diagnostics / ENGINE_B_REASON_TP_WRONG_SIDE
         sl = _exec_lvl["execution_sl"]
@@ -4039,6 +4142,8 @@ class NakedEngine:
             failed_gate_names.append("space")
         if not rr_ok:
             failed_gate_names.append(f"rr={rr:.1f}(src={_exec_lvl['rr_source']})")
+        if _exec_lvl.get("execution_level_reject_reason") == "max_sl_exceeded":
+            failed_gate_names.append("max_sl_exceeded")
 
         lifecycle_state, lifecycle_reason = self._determine_lifecycle_state(
             res, current_price, direction, trigger_ok

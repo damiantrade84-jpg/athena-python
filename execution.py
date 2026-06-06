@@ -727,10 +727,77 @@ def _hydrate_execution_candle_quality(sig: dict, *, _r) -> None:
         _maybe_prefetch_execution_candle_fetch_meta(sig, _r=_r)
 
 
+def _sync_engine_b_execution_price(sig: dict, engine_b: dict | None = None) -> None:
+    """Fill missing entry/price from Engine B checklist payloads before risk sizing."""
+    sig = sig or {}
+    try:
+        current = float(sig.get("price") or sig.get("entry") or 0)
+    except (TypeError, ValueError):
+        current = 0.0
+    if current > 0:
+        return
+    for source in (
+        sig.get("engine_b_status"),
+        engine_b,
+        sig.get("naked_data"),
+        sig.get("engine_b"),
+    ):
+        if not isinstance(source, dict):
+            continue
+        for key in ("current_price", "price", "entry"):
+            try:
+                px = float(source.get(key) or 0)
+            except (TypeError, ValueError):
+                continue
+            if px > 0:
+                sig["price"] = px
+                sig["entry"] = px
+                return
+
+
+def _engine_b_execution_sl_exceeds_max(sig: dict, sl: float) -> bool:
+    try:
+        entry = float(sig.get("price") or sig.get("entry") or 0)
+        sl_f = float(sl)
+    except (TypeError, ValueError):
+        return True
+    if entry <= 0 or sl_f <= 0:
+        return True
+    from risk_engine import resolve_max_sl_pct
+
+    asset_type = str(sig.get("type") or sig.get("asset_type") or "").lower()
+    max_sl_pct, _ = resolve_max_sl_pct(sig, asset_type, rt().CONFIG)
+    sl_pct = abs(entry - sl_f) / abs(entry)
+    return sl_pct > float(max_sl_pct) + 1e-12
+
+
+def _engine_b_levels_apply_error_response(sig: dict) -> tuple[dict, int]:
+    if sig.get("_engine_b_apply_error") == "MAX_SL_EXCEEDED":
+        return (
+            {
+                "error": "Risk Blocked: MAX_SL_EXCEEDED",
+                "pair": sig.get("pair"),
+            },
+            400,
+        )
+    return (
+        {
+            "error": "ENGINE_B_LEVELS_UNAVAILABLE: Engine B execution levels missing or invalid",
+            "pair": sig.get("pair"),
+        },
+        409,
+    )
+
+
 def _apply_engine_b_execution_levels(sig: dict, engine_b: dict | None = None) -> bool:
+    _sync_engine_b_execution_price(sig, engine_b)
     levels = _extract_engine_b_execution_levels(sig, engine_b)
     if not levels:
         return False
+    if _engine_b_execution_sl_exceeds_max(sig, levels["sl"]):
+        sig["_engine_b_apply_error"] = "MAX_SL_EXCEEDED"
+        return False
+    sig.pop("_engine_b_apply_error", None)
     sig["sl"] = levels["sl"]
     sig["tp1"] = levels["tp1"]
     sig["tp2"] = levels["tp2"]
@@ -930,12 +997,8 @@ def api_quick_execute():
                 f"SL={sig.get('sl')} TP1={sig.get('tp1')}"
             )
         else:
-            return jsonify(
-                {
-                    "error": "ENGINE_B_LEVELS_UNAVAILABLE: Engine B execution levels missing or invalid",
-                    "pair": sig.get("pair"),
-                }
-            ), 409
+            body, status = _engine_b_levels_apply_error_response(sig)
+            return jsonify(body), status
     else:
         try:
             recomputed = recompute_levels_for_style(
@@ -1844,12 +1907,8 @@ def api_execute():
             _r.log.warning(
                 f"[EXEC] {pair}: Engine B execution levels not found — cannot execute structural signal"
             )
-            return jsonify(
-                {
-                    "error": "ENGINE_B_LEVELS_UNAVAILABLE: structural execution levels missing",
-                    "pair": pair,
-                }
-            ), 409
+            body, status = _engine_b_levels_apply_error_response(sig)
+            return jsonify(body), status
 
     if level_override:
         _override_err = _apply_level_override(sig, level_override)

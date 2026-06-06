@@ -1196,6 +1196,8 @@ CONFIG: dict = {
     # TP is missing/wrong-side). Code defaults must agree with config.yaml so
     # deployments without overlay do not silently disable the rescue path.
     "ENGINE_B_ALLOW_SYNTHETIC_FALLBACK_RR_TP": True,
+    # When True, Engine B execution SL must fit risk_engine MAX_SL_PCT (clamp to ATR or fail).
+    "ENGINE_B_ENFORCE_MAX_SL_PCT": True,
     "NAKED_MAX_DAILY": 3,
     "ENGINE_B_BT_EXIT_POLICY": "fixed_target_be",
     # When True, Engine B skips forex on 22:00–07:00 UTC bars (backtest + live scan).

@@ -1580,6 +1580,58 @@ def test_resolve_engine_b_execution_levels_atr_sl_structural_tp_long():
     assert "atr" in out["rr_source"]
 
 
+def test_resolve_engine_b_execution_levels_crypto_clamps_wide_structural_to_atr():
+    """Wide crypto structural SL must resolve to an executable SL within MAX_SL_PCT."""
+    out = resolve_engine_b_execution_levels(
+        direction="LONG",
+        entry=150.0,
+        structural_sl=79.5,
+        structural_tp=220.0,
+        atr=7.0,
+        style="swing",
+        asset_class="crypto",
+        min_rr=1.2,
+    )
+    assert out["execution_levels_valid"] is True
+    assert float(out["execution_sl"]) > 79.5
+    sl_pct = abs(150.0 - float(out["execution_sl"])) / 150.0
+    assert sl_pct <= 0.08 + 1e-9
+
+
+def test_resolve_engine_b_execution_levels_crypto_fails_when_no_sl_within_max_cap():
+    out = resolve_engine_b_execution_levels(
+        direction="LONG",
+        entry=100.0,
+        structural_sl=50.0,
+        structural_tp=120.0,
+        atr=6.0,
+        style="swing",
+        asset_class="crypto",
+        min_rr=1.2,
+    )
+    assert out["execution_level_reject_reason"] == "max_sl_exceeded"
+    assert out["execution_levels_valid"] is False
+    assert out["execution_sl"] is None
+
+
+def test_resolve_engine_b_enforce_max_sl_can_be_disabled(monkeypatch):
+    import config as _cfg
+
+    monkeypatch.setitem(_cfg.CONFIG, "ENGINE_B_ENFORCE_MAX_SL_PCT", False)
+    out = resolve_engine_b_execution_levels(
+        direction="LONG",
+        entry=100.0,
+        structural_sl=50.0,
+        structural_tp=120.0,
+        atr=6.0,
+        style="swing",
+        asset_class="crypto",
+        min_rr=1.2,
+    )
+    assert out["execution_sl"] == pytest.approx(91.0)
+    assert out["execution_levels_valid"] is True
+
+
 def test_resolve_engine_b_execution_levels_atr_sl_fallback_tp_when_structural_missing():
     """No structural TP → ATR SL + ATR TP."""
     out = resolve_engine_b_execution_levels(

@@ -201,6 +201,52 @@ class TestQuickExecuteExecutionGuard:
         assert resp.status_code == 409
         assert "ENGINE_B_LEVELS_UNAVAILABLE" in data["error"]
 
+    def test_quick_execute_rejects_engine_b_over_max_sl_before_risk(self, monkeypatch):
+        """Stale wide Engine B SL must fail before broker/risk when over MAX_SL_PCT."""
+        import execution
+        from flask import Flask
+
+        rt_mock = _make_rt(execution_enabled=True)
+        rt_mock.log = MagicMock()
+
+        def _unexpected_recompute(*_args, **_kwargs):
+            raise AssertionError("Engine B quick execute must not recompute generic levels")
+
+        monkeypatch.setattr(execution, "rt", lambda: rt_mock)
+        monkeypatch.setattr(execution, "recompute_levels_for_style", _unexpected_recompute)
+
+        app = Flask(__name__)
+        execution.register_execution_routes(app)
+        client = app.test_client()
+
+        resp = client.post(
+            "/api/quick-execute",
+            json={
+                "signal": {
+                    "pair": "SOL/USDT",
+                    "display": "SOL/USDT",
+                    "type": "crypto",
+                    "direction": "LONG",
+                    "price": 150.0,
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "is_naked": True,
+                    "engine_b_status": {
+                        "passed": True,
+                        "checklist_passed": True,
+                        "execution_sl": 79.5,
+                        "execution_tp": 220.0,
+                        "current_price": 150.0,
+                    },
+                },
+                "engine_b": {"passed": True},
+                "pip_mode": "swing",
+            },
+        )
+
+        data = resp.get_json()
+        assert resp.status_code == 400
+        assert "MAX_SL_EXCEEDED" in data["error"]
+
     def test_quick_execute_logs_empty_broker_failure(self, monkeypatch):
         """/api/quick-execute must not hide broker failures with no error field."""
         import execution

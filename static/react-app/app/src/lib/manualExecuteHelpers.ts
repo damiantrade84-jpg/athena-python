@@ -122,6 +122,42 @@ export function stripEngineBFromSignal(signal: EngineASignal): EngineASignal {
   return payload as EngineASignal;
 }
 
+function positiveNumber(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : undefined;
+}
+
+/** Resolve entry/SL for risk preview when Engine B stores levels off top-level fields. */
+export function resolveEngineBExecutionPreviewLevels(
+  signal: EngineASignal,
+  opts?: { engineBOnly?: boolean },
+): { entry?: number; sl?: number } {
+  const raw = signal as Record<string, unknown>;
+  const status = raw.engine_b_status as Record<string, unknown> | undefined;
+  const engineB = raw.engine_b as Record<string, unknown> | undefined;
+  const naked = raw.naked_data as Record<string, unknown> | undefined;
+
+  const sl =
+    positiveNumber(raw.engine_b_execution_sl as number | undefined)
+    ?? positiveNumber(status?.execution_sl as number | undefined)
+    ?? positiveNumber(status?.engine_b_execution_sl as number | undefined)
+    ?? (opts?.engineBOnly ? undefined : positiveNumber(raw.sl as number | undefined))
+    ?? positiveNumber(engineB?.execution_sl as number | undefined)
+    ?? positiveNumber(naked?.execution_sl as number | undefined)
+    ?? positiveNumber(engineB?.recommended_stop_loss as number | undefined)
+    ?? positiveNumber(naked?.recommended_stop_loss as number | undefined)
+    ?? positiveNumber(raw.sl as number | undefined);
+
+  const entry =
+    positiveNumber(raw.entry as number | undefined)
+    ?? positiveNumber(raw.price as number | undefined)
+    ?? positiveNumber(status?.current_price as number | undefined)
+    ?? positiveNumber(engineB?.current_price as number | undefined)
+    ?? positiveNumber(naked?.current_price as number | undefined)
+    ?? positiveNumber(engineB?.price as number | undefined);
+
+  return { entry, sl };
+}
+
 export function buildQuickExecutePayload(args: {
   signal: EngineASignal;
   engineBOverlay?: Record<string, unknown>;

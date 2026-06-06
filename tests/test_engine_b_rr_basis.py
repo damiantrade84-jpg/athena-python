@@ -299,7 +299,7 @@ def test_structural_and_fallback_tp_setups_have_separate_cohorts():
     structural = resolve_engine_b_execution_levels(
         direction="LONG",
         entry=100.0,
-        structural_sl=90.0,
+        structural_sl=98.5,
         structural_tp=120.0,
         atr=1.0,
         style="intraday",
@@ -310,7 +310,7 @@ def test_structural_and_fallback_tp_setups_have_separate_cohorts():
     fallback = resolve_engine_b_execution_levels(
         direction="LONG",
         entry=100.0,
-        structural_sl=90.0,
+        structural_sl=98.5,
         structural_tp=101.0,
         atr=1.0,
         style="intraday",

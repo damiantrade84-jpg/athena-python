@@ -29,7 +29,7 @@ import { fmtNum, toNum, cn } from '@/lib/utils';
 import { fmtAtrMeta, fmtLiveQuoteMeta, fmtPrice } from '@/lib/athenaFormat';
 import { fetchVisionCandlePayload } from '@/lib/visionReview';
 import apiClient from '@/lib/apiClient';
-import { buildQuickExecutePayload } from '@/lib/manualExecuteHelpers';
+import { buildQuickExecutePayload, resolveEngineBExecutionPreviewLevels } from '@/lib/manualExecuteHelpers';
 import VolumeModeField from '@/components/execution/VolumeModeField';
 import ExitModeField from '@/components/execution/ExitModeField';
 import { useExitModeState } from '@/hooks/useExitModeState';
@@ -581,6 +581,8 @@ export default function SignalsPanel() {
       return;
     }
     const sig = confirmRow.signal;
+    const isEngineBOnly = confirmRow.engines.has('B') && !confirmRow.engines.has('A');
+    const bLevels = resolveEngineBExecutionPreviewLevels(sig, { engineBOnly: isEngineBOnly });
     const effectiveStyle = pendingStyle === 'auto'
       ? (sig.style || (style === 'auto' ? 'swing' : style))
       : pendingStyle;
@@ -591,9 +593,9 @@ export default function SignalsPanel() {
       symbol: sig.symbol || sig.pair,
       type: sig.type,
       direction: sig.direction,
-      entry: sig.entry ?? sig.price,
-      price: sig.entry ?? sig.price,
-      sl: sig.sl,
+      entry: bLevels.entry ?? sig.entry ?? sig.price,
+      price: bLevels.entry ?? sig.entry ?? sig.price,
+      sl: bLevels.sl ?? sig.sl,
       volume_mode: volumeMode,
       sizing_override: volumeMode === 'calculated' ? sizingOverride : 1.0,
       style: effectiveStyle,
