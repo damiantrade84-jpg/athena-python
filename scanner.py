@@ -107,23 +107,41 @@ def _fetch_scan_h4_candles(runtime, pair: dict, limit: int, preloaded_h4: list |
     return candles, meta, crypto_bybit_signal_feed
 
 
+def _engine_b_execution_levels_marked_invalid(conf_b: dict | None) -> bool:
+    conf_b = conf_b or {}
+    if conf_b.get("execution_levels_valid") is False:
+        return True
+    return conf_b.get("execution_level_reject_reason") in (
+        "max_sl_exceeded",
+        "tp_wrong_side",
+        "levels_missing",
+    )
+
+
 def _engine_b_level_pair(conf_b: dict | None, res_b: dict | None) -> tuple[float | None, float | None]:
     conf_b = conf_b or {}
     res_b = res_b or {}
-    sl = conf_b.get("execution_sl")
-    if sl is None:
+    exec_invalid = _engine_b_execution_levels_marked_invalid(conf_b)
+
+    sl = conf_b["execution_sl"] if "execution_sl" in conf_b else None
+    if sl is None and not exec_invalid:
         sl = res_b.get("execution_sl")
-    if sl is None:
+    if sl is None and not exec_invalid:
         sl = res_b.get("recommended_stop_loss")
-    tp = conf_b.get("execution_tp")
-    if tp is None:
+
+    tp = conf_b["execution_tp"] if "execution_tp" in conf_b else None
+    if tp is None and not exec_invalid:
         tp = res_b.get("execution_tp")
-    if tp is None:
+    if tp is None and not exec_invalid:
         tp = res_b.get("recommended_take_profit")
     try:
-        return float(sl), float(tp)
+        sl_f = float(sl) if sl is not None else None
+        tp_f = float(tp) if tp is not None else None
     except (TypeError, ValueError):
         return None, None
+    if sl_f is None or tp_f is None:
+        return None, None
+    return sl_f, tp_f
 
 
 def _engine_b_levels_apply_to_generic(signal: dict) -> bool:

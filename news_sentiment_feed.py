@@ -405,6 +405,10 @@ def fetch_news_sources(
         source_meta.append({**source, "status": "ok", "articleCount": kept_for_source})
         if len(articles) >= max_total:
             break
+    articles.sort(
+        key=lambda art: _parse_article_dt(art) or datetime.min.replace(tzinfo=timezone.utc),
+        reverse=True,
+    )
     return {
         "articles": articles[:max_total],
         "sourceMetadata": source_meta,
@@ -414,10 +418,13 @@ def fetch_news_sources(
     }
 
 
-def _latest_normalized_sentiment(data: Any, ticker: str) -> Optional[float]:
-    """Parse EODHD /api/sentiments payload (dict or list of rows) — align with fetch_news_context."""
+def _latest_normalized_sentiment_with_date(
+    data: Any,
+    ticker: str,
+) -> tuple[Optional[float], Optional[str]]:
+    """Return latest normalized score and its source date for one ticker."""
     if not data:
-        return None
+        return None, None
     sentiment_by_ticker: dict[str, Any] = {}
     if isinstance(data, dict):
         sentiment_by_ticker = data
@@ -443,21 +450,27 @@ def _latest_normalized_sentiment(data: Any, ticker: str) -> Optional[float]:
         scores = []
 
     if not scores:
-        return None
+        return None, None
 
     dated = [s for s in scores if isinstance(s, dict) and s.get("date")]
     pool = dated if dated else [s for s in scores if isinstance(s, dict)]
     if not pool:
-        return None
+        return None, None
 
     latest = sorted(pool, key=lambda x: str(x.get("date", "")), reverse=True)[0]
     n = latest.get("normalized")
     if n is None:
-        return None
+        return None, None
     try:
-        return float(n)
+        return float(n), str(latest.get("date") or "")[:10] or None
     except (TypeError, ValueError):
-        return None
+        return None, None
+
+
+def _latest_normalized_sentiment(data: Any, ticker: str) -> Optional[float]:
+    """Parse EODHD /api/sentiments payload (dict or list of rows) — align with fetch_news_context."""
+    score, _date = _latest_normalized_sentiment_with_date(data, ticker)
+    return score
 
 
 def fetch_eodhd_sentiment(
@@ -467,6 +480,22 @@ def fetch_eodhd_sentiment(
     days: int = 3,
     timeout: float = 12.0,
 ) -> Optional[float]:
+    score, _date = fetch_eodhd_sentiment_with_date(
+        eodhd_ticker,
+        api_key,
+        days=days,
+        timeout=timeout,
+    )
+    return score
+
+
+def fetch_eodhd_sentiment_with_date(
+    eodhd_ticker: str,
+    api_key: str,
+    *,
+    days: int = 3,
+    timeout: float = 12.0,
+) -> tuple[Optional[float], Optional[str]]:
     date_to = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     date_from = (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%d")
     url = "https://eodhd.com/api/sentiments"
@@ -480,17 +509,20 @@ def fetch_eodhd_sentiment(
     try:
         r = http_requests.get(url, params=params, timeout=timeout)
         r.raise_for_status()
-        return _latest_normalized_sentiment(r.json(), eodhd_ticker)
+        return _latest_normalized_sentiment_with_date(r.json(), eodhd_ticker)
     except Exception as e:
         log.error("[NewsAI] Sentiment fetch failed [%s]: %s", eodhd_ticker, e)
-        return None
+        return None, None
 
 
 def build_news_block(articles: list) -> str:
+    ordered = sorted(
+        [art for art in (articles or []) if isinstance(art, dict)],
+        key=lambda art: _parse_article_dt(art) or datetime.min.replace(tzinfo=timezone.utc),
+        reverse=True,
+    )
     blocks = []
-    for i, art in enumerate(articles[:8], 1):
-        if not isinstance(art, dict):
-            continue
+    for i, art in enumerate(ordered[:8], 1):
         date = str(art.get("date", ""))[:10]
         title = str(art.get("title", "")).strip()
         content = str(art.get("content", "")).strip()
@@ -787,13 +819,17 @@ def get_news_sentiment(
         result["max_article_age_hours"] = source_bundle.get("maxArticleAgeHours")
         result["article_count_used"] = result.get("article_count_used") or len(articles)
         eodhd_normalized = None
+        eodhd_source_date = None
         if _config_value(config, "NEWS_SENTIMENT_USE_EODHD_NORMALIZED", False):
-            eodhd_normalized = fetch_eodhd_sentiment(ticker, eodhd_api_key)
+            eodhd_normalized, eodhd_source_date = fetch_eodhd_sentiment_with_date(
+                ticker,
+                eodhd_api_key,
+            )
         llm_vote = news_to_confluence_vote(result)
         combined_vote, agreement = _combine_llm_and_eodhd_vote(llm_vote, eodhd_normalized)
         result["eodhd_normalized_score"] = eodhd_normalized
         result["eodhd_agreement"] = agreement
-        result["eodhd_source_date"] = None
+        result["eodhd_source_date"] = eodhd_source_date
         result["eodhd_article_count"] = len(articles) if eodhd_normalized is not None else None
         if combined_vote is not None:
             result["combined_vote"] = combined_vote

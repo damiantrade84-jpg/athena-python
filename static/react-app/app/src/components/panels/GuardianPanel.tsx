@@ -271,23 +271,71 @@ const badgeVariantForStatus = (status: unknown): 'default' | 'destructive' | 'ou
 export default function GuardianPanel() {
   const [confirmReset, setConfirmReset] = useState(false);
 
-  const { data: status, loading: statusLoading, error: statusError, refresh: refreshStatus } = useApiPoll<GuardianApiStatus>('/api/guardian/status', 30000);
-  const { data: bootCheck, loading: bootLoading, error: bootError, refresh: refreshBoot } = useApiPoll<BootCheckReport>('/api/guardian/boot-check', 0);
-  const { data: divergence } = useApiPoll<DivergencePayload>('/api/divergence', 30000);
-  const { data: shieldStatus } = useApiPoll<ShieldStatus>('/api/shield/status', 30000);
-  const { data: feedHealth, loading: feedLoading, error: feedError } = useApiPoll<FeedHealth>('/api/feed-health', 30000);
-  const { data: forensics, loading: forensicsLoading } = useApiPoll<ForensicsSummary>('/api/forensics/summary', 0);
+  const {
+    data: status,
+    loading: statusLoading,
+    isRefreshing: statusRefreshing,
+    error: statusError,
+    refresh: refreshStatus,
+  } = useApiPoll<GuardianApiStatus>('/api/guardian/status', 30000);
+  const {
+    data: bootCheck,
+    loading: bootLoading,
+    isRefreshing: bootRefreshing,
+    error: bootError,
+    refresh: refreshBoot,
+  } = useApiPoll<BootCheckReport>('/api/guardian/boot-check', 0);
+  const {
+    data: divergence,
+    isRefreshing: divergenceRefreshing,
+    refresh: refreshDivergence,
+  } = useApiPoll<DivergencePayload>('/api/divergence', 30000);
+  const {
+    data: shieldStatus,
+    isRefreshing: shieldRefreshing,
+    refresh: refreshShield,
+  } = useApiPoll<ShieldStatus>('/api/shield/status', 30000);
+  const {
+    data: feedHealth,
+    loading: feedLoading,
+    isRefreshing: feedRefreshing,
+    error: feedError,
+    refresh: refreshFeed,
+  } = useApiPoll<FeedHealth>('/api/feed-health', 30000);
+  const {
+    data: forensics,
+    loading: forensicsLoading,
+    isRefreshing: forensicsRefreshing,
+    refresh: refreshForensics,
+  } = useApiPoll<ForensicsSummary>('/api/forensics/summary', 0);
   const { data: diagnostics } = useApiPoll<Record<string, unknown>>('/api/live-feed-diagnostics', 0);
 
   const { post: postReset, loading: resetting } = useApiPost<{ success: boolean }>();
 
+  const refreshAll = useCallback(() => {
+    refreshStatus();
+    refreshBoot();
+    refreshDivergence();
+    refreshShield();
+    refreshFeed();
+    refreshForensics();
+  }, [refreshStatus, refreshBoot, refreshDivergence, refreshShield, refreshFeed, refreshForensics]);
+
+  const panelRefreshing =
+    statusRefreshing
+    || bootRefreshing
+    || divergenceRefreshing
+    || shieldRefreshing
+    || feedRefreshing
+    || forensicsRefreshing;
+
   const handleReset = useCallback(async () => {
     const res = await postReset('/api/shield/reset');
     if (res?.success) {
-      refreshStatus();
+      refreshAll();
     }
     setConfirmReset(false);
-  }, [postReset, refreshStatus]);
+  }, [postReset, refreshAll]);
 
   const overall = status?.overall || forensics?.overall || 'unknown';
   const bannerColor = overall === 'healthy' ? 'bg-long/20 border-long/40 text-long' :
@@ -317,7 +365,7 @@ export default function GuardianPanel() {
       {(statusError || bootError || feedError) && (
         <ErrorBanner
           message={[statusError, bootError, feedError].filter(Boolean).join(' | ')}
-          onRetry={() => { refreshStatus(); refreshBoot(); }}
+          onRetry={refreshAll}
         />
       )}
 
@@ -327,7 +375,10 @@ export default function GuardianPanel() {
           <Shield className="w-5 h-5" />
           <span className="text-sm font-bold uppercase">Guardian Overall: {overall}</span>
         </div>
-        <RefreshButton onClick={() => { refreshStatus(); refreshBoot(); }} loading={statusLoading || bootLoading} />
+        <RefreshButton
+          onClick={refreshAll}
+          loading={panelRefreshing || statusLoading || bootLoading}
+        />
       </div>
 
       <div className="grid grid-cols-2 gap-5">
@@ -402,11 +453,12 @@ export default function GuardianPanel() {
 
       {/* Divergence Monitor */}
       <Card className="border-border/60 bg-card/50">
-        <CardHeader className="pb-2">
+        <CardHeader className="pb-2 flex flex-row items-center justify-between gap-2">
           <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Rajdhani', sans-serif", letterSpacing: '0.12em' }}>
             <Activity className="w-4 h-4 text-primary" />
             Divergence Monitor
           </CardTitle>
+          <RefreshButton onClick={refreshAll} loading={panelRefreshing} />
         </CardHeader>
         <CardContent>
           {divergencePayload ? (

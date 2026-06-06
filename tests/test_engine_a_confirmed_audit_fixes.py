@@ -343,13 +343,13 @@ def test_addon_feed_exception_surfaces_error_status(monkeypatch):
     assert status == "error"
 
 
-def test_btc_correlation_heuristic_fallback_is_logged(caplog):
+def test_btc_correlation_missing_prices_returns_neutral(caplog):
     caplog.set_level(logging.WARNING, logger="athena")
 
     corr = _get_30d_correlation(pair_display="ETH/USDT")
 
-    assert corr == pytest.approx(0.90)
-    assert "heuristic BTC correlation fallback" in caplog.text
+    assert corr == pytest.approx(0.0)
+    assert "returning 0.0 (neutral" in caplog.text
 
 
 def test_dead_engine_a_config_blocks_removed_from_runtime_config():

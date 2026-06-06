@@ -106,6 +106,43 @@ def test_scoring_sentiment_gating():
         assert "Blocked by Sentiment Gate" in reason
 
 
+def test_classify_signal_confidence_gate_demotes_low_confidence():
+    from scoring import _classify_signal
+    from config import CONFIG
+
+    pair = {"display": "BNB/USDT", "type": "crypto", "enabled": True}
+    signal = {
+        "confluenceScore": 2.68,
+        "scanThreshold": 2.0,
+        "confidence": 0.58,
+        "eventRisk": {"hardBlock": False},
+        "macroEventRisk": {"blocked": False},
+        "exchangeClosed": False,
+        "scanDiagnostics": [],
+    }
+    with patch.dict(
+        CONFIG,
+        {
+            "ENGINE_A_TRADE_MIN_CONFIDENCE_ENABLED": True,
+            "ENGINE_A_TRADE_MIN_CONFIDENCE": 0.60,
+            "ENGINE_A_TRADE_ELIGIBILITY_ENABLED": False,
+        },
+    ):
+        tier, reason = _classify_signal(signal, pair)
+        assert tier == "watchlist"
+        assert "confidence 0.58" in reason
+
+    with patch.dict(
+        CONFIG,
+        {
+            "ENGINE_A_TRADE_MIN_CONFIDENCE_ENABLED": False,
+            "ENGINE_A_TRADE_ELIGIBILITY_ENABLED": False,
+        },
+    ):
+        tier, reason = _classify_signal(signal, pair)
+        assert tier == "trade"
+
+
 def test_correlation_clusters_can_be_configured():
     from scoring import apply_correlation_cap
     from config import CONFIG

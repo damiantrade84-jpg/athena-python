@@ -257,6 +257,42 @@ def test_execution_prefers_nested_engine_b_execution_levels():
     assert sig["level_source"] == "engine_b_execution"
 
 
+def test_execution_prefers_engine_b_status_over_stale_sig_overlay():
+    sig = {
+        "engine": "B",
+        "direction": "LONG",
+        "price": 0.9293,
+        "engine_b_execution_sl": 0.436,
+        "engine_b_execution_tp": 1.05,
+        "engine_b_status": {
+            "execution_sl": 0.855,
+            "execution_tp": 1.05,
+            "execution_levels_valid": True,
+        },
+    }
+
+    assert _extract_engine_b_execution_levels(sig) == {
+        "sl": 0.855,
+        "tp1": 1.05,
+        "tp2": 1.05,
+    }
+
+
+def test_execution_rejects_wrong_side_tp_on_long():
+    sig = {
+        "engine": "B",
+        "direction": "LONG",
+        "price": 0.9293,
+        "engine_b_status": {
+            "execution_sl": 0.855,
+            "execution_tp": 0.436,
+            "execution_levels_valid": True,
+        },
+    }
+
+    assert _extract_engine_b_execution_levels(sig) is None
+
+
 def test_execution_prefers_top_level_resolved_engine_b_levels_over_raw_overlay():
     sig = {
         "engine": "B",

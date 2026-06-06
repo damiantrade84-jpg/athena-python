@@ -1262,7 +1262,10 @@ class AutoTrader:
 
             gate["checked"] = True
             sent = check_sentiment(
-                signal.get("pair", ""), signal.get("direction", ""), asset_type
+                signal.get("pair", ""),
+                signal.get("direction", ""),
+                asset_type,
+                symbol=signal.get("symbol"),
             )
             gate["result"] = sent
             if not sent.get("allowed", False):

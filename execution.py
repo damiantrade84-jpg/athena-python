@@ -457,50 +457,111 @@ def _engine_b_context_confirmed(sig: dict, engine_b: dict | None = None) -> bool
     return False
 
 
+def _engine_b_execution_levels_marked_invalid(source: dict | None) -> bool:
+    if not isinstance(source, dict):
+        return False
+    if source.get("execution_levels_valid") is False:
+        return True
+    return source.get("execution_level_reject_reason") in (
+        "max_sl_exceeded",
+        "tp_wrong_side",
+        "levels_missing",
+    )
+
+
+def _engine_b_execution_tp_side_ok(
+    sig: dict,
+    tp: float,
+    entry: float | None = None,
+) -> bool:
+    direction = str(sig.get("direction") or "").upper()
+    try:
+        px = float(
+            entry if entry is not None else sig.get("price") or sig.get("entry") or 0
+        )
+        tp_f = float(tp)
+    except (TypeError, ValueError):
+        return False
+    if px <= 0 or tp_f <= 0 or direction not in ("LONG", "SHORT"):
+        return True
+    if direction == "LONG":
+        return tp_f > px
+    return tp_f < px
+
+
 def _extract_engine_b_execution_levels(
     sig: dict,
     engine_b: dict | None = None,
 ) -> dict | None:
     sig = sig or {}
     has_b_context = _signal_has_engine_b_context(sig, engine_b)
+    eb_status = (
+        sig.get("engine_b_status")
+        if isinstance(sig.get("engine_b_status"), dict)
+        else None
+    )
 
-    def _levels_from(source: dict, *, allow_recommended: bool, allow_signal_levels: bool = False) -> dict | None:
-        sl = source.get("execution_sl") or source.get("engine_b_execution_sl")
-        tp = source.get("execution_tp") or source.get("engine_b_execution_tp")
-        if allow_recommended and (sl is None or tp is None):
-            sl = sl or source.get("recommended_stop_loss")
-            tp = tp or source.get("recommended_take_profit")
+    def _levels_from(
+        source: dict,
+        *,
+        allow_recommended: bool,
+        allow_signal_levels: bool = False,
+        block_stale_overlay: bool = False,
+    ) -> dict | None:
+        if block_stale_overlay and _engine_b_execution_levels_marked_invalid(eb_status):
+            sl = eb_status.get("execution_sl") if eb_status else None
+            tp = eb_status.get("execution_tp") if eb_status else None
+        else:
+            sl = source.get("execution_sl")
+            if sl is None:
+                sl = source.get("engine_b_execution_sl")
+            tp = source.get("execution_tp")
+            if tp is None:
+                tp = source.get("engine_b_execution_tp")
+        if allow_recommended and not _engine_b_execution_levels_marked_invalid(source):
+            if sl is None:
+                sl = source.get("recommended_stop_loss")
+            if tp is None:
+                tp = source.get("recommended_take_profit")
         if allow_signal_levels and (sl is None or tp is None):
-            sl = sl or source.get("sl")
-            tp = tp or source.get("tp1")
+            if sl is None:
+                sl = source.get("sl")
+            if tp is None:
+                tp = source.get("tp1")
         try:
             sl_f = float(sl)
             tp_f = float(tp)
         except (TypeError, ValueError):
             return None
         if sl_f > 0 and tp_f > 0:
+            if not _engine_b_execution_tp_side_ok(sig, tp_f):
+                return None
             return {"sl": sl_f, "tp1": tp_f, "tp2": tp_f}
         return None
 
-    candidates = [
-        (sig, False, False),
-        sig.get("naked_data"),
-        sig.get("engine_b_status"),
-        engine_b,
-        sig.get("engine_b"),
-        (sig, False, has_b_context),
-    ]
-    for source in candidates:
-        allow_recommended = True
-        allow_signal_levels = False
-        if isinstance(source, tuple):
-            source, allow_recommended, allow_signal_levels = source
+    candidates: list[tuple[str, dict | None, bool, bool, bool]] = []
+    if isinstance(engine_b, dict):
+        candidates.append(("engine_b_param", engine_b, True, False, False))
+    if isinstance(eb_status, dict):
+        candidates.append(("engine_b_status", eb_status, True, False, False))
+    naked_data = sig.get("naked_data")
+    if isinstance(naked_data, dict):
+        candidates.append(("naked_data", naked_data, True, False, False))
+    candidates.append(("sig_overlay", sig, False, False, True))
+    nested_engine_b = sig.get("engine_b")
+    if isinstance(nested_engine_b, dict) and nested_engine_b is not engine_b:
+        candidates.append(("sig.engine_b", nested_engine_b, True, False, False))
+    if has_b_context:
+        candidates.append(("sig_recommended", sig, True, True, True))
+
+    for label, source, allow_recommended, allow_signal_levels, block_stale in candidates:
         if not isinstance(source, dict):
             continue
         levels = _levels_from(
             source,
             allow_recommended=allow_recommended,
             allow_signal_levels=allow_signal_levels,
+            block_stale_overlay=block_stale,
         )
         if levels:
             return levels
@@ -780,6 +841,22 @@ def _engine_b_levels_apply_error_response(sig: dict) -> tuple[dict, int]:
             },
             400,
         )
+    if sig.get("_engine_b_apply_error") == "INVALID_TP_SIDE":
+        return (
+            {
+                "error": "ENGINE_B_LEVELS_UNAVAILABLE: Engine B take-profit on wrong side of entry",
+                "pair": sig.get("pair"),
+            },
+            409,
+        )
+    if sig.get("_engine_b_apply_error") == "INVALID_TP_BOUNDS":
+        return (
+            {
+                "error": "ENGINE_B_LEVELS_UNAVAILABLE: Engine B take-profit outside exchange/distance bounds",
+                "pair": sig.get("pair"),
+            },
+            409,
+        )
     return (
         {
             "error": "ENGINE_B_LEVELS_UNAVAILABLE: Engine B execution levels missing or invalid",
@@ -793,6 +870,22 @@ def _apply_engine_b_execution_levels(sig: dict, engine_b: dict | None = None) ->
     _sync_engine_b_execution_price(sig, engine_b)
     levels = _extract_engine_b_execution_levels(sig, engine_b)
     if not levels:
+        return False
+    if not _engine_b_execution_tp_side_ok(sig, levels["tp1"]):
+        sig["_engine_b_apply_error"] = "INVALID_TP_SIDE"
+        return False
+    try:
+        from risk_engine import validate_tp_exchange_bounds
+
+        _entry_px = float(sig.get("price") or sig.get("entry") or 0)
+        _asset = str(sig.get("type") or sig.get("asset_type") or "").lower()
+        _bounds_ok, _bounds_err = validate_tp_exchange_bounds(
+            _entry_px, levels["tp1"], _asset, rt().CONFIG
+        )
+    except Exception:
+        _bounds_ok, _bounds_err = True, None
+    if not _bounds_ok:
+        sig["_engine_b_apply_error"] = "INVALID_TP_BOUNDS"
         return False
     if _engine_b_execution_sl_exceeds_max(sig, levels["sl"]):
         sig["_engine_b_apply_error"] = "MAX_SL_EXCEEDED"

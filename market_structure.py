@@ -1752,6 +1752,9 @@ def resolve_engine_b_execution_levels(
                 _exec_rr, _exec_valid, _exec_reject, _exec_tp_side_ok = _compute_exec_rr(
                     _exec_sl, _exec_tp
                 )
+                if not _exec_tp_side_ok:
+                    _exec_valid = False
+                    _exec_reject = "tp_wrong_side"
                 try:
                     _min_rr_after = float(min_rr) if min_rr is not None else None
                 except (TypeError, ValueError):
@@ -1793,6 +1796,66 @@ def resolve_engine_b_execution_levels(
                 _exec_rr = 0.0
                 _level_mode = "max_sl_exceeded"
                 _rr_source = "max_sl_exceeded"
+
+    if (
+        _exec_valid
+        and _exec_tp is not None
+        and _entry > 0
+        and str(asset_class or "").lower() == "crypto"
+    ):
+        try:
+            from risk_engine import validate_tp_exchange_bounds
+
+            _bounds_ok, _bounds_err = validate_tp_exchange_bounds(
+                _entry, _exec_tp, "crypto", config.CONFIG
+            )
+        except Exception:
+            _bounds_ok = True
+            _bounds_err = None
+        if not _bounds_ok:
+            _synth_attempted = False
+            if (
+                fallback_rr is not None
+                and _sl_valid_for_synthetic
+                and bool(config.CONFIG.get("ENGINE_B_ALLOW_SYNTHETIC_FALLBACK_RR_TP", False))
+                and _exec_sl is not None
+            ):
+                try:
+                    _min_rr_b = float(min_rr) if min_rr is not None else None
+                except (TypeError, ValueError):
+                    _min_rr_b = None
+                try:
+                    _fallback_rr_b = float(fallback_rr)
+                except (TypeError, ValueError):
+                    _fallback_rr_b = 0.0
+                _sl_dist_b = abs(_entry - _exec_sl)
+                if _sl_dist_b > 0 and _fallback_rr_b > 0:
+                    _target_rr_b = max(
+                        _fallback_rr_b,
+                        _min_rr_b if _min_rr_b is not None else _fallback_rr_b,
+                    )
+                    _exec_tp = (
+                        _entry + (_sl_dist_b * _target_rr_b)
+                        if direction == "LONG"
+                        else _entry - (_sl_dist_b * _target_rr_b)
+                    )
+                    _tp_source = "fallback_rr"
+                    _level_mode = f"{_sl_source}_sl_{_tp_source}_tp"
+                    _rr_source = _level_mode
+                    _fallback_applied = True
+                    _fallback_reason = "tp_exchange_bounds_synthesized"
+                    _synth_attempted = True
+                    _exec_rr, _exec_valid, _exec_reject, _exec_tp_side_ok = _compute_exec_rr(
+                        _exec_sl, _exec_tp
+                    )
+                    _bounds_ok, _bounds_err = validate_tp_exchange_bounds(
+                        _entry, _exec_tp, "crypto", config.CONFIG
+                    )
+            if not _bounds_ok:
+                _exec_valid = False
+                _exec_reject = "tp_exchange_bounds"
+                if _synth_attempted:
+                    _exec_tp = None
 
     _structural_target_distance_atr = (
         round(abs(_struct_tp - _entry) / _atr, 4)

@@ -1201,7 +1201,13 @@ export default function SignalsPanel() {
                                 <DetailRow
                                   key={k}
                                   label={k}
-                                  value={typeof v === 'number' ? fmtNum(v, 2) : String(v ?? '-')}
+                                  value={
+                                    typeof v === 'number'
+                                      ? fmtNum(v, 2)
+                                      : v && typeof v === 'object'
+                                        ? JSON.stringify(v)
+                                        : String(v ?? '-')
+                                  }
                                 />
                               ))}
                           </div>

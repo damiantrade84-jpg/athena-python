@@ -882,6 +882,55 @@ def _position_matches_pair(pos: dict, pair: str) -> bool:
     return False
 
 
+def validate_tp_exchange_bounds(
+    entry: float,
+    tp: float,
+    asset_type: str,
+    cfg: dict | None = None,
+) -> tuple[bool, str | None]:
+    """Fail closed when TP violates Bybit absolute floor or max distance caps."""
+    cfg = cfg or CONFIG
+    try:
+        entry_f = float(entry)
+        tp_f = float(tp)
+    except (TypeError, ValueError):
+        return False, "INVALID_LEVELS"
+    if entry_f <= 0 or tp_f <= 0:
+        return False, "INVALID_LEVELS"
+
+    asset = str(asset_type or "").lower()
+    if asset == "crypto":
+        try:
+            min_pct = float(cfg.get("BYBIT_MIN_TP_PCT_OF_MARK", 0.10))
+        except (TypeError, ValueError):
+            min_pct = 0.10
+        if min_pct > 0:
+            floor = entry_f * min_pct
+            if tp_f + 1e-12 < floor:
+                return False, (
+                    f"TP_BELOW_EXCHANGE_FLOOR: TP {tp_f} < {floor} "
+                    f"({min_pct:.0%} of entry {entry_f})"
+                )
+
+    max_tp_tbl = cfg.get("MAX_TP_PCT") if isinstance(cfg.get("MAX_TP_PCT"), dict) else {}
+    max_tp_pct = max_tp_tbl.get(asset)
+    if max_tp_pct is None:
+        max_tp_pct = max_tp_tbl.get("default")
+    if max_tp_pct is not None:
+        try:
+            cap = float(max_tp_pct)
+        except (TypeError, ValueError):
+            cap = None
+        if cap is not None and cap > 0:
+            dist_pct = abs(tp_f - entry_f) / abs(entry_f)
+            if dist_pct > cap + 1e-12:
+                return False, (
+                    f"TP_TOO_FAR: {dist_pct:.1%} exceeds {cap:.0%} cap"
+                )
+
+    return True, None
+
+
 def risk_check(
     signal: dict,
     account_balance: float,
@@ -1136,6 +1185,16 @@ def risk_check(
     if direction == "SHORT" and tp1 > 0 and tp1 >= entry:
         log.warning(f"{prefix} REJECTED: SHORT tp1 {tp1} must be below entry {entry}")
         return RiskApproval(False, 0.0, 0.0, 0.0, 0.0, dd, "INVALID_LEVELS")
+
+    if tp1 > 0:
+        _tp_bounds_ok, _tp_bounds_err = validate_tp_exchange_bounds(
+            entry, tp1, asset_type, CONFIG
+        )
+        if not _tp_bounds_ok:
+            log.warning(f"{prefix} REJECTED: {_tp_bounds_err}")
+            return RiskApproval(
+                False, 0.0, 0.0, 0.0, 0.0, dd, _tp_bounds_err or "INVALID_LEVELS"
+            )
 
     # Engine C / consensus minimum R:R from geometry (defense in depth)
     def _is_consensus_execution_signal(sig: dict) -> bool:

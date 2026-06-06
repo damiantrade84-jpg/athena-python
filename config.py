@@ -1180,6 +1180,8 @@ CONFIG: dict = {
     "ENGINE_A_CRYPTO_LATE_TREND_MULT": 0.85,
     "ENGINE_A_CRYPTO_VWAP_EXTENSION_ATR_WARN": 3.0,
     "ENGINE_A_CRYPTO_VOLUME_MA_LOOKBACK": 20,
+    "ENGINE_A_TRADE_MIN_CONFIDENCE_ENABLED": True,
+    "ENGINE_A_TRADE_MIN_CONFIDENCE": 0.60,
     "ENGINE_AB_CRYPTO_SIGNAL_FEED": "binance",
     "ENGINE_AB_CRYPTO_SIGNAL_FEED_FALLBACK": False,
     "ENGINE_A_MULTI_EXCHANGE_FUNDING": {
@@ -1796,6 +1798,18 @@ CONFIG: dict = {
     },
     "MAX_SL_PCT_SCORE_GROUP_OVERRIDES": {},
     "MAX_SL_PCT_SYMBOL_OVERRIDES": {},
+    # Bybit linear USDT perps reject TP triggers below ~10% of mark (retCode 10001).
+    "BYBIT_MIN_TP_PCT_OF_MARK": 0.10,
+    "MAX_TP_PCT": {
+        "crypto": 0.50,
+        "forex": 0.50,
+        "commodity": 0.50,
+        "index": 0.50,
+        "stock": 0.50,
+        "etf": 0.50,
+        "etf_bond": 0.50,
+        "default": 0.50,
+    },
     "DATA_FRESHNESS_GATES": {
         "WARN_ON_STALE_SCAN": True,
         "BLOCK_EXECUTION_ON_STALE": True,

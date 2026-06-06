@@ -5972,6 +5972,17 @@ def api_pair_scan():
                 jsonify({"error": "Engine A analysis unavailable for this pair"}),
                 422,
             )
+        _conf_detail = signal.get("confidenceDetail") or {}
+        if _conf_detail.get("confidence") is not None:
+            signal["confidence"] = _conf_detail.get("confidence")
+        signal.setdefault(
+            "scanThreshold",
+            signal.get("threshold") or get_min_confluence_threshold(pair_obj),
+        )
+        _tier, _tier_reason = _classify_signal(signal, pair_obj)
+        signal["tier"] = _tier
+        signal["scanTier"] = _tier
+        signal["tierReason"] = _tier_reason
         return jsonify(
             _json_safe(
                 {
@@ -8406,6 +8417,51 @@ def api_backtest_naked():
         log.exception("[ENGINE B BT] Unhandled error in api_backtest_naked")
         return jsonify(
             {"success": False, "error": f"Engine B backtest failed: {str(exc)}"}
+        ), 500
+
+
+@app.route("/api/backtest-naked-all", methods=["POST"])
+def api_backtest_naked_all():
+    """Engine B batch backtest across many pairs (parallel REST + serial MT5).
+
+    Body: {pairs?: [symbol|display, ...], style?, validation_mode?, purge_gap?, folds?}.
+    Empty/absent ``pairs`` => all non-JSE pairs. Returns {success, totalPairs, okCount, rows}.
+    """
+    try:
+        from engine_b_batch import run_engine_b_batch, resolve_engine_b_batch_pairs
+
+        data = request.get_json(force=True, silent=True) or {}
+        tokens = data.get("pairs") or data.get("symbols") or []
+        pairs = resolve_engine_b_batch_pairs(tokens, ALL_PAIRS, JSE_PAIRS)
+        if not pairs:
+            return jsonify(
+                {"success": False, "error": "No valid pairs resolved for Engine B batch."}
+            ), 400
+
+        _vm = str(data.get("validation_mode") or "standard").strip().lower()
+        try:
+            _pg = int(data.get("purge_gap", 200))
+        except (TypeError, ValueError):
+            _pg = 200
+        try:
+            _fd = int(data.get("folds", 3))
+        except (TypeError, ValueError):
+            _fd = 3
+
+        out = run_engine_b_batch(
+            pairs,
+            style=data.get("style", "auto"),
+            validation_mode=_vm,
+            purge_gap=_pg,
+            folds=max(1, _fd),
+        )
+        safe = _json_safe(out) if callable(globals().get("_json_safe")) else out
+        return jsonify(safe)
+
+    except Exception as exc:
+        log.exception("[ENGINE B BT] Unhandled error in api_backtest_naked_all")
+        return jsonify(
+            {"success": False, "error": f"Engine B batch backtest failed: {str(exc)}"}
         ), 500
 
 

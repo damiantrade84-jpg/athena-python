@@ -71,6 +71,49 @@ def test_build_news_block_skips_non_dict():
     assert text.count("[") >= 1
 
 
+def test_build_news_block_orders_newest_first():
+    articles = [
+        {"date": "2026-06-05T10:00:00+00:00", "title": "Older", "content": "old"},
+        {"date": "2026-06-06T09:00:00+00:00", "title": "Newest", "content": "new"},
+        {"date": "2026-06-06T06:00:00+00:00", "title": "Middle", "content": "mid"},
+    ]
+    text = build_news_block(articles)
+    assert text.split("\n")[0].endswith("Newest")
+
+
+def test_fetch_news_sources_sorts_newest_first(monkeypatch):
+    now = datetime(2026, 6, 6, 12, 0, tzinfo=timezone.utc)
+
+    class Response:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return [
+                {
+                    "date": "2026-06-05T10:00:00+00:00",
+                    "title": "Older",
+                    "content": "old",
+                    "link": "https://example.com/old",
+                },
+                {
+                    "date": "2026-06-06T09:00:00+00:00",
+                    "title": "Newest",
+                    "content": "new",
+                    "link": "https://example.com/new",
+                },
+            ]
+
+    monkeypatch.setattr(nsf.http_requests, "get", lambda *a, **k: Response())
+    bundle = fetch_news_sources(
+        [{"kind": "ticker", "value": "EURUSD.FOREX", "label": "direct"}],
+        "test-key",
+        {"NEWS_SENTIMENT_MAX_ARTICLE_AGE_HOURS": 72},
+        now=now,
+    )
+    assert bundle["articles"][0]["title"] == "Newest"
+
+
 def test_apply_news_sentiment_disabled_noop(monkeypatch):
     res = {"score": 2.0, "maxScoreOverride": 3.0, "warnings": []}
 
@@ -308,6 +351,11 @@ def test_eodhd_normalized_sentiment_combined_after_llm_and_not_in_prompt(monkeyp
         },
     )
     monkeypatch.setattr(nsf, "fetch_eodhd_sentiment", lambda *_a, **_k: -0.2)
+    monkeypatch.setattr(
+        nsf,
+        "fetch_eodhd_sentiment_with_date",
+        lambda *_a, **_k: (-0.2, "2026-05-24"),
+    )
 
     result = nsf.get_news_sentiment(
         {"display": "EUR/USD", "symbol": "EURUSD", "type": "forex"},
@@ -320,6 +368,7 @@ def test_eodhd_normalized_sentiment_combined_after_llm_and_not_in_prompt(monkeyp
 
     assert result["eodhd_normalized_score"] == pytest.approx(-0.2)
     assert result["eodhd_agreement"] == "conflict"
+    assert result["eodhd_source_date"] == "2026-05-24"
     assert result["combined_vote"] != news_to_confluence_vote({"sentiment_score": 0.5, "confidence": 0.8})
     assert "eodhd_normalized_score" not in captured["prompt"]
 

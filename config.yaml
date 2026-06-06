@@ -177,13 +177,17 @@ ENGINE_A_CRYPTO_BT_LEVEL_ATR_USE_SIGNAL_FEED: false
 # Engine A scoring OHLC: Bybit when paper execution is Bybit (chart parity).
 ENGINE_A_CRYPTO_SIGNAL_FEED: bybit
 # Crypto late-trend continuation: diagnostics + conservative score multiplier when
-# full EMA alignment meets weak ADX, stretched VWAP, and sub-MA H4 volume.
+# full EMA alignment meets weak/falling ADX and stretched VWAP (volume not required).
 ENGINE_A_CRYPTO_LATE_TREND_DIAGNOSTICS_ENABLED: true
 ENGINE_A_CRYPTO_LATE_TREND_ADJUSTMENT_ENABLED: true
 ENGINE_A_CRYPTO_ADX_STRONG_THRESHOLD: 25
 ENGINE_A_CRYPTO_LATE_TREND_MULT: 0.85
 ENGINE_A_CRYPTO_VWAP_EXTENSION_ATR_WARN: 3.0
 ENGINE_A_CRYPTO_VOLUME_MA_LOOKBACK: 20
+# Trade tier: demote to watchlist when confidence engine score is below minimum.
+# Confidence is advisory for display but gates scan trade tier when enabled.
+ENGINE_A_TRADE_MIN_CONFIDENCE_ENABLED: true
+ENGINE_A_TRADE_MIN_CONFIDENCE: 0.60
 ENGINE_AB_CRYPTO_SIGNAL_FEED: bybit
 ENGINE_AB_CRYPTO_SIGNAL_FEED_FALLBACK: false
 ENGINE_B_CRYPTO_LEVELS_FEED: bybit
@@ -1732,6 +1736,11 @@ ENGINE_B_STRUCT_CONFIRMED_MIN_BARS: 20
 ENGINE_B_SWEEP_LOOKBACK_BARS: 5
 ENGINE_B_ALLOW_SYNTHETIC_FALLBACK_RR_TP: true
 ENGINE_B_ENFORCE_MAX_SL_PCT: true
+# Bybit linear perps: TP trigger must be >= ~10% of mark (retCode 10001 otherwise).
+BYBIT_MIN_TP_PCT_OF_MARK: 0.10
+MAX_TP_PCT:
+  crypto: 0.50
+  default: 0.50
 
 
 
