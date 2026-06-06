@@ -19,6 +19,16 @@ from scanner import (
 class TestEngineBLevelPair:
     """_engine_b_level_pair must not fall through to stale levels when execution_sl is 0."""
 
+    def test_max_sl_exceeded_does_not_fall_through_to_recommended(self):
+        conf_b = {
+            "execution_levels_valid": False,
+            "execution_level_reject_reason": "max_sl_exceeded",
+        }
+        res_b = {"recommended_stop_loss": 0.436, "recommended_take_profit": 1.05}
+        sl, tp = _engine_b_level_pair(conf_b, res_b)
+        assert sl is None
+        assert tp is None
+
     def test_execution_sl_zero_does_not_fall_through(self):
         """execution_sl=0.0 is a valid level; must not fall through to recommended_stop_loss."""
         conf_b = {"execution_sl": 0.0, "execution_tp": 0.0}

@@ -1736,6 +1736,11 @@ ENGINE_B_STRUCT_CONFIRMED_MIN_BARS: 20
 ENGINE_B_SWEEP_LOOKBACK_BARS: 5
 ENGINE_B_ALLOW_SYNTHETIC_FALLBACK_RR_TP: true
 ENGINE_B_ENFORCE_MAX_SL_PCT: true
+# Bybit linear perps: TP trigger must be >= ~10% of mark (retCode 10001 otherwise).
+BYBIT_MIN_TP_PCT_OF_MARK: 0.10
+MAX_TP_PCT:
+  crypto: 0.50
+  default: 0.50
 
 
 

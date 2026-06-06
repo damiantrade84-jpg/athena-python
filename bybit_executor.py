@@ -265,7 +265,7 @@ def _entry_slippage_bps(
 
 
 def _validate_exit_levels(
-    direction: str, entry_price: float, sl: float, tp: float
+    direction: str, entry_price: float, sl: float, tp: float, *, asset_type: str = "crypto"
 ) -> str | None:
     """Ensure SL/TP are on the correct side of the current entry price."""
     if entry_price <= 0:
@@ -282,6 +282,18 @@ def _validate_exit_levels(
             return f"INVALID_SL: SL {sl} is below entry {entry_price} for SHORT"
         if tp >= entry_price:
             return f"INVALID_TP: TP {tp} is above entry {entry_price} for SHORT"
+    if tp > 0 and str(asset_type or "").lower() == "crypto":
+        try:
+            from config import CONFIG as _cfg
+            from risk_engine import validate_tp_exchange_bounds
+
+            _ok, _err = validate_tp_exchange_bounds(
+                entry_price, tp, "crypto", _cfg
+            )
+            if not _ok:
+                return _err
+        except Exception:
+            pass
     return None
 
 
@@ -1272,8 +1284,8 @@ def bybit_execute(signal: dict, approval: "RiskApproval") -> dict:  # noqa: F821
                     "spreadLimitPct": _spread_limit,
                 }
 
-        sl = signal.get("sl", 0)
-        tp1 = signal.get("tp1", 0)
+        sl = float(signal.get("sl", 0) or 0)
+        tp1 = float(signal.get("tp1", 0) or 0)
         signal_price = float(signal.get("price") or signal.get("livePrice") or 0)
 
         # GAP-7 — provider drift between the signal price (Binance candle close
@@ -1327,6 +1339,8 @@ def bybit_execute(signal: dict, approval: "RiskApproval") -> dict:  # noqa: F821
             if anchor_entry > 0 and sl_offset is not None and tp_offset is not None:
                 sl = round(price + sl_offset, 8)
                 tp1 = round(price + tp_offset, 8)
+                signal["sl"] = sl
+                signal["tp1"] = tp1
                 log.info(
                     f"[BYBIT] {ccxt_symbol}: rebased AI levels from anchor {anchor_entry} to live entry {price} "
                     f"-> SL={sl} TP={tp1}"
@@ -1341,6 +1355,8 @@ def bybit_execute(signal: dict, approval: "RiskApproval") -> dict:  # noqa: F821
                 _pre_rebase_tp = float(tp1)
                 sl = round(price + sl_offset, 8)
                 tp1 = round(price + tp_offset, 8)
+                signal["sl"] = sl
+                signal["tp1"] = tp1
                 log.info(
                     f"[BYBIT] {ccxt_symbol}: price drift {_provider_drift_pct:.1%} ({signal_price}→{price}) — rebased SL={sl} TP={tp1}"
                 )
@@ -1556,13 +1572,13 @@ def bybit_execute(signal: dict, approval: "RiskApproval") -> dict:  # noqa: F821
 
         _is_scalp = _is_engine_d_signal(signal)
         _use_broker_tp = _bybit_should_send_broker_tp(signal)
-        _tp1 = float(signal.get("tp1", 0) or 0)
+        _tp1_local = float(tp1 or 0)
         _tp2 = float(signal.get("tp2", 0) or 0)
         _tp_partial = float(signal.get("tp_partial", 0) or 0)
         # Engine D: position TP sits at the structural target (tp1).
         # A separate reduce-only limit at tp_partial closes the first 50% clip at +1R.
         # Non-scalp signals use tp1 as the single full-position exit.
-        tp_exec = _tp1 if _use_broker_tp else 0.0
+        tp_exec = _tp1_local if _use_broker_tp else 0.0
 
         # Set SL/TP on the position via Bybit v5 trading-stop endpoint
         # (stop_market / take_profit_market order types are invalid in v5)
@@ -1670,7 +1686,7 @@ def bybit_execute(signal: dict, approval: "RiskApproval") -> dict:  # noqa: F821
             "direction": direction,
             "sl": sl,
             "tp": tp1,
-            "tp1": _tp1,
+            "tp1": _tp1_local,
             "tp2": _tp2 if _tp2 > 0 else None,
             "tpPartial": _tp_partial if _tp_partial > 0 else None,
             "partialOrderId": partial_order_id,
