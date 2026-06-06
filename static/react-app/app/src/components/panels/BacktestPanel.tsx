@@ -104,6 +104,20 @@ interface BacktestResult {
   [k: string]: unknown;
 }
 
+interface EngineBBatchRow {
+  pairKey: string;
+  ok: boolean;
+  error?: string;
+  result?: BacktestResult;
+}
+interface EngineBBatchResponse {
+  success?: boolean;
+  totalPairs?: number;
+  okCount?: number;
+  rows?: EngineBBatchRow[];
+  error?: string;
+}
+
 interface BacktestHistoryRow {
   id?: number;
   run_date?: string;
@@ -257,6 +271,7 @@ export default function BacktestPanel() {
   const allPairs = useMemo(() => flattenPairs(pairsData), [pairsData]);
 
   const { post: postBacktest, loading: running, error: btError } = useApiPost<BacktestResult>();
+  const { post: postBatchB } = useApiPost<EngineBBatchResponse>();
   const { data: history, loading: historyLoading, error: historyError, refresh: refreshHistory } =
     useApiPoll<BacktestHistoryRow[]>('/api/backtest-history', 0);
   const { data: bestData, loading: bestLoading, error: bestError } =
@@ -281,6 +296,32 @@ export default function BacktestPanel() {
       const tokens = batchList.split(/[,;\n\r]+/).map((x) => x.trim()).filter(Boolean);
       if (tokens.length === 0) {
         showToast('Batch list is empty.', 'info');
+        return;
+      }
+      if (engine === 'B') {
+        // Engine B: run all pairs server-side in parallel (process pool) instead
+        // of looping client-side one request at a time.
+        const resolved = tokens.map((t) => resolvePairKey(t, allPairs));
+        const res = await postBatchB('/api/backtest-naked-all', {
+          pairs: resolved,
+          style,
+          validation_mode: validationMode,
+        });
+        if (!res || res.error || !res.rows) {
+          showToast(`Batch failed: ${res?.error || 'unknown'}`, 'error');
+          return;
+        }
+        const rowsB: BatchRow[] = res.rows.map((r) => ({
+          pairKey: r.pairKey,
+          ok: !!r.ok,
+          error: r.error,
+          result: r.result,
+        }));
+        setBatchRows(rowsB);
+        setResult(null);
+        const okB = rowsB.filter((r) => r.ok).length;
+        showToast(`Batch: ${okB}/${rowsB.length} pairs OK`, okB === rowsB.length ? 'success' : 'info');
+        refreshHistory();
         return;
       }
       const rowsOut: BatchRow[] = [];
@@ -315,7 +356,7 @@ export default function BacktestPanel() {
     );
     refreshHistory();
   }, [
-    pair, engine, style, validationMode, postBacktest, showToast, refreshHistory,
+    pair, engine, style, validationMode, postBacktest, postBatchB, showToast, refreshHistory,
     batchMode, batchList, allPairs,
   ]);
 
