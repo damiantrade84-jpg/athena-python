@@ -1709,6 +1709,12 @@ CONFIG: dict = {
     },
     "FACTOR_ADDON_CONFIRM_MAX": 0.20,
     "FACTOR_ADDON_AGAINST_MIN": -0.25,
+    "CARRY_STATIC_RATES_AS_OF": "2026-06-07",
+    "CARRY_STATIC_RATES_MAX_AGE_DAYS": 30,
+    "FACTOR_FUNDING_USE_ZSCORE": False,
+    "FACTOR_FUNDING_ZSCORE_WINDOW": 30,
+    "FACTOR_FUNDING_Z_THRESHOLD": 1.0,
+    "FACTOR_FUNDING_ZSCORE_MIN_STD": 1e-6,
     "FACTOR_CRYPTO_ADDON_COMBO_CONFIRM_CAP": 0.25,
     "FACTOR_CRYPTO_ADDON_COMBO_AGAINST_CAP": -0.20,
     "EODHD_COMMODITY_TICKERS": {
@@ -2178,8 +2184,14 @@ _KNOWN_YAML_ONLY_KEYS = {
     "FACTOR_ADDON_AGAINST_MIN",
     "FACTOR_ADDON_CONFIRM_MAX",
     "FACTOR_CONVICTION_FLOOR",
+    "CARRY_STATIC_RATES_AS_OF",
+    "CARRY_STATIC_RATES_MAX_AGE_DAYS",
     "FACTOR_FUNDING_BASELINE",
     "FACTOR_FUNDING_NOISE_BAND",
+    "FACTOR_FUNDING_USE_ZSCORE",
+    "FACTOR_FUNDING_ZSCORE_WINDOW",
+    "FACTOR_FUNDING_Z_THRESHOLD",
+    "FACTOR_FUNDING_ZSCORE_MIN_STD",
     "FACTOR_FUNDING_Z_REF",
     "FACTOR_FUNDING_SCALE",
     "FACTOR_OI_REF_PCT",
@@ -2331,7 +2343,34 @@ class AITemperatureConfig:
 
 def validate_config(cfg: dict) -> None:
     """Warn on mis-typed or dangerous CONFIG values after YAML overrides are applied."""
+    import os
+
     _report_unknown_top_level_config_keys(_yaml_overrides)
+    if not cfg.get("ENGINE_A_SCORE_GROUP_ADJUSTMENTS_ENABLED", False):
+        if not os.environ.get("PYTEST_CURRENT_TEST"):
+            log.warning(
+                "[CFG] ENGINE_A_SCORE_GROUP_ADJUSTMENTS_ENABLED is False — "
+                "per-score-group indicator differentiation (EMA/RSI/MACD/weights/floors) "
+                "is inactive; config.yaml normally sets this to true"
+            )
+    carry_as_of = str(cfg.get("CARRY_STATIC_RATES_AS_OF", "") or "").strip()
+    if carry_as_of:
+        try:
+            from datetime import datetime, timezone
+
+            as_of_dt = datetime.strptime(carry_as_of, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+            max_age = max(1, int(cfg.get("CARRY_STATIC_RATES_MAX_AGE_DAYS", 30) or 30))
+            age_days = (datetime.now(timezone.utc) - as_of_dt).days
+            if age_days > max_age:
+                log.warning(
+                    "[CFG] CARRY_STATIC_RATES_AS_OF=%s is %d days old (max %d) — "
+                    "refresh carry_feed static fallbacks when FRED is unreachable",
+                    carry_as_of,
+                    age_days,
+                    max_age,
+                )
+        except (TypeError, ValueError):
+            log.warning("[CFG] CARRY_STATIC_RATES_AS_OF must be YYYY-MM-DD, got %r", carry_as_of)
     for k in (
         "RISK_PCT",
         "SL_ATR_MULT",

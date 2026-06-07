@@ -272,6 +272,18 @@ def test_cot_unsupported_commodity_can_fallback_to_real_volume(monkeypatch):
     assert value > 0
 
 
+def test_vwap_filter_crypto_only_when_enabled(monkeypatch):
+    monkeypatch.setitem(
+        factor_scoring.CONFIG,
+        "ENGINE_A_VWAP_FILTER",
+        {"ENABLED": True, "MAX_BOOST": 0.03, "MAX_PENALTY": -0.03, "CANDLE_LOOKBACK": 10},
+    )
+    candles = [{"close": 100.0, "high": 101.0, "low": 99.0, "volume": 1000, "confirmed": True}] * 12
+    mult, detail = factor_scoring._vwap_direction_filter(candles, "LONG", "forex")
+    assert mult == 1.0
+    assert detail.get("reason") == "crypto_only"
+
+
 def test_vwap_filter_skips_explicit_unfinalized_last_bar(monkeypatch):
     monkeypatch.setitem(
         CONFIG,
@@ -281,7 +293,7 @@ def test_vwap_filter_skips_explicit_unfinalized_last_bar(monkeypatch):
     candles = _candles(5)
     candles[-1]["is_final"] = False
 
-    mult, detail = factor_scoring._vwap_direction_filter(candles, "LONG", "stock")
+    mult, detail = factor_scoring._vwap_direction_filter(candles, "LONG", "crypto")
 
     assert mult == pytest.approx(1.0)
     assert detail["applied"] is False
@@ -2892,3 +2904,41 @@ def test_macro_context_usd_relative_strength_score(monkeypatch):
     # The relative difference is ~4% of base score.
     diff_pct = (res_bullish["final_score"] - res_bearish["final_score"]) / res_bearish["final_score"]
     assert pytest.approx(diff_pct, abs=1e-2) == 0.04
+
+
+def test_engine_a_group_adjustments_enabled_reads_config(monkeypatch):
+    monkeypatch.setitem(CONFIG, "ENGINE_A_SCORE_GROUP_ADJUSTMENTS_ENABLED", False)
+    assert factor_scoring._engine_a_group_adjustments_enabled() is False
+    monkeypatch.setitem(CONFIG, "ENGINE_A_SCORE_GROUP_ADJUSTMENTS_ENABLED", True)
+    assert factor_scoring._engine_a_group_adjustments_enabled() is True
+
+
+def test_cot_coverage_status_unsupported_and_no_coverage(monkeypatch):
+    assert factor_scoring._cot_coverage_status("SOL/USDT") == "unsupported"
+
+    monkeypatch.setattr(factor_scoring, "_cot_formula_supported", lambda _d: True)
+    monkeypatch.setattr(
+        "cot_feed.get_cot_net",
+        lambda _d: {"_cot_coverage": "no_coverage"},
+    )
+    assert factor_scoring._cot_coverage_status("Cocoa") == "no_coverage"
+
+
+def test_resolve_funding_stats_builds_rolling_mean_std(monkeypatch):
+    factor_scoring._funding_stats_cache.clear()
+    monkeypatch.setitem(CONFIG, "FACTOR_FUNDING_USE_ZSCORE", True)
+    monkeypatch.setitem(CONFIG, "FACTOR_FUNDING_ZSCORE_WINDOW", 5)
+    rates = [{"rate": 0.0001}, {"rate": 0.0002}, {"rate": 0.0003}, {"rate": 0.0004}, {"rate": 0.0005}]
+    monkeypatch.setattr(
+        "data_feeds._fetch_bybit_funding_history",
+        lambda *a, **k: {"list": rates},
+    )
+    monkeypatch.setattr(
+        "data_feeds._fetch_binance_funding_history",
+        lambda *a, **k: {"list": []},
+    )
+    stats = factor_scoring._resolve_funding_stats({"symbol": "BTCUSDT", "type": "crypto"})
+    assert stats is not None
+    assert stats["n"] == 5
+    assert stats["mean"] == pytest.approx(0.0003)
+    assert stats["std"] > 0

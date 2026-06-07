@@ -29,6 +29,7 @@ Do not use `.cursor/**`, `.agents/**`, or global/user-profile agent skills for t
 
 - Before editing `execution.py`, `risk_engine.py`, `guardian.py`, `auto_trader.py`, `mt5_executor.py`, or `bybit_executor.py`, invoke `/athena-audit` to verify execution safety first.
 - If changes affect Engine A/B/C/D scoring or threshold logic, verify live/backtest parity before applying.
+- Before merging or reviewing chart candle indicators, `TVChartPanel` indicator math, `routes_market_data` chart payloads, or `ENGINE_A_*_PERIOD` config — run the **cross-surface parity** checklist below (do not trust “field exists in interface”).
 - After any edit to safety gates, freshness checks, or kill switches, run targeted tests for the touched behavior.
 
 ## Claude Code skill policy
@@ -65,6 +66,64 @@ Common entry points only. This is not a complete allowlist.
 - Do not build new AI review features on the legacy TradingView path.
 - Prefer native chart PNG screenshots; TradingView limits drove the move.
 
+## Cross-surface parity (Engine A ↔ chart ↔ backtest)
+
+Catch **contract drift** where config is resolved per score group but a later surface still uses hardcoded defaults. **Field presence ≠ parity.**
+
+### Golden rule — closed loop required
+
+For every config-driven value (RSI/EMA/ATR period, VWAP gate, score_group, candle policy, overlay `computed_at`), trace and mark each hop **PASS / FAIL / NOT REVIEWED**:
+
+```
+config.yaml → _resolve_* → server compute → API field → client read → UI label → per-group test
+```
+
+Stop if any hop uses a literal (e.g. RSI `14`, EMA `21`/`50`/`200`) while an earlier hop resolves per `score_group`.
+
+### When this applies (mandatory)
+
+- `factor_scoring.py`, `forex_scoring.py`, `scoring.py`, `indicators.py`
+- `athena_app/api/routes_market_data.py` (`_format_chart_candles`, `price_precision`, overlays)
+- `static/react-app/**/TVChartPanel.tsx` (`buildChartStudySnapshot`, `indicatorPeriods`, labels)
+- `tests/test_engine_a_*`, `tests/test_*chart*`
+- `config.yaml` keys: `ENGINE_A_RSI_PERIOD_BY_CLASS`, `ENGINE_A_EMA_PERIODS_BY_CLASS`, `ENGINE_A_VWAP_FILTER`
+
+### Never accept
+
+- TypeScript interface or API type listing `rsi_period` without tracing into computation
+- Green tests that omit `score_group` or only use default-tier pairs (both sides wrong the same way = masked failure)
+- UI labels (`RSI14`, `ATR14`) that disagree with actual computation period
+- Client fallbacks in `buildChartStudySnapshot` that ignore `price_precision.rsi_period` / `indicator_periods`
+
+### Adversarial greps (before parity PASS)
+
+```bash
+rg -n "rsi\(.*,\s*14\)|calc_rsi\(.*14\)|atr\(.*,\s*14\)|calc_atr\(.*14\)|adx\(.*,\s*14\)" static/react-app athena_app/api indicators.py
+rg -n "rsi_period|ema_periods|indicator_periods|price_precision" static/react-app athena_app/api factor_scoring.py
+```
+
+For each field: find **write site** (API) and **read site** (compute or UI). Write without read = FAIL.
+
+### Minimum score-group spot checks
+
+| Pair | Typical RSI period |
+|------|-------------------|
+| EURUSD (forex_majors) | 18 |
+| TRXUSDT (crypto) | 12 |
+| Default-tier index/stock | 14 |
+
+Assert chart API last-candle RSI == `calc_indicators_with_normalized(..., score_group=group).snap.rsi`. Regression tests: `tests/test_chart_api_indicator_period_parity.py`, `tests/test_engine_a_crypto_chart_parity.py`.
+
+### Reference incident (TV Chart, 2026)
+
+Server sent `price_precision.rsi_period` and client used `ema_periods`, but `_format_chart_candles` and `buildChartStudySnapshot` still computed RSI/ATR/ADX at **14**. `test_engine_a_crypto_chart_parity.py` passed while masking the gap because both sides used universal RSI 14 without `score_group`.
+
+### Verdict
+
+Do not say parity PASS if any CRITICAL closed loop is FAIL or NOT REVIEWED. List masked tests and surfaces not inspected.
+
+Codex/Cursor extended checklist (when user asks): `.agents/skills/athena-cross-surface-parity/references/parity-checklist.md`
+
 ## Chart AI review contract
 
 - Read-only advisory; must not connect to execution.
@@ -86,9 +145,10 @@ Common entry points only. This is not a complete allowlist.
 1. Restate the exact user request in operational terms.
 2. Identify the relevant engine/surface and current source files.
 3. Trace producer-to-consumer behavior before editing.
-4. Apply the smallest safe patch.
-5. Run the smallest relevant compile/test command.
-6. Report what changed, what passed, and what was not verified.
+4. If chart/scoring/indicators are in scope, run the **cross-surface parity** closed-loop checklist.
+5. Apply the smallest safe patch.
+6. Run the smallest relevant compile/test command (include per-`score_group` parity tests when indicators changed).
+7. Report what changed, what passed, masked-test risks, and what was not verified.
 
 
 ---

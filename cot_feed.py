@@ -83,6 +83,15 @@ _CONTRACT_FRAGMENTS: dict[str, str | tuple[str, ...]] = {
     "NG": "NATURAL GAS",
     "HG": "COPPER",
     "PL": "PLATINUM",
+    # Softs / grains (disaggregated CFTC)
+    "COCOA": "COCOA",
+    "COFFEE": "COFFEE C",
+    "CORN": "CORN",
+    "COTTON": "COTTON NO 2",
+    "SOYBEANS": "SOYBEANS",
+    "SUGAR": "SUGAR NO. 11",
+    "WHEAT": "WHEAT",
+    "CATTLE": "LIVE CATTLE",
 }
 
 
@@ -104,7 +113,10 @@ def _base_matches_fragment(base: str, frag: str | tuple[str, ...]) -> bool:
 _COT_ZSCORE_WINDOW = 52
 _MIN_WEEKS_FOR_COT = max(_COT_ZSCORE_WINDOW // 2, 4)
 
-_DISAGG_ASSETS = {"XAU", "XAG", "OIL", "NG", "HG", "PL"}
+_DISAGG_ASSETS = {
+    "XAU", "XAG", "OIL", "NG", "HG", "PL",
+    "COCOA", "COFFEE", "CORN", "COTTON", "SOYBEANS", "SUGAR", "WHEAT", "CATTLE",
+}
 
 # ── Pair → COT formula ────────────────────────────────────────────────────────
 _PAIR_FORMULA: dict[str, list[tuple[float, str]]] = {
@@ -170,6 +182,15 @@ _PAIR_FORMULA: dict[str, list[tuple[float, str]]] = {
     "Nat Gas": [(1.0, "NG")],
     "Copper": [(1.0, "HG")],
     "XPT/USD": [(1.0, "PL")],
+    # ── Softs / grains (score_group softs) ───────────────────────────────────
+    "Cocoa": [(1.0, "COCOA")],
+    "Coffee": [(1.0, "COFFEE")],
+    "Corn": [(1.0, "CORN")],
+    "Cotton": [(1.0, "COTTON")],
+    "Soybeans": [(1.0, "SOYBEANS")],
+    "Sugar": [(1.0, "SUGAR")],
+    "Wheat": [(1.0, "WHEAT")],
+    "Cattle": [(1.0, "CATTLE")],
     # ── US Stocks — S&P 500 / Nasdaq E-mini as macro risk proxy ──────────
     "AAPL": [(1.0, "SP500")],
     "TSLA": [(1.0, "SP500")],

@@ -580,6 +580,7 @@ def _normalize_engine_b_overlay_payload(
         "confirmed_only": not bool(CONFIG.get("ENGINE_B_USE_FORMING_FOR_STRUCTURE", False)),
         "overlay_source": "engine_b",
         "overlay_version": "engine_b_legacy_v1",
+        "computed_at": datetime.now(timezone.utc).isoformat(),
         "price_precision": _overlay_precision_for(pair),
         "warnings": warnings,
         "nearest_support_zone": support_zone,
@@ -797,6 +798,29 @@ def _vwap_values(rows: list[dict], tf: str | None = None) -> tuple[list[float | 
     return out, formula
 
 
+def _resolve_chart_indicator_periods(pair: dict | None) -> dict:
+    """Engine A-aligned indicator periods for native chart candle enrichment."""
+    periods = {
+        "ema": {"trend": 21, "long": 200, "momentum": 50},
+        "rsi": 14,
+        "adx": 14,
+        "atr": 14,
+    }
+    if not isinstance(pair, dict):
+        return periods
+    try:
+        from factor_scoring import _resolve_ema_periods, _resolve_rsi_period
+        from scoring import get_pair_score_group
+
+        group = get_pair_score_group(pair)
+        asset_type = str(pair.get("type") or "")
+        periods["ema"] = _resolve_ema_periods(group, asset_type)
+        periods["rsi"] = int(_resolve_rsi_period(group, asset_type))
+    except Exception:
+        pass
+    return periods
+
+
 def _format_chart_candles(
     candles: list[dict],
     *,
@@ -805,6 +829,7 @@ def _format_chart_candles(
     category: str | None = None,
     bybit_symbol: str | None = None,
     include_indicators: bool = False,
+    pair: dict | None = None,
 ) -> tuple[list[dict], dict]:
     now_s = time.time()
     rows: list[dict] = []
@@ -838,26 +863,42 @@ def _format_chart_candles(
         try:
             from indicators import calc_adx, calc_atr, calc_ema, calc_rsi
 
+            periods = _resolve_chart_indicator_periods(pair)
+            ema_p = periods["ema"]
+            rsi_p = int(periods.get("rsi") or 14)
+            adx_p = int(periods.get("adx") or 14)
+            atr_p = int(periods.get("atr") or 14)
+            meta["indicator_periods"] = periods
+
             highs = [row["h"] for row in rows]
             lows = [row["l"] for row in rows]
             closes = [row["c"] for row in rows]
             volumes = [row["v"] for row in rows]
-            ema21 = calc_ema(closes, 21)
-            ema50 = calc_ema(closes, 50)
-            ema200 = calc_ema(closes, 200)
-            rsi14 = calc_rsi(closes, 14)
-            atr14 = calc_atr(highs, lows, closes, 14)
-            adx = calc_adx(highs, lows, closes, 14).get("adx", [])
+            ema_trend = calc_ema(closes, int(ema_p.get("trend") or 21))
+            ema_momentum = calc_ema(closes, int(ema_p.get("momentum") or 50))
+            ema_long = calc_ema(closes, int(ema_p.get("long") or 200))
+            rsi_vals = calc_rsi(closes, rsi_p)
+            atr_vals = calc_atr(highs, lows, closes, atr_p)
+            adx = calc_adx(highs, lows, closes, adx_p).get("adx", [])
             vol_ma = _volume_ma(volumes, 20)
             vwap, formula = _vwap_values(rows, tf)
             meta["vwap_formula"] = formula
             for idx, row in enumerate(rows):
-                row["ema21"] = ema21[idx] if idx < len(ema21) else None
-                row["ema50"] = ema50[idx] if idx < len(ema50) else None
-                row["ema200"] = ema200[idx] if idx < len(ema200) else None
-                row["rsi14"] = rsi14[idx] if idx < len(rsi14) else None
+                row["ema_trend"] = ema_trend[idx] if idx < len(ema_trend) else None
+                row["ema_momentum"] = ema_momentum[idx] if idx < len(ema_momentum) else None
+                row["ema_long"] = ema_long[idx] if idx < len(ema_long) else None
+                if int(ema_p.get("trend") or 21) == 21:
+                    row["ema21"] = row["ema_trend"]
+                if int(ema_p.get("momentum") or 50) == 50:
+                    row["ema50"] = row["ema_momentum"]
+                if int(ema_p.get("long") or 200) == 200:
+                    row["ema200"] = row["ema_long"]
+                row["rsi"] = rsi_vals[idx] if idx < len(rsi_vals) else None
+                row["rsi14"] = row["rsi"]
                 row["adx14"] = adx[idx] if idx < len(adx) else None
-                row["atr14"] = atr14[idx] if idx < len(atr14) else None
+                row["adx"] = row["adx14"]
+                row["atr14"] = atr_vals[idx] if idx < len(atr_vals) else None
+                row["atr"] = row["atr14"]
                 row["volume_ma"] = vol_ma[idx] if idx < len(vol_ma) else None
                 row["vwap"] = vwap[idx] if idx < len(vwap) else None
         except Exception as exc:
@@ -1119,6 +1160,7 @@ def _crypto_chart_payload(pair: dict, symbol: str, tf: str, limit: int):
         category=category if chart_provider == "bybit" else None,
         bybit_symbol=bybit_symbol if chart_provider == "bybit" else pair.get("symbol"),
         include_indicators=True,
+        pair=pair,
     )
     display = pair.get("display", symbol)
     live_tick, live_tick_meta = _fetch_bybit_chart_tick(
@@ -1169,6 +1211,10 @@ def _crypto_chart_payload(pair: dict, symbol: str, tf: str, limit: int):
         "volume_ma_period": 20,
         "vwap_formula": indicator_meta.get("vwap_formula"),
         "indicator_set": ["EMA21", "EMA50", "EMA200", "VWAP", "RSI14", "ADX14", "ATR14", "Volume", "Volume MA"],
+        "indicator_periods": indicator_meta.get("indicator_periods"),
+        "engine_a_vwap_filter_enabled": bool(
+            (CONFIG.get("ENGINE_A_VWAP_FILTER") or {}).get("ENABLED", False)
+        ),
         "price_precision": _overlay_precision_for(pair),
     }
     return payload, 200
@@ -1244,7 +1290,9 @@ def api_candles():
     if not candles:
         return jsonify({"error": f"No candle data for {symbol} {tf}"}), 404
 
-    result, indicator_meta = _format_chart_candles(candles, tf=tf, include_indicators=True)
+    result, indicator_meta = _format_chart_candles(
+        candles, tf=tf, include_indicators=True, pair=pair
+    )
 
     provider = _generic_chart_provider(pair, chart_source)
     return jsonify(
@@ -1261,6 +1309,10 @@ def api_candles():
             "live_tick_provider": provider,
             "candle_confirmed_policy": _generic_candle_policy(pair, chart_source),
             "last_candle_ts": result[-1].get("t") if result else None,
+            "indicator_periods": indicator_meta.get("indicator_periods"),
+            "engine_a_vwap_filter_enabled": bool(
+                (CONFIG.get("ENGINE_A_VWAP_FILTER") or {}).get("ENABLED", False)
+            ),
             "price_precision": _overlay_precision_for(pair),
         }
     )

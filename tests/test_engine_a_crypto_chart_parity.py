@@ -36,8 +36,12 @@ def _bybit_candles(count: int = 40) -> list[dict]:
 
 def test_chart_indicator_bundle_matches_calc_indicators_on_bybit_candles():
     from athena_app.api import routes_market_data as routes
+    from factor_scoring import _resolve_rsi_period
+    from scoring import get_pair_score_group
 
+    pair = {"symbol": "TRXUSDT", "type": "crypto", "display": "TRX/USDT"}
     candles = _bybit_candles(40)
+    score_group = get_pair_score_group(pair)
     rows, meta = routes._format_chart_candles(
         candles,
         tf="H4",
@@ -45,10 +49,12 @@ def test_chart_indicator_bundle_matches_calc_indicators_on_bybit_candles():
         category="linear",
         bybit_symbol="TRXUSDT",
         include_indicators=True,
+        pair=pair,
     )
-    assert meta.get("vwap_formula") == "cumulative_turnover_divided_by_cumulative_volume"
+    assert "cumulative_turnover_divided_by_cumulative_volume" in str(meta.get("vwap_formula") or "")
+    assert meta["indicator_periods"]["rsi"] == _resolve_rsi_period(score_group, "crypto")
 
-    engine = calc_indicators_with_normalized(candles, "crypto")
+    engine = calc_indicators_with_normalized(candles, "crypto", score_group=score_group)
     snap = engine.get("snap") or {}
 
     last = rows[-1]
@@ -56,8 +62,8 @@ def test_chart_indicator_bundle_matches_calc_indicators_on_bybit_candles():
     assert last["turnover"] > 0
     assert last["volume_ma"] is not None
     assert last["vwap"] is not None
-    assert last["ema21"] == snap.get("ema21")
-    assert last["ema50"] == snap.get("ema50")
+    assert last["ema_trend"] == snap.get("ema21")
+    assert last["ema_momentum"] == snap.get("ema50")
     assert last["rsi14"] == snap.get("rsi")
     assert last["atr14"] == snap.get("atr")
     assert last["adx14"] == snap.get("adx")

@@ -27,6 +27,8 @@ Do not claim parity without tracing the full chain: provider/source → candle p
 
 `scanner.py`, `candles_cache.py`, `candle_feeds.py`, engine modules (`forex_scoring.py`, `factor_scoring.py`, `market_structure.py`, `engine_c.py`, `scalp_engine.py`), `routes_market_data.py`, chart UI under `static/react-app/`.
 
+For **config → API → UI → test** closed-loop checks (indicator periods, sent-but-unused payload fields, masked parity tests), also load **`athena-cross-surface-parity`** and `references/parity-checklist.md`.
+
 Multi-engine parity: use parallel lanes in `athena-anti-miss-review/references/review-lanes.md`.
 
 ## Output

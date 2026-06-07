@@ -40,6 +40,8 @@ log = logging.getLogger("athena")
 # ── Constants ─────────────────────────────────────────────────────────────────
 
 _CRYPTO_COT_PAIRS = {"BTC/USDT", "ETH/USDT"}
+_funding_stats_cache: dict[str, tuple[dict, float]] = {}
+_FUNDING_STATS_TTL = 3600
 
 
 def _resolve_class_keyed(mapping, score_group: str | None, asset_type: str, default):
@@ -1992,6 +1994,70 @@ def _funding_threshold_decimal(new_key: str, old_key: str, default_decimal: floa
     return float(CONFIG.get(old_key, default_decimal))
 
 
+def _resolve_funding_stats(pair: dict) -> Optional[dict]:
+    """Rolling mean/std of recent perp funding for z-score addon mode."""
+    if not CONFIG.get("FACTOR_FUNDING_USE_ZSCORE", False):
+        return None
+    sym = (pair.get("symbol") or pair.get("display") or "").replace("/", "").upper()
+    if not sym:
+        return None
+    now = time.time()
+    cached = _funding_stats_cache.get(sym)
+    if cached and now - cached[1] < _FUNDING_STATS_TTL:
+        return cached[0]
+    window = max(5, int(CONFIG.get("FACTOR_FUNDING_ZSCORE_WINDOW", 30) or 30))
+    try:
+        from data_feeds import _fetch_binance_funding_history, _fetch_bybit_funding_history
+
+        end_ms = int(now * 1000)
+        # ~8h funding intervals; fetch a few extra days for window stability.
+        start_ms = end_ms - (window * 3 * 8 * 3600 * 1000)
+        rows: list = []
+        fr = _fetch_bybit_funding_history(sym, start_ms=start_ms, end_ms=end_ms, limit=200)
+        if isinstance(fr, dict) and not fr.get("error"):
+            rows = list(fr.get("list") or [])
+        if len(rows) < 5:
+            fr2 = _fetch_binance_funding_history(sym, start_ms=start_ms, end_ms=end_ms, limit=200)
+            if isinstance(fr2, dict) and not fr2.get("error"):
+                alt = list(fr2.get("list") or [])
+                if len(alt) > len(rows):
+                    rows = alt
+        rates: list[float] = []
+        for row in rows:
+            try:
+                rates.append(float(row.get("rate", 0)))
+            except (TypeError, ValueError):
+                continue
+        if len(rates) < 5:
+            return None
+        sample = rates[-window:] if len(rates) > window else rates
+        mean = sum(sample) / len(sample)
+        var = sum((r - mean) ** 2 for r in sample) / len(sample)
+        std = math.sqrt(max(0.0, var))
+        min_std = float(CONFIG.get("FACTOR_FUNDING_ZSCORE_MIN_STD", 1e-6))
+        if std < min_std:
+            std = min_std
+        stats = {"mean": mean, "std": std, "n": len(sample)}
+        _funding_stats_cache[sym] = (stats, now)
+        return stats
+    except Exception as exc:
+        log.debug("[EA2] funding stats unavailable for %s: %s", sym, exc)
+        return None
+
+
+def _cot_coverage_status(pair_display: str) -> str:
+    """Return COT coverage label for feed_status (ok | no_coverage | unsupported)."""
+    if not _cot_formula_supported(pair_display):
+        return "unsupported"
+    try:
+        from cot_feed import get_cot_net
+
+        detail = get_cot_net(pair_display) or {}
+        return str(detail.get("_cot_coverage") or "unknown")
+    except Exception:
+        return "unknown"
+
+
 def _funding_addon(funding_rate: Optional[float], direction: str,
                    funding_stats: Optional[dict] = None) -> float:
     """Funding rate addon for crypto. Returns _ADDON_* constant.
@@ -2427,7 +2493,8 @@ def _asset_addon(
         return val, "carry", status
 
     if asset_type == "crypto":
-        funding_val = _funding_addon(funding_rate, direction)
+        funding_stats = _resolve_funding_stats(pair)
+        funding_val = _funding_addon(funding_rate, direction, funding_stats=funding_stats)
         if oi_context is not None:
             oi_val = _oi_addon(oi_context, direction)
             # Funding is more real-time; OI is supporting signal (lower weight).
@@ -2493,6 +2560,8 @@ def _vwap_direction_filter(
     cfg = CONFIG.get("ENGINE_A_VWAP_FILTER", {}) or {}
     if not cfg.get("ENABLED", False):
         return 1.0, {"enabled": False}
+    if str(asset_type or "").lower() != "crypto":
+        return 1.0, {"enabled": True, "applied": False, "reason": "crypto_only"}
 
     max_boost = float(cfg.get("MAX_BOOST", 0.03))
     max_penalty = float(cfg.get("MAX_PENALTY", -0.03))
@@ -2986,6 +3055,8 @@ def compute_factor_scores(
     )
     addon_val_before_research = addon_val
     feed_status["addon"] = f"{addon_type}:{addon_status}"
+    if addon_type in ("cot", "cot_proxy"):
+        feed_status["cot_coverage"] = _cot_coverage_status(display)
     if asset_type == "stock":
         if bool(CONFIG.get("INSIDER_TRADING_DIAGNOSTIC_ENABLED", False)):
             feed_status["insider_trading"] = "advisory_only"
@@ -3180,7 +3251,7 @@ def compute_factor_scores(
             bar_time,
             funding_rate,
             oi_context,
-            funding_stats=None,
+            funding_stats=_resolve_funding_stats(pair) if asset_type == "crypto" else None,
             macro_context=macro_context,
         )
         _eff_addon_w = 0.0

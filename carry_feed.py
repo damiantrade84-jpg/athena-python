@@ -35,12 +35,15 @@ import logging
 import threading
 import time
 from bisect import bisect_right
+from datetime import datetime, timezone
 from io import StringIO
 from typing import Optional
 
 import requests
 
 log = logging.getLogger("sentinel")
+
+_static_carry_warned = False
 
 _DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "carry_cache.db")
 _db_lock = threading.Lock()
@@ -93,6 +96,10 @@ _STATIC_10Y_EZ = 3.03  # Euro Area 10Y proxy (Germany Bund), Jun 5 2026
 # Source: Each central bank's official website. Last updated: 2026-06-07.
 # Update these when central banks change rates. USD/EUR/GBP also listed here
 # as fallback when FRED is temporarily unreachable.
+# Version date for static fallbacks — keep in sync with _STATIC_RATES comments.
+# Config key CARRY_STATIC_RATES_AS_OF mirrors this; carry_feed warns when stale.
+_STATIC_RATES_AS_OF = "2026-06-07"
+
 _STATIC_RATES: dict[str, float] = {
     "USD": 3.625,  # Fed funds midpoint 3.50-3.75%, held Apr 29 2026 (FOMC)
     "EUR": 2.00,  # ECB Deposit Facility Rate, held Apr 30 2026 (ECB)
@@ -455,6 +462,55 @@ _10Y_SERIES_MAP: dict[str, tuple[str, float]] = {
 }
 
 
+def _carry_static_rates_as_of() -> str:
+    try:
+        from config import CONFIG
+
+        return str(CONFIG.get("CARRY_STATIC_RATES_AS_OF", _STATIC_RATES_AS_OF) or _STATIC_RATES_AS_OF).strip()
+    except Exception:
+        return _STATIC_RATES_AS_OF
+
+
+def _carry_static_rates_max_age_days() -> int:
+    try:
+        from config import CONFIG
+
+        return max(1, int(CONFIG.get("CARRY_STATIC_RATES_MAX_AGE_DAYS", 30) or 30))
+    except Exception:
+        return 30
+
+
+def _static_rates_age_days() -> Optional[int]:
+    as_of = _carry_static_rates_as_of()
+    try:
+        dt = datetime.strptime(as_of, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+        return (datetime.now(timezone.utc) - dt).days
+    except ValueError:
+        return None
+
+
+def _maybe_warn_static_carry_fallback(key: str) -> None:
+    """Emit once per process when FRED failed and hardcoded policy rates are used."""
+    global _static_carry_warned
+    if _static_carry_warned:
+        return
+    age = _static_rates_age_days()
+    if age is None:
+        return
+    max_age = _carry_static_rates_max_age_days()
+    if age <= max_age:
+        return
+    _static_carry_warned = True
+    log.warning(
+        "[CARRY] Using static policy rate for %s; CARRY_STATIC_RATES_AS_OF=%s is %d days old "
+        "(max %d). Verify FRED connectivity and refresh static rates.",
+        key,
+        _carry_static_rates_as_of(),
+        age,
+        max_age,
+    )
+
+
 def _get_rate_for_key(key: str, as_of_date: str = None) -> Optional[float]:
     """Get latest rate for a currency key or special key like _10Y / _10Y_GB etc.
 
@@ -478,7 +534,9 @@ def _get_rate_for_key(key: str, as_of_date: str = None) -> Optional[float]:
             if not as_of_date:
                 _rate_cache[series_id] = (rate, now)
             return rate
-        return static_fallback
+        if rate is None and not as_of_date:
+            _maybe_warn_static_carry_fallback(key)
+        return static_fallback if rate is None else rate
 
     # FRED-backed currency
     series_id = _FRED_CURRENCY_SERIES.get(key)
@@ -498,7 +556,10 @@ def _get_rate_for_key(key: str, as_of_date: str = None) -> Optional[float]:
         # FRED failed — fall through to static
 
     # Static fallback (hardcoded central bank rates)
-    return _STATIC_RATES.get(key)
+    static_rate = _STATIC_RATES.get(key)
+    if static_rate is not None and not as_of_date:
+        _maybe_warn_static_carry_fallback(key)
+    return static_rate
 
 
 def _get_rate_series_for_key(

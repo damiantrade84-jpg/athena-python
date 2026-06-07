@@ -53,6 +53,8 @@ Compare SL/TP, ATR source, score group, session logic, volume/feed source, fresh
 
 Call out intentional divergence separately from bugs.
 
+For Engine A ↔ chart API ↔ TV Chart UI indicator periods and sent-but-unused payload fields, use **`.agents/skills/athena-cross-surface-parity/`** (closed-loop checklist).
+
 ### 6. Execution safety handoff
 Inspect: signal producer → scoring output → consensus → execution guard → risk engine → level preservation → broker adapter → broker response → monitor → audit/log.
 

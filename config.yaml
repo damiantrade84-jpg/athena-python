@@ -312,8 +312,16 @@ ADX_MISSING_BOTH_ABORT: true
 # Funding rate addon: baseline (0.01% per 8h) and noise band half-width.
 # Narrowed from 0.0002 to 0.0001 so typical Binance/Bybit funding deviations
 # are treated as signal rather than noise.
+# Carry static fallback versioning — warn when FRED fails and these rates are used.
+CARRY_STATIC_RATES_AS_OF: "2026-06-07"
+CARRY_STATIC_RATES_MAX_AGE_DAYS: 30
+
 FACTOR_FUNDING_BASELINE: 0.0001
 FACTOR_FUNDING_NOISE_BAND: 0.0001
+FACTOR_FUNDING_USE_ZSCORE: true
+FACTOR_FUNDING_ZSCORE_WINDOW: 30
+FACTOR_FUNDING_Z_THRESHOLD: 1.0
+FACTOR_FUNDING_ZSCORE_MIN_STD: 0.00001
 FACTOR_FUNDING_HIGH_BPS_8H: 10
 FACTOR_FUNDING_LOW_BPS_8H: -10
 FACTOR_FUNDING_Z_REF: 2.0

@@ -35,6 +35,13 @@ def test_get_cot_net_marks_no_coverage_when_history_too_thin(monkeypatch):
     assert "min rows=2" in detail["_cot_note"]
 
 
+def test_softs_pair_formulas_are_non_empty():
+    for display in ("Cocoa", "Coffee", "Corn", "Cotton", "Soybeans", "Sugar", "Wheat", "Cattle"):
+        formula = cot_feed._PAIR_FORMULA.get(display)
+        assert formula, f"missing COT formula for {display}"
+        assert len(formula) >= 1
+
+
 def test_asset_z_does_not_negative_cache_missing_series(monkeypatch):
     monkeypatch.setattr(cot_feed, "_get_net_series", lambda asset, as_of_date=None: [1, 2, 3])
     cot_feed._mem_cache.clear()

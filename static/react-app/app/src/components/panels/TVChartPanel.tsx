@@ -163,6 +163,25 @@ const STUDY_PANEL_INDICATORS = {
   volumeMa: { key: 'volumeMa', label: 'Volume MA20', period: 20, color: INDICATOR_COLORS.volumeMa },
 } satisfies Record<string, IndicatorDefinition>;
 
+const ENGINE_B_OVERLAY_STALE_SEC = 300;
+
+function buildStudyIndicatorDefs(periods: { rsi: number; adx: number; atr: number }) {
+  return {
+    rsi14: { ...STUDY_PANEL_INDICATORS.rsi14, label: `RSI${periods.rsi} 70/30`, period: periods.rsi },
+    adx14: { ...STUDY_PANEL_INDICATORS.adx14, label: `ADX${periods.adx}`, period: periods.adx },
+    atr14: { ...STUDY_PANEL_INDICATORS.atr14, label: `ATR${periods.atr}`, period: periods.atr },
+    volume: STUDY_PANEL_INDICATORS.volume,
+    volumeMa: STUDY_PANEL_INDICATORS.volumeMa,
+  };
+}
+
+function overlayAgeSeconds(computedAt: string | null | undefined): number | null {
+  if (!computedAt) return null;
+  const ts = Date.parse(computedAt);
+  if (!Number.isFinite(ts)) return null;
+  return Math.max(0, (Date.now() - ts) / 1000);
+}
+
 const PRESET_OPTIONS = [
   { value: 'custom', label: 'Custom' },
   { value: 'all', label: 'All indicators' },
@@ -209,11 +228,17 @@ interface CandleApiRow {
   volume?: number | string;
   volume_ma?: number | string | null;
   vwap?: number | string | null;
+  ema_trend?: number | string | null;
+  ema_momentum?: number | string | null;
+  ema_long?: number | string | null;
   ema21?: number | string | null;
   ema50?: number | string | null;
   ema200?: number | string | null;
+  rsi?: number | string | null;
   rsi14?: number | string | null;
+  adx?: number | string | null;
   adx14?: number | string | null;
+  atr?: number | string | null;
   atr14?: number | string | null;
   provider?: string;
   confirmed?: boolean | null;
@@ -255,6 +280,8 @@ interface CandleApiResponse {
   atr_timeframe?: string;
   liveTick?: Record<string, unknown> | null;
   price_precision?: ChartPricePrecision;
+  indicator_periods?: { rsi?: number; adx?: number; atr?: number; ema?: { trend?: number; momentum?: number; long?: number } };
+  engine_a_vwap_filter_enabled?: boolean;
 }
 
 interface EngineBZone {
@@ -281,6 +308,7 @@ interface EngineBOverlayPayload {
   price_precision?: ChartPricePrecision;
   overlay_source?: string;
   overlay_version?: string;
+  computed_at?: string;
   warnings?: string[];
   nearest_support_zone?: EngineBZone | null;
   nearest_resistance_zone?: EngineBZone | null;
@@ -794,7 +822,9 @@ function buildChartStudySnapshot(
   liveTick: LiveTick | null,
   backendTf: string | undefined,
   isCryptoChart: boolean,
+  showVwapOnChart: boolean,
   emaPeriods: { trend: number; momentum: number; long: number },
+  indicatorPeriods: { rsi: number; adx: number; atr: number },
 ): ChartStudySnapshot {
   const empty: ChartStudySnapshot = { rows: [], highs: [], lows: [], closes: [], volumes: [], seriesValues: {}, latest: {} };
   if (!candles?.length || !backendTf) return empty;
@@ -804,9 +834,9 @@ function buildChartStudySnapshot(
   const apiVwap: (number | null)[] = [];
   const apiVolumeMa: (number | null)[] = [];
   const apiAdx14: (number | null)[] = [];
-  const apiEma21: (number | null)[] = [];
-  const apiEma50: (number | null)[] = [];
-  const apiEma200: (number | null)[] = [];
+  const apiEmaTrend: (number | null)[] = [];
+  const apiEmaMomentum: (number | null)[] = [];
+  const apiEmaLong: (number | null)[] = [];
   const apiRsi14: (number | null)[] = [];
   const apiAtr14: (number | null)[] = [];
   for (const c of candles) {
@@ -821,11 +851,11 @@ function buildChartStudySnapshot(
     baseVolumes.push(toNum(c.volume ?? c.v, 0));
     apiVwap.push(Number.isFinite(toNum(c.vwap, NaN)) ? toNum(c.vwap, NaN) : null);
     apiVolumeMa.push(Number.isFinite(toNum(c.volume_ma, NaN)) ? toNum(c.volume_ma, NaN) : null);
-    apiAdx14.push(Number.isFinite(toNum(c.adx14, NaN)) ? toNum(c.adx14, NaN) : null);
-    apiEma21.push(Number.isFinite(toNum(c.ema21, NaN)) ? toNum(c.ema21, NaN) : null);
-    apiEma50.push(Number.isFinite(toNum(c.ema50, NaN)) ? toNum(c.ema50, NaN) : null);
-    apiEma200.push(Number.isFinite(toNum(c.ema200, NaN)) ? toNum(c.ema200, NaN) : null);
-    apiRsi14.push(Number.isFinite(toNum(c.rsi14, NaN)) ? toNum(c.rsi14, NaN) : null);
+    apiAdx14.push(Number.isFinite(toNum(c.adx14 ?? c.adx, NaN)) ? toNum(c.adx14 ?? c.adx, NaN) : null);
+    apiEmaTrend.push(Number.isFinite(toNum(c.ema_trend ?? c.ema21, NaN)) ? toNum(c.ema_trend ?? c.ema21, NaN) : null);
+    apiEmaMomentum.push(Number.isFinite(toNum(c.ema_momentum ?? c.ema50, NaN)) ? toNum(c.ema_momentum ?? c.ema50, NaN) : null);
+    apiEmaLong.push(Number.isFinite(toNum(c.ema_long ?? c.ema200, NaN)) ? toNum(c.ema_long ?? c.ema200, NaN) : null);
+    apiRsi14.push(Number.isFinite(toNum(c.rsi ?? c.rsi14, NaN)) ? toNum(c.rsi ?? c.rsi14, NaN) : null);
     apiAtr14.push(Number.isFinite(toNum(c.atr14, NaN)) ? toNum(c.atr14, NaN) : null);
   }
 
@@ -852,21 +882,22 @@ function buildChartStudySnapshot(
   // 21/50/200 the API rows carry. The fast trend line (ema20 non-crypto /
   // ema21 crypto) is unified onto the resolved trend period; DEMA tracks long.
   const { trend: trendPeriod, momentum: momentumPeriod, long: longPeriod } = emaPeriods;
+  const { rsi: rsiPeriod, adx: adxPeriod, atr: atrPeriod } = indicatorPeriods;
   const emaTrendValues =
-    useApiIndicators && trendPeriod === 21 && apiEma21.some((v) => v != null) ? apiEma21 : ema(cCloses, trendPeriod);
+    useApiIndicators && apiEmaTrend.some((v) => v != null) ? apiEmaTrend : ema(cCloses, trendPeriod);
   const ema20Values = emaTrendValues;
   const ema21Values = emaTrendValues;
   const ema50Values =
-    useApiIndicators && momentumPeriod === 50 && apiEma50.some((v) => v != null) ? apiEma50 : ema(cCloses, momentumPeriod);
+    useApiIndicators && apiEmaMomentum.some((v) => v != null) ? apiEmaMomentum : ema(cCloses, momentumPeriod);
   const ema200Values =
-    useApiIndicators && longPeriod === 200 && apiEma200.some((v) => v != null) ? apiEma200 : ema(cCloses, longPeriod);
+    useApiIndicators && apiEmaLong.some((v) => v != null) ? apiEmaLong : ema(cCloses, longPeriod);
   const dema200Values = dema(cCloses, longPeriod);
-  const rsi14Values = useApiIndicators && apiRsi14.some((v) => v != null) ? apiRsi14 : rsi(cCloses, 14);
-  const atr14Values = useApiIndicators && apiAtr14.some((v) => v != null) ? apiAtr14 : atr(cHighs, cLows, cCloses, 14);
+  const rsi14Values = useApiIndicators && apiRsi14.some((v) => v != null) ? apiRsi14 : rsi(cCloses, rsiPeriod);
+  const atr14Values = useApiIndicators && apiAtr14.some((v) => v != null) ? apiAtr14 : atr(cHighs, cLows, cCloses, atrPeriod);
   const vwapAnchorTimes =
     backendTf && (TF_SECONDS[backendTf] ?? 0) > 0 && (TF_SECONDS[backendTf] as number) < 86400 ? cTimes : undefined;
   const vwapValues = apiVwap.some((v) => v != null) ? apiVwap : vwapFromRows(cHighs, cLows, cCloses, cVolumes, vwapAnchorTimes);
-  const adx14Values = apiAdx14.some((v) => v != null) ? apiAdx14 : adx(cHighs, cLows, cCloses, 14);
+  const adx14Values = apiAdx14.some((v) => v != null) ? apiAdx14 : adx(cHighs, cLows, cCloses, adxPeriod);
   const volumeMaValues = apiVolumeMa.some((v) => v != null) ? apiVolumeMa : sma(cVolumes, 20);
 
   return {
@@ -894,7 +925,7 @@ function buildChartStudySnapshot(
       ema50: latestFinite(ema50Values) ?? undefined,
       ema200: latestFinite(ema200Values) ?? undefined,
       dema200: latestFinite(dema200Values) ?? undefined,
-      vwap: isCryptoChart ? latestFinite(vwapValues) ?? undefined : undefined,
+      vwap: showVwapOnChart ? latestFinite(vwapValues) ?? undefined : undefined,
       rsi14: latestFinite(rsi14Values) ?? undefined,
       adx14: latestFinite(adx14Values) ?? undefined,
       atr14: latestFinite(atr14Values) ?? undefined,
@@ -1482,10 +1513,14 @@ function isBybitCryptoExecution(payload: CandleApiResponse | null | undefined): 
   return payload?.asset_group === 'crypto' && payload?.execution_provider === 'bybit';
 }
 
-function cryptoAtr14LegendLabel(payload: CandleApiResponse | null | undefined): string {
+function cryptoAtr14LegendLabel(
+  payload: CandleApiResponse | null | undefined,
+  atrPeriod = 14,
+): string {
   const tf = payload?.atr_timeframe || payload?.tf;
   const provider = titleCaseProvider(payload?.atr_provider || payload?.chart_provider);
-  return tf ? `ATR14 ${tf} ${provider}` : STUDY_PANEL_INDICATORS.atr14.label;
+  const base = `ATR${atrPeriod}`;
+  return tf ? `${base} ${tf} ${provider}` : base;
 }
 
 function buildChartFeedSummary(payload: CandleApiResponse | null | undefined): string | null {
@@ -1987,6 +2022,7 @@ function LegendChip({ spec }: { spec: LegendChipSpec }) {
 
 function buildCleanLegendChips(args: {
   isCryptoChart: boolean;
+  showVwapOnChart: boolean;
   ema20: boolean;
   ema21: boolean;
   ema50: boolean;
@@ -2008,7 +2044,7 @@ function buildCleanLegendChips(args: {
   if (!args.isCryptoChart && args.dema200) {
     chips.push({ key: 'dema200', label: args.emaLabels.demaLong, color: INDICATOR_COLORS.dema200, swatch: 'line' });
   }
-  if (args.isCryptoChart && args.vwap) {
+  if (args.showVwapOnChart && args.vwap) {
     chips.push({ key: 'vwap', label: 'VWAP', color: INDICATOR_COLORS.vwap, swatch: 'line' });
   }
   if (args.engineBEnabled && args.engineBPayload?.overlay_source === 'engine_b') {
@@ -2128,6 +2164,7 @@ export default function TVChartPanel() {
   const timeframeRouteLabel = useMemo(() => timeframeRouteDisplay(timeframeRoute), [timeframeRoute]);
   const engineBDirection = normalizeDirection(chartCandidate?.direction) === 'SHORT' ? 'SHORT' : 'LONG';
   const isCryptoChart = chartPayload?.asset_group === 'crypto' || chartPayload?.pairType === 'crypto';
+  const showVwapOnChart = isCryptoChart || Boolean(chartPayload?.engine_a_vwap_filter_enabled);
   const engineBOverlayPendingForReview = showEngineBOverlays && engineBOverlayLoading;
   const engineBOverlayStatus = !showEngineBOverlays
     ? 'disabled'
@@ -2138,6 +2175,11 @@ export default function TVChartPanel() {
         : engineBOverlayError
           ? 'error'
           : 'unavailable';
+  const engineBOverlayAgeSec = overlayAgeSeconds(engineBOverlay?.computed_at);
+  const engineBOverlayStale =
+    engineBOverlayStatus === 'ready'
+    && engineBOverlayAgeSec != null
+    && engineBOverlayAgeSec > ENGINE_B_OVERLAY_STALE_SEC;
   const lastCandleConfirmed = candles?.length ? candles[candles.length - 1]?.confirmed : null;
   const chartPayloadLiveTick = useMemo(() => liveTickFromChartPayload(chartPayload), [chartPayload]);
   const chartTickLiveTick = useMemo(() => liveTickFromChartPayload(chartTickPayload), [chartTickPayload]);
@@ -2147,13 +2189,27 @@ export default function TVChartPanel() {
   const liveTick = usesBybitChartTick ? (chartTickLiveTick ?? chartPayloadLiveTick) : sharedLiveTick;
   const emaPeriods = useMemo(() => {
     const pp = chartPayload?.price_precision ?? engineBOverlay?.price_precision;
-    const p = pp?.ema_periods ?? {};
+    const apiEma = chartPayload?.indicator_periods?.ema;
+    const p = pp?.ema_periods ?? apiEma ?? {};
     return {
       trend: typeof p.trend === 'number' ? p.trend : 21,
       momentum: typeof p.momentum === 'number' ? p.momentum : 50,
       long: typeof p.long === 'number' ? p.long : 200,
     };
-  }, [chartPayload?.price_precision, engineBOverlay?.price_precision]);
+  }, [chartPayload?.price_precision, chartPayload?.indicator_periods?.ema, engineBOverlay?.price_precision]);
+  const indicatorPeriods = useMemo(() => {
+    const pp = chartPayload?.price_precision ?? engineBOverlay?.price_precision;
+    const api = chartPayload?.indicator_periods;
+    return {
+      rsi: typeof pp?.rsi_period === 'number' ? pp.rsi_period : (typeof api?.rsi === 'number' ? api.rsi : 14),
+      adx: typeof api?.adx === 'number' ? api.adx : 14,
+      atr: typeof api?.atr === 'number' ? api.atr : 14,
+    };
+  }, [chartPayload?.price_precision, chartPayload?.indicator_periods, engineBOverlay?.price_precision]);
+  const studyIndicatorDefs = useMemo(
+    () => buildStudyIndicatorDefs(indicatorPeriods),
+    [indicatorPeriods],
+  );
   const emaLabels = useMemo(
     () => ({
       trend: `EMA${emaPeriods.trend}`,
@@ -2164,8 +2220,8 @@ export default function TVChartPanel() {
     [emaPeriods],
   );
   const studySnapshot = useMemo(
-    () => buildChartStudySnapshot(candles, liveTick, backendTf, isCryptoChart, emaPeriods),
-    [candles, liveTick, backendTf, isCryptoChart, emaPeriods],
+    () => buildChartStudySnapshot(candles, liveTick, backendTf, isCryptoChart, showVwapOnChart, emaPeriods, indicatorPeriods),
+    [candles, liveTick, backendTf, isCryptoChart, showVwapOnChart, emaPeriods, indicatorPeriods],
   );
   const assetGroupLabel = chartPayload?.asset_group || chartPayload?.pairType || 'unknown';
   const chartProviderLabel = titleCaseProvider(chartPayload?.chart_provider || chartPayload?.candlesSource);
@@ -2246,7 +2302,7 @@ export default function TVChartPanel() {
     if (quantEma50 && !hasLatest('ema50')) return false;
     if (quantEma200 && !hasLatest('ema200')) return false;
     if (!isCryptoChart && quantDema200 && !hasLatest('dema200')) return false;
-    if (isCryptoChart && quantVwap && !hasLatest('vwap')) return false;
+    if (showVwapOnChart && quantVwap && !hasLatest('vwap')) return false;
     if (quantAtr14 && !hasLatest('atr14')) return false;
     if (quantRsi14 && !hasLatest('rsi14')) return false;
     if (quantAdx14 && !hasLatest('adx14')) return false;
@@ -2257,6 +2313,7 @@ export default function TVChartPanel() {
     candles?.length,
     studySnapshot.latest,
     isCryptoChart,
+    showVwapOnChart,
     quantEma20,
     quantEma21,
     quantEma50,
@@ -2286,9 +2343,9 @@ export default function TVChartPanel() {
     if (quantEma50) items.push({ definition: { ...PRICE_PANEL_INDICATORS.ema50, label: emaLabels.momentum }, value: latest.ema50 });
     if (quantEma200) items.push({ definition: { ...PRICE_PANEL_INDICATORS.ema200, label: emaLabels.long }, value: latest.ema200 });
     if (!isCryptoChart && quantDema200) items.push({ definition: { ...PRICE_PANEL_INDICATORS.dema200, label: emaLabels.demaLong }, value: latest.dema200 });
-    if (isCryptoChart && quantVwap) items.push({ definition: PRICE_PANEL_INDICATORS.vwap, value: latest.vwap });
+    if (showVwapOnChart && quantVwap) items.push({ definition: PRICE_PANEL_INDICATORS.vwap, value: latest.vwap });
     return items;
-  }, [studySnapshot.latest, isCryptoChart, quantEma20, quantEma21, quantEma50, quantEma200, quantDema200, quantVwap, emaLabels]);
+  }, [studySnapshot.latest, isCryptoChart, showVwapOnChart, quantEma20, quantEma21, quantEma50, quantEma200, quantDema200, quantVwap, emaLabels]);
   const studyPanelLegendItems = useMemo<IndicatorLegendValue[]>(() => {
     const latest = studySnapshot.latest;
     const items: IndicatorLegendValue[] = [];
@@ -2298,14 +2355,14 @@ export default function TVChartPanel() {
     const tfSuffix = backendTf ? ` ${backendTf}` : '';
     if (quantRsi14) {
       items.push({
-        definition: { ...STUDY_PANEL_INDICATORS.rsi14, label: `${STUDY_PANEL_INDICATORS.rsi14.label}${tfSuffix}` },
+        definition: { ...studyIndicatorDefs.rsi14, label: `${studyIndicatorDefs.rsi14.label}${tfSuffix}` },
         value: latest.rsi14,
         precision: 2,
       });
     }
     if (quantAdx14) {
       items.push({
-        definition: { ...STUDY_PANEL_INDICATORS.adx14, label: `${STUDY_PANEL_INDICATORS.adx14.label}${tfSuffix}` },
+        definition: { ...studyIndicatorDefs.adx14, label: `${studyIndicatorDefs.adx14.label}${tfSuffix}` },
         value: latest.adx14,
         precision: 2,
       });
@@ -2313,8 +2370,10 @@ export default function TVChartPanel() {
     if (quantAtr14) {
       items.push({
         definition: {
-          ...STUDY_PANEL_INDICATORS.atr14,
-          label: isCryptoChart ? cryptoAtr14LegendLabel(chartPayload) : `${STUDY_PANEL_INDICATORS.atr14.label}${tfSuffix}`,
+          ...studyIndicatorDefs.atr14,
+          label: isCryptoChart
+            ? cryptoAtr14LegendLabel(chartPayload, indicatorPeriods.atr)
+            : `${studyIndicatorDefs.atr14.label}${tfSuffix}`,
         },
         value: latest.atr14,
       });
@@ -2322,7 +2381,7 @@ export default function TVChartPanel() {
     if (isCryptoChart && quantVolumeBars) items.push({ definition: STUDY_PANEL_INDICATORS.volume, value: latest.volume, precision: 0 });
     if (isCryptoChart && quantVolumeBars && quantVolumeMa) items.push({ definition: STUDY_PANEL_INDICATORS.volumeMa, value: latest.volumeMa, precision: 0 });
     return items;
-  }, [studySnapshot.latest, isCryptoChart, chartPayload, backendTf, quantRsi14, quantAdx14, quantAtr14, quantVolumeBars, quantVolumeMa]);
+  }, [studySnapshot.latest, isCryptoChart, chartPayload, backendTf, indicatorPeriods.atr, studyIndicatorDefs, quantRsi14, quantAdx14, quantAtr14, quantVolumeBars, quantVolumeMa]);
   const engineAParityRows = useMemo(
     () => buildEngineAParityRows(chartCandidate, studySnapshot.latest, chartPayload),
     [chartCandidate, studySnapshot.latest, chartPayload],
@@ -2333,6 +2392,7 @@ export default function TVChartPanel() {
   const cleanLegendChips = useMemo(
     () => buildCleanLegendChips({
       isCryptoChart,
+      showVwapOnChart,
       ema20: quantEma20,
       ema21: quantEma21,
       ema50: quantEma50,
@@ -2343,11 +2403,11 @@ export default function TVChartPanel() {
       engineBEnabled: showEngineBOverlays,
       engineBPayload: engineBOverlay,
     }),
-    [isCryptoChart, quantEma20, quantEma21, quantEma50, quantEma200, quantDema200, quantVwap, emaLabels, showEngineBOverlays, engineBOverlay],
+    [isCryptoChart, showVwapOnChart, quantEma20, quantEma21, quantEma50, quantEma200, quantDema200, quantVwap, emaLabels, showEngineBOverlays, engineBOverlay],
   );
 
   // Derived preset label: "all" only when every indicator is on, otherwise "custom".
-  const activePreset: PresetValue = showQuantDebug && (isCryptoChart ? ema21 && vwapEnabled && adx14 && volumeBars && volumeMa : ema20) && ema50 && ema200 && dema200 && rsi14 && atr14 ? 'all' : 'custom';
+  const activePreset: PresetValue = showQuantDebug && (isCryptoChart ? ema21 && (!showVwapOnChart || vwapEnabled) && adx14 && volumeBars && volumeMa : ema20) && ema50 && ema200 && dema200 && rsi14 && atr14 ? 'all' : 'custom';
 
   function applyRecommendedTimeframe() {
     const recommendedCode = tfCodeForBackend(timeframeRoute?.autoSelectTf);
@@ -3302,7 +3362,7 @@ export default function TVChartPanel() {
     pushLine(ema50SeriesRef.current, quantEma50, values.ema50 || []);
     pushLine(ema200SeriesRef.current, quantEma200, values.ema200 || []);
     pushLine(dema200SeriesRef.current, quantDema200, values.dema200 || []);
-    pushLine(vwapSeriesRef.current, isCryptoChart && quantVwap, values.vwap || []);
+    pushLine(vwapSeriesRef.current, showVwapOnChart && quantVwap, values.vwap || []);
     pushLine(rsiSeriesRef.current, quantRsi14, values.rsi14 || []);
     pushLine(adxSeriesRef.current, quantAdx14, values.adx14 || []);
     pushLine(atrSeriesRef.current, quantAtr14, values.atr14 || []);
@@ -3341,7 +3401,7 @@ export default function TVChartPanel() {
     return () => {
       cancelled = true;
     };
-  }, [pair, candles, liveTick, backendTf, isCryptoChart, studySnapshot, chartPayload, candlePriceFormat, engineBOverlay, showEngineBOverlays, chartMode, quantEma20, quantEma21, quantEma50, quantEma200, quantDema200, quantVwap, quantRsi14, quantAdx14, quantAtr14, quantVolumeBars, quantVolumeMa]);
+  }, [pair, candles, liveTick, backendTf, isCryptoChart, showVwapOnChart, studySnapshot, chartPayload, candlePriceFormat, engineBOverlay, showEngineBOverlays, chartMode, quantEma20, quantEma21, quantEma50, quantEma200, quantDema200, quantVwap, quantRsi14, quantAdx14, quantAtr14, quantVolumeBars, quantVolumeMa]);
 
   return (
     <>
@@ -3497,10 +3557,10 @@ export default function TVChartPanel() {
             <IndicatorSwitch label={emaLabels.momentum} checked={ema50} onCheckedChange={setEma50} />
             <IndicatorSwitch label={emaLabels.long} checked={ema200} onCheckedChange={setEma200} />
             {!isCryptoChart && <IndicatorSwitch label={emaLabels.demaLong} checked={dema200} onCheckedChange={setDema200} />}
-            {isCryptoChart && <IndicatorSwitch label="VWAP" checked={vwapEnabled} onCheckedChange={setVwapEnabled} />}
-            <IndicatorSwitch label="ATR14" checked={atr14} onCheckedChange={setAtr14} />
-            <IndicatorSwitch label="RSI14" checked={rsi14} onCheckedChange={setRsi14} />
-            {isCryptoChart && <IndicatorSwitch label="ADX14" checked={adx14} onCheckedChange={setAdx14} />}
+            {showVwapOnChart && <IndicatorSwitch label="VWAP" checked={vwapEnabled} onCheckedChange={setVwapEnabled} />}
+            <IndicatorSwitch label={studyIndicatorDefs.atr14.label} checked={atr14} onCheckedChange={setAtr14} />
+            <IndicatorSwitch label={studyIndicatorDefs.rsi14.label.split(' ')[0]} checked={rsi14} onCheckedChange={setRsi14} />
+            {isCryptoChart && <IndicatorSwitch label={studyIndicatorDefs.adx14.label} checked={adx14} onCheckedChange={setAdx14} />}
             {isCryptoChart && <IndicatorSwitch label="Volume" checked={volumeBars} onCheckedChange={setVolumeBars} />}
             {isCryptoChart && <IndicatorSwitch label="Volume MA" checked={volumeMa} onCheckedChange={setVolumeMa} />}
           </div>
@@ -3519,7 +3579,7 @@ export default function TVChartPanel() {
               />
               {(cleanLegendChips.length > 0
                 || (showEngineBOverlays && engineBOverlay?.overlay_source === 'engine_b')
-                || (showEngineBOverlays && (engineBOverlayLoading || engineBOverlayError))) && (
+                || (showEngineBOverlays && (engineBOverlayLoading || engineBOverlayError || engineBOverlayStale))) && (
                 <div className="flex flex-wrap items-center gap-1 border-t border-border/30 pt-2">
                   {cleanLegendChips.map((chip) => (
                     <LegendChip key={`legend-${chip.key}`} spec={chip} />
@@ -3532,6 +3592,9 @@ export default function TVChartPanel() {
                   )}
                   {showEngineBOverlays && engineBOverlayError && (
                     <CaptureLabel>{`Engine B warning ${engineBOverlayError}`}</CaptureLabel>
+                  )}
+                  {showEngineBOverlays && engineBOverlayStale && (
+                    <CaptureLabel>{`Engine B stale (${Math.round(engineBOverlayAgeSec ?? 0)}s)`}</CaptureLabel>
                   )}
                 </div>
               )}

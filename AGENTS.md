@@ -47,6 +47,7 @@ Discover under `.agents/skills/<name>/SKILL.md`. Load a skill only when the task
 | `athena-audit` | Full audit, bug hunt, strict findings, e2e trace, producer-to-consumer contract review |
 | `athena-anti-miss-review` | Audit, verification, shipped-change validation, missed-issue detection, regression check, "nothing missed" |
 | `athena-engine-parity` | Live/backtest or chart parity across engines, candles, ATR, scoring drift, UI payloads |
+| `athena-cross-surface-parity` | Closed-loop audit: config → resolver → API → UI → tests; catch sent-but-unused fields, hardcoded period drift, masked parity tests (Engine A ↔ chart ↔ backtest) |
 | `athena-research-lab` | `athena_research/`, vectorbt lab, backtest discovery, indicator calibration |
 | `athena-ui-chart-review` | React/native chart UI, chart AI review payloads, Vision (not execution) |
 | `athena-test-repair` | Targeted pytest repair for touched behavior |

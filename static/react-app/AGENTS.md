@@ -14,5 +14,6 @@ Scope: `static/react-app/` and chart-related API consumers.
 
 - `athena-ui-chart-review` — chart UI, Vision/review payloads, overlay contracts
 - `athena-engine-parity` — when the bug is live chart vs engine payload mismatch
+- `athena-cross-surface-parity` — before chart indicator changes: trace `price_precision` / `indicator_periods` from API → `TVChartPanel` computation → labels → per-group tests
 
 Parent rules: repo root `AGENTS.md`.

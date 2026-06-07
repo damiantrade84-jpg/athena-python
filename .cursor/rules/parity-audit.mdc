@@ -1,0 +1,48 @@
+---
+description: >
+  Cross-surface parity guardrail for Engine A ↔ chart API ↔ TV Chart UI ↔ tests.
+  Apply when editing factor_scoring, indicators, routes_market_data chart candles,
+  TVChartPanel indicator math, ENGINE_A_* period config, or chart parity tests.
+  Also apply when user asks if chart matches Engine A, or before merging scoring/chart changes.
+globs:
+  - factor_scoring.py
+  - forex_scoring.py
+  - scoring.py
+  - indicators.py
+  - athena_app/api/routes_market_data.py
+  - static/react-app/**/TVChartPanel.tsx
+  - tests/test_engine_a*.py
+  - tests/test_*chart*.py
+  - config.yaml
+alwaysApply: false
+---
+
+# Cross-surface parity (Engine A ↔ chart ↔ backtest)
+
+Load **`.agents/skills/athena-cross-surface-parity/SKILL.md`** and follow `references/parity-checklist.md` before claiming parity or finishing chart/scoring work.
+
+## Closed loop (required per invariant)
+
+For each config-driven value (RSI/EMA/ATR period, VWAP gate, score_group, candle policy, overlay `computed_at`):
+
+`config → _resolve_* → server compute → API field → client read → UI label → per-group test`
+
+**FAIL** if an earlier hop is per-group and a later hop uses a hardcoded literal (e.g. `14`, `21`, `50`, `200`).
+
+## Never accept
+
+- "Field is in the TypeScript interface" as proof of parity
+- Green tests that compare both sides without `score_group` or only default-tier pairs
+- UI labels (`RSI14`) that disagree with actual computation period
+- Client `buildChartStudySnapshot` fallbacks that ignore `price_precision.rsi_period` / `indicator_periods`
+
+## Before merge / review complete
+
+1. Run hardcoded-period and sent-but-unused greps from the skill checklist
+2. Spot-check at least one **non-default** score group (forex RSI 18, crypto RSI 12)
+3. List masked tests and NOT REVIEWED surfaces in the response
+4. Add or cite a regression test that would **fail** on the TV Chart RSI-style bug
+
+## Reference incident
+
+TV Chart sent `rsi_period` via `price_precision` but `_format_chart_candles` and `buildChartStudySnapshot` still used RSI 14 — CRITICAL drift masked by `test_engine_a_crypto_chart_parity.py`.
