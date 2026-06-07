@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from 'react';
+import { memo, useCallback, useMemo, useState } from 'react';
 import { useStore } from '@/hooks/useStore';
 import { useApiPoll, useApiPost } from '@/hooks/useApiData';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -6,14 +6,15 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Textarea } from '@/components/ui/textarea';
 import { ErrorBanner, SqnBadge } from '@/components/shared';
-import { FlaskConical, Play, AlertTriangle, Trophy, Layers } from 'lucide-react';
+import { FlaskConical, Play, AlertTriangle, Trophy, Layers, ChevronsUpDown, Check } from 'lucide-react';
 import { AreaChart, Area, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
-import { fmtNum, toNum } from '@/lib/utils';
+import { cn, fmtNum, toNum } from '@/lib/utils';
 import type { PairsResponse, PairListEntry } from '@/types/athena';
 
 /**
@@ -254,6 +255,157 @@ function resolvePairKey(token: string, allPairs: PairListEntry[]): string {
   return t;
 }
 
+const PAIR_GROUP_ORDER = ['forex', 'crypto', 'stock', 'index', 'commodity', 'etf', 'other'];
+
+function groupPairsByType(allPairs: PairListEntry[]): Record<string, PairListEntry[]> {
+  const groups: Record<string, PairListEntry[]> = {};
+  for (const p of allPairs) {
+    const g = p.type || 'other';
+    (groups[g] ??= []).push(p);
+  }
+  return groups;
+}
+
+function orderedPairGroups(groups: Record<string, PairListEntry[]>): [string, PairListEntry[]][] {
+  const seen = new Set<string>();
+  const out: [string, PairListEntry[]][] = [];
+  for (const g of PAIR_GROUP_ORDER) {
+    const items = groups[g];
+    if (items?.length) {
+      out.push([g, items]);
+      seen.add(g);
+    }
+  }
+  for (const [g, items] of Object.entries(groups)) {
+    if (!seen.has(g) && items.length) out.push([g, items]);
+  }
+  return out;
+}
+
+interface BacktestPairPickerProps {
+  value: string;
+  onChange: (pair: string) => void;
+  allPairs: PairListEntry[];
+}
+
+function BacktestPairPicker({ value, onChange, allPairs }: BacktestPairPickerProps) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState('');
+
+  const groupedPairs = useMemo(() => groupPairsByType(allPairs), [allPairs]);
+
+  const filteredGroups = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    const entries = orderedPairGroups(groupedPairs);
+    if (!q) return entries;
+    return entries
+      .map(([type, items]) => {
+        const hits = items.filter((p) => {
+          const hay = `${p.display || ''} ${p.symbol || ''} ${type}`.toLowerCase();
+          return hay.includes(q);
+        });
+        return hits.length ? ([type, hits] as [string, PairListEntry[]]) : null;
+      })
+      .filter((row): row is [string, PairListEntry[]] => row !== null);
+  }, [groupedPairs, query]);
+
+  const displayLabel = useMemo(() => {
+    const hit = allPairs.find((p) => (p.symbol || p.display) === value);
+    return hit?.display || hit?.symbol || value || 'Select pair...';
+  }, [allPairs, value]);
+
+  const handleOpenChange = useCallback((next: boolean) => {
+    setOpen(next);
+    if (!next) setQuery('');
+  }, []);
+
+  return (
+    <Popover open={open} onOpenChange={handleOpenChange} modal>
+      <PopoverTrigger asChild>
+        <Button
+          variant="outline"
+          role="combobox"
+          aria-expanded={open}
+          className="w-[180px] h-8 text-xs justify-between font-normal"
+        >
+          <span className="truncate">{displayLabel}</span>
+          <ChevronsUpDown className="ml-1 h-3 w-3 shrink-0 opacity-50" />
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent
+        className="w-[220px] p-0"
+        align="start"
+        onOpenAutoFocus={(e) => e.preventDefault()}
+        onWheel={(e) => e.stopPropagation()}
+      >
+        <div className="flex flex-col">
+          <Input
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Search pair..."
+            className="h-8 text-xs border-0 border-b rounded-none shadow-none focus-visible:ring-0"
+          />
+          <div
+            className="max-h-[300px] overflow-y-auto overscroll-contain p-1"
+            onWheel={(e) => e.stopPropagation()}
+          >
+            {allPairs.length === 0 && (
+              <button
+                type="button"
+                className="flex w-full items-center rounded-sm px-2 py-1.5 text-xs hover:bg-accent hover:text-accent-foreground"
+                onClick={() => {
+                  onChange('EURUSD');
+                  setOpen(false);
+                  setQuery('');
+                }}
+              >
+                <Check className={cn('mr-1 h-3 w-3', value === 'EURUSD' ? 'opacity-100' : 'opacity-0')} />
+                EURUSD
+              </button>
+            )}
+            {allPairs.length > 0 && filteredGroups.length === 0 && (
+              <p className="py-3 text-center text-xs text-muted-foreground">No pair found.</p>
+            )}
+            {filteredGroups.map(([type, items]) => (
+              <div key={type} className="mb-1">
+                <div className="px-2 py-1.5 text-xs font-medium text-muted-foreground capitalize">{type}</div>
+                {items.map((p) => {
+                  const pairValue = p.symbol || p.display || '';
+                  return (
+                    <button
+                      key={`${type}:${pairValue}`}
+                      type="button"
+                      className={cn(
+                        'flex w-full items-center rounded-sm px-2 py-1.5 text-xs hover:bg-accent hover:text-accent-foreground',
+                        value === pairValue && 'bg-accent/50',
+                      )}
+                      onClick={() => {
+                        onChange(pairValue);
+                        setOpen(false);
+                        setQuery('');
+                      }}
+                    >
+                      <Check
+                        className={cn(
+                          'mr-1 h-3 w-3 shrink-0',
+                          value === pairValue ? 'opacity-100' : 'opacity-0',
+                        )}
+                      />
+                      <span className="truncate">{p.display || p.symbol}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            ))}
+          </div>
+        </div>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
+const MemoizedBacktestPairPicker = memo(BacktestPairPicker);
+
 export default function BacktestPanel() {
   const { showToast } = useStore();
   const [pair, setPair] = useState('EURUSD');
@@ -413,17 +565,7 @@ export default function BacktestPanel() {
             <CardContent className="space-y-3">
               <div className="flex items-center gap-2 flex-wrap w-full">
                 {!batchMode ? (
-                  <Select value={pair} onValueChange={setPair}>
-                    <SelectTrigger className="w-[180px] h-8 text-xs"><SelectValue /></SelectTrigger>
-                    <SelectContent position="popper" className="max-h-72">
-                      {allPairs.length === 0 && <SelectItem value="EURUSD">EURUSD</SelectItem>}
-                      {allPairs.map((p) => (
-                        <SelectItem key={p.symbol || p.display} value={p.symbol || p.display || ''}>
-                          {p.display || p.symbol} {p.type ? `· ${p.type}` : ''}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                  <MemoizedBacktestPairPicker value={pair} onChange={setPair} allPairs={allPairs} />
                 ) : (
                   <Textarea
                     value={batchList}
