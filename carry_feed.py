@@ -102,7 +102,7 @@ _STATIC_RATES: dict[str, float] = {
     "NZD": 2.25,  # RBNZ OCR, held Apr 2026 after 325bp cut cycle (RBNZ)
     "CAD": 2.25,  # BoC overnight rate, held Apr 29 2026 (BoC)
     "CHF": 0.00,  # SNB policy rate cut to 0% Jun 2025, held Mar 2026 (SNB)
-    "ZAR": 7.00,  # SARB repo rate 7.00%, May 29 2026 (SARB)
+    "ZAR": 7.00,  # SARB repo rate, +25bp hike to 7.00% May 28 2026 (SARB)
     "MXN": 6.50,  # Banxico target rate, cut to 6.50% May 7 2026 (Banxico)
     "SGD": 1.00,  # SORA overnight proxy ~1.00%, Jun 2026 (MAS)
 }
