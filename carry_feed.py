@@ -81,30 +81,30 @@ _FRED_10Y_SERIES_AU = "IRLTLT01AUM156N"  # Australia 10-Year yield (monthly)
 _FRED_10Y_SERIES_JP = "IRLTLT01JPM156N"  # Japan 10-Year JGB yield (monthly)
 _FRED_10Y_SERIES_EZ = "IRLTLT01EZM156N"  # Euro Area 10-Year yield (monthly)
 
-_STATIC_10Y = 4.20  # US  — fallback when FRED is unreachable
-_STATIC_10Y_GB = 4.50  # UK
-_STATIC_10Y_DE = 2.50  # Germany
-_STATIC_10Y_AU = 4.40  # Australia
-_STATIC_10Y_JP = 1.50  # Japan
-_STATIC_10Y_EZ = 2.80  # Euro Area
+_STATIC_10Y = 4.55  # US 10Y Treasury, Jun 5 2026 (FRED DGS10) — fallback when FRED is unreachable
+_STATIC_10Y_GB = 4.88  # UK 10Y Gilt, Jun 5 2026 (DMO)
+_STATIC_10Y_DE = 3.03  # Germany 10Y Bund, Jun 5 2026 (Bundesbank)
+_STATIC_10Y_AU = 4.94  # Australia 10Y, Jun 5 2026 (RBA)
+_STATIC_10Y_JP = 2.67  # Japan 10Y JGB, Jun 5 2026 (BOJ)
+_STATIC_10Y_EZ = 3.03  # Euro Area 10Y proxy (Germany Bund), Jun 5 2026
 
 # ── Hardcoded policy rates for currencies without reliable FRED coverage ──────
 # Update these when central banks change rates (meetings ~6-8x per year).
-# Source: Each central bank's official website. Last updated: 2026-03.
+# Source: Each central bank's official website. Last updated: 2026-06-07.
 # Update these when central banks change rates. USD/EUR/GBP also listed here
 # as fallback when FRED is temporarily unreachable.
 _STATIC_RATES: dict[str, float] = {
-    "USD": 4.33,  # Fed Funds Rate (target range 4.25-4.50%)
-    "EUR": 2.40,  # ECB Deposit Facility Rate
-    "GBP": 4.50,  # Bank of England base rate
-    "JPY": 0.50,  # Bank of Japan — raised to 0.5% Jan 2025
-    "AUD": 4.10,  # RBA — easing cycle started Feb 2025
-    "NZD": 3.75,  # RBNZ — cutting cycle
-    "CAD": 3.00,  # Bank of Canada — cutting cycle
-    "CHF": 0.50,  # SNB
-    "ZAR": 7.50,  # SARB repo rate
-    "MXN": 9.00,  # Banxico — cutting cycle
-    "SGD": 3.00,  # MAS (proxy: SGD SORA ~3%)
+    "USD": 3.625,  # Fed funds midpoint 3.50-3.75%, held Apr 29 2026 (FOMC)
+    "EUR": 2.00,  # ECB Deposit Facility Rate, held Apr 30 2026 (ECB)
+    "GBP": 3.75,  # BoE Base Rate, held Apr 29 2026 (BoE MPC 8-1 vote)
+    "JPY": 0.75,  # BOJ overnight target, held Apr 27-28 2026 (BOJ)
+    "AUD": 4.35,  # RBA Cash Rate, +25bp hike May 2026 (RBA)
+    "NZD": 2.25,  # RBNZ OCR, held Apr 2026 after 325bp cut cycle (RBNZ)
+    "CAD": 2.25,  # BoC overnight rate, held Apr 29 2026 (BoC)
+    "CHF": 0.00,  # SNB policy rate cut to 0% Jun 2025, held Mar 2026 (SNB)
+    "ZAR": 7.00,  # SARB repo rate 7.00%, May 29 2026 (SARB)
+    "MXN": 6.50,  # Banxico target rate, cut to 6.50% May 7 2026 (Banxico)
+    "SGD": 1.00,  # SORA overnight proxy ~1.00%, Jun 2026 (MAS)
 }
 
 # ── Pair → carry formula ──────────────────────────────────────────────────────
