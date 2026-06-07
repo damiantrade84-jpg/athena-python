@@ -415,7 +415,7 @@ export default function BacktestPanel() {
                 {!batchMode ? (
                   <Select value={pair} onValueChange={setPair}>
                     <SelectTrigger className="w-[180px] h-8 text-xs"><SelectValue /></SelectTrigger>
-                    <SelectContent className="max-h-72">
+                    <SelectContent position="popper" className="max-h-72">
                       {allPairs.length === 0 && <SelectItem value="EURUSD">EURUSD</SelectItem>}
                       {allPairs.map((p) => (
                         <SelectItem key={p.symbol || p.display} value={p.symbol || p.display || ''}>
