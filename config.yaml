@@ -1789,7 +1789,12 @@ DATA_FRESHNESS_GATES:
 # When true, analyze_pair / Engine D set signal["executable"]=false if data freshness blocks execution.
 SIGNAL_EXECUTABLE_FALSE_WHEN_FRESHNESS_BLOCKS: true
 
-# Engine B: use confirmed-only candles for BOS/struct series when split_market_state detects forming bar.
+# Engine B forming-bar policy (intentional split — not a bug):
+# - ENGINE_B_STRIP_FORMING_STRUCT: strips the live/forming bar from structure TF candles
+#   (BOS/CHoCH/sequence) via market_structure._engine_b_confirmed_only_struct_candles.
+# - ENGINE_B_USE_FORMING_FOR_TRIGGER: trigger/entry patterns may use the forming bar (default true).
+# - ENGINE_B_USE_FORMING_FOR_STRUCTURE: chart-overlay label only (routes_market_data); does NOT
+#   control structure stripping — use ENGINE_B_STRIP_FORMING_STRUCT for that.
 ENGINE_B_STRIP_FORMING_STRUCT: true
 ENGINE_B_STRUCT_CONFIRMED_MIN_BARS: 20
 ENGINE_B_SWEEP_LOOKBACK_BARS: 5
@@ -2093,7 +2098,9 @@ ENGINE_B_PROFILE_TRUSTED_ASSET_TYPES:
   - crypto
   - stock
 
-# Engine contextual room gate: require structural distance-to-level (fail closed when unknown).
+# Engine contextual room gate. When true, room_ok requires distance_to_opposing_zone >= min_room_atr
+# EXCEPT when no opposing zone exists (room_dist is None) AND trend+BOS confirmed — then room passes
+# (trend has room to run). Rename would be ENGINE_B_ROOM_GATE_ALLOW_NONE_WITH_TREND_BOS; kept for BT parity.
 ENGINE_B_ROOM_GATE_REQUIRE_DISTANCE: true
 
 
@@ -2661,6 +2668,8 @@ AUTO_EXIT_ON_DECAY: false
 
 # ── Engine B (Naked Scalp) ───────────────────────────────────────────
 
+# Research lab candidate factors may upgrade entry_ok/location_ok only when ALLOW_GATE_UPGRADE true.
+# Protected gates (never upgraded by research lab): structure_ok, room_ok/space_gate_ok, rr_ok, macro_ok.
 ENGINE_B_RESEARCH_LAB_FACTORS:
   ENABLED: true
   ALLOW_GATE_UPGRADE: false
@@ -2686,9 +2695,20 @@ NAKED_ENGINE:
     H4: 6
     H1: 5
 
-  # Zone proximity threshold as multiple of ATR
+  # When true, commodity swing forces require_macro_align regardless of style YAML.
+  # Default false so NAKED_ENGINE.style_profiles.swing.require_macro_align wins.
+  commodity_swing_force_macro_align: false
+
+  # Zone proximity threshold as multiple of ATR (near_zone / location gate input).
+  # Resolved per score_group, then asset_type, then default via scoring._resolve_class_keyed.
   zone_proximity_atr_mult:
     default: 0.5
+    forex: 0.40
+    crypto: 0.60
+    commodity: 0.55
+    forex_majors: 0.38
+    crypto_btc: 0.65
+    precious_trackers: 0.50
 
   # D1 PD-array conflict scan distance as a multiple of D1 ATR.
   # Reduced from 3.0 to 1.5 to prevent persistent score drag — 3.0 ATR window
@@ -2699,8 +2719,13 @@ NAKED_ENGINE:
   # Default preserves current behavior; lower only after backtest/shadow validation.
   rejection_wick_body_ratio: 1.2
 
-  # D1 PD-array conflict penalty (points deducted from score)
+  # D1 PD-array conflict penalty (points deducted from score; gate_score unchanged)
   d1_pd_array_penalty: 0.25
+
+  # hard_counter_mode: "penalty" (default) subtracts hard_counter_penalty from total_score only.
+  # "veto" zeroes structure_ok even when BOS/sweep confirmed — use only with explicit intent.
+  hard_counter_mode: penalty
+  hard_counter_penalty: 1.0
 
   # Overlay observability (logs / engine_b_overlay / calculate_confidence.engine_b_diagnostics):
 
@@ -2926,6 +2951,7 @@ ENGINE_B_NEWS_CONTEXT_ENABLED: true
 
 ENGINE_B_ZONE_PERSISTENCE: false
 
+# See ENGINE_B_STRIP_FORMING_STRUCT (above) for structure vs trigger forming-bar split.
 ENGINE_B_USE_FORMING_FOR_STRUCTURE: false
 
 ENGINE_B_USE_FORMING_FOR_TRIGGER: true

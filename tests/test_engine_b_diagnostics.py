@@ -1670,14 +1670,54 @@ def test_engine_b_structural_tp_below_min_rr_uses_fallback_rr_tp(monkeypatch):
     assert out["structural_tp"] == pytest.approx(101.0)
     assert out["structural_rr"] == pytest.approx(1.0 / 3.0, abs=1e-4)
     assert out["fallback_tp_applied"] is True
-    assert out["fallback_tp_reason"] == "structural_tp_below_min_rr"
-    assert out["execution_sl"] == pytest.approx(97.0)
-    assert out["execution_tp"] == pytest.approx(106.0)
+    # Structural SL (3%) exceeds forex MAX_SL_PCT (2.5%) — clamp, do not null SL/TP.
+    assert out["execution_sl"] == pytest.approx(97.5)
+    assert out["fallback_tp_reason"] == "max_sl_clamp_tp_resynthesized"
+    assert out["execution_tp"] == pytest.approx(105.0)
     assert out["execution_rr"] == pytest.approx(2.0)
     assert out["rr_used_for_gate"] == pytest.approx(2.0)
     assert out["rr_source"].endswith("_fallback_rr_tp")
     assert out["level_mode"].endswith("_fallback_rr_tp")
     assert out["execution_levels_valid"] is True
+
+
+def test_engine_b_fallback_rr_preserves_sl_when_within_max_sl_pct(monkeypatch):
+    """Fallback RR keeps structural SL when it already fits MAX_SL_PCT."""
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_ALLOW_SYNTHETIC_FALLBACK_RR_TP", True)
+
+    out = resolve_engine_b_execution_levels(
+        direction="LONG",
+        entry=100.0,
+        structural_sl=97.6,
+        structural_tp=101.0,
+        atr=2.0,
+        style="intraday",
+        asset_class="forex",
+        min_rr=1.5,
+        fallback_rr=2.0,
+    )
+
+    assert out["fallback_tp_applied"] is True
+    assert out["fallback_tp_reason"] == "structural_tp_below_min_rr"
+    assert out["execution_sl"] == pytest.approx(97.6)
+    assert out["execution_tp"] == pytest.approx(104.8)
+    assert out["execution_levels_valid"] is True
+
+
+def test_zone_context_proximity_mult_varies_by_asset_type(monkeypatch):
+    """zone_proximity_atr_mult resolves per asset_type (crypto wider than forex)."""
+    monkeypatch.setitem(
+        config.CONFIG.setdefault("NAKED_ENGINE", {}),
+        "zone_proximity_atr_mult",
+        {"default": 0.5, "forex": 0.40, "crypto": 0.60},
+    )
+    zone = {"lower": 98.0, "upper": 99.0, "center": 98.5}
+    price = 99.5
+    atr = 1.0
+    forex_ctx = engine._zone_context(zone, price, atr, "LONG", [], asset_type="forex")
+    crypto_ctx = engine._zone_context(zone, price, atr, "LONG", [], asset_type="crypto")
+    assert forex_ctx["near_zone"] is False
+    assert crypto_ctx["near_zone"] is True
 
 
 def test_engine_b_invalid_atr_still_fails_closed():

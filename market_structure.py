@@ -1457,6 +1457,18 @@ def _engine_b_sl_within_max_sl_pct(
     return pct <= float(max_sl_pct) + 1e-12
 
 
+def _engine_b_clamp_sl_to_max_pct(
+    entry: float,
+    direction: str,
+    max_sl_pct: float,
+) -> float:
+    """Tightest allowed SL at the max SL width cap (risk_engine aligned)."""
+    max_dist = float(entry) * float(max_sl_pct)
+    if direction == "LONG":
+        return float(entry) - max_dist
+    return float(entry) + max_dist
+
+
 def resolve_engine_b_execution_levels(
     *,
     direction: str,
@@ -1788,6 +1800,46 @@ def resolve_engine_b_execution_levels(
                             _exec_rr, _exec_valid, _exec_reject, _exec_tp_side_ok = _compute_exec_rr(
                                 _exec_sl, _exec_tp
                             )
+            elif (
+                _fallback_applied
+                and bool(config.CONFIG.get("ENGINE_B_ALLOW_SYNTHETIC_FALLBACK_RR_TP", False))
+                and _max_sl_pct is not None
+            ):
+                # Preserve fallback-RR path: clamp SL to cap instead of nulling both levels.
+                _exec_sl = _engine_b_clamp_sl_to_max_pct(_entry, direction, float(_max_sl_pct))
+                _sl_source = "max_sl_clamp"
+                _level_mode = f"{_sl_source}_sl_{_tp_source}_tp"
+                _rr_source = _level_mode
+                _exec_rr, _exec_valid, _exec_reject, _exec_tp_side_ok = _compute_exec_rr(
+                    _exec_sl, _exec_tp
+                )
+                try:
+                    _min_rr_clamp = float(min_rr) if min_rr is not None else None
+                except (TypeError, ValueError):
+                    _min_rr_clamp = None
+                if fallback_rr is not None and _exec_sl is not None:
+                    try:
+                        _fallback_rr_clamp = float(fallback_rr)
+                    except (TypeError, ValueError):
+                        _fallback_rr_clamp = 0.0
+                    _sl_dist = abs(_entry - _exec_sl)
+                    if _sl_dist > 0 and _fallback_rr_clamp > 0:
+                        _target_rr = max(
+                            _fallback_rr_clamp,
+                            _min_rr_clamp if _min_rr_clamp is not None else _fallback_rr_clamp,
+                        )
+                        _exec_tp = (
+                            _entry + (_sl_dist * _target_rr)
+                            if direction == "LONG"
+                            else _entry - (_sl_dist * _target_rr)
+                        )
+                        _tp_source = "fallback_rr"
+                        _level_mode = f"{_sl_source}_sl_{_tp_source}_tp"
+                        _rr_source = _level_mode
+                        _fallback_reason = "max_sl_clamp_tp_resynthesized"
+                        _exec_rr, _exec_valid, _exec_reject, _exec_tp_side_ok = _compute_exec_rr(
+                            _exec_sl, _exec_tp
+                        )
             else:
                 _exec_sl = None
                 _exec_tp = None
@@ -2679,7 +2731,15 @@ class NakedEngine:
             return self._detect_fvg_legacy(candles)
 
     def _zone_context(
-        self, zone: dict | None, current_price: float, atr: float, direction: str, candles: list
+        self,
+        zone: dict | None,
+        current_price: float,
+        atr: float,
+        direction: str,
+        candles: list,
+        *,
+        asset_type: str | None = None,
+        score_group: str | None = None,
     ) -> dict:
         atr_val = atr if atr and atr > 0 else 0.0001
         if not zone:
@@ -2700,11 +2760,23 @@ class NakedEngine:
             distance = abs(current_price - center) if center is not None else None
 
         _proximity_cfg = config.CONFIG.get("NAKED_ENGINE", {}).get("zone_proximity_atr_mult") or {}
-        _proximity_mult = 0.5
-        if isinstance(_proximity_cfg, dict):
-            _proximity_mult = float(_proximity_cfg.get("default", 0.5))
-        else:
-            _proximity_mult = float(_proximity_cfg)
+        try:
+            from scoring import _resolve_class_keyed
+
+            _proximity_mult = float(
+                _resolve_class_keyed(
+                    _proximity_cfg if isinstance(_proximity_cfg, dict) else {"default": _proximity_cfg},
+                    score_group,
+                    str(asset_type or "").lower(),
+                    0.5,
+                )
+            )
+        except Exception:
+            _proximity_mult = 0.5
+            if isinstance(_proximity_cfg, dict):
+                _proximity_mult = float(_proximity_cfg.get("default", 0.5))
+            else:
+                _proximity_mult = float(_proximity_cfg)
         near_zone = distance is not None and distance <= atr_val * _proximity_mult
         zone_touched = False
 
@@ -3529,7 +3601,20 @@ class NakedEngine:
             fvg_overlap = nearest_res.get("fvg_overlap", False)
 
         active_zone = nearest_sup if direction == "LONG" else nearest_res
-        zone_ctx = self._zone_context(active_zone, current_price, atr, direction, trigger_candles)
+        _zone_score_group = (
+            (pair or {}).get("score_group")
+            or (pair or {}).get("group")
+            or (pair or {}).get("asset_group")
+        )
+        zone_ctx = self._zone_context(
+            active_zone,
+            current_price,
+            atr,
+            direction,
+            trigger_candles,
+            asset_type=asset_type,
+            score_group=_zone_score_group,
+        )
 
         _ob_min_strength = config.CONFIG.get("NAKED_ENGINE", {}).get("ob_min_strength", 50)
         _ob_at_zone = False
@@ -3896,7 +3981,7 @@ class NakedEngine:
             "pgm_metals",
         }
         _force_commodity_macro = bool(
-            _naked_engine_cfg.get("commodity_swing_force_macro_align", True)
+            _naked_engine_cfg.get("commodity_swing_force_macro_align", False)
         )
         _commodity_swing_macro_required = (
             _force_commodity_macro

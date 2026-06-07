@@ -617,7 +617,50 @@ def test_crypto_min_room_atr_is_style_aware():
     assert intraday_conf["room_ok"] is True
 
 
-def test_stock_typed_commodity_tracker_score_group_forces_swing_macro_alignment():
+def test_commodity_swing_respects_yaml_macro_when_force_align_off(monkeypatch):
+    """YAML require_macro_align:false wins when commodity_swing_force_macro_align is off."""
+    monkeypatch.setitem(
+        config.CONFIG.setdefault("NAKED_ENGINE", {}),
+        "commodity_swing_force_macro_align",
+        False,
+    )
+    engine = NakedEngine()
+    res = {
+        "atr": 10.0,
+        "asset_type": "stock",
+        "current_swing_sequence": "HH_HL",
+        "macro_swing_sequence": "LH_LL",
+        "bos_confirmed": False,
+        "near_active_zone": True,
+        "trigger_ok": True,
+        "recommended_stop_loss": 90.0,
+        "recommended_take_profit": 120.0,
+        "distance_to_res": 10.0,
+    }
+
+    conf = engine.calculate_confidence(
+        res,
+        100.0,
+        "LONG",
+        style_profile={
+            "style": "swing",
+            "score_group": "precious_trackers",
+            "require_macro_align": False,
+            "min_rr": 1.0,
+            "fallback_rr": 2.0,
+        },
+    )
+
+    assert conf["macro_ok"] is True
+
+
+def test_stock_typed_commodity_tracker_score_group_forces_swing_macro_alignment(monkeypatch):
+    """Legacy override: force macro align still blocks when explicitly enabled."""
+    monkeypatch.setitem(
+        config.CONFIG.setdefault("NAKED_ENGINE", {}),
+        "commodity_swing_force_macro_align",
+        True,
+    )
     engine = NakedEngine()
     res = {
         "atr": 10.0,
