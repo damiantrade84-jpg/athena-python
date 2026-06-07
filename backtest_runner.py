@@ -476,19 +476,43 @@ def _crypto_bt_signal_candles(
     )
 
 
+def _backtest_candle_limits(days: int | None = None) -> dict[str, int]:
+    """Derive D1/H4/H1 fetch limits from BACKTEST_LOOKBACK_DAYS."""
+    days = int(days if days is not None else CONFIG.get("BACKTEST_LOOKBACK_DAYS", 730))
+    days = max(120, min(days, 730))
+    return {
+        "days": days,
+        "d1": days + 20,
+        "h4": math.ceil(days * 6) + 50,
+        "h1": math.ceil(days * 24) + 50,
+    }
+
+
+def _log_backtest_lookback(limits: dict[str, int], *, prefix: str = "[BT]") -> None:
+    log.info(
+        "%s lookback=%sd limits D1=%s H4=%s H1=%s",
+        prefix,
+        limits["days"],
+        limits["d1"],
+        limits["h4"],
+        limits["h1"],
+    )
+
+
 def _bt_cached_eodhd_intraday(
     pair: dict,
     *,
-    days: int = 730,
-    h4_limit: int = 4400,
-    h1_limit: int = 17600,
+    days: int | None = None,
+    h4_limit: int | None = None,
+    h1_limit: int | None = None,
 ):
+    limits = _backtest_candle_limits(days)
     return fetch_backtest_eodhd_intraday(
         pair,
-        days,
+        limits["days"],
         lambda fetch_days: _rt().fetch_eodhd_intraday_bt(pair, days=fetch_days),
-        h4_limit=h4_limit,
-        h1_limit=h1_limit,
+        h4_limit=h4_limit if h4_limit is not None else limits["h4"],
+        h1_limit=h1_limit if h1_limit is not None else limits["h1"],
     )
 
 
@@ -1723,6 +1747,8 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
             ]
 
         _ptype = pair.get("type", "")
+        _bt_limits = _backtest_candle_limits()
+        _log_backtest_lookback(_bt_limits)
 
         if pair["source"] == "binance":
             # Crypto: config-gated Engine A signal feed (Binance default, Bybit experiment optional).
@@ -1730,7 +1756,7 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
                 pair,
                 engine="A",
                 tf="D1",
-                limit=750,
+                limit=_bt_limits["d1"],
                 min_bars=230,
             )
 
@@ -1738,7 +1764,7 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
                 pair,
                 engine="A",
                 tf="H4",
-                limit=4400,
+                limit=_bt_limits["h4"],
                 min_bars=500,
             )
 
@@ -1746,7 +1772,7 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
                 pair,
                 engine="A",
                 tf="H1",
-                limit=17600,
+                limit=_bt_limits["h1"],
                 min_bars=500,
             )
 
@@ -1755,7 +1781,7 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
             d1_raw = _bt_cached_fetch(
                 pair,
                 "D1",
-                750,
+                _bt_limits["d1"],
                 lambda lim: _rt().fetch_candles(pair, "D1", lim),
                 provider="mt5",
                 min_bars=230,
@@ -1763,7 +1789,7 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
             h4_raw = _bt_cached_fetch(
                 pair,
                 "H4",
-                4400,
+                _bt_limits["h4"],
                 lambda lim: _rt().fetch_candles(pair, "H4", lim),
                 provider="mt5",
                 min_bars=500,
@@ -1771,31 +1797,31 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
             h1_raw = _bt_cached_fetch(
                 pair,
                 "H1",
-                17600,
+                _bt_limits["h1"],
                 lambda lim: _rt().fetch_candles(pair, "H1", lim),
                 provider="mt5",
                 min_bars=500,
             )
         elif _ptype in ("stock", "commodity", "index"):
-            # Stocks/Commodities/Indices: EODHD D1 + EODHD intraday (730d)
+            # Stocks/Commodities/Indices: EODHD D1 + EODHD intraday (BACKTEST_LOOKBACK_DAYS)
             # Fallback chain: EODHD → Polygon (commodities) → yfinance
             d1_raw = _bt_cached_fetch(
                 pair,
                 "D1",
-                750,
+                _bt_limits["d1"],
                 lambda lim: _rt().extract_candles(_rt().fetch_eodhd(pair, "D1", lim)),
                 provider="eodhd",
                 min_bars=230,
             ) or _bt_cached_fetch(
                 pair,
                 "D1",
-                750,
+                _bt_limits["d1"],
                 lambda lim: _rt().fetch_candles(pair, "D1", lim),
                 provider=str(pair.get("source") or "fallback"),
                 min_bars=230,
             )
 
-            h4_raw, h1_raw = _bt_cached_eodhd_intraday(pair, days=730)
+            h4_raw, h1_raw = _bt_cached_eodhd_intraday(pair)
 
             if not h4_raw or not h1_raw:
                 # Try Polygon first for commodities (better data quality than yfinance)
@@ -1804,8 +1830,12 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
                     log.info(
                         f"[BT] {pair['display']}: EODHD intraday failed, trying Polygon"
                     )
-                    _pg_h4 = _rt().extract_candles(_rt().fetch_polygon(pair, "H4", 4400))
-                    _pg_h1 = _rt().extract_candles(_rt().fetch_polygon(pair, "H1", 17600))
+                    _pg_h4 = _rt().extract_candles(
+                        _rt().fetch_polygon(pair, "H4", _bt_limits["h4"])
+                    )
+                    _pg_h1 = _rt().extract_candles(
+                        _rt().fetch_polygon(pair, "H1", _bt_limits["h1"])
+                    )
                     h4_raw = h4_raw or _pg_h4
                     h1_raw = h1_raw or _pg_h1
                 # Legacy vendor fallback removed.
@@ -1837,7 +1867,7 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
             d1_raw = _bt_cached_fetch(
                 pair,
                 "D1",
-                750,
+                _bt_limits["d1"],
                 lambda lim: _rt().fetch_candles(pair, "D1", lim),
                 provider=str(pair.get("source") or "fallback"),
                 min_bars=230,
@@ -1846,7 +1876,7 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
             h4_raw = _bt_cached_fetch(
                 pair,
                 "H4",
-                4400,
+                _bt_limits["h4"],
                 lambda lim: _rt().fetch_candles(pair, "H4", lim),
                 provider=str(pair.get("source") or "fallback"),
                 min_bars=500,
@@ -1855,7 +1885,7 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
             h1_raw = _bt_cached_fetch(
                 pair,
                 "H1",
-                17600,
+                _bt_limits["h1"],
                 lambda lim: _rt().fetch_candles(pair, "H1", lim),
                 provider=str(pair.get("source") or "fallback"),
                 min_bars=500,
@@ -4835,28 +4865,30 @@ def backtest_pair_naked(pair: dict, style: str = "naked", validation_mode="stand
 
     log.info(f"[ENGINE B BT] {pair['display']} fetching data... style={style}")
 
+    _bt_limits = _backtest_candle_limits()
+    _log_backtest_lookback(_bt_limits, prefix="[ENGINE B BT]")
+
     # Use same extended data fetch as Engine A backtest — live cache only holds ~180d.
     if pair.get("source") == "binance":
-        # Crypto: paginated Binance fetch — 730 days: D1=750, H4=4400, H1=17600
         candles_d1 = _crypto_bt_signal_candles(
             pair,
             engine="B",
             tf="D1",
-            limit=750,
+            limit=_bt_limits["d1"],
             min_bars=230,
         )
         candles_h4 = _crypto_bt_signal_candles(
             pair,
             engine="B",
             tf="H4",
-            limit=4400,
+            limit=_bt_limits["h4"],
             min_bars=500,
         )
         candles_h1 = _crypto_bt_signal_candles(
             pair,
             engine="B",
             tf="H1",
-            limit=17600,
+            limit=_bt_limits["h1"],
             min_bars=500,
         )
     elif pair.get("source") == "mt5":
@@ -4864,7 +4896,7 @@ def backtest_pair_naked(pair: dict, style: str = "naked", validation_mode="stand
         candles_d1 = _bt_cached_fetch(
             pair,
             "D1",
-            750,
+            _bt_limits["d1"],
             lambda lim: _rt().fetch_candles(pair, "D1", lim),
             provider="mt5",
             min_bars=230,
@@ -4872,7 +4904,7 @@ def backtest_pair_naked(pair: dict, style: str = "naked", validation_mode="stand
         candles_h4 = _bt_cached_fetch(
             pair,
             "H4",
-            4400,
+            _bt_limits["h4"],
             lambda lim: _rt().fetch_candles(pair, "H4", lim),
             provider="mt5",
             min_bars=500,
@@ -4880,7 +4912,7 @@ def backtest_pair_naked(pair: dict, style: str = "naked", validation_mode="stand
         candles_h1 = _bt_cached_fetch(
             pair,
             "H1",
-            17600,
+            _bt_limits["h1"],
             lambda lim: _rt().fetch_candles(pair, "H1", lim),
             provider="mt5",
             min_bars=500,
@@ -4891,7 +4923,7 @@ def backtest_pair_naked(pair: dict, style: str = "naked", validation_mode="stand
         candles_d1 = _bt_cached_fetch(
             pair,
             "D1",
-            750,
+            _bt_limits["d1"],
             lambda lim: _rt().fetch_candles(pair, "D1", lim),
             provider=_provider,
             min_bars=230,
@@ -4899,7 +4931,7 @@ def backtest_pair_naked(pair: dict, style: str = "naked", validation_mode="stand
         candles_h4 = _bt_cached_fetch(
             pair,
             "H4",
-            4400,
+            _bt_limits["h4"],
             lambda lim: _rt().fetch_candles(pair, "H4", lim),
             provider=_provider,
             min_bars=500,
@@ -4907,7 +4939,7 @@ def backtest_pair_naked(pair: dict, style: str = "naked", validation_mode="stand
         candles_h1 = _bt_cached_fetch(
             pair,
             "H1",
-            17600,
+            _bt_limits["h1"],
             lambda lim: _rt().fetch_candles(pair, "H1", lim),
             provider=_provider,
             min_bars=500,
@@ -5754,13 +5786,15 @@ def backtest_pair_consensus(
 
     _ptype = pair.get("type", "stock")
     log.info(f"[ENGINE C BT] {pair['display']} fetching data...")
+    _bt_limits = _backtest_candle_limits()
+    _log_backtest_lookback(_bt_limits, prefix="[ENGINE C BT]")
 
     if pair.get("source") == "binance":
         sym = pair["symbol"]
         candles_d1 = _bt_cached_fetch(
             pair,
             "D1",
-            1000,
+            _bt_limits["d1"],
             lambda lim: _rt().fetch_binance(sym, "1d", lim),
             provider="binance_futures",
             min_bars=230,
@@ -5768,7 +5802,7 @@ def backtest_pair_consensus(
         candles_h4 = _bt_cached_fetch(
             pair,
             "H4",
-            5000,
+            _bt_limits["h4"],
             lambda lim: _rt().fetch_binance_paginated(sym, "4h", lim),
             provider="binance_futures",
             min_bars=500,
@@ -5776,7 +5810,7 @@ def backtest_pair_consensus(
         candles_h1 = _bt_cached_fetch(
             pair,
             "H1",
-            20000,
+            _bt_limits["h1"],
             lambda lim: _rt().fetch_binance_paginated(sym, "1h", lim),
             provider="binance_futures",
             min_bars=500,
@@ -5785,7 +5819,7 @@ def backtest_pair_consensus(
         candles_d1 = _bt_cached_fetch(
             pair,
             "D1",
-            600,
+            _bt_limits["d1"],
             lambda lim: _rt().fetch_candles(pair, "D1", lim),
             provider="mt5",
             min_bars=230,
@@ -5793,7 +5827,7 @@ def backtest_pair_consensus(
         candles_h4 = _bt_cached_fetch(
             pair,
             "H4",
-            5000,
+            _bt_limits["h4"],
             lambda lim: _rt().fetch_candles(pair, "H4", lim),
             provider="mt5",
             min_bars=500,
@@ -5801,7 +5835,7 @@ def backtest_pair_consensus(
         candles_h1 = _bt_cached_fetch(
             pair,
             "H1",
-            5000,
+            _bt_limits["h1"],
             lambda lim: _rt().fetch_candles(pair, "H1", lim),
             provider="mt5",
             min_bars=500,
@@ -5810,24 +5844,24 @@ def backtest_pair_consensus(
         candles_d1 = _bt_cached_fetch(
             pair,
             "D1",
-            600,
+            _bt_limits["d1"],
             lambda lim: _rt().extract_candles(_rt().fetch_eodhd(pair, "D1", lim)),
             provider="eodhd",
             min_bars=230,
         ) or _bt_cached_fetch(
             pair,
             "D1",
-            600,
+            _bt_limits["d1"],
             lambda lim: _rt().fetch_candles(pair, "D1", lim),
             provider=str(pair.get("source") or "fallback"),
             min_bars=230,
         )
-        candles_h4, candles_h1 = _bt_cached_eodhd_intraday(pair, days=730, h4_limit=5000, h1_limit=20000)
+        candles_h4, candles_h1 = _bt_cached_eodhd_intraday(pair)
         if not candles_h4 or not candles_h1:
             candles_h4 = candles_h4 or _bt_cached_fetch(
                 pair,
                 "H4",
-                5000,
+                _bt_limits["h4"],
                 lambda lim: _rt().fetch_candles(pair, "H4", lim),
                 provider=str(pair.get("source") or "fallback"),
                 min_bars=500,
@@ -5835,7 +5869,7 @@ def backtest_pair_consensus(
             candles_h1 = candles_h1 or _bt_cached_fetch(
                 pair,
                 "H1",
-                5000,
+                _bt_limits["h1"],
                 lambda lim: _rt().fetch_candles(pair, "H1", lim),
                 provider=str(pair.get("source") or "fallback"),
                 min_bars=500,

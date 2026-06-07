@@ -63,6 +63,7 @@ NEWS_BG_INTERVAL_SEC: 3600    # How often the background news loop runs (seconds
 NEWS_PAIR_CACHE_TTL_SEC: 14400 # How long per-pair news/word-weights are cached after an AI fetch (seconds). Default 14400 = 4 hours.
 
 BACKTEST_MAX_WORKERS: 10      # Parallel workers for backtesting (Engine A & B). (Conservative: 10 for i7/16GB)
+BACKTEST_LOOKBACK_DAYS: 365   # Calendar days of history for Engine A/B/C backtests (was hardcoded 730).
 BT_VECTORIZED: true           # Speed path: exact-window indicator caching for Engine A/B backtests (parity-safe target).
 BACKTEST_DATA_AS_OF: null     # Optional YYYY-MM-DD frozen dataset manifest. Null = normal live/cache-backed backtest data.
 ENGINE_B_FAST_FVG_DETECTION: true
