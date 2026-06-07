@@ -24,6 +24,10 @@ _DEFAULT_WEIGHTS = {
     "liquidity_quality": 0.15,
 }
 
+# When components are missing, cap confidence so static regime_fit cannot dominate.
+_DEGRADED_CONFIDENCE_CAP_DEFAULT = 0.65
+_MIN_CONFIDENCE_COMPONENTS_DEFAULT = 2
+
 # Mirror the live Engine A factor taxonomy for indicator-agreement checks.
 # Missing keys are ignored at runtime, so listing all supported indicators is safe.
 _DEFAULT_FACTOR_MAP = {
@@ -215,6 +219,39 @@ def liquidity_quality(
     return sum(components) / len(components)
 
 
+def _confidence_degraded_cap() -> float:
+    try:
+        from config import CONFIG
+
+        return float(
+            CONFIG.get(
+                "CONFIDENCE_DEGRADED_CAP",
+                _DEGRADED_CONFIDENCE_CAP_DEFAULT,
+            )
+            or _DEGRADED_CONFIDENCE_CAP_DEFAULT
+        )
+    except Exception:
+        return _DEGRADED_CONFIDENCE_CAP_DEFAULT
+
+
+def _confidence_min_components() -> int:
+    try:
+        from config import CONFIG
+
+        return max(
+            1,
+            int(
+                CONFIG.get(
+                    "CONFIDENCE_MIN_COMPONENTS",
+                    _MIN_CONFIDENCE_COMPONENTS_DEFAULT,
+                )
+                or _MIN_CONFIDENCE_COMPONENTS_DEFAULT
+            ),
+        )
+    except Exception:
+        return _MIN_CONFIDENCE_COMPONENTS_DEFAULT
+
+
 def compute_confidence(
     factor_result: Dict,
     d1_factor_result: Optional[Dict] = None,
@@ -276,6 +313,18 @@ def compute_confidence(
 
     confidence = max(0.0, min(1.0, final))
 
+    degraded = len(available) < len(_DEFAULT_WEIGHTS)
+    degraded_cap = _confidence_degraded_cap()
+    min_components = _confidence_min_components()
+    degraded_reason = None
+    if degraded:
+        if len(available) < min_components:
+            confidence = min(confidence, degraded_cap)
+            degraded_reason = "insufficient_components"
+        elif "indicator_agreement" not in available:
+            confidence = min(confidence, degraded_cap)
+            degraded_reason = "missing_indicator_agreement"
+
     # Session quality multiplier: off-hours entries have lower conviction.
     # Timing is the strongest PROTECTIVE factor (2026-04-18 backtest: breakout_eval_hour
     # and utc_hour consistently PROTECTIVE across all asset classes and splits).
@@ -292,6 +341,7 @@ def compute_confidence(
         "components": components,
         "weights_used": used_weights,
         "available_count": len(available),
-        "degraded": len(available) < len(_DEFAULT_WEIGHTS),
+        "degraded": degraded,
+        "degraded_reason": degraded_reason,
         "session_quality": session_quality,
     }

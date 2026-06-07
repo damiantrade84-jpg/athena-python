@@ -1,3 +1,6 @@
+import sqlite3
+import time
+
 import cot_feed
 
 
@@ -40,6 +43,41 @@ def test_softs_pair_formulas_are_non_empty():
         formula = cot_feed._PAIR_FORMULA.get(display)
         assert formula, f"missing COT formula for {display}"
         assert len(formula) >= 1
+
+
+def test_parse_weekly_disagg_no_header_matches_gold_managed_money():
+    text = (
+        '"GOLD - COMMODITY EXCHANGE INC.",260602,2026-06-02,088691,CMX ,01,088 ,'
+        " 326052, 10275, 30429, 27505, 213696, 16071, 129367, 17188, 12456,"
+        " 76729, 12888, 9993"
+    )
+    parsed = cot_feed._parse_weekly_disagg_no_header(text)
+    assert parsed["XAU"]["2026-06-02"] == 76729 - 12888
+
+
+def test_mark_fetch_failure_uses_shorter_retry_window():
+    cot_feed._init_db()
+    before = time.time()
+    cot_feed._mark_fetch("weekly_fin_test", failed=True, ttl=cot_feed._WEEKLY_TTL)
+    assert cot_feed._needs_refresh("weekly_fin_test", cot_feed._WEEKLY_TTL) is False
+    with cot_feed._db_lock:
+        con = __import__("sqlite3").connect(cot_feed._DB_PATH, timeout=15.0)
+        row = con.execute(
+            "SELECT last_fetch FROM cot_meta WHERE source=?",
+            ("weekly_fin_test",),
+        ).fetchone()
+        con.close()
+    assert row is not None
+    assert row[0] < before
+
+
+def test_update_weekly_calls_fin_and_disagg(monkeypatch):
+    calls = []
+
+    monkeypatch.setattr(cot_feed, "_update_weekly_fin", lambda: calls.append("fin"))
+    monkeypatch.setattr(cot_feed, "_update_weekly_disagg", lambda: calls.append("disagg"))
+    cot_feed._update_weekly()
+    assert calls == ["fin", "disagg"]
 
 
 def test_asset_z_does_not_negative_cache_missing_series(monkeypatch):

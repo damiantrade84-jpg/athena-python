@@ -20,11 +20,12 @@ Signal:  z > 0 = speculators net long → bullish base / asset
 
 Data sources (CFTC — free, no API key):
   Weekly current:     https://www.cftc.gov/dea/newcot/FinFutWk.txt
+  Weekly disagg:      https://www.cftc.gov/dea/newcot/f_disagg.txt
   Annual TXT history: https://www.cftc.gov/files/dea/history/fut_fin_txt_{YYYY}.zip
   Disaggregated:      https://www.cftc.gov/files/dea/history/fut_disagg_txt_{YYYY}.zip
 
 Strategy: seed 3 years of history from annual ZIPs on first run,
-          then update weekly from FinFutWk.txt (current week).
+          then update weekly from FinFutWk.txt (financial) and f_disagg.txt (commodities).
 
 Usage:
     from cot_feed import get_cot_z, refresh_cot
@@ -53,6 +54,7 @@ _DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cot_cache.d
 _db_lock = threading.Lock()
 _TIMEOUT = 30
 _WEEKLY_TTL = 7 * 86400  # re-fetch weekly file at most once per week
+_WEEKLY_FAIL_COOLDOWN = 6 * 3600  # retry sooner after transient fetch failures
 _HISTORY_TTL = 30 * 86400  # re-fetch annual ZIPs at most once per month
 
 # In-memory cache: asset_key → (z_score, fetched_at)
@@ -61,6 +63,10 @@ _MEM_TTL = 6 * 3600
 
 # ── CFTC URLs ─────────────────────────────────────────────────────────────────
 _WEEKLY_FIN_URL = "https://www.cftc.gov/dea/newcot/FinFutWk.txt"
+_WEEKLY_DISAGG_URL = "https://www.cftc.gov/dea/newcot/f_disagg.txt"
+# CFTC disaggregated futures-only weekly layout (0-indexed): M_Money long/short.
+_DISAGG_WEEKLY_M_MONEY_LONG_COL = 16
+_DISAGG_WEEKLY_M_MONEY_SHORT_COL = 17
 _HIST_FIN_URL = "https://www.cftc.gov/files/dea/history/fut_fin_txt_{year}.zip"
 _HIST_DISAGG_URL = "https://www.cftc.gov/files/dea/history/fut_disagg_txt_{year}.zip"
 
@@ -414,6 +420,54 @@ def _parse_weekly_fin_no_header(text: str) -> dict[str, dict[str, int]]:
     return result
 
 
+def _parse_weekly_disagg_no_header(text: str) -> dict[str, dict[str, int]]:
+    """Parse f_disagg.txt (futures-only disaggregated, no header).
+
+    Column layout (0-indexed):
+      0: Market_and_Exchange_Names
+      2: Report_Date_as_YYYY-MM-DD
+      16: M_Money_Positions_Long_All
+      17: M_Money_Positions_Short_All
+    """
+    disagg = {k: v for k, v in _CONTRACT_FRAGMENTS.items() if k in _DISAGG_ASSETS}
+    frag_list = sorted(disagg.items(), key=_fragment_sort_key, reverse=True)
+    result: dict[str, dict[str, int]] = {k: {} for k in disagg}
+    long_col = _DISAGG_WEEKLY_M_MONEY_LONG_COL
+    short_col = _DISAGG_WEEKLY_M_MONEY_SHORT_COL
+
+    try:
+        reader = csv.reader(StringIO(text))
+        for row in reader:
+            if len(row) <= short_col:
+                continue
+            name = row[0].strip().strip('"').upper()
+            base = name.split(" - ")[0].strip()
+
+            matched = None
+            for key, frag in frag_list:
+                if _base_matches_fragment(base, frag):
+                    matched = key
+                    break
+            if not matched:
+                continue
+
+            date_str = row[2].strip().strip('"')
+            if not date_str or len(date_str) != 10:
+                continue
+
+            try:
+                long_pos = int(row[long_col].strip().replace(",", "") or "0")
+                short_pos = int(row[short_col].strip().replace(",", "") or "0")
+                net = long_pos - short_pos
+            except Exception:
+                continue
+
+            result[matched][date_str] = net
+    except Exception as e:
+        log.warning(f"[COT] weekly disagg parse error: {e}")
+    return result
+
+
 # ── DB helpers ────────────────────────────────────────────────────────────────
 
 
@@ -443,12 +497,16 @@ def _needs_refresh(source: str, ttl: float) -> bool:
     return not row or (time.time() - row[0] > ttl)
 
 
-def _mark_fetch(source: str):
+def _mark_fetch(source: str, *, failed: bool = False, ttl: float = _WEEKLY_TTL):
+    """Record a successful fetch at ``now``; failures use a shorter retry window."""
+    fetched_at = time.time()
+    if failed:
+        fetched_at = time.time() - max(0.0, ttl - _WEEKLY_FAIL_COOLDOWN)
     with _db_lock:
         con = sqlite3.connect(_DB_PATH, timeout=15.0)
         con.execute(
             "INSERT OR REPLACE INTO cot_meta (source, last_fetch) VALUES (?,?)",
-            (source, time.time()),
+            (source, fetched_at),
         )
         con.commit()
         con.close()
@@ -509,7 +567,7 @@ def _seed_history(years: int = 3):
             log.info(f"[COT] disagg history {year}: {total} rows cached")
 
 
-def _update_weekly():
+def _update_weekly_fin():
     """Fetch the current week's financial futures data."""
     if not _needs_refresh("weekly_fin", _WEEKLY_TTL):
         return
@@ -521,12 +579,38 @@ def _update_weekly():
         if total:
             _write_rows(data)
             _mark_fetch("weekly_fin")
-            log.info(f"[COT] weekly update: {total} current positions cached")
+            log.info(f"[COT] weekly fin update: {total} current positions cached")
         else:
-            _mark_fetch("weekly_fin")  # empty response — don't retry immediately
+            _mark_fetch("weekly_fin", failed=True)
     except Exception as e:
-        log.warning(f"[COT] weekly fetch failed: {e}")
-        _mark_fetch("weekly_fin")  # failure cooldown — don't retry immediately
+        log.warning(f"[COT] weekly fin fetch failed: {e}")
+        _mark_fetch("weekly_fin", failed=True)
+
+
+def _update_weekly_disagg():
+    """Fetch the current week's disaggregated futures-only commodity data."""
+    if not _needs_refresh("weekly_disagg", _WEEKLY_TTL):
+        return
+    try:
+        resp = requests.get(_WEEKLY_DISAGG_URL, timeout=_TIMEOUT)
+        resp.raise_for_status()
+        data = _parse_weekly_disagg_no_header(resp.text)
+        total = sum(len(v) for v in data.values())
+        if total:
+            _write_rows(data)
+            _mark_fetch("weekly_disagg")
+            log.info(f"[COT] weekly disagg update: {total} current positions cached")
+        else:
+            _mark_fetch("weekly_disagg", failed=True)
+    except Exception as e:
+        log.warning(f"[COT] weekly disagg fetch failed: {e}")
+        _mark_fetch("weekly_disagg", failed=True)
+
+
+def _update_weekly():
+    """Fetch current-week financial and disaggregated futures reports."""
+    _update_weekly_fin()
+    _update_weekly_disagg()
 
 
 # ── Public refresh ────────────────────────────────────────────────────────────

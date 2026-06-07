@@ -69,3 +69,44 @@ def test_session_quality_low_multiplier_reduces_confidence():
         session_quality="low",
     )
     assert low["confidence"] < high["confidence"]
+
+
+def test_degraded_confidence_capped_without_indicator_agreement():
+    factor_result = {
+        "regime": "TRENDING",
+        "factor_scores": {"trend": 1.0},
+        "filtered_indicators": {},
+    }
+    result = compute_confidence(
+        factor_result=factor_result,
+        d1_factor_result={"final_score": 1.0},
+        h4_factor_result={"final_score": 1.0},
+        h1_factor_result={"final_score": 1.0},
+        signal_type="trend",
+    )
+    assert result["degraded"] is True
+    assert result["degraded_reason"] == "missing_indicator_agreement"
+    assert result["confidence"] <= 0.65
+
+
+def test_full_confidence_not_capped_when_all_components_present():
+    factor_result = {
+        "regime": "TRENDING",
+        "factor_scores": {"trend": 1.0, "trend_strength": 0.8},
+        "filtered_indicators": {
+            "ema_trend": 1.0,
+            "h4_ema_trend": 1.0,
+            "d1_ema_trend": 1.0,
+            "adx_z": 0.5,
+        },
+    }
+    result = compute_confidence(
+        factor_result=factor_result,
+        d1_factor_result={"final_score": 1.0},
+        h4_factor_result={"final_score": 1.0},
+        h1_factor_result={"final_score": 1.0},
+        signal_type="trend",
+        volume_ratio=1.5,
+    )
+    assert result["degraded"] is False
+    assert result["confidence"] > 0.65

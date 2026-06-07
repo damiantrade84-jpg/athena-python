@@ -68,10 +68,9 @@ _FRED_URL = "https://fred.stlouisfed.org/graph/fredgraph.csv?id={series}"
 _FRED_CURRENCY_SERIES: dict[str, str] = {
     "USD": "DFF",  # Fed Funds Rate (daily)
     "EUR": "ECBDFR",  # ECB Deposit Facility Rate
-    # BOERUKM ends ~2017 on FRED; use UK 10Y gilt (monthly) — same series as _FRED_10Y_SERIES_GB.
-    "GBP": "IRLTLT01GBM156N",
+    "GBP": "IRSTCI01GBM156N",  # UK short-term interest rate (monthly)
     "JPY": "IRSTCI01JPM156N",  # Japan short-term interest rate (monthly)
-    "AUD": "IRLTLT01AUM156N",  # Australia — 10Y as proxy (monthly)
+    "AUD": "IRSTCI01AUM156N",  # Australia short-term interest rate (monthly)
     "CHF": "IRSTCI01CHM156N",  # Switzerland short-term rate (monthly)
     "ZAR": "IRSTCI01ZAM156N",  # South Africa short-term rate (monthly)
 }
@@ -410,10 +409,67 @@ def _get_rate_series_cached(
     return rates[start:end]
 
 
+def _resample_to_monthly(dates: list[str], rates: list[float]) -> dict[str, float]:
+    """Collapse observations to one rate per YYYY-MM (last obs in month wins)."""
+    by_month: dict[str, float] = {}
+    for d, r in zip(dates, rates):
+        if len(d) >= 7:
+            by_month[d[:7]] = r
+    return by_month
+
+
+def _month_keys_before(month_key: str, count: int) -> list[str]:
+    """Return ``count`` ascending YYYY-MM keys ending at ``month_key``."""
+    year, month = int(month_key[:4]), int(month_key[5:7])
+    keys: list[str] = []
+    for _ in range(count):
+        keys.append(f"{year:04d}-{month:02d}")
+        month -= 1
+        if month == 0:
+            month = 12
+            year -= 1
+    keys.reverse()
+    return keys
+
+
+def _anchor_month_key(as_of_date: str | None) -> str:
+    if as_of_date and len(as_of_date) >= 7:
+        return as_of_date[:7]
+    return datetime.now(timezone.utc).strftime("%Y-%m")
+
+
+def _get_monthly_rate_map_for_key(
+    key: str, months: int = 36, as_of_date: str | None = None
+) -> dict[str, float]:
+    """Return {YYYY-MM: rate} for the last ``months`` months (inclusive anchor)."""
+    anchor = _anchor_month_key(as_of_date)
+    month_keys = _month_keys_before(anchor, months)
+
+    if key in _10Y_SERIES_MAP:
+        series_id, static_fallback = _10Y_SERIES_MAP[key]
+        dates, rates = _get_series_rows_cached(series_id)
+        monthly = _resample_to_monthly(dates, rates)
+        if monthly:
+            return {m: monthly[m] for m in month_keys if m in monthly}
+        return {m: static_fallback for m in month_keys}
+
+    series_id = _FRED_CURRENCY_SERIES.get(key)
+    if series_id:
+        dates, rates = _get_series_rows_cached(series_id)
+        monthly = _resample_to_monthly(dates, rates)
+        if monthly:
+            return {m: monthly[m] for m in month_keys if m in monthly}
+
+    static_rate = _STATIC_RATES.get(key)
+    if static_rate is not None:
+        return {m: static_rate for m in month_keys}
+    return {}
+
+
 def _get_rate_series(
     series_id: str, months: int = 36, as_of_date: str = None
 ) -> list[float]:
-    """Return last `months` monthly rate values (most recent last)."""
+    """Return last ``months`` observations (most recent last)."""
     _ensure_series(series_id)
     with _db_lock:
         con = sqlite3.connect(_DB_PATH, timeout=15.0)
@@ -640,29 +696,30 @@ def get_carry_z(display: str, as_of_date: str = None) -> float:
             return 0.0
         carry += sign * rate
 
-    # Build historical carry series for z-score (36 months)
-    history_lists = []
+    # Build monthly-aligned carry history for z-score (36 months).
+    monthly_maps: list[tuple[float, dict[str, float]]] = []
     for sign, key in formula:
-        s = _get_rate_series_for_key(key, months=36, as_of_date=as_of_date)
-        if s:
-            history_lists.append((sign, s))
+        month_map = _get_monthly_rate_map_for_key(key, months=36, as_of_date=as_of_date)
+        if month_map:
+            monthly_maps.append((sign, month_map))
 
-    # Compute carry for each historical date
-    if not history_lists:
+    if not monthly_maps:
         if not as_of_date:
             _mem_cache[display] = (0.0, now)
         return 0.0
 
-    min_len = min(len(s) for _, s in history_lists)
-    if min_len < 4:
+    common_months = sorted(
+        set.intersection(*[set(m.keys()) for _, m in monthly_maps])
+    )
+    if len(common_months) < 4:
         if not as_of_date:
             _mem_cache[display] = (0.0, now)
         return 0.0
 
-    carry_history = []
-    for i in range(min_len):
-        c = sum(sign * series[i] for sign, series in history_lists)
-        carry_history.append(c)
+    carry_history = [
+        sum(sign * month_map[month] for sign, month_map in monthly_maps)
+        for month in common_months
+    ]
 
     z = _carry_zscore(carry, carry_history)
     result = round(z, 3) if z is not None else 0.0
