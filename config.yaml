@@ -185,10 +185,6 @@ ENGINE_A_CRYPTO_ADX_STRONG_THRESHOLD: 25
 ENGINE_A_CRYPTO_LATE_TREND_MULT: 0.85
 ENGINE_A_CRYPTO_VWAP_EXTENSION_ATR_WARN: 3.0
 ENGINE_A_CRYPTO_VOLUME_MA_LOOKBACK: 20
-# Trade tier: demote to watchlist when confidence engine score is below minimum.
-# Confidence is advisory for display but gates scan trade tier when enabled.
-ENGINE_A_TRADE_MIN_CONFIDENCE_ENABLED: true
-ENGINE_A_TRADE_MIN_CONFIDENCE: 0.60
 ENGINE_AB_CRYPTO_SIGNAL_FEED: bybit
 ENGINE_AB_CRYPTO_SIGNAL_FEED_FALLBACK: false
 ENGINE_B_CRYPTO_LEVELS_FEED: bybit
@@ -324,6 +320,11 @@ FACTOR_FUNDING_Z_REF: 2.0
 FACTOR_FUNDING_SCALE: 0.0005
 FACTOR_OI_REF_PCT: 5.0
 FACTOR_OI_USE_SMOOTHED: true
+FACTOR_ADDON_AGAINST_MIN: -0.25  # widened from -0.15 (2026-06-07): with forex
+                                  # floor=0.60 the old -0.15 barely penalised
+                                  # counter-carry setups at moderate momentum.
+FACTOR_ADDON_CONFIRM_MAX: 0.20    # confirm stays at 0.20 (intentional asymmetry:
+                                  # reward < double the penalty to avoid over-boosting)
 
 # ── Multi-Exchange Funding Composite (Binance + Bybit) ───────────────────────
 # When enabled, fetches funding rates from both Binance and Bybit and composites
@@ -694,6 +695,21 @@ ENGINE_A_SCORING_PROFILE:
       trend_weights: { h4_ema_trend: 0.55, ema_trend: 0.45 }
       momentum_tf: H4
       regime_tf: H4
+    # Restores stock/index D1 weight to 0.40 (vs 0.50 profile default).
+    # INDICATOR_WEIGHTS.trend had these values but was silently bypassed by
+    # SCORING_PROFILE: ENABLED: true. Explicitly set here to preserve intent.
+    us_stock_single:
+      trend_weights: { d1_ema_trend: 0.40, h4_ema_trend: 0.35, ema_trend: 0.25 }
+    stock_other:
+      trend_weights: { d1_ema_trend: 0.40, h4_ema_trend: 0.35, ema_trend: 0.25 }
+    us_indices_trackers:
+      trend_weights: { d1_ema_trend: 0.40, h4_ema_trend: 0.35, ema_trend: 0.25 }
+    eu_indices:
+      trend_weights: { d1_ema_trend: 0.40, h4_ema_trend: 0.35, ema_trend: 0.25 }
+    asian_indices:
+      trend_weights: { d1_ema_trend: 0.40, h4_ema_trend: 0.35, ema_trend: 0.25 }
+    index_other:
+      trend_weights: { d1_ema_trend: 0.40, h4_ema_trend: 0.35, ema_trend: 0.25 }
     # #6 (2026-05-28): per-group momentum/regime anchor. bond_tlt (TLT) trends
     # slowly, so anchor momentum + regime on D1 instead of the universal H4 — D1
     # RSI/MACD are smoother and better matched to a slow-swing instrument. Only

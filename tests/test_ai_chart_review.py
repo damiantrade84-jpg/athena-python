@@ -1623,7 +1623,7 @@ def test_non_visual_context_marks_asset_specific_inputs_not_applicable():
         factor_diagnostics={
             "addon_type": "carry",
             "addon_value": 0.05,
-            "feedStatus": {"addon": "carry:ok", "forex_carry_cost": "ok"},
+            "feedStatus": {"addon": "carry:ok"},
         },
     )
     forex_block = build_engine_a_prompt_context(forex_ctx)["nonVisualContext"]

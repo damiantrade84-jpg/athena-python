@@ -3250,10 +3250,9 @@ def compute_factor_scores(
     _fund_pen_mult = float(CONFIG.get("FACTOR_FUNDING_PENALTY_MULT", 5.0))
     _fund_bonus_cap = float(CONFIG.get("FACTOR_FUNDING_BONUS_CAP", 0.05))
     _fund_bonus_mult = float(CONFIG.get("FACTOR_FUNDING_BONUS_MULT", 2.5))
-    _carry_neg = float(CONFIG.get("FACTOR_CARRY_NEGATIVE_PCT", -0.02))
-    _carry_pos = float(CONFIG.get("FACTOR_CARRY_POSITIVE_PCT", 0.02))
-    _carry_pen = float(CONFIG.get("FACTOR_CARRY_PENALTY", 0.05))
-    _carry_boost = float(CONFIG.get("FACTOR_CARRY_BOOST", -0.03))
+    # NOTE: forex carry cost penalty removed (2026-06-07) -- carry direction is
+    # already captured by _carry_addon_with_status() via addon_val/conviction.
+    # Double-applying it via base_score multiplier overstated both reward and penalty.
     if asset_type == "crypto" and funding_rate is not None:
         try:
             _fr = float(funding_rate)
@@ -3266,24 +3265,6 @@ def compute_factor_scores(
                 _cost_penalty = 0  # Normal funding = no penalty
         except (TypeError, ValueError):
             pass
-    elif asset_type == "forex":
-        # Use raw carry differential for cost penalty (independent of addon_val)
-        try:
-            from carry_feed import get_carry_differential
-            carry = get_carry_differential(display)
-            if carry is not None:
-                if carry < _carry_neg:  # Negative carry
-                    _cost_penalty = _carry_pen
-                elif carry > _carry_pos:  # Positive carry
-                    _cost_penalty = _carry_boost  # Small boost
-                else:
-                    _cost_penalty = 0
-                feed_status["forex_carry_cost"] = "ok"
-            else:
-                feed_status["forex_carry_cost"] = "missing"
-        except Exception as exc:
-            log.debug("[EA2] %s forex carry differential unavailable: %s", display, exc)
-            feed_status["forex_carry_cost"] = "error"
 
     base_score = (
         abs(trend_score)

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from engine_a_scoring_profile import (
     resolve_engine_a_scoring_profile,
     scoring_profile_public_dict,
@@ -55,6 +57,30 @@ def test_energy_oil_profile_uses_h4_h1_only_trend_stack():
     assert "d1_ema_trend" not in profile["trend_weights"]
     assert profile["trend_weights"]["h4_ema_trend"] == 0.55
     assert profile["trend_weights"]["ema_trend"] == 0.45
+
+
+def test_stock_and_index_score_groups_preserve_d1_dominant_trend_weights():
+    expected = {"d1_ema_trend": 0.40, "h4_ema_trend": 0.35, "ema_trend": 0.25}
+    cases = [
+        ("us_stock_single", "stock"),
+        ("stock_other", "stock"),
+        ("us_indices_trackers", "index"),
+        ("eu_indices", "index"),
+        ("asian_indices", "index"),
+        ("index_other", "index"),
+    ]
+    for score_group, asset_type in cases:
+        profile = resolve_engine_a_scoring_profile(
+            score_group=score_group,
+            asset_type=asset_type,
+            style="swing",
+        )
+        assert profile["trend_weights"] == expected
+
+
+def test_config_keeps_single_engine_a_min_confidence_enabled_key():
+    config_text = Path(__file__).resolve().parents[1].joinpath("config.yaml").read_text(encoding="utf-8")
+    assert config_text.count("ENGINE_A_TRADE_MIN_CONFIDENCE_ENABLED:") == 1
 
 
 def test_public_dict_camel_case_keys():

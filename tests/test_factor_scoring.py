@@ -942,9 +942,9 @@ def test_zero_macd_histogram_does_not_fallback_to_macd_line_z():
 
 
 def test_oi_addon_covers_symmetric_long_and_short_quadrants():
-    # Stage 1.4: _ADDON_CONFIRM aligned to 0.20, _ADDON_AGAINST to -0.15
+    assert factor_scoring._ADDON_AGAINST == pytest.approx(-0.25)
     assert _oi_addon({"oi_change_pct": -4.0, "price_change_pct": -2.0}, "SHORT") == pytest.approx(0.20)
-    assert _oi_addon({"oi_change_pct": 4.0, "price_change_pct": -2.0}, "LONG") == pytest.approx(-0.15)
+    assert _oi_addon({"oi_change_pct": 4.0, "price_change_pct": -2.0}, "LONG") == pytest.approx(-0.25)
     assert _oi_addon({"oi_change_pct": -4.0, "price_change_pct": 2.0}, "LONG") == pytest.approx(0.0)
 
 
@@ -1097,10 +1097,9 @@ def test_crypto_addon_conviction_positive_zero_negative_ordering():
     zero = _score(pair=pair, funding_rate=0.0001)
     negative = _score(pair=pair, funding_rate=0.0010)
 
-    # Stage 1.4: _ADDON_CONFIRM = 0.20, _ADDON_AGAINST = -0.15
     assert positive["addon_value"] == pytest.approx(0.20)
     assert zero["addon_value"] == pytest.approx(0.0)
-    assert negative["addon_value"] == pytest.approx(-0.15)
+    assert negative["addon_value"] == pytest.approx(-0.25)
     assert positive["conviction"] > zero["conviction"] > negative["conviction"]
     assert positive["final_score"] > zero["final_score"] > negative["final_score"]
 
@@ -1507,23 +1506,34 @@ def test_calc_confluence_warns_when_adx_missing_soft_multiplier(monkeypatch):
     assert any("ADX unavailable" in str(w) for w in out.get("warnings", []))
 
 
-def test_forex_carry_feed_status_ok_when_carry_present(monkeypatch):
+def test_forex_raw_carry_penalty_removed_but_addon_still_uses_carry(monkeypatch):
     import carry_feed
 
-    monkeypatch.setattr(carry_feed, "get_carry_differential", lambda _display: 0.0)
-    result = _score(pair={"type": "forex", "display": "EUR/USD"})
-    assert result["feed_status"].get("forex_carry_cost") == "ok"
-
-
-def test_forex_carry_feed_status_error_when_carry_raises(monkeypatch):
-    import carry_feed
+    monkeypatch.setattr(carry_feed, "get_carry_z", lambda *_args, **_kwargs: 1.0)
 
     def boom(_display):
-        raise RuntimeError("carry unavailable")
+        raise AssertionError("cost penalty must not read raw carry differential")
 
     monkeypatch.setattr(carry_feed, "get_carry_differential", boom)
     result = _score(pair={"type": "forex", "display": "EUR/USD"})
-    assert result["feed_status"].get("forex_carry_cost") == "error"
+    assert result["addon_type"] == "carry"
+    assert result["addon_value"] == pytest.approx(0.20)
+    assert result["feed_status"].get("addon") == "carry:ok"
+    removed_key = "forex" + "_carry_cost"
+    assert removed_key not in result["feed_status"]
+
+
+def test_forex_carry_addon_error_remains_advisory_without_cost_status(monkeypatch):
+    import carry_feed
+
+    def boom(*_args, **_kwargs):
+        raise RuntimeError("carry unavailable")
+
+    monkeypatch.setattr(carry_feed, "get_carry_z", boom)
+    result = _score(pair={"type": "forex", "display": "EUR/USD"})
+    assert result["feed_status"].get("addon") == "carry:error"
+    removed_key = "forex" + "_carry_cost"
+    assert removed_key not in result["feed_status"]
 
 
 def test_conviction_floor_default_is_explicit_and_no_momentum_uses_floor_blend(monkeypatch):

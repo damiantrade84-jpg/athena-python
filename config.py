@@ -1707,6 +1707,8 @@ CONFIG: dict = {
             "require_choch": False,
         },
     },
+    "FACTOR_ADDON_CONFIRM_MAX": 0.20,
+    "FACTOR_ADDON_AGAINST_MIN": -0.25,
     "FACTOR_CRYPTO_ADDON_COMBO_CONFIRM_CAP": 0.25,
     "FACTOR_CRYPTO_ADDON_COMBO_AGAINST_CAP": -0.20,
     "EODHD_COMMODITY_TICKERS": {
@@ -2173,6 +2175,8 @@ _KNOWN_YAML_ONLY_KEYS = {
     "ENGINE_C_A_DEFAULT_MAX_SCORE",
     "ENGINE_C_A_DEFAULT_MAX_SCORE_BY_TYPE",
     "FACTOR_ADX_HARD_FAIL_CLASS",
+    "FACTOR_ADDON_AGAINST_MIN",
+    "FACTOR_ADDON_CONFIRM_MAX",
     "FACTOR_CONVICTION_FLOOR",
     "FACTOR_FUNDING_BASELINE",
     "FACTOR_FUNDING_NOISE_BAND",
@@ -2668,7 +2672,7 @@ def _fatal_config_validation(cfg: dict) -> None:
                 )
 
     # 2. Bound non-contradiction
-    _addon_confirm = float(cfg.get("FACTOR_ADDON_CONFIRM", 0.20))
+    _addon_confirm = float(cfg.get("FACTOR_ADDON_CONFIRM_MAX", cfg.get("FACTOR_ADDON_CONFIRM", 0.20)))
     _research_max = float((cfg.get("ENGINE_A_RESEARCH_LAB_FACTORS") or {}).get("MAX_ABS", 0.20))
     if abs(_addon_confirm - _research_max) > 1e-6:
         errors.append(
