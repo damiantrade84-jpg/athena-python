@@ -2913,6 +2913,23 @@ def test_engine_a_group_adjustments_enabled_reads_config(monkeypatch):
     assert factor_scoring._engine_a_group_adjustments_enabled() is True
 
 
+def test_adx_thresholds_use_explicit_score_group_keys(monkeypatch):
+    """Score-group ADX keys in config.yaml resolve before asset_type fallback."""
+    monkeypatch.setitem(
+        CONFIG,
+        "ADX_TREND_MIN_CLASS",
+        {"commodity": 25, "copper": 26},
+    )
+    monkeypatch.setitem(
+        CONFIG,
+        "FACTOR_ADX_HARD_FAIL_CLASS",
+        {"commodity": 10, "copper": 10},
+    )
+    trend_min, hard_fail = factor_scoring._resolve_adx_thresholds("commodity", "copper")
+    assert trend_min == pytest.approx(26.0)
+    assert hard_fail == pytest.approx(10.0)
+
+
 def test_cot_coverage_status_unsupported_and_no_coverage(monkeypatch):
     assert factor_scoring._cot_coverage_status("SOL/USDT") == "unsupported"
 
@@ -2922,6 +2939,19 @@ def test_cot_coverage_status_unsupported_and_no_coverage(monkeypatch):
         lambda _d: {"_cot_coverage": "no_coverage"},
     )
     assert factor_scoring._cot_coverage_status("Cocoa") == "no_coverage"
+
+
+def test_cot_stock_uses_macro_proxy_formula():
+    from cot_feed import _PAIR_FORMULA
+
+    assert _PAIR_FORMULA.get("AAPL") == [(1.0, "SP500")]
+    assert _PAIR_FORMULA.get("NVDA") == [(1.0, "NQ100")]
+
+
+def test_engine_a_cot_policy_present_in_config():
+    policy = CONFIG.get("ENGINE_A_COT_POLICY") or {}
+    assert policy.get("altcoin_unsupported") is True
+    assert policy.get("stock_macro_proxy") is True
 
 
 def test_resolve_funding_stats_builds_rolling_mean_std(monkeypatch):

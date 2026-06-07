@@ -272,15 +272,30 @@ ADX_TREND_MIN_CLASS:
   forex_exotics: 18
 
   commodity: 25
-  nat_gas: 27
+  precious_trackers: 25
+  energy_oil: 25
+  copper: 26
+  pgm_metals: 26
+  base_metals: 25
   softs: 25
+  commodity_other: 25
+  nat_gas: 27
 
   stock: 25
+  us_stock_single: 25
+  stock_other: 25
+  bond_tlt: 25
+  smallcap_em_etf: 25
 
   index: 25
+  us_indices_trackers: 25
+  eu_indices: 25
+  asian_indices: 25
+  index_other: 25
 
   etf: 25
   etf_bond: 25
+  unknown: 25
 
 # Per-class ADX hard-fail override.  Global default is 15 (from code).
 # Crypto class_min=15 collides with global hard_fail=15 leaving zero soft zone;
@@ -298,12 +313,27 @@ FACTOR_ADX_HARD_FAIL_CLASS:
   forex_other: 10
   forex_exotics: 9
   commodity: 10
-  nat_gas: 12
+  precious_trackers: 10
+  energy_oil: 10
+  copper: 10
+  pgm_metals: 10
+  base_metals: 10
   softs: 10
+  commodity_other: 10
+  nat_gas: 12
   stock: 10
+  us_stock_single: 10
+  stock_other: 10
+  bond_tlt: 10
+  smallcap_em_etf: 10
   index: 10
+  us_indices_trackers: 10
+  eu_indices: 10
+  asian_indices: 10
+  index_other: 10
   etf: 10
   etf_bond: 10
+  unknown: 10
 
 # Engine A fail-safe: when both D1 and H4 ADX are unavailable, block the signal
 # instead of assigning the old neutral 0.5 multiplier.
@@ -377,6 +407,23 @@ ENGINE_A_FACTOR_WEIGHTS_BY_CLASS:
   precious_trackers: { momentum: 0.40, addon: 0.35, base: 0.25 }
   energy_oil: { momentum: 0.40, addon: 0.35, base: 0.25 }
   nat_gas: { momentum: 0.35, addon: 0.35, base: 0.30 }
+  copper: { momentum: 0.42, addon: 0.35, base: 0.23 }
+  pgm_metals: { momentum: 0.40, addon: 0.35, base: 0.25 }
+  base_metals: { momentum: 0.43, addon: 0.35, base: 0.22 }
+  softs: { momentum: 0.45, addon: 0.35, base: 0.20 }
+  eu_indices: { momentum: 0.50, addon: 0.15, base: 0.35 }
+  asian_indices: { momentum: 0.50, addon: 0.15, base: 0.35 }
+  bond_tlt: { momentum: 0.48, addon: 0.18, base: 0.34 }
+  smallcap_em_etf: { momentum: 0.47, addon: 0.20, base: 0.33 }
+  crypto_btc: { momentum: 0.50, addon: 0.22, base: 0.28 }
+  crypto_eth: { momentum: 0.50, addon: 0.22, base: 0.28 }
+  crypto_alt_majors: { momentum: 0.50, addon: 0.20, base: 0.30 }
+  crypto_doge: { momentum: 0.50, addon: 0.18, base: 0.32 }
+  crypto_other: { momentum: 0.50, addon: 0.18, base: 0.32 }
+  forex_majors: { momentum: 0.50, addon: 0.22, base: 0.28 }
+  forex_crosses: { momentum: 0.50, addon: 0.20, base: 0.30 }
+  forex_exotics: { momentum: 0.50, addon: 0.20, base: 0.30 }
+  forex_other: { momentum: 0.50, addon: 0.20, base: 0.30 }
   # #2 (2026-05-28): crypto/forex previously fell back to code defaults
   # 0.50 / 0.30 / 0.20 (momentum/addon/base) — the addon (crypto funding, forex
   # carry) sat at an unreviewed 0.30. These are asset_type-level entries (caught via
@@ -1804,7 +1851,21 @@ ENGINE_B_ENFORCE_MAX_SL_PCT: true
 BYBIT_MIN_TP_PCT_OF_MARK: 0.10
 MAX_TP_PCT:
   crypto: 0.50
+  forex: 0.50
+  commodity: 0.50
+  index: 0.50
+  stock: 0.50
+  etf: 0.50
+  etf_bond: 0.50
   default: 0.50
+
+# Engine A COT addon policy (see cot_feed._PAIR_FORMULA and docs/audits/combined-audit-reverified-2026-06-07.md)
+# altcoin_unsupported: empty formula → feed_status cot_coverage=unsupported (no BTC proxy for alts)
+# stock_macro_proxy: single-name equities use SP500/NQ100 CME legs, not issuer-specific COT
+ENGINE_A_COT_POLICY:
+  altcoin_unsupported: true
+  stock_macro_proxy: true
+  stock_proxy_note: "US equities use E-mini SP500/NQ100 positioning, not single-stock CFTC reports"
 
 
 
@@ -2959,6 +3020,8 @@ ENGINE_B_USE_FORMING_FOR_TRIGGER: true
 # When true, apply NAKED_ENGINE.bos_volume_multiplier to BOS volume confirmation using
 # MT5 tick_volume (forex, stocks, indices, commodities). Default false: only crypto
 # uses exchange contract volume — see market_structure.NakedEngine.analyze_structure.
+# Do NOT enable for forex without backtest evidence: tick_volume ≠ exchange contract
+# volume and can produce false BOS confirmations. See combined-audit-reverified doc.
 ENGINE_B_BOS_VOLUME_FOR_TICKVOL: false
 
 

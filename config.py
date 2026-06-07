@@ -2710,6 +2710,19 @@ def _fatal_config_validation(cfg: dict) -> None:
                     f"ENGINE_A_SCORE_GROUP_MIN_CONFIDENCE[{key!r}] must be in [0, 1], got {val}"
                 )
 
+    _adx_trend = cfg.get("ADX_TREND_MIN_CLASS") or {}
+    _adx_hard = cfg.get("FACTOR_ADX_HARD_FAIL_CLASS") or {}
+    if isinstance(_adx_trend, dict) and isinstance(_adx_hard, dict):
+        for group in sorted(ENGINE_A_KNOWN_SCORE_GROUPS):
+            if group == "unknown":
+                continue
+            if group not in _adx_trend or group not in _adx_hard:
+                log.warning(
+                    "[CFG] score_group %r missing explicit ADX_TREND_MIN_CLASS and/or "
+                    "FACTOR_ADX_HARD_FAIL_CLASS — inherits asset_type via _resolve_class_keyed",
+                    group,
+                )
+
     # 2. Bound non-contradiction
     _addon_confirm = float(cfg.get("FACTOR_ADDON_CONFIRM_MAX", cfg.get("FACTOR_ADDON_CONFIRM", 0.20)))
     _research_max = float((cfg.get("ENGINE_A_RESEARCH_LAB_FACTORS") or {}).get("MAX_ABS", 0.20))

@@ -1849,17 +1849,18 @@ def resolve_engine_b_execution_levels(
                 _level_mode = "max_sl_exceeded"
                 _rr_source = "max_sl_exceeded"
 
+    _asset_class_lower = str(asset_class or "").lower()
     if (
         _exec_valid
         and _exec_tp is not None
         and _entry > 0
-        and str(asset_class or "").lower() == "crypto"
+        and _asset_class_lower
     ):
         try:
             from risk_engine import validate_tp_exchange_bounds
 
             _bounds_ok, _bounds_err = validate_tp_exchange_bounds(
-                _entry, _exec_tp, "crypto", config.CONFIG
+                _entry, _exec_tp, _asset_class_lower, config.CONFIG
             )
         except Exception:
             _bounds_ok = True
@@ -1901,7 +1902,7 @@ def resolve_engine_b_execution_levels(
                         _exec_sl, _exec_tp
                     )
                     _bounds_ok, _bounds_err = validate_tp_exchange_bounds(
-                        _entry, _exec_tp, "crypto", config.CONFIG
+                        _entry, _exec_tp, _asset_class_lower, config.CONFIG
                     )
             if not _bounds_ok:
                 _exec_valid = False

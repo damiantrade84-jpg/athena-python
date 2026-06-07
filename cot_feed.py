@@ -8,6 +8,13 @@ positioning z-scores as a directional factor for:
   Indices:     S&P 500, Nasdaq (SPY/QQQ) via E-mini futures
   Commodities: XAU/USD, XAG/USD via COMEX gold/silver (managed money)
 
+COT coverage policy (ENGINE_A_COT_POLICY in config.yaml):
+
+  Altcoins:    ``[]`` formula → intentionally **unsupported** (no BTC/ETH proxy).
+               factor_scoring reports feed_status cot_coverage=unsupported.
+  US stocks:   **Macro proxy** only — E-mini SP500/NQ100 legs, not issuer COT.
+  Softs/metals: Dedicated CFTC legs where mapped in ``_PAIR_FORMULA``.
+
 Signal:  z > 0 = speculators net long → bullish base / asset
          z < 0 = speculators net short → bearish
 

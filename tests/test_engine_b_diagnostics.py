@@ -1681,6 +1681,51 @@ def test_engine_b_structural_tp_below_min_rr_uses_fallback_rr_tp(monkeypatch):
     assert out["execution_levels_valid"] is True
 
 
+def test_resolve_engine_b_execution_levels_forex_tp_bounds_rejects_far_tp(monkeypatch):
+    """Forex execution TP must respect MAX_TP_PCT (parity with crypto bounds path)."""
+    import config as _cfg
+
+    monkeypatch.setitem(
+        _cfg.CONFIG,
+        "MAX_TP_PCT",
+        {"forex": 0.10, "default": 0.50},
+    )
+    out = resolve_engine_b_execution_levels(
+        direction="LONG",
+        entry=100.0,
+        structural_sl=98.5,
+        structural_tp=115.0,
+        atr=1.0,
+        style="intraday",
+        asset_class="forex",
+        min_rr=1.0,
+    )
+    assert out["execution_level_reject_reason"] == "tp_exchange_bounds"
+    assert out["execution_levels_valid"] is False
+
+
+def test_resolve_engine_b_execution_levels_forex_tp_within_bounds_passes(monkeypatch):
+    import config as _cfg
+
+    monkeypatch.setitem(
+        _cfg.CONFIG,
+        "MAX_TP_PCT",
+        {"forex": 0.10, "default": 0.50},
+    )
+    out = resolve_engine_b_execution_levels(
+        direction="LONG",
+        entry=100.0,
+        structural_sl=98.5,
+        structural_tp=108.0,
+        atr=1.0,
+        style="intraday",
+        asset_class="forex",
+        min_rr=1.0,
+    )
+    assert out["execution_levels_valid"] is True
+    assert out["execution_tp"] == pytest.approx(108.0)
+
+
 def test_engine_b_fallback_rr_preserves_sl_when_within_max_sl_pct(monkeypatch):
     """Fallback RR keeps structural SL when it already fits MAX_SL_PCT."""
     monkeypatch.setitem(config.CONFIG, "ENGINE_B_ALLOW_SYNTHETIC_FALLBACK_RR_TP", True)
