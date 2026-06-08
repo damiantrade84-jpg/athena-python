@@ -13093,13 +13093,22 @@ def analyze_pair(
 
                 _stale_tfs.append(f"{_tf}:{_sev}")
 
-            # Crypto-specific D1 staleness threshold: enforce max hours since last bar open.
+            # Crypto-specific D1 staleness threshold: enforce max hours since last bar open
+            # only when bucket lag is genuinely multi-bucket. Confirmed-only D1 can be
+            # 24-48h old by wall-clock while bucketLag stays at 1 (policy-normal).
             if pair.get("type") == "crypto" and d1:
                 try:
                     from scalp_engine import _coerce_utc_datetime, _current_utc_datetime
 
+                    _d1_fresh_diag = _freshness_diag.get("D1") or {}
+                    _d1_bucket_lag = int(_d1_fresh_diag.get("bucketLag") or 0)
+                    _d1_sev = str(_d1_fresh_diag.get("stalenessSeverity") or "")
+                    _genuine_multi_bucket = (
+                        _d1_bucket_lag >= 2
+                        or _d1_sev in ("stale_multi_bucket", "missing_current_bucket")
+                    )
                     _last_candle = d1[-1] if d1 else None
-                    if _last_candle:
+                    if _last_candle and _genuine_multi_bucket:
                         _last_time = _last_candle.get("time")
                         if _last_time:
                             _last_ts = _coerce_utc_datetime(_last_time)

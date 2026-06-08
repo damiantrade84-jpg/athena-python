@@ -603,12 +603,28 @@ def evaluate_execution_data_freshness(
                 has_confirmed_only_ok = True
                 break
     
+    freshness_by_tf: dict[str, dict[str, Any]] = {}
+    _cf = sig.get("candleFreshness")
+    if isinstance(_cf, dict):
+        for tf, diag in _cf.items():
+            if isinstance(diag, dict):
+                freshness_by_tf[str(tf or "").upper()] = diag
+
+    _policy_ok_severities = {
+        "d1_calendar_gap_policy_ok",
+        "intraday_calendar_gap_policy_ok",
+    }
+
     for source_key in ("candleFreshness", "candleFetchMeta"):
         meta = sig.get(source_key)
         if not isinstance(meta, dict):
             continue
         for tf, diag in meta.items():
             if not isinstance(diag, dict):
+                continue
+            tf_u = str(tf or "").upper()
+            # candleFreshness is authoritative per TF; fetch meta must not override it.
+            if source_key == "candleFetchMeta" and tf_u in freshness_by_tf:
                 continue
             severity = diag.get("stalenessSeverity")
             if severity:
@@ -617,8 +633,8 @@ def evaluate_execution_data_freshness(
                 if has_confirmed_only_ok and severity == "stale_1_bucket":
                     # Skip blocking on stale_1_bucket when policy-aware status is CONFIRMED_ONLY_OK
                     continue
-                if severity == "d1_calendar_gap_policy_ok":
-                    # Calendar gap policy is intentional D1 weekend tolerance; do not block
+                if severity in _policy_ok_severities:
+                    # Calendar gap policy is intentional session/weekend tolerance; do not block
                     continue
                 _add(tf, severity, source_key, diag)
 

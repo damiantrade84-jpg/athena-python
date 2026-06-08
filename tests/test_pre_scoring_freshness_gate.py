@@ -155,6 +155,44 @@ class TestPreScoringFreshnessGateForex:
         assert diag["stalenessSeverity"] == "stale_multi_bucket"
         assert diag["bucketLag"] > 1
 
+    def test_crypto_d1_lag_1_with_40h_wall_clock_not_hours_stale(self):
+        """Confirmed-only crypto D1: ~40h age with bucketLag=1 must not trigger hours gate."""
+        pair = {"type": "crypto", "source": "binance", "display": "BTCUSDT"}
+        diag = candle_freshness_diagnostic(
+            pair,
+            "D1",
+            [_candle("2026-06-07T00:00:00Z"), _candle("2026-06-08T00:00:00Z")],
+            time_now=_epoch("2026-06-09T16:00:00Z"),
+        )
+        assert diag["stalenessSeverity"] == "stale_1_bucket"
+        assert diag["bucketLag"] == 1
+        bucket_lag = int(diag.get("bucketLag") or 0)
+        sev = str(diag.get("stalenessSeverity") or "")
+        genuine_multi_bucket = (
+            bucket_lag >= 2
+            or sev in ("stale_multi_bucket", "missing_current_bucket")
+        )
+        assert genuine_multi_bucket is False
+
+    def test_crypto_d1_multi_bucket_triggers_hours_gate_path(self):
+        """Genuine multi-bucket crypto D1 remains eligible for hours-based pre-score block."""
+        pair = {"type": "crypto", "source": "binance", "display": "BTCUSDT"}
+        diag = candle_freshness_diagnostic(
+            pair,
+            "D1",
+            [_candle("2026-06-05T00:00:00Z"), _candle("2026-06-06T00:00:00Z")],
+            time_now=_epoch("2026-06-09T16:00:00Z"),
+        )
+        assert diag["stalenessSeverity"] == "stale_multi_bucket"
+        assert int(diag.get("bucketLag") or 0) >= 2
+        bucket_lag = int(diag.get("bucketLag") or 0)
+        sev = str(diag.get("stalenessSeverity") or "")
+        genuine_multi_bucket = (
+            bucket_lag >= 2
+            or sev in ("stale_multi_bucket", "missing_current_bucket")
+        )
+        assert genuine_multi_bucket is True
+
 
 class TestFetchMT5OffsetDetection:
     """fetch_mt5 bar-based timezone detection logic."""
