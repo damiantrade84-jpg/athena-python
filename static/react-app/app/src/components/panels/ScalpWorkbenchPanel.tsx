@@ -26,7 +26,7 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Switch } from '@/components/ui/switch';
 import VolumeModeField from '@/components/execution/VolumeModeField';
-import { useApiPost } from '@/hooks/useApiData';
+import { useApiPoll, useApiPost } from '@/hooks/useApiData';
 import {
   fetchRiskPreview,
   formatRiskPreviewLine,
@@ -869,6 +869,7 @@ export default function ScalpWorkbenchPanel() {
     aiReviewProvider,
     setAiReviewProvider,
   } = useStore();
+  const { data: health } = useApiPoll<{ paper_mode?: boolean }>('/api/health', 60_000);
   const { post: postScan, loading: scanLoading, error: scanError } = useApiPost<ScalpScanResponse>();
   const { post: postExecute, loading: executingScalp } = useApiPost<ScalpExecuteResponse>();
   const [symbolOverride, setSymbolOverride] = useState('');
@@ -1034,6 +1035,7 @@ export default function ScalpWorkbenchPanel() {
     && ['WAIT_FOR_LEVEL', 'WAIT_FOR_ZONE', 'WATCH_ONLY'].includes(String(suggestedPlan?.action || '').toUpperCase()),
   );
 
+  const isPaper = Boolean(health?.paper_mode);
   const executeBlockReason = useMemo(
     () => evaluateScalpExecuteBlock({
       signal: activeSignal
@@ -1045,8 +1047,9 @@ export default function ScalpWorkbenchPanel() {
       aiReview: scalpAiReviewResponse,
       suggestedTradePlan: suggestedPlan,
       isTestMode,
+      isPaper,
     }),
-    [activeSignal, activeUi.sourceContract.strictOrderflowSourcePass, scalpAiReviewResponse, suggestedPlan, isTestMode],
+    [activeSignal, activeUi.sourceContract.strictOrderflowSourcePass, scalpAiReviewResponse, suggestedPlan, isTestMode, isPaper],
   );
   const showViewSuggestedTrades = Boolean(flagStatus) || symbolWatches.length > 0;
   const { runner: suggestedTradeRunner } = useSuggestedTradeRunnerStatus();

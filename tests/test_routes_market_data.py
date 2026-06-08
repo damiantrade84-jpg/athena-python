@@ -181,6 +181,7 @@ def test_engine_b_overlays_preserve_legacy_structure_contract():
                 "macro_swing_sequence": "LH_LL",
                 "bos_confirmed": True,
                 "choch_confirmed": False,
+                "struct_atr": 2.5,
             },
             {"display": "BTC/USDT"},
             None,
@@ -209,6 +210,7 @@ def test_engine_b_overlays_preserve_legacy_structure_contract():
     assert len(payload["active_fvgs"]) == 2
     assert all(not fvg.get("mitigated") for fvg in payload["active_fvgs"])
     assert payload["breaker_block"]["level"] == 101.25
+    assert payload["struct_atr"] == pytest.approx(2.5)
     pp = payload["price_precision"]
     assert pp["score_group"] == "crypto_btc"
     assert pp["precision"] == 1

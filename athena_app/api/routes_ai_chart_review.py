@@ -48,6 +48,17 @@ from ai_review.validation import decode_screenshot_bytes, validate_request
 
 log = logging.getLogger("sentinel.ai_chart_review")
 
+_ALLOWED_REQUEST_KEYS = frozenset(
+    {"symbol", "timeframe", "provider", "screenshot_base64", "screenshot_meta"}
+)
+
+
+def _reject_extra_request_keys(data: dict[str, Any]) -> str | None:
+    extra = sorted(set(data.keys()) - _ALLOWED_REQUEST_KEYS)
+    if extra:
+        return f"unexpected request keys: {', '.join(extra)}"
+    return None
+
 
 def _resolve_provider_name(
     data: dict[str, Any],
@@ -251,6 +262,10 @@ def register_ai_chart_review_routes(app, runtime: SimpleNamespace) -> None:
             return jsonify({"error": "AI chart review disabled"}), 503
 
         data = request.get_json(silent=True) or {}
+        extra_err = _reject_extra_request_keys(data)
+        if extra_err:
+            return jsonify({"error": extra_err}), 400
+
         err = validate_request(data, cfg)
         if err:
             return jsonify({"error": err.message}), err.status

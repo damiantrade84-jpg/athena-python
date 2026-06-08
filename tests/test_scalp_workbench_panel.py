@@ -107,6 +107,8 @@ def test_scalp_workbench_execute_scalp_button():
     assert "/api/scalp-execute" in source
     assert "buildScalpExecutePayload" in source
     assert "evaluateScalpExecuteBlock" in source
+    assert "useApiPoll<{ paper_mode?: boolean }>('/api/health'" in source
+    assert "isPaper" in source
     assert "Confirm Scalp Execution" in source
     assert "refresh/revalidate before order" in source
     assert "{executeBlockReason &&" in source

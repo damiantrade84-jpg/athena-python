@@ -163,6 +163,8 @@ const STUDY_PANEL_INDICATORS = {
   volumeMa: { key: 'volumeMa', label: 'Volume MA20', period: 20, color: INDICATOR_COLORS.volumeMa },
 } satisfies Record<string, IndicatorDefinition>;
 
+// Advisory-only: stale overlay shows a UI badge but does not block execute.
+// TV Chart execute uses Engine A signal (/api/quick-execute); overlay fetch is visual-only.
 const ENGINE_B_OVERLAY_STALE_SEC = 300;
 
 function buildStudyIndicatorDefs(periods: { rsi: number; adx: number; atr: number }) {
@@ -322,8 +324,6 @@ interface EngineBOverlayPayload {
   bos_confirmed?: boolean;
   choch_confirmed?: boolean;
   liquidity_sweep?: boolean;
-  atr?: number | string | null;
-  atr_value?: number | string | null;
   struct_atr?: number | string | null;
 }
 
@@ -1032,8 +1032,8 @@ function engineBOverlayCollisionThreshold(
   const referencePrice = prices.length > 0
     ? prices.reduce((sum, price) => sum + price, 0) / prices.length
     : 1;
-  const atr = firstNumber(payload.atr, payload.atr_value, payload.struct_atr);
-  if (atr != null && atr > 0) return atr * 0.20;
+  const structAtr = firstNumber(payload.struct_atr);
+  if (structAtr != null && structAtr > 0) return structAtr * 0.20;
   return 0.0008 * Math.abs(referencePrice);
 }
 
@@ -1126,7 +1126,6 @@ function engineBOverlayLines(payload: EngineBOverlayPayload | null, enabled: boo
     });
   }
   const threshold = engineBOverlayCollisionThreshold(payload, lines);
-  // Collision threshold: relative fallback — EngineBOverlayPayload has no ATR field (see routes_market_data normalizer).
   return mergeEngineBOverlayLines(lines, threshold);
 }
 

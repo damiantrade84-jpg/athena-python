@@ -271,6 +271,7 @@ export function canExecuteEngineASignalTier(signal: EngineASignal | null): boole
   return tier === 'trade' || tier === 'criteria' || signal.trade === true;
 }
 
+/** Engine A execute gate. Engine B overlay staleness is advisory-only (see TVChartPanel). */
 export function evaluateTvChartExecuteBlock(args: {
   signal: EngineASignal | null;
   chartSymbolKey: string | null;
@@ -392,9 +393,11 @@ export function evaluateScalpExecuteBlock(args: {
   aiReview: ScalpAIChartReviewResponse | null;
   suggestedTradePlan?: SuggestedTradePlan | null;
   isTestMode?: boolean;
+  isPaper?: boolean;
 }): string | null {
-  const { signal, aiReview, suggestedTradePlan, isTestMode } = args;
+  const { signal, aiReview, suggestedTradePlan, isTestMode, isPaper } = args;
   if (isTestMode) return 'Test mode';
+  if (isPaper) return 'Paper mode';
   if (!signal) return 'No scalp candidate';
   const direction = String(signal.direction || '').toUpperCase();
   if (direction !== 'LONG' && direction !== 'SHORT') return 'Direction missing';

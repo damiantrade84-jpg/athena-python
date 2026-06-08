@@ -269,6 +269,17 @@ def test_route_rejects_missing_symbol_or_timeframe(tmp_audit_db):
     assert resp.status_code == 400
 
 
+def test_route_rejects_extra_client_score_keys(tmp_audit_db):
+    app = _make_app(tmp_audit_db)
+    client = app.test_client()
+    body = _base_request(confluence_score=99, passed=True)
+    with patch("ai_review.providers.anthropic_provider.call_anthropic_chart_review") as mock_call:
+        resp = client.post("/api/ai/chart-review", json=body)
+        assert resp.status_code == 400
+        assert "unexpected request keys" in resp.get_json()["error"]
+        mock_call.assert_not_called()
+
+
 def test_route_rejects_non_png_data_url(tmp_audit_db):
     app = _make_app(tmp_audit_db)
     client = app.test_client()

@@ -572,6 +572,8 @@ def _normalize_engine_b_overlay_payload(
     if not has_overlay:
         warnings.append("engine_b_overlays_missing")
 
+    struct_atr = _safe_float(raw.get("struct_atr"))
+
     return {
         "symbol": symbol,
         "timeframe": timeframe,
@@ -596,6 +598,7 @@ def _normalize_engine_b_overlay_payload(
         "choch_confirmed": bool(raw.get("choch_confirmed", False)),
         "liquidity_sweep": bool(raw.get("liquidity_sweep", False)),
         "structural_verdict": raw.get("structural_verdict"),
+        "struct_atr": struct_atr,
         "overlay_limits": {
             "order_blocks": 2,
             "active_fvgs": 2,
