@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from ai_review.persistence import find_scalp_review_by_id
+from ai_scalp_review.scalp_verdict import build_scalp_verdict_comparison
 from symbol_matching import symbol_match_keys, symbols_match
 
 
@@ -41,6 +42,53 @@ def scalp_ai_review_allows_entry(ai_review: dict[str, Any] | None) -> bool:
     if verdict in ("NO_TRADE", "INVALID"):
         return False
     return True
+
+
+def _scalp_verdict_comparison_block(
+    review: dict[str, Any],
+    *,
+    engine_d_ctx: dict[str, Any],
+    ai_review: dict[str, Any],
+) -> str | None:
+    """Mirror UI scalpAiReviewBlocksExecute concordance checks."""
+    structured = ai_review.get("structured") or {}
+    if not isinstance(structured, dict):
+        structured = {}
+    model_comparison = structured.get("scalpVerdictComparison") or structured.get(
+        "scalp_verdict_comparison"
+    )
+    if not isinstance(model_comparison, dict):
+        model_comparison = None
+    comparison = (
+        review.get("scalpVerdictComparison")
+        or review.get("scalp_verdict_comparison")
+        or model_comparison
+    )
+    if not isinstance(comparison, dict):
+        comparison = build_scalp_verdict_comparison(
+            engine_d_ctx,
+            ai_review,
+            model_comparison=model_comparison,
+        )
+    final_decision = str(comparison.get("finalDecision") or "").lower()
+    if final_decision in ("reject", "watch"):
+        return "AI_REVIEW_CONCORDANCE_REJECT"
+    if comparison.get("chartContradictsEntryTiming") is True:
+        return "AI_REVIEW_ENTRY_TIMING_CONTRADICTED"
+    summary = (
+        review.get("aiReviewSummary")
+        or review.get("ai_review_summary")
+        or structured.get("aiReviewSummary")
+        or structured.get("ai_review_summary")
+    )
+    action = ""
+    if isinstance(summary, dict):
+        action = str(summary.get("humanAction") or "").lower()
+    if not action:
+        action = str(ai_review.get("human_action") or "").lower()
+    if action in ("wait", "reject", "watch", "needs_fresher_data", "needs_better_rr"):
+        return "AI_REVIEW_HUMAN_ACTION_BLOCK"
+    return None
 
 
 def _to_float(value: Any) -> float | None:
@@ -212,6 +260,14 @@ def resolve_engine_d_execute_gate(
     ai_review = review.get("ai_review") or {}
     if not scalp_ai_review_allows_entry(ai_review):
         return "AI_REVIEW_NOT_ENTRY_NOW", None
+
+    concordance_block = _scalp_verdict_comparison_block(
+        review,
+        engine_d_ctx=ctx,
+        ai_review=ai_review if isinstance(ai_review, dict) else {},
+    )
+    if concordance_block:
+        return concordance_block, None
 
     grade = str(signal.get("ai_grade") or signal.get("grade") or "").upper()
     if grade in ("A", "B"):

@@ -320,7 +320,6 @@ def _current_policy_snapshot() -> dict[str, Any]:
     ne = CONFIG.get("NAKED_ENGINE") or {}
     styles = ne.get("style_profiles") or {}
     return {
-        "engine_a_backtest": dict(CONFIG.get("BT_MIN") or {}),
         "engine_a_live": dict(CONFIG.get("ENGINE_A_SCORE_GROUP_THRESHOLDS") or {}),
         "engine_b_styles": {
             key: {
@@ -339,7 +338,6 @@ def _recommendation_id(scope_type: str, scope_key: str, current_value: float, pr
 
 def _build_engine_a_recommendations(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
-    current_bt = dict(CONFIG.get("BT_MIN") or {})
     current_live = dict(CONFIG.get("ENGINE_A_SCORE_GROUP_THRESHOLDS") or {})
 
     for asset_type, engine_name in _ENGINE_A_BY_ASSET.items():
@@ -352,40 +350,40 @@ def _build_engine_a_recommendations(rows: list[dict[str, Any]]) -> list[dict[str
         avg_sqn = round(sum(float(row.get("sqn") or 0.0) for row in bucket) / pair_count, 2)
         avg_wr = round(sum(float(row.get("win_rate") or 0.0) for row in bucket) / pair_count, 2)
 
-        cur_bt = float(current_bt.get(asset_type, 0.0) or 0.0)
-        bt_step = _BT_STEP.get(asset_type, 0.05)
-        bt_low, bt_high = _BT_LIMITS.get(asset_type, (0.30, 2.00))
-        proposed_bt = cur_bt
+        cur_live = float(current_live.get(asset_type, 0.0) or 0.0)
+        live_step = _LIVE_STEP
+        live_low, live_high = _LIVE_LIMITS.get(asset_type, (0.60, 2.50))
+        proposed_live = cur_live
         direction = None
         reasons: list[str] = []
 
         if avg_sqn <= -0.50 and pair_count >= 5:
-            proposed_bt = _clamp(_round_to_step(cur_bt + bt_step, bt_step), bt_low, bt_high)
+            proposed_live = _clamp(_round_to_step(cur_live + live_step, live_step), live_low, live_high)
             direction = "tighten"
             reasons.append(
                 f"Latest Engine A cohort averages SQN {avg_sqn:.2f} across {pair_count} {asset_type} pairs."
             )
         elif avg_trades < _ENGINE_A_TRADE_FLOOR.get(asset_type, 25.0) and avg_sqn >= 0.25 and pair_count >= 4:
-            proposed_bt = _clamp(_round_to_step(cur_bt - bt_step, bt_step), bt_low, bt_high)
+            proposed_live = _clamp(_round_to_step(cur_live - live_step, live_step), live_low, live_high)
             direction = "loosen"
             reasons.append(
                 f"Latest Engine A cohort averages only {avg_trades:.1f} trades per pair with SQN {avg_sqn:.2f}."
             )
 
-        if direction and abs(proposed_bt - cur_bt) >= 0.0001:
+        if direction and abs(proposed_live - cur_live) >= 0.0001:
             scope_key = asset_type
             out.append(
                 {
-                    "id": _recommendation_id("engine_a_bt_class", scope_key, cur_bt, proposed_bt),
-                    "scope_type": "engine_a_bt_class",
+                    "id": _recommendation_id("engine_a_live_class", scope_key, cur_live, proposed_live),
+                    "scope_type": "engine_a_live_class",
                     "scope_key": scope_key,
                     "engine": "engine_a",
-                    "environment": "backtest",
-                    "title": f"Engine A Backtest | {_ASSET_LABELS.get(asset_type, asset_type.title())}",
-                    "subtitle": "Class-level BT_MIN update",
-                    "current_value": round(cur_bt, 4),
-                    "proposed_value": round(proposed_bt, 4),
-                    "delta": round(proposed_bt - cur_bt, 4),
+                    "environment": "live",
+                    "title": f"Engine A Live | {_ASSET_LABELS.get(asset_type, asset_type.title())}",
+                    "subtitle": "Class-level ENGINE_A_SCORE_GROUP_THRESHOLDS update",
+                    "current_value": round(cur_live, 4),
+                    "proposed_value": round(proposed_live, 4),
+                    "delta": round(proposed_live - cur_live, 4),
                     "direction": direction,
                     "confidence": _confidence_from_count(pair_count, avg_trades),
                     "metrics": {
@@ -398,39 +396,6 @@ def _build_engine_a_recommendations(rows: list[dict[str, Any]]) -> list[dict[str
                     "requires_human_approval": True,
                 }
             )
-
-            cur_live = float(current_live.get(asset_type, 0.0) or 0.0)
-            live_low, live_high = _LIVE_LIMITS.get(asset_type, (0.60, 2.50))
-            ratio = (cur_live / cur_bt) if cur_bt > 0 else (1.65 if asset_type != "forex" else 1.60)
-            proposed_live = _clamp(_round_to_step(proposed_bt * ratio, _LIVE_STEP), live_low, live_high)
-            if abs(proposed_live - cur_live) >= 0.0001:
-                out.append(
-                    {
-                        "id": _recommendation_id("engine_a_live_class", scope_key, cur_live, proposed_live),
-                        "scope_type": "engine_a_live_class",
-                        "scope_key": scope_key,
-                        "engine": "engine_a",
-                        "environment": "live",
-                        "title": f"Engine A Live | {_ASSET_LABELS.get(asset_type, asset_type.title())}",
-                        "subtitle": "Class-level ENGINE_A_SCORE_GROUP_THRESHOLDS update",
-                        "current_value": round(cur_live, 4),
-                        "proposed_value": round(proposed_live, 4),
-                        "delta": round(proposed_live - cur_live, 4),
-                        "direction": direction,
-                        "confidence": _confidence_from_count(pair_count, avg_trades),
-                        "metrics": {
-                            "pairs": pair_count,
-                            "avg_trades": avg_trades,
-                            "avg_sqn": avg_sqn,
-                            "avg_win_rate": avg_wr,
-                        },
-                        "reasons": reasons
-                        + [
-                            f"Live threshold is scaled from the current live/backtest ratio ({ratio:.2f}x)."
-                        ],
-                        "requires_human_approval": True,
-                    }
-                )
 
     return out
 

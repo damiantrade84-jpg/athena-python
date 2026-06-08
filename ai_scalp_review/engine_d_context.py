@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+
+from ai_review.engine_a_context import select_ohlcv_bars_for_chart
 from typing import Any, Callable
 
 from ai_scalp_review.session_context import (
@@ -417,7 +419,7 @@ def assemble_engine_d_context(
         "marketLocation": picked.get("marketLocation") or {},
         "aggressionContext": picked.get("aggressionContext") or {},
         "sourceContract": picked.get("sourceContract") or {},
-        "ohlcv_bars": [],
+        "ohlcv_bars": select_ohlcv_bars_for_chart(picked, timeframe, screenshot_meta),
     }
     ctx["mismatch_warnings"] = _build_mismatch_warnings(ctx, screenshot_meta)
     ctx["clientChartSnapshot"] = sanitize_client_chart_snapshot(screenshot_meta)

@@ -277,7 +277,7 @@ def register_status_routes(app, runtime: SimpleNamespace) -> None:
     )
     app.add_url_rule(
         "/api/kimi/conductor/last",
-        "api_conductor_last",
+        "api_kimi_conductor_last",
         api_conductor_last,
         methods=["GET"],
     )

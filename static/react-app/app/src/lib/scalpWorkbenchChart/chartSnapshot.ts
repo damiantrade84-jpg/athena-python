@@ -77,8 +77,12 @@ export function buildScalpChartSnapshot(args: BuildChartSnapshotArgs): ScalpChar
           orderBlocks: args.engineB.order_blocks ?? [],
           fvgs: args.engineB.active_fvgs ?? [],
           breakerBlock: null,
-          bosLevel: args.engineB.bos_data?.level ?? null,
-          chochLevel: args.engineB.choch_data?.level ?? null,
+          bosLevel:
+            args.engineB.bos_data?.last_broken_high
+            ?? args.engineB.bos_data?.last_broken_low
+            ?? args.engineB.bos_data?.level
+            ?? null,
+          chochLevel: args.engineB.choch_data?.choch_level ?? args.engineB.choch_data?.level ?? null,
           swingSequence: args.engineB.current_swing_sequence ?? null,
         }
       : {

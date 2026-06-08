@@ -1,0 +1,40 @@
+"""Regression tests for aggressive bug-sweep fixes."""
+
+from __future__ import annotations
+
+import sys
+from importlib.util import module_from_spec, spec_from_file_location
+from pathlib import Path
+
+
+def _load_athena_module():
+    path = Path(__file__).resolve().parents[1] / "athena.py"
+    spec = spec_from_file_location("athena_bug_sweep_module", path)
+    module = module_from_spec(spec)
+    sys.modules[spec.name] = module
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_bt_min_api_rejects_backtest_chain_flag():
+    athena_module = _load_athena_module()
+    client = athena_module.app.test_client()
+    resp = client.post(
+        "/api/bt-min",
+        json={"backtest_use_bt_min_thresholds": True},
+    )
+    assert resp.status_code == 400
+    data = resp.get_json()
+    assert "retired" in str(data.get("error", "")).lower()
+
+
+def test_bt_min_get_does_not_expose_dual_threshold_chain():
+    athena_module = _load_athena_module()
+    client = athena_module.app.test_client()
+    resp = client.get("/api/bt-min")
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data.get("backtest_uses_bt_min_chain") is False
+    assert data.get("backtest_use_bt_min_thresholds") is False
+    assert "live_class" in data

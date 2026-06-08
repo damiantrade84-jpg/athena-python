@@ -1684,6 +1684,8 @@ def fetch_yfinance(sym, tf, limit):
         import pandas as pd
 
         try:
+            from pathlib import Path
+
             _yf_cache_dir = Path(__file__).resolve().parent / ".yfinance-cache"
             _yf_cache_dir.mkdir(parents=True, exist_ok=True)
             if hasattr(yf, "set_tz_cache_location"):
@@ -3140,7 +3142,7 @@ from scoring import (  # noqa: E402
 
 from config import _json_safe  # noqa: E402
 from engine_c import compute_consensus, apply_vision  # noqa: E402
-from athena_runtime import executed_signals  # noqa: E402
+from athena_runtime import executed_signals, rt  # noqa: E402
 from vision_data import (  # noqa: E402
     asdict_safe as _vision_asdict_safe,
     create_vision_label as _create_vision_label,
@@ -8934,57 +8936,35 @@ def api_scan_settings():
 
 @app.route("/api/bt-min", methods=["GET", "POST"])
 def api_bt_min():
-    """GET: BT_MIN + ENGINE_A_SCORE_GROUP_THRESHOLDS metadata.
-    POST: update BT_MIN class floors and/or backtest_use_bt_min_thresholds (backtest only).
-    Body: {"crypto": 0.55, ...} and optional {"backtest_use_bt_min_thresholds": true}
+    """GET/POST live Engine A class thresholds (ENGINE_A_SCORE_GROUP_THRESHOLDS).
+
+    Stage 4.2: BT_MIN / BACKTEST_USE_BT_MIN_THRESHOLDS are retired — this route
+    only exposes and updates live runtime thresholds for dashboard compatibility.
     """
     asset_classes = ("crypto", "forex", "commodity", "stock", "index")
-    cfg_path = os.path.join(os.path.dirname(__file__), "config.yaml")
 
     if request.method == "GET":
-        use_bt = bool(
-            CONFIG.get("BACKTEST_USE_BT_MIN_THRESHOLDS", False)
-            or CONFIG.get("RESEARCH_MODE", False)
-        )
+        live_class = dict(CONFIG.get("ENGINE_A_SCORE_GROUP_THRESHOLDS") or {})
         return jsonify(
             {
-                "bt_min": dict(CONFIG.get("BT_MIN") or {}),
-                "live_class": dict(CONFIG.get("ENGINE_A_SCORE_GROUP_THRESHOLDS") or {}),
+                "live_class": live_class,
+                "bt_min": live_class,
                 "min_confluence_class_role": "active_runtime_config",
                 "engine_a_active_gate": _ENGINE_A_ACTIVE_GATE_HELP,
-                "backtest_use_bt_min_thresholds": bool(
-                    CONFIG.get("BACKTEST_USE_BT_MIN_THRESHOLDS", False)
-                ),
+                "backtest_use_bt_min_thresholds": False,
                 "research_mode": bool(CONFIG.get("RESEARCH_MODE", False)),
-                "backtest_uses_bt_min_chain": use_bt,
+                "backtest_uses_bt_min_chain": False,
             }
         )
 
     data = request.get_json(silent=True) or {}
-
     if "backtest_use_bt_min_thresholds" in data:
-        try:
-            CONFIG["BACKTEST_USE_BT_MIN_THRESHOLDS"] = bool(
-                data["backtest_use_bt_min_thresholds"]
-            )
-            _persist_backtest_bt_chain_flag_yaml(
-                cfg_path, CONFIG["BACKTEST_USE_BT_MIN_THRESHOLDS"]
-            )
-            log.info(
-                "[BT_MIN] BACKTEST_USE_BT_MIN_THRESHOLDS=%s (persisted)",
-                CONFIG["BACKTEST_USE_BT_MIN_THRESHOLDS"],
-            )
-        except Exception as e:
-            log.error(f"Failed to persist BACKTEST_USE_BT_MIN_THRESHOLDS: {e}")
-            return jsonify(
-                {
-                    "saved": False,
-                    "error": str(e),
-                    "backtest_use_bt_min_thresholds": bool(
-                        CONFIG.get("BACKTEST_USE_BT_MIN_THRESHOLDS", False)
-                    ),
-                }
-            ), 500
+        return jsonify(
+            {
+                "error": "BACKTEST_USE_BT_MIN_THRESHOLDS retired (Stage 4.2)",
+                "saved": False,
+            }
+        ), 400
 
     new_vals = {}
     for cls in asset_classes:
@@ -9002,45 +8982,21 @@ def api_bt_min():
         new_vals[cls] = round(val, 4)
 
     if not new_vals:
-        if "backtest_use_bt_min_thresholds" in data:
-            use_bt = bool(
-                CONFIG.get("BACKTEST_USE_BT_MIN_THRESHOLDS", False)
-                or CONFIG.get("RESEARCH_MODE", False)
-            )
-            return jsonify(
-                {
-                    "saved": True,
-                    "bt_min": dict(CONFIG.get("BT_MIN") or {}),
-                    "backtest_use_bt_min_thresholds": bool(
-                        CONFIG.get("BACKTEST_USE_BT_MIN_THRESHOLDS", False)
-                    ),
-                    "research_mode": bool(CONFIG.get("RESEARCH_MODE", False)),
-                    "backtest_uses_bt_min_chain": use_bt,
-                }
-            )
         return jsonify({"error": "No valid keys provided"}), 400
 
     try:
-        current = _apply_bt_min_updates(new_vals)
+        current = _apply_score_group_threshold_updates(new_vals)
     except Exception as e:
-        log.error(f"Failed to persist BT_MIN to config.yaml: {e}")
-        return jsonify({"saved": False, "error": str(e), "bt_min": dict(CONFIG.get('BT_MIN') or {})}), 500
+        log.error(f"Failed to persist ENGINE_A_SCORE_GROUP_THRESHOLDS: {e}")
+        return jsonify(
+            {
+                "saved": False,
+                "error": str(e),
+                "live_class": dict(CONFIG.get("ENGINE_A_SCORE_GROUP_THRESHOLDS") or {}),
+            }
+        ), 500
 
-    use_bt = bool(
-        CONFIG.get("BACKTEST_USE_BT_MIN_THRESHOLDS", False)
-        or CONFIG.get("RESEARCH_MODE", False)
-    )
-    return jsonify(
-        {
-            "saved": True,
-            "bt_min": current,
-            "backtest_use_bt_min_thresholds": bool(
-                CONFIG.get("BACKTEST_USE_BT_MIN_THRESHOLDS", False)
-            ),
-            "research_mode": bool(CONFIG.get("RESEARCH_MODE", False)),
-            "backtest_uses_bt_min_chain": use_bt,
-        }
-    )
+    return jsonify({"saved": True, "live_class": current, "bt_min": current})
 
 
 def _persist_naked_style_profiles_yaml(cfg_path: str, full_profiles: dict) -> None:
@@ -9487,9 +9443,11 @@ def api_advisory_threshold_approve(rec_id):
         scope_key = recommendation.get("scope_key")
         proposed_value = float(recommendation.get("proposed_value"))
         if scope_type == "engine_a_bt_class":
-            applied = {"bt_min": _apply_bt_min_updates({scope_key: proposed_value})}
+            return jsonify(
+                {"error": "engine_a_bt_class recommendations retired (Stage 4.2 — use live thresholds only)"}
+            ), 400
         elif scope_type == "engine_a_live_class":
-            applied = {"live_class": _apply_live_confluence_updates({scope_key: proposed_value})}
+            applied = {"live_class": _apply_score_group_threshold_updates({scope_key: proposed_value})}
         elif scope_type == "engine_b_style":
             applied = {"style_profiles": _apply_naked_style_score_updates({scope_key: proposed_value})}
         else:
@@ -10411,6 +10369,72 @@ def api_scalp_execute():
 
         _volume_mode, _exec_context, _ = parse_execution_volume_args(payload)
         _sizing_override = merge_scalp_sizing_override(_volume_mode, payload, signal)
+
+        _rebase_error = None
+        try:
+            from scalp_engine import (
+                _guess_asset_type,
+                _scalp_min_rr_for_group,
+                calculate_scalp_levels,
+            )
+
+            _bid = float(symbol_info.get("bid") or 0)
+            _ask = float(symbol_info.get("ask") or 0)
+            _live_px = (_bid + _ask) / 2 if _bid > 0 and _ask > 0 else _bid or _ask
+            _scan_px = float(signal.get("price") or 0)
+            _vp = {
+                "poc": float(signal.get("vp_poc") or 0),
+                "vah": float(signal.get("vp_vah") or 0),
+                "val": float(signal.get("vp_val") or 0),
+                "lvn_levels": [],
+            }
+            if _live_px > 0 and _vp["poc"] > 0 and _vp["vah"] > 0 and _vp["val"] > 0:
+                _asset_type = _guess_asset_type(symbol)
+                _score_group = get_pair_score_group(
+                    {"display": symbol, "symbol": symbol, "type": _asset_type}
+                )
+                _min_rr = _scalp_min_rr_for_group(_asset_type, _score_group)
+                _rebased = calculate_scalp_levels(
+                    signal.get("direction", "LONG"),
+                    _live_px,
+                    _vp,
+                    signal.get("zone_type", "trend_continuation"),
+                    symbol_info,
+                    _asset_type,
+                    min_rr_override=_min_rr,
+                    score_group=_score_group,
+                )
+                drift_pct = abs(_live_px - _scan_px) / _scan_px * 100 if _scan_px else 0
+                if _rebased.get("rr_below_min"):
+                    _rebase_error = (
+                        f"VP structure invalidated by price drift ({drift_pct:.2f}% since scan). "
+                        f"Rescan required."
+                    )
+                    log.warning("[SCALP EXEC] %s BLOCKED: %s", symbol, _rebase_error)
+                else:
+                    log.info(
+                        "[SCALP EXEC] %s levels rebased: price %.5f→%.5f (%.2f%% drift), "
+                        "sl %s→%s, tp1 %s→%s",
+                        symbol,
+                        _scan_px,
+                        _live_px,
+                        drift_pct,
+                        signal.get("sl"),
+                        _rebased["sl"],
+                        signal.get("tp1"),
+                        _rebased["tp1"],
+                    )
+                    signal = dict(signal)
+                    signal["price"] = _rebased["entry"]
+                    signal["sl"] = _rebased["sl"]
+                    signal["tp1"] = _rebased["tp1"]
+                    if _rebased.get("tp2"):
+                        signal["tp2"] = _rebased["tp2"]
+        except Exception as _re:
+            log.warning("[SCALP EXEC] Level rebase failed (%s), using scan-time levels", _re)
+
+        if _rebase_error:
+            return jsonify({"success": False, "error": _rebase_error}), 400
 
         _hydrate_execution_candle_quality(signal, _r=rt())
 
@@ -13192,7 +13216,8 @@ def analyze_pair(
             # Crypto-specific D1 staleness threshold: enforce max hours since last bar open.
             if pair.get("type") == "crypto" and d1:
                 try:
-                    import time
+                    from scalp_engine import _coerce_utc_datetime, _current_utc_datetime
+
                     _last_candle = d1[-1] if d1 else None
                     if _last_candle:
                         _last_time = _last_candle.get("time")
@@ -13204,8 +13229,12 @@ def analyze_pair(
                                 _max_hours = CONFIG.get("CRYPTO_D1_MAX_STALE_HOURS", 25)
                                 if _age_hours > _max_hours:
                                     _stale_tfs.append(f"D1:crypto_stale_{int(_age_hours)}h")
-                except Exception:
-                    pass
+                except Exception as _crypto_d1_stale_err:
+                    log.warning(
+                        "[ANALYZE] crypto D1 staleness check failed for %s: %s",
+                        pair.get("display") or pair.get("symbol"),
+                        _crypto_d1_stale_err,
+                    )
 
             if _stale_tfs:
                 _reason = "STALE_DATA_PRE_SCORING:" + ",".join(_stale_tfs)

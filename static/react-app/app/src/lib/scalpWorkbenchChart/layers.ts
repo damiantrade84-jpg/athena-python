@@ -66,13 +66,28 @@ export interface ScalpSetupLike {
   direction?: string | null;
 }
 
+type EngineBZoneLike = {
+  lower?: number;
+  upper?: number;
+  low?: number;
+  high?: number;
+};
+
+type EngineBBlockLike = {
+  top?: number;
+  bottom?: number;
+  low?: number;
+  high?: number;
+  mitigated?: boolean;
+};
+
 export interface EngineBOverlayLike {
-  nearest_support_zone?: { low?: number; high?: number } | null;
-  nearest_resistance_zone?: { low?: number; high?: number } | null;
-  order_blocks?: Array<{ low?: number; high?: number; mitigated?: boolean }>;
-  active_fvgs?: Array<{ low?: number; high?: number; mitigated?: boolean }>;
-  bos_data?: { level?: number };
-  choch_data?: { level?: number };
+  nearest_support_zone?: EngineBZoneLike | null;
+  nearest_resistance_zone?: EngineBZoneLike | null;
+  order_blocks?: Array<EngineBBlockLike>;
+  active_fvgs?: Array<EngineBBlockLike>;
+  bos_data?: { last_broken_high?: number; last_broken_low?: number; level?: number };
+  choch_data?: { choch_level?: number; level?: number };
   current_swing_sequence?: string;
 }
 
@@ -115,16 +130,24 @@ function pushLevel(
   levels.push({ label, price, color, style, layer });
 }
 
+function zoneLow(zone: EngineBZoneLike | EngineBBlockLike): number | null | undefined {
+  return zone.lower ?? zone.bottom ?? zone.low;
+}
+
+function zoneHigh(zone: EngineBZoneLike | EngineBBlockLike): number | null | undefined {
+  return zone.upper ?? zone.top ?? zone.high;
+}
+
 function pushZoneLevels(
   levels: ScalpPriceLevel[],
   prefix: string,
-  zone: { low?: number; high?: number } | null | undefined,
+  zone: EngineBZoneLike | EngineBBlockLike | null | undefined,
   color: string,
   layer: string,
 ) {
   if (!zone) return;
-  pushLevel(levels, `${prefix} low`, zone.low, color, LineStyle.Dotted, layer);
-  pushLevel(levels, `${prefix} high`, zone.high, color, LineStyle.Dotted, layer);
+  pushLevel(levels, `${prefix} low`, zoneLow(zone), color, LineStyle.Dotted, layer);
+  pushLevel(levels, `${prefix} high`, zoneHigh(zone), color, LineStyle.Dotted, layer);
 }
 
 export function buildScalpChartLevels(args: BuildLayersArgs): ScalpPriceLevel[] {
@@ -176,8 +199,22 @@ export function buildScalpChartLevels(args: BuildLayersArgs): ScalpPriceLevel[] 
       for (const fvg of (eb.active_fvgs || []).filter((z) => !z?.mitigated).slice(0, 2)) {
         pushZoneLevels(levels, 'FVG', fvg, 'rgba(168,85,247,0.45)', 'engineB');
       }
-      pushLevel(levels, 'BOS', eb.bos_data?.level, 'rgba(250,204,21,0.7)', LineStyle.Dashed, 'engineB');
-      pushLevel(levels, 'CHOCH', eb.choch_data?.level, 'rgba(251,146,60,0.7)', LineStyle.Dashed, 'engineB');
+      pushLevel(
+        levels,
+        'BOS',
+        eb.bos_data?.last_broken_high ?? eb.bos_data?.last_broken_low ?? eb.bos_data?.level,
+        'rgba(250,204,21,0.7)',
+        LineStyle.Dashed,
+        'engineB',
+      );
+      pushLevel(
+        levels,
+        'CHOCH',
+        eb.choch_data?.choch_level ?? eb.choch_data?.level,
+        'rgba(251,146,60,0.7)',
+        LineStyle.Dashed,
+        'engineB',
+      );
     }
   }
 

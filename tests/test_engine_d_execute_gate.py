@@ -330,6 +330,78 @@ def test_ai_review_rejects_different_crypto_symbol_with_same_provider_prefix():
     assert reason == "AI_REVIEW_SYMBOL_MISMATCH"
 
 
+def test_execute_blocks_when_concordance_final_decision_reject():
+    review_id, audit_db = _seed_review(
+        ai_review={
+            "parse_success": True,
+            "decision": "ENTRY_NOW",
+            "entryAllowedNow": True,
+            "structured": {
+                "decision": "ENTRY_NOW",
+                "entryAllowedNow": True,
+                "scalpVerdictComparison": {
+                    "finalDecision": "reject",
+                    "chartContradictsEntryTiming": False,
+                },
+            },
+            "verdict": "VALID",
+        }
+    )
+    signal = {
+        "pair": "EUR/USD",
+        "direction": "LONG",
+        "ai_grade": "B",
+        "gate_result": "PASS",
+        "executable": True,
+        "price": 1.1,
+        "sl": 1.095,
+        "tp1": 1.11,
+    }
+    reason, _ = resolve_engine_d_execute_gate(
+        signal,
+        review_id=review_id,
+        audit_db=audit_db,
+        cfg=_cfg(),
+    )
+    assert reason == "AI_REVIEW_CONCORDANCE_REJECT"
+
+
+def test_execute_blocks_when_chart_contradicts_entry_timing():
+    review_id, audit_db = _seed_review(
+        ai_review={
+            "parse_success": True,
+            "decision": "ENTRY_NOW",
+            "entryAllowedNow": True,
+            "structured": {
+                "decision": "ENTRY_NOW",
+                "entryAllowedNow": True,
+                "scalpVerdictComparison": {
+                    "finalDecision": "trade",
+                    "chartContradictsEntryTiming": True,
+                },
+            },
+            "verdict": "VALID",
+        }
+    )
+    signal = {
+        "pair": "EUR/USD",
+        "direction": "LONG",
+        "ai_grade": "B",
+        "gate_result": "PASS",
+        "executable": True,
+        "price": 1.1,
+        "sl": 1.095,
+        "tp1": 1.11,
+    }
+    reason, _ = resolve_engine_d_execute_gate(
+        signal,
+        review_id=review_id,
+        audit_db=audit_db,
+        cfg=_cfg(),
+    )
+    assert reason == "AI_REVIEW_ENTRY_TIMING_CONTRADICTED"
+
+
 def test_ai_review_rejects_review_level_mismatch():
     review_id, audit_db = _seed_review(
         engine_d_ctx={

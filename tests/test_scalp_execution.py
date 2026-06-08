@@ -466,6 +466,83 @@ def test_modular_scalp_execute_rejects_grade_d_signal():
     )
 
 
+def test_production_scalp_execute_rebase_uses_pair_score_group_min_rr(monkeypatch):
+    athena_module = _load_athena_module()
+    captured = {}
+    monkeypatch.setitem(
+        athena_module.CONFIG["AI_SCALP_CHART_REVIEW"],
+        "EXECUTE_REQUIRES_AI_REVIEW",
+        False,
+    )
+    monkeypatch.setattr(
+        scalp_engine,
+        "run_scalp_scan",
+        lambda pairs: {
+            "signals": [
+                {
+                    "pair": "USD/ZAR",
+                    "direction": "LONG",
+                    "type": "forex",
+                    "price": 1.1,
+                    "sl": 1.095,
+                    "tp1": 1.11,
+                    "vp_poc": 1.1,
+                    "vp_vah": 1.12,
+                    "vp_val": 1.09,
+                    "zone_type": "trend_continuation",
+                }
+            ]
+        },
+    )
+    monkeypatch.setattr(mt5_executor, "mt5_get_account", lambda: {"balance": 10000.0, "equity": 10000.0})
+    monkeypatch.setattr(mt5_executor, "mt5_get_positions", lambda: {"positions": []})
+    monkeypatch.setattr(
+        mt5_executor,
+        "mt5_get_symbol_info",
+        lambda symbol: {"digits": 5, "point": 0.00001, "bid": 1.101, "ask": 1.1012},
+    )
+    monkeypatch.setattr(athena_module, "get_pair_score_group", lambda pair: "forex_exotics")
+    monkeypatch.setattr(scalp_engine, "_scalp_min_rr_for_group", lambda asset_type, score_group: 1.75)
+
+    def _levels(direction, entry, vp, setup_type, symbol_info, asset_type, **kwargs):
+        captured.update(kwargs)
+        return {"entry": entry, "sl": 1.095, "tp1": 1.11, "tp2": 1.12, "rr_below_min": False}
+
+    monkeypatch.setattr(scalp_engine, "calculate_scalp_levels", _levels)
+
+    class _Approval:
+        approved = True
+        reason = "OK"
+        risk_amount = 10.0
+        risk_pct = 0.001
+
+        @staticmethod
+        def to_dict():
+            return {"approved": True, "reason": "OK"}
+
+    def _fake_risk_check(**kwargs):
+        captured["signal"] = kwargs["signal"]
+        return _Approval()
+
+    monkeypatch.setattr(risk_engine, "risk_check", _fake_risk_check)
+    monkeypatch.setattr(
+        execution_lifecycle,
+        "run_managed_execution",
+        lambda venue, signal, approval: {"success": True, "ticket": "123", "volume": 0.01, "entry_price": signal["price"]},
+    )
+    monkeypatch.setattr(athena_module, "_guardian_pre_trade", lambda *args, **kwargs: (True, None))
+
+    client = athena_module.app.test_client()
+    resp = client.post("/api/scalp-execute", json={"symbol": "USD/ZAR"})
+
+    assert resp.status_code == 200, resp.get_data(as_text=True)
+    data = resp.get_json()
+    assert data["success"] is True
+    assert captured["score_group"] == "forex_exotics"
+    assert captured["min_rr_override"] == 1.75
+    assert captured["signal"]["price"] == 1.1011
+
+
 def test_modular_scalp_execute_rebase_uses_pair_score_group_min_rr(monkeypatch, tmp_path):
     captured = {}
     audit_db = tmp_path / "audit.db"

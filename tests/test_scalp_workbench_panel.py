@@ -229,6 +229,19 @@ def test_scalp_workbench_right_edge_label_layout():
     assert "axisLabelVisible: false" in source
 
 
+def test_scalp_workbench_overlay_layers_use_api_zone_keys():
+    layers = _read(ROOT / "static/react-app/app/src/lib/scalpWorkbenchChart/layers.ts")
+    snapshot = _read(ROOT / "static/react-app/app/src/lib/scalpWorkbenchChart/chartSnapshot.ts")
+    assert "lower" in layers
+    assert "upper" in layers
+    assert "top" in layers
+    assert "bottom" in layers
+    assert "choch_level" in layers or "chochLevel" in snapshot
+    assert "last_broken_high" in layers or "last_broken_high" in snapshot
+    assert "zone.lower ?? zone.bottom ?? zone.low" in layers
+    assert "zone.upper ?? zone.top ?? zone.high" in layers
+
+
 def test_scalp_workbench_builds_chart_snapshot_with_profile_liquidity_engineb_orderflow():
     source = _read(SCALP_WORKBENCH)
     helper_dir = ROOT / "static/react-app/app/src/lib/scalpWorkbenchChart"

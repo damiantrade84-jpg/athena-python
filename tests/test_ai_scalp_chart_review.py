@@ -265,6 +265,22 @@ def test_assemble_engine_d_context_picks_best_signal():
     assert ctx["ai_score"] == 72.5
 
 
+def test_assemble_engine_d_context_populates_ohlcv_bars_from_signal():
+    bars = [{"time": "2026-05-21T16:30:00+00:00", "open": 1.0, "high": 1.1, "low": 0.9, "close": 1.05}]
+    signal = _mock_scan_signal(direction="LONG", ai_score=72.5)
+    signal["m1Candles"] = bars
+    ctx = assemble_engine_d_context(
+        "BTCUSDT",
+        "M1",
+        screenshot_meta={"captured_at": "2026-05-21T16:31:02+00:00", "chart_timeframe": "M1"},
+        resolve_pair_fn=lambda s: {"display": "BTCUSDT"},
+        run_scalp_scan_fn=lambda pairs: {"signals": [signal]},
+        scalp_ui_signal_fn=lambda s: s,
+    )
+    assert ctx is not None
+    assert ctx["ohlcv_bars"] == bars
+
+
 def test_prompt_contains_engine_d_playbook_and_review_order():
     ctx = _engine_d_ctx()
     prompt = build_scalp_chart_review_prompt(ctx)

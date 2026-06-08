@@ -65,7 +65,7 @@ const ASSET_CLASSES = ['crypto', 'forex', 'commodity', 'stock', 'index'] as cons
 
 export default function ScanConfigPanel() {
   const { showToast } = useStore();
-  const [localBtMin, setLocalBtMin] = useState<Record<string, number>>({});
+  const [localLiveClass, setLocalLiveClass] = useState<Record<string, number>>({});
   const [localExec, setLocalExec] = useState<ExecutionConfig>({});
 
   const { data: scanSettings, loading: settingsLoading, error: settingsError, refresh: refreshSettings }
@@ -79,44 +79,35 @@ export default function ScanConfigPanel() {
   const { data: executionConfig, loading: execLoading, error: execError, refresh: refreshExec }
     = useApiPoll<ExecutionConfig>('/api/execution-config', 0);
 
-  const { post: postBtMin } = useApiPost<{ bt_min: Record<string, number> }>();
+  const { post: postBtMin } = useApiPost<{ live_class: Record<string, number> }>();
   const { post: postFeatures } = useApiPost<FeatureToggles>();
   const { post: postExec } = useApiPost<ExecutionConfig>();
   const { post: postAdvisory } = useApiPost<{ saved?: boolean; error?: string }>();
 
   useEffect(() => {
-    if (btMin?.bt_min) setLocalBtMin(prev => ({ ...btMin.bt_min, ...prev }));
+    const live = btMin?.live_class ?? btMin?.bt_min;
+    if (live) setLocalLiveClass(prev => ({ ...live, ...prev }));
   }, [btMin]);
 
   useEffect(() => {
     if (executionConfig) setLocalExec(prev => ({ ...executionConfig, ...prev }));
   }, [executionConfig]);
 
-  const handleSaveBtMin = useCallback(async () => {
+  const handleSaveLiveClass = useCallback(async () => {
     const body: Record<string, number> = {};
     for (const cls of ASSET_CLASSES) {
-      if (typeof localBtMin[cls] === 'number' && Number.isFinite(localBtMin[cls])) {
-        body[cls] = localBtMin[cls];
+      if (typeof localLiveClass[cls] === 'number' && Number.isFinite(localLiveClass[cls])) {
+        body[cls] = localLiveClass[cls];
       }
     }
     const res = await postBtMin('/api/bt-min', body);
     if (res && !(res as { error?: string }).error) {
-      showToast('BT_MIN thresholds saved', 'success');
+      showToast('Live Engine A thresholds saved', 'success');
       refreshBtMin();
     } else {
-      showToast('Failed to save BT_MIN thresholds', 'error');
+      showToast('Failed to save live thresholds', 'error');
     }
-  }, [localBtMin, postBtMin, showToast, refreshBtMin]);
-
-  const handleToggleBtChain = useCallback(async (next: boolean) => {
-    const res = await postBtMin('/api/bt-min', { backtest_use_bt_min_thresholds: next } as unknown as Record<string, number>);
-    if (res && !(res as { error?: string }).error) {
-      showToast(`BT chain ${next ? 'enabled' : 'disabled'}`, 'success');
-      refreshBtMin();
-    } else {
-      showToast('Failed to toggle BT chain', 'error');
-    }
-  }, [postBtMin, showToast, refreshBtMin]);
+  }, [localLiveClass, postBtMin, showToast, refreshBtMin]);
 
   const handleToggleFeature = useCallback(async (feature: keyof FeatureToggles, next: boolean) => {
     const res = await postFeatures('/api/feature-toggles', { feature, action: next ? 'enable' : 'disable' });
@@ -161,11 +152,11 @@ export default function ScanConfigPanel() {
       )}
 
       <div className="grid grid-cols-2 gap-5">
-        {/* BT_MIN Thresholds */}
+        {/* Live Engine A class thresholds */}
         <Card className="border-border/60 bg-card/50">
           <CardHeader className="pb-2">
             <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Rajdhani', sans-serif", letterSpacing: '0.12em' }}>
-              <Settings className="w-4 h-4 text-primary" /> BT_MIN Thresholds
+              <Settings className="w-4 h-4 text-primary" /> Live Engine A Thresholds
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-3">
@@ -173,46 +164,33 @@ export default function ScanConfigPanel() {
               <Skeleton className="h-32 w-full" />
             ) : (
               <>
-                <div className="flex items-center justify-between p-2 rounded-md bg-muted/30">
-                  <div>
-                    <p className="text-xs">Use BT chain in backtest</p>
-                    <p className="text-[10px] text-muted-foreground">
-                      {btMin?.backtest_uses_bt_min_chain ? 'BT_MIN active' : 'Live MIN_CONFLUENCE_CLASS active'}
-                      {btMin?.research_mode ? ' · research mode' : ''}
-                    </p>
-                  </div>
-                  <Switch
-                    checked={!!btMin?.backtest_use_bt_min_thresholds}
-                    onCheckedChange={handleToggleBtChain}
-                  />
-                </div>
+                <p className="text-[10px] text-muted-foreground">
+                  Active runtime ENGINE_A_SCORE_GROUP_THRESHOLDS (Stage 4.2 — BT_MIN retired).
+                  {btMin?.research_mode ? ' Research mode on.' : ''}
+                </p>
 
                 <div className="space-y-2">
-                  <p className="text-[10px] uppercase text-muted-foreground">BT_MIN per class</p>
+                  <p className="text-[10px] uppercase text-muted-foreground">Per asset class</p>
                   {ASSET_CLASSES.map(cls => {
-                    const live = btMin?.live_class?.[cls];
-                    const bt = localBtMin[cls] ?? btMin?.bt_min?.[cls];
+                    const live = localLiveClass[cls] ?? btMin?.live_class?.[cls] ?? btMin?.bt_min?.[cls];
                     return (
                       <div key={cls} className="flex items-center justify-between gap-2">
-                        <div>
-                          <span className="text-xs capitalize font-medium">{cls}</span>
-                          <span className="ml-2 text-[10px] text-muted-foreground">live: {fmtNum(live, 2)}</span>
-                        </div>
+                        <span className="text-xs capitalize font-medium">{cls}</span>
                         <Input
                           type="number"
                           step={0.05}
                           className="w-24 h-8 text-xs font-mono"
-                          value={bt ?? ''}
+                          value={live ?? ''}
                           onChange={e => {
                             const v = parseFloat(e.target.value);
-                            setLocalBtMin(prev => ({ ...prev, [cls]: Number.isFinite(v) ? v : 0 }));
+                            setLocalLiveClass(prev => ({ ...prev, [cls]: Number.isFinite(v) ? v : 0 }));
                           }}
                         />
                       </div>
                     );
                   })}
-                  <Button size="sm" className="w-full gap-1 text-xs" onClick={handleSaveBtMin}>
-                    <Save className="w-3 h-3" /> Save BT_MIN
+                  <Button size="sm" className="w-full gap-1 text-xs" onClick={handleSaveLiveClass}>
+                    <Save className="w-3 h-3" /> Save live thresholds
                   </Button>
                 </div>
               </>
