@@ -255,6 +255,12 @@ export interface CascadeScanMeta {
 }
 
 /** POST /api/cascade-scan response (run + busy shapes). */
+export interface CascadeHardBlockedSummary {
+  symbol: string;
+  blockers: string[];
+}
+
+/** POST /api/cascade-scan response (run + busy shapes). */
 export interface CascadeScanResponse {
   success?: boolean;
   busy?: boolean;
@@ -264,6 +270,8 @@ export interface CascadeScanResponse {
   universeCount: number;
   engineACandidateCount: number;
   shortlistCount: number;
+  hardBlockedCount?: number;
+  hardBlockedSummary?: CascadeHardBlockedSummary[];
   triageEnabled: boolean;
   candidates: CascadeCandidate[];
 }

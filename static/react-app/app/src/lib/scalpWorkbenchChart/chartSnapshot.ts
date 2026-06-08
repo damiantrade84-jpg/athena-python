@@ -76,7 +76,7 @@ export function buildScalpChartSnapshot(args: BuildChartSnapshotArgs): ScalpChar
           nearestResistance: args.engineB.nearest_resistance_zone ?? null,
           orderBlocks: args.engineB.order_blocks ?? [],
           fvgs: args.engineB.active_fvgs ?? [],
-          breakerBlock: null,
+          breakerBlock: args.engineB.breaker_block ?? null,
           bosLevel:
             args.engineB.bos_data?.last_broken_high
             ?? args.engineB.bos_data?.last_broken_low

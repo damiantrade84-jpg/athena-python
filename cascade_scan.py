@@ -79,7 +79,7 @@ def run_cascade_scan(
         limit = 5
 
     raw_candidates = _candidate_signals(scan_result)
-    candidates = build_shortlist(
+    candidates, hard_blocked_summary, hard_blocked_count = build_shortlist(
         scan_result,
         rules=merged_rules,
         asset_class=asset_class,
@@ -96,6 +96,8 @@ def run_cascade_scan(
         "universeCount": _safe_int(scan_result.get("totalPairs"), default=0),
         "engineACandidateCount": len(raw_candidates),
         "shortlistCount": len(candidates),
+        "hardBlockedCount": hard_blocked_count,
+        "hardBlockedSummary": hard_blocked_summary,
         "triageEnabled": bool(enable_triage),
         "candidates": candidates,
     }
@@ -107,14 +109,21 @@ def build_shortlist(
     asset_class: str,
     top_n: int | None = None,
     style: str = "auto",
-) -> list[dict]:
+) -> tuple[list[dict], list[dict], int]:
     """Pure deterministic shortlist builder for server-safe Engine A fields."""
     merged_rules = _merge_rules(rules)
     rows: list[dict] = []
+    hard_blocked: list[dict] = []
 
     for signal in _candidate_signals(scan_result):
         blockers = _hard_blockers(signal, merged_rules)
         if blockers:
+            hard_blocked.append(
+                {
+                    "symbol": _symbol(signal),
+                    "blockers": blockers,
+                }
+            )
             continue
         row = _candidate_from_signal(signal, merged_rules, asset_class, style)
         rows.append(row)
@@ -124,7 +133,7 @@ def build_shortlist(
         rows = rows[: max(1, int(top_n))]
     for idx, row in enumerate(rows, 1):
         row["shortlistRank"] = idx
-    return rows
+    return rows, hard_blocked[:10], len(hard_blocked)
 
 
 def triage_candidates(

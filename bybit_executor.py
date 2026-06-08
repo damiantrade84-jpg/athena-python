@@ -1414,15 +1414,21 @@ def bybit_execute(signal: dict, approval: "RiskApproval") -> dict:  # noqa: F821
         if level_error:
             return {"success": False, "error": level_error}
 
-        # Hard SL cap before sending to exchange
+        # Hard SL cap before sending to exchange.
+        # Use the shared resolver so per-symbol / score-group overrides
+        # (MAX_SL_PCT_SYMBOL_OVERRIDES) apply identically to risk_engine and
+        # guardian — not the raw crypto default.
         try:
             from config import CONFIG as _cfg
-            _max_sl_pct = _cfg.get("MAX_SL_PCT", {}).get("crypto", 0.08)
+            from risk_engine import resolve_max_sl_pct
+            _max_sl_pct, _max_sl_source = resolve_max_sl_pct(
+                signal, signal.get("type") or "crypto", _cfg
+            )
             _sl_dist_pct = abs(float(price) - float(sl)) / float(price)
             if _sl_dist_pct > _max_sl_pct:
                 return {
                     "success": False,
-                    "error": f"SL_TOO_WIDE: {_sl_dist_pct:.1%} exceeds {_max_sl_pct:.0%} crypto cap"
+                    "error": f"SL_TOO_WIDE: {_sl_dist_pct:.1%} exceeds {_max_sl_pct:.0%} cap ({_max_sl_source})"
                 }
         except Exception as sl_cap_err:
             log.warning(

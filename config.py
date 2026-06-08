@@ -1183,6 +1183,7 @@ CONFIG: dict = {
     "ENGINE_A_CRYPTO_VOLUME_MA_LOOKBACK": 20,
     "ENGINE_A_TRADE_MIN_CONFIDENCE_ENABLED": True,
     "ENGINE_A_TRADE_MIN_CONFIDENCE": 0.60,
+    "ENGINE_A_STRUCTURAL_SL_FLOOR_ATR": True,
     "ENGINE_AB_CRYPTO_SIGNAL_FEED": "binance",
     "ENGINE_AB_CRYPTO_SIGNAL_FEED_FALLBACK": False,
     "ENGINE_A_MULTI_EXCHANGE_FUNDING": {
@@ -1826,7 +1827,7 @@ CONFIG: dict = {
         "SL_RECOMPUTE_ON_POLL": False,
     },
     "MAX_CORRELATED_POSITIONS": 10,  # Max positions in same correlation cluster
-    "SIGNAL_MAX_AGE_SEC": 1800,  # Reject signals older than 30 minutes
+    "SIGNAL_MAX_AGE_SEC": 300,  # Reject signals older than 5 minutes (matches config.yaml)
     "MAX_RISK_PER_TRADE": 0.03,  # Hard cap: never risk > 3% on single trade
     "MAX_SL_PCT": {
         "forex":     0.025,
@@ -2605,6 +2606,11 @@ def _critical_safety_config_errors(
             errors.append(
                 "DRAWDOWN_STOP_THRESHOLD must be greater than DRAWDOWN_REDUCE_THRESHOLD"
             )
+
+    if cfg.get("DRAWDOWN_STOP_ENABLED") is False:
+        errors.append(
+            "DRAWDOWN_STOP_ENABLED=false disables account drawdown protection and is not allowed"
+        )
 
     env_map = env if env is not None else os.environ
     real_orders_allowed = bool(cfg.get("REAL_ORDERS_ALLOWED", False))

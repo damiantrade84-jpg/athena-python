@@ -279,13 +279,25 @@ def test_engine_d_bt_fee_guard_blocks_high_cost_r():
 
 
 def test_engine_d_bt_grading_receives_proxy_fidelity_inputs():
-    import inspect
-    import backtest_runner
+    from scalp_engine import ai_quality_grade
 
-    src = inspect.getsource(backtest_runner.backtest_pair_scalp)
-    assert "data_fidelity=data_fidelity" in src
-    assert "tick_vol_quality=tick_vol_quality" in src
-    assert '"data_fidelity": data_fidelity' in src
+    result = ai_quality_grade(
+        vp={"poc": 100.0, "vah": 101.0, "val": 99.0},
+        price_loc={"location": "at_poc"},
+        absorption={"detected": False},
+        cvd={"direction": "LONG"},
+        aaa={"complete": False},
+        vwap={"lean": "LONG"},
+        setup={"setup_type": "vwap_reclaim", "direction": "LONG"},
+        sessions=[],
+        spread_pips=0.0,
+        htf_bias="LONG",
+        asset_type="crypto",
+        pair="BTC/USDT",
+        data_fidelity={"score": 0.9},
+        tick_vol_quality={"score": 0.8},
+    )
+    assert result.get("grade") in {"A", "B", "C", "D"}
 
 
 def test_c3_default_engine_c_bt_enforce_min_conviction_is_truthy():

@@ -23,6 +23,7 @@ from scoring import (
     _classify_signal,
     _pair_exchange_closed,
     apply_correlation_cap,
+    engine_a_regime_label_for_threshold,
     get_score_threshold,
     get_pair_score_group,
 )
@@ -2410,7 +2411,7 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict[s
 
             # Unify threshold resolution — ensures live scan and backtest parity (BUG 7)
             # Pass regime for dynamic threshold adjustment when enabled
-            regime = sig.get("regime")
+            regime = engine_a_regime_label_for_threshold(sig)
             static_threshold = get_score_threshold(pair, regime=regime)
 
             if r.test_mode():
@@ -2679,7 +2680,13 @@ def analyze_pair(
             preloaded_fetch_meta=preloaded_fetch_meta,
             intermarket_snapshot=intermarket_snapshot,
         )
-    except RuntimeError:
+    except RuntimeError as exc:
+        if "runtime not initialized" not in str(exc).lower():
+            raise
+        log.warning(
+            "[SCANNER] athena runtime not initialized — legacy fallback for %s",
+            pair.get("display") or pair.get("symbol") or pair,
+        )
         from athena_legacy import load as _load_legacy
 
         return _load_legacy().analyze_pair(

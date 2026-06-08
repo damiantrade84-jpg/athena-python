@@ -320,7 +320,6 @@ def shielded_execute(
             symbol_info=symbol_info,
             kill_switch=kill_switch,
             sizing_override=sizing_override,
-            is_manual_override=is_manual,
             volume_mode=volume_mode,
             execution_context=execution_context or ("manual" if is_manual else "auto"),
         )

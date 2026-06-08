@@ -244,3 +244,50 @@ def test_evaluate_execution_data_freshness_disabled_gate_allows_with_warning():
 
     assert result["allowed"] is True
     assert result["blocked"][0]["severity"] == "stale_1_bucket"
+
+
+def test_fetch_meta_stale_multi_ignored_when_candle_freshness_policy_ok():
+    """ETF weekend D1: authoritative candleFreshness must win over fetch meta."""
+    signal = {
+        "candleFreshness": {
+            "D1": {"stalenessSeverity": "d1_calendar_gap_policy_ok", "bucketLag": 3},
+        },
+        "candleFetchMeta": {
+            "D1": {"stalenessSeverity": "stale_multi_bucket", "bucketLag": 3},
+        },
+    }
+    config = {
+        "DATA_FRESHNESS_GATES": {
+            "BLOCK_EXECUTION_ON_STALE": True,
+            "BLOCK_TIMEFRAMES": ["D1"],
+            "BLOCK_SEVERITIES": ["stale_multi_bucket"],
+        }
+    }
+
+    result = evaluate_execution_data_freshness(signal, config)
+
+    assert result["allowed"] is True
+    assert result["blocked"] == []
+
+
+def test_crypto_genuine_stale_multi_bucket_still_blocks_execution():
+    signal = {
+        "candleFreshness": {
+            "D1": {"stalenessSeverity": "stale_multi_bucket", "bucketLag": 2},
+        },
+        "candleFetchMeta": {
+            "D1": {"stalenessSeverity": "stale_multi_bucket", "bucketLag": 2},
+        },
+    }
+    config = {
+        "DATA_FRESHNESS_GATES": {
+            "BLOCK_EXECUTION_ON_STALE": True,
+            "BLOCK_TIMEFRAMES": ["D1"],
+            "BLOCK_SEVERITIES": ["stale_multi_bucket"],
+        }
+    }
+
+    result = evaluate_execution_data_freshness(signal, config)
+
+    assert result["allowed"] is False
+    assert result["reason"] == "STALE_DATA_BLOCK:D1:stale_multi_bucket"

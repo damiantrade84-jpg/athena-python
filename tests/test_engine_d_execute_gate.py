@@ -168,6 +168,18 @@ def test_grade_d_always_blocked_even_with_ai_review():
     assert reason == "ENGINE_D_GRADE_D_NOT_EXECUTABLE"
 
 
+def test_engine_d_hard_block_reason_matches_execute_gate():
+    from ai_scalp_review.execute_gate import engine_d_signal_hard_block
+
+    signal = {
+        "pair": "EUR/USD",
+        "direction": "LONG",
+        "ai_grade": "D",
+        "gate_result": "BLOCKED",
+    }
+    assert engine_d_signal_hard_block(signal) == "ENGINE_D_GRADE_D_NOT_EXECUTABLE"
+
+
 def test_grade_c_still_requires_legacy_pass_without_ai_bypass():
     review_id, audit_db = _seed_review()
     signal = {
@@ -400,6 +412,36 @@ def test_execute_blocks_when_chart_contradicts_entry_timing():
         cfg=_cfg(),
     )
     assert reason == "AI_REVIEW_ENTRY_TIMING_CONTRADICTED"
+
+
+def test_non_directional_visual_contradiction_does_not_block_execute():
+    review_id, audit_db = _seed_review(
+        ai_review={
+            "parse_success": True,
+            "decision": "ENTRY_NOW",
+            "entryAllowedNow": True,
+            "visual_contradiction": "liquidity thin near entry zone",
+            "structured": {"decision": "ENTRY_NOW", "entryAllowedNow": True},
+            "verdict": "VALID",
+        }
+    )
+    signal = {
+        "pair": "EUR/USD",
+        "direction": "LONG",
+        "ai_grade": "B",
+        "gate_result": "PASS",
+        "executable": True,
+        "price": 1.1,
+        "sl": 1.095,
+        "tp1": 1.11,
+    }
+    reason, _ = resolve_engine_d_execute_gate(
+        signal,
+        review_id=review_id,
+        audit_db=audit_db,
+        cfg=_cfg(),
+    )
+    assert reason is None
 
 
 def test_ai_review_rejects_review_level_mismatch():

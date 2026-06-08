@@ -189,7 +189,13 @@ def build_engine_a_calibration_row(
         "trend_score": _safe_float(factor_diag.get("directionalScore"), _safe_float(factor_result.get("directional_score"))),
         "adx_mult": _safe_float((result.get("factorScores") or {}).get("adx_multiplier"), _safe_float(factor_result.get("adx_multiplier"))),
         "di_align_mult": _safe_float(feed_status.get("di_align")),
-        "dir_ramp_mult": _safe_float(factor_diag.get("directionalRampMultiplier"), _safe_float(factor_result.get("directional_ramp_multiplier"))),
+        "dir_ramp_mult": _safe_float(
+            factor_diag.get("directionalRampMult"),
+            _safe_float(
+                factor_diag.get("directionalRampMultiplier"),
+                _safe_float(factor_result.get("directional_ramp_multiplier")),
+            ),
+        ),
         "volatility_scaler": _safe_float(volatility.get("atr_pct_scaler")),
         "final_score": _safe_float(factor_result.get("final_score"), final_score),
     }

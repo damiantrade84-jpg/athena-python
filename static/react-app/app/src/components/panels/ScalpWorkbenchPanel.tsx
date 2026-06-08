@@ -206,6 +206,7 @@ interface ScalpExecuteResponse {
   success?: boolean;
   ticket?: string;
   error?: string;
+  hardBlockReason?: string;
   fresh_scan?: ScalpScanResponse;
 }
 
@@ -1105,7 +1106,8 @@ export default function ScalpWorkbenchPanel() {
     } else if (result.success) {
       showToast(`Scalp executed — ticket ${result.ticket || '?'}`, 'success');
     } else {
-      showToast(`Scalp rejected: ${result.error || 'unknown'}`, 'error');
+      const hard = result.hardBlockReason ? ` [hard block: ${result.hardBlockReason}]` : '';
+      showToast(`Scalp rejected: ${result.error || 'unknown'}${hard}`, 'error');
     }
     setConfirmExecOpen(false);
   }, [activeSignal, chartSymbol, executeBlockReason, postExecute, scalpAiReviewResponse?.review_id, showToast, volumeMode, sizingOverride]);

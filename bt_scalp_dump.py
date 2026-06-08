@@ -39,7 +39,7 @@ def backtest_pair_scalp(pair: dict, validation_mode: str = "standard") -> dict |
 
     walk_bars = int(cfg.get("BT_WALK_BARS", 12))
     max_concurrent = int(cfg.get("BT_MAX_CONCURRENT", 2))
-    min_rr = float(cfg.get("MIN_RR", 2.0))
+    min_rr = float(cfg.get("MIN_RR", 1.2))
     vp_bins = int(cfg.get("VP_BINS", 64))
     abs_vol_mult = float(cfg.get("ABSORPTION_VOL_MULT", 2.0))
     slippage_ticks = int(cfg.get("BT_SLIPPAGE_TICKS", 3))

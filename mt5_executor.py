@@ -685,6 +685,30 @@ def mt5_get_account() -> dict:
     }
 
 
+def _mt5_position_risk_amount(
+    price_open: float,
+    sl: float,
+    volume: float,
+    tick_size: float,
+    tick_value: float,
+    fallback_sl_pct: float,
+) -> float:
+    """Risk in account currency for an open MT5 position.
+
+    When the broker SL is unset (``sl <= 0``) the true risk is unbounded, so for
+    portfolio-heat accounting we assume the position risks up to
+    ``fallback_sl_pct`` of its entry price. This prevents SL-less positions from
+    contributing 0 heat and stacking without limit (audit C4).
+    """
+    if not tick_size or not tick_value or volume <= 0 or price_open <= 0:
+        return 0.0
+    if sl > 0:
+        sl_dist = abs(price_open - sl)
+    else:
+        sl_dist = abs(price_open) * max(0.0, fallback_sl_pct)
+    return (sl_dist / tick_size) * tick_value * volume
+
+
 def mt5_get_positions(*, attempt_connect: bool = True) -> dict:
     """Get all open positions. Returns dict with standardized error format.
 
@@ -729,26 +753,32 @@ def mt5_get_positions(*, attempt_connect: bool = True) -> dict:
 
     reverse_map = {v: k for k, v in _MT5_SYMBOL_MAP.items()}
 
+    # C4: an SL-less position would otherwise contribute 0 to portfolio heat,
+    # allowing unlimited stacking. Assume the worst-case configured cap distance.
+    _heat_fallback_sl_pct = float(CONFIG.get("MAX_SL_PCT", {}).get("forex", 0.05))
+
     for pos in positions:
         athena_pair = reverse_map.get(pos.symbol, pos.symbol)
 
-        sl_dist = abs(pos.price_open - pos.sl) if pos.sl > 0 else 0
-
         risk_amount = 0.0
 
-        if sl_dist > 0:
-            info = mt5.symbol_info(pos.symbol)
+        info = mt5.symbol_info(pos.symbol)
+        if info:
+            tick_size = info.trade_tick_size or info.point or 0
 
-            if info:
-                tick_size = info.trade_tick_size or info.point or 0
+            tick_value = info.trade_tick_value
 
-                tick_value = info.trade_tick_value
+            if tick_value == 0 and info.trade_contract_size and info.point:
+                tick_value = info.trade_contract_size * info.point
 
-                if tick_value == 0 and info.trade_contract_size and info.point:
-                    tick_value = info.trade_contract_size * info.point
-
-                if tick_size and tick_value:
-                    risk_amount = (sl_dist / tick_size) * tick_value * pos.volume
+            risk_amount = _mt5_position_risk_amount(
+                pos.price_open,
+                pos.sl,
+                pos.volume,
+                tick_size,
+                tick_value,
+                _heat_fallback_sl_pct,
+            )
 
         result.append(
             {

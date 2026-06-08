@@ -1,114 +1,145 @@
 """Tests for safety fixes from deep audit (C1, M1, M2, M5, M7, L2)."""
 
 import os
-import re
 import sys
+from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import pytest
+from flask import Flask
+
+import execution
 from risk_engine import risk_check
 
-# ---------------------------------------------------------------------------
-# C1: Timestamp laundering on failed refresh
-# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def exec_client(monkeypatch):
+    class _FakeLog:
+        def warning(self, *args, **kwargs):
+            return None
+
+        def info(self, *args, **kwargs):
+            return None
+
+    class _FakeRt:
+        CONFIG = {"EXECUTION_ENABLED": True, "SIGNAL_MAX_AGE_SEC": 300}
+        ALL_PAIRS = [{"display": "EUR/USD", "type": "forex"}]
+        AUDIT_DB = ":memory:"
+        log = _FakeLog()
+
+        @staticmethod
+        def kill_switch():
+            return False
+
+        @staticmethod
+        def analyze_pair(pair_obj, btc_bias, style="swing"):
+            raise RuntimeError("refresh failed")
+
+    monkeypatch.setattr(execution, "rt", lambda: _FakeRt())
+    app = Flask(__name__)
+    execution.register_execution_routes(app)
+    return app.test_client()
 
 
-def test_stale_signal_pair_not_in_universe_rejected():
-    """Execution.py now returns 409 instead of faking timestamp when pair not found."""
-    import execution
-    import inspect
+def test_stale_signal_pair_not_in_universe_rejected(monkeypatch):
+    class _FakeLog:
+        def warning(self, *args, **kwargs):
+            return None
 
-    src = inspect.getsource(execution.api_execute)
-    assert "STALE_SIGNAL_REFRESH_FAILED" in src, (
-        "C1 fix missing: stale signal refresh failure should return STALE_SIGNAL_REFRESH_FAILED"
+    class _NoPairRt:
+        CONFIG = {"EXECUTION_ENABLED": True, "SIGNAL_MAX_AGE_SEC": 300}
+        ALL_PAIRS = []
+        log = _FakeLog()
+
+        @staticmethod
+        def kill_switch():
+            return False
+
+    monkeypatch.setattr(execution, "rt", lambda: _NoPairRt())
+
+    app = Flask(__name__)
+    execution.register_execution_routes(app)
+    client = app.test_client()
+    resp = client.post(
+        "/api/execute",
+        json={
+            "signal": {
+                "pair": "EUR/USD",
+                "direction": "LONG",
+                "timestamp": "2000-01-01T00:00:00+00:00",
+                "type": "forex",
+                "price": 1.1,
+                "sl": 1.09,
+                "tp1": 1.12,
+            }
+        },
     )
-    assert 'sig["timestamp"] = datetime.now(timezone.utc).isoformat()' not in src, (
-        "C1 fix incomplete: timestamp laundering via else-branch still present"
+    assert resp.status_code == 409
+    assert "STALE_SIGNAL_REFRESH_FAILED" in resp.get_json()["error"]
+
+
+def test_stale_signal_live_refresh_failed_rejected(exec_client):
+    resp = exec_client.post(
+        "/api/execute",
+        json={
+            "signal": {
+                "pair": "EUR/USD",
+                "direction": "LONG",
+                "timestamp": "2000-01-01T00:00:00+00:00",
+                "type": "forex",
+                "price": 1.1,
+                "sl": 1.09,
+                "tp1": 1.12,
+            }
+        },
+    )
+    assert resp.status_code == 409
+    assert "STALE_SIGNAL_REFRESH_FAILED" in resp.get_json()["error"]
+
+
+def test_engine_b_execution_levels_return_checked(monkeypatch):
+    class _FakeLog:
+        def warning(self, *args, **kwargs):
+            return None
+
+    class _FakeRt:
+        CONFIG = {"EXECUTION_ENABLED": True, "SIGNAL_MAX_AGE_SEC": 300}
+        ALL_PAIRS = [{"display": "EUR/USD", "type": "forex"}]
+        log = _FakeLog()
+
+        @staticmethod
+        def kill_switch():
+            return False
+
+    monkeypatch.setattr(execution, "rt", lambda: _FakeRt())
+    monkeypatch.setattr(execution, "_apply_engine_b_execution_levels", lambda *args, **kwargs: False)
+    monkeypatch.setattr(
+        execution,
+        "_engine_b_levels_apply_error_response",
+        lambda sig: ({"error": "ENGINE_B_LEVELS_UNAVAILABLE: test"}, 422),
     )
 
-
-def test_stale_signal_live_refresh_failed_rejected():
-    """Execution.py now returns 409 instead of faking timestamp on refresh exception."""
-    import execution
-    import inspect
-
-    src = inspect.getsource(execution.api_execute)
-    lines = src.split("\n")
-    in_except = False
-    found_return_409 = False
-    found_timestamp_laundering = False
-    for line in lines:
-        if "except Exception as _re:" in line:
-            in_except = True
-        if in_except:
-            if "STALE_SIGNAL_REFRESH_FAILED" in line:
-                found_return_409 = True
-            if 'sig["timestamp"]' in line:
-                found_timestamp_laundering = True
-            if "return jsonify" in line and found_return_409:
-                break
-    assert found_return_409, "C1 fix missing: exception handler should return 409"
-    assert not found_timestamp_laundering, (
-        "C1 fix incomplete: timestamp laundering still present in exception handler"
+    app = Flask(__name__)
+    execution.register_execution_routes(app)
+    client = app.test_client()
+    resp = client.post(
+        "/api/execute",
+        json={
+            "engine_b": {"execution_sl": 1.09, "execution_tp": 1.12, "passed": True},
+            "signal": {
+                "pair": "EUR/USD",
+                "direction": "LONG",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "type": "forex",
+                "price": 1.1,
+                "is_naked": True,
+                "enginesAligned": True,
+            },
+        },
     )
-
-
-# ---------------------------------------------------------------------------
-# M1: _apply_engine_b_execution_levels return value checked
-# ---------------------------------------------------------------------------
-
-
-def test_engine_b_execution_levels_return_checked():
-    """Execution.py api_execute now checks return value of _apply_engine_b_execution_levels."""
-    import execution
-    import inspect
-
-    src = inspect.getsource(execution.api_execute)
-    assert "_levels_applied = _apply_engine_b_execution_levels" in src, (
-        "M1 fix missing: return value of _apply_engine_b_execution_levels not captured"
-    )
-    assert "if not _levels_applied:" in src, (
-        "M1 fix missing: return value not checked"
-    )
-    assert "ENGINE_B_LEVELS_UNAVAILABLE" in src, (
-        "M1 fix missing: error code for missing Engine B levels not present"
-    )
-
-
-# ---------------------------------------------------------------------------
-# M2: bos_volume_confirmed defaults False
-# ---------------------------------------------------------------------------
-
-
-def test_bos_volume_confirmed_defaults_false_in_detector():
-    """Verify bos_volume_confirmed initializes to False in _detect_bos()."""
-    from market_structure import NakedEngine
-    import inspect
-
-    try:
-        src = inspect.getsource(NakedEngine._detect_bos)
-    except (OSError, TypeError):
-        pytest.skip("_detect_bos source unavailable")
-
-    assert "bos_volume_confirmed = False" in src, (
-        "M2 fix missing: bos_volume_confirmed should default to False in _detect_bos()"
-    )
-
-
-def test_bos_volume_confirmed_defaults_false_in_result_dict():
-    """Verify analyze_structure result dict defaults bos_volume_confirmed to False."""
-    from market_structure import NakedEngine
-    import inspect
-
-    try:
-        src = inspect.getsource(NakedEngine.analyze_structure_direction)
-    except (OSError, TypeError):
-        pytest.skip("analyze_structure_direction source unavailable")
-
-    assert 'bos_data.get("bos_volume_confirmed", False)' in src, (
-        "M2 fix missing: bos_volume_confirmed should default to False in result dict"
-    )
+    assert resp.status_code == 422
+    assert "ENGINE_B_LEVELS_UNAVAILABLE" in resp.get_json()["error"]
 
 
 def test_missing_bos_volume_data_does_not_confirm():
@@ -136,11 +167,6 @@ def test_missing_bos_volume_data_does_not_confirm():
     )
 
 
-# ---------------------------------------------------------------------------
-# M5: decision_state/verdict gate bypass
-# ---------------------------------------------------------------------------
-
-
 def _make_signal(**overrides):
     base = {
         "pair": "EUR/USD",
@@ -158,37 +184,33 @@ def _make_signal(**overrides):
 
 
 def test_verdict_empty_tier_watchlist_blocks_execution(monkeypatch):
-    """Signal with empty verdict and tier=WATCHLIST must be blocked."""
     import risk_engine as re
+
     monkeypatch.setattr(re, "_current_drawdown", lambda *_args, **_kwargs: 0.0)
     monkeypatch.setattr(re, "_has_execution_freshness_evidence", lambda _s: True)
     monkeypatch.setattr(re, "CONFIG", {"MAX_OPEN_POSITIONS": 5})
 
     sig = _make_signal(verdict="", signalTier="WATCHLIST", decision_state="")
     result = risk_check(sig, 10000.0, 10000.0, [])
-    assert result.approved is False, (
-        f"M5 regression: empty verdict + WATCHLIST tier should block, got {result.reason}"
-    )
+    assert result.approved is False
     assert result.reason == "NON_EXECUTABLE_SIGNAL_STATE"
 
 
 def test_verdict_empty_tier_skip_blocks_execution(monkeypatch):
-    """Signal with empty verdict and tier=SKIP must be blocked."""
     import risk_engine as re
+
     monkeypatch.setattr(re, "_current_drawdown", lambda *_args, **_kwargs: 0.0)
     monkeypatch.setattr(re, "_has_execution_freshness_evidence", lambda _s: True)
     monkeypatch.setattr(re, "CONFIG", {"MAX_OPEN_POSITIONS": 5})
 
     sig = _make_signal(verdict="", signalTier="SKIP", decision_state="")
     result = risk_check(sig, 10000.0, 10000.0, [])
-    assert result.approved is False, (
-        f"M5 regression: empty verdict + SKIP tier should block, got {result.reason}"
-    )
+    assert result.approved is False
 
 
 def test_decision_state_watchlist_blocks_execution(monkeypatch):
-    """Signal with decision_state='watchlist' must be blocked (pre-existing)."""
     import risk_engine as re
+
     monkeypatch.setattr(re, "_current_drawdown", lambda *_args, **_kwargs: 0.0)
     monkeypatch.setattr(re, "_has_execution_freshness_evidence", lambda _s: True)
     monkeypatch.setattr(re, "CONFIG", {"MAX_OPEN_POSITIONS": 5})
@@ -199,8 +221,8 @@ def test_decision_state_watchlist_blocks_execution(monkeypatch):
 
 
 def test_normal_verdict_passes_with_valid_state(monkeypatch):
-    """Signal with valid verdict and tier should not be blocked by M5 gate."""
     import risk_engine as re
+
     monkeypatch.setattr(re, "_current_drawdown", lambda *_args, **_kwargs: 0.0)
     monkeypatch.setattr(re, "_has_execution_freshness_evidence", lambda _s: True)
     monkeypatch.setattr(re, "CONFIG", {"MAX_OPEN_POSITIONS": 5})
@@ -213,104 +235,152 @@ def test_normal_verdict_passes_with_valid_state(monkeypatch):
         components={"b_checklist_passed": True, "a_has_signal": True},
     )
     result = risk_check(sig, 10000.0, 10000.0, [])
-    # Should not be rejected by decision_state/tier gate
-    assert result.reason != "NON_EXECUTABLE_SIGNAL_STATE", (
-        "M5 over-fix: valid signal incorrectly blocked by decision_state gate"
-    )
-
-
-# ---------------------------------------------------------------------------
-# M7: trust_verdict defaults to trust_neither
-# ---------------------------------------------------------------------------
+    assert result.reason != "NON_EXECUTABLE_SIGNAL_STATE"
 
 
 def test_trust_verdict_defaults_to_trust_neither():
-    """Unparseable AI trust verdict should default to trust_neither, not trust_both."""
     from engine_c_ai import normalize_engine_c_ai_weight_verdict
 
     out = normalize_engine_c_ai_weight_verdict({"trust_verdict": None})
-    assert out.get("trust_verdict") != "trust_both", (
-        "M7 regression: trust_verdict should not default to trust_both"
-    )
+    assert out.get("trust_verdict") != "trust_both"
 
     out2 = normalize_engine_c_ai_weight_verdict({})
-    assert out2.get("trust_verdict") == "trust_neither", (
-        "M7 fix missing: empty input should default to trust_neither"
-    )
+    assert out2.get("trust_verdict") == "trust_neither"
 
 
-# ---------------------------------------------------------------------------
-# L2: bybit SL width cap no longer silently passes
-# ---------------------------------------------------------------------------
-
-
-def test_bybit_sl_width_exception_logged_not_silent():
-    """Bybit executor SL width check fail-closed: exception rejects with SL_CAP_CHECK_FAILED."""
+def test_bybit_sl_width_exception_logged_not_silent(monkeypatch):
+    from risk_engine import RiskApproval
     import bybit_executor
-    import inspect
 
-    try:
-        src = inspect.getsource(bybit_executor.bybit_execute)
-    except (OSError, TypeError, AttributeError):
-        pytest.skip("bybit_execute source unavailable")
+    class _FakeExchange:
+        def fetch_ticker(self, symbol):
+            return {"ask": 50000.0, "bid": 49999.0, "last": 50000.0}
 
-    assert "except Exception:" in src, (
-        "L2: SL width check still has exception handler"
-    )
-    assert "SL_CAP_CHECK_FAILED" in src, (
-        "L2 fix: cap check exception must reject order"
-    )
-    assert "proceeding but this bypasses" not in src, (
-        "L2 regression: must not proceed after cap check failure"
-    )
+    approval = RiskApproval(True, 0.01, 100.0, 0.01, 0.01, 0.0, "OK")
+    signal = {
+        "pair": "BTCUSDT",
+        "symbol": "BTCUSDT",
+        "direction": "LONG",
+        "price": 50000.0,
+        "sl": 49000.0,
+        "tp1": 52000.0,
+        "type": "crypto",
+    }
 
-
-# ---------------------------------------------------------------------------
-# HTTP semantics: hard failures must not use 200 OK
-# ---------------------------------------------------------------------------
-
-
-def test_api_execute_risk_rejection_uses_422_not_200():
-    import execution
-    import inspect
-
-    src = inspect.getsource(execution.api_execute)
-    assert "Risk engine rejected" in src
-    block = src.split("Risk engine rejected", 1)[1][:900]
-    assert re.search(r"\),\s*422\b", block), (
-        "Risk rejection response must use HTTP 422, not 200"
+    monkeypatch.setattr(bybit_executor, "_get_exchange", lambda: _FakeExchange())
+    monkeypatch.setattr(bybit_executor, "_ensure_leverage", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        "risk_engine.resolve_max_sl_pct",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("cap resolver down")),
     )
 
+    out = bybit_executor.bybit_execute(signal, approval)
+    assert out.get("success") is False
+    assert "SL_CAP_CHECK_FAILED" in (out.get("error") or "")
 
-def test_api_execute_mt5_missing_symbol_uses_400_not_200():
-    import execution
-    import inspect
 
-    src = inspect.getsource(execution.api_execute)
-    assert "not available on your MT5 broker" in src
-    block = src.split("not available on your MT5 broker", 1)[1][:500]
-    assert re.search(r"\),\s*400\b", block), (
-        "Unknown MT5 symbol must use HTTP 400, not 200"
+def test_api_execute_risk_rejection_uses_422_not_200(monkeypatch):
+    class _FakeLog:
+        def warning(self, *args, **kwargs):
+            return None
+
+    class _FakeRt:
+        CONFIG = {"EXECUTION_ENABLED": True, "SIGNAL_MAX_AGE_SEC": 300}
+        ALL_PAIRS = [{"display": "EUR/USD", "type": "forex"}]
+        log = _FakeLog()
+
+        @staticmethod
+        def kill_switch():
+            return False
+
+    class _RejectApproval:
+        approved = False
+        reason = "RR_BELOW_MINIMUM"
+        volume = 0.0
+        risk_amount = 0.0
+        risk_pct = 0.0
+
+        def to_dict(self):
+            return {"approved": False, "reason": self.reason}
+
+    monkeypatch.setattr(execution, "rt", lambda: _FakeRt())
+    monkeypatch.setattr(execution, "_engine_a_trade_gate_block_reason", lambda *args, **kwargs: None)
+    monkeypatch.setattr(execution, "_hydrate_execution_candle_quality", lambda *args, **kwargs: None)
+    monkeypatch.setattr(execution, "apply_engine_a_exit_mode", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        "risk_engine.risk_check",
+        lambda **kwargs: _RejectApproval(),
+    )
+    monkeypatch.setattr(
+        "mt5_executor.mt5_get_account",
+        lambda: {"balance": 10000.0, "equity": 10000.0},
+    )
+    monkeypatch.setattr("mt5_executor.mt5_get_positions", lambda: {"positions": []})
+    monkeypatch.setattr(
+        "mt5_executor.mt5_get_symbol_info",
+        lambda symbol: {"digits": 5, "point": 0.00001, "volume_min": 0.01},
     )
 
+    app = Flask(__name__)
+    execution.register_execution_routes(app)
+    client = app.test_client()
+    resp = client.post(
+        "/api/execute",
+        json={
+            "signal": {
+                "pair": "EUR/USD",
+                "direction": "LONG",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "type": "forex",
+                "price": 1.1,
+                "sl": 1.09,
+                "tp1": 1.12,
+            }
+        },
+    )
+    assert resp.status_code == 422
+    assert "Risk engine rejected" in resp.get_json()["error"]
 
-# ---------------------------------------------------------------------------
-# Summary of audit fixes verified by this test file
-# ---------------------------------------------------------------------------
 
+def test_api_execute_mt5_missing_symbol_uses_400_not_200(monkeypatch):
+    class _FakeLog:
+        def warning(self, *args, **kwargs):
+            return None
 
-def test_audit_fixes_summary():
-    """Meta-test: confirm all fix markers are present in the source files."""
-    import execution
-    import inspect as _i
+    class _FakeRt:
+        CONFIG = {"EXECUTION_ENABLED": True, "SIGNAL_MAX_AGE_SEC": 300}
+        ALL_PAIRS = [{"display": "EUR/USD", "type": "forex"}]
+        log = _FakeLog()
 
-    exec_src = _i.getsource(execution.api_execute)
-    checks = [
-        ("C1", "STALE_SIGNAL_REFRESH_FAILED", exec_src),
-        ("M1", "ENGINE_B_LEVELS_UNAVAILABLE", exec_src),
-    ]
-    failures = []
-    for tag, marker, src in checks:
-        if marker not in src:
-            failures.append(f"{tag}: '{marker}' not found in source")
-    assert not failures, "\n".join(failures)
+        @staticmethod
+        def kill_switch():
+            return False
+
+    monkeypatch.setattr(execution, "rt", lambda: _FakeRt())
+    monkeypatch.setattr(execution, "_engine_a_trade_gate_block_reason", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        "mt5_executor.mt5_get_account",
+        lambda: {"balance": 10000.0, "equity": 10000.0},
+    )
+    monkeypatch.setattr("mt5_executor.mt5_get_positions", lambda: {"positions": []})
+    monkeypatch.setattr("mt5_executor.mt5_get_symbol_info", lambda symbol: None)
+
+    app = Flask(__name__)
+    execution.register_execution_routes(app)
+    client = app.test_client()
+    resp = client.post(
+        "/api/execute",
+        json={
+            "signal": {
+                "pair": "EUR/USD",
+                "direction": "LONG",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "type": "forex",
+                "price": 1.1,
+                "sl": 1.09,
+                "tp1": 1.12,
+            }
+        },
+    )
+    assert resp.status_code == 400
+    assert "not available on your MT5 broker" in resp.get_json()["error"]

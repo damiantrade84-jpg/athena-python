@@ -34,14 +34,6 @@ _ASSET_LABELS = {
     "forex": "Forex",
 }
 
-_BT_STEP = {"forex": 0.03}
-_BT_LIMITS = {
-    "forex": (0.80, 2.80),      # Engine A v2: 0-3.0 scale (was 0.80-1.90 on old 0-2.0 scale)
-    "crypto": (0.60, 3.00),     # Engine A v2: 0-3.0 scale (was 0.30-2.00)
-    "commodity": (0.60, 3.00),  # Engine A v2: 0-3.0 scale (was 0.30-2.00)
-    "stock": (0.60, 3.00),      # Engine A v2: 0-3.0 scale (was 0.30-2.00)
-    "index": (0.60, 3.00),      # Engine A v2: 0-3.0 scale (was 0.30-2.00)
-}
 _LIVE_STEP = 0.05
 _LIVE_LIMITS = {
     "forex": (1.00, 2.80),      # Engine A v2: 0-3.0 scale (was 1.00-2.00 on old 0-2.0 scale)
@@ -350,7 +342,9 @@ def _build_engine_a_recommendations(rows: list[dict[str, Any]]) -> list[dict[str
         avg_sqn = round(sum(float(row.get("sqn") or 0.0) for row in bucket) / pair_count, 2)
         avg_wr = round(sum(float(row.get("win_rate") or 0.0) for row in bucket) / pair_count, 2)
 
-        cur_live = float(current_live.get(asset_type, 0.0) or 0.0)
+        from scoring import current_engine_a_threshold_for_asset_class
+
+        cur_live = current_engine_a_threshold_for_asset_class(asset_type, current_live)
         live_step = _LIVE_STEP
         live_low, live_high = _LIVE_LIMITS.get(asset_type, (0.60, 2.50))
         proposed_live = cur_live
@@ -545,7 +539,9 @@ def _build_live_engine_a_recommendations(live_a: dict[str, dict[str, Any]]) -> l
     out: list[dict[str, Any]] = []
     current_live = dict(CONFIG.get("ENGINE_A_SCORE_GROUP_THRESHOLDS") or {})
     for asset_type, summary in live_a.items():
-        cur_live = float(current_live.get(asset_type, 0.0) or 0.0)
+        from scoring import current_engine_a_threshold_for_asset_class
+
+        cur_live = current_engine_a_threshold_for_asset_class(asset_type, current_live)
         live_low, live_high = _LIVE_LIMITS.get(asset_type, (0.60, 2.50))
         direction = _live_engine_a_signal(summary)
         if not direction:

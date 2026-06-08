@@ -270,3 +270,34 @@ def test_engine_b_structure_ready_scan_tier_does_not_override_trade_or_safety_bl
         "event_risk",
         config=_structure_ready_config(enabled=True),
     ) == ("skip", "event_risk")
+
+
+def test_analyze_pair_propagates_non_init_runtime_error(monkeypatch):
+    import scanner
+
+    class _FakeRt:
+        def analyze_pair(self, *args, **kwargs):
+            raise RuntimeError("data bug")
+
+    monkeypatch.setattr(scanner, "rt", lambda: _FakeRt())
+    with pytest.raises(RuntimeError, match="data bug"):
+        scanner.analyze_pair({"display": "EUR/USD"}, "neutral")
+
+
+def test_analyze_pair_legacy_fallback_when_runtime_not_initialized(monkeypatch):
+    import scanner
+
+    class _Legacy:
+        def analyze_pair(self, *args, **kwargs):
+            return {"pair": "EUR/USD", "direction": "LONG"}
+
+    def _raise_runtime():
+        raise RuntimeError("athena runtime not initialized (set_runtime not called)")
+
+    monkeypatch.setattr(scanner, "rt", _raise_runtime)
+    monkeypatch.setattr(
+        "athena_legacy.load",
+        lambda: _Legacy(),
+    )
+    out = scanner.analyze_pair({"display": "EUR/USD"}, "neutral")
+    assert out["direction"] == "LONG"

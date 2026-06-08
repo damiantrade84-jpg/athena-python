@@ -85,7 +85,7 @@ export default function ScanConfigPanel() {
   const { post: postAdvisory } = useApiPost<{ saved?: boolean; error?: string }>();
 
   useEffect(() => {
-    const live = btMin?.live_class ?? btMin?.bt_min;
+    const live = btMin?.live_class;
     if (live) setLocalLiveClass(prev => ({ ...live, ...prev }));
   }, [btMin]);
 
@@ -172,7 +172,7 @@ export default function ScanConfigPanel() {
                 <div className="space-y-2">
                   <p className="text-[10px] uppercase text-muted-foreground">Per asset class</p>
                   {ASSET_CLASSES.map(cls => {
-                    const live = localLiveClass[cls] ?? btMin?.live_class?.[cls] ?? btMin?.bt_min?.[cls];
+                    const live = localLiveClass[cls] ?? btMin?.live_class?.[cls];
                     return (
                       <div key={cls} className="flex items-center justify-between gap-2">
                         <span className="text-xs capitalize font-medium">{cls}</span>

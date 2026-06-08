@@ -105,6 +105,23 @@ def _bt_forex_d1_bar_time(d1_ts: str) -> str:
         return d1_ts  # fallback: use original if parsing fails
 
 
+def _classify_engine_c_timeout(r_multiple: float) -> tuple[str | None, str | None]:
+    """Classify Engine C TIMEOUT exit by open R at bar close."""
+    if r_multiple > 0.01:
+        return "TIMEOUT_PROFIT", "PROFIT"
+    if r_multiple < -0.01:
+        return "TIMEOUT_LOSS", "LOSS"
+    return "TIMEOUT_FLAT", "FLAT"
+
+
+def _engine_c_timeout_subcounts(trades: list[dict]) -> dict[str, int]:
+    return {
+        "timeout_profit": sum(1 for t in trades if t.get("timeout_class") == "TIMEOUT_PROFIT"),
+        "timeout_loss": sum(1 for t in trades if t.get("timeout_class") == "TIMEOUT_LOSS"),
+        "timeout_flat": sum(1 for t in trades if t.get("timeout_class") == "TIMEOUT_FLAT"),
+    }
+
+
 log = logging.getLogger("sentinel")
 
 
@@ -6395,18 +6412,7 @@ def backtest_pair_consensus(
             if risk > 0:
                 open_r = ((last_close - entry) / risk) if direction == "LONG" else ((entry - last_close) / risk)
                 r_multiple = round(max(-1.0, min(target_rr, open_r)), 2)
-                
-                # Classify timeout outcome
-                if r_multiple > 0.01:  # Positive timeout
-                    timeout_class = "TIMEOUT_PROFIT"
-                    forced_exit_pnl_sign = "PROFIT"
-                elif r_multiple < -0.01:  # Negative timeout
-                    timeout_class = "TIMEOUT_LOSS"
-                    forced_exit_pnl_sign = "LOSS"
-                else:  # Near-zero timeout
-                    timeout_class = "TIMEOUT_FLAT"
-                    forced_exit_pnl_sign = "FLAT"
-                
+                timeout_class, forced_exit_pnl_sign = _classify_engine_c_timeout(r_multiple)
                 forced_exit_result_r = r_multiple
 
         _fee_r = _bt_transaction_cost_r(entry, sl, _ptype)
@@ -6493,9 +6499,10 @@ def backtest_pair_consensus(
     _to_count = sum(1 for t in trades if t.get("outcome") == "TIMEOUT")
     
     # PHASE 1B: Timeout sub-counts for detailed reporting
-    _to_profit = sum(1 for t in trades if t.get("timeout_class") == "TIMEOUT_PROFIT")
-    _to_loss = sum(1 for t in trades if t.get("timeout_class") == "TIMEOUT_LOSS")
-    _to_flat = sum(1 for t in trades if t.get("timeout_class") == "TIMEOUT_FLAT")
+    _timeout_subcounts = _engine_c_timeout_subcounts(trades)
+    _to_profit = _timeout_subcounts["timeout_profit"]
+    _to_loss = _timeout_subcounts["timeout_loss"]
+    _to_flat = _timeout_subcounts["timeout_flat"]
     
     log.warning(
         f"[ENGINE C BT] {pair['display']} done: {result.get('totalTrades', 0)} trades "

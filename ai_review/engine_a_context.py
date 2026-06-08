@@ -736,7 +736,12 @@ def select_ohlcv_bars_for_chart(
     """Pick candle series aligned to the chart timeframe for strategy facts."""
     tf = str((screenshot_meta or {}).get("chart_timeframe") or timeframe or "H4").upper()
     if tf in ("M1", "M2", "M3", "M5", "M15"):
-        raw = signal.get("m1Candles") or signal.get("m5Candles") or signal.get("h1Candles")
+        raw = (
+            signal.get("m1Candles")
+            or signal.get("m5Candles")
+            or signal.get("m15Candles")
+            or signal.get("h1Candles")
+        )
     elif tf in ("M30", "H1", "H2", "H3"):
         raw = signal.get("h1Candles") or signal.get("h4Candles")
     elif tf == "H4":

@@ -1082,14 +1082,25 @@ def api_quick_execute():
                 if _fresh:
                     _orig_dir = sig.get("direction", "")
                     _is_manual_override = bool(d.get("is_manual_override"))
-                    if not _is_manual_override and _fresh["direction"] != _orig_dir:
-                        return jsonify(
-                            {
-                                "error": f"SIGNAL_FLIPPED: {pair} is now {_fresh['direction']} (was {_orig_dir})",
-                                "newDirection": _fresh["direction"],
-                                "refreshedAt": _fresh["timestamp"],
-                            }
-                        ), 409
+                    _fresh_dir = _fresh.get("direction")
+                    if _fresh_dir and _fresh_dir != _orig_dir:
+                        if _is_manual_override:
+                            _r.log.warning(
+                                f"[QUICK EXEC] {pair}: manual override — direction updated "
+                                f"{_orig_dir} -> {_fresh_dir}"
+                            )
+                            sig["direction"] = _fresh_dir
+                            for _lvl_key in ("sl", "tp1", "tp2", "entry"):
+                                if _fresh.get(_lvl_key) is not None:
+                                    sig[_lvl_key] = _fresh[_lvl_key]
+                        else:
+                            return jsonify(
+                                {
+                                    "error": f"SIGNAL_FLIPPED: {pair} is now {_fresh_dir} (was {_orig_dir})",
+                                    "newDirection": _fresh_dir,
+                                    "refreshedAt": _fresh["timestamp"],
+                                }
+                            ), 409
                     sig["price"] = _fresh["price"]
                     sig["atr"] = _fresh.get("atr", sig.get("atr", 0))
                     sig["confluenceScore"] = _fresh.get(
@@ -1238,7 +1249,6 @@ def api_quick_execute():
             symbol_info=symbol_info,
             kill_switch=_r.kill_switch(),
             sizing_override=_sizing_override,
-            is_manual_override=True,
             account_domain=account.get("risk_domain"),
             volume_mode=_volume_mode,
             execution_context=_exec_context,
@@ -2502,16 +2512,6 @@ def api_scalp_execute():
     if not sig:
         return jsonify({"error": "Missing signal data"}), 400
 
-    review_id = str(d.get("review_id") or d.get("ai_review_id") or "").strip() or None
-    _block_reason = _engine_d_execution_block_reason(
-        sig,
-        review_id=review_id,
-        audit_db=getattr(_r, "AUDIT_DB", None),
-        cfg=_r.CONFIG,
-    )
-    if _block_reason:
-        return jsonify({"error": _block_reason, "success": False}), 400
-        
     try:
         from risk_engine import risk_check
 
@@ -2559,65 +2559,27 @@ def api_scalp_execute():
                 return jsonify({"error": f"Symbol {pair_key} not available on MT5"}), 400
             _exec_venue = "mt5"
 
-        # ── Rebase scalp levels to current live price ────────────────────────
-        # VP-based SL/TP are calculated at scan time.  By execution time the
-        # price may have drifted enough to invert or invalidate the levels.
-        # Recompute using the current broker mid-price before risk_check runs.
-        # If VP is so stale that TP ends up on the wrong side of entry, block
-        # execution and tell the user to rescan.
-        _rebase_error = None
-        try:
-            from scalp_engine import calculate_scalp_levels, _guess_asset_type, _scalp_min_rr_for_group
-            _bid = float(symbol_info.get("bid") or 0)
-            _ask = float(symbol_info.get("ask") or 0)
-            _live_px = (_bid + _ask) / 2 if _bid > 0 and _ask > 0 else _bid or _ask
-            _scan_px  = float(sig.get("price") or 0)
-            _vp = {
-                "poc": float(sig.get("vp_poc") or 0),
-                "vah": float(sig.get("vp_vah") or 0),
-                "val": float(sig.get("vp_val") or 0),
-                "lvn_levels": [],
-            }
-            if _live_px > 0 and _vp["poc"] > 0 and _vp["vah"] > 0 and _vp["val"] > 0:
-                _asset_type = _guess_asset_type(pair_key)
-                _score_group = get_pair_score_group({"display": pair_key, "symbol": pair_key, "type": _asset_type})
-                _min_rr = _scalp_min_rr_for_group(_asset_type, _score_group)
-                _rebased = calculate_scalp_levels(
-                    sig.get("direction", "LONG"),
-                    _live_px,
-                    _vp,
-                    sig.get("zone_type", "trend_continuation"),
-                    symbol_info,
-                    _asset_type,
-                    min_rr_override=_min_rr,
-                    score_group=_score_group,
-                )
-                drift_pct = abs(_live_px - _scan_px) / _scan_px * 100 if _scan_px else 0
-                if _rebased.get("rr_below_min"):
-                    # VP structure invalidated (TP inverted) or RR too low — do not execute
-                    _rebase_error = (
-                        f"VP structure invalidated by price drift ({drift_pct:.2f}% since scan). "
-                        f"Rescan required."
-                    )
-                    _r.log.warning(f"[SCALP EXEC] {pair_key} BLOCKED: {_rebase_error}")
-                else:
-                    _r.log.info(
-                        f"[SCALP EXEC] {pair_key} levels rebased: "
-                        f"price {_scan_px:.5f}→{_live_px:.5f} ({drift_pct:.2f}% drift), "
-                        f"sl {sig.get('sl')}→{_rebased['sl']}, "
-                        f"tp1 {sig.get('tp1')}→{_rebased['tp1']}"
-                    )
-                    sig = dict(sig)   # don't mutate caller's dict
-                    sig["price"] = _rebased["entry"]
-                    sig["sl"]    = _rebased["sl"]
-                    sig["tp1"]   = _rebased["tp1"]
-                    if _rebased.get("tp2"):
-                        sig["tp2"] = _rebased["tp2"]
-        except Exception as _re:
-            _r.log.warning(f"[SCALP EXEC] Level rebase failed ({_re}), using scan-time levels")
+        from scalp_engine import rebase_scalp_signal_levels
 
+        sig, _rebase_error = rebase_scalp_signal_levels(sig, pair_key, symbol_info)
         if _rebase_error:
             return jsonify({"error": _rebase_error}), 400
+
+        review_id = str(d.get("review_id") or d.get("ai_review_id") or "").strip() or None
+        from ai_scalp_review.execute_gate import engine_d_signal_hard_block
+
+        hard_block_reason = engine_d_signal_hard_block(sig)
+        _block_reason = _engine_d_execution_block_reason(
+            sig,
+            review_id=review_id,
+            audit_db=getattr(_r, "AUDIT_DB", None),
+            cfg=_r.CONFIG,
+        )
+        if _block_reason:
+            body = {"error": _block_reason, "success": False}
+            if hard_block_reason:
+                body["hardBlockReason"] = hard_block_reason
+            return jsonify(body), 400
 
         _hydrate_execution_candle_quality(sig, _r=_r)
 
@@ -2630,7 +2592,6 @@ def api_scalp_execute():
             symbol_info=symbol_info,
             kill_switch=_r.kill_switch(),
             sizing_override=_sizing_override,
-            is_manual_override=True,
             account_domain=account.get("risk_domain"),
             volume_mode=_volume_mode,
             execution_context=_exec_context,

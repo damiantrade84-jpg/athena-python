@@ -220,3 +220,21 @@ def test_calibration_summary_includes_engine_b_cohort_performance():
     assert perf["atr_sl_fallback_rr_tp"]["count"] == 1
     assert perf["atr_sl_fallback_rr_tp"]["failed"] == 1
     assert "engine_a" not in perf
+
+
+def test_engine_a_calibration_row_reads_directional_ramp_mult_key():
+    from calibration_diagnostics import build_engine_a_calibration_row
+
+    row = build_engine_a_calibration_row(
+        pair={"display": "BTC/USDT", "symbol": "BTCUSDT", "type": "crypto"},
+        result={
+            "score": 2.0,
+            "factorDiagnostics": {"directionalRampMult": 0.85},
+        },
+        factor_result={},
+        threshold=2.5,
+        passed=False,
+        failure_reason="below_threshold",
+    )
+
+    assert row["dir_ramp_mult"] == pytest.approx(0.85)
