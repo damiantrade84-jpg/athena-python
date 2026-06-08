@@ -1474,7 +1474,7 @@ function engineBMarkers(
       text: macroSwing,
     });
   }
-  if (payload.bos_confirmed || Object.keys(payload.bos_data || {}).length > 0) {
+  if (payload.bos_confirmed) {
     markers.push({
       time: last.time,
       position: 'belowBar',
@@ -1483,7 +1483,7 @@ function engineBMarkers(
       text: 'BOS',
     });
   }
-  if (payload.choch_confirmed || Object.keys(payload.choch_data || {}).length > 0) {
+  if (payload.choch_confirmed) {
     markers.push({
       time: last.time,
       position: 'aboveBar',
@@ -2068,10 +2068,10 @@ function buildCleanLegendChips(args: {
     if (obs.some((zone) => !(typeof zone.type === 'string' && zone.type.toLowerCase().includes('bull')))) {
       chips.push({ key: 'ob_bear', label: 'OB bear', color: ENGINE_B_ZONE_STYLE.ob_bear.stroke, swatch: 'band' });
     }
-    if (payload.bos_confirmed || Object.keys(payload.bos_data || {}).length > 0) {
+    if (payload.bos_confirmed) {
       chips.push({ key: 'bos', label: 'BOS', color: 'rgba(96, 165, 250, 0.85)', swatch: 'line' });
     }
-    if (payload.choch_confirmed || Object.keys(payload.choch_data || {}).length > 0) {
+    if (payload.choch_confirmed) {
       chips.push({ key: 'choch', label: 'CHOCH', color: 'rgba(168, 85, 247, 0.85)', swatch: 'line' });
     }
     if (firstNumber(payload.breaker_block?.level) != null) {
@@ -2606,12 +2606,13 @@ export default function TVChartPanel() {
     () => evaluateTvChartExecuteBlock({
       signal: chartCandidate,
       chartSymbolKey: currentSymbolKey,
+      chartTimeframe: timeframe,
       aiReview,
       suggestedTradePlan: suggestedPlan,
       isTestMode,
       isPaper,
     }),
-    [chartCandidate, currentSymbolKey, aiReview, suggestedPlan, isTestMode, isPaper],
+    [chartCandidate, currentSymbolKey, timeframe, aiReview, suggestedPlan, isTestMode, isPaper],
   );
   const executeWarning = useMemo(() => aiReviewWarningForExecute(aiReview), [aiReview]);
   const showFlagWatchAction = Boolean(aiReview || suggestedPlan || flagStatus);
@@ -2665,6 +2666,8 @@ export default function TVChartPanel() {
         volumeMode,
         sizingOverride,
         exitMode,
+        engineBOverlay: engineBOverlay as Record<string, unknown> | undefined,
+        reviewId: aiReview?.review_id ?? null,
       });
       const result = await apiClient.postJson('/api/quick-execute', payload) as {
         success?: boolean;
@@ -2720,12 +2723,15 @@ export default function TVChartPanel() {
   useEffect(() => {
     if (!aiReview) return;
     const reviewSymbolKey = aiReviewSymbolKeyRef.current || symbolKey(aiReview.engine_a_context?.symbol);
-    if (currentSymbolKey && (!reviewSymbolKey || reviewSymbolKey !== currentSymbolKey)) {
+    const reviewTimeframe = aiReview.engine_a_context?.timeframe;
+    const symbolChanged = currentSymbolKey && (!reviewSymbolKey || reviewSymbolKey !== currentSymbolKey);
+    const timeframeChanged = timeframe && reviewTimeframe && reviewTimeframe !== timeframe;
+    if (symbolChanged || timeframeChanged) {
       setAiReview(null);
       setAiReviewError(null);
       lastAppliedRouteKeyRef.current = null;
     }
-  }, [aiReview, currentSymbolKey]);
+  }, [aiReview, currentSymbolKey, timeframe]);
 
   useEffect(() => {
     if (!timeframeAutoMode || !timeframeRoute || timeframeRoute.enabled === false) return;
@@ -3019,6 +3025,9 @@ export default function TVChartPanel() {
           showEngineBOverlays && engineBOverlay?.overlay_source === 'engine_b'
             ? engineBOverlayLines(engineBOverlay, true).length + buildEngineBZones(engineBOverlay, true).length
             : 0,
+        engineBContext: showEngineBOverlays && engineBOverlay?.overlay_source === 'engine_b'
+            ? (engineBOverlay as Record<string, unknown>)
+            : null,
         engineBOverlayStatus,
         engineBOverlayError: engineBOverlayError ?? null,
         priceRange: priceValues.length

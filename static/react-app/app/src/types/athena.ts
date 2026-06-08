@@ -1569,6 +1569,7 @@ export interface AIChartReviewChartSnapshot {
   visibleCandleCount?: number | null;
   indicatorLayerStates?: Record<string, boolean>;
   engineBOverlayCount?: number;
+  engineBContext?: Record<string, unknown> | null;
   engineBOverlayStatus?: 'disabled' | 'loading' | 'ready' | 'error' | 'unavailable';
   engineBOverlayError?: string | null;
   priceRange?: {

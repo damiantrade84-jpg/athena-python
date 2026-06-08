@@ -71,6 +71,7 @@ type EngineBZoneLike = {
   upper?: number;
   low?: number;
   high?: number;
+  level?: number;
 };
 
 type EngineBBlockLike = {
@@ -79,6 +80,7 @@ type EngineBBlockLike = {
   low?: number;
   high?: number;
   mitigated?: boolean;
+  type?: string;
 };
 
 export interface EngineBOverlayLike {
@@ -87,7 +89,8 @@ export interface EngineBOverlayLike {
   order_blocks?: Array<EngineBBlockLike>;
   active_fvgs?: Array<EngineBBlockLike>;
   bos_data?: { last_broken_high?: number; last_broken_low?: number; level?: number };
-  choch_data?: { choch_level?: number; level?: number };
+  choch_data?: { choch_level?: number; level?: number; price?: number };
+  breaker_block?: { level?: number; type?: string };
   current_swing_sequence?: string;
 }
 
@@ -131,11 +134,11 @@ function pushLevel(
 }
 
 function zoneLow(zone: EngineBZoneLike | EngineBBlockLike): number | null | undefined {
-  return zone.lower ?? zone.bottom ?? zone.low;
+  return (zone as EngineBZoneLike).lower ?? (zone as EngineBBlockLike).bottom ?? zone.low;
 }
 
 function zoneHigh(zone: EngineBZoneLike | EngineBBlockLike): number | null | undefined {
-  return zone.upper ?? zone.top ?? zone.high;
+  return (zone as EngineBZoneLike).upper ?? (zone as EngineBBlockLike).top ?? zone.high;
 }
 
 function pushZoneLevels(

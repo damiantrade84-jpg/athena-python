@@ -46,6 +46,7 @@ import {
   isScalpAiReviewEligible,
   normalizeSymbolKey,
 } from '@/lib/manualExecuteHelpers';
+import { buildEngineBZones, EngineBZonePrimitive } from '@/lib/engineBPrimitives';
 import { buildScalpChartLevels, buildOrderFlowPrimitiveMarkers, DEFAULT_SCALP_OVERLAY_TOGGLES, type EngineBOverlayLike, type OrderFlowPayloadLike, type ScalpOverlayToggles } from '@/lib/scalpWorkbenchChart/layers';
 import { buildScalpChartSnapshot, buildRenderedLayers } from '@/lib/scalpWorkbenchChart/chartSnapshot';
 import { hasScalpNativeCanvas, waitForScalpChartRenderReady } from '@/lib/scalpWorkbenchChart/renderReady';
@@ -903,6 +904,7 @@ export default function ScalpWorkbenchPanel() {
   const [engineBOverlay, setEngineBOverlay] = useState<EngineBOverlayLike | null>(null);
   const [orderFlowPayload, setOrderFlowPayload] = useState<OrderFlowPayloadLike | null>(null);
   const orderFlowPrimitiveRef = useRef<OrderFlowMarkerPrimitive | null>(null);
+  const engineBZonePrimitiveRef = useRef<EngineBZonePrimitive | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const chartCaptureRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<IChartApi | null>(null);
@@ -988,6 +990,10 @@ export default function ScalpWorkbenchPanel() {
   }, [scalpWorkbenchIntent, clearScalpWorkbenchIntent, setScalpLabSelectedCache, tfDisplayOverride]);
 
   useEffect(() => {
+    setScalpAiReviewResponse(null);
+  }, [chartSymbol, timeframe]);
+
+  useEffect(() => {
     let cancelled = false;
     const poll = async () => {
       try {
@@ -1044,12 +1050,14 @@ export default function ScalpWorkbenchPanel() {
             strictOrderflowSourcePass: activeUi.sourceContract.strictOrderflowSourcePass,
           }
         : null,
+      chartSymbolKey: chartSymbol || null,
+      chartTimeframe: timeframe || null,
       aiReview: scalpAiReviewResponse,
       suggestedTradePlan: suggestedPlan,
       isTestMode,
       isPaper,
     }),
-    [activeSignal, activeUi.sourceContract.strictOrderflowSourcePass, scalpAiReviewResponse, suggestedPlan, isTestMode, isPaper],
+    [activeSignal, activeUi.sourceContract.strictOrderflowSourcePass, chartSymbol, timeframe, scalpAiReviewResponse, suggestedPlan, isTestMode, isPaper],
   );
   const showViewSuggestedTrades = Boolean(flagStatus) || symbolWatches.length > 0;
   const { runner: suggestedTradeRunner } = useSuggestedTradeRunnerStatus();
@@ -1203,7 +1211,7 @@ export default function ScalpWorkbenchPanel() {
     liquidity: activeUi.liquidityContext,
     setup: activeUi.scalpSetup,
     structuralTp,
-    engineB: engineBOverlay,
+    engineB: null, // Handled by EngineBZonePrimitive
     engineBSimplified: true,
     aiVerdict: overlayToggles.aiVerdict ? aiVerdictOverlay : null,
     anchorPrice: activeUi.scalpSetup.entry,
@@ -1531,6 +1539,11 @@ export default function ScalpWorkbenchPanel() {
     const orderFlowPrimitive = new OrderFlowMarkerPrimitive();
     candleSeries.attachPrimitive(orderFlowPrimitive);
     orderFlowPrimitiveRef.current = orderFlowPrimitive;
+    
+    const engineBZonePrimitive = new EngineBZonePrimitive();
+    candleSeries.attachPrimitive(engineBZonePrimitive);
+    engineBZonePrimitiveRef.current = engineBZonePrimitive;
+    
     candleSeries.setData(candleRows);
 
     for (const level of priceLevels) {
@@ -1594,8 +1607,15 @@ export default function ScalpWorkbenchPanel() {
       candleSeriesRef.current = null;
       rightEdgeLabelPrimitiveRef.current = null;
       orderFlowPrimitiveRef.current = null;
+      engineBZonePrimitiveRef.current = null;
     };
   }, [candleRows, priceLevels, orderFlowMarkers]);
+
+  useEffect(() => {
+    engineBZonePrimitiveRef.current?.setZones(
+      buildEngineBZones(engineBOverlay, overlayToggles.engineB)
+    );
+  }, [engineBOverlay, overlayToggles.engineB]);
 
   const warnings = useMemo(() => {
     const items: Array<{ text: string; tone: BadgeTone }> = [];
@@ -1821,7 +1841,7 @@ export default function ScalpWorkbenchPanel() {
           </CardContent>
         </Card>
 
-        <div className="min-w-0 space-y-3 xl:sticky xl:top-0" data-review-rail style={{ maxHeight: '540px' }}>
+        <div className="min-w-0 space-y-3 xl:sticky xl:top-0 overflow-y-auto" data-review-rail style={{ maxHeight: '540px' }}>
           <div className="flex flex-wrap items-center gap-2">
             <CompactSuggestedWatchStatus watches={symbolWatches} />
             {suggestedTradeRunner && (

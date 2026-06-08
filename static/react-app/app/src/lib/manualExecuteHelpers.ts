@@ -166,8 +166,9 @@ export function buildQuickExecutePayload(args: {
   volumeMode?: ExecutionVolumeMode;
   sizingOverride?: number;
   exitMode?: ExitModeSelection;
+  reviewId?: string | null;
 }): Record<string, unknown> {
-  const { signal, engineBOverlay, isEngineBOnly, pipMode, volumeMode, sizingOverride, exitMode } = args;
+  const { signal, engineBOverlay, isEngineBOnly, pipMode, volumeMode, sizingOverride, exitMode, reviewId } = args;
   const signalPayload = isEngineBOnly ? signal : stripEngineBFromSignal(signal);
   const nakedData = isEngineBOnly
     ? (signal.naked_data ?? signal.engine_b ?? {})
@@ -176,7 +177,7 @@ export function buildQuickExecutePayload(args: {
   const volumePayload = buildExecutionVolumePayload({ volumeMode, sizingOverride });
   // Per-trade exit-mode override is Engine-A only (backend no-ops it for engine_b).
   const exitModePayload = isEngineBOnly ? {} : buildExitModePayload({ exitMode });
-  return {
+  const payload: Record<string, unknown> = {
     signal: {
       ...signalPayload,
       symbol: signal.symbol || signal.pair || signal.display,
@@ -197,6 +198,10 @@ export function buildQuickExecutePayload(args: {
     pip_mode: effectiveStyle,
     ...volumePayload,
   };
+  if (reviewId) {
+    payload.review_id = reviewId;
+  }
+  return payload;
 }
 
 function isPositiveNumber(value: unknown): boolean {
@@ -275,12 +280,13 @@ export function canExecuteEngineASignalTier(signal: EngineASignal | null): boole
 export function evaluateTvChartExecuteBlock(args: {
   signal: EngineASignal | null;
   chartSymbolKey: string | null;
+  chartTimeframe: string | null;
   aiReview: AIChartReviewResponse | null;
   suggestedTradePlan?: SuggestedTradePlan | null;
   isTestMode: boolean;
   isPaper?: boolean;
 }): string | null {
-  const { signal, chartSymbolKey, aiReview, isTestMode, isPaper } = args;
+  const { signal, chartSymbolKey, chartTimeframe, aiReview, isTestMode, isPaper } = args;
   if (isTestMode) return 'Test mode';
   if (!signal) return 'No selected signal';
   const signalKey = normalizeSymbolKey(signal.symbol || signal.pair || signal.display);
@@ -297,7 +303,11 @@ export function evaluateTvChartExecuteBlock(args: {
   if (isPaper) return 'Paper mode';
   const reviewSymbolKey = normalizeSymbolKey(aiReview?.engine_a_context?.symbol);
   if (aiReview && reviewSymbolKey && chartSymbolKey && reviewSymbolKey !== chartSymbolKey) {
-    return 'Review not current';
+    return 'Review not current (symbol mismatch)';
+  }
+  const reviewTimeframe = aiReview?.engine_a_context?.timeframe;
+  if (aiReview && reviewTimeframe && chartTimeframe && reviewTimeframe !== chartTimeframe) {
+    return 'Review not current (timeframe mismatch)';
   }
   if (aiReviewBlocksManualExecute(aiReview)) return 'AI review: no trade';
   return null;
@@ -390,12 +400,14 @@ function scalpMechanicalGateBlock(signal: ScalpExecuteSignalLike): string | null
 
 export function evaluateScalpExecuteBlock(args: {
   signal: ScalpExecuteSignalLike | null;
+  chartSymbolKey: string | null;
+  chartTimeframe: string | null;
   aiReview: ScalpAIChartReviewResponse | null;
   suggestedTradePlan?: SuggestedTradePlan | null;
   isTestMode?: boolean;
   isPaper?: boolean;
 }): string | null {
-  const { signal, aiReview, suggestedTradePlan, isTestMode, isPaper } = args;
+  const { signal, chartSymbolKey, chartTimeframe, aiReview, suggestedTradePlan, isTestMode, isPaper } = args;
   if (isTestMode) return 'Test mode';
   if (isPaper) return 'Paper mode';
   if (!signal) return 'No scalp candidate';
@@ -405,6 +417,14 @@ export function evaluateScalpExecuteBlock(args: {
   if (grade === 'D') return 'Grade D not executable';
   if ((grade === 'A' || grade === 'B') && !aiReview?.review_id && !aiReview?.ai_review) {
     return 'AI review required';
+  }
+  const reviewSymbolKey = aiReview?.engine_d_context?.symbol ? normalizeSymbolKey(aiReview.engine_d_context.symbol) : null;
+  if (aiReview && reviewSymbolKey && chartSymbolKey && reviewSymbolKey !== chartSymbolKey) {
+    return 'Review not current (symbol mismatch)';
+  }
+  const reviewTimeframe = aiReview?.engine_d_context?.timeframe;
+  if (aiReview && reviewTimeframe && chartTimeframe && reviewTimeframe !== chartTimeframe) {
+    return 'Review not current (timeframe mismatch)';
   }
   const entry = signal.entry ?? signal.price;
   if (!isPositiveNumber(entry) || !isPositiveNumber(signal.sl) || !isPositiveNumber(signal.tp1 ?? signal.tp)) {
