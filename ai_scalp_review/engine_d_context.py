@@ -32,6 +32,20 @@ def _symbol_keys(symbol: str) -> set[str]:
     return {k for k in (raw, compact) if k}
 
 
+_ENGINE_D_MARKET_STATE_TO_PLAYBOOK = {
+    "balance": "balancing",
+    "imbalance": "trending",
+}
+
+
+def _map_engine_d_market_state(raw: Any) -> str | None:
+    """Map deterministic Engine D states to playbook vocabulary for AI review."""
+    state = str(raw or "").strip().lower()
+    if not state:
+        return None
+    return _ENGINE_D_MARKET_STATE_TO_PLAYBOOK.get(state, state)
+
+
 def _signal_matches_symbol(signal: dict[str, Any], symbol: str) -> bool:
     keys = _symbol_keys(symbol)
     for field in ("symbol", "pair", "display"):
@@ -132,7 +146,10 @@ def build_engine_d_prompt_context(engine_d_ctx: dict[str, Any]) -> dict[str, Any
         "absorptionDetected": aggression.get("absorptionDetected"),
         "htfBias": engine_d_ctx.get("htf_bias") or signal.get("htf_bias"),
         "htfEngineA": engine_d_ctx.get("htf_engine_a") or signal.get("htf_engine_a"),
-        "marketState": signal.get("market_state") or signal.get("marketState"),
+        "marketState": _map_engine_d_market_state(
+            signal.get("market_state") or signal.get("marketState")
+        ),
+        "engineMarketState": signal.get("market_state") or signal.get("marketState"),
         "sessionContext": session_context,
         "sessionConvictionHint": session_conviction_hint,
         "sourceContract": {

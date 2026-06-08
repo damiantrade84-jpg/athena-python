@@ -3889,7 +3889,6 @@ class NakedEngine:
 
         Bonus points (add to score, not required for pass):
           +1  bos_mtf_confirmed  — multi-TF BOS alignment
-          +1  ob_at_zone         — strong order block at active zone
           +1  volume_ok          — volume confirmation on breakout
         """
         try:
@@ -4178,8 +4177,6 @@ class NakedEngine:
         # Bonus confirmations — these add to the score but don't block if missing
         if bos_mtf:
             bonus_points += 1.0  # MTF BOS alignment = extra point
-        if ob_at_zone:
-            bonus_points += 1.0  # OB at zone = extra point
         if volume_ok:
             bonus_points += 1.0  # Volume confirmation = extra point
 

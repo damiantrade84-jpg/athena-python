@@ -1246,6 +1246,35 @@ def test_parse_fallback_provider_status(tmp_audit_db):
     assert "opus" not in summary["model"].lower()
 
 
+def test_engine_a_verdict_wait_without_timing_contradiction_is_entry_rejected():
+    """Wait/watch must not classify as engine_a_confirmed when timing is not flagged."""
+    ctx = _engine_a_ctx(passed=True)
+    ctx["engine_snapshots"] = extract_engine_snapshots({}, ctx)
+    ai = normalize_chart_review_response(
+        json.dumps(
+            {
+                "verdict": "CAUTION",
+                "confidence": 60,
+                "human_action": "wait",
+                "visual_confirmation": "direction aligned with engine bias",
+                "visual_contradiction": "",
+                "engine_a_alignment": "aligned with engine",
+                "entry_quality": "acceptable location, wait for pullback",
+                "atr_rr_assessment": "acceptable",
+                "freshness_assessment": "fresh",
+                "supporting_reasons": ["trend intact"],
+                "risks": ["near-term extension"],
+                "missing_context": [],
+            }
+        )
+    )
+    comparison = build_engine_a_verdict_comparison(ctx, ai, engine_snapshots=ctx["engine_snapshots"])
+    assert comparison["chartConfirmsEngineADirection"] is True
+    assert comparison["chartContradictsEntryTiming"] is not True
+    assert comparison["comparisonVerdict"] == "engine_a_direction_confirmed_entry_rejected"
+    assert comparison["finalDecision"] == "wait"
+
+
 def test_engine_a_verdict_wait_extension_downgrade():
     ctx = _engine_a_ctx(passed=True)
     ctx["engine_snapshots"] = extract_engine_snapshots({}, ctx)

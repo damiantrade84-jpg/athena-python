@@ -3401,8 +3401,15 @@ def calculate_scalp_levels(
             f"[SCALP] TP direction invalid: {direction} tp1={tp1:.5f} vs entry={entry:.5f} "
             f"(mechanical {tp1_r_mult}R target could not be built)"
         )
+    elif sl_distance > 0 and actual_rr + 1e-9 < min_rr_cfg:
+        log.warning(
+            f"[SCALP] Mechanical RR {actual_rr:.2f} < MIN_RR {min_rr_cfg:.2f} "
+            f"(entry={entry:.5f} tp1={tp1:.5f} sl_distance={sl_distance:.5f})"
+        )
 
-    rr_below_min = not tp_direction_ok
+    rr_below_min = (not tp_direction_ok) or (
+        tp_direction_ok and sl_distance > 0 and actual_rr + 1e-9 < min_rr_cfg
+    )
 
     # --- Defensive Rounding Safeguard ---
     # Protect against level collapse if symbol_info.digits are too coarse (e.g. 2 digits for a 0.09 crypto pair).
@@ -3426,6 +3433,8 @@ def calculate_scalp_levels(
         "structure_target_close": structure_target_close,
         "structural_tp_direction_ok": structural_tp_direction_ok,
         "rr":           actual_rr,
+        "min_rr":       min_rr_cfg,
+        "tp_direction_ok": tp_direction_ok,
         "rr_below_min": rr_below_min,
         "rr_synthetic": True,
         "sl_distance":  round(sl_distance, digits),
@@ -4687,10 +4696,16 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
                     atr_m15=_atr_m15,
                 )
             if levels.get("rr_below_min"):
-                log.warning(
-                    f"[SCALP] {display}: {setup['setup_type']} RR {levels['rr']:.2f} < MIN_RR "
-                    f"- surfacing as watchlist candidate (mechanical 1R TP invalid)"
-                )
+                if not levels.get("tp_direction_ok", True):
+                    log.warning(
+                        f"[SCALP] {display}: {setup['setup_type']} mechanical TP direction invalid "
+                        f"- surfacing as watchlist candidate"
+                    )
+                else:
+                    log.warning(
+                        f"[SCALP] {display}: {setup['setup_type']} RR {levels['rr']:.2f} < MIN_RR "
+                        f"{levels.get('min_rr', _min_rr):.2f} - surfacing as watchlist candidate"
+                    )
                 _append_engine_d_gate_issue(
                     "rr_below_min",
                     fail_reasons=candidate_fail_reasons,

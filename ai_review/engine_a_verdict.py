@@ -217,12 +217,12 @@ def _comparison_verdict(
         return "engine_a_contradicted"
     if chart_confirms is True and chart_contradicts_timing is True:
         return "engine_a_direction_confirmed_entry_rejected"
+    if chart_confirms is True and final_decision in ("wait", "watch"):
+        return "engine_a_direction_confirmed_entry_rejected"
     if chart_confirms is True and engine_passed and final_decision in ("trade",):
         return "engine_a_confirmed"
     if chart_confirms is True and engine_passed:
         return "engine_a_confirmed"
-    if chart_confirms is True and final_decision in ("wait", "watch"):
-        return "engine_a_direction_confirmed_entry_rejected"
     if chart_confirms is False:
         return "engine_a_contradicted"
     if chart_confirms is None and chart_contradicts_timing:

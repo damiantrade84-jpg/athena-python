@@ -336,6 +336,32 @@ def test_scalp_tp1_is_1r_and_structural_target_is_context(monkeypatch):
     assert levels["structure_target_close"] is True
 
 
+def test_scalp_rr_below_min_enforces_configured_min_rr(monkeypatch):
+    monkeypatch.setitem(
+        scalp_engine.CONFIG,
+        "SCALP_ENGINE",
+        {
+            **scalp_engine.CONFIG.get("SCALP_ENGINE", {}),
+            "MIN_RR": 1.2,
+            "ATR_SL_ENABLED": False,
+            "TP1_R_MULT": 1.0,
+        },
+    )
+    vp = {"poc": 1.1002, "vah": 1.1010, "val": 1.1000}
+    levels = scalp_engine.calculate_scalp_levels(
+        direction="LONG",
+        entry=1.1001,
+        vp=vp,
+        setup_type="mean_reversion",
+        symbol_info={"digits": 5, "point": 0.00001},
+        asset_type="forex",
+    )
+    assert levels["rr"] == 1.0
+    assert levels["min_rr"] == 1.2
+    assert levels["tp_direction_ok"] is True
+    assert levels["rr_below_min"] is True
+
+
 def test_bybit_scalp_exec_uses_tp1_for_exchange_tp(monkeypatch):
     """Engine D Bybit protective TP should be set at TP1."""
     captured = {"tp": None}

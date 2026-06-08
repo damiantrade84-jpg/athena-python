@@ -493,6 +493,20 @@ def test_build_engine_d_prompt_context_fields():
     assert prompt_ctx["sessionContext"]["currentSession"]
 
 
+def test_engine_d_prompt_context_maps_engine_market_state_to_playbook():
+    ctx = _engine_d_ctx()
+    ctx["signal"] = dict(ctx.get("signal") or {})
+    ctx["signal"]["market_state"] = "balance"
+    prompt_ctx = build_engine_d_prompt_context(ctx)
+    assert prompt_ctx["marketState"] == "balancing"
+    assert prompt_ctx["engineMarketState"] == "balance"
+
+    ctx["signal"]["market_state"] = "imbalance"
+    prompt_ctx = build_engine_d_prompt_context(ctx)
+    assert prompt_ctx["marketState"] == "trending"
+    assert prompt_ctx["engineMarketState"] == "imbalance"
+
+
 def test_engine_d_context_passes_session_context():
     ctx = _engine_d_ctx()
     ctx["scan_timestamp"] = "2026-01-15T18:00:00+00:00"

@@ -154,6 +154,41 @@ def test_missing_type_defaults_to_snapshot_backward_compat():
     assert ob["asks"] == [(101.0, 1.0)]
 
 
+def test_handle_trade_persists_to_trade_bucket_store(monkeypatch):
+    from athena.datafeeds.bybit_ws import BybitWS
+
+    stored = []
+    monkeypatch.setattr(
+        "athena.datafeeds.bybit_ws.store_trade",
+        lambda **kwargs: stored.append(kwargs),
+    )
+
+    ws = BybitWS(symbol="BTCUSDT")
+    ws._handle_trade({"p": "65000.5", "v": "0.01", "S": "Buy", "T": 1700000000000})
+
+    assert len(stored) == 1
+    assert stored[0]["exchange"] == "bybit"
+    assert stored[0]["symbol"] == "BTCUSDT"
+    assert stored[0]["price"] == 65000.5
+    assert stored[0]["quantity"] == 0.01
+    assert stored[0]["is_buyer_maker"] is False
+
+
+def test_handle_trade_sell_side_marks_buyer_as_maker(monkeypatch):
+    from athena.datafeeds.bybit_ws import BybitWS
+
+    stored = []
+    monkeypatch.setattr(
+        "athena.datafeeds.bybit_ws.store_trade",
+        lambda **kwargs: stored.append(kwargs),
+    )
+
+    ws = BybitWS(symbol="ETHUSDT")
+    ws._handle_trade({"p": "3200", "v": "1.5", "S": "Sell", "T": 1700000000000})
+
+    assert stored[0]["is_buyer_maker"] is True
+
+
 def test_bybit_ws_instance_delegates_to_envelope():
     from athena.datafeeds.bybit_ws import BybitWS
 

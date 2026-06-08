@@ -16,6 +16,7 @@ import telegram_notify
 log = logging.getLogger("sentinel")
 from athena.datafeeds.ws_ssl import default_ssl_context  # noqa: E402
 from athena.microstructure.microstructure_store import store_metrics  # noqa: E402
+from athena.microstructure.trade_bucket_store import store_trade  # noqa: E402
 from athena.microstructure.orderbook_metrics import (  # noqa: E402
     liquidity_wall_detection as _liq_wall,
     liquidity_pressure as _liq_pressure,
@@ -269,17 +270,37 @@ class BybitWS:
 
     def _handle_trade(self, data: Dict) -> None:
         """Accumulate taker volume from publicTrade (S=Buy / S=Sell)."""
-        # Bybit V5 publicTrade fields: v=size, S=side (Buy/Sell), s=symbol (string)
+        # Bybit V5 publicTrade fields: p=price, v=size, S=side (Buy/Sell), T=timestamp ms
         trades = data if isinstance(data, list) else [data]
         for trade in trades:
-            size = float(trade.get("v", 0))
-            side = trade.get("S")
+            try:
+                size = float(trade.get("v", 0))
+                price = float(trade.get("p", 0))
+                side = trade.get("S")
+                event_ts = float(trade.get("T") or trade.get("ts") or 0) / 1000.0
+                if event_ts <= 0:
+                    event_ts = time.time()
+            except (TypeError, ValueError):
+                size = 0.0
+                price = 0.0
+                side = None
+                event_ts = time.time()
             if side == "Buy":
                 self.buy_taker_volume += size
                 self.orderflow_delta += size
             elif side == "Sell":
                 self.sell_taker_volume += size
                 self.orderflow_delta -= size
+            if size > 0 and price > 0 and side in ("Buy", "Sell"):
+                # Bybit S=Buy → buy taker; S=Sell → sell taker (buyer is maker).
+                store_trade(
+                    exchange="bybit",
+                    symbol=self.symbol.upper(),
+                    price=price,
+                    quantity=size,
+                    is_buyer_maker=(side == "Sell"),
+                    ts=event_ts,
+                )
 
     def _compute_imbalance(self) -> float:
         """Compute order book imbalance: (bid_vol - ask_vol) / (bid_vol + ask_vol)."""
