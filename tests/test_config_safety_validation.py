@@ -90,3 +90,17 @@ def test_real_orders_allowed_accepts_exact_confirmation_token():
         cfg,
         env={_REAL_ORDER_CONFIRM_ENV: _REAL_ORDER_CONFIRM_TOKEN},
     )
+
+
+def test_signal_max_age_sec_default_matches_yaml():
+    from config import CONFIG
+
+    assert CONFIG["SIGNAL_MAX_AGE_SEC"] == 300
+
+
+def test_drawdown_stop_enabled_false_rejected():
+    cfg = _base_safety_config()
+    cfg["DRAWDOWN_STOP_ENABLED"] = False
+
+    with pytest.raises(ConfigValidationError):
+        _validate_critical_safety_config(cfg, env={})

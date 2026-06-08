@@ -7636,6 +7636,9 @@ def api_scan_naked():
 def api_webhook():
     """Ingest external signals (e.g. TradingView alerts) and execute via risk engine.
 
+    External ingress endpoint — not consumed by the React UI; TradingView and
+    similar alert providers POST here.
+
 
 
     Payload (all fields required):
@@ -8676,33 +8679,6 @@ def _update_yaml_toggle(state: bool):
         log.error(f"Failed to update config.yaml: {e}")
 
 
-def _persist_bt_min_yaml(cfg_path: str, current: dict) -> None:
-    import re as _re
-
-    with open(cfg_path, "r", encoding="utf-8") as f:
-        content = f.read()
-
-    def _bt_block_replacer(m):
-        block = m.group(0)
-        for cls, val in current.items():
-            block = _re.sub(
-                rf"^([ \t]+{_re.escape(cls)}\s*:\s*)[\d.]+",
-                lambda mm, v=val: f"{mm.group(1)}{v}",
-                block,
-                flags=_re.MULTILINE,
-            )
-        return block
-
-    content = _re.sub(
-        r"^BT_MIN\s*:\s*\n(?:[ \t]+\S[^\n]*\n)+",
-        _bt_block_replacer,
-        content,
-        flags=_re.MULTILINE,
-    )
-    with open(cfg_path, "w", encoding="utf-8") as f:
-        f.write(content)
-
-
 def _persist_score_group_thresholds_yaml(cfg_path: str, current: dict) -> None:
     import re as _re
 
@@ -8730,51 +8706,14 @@ def _persist_score_group_thresholds_yaml(cfg_path: str, current: dict) -> None:
         f.write(content)
 
 
-def _persist_backtest_bt_chain_flag_yaml(cfg_path: str, value: bool) -> None:
-    """Write BACKTEST_USE_BT_MIN_THRESHOLDS: true|false in config.yaml."""
-    import re as _re
-
-    with open(cfg_path, "r", encoding="utf-8") as f:
-        content = f.read()
-    repl = "true" if value else "false"
-    new_content, n = _re.subn(
-        r"^(BACKTEST_USE_BT_MIN_THRESHOLDS\s*:\s*)(true|false)\s*$",
-        lambda m: f"{m.group(1)}{repl}",
-        content,
-        count=1,
-        flags=_re.MULTILINE | _re.IGNORECASE,
-    )
-    if n:
-        with open(cfg_path, "w", encoding="utf-8") as f:
-            f.write(new_content)
-        return
-    m = _re.search(
-        r"^(RESEARCH_MODE\s*:\s*(?:true|false))\s*$",
-        content,
-        _re.MULTILINE | _re.IGNORECASE,
-    )
-    if m:
-        insert = f"\nBACKTEST_USE_BT_MIN_THRESHOLDS: {repl}"
-        content = content[: m.end()] + insert + content[m.end() :]
-        with open(cfg_path, "w", encoding="utf-8") as f:
-            f.write(content)
-        return
-    raise ValueError("config.yaml: RESEARCH_MODE / BACKTEST_USE_BT_MIN_THRESHOLDS not found")
-
-
-def _apply_bt_min_updates(new_vals: dict) -> dict:
-    current = dict(CONFIG.get("BT_MIN") or {})
-    current.update({k: round(float(v), 4) for k, v in (new_vals or {}).items()})
-    CONFIG["BT_MIN"] = current
-    cfg_path = os.path.join(os.path.dirname(__file__), "config.yaml")
-    _persist_bt_min_yaml(cfg_path, current)
-    log.info(f"[BT_MIN] Updated via UI: {current}")
-    return current
-
-
 def _apply_score_group_threshold_updates(new_vals: dict) -> dict:
+    from scoring import expand_engine_a_threshold_updates
+
+    expanded = expand_engine_a_threshold_updates(new_vals)
+    if not expanded:
+        raise ValueError("No valid ENGINE_A_SCORE_GROUP_THRESHOLDS keys in update payload")
     current = dict(CONFIG.get("ENGINE_A_SCORE_GROUP_THRESHOLDS") or {})
-    current.update({k: round(float(v), 4) for k, v in (new_vals or {}).items()})
+    current.update(expanded)
     CONFIG["ENGINE_A_SCORE_GROUP_THRESHOLDS"] = current
     cfg_path = os.path.join(os.path.dirname(__file__), "config.yaml")
     _persist_score_group_thresholds_yaml(cfg_path, current)
@@ -8809,7 +8748,7 @@ def _apply_naked_style_score_updates(new_vals: dict) -> dict:
 _ENGINE_A_ACTIVE_GATE_HELP = (
     "Runtime Engine A threshold: scoring.get_score_threshold — "
     "PAIR_PROFILES.min_confluence, ENGINE_A_PAIR_THRESHOLDS, "
-    "ENGINE_A_SCORE_GROUP_THRESHOLDS (score_group, type, default), "
+    "ENGINE_A_SCORE_GROUP_THRESHOLDS (score_group keys only; asset type not used), "
     "then 3-tier fallback."
 )
 
@@ -8944,11 +8883,14 @@ def api_bt_min():
     asset_classes = ("crypto", "forex", "commodity", "stock", "index")
 
     if request.method == "GET":
-        live_class = dict(CONFIG.get("ENGINE_A_SCORE_GROUP_THRESHOLDS") or {})
+        from scoring import aggregate_engine_a_thresholds_for_dashboard
+
+        score_groups = dict(CONFIG.get("ENGINE_A_SCORE_GROUP_THRESHOLDS") or {})
+        live_class = aggregate_engine_a_thresholds_for_dashboard(score_groups)
         return jsonify(
             {
                 "live_class": live_class,
-                "bt_min": live_class,
+                "score_group_thresholds": score_groups,
                 "min_confluence_class_role": "active_runtime_config",
                 "engine_a_active_gate": _ENGINE_A_ACTIVE_GATE_HELP,
                 "backtest_use_bt_min_thresholds": False,
@@ -8996,7 +8938,15 @@ def api_bt_min():
             }
         ), 500
 
-    return jsonify({"saved": True, "live_class": current, "bt_min": current})
+    from scoring import aggregate_engine_a_thresholds_for_dashboard
+
+    return jsonify(
+        {
+            "saved": True,
+            "live_class": aggregate_engine_a_thresholds_for_dashboard(current),
+            "score_group_thresholds": current,
+        }
+    )
 
 
 def _persist_naked_style_profiles_yaml(cfg_path: str, full_profiles: dict) -> None:
@@ -9303,7 +9253,7 @@ def api_scalp_group_rr():
     STYLES = ("scalp", "intraday", "swing")
     ne = CONFIG.get("NAKED_ENGINE") or {}
     group_overrides = ne.get("score_group_overrides") or {}
-    global_min_rr = float((CONFIG.get("SCALP_ENGINE") or {}).get("MIN_RR", 2.0))
+    global_min_rr = float((CONFIG.get("SCALP_ENGINE") or {}).get("MIN_RR", 1.2))
 
     if request.method == "GET":
         out = {"global_min_rr": global_min_rr, "groups": {}}
@@ -9381,9 +9331,13 @@ def api_live_confluence_thresholds():
     """GET/POST ENGINE_A_SCORE_GROUP_THRESHOLDS — active runtime config for Engine A gates."""
     asset_classes = ("crypto", "forex", "commodity", "stock", "index")
     if request.method == "GET":
+        from scoring import aggregate_engine_a_thresholds_for_dashboard
+
+        score_groups = dict(CONFIG.get("ENGINE_A_SCORE_GROUP_THRESHOLDS") or {})
         return jsonify(
             {
-                "live_class": dict(CONFIG.get("ENGINE_A_SCORE_GROUP_THRESHOLDS") or {}),
+                "live_class": aggregate_engine_a_thresholds_for_dashboard(score_groups),
+                "score_group_thresholds": score_groups,
                 "min_confluence_class_role": "active_runtime_config",
                 "engine_a_active_gate": _ENGINE_A_ACTIVE_GATE_HELP,
             }
@@ -9447,7 +9401,13 @@ def api_advisory_threshold_approve(rec_id):
                 {"error": "engine_a_bt_class recommendations retired (Stage 4.2 — use live thresholds only)"}
             ), 400
         elif scope_type == "engine_a_live_class":
-            applied = {"live_class": _apply_score_group_threshold_updates({scope_key: proposed_value})}
+            from scoring import aggregate_engine_a_thresholds_for_dashboard
+
+            updated = _apply_score_group_threshold_updates({scope_key: proposed_value})
+            applied = {
+                "live_class": aggregate_engine_a_thresholds_for_dashboard(updated),
+                "score_group_thresholds": updated,
+            }
         elif scope_type == "engine_b_style":
             applied = {"style_profiles": _apply_naked_style_score_updates({scope_key: proposed_value})}
         else:
@@ -9999,7 +9959,7 @@ def _scalp_ui_signal(raw_signal: dict) -> dict:
     )
     zone_conditions = raw_signal.get("zone_conditions", []) or []
     zone_desc = (
-        f"{raw_signal.get('zone_type', 'zone').upper()} near {raw_signal.get('zone_level')} "
+        f"{str(raw_signal.get('zone_type') or 'zone').upper()} near {raw_signal.get('zone_level')} "
         f"with {len(zone_conditions)} condition(s): {', '.join(zone_conditions) or 'none'}"
     )
     trigger_desc = (
@@ -10100,6 +10060,9 @@ def _scalp_ui_signal(raw_signal: dict) -> dict:
         "timestamp": raw_signal.get("timestamp"),
         "candleFetchMeta": raw_signal.get("candleFetchMeta"),
         "dataFreshness": raw_signal.get("dataFreshness"),
+        "m1Candles": raw_signal.get("m1Candles"),
+        "m5Candles": raw_signal.get("m5Candles"),
+        "m15Candles": raw_signal.get("m15Candles"),
     }
     return _attach_scalp_workbench_contracts(out, skipped=False)
 
@@ -10283,34 +10246,6 @@ def api_scalp_execute():
         else:
             signal = raw_signals[0]
 
-        from ai_scalp_review.execute_gate import resolve_engine_d_execute_gate
-
-        review_id = str(payload.get("review_id") or payload.get("ai_review_id") or "").strip() or None
-        exec_block, _ai_review_row = resolve_engine_d_execute_gate(
-            signal,
-            review_id=review_id,
-            audit_db=_AUDIT_DB,
-            cfg=CONFIG,
-        )
-        if exec_block:
-            return jsonify(
-                {
-                    "success": False,
-                    "error": exec_block,
-                    "skipped": [
-                        {
-                            "pair": signal.get("pair") or symbol,
-                            "reason": exec_block,
-                            "gate_result": signal.get("gate_result"),
-                            "ai_grade": signal.get("ai_grade"),
-                            "ai_score": signal.get("ai_score"),
-                            "fail_reasons": signal.get("fail_reasons", []),
-                        }
-                    ],
-                    "fresh_scan": scan,
-                }
-            ), 200
-
         is_crypto = (signal.get("type") == "crypto")
 
         if is_crypto:
@@ -10364,77 +10299,45 @@ def api_scalp_execute():
                 return jsonify({"error": f"Symbol '{symbol}' not available on MT5"}), 200
             _exec_venue = "mt5"
 
+        from scalp_engine import rebase_scalp_signal_levels
+
+        signal, _rebase_error = rebase_scalp_signal_levels(signal, symbol, symbol_info)
+        if _rebase_error:
+            return jsonify({"success": False, "error": _rebase_error}), 400
+
+        from ai_scalp_review.execute_gate import resolve_engine_d_execute_gate
+
+        review_id = str(payload.get("review_id") or payload.get("ai_review_id") or "").strip() or None
+        exec_block, _ai_review_row = resolve_engine_d_execute_gate(
+            signal,
+            review_id=review_id,
+            audit_db=_AUDIT_DB,
+            cfg=CONFIG,
+        )
+        if exec_block:
+            return jsonify(
+                {
+                    "success": False,
+                    "error": exec_block,
+                    "skipped": [
+                        {
+                            "pair": signal.get("pair") or symbol,
+                            "reason": exec_block,
+                            "gate_result": signal.get("gate_result"),
+                            "ai_grade": signal.get("ai_grade"),
+                            "ai_score": signal.get("ai_score"),
+                            "fail_reasons": signal.get("fail_reasons", []),
+                        }
+                    ],
+                    "fresh_scan": scan,
+                }
+            ), 200
+
         from execution import _hydrate_execution_candle_quality
         from execution_lifecycle import run_managed_execution
 
         _volume_mode, _exec_context, _ = parse_execution_volume_args(payload)
         _sizing_override = merge_scalp_sizing_override(_volume_mode, payload, signal)
-
-        _rebase_error = None
-        try:
-            from scalp_engine import (
-                _guess_asset_type,
-                _scalp_min_rr_for_group,
-                calculate_scalp_levels,
-            )
-
-            _bid = float(symbol_info.get("bid") or 0)
-            _ask = float(symbol_info.get("ask") or 0)
-            _live_px = (_bid + _ask) / 2 if _bid > 0 and _ask > 0 else _bid or _ask
-            _scan_px = float(signal.get("price") or 0)
-            _vp = {
-                "poc": float(signal.get("vp_poc") or 0),
-                "vah": float(signal.get("vp_vah") or 0),
-                "val": float(signal.get("vp_val") or 0),
-                "lvn_levels": [],
-            }
-            if _live_px > 0 and _vp["poc"] > 0 and _vp["vah"] > 0 and _vp["val"] > 0:
-                _asset_type = _guess_asset_type(symbol)
-                _score_group = get_pair_score_group(
-                    {"display": symbol, "symbol": symbol, "type": _asset_type}
-                )
-                _min_rr = _scalp_min_rr_for_group(_asset_type, _score_group)
-                _rebased = calculate_scalp_levels(
-                    signal.get("direction", "LONG"),
-                    _live_px,
-                    _vp,
-                    signal.get("zone_type", "trend_continuation"),
-                    symbol_info,
-                    _asset_type,
-                    min_rr_override=_min_rr,
-                    score_group=_score_group,
-                )
-                drift_pct = abs(_live_px - _scan_px) / _scan_px * 100 if _scan_px else 0
-                if _rebased.get("rr_below_min"):
-                    _rebase_error = (
-                        f"VP structure invalidated by price drift ({drift_pct:.2f}% since scan). "
-                        f"Rescan required."
-                    )
-                    log.warning("[SCALP EXEC] %s BLOCKED: %s", symbol, _rebase_error)
-                else:
-                    log.info(
-                        "[SCALP EXEC] %s levels rebased: price %.5f→%.5f (%.2f%% drift), "
-                        "sl %s→%s, tp1 %s→%s",
-                        symbol,
-                        _scan_px,
-                        _live_px,
-                        drift_pct,
-                        signal.get("sl"),
-                        _rebased["sl"],
-                        signal.get("tp1"),
-                        _rebased["tp1"],
-                    )
-                    signal = dict(signal)
-                    signal["price"] = _rebased["entry"]
-                    signal["sl"] = _rebased["sl"]
-                    signal["tp1"] = _rebased["tp1"]
-                    if _rebased.get("tp2"):
-                        signal["tp2"] = _rebased["tp2"]
-        except Exception as _re:
-            log.warning("[SCALP EXEC] Level rebase failed (%s), using scan-time levels", _re)
-
-        if _rebase_error:
-            return jsonify({"success": False, "error": _rebase_error}), 400
 
         _hydrate_execution_candle_quality(signal, _r=rt())
 
@@ -10579,29 +10482,6 @@ def api_auto_trade_toggle():
 
 
 # ── AI Learning endpoints ─────────────────────────────────────────────────────
-
-
-@app.route("/api/learning/stats")
-def api_learning_stats():
-
-    try:
-        from ai_learning import get_ai_learning_context
-
-        pair = request.args.get("pair", "")
-
-        asset_type = request.args.get("type", "")
-
-        ctx = get_ai_learning_context(
-            pair,
-            asset_type,
-            _AUDIT_DB,
-            lookback_days=CONFIG.get("LEARNING_LOOKBACK_DAYS", 90),
-        )
-
-        return jsonify(ctx)
-
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
 
 
 @app.route("/api/learning/meta-analysis", methods=["POST"])
@@ -13915,7 +13795,7 @@ def analyze_pair(
                         direction,
                         _math_sl,
                         _struct_sl,
-                        bool(CONFIG.get("ENGINE_A_STRUCTURAL_SL_FLOOR_ATR", False)),
+                        bool(CONFIG.get("ENGINE_A_STRUCTURAL_SL_FLOOR_ATR", True)),
                     )
 
                     # Hard SL distance cap - prevents runaway structural overrides.
@@ -15727,7 +15607,10 @@ def _check_score_decay() -> None:
 
 @app.route("/api/score-decay")
 def api_score_decay():
-    """Return score decay status for open positions, merged with regime shift classifier."""
+    """Return score decay status for open positions, merged with regime shift classifier.
+
+    Consumed by telegram_bot.py for operator alerts — not used by the React UI.
+    """
 
     live_open_pairs = _verified_open_decay_pairs()
     for k in [p for p in _score_decay_results if p not in live_open_pairs]:

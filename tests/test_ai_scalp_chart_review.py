@@ -281,6 +281,39 @@ def test_assemble_engine_d_context_populates_ohlcv_bars_from_signal():
     assert ctx["ohlcv_bars"] == bars
 
 
+def test_scalp_ui_signal_forwards_candles_for_engine_d_review():
+    from importlib.util import module_from_spec, spec_from_file_location
+    from pathlib import Path
+
+    path = Path(__file__).resolve().parents[1] / "athena.py"
+    spec = spec_from_file_location("athena_scalp_ui_signal_module", path)
+    module = module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+
+    bars = [{"time": "2026-05-21T16:30:00+00:00", "open": 1.0, "high": 1.1, "low": 0.9, "close": 1.05}]
+    raw = {
+        "pair": "BTCUSDT",
+        "direction": "LONG",
+        "ai_grade": "B",
+        "ai_score": 72.5,
+        "zone_type": "trend_continuation",
+        "zone_level": 1.05,
+        "m1Candles": bars,
+    }
+    ui = module._scalp_ui_signal(raw)
+    ctx = assemble_engine_d_context(
+        "BTCUSDT",
+        "M1",
+        screenshot_meta={"captured_at": "2026-05-21T16:31:02+00:00", "chart_timeframe": "M1"},
+        resolve_pair_fn=lambda s: {"display": "BTCUSDT"},
+        run_scalp_scan_fn=lambda pairs: {"signals": [ui]},
+        scalp_ui_signal_fn=module._scalp_ui_signal,
+    )
+    assert ctx is not None
+    assert ctx["ohlcv_bars"] == bars
+
+
 def test_prompt_contains_engine_d_playbook_and_review_order():
     ctx = _engine_d_ctx()
     prompt = build_scalp_chart_review_prompt(ctx)

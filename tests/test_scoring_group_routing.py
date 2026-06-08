@@ -59,6 +59,16 @@ def test_engine_a_score_group_thresholds_cover_all_known_groups():
     assert not missing, f"ENGINE_A_SCORE_GROUP_THRESHOLDS missing: {missing}"
 
 
+def test_expand_engine_a_threshold_updates_maps_asset_class_to_score_groups():
+    from scoring import expand_engine_a_threshold_updates
+
+    expanded = expand_engine_a_threshold_updates({"forex": 2.55, "forex_majors": 2.2})
+    assert expanded["forex_majors"] == 2.2
+    assert expanded["forex_crosses"] == 2.55
+    assert expanded["forex_exotics"] == 2.55
+    assert expanded["forex_other"] == 2.55
+
+
 def test_engine_a_threshold_resolves_by_score_group_not_asset_type(monkeypatch):
     """Broad asset_type keys must not override score_group-specific floors."""
     monkeypatch.setitem(CONFIG, "PAIR_PROFILES", {})

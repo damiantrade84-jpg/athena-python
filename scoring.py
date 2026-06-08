@@ -234,6 +234,75 @@ def get_pair_score_group(pair: dict) -> str:
     return _fallback
 
 
+ENGINE_A_ASSET_CLASS_SCORE_GROUPS: dict[str, tuple[str, ...]] = {
+    "forex": ("forex_majors", "forex_crosses", "forex_exotics", "forex_other"),
+    "crypto": ("crypto_btc", "crypto_eth", "crypto_doge", "crypto_alt_majors", "crypto_other"),
+    "commodity": (
+        "precious_trackers",
+        "energy_oil",
+        "nat_gas",
+        "copper",
+        "pgm_metals",
+        "base_metals",
+        "softs",
+        "commodity_other",
+    ),
+    "index": ("us_indices_trackers", "eu_indices", "asian_indices", "index_other"),
+    "stock": ("us_stock_single", "bond_tlt", "smallcap_em_etf", "stock_other"),
+}
+
+ENGINE_A_ASSET_CLASS_PRIMARY_GROUP: dict[str, str] = {
+    "forex": "forex_majors",
+    "crypto": "crypto_btc",
+    "commodity": "commodity_other",
+    "index": "us_indices_trackers",
+    "stock": "stock_other",
+}
+
+
+def expand_engine_a_threshold_updates(updates: dict) -> dict[str, float]:
+    """Map dashboard asset-class keys to score_group keys used by live gates."""
+    from engine_a_groups import ENGINE_A_KNOWN_SCORE_GROUPS
+
+    expanded: dict[str, float] = {}
+    for key, raw_val in (updates or {}).items():
+        try:
+            val = round(float(raw_val), 4)
+        except (TypeError, ValueError):
+            continue
+        groups = ENGINE_A_ASSET_CLASS_SCORE_GROUPS.get(str(key))
+        if groups:
+            for group in groups:
+                expanded[group] = val
+            continue
+        if str(key) in ENGINE_A_KNOWN_SCORE_GROUPS or str(key) == "default":
+            expanded[str(key)] = val
+    return expanded
+
+
+def aggregate_engine_a_thresholds_for_dashboard(thresholds: dict) -> dict[str, float]:
+    """Summarize score_group thresholds for per-asset-class dashboard fields."""
+    src = thresholds or {}
+    out: dict[str, float] = {}
+    for asset_class, groups in ENGINE_A_ASSET_CLASS_SCORE_GROUPS.items():
+        primary = ENGINE_A_ASSET_CLASS_PRIMARY_GROUP.get(asset_class)
+        if primary and primary in src:
+            out[asset_class] = float(src[primary])
+            continue
+        for group in groups:
+            if group in src:
+                out[asset_class] = float(src[group])
+                break
+    return out
+
+
+def current_engine_a_threshold_for_asset_class(asset_class: str, thresholds: dict | None = None) -> float:
+    """Return the representative live threshold for an asset class."""
+    src = thresholds if thresholds is not None else (CONFIG.get("ENGINE_A_SCORE_GROUP_THRESHOLDS") or {})
+    aggregated = aggregate_engine_a_thresholds_for_dashboard(src)
+    return float(aggregated.get(asset_class, 0.0) or 0.0)
+
+
 # Every value returned by get_pair_score_group() must have an explicit entry in
 # ENGINE_A_SCORE_GROUP_THRESHOLDS (config.yaml / config.py). The "default" key is
 # only for forward-compatible unknown groups — not a substitute for listed groups.

@@ -2728,7 +2728,7 @@ class NakedEngine:
         try:
             return self._detect_fvg_fast(candles)
         except Exception as _fvg_err:
-            log.debug(f"[FVG-DETECT] fast path fallback: {_fvg_err}")
+            log.warning(f"[FVG-DETECT] fast path fallback: {_fvg_err}")
             return self._detect_fvg_legacy(candles)
 
     def _zone_context(

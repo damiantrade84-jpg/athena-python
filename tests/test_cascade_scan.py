@@ -155,13 +155,22 @@ def test_build_shortlist_drops_hard_filter_failures():
     missing_atr.pop("atrDiagnostics")
     good = _signal("GOOD", confluenceScore=2.6, rr=2.2)
 
-    shortlist = build_shortlist(
+    shortlist, hard_blocked, hard_count = build_shortlist(
         _scan_result(stale, blocked, low_score, bad_rr, missing_direction, missing_atr, good),
         rules={"min_confluence": 2.0, "min_rr": 1.5},
         asset_class="forex",
     )
 
     assert [row["symbol"] for row in shortlist] == ["GOOD"]
+    assert hard_count == 6
+    assert {row["symbol"] for row in hard_blocked} == {
+        "STALE",
+        "BLOCKED",
+        "LOW",
+        "BADRR",
+        "NODIR",
+        "NOATR",
+    }
 
 
 def test_build_shortlist_reads_nested_coherence_and_missing_defaults_to_not_available():
@@ -180,7 +189,7 @@ def test_build_shortlist_reads_nested_coherence_and_missing_defaults_to_not_avai
     )
     missing = _signal("MISSING", confluenceScore=2.3, factorDiagnostics={})
 
-    shortlist = build_shortlist(_scan_result(nested, missing), rules={}, asset_class="forex")
+    shortlist, _, _ = build_shortlist(_scan_result(nested, missing), rules={}, asset_class="forex")
     by_symbol = {row["symbol"]: row for row in shortlist}
 
     assert by_symbol["NESTED"]["coherenceScore"] == pytest.approx(0.91)
@@ -202,12 +211,12 @@ def test_ranking_is_deterministic_and_source_fidelity_is_only_tiebreaker():
     high_fidelity = _signal("AAA", confluenceScore=2.5, rr=2.0)
     lower_score = _signal("CCC", confluenceScore=2.4, rr=3.0)
 
-    first = build_shortlist(
+    first, _, _ = build_shortlist(
         _scan_result(low_fidelity_fresh, lower_score, high_fidelity),
         rules={"min_confluence": 2.0, "min_rr": 1.5},
         asset_class="forex",
     )
-    second = build_shortlist(
+    second, _, _ = build_shortlist(
         _scan_result(low_fidelity_fresh, lower_score, high_fidelity),
         rules={"min_confluence": 2.0, "min_rr": 1.5},
         asset_class="forex",
@@ -229,7 +238,7 @@ def test_forex_session_is_ranking_neutral_and_ranging_is_not_default_blocked():
 
     ranging = _signal("RANGE", regime="RANGING")
 
-    shortlist = build_shortlist(_scan_result(ranging), rules={}, asset_class="forex")
+    shortlist, _, _ = build_shortlist(_scan_result(ranging), rules={}, asset_class="forex")
 
     assert len(shortlist) == 1
     assert shortlist[0]["sessionQualityScore"] == 0
@@ -240,7 +249,8 @@ def test_forex_session_is_ranking_neutral_and_ranging_is_not_default_blocked():
 def test_triage_noops_without_client_and_rejects_execution_verdicts():
     from cascade_scan import build_shortlist, triage_candidates
 
-    candidate = build_shortlist(_scan_result(_signal("EUR/USD")), rules={}, asset_class="forex")[0]
+    candidate, _, _ = build_shortlist(_scan_result(_signal("EUR/USD")), rules={}, asset_class="forex")
+    candidate = candidate[0]
 
     no_client = triage_candidates([candidate], client=None)
     assert no_client[0]["triageVerdict"] is None

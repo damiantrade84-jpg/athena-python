@@ -4,6 +4,12 @@ from __future__ import annotations
 
 from typing import Any
 
+from ai_review.engine_a_verdict import (
+    _infer_entry_timing,
+    _is_negative_visual_text,
+    _looks_directional_contradiction,
+)
+
 _VALID_VERDICTS = frozenset(
     {
         "setup_confirmed",
@@ -42,23 +48,32 @@ def build_scalp_verdict_comparison(
     direction = str(engine_d_ctx.get("direction") or "NONE").upper()
     text = _text_blob(ai_review)
 
+    visual_contradiction = ai_review.get("visual_contradiction")
+    visual_text = str(visual_contradiction or "").strip().lower()
+    directional_visual_conflict = (
+        not _is_negative_visual_text(visual_contradiction)
+        and _looks_directional_contradiction(visual_text)
+    )
+
     chart_confirms = mc.get("chartConfirmsDirection")
     if chart_confirms is None:
-        if ai_review.get("visual_contradiction"):
+        if directional_visual_conflict:
             chart_confirms = False
         elif any(w in text for w in ("confirm", "aligned", "supports", "agree")):
             chart_confirms = True
 
     chart_contradicts = mc.get("chartContradictsDirection")
     if chart_contradicts is None:
-        chart_contradicts = bool(ai_review.get("visual_contradiction"))
+        chart_contradicts = directional_visual_conflict
 
     entry_confirms = mc.get("chartConfirmsEntryTiming")
     entry_contradicts = mc.get("chartContradictsEntryTiming")
-    if entry_contradicts is None:
-        entry_contradicts = any(
-            p in text for p in ("late entry", "poor entry", "chasing", "extended", "bad entry")
-        )
+    if entry_confirms is None or entry_contradicts is None:
+        inferred_confirm, inferred_contradict = _infer_entry_timing(ai_review)
+        if entry_confirms is None:
+            entry_confirms = inferred_confirm
+        if entry_contradicts is None:
+            entry_contradicts = inferred_contradict
     if entry_confirms is None and not entry_contradicts:
         entry_confirms = bool(ai_review.get("visual_confirmation"))
 

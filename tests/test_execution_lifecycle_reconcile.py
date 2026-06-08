@@ -56,10 +56,32 @@ def test_bybit_reconcile_error_marks_execution_failed():
     assert "BYBIT_PROTECTION_RECONCILE_FAILED" in (out.get("error") or "")
 
 
-def test_bybit_sl_cap_failure_rejects_order():
+def test_bybit_sl_cap_failure_rejects_order(monkeypatch):
+    from risk_engine import RiskApproval
     import bybit_executor
-    import inspect
 
-    src = inspect.getsource(bybit_executor.bybit_execute)
-    assert "SL_CAP_CHECK_FAILED" in src
-    assert "proceeding but this bypasses" not in src
+    class _FakeExchange:
+        def fetch_ticker(self, symbol):
+            return {"ask": 50000.0, "bid": 49999.0, "last": 50000.0}
+
+    approval = RiskApproval(True, 0.01, 100.0, 0.01, 0.01, 0.0, "OK")
+    signal = {
+        "pair": "BTCUSDT",
+        "symbol": "BTCUSDT",
+        "direction": "LONG",
+        "price": 50000.0,
+        "sl": 49000.0,
+        "tp1": 52000.0,
+        "type": "crypto",
+    }
+
+    monkeypatch.setattr(bybit_executor, "_get_exchange", lambda: _FakeExchange())
+    monkeypatch.setattr(bybit_executor, "_ensure_leverage", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        "risk_engine.resolve_max_sl_pct",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("cap check failed")),
+    )
+
+    out = bybit_executor.bybit_execute(signal, approval)
+    assert out.get("success") is False
+    assert "SL_CAP_CHECK_FAILED" in (out.get("error") or "")

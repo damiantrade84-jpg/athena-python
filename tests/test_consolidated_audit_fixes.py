@@ -91,20 +91,36 @@ def test_resolve_max_sl_pct_honours_crypto_symbol_override():
     assert source == "symbol:FARTCOIN/USDT"
 
 
-def test_bybit_sl_cap_uses_resolve_max_sl_pct():
-    """Bybit must resolve the SL cap through resolve_max_sl_pct (override chain),
-    not read the raw MAX_SL_PCT.crypto default. Mirrors risk_engine/guardian."""
-    import inspect
-
+def test_bybit_sl_cap_uses_resolve_max_sl_pct(monkeypatch):
+    """Bybit must reject when resolve_max_sl_pct reports SL too wide."""
+    from risk_engine import RiskApproval
     import bybit_executor
 
-    src = inspect.getsource(bybit_executor.bybit_execute)
-    assert "resolve_max_sl_pct" in src, (
-        "C3 fix missing: bybit_execute must use resolve_max_sl_pct for the SL cap"
+    class _FakeExchange:
+        def fetch_ticker(self, symbol):
+            return {"ask": 50000.0, "bid": 49999.0, "last": 50000.0}
+
+    approval = RiskApproval(True, 0.01, 100.0, 0.01, 0.01, 0.0, "OK")
+    signal = {
+        "pair": "BTCUSDT",
+        "symbol": "BTCUSDT",
+        "direction": "LONG",
+        "price": 50000.0,
+        "sl": 40000.0,
+        "tp1": 52000.0,
+        "type": "crypto",
+    }
+
+    monkeypatch.setattr(bybit_executor, "_get_exchange", lambda: _FakeExchange())
+    monkeypatch.setattr(bybit_executor, "_ensure_leverage", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        "risk_engine.resolve_max_sl_pct",
+        lambda *args, **kwargs: (0.05, "crypto_default"),
     )
-    assert '.get("MAX_SL_PCT", {}).get("crypto"' not in src, (
-        "C3 fix incomplete: raw MAX_SL_PCT.crypto lookup still present"
-    )
+
+    out = bybit_executor.bybit_execute(signal, approval)
+    assert out.get("success") is False
+    assert "SL_TOO_WIDE" in (out.get("error") or "")
 
 
 # ── C4 ──────────────────────────────────────────────────────────────────────

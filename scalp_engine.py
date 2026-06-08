@@ -44,7 +44,7 @@ except Exception as _sa_err:
     build_funnel_row = None  # type: ignore
     log_engine_d_funnel = None  # type: ignore
     shadow_proximity_simulations = None  # type: ignore
-    log.debug("[SCALP-AUDIT] scalp_audit import failed: %s", _sa_err)
+    log.warning("[SCALP-AUDIT] scalp_audit import failed: %s", _sa_err)
 
 
 def _london_cash_open_utc_minute_of_day(when_utc: datetime | None = None) -> int:
@@ -3060,7 +3060,7 @@ def _classify_setup(
 def _scalp_min_rr_for_group(asset_type: str, score_group: str | None = None) -> float:
     """Return the effective Engine D MIN_RR with Engine D-owned group overrides."""
     cfg = CONFIG.get("SCALP_ENGINE", {})
-    base = float(cfg.get("MIN_RR", 2.0))
+    base = float(cfg.get("MIN_RR", 1.2))
     if not score_group:
         return base
     group_cfg = (cfg.get("score_group_overrides", {}) or {}).get(score_group, {})
@@ -3098,6 +3098,85 @@ def _scalp_cost_assumptions(cfg: dict, asset_type: str) -> tuple[float, float]:
     fee_pct = float(fee_by_asset.get(asset_type, cfg.get("ESTIMATED_FEE_PCT", fee_default)))
     slip_pct = float(slip_by_asset.get(asset_type, cfg.get("ESTIMATED_SLIPPAGE_PCT", slip_default)))
     return fee_pct, slip_pct
+
+
+def _format_scalp_chart_candles(candles: list, limit: int = 120) -> list[dict]:
+    """Normalize scalp candle rows for AI chart-review strategy facts."""
+    if not candles:
+        return []
+    out: list[dict] = []
+    for candle in list(candles)[-int(max(1, limit)) :]:
+        if not isinstance(candle, dict):
+            continue
+        out.append(
+            {
+                "time": candle.get("time") or candle.get("t"),
+                "open": candle.get("open") or candle.get("o"),
+                "high": candle.get("high") or candle.get("h"),
+                "low": candle.get("low") or candle.get("l"),
+                "close": candle.get("close") or candle.get("c"),
+                "volume": candle.get("volume") or candle.get("v") or candle.get("vol"),
+            }
+        )
+    return out
+
+
+def rebase_scalp_signal_levels(
+    signal: dict,
+    symbol: str,
+    symbol_info: dict,
+) -> tuple[dict, str | None]:
+    """Recompute VP-based scalp levels at the live broker mid-price."""
+    from scoring import get_pair_score_group
+
+    sig = dict(signal)
+    try:
+        bid = float(symbol_info.get("bid") or 0)
+        ask = float(symbol_info.get("ask") or 0)
+        live_px = (bid + ask) / 2 if bid > 0 and ask > 0 else bid or ask
+        scan_px = float(sig.get("price") or 0)
+        vp = {
+            "poc": float(sig.get("vp_poc") or 0),
+            "vah": float(sig.get("vp_vah") or 0),
+            "val": float(sig.get("vp_val") or 0),
+            "lvn_levels": [],
+        }
+        if live_px <= 0 or vp["poc"] <= 0 or vp["vah"] <= 0 or vp["val"] <= 0:
+            return sig, None
+
+        asset_type = _guess_asset_type(symbol)
+        score_group = get_pair_score_group(
+            {"display": symbol, "symbol": symbol, "type": asset_type}
+        )
+        min_rr = _scalp_min_rr_for_group(asset_type, score_group)
+        atr_m15 = float(sig.get("atr") or 0)
+        rebased = calculate_scalp_levels(
+            sig.get("direction", "LONG"),
+            live_px,
+            vp,
+            sig.get("zone_type", "trend_continuation"),
+            symbol_info,
+            asset_type,
+            min_rr_override=min_rr,
+            atr_m15=atr_m15,
+            score_group=score_group,
+        )
+        drift_pct = abs(live_px - scan_px) / scan_px * 100 if scan_px else 0
+        if rebased.get("rr_below_min"):
+            return sig, (
+                f"VP structure invalidated by price drift ({drift_pct:.2f}% since scan). "
+                f"Rescan required."
+            )
+
+        sig["price"] = rebased["entry"]
+        sig["sl"] = rebased["sl"]
+        sig["tp1"] = rebased["tp1"]
+        if rebased.get("tp2"):
+            sig["tp2"] = rebased["tp2"]
+        return sig, None
+    except Exception as exc:
+        log.warning("[SCALP EXEC] Level rebase failed (%s), using scan-time levels", exc)
+        return dict(signal), None
 
 
 def _calc_m15_atr(candles: list, period: int = 14) -> float:
@@ -3269,7 +3348,7 @@ def calculate_scalp_levels(
     poc = vp.get("poc", entry) or entry
     vah = vp.get("vah", entry) or entry
     val = vp.get("val", entry) or entry
-    min_rr_cfg = float(min_rr_override) if min_rr_override is not None else float(cfg.get("MIN_RR", 2.0))
+    min_rr_cfg = float(min_rr_override) if min_rr_override is not None else float(cfg.get("MIN_RR", 1.2))
     va_width = abs(vah - val)
     sl_method = "vp_boundary"
     structural_tp = poc
@@ -4724,7 +4803,7 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
                 
                 estimated_fee_pct, estimated_slippage_pct = _scalp_cost_assumptions(cfg, asset_type)
                 estimated_total_cost_pct = estimated_fee_pct + estimated_slippage_pct
-                
+
                 cost_as_R = estimated_total_cost_pct / risk_distance_pct if risk_distance_pct > 0 else float('inf')
                 
                 max_cost_R = float(cfg.get("ENGINE_D_MAX_COST_R", 0.20))
@@ -5022,6 +5101,11 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
                 "confluenceScore": float(quality["score"]),
                 "maxScore":        100.0,
             }
+
+            signal["m5Candles"] = _format_scalp_chart_candles(candles_m5)
+            signal["m15Candles"] = _format_scalp_chart_candles(candles_m15)
+            if execution_tf == "M1":
+                signal["m1Candles"] = _format_scalp_chart_candles(candles_exec)
 
             _scalp_cf_by_tf: dict[str, list] = {
                 "M15": candles_m15,

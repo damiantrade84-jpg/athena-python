@@ -42,16 +42,33 @@ def _demo_broker_execution_requested(venue: str) -> bool:
     return False
 
 
+def _normalize_paper_soak(raw: Any) -> dict[str, Any] | None:
+    if isinstance(raw, dict):
+        return raw
+    if raw is True:
+        return {"ENABLED": True, "REAL_ORDERS_ALLOWED": False}
+    if raw is False:
+        return {"ENABLED": False, "REAL_ORDERS_ALLOWED": True}
+    return None
+
+
 def _paper_soak_blocks_real_orders(venue: str = "") -> bool:
     if _demo_broker_execution_requested(venue):
         return False
     try:
         from config import CONFIG
-    except Exception:
-        return False
-    paper_soak = CONFIG.get("PAPER_SOAK")
-    if not isinstance(paper_soak, dict):
-        return False
+    except Exception as exc:
+        log.critical(
+            "[PAPER-SOAK] config import failed — blocking real orders (fail-closed): %s",
+            exc,
+        )
+        return True
+    paper_soak = _normalize_paper_soak(CONFIG.get("PAPER_SOAK"))
+    if paper_soak is None:
+        log.warning(
+            "[PAPER-SOAK] PAPER_SOAK missing or malformed — blocking real orders (fail-closed)"
+        )
+        return True
     if bool(paper_soak.get("ENABLED", False)):
         return True
     return paper_soak.get("REAL_ORDERS_ALLOWED") is False

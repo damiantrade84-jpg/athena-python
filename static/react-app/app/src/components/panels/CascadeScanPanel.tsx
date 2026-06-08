@@ -206,8 +206,29 @@ export default function CascadeScanPanel() {
           <span>Universe: {result.universeCount}</span>
           <span>Engine A candidates: {result.engineACandidateCount}</span>
           <span>Shortlisted: {result.shortlistCount}</span>
+          {(result.hardBlockedCount ?? 0) > 0 && (
+            <span className="text-warning">Hard blocked: {result.hardBlockedCount}</span>
+          )}
           <span>Triage: {result.triageEnabled ? 'on' : 'off'}</span>
         </div>
+      )}
+
+      {result && (result.hardBlockedSummary?.length ?? 0) > 0 && (
+        <Card className="border-warning/35 bg-warning/5">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-xs font-semibold uppercase tracking-wider text-warning">
+              Hard-blocked candidates ({result.hardBlockedCount ?? result.hardBlockedSummary?.length ?? 0})
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-2 text-[11px]">
+            {result.hardBlockedSummary?.map((row) => (
+              <div key={row.symbol} className="rounded border border-border/50 px-2 py-1.5">
+                <span className="font-mono font-semibold">{row.symbol}</span>
+                <span className="text-muted-foreground"> — {row.blockers.join(', ')}</span>
+              </div>
+            ))}
+          </CardContent>
+        </Card>
       )}
 
       {/* -- RESULTS -- */}

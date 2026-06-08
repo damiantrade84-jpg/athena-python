@@ -104,6 +104,120 @@ def test_quick_execute_rejects_direction_flip(monkeypatch):
     assert data["newDirection"] == "LONG"
 
 
+def test_quick_execute_manual_override_updates_direction_on_flip(monkeypatch):
+    athena_module = _load_athena_module()
+    captured = {}
+
+    class _FakeLog:
+        def warning(self, *args, **kwargs):
+            return None
+
+    class _FakeRt:
+        CONFIG = {"SIGNAL_MAX_AGE_SEC": 300, "EXECUTION_ENABLED": True}
+        ALL_PAIRS = [{"display": "EUR/USD", "type": "forex"}]
+        AUDIT_DB = ":memory:"
+        log = _FakeLog()
+
+        @staticmethod
+        def kill_switch():
+            return False
+
+        @staticmethod
+        def analyze_pair(pair_obj, btc_bias, style="swing"):
+            return {
+                "pair": pair_obj["display"],
+                "direction": "LONG",
+                "price": 1.101,
+                "sl": 1.095,
+                "tp1": 1.11,
+                "tp2": 1.12,
+                "timestamp": "2026-03-26T00:00:00+00:00",
+                "type": "forex",
+            }
+
+        @staticmethod
+        def resolve_pair_from_signal(sig):
+            return {"display": sig.get("pair"), "type": "forex"}
+
+        @staticmethod
+        def fetch_candles(*args, **kwargs):
+            return []
+
+        @staticmethod
+        def calc_indicators_with_normalized(*args, **kwargs):
+            return {"snap": {"atr": 0.001}}
+
+        @staticmethod
+        def atr_for_levels(*args, **kwargs):
+            return 0.001
+
+        @staticmethod
+        def calc_levels(*args, **kwargs):
+            return {"sl": 1.095, "tp1": 1.11, "tp2": 1.12}
+
+    class _Approval:
+        approved = True
+        reason = "OK"
+        risk_amount = 10.0
+        risk_pct = 0.001
+        volume = 0.01
+
+        @staticmethod
+        def to_dict():
+            return {"approved": True, "reason": "OK"}
+
+    def _fake_risk_check(**kwargs):
+        captured.update(kwargs)
+        return _Approval()
+
+    monkeypatch.setattr(execution, "rt", lambda: _FakeRt())
+    monkeypatch.setattr(risk_engine, "risk_check", _fake_risk_check)
+    monkeypatch.setattr(
+        execution,
+        "recompute_levels_for_style",
+        lambda *args, **kwargs: {
+            "pip_mode": "intraday",
+            "atr": 0.001,
+            "levels": {"sl": 1.095, "tp1": 1.11, "tp2": 1.12},
+        },
+    )
+    monkeypatch.setattr(execution, "_engine_a_trade_gate_block_reason", lambda *args, **kwargs: None)
+    monkeypatch.setattr(execution, "_hydrate_execution_candle_quality", lambda *args, **kwargs: None)
+    monkeypatch.setattr(execution, "apply_engine_a_exit_mode", lambda *args, **kwargs: None)
+    monkeypatch.setattr(execution, "_guardian_pre_trade", lambda *args, **kwargs: (True, None))
+    monkeypatch.setattr(
+        execution,
+        "run_managed_execution",
+        lambda venue, signal, approval: {"success": True, "ticket": "123"},
+    )
+    monkeypatch.setattr(mt5_executor, "mt5_get_account", lambda: {"balance": 10000.0, "equity": 10000.0})
+    monkeypatch.setattr(mt5_executor, "mt5_get_positions", lambda: {"positions": []})
+    monkeypatch.setattr(
+        mt5_executor,
+        "mt5_get_symbol_info",
+        lambda symbol: {"digits": 5, "point": 0.00001, "volume_min": 0.01},
+    )
+
+    client = athena_module.app.test_client()
+    resp = client.post(
+        "/api/quick-execute",
+        json={
+            "is_manual_override": True,
+            "signal": {
+                "pair": "EUR/USD",
+                "direction": "SHORT",
+                "timestamp": "2000-01-01T00:00:00+00:00",
+                "type": "forex",
+                "price": 1.1,
+            },
+            "pip_mode": "intraday",
+        },
+    )
+
+    assert resp.status_code != 409, resp.get_data(as_text=True)
+    assert captured["signal"]["direction"] == "LONG"
+
+
 def test_scan_style_auto_resolution_contract():
     athena_module = _load_athena_module()
 
@@ -541,6 +655,30 @@ def test_production_scalp_execute_rebase_uses_pair_score_group_min_rr(monkeypatc
     assert captured["score_group"] == "forex_exotics"
     assert captured["min_rr_override"] == 1.75
     assert captured["signal"]["price"] == 1.1011
+
+
+def test_rebase_scalp_signal_levels_passes_atr_m15(monkeypatch):
+    captured = {}
+
+    def _levels(*_args, **kwargs):
+        captured.update(kwargs)
+        return {"entry": 1.1, "sl": 1.095, "tp1": 1.11, "rr_below_min": False}
+
+    monkeypatch.setattr(scalp_engine, "calculate_scalp_levels", _levels)
+    signal = {
+        "direction": "LONG",
+        "price": 1.1,
+        "vp_poc": 1.1,
+        "vp_vah": 1.12,
+        "vp_val": 1.09,
+        "zone_type": "trend_continuation",
+        "atr": 0.0025,
+    }
+    symbol_info = {"bid": 1.101, "ask": 1.1012, "digits": 5, "point": 0.00001}
+    updated, err = scalp_engine.rebase_scalp_signal_levels(signal, "USD/ZAR", symbol_info)
+    assert err is None
+    assert captured["atr_m15"] == 0.0025
+    assert updated["price"] == 1.1
 
 
 def test_modular_scalp_execute_rebase_uses_pair_score_group_min_rr(monkeypatch, tmp_path):

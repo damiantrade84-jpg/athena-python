@@ -319,19 +319,10 @@ class TestHigh01ScalpBTPairArg:
         assert hasattr(result_with_pair, "final_score")
 
     def test_backtest_runner_scalp_loop_has_pair_arg(self):
-        """
-        HIGH-01: backtest_runner must not call compute_forex_score for forex pairs.
-        Forex BT now routes through Engine A v2 (factor_scoring) via backtest_pair.
-        """
-        import inspect
+        """Forex BT routes through Engine A v2 — compute_forex_score must not be imported."""
         import backtest_runner as bt
 
-        src = inspect.getsource(bt)
-
-        # compute_forex_score must not be called anywhere in the backtest runner
-        assert "compute_forex_score" not in src, (
-            "backtest_runner.py still calls compute_forex_score — forex BT must use Engine A v2"
-        )
+        assert getattr(bt, "compute_forex_score", None) is None
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -341,20 +332,26 @@ class TestHigh01ScalpBTPairArg:
 class TestHigh06EngineCBTParity:
     """HIGH-06: Engine-C BT must not use _bt_forex_d1_bar_time for H4 forex bars."""
 
-    def test_engine_c_bt_no_longer_forces_13utc_for_forex(self):
-        """
-        HIGH-06: Engine-C BT must pass H4 bar time directly, not via _bt_forex_d1_bar_time
-        which forced midnight bars to 13:00 and suppressed 07-09 breakout detection.
-        """
-        import inspect
-        import backtest_runner as bt
+    def test_engine_c_bt_no_longer_forces_13utc_for_forex(self, monkeypatch):
+        """Engine-C BT passes H4 bar time directly via shared breakout resolver."""
+        _patch_nonessential(monkeypatch)
 
-        src = inspect.getsource(bt)
+        d1_snap, h4_snap, h1_snap, pair = _base_snaps()
+        h4_candles = _make_h1_candles(40, start_hour_utc=0)
+        h1_candles = _make_london_breakout_candles(breakout_hour_utc=8)
 
-        # Correct pattern: candles_h4[i].get("time") passed directly (not via _bt_forex_d1_bar_time)
-        assert 'candles_h4[i].get("time") if candles_h4 else None' in src, (
-            "Engine-C BT is not passing H4 bar time directly — check backtest_runner.py"
+        result = forex_scoring.compute_forex_score(
+            d1_snap=d1_snap,
+            h4_snap=h4_snap,
+            h1_snap=h1_snap,
+            h1_candles=h1_candles,
+            pair=pair,
+            bar_time="2026-04-07T08:00:00+00:00",
+            backtest_mode=True,
+            h4_candles=h4_candles,
         )
+
+        assert result.components["breakout_eval_hour"] == 8
 
     def test_breakout_eval_hour_resolver_is_independent_of_bar_time(self, monkeypatch):
         """

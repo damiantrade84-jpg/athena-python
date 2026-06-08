@@ -1110,7 +1110,9 @@ def test_engine_b_fast_fvg_detection_matches_legacy(monkeypatch):
     assert any(fvg.get("mitigated") for fvg in fast)
 
 
-def test_engine_b_fast_fvg_detection_falls_back_to_legacy(monkeypatch):
+def test_engine_b_fast_fvg_detection_falls_back_to_legacy(monkeypatch, caplog):
+    import logging
+
     local_engine = NakedEngine()
     candles = _fvg_fixture()
     expected = local_engine._detect_fvg_legacy(candles)
@@ -1121,7 +1123,9 @@ def test_engine_b_fast_fvg_detection_falls_back_to_legacy(monkeypatch):
     monkeypatch.setitem(config.CONFIG, "ENGINE_B_FAST_FVG_DETECTION", True)
     monkeypatch.setattr(local_engine, "_detect_fvg_fast", _raise_fast)
 
-    assert local_engine._detect_fvg(candles) == expected
+    with caplog.at_level(logging.WARNING):
+        assert local_engine._detect_fvg(candles) == expected
+    assert any("fast path fallback" in rec.message for rec in caplog.records)
 
 
 def test_calculate_confidence_structural_tp_wrong_side_emits_diagnostic():

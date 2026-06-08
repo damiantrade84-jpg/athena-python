@@ -1073,7 +1073,6 @@ def risk_check(
     symbol_info: dict | None = None,
     kill_switch: bool = False,
     sizing_override: float = 1.0,
-    is_manual_override: bool = False,
     account_domain: str | None = None,
     volume_mode: str | None = None,
     execution_context: str | None = None,
