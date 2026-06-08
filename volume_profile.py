@@ -276,8 +276,15 @@ def compute_fixed_range_volume_profile(
     session_candles: list,
     bins: int = 64,
     value_area_pct: float = 0.70,
+    lvn_threshold: float = 0.30,
 ) -> dict:
-    """Compute previous-session POC/VAH/VAL from candle OHLCV."""
+    """Compute previous-session POC/VAH/VAL from candle OHLCV.
+
+    ``lvn_threshold`` is the POC-volume fraction below which a bin is a low-volume
+    node. It is exposed (default 0.30, preserving prior behavior) so callers can
+    harmonise it with ``compute_bucketed_volume_profile`` instead of relying on a
+    hardcoded literal that silently diverged from the bucketed path (audit H7).
+    """
     out = {
         "poc": None,
         "vah": None,
@@ -417,7 +424,7 @@ def compute_fixed_range_volume_profile(
     low_idx = min(included)
     high_idx = max(included)
     poc_vol = float(volumes[poc_idx])
-    lvn_cutoff = poc_vol * 0.30 if poc_vol > 0 else 0.0
+    lvn_cutoff = poc_vol * float(max(0.0, lvn_threshold)) if poc_vol > 0 else 0.0
     lvn_levels = [
         round(float((edges[i] + edges[i + 1]) / 2.0), 6)
         for i in range(bins)

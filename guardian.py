@@ -517,19 +517,24 @@ def pre_trade_check(
             )
 
     # ── Check 5: SL distance within MAX_SL_PCT ────────────────────────
+    # H2: only the config/resolver lookup may degrade gracefully (risk_check
+    # still enforces the cap). A successfully-computed breach is NEVER swallowed.
+    asset_type = signal.get("type", "")
+    max_sl_pct = None
+    max_sl_source = ""
     try:
         from config import CONFIG
         from risk_engine import resolve_max_sl_pct
 
-        asset_type = signal.get("type", "")
         max_sl_pct, max_sl_source = resolve_max_sl_pct(signal, asset_type, CONFIG)
+    except Exception:
+        max_sl_pct = None  # resolver unavailable — risk_check remains authoritative
+    if max_sl_pct is not None and price > 0:
         sl_dist_pct = abs(price - sl) / price
         if sl_dist_pct > max_sl_pct * 1.05:  # 5% tolerance for rounding
             return False, (
                 f"SL_EXCEEDS_CAP: {sl_dist_pct:.1%} > {max_sl_pct:.1%} for {asset_type} ({max_sl_source})"
             )
-    except Exception:
-        pass  # Degrade gracefully if config unavailable
 
     # ── Check 6: Signal freshness ──────────────────────────────────────
     try:
@@ -591,15 +596,17 @@ def pre_trade_check(
             pass  # Non-fatal — risk_check also validates freshness
 
     # ── Check 7: Drawdown circuit breaker ──────────────────────────────
+    # H2: if config is unavailable, fall back to the fail-safe default
+    # threshold and STILL enforce — never skip the drawdown stop entirely.
     try:
         from config import CONFIG
-        dd_stop = CONFIG.get("DRAWDOWN_STOP_THRESHOLD", 0.15)
-        if equity > 0 and balance > 0:
-            # Simple drawdown estimate from balance vs equity
-            if equity < balance * (1 - dd_stop):
-                return False, f"DRAWDOWN_EXCEEDED: equity={equity:.2f} vs balance={balance:.2f}"
+        dd_stop = float(CONFIG.get("DRAWDOWN_STOP_THRESHOLD", 0.15))
     except Exception:
-        pass
+        dd_stop = 0.15
+    if equity > 0 and balance > 0:
+        # Simple drawdown estimate from balance vs equity
+        if equity < balance * (1 - dd_stop):
+            return False, f"DRAWDOWN_EXCEEDED: equity={equity:.2f} vs balance={balance:.2f}"
 
     return True, "OK"
 

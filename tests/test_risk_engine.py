@@ -460,9 +460,12 @@ class TestExecutionStateSafety:
 
 class TestMaxSlPct:
     def test_rejects_when_sl_distance_exceeds_cap(self):
-        """Crypto MAX_SL_PCT default 8% — 33% wide stop must fail in risk_check."""
+        """Crypto MAX_SL_PCT default 8% — 33% wide stop must fail in risk_check.
+
+        TP set so RR >= 1 (reward 25000 vs risk 20000) to isolate the SL-cap
+        rejection from the now-universal RR floor (audit C1)."""
         result = risk_check(
-            _make_signal(price=60000, sl=40000, tp1=65000, tp2=68000),
+            _make_signal(price=60000, sl=40000, tp1=85000, tp2=90000),
             100000,
             100000,
             [],
@@ -866,7 +869,10 @@ class TestConsensusMinRR:
         assert r.approved is False
         assert r.reason == "RR_BELOW_MINIMUM"
 
-    def test_allows_low_rr_when_not_consensus_context(self, monkeypatch):
+    def test_rejects_low_rr_for_pure_signal_no_consensus_context(self, monkeypatch):
+        """Audit C1: the geometric RR floor now applies to EVERY execution
+        signal, including a pure Engine A signal with no verdict/components.
+        Previously this RR 0.8 signal was approved (gate skipped)."""
         monkeypatch.setitem(risk_engine.CONFIG, "ENGINE_C_EXEC_MIN_RR", 1.0)
         sig = _make_signal(
             price=100.0,
@@ -874,7 +880,8 @@ class TestConsensusMinRR:
             tp1=104.0,
         )
         r = risk_check(sig, 10000, 10000, [])
-        assert r.approved is True
+        assert r.approved is False
+        assert r.reason == "RR_BELOW_MINIMUM"
 
     def test_rejects_standalone_engine_b_low_rr_after_override(self, monkeypatch):
         monkeypatch.setitem(risk_engine.CONFIG, "ENGINE_C_EXEC_MIN_RR", 1.0)

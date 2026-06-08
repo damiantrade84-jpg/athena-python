@@ -432,9 +432,77 @@ def _resolve_domain(asset_type: str = "", account_domain: str | None = None) -> 
     return at  # Fallback for others (bond_tlt, etc.)
 
 # ── Daily loss tracker ───────────────────────────────────────────────────────
-_daily_pnl: dict[str, float] = {}
-_daily_pnl_date: str = ""
-_daily_start_balance: dict[str, float] = {}
+# Persisted to SQLite (audit.db) so a mid-day restart cannot zero the daily
+# loss and bypass the DAILY_LOSS_LIMIT gate (audit C2).
+def _init_daily_pnl_table() -> None:
+    """Create daily_pnl table if it doesn't exist."""
+    try:
+        with timed_sqlite_connect(_RISK_DB, timeout=15.0, label="risk.daily_init.connect") as con:
+            timed_sqlite_execute_write(
+                con, "PRAGMA journal_mode=WAL", label="risk.daily_init.wal"
+            )
+            timed_sqlite_execute_write(
+                con,
+                "CREATE TABLE IF NOT EXISTS daily_pnl ("
+                "domain TEXT PRIMARY KEY, date TEXT NOT NULL, pnl REAL NOT NULL, "
+                "start_balance REAL NOT NULL, updated_at TEXT NOT NULL)",
+                label="risk.daily_init.create",
+            )
+            timed_sqlite_commit(con, label="risk.daily_init.commit")
+    except Exception as e:
+        log.error(f"[RISK] Failed to init daily_pnl table: {e}")
+
+
+def _save_daily_pnl(domain: str, date_str: str, pnl: float, start_balance: float) -> None:
+    """Persist one domain's running daily P&L (synchronous; low call volume)."""
+    try:
+        ts = datetime.now(timezone.utc).isoformat()
+        with timed_sqlite_connect(_RISK_DB, timeout=15.0, label="risk.daily_save.connect") as con:
+            timed_sqlite_execute_write(
+                con,
+                "INSERT INTO daily_pnl (domain, date, pnl, start_balance, updated_at) "
+                "VALUES (?, ?, ?, ?, ?) ON CONFLICT(domain) DO UPDATE SET "
+                "date=excluded.date, pnl=excluded.pnl, "
+                "start_balance=excluded.start_balance, updated_at=excluded.updated_at",
+                (domain, date_str, float(pnl), float(start_balance), ts),
+                label="risk.daily_save.upsert",
+            )
+            timed_sqlite_commit(con, label="risk.daily_save.commit")
+    except Exception as e:
+        log.warning(f"[RISK] daily P&L save failed [{domain}]: {e}")  # non-fatal
+
+
+def _load_daily_pnl() -> tuple[dict[str, float], dict[str, float], str]:
+    """Restore today's per-domain daily P&L from SQLite on startup.
+
+    Rows dated before today are ignored (a new trading day starts flat)."""
+    pnl: dict[str, float] = {}
+    start: dict[str, float] = {}
+    date_str = ""
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    try:
+        with timed_sqlite_connect(_RISK_DB, timeout=15.0, label="risk.daily_load.connect") as con:
+            rows = con.execute(
+                "SELECT domain, date, pnl, start_balance FROM daily_pnl"
+            ).fetchall()
+            for r in rows:
+                if str(r[1]) != today:
+                    continue
+                domain = str(r[0])
+                pnl[domain] = float(r[2])
+                start[domain] = float(r[3])
+                date_str = today
+                log.info(
+                    f"[RISK] Restored daily P&L [{domain}]: ${float(r[2]):,.2f} "
+                    f"(start ${float(r[3]):,.2f}, {today})"
+                )
+    except Exception as e:
+        log.warning(f"[RISK] Could not load daily P&L: {e}")
+    return pnl, start, date_str
+
+
+_init_daily_pnl_table()
+_daily_pnl, _daily_start_balance, _daily_pnl_date = _load_daily_pnl()
 _daily_lock = threading.Lock()
 _kelly_cache: dict = {}           # (asset_type, regime) → (adaptive_risk_pct, cached_at)
 _KELLY_TTL_SECONDS: float = 300.0  # 5 minutes
@@ -458,6 +526,8 @@ def record_daily_pnl(
         if domain not in _daily_start_balance or _daily_start_balance[domain] <= 0:
             _daily_start_balance[domain] = account_balance
         _daily_pnl[domain] = _daily_pnl.get(domain, 0.0) + pnl
+        # Persist so a restart cannot reset the daily loss tracker (C2).
+        _save_daily_pnl(domain, today, _daily_pnl[domain], _daily_start_balance[domain])
         if _daily_start_balance[domain] > 0 and _daily_pnl[domain] < 0:
             loss_pct = abs(_daily_pnl[domain]) / _daily_start_balance[domain]
             if loss_pct >= _cfg("DAILY_LOSS_LIMIT", 0.05):
@@ -1263,24 +1333,6 @@ def risk_check(
             )
 
     # Engine C / consensus minimum R:R from geometry (defense in depth)
-    def _is_consensus_execution_signal(sig: dict) -> bool:
-        eng = str(sig.get("engine") or "").strip().lower()
-        if eng in ("engine_c", "consensus"):
-            return True
-        v = str(sig.get("verdict") or "").strip().upper()
-        if v in (
-            "ALIGNED",
-            "A_ONLY",
-            "B_ONLY",
-            "B_ONLY_SCORED",
-            "B_ONLY_VISION_CONFIRMED",
-            "B_OVERRIDE_CONFLICT",
-            "A_OVERRIDE_CONFLICT",
-        ):
-            return True
-        comps = sig.get("components")
-        return isinstance(comps, dict) and bool(comps)
-
     try:
         _min_exec_rr = float(CONFIG.get("ENGINE_C_EXEC_MIN_RR", 1.0) or 1.0)
     except (TypeError, ValueError):
@@ -1301,9 +1353,11 @@ def risk_check(
                 except (TypeError, ValueError):
                     pass
 
-    if _min_exec_rr > 0 and tp1 > 0 and (
-        _is_consensus_execution_signal(signal) or _is_engine_b_execution_signal(signal)
-    ):
+    # Defense in depth: the geometric RR floor applies to EVERY execution
+    # signal, not only consensus/Engine B. Pure Engine A signals (no verdict,
+    # no components) previously bypassed this and could execute with RR < 1
+    # (SL further than TP) as long as SL/TP were on the correct side.
+    if _min_exec_rr > 0 and tp1 > 0:
         risk_abs = abs(entry - sl)
         if risk_abs > 0:
             rr_geom = abs(tp1 - entry) / risk_abs
