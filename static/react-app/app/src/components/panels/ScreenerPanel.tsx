@@ -1,5 +1,4 @@
 import { useState, useCallback } from 'react';
-import { useStore } from '@/hooks/useStore';
 import { useApiPoll, useApiPost } from '@/hooks/useApiData';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -11,11 +10,11 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Progress } from '@/components/ui/progress';
 import { ErrorBanner } from '@/components/shared';
 import { Filter, Search, Activity } from 'lucide-react';
-import type { ScreenerResult } from '@/types';
+import { fmtNum } from '@/lib/utils';
+import type { ScreenerCandidate, ScreenerScanResponse } from '@/types';
 
-interface ScreenerScanResult {
-  results: ScreenerResult[];
-}
+const DEFAULT_MIN_MARKET_CAP = 50_000_000_000;
+const DEFAULT_LIMIT = 50;
 
 interface MicroHealth {
   pair: string;
@@ -24,42 +23,87 @@ interface MicroHealth {
   status: string;
 }
 
+function fmtCompact(value: number | null | undefined): string {
+  if (value == null || Number.isNaN(value)) return '—';
+  return new Intl.NumberFormat('en-US', {
+    notation: 'compact',
+    maximumFractionDigits: 1,
+  }).format(value);
+}
+
+function fmtPrice(value: number | null | undefined): string {
+  if (value == null || Number.isNaN(value)) return '—';
+  return fmtNum(value, value >= 100 ? 2 : 4);
+}
+
+function CandidateTable({ rows, emptyMessage }: { rows: ScreenerCandidate[]; emptyMessage: string }) {
+  if (rows.length === 0) {
+    return <div className="text-center text-muted-foreground py-8 text-sm">{emptyMessage}</div>;
+  }
+
+  return (
+    <table className="w-full text-left">
+      <thead>
+        <tr className="border-b border-border/40">
+          <th className="text-[10px] uppercase py-2 text-muted-foreground">Symbol</th>
+          <th className="text-[10px] uppercase py-2 text-muted-foreground">Name</th>
+          <th className="text-[10px] uppercase py-2 text-muted-foreground">Exchange</th>
+          <th className="text-[10px] uppercase py-2 text-muted-foreground text-right">Price</th>
+          <th className="text-[10px] uppercase py-2 text-muted-foreground text-right">Market Cap</th>
+          <th className="text-[10px] uppercase py-2 text-muted-foreground text-right">52w High</th>
+          <th className="text-[10px] uppercase py-2 text-muted-foreground text-right">52w Low</th>
+          <th className="text-[10px] uppercase py-2 text-muted-foreground text-right">200d New Hi</th>
+        </tr>
+      </thead>
+      <tbody>
+        {rows.map(row => (
+          <tr key={`${row.symbol}-${row.exchange}`} className="border-b border-border/20 hover:bg-muted/30 transition-colors">
+            <td className="py-2 text-xs font-mono font-bold">{row.symbol || '—'}</td>
+            <td className="py-2 text-xs max-w-[180px] truncate" title={row.name}>{row.name || '—'}</td>
+            <td className="py-2 text-xs font-mono">{row.exchange || '—'}</td>
+            <td className="py-2 text-xs font-mono text-right">{fmtPrice(row.price)}</td>
+            <td className="py-2 text-xs font-mono text-right">{fmtCompact(row.marketCap)}</td>
+            <td className="py-2 text-xs font-mono text-right">{fmtPrice(row['52wHigh'])}</td>
+            <td className="py-2 text-xs font-mono text-right">{fmtPrice(row['52wLow'])}</td>
+            <td className="py-2 text-xs font-mono text-right">{fmtNum(row['200dNewHi'], 2)}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+}
+
 export default function ScreenerPanel() {
-  const { setActivePanel } = useStore();
-  const [assetClass, setAssetClass] = useState('forex');
-  const [trendFilter, setTrendFilter] = useState('all');
-  const [minStrength, setMinStrength] = useState(0);
-  const [results, setResults] = useState<ScreenerResult[]>([]);
+  const [minMarketCap, setMinMarketCap] = useState(DEFAULT_MIN_MARKET_CAP);
+  const [limit, setLimit] = useState(DEFAULT_LIMIT);
+  const [scanData, setScanData] = useState<ScreenerScanResponse | null>(null);
   const [scanning, setScanning] = useState(false);
 
-  const { post: postScan } = useApiPost<ScreenerScanResult>();
+  const { post: postScan, error: scanError } = useApiPost<ScreenerScanResponse>();
   const { data: microHealth, loading: microLoading, error: microError } = useApiPoll<MicroHealth[]>('/api/microstructure-health', 0);
+
+  const newCandidates = scanData?.newCandidates ?? [];
+  const alreadyTracked = scanData?.alreadyTracked ?? [];
+  const hasScanResults = newCandidates.length > 0 || alreadyTracked.length > 0;
 
   const handleScan = useCallback(async () => {
     setScanning(true);
+    setScanData(null);
     const res = await postScan('/api/screener-scan', {
-      asset_class: assetClass,
-      filters: { trend: trendFilter === 'all' ? undefined : trendFilter, min_strength: minStrength },
+      minMarketCap,
+      limit: Math.min(Math.max(limit, 1), 100),
     });
-    if (res) setResults(res.results);
+    if (res?.success) {
+      setScanData({
+        success: true,
+        newCandidates: res.newCandidates ?? [],
+        alreadyTracked: res.alreadyTracked ?? [],
+        totalScanned: res.totalScanned ?? 0,
+        scannedAt: res.scannedAt ?? '',
+      });
+    }
     setScanning(false);
-  }, [assetClass, trendFilter, minStrength, postScan]);
-
-  const trendColor = (trend: string) => {
-    switch (trend) {
-      case 'bullish': return 'bg-long/20 text-long';
-      case 'bearish': return 'bg-short/20 text-short';
-      default: return 'bg-muted text-muted-foreground';
-    }
-  };
-
-  const sentimentColor = (s: string) => {
-    switch (s) {
-      case 'risk_on': return 'bg-long/20 text-long';
-      case 'risk_off': return 'bg-short/20 text-short';
-      default: return 'bg-muted text-muted-foreground';
-    }
-  };
+  }, [minMarketCap, limit, postScan]);
 
   return (
     <div className="space-y-4">
@@ -78,23 +122,29 @@ export default function ScreenerPanel() {
               </CardTitle>
             </CardHeader>
             <CardContent className="space-y-3">
+              <p className="text-[10px] text-muted-foreground">
+                EODHD momentum screener — discovers high-cap stocks near 52-week highs
+              </p>
               <div className="flex items-center gap-3 flex-wrap">
-                <select value={assetClass} onChange={e => setAssetClass(e.target.value)} className="h-8 text-xs bg-card border border-border/60 rounded px-2">
-                  <option value="forex">Forex</option>
-                  <option value="crypto">Crypto</option>
-                  <option value="stocks">Stocks</option>
-                  <option value="indices">Indices</option>
-                  <option value="commodities">Commodities</option>
-                </select>
-                <select value={trendFilter} onChange={e => setTrendFilter(e.target.value)} className="h-8 text-xs bg-card border border-border/60 rounded px-2">
-                  <option value="all">All Trends</option>
-                  <option value="bullish">Bullish</option>
-                  <option value="bearish">Bearish</option>
-                  <option value="neutral">Neutral</option>
-                </select>
                 <div className="flex items-center gap-2">
-                  <span className="text-[10px] text-muted-foreground">Min Strength</span>
-                  <Input type="number" value={minStrength} onChange={e => setMinStrength(parseInt(e.target.value))} className="w-20 h-8 text-xs font-mono" />
+                  <span className="text-[10px] text-muted-foreground">Min Market Cap</span>
+                  <Input
+                    type="number"
+                    value={minMarketCap}
+                    onChange={e => setMinMarketCap(parseInt(e.target.value, 10) || DEFAULT_MIN_MARKET_CAP)}
+                    className="w-36 h-8 text-xs font-mono"
+                  />
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="text-[10px] text-muted-foreground">Limit</span>
+                  <Input
+                    type="number"
+                    min={1}
+                    max={100}
+                    value={limit}
+                    onChange={e => setLimit(parseInt(e.target.value, 10) || DEFAULT_LIMIT)}
+                    className="w-20 h-8 text-xs font-mono"
+                  />
                 </div>
                 <Button size="sm" className="h-8 text-xs gap-1" onClick={handleScan} disabled={scanning}>
                   <Search className="w-3 h-3" />
@@ -103,6 +153,8 @@ export default function ScreenerPanel() {
               </div>
             </CardContent>
           </Card>
+
+          {scanError && <ErrorBanner message={scanError} />}
 
           <Card className="border-border/60 bg-card/50">
             <CardHeader className="pb-2">
@@ -114,54 +166,31 @@ export default function ScreenerPanel() {
                   <div className="space-y-2">
                     {Array.from({ length: 6 }).map((_, i) => <Skeleton key={i} className="h-10 w-full" />)}
                   </div>
-                ) : results.length === 0 ? (
+                ) : !scanData ? (
                   <div className="text-center text-muted-foreground py-12 text-sm">Run a scan to see results</div>
+                ) : !hasScanResults ? (
+                  <div className="text-center text-muted-foreground py-12 text-sm">No candidates found</div>
                 ) : (
-                  <table className="w-full text-left">
-                    <thead>
-                      <tr className="border-b border-border/40">
-                        <th className="text-[10px] uppercase py-2 text-muted-foreground">Pair</th>
-                        <th className="text-[10px] uppercase py-2 text-muted-foreground">Trend</th>
-                        <th className="text-[10px] uppercase py-2 text-muted-foreground">Strength</th>
-                        <th className="text-[10px] uppercase py-2 text-muted-foreground text-right">RSI</th>
-                        <th className="text-[10px] uppercase py-2 text-muted-foreground text-right">MACD</th>
-                        <th className="text-[10px] uppercase py-2 text-muted-foreground text-right">Vol</th>
-                        <th className="text-[10px] uppercase py-2 text-muted-foreground text-right">ATR</th>
-                        <th className="text-[10px] uppercase py-2 text-muted-foreground">Sentiment</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {results.map(r => (
-                        <tr
-                          key={r.pair}
-                          className="border-b border-border/20 hover:bg-muted/30 transition-colors cursor-pointer"
-                          onClick={() => setActivePanel('pairBrowser')}
-                        >
-                          <td className="py-2 text-xs font-mono font-bold">{r.pair}</td>
-                          <td className="py-2">
-                            <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${trendColor(r.trend)}`}>
-                              {r.trend}
-                            </span>
-                          </td>
-                          <td className="py-2">
-                            <div className="flex items-center gap-2 w-24">
-                              <Progress value={r.strength} className="h-1.5 flex-1" />
-                              <span className="text-[10px] font-mono">{r.strength}</span>
-                            </div>
-                          </td>
-                          <td className="py-2 text-xs font-mono text-right">{r.rsi.toFixed(1)}</td>
-                          <td className="py-2 text-xs font-mono text-right">{r.macd.toFixed(4)}</td>
-                          <td className="py-2 text-xs font-mono text-right">{r.volume.toFixed(0)}</td>
-                          <td className="py-2 text-xs font-mono text-right">{r.atr.toFixed(5)}</td>
-                          <td className="py-2">
-                            <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${sentimentColor(r.sentiment)}`}>
-                              {r.sentiment}
-                            </span>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
+                  <div className="space-y-6">
+                    <div className="flex items-center gap-4 text-[10px] text-muted-foreground font-mono">
+                      <span>Scanned: {scanData.totalScanned}</span>
+                      {scanData.scannedAt && <span>At: {scanData.scannedAt}</span>}
+                    </div>
+
+                    <div>
+                      <h3 className="text-[10px] uppercase tracking-wider text-muted-foreground mb-2">
+                        New Candidates ({newCandidates.length})
+                      </h3>
+                      <CandidateTable rows={newCandidates} emptyMessage="No new candidates" />
+                    </div>
+
+                    <div>
+                      <h3 className="text-[10px] uppercase tracking-wider text-muted-foreground mb-2">
+                        Already Tracked ({alreadyTracked.length})
+                      </h3>
+                      <CandidateTable rows={alreadyTracked} emptyMessage="No already-tracked matches" />
+                    </div>
+                  </div>
                 )}
               </ScrollArea>
             </CardContent>

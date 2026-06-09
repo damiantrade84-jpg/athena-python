@@ -112,6 +112,26 @@ export interface ScreenerResult {
   sentiment: 'risk_on' | 'risk_off' | 'neutral';
 }
 
+/** Row returned by Flask POST /api/screener-scan (EODHD momentum discovery). */
+export interface ScreenerCandidate {
+  symbol: string;
+  name: string;
+  exchange: string;
+  marketCap: number | null;
+  '52wHigh': number | null;
+  '52wLow': number | null;
+  price: number | null;
+  '200dNewHi': number | null;
+}
+
+export interface ScreenerScanResponse {
+  success: boolean;
+  newCandidates: ScreenerCandidate[];
+  alreadyTracked: ScreenerCandidate[];
+  totalScanned: number;
+  scannedAt: string;
+}
+
 /**
  * Real shape returned by Flask /api/performance.
  * - win_rate, max_drawdown_pct already in PERCENT units (0..100).
