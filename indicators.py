@@ -11,6 +11,7 @@ per-asset-class ATR multipliers. Safe to import and unit-test in isolation.
 import math
 
 import logging
+import numpy as np
 
 from config import CONFIG
 
@@ -27,17 +28,18 @@ log = logging.getLogger("athena")
 def calc_ema(c: list, p: int) -> list:
     """Exponential Moving Average. Returns list aligned with input, None-padded."""
 
-    k = 2 / (p + 1)
-
-    e = [None] * len(c)
-
-    if len(c) < p:
+    n = len(c)
+    e = [None] * n
+    if n < p:
         return e
 
-    e[p - 1] = sum(c[:p]) / p
-
-    for i in range(p, len(c)):
-        e[i] = c[i] * k + e[i - 1] * (1 - k)
+    arr = np.asarray(c, dtype=np.float64)
+    k = 2.0 / (p + 1)
+    ema_val = float(np.mean(arr[:p]))
+    e[p - 1] = ema_val
+    for i in range(p, n):
+        ema_val = arr[i] * k + ema_val * (1.0 - k)
+        e[i] = float(ema_val)
 
     return e
 
@@ -60,34 +62,22 @@ def calc_sma(a: list, p: int) -> list:
 def calc_rsi(c: list, p: int) -> list:
     """Wilder RSI (smoothed). Returns list aligned with input, None-padded."""
 
-    r = [None] * len(c)
-
-    if len(c) < p + 1:
+    n = len(c)
+    r = [None] * n
+    if n < p + 1:
         return r
 
-    g = loss = 0
+    arr = np.asarray(c, dtype=np.float64)
+    delta = np.diff(arr)
+    ag = float(np.mean(np.maximum(delta[:p], 0.0)))
+    al = float(np.mean(np.maximum(-delta[:p], 0.0)))
+    r[p] = 100.0 if al == 0 else 100.0 - 100.0 / (1.0 + ag / al)
 
-    for i in range(1, p + 1):
-        d = c[i] - c[i - 1]
-
-        if d > 0:
-            g += d
-
-        else:
-            loss -= d
-
-    ag, al = g / p, loss / p
-
-    r[p] = 100 if al == 0 else 100 - 100 / (1 + ag / al)
-
-    for i in range(p + 1, len(c)):
-        d = c[i] - c[i - 1]
-
-        ag = (ag * (p - 1) + max(d, 0)) / p
-
-        al = (al * (p - 1) + max(-d, 0)) / p
-
-        r[i] = 100 if al == 0 else 100 - 100 / (1 + ag / al)
+    for i in range(p + 1, n):
+        d = float(delta[i - 1])
+        ag = (ag * (p - 1) + max(d, 0.0)) / p
+        al = (al * (p - 1) + max(-d, 0.0)) / p
+        r[i] = 100.0 if al == 0 else 100.0 - 100.0 / (1.0 + ag / al)
 
     return r
 
