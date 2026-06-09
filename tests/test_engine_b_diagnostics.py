@@ -1072,7 +1072,8 @@ def test_follow_through_diagnostics_can_run_without_score_impact(monkeypatch):
     assert observed["follow_through_bonus"] == 0.0
     assert detail["enabled"] is False
     assert detail["diagnostics_enabled"] is True
-    assert detail["confidence"] == "insufficient_data"
+    # Flat candles with no BOS level in res — no breakout bar to evaluate.
+    assert detail["confidence"] == "no_breakout_bar"
 
 
 def _fvg_fixture():
@@ -1870,6 +1871,7 @@ def test_engine_b_follow_through_denominator_uses_configured_capacity(monkeypatc
     )
 
     assert out["follow_through"]["score"] == pytest.approx(0.0)
+    # gates 5 + bonuses 3 (bos_mtf, ob_at_zone, volume_ok) + follow-through 1.5
     assert out["max_possible"] == pytest.approx(9.5)
 
 
@@ -2020,3 +2022,184 @@ def test_execution_levels_exposed_in_confidence_output():
         assert key in out, f"Missing key: {key}"
 
 
+
+# ── 2026-06-09 Engine B quant review regressions ────────────────────────────
+
+
+def test_engine_b_max_sl_gate_honours_score_group_override(monkeypatch):
+    """Engine B max-SL gate must use the same per-group caps as risk_engine.
+
+    precious_trackers allows 10% SL width while the flat commodity cap is 4%.
+    Without score_group context the structural SL (8%) was wrongly rejected.
+    """
+    from market_structure import resolve_engine_b_execution_levels
+
+    monkeypatch.setitem(config.CONFIG, "MAX_SL_PCT", {"commodity": 0.04, "default": 0.05})
+    monkeypatch.setitem(
+        config.CONFIG, "MAX_SL_PCT_SCORE_GROUP_OVERRIDES", {"precious_trackers": 0.10}
+    )
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_ENFORCE_MAX_SL_PCT", True)
+    monkeypatch.setitem(
+        config.CONFIG, "STYLE_ATR_MULTS", {"swing": {"commodity": {"sl": 2.0, "tp1": 3.0}}}
+    )
+
+    kwargs = dict(
+        direction="LONG",
+        entry=100.0,
+        structural_sl=92.0,   # 8% — beyond the flat commodity cap, inside the group cap
+        structural_tp=120.0,  # structural RR 2.5 >= min_rr
+        atr=2.0,
+        style="swing",
+        asset_class="commodity",
+        min_rr=2.0,
+        fallback_rr=3.0,
+    )
+    with_group = resolve_engine_b_execution_levels(**kwargs, score_group="precious_trackers")
+    without_group = resolve_engine_b_execution_levels(**kwargs)
+
+    assert with_group["execution_sl"] == pytest.approx(92.0)
+    assert with_group["sl_source"] == "structural"
+    assert with_group["rr_passed"] is True
+    # Without group context the structural SL exceeds the 4% cap and is replaced.
+    assert without_group["execution_sl"] != pytest.approx(92.0)
+
+
+def test_engine_b_confidence_passes_score_group_to_max_sl_gate(monkeypatch):
+    """calculate_confidence threads profile score_group into the max-SL resolver."""
+    monkeypatch.setitem(config.CONFIG, "MAX_SL_PCT", {"commodity": 0.04, "default": 0.05})
+    monkeypatch.setitem(
+        config.CONFIG, "MAX_SL_PCT_SCORE_GROUP_OVERRIDES", {"precious_trackers": 0.10}
+    )
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_ENFORCE_MAX_SL_PCT", True)
+    monkeypatch.setitem(
+        config.CONFIG, "STYLE_ATR_MULTS", {"swing": {"commodity": {"sl": 2.0, "tp1": 3.0}}}
+    )
+
+    res = _base_res_long()
+    res["asset_type"] = "commodity"
+    res["atr"] = 2.0
+    res["recommended_stop_loss"] = 92.0
+    res["recommended_take_profit"] = 120.0
+    res["distance_to_res"] = 25.0
+    profile = {
+        "style": "swing",
+        "min_rr": 2.0,
+        "fallback_rr": 3.0,
+        "min_room_atr": 0.35,
+        "require_macro_align": False,
+        "score_group": "precious_trackers",
+    }
+
+    out = engine.calculate_confidence(
+        res, current_price=100.0, direction="LONG", learning_ctx=None,
+        entry_candles=[], style_profile=profile,
+    )
+    assert out["execution_sl"] == pytest.approx(92.0)
+    assert out["sl_source"] == "structural"
+
+    no_group = dict(profile)
+    no_group.pop("score_group")
+    out_flat = engine.calculate_confidence(
+        res, current_price=100.0, direction="LONG", learning_ctx=None,
+        entry_candles=[], style_profile=no_group,
+    )
+    assert out_flat["execution_sl"] != pytest.approx(92.0)
+
+
+def _follow_through_breakout_candles():
+    candles = [
+        {"open": 100.0, "high": 100.8, "low": 99.8, "close": 100.5}
+        for _ in range(10)
+    ]
+    # Breakout bar: close crosses the broken BOS level (101.0)
+    candles.append({"open": 100.5, "high": 101.6, "low": 100.4, "close": 101.5})
+    # Three aligned follow-through bars, each closing beyond the breakout high
+    candles.append({"open": 101.5, "high": 102.1, "low": 101.4, "close": 102.0})
+    candles.append({"open": 102.0, "high": 102.6, "low": 101.9, "close": 102.5})
+    candles.append({"open": 102.5, "high": 103.1, "low": 102.4, "close": 103.0})
+    return candles
+
+
+def test_follow_through_evaluates_bars_after_breakout_bar(monkeypatch):
+    """Follow-through must anchor on the breakout bar, not the last bar."""
+    monkeypatch.setitem(
+        config.CONFIG,
+        "ENGINE_B_FOLLOW_THROUGH",
+        {"ENABLED": False, "DIAGNOSTICS_ENABLED": True, "MAX_BONUS": 1.5, "MIN_PENALTY": -0.5},
+    )
+    res = _base_res_long()
+    res["distance_to_res"] = 5.0
+    res["bos_data"] = {"bos_bull": True, "last_broken_high": 101.0}
+
+    out = engine.calculate_confidence(
+        res, current_price=103.0, direction="LONG", learning_ctx=None,
+        entry_candles=_follow_through_breakout_candles(),
+        style_profile={"min_room_atr": 0.35, "min_rr": 1.0, "require_macro_align": False},
+    )
+
+    detail = out["follow_through_detail"]
+    assert detail["bars_checked"] == 3
+    assert detail["confidence"] == "strong"
+    assert detail["score"] == pytest.approx(1.5)
+    # Diagnostics-only: no score impact while ENABLED is false.
+    assert out["follow_through_bonus"] == 0.0
+
+
+def test_follow_through_bonus_applies_when_enabled(monkeypatch):
+    monkeypatch.setitem(
+        config.CONFIG,
+        "ENGINE_B_FOLLOW_THROUGH",
+        {"ENABLED": True, "DIAGNOSTICS_ENABLED": True, "MAX_BONUS": 1.5, "MIN_PENALTY": -0.5},
+    )
+    res = _base_res_long()
+    res["distance_to_res"] = 5.0
+    res["bos_data"] = {"bos_bull": True, "last_broken_high": 101.0}
+    profile = {"min_room_atr": 0.35, "min_rr": 1.0, "require_macro_align": False}
+
+    out = engine.calculate_confidence(
+        res, current_price=103.0, direction="LONG", learning_ctx=None,
+        entry_candles=_follow_through_breakout_candles(), style_profile=profile,
+    )
+    assert out["follow_through_bonus"] == pytest.approx(1.5)
+
+    monkeypatch.setitem(
+        config.CONFIG,
+        "ENGINE_B_FOLLOW_THROUGH",
+        {"ENABLED": False, "DIAGNOSTICS_ENABLED": True, "MAX_BONUS": 1.5, "MIN_PENALTY": -0.5},
+    )
+    baseline = engine.calculate_confidence(
+        res, current_price=103.0, direction="LONG", learning_ctx=None,
+        entry_candles=_follow_through_breakout_candles(), style_profile=profile,
+    )
+    assert out["score"] == pytest.approx(baseline["score"] + 1.5)
+
+
+def test_determine_sequence_exposes_direction_agnostic_equal_extrema():
+    local_engine = NakedEngine()
+    highs = np.array([100.0, 105.0, 101.0, 105.1, 101.0, 103.0], dtype=float)
+    lows = np.array([99.0, 100.0, 96.0, 100.0, 98.0, 99.0], dtype=float)
+    swings = {"peak_idx": np.array([1, 3]), "trough_idx": np.array([2, 4])}
+
+    seq = local_engine._determine_sequence(highs, lows, atr=1.0, direction="LONG", swings=swings)
+
+    # Equal highs (105.0 vs 105.1 within 0.3*ATR) — invisible to the legacy
+    # LONG-only flag but exposed for direction-dependent resolution.
+    assert seq["equal_highs"] is True
+    assert seq["equal_lows"] is False
+    assert seq["has_equal_extrema"] is False  # legacy LONG semantics preserved
+
+
+def test_find_zones_handles_short_candle_window():
+    """Fewer than 20 zone candles must not raise (ndarray truthiness crash)."""
+    local_engine = NakedEngine()
+    candles = [
+        {"open": 100.0, "high": 101.0 + i, "low": 99.0 - i, "close": 100.0, "vol": 50.0}
+        for i in range(5)
+    ]
+    highs = np.array([float(c["high"]) for c in candles])
+    lows = np.array([float(c["low"]) for c in candles])
+
+    res_zones, sup_zones = local_engine._find_zones(highs, lows, 1.0, "RANGING", candles)
+
+    assert isinstance(res_zones, list)
+    assert isinstance(sup_zones, list)
