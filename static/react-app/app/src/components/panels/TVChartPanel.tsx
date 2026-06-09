@@ -824,6 +824,19 @@ interface ChartStudySnapshot {
   latest: Partial<Record<IndicatorKey, number>> & { close?: number };
 }
 
+// API indicator fields are null on warm-up and forming bars (confirmed-only
+// policy). toNum(null) would coerce null -> 0 (Number(null) === 0), painting
+// zero-valued indicator points that collapse the price autoscale, so nullish
+// values must be skipped before numeric conversion.
+function apiSeriesValue(...values: (number | string | null | undefined)[]): number | null {
+  for (const value of values) {
+    if (value == null) continue;
+    const n = typeof value === 'number' ? value : Number(value);
+    if (Number.isFinite(n)) return n;
+  }
+  return null;
+}
+
 function latestFinite(values: (number | null)[]): number | null {
   for (let i = values.length - 1; i >= 0; i -= 1) {
     const value = values[i];
@@ -866,14 +879,14 @@ function buildChartStudySnapshot(
     baseRows.push({ time: t, open: o, high: h, low: l, close: cl });
     baseVolumes.push(toNum(c.volume ?? c.v, 0));
     baseConfirmed.push(typeof c.confirmed === 'boolean' ? c.confirmed : null);
-    apiVwap.push(Number.isFinite(toNum(c.vwap, NaN)) ? toNum(c.vwap, NaN) : null);
-    apiVolumeMa.push(Number.isFinite(toNum(c.volume_ma, NaN)) ? toNum(c.volume_ma, NaN) : null);
-    apiAdx14.push(Number.isFinite(toNum(c.adx14 ?? c.adx, NaN)) ? toNum(c.adx14 ?? c.adx, NaN) : null);
-    apiEmaTrend.push(Number.isFinite(toNum(c.ema_trend ?? c.ema21, NaN)) ? toNum(c.ema_trend ?? c.ema21, NaN) : null);
-    apiEmaMomentum.push(Number.isFinite(toNum(c.ema_momentum ?? c.ema50, NaN)) ? toNum(c.ema_momentum ?? c.ema50, NaN) : null);
-    apiEmaLong.push(Number.isFinite(toNum(c.ema_long ?? c.ema200, NaN)) ? toNum(c.ema_long ?? c.ema200, NaN) : null);
-    apiRsi14.push(Number.isFinite(toNum(c.rsi ?? c.rsi14, NaN)) ? toNum(c.rsi ?? c.rsi14, NaN) : null);
-    apiAtr14.push(Number.isFinite(toNum(c.atr14, NaN)) ? toNum(c.atr14, NaN) : null);
+    apiVwap.push(apiSeriesValue(c.vwap));
+    apiVolumeMa.push(apiSeriesValue(c.volume_ma));
+    apiAdx14.push(apiSeriesValue(c.adx14, c.adx));
+    apiEmaTrend.push(apiSeriesValue(c.ema_trend, c.ema21));
+    apiEmaMomentum.push(apiSeriesValue(c.ema_momentum, c.ema50));
+    apiEmaLong.push(apiSeriesValue(c.ema_long, c.ema200));
+    apiRsi14.push(apiSeriesValue(c.rsi, c.rsi14));
+    apiAtr14.push(apiSeriesValue(c.atr14));
   }
 
   const rows = buildLiveCandleRows(baseRows, liveTick, backendTf);

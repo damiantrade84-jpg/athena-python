@@ -548,6 +548,32 @@ def test_crypto_chart_prefers_api_indicator_series_when_present():
     assert "useApiIndicators" in source
 
 
+def test_chart_snapshot_does_not_coerce_null_api_indicators_to_zero():
+    """Server nulls indicator fields on warm-up/forming bars (confirmed-only
+    policy). Number(null) === 0, so a bare toNum() coercion painted 0-valued
+    EMA200/RSI/ATR points: the price autoscale stretched to 0 and squashed
+    H1 candles flat, and that broken image was sent to AI review.
+    """
+    source = _read(TV_PANEL)
+
+    assert "function apiSeriesValue" in source
+    assert "if (value == null) continue;" in source
+    assert "apiSeriesValue(c.vwap)" in source
+    assert "apiSeriesValue(c.volume_ma)" in source
+    assert "apiSeriesValue(c.adx14, c.adx)" in source
+    assert "apiSeriesValue(c.ema_trend, c.ema21)" in source
+    assert "apiSeriesValue(c.ema_momentum, c.ema50)" in source
+    assert "apiSeriesValue(c.ema_long, c.ema200)" in source
+    assert "apiSeriesValue(c.rsi, c.rsi14)" in source
+    assert "apiSeriesValue(c.atr14)" in source
+    # The null-coercing pattern must not return to the indicator series reads.
+    assert "toNum(c.ema_long ?? c.ema200" not in source
+    assert "toNum(c.rsi ?? c.rsi14" not in source
+    assert "toNum(c.atr14" not in source
+    assert "toNum(c.adx14 ?? c.adx" not in source
+    assert "toNum(c.vwap" not in source
+
+
 def test_crypto_atr_legend_includes_timeframe_and_provider():
     source = _read(TV_PANEL)
 
