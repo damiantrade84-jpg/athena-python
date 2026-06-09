@@ -13,6 +13,7 @@ VALID_PROVIDER_STATUSES = frozenset(
         "timeout",
         "fallback_used",
         "parse_error",
+        "empty_response",
         "unknown",
     }
 )

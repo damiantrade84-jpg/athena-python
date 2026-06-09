@@ -797,8 +797,125 @@ def test_xai_provider_posts_png_data_url_as_image_url(monkeypatch):
     assert content[0] == {"type": "text", "text": "review this chart"}
     assert content[1] == {"type": "image_url", "image_url": {"url": payload.screenshot_base64}}
     assert kwargs["model"] == "grok-4.3"
+    assert kwargs["max_tokens"] == CONFIG["AI_CHART_REVIEW"]["XAI_MAX_TOKENS"]
+    assert "response_format" not in kwargs
     assert out["provider"] == "grok"
     assert out["raw_text"].startswith('{"verdict"')
+
+
+def test_xai_provider_extracts_list_block_content(monkeypatch):
+    from ai_review.providers.xai_provider import call_xai_chart_review
+
+    payload = MagicMock()
+    payload.screenshot_base64 = _png_data_url()
+    payload.prompt = "review this chart"
+    monkeypatch.setenv("XAI_API_KEY", "test-xai-key")
+
+    mock_client = MagicMock()
+    mock_resp = MagicMock()
+    mock_resp.model = "grok-4.3"
+    mock_choice = MagicMock()
+    mock_choice.message.content = [
+        {"type": "text", "text": '{"verdict":"VALID","confidence":70,"human_action":"take"}'}
+    ]
+    mock_resp.choices = [mock_choice]
+    mock_client.chat.completions.create.return_value = mock_resp
+
+    with patch(
+        "ai_review.providers.xai_provider.create_ai_client",
+        return_value=mock_client,
+    ):
+        out = call_xai_chart_review(payload)
+
+    assert out["raw_text"].startswith('{"verdict"')
+
+
+def test_xai_provider_empty_content_raises(monkeypatch):
+    from ai_review.providers.xai_provider import call_xai_chart_review
+    from ai_review.provider_meta import ProviderChartReviewError
+
+    payload = MagicMock()
+    payload.screenshot_base64 = _png_data_url()
+    payload.prompt = "review this chart"
+    monkeypatch.setenv("XAI_API_KEY", "test-xai-key")
+
+    mock_client = MagicMock()
+    mock_resp = MagicMock()
+    mock_resp.model = "grok-4.3"
+    mock_choice = MagicMock()
+    mock_choice.message.content = ""
+    mock_resp.choices = [mock_choice]
+    mock_client.chat.completions.create.return_value = mock_resp
+
+    with patch(
+        "ai_review.providers.xai_provider.create_ai_client",
+        return_value=mock_client,
+    ):
+        with pytest.raises(ProviderChartReviewError) as excinfo:
+            call_xai_chart_review(payload)
+
+    assert excinfo.value.provider_status == "empty_response"
+    assert excinfo.value.provider == "grok"
+
+
+def test_xai_provider_fenced_json_parses_through_normalizer(monkeypatch):
+    from ai_review.providers.xai_provider import call_xai_chart_review
+
+    payload = MagicMock()
+    payload.screenshot_base64 = _png_data_url()
+    payload.prompt = "review this chart"
+    monkeypatch.setenv("XAI_API_KEY", "test-xai-key")
+
+    fenced = (
+        '```json\n'
+        '{"verdict":"VALID","confidence":82,"human_action":"take","direction":"LONG"}\n'
+        '```'
+    )
+    mock_client = MagicMock()
+    mock_resp = MagicMock()
+    mock_resp.model = "grok-4.3"
+    mock_choice = MagicMock()
+    mock_choice.message.content = fenced
+    mock_resp.choices = [mock_choice]
+    mock_client.chat.completions.create.return_value = mock_resp
+
+    with patch(
+        "ai_review.providers.xai_provider.create_ai_client",
+        return_value=mock_client,
+    ):
+        out = call_xai_chart_review(payload)
+
+    normalized = normalize_chart_review_response(out["raw_text"])
+    assert normalized["parse_success"] is True
+    assert normalized["verdict"] == "VALID"
+
+
+def test_xai_provider_json_mode_is_config_gated(monkeypatch):
+    from ai_review.providers.xai_provider import call_xai_chart_review
+
+    payload = MagicMock()
+    payload.screenshot_base64 = _png_data_url()
+    payload.prompt = "review this chart"
+    monkeypatch.setenv("XAI_API_KEY", "test-xai-key")
+
+    mock_client = MagicMock()
+    mock_resp = MagicMock()
+    mock_resp.model = "grok-4.3"
+    mock_choice = MagicMock()
+    mock_choice.message.content = '{"verdict":"VALID","confidence":80,"human_action":"take"}'
+    mock_resp.choices = [mock_choice]
+    mock_client.chat.completions.create.return_value = mock_resp
+
+    chart_cfg = dict(CONFIG["AI_CHART_REVIEW"])
+    chart_cfg["XAI_JSON_MODE"] = True
+    with patch(
+        "ai_review.providers.xai_provider.create_ai_client",
+        return_value=mock_client,
+    ), patch.dict(CONFIG, {"AI_CHART_REVIEW": chart_cfg}, clear=False):
+        call_xai_chart_review(payload)
+
+    kwargs = mock_client.chat.completions.create.call_args.kwargs
+    assert kwargs["response_format"] == {"type": "json_object"}
 
 
 def test_openai_provider_missing_key_fails_closed(monkeypatch):

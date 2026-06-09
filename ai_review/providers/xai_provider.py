@@ -42,6 +42,36 @@ def classify_xai_exception(exc: Exception) -> ProviderChartReviewError:
     )
 
 
+def extract_xai_message_text(content: Any) -> str:
+    """Extract assistant text from OpenAI-compatible chat completion message.content."""
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content.strip()
+    parts: list[str] = []
+    for block in content:
+        if isinstance(block, dict):
+            if block.get("type") == "text" and block.get("text"):
+                parts.append(str(block["text"]))
+        else:
+            text = getattr(block, "text", None)
+            if text:
+                parts.append(str(text))
+    return "\n".join(parts).strip()
+
+
+def _chart_review_timeout_sec(cfg: dict[str, Any]) -> float:
+    nested = cfg.get("TIMEOUT_SEC")
+    if nested is not None:
+        try:
+            timeout = float(nested)
+            if timeout > 0:
+                return timeout
+        except (TypeError, ValueError):
+            pass
+    return get_ai_timeout_sec(CONFIG, preferred_key="AI_CHART_REVIEW_TIMEOUT_SEC", fallback=120.0)
+
+
 def call_xai_chart_review(payload: Any) -> dict[str, Any]:
     api_key = get_ai_api_key(CONFIG, provider="grok")
     if not api_key:
@@ -59,8 +89,8 @@ def call_xai_chart_review(payload: Any) -> dict[str, Any]:
         fallback="grok-4.3",
         provider="grok",
     )
-    max_tokens = int(cfg.get("MAX_TOKENS", 1500))
-    timeout = get_ai_timeout_sec(CONFIG, preferred_key="AI_CHART_REVIEW_TIMEOUT_SEC")
+    max_tokens = int(cfg.get("XAI_MAX_TOKENS") or cfg.get("MAX_TOKENS", 1500))
+    timeout = _chart_review_timeout_sec(cfg)
 
     data_url = payload.screenshot_base64
     if not data_url.startswith("data:image/png;base64,"):
@@ -72,35 +102,47 @@ def call_xai_chart_review(payload: Any) -> dict[str, Any]:
         max_retries=get_ai_max_retries(CONFIG),
         provider="grok",
     )
+    request_kwargs: dict[str, Any] = {
+        "model": model,
+        "max_tokens": max_tokens,
+        "timeout": timeout,
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": payload.prompt},
+                    {"type": "image_url", "image_url": {"url": data_url}},
+                ],
+            }
+        ],
+    }
+    if cfg.get("XAI_JSON_MODE"):
+        request_kwargs["response_format"] = {"type": "json_object"}
+
     t0 = time.monotonic()
     try:
-        resp = client.chat.completions.create(
-            model=model,
-            max_tokens=max_tokens,
-            timeout=timeout,
-            messages=[
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": payload.prompt},
-                        {"type": "image_url", "image_url": {"url": data_url}},
-                    ],
-                }
-            ],
-        )
+        resp = client.chat.completions.create(**request_kwargs)
     except Exception as exc:
         raise classify_xai_exception(exc) from exc
 
     latency_ms = int((time.monotonic() - t0) * 1000)
     choice = resp.choices[0] if getattr(resp, "choices", None) else None
     message = getattr(choice, "message", None)
-    raw_text = str(getattr(message, "content", "") or "")
+    raw_text = extract_xai_message_text(getattr(message, "content", None))
+    if not raw_text:
+        raise ProviderChartReviewError(
+            "Grok chart review returned empty content",
+            provider_status="empty_response",
+            provider="grok",
+            http_status=503,
+        )
     model_used = str(getattr(resp, "model", "") or model)
     log.info(
-        "[AI_CHART_REVIEW] xai model=%s latency_ms=%s data_url_len=%s",
+        "[AI_CHART_REVIEW] xai model=%s latency_ms=%s data_url_len=%s raw_len=%s",
         model_used,
         latency_ms,
         len(data_url),
+        len(raw_text),
     )
     meta = build_provider_meta(
         provider="grok",
