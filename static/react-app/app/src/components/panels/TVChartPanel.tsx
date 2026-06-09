@@ -2690,7 +2690,6 @@ export default function TVChartPanel() {
         volumeMode,
         sizingOverride,
         exitMode,
-        engineBOverlay: engineBOverlay as Record<string, unknown> | undefined,
         reviewId: aiReview?.review_id ?? null,
       });
       const result = await apiClient.postJson('/api/quick-execute', payload) as {
