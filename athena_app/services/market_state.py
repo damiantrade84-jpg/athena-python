@@ -458,29 +458,46 @@ def get_tf_market_state(
     )
 
 
-def should_refetch_forex_h4(
+# Per-TF config keys / default lag caps for the one-shot forex stale refetch.
+# H1 weekend gap is ~48 buckets, so a cap of 6 cannot trigger weekend retries.
+_FOREX_STALE_REFETCH_TFS = {
+    "H4": ("MT5_H4_FETCH_RETRY_ENABLED", "MT5_H4_FETCH_RETRY_MAX_LAG", 3),
+    "H1": ("MT5_H1_FETCH_RETRY_ENABLED", "MT5_H1_FETCH_RETRY_MAX_LAG", 6),
+}
+
+
+def should_refetch_forex_stale_tf(
     pair: dict[str, Any] | None,
+    timeframe: str,
     newest_bar_epoch: float | int | None,
     *,
     time_now: Optional[float] = None,
     config: dict[str, Any] | None = None,
 ) -> tuple[bool, int]:
-    """Decide whether a one-shot forex H4 refetch is warranted.
+    """Decide whether a one-shot forex intraday (H1/H4) refetch is warranted.
 
-    MT5 can briefly omit the just-closed/forming H4 bar right after a boundary, so the
-    newest fetched bar lags the current bucket and would surface as
-    ``STALE_DATA_PRE_SCORING:H4`` on confirmed-only scoring. Returns
-    ``(should_retry, bucket_lag)``. A retry is warranted only when the lag is in
-    ``2..MT5_H4_FETCH_RETRY_MAX_LAG`` buckets — the cap excludes weekend / dead-feed
-    gaps. Bucket math is offset-aware and shift-invariant, so the raw broker-stamped bar
-    time can be passed directly. Pure decision helper (no I/O).
+    MT5 can briefly serve stale history (just-closed/forming bar omitted at a boundary,
+    or lazy chart re-sync right after a terminal/server restart), so the newest fetched
+    bar lags the current bucket and would surface as ``STALE_DATA_PRE_SCORING:<TF>`` on
+    confirmed-only scoring. Returns ``(should_retry, bucket_lag)``. A retry is warranted
+    only when the lag is in ``2..MT5_<TF>_FETCH_RETRY_MAX_LAG`` buckets — the cap
+    excludes weekend / dead-feed gaps. Pass the canonical UTC-aligned bar time
+    (raw MT5 time minus the inferred shift). H4 bucket math also tolerates a raw
+    broker-stamped (+3h) label because 3h stays inside one 4h bucket on the offset
+    grid; H1 does NOT (a +3h label hides 3 buckets of lag), so H1 callers must
+    shift first. Pure decision helper (no I/O).
     """
     cfg = config if isinstance(config, dict) else CONFIG
+    tf = str(timeframe or "").upper()
+    keys = _FOREX_STALE_REFETCH_TFS.get(tf)
+    if keys is None:
+        return False, 0
+    enabled_key, max_lag_key, default_max_lag = keys
     if not isinstance(pair, dict):
         return False, 0
     if str(pair.get("type") or "").lower() != "forex":
         return False, 0
-    if not cfg.get("MT5_H4_FETCH_RETRY_ENABLED", True):
+    if not cfg.get(enabled_key, True):
         return False, 0
     try:
         newest = float(newest_bar_epoch)
@@ -490,14 +507,27 @@ def should_refetch_forex_h4(
         return False, 0
 
     now = time_now if time_now is not None else time.time()
-    offset_hours = market_state_offset_hours(pair, "H4")
-    now_bucket = get_bucket_start_epoch("H4", now, offset_hours=offset_hours)
-    last_bucket = get_bucket_start_epoch("H4", newest, offset_hours=offset_hours)
-    lag = max(0, int((int(now_bucket) - int(last_bucket)) // _timeframe_seconds("H4")))
+    offset_hours = market_state_offset_hours(pair, tf)
+    now_bucket = get_bucket_start_epoch(tf, now, offset_hours=offset_hours)
+    last_bucket = get_bucket_start_epoch(tf, newest, offset_hours=offset_hours)
+    lag = max(0, int((int(now_bucket) - int(last_bucket)) // _timeframe_seconds(tf)))
 
     try:
-        max_lag = int(cfg.get("MT5_H4_FETCH_RETRY_MAX_LAG", 3) or 3)
+        max_lag = int(cfg.get(max_lag_key, default_max_lag) or default_max_lag)
     except (TypeError, ValueError):
-        max_lag = 3
+        max_lag = default_max_lag
 
     return (2 <= lag <= max_lag), lag
+
+
+def should_refetch_forex_h4(
+    pair: dict[str, Any] | None,
+    newest_bar_epoch: float | int | None,
+    *,
+    time_now: Optional[float] = None,
+    config: dict[str, Any] | None = None,
+) -> tuple[bool, int]:
+    """Backward-compatible H4 wrapper around :func:`should_refetch_forex_stale_tf`."""
+    return should_refetch_forex_stale_tf(
+        pair, "H4", newest_bar_epoch, time_now=time_now, config=config
+    )

@@ -2847,35 +2847,6 @@ def fetch_mt5(pair: dict, tf: str, limit: int):
         err = mt5.last_error()
         return _mt5_fallback(f"MT5 failed: {err}")
 
-    # One-shot refetch for forex H4 when the newest bar is >1 bucket stale. MT5 can
-    # briefly omit the just-closed/forming H4 bar right after a boundary, which would
-    # otherwise surface as a STALE_DATA_PRE_SCORING:H4 false positive on confirmed-only
-    # scoring. Bounded by a small lag cap so weekend / dead-feed gaps are NOT retried;
-    # read-only refetch only — no gate, scoring, or timestamp behavior change.
-    if tf == "H4":
-        try:
-            from athena_app.services.market_state import should_refetch_forex_h4
-
-            _h4_retry, _h4_lag = should_refetch_forex_h4(pair, float(bars[-1]["time"]))
-            if _h4_retry:
-                _retry_sleep_ms = int(CONFIG.get("MT5_H4_FETCH_RETRY_SLEEP_MS", 400) or 0)
-                if _retry_sleep_ms > 0:
-                    time.sleep(min(_retry_sleep_ms, 2000) / 1000.0)
-                _retry_bars = mt5.copy_rates_from_pos(mt5_symbol, mt5_tf, 0, request_limit)
-                if _retry_bars is not None and len(_retry_bars) > 0:
-                    _, _retry_lag = should_refetch_forex_h4(
-                        pair, float(_retry_bars[-1]["time"])
-                    )
-                    log.debug(
-                        "[MT5] %s H4: one-shot refetch (lag %d->%d buckets) after stale newest bar",
-                        symbol,
-                        _h4_lag,
-                        _retry_lag,
-                    )
-                    bars = _retry_bars
-        except Exception:
-            pass
-
     # Timezone alignment: MT5 bars may use broker-aligned stamps. When the newest bar
     # is severely stale (illiquid exotics), legacy tick TZ fallback hallucinated ±60h
     # shifts — see infer_mt5_rates_time_shift_seconds + MT5_FETCH_STALE_UNSHIFTED_AGE_SEC.
@@ -2895,6 +2866,65 @@ def fetch_mt5(pair: dict, tf: str, limit: int):
             tick_epoch,
             stale_unshifted_age_sec=get_mt5_fetch_stale_unshifted_age_sec(),
         )
+
+        # One-shot refetch for forex H1/H4 when the newest bar is >1 bucket stale. MT5
+        # can briefly serve stale history (just-closed/forming bar omitted at a
+        # boundary, or lazy chart re-sync right after a terminal/server restart), which
+        # would otherwise surface as a STALE_DATA_PRE_SCORING:<TF> false positive on
+        # confirmed-only scoring. Uses the canonical (shift-adjusted) newest time so H1
+        # lag is not understated by broker-stamped (+offset) labels. Bounded by a small
+        # lag cap so weekend / dead-feed gaps are NOT retried; read-only refetch only —
+        # no gate, scoring, or timestamp behavior change.
+        if tf in ("H1", "H4"):
+            try:
+                from athena_app.services.market_state import should_refetch_forex_stale_tf
+
+                _stale_retry, _stale_lag = should_refetch_forex_stale_tf(
+                    pair, tf, _newest_ts - offset_seconds, time_now=_utc_now
+                )
+                if _stale_retry:
+                    _retry_sleep_ms = int(CONFIG.get("MT5_H4_FETCH_RETRY_SLEEP_MS", 400) or 0)
+                    if _retry_sleep_ms > 0:
+                        time.sleep(min(_retry_sleep_ms, 2000) / 1000.0)
+                    _retry_bars = mt5.copy_rates_from_pos(mt5_symbol, mt5_tf, 0, request_limit)
+                    if _retry_bars is not None and len(_retry_bars) > 0:
+                        _r_now = time.time()
+                        _r_newest = float(_retry_bars[-1]["time"])
+                        _r_tick = mt5.symbol_info_tick(mt5_symbol)
+                        _r_tick_epoch = (
+                            float(_r_tick.time)
+                            if _r_tick and getattr(_r_tick, "time", 0) and _r_tick.time > 0
+                            else None
+                        )
+                        _r_offset, _r_tag = infer_mt5_rates_time_shift_seconds(
+                            tf,
+                            _r_now,
+                            _r_newest,
+                            _broker_offset_cfg,
+                            _r_tick_epoch,
+                            stale_unshifted_age_sec=get_mt5_fetch_stale_unshifted_age_sec(),
+                        )
+                        _, _retry_lag = should_refetch_forex_stale_tf(
+                            pair, tf, _r_newest - _r_offset, time_now=_r_now
+                        )
+                        log.debug(
+                            "[MT5] %s %s: one-shot refetch (lag %d->%d buckets) after stale newest bar",
+                            symbol,
+                            tf,
+                            _stale_lag,
+                            _retry_lag,
+                        )
+                        # Commit retry results atomically so downstream alignment,
+                        # logging, and diagnostics all reflect the refetched series.
+                        bars = _retry_bars
+                        _utc_now = _r_now
+                        _newest_ts = _r_newest
+                        _unshifted_age = _r_now - _r_newest
+                        tick_epoch = _r_tick_epoch
+                        offset_seconds, shift_tag = _r_offset, _r_tag
+            except Exception:
+                pass
+
         if shift_tag == "utc_assumed_recent":
             pass
         elif shift_tag == "broker_offset_applied":

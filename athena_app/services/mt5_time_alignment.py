@@ -33,8 +33,10 @@ def infer_mt5_rates_time_shift_seconds(
     Positive `offset_seconds` means: canonical UTC-aligned ``time = mt5_native - offset``.
 
     Reason tags:
-    - ``utc_assumed_recent`` — newest bar is plausibly already on UTC-ish grid vs now.
-    - ``broker_offset_applied`` — shift by configured broker UTC offset made bar recent.
+    - ``utc_assumed_recent`` — newest bar is plausibly already on UTC-ish grid vs now
+      (and the tick clock does not contradict it).
+    - ``broker_offset_applied`` — shift by configured broker UTC offset made bar recent,
+      or the tick clock confirmed broker-aligned stamps for a bar in the recent window.
     - ``stale_feed_skip_tick_tz`` — bar too old; refuse tick TZ (misleading shift).
     - ``tick_tz_out_of_band`` — inferred tick TZ exceeds clamp → treat as unreliable.
     - ``tick_inferred_tz`` — used rounded tick-vs-clock delta within clamp band.
@@ -62,8 +64,27 @@ def infer_mt5_rates_time_shift_seconds(
 
     unshifted_age = u_now - newest
 
+    tick_t: float | None = None
+    try:
+        if tick_epoch is not None and float(tick_epoch) > 0:
+            tick_t = float(tick_epoch)
+    except (TypeError, ValueError):
+        tick_t = None
+
     # Plausibly current forming bar on UTC-aligned native stamps
     if -300.0 <= unshifted_age <= 2.0 * tf_sec:
+        # A broker-stamped (+offset) feed that lags by ~offset hours also lands in
+        # this window, and treating its labels as UTC would relabel stale bars as
+        # fresh — masking staleness from the freshness gates (observed 2026-06-09 on
+        # forex H4 after a server restart). The live tick clock shares the bar
+        # server clock: if its delta vs wall clock rounds to the configured broker
+        # offset, the stamps are broker-aligned, so prefer the broker shift. This
+        # only tightens freshness (stale bars stay visible); a genuinely UTC-stamped
+        # feed has tick delta ~0 and keeps the unshifted path.
+        if broker_off != 0 and tick_t is not None:
+            tick_delta_hours = round((tick_t - u_now) / 3600.0)
+            if tick_delta_hours == broker_off:
+                return int(broker_shift_s), "broker_offset_applied"
         return 0, "utc_assumed_recent"
 
     shifted_age = u_now - (newest - broker_shift_s)
@@ -72,13 +93,6 @@ def infer_mt5_rates_time_shift_seconds(
 
     if unshifted_age > cap:
         return 0, "stale_feed_skip_tick_tz"
-
-    tick_t: float | None = None
-    try:
-        if tick_epoch is not None and float(tick_epoch) > 0:
-            tick_t = float(tick_epoch)
-    except (TypeError, ValueError):
-        tick_t = None
 
     if tick_t is None:
         return 0, "no_tick_timezone_uncertain"

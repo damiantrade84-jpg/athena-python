@@ -154,6 +154,13 @@ MT5_H4_FETCH_RETRY_ENABLED: true
 MT5_H4_FETCH_RETRY_MAX_LAG: 3
 MT5_H4_FETCH_RETRY_SLEEP_MS: 400
 
+# Forex H1 one-shot refetch: same MT5 stale-history quirk as H4 (boundary omission or
+# lazy chart re-sync right after a terminal/server restart) surfacing as
+# STALE_DATA_PRE_SCORING:H1. Lag cap 6 stays far below the ~48-bucket H1 weekend gap,
+# so weekend / dead-feed gaps are never retried. Reuses MT5_H4_FETCH_RETRY_SLEEP_MS.
+MT5_H1_FETCH_RETRY_ENABLED: true
+MT5_H1_FETCH_RETRY_MAX_LAG: 6
+
 # Broker candle safety: do not turn MT5 error payloads with Polygon/yfinance
 # fallback candles into execution-eligible Engine A candles.
 MT5_CANDLE_FALLBACK_ENABLED: false
