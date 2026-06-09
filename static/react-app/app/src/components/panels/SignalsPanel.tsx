@@ -294,6 +294,7 @@ export default function SignalsPanel() {
     setActivePanel, setTvChartIntent,
   } = useStore();
   const [filter, setFilter] = useState('');
+  const [feedEngine, setFeedEngine] = useState<EngineSource>('A');
   const [directionFilter, setDirectionFilter] = useState<string>('all');
   const [assetClass, setAssetClass] = useState<string>('all');
   const [style, setStyle] = useState<string>('auto');
@@ -366,10 +367,27 @@ export default function SignalsPanel() {
     return list;
   }, [rows, priceFor, filter, directionFilter, assetClass, sortBy]);
 
+  /** Per-engine counts (combined filtered list). A dual-flagged row counts for both. */
+  const engineCounts = useMemo(() => {
+    let a = 0;
+    let b = 0;
+    for (const r of filteredRows) {
+      if (r.engines.has('A')) a += 1;
+      if (r.engines.has('B')) b += 1;
+    }
+    return { a, b };
+  }, [filteredRows]);
+
+  /** Rows for the active engine tab. Dual-flagged setups appear in both tabs. */
+  const feedRows = useMemo(
+    () => filteredRows.filter((r) => r.engines.has(feedEngine)),
+    [filteredRows, feedEngine],
+  );
+
   /** Grouped by scoreGroup (Engine A) or asset type. Watchlist falls within its group. */
   const groupedRows = useMemo(() => {
     const map = new Map<string, UnifiedRow[]>();
-    for (const r of filteredRows) {
+    for (const r of feedRows) {
       const k = signalGroupKey(r.signal);
       if (!map.has(k)) map.set(k, []);
       map.get(k)!.push(r);
@@ -386,7 +404,7 @@ export default function SignalsPanel() {
       return a.key.localeCompare(b.key);
     });
     return entries;
-  }, [filteredRows, sortBy]);
+  }, [feedRows, sortBy]);
 
   const selectedRow = useMemo<UnifiedRow | null>(() => {
     if (!selectedId) return null;
@@ -446,6 +464,7 @@ export default function SignalsPanel() {
 
   const runScanA = useCallback(async () => {
     const a = await scanEngineA();
+    setFeedEngine('A');
     setSortBy('score');
     showToast(
       a ? `Engine A scan complete · ${a.trade} trade / ${a.watchlist} watch` : 'Engine A scan failed',
@@ -455,6 +474,7 @@ export default function SignalsPanel() {
 
   const runScanB = useCallback(async () => {
     const b = await scanEngineB();
+    setFeedEngine('B');
     setSortBy('score');
     showToast(
       b ? `Engine B scan complete · ${b.count} setups` : 'Engine B scan failed',
@@ -777,33 +797,56 @@ export default function SignalsPanel() {
             >
               <span>Signal Feed</span>
               <Badge variant="outline" className="text-[10px]">
-                {filteredRows.length} shown
+                {feedRows.length} shown
               </Badge>
             </CardTitle>
           </CardHeader>
           <CardContent>
-            <ScrollArea className="h-[680px] pr-2">
-              {scanning && filteredRows.length === 0 ? (
+            <Tabs value={feedEngine} onValueChange={(v) => setFeedEngine(v as EngineSource)}>
+              <TabsList className="w-full grid grid-cols-2 h-9 mb-3">
+                <TabsTrigger value="A" className="text-[11px] gap-1.5">
+                  <Zap className="w-3.5 h-3.5" /> Engine A
+                  <Badge variant="outline" className="ml-1 text-[9px] font-mono px-1">
+                    {engineCounts.a}
+                  </Badge>
+                </TabsTrigger>
+                <TabsTrigger value="B" className="text-[11px] gap-1.5">
+                  <Layers className="w-3.5 h-3.5" /> Engine B
+                  <Badge variant="outline" className="ml-1 text-[9px] font-mono px-1">
+                    {engineCounts.b}
+                  </Badge>
+                </TabsTrigger>
+              </TabsList>
+            </Tabs>
+            <ScrollArea className="h-[640px] pr-2">
+              {scanning && feedRows.length === 0 ? (
                 <div className="space-y-2">
                   {Array.from({ length: 6 }).map((_, i) => (
                     <Skeleton key={i} className="h-24 w-full" />
                   ))}
                 </div>
-              ) : filteredRows.length === 0 ? (
+              ) : feedRows.length === 0 ? (
                 <div className="flex flex-col items-center justify-center h-[300px] text-muted-foreground text-center px-4">
                   <Filter className="w-8 h-8 mb-3 opacity-40" />
                   {rows.length === 0 ? (
                     <>
                       <p className="text-sm">No signals yet</p>
                       <p className="text-[11px] mt-1">
-                        Run Engine A or Engine B from the controls above.
+                        Run Engine {feedEngine} from the controls above.
                       </p>
                     </>
-                  ) : (
+                  ) : filteredRows.length === 0 ? (
                     <>
                       <p className="text-sm">No signals match your filters</p>
                       <p className="text-[11px] mt-1">
                         {rows.length} signals total — adjust pair / direction / asset filters.
+                      </p>
+                    </>
+                  ) : (
+                    <>
+                      <p className="text-sm">No Engine {feedEngine} signals</p>
+                      <p className="text-[11px] mt-1">
+                        Engine {feedEngine === 'A' ? 'B' : 'A'} has results — switch tab, or run Engine {feedEngine}.
                       </p>
                     </>
                   )}
@@ -1228,7 +1271,7 @@ export default function SignalsPanel() {
                 <Activity className="w-8 h-8 mb-3 opacity-40" />
                 <p className="text-sm">Select a signal to inspect</p>
                 <p className="text-[11px] mt-1 max-w-xs text-center">
-                  Use the unified list on the left — Engine A and Engine B share one feed, each row tagged with its source.
+                  Pick the Engine A or Engine B tab on the left, then select a signal to inspect.
                 </p>
               </div>
             )}
