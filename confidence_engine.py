@@ -130,7 +130,12 @@ def indicator_agreement(
     """Measure agreement within each factor's indicators via MAD dispersion.
 
     Uses _mad_dispersion_score (inverse dispersion to [0,1]), not z-score normalization.
-    Returns 0–1 or None if no data."""
+    Factor groups with fewer than 2 populated indicators are excluded: a lone
+    indicator carries no agreement information, and counting it as MAD 0.0
+    ("perfect agreement") diluted real disagreement — most groups in
+    _DEFAULT_FACTOR_MAP only ever have one populated key, which dragged the
+    mean toward 1.0 regardless of actual indicator dispersion.
+    Returns 0–1 or None if no group has 2+ indicators."""
     mads = []
     for factor, keys in factor_map.items():
         vals = [
@@ -140,8 +145,6 @@ def indicator_agreement(
         ]
         if len(vals) >= 2:
             mads.append(_mad(vals))
-        elif len(vals) == 1:
-            mads.append(0.0)  # single indicator = perfect agreement
     if not mads:
         return None
     mean_mad = sum(mads) / len(mads)

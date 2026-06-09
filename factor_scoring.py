@@ -457,6 +457,39 @@ def _ema_cross_confirmed(current_snap: dict, prev_snap: dict, fast_key: str, slo
     return None
 
 
+def _trend_magnitude_cfg() -> dict:
+    cfg = CONFIG.get("ENGINE_A_TREND_MAGNITUDE") or {}
+    return cfg if isinstance(cfg, dict) else {}
+
+
+def _trend_vote_strength(snap: dict, fast_key: str, slow_key: str) -> float | None:
+    """ATR-normalized EMA separation in [0, 1] for trend magnitude scaling.
+
+    tanh(|fast - slow| / (ATR_K * atr)): a barely-crossed EMA pair (gap << ATR)
+    scores near 0; an established trend (gap >= ~2 ATR at default ATR_K=2.0)
+    saturates near 1. Returns None when ATR or either EMA is unavailable so the
+    vote falls back to sign-only behaviour.
+    """
+    cfg = _trend_magnitude_cfg()
+    fast_raw = snap.get(fast_key)
+    slow_raw = snap.get(slow_key)
+    atr_raw = snap.get("atr")
+    if fast_raw is None or slow_raw is None or atr_raw is None:
+        return None
+    try:
+        fast = float(fast_raw)
+        slow = float(slow_raw)
+        atr = float(atr_raw)
+    except (TypeError, ValueError):
+        return None
+    if atr <= 0 or not math.isfinite(atr):
+        return None
+    atr_k = _float_cfg(cfg.get("ATR_K"), 2.0)
+    if atr_k <= 0:
+        atr_k = 2.0
+    return math.tanh(abs(fast - slow) / (atr_k * atr))
+
+
 def _coherent_trend_score_legacy(
     d1_snap: dict, h4_snap: dict, h1_snap: dict, asset_type: str,
     d1_prev: dict | None = None, h4_prev: dict | None = None, h1_prev: dict | None = None,
@@ -478,11 +511,13 @@ def _coherent_trend_score_legacy(
 
     votes = []
     detail = {}
+    vote_strengths = {}
 
     d1_sign = _ema_cross_confirmed(d1_snap, d1_prev, "ema21", "ema200")
     if d1_sign is not None:
         votes.append(("d1_ema_trend", d1_sign, _w("d1_ema_trend")))
         detail["d1"] = "LONG" if d1_sign > 0 else "SHORT"
+        vote_strengths["d1_ema_trend"] = _trend_vote_strength(d1_snap, "ema21", "ema200")
     elif d1_snap.get("ema21") is not None and d1_snap.get("ema200") is None:
         detail["d1_ema200_missing"] = True
     elif d1_snap.get("ema21") is not None and d1_snap.get("ema200") is not None:
@@ -492,6 +527,7 @@ def _coherent_trend_score_legacy(
     if h4_sign is not None:
         votes.append(("h4_ema_trend", h4_sign, _w("h4_ema_trend")))
         detail["h4"] = "LONG" if h4_sign > 0 else "SHORT"
+        vote_strengths["h4_ema_trend"] = _trend_vote_strength(h4_snap, "ema21", "ema50")
     elif h4_snap.get("ema21") is not None and h4_snap.get("ema50") is not None:
         detail["h4_hysteresis_pending"] = True
 
@@ -499,10 +535,11 @@ def _coherent_trend_score_legacy(
     if h1_sign is not None:
         votes.append(("ema_trend", h1_sign, _w("ema_trend")))
         detail["h1"] = "LONG" if h1_sign > 0 else "SHORT"
+        vote_strengths["ema_trend"] = _trend_vote_strength(h1_snap, "ema21", "ema50")
     elif h1_snap.get("ema21") is not None and h1_snap.get("ema50") is not None:
         detail["h1_hysteresis_pending"] = True
 
-    return _finalize_coherent_trend_score(votes, detail)
+    return _finalize_coherent_trend_score(votes, detail, vote_strengths=vote_strengths)
 
 
 def _coherent_trend_score_from_profile(
@@ -529,6 +566,7 @@ def _coherent_trend_score_from_profile(
 
     votes = []
     detail = {"scoring_profile_style": scoring_profile.get("style")}
+    vote_strengths = {}
     for layer in layers:
         tf = str(layer.get("tf") or "").upper()
         snap = snaps.get(tf) or {}
@@ -541,17 +579,26 @@ def _coherent_trend_score_from_profile(
         if sign is not None:
             votes.append((weight_key, sign, _w(weight_key)))
             detail[tf_key] = "LONG" if sign > 0 else "SHORT"
+            vote_strengths[weight_key] = _trend_vote_strength(snap, fast_ema, slow_ema)
         elif snap.get(fast_ema) is not None and snap.get(slow_ema) is None:
             detail[f"{tf_key}_{slow_ema}_missing"] = True
         elif snap.get(fast_ema) is not None and snap.get(slow_ema) is not None:
             detail[f"{tf_key}_hysteresis_pending"] = True
 
     detail["trend_timeframes"] = list(scoring_profile.get("trend_timeframes") or [])
-    return _finalize_coherent_trend_score(votes, detail)
+    return _finalize_coherent_trend_score(votes, detail, vote_strengths=vote_strengths)
 
 
-def _finalize_coherent_trend_score(votes: list, detail: dict) -> tuple:
-    """Shared vote aggregation for legacy and profile-driven trend scoring."""
+def _finalize_coherent_trend_score(
+    votes: list, detail: dict, vote_strengths: dict | None = None
+) -> tuple:
+    """Shared vote aggregation for legacy and profile-driven trend scoring.
+
+    ``vote_strengths`` maps weight_key -> ATR-normalized EMA separation in
+    [0, 1] (or None when unavailable). Only applied when
+    ENGINE_A_TREND_MAGNITUDE.ENABLED is true; direction, tie handling, and
+    coherence semantics are unchanged — magnitude alone is scaled.
+    """
     if not votes:
         return 0.0, None, {"error": "no_ema_data", **detail}
 
@@ -601,6 +648,30 @@ def _finalize_coherent_trend_score(votes: list, detail: dict) -> tuple:
     else:
         _tf_coverage = active_votes / 3.0
     magnitude = coherence_ratio * 3.0 * _tf_coverage
+
+    # Optional ATR-normalized magnitude scaling (config-gated, default off).
+    # Sign-only votes score a barely-crossed EMA stack the same as an
+    # established trend; this scales magnitude by the weighted average
+    # separation strength of the agreeing TFs. MIN_MULT keeps a confirmed
+    # cross from being zeroed outright by a tiny gap.
+    _mag_cfg = _trend_magnitude_cfg()
+    if bool(_mag_cfg.get("ENABLED", False)) and vote_strengths:
+        _strength_pairs = [
+            (vote_strengths.get(name), w)
+            for name, d, w in votes
+            if d == dominant_sign and vote_strengths.get(name) is not None and w > 0
+        ]
+        if _strength_pairs:
+            _sw_total = sum(w for _, w in _strength_pairs)
+            if _sw_total > 0:
+                _avg_strength = sum(s * w for s, w in _strength_pairs) / _sw_total
+                _min_mult = _float_cfg(_mag_cfg.get("MIN_MULT"), 0.25)
+                _min_mult = max(0.0, min(1.0, _min_mult))
+                _mag_mult = _min_mult + (1.0 - _min_mult) * _avg_strength
+                magnitude *= _mag_mult
+                detail["trend_magnitude_mult"] = round(_mag_mult, 4)
+                detail["trend_magnitude_avg_strength"] = round(_avg_strength, 4)
+
     trend_score = dominant_sign * magnitude
     direction = "LONG" if dominant_sign > 0 else "SHORT"
 
@@ -868,6 +939,68 @@ def _stochastic_rsi_modifier(
         return 0.0
 
 
+def _momentum_smoothing_cfg() -> dict:
+    cfg = CONFIG.get("ENGINE_A_MOMENTUM_SMOOTHING") or {}
+    return cfg if isinstance(cfg, dict) else {}
+
+
+def _rsi_score_smooth(rsi: float, is_long: bool, ob: float, os_: float, width: float) -> float:
+    """Piecewise-linear RSI confirmation score without step discontinuities.
+
+    Plateau values match the step logic in _momentum_quality exactly
+    (0.0 / 0.30 / 0.50 / -0.25); ``width`` half-width linear ramps replace the
+    jumps at os_, 50, and ob so feed noise at a boundary cannot flip the score
+    discontinuously. SHORT is scored by reflecting RSI about 50.
+    """
+    if not is_long:
+        rsi = 100.0 - rsi
+        ob, os_ = 100.0 - os_, 100.0 - ob
+    # Clamp ramp width so adjacent ramps cannot overlap.
+    width = max(0.0, min(width, (50.0 - os_) / 2.0, (ob - 50.0) / 2.0))
+    if width <= 0:
+        # Degenerate bounds — fall back to plateau steps.
+        if rsi >= ob:
+            return -0.25
+        if rsi >= 50:
+            return 0.50
+        if rsi >= os_:
+            return 0.30
+        return 0.0
+    edges = ((os_, 0.0, 0.30), (50.0, 0.30, 0.50), (ob, 0.50, -0.25))
+    for edge, lo_val, hi_val in edges:
+        if rsi < edge - width:
+            return lo_val
+        if rsi <= edge + width:
+            t = (rsi - (edge - width)) / (2.0 * width)
+            return lo_val + t * (hi_val - lo_val)
+    return -0.25
+
+
+def _macd_score_smooth(hist: float, is_long: bool, atr: float | None, eps_atr: float) -> float:
+    """MACD histogram confirmation score with a linear ramp through zero.
+
+    Outside +/- eps (eps = eps_atr * ATR) the plateau values match the step
+    logic (+0.50 aligned / -0.25 opposed). Inside, a linear ramp removes the
+    sign-flip discontinuity at hist == 0. Falls back to step behaviour when
+    ATR is unavailable.
+    """
+    h = hist if is_long else -hist
+    eps = None
+    if atr is not None and atr > 0 and eps_atr > 0:
+        eps = eps_atr * atr
+    if eps is None or eps <= 0:
+        if h > 0:
+            return 0.50
+        if h < 0:
+            return -0.25
+        return 0.0
+    if h >= eps:
+        return 0.50
+    if h <= -eps:
+        return -0.25
+    return -0.25 + ((h + eps) / (2.0 * eps)) * 0.75
+
+
 def _momentum_quality(
     h4_snap: dict,
     direction: str,
@@ -914,12 +1047,22 @@ def _momentum_quality(
     # counts as fully confirming. RSI on the wrong side of 50 is partial/weak,
     # not negligible — trending forex pairs pull back through 50 frequently
     # without invalidating the higher-TF trend.
+    _smooth_cfg = _momentum_smoothing_cfg()
+    _smooth_enabled = bool(_smooth_cfg.get("ENABLED", False))
+
     rsi_score = 0.0
     rsi = h4_snap.get("rsi")
     if rsi is not None:
         try:
             rsi = float(rsi)
-            if is_long:
+            if _smooth_enabled:
+                # Config-gated: piecewise-linear ramps replace the plateau
+                # jumps at os_/50/ob (same plateau values away from edges).
+                rsi_score = _rsi_score_smooth(
+                    rsi, is_long, ob, os_,
+                    _float_cfg(_smooth_cfg.get("RSI_RAMP_WIDTH"), 2.0),
+                )
+            elif is_long:
                 if rsi >= ob:
                     rsi_score = -0.25  # overbought — late entry risk
                 elif rsi >= 50:
@@ -969,7 +1112,21 @@ def _momentum_quality(
     if macd_hist is not None:
         try:
             hist = float(macd_hist)
-            if is_long and hist > 0:
+            if _smooth_enabled:
+                # Config-gated: ATR-normalized linear ramp through hist == 0
+                # replaces the sign-flip step (same plateaus beyond +/- eps).
+                _atr_for_macd = None
+                try:
+                    _atr_raw = h4_snap.get("atr")
+                    if _atr_raw is not None:
+                        _atr_for_macd = float(_atr_raw)
+                except (TypeError, ValueError):
+                    _atr_for_macd = None
+                macd_score = _macd_score_smooth(
+                    hist, is_long, _atr_for_macd,
+                    _float_cfg(_smooth_cfg.get("MACD_NORM_EPS_ATR"), 0.05),
+                )
+            elif is_long and hist > 0:
                 macd_score = 0.50
             elif not is_long and hist < 0:
                 macd_score = 0.50
@@ -3351,6 +3508,7 @@ def compute_factor_scores(
     )
 
     crypto_late_trend = None
+    _late_trend_mult = 1.0
     if asset_type == "forex":
         (
             ema_cluster_penalty_mult,
@@ -3382,9 +3540,43 @@ def compute_factor_scores(
         )
         if _lt_applied:
             base_score *= _lt_mult
+            _late_trend_mult = _lt_mult
             crypto_late_trend["late_trend_adjustment_applied"] = True
             crypto_late_trend["late_trend_adjustment_mult"] = round(_lt_mult, 4)
             feed_status["crypto_late_trend"] = _lt_reason or "applied"
+
+    # ── Correlated penalty drawdown guard (config-gated, default off) ─────────
+    # Mirror of ENGINE_A_CORRELATED_OVERLAY_GUARD on the downside: the
+    # trend-quality penalties (DI alignment, VWAP, volatility regime, forex
+    # EMA cluster, crypto late trend) frequently fire on the same underlying
+    # evidence (weak short-term momentum inside a valid trend).
+    # The product is always reported for telemetry; when ENABLED, the combined
+    # multiplier is floored at MIN_COMBINED_MULT so stacked correlated
+    # penalties cannot compound below it. The directional ramp is excluded: it
+    # is the soft half of the min-directional gate and must stay authoritative.
+    # ADX gate, vol scaler, session, and cost multipliers are intentionally
+    # out of scope (independent evidence).
+    _corr_penalty_product = (
+        di_align_mult
+        * vwap_mult
+        * vol_regime_mult
+        * ema_cluster_penalty_mult
+        * _late_trend_mult
+    )
+    _corr_pen_cfg = CONFIG.get("ENGINE_A_CORRELATED_PENALTY_GUARD") or {}
+    if not isinstance(_corr_pen_cfg, dict):
+        _corr_pen_cfg = {}
+    _corr_pen_enabled = bool(_corr_pen_cfg.get("ENABLED", False))
+    _corr_pen_floor = _float_cfg(_corr_pen_cfg.get("MIN_COMBINED_MULT"), 0.50)
+    _corr_pen_applied = False
+    if (
+        _corr_pen_enabled
+        and 0.0 < _corr_penalty_product < _corr_pen_floor
+        and base_score > 0
+    ):
+        base_score *= _corr_pen_floor / _corr_penalty_product
+        _corr_pen_applied = True
+        feed_status["correlated_penalty_guard"] = "floored"
 
     # ── Phase 2 parameter wiring: volume_ratio, macro_context, intermarket_context ──
     # These parameters were previously accepted but silently ignored.  They now
@@ -3468,6 +3660,45 @@ def compute_factor_scores(
     final_score = max(0.0, min(3.0, final_score))
     if ema_cluster_soft_cap is not None:
         final_score = min(final_score, ema_cluster_soft_cap)
+
+    # ── Multiplier attribution telemetry (report-only, always on) ─────────────
+    # For each multiplier in the chain, record its value and the counterfactual
+    # score with that multiplier alone removed (set to 1.0). Computed before
+    # intermarket/structure overlays; mean_rev is additive so it is excluded
+    # from the division. scoring.py annotates threshold-flip flags downstream.
+    _conv_blend_mult = _eff_floor + (1.0 - _eff_floor) * conviction
+    _attribution_inputs = {
+        "adx": adx_mult,
+        "vol_scaler": vol_scaler,
+        "session": session_mult,
+        "equity_session": equity_session_mult,
+        "vol_regime": vol_regime_mult,
+        "di_align": di_align_mult,
+        "dir_ramp": dir_ramp_mult,
+        "vwap": vwap_mult,
+        "cost": 1.0 - _cost_penalty,
+        "ema_cluster": ema_cluster_penalty_mult,
+        "crypto_late_trend": _late_trend_mult,
+        "conviction_blend": _conv_blend_mult,
+        "total_adj": 1.0 + _total_adj,
+    }
+    _mult_product_part = base_score * _conv_blend_mult * (1.0 + _total_adj)
+    multiplier_attribution = {}
+    for _attr_name, _attr_mult in _attribution_inputs.items():
+        try:
+            _attr_mult = float(_attr_mult)
+        except (TypeError, ValueError):
+            continue
+        if abs(_attr_mult - 1.0) < 1e-9 or _attr_mult <= 0:
+            continue
+        _score_without = max(
+            0.0, min(3.0, _mult_product_part / _attr_mult + mean_rev_adj)
+        )
+        multiplier_attribution[_attr_name] = {
+            "multiplier": round(_attr_mult, 4),
+            "score_without": round(_score_without, 4),
+        }
+
     research_score_uplift_for_guard = 0.0
     if (not _ortho_enabled) and research_detail.get("enabled") and research_val > 0:
         addon_norm_without_positive_research = (
@@ -3720,6 +3951,13 @@ def compute_factor_scores(
         "missing_directional_optional_count": 0,
         "correlation_adjustments": {},
         "crypto_engine_a_diagnostics": crypto_late_trend,
+        "multiplier_attribution": multiplier_attribution,
+        "correlated_penalty_guard": {
+            "enabled": _corr_pen_enabled,
+            "product": round(_corr_penalty_product, 4),
+            "floor": round(_corr_pen_floor, 4),
+            "applied": _corr_pen_applied,
+        },
         "intermarket_confirmation": intermarket_confirmation,
         "intermarket_engine_a_delta": round(intermarket_engine_a_delta, 6),
         "feed_status": feed_status,
