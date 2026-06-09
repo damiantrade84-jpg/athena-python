@@ -114,6 +114,20 @@ export function normalizeSymbolKey(value: unknown): string | null {
   return key || null;
 }
 
+function normalizeBackendTf(tf: string | null | undefined): string | null {
+  if (!tf) return null;
+  const raw = tf.trim().toUpperCase().replace(/\s+/g, '');
+  if (!raw) return null;
+  if (raw === '240' || raw === '4H') return 'H4';
+  if (raw === '60' || raw === '1H') return 'H1';
+  if (raw === '15' || raw === '15M') return 'M15';
+  if (raw === '5' || raw === '5M') return 'M5';
+  if (raw === '1' || raw === '1M') return 'M1';
+  if (raw === 'D' || raw === '1D') return 'D1';
+  if (raw === 'W' || raw === '1W') return 'W1';
+  return raw;
+}
+
 export function stripEngineBFromSignal(signal: EngineASignal): EngineASignal {
   const payload = { ...signal } as Record<string, unknown>;
   delete payload.engine_b;
@@ -305,8 +319,9 @@ export function evaluateTvChartExecuteBlock(args: {
   if (aiReview && reviewSymbolKey && chartSymbolKey && reviewSymbolKey !== chartSymbolKey) {
     return 'Review not current (symbol mismatch)';
   }
-  const reviewTimeframe = aiReview?.engine_a_context?.timeframe;
-  if (aiReview && reviewTimeframe && chartTimeframe && reviewTimeframe !== chartTimeframe) {
+  const reviewTimeframe = normalizeBackendTf(aiReview?.engine_a_context?.timeframe);
+  const currentTf = normalizeBackendTf(chartTimeframe);
+  if (aiReview && reviewTimeframe && currentTf && reviewTimeframe !== currentTf) {
     return 'Review not current (timeframe mismatch)';
   }
   if (aiReviewBlocksManualExecute(aiReview)) return 'AI review: no trade';

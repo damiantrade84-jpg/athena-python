@@ -2747,9 +2747,10 @@ export default function TVChartPanel() {
   useEffect(() => {
     if (!aiReview) return;
     const reviewSymbolKey = aiReviewSymbolKeyRef.current || symbolKey(aiReview.engine_a_context?.symbol);
-    const reviewTimeframe = aiReview.engine_a_context?.timeframe;
+    const reviewTimeframe = normalizeBackendTf(aiReview.engine_a_context?.timeframe);
+    const currentTf = normalizeBackendTf(timeframe);
     const symbolChanged = currentSymbolKey && (!reviewSymbolKey || reviewSymbolKey !== currentSymbolKey);
-    const timeframeChanged = timeframe && reviewTimeframe && reviewTimeframe !== timeframe;
+    const timeframeChanged = currentTf && reviewTimeframe && reviewTimeframe !== currentTf;
     if (symbolChanged || timeframeChanged) {
       setAiReview(null);
       setAiReviewError(null);
