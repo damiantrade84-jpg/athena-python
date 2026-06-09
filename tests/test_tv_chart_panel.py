@@ -271,6 +271,30 @@ def test_tv_chart_panel_auto_review_waits_for_chart_paint():
     assert "requestAnimationFrame" in source
 
 
+def test_tv_chart_panel_review_generation_key_uses_rendered_row_count():
+    """Gate and paint effect must share the same row-count source (not raw candles.length)."""
+    source = _read(TV_PANEL)
+
+    assert "chartRenderGenerationKey(pair, backendTf, studySnapshot.rows.length)" in source
+    assert "chartRenderGenerationKey(pair, backendTf, candles.length)" not in source
+    assert "chartRenderGenerationKey(pair, backendTf, rows.length)" in source
+
+
+def test_tv_chart_panel_review_block_reason_helper_exists():
+    source = _read(TV_PANEL)
+
+    assert "resolveChartReviewBlockReason" in source
+    assert "chartReviewBlockReason" in source
+    assert "Waiting for chart paint" in source
+
+
+def test_tv_chart_panel_capture_failure_surfaces_ai_review_error():
+    source = _read(TV_PANEL)
+
+    assert "setAiReviewError(captured.error" in source
+    assert "captureReviewCanvas" in source
+
+
 def test_tv_chart_panel_auto_review_waits_for_engine_b_overlay_state():
     source = _read(TV_PANEL)
 

@@ -774,6 +774,21 @@ function chartRenderGenerationKey(
   return `${pair}:${backendTf || ''}:${candleCount}`;
 }
 
+function resolveChartReviewBlockReason(args: {
+  loading: boolean;
+  engineBOverlayPending: boolean;
+  hasCandles: boolean;
+  chartPaintReady: boolean;
+  chartIndicatorsReady: boolean;
+}): string | null {
+  if (args.loading) return 'Loading chart candles…';
+  if (!args.hasCandles) return 'Waiting for chart candles…';
+  if (args.engineBOverlayPending) return 'Loading Engine B overlays…';
+  if (!args.chartPaintReady) return 'Waiting for chart paint…';
+  if (!args.chartIndicatorsReady) return 'Waiting for chart indicators…';
+  return null;
+}
+
 function canvasHasNonBackgroundContent(
   canvas: HTMLCanvasElement,
   background = CHART_CAPTURE_BACKGROUND,
@@ -2286,8 +2301,8 @@ export default function TVChartPanel() {
   const quantAdx14 = showQuantDebug && adx14;
   const quantVolumeBars = showQuantDebug && volumeBars;
   const quantVolumeMa = showQuantDebug && volumeMa;
-  const chartRenderGeneration = candles?.length
-    ? chartRenderGenerationKey(pair, backendTf, candles.length)
+  const chartRenderGeneration = studySnapshot.rows.length
+    ? chartRenderGenerationKey(pair, backendTf, studySnapshot.rows.length)
     : null;
   const chartPaintReadyForReview = Boolean(
     chartRenderGeneration && chartPaintReadyGenerationRef.current === chartRenderGeneration,
@@ -2331,6 +2346,15 @@ export default function TVChartPanel() {
     !candles?.length ||
     !chartPaintReadyForReview ||
     !chartIndicatorsReadyForReview;
+  const chartReviewBlockReason = chartReviewPendingForReview
+    ? resolveChartReviewBlockReason({
+        loading,
+        engineBOverlayPending: engineBOverlayPendingForReview,
+        hasCandles: Boolean(candles?.length),
+        chartPaintReady: chartPaintReadyForReview,
+        chartIndicatorsReady: chartIndicatorsReadyForReview,
+      })
+    : null;
   const pricePanelLegendItems = useMemo<IndicatorLegendValue[]>(() => {
     const latest = studySnapshot.latest;
     const items: IndicatorLegendValue[] = [];
@@ -2881,13 +2905,18 @@ export default function TVChartPanel() {
     return { type: 'price' as const, precision, minMove };
   }, [chartPayload?.price_precision, engineBOverlay?.price_precision]);
 
-  function captureChartCanvas(): HTMLCanvasElement | null {
+  function captureChartCanvas(): { canvas: HTMLCanvasElement | null; error: string | null } {
     const captureEl = chartCaptureRef.current;
-    if (!captureEl) return null;
+    if (!captureEl) {
+      const error = 'Chart screenshot is unavailable until the chart renders';
+      setChartError(error);
+      return { canvas: null, error };
+    }
     const canvases = Array.from(captureEl.querySelectorAll('canvas'));
     if (canvases.length === 0) {
-      setChartError('Chart screenshot is unavailable until the chart renders');
-      return null;
+      const error = 'Chart screenshot is unavailable until the chart renders';
+      setChartError(error);
+      return { canvas: null, error };
     }
 
     const captureRect = captureEl.getBoundingClientRect();
@@ -2897,8 +2926,9 @@ export default function TVChartPanel() {
     outputCanvas.height = Math.max(1, Math.round(captureRect.height * scale));
     const outputCtx = outputCanvas.getContext('2d');
     if (!outputCtx) {
-      setChartError('Chart screenshot failed: canvas context unavailable');
-      return null;
+      const error = 'Chart screenshot failed: canvas context unavailable';
+      setChartError(error);
+      return { canvas: null, error };
     }
 
     outputCtx.scale(scale, scale);
@@ -2916,11 +2946,11 @@ export default function TVChartPanel() {
       );
     }
     drawCaptureLabels(outputCtx, captureEl, captureRect);
-    return outputCanvas;
+    return { canvas: outputCanvas, error: null };
   }
 
   function downloadChartScreenshot() {
-    const outputCanvas = captureChartCanvas();
+    const { canvas: outputCanvas } = captureChartCanvas();
     if (!outputCanvas) return;
     outputCanvas.toBlob((blob) => {
       if (!blob) {
@@ -2940,27 +2970,32 @@ export default function TVChartPanel() {
     }, 'image/png');
   }
 
-  async function captureReviewCanvas(allowRetry: boolean): Promise<HTMLCanvasElement | null> {
+  async function captureReviewCanvas(
+    allowRetry: boolean,
+  ): Promise<{ canvas: HTMLCanvasElement | null; error: string | null }> {
     await waitForChartPaint();
-    let sourceCanvas = captureChartCanvas();
-    if (!sourceCanvas) return null;
-    if (canvasHasNonBackgroundContent(sourceCanvas)) {
-      return sourceCanvas;
+    let captured = captureChartCanvas();
+    if (!captured.canvas) return captured;
+    if (canvasHasNonBackgroundContent(captured.canvas)) {
+      setChartError(null);
+      return captured;
     }
     if (!allowRetry) {
-      setChartError('Chart screenshot failed: chart has not painted yet');
-      return null;
+      const error = 'Chart screenshot failed: chart has not painted yet';
+      setChartError(error);
+      return { canvas: null, error };
     }
     setChartError('Chart not painted yet — retrying…');
     await waitForChartPaint();
-    sourceCanvas = captureChartCanvas();
-    if (!sourceCanvas) return null;
-    if (!canvasHasNonBackgroundContent(sourceCanvas)) {
-      setChartError('Chart screenshot failed: chart has not painted yet');
-      return null;
+    captured = captureChartCanvas();
+    if (!captured.canvas) return captured;
+    if (!canvasHasNonBackgroundContent(captured.canvas)) {
+      const error = 'Chart screenshot failed: chart has not painted yet';
+      setChartError(error);
+      return { canvas: null, error };
     }
     setChartError(null);
-    return sourceCanvas;
+    return captured;
   }
 
   async function runAIReview() {
@@ -2971,8 +3006,12 @@ export default function TVChartPanel() {
     }
     setAiReviewError(null);
     setAiReview(null);
-    const sourceCanvas = await captureReviewCanvas(true);
-    if (!sourceCanvas) return;
+    const captured = await captureReviewCanvas(true);
+    if (!captured.canvas) {
+      setAiReviewError(captured.error || 'Chart screenshot capture failed');
+      return;
+    }
+    const sourceCanvas = captured.canvas;
     const downscaled = downscaleToCap(
       sourceCanvas,
       AI_CHART_REVIEW_DEFAULTS.MAX_WIDTH,
@@ -3704,6 +3743,9 @@ export default function TVChartPanel() {
                 </Button>
               )}
             </div>
+            {chartReviewBlockReason && (
+              <span className="block text-[10px] text-muted-foreground">{chartReviewBlockReason}</span>
+            )}
             {executeBlockReason && (
               <span className="block text-[10px] text-muted-foreground">{executeBlockReason}</span>
             )}
