@@ -46,13 +46,12 @@ import zipfile
 from io import StringIO, BytesIO
 from typing import Optional
 
-import requests
+from feed_http import feed_get
 
 log = logging.getLogger("sentinel")
 
 _DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cot_cache.db")
 _db_lock = threading.Lock()
-_TIMEOUT = 30
 _WEEKLY_TTL = 7 * 86400  # re-fetch weekly file at most once per week
 _WEEKLY_FAIL_COOLDOWN = 6 * 3600  # retry sooner after transient fetch failures
 _HISTORY_TTL = 30 * 86400  # re-fetch annual ZIPs at most once per month
@@ -528,7 +527,7 @@ def _row_count(asset: str) -> int:
 def _fetch_zip_txt(url: str, inner_filename_hint: str = ".txt") -> Optional[str]:
     """Download a ZIP and return the text content of the first .txt file inside."""
     try:
-        resp = requests.get(url, timeout=_TIMEOUT)
+        resp = feed_get(url)
         resp.raise_for_status()
         zf = zipfile.ZipFile(BytesIO(resp.content))
         for name in zf.namelist():
@@ -572,7 +571,7 @@ def _update_weekly_fin():
     if not _needs_refresh("weekly_fin", _WEEKLY_TTL):
         return
     try:
-        resp = requests.get(_WEEKLY_FIN_URL, timeout=_TIMEOUT)
+        resp = feed_get(_WEEKLY_FIN_URL)
         resp.raise_for_status()
         data = _parse_weekly_fin_no_header(resp.text)
         total = sum(len(v) for v in data.values())
@@ -592,7 +591,7 @@ def _update_weekly_disagg():
     if not _needs_refresh("weekly_disagg", _WEEKLY_TTL):
         return
     try:
-        resp = requests.get(_WEEKLY_DISAGG_URL, timeout=_TIMEOUT)
+        resp = feed_get(_WEEKLY_DISAGG_URL)
         resp.raise_for_status()
         data = _parse_weekly_disagg_no_header(resp.text)
         total = sum(len(v) for v in data.values())

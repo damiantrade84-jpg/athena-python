@@ -5393,6 +5393,17 @@ _init_audit_db(_AUDIT_DB)
 set_lottery_db_path(_AUDIT_DB)
 init_stability_store(_AUDIT_DB)
 
+try:
+    from athena_runtime import hydrate_executed_signals_from_db
+
+    _dedup_hydrated = hydrate_executed_signals_from_db()
+    log.info(
+        "[RUNTIME] Hydrated %s executed-signal dedup keys from audit.db",
+        _dedup_hydrated,
+    )
+except Exception as _dedup_exc:
+    log.warning("[RUNTIME] executed-signal dedup hydrate failed: %s", _dedup_exc)
+
 
 def _stability_engine_from_audit_row(
     style: str | None, max_score: float | None, engine: str | None = None
@@ -7681,67 +7692,32 @@ def api_webhook():
 
     d = request.get_json(force=True, silent=True) or {}
 
+    from athena_runtime import claim_webhook_signal
+    from webhook_ingress import (
+        parse_webhook_payload,
+        validate_webhook_secret,
+        webhook_duplicate_key,
+    )
+
     # Optional shared-secret guard (separate from ATHENA_API_KEY header auth)
-
     _wh_secret = os.environ.get("WEBHOOK_SECRET", "")
-
-    if _wh_secret and d.get("secret", "") != _wh_secret:
+    secret_err = validate_webhook_secret(d, _wh_secret)
+    if secret_err:
         log.warning(f"[WEBHOOK] {request.remote_addr} rejected - invalid secret")
+        return jsonify({"error": secret_err}), 401
 
-        return jsonify({"error": "Unauthorized - invalid webhook secret"}), 401
+    sig, parse_err = parse_webhook_payload(d)
+    if parse_err:
+        return jsonify({"error": parse_err}), 400
 
-    # Build minimal signal dict from webhook payload
-
-    pair_name = d.get("pair", "")
-
-    direction = (d.get("direction") or d.get("side") or "").upper()
-
-    sig_type = d.get("type", "")
-
-    price = d.get("price") or d.get("entry") or 0
-
-    sl = d.get("sl") or d.get("stop") or 0
-
-    tp1 = d.get("tp1") or d.get("tp") or 0
-
-    tp2 = d.get("tp2", 0)
-    tp_partial = d.get("tp_partial", 0)
-
-    if (
-        not pair_name
-        or direction not in ("LONG", "SHORT")
-        or not price
-        or not sl
-        or not tp1
-    ):
-        return jsonify(
-            {"error": "Missing required fields: pair, direction, price, sl, tp1"}
-        ), 400
-
-    sig = {
-        "pair": pair_name,
-        "display": pair_name,
-        "symbol": d.get("symbol", pair_name.replace("/", "")),
-        "type": sig_type,
-        "direction": direction,
-        "price": float(price),
-        "sl": float(sl),
-        "tp1": float(tp1),
-        "tp2": float(tp2) if tp2 else float(tp1),
-        "tp_partial": float(tp_partial) if tp_partial else None,
-        "confluenceScore": float(d.get("score", 0.5)),
-        "maxScore": float(d.get("maxScore", 3.0)),
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-        "trendState": d.get("trendState", "DEVELOPING"),
-    }
+    pair_name = sig["pair"]
+    direction = sig["direction"]
+    sig_type = sig["type"]
 
     # Duplicate guard - webhook signals use pair+direction+minute-bucket as key
+    sig_id = webhook_duplicate_key(pair_name, direction)
 
-    _minute = datetime.now(timezone.utc).strftime("%Y%m%d%H%M")
-
-    sig_id = f"wh_{pair_name}_{direction}_{_minute}"
-
-    if sig_id in executed_signals:
+    if not claim_webhook_signal(sig_id):
         log.info(f"[WEBHOOK] Duplicate suppressed: {sig_id}")
 
         return jsonify(
@@ -7851,8 +7827,6 @@ def api_webhook():
         result = run_managed_execution(_exec_venue, sig, approval)
 
         if result.get("success"):
-            executed_signals.add(sig_id)
-
             try:
                 with sqlite3.connect(_AUDIT_DB, timeout=15.0) as con:
                     # CLAUDE.md Hard Rule 23: signal dict uses camelCase.

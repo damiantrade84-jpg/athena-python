@@ -39,7 +39,7 @@ from datetime import datetime, timezone
 from io import StringIO
 from typing import Optional
 
-import requests
+from feed_http import feed_get, fetch_texts_concurrent
 
 log = logging.getLogger("sentinel")
 
@@ -47,7 +47,6 @@ _static_carry_warned = False
 
 _DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "carry_cache.db")
 _db_lock = threading.Lock()
-_TIMEOUT = 30
 _FETCH_TTL = 86400  # re-download daily (rates change monthly but freshness matters)
 
 # In-memory cache: pair → (z_score, fetched_at)
@@ -242,13 +241,10 @@ _init_db()
 # ── FRED data fetch ───────────────────────────────────────────────────────────
 
 
-def _fetch_fred(series_id: str) -> list[tuple[str, float]]:
-    """Download FRED series CSV. Returns list of (YYYY-MM-DD, value) sorted asc."""
-    url = _FRED_URL.format(series=series_id)
-    resp = requests.get(url, timeout=_TIMEOUT)
-    resp.raise_for_status()
+def _parse_fred_csv(text: str) -> list[tuple[str, float]]:
+    """Parse FRED CSV body into (YYYY-MM-DD, value) rows sorted asc."""
     rows = []
-    reader = csv.reader(StringIO(resp.text))
+    reader = csv.reader(StringIO(text))
     next(reader, None)  # skip header
     for row in reader:
         if len(row) < 2:
@@ -261,6 +257,30 @@ def _fetch_fred(series_id: str) -> list[tuple[str, float]]:
         except ValueError:
             continue
     return rows
+
+
+def _fetch_fred(series_id: str) -> list[tuple[str, float]]:
+    """Download FRED series CSV. Returns list of (YYYY-MM-DD, value) sorted asc."""
+    url = _FRED_URL.format(series=series_id)
+    resp = feed_get(url)
+    resp.raise_for_status()
+    return _parse_fred_csv(resp.text)
+
+
+def _fetch_fred_series_batch(series_ids: list[str]) -> dict[str, list[tuple[str, float]]]:
+    """Fetch multiple stale FRED series via pooled HTTP (startup seed path)."""
+    if not series_ids:
+        return {}
+    url_by_sid = {sid: _FRED_URL.format(series=sid) for sid in series_ids}
+    texts = fetch_texts_concurrent(url_by_sid.values())
+    out: dict[str, list[tuple[str, float]]] = {}
+    for sid, url in url_by_sid.items():
+        text = texts.get(url)
+        if text:
+            rows = _parse_fred_csv(text)
+            if rows:
+                out[sid] = rows
+    return out
 
 
 def _needs_refresh(series_id: str) -> bool:
@@ -752,12 +772,20 @@ def seed_carry_background():
         all_series = set(_FRED_CURRENCY_SERIES.values()) | set(
             sid for sid, _ in _10Y_SERIES_MAP.values()
         )
-        for sid in sorted(all_series):
-            try:
-                _ensure_series(sid, blocking=True)
-            except Exception as e:
-                log.warning(f"[CARRY] Seed {sid} failed: {e}")
-        log.info(f"[CARRY] Rate seed complete ({len(all_series)} series)")
+        stale = [sid for sid in sorted(all_series) if _needs_refresh(sid)]
+        if stale:
+            batch = _fetch_fred_series_batch(stale)
+            for sid in stale:
+                rows = batch.get(sid)
+                if rows:
+                    _write_series(sid, rows)
+                    log.info(f"[CARRY] FRED {sid}: {len(rows)} observations cached (batch)")
+                else:
+                    try:
+                        _ensure_series(sid, blocking=True)
+                    except Exception as e:
+                        log.warning(f"[CARRY] Seed {sid} failed: {e}")
+        log.info(f"[CARRY] Rate seed complete ({len(all_series)} series, {len(stale)} refreshed)")
 
     t = threading.Thread(target=_seed, daemon=True, name="CarrySeed")
     t.start()

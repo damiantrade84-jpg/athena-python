@@ -18,7 +18,13 @@ from athena_app.api.routes_execution import (
 )
 from athena_app.repositories.audit_repo import insert_manual_error
 from athena_app.services.candle_service import recompute_levels_for_style
-from athena_runtime import executed_signals, rt
+from athena_runtime import (
+    abort_signal_execution,
+    begin_signal_execution,
+    complete_signal_execution,
+    is_signal_duplicate,
+    rt,
+)
 from candles_cache import (
     _annotate_fetch_meta_with_bar_freshness,
     extract_candles,
@@ -1923,7 +1929,7 @@ def api_execute():
 
     sig_id = f"{pair}_{sig.get('direction')}_{sig.get('timestamp', '')}"
 
-    if sig_id in executed_signals and not force:
+    if not force and is_signal_duplicate(sig_id):
         return jsonify({"error": "DUPLICATE: This signal has already been executed"}), 409
 
     if force:
@@ -2060,6 +2066,7 @@ def api_execute():
     if _ea_block:
         return jsonify({"error": _ea_block, "pair": pair}), 422
 
+    _exec_claimed = False
     try:
         from risk_engine import risk_check
 
@@ -2221,6 +2228,10 @@ def api_execute():
             _r.log.warning(f"[EXEC] {pair} GUARDIAN BLOCKED: {_ptc_reason}")
             return jsonify({"error": f"Guardian: {_ptc_reason}"}), 400
 
+        if not force and not begin_signal_execution(sig_id):
+            return jsonify({"error": "DUPLICATE: This signal has already been executed"}), 409
+        _exec_claimed = not force
+
         result = run_managed_execution(_exec_venue, sig, approval)
 
         if result.get("success"):
@@ -2289,10 +2300,13 @@ def api_execute():
                 result["success"] = False
                 result["error"] = "AUDIT_PERSISTENCE_FAILED_AFTER_FILL"
             else:
-                executed_signals.add(sig_id)
+                if not force:
+                    complete_signal_execution(sig_id)
                 _r.log.info(
                     f"[EXEC] {pair} EXECUTED: ticket={result.get('ticket')}, volume={result.get('volume')}"
                 )
+        elif not force:
+            abort_signal_execution(sig_id)
 
         if not result.get("success"):
             err = _log_execution_failure(_r.log, "EXEC", pair, _exec_venue, result)
@@ -2304,6 +2318,8 @@ def api_execute():
         return jsonify(result)
 
     except Exception as e:
+        if _exec_claimed:
+            abort_signal_execution(sig_id)
         _r.log.exception(f"[EXEC] {pair or '?'} execution error: {e}")
 
         return jsonify({"error": "Execution failed — check logs"}), 500

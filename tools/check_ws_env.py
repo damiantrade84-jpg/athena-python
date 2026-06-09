@@ -15,6 +15,7 @@ import sys
 
 # Must match requirements.txt
 _EXPECTED_WEBSOCKETS = "16.0"
+_EXPECTED_PYTHON_MINOR = 14
 
 
 def _ver(dist: str) -> str:
@@ -31,12 +32,15 @@ def main() -> None:
     print(f"version:    {sys.version.split()[0]} ({sys.version})")
 
     vi = sys.version_info
-    if vi >= (3, 14):
+    if vi < (3, 11):
+        print("NOTICE:     Python <3.11 — below project requires-python (>=3.11,<3.15).")
+    elif vi >= (3, 15):
+        print("NOTICE:     Python >=3.15 — above project requires-python (>=3.11,<3.15).")
+    elif vi[:2] != (3, _EXPECTED_PYTHON_MINOR):
         print(
-            "NOTICE:     Python >=3.14 - numba (pandas-ta) has blocked install in verified pip runs; use 3.13 or earlier."
+            f"NOTICE:     Python {vi.major}.{vi.minor} — .python-version pins {_EXPECTED_PYTHON_MINOR}. "
+            "Recreate .venv with the pinned interpreter."
         )
-    elif vi < (3, 11):
-        print("NOTICE:     Python <3.11 — below project requires-python (>=3.11,<3.14).")
 
     ws = _ver("websockets")
     print(f"websockets: {ws}")
@@ -48,9 +52,15 @@ def main() -> None:
     print(f"certifi:    {_ver('certifi')}")
     print(f"ccxt:       {_ver('ccxt')}")
     print(f"eodhd:      {_ver('eodhd')}")
+    print(f"numba:      {_ver('numba')}")
+    print(f"llvmlite:   {_ver('llvmlite')}")
+    print(f"telegram:   {_ver('python-telegram-bot')}")
     print(f"OpenSSL:    {ssl.OPENSSL_VERSION}")
     print()
-    print("If .python-version says 3.13 but version above is not 3.13.x, this .venv was not created with Python 3.13.")
+    print(
+        f"If .python-version says {_EXPECTED_PYTHON_MINOR} but version above differs, "
+        "this .venv was not created with the expected Python."
+    )
 
 
 if __name__ == "__main__":

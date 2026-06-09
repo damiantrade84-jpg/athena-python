@@ -35,7 +35,7 @@ python athena.py
 pytest path/to/test_file.py -q
 pytest path/to/test_file.py::test_function_name -q
 
-# Dependencies (Python 3.11–3.13; .python-version pins 3.13)
+# Dependencies (Python 3.11–3.14; .python-version pins 3.14)
 pip install -r requirements.txt
 ```
 
