@@ -453,8 +453,12 @@ def test_crypto_chart_payload_includes_volume_ma_vwap_and_same_provider_indicato
     assert last["confirmed"] is True
     assert last["volume_ma"] is not None
     assert last["vwap"] is not None
-    assert last["ema21"] is not None
-    assert last["ema50"] is None  # 40 candles is not enough for EMA50; provider is still explicit.
+    # BTCUSDT (crypto_btc) draws per-group EMA periods (trend 18, momentum 40);
+    # the legacy ema21/ema50 aliases are only emitted when the period is 21/50.
+    assert last["ema_trend"] is not None
+    assert "ema21" not in last
+    assert last["ema_momentum"] is not None  # 40 candles == momentum period 40
+    assert "ema50" not in last
     assert last["rsi14"] is not None
     assert last["adx14"] is not None
     assert last["atr14"] is not None

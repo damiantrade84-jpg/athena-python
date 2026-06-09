@@ -846,6 +846,7 @@ function buildChartStudySnapshot(
 
   const baseRows: CandlestickData[] = [];
   const baseVolumes: number[] = [];
+  const baseConfirmed: (boolean | null)[] = [];
   const apiVwap: (number | null)[] = [];
   const apiVolumeMa: (number | null)[] = [];
   const apiAdx14: (number | null)[] = [];
@@ -864,6 +865,7 @@ function buildChartStudySnapshot(
     if (![o, h, l, cl].every(Number.isFinite)) continue;
     baseRows.push({ time: t, open: o, high: h, low: l, close: cl });
     baseVolumes.push(toNum(c.volume ?? c.v, 0));
+    baseConfirmed.push(typeof c.confirmed === 'boolean' ? c.confirmed : null);
     apiVwap.push(Number.isFinite(toNum(c.vwap, NaN)) ? toNum(c.vwap, NaN) : null);
     apiVolumeMa.push(Number.isFinite(toNum(c.volume_ma, NaN)) ? toNum(c.volume_ma, NaN) : null);
     apiAdx14.push(Number.isFinite(toNum(c.adx14 ?? c.adx, NaN)) ? toNum(c.adx14 ?? c.adx, NaN) : null);
@@ -879,41 +881,51 @@ function buildChartStudySnapshot(
   const lows = rows.map((row) => row.low);
   const closes = rows.map((row) => row.close);
   const volumes = rows.map((_row, idx) => baseVolumes[idx] ?? 0);
-  // Confirmed-only indicator inputs: exclude the live/forming bar so chart
-  // indicators match Engine A's confirmed-only series. The live bar is still
-  // drawn for price (rows) but carries no indicator point.
   const cHighs = baseRows.map((row) => row.high);
   const cLows = baseRows.map((row) => row.low);
   const cCloses = baseRows.map((row) => row.close);
   const cVolumes = baseVolumes.slice();
   const cTimes = baseRows.map((row) => timeToEpochSeconds(row.time) ?? 0);
+  // Confirmed-only indicator inputs: exclude trailing forming bars (both the
+  // tick-built live bar and an unconfirmed last API candle) so chart indicators
+  // match Engine A's confirmed-only series. Forming bars are still drawn for
+  // price; they just carry no indicator point. The server applies the same
+  // policy, so API indicator series are already null on forming bars.
+  let confirmedCount = baseRows.length;
+  while (confirmedCount > 0 && baseConfirmed[confirmedCount - 1] === false) confirmedCount -= 1;
+  const iHighs = cHighs.slice(0, confirmedCount);
+  const iLows = cLows.slice(0, confirmedCount);
+  const iCloses = cCloses.slice(0, confirmedCount);
+  const iVolumes = cVolumes.slice(0, confirmedCount);
   // Prefer server-computed indicators (same calc_* library as Engine A) for all
   // asset classes; fall back to local math only when the API omitted them.
   const useApiIndicators = true;
   // Draw the trend/momentum/long EMA lines at the per-group periods Engine A
-  // scores with (see ChartPricePrecision.ema_periods). The local ema() matches
-  // the server calc_ema exactly, so recomputed (overridden) periods stay
-  // parity-faithful; prefer the API series only when the period is the standard
-  // 21/50/200 the API rows carry. The fast trend line (ema20 non-crypto /
-  // ema21 crypto) is unified onto the resolved trend period; DEMA tracks long.
+  // scores with (see ChartPricePrecision.ema_periods); the API rows carry the
+  // same per-group series under ema_trend/ema_momentum/ema_long. The local
+  // ema() matches the server calc_ema exactly, so the fallback stays
+  // parity-faithful. The fast trend line (ema20 non-crypto / ema21 crypto) is
+  // unified onto the resolved trend period; DEMA tracks long.
   const { trend: trendPeriod, momentum: momentumPeriod, long: longPeriod } = emaPeriods;
   const { rsi: rsiPeriod, adx: adxPeriod, atr: atrPeriod } = indicatorPeriods;
   const emaTrendValues =
-    useApiIndicators && apiEmaTrend.some((v) => v != null) ? apiEmaTrend : ema(cCloses, trendPeriod);
+    useApiIndicators && apiEmaTrend.some((v) => v != null) ? apiEmaTrend : ema(iCloses, trendPeriod);
   const ema20Values = emaTrendValues;
   const ema21Values = emaTrendValues;
   const ema50Values =
-    useApiIndicators && apiEmaMomentum.some((v) => v != null) ? apiEmaMomentum : ema(cCloses, momentumPeriod);
+    useApiIndicators && apiEmaMomentum.some((v) => v != null) ? apiEmaMomentum : ema(iCloses, momentumPeriod);
   const ema200Values =
-    useApiIndicators && apiEmaLong.some((v) => v != null) ? apiEmaLong : ema(cCloses, longPeriod);
-  const dema200Values = dema(cCloses, longPeriod);
-  const rsi14Values = useApiIndicators && apiRsi14.some((v) => v != null) ? apiRsi14 : rsi(cCloses, rsiPeriod);
-  const atr14Values = useApiIndicators && apiAtr14.some((v) => v != null) ? apiAtr14 : atr(cHighs, cLows, cCloses, atrPeriod);
+    useApiIndicators && apiEmaLong.some((v) => v != null) ? apiEmaLong : ema(iCloses, longPeriod);
+  const dema200Values = dema(iCloses, longPeriod);
+  const rsi14Values = useApiIndicators && apiRsi14.some((v) => v != null) ? apiRsi14 : rsi(iCloses, rsiPeriod);
+  const atr14Values = useApiIndicators && apiAtr14.some((v) => v != null) ? apiAtr14 : atr(iHighs, iLows, iCloses, atrPeriod);
+  // VWAP stays full-series (matches the server): per-bar cumulative, not an
+  // Engine A scoring input, and the forming bar's VWAP point is meaningful.
   const vwapAnchorTimes =
     backendTf && (TF_SECONDS[backendTf] ?? 0) > 0 && (TF_SECONDS[backendTf] as number) < 86400 ? cTimes : undefined;
   const vwapValues = apiVwap.some((v) => v != null) ? apiVwap : vwapFromRows(cHighs, cLows, cCloses, cVolumes, vwapAnchorTimes);
-  const adx14Values = apiAdx14.some((v) => v != null) ? apiAdx14 : adx(cHighs, cLows, cCloses, adxPeriod);
-  const volumeMaValues = apiVolumeMa.some((v) => v != null) ? apiVolumeMa : sma(cVolumes, 20);
+  const adx14Values = apiAdx14.some((v) => v != null) ? apiAdx14 : adx(iHighs, iLows, iCloses, adxPeriod);
+  const volumeMaValues = apiVolumeMa.some((v) => v != null) ? apiVolumeMa : sma(iVolumes, 20);
 
   return {
     rows,
@@ -2690,7 +2702,6 @@ export default function TVChartPanel() {
         volumeMode,
         sizingOverride,
         exitMode,
-        engineBOverlay: engineBOverlay as Record<string, unknown> | undefined,
         reviewId: aiReview?.review_id ?? null,
       });
       const result = await apiClient.postJson('/api/quick-execute', payload) as {
@@ -3081,6 +3092,7 @@ export default function TVChartPanel() {
         // the backend can flag chart-vs-Engine-A divergence. Not trusted for scoring.
         chartIndicators: {
           timeframe: tfForBackend,
+          emaTrend: studySnapshot.latest.ema21 ?? null,
           ema50: studySnapshot.latest.ema50 ?? null,
           ema200: studySnapshot.latest.ema200 ?? null,
           rsi14: studySnapshot.latest.rsi14 ?? null,

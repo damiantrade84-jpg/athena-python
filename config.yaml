@@ -945,6 +945,49 @@ ENGINE_A_STOCHASTIC_RSI:
   OVERSOLD: 20        # Oversold threshold
 
 
+# ── Engine A quant-review gates (2026-06-09) ────────────────────────────────
+# Enabled 2026-06-09 with user approval (legacy n>=30 gate explicitly lifted —
+# it predated the bug-fix era). TREND_MAGNITUDE.ATR_K was calibrated offline on
+# the frozen 2026-05-30 dataset (20 symbols x D1/H4/H1, ~10 months): at
+# ATR_K=1.0 established trends (sign stable >=10 bars) keep a 0.94-1.00 median
+# multiplier in every score group while fresh crosses (<=3 bars) get ~0.31-0.44.
+# The original 2.0 placeholder cut established trends 10-25% and is too harsh.
+
+# Downside mirror of ENGINE_A_CORRELATED_OVERLAY_GUARD: floors the combined
+# product of the correlated trend-quality penalties (DI alignment, VWAP,
+# volatility regime, forex EMA cluster, crypto late trend) so penalties firing
+# on the same evidence cannot compound without bound. The directional ramp is
+# excluded — it is the soft half of the min-directional gate and stays
+# authoritative.
+# The product is always reported in diagnostics (multiplier attribution),
+# guard application is gated here.
+ENGINE_A_CORRELATED_PENALTY_GUARD:
+  ENABLED: true
+  MIN_COMBINED_MULT: 0.50
+
+# ATR-normalized trend magnitude: scales the coherent-trend magnitude by
+# tanh(|ema_fast - ema_slow| / (ATR_K * ATR)) averaged over agreeing TFs, so a
+# barely-crossed EMA stack no longer scores like an established trend.
+# MIN_MULT keeps a confirmed cross from being zeroed by a tiny gap.
+# ATR_K=1.0 is empirically calibrated (see header note); per-group values are
+# unnecessary — gap/ATR is scale-free and distributions match across groups.
+ENGINE_A_TREND_MAGNITUDE:
+  ENABLED: true
+  ATR_K: 1.0
+  MIN_MULT: 0.25
+
+# Momentum quality smoothing: replaces the RSI plateau jumps (at os/50/ob) and
+# the MACD histogram sign-flip step with linear ramps. Plateau values away
+# from the edges are identical to the step logic, so this only changes
+# behaviour near the boundaries where feed noise currently flips scores
+# discontinuously. RSI_RAMP_WIDTH is the half-width in RSI points;
+# MACD_NORM_EPS_ATR is the ramp half-width as a fraction of ATR.
+ENGINE_A_MOMENTUM_SMOOTHING:
+  ENABLED: true
+  RSI_RAMP_WIDTH: 2.0
+  MACD_NORM_EPS_ATR: 0.05
+
+
 
 # Per-class counter-trend penalty (standardized - Trend Gate already handles direction)
 

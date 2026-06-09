@@ -10105,27 +10105,25 @@ def api_scalp_scan():
                         "_skipped": True,
                     }
 
-        return jsonify(
-            {
-                "signals": signals,
-                "skipped": skipped,
-                "scanned": result.get("scanned", len(pairs)),
-                "pairs": pairs,
-                "pair_count": len(pairs),
-                "session": result.get("session"),
-                "sessions_active": result.get("sessions_active", []),
-                "reason": result.get("reason"),
-                "diagnostic_summary": result.get("diagnostic_summary"),
-                "diagnostic": diagnostic,
-                "pass_count": sum(
-                    1
-                    for _sig in signals
-                    if _sig.get("executable") and _sig.get("gate_result", "PASS") == "PASS"
-                ),
-                "candidate_count": len(signals),
-                "skip_count": len(skipped),
-            }
-        )
+        return jsonify(_json_safe({
+            "signals": signals,
+            "skipped": skipped,
+            "scanned": result.get("scanned", len(pairs)),
+            "pairs": pairs,
+            "pair_count": len(pairs),
+            "session": result.get("session"),
+            "sessions_active": result.get("sessions_active", []),
+            "reason": result.get("reason"),
+            "diagnostic_summary": result.get("diagnostic_summary"),
+            "diagnostic": diagnostic,
+            "pass_count": sum(
+                1
+                for _sig in signals
+                if _sig.get("executable") and _sig.get("gate_result", "PASS") == "PASS"
+            ),
+            "candidate_count": len(signals),
+            "skip_count": len(skipped),
+        }))
     except Exception as e:
         log.error(f"api_scalp_scan error: {e}")
         return jsonify({"error": str(e)}), 500

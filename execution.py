@@ -2511,7 +2511,7 @@ def api_scalp_scan():
                     )
             except Exception as _ce:
                 rt().log.warning(f"[CONDUCTOR] scalp scan orchestration failed: {_ce}")
-        return jsonify(out)
+        return jsonify(_json_safe(out))
     except Exception as e:
         rt().log.error(f"[SCALP API] Scan error: {e}")
         return jsonify({"error": str(e)}), 500

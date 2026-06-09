@@ -1230,6 +1230,7 @@ def calc_indicators_for_engine_a(
             _resolve_ema_periods,
             _resolve_rsi_period,
             _resolve_macd_params,
+            _resolve_atr_adx_periods,
             _engine_a_group_adjustments_enabled,
         )
 
@@ -1241,6 +1242,7 @@ def calc_indicators_for_engine_a(
         ema_p = _resolve_ema_periods(score_group, asset_type)
         rsi_p = _resolve_rsi_period(score_group, asset_type)
         macd_p = _resolve_macd_params(score_group, asset_type)
+        atr_adx_p = _resolve_atr_adx_periods(score_group, asset_type)
 
         # Build periods dict that _calc_indicator_bundle understands
         periods = {
@@ -1251,8 +1253,8 @@ def calc_indicators_for_engine_a(
             "macd_fast": macd_p.get("fast", 12),
             "macd_slow": macd_p.get("slow", 26),
             "macd_signal": macd_p.get("signal", 9),
-            "atr": 14,
-            "adx": 14,
+            "atr": atr_adx_p.get("atr", 14),
+            "adx": atr_adx_p.get("adx", 14),
         }
 
         bundle = _calc_indicator_bundle(candles, periods=periods)

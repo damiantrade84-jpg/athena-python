@@ -365,6 +365,15 @@ def test_tv_chart_panel_execute_now_button():
     assert "executeBlockReason || 'Execute Now'" not in source
 
 
+def test_tv_chart_panel_execute_does_not_send_visual_engine_b_overlay():
+    """Engine A execute must not leak visual-only Engine B overlay into payload.engine_b."""
+    source = _read(TV_PANEL)
+    confirm_idx = source.index("async function onConfirmExecute()")
+    confirm_section = source[confirm_idx:confirm_idx + 600]
+    assert "buildQuickExecutePayload" in confirm_section
+    assert "engineBOverlay" not in confirm_section
+
+
 def test_tv_chart_panel_execute_shown_when_can_flag_watch():
     source = _read(TV_PANEL)
 
@@ -534,7 +543,7 @@ def test_crypto_chart_exposes_bybit_provider_badge_and_required_indicators():
 def test_crypto_chart_prefers_api_indicator_series_when_present():
     source = _read(TV_PANEL)
 
-    assert "apiEma21" in source
+    assert "apiEmaTrend" in source
     assert "apiAtr14" in source
     assert "useApiIndicators" in source
 

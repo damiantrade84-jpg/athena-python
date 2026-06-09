@@ -290,11 +290,14 @@ def build_engine_b_signal_message(
     lines.append("")
     lines.append("=== MARKET STRUCTURE ===")
 
-    # Swing sequences
+    # Swing sequences. The structural sequence TF varies by style (H1 scalp,
+    # H4 intraday, D1 swing) — label it accurately so the model does not judge
+    # a D1 sequence as an H1 micro-structure read. Macro is always H4.
+    _struct_tf = str(structure_result.get("structure_tf") or "H1").upper()
     lines.append(
-        f"H1 Swing: {structure_result.get('current_swing_sequence', 'RANGING')}"
+        f"{_struct_tf} Structure Swing: {structure_result.get('current_swing_sequence', 'RANGING')}"
     )
-    lines.append(f"H4 Swing: {structure_result.get('macro_swing_sequence', 'RANGING')}")
+    lines.append(f"H4 Macro Swing: {structure_result.get('macro_swing_sequence', 'RANGING')}")
 
     # BOS and sweeps
     bos = structure_result.get("bos_data", {})

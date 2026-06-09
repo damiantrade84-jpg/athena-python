@@ -517,6 +517,7 @@ def _overlay_precision_for(pair: dict | None) -> dict:
     asset_type = str(pair.get("type", "") or "")
     # Per-group EMA/RSI periods Engine A scores with, so the chart can draw the
     # actual scoring periods instead of fixed 50/200/14 lines.
+    resolver_fallback = False
     try:
         from factor_scoring import _resolve_ema_periods, _resolve_rsi_period
 
@@ -525,6 +526,7 @@ def _overlay_precision_for(pair: dict | None) -> dict:
     except Exception:
         ema_periods = {"trend": 21, "long": 200, "momentum": 50}
         rsi_period = 14
+        resolver_fallback = True
     return {
         "score_group": group,
         "asset_type": asset_type,
@@ -532,6 +534,7 @@ def _overlay_precision_for(pair: dict | None) -> dict:
         "min_move": float(10 ** -precision),
         "ema_periods": ema_periods,
         "rsi_period": rsi_period,
+        "resolver_fallback": resolver_fallback,
     }
 
 
@@ -733,11 +736,23 @@ def _infer_confirmed(candle: dict, tf: str, now_s: float) -> bool | None:
     raw = candle.get("confirmed", candle.get("closed"))
     if raw is not None:
         return bool(raw)
-    open_ms = _safe_float(candle.get("open_time"))
     tf_s = _tf_seconds(tf)
-    if open_ms is None or not tf_s:
+    if not tf_s:
         return None
-    return (open_ms / 1000.0) + tf_s <= now_s
+    open_ms = _safe_float(candle.get("open_time"))
+    if open_ms is not None:
+        return (open_ms / 1000.0) + tf_s <= now_s
+    # Forex/EODHD-style candles carry an ISO open-time string instead of open_time.
+    raw_time = candle.get("time") or candle.get("datetime")
+    if isinstance(raw_time, str) and raw_time:
+        try:
+            dt = datetime.fromisoformat(raw_time.strip().replace(" ", "T").replace("Z", "+00:00"))
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return dt.timestamp() + tf_s <= now_s
+        except ValueError:
+            return None
+    return None
 
 
 def _volume_ma(values: list[float], period: int = 20) -> list[float | None]:
@@ -808,20 +823,49 @@ def _resolve_chart_indicator_periods(pair: dict | None) -> dict:
         "rsi": 14,
         "adx": 14,
         "atr": 14,
+        "source": "fallback_defaults",
     }
     if not isinstance(pair, dict):
         return periods
     try:
-        from factor_scoring import _resolve_ema_periods, _resolve_rsi_period
+        from factor_scoring import (
+            _resolve_atr_adx_periods,
+            _resolve_ema_periods,
+            _resolve_rsi_period,
+        )
         from scoring import get_pair_score_group
 
         group = get_pair_score_group(pair)
         asset_type = str(pair.get("type") or "")
         periods["ema"] = _resolve_ema_periods(group, asset_type)
         periods["rsi"] = int(_resolve_rsi_period(group, asset_type))
+        atr_adx = _resolve_atr_adx_periods(group, asset_type)
+        periods["adx"] = int(atr_adx.get("adx", 14))
+        periods["atr"] = int(atr_adx.get("atr", 14))
+        periods["source"] = "engine_a_resolver"
     except Exception:
+        # Defaults already in place; "source" stays fallback_defaults so the
+        # client and AI review can see the per-group resolution did not apply.
         pass
     return periods
+
+
+def _indicator_set_labels(periods: dict | None) -> list[str]:
+    """Indicator labels matching the per-group periods the chart actually draws."""
+    periods = periods if isinstance(periods, dict) else {}
+    ema_raw = periods.get("ema")
+    ema_p = ema_raw if isinstance(ema_raw, dict) else {}
+    return [
+        f"EMA{ema_p.get('trend', 21)}",
+        f"EMA{ema_p.get('momentum', 50)}",
+        f"EMA{ema_p.get('long', 200)}",
+        "VWAP",
+        f"RSI{periods.get('rsi', 14)}",
+        f"ADX{periods.get('adx', 14)}",
+        f"ATR{periods.get('atr', 14)}",
+        "Volume",
+        "Volume MA",
+    ]
 
 
 def _format_chart_candles(
@@ -838,6 +882,7 @@ def _format_chart_candles(
     rows: list[dict] = []
     for c in candles:
         volume = float(c.get("vol", c.get("volume", 0)) or 0)
+        confirmed = _infer_confirmed(c, tf, now_s)
         row = {
             "t": _iso_timestamp(c),
             "o": float(c.get("open", 0)),
@@ -846,6 +891,8 @@ def _format_chart_candles(
             "c": float(c.get("close", 0)),
             "v": volume,
             "volume": volume,
+            "confirmed": confirmed,
+            "closed": confirmed,
         }
         if provider:
             row.update(
@@ -855,13 +902,11 @@ def _format_chart_candles(
                     "symbol": bybit_symbol or c.get("symbol"),
                     "open_time": c.get("open_time"),
                     "turnover": float(c.get("turnover", 0) or 0),
-                    "confirmed": _infer_confirmed(c, tf, now_s),
-                    "closed": _infer_confirmed(c, tf, now_s),
                 }
             )
         rows.append(row)
 
-    meta = {"vwap_formula": None}
+    meta: dict = {"vwap_formula": None}
     if include_indicators and rows:
         try:
             from indicators import calc_adx, calc_atr, calc_ema, calc_rsi
@@ -873,10 +918,22 @@ def _format_chart_candles(
             atr_p = int(periods.get("atr") or 14)
             meta["indicator_periods"] = periods
 
-            highs = [row["h"] for row in rows]
-            lows = [row["l"] for row in rows]
-            closes = [row["c"] for row in rows]
-            volumes = [row["v"] for row in rows]
+            # Engine A scores on confirmed candles only (the scanner drops the
+            # forming bar), so indicator series exclude trailing unconfirmed
+            # bars to stay parity-faithful. The forming bar is still returned
+            # for price display; it just carries no indicator point. VWAP stays
+            # full-series: it is per-bar cumulative and not an Engine A input.
+            ind_count = len(rows)
+            while ind_count > 0 and rows[ind_count - 1].get("confirmed") is False:
+                ind_count -= 1
+            ind_rows = rows[:ind_count]
+            meta["indicator_basis"] = "confirmed_only"
+            meta["forming_bars_excluded"] = len(rows) - ind_count
+
+            highs = [row["h"] for row in ind_rows]
+            lows = [row["l"] for row in ind_rows]
+            closes = [row["c"] for row in ind_rows]
+            volumes = [row["v"] for row in ind_rows]
             ema_trend = calc_ema(closes, int(ema_p.get("trend") or 21))
             ema_momentum = calc_ema(closes, int(ema_p.get("momentum") or 50))
             ema_long = calc_ema(closes, int(ema_p.get("long") or 200))
@@ -1213,7 +1270,7 @@ def _crypto_chart_payload(pair: dict, symbol: str, tf: str, limit: int):
         "fallback_used": bool(fallback_used or tick_diag.get("fallback_used")),
         "volume_ma_period": 20,
         "vwap_formula": indicator_meta.get("vwap_formula"),
-        "indicator_set": ["EMA21", "EMA50", "EMA200", "VWAP", "RSI14", "ADX14", "ATR14", "Volume", "Volume MA"],
+        "indicator_set": _indicator_set_labels(indicator_meta.get("indicator_periods")),
         "indicator_periods": indicator_meta.get("indicator_periods"),
         "engine_a_vwap_filter_enabled": bool(
             (CONFIG.get("ENGINE_A_VWAP_FILTER") or {}).get("ENABLED", False)

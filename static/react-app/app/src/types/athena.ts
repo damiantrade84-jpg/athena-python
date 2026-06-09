@@ -1584,6 +1584,8 @@ export interface AIChartReviewChartSnapshot {
    */
   chartIndicators?: {
     timeframe?: string | null;
+    /** Trend EMA drawn at the per-group period Engine A scores with. */
+    emaTrend?: number | null;
     ema50?: number | null;
     ema200?: number | null;
     rsi14?: number | null;

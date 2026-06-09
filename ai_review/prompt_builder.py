@@ -160,6 +160,7 @@ review_analyze_style: {_fmt(review_style.get("review_analyze_style"))} candidate
 review_style_note: {_fmt(review_style.get("note"))}
 indicator_parity: chart_tf={_fmt(indicator_parity.get("chart_timeframe"))} engine_a_indicator_tf={_fmt(indicator_parity.get("engine_a_indicator_timeframe"))} status={_fmt(indicator_parity.get("status"))} mismatches={_fmt(indicator_parity.get("mismatches"))}
 (Chart indicators are computed on the visible timeframe; Engine A trend EMAs are H4. When status is not_comparable_timeframe or values_differ, do not read the chart's drawn EMA/ATR/ADX as Engine A's values.)
+(VWAP anchors differ: the chart-drawn VWAP line is UTC-day session-anchored on intraday timeframes, while engineAContext vwapDistanceAtr/vwapExtended use a multi-day anchored H4 VWAP. Do not treat the chart VWAP line as the basis of the engine's VWAP-extension diagnostics.)
 
 == CHART CAPTURE METADATA ==
 rendered_layers: {_fmt_list(rendered_layers)}

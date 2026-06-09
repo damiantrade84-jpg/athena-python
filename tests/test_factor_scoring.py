@@ -409,6 +409,8 @@ def test_forex_directional_score_caps_single_h1_vote_to_one_point(monkeypatch):
 
     monkeypatch.setattr(carry_feed, "get_carry_z", lambda *_args, **_kwargs: 0.0)
     monkeypatch.setattr(carry_feed, "get_carry_differential", lambda _display: 0.0)
+    # Isolate the single-vote cap from the magnitude scaler (tested separately).
+    monkeypatch.setitem(CONFIG, "ENGINE_A_TREND_MAGNITUDE", {"ENABLED": False})
 
     result = _score(
         {"adx": 25.0, "close": 100.0, "atr": 1.0},

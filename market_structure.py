@@ -953,6 +953,40 @@ def _get_engine_b_gate_failure_summary() -> dict[str, int]:
     return dict(_engine_b_gate_failures)
 
 
+def _find_breakout_bar_index(
+    candles: list,
+    direction: str,
+    level: float | None,
+    lookback: int = 20,
+) -> int | None:
+    """Locate the most recent bar whose close crossed beyond ``level``.
+
+    A breakout bar is one that closed beyond the broken structural level while
+    the previous bar's close was still inside it. Needed because
+    ``_breakout_follow_through`` evaluates the bars *after* the breakout — the
+    last bar has no follow-through window by definition.
+    """
+    if level is None or not candles:
+        return None
+    try:
+        _level = float(level)
+    except (TypeError, ValueError):
+        return None
+    n = len(candles)
+    start = max(1, n - max(1, int(lookback)))
+    for i in range(n - 1, start - 1, -1):
+        try:
+            close_i = float(candles[i].get("close", 0.0))
+            close_prev = float(candles[i - 1].get("close", 0.0))
+        except (AttributeError, TypeError, ValueError):
+            continue
+        if direction == "LONG" and close_i > _level >= close_prev:
+            return i
+        if direction == "SHORT" and close_i < _level <= close_prev:
+            return i
+    return None
+
+
 def _breakout_follow_through(
     candles: list,
     direction: str,
@@ -1433,7 +1467,9 @@ def _engine_b_sl_distance_pct(entry: float, sl: float | None) -> float | None:
     return abs(_entry - _sl) / abs(_entry)
 
 
-def _engine_b_resolve_max_sl_pct(asset_class: str, pair: str | None = None) -> tuple[float, str]:
+def _engine_b_resolve_max_sl_pct(
+    asset_class: str, pair: str | None = None, score_group: str | None = None
+) -> tuple[float, str]:
     from risk_engine import resolve_max_sl_pct
 
     _asset = str(asset_class or "forex").lower()
@@ -1441,6 +1477,8 @@ def _engine_b_resolve_max_sl_pct(asset_class: str, pair: str | None = None) -> t
     if pair:
         sig_ctx["pair"] = pair
         sig_ctx["display"] = pair
+    if score_group:
+        sig_ctx["score_group"] = score_group
     return resolve_max_sl_pct(sig_ctx, _asset, config.CONFIG)
 
 
@@ -1481,6 +1519,7 @@ def resolve_engine_b_execution_levels(
     min_rr: float | None = None,
     fallback_rr: float | None = None,
     pair: str | None = None,
+    score_group: str | None = None,
 ) -> dict:
     """Resolve final Engine B execution SL/TP for RR gating.
 
@@ -1599,7 +1638,9 @@ def resolve_engine_b_execution_levels(
     _max_sl_pct = None
     _max_sl_source = None
     if _enforce_max_sl and _entry > 0:
-        _max_sl_pct, _max_sl_source = _engine_b_resolve_max_sl_pct(_asset, pair=pair)
+        _max_sl_pct, _max_sl_source = _engine_b_resolve_max_sl_pct(
+            _asset, pair=pair, score_group=score_group
+        )
 
     # Select execution SL.
     # Preference order:
@@ -2065,7 +2106,7 @@ class NakedEngine:
         # Calculate recent average volume for normalisation
         vols = np.array([float(c.get("vol", 0)) for c in candles], dtype=float)
         avg_volume_20 = (
-            np.mean(vols[-20:]) if len(vols) >= 20 else (np.mean(vols) if vols else 1.0)
+            np.mean(vols[-20:]) if len(vols) >= 20 else (np.mean(vols) if len(vols) > 0 else 1.0)
         )
         if avg_volume_20 <= 0:
             avg_volume_20 = 1.0
@@ -2165,6 +2206,10 @@ class NakedEngine:
             "recent_high": recent_swing_high,
             "recent_low": recent_swing_low,
             "has_equal_extrema": has_equal_extrema,
+            # Direction-agnostic raw flags so direction-dependent consumers can
+            # resolve per side (precompute calls this once with "LONG").
+            "equal_highs": bool(equal_highs),
+            "equal_lows": bool(equal_lows),
         }
 
     def _detect_bos(self, highs: np.ndarray, lows: np.ndarray, atr: float,
@@ -3742,7 +3787,16 @@ class NakedEngine:
             "fvg_overlap": fvg_overlap,
             "active_fvgs": active_fvgs,
             "liquidity_sweep": is_sweep_event,
-            "has_equal_extrema": sequence_data.get("has_equal_extrema", False),
+            # Equal extrema relative to the scanned direction: equal lows are the
+            # liquidity pool for LONG sweeps, equal highs for SHORT. The precompute
+            # sequence pass runs direction-independent, so resolve per side here.
+            "has_equal_extrema": bool(
+                sequence_data.get("equal_lows", False)
+                if direction == "LONG"
+                else sequence_data.get("equal_highs", False)
+            )
+            if ("equal_lows" in sequence_data or "equal_highs" in sequence_data)
+            else sequence_data.get("has_equal_extrema", False),
             "active_zone_distance": zone_ctx["distance"],
             "near_active_zone": zone_ctx["near_zone"],
             "zone_touched": zone_ctx["zone_touched"],
@@ -3756,6 +3810,7 @@ class NakedEngine:
             "latest_confirmed_trigger_candle_time": latest_trigger_candle_time,
             "structure_tf": structure_tf,
             "asset_type": asset_type,
+            "pair_display": (pair or {}).get("display") or (pair or {}).get("symbol"),
             **({"forex_session_structure": forex_session_structure} if str(asset_type or "").lower() == "forex" else {}),
             **({"asset_class_structure_diagnostics": asset_struct_diag} if asset_struct_diag.get("asset_class") in {"stock", "index", "commodity", "etf", "etf_bond"} else {}),
             **({"equity_session_structure": equity_session_structure} if equity_session_structure is not None else {}),
@@ -4073,7 +4128,8 @@ class NakedEngine:
             asset_class=_exec_asset_class,
             min_rr=min_rr,
             fallback_rr=profile.get("fallback_rr"),
-            pair=res.get("pair") or res.get("display") or res.get("symbol"),
+            pair=res.get("pair_display") or res.get("pair") or res.get("display") or res.get("symbol"),
+            score_group=profile.get("score_group"),
         )
         # Structural TP side check — kept for diagnostics / ENGINE_B_REASON_TP_WRONG_SIDE
         sl = _exec_lvl["execution_sl"]
@@ -4179,6 +4235,11 @@ class NakedEngine:
             bonus_points += 1.0  # MTF BOS alignment = extra point
         if volume_ok:
             bonus_points += 1.0  # Volume confirmation = extra point
+        if ob_at_zone:
+            # Strong order block at the active zone = SMC confluence. Counted in
+            # max_possible (FIX 4) and expected by Engine C ("may already count
+            # these as extra checklist rows"), but the award itself was missing.
+            bonus_points += 1.0
 
         # ── Breakout Follow-Through Bonus (config-gated) ────────────────────────
         _ft_cfg = config.CONFIG.get("ENGINE_B_FOLLOW_THROUGH", {}) or {}
@@ -4190,7 +4251,28 @@ class NakedEngine:
             "diagnostics_enabled": _ft_diagnostics_enabled,
         }
         if _ft_enabled or _ft_diagnostics_enabled:
-            _ft_result = _breakout_follow_through(entry_candles or [], direction, atr_val)
+            # Locate the actual breakout bar (close crossing the broken BOS level)
+            # so follow-through evaluates the bars after it. Defaulting to the
+            # last bar always yields zero bars to check.
+            _ft_bos = res.get("bos_data") or {}
+            _ft_level = (
+                _ft_bos.get("last_broken_high")
+                if direction == "LONG"
+                else _ft_bos.get("last_broken_low")
+            )
+            _ft_idx = _find_breakout_bar_index(entry_candles or [], direction, _ft_level)
+            if _ft_idx is not None:
+                _ft_result = _breakout_follow_through(
+                    entry_candles or [], direction, atr_val, breakout_bar_index=_ft_idx
+                )
+                _ft_result["breakout_bar_index"] = _ft_idx
+            else:
+                _ft_result = {
+                    "score": 0.0,
+                    "confidence": "no_breakout_bar",
+                    "bars_checked": 0,
+                    "breakout_bar_index": None,
+                }
             _ft_detail.update(_ft_result)
             _ft_max = abs(float(_ft_cfg.get("MAX_BONUS", 1.5)))
             _ft_min = -abs(float(_ft_cfg.get("MIN_PENALTY", -0.5)))

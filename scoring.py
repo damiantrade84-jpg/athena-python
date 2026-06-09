@@ -507,6 +507,37 @@ def get_backtest_min_score_threshold(pair: dict) -> float:
     return get_score_threshold(pair)
 
 
+def annotate_multiplier_flips(
+    attribution: dict, final_score: float | None, threshold: float | None
+) -> dict:
+    """Mark which multipliers alone flip the score across the trade threshold.
+
+    Report-only telemetry: for each entry from factor_scoring's
+    multiplier_attribution, ``would_flip_decision`` is true when removing that
+    single multiplier moves the score to the other side of the threshold.
+    Mutates and returns ``attribution``; never changes scores or gating.
+    """
+    if not isinstance(attribution, dict) or final_score is None or threshold is None:
+        return attribution
+    try:
+        passed = float(final_score) >= float(threshold)
+    except (TypeError, ValueError):
+        return attribution
+    for entry in attribution.values():
+        if not isinstance(entry, dict):
+            continue
+        score_without = entry.get("score_without")
+        if score_without is None:
+            continue
+        try:
+            entry["would_flip_decision"] = bool(
+                (float(score_without) >= float(threshold)) != passed
+            )
+        except (TypeError, ValueError):
+            continue
+    return attribution
+
+
 def pair_filter_enabled(pair: dict, filter_name: str) -> bool:
     disabled = set(get_pair_profile(pair).get("disable_filters", []) or [])
     return filter_name not in disabled
@@ -1165,6 +1196,12 @@ def calc_confluence(
             session_quality=_session_quality,
         )
     confidence_val = _conf["confidence"]
+    # Report-only multiplier flip telemetry (threshold known only here).
+    _mult_attr = annotate_multiplier_flips(
+        factor_result.get("multiplier_attribution") or {},
+        factor_result.get("final_score"),
+        get_score_threshold(pair),
+    )
     _crypto_diag = factor_result.get("crypto_engine_a_diagnostics") or {}
     if _crypto_diag.get("late_trend_adjustment_applied"):
         _lt_conf_mult = float(CONFIG.get("ENGINE_A_CRYPTO_LATE_TREND_CONF_MULT", 0.85))
@@ -1223,6 +1260,8 @@ def calc_confluence(
             "adxMultiplier": factor_result.get("adx_multiplier"),
             "directionalRampMult": factor_result.get("directional_ramp_multiplier"),
             "conviction": factor_result.get("conviction"),
+            "multiplierAttribution": _mult_attr,
+            "correlatedPenaltyGuard": factor_result.get("correlated_penalty_guard"),
             "diAlignMult": _safe_feed_mult(factor_result.get("feed_status", {}), "di_align"),
             "regimeLabelsDualCapture": {
                 "trendState": trend_state,
