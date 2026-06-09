@@ -265,6 +265,16 @@ def _resolve_rsi_period(score_group: str | None, asset_type: str) -> int:
         return period
 
 
+def _resolve_atr_adx_periods(score_group: str | None = None, asset_type: str = "") -> dict:
+    """Return ATR/ADX periods Engine A scores with. Pinned to 14 for all groups.
+
+    Single source of truth shared with the chart API (_resolve_chart_indicator_periods)
+    so Engine A and the chart surface cannot drift independently if calibration
+    ever makes these per-group.
+    """
+    return {"atr": 14, "adx": 14}
+
+
 def _resolve_macd_params(score_group: str | None, asset_type: str) -> dict:
     """Return MACD (fast, slow, signal) tuple for momentum factor."""
     params = {"fast": 12, "slow": 26, "signal": 9}

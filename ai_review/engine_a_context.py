@@ -523,6 +523,9 @@ def _ema_levels(signal: dict[str, Any], factor_diag: dict[str, Any]) -> dict[str
     if not isinstance(trend, dict):
         trend = {}
     return {
+        # "ema21" is the legacy snap key for the trend EMA; under per-group
+        # calibration it holds the group's trend period (e.g. 18 crypto, 26 forex).
+        "ema21": h4_snap.get("ema21") or trend.get("ema21") or trend.get("ema21_value"),
         "ema50": h4_snap.get("ema50") or trend.get("ema50") or trend.get("ema50_value"),
         "ema200": h4_snap.get("ema200") or trend.get("ema200") or trend.get("ema200_value"),
         "dema200": h4_snap.get("dema200") or trend.get("dema200") or trend.get("dema200_value"),
@@ -856,13 +859,12 @@ def _chart_indicator_parity(
 
     Engine A's trend EMAs come from the H4 snapshot, so the chart's visible-TF
     lines are only directly comparable when the chart is on H4. The chart sends
-    ema50/ema200/rsi14/atr14/adx14; all five are compared against Engine A's H4
-    references here. Advisory only — never affects scoring.
-
-    The chart draws fixed EMA50/EMA200 lines, but Engine A's trend/momentum EMAs
-    use per-group periods (engine_a_ema_periods); a value mismatch on ema50 can
-    therefore be expected for non-default groups, so the scoring periods are
-    surfaced alongside the comparison for the model to reconcile.
+    emaTrend/ema50/ema200/rsi14/atr14/adx14 — drawn at the per-group periods
+    Engine A scores with and computed on confirmed bars only — and they are
+    compared against Engine A's H4 references here. The legacy "...14"/"50"
+    key names are aliases; the actual periods are surfaced via
+    engine_a_ema_periods / engine_a_rsi_period. Advisory only — never affects
+    scoring.
     """
     refs = engine_refs or {}
     meta = screenshot_meta or {}
@@ -892,6 +894,7 @@ def _chart_indicator_parity(
             return max(abs(ev) * frac, 1e-9) if ev is not None else 1e-9
 
         # Price-scale indicators: relative tolerance.
+        _cmp("ema_trend", chart_ind.get("emaTrend"), ema_levels.get("ema21"), _rel(ema_levels.get("ema21"), 0.0025))
         _cmp("ema50", chart_ind.get("ema50"), ema_levels.get("ema50"), _rel(ema_levels.get("ema50"), 0.0025))
         _cmp("ema200", chart_ind.get("ema200"), ema_levels.get("ema200"), _rel(ema_levels.get("ema200"), 0.0025))
         _cmp("atr14", chart_ind.get("atr14"), refs.get("atr14"), _rel(refs.get("atr14"), 0.05))
@@ -919,6 +922,7 @@ def _chart_indicator_parity(
             "status": status,
             "mismatches": mismatches,
             "engine_a_ema_periods": refs.get("ema_periods"),
+            "engine_a_rsi_period": refs.get("rsi_period"),
             "rsi_timeframe": refs.get("rsi_tf"),
         },
         warnings,
@@ -1078,13 +1082,14 @@ def assemble_engine_a_context(
     ctx["score_attribution"] = _score_attribution(signal, factor_diag, ctx)
     ctx["review_style_diagnostic"] = _review_style_diagnostic(style, screenshot_meta, timeframe)
     h4_snap = (signal.get("h4") or {}).get("snap") or {}
-    from factor_scoring import _resolve_ema_periods
+    from factor_scoring import _resolve_ema_periods, _resolve_rsi_period
 
     engine_refs = {
         "rsi14": _to_float(h4_snap.get("rsi")),
         "atr14": _to_float(ctx["atr"].get("atr_h4")) if h4_snap.get("atr") is None else _to_float(h4_snap.get("atr")),
         "adx14": _to_float(factor_diag.get("adx_value") or factor_diag.get("adxValue") or h4_snap.get("adx")),
         "ema_periods": _resolve_ema_periods(ctx.get("asset_group"), str(pair.get("type") or "")),
+        "rsi_period": _resolve_rsi_period(ctx.get("asset_group"), str(pair.get("type") or "")),
         "rsi_tf": "H4",
     }
     parity, parity_warnings = _chart_indicator_parity(
@@ -1328,9 +1333,9 @@ def build_engine_a_prompt_context(engine_a_ctx: dict[str, Any]) -> dict[str, Any
         score_attribution = _score_attribution({}, fd, engine_a_ctx)
 
     # Per-group indicator periods Engine A actually scored with. The chart draws
-    # fixed EMA50/EMA200, but for most groups Engine A's trend/momentum EMAs and
-    # RSI use different periods (e.g. forex 26/60/rsi18, crypto 18/40/rsi12), so
-    # the model must reconcile against these, not the chart's fixed lines.
+    # its EMA/RSI lines at these same per-group periods (e.g. forex 26/60/rsi18,
+    # crypto 18/40/rsi12) — the legacy ema50/rsi14 field names are aliases — so
+    # the model reconciles values against these periods, not the literal names.
     from factor_scoring import _resolve_ema_periods, _resolve_rsi_period
 
     score_group = engine_a_ctx.get("asset_group")

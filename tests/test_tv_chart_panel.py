@@ -543,7 +543,7 @@ def test_crypto_chart_exposes_bybit_provider_badge_and_required_indicators():
 def test_crypto_chart_prefers_api_indicator_series_when_present():
     source = _read(TV_PANEL)
 
-    assert "apiEma21" in source
+    assert "apiEmaTrend" in source
     assert "apiAtr14" in source
     assert "useApiIndicators" in source
 
