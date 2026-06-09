@@ -1129,6 +1129,49 @@ def test_scalp_scan_route_adds_source_contracts_to_signals_and_skips(monkeypatch
     assert "sourceContract" in skipped and "scalpSetup" in skipped
 
 
+def test_scalp_scan_route_json_safe_numpy_candle_times(monkeypatch):
+    import numpy as np
+
+    athena_module = _load_athena_module()
+
+    def _fake_scan(pairs):
+        return {
+            "signals": [
+                {
+                    "pair": "BTC/USDT",
+                    "display": "BTC/USDT",
+                    "symbol": "BTCUSDT",
+                    "type": "crypto",
+                    "direction": "LONG",
+                    "price": 100.0,
+                    "sl": 99.0,
+                    "tp1": 102.0,
+                    "tp2": 103.0,
+                    "rr1": 2.0,
+                    "ai_grade": "B",
+                    "ai_score": 72,
+                    "gate_result": "PASS",
+                    "executable": True,
+                    "m5Candles": [{"time": np.int64(1780990200), "open": 1.0, "high": 1.1, "low": 0.9, "close": 1.05, "vol": 10.0}],
+                    "m1Candles": [{"time": np.int64(1781019000), "open": 1.0, "high": 1.1, "low": 0.9, "close": 1.05, "vol": 10.0}],
+                }
+            ],
+            "skipped": [],
+            "scanned": len(pairs),
+            "session": "london",
+            "sessions_active": ["london"],
+        }
+
+    monkeypatch.setattr(scalp_engine, "run_scalp_scan", _fake_scan)
+    client = athena_module.app.test_client()
+    resp = client.post("/api/scalp-scan", json={"pairs": ["BTC/USDT"]})
+
+    assert resp.status_code == 200, resp.get_data(as_text=True)
+    payload = resp.get_json()
+    assert payload["signals"][0]["m5Candles"][0]["time"] == 1780990200
+    assert isinstance(payload["signals"][0]["m5Candles"][0]["time"], int)
+
+
 def test_open_trades_timed_hides_intraday_labels_for_scalp(monkeypatch):
     athena_module = _load_athena_module()
 
