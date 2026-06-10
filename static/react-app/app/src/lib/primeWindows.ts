@@ -30,6 +30,9 @@ export interface AssetGroup {
 }
 
 export const REFERENCE_UTC_OFFSET_MIN = 120; // GMT+2
+export const REFERENCE_UTC_OFFSET_HOURS = REFERENCE_UTC_OFFSET_MIN / 60;
+/** Default when /api/market-hours is unavailable; matches config MT5_BROKER_UTC_OFFSET. */
+export const DEFAULT_MT5_BROKER_UTC_OFFSET_HOURS = 3;
 
 const MIN_PER_DAY = 1440;
 const h = (hours: number, minutes = 0) => hours * 60 + minutes;
@@ -169,6 +172,39 @@ export function refMinToLocalLabel(refMin: number): string {
   const d = new Date();
   d.setUTCHours(0, refMin - REFERENCE_UTC_OFFSET_MIN, 0, 0);
   return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
+}
+
+/** Format a GMT+2 anchor minute-of-day as HH:mm GMT+2 (window reference clock). */
+export function refMinToAnchorLabel(refMin: number, withSuffix = true): string {
+  const normalized = ((refMin % MIN_PER_DAY) + MIN_PER_DAY) % MIN_PER_DAY;
+  const hh = Math.floor(normalized / 60);
+  const mm = normalized % 60;
+  const clock = `${hh.toString().padStart(2, '0')}:${mm.toString().padStart(2, '0')}`;
+  return withSuffix ? `${clock} GMT+2` : clock;
+}
+
+/** Hours between MT5 broker clock and the GMT+2 window anchor (e.g. 3 - 2 = +1). */
+export function brokerOffsetDeltaHours(brokerUtcOffsetHours: number): number {
+  return brokerUtcOffsetHours - REFERENCE_UTC_OFFSET_HOURS;
+}
+
+/** MT5 broker HH:mm for a GMT+2 window boundary. */
+export function refMinToBrokerLabel(refMin: number, brokerUtcOffsetHours: number): string {
+  const deltaMin = brokerOffsetDeltaHours(brokerUtcOffsetHours) * 60;
+  const brokerMin = ((refMin + deltaMin) % MIN_PER_DAY + MIN_PER_DAY) % MIN_PER_DAY;
+  const hh = Math.floor(brokerMin / 60);
+  const mm = brokerMin % 60;
+  return `${hh.toString().padStart(2, '0')}:${mm.toString().padStart(2, '0')}`;
+}
+
+/** Footer note comparing MT5 broker clock to the GMT+2 window map. */
+export function fmtBrokerOffsetNote(brokerUtcOffsetHours: number): string | null {
+  const delta = brokerOffsetDeltaHours(brokerUtcOffsetHours);
+  if (delta === 0) {
+    return `MT5 broker GMT+${brokerUtcOffsetHours} — same as window clock.`;
+  }
+  const sign = delta > 0 ? '+' : '';
+  return `MT5 charts GMT+${brokerUtcOffsetHours} (${sign}${delta}h vs window GMT+2).`;
 }
 
 export function fmtCountdown(minutes: number): string {

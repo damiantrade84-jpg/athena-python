@@ -788,3 +788,23 @@ def test_bulk_prices_uses_runtime_http_client(monkeypatch):
 
     assert resp.status_code == 200
     assert resp.get_json()["prices"]["SPY.US"]["price"] == 500
+
+
+def test_market_hours_exposes_timezone_offsets_for_prime_windows():
+    """Prime windows use GMT+2 anchor; MT5 broker offset explains the +1h chart gap."""
+    client = _client(
+        _runtime(
+            CONFIG={
+                "SERVER_TZ_OFFSET_HOURS": 2,
+                "MT5_BROKER_UTC_OFFSET": 3,
+            }
+        )
+    )
+
+    resp = client.get("/api/market-hours")
+    data = resp.get_json()
+
+    assert resp.status_code == 200
+    assert data["windowAnchorUtcOffsetHours"] == 2
+    assert data["mt5BrokerUtcOffset"] == 3
+    assert "GMT+2" in data["localTime"]

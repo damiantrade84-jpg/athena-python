@@ -1,11 +1,18 @@
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Hourglass } from 'lucide-react';
+import { useApiPoll } from '@/hooks/useApiData';
 import { useNowTick } from '@/hooks/useNowTick';
 import {
   QUALITY_SEGMENTS, QUALITY_META,
   currentSegment, nextSegment, groupStatuses,
-  refMinutesOfDay, refMinToLocalLabel, fmtCountdown,
+  refMinutesOfDay, refMinToAnchorLabel, fmtCountdown,
+  DEFAULT_MT5_BROKER_UTC_OFFSET_HOURS, fmtBrokerOffsetNote,
 } from '@/lib/primeWindows';
+
+interface MarketHoursMeta {
+  windowAnchorUtcOffsetHours?: number;
+  mt5BrokerUtcOffset?: number;
+}
 
 const MIN_PER_DAY = 1440;
 
@@ -19,6 +26,9 @@ const SEGMENT_FILL: Record<string, string> = {
 
 export default function PrimeTimeCard() {
   const now = useNowTick(30_000);
+  const { data: marketHours } = useApiPoll<MarketHoursMeta>('/api/market-hours', 60_000);
+  const brokerOffset = marketHours?.mt5BrokerUtcOffset ?? DEFAULT_MT5_BROKER_UTC_OFFSET_HOURS;
+  const brokerNote = fmtBrokerOffsetNote(brokerOffset);
   const seg = currentSegment(now);
   const next = nextSegment(now);
   const groups = groupStatuses(now);
@@ -61,10 +71,10 @@ export default function PrimeTimeCard() {
           </div>
           <div className="text-right shrink-0">
             <p className="text-[11px] font-mono" style={{ color: meta.color }}>
-              ends {refMinToLocalLabel(seg.endMin)} · in {fmtCountdown(next.minutesUntil)}
+              ends {refMinToAnchorLabel(seg.endMin)} · in {fmtCountdown(next.minutesUntil)}
             </p>
             <p className="text-[10px] text-muted-foreground font-mono mt-0.5">
-              next: {next.segment.label} ({QUALITY_META[next.segment.quality].label}) {refMinToLocalLabel(next.segment.startMin)}
+              next: {next.segment.label} ({QUALITY_META[next.segment.quality].label}) {refMinToAnchorLabel(next.segment.startMin)}
             </p>
           </div>
         </div>
@@ -81,7 +91,7 @@ export default function PrimeTimeCard() {
                     width: `${((s.endMin - s.startMin) / MIN_PER_DAY) * 100}%`,
                     background: SEGMENT_FILL[s.quality],
                   }}
-                  title={`${s.label} · ${QUALITY_META[s.quality].label} · ${refMinToLocalLabel(s.startMin)}–${refMinToLocalLabel(s.endMin)} · ${s.markets}`}
+                  title={`${s.label} · ${QUALITY_META[s.quality].label} · ${refMinToAnchorLabel(s.startMin)}–${refMinToAnchorLabel(s.endMin)} · ${s.markets}`}
                 />
               ))}
             </div>
@@ -102,7 +112,7 @@ export default function PrimeTimeCard() {
                 className="absolute text-[9px] font-mono text-muted-foreground -translate-x-1/2"
                 style={{ left: `${(hour / 24) * 100}%` }}
               >
-                {refMinToLocalLabel(hour * 60)}
+                {refMinToAnchorLabel(hour * 60, false)}
               </span>
             ))}
           </div>
@@ -132,8 +142,8 @@ export default function PrimeTimeCard() {
                 </div>
                 <span className="text-[9px] font-mono shrink-0 text-right" style={{ color: live ? 'hsl(var(--gold-light))' : 'hsl(var(--muted-foreground))' }}>
                   {live
-                    ? `${livePrime ? 'PRIME' : 'ACTIVE'} · ends ${refMinToLocalLabel(active.endMin)}`
-                    : `next ${refMinToLocalLabel(nextWin.startMin)} · in ${fmtCountdown(minutes)}`}
+                    ? `${livePrime ? 'PRIME' : 'ACTIVE'} · ends ${refMinToAnchorLabel(active.endMin)}`
+                    : `next ${refMinToAnchorLabel(nextWin.startMin)} · in ${fmtCountdown(minutes)}`}
                 </span>
               </div>
             );
@@ -142,7 +152,8 @@ export default function PrimeTimeCard() {
 
         <p className="text-[9px] text-muted-foreground/70">
           Liquidity windows only — setup quality, freshness, spread, RR and all gates still apply.
-          Anchored GMT+2 (summer DST alignment); times shown in your local clock.
+          All window times are GMT+2 (summer EU/US DST alignment).
+          {brokerNote ? ` ${brokerNote}` : ''}
         </p>
       </CardContent>
     </Card>

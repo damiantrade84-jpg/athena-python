@@ -166,9 +166,14 @@ def api_market_hours():
         else:
             return {"open": False, "status": "Closed", "note": fmt_opens_in(mins)}
 
+    _window_anchor = int(CONFIG.get("SERVER_TZ_OFFSET_HOURS", 2) or 2)
+    _mt5_broker = int(CONFIG.get("MT5_BROKER_UTC_OFFSET", 3) or 3)
+
     return jsonify({
         "serverTime": now_utc.strftime("%Y-%m-%d %H:%M:%S UTC"),
         "localTime": now_gmt2.strftime("%Y-%m-%d %H:%M GMT+2"),
+        "windowAnchorUtcOffsetHours": _window_anchor,
+        "mt5BrokerUtcOffset": _mt5_broker,
         "sessions": {
             "sydney":    session_detail(syd_open, syd_mins),
             "tokyo":     session_detail(tok_open, tok_mins),
