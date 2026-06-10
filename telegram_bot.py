@@ -109,6 +109,14 @@ def _prune_pending():
         del _pending_signals[k]
 
 
+def _store_pending_signal(sig: dict) -> str:
+    """Store a signal for Telegram callback execution and return its callback key."""
+    _prune_pending()
+    signal_key = f"{sig.get('pair', sig.get('display', '?'))}_{sig.get('direction', '?')}_{int(datetime.now().timestamp())}"
+    _pending_signals[signal_key] = {"signal": sig, "ts": datetime.now(timezone.utc)}
+    return signal_key
+
+
 def _safe_json(resp) -> dict:
     try:
         data = resp.json()
@@ -1178,7 +1186,12 @@ def _build_and_run(token: str, chat_ids: list[str]):
                 )
                 return
             for sig in signals[:3]:
-                await update.message.reply_text(_fmt_engine_b_card(sig), parse_mode="Markdown")
+                key = _store_pending_signal(sig)
+                await update.message.reply_text(
+                    _fmt_engine_b_card(sig),
+                    parse_mode="Markdown",
+                    reply_markup=_execution_keyboard(key),
+                )
         except Exception:
             await msg.edit_text("Athena offline - check server")
 
@@ -1510,25 +1523,26 @@ def _build_and_run(token: str, chat_ids: list[str]):
 
     # ── Helper: send signal card with execute buttons ─────────────────────────
 
-    async def _send_signal_card(chat_id_val, sig: dict, context):
-        _prune_pending()
-        signal_key = f"{sig.get('pair', sig.get('display', '?'))}_{sig.get('direction', '?')}_{int(datetime.now().timestamp())}"
-        _pending_signals[signal_key] = {"signal": sig, "ts": datetime.now(timezone.utc)}
-
-        card = _fmt_signal_card(sig)
-        keyboard = InlineKeyboardMarkup([
-            [
-                InlineKeyboardButton("⚡ SCALP", callback_data=f"exec_scalp:{signal_key}"),
-                InlineKeyboardButton("📊 INTRADAY", callback_data=f"exec_intraday:{signal_key}"),
-                InlineKeyboardButton("🌊 SWING", callback_data=f"exec_swing:{signal_key}"),
-            ],
-            [
+    def _execution_keyboard(signal_key: str, *, include_ai: bool = True):
+        rows = [[
+            InlineKeyboardButton("⚡ SCALP", callback_data=f"exec_scalp:{signal_key}"),
+            InlineKeyboardButton("📊 INTRADAY", callback_data=f"exec_intraday:{signal_key}"),
+            InlineKeyboardButton("🌊 SWING", callback_data=f"exec_swing:{signal_key}"),
+        ]]
+        if include_ai:
+            rows.append([
                 InlineKeyboardButton("🧠 AI Analysis", callback_data=f"ai_analyse:{signal_key}"),
                 InlineKeyboardButton("❌ Skip", callback_data=f"skip:{signal_key}"),
-            ],
-        ])
+            ])
+        else:
+            rows.append([InlineKeyboardButton("❌ Cancel", callback_data=f"skip:{signal_key}")])
+        return InlineKeyboardMarkup(rows)
+
+    async def _send_signal_card(chat_id_val, sig: dict, context):
+        signal_key = _store_pending_signal(sig)
+        card = _fmt_signal_card(sig)
         await context.bot.send_message(
-            chat_id=chat_id_val, text=card, parse_mode="Markdown", reply_markup=keyboard
+            chat_id=chat_id_val, text=card, parse_mode="Markdown", reply_markup=_execution_keyboard(signal_key)
         )
 
     # ── Button callbacks ──────────────────────────────────────────────────────
@@ -1642,15 +1656,11 @@ def _build_and_run(token: str, chat_ids: list[str]):
 
                 g0 = str(grade).strip()[:1].upper()
                 if g0 in ("A", "B"):
-                    keyboard = InlineKeyboardMarkup([
-                        [
-                            InlineKeyboardButton("⚡ SCALP", callback_data=f"exec_scalp:{key}"),
-                            InlineKeyboardButton("📊 INTRADAY", callback_data=f"exec_intraday:{key}"),
-                            InlineKeyboardButton("🌊 SWING", callback_data=f"exec_swing:{key}"),
-                        ],
-                        [InlineKeyboardButton("❌ Cancel", callback_data=f"skip:{key}")],
-                    ])
-                    await query.message.reply_text(result_text, parse_mode="Markdown", reply_markup=keyboard)
+                    await query.message.reply_text(
+                        result_text,
+                        parse_mode="Markdown",
+                        reply_markup=_execution_keyboard(key, include_ai=False),
+                    )
                 else:
                     await query.message.reply_text(
                         f"{result_text}\n\n🚫 *Trade blocked — Grade {grade}*",

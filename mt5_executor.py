@@ -1727,6 +1727,11 @@ def mt5_execute(signal: dict, approval: "RiskApproval") -> dict:  # noqa: F821
             and total_vol >= (vol_min * 2)
         )
 
+    # Hybrid scale-out (trailing_atr only, mutually exclusive with do_split):
+    # banker leg keeps broker TP1 (banks the fraction); runner leg carries no
+    # broker TP and is managed by the timed-exit chandelier trail.
+    hybrid_split = False
+    vols = [(total_vol, tp if _use_broker_tp else 0)]
     if do_split:
         vol1 = round(math.floor((total_vol / 2) / vol_step) * vol_step, 2)
         if vol1 < vol_min: vol1 = vol_min
@@ -1734,7 +1739,32 @@ def mt5_execute(signal: dict, approval: "RiskApproval") -> dict:  # noqa: F821
         vols = [(vol1, tp), (vol2, tp2)]
         log.info(f"[MT5] {mt5_symbol}: splitting {total_vol} lots into targets TP1={tp} ({vol1}) and TP2={tp2} ({vol2})")
     else:
-        vols = [(total_vol, tp if _use_broker_tp else 0)]
+        _hybrid_cfg = _timed_exit_cfg().get("hybrid_scaleout") or {}
+        if (
+            not _is_scalp
+            and _uses_trailing_exit
+            and _use_broker_tp
+            and isinstance(_hybrid_cfg, dict)
+            and bool(_hybrid_cfg.get("enabled"))
+            and tp > 0
+            and total_vol >= (vol_min * 2)
+        ):
+            try:
+                _hybrid_frac = float(_hybrid_cfg.get("fraction", 0.5) or 0.5)
+            except (TypeError, ValueError):
+                _hybrid_frac = 0.5
+            _hybrid_frac = min(max(_hybrid_frac, 0.0), 1.0)
+            vol1 = round(math.floor((total_vol * _hybrid_frac) / vol_step) * vol_step, 2)
+            if vol1 < vol_min:
+                vol1 = vol_min
+            vol2 = round(total_vol - vol1, 2)
+            if vol2 >= vol_min:
+                hybrid_split = True
+                vols = [(vol1, tp), (vol2, 0)]
+                log.info(
+                    f"[MT5] {mt5_symbol}: hybrid scale-out — banker {vol1} lots TP1={tp}, "
+                    f"runner {vol2} lots on chandelier (no broker TP)"
+                )
 
     # ── Execution Loop ─────────────────────────────────────────────────────
     results = []
@@ -1909,8 +1939,9 @@ def mt5_execute(signal: dict, approval: "RiskApproval") -> dict:  # noqa: F821
         "brokerTp": tp if _use_broker_tp else 0,
         "tpPartial": None,
         "tp2": tp2 if do_split else None,
-        "tp2Ticket": int(results[1].order) if len(results) > 1 else None,
-        "tp2PositionTicket": legs[1]["ticket"] if len(legs) > 1 else None,
+        "tp2Ticket": int(results[1].order) if (do_split and len(results) > 1) else None,
+        "tp2PositionTicket": legs[1]["ticket"] if (do_split and len(legs) > 1) else None,
+        "hybridScaleout": hybrid_split,
         "legs": legs,
         "riskAmount": approval.risk_amount,
         "riskPct": approval.risk_pct,

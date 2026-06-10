@@ -137,6 +137,15 @@ def build_engine_d_prompt_context(engine_d_ctx: dict[str, Any]) -> dict[str, Any
         "tp1": setup.get("tp1"),
         "tp2": setup.get("tp2"),
         "rr1": setup.get("rr1"),
+        # Stop/RR provenance: slMethod vp_boundary|atr|fallback_buffer (atr =
+        # ATR stop was WIDER than structure); rr1 is a synthetic mechanical
+        # self-pay multiple; rrGateBasis is the structural RR the gate uses.
+        "slMethod": signal.get("sl_method") or setup.get("invalidationReason"),
+        "structuralTp": signal.get("structural_tp"),
+        "structuralRr": signal.get("structural_rr"),
+        "tpPartial": signal.get("tp_partial"),
+        "rrSynthetic": signal.get("rr_synthetic"),
+        "rrGateBasis": signal.get("rr_gate_basis"),
         "locationLabel": location.get("locationLabel"),
         "poc": location.get("poc"),
         "vah": location.get("vah"),
@@ -388,7 +397,17 @@ def assemble_engine_d_context(
         skipped = scan.get("skipped") or []
         for row in skipped:
             if isinstance(row, dict) and _signal_matches_symbol(row, symbol):
-                picked = scalp_ui_signal_fn(row) if scalp_ui_signal_fn else row
+                # Skipped rows carry only {pair, reason}; without fail-closed
+                # defaults the signal normalizer reports executable=True /
+                # gate_result=PASS to the AI reviewer.
+                skipped_row = dict(row)
+                reason = str(skipped_row.get("reason") or "")
+                skipped_row.setdefault(
+                    "gate_result",
+                    "NO_SETUP" if reason.startswith("no_setup:") else "BLOCKED",
+                )
+                skipped_row.setdefault("executable", False)
+                picked = scalp_ui_signal_fn(skipped_row) if scalp_ui_signal_fn else skipped_row
                 break
     if picked is None:
         return None

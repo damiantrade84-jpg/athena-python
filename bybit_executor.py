@@ -128,6 +128,64 @@ def _bybit_should_send_broker_tp(signal: dict) -> bool:
     return bool(cfg.get("bybit_attach_broker_tp_when_trailing_atr", True))
 
 
+def _hybrid_scaleout_cfg() -> dict:
+    """TIMED_EXIT.hybrid_scaleout config block ({} when absent/malformed)."""
+    cfg = CONFIG.get("TIMED_EXIT") or {}
+    hyb = cfg.get("hybrid_scaleout") if isinstance(cfg, dict) else None
+    return hyb if isinstance(hyb, dict) else {}
+
+
+def _place_reduce_only_partial(
+    exchange, ccxt_symbol: str, direction: str, filled_amount: float,
+    price: float, fraction: float, label: str,
+) -> str | None:
+    """Place a reduce-only limit that closes `fraction` of the position at `price`.
+
+    Non-fatal: returns the order id, or None when qty is below the exchange
+    minimum or placement fails — the position keeps its SL (and broker TP when
+    attached) and runs as a single unit.
+    """
+    try:
+        partial_side = "sell" if direction == "LONG" else "buy"
+        partial_qty = round(filled_amount * fraction, 8)
+        # Align to exchange minimum qty step
+        try:
+            mkt = exchange.market(ccxt_symbol)
+            _v_prec = (mkt.get("precision") or {}).get("amount", 0.001) or 0.001
+            _step = float(_v_prec) if not isinstance(_v_prec, int) else round(10 ** -_v_prec, 8)
+            if _step > 0:
+                import math as _math
+                partial_qty = _math.floor(partial_qty / _step) * _step
+                partial_qty = round(partial_qty, 8)
+        except Exception:
+            pass
+        vol_min = 0.001
+        try:
+            vol_min = float(exchange.market(ccxt_symbol)["limits"]["amount"].get("min") or 0.001)
+        except Exception:
+            pass
+        if partial_qty < vol_min:
+            log.warning(
+                f"[BYBIT] {label} partial qty {partial_qty} < min {vol_min} — skipping partial order"
+            )
+            return None
+        _partial_order = exchange.create_limit_order(
+            ccxt_symbol,
+            partial_side,
+            partial_qty,
+            price,
+            params={"reduceOnly": True, "positionIdx": 0},
+        )
+        order_id = _partial_order.get("id", "")
+        log.info(
+            f"[BYBIT] {label} partial order placed: {partial_side} {partial_qty} @ {price} id={order_id}"
+        )
+        return order_id
+    except Exception as _pe:
+        log.warning(f"[BYBIT] {label} partial order failed (non-fatal): {_pe}")
+        return None
+
+
 def bybit_account_risk_domain() -> str:
     env_label = (
         "demo"
@@ -1581,10 +1639,21 @@ def bybit_execute(signal: dict, approval: "RiskApproval") -> dict:  # noqa: F821
         _tp1_local = float(tp1 or 0)
         _tp2 = float(signal.get("tp2", 0) or 0)
         _tp_partial = float(signal.get("tp_partial", 0) or 0)
+        _hybrid_cfg = _hybrid_scaleout_cfg()
+        _hybrid_on = (
+            _uses_trailing_atr_exit(signal)
+            and bool(_hybrid_cfg.get("enabled"))
+            and _tp1_local > 0
+        )
         # Engine D: position TP sits at the structural target (tp1).
         # A separate reduce-only limit at tp_partial closes the first 50% clip at +1R.
-        # Non-scalp signals use tp1 as the single full-position exit.
-        tp_exec = _tp1_local if _use_broker_tp else 0.0
+        # Non-scalp signals use tp1 as the single full-position exit — except in
+        # hybrid scale-out (trailing mode): no full-position TP; a reduce-only
+        # limit at TP1 banks the first clip and the chandelier manages the runner.
+        if _hybrid_on:
+            tp_exec = 0.0
+        else:
+            tp_exec = _tp1_local if _use_broker_tp else 0.0
 
         # Set SL/TP on the position via Bybit v5 trading-stop endpoint
         # (stop_market / take_profit_market order types are invalid in v5)
@@ -1681,6 +1750,23 @@ def bybit_execute(signal: dict, approval: "RiskApproval") -> dict:  # noqa: F821
             except Exception as _pe:
                 log.warning(f"[BYBIT] Partial +1R order failed (non-fatal, full position runs to TP1): {_pe}")
 
+        # ── Hybrid scale-out (trailing mode): reduce-only limit banks the TP1 clip ─
+        # The position carries no broker TP (tp_exec=0); this order closes the
+        # configured fraction at TP1 and the chandelier trail manages the runner.
+        # Mutually exclusive with the Engine D block above (_hybrid_on is
+        # non-scalp by definition). Non-fatal on failure: SL stays attached and
+        # the whole position runs trail-managed, same as broker-TP-disabled mode.
+        if _hybrid_on:
+            try:
+                _hybrid_frac = float(_hybrid_cfg.get("fraction", 0.5) or 0.5)
+            except (TypeError, ValueError):
+                _hybrid_frac = 0.5
+            _hybrid_frac = min(max(_hybrid_frac, 0.0), 1.0)
+            partial_order_id = _place_reduce_only_partial(
+                exchange, ccxt_symbol, direction, filled_amount,
+                _tp1_local, _hybrid_frac, "Hybrid TP1",
+            )
+
         fee_info = order.get("fee") or {}
         fee_cost = float(fee_info.get("cost") or 0) or None
         return {
@@ -1696,6 +1782,7 @@ def bybit_execute(signal: dict, approval: "RiskApproval") -> dict:  # noqa: F821
             "tp2": _tp2 if _tp2 > 0 else None,
             "tpPartial": _tp_partial if _tp_partial > 0 else None,
             "partialOrderId": partial_order_id,
+            "hybridScaleout": _hybrid_on,
             "slOrderId": sl_order_id,
             "tpOrderId": tp_order_id,
             "riskAmount": approval.risk_amount,

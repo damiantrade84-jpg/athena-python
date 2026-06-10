@@ -1102,7 +1102,7 @@ BT_PERCENTILE_FILTER: false
 
 # Research/backtest-only exit baselines. These do not drive live scanner,
 # guardian, broker execution, risk shield, Telegram execution, or timed exits.
-BACKTEST_EXIT_MODE: triple_barrier  # baseline_r | atr_baseline | triple_barrier | live_exit
+BACKTEST_EXIT_MODE: triple_barrier  # baseline_r | atr_baseline | triple_barrier | live_exit | live_trail
 
 BACKTEST_BASELINE_R:
   sl_r: 1.0
@@ -1128,6 +1128,32 @@ BACKTEST_TRIPLE_BARRIER:
   atr_length: 14
   sl_mult: 1.0
   tp_mult: 1.5
+  max_hold_bars:
+    M15: 12
+    H1: 24
+    H4: 18
+    D1: 10
+  same_bar_policy: sl_first
+
+# live_trail: bar-close approximation of the live trailing manager
+# (timed_exit_monitor) — initial ATR bracket, R-progress breakeven, chandelier
+# trail after activation (TP cap cleared), optional give-back, stagnation
+# time-stop. Use it to calibrate trail_giveback_r / trail_activation_r /
+# breakeven_arm_r from exit-reason and peak_r metadata before re-enabling
+# give-back live. Research-only; never drives live execution.
+BACKTEST_LIVE_TRAIL:
+  atr_length: 14
+  sl_mult: 1.5
+  tp_mult: 3.0            # TP cap active only until trail activation
+  be_arm_r: 0.6           # breakeven arms at this R progress (close basis)
+  be_buffer_r: 0.05
+  activation_r: 1.0       # trail activates at this R progress (close basis)
+  trail_atr_mult: 2.5
+  trail_lookback: 14
+  giveback_r: 0.0         # 0 = disabled (mirrors live; calibrate before enabling)
+  clear_tp_on_activation: true
+  stagnation_fraction: 0.5
+  stagnation_max_abs_r: 0.25
   max_hold_bars:
     M15: 12
     H1: 24
@@ -3542,7 +3568,7 @@ SCALP_ENGINE:
   # When true, demote non-crypto setups with proxy volume + unreliable tick-volume
   # quality from PASS to WATCHLIST. Default false = legacy (TVQ informs grading
   # only, never the execution gate).
-  TVQ_REQUIRED_FOR_EXEC_NONCRYPTO: false
+  TVQ_REQUIRED_FOR_EXEC_NONCRYPTO: true   # Non-crypto proxy-volume setups with unreliable tick-volume quality demote to WATCHLIST (real volume only exists for crypto + EODHD stocks).
 
   TRADE_BUCKET_MIN_VOLUME: 0.0    # Optional minimum total bucket volume before using aggTrade VP
 
@@ -3721,6 +3747,10 @@ SCALP_ENGINE:
   # ── Risk & Grading ────────────────────────────────────────
 
   MIN_RR: 1.2                   # Global Engine D minimum RR; unified floor (operator-approved).
+                                # Gate basis is STRUCTURAL: the best of structural_tp/runner RR must
+                                # clear this floor. The mechanical TP1 (TP1_R_MULT self-pay) is synthetic
+                                # and is no longer compared against MIN_RR (2026-06-10 fix: doing so made
+                                # every signal rr_below_min and blocked all Engine D execution).
 
   score_group_overrides:
     forex_majors:
@@ -3799,6 +3829,12 @@ SCALP_ENGINE:
     stock: 0.25
 
   TP1_R_MULT: 1.0               # Engine D first take-profit/self-pay target in R.
+  TP1_R_MULT_CLASS:             # Optional per-class override (resolved via _scalp_cfg_lookup;
+    forex: 1.0                  # TP1_R_MULT_GROUP / TP1_R_MULT_BY_SCORE_GROUP also supported).
+    crypto: 1.0
+    commodity: 1.0
+    index: 1.0
+    stock: 1.0
 
   TP1_MAX_RR: 4.0               # Cap TP1 to this multiple of SL distance - prevents unrealistically far targets (0 = disabled)
 
@@ -3948,9 +3984,19 @@ TIMED_EXIT:
 
   breakeven_buffer_r: 0.05
 
+  # R-progress BE arming (trailing_atr mode only). BE arms once the trade
+  # reaches this R vs the *initial* risk — structure-based, not wall-clock.
+  # Replaces the old breakeven_min/breakeven_days clock gate in trailing mode
+  # (the clock moved every slightly-green trade to BE within minutes, where
+  # normal noise stopped it out at ~0R). Scalar or per-style dict accepted.
+  breakeven_arm_r:
+    scalp: 0.5
+    intraday: 0.6
+    swing: 0.7
+
   scalp:
 
-    breakeven_min: 5           # move SL to entry after 5 min if in profit
+    breakeven_min: 5           # fixed mode only; trailing_atr uses breakeven_arm_r (R-progress)
 
     close_min: 10              # in trailing_atr mode: ignored; in fixed mode: force-close at 10 min
 
@@ -3977,7 +4023,7 @@ TIMED_EXIT:
 
   intraday:
 
-    breakeven_min: 15          # move SL to entry after 15 min if in profit
+    breakeven_min: 15          # fixed mode only; trailing_atr uses breakeven_arm_r (R-progress)
 
     close_min: 30              # in trailing_atr mode: ignored; in fixed mode: force-close at 30 min
 
@@ -3987,7 +4033,7 @@ TIMED_EXIT:
 
   swing:
 
-    breakeven_days: 2.5        # move SL to entry after 2.5 days if in profit
+    breakeven_days: 2.5        # fixed mode only; trailing_atr uses breakeven_arm_r (R-progress)
 
     close_days: 5.0            # in trailing_atr mode: ignored; in fixed mode: force-close at 5 days
 
@@ -4083,24 +4129,23 @@ TIMED_EXIT:
 
   # Peak-R give-back close. Once chandelier is active, track the highest R
   # the trade reaches; if current R drops below peak by giveback_r, close
-  # immediately. Independent of the trail-line breach — protects against
-  # sharp reversals that haven't yet touched the chandelier level.
+  # immediately. Independent of the trail-line breach.
+  #
+  # DISABLED (0 = off, 2026-06-10): the previous budgets (0.25-0.7R) were
+  # ~4x tighter than the chandelier rope in R terms (e.g. MT5 intraday:
+  # rope 2.2 ATR / risk 1.5 ATR ~= 1.47R vs giveback 0.35R), so the give-back
+  # always fired first and the chandelier never managed the trade. The trail
+  # is now the single profit-side mechanism. Re-enable only with budgets
+  # calibrated from the live_exit backtest mode (post-peak retrace quantiles
+  # of winners), and keep the budget >= the rope expressed in R.
   trail_giveback_r:
-    scalp: 0.3
-    intraday: 0.4
-    swing: 0.6
+    scalp: 0.0
+    intraday: 0.0
+    swing: 0.0
 
-  # Optional per-venue override for give-back. Crypto noisier → slightly
-  # larger budget; MT5 tighter to lock profit faster.
-  trail_giveback_r_by_venue:
-    bybit:
-      scalp: 0.4
-      intraday: 0.3
-      swing: 0.7
-    mt5:
-      scalp: 0.25
-      intraday: 0.35
-      swing: 0.5
+  # Optional per-venue override for give-back. Disabled with the default
+  # above — populate only alongside calibrated trail_giveback_r values.
+  trail_giveback_r_by_venue: {}
 
   # When the chandelier first activates (trade crosses trail_activation_r),
   # clear the fixed broker TP so the trail is the only profit-side exit.
@@ -4134,6 +4179,31 @@ TIMED_EXIT:
 
   timer_tightens_trail: false      # do not tighten chandelier from legacy close_min timers
   timer_tighten_factor: 0.6        # multiplier applied to trail_atr_mult past close_min
+
+  # ── Stagnation time-stop (trailing mode) ─────────────────────────────────
+  # Below chandelier activation, a trade pinned near 0R ties up capital and
+  # rides swap/weekend risk with no thesis progress. After
+  # fraction_of_max_hold × (ENGINE_A_TIME_EXIT_BARS[style] × trail_timeframe)
+  # with |R| <= max_abs_r, close with exit_reason=STAGNATION_EXIT.
+  # E.g. intraday: 18 H4 bars = 72h → stagnation close at 36h if |R| <= 0.25.
+  stagnation_exit:
+    enabled: true
+    fraction_of_max_hold: 0.5
+    max_abs_r: 0.25
+
+  # ── Hybrid scale-out at TP1 (trailing mode) ──────────────────────────────
+  # Bank `fraction` of the position at TP1 and let the remainder run on the
+  # chandelier trail. MT5: the entry is split into a banker leg (keeps broker
+  # TP1) and a runner leg (no broker TP). Bybit: the position carries no
+  # full-position TP; a reduce-only limit at TP1 closes the first clip.
+  # When enabled, the monitor does NOT clear broker TPs at trail activation —
+  # the banker leg's TP1 IS the scale-out (overrides
+  # trail_clear_broker_tp_on_activation). Existing positions opened before
+  # enabling keep their full-position TP1 and bank fully there (safe legacy
+  # behavior). Requires mt5_attach_broker_tp_when_trailing_atr for MT5 splits.
+  hybrid_scaleout:
+    enabled: true
+    fraction: 0.5            # share closed at TP1; remainder trails
 
 CHART_VISION_DATASET_ENABLED: false
 

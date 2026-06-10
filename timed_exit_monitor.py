@@ -79,6 +79,9 @@ _DEFAULT_CFG: dict = {
     "intraday": {"breakeven_min": 15,  "close_min": 30, "timed_close_enabled": True, "tp_progress_exempt": 0.50},
     "swing":    {"breakeven_days": 2.5, "close_days": 5.0, "timed_close_enabled": True, "tp_progress_exempt": 0.50},
     "tp_mode": "fixed",
+    # R-progress BE arming (trailing_atr mode): arm BE once the trade has
+    # reached this R vs the initial risk — structure-based, not wall-clock.
+    "breakeven_arm_r": {"scalp": 0.5, "intraday": 0.6, "swing": 0.7},
     "trail_activation_r": {"scalp": 0.7, "intraday": 1.0, "swing": 1.5},
     "trail_atr_mult": {"scalp": 2.0, "intraday": 2.5, "swing": 3.0},
     "pre_activation_profit_protect_enabled": False,
@@ -93,6 +96,18 @@ _DEFAULT_CFG: dict = {
     "trail_confirm_macd": True,
     "timer_tightens_trail": False,
     "timer_tighten_factor": 0.6,
+    # Stagnation time-stop (trailing mode, below activation): close a trade
+    # stuck near 0R after a fraction of the style's N-bar max-hold window.
+    "stagnation_exit": {
+        "enabled": True,
+        "fraction_of_max_hold": 0.5,
+        "max_abs_r": 0.25,
+    },
+    # Hybrid scale-out (trailing mode): execution opens a banker leg that keeps
+    # its broker TP1 (the fraction banked) plus a runner leg with no broker TP
+    # managed by the chandelier. When enabled, the monitor must NOT clear
+    # broker TPs at trail activation — the banker's TP1 is the scale-out.
+    "hybrid_scaleout": {"enabled": False, "fraction": 0.5},
 }
 
 _PROFIT_LOCK_STAGES_DEFAULT: tuple[dict, ...] = (
@@ -190,6 +205,23 @@ def _persist_trail_state(state_key: str, trail_level: float) -> None:
             con.commit()
     except Exception as e:
         log.debug(f"[TIMED_EXIT] _persist_trail_state failed key={state_key}: {e}")
+
+
+def _clear_trail_state(state_key: str) -> None:
+    """Drop a stored trail level (memory + db) so the next tick recomputes fresh."""
+    _trail_state.pop(state_key, None)
+    if not _state_db_path:
+        return
+    try:
+        with sqlite3.connect(_state_db_path, timeout=10.0) as con:
+            con.execute(
+                "UPDATE timed_exit_state SET trail_level = NULL, last_update_ts = ? "
+                "WHERE state_key = ?",
+                (datetime.now(timezone.utc).isoformat(), state_key),
+            )
+            con.commit()
+    except Exception as e:
+        log.debug(f"[TIMED_EXIT] _clear_trail_state failed key={state_key}: {e}")
 
 
 def _persist_peak_r(state_key: str, peak_r: float) -> None:
@@ -399,7 +431,7 @@ def _try_trailing_mode_breakeven(
     state_key: str,
     row: dict,
     style: str,
-    be_due_now: bool,
+    cur_price: float,
     profit: float,
     tcfg: dict,
     entry: float,
@@ -410,8 +442,22 @@ def _try_trailing_mode_breakeven(
     move_sl: Callable[[float], dict],
     pair_label: str,
 ) -> None:
-    """Time-based BE under trailing_atr when trade is green but below chandelier activation."""
-    if not be_due_now or state_key in _be_done:
+    """R-progress BE under trailing_atr, below chandelier activation.
+
+    Arms once current R (vs the audit/fill SL) reaches breakeven_arm_r for the
+    style — structure-based, not wall-clock. A clock gate moved every slightly
+    green trade to BE within minutes, where ordinary noise stopped it at ~0R.
+    The dollar-profit floor stays as a fee/spread sanity check.
+    """
+    if state_key in _be_done:
+        return
+    arm_map = tcfg.get("breakeven_arm_r") or {}
+    try:
+        arm_r = float(arm_map.get(style, arm_map.get("intraday", 0.6)))
+    except (TypeError, ValueError):
+        arm_r = 0.6
+    current_r = _current_r_multiple(entry, sl_raw, cur_price, direction)
+    if current_r is None or current_r < arm_r:
         return
     risk_amount = float(row.get("risk_amount") or 0)
     be_min_profit_r = tcfg.get("breakeven_min_profit_r", 0.20)
@@ -437,8 +483,8 @@ def _try_trailing_mode_breakeven(
         _be_done.add(state_key)
         log.info(
             f"[TIMED_EXIT] trailing BE set: {pair_label} style={style} "
-            f"mins_open={mins:.1f} be_price={be_price:.5f} "
-            f"(entry={entry:.5f} buffer={be_buffer_r:.0%} of SL dist)"
+            f"current_r={current_r:.2f} arm_r={arm_r:.2f} mins_open={mins:.1f} "
+            f"be_price={be_price:.5f} (entry={entry:.5f} buffer={be_buffer_r:.0%} of SL dist)"
         )
 
 
@@ -562,6 +608,22 @@ def _get_timed_cfg(config_fn) -> dict:
         raw.get("breakeven_buffer_r", _DEFAULT_CFG["breakeven_buffer_r"])
     )
     merged["tp_mode"] = str(raw.get("tp_mode", _DEFAULT_CFG["tp_mode"])).lower()
+    # breakeven_arm_r accepts a scalar (all styles) or a per-style dict.
+    _be_arm_raw = raw.get("breakeven_arm_r", _DEFAULT_CFG["breakeven_arm_r"])
+    if isinstance(_be_arm_raw, dict):
+        _be_arm_defaults = _DEFAULT_CFG["breakeven_arm_r"]
+        merged["breakeven_arm_r"] = {
+            s: float(_be_arm_raw.get(s, _be_arm_defaults[s]))
+            for s in ("scalp", "intraday", "swing")
+        }
+    else:
+        try:
+            _be_arm_scalar = float(_be_arm_raw)
+        except (TypeError, ValueError):
+            _be_arm_scalar = 0.6
+        merged["breakeven_arm_r"] = {
+            s: _be_arm_scalar for s in ("scalp", "intraday", "swing")
+        }
     # trail_activation_r accepts either a scalar (applied to all styles) or a per-style dict.
     _act_raw = raw.get("trail_activation_r", _DEFAULT_CFG["trail_activation_r"])
     if isinstance(_act_raw, dict):
@@ -673,6 +735,37 @@ def _get_timed_cfg(config_fn) -> dict:
         merged["timer_tighten_factor"] = float(raw.get("timer_tighten_factor", _DEFAULT_CFG["timer_tighten_factor"]))
     except (TypeError, ValueError):
         merged["timer_tighten_factor"] = float(_DEFAULT_CFG["timer_tighten_factor"])
+    _stag_raw = raw.get("stagnation_exit")
+    _stag_defaults = _DEFAULT_CFG["stagnation_exit"]
+    _stag = _stag_raw if isinstance(_stag_raw, dict) else {}
+    try:
+        _stag_frac = float(_stag.get("fraction_of_max_hold", _stag_defaults["fraction_of_max_hold"]))
+    except (TypeError, ValueError):
+        _stag_frac = float(_stag_defaults["fraction_of_max_hold"])
+    try:
+        _stag_max_r = float(_stag.get("max_abs_r", _stag_defaults["max_abs_r"]))
+    except (TypeError, ValueError):
+        _stag_max_r = float(_stag_defaults["max_abs_r"])
+    merged["stagnation_exit"] = {
+        "enabled": bool(_stag.get("enabled", _stag_defaults["enabled"])),
+        "fraction_of_max_hold": _stag_frac,
+        "max_abs_r": _stag_max_r,
+    }
+    _hyb_raw = raw.get("hybrid_scaleout")
+    _hyb_defaults = _DEFAULT_CFG["hybrid_scaleout"]
+    _hyb = _hyb_raw if isinstance(_hyb_raw, dict) else {}
+    try:
+        _hyb_frac = float(_hyb.get("fraction", _hyb_defaults["fraction"]))
+    except (TypeError, ValueError):
+        _hyb_frac = float(_hyb_defaults["fraction"])
+    merged["hybrid_scaleout"] = {
+        "enabled": bool(_hyb.get("enabled", _hyb_defaults["enabled"])),
+        "fraction": min(max(_hyb_frac, 0.0), 1.0),
+    }
+    if merged["hybrid_scaleout"]["enabled"]:
+        # Hybrid: the banker leg's broker TP1 is the scale-out bank and must
+        # survive trail activation; runner legs are born without a TP.
+        merged["trail_clear_broker_tp_on_activation"] = False
     scalp_raw = cfg.get("SCALP_ENGINE") or {}
     merged["scalp_live_profit_protect"] = bool(scalp_raw.get("LIVE_PROFIT_PROTECT", True))
     # Engine A time_based exit: bars-per-style for the timed close (Plan 2).
@@ -871,12 +964,16 @@ def _safe_float(value) -> float:
 def _risk_sl_for_activation(audit_sl: float, live_sl: float) -> float:
     """SL price used for R-multiples and chandelier context.
 
-    Prefer the broker live SL when known so activation matches the stop the
-    position is working against; otherwise use audit (fill) SL.
+    Always the audit (fill) SL when known: R must be measured against the
+    *initial* risk. Using the live broker SL here inflates R as soon as BE or a
+    trail ratchet tightens the stop (denominator shrinks toward zero once the
+    SL crosses entry), causing premature activation and hair-trigger give-back
+    closes, and makes peak_r/current_r comparisons across ticks incoherent.
+    The live SL is only a fallback when no audit SL was recorded.
     """
     a = _safe_float(audit_sl)
     l = _safe_float(live_sl)
-    return l if l > 0 else a
+    return a if a > 0 else l
 
 
 def _log_trail_ratchet_broker_outcome(
@@ -1063,6 +1160,7 @@ def _row_for_live_position(position: dict, audit_rows: list[dict]) -> dict | Non
         "volume": audit.get("volume") or position.get("volume"),
         "risk_amount": audit.get("risk_amount"),
         "asset_class": audit.get("asset_class"),
+        "exit_mode": audit.get("exit_mode"),
     }
 
 
@@ -1368,8 +1466,8 @@ def _evaluate_trail(
 ) -> dict:
     """Single decision point for the chandelier trail state machine.
 
-    ``sl`` is the audit (opening) stop; ``live_sl_for_r`` when >0 overrides for
-    R-multiples and chandelier inputs so activation matches the broker stop.
+    ``sl`` is the audit (opening) stop and anchors all R-multiples;
+    ``live_sl_for_r`` is only a fallback risk reference when no audit SL exists.
 
     Returns one of:
         {"action": "none",    "reason": ...}
@@ -1453,6 +1551,33 @@ def _evaluate_trail(
                     "reason": "profit_roundtrip",
                 }
 
+    # Stagnation time-stop: below activation, a trade pinned near 0R for half
+    # (configurable) of the style's max-hold window ties up capital and rides
+    # swap/weekend risk with no thesis progress — close it. Full mode only;
+    # Engine D's pre_activation_only protect path is not a time-stop surface.
+    stag_cfg = tcfg.get("stagnation_exit") or {}
+    if (
+        trail_mode == "full"
+        and stag_cfg.get("enabled")
+        and mins_open > 0
+        and current_r < activation_r
+        and abs(current_r) <= float(stag_cfg.get("max_abs_r", 0.25))
+    ):
+        stag_frac = float(stag_cfg.get("fraction_of_max_hold", 0.5))
+        close_after_min = _time_close_after_min(tcfg, style)
+        if stag_frac > 0 and close_after_min > 0 and mins_open >= close_after_min * stag_frac:
+            log.info(
+                f"[TIMED_EXIT] STAGNATION close: {pair} style={style} dir={direction} "
+                f"current_r={current_r:.2f} mins_open={mins_open:.0f} "
+                f"threshold_min={close_after_min * stag_frac:.0f}"
+            )
+            return {
+                "action": "close",
+                "trail_level": None,
+                "current_r": current_r,
+                "reason": "stagnation",
+            }
+
     if current_r < activation_r:
         peak_watch = _peak_r_state.get(state_key)
         if current_r > 0:
@@ -1461,8 +1586,6 @@ def _evaluate_trail(
                 f"current_r={current_r:.2f} peak_r={peak_watch} activation_r={activation_r:.2f} "
                 f"mode={trail_mode}"
             )
-        if trail_mode == "pre_activation_only":
-            return {"action": "none", "reason": "below_activation", "current_r": current_r}
         return {"action": "none", "reason": "below_activation", "current_r": current_r}
 
     if trail_mode == "pre_activation_only":
@@ -1477,20 +1600,25 @@ def _evaluate_trail(
         return {"action": "none", "reason": "no_trail_data", "current_r": current_r}
 
     if first_activation_tick:
-        epsilon = max(abs(cur_price) * 1e-8, 1e-8)
-        clamped_trail = trail_level
-        if direction == "LONG" and trail_level >= cur_price:
-            clamped_trail = cur_price - epsilon
-        elif direction == "SHORT" and trail_level <= cur_price:
-            clamped_trail = cur_price + epsilon
-        if clamped_trail != trail_level:
+        wrong_side = (
+            (direction == "LONG" and trail_level >= cur_price)
+            or (direction == "SHORT" and trail_level <= cur_price)
+        )
+        if wrong_side:
+            # Clamping this to price±epsilon would ratchet the broker SL to
+            # market (instant stop-out). Keep the original SL protecting,
+            # forget the bad level, and let a later tick activate cleanly.
+            _clear_trail_state(state_key)
             log.info(
-                f"[TIMED_EXIT] First activation trail clamped: {pair} style={style} "
-                f"raw={trail_level:.5f} clamped={clamped_trail:.5f} price={cur_price:.5f}"
+                f"[TIMED_EXIT] First activation skipped (trail {trail_level:.5f} on "
+                f"wrong side of price {cur_price:.5f}): {pair} style={style} — "
+                f"original SL keeps protecting"
             )
-            trail_level = clamped_trail
-            _trail_state[state_key] = trail_level
-            _persist_trail_state(state_key, trail_level)
+            return {
+                "action": "none",
+                "reason": "first_trail_wrong_side",
+                "current_r": current_r,
+            }
 
     # Peak-R tracking. Ratchets up monotonically. Persisted so a monitor
     # restart does not erase the peak and reset the give-back budget.
@@ -1791,6 +1919,8 @@ def _handle_mt5_row(
             close_reason = "TRAIL_GIVEBACK"
         elif trail_eval.get("reason") == "profit_roundtrip":
             close_reason = "TRAIL_PROFIT_ROUNDTRIP"
+        elif trail_eval.get("reason") == "stagnation":
+            close_reason = "STAGNATION_EXIT"
 
         if action == "close":
             result = mt5_close_position(ticket)
@@ -1856,7 +1986,7 @@ def _handle_mt5_row(
             state_key=state_key,
             row=row,
             style=style,
-            be_due_now=be_due_now,
+            cur_price=cur_price,
             profit=profit,
             tcfg=tcfg,
             entry=entry,
@@ -2219,6 +2349,8 @@ def _handle_bybit_row(
             close_reason = "TRAIL_GIVEBACK"
         elif trail_eval.get("reason") == "profit_roundtrip":
             close_reason = "TRAIL_PROFIT_ROUNDTRIP"
+        elif trail_eval.get("reason") == "stagnation":
+            close_reason = "STAGNATION_EXIT"
 
         if action == "close":
             result = bybit_close_position(pair, direction, volume)
@@ -2289,7 +2421,7 @@ def _handle_bybit_row(
             state_key=state_key,
             row=row,
             style=style,
-            be_due_now=be_due_now,
+            cur_price=cur_price,
             profit=profit,
             tcfg=tcfg,
             entry=entry,

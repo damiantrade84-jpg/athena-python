@@ -55,7 +55,7 @@ CANDLE UNDERSTANDING (server-trusted, read before visual pattern naming):
 4. Trapped Traders: score trappedTraderAssessment (trappedSide, trapTrigger, squeezeFuelScore).
 5. Entry Model: choose Model A (NY trend squeeze) or Model B (London mean reversion) per sessionContext.preferredModel.
 6. Target: populate targetLogic — POC magnet for mean-reversion; structural liquidity for continuation.
-7. Invalidation: structural stop geometry — reject ATR-only stops; populate invalidationAssessment.
+7. Invalidation: assess stop geometry with engineDContext.slMethod. The engine takes the WIDER of structural invalidation and the ATR stop, so slMethod=atr means the ATR stop is wider than structure (acceptable); slMethod=fallback_buffer means structure was invalid (scrutinize hard). Flag stopPlacementValid=false only when the stop sits inside structural invalidation. Populate invalidationAssessment.
 8. Management: for ENTRY_NOW, populate managementPlan (BE trigger, scale-out, invalidation exit).
 9. Decision: ENTRY_NOW | WAIT_FOR_PULLBACK | WAIT_FOR_ACCEPTANCE | WATCH_ONLY | NO_TRADE | INVALIDATED.
 
@@ -120,7 +120,8 @@ Rules:
 
 == SETUP ==
 direction: {_fmt(context.get("direction"))} grade: {_fmt(context.get("ai_grade"))} score: {_fmt(context.get("ai_score"))}
-entry: {_fmt(setup.get("entry"))} sl: {_fmt(setup.get("stopLoss"))} tp1: {_fmt(setup.get("tp1"))} rr1: {_fmt(setup.get("rr1"))}
+entry: {_fmt(setup.get("entry"))} sl: {_fmt(setup.get("stopLoss"))} tp1: {_fmt(setup.get("tp1"))} rr1: {_fmt(setup.get("rr1"))} (synthetic self-pay)
+sl_method: {_fmt((context.get("signal") or {}).get("sl_method") or setup.get("invalidationReason"))} structural_tp: {_fmt((context.get("signal") or {}).get("structural_tp"))} structural_rr: {_fmt((context.get("signal") or {}).get("structural_rr"))}
 
 == LOCATION ==
 label: {_fmt(location.get("locationLabel"))} poc: {_fmt(location.get("poc"))} vah: {_fmt(location.get("vah"))} val: {_fmt(location.get("val"))}
@@ -180,11 +181,14 @@ Engine B nearby zones, order-flow markers, candidate entry/SL/TP, thesis badge, 
 - Late session: reject marginal; require liquidity event + clean invalidation.
 - profitLockActive=true: stop trading / review only.
 
-== STRUCTURAL STOP GEOMETRY (reject ATR-only generic stops) ==
+== STRUCTURAL STOP GEOMETRY ==
 - SWEEP_AND_RECLAIM: SL behind swept wick / failed auction extreme / absorption wall.
 - ABSORPTION_REVERSAL: SL behind absorption wall / aggressive failed extreme.
 - LVN_REJECTION_CONTINUATION: SL behind LVN/retest failure.
 - FAILED_BREAKOUT_REVERSAL: SL behind failed breakout extreme.
+- slMethod legend: vp_boundary = stop behind the VP structural level; atr = ATR stop chosen because it is WIDER than the structural level (valid, conservative); fallback_buffer = structure was on the wrong side of entry, stop is a buffer clamp (treat as weak invalidation).
+- A stop is a problem when it sits INSIDE structural invalidation (tighter than structure), not merely because it is ATR-derived.
+- rr1 is the mechanical self-pay multiple (rrSynthetic=true); judge reward via structuralRr/rrGateBasis and targetLogic.structuralRR, not rr1.
 - Populate invalidationAssessment.stopPlacementValid=false if stopProblem is not NONE.
 
 == TRADE MANAGEMENT (ENTRY_NOW only) ==

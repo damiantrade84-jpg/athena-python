@@ -185,6 +185,47 @@ def test_engine_b_card_formats_naked_signal():
     assert "TF `H4/H1`" in card
 
 
+def test_engine_b_pending_signal_preserves_full_payload_for_execute():
+    telegram_bot._pending_signals.clear()
+    signal = {
+        "display": "ADA/USDT",
+        "symbol": "ADAUSDT",
+        "type": "crypto",
+        "direction": "SHORT",
+        "price": 0.1668,
+        "sl": 0.176,
+        "tp1": 0.148,
+        "rr1": 2.0,
+        "style": "intraday",
+        "naked_data": {
+            "passed": True,
+            "execution_sl": 0.176,
+            "execution_tp": 0.148,
+        },
+    }
+
+    key = telegram_bot._store_pending_signal(signal)
+    payload = telegram_bot._build_quick_execute_payload(
+        telegram_bot._pending_signals[key]["signal"],
+        "intraday",
+    )
+
+    assert payload["signal"]["naked_data"]["execution_sl"] == 0.176
+    assert payload["signal"]["display"] == "ADA/USDT"
+    assert payload["signal"]["style"] == "intraday"
+    assert payload["pip_mode"] == "intraday"
+
+
+def test_engine_b_command_attaches_execute_keyboard():
+    source = Path(telegram_bot.__file__).read_text(encoding="utf-8")
+    start = source.index("async def cmd_engineb")
+    end = source.index("async def cmd_scalp", start)
+    engineb_block = source[start:end]
+
+    assert "_store_pending_signal(sig)" in engineb_block
+    assert "reply_markup=_execution_keyboard(key)" in engineb_block
+
+
 def test_scalp_card_includes_strict_fabio_and_gate():
     card = telegram_bot._fmt_scalp_card(
         {

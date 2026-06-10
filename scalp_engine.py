@@ -1226,10 +1226,12 @@ def _build_volume_profile(
         bin_size = price_range / num_bins
         bins = [0.0] * num_bins
 
+        range_substituted = 0
         for c in candles:
             vol = float(c.get("vol", 0) or 0)
             if vol <= 0:
                 vol = max(float(c["high"]) - float(c["low"]), 1e-10)
+                range_substituted += 1
             lo = c["low"]
             hi = c["high"]
             lo_bin = max(0, int((lo - price_min) / bin_size))
@@ -1284,6 +1286,12 @@ def _build_volume_profile(
             "session_high": round(price_max, 6),
             "session_low": round(price_min, 6),
         }
+        # Label range substitution so downstream fidelity gates (e.g. the stock
+        # range-proxy VP invalidation) can see it; previously this was silent.
+        sub_ratio = range_substituted / len(candles) if candles else 0.0
+        result["range_substituted_ratio"] = round(sub_ratio, 3)
+        if sub_ratio >= 0.5:
+            result["volume_source"] = "range_proxy"
         result["balance_ratio"] = _calc_balance_ratio(result)
         return result
 
@@ -1674,7 +1682,9 @@ def _check_trade_bucket_cvd(display: str, reference_ts=None, require_fresh: bool
         deltas = [float(r.get("delta") or 0.0) for r in rows]
         cvd = sum(deltas)
         slope = (sum(deltas[-3:]) - sum(deltas[:3])) if len(deltas) >= 6 else cvd
-        direction = "LONG" if slope > 0 else "SHORT" if slope < 0 else None
+        # Neutral band parity with the candle CVD path: |slope| <= CVD_MIN_SLOPE -> None.
+        min_slope = float(_scalp_cfg_lookup(cfg, "CVD_MIN_SLOPE", 0.0, asset_type="crypto"))
+        direction = "LONG" if slope > min_slope else "SHORT" if slope < -min_slope else None
         return {
             "direction": direction,
             "cvd_value": round(cvd, 2),
@@ -1826,10 +1836,12 @@ def _engine_d_source_fidelity(source: Any, *, domain: str) -> dict:
     # Delayed-real: post-trade real volume with a latency penalty (live US-stock
     # WS aggregation, EODHD intraday history). Still proxy for execution-trust
     # purposes but distinguishable from pure candle/range proxies for caps.
-    delayed_real = normalized in {
-        "eodhd_candle_volume",
-        "ws_tick_volume",
-    }
+    # eodhd_1h is excluded: 2-3h stale during the session, too old to earn the
+    # delayed-real grade-cap lift.
+    delayed_real = (
+        normalized in {"eodhd_candle_volume", "ws_tick_volume"}
+        and raw != "eodhd_1h"
+    )
     real_volume_proxy = normalized in {
         "candle_volume",
         "binance_candle",
@@ -2976,6 +2988,7 @@ def _classify_setup(
             "target": "POC_OR_OPPOSITE_VA",
             "reasons": reasons,
             "volume_divergence": vol_div_tc,
+            "stop_run": stop_run_tc,
         }
 
     # ── Trend Extension — price broke through the value area in a trending market ─
@@ -3044,6 +3057,7 @@ def _classify_setup(
             "target": "VA_WIDTH_PROJECTION",
             "reasons": reasons,
             "volume_divergence": vol_div_ext,
+            "stop_run": stop_run,
         }
 
     # ── No valid setup ───────────────────────────────────────────────────
@@ -3446,7 +3460,15 @@ def calculate_scalp_levels(
 
     sl_distance = abs(entry - sl)
 
-    tp1_r_mult = float(cfg.get("TP1_R_MULT", 1.0))
+    tp1_r_mult = float(
+        _scalp_cfg_lookup(
+            cfg,
+            "TP1_R_MULT",
+            1.0,
+            asset_type=asset_type,
+            score_group=score_group,
+        )
+    )
     tp1 = entry + (sl_distance * tp1_r_mult) if direction == "LONG" else entry - (sl_distance * tp1_r_mult)
     tp_partial = tp1
     actual_rr = round(abs(tp1 - entry) / sl_distance, 2) if sl_distance > 0 else 0
@@ -3475,19 +3497,35 @@ def calculate_scalp_levels(
             tp2 = max(valid_runners) if valid_runners else None
 
     tp_direction_ok = (direction == "LONG" and tp1 > entry) or (direction == "SHORT" and tp1 < entry)
+
+    # MIN_RR is a structural floor. The mechanical TP1 is synthetic
+    # (rr == TP1_R_MULT by construction), so gating the mechanical RR on
+    # min_rr > TP1_R_MULT made every signal rr_below_min and bricked
+    # execution via the rebase reject. Gate on the best structural/runner
+    # target instead: the setup must offer >= min_rr of structure.
+    runner_direction_ok = runner_tp is not None and (
+        (direction == "LONG" and runner_tp > entry)
+        or (direction == "SHORT" and runner_tp < entry)
+    )
+    runner_rr = (
+        round(abs(runner_tp - entry) / sl_distance, 2)
+        if sl_distance > 0 and runner_direction_ok
+        else 0
+    )
+    rr_gate_basis = max(structural_rr, runner_rr)
     if not tp_direction_ok:
         log.warning(
             f"[SCALP] TP direction invalid: {direction} tp1={tp1:.5f} vs entry={entry:.5f} "
             f"(mechanical {tp1_r_mult}R target could not be built)"
         )
-    elif sl_distance > 0 and actual_rr + 1e-9 < min_rr_cfg:
+    elif sl_distance > 0 and rr_gate_basis + 1e-9 < min_rr_cfg:
         log.warning(
-            f"[SCALP] Mechanical RR {actual_rr:.2f} < MIN_RR {min_rr_cfg:.2f} "
-            f"(entry={entry:.5f} tp1={tp1:.5f} sl_distance={sl_distance:.5f})"
+            f"[SCALP] Structural RR {rr_gate_basis:.2f} < MIN_RR {min_rr_cfg:.2f} "
+            f"(entry={entry:.5f} structural_tp={structural_tp:.5f} sl_distance={sl_distance:.5f})"
         )
 
     rr_below_min = (not tp_direction_ok) or (
-        tp_direction_ok and sl_distance > 0 and actual_rr + 1e-9 < min_rr_cfg
+        tp_direction_ok and sl_distance > 0 and rr_gate_basis + 1e-9 < min_rr_cfg
     )
 
     # --- Defensive Rounding Safeguard ---
@@ -3513,6 +3551,8 @@ def calculate_scalp_levels(
         "structural_tp_direction_ok": structural_tp_direction_ok,
         "rr":           actual_rr,
         "min_rr":       min_rr_cfg,
+        "rr_gate_basis": rr_gate_basis,
+        "rr_gate":      "structural",
         "tp_direction_ok": tp_direction_ok,
         "rr_below_min": rr_below_min,
         "rr_synthetic": True,
@@ -4993,6 +5033,8 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
                 "structural_rr":    levels.get("structural_rr"),
                 "structure_target_close": levels.get("structure_target_close"),
                 "rr1":             levels["rr"],
+                "rr_synthetic":    levels.get("rr_synthetic", True),
+                "rr_gate_basis":   levels.get("rr_gate_basis"),
                 "sl_distance":     levels["sl_distance"],
                 "sl_method":       levels["sl_method"],
                 # F2: surface Engine D M15 ATR provenance on the signal payload.

@@ -694,7 +694,12 @@ def test_calculate_levels_keys():
         assert k in levels, f"Missing key: {k}"
 
 
-def test_calculate_levels_trend_continuation_keeps_close_structure_as_warning(monkeypatch):
+def test_calculate_levels_trend_continuation_structural_rr_gate(monkeypatch):
+    """MIN_RR gates the structural/runner RR, not the synthetic mechanical TP1.
+
+    Structure offering only ~0.35R against the stop fails a 1.0 structural
+    floor even though the mechanical self-pay rr is 1.0 by construction.
+    """
     monkeypatch.setitem(
         scalp_engine.CONFIG,
         "SCALP_ENGINE",
@@ -706,8 +711,20 @@ def test_calculate_levels_trend_continuation_keeps_close_structure_as_warning(mo
         {"digits": 5, "point": 0.00001}, "forex"
     )
     assert levels["rr"] == 1.0
-    assert levels["rr_below_min"] is False
+    assert levels["rr_synthetic"] is True
+    assert levels["rr_gate"] == "structural"
+    assert levels["rr_gate_basis"] < 1.0
+    assert levels["rr_below_min"] is True
     assert levels["structure_target_close"] is True
+
+    # Structure comfortably beyond the floor -> gate passes.
+    vp_wide = {"poc": 0.91200, "vah": 0.917585, "val": 0.90900}
+    levels_wide = calculate_scalp_levels(
+        "SHORT", 0.91789, vp_wide, "trend_continuation",
+        {"digits": 5, "point": 0.00001}, "forex"
+    )
+    assert levels_wide["rr_gate_basis"] >= 1.0
+    assert levels_wide["rr_below_min"] is False
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

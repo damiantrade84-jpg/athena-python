@@ -14,7 +14,7 @@ from dataclasses import asdict, dataclass, field
 from typing import Any, Iterable, Mapping, Sequence
 
 
-VALID_EXIT_MODES = {"baseline_r", "atr_baseline", "triple_barrier", "live_exit"}
+VALID_EXIT_MODES = {"baseline_r", "atr_baseline", "triple_barrier", "live_exit", "live_trail"}
 
 DEFAULT_MAX_HOLD = {"M15": 12, "H1": 24, "H4": 18, "D1": 10}
 
@@ -36,6 +36,25 @@ DEFAULT_BACKTEST_EXIT_CONFIG: dict[str, Any] = {
         "atr_length": 14,
         "sl_mult": 1.0,
         "tp_mult": 1.5,
+        "max_hold_bars": dict(DEFAULT_MAX_HOLD),
+        "same_bar_policy": "sl_first",
+    },
+    # Bar-close approximation of the live trailing manager (timed_exit_monitor):
+    # initial ATR bracket, R-progress breakeven, chandelier trail after
+    # activation, optional give-back, and a stagnation time-stop.
+    "BACKTEST_LIVE_TRAIL": {
+        "atr_length": 14,
+        "sl_mult": 1.5,
+        "tp_mult": 3.0,
+        "be_arm_r": 0.6,
+        "be_buffer_r": 0.05,
+        "activation_r": 1.0,
+        "trail_atr_mult": 2.5,
+        "trail_lookback": 14,
+        "giveback_r": 0.0,
+        "clear_tp_on_activation": True,
+        "stagnation_fraction": 0.5,
+        "stagnation_max_abs_r": 0.25,
         "max_hold_bars": dict(DEFAULT_MAX_HOLD),
         "same_bar_policy": "sl_first",
     },
@@ -70,7 +89,7 @@ def normalized_backtest_exit_config(config: Mapping[str, Any] | None = None) -> 
         key: (dict(value) if isinstance(value, dict) else value)
         for key, value in DEFAULT_BACKTEST_EXIT_CONFIG.items()
     }
-    for key in ("BACKTEST_BASELINE_R", "BACKTEST_ATR_BASELINE", "BACKTEST_TRIPLE_BARRIER"):
+    for key in ("BACKTEST_BASELINE_R", "BACKTEST_ATR_BASELINE", "BACKTEST_TRIPLE_BARRIER", "BACKTEST_LIVE_TRAIL"):
         if isinstance(merged.get(key), dict):
             merged[key] = {
                 **DEFAULT_BACKTEST_EXIT_CONFIG[key],
@@ -82,7 +101,7 @@ def normalized_backtest_exit_config(config: Mapping[str, Any] | None = None) -> 
             }
     if config:
         for key, value in config.items():
-            if key in {"BACKTEST_BASELINE_R", "BACKTEST_ATR_BASELINE", "BACKTEST_TRIPLE_BARRIER"}:
+            if key in {"BACKTEST_BASELINE_R", "BACKTEST_ATR_BASELINE", "BACKTEST_TRIPLE_BARRIER", "BACKTEST_LIVE_TRAIL"}:
                 base = dict(merged.get(key) or {})
                 incoming = dict(value or {}) if isinstance(value, Mapping) else {}
                 base["max_hold_bars"] = {
@@ -145,6 +164,10 @@ def calculate_backtest_exit(
         return _invalid(exit_mode, "invalid_direction")
 
     tf = str(timeframe or "").upper()
+    if exit_mode == "live_trail":
+        return _live_trail_exit(
+            rows, entry_i, entry, side, tf, cfg.get("BACKTEST_LIVE_TRAIL", {}) or {}, atr_series
+        )
     mode_cfg_key = {
         "baseline_r": "BACKTEST_BASELINE_R",
         "atr_baseline": "BACKTEST_ATR_BASELINE",
@@ -248,6 +271,173 @@ def calculate_backtest_exit(
             mfe,
         )
     return _invalid(exit_mode, "no_future_candles", same_bar_policy=same_bar_policy)
+
+
+def _live_trail_exit(
+    rows: list[Mapping[str, Any]],
+    entry_i: int,
+    entry: float,
+    side: str,
+    tf: str,
+    mode_cfg: Mapping[str, Any],
+    atr_series: Sequence[float | None] | Any | None,
+) -> BacktestExitResult:
+    """Bar-close simulation of the live trailing manager (no look-ahead).
+
+    Per bar: (1) intrabar stop/TP checks against the state set on PRIOR bars,
+    sl-first on a same-bar conflict; (2) close-basis management mirroring
+    timed_exit_monitor — give-back (if enabled), trail activation at
+    activation_r (clearing the TP cap), R-progress breakeven, chandelier trail
+    (ratchet-only, first adoption skipped when wrong side of the close), and a
+    stagnation time-stop while the trail is inactive.
+    """
+    same_bar_policy = str(mode_cfg.get("same_bar_policy") or "sl_first").lower()
+    max_hold_bars = _max_hold_for_timeframe(mode_cfg, tf)
+    atr_length = int(mode_cfg.get("atr_length", 14) or 14)
+    atr_at_entry = _atr_at_entry(rows, entry_i, atr_length, atr_series)
+    if atr_at_entry is None or atr_at_entry <= 0:
+        return _invalid(
+            "live_trail",
+            "invalid_atr_at_entry",
+            same_bar_policy=same_bar_policy,
+            atr_length=atr_length,
+            atr_at_entry=atr_at_entry,
+            max_hold_bars=max_hold_bars,
+        )
+    risk = atr_at_entry * float(mode_cfg.get("sl_mult", 1.5) or 1.5)
+    tp_dist = atr_at_entry * float(mode_cfg.get("tp_mult", 3.0) or 3.0)
+    if not all(math.isfinite(v) and v > 0 for v in (risk, tp_dist)):
+        return _invalid("live_trail", "invalid_barrier_distance", same_bar_policy=same_bar_policy)
+
+    is_long = side == "LONG"
+    sgn = 1.0 if is_long else -1.0
+    sl_price = entry - sgn * risk
+    tp_price = entry + sgn * tp_dist
+
+    be_arm_r = float(mode_cfg.get("be_arm_r", 0.6) or 0.0)
+    be_buffer_r = float(mode_cfg.get("be_buffer_r", 0.05) or 0.0)
+    activation_r = float(mode_cfg.get("activation_r", 1.0) or 1.0)
+    trail_mult = float(mode_cfg.get("trail_atr_mult", 2.5) or 2.5)
+    trail_lookback = max(1, int(mode_cfg.get("trail_lookback", 14) or 14))
+    giveback_r = float(mode_cfg.get("giveback_r", 0.0) or 0.0)
+    clear_tp = bool(mode_cfg.get("clear_tp_on_activation", True))
+    stag_frac = float(mode_cfg.get("stagnation_fraction", 0.0) or 0.0)
+    stag_band = float(mode_cfg.get("stagnation_max_abs_r", 0.25) or 0.0)
+
+    stop = sl_price
+    stop_source = "sl"
+    tp_active = True
+    trail_active = False
+    trail_adopted = False
+    activation_index: int | None = None
+    peak_r = 0.0
+    mfe = 0.0
+    mae = 0.0
+
+    def _done(reason: str, exit_price: float, idx: int) -> BacktestExitResult:
+        r_multiple = sgn * (exit_price - entry) / risk
+        row = rows[idx]
+        return BacktestExitResult(
+            exit_price=float(exit_price),
+            exit_index=int(idx),
+            exit_timestamp=row.get("time") or row.get("timestamp") or row.get("date"),
+            exit_reason=reason,
+            tp_price=float(tp_price) if tp_active else None,
+            sl_price=float(stop),
+            max_hold_bars=int(max_hold_bars),
+            r_multiple=round(float(r_multiple), 6),
+            same_bar_policy=same_bar_policy,
+            backtest_exit_mode="live_trail",
+            atr_length=atr_length,
+            atr_at_entry=atr_at_entry,
+            mae=round(float(mae), 6),
+            mfe=round(float(mfe), 6),
+            metadata={
+                "activation_index": activation_index,
+                "peak_r": round(float(peak_r), 6),
+                "stop_source": stop_source,
+            },
+        )
+
+    last_i = min(len(rows) - 1, entry_i + max_hold_bars)
+    for idx in range(entry_i + 1, last_i + 1):
+        row = rows[idx]
+        try:
+            high = float(row["high"])
+            low = float(row["low"])
+            close = float(row["close"])
+        except (KeyError, TypeError, ValueError):
+            return _invalid("live_trail", f"invalid_candle:{idx}", same_bar_policy=same_bar_policy)
+        fav_r, adv_r = _bar_excursions_r(side, entry, risk, high, low)
+        mfe = max(mfe, fav_r)
+        mae = min(mae, adv_r)
+
+        # 1) Intrabar checks against state from prior bars only.
+        hit_stop = (low <= stop) if is_long else (high >= stop)
+        hit_tp = tp_active and ((high >= tp_price) if is_long else (low <= tp_price))
+        if hit_stop and hit_tp:
+            hit_tp = False  # sl_first
+        if hit_stop:
+            reason = {"sl": "sl", "be": "be_sl", "trail": "trail_sl"}[stop_source]
+            return _done(reason, stop, idx)
+        if hit_tp:
+            return _done("tp", tp_price, idx)
+
+        # 2) Close-basis management.
+        close_r = sgn * (close - entry) / risk
+        peak_r = max(peak_r, close_r)
+
+        if giveback_r > 0 and peak_r > 0 and (peak_r - close_r) >= giveback_r:
+            return _done("giveback", close, idx)
+
+        if not trail_active and close_r >= activation_r:
+            trail_active = True
+            activation_index = idx
+            if clear_tp:
+                tp_active = False
+
+        if be_arm_r > 0 and close_r >= be_arm_r:
+            be_level = entry + sgn * be_buffer_r * risk
+            if (is_long and be_level > stop) or (not is_long and be_level < stop):
+                stop = be_level
+                stop_source = "be"
+
+        if trail_active:
+            atr_now = _atr_at_entry(rows, idx, atr_length, atr_series)
+            if atr_now is not None and atr_now > 0:
+                w_start = max(entry_i + 1, idx - trail_lookback + 1)
+                if is_long:
+                    extreme = max(float(rows[j]["high"]) for j in range(w_start, idx + 1))
+                    trail = extreme - trail_mult * atr_now
+                    wrong_side = trail >= close
+                else:
+                    extreme = min(float(rows[j]["low"]) for j in range(w_start, idx + 1))
+                    trail = extreme + trail_mult * atr_now
+                    wrong_side = trail <= close
+                if trail_adopted or not wrong_side:
+                    trail_adopted = True
+                    if (is_long and trail > stop) or (not is_long and trail < stop):
+                        stop = trail
+                        stop_source = "trail"
+                    if stop_source == "trail" and (
+                        (is_long and close <= stop) or (not is_long and close >= stop)
+                    ):
+                        return _done("trail_close", close, idx)
+                # else: first adoption wrong side of close -> skip, retry next bar
+                # (mirrors live first_trail_wrong_side).
+
+        bars_held = idx - entry_i
+        if (
+            not trail_active
+            and stag_frac > 0
+            and abs(close_r) <= stag_band
+            and bars_held >= stag_frac * max_hold_bars
+        ):
+            return _done("stagnation", close, idx)
+
+    if last_i > entry_i:
+        return _done("timeout", float(rows[last_i].get("close", entry)), last_i)
+    return _invalid("live_trail", "no_future_candles", same_bar_policy=same_bar_policy)
 
 
 def _normalise_candles(candles: Sequence[Mapping[str, Any]] | Any) -> list[Mapping[str, Any]]:

@@ -9679,7 +9679,12 @@ def _scalp_contract_source_is_real(source, *, proxy=None, real_hint=None, domain
     if domain in {"orderflow", "cvd", "vp"}:
         return any(token in normalized for token in ("aggtrade", "trade_bucket", "real_trade_bucket", "footprint", "orderbook"))
     if domain == "volume":
-        return any(token in normalized for token in ("aggtrade", "trade_bucket", "eodhd", "polygon", "ws_tick", "real_vol"))
+        # Volume reality is independent of order-flow trust: Binance candle
+        # volume is real traded volume (no aggressor split), EODHD/ws_tick is
+        # real post-trade volume. eodhd_1h is excluded (2-3h stale in-session).
+        if "eodhd_1h" in normalized:
+            return False
+        return any(token in normalized for token in ("aggtrade", "trade_bucket", "eodhd", "polygon", "ws_tick", "real_vol", "binance"))
     if domain == "candle":
         return any(token in normalized for token in ("mt5", "binance", "bybit", "eodhd", "polygon", "yfinance"))
     return False
@@ -9718,7 +9723,9 @@ def _build_scalp_source_contract(raw_signal: dict, *, skipped: bool = False) -> 
     orderflow_real_hint = _scalp_contract_bool(raw_signal.get("aggression_uses_real_order_flow"))
 
     candle_is_real = _scalp_contract_source_is_real(candle_source, domain="candle")
-    volume_is_real = _scalp_contract_source_is_real(volume_source, proxy=raw_signal.get("vp_is_proxy"), domain="volume")
+    # Volume realness is judged on the volume source alone; vp_is_proxy tracks
+    # order-flow trust (aggressor split) and must not veto real candle volume.
+    volume_is_real = _scalp_contract_source_is_real(volume_source, domain="volume")
     orderflow_is_real = _scalp_contract_source_is_real(
         orderflow_source,
         proxy=raw_signal.get("aggression_source_is_proxy"),
@@ -10080,6 +10087,8 @@ def _scalp_ui_signal(raw_signal: dict) -> dict:
         "size_multiplier": raw_signal.get("size_multiplier"),
         "sl_method": raw_signal.get("sl_method"),
         "rr1": raw_signal.get("rr1"),
+        "rr_synthetic": raw_signal.get("rr_synthetic"),
+        "rr_gate_basis": raw_signal.get("rr_gate_basis"),
         "sl_distance": raw_signal.get("sl_distance"),
         "tp_partial": raw_signal.get("tp_partial"),
         "ai_reasons": raw_signal.get("ai_reasons", []),

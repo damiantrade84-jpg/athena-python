@@ -20,6 +20,11 @@ def test_exit_mode_in_monitor_select():
     assert "FROM   audit_log" in mon_src
 
 
+def test_exit_mode_threaded_into_live_position_row():
+    mon_src = _read("timed_exit_monitor.py")
+    assert '"exit_mode": audit.get("exit_mode")' in mon_src
+
+
 def test_exit_mode_wired_into_all_three_engine_a_paths():
     exec_src = _read("execution.py")
     at_src = _read("auto_trader.py")

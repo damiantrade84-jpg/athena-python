@@ -651,8 +651,8 @@ class TestEvaluateTrail:
         import timed_exit_monitor as tem
         tem._peak_r_state.clear()
 
-    def test_live_sl_for_r_increases_measured_r_vs_audit_sl(self, monkeypatch):
-        """Tighter live SL → smaller risk distance → higher R for same price."""
+    def test_live_sl_for_r_does_not_change_r_when_audit_sl_known(self, monkeypatch):
+        """R is anchored to the audit (fill) SL; a tightened live SL must not inflate it."""
         import timed_exit_monitor as tem
         tcfg = _get_timed_cfg(_cfg_fn({
             "tp_mode": "trailing_atr",
@@ -665,12 +665,12 @@ class TestEvaluateTrail:
         assert below["action"] == "none"
         assert below["reason"] == "below_activation"
 
-        above = _evaluate_trail(
+        same = _evaluate_trail(
             row, "intraday", "LONG", 100.0, 90.0, 104.0, tcfg,
             live_sl_for_r=95.0,
         )
-        assert above["action"] == "ratchet"
-        assert above["reason"] == "active"
+        assert same["action"] == "none"
+        assert same["reason"] == "below_activation"
 
     def test_below_activation_returns_none(self, monkeypatch):
         import timed_exit_monitor as tem
@@ -721,7 +721,8 @@ class TestEvaluateTrail:
 
         assert res["action"] == "close"
 
-    def test_first_activation_clamps_initial_breached_trail(self, monkeypatch):
+    def test_first_activation_wrong_side_trail_skips_and_clears_state(self, monkeypatch):
+        """A first trail at/through price must NOT become a stop at market."""
         import timed_exit_monitor as tem
 
         tcfg = _get_timed_cfg(_cfg_fn({
@@ -730,7 +731,13 @@ class TestEvaluateTrail:
             "trail_indicator_confirm": True,
         }))
         row = {"ticket": "T1", "pair": "EUR/USD", "audit_id": 1}
-        monkeypatch.setattr(tem, "_compute_chandelier_trail", lambda *a, **kw: 107.0)
+
+        def _fake_trail(*_a, **_kw):
+            # Mimic the real compute, which stores the level before returning.
+            _trail_state["mt5:aid:1"] = 107.0
+            return 107.0
+
+        monkeypatch.setattr(tem, "_compute_chandelier_trail", _fake_trail)
         monkeypatch.setattr(tem, "_check_indicator_confirmation", lambda *a, **kw: True)
 
         res = _evaluate_trail(
@@ -738,11 +745,11 @@ class TestEvaluateTrail:
             state_key="mt5:aid:1",
         )
 
-        assert res["action"] == "ratchet"
-        assert res["new_sl"] < 106.0
-        assert _trail_state["mt5:aid:1"] == pytest.approx(res["new_sl"])
+        assert res["action"] == "none"
+        assert res["reason"] == "first_trail_wrong_side"
+        assert "mt5:aid:1" not in _trail_state
 
-    def test_first_activation_clamps_initial_breached_short_trail(self, monkeypatch):
+    def test_first_activation_wrong_side_short_trail_skips(self, monkeypatch):
         import timed_exit_monitor as tem
 
         tcfg = _get_timed_cfg(_cfg_fn({
@@ -751,7 +758,12 @@ class TestEvaluateTrail:
             "trail_indicator_confirm": True,
         }))
         row = {"ticket": "T1", "pair": "EUR/USD", "audit_id": 1}
-        monkeypatch.setattr(tem, "_compute_chandelier_trail", lambda *a, **kw: 94.0)
+
+        def _fake_trail(*_a, **_kw):
+            _trail_state["mt5:aid:short"] = 94.0
+            return 94.0
+
+        monkeypatch.setattr(tem, "_compute_chandelier_trail", _fake_trail)
         monkeypatch.setattr(tem, "_check_indicator_confirmation", lambda *a, **kw: True)
 
         res = _evaluate_trail(
@@ -759,9 +771,9 @@ class TestEvaluateTrail:
             state_key="mt5:aid:short",
         )
 
-        assert res["action"] == "ratchet"
-        assert res["new_sl"] > 95.0
-        assert _trail_state["mt5:aid:short"] == pytest.approx(res["new_sl"])
+        assert res["action"] == "none"
+        assert res["reason"] == "first_trail_wrong_side"
+        assert "mt5:aid:short" not in _trail_state
 
     def test_breach_without_confirmation_ratchets_not_closes(self, monkeypatch):
         """Suggestion #6 corollary: if indicator says no, keep ratcheting (don't close)."""
@@ -991,6 +1003,167 @@ class TestDistinctExitTags:
         assert params[5] == 7
 
 
+# ── Stagnation time-stop (trailing mode) ─────────────────────────────────────
+
+class TestStagnationExit:
+    """Below activation, a trade going nowhere for half the style's max-hold
+    window closes instead of sitting at ~0R indefinitely (dead capital,
+    swap/weekend exposure)."""
+
+    def setup_method(self):
+        import timed_exit_monitor as tem
+        _trail_state.clear()
+        tem._peak_r_state.clear()
+
+    @staticmethod
+    def _tcfg(**stag_overrides):
+        return _get_timed_cfg(_cfg_fn({
+            "tp_mode": "trailing_atr",
+            "trail_activation_r": {"intraday": 1.0},
+            "stagnation_exit": {
+                "enabled": True,
+                "fraction_of_max_hold": 0.5,
+                "max_abs_r": 0.25,
+                **stag_overrides,
+            },
+        }))
+
+    # Intraday default window: 18 bars × H4 = 4320 min; half = 2160 min.
+
+    def test_stagnant_trade_closes_after_half_max_hold(self):
+        row = {"ticket": "T1", "pair": "EUR/USD", "audit_id": 1}
+        # +0.1R after 2200 min — stagnant.
+        res = _evaluate_trail(
+            row, "intraday", "LONG", 100.0, 90.0, 101.0, self._tcfg(),
+            mins_open=2200.0, state_key="mt5:aid:1",
+        )
+        assert res["action"] == "close"
+        assert res["reason"] == "stagnation"
+
+    def test_young_flat_trade_does_not_close(self):
+        row = {"ticket": "T1", "pair": "EUR/USD", "audit_id": 1}
+        res = _evaluate_trail(
+            row, "intraday", "LONG", 100.0, 90.0, 101.0, self._tcfg(),
+            mins_open=600.0, state_key="mt5:aid:1",
+        )
+        assert res["action"] == "none"
+        assert res["reason"] == "below_activation"
+
+    def test_progressing_trade_does_not_close(self):
+        row = {"ticket": "T1", "pair": "EUR/USD", "audit_id": 1}
+        # +0.5R > max_abs_r 0.25 — making progress, leave it alone.
+        res = _evaluate_trail(
+            row, "intraday", "LONG", 100.0, 90.0, 105.0, self._tcfg(),
+            mins_open=2200.0, state_key="mt5:aid:1",
+        )
+        assert res["action"] == "none"
+        assert res["reason"] == "below_activation"
+
+    def test_disabled_by_config(self):
+        row = {"ticket": "T1", "pair": "EUR/USD", "audit_id": 1}
+        res = _evaluate_trail(
+            row, "intraday", "LONG", 100.0, 90.0, 101.0, self._tcfg(enabled=False),
+            mins_open=2200.0, state_key="mt5:aid:1",
+        )
+        assert res["action"] == "none"
+        assert res["reason"] == "below_activation"
+
+    def test_not_applied_in_pre_activation_only_mode(self):
+        """Engine D profit-protect path must not inherit the stagnation stop."""
+        row = {"ticket": "0", "pair": "BTC/USDT", "audit_id": 9}
+        res = _evaluate_trail(
+            row, "intraday", "LONG", 100.0, 90.0, 101.0, self._tcfg(),
+            mins_open=2200.0, state_key="bybit:aid:9",
+            trail_mode="pre_activation_only",
+        )
+        assert res["action"] == "none"
+
+
+# ── Initial-risk R denominator (R-inflation regression) ──────────────────────
+
+class TestInitialRiskDenominator:
+    """R-multiples must be measured against the initial (audit) risk distance.
+
+    Regression for the R-inflation defect: once BE or a trail ratchet moves the
+    broker SL toward/past entry, a live-SL denominator collapses, inflating
+    current_r — premature chandelier activation and hair-trigger give-back
+    closes. The live SL may only serve as a fallback when the audit SL is
+    missing.
+    """
+
+    def setup_method(self):
+        import timed_exit_monitor as tem
+        _trail_state.clear()
+        tem._peak_r_state.clear()
+        tem._tp_cleared_state.clear()
+
+    def test_tightened_live_sl_does_not_inflate_r(self, monkeypatch):
+        import timed_exit_monitor as tem
+        tcfg = _get_timed_cfg(_cfg_fn({
+            "tp_mode": "trailing_atr",
+            "trail_activation_r": {"scalp": 0.3, "intraday": 0.5, "swing": 1.0},
+        }))
+        row = {"ticket": "T1", "pair": "EUR/USD", "audit_id": 1}
+        monkeypatch.setattr(tem, "_compute_chandelier_trail", lambda *a, **kw: 102.0)
+
+        # entry=100, audit SL=90 → true R at 104 = 0.4 < activation 0.5.
+        # Live SL ratcheted to 99 must NOT shrink the denominator to 1.0 (R=4.0).
+        res = _evaluate_trail(
+            row, "intraday", "LONG", 100.0, 90.0, 104.0, tcfg,
+            live_sl_for_r=99.0,
+        )
+
+        assert res["action"] == "none"
+        assert res["reason"] == "below_activation"
+        assert res["current_r"] == pytest.approx(0.4)
+
+    def test_live_sl_is_fallback_when_audit_sl_missing(self, monkeypatch):
+        import timed_exit_monitor as tem
+        tcfg = _get_timed_cfg(_cfg_fn({
+            "tp_mode": "trailing_atr",
+            "trail_activation_r": {"scalp": 0.3, "intraday": 0.5, "swing": 1.0},
+        }))
+        row = {"ticket": "T1", "pair": "EUR/USD", "audit_id": 1}
+        monkeypatch.setattr(tem, "_compute_chandelier_trail", lambda *a, **kw: 102.0)
+
+        # No audit SL → live SL 95 is the only risk reference: R at 110 = 2.0.
+        res = _evaluate_trail(
+            row, "intraday", "LONG", 100.0, 0.0, 110.0, tcfg,
+            live_sl_for_r=95.0,
+        )
+
+        assert res["action"] == "ratchet"
+        assert res["current_r"] == pytest.approx(2.0)
+
+    def test_post_be_sl_does_not_hair_trigger_giveback(self, monkeypatch):
+        """Peak/current R compared across ticks must share the same denominator."""
+        import timed_exit_monitor as tem
+        tcfg = _get_timed_cfg(_cfg_fn({
+            "tp_mode": "trailing_atr",
+            "trail_activation_r": {"intraday": 1.0},
+            "trail_giveback_r": {"intraday": 0.4},
+        }))
+        row = {"ticket": "T9", "pair": "EUR/USD", "audit_id": 9}
+        state_key = "mt5:aid:9"
+        monkeypatch.setattr(tem, "_compute_chandelier_trail", lambda *a, **kw: 101.0)
+
+        # Tick 1: entry=100, audit SL=90, price=115 → true R=1.5; BE SL at 100.5.
+        first = _evaluate_trail(
+            row, "intraday", "LONG", 100.0, 90.0, 115.0, tcfg,
+            state_key=state_key, live_sl_for_r=100.5,
+        )
+        assert first["action"] == "ratchet"
+        assert first["current_r"] == pytest.approx(1.5)
+
+        # Tick 2: pullback to 112 → true R=1.2; give-back 0.3 < 0.4 → no close.
+        second = _evaluate_trail(
+            row, "intraday", "LONG", 100.0, 90.0, 112.0, tcfg,
+            state_key=state_key, live_sl_for_r=100.5,
+        )
+        assert second["action"] == "ratchet"
+        assert second["current_r"] == pytest.approx(1.2)
+
+
 # ── Persistence (suggestions #5) ─────────────────────────────────────────────
 
 class TestStatePersistence:
@@ -1111,31 +1284,61 @@ class TestTrailingModeBreakeven:
         import timed_exit_monitor as tem
         tem._be_done.clear()
 
-    def test_trailing_be_moves_sl_when_due(self):
-        import timed_exit_monitor as tem
-        moves = []
+    @staticmethod
+    def _call(tem, moves, *, cur_price, mins=20.0, profit=5.0, overrides=None):
         tcfg = _get_timed_cfg(_cfg_fn({
             "breakeven_min_profit_r": 0.10,
             "breakeven_buffer_r": 0.05,
+            **(overrides or {}),
         }))
         tem._try_trailing_mode_breakeven(
             state_key="bybit:aid:1",
             row={"risk_amount": 10.0},
             style="intraday",
-            be_due_now=True,
-            profit=5.0,
+            cur_price=cur_price,
+            profit=profit,
             tcfg=tcfg,
             entry=100.0,
             sl_raw=90.0,
             direction="LONG",
             live_sl=91.0,
-            mins=20.0,
+            mins=mins,
             move_sl=lambda px: moves.append(px) or {"success": True},
             pair_label="ADA/USDT",
         )
+
+    def test_trailing_be_moves_sl_on_r_progress(self):
+        """+0.7R ≥ intraday arm threshold 0.6 → BE at entry + buffer."""
+        import timed_exit_monitor as tem
+        moves = []
+        self._call(tem, moves, cur_price=107.0)
         assert len(moves) == 1
         assert moves[0] == pytest.approx(100.5)
         assert "bybit:aid:1" in tem._be_done
+
+    def test_trailing_be_not_armed_below_arm_r_even_after_long_clock(self):
+        """+0.3R < arm 0.6 must NOT arm BE no matter how long the trade is open."""
+        import timed_exit_monitor as tem
+        moves = []
+        self._call(tem, moves, cur_price=103.0, mins=500.0)
+        assert moves == []
+        assert "bybit:aid:1" not in tem._be_done
+
+    def test_trailing_be_arms_on_r_progress_even_when_young(self):
+        """R-progress, not wall clock: a 2-minute-old trade at +0.7R arms BE."""
+        import timed_exit_monitor as tem
+        moves = []
+        self._call(tem, moves, cur_price=107.0, mins=2.0)
+        assert len(moves) == 1
+        assert moves[0] == pytest.approx(100.5)
+
+    def test_breakeven_arm_r_defaults(self):
+        tcfg = _get_timed_cfg(_cfg_fn())
+        assert tcfg["breakeven_arm_r"] == {
+            "scalp": pytest.approx(0.5),
+            "intraday": pytest.approx(0.6),
+            "swing": pytest.approx(0.7),
+        }
 
 
 class TestPreActivationOnlyMode:
