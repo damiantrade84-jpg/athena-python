@@ -217,3 +217,121 @@ class TestPercentOfPeakBudgetResolver:
             "trail_giveback_min_r": 0.30,
         })
         assert tem._giveback_budget_r_for(tcfg, "intraday", "mt5", 2.0) == pytest.approx(1.8)
+
+
+class TestPercentOfPeakGivebackClose:
+    def setup_method(self):
+        _clear_state()
+
+    def _frac_cfg(self):
+        return _cfg({
+            "trail_giveback_frac_of_peak": 0.40,
+            "trail_giveback_min_r": 0.30,
+            # Fixed budgets stay 0 (disabled), as in live config.
+            "trail_giveback_r": {"scalp": 0.0, "intraday": 0.0, "swing": 0.0},
+            "trail_giveback_r_by_venue": {},
+        })
+
+    def test_closes_after_40pct_of_peak_given_back(self, monkeypatch):
+        # Trail pinned far away so the close must come from the give-back path.
+        monkeypatch.setattr(tem, "_compute_chandelier_trail", lambda *a, **kw: 90.0)
+        tcfg = self._frac_cfg()
+        row = {"pair": "EURUSD", "ticket": 10, "audit_id": "p1"}
+        # Entry=100, SL=90 -> risk 10. Intraday activation 1.0R.
+
+        # Peak +2.0R (price 120): budget = 0.4 * 2.0 = 0.8R.
+        first = _evaluate_trail(row, "intraday", "LONG", 100.0, 90.0, 120.0, tcfg,
+                                state_key="pp_long", venue="mt5")
+        assert first["action"] == "ratchet"
+        assert first["peak_r"] == pytest.approx(2.0)
+
+        # Retreat to +1.4R (drop 0.6 < 0.8) -> still ratcheting.
+        mid = _evaluate_trail(row, "intraday", "LONG", 100.0, 90.0, 114.0, tcfg,
+                              state_key="pp_long", venue="mt5")
+        assert mid["action"] == "ratchet"
+
+        # Retreat to +1.1R (drop 0.9 >= 0.8) -> close, still well above BE.
+        out = _evaluate_trail(row, "intraday", "LONG", 100.0, 90.0, 111.0, tcfg,
+                              state_key="pp_long", venue="mt5")
+        assert out["action"] == "close"
+        assert out["reason"] == "peak_giveback"
+        assert out["current_r"] == pytest.approx(1.1)
+        assert out["current_r"] > 0
+
+    def test_giveback_fires_below_activation_after_armed_peak(self, monkeypatch):
+        # Scalp activation 0.7R; close level 0.7 - 0.30 = +0.4R sits BELOW the
+        # activation gate, so this exercises the new below_activation branch.
+        monkeypatch.setattr(tem, "_compute_chandelier_trail", lambda *a, **kw: 90.0)
+        tcfg = self._frac_cfg()
+        row = {"pair": "EURUSD", "ticket": 11, "audit_id": "p2"}
+        # Peak +0.7R (price 107): frac budget 0.28 -> floored to 0.30.
+        armed = _evaluate_trail(row, "scalp", "LONG", 100.0, 90.0, 107.0, tcfg,
+                                state_key="pp_scalp", venue="mt5")
+        assert armed["action"] == "ratchet"
+
+        # Drop 0.25R (price 104.5, current +0.45R < activation): under budget,
+        # no close — falls through to the below_activation watch.
+        hold = _evaluate_trail(row, "scalp", "LONG", 100.0, 90.0, 104.5, tcfg,
+                               state_key="pp_scalp", venue="mt5")
+        assert hold["action"] == "none"
+
+        # Drop 0.31R (price 103.9, current +0.39R; 0.30 exactly is float-edge)
+        # -> close just under the +0.4R level, still well above BE.
+        out = _evaluate_trail(row, "scalp", "LONG", 100.0, 90.0, 103.9, tcfg,
+                              state_key="pp_scalp", venue="mt5")
+        assert out["action"] == "close"
+        assert out["reason"] == "peak_giveback"
+        assert out["current_r"] == pytest.approx(0.39)
+        assert out["current_r"] > 0
+
+    def test_no_giveback_close_at_or_below_breakeven(self, monkeypatch):
+        # Gap scenario: armed peak, then price gaps red between ticks. The
+        # give-back close must NOT fire below BE — the (already BE'd/ratcheted)
+        # broker SL owns that case.
+        monkeypatch.setattr(tem, "_compute_chandelier_trail", lambda *a, **kw: 90.0)
+        tcfg = self._frac_cfg()
+        row = {"pair": "EURUSD", "ticket": 12, "audit_id": "p3"}
+        _evaluate_trail(row, "scalp", "LONG", 100.0, 90.0, 107.0, tcfg,
+                        state_key="pp_gap", venue="mt5")
+        out = _evaluate_trail(row, "scalp", "LONG", 100.0, 90.0, 99.0, tcfg,
+                              state_key="pp_gap", venue="mt5")
+        assert out["action"] == "none"
+
+    def test_short_side_percent_of_peak(self, monkeypatch):
+        monkeypatch.setattr(tem, "_compute_chandelier_trail", lambda *a, **kw: 200.0)
+        tcfg = self._frac_cfg()
+        row = {"pair": "BTCUSDT", "ticket": "pp4", "audit_id": "p4"}
+        # SHORT entry=100, SL=110, risk 10. Peak +3.0R (price 70): budget 1.2R.
+        _evaluate_trail(row, "intraday", "SHORT", 100.0, 110.0, 70.0, tcfg,
+                        state_key="pp_short", venue="bybit")
+        # Retreat to +1.7R (price 83, drop 1.3 >= 1.2) -> close.
+        out = _evaluate_trail(row, "intraday", "SHORT", 100.0, 110.0, 83.0, tcfg,
+                              state_key="pp_short", venue="bybit")
+        assert out["action"] == "close"
+        assert out["reason"] == "peak_giveback"
+
+    def test_engine_d_pre_activation_only_unaffected(self, monkeypatch):
+        # Engine D path: armed peak then retreat below activation must NOT
+        # close via the new branch when trail_mode="pre_activation_only".
+        monkeypatch.setattr(tem, "_compute_chandelier_trail", lambda *a, **kw: 90.0)
+        tcfg = self._frac_cfg()
+        row = {"pair": "EURUSD", "ticket": 13, "audit_id": "p5"}
+        # Seed an armed peak as the full path would have.
+        _peak_r_state["pp_d"] = 0.7
+        out = _evaluate_trail(row, "scalp", "LONG", 100.0, 90.0, 104.0, tcfg,
+                              state_key="pp_d", venue="mt5",
+                              trail_mode="pre_activation_only")
+        assert out["action"] == "none"
+
+    def test_frac_zero_keeps_legacy_fixed_behavior(self, monkeypatch):
+        # With frac 0 and fixed budgets present, behavior matches the existing
+        # fixed give-back (mt5/intraday 0.35 from the base _cfg fixture).
+        monkeypatch.setattr(tem, "_compute_chandelier_trail", lambda *a, **kw: 90.0)
+        tcfg = _cfg({"trail_giveback_frac_of_peak": 0.0})
+        row = {"pair": "EURUSD", "ticket": 14, "audit_id": "p6"}
+        _evaluate_trail(row, "intraday", "LONG", 100.0, 90.0, 120.0, tcfg,
+                        state_key="pp_legacy", venue="mt5")
+        out = _evaluate_trail(row, "intraday", "LONG", 100.0, 90.0, 116.0, tcfg,
+                              state_key="pp_legacy", venue="mt5")
+        assert out["action"] == "close"
+        assert out["reason"] == "peak_giveback"

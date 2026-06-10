@@ -1623,6 +1623,32 @@ def _evaluate_trail(
 
     if current_r < activation_r:
         peak_watch = _peak_r_state.get(state_key)
+        # Percent-of-peak give-back can owe a close BELOW the activation gate
+        # (close level = peak - budget; e.g. scalp peak 0.7R closes at 0.4R).
+        # Fire it here for trades whose persisted peak armed the give-back,
+        # but never at/below breakeven — a gap into the red is the broker
+        # SL's job (BE'd at breakeven_arm_r, ratcheted by the trail).
+        if (
+            trail_mode == "full"
+            and peak_watch is not None
+            and peak_watch >= activation_r
+            and current_r > 0
+        ):
+            giveback_r = _giveback_budget_r_for(tcfg, style, venue, peak_watch)
+            if giveback_r > 0 and (peak_watch - current_r) >= giveback_r:
+                log.info(
+                    f"[TIMED_EXIT] PEAK GIVE-BACK close (below activation): {pair} "
+                    f"style={style} dir={direction} peak_r={peak_watch:.2f} "
+                    f"current_r={current_r:.2f} giveback_r={giveback_r:.2f}"
+                )
+                return {
+                    "action": "close",
+                    "trail_level": _trail_state.get(state_key),
+                    "current_r": current_r,
+                    "peak_r": peak_watch,
+                    "giveback_r": giveback_r,
+                    "reason": "peak_giveback",
+                }
         if current_r > 0:
             log.info(
                 f"[TIMED_EXIT] below_activation watch: {pair} style={style} dir={direction} "
@@ -1674,7 +1700,7 @@ def _evaluate_trail(
         _peak_r_state.setdefault(state_key, prev_peak)
         peak_r = prev_peak
 
-    giveback_r = _giveback_r_for(tcfg, style, venue)
+    giveback_r = _giveback_budget_r_for(tcfg, style, venue, peak_r)
     giveback_close = (
         giveback_r > 0 and (peak_r - current_r) >= giveback_r and peak_r >= activation_r
     )
