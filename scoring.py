@@ -6,7 +6,7 @@ Depends on: config.CONFIG, indicators (calc_* functions).
 import logging
 import warnings
 from datetime import datetime, timezone
-from typing import Any, List, Optional, TypedDict
+from typing import Any, Callable, List, Optional, TypedDict
 
 from config import CONFIG
 from engine_a_groups import ENGINE_A_KNOWN_SCORE_GROUPS
@@ -837,6 +837,103 @@ def _pair_to_cluster() -> dict:
     }
 
 
+BTC_CORRELATION_MIN_BARS = 15
+
+_BTC_BENCHMARK_PAIR = {
+    "symbol": "BTCUSDT",
+    "display": "BTC/USDT",
+    "source": "binance",
+    "type": "crypto",
+}
+
+
+def extract_close_prices(candles: list | None) -> list[float] | None:
+    """Return chronological close prices from OHLCV candles, or None when empty."""
+    if not candles:
+        return None
+    closes = [float(c.get("close", 0)) for c in candles if c.get("close") is not None]
+    return closes or None
+
+
+def pair_crypto_btc_correlation_series(
+    asset_closes: list[float] | None,
+    benchmark_closes: list[float] | None,
+    *,
+    min_bars: int = BTC_CORRELATION_MIN_BARS,
+) -> tuple[list[float] | None, list[float] | None]:
+    """Return both close series only when each leg meets min_bars (atomic pair)."""
+    if not asset_closes or not benchmark_closes:
+        return None, None
+    if len(asset_closes) < min_bars or len(benchmark_closes) < min_bars:
+        return None, None
+    return asset_closes, benchmark_closes
+
+
+def resolve_btc_h4_benchmark_candles(
+    limit: int,
+    *,
+    config: dict,
+    fetch_signal: Callable[[dict, str, int], tuple[list | None, dict | None]],
+    fetch_default: Callable[[dict, str, int], list | None],
+) -> tuple[list | None, str | None]:
+    """Fetch BTC H4 candles for alt/BTC correlation with optional Binance fallback."""
+    from athena_app.services.crypto_signal_feed import crypto_signal_feed_fallback_enabled
+
+    try:
+        candles, meta = fetch_signal(_BTC_BENCHMARK_PAIR, "H4", int(limit))
+        if candles:
+            upstream = (meta or {}).get("upstream") if isinstance(meta, dict) else None
+            return candles, str(upstream or "signal_feed")
+        allow_fallback = crypto_signal_feed_fallback_enabled("A", config) or bool(
+            config.get("ENGINE_A_CRYPTO_DERIVATIVES_BINANCE_FALLBACK", False)
+        )
+        if allow_fallback:
+            fallback = fetch_default(_BTC_BENCHMARK_PAIR, "H4", int(limit))
+            if fallback:
+                return fallback, "binance_futures_fallback"
+    except Exception as exc:
+        log.debug("[CORR] BTC benchmark fetch failed: %s", exc)
+    return None, None
+
+
+def compute_btc_pearson_correlation(
+    asset_prices: list[float] | None,
+    benchmark_prices: list[float] | None,
+    *,
+    pair_display: str = "",
+) -> tuple[float, str]:
+    """Resolve alt/BTC Pearson r and a diagnostic source label for factorDiagnostics."""
+    if asset_prices is not None and benchmark_prices is not None:
+        min_len = min(len(asset_prices), len(benchmark_prices))
+        if min_len < BTC_CORRELATION_MIN_BARS:
+            return 0.0, "neutral_insufficient_overlap"
+        return (
+            _get_30d_correlation(
+                asset_prices=asset_prices,
+                benchmark_prices=benchmark_prices,
+            ),
+            "pearson",
+        )
+    if asset_prices is not None and benchmark_prices is None:
+        log.debug(
+            "[CORR] %s btc_benchmark_unavailable — neutral BTC correlation",
+            pair_display or "?",
+        )
+        return 0.0, "neutral_benchmark_missing"
+    if CONFIG.get("ENGINE_A_BTC_CORR_WARN_ON_MISSING_SERIES", False):
+        log.warning(
+            "no price series for %s correlation — returning 0.0 (neutral, no BTC bias). "
+            "Pass asset_prices + benchmark_prices for real Pearson r.",
+            pair_display or "unknown",
+        )
+    else:
+        log.debug(
+            "[CORR] %s no H4 price series for BTC correlation — neutral",
+            pair_display or "?",
+        )
+    return 0.0, "neutral_missing_series"
+
+
 def _get_30d_correlation(
     asset_prices: Optional[List[float]] = None,
     benchmark_prices: Optional[List[float]] = None,
@@ -919,12 +1016,8 @@ def _get_30d_correlation(
         return max(-1.0, min(1.0, r))
 
     # ── No price data: neutral correlation (no BTC bias adjustment) ───────────
-    log.warning(
-        "no price series for %s correlation — returning 0.0 (neutral, no BTC bias). "
-        "Pass asset_prices + benchmark_prices for real Pearson r.",
-        pair_display or "unknown",
-    )
-    return 0.0
+    corr, _source = compute_btc_pearson_correlation(None, None, pair_display=pair_display)
+    return corr
 
 
 def apply_correlation_cap(signals: list) -> list:
@@ -968,6 +1061,7 @@ def calc_confluence(
     structure_result: dict | None = None,
     asset_prices: list | None = None,
     benchmark_prices: list | None = None,
+    btc_benchmark_feed: str | None = None,
     style: str | None = None,
 ) -> dict:
     """Factor-based confluence using normalized indicators, regime-aware weights, and correlation filtering.
@@ -1005,19 +1099,20 @@ def calc_confluence(
 
     # FIX 2: BTC Bias Conditional on Correlation
     _btc_mult = 1.0
+    _btc_corr_diag: float | None = None
+    _btc_corr_source: str | None = None
+    _btc_benchmark_feed_diag = btc_benchmark_feed
     _dir = factor_result.get("direction")
     _pair_display = pair.get("display", "")
     if pair.get("type") == "crypto" and btc_bias and btc_bias != "neutral" and _dir is not None:
         if "BTC" not in _pair_display:
             # Only apply BTC bias if altcoin actually correlates with BTC
-            # Prefer real price-series correlation; fall back to heuristic labels
-            if asset_prices is not None and benchmark_prices is not None:
-                btc_corr = _get_30d_correlation(
-                    asset_prices=asset_prices,
-                    benchmark_prices=benchmark_prices,
-                )
-            else:
-                btc_corr = _get_30d_correlation(pair_display=_pair_display, btc_symbol="BTCUSDT")
+            btc_corr, _btc_corr_source = compute_btc_pearson_correlation(
+                asset_prices,
+                benchmark_prices,
+                pair_display=_pair_display,
+            )
+            _btc_corr_diag = btc_corr
             if btc_corr > 0.80:
                 # High correlation: BTC bias matters
                 if (btc_bias == "bullish" and _dir == "LONG") or \
@@ -1288,6 +1383,9 @@ def calc_confluence(
             "scoringStyle": factor_result.get("scoring_style"),
             "momentumTimeframe": factor_result.get("momentum_timeframe"),
             "regimeTimeframe": factor_result.get("regime_timeframe"),
+            "btcCorrelation": _btc_corr_diag,
+            "btcCorrelationSource": _btc_corr_source,
+            "btcBenchmarkFeed": _btc_benchmark_feed_diag,
         },
         "intermarketConfirmation": factor_result.get("intermarket_confirmation") or {},
     }

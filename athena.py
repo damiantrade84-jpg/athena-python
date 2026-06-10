@@ -3169,6 +3169,9 @@ from scoring import (  # noqa: E402
     _pair_exchange_closed,
     _build_event_risk,
     _classify_signal,
+    extract_close_prices,
+    pair_crypto_btc_correlation_series,
+    resolve_btc_h4_benchmark_candles,
 )
 
 from config import _json_safe  # noqa: E402
@@ -13426,27 +13429,24 @@ def analyze_pair(
     # Extract close-price series for real 30-day correlation (Bug 2 fix)
     _asset_prices = None
     _benchmark_prices = None
+    _btc_benchmark_feed = None
     if pair.get("type") == "crypto" and _cf_h4c:
-        _asset_prices = [float(c.get("close", 0)) for c in _cf_h4c if c.get("close") is not None]
-        if _asset_prices and len(_asset_prices) >= 15:
-            try:
-                _btc_candles, _btc_meta = _fetch_ab_crypto_signal_candles(
-                    {
-                        "symbol": "BTCUSDT",
-                        "display": "BTC/USDT",
-                        "source": "binance",
-                        "type": "crypto",
-                    },
-                    "H4",
-                    len(_asset_prices),
-                    engine="A",
-                )
-                if _btc_candles:
-                    _benchmark_prices = [
-                        float(c.get("close", 0)) for c in _btc_candles if c.get("close") is not None
-                    ]
-            except Exception as _btc_fetch_err:
-                log.debug("[CORR] BTC benchmark fetch failed: %s", _btc_fetch_err)
+        _asset_closes = extract_close_prices(_cf_h4c)
+        if _asset_closes and len(_asset_closes) >= 15:
+            _btc_candles, _btc_benchmark_feed = resolve_btc_h4_benchmark_candles(
+                len(_asset_closes),
+                config=CONFIG,
+                fetch_signal=lambda p, tf, lim: _fetch_ab_crypto_signal_candles(
+                    p, tf, lim, engine="A"
+                ),
+                fetch_default=fetch_candles,
+            )
+            _benchmark_closes = extract_close_prices(_btc_candles)
+            _asset_prices, _benchmark_prices = pair_crypto_btc_correlation_series(
+                _asset_closes, _benchmark_closes
+            )
+            if _asset_prices is None:
+                _btc_benchmark_feed = None
 
     # Wire bar_time from latest available candle so the equity session gate
     # (and any future bar-time-dependent factor) sees a real timestamp instead
@@ -13492,6 +13492,7 @@ def analyze_pair(
         intermarket_context=_intermarket_raw_context,
         asset_prices=_asset_prices,
         benchmark_prices=_benchmark_prices,
+        btc_benchmark_feed=_btc_benchmark_feed,
         style=_style,
     )
 

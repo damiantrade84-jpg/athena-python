@@ -10,7 +10,14 @@ import pytest
 
 from config import CONFIG
 from indicators import calc_bb, calc_rsi, calc_stochastic_rsi
-from scoring import _classify_signal, _get_30d_correlation, get_score_threshold
+from scoring import (
+    _classify_signal,
+    _get_30d_correlation,
+    compute_btc_pearson_correlation,
+    get_score_threshold,
+    pair_crypto_btc_correlation_series,
+    resolve_btc_h4_benchmark_candles,
+)
 
 
 def test_a_only_scan_tier_demotes_below_live_conviction_floor(monkeypatch):
@@ -344,12 +351,116 @@ def test_addon_feed_exception_surfaces_error_status(monkeypatch):
 
 
 def test_btc_correlation_missing_prices_returns_neutral(caplog):
+    caplog.set_level(logging.DEBUG, logger="athena")
+
+    corr, source = compute_btc_pearson_correlation(None, None, pair_display="ETH/USDT")
+
+    assert corr == pytest.approx(0.0)
+    assert source == "neutral_missing_series"
+    assert "returning 0.0 (neutral" not in caplog.text
+    assert "no H4 price series for BTC correlation" in caplog.text
+
+
+def test_btc_correlation_missing_prices_warns_when_config_enabled(caplog, monkeypatch):
     caplog.set_level(logging.WARNING, logger="athena")
+    monkeypatch.setitem(CONFIG, "ENGINE_A_BTC_CORR_WARN_ON_MISSING_SERIES", True)
+
+    corr, source = compute_btc_pearson_correlation(None, None, pair_display="POL/USDT")
+
+    assert corr == pytest.approx(0.0)
+    assert source == "neutral_missing_series"
+    assert "returning 0.0 (neutral" in caplog.text
+
+
+def test_btc_correlation_benchmark_missing_is_atomic(caplog):
+    caplog.set_level(logging.DEBUG, logger="athena")
+    asset = [float(i) for i in range(20)]
+
+    paired_asset, paired_bench = pair_crypto_btc_correlation_series(asset, None)
+    corr, source = compute_btc_pearson_correlation(asset, None, pair_display="POL/USDT")
+
+    assert paired_asset is None
+    assert paired_bench is None
+    assert corr == pytest.approx(0.0)
+    assert source == "neutral_benchmark_missing"
+    assert "btc_benchmark_unavailable" in caplog.text
+
+
+def test_resolve_btc_h4_benchmark_candles_falls_back_to_binance(monkeypatch):
+    monkeypatch.setitem(CONFIG, "ENGINE_AB_CRYPTO_SIGNAL_FEED_FALLBACK", True)
+    calls = {"default": 0}
+
+    def _signal(_pair, _tf, _limit):
+        return None, {"upstream": "bybit_linear_kline", "error": True}
+
+    def _default(_pair, _tf, _limit):
+        calls["default"] += 1
+        return [{"close": 100.0 + i} for i in range(20)]
+
+    candles, upstream = resolve_btc_h4_benchmark_candles(
+        20,
+        config=CONFIG,
+        fetch_signal=_signal,
+        fetch_default=_default,
+    )
+
+    assert calls["default"] == 1
+    assert candles is not None
+    assert len(candles) == 20
+    assert upstream == "binance_futures_fallback"
+
+
+def test_calc_confluence_btc_corr_diagnostics_for_alt(monkeypatch):
+    from scoring import calc_confluence
+
+    monkeypatch.setitem(CONFIG, "ADX_MISSING_BOTH_ABORT", False)
+    pair = {"type": "crypto", "display": "POL/USDT", "symbol": "POLUSDT"}
+    snap = {
+        "ema21": 110.0,
+        "ema50": 105.0,
+        "ema200": 100.0,
+        "rsi": 55.0,
+        "macdHist": 0.2,
+        "adx": 25.0,
+        "plusDI": 25.0,
+        "minusDI": 15.0,
+        "close": 1.0,
+        "atr": 0.05,
+    }
+    d1 = {"snap": dict(snap)}
+    h4 = {"snap": dict(snap)}
+    h1 = {"snap": dict(snap)}
+    candles = [{"close": 1.0 + i * 0.01, "high": 1.1, "low": 0.9, "open": 1.0, "vol": 100.0} for i in range(30)]
+
+    out = calc_confluence(
+        d1,
+        h4,
+        h1,
+        vr=1.0,
+        stoch={"k": [50.0], "d": [50.0]},
+        pair=pair,
+        btc_bias="bullish",
+        d1_candles=candles,
+        h4_candles=candles,
+        h1_candles=candles,
+        asset_prices=[float(c["close"]) for c in candles],
+        benchmark_prices=None,
+        btc_benchmark_feed=None,
+    )
+    fd = out["factorDiagnostics"]
+    assert fd.get("btcCorrelationSource") == "neutral_benchmark_missing"
+    assert fd.get("btcCorrelation") == pytest.approx(0.0)
+    assert fd.get("btcBenchmarkFeed") is None
+    assert out.get("btc_bias_applied") is None
+
+
+def test_legacy_get_30d_correlation_delegates_to_neutral_helper(caplog):
+    caplog.set_level(logging.DEBUG, logger="athena")
 
     corr = _get_30d_correlation(pair_display="ETH/USDT")
 
     assert corr == pytest.approx(0.0)
-    assert "returning 0.0 (neutral" in caplog.text
+    assert "no H4 price series for BTC correlation" in caplog.text
 
 
 def test_dead_engine_a_config_blocks_removed_from_runtime_config():
