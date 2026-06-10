@@ -6433,6 +6433,7 @@ def _compute_naked_analysis(
         atr = (
             float(atr_series[-1]) if atr_series and atr_series[-1] is not None else 0.0
         )
+        atr_source = "candle_atr_tf"
         if (
             pair_obj.get("type") == "crypto"
             and str(CONFIG.get("ENGINE_B_CRYPTO_LEVELS_FEED", "bybit")).lower() == "bybit"
@@ -6440,6 +6441,7 @@ def _compute_naked_analysis(
             bybit_atr = _bybit_atr_for_levels(pair_obj, resolved_style)
             if bybit_atr:
                 atr = float(bybit_atr)
+                atr_source = "bybit_levels"
             elif not bool(CONFIG.get("ENGINE_B_CRYPTO_LEVELS_SIGNAL_FEED_FALLBACK", False)):
                 atr = 0.0
 
@@ -6462,6 +6464,7 @@ def _compute_naked_analysis(
                 "index": 0.006,
             }
             atr = current_price * _atr_pct.get(pair_obj.get("type", ""), 0.01)
+            atr_source = "percent_fallback"
             log.info(
                 f"[NAKED-AI] {pair_obj.get('display')}: Using fallback ATR={atr} (type={pair_obj.get('type')})"
             )
@@ -6551,6 +6554,7 @@ def _compute_naked_analysis(
         res["style"] = resolved_style
         res["regime"] = regime_label
         res["is_forming"] = is_forming_b
+        res["atr_source"] = atr_source
         # Expose execution-resolved levels as final levels for consumers
         res["final_stop_loss"] = conf.get("execution_sl") or res.get("recommended_stop_loss")
         res["final_take_profit"] = conf.get("execution_tp") or res.get("recommended_take_profit")

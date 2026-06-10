@@ -433,6 +433,35 @@ def test_choch_uses_bos_reference_level_when_bos_context_present():
     assert out["choch_events"] == [{"type": "bearish", "level": 100.0}]
 
 
+def test_choch_dual_bos_keeps_only_more_recent_direction():
+    engine = NakedEngine()
+    highs = np.array([100.0, 102.0, 104.0, 103.0, 105.0])
+    lows = np.array([99.0, 100.0, 101.0, 98.0, 102.0])
+    closes = np.array([100.0, 101.5, 103.5, 104.5, 101.0])
+    swings = {"peak_idx": [0, 1, 2, 3], "trough_idx": [0, 1, 2, 3]}
+
+    out = engine._detect_choch(
+        highs,
+        lows,
+        atr=1.0,
+        closes=closes,
+        swings=swings,
+        bos_data={
+            "bos_bull": True,
+            "bos_bear": True,
+            "bos_reference_high": 100.0,
+            "bos_reference_low": 102.0,
+            "bos_bull_bar_index": 4,
+            "bos_bear_bar_index": 2,
+        },
+    )
+
+    assert out["choch_bear"] is True
+    assert out["choch_bull"] is False
+    assert out["choch_level"] == pytest.approx(102.0)
+    assert out["choch_events"] == [{"type": "bearish", "level": 102.0}]
+
+
 def test_engine_b_backtest_mt5_does_not_call_eodhd_or_yfinance_fallback(monkeypatch):
     calls = {"fetch_candles": [], "fetch_eodhd": 0, "fetch_yfinance": 0}
 

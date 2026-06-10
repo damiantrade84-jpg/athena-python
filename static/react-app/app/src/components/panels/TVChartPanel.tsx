@@ -1515,11 +1515,13 @@ function engineBMarkers(
     });
   }
   if (payload.bos_confirmed) {
+    const bosData = payload.bos_data as { bos_bull?: boolean; bos_bear?: boolean } | undefined;
+    const isBearBos = Boolean(bosData?.bos_bear) && !bosData?.bos_bull;
     markers.push({
       time: last.time,
-      position: 'belowBar',
-      color: 'rgba(250, 204, 21, 0.95)',
-      shape: 'arrowUp',
+      position: isBearBos ? 'aboveBar' : 'belowBar',
+      color: isBearBos ? 'rgba(239, 68, 68, 0.95)' : 'rgba(250, 204, 21, 0.95)',
+      shape: isBearBos ? 'arrowDown' : 'arrowUp',
       text: 'BOS',
     });
   }

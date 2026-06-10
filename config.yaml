@@ -1893,6 +1893,8 @@ SIGNAL_EXECUTABLE_FALSE_WHEN_FRESHNESS_BLOCKS: true
 # - ENGINE_B_USE_FORMING_FOR_STRUCTURE: chart-overlay label only (routes_market_data); does NOT
 #   control structure stripping — use ENGINE_B_STRIP_FORMING_STRUCT for that.
 ENGINE_B_STRIP_FORMING_STRUCT: true
+# Fail-closed: skip Engine B structure scoring when role TF candles are stale (mirrors Engine A pre-scoring gate).
+ENGINE_B_SCAN_FRESHNESS_GATE: true
 ENGINE_B_STRUCT_CONFIRMED_MIN_BARS: 20
 ENGINE_B_SWEEP_LOOKBACK_BARS: 5
 ENGINE_B_ALLOW_SYNTHETIC_FALLBACK_RR_TP: true

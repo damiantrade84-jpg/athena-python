@@ -73,6 +73,107 @@ def _last_atr_from_candles(candles: list, period: int = 14) -> float:
     return float(atr_series[-1]) if atr_series else 0.0
 
 
+def _engine_b_scan_freshness_stale_tfs(
+    pair: dict,
+    d1: list | None,
+    h4: list | None,
+    h1: list | None,
+    *,
+    config: dict | None = None,
+) -> tuple[list[str], dict[str, dict]]:
+    """Return stale TF labels for Engine B scan when freshness gate is enabled."""
+    cfg = config or CONFIG
+    if not bool(cfg.get("ENGINE_B_SCAN_FRESHNESS_GATE", True)):
+        return [], {}
+
+    try:
+        from athena_app.services.data_freshness import (
+            pre_scoring_allows_confirmed_only_stale_1,
+            pre_scoring_allows_intraday_calendar_gap,
+        )
+        from athena_app.services.market_state import candle_freshness_diagnostic
+    except Exception:
+        return [], {}
+
+    stale_tfs: list[str] = []
+    freshness_diag: dict[str, dict] = {}
+    pair_type = pair.get("type", "")
+    is_forex_stock = pair_type in (
+        "forex",
+        "stock",
+        "index",
+        "commodity",
+        "etf",
+        "etf_bond",
+    )
+    allow_confirmed_only_stale_1 = pre_scoring_allows_confirmed_only_stale_1(pair)
+
+    for tf, candles in (("D1", d1), ("H4", h4), ("H1", h1)):
+        diag = candle_freshness_diagnostic(
+            pair,
+            tf,
+            candles or [],
+            source=pair.get("source"),
+        )
+        freshness_diag[tf] = diag
+        sev = diag.get("stalenessSeverity", "")
+        if not sev or sev == "fresh":
+            continue
+
+        if allow_confirmed_only_stale_1 and sev == "stale_1_bucket":
+            continue
+
+        if pre_scoring_allows_intraday_calendar_gap(pair, tf, diag):
+            continue
+
+        if sev in ("d1_calendar_gap_policy_ok", "intraday_calendar_gap_policy_ok"):
+            continue
+
+        if is_forex_stock and tf == "D1" and sev == "stale_multi_bucket":
+            import datetime as _dt_mod
+
+            utc_weekday = _dt_mod.datetime.now(_dt_mod.timezone.utc).weekday()
+            bucket_lag = int(diag.get("bucketLag") or 99)
+            if utc_weekday in (0, 5, 6) and bucket_lag <= 4:
+                continue
+
+        if is_forex_stock and tf == "D1" and sev == "d1_calendar_gap_policy_ok":
+            import datetime as _dt_mod
+
+            utc_weekday = _dt_mod.datetime.now(_dt_mod.timezone.utc).weekday()
+            if utc_weekday in (0, 5, 6):
+                continue
+
+        stale_tfs.append(f"{tf}:{sev}")
+
+    if pair.get("type") == "crypto" and d1:
+        try:
+            from scalp_engine import _coerce_utc_datetime, _current_utc_datetime
+
+            d1_fresh_diag = freshness_diag.get("D1") or {}
+            d1_bucket_lag = int(d1_fresh_diag.get("bucketLag") or 0)
+            d1_sev = str(d1_fresh_diag.get("stalenessSeverity") or "")
+            genuine_multi_bucket = (
+                d1_bucket_lag >= 2
+                or d1_sev in ("stale_multi_bucket", "missing_current_bucket")
+            )
+            last_candle = d1[-1] if d1 else None
+            if last_candle and genuine_multi_bucket:
+                last_time = last_candle.get("time")
+                if last_time:
+                    last_ts = _coerce_utc_datetime(last_time)
+                    if last_ts:
+                        now = _current_utc_datetime()
+                        age_hours = (now - last_ts).total_seconds() / 3600
+                        max_hours = cfg.get("CRYPTO_D1_MAX_STALE_HOURS", 25)
+                        if age_hours > max_hours:
+                            stale_tfs.append(f"D1:crypto_stale_{int(age_hours)}h")
+        except Exception:
+            pass
+
+    return stale_tfs, freshness_diag
+
+
 def _fetch_ab_crypto_signal_candles(runtime, pair: dict, tf: str, limit: int):
     """Fetch shared Engine A/B scan candles with optional crypto Bybit experiment."""
     if (
@@ -1807,6 +1908,32 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict[s
                     )
 
                     if zone_candles_b and entry_candles_b and atr_candles_b:
+                        _stale_b_tfs, _fresh_diag_b = _engine_b_scan_freshness_stale_tfs(
+                            pair, d1, h4, h1
+                        )
+                        if _stale_b_tfs:
+                            _fresh_reason = "STALE_DATA_ENGINE_B:" + ",".join(_stale_b_tfs)
+                            sig_a["engine_b_error"] = _fresh_reason
+                            sig_a["engine_b_freshness_blocked"] = True
+                            sig_a["engine_b_freshness_diag"] = _fresh_diag_b
+                            _eb_funnel_extras["engine_b_skip_stage"] = "freshness_gate"
+                            _eb_funnel_extras["engine_b_freshness_stale_tfs"] = _stale_b_tfs
+                            log.warning(
+                                "[SCAN+B] %s freshness gate block: %s",
+                                pair.get("display", "?"),
+                                _fresh_reason,
+                            )
+                            _attach_engine_b_scan_gate_funnel(
+                                sig=sig_a,
+                                pair=pair,
+                                score_group=_pair_score_group,
+                                resolved_style=resolved_style_b,
+                                style_profile_b=style_profile_b,
+                                conf_b=_eb_snap["conf"],
+                                res_b=_eb_snap["res"],
+                                extras=dict(_eb_funnel_extras),
+                            )
+                            return pair, sig_a, None
                         if engine_b_forex_asian_session_blocks_bar(
                             entry_candles_b,
                             ptype,

@@ -2383,6 +2383,24 @@ class NakedEngine:
                     if choch_bear:
                         choch_level = ref_low
                         choch_events.append({"type": "bearish", "level": ref_low})
+                # Dual BOS in lookback can set both flags; keep CHoCH for the more recent BOS only.
+                if choch_bull and choch_bear:
+                    def _bos_bar_idx(key: str) -> int:
+                        try:
+                            raw = bos_data.get(key)
+                            return int(raw) if raw is not None else -1
+                        except (TypeError, ValueError):
+                            return -1
+
+                    _bear_bos_idx = _bos_bar_idx("bos_bear_bar_index")
+                    _bull_bos_idx = _bos_bar_idx("bos_bull_bar_index")
+                    if _bull_bos_idx > _bear_bos_idx:
+                        choch_bull = False
+                        choch_events = [e for e in choch_events if e.get("type") != "bullish"]
+                    else:
+                        choch_bear = False
+                        choch_events = [e for e in choch_events if e.get("type") != "bearish"]
+                    choch_level = choch_events[-1]["level"] if choch_events else None
                 if bos_data.get("bos_bull") or bos_data.get("bos_bear"):
                     return {
                         "choch_bull": choch_bull,
