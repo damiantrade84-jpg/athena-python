@@ -17,7 +17,7 @@ signal/autopilot entry → risk gates → sizing → SL/TP construction → brok
 2. SL/TP direction, precision, tighten-only rules, broker constraints.
 3. Kill switch and freshness reachable on modified branches.
 4. AI cannot approve or execute; deterministic gates remain authoritative.
-5. Targeted tests for every new branch; suggest concrete test names if missing.
+5. Name **one** targeted test per changed branch; suggest a concrete test name if missing. Run only that file after patch (`pytest path/to/test_file.py -q`).
 
 ## Before editing
 

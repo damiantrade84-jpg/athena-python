@@ -26,9 +26,10 @@ Also invoke when the user says: parity, chart matches scoring, period mismatch, 
 1. **Build closed-loop map** — one row per invariant (RSI period, EMA periods, ATR, VWAP gate, overlay freshness, score_group). See checklist table.
 2. **Trace producer → consumer** with file evidence at each hop. **Do not stop at "field exists in interface".**
 3. **Run adversarial greps** from checklist (hardcoded 14/21, sent-but-unused fields).
-4. **Audit tests** — would they pass if both sides were wrong the same way? Add per-`score_group` assertions if missing.
+4. **Audit tests** (read source) — would they pass if both sides were wrong the same way? Add per-`score_group` assertions if missing.
 5. **Compare live / backtest / chart** paths when indicators change.
 6. **Emit verdict** using checklist template. CRITICAL drift → **FAIL**, not "looks good".
+7. **Pytest (optional, post-fix only)** — if indicators changed, run at most **one** parity file (e.g. `tests/test_chart_api_indicator_period_parity.py`); do not run every file in the checklist.
 
 ## Non-negotiable rules
 
@@ -47,5 +48,7 @@ End with: Coverage map, masked-test risks, Verdict (**PASS** / **PASS WITH GAPS*
 ## Boundaries
 
 - Paper-only; no execution-gate weakening.
-- Do not run full test suite or backtest matrix unless requested.
+- Do not run full test suite, multi-file pytest batches, or backtest matrix unless requested.
+- Greps and source reads are required during parity review; pytest is post-fix only, capped to one file.
+- Score-group spot checks: prefer parametrized assertions in the cited test file — not running multiple parity files.
 - Pair with `athena-ui-chart-review` for Vision/prompt-only work; pair with `athena-engine-parity` for provider/candle/ATR provenance deep dives.

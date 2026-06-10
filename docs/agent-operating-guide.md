@@ -19,7 +19,7 @@
 - Claude Code project skills belong under `.claude/skills/<skill-name>/SKILL.md`.
 - Old audit docs, task artifacts, historical findings, and archived reports are historical context. Do not load them unless the user explicitly asks for a historical review, full audit comparison, or a named artifact.
 - Engine A, Engine B, Engine C, and Engine D are independent unless the task explicitly concerns consensus, blending, or cross-engine coordination.
-- Run only tests directly related to the touched behavior. Do not run the full test suite or unrelated engine/UI/backtest tests unless explicitly requested or shared infrastructure was changed.
+- Run only tests directly related to the touched behavior. Do not run the full test suite or unrelated engine/UI/backtest tests unless explicitly requested or shared infrastructure was changed. See **`AGENTS.md` Test & token budget** for the canonical one-file-per-pass rule.
 - Do not read `tasks/`, old audit reports, generated logs, backtest artifacts, or historical skill references at startup. Read them only when the user names them or the current task requires that exact artifact.
 - Use subagents, Superpowers, or other workflow helpers only when the task benefits from parallel investigation or a specialized workflow and the active tool policy allows it. Do not use them to broaden a small fix into a full audit.
 
@@ -345,7 +345,7 @@ Use the manual audit skill only when the user explicitly asks for an audit, bug 
 
 All audits and code reviews must follow **`docs/codex-code-review-discipline.md`**: build a coverage map before any verdict, no summary-only reviews, run the negative-check pass, and say **"Coverage incomplete"** with missing areas when proof is insufficient.
 
-For audit, verification, shipped-change validation, or "make sure nothing was missed" asks, invoke **`.agents/skills/athena-anti-miss-review/SKILL.md`** (review map, parallel lanes when multi-surface, required search pass, adversarial pass, structured verdict). Lane definitions: **`references/review-lanes.md`** under that skill.
+For audit, verification, shipped-change validation, or "make sure nothing was missed" asks, invoke **`.agents/skills/athena-anti-miss-review/SKILL.md`** (review map, parallel lanes when multi-surface and explicitly scoped, required search pass, adversarial pass, structured verdict). Parallel lanes are for explicit audit asks only — not single-file fixes. Lane definitions: **`references/review-lanes.md`** under that skill. No pytest during audit phase; see **`AGENTS.md` Test & token budget**.
 
 ### Implementation mode
 

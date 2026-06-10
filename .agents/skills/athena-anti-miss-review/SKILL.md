@@ -5,7 +5,7 @@ description: Use when the user asks for audit, review, verification, shipped-cha
 
 # Anti-miss review protocol
 
-Follow repo `AGENTS.md` safety rules and `docs/codex-code-review-discipline.md`. Use this skill for reviews where missing a defect is costly.
+Follow repo `AGENTS.md` safety rules, **Test & token budget**, and `docs/codex-code-review-discipline.md`. Use this skill for reviews where missing a defect is costly.
 
 ## Mandatory first pass
 
@@ -20,17 +20,17 @@ Do not produce a final pass/fail verdict until the review map exists.
 
 ## Parallel lane review (multi-surface audits)
 
-When the change touches more than one engine, UI/API, or test surface, **spawn one subagent per lane** (run lanes in parallel when the tool supports it):
+When the change touches more than one engine, UI/API, or test surface, **spawn one subagent per in-scope lane only** (run lanes in parallel when the tool supports it). Do not spawn all five lanes for single-file fixes.
 
 1. **Engine A** — factor/forex scoring, Engine A scan payloads
 2. **Engine B** — market structure, zones, Engine B overlays
 3. **Engine D / Scalp Workbench** — scalp engine, workbench UI/API
 4. **UI / API contracts** — routes, React consumers, review payloads
-5. **Tests / imports** — targeted pytest, forbidden `athena.py` imports, stale assertions
+5. **Tests / imports** — **read** test files and map coverage; forbidden `athena.py` imports, stale assertions. **Do not run pytest** during review — run only after a fix, one file per fix.
 
 Lane entry points and chain expectations: **`references/review-lanes.md`**.
 
-Each subagent returns **coverage**, **findings**, and **not-reviewed areas**. **Consolidate only after all lanes return** (or are BLOCKED with reason). Merge maps, run global search/adversarial passes, then emit final output.
+Each subagent returns **coverage**, **findings**, and **not-reviewed areas**. **Consolidate only after all lanes return** (or are BLOCKED with reason). Merge maps, run global search/adversarial passes (`rg`, not pytest), then emit final output.
 
 For single-lane scoped reviews, one reviewer may cover the lane — still fill the review map and list NOT REVIEWED explicitly.
 
@@ -119,3 +119,5 @@ Do not use **PASS** if any required execution path or required lane was not insp
 - Do not patch during review unless the user requests fix-first work.
 - Do not load `tasks/`, old audits, or generated artifacts unless named by the user.
 - Do not change thresholds or strategy semantics during a review unless explicitly requested.
+- **No pytest during review/audit phase.** Run pytest only after applying a fix — at most **one** test file per fix (`pytest path/to/test_file.py -q`).
+- Do not run `pytest tests/`, broad `-k` globs across modules, or full frontend test suites unless the user explicitly requests.

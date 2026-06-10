@@ -22,6 +22,7 @@ Do not use `.cursor/**`, `.agents/**`, or global/user-profile agent skills for t
 - Start with the files relevant to the user's request. The repository map below lists common entry points only; inspect additional current source files when needed to verify the real execution path.
 - Do not load `tasks/`, old audit reports, generated logs, backtest artifacts, historical findings, or archived diagnostics unless the user names them or the current issue directly requires them.
 - Run only targeted tests for the changed behavior. Never run full test suites unless explicitly requested.
+- **Test & token budget:** at most **one** pytest file per verification pass (`pytest path/to/test_file.py -q` or `::test_name`). No pytest during audit/review phase — run only after a fix. Full audit commands in `.claude/commands/audit-*.md` inherit this budget.
 - Evidence first. Inspect current source before making claims.
 - If unsure, say `not verified` instead of guessing.
 
@@ -112,7 +113,7 @@ For each field: find **write site** (API) and **read site** (compute or UI). Wri
 | TRXUSDT (crypto) | 12 |
 | Default-tier index/stock | 14 |
 
-Assert chart API last-candle RSI == `calc_indicators_with_normalized(..., score_group=group).snap.rsi`. Regression tests: `tests/test_chart_api_indicator_period_parity.py`, `tests/test_engine_a_crypto_chart_parity.py`.
+Assert chart API last-candle RSI == `calc_indicators_with_normalized(..., score_group=group).snap.rsi`. Regression test references: `tests/test_chart_api_indicator_period_parity.py`, `tests/test_engine_a_crypto_chart_parity.py` — cite by name; run **one** file post-fix only (prefer `test_chart_api_indicator_period_parity.py` unless crypto-specific).
 
 ### Reference incident (TV Chart, 2026)
 
@@ -147,7 +148,7 @@ Codex/Cursor extended checklist (when user asks): `.agents/skills/athena-cross-s
 3. Trace producer-to-consumer behavior before editing.
 4. If chart/scoring/indicators are in scope, run the **cross-surface parity** closed-loop checklist.
 5. Apply the smallest safe patch.
-6. Run the smallest relevant compile/test command (include per-`score_group` parity tests when indicators changed).
+6. Run the smallest relevant compile/test command — at most **one** pytest file (or `::test_name`). When indicators changed, prefer `tests/test_chart_api_indicator_period_parity.py` unless the fix is crypto-specific.
 7. Report what changed, what passed, masked-test risks, and what was not verified.
 
 

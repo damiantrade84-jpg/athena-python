@@ -99,9 +99,14 @@ regressed the main metrics: SQN `-0.55 -> -0.64`, expectancy `-0.066R ->
 
 ## Tests
 
+Targeted only (agents and humans — do not run the full suite unless explicitly requested):
+
 ```bash
-.\.venv\Scripts\python.exe -m pytest tests/ -v
+.\.venv\Scripts\python.exe -m pytest path/to/test_file.py -q
+.\.venv\Scripts\python.exe -m pytest path/to/test_file.py::test_name -q
 ```
+
+Full suite (`pytest tests/ -v`) only when you explicitly need it — not the default for routine changes.
 
 ---
 

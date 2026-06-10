@@ -24,6 +24,14 @@ Athena / Sentinel Pro v4: multi-engine trading analysis and execution-support. *
 
 **Do not run** full test suite, backtest matrix, long research jobs, live trading, or broker actions unless explicitly requested.
 
+## Test & token budget (all agents)
+
+- **Default:** `pytest path/to/test_file.py -q` or `pytest path/to/test_file.py::test_name -q` — at most **one file** per verification pass unless the user explicitly requests more.
+- **Never** run `pytest tests/`, broad `-k` globs across modules, full frontend test suites, or backtest matrix unless explicitly requested or shared infrastructure changed.
+- **Audits/reviews:** read test source files; **do not run pytest** during the audit phase. Run pytest only after applying a fix, and only the **one** test file that proves that fix.
+- **Parity/chart work:** cite parity tests by name; run **one** parity file if indicators changed — not all files in the checklist.
+- **Completion claims:** "tests pass" requires fresh output from the targeted command above — not a full-suite run.
+
 ## Output contract
 
 Every final response includes: summary, files inspected/changed, tests/checks run, remaining risks or `not verified` areas.
@@ -36,7 +44,7 @@ Do not say "looks good", "no issues found", or "implemented correctly" without t
 
 Every finding: severity, file path, function/class/route/component, line anchor, why it is real, expected behavior, minimal fix, regression test required. Current source and tests are proof — not memory, old audits, prior summaries, or comments.
 
-Multi-surface audits: spawn **parallel lane subagents** (Engine A, Engine B, Engine D/Scalp Workbench, UI/API, tests/imports); each returns coverage, findings, and not-reviewed areas; **consolidate only after all return**. Search pass, adversarial pass, and verdict rules: **`athena-anti-miss-review`**. Summary checklist: **`docs/codex-code-review-discipline.md`**.
+Multi-surface audits (only when the user explicitly asks for audit/review/verification): spawn **parallel lane subagents** scoped to the change (Engine A, Engine B, Engine D/Scalp Workbench, UI/API, tests/imports); each returns coverage, findings, and not-reviewed areas; **consolidate only after all return**. Do not spawn all lanes for single-file fixes. Search pass, adversarial pass, and verdict rules: **`athena-anti-miss-review`**. Summary checklist: **`docs/codex-code-review-discipline.md`**. Audit skills inherit the **Test & token budget** above.
 
 ## Repo skills (on demand)
 
@@ -44,8 +52,8 @@ Discover under `.agents/skills/<name>/SKILL.md`. Load a skill only when the task
 
 | Skill | Invoke for |
 |-------|------------|
-| `athena-audit` | Full audit, bug hunt, strict findings, e2e trace, producer-to-consumer contract review |
-| `athena-anti-miss-review` | Audit, verification, shipped-change validation, missed-issue detection, regression check, "nothing missed" |
+| `athena-audit` | Full audit, bug hunt, strict findings, e2e trace, producer-to-consumer contract review (inherits Test & token budget) |
+| `athena-anti-miss-review` | Audit, verification, shipped-change validation, missed-issue detection, regression check, "nothing missed" (inherits Test & token budget) |
 | `athena-engine-parity` | Live/backtest or chart parity across engines, candles, ATR, scoring drift, UI payloads |
 | `athena-cross-surface-parity` | Closed-loop audit: config → resolver → API → UI → tests; catch sent-but-unused fields, hardcoded period drift, masked parity tests (Engine A ↔ chart ↔ backtest) |
 | `athena-research-lab` | `athena_research/`, vectorbt lab, backtest discovery, indicator calibration |

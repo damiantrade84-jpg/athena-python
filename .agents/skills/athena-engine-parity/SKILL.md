@@ -39,6 +39,7 @@ Per finding: severity, file/anchor, execution path, expected vs actual, minimal 
 
 - No threshold changes unless explicitly requested.
 - Do not collapse Engine A/B/C/D responsibilities.
-- No long backtest matrix unless requested.
-- Every fix needs a regression test and proof of no unintended scoring change.
+- No long backtest matrix, multi-file pytest batches, or `pytest tests/` unless the user explicitly requests.
+- Every fix needs one named regression test; run only that file after patch. Proof of no unintended scoring change via source trace, not broad test runs.
+- **No pytest during parity investigation** — read tests for coverage; run pytest only post-fix, one file per fix.
 - Current source and tests are proof — not memory or old audit notes.

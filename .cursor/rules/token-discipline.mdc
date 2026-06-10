@@ -1,0 +1,15 @@
+---
+description: Test and token budget for Cursor agents. Caps pytest scope and audit subagent spawning.
+alwaysApply: true
+---
+
+# Test & token budget
+
+Follow `AGENTS.md` **Test & token budget** section. Summary:
+
+- **Default verification:** `pytest path/to/test_file.py -q` or `::test_name` — at most **one file** per pass unless the user explicitly requests more.
+- **Never** run `pytest tests/`, broad `-k` globs across modules, full frontend test suites, or backtest matrix unless explicitly requested.
+- **Audits/reviews:** read test source files; **no pytest during audit phase**. Run pytest only after a fix — one file per fix.
+- **Parallel audit subagents:** only when the user explicitly asks for audit/review/verification. Do not spawn all lanes for single-file fixes.
+- **`CLAUDE.md`** is Claude Code only — non-authoritative in Cursor (see `athena-agent-guardrails.mdc`).
+- **Completion claims:** targeted pytest output satisfies verification; a full-suite run is not required.

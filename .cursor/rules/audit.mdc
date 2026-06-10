@@ -19,14 +19,16 @@ Do not stop at the happy path. Do not patch before producing a bug list unless e
 An audit is complete only when the response includes:
 1. Files and functions inspected
 2. Execution paths traced
-3. Commands/tests run
+3. Commands run (e.g. `rg` greps); **tests run (if any)** — pytest only post-fix, at most one file per fix
 4. Areas not verified (explicitly listed)
 5. Ranked bug list with evidence
-6. Negative-case tests recommended or added
+6. Negative-case tests **recommended by name** (do not require running all scenarios)
+
+During the audit phase: **read** test source files for coverage; **do not run pytest**. See `AGENTS.md` Test & token budget.
 
 For each bug: severity, file/function, producer, consumer, trigger, actual behavior, expected behavior, impact, minimal fix, test to prove it.
 
-## Mandatory checks (run all of these)
+## Mandatory checks (verify by reading/tracing)
 
 ### 1. Fail-closed defaults
 Verify the system rejects by default when any gate/confirmation/score/approval field is absent, null, false, stale, or malformed.
@@ -61,6 +63,6 @@ Inspect: signal producer → scoring output → consensus → execution guard �
 Engine-internal correctness is not enough.
 
 ### 7. Negative-case tests
-Recommend or add tests for: omitted required flags, failed confirmations, stale candles, zero/invalid ATR, missing broker symbol, missing SL/TP levels, rejected broker updates, duplicate signal, bot restart recovery, kill-switch active.
+Recommend **by name** (one test per confirmed bug) for: omitted required flags, failed confirmations, stale candles, zero/invalid ATR, missing broker symbol, missing SL/TP levels, rejected broker updates, duplicate signal, bot restart recovery, kill-switch active. Run pytest only after a fix — at most one file per fix.
 
 Label any unchecked area as `not verified`.

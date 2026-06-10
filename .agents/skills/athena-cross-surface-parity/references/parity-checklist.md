@@ -80,9 +80,14 @@ UI labels (`RSI14`, `ATR14`, `EMA21`) must match actual computation period. Dyna
 
 ---
 
+## Pytest budget
+
+- During parity **review**: greps and source reads are required; **do not run pytest**.
+- After a **fix** that changes indicators: run at most **one** parity file — prefer `tests/test_chart_api_indicator_period_parity.py` unless the fix is crypto-specific (`tests/test_engine_a_crypto_chart_parity.py`). Do not run every file in the surface map table.
+
 ## Score-group spot checks (minimum)
 
-Parametrize at least these pairs in tests or manual verification:
+Parametrize at least these pairs in tests (read or extend one cited file) or manual verification:
 
 | Pair | score_group | asset_type | RSI period (typical) |
 |------|-------------|------------|----------------------|

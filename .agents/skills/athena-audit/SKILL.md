@@ -5,7 +5,7 @@ description: Use for explicit full audit, bug hunt, strict findings report, exec
 
 # Athena audit
 
-Manual, evidence-first audit. Follow repo `AGENTS.md` safety rules.
+Manual, evidence-first audit. Follow repo `AGENTS.md` safety rules and **Test & token budget**.
 
 ## Before starting
 
@@ -22,7 +22,7 @@ Manual, evidence-first audit. Follow repo `AGENTS.md` safety rules.
 4. Verify fail-closed behavior with code evidence, not assumptions.
 5. Run the **negative-check pass** from `docs/codex-code-review-discipline.md`.
 6. Separate confirmed bugs from suspicious patterns.
-7. Propose minimal fixes only after findings; recommend focused regression tests.
+7. Propose minimal fixes only after findings; name **one** regression test per confirmed bug. Run pytest only after a fix — at most one file per fix.
 
 Do not say "looks good", "no issues found", or "implemented correctly" without traced coverage. If incomplete, say **"Coverage incomplete"** and list missing files/paths/lanes.
 
@@ -42,4 +42,5 @@ Label any unchecked mandatory area as `not verified`. End with Coverage / Findin
 - Do not broaden a targeted audit into a whole-repo audit.
 - Do not load `tasks/`, old audits, or generated artifacts unless named by the user.
 - Do not change thresholds or strategy semantics during an audit unless explicitly requested.
+- **No pytest during audit phase.** Read test source files for coverage; run pytest only after a fix — at most **one** test file per fix.
 - Current source and tests are proof — not memory, prior summaries, or comments alone.

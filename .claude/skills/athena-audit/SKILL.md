@@ -63,7 +63,14 @@ Read `references/invariants.md` for the full list of system invariants. All inva
 5. Verify fail-closed behavior. Do not infer it.
 6. Separate confirmed bugs from suspicious patterns.
 7. Propose minimal fixes only after evidence is listed.
-8. Recommend focused regression tests for each confirmed bug.
+8. Name **one** regression test per confirmed bug. Run pytest only after a fix — at most one file per fix.
+
+## Test & token budget
+
+- **No pytest during audit phase.** Read test source files for coverage.
+- After a fix: `pytest path/to/test_file.py -q` — at most **one** file per fix.
+- Never run `pytest tests/`, broad `-k` globs, or full frontend test suites unless the user explicitly requests.
+- Scoped audits in `.claude/commands/audit-*.md` inherit this budget.
 
 ## Mandatory contract checks
 

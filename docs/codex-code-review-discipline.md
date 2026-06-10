@@ -63,6 +63,10 @@ When reviewing Athena engine logic, inspect the full relevant chain:
 
 For multi-surface audits, spawn one subagent per lane (Engine A, Engine B, Engine D/Scalp Workbench, UI/API contracts, tests/imports). Each lane returns coverage, findings, and not-reviewed areas. Consolidate only after all lanes return. Lane details: `.agents/skills/athena-anti-miss-review/references/review-lanes.md`.
 
+## Test runs during review
+
+Reviews verify tests by **reading** test source files and mapping coverage. **Do not run pytest** during the audit/review phase. After applying a fix, run at most **one** test file per fix (`pytest path/to/test_file.py -q`). See **`AGENTS.md` Test & token budget**.
+
 ## Source of truth
 
 Do not rely on memory, prior summaries, old audit notes, or comments in code as proof. **Current source files and current tests** are the source of truth.
