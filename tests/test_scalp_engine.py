@@ -727,6 +727,71 @@ def test_calculate_levels_trend_continuation_structural_rr_gate(monkeypatch):
     assert levels_wide["rr_below_min"] is False
 
 
+def test_atr_widened_sl_does_not_deflate_structural_rr_gate(monkeypatch):
+    """ATR execution padding must not shrink rr_gate_basis below the group floor."""
+    monkeypatch.setitem(
+        scalp_engine.CONFIG,
+        "SCALP_ENGINE",
+        {
+            **scalp_engine.CONFIG.get("SCALP_ENGINE", {}),
+            "MIN_RR": 1.2,
+            "ATR_SL_ENABLED": True,
+            "ATR_SL_MULT": 1.5,
+            "TP1_R_MULT": 1.0,
+        },
+    )
+    vp = {"poc": 1.0990, "vah": 1.1015, "val": 1.0970}
+    levels = calculate_scalp_levels(
+        "LONG", 1.0985, vp, "mean_reversion",
+        {"digits": 5, "point": 0.00001}, "forex", atr_m15=0.0020,
+    )
+    assert levels["sl_method"] == "atr"
+    assert levels["invalidation_distance"] < levels["sl_distance"]
+    assert levels["invalidation_sl_method"] == "vp_boundary"
+    # Runner to VAH clears 1.2R on invalidation distance but not on execution distance.
+    assert levels["rr_gate_basis"] >= 1.2
+    assert levels["rr_below_min"] is False
+    exec_runner_rr = round(abs(vp["vah"] - 1.0985) / levels["sl_distance"], 2)
+    assert exec_runner_rr < 1.2
+
+
+def test_rebase_passes_when_structural_gate_ok_despite_atr_widen(monkeypatch):
+    """Execution rebase must not reject when structure clears MIN_RR on invalidation basis."""
+    monkeypatch.setitem(
+        scalp_engine.CONFIG,
+        "SCALP_ENGINE",
+        {
+            **scalp_engine.CONFIG.get("SCALP_ENGINE", {}),
+            "MIN_RR": 1.2,
+            "ATR_SL_ENABLED": True,
+            "ATR_SL_MULT": 1.5,
+        },
+    )
+
+    def _fake_score_group(_pair):
+        return "forex_majors"
+
+    monkeypatch.setattr(scalp_engine, "_guess_asset_type", lambda _sym: "forex")
+    monkeypatch.setattr(
+        "scoring.get_pair_score_group",
+        _fake_score_group,
+    )
+    signal = {
+        "direction": "LONG",
+        "price": 1.0985,
+        "vp_poc": 1.0990,
+        "vp_vah": 1.1015,
+        "vp_val": 1.0970,
+        "zone_type": "mean_reversion",
+        "atr": 0.0020,
+    }
+    symbol_info = {"bid": 1.0985, "ask": 1.0987, "digits": 5, "point": 0.00001}
+    updated, err = scalp_engine.rebase_scalp_signal_levels(signal, "EUR/USD", symbol_info)
+    assert err is None
+    assert updated["sl"] < signal["price"]
+    assert updated["tp1"] > signal["price"]
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # 5. GRADING  (actual: ai_quality_grade(vp, price_loc, absorption, cvd, aaa, vwap, setup, sessions, spread, htf_bias))
 # ═══════════════════════════════════════════════════════════════════════════════

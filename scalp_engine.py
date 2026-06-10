@@ -3423,6 +3423,11 @@ def calculate_scalp_levels(
             structural_tp = val
             runner_tp = val - (poc - val)
 
+    # VP invalidation stop (pre-ATR): structural/runner RR gate uses this distance,
+    # not the ATR-widened execution stop — otherwise ATR padding deflates rr_gate_basis.
+    invalidation_sl = sl
+    invalidation_sl_method = sl_method
+
     if atr_m15 > 0 and cfg.get("ATR_SL_ENABLED", True):
         atr_stop_distance = atr_m15 * float(
             _scalp_cfg_lookup(
@@ -3459,6 +3464,7 @@ def calculate_scalp_levels(
         sl_method = "fallback_buffer"
 
     sl_distance = abs(entry - sl)
+    invalidation_distance = abs(entry - invalidation_sl)
 
     tp1_r_mult = float(
         _scalp_cfg_lookup(
@@ -3473,15 +3479,17 @@ def calculate_scalp_levels(
     tp_partial = tp1
     actual_rr = round(abs(tp1 - entry) / sl_distance, 2) if sl_distance > 0 else 0
 
-    # Structural/profile targets are context and optional runners. They should
-    # not block an otherwise valid scalp when the mechanical pay target exists.
+    # MIN_RR gates on structural room vs VP invalidation distance. Mechanical TP1
+    # (TP1_R_MULT self-pay) is sized off the execution stop; structure_target_close
+    # flags when POC/structure is closer than that self-pay multiple on invalidation.
     structural_tp_direction_ok = (
         (direction == "LONG" and structural_tp > entry)
         or (direction == "SHORT" and structural_tp < entry)
     )
+    _gate_sl_distance = invalidation_distance if invalidation_distance > 0 else sl_distance
     structural_rr = (
-        round(abs(structural_tp - entry) / sl_distance, 2)
-        if sl_distance > 0 and structural_tp_direction_ok
+        round(abs(structural_tp - entry) / _gate_sl_distance, 2)
+        if _gate_sl_distance > 0 and structural_tp_direction_ok
         else 0
     )
     structure_target_close = structural_tp_direction_ok and structural_rr < tp1_r_mult
@@ -3508,8 +3516,8 @@ def calculate_scalp_levels(
         or (direction == "SHORT" and runner_tp < entry)
     )
     runner_rr = (
-        round(abs(runner_tp - entry) / sl_distance, 2)
-        if sl_distance > 0 and runner_direction_ok
+        round(abs(runner_tp - entry) / _gate_sl_distance, 2)
+        if _gate_sl_distance > 0 and runner_direction_ok
         else 0
     )
     rr_gate_basis = max(structural_rr, runner_rr)
@@ -3518,14 +3526,16 @@ def calculate_scalp_levels(
             f"[SCALP] TP direction invalid: {direction} tp1={tp1:.5f} vs entry={entry:.5f} "
             f"(mechanical {tp1_r_mult}R target could not be built)"
         )
-    elif sl_distance > 0 and rr_gate_basis + 1e-9 < min_rr_cfg:
+    elif _gate_sl_distance > 0 and rr_gate_basis + 1e-9 < min_rr_cfg:
         log.warning(
             f"[SCALP] Structural RR {rr_gate_basis:.2f} < MIN_RR {min_rr_cfg:.2f} "
-            f"(entry={entry:.5f} structural_tp={structural_tp:.5f} sl_distance={sl_distance:.5f})"
+            f"(structural_rr={structural_rr:.2f} runner_rr={runner_rr:.2f} "
+            f"inv_dist={invalidation_distance:.5f} exec_dist={sl_distance:.5f} "
+            f"entry={entry:.5f} structural_tp={structural_tp:.5f})"
         )
 
     rr_below_min = (not tp_direction_ok) or (
-        tp_direction_ok and sl_distance > 0 and rr_gate_basis + 1e-9 < min_rr_cfg
+        tp_direction_ok and _gate_sl_distance > 0 and rr_gate_basis + 1e-9 < min_rr_cfg
     )
 
     # --- Defensive Rounding Safeguard ---
@@ -3557,6 +3567,9 @@ def calculate_scalp_levels(
         "rr_below_min": rr_below_min,
         "rr_synthetic": True,
         "sl_distance":  round(sl_distance, digits),
+        "execution_sl_distance": round(sl_distance, digits),
+        "invalidation_distance": round(invalidation_distance, digits),
+        "invalidation_sl_method": invalidation_sl_method,
         "sl_method":    sl_method,
     }
 
@@ -5036,6 +5049,7 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
                 "rr_synthetic":    levels.get("rr_synthetic", True),
                 "rr_gate_basis":   levels.get("rr_gate_basis"),
                 "sl_distance":     levels["sl_distance"],
+                "invalidation_distance": levels.get("invalidation_distance"),
                 "sl_method":       levels["sl_method"],
                 # F2: surface Engine D M15 ATR provenance on the signal payload.
                 # Observability-only — execution still uses level fields above.
