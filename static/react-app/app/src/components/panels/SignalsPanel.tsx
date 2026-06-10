@@ -794,7 +794,7 @@ export default function SignalsPanel() {
           <CardHeader className="pb-2">
             <CardTitle
               className="text-xs font-semibold flex items-center justify-between uppercase tracking-wider"
-              style={{ fontFamily: "'Rajdhani', sans-serif", letterSpacing: '0.12em' }}
+              style={{ fontFamily: "'Cinzel', serif", letterSpacing: '0.12em' }}
             >
               <span>Signal Feed</span>
               <Badge variant="outline" className="text-[10px]">
@@ -857,9 +857,12 @@ export default function SignalsPanel() {
                   {groupedRows.map(({ key, items }) => (
                     <div key={key} className="space-y-2">
                       <div
-                        className="flex items-center justify-between sticky top-0 z-[1] bg-card/95 backdrop-blur-sm py-1 border-b border-border/50"
+                        className="flex items-center justify-between sticky top-0 z-[1] bg-card/95 backdrop-blur-sm py-1 border-b border-primary/15"
                       >
-                        <span className="text-[10px] uppercase tracking-wide text-muted-foreground font-semibold">
+                        <span
+                          className="text-[10px] uppercase tracking-[0.18em] font-semibold"
+                          style={{ fontFamily: "'Cinzel', serif", color: 'hsl(var(--platinum) / 0.85)' }}
+                        >
                           {formatGroupLabel(key)}
                         </span>
                         <Badge variant="outline" className="text-[9px] font-mono">
@@ -889,7 +892,7 @@ export default function SignalsPanel() {
           <CardHeader className="pb-2">
             <CardTitle
               className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider"
-              style={{ fontFamily: "'Rajdhani', sans-serif", letterSpacing: '0.12em' }}
+              style={{ fontFamily: "'Cinzel', serif", letterSpacing: '0.12em' }}
             >
               <Activity className="w-4 h-4 text-primary" />
               Signal Detail

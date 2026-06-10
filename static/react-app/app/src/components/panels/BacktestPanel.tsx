@@ -557,7 +557,7 @@ export default function BacktestPanel() {
         <TabsContent value="run" className="mt-3 space-y-4">
           <Card className="border-border/60 bg-card/50">
             <CardHeader className="pb-2">
-              <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Rajdhani', sans-serif", letterSpacing: '0.12em' }}>
+              <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Cinzel', serif", letterSpacing: '0.12em' }}>
                 <FlaskConical className="w-4 h-4 text-primary" />
                 Backtest Config
               </CardTitle>
@@ -625,7 +625,7 @@ export default function BacktestPanel() {
           {batchRows.length > 0 && (
             <Card className="border-border/60 bg-card/50">
               <CardHeader className="pb-2">
-                <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Rajdhani', sans-serif", letterSpacing: '0.12em' }}>Batch summary</CardTitle>
+                <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Cinzel', serif", letterSpacing: '0.12em' }}>Batch summary</CardTitle>
               </CardHeader>
               <CardContent className="max-h-[240px] overflow-y-auto">
                 <table className="w-full text-left text-[11px]">
@@ -718,7 +718,7 @@ export default function BacktestPanel() {
               {result.researchMetrics && (
                 <Card className="border-border/60 bg-card/50">
                   <CardHeader className="pb-2">
-                    <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Rajdhani', sans-serif", letterSpacing: '0.12em' }}>Research integrity (PSR / DSR / PBO)</CardTitle>
+                    <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Cinzel', serif", letterSpacing: '0.12em' }}>Research integrity (PSR / DSR / PBO)</CardTitle>
                   </CardHeader>
                   <CardContent className="space-y-2 text-[11px] text-muted-foreground">
                     <div className="flex flex-wrap gap-2">
@@ -755,7 +755,7 @@ export default function BacktestPanel() {
               {/* Equity curve */}
               <Card className="border-border/60 bg-card/50">
                 <CardHeader className="pb-2">
-                  <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Rajdhani', sans-serif", letterSpacing: '0.12em' }}>Equity Curve</CardTitle>
+                  <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Cinzel', serif", letterSpacing: '0.12em' }}>Equity Curve</CardTitle>
                 </CardHeader>
                 <CardContent>
                   {equityChart.length === 0 ? (
@@ -797,7 +797,7 @@ export default function BacktestPanel() {
 
               {result.confluenceAnalysis && Object.keys(result.confluenceAnalysis).length > 0 && (
                 <Card className="border-border/60 bg-card/50">
-                  <CardHeader className="pb-2"><CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Rajdhani', sans-serif", letterSpacing: '0.12em' }}>Confluence Analysis (Engine B)</CardTitle></CardHeader>
+                  <CardHeader className="pb-2"><CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Cinzel', serif", letterSpacing: '0.12em' }}>Confluence Analysis (Engine B)</CardTitle></CardHeader>
                   <CardContent>
                     <pre className="text-[10px] font-mono whitespace-pre-wrap p-2 bg-muted/20 rounded border border-border/40 max-h-72 overflow-y-auto">
                       {JSON.stringify(result.confluenceAnalysis, null, 2)}
@@ -808,7 +808,7 @@ export default function BacktestPanel() {
 
               {result.engineCFunnel && Object.keys(result.engineCFunnel).length > 0 && (
                 <Card className="border-border/60 bg-card/50">
-                  <CardHeader className="pb-2"><CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Rajdhani', sans-serif", letterSpacing: '0.12em' }}>Engine C Funnel</CardTitle></CardHeader>
+                  <CardHeader className="pb-2"><CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Cinzel', serif", letterSpacing: '0.12em' }}>Engine C Funnel</CardTitle></CardHeader>
                   <CardContent>
                     <pre className="text-[10px] font-mono whitespace-pre-wrap p-2 bg-muted/20 rounded border border-border/40 max-h-72 overflow-y-auto">
                       {JSON.stringify(result.engineCFunnel, null, 2)}
@@ -828,7 +828,7 @@ export default function BacktestPanel() {
         <TabsContent value="history" className="mt-3">
           <Card className="border-border/60 bg-card/50">
             <CardHeader className="pb-2">
-              <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Rajdhani', sans-serif", letterSpacing: '0.12em' }}>Backtest History (last 500)</CardTitle>
+              <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Cinzel', serif", letterSpacing: '0.12em' }}>Backtest History (last 500)</CardTitle>
             </CardHeader>
             <CardContent>
               {historyError && <ErrorBanner message={historyError} />}
@@ -879,7 +879,7 @@ export default function BacktestPanel() {
         <TabsContent value="best" className="mt-3">
           <Card className="border-border/60 bg-card/50">
             <CardHeader className="pb-2">
-              <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Rajdhani', sans-serif", letterSpacing: '0.12em' }}>
+              <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Cinzel', serif", letterSpacing: '0.12em' }}>
                 <Trophy className="w-4 h-4 text-primary" />
                 Best Performing Pairs (latest run per pair, sorted by SQN)
               </CardTitle>
@@ -918,7 +918,7 @@ export default function BacktestPanel() {
         <TabsContent value="advisory" className="mt-3">
           <Card className="border-border/60 bg-card/50">
             <CardHeader className="pb-2">
-              <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Rajdhani', sans-serif", letterSpacing: '0.12em' }}>
+              <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Cinzel', serif", letterSpacing: '0.12em' }}>
                 <Layers className="w-4 h-4 text-primary" />
                 Advisory Thresholds
               </CardTitle>
@@ -1017,7 +1017,7 @@ function ScalpAnalysisBlock({
   return (
     <Card className="border-border/60 bg-card/50">
       <CardHeader className="pb-2">
-        <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Rajdhani', sans-serif", letterSpacing: '0.12em' }}>Engine D — Scalp Analysis</CardTitle>
+        <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Cinzel', serif", letterSpacing: '0.12em' }}>Engine D — Scalp Analysis</CardTitle>
       </CardHeader>
       <CardContent className="space-y-3">
         <div className="grid grid-cols-4 gap-3">
@@ -1084,7 +1084,7 @@ function TradeTable({ trades, totalCount }: { trades: Array<Record<string, unkno
   return (
     <Card className="border-border/60 bg-card/50">
       <CardHeader className="pb-2">
-        <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Rajdhani', sans-serif", letterSpacing: '0.12em' }}>
+        <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Cinzel', serif", letterSpacing: '0.12em' }}>
           Trade Log {totalCount > trades.length && <span className="text-[10px] text-muted-foreground">(showing first {trades.length} of {totalCount})</span>}
         </CardTitle>
       </CardHeader>

@@ -74,7 +74,7 @@ export default function Sidebar() {
         <span
           className="text-[10px] uppercase tracking-[0.2em]"
           style={{
-            fontFamily: "'Rajdhani', sans-serif",
+            fontFamily: "'Cinzel', serif",
             color: 'hsl(var(--muted-foreground))',
           }}
         >

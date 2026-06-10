@@ -8,6 +8,7 @@ import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Skeleton } from '@/components/ui/skeleton';
 import { StatCard, ErrorBanner } from '@/components/shared';
+import PrimeTimeCard from '@/components/athena/PrimeTimeCard';
 import {
   TrendingUp, TrendingDown, Activity, Zap, Target,
   Clock, Globe, AlertTriangle, BarChart3, Play, Square, X
@@ -272,12 +273,15 @@ export default function DashboardPanel() {
         />
       </div>
 
+      {/* Prime execution windows (advisory liquidity map) */}
+      <PrimeTimeCard />
+
       {/* Equity + sessions / controls */}
       <div className="grid grid-cols-3 gap-5">
         <Card className="col-span-2 border-border/60 bg-card/50">
           <CardHeader className="pb-2">
             <div className="flex items-center justify-between">
-              <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Rajdhani', sans-serif", letterSpacing: '0.12em' }}>
+              <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Cinzel', serif", letterSpacing: '0.12em' }}>
                 <TrendingUp className="w-4 h-4 text-primary" /> Equity Curve
               </CardTitle>
               <Badge variant="outline" className="text-[10px]">{equityData.length} points</Badge>
@@ -313,7 +317,7 @@ export default function DashboardPanel() {
         <div className="space-y-4">
           <Card className="border-border/60 bg-card/50">
             <CardHeader className="pb-2">
-              <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Rajdhani', sans-serif", letterSpacing: '0.12em' }}>
+              <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Cinzel', serif", letterSpacing: '0.12em' }}>
                 <Clock className="w-4 h-4 text-primary" /> Market Sessions (UTC)
               </CardTitle>
             </CardHeader>
@@ -323,7 +327,7 @@ export default function DashboardPanel() {
                 return (
                   <div
                     key={session.name}
-                    className={`flex items-center justify-between p-2 rounded-md ${active ? 'bg-long/15 border border-long/30' : 'bg-muted/30'}`}
+                    className={`flex items-center justify-between p-2.5 rounded-lg border transition-colors ${active ? 'bg-long/15 border-long/30' : 'bg-secondary/35 border-border/40'}`}
                   >
                     <div className="flex items-center gap-2">
                       <Globe className={`w-3.5 h-3.5 ${active ? 'text-long' : 'text-muted-foreground'}`} />
@@ -340,7 +344,7 @@ export default function DashboardPanel() {
 
           <Card className="border-border/60 bg-card/50">
             <CardHeader className="pb-2">
-              <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Rajdhani', sans-serif", letterSpacing: '0.12em' }}>
+              <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Cinzel', serif", letterSpacing: '0.12em' }}>
                 <Activity className="w-4 h-4 text-primary" /> Quick Controls
               </CardTitle>
             </CardHeader>
@@ -377,7 +381,7 @@ export default function DashboardPanel() {
       <div className="grid grid-cols-3 gap-5">
         <Card className="border-border/60 bg-card/50">
           <CardHeader className="pb-2">
-            <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Rajdhani', sans-serif", letterSpacing: '0.12em' }}>
+            <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Cinzel', serif", letterSpacing: '0.12em' }}>
               <Target className="w-4 h-4 text-primary" /> Latest Signals
             </CardTitle>
           </CardHeader>
@@ -400,7 +404,7 @@ export default function DashboardPanel() {
                     return (
                       <div
                         key={`${label}-${i}`}
-                        className="flex items-center justify-between p-2 rounded-md bg-muted/30"
+                        className="flex items-center justify-between p-2.5 rounded-lg border border-border/40 bg-secondary/35 hover:border-primary/25 transition-colors"
                       >
                         <div className="flex items-center gap-2 min-w-0">
                           <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${long ? 'bg-long/20 text-long' : 'bg-short/20 text-short'}`}>
@@ -437,7 +441,7 @@ export default function DashboardPanel() {
 
         <Card className="border-border/60 bg-card/50">
           <CardHeader className="pb-2">
-            <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Rajdhani', sans-serif", letterSpacing: '0.12em' }}>
+            <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Cinzel', serif", letterSpacing: '0.12em' }}>
               <BarChart3 className="w-4 h-4 text-primary" /> Open Positions
               {unresolvedAudit.length > 0 && (
                 <Badge variant="outline" className="ml-auto text-[10px] text-warning border-warning/50">
@@ -471,7 +475,7 @@ export default function DashboardPanel() {
                         ? `SL ${fmtNum(t.closes_at_sl, 5)}${t.pct_to_sl != null ? ` · ${fmtNum(t.pct_to_sl, 2)}% to SL` : ''}`
                         : null);
                     return (
-                      <div key={ticketKey} className="flex items-center justify-between p-2 rounded-md bg-muted/30">
+                      <div key={ticketKey} className="flex items-center justify-between p-2.5 rounded-lg border border-border/40 bg-secondary/35 hover:border-primary/25 transition-colors">
                         <div className="flex flex-col gap-0.5 min-w-0">
                           <div className="flex items-center gap-2">
                             <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${t.direction === 'LONG' ? 'bg-long/20 text-long' : 'bg-short/20 text-short'}`}>
@@ -497,7 +501,7 @@ export default function DashboardPanel() {
                     const direction = String(row.direction || '');
                     const canCloseAudit = !row.broker_live && row.close_action_enabled !== false;
                     return (
-                      <div key={`audit-${ticket}`} className="flex items-center justify-between p-2 rounded-md border border-warning/30 bg-warning/5">
+                      <div key={`audit-${ticket}`} className="flex items-center justify-between p-2.5 rounded-lg border border-warning/30 bg-warning/5">
                         <div className="flex items-center gap-2">
                           <AlertTriangle className="h-3.5 w-3.5 text-warning" />
                           <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${direction === 'LONG' ? 'bg-long/20 text-long' : 'bg-short/20 text-short'}`}>
@@ -535,7 +539,7 @@ export default function DashboardPanel() {
 
         <Card className="border-border/60 bg-card/50">
           <CardHeader className="pb-2">
-            <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Rajdhani', sans-serif", letterSpacing: '0.12em' }}>
+            <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Cinzel', serif", letterSpacing: '0.12em' }}>
               <BarChart3 className="w-4 h-4 text-primary" /> Performance by Engine
             </CardTitle>
           </CardHeader>
@@ -554,7 +558,7 @@ export default function DashboardPanel() {
                     const trades = r.trades ?? r.count;
                     const pnl = r.total_pnl ?? r.pnl;
                     return (
-                      <div key={engine} className="flex items-center justify-between p-2 rounded-md bg-muted/30">
+                      <div key={engine} className="flex items-center justify-between p-2.5 rounded-lg border border-border/40 bg-secondary/35 hover:border-primary/25 transition-colors">
                         <span className="text-xs font-medium uppercase">{engine}</span>
                         <div className="flex items-center gap-2 text-[10px]">
                           <Badge variant="outline">{trades ?? 0} tr</Badge>

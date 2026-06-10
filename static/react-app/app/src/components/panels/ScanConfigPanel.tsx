@@ -155,7 +155,7 @@ export default function ScanConfigPanel() {
         {/* Live Engine A class thresholds */}
         <Card className="border-border/60 bg-card/50">
           <CardHeader className="pb-2">
-            <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Rajdhani', sans-serif", letterSpacing: '0.12em' }}>
+            <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Cinzel', serif", letterSpacing: '0.12em' }}>
               <Settings className="w-4 h-4 text-primary" /> Live Engine A Thresholds
             </CardTitle>
           </CardHeader>
@@ -201,7 +201,7 @@ export default function ScanConfigPanel() {
         {/* Feature Toggles */}
         <Card className="border-border/60 bg-card/50">
           <CardHeader className="pb-2">
-            <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Rajdhani', sans-serif", letterSpacing: '0.12em' }}>
+            <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Cinzel', serif", letterSpacing: '0.12em' }}>
               <Settings className="w-4 h-4 text-primary" /> Feature Toggles
             </CardTitle>
           </CardHeader>
@@ -238,7 +238,7 @@ export default function ScanConfigPanel() {
       {/* Execution Config */}
       <Card className="border-border/60 bg-card/50">
         <CardHeader className="pb-2">
-          <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Rajdhani', sans-serif", letterSpacing: '0.12em' }}>
+          <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Cinzel', serif", letterSpacing: '0.12em' }}>
             <Settings className="w-4 h-4 text-primary" /> Execution Config
           </CardTitle>
         </CardHeader>
@@ -320,7 +320,7 @@ export default function ScanConfigPanel() {
       {/* Scan Runtime Snapshot */}
       <Card className="border-border/60 bg-card/50">
         <CardHeader className="pb-2">
-          <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Rajdhani', sans-serif", letterSpacing: '0.12em' }}>Scan Runtime Snapshot</CardTitle>
+          <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Cinzel', serif", letterSpacing: '0.12em' }}>Scan Runtime Snapshot</CardTitle>
         </CardHeader>
         <CardContent>
           {settingsLoading ? (
@@ -348,7 +348,7 @@ export default function ScanConfigPanel() {
       {/* Advisory Thresholds */}
       <Card className="border-border/60 bg-card/50">
         <CardHeader className="pb-2">
-          <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Rajdhani', sans-serif", letterSpacing: '0.12em' }}>
+          <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Cinzel', serif", letterSpacing: '0.12em' }}>
             <Settings className="w-4 h-4 text-primary" /> Advisory Threshold Recommendations
           </CardTitle>
           {advisories?.summary && (

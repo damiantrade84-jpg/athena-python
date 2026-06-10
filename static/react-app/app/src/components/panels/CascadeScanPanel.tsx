@@ -236,7 +236,7 @@ export default function CascadeScanPanel() {
         <CardHeader className="pb-2">
           <CardTitle
             className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider"
-            style={{ fontFamily: "'Rajdhani', sans-serif", letterSpacing: '0.12em' }}
+            style={{ fontFamily: "'Cinzel', serif", letterSpacing: '0.12em' }}
           >
             <Workflow className="w-4 h-4 text-primary" />
             Cascade Shortlist

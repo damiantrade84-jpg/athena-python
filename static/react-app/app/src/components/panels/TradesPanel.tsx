@@ -237,7 +237,7 @@ export default function TradesPanel() {
         <TabsContent value="open" className="mt-2">
           <Card className="border-border/60 bg-card/50">
             <CardHeader className="pb-2">
-              <CardTitle className="text-xs font-semibold flex items-center justify-between uppercase tracking-wider" style={{ fontFamily: "'Rajdhani', sans-serif", letterSpacing: '0.12em' }}>
+              <CardTitle className="text-xs font-semibold flex items-center justify-between uppercase tracking-wider" style={{ fontFamily: "'Cinzel', serif", letterSpacing: '0.12em' }}>
                 <span>Open Positions</span>
                 <div className="flex items-center gap-2">
                   <Badge variant="outline" className="text-[10px]">{openTrades.length} live</Badge>
@@ -418,7 +418,7 @@ export default function TradesPanel() {
         <TabsContent value="history" className="mt-2">
           <Card className="border-border/60 bg-card/50">
             <CardHeader className="pb-2">
-              <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Rajdhani', sans-serif", letterSpacing: '0.12em' }}>Last 20 Closed Trades</CardTitle>
+              <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Cinzel', serif", letterSpacing: '0.12em' }}>Last 20 Closed Trades</CardTitle>
             </CardHeader>
             <CardContent>
               {Array.isArray(performance?.last_20_trades) && performance!.last_20_trades.length > 0 ? (
@@ -473,7 +473,7 @@ export default function TradesPanel() {
 
           <Card className="border-border/60 bg-card/50">
             <CardHeader className="pb-2">
-              <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Rajdhani', sans-serif", letterSpacing: '0.12em' }}>Equity Curve (Cumulative R)</CardTitle>
+              <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Cinzel', serif", letterSpacing: '0.12em' }}>Equity Curve (Cumulative R)</CardTitle>
             </CardHeader>
             <CardContent>
               {perfLoading ? (
@@ -508,7 +508,7 @@ export default function TradesPanel() {
           {byEngineEntries.length > 0 && (
             <Card className="border-border/60 bg-card/50">
               <CardHeader className="pb-2">
-                <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Rajdhani', sans-serif", letterSpacing: '0.12em' }}>By Engine</CardTitle>
+                <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Cinzel', serif", letterSpacing: '0.12em' }}>By Engine</CardTitle>
               </CardHeader>
               <CardContent>
                 <Table>
@@ -545,7 +545,7 @@ export default function TradesPanel() {
         <TabsContent value="autolog" className="mt-2">
           <Card className="border-border/60 bg-card/50">
             <CardHeader className="pb-2">
-              <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Rajdhani', sans-serif", letterSpacing: '0.12em' }}>Auto-Trade Log</CardTitle>
+              <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Cinzel', serif", letterSpacing: '0.12em' }}>Auto-Trade Log</CardTitle>
             </CardHeader>
             <CardContent>
               <ScrollArea className="h-[400px]">
@@ -566,7 +566,7 @@ export default function TradesPanel() {
         <TabsContent value="failed" className="mt-2">
           <Card className="border-border/60 bg-card/50">
             <CardHeader className="pb-2">
-              <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Rajdhani', sans-serif", letterSpacing: '0.12em' }}>
+              <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Cinzel', serif", letterSpacing: '0.12em' }}>
                 <AlertTriangle className="w-4 h-4 text-short" />
                 Failed Executions
               </CardTitle>

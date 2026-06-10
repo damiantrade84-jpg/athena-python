@@ -2,6 +2,7 @@ import { useStore } from '@/hooks/useStore';
 import { Badge } from '@/components/ui/badge';
 import { useEffect, useState } from 'react';
 import { Activity, Wifi } from 'lucide-react';
+import { currentSegment, nextSegment, QUALITY_META, fmtCountdown } from '@/lib/primeWindows';
 
 export default function Header() {
   const { guardian } = useStore();
@@ -33,21 +34,28 @@ export default function Header() {
   return (
     <header
       className="h-11 border-b border-border flex items-center justify-between px-5 shrink-0 relative header-gold-line"
-      style={{ background: 'hsl(248 45% 5%)' }}
+      style={{ background: 'hsl(var(--sidebar-background))' }}
     >
       {/* Left — Logo */}
       <div className="flex items-center gap-3">
         <h1
-          className="text-sm font-bold tracking-widest"
+          className="text-sm font-bold logo-platinum"
           style={{
-            fontFamily: "'Rajdhani', sans-serif",
-            letterSpacing: '0.14em',
-            color: 'hsl(var(--gold-light))',
-            textShadow: '0 0 14px hsl(43 90% 46% / 0.45)',
+            fontFamily: "'Cinzel', serif",
+            letterSpacing: '0.3em',
           }}
         >
-          SENTINEL PRO
+          SENTINEL
         </h1>
+        <span
+          className="text-[10px] font-medium tracking-[0.3em]"
+          style={{
+            fontFamily: "'Cinzel', serif",
+            color: 'hsl(var(--gold-light) / 0.85)',
+          }}
+        >
+          PRO
+        </span>
         <Badge
           variant="outline"
           className="text-[9px] h-4 px-1"
@@ -63,6 +71,24 @@ export default function Header() {
 
       {/* Right — Status chips */}
       <div className="flex items-center gap-4">
+        {/* Prime execution-window pill (advisory) */}
+        {(() => {
+          const seg = currentSegment(time);
+          const next = nextSegment(time);
+          const meta = QUALITY_META[seg.quality];
+          const isPrime = seg.quality === 'prime';
+          return (
+            <div
+              className={`flex items-center gap-2 px-2.5 py-1 rounded-md border text-[10px] font-mono tracking-wider ${isPrime ? 'animate-glow-gold' : ''}`}
+              style={{ background: meta.bg, borderColor: meta.border, color: meta.color }}
+              title={`${seg.label} · ${seg.markets} · next: ${next.segment.label} in ${fmtCountdown(next.minutesUntil)}`}
+            >
+              <div className={`w-1.5 h-1.5 rounded-full bg-current ${isPrime ? 'animate-pulse' : ''}`} />
+              {meta.label} · {fmtCountdown(next.minutesUntil)}
+            </div>
+          );
+        })()}
+
         {/* Guardian status pill */}
         <div
           className="flex items-center gap-2 px-2.5 py-1 rounded-md border text-[10px] font-mono tracking-wider"

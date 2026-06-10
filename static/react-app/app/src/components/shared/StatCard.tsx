@@ -16,15 +16,19 @@ interface StatCardProps {
 export default function StatCard({ title, value, icon, iconClass, valueClass, loading, subtitle }: StatCardProps) {
   return (
     <Card
-      className="border-border bg-card relative overflow-hidden stat-card-top-line transition-all duration-200 hover:border-primary/30"
+      className="group border-border/70 relative overflow-hidden stat-card-top-line transition-all duration-300 hover:border-primary/35 hover:-translate-y-px hover:shadow-gold"
       style={{
-        background: 'hsl(var(--card))',
+        background: 'linear-gradient(180deg, hsl(var(--card) / 0.92), hsl(var(--background) / 0.55))',
+        backdropFilter: 'blur(8px)',
       }}
     >
       <CardContent className="p-4">
         <div className="flex items-center justify-between">
           <div className="min-w-0">
-            <p className="text-[9px] uppercase tracking-[0.15em] font-mono" style={{ color: 'hsl(var(--muted-foreground))' }}>
+            <p
+              className="text-[9px] uppercase tracking-[0.22em]"
+              style={{ fontFamily: "'Cinzel', serif", color: 'hsl(var(--muted-foreground))' }}
+            >
               {title}
             </p>
             {loading ? (
@@ -40,12 +44,12 @@ export default function StatCard({ title, value, icon, iconClass, valueClass, lo
               </p>
             )}
           </div>
-          {/* Icon container — gold ring */}
+          {/* Icon chip — frosted ice ring */}
           <div
-            className={cn('p-2 rounded-md shrink-0', iconClass)}
+            className={cn('p-2 rounded-lg shrink-0 transition-shadow duration-300 group-hover:glow-gold-sm', iconClass)}
             style={{
-              background: 'hsl(var(--gold) / 0.08)',
-              border: '1px solid hsl(var(--gold) / 0.22)',
+              background: 'linear-gradient(160deg, hsl(var(--gold) / 0.12), hsl(var(--gold) / 0.03))',
+              border: '1px solid hsl(var(--gold) / 0.25)',
             }}
           >
             {icon}

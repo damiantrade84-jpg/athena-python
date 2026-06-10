@@ -5,7 +5,7 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 
 export default function MainLayout({ children }: { children: React.ReactNode }) {
   return (
-    <div className="h-screen w-screen flex flex-col overflow-hidden bg-background">
+    <div className="h-screen w-screen flex flex-col overflow-hidden app-shell-bg">
       <Header />
       <div className="flex flex-1 overflow-hidden">
         <Sidebar />

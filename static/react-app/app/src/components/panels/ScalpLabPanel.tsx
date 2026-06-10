@@ -427,7 +427,7 @@ export default function ScalpLabPanel() {
       {/* Header / scan controls */}
       <Card className="border-border/60 bg-card/50">
         <CardHeader className="pb-2">
-          <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Rajdhani', sans-serif", letterSpacing: '0.12em' }}>
+          <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Cinzel', serif", letterSpacing: '0.12em' }}>
             <Activity className="w-4 h-4 text-primary" />
             Engine D — Scalp Lab (VP + OrderFlow)
           </CardTitle>
@@ -497,7 +497,7 @@ export default function ScalpLabPanel() {
           <div className="grid grid-cols-5 gap-4">
             <Card className="col-span-3 border-border/60 bg-card/50">
               <CardHeader className="pb-2">
-                <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Rajdhani', sans-serif", letterSpacing: '0.12em' }}>Scalp Candidates</CardTitle>
+                <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Cinzel', serif", letterSpacing: '0.12em' }}>Scalp Candidates</CardTitle>
               </CardHeader>
               <CardContent>
                 <ScrollArea className="h-[520px] pr-2">
@@ -539,7 +539,7 @@ export default function ScalpLabPanel() {
 
             <Card className="col-span-2 border-border/60 bg-card/50">
               <CardHeader className="pb-2">
-                <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Rajdhani', sans-serif", letterSpacing: '0.12em' }}>Detail</CardTitle>
+                <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Cinzel', serif", letterSpacing: '0.12em' }}>Detail</CardTitle>
               </CardHeader>
               <CardContent>
                 {selected ? (
@@ -569,7 +569,7 @@ export default function ScalpLabPanel() {
           {scanResult.diagnostic && skipped.length > 0 && (
             <Card className="border-border/60 bg-card/50">
               <CardHeader className="pb-2">
-                <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Rajdhani', sans-serif", letterSpacing: '0.12em' }}>Skipped / Filtered</CardTitle>
+                <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Cinzel', serif", letterSpacing: '0.12em' }}>Skipped / Filtered</CardTitle>
               </CardHeader>
               <CardContent>
                 <ScrollArea className="h-[260px]">

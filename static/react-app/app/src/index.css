@@ -1,4 +1,4 @@
-@import url('https://fonts.googleapis.com/css2?family=Rajdhani:wght@400;500;600;700&family=IBM+Plex+Mono:wght@300;400;500;600&family=Inter:wght@300;400;500;600&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Cinzel:wght@400;500;600;700&family=Hanken+Grotesk:wght@300;400;500;600;700&family=Spline+Sans+Mono:wght@300;400;500;600&display=swap');
 
 @tailwind base;
 @tailwind components;
@@ -6,52 +6,56 @@
 
 @layer base {
   :root {
-    /* ── Deep warm dark background ── */
-    --background: 248 40% 4%;          /* #040308 deep purple-black */
-    --foreground: 38 40% 94%;          /* warm white #f5f0e8 */
-    --card: 248 45% 6%;                /* #09070f */
-    --card-foreground: 38 40% 94%;
-    --popover: 248 45% 6%;
-    --popover-foreground: 38 40% 94%;
+    /* ════ GLACIER — cold obsidian sapphire, polished ice, platinum ════ */
+    --background: 216 50% 4%;          /* obsidian sapphire #050a12 */
+    --foreground: 200 28% 93%;         /* cool porcelain #e7eff2 */
+    --card: 215 42% 6.2%;              /* #091016 */
+    --card-foreground: 200 28% 93%;
+    --popover: 215 45% 5.5%;
+    --popover-foreground: 200 28% 93%;
 
-    /* ── PRIMARY: Liquid Gold ── */
-    --primary: 43 90% 46%;             /* #d4a017 rich gold */
-    --primary-foreground: 248 40% 4%;  /* dark text on gold */
+    /* ── PRIMARY: Glacier Ice ── */
+    --primary: 192 72% 58%;            /* #47c2e1 polished ice */
+    --primary-foreground: 217 55% 5%;  /* dark ink on ice */
 
-    --secondary: 248 30% 10%;
-    --secondary-foreground: 38 20% 70%;
-    --muted: 248 30% 8%;
-    --muted-foreground: 32 20% 48%;   /* warm grey */
-    --accent: 248 30% 10%;
-    --accent-foreground: 38 40% 94%;
-    --destructive: 343 96% 60%;        /* vivid rose */
+    --secondary: 213 36% 9%;
+    --secondary-foreground: 202 22% 72%;
+    --muted: 214 38% 7.5%;
+    --muted-foreground: 207 16% 55%;   /* cool slate grey */
+    --accent: 213 36% 10%;
+    --accent-foreground: 200 28% 93%;
+    --destructive: 351 88% 60%;        /* vivid rose */
     --destructive-foreground: 0 0% 98%;
-    --border: 40 25% 12%;              /* warm gold-tinted dark border */
-    --input: 40 25% 12%;
-    --ring: 43 90% 46%;                /* gold ring */
-    --radius: 0.5rem;                  /* slightly more rounded, playful */
+    --border: 210 32% 12%;             /* steel hairline */
+    --input: 210 32% 12%;
+    --ring: 192 72% 58%;               /* ice ring */
+    --radius: 0.75rem;                 /* soft, lounge-like corners */
 
     /* ── Directional ── */
-    --long: 160 84% 39%;               /* vivid emerald #10b981 */
-    --short: 343 96% 60%;              /* vivid rose #f43f5e */
-    --warning: 25 95% 60%;             /* vibrant orange #fb923c */
-    --info: 200 95% 43%;               /* bright cyan #06b6d4 */
+    --long: 152 70% 44%;               /* deep emerald #21bf7d */
+    --short: 351 88% 60%;              /* vivid rose #f33d63 */
+    --warning: 36 95% 58%;             /* amber #f9a23a */
+    --info: 258 88% 70%;               /* royal violet #9b78f7 — Engine B */
 
-    /* ── Gold palette extras ── */
-    --gold: 43 90% 46%;                /* #d4a017 */
-    --gold-light: 45 95% 58%;          /* #f5c518 */
-    --gold-dark: 38 88% 35%;           /* #c8860a */
-    --gold-muted: 40 60% 20%;          /* for subtle bg tints */
+    /* ── Ice ramp (legacy --gold names retained: they now map to the
+         glacier accent so every panel re-themes without code changes) ── */
+    --gold: 192 72% 58%;               /* glacier ice */
+    --gold-light: 186 90% 74%;         /* frost highlight #82e8f4 */
+    --gold-dark: 203 62% 40%;          /* deep steel #2776a5 */
+    --gold-muted: 205 45% 16%;         /* subtle ice-tinted bg */
+
+    /* ── Platinum (hairlines, engraved titles, logo) ── */
+    --platinum: 204 25% 80%;
 
     /* ── Sidebar ── */
-    --sidebar-background: 249 50% 5%;  /* #09070f deep indigo-dark */
-    --sidebar-foreground: 38 25% 65%;
-    --sidebar-primary: 43 90% 46%;     /* gold */
-    --sidebar-primary-foreground: 248 40% 4%;
-    --sidebar-accent: 248 35% 9%;
-    --sidebar-accent-foreground: 38 25% 65%;
-    --sidebar-border: 40 20% 11%;
-    --sidebar-ring: 43 90% 46%;
+    --sidebar-background: 217 48% 4.4%;
+    --sidebar-foreground: 205 18% 64%;
+    --sidebar-primary: 192 72% 58%;
+    --sidebar-primary-foreground: 217 55% 5%;
+    --sidebar-accent: 214 38% 8%;
+    --sidebar-accent-foreground: 205 18% 64%;
+    --sidebar-border: 211 32% 10.5%;
+    --sidebar-ring: 192 72% 58%;
   }
 
   * {
@@ -60,17 +64,27 @@
 
   body {
     @apply bg-background text-foreground;
-    font-family: 'Inter', system-ui, sans-serif;
+    font-family: 'Hanken Grotesk', system-ui, sans-serif;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
   }
 
   code, .font-mono {
-    font-family: 'IBM Plex Mono', monospace;
+    font-family: 'Spline Sans Mono', monospace;
   }
 }
 
 @layer components {
+  /* ── App shell atmosphere: layered cold gradients + fine grain ── */
+  .app-shell-bg {
+    background-color: hsl(var(--background));
+    background-image:
+      radial-gradient(1100px 540px at 16% -10%, hsl(197 85% 32% / 0.14), transparent 60%),
+      radial-gradient(900px 480px at 102% -4%, hsl(258 70% 34% / 0.10), transparent 55%),
+      radial-gradient(1300px 860px at 50% 120%, hsl(212 70% 13% / 0.50), transparent 64%),
+      url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.045'/%3E%3C/svg%3E");
+  }
+
   /* ── Panel glass ── */
   .panel-glass {
     @apply bg-card/80 backdrop-blur-xl border border-border/60 rounded-lg;
@@ -104,6 +118,12 @@
     color: hsl(var(--gold-light));
     border: 1px solid hsl(var(--gold) / 0.4);
   }
+  .badge-neutral {
+    @apply inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold;
+    background: hsl(var(--muted) / 0.6);
+    color: hsl(var(--muted-foreground));
+    border: 1px solid hsl(var(--border) / 0.8);
+  }
 
   /* ── Scrollbar ── */
   .scrollbar-thin {
@@ -117,7 +137,7 @@
     border-radius: 3px;
   }
 
-  /* ── Glow effects ── */
+  /* ── Glow effects (ice) ── */
   .glow-gold {
     box-shadow:
       0 0 12px hsl(var(--gold) / 0.20),
@@ -137,17 +157,17 @@
   .data-grid { @apply grid gap-px bg-border/40 rounded-lg overflow-hidden; }
   .data-grid > * { @apply bg-card p-3; }
 
-  /* ── Panel header ── */
+  /* ── Panel header: engraved serif, frost ink ── */
   .panel-header-title {
-    font-family: 'Rajdhani', sans-serif;
+    font-family: 'Cinzel', serif;
     font-weight: 600;
     font-size: 0.75rem;
     text-transform: uppercase;
-    letter-spacing: 0.12em;
-    color: hsl(var(--gold-light));
+    letter-spacing: 0.14em;
+    color: hsl(var(--platinum));
   }
 
-  /* ── Stat card gold top line ── */
+  /* ── Stat card platinum crown line ── */
   .stat-card-top-line::before {
     content: '';
     position: absolute;
@@ -155,15 +175,15 @@
     height: 1px;
     background: linear-gradient(90deg,
       transparent,
-      hsl(var(--gold-dark)),
-      hsl(var(--gold-light)),
-      hsl(var(--gold-dark)),
+      hsl(207 28% 52%),
+      hsl(190 85% 80%),
+      hsl(207 28% 52%),
       transparent
     );
-    opacity: 0.5;
+    opacity: 0.55;
   }
 
-  /* ── Active nav gold left bar ── */
+  /* ── Active nav ice left bar ── */
   .nav-active-bar::before {
     content: '';
     position: absolute;
@@ -185,13 +205,13 @@
     box-shadow: inset 2px 0 8px hsl(var(--short) / 0.08);
   }
 
-  /* ── Gold gradient progress bar override ── */
+  /* ── Ice gradient progress bar override ── */
   .progress-gold [data-radix-progress-indicator],
   .progress-gold > div {
     background: linear-gradient(90deg, hsl(var(--gold-dark)), hsl(var(--gold-light))) !important;
   }
 
-  /* ── Header gold gradient line ── */
+  /* ── Header platinum hairline ── */
   .header-gold-line::after {
     content: '';
     position: absolute;
@@ -199,19 +219,30 @@
     height: 1px;
     background: linear-gradient(90deg,
       transparent 0%,
-      hsl(var(--gold-dark)) 20%,
-      hsl(var(--gold-light)) 50%,
-      hsl(var(--gold-dark)) 80%,
+      hsl(207 28% 50%) 20%,
+      hsl(188 85% 78%) 50%,
+      hsl(207 28% 50%) 80%,
       transparent 100%
     );
-    opacity: 0.45;
+    opacity: 0.4;
+  }
+
+  /* ── Logo: brushed platinum-to-ice gradient text ── */
+  .logo-platinum {
+    background: linear-gradient(115deg,
+      hsl(200 35% 94%) 0%,
+      hsl(188 80% 78%) 45%,
+      hsl(208 28% 64%) 100%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
   }
 }
 
 /* ── Animations ── */
 @keyframes glow-pulse-gold {
-  0%, 100% { box-shadow: 0 0 6px hsl(43 90% 46% / 0.35); }
-  50%       { box-shadow: 0 0 18px hsl(43 90% 46% / 0.65), 0 0 6px hsl(45 95% 58% / 0.3); }
+  0%, 100% { box-shadow: 0 0 6px hsl(192 72% 58% / 0.35); }
+  50%       { box-shadow: 0 0 18px hsl(192 72% 58% / 0.60), 0 0 6px hsl(186 90% 74% / 0.3); }
 }
 @keyframes glow-pulse-long {
   0%, 100% { opacity: 1; }
@@ -249,8 +280,8 @@
   overflow: hidden;
   border-bottom: 1px solid hsl(var(--gold) / 0.15);
   background: linear-gradient(180deg,
-    hsl(248 45% 5% / 0.95),
-    hsl(248 50% 4% / 0.95));
+    hsl(216 45% 5% / 0.95),
+    hsl(216 50% 4% / 0.95));
 }
 .ticker-strip::before,
 .ticker-strip::after {
@@ -264,9 +295,9 @@
 }
 .ticker-strip::before {
   left: 0;
-  background: linear-gradient(90deg, hsl(248 45% 5%), transparent);
+  background: linear-gradient(90deg, hsl(216 45% 5%), transparent);
 }
 .ticker-strip::after {
   right: 0;
-  background: linear-gradient(-90deg, hsl(248 45% 5%), transparent);
+  background: linear-gradient(-90deg, hsl(216 45% 5%), transparent);
 }

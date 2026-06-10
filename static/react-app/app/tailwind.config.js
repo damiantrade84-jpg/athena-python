@@ -48,16 +48,22 @@ module.exports = {
           border: "hsl(var(--sidebar-border))",
           ring: "hsl(var(--sidebar-ring))",
         },
-        /* Gold palette */
+        /* Ice accent (legacy "gold" token names, remapped to glacier palette) */
         gold: {
           DEFAULT: "hsl(var(--gold))",
           light: "hsl(var(--gold-light))",
           dark: "hsl(var(--gold-dark))",
           muted: "hsl(var(--gold-muted))",
         },
+        platinum: "hsl(var(--platinum))",
         /* Directional */
         long: "hsl(var(--long))",
         short: "hsl(var(--short))",
+      },
+      fontFamily: {
+        display: ["Cinzel", "serif"],
+        body: ["'Hanken Grotesk'", "system-ui", "sans-serif"],
+        mono: ["'Spline Sans Mono'", "monospace"],
       },
       borderRadius: {
         xl: "calc(var(--radius) + 4px)",
@@ -68,10 +74,10 @@ module.exports = {
       },
       boxShadow: {
         xs: "0 1px 2px 0 rgb(0 0 0 / 0.05)",
-        gold: "0 0 12px hsl(43 90% 46% / 0.25), 0 0 30px hsl(43 90% 46% / 0.08)",
-        "gold-sm": "0 0 8px hsl(43 90% 46% / 0.35)",
-        "long-sm": "0 0 8px hsl(160 84% 39% / 0.35)",
-        "short-sm": "0 0 8px hsl(343 96% 60% / 0.35)",
+        gold: "0 0 12px hsl(192 72% 58% / 0.25), 0 0 30px hsl(192 72% 58% / 0.08)",
+        "gold-sm": "0 0 8px hsl(192 72% 58% / 0.35)",
+        "long-sm": "0 0 8px hsl(152 70% 44% / 0.35)",
+        "short-sm": "0 0 8px hsl(351 88% 60% / 0.35)",
       },
       keyframes: {
         "accordion-down": {
@@ -87,8 +93,8 @@ module.exports = {
           "20%,50%": { opacity: "0" },
         },
         "glow-pulse-gold": {
-          "0%, 100%": { boxShadow: "0 0 6px hsl(43 90% 46% / 0.35)" },
-          "50%": { boxShadow: "0 0 18px hsl(43 90% 46% / 0.65)" },
+          "0%, 100%": { boxShadow: "0 0 6px hsl(192 72% 58% / 0.35)" },
+          "50%": { boxShadow: "0 0 18px hsl(192 72% 58% / 0.65)" },
         },
       },
       animation: {
