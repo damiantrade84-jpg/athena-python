@@ -4128,24 +4128,40 @@ TIMED_EXIT:
       swing: 0.55
 
   # Peak-R give-back close. Once chandelier is active, track the highest R
-  # the trade reaches; if current R drops below peak by giveback_r, close
+  # the trade reaches; if current R drops below peak by the budget, close
   # immediately. Independent of the trail-line breach.
   #
-  # DISABLED (0 = off, 2026-06-10): the previous budgets (0.25-0.7R) were
-  # ~4x tighter than the chandelier rope in R terms (e.g. MT5 intraday:
-  # rope 2.2 ATR / risk 1.5 ATR ~= 1.47R vs giveback 0.35R), so the give-back
-  # always fired first and the chandelier never managed the trade. The trail
-  # is now the single profit-side mechanism. Re-enable only with budgets
-  # calibrated from the live_exit backtest mode (post-peak retrace quantiles
-  # of winners), and keep the budget >= the rope expressed in R.
+  # Fixed budgets DISABLED (0 = off, 2026-06-10): the previous fixed budgets
+  # (0.25-0.7R) were ~4x tighter than the chandelier rope in R terms, so the
+  # give-back always fired first and the chandelier never managed the trade.
+  # Superseded by trail_giveback_frac_of_peak below (2026-06-10): the budget
+  # now scales with the peak, so tolerance is wide early and locks in more as
+  # the win grows. Keep these fixed values at 0 while the fraction is active.
   trail_giveback_r:
     scalp: 0.0
     intraday: 0.0
     swing: 0.0
 
-  # Optional per-venue override for give-back. Disabled with the default
-  # above — populate only alongside calibrated trail_giveback_r values.
+  # Optional per-venue override for the fixed give-back. Disabled with the
+  # default above — populate only alongside calibrated trail_giveback_r values.
   trail_giveback_r_by_venue: {}
+
+  # Percent-of-peak give-back (active mechanism, 2026-06-10). Budget =
+  # max(frac x peak_r, trail_giveback_min_r); overrides the fixed
+  # trail_giveback_r when > 0. Examples at 0.40: peak +1.0R closes at +0.6R,
+  # peak +3.0R closes at +1.8R. Arms once peak >= trail_activation_r and can
+  # fire below the activation line (scalp worst close: +0.4R) but never at or
+  # below breakeven. Defaults are sane-but-uncalibrated (user-approved
+  # 2026-06-10); tune from live TRAIL_GIVEBACK exits. Parser clamps frac to
+  # [0, 0.9].
+  trail_giveback_frac_of_peak:
+    scalp: 0.40
+    intraday: 0.40
+    swing: 0.40
+
+  # Minimum give-back budget in R — stops noise-closes right after arming,
+  # where frac x peak is smallest (scalp: 0.4 x 0.7R = 0.28R -> floored to 0.30R).
+  trail_giveback_min_r: 0.30
 
   # When the chandelier first activates (trade crosses trail_activation_r),
   # clear the fixed broker TP so the trail is the only profit-side exit.
