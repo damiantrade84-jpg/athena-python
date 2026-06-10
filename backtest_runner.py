@@ -384,12 +384,13 @@ def _bt_indicators_from_cache(
     end_idx: int,
     window: int,
     asset_type: str,
-    cache: dict[tuple[int, int, str], dict],
+    cache: dict[tuple, dict],
+    score_group: str | None = None,
 ) -> dict | None:
     """Exact parity cache: compute the same rolling window as legacy path once."""
     if end_idx < 0:
         return None
-    key = (end_idx, window, asset_type)
+    key = (end_idx, window, asset_type, score_group)
     hit = cache.get(key)
     if hit is not None:
         return hit
@@ -397,7 +398,7 @@ def _bt_indicators_from_cache(
     w = candles[start : end_idx + 1]
     if len(w) < 50:
         return None
-    out = calc_indicators_with_normalized(w, asset_type)
+    out = calc_indicators_with_normalized(w, asset_type, score_group=score_group)
     cache[key] = out
     return out
 
@@ -1952,9 +1953,9 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
         return {"error": f"Data fetch failed: {e}"}
 
     bt_vectorized = bool(CONFIG.get("BT_VECTORIZED", False))
-    d1_cache: dict[tuple[int, int, str], dict] = {}
-    h4_cache: dict[tuple[int, int, str], dict] = {}
-    h1_cache: dict[tuple[int, int, str], dict] = {}
+    d1_cache: dict[tuple, dict] = {}
+    h4_cache: dict[tuple, dict] = {}
+    h1_cache: dict[tuple, dict] = {}
     if bt_vectorized:
         log.info("[BT] %s vectorized indicator cache enabled", pair["display"])
 
@@ -2261,6 +2262,7 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
                         window=MIN_BARS,
                         asset_type=pair.get("type", "stock"),
                         cache=d1_cache,
+                        score_group=_pair_score_group,
                     )
                     h4i = _bt_indicators_from_cache(
                         h4_raw,
@@ -2268,6 +2270,7 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
                         window=_h4_need,
                         asset_type=pair.get("type", "stock"),
                         cache=h4_cache,
+                        score_group=_pair_score_group,
                     )
                     h1i = _bt_indicators_from_cache(
                         h1_raw,
@@ -2275,19 +2278,22 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
                         window=_h1_need,
                         asset_type=pair.get("type", "stock"),
                         cache=h1_cache,
+                        score_group=_pair_score_group,
                     )
                     if not d1i or not h4i or not h1i:
                         i += 1
                         continue
                 else:
+                    # Live parity: analyze_pair passes score_group so group-calibrated
+                    # RSI/EMA periods apply (forex 18 / crypto 12 vs universal 14).
                     d1i = calc_indicators_with_normalized(
-                        d1_window, pair.get("type", "stock")
+                        d1_window, pair.get("type", "stock"), score_group=_pair_score_group
                     )
                     h4i = calc_indicators_with_normalized(
-                        h4_window, pair.get("type", "stock")
+                        h4_window, pair.get("type", "stock"), score_group=_pair_score_group
                     )
                     h1i = calc_indicators_with_normalized(
-                        h1_window, pair.get("type", "stock")
+                        h1_window, pair.get("type", "stock"), score_group=_pair_score_group
                     )
 
                 # Inject fib_proximity so structure factor is non-None during backtest
@@ -2896,6 +2902,7 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
                         window=MIN_H4,
                         asset_type=pair.get("type", "stock"),
                         cache=h4_cache,
+                        score_group=_pair_score_group,
                     )
                     h1i = _bt_indicators_from_cache(
                         h1_raw,
@@ -2903,6 +2910,7 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
                         window=_h1_need,
                         asset_type=pair.get("type", "stock"),
                         cache=h1_cache,
+                        score_group=_pair_score_group,
                     )
                     d1i_ctx = _bt_indicators_from_cache(
                         d1_raw,
@@ -2910,19 +2918,20 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
                         window=220,
                         asset_type=pair.get("type", "stock"),
                         cache=d1_cache,
+                        score_group=_pair_score_group,
                     )
                     if not h4i or not h1i or not d1i_ctx:
                         i += 1
                         continue
                 else:
                     h4i = calc_indicators_with_normalized(
-                        h4_window, pair.get("type", "stock")
+                        h4_window, pair.get("type", "stock"), score_group=_pair_score_group
                     )
                     h1i = calc_indicators_with_normalized(
-                        h1_window, pair.get("type", "stock")
+                        h1_window, pair.get("type", "stock"), score_group=_pair_score_group
                     )
                     d1i_ctx = calc_indicators_with_normalized(
-                        d1_ctx, pair.get("type", "stock")
+                        d1_ctx, pair.get("type", "stock"), score_group=_pair_score_group
                     )
 
                 # Inject fib_proximity so structure factor is non-None during backtest
@@ -3516,6 +3525,7 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
                         window=MIN_H1,
                         asset_type=pair.get("type", "stock"),
                         cache=h1_cache,
+                        score_group=_pair_score_group,
                     )
                     h4i_ctx = _bt_indicators_from_cache(
                         h4_raw,
@@ -3523,6 +3533,7 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
                         window=250,
                         asset_type=pair.get("type", "stock"),
                         cache=h4_cache,
+                        score_group=_pair_score_group,
                     )
                     d1i_ctx = _bt_indicators_from_cache(
                         d1_raw,
@@ -3530,19 +3541,20 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
                         window=220,
                         asset_type=pair.get("type", "stock"),
                         cache=d1_cache,
+                        score_group=_pair_score_group,
                     )
                     if not h1i or not h4i_ctx or not d1i_ctx:
                         i += 1
                         continue
                 else:
                     h1i = calc_indicators_with_normalized(
-                        h1_window, pair.get("type", "stock")
+                        h1_window, pair.get("type", "stock"), score_group=_pair_score_group
                     )
                     h4i_ctx = calc_indicators_with_normalized(
-                        h4_ctx, pair.get("type", "stock")
+                        h4_ctx, pair.get("type", "stock"), score_group=_pair_score_group
                     )
                     d1i_ctx = calc_indicators_with_normalized(
-                        d1_ctx, pair.get("type", "stock")
+                        d1_ctx, pair.get("type", "stock"), score_group=_pair_score_group
                     )
 
                 vols = [c["vol"] for c in h1_window]
@@ -5060,8 +5072,8 @@ def backtest_pair_naked(pair: dict, style: str = "naked", validation_mode="stand
     }
 
     bt_vectorized = bool(CONFIG.get("BT_VECTORIZED", False))
-    d1_indicator_cache: dict[tuple[int, int, str], dict] = {}
-    zone_indicator_cache: dict[tuple[int, int, str], dict] = {}
+    d1_indicator_cache: dict[tuple, dict] = {}
+    zone_indicator_cache: dict[tuple, dict] = {}
     _indicator_cache = {}
 
     def _cached_calc_indicators(

@@ -1082,6 +1082,18 @@ def api_quick_execute():
     if _sig_age > _max_age / 2 or _missing_price:
         pair = sig.get("pair", "")
         _pair_obj = next((p for p in _r.ALL_PAIRS if p["display"] == pair), None)
+        if not _pair_obj:
+            # Fail closed like /api/execute: a stale signal that cannot be
+            # refreshed must never proceed with original client data.
+            _r.log.warning(
+                f"[QUICK EXEC] {pair}: pair not found in universe — rejecting stale signal"
+            )
+            return jsonify(
+                {
+                    "error": f"STALE_SIGNAL_REFRESH_FAILED: {pair} not found in universe — signal rejected",
+                    "pair": pair,
+                }
+            ), 409
         if _pair_obj:
             try:
                 _fresh = _r.analyze_pair(_pair_obj, "neutral", style=sig["style"])
@@ -1126,9 +1138,17 @@ def api_quick_execute():
                         if _fresh.get(_fresh_key) is not None:
                             sig[_fresh_key] = _fresh[_fresh_key]
             except Exception as _fresh_err:
+                # Fail closed (parity with /api/execute): refresh failure on a
+                # stale signal rejects instead of executing original client data.
                 _r.log.warning(
-                    f"[QUICK EXEC] {pair}: refresh failed ({_fresh_err}) - continuing with original direction"
+                    f"[QUICK EXEC] {pair}: live refresh failed ({_fresh_err}) — rejecting stale signal"
                 )
+                return jsonify(
+                    {
+                        "error": f"STALE_SIGNAL_REFRESH_FAILED: {pair} live refresh failed — signal rejected",
+                        "pair": pair,
+                    }
+                ), 409
 
     if _has_engine_b_context:
         if _apply_engine_b_execution_levels(sig, engine_b):

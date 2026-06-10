@@ -174,6 +174,18 @@ def _fetch_bybit_klines(
         return None
 
 
+def trim_unconfirmed_tail_candles(candles: list[dict] | None) -> list[dict]:
+    """Drop trailing candles explicitly marked unconfirmed (forming bar).
+
+    Only candles with ``confirmed is False`` are removed; candles without the
+    flag are treated as confirmed (legacy providers). Used so ATR/levels math
+    matches the confirmed-only policy of Engine A scoring."""
+    out = list(candles or [])
+    while out and out[-1].get("confirmed") is False:
+        out.pop()
+    return out
+
+
 def _fetch_bybit_ticker(symbol: str, *, category: str = "linear") -> dict | None:
     """Fetch a normalized Bybit V5 ticker for chart/live-price diagnostics."""
     bybit_symbol = str(symbol or "").replace("/", "").upper()

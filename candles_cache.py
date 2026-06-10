@@ -785,6 +785,17 @@ def fetch_candles(
                 fetch_meta["detail"] = candles.get("detail")
             if candles.get("detail") == "rate_limited":
                 fetch_meta["rateLimited"] = True
+            # Provider-internal fallback (e.g. EODHD/MT5 -> polygon/yfinance):
+            # label provenance so fallback candles never masquerade as the
+            # primary provider in downstream freshness/observability checks.
+            if candles.get("fallback_provider") and candles.get("candles"):
+                fetch_meta["fallback"] = candles.get("fallback_provider")
+                _enrich_fallback_meta(
+                    fetch_meta,
+                    primary_provider=pair.get("source"),
+                    fallback_provider=candles.get("fallback_provider"),
+                    fallback_reason=str(candles.get("detail") or ""),
+                )
 
         if not candles and pair.get("type") != "crypto" and pair.get("source") == "eodhd":
             _yf_sym = yfinance_symbol_for_pair(pair)

@@ -301,7 +301,14 @@ export default function EngineASignalCard({
           <div className="flex items-center gap-2 text-[10px] text-muted-foreground">
             <ArrowUpRight className="w-3 h-3 text-long" />
             TP2: <span className="font-mono text-foreground">{fmtPrice(signal.tp2, pair, type)}</span>
-            {signal.rr != null && <span className="ml-2">R:R {fmtNum(signal.rr ?? signal.rr1, 2)}</span>}
+            {/* Primary R:R = TP1 RR (the value the execution gate validates);
+                backend `rr` mirrors rr2 (TP2 RR), shown separately. */}
+            {(signal.rr1 ?? signal.rr) != null && (
+              <span className="ml-2">R:R {fmtNum(signal.rr1 ?? signal.rr, 2)}</span>
+            )}
+            {signal.rr2 != null && (
+              <span className="ml-1">TP2 R:R {fmtNum(signal.rr2, 2)}</span>
+            )}
           </div>
         )}
 

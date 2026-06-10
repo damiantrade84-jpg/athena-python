@@ -78,6 +78,7 @@ from data_feeds import (  # noqa: E402
     _fetch_bybit_funding_rate,
     _fetch_bybit_klines,
     _fetch_bybit_klines_paginated,
+    trim_unconfirmed_tail_candles,
     _fetch_bybit_ticker,
     _fetch_bybit_open_interest,
     _fetch_open_interest,
@@ -1489,7 +1490,7 @@ def _fallback_source_for_pair(pair: dict) -> str | None:
 def _fetch_fallback_candles(pair: dict, tf: str, limit: int, reason: str = ""):
     """Try fallback sources in order: Polygon → yfinance.
     Uses only Polygon and yfinance.
-    Returns candle list or None if all sources fail."""
+    Returns ``(candles, provider)`` or ``(None, None)`` if all sources fail."""
 
     tag = f" ({reason})" if reason else ""
     disp = pair["display"]
@@ -1500,15 +1501,17 @@ def _fetch_fallback_candles(pair: dict, tf: str, limit: int, reason: str = ""):
         candles = _extract_candles(resp)
         if candles:
             log.info(f"[FALLBACK] {disp} {tf}: using Polygon{tag}")
-            return candles
+            return candles, "polygon"
 
     # 2. yfinance - last resort, broad coverage but lower reliability
     yf_symbol = _yfinance_symbol_for_pair(pair)
     if yf_symbol:
         log.info(f"[FALLBACK] {disp} {tf}: using yfinance{tag}")
-        return fetch_yfinance(yf_symbol, tf, limit)
+        candles = _extract_candles(fetch_yfinance(yf_symbol, tf, limit))
+        if candles:
+            return candles, "yfinance"
 
-    return None
+    return None, None
 
 
 def _atr_for_levels(
@@ -1653,6 +1656,9 @@ def _bybit_atr_for_levels(pair: dict, style: str | None, as_of=None) -> float | 
         except Exception:
             end_ms = None
     candles = _fetch_bybit_klines(symbol, tf, 120, end_ms=end_ms)
+    # Engine A levels use confirmed bars only: drop the forming Bybit bucket so
+    # SL/TP ATR matches the confirmed-only policy used for scoring indicators.
+    candles = trim_unconfirmed_tail_candles(candles)
     if not candles or len(candles) < 20:
         return None
     atr_series = calc_atr(
@@ -2455,9 +2461,15 @@ def fetch_eodhd(pair, tf, limit):
 
     # Fast-fail if EODHD recently returned 402/429; never sleep in scan worker paths.
     if time.time() < _eodhd_cooldown_until:
-        fallback = _fetch_fallback_candles(pair, tf, limit, reason="EODHD cooldown (402)")
+        fallback, fb_provider = _fetch_fallback_candles(pair, tf, limit, reason="EODHD cooldown (402)")
         if fallback:
-            return {"error": True, "symbol": symbol, "detail": "rate_limited", "candles": fallback}
+            return {
+                "error": True,
+                "symbol": symbol,
+                "detail": "rate_limited",
+                "candles": fallback,
+                "fallback_provider": fb_provider,
+            }
         return {"error": True, "symbol": symbol, "detail": "rate_limited"}
 
     try:
@@ -2471,7 +2483,7 @@ def fetch_eodhd(pair, tf, limit):
         ticker = _eodhd_ticker_for_pair(pair)
 
         if not ticker:
-            fallback = _fetch_fallback_candles(
+            fallback, fb_provider = _fetch_fallback_candles(
                 pair, tf, limit, reason="no valid EODHD ticker"
             )
 
@@ -2481,6 +2493,7 @@ def fetch_eodhd(pair, tf, limit):
                     "symbol": symbol,
                     "detail": "no valid EODHD ticker (using fallback)",
                     "candles": fallback,
+                    "fallback_provider": fb_provider,
                 }
 
             return {"error": True, "symbol": symbol, "detail": "no valid EODHD ticker"}
@@ -2514,7 +2527,7 @@ def fetch_eodhd(pair, tf, limit):
             if not bars:
                 log.warning(f"[EODHD] {ticker} D1: no data")
 
-                fallback = _fetch_fallback_candles(
+                fallback, fb_provider = _fetch_fallback_candles(
                     pair, tf, limit, reason="EODHD daily unavailable"
                 )
 
@@ -2524,6 +2537,7 @@ def fetch_eodhd(pair, tf, limit):
                         "symbol": symbol,
                         "detail": "EODHD daily unavailable (using fallback)",
                         "candles": fallback,
+                        "fallback_provider": fb_provider,
                     }
 
                 return {
@@ -2571,7 +2585,7 @@ def fetch_eodhd(pair, tf, limit):
                     return {"error": True, "symbol": symbol, "detail": "rate_limited"}
 
             if not bars:
-                fallback = _fetch_fallback_candles(
+                fallback, fb_provider = _fetch_fallback_candles(
                     pair, tf, limit, reason="EODHD intraday unavailable"
                 )
 
@@ -2581,6 +2595,7 @@ def fetch_eodhd(pair, tf, limit):
                         "symbol": symbol,
                         "detail": "EODHD intraday unavailable (using fallback)",
                         "candles": fallback,
+                        "fallback_provider": fb_provider,
                     }
 
                 log.warning(f"[EODHD] {ticker} {tf}: no data")
@@ -2631,9 +2646,15 @@ def fetch_eodhd(pair, tf, limit):
 
     except Exception as e:
         log.error(f"[EODHD] {pair['display']}: {e}")
-        fallback = _fetch_fallback_candles(pair, tf, limit, reason=f"EODHD error: {e}")
+        fallback, fb_provider = _fetch_fallback_candles(pair, tf, limit, reason=f"EODHD error: {e}")
         if fallback:
-            return {"error": True, "symbol": symbol, "detail": str(e), "candles": fallback}
+            return {
+                "error": True,
+                "symbol": symbol,
+                "detail": str(e),
+                "candles": fallback,
+                "fallback_provider": fb_provider,
+            }
         return {"error": True, "symbol": symbol, "detail": str(e)}
 
 
@@ -2810,9 +2831,15 @@ def fetch_mt5(pair: dict, tf: str, limit: int):
     symbol = pair.get("display", pair.get("symbol", ""))
 
     def _mt5_fallback(detail: str):
-        fallback = _fetch_fallback_candles(pair, tf, limit, reason=detail)
+        fallback, fb_provider = _fetch_fallback_candles(pair, tf, limit, reason=detail)
         if fallback:
-            return {"error": True, "symbol": symbol, "detail": detail, "candles": fallback}
+            return {
+                "error": True,
+                "symbol": symbol,
+                "detail": detail,
+                "candles": fallback,
+                "fallback_provider": fb_provider,
+            }
         return {"error": True, "symbol": symbol, "detail": detail}
 
     if not mt5_executor.mt5_connect():
@@ -7861,6 +7888,13 @@ def api_webhook():
                     "approval": approval.to_dict(),
                 }
             ), 200
+
+        # Guardian pre-trade invariants (parity with /api/execute and
+        # /api/quick-execute): webhook must not bypass deterministic gates.
+        _ptc_ok, _ptc_reason = _guardian_pre_trade(sig, positions, account, _pos_resp)
+        if not _ptc_ok:
+            log.warning(f"[WEBHOOK] {pair_name} GUARDIAN BLOCKED: {_ptc_reason}")
+            return jsonify({"error": f"Guardian: {_ptc_reason}"}), 400
 
         result = run_managed_execution(_exec_venue, sig, approval)
 

@@ -312,6 +312,9 @@ class TestQuickExecuteExecutionGuard:
                     "type": "forex",
                     "direction": "LONG",
                     "price": 1.1,
+                    # Fresh timestamp: stale signals now fail closed (409)
+                    # before reaching the broker path under test.
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
                 },
                 "pip_mode": "intraday",
             },
