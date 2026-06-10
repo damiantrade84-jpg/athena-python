@@ -2777,12 +2777,14 @@ export default function TVChartPanel() {
     const currentTf = normalizeBackendTf(timeframe);
     const symbolChanged = currentSymbolKey && (!reviewSymbolKey || reviewSymbolKey !== currentSymbolKey);
     const timeframeChanged = currentTf && reviewTimeframe && reviewTimeframe !== currentTf;
-    if (symbolChanged || timeframeChanged) {
+    const routeTf = normalizeBackendTf(timeframeRoute?.autoSelectTf);
+    const autoRouteApplied = timeframeAutoMode && routeTf && currentTf === routeTf;
+    if (symbolChanged || (timeframeChanged && !autoRouteApplied)) {
       setAiReview(null);
       setAiReviewError(null);
       lastAppliedRouteKeyRef.current = null;
     }
-  }, [aiReview, currentSymbolKey, timeframe]);
+  }, [aiReview, currentSymbolKey, timeframe, timeframeAutoMode, timeframeRoute]);
 
   useEffect(() => {
     if (!timeframeAutoMode || !timeframeRoute || timeframeRoute.enabled === false) return;
@@ -3162,7 +3164,10 @@ export default function TVChartPanel() {
         screenshot_meta: meta,
       });
       const responseSymbolKey = symbolKey(response.engine_a_context?.symbol) || symbolKey(symbol);
-      if (responseSymbolKey && currentPairKeyRef.current && responseSymbolKey !== currentPairKeyRef.current) return;
+      if (responseSymbolKey && currentPairKeyRef.current && responseSymbolKey !== currentPairKeyRef.current) {
+        setAiReviewError('Review completed for a different symbol; select the symbol again to view results.');
+        return;
+      }
       aiReviewSymbolKeyRef.current = responseSymbolKey;
       lastAppliedRouteKeyRef.current = null;
       setAiReview(response);

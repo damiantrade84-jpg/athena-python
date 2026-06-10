@@ -50,15 +50,26 @@ export interface AIReviewCardProps {
 export default function AIReviewCard({ response }: AIReviewCardProps) {
   const ai = response.ai_review;
   const c = response.concordance;
+  if (!ai || !c) {
+    return (
+      <Card className="border-border/60 bg-card/50">
+        <CardContent className="p-3">
+          <div className="text-[11px] text-warning border border-border/40 rounded-md p-2">
+            AI review response is incomplete (missing {[!ai ? 'ai_review' : null, !c ? 'concordance' : null].filter(Boolean).join(' and ')}).
+          </div>
+        </CardContent>
+      </Card>
+    );
+  }
   const ts = response.timestamps;
   const ctx = response.engine_a_context;
   const summary = response.aiReviewSummary ?? response.ai_review_summary;
   const verdictComparison =
     response.engineAVerdictComparison ?? response.engine_a_verdict_comparison;
   const atrInfo = ctx?.atr;
-  const scanDelta = deltaSeconds(ts.scan_timestamp, ts.chart_captured_at);
+  const scanDelta = deltaSeconds(ts?.scan_timestamp, ts?.chart_captured_at);
   const verdictClass = VERDICT_PILL[ai.verdict] ?? VERDICT_PILL.NO_TRADE;
-  const concordanceClass = CONCORDANCE_PILL[c.concordance];
+  const concordanceClass = CONCORDANCE_PILL[c.concordance] ?? CONCORDANCE_PILL.unknown;
 
   const supporting = showList(ai.supporting_reasons);
   const risks = showList(ai.risks);

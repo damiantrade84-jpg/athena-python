@@ -492,6 +492,35 @@ def test_tv_chart_panel_clears_stale_ai_review_on_pair_change():
     assert "routeSymbolKey !== currentSymbolKey" in source
 
 
+def test_tv_chart_panel_stale_clear_normalizes_timeframes():
+    source = _read(TV_PANEL)
+
+    assert "normalizeBackendTf(aiReview.engine_a_context?.timeframe)" in source
+    assert "normalizeBackendTf(timeframe)" in source
+
+
+def test_tv_chart_panel_stale_clear_exempts_auto_route_tf():
+    source = _read(TV_PANEL)
+
+    assert "normalizeBackendTf(timeframeRoute?.autoSelectTf)" in source
+    assert "autoRouteApplied" in source
+    assert "timeframeChanged && !autoRouteApplied" in source
+
+
+def test_tv_chart_panel_symbol_race_sets_review_error():
+    source = _read(TV_PANEL)
+
+    assert "Review completed for a different symbol" in source
+    assert "setAiReviewError('Review completed for a different symbol" in source
+
+
+def test_ai_review_card_handles_incomplete_payload():
+    source = _read(ROOT / "static/react-app/app/src/components/athena/AIReviewCard.tsx")
+
+    assert "!ai || !c" in source
+    assert "AI review response is incomplete" in source
+
+
 def test_engine_a_review_layout_enables_required_lean_indicators():
     source = _read(TV_PANEL)
 
