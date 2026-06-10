@@ -175,3 +175,45 @@ class TestPerVenueResolution:
     def test_giveback_missing_config_returns_zero(self):
         tcfg = _cfg({"trail_giveback_r": {}, "trail_giveback_r_by_venue": {}})
         assert _giveback_r_for(tcfg, "intraday", "mt5") == pytest.approx(0.0)
+
+
+class TestPercentOfPeakBudgetResolver:
+    def test_frac_budget_scales_with_peak(self):
+        tcfg = _cfg({
+            "trail_giveback_frac_of_peak": 0.40,
+            "trail_giveback_min_r": 0.30,
+        })
+        # 0.40 * 2.0R = 0.8R budget (floor 0.30 not binding)
+        assert tem._giveback_budget_r_for(tcfg, "intraday", "mt5", 2.0) == pytest.approx(0.8)
+
+    def test_min_floor_binds_near_activation(self):
+        tcfg = _cfg({
+            "trail_giveback_frac_of_peak": 0.40,
+            "trail_giveback_min_r": 0.30,
+        })
+        # 0.40 * 0.7R = 0.28 < 0.30 floor -> 0.30
+        assert tem._giveback_budget_r_for(tcfg, "scalp", "mt5", 0.7) == pytest.approx(0.30)
+
+    def test_frac_zero_falls_back_to_fixed(self):
+        tcfg = _cfg({
+            "trail_giveback_frac_of_peak": 0.0,
+            "trail_giveback_min_r": 0.30,
+        })
+        # Falls back to fixed trail_giveback_r_by_venue: mt5/intraday = 0.35
+        assert tem._giveback_budget_r_for(tcfg, "intraday", "mt5", 2.0) == pytest.approx(0.35)
+
+    def test_per_style_dict_accepted(self):
+        tcfg = _cfg({
+            "trail_giveback_frac_of_peak": {"scalp": 0.5, "intraday": 0.4, "swing": 0.35},
+            "trail_giveback_min_r": 0.30,
+        })
+        assert tem._giveback_budget_r_for(tcfg, "swing", None, 4.0) == pytest.approx(1.4)
+
+    def test_frac_clamped_below_one(self):
+        # A misconfigured frac >= 1 would let the close fire at/below 0R.
+        # Parser clamps to 0.9 -> budget 0.9 * 2.0 = 1.8R.
+        tcfg = _cfg({
+            "trail_giveback_frac_of_peak": 1.5,
+            "trail_giveback_min_r": 0.30,
+        })
+        assert tem._giveback_budget_r_for(tcfg, "intraday", "mt5", 2.0) == pytest.approx(1.8)

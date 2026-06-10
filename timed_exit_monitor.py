@@ -84,6 +84,10 @@ _DEFAULT_CFG: dict = {
     "breakeven_arm_r": {"scalp": 0.5, "intraday": 0.6, "swing": 0.7},
     "trail_activation_r": {"scalp": 0.7, "intraday": 1.0, "swing": 1.5},
     "trail_atr_mult": {"scalp": 2.0, "intraday": 2.5, "swing": 3.0},
+    # Percent-of-peak give-back: budget = max(frac * peak_r, min_r). 0 = off
+    # (fixed trail_giveback_r then applies). Enabled via config.yaml.
+    "trail_giveback_frac_of_peak": {"scalp": 0.0, "intraday": 0.0, "swing": 0.0},
+    "trail_giveback_min_r": 0.30,
     "pre_activation_profit_protect_enabled": False,
     "pre_activation_profit_arm_r": {"scalp": 0.20, "intraday": 0.25, "swing": 0.35},
     "pre_activation_profit_close_r": {"scalp": 0.0, "intraday": 0.0, "swing": 0.0},
@@ -682,6 +686,25 @@ def _get_timed_cfg(config_fn) -> dict:
                 s: float(bucket.get(s, merged["trail_giveback_r"][s]))
                 for s in ("scalp", "intraday", "swing")
             }
+    # Percent-of-peak give-back fraction: scalar or per-style dict. Clamped to
+    # [0, 0.9] — frac >= 1 would let the give-back close fire at or below 0R.
+    _frac_defaults = _DEFAULT_CFG["trail_giveback_frac_of_peak"]
+    _frac_raw = raw.get("trail_giveback_frac_of_peak", _frac_defaults)
+    if isinstance(_frac_raw, dict):
+        merged["trail_giveback_frac_of_peak"] = {
+            s: min(max(_safe_float(_frac_raw.get(s, _frac_defaults[s])), 0.0), 0.9)
+            for s in ("scalp", "intraday", "swing")
+        }
+    else:
+        _frac_scalar = min(max(_safe_float(_frac_raw), 0.0), 0.9)
+        merged["trail_giveback_frac_of_peak"] = {
+            s: _frac_scalar for s in ("scalp", "intraday", "swing")
+        }
+    try:
+        _gb_min = float(raw.get("trail_giveback_min_r", _DEFAULT_CFG["trail_giveback_min_r"]))
+    except (TypeError, ValueError):
+        _gb_min = float(_DEFAULT_CFG["trail_giveback_min_r"])
+    merged["trail_giveback_min_r"] = max(_gb_min, 0.0)
     merged["pre_activation_profit_protect_enabled"] = bool(
         raw.get(
             "pre_activation_profit_protect_enabled",
@@ -874,6 +897,26 @@ def _giveback_r_for(tcfg: dict, style: str, venue: str | None) -> float:
         return float(default)
     except (TypeError, ValueError):
         return 0.0
+
+
+def _giveback_budget_r_for(
+    tcfg: dict, style: str, venue: str | None, peak_r: float
+) -> float:
+    """Effective peak give-back budget in R.
+
+    Percent-of-peak (trail_giveback_frac_of_peak > 0) wins over the fixed
+    trail_giveback_r: budget = max(frac * peak_r, trail_giveback_min_r).
+    With frac == 0 the fixed budget applies; 0 everywhere disables give-back.
+    """
+    frac_map = tcfg.get("trail_giveback_frac_of_peak") or {}
+    if isinstance(frac_map, dict):
+        frac = _safe_float(frac_map.get(style, 0.0))
+    else:
+        frac = _safe_float(frac_map)
+    if frac > 0 and peak_r > 0:
+        min_r = _safe_float(tcfg.get("trail_giveback_min_r", 0.0))
+        return max(frac * peak_r, min_r)
+    return _giveback_r_for(tcfg, style, venue)
 
 
 def _venue_style_r_for(
