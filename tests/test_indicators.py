@@ -266,3 +266,11 @@ class TestCalcLevels:
         result = calc_levels(100.0, 2.0, "LONG", "crypto")
         assert result["rr1"] > 0
         assert result["rr2"] > result["rr1"]
+
+    def test_neutral_direction_returns_null_levels(self):
+        result = calc_levels(100.0, 2.0, "neutral", "forex")
+        assert result["sl"] is None
+        assert result["tp1"] is None
+        assert result["tp2"] is None
+        assert result["rr1"] is None
+        assert result["rr2"] is None

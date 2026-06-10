@@ -8,7 +8,7 @@ structural SL can only widen the ATR stop, never tighten it.
 
 from __future__ import annotations
 
-from indicators import select_overlay_sl
+from indicators import select_overlay_sl, struct_sl_on_correct_side
 
 
 # --- legacy behavior (floor off): pick the tighter (closer-to-price) stop ----
@@ -59,3 +59,20 @@ def test_floor_never_tighter_than_atr_distance():
     ]:
         final = select_overlay_sl(direction, atr_sl, struct_sl, floor_atr=True)
         assert abs(entry - final) >= abs(entry - atr_sl) - 1e-9
+
+
+def test_legacy_long_rejects_wrong_side_struct_with_entry():
+    # LONG entry 100: structural SL above entry must not be adopted (legacy mode).
+    assert select_overlay_sl("LONG", 98.0, 101.0, floor_atr=False, entry_price=100.0) == 98.0
+
+
+def test_legacy_short_rejects_wrong_side_struct_with_entry():
+    # SHORT entry 100: structural SL below entry must not be adopted (legacy mode).
+    assert select_overlay_sl("SHORT", 102.0, 99.0, floor_atr=False, entry_price=100.0) == 102.0
+
+
+def test_struct_sl_on_correct_side_long_and_short():
+    assert struct_sl_on_correct_side("LONG", 98.0, 100.0) is True
+    assert struct_sl_on_correct_side("LONG", 101.0, 100.0) is False
+    assert struct_sl_on_correct_side("SHORT", 102.0, 100.0) is True
+    assert struct_sl_on_correct_side("SHORT", 99.0, 100.0) is False

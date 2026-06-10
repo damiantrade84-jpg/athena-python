@@ -3146,6 +3146,7 @@ from indicators import (  # noqa: E402
     calc_stochastic,
     calc_levels,
     select_overlay_sl,
+    struct_sl_on_correct_side,
     calc_indicators,
     calc_fib,
     calc_indicators_with_normalized,
@@ -13687,7 +13688,7 @@ def analyze_pair(
 
     risk_pct = (
         round(abs(float(price) - float(lvl["sl"])) / float(price) * 100, 2)
-        if price and float(price) != 0
+        if price and float(price) != 0 and lvl.get("sl") is not None
         else None
     )
 
@@ -13714,8 +13715,10 @@ def analyze_pair(
             from market_structure import (
                 ENGINE_B_REASON_ADVERSE_DXY,
                 ENGINE_B_REASON_RESISTANCE_TOO_CLOSE,
+                ENGINE_B_REASON_SL_WRONG_SIDE,
                 ENGINE_B_REASON_STRUCTURAL_SL_HARD_CAP,
                 ENGINE_B_REASON_SUPPORT_TOO_CLOSE,
+                ENGINE_B_REASON_TP_WRONG_SIDE,
                 engine as naked_engine,
             )
             _overlay_style, _overlay_profile = _naked_scan_style_profile(
@@ -13798,16 +13801,37 @@ def analyze_pair(
                 if structure_data.get("recommended_stop_loss"):
                     _struct_sl = float(structure_data["recommended_stop_loss"])
                     _math_sl = float(lvl["sl"])
-                    # Legacy (floor off): pick the tighter stop (closer to price).
-                    # Floor on (ENGINE_A_STRUCTURAL_SL_FLOOR_ATR): structural SL may
-                    # only widen the ATR stop, never tighten it inside the ATR
-                    # baseline — avoids stop-hunt-prone stops on swing/sweep levels.
-                    lvl["sl"] = select_overlay_sl(
-                        direction,
-                        _math_sl,
-                        _struct_sl,
-                        bool(CONFIG.get("ENGINE_A_STRUCTURAL_SL_FLOOR_ATR", True)),
+                    _entry_px = float(price)
+                    _sl_wrong_side = not struct_sl_on_correct_side(
+                        direction, _struct_sl, _entry_px
+                    ) and bool(
+                        CONFIG.get("ENGINE_A_STRUCTURAL_SL_VALIDATE_SIDE", True)
                     )
+                    if _sl_wrong_side:
+                        log.warning(
+                            "[ENGINE-B] pair=%s block_code=%s direction=%s struct_sl=%.6f entry=%.6f",
+                            pair["display"],
+                            ENGINE_B_REASON_SL_WRONG_SIDE,
+                            direction,
+                            _struct_sl,
+                            _entry_px,
+                        )
+                        _engine_b_block_reasons.append(
+                            f"ENGINE-B: {ENGINE_B_REASON_SL_WRONG_SIDE}"
+                        )
+                        lvl["sl"] = _math_sl
+                    else:
+                        # Legacy (floor off): pick the tighter stop (closer to price).
+                        # Floor on (ENGINE_A_STRUCTURAL_SL_FLOOR_ATR): structural SL may
+                        # only widen the ATR stop, never tighten it inside the ATR
+                        # baseline — avoids stop-hunt-prone stops on swing/sweep levels.
+                        lvl["sl"] = select_overlay_sl(
+                            direction,
+                            _math_sl,
+                            _struct_sl,
+                            bool(CONFIG.get("ENGINE_A_STRUCTURAL_SL_FLOOR_ATR", True)),
+                            entry_price=_entry_px,
+                        )
 
                     # Hard SL distance cap - prevents runaway structural overrides.
                     # Use the same resolver as risk/execution so mapped volatile
@@ -13846,14 +13870,37 @@ def analyze_pair(
                 if structure_data.get("recommended_take_profit"):
                     _struct_tp = float(structure_data["recommended_take_profit"])
                     _math_tp1 = float(lvl["tp1"])
-                    lvl["tp1"] = (
-                        min(_math_tp1, _struct_tp)
-                        if direction == "LONG"
-                        else max(_math_tp1, _struct_tp)
+                    _entry_px = float(price)
+                    _tp_wrong_side = (
+                        direction == "LONG" and _struct_tp <= _entry_px
+                    ) or (
+                        direction == "SHORT" and _struct_tp >= _entry_px
                     )
+                    if _tp_wrong_side:
+                        log.warning(
+                            "[ENGINE-B] pair=%s block_code=%s direction=%s struct_tp=%.6f entry=%.6f",
+                            pair["display"],
+                            ENGINE_B_REASON_TP_WRONG_SIDE,
+                            direction,
+                            _struct_tp,
+                            _entry_px,
+                        )
+                        _engine_b_block_reasons.append(
+                            f"ENGINE-B: {ENGINE_B_REASON_TP_WRONG_SIDE}"
+                        )
+                    else:
+                        lvl["tp1"] = (
+                            min(_math_tp1, _struct_tp)
+                            if direction == "LONG"
+                            else max(_math_tp1, _struct_tp)
+                        )
 
-                risk_pct = round(
-                    abs(float(price) - float(lvl["sl"])) / float(price) * 100, 2
+                risk_pct = (
+                    round(
+                        abs(float(price) - float(lvl["sl"])) / float(price) * 100, 2
+                    )
+                    if lvl.get("sl") is not None and float(price)
+                    else None
                 )
                 _engine_b_overlay_meta = {
                     "applied": True,
@@ -13868,9 +13915,12 @@ def analyze_pair(
             log.error(f"[ENGINE-B] Error on {pair['display']}: {e}")
     # ------------------------------------------------
 
-    _sl_distance_for_rr = abs(float(price) - float(lvl["sl"]))
-    risk_pct = round((_sl_distance_for_rr / float(price) * 100) if float(price) else 0.0, 2)
-    if _sl_distance_for_rr > 0:
+    _sl_distance_for_rr = (
+        abs(float(price) - float(lvl["sl"])) if lvl.get("sl") is not None else 0.0
+    )
+    if lvl.get("sl") is not None and float(price):
+        risk_pct = round(_sl_distance_for_rr / float(price) * 100, 2)
+    if _sl_distance_for_rr > 0 and lvl.get("tp1") is not None and lvl.get("tp2") is not None:
         lvl["rr1"] = abs(float(lvl["tp1"]) - float(price)) / _sl_distance_for_rr
         lvl["rr2"] = abs(float(lvl["tp2"]) - float(price)) / _sl_distance_for_rr
 
@@ -14005,12 +14055,12 @@ def analyze_pair(
         "thresholdProgressPct": _confluence_pct,
         "engine_b": structure_data if structure_data else {},
         "price": round(float(price), 6),
-        "sl": round(float(lvl["sl"]), 6),
-        "tp1": round(float(lvl["tp1"]), 6),
-        "tp2": round(float(lvl["tp2"]), 6),
-        "rr1": round(float(lvl["rr1"]), 2),
-        "rr2": round(float(lvl["rr2"]), 2),
-        "rr": round(float(lvl["rr2"]), 2),
+        "sl": round(float(lvl["sl"]), 6) if lvl.get("sl") is not None else None,
+        "tp1": round(float(lvl["tp1"]), 6) if lvl.get("tp1") is not None else None,
+        "tp2": round(float(lvl["tp2"]), 6) if lvl.get("tp2") is not None else None,
+        "rr1": round(float(lvl["rr1"]), 2) if lvl.get("rr1") is not None else None,
+        "rr2": round(float(lvl["rr2"]), 2) if lvl.get("rr2") is not None else None,
+        "rr": round(float(lvl["rr2"]), 2) if lvl.get("rr2") is not None else None,
         "atr": round(float(atr), 6),
         "atrDiagnostics": _build_engine_a_atr_diagnostics(
             atr_value=float(atr),
@@ -14028,8 +14078,22 @@ def analyze_pair(
             h4_candles=h4,
             h1_candles=h1,
         ),
-        "slDistance": round(abs(float(price) - float(lvl["sl"])), 6),
-        "slPips": round(abs(float(price) - float(lvl["sl"])) * (100 if "JPY" in pair.get("display", "") else 10000) if pair.get("type") == "forex" else 1, 1),
+        "slDistance": (
+            round(abs(float(price) - float(lvl["sl"])), 6)
+            if lvl.get("sl") is not None
+            else None
+        ),
+        "slPips": (
+            round(
+                abs(float(price) - float(lvl["sl"]))
+                * (100 if "JPY" in pair.get("display", "") else 10000)
+                if pair.get("type") == "forex"
+                else 1,
+                1,
+            )
+            if lvl.get("sl") is not None
+            else None
+        ),
         "slPct": risk_pct,
         "fib": fib,
         "d1": d1i,
@@ -14358,13 +14422,22 @@ def _build_style_levels(price: float, atr: float, direction: str, pair_type: str
     for _style in ("scalp", "intraday", "swing"):
         try:
             lvl = _calc_levels(price, atr, direction, pair_type, style=_style)
-            result[_style] = {
-                "sl":  round(float(lvl["sl"]),  6),
-                "tp1": round(float(lvl["tp1"]), 6),
-                "tp2": round(float(lvl["tp2"]), 6),
-                "rr1": round(float(lvl["rr1"]), 2),
-                "rr2": round(float(lvl["rr2"]), 2),
-            }
+            if lvl.get("sl") is None:
+                result[_style] = {
+                    "sl": None,
+                    "tp1": None,
+                    "tp2": None,
+                    "rr1": None,
+                    "rr2": None,
+                }
+            else:
+                result[_style] = {
+                    "sl": round(float(lvl["sl"]), 6),
+                    "tp1": round(float(lvl["tp1"]), 6),
+                    "tp2": round(float(lvl["tp2"]), 6),
+                    "rr1": round(float(lvl["rr1"]), 2),
+                    "rr2": round(float(lvl["rr2"]), 2),
+                }
         except Exception:
             pass
     return result

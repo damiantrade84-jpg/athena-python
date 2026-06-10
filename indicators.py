@@ -877,7 +877,22 @@ def calc_levels(
 
     regime_state: 0=TRENDING (wider stops), 1=RANGING (default), 2=HIGH_VOLATILITY (wider stops), 3=LOW_VOLATILITY (tighter stops).
 
+    direction must be "LONG" or "SHORT"; any other value (e.g. "neutral") returns null levels.
+
     """
+
+    if direction not in ("LONG", "SHORT"):
+        return {
+            "sl": None,
+            "tp1": None,
+            "tp2": None,
+            "rr1": None,
+            "rr2": None,
+            "mults": None,
+            "mults_base": None,
+            "mults_effective": None,
+            "regimeFactor": None,
+        }
 
     # Style-aware ATR multiplier lookup
     _style = (style or "swing").lower()
@@ -942,8 +957,23 @@ def calc_levels(
     }
 
 
+def struct_sl_on_correct_side(
+    direction: str, struct_sl: float, entry_price: float
+) -> bool:
+    """True when structural SL is on the loss side of entry for the trade direction."""
+    if direction == "LONG":
+        return struct_sl < entry_price
+    if direction == "SHORT":
+        return struct_sl > entry_price
+    return False
+
+
 def select_overlay_sl(
-    direction: str, math_sl: float, struct_sl: float, floor_atr: bool
+    direction: str,
+    math_sl: float,
+    struct_sl: float,
+    floor_atr: bool,
+    entry_price: float | None = None,
 ) -> float:
     """Combine the ATR (math) SL with an Engine B structural SL for Engine A.
 
@@ -958,6 +988,9 @@ def select_overlay_sl(
         avoids placing the stop on swing/sweep liquidity that gets hunted.
         LONG -> min(...) (lower = wider), SHORT -> max(...) (higher = wider).
     """
+    if entry_price is not None and CONFIG.get("ENGINE_A_STRUCTURAL_SL_VALIDATE_SIDE", True):
+        if not struct_sl_on_correct_side(direction, struct_sl, float(entry_price)):
+            return math_sl
     if floor_atr:
         return min(math_sl, struct_sl) if direction == "LONG" else max(math_sl, struct_sl)
     return max(math_sl, struct_sl) if direction == "LONG" else min(math_sl, struct_sl)
@@ -1085,7 +1118,12 @@ def _calc_indicator_bundle(candles: list, periods: dict | None = None) -> dict:
         "ema50": calc_ema(cl, int(p.get("ema_momentum", p.get("ema_trend", 50)))),
         "ema200": calc_ema(cl, int(p.get("ema_long", 200))),
         "rsi": calc_rsi(cl, int(p.get("rsi", 14))),
-        "macd": calc_macd(cl),  # MACD periods are applied at call site via wrapper for now (macd default 12/26/9)
+        "macd": calc_macd(
+            cl,
+            int(p.get("macd_fast", 12)),
+            int(p.get("macd_slow", 26)),
+            int(p.get("macd_signal", 9)),
+        ),
         "atr": calc_atr(hi, lo, cl, int(p.get("atr", 14))),
         "adx": calc_adx(hi, lo, cl, int(p.get("adx", 14))),
         "bb": calc_bb(cl, 20, 2),
@@ -1258,8 +1296,6 @@ def calc_indicators_for_engine_a(
         }
 
         bundle = _calc_indicator_bundle(candles, periods=periods)
-        # Note: full MACD period override would require a small enhancement to calc_macd;
-        # for v1 we keep the proven 12/26/9 while still exposing the resolver for future use.
         return calc_indicators(candles, _bundle=bundle)
 
     except Exception as exc:

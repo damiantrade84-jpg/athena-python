@@ -480,6 +480,7 @@ ENGINE_B_REASON_STRUCTURAL_SL_HARD_CAP = "structural_sl_rejected_hard_cap"
 # pins removal of the legacy gate (audit BUG-B-1 / BUG-B-7).
 ENGINE_B_REASON_FOREX_ADX_LOW = "forex_adx_below_min"
 ENGINE_B_REASON_TP_WRONG_SIDE = "tp_wrong_side"
+ENGINE_B_REASON_SL_WRONG_SIDE = "sl_wrong_side"
 ENGINE_B_REASON_SEQUENCE_COUNTER_TREND = "sequence_counter_trend"
 ENGINE_B_REASON_NO_TRIGGER_PATTERN = "no_trigger_pattern"
 ENGINE_B_REASON_BOS_WITHOUT_VOLUME = "bos_without_volume"
