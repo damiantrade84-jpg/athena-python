@@ -2,12 +2,20 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timezone
 from typing import Any
 
 from ai_review.persistence import find_scalp_review_by_id
 from ai_scalp_review.scalp_verdict import build_scalp_verdict_comparison
 from symbol_matching import symbol_match_keys, symbols_match
+
+log = logging.getLogger("sentinel.engine_d_execute_gate")
+
+# Soft-warning marker stamped by scalp_engine when the TVQ execution gate
+# demotes a passing candidate (tvq_blocks_execution). Deterministic — the AI
+# review path must never re-open it.
+_TVQ_BLOCK_WARNING = "tvq_below_threshold_proxy_volume"
 
 
 def _normalize_symbol_keys(symbol: str) -> set[str]:
@@ -176,6 +184,12 @@ def engine_d_signal_hard_block(signal: dict[str, Any]) -> str | None:
     gate = str(signal.get("gate_result", "PASS") or "PASS").upper()
     if gate == "BLOCKED":
         return str(signal.get("candidate_status") or "ENGINE_D_BLOCKED")
+    soft_warnings = signal.get("soft_warnings")
+    if (
+        isinstance(soft_warnings, (list, tuple))
+        and _TVQ_BLOCK_WARNING in soft_warnings
+    ) or str(signal.get("candidate_status") or "") == _TVQ_BLOCK_WARNING:
+        return "ENGINE_D_TVQ_BLOCKED_NOT_EXECUTABLE"
     direction = str(signal.get("direction") or "").upper()
     if direction not in ("LONG", "SHORT"):
         return "ENGINE_D_DIRECTION_MISSING"
@@ -274,6 +288,17 @@ def resolve_engine_d_execute_gate(
         level_block = _ai_review_level_block(signal, ctx)
         if level_block:
             return level_block, None
+        gate_result = str(signal.get("gate_result", "PASS") or "PASS").upper()
+        if gate_result != "PASS" or signal.get("executable") is False:
+            log.warning(
+                "AI_REOPENED_WATCHLIST pair=%s grade=%s gate_result=%s "
+                "candidate_status=%s review_id=%s",
+                symbol,
+                grade,
+                gate_result,
+                signal.get("candidate_status"),
+                review_id,
+            )
         return None, review
 
     return _legacy_mechanical_block(signal), None

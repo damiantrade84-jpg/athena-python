@@ -132,6 +132,51 @@ def test_watchlist_ab_candidate_allowed_with_fresh_ai_review():
     assert review is not None
 
 
+def test_tvq_blocked_candidate_not_reopened_by_ai_review():
+    review_id, audit_db = _seed_review()
+    signal = {
+        "pair": "EUR/USD",
+        "direction": "LONG",
+        "ai_grade": "B",
+        "gate_result": "WATCHLIST",
+        "executable": False,
+        "fail_reasons": [],
+        "soft_warnings": ["tvq_below_threshold_proxy_volume"],
+        "price": 1.1,
+        "sl": 1.095,
+        "tp1": 1.11,
+    }
+    reason, _ = resolve_engine_d_execute_gate(
+        signal,
+        review_id=review_id,
+        audit_db=audit_db,
+        cfg=_cfg(),
+    )
+    assert reason == "ENGINE_D_TVQ_BLOCKED_NOT_EXECUTABLE"
+
+
+def test_tvq_candidate_status_blocked_without_soft_warning():
+    review_id, audit_db = _seed_review()
+    signal = {
+        "pair": "EUR/USD",
+        "direction": "LONG",
+        "ai_grade": "A",
+        "gate_result": "WATCHLIST",
+        "executable": False,
+        "candidate_status": "tvq_below_threshold_proxy_volume",
+        "price": 1.1,
+        "sl": 1.095,
+        "tp1": 1.11,
+    }
+    reason, _ = resolve_engine_d_execute_gate(
+        signal,
+        review_id=review_id,
+        audit_db=audit_db,
+        cfg=_cfg(),
+    )
+    assert reason == "ENGINE_D_TVQ_BLOCKED_NOT_EXECUTABLE"
+
+
 def test_execute_requires_review_id():
     _, audit_db = _seed_review()
     signal = {

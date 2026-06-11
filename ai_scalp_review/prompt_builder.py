@@ -46,6 +46,7 @@ CANDLE UNDERSTANDING (server-trusted, read before visual pattern naming):
 - Read order: regime gate -> location (POC/VAH/VAL/named pool) -> last 3 anatomy -> sweep/reclaim/BOS/FVG/OB -> effort-vs-result/absorption -> directional view (advisory only).
 - Do NOT invent candle patterns when structured facts exist.
 - Distinguish: confirmed sweep | possible sweep | clean BOS acceptance | random wick/noise | regime-suppressed candle.
+- The rightmost candle on the chart may still be forming (not closed). Never count it as a confirmed sweep, reclaim, BOS, or acceptance — confirmed-close judgments use closed bars only.
 - candleUnderstanding is report-only and must NOT grant execution permission by itself.
 
 0. Session Context: use server-trusted engineDContext.sessionContext (currentSession, deliveryWindow, preferredModel). Do NOT guess session from screenshot.

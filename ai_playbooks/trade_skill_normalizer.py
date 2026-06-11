@@ -253,6 +253,7 @@ def normalize_trade_skill_output(
             sl = _coerce_float(backend_levels.get("stop_loss") or backend_levels.get("stopLoss"))
             if sl is not None:
                 invalidation_level = sl
+                warnings.append("invalidation_backfilled_from_backend")
         if invalidation_level is None:
             decision = "WATCH_ONLY"
             entry_allowed = False

@@ -25,6 +25,15 @@ def get_engine_b_playbook() -> dict:
             "FVG_FILL_CONTINUATION",
             "NO_TRADE",
         ],
+        "structureUsage": {
+            "engineBContext.bosConfirmed / chochConfirmed": "Server-confirmed break/change of structure. Only treat BOS/CHoCH as confirmed when these flags are true — do not infer confirmation from the image alone.",
+            "engineBContext.liquiditySweep": "Server-detected liquidity sweep; require reclaim evidence before LIQUIDITY_SWEEP_RECLAIM.",
+            "engineBContext.nearestSupport / nearestResistance": "Nearest structural zone levels. Check the proposed entry and TP path against them for location and RR — see mustRejectIf for shorting into demand / longing into supply.",
+            "engineBContext.breakerLevel": "Breaker block level for breakout retest/acceptance checks.",
+            "engineBContext.structuralVerdict": "Engine B's overall structural read; contradiction with the proposed direction lowers tradeability.",
+            "engineBContext.volumeProfileContext": "POC/VAH/VAL availability per asset class. When disabled, do not cite volume-profile levels for this asset.",
+            "engineBContext.score / maxScore / threshold / passed / direction": "Engine B's deterministic result — advisory context only; never mutate or override it.",
+        },
         "invalidations": [
             "Identify exact invalidation level or zone.",
             "State what would prove the structure setup wrong.",

@@ -49,6 +49,7 @@ def render_playbook_prompt_block(
             }
             for extra in (
                 "indicatorUsage",
+                "structureUsage",
                 "strategyMapping",
                 "marketStates",
                 "locationChecklist",
