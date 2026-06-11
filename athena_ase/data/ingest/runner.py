@@ -1,0 +1,56 @@
+"""Orchestrate PTIS ingestion from Athena legacy caches and feeds."""
+
+from __future__ import annotations
+
+import logging
+from pathlib import Path
+from typing import Iterable
+
+from athena_ase.data.ingest import audit as audit_mod
+from athena_ase.data.ingest import bybit, cot, dukascopy, eodhd, fred
+from athena_ase.data.ptis import PTISStore, default_ptis_root
+
+log = logging.getLogger("ase.ingest")
+
+ALL_SOURCES = ("eodhd", "dukascopy", "bybit", "cot", "fred")
+
+
+def run_ingest(
+    store: PTISStore | None = None,
+    *,
+    sources: Iterable[str] = ALL_SOURCES,
+    ptis_root: Path | str | None = None,
+    backtest_db: str | None = None,
+    duka_db: str | None = None,
+    cot_db: str | None = None,
+    carry_db: str | None = None,
+    bybit_symbols: list[str] | None = None,
+    bybit_lookback_days: int = 730,
+    write_audit: bool = True,
+    audit_path: Path | str | None = None,
+) -> dict[str, dict[str, int]]:
+    ptis = store or PTISStore(ptis_root or default_ptis_root())
+    selected = {s.strip().lower() for s in sources}
+    results: dict[str, dict[str, int]] = {}
+
+    if "eodhd" in selected:
+        results["eodhd"] = eodhd.ingest_all(ptis, db_path=backtest_db)
+    if "dukascopy" in selected:
+        results["dukascopy"] = dukascopy.ingest_all(ptis, db_path=duka_db)
+    if "bybit" in selected:
+        results["bybit"] = bybit.ingest_all(
+            ptis, symbols=bybit_symbols, lookback_days=bybit_lookback_days
+        )
+    if "cot" in selected:
+        results["cot"] = cot.ingest_all(ptis, db_path=cot_db)
+    if "fred" in selected:
+        results["fred"] = fred.ingest_all(ptis, db_path=carry_db)
+
+    if write_audit:
+        path = audit_path or (
+            Path(__file__).resolve().parents[3] / "reports" / "availability_audit.md"
+        )
+        audit_mod.write_availability_audit(ptis, path)
+        log.info("availability audit written: %s", path)
+
+    return results

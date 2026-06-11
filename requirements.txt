@@ -32,3 +32,6 @@ python-telegram-bot>=22.7
 matplotlib>=3.8.0
 mplfinance>=0.12.10b0
 MetaTrader5>=5.0.0
+# ASE v2.1 PTIS parquet store + Phase 2 sklearn meta-models
+pyarrow>=18.0.0
+scikit-learn==1.9.0
