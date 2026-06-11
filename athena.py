@@ -1636,11 +1636,13 @@ def _build_atr_freshness_eval(
     )
 
 
-def _bybit_atr_for_levels(pair: dict, style: str | None, as_of=None) -> float | None:
-    """Fetch Bybit ATR for crypto execution levels when Bybit is the execution venue."""
+def _bybit_atr_and_candles_for_levels(
+    pair: dict, style: str | None, as_of=None
+) -> tuple[float | None, list | None]:
+    """Bybit ATR for crypto execution levels plus the confirmed klines that produced it."""
     symbol = (pair.get("symbol") or pair.get("display") or "").replace("/", "").upper()
     if not symbol:
-        return None
+        return None, None
     resolved_style = _normalize_style(style or "swing")
     if resolved_style == "auto":
         resolved_style = "swing"
@@ -1660,7 +1662,7 @@ def _bybit_atr_for_levels(pair: dict, style: str | None, as_of=None) -> float | 
     # SL/TP ATR matches the confirmed-only policy used for scoring indicators.
     candles = trim_unconfirmed_tail_candles(candles)
     if not candles or len(candles) < 20:
-        return None
+        return None, None
     atr_series = calc_atr(
         [c["high"] for c in candles],
         [c["low"] for c in candles],
@@ -1669,8 +1671,14 @@ def _bybit_atr_for_levels(pair: dict, style: str | None, as_of=None) -> float | 
     )
     for value in reversed(atr_series or []):
         if value:
-            return float(value)
-    return None
+            return float(value), candles
+    return None, None
+
+
+def _bybit_atr_for_levels(pair: dict, style: str | None, as_of=None) -> float | None:
+    """Fetch Bybit ATR for crypto execution levels when Bybit is the execution venue."""
+    atr_value, _ = _bybit_atr_and_candles_for_levels(pair, style, as_of=as_of)
+    return atr_value
 
 
 def _max_score_for_pair(pair: dict) -> float:
@@ -13131,19 +13139,6 @@ def analyze_pair(
                     if _utc_weekday in (0, 5, 6) and _bucket_lag <= 4:
                         continue
 
-                # D1 calendar gap policy: diagnostic downgrades stale_multi_bucket
-                # to d1_calendar_gap_policy_ok for MT5 forex weekend gaps.
-                # Treat it as allowed on the same Monday/Saturday/Sunday window.
-                if (
-                    _is_forex_stock
-                    and _tf == "D1"
-                    and _sev == "d1_calendar_gap_policy_ok"
-                ):
-                    import datetime as _dt_mod
-                    _utc_weekday = _dt_mod.datetime.now(_dt_mod.timezone.utc).weekday()
-                    if _utc_weekday in (0, 5, 6):
-                        continue
-
                 _stale_tfs.append(f"{_tf}:{_sev}")
 
             # Crypto-specific D1 staleness threshold: enforce max hours since last bar open
@@ -13582,14 +13577,16 @@ def analyze_pair(
     )
     level_atr_feed = "signal"
     _atr_tf_used = _atr_priority_tf
+    _levels_atr_feed_candles = None
     if (
         pair.get("type") == "crypto"
         and str(CONFIG.get("ENGINE_A_CRYPTO_LEVELS_FEED", "bybit")).lower() == "bybit"
     ):
-        bybit_atr = _bybit_atr_for_levels(pair, _style)
+        bybit_atr, _bybit_atr_candles = _bybit_atr_and_candles_for_levels(pair, _style)
         if bybit_atr:
             atr = bybit_atr
             level_atr_feed = "bybit"
+            _levels_atr_feed_candles = _bybit_atr_candles
             # Bybit ATR resolver maps style -> H1/H4/D1 internally.
             _atr_tf_used = {
                 "scalp": "H1", "intraday": "H4", "swing": "D1"
@@ -14077,6 +14074,15 @@ def analyze_pair(
                 _div_err,
             )
 
+    # atrDiagnostics must describe the feed that produced the levels ATR: when
+    # the Bybit feed won, candle last-ts/age come from those klines, not the
+    # signal-feed series at the same timeframe.
+    from atr_diagnostics import substitute_levels_atr_series as _sub_atr_series
+
+    _atr_diag_d1, _atr_diag_h4, _atr_diag_h1 = _sub_atr_series(
+        _atr_tf_used, d1, h4, h1, _levels_atr_feed_candles
+    )
+
     signal = {
         "pair": pair["display"],
         "display": pair["display"],
@@ -14114,17 +14120,17 @@ def analyze_pair(
             atr_value=float(atr),
             atr_tf=_atr_tf_used,
             atr_source=level_atr_feed,
-            d1_candles=d1,
-            h4_candles=h4,
-            h1_candles=h1,
+            d1_candles=_atr_diag_d1,
+            h4_candles=_atr_diag_h4,
+            h1_candles=_atr_diag_h1,
         ),
         "atrFreshness": _build_atr_freshness_eval(
             atr_value=float(atr),
             atr_tf=_atr_tf_used,
             atr_source=level_atr_feed,
-            d1_candles=d1,
-            h4_candles=h4,
-            h1_candles=h1,
+            d1_candles=_atr_diag_d1,
+            h4_candles=_atr_diag_h4,
+            h1_candles=_atr_diag_h1,
         ),
         "slDistance": (
             round(abs(float(price) - float(lvl["sl"])), 6)
@@ -14269,7 +14275,12 @@ def analyze_pair(
     # write ts as seconds since epoch; EODHD WS uses milliseconds, so normalize.
     try:
         import time as _time_mod
-        _q_ts_raw = _lp_entry.get("ts") if isinstance(_lp_entry, dict) else None
+        # Prefer the broker tick time (MT5 poller writes broker_ts): symbol_info_tick
+        # returns the last known tick when the feed is frozen, so the receipt-time
+        # `ts` would mask staleness from quoteAgeSec / quoteAgeEval.
+        _q_ts_raw = _lp_entry.get("broker_ts") if isinstance(_lp_entry, dict) else None
+        if not isinstance(_q_ts_raw, (int, float)) or _q_ts_raw <= 0:
+            _q_ts_raw = _lp_entry.get("ts") if isinstance(_lp_entry, dict) else None
         _q_ts_norm = None
         _q_age_sec = None
         if isinstance(_q_ts_raw, (int, float)) and _q_ts_raw > 0:

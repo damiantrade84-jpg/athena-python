@@ -80,6 +80,53 @@ def test_update_weekly_calls_fin_and_disagg(monkeypatch):
     assert calls == ["fin", "disagg"]
 
 
+def test_get_cot_net_marks_stale_when_newest_report_too_old(monkeypatch):
+    monkeypatch.setattr(cot_feed, "_row_count", lambda asset: 60)
+    monkeypatch.setattr(
+        cot_feed, "_get_net_series", lambda asset, weeks=104, as_of_date=None: [100]
+    )
+    monkeypatch.setattr(cot_feed, "_asset_z", lambda key, as_of_date=None: 1.0)
+    monkeypatch.setattr(cot_feed, "_latest_report_date", lambda asset: "2025-01-07")
+    monkeypatch.setattr(cot_feed, "_cot_max_report_age_days", lambda: 28)
+    cot_feed._mem_cache.clear()
+
+    detail = cot_feed.get_cot_net("EUR/USD")
+    assert detail["_cot_coverage"] == "stale"
+    assert "2025-01-07" in detail["_cot_note"]
+    assert detail["EUR"]["latest_report_date"] == "2025-01-07"
+
+
+def test_get_cot_net_keeps_ok_when_reports_recent(monkeypatch):
+    import datetime as _dt
+
+    recent = (_dt.date.today() - _dt.timedelta(days=7)).isoformat()
+    monkeypatch.setattr(cot_feed, "_row_count", lambda asset: 60)
+    monkeypatch.setattr(
+        cot_feed, "_get_net_series", lambda asset, weeks=104, as_of_date=None: [100]
+    )
+    monkeypatch.setattr(cot_feed, "_asset_z", lambda key, as_of_date=None: 1.0)
+    monkeypatch.setattr(cot_feed, "_latest_report_date", lambda asset: recent)
+    monkeypatch.setattr(cot_feed, "_cot_max_report_age_days", lambda: 28)
+    cot_feed._mem_cache.clear()
+
+    detail = cot_feed.get_cot_net("EUR/USD")
+    assert detail["_cot_coverage"] == "ok"
+
+
+def test_get_cot_net_report_age_check_disabled_when_zero(monkeypatch):
+    monkeypatch.setattr(cot_feed, "_row_count", lambda asset: 60)
+    monkeypatch.setattr(
+        cot_feed, "_get_net_series", lambda asset, weeks=104, as_of_date=None: [100]
+    )
+    monkeypatch.setattr(cot_feed, "_asset_z", lambda key, as_of_date=None: 1.0)
+    monkeypatch.setattr(cot_feed, "_latest_report_date", lambda asset: "2025-01-07")
+    monkeypatch.setattr(cot_feed, "_cot_max_report_age_days", lambda: 0)
+    cot_feed._mem_cache.clear()
+
+    detail = cot_feed.get_cot_net("EUR/USD")
+    assert detail["_cot_coverage"] == "ok"
+
+
 def test_asset_z_does_not_negative_cache_missing_series(monkeypatch):
     monkeypatch.setattr(cot_feed, "_get_net_series", lambda asset, as_of_date=None: [1, 2, 3])
     cot_feed._mem_cache.clear()

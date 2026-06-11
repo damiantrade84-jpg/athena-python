@@ -184,6 +184,29 @@ def build_engine_c_diagnostics(
     }
 
 
+def substitute_levels_atr_series(
+    atr_tf: str | None,
+    d1_candles: list | None,
+    h4_candles: list | None,
+    h1_candles: list | None,
+    levels_feed_candles: list | None,
+) -> tuple[list | None, list | None, list | None]:
+    """Swap the ATR timeframe's series for the candles that actually produced
+    the levels ATR (e.g. Bybit klines when ENGINE_A_CRYPTO_LEVELS_FEED=bybit),
+    so ``atr_candle_last_ts`` / ``atr_age_seconds`` describe the true ATR
+    source feed instead of the signal feed."""
+    if not levels_feed_candles:
+        return d1_candles, h4_candles, h1_candles
+    tf = str(atr_tf or "").upper()
+    if tf == "D1":
+        return levels_feed_candles, h4_candles, h1_candles
+    if tf == "H4":
+        return d1_candles, levels_feed_candles, h1_candles
+    if tf == "H1":
+        return d1_candles, h4_candles, levels_feed_candles
+    return d1_candles, h4_candles, h1_candles
+
+
 DEFAULT_MAX_AGE_SECONDS: dict[str, float] = {
     "M1": 180.0,
     "M5": 600.0,

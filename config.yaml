@@ -1945,6 +1945,11 @@ ENGINE_A_COT_POLICY:
   stock_macro_proxy: true
   stock_proxy_note: "US equities use E-mini SP500/NQ100 positioning, not single-stock CFTC reports"
 
+# Coverage label turns "stale" (feed_status only — scoring unchanged) when the newest
+# cached CFTC report is older than this. Detects a broken fetch pipeline that row-count
+# coverage checks cannot see. CFTC publishes weekly; 28d = 3+ missed reports. 0 disables.
+COT_MAX_REPORT_AGE_DAYS: 28
+
 
 
 # ── EODHD Sentiment Gate ──────────────────────────────────

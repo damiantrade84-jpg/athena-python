@@ -1070,7 +1070,13 @@ def _run_mt5_tick_poller(poll_interval: float = 1.5):
     and write bid/ask/mid into _live_prices. Forex/commodity/index/stock prices
     only landed in _live_prices as a side effect of fetch_mt5() before this; this
     keeps them continuously fresh independent of /api/candles traffic.
+
+    `ts` is the local receipt time; `broker_ts` is the UTC-normalized broker tick
+    time. symbol_info_tick silently returns the last known tick when the feed is
+    frozen, so quote-age checks must use broker_ts — receipt time masks staleness.
     """
+    from athena_app.services.mt5_time_alignment import normalize_mt5_tick_epoch_utc
+
     log.info("[MT5-PRICE-POLL] Started — interval=%.1fs", poll_interval)
     while True:
         try:
@@ -1103,6 +1109,15 @@ def _run_mt5_tick_poller(poll_interval: float = 1.5):
                 time.sleep(poll_interval)
                 continue
 
+            try:
+                _poll_cfg = getattr(rt(), "CONFIG", {}) or {}
+            except RuntimeError:
+                _poll_cfg = {}
+            try:
+                _broker_off = int(_poll_cfg.get("MT5_BROKER_UTC_OFFSET", 3) or 3)
+            except (TypeError, ValueError):
+                _broker_off = 3
+
             updated = 0
             for p in mt5_pairs:
                 try:
@@ -1131,12 +1146,21 @@ def _run_mt5_tick_poller(poll_interval: float = 1.5):
                         price = ask
                     else:
                         continue
+                    _tick_epoch = float(getattr(tick, "time_msc", 0) or 0) / 1000.0
+                    if _tick_epoch <= 0:
+                        _tick_epoch = float(getattr(tick, "time", 0) or 0)
+                    _broker_ts = (
+                        normalize_mt5_tick_epoch_utc(_tick_epoch, time.time(), _broker_off)
+                        if _tick_epoch > 0
+                        else None
+                    )
                     with _live_prices_lock:
                         _live_prices[display] = {
                             "price": price,
                             "bid": bid,
                             "ask": ask,
                             "ts": time.time(),
+                            "broker_ts": _broker_ts,
                             "source": "mt5",
                         }
                     updated += 1

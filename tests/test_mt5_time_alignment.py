@@ -1,6 +1,9 @@
 """Unit tests for MT5 bar timestamp inference (timezone vs stale-feed guard)."""
 
-from athena_app.services.mt5_time_alignment import infer_mt5_rates_time_shift_seconds
+from athena_app.services.mt5_time_alignment import (
+    infer_mt5_rates_time_shift_seconds,
+    normalize_mt5_tick_epoch_utc,
+)
 
 
 def test_infer_recent_bar_zero_shift_utc_assumed():
@@ -104,3 +107,45 @@ def test_recent_window_without_tick_keeps_utc_assumed():
         "H1", now, newest, broker_offset_hours=3, tick_epoch=None
     )
     assert off == 0 and tag == "utc_assumed_recent"
+
+
+def test_normalize_tick_fresh_broker_clock_matches_config():
+    """Live GMT+3 broker tick with config offset 3 normalizes to ~now."""
+    now = 1_781_034_014.0
+    tick = now + 3 * 3600.0 - 20.0
+    norm = normalize_mt5_tick_epoch_utc(tick, now, 3)
+    assert norm is not None
+    assert abs(now - norm) < 120.0
+
+
+def test_normalize_tick_dst_drift_one_hour_tracked():
+    """Winter GMT+2 broker with config still 3: ±1h band accepts the live offset."""
+    now = 1_781_034_014.0
+    tick = now + 2 * 3600.0 - 20.0
+    norm = normalize_mt5_tick_epoch_utc(tick, now, 3)
+    assert norm is not None
+    assert abs(now - norm) < 120.0
+
+
+def test_normalize_tick_frozen_feed_age_stays_visible():
+    """A tick frozen 5h ago on a GMT+3 clock must read ~5h old, not fresh."""
+    now = 1_781_034_014.0
+    tick = (now - 5 * 3600.0) + 3 * 3600.0
+    norm = normalize_mt5_tick_epoch_utc(tick, now, 3)
+    assert norm is not None
+    assert (now - norm) > 4.5 * 3600.0
+
+
+def test_normalize_tick_weekend_gap_stays_visible():
+    """Weekend-frozen tick (~48h) keeps its real age under the configured offset."""
+    now = 1_781_034_014.0
+    tick = (now - 48 * 3600.0) + 3 * 3600.0
+    norm = normalize_mt5_tick_epoch_utc(tick, now, 3)
+    assert norm is not None
+    assert (now - norm) > 47 * 3600.0
+
+
+def test_normalize_tick_invalid_inputs_return_none():
+    assert normalize_mt5_tick_epoch_utc(None, 123.0, 3) is None
+    assert normalize_mt5_tick_epoch_utc(0, 123.0, 3) is None
+    assert normalize_mt5_tick_epoch_utc(-5, 123.0, 3) is None

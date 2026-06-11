@@ -125,6 +125,22 @@ def _base_matches_fragment(base: str, frag: str | tuple[str, ...]) -> bool:
 _COT_ZSCORE_WINDOW = 52
 _MIN_WEEKS_FOR_COT = max(_COT_ZSCORE_WINDOW // 2, 4)
 
+# Coverage is labeled "stale" when the newest cached report is older than this.
+# CFTC publishes weekly (Friday for Tuesday data); 28 days = 3+ missed reports,
+# i.e. the fetch pipeline is broken, not a holiday delay. 0 disables the check.
+_DEFAULT_MAX_REPORT_AGE_DAYS = 28
+
+
+def _cot_max_report_age_days() -> int:
+    try:
+        from config import CONFIG
+
+        return max(
+            0, int(CONFIG.get("COT_MAX_REPORT_AGE_DAYS", _DEFAULT_MAX_REPORT_AGE_DAYS) or 0)
+        )
+    except Exception:
+        return _DEFAULT_MAX_REPORT_AGE_DAYS
+
 _DISAGG_ASSETS = {
     "XAU", "XAG", "OIL", "NG", "HG", "PL",
     "COCOA", "COFFEE", "CORN", "COTTON", "SOYBEANS", "SUGAR", "WHEAT", "CATTLE",
@@ -521,6 +537,17 @@ def _row_count(asset: str) -> int:
     return row[0] if row else 0
 
 
+def _latest_report_date(asset: str) -> Optional[str]:
+    """Newest cached CFTC report date (YYYY-MM-DD) for an asset leg, or None."""
+    with _db_lock:
+        con = sqlite3.connect(_DB_PATH, timeout=15.0)
+        row = con.execute(
+            "SELECT MAX(report_date) FROM cot_net WHERE asset=?", (asset,)
+        ).fetchone()
+        con.close()
+    return row[0] if row and row[0] else None
+
+
 # ── Download helpers ──────────────────────────────────────────────────────────
 
 
@@ -748,8 +775,13 @@ def get_cot_net(display: str) -> Optional[dict]:
             "net": series[-1] if series else None,
             "z": _asset_z(key),
             "weeks_of_data": _row_count(key),
+            "latest_report_date": _latest_report_date(key),
         }
     min_weeks = min(results[k]["weeks_of_data"] for k in results)
+    oldest_latest = min(
+        (v["latest_report_date"] for v in results.values() if v["latest_report_date"]),
+        default=None,
+    )
     if min_weeks < _MIN_WEEKS_FOR_COT:
         results["_cot_coverage"] = "no_coverage"
         results["_cot_note"] = (
@@ -757,6 +789,21 @@ def get_cot_net(display: str) -> Optional[dict]:
         )
     else:
         results["_cot_coverage"] = "ok"
+        # Row count alone cannot detect a broken fetch pipeline: months of old
+        # reports still pass the history bar while the z silently goes stale.
+        max_age_days = _cot_max_report_age_days()
+        if max_age_days and oldest_latest:
+            try:
+                report_date = datetime.date.fromisoformat(oldest_latest)
+                age_days = (datetime.date.today() - report_date).days
+                if age_days > max_age_days:
+                    results["_cot_coverage"] = "stale"
+                    results["_cot_note"] = (
+                        f"newest report {oldest_latest} is {age_days}d old "
+                        f"(max {max_age_days}); check CFTC fetch"
+                    )
+            except ValueError:
+                pass
     return results
 
 

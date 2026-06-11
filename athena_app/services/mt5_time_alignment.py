@@ -12,9 +12,51 @@ _TF_SECONDS = {"M1": 60, "M5": 300, "M15": 900, "M30": 1800, "H1": 3600, "H4": 1
 # Largest plausible timezone correction from tick clock skew (broker vs local), in seconds.
 _MAX_ABS_TICK_TZ_SECONDS = 14 * 3600
 
+# Tick deltas within ±1h of the configured broker offset are treated as the live
+# offset (tracks broker DST drift); anything further means the tick itself is stale.
+_TICK_TZ_DST_BAND_HOURS = 1
+
 # If the newest MT5 bar predates wall clock by this much, assume illiquid/stale —
 # not solvable via tick TZ nudge — keep offset at 0 to avoid hallucinated series.
 _DEFAULT_STALE_UNSHIFTED_AGE_SEC = int(36 * 3600)
+
+
+def normalize_mt5_tick_epoch_utc(
+    tick_epoch: float | None,
+    utc_now: float,
+    broker_offset_hours: int,
+) -> float | None:
+    """Return the UTC epoch for an MT5 ``symbol_info_tick`` timestamp.
+
+    The MT5 tick clock shares the bar server clock (broker-aligned stamps, see
+    :func:`infer_mt5_rates_time_shift_seconds`). A live tick's delta vs wall
+    clock rounds to the broker UTC offset; deltas within ±1h of the configured
+    offset are accepted as the live offset so broker DST drift does not flag
+    fresh ticks as stale. Anything outside that band means the tick itself is
+    frozen (weekend, terminal stall), so the configured offset is applied
+    unchanged and the resulting age stays honest. Staleness under ~90 minutes
+    is indistinguishable from DST drift at whole-hour granularity and may read
+    as fresh — multi-hour/weekend staleness is always visible.
+    """
+    if tick_epoch is None:
+        return None
+    try:
+        tick_t = float(tick_epoch)
+        u_now = float(utc_now)
+    except (TypeError, ValueError):
+        return None
+    if tick_t <= 0:
+        return None
+    try:
+        broker_off = int(broker_offset_hours)
+    except (TypeError, ValueError):
+        broker_off = 0
+    delta_hours = round((tick_t - u_now) / 3600.0)
+    if abs(delta_hours - broker_off) <= _TICK_TZ_DST_BAND_HOURS:
+        shift_hours = delta_hours
+    else:
+        shift_hours = broker_off
+    return tick_t - shift_hours * 3600.0
 
 
 def infer_mt5_rates_time_shift_seconds(
