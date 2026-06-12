@@ -12,8 +12,9 @@ import pandas as pd
 from athena_ase.data.ptis import PTISStore
 from athena_ase.horizon import Horizon
 from athena_ase.instruments import DEFAULT_INSTRUMENTS, Instrument
-from athena_ase.labels.triple_barrier import label_candidate
+from athena_ase.labels.triple_barrier import label_candidate, simulate_barriers
 from athena_ase.signals.arbitrate import Candidate
+from athena_ase.signals.common import BarSeries, load_bar_series
 from athena_ase.signals.engine import iter_candidates
 
 OUTPUT_DIR = Path(__file__).resolve().parent / "output"
@@ -45,8 +46,24 @@ def simulate_candidate(
     candidate: Candidate,
     store: PTISStore,
     instrument: Instrument,
+    *,
+    series: BarSeries | None = None,
 ) -> EventOutcome | None:
-    labeled = label_candidate(candidate, store, instrument)
+    if series is None:
+        labeled = label_candidate(candidate, store, instrument)
+    else:
+        labeled = simulate_barriers(
+            close_log=series.close_log,
+            high_log=series.high_log,
+            low_log=series.low_log,
+            value_time=series.value_time,
+            idx=candidate.bar_index,
+            direction=candidate.direction,
+            entry_log=candidate.entry_log,
+            sigma_bar=candidate.sigma_bar,
+            horizon=candidate.horizon,
+            instrument=instrument,
+        )
     if labeled is None:
         return None
     return EventOutcome(
@@ -64,9 +81,9 @@ def simulate_candidate(
         mfe_R=labeled.mfe_R,
         hold_bars=labeled.hold_bars,
         exit_reason=labeled.exit_reason,
-        agreement_count=labeled.agreement_count,
-        conflict_flag=labeled.conflict_flag,
-        primary_signals=labeled.primary_signals,
+        agreement_count=candidate.agreement_count,
+        conflict_flag=candidate.conflict_flag,
+        primary_signals=json.dumps(candidate.signals),
     )
 
 
@@ -79,6 +96,16 @@ def run_event_backtest(
     instruments: tuple[Instrument, ...] | None = None,
 ) -> list[EventOutcome]:
     inst_map = {i.symbol: i for i in (instruments or DEFAULT_INSTRUMENTS)}
+    series_by_instrument = {
+        symbol: load_bar_series(
+            store,
+            symbol,
+            horizon,
+            start_ms,
+            end_ms + 60 * 86_400_000,
+        )
+        for symbol in inst_map
+    }
     outcomes: list[EventOutcome] = []
     for cand in iter_candidates(
         store, instruments, horizon=horizon, start_ms=start_ms, end_ms=end_ms
@@ -86,7 +113,12 @@ def run_event_backtest(
         inst = inst_map.get(cand.instrument)
         if inst is None:
             continue
-        out = simulate_candidate(cand, store, inst)
+        out = simulate_candidate(
+            cand,
+            store,
+            inst,
+            series=series_by_instrument.get(cand.instrument),
+        )
         if out is not None:
             outcomes.append(out)
     return outcomes

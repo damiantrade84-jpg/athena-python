@@ -10,8 +10,9 @@ import pytest
 
 from athena_ase.data.availability import AvailabilityRuleId, compute_available_time_ms
 from athena_ase.data.ingest import cot as cot_ingest
-from athena_ase.data.ingest import dukascopy, eodhd, fred
+from athena_ase.data.ingest import dukascopy, eodhd, fred, mt5
 from athena_ase.data.ptis import PTISStore, build_row
+from athena_ase.signals.common import load_bar_series
 
 
 def _ms(dt: datetime) -> int:
@@ -145,6 +146,27 @@ def test_eodhd_ingest_respects_bar_close_plus_90s(tmp_path, monkeypatch):
     assert row["available_time"] == expected_avail
 
 
+def test_mt5_ingest_preserves_source_and_normalizes_forex_symbol(tmp_path):
+    bt_db = tmp_path / "bt.db"
+    _seed_backtest_db(bt_db, symbol="EURUSD=X", provider="mt5")
+    store = PTISStore(tmp_path / "ptis")
+
+    counts = mt5.ingest_all(store, db_path=str(bt_db))
+
+    sid = "MT5:EURUSD:H1:close"
+    assert counts[sid] == 1
+    assert not store.series_exists("EODHD:EURUSD:H1:close")
+    series = load_bar_series(
+        store,
+        "EURUSD",
+        "intraday",
+        _ms(datetime(2025, 6, 2, 0, 0, tzinfo=timezone.utc)),
+        _ms(datetime(2025, 6, 3, 0, 0, tzinfo=timezone.utc)),
+    )
+    assert series is not None
+    assert len(series.close_log) == 1
+
+
 def test_dukascopy_ingest_bar_close_plus_5m(tmp_path):
     duka_db = tmp_path / "duka.db"
     _seed_duka_db(duka_db)
@@ -216,3 +238,30 @@ def test_append_unregistered_without_auto_register_raises(tmp_path):
             source="EODHD",
             auto_register=False,
         )
+
+
+def test_asof_reuses_cached_series_frame(tmp_path, monkeypatch):
+    store = PTISStore(tmp_path / "ptis")
+    series_id = "EODHD:CACHE:H1:close"
+    t0 = _ms(datetime(2025, 6, 1, 0, 0, tzinfo=timezone.utc))
+    store.append_rows(
+        series_id,
+        [build_row(series_id, t0, t0 + 90_000, 1.23)],
+        source="EODHD",
+        auto_register=True,
+    )
+
+    from athena_ase.data import ptis as ptis_mod
+
+    original = ptis_mod.pd.read_parquet
+    calls = 0
+
+    def counted_read(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(ptis_mod.pd, "read_parquet", counted_read)
+    assert len(store.asof(series_id, t0 + 90_000)) == 1
+    assert len(store.asof(series_id, t0 + 90_000)) == 1
+    assert calls == 1

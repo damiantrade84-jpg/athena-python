@@ -6,9 +6,12 @@ from typing import Any
 
 from athena_ase.exceptions import LegacyEngineBypassed
 from athena_ase.instruments import instrument_by_symbol
-from athena_ase.registry.promotion import get_family_state
-
 LEGACY_ENGINE_A_ENTRY_POINTS = ("analyze_pair", "calc_confluence")
+
+# ASE final build: all model families are operational from day one.
+ASE_OPERATIONAL_FAMILIES = frozenset(
+    {"forex", "crypto", "commodity", "equity", "index_etf"}
+)
 
 _TYPE_TO_FAMILY = {
     "forex": "forex",
@@ -41,7 +44,7 @@ def assert_legacy_engine_allowed(
     family = resolve_ase_family(pair)
     if not family:
         return
-    if get_family_state(family) == "DEMO":
+    if family in ASE_OPERATIONAL_FAMILIES:
         raise LegacyEngineBypassed(
             family,
             symbol=str(pair.get("display") or pair.get("symbol") or ""),

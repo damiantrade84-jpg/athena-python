@@ -20,6 +20,10 @@ def eodhd_series_id(symbol: str, tf: str, field: str) -> str:
     return f"EODHD:{compact_symbol(symbol)}:{tf.upper()}:{field.lower()}"
 
 
+def price_series_id(source: str, symbol: str, tf: str, field: str) -> str:
+    return f"{source.strip().upper()}:{compact_symbol(symbol)}:{tf.upper()}:{field.lower()}"
+
+
 def duka_series_id(duka_symbol: str, tf: str) -> str:
     return f"DUKASCOPY:{duka_symbol}:{tf.upper()}:volume"
 

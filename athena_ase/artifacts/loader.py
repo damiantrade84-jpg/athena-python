@@ -29,7 +29,9 @@ class ArtifactBundle:
     model_core: Any | None
     model_enriched: Any | None
     calibrator: Any | None
+    calibrator_enriched: Any | None
     quantile_heads: dict[str, Any] | None
+    quantile_heads_enriched: dict[str, Any] | None
     thr_family: float
     feature_names: tuple[str, ...]
 
@@ -73,7 +75,9 @@ def load_artifact_bundle(
         model_core=models.get("model_core.pkl"),
         model_enriched=models.get("model_enriched.pkl"),
         calibrator=models.get("calibrator.pkl"),
+        calibrator_enriched=models.get("calibrator_enriched.pkl"),
         quantile_heads=models.get("quantile_heads.pkl"),
+        quantile_heads_enriched=models.get("quantile_heads_enriched.pkl"),
         thr_family=float(manifest.thr_family),
         feature_names=tuple(manifest.feature_schema),
     )

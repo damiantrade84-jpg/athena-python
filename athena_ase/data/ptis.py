@@ -89,6 +89,7 @@ class PTISStore:
         self.root.mkdir(parents=True, exist_ok=True)
         self.catalog_path = self.root / "ptis_catalog.db"
         self._lock = threading.Lock()
+        self._frame_cache: dict[str, pd.DataFrame] = {}
         self._init_catalog()
 
     def _connect(self) -> sqlite3.Connection:
@@ -151,6 +152,11 @@ class PTISStore:
             rows = con.execute("SELECT series_id FROM series ORDER BY series_id").fetchall()
         return [r[0] for r in rows]
 
+    def catalog_series_count(self) -> int:
+        with self._connect() as con:
+            row = con.execute("SELECT COUNT(*) FROM series").fetchone()
+        return int(row[0]) if row else 0
+
     def partition_dir(self, source: str, series_id: str, year: int) -> Path:
         path = self.root / source / _series_path_component(series_id) / str(year)
         path.mkdir(parents=True, exist_ok=True)
@@ -167,6 +173,23 @@ class PTISStore:
         if row is None:
             raise KeyError(f"unknown PTIS series: {series_id}")
         return str(row[0])
+
+    def _load_series_frame(self, series_id: str, source: str) -> pd.DataFrame:
+        cached = self._frame_cache.get(series_id)
+        if cached is not None:
+            return cached
+        base = self.root / source / _series_path_component(series_id)
+        frames: list[pd.DataFrame] = []
+        if base.exists():
+            for year_dir in sorted(base.glob("*"), key=lambda path: path.name):
+                if not year_dir.is_dir() or not year_dir.name.isdigit():
+                    continue
+                part_path = year_dir / "data.parquet"
+                if part_path.exists():
+                    frames.append(pd.read_parquet(part_path))
+        frame = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+        self._frame_cache[series_id] = frame
+        return frame
 
     def append_rows(
         self,
@@ -216,6 +239,7 @@ class PTISStore:
                 ).drop_duplicates(subset=["value_time", "revision"], keep="last")
                 merged.to_parquet(part_path, index=False)
                 written += len(chunk)
+        self._frame_cache.pop(series_id, None)
         return written
 
     def asof(self, series_id: str, decision_time_ms: int, n: int = 1) -> np.ndarray:
@@ -223,30 +247,12 @@ class PTISStore:
         if n <= 0:
             return np.empty(0, dtype=PTIS_VALUE_DTYPE)
         source = self._series_source(series_id)
-        years = sorted(
-            {
-                int(p.name)
-                for p in (self.root / source / _series_path_component(series_id)).glob("*")
-                if p.is_dir() and p.name.isdigit()
-            }
-        )
-        if not years:
+        frame = self._load_series_frame(series_id, source)
+        if frame.empty:
             return np.empty(0, dtype=PTIS_VALUE_DTYPE)
-
-        frames: list[pd.DataFrame] = []
-        for year in years:
-            part_path = self.partition_file(source, series_id, year)
-            if not part_path.exists():
-                continue
-            part = pd.read_parquet(part_path)
-            part = part[part["available_time"] <= decision_time_ms]
-            if not part.empty:
-                frames.append(part)
-
-        if not frames:
+        df = frame[frame["available_time"] <= decision_time_ms].copy()
+        if df.empty:
             return np.empty(0, dtype=PTIS_VALUE_DTYPE)
-
-        df = pd.concat(frames, ignore_index=True)
         df = df.sort_values(["value_time", "revision", "ingest_time"])
         df = df.drop_duplicates(subset=["value_time"], keep="last")
         df = df.sort_values("value_time")
@@ -265,20 +271,14 @@ class PTISStore:
         if end_ms < start_ms:
             return np.empty(0, dtype=PTIS_VALUE_DTYPE)
         source = self._series_source(series_id)
-        start_year = _year_from_ms(start_ms)
-        end_year = _year_from_ms(end_ms)
-        frames: list[pd.DataFrame] = []
-        for year in range(start_year, end_year + 1):
-            part_path = self.partition_file(source, series_id, year)
-            if not part_path.exists():
-                continue
-            part = pd.read_parquet(part_path)
-            part = part[(part["value_time"] >= start_ms) & (part["value_time"] <= end_ms)]
-            if not part.empty:
-                frames.append(part)
-        if not frames:
+        frame = self._load_series_frame(series_id, source)
+        if frame.empty:
             return np.empty(0, dtype=PTIS_VALUE_DTYPE)
-        df = pd.concat(frames, ignore_index=True)
+        df = frame[
+            (frame["value_time"] >= start_ms) & (frame["value_time"] <= end_ms)
+        ].copy()
+        if df.empty:
+            return np.empty(0, dtype=PTIS_VALUE_DTYPE)
         df = df.sort_values(["value_time", "revision", "ingest_time"])
         df = df.drop_duplicates(subset=["value_time"], keep="last")
         df = df.sort_values("value_time")

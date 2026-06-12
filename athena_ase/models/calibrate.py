@@ -15,6 +15,19 @@ class CalibrateResult:
     brier_skill: float
 
 
+def chronological_calibration_split(
+    n_rows: int,
+    *,
+    calibration_fraction: float = 0.15,
+) -> tuple[np.ndarray, np.ndarray]:
+    if n_rows < 2:
+        raise ValueError("calibration split requires at least two rows")
+    if not 0.0 < calibration_fraction < 1.0:
+        raise ValueError("calibration_fraction must be between 0 and 1")
+    cut = max(1, min(n_rows - 1, int(n_rows * (1.0 - calibration_fraction))))
+    return np.arange(0, cut), np.arange(cut, n_rows)
+
+
 def calibrate_fold(
     model,
     X: list[dict],
@@ -30,8 +43,10 @@ def calibrate_fold(
     n = len(y)
     if n < 20:
         return CalibrateResult(None, float("nan"), float("nan"))
-    cut = max(1, int(n * (1.0 - calib_fraction)))
-    cal_idx = np.arange(cut, n)
+    _, cal_idx = chronological_calibration_split(
+        n,
+        calibration_fraction=calib_fraction,
+    )
     names = tuple(feature_names) if feature_names else FEATURE_SCHEMA_CORE
     X_mat = _prepare_matrix(X, names)
     raw_p = model.predict_proba(X_mat)[:, 1]

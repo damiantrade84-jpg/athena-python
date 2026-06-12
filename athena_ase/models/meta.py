@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
-import itertools
 from dataclasses import dataclass
 from typing import Any, Sequence
 
 import numpy as np
 from sklearn.ensemble import HistGradientBoostingClassifier
 
-from athena_ase.features.build import CATEGORICAL_FEATURES, FEATURE_SCHEMA_CORE
+from athena_ase.features.build import CATEGORICAL_FEATURES, FEATURE_SCHEMA_CORE, categorical_code
 from athena_research.ase.trials_registry import append_trial
 
 RANDOM_STATE = 42
@@ -25,13 +24,6 @@ BASE_HGB_PARAMS: dict[str, Any] = {
     "class_weight": "balanced",
     "random_state": RANDOM_STATE,
 }
-
-HYPERPARAM_GRID: dict[str, list[Any]] = {
-    "learning_rate": [0.04, 0.06, 0.08],
-    "max_leaf_nodes": [23, 31, 47],
-    "min_samples_leaf": [100, 200],
-}
-
 
 @dataclass(frozen=True)
 class MetaTrainResult:
@@ -60,11 +52,20 @@ def _prepare_matrix(
     feature_names: Sequence[str],
 ) -> np.ndarray:
     if isinstance(X, np.ndarray):
-        return X.astype(float)
-    matrix = np.empty((len(X), len(feature_names)), dtype=object)
-    for i, row in enumerate(X):
-        for j, name in enumerate(feature_names):
-            matrix[i, j] = row.get(name, np.nan)
+        matrix = X.astype(float)
+    else:
+        matrix = np.empty((len(X), len(feature_names)), dtype=float)
+        for i, row in enumerate(X):
+            for j, name in enumerate(feature_names):
+                value = row.get(name, np.nan)
+                matrix[i, j] = (
+                    categorical_code(value)
+                    if name in CATEGORICAL_FEATURES
+                    else float(value)
+                )
+    if len(matrix):
+        all_missing = np.all(np.isnan(matrix), axis=0)
+        matrix[:, all_missing] = 0.0
     return matrix
 
 
@@ -89,43 +90,33 @@ def train_meta_classifier(
     horizon: str = "all",
     log_trials: bool = True,
 ) -> MetaTrainResult:
-    """Train with 3×3×2 grid; log every config to trials registry."""
+    """Train the fixed final-build HGB configuration."""
     names = tuple(feature_names) if feature_names is not None else FEATURE_SCHEMA_CORE
     X_mat = _prepare_matrix(X, names)
     y_arr = np.asarray(y, dtype=int)
-    best_model: HistGradientBoostingClassifier | None = None
-    best_score = -np.inf
-    best_config: dict[str, Any] = {}
-    best_hash = ""
+    if len(y_arr) == 0:
+        raise ValueError("cannot train meta-classifier with no rows")
+    if len(np.unique(y_arr)) < 2:
+        raise ValueError("meta-classifier requires both target classes")
 
-    grid_keys = list(HYPERPARAM_GRID.keys())
-    grid_values = [HYPERPARAM_GRID[k] for k in grid_keys]
-
-    for combo in itertools.product(*grid_values):
-        overrides = dict(zip(grid_keys, combo))
-        clf = build_classifier(names, **overrides)
-        clf.fit(X_mat, y_arr, sample_weight=sample_weight)
-        score = float(clf.score(X_mat, y_arr))
-        config = {**BASE_HGB_PARAMS, **overrides}
-        trial_row = append_trial(
+    clf = build_classifier(names)
+    clf.fit(X_mat, y_arr, sample_weight=sample_weight)
+    score = float(clf.score(X_mat, y_arr))
+    trial_row = (
+        append_trial(
             family=family,
             horizon=horizon,
-            config=config,
+            config=BASE_HGB_PARAMS,
             results={"train_accuracy": score, "n_samples": len(y_arr)},
-            notes="meta HGB grid search",
-        ) if log_trials else {"config_hash": ""}
-
-        if score > best_score:
-            best_score = score
-            best_model = clf
-            best_config = config
-            best_hash = trial_row.get("config_hash", "")
-
-    assert best_model is not None
+            notes="fixed meta HGB configuration",
+        )
+        if log_trials
+        else {"config_hash": ""}
+    )
     return MetaTrainResult(
-        model=best_model,
-        config=best_config,
-        config_hash=best_hash,
-        fold_score=best_score,
+        model=clf,
+        config=dict(BASE_HGB_PARAMS),
+        config_hash=trial_row.get("config_hash", ""),
+        fold_score=score,
         feature_names=names,
     )

@@ -65,6 +65,7 @@ __all__ = [
     "FeatureBuildContext",
     "build_features_for_candidate",
     "build_feature_matrix",
+    "categorical_code",
     "schema_hash",
     "asof",
 ]
@@ -76,6 +77,14 @@ def _compact_symbol(symbol: str) -> str:
 
 def _eodhd_series_id(symbol: str, tf: str, field: str) -> str:
     return f"EODHD:{_compact_symbol(symbol)}:{tf.upper()}:{field.lower()}"
+
+
+def _price_series_ids(symbol: str, tf: str, field: str) -> tuple[str, ...]:
+    compact = _compact_symbol(symbol)
+    return (
+        f"EODHD:{compact}:{tf.upper()}:{field.lower()}",
+        f"MT5:{compact}:{tf.upper()}:{field.lower()}",
+    )
 
 
 def _duka_series_id(symbol: str, tf: str) -> str:
@@ -94,6 +103,15 @@ def schema_hash(schema: Sequence[str] | None = None) -> str:
     names = tuple(schema) if schema is not None else FEATURE_SCHEMA_ENRICHED
     payload = json.dumps(list(names), sort_keys=False)
     return hashlib.sha256(payload.encode()).hexdigest()
+
+
+def categorical_code(value: Any) -> float:
+    if value is None:
+        return float("nan")
+    if isinstance(value, float) and math.isnan(value):
+        return float("nan")
+    digest = hashlib.sha256(str(value).encode("utf-8")).digest()
+    return float(int.from_bytes(digest[:8], "big") % 255)
 
 
 def _ewma_vol(logret: np.ndarray, span: int) -> np.ndarray:
@@ -116,14 +134,21 @@ def _ewma_vol(logret: np.ndarray, span: int) -> np.ndarray:
 
 
 def _asof_values(series_id: str, decision_time_ms: int, n: int) -> np.ndarray:
-    rows = asof(series_id, decision_time_ms, n)
+    try:
+        rows = asof(series_id, decision_time_ms, n)
+    except KeyError:
+        return np.array([], dtype=float)
     if len(rows) == 0:
         return np.array([], dtype=float)
     return rows["value"].astype(float)
 
 
 def _asof_close_log(symbol: str, tf: str, decision_time_ms: int, n: int) -> np.ndarray:
-    vals = _asof_values(_eodhd_series_id(symbol, tf, "close"), decision_time_ms, n)
+    vals = np.array([], dtype=float)
+    for series_id in _price_series_ids(symbol, tf, "close"):
+        vals = _asof_values(series_id, decision_time_ms, n)
+        if len(vals):
+            break
     if len(vals) == 0:
         return vals
     return np.log(np.maximum(vals, 1e-12))
@@ -283,12 +308,14 @@ def build_features_for_candidate(
         lo = float(np.min(tail))
         out["range_pos"] = (float(tail[-1]) - lo) / (hi - lo) if hi > lo else 0.5
 
-    vol_series_id = (
-        _duka_series_id(ctx.symbol, tf)
-        if ctx.family == "forex"
-        else _eodhd_series_id(ctx.symbol, tf, "volume")
-    )
-    vol_rows = _asof_values(vol_series_id, ctx.decision_time_ms, 64)
+    if ctx.family == "forex":
+        vol_rows = _asof_values(_duka_series_id(ctx.symbol, tf), ctx.decision_time_ms, 64)
+    else:
+        vol_rows = np.array([], dtype=float)
+        for series_id in _price_series_ids(ctx.symbol, tf, "volume"):
+            vol_rows = _asof_values(series_id, ctx.decision_time_ms, 64)
+            if len(vol_rows):
+                break
     if len(vol_rows) == 0:
         ctx.missing_feeds.append("volume")
         out["volu_z"] = float("nan")
@@ -376,7 +403,7 @@ def build_feature_matrix(
         for j, name in enumerate(schema):
             val = row[name]
             if name in CATEGORICAL_FEATURES:
-                matrix[i, j] = hash(str(val)) % 10_000 if val == val else float("nan")
+                matrix[i, j] = categorical_code(val)
             elif isinstance(val, (int, float)):
                 matrix[i, j] = float(val)
             else:

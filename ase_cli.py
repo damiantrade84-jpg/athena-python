@@ -86,7 +86,19 @@ def _cmd_train(args: argparse.Namespace) -> int:
         version=args.version,
     )
     print(json.dumps(result, indent=2, default=str))
-    return 0 if result.get("provisional_ok") else 2
+    return 0 if result.get("trained") else 2
+
+
+def _cmd_train_all(args: argparse.Namespace) -> int:
+    from athena_research.ase.train import train_all
+
+    result = train_all(
+        version=args.version,
+        events_path=Path(args.events_path) if args.events_path else None,
+        report_path=Path(args.report_path),
+    )
+    print(json.dumps(result, indent=2, default=str))
+    return 0 if result.get("trained") else 2
 
 
 def _cmd_freeze(args: argparse.Namespace) -> int:
@@ -256,6 +268,12 @@ def build_parser() -> argparse.ArgumentParser:
     train.add_argument("--version", default="v1")
     train.add_argument("--events-path", default="")
     train.set_defaults(func=_cmd_train)
+
+    train_all = sub.add_parser("train-all", help="Train every ASE family-horizon independently")
+    train_all.add_argument("--version", default="v1")
+    train_all.add_argument("--events-path", default="")
+    train_all.add_argument("--report-path", default="reports/ase_training_report.md")
+    train_all.set_defaults(func=_cmd_train_all)
 
     freeze = sub.add_parser("freeze", help="Freeze trained artifacts for family-horizon")
     freeze.add_argument("--family", required=True)

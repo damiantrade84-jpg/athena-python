@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import math
+import time
 from typing import Any, Sequence
 
 import numpy as np
@@ -16,6 +17,7 @@ from athena_ase.features.build import (
     CATEGORICAL_FEATURES,
     FeatureBuildContext,
     build_features_for_candidate,
+    categorical_code,
 )
 from athena_ase.gates.demo_only import assert_demo
 from athena_ase.horizon import Horizon, K_TP
@@ -23,8 +25,9 @@ from athena_ase.inference.decision import apply_decision_rule
 from athena_ase.inference.monitor import apply_watch_max_cap, evaluate_monitor
 from athena_ase.instruments import Instrument
 from athena_ase.levels.brackets import compute_brackets
-from athena_ase.registry.promotion import get_family_state, is_watch_max, set_watch_max
+from athena_ase.registry.promotion import is_watch_max, set_watch_max
 from athena_ase.signals.arbitrate import Candidate
+from athena_ase.signals.common import load_bar_series
 
 log = logging.getLogger("ase.predict")
 
@@ -121,7 +124,7 @@ def _row_to_vector(row: dict[str, Any], schema: tuple[str, ...]) -> np.ndarray:
     for j, name in enumerate(schema):
         val = row.get(name)
         if name in CATEGORICAL_FEATURES:
-            vec[j] = hash(str(val)) % 10_000 if val is not None else float("nan")
+            vec[j] = categorical_code(val)
         elif isinstance(val, (int, float)):
             vec[j] = float(val)
         else:
@@ -217,8 +220,15 @@ def predict_one(
     }
 
     model = bundle.model_enriched if route == "enriched" else bundle.model_core
+    calibrator = bundle.calibrator_enriched if route == "enriched" else bundle.calibrator
+    quantile_bundle = (
+        bundle.quantile_heads_enriched if route == "enriched" else bundle.quantile_heads
+    )
     if model is None:
         model = bundle.model_core
+        calibrator = bundle.calibrator
+        quantile_bundle = bundle.quantile_heads
+        route = "core"
     if model is None:
         return error_signal(
             instrument=candidate.instrument,
@@ -230,11 +240,11 @@ def predict_one(
         )
 
     raw_p = _predict_proba(model, features)
-    p_cal = _calibrate(bundle.calibrator, raw_p)
-    return_q = _predict_quantiles(bundle.quantile_heads, features, "net_R")
-    mae_q = _predict_quantiles(bundle.quantile_heads, features, "MAE_R")
-    mfe_q = _predict_quantiles(bundle.quantile_heads, features, "MFE_R")
-    hold_q = _predict_quantiles(bundle.quantile_heads, features, "hold_bars")
+    p_cal = _calibrate(calibrator, raw_p)
+    return_q = _predict_quantiles(quantile_bundle, features, "net_R")
+    mae_q = _predict_quantiles(quantile_bundle, features, "MAE_R")
+    mfe_q = _predict_quantiles(quantile_bundle, features, "MFE_R")
+    hold_q = _predict_quantiles(quantile_bundle, features, "hold_bars")
 
     expected_r = _expected_net_r(p_cal, mfe_q, mae_q)
     status = _decision_status(
@@ -267,7 +277,6 @@ def predict_one(
     if is_watch_max(family) or monitor.watch_max:
         status = apply_watch_max_cap(status, True)
 
-    deployment = get_family_state(family)
     signal_strength = int(round(100 * min(max(expected_r / 0.5, 0.0), 1.0)))
 
     return ASESignal(
@@ -294,7 +303,7 @@ def predict_one(
         maxHoldBars=brackets.max_hold_bars,
         primarySignals=list(candidate.signals),
         predictionDiagnostics={"rawP": raw_p, "thrFamily": bundle.thr_family},
-        dataQuality={**data_quality, "deployment": deployment},
+        dataQuality={**data_quality, "deployment": "OPERATIONAL"},
         modelHealth={
             "artifactHash": bundle.artifact_hash,
             "trainedAt": bundle.manifest.trained_at,
@@ -350,6 +359,9 @@ def predict_batch(
 def predict_no_candidate(
     instrument: Instrument,
     horizon: Horizon,
+    *,
+    store: Any | None = None,
+    decision_time_ms: int | None = None,
 ) -> ASESignal:
     gate = assert_demo()
     if not gate.ok:
@@ -362,10 +374,51 @@ def predict_no_candidate(
         )
     bundle = load_artifact_bundle(instrument.family, horizon)
     version = bundle.version if bundle else "none"
+    artifacts_present = bundle is not None
+
+    now_ms = decision_time_ms or int(time.time() * 1000)
+    ptis_ok = False
+    if store is not None:
+        lookback_ms = 180 * 24 * 3600 * 1000
+        series = load_bar_series(
+            store,
+            instrument.symbol,
+            horizon,
+            now_ms - lookback_ms,
+            now_ms,
+        )
+        ptis_ok = series is not None and len(series.close_log) > 0
+
+    blocker = "no_layer1_candidate"
+    if not ptis_ok:
+        blocker = "ptis_bars_missing"
+
+    data_quality: dict[str, Any] = {
+        "coreOk": ptis_ok,
+        "route": "core",
+        "missingFeeds": [] if ptis_ok else ["eodhd_bars"],
+        "blocker": blocker,
+        "ptisOk": ptis_ok,
+        "artifactsPresent": artifacts_present,
+        "deployment": "OPERATIONAL",
+    }
+    model_health: dict[str, Any] = {
+        "artifactHash": bundle.artifact_hash if bundle else "",
+        "trainedAt": bundle.manifest.trained_at if bundle else "",
+        "brier": None,
+        "driftScore": 0.0,
+        "gateResult": gate.to_dict(),
+        "blocker": blocker,
+    }
+    if not artifacts_present:
+        model_health["errorReason"] = "artifact_missing"
+
     return flat_signal(
         instrument=instrument.symbol,
         family=instrument.family,
         horizon=horizon,
         model_version=version,
         gate_result=gate.to_dict(),
+        data_quality=data_quality,
+        model_health=model_health,
     )

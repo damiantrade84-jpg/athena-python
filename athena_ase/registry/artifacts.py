@@ -46,6 +46,8 @@ class ArtifactManifest:
     version: str
     feature_schema_hash: str
     feature_schema: list[str]
+    feature_schema_hashes: dict[str, str] = field(default_factory=dict)
+    feature_schemas: dict[str, list[str]] = field(default_factory=dict)
     dataset_hash: str = ""
     ptis_snapshot_id: str = ""
     cost_model_version: str = "cm-2026.06.0"
@@ -53,6 +55,9 @@ class ArtifactManifest:
         default_factory=lambda: {"k_sl": 1.0, "k_tp": 1.0, "H_intraday": 16, "H_swing": 10}
     )
     thr_family: float = 0.10
+    threshold_fallback: bool = False
+    eval_summary: dict[str, Any] = field(default_factory=dict)
+    model_params: dict[str, Any] = field(default_factory=dict)
     trials_registry_hash: str = ""
     sklearn_version: str = field(default_factory=lambda: sklearn.__version__)
     trained_at: str = field(default_factory=_now_iso)
@@ -94,6 +99,9 @@ def freeze_artifact_bundle(
     ptis_snapshot_id: str = "",
     thr_family: float = 0.10,
     validation_report: dict[str, Any] | None = None,
+    threshold_fallback: bool = False,
+    eval_summary: dict[str, Any] | None = None,
+    model_params: dict[str, Any] | None = None,
     adapters: list[str] | None = None,
     root: Path | None = None,
 ) -> Path:
@@ -102,6 +110,18 @@ def freeze_artifact_bundle(
     out_dir.mkdir(parents=True, exist_ok=True)
 
     schema = FEATURE_SCHEMA_ENRICHED if route == "enriched" else FEATURE_SCHEMA_CORE
+    feature_schemas = {"core": list(FEATURE_SCHEMA_CORE)}
+    if "model_enriched.pkl" in models:
+        feature_schemas["enriched"] = list(FEATURE_SCHEMA_ENRICHED)
+    feature_schema_hashes = {
+        name: schema_hash(names)
+        for name, names in feature_schemas.items()
+    }
+
+    for stale_path in out_dir.glob("*.pkl"):
+        if stale_path.name not in models:
+            stale_path.unlink()
+
     file_hashes: dict[str, str] = {}
     for name, obj in models.items():
         fpath = out_dir / name
@@ -115,9 +135,14 @@ def freeze_artifact_bundle(
         version=version,
         feature_schema_hash=schema_hash(schema),
         feature_schema=list(schema),
+        feature_schema_hashes=feature_schema_hashes,
+        feature_schemas=feature_schemas,
         dataset_hash=dataset_hash,
         ptis_snapshot_id=ptis_snapshot_id,
         thr_family=thr_family,
+        threshold_fallback=threshold_fallback,
+        eval_summary=eval_summary or {},
+        model_params=model_params or {},
         trials_registry_hash=registry_hash(),
         validation_report=validation_report or {},
         adapters=list(adapters or []),
@@ -132,6 +157,15 @@ def verify_manifest(manifest: ArtifactManifest, artifact_root: Path) -> list[str
     expected_schema_hash = schema_hash(manifest.feature_schema)
     if manifest.feature_schema_hash != expected_schema_hash:
         errors.append("feature_schema_hash mismatch")
+    for route, route_schema in manifest.feature_schemas.items():
+        expected = schema_hash(route_schema)
+        if manifest.feature_schema_hashes.get(route) != expected:
+            errors.append(f"feature_schema_hash mismatch: {route}")
+    if not manifest.dataset_hash:
+        errors.append("missing dataset_hash")
+    persisted_model_files = {path.name for path in artifact_root.glob("*.pkl")}
+    if set(manifest.file_hashes) != persisted_model_files:
+        errors.append("file_hashes do not cover all model files")
     for fname, expected in manifest.file_hashes.items():
         fpath = artifact_root / fname
         if not fpath.exists():

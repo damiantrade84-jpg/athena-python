@@ -17,6 +17,7 @@ _MS_PER_MINUTE = 60 * _MS_PER_SECOND
 
 class AvailabilityRuleId(str, Enum):
     EODHD_BAR = "eodhd_bar"
+    MT5_BAR = "mt5_bar"
     DUKASCOPY_VOLUME = "dukascopy_volume"
     BYBIT_EVENT = "bybit_event"
     CFTC_COT = "cftc_cot"
@@ -35,6 +36,11 @@ AVAILABILITY_RULES: dict[AvailabilityRuleId, AvailabilityRule] = {
     AvailabilityRuleId.EODHD_BAR: AvailabilityRule(
         AvailabilityRuleId.EODHD_BAR,
         "EODHD H1/H4/D1 bars: bar close + 90 s ingestion buffer",
+        verified=True,
+    ),
+    AvailabilityRuleId.MT5_BAR: AvailabilityRule(
+        AvailabilityRuleId.MT5_BAR,
+        "MT5 H1/H4/D1 bars: bar close + 90 s ingestion buffer",
         verified=True,
     ),
     AvailabilityRuleId.DUKASCOPY_VOLUME: AvailabilityRule(
@@ -91,7 +97,7 @@ def compute_available_time_ms(
     realtime_start_ms: int | None = None,
 ) -> int:
     """Compute available_time (epoch ms) for a row being ingested."""
-    if rule_id == AvailabilityRuleId.EODHD_BAR:
+    if rule_id in (AvailabilityRuleId.EODHD_BAR, AvailabilityRuleId.MT5_BAR):
         close_ms = bar_close_ms if bar_close_ms is not None else value_time_ms
         return close_ms + 90 * _MS_PER_SECOND
 
@@ -161,6 +167,8 @@ def rule_for_source(source: str) -> AvailabilityRuleId:
     src = source.strip().upper()
     if src.startswith("EODHD"):
         return AvailabilityRuleId.EODHD_BAR
+    if src.startswith("MT5"):
+        return AvailabilityRuleId.MT5_BAR
     if src.startswith("DUKASCOPY"):
         return AvailabilityRuleId.DUKASCOPY_VOLUME
     if src.startswith("BYBIT"):

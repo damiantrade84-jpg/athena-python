@@ -1147,8 +1147,33 @@ export interface ASEScanResponse {
   family?: string;
   candidateCount?: number;
   signalCount?: number;
+  statusCounts?: Record<string, number>;
   deployment?: Record<string, string>;
+  diagnostics?: ASEScanDiagnostics;
+  journalError?: string;
   signals?: ASESignalRow[];
+  error?: string;
+}
+
+export interface ASEScanDiagnostics {
+  ptisRoot?: string;
+  ptisSeriesCount?: number;
+  eurusdH1CloseRows?: number;
+  artifactsRoot?: string;
+  horizon?: string;
+  familiesWithArtifacts?: string[];
+}
+
+export interface ASEHealthResponse {
+  success?: boolean;
+  ready?: boolean;
+  blockers?: string[];
+  ptisRoot?: string;
+  ptisSeriesCount?: number;
+  eurusdH1CloseRows?: number;
+  artifactsRoot?: string;
+  horizon?: string;
+  familiesWithArtifacts?: string[];
   error?: string;
 }
 

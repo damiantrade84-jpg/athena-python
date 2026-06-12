@@ -12,8 +12,18 @@ from athena_ase.data.ptis import PTISStore, load_window
 from athena_ase.horizon import Horizon, HORIZONS
 
 
-def eodhd_series_id(symbol: str, tf: str, field: str) -> str:
-    return f"EODHD:{compact_symbol(symbol)}:{tf.upper()}:{field.lower()}"
+PRICE_SOURCES = ("EODHD", "MT5")
+
+
+def price_series_id(source: str, symbol: str, tf: str, field: str) -> str:
+    return f"{source}:{compact_symbol(symbol)}:{tf.upper()}:{field.lower()}"
+
+
+def resolve_price_source(store: PTISStore, symbol: str, tf: str) -> str | None:
+    for source in PRICE_SOURCES:
+        if store.series_exists(price_series_id(source, symbol, tf, "close")):
+            return source
+    return None
 
 
 @dataclass
@@ -71,9 +81,12 @@ def load_bar_series(
 ) -> BarSeries | None:
     cfg = HORIZONS[horizon]
     tf = cfg.tf
-    close_id = eodhd_series_id(symbol, tf, "close")
-    high_id = eodhd_series_id(symbol, tf, "high")
-    low_id = eodhd_series_id(symbol, tf, "low")
+    source = resolve_price_source(store, symbol, tf)
+    if source is None:
+        return None
+    close_id = price_series_id(source, symbol, tf, "close")
+    high_id = price_series_id(source, symbol, tf, "high")
+    low_id = price_series_id(source, symbol, tf, "low")
     try:
         close_rows = store.load_window(close_id, start_ms, end_ms)
         high_rows = store.load_window(high_id, start_ms, end_ms)
