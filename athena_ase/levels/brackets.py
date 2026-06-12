@@ -40,12 +40,14 @@ def compute_brackets(
 ) -> BracketLevels:
     cfg = HORIZONS[horizon]
     h = cfg.max_hold_bars
-    r_unit = k_sl * sigma_bar * math.sqrt(h)
+    # sigma_bar is a log-return sigma; scale by entry_reference so R_unit is in
+    # price units (spec §5: "R_unit = k_sl×σ_bar×sqrt(H) in price").
+    r_unit = k_sl * sigma_bar * math.sqrt(h) * entry_reference
     if r_unit <= 0 or direction == 0:
         return BracketLevels(entry_reference, (entry_reference, entry_reference), entry_reference, entry_reference, entry_reference, h, False)
 
     d = direction
-    zone_half = 0.25 * sigma_bar * math.sqrt(h) ** 0.5
+    zone_half = 0.25 * sigma_bar * math.sqrt(h) ** 0.5 * entry_reference
     if d > 0:
         entry_zone = (entry_reference - zone_half, entry_reference)
     else:

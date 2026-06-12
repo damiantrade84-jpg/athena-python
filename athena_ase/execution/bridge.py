@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import time
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Any, Callable
 
 from athena_ase.contracts import ASESignal
@@ -89,7 +90,11 @@ def ase_signal_to_execution_dict(
             "tp": signal.tp1,
             "tp2": signal.tp2,
             "type": asset_type,
-            "timestamp": signal.decisionTimeMs or int(time.time() * 1000),
+            # risk_engine expects an ISO-8601 string (legacy Engine A contract)
+            "timestamp": datetime.fromtimestamp(
+                (signal.decisionTimeMs or int(time.time() * 1000)) / 1000.0,
+                tz=timezone.utc,
+            ).isoformat(),
             "confluenceScore": signal.signalStrength,
             "scoreNorm": signal.scoreNorm,
             "engineATradeEnabled": True,
@@ -332,11 +337,57 @@ def default_execution_deps() -> ASEExecutionDeps:
 
         return _bybit_execute(signal, approval)
 
+    def _get_account(venue: str) -> dict[str, Any]:
+        if venue == "bybit":
+            from bybit_executor import bybit_get_account
+
+            acct = bybit_get_account()
+        else:
+            from mt5_executor import mt5_get_account
+
+            acct = mt5_get_account()
+        if not acct or (isinstance(acct, dict) and acct.get("error")):
+            detail = acct.get("detail") if isinstance(acct, dict) else ""
+            raise RuntimeError(f"{venue.upper()}_ACCOUNT_UNAVAILABLE: {detail}")
+        return acct
+
+    def _get_positions(venue: str) -> tuple[list, dict | None]:
+        if venue == "bybit":
+            from bybit_executor import bybit_get_positions
+
+            res = bybit_get_positions()
+        else:
+            from mt5_executor import mt5_get_positions
+
+            res = mt5_get_positions()
+        if isinstance(res, dict):
+            if res.get("error"):
+                raise RuntimeError(f"{venue.upper()}_POSITIONS_UNAVAILABLE: {res.get('detail')}")
+            return list(res.get("positions") or []), res
+        return list(res or []), None
+
+    def _get_symbol_info(symbol: str, exec_dict: dict) -> dict | None:
+        display = str(exec_dict.get("pair") or symbol)
+        if str(exec_dict.get("type") or "").lower() == "crypto":
+            from bybit_executor import bybit_get_symbol_info
+
+            info = bybit_get_symbol_info(display)
+        else:
+            from mt5_executor import mt5_get_symbol_info
+
+            info = mt5_get_symbol_info(display)
+        if isinstance(info, dict) and info.get("error"):
+            return None
+        return info
+
     return ASEExecutionDeps(
         get_executor_mode=_mode,
         get_mt5_trade_mode=_mt5_mode,
         get_bybit_base_url=_bybit_url,
         get_kill_switch=lambda: bool(CONFIG.get("KILL_SWITCH", False)),
+        get_account=_get_account,
+        get_positions=_get_positions,
+        get_symbol_info=_get_symbol_info,
         risk_check=_risk_check,
         guardian_check=_guardian,
         mt5_execute=_mt5_execute,

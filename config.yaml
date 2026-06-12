@@ -3281,6 +3281,11 @@ ENGINE_C_META_BLEND: 0.20
 # Minimum reward:risk (geometric from entry/sl/tp1) for consensus signals in risk_check.
 ENGINE_C_EXEC_MIN_RR: 1.0
 
+# ASE bridge (demo-only) RR floor — ASE spec targets median-MFE TPs (RR 0.6-0.94,
+# win-rate-driven). Applies ONLY to execution_context=ase_bridge + aseExecution signals;
+# every other engine keeps ENGINE_C_EXEC_MIN_RR. User-approved 2026-06-12.
+ASE_EXEC_MIN_RR: 0.6
+
 # When Engine A omits maxScore, use this default (see ENGINE_C_A_DEFAULT_MAX_SCORE_BY_TYPE).
 ENGINE_C_A_DEFAULT_MAX_SCORE: 3.0
 
