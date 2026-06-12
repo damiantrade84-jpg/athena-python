@@ -1148,11 +1148,30 @@ export interface ASEScanResponse {
   candidateCount?: number;
   signalCount?: number;
   statusCounts?: Record<string, number>;
-  deployment?: Record<string, string>;
+  deployment?: string;
   diagnostics?: ASEScanDiagnostics;
   journalError?: string;
   signals?: ASESignalRow[];
+  executions?: ASEExecutionOutcome[];
   error?: string;
+}
+
+export interface ASEExecutionOutcome {
+  executed?: boolean;
+  reason?: string;
+  venue?: string;
+  result?: Record<string, unknown>;
+  approval_volume?: number | null;
+  [k: string]: unknown;
+}
+
+export interface ASEExecuteResponse {
+  success?: boolean;
+  executed?: boolean;
+  reason?: string;
+  error?: string;
+  signal?: ASESignalRow;
+  execution?: ASEExecutionOutcome;
 }
 
 export interface ASEScanDiagnostics {

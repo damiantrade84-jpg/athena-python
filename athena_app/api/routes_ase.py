@@ -10,6 +10,7 @@ from flask import jsonify, request
 
 from athena_ase.execution.journal import trade_journal_summary
 from athena_ase.horizon import Horizon
+from athena_ase.instruments import instrument_by_symbol
 from athena_ase.runtime.health import ase_health
 from athena_ase.runtime.scan import run_ase_dual_horizon_scan, run_ase_scan
 from athena_research.ase.training_report import write_training_report
@@ -82,6 +83,77 @@ def api_ase_scan():
         return jsonify({"success": False, "error": str(exc)}), 500
 
 
+def api_ase_execute():
+    d = request.get_json(force=True, silent=True) or {}
+    symbol = str(d.get("instrument") or d.get("symbol") or "").strip()
+    if not symbol:
+        return jsonify({"success": False, "error": "instrument_required"}), 400
+
+    instrument = instrument_by_symbol(symbol)
+    if instrument is None:
+        return jsonify({"success": False, "error": f"unknown_instrument:{symbol}"}), 400
+
+    horizon_raw = str(d.get("horizon") or "").strip().lower()
+    if horizon_raw not in ("intraday", "swing"):
+        return jsonify({"success": False, "error": "horizon_must_be_intraday_or_swing"}), 400
+    horizon: Horizon = "swing" if horizon_raw == "swing" else "intraday"
+
+    try:
+        result = run_ase_scan(
+            symbols=[instrument.symbol],
+            horizon=horizon,
+            write_journal=True,
+            execute_trades=True,
+        )
+        signals = result.get("signals") or []
+        signal = signals[0] if signals else None
+        if not signal:
+            return jsonify(
+                {
+                    "success": False,
+                    "executed": False,
+                    "reason": "signal_unavailable",
+                }
+            )
+
+        status = str(signal.get("decisionStatus") or "ERROR")
+        if status != "TRADE":
+            return jsonify(
+                {
+                    "success": False,
+                    "executed": False,
+                    "reason": f"signal_status:{status}",
+                    "signal": _json_safe(signal),
+                }
+            )
+
+        executions = result.get("executions") or []
+        if not executions:
+            return jsonify(
+                {
+                    "success": False,
+                    "executed": False,
+                    "reason": "execution_result_missing",
+                    "signal": _json_safe(signal),
+                }
+            )
+
+        execution = executions[0]
+        executed = bool(execution.get("executed"))
+        return jsonify(
+            {
+                "success": executed,
+                "executed": executed,
+                "reason": str(execution.get("reason") or ("ok" if executed else "execution_failed")),
+                "execution": _json_safe(execution),
+                "signal": _json_safe(signal),
+            }
+        )
+    except Exception as exc:
+        log.exception("ASE manual execution failed for %s", instrument.symbol)
+        return jsonify({"success": False, "error": str(exc)}), 500
+
+
 def api_ase_journal_summary():
     try:
         journal = trade_journal_summary()
@@ -117,6 +189,13 @@ def register_ase_routes(app) -> None:
     rules = {rule.rule for rule in app.url_map.iter_rules()}
     if "/api/ase-scan" not in rules:
         app.add_url_rule("/api/ase-scan", "api_ase_scan", api_ase_scan, methods=["POST"])
+    if "/api/ase-execute" not in rules:
+        app.add_url_rule(
+            "/api/ase-execute",
+            "api_ase_execute",
+            api_ase_execute,
+            methods=["POST"],
+        )
     if "/api/ase-journal-summary" not in rules:
         app.add_url_rule(
             "/api/ase-journal-summary",

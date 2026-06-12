@@ -7,10 +7,26 @@ import { Button } from '@/components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Input } from '@/components/ui/input';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
 import { ErrorBanner } from '@/components/shared';
 import { Cpu, Radar, Activity, Shield, AlertTriangle } from 'lucide-react';
 import { fmtNum, toNum } from '@/lib/utils';
-import type { ASEHealthResponse, ASEScanResponse, ASEShadowSummary, ASESignalRow } from '@/types/athena';
+import type {
+  ASEExecuteResponse,
+  ASEHealthResponse,
+  ASEScanResponse,
+  ASEShadowSummary,
+  ASESignalRow,
+} from '@/types/athena';
 
 const CYAN = 'hsl(185 85% 45%)';
 const CYAN_DIM = 'hsl(185 55% 28%)';
@@ -33,7 +49,32 @@ function statusBadgeClass(status?: string): string {
   }
 }
 
-function SignalCard({ row }: { row: ASESignalRow }) {
+function signalKey(row: ASESignalRow): string {
+  return `${row.instrument || ''}:${row.horizon || ''}:${row.decisionTimeMs || 0}`;
+}
+
+function executionTicket(result?: ASEExecuteResponse): string {
+  const broker = result?.execution?.result || {};
+  return String(
+    broker.ticket
+    || broker.order_ticket
+    || broker.orderId
+    || broker.order_id
+    || '',
+  );
+}
+
+function SignalCard({
+  row,
+  onExecute,
+  executing,
+  outcome,
+}: {
+  row: ASESignalRow;
+  onExecute: (row: ASESignalRow) => void;
+  executing: boolean;
+  outcome?: ASEExecuteResponse;
+}) {
   const dq = row.dataQuality || {};
   const health = row.modelHealth || {};
   const monitor = (health.monitor || {}) as Record<string, unknown>;
@@ -124,6 +165,28 @@ function SignalCard({ row }: { row: ASESignalRow }) {
         )}
         {Boolean(monitor.watchMax) && <span className="text-amber-400">WATCH-max</span>}
       </div>
+
+      {row.decisionStatus === 'TRADE' && (
+        <div className="mt-3 flex items-center justify-between gap-2 border-t pt-2" style={{ borderColor: CYAN_DIM }}>
+          <Button
+            size="sm"
+            variant="outline"
+            className="h-7 text-[10px] uppercase tracking-wide"
+            style={{ borderColor: CYAN, color: CYAN }}
+            onClick={() => onExecute(row)}
+            disabled={executing}
+          >
+            {executing ? 'Executing...' : 'Execute Demo'}
+          </Button>
+          {outcome && (
+            <span className={outcome.executed ? 'text-long text-[10px]' : 'text-amber-400 text-[10px]'}>
+              {outcome.executed
+                ? `Filled${executionTicket(outcome) ? ` #${executionTicket(outcome)}` : ''}`
+                : `Blocked: ${outcome.reason || outcome.error || 'unknown'}`}
+            </span>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -134,6 +197,8 @@ export default function ASEPanel() {
   const [horizon, setHorizon] = useState<'intraday' | 'swing' | 'both'>('both');
   const [pairFilter, setPairFilter] = useState('');
   const [scanResult, setScanResult] = useState<ASEScanResponse | null>(null);
+  const [confirmSignal, setConfirmSignal] = useState<ASESignalRow | null>(null);
+  const [executionResults, setExecutionResults] = useState<Record<string, ASEExecuteResponse>>({});
 
   const healthUrl = `/api/ase-health?horizon=${horizon === 'both' ? 'intraday' : horizon}`;
   const { data: health } = useApiPoll<ASEHealthResponse>(healthUrl, 60000);
@@ -143,13 +208,14 @@ export default function ASEPanel() {
     30000,
   );
   const { post: postScan, loading: scanning, error: scanError } = useApiPost<ASEScanResponse>();
+  const { post: postExecute, loading: executing, error: executeError } = useApiPost<ASEExecuteResponse>();
 
   const runScan = useCallback(async () => {
     const tokens = pairFilter.split(/[,;\s]+/).map((s) => s.trim()).filter(Boolean);
     const body: Record<string, unknown> = {
       horizon,
       writeJournal: true,
-      executeTrades: true,
+      executeTrades: false,
     };
     if (family !== 'all') body.family = family;
     if (tokens.length) body.symbols = tokens;
@@ -163,8 +229,36 @@ export default function ASEPanel() {
     await refreshSummary();
     const tradeN = (result.signals || []).filter((s) => s.decisionStatus === 'TRADE').length;
     const watchN = (result.signals || []).filter((s) => s.decisionStatus === 'WATCH').length;
-    showToast(`ASE live: ${tradeN} TRADE · ${watchN} WATCH · ${result.candidateCount ?? result.signalCount ?? 0} rows`, 'success');
+    showToast(`ASE scan: ${tradeN} TRADE · ${watchN} WATCH · ${result.candidateCount ?? result.signalCount ?? 0} rows`, 'success');
   }, [family, horizon, pairFilter, postScan, refreshSummary, showToast]);
+
+  const confirmExecute = useCallback(async () => {
+    if (!confirmSignal?.instrument || !confirmSignal.horizon) {
+      showToast('ASE execution failed: signal identity is missing', 'error');
+      return;
+    }
+    const key = signalKey(confirmSignal);
+    const result = await postExecute('/api/ase-execute', {
+      instrument: confirmSignal.instrument,
+      horizon: confirmSignal.horizon,
+    });
+    if (!result) {
+      showToast('ASE execution failed before a result was returned', 'error');
+      return;
+    }
+    setExecutionResults((current) => ({ ...current, [key]: result }));
+    await refreshSummary();
+    if (result.executed) {
+      const ticket = executionTicket(result);
+      showToast(
+        `ASE demo executed ${confirmSignal.direction || ''} ${confirmSignal.instrument}${ticket ? ` - ticket ${ticket}` : ''}`,
+        'success',
+      );
+    } else {
+      showToast(`ASE blocked ${confirmSignal.instrument}: ${result.reason || result.error || 'unknown'}`, 'error');
+    }
+    setConfirmSignal(null);
+  }, [confirmSignal, postExecute, refreshSummary, showToast]);
 
   const signals = useMemo(() => {
     const rows = scanResult?.signals || [];
@@ -203,6 +297,7 @@ export default function ASEPanel() {
       </div>
 
       {scanError && <ErrorBanner message={scanError} />}
+      {executeError && <ErrorBanner message={executeError} />}
 
       {showArtifactsBanner && (
         <div
@@ -314,12 +409,54 @@ export default function ASEPanel() {
                 </p>
               )}
               {signals.map((row) => (
-                <SignalCard key={`${row.instrument}-${row.decisionTimeMs}-${row.horizon}`} row={row} />
+                <SignalCard
+                  key={`${row.instrument}-${row.decisionTimeMs}-${row.horizon}`}
+                  row={row}
+                  onExecute={setConfirmSignal}
+                  executing={executing && signalKey(confirmSignal || {}) === signalKey(row)}
+                  outcome={executionResults[signalKey(row)]}
+                />
               ))}
             </div>
           </ScrollArea>
         </CardContent>
       </Card>
+
+      <AlertDialog
+        open={!!confirmSignal}
+        onOpenChange={(open) => {
+          if (!open && !executing) setConfirmSignal(null);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Confirm ASE Demo Execution</AlertDialogTitle>
+            <AlertDialogDescription asChild>
+              <div className="space-y-2 text-xs">
+                <div>
+                  Execute <b>{confirmSignal?.direction}</b> {confirmSignal?.instrument} on{' '}
+                  <b>{confirmSignal?.horizon}</b>?
+                </div>
+                <div className="font-mono">
+                  Displayed reference: {fmtNum(confirmSignal?.entryReference, 5)} ·
+                  SL: {fmtNum(confirmSignal?.sl, 5)} ·
+                  TP1: {fmtNum(confirmSignal?.tp1, 5)}
+                </div>
+                <div className="text-[10px] text-muted-foreground">
+                  The server will re-scan this symbol and execute only if it is still TRADE.
+                  Demo-account, freshness, guardian, risk, and broker gates remain mandatory.
+                </div>
+              </div>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={executing}>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={() => void confirmExecute()} disabled={executing}>
+              {executing ? 'Executing...' : 'Confirm Demo Execute'}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }
