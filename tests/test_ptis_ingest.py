@@ -9,7 +9,7 @@ from uuid import uuid4
 import pytest
 
 from athena_ase.data.availability import AvailabilityRuleId, compute_available_time_ms
-from athena_ase.data.ingest import cot as cot_ingest
+from athena_ase.data.ingest import binance, cot as cot_ingest
 from athena_ase.data.ingest import dukascopy, eodhd, fred, mt5
 from athena_ase.data.ptis import PTISStore, build_row
 from athena_ase.signals.common import load_bar_series
@@ -144,6 +144,71 @@ def test_eodhd_ingest_respects_bar_close_plus_90s(tmp_path, monkeypatch):
     row = store.asof(sid, expected_avail, n=1)[0]
     assert row["value"] == pytest.approx(1.085)
     assert row["available_time"] == expected_avail
+
+
+def _seed_binance_crypto_db(path, *, symbol="BTCUSDT"):
+    with sqlite3.connect(path, timeout=15.0) as con:
+        con.execute("PRAGMA journal_mode=WAL")
+        con.execute(
+            """
+            CREATE TABLE backtest_candles (
+                cache_key TEXT NOT NULL,
+                display TEXT,
+                symbol TEXT,
+                source TEXT,
+                asset_type TEXT,
+                timeframe TEXT NOT NULL,
+                bar_time TEXT NOT NULL,
+                open REAL, high REAL, low REAL, close REAL,
+                volume REAL DEFAULT 0,
+                provider TEXT,
+                updated_at REAL NOT NULL,
+                PRIMARY KEY (cache_key, timeframe, bar_time)
+            )
+            """
+        )
+        bar_time = "2025-06-02T12:00:00+00:00"
+        con.execute(
+            """
+            INSERT INTO backtest_candles VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                "v2:binance:binance_futures:BTCUSDT",
+                "BTC/USDT",
+                symbol,
+                "binance",
+                "crypto",
+                "H1",
+                bar_time,
+                68000.0,
+                68100.0,
+                67900.0,
+                68050.0,
+                5000,
+                "binance_futures",
+                1.0,
+            ),
+        )
+
+
+def test_binance_ingest_loads_crypto_bars_for_phase1(tmp_path):
+    bt_db = tmp_path / "bt.db"
+    _seed_binance_crypto_db(bt_db)
+    store = PTISStore(tmp_path / "ptis")
+
+    counts = binance.ingest_all(store, db_path=str(bt_db))
+
+    sid = "BINANCE:BTCUSDT:H1:close"
+    assert counts[sid] == 1
+    series = load_bar_series(
+        store,
+        "BTCUSDT",
+        "intraday",
+        _ms(datetime(2025, 6, 2, 0, 0, tzinfo=timezone.utc)),
+        _ms(datetime(2025, 6, 3, 0, 0, tzinfo=timezone.utc)),
+    )
+    assert series is not None
+    assert len(series.close_log) == 1
 
 
 def test_mt5_ingest_preserves_source_and_normalizes_forex_symbol(tmp_path):

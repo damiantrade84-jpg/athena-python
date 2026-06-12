@@ -167,7 +167,7 @@ def rule_for_source(source: str) -> AvailabilityRuleId:
     src = source.strip().upper()
     if src.startswith("EODHD"):
         return AvailabilityRuleId.EODHD_BAR
-    if src.startswith("MT5"):
+    if src.startswith("MT5") or src.startswith("BINANCE"):
         return AvailabilityRuleId.MT5_BAR
     if src.startswith("DUKASCOPY"):
         return AvailabilityRuleId.DUKASCOPY_VOLUME

@@ -12,7 +12,7 @@ from athena_ase.inference.predict import predict_no_candidate
 from athena_ase.instruments import instrument_by_symbol
 from athena_ase.runtime.health import ase_health, scan_diagnostics
 from athena_ase.runtime.scan import run_ase_scan
-from athena_ase.signals.common import eodhd_series_id
+from athena_ase.data.ingest.common import eodhd_series_id
 
 
 def _seed_forex_h1_bars(
@@ -84,10 +84,10 @@ def test_scan_with_bars_and_no_artifacts_yields_error_candidates(ptis: PTISStore
         ptis_root=str(ptis.root),
     )
     assert result["candidateCount"] >= 1
-    statuses = {s["decisionStatus"] for s in result["signals"]}
-    assert "ERROR" in statuses
-    err = next(s for s in result["signals"] if s["decisionStatus"] == "ERROR")
-    assert err["modelHealth"]["errorReason"] == "artifact_missing"
+    flat = next(s for s in result["signals"] if s["decisionStatus"] == "FLAT")
+    assert flat["dataQuality"]["blocker"] == "model_not_trained"
+    assert flat["dataQuality"]["artifactsPresent"] is False
+    assert flat["modelHealth"]["errorReason"] == "artifact_missing"
     assert result["diagnostics"]["eurusdH1CloseRows"] > 100
 
 

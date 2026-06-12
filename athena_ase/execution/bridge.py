@@ -104,6 +104,52 @@ def ase_signal_to_execution_dict(
     return payload
 
 
+def _ptis_freshness_evidence(
+    signal: ASESignal, exec_dict: dict[str, Any]
+) -> tuple[bool, str]:
+    """Attach real PTIS bar-freshness diagnostics so risk_engine can evaluate staleness.
+
+    PTIS price rows stamp ``value_time`` at bar close; the canonical diagnostic
+    buckets by bar open, so timestamps are shifted back one bar before
+    classification. Fails closed: no evidence → no order.
+    """
+    try:
+        from athena_app.services.market_state import candle_freshness_diagnostic
+        from athena_ase.data.ptis import PTISStore, default_ptis_root
+        from athena_ase.horizon import HORIZONS
+        from athena_ase.signals.common import load_bar_series
+
+        horizon = signal.horizon if signal.horizon in HORIZONS else "intraday"
+        tf = HORIZONS[horizon].tf
+        tf_s = {"H1": 3600, "D1": 86400}.get(tf, 3600)
+        now_ms = int(time.time() * 1000)
+        store = PTISStore(default_ptis_root())
+        series = load_bar_series(
+            store, signal.instrument, horizon, now_ms - 30 * 86_400_000, now_ms
+        )
+        if series is None or len(series.value_time) == 0:
+            return False, "no_ptis_bars"
+        pair = {
+            "symbol": exec_dict.get("symbol") or signal.instrument,
+            "display": exec_dict.get("pair") or signal.instrument,
+            "type": exec_dict.get("type") or "forex",
+            "source": exec_dict.get("source") or "mt5",
+        }
+        candles = [{"time": int(t) // 1000 - tf_s} for t in series.value_time[-5:]]
+        diag = candle_freshness_diagnostic(pair, tf, candles)
+        exec_dict["candleFreshness"] = {tf: dict(diag)}
+        severity = str(diag.get("stalenessSeverity") or "")
+        if severity == "fresh":
+            exec_dict["candleConsistency"] = {tf: {"status": "OK"}}
+        elif severity == "stale_1_bucket":
+            # PTIS stores confirmed bars only; one-bucket lag is the intended policy.
+            exec_dict["candleConsistency"] = {tf: {"status": "CONFIRMED_ONLY_OK"}}
+        return True, severity or "unclassified"
+    except Exception as exc:
+        log.warning("ASE freshness evidence failed for %s: %s", signal.instrument, exc)
+        return False, f"evidence_error:{exc}"
+
+
 def _rr_floor_ok(signal: ASESignal) -> bool:
     sl_dist = abs(signal.entryReference - signal.sl)
     tp_dist = abs(signal.tp1 - signal.entryReference)
@@ -118,9 +164,33 @@ def execute_trade_signal(
     pair: dict[str, Any] | None = None,
     deps: ASEExecutionDeps | None = None,
     write_journal: bool = True,
+    journal_outcomes: bool | None = None,
 ) -> dict[str, Any]:
-    """Demo-only TRADE execution: gate → guardian → risk_check → executor."""
+    """Demo-only TRADE execution: gate → guardian → risk_check → executor.
+
+    ``write_journal`` appends the signal row; ``journal_outcomes`` (defaults to
+    ``write_journal``) records rejection/fill outcomes on the existing row, so
+    callers that already journal signals (the scan) still see why orders died.
+    """
     deps = deps or ASEExecutionDeps()
+    log_outcomes = write_journal if journal_outcomes is None else journal_outcomes
+
+    def _reject(stage: str, reason: str, extra: dict[str, Any] | None = None) -> dict[str, Any]:
+        if log_outcomes:
+            try:
+                append_execution_outcome(
+                    instrument=signal.instrument,
+                    decision_time_ms=signal.decisionTimeMs,
+                    status="rejected",
+                    detail={"stage": stage, "reason": reason},
+                )
+            except Exception as exc:
+                log.warning("ASE outcome journal failed for %s: %s", signal.instrument, exc)
+        out = {"executed": False, "reason": f"{stage}:{reason}" if stage else reason}
+        if extra:
+            out.update(extra)
+        return out
+
     if signal.decisionStatus != "TRADE":
         return {"executed": False, "reason": "not_trade_status"}
 
@@ -130,15 +200,15 @@ def execute_trade_signal(
         bybit_base_url=deps.get_bybit_base_url(),
     )
     if not gate.ok:
-        return {"executed": False, "reason": f"demo_gate:{gate.reason}", "gate": gate.to_dict()}
+        return _reject("demo_gate", gate.reason, {"gate": gate.to_dict()})
 
     if not _rr_floor_ok(signal):
-        return {"executed": False, "reason": "rr_floor"}
+        return _reject("", "rr_floor")
 
     exec_dict = ase_signal_to_execution_dict(signal, pair)
     fresh_ok, fresh_reason = deps.candle_freshness_ok(signal, exec_dict)
     if not fresh_ok:
-        return {"executed": False, "reason": f"freshness:{fresh_reason}"}
+        return _reject("freshness", fresh_reason)
 
     if write_journal:
         append_trade_signals([signal])
@@ -149,14 +219,7 @@ def execute_trade_signal(
 
     ok_guard, guard_reason = deps.guardian_check(exec_dict, positions, account, positions_raw)
     if not ok_guard:
-        if write_journal:
-            append_execution_outcome(
-                instrument=signal.instrument,
-                decision_time_ms=signal.decisionTimeMs,
-                status="rejected",
-                detail={"stage": "guardian", "reason": guard_reason},
-            )
-        return {"executed": False, "reason": f"guardian:{guard_reason}"}
+        return _reject("guardian", guard_reason)
 
     approval = deps.risk_check(
         signal=exec_dict,
@@ -169,14 +232,7 @@ def execute_trade_signal(
     )
     if approval is None or not getattr(approval, "approved", False):
         reason = getattr(approval, "reason", "risk_rejected") if approval else "risk_rejected"
-        if write_journal:
-            append_execution_outcome(
-                instrument=signal.instrument,
-                decision_time_ms=signal.decisionTimeMs,
-                status="rejected",
-                detail={"stage": "risk_engine", "reason": reason},
-            )
-        return {"executed": False, "reason": f"risk:{reason}"}
+        return _reject("risk", reason)
 
     if venue == "bybit":
         result = deps.bybit_execute(exec_dict, approval)
@@ -185,7 +241,7 @@ def execute_trade_signal(
 
     success = bool(result.get("success"))
     status = "filled" if success else "failed"
-    if write_journal:
+    if log_outcomes:
         append_execution_outcome(
             instrument=signal.instrument,
             decision_time_ms=signal.decisionTimeMs,
@@ -285,4 +341,5 @@ def default_execution_deps() -> ASEExecutionDeps:
         guardian_check=_guardian,
         mt5_execute=_mt5_execute,
         bybit_execute=_bybit_execute,
+        candle_freshness_ok=_ptis_freshness_evidence,
     )

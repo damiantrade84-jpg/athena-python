@@ -180,6 +180,7 @@ def run_ase_scan(
                         pair=pair,
                         deps=deps,
                         write_journal=False,
+                        journal_outcomes=write_journal,
                     )
                 )
             except Exception as exc:

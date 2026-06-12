@@ -12,7 +12,7 @@ from athena_ase.data.ptis import PTISStore, load_window
 from athena_ase.horizon import Horizon, HORIZONS
 
 
-PRICE_SOURCES = ("EODHD", "MT5")
+PRICE_SOURCES = ("EODHD", "MT5", "BINANCE")
 
 
 def price_series_id(source: str, symbol: str, tf: str, field: str) -> str:

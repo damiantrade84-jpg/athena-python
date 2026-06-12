@@ -11,10 +11,10 @@ from athena_ase.data.ptis import PTISStore
 
 log = logging.getLogger("ase.ingest.bybit")
 
-_DEFAULT_CRYPTO = (
-    {"symbol": "BTCUSDT", "type": "crypto"},
-    {"symbol": "ETHUSDT", "type": "crypto"},
-)
+def _default_crypto_symbols() -> list[str]:
+    from athena_ase.instruments import instruments_for_family
+
+    return [inst.symbol for inst in instruments_for_family("crypto")]
 
 
 def _fetch_derivatives(symbol: str, *, lookback_days: int = 730) -> tuple[list[dict], list[dict]]:
@@ -86,7 +86,7 @@ def ingest_all(
     lookback_days: int = 730,
 ) -> dict[str, int]:
     totals: dict[str, int] = {}
-    targets = symbols or [p["symbol"] for p in _DEFAULT_CRYPTO]
+    targets = symbols or _default_crypto_symbols()
     for sym in targets:
         try:
             totals.update(ingest_symbol(store, sym, lookback_days=lookback_days))

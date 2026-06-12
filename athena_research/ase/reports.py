@@ -30,8 +30,8 @@ def phase1_report(events_path: Path | None = None, out_path: Path | None = None)
         lines.append("No candidates recorded.")
         gate_rows.append("| (none) | 0 | n/a | **FAIL** |")
     else:
-        grouped = df.groupby(["family", "horizon"])
-        for (family, horizon), g in grouped.sort_index():
+        grouped = df.groupby(["family", "horizon"], sort=True)
+        for (family, horizon), g in grouped:
             n = len(g)
             mean_r = float(g["net_R"].mean())
             status = "PASS" if n >= MIN_CANDIDATES and mean_r >= MIN_MEAN_NET_R else "FAIL"
