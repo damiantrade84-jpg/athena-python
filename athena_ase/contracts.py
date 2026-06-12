@@ -78,7 +78,8 @@ class ASESignal:
         payload["entryZone"] = [self.entryZone[0], self.entryZone[1]]
         return payload
 
-    def to_engine_a_dict(self, *, style: str | None = None) -> dict[str, Any]:
+    def to_execution_dict(self, *, style: str | None = None) -> dict[str, Any]:
+        """Execution-bridge payload only — not an Engine A scan slot."""
         payload = self.to_dict()
         payload.update(
             {
@@ -93,50 +94,6 @@ class ASESignal:
             }
         )
         return payload
-
-
-def is_ase_engine_a_signal(signal_a: dict | ASESignal | None) -> bool:
-    if signal_a is None:
-        return False
-    if isinstance(signal_a, ASESignal):
-        return True
-    if signal_a.get("engine") == "ASE" or signal_a.get("aseEngine") is True:
-        return True
-    return bool(signal_a.get("modelFamily")) and signal_a.get("decisionStatus") in (
-        "TRADE",
-        "WATCH",
-        "FLAT",
-        "ERROR",
-    )
-
-
-def normalise_ase_for_engine_c(signal_a: dict) -> dict[str, Any]:
-    status = str(signal_a.get("decisionStatus", "FLAT"))
-    direction = signal_a.get("direction")
-    norm = float(signal_a.get("scoreNorm", signal_a.get("signalStrength", 0) / 100.0))
-    has_trade = status == "TRADE" and direction in ("LONG", "SHORT")
-    has_watch = status == "WATCH" and direction in ("LONG", "SHORT")
-    return {
-        "score_norm": round(norm, 4),
-        "direction": direction,
-        "regime": signal_a.get("regime", "RANGING"),
-        "sl": signal_a.get("sl"),
-        "tp": signal_a.get("tp1"),
-        "tp2": signal_a.get("tp2"),
-        "rr": signal_a.get("rr1", 0),
-        "raw_score": float(signal_a.get("confluenceScore", signal_a.get("signalStrength", 0))),
-        "max_score": float(signal_a.get("maxScore", 100)),
-        "has_signal": has_trade,
-        "has_partial_signal": has_watch and not has_trade,
-        "trade_enabled": True,
-        "trade_gate": {"source": "ASE", "bypassed": True},
-        "cot_active": False,
-        "carry_active": False,
-        "style": signal_a.get("style", signal_a.get("horizon", "swing")),
-        "confidence": float(signal_a.get("confidence", signal_a.get("probabilityPositive", 0.5))),
-        "ase": True,
-        "decisionStatus": status,
-    }
 
 
 def error_signal(

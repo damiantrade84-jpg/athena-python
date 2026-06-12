@@ -4829,7 +4829,7 @@ def _format_backtest_results(
     )
 
     # ── Forex-specific Engine B metrics ───────────────────────────────────────
-    if pair.get("type") == "forex":
+    if pair.get("type") == "forex" and engine_type == "NAKED":
         fvg_avg = sum(t.get("fvg_bonus", 0) for t in trades) / len(trades)
         volume_avg = sum(t.get("volume_strength", 0) for t in trades) / len(trades)
         fvg_overlap_pct = (
@@ -7424,6 +7424,109 @@ def backtest_pair_scalp(pair: dict, validation_mode: str = "standard") -> dict |
     return result
 
 
+# ── ASE (Adaptive Specialist Engine) standalone backtest ─────────────────────
+def backtest_pair_ase(
+    pair: dict,
+    horizon: str = "both",
+    validation_mode: str = "standard",
+) -> dict | None:
+    """Backtest ASE via PTIS candidates + predict_batch + triple-barrier outcomes."""
+    from athena_ase.backtest import run_ase_pair_backtest
+
+    display = pair.get("display", pair.get("symbol", "UNKNOWN"))
+    log.info("[ASE-BT] Starting backtest for %s horizon=%s", display, horizon)
+
+    raw = run_ase_pair_backtest(pair, horizon=horizon)
+    if raw.get("error"):
+        err = str(raw["error"])
+        log.warning("[ASE-BT] %s: %s", display, err)
+        out: dict[str, Any] = {"error": err}
+        if raw.get("diagnostics"):
+            out["aseDiagnostics"] = raw["diagnostics"]
+        return out
+
+    trades = raw.get("trades") or []
+    result = _format_backtest_results(
+        trades,
+        pair,
+        engine_type="ASE",
+        validation_mode=validation_mode,
+    )
+    if isinstance(result, dict) and raw.get("diagnostics"):
+        result["aseDiagnostics"] = raw["diagnostics"]
+        result["btStyle"] = "ase"
+        result["btStyleRequested"] = horizon
+    return result
+
+
+def run_full_backtest_ase(
+    horizon: str = "both",
+    validation_mode: str = "standard",
+    family: str | None = None,
+):
+    """Run ASE backtest across the ASE instrument universe (standalone)."""
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    from athena_ase.backtest import ase_backtest_pairs
+    from athena_ase.instruments import instruments_for_family
+
+    if not bool(CONFIG.get("ASE_BT_ENABLED", True)):
+        return {
+            "success": False,
+            "error": "ASE backtest disabled in config (ASE_BT_ENABLED=false)",
+            "results": [],
+            "errors": [],
+            "totalPairs": 0,
+        }
+
+    pairs = ase_backtest_pairs()
+    if family:
+        fam_symbols = {i.symbol for i in instruments_for_family(family)}  # type: ignore[arg-type]
+        pairs = [p for p in pairs if p.get("symbol") in fam_symbols]
+
+    results: list[dict] = []
+    errors: list[dict] = []
+
+    def _bt(one_pair: dict):
+        try:
+            return one_pair, backtest_pair_ase(
+                one_pair,
+                horizon=horizon,
+                validation_mode=validation_mode,
+            )
+        except Exception as exc:
+            return one_pair, {"error": str(exc)}
+
+    _bt_workers = get_optimal_workers(
+        configured_max=int(CONFIG.get("BACKTEST_MAX_WORKERS", 10) or 10),
+        conservative=True,
+    )
+    with ThreadPoolExecutor(max_workers=_bt_workers) as pool:
+        futures = {pool.submit(_bt, p): p for p in pairs}
+        for fut in as_completed(futures):
+            one_pair, r = fut.result()
+            if not r or "error" in r:
+                errors.append(
+                    {
+                        "pair": one_pair.get("display") or one_pair.get("symbol"),
+                        "error": (r or {}).get("error", "unknown"),
+                    }
+                )
+            else:
+                results.append(r)
+
+    results.sort(
+        key=lambda x: x.get("sqn") if x.get("sqn") is not None else -999,
+        reverse=True,
+    )
+    return {
+        "success": True,
+        "engine": "ASE",
+        "results": results,
+        "errors": errors,
+        "totalPairs": len(pairs),
+        "family": family or "all",
+    }
 
 
 def run_full_backtest(

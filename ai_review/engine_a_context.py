@@ -948,15 +948,7 @@ def assemble_engine_a_context(
 
     style = resolve_chart_review_analyze_style(timeframe, screenshot_meta, pair)
 
-    try:
-        signal = analyze_pair(pair, btc_bias, style=style)
-    except Exception as exc:
-        from athena_ase.exceptions import LegacyEngineBypassed
-        from athena_ase.runtime.scan import ase_scan_signal_for_pair
-
-        if not isinstance(exc, LegacyEngineBypassed):
-            raise
-        signal = ase_scan_signal_for_pair(pair, style=style)
+    signal = analyze_pair(pair, btc_bias, style=style)
     if not signal:
         return None
 

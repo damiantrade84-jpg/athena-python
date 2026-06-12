@@ -5243,7 +5243,15 @@ def run_ai(
 
 
 
-from backtest_runner import backtest_pair, backtest_pair_naked, backtest_pair_consensus, backtest_pair_scalp, run_full_backtest  # noqa: E402
+from backtest_runner import (  # noqa: E402
+    backtest_pair,
+    backtest_pair_ase,
+    backtest_pair_consensus,
+    backtest_pair_naked,
+    backtest_pair_scalp,
+    run_full_backtest,
+    run_full_backtest_ase,
+)
 
 
 def _init_audit_db(db_path: str) -> None:
@@ -8574,6 +8582,88 @@ def api_backtest_scalp():
         return jsonify({
             "success": False,
             "error": f"Scalp backtest failed: {str(exc)}",
+        }), 500
+
+
+@app.route("/api/backtest-ase", methods=["POST"])
+def api_backtest_ase():
+    """Standalone ASE backtest for one pair (no Engine A/B/C routing)."""
+    try:
+        data = request.get_json(force=True, silent=True) or {}
+        pair_symbol = data.get("pair") or data.get("symbol")
+        if not pair_symbol:
+            return jsonify({
+                "success": False,
+                "error": "No pair selected. ASE backtest requires a specific pair.",
+            }), 400
+
+        from athena_ase.backtest import ase_backtest_pairs
+
+        pair = next(
+            (
+                p
+                for p in ase_backtest_pairs()
+                if p.get("display") == pair_symbol or p.get("symbol") == pair_symbol
+            ),
+            None,
+        )
+        if not pair:
+            pair = next(
+                (
+                    p
+                    for p in ALL_PAIRS
+                    if p.get("display") == pair_symbol or p.get("symbol") == pair_symbol
+                ),
+                None,
+            )
+        if not pair:
+            return jsonify({
+                "success": False,
+                "error": f"Pair '{pair_symbol}' not found in ASE universe.",
+            }), 404
+
+        _vm = str(data.get("validation_mode") or "standard").strip().lower()
+        _horizon = str(data.get("horizon") or "both").strip().lower()
+        result = backtest_pair_ase(pair, horizon=_horizon, validation_mode=_vm)
+        if result is None:
+            return jsonify({
+                "success": False,
+                "error": "ASE backtest returned no result.",
+            }), 422
+        if result.get("error"):
+            return jsonify({"success": False, **result}), 422
+
+        safe_result = _json_safe(result) if callable(globals().get("_json_safe")) else result
+        return jsonify(safe_result)
+
+    except Exception as exc:
+        log.exception("[ASE-BT] Unhandled error in api_backtest_ase")
+        return jsonify({
+            "success": False,
+            "error": f"ASE backtest failed: {str(exc)}",
+        }), 500
+
+
+@app.route("/api/backtest-ase-all", methods=["POST"])
+def api_backtest_ase_all():
+    """Standalone ASE backtest across the full ASE instrument universe."""
+    try:
+        data = request.get_json(force=True, silent=True) or {}
+        _vm = str(data.get("validation_mode") or "standard").strip().lower()
+        _horizon = str(data.get("horizon") or "both").strip().lower()
+        _family = data.get("family")
+        out = run_full_backtest_ase(
+            horizon=_horizon,
+            validation_mode=_vm,
+            family=str(_family).strip().lower() if _family else None,
+        )
+        safe = _json_safe(out) if callable(globals().get("_json_safe")) else out
+        return jsonify(safe)
+    except Exception as exc:
+        log.exception("[ASE-BT] Unhandled error in api_backtest_ase_all")
+        return jsonify({
+            "success": False,
+            "error": f"ASE batch backtest failed: {str(exc)}",
         }), 500
 
 
@@ -12890,10 +12980,6 @@ def analyze_pair(
     _score_group = get_pair_score_group(pair)
     _pair_ctx = dict(pair or {})
     _pair_ctx["score_group"] = _score_group
-
-    from engine_a_legacy_guard import assert_legacy_engine_allowed
-
-    assert_legacy_engine_allowed(pair, entry_point="analyze_pair")
 
     _lim = scan_candle_limits()
     preloaded_candles = preloaded_candles or {}

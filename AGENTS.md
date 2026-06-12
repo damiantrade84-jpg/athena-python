@@ -77,7 +77,7 @@ Greenfield per-family meta-model (`forex`, `crypto`, `commodity`, `equity`, `ind
 | Artifacts | `%LOCALAPPDATA%/Athena/models/ase/{family}/{horizon}/{version}/` |
 | CLI | `ase_cli.py` — `train`, `validate`, `freeze`, `holdout-eval`, `promote`, `demote`, `shadow-report`, `drift-report`, `parity-check` |
 | UI / API | `ASEPanel.tsx`, `/api/ase-scan`, `/api/ase-shadow-summary` |
-| Promotion | SHADOW → manual `promote` → DEMO; promoted families bypass Engine A via `engine_a_legacy_guard.py`; Engine C consumes `ASESignal` compatibility aliases |
+| Promotion | SHADOW → manual `promote` → DEMO; ASE is standalone (panel, journals, demo execution bridge) — does not block Engine A or route through Engine C |
 
 **Gates:** Phase 1 Layer 1 gate (≥500 candidates, mean net_R ≥ −0.15R) before training; PROVISIONAL before shadow wiring; 30-day shadow + holdout before promotion. Failed families ship FLAT-only — do not lower gates.
 

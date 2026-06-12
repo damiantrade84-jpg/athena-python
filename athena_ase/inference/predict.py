@@ -19,7 +19,7 @@ from athena_ase.features.build import (
     build_features_for_candidate,
     categorical_code,
 )
-from athena_ase.gates.demo_only import assert_demo
+from athena_ase.gates.demo_only import GateResult, assert_demo
 from athena_ase.horizon import Horizon, K_TP
 from athena_ase.inference.decision import apply_decision_rule
 from athena_ase.inference.monitor import apply_watch_max_cap, evaluate_monitor
@@ -167,10 +167,14 @@ def predict_one(
     bundle: ArtifactBundle | None = None,
     monitor_reference: dict[str, np.ndarray] | None = None,
     live_feature_rows: list[dict[str, float]] | None = None,
+    skip_demo_gate: bool = False,
 ) -> ASESignal:
     family = instrument.family
     horizon: Horizon = candidate.horizon
-    gate = assert_demo()
+    if skip_demo_gate:
+        gate = GateResult(ok=True, reason="backtest", checks={"backtest": True})
+    else:
+        gate = assert_demo()
     if not gate.ok:
         return error_signal(
             instrument=candidate.instrument,
@@ -182,12 +186,30 @@ def predict_one(
 
     bundle = bundle or load_artifact_bundle(family, horizon)
     if bundle is None:
-        return error_signal(
+        return flat_signal(
             instrument=candidate.instrument,
             family=family,
             horizon=horizon,
-            reason="artifact_missing",
+            model_version="none",
             gate_result=gate.to_dict(),
+            data_quality={
+                "coreOk": False,
+                "route": "none",
+                "missingFeeds": [],
+                "blocker": "model_not_trained",
+                "artifactsPresent": False,
+                "deployment": "OPERATIONAL",
+            },
+            model_health={
+                "artifactHash": "",
+                "trainedAt": "",
+                "brier": None,
+                "driftScore": 0.0,
+                "gateResult": gate.to_dict(),
+                "blocker": "model_not_trained",
+                "errorReason": "artifact_missing",
+            },
+            primary_signals=list(candidate.signals),
         )
 
     hash_errors = verify_manifest_hashes(bundle.root, bundle.manifest)
@@ -323,6 +345,7 @@ def predict_batch(
     instruments: dict[str, Instrument],
     *,
     monitor_reference: dict[str, np.ndarray] | None = None,
+    skip_demo_gate: bool = False,
 ) -> list[ASESignal]:
     """Single inference path for scan, shadow, backtest parity, and chart review."""
     bundle_cache: dict[tuple[str, Horizon], ArtifactBundle | None] = {}
@@ -351,6 +374,7 @@ def predict_batch(
             bundle=bundle_cache[key],
             monitor_reference=monitor_reference,
             live_feature_rows=live_rows,
+            skip_demo_gate=skip_demo_gate,
         )
         out.append(sig)
     return out

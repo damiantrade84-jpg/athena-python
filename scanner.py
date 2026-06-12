@@ -1689,24 +1689,16 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict[s
                         "skipCode": "rate_limited",
                         "skipDetail": f"Rate limited on {', '.join(rate_limited_tfs)}",
                     }, None
-                try:
-                    sig_a = r.analyze_pair(
-                        pair,
-                        btc_bias,
-                        style=_pair_style,
-                        regime_context=_regime_context,
-                        preloaded_candles=preloaded_candles_for_a,
-                        preloaded_market_state=preloaded_market_state,
-                        preloaded_fetch_meta=fetch_meta,
-                        intermarket_snapshot=intermarket_snapshot,
-                    )
-                except Exception as _legacy_bypass:
-                    from athena_ase.exceptions import LegacyEngineBypassed
-                    from athena_ase.runtime.scan import ase_scan_signal_for_pair
-
-                    if not isinstance(_legacy_bypass, LegacyEngineBypassed):
-                        raise
-                    sig_a = ase_scan_signal_for_pair(pair, style=_pair_style)
+                sig_a = r.analyze_pair(
+                    pair,
+                    btc_bias,
+                    style=_pair_style,
+                    regime_context=_regime_context,
+                    preloaded_candles=preloaded_candles_for_a,
+                    preloaded_market_state=preloaded_market_state,
+                    preloaded_fetch_meta=fetch_meta,
+                    intermarket_snapshot=intermarket_snapshot,
+                )
 
                 # REGRESSION CHECK: Log per-pair Engine A details
                 d1_count = _regression_candle_count(raw_candles, "D1")

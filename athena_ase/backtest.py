@@ -1,0 +1,159 @@
+"""Standalone ASE backtest — no Engine A/B/C routing."""
+
+from __future__ import annotations
+
+import logging
+import time
+from datetime import datetime, timezone
+from typing import Any
+
+from athena_ase.data.ptis import PTISStore, default_ptis_root
+from athena_ase.horizon import Horizon
+from athena_ase.instruments import DEFAULT_INSTRUMENTS, Instrument, instrument_by_symbol
+from athena_ase.runtime.scan import _pair_meta_for_symbol
+from config import CONFIG
+
+log = logging.getLogger("ase.backtest")
+
+_HORIZONS: tuple[Horizon, ...] = ("intraday", "swing")
+
+
+def _resolve_horizons(horizon: str | None) -> tuple[Horizon, ...]:
+    raw = str(horizon or "both").strip().lower()
+    if raw in ("both", "all", "dual"):
+        configured = CONFIG.get("ASE_BT_HORIZONS")
+        if isinstance(configured, (list, tuple)) and configured:
+            out: list[Horizon] = []
+            for item in configured:
+                hz = str(item).strip().lower()
+                if hz in _HORIZONS and hz not in out:
+                    out.append(hz)  # type: ignore[arg-type]
+            if out:
+                return tuple(out)
+        return _HORIZONS
+    if raw in _HORIZONS:
+        return (raw,)  # type: ignore[return-value]
+    return _HORIZONS
+
+
+def _resolve_instrument(pair: dict[str, Any]) -> Instrument | None:
+    symbol = str(pair.get("symbol") or pair.get("display") or "").replace("/", "")
+    return instrument_by_symbol(symbol)
+
+
+def _ms_to_iso(ms: int) -> str:
+    return datetime.fromtimestamp(ms / 1000.0, tz=timezone.utc).isoformat()
+
+
+def run_ase_pair_backtest(
+    pair: dict[str, Any],
+    *,
+    horizon: str = "both",
+    lookback_days: int | None = None,
+    ptis_root: str | None = None,
+    skip_demo_gate: bool = True,
+) -> dict[str, Any]:
+    """Run ASE Layer-1 + predict_batch backtest for one instrument across horizons."""
+    if not bool(CONFIG.get("ASE_BT_ENABLED", True)):
+        return {"error": "ASE backtest disabled in config (ASE_BT_ENABLED=false)"}
+
+    inst = _resolve_instrument(pair)
+    if inst is None:
+        display = pair.get("display") or pair.get("symbol") or "?"
+        return {"error": f"{display} is not in the ASE instrument universe"}
+
+    days = lookback_days
+    if days is None:
+        try:
+            days = int(CONFIG.get("ASE_BT_LOOKBACK_DAYS", 365) or 365)
+        except (TypeError, ValueError):
+            days = 365
+    days = max(30, days)
+
+    end_ms = int(time.time() * 1000)
+    start_ms = end_ms - days * 24 * 3600 * 1000
+    store = PTISStore(ptis_root or default_ptis_root())
+    horizons = _resolve_horizons(horizon)
+
+    from athena_ase.inference.predict import predict_batch
+    from athena_ase.signals.engine import iter_candidates
+    from athena_research.ase.event_backtest import simulate_candidate
+
+    trades: list[dict[str, Any]] = []
+    candidate_count = 0
+    signal_counts: dict[str, int] = {}
+
+    for hz in horizons:
+        candidates = list(
+            iter_candidates(store, (inst,), horizon=hz, start_ms=start_ms, end_ms=end_ms)
+        )
+        candidate_count += len(candidates)
+        if not candidates:
+            continue
+
+        signals = predict_batch(
+            candidates,
+            store,
+            {inst.symbol: inst},
+            skip_demo_gate=skip_demo_gate,
+        )
+        for cand, sig in zip(candidates, signals):
+            status = str(sig.decisionStatus or "FLAT")
+            signal_counts[status] = signal_counts.get(status, 0) + 1
+            if status != "TRADE" or sig.direction not in ("LONG", "SHORT"):
+                continue
+            outcome = simulate_candidate(cand, store, inst)
+            if outcome is None:
+                continue
+            trades.append(
+                {
+                    "resultR": round(float(outcome.net_R), 4),
+                    "r_multiple": round(float(outcome.net_R), 4),
+                    "date": _ms_to_iso(outcome.decision_time_ms),
+                    "time": _ms_to_iso(outcome.decision_time_ms),
+                    "direction": "LONG" if outcome.direction > 0 else "SHORT",
+                    "horizon": hz,
+                    "instrument": outcome.instrument,
+                    "family": outcome.family,
+                    "exit_reason": outcome.exit_reason,
+                    "hold_bars": outcome.hold_bars,
+                    "expectedNetR": float(sig.expectedNetR),
+                    "probabilityPositive": float(sig.probabilityPositive),
+                    "engine": "ASE",
+                }
+            )
+
+    if not trades:
+        return {
+            "error": f"No ASE TRADE outcomes for {pair.get('display', inst.display)} "
+            f"({candidate_count} candidates, horizons={list(horizons)})",
+            "diagnostics": {
+                "candidateCount": candidate_count,
+                "signalCounts": signal_counts,
+                "horizons": list(horizons),
+                "lookbackDays": days,
+            },
+        }
+
+    return {
+        "trades": trades,
+        "diagnostics": {
+            "candidateCount": candidate_count,
+            "tradeCount": len(trades),
+            "signalCounts": signal_counts,
+            "horizons": list(horizons),
+            "lookbackDays": days,
+            "instrument": inst.symbol,
+            "family": inst.family,
+        },
+    }
+
+
+def ase_backtest_pairs() -> list[dict[str, Any]]:
+    """Pair dicts for every instrument in the ASE universe."""
+    pairs: list[dict[str, Any]] = []
+    for inst in DEFAULT_INSTRUMENTS:
+        meta = _pair_meta_for_symbol(inst.symbol)
+        if meta:
+            pairs.append(meta)
+    return pairs

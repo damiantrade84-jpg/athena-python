@@ -279,8 +279,8 @@ Detailed repeatable workflows live in repo skills. See `docs/codex-guidance.md` 
 - **Data:** PTIS point-in-time store (`athena_ase/data/ptis.py`); features use `asof()` only.
 - **Universe:** 134 instruments via `athena_ase/universe.py` (derived from `ALL_PAIRS`).
 - **Inference:** `athena_ase/inference/predict.py` → `predict_batch()` — **only** path for scan/shadow/demo/parity.
-- **Safety:** `athena_ase/gates/demo_only.py` (no override); sizing in `risk_engine`; promoted families raise `LegacyEngineBypassed` on Engine A entry points.
-- **Deployment:** SHADOW (default) → manual `ase_cli promote` → DEMO; Engine C consumes `ASESignal` after promotion.
+- **Safety:** `athena_ase/gates/demo_only.py` (no override); sizing in `risk_engine`; **does not block Engine A** or route through Engine C.
+- **Deployment:** SHADOW journal + manual `ase_cli promote` → DEMO execution eligibility; ASE panel + `/api/ase-*` + standalone backtest (`/api/backtest-ase`, `/api/backtest-ase-all`).
 - **Spec / CLI:** `docs/ASE_v2.1_Implementation_Spec.md`, `ase_cli.py` (`train`, `validate`, `freeze`, `holdout-eval`, `promote`, `demote`, `shadow-report`, `drift-report`).
 - **Research:** `athena_research/ase/` (Phase 1 backtest, walk-forward, train, parity).
 - **UI:** `ASEPanel.tsx`, `/api/ase-scan`.

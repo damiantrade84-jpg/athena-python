@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-from athena_ase.contracts import ASESignal, is_ase_engine_a_signal
-from engine_c import normalise_engine_a
+from athena_ase.contracts import ASESignal
 
 
 def _signal():
@@ -44,9 +43,8 @@ def test_alias_properties():
     assert sig.confidence == 0.62
 
 
-def test_engine_c_consumes_without_legacy_floors():
-    payload = _signal().to_engine_a_dict()
-    assert is_ase_engine_a_signal(payload)
-    norm = normalise_engine_a(payload)
-    assert norm["has_signal"] is True
-    assert norm["trade_gate"]["bypassed"] is True
+def test_execution_dict_marks_ase_engine():
+    payload = _signal().to_execution_dict()
+    assert payload["engine"] == "ASE"
+    assert payload["aseEngine"] is True
+    assert payload["decisionStatus"] == "TRADE"

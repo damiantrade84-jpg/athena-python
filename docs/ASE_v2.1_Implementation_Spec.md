@@ -10,7 +10,7 @@
 
 Two layers. **Layer 1**: deterministic primary signals (TSMOM, carry, cross-sectional momentum, FX mean-reversion) generate *candidate trade events* with direction. **Layer 2**: a pooled per-family meta-model estimates P(candidate is profitable net of costs) via triple-barrier labels, plus quantile heads for return/MAE/MFE/hold-time that build the brackets. ML filters and sizes confidence; it never originates direction.
 
-Decision statuses: `TRADE / WATCH / FLAT / ERROR`. Deployment: 30-day shadow → per-family manual promotion to demo → legacy Engine A bypassed per family, removed only in a later dedicated release. All sizing stays in `risk_engine`; `risk_check()` is never bypassed; ASE emits levels and scores only.
+Decision statuses: `TRADE / WATCH / FLAT / ERROR`. **ASE is a standalone engine** — own panel, scan payload, journals, demo execution bridge, and backtest path. It does **not** block Engine A, route through Engine C, or masquerade as Engine A in the A/B/C scan loop. Deployment: shadow journal + manual `ase_cli promote` per family controls demo execution eligibility only. All sizing stays in `risk_engine`; `risk_check()` is never bypassed; ASE emits levels and scores only.
 
 Five model families: `forex`, `crypto`, `commodity`, `equity` (US+JSE), `index_etf`. Two horizons: `intraday` (H1 decisions) and `swing` (D1 decisions).
 
@@ -310,7 +310,7 @@ class ASESignal:
     def confidence(self): return self.probabilityPositive
 ```
 
-Engine C consumes `decisionStatus/probabilityPositive/signalStrength` + levels; no legacy floors. Chart-AI review receives the full payload as text context plus `primarySignals` so Opus reviews economics, not a bare number. React: separate ASE panel — expectedNetR, P_cal with uncertainty band (q10–q90 net_R), horizon, route, model health, drift badge, top-5 ablations, primary-signal chips; SHADOW watermark until promoted. EMA/RSI/ADX overlays stay as generic visuals, parity claims removed.
+**Integration (standalone island):** React ASE panel (`ASEPanel.tsx`), `/api/ase-*`, post-scan `_scan_out["ase"]` payload, shadow/trade journals, and `athena_ase/execution/bridge.py` → demo gate → `risk_engine` → broker. **No** injection into `sig_a`, **no** Engine C normalization, **no** legacy Engine A bypass. Chart AI may attach read-only `aseSignal` context when reviewing ASE separately; Engine A chart review stays Engine A. Backtest: `athena_ase/backtest.py`, `backtest_pair_ase()`, `/api/backtest-ase`, `/api/backtest-ase-all` over the ASE instrument universe (`DEFAULT_INSTRUMENTS`).
 
 ## 15. Artifacts & CLI
 - `%LOCALAPPDATA%\Athena\models\ase\{family}\{horizon}\{version}\` → `model_core.pkl, model_enriched.pkl, quantile_heads.pkl, calibrator.pkl, manifest.json`.
@@ -337,10 +337,11 @@ Engine C consumes `decisionStatus/probabilityPositive/signalStrength` + levels; 
 | `test_adapters.py` | gating criteria; ≤3 features; Brier non-degradation |
 | `test_missing_feeds.py` | enriched-missing → core route; core-missing → FLAT; UNVERIFIED_LAG exclusion |
 | `test_demo_gate.py` | non-demo MT5 trade_mode → ERROR; non-testnet Bybit URL → ERROR; no override path exists |
-| `test_legacy_bypass.py` | every legacy Engine A entry point raises LegacyEngineBypassed for promoted families; representative forex/crypto/commodity/index/US-equity/JSE/ETF/TLT scans still complete |
+| `test_ase_standalone.py` | Engine A entry points do not import legacy guard; Engine C has no ASE normalizer; ASE scan stays isolated |
+| `test_ase_backtest.py` | standalone ASE backtest config + `_format_backtest_results(..., engine_type="ASE")` |
 | `test_parity.py` | research vs runtime feature+prediction hash equality on fixture window |
 | `test_drift_monitor.py` | PSI thresholds; auto-demote to WATCH-max; manual-promotion-only invariant |
-| `test_contract_aliases.py` | confluenceScore/maxScore/scoreNorm/confidence aliases; Engine C consumes without legacy floors |
+| `test_contract_aliases.py` | confluenceScore/maxScore/scoreNorm/confidence aliases; `to_execution_dict()` marks engine=ASE |
 
 Plus `npm run build` in `static/react-app/app` after Phase 3 UI work.
 
@@ -377,7 +378,7 @@ Plus `npm run build` in `static/react-app/app` after Phase 3 UI work.
 
 **Phase 4 — Promotion**
 - T4.1 holdout evaluation (single shot, recorded) + provisional gate check per family
-- T4.2 `promote` per passing family; legacy bypass tests; demo trades flow via unchanged risk_engine/executor
+- T4.2 `promote` per passing family; standalone demo trades via `athena_ase/execution/bridge.py` → unchanged `risk_engine`/executor
 - T4.3 weekly drift + shadow-vs-demo reports
 **Exit:** demo trading live for promoted families; failing families remain shadow/FLAT.
 

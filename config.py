@@ -1455,6 +1455,9 @@ CONFIG: dict = {
     "RESEARCH_MODE": False,
     "BACKTEST_EVENT_RISK_GATING": False,
     "BACKTEST_SENTIMENT_GATING": False,
+    "ASE_BT_ENABLED": True,
+    "ASE_BT_LOOKBACK_DAYS": 365,
+    "ASE_BT_HORIZONS": ["intraday", "swing"],
     # PHASE 3: Engine C Backtest Exit Controls - explicit config for MAX_HOLD and BE parameters
     "ENGINE_C_BT_EXIT": {
         "forex": {

@@ -70,6 +70,20 @@ Bundle: static/assets/index-BVkHvMkM.js
 | MT5 TP2 | Uses existing `mt5_executor` volume-split (TP1/TP2 legs), not a separate pending limit after fill — matches current executor convention |
 | Engine B overlay on ASE-bypassed pairs | Still attempted; ASE is authoritative for direction/levels, Engine B is diagnostic only |
 
+---
+
+## Correction (2026-06-12 — standalone decouple)
+
+The initial final-build pass incorrectly wired ASE into the Engine A scan slot (`engine_a_legacy_guard.py`, `LegacyEngineBypassed` → `sig_a`, Engine C `normalise_ase_for_engine_c`). **Reverted:**
+
+| Removed | Kept (standalone) |
+|---|---|
+| `engine_a_legacy_guard.py` | `run_ase_dual_horizon_scan`, post-scan `_scan_out["ase"]` |
+| Scanner/chart-AI ASE → Engine A fallback | ASE panel, `/api/ase-*`, execution bridge |
+| Engine C ASE normalization | `athena_ase/backtest.py`, `backtest_pair_ase`, `/api/backtest-ase*` |
+
+Config: `ASE_BT_ENABLED`, `ASE_BT_LOOKBACK_DAYS`, `ASE_BT_HORIZONS`. Tests: `test_ase_standalone.py`, `test_ase_backtest.py` (replaces `test_legacy_bypass.py`).
+
 ## Families operational vs FLAT-only
 
 - **Operational:** any family-horizon that completes `train-all` without error (negative eval expectancy still ships; threshold filters TRADE).

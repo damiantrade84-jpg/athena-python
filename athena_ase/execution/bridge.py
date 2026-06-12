@@ -78,7 +78,7 @@ def ase_signal_to_execution_dict(
     rr = abs(signal.tp1 - signal.entryReference) / max(
         abs(signal.entryReference - signal.sl), 1e-9
     )
-    payload = signal.to_engine_a_dict(style=signal.horizon)
+    payload = signal.to_execution_dict(style=signal.horizon)
     payload.update(
         {
             "pair": display,
