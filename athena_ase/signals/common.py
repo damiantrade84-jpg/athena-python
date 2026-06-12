@@ -1,0 +1,129 @@
+"""Shared math and PTIS series access for ASE Layer 1 signals."""
+
+from __future__ import annotations
+
+import math
+from dataclasses import dataclass
+
+import numpy as np
+
+from athena_ase.data.ingest.common import compact_symbol
+from athena_ase.data.ptis import PTISStore, load_window
+from athena_ase.horizon import Horizon, HORIZONS
+
+
+def eodhd_series_id(symbol: str, tf: str, field: str) -> str:
+    return f"EODHD:{compact_symbol(symbol)}:{tf.upper()}:{field.lower()}"
+
+
+@dataclass
+class BarSeries:
+    value_time: np.ndarray
+    available_time: np.ndarray
+    close_log: np.ndarray
+    high_log: np.ndarray
+    low_log: np.ndarray
+    sigma_bar: np.ndarray
+    sigma_long: np.ndarray
+
+
+def ewma_vol(logret: np.ndarray, span: int) -> np.ndarray:
+    """Per-bar EWMA std of log returns; leading values NaN until warm."""
+    if len(logret) == 0:
+        return np.array([], dtype=float)
+    if len(logret) == 1:
+        out = np.full(1, np.nan)
+        return out
+    alpha = 2.0 / (span + 1.0)
+    var = np.full(len(logret), np.nan)
+    v = float(logret[1] ** 2) if len(logret) > 1 else 0.0
+    var[1] = v
+    for i in range(2, len(logret)):
+        x = float(logret[i])
+        if math.isnan(x):
+            var[i] = var[i - 1]
+        else:
+            v = alpha * (x * x) + (1.0 - alpha) * v
+            var[i] = v
+    return np.sqrt(var)
+
+
+def mask_available(rows: np.ndarray, decision_time_ms: int) -> np.ndarray:
+    if len(rows) == 0:
+        return rows
+    return rows[rows["available_time"] <= decision_time_ms]
+
+
+def asof_tail(rows: np.ndarray, decision_time_ms: int, n: int) -> np.ndarray:
+    """Last n availability-resolved rows at decision_time."""
+    masked = mask_available(rows, decision_time_ms)
+    if n <= 0 or len(masked) == 0:
+        return masked[:0]
+    return masked[-n:]
+
+
+def load_bar_series(
+    store: PTISStore,
+    symbol: str,
+    horizon: Horizon,
+    start_ms: int,
+    end_ms: int,
+) -> BarSeries | None:
+    cfg = HORIZONS[horizon]
+    tf = cfg.tf
+    close_id = eodhd_series_id(symbol, tf, "close")
+    high_id = eodhd_series_id(symbol, tf, "high")
+    low_id = eodhd_series_id(symbol, tf, "low")
+    try:
+        close_rows = store.load_window(close_id, start_ms, end_ms)
+        high_rows = store.load_window(high_id, start_ms, end_ms)
+        low_rows = store.load_window(low_id, start_ms, end_ms)
+    except KeyError:
+        return None
+    if len(close_rows) == 0:
+        return None
+
+    vt = close_rows["value_time"]
+    close = close_rows["value"].astype(float)
+    close_log = np.log(np.maximum(close, 1e-12))
+    logret = np.full(len(close_log), np.nan)
+    logret[1:] = close_log[1:] - close_log[:-1]
+
+    sigma_bar = ewma_vol(logret, cfg.sigma_bar_span)
+    sigma_long = ewma_vol(logret, cfg.sigma_long_span)
+
+    high_map = {int(r["value_time"]): float(r["value"]) for r in high_rows}
+    low_map = {int(r["value_time"]): float(r["value"]) for r in low_rows}
+    high_log = np.array(
+        [math.log(max(high_map.get(int(t), math.exp(c)), 1e-12)) for t, c in zip(vt, close_log)],
+        dtype=float,
+    )
+    low_log = np.array(
+        [math.log(max(low_map.get(int(t), math.exp(c)), 1e-12)) for t, c in zip(vt, close_log)],
+        dtype=float,
+    )
+
+    return BarSeries(
+        value_time=vt,
+        available_time=close_rows["available_time"],
+        close_log=close_log,
+        high_log=high_log,
+        low_log=low_log,
+        sigma_bar=sigma_bar,
+        sigma_long=sigma_long,
+    )
+
+
+def bar_index_at_decision(series: BarSeries, decision_time_ms: int) -> int | None:
+    """Index of last bar whose data is available at decision_time."""
+    idx = None
+    for i in range(len(series.value_time)):
+        if series.available_time[i] <= decision_time_ms:
+            idx = i
+        else:
+            break
+    return idx
+
+
+def load_window_series(store: PTISStore, series_id: str, start_ms: int, end_ms: int) -> np.ndarray:
+    return store.load_window(series_id, start_ms, end_ms)

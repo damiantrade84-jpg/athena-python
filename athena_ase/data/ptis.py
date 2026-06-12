@@ -178,10 +178,15 @@ class PTISStore:
     ) -> int:
         if not rows:
             return 0
-        src = source or self._series_source(series_id) if self.series_exists(series_id) else None
+        if self.series_exists(series_id):
+            src = source or self._series_source(series_id)
+        else:
+            src = source
         if src is None:
             raise KeyError(f"series {series_id} not registered and source not provided")
-        if auto_register and not self.series_exists(series_id):
+        if not self.series_exists(series_id):
+            if not auto_register:
+                raise KeyError(f"series {series_id} not registered")
             self.register_series(series_id, src)
 
         df = pd.DataFrame(rows)
@@ -255,6 +260,36 @@ class PTISStore:
         out["ingest_time"] = tail["ingest_time"].to_numpy(dtype="i8")
         return out
 
+    def load_window(self, series_id: str, start_ms: int, end_ms: int) -> np.ndarray:
+        """All rows with value_time in [start_ms, end_ms], latest revision per value_time."""
+        if end_ms < start_ms:
+            return np.empty(0, dtype=PTIS_VALUE_DTYPE)
+        source = self._series_source(series_id)
+        start_year = _year_from_ms(start_ms)
+        end_year = _year_from_ms(end_ms)
+        frames: list[pd.DataFrame] = []
+        for year in range(start_year, end_year + 1):
+            part_path = self.partition_file(source, series_id, year)
+            if not part_path.exists():
+                continue
+            part = pd.read_parquet(part_path)
+            part = part[(part["value_time"] >= start_ms) & (part["value_time"] <= end_ms)]
+            if not part.empty:
+                frames.append(part)
+        if not frames:
+            return np.empty(0, dtype=PTIS_VALUE_DTYPE)
+        df = pd.concat(frames, ignore_index=True)
+        df = df.sort_values(["value_time", "revision", "ingest_time"])
+        df = df.drop_duplicates(subset=["value_time"], keep="last")
+        df = df.sort_values("value_time")
+        out = np.empty(len(df), dtype=PTIS_VALUE_DTYPE)
+        out["value_time"] = df["value_time"].to_numpy(dtype="i8")
+        out["available_time"] = df["available_time"].to_numpy(dtype="i8")
+        out["value"] = df["value"].to_numpy(dtype="f8")
+        out["revision"] = df["revision"].to_numpy(dtype="i2")
+        out["ingest_time"] = df["ingest_time"].to_numpy(dtype="i8")
+        return out
+
     def audit_rows(self) -> list[dict[str, Any]]:
         with self._connect() as con:
             rows = con.execute(
@@ -304,6 +339,11 @@ def get_store(root: Path | str | None = None) -> PTISStore:
 def asof(series_id: str, decision_time_ms: int, n: int = 1) -> np.ndarray:
     """Module-level query API — the only PTIS read entry for features."""
     return get_store().asof(series_id, decision_time_ms, n)
+
+
+def load_window(series_id: str, start_ms: int, end_ms: int) -> np.ndarray:
+    """Module-level bulk window read for Layer 1 / backtest paths."""
+    return get_store().load_window(series_id, start_ms, end_ms)
 
 
 def build_row(

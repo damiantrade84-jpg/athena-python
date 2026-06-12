@@ -7,8 +7,9 @@ Athena / Sentinel Pro v4: multi-engine trading analysis and execution-support. *
 - Do not guess architecture. Read current source before claims or patches.
 - Smallest safe diff. No unrelated refactors, features, or safety layers unless requested.
 - Do not change thresholds, scoring weights, gate behavior, SL/TP logic, or strategy semantics unless explicitly requested.
-- Keep **Engine A, B, C, D**, Research Lab, UI, and execution paths separate unless the task requires integration.
+- Keep **Engine A, B, C, D**, **ASE**, Research Lab, UI, and execution paths separate unless the task requires integration.
 - **Engine C** owns A/B agreement, conflict, A-only, and B-only. **Engine A and B must not suppress each other.**
+- **ASE (Adaptive Specialist Engine)** is a separate greenfield stack under `athena_ase/` — no Engine A indicator/scoring imports. Layer 1 generates direction; Layer 2 meta-model filters only. Demo/paper only; sizing stays in `risk_engine`. See **`docs/ASE_v2.1_Implementation_Spec.md`**.
 - Never bypass risk, freshness, kill-switch, execution-approval, broker, RR, SL/TP, or audit gates.
 - AI is advisory only; it cannot execute, approve orders, mutate config, or override deterministic gates.
 - Never read, print, modify, or commit `.env`, secrets, API keys, tokens, or credentials.
@@ -60,6 +61,27 @@ Discover under `.agents/skills/<name>/SKILL.md`. Load a skill only when the task
 | `athena-ui-chart-review` | React/native chart UI, chart AI review payloads, Vision (not execution) |
 | `athena-test-repair` | Targeted pytest repair for touched behavior |
 | `athena-risk-execution` | `execution.py`, `risk_engine.py`, `guardian.py`, `auto_trader.py`, broker executors |
+
+## ASE (Adaptive Specialist Engine v2.1)
+
+Greenfield per-family meta-model (`forex`, `crypto`, `commodity`, `equity`, `index_etf`; horizons `intraday`/`swing`). **Not** Engine A — do not reuse EMA/RSI/ADX/VWAP scoring or Engine A thresholds.
+
+| Area | Entry points |
+|------|----------------|
+| Spec (authoritative) | `docs/ASE_v2.1_Implementation_Spec.md` |
+| PTIS / ingest | `athena_ase/data/ptis.py`, `ase_cli.py ingest` |
+| Layer 1 signals | `athena_ase/signals/`, `athena_research/ase/run_phase1.py` |
+| Labels / features / models | `athena_ase/labels/`, `features/build.py`, `models/` |
+| Single inference path | `athena_ase/inference/predict.py` → `predict_batch()` only |
+| Demo gate | `athena_ase/gates/demo_only.py` — no override flag |
+| Artifacts | `%LOCALAPPDATA%/Athena/models/ase/{family}/{horizon}/{version}/` |
+| CLI | `ase_cli.py` — `train`, `validate`, `freeze`, `holdout-eval`, `promote`, `demote`, `shadow-report`, `drift-report`, `parity-check` |
+| UI / API | `ASEPanel.tsx`, `/api/ase-scan`, `/api/ase-shadow-summary` |
+| Promotion | SHADOW → manual `promote` → DEMO; promoted families bypass Engine A via `engine_a_legacy_guard.py`; Engine C consumes `ASESignal` compatibility aliases |
+
+**Gates:** Phase 1 Layer 1 gate (≥500 candidates, mean net_R ≥ −0.15R) before training; PROVISIONAL before shadow wiring; 30-day shadow + holdout before promotion. Failed families ship FLAT-only — do not lower gates.
+
+**Tests:** `tests/test_triple_barrier.py`, `test_decision_rule.py`, `test_demo_gate.py`, `test_legacy_bypass.py`, etc. — one file per verification pass.
 
 ## Chart AI review
 

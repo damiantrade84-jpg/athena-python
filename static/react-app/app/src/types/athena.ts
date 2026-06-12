@@ -1107,6 +1107,67 @@ export interface EngineCBacktestResponse {
   [k: string]: unknown;
 }
 
+/** ASE v2.1 shadow signal row (/api/ase-scan). */
+export interface ASESignalRow {
+  engineVersion?: string;
+  modelFamily?: string;
+  modelVersion?: string;
+  horizon?: 'intraday' | 'swing';
+  decisionStatus?: 'TRADE' | 'WATCH' | 'FLAT' | 'ERROR';
+  direction?: 'LONG' | 'SHORT' | 'NONE';
+  expectedNetR?: number;
+  expectedNetBps?: number;
+  probabilityPositive?: number;
+  decisionMargin?: number;
+  signalStrength?: number;
+  returnQ?: Record<string, number>;
+  maeQ?: Record<string, number>;
+  mfeQ?: Record<string, number>;
+  holdQ?: Record<string, number>;
+  entryReference?: number;
+  entryZone?: [number, number];
+  sl?: number;
+  tp1?: number;
+  tp2?: number;
+  maxHoldBars?: number;
+  primarySignals?: Array<{ name: string; direction: number; rawStrength: number }>;
+  predictionDiagnostics?: Record<string, unknown>;
+  dataQuality?: Record<string, unknown>;
+  modelHealth?: Record<string, unknown>;
+  instrument?: string;
+  decisionTimeMs?: number;
+  confluenceScore?: number;
+  confidence?: number;
+  [k: string]: unknown;
+}
+
+export interface ASEScanResponse {
+  success?: boolean;
+  horizon?: string;
+  family?: string;
+  candidateCount?: number;
+  signalCount?: number;
+  deployment?: Record<string, string>;
+  signals?: ASESignalRow[];
+  error?: string;
+}
+
+export interface ASEShadowSummary {
+  success?: boolean;
+  deployment?: {
+    families?: Record<string, string>;
+    watchMax?: Record<string, boolean>;
+  };
+  journal?: {
+    totalRows?: number;
+    byStatus?: Record<string, number>;
+    byFamily?: Record<string, number>;
+    reconciled?: number;
+    journalPath?: string;
+  };
+  error?: string;
+}
+
 // ============================================================================
 // AI Chart Review v1 — POST /api/ai/chart-review
 // Mirrors normalized AI response + Engine-A-vs-AI concordance from

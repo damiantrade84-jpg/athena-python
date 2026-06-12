@@ -22,6 +22,7 @@ Sources:
 import logging
 from typing import Optional
 
+from athena_ase.contracts import is_ase_engine_a_signal, normalise_ase_for_engine_c
 from calibration import predict_calibrated_prob
 from config import CONFIG, AISafetyConstants
 from intermarket import engine_c_conviction_multiplier
@@ -332,7 +333,13 @@ def normalise_engine_a(signal_a: dict) -> dict:
       - regime: dict with label, state
       - sl, tp1, tp2: ATR-based levels
       - confluencePct: threshold-relative display percentage (UI only)
+
+    ASE-promoted families may supply an ASESignal compatibility payload; legacy
+    Engine A floors and trade gates are bypassed for that family only.
     """
+    if is_ase_engine_a_signal(signal_a):
+        return normalise_ase_for_engine_c(signal_a)
+
     score = float(signal_a.get("confluenceScore", 0))
     _ms_raw = signal_a.get("maxScore")
     if _ms_raw is None:

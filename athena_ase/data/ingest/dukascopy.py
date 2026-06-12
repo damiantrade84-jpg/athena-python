@@ -17,8 +17,6 @@ from athena_ase.data.ptis import PTISStore
 
 log = logging.getLogger("ase.ingest.dukascopy")
 
-_DEFAULT_DUKA_DB = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "..", "duka_volume.db")
-
 
 def _resolve_duka_db(path: str | None) -> str:
     if path:

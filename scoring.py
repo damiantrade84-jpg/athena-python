@@ -1067,6 +1067,10 @@ def calc_confluence(
     """Factor-based confluence using normalized indicators, regime-aware weights, and correlation filtering.
     Preserves legacy API and raw-threshold warnings for human readability.
     """
+    from engine_a_legacy_guard import assert_legacy_engine_allowed
+
+    assert_legacy_engine_allowed(pair, entry_point="calc_confluence")
+
     from factor_scoring import compute_factor_scores, build_oi_context_for_factor_scoring
     from confidence_engine import compute_confidence
 

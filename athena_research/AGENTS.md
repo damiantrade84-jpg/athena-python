@@ -2,6 +2,8 @@
 
 Scope: `athena_research/`, `tools/vectorbt_research_lab.py`, `configs/vectorbt_research_lab.yaml`, and related research configs.
 
+**ASE research** lives in `athena_research/ase/` (Layer 1 event backtest, walk-forward, train, parity, holdout manifest). Authoritative behavior: `docs/ASE_v2.1_Implementation_Spec.md`. Do not tune live Engine A/B/C/D thresholds from ASE runs.
+
 ## Rules
 
 - Backtests and lab runs are **diagnostic discovery**, not permission to tune live thresholds.

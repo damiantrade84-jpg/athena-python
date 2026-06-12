@@ -212,7 +212,8 @@ export type PanelId =
   | 'aiPerformance'
   | 'exitStrategy'
   | 'cascadeScan'
-  | 'suggestedTrades';
+  | 'suggestedTrades'
+  | 'ase';
 
 /**
  * Derived data-fidelity diagnostic for a Cascade Scan candidate.

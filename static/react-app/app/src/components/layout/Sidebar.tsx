@@ -13,7 +13,7 @@ import { Switch } from '@/components/ui/switch';
 import {
   LayoutDashboard, Zap, Search, Settings, TrendingUp,
   Layers, Activity, BarChart2, FlaskConical, Filter, Ticket,
-  Microscope, PieChart, Globe, ShieldCheck, Radio, BrainCircuit, ListChecks, LogOut, Workflow,
+  Microscope, PieChart, Globe, ShieldCheck, Radio, BrainCircuit, ListChecks, LogOut, Workflow, Cpu,
 } from 'lucide-react';
 
 const navItems: { id: PanelId; label: string; icon: ElementType; badge?: string }[] = [
@@ -25,6 +25,7 @@ const navItems: { id: PanelId; label: string; icon: ElementType; badge?: string 
   { id: 'scanConfig',  label: 'Scan Config',  icon: Settings },
   { id: 'trades',      label: 'Trades',       icon: TrendingUp },
   { id: 'engineC',     label: 'Engine C',     icon: Layers },
+  { id: 'ase',         label: 'ASE',          icon: Cpu,        badge: 'SHADOW' },
   { id: 'scalpLab',    label: 'Scalp Lab',    icon: Activity },
   { id: 'scalpWorkbench', label: 'Scalp Workbench', icon: BarChart2 },
   { id: 'tvChart',     label: 'TV Chart',     icon: BarChart2 },

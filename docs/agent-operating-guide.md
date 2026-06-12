@@ -62,6 +62,7 @@ After recreating `.venv`: run `python tools/check_ws_env.py` to verify WebSocket
 - `engine_c.py` + `engine_c_ai.py` — Engine C consensus + AI blend
 - `engine_b_ai.py` — Engine B AI advisory (**review-only**, never executes)
 - `scalp_engine.py` + `volume_profile.py` — Engine D scalp lab
+- **`athena_ase/`** — ASE v2.1 (PTIS, Layer 1/2, inference, demo gate); **`ase_cli.py`**; spec **`docs/ASE_v2.1_Implementation_Spec.md`**
 - `timed_exit_monitor.py` — exit pipeline for Engine A/B (Engine D bypasses)
 
 ### Execution
@@ -270,6 +271,21 @@ Detailed repeatable workflows live in repo skills. See `docs/codex-guidance.md` 
 - **Config:** `SCALP_ENGINE`, `BT_*`
 
 **Audit concerns:** missing pillar passes, grade D trades, session skip ignored, mixed volume sources, EODHD beyond volume-only role, live/BT mismatch, bad/missing POC or VA levels, aggression defaulting “on”.
+
+### ASE — Adaptive Specialist Engine v2.1 (greenfield)
+
+- **Package:** `athena_ase/` — separate from Engine A/B/C/D; no legacy factor scoring imports.
+- **Layers:** Layer 1 deterministic signals → candidates; Layer 2 pooled per-family meta-model (HGB + isotonic + quantile heads) filters only.
+- **Data:** PTIS point-in-time store (`athena_ase/data/ptis.py`); features use `asof()` only.
+- **Universe:** 134 instruments via `athena_ase/universe.py` (derived from `ALL_PAIRS`).
+- **Inference:** `athena_ase/inference/predict.py` → `predict_batch()` — **only** path for scan/shadow/demo/parity.
+- **Safety:** `athena_ase/gates/demo_only.py` (no override); sizing in `risk_engine`; promoted families raise `LegacyEngineBypassed` on Engine A entry points.
+- **Deployment:** SHADOW (default) → manual `ase_cli promote` → DEMO; Engine C consumes `ASESignal` after promotion.
+- **Spec / CLI:** `docs/ASE_v2.1_Implementation_Spec.md`, `ase_cli.py` (`train`, `validate`, `freeze`, `holdout-eval`, `promote`, `demote`, `shadow-report`, `drift-report`).
+- **Research:** `athena_research/ase/` (Phase 1 backtest, walk-forward, train, parity).
+- **UI:** `ASEPanel.tsx`, `/api/ase-scan`.
+
+**Audit concerns:** second inference path, demo gate bypass, training on holdout, automatic promotion, Engine A threshold reuse in ASE features, weakened PROVISIONAL/holdout gates.
 
 ---
 

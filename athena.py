@@ -12891,6 +12891,10 @@ def analyze_pair(
     _pair_ctx = dict(pair or {})
     _pair_ctx["score_group"] = _score_group
 
+    from engine_a_legacy_guard import assert_legacy_engine_allowed
+
+    assert_legacy_engine_allowed(pair, entry_point="analyze_pair")
+
     _lim = scan_candle_limits()
     preloaded_candles = preloaded_candles or {}
     preloaded_market_state = preloaded_market_state or {}
@@ -16338,6 +16342,7 @@ from athena_app.api.routes_live_dashboard import register_live_dashboard_routes 
 from athena_app.api.routes_lottery import register_lottery_routes  # noqa: E402
 from athena_app.api.routes_market_data import register_market_data_routes  # noqa: E402
 from athena_app.api.routes_status import register_status_routes  # noqa: E402
+from athena_app.api.routes_ase import register_ase_routes  # noqa: E402
 from execution import register_execution_routes  # noqa: E402
 
 set_runtime(
@@ -16548,6 +16553,7 @@ register_status_routes(
         log=log,
     ),
 )
+register_ase_routes(app)
 
 # ── Research Lab routes (optional - does not affect production logic) ─────────
 try:

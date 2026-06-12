@@ -16,9 +16,11 @@ Do not use `.cursor/**`, `.agents/**`, or global/user-profile agent skills for t
 
 
 - Never bypass risk gates, freshness checks, kill switches, execution approvals, broker safety checks, RR checks, SL/TP validation, audit logging, or deterministic safety rules.
+- Never disable, weaken, or work around `engine_a_trade_gate.py`, `ENGINE_A_TRADE_EVIDENCE_*` thresholds, or the `ENGINE_A_TRADE_ENABLED_*` maps. Populating evidence or flipping enablement is a user decision made outside Claude Code. Engine A is currently research-only for ALL asset classes by design (`config.yaml` `ENGINE_A_TRADE_ENABLED_BY_CLASS`, AB6 reasons in comments) — zero Engine A live trades is expected behavior, not a bug. The deliberate per-pair escape hatch is `ENGINE_A_TRADE_ENABLED_OVERRIDES` (user-only).
 - AI is advisory only. AI review, Marcus, Vision, Strategist, AI Agent chat, and similar-setup logic cannot execute trades, approve orders, mutate config, or override deterministic gates.
-- Engine A, Engine B, Engine C, and Engine D are separate unless the task explicitly concerns consensus, routing, or cross-engine payload handoff.
+- Engine A, Engine B, Engine C, Engine D, and **ASE** are separate unless the task explicitly concerns consensus, routing, or cross-engine payload handoff.
 - Engine A and Engine B must not suppress each other. Engine C owns agreement, conflict, A-only, and B-only comparison.
+- **ASE** (`athena_ase/`) is greenfield — zero reuse of Engine A indicators, scoring, weights, thresholds, or exit policies. Read **`docs/ASE_v2.1_Implementation_Spec.md`** before ASE work. All scan/backtest/shadow/demo paths must call `athena_ase/inference/predict.py` → `predict_batch()` only. Demo/paper only; `risk_check()` and sizing in `risk_engine` are never bypassed.
 - Start with the files relevant to the user's request. The repository map below lists common entry points only; inspect additional current source files when needed to verify the real execution path.
 - Do not load `tasks/`, old audit reports, generated logs, backtest artifacts, historical findings, or archived diagnostics unless the user names them or the current issue directly requires them.
 - Run only targeted tests for the changed behavior. Never run full test suites unless explicitly requested.
@@ -37,9 +39,22 @@ Do not use `.cursor/**`, `.agents/**`, or global/user-profile agent skills for t
 
 - Claude Code project skills live under `.claude/skills/<skill-name>/SKILL.md`.
 - Current installed repo skill: `athena-audit`.
+- Repo commands: `/audit-engine`, `/audit-playbook`, `/diagnose-engine-a` (Engine A strictness gate-attribution; diagnosis only, no code changes).
 - Invoke manually with `/athena-audit` only for explicit full audit, bug hunt, strict findings, execution-safety review, live/backtest parity review, or end-to-end trace work.
 - Do not look for or use skills that do not exist under `.claude/skills/`.
 - The `athena-audit` skill must include `disable-model-invocation: true` in Claude frontmatter.
+
+## Session economics (Fable 5 / expensive models)
+
+Sessions are expensive. Optimize for one correct pass, not exploration.
+
+- **No open-ended bug hunts.** "Engine X seems off, find it" is rejected as a task shape. Convert it to an attribution question with a fixed window and a funnel of named gates, then answer it in one pass. For Engine A strictness specifically, use `/diagnose-engine-a`.
+- **Plan first, in one block:** goal restated operationally, files in scope, evidence to collect, success criterion. Then execute the plan without narration between steps.
+- **Batch evidence collection.** Group greps/reads into as few tool passes as possible. Large files (`athena.py`) via offset/limit only. Reuse telemetry already in `tmp/` before generating new runs.
+- **Never re-derive known architecture.** The repo map, parity checklist, and verified facts in command files are trusted. Re-verify only what the current change touches.
+- **One findings report per session,** with VERIFIED / SUSPECT / NOT REVIEWED per claim and file:line evidence. No incremental progress commentary.
+- **End every session with a handoff block:** what changed (files:lines), what passed, what is pending, exact next command. The next session must be able to start cold from that block without re-reading the repo.
+- Test budget unchanged: max one pytest file, post-fix only.
 
 ## Repository map
 
@@ -51,7 +66,9 @@ Common entry points only. This is not a complete allowlist.
 - Engine B: `market_structure.py`, `engine_b_ai.py`
 - Engine C: `engine_c.py`, `engine_c_ai.py`
 - Engine D: `scalp_engine.py`
+- **ASE (Adaptive Specialist Engine v2.1):** `athena_ase/` — PTIS (`data/ptis.py`), Layer 1 (`signals/`), labels/features/models, `inference/predict.py`, `gates/demo_only.py`, `contracts.py` (`ASESignal`); CLI `ase_cli.py`; research harness `athena_research/ase/`; UI `static/react-app/.../ASEPanel.tsx`; routes `athena_app/api/routes_ase.py`. Spec: `docs/ASE_v2.1_Implementation_Spec.md`. Promoted families bypass Engine A via `engine_a_legacy_guard.py`; Engine C consumes ASE via compatibility aliases only after manual `promote`.
 - Execution: `execution.py`, `auto_trader.py`, `risk_engine.py`, `guardian.py`, `mt5_executor.py`, `bybit_executor.py`
+- Engine A evidence gate: `engine_a_trade_gate.py` (+ `ENGINE_A_TRADE_*` keys in `config.yaml` ~lines 515-534)
 - Data/candles: `candles_cache.py`, `candle_feeds.py`, provider-specific feed modules
 - AI/Vision: `ai_agent_safety.py`, native chart AI review modules, provider routers, screenshot/payload builders, browser chart code under `static/`
 - AI Agent chat: `ai_trade_chat.py`, `athena_app/api/routes_ai_agent.py`. LLM narrative optional when configured; deterministic decision card, safety flags, and gates remain authoritative.
@@ -141,6 +158,16 @@ Codex/Cursor extended checklist (when user asks): `.agents/skills/athena-cross-s
 - AI may block, wait, or reduce `executionConvictionEffective`, but must never mutate Engine A score fields.
 - Browser chart metadata is diagnostic only.
 
+## ASE contract (demo/paper only)
+
+- Authoritative spec: `docs/ASE_v2.1_Implementation_Spec.md`.
+- Layer 1 (TSMOM, carry, xsec, mean-rev, arbitration) generates **candidates**; Layer 2 meta-model filters — never originates direction.
+- Single inference path: `predict_batch()` in `athena_ase/inference/predict.py` for scan, shadow, backtest parity, and demo.
+- Demo gate in `athena_ase/gates/demo_only.py` — `EXECUTOR_MODE` paper/demo + MT5 demo + Bybit testnet; no override flag.
+- Shadow journal + ASE panel run on every scan; **no Engine C / executor** until per-family manual `promote`.
+- Chart AI may include full `ASESignal` context (`ai_review/ase_context.py`) — advisory only.
+- Do not change ASE evidence gates (PROVISIONAL, holdout, shadow days) unless the user explicitly requests it.
+
 ## Safe workflow
 
 1. Restate the exact user request in operational terms.
@@ -219,4 +246,3 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
 ---
 
 **These guidelines are working if:** fewer unnecessary changes in diffs, fewer rewrites due to overcomplication, and clarifying questions come before implementation rather than after mistakes.
-

@@ -11,7 +11,7 @@ import pytest
 from athena_ase.data.availability import AvailabilityRuleId, compute_available_time_ms
 from athena_ase.data.ingest import cot as cot_ingest
 from athena_ase.data.ingest import dukascopy, eodhd, fred
-from athena_ase.data.ptis import PTISStore
+from athena_ase.data.ptis import PTISStore, build_row
 
 
 def _ms(dt: datetime) -> int:
@@ -186,3 +186,33 @@ def test_list_cached_pair_providers(tmp_path):
     pairs = eodhd.list_cached_pair_providers(db_path=str(bt_db))
     assert len(pairs) == 1
     assert pairs[0]["symbol"] == "EURUSD"
+
+
+def test_append_unregistered_with_source_auto_registers(tmp_path):
+    store = PTISStore(tmp_path / "ptis")
+    series_id = "EODHD:NEW:H1:close"
+    t0 = _ms(datetime(2025, 6, 1, 0, 0, tzinfo=timezone.utc))
+    avail = t0 + 90_000
+    n = store.append_rows(
+        series_id,
+        [build_row(series_id, t0, avail, 1.23)],
+        source="EODHD",
+        auto_register=True,
+    )
+    assert n == 1
+    assert store.series_exists(series_id)
+    row = store.asof(series_id, avail, n=1)[0]
+    assert row["value"] == pytest.approx(1.23)
+
+
+def test_append_unregistered_without_auto_register_raises(tmp_path):
+    store = PTISStore(tmp_path / "ptis")
+    series_id = "EODHD:NEW:H1:close"
+    t0 = _ms(datetime(2025, 6, 1, 0, 0, tzinfo=timezone.utc))
+    with pytest.raises(KeyError, match="not registered"):
+        store.append_rows(
+            series_id,
+            [build_row(series_id, t0, t0 + 90_000, 1.0)],
+            source="EODHD",
+            auto_register=False,
+        )
