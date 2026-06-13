@@ -1590,6 +1590,12 @@ class AutoTrader:
     def _can_execute(self, signal: dict, cfg: dict) -> tuple[bool, str]:
         """Check deterministic auto-execution gates without mutating Engine A score."""
 
+        if (
+            str(signal.get("engine") or "").upper() == "ENGINE_A_V3"
+            and str(signal.get("contractVersion") or "").startswith("3.")
+        ):
+            return False, "ENGINE_A_V3_MANUAL_DEMO_ONLY"
+
         asset_type = signal.get("type", "")
         engine_name = _signal_engine(signal)
         context = extract_auto_trade_context(signal)

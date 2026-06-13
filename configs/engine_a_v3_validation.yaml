@@ -1,0 +1,55 @@
+schemaVersion: 1
+
+limits:
+  H1: 12000
+  H4: 6000
+  D1: 1500
+
+groups:
+  crypto_btc:
+    pairs:
+      - display: BTC/USDT
+        symbol: BTCUSDT
+        type: crypto
+        dataSymbol: BTC/USDT
+    costs:
+      spreadBps: 2.0
+      commissionBps: 11.0
+      slippageBps: 2.0
+      swapBpsPerDay: 1.0
+    purgeBars: 5
+    maxHoldBars:
+      intraday: 24
+      swing: 30
+
+  crypto_eth:
+    pairs:
+      - display: ETH/USDT
+        symbol: ETHUSDT
+        type: crypto
+        dataSymbol: ETH/USDT
+    costs:
+      spreadBps: 2.5
+      commissionBps: 11.0
+      slippageBps: 2.5
+      swapBpsPerDay: 1.0
+    purgeBars: 5
+    maxHoldBars:
+      intraday: 24
+      swing: 30
+
+  crypto_doge:
+    pairs:
+      - display: DOGE/USDT
+        symbol: DOGEUSDT
+        type: crypto
+        dataSymbol: DOGE/USDT
+    costs:
+      spreadBps: 5.0
+      commissionBps: 11.0
+      slippageBps: 5.0
+      swapBpsPerDay: 1.5
+    purgeBars: 5
+    maxHoldBars:
+      intraday: 24
+      swing: 30

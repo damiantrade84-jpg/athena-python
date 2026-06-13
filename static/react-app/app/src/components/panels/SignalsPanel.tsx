@@ -934,7 +934,12 @@ export default function SignalsPanel() {
                         livePriceAgeSec: ageSecFor(selectedRow.signal),
                         livePriceSource: sourceFor(selectedRow.signal),
                       }}
-                      onExecute={(s) => requestExecute({ ...selectedRow, signal: s }, pendingStyle)}
+                      onExecute={(s) => requestExecute(
+                        { ...selectedRow, signal: s },
+                        String(s.engine || '').toUpperCase() === 'ENGINE_A_V3'
+                          ? (s.horizon === 'intraday' ? 'intraday' : 'swing')
+                          : pendingStyle,
+                      )}
                       executeDisabled={executeDisabled}
                       executeLabel={executeLabel}
                     />
@@ -950,6 +955,14 @@ export default function SignalsPanel() {
                     </Button>
 
                     {/* Per-style execute toolbar */}
+                    {String(selectedRow.signal.engine || '').toUpperCase() === 'ENGINE_A_V3' ? (
+                      <Card className="border-border/60 bg-card/50">
+                        <CardContent className="p-3 text-[11px] text-muted-foreground">
+                          V3 execution re-validates the fixed {selectedRow.signal.horizon || 'signal'} horizon
+                          from fresh confirmed candles and submits broker minimum volume on a verified demo venue.
+                        </CardContent>
+                      </Card>
+                    ) : (
                     <Card className="border-border/60 bg-card/50">
                       <CardContent className="p-3 space-y-3">
                         <div className="flex items-center justify-between gap-2">
@@ -1004,6 +1017,7 @@ export default function SignalsPanel() {
                         </p>
                       </CardContent>
                     </Card>
+                    )}
 
                     {/* Levels detail */}
                     <Card className="border-border/60 bg-card/50">

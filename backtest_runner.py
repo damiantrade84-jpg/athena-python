@@ -1740,7 +1740,7 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
 
     effective_style = _effective_backtest_style(pair, requested_style)
 
-    if effective_style not in ("swing", "intraday", "scalp"):
+    if effective_style not in ("swing", "intraday"):
         return {"error": f"Unsupported backtest style: {requested_style}"}
 
     log.info(
@@ -1775,7 +1775,7 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
                 engine="A",
                 tf="D1",
                 limit=_bt_limits["d1"],
-                min_bars=230,
+                min_bars=60,
             )
 
             h4_raw = _crypto_bt_signal_candles(
@@ -1783,7 +1783,7 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
                 engine="A",
                 tf="H4",
                 limit=_bt_limits["h4"],
-                min_bars=500,
+                min_bars=80,
             )
 
             h1_raw = _crypto_bt_signal_candles(
@@ -1791,7 +1791,7 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
                 engine="A",
                 tf="H1",
                 limit=_bt_limits["h1"],
-                min_bars=500,
+                min_bars=80,
             )
 
         elif pair["source"] == "mt5":
@@ -1802,7 +1802,7 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
                 _bt_limits["d1"],
                 lambda lim: _rt().fetch_candles(pair, "D1", lim),
                 provider="mt5",
-                min_bars=230,
+                min_bars=60,
             )
             h4_raw = _bt_cached_fetch(
                 pair,
@@ -1810,7 +1810,7 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
                 _bt_limits["h4"],
                 lambda lim: _rt().fetch_candles(pair, "H4", lim),
                 provider="mt5",
-                min_bars=500,
+                min_bars=80,
             )
             h1_raw = _bt_cached_fetch(
                 pair,
@@ -1818,7 +1818,7 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
                 _bt_limits["h1"],
                 lambda lim: _rt().fetch_candles(pair, "H1", lim),
                 provider="mt5",
-                min_bars=500,
+                min_bars=80,
             )
         elif _ptype in ("stock", "commodity", "index"):
             # Stocks/Commodities/Indices: EODHD D1 + EODHD intraday (BACKTEST_LOOKBACK_DAYS)
@@ -1829,14 +1829,14 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
                 _bt_limits["d1"],
                 lambda lim: _rt().extract_candles(_rt().fetch_eodhd(pair, "D1", lim)),
                 provider="eodhd",
-                min_bars=230,
+                min_bars=60,
             ) or _bt_cached_fetch(
                 pair,
                 "D1",
                 _bt_limits["d1"],
                 lambda lim: _rt().fetch_candles(pair, "D1", lim),
                 provider=str(pair.get("source") or "fallback"),
-                min_bars=230,
+                min_bars=60,
             )
 
             h4_raw, h1_raw = _bt_cached_eodhd_intraday(pair)
@@ -1888,7 +1888,7 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
                 _bt_limits["d1"],
                 lambda lim: _rt().fetch_candles(pair, "D1", lim),
                 provider=str(pair.get("source") or "fallback"),
-                min_bars=230,
+                min_bars=60,
             )
 
             h4_raw = _bt_cached_fetch(
@@ -1897,7 +1897,7 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
                 _bt_limits["h4"],
                 lambda lim: _rt().fetch_candles(pair, "H4", lim),
                 provider=str(pair.get("source") or "fallback"),
-                min_bars=500,
+                min_bars=80,
             )
 
             h1_raw = _bt_cached_fetch(
@@ -1906,7 +1906,7 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
                 _bt_limits["h1"],
                 lambda lim: _rt().fetch_candles(pair, "H1", lim),
                 provider=str(pair.get("source") or "fallback"),
-                min_bars=500,
+                min_bars=80,
             )
 
         d1_raw = _bt_confirmed_candles(pair, "D1", d1_raw)
@@ -1919,24 +1919,19 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
         if not h4_raw or not h1_raw:
             return {"error": f"No H4/H1 data for {pair['display']}"}
 
-        if len(d1_raw) < 230:
+        if len(d1_raw) < 60:
             return {
-                "error": f"Insufficient D1 history for {pair['display']} ({len(d1_raw)} bars)"
+                "error": f"Insufficient D1 context for Engine A V3 ({len(d1_raw)} bars, need 60+)"
             }
 
-        if effective_style == "swing" and len(h4_raw) < 250:
+        if len(h4_raw) < 80:
             return {
-                "error": f"Insufficient H4 history for swing backtest ({len(h4_raw)} bars, need 250+) — Polygon free plan may cap intraday history. Try adding a yfinanceSymbol override or EODHD intraday key."
+                "error": f"Insufficient H4 history for Engine A V3 ({len(h4_raw)} bars, need 80+)"
             }
 
-        if effective_style == "intraday" and len(h4_raw) < 260:
+        if len(h1_raw) < 80:
             return {
-                "error": f"Insufficient H4 history for {pair['display']} ({len(h4_raw)} bars, need 260+)"
-            }
-
-        if effective_style == "scalp" and len(h1_raw) < 260:
-            return {
-                "error": f"Insufficient H1 history for {pair['display']} ({len(h1_raw)} bars)"
+                "error": f"Insufficient H1 history for Engine A V3 ({len(h1_raw)} bars, need 80+)"
             }
 
         h4_times = pd.to_datetime(
@@ -1951,6 +1946,20 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
 
     except Exception as e:
         return {"error": f"Data fetch failed: {e}"}
+
+    from engine_a_v3.backtest import run_v3_backtest
+
+    _v3_costs = CONFIG.get("ENGINE_A_V3_BACKTEST") or {}
+    return run_v3_backtest(
+        pair,
+        {"D1": d1_raw, "H4": h4_raw, "H1": h1_raw},
+        horizon=effective_style,
+        spread_bps=float(_v3_costs.get("SPREAD_BPS", 2.0)),
+        commission_bps=float(_v3_costs.get("COMMISSION_BPS", 1.0)),
+        slippage_bps=float(_v3_costs.get("SLIPPAGE_BPS", 1.0)),
+        swap_bps_per_day=float(_v3_costs.get("SWAP_BPS_PER_DAY", 0.5)),
+        max_hold_bars=int(_v3_costs.get("MAX_HOLD_BARS", 24)),
+    )
 
     bt_vectorized = bool(CONFIG.get("BT_VECTORIZED", False))
     d1_cache: dict[tuple, dict] = {}
@@ -6138,36 +6147,20 @@ def backtest_pair_consensus(
                 except Exception:
                     _bt_intermarket_ctx_c = None
 
-            # Engine A v2: all asset classes (including forex) use calc_confluence
-            res_a = calc_confluence(
-                d1i, h4i, h1i, vr, stoch, _pair_ctx, btc_bias,
-                d1_candles=d1_ctx, h4_candles=h4_window, h1_candles=h1_window,
-                funding_rate=_bt_funding_rate, oi_data=_bt_oi_data, oi_context=_bt_oi_ctx,
-                bar_time=candles_h4[i].get("time") if candles_h4 else None,
-                volume_threshold=_engine_a_volume_threshold(_pair_ctx, _canonical_vm),
-                intermarket_context=_bt_intermarket_ctx_c,
+            from engine_a_v3.evaluator import evaluate_engine_a_v3
+
+            signal_a = evaluate_engine_a_v3(
+                pair,
+                {"D1": d1_ctx, "H4": h4_window, "H1": h1_window},
+                horizon="intraday",
+            ).to_dict()
+            a_direction = (
+                signal_a.get("direction")
+                if signal_a.get("decision") in ("TRADE", "WATCH")
+                else None
             )
-            _ea_signal_atr = _rt().atr_for_levels(
-                d1i, h4i, h1i, pair=pair, style=resolved_style
-            )
-            engine_a_atr, _ea_bt_atr_feed_c = _engine_a_level_atr_for_bt(
-                _ea_signal_atr, pair, resolved_style, as_of=entry_time
-            )
-            if engine_a_atr is None or float(engine_a_atr) <= 0:
-                i += 1
-                continue
-            _lvl_a = calc_levels(current_price, engine_a_atr, res_a["direction"], _level_atr_class,
-                                 regime_state=res_a.get("regime", {}).get("state"),
-                                 style=resolved_style)
-            signal_a = {
-                "confluenceScore": res_a["score"], "maxScore": res_a.get("maxScoreOverride", 3.0),
-                "direction": res_a["direction"], "score": res_a["score"],
-                "regime": res_a.get("regime", {"label": regime_label}),
-                "sl": _lvl_a.get("sl"), "tp1": _lvl_a.get("tp1"),
-                "tp2": _lvl_a.get("tp2"), "rr1": _lvl_a.get("rr1", 0),
-                "factor_scores": res_a.get("factor_scores", {}),
-            }
-            a_direction = res_a["direction"]
+            if signal_a.get("decision") == "NO_SIGNAL":
+                _c_funnel["a_no_signal"] += 1
 
         except Exception as _ae:
             log.debug("[ENGINE C BT] %s bar %d Engine A failed: %s", pair.get("display"), i, _ae)
@@ -6302,8 +6295,8 @@ def backtest_pair_consensus(
         # Engine A's factorDiagnostics.directionalScore is irrelevant — skip it
         # so the invariant check does not falsely reject valid consensus trades.
         _fd = (
-            res_a.get("factorDiagnostics")
-            if res_a.get("direction") == direction
+            signal_a.get("factorDiagnostics")
+            if signal_a.get("direction") == direction
             else None
         )
         _gd_ok, _gd_why = _bt_pre_trade_invariants(

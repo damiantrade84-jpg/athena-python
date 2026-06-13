@@ -6096,7 +6096,7 @@ def api_pair_scan():
             )
         )
     except Exception as e:
-        log.error(f"api_pair_scan error [{pair_obj.get('display')}]: {e}")
+        log.exception(f"api_pair_scan error [{pair_obj.get('display')}]: {e}")
         return jsonify({"error": "Pair scan failed"}), 500
 
 
@@ -12977,7 +12977,9 @@ def analyze_pair(
 ):
 
     pair_profile = get_pair_profile(pair)
-    _score_group = get_pair_score_group(pair)
+    from engine_a_v3.routing import route_specialist
+
+    _score_group = route_specialist(pair).score_group
     _pair_ctx = dict(pair or {})
     _pair_ctx["score_group"] = _score_group
 
@@ -13140,44 +13142,24 @@ def analyze_pair(
             )
         except Exception:
             pass
-        return None
+        from engine_a_v3.evaluator import evaluate_engine_a_v3
+
+        return evaluate_engine_a_v3(
+            pair,
+            {"D1": list(d1 or []), "H4": list(h4 or []), "H1": list(h1 or [])},
+            horizon=style,
+            blocked_reasons=("required_confirmed_candles_missing",),
+        ).to_dict()
 
     # Engine A scores confirmed candles only. Forming-bar state remains diagnostic
     # for UI/freshness, but indicators and two-bar confirmation use closed bars.
 
-    _min_d1 = int(CONFIG.get("ENGINE_A_MIN_D1_BARS", 220) or 220)
-    _min_h4 = int(CONFIG.get("ENGINE_A_MIN_H4_BARS", 50) or 50)
-    _min_h1 = int(CONFIG.get("ENGINE_A_MIN_H1_BARS", 50) or 50)
-    if len(d1) < _min_d1 or len(h4) < _min_h4 or len(h1) < _min_h1:
-        log.warning(
-            f"[ANALYZE] {pair.get('display', '?')} insufficient bars - "
-            f"D1={len(d1)}/{_min_d1} H4={len(h4)}/{_min_h4} H1={len(h1)}/{_min_h1}"
-        )
-        from engine_a_analyze_abort import record_analyze_pair_abort
-
-        _abort_detail = (
-            f"D1={len(d1)}/{_min_d1} H4={len(h4)}/{_min_h4} H1={len(h1)}/{_min_h1}"
-        )
-        record_analyze_pair_abort(
-            pair, "insufficient_bars", detail=_abort_detail, score_group=_score_group
-        )
-        try:
-            from calibration_diagnostics import record_engine_a_analyze_skip
-
-            record_engine_a_analyze_skip(
-                pair,
-                abort_reason="insufficient_bars",
-                detail=_abort_detail,
-                score_group=_score_group,
-            )
-        except Exception:
-            pass
-        return None
-
     # Pre-scoring freshness gate: skip indicator calculation if any required
     # TF is stale. This prevents wasted CPU and false signal log entries from
     # scoring on stale data that would be blocked at execution time anyway.
-    if CONFIG.get("PRE_SCORING_FRESHNESS_GATE_ENABLED", True):
+    _freshness_diag = {}
+    _v3_freshness_required = True
+    if _v3_freshness_required:
         try:
             from athena_app.services.data_freshness import (
                 pre_scoring_allows_confirmed_only_stale_1,
@@ -13262,6 +13244,7 @@ def analyze_pair(
                         pair.get("display") or pair.get("symbol"),
                         _crypto_d1_stale_err,
                     )
+                    _stale_tfs.append("D1:crypto_freshness_validation_error")
 
             if _stale_tfs:
                 _reason = "STALE_DATA_PRE_SCORING:" + ",".join(_stale_tfs)
@@ -13289,36 +13272,57 @@ def analyze_pair(
                     )
                 except Exception:
                     pass
-                return {
-                    "pair": pair.get("display"),
-                    "symbol": pair.get("symbol"),
-                    "scoreGroup": _score_group,
-                    "score": 0,
-                    "confluenceScore": 0,
-                    "maxScore": 3.0,
-                    "direction": "neutral",
-                    "trendState": "neutral",
-                    "engineAAbortReason": "pre_scoring_freshness",
-                    "executable": False,
-                    "dataFreshness": {
-                        "allowed": False,
-                        "reason": _reason,
-                        "diagnostics": _freshness_diag,
-                    },
-                    "candleFetchMeta": {
-                        "D1": _freshness_diag.get("D1"),
-                        "H4": _freshness_diag.get("H4"),
-                        "H1": _freshness_diag.get("H1"),
-                        "pairSource": pair.get("source"),
-                    },
-                    "is_forming": is_forming,
+                from engine_a_v3.evaluator import evaluate_engine_a_v3
+
+                _blocked = evaluate_engine_a_v3(
+                    pair,
+                    {"D1": d1, "H4": h4, "H1": h1},
+                    horizon=style,
+                    blocked_reasons=(_reason,),
+                ).to_dict()
+                _blocked["dataFreshness"]["diagnostics"] = _freshness_diag
+                _blocked["candleFetchMeta"] = {
+                    "D1": _freshness_diag.get("D1"),
+                    "H4": _freshness_diag.get("H4"),
+                    "H1": _freshness_diag.get("H1"),
+                    "pairSource": pair.get("source"),
                 }
+                _blocked["is_forming"] = is_forming
+                return _blocked
         except Exception as _prefresh_err:
-            log.debug(
-                "[ANALYZE] %s pre-scoring freshness check skipped: %s",
+            log.warning(
+                "[ANALYZE] %s V3 freshness validation failed closed: %s",
                 pair.get("display", "?"),
                 _prefresh_err,
             )
+            from engine_a_v3.evaluator import evaluate_engine_a_v3
+
+            _blocked = evaluate_engine_a_v3(
+                pair,
+                {"D1": d1, "H4": h4, "H1": h1},
+                horizon=style,
+                blocked_reasons=("FRESHNESS_VALIDATION_ERROR",),
+            ).to_dict()
+            _blocked["dataFreshness"]["diagnostics"] = _freshness_diag
+            _blocked["is_forming"] = is_forming
+            return _blocked
+
+    from engine_a_v3.evaluator import evaluate_engine_a_v3
+
+    _v3_signal = evaluate_engine_a_v3(
+        pair,
+        {"D1": d1, "H4": h4, "H1": h1},
+        horizon=style,
+    ).to_dict()
+    _v3_signal["dataFreshness"]["diagnostics"] = _freshness_diag
+    _v3_signal["candleFetchMeta"] = {
+        "D1": preloaded_fetch_meta.get("D1") or _freshness_diag.get("D1"),
+        "H4": preloaded_fetch_meta.get("H4") or _freshness_diag.get("H4"),
+        "H1": preloaded_fetch_meta.get("H1") or _freshness_diag.get("H1"),
+        "pairSource": pair.get("source"),
+    }
+    _v3_signal["is_forming"] = is_forming
+    return _v3_signal
 
     _asset_type = pair.get("type", "stock")
     d1i = calc_indicators_with_normalized(d1, _asset_type, score_group=_score_group)

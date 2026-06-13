@@ -334,6 +334,41 @@ def normalise_engine_a(signal_a: dict) -> dict:
       - confluencePct: threshold-relative display percentage (UI only)
 
     """
+    if (
+        str(signal_a.get("engine") or "").upper() == "ENGINE_A_V3"
+        and str(signal_a.get("contractVersion") or "").startswith("3.")
+    ):
+        decision = str(signal_a.get("decision") or "NO_SIGNAL").upper()
+        direction = signal_a.get("direction")
+        direction_ok = direction in ("LONG", "SHORT")
+        qualified = signal_a.get("qualified") is True
+        trade_enabled = signal_a.get("engineATradeEnabled") is True
+        is_full = decision == "TRADE" and qualified and trade_enabled and direction_ok
+        is_partial = decision == "WATCH" and direction_ok
+        return {
+            "score_norm": 1.0 if is_full else 0.5 if is_partial else 0.0,
+            "direction": direction,
+            "regime": "V3_SPECIALIST",
+            "sl": signal_a.get("sl"),
+            "tp": signal_a.get("tp1"),
+            "tp2": signal_a.get("tp2"),
+            "rr": signal_a.get("rr1", 0),
+            "raw_score": None,
+            "max_score": None,
+            "has_signal": is_full,
+            "has_partial_signal": is_partial,
+            "trade_enabled": is_full,
+            "trade_gate": None,
+            "cot_active": False,
+            "carry_active": False,
+            "style": signal_a.get("horizon"),
+            "confidence": None,
+            "setup_id": signal_a.get("setupId"),
+            "horizon": signal_a.get("horizon"),
+            "decision": decision,
+            "rejection_reasons": list(signal_a.get("rejectionReasons") or []),
+        }
+
     score = float(signal_a.get("confluenceScore", 0))
     _ms_raw = signal_a.get("maxScore")
     if _ms_raw is None:

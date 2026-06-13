@@ -682,6 +682,7 @@ def mt5_get_account() -> dict:
         "freeMargin": info.margin_free,
         "profit": info.profit,
         "currency": info.currency,
+        "trade_mode": getattr(info, "trade_mode", None),
     }
 
 
