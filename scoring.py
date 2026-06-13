@@ -1587,6 +1587,27 @@ def _signal_confidence_for_gate(signal: dict) -> float | None:
 
 def _classify_signal(signal: dict, pair: dict) -> tuple[str, str]:
     """Return (tier, reason) where tier is 'trade' | 'watchlist' | 'skip'."""
+    if (
+        str(signal.get("engine") or "").upper() == "ENGINE_A_V3"
+        and str(signal.get("contractVersion") or "").startswith("3.")
+    ):
+        decision = str(signal.get("decision") or "NO_SIGNAL").upper()
+        reasons = [str(value) for value in signal.get("rejectionReasons") or [] if value]
+        reason = "; ".join(dict.fromkeys(reasons))
+        if decision == "NO_SIGNAL":
+            return "skip", reason or "V3 specialist returned NO_SIGNAL"
+        if decision == "WATCH":
+            return "watchlist", reason or "V3 specialist is awaiting confirmation"
+        if decision != "TRADE" or signal.get("qualified") is not True:
+            return "skip", reason or "V3 signal is not trade-qualified"
+        if signal.get("engineATradeEnabled") is not True:
+            return "watchlist", reason or "V3 execution eligibility is disabled"
+        if not pair.get("enabled", True):
+            return "watchlist", reason or "Pair is disabled"
+        if signal.get("exchangeClosed"):
+            return "watchlist", reason or "Exchange closed"
+        return "trade", "V3 specialist trade-qualified"
+
     threshold = signal.get("scanThreshold", get_min_confluence_threshold(pair))
     score = signal.get("confluenceScore", 0)
     hard_event = signal.get("eventRisk", {}).get("hardBlock", False)

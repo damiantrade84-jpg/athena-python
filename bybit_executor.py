@@ -23,6 +23,40 @@ except Exception:
     CONFIG = {}
 
 _exchange = None
+_exchange_demo_verified = False
+
+
+def _url_values(value):
+    if isinstance(value, dict):
+        for item in value.values():
+            yield from _url_values(item)
+    elif isinstance(value, (list, tuple, set)):
+        for item in value:
+            yield from _url_values(item)
+    elif isinstance(value, str):
+        yield value.lower()
+
+
+def bybit_demo_endpoint_verified(
+    exchange,
+    *,
+    demo_enabled: bool,
+    testnet_enabled: bool,
+) -> bool:
+    if not demo_enabled or testnet_enabled or exchange is None:
+        return False
+    options = getattr(exchange, "options", {})
+    if not isinstance(options, dict) or options.get("enableDemoTrading") is not True:
+        return False
+    urls = list(_url_values(getattr(exchange, "urls", {}).get("api", {})))
+    hostname = str(getattr(exchange, "hostname", "") or "").lower()
+    return bool(
+        hostname == "bybit.com"
+        and any(
+            "api-demo.bybit.com" in url or "api-demo.{hostname}" in url
+            for url in urls
+        )
+    )
 
 
 def _is_engine_d_signal(signal: dict) -> bool:
@@ -529,7 +563,7 @@ def _bybit_resolve_avg_entry(order: dict, *, fallback_price: float) -> float:
 
 def _get_exchange():
     """Initialize Bybit Linear Futures connection."""
-    global _exchange
+    global _exchange, _exchange_demo_verified
     if _exchange is not None:
         return _exchange
 
@@ -552,6 +586,10 @@ def _get_exchange():
         "yes",
     )
     use_demo = os.environ.get("BYBIT_DEMO", "false").lower() in ("true", "1", "yes")
+    if use_testnet and use_demo:
+        log.error("[BYBIT] BYBIT_TESTNET and BYBIT_DEMO cannot both be enabled")
+        _exchange_demo_verified = False
+        return None
 
     try:
         _exchange = ccxt.bybit(
@@ -573,6 +611,15 @@ def _get_exchange():
 
         if use_demo:
             _exchange.enable_demo_trading(True)
+        _exchange_demo_verified = bybit_demo_endpoint_verified(
+            _exchange,
+            demo_enabled=use_demo,
+            testnet_enabled=use_testnet,
+        )
+        if use_demo and not _exchange_demo_verified:
+            log.error("[BYBIT] Demo mode requested but demo endpoint was not verified")
+            _exchange = None
+            return None
 
         # Sync local/client drift against Bybit server time to avoid retCode 10002
         # on signed requests like fetch_positions/fetch_balance during startup polling.
@@ -590,6 +637,7 @@ def _get_exchange():
     except Exception as e:
         log.error(f"[BYBIT] Connection failed: {e}")
         _exchange = None
+        _exchange_demo_verified = False
         return None
 
 
@@ -702,6 +750,7 @@ def bybit_get_account() -> dict:
                 "exchange": "Bybit",
                 "testnet": os.environ.get("BYBIT_TESTNET", "false").lower()
                 in ("true", "1", "yes"),
+                "demo": bool(_exchange_demo_verified),
                 "risk_domain": risk_domain,
                 "balance": total,
                 "equity": total + unrealized,  # ← real equity including open P&L

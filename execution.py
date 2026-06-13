@@ -1018,6 +1018,73 @@ def _refresh_engine_b_execution_context(
     return refreshed, None
 
 
+def _refresh_engine_a_v3_execution_context(
+    sig: dict,
+    runtime,
+) -> str | None:
+    from engine_a_v3.execution import (
+        is_engine_a_v3_signal,
+        merge_refreshed_signal,
+        verify_refreshed_signal,
+    )
+
+    if not is_engine_a_v3_signal(sig):
+        return None
+    pair_key = sig.get("pair") or sig.get("display") or sig.get("symbol") or ""
+    pair_obj = next(
+        (
+            pair
+            for pair in runtime.ALL_PAIRS
+            if pair.get("display") == pair_key or pair.get("symbol") == pair_key
+        ),
+        None,
+    )
+    if pair_obj is None:
+        return f"ENGINE_A_V3_REFRESH_PAIR_NOT_FOUND: {pair_key}"
+    try:
+        refreshed = runtime.analyze_pair(
+            pair_obj,
+            "neutral",
+            style=str(sig.get("horizon") or sig.get("style") or ""),
+        )
+    except Exception as exc:
+        return f"ENGINE_A_V3_REFRESH_FAILED: {exc}"
+    allowed, reason = verify_refreshed_signal(sig, refreshed)
+    if not allowed:
+        return reason or "ENGINE_A_V3_REFRESH_REJECTED"
+    merged = merge_refreshed_signal(sig, refreshed)
+    sig.clear()
+    sig.update(merged)
+    return None
+
+
+def _engine_a_v3_demo_attestation_error(
+    sig: dict,
+    *,
+    account: dict,
+    venue: str,
+    config: dict,
+) -> str | None:
+    from engine_a_v3.execution import attest_demo_execution, is_engine_a_v3_signal
+
+    if not is_engine_a_v3_signal(sig):
+        return None
+    attestation = attest_demo_execution(
+        executor_mode=config.get("EXECUTOR_MODE"),
+        venue=venue,
+        mt5_trade_mode=account.get("trade_mode") if venue == "mt5" else None,
+        bybit_demo=account.get("demo") if venue == "bybit" else None,
+    )
+    if attestation.allowed:
+        sig["demoExecutionAttestation"] = {
+            "allowed": True,
+            "venue": attestation.venue,
+            "reason": attestation.reason,
+        }
+        return None
+    return f"ENGINE_A_V3_DEMO_ATTESTATION_FAILED: {attestation.reason}"
+
+
 def api_quick_execute():
     _r = rt()
     # ── Execution safety guards (must match api_execute) ─────────────────
@@ -1036,10 +1103,30 @@ def api_quick_execute():
     _quick_pair = sig.get("pair") or sig.get("display") or sig.get("symbol") or ""
     engine_b = d.get("engine_b") or {}
     level_override = d.get("level_override") or sig.get("level_override")
+    from engine_a_v3.execution import is_engine_a_v3_signal
+
+    _is_engine_a_v3 = is_engine_a_v3_signal(sig)
+    if _is_engine_a_v3 and level_override:
+        return jsonify(
+            {"error": "ENGINE_A_V3_LEVEL_OVERRIDE_FORBIDDEN", "pair": _quick_pair}
+        ), 422
 
     pip_mode = normalize_pip_mode(d.get("pip_mode"))
     _volume_mode, _exec_context, _sizing_override = parse_execution_volume_args(d)
-    sig["style"] = pip_mode or sig.get("style", "swing")
+    if _is_engine_a_v3:
+        _v3_horizon = str(sig.get("horizon") or "")
+        if d.get("pip_mode") and pip_mode != _v3_horizon:
+            return jsonify(
+                {"error": "ENGINE_A_V3_HORIZON_OVERRIDE_FORBIDDEN", "pair": _quick_pair}
+            ), 422
+        sig["style"] = _v3_horizon
+        _volume_mode = "min_lot"
+        _sizing_override = 1.0
+        _v3_refresh_error = _refresh_engine_a_v3_execution_context(sig, _r)
+        if _v3_refresh_error:
+            return jsonify({"error": _v3_refresh_error, "pair": _quick_pair}), 409
+    else:
+        sig["style"] = pip_mode or sig.get("style", "swing")
 
     _sig_age = 9999
     _ts_str = sig.get("timestamp", "")
@@ -1053,7 +1140,9 @@ def api_quick_execute():
             _sig_age = 9999
 
     _max_age = _r.CONFIG.get("SIGNAL_MAX_AGE_SEC", 300)
-    _has_engine_b_context = _signal_has_engine_b_context(sig, engine_b)
+    _has_engine_b_context = (
+        False if _is_engine_a_v3 else _signal_has_engine_b_context(sig, engine_b)
+    )
     
     _missing_price = False
     try:
@@ -1079,7 +1168,7 @@ def api_quick_execute():
             }
         ), 409
 
-    if _sig_age > _max_age / 2 or _missing_price:
+    if (not _is_engine_a_v3) and (_sig_age > _max_age / 2 or _missing_price):
         pair = sig.get("pair", "")
         _pair_obj = next((p for p in _r.ALL_PAIRS if p["display"] == pair), None)
         if not _pair_obj:
@@ -1150,7 +1239,9 @@ def api_quick_execute():
                     }
                 ), 409
 
-    if _has_engine_b_context:
+    if _is_engine_a_v3:
+        sig["level_source"] = "engine_a_v3_refresh"
+    elif _has_engine_b_context:
         if _apply_engine_b_execution_levels(sig, engine_b):
             _r.log.warning(
                 f"[QUICK EXEC] {sig.get('pair')}: preserved Engine B execution levels "
@@ -1191,7 +1282,7 @@ def api_quick_execute():
                 f"[QUICK EXEC] {sig.get('pair')}: style={pip_mode} level service fallback ({_svc_err})"
             )
 
-    if level_override:
+    if level_override and not _is_engine_a_v3:
         _override_err = _apply_level_override(sig, level_override)
         if _override_err:
             return jsonify({"error": f"Invalid AI level override: {_override_err}"}), 400
@@ -1206,7 +1297,11 @@ def api_quick_execute():
         (p for p in _r.ALL_PAIRS if p.get("display") == _quick_pair or p.get("symbol") == _quick_pair),
         None,
     )
-    _ea_block = _engine_a_trade_gate_block_reason(sig, _pair_obj, config=_r.CONFIG)
+    _ea_block = (
+        None
+        if _is_engine_a_v3
+        else _engine_a_trade_gate_block_reason(sig, _pair_obj, config=_r.CONFIG)
+    )
     if _ea_block:
         return jsonify({"error": _ea_block, "pair": sig.get("pair")}), 422
 
@@ -1258,14 +1353,24 @@ def api_quick_execute():
                 return jsonify({"error": "Symbol not on broker"}), 400
             _exec_venue = "mt5"
 
+        _demo_error = _engine_a_v3_demo_attestation_error(
+            sig,
+            account=account,
+            venue=_exec_venue,
+            config=_r.CONFIG,
+        )
+        if _demo_error:
+            return jsonify({"error": _demo_error, "pair": sig.get("pair")}), 403
+
         _hydrate_execution_candle_quality(sig, _r=_r)
 
         # Engine A exit-mode selector (Plan 2): resolve mode + advisable-pip clamp
         # BEFORE risk_check, so the clamped SL/TP is sized and gated normally.
         # No-op for non-Engine-A signals (exit_mode stays unset -> monitor trails).
-        apply_engine_a_exit_mode(
-            sig, _audit_engine_from_signal(sig), symbol_info, _r.CONFIG, level_override
-        )
+        if not _is_engine_a_v3:
+            apply_engine_a_exit_mode(
+                sig, _audit_engine_from_signal(sig), symbol_info, _r.CONFIG, level_override
+            )
 
         approval = risk_check(
             signal=sig,
@@ -1942,12 +2047,29 @@ def api_execute():
 
     sig = d["signal"]
     level_override = d.get("level_override") or sig.get("level_override")
+    from engine_a_v3.execution import is_engine_a_v3_signal
+
+    _is_engine_a_v3 = is_engine_a_v3_signal(sig)
 
     pair = sig.get("pair", "")
 
     force = d.get("force", False) and _r.test_mode()
+    if _is_engine_a_v3 and d.get("force"):
+        return jsonify({"error": "ENGINE_A_V3_FORCE_FORBIDDEN", "pair": pair}), 422
+    if _is_engine_a_v3 and level_override:
+        return jsonify(
+            {"error": "ENGINE_A_V3_LEVEL_OVERRIDE_FORBIDDEN", "pair": pair}
+        ), 422
+    if _is_engine_a_v3:
+        _v3_refresh_error = _refresh_engine_a_v3_execution_context(sig, _r)
+        if _v3_refresh_error:
+            return jsonify({"error": _v3_refresh_error, "pair": pair}), 409
 
-    sig_id = f"{pair}_{sig.get('direction')}_{sig.get('timestamp', '')}"
+    sig_id = (
+        str(sig.get("signalId"))
+        if _is_engine_a_v3
+        else f"{pair}_{sig.get('direction')}_{sig.get('timestamp', '')}"
+    )
 
     if not force and is_signal_duplicate(sig_id):
         return jsonify({"error": "DUPLICATE: This signal has already been executed"}), 409
@@ -1972,9 +2094,13 @@ def api_execute():
             _sig_age = 9999
 
     _max_age = _r.CONFIG.get("SIGNAL_MAX_AGE_SEC", 300)
-    _has_engine_b_context = _signal_has_engine_b_context(sig, d.get("engine_b") or {})
+    _has_engine_b_context = (
+        False
+        if _is_engine_a_v3
+        else _signal_has_engine_b_context(sig, d.get("engine_b") or {})
+    )
 
-    if _sig_age > _max_age / 2:
+    if (not _is_engine_a_v3) and _sig_age > _max_age / 2:
         _pair_obj = None
         if _has_engine_b_context:
             refreshed_engine_b, refresh_err = _refresh_engine_b_execution_context(
@@ -2060,7 +2186,9 @@ def api_execute():
             }
         ), 409
 
-    if _has_engine_b_context:
+    if _is_engine_a_v3:
+        sig["level_source"] = "engine_a_v3_refresh"
+    elif _has_engine_b_context:
         _levels_applied = _apply_engine_b_execution_levels(sig, d.get("engine_b") or {})
         if not _levels_applied:
             _r.log.warning(
@@ -2069,7 +2197,7 @@ def api_execute():
             body, status = _engine_b_levels_apply_error_response(sig)
             return jsonify(body), status
 
-    if level_override:
+    if level_override and not _is_engine_a_v3:
         _override_err = _apply_level_override(sig, level_override)
         if _override_err:
             return jsonify({"error": f"Invalid AI level override: {_override_err}"}), 400
@@ -2082,7 +2210,11 @@ def api_execute():
         (p for p in _r.ALL_PAIRS if p.get("display") == pair or p.get("symbol") == pair),
         None,
     )
-    _ea_block = _engine_a_trade_gate_block_reason(sig, _pair_obj, config=_r.CONFIG)
+    _ea_block = (
+        None
+        if _is_engine_a_v3
+        else _engine_a_trade_gate_block_reason(sig, _pair_obj, config=_r.CONFIG)
+    )
     if _ea_block:
         return jsonify({"error": _ea_block, "pair": pair}), 422
 
@@ -2165,6 +2297,15 @@ def api_execute():
 
             _exec_venue = "mt5"
 
+        _demo_error = _engine_a_v3_demo_attestation_error(
+            sig,
+            account=account,
+            venue=_exec_venue,
+            config=_r.CONFIG,
+        )
+        if _demo_error:
+            return jsonify({"error": _demo_error, "pair": pair}), 403
+
         _volume_mode, _exec_context, _payload_sizing = parse_execution_volume_args(d)
         _raw_so = d.get("sizing_override")
         _sizing_override = None
@@ -2190,14 +2331,18 @@ def api_execute():
 
             else:
                 _sizing_override = _payload_sizing
+        if _is_engine_a_v3:
+            _volume_mode = "min_lot"
+            _sizing_override = 1.0
 
         _hydrate_execution_candle_quality(sig, _r=_r)
 
         # Engine A exit-mode selector (Plan 2): resolve mode + advisable-pip clamp
         # before risk_check (audit H1 — same as quick_execute path).
-        apply_engine_a_exit_mode(
-            sig, _audit_engine_from_signal(sig), symbol_info, _r.CONFIG, level_override
-        )
+        if not _is_engine_a_v3:
+            apply_engine_a_exit_mode(
+                sig, _audit_engine_from_signal(sig), symbol_info, _r.CONFIG, level_override
+            )
 
         approval = risk_check(
             signal=sig,

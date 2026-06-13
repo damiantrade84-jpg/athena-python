@@ -143,6 +143,9 @@ export interface ScalpWorkbenchIntent {
 
 /** Engine A v2 signal — emitted by `analyze_pair()` (camelCase keys). */
 export interface EngineASignal {
+  contractVersion?: string;
+  signalId?: string;
+  engine?: string;
   id?: string;
   timestamp?: string;
   pair?: string;
@@ -150,6 +153,38 @@ export interface EngineASignal {
   symbol?: string;
   type?: string; // forex | crypto | commodity | index | stock | etf
   scoreGroup?: string;
+  family?: string;
+  subclass?: string;
+  horizon?: 'intraday' | 'swing' | string;
+  setupId?: string | null;
+  decision?: 'TRADE' | 'WATCH' | 'NO_SIGNAL' | string;
+  qualified?: boolean;
+  decisionTime?: string;
+  lastConfirmedCandleTs?: string | null;
+  validUntil?: string;
+  entryZone?: [number, number] | number[] | null;
+  invalidation?: number | null;
+  targets?: Array<{
+    label?: string;
+    price?: number;
+    rr?: number;
+  }>;
+  predicates?: Array<{
+    name?: string;
+    passed?: boolean;
+    actual?: unknown;
+    expected?: string;
+  }>;
+  rejectionReasons?: string[];
+  validationArtifact?: {
+    artifactId?: string;
+    family?: string;
+    subclass?: string;
+    horizon?: string;
+    status?: string;
+    metrics?: Record<string, unknown>;
+    provenanceSha256?: string;
+  } | null;
   scoringProfile?: {
     enabled?: boolean;
     style?: string;

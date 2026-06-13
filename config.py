@@ -1606,6 +1606,14 @@ CONFIG: dict = {
     "ENGINE_A_MIN_D1_BARS": 220,
     "ENGINE_A_MIN_H4_BARS": 50,
     "ENGINE_A_MIN_H1_BARS": 50,
+    "ENGINE_A_V3_BACKTEST": {
+        "SPREAD_BPS": 2.0,
+        "COMMISSION_BPS": 1.0,
+        "SLIPPAGE_BPS": 1.0,
+        "SWAP_BPS_PER_DAY": 0.5,
+        "MAX_HOLD_BARS": 24,
+    },
+    "ENGINE_A_V3_DEMO_UNVALIDATED_ENABLED": False,
     "ENGINE_A_SCORING_PROFILE": {
         "ENABLED": True,
         "DEFAULT_BY_CLASS": {

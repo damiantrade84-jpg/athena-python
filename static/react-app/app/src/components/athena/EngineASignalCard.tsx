@@ -43,6 +43,21 @@ export default function EngineASignalCard({
   compact,
 }: Props) {
   const raw = signal as Record<string, unknown>;
+  const isEngineAV3 = String(signal.engine || '').toUpperCase() === 'ENGINE_A_V3'
+    && String(signal.contractVersion || '').startsWith('3.');
+  if (isEngineAV3) {
+    return (
+      <EngineAV3SignalCard
+        signal={signal}
+        onExecute={onExecute}
+        onSelect={onSelect}
+        selected={selected}
+        executeDisabled={executeDisabled}
+        executeLabel={executeLabel}
+        compact={compact}
+      />
+    );
+  }
   const engineSource = String(raw.engine_source ?? raw.engine ?? '').toUpperCase();
   const isEngineBOnly = engineSource === 'ENGINE_B' || (
     engineSource === 'B' && raw.engine_a_present === false
@@ -354,6 +369,128 @@ export default function EngineASignalCard({
           >
             <Play className="w-3.5 h-3.5" />
             {executeLabel || 'Execute'}
+          </Button>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+function EngineAV3SignalCard({
+  signal,
+  onExecute,
+  onSelect,
+  selected,
+  executeDisabled,
+  executeLabel,
+  compact,
+}: Props) {
+  const pair = signal.display || signal.pair || signal.symbol || '-';
+  const type = signal.type;
+  const isLong = signal.direction === 'LONG';
+  const isShort = signal.direction === 'SHORT';
+  const decision = String(signal.decision || 'NO_SIGNAL');
+  const entryZone = Array.isArray(signal.entryZone) ? signal.entryZone : [];
+  const passedPredicates = (signal.predicates || []).filter((predicate) => predicate.passed);
+  const decisionClass = decision === 'TRADE'
+    ? 'text-long border-long/40'
+    : decision === 'WATCH'
+    ? 'text-warning border-warning/40'
+    : 'text-muted-foreground border-border/60';
+
+  return (
+    <Card
+      className={cn(
+        'transition-all duration-200',
+        isLong ? 'signal-long-border' : '',
+        isShort ? 'signal-short-border' : '',
+      )}
+      style={selected
+        ? { background: 'hsl(var(--card) / 0.70)', border: '1px solid hsl(var(--gold) / 0.45)' }
+        : { background: 'hsl(var(--card) / 0.50)', border: '1px solid hsl(var(--border) / 0.60)' }}
+      onClick={() => onSelect?.(signal)}
+    >
+      <CardContent className={compact ? 'p-3 space-y-2' : 'p-4 space-y-3'}>
+        <div className="flex items-start justify-between gap-2">
+          <div className="min-w-0">
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="text-sm font-mono font-bold">{pair}</span>
+              <Badge variant="outline" className={cn('text-[10px]', decisionClass)}>{decision}</Badge>
+              <Badge variant="outline" className="text-[10px]">{signal.horizon || '-'}</Badge>
+            </div>
+            <p className="mt-1 text-[11px] text-muted-foreground break-words">
+              {signal.setupId || 'No qualified setup'} · {signal.family || '-'} / {signal.subclass || '-'}
+            </p>
+          </div>
+          <Badge variant={isShort ? 'destructive' : 'secondary'}>{signal.direction || '-'}</Badge>
+        </div>
+
+        <div className="grid grid-cols-4 gap-2">
+          <Level label="Entry" value={signal.price} pair={pair} type={type} accent="muted" />
+          <Level label="Invalidation" value={signal.invalidation ?? signal.sl} pair={pair} type={type} accent="short" />
+          <Level label="TP1" value={signal.tp1} pair={pair} type={type} accent="long" />
+          <Level label="TP2" value={signal.tp2} pair={pair} type={type} accent="long" />
+        </div>
+
+        {entryZone.length >= 2 && (
+          <p className="text-[10px] text-muted-foreground">
+            Trigger zone: <span className="font-mono text-foreground">
+              {fmtPrice(entryZone[0], pair, type)} - {fmtPrice(entryZone[1], pair, type)}
+            </span>
+          </p>
+        )}
+
+        {!compact && (
+          <div className="rounded-md border border-border/50 bg-muted/20 p-2 space-y-1">
+            <p className="text-[10px] uppercase text-muted-foreground">
+              Predicates {passedPredicates.length}/{signal.predicates?.length || 0} passed
+            </p>
+            {(signal.predicates || []).slice(0, 8).map((predicate) => (
+              <div key={predicate.name} className="flex items-start justify-between gap-2 text-[10px]">
+                <span className={predicate.passed ? 'text-long' : 'text-warning'}>
+                  {predicate.passed ? 'PASS' : 'FAIL'} {predicate.name}
+                </span>
+                <span className="text-right text-muted-foreground">{predicate.expected}</span>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {(signal.rejectionReasons || []).length > 0 && (
+          <div className="flex flex-wrap gap-1">
+            {signal.rejectionReasons?.map((reason) => (
+              <Badge key={reason} variant="outline" className="text-[9px] text-warning border-warning/40">
+                {reason}
+              </Badge>
+            ))}
+          </div>
+        )}
+
+        {!compact && signal.validationArtifact && (
+          <p className="text-[10px] text-muted-foreground break-all">
+            Validation: <span className="font-mono text-foreground">
+              {signal.validationArtifact.artifactId} · {signal.validationArtifact.status}
+            </span>
+          </p>
+        )}
+
+        {onExecute && (
+          <Button
+            size="sm"
+            className="w-full gap-2"
+            onClick={(event) => {
+              event.stopPropagation();
+              onExecute(signal);
+            }}
+            disabled={
+              executeDisabled
+              || decision !== 'TRADE'
+              || signal.qualified !== true
+              || signal.engineATradeEnabled !== true
+            }
+          >
+            <Play className="w-3.5 h-3.5" />
+            {executeLabel || 'Execute demo'}
           </Button>
         )}
       </CardContent>

@@ -1733,6 +1733,83 @@ function DiagnosticBlock({ label, value }: { label: string; value: unknown }) {
   );
 }
 
+function isEngineAV3Signal(signal: EngineASignal | null): boolean {
+  return String(signal?.engine || '').toUpperCase() === 'ENGINE_A_V3'
+    && String(signal?.contractVersion || '').startsWith('3.');
+}
+
+function EngineAV3SidePanel({
+  signal,
+  liveTick,
+  chartPayload,
+}: {
+  signal: EngineASignal;
+  liveTick: LiveTick | null;
+  chartPayload: CandleApiResponse | null;
+}) {
+  const entryZone = Array.isArray(signal.entryZone) ? signal.entryZone : [];
+  const chartFeedSummary = buildChartFeedSummary(chartPayload);
+  const passed = (signal.predicates || []).filter((predicate) => predicate.passed).length;
+  return (
+    <aside className="min-w-0 space-y-3 rounded-md border bg-card/70 p-3">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className="text-xs uppercase tracking-wide text-muted-foreground">Engine A V3 Specialist</p>
+          <h3 className="truncate text-sm font-semibold">{displaySymbol(signal) || 'No candidate'}</h3>
+          <p className="text-[11px] text-muted-foreground">{signal.setupId || 'No setup'} · {signal.horizon || '-'}</p>
+        </div>
+        <Badge variant={signal.decision === 'TRADE' ? 'secondary' : 'outline'}>
+          {signal.decision || 'NO_SIGNAL'}
+        </Badge>
+      </div>
+
+      <section className="space-y-2 rounded-md border border-border/60 p-2">
+        <TextRow label="Direction" value={normalizeDirection(signal.direction) || 'UNAVAILABLE'} />
+        <TextRow label="Family" value={`${signal.family || '-'} / ${signal.subclass || '-'}`} />
+        <TextRow label="Trigger zone" value={entryZone.length >= 2 ? `${fmtNum(entryZone[0], 6)} - ${fmtNum(entryZone[1], 6)}` : null} />
+        <NumberRow label="Entry" value={firstNumber(signal.entry, signal.price)} />
+        <NumberRow label="Live price" value={liveTick?.price} />
+        <NumberRow label="Invalidation" value={firstNumber(signal.invalidation, signal.sl)} />
+        <NumberRow label="TP1" value={signal.tp1} />
+        <NumberRow label="TP2" value={signal.tp2} />
+        <TextRow label="Chart feeds" value={chartFeedSummary} />
+      </section>
+
+      <section className="space-y-2 rounded-md border border-border/60 p-2">
+        <div className="text-xs font-semibold">Deterministic predicates ({passed}/{signal.predicates?.length || 0})</div>
+        {(signal.predicates || []).slice(0, 10).map((predicate) => (
+          <div key={predicate.name} className="flex items-start justify-between gap-2 text-[11px]">
+            <span className={predicate.passed ? 'text-long' : 'text-warning'}>
+              {predicate.passed ? 'PASS' : 'FAIL'} {predicate.name}
+            </span>
+            <span className="text-right text-muted-foreground">{predicate.expected || '-'}</span>
+          </div>
+        ))}
+      </section>
+
+      {(signal.rejectionReasons || []).length > 0 && (
+        <section className="space-y-1 rounded-md border border-warning/30 p-2">
+          <div className="text-xs font-semibold">Rejection reasons</div>
+          {signal.rejectionReasons?.map((reason) => (
+            <p key={reason} className="text-[11px] text-warning">{reason}</p>
+          ))}
+        </section>
+      )}
+
+      <section className="space-y-2 rounded-md border border-border/60 p-2">
+        <TextRow label="Last confirmed candle" value={signal.lastConfirmedCandleTs} />
+        <TextRow label="Valid until" value={signal.validUntil} />
+        <TextRow label="Validation artifact" value={signal.validationArtifact?.artifactId || 'Not promoted'} />
+        <TextRow label="Artifact status" value={signal.validationArtifact?.status || null} />
+      </section>
+
+      <p className="text-[11px] leading-4 text-muted-foreground">
+        AI review is advisory only. It cannot approve, veto, or alter this deterministic V3 setup.
+      </p>
+    </aside>
+  );
+}
+
 function EngineASidePanel({
   signal,
   liveTick,
@@ -1742,6 +1819,9 @@ function EngineASidePanel({
   liveTick: LiveTick | null;
   chartPayload: CandleApiResponse | null;
 }) {
+  if (signal && isEngineAV3Signal(signal)) {
+    return <EngineAV3SidePanel signal={signal} liveTick={liveTick} chartPayload={chartPayload} />;
+  }
   const factorScores = asRecord(signal?.factorScores);
   const diagnostics = asRecord(signal?.factorDiagnostics);
   const trendCoherence = asRecord(diagnostics.trendCoherence);

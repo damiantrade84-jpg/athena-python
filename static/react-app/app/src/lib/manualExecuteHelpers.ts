@@ -282,6 +282,13 @@ export function aiReviewWarningForExecute(review: AIChartReviewResponse | null):
 
 export function canExecuteEngineASignalTier(signal: EngineASignal | null): boolean {
   if (!signal) return false;
+  const isV3 = String(signal.engine || '').toUpperCase() === 'ENGINE_A_V3'
+    && String(signal.contractVersion || '').startsWith('3.');
+  if (isV3) {
+    return signal.decision === 'TRADE'
+      && signal.qualified === true
+      && signal.engineATradeEnabled === true;
+  }
   if (signal.engineATradeEnabled === false) return false;
   const tier = String(
     signal.signalTier || signal.scan_tier || signal.signalClass || '',
@@ -315,6 +322,9 @@ export function evaluateTvChartExecuteBlock(args: {
   if (signal.engineATradeEnabled === false) return 'Research-only';
   if (!canExecuteEngineASignalTier(signal)) return 'Watchlist only';
   if (isPaper) return 'Paper mode';
+  const isV3 = String(signal.engine || '').toUpperCase() === 'ENGINE_A_V3'
+    && String(signal.contractVersion || '').startsWith('3.');
+  if (isV3) return null;
   const reviewSymbolKey = normalizeSymbolKey(aiReview?.engine_a_context?.symbol);
   if (aiReview && reviewSymbolKey && chartSymbolKey && reviewSymbolKey !== chartSymbolKey) {
     return 'Review not current (symbol mismatch)';

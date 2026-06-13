@@ -75,6 +75,11 @@ def _paper_soak_blocks_real_orders(venue: str = "") -> bool:
 
 
 def _vision_blocks_execution(signal: dict[str, Any]) -> bool:
+    if (
+        str(signal.get("engine") or "").upper() == "ENGINE_A_V3"
+        and str(signal.get("contractVersion") or "").startswith("3.")
+    ):
+        return False
     candidates = [
         signal.get("vision_output"),
         signal.get("structured"),
