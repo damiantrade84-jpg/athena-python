@@ -609,6 +609,29 @@ ENGINE_A_DI_ALIGNMENT_MULT_BY_CLASS:
   stock: { missing: 1.0, balanced: 0.85, opposed: 0.65, severe_opposed: 0.35 }
   index: { missing: 1.0, balanced: 0.85, opposed: 0.65, severe_opposed: 0.35 }
 
+# ── Engine A entry-extension quality gate (cross-asset, 2026-06-13) ───────────
+# Deterministic version of the AI playbook's "extended / late entry" test: how
+# far the H4 close sits BEYOND the EMA50 anchor in ATR units, measured in the
+# trade direction. Chasing entries (large positive extension) are penalised;
+# pullback / at-value entries (price on the value side of EMA50, or within
+# NEAR_ATR) are not. Multiplier ∈ [MIN_MULT, 1.0] — never raises a score.
+# Fail-open (1.0) when EMA50 / ATR / close are unavailable. Applies to ALL
+# asset classes. Targets the late-entry → stop-out pattern (frozen Engine A
+# backtest: 69% SL, avg MFE ~+1R then reverse). PROVISIONAL thresholds — under
+# frozen-backtest calibration (2026-05-30 layer); reversible via ENABLED:false.
+# factor_scoring._entry_extension_multiplier consumes this block.
+ENGINE_A_ENTRY_EXTENSION_GATE:
+  ENABLED: true
+  NEAR_ATR: 2.0     # no penalty up to this extension beyond EMA50
+  FAR_ATR: 4.0      # full MIN_MULT penalty at/beyond this extension
+  MIN_MULT: 0.5     # strongest penalty for severely extended (chasing) entries
+  BY_CLASS:
+    forex:     { NEAR_ATR: 1.5, FAR_ATR: 3.5, MIN_MULT: 0.50 }
+    crypto:    { NEAR_ATR: 2.5, FAR_ATR: 5.0, MIN_MULT: 0.50 }
+    commodity: { NEAR_ATR: 2.0, FAR_ATR: 4.5, MIN_MULT: 0.55 }
+    index:     { NEAR_ATR: 1.8, FAR_ATR: 3.8, MIN_MULT: 0.50 }
+    stock:     { NEAR_ATR: 2.0, FAR_ATR: 4.5, MIN_MULT: 0.50 }
+
 # ── 2026 Engine A Group Calibration Review — Indicator Periods ────────────────
 # These maps extend the proven ENGINE_A_*_BY_CLASS resolver pattern (see
 # factor_scoring.py _resolve_class_keyed + _engine_a_group_adjustments_enabled)

@@ -1823,6 +1823,63 @@ def _apply_forex_ema_cluster_penalty(
     return 1.0, cap, True, "ema_cluster_soft_cap"
 
 
+def _resolve_entry_extension_params(
+    cfg: dict, score_group: str | None, asset_type: str
+) -> tuple[float, float, float]:
+    """Resolve (near_atr, far_atr, min_mult) for the entry-extension gate."""
+    near = _float_cfg(cfg.get("NEAR_ATR"), 2.0)
+    far = _float_cfg(cfg.get("FAR_ATR"), 4.0)
+    min_mult = _float_cfg(cfg.get("MIN_MULT"), 0.5)
+    by_class = cfg.get("BY_CLASS")
+    override = _resolve_class_keyed(by_class, score_group, asset_type, None)
+    if isinstance(override, dict):
+        near = _float_cfg(override.get("NEAR_ATR"), near)
+        far = _float_cfg(override.get("FAR_ATR"), far)
+        min_mult = _float_cfg(override.get("MIN_MULT"), min_mult)
+    return near, far, max(0.0, min(1.0, min_mult))
+
+
+def _entry_extension_multiplier(
+    h4_snap: dict,
+    atr: float | None,
+    direction: str,
+    score_group: str | None,
+    asset_type: str,
+) -> tuple[float, dict]:
+    """Cross-asset entry-extension quality penalty (config-gated, all classes).
+
+    Deterministic version of the AI playbook's "extended/late entry" test: how
+    far the H4 close sits beyond the EMA50 anchor in ATR units, measured in the
+    trade direction. Chasing entries (large positive extension) are penalised;
+    pullback / at-value entries (price on the value side of EMA50, or within
+    NEAR_ATR) are not. Targets the late-entry → stop-out pattern. Multiplier is
+    bounded to [MIN_MULT, 1.0] — it never raises a score. Fail-open (1.0) when
+    EMA50 / ATR / close are unavailable.
+    """
+    cfg = CONFIG.get("ENGINE_A_ENTRY_EXTENSION_GATE") or {}
+    detail = {"enabled": False, "ext_atr": None, "multiplier": 1.0}
+    if not isinstance(cfg, dict) or not bool(cfg.get("ENABLED", False)):
+        return 1.0, detail
+    close = _safe_indicator_float(h4_snap.get("close"))
+    ema50 = _safe_indicator_float(h4_snap.get("ema50"))
+    a = _safe_indicator_float(atr)
+    if close is None or ema50 is None or a is None or a <= 0 or direction not in ("LONG", "SHORT"):
+        return 1.0, detail
+    near, far, min_mult = _resolve_entry_extension_params(cfg, score_group, asset_type)
+    ext_atr = (close - ema50) / a if direction == "LONG" else (ema50 - close) / a
+    detail.update({"enabled": True, "ext_atr": round(ext_atr, 4)})
+    if ext_atr <= near:
+        return 1.0, detail
+    if far <= near or ext_atr >= far:
+        mult = min_mult
+    else:
+        t = (ext_atr - near) / (far - near)
+        mult = 1.0 + t * (min_mult - 1.0)
+    mult = max(min_mult, min(1.0, mult))
+    detail["multiplier"] = round(mult, 4)
+    return mult, detail
+
+
 def _h4_volume_vs_ma(h4_candles: list | None, lookback: int) -> tuple[float | None, float | None]:
     """Return (latest_volume, volume_ma) from H4 candle volume series."""
     if not isinstance(h4_candles, list) or not h4_candles:
@@ -3504,6 +3561,17 @@ def compute_factor_scores(
         except (TypeError, ValueError):
             pass
 
+    # ── Entry-extension quality gate (cross-asset, config-gated) ──────────────
+    # Penalise entries that chase price far from the EMA50 anchor in ATR units;
+    # pullback / at-value entries are unpenalised. Never raises score.
+    entry_ext_mult, entry_ext_detail = _entry_extension_multiplier(
+        h4_snap, _atr, direction, score_group, asset_type
+    )
+    if entry_ext_detail.get("enabled"):
+        feed_status["entry_ext"] = f"{entry_ext_mult:.2f}"
+        if entry_ext_mult < 1.0:
+            feed_status["entry_extended"] = str(entry_ext_detail.get("ext_atr"))
+
     base_score = (
         abs(trend_score)
         * adx_mult
@@ -3514,6 +3582,7 @@ def compute_factor_scores(
         * di_align_mult
         * dir_ramp_mult
         * vwap_mult
+        * entry_ext_mult
         * (1.0 - _cost_penalty)
     )
 
@@ -3686,6 +3755,7 @@ def compute_factor_scores(
         "di_align": di_align_mult,
         "dir_ramp": dir_ramp_mult,
         "vwap": vwap_mult,
+        "entry_ext": entry_ext_mult,
         "cost": 1.0 - _cost_penalty,
         "ema_cluster": ema_cluster_penalty_mult,
         "crypto_late_trend": _late_trend_mult,
