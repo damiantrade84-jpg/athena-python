@@ -98,6 +98,19 @@ ENGINE_A_V3_BACKTEST:
 # This does not force TRADE decisions and cannot pass the V3 live/autopilot guards.
 ENGINE_A_V3_DEMO_UNVALIDATED_ENABLED: true
 
+# Per-group thesis for the v3 forex specialist: "trend" (default, unchanged) or
+# "mean_reversion" (range-fade, counter-trend). Reversible via this key.
+ENGINE_A_V3_FOREX_THESIS: trend
+# Forex setup selector: "trend" (breakout/pullback) or "london_open" (Asian IB breakout).
+ENGINE_A_V3_FOREX_SETUP: trend
+ENGINE_A_V3_SESSION_SCORING:
+  ENABLED: false
+  MIN_SCORE: 0.35
+ENGINE_A_V3_MEAN_REVERSION:
+  Z_ENTRY: 1.5
+  EFF_MAX: 0.35
+  LOOKBACK: 20
+
 # Per-TF candle freshness diagnostic (stalenessSeverity, bucketLag, etc.).
 # Always populated for production visibility (unlike candleMeta which is debug-only).
 CANDLE_FRESHNESS_ENABLED: true

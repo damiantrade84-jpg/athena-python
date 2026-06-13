@@ -1614,6 +1614,15 @@ CONFIG: dict = {
         "MAX_HOLD_BARS": 24,
     },
     "ENGINE_A_V3_DEMO_UNVALIDATED_ENABLED": False,
+    # Per-group thesis selector for the v3 forex specialist. "trend" keeps the
+    # trend-pullback/breakout setups; "mean_reversion" swaps in the range-fade
+    # (counter-trend) specialist. Reversible; default preserves existing behavior.
+    "ENGINE_A_V3_FOREX_THESIS": "trend",
+    "ENGINE_A_V3_MEAN_REVERSION": {
+        "Z_ENTRY": 1.5,
+        "EFF_MAX": 0.35,
+        "LOOKBACK": 20,
+    },
     "ENGINE_A_SCORING_PROFILE": {
         "ENABLED": True,
         "DEFAULT_BY_CLASS": {

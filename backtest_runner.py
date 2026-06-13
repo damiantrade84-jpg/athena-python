@@ -494,15 +494,33 @@ def _crypto_bt_signal_candles(
     )
 
 
-def _backtest_candle_limits(days: int | None = None) -> dict[str, int]:
-    """Derive D1/H4/H1 fetch limits from BACKTEST_LOOKBACK_DAYS."""
+def _backtest_candle_limits(
+    days: int | None = None, *, asset_type: str | None = None
+) -> dict[str, int]:
+    """Derive D1/H4/H1 fetch limits from BACKTEST_LOOKBACK_DAYS.
+
+    Cash-session instruments (US single stocks, equity/bond ETFs) print far fewer
+    intraday bars per trading day than 24h markets, so the fixed H4/H1 bar caps
+    reach back several years while the D1 cap (~days trading-days) only spans
+    ~1.5y. That left the older ~64% of stock H4 decision bars with no preceding
+    D1 candle in the backtest prefix -> Engine A v3 evaluator ``d1_candles_missing``
+    -> dropped before any setup ran (backtest-only; live sees a full D1 series).
+    For those instruments raise the D1 cap so D1 spans at least the H4 window.
+    """
     days = int(days if days is not None else CONFIG.get("BACKTEST_LOOKBACK_DAYS", 730))
     days = max(120, min(days, 730))
+    h4 = math.ceil(days * 6) + 50
+    h1 = math.ceil(days * 24) + 50
+    d1 = days + 20
+    if str(asset_type or "").lower() in {"stock", "etf", "etf_bond"}:
+        # ~2-3 H4 bars per cash-session day -> the H4 cap spans ~h4/2 trading
+        # days; size D1 to cover that span plus the 60-bar trend-context warmup.
+        d1 = max(d1, math.ceil(h4 / 2) + 60)
     return {
         "days": days,
-        "d1": days + 20,
-        "h4": math.ceil(days * 6) + 50,
-        "h1": math.ceil(days * 24) + 50,
+        "d1": d1,
+        "h4": h4,
+        "h1": h1,
     }
 
 
@@ -1733,7 +1751,7 @@ def _records_for_meta(
     return records
 
 
-def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200, folds=3):
+def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200, folds=3, collect_funnel=False):
     """Walk-forward backtest on D1/H4 bars with slippage, regime tagging, and Monte Carlo DD simulation."""
 
     requested_style = _normalize_style(style)
@@ -1765,7 +1783,7 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
             ]
 
         _ptype = pair.get("type", "")
-        _bt_limits = _backtest_candle_limits()
+        _bt_limits = _backtest_candle_limits(asset_type=_ptype)
         _log_backtest_lookback(_bt_limits)
 
         if pair["source"] == "binance":
@@ -1959,6 +1977,7 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
         slippage_bps=float(_v3_costs.get("SLIPPAGE_BPS", 1.0)),
         swap_bps_per_day=float(_v3_costs.get("SWAP_BPS_PER_DAY", 0.5)),
         max_hold_bars=int(_v3_costs.get("MAX_HOLD_BARS", 24)),
+        collect_funnel=collect_funnel,
     )
 
     bt_vectorized = bool(CONFIG.get("BT_VECTORIZED", False))
