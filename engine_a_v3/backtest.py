@@ -8,8 +8,6 @@ from engine_a_v3.diagnostics import reverse_direction_result_r, trade_path_diagn
 from engine_a_v3.evaluator import evaluate_engine_a_v3
 from engine_a_v3.promotion import PromotionRegistry
 from engine_a_v3.setups import _efficiency_ratio
-from indicators import calc_indicators
-from regime import detect_regime
 
 
 def _cost_r(
@@ -217,10 +215,13 @@ def run_v3_backtest(
         h4_prefix = prefix.get("H4") or []
         regime_label = "unknown"
         if len(h4_prefix) >= 20:
-            snap = calc_indicators(h4_prefix).get("snap") or {}
-            regime_label = str(
-                detect_regime(snap, str(pair.get("type") or "forex")).get("regime") or "unknown"
-            ).lower()
+            h4_eff, _ = _efficiency_ratio(h4_prefix, 20)
+            if h4_eff >= 0.3:
+                regime_label = "trending"
+            elif h4_eff <= 0.2:
+                regime_label = "ranging"
+            else:
+                regime_label = "neutral"
         efficiency_at_entry, _ = _efficiency_ratio(primary[: index + 1], 20)
         trades.append(
             {
