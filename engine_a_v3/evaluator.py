@@ -10,10 +10,14 @@ from engine_a_v3.contract import (
     DataFreshness,
     EngineASetupSignal,
 )
-from engine_a_v3.levels import build_structural_levels
+from engine_a_v3.levels import (
+    build_london_open_breakout_levels,
+    build_mean_reversion_levels,
+    build_structural_levels,
+)
 from engine_a_v3.promotion import PromotionRegistry, production_registry
 from engine_a_v3.routing import route_specialist
-from engine_a_v3.setups import detect_setup
+from engine_a_v3.setups import SetupCandidate, detect_setup
 
 
 def _parse_time(value: Any) -> datetime | None:
@@ -157,16 +161,44 @@ def evaluate_engine_a_v3(
         )
 
     candidate = detect_setup(route, normalized_horizon, candles)
+    if (
+        route.family == "forex"
+        and candidate.level_style == "london_open"
+        and candidate.decision == "TRADE"
+    ):
+        from config import CONFIG
+
+        scoring_cfg = CONFIG.get("ENGINE_A_V3_SESSION_SCORING") or {}
+        if bool(scoring_cfg.get("ENABLED", False)):
+            from engine_a_v3.session_scoring import session_score_passes
+
+            min_score = float(scoring_cfg.get("MIN_SCORE", 0.35))
+            if not session_score_passes(primary, direction=candidate.direction, min_score=min_score):
+                candidate = SetupCandidate(
+                    candidate.setup_id,
+                    "NO_SIGNAL",
+                    candidate.direction,
+                    candidate.predicates,
+                    tuple(
+                        dict.fromkeys(
+                            candidate.rejection_reasons + ("session_context_score_below_min",)
+                        )
+                    ),
+                    candidate.level_style,
+                )
     promotion = (registry or production_registry()).resolve(
         route,
         normalized_horizon,
         symbol=symbol,
     )
-    levels = (
-        build_structural_levels(primary, direction=candidate.direction)
-        if candidate.direction in {"LONG", "SHORT"}
-        else None
-    )
+    levels = None
+    if candidate.direction in {"LONG", "SHORT"}:
+        if candidate.level_style == "mean_reversion":
+            levels = build_mean_reversion_levels(primary, direction=candidate.direction)
+        elif candidate.level_style == "london_open":
+            levels = build_london_open_breakout_levels(primary, direction=candidate.direction)
+        else:
+            levels = build_structural_levels(primary, direction=candidate.direction)
     rejection_reasons = list(candidate.rejection_reasons)
     decision = candidate.decision
     if levels is None and decision != "NO_SIGNAL":

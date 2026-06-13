@@ -4,8 +4,12 @@ from math import sqrt
 from statistics import fmean, stdev
 
 from engine_a_v3.contract import CONTRACT_VERSION
+from engine_a_v3.diagnostics import reverse_direction_result_r, trade_path_diagnostics
 from engine_a_v3.evaluator import evaluate_engine_a_v3
 from engine_a_v3.promotion import PromotionRegistry
+from engine_a_v3.setups import _efficiency_ratio
+from indicators import calc_indicators
+from regime import detect_regime
 
 
 def _cost_r(
@@ -97,6 +101,7 @@ def run_v3_backtest(
     swap_bps_per_day: float,
     max_hold_bars: int = 24,
     start_index: int | None = None,
+    collect_funnel: bool = False,
 ) -> dict:
     primary_tf = "H1" if horizon == "intraday" else "H4"
     primary = list(candles.get(primary_tf) or [])
@@ -140,11 +145,12 @@ def run_v3_backtest(
             else max(min(bar_open, zone_high), zone_low)
         )
         sl = float(signal.sl)
-        tp = float(signal.tp2 or signal.tp1)
+        tp1 = float(signal.tp1) if signal.tp1 is not None else None
+        tp2 = float(signal.tp2 or signal.tp1)
         direction = str(signal.direction)
-        if direction == "LONG" and not (sl < entry < tp):
+        if direction == "LONG" and not (sl < entry < tp2):
             continue
-        if direction == "SHORT" and not (sl > entry > tp):
+        if direction == "SHORT" and not (sl > entry > tp2):
             continue
         risk = abs(entry - sl)
         if risk <= 0:
@@ -157,8 +163,12 @@ def run_v3_backtest(
             high = float(bar["high"])
             low = float(bar["low"])
             sl_hit = low <= sl if direction == "LONG" else high >= sl
-            tp_hit = high >= tp if direction == "LONG" else low <= tp
-            if sl_hit and tp_hit:
+            tp1_hit = (
+                tp1 is not None
+                and (high >= tp1 if direction == "LONG" else low <= tp1)
+            )
+            tp2_hit = high >= tp2 if direction == "LONG" else low <= tp2
+            if sl_hit and (tp1_hit or tp2_hit):
                 same_bar += 1
                 outcome = "SL"
                 result_r = -1.0
@@ -169,9 +179,14 @@ def run_v3_backtest(
                 result_r = -1.0
                 exit_index = probe_index
                 break
-            if tp_hit:
+            if tp2_hit:
                 outcome = "TP2"
-                result_r = abs(tp - entry) / risk
+                result_r = abs(tp2 - entry) / risk
+                exit_index = probe_index
+                break
+            if tp1_hit:
+                outcome = "TP1"
+                result_r = abs(tp1 - entry) / risk
                 exit_index = probe_index
                 break
         if outcome == "TIMEOUT":
@@ -179,7 +194,7 @@ def run_v3_backtest(
             signed = close - entry if direction == "LONG" else entry - close
             result_r = signed / risk
         holding_bars = max(1, exit_index - index)
-        result_r -= _cost_r(
+        cost_r = _cost_r(
             entry,
             sl,
             spread_bps=spread_bps,
@@ -189,6 +204,24 @@ def run_v3_backtest(
             holding_bars=holding_bars,
             horizon=horizon,
         )
+        result_r -= cost_r
+        future_window = primary[index + 1 : exit_index + 1]
+        path = trade_path_diagnostics(
+            future_window,
+            direction=direction,
+            entry=entry,
+            sl=sl,
+            tp1=tp1,
+            tp2=tp2,
+        )
+        h4_prefix = prefix.get("H4") or []
+        regime_label = "unknown"
+        if len(h4_prefix) >= 20:
+            snap = calc_indicators(h4_prefix).get("snap") or {}
+            regime_label = str(
+                detect_regime(snap, str(pair.get("type") or "forex")).get("regime") or "unknown"
+            ).lower()
+        efficiency_at_entry, _ = _efficiency_ratio(primary[: index + 1], 20)
         trades.append(
             {
                 "date": signal.decisionTime,
@@ -196,12 +229,60 @@ def run_v3_backtest(
                 "setupId": signal.setupId,
                 "entry": round(entry, 8),
                 "sl": round(sl, 8),
-                "tp": round(tp, 8),
+                "tp1": round(tp1, 8) if tp1 is not None else None,
+                "tp": round(tp2, 8),
                 "outcome": outcome,
                 "resultR": round(result_r, 4),
+                "reverseResultR": reverse_direction_result_r(
+                    future_window,
+                    direction=direction,
+                    entry=entry,
+                    sl=sl,
+                    tp=tp2,
+                    cost_r=cost_r,
+                ),
+                "max_favorable_excursion_r": path["max_favorable_excursion_r"],
+                "max_adverse_excursion_r": path["max_adverse_excursion_r"],
+                "regime": regime_label,
+                "efficiencyAtEntry": round(efficiency_at_entry, 4),
                 "signalId": signal.signalId,
                 "oos": True,
             }
         )
         next_available_index = exit_index + 1
-    return _summarize(pair, horizon, trades, same_bar)
+
+    result = _summarize(pair, horizon, trades, same_bar)
+    if collect_funnel:
+        # Diagnostic: re-walk every bar (ignoring the post-trade cooldown) to attribute
+        # why trades are scarce — data depth vs decision distribution vs which gate fires.
+        decisions = {"TRADE": 0, "WATCH": 0, "NO_SIGNAL": 0}
+        qualified = 0
+        reasons: dict[str, int] = {}
+        evaluated = 0
+        for index in range(min_index, len(primary) - 1):
+            cutoff = primary[index].get("time")
+            prefix = {
+                timeframe: [
+                    candle
+                    for candle in rows
+                    if str(candle.get("time") or candle.get("datetime")) <= str(cutoff)
+                ]
+                for timeframe, rows in candles.items()
+            }
+            sig = evaluate_engine_a_v3(pair, prefix, horizon=horizon, registry=registry)
+            decisions[sig.decision] = decisions.get(sig.decision, 0) + 1
+            qualified += 1 if sig.qualified else 0
+            for reason in sig.rejectionReasons:
+                reasons[reason] = reasons.get(reason, 0) + 1
+            evaluated += 1
+        result["funnel"] = {
+            "primaryTf": primary_tf,
+            "dataDepth": {tf: len(rows) for tf, rows in candles.items()},
+            "minIndexWarmup": min_index,
+            "barsEvaluated": evaluated,
+            "decisions": decisions,
+            "qualified": qualified,
+            "tradesTaken": len(trades),
+            "topRejectionReasons": dict(sorted(reasons.items(), key=lambda kv: -kv[1])[:15]),
+        }
+    return result

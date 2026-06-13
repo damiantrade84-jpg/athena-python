@@ -113,6 +113,11 @@ class SpecialistRoute:
     def setup_ids(self, horizon: str) -> tuple[str, ...]:
         h = str(horizon).lower()
         if self.family == "forex":
+            from config import CONFIG
+
+            setup_mode = str(CONFIG.get("ENGINE_A_V3_FOREX_SETUP", "trend") or "trend").lower()
+            if setup_mode == "london_open" and h == "intraday":
+                return ("fx_london_open_breakout",)
             return (
                 ("fx_session_breakout_retest", "fx_trend_pullback")
                 if h == "intraday"

@@ -7,6 +7,13 @@ from typing import Any, Iterable
 
 from engine_a_v3.contract import PredicateResult
 from engine_a_v3.routing import SpecialistRoute
+from engine_a_v3.session_forex import (
+    asian_session_range,
+    in_london_open_window,
+    parse_utc,
+    session_quality_score,
+    volume_spike_ratio,
+)
 
 
 @dataclass(frozen=True)
@@ -16,6 +23,7 @@ class SetupCandidate:
     direction: str | None
     predicates: tuple[PredicateResult, ...]
     rejection_reasons: tuple[str, ...]
+    level_style: str = "trend"  # "trend" | "mean_reversion" | "london_open"
 
 
 def _ema(values: Iterable[float], period: int) -> list[float]:
@@ -362,19 +370,31 @@ def _opening_range_gap_candidate(
     return SetupCandidate(setup_id, "NO_SIGNAL", direction, predicates, reasons)
 
 
+def _efficiency_ratio(primary: list[dict], window: int = 20) -> tuple[float, float]:
+    """Kaufman efficiency ratio over the last `window` closes.
+
+    Returns (efficiency, net_change). efficiency = |net move| / path length in
+    [0, 1]; high = persistent/trending, low = choppy/mean-reverting. `net` is
+    returned so callers can also test directional alignment.
+    """
+    closes = [float(candle["close"]) for candle in primary[-window:]]
+    if len(closes) < 2:
+        return 0.0, 0.0
+    path = sum(abs(current - previous) for previous, current in zip(closes[:-1], closes[1:]))
+    net = closes[-1] - closes[0]
+    return (abs(net) / path if path > 0 else 0.0), net
+
+
 def _with_relative_strength(
     candidate: SetupCandidate,
     primary: list[dict],
 ) -> SetupCandidate:
-    closes = [float(candle["close"]) for candle in primary[-20:]]
-    path = sum(abs(current - previous) for previous, current in zip(closes[:-1], closes[1:]))
-    net = closes[-1] - closes[0] if len(closes) >= 2 else 0.0
-    efficiency = abs(net) / path if path > 0 else 0.0
+    efficiency, net = _efficiency_ratio(primary, 20)
     aligned = (
         (candidate.direction == "LONG" and net > 0)
         or (candidate.direction == "SHORT" and net < 0)
     )
-    passed = len(closes) == 20 and aligned and efficiency >= 0.35
+    passed = len(primary) >= 20 and aligned and efficiency >= 0.35
     predicates = candidate.predicates + (
         _predicate(
             "relative_strength_efficiency_20",
@@ -404,6 +424,134 @@ def _with_relative_strength(
     )
 
 
+def _mean_reversion_candidate(
+    setup_id: str,
+    primary: list[dict],
+    *,
+    z_entry: float = 1.5,
+    eff_max: float = 0.35,
+    lookback: int = 20,
+) -> SetupCandidate:
+    """Range-fade specialist: in a ranging (low-efficiency) regime, fade a stretch
+    away from the EMA20 mean once the candle turns back toward it. Direction is the
+    OPPOSITE of the stretch — counter-trend by design, unlike the trend specialists.
+    """
+    if len(primary) < 60:
+        return SetupCandidate(
+            setup_id, "NO_SIGNAL", None,
+            (_predicate("primary_history", False, len(primary), "at least 60 bars"),),
+            ("insufficient_primary_history",), "mean_reversion",
+        )
+    closes = [float(candle["close"]) for candle in primary]
+    ema20 = _ema(closes, 20)
+    atr = _atr(primary)
+    efficiency, _ = _efficiency_ratio(primary, lookback)
+    if atr <= 0:
+        return SetupCandidate(
+            setup_id, "NO_SIGNAL", None,
+            (_predicate("atr_valid", False, atr, "> 0"),),
+            ("atr_invalid",), "mean_reversion",
+        )
+    current = primary[-1]
+    previous = primary[-2]
+    close = float(current["close"])
+    open_ = float(current["open"])
+    prev_close = float(previous["close"])
+    mean = ema20[-1]
+    z = (close - mean) / atr
+    ranging = efficiency <= eff_max
+    direction = "SHORT" if z >= z_entry else "LONG" if z <= -z_entry else None
+    reversal = (
+        (direction == "SHORT" and close < open_ and close < prev_close)
+        or (direction == "LONG" and close > open_ and close > prev_close)
+    )
+    predicates = (
+        _predicate("ranging_regime", ranging, round(efficiency, 4), f"efficiency <= {eff_max:.2f}"),
+        _predicate("stretch_from_mean", direction is not None, round(z, 4), f"|z| >= {z_entry:.2f}"),
+        _predicate("reversal_confirmation", bool(reversal), close, "candle turns toward mean"),
+    )
+    if direction is not None and ranging and reversal:
+        return SetupCandidate(setup_id, "TRADE", direction, predicates, (), "mean_reversion")
+    if direction is not None and ranging:
+        return SetupCandidate(
+            setup_id, "WATCH", direction, predicates,
+            ("reversal_confirmation_missing",), "mean_reversion",
+        )
+    reasons = tuple(predicate.name for predicate in predicates if not predicate.passed)
+    return SetupCandidate(setup_id, "NO_SIGNAL", direction, predicates, reasons, "mean_reversion")
+
+
+def _london_open_breakout_candidate(
+    setup_id: str,
+    primary: list[dict],
+) -> SetupCandidate:
+    """Asian range breakout during London open with tick-volume confirmation."""
+    if len(primary) < 80:
+        return SetupCandidate(
+            setup_id,
+            "NO_SIGNAL",
+            None,
+            (_predicate("primary_history", False, len(primary), "at least 80 bars"),),
+            ("insufficient_primary_history",),
+            "london_open",
+        )
+    as_of = parse_utc(primary[-1].get("time") or primary[-1].get("datetime"))
+    if as_of is None:
+        return SetupCandidate(
+            setup_id,
+            "NO_SIGNAL",
+            None,
+            (_predicate("timestamp_valid", False, None, "parseable UTC time"),),
+            ("timestamp_invalid",),
+            "london_open",
+        )
+    asian = asian_session_range(primary, as_of=as_of)
+    if asian is None:
+        return SetupCandidate(
+            setup_id,
+            "NO_SIGNAL",
+            None,
+            (_predicate("asian_range", False, None, "Asian session 00:00-07:00 UTC"),),
+            ("asian_range_missing",),
+            "london_open",
+        )
+    current = primary[-1]
+    close = float(current["close"])
+    long_break = close > asian.high
+    short_break = close < asian.low
+    direction = "LONG" if long_break else "SHORT" if short_break else None
+    vol_ratio = volume_spike_ratio(primary)
+    vol_ok = vol_ratio >= 1.5
+    session_ok = in_london_open_window(as_of)
+    quality, quality_label = session_quality_score(as_of)
+    quality_ok = quality >= 0.75
+    predicates = (
+        _predicate("asian_range_defined", True, round(asian.high - asian.low, 6), "> 0"),
+        _predicate("london_open_window", session_ok, as_of.isoformat(), "07:00-08:30 UTC"),
+        _predicate("session_quality", quality_ok, quality_label, ">= 0.75 gate"),
+        _predicate(
+            "breakout_direction",
+            direction is not None,
+            close,
+            f"[{asian.low}, {asian.high}]",
+        ),
+        _predicate("volume_spike", vol_ok, round(vol_ratio, 4), ">= 1.5x 20-bar mean"),
+    )
+    if direction and session_ok and quality_ok and vol_ok:
+        return SetupCandidate(setup_id, "TRADE", direction, predicates, (), "london_open")
+    if direction and session_ok and quality_ok:
+        return SetupCandidate(
+            setup_id,
+            "WATCH",
+            direction,
+            predicates,
+            ("volume_spike_missing",),
+            "london_open",
+        )
+    reasons = tuple(predicate.name for predicate in predicates if not predicate.passed)
+    return SetupCandidate(setup_id, "NO_SIGNAL", direction, predicates, reasons, "london_open")
+
+
 def detect_setup(
     route: SpecialistRoute,
     horizon: str,
@@ -423,19 +571,37 @@ def detect_setup(
     setup_ids = route.setup_ids(horizon)
 
     if route.family == "forex":
-        candidates = (
-            _with_session_gate(
-                _breakout_retest_candidate(
-                    setup_ids[0],
+        from config import CONFIG
+
+        thesis = str(CONFIG.get("ENGINE_A_V3_FOREX_THESIS", "trend") or "trend").lower()
+        setup_mode = str(CONFIG.get("ENGINE_A_V3_FOREX_SETUP", "trend") or "trend").lower()
+        if thesis == "mean_reversion":
+            mr = CONFIG.get("ENGINE_A_V3_MEAN_REVERSION") or {}
+            candidates = (
+                _mean_reversion_candidate(
+                    "fx_range_mean_reversion",
                     primary,
-                    context,
-                    require_contraction=False,
+                    z_entry=float(mr.get("Z_ENTRY", 1.5)),
+                    eff_max=float(mr.get("EFF_MAX", 0.35)),
+                    lookback=int(mr.get("LOOKBACK", 20)),
                 ),
-                primary,
-                route,
-            ),
-            _pullback_candidate(setup_ids[-1], primary, context),
-        )
+            )
+        elif setup_mode == "london_open":
+            candidates = (_london_open_breakout_candidate("fx_london_open_breakout", primary),)
+        else:
+            candidates = (
+                _with_session_gate(
+                    _breakout_retest_candidate(
+                        setup_ids[0],
+                        primary,
+                        context,
+                        require_contraction=False,
+                    ),
+                    primary,
+                    route,
+                ),
+                _pullback_candidate(setup_ids[-1], primary, context),
+            )
     elif route.family == "crypto":
         candidates = (
             _breakout_retest_candidate(setup_ids[0], primary, context, require_contraction=True),
