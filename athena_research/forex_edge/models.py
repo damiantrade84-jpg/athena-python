@@ -73,15 +73,11 @@ def _json_safe(value: Any) -> Any:
     if isinstance(value, Mapping):
         result: dict[str, Any] = {}
         for key, item in value.items():
-            safe_key = _json_safe(key)
-            if (
-                not isinstance(safe_key, (str, int, float, bool))
-                and safe_key is not None
-            ):
+            if not isinstance(key, str):
                 raise InvalidResearchInputError(
-                    f"unsupported JSON mapping key type: {type(key).__name__}"
+                    "JSON-safe mapping keys must be strings"
                 )
-            result[str(safe_key)] = _json_safe(item)
+            result[key] = _json_safe(item)
         return result
     if isinstance(value, (list, tuple)):
         return [_json_safe(item) for item in value]

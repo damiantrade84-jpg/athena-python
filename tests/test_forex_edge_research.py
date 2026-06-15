@@ -203,6 +203,28 @@ def test_json_safe_serialization_rejects_unsupported_types() -> None:
         result.to_dict()
 
 
+@pytest.mark.parametrize(
+    "mapping",
+    [
+        {1: "integer", "1": "string"},
+        {True: "boolean", "True": "string"},
+        {False: "boolean", "False": "string"},
+    ],
+)
+def test_json_safe_serialization_rejects_nonstring_mapping_keys(
+    mapping: dict[object, str],
+) -> None:
+    from athena_research.forex_edge.models import InvalidResearchInputError
+
+    result = _study_result(
+        production_eligible=False,
+        metrics={"mapping": mapping},
+    )
+
+    with pytest.raises(InvalidResearchInputError, match="mapping keys"):
+        result.to_dict()
+
+
 def test_json_safe_serialization_sorts_sets_deterministically() -> None:
     first = _study_result(
         production_eligible=False,
