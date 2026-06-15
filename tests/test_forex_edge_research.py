@@ -736,6 +736,86 @@ def test_dukascopy_allows_explicit_column_mapping(tmp_path: Path) -> None:
     assert bars.loc[0, "bid_open"] == pytest.approx(1.2)
 
 
+def test_portfolio_signals_use_only_available_values_and_do_not_impute() -> None:
+    from athena_research.forex_edge.portfolio.signals import (
+        carry_proxy_scores,
+        momentum_12_1_scores,
+        reer_value_5y_scores,
+    )
+
+    decision = pd.Timestamp("2020-01-31 23:59:59Z")
+    rates = pd.DataFrame(
+        {
+            "currency": ["EUR", "GBP", "JPY"],
+            "timestamp": pd.to_datetime(
+                ["2020-01-30", "2020-01-30", "2020-01-30"],
+                utc=True,
+            ),
+            "available_time": pd.to_datetime(
+                ["2020-01-31", "2020-01-31", "2020-02-03"],
+                utc=True,
+            ),
+            "value": [1.0, 2.0, -0.1],
+            "unit": ["Percent", "Percent", "Percent"],
+            "availability_verified": [True, True, True],
+        }
+    )
+    carry = carry_proxy_scores(rates, decision)
+    assert carry.to_dict() == {"EUR": 0.01, "GBP": 0.02}
+    assert "JPY" not in carry
+
+    dates = pd.date_range("2018-01-31", periods=25, freq="ME", tz="UTC")
+    returns = pd.DataFrame(
+        {
+            "timestamp": list(dates) * 2,
+            "currency": ["EUR"] * len(dates) + ["GBP"] * len(dates),
+            "return": [0.01] * len(dates)
+            + [0.02] * (len(dates) - 2)
+            + [float("nan")]
+            + [0.02],
+            "available_time": list(dates) * 2,
+        }
+    )
+    momentum = momentum_12_1_scores(returns, dates[-1] + pd.Timedelta(days=1))
+    assert momentum["EUR"] == pytest.approx((1.01**11) - 1)
+    assert "GBP" not in momentum
+
+    reer_dates = pd.date_range("2015-01-31", periods=61, freq="ME", tz="UTC")
+    reer = pd.DataFrame(
+        {
+            "timestamp": list(reer_dates) * 2,
+            "available_time": list(reer_dates) * 2,
+            "currency": ["EUR"] * 61 + ["GBP"] * 61,
+            "value": [100.0] * 60 + [90.0] + [100.0] * 60 + [float("nan")],
+        }
+    )
+    value = reer_value_5y_scores(reer, reer_dates[-1])
+    assert value["EUR"] > 0
+    assert "GBP" not in value
+
+
+def test_centered_ranks_and_blend_preserve_missingness() -> None:
+    from athena_research.forex_edge.portfolio.signals import (
+        blend_rank_scores,
+        centered_rank_scores,
+    )
+
+    ranked = centered_rank_scores(
+        pd.Series({"EUR": 3.0, "GBP": 2.0, "JPY": 1.0})
+    )
+    assert ranked["EUR"] == pytest.approx(1.0)
+    assert ranked["JPY"] == pytest.approx(-1.0)
+
+    blend = blend_rank_scores(
+        {
+            "carry": pd.Series({"EUR": 1.0, "GBP": 0.0}),
+            "momentum": pd.Series({"EUR": 0.5, "GBP": -0.5}),
+            "value": pd.Series({"EUR": 0.0}),
+        }
+    )
+    assert blend.to_dict() == {"EUR": pytest.approx(0.5)}
+
+
 def test_validate_bid_ask_bars_requires_timestamp_and_executable_ohlc() -> None:
     from athena_research.forex_edge.models import ReasonCode
     from athena_research.forex_edge.quality import validate_bid_ask_bars
