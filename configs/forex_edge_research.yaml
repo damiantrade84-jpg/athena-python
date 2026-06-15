@@ -1,0 +1,115 @@
+schema_version: 1
+production_eligible: false
+universe:
+  pairs: [EURUSD, GBPUSD, USDJPY, AUDUSD, AUDCHF, AUDNZD, NZDUSD, EURGBP, USDCAD, USDCHF, EURJPY, GBPJPY, AUDJPY, EURAUD, GBPAUD, USDZAR, EURCHF, USDMXN, USDSGD, USDBRL, USDINR]
+sources:
+  bis:
+    base_url: https://stats.bis.org/api/v1/data/WS_EER_M
+    reer_series:
+      USD: M.R.B.US
+      EUR: M.R.B.XM
+      GBP: M.R.B.GB
+      JPY: M.R.B.JP
+      AUD: M.R.B.AU
+      CHF: M.R.B.CH
+      NZD: M.R.B.NZ
+      CAD: M.R.B.CA
+      ZAR: M.R.B.ZA
+      MXN: M.R.B.MX
+      SGD: M.R.B.SG
+      BRL: M.R.B.BR
+      INR: M.R.B.IN
+  cftc:
+    historical_url: https://www.cftc.gov/files/dea/history/deacot{year}.zip
+    mappings:
+      EUR: EURO FX
+      GBP: BRITISH POUND
+      JPY: JAPANESE YEN
+      AUD: AUSTRALIAN DOLLAR
+      CHF: SWISS FRANC
+      NZD: NEW ZEALAND DOLLAR
+      CAD: CANADIAN DOLLAR
+      MXN: MEXICAN PESO
+  fred:
+    api_base: https://api.stlouisfed.org/fred
+    api_key_env: FRED_API_KEY
+    spot_series:
+      EUR: {series_id: DEXUSEU, usd_per_currency: true}
+      GBP: {series_id: DEXUSUK, usd_per_currency: true}
+      JPY: {series_id: DEXJPUS, usd_per_currency: false}
+      AUD: {series_id: DEXUSAL, usd_per_currency: true}
+      CHF: {series_id: DEXSZUS, usd_per_currency: false}
+      NZD: {series_id: DEXUSNZ, usd_per_currency: true}
+      CAD: {series_id: DEXCAUS, usd_per_currency: false}
+      ZAR: {series_id: DEXSFUS, usd_per_currency: false}
+      MXN: {series_id: DEXMXUS, usd_per_currency: false}
+      SGD: {series_id: DEXSIUS, usd_per_currency: false}
+      BRL: {series_id: DEXBZUS, usd_per_currency: false}
+      INR: {series_id: DEXINUS, usd_per_currency: false}
+    rate_series:
+      USD: DFF
+      EUR: ECBDFR
+      GBP: IRSTCI01GBM156N
+      JPY: IRSTCI01JPM156N
+      AUD: IRSTCI01AUM156N
+      CHF: IRSTCI01CHM156N
+      NZD: IRSTCI01NZM156N
+      CAD: IRSTCI01CAM156N
+      ZAR: IRSTCI01ZAM156N
+      MXN: IRSTCI01MXM156N
+      BRL: IRSTCI01BRM156N
+      INR: IRSTCI01INM156N
+portfolio:
+  target_start: "2006-01-01"
+  development_end: "2018-12-31"
+  holdout_start: "2019-01-01"
+  min_currencies: 12
+  top_n: 4
+  momentum_lookback_months: 12
+  momentum_skip_months: 1
+  value_lookback_months: 60
+  vol_lookback_days: 63
+  annual_vol_target: 0.10
+  initial_gross: 1.0
+  max_gross: 2.0
+  max_currency_weight: 0.25
+  cost_multipliers: [1.0, 1.5, 2.0]
+  round_trip_bps: {major: 1.8, other: 4.1}
+  major_pairs: [EURUSD, GBPUSD, USDJPY, AUDUSD, NZDUSD, USDCAD, USDCHF]
+fixing:
+  target_start: "2015-01-01"
+  development_end: "2020-12-31"
+  holdout_start: "2021-01-01"
+  pairs: [EURUSD, GBPUSD, USDJPY]
+  commission_round_trip_bps: 0.6
+  cost_multipliers: [1.0, 1.5, 2.0]
+  anchors:
+    london: {timezone: Europe/London, hour: 16, minute: 0}
+    tokyo: {timezone: Asia/Tokyo, hour: 9, minute: 55}
+  windows:
+    pre_continuation:
+      observation_start_minutes: -30
+      signal_minutes: -15
+      entry_next_bar_minutes: 5
+      exit_minutes: 0
+    post_reversal:
+      observation_start_minutes: -15
+      signal_minutes: 0
+      entry_next_bar_minutes: 5
+      exit_minutes: 30
+quality:
+  # These limits must be pre-registered before empirical results are inspected.
+  # Null values keep fixture/parser loading available while empirical runs fail closed.
+  spot_staleness_days: null
+  rate_staleness_days: null
+  reer_staleness_days: null
+  m5_max_spread_bps: null
+validation:
+  bootstrap_block: 10
+  bootstrap_resamples: 5000
+  bootstrap_seed: 42
+  cscv_partitions: 16
+  dsr_z_min: 1.645
+  pbo_max: 0.50
+  concentration_max: 0.40
+  min_positive_holdout_years: 3
