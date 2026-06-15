@@ -29,6 +29,33 @@ class RawArtifact:
     retrieval_id: str
 
 
+def _validate_path_segment(name: str, value: object) -> str:
+    if not isinstance(value, str) or not value:
+        raise InvalidResearchInputError(
+            f"{name} must be a nonempty safe path segment"
+        )
+    path = Path(value)
+    unsafe = (
+        value in {".", ".."}
+        or "/" in value
+        or "\\" in value
+        or path.name != value
+        or path.is_absolute()
+        or bool(path.drive)
+        or bool(path.anchor)
+        or any(ord(character) < 32 or ord(character) == 127 for character in value)
+    )
+    if unsafe:
+        raise InvalidResearchInputError(
+            f"{name} must be a nonempty safe path segment"
+        )
+    return value
+
+
+def _publish_no_overwrite(temp: Path, target: Path) -> None:
+    os.link(temp, target)
+
+
 def _json_safe_scalar(value: Any) -> Any:
     if value is None or value is pd.NA or value is pd.NaT:
         return None
@@ -116,6 +143,8 @@ class ResearchStore:
         dataset: str,
         content: bytes,
     ) -> RawArtifact:
+        source = _validate_path_segment("source", source)
+        dataset = _validate_path_segment("dataset", dataset)
         digest = hashlib.sha256(content).hexdigest()
         retrieval_id = digest[:16]
         path = (
@@ -128,46 +157,66 @@ class ResearchStore:
         )
         path.parent.mkdir(parents=True, exist_ok=True)
         if path.exists():
-            try:
-                existing = path.read_bytes()
-            except OSError as exc:
-                raise RuntimeError(f"immutable raw conflict: {path}") from exc
-            if existing != content:
-                raise RuntimeError(f"immutable raw conflict: {path}")
+            self._verify_raw(path, content)
         else:
-            path.write_bytes(content)
+            temp = path.with_name(f".{path.name}.{uuid4().hex}.tmp")
+            try:
+                temp.write_bytes(content)
+                try:
+                    _publish_no_overwrite(temp, path)
+                except FileExistsError:
+                    self._verify_raw(path, content)
+            finally:
+                try:
+                    temp.unlink()
+                except FileNotFoundError:
+                    pass
         return RawArtifact(
             path=path,
             sha256=digest,
             retrieval_id=retrieval_id,
         )
 
+    def _verify_raw(self, path: Path, content: bytes) -> None:
+        try:
+            existing = path.read_bytes()
+        except OSError as exc:
+            raise RuntimeError(f"immutable raw conflict: {path}") from exc
+        if existing != content:
+            raise RuntimeError(f"immutable raw conflict: {path}")
+
     def _write_partition(self, path: Path, frame: pd.DataFrame) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         if path.exists():
-            try:
-                existing = pd.read_parquet(path)
-                matches = (
-                    canonical_frame_hash(existing)
-                    == canonical_frame_hash(frame)
-                )
-            except Exception as exc:
-                raise RuntimeError(
-                    f"immutable partition conflict: {path}"
-                ) from exc
-            if not matches:
-                raise RuntimeError(f"immutable partition conflict: {path}")
+            self._verify_partition(path, frame)
             return
 
         temp = path.with_name(f".{path.name}.{uuid4().hex}.tmp")
         try:
             frame.to_parquet(temp, index=False)
-            os.replace(temp, path)
+            try:
+                _publish_no_overwrite(temp, path)
+            except FileExistsError:
+                self._verify_partition(path, frame)
         finally:
             try:
                 temp.unlink()
             except FileNotFoundError:
                 pass
+
+    def _verify_partition(self, path: Path, frame: pd.DataFrame) -> None:
+        try:
+            existing = pd.read_parquet(path)
+            matches = (
+                canonical_frame_hash(existing)
+                == canonical_frame_hash(frame)
+            )
+        except Exception as exc:
+            raise RuntimeError(
+                f"immutable partition conflict: {path}"
+            ) from exc
+        if not matches:
+            raise RuntimeError(f"immutable partition conflict: {path}")
 
     def write_normalized(
         self,
@@ -180,6 +229,9 @@ class ResearchStore:
         raw_hashes: tuple[str, ...],
         metadata: dict[str, Any],
     ) -> DatasetManifest:
+        source = _validate_path_segment("source", source)
+        dataset = _validate_path_segment("dataset", dataset)
+        key = _validate_path_segment("key", key)
         if not frame.empty and "timestamp" not in frame.columns:
             raise ValueError("nonempty normalized frame requires timestamp")
         if "config_hash" not in metadata:
@@ -296,7 +348,18 @@ class ResearchStore:
                 + "\n",
                 encoding="utf-8",
             )
-            os.replace(temp, manifest_path)
+            try:
+                _publish_no_overwrite(temp, manifest_path)
+            except FileExistsError:
+                concurrent_manifest = self._read_manifest(manifest_path)
+                if (
+                    concurrent_manifest is None
+                    or concurrent_manifest.to_dict() != payload
+                ):
+                    raise RuntimeError(
+                        f"immutable manifest conflict: {manifest_path}"
+                    )
+                return concurrent_manifest
         finally:
             try:
                 temp.unlink()
@@ -324,6 +387,9 @@ class ResearchStore:
         key: str,
         version: str,
     ) -> pd.DataFrame:
+        dataset = _validate_path_segment("dataset", dataset)
+        key = _validate_path_segment("key", key)
+        version = _validate_path_segment("version", version)
         base = self.root / "normalized" / dataset / key / version
         paths = sorted(base.glob("*/data.parquet"))
         if not paths:
@@ -337,6 +403,7 @@ class ResearchStore:
         return pd.concat(frames, ignore_index=True)
 
     def run_dir(self, run_id: str) -> Path:
+        run_id = _validate_path_segment("run_id", run_id)
         path = self.root / "runs" / run_id
         path.mkdir(parents=True, exist_ok=True)
         return path

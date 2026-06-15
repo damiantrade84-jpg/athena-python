@@ -662,3 +662,114 @@ def test_canonical_frame_hash_normalizes_numpy_datetime64_ns() -> None:
     assert canonical_frame_hash(numpy_frame) == canonical_frame_hash(
         pandas_frame
     )
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "",
+        ".",
+        "..",
+        "../escape",
+        r"..\escape",
+        "nested/name",
+        r"nested\name",
+        "C:/absolute",
+        "C:\\absolute",
+        "/absolute",
+        "bad\x00name",
+        "bad\nname",
+    ],
+)
+def test_store_rejects_unsafe_path_segments(
+    tmp_path: Path,
+    value: str,
+) -> None:
+    from athena_research.forex_edge.models import InvalidResearchInputError
+    from athena_research.forex_edge.store import ResearchStore
+
+    store = ResearchStore(tmp_path / "root")
+    frame = pd.DataFrame(columns=["timestamp", "value"])
+    operations = (
+        lambda: store.write_raw(value, "spot", b"payload"),
+        lambda: store.write_raw("FRED", value, b"payload"),
+        lambda: store.write_normalized(
+            dataset=value,
+            key="EUR",
+            frame=frame,
+            source="FRED",
+            source_url="https://example.test",
+            raw_hashes=(),
+            metadata={"config_hash": "cfg"},
+        ),
+        lambda: store.write_normalized(
+            dataset="spot",
+            key=value,
+            frame=frame,
+            source="FRED",
+            source_url="https://example.test",
+            raw_hashes=(),
+            metadata={"config_hash": "cfg"},
+        ),
+        lambda: store.load_normalized(value, "EUR", "version"),
+        lambda: store.load_normalized("spot", value, "version"),
+        lambda: store.load_normalized("spot", "EUR", value),
+        lambda: store.run_dir(value),
+    )
+
+    for operation in operations:
+        with pytest.raises(InvalidResearchInputError, match="path segment"):
+            operation()
+
+    assert not (tmp_path / "escape").exists()
+    assert not (tmp_path / "root" / "raw").exists()
+    assert not (tmp_path / "root" / "normalized").exists()
+    assert not (tmp_path / "root" / "runs").exists()
+
+
+def test_store_raw_publication_failure_leaves_no_partial_files(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import athena_research.forex_edge.store as store_module
+    from athena_research.forex_edge.store import ResearchStore
+
+    store = ResearchStore(tmp_path)
+
+    def fail_publication(source: object, target: object) -> None:
+        raise OSError("publication failed")
+
+    monkeypatch.setattr(store_module.os, "link", fail_publication)
+
+    with pytest.raises(OSError, match="publication failed"):
+        store.write_raw("FRED", "spot_EUR", b"payload")
+
+    raw_root = tmp_path / "raw"
+    assert not list(raw_root.rglob("response.bin"))
+    assert not list(raw_root.rglob("*.tmp"))
+
+
+def test_store_raw_concurrent_identical_publication_is_idempotent(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import athena_research.forex_edge.store as store_module
+    from athena_research.forex_edge.store import ResearchStore
+
+    store = ResearchStore(tmp_path)
+    real_link = store_module.os.link
+
+    def publish_then_report_exists(source: object, target: object) -> None:
+        real_link(source, target)
+        raise FileExistsError
+
+    monkeypatch.setattr(
+        store_module.os,
+        "link",
+        publish_then_report_exists,
+    )
+
+    artifact = store.write_raw("FRED", "spot_EUR", b"payload")
+
+    assert artifact.path.read_bytes() == b"payload"
+    assert not list(artifact.path.parent.glob("*.tmp"))
