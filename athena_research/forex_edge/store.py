@@ -5,7 +5,7 @@ import json
 import math
 import os
 from dataclasses import dataclass
-from datetime import date, datetime, timezone
+from datetime import date, datetime
 from enum import Enum
 from pathlib import Path
 from typing import Any, Mapping
@@ -34,8 +34,6 @@ def _json_safe_scalar(value: Any) -> Any:
         return None
     if isinstance(value, Enum):
         return _json_safe_scalar(value.value)
-    if isinstance(value, np.generic):
-        return _json_safe_scalar(value.item())
     if isinstance(value, (pd.Timestamp, datetime, date, np.datetime64)):
         try:
             timestamp = pd.Timestamp(value)
@@ -48,6 +46,8 @@ def _json_safe_scalar(value: Any) -> Any:
         return timestamp.tz_localize("UTC").isoformat() if (
             timestamp.tzinfo is None
         ) else timestamp.tz_convert("UTC").isoformat()
+    if isinstance(value, np.generic):
+        return _json_safe_scalar(value.item())
     if isinstance(value, float):
         if not math.isfinite(value):
             raise InvalidResearchInputError(
@@ -201,6 +201,10 @@ class ResearchStore:
                 raise InvalidResearchInputError(
                     "timestamp values must be valid UTC datetimes"
                 ) from exc
+            if work["timestamp"].isna().any():
+                raise InvalidResearchInputError(
+                    "timestamp values must not be missing"
+                )
 
         frame_hash = canonical_frame_hash(work)
         version = hash_stable_json(
@@ -248,11 +252,11 @@ class ResearchStore:
         )
         manifest_path.parent.mkdir(parents=True, exist_ok=True)
         existing_manifest = self._read_manifest(manifest_path)
-        retrieved_at = (
-            existing_manifest.retrieved_at
-            if existing_manifest is not None
-            else datetime.now(timezone.utc).isoformat()
-        )
+        retrieved_at = safe_metadata.get("retrieved_at", "")
+        if not isinstance(retrieved_at, str):
+            raise InvalidResearchInputError(
+                "metadata retrieved_at must normalize to a string"
+            )
         manifest = DatasetManifest(
             schema_version=1,
             dataset=dataset,

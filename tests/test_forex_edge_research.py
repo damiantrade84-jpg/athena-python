@@ -6,6 +6,7 @@ import json
 import math
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import pytest
 import yaml
@@ -538,3 +539,126 @@ def test_store_empty_frame_and_run_directory(tmp_path: Path) -> None:
     assert list(loaded.columns) == ["timestamp", "value"]
     assert store.run_dir("run-1") == tmp_path / "runs" / "run-1"
     assert store.run_dir("run-1").is_dir()
+
+
+@pytest.mark.parametrize(
+    "timestamps",
+    [
+        [pd.Timestamp("2020-01-02", tz="UTC"), pd.NaT],
+        [pd.NaT, pd.NaT],
+    ],
+    ids=["mixed-null", "all-null"],
+)
+def test_store_rejects_null_timestamps_without_dropping_rows(
+    tmp_path: Path,
+    timestamps: list[pd.Timestamp],
+) -> None:
+    from athena_research.forex_edge.models import InvalidResearchInputError
+    from athena_research.forex_edge.store import ResearchStore
+
+    store = ResearchStore(tmp_path)
+    frame = pd.DataFrame({"timestamp": timestamps, "value": [1.1, 1.2]})
+
+    with pytest.raises(InvalidResearchInputError, match="missing"):
+        store.write_normalized(
+            dataset="spot",
+            key="EUR",
+            frame=frame,
+            source="FRED",
+            source_url="https://example.test/fred",
+            raw_hashes=("raw",),
+            metadata={"config_hash": "cfg"},
+        )
+
+    assert not list((tmp_path / "normalized").rglob("data.parquet"))
+
+
+def test_store_manifest_is_deterministic_across_fresh_roots(
+    tmp_path: Path,
+) -> None:
+    from athena_research.forex_edge.store import ResearchStore
+
+    frame = pd.DataFrame(
+        {
+            "timestamp": pd.to_datetime(["2020-01-02"], utc=True),
+            "value": [1.1],
+        }
+    )
+    manifests = []
+    payloads = []
+    for root in (tmp_path / "first", tmp_path / "second"):
+        store = ResearchStore(root)
+        manifest = store.write_normalized(
+            dataset="spot",
+            key="EUR",
+            frame=frame,
+            source="FRED",
+            source_url="https://example.test/fred",
+            raw_hashes=("raw",),
+            metadata={
+                "config_hash": "cfg",
+                "retrieved_at": "2020-01-03T00:00:00+00:00",
+            },
+        )
+        manifests.append(manifest)
+        payloads.append(
+            (
+                root
+                / "manifests"
+                / "spot"
+                / "EUR"
+                / f"{manifest.version}.json"
+            ).read_bytes()
+        )
+
+    assert manifests[0] == manifests[1]
+    assert manifests[0].retrieved_at == "2020-01-03T00:00:00+00:00"
+    assert payloads[0] == payloads[1]
+
+
+def test_store_manifest_uses_deterministic_retrieval_sentinel(
+    tmp_path: Path,
+) -> None:
+    from athena_research.forex_edge.store import ResearchStore
+
+    manifest = ResearchStore(tmp_path).write_normalized(
+        dataset="spot",
+        key="EUR",
+        frame=pd.DataFrame(
+            {
+                "timestamp": pd.to_datetime(["2020-01-02"], utc=True),
+                "value": [1.1],
+            }
+        ),
+        source="FRED",
+        source_url="https://example.test/fred",
+        raw_hashes=("raw",),
+        metadata={"config_hash": "cfg"},
+    )
+
+    assert manifest.retrieved_at == ""
+
+
+def test_canonical_frame_hash_normalizes_numpy_datetime64_ns() -> None:
+    from athena_research.forex_edge.store import canonical_frame_hash
+
+    numpy_frame = pd.DataFrame(
+        {
+            "timestamp": pd.Series(
+                [np.datetime64("2020-01-02T03:04:05.000000000", "ns")],
+                dtype=object,
+            )
+        }
+    )
+    pandas_frame = pd.DataFrame(
+        {
+            "timestamp": pd.Series(
+                [pd.Timestamp("2020-01-02T03:04:05Z")],
+                dtype=object,
+            )
+        }
+    )
+
+    assert canonical_frame_hash(numpy_frame) == canonical_frame_hash(
+        pandas_frame
+    )
