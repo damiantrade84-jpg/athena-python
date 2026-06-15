@@ -1125,6 +1125,72 @@ def test_candidate_classification_requires_every_registered_gate() -> None:
     assert "PBO_UNAVAILABLE" in failed["evidence_flags"]
 
 
+def test_trial_registry_is_frozen_complete_and_deterministic() -> None:
+    from athena_research.forex_edge.runner import build_trial_registry
+
+    first = build_trial_registry()
+    second = build_trial_registry()
+
+    assert first == second
+    assert len(first) == 48
+    assert sum(row["lane"] == "portfolio" for row in first) == 12
+    assert sum(row["lane"] == "fixing" for row in first) == 36
+    assert {row["cost_multiplier"] for row in first} == {1.0, 1.5, 2.0}
+    assert len({row["trial_id"] for row in first}) == 48
+
+
+def test_runner_requires_exact_manifest_ids_not_latest(tmp_path: Path) -> None:
+    from athena_research.forex_edge.models import BlockedDataError
+    from athena_research.forex_edge.runner import RunRequest
+
+    with pytest.raises(BlockedDataError, match="PINNED_MANIFEST_REQUIRED"):
+        RunRequest(
+            lane="portfolio",
+            dataset_manifests={},
+            output_root=tmp_path,
+        )
+
+
+def test_reporting_writes_complete_deterministic_artifact_set(
+    tmp_path: Path,
+) -> None:
+    from athena_research.forex_edge.reporting import write_run_artifacts
+
+    payload = {
+        "run_id": "run-test",
+        "manifest": {"config_hash": "abc", "dataset_manifests": {"fred": "v1"}},
+        "eligibility": {"eligible": True, "reason_codes": []},
+        "quality": {"passed": True, "issues": []},
+        "trials": [{"trial_id": "portfolio:momentum:1.0"}],
+        "metrics": {
+            "study_status": "COMPLETED_NO_EDGE",
+            "production_eligible": False,
+        },
+        "returns": pd.DataFrame(
+            {
+                "timestamp": pd.to_datetime(["2021-01-01"], utc=True),
+                "net_return": [0.001],
+            }
+        ),
+    }
+    first = write_run_artifacts(tmp_path, payload)
+    second = write_run_artifacts(tmp_path, payload)
+    expected = {
+        "run_manifest.json",
+        "eligibility.json",
+        "quality.json",
+        "trials.jsonl",
+        "metrics.json",
+        "equity_or_event_returns.parquet",
+        "report.md",
+    }
+
+    assert {path.name for path in first} == expected
+    assert {path.name: path.read_bytes() for path in first} == {
+        path.name: path.read_bytes() for path in second
+    }
+
+
 def test_validate_bid_ask_bars_requires_timestamp_and_executable_ohlc() -> None:
     from athena_research.forex_edge.models import ReasonCode
     from athena_research.forex_edge.quality import validate_bid_ask_bars
