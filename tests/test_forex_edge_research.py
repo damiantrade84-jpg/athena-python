@@ -172,6 +172,237 @@ def _study_result(*, production_eligible: bool, metrics: object) -> object:
     )
 
 
+def test_macro_asof_selects_latest_verified_row_and_ignores_future_unverified_row() -> None:
+    from athena_research.forex_edge.quality import macro_asof
+
+    rows = pd.DataFrame(
+        {
+            "timestamp": pd.to_datetime(
+                ["2020-01-01", "2020-02-01", "2020-03-01"],
+                utc=True,
+            ),
+            "available_time": pd.to_datetime(
+                ["2020-01-15", "2020-02-10", "2020-05-01"],
+                utc=True,
+            ),
+            "value": [1.0, 2.0, 3.0],
+            "availability_verified": [True, True, False],
+        }
+    )
+
+    row = macro_asof(rows, pd.Timestamp("2020-02-15", tz="UTC"))
+
+    assert row["timestamp"] == pd.Timestamp("2020-02-01", tz="UTC")
+    assert row["available_time"] == pd.Timestamp("2020-02-10", tz="UTC")
+    assert row["value"] == pytest.approx(2.0)
+
+
+def test_macro_asof_rejects_unverified_row_when_it_is_eligible() -> None:
+    from athena_research.forex_edge.quality import macro_asof
+
+    rows = pd.DataFrame(
+        {
+            "timestamp": pd.to_datetime(
+                ["2020-01-01", "2020-02-01"],
+                utc=True,
+            ),
+            "available_time": pd.to_datetime(
+                ["2020-01-15", "2020-02-10"],
+                utc=True,
+            ),
+            "value": [1.0, 2.0],
+            "availability_verified": [True, False],
+        }
+    )
+
+    with pytest.raises(ValueError, match="UNVERIFIED_AVAILABILITY"):
+        macro_asof(rows, pd.Timestamp("2020-02-15", tz="UTC"))
+
+
+def test_macro_asof_rejects_missing_required_schema() -> None:
+    from athena_research.forex_edge.quality import macro_asof
+
+    rows = pd.DataFrame(
+        {
+            "timestamp": pd.to_datetime(["2020-01-01"], utc=True),
+            "value": [1.0],
+        }
+    )
+
+    with pytest.raises(ValueError, match="MISSING_SERIES"):
+        macro_asof(rows, pd.Timestamp("2020-01-02", tz="UTC"))
+
+
+def test_macro_asof_rejects_malformed_available_time() -> None:
+    from athena_research.forex_edge.models import InvalidResearchInputError
+    from athena_research.forex_edge.quality import macro_asof
+
+    rows = pd.DataFrame(
+        {
+            "timestamp": pd.to_datetime(["2020-01-01"], utc=True),
+            "available_time": ["not-a-timestamp"],
+            "value": [1.0],
+            "availability_verified": [True],
+        }
+    )
+
+    with pytest.raises(InvalidResearchInputError, match="available_time"):
+        macro_asof(rows, pd.Timestamp("2020-01-02", tz="UTC"))
+
+
+def test_macro_asof_rejects_invalid_availability_flags() -> None:
+    from athena_research.forex_edge.models import InvalidResearchInputError
+    from athena_research.forex_edge.quality import macro_asof
+
+    rows = pd.DataFrame(
+        {
+            "timestamp": pd.to_datetime(
+                ["2020-01-01", "2020-01-02"],
+                utc=True,
+            ),
+            "available_time": pd.to_datetime(
+                ["2020-01-15", "2020-01-16"],
+                utc=True,
+            ),
+            "value": [1.0, 2.0],
+            "availability_verified": [True, None],
+        }
+    )
+
+    with pytest.raises(InvalidResearchInputError, match="availability_verified"):
+        macro_asof(rows, pd.Timestamp("2020-01-20", tz="UTC"))
+
+
+def test_validate_bid_ask_bars_requires_timestamp_and_executable_ohlc() -> None:
+    from athena_research.forex_edge.models import ReasonCode
+    from athena_research.forex_edge.quality import validate_bid_ask_bars
+
+    frame = pd.DataFrame(
+        {
+            "bid_open": [1.0],
+            "bid_high": [1.0],
+            "bid_low": [1.0],
+            "bid_close": [1.0],
+            "ask_open": [1.1],
+            "ask_high": [1.1],
+            "ask_low": [1.1],
+            "ask_close": [1.1],
+        }
+    )
+
+    result = validate_bid_ask_bars(frame)
+
+    assert result.eligible is False
+    assert result.reason_codes == (ReasonCode.MIDPOINT_ONLY,)
+    assert result.details["missing_columns"] == ["timestamp"]
+
+
+def test_validate_bid_ask_bars_rejects_nonfinite_and_nonpositive_prices() -> None:
+    from athena_research.forex_edge.models import ReasonCode
+    from athena_research.forex_edge.quality import validate_bid_ask_bars
+
+    frame = pd.DataFrame(
+        {
+            "timestamp": pd.to_datetime(["2021-01-04 16:00Z"], utc=True),
+            "bid_open": [1.0],
+            "bid_high": [math.inf],
+            "bid_low": [1.0],
+            "bid_close": [0.0],
+            "ask_open": [1.1],
+            "ask_high": [1.2],
+            "ask_low": [1.1],
+            "ask_close": [1.2],
+        }
+    )
+
+    result = validate_bid_ask_bars(frame)
+
+    assert result.eligible is False
+    assert ReasonCode.NONPOSITIVE_PRICE in result.reason_codes
+
+
+def test_validate_bid_ask_bars_rejects_malformed_timestamp() -> None:
+    from athena_research.forex_edge.models import InvalidResearchInputError
+    from athena_research.forex_edge.quality import validate_bid_ask_bars
+
+    frame = pd.DataFrame(
+        {
+            "timestamp": ["not-a-timestamp"],
+            "bid_open": [1.0],
+            "bid_high": [1.0],
+            "bid_low": [1.0],
+            "bid_close": [1.0],
+            "ask_open": [1.1],
+            "ask_high": [1.2],
+            "ask_low": [1.1],
+            "ask_close": [1.2],
+        }
+    )
+
+    with pytest.raises(InvalidResearchInputError, match="timestamp"):
+        validate_bid_ask_bars(frame)
+
+
+def test_validate_bid_ask_bars_rejects_internal_ohlc_inconsistency_and_crossed_quotes() -> None:
+    from athena_research.forex_edge.models import ReasonCode
+    from athena_research.forex_edge.quality import validate_bid_ask_bars
+
+    frame = pd.DataFrame(
+        {
+            "timestamp": pd.to_datetime(
+                ["2021-01-04 16:00Z", "2021-01-04 16:05Z"],
+                utc=True,
+            ),
+            "bid_open": [1.2, 1.3],
+            "bid_high": [1.1, 1.3],
+            "bid_low": [1.05, 1.29],
+            "bid_close": [1.15, 1.31],
+            "ask_open": [1.1, 1.4],
+            "ask_high": [1.2, 1.39],
+            "ask_low": [1.08, 1.28],
+            "ask_close": [1.16, 1.35],
+        }
+    )
+
+    result = validate_bid_ask_bars(frame)
+
+    assert result.eligible is False
+    assert ReasonCode.CROSSED_QUOTE in result.reason_codes
+
+
+def test_validate_bid_ask_bars_treats_identical_duplicates_as_eligible_but_rejects_conflicts() -> None:
+    from athena_research.forex_edge.models import ReasonCode
+    from athena_research.forex_edge.quality import validate_bid_ask_bars
+
+    identical = pd.DataFrame(
+        {
+            "timestamp": pd.to_datetime(
+                ["2021-01-04 16:00Z", "2021-01-04 16:00Z"],
+                utc=True,
+            ),
+            "bid_open": [1.2, 1.2],
+            "bid_high": [1.2001, 1.2001],
+            "bid_low": [1.1999, 1.1999],
+            "bid_close": [1.2, 1.2],
+            "ask_open": [1.2002, 1.2002],
+            "ask_high": [1.2004, 1.2004],
+            "ask_low": [1.2002, 1.2002],
+            "ask_close": [1.2003, 1.2003],
+        }
+    )
+
+    identical_result = validate_bid_ask_bars(identical)
+    assert identical_result.eligible is True
+    assert identical_result.reason_codes == ()
+
+    conflicting = identical.copy()
+    conflicting.loc[1, "ask_close"] = 1.2005
+    conflicting_result = validate_bid_ask_bars(conflicting)
+
+    assert conflicting_result.eligible is False
+    assert ReasonCode.DUPLICATE_CONFLICT in conflicting_result.reason_codes
+
+
 def test_study_result_rejects_production_eligibility() -> None:
     from athena_research.forex_edge.models import InvalidResearchInputError
 
