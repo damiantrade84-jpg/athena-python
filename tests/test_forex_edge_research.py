@@ -492,6 +492,112 @@ def test_fred_fetch_requires_api_key_without_leaking_env_name(
         )
 
 
+def test_bis_reer_applies_conservative_lag_and_revision_flag() -> None:
+    from athena_research.forex_edge.sources.bis import parse_bis_reer_csv
+
+    content = (
+        "FREQ,TYPE,BASKET,REF_AREA,TIME_PERIOD,OBS_VALUE,UNIT_MEASURE\n"
+        "M,R,B,GB,2020-01,101.5,IX\n"
+    ).encode()
+    frame = parse_bis_reer_csv(
+        content,
+        currency="GBP",
+        series_key="M.R.B.GB",
+    )
+
+    assert frame.loc[0, "timestamp"] == pd.Timestamp(
+        "2020-01-31 23:59:59.999999999",
+        tz="UTC",
+    )
+    assert frame.loc[0, "available_time"] == pd.Timestamp(
+        "2020-02-29 23:59:59",
+        tz="UTC",
+    )
+    assert bool(frame.loc[0, "revision_history_verified"]) is False
+
+
+def test_bis_reer_rejects_ambiguous_units() -> None:
+    from athena_research.forex_edge.sources.bis import parse_bis_reer_csv
+
+    content = (
+        "TIME_PERIOD,OBS_VALUE,UNIT_MEASURE\n"
+        "2020-01,101.5,UNKNOWN\n"
+    ).encode()
+
+    with pytest.raises(ValueError, match="AMBIGUOUS_UNIT"):
+        parse_bis_reer_csv(content, currency="GBP", series_key="M.R.B.GB")
+
+
+def test_bis_reer_rejects_duplicate_observation_conflicts() -> None:
+    from athena_research.forex_edge.sources.bis import parse_bis_reer_csv
+
+    content = (
+        "TIME_PERIOD,OBS_VALUE,UNIT_MEASURE\n"
+        "2020-01,101.5,IX\n"
+        "2020-01,102.5,IX\n"
+    ).encode()
+
+    with pytest.raises(ValueError, match="DUPLICATE_CONFLICT"):
+        parse_bis_reer_csv(content, currency="GBP", series_key="M.R.B.GB")
+
+
+def test_cftc_applies_following_monday_and_reports_missing_mapping() -> None:
+    from athena_research.forex_edge.sources.cftc import (
+        missing_cot_currencies,
+        normalize_cftc_frame,
+    )
+
+    raw = pd.DataFrame(
+        {
+            "Market and Exchange Names": [
+                "EURO FX - CHICAGO MERCANTILE EXCHANGE"
+            ],
+            "As of Date in Form YYYY-MM-DD": ["2020-01-07"],
+            "Noncommercial Positions-Long (All)": [100],
+            "Noncommercial Positions-Short (All)": [40],
+        }
+    )
+    frame = normalize_cftc_frame(raw, {"EUR": "EURO FX"})
+
+    assert frame.loc[0, "net_noncommercial"] == 60
+    assert frame.loc[0, "available_time"] == pd.Timestamp(
+        "2020-01-13",
+        tz="UTC",
+    )
+    assert missing_cot_currencies(("EUR", "SGD"), {"EUR": "EURO FX"}) == (
+        "SGD",
+    )
+
+
+def test_cftc_rejects_duplicate_conflicts_and_bad_archives() -> None:
+    from io import BytesIO
+    from zipfile import ZipFile
+
+    from athena_research.forex_edge.sources.cftc import (
+        normalize_cftc_frame,
+        parse_cftc_zip,
+    )
+
+    raw = pd.DataFrame(
+        {
+            "Market and Exchange Names": ["EURO FX", "EURO FX"],
+            "As of Date in Form YYYY-MM-DD": ["2020-01-07", "2020-01-07"],
+            "Noncommercial Positions-Long (All)": [100, 101],
+            "Noncommercial Positions-Short (All)": [40, 40],
+        }
+    )
+
+    with pytest.raises(ValueError, match="DUPLICATE_CONFLICT"):
+        normalize_cftc_frame(raw, {"EUR": "EURO FX"})
+
+    payload = BytesIO()
+    with ZipFile(payload, "w") as archive:
+        archive.writestr("one.csv", "a\n1\n")
+        archive.writestr("two.csv", "a\n2\n")
+    with pytest.raises(ValueError, match="exactly one"):
+        parse_cftc_zip(payload.getvalue())
+
+
 def test_validate_bid_ask_bars_requires_timestamp_and_executable_ohlc() -> None:
     from athena_research.forex_edge.models import ReasonCode
     from athena_research.forex_edge.quality import validate_bid_ask_bars
