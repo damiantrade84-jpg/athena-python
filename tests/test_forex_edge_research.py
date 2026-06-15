@@ -925,6 +925,117 @@ def test_portfolio_positions_start_after_decision_and_charge_turnover() -> None:
     assert daily["cost"].sum() > 0
 
 
+def test_fixing_calendar_resolves_london_dst_and_fixed_tokyo_offset() -> None:
+    from athena_research.forex_edge.fixing.calendar import resolve_fixing_utc
+
+    assert resolve_fixing_utc(
+        pd.Timestamp("2021-01-15"),
+        timezone_name="Europe/London",
+        local_time="16:00",
+    ) == pd.Timestamp("2021-01-15 16:00:00Z")
+    assert resolve_fixing_utc(
+        pd.Timestamp("2021-07-15"),
+        timezone_name="Europe/London",
+        local_time="16:00",
+    ) == pd.Timestamp("2021-07-15 15:00:00Z")
+    assert resolve_fixing_utc(
+        pd.Timestamp("2021-07-15"),
+        timezone_name="Asia/Tokyo",
+        local_time="09:55",
+    ) == pd.Timestamp("2021-07-15 00:55:00Z")
+
+
+def test_fixing_window_enters_next_bar_and_uses_executable_sides() -> None:
+    from athena_research.forex_edge.fixing.backtest import run_fixing_event
+    from athena_research.forex_edge.fixing.windows import fixing_window
+
+    fixing = pd.Timestamp("2021-07-15 15:00:00Z")
+    times = pd.date_range("2021-07-15 14:30:00Z", periods=13, freq="5min")
+    bars = pd.DataFrame(
+        {
+            "timestamp": times,
+            "symbol": "EURUSD",
+            "bid_open": [1.1000 + i * 0.0001 for i in range(13)],
+            "bid_close": [1.10005 + i * 0.0001 for i in range(13)],
+            "ask_open": [1.1002 + i * 0.0001 for i in range(13)],
+            "ask_close": [1.10025 + i * 0.0001 for i in range(13)],
+        }
+    )
+    for side in ("bid", "ask"):
+        bars[f"{side}_high"] = bars[[f"{side}_open", f"{side}_close"]].max(axis=1)
+        bars[f"{side}_low"] = bars[[f"{side}_open", f"{side}_close"]].min(axis=1)
+
+    window = fixing_window(fixing, mode="pre_continuation")
+    trade = run_fixing_event(
+        bars,
+        symbol="EURUSD",
+        window=window,
+        roundtrip_commission_bps=0.6,
+        cost_multiplier=1.0,
+    )
+
+    assert trade is not None
+    assert trade["signal_bar_end"] == pd.Timestamp("2021-07-15 14:45:00Z")
+    assert trade["entry_bar_end"] == pd.Timestamp("2021-07-15 14:50:00Z")
+    assert trade["entry_price"] == pytest.approx(
+        bars.loc[
+            bars["timestamp"].eq(trade["entry_bar_end"]),
+            "ask_open",
+        ].item()
+    )
+    assert trade["exit_price"] == pytest.approx(
+        bars.loc[bars["timestamp"].eq(fixing), "bid_close"].item()
+    )
+
+
+def test_fixing_event_fails_closed_when_required_bar_is_missing() -> None:
+    from athena_research.forex_edge.fixing.backtest import run_fixing_event
+    from athena_research.forex_edge.fixing.windows import fixing_window
+
+    fixing = pd.Timestamp("2021-01-15 16:00:00Z")
+    bars = pd.DataFrame({"timestamp": [fixing], "symbol": ["EURUSD"]})
+
+    with pytest.raises(ValueError, match="NO_EXECUTABLE_QUOTE"):
+        run_fixing_event(
+            bars,
+            symbol="EURUSD",
+            window=fixing_window(fixing, mode="post_reversal"),
+            roundtrip_commission_bps=0.6,
+            cost_multiplier=1.0,
+        )
+
+
+def test_fixing_event_rejects_duplicate_conflicting_bar() -> None:
+    from athena_research.forex_edge.fixing.backtest import run_fixing_event
+    from athena_research.forex_edge.fixing.windows import fixing_window
+
+    fixing = pd.Timestamp("2021-07-15 15:00:00Z")
+    times = pd.date_range("2021-07-15 14:30:00Z", periods=7, freq="5min")
+    bars = pd.DataFrame(
+        {
+            "timestamp": list(times) + [pd.Timestamp("2021-07-15 14:45:00Z")],
+            "symbol": "EURUSD",
+            "bid_open": [1.1 + i * 0.0001 for i in range(7)] + [1.5],
+            "bid_high": [1.1002 + i * 0.0001 for i in range(7)] + [1.5002],
+            "bid_low": [1.0999 + i * 0.0001 for i in range(7)] + [1.4999],
+            "bid_close": [1.1001 + i * 0.0001 for i in range(7)] + [1.5001],
+            "ask_open": [1.1002 + i * 0.0001 for i in range(7)] + [1.5002],
+            "ask_high": [1.1004 + i * 0.0001 for i in range(7)] + [1.5004],
+            "ask_low": [1.1001 + i * 0.0001 for i in range(7)] + [1.5001],
+            "ask_close": [1.1003 + i * 0.0001 for i in range(7)] + [1.5003],
+        }
+    )
+
+    with pytest.raises(ValueError, match="DUPLICATE_CONFLICT"):
+        run_fixing_event(
+            bars,
+            symbol="EURUSD",
+            window=fixing_window(fixing, mode="pre_continuation"),
+            roundtrip_commission_bps=0.6,
+            cost_multiplier=1.0,
+        )
+
+
 def test_validate_bid_ask_bars_requires_timestamp_and_executable_ohlc() -> None:
     from athena_research.forex_edge.models import ReasonCode
     from athena_research.forex_edge.quality import validate_bid_ask_bars
