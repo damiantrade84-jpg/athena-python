@@ -7682,6 +7682,25 @@ def api_scan_naked():
         reverse=True,
     )
 
+    # Warm the Engine B cache so the Live Cockpit snapshot reflects this universe
+    # scan (the snapshot reads _engine_b_cache_get(display); see
+    # routes_live_dashboard._ld_build_engine_b_row). Diagnostic/advisory only -
+    # caches the same naked-analysis dict shape as /api/naked-analysis, no
+    # scoring/gate/execution effect. TTL handled by _engine_b_cache.
+    for _row in results:
+        _nd = _row.get("naked_data")
+        if not isinstance(_nd, dict):
+            continue
+        _disp = str(_row.get("display") or "")
+        _sym = str(_row.get("symbol") or "")
+        if _disp:
+            _engine_b_cache_put(_disp, _nd)
+            _engine_b_cache_put(_disp.upper(), _nd)
+        if _sym:
+            _sid = _sym.replace("/", "_").replace("=", "_").replace("^", "_").replace(".", "_")
+            _engine_b_cache_put(_sid, _nd)
+            _engine_b_cache_put(_sym, _nd)
+
     # Run Conductor on Engine B signals so widget updates after an Engine B scan
     if results:
         try:

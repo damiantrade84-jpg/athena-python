@@ -4308,7 +4308,7 @@ CONDUCTOR:
 
 LIVE_DASHBOARD:
   ENABLED: true
-  MAX_SYMBOLS: 8
+  MAX_SYMBOLS: 16          # holds the ranked forex Engine-B candidate set (majors+crosses exceed 8)
   DEFAULT_SYMBOLS:
     - NAS100
     - SPY.US
