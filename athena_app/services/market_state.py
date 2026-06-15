@@ -124,6 +124,67 @@ def _mt5_d1_calendar_gap_excluded_types() -> set[str]:
     return {str(x).lower() for x in (raw or []) if str(x).strip()}
 
 
+def forex_market_closed_at(time_now: float | None = None) -> bool:
+    """True when MT5 forex is in weekend closure (Fri 22:00 UTC → Sun 22:00 UTC)."""
+    now = datetime.fromtimestamp(
+        time_now if time_now is not None else time.time(),
+        timezone.utc,
+    )
+    utc_weekday = now.weekday()
+    utc_total = now.hour * 60 + now.minute
+    return (
+        utc_weekday == 5
+        or (utc_weekday == 6 and utc_total < 22 * 60)
+        or (utc_weekday == 4 and utc_total >= 22 * 60)
+    )
+
+
+def _mt5_intraday_calendar_gap_applies(
+    pair: dict[str, Any],
+    *,
+    time_now: float | None = None,
+) -> bool:
+    pair_type = str(pair.get("type") or "").lower()
+    if pair_type in _mt5_intraday_calendar_gap_types():
+        return True
+    if pair_type == "forex" and forex_market_closed_at(time_now):
+        return True
+    return False
+
+
+def apply_staleness_calendar_policies(
+    pair: dict[str, Any],
+    tf: str,
+    severity: str,
+    bucket_lag: int | None,
+    *,
+    time_now: float | None = None,
+) -> str:
+    """Downgrade stale_multi_bucket for expected session/weekend calendar gaps."""
+    if severity != "stale_multi_bucket" or bucket_lag is None:
+        return severity
+    if str(pair.get("source") or "").lower() != "mt5":
+        return severity
+
+    tf_u = str(tf or "").upper()
+    blag = int(bucket_lag)
+
+    if tf_u in ("H4", "H1") and _mt5_intraday_calendar_gap_applies(pair, time_now=time_now):
+        grace_cap = _mt5_intraday_calendar_gap_grace_buckets(tf_u)
+        if grace_cap >= 2 and 2 <= blag <= grace_cap:
+            return "intraday_calendar_gap_policy_ok"
+
+    if (
+        tf_u == "D1"
+        and str(pair.get("type") or "").lower() not in _mt5_d1_calendar_gap_excluded_types()
+    ):
+        grace_cap = _mt5_d1_calendar_gap_grace_buckets()
+        if grace_cap >= 2 and 2 <= blag <= grace_cap:
+            return "d1_calendar_gap_policy_ok"
+
+    return severity
+
+
 def market_state_offset_hours(pair: dict[str, Any] | None, tf: str) -> float:
     """Return the bucket offset for this pair/timeframe market-state split.
     
@@ -319,55 +380,37 @@ def candle_freshness_diagnostic(
     else:
         severity = "missing_current_bucket"
 
-    if (
-        severity == "stale_multi_bucket"
-        and tf in ("H4", "H1")
-        and str(pair.get("source") or "").lower() == "mt5"
-        and str(pair.get("type") or "").lower() in _mt5_intraday_calendar_gap_types()
-        and bucket_lag is not None
-        and last_bucket is not None
-    ):
-        grace_cap = _mt5_intraday_calendar_gap_grace_buckets(tf)
-        blag = int(bucket_lag)
-        if grace_cap >= 2 and 2 <= blag <= grace_cap:
-            severity = "intraday_calendar_gap_policy_ok"
+    severity = apply_staleness_calendar_policies(
+        pair,
+        tf,
+        severity,
+        int(bucket_lag) if bucket_lag is not None else None,
+        time_now=now,
+    )
+    if severity == "d1_calendar_gap_policy_ok":
+        # #region agent log
+        try:
+            from athena_app.debug_ndjson_agent import append_agent_ndjson
 
-    if (
-        severity == "stale_multi_bucket"
-        and tf == "D1"
-        and str(pair.get("source") or "").lower() == "mt5"
-        and str(pair.get("type") or "").lower() not in _mt5_d1_calendar_gap_excluded_types()
-        and bucket_lag is not None
-        and last_bucket is not None
-    ):
-        grace_cap = _mt5_d1_calendar_gap_grace_buckets()
-        blag = int(bucket_lag)
-        # bucket_lag is already (expected-last)/86400 on D1; cap bounds false "ok" when feed is hollow.
-        if grace_cap >= 2 and 2 <= blag <= grace_cap:
-            severity = "d1_calendar_gap_policy_ok"
-            # #region agent log
-            try:
-                from athena_app.debug_ndjson_agent import append_agent_ndjson
-
-                append_agent_ndjson(
-                    {
-                        "hypothesisId": "H_d1_calendar_grace",
-                        "location": "market_state.candle_freshness_diagnostic",
-                        "message": "d1_calendar_gap_policy_ok",
-                        "runId": "post-fix",
-                        "data": {
-                            "pairDisplay": pair.get("display"),
-                            "pairType": pair.get("type"),
-                            "bucketLag": blag,
-                            "graceCap": grace_cap,
-                            "lastBarIso": _epoch_iso(last_epoch),
-                            "expectedIso": _epoch_iso(int(expected_bucket)),
-                        },
-                    }
-                )
-            except Exception:
-                pass
-            # #endregion
+            append_agent_ndjson(
+                {
+                    "hypothesisId": "H_d1_calendar_grace",
+                    "location": "market_state.candle_freshness_diagnostic",
+                    "message": "d1_calendar_gap_policy_ok",
+                    "runId": "post-fix",
+                    "data": {
+                        "pairDisplay": pair.get("display"),
+                        "pairType": pair.get("type"),
+                        "bucketLag": bucket_lag,
+                        "graceCap": _mt5_d1_calendar_gap_grace_buckets(),
+                        "lastBarIso": _epoch_iso(last_epoch),
+                        "expectedIso": _epoch_iso(int(expected_bucket)),
+                    },
+                }
+            )
+        except Exception:
+            pass
+        # #endregion
 
     out = {
         "symbol": pair.get("symbol") or pair.get("display") or "",

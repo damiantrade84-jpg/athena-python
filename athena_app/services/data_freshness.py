@@ -7,8 +7,10 @@ from typing import Any
 from config import CONFIG
 
 from athena_app.services.market_state import (
+    apply_staleness_calendar_policies,
     candle_freshness_diagnostic,
     candle_timestamp_epoch,
+    forex_market_closed_at,
     get_bucket_start_epoch,
     market_state_offset_hours,
     split_market_state,
@@ -96,7 +98,7 @@ def pre_scoring_allows_intraday_calendar_gap(
     if str(pair.get("source") or "").lower() != "mt5":
         return False
     pair_type = str(pair.get("type") or "").strip().lower()
-    if pair_type not in ("stock", "index", "commodity", "etf", "etf_bond"):
+    if pair_type not in ("stock", "index", "commodity", "etf", "etf_bond", "forex"):
         return False
 
     severity = str(diagnostic.get("stalenessSeverity") or diagnostic.get("stale_status") or "")
@@ -105,6 +107,16 @@ def pre_scoring_allows_intraday_calendar_gap(
 
     if severity != "stale_multi_bucket":
         return False
+
+    if pair_type == "forex":
+        if not forex_market_closed_at():
+            return False
+        try:
+            bucket_lag = int(diagnostic.get("bucketLag") or diagnostic.get("bucket_lag") or 0)
+        except (TypeError, ValueError):
+            bucket_lag = 0
+        grace = _mt5_intraday_calendar_gap_grace_buckets(tf_u)
+        return grace >= 2 and 2 <= bucket_lag <= grace
 
     if pair_type in ("stock", "index", "etf", "etf_bond") and _us_equity_off_hours_now():
         return True
@@ -293,6 +305,21 @@ def _normalise_path(
                 out["expectedCurrentBucketEpoch"] = int(
                     get_bucket_start_epoch(tf, time_now, offset_h)
                 )
+        raw_severity = out.get("stalenessSeverity") or out.get("stale_status")
+        raw_lag = out.get("bucketLag")
+        if raw_lag is None:
+            raw_lag = out.get("bucket_lag") or out.get("freshness_lag")
+        if raw_severity and raw_lag is not None:
+            try:
+                out["stalenessSeverity"] = apply_staleness_calendar_policies(
+                    pair,
+                    tf,
+                    str(raw_severity),
+                    int(raw_lag),
+                    time_now=time_now,
+                )
+            except (TypeError, ValueError):
+                pass
     elif isinstance(payload, dict) and ("confirmed" in payload or "forming" in payload):
         candles = list(payload.get("confirmed") or [])
         if payload.get("forming"):

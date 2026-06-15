@@ -246,6 +246,33 @@ def test_evaluate_execution_data_freshness_disabled_gate_allows_with_warning():
     assert result["blocked"][0]["severity"] == "stale_1_bucket"
 
 
+def test_evaluate_execution_freshness_uses_candle_freshness_before_fetch_meta():
+    """Authoritative candleFreshness must be evaluated even when fetch meta is raw."""
+    signal = {
+        "candleFreshness": {
+            "D1": {"stalenessSeverity": "d1_calendar_gap_policy_ok", "bucketLag": 2},
+            "H4": {"stalenessSeverity": "intraday_calendar_gap_policy_ok", "bucketLag": 8},
+        },
+        "candleFetchMeta": {
+            "D1": {"stalenessSeverity": "stale_multi_bucket", "bucketLag": 2},
+            "H4": {"stalenessSeverity": "stale_multi_bucket", "bucketLag": 8},
+        },
+    }
+    config = {
+        "DATA_FRESHNESS_GATES": {
+            "BLOCK_EXECUTION_ON_STALE": True,
+            "WARN_ON_STALE_SCAN": True,
+            "BLOCK_TIMEFRAMES": ["D1", "H4"],
+            "BLOCK_SEVERITIES": ["stale_multi_bucket"],
+        }
+    }
+
+    result = evaluate_execution_data_freshness(signal, config)
+
+    assert result["allowed"] is True
+    assert result["blocked"] == []
+
+
 def test_fetch_meta_stale_multi_ignored_when_candle_freshness_policy_ok():
     """ETF weekend D1: authoritative candleFreshness must win over fetch meta."""
     signal = {

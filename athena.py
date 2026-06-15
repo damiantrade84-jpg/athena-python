@@ -7477,6 +7477,44 @@ def api_scan_naked():
                     "H1": _get_candle_fetch_meta(pair, "H1", _lim_b["H1"]),
                     "pairSource": pair.get("source"),
                 }
+                if CONFIG.get("CANDLE_FRESHNESS_ENABLED", True):
+                    try:
+                        from athena_app.services.market_state import candle_freshness_diagnostic
+
+                        def _naked_series_for_diag(tf_key):
+                            state = _tf_state_map.get(tf_key)
+                            if isinstance(state, dict):
+                                confirmed = list(state.get("confirmed") or [])
+                                forming = state.get("forming")
+                                return confirmed + ([forming] if forming else [])
+                            return list(_tf_raw_map.get(tf_key) or [])
+
+                        signal["candleFreshness"] = {
+                            "D1": candle_freshness_diagnostic(
+                                pair,
+                                "D1",
+                                _naked_series_for_diag("D1"),
+                                source=pair.get("source"),
+                            ),
+                            "H4": candle_freshness_diagnostic(
+                                pair,
+                                "H4",
+                                _naked_series_for_diag("H4"),
+                                source=pair.get("source"),
+                            ),
+                            "H1": candle_freshness_diagnostic(
+                                pair,
+                                "H1",
+                                _naked_series_for_diag("H1"),
+                                source=pair.get("source"),
+                            ),
+                        }
+                    except Exception as _naked_fresh_err:
+                        log.debug(
+                            "[NAKED SCAN] %s candle freshness diagnostic unavailable: %s",
+                            pair.get("display", "?"),
+                            _naked_fresh_err,
+                        )
                 signal.setdefault("executable", True)
                 try:
                     from athena_app.services.data_freshness import (
@@ -14342,6 +14380,45 @@ def analyze_pair(
     }
     signal["candleFetchMeta"] = _candle_fetch_meta
 
+    if CONFIG.get("CANDLE_FRESHNESS_ENABLED", True):
+        try:
+            from athena_app.services.market_state import candle_freshness_diagnostic
+
+            def _series_for_candle_diag(tf_key, fallback):
+                state = preloaded_market_state.get(tf_key)
+                if isinstance(state, dict):
+                    confirmed = list(state.get("confirmed") or [])
+                    forming = state.get("forming")
+                    return confirmed + ([forming] if forming else [])
+                return list(fallback or [])
+
+            signal["candleFreshness"] = {
+                "D1": candle_freshness_diagnostic(
+                    pair,
+                    "D1",
+                    _series_for_candle_diag("D1", d1),
+                    source=pair.get("source"),
+                ),
+                "H4": candle_freshness_diagnostic(
+                    pair,
+                    "H4",
+                    _series_for_candle_diag("H4", h4),
+                    source=pair.get("source"),
+                ),
+                "H1": candle_freshness_diagnostic(
+                    pair,
+                    "H1",
+                    _series_for_candle_diag("H1", h1),
+                    source=pair.get("source"),
+                ),
+            }
+        except Exception as _diag_err:
+            log.debug(
+                "[ANALYZE] %s candle freshness diagnostic unavailable: %s",
+                pair.get("display", "?"),
+                _diag_err,
+            )
+
     try:
         from engine_a_trade_gate import annotate_engine_a_trade_eligibility, apply_fail_closed_engine_a_trade_gate
 
@@ -14517,44 +14594,6 @@ def analyze_pair(
             "H4": _candle_fetch_meta.get("H4"),
             "H1": _candle_fetch_meta.get("H1"),
         }
-    if CONFIG.get("CANDLE_FRESHNESS_ENABLED", True):
-        try:
-            from athena_app.services.market_state import candle_freshness_diagnostic
-
-            def _series_for_candle_diag(tf_key, fallback):
-                state = preloaded_market_state.get(tf_key)
-                if isinstance(state, dict):
-                    confirmed = list(state.get("confirmed") or [])
-                    forming = state.get("forming")
-                    return confirmed + ([forming] if forming else [])
-                return list(fallback or [])
-
-            signal["candleFreshness"] = {
-                "D1": candle_freshness_diagnostic(
-                    pair,
-                    "D1",
-                    _series_for_candle_diag("D1", d1),
-                    source=pair.get("source"),
-                ),
-                "H4": candle_freshness_diagnostic(
-                    pair,
-                    "H4",
-                    _series_for_candle_diag("H4", h4),
-                    source=pair.get("source"),
-                ),
-                "H1": candle_freshness_diagnostic(
-                    pair,
-                    "H1",
-                    _series_for_candle_diag("H1", h1),
-                    source=pair.get("source"),
-                ),
-            }
-        except Exception as _diag_err:
-            log.debug(
-                "[ANALYZE] %s candle freshness diagnostic unavailable: %s",
-                pair.get("display", "?"),
-                _diag_err,
-            )
     return signal
 
 
