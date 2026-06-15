@@ -386,6 +386,112 @@ def test_requests_get_wraps_read_only_get(monkeypatch: pytest.MonkeyPatch) -> No
     assert response.url == "https://provider.test/final?x=1"
 
 
+def test_fred_normalization_uses_vintage_and_explicit_units() -> None:
+    from athena_research.forex_edge.sources.fred import (
+        normalize_fred_observations,
+        percent_to_decimal,
+    )
+
+    payload = {
+        "observations": [
+            {
+                "realtime_start": "2020-01-06",
+                "realtime_end": "2020-01-06",
+                "date": "2020-01-03",
+                "value": "150.0",
+            }
+        ]
+    }
+    frame = normalize_fred_observations(
+        payload,
+        series_id="DEXJPUS",
+        currency="JPY",
+        kind="spot",
+        unit="Japanese Yen to U.S. Dollar",
+        usd_per_currency=False,
+    )
+
+    assert frame.loc[0, "value"] == pytest.approx(1 / 150.0)
+    assert frame.loc[0, "available_time"] == pd.Timestamp(
+        "2020-01-06 16:15",
+        tz="America/New_York",
+    ).tz_convert("UTC")
+    assert frame.loc[0, "unit"] == "USD_PER_CURRENCY"
+    assert bool(frame.loc[0, "availability_verified"]) is True
+    assert percent_to_decimal(5.25, "Percent") == pytest.approx(0.0525)
+    with pytest.raises(ValueError, match="AMBIGUOUS_UNIT"):
+        percent_to_decimal(5.25, "Index")
+
+    rate_payload = {
+        "observations": [
+            {
+                "realtime_start": "2020-01-06",
+                "realtime_end": "2020-01-06",
+                "date": "2020-01-03",
+                "value": "5.25",
+            }
+        ]
+    }
+    rate = normalize_fred_observations(
+        rate_payload,
+        series_id="DFF",
+        currency="USD",
+        kind="rate",
+        unit="Percent",
+    )
+    assert rate.loc[0, "value"] == pytest.approx(5.25)
+    assert rate.loc[0, "unit"] == "Percent"
+    assert bool(rate.loc[0, "availability_verified"]) is False
+    assert rate.loc[0, "availability_reason"] == "UNVERIFIED_AVAILABILITY"
+
+
+def test_fred_errors_redact_api_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    from athena_research.forex_edge.sources.common import HttpResponse
+    from athena_research.forex_edge.sources.fred import fetch_fred_series
+
+    monkeypatch.setenv("FRED_API_KEY", "super-secret")
+
+    def fake_get(
+        url: str,
+        *,
+        params: object = None,
+        headers: object = None,
+        timeout: float = 30.0,
+    ) -> HttpResponse:
+        return HttpResponse(
+            500,
+            b"failure super-secret",
+            {},
+            url + "?api_key=super-secret",
+        )
+
+    with pytest.raises(RuntimeError) as exc:
+        fetch_fred_series(
+            "DEXUSEU",
+            api_base="https://api.test/fred",
+            api_key_env="FRED_API_KEY",
+            http_get=fake_get,
+        )
+
+    assert "super-secret" not in str(exc.value)
+    assert "api_key=super-secret" not in str(exc.value)
+
+
+def test_fred_fetch_requires_api_key_without_leaking_env_name(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from athena_research.forex_edge.sources.fred import fetch_fred_series
+
+    monkeypatch.delenv("FRED_API_KEY", raising=False)
+
+    with pytest.raises(RuntimeError, match="FRED_API_KEY not configured"):
+        fetch_fred_series(
+            "DEXUSEU",
+            api_base="https://api.test/fred",
+            api_key_env="FRED_API_KEY",
+        )
+
+
 def test_validate_bid_ask_bars_requires_timestamp_and_executable_ohlc() -> None:
     from athena_research.forex_edge.models import ReasonCode
     from athena_research.forex_edge.quality import validate_bid_ask_bars
