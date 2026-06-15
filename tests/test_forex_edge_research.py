@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import ast
+from copy import deepcopy
 import json
+import math
 from pathlib import Path
 
 import pytest
+import yaml
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -80,6 +83,35 @@ def test_config_redaction_removes_secret_values(
     assert redacted["api_key"] == "[REDACTED]"
 
 
+def test_config_redaction_normalizes_aliases_and_url_credentials(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from athena_research.forex_edge.config import redact_secrets
+
+    monkeypatch.setenv("FRED_API_KEY", "fred-secret-value")
+    payload = {
+        "Api-Key": "fred-secret-value",
+        "CLIENT SECRET": "client-value",
+        "header": "Bearer bearer-value",
+        "url": (
+            "https://user:password@example.test/data"
+            "?page=2&API-KEY=fred-secret-value&format=json"
+        ),
+    }
+
+    redacted = redact_secrets(payload)
+
+    assert "fred-secret-value" not in repr(redacted)
+    assert "client-value" not in repr(redacted)
+    assert "bearer-value" not in repr(redacted)
+    assert "password" not in redacted["url"]
+    assert redacted["Api-Key"] == "[REDACTED]"
+    assert redacted["CLIENT SECRET"] == "[REDACTED]"
+    assert redacted["header"] == "Bearer [REDACTED]"
+    assert "page=2" in redacted["url"]
+    assert "format=json" in redacted["url"]
+
+
 def test_models_serialize_to_json_safe_mappings() -> None:
     from athena_research.forex_edge.models import (
         EligibilityResult,
@@ -117,6 +149,74 @@ def test_models_serialize_to_json_safe_mappings() -> None:
     assert json.loads(json.dumps(result.to_dict()))["production_eligible"] is False
 
 
+def _study_result(*, production_eligible: bool, metrics: object) -> object:
+    from athena_research.forex_edge.models import (
+        EligibilityResult,
+        EligibilityStatus,
+        StudyResult,
+        StudyStatus,
+    )
+
+    return StudyResult(
+        study_status=StudyStatus.COMPLETED_NO_EDGE,
+        production_eligible=production_eligible,
+        evidence_flags=(),
+        metrics=metrics,
+        eligibility=EligibilityResult(
+            eligible=False,
+            status=EligibilityStatus.INELIGIBLE,
+        ),
+        trials=(),
+    )
+
+
+def test_study_result_rejects_production_eligibility() -> None:
+    from athena_research.forex_edge.models import InvalidResearchInputError
+
+    with pytest.raises(
+        InvalidResearchInputError,
+        match="production_eligible",
+    ):
+        _study_result(production_eligible=True, metrics={})
+
+    result = _study_result(production_eligible=False, metrics={})
+    assert result.to_dict()["production_eligible"] is False
+
+
+@pytest.mark.parametrize("value", [math.nan, math.inf, -math.inf])
+def test_json_safe_serialization_rejects_nonfinite_floats(value: float) -> None:
+    from athena_research.forex_edge.models import InvalidResearchInputError
+
+    result = _study_result(production_eligible=False, metrics={"value": value})
+    with pytest.raises(InvalidResearchInputError, match="finite"):
+        result.to_dict()
+
+
+def test_json_safe_serialization_rejects_unsupported_types() -> None:
+    from athena_research.forex_edge.models import InvalidResearchInputError
+
+    result = _study_result(
+        production_eligible=False,
+        metrics={"value": object()},
+    )
+    with pytest.raises(InvalidResearchInputError, match="unsupported"):
+        result.to_dict()
+
+
+def test_json_safe_serialization_sorts_sets_deterministically() -> None:
+    first = _study_result(
+        production_eligible=False,
+        metrics={"values": {"JPY", "EUR", "USD"}},
+    )
+    second = _study_result(
+        production_eligible=False,
+        metrics={"values": frozenset(("USD", "JPY", "EUR"))},
+    )
+
+    assert first.to_dict() == second.to_dict()
+    assert first.to_dict()["metrics"]["values"] == ["EUR", "JPY", "USD"]
+
+
 def test_universe_helpers_fail_closed_and_preserve_quote_orientation() -> None:
     from athena_research.forex_edge.universe import (
         currency_usd_price,
@@ -127,6 +227,22 @@ def test_universe_helpers_fail_closed_and_preserve_quote_orientation() -> None:
     assert pair_weight_for_currency("JPY", 0.25) == pytest.approx(-0.25)
     with pytest.raises(ValueError, match="positive"):
         currency_usd_price("EUR", 0)
+
+
+@pytest.mark.parametrize("value", [math.nan, math.inf, -math.inf])
+def test_universe_helpers_reject_nonfinite_prices_and_weights(
+    value: float,
+) -> None:
+    from athena_research.forex_edge.universe import (
+        currency_usd_price,
+        pair_weight_for_currency,
+    )
+
+    for currency in ("EUR", "JPY"):
+        with pytest.raises(ValueError, match="finite"):
+            currency_usd_price(currency, value)
+        with pytest.raises(ValueError, match="finite"):
+            pair_weight_for_currency(currency, value)
 
 
 def test_store_root_override_and_empirical_quality_limits_fail_closed(
@@ -156,3 +272,66 @@ def test_store_root_override_and_empirical_quality_limits_fail_closed(
     validate_empirical_config(cfg, "fixing")
     validate_empirical_config(cfg, "quality-report")
     validate_empirical_config(cfg, "both")
+
+
+@pytest.mark.parametrize(
+    ("section", "value"),
+    [
+        ("universe", []),
+        ("universe", None),
+        ("portfolio", []),
+        ("portfolio", None),
+    ],
+)
+def test_load_config_rejects_nonmapping_nested_sections(
+    tmp_path: Path,
+    section: str,
+    value: object,
+) -> None:
+    from athena_research.forex_edge.config import load_config
+    from athena_research.forex_edge.models import InvalidResearchInputError
+
+    raw = yaml.safe_load(
+        (ROOT / "configs" / "forex_edge_research.yaml").read_text(
+            encoding="utf-8"
+        )
+    )
+    raw[section] = value
+    path = tmp_path / "invalid.yaml"
+    path.write_text(yaml.safe_dump(raw), encoding="utf-8")
+
+    with pytest.raises(InvalidResearchInputError):
+        load_config(path)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("min_currencies", "12"),
+        ("min_currencies", 12.5),
+        ("min_currencies", True),
+        ("top_n", "4"),
+        ("top_n", 4.0),
+        ("top_n", False),
+    ],
+)
+def test_load_config_requires_exact_integer_portfolio_values(
+    tmp_path: Path,
+    field: str,
+    value: object,
+) -> None:
+    from athena_research.forex_edge.config import load_config
+    from athena_research.forex_edge.models import InvalidResearchInputError
+
+    raw = yaml.safe_load(
+        (ROOT / "configs" / "forex_edge_research.yaml").read_text(
+            encoding="utf-8"
+        )
+    )
+    malformed = deepcopy(raw)
+    malformed["portfolio"][field] = value
+    path = tmp_path / "invalid.yaml"
+    path.write_text(yaml.safe_dump(malformed), encoding="utf-8")
+
+    with pytest.raises(InvalidResearchInputError):
+        load_config(path)

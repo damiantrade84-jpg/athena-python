@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 import os
+import re
 from copy import deepcopy
 from pathlib import Path
 from typing import Any, Mapping
@@ -17,15 +18,14 @@ from athena_research.forex_edge.universe import FOREX_PAIRS
 
 
 SECRET_KEYS = {
-    "api_key",
     "apikey",
     "authorization",
     "token",
-    "access_token",
+    "accesstoken",
     "secret",
-    "client_secret",
+    "clientsecret",
     "password",
-    "fred_api_key",
+    "fredapikey",
 }
 
 _QUALITY_KEYS = {
@@ -60,12 +60,20 @@ def default_store_root() -> Path:
     return Path(local) / "Athena" / "research" / "forex_edge"
 
 
+def _normalized_secret_key(key: object) -> str:
+    return re.sub(r"[^a-z0-9]", "", str(key).lower())
+
+
+def _is_secret_key(key: object) -> bool:
+    return _normalized_secret_key(key) in SECRET_KEYS
+
+
 def redact_secrets(value: Any) -> Any:
     if isinstance(value, Mapping):
         return {
             str(key): (
                 "[REDACTED]"
-                if str(key).lower() in SECRET_KEYS
+                if _is_secret_key(key)
                 else redact_secrets(item)
             )
             for key, item in value.items()
@@ -75,16 +83,21 @@ def redact_secrets(value: Any) -> Any:
     if isinstance(value, tuple):
         return tuple(redact_secrets(item) for item in value)
     if isinstance(value, str):
+        if re.fullmatch(r"\s*Bearer\s+\S+\s*", value, flags=re.IGNORECASE):
+            return "Bearer [REDACTED]"
         parts = urlsplit(value)
-        if parts.query:
+        if parts.scheme and parts.netloc:
+            netloc = parts.netloc
+            if "@" in netloc:
+                netloc = f"[REDACTED]@{netloc.rsplit('@', 1)[1]}"
             query = [
-                (key, "[REDACTED]" if key.lower() in SECRET_KEYS else item)
+                (key, "[REDACTED]" if _is_secret_key(key) else item)
                 for key, item in parse_qsl(parts.query, keep_blank_values=True)
             ]
             value = urlunsplit(
                 (
                     parts.scheme,
-                    parts.netloc,
+                    netloc,
                     parts.path,
                     urlencode(query),
                     parts.fragment,
@@ -98,14 +111,31 @@ def redact_secrets(value: Any) -> Any:
 
 
 def load_config(path: str | Path) -> dict[str, Any]:
-    raw = yaml.safe_load(Path(path).read_text(encoding="utf-8")) or {}
+    raw = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
     if not isinstance(raw, Mapping):
         raise InvalidResearchInputError("forex edge config must be a mapping")
     if raw.get("schema_version") != 1:
         raise InvalidResearchInputError(
             "forex edge config schema_version must be 1"
         )
-    if tuple(raw.get("universe", {}).get("pairs", ())) != FOREX_PAIRS:
+    sections: dict[str, Mapping[str, Any]] = {}
+    for name in (
+        "universe",
+        "sources",
+        "portfolio",
+        "fixing",
+        "quality",
+        "validation",
+    ):
+        section = raw.get(name)
+        if not isinstance(section, Mapping):
+            raise InvalidResearchInputError(
+                f"forex edge config {name} must be a mapping"
+            )
+        sections[name] = section
+    universe = sections["universe"]
+    portfolio = sections["portfolio"]
+    if tuple(universe.get("pairs", ())) != FOREX_PAIRS:
         raise InvalidResearchInputError(
             "configured forex universe does not match frozen universe"
         )
@@ -114,12 +144,18 @@ def load_config(path: str | Path) -> dict[str, Any]:
             "production_eligible must remain false"
         )
     try:
-        min_currencies = int(raw["portfolio"]["min_currencies"])
-        top_n = int(raw["portfolio"]["top_n"])
-    except (KeyError, TypeError, ValueError) as exc:
+        min_currencies = portfolio["min_currencies"]
+        top_n = portfolio["top_n"]
+    except KeyError as exc:
         raise InvalidResearchInputError(
             "portfolio config is missing required frozen values"
         ) from exc
+    if type(min_currencies) is not int:
+        raise InvalidResearchInputError(
+            "portfolio min_currencies must be an integer"
+        )
+    if type(top_n) is not int:
+        raise InvalidResearchInputError("portfolio top_n must be an integer")
     if min_currencies < 12:
         raise InvalidResearchInputError(
             "portfolio min_currencies must be at least 12"

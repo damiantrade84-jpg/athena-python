@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import math
 
 
 FOREX_PAIRS: tuple[str, ...] = (
@@ -69,11 +70,13 @@ CANONICAL_USD_PAIRS: dict[str, CanonicalPair] = {
 
 def currency_usd_price(currency: str, pair_value: float) -> float:
     ccy = currency.upper()
-    if ccy == "USD":
-        return 1.0
     value = float(pair_value)
+    if not math.isfinite(value):
+        raise ValueError("pair_value must be finite")
     if value <= 0:
         raise ValueError("pair_value must be positive")
+    if ccy == "USD":
+        return 1.0
     spec = CANONICAL_USD_PAIRS[ccy]
     return value if spec.usd_per_currency else 1.0 / value
 
@@ -81,4 +84,6 @@ def currency_usd_price(currency: str, pair_value: float) -> float:
 def pair_weight_for_currency(currency: str, currency_weight: float) -> float:
     spec = CANONICAL_USD_PAIRS[currency.upper()]
     weight = float(currency_weight)
+    if not math.isfinite(weight):
+        raise ValueError("currency_weight must be finite")
     return weight if spec.usd_per_currency else -weight
