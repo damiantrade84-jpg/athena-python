@@ -898,3 +898,32 @@ non-promotable.
   https://www.dukascopy.com/swiss/english/marketwatch/historical/
 - Research evidence review:
   `docs/FOREX_EDGE_RESEARCH_STUDY_2026-06-14.md`
+
+## 19. Implementation Status (2026-06-15)
+
+Implemented research-only surfaces:
+
+- `athena_research/forex_edge/`
+- `forex_edge_cli.py`
+- `configs/forex_edge_research.yaml`
+- `tests/test_forex_edge_research.py`
+
+Focused verification command:
+
+```text
+C:\dev\athena-python\.venv\Scripts\python.exe -m pytest tests/test_forex_edge_research.py -q
+```
+
+Latest implementation-worktree result: 105 passed.
+
+Current behavior:
+
+- The CLI exposes only `ingest-bis`, `ingest-cftc`, `ingest-fred`,
+  `import-dukascopy`, `quality-report`, `run-portfolio`, `run-fixing`, and
+  `run-both`.
+- Pinned manifest IDs are required for run commands.
+- Run artifacts are deterministic and always record
+  `production_eligible=false`.
+- Synthetic tests do not claim empirical edge.
+- Live official-source ingestion, user Dukascopy files, final holdout returns,
+  and real `RESEARCH_CANDIDATE` status are not verified in this pass.

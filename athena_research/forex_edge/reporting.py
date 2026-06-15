@@ -90,7 +90,19 @@ def write_run_artifacts(
     trials = payload["trials"]
     if not isinstance(trials, list):
         raise InvalidResearchInputError("trials must be a list")
-    trial_bytes = b"".join(_canonical_json(trial) for trial in trials)
+    trial_bytes = b"".join(
+        (
+            json.dumps(
+                trial,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=True,
+                allow_nan=False,
+            )
+            + "\n"
+        ).encode("utf-8")
+        for trial in trials
+    )
     _write_atomic(trials_path, trial_bytes)
     _write_atomic(metrics_path, _canonical_json(payload["metrics"]))
     returns = payload["returns"]

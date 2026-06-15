@@ -1248,6 +1248,48 @@ def test_forex_edge_cli_redacts_provider_errors(
     assert "never-print-this" not in capsys.readouterr().out
 
 
+def test_synthetic_run_both_is_reproducible_and_research_only(
+    tmp_path: Path,
+) -> None:
+    from athena_research.forex_edge.runner import RunRequest, run_research
+
+    request = RunRequest(
+        lane="both",
+        dataset_manifests={
+            "fred_spot": "spot-v1",
+            "fred_rates": "rates-v1",
+            "bis_reer": "reer-v1",
+            "dukascopy_m5": "m5-v1",
+        },
+        output_root=tmp_path,
+    )
+    config = {
+        "schema_version": 1,
+        "production_eligible": False,
+        "quality": {
+            "spot_staleness_days": 10,
+            "rate_staleness_days": 10,
+            "reer_staleness_days": 45,
+            "m5_max_spread_bps": 20,
+        },
+    }
+
+    first = run_research(request, config)
+    second = run_research(request, config)
+    run_dir = tmp_path / "runs" / Path(first[0]).parent.name
+
+    assert {path.name: path.read_bytes() for path in first} == {
+        path.name: path.read_bytes() for path in second
+    }
+    metrics = json.loads((run_dir / "metrics.json").read_text(encoding="utf-8"))
+    assert metrics["production_eligible"] is False
+    manifest = json.loads(
+        (run_dir / "run_manifest.json").read_text(encoding="utf-8")
+    )
+    assert len(manifest["dataset_manifests"]) == 4
+    assert sum(1 for _ in (run_dir / "trials.jsonl").open(encoding="utf-8")) == 48
+
+
 def test_validate_bid_ask_bars_requires_timestamp_and_executable_ohlc() -> None:
     from athena_research.forex_edge.models import ReasonCode
     from athena_research.forex_edge.quality import validate_bid_ask_bars
