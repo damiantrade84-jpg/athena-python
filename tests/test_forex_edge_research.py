@@ -1191,6 +1191,63 @@ def test_reporting_writes_complete_deterministic_artifact_set(
     }
 
 
+def test_forex_edge_cli_exposes_research_commands_only() -> None:
+    from forex_edge_cli import build_parser
+
+    parser = build_parser()
+    choices = parser._subparsers._group_actions[0].choices
+    assert set(choices) == {
+        "ingest-bis",
+        "ingest-cftc",
+        "ingest-fred",
+        "import-dukascopy",
+        "quality-report",
+        "run-portfolio",
+        "run-fixing",
+        "run-both",
+    }
+    forbidden = {"promote", "execute", "trade", "order", "demo", "shadow"}
+    assert set(choices).isdisjoint(forbidden)
+
+
+def test_forex_edge_cli_returns_blocked_code_as_json(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    import forex_edge_cli
+
+    def blocked(*args: object, **kwargs: object) -> object:
+        raise forex_edge_cli.BlockedDataError("MISSING_PAIR")
+
+    monkeypatch.setattr(forex_edge_cli, "_dispatch", blocked)
+
+    assert forex_edge_cli.main(["quality-report"]) == 3
+    output = json.loads(capsys.readouterr().out)
+    assert output["status"] == "BLOCKED_DATA"
+    assert output["reason"] == "MISSING_PAIR"
+
+
+def test_forex_edge_cli_redacts_provider_errors(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    import requests
+
+    import forex_edge_cli
+
+    monkeypatch.setenv("FRED_API_KEY", "never-print-this")
+
+    def failed(*args: object, **kwargs: object) -> object:
+        raise requests.RequestException(
+            "https://api.stlouisfed.org/fred?api_key=never-print-this"
+        )
+
+    monkeypatch.setattr(forex_edge_cli, "_dispatch", failed)
+
+    assert forex_edge_cli.main(["ingest-fred"]) == 5
+    assert "never-print-this" not in capsys.readouterr().out
+
+
 def test_validate_bid_ask_bars_requires_timestamp_and_executable_ohlc() -> None:
     from athena_research.forex_edge.models import ReasonCode
     from athena_research.forex_edge.quality import validate_bid_ask_bars
