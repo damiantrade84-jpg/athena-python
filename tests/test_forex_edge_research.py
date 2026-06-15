@@ -1036,6 +1036,95 @@ def test_fixing_event_rejects_duplicate_conflicting_bar() -> None:
         )
 
 
+def test_chronological_splits_are_fixed_and_do_not_move() -> None:
+    from athena_research.forex_edge.validation import chronological_split
+
+    dates = pd.date_range("2018-12-30", "2019-01-02", freq="D", tz="UTC")
+    development, holdout = chronological_split(
+        dates,
+        development_end="2018-12-31",
+        holdout_start="2019-01-01",
+    )
+    assert list(development) == list(dates[:2])
+    assert list(holdout) == list(dates[2:])
+
+    late = pd.date_range("2020-01-01", periods=5, freq="D", tz="UTC")
+    with pytest.raises(ValueError, match="BLOCKED_DATA"):
+        chronological_split(
+            late,
+            development_end="2018-12-31",
+            holdout_start="2019-01-01",
+        )
+
+
+def test_bootstrap_and_dsr_are_deterministic_and_use_all_48_trials() -> None:
+    from athena_research.forex_edge.validation import (
+        block_bootstrap_lower_bound,
+        deflated_sharpe,
+    )
+
+    returns = pd.Series([0.01, -0.002, 0.008, 0.004] * 20)
+    first = block_bootstrap_lower_bound(
+        returns,
+        block_size=10,
+        resamples=500,
+        seed=42,
+    )
+    second = block_bootstrap_lower_bound(
+        returns,
+        block_size=10,
+        resamples=500,
+        seed=42,
+    )
+    assert first == second
+    dsr = deflated_sharpe(returns, n_trials=48)
+    assert dsr["n_trials"] == 48
+    assert dsr["n_obs"] == 80
+
+
+def test_cscv_pbo_uses_lane_matrix_and_reports_unavailable() -> None:
+    from athena_research.forex_edge.validation import cscv_pbo
+
+    too_short = cscv_pbo(np.ones((8, 12)), n_partitions=16)
+    assert too_short["pbo"] is None
+    assert too_short["reason_code"] == "PBO_UNAVAILABLE"
+
+    rng = np.random.default_rng(7)
+    result = cscv_pbo(rng.normal(size=(64, 12)), n_partitions=16)
+    assert result["n_configs"] == 12
+    assert 0.0 <= result["pbo"] <= 1.0
+
+
+def test_candidate_classification_requires_every_registered_gate() -> None:
+    from athena_research.forex_edge.validation import classify_result
+
+    passing = {
+        "holdout_net_return": 0.10,
+        "bootstrap_lb": 0.001,
+        "cost_2x_net_return": 0.03,
+        "dsr_z": 1.80,
+        "pbo": 0.25,
+        "max_positive_contribution_share": 0.30,
+        "positive_holdout_years": 3,
+    }
+    result = classify_result(
+        passing,
+        quality_passed=True,
+        evidence_flags=["PROXY_TRANSACTION_COSTS"],
+    )
+    assert result["study_status"] == "RESEARCH_CANDIDATE"
+    assert result["production_eligible"] is False
+
+    unavailable = dict(passing, pbo=None)
+    failed = classify_result(
+        unavailable,
+        quality_passed=True,
+        evidence_flags=[],
+    )
+    assert failed["study_status"] == "COMPLETED_NO_EDGE"
+    assert "PBO_UNAVAILABLE" in failed["evidence_flags"]
+
+
 def test_validate_bid_ask_bars_requires_timestamp_and_executable_ohlc() -> None:
     from athena_research.forex_edge.models import ReasonCode
     from athena_research.forex_edge.quality import validate_bid_ask_bars
