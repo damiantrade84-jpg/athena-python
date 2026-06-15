@@ -273,6 +273,119 @@ def test_macro_asof_rejects_invalid_availability_flags() -> None:
         macro_asof(rows, pd.Timestamp("2020-01-20", tz="UTC"))
 
 
+@pytest.mark.parametrize("decision_time", [None, "not-a-timestamp"])
+def test_macro_asof_rejects_invalid_decision_time(
+    decision_time: object,
+) -> None:
+    from athena_research.forex_edge.models import InvalidResearchInputError
+    from athena_research.forex_edge.quality import macro_asof
+
+    rows = pd.DataFrame(
+        {
+            "timestamp": pd.to_datetime(["2020-01-01"], utc=True),
+            "available_time": pd.to_datetime(["2020-01-15"], utc=True),
+            "value": [1.0],
+            "availability_verified": [True],
+        }
+    )
+
+    with pytest.raises(InvalidResearchInputError, match="decision_time"):
+        macro_asof(rows, decision_time)  # type: ignore[arg-type]
+
+
+def test_macro_asof_rejects_null_eligible_value() -> None:
+    from athena_research.forex_edge.models import InvalidResearchInputError
+    from athena_research.forex_edge.quality import macro_asof
+
+    rows = pd.DataFrame(
+        {
+            "timestamp": pd.to_datetime(["2020-01-01"], utc=True),
+            "available_time": pd.to_datetime(["2020-01-15"], utc=True),
+            "value": [None],
+            "availability_verified": [True],
+        }
+    )
+
+    with pytest.raises(InvalidResearchInputError, match="value"):
+        macro_asof(rows, pd.Timestamp("2020-01-20", tz="UTC"))
+
+
+def test_http_response_status_errors_do_not_leak_url_or_content() -> None:
+    from athena_research.forex_edge.sources.common import HttpResponse
+
+    for status in (200, 299):
+        HttpResponse(
+            status,
+            b"secret-content",
+            {},
+            "https://example.test/?api_key=secret",
+        ).raise_for_status()
+
+    for status in (300, 404, 500):
+        response = HttpResponse(
+            status,
+            b"secret-content",
+            {},
+            "https://example.test/?api_key=secret",
+        )
+        with pytest.raises(RuntimeError) as exc:
+            response.raise_for_status()
+        assert str(exc.value) == f"provider HTTP {status}"
+        assert "secret" not in str(exc.value)
+        assert "example.test" not in str(exc.value)
+
+
+def test_requests_get_wraps_read_only_get(monkeypatch: pytest.MonkeyPatch) -> None:
+    import athena_research.forex_edge.sources.common as common
+
+    calls: list[dict[str, object]] = []
+
+    class FakeResponse:
+        status_code = 200
+        content = b"payload"
+        headers = {"Content-Type": "application/json"}
+        url = "https://provider.test/final?x=1"
+
+    def fake_get(
+        url: str,
+        *,
+        params: object = None,
+        headers: object = None,
+        timeout: float = 30.0,
+    ) -> FakeResponse:
+        calls.append(
+            {
+                "url": url,
+                "params": params,
+                "headers": headers,
+                "timeout": timeout,
+            }
+        )
+        return FakeResponse()
+
+    monkeypatch.setattr(common.requests, "get", fake_get)
+
+    response = common.requests_get(
+        "https://provider.test/base",
+        params={"series_id": "DEXUSEU"},
+        headers={"Accept": "application/json"},
+        timeout=12.5,
+    )
+
+    assert calls == [
+        {
+            "url": "https://provider.test/base",
+            "params": {"series_id": "DEXUSEU"},
+            "headers": {"Accept": "application/json"},
+            "timeout": 12.5,
+        }
+    ]
+    assert response.status_code == 200
+    assert response.content == b"payload"
+    assert response.headers == {"Content-Type": "application/json"}
+    assert response.url == "https://provider.test/final?x=1"
+
+
 def test_validate_bid_ask_bars_requires_timestamp_and_executable_ohlc() -> None:
     from athena_research.forex_edge.models import ReasonCode
     from athena_research.forex_edge.quality import validate_bid_ask_bars
@@ -401,6 +514,7 @@ def test_validate_bid_ask_bars_treats_identical_duplicates_as_eligible_but_rejec
 
     assert conflicting_result.eligible is False
     assert ReasonCode.DUPLICATE_CONFLICT in conflicting_result.reason_codes
+    json.dumps(conflicting_result.to_dict(), allow_nan=False)
 
 
 def test_study_result_rejects_production_eligibility() -> None:

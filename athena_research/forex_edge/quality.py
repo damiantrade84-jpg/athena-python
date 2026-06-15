@@ -101,6 +101,8 @@ def macro_asof(frame: pd.DataFrame, decision_time: pd.Timestamp) -> pd.Series:
 
     if not eligible["availability_verified"].all():
         raise ValueError(ReasonCode.UNVERIFIED_AVAILABILITY.value)
+    if eligible["value"].isna().any():
+        raise InvalidResearchInputError("eligible value must not be missing")
 
     selected = eligible.sort_values("available_time", kind="stable").iloc[-1]
     return selected
