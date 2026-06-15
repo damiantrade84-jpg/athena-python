@@ -598,6 +598,144 @@ def test_cftc_rejects_duplicate_conflicts_and_bad_archives() -> None:
         parse_cftc_zip(payload.getvalue())
 
 
+def test_dukascopy_ticks_resample_to_executable_m5_bars(tmp_path: Path) -> None:
+    from athena_research.forex_edge.sources.dukascopy import import_dukascopy
+
+    source = tmp_path / "EURUSD_ticks.csv"
+    source.write_text(
+        "time,bid,ask\n"
+        "2021-01-04 15:30:01,1.2000,1.2002\n"
+        "2021-01-04 15:34:59,1.2004,1.2006\n"
+        "2021-01-04 15:35:01,1.2003,1.2005\n",
+        encoding="utf-8",
+    )
+
+    bars = import_dukascopy(
+        source,
+        symbol="EURUSD",
+        timezone_name="UTC",
+        schema="tick_bid_ask",
+    )
+    first = bars.iloc[0]
+
+    assert first["timestamp"] == pd.Timestamp("2021-01-04 15:35:00Z")
+    assert first["bid_open"] == pytest.approx(1.2000)
+    assert first["bid_close"] == pytest.approx(1.2004)
+    assert first["ask_open"] == pytest.approx(1.2002)
+    assert first["ask_close"] == pytest.approx(1.2006)
+    assert (bars["ask_low"] >= bars["bid_low"]).all()
+
+
+@pytest.mark.parametrize(
+    ("schema", "timezone_name", "expected"),
+    [
+        ("midpoint_m5", "UTC", "MIDPOINT_ONLY"),
+        ("tick_bid_ask", "", "AMBIGUOUS_TIMEZONE"),
+    ],
+)
+def test_dukascopy_rejects_ineligible_schema_or_timezone(
+    tmp_path: Path,
+    schema: str,
+    timezone_name: str,
+    expected: str,
+) -> None:
+    from athena_research.forex_edge.sources.dukascopy import import_dukascopy
+
+    source = tmp_path / "quotes.csv"
+    source.write_text(
+        "time,bid,ask\n2021-01-04 15:30:01,1.2,1.2002\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match=expected):
+        import_dukascopy(
+            source,
+            symbol="EURUSD",
+            timezone_name=timezone_name,
+            schema=schema,
+        )
+
+
+def test_dukascopy_rejects_crossed_and_conflicting_quotes(
+    tmp_path: Path,
+) -> None:
+    from athena_research.forex_edge.sources.dukascopy import import_dukascopy
+
+    crossed = tmp_path / "crossed.csv"
+    crossed.write_text(
+        "time,bid,ask\n2021-01-04 15:30:01,1.2003,1.2002\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="CROSSED_QUOTE"):
+        import_dukascopy(
+            crossed,
+            symbol="EURUSD",
+            timezone_name="UTC",
+            schema="tick_bid_ask",
+        )
+
+    duplicate = tmp_path / "duplicate.csv"
+    duplicate.write_text(
+        "time,bid,ask\n"
+        "2021-01-04 15:30:01,1.2000,1.2002\n"
+        "2021-01-04 15:30:01,1.2001,1.2003\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="DUPLICATE_CONFLICT"):
+        import_dukascopy(
+            duplicate,
+            symbol="EURUSD",
+            timezone_name="UTC",
+            schema="tick_bid_ask",
+        )
+
+
+def test_dukascopy_m5_bars_shift_start_timestamps_to_end(
+    tmp_path: Path,
+) -> None:
+    from athena_research.forex_edge.sources.dukascopy import import_dukascopy
+
+    source = tmp_path / "EURUSD_m5.csv"
+    source.write_text(
+        "time,bid_open,bid_high,bid_low,bid_close,"
+        "ask_open,ask_high,ask_low,ask_close\n"
+        "2021-01-04 15:30:00,1.2,1.2003,1.1999,1.2001,"
+        "1.2002,1.2005,1.2001,1.2003\n",
+        encoding="utf-8",
+    )
+
+    bars = import_dukascopy(
+        source,
+        symbol="EURUSD",
+        timezone_name="UTC",
+        schema="m5_bid_ask",
+    )
+
+    assert bars.loc[0, "timestamp"] == pd.Timestamp("2021-01-04 15:35:00Z")
+
+
+def test_dukascopy_allows_explicit_column_mapping(tmp_path: Path) -> None:
+    from athena_research.forex_edge.sources.dukascopy import import_dukascopy
+
+    source = tmp_path / "custom.csv"
+    source.write_text(
+        "datetime,bid_px,ask_px\n"
+        "2021-01-04 15:30:01,1.2000,1.2002\n",
+        encoding="utf-8",
+    )
+
+    bars = import_dukascopy(
+        source,
+        symbol="EURUSD",
+        timezone_name="UTC",
+        schema="custom_vendor_tick",
+        column_mapping={"time": "datetime", "bid": "bid_px", "ask": "ask_px"},
+    )
+
+    assert len(bars) == 1
+    assert bars.loc[0, "bid_open"] == pytest.approx(1.2)
+
+
 def test_validate_bid_ask_bars_requires_timestamp_and_executable_ohlc() -> None:
     from athena_research.forex_edge.models import ReasonCode
     from athena_research.forex_edge.quality import validate_bid_ask_bars
