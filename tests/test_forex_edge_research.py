@@ -6,6 +6,7 @@ import json
 import math
 from pathlib import Path
 
+import pandas as pd
 import pytest
 import yaml
 
@@ -357,3 +358,183 @@ def test_load_config_requires_exact_integer_portfolio_values(
 
     with pytest.raises(InvalidResearchInputError):
         load_config(path)
+
+
+def test_store_versions_data_without_overwrite(tmp_path: Path) -> None:
+    from athena_research.forex_edge.store import ResearchStore
+
+    store = ResearchStore(tmp_path)
+    raw = store.write_raw("FRED", "spot_EUR", b'{"value":1.1}')
+    frame = pd.DataFrame(
+        {
+            "timestamp": pd.to_datetime(
+                ["2020-01-02", "2020-01-03"],
+                utc=True,
+            ),
+            "value": [1.1, 1.2],
+        }
+    )
+    first = store.write_normalized(
+        dataset="spot",
+        key="EUR",
+        frame=frame,
+        source="FRED",
+        source_url="https://example.test/fred",
+        raw_hashes=(raw.sha256,),
+        metadata={"unit": "USD_PER_CURRENCY", "config_hash": "cfg"},
+    )
+    same = store.write_normalized(
+        dataset="spot",
+        key="EUR",
+        frame=frame,
+        source="FRED",
+        source_url="https://example.test/fred",
+        raw_hashes=(raw.sha256,),
+        metadata={"unit": "USD_PER_CURRENCY", "config_hash": "cfg"},
+    )
+
+    assert first == same
+    pd.testing.assert_frame_equal(
+        store.load_normalized("spot", "EUR", first.version),
+        frame,
+    )
+
+    changed = frame.copy()
+    changed.loc[1, "value"] = 1.3
+    second = store.write_normalized(
+        dataset="spot",
+        key="EUR",
+        frame=changed,
+        source="FRED",
+        source_url="https://example.test/fred",
+        raw_hashes=(raw.sha256,),
+        metadata={"unit": "USD_PER_CURRENCY", "config_hash": "cfg"},
+    )
+
+    assert second.version != first.version
+    pd.testing.assert_frame_equal(
+        store.load_normalized("spot", "EUR", second.version),
+        changed,
+    )
+
+
+def test_store_rejects_conflicting_existing_partition(tmp_path: Path) -> None:
+    from athena_research.forex_edge.store import ResearchStore
+
+    store = ResearchStore(tmp_path)
+    path = (
+        store.root
+        / "normalized"
+        / "spot"
+        / "EUR"
+        / "bad"
+        / "2020"
+        / "data.parquet"
+    )
+    path.parent.mkdir(parents=True)
+    path.write_bytes(b"not parquet")
+
+    with pytest.raises(RuntimeError, match="immutable partition conflict"):
+        store._write_partition(path, pd.DataFrame({"x": [1]}))
+
+
+def test_store_raw_writes_are_idempotent_and_immutable(tmp_path: Path) -> None:
+    from athena_research.forex_edge.store import ResearchStore
+
+    store = ResearchStore(tmp_path)
+    first = store.write_raw("FRED", "spot_EUR", b"payload")
+    same = store.write_raw("FRED", "spot_EUR", b"payload")
+    assert first == same
+    assert first.path.read_bytes() == b"payload"
+
+    first.path.write_bytes(b"corrupted")
+    with pytest.raises(RuntimeError, match="immutable raw conflict"):
+        store.write_raw("FRED", "spot_EUR", b"payload")
+
+
+def test_store_rejects_missing_timestamp_and_nonfinite_hashing(
+    tmp_path: Path,
+) -> None:
+    from athena_research.forex_edge.models import InvalidResearchInputError
+    from athena_research.forex_edge.store import (
+        ResearchStore,
+        canonical_frame_hash,
+    )
+
+    store = ResearchStore(tmp_path)
+    with pytest.raises(ValueError, match="timestamp"):
+        store.write_normalized(
+            dataset="spot",
+            key="EUR",
+            frame=pd.DataFrame({"value": [1.1]}),
+            source="FRED",
+            source_url="https://example.test/fred",
+            raw_hashes=("raw",),
+            metadata={"config_hash": "cfg"},
+        )
+    with pytest.raises(InvalidResearchInputError, match="finite"):
+        canonical_frame_hash(pd.DataFrame({"value": [math.nan]}))
+
+
+def test_store_rejects_conflicting_existing_manifest(tmp_path: Path) -> None:
+    from athena_research.forex_edge.store import ResearchStore
+
+    store = ResearchStore(tmp_path)
+    frame = pd.DataFrame(
+        {
+            "timestamp": pd.to_datetime(["2020-01-02"], utc=True),
+            "value": [1.1],
+        }
+    )
+    manifest = store.write_normalized(
+        dataset="spot",
+        key="EUR",
+        frame=frame,
+        source="FRED",
+        source_url="https://example.test/fred",
+        raw_hashes=("raw",),
+        metadata={"config_hash": "cfg"},
+    )
+    path = (
+        store.root
+        / "manifests"
+        / "spot"
+        / "EUR"
+        / f"{manifest.version}.json"
+    )
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["source_url"] = "https://conflict.test"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(RuntimeError, match="immutable manifest conflict"):
+        store.write_normalized(
+            dataset="spot",
+            key="EUR",
+            frame=frame,
+            source="FRED",
+            source_url="https://example.test/fred",
+            raw_hashes=("raw",),
+            metadata={"config_hash": "cfg"},
+        )
+
+
+def test_store_empty_frame_and_run_directory(tmp_path: Path) -> None:
+    from athena_research.forex_edge.store import ResearchStore
+
+    store = ResearchStore(tmp_path)
+    frame = pd.DataFrame(columns=["timestamp", "value"])
+    manifest = store.write_normalized(
+        dataset="spot",
+        key="EUR",
+        frame=frame,
+        source="FRED",
+        source_url="https://example.test/fred",
+        raw_hashes=(),
+        metadata={"config_hash": "cfg"},
+    )
+
+    loaded = store.load_normalized("spot", "EUR", manifest.version)
+    assert loaded.empty
+    assert list(loaded.columns) == ["timestamp", "value"]
+    assert store.run_dir("run-1") == tmp_path / "runs" / "run-1"
+    assert store.run_dir("run-1").is_dir()
