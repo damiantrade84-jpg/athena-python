@@ -816,6 +816,115 @@ def test_centered_ranks_and_blend_preserve_missingness() -> None:
     assert blend.to_dict() == {"EUR": pytest.approx(0.5)}
 
 
+def test_currency_weights_are_neutral_capped_and_map_to_canonical_pairs() -> None:
+    from athena_research.forex_edge.portfolio.construction import (
+        build_currency_weights,
+        map_currency_weights_to_pairs,
+    )
+
+    scores = pd.Series(
+        {
+            "AUD": 6,
+            "EUR": 5,
+            "GBP": 4,
+            "NZD": 3,
+            "CAD": -3,
+            "CHF": -4,
+            "JPY": -5,
+            "USD": -6,
+            "BRL": 2,
+            "INR": 1,
+            "MXN": 0,
+            "SGD": -1,
+        },
+        dtype=float,
+    )
+    weights = build_currency_weights(scores, top_n=4, min_currencies=12)
+
+    assert weights.abs().sum() == pytest.approx(1.0)
+    assert weights.sum() == pytest.approx(0.0)
+    assert weights.abs().max() <= 0.25
+
+    pair_weights = map_currency_weights_to_pairs(weights)
+    assert set(pair_weights.index).issubset(
+        {
+            "EURUSD",
+            "GBPUSD",
+            "USDJPY",
+            "AUDUSD",
+            "NZDUSD",
+            "USDCAD",
+            "USDCHF",
+            "USDZAR",
+            "USDMXN",
+            "USDSGD",
+            "USDBRL",
+            "USDINR",
+        }
+    )
+
+
+def test_volatility_scaling_uses_prior_returns_only() -> None:
+    from athena_research.forex_edge.portfolio.construction import (
+        scale_weights_to_vol,
+    )
+
+    weights = pd.Series({"EUR": 0.5, "JPY": -0.5})
+    prior = pd.Series([0.001] * 62 + [0.002])
+    scaled = scale_weights_to_vol(
+        weights,
+        prior,
+        target_vol=0.10,
+        lookback=63,
+        max_gross=2.0,
+    )
+    changed_future = pd.concat([prior, pd.Series([0.50])], ignore_index=True)
+
+    assert scale_weights_to_vol(
+        weights,
+        changed_future.iloc[:-1],
+        target_vol=0.10,
+        lookback=63,
+        max_gross=2.0,
+    ).to_dict() == pytest.approx(scaled.to_dict())
+    assert scaled.abs().sum() <= 2.0
+
+
+def test_portfolio_positions_start_after_decision_and_charge_turnover() -> None:
+    from athena_research.forex_edge.portfolio.backtest import (
+        run_monthly_portfolio,
+    )
+
+    dates = pd.to_datetime(
+        ["2020-01-30", "2020-01-31", "2020-02-03", "2020-02-04"],
+        utc=True,
+    )
+    pair_returns = pd.DataFrame(
+        {
+            "timestamp": list(dates) * 2,
+            "symbol": ["EURUSD"] * 4 + ["USDJPY"] * 4,
+            "return": [0.0, 0.50, 0.01, 0.01, 0.0, -0.50, 0.01, 0.01],
+        }
+    )
+    decisions = {
+        pd.Timestamp("2020-01-31T00:00:00Z"): pd.Series(
+            {"EUR": 0.5, "JPY": -0.5}
+        )
+    }
+
+    result = run_monthly_portfolio(
+        pair_returns,
+        decisions,
+        roundtrip_cost_bps={"EURUSD": 1.8, "USDJPY": 1.8},
+        cost_multiplier=1.0,
+    )
+    daily = result.daily_returns.set_index("timestamp")
+
+    assert daily.loc[pd.Timestamp("2020-01-31T00:00:00Z"), "gross_return"] == 0
+    assert daily.loc[pd.Timestamp("2020-02-03T00:00:00Z"), "gross_return"] > 0
+    assert daily["cost"].sum() > 0
+
+
 def test_validate_bid_ask_bars_requires_timestamp_and_executable_ohlc() -> None:
     from athena_research.forex_edge.models import ReasonCode
     from athena_research.forex_edge.quality import validate_bid_ask_bars
