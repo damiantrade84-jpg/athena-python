@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from statistics import fmean
 from typing import Any
 
@@ -11,7 +11,13 @@ def parse_utc(value: Any) -> datetime | None:
         parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
     except (TypeError, ValueError):
         return None
-    return parsed.replace(tzinfo=timezone.utc) if parsed.tzinfo is None else parsed.astimezone(timezone.utc)
+    if parsed.tzinfo is None:
+        from config import CONFIG
+        offset = int(CONFIG.get("SERVER_TZ_OFFSET_HOURS", 2))
+        parsed = parsed.replace(tzinfo=timezone(timedelta(hours=offset))).astimezone(timezone.utc)
+    else:
+        parsed = parsed.astimezone(timezone.utc)
+    return parsed
 
 
 @dataclass(frozen=True)
@@ -118,7 +124,22 @@ def session_quality_score(as_of: datetime) -> tuple[float, str]:
     return 0.5, "off_hours"
 
 
-def volume_spike_ratio(candles: list[dict], *, lookback: int = 20) -> float:
+def volume_spike_ratio(
+    candles: list[dict],
+    *,
+    display: str | None = None,
+    tf: str = "H1",
+    lookback: int = 20,
+) -> float:
+    if display and "/" in display:
+        try:
+            from duka_volume import get_forex_vr
+            vr = get_forex_vr(display, tf=tf, lookback=lookback)
+            if vr is not None and vr != 1.0:
+                return vr
+        except Exception:
+            pass
+
     if len(candles) < lookback + 1:
         return 0.0
     recent = max(float(candles[-1].get("vol") or candles[-1].get("volume") or 0.0), 0.0)

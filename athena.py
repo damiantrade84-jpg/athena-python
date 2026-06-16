@@ -13199,6 +13199,10 @@ def analyze_pair(
             )
         except Exception:
             pass
+        from config import CONFIG
+        if not bool(CONFIG.get("ENGINE_A_V3_ENABLED", True)):
+            return None
+
         from engine_a_v3.evaluator import evaluate_engine_a_v3
 
         return evaluate_engine_a_v3(
@@ -13329,6 +13333,10 @@ def analyze_pair(
                     )
                 except Exception:
                     pass
+                from config import CONFIG
+                if not bool(CONFIG.get("ENGINE_A_V3_ENABLED", True)):
+                    return None
+
                 from engine_a_v3.evaluator import evaluate_engine_a_v3
 
                 _blocked = evaluate_engine_a_v3(
@@ -13352,6 +13360,10 @@ def analyze_pair(
                 pair.get("display", "?"),
                 _prefresh_err,
             )
+            from config import CONFIG
+            if not bool(CONFIG.get("ENGINE_A_V3_ENABLED", True)):
+                return None
+
             from engine_a_v3.evaluator import evaluate_engine_a_v3
 
             _blocked = evaluate_engine_a_v3(
@@ -13364,22 +13376,24 @@ def analyze_pair(
             _blocked["is_forming"] = is_forming
             return _blocked
 
-    from engine_a_v3.evaluator import evaluate_engine_a_v3
+    from config import CONFIG
+    if bool(CONFIG.get("ENGINE_A_V3_ENABLED", True)):
+        from engine_a_v3.evaluator import evaluate_engine_a_v3
 
-    _v3_signal = evaluate_engine_a_v3(
-        pair,
-        {"D1": d1, "H4": h4, "H1": h1},
-        horizon=style,
-    ).to_dict()
-    _v3_signal["dataFreshness"]["diagnostics"] = _freshness_diag
-    _v3_signal["candleFetchMeta"] = {
-        "D1": preloaded_fetch_meta.get("D1") or _freshness_diag.get("D1"),
-        "H4": preloaded_fetch_meta.get("H4") or _freshness_diag.get("H4"),
-        "H1": preloaded_fetch_meta.get("H1") or _freshness_diag.get("H1"),
-        "pairSource": pair.get("source"),
-    }
-    _v3_signal["is_forming"] = is_forming
-    return _v3_signal
+        _v3_signal = evaluate_engine_a_v3(
+            pair,
+            {"D1": d1, "H4": h4, "H1": h1},
+            horizon=style,
+        ).to_dict()
+        _v3_signal["dataFreshness"]["diagnostics"] = _freshness_diag
+        _v3_signal["candleFetchMeta"] = {
+            "D1": preloaded_fetch_meta.get("D1") or _freshness_diag.get("D1"),
+            "H4": preloaded_fetch_meta.get("H4") or _freshness_diag.get("H4"),
+            "H1": preloaded_fetch_meta.get("H1") or _freshness_diag.get("H1"),
+            "pairSource": pair.get("source"),
+        }
+        _v3_signal["is_forming"] = is_forming
+        return _v3_signal
 
     _asset_type = pair.get("type", "stock")
     d1i = calc_indicators_with_normalized(d1, _asset_type, score_group=_score_group)

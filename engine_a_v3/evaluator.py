@@ -25,7 +25,13 @@ def _parse_time(value: Any) -> datetime | None:
         parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
     except (TypeError, ValueError):
         return None
-    return parsed.replace(tzinfo=timezone.utc) if parsed.tzinfo is None else parsed.astimezone(timezone.utc)
+    if parsed.tzinfo is None:
+        from config import CONFIG
+        offset = int(CONFIG.get("SERVER_TZ_OFFSET_HOURS", 2))
+        parsed = parsed.replace(tzinfo=timezone(timedelta(hours=offset))).astimezone(timezone.utc)
+    else:
+        parsed = parsed.astimezone(timezone.utc)
+    return parsed
 
 
 def _validate_candles(candles: dict[str, list[dict]]) -> tuple[bool, tuple[str, ...]]:
@@ -160,7 +166,7 @@ def evaluate_engine_a_v3(
             engineATradeEnabled=False,
         )
 
-    candidate = detect_setup(route, normalized_horizon, candles)
+    candidate = detect_setup(route, normalized_horizon, candles, display=display)
     if (
         route.family == "forex"
         and candidate.level_style == "london_open"
