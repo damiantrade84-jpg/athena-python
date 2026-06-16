@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import os
-from datetime import date, datetime, time
+from datetime import date, datetime, timedelta, time
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -33,6 +33,19 @@ def _available_time(realtime_start: str, kind: str) -> pd.Timestamp:
     ).tz_convert("UTC")
 
 
+def _spot_available_time(observation_date: str, realtime_start: str) -> pd.Timestamp:
+    observed = date.fromisoformat(observation_date)
+    realtime = date.fromisoformat(realtime_start)
+    # FRED current-observation responses set realtime_start to the retrieval
+    # date for non-ALFRED series. For H.10 spot FX, use the observation date
+    # release timestamp instead of pretending old data was unavailable until
+    # the retrieval day.
+    release_day = observed if realtime > observed + timedelta(days=30) else realtime
+    return pd.Timestamp(
+        datetime.combine(release_day, time(16, 15), tzinfo=_NY)
+    ).tz_convert("UTC")
+
+
 def normalize_fred_observations(
     payload: dict[str, Any],
     *,
@@ -60,18 +73,23 @@ def normalize_fred_observations(
             normalized_unit = "USD_PER_CURRENCY"
             availability_verified = True
             availability_reason = ""
+            available_time = _spot_available_time(
+                str(observation["date"]),
+                realtime_start,
+            )
         elif kind == "rate":
             percent_to_decimal(raw_value, unit)
             value = raw_value
             normalized_unit = unit
             availability_verified = False
             availability_reason = ReasonCode.UNVERIFIED_AVAILABILITY.value
+            available_time = _available_time(realtime_start, kind)
         else:
             raise InvalidResearchInputError(f"unknown FRED kind: {kind}")
         rows.append(
             {
                 "timestamp": pd.Timestamp(observation["date"], tz="UTC"),
-                "available_time": _available_time(realtime_start, kind),
+                "available_time": available_time,
                 "value": value,
                 "raw_value": raw_value,
                 "series_id": series_id,
@@ -103,7 +121,6 @@ def fetch_fred_series(
         "series_id": series_id,
         "api_key": api_key,
         "file_type": "json",
-        "output_type": 4,
         "observation_start": observation_start,
     }
     if observation_end:

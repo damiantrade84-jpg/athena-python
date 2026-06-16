@@ -4,7 +4,7 @@ universe:
   pairs: [EURUSD, GBPUSD, USDJPY, AUDUSD, AUDCHF, AUDNZD, NZDUSD, EURGBP, USDCAD, USDCHF, EURJPY, GBPJPY, AUDJPY, EURAUD, GBPAUD, USDZAR, EURCHF, USDMXN, USDSGD, USDBRL, USDINR]
 sources:
   bis:
-    base_url: https://stats.bis.org/api/v1/data/WS_EER_M
+    base_url: https://stats.bis.org/api/v1/data/WS_EER
     reer_series:
       USD: M.R.B.US
       EUR: M.R.B.XM

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import lzma
 from pathlib import Path
+import struct
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import numpy as np
@@ -113,6 +115,84 @@ def _resample_ticks(frame: pd.DataFrame, symbol: str) -> pd.DataFrame:
         }
     ).dropna(how="any")
     return bars.reset_index(drop=True)
+
+
+def dukascopy_point_value(symbol: str) -> float:
+    return 1000.0 if "JPY" in symbol.upper() else 100000.0
+
+
+def parse_bi5_ticks(
+    content: bytes,
+    *,
+    symbol: str,
+    hour_start: pd.Timestamp,
+    point_value: float | None = None,
+) -> pd.DataFrame:
+    start = pd.Timestamp(hour_start)
+    start = start.tz_localize("UTC") if start.tzinfo is None else start.tz_convert("UTC")
+    try:
+        raw = lzma.decompress(content)
+    except lzma.LZMAError as exc:
+        raise ValueError("DUKASCOPY_BI5_DECOMPRESS_FAILED") from exc
+    if len(raw) % 20:
+        raise ValueError("DUKASCOPY_BI5_BAD_LENGTH")
+    divisor = float(point_value or dukascopy_point_value(symbol))
+    rows: list[dict[str, object]] = []
+    for offset in range(0, len(raw), 20):
+        time_delta_ms, ask, bid, ask_vol, bid_vol = struct.unpack(
+            ">IIIff",
+            raw[offset : offset + 20],
+        )
+        rows.append(
+            {
+                "timestamp": start + pd.Timedelta(milliseconds=int(time_delta_ms)),
+                "symbol": symbol.upper(),
+                "ask": float(ask) / divisor,
+                "bid": float(bid) / divisor,
+                "ask_volume": float(ask_vol),
+                "bid_volume": float(bid_vol),
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def bi5_url(symbol: str, hour_start: pd.Timestamp) -> str:
+    ts = pd.Timestamp(hour_start)
+    ts = ts.tz_localize("UTC") if ts.tzinfo is None else ts.tz_convert("UTC")
+    return (
+        "https://datafeed.dukascopy.com/datafeed/"
+        f"{symbol.upper()}/{ts.year}/{ts.month - 1:02d}/{ts.day:02d}/{ts.hour:02d}h_ticks.bi5"
+    )
+
+
+def ticks_to_m5_bars(ticks: pd.DataFrame, *, symbol: str) -> pd.DataFrame:
+    if ticks.empty:
+        return pd.DataFrame(columns=BAR_COLUMNS)
+    work = ticks.copy()
+    work["timestamp"] = pd.to_datetime(work["timestamp"], utc=True)
+    work["bid"] = pd.to_numeric(work["bid"], errors="coerce")
+    work["ask"] = pd.to_numeric(work["ask"], errors="coerce")
+    if work[["bid", "ask"]].isna().any().any():
+        raise ValueError("NONPOSITIVE_PRICE")
+    bars = _resample_ticks(work[["timestamp", "bid", "ask"]], symbol.upper())
+    _validate_bar_quotes(bars)
+    return bars
+
+
+def fetch_bi5_hour(
+    symbol: str,
+    hour_start: pd.Timestamp,
+    *,
+    http_get: object,
+) -> tuple[str, bytes]:
+    url = bi5_url(symbol, hour_start)
+    response = http_get(
+        url,
+        headers={"User-Agent": "AthenaResearch/1.0"},
+        timeout=90.0,
+    )
+    response.raise_for_status()
+    return url, response.content
 
 
 def import_dukascopy(

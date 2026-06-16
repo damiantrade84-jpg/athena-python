@@ -14,7 +14,7 @@ def build_bis_url(
     start: str,
     end: str = "",
 ) -> str:
-    query = f"?startPeriod={start}&detail=full"
+    query = f"?startPeriod={start}&detail=full&format=csvfile"
     if end:
         query += f"&endPeriod={end}"
     return f"{base_url.rstrip('/')}/{series_key}/all{query}"
@@ -35,7 +35,7 @@ def parse_bis_reer_csv(
     if values.isna().any():
         raise ValueError(ReasonCode.AMBIGUOUS_UNIT.value)
     raw_units = tuple(sorted(frame["UNIT_MEASURE"].dropna().astype(str).unique()))
-    if raw_units != ("IX",):
+    if raw_units not in {("IX",), ("882",)}:
         raise ValueError(ReasonCode.AMBIGUOUS_UNIT.value)
     conflicts = frame[frame.duplicated("TIME_PERIOD", keep=False)]
     if not conflicts.empty and any(
@@ -59,7 +59,7 @@ def parse_bis_reer_csv(
             "currency": currency,
             "series_id": series_key,
             "unit": "INDEX",
-            "raw_unit": "IX",
+            "raw_unit": raw_units[0],
             "availability_verified": True,
             "revision_history_verified": False,
         }

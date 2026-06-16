@@ -36,7 +36,10 @@ def normalize_cftc_frame(
     rows: list[dict[str, object]] = []
     market_text = raw[MARKET].astype(str).str.upper()
     for currency, prefix in mappings.items():
-        matches = raw[market_text.str.startswith(prefix.upper())]
+        expected = prefix.upper()
+        matches = raw[
+            market_text.eq(expected) | market_text.str.startswith(f"{expected} -")
+        ]
         for _, row in matches.iterrows():
             report = pd.Timestamp(row[REPORT_DATE], tz="UTC")
             long_value = float(row[LONG])
@@ -55,9 +58,15 @@ def normalize_cftc_frame(
     frame = pd.DataFrame(rows)
     if frame.empty:
         return frame
+    value_columns = [
+        "net_noncommercial",
+        "long_noncommercial",
+        "short_noncommercial",
+        "available_time",
+    ]
     conflicts = frame[frame.duplicated(["currency", "timestamp"], keep=False)]
     if not conflicts.empty and any(
-        len(group.drop_duplicates()) > 1
+        len(group[value_columns].drop_duplicates()) > 1
         for _, group in conflicts.groupby(["currency", "timestamp"])
     ):
         raise ValueError("DUPLICATE_CONFLICT")

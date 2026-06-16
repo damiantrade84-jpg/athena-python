@@ -3,8 +3,10 @@ from __future__ import annotations
 import ast
 from copy import deepcopy
 import json
+import lzma
 import math
 from pathlib import Path
+import struct
 
 import numpy as np
 import pandas as pd
@@ -445,6 +447,33 @@ def test_fred_normalization_uses_vintage_and_explicit_units() -> None:
     assert rate.loc[0, "availability_reason"] == "UNVERIFIED_AVAILABILITY"
 
 
+def test_fred_spot_current_observations_use_observation_date_availability() -> None:
+    from athena_research.forex_edge.sources.fred import normalize_fred_observations
+
+    frame = normalize_fred_observations(
+        {
+            "observations": [
+                {
+                    "realtime_start": "2026-06-16",
+                    "realtime_end": "2026-06-16",
+                    "date": "2006-01-03",
+                    "value": "1.1980",
+                }
+            ]
+        },
+        series_id="DEXUSEU",
+        currency="EUR",
+        kind="spot",
+        unit="FRED exchange rate",
+        usd_per_currency=True,
+    )
+
+    assert frame.loc[0, "available_time"] == pd.Timestamp(
+        "2006-01-03 16:15",
+        tz="America/New_York",
+    ).tz_convert("UTC")
+
+
 def test_fred_errors_redact_api_key(monkeypatch: pytest.MonkeyPatch) -> None:
     from athena_research.forex_edge.sources.common import HttpResponse
     from athena_research.forex_edge.sources.fred import fetch_fred_series
@@ -624,6 +653,34 @@ def test_dukascopy_ticks_resample_to_executable_m5_bars(tmp_path: Path) -> None:
     assert first["ask_open"] == pytest.approx(1.2002)
     assert first["ask_close"] == pytest.approx(1.2006)
     assert (bars["ask_low"] >= bars["bid_low"]).all()
+
+
+def test_dukascopy_bi5_parser_aggregates_to_m5_bars() -> None:
+    from athena_research.forex_edge.sources.dukascopy import (
+        parse_bi5_ticks,
+        ticks_to_m5_bars,
+    )
+
+    raw = b"".join(
+        [
+            struct.pack(">IIIff", 1_000, 120020, 120000, 1.0, 2.0),
+            struct.pack(">IIIff", 299_000, 120060, 120040, 1.5, 2.5),
+            struct.pack(">IIIff", 301_000, 120050, 120030, 1.0, 2.0),
+        ]
+    )
+
+    ticks = parse_bi5_ticks(
+        lzma.compress(raw),
+        symbol="EURUSD",
+        hour_start=pd.Timestamp("2021-01-04 15:00Z"),
+    )
+    bars = ticks_to_m5_bars(ticks, symbol="EURUSD")
+
+    assert len(bars) == 2
+    assert bars.loc[0, "timestamp"] == pd.Timestamp("2021-01-04 15:05Z")
+    assert bars.loc[0, "bid_open"] == pytest.approx(1.2000)
+    assert bars.loc[0, "bid_close"] == pytest.approx(1.2004)
+    assert bars.loc[0, "ask_high"] == pytest.approx(1.2006)
 
 
 @pytest.mark.parametrize(
@@ -1200,6 +1257,7 @@ def test_forex_edge_cli_exposes_research_commands_only() -> None:
         "ingest-bis",
         "ingest-cftc",
         "ingest-fred",
+        "download-dukascopy",
         "import-dukascopy",
         "quality-report",
         "run-portfolio",
@@ -1246,6 +1304,137 @@ def test_forex_edge_cli_redacts_provider_errors(
 
     assert forex_edge_cli.main(["ingest-fred"]) == 5
     assert "never-print-this" not in capsys.readouterr().out
+
+
+def test_forex_edge_cli_ingest_fred_writes_pinned_manifest(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import forex_edge_cli
+
+    payload = json.dumps(
+        {
+            "observations": [
+                {
+                    "realtime_start": "2020-01-06",
+                    "realtime_end": "2020-01-06",
+                    "date": "2020-01-03",
+                    "value": "1.12",
+                }
+            ]
+        }
+    ).encode()
+    calls: list[dict[str, object]] = []
+
+    def fake_fetch(
+        series_id: str,
+        *,
+        api_base: str,
+        api_key_env: str,
+        observation_start: str,
+        observation_end: str | None,
+    ) -> bytes:
+        calls.append(
+            {
+                "series_id": series_id,
+                "api_base": api_base,
+                "api_key_env": api_key_env,
+                "observation_start": observation_start,
+                "observation_end": observation_end,
+            }
+        )
+        return payload
+
+    monkeypatch.setattr(forex_edge_cli, "fetch_fred_series", fake_fetch)
+
+    result = forex_edge_cli._dispatch(
+        forex_edge_cli.build_parser().parse_args(
+            [
+                "--store-root",
+                str(tmp_path),
+                "ingest-fred",
+                "--dataset",
+                "spot",
+                "--start",
+                "2020-01-01",
+                "--end",
+                "2020-01-10",
+                "--series-id",
+                "DEXUSEU",
+            ]
+        )
+    )
+
+    assert calls == [
+        {
+            "series_id": "DEXUSEU",
+            "api_base": "https://api.stlouisfed.org/fred",
+            "api_key_env": "FRED_API_KEY",
+            "observation_start": "2020-01-01",
+            "observation_end": "2020-01-10",
+        }
+    ]
+    manifests = result["manifests"]
+    assert isinstance(manifests, list)
+    assert manifests[0]["dataset"] == "spot"
+    assert manifests[0]["key"] == "EUR"
+    assert manifests[0]["row_count"] == 1
+    assert manifests[0]["metadata"]["series_id"] == "DEXUSEU"
+    assert (
+        tmp_path
+        / "manifests"
+        / "spot"
+        / "EUR"
+        / f"{manifests[0]['version']}.json"
+    ).exists()
+
+
+def test_forex_edge_cli_cftc_requires_explicit_year() -> None:
+    import forex_edge_cli
+    from athena_research.forex_edge.models import InvalidResearchInputError
+
+    parser = forex_edge_cli.build_parser()
+    with pytest.raises(InvalidResearchInputError, match="CFTC --year"):
+        forex_edge_cli._dispatch(parser.parse_args(["ingest-cftc"]))
+
+
+def test_forex_edge_cli_import_dukascopy_writes_pinned_manifest(
+    tmp_path: Path,
+) -> None:
+    import forex_edge_cli
+
+    source = tmp_path / "EURUSD_ticks.csv"
+    source.write_text(
+        "time,bid,ask\n"
+        "2021-01-04 15:30:01,1.2000,1.2002\n"
+        "2021-01-04 15:34:59,1.2004,1.2006\n",
+        encoding="utf-8",
+    )
+
+    result = forex_edge_cli._dispatch(
+        forex_edge_cli.build_parser().parse_args(
+            [
+                "--store-root",
+                str(tmp_path / "store"),
+                "import-dukascopy",
+                "--file",
+                str(source),
+                "--symbol",
+                "EURUSD",
+                "--timezone",
+                "UTC",
+                "--schema",
+                "tick_bid_ask",
+            ]
+        )
+    )
+
+    manifests = result["manifests"]
+    assert isinstance(manifests, list)
+    assert manifests[0]["dataset"] == "m5"
+    assert manifests[0]["key"] == "EURUSD"
+    assert manifests[0]["row_count"] == 1
+    assert Path(manifests[0]["manifest_path"]).exists()
 
 
 def test_synthetic_run_both_is_reproducible_and_research_only(

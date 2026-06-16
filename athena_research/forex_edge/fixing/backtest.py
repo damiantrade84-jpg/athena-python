@@ -132,13 +132,18 @@ def run_fixing_backtest(
             timezone_name=timezone_name,
             local_time=local_time,
         )
-        event = run_fixing_event(
-            bars,
-            symbol=symbol,
-            window=fixing_window(fixing, mode=mode),
-            roundtrip_commission_bps=roundtrip_commission_bps,
-            cost_multiplier=cost_multiplier,
-        )
+        try:
+            event = run_fixing_event(
+                bars,
+                symbol=symbol,
+                window=fixing_window(fixing, mode=mode),
+                roundtrip_commission_bps=roundtrip_commission_bps,
+                cost_multiplier=cost_multiplier,
+            )
+        except ValueError as exc:
+            if str(exc) != "NO_EXECUTABLE_QUOTE":
+                raise
+            continue
         if event is not None:
             rows.append(event)
     return pd.DataFrame(rows)
