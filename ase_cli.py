@@ -109,6 +109,36 @@ def _cmd_freeze(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_export_holdout_metrics(args: argparse.Namespace) -> int:
+    from athena_research.ase.train import train_family_horizon
+
+    result = train_family_horizon(args.family, args.horizon)
+    gate_metrics = dict(result["metrics"]["holdout_gate_metrics"])
+    gate_metrics["family"] = args.family
+    gate_metrics["horizon"] = args.horizon
+    out_path = (
+        Path(args.out)
+        if args.out
+        else Path("athena_research/ase/output")
+        / f"holdout_metrics_{args.family}_{args.horizon}.json"
+    )
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text(
+        json.dumps(gate_metrics, indent=2),
+        encoding="utf-8",
+    )
+    print(
+        json.dumps(
+            {
+                "written": str(out_path),
+                "oos_trades": gate_metrics["oos_trades"],
+            },
+            indent=2,
+        )
+    )
+    return 0
+
+
 def _cmd_holdout_eval(args: argparse.Namespace) -> int:
     metrics = _load_metrics_file(args.metrics_file)
     reg_path = Path(args.registry) if args.registry else None
@@ -231,6 +261,20 @@ def build_parser() -> argparse.ArgumentParser:
     holdout.add_argument("--registry", default="")
     holdout.add_argument("--dry-run", action="store_true")
     holdout.set_defaults(func=_cmd_holdout_eval)
+
+    export_metrics = sub.add_parser(
+        "export-holdout-metrics",
+        help="Run train_family_horizon and write its holdout_gate_metrics to JSON "
+        "for use as ase_cli holdout-eval/promote --metrics-file",
+    )
+    export_metrics.add_argument("--family", required=True)
+    export_metrics.add_argument(
+        "--horizon",
+        required=True,
+        choices=["intraday", "swing"],
+    )
+    export_metrics.add_argument("--out", default="")
+    export_metrics.set_defaults(func=_cmd_export_holdout_metrics)
 
     promote = sub.add_parser("promote", help="Manually promote a passing family to demo")
     promote.add_argument("--family", required=True)

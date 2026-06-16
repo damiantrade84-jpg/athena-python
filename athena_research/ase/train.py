@@ -40,6 +40,7 @@ from athena_research.ase.bootstrap import block_bootstrap_expectancy
 from athena_research.ase.dsr_pbo import deflated_sharpe_ratio
 from athena_research.ase.event_backtest import EVENTS_PATH
 from athena_research.ase.training_report import write_training_report
+from athena_research.ase.walkforward import expanding_folds
 
 log = logging.getLogger("ase.train")
 
@@ -48,6 +49,10 @@ DATASET_DIR = OUTPUT_DIR / "datasets"
 TRAIN_STATE = OUTPUT_DIR / "train_state.json"
 MODEL_FAMILIES: tuple[str, ...] = ("forex", "crypto", "commodity", "equity", "index_etf")
 MODEL_HORIZONS: tuple[str, ...] = ("intraday", "swing")
+# Total independent family/horizon trials in the ASE search grid. Used as
+# n_trials for deflated_sharpe_ratio so DSR reflects the real multiple-testing
+# burden (5 families x 2 horizons), not a single-trial Sharpe check.
+ASE_TOTAL_FAMILY_HORIZON_TRIALS = len(MODEL_FAMILIES) * len(MODEL_HORIZONS)
 MIN_TRAIN_CANDIDATES = 500
 MIN_ENRICHED_CANDIDATES = 250
 
@@ -348,7 +353,10 @@ def train_family_horizon(
 
     boot_source = selected_net_r if len(selected_net_r) else eval_frame["net_R"].to_numpy(dtype=float)
     boot = block_bootstrap_expectancy(boot_source)
-    dsr = deflated_sharpe_ratio(boot_source, n_trials=1)
+    dsr = deflated_sharpe_ratio(
+        boot_source,
+        n_trials=ASE_TOTAL_FAMILY_HORIZON_TRIALS,
+    )
     eval_summary = {
         "expectancy": float(selected_net_r.mean()) if len(selected_net_r) else 0.0,
         "win_rate": float((selected_net_r > 0).mean()) if len(selected_net_r) else 0.0,
@@ -358,6 +366,91 @@ def train_family_horizon(
         "eval_rows": int(len(eval_frame)),
         "threshold": threshold.threshold,
         "threshold_fallback": threshold.fallback,
+    }
+
+    oos_trades = int(selected.sum())
+    selected_instruments = eval_frame.loc[selected, "instrument"]
+    n_instruments_oos = int(selected_instruments.nunique())
+
+    if len(selected_net_r) and selected_net_r.sum() > 0:
+        per_instrument = (
+            pd.Series(selected_net_r, index=selected_instruments.to_numpy())
+            .groupby(level=0)
+            .sum()
+        )
+        max_instrument_profit_share = float(
+            per_instrument.max() / per_instrument.sum()
+        )
+    else:
+        max_instrument_profit_share = 1.0
+
+    if len(selected_net_r):
+        order = np.argsort(
+            eval_frame.loc[selected, "decision_time_ms"].to_numpy()
+        )
+        equity = np.cumsum(selected_net_r[order])
+        running_max = np.maximum.accumulate(equity)
+        max_dd_R = float((running_max - equity).max())
+    else:
+        max_dd_R = 0.0
+
+    # Re-score expanding folds through the same trained model, calibrator,
+    # quantile heads, and global threshold. Empty-selection folds provide no
+    # evidence and are excluded from the non-negative fold count.
+    fold_details: list[dict[str, Any]] = []
+    folds_nonneg = 0
+    folds_with_evidence = 0
+    fold_frame = labeled.sort_values(
+        "decision_time_ms",
+        kind="stable",
+    ).reset_index(drop=True)
+    for fold in expanding_folds(fold_frame):
+        fold_df = fold_frame.iloc[fold.test_idx]
+        if fold_df.empty:
+            continue
+        fold_matrix = _prepare_matrix(
+            fold_df.to_dict(orient="records"),
+            FEATURE_SCHEMA_CORE,
+        )
+        fold_raw_p = _positive_probability(core_result.model, fold_matrix)
+        fold_p = core_calibrator.predict(fold_raw_p)
+        fold_quantiles = predict_quantile_heads(quantile_heads, fold_matrix)
+        fold_expected_r = _expected_net_r(fold_p, fold_quantiles)
+        fold_selected = fold_expected_r >= threshold.threshold
+        fold_net_r = fold_df["net_R"].to_numpy(dtype=float)[fold_selected]
+        if len(fold_net_r):
+            folds_with_evidence += 1
+            fold_expectancy = float(fold_net_r.mean())
+            if fold_expectancy >= 0:
+                folds_nonneg += 1
+            fold_details.append(
+                {
+                    "fold": fold.fold,
+                    "trades": int(len(fold_net_r)),
+                    "expectancy": fold_expectancy,
+                }
+            )
+        else:
+            fold_details.append(
+                {
+                    "fold": fold.fold,
+                    "trades": 0,
+                    "expectancy": None,
+                }
+            )
+
+    holdout_gate_metrics = {
+        "oos_trades": oos_trades,
+        "instruments": n_instruments_oos,
+        "folds_nonneg": folds_nonneg,
+        "folds_with_evidence": folds_with_evidence,
+        "folds_total": len(fold_details),
+        "fold_details": fold_details,
+        "max_instrument_profit_share": max_instrument_profit_share,
+        "max_dd_R": max_dd_R,
+        "brier_skill": eval_summary["brier_skill"],
+        "bootstrap_lb_expectancy": boot.lb_expectancy,
+        "dsr": dsr.deflated_sharpe,
     }
 
     models: dict[str, Any] = {
@@ -417,6 +510,7 @@ def train_family_horizon(
         "enriched": enriched_summary,
         "bootstrap_lb": boot.lb_expectancy,
         "dsr": dsr.deflated_sharpe,
+        "holdout_gate_metrics": holdout_gate_metrics,
     }
     artifact_path = freeze_artifact_bundle(
         family=family,

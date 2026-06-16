@@ -1779,7 +1779,7 @@ def mt5_execute(signal: dict, approval: "RiskApproval") -> dict:  # noqa: F821
             "sl": sl,
             "deviation": 20,
             "magic": 240601,
-            "comment": f"Ath|{pair[:12]}|{signal.get('confluenceScore', 0):.2f}"[:31],
+            "comment": f"Ath|{pair[:12]}|{float(signal.get('confluenceScore') or 0):.2f}"[:31],
             "type_time": mt5.ORDER_TIME_GTC,
             "type_filling": _SYMBOL_FILLING_MODES.get(mt5_symbol, mt5.ORDER_FILLING_IOC),
         }

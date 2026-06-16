@@ -113,6 +113,42 @@ def test_refreshed_signal_replaces_authoritative_contract_and_levels():
     assert merged["sl"] == 1.10
     assert merged["tp2"] == 1.13
     assert merged["entryZone"] == [1.109, 1.111]
+    assert merged["timestamp"] != refreshed["decisionTime"]
+    assert merged["scoredAt"] == merged["timestamp"]
+
+
+def test_v3_contract_timestamp_is_scan_time_not_candle_time():
+    from datetime import datetime, timedelta, timezone
+
+    from engine_a_v3.evaluator import evaluate_engine_a_v3
+    from tests.test_engine_a_v3 import _trend_pullback_candles
+
+    pair = {"display": "BTC/USDT", "symbol": "BTCUSDT", "type": "crypto"}
+    candles = _trend_pullback_candles()
+    before = datetime.now(timezone.utc)
+    payload = evaluate_engine_a_v3(pair, candles, horizon="intraday").to_dict()
+    after = datetime.now(timezone.utc)
+
+    ts = datetime.fromisoformat(payload["timestamp"].replace("Z", "+00:00"))
+    assert before <= ts <= after + timedelta(seconds=2)
+    assert payload["timestamp"] != payload["decisionTime"]
+
+
+def test_guardian_pre_trade_accepts_v3_with_null_factor_diagnostics():
+    from guardian import pre_trade_check
+
+    signal = _signal(
+        pair="USD/SGD",
+        type="forex",
+        factorDiagnostics=None,
+    )
+    ok, reason = pre_trade_check(
+        signal,
+        [],
+        {"balance": 10_000.0, "equity": 10_000.0},
+    )
+    assert ok is True
+    assert reason == "OK"
 
 
 def test_manual_routes_refresh_and_attest_before_risk_without_force_or_overrides():

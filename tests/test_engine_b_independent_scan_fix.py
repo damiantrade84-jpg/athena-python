@@ -112,6 +112,37 @@ def test_blocked_engine_a_stub_preserves_v2_abort_diagnostics():
     assert stub["engine_a_factorScores"] == blocked_a["factorScores"]
 
 
+def test_blocked_engine_a_v3_stub_preserves_display_fields_for_ui():
+    pair = {"display": "SOL/USDT", "symbol": "SOLUSDT", "type": "crypto"}
+    blocked_a = {
+        "engine": "ENGINE_A_V3",
+        "contractVersion": "3.0.0",
+        "setupId": "crypto_trend_pullback_continuation",
+        "decision": "NO_SIGNAL",
+        "direction": "LONG",
+        "qualified": False,
+        "rejectionReasons": ["trend_context_not_directional"],
+        "predicates": [
+            {"name": "context_trend_long", "passed": False, "actual": 0, "expected": "> 0"},
+        ],
+        "family": "crypto",
+        "subclass": "alt_majors",
+        "horizon": "swing",
+        "validationStatus": "UNVALIDATED",
+    }
+
+    stub = _make_engine_b_only_signal_stub_from_blocked_engine_a(pair, blocked_a)
+
+    assert stub["engine_source"] == ENGINE_B_SOURCE
+    assert stub["engine"] == "B"
+    assert stub["engine_a_v3_blocked"] is True
+    assert stub["engine_a_setupId"] == "crypto_trend_pullback_continuation"
+    assert stub["engine_a_decision"] == "NO_SIGNAL"
+    assert stub["engine_a_predicates"] == blocked_a["predicates"]
+    assert stub["engine_a_rejectionReasons"] == blocked_a["rejectionReasons"]
+    assert stub["engine_a_family"] == "crypto"
+
+
 def test_scan_rank_handles_b_only_zero_max_score():
     pair = {"display": "BTCUSDT", "symbol": "BTCUSDT", "type": "crypto"}
     stub = _make_engine_b_only_signal_stub(pair)

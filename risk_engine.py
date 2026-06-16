@@ -1231,13 +1231,48 @@ def risk_check(
         return RiskApproval(False, 0.0, 0.0, 0.0, 0.0, 0.0, "DAILY_LOSS_LIMIT")
 
     # ── Check 1: Signal freshness ───────────────────────────────────────────
-    ts_str = signal.get("timestamp")
-    if not ts_str:
-        log.warning(f"{prefix} REJECTED: missing signal timestamp")
-        return RiskApproval(False, 0.0, 0.0, 0.0, 0.0, 0.0, "MISSING_SIGNAL_TIMESTAMP")
-    if ts_str:
+    try:
+        from engine_a_v3.execution import is_engine_a_v3_signal as _is_v3_signal
+    except Exception:
+        def _is_v3_signal(_signal: dict) -> bool:
+            return False
+
+    if _is_v3_signal(signal):
+        valid_until_raw = signal.get("validUntil")
+        if not valid_until_raw:
+            log.warning(f"{prefix} REJECTED: missing V3 validUntil")
+            return RiskApproval(
+                False, 0.0, 0.0, 0.0, 0.0, 0.0, "MISSING_SIGNAL_VALID_UNTIL"
+            )
+        try:
+            valid_until = datetime.fromisoformat(str(valid_until_raw).replace("Z", "+00:00"))
+            if valid_until.tzinfo is None:
+                valid_until = valid_until.replace(tzinfo=timezone.utc)
+            else:
+                valid_until = valid_until.astimezone(timezone.utc)
+            if valid_until <= datetime.now(timezone.utc):
+                log.warning(
+                    f"{prefix} REJECTED: V3 signal expired (validUntil={valid_until_raw})"
+                )
+                return RiskApproval(False, 0.0, 0.0, 0.0, 0.0, 0.0, "STALE_SIGNAL")
+        except (ValueError, TypeError):
+            log.warning(
+                f"{prefix} REJECTED: could not parse V3 validUntil: {valid_until_raw}"
+            )
+            return RiskApproval(
+                False, 0.0, 0.0, 0.0, 0.0, 0.0, "UNPARSEABLE_VALID_UNTIL"
+            )
+    else:
+        ts_str = signal.get("timestamp")
+        if not ts_str:
+            log.warning(f"{prefix} REJECTED: missing signal timestamp")
+            return RiskApproval(False, 0.0, 0.0, 0.0, 0.0, 0.0, "MISSING_SIGNAL_TIMESTAMP")
         try:
             sig_time = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+            if sig_time.tzinfo is None:
+                sig_time = sig_time.replace(tzinfo=timezone.utc)
+            else:
+                sig_time = sig_time.astimezone(timezone.utc)
             age = (datetime.now(timezone.utc) - sig_time).total_seconds()
             if age > _cfg("SIGNAL_MAX_AGE_SEC", 300):
                 log.warning(

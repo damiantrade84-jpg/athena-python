@@ -836,6 +836,38 @@ def _regression_candle_count(raw_candles: dict | None, tf: str) -> int:
     return len(raw_candles.get(tf) or [])
 
 
+def _copy_engine_a_v3_stub_fields(stub: dict, engine_a_signal: dict) -> None:
+    """Preserve V3 specialist display fields when row is demoted to Engine B-only."""
+    if not _is_engine_a_v3_signal(engine_a_signal):
+        return
+    stub["engine_a_v3_blocked"] = True
+    for key in (
+        "setupId",
+        "decision",
+        "rejectionReasons",
+        "predicates",
+        "qualified",
+        "price",
+        "sl",
+        "tp1",
+        "tp2",
+        "rr1",
+        "rr2",
+        "entryZone",
+        "invalidation",
+        "family",
+        "subclass",
+        "horizon",
+        "contractVersion",
+        "validationStatus",
+        "validationArtifact",
+        "engineATradeEnabled",
+    ):
+        value = engine_a_signal.get(key)
+        if value is not None:
+            stub[f"engine_a_{key}"] = value
+
+
 def _make_engine_b_only_signal_stub_from_blocked_engine_a(
     pair: dict,
     engine_a_signal: dict | None,
@@ -880,10 +912,7 @@ def _make_engine_b_only_signal_stub_from_blocked_engine_a(
             stub["engine_a_scanDiagnostics"] = engine_a_signal.get("scanDiagnostics")
         if engine_a_signal.get("rejectionReasons") is not None:
             stub["engine_a_rejectionReasons"] = engine_a_signal.get("rejectionReasons")
-        if engine_a_signal.get("setupId") is not None:
-            stub["engine_a_setupId"] = engine_a_signal.get("setupId")
-        if engine_a_signal.get("decision") is not None:
-            stub["engine_a_decision"] = engine_a_signal.get("decision")
+        _copy_engine_a_v3_stub_fields(stub, engine_a_signal)
 
     return stub
 

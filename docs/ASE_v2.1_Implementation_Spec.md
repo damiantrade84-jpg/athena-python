@@ -140,6 +140,11 @@ Per instrument-horizon-bar, collect fired signals.
 
 A candidate is an event, never an order.
 
+## Part III addendum - Signal coverage decisions (2026-06-13)
+
+- **COT positioning** is intentionally **not** an ASE Layer-1 signal. Non-commercial COT positioning empirically tracks the prevailing trend rather than providing an independent contrarian read, so it is largely redundant with `signals/tsmom.py`'s blend. Revisit it only if a future audit shows COT direction diverging from the TSMOM blend often enough on a family/horizon to be additive.
+- **Session-quality scoring** (`engine_a_v3/session_forex.py:session_quality_score`, including London/NY-overlap weighting) is **not** wired into ASE Layer 1 or `signals/arbitrate.py` in v2.1. It remains a candidate future feature, either as an arbitration weighting input or a new `signals/session.py`, but is out of scope for the current forex evidence pass.
+
 ---
 
 # PART IV — LAYER 2, EXACT DEFINITIONS
