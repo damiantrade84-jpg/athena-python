@@ -400,3 +400,31 @@ def test_engine_b_only_classifier_never_returns_trade_tier():
     sig["enginesAligned"] = True
     tier, _ = _classify_engine_b_only_signal(sig, pair)
     assert tier in {"watchlist", "skip"}
+
+
+# ---------------------------------------------------------------------------
+# v3 isolation: Engine B scan path must not branch on v3 overlay
+# ---------------------------------------------------------------------------
+
+def test_v3_no_signal_with_direction_does_not_force_b_only_probe():
+    """v3 NO_SIGNAL can still carry LONG/SHORT — B must use that direction,
+    not the independent LONG+SHORT probe (pre-v3 contract)."""
+    text = (REPO_ROOT / "scanner.py").read_text(encoding="utf-8")
+    assert "_v3_overlay" not in text
+    assert (
+        '_is_engine_a_v3_signal(sig_a) and sig_a.get("decision") == "NO_SIGNAL"'
+        not in text
+    )
+
+
+def test_scanner_tier_loop_applies_b_gates_after_v3_classify():
+    """Engine B scan gates must run for v3 rows — not only legacy Engine A rows."""
+    text = (REPO_ROOT / "scanner.py").read_text(encoding="utf-8")
+    marker = "Engine B scan gates run for all non-B-only rows"
+    assert marker in text
+    idx = text.index(marker)
+    tail = text[idx : idx + 400]
+    assert "_apply_engine_b_scan_gate" in tail
+    assert "_apply_engine_b_only_watchlist_scan_tier" in tail
+    assert "_apply_engine_b_structure_ready_scan_tier" in tail
+

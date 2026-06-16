@@ -1820,10 +1820,9 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict[s
                     sig_a = _make_engine_b_only_signal_stub(pair)
                     engine_b_scan_only = True
                 else:
-                    if (
-                        (_is_engine_a_v3_signal(sig_a) and sig_a.get("decision") == "NO_SIGNAL")
-                        or sig_a.get("direction") not in ("LONG", "SHORT")
-                    ):
+                    # Engine B scan path must not branch on v3 decision — only on
+                    # whether a tradable direction exists (pre-v3 contract).
+                    if sig_a.get("direction") not in ("LONG", "SHORT"):
                         sig_a = _make_engine_b_only_signal_stub_from_blocked_engine_a(
                             pair,
                             sig_a,
@@ -2236,14 +2235,9 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict[s
                                     sig_a["engine_b_lifecycle_reason"] = conf_b.get("lifecycle_reason", "")
                                     _apply_engine_b_scan_levels(sig_a, conf_b, res_b)
 
-                                    _v3_overlay = _is_engine_a_v3_signal(sig_a)
-                                    a_max = None if _v3_overlay else sig_a.get("maxScore", 3.0)
-                                    a_score = None if _v3_overlay else sig_a.get("confluenceScore", 0)
-                                    a_norm = (
-                                        0.0
-                                        if _v3_overlay
-                                        else float(sig_a.get("scoreNorm", 0))
-                                    )
+                                    a_max = sig_a.get("maxScore", 3.0)
+                                    a_score = sig_a.get("confluenceScore", 0)
+                                    a_norm = float(sig_a.get("scoreNorm", 0))
                                     b_norm = min(b_score / b_max, 1.0) if b_max else 0
 
                                     # Use same regime-conditional weights as engine_c.
@@ -2255,58 +2249,40 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict[s
                                     _engine_b_direction_aligned = (
                                         _engine_b_direction_used == direction
                                     )
-                                    combined_conviction = (
-                                        None
-                                        if _v3_overlay
-                                        else _engine_b_scan_combined_conviction(
-                                            a_norm,
-                                            b_norm,
-                                            _w,
-                                            direction_aligned=_engine_b_direction_aligned,
-                                        )
+                                    combined_conviction = _engine_b_scan_combined_conviction(
+                                        a_norm,
+                                        b_norm,
+                                        _w,
+                                        direction_aligned=_engine_b_direction_aligned,
                                     )
                                     sig_a["combinedConviction"] = combined_conviction
                                     sig_a["engine_b_scoreNorm"] = round(b_norm, 4)
-                                    if not _v3_overlay:
-                                        _apply_engine_b_scan_confidence_gate(
-                                            sig_a,
-                                            conf_b,
-                                            style_profile_b,
-                                            regime_label,
-                                            ptype,
-                                        )
+                                    _apply_engine_b_scan_confidence_gate(
+                                        sig_a,
+                                        conf_b,
+                                        style_profile_b,
+                                        regime_label,
+                                        ptype,
+                                    )
                                     sig_a["engine_b_confidence_passed"] = bool(conf_b.get("passed", False))
                                     sig_a["engine_b_direction_aligned_with_a"] = _engine_b_direction_aligned
-                                    sig_a["enginesAligned"] = bool(_engine_b_direction_aligned)
+                                    if not _engine_b_direction_aligned:
+                                        sig_a["enginesAligned"] = False
                                     _mark_engine_b_structure_ready_watchlist(
                                         sig_a,
                                         conf_b,
                                         res_b,
                                     )
 
-                                    if _v3_overlay:
-                                        log.debug(
-                                            "[SCAN+B] %s V3 decision=%s setup=%s B=%.2f/%.1f aligned=%s",
-                                            pair.get("display"),
-                                            sig_a.get("decision"),
-                                            sig_a.get("setupId"),
-                                            b_score,
-                                            b_max,
-                                            _engine_b_direction_aligned,
-                                        )
-                                    else:
-                                        log.debug(
-                                            f"[SCAN+B] {pair.get('display')} A={a_score:.2f}/{a_max} B={b_score:.2f}/{b_max} "
-                                            f"regime={_rl} wA={_w_a} wB={_w_b} combined={combined_conviction:.3f}"
-                                        )
+                                    log.debug(
+                                        f"[SCAN+B] {pair.get('display')} A={a_score:.2f}/{a_max} B={b_score:.2f}/{b_max} "
+                                        f"regime={_rl} wA={_w_a} wB={_w_b} combined={combined_conviction:.3f}"
+                                    )
                                 else:
-                                    if _is_engine_a_v3_signal(sig_a):
-                                        sig_a["combinedConviction"] = None
-                                    else:
-                                        a_norm = float(sig_a.get("scoreNorm", 0))
-                                        # A-only fallback: do not cap with Engine C A/B blend weights.
-                                        _w_a_fb = _a_only_auto_weight(pair)
-                                        sig_a["combinedConviction"] = round(a_norm * _w_a_fb, 4)
+                                    a_norm = float(sig_a.get("scoreNorm", 0))
+                                    # A-only fallback: do not cap with Engine C A/B blend weights.
+                                    _w_a_fb = _a_only_auto_weight(pair)
+                                    sig_a["combinedConviction"] = round(a_norm * _w_a_fb, 4)
                                     sig_a["enginesAligned"] = False
                                     sig_a["engine_b_verdict"] = res_b.get("structural_verdict", "UNCLEAR")
                                 _eb_snap["res"] = res_b
@@ -2436,13 +2412,10 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict[s
 
                 except Exception as _b_err:
                     log.debug(f"[SCAN+B] {pair.get('display')} Engine B failed: {_b_err}")
-                    if _is_engine_a_v3_signal(sig_a):
-                        sig_a["combinedConviction"] = None
-                    else:
-                        a_norm = float(sig_a.get("scoreNorm", 0))
-                        sig_a["combinedConviction"] = round(
-                            a_norm * _a_only_auto_weight(pair), 4
-                        )
+                    a_norm = float(sig_a.get("scoreNorm", 0))
+                    sig_a["combinedConviction"] = round(
+                        a_norm * _a_only_auto_weight(pair), 4
+                    )
                     sig_a["enginesAligned"] = False
                     sig_a["engine_b_error"] = str(_b_err)
                     if _threshold_audit_on:
@@ -2562,7 +2535,7 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict[s
         # their confluenceScore is intentionally 0 and would skew the floor.
         scores_by_type: dict[str, list[float]] = {}
         for pair, sig in buffered_ok:
-            if sig.get("engine_source") == ENGINE_B_SOURCE or _is_engine_a_v3_signal(sig):
+            if sig.get("engine_source") == ENGINE_B_SOURCE:
                 continue
             ptype = pair.get("type") or "stock"
             scores_by_type.setdefault(ptype, []).append(float(sig.get("confluenceScore", 0)))
@@ -2715,17 +2688,18 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict[s
                         100, max(0, round((_cs / _maxs) * 100))
                     )
                 tier, tier_reason = _classify_signal(sig, pair)
-                tier, tier_reason = _apply_engine_b_scan_gate(sig, tier, tier_reason)
-                tier, tier_reason = _apply_engine_b_only_watchlist_scan_tier(
-                    sig,
-                    tier,
-                    tier_reason,
-                )
-                tier, tier_reason = _apply_engine_b_structure_ready_scan_tier(
-                    sig,
-                    tier,
-                    tier_reason,
-                )
+            # Engine B scan gates run for all non-B-only rows (v3 does not bypass).
+            tier, tier_reason = _apply_engine_b_scan_gate(sig, tier, tier_reason)
+            tier, tier_reason = _apply_engine_b_only_watchlist_scan_tier(
+                sig,
+                tier,
+                tier_reason,
+            )
+            tier, tier_reason = _apply_engine_b_structure_ready_scan_tier(
+                sig,
+                tier,
+                tier_reason,
+            )
             if _threshold_audit_on:
                 threshold_audit_rows.append(
                     build_signal_funnel_row(
