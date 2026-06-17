@@ -13379,11 +13379,36 @@ def analyze_pair(
     from config import CONFIG
     if bool(CONFIG.get("ENGINE_A_V3_ENABLED", True)):
         from engine_a_v3.evaluator import evaluate_engine_a_v3
+        from engine_a_v3.quant_context import build_quant_context
+
+        # Subsystem inputs for the quant scorer (intermarket/carry/COT/micro/volume).
+        # Assembled here because these feeds live in analyze_pair scope; each maps to
+        # a {signal, quality} or is omitted (-> neutral) when unavailable.
+        try:
+            _v3_usd = fetch_usd_relative_strength_context(pair, h4, tf="H4")
+        except Exception:
+            _v3_usd = None
+        _v3_micro = _micro_cache.get(pair.get("symbol", ""), {})
+        _v3_vr = None
+        if str(pair.get("type") or "").lower() == "forex":
+            try:
+                from duka_volume import get_forex_vr as _get_forex_vr
+
+                _v3_vr = _get_forex_vr(pair.get("display", ""), tf="H1", lookback=20)
+            except Exception:
+                _v3_vr = None
+        _v3_ctx = build_quant_context(
+            pair,
+            micro=_v3_micro,
+            usd_strength=_v3_usd,
+            volume_ratio=_v3_vr,
+        )
 
         _v3_signal = evaluate_engine_a_v3(
             pair,
             {"D1": d1, "H4": h4, "H1": h1},
             horizon=style,
+            context=_v3_ctx,
         ).to_dict()
         _v3_signal["dataFreshness"]["diagnostics"] = _freshness_diag
         _v3_signal["candleFetchMeta"] = {

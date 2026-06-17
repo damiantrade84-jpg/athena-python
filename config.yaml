@@ -114,6 +114,17 @@ ENGINE_A_V3_MEAN_REVERSION:
   EFF_MAX: 0.35
   LOOKBACK: 20
 
+# Engine A quant scorer (ground-up rebuild) per-score_group component weights.
+# Relative priors, normalized over the components that actually have data (a
+# subsystem with no coverage does not dilute the score). Components: trend,
+# momentum, location, volume, intermarket, carry, sentiment, macro,
+# microstructure. Empty {} -> per-family defaults in engine_a_v3/quant_scorer.py.
+# TRADE cutoff reuses ENGINE_A_SCORE_GROUP_THRESHOLDS. Timeframes: intraday =
+# H1 entry / H4 momentum / D1 bias; swing = H4 entry / D1 bias (per horizon).
+# Tunable live with no code change, e.g.:
+#   crypto_btc: { trend: 0.26, momentum: 0.18, microstructure: 0.18, volume: 0.12 }
+ENGINE_A_QUANT_WEIGHTS_BY_GROUP: {}
+
 # Per-TF candle freshness diagnostic (stalenessSeverity, bucketLag, etc.).
 # Always populated for production visibility (unlike candleMeta which is debug-only).
 CANDLE_FRESHNESS_ENABLED: true

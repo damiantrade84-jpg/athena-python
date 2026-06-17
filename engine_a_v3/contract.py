@@ -82,11 +82,15 @@ class EngineASetupSignal:
     validationArtifact: ValidationArtifact | None
     validationStatus: str = "UNAVAILABLE"
     executionScope: str = "NONE"
-    confluenceScore: None = None
-    maxScore: None = None
-    scoreNorm: None = None
-    confidenceDetail: None = None
-    factorDiagnostics: None = None
+    # Continuous quality fields (repopulated by the quant scorer; V3 left these None).
+    confluenceScore: float | None = None
+    maxScore: float | None = None
+    scoreNorm: float | None = None
+    conviction: float | None = None
+    confluenceThreshold: float | None = None
+    factorScores: dict[str, Any] | None = None
+    confidenceDetail: dict[str, Any] | None = None
+    factorDiagnostics: dict[str, Any] | None = None
     engineATradeEnabled: bool = False
 
     def to_dict(self) -> dict[str, Any]:
@@ -120,6 +124,8 @@ class EngineASetupSignal:
                     "NO_SIGNAL": "skip",
                 }[self.decision],
                 "signalClass": self.setupId,
+                "score": self.confluenceScore,
+                "threshold": self.confluenceThreshold,
                 "engine_source": "ENGINE_A",
                 "engine_name": "Engine A V3",
                 "legacyDiagnosticsOnly": True,
