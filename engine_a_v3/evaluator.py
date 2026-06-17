@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -9,15 +10,15 @@ from engine_a_v3.contract import (
     CONTRACT_VERSION,
     DataFreshness,
     EngineASetupSignal,
+    PredicateResult,
 )
 from engine_a_v3.levels import (
-    build_london_open_breakout_levels,
     build_mean_reversion_levels,
     build_structural_levels,
 )
 from engine_a_v3.promotion import PromotionRegistry, production_registry
+from engine_a_v3.quant_scorer import QuantScore, score_pair
 from engine_a_v3.routing import route_specialist
-from engine_a_v3.setups import SetupCandidate, detect_setup
 
 
 def _parse_time(value: Any) -> datetime | None:
@@ -83,6 +84,31 @@ def _expiry(decision_time: datetime, horizon: str) -> datetime:
     return decision_time + (timedelta(hours=4) if horizon == "intraday" else timedelta(days=2))
 
 
+def _quant_predicates(quant: QuantScore) -> tuple[PredicateResult, ...]:
+    """Transparency view of the price-based components (advisory; the full
+    breakdown lives in factorScores). Never used to veto."""
+    target = quant.direction
+    out: list[PredicateResult] = []
+    for name in ("trend", "momentum", "location", "volume"):
+        comp = quant.components.get(name)
+        if comp is None:
+            continue
+        aligned = (
+            target in {"LONG", "SHORT"}
+            and ((comp.signal > 0) == (target == "LONG"))
+            and comp.quality > 0.1
+        )
+        out.append(
+            PredicateResult(
+                name=f"{name}_supports_direction",
+                passed=bool(aligned and comp.signal != 0.0),
+                actual=round(comp.signal, 3),
+                expected=f"aligned with {target or 'a direction'}",
+            )
+        )
+    return tuple(out)
+
+
 def evaluate_engine_a_v3(
     pair: dict,
     candles: dict[str, list[dict]],
@@ -90,6 +116,7 @@ def evaluate_engine_a_v3(
     horizon: str,
     registry: PromotionRegistry | None = None,
     blocked_reasons: tuple[str, ...] = (),
+    context: Mapping[str, Any] | None = None,
 ) -> EngineASetupSignal:
     route = route_specialist(pair)
     normalized_horizon = _horizon(horizon)
@@ -166,73 +193,35 @@ def evaluate_engine_a_v3(
             engineATradeEnabled=False,
         )
 
-    candidate = detect_setup(route, normalized_horizon, candles, display=display)
-    if (
-        route.family == "forex"
-        and candidate.level_style == "london_open"
-        and candidate.decision == "TRADE"
-    ):
-        from config import CONFIG
-
-        scoring_cfg = CONFIG.get("ENGINE_A_V3_SESSION_SCORING") or {}
-        if bool(scoring_cfg.get("ENABLED", False)):
-            from engine_a_v3.session_scoring import session_score_passes
-
-            min_score = float(scoring_cfg.get("MIN_SCORE", 0.35))
-            if not session_score_passes(primary, direction=candidate.direction, min_score=min_score):
-                candidate = SetupCandidate(
-                    candidate.setup_id,
-                    "NO_SIGNAL",
-                    candidate.direction,
-                    candidate.predicates,
-                    tuple(
-                        dict.fromkeys(
-                            candidate.rejection_reasons + ("session_context_score_below_min",)
-                        )
-                    ),
-                    candidate.level_style,
-                )
+    # ── Continuous quant scoring (no-veto). Every valid pair gets a direction +
+    # quality. Promotion governs execution eligibility only; it never hides a pair.
+    quant = score_pair(route, normalized_horizon, candles, context=context)
     promotion = (registry or production_registry()).resolve(
         route,
         normalized_horizon,
         symbol=symbol,
     )
+
+    direction = quant.direction if quant.direction in {"LONG", "SHORT"} else None
     levels = None
-    if candidate.direction in {"LONG", "SHORT"}:
-        if candidate.level_style == "mean_reversion":
-            levels = build_mean_reversion_levels(primary, direction=candidate.direction)
-        elif candidate.level_style == "london_open":
-            levels = build_london_open_breakout_levels(primary, direction=candidate.direction)
+    if direction is not None:
+        if quant.level_style == "mean_reversion":
+            levels = build_mean_reversion_levels(primary, direction=direction)
         else:
-            levels = build_structural_levels(primary, direction=candidate.direction)
-    rejection_reasons = list(candidate.rejection_reasons)
-    decision = candidate.decision
-    if levels is None and decision != "NO_SIGNAL":
-        decision = "NO_SIGNAL"
-        rejection_reasons.append("structural_levels_invalid")
-    if not promotion.qualified:
-        decision = "NO_SIGNAL"
-        rejection_reasons.extend(promotion.reasons)
-    rejection_reasons = list(dict.fromkeys(rejection_reasons))
+            levels = build_structural_levels(primary, direction=direction)
+
+    # The quant model never emits NO_SIGNAL. Missing levels or ineligible promotion
+    # only cap TRADE -> WATCH so the pair stays visible; execution stays gated by
+    # executionScope / engineATradeEnabled below.
+    decision = quant.decision
+    if decision == "TRADE" and (levels is None or not promotion.qualified):
+        decision = "WATCH"
+
     qualified = decision == "TRADE" and promotion.qualified and levels is not None
-    executable_levels = levels if decision in {"TRADE", "WATCH"} and promotion.qualified else None
-    signal_identity = {
-        "contractVersion": CONTRACT_VERSION,
-        "pair": display,
-        "symbol": symbol,
-        "family": route.family,
-        "subclass": route.subclass,
-        "horizon": normalized_horizon,
-        "setupId": candidate.setup_id,
-        "decision": decision,
-        "direction": candidate.direction,
-        "lastConfirmedCandleTs": last_ts,
-        "artifactId": promotion.artifact.artifactId if promotion.artifact else None,
-        "entry": executable_levels.price if executable_levels else None,
-        "sl": executable_levels.invalidation if executable_levels else None,
-        "targets": [target.price for target in executable_levels.targets] if executable_levels else [],
-    }
+    executable_levels = levels
     targets = executable_levels.targets if executable_levels else ()
+    setup_id = f"quant_{quant.level_style}"
+
     validation_status = (
         "UNVALIDATED"
         if promotion.artifact and promotion.artifact.status == "DEMO_UNVALIDATED"
@@ -241,6 +230,23 @@ def evaluate_engine_a_v3(
         else "UNAVAILABLE"
     )
     execution_scope = "DEMO_ONLY" if promotion.qualified else "NONE"
+
+    signal_identity = {
+        "contractVersion": CONTRACT_VERSION,
+        "pair": display,
+        "symbol": symbol,
+        "family": route.family,
+        "subclass": route.subclass,
+        "horizon": normalized_horizon,
+        "setupId": setup_id,
+        "decision": decision,
+        "direction": direction,
+        "score": quant.confluence_score,
+        "lastConfirmedCandleTs": last_ts,
+        "artifactId": promotion.artifact.artifactId if promotion.artifact else None,
+        "entry": executable_levels.price if executable_levels else None,
+    }
+
     return EngineASetupSignal(
         contractVersion=CONTRACT_VERSION,
         signalId=_signal_id(signal_identity),
@@ -252,10 +258,10 @@ def evaluate_engine_a_v3(
         family=route.family,
         subclass=route.subclass,
         horizon=normalized_horizon,
-        setupId=candidate.setup_id,
+        setupId=setup_id,
         decision=decision,
         qualified=qualified,
-        direction=candidate.direction,
+        direction=direction,
         decisionTime=decision_time.isoformat(),
         lastConfirmedCandleTs=last_ts,
         validUntil=_expiry(decision_time, normalized_horizon).isoformat(),
@@ -268,8 +274,8 @@ def evaluate_engine_a_v3(
         tp2=targets[1].price if len(targets) > 1 else None,
         rr1=targets[0].rr if len(targets) > 0 else None,
         rr2=targets[1].rr if len(targets) > 1 else None,
-        predicates=candidate.predicates,
-        rejectionReasons=tuple(rejection_reasons),
+        predicates=_quant_predicates(quant),
+        rejectionReasons=(),
         dataFreshness=DataFreshness(
             allowed=True,
             policy="confirmed_only",
@@ -279,5 +285,12 @@ def evaluate_engine_a_v3(
         validationArtifact=promotion.artifact,
         validationStatus=validation_status,
         executionScope=execution_scope,
+        confluenceScore=quant.confluence_score,
+        maxScore=quant.max_score,
+        scoreNorm=quant.score_norm,
+        conviction=quant.conviction,
+        confluenceThreshold=quant.threshold,
+        factorScores=quant.factor_scores,
+        factorDiagnostics=quant.factor_diagnostics,
         engineATradeEnabled=qualified,
     )

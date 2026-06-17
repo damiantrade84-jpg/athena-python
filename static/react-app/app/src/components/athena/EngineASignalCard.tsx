@@ -32,6 +32,12 @@ const ORTHO_LABELS: Record<string, string> = {
   funding: 'Funding',
   oi_divergence: 'OI Div',
   vol_skew: 'Vol Skew',
+  location: 'Location',
+  volume: 'Volume',
+  intermarket: 'Intermkt',
+  sentiment: 'Sentiment',
+  macro: 'Macro',
+  microstructure: 'Micro',
 };
 
 export default function EngineASignalCard({
@@ -215,10 +221,9 @@ export default function EngineASignalCard({
             </p>
           ) : (
             <p className="text-[9px] text-muted-foreground leading-snug">
-              Final confluence blends trend, momentum quality, ADX/session gates and a weighted vote of
-              orthogonal factors (carry, COT, funding, OI divergence, vol skew) squashed into the
-              conviction term — it is{' '}
-              <span className="font-medium text-foreground/80">not</span> the sum of the factor boxes below.
+              Quality score (0–3.0): weighted multi-timeframe trend + momentum (RSI/MACD/DI·ADX),
+              entry location and volatility regime, plus intermarket, carry, COT, microstructure and
+              volume — each shown below. The bar fills to ~67% at this group&apos;s TRADE threshold.
             </p>
           )}
           {trendAbortNote && (
