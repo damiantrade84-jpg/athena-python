@@ -421,3 +421,35 @@ The next milestone is not a promotion. It is a research result answering:
 
 Until that question is answered with the validation protocol above, the
 correct status is **edge not verified**.
+
+## 10. Implementation status (2026-06-15)
+
+Standalone research harness paths:
+
+- package: `athena_research/forex_edge/`
+- CLI: `forex_edge_cli.py`
+- focused tests: `tests/test_forex_edge_research.py`
+
+Verified in the implementation worktree:
+
+```text
+C:\dev\athena-python\.venv\Scripts\python.exe -m pytest tests/test_forex_edge_research.py -q
+```
+
+Result: 105 synthetic/fixture tests passed.
+
+Important limits:
+
+- Synthetic tests prove contracts and reproducibility only. They do **not**
+  prove a forex edge.
+- Official live ingestion was not run in this verification pass.
+- User-provided Dukascopy bid/ask files were not supplied or empirically
+  tested.
+- Quality caps remain pre-registration inputs; empirical runs must fail closed
+  until those values are reviewed and supplied before holdout results are
+  inspected.
+- `BLOCKED_DATA` means required evidence is missing or fails a quality gate.
+- `COMPLETED_NO_EDGE` means the frozen study completed but did not meet every
+  candidate criterion.
+- `RESEARCH_CANDIDATE` is research-only and still has
+  `production_eligible=false`.
