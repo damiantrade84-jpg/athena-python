@@ -144,4 +144,6 @@ def merge_refreshed_signal(
         if field in refreshed:
             merged[field] = refreshed[field]
     merged["level_source"] = "engine_a_v3_refresh"
+    merged["timestamp"] = datetime.now(timezone.utc).isoformat()
+    merged["scoredAt"] = merged["timestamp"]
     return merged

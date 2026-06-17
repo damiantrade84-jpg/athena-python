@@ -45,7 +45,7 @@ def backup_now(reason: str = "manual") -> list:
             dst_con.close()
             src_con.close()
             backed_up.append(dst)
-            print(f"[BACKUP] {db_name} → {os.path.basename(dst)}")
+            print(f"[BACKUP] {db_name} -> {os.path.basename(dst)}")
         except Exception as e:
             print(f"[BACKUP] ERROR backing up {db_name}: {e}")
 

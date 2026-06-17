@@ -507,7 +507,7 @@ def pre_trade_check(
             return False, f"SHORT_TP_ABOVE_ENTRY: tp1={tp1} >= price={price}"
 
     # ── Check 4: Direction matches directional score sign ──────────────
-    dir_score = signal.get("factorDiagnostics", {}).get("directionalScore")
+    dir_score = (signal.get("factorDiagnostics") or {}).get("directionalScore")
     if dir_score is not None and dir_score != 0:
         expected_dir = "LONG" if dir_score > 0 else "SHORT"
         if direction != expected_dir:

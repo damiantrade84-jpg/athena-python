@@ -53,3 +53,95 @@ groups:
     maxHoldBars:
       intraday: 24
       swing: 30
+
+  forex_majors:
+    pairs:
+      - display: EUR/USD
+        symbol: EURUSD
+        type: forex
+        dataSymbol: EUR/USD
+      - display: GBP/USD
+        symbol: GBPUSD
+        type: forex
+        dataSymbol: GBP/USD
+      - display: USD/JPY
+        symbol: USDJPY
+        type: forex
+        dataSymbol: USD/JPY
+      - display: AUD/USD
+        symbol: AUDUSD
+        type: forex
+        dataSymbol: AUD/USD
+      - display: USD/CAD
+        symbol: USDCAD
+        type: forex
+        dataSymbol: USD/CAD
+      - display: USD/CHF
+        symbol: USDCHF
+        type: forex
+        dataSymbol: USD/CHF
+      - display: NZD/USD
+        symbol: NZDUSD
+        type: forex
+        dataSymbol: NZD/USD
+    costs:
+      spreadBps: 1.5
+      commissionBps: 2.0
+      slippageBps: 1.0
+      swapBpsPerDay: 0.2
+    purgeBars: 5
+    maxHoldBars:
+      intraday: 24
+      swing: 30
+
+  forex_crosses:
+    pairs:
+      - display: EUR/GBP
+        symbol: EURGBP
+        type: forex
+        dataSymbol: EUR/GBP
+      - display: EUR/JPY
+        symbol: EURJPY
+        type: forex
+        dataSymbol: EUR/JPY
+      - display: GBP/JPY
+        symbol: GBPJPY
+        type: forex
+        dataSymbol: GBP/JPY
+      - display: AUD/JPY
+        symbol: AUDJPY
+        type: forex
+        dataSymbol: AUD/JPY
+      - display: EUR/AUD
+        symbol: EURAUD
+        type: forex
+        dataSymbol: EUR/AUD
+      - display: GBP/AUD
+        symbol: GBPAUD
+        type: forex
+        dataSymbol: GBP/AUD
+      - display: EUR/CHF
+        symbol: EURCHF
+        type: forex
+        dataSymbol: EUR/CHF
+      - display: USD/SGD
+        symbol: USDSGD
+        type: forex
+        dataSymbol: USD/SGD
+      - display: AUD/CHF
+        symbol: AUDCHF
+        type: forex
+        dataSymbol: AUD/CHF
+      - display: AUD/NZD
+        symbol: AUDNZD
+        type: forex
+        dataSymbol: AUD/NZD
+    costs:
+      spreadBps: 2.0
+      commissionBps: 2.0
+      slippageBps: 1.5
+      swapBpsPerDay: 0.3
+    purgeBars: 5
+    maxHoldBars:
+      intraday: 24
+      swing: 30

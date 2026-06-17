@@ -415,3 +415,29 @@ def test_specialists_expose_market_specific_predicates():
         item for item in commodity.predicates if item.name == "breakout_close"
     )
     assert "12-bar" in breakout.expected
+
+
+def test_timezone_naive_parsing(monkeypatch):
+    from config import CONFIG
+    from engine_a_v3.evaluator import _parse_time
+    from engine_a_v3.session_forex import parse_utc
+
+    # Test with SERVER_TZ_OFFSET_HOURS = 2 (SAST)
+    monkeypatch.setitem(CONFIG, "SERVER_TZ_OFFSET_HOURS", 2)
+    dt1 = _parse_time("2026-06-16T10:00:00")
+    assert dt1 is not None
+    assert dt1.tzinfo == timezone.utc
+    assert dt1.hour == 8
+    assert dt1.minute == 0
+
+    dt2 = parse_utc("2026-06-16T10:00:00")
+    assert dt2 is not None
+    assert dt2.tzinfo == timezone.utc
+    assert dt2.hour == 8
+
+    # Test with timezone-aware timestamp (no conversion should shift the time itself)
+    dt3 = _parse_time("2026-06-16T10:00:00+00:00")
+    assert dt3 is not None
+    assert dt3.tzinfo == timezone.utc
+    assert dt3.hour == 10
+

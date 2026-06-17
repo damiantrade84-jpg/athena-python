@@ -28,6 +28,8 @@ import {
   Info,
   ChevronDown,
   Plus,
+  Search,
+  LineChart,
 } from 'lucide-react';
 import { cn, fmtNum, toNum } from '@/lib/utils';
 import { fmtPrice } from '@/lib/athenaFormat';
@@ -48,13 +50,14 @@ const DEFAULT_SYMBOLS = 'EUR/USD,GBP/USD,XAU/USD,BTCUSDT,ETHUSDT,NVDA,AAPL,MSFT'
 const POLL_MS = 15000;
 
 export default function LiveCockpitPanel() {
-  const { showToast } = useStore();
+  const { showToast, setTvChartIntent, setActivePanel } = useStore();
   const [symbolsInput, setSymbolsInput] = useState(DEFAULT_SYMBOLS);
   const [activeSymbols, setActiveSymbols] = useState(DEFAULT_SYMBOLS);
   const [tf, setTf] = useState<'H1' | 'H4' | 'D1'>('H4');
   const [autoPoll, setAutoPoll] = useState(true);
   const [filter, setFilter] = useState<string>('all');
   const [selected, setSelected] = useState<string | null>(null);
+  const [forexBMode, setForexBMode] = useState(false);
   const [snapshot, setSnapshot] = useState<LdSnapshot | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -63,6 +66,7 @@ export default function LiveCockpitPanel() {
   const pollRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const inFlightRef = useRef(false);
   const { post: postPaperExec, loading: papering } = useApiPost<{ ok?: boolean; error?: string; ticket?: string }>();
+  const { post: postScanB, loading: scanningB } = useApiPost<{ signals?: Array<Record<string, unknown>> }>();
 
   const fetchSnap = useCallback(async () => {
     if (inFlightRef.current) return;
@@ -151,14 +155,25 @@ export default function LiveCockpitPanel() {
   const conn = snapshot?.connections || {};
   const paperMode = snapshot?.paperMode || {};
   const filtered = useMemo(() => {
-    return symbols.filter((s) => {
+    const rows = symbols.filter((s) => {
       if (filter === 'aligned') return s.engineC?.decisionState === 'ALIGNED';
       if (filter === 'watchlist') return s.finalState === 'WATCHLIST';
       if (filter === 'paper') return s.finalState === 'PAPER CANDIDATE';
       if (filter === 'blocked') return s.finalState === 'BLOCKED';
+      if (filter === 'bcandidate')
+        return Boolean(s.engineB?.confidencePassed || s.engineB?.structuralVerdict === 'CLEAR');
       return true;
     });
-  }, [symbols, filter]);
+    // Engine B leads forex: rank passing/CLEAR structures first, then by score.
+    if (!forexBMode) return rows;
+    const rank = (r: LdSymbolRow) => {
+      let v = toNum(r.engineB?.score) || 0;
+      if (r.engineB?.confidencePassed) v += 1000;
+      if (r.engineB?.structuralVerdict === 'CLEAR') v += 100;
+      return v;
+    };
+    return [...rows].sort((a, b) => rank(b) - rank(a));
+  }, [symbols, filter, forexBMode]);
 
   const selectedRow = symbols.find((s) => s.symbol === selected) || null;
 
@@ -193,6 +208,75 @@ export default function LiveCockpitPanel() {
       else showToast(`Paper execute blocked: ${r?.error || 'unknown'}`, 'error');
     },
     [postPaperExec, showToast],
+  );
+
+  // Engine B leads forex: scan the forex universe for Engine B candidates and
+  // load the top-ranked passes as the cockpit's active symbols. The returned
+  // signals are passing Engine B structures already sorted by confluence; the
+  // /api/scan-naked call also warms the Engine B cache the snapshot reads.
+  const scanForexB = useCallback(async () => {
+    const res = await postScanB('/api/scan-naked', { assetClass: 'forex', style: 'auto' });
+    const sigs = Array.isArray(res?.signals) ? res.signals : [];
+    if (sigs.length === 0) {
+      showToast('Engine B forex scan: no candidates', 'info');
+      return;
+    }
+    const displays: string[] = [];
+    for (const s of sigs) {
+      const d = String((s as { display?: string; symbol?: string }).display
+        || (s as { symbol?: string }).symbol || '').trim();
+      if (d && !displays.includes(d)) displays.push(d);
+      if (displays.length >= 16) break;
+    }
+    const joined = displays.join(',');
+    setSymbolsInput(joined);
+    setActiveSymbols(joined);
+    setForexBMode(true);
+    setFilter('bcandidate');
+    showToast(`Engine B forex: ${displays.length} candidate${displays.length === 1 ? '' : 's'} loaded`, 'success');
+  }, [postScanB, showToast]);
+
+  // Open a cockpit symbol on the TV Chart with Engine B context for AI review.
+  // Advisory only - mirrors SignalsPanel's setTvChartIntent handoff; no execution.
+  const openOnChart = useCallback(
+    (row: LdSymbolRow) => {
+      const symbol = String(row.symbol || '').toUpperCase().trim();
+      if (!symbol) {
+        showToast('Cannot open chart: missing symbol', 'error');
+        return;
+      }
+      const eb = row.engineB;
+      const signal = {
+        symbol,
+        pair: symbol,
+        display: row.symbol,
+        type: row.asset_type,
+        direction: eb?.direction || row.engineA?.direction || null,
+        engine: 'engine_b',
+        engine_source: 'engine_b',
+        timeframe: tf,
+        score: eb?.score ?? null,
+        threshold: eb?.threshold ?? null,
+        entry: row.levels?.entry ?? eb?.entry ?? null,
+        sl: row.levels?.sl ?? eb?.sl ?? null,
+        tp1: row.levels?.tp1 ?? row.levels?.tp ?? eb?.tp ?? null,
+        rr1: row.levels?.rr ?? eb?.rr ?? null,
+        structuralVerdict: eb?.structuralVerdict ?? null,
+      };
+      setTvChartIntent({
+        id: `tv-${symbol}-${Date.now()}`,
+        source: 'engine_b',
+        symbol,
+        display: row.symbol,
+        signal,
+        preferredTf: tf,
+        autoReview: true,
+        createdAt: new Date().toISOString(),
+      });
+      setActivePanel('tvChart');
+      showToast(`Opening ${row.symbol} on TV Chart for AI review`, 'info');
+    },
+    [tf, setTvChartIntent, setActivePanel, showToast],
   );
 
   return (
@@ -335,12 +419,24 @@ export default function LiveCockpitPanel() {
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="all">All states</SelectItem>
+              <SelectItem value="bcandidate">Engine B candidate</SelectItem>
               <SelectItem value="paper">Paper candidate</SelectItem>
               <SelectItem value="aligned">Engine C aligned</SelectItem>
               <SelectItem value="watchlist">Watchlist</SelectItem>
               <SelectItem value="blocked">Blocked</SelectItem>
             </SelectContent>
           </Select>
+          <Button
+            size="sm"
+            variant={forexBMode ? 'default' : 'outline'}
+            className="h-8 text-xs gap-1"
+            onClick={scanForexB}
+            disabled={scanningB}
+            title="Scan the forex universe for Engine B candidates and load the top-ranked passes"
+          >
+            <Search className="w-3.5 h-3.5" />
+            {scanningB ? 'Scanning…' : 'Scan Forex (Engine B)'}
+          </Button>
           <Button size="sm" className="h-8 text-xs" onClick={() => fetchSnap()}>
             Refresh
           </Button>
@@ -363,20 +459,27 @@ export default function LiveCockpitPanel() {
                 </Card>
               ) : (
                 filtered.map((row) => (
-                  <CockpitCard key={row.symbol} row={row} active={selected === row.symbol} onClick={() => setSelected(row.symbol)} />
+                  <CockpitCard
+                    key={row.symbol}
+                    row={row}
+                    active={selected === row.symbol}
+                    preferB={forexBMode}
+                    onClick={() => setSelected(row.symbol)}
+                    onOpenChart={() => openOnChart(row)}
+                  />
                 ))
               )}
             </div>
           </ScrollArea>
           {/* Event feed */}
-          <Card className="border-border/60 bg-card/50 shrink-0">
-            <CardHeader className="pb-2">
+          <Card className="border-border/60 bg-card/50 shrink min-h-0 max-h-[40%] flex flex-col gap-0 py-3">
+            <CardHeader className="pb-2 shrink-0">
               <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Cinzel', serif", letterSpacing: '0.12em' }}>
                 <Activity className="w-3.5 h-3.5" /> Event Feed
               </CardTitle>
             </CardHeader>
-            <CardContent className="p-3 pt-0">
-              <ScrollArea className="h-[100px]">
+            <CardContent className="p-3 pt-0 flex-1 min-h-0">
+              <ScrollArea className="h-full">
                 {events.length === 0 ? (
                   <p className="text-[11px] text-muted-foreground">No events yet.</p>
                 ) : (
@@ -412,7 +515,7 @@ export default function LiveCockpitPanel() {
         {/* Right: detail tabs */}
         <Card className="col-span-4 border-border/60 bg-card/50 flex flex-col overflow-hidden min-h-0 h-full">
           {selectedRow ? (
-            <CockpitDetail row={selectedRow} onPaperExecute={onPaperExecute} executing={papering} />
+            <CockpitDetail row={selectedRow} onPaperExecute={onPaperExecute} executing={papering} onOpenChart={() => openOnChart(selectedRow)} />
           ) : (
             <CardContent className="p-12 text-center text-muted-foreground">
               Select a symbol from the left.
@@ -489,7 +592,19 @@ function connBg(state?: string): string {
   return 'bg-muted/40 text-muted-foreground';
 }
 
-function CockpitCard({ row, active, onClick }: { row: LdSymbolRow; active: boolean; onClick: () => void }) {
+function CockpitCard({
+  row,
+  active,
+  preferB,
+  onClick,
+  onOpenChart,
+}: {
+  row: LdSymbolRow;
+  active: boolean;
+  preferB?: boolean;
+  onClick: () => void;
+  onOpenChart: () => void;
+}) {
   const finalBg =
     row.finalState === 'PAPER CANDIDATE'
       ? 'bg-long/15 text-long'
@@ -498,7 +613,9 @@ function CockpitCard({ row, active, onClick }: { row: LdSymbolRow; active: boole
         : row.finalState === 'BLOCKED'
           ? 'bg-short/15 text-short'
           : 'bg-muted/40 text-muted-foreground';
-  const dir = row.engineA?.direction || row.engineB?.direction;
+  const dir = preferB
+    ? row.engineB?.direction || row.engineA?.direction
+    : row.engineA?.direction || row.engineB?.direction;
   const dirBg = dir === 'LONG' ? 'bg-long/20 text-long' : dir === 'SHORT' ? 'bg-short/20 text-short' : 'bg-muted/40 text-muted-foreground';
   return (
     <Card
@@ -519,7 +636,21 @@ function CockpitCard({ row, active, onClick }: { row: LdSymbolRow; active: boole
               </Badge>
             )}
           </div>
-          <Badge className={cn('text-[10px]', finalBg)}>{row.finalState}</Badge>
+          <div className="flex items-center gap-1">
+            <Badge className={cn('text-[10px]', finalBg)}>{row.finalState}</Badge>
+            <Button
+              size="sm"
+              variant="ghost"
+              className="h-6 px-1.5 text-[10px] gap-1"
+              title="Open on TV Chart for AI review"
+              onClick={(e) => {
+                e.stopPropagation();
+                onOpenChart();
+              }}
+            >
+              <LineChart className="w-3.5 h-3.5" />
+            </Button>
+          </div>
         </div>
 
         <div className="grid grid-cols-3 gap-2 text-xs">
@@ -568,10 +699,12 @@ function CockpitDetail({
   row,
   onPaperExecute,
   executing,
+  onOpenChart,
 }: {
   row: LdSymbolRow;
   onPaperExecute: (row: LdSymbolRow) => void;
   executing: boolean;
+  onOpenChart: () => void;
 }) {
   const [activeTab, setActiveTab] = useState('overview');
 
@@ -590,6 +723,10 @@ function CockpitDetail({
             {row.spread != null && (
               <span className="text-[10px] text-muted-foreground">spread {fmtNum(row.spread, 4)}</span>
             )}
+            <Button type="button" size="sm" variant="outline" className="h-7 gap-1 text-[10px]" onClick={onOpenChart}>
+              <LineChart className="w-3.5 h-3.5" />
+              Open &amp; Review
+            </Button>
             <Button type="button" size="sm" variant="outline" className="h-7 gap-1 text-[10px]" onClick={() => setActiveTab('agent')}>
               <Bot className="w-3.5 h-3.5" />
               Discuss with AI

@@ -7682,6 +7682,25 @@ def api_scan_naked():
         reverse=True,
     )
 
+    # Warm the Engine B cache so the Live Cockpit snapshot reflects this universe
+    # scan (the snapshot reads _engine_b_cache_get(display); see
+    # routes_live_dashboard._ld_build_engine_b_row). Diagnostic/advisory only -
+    # caches the same naked-analysis dict shape as /api/naked-analysis, no
+    # scoring/gate/execution effect. TTL handled by _engine_b_cache.
+    for _row in results:
+        _nd = _row.get("naked_data")
+        if not isinstance(_nd, dict):
+            continue
+        _disp = str(_row.get("display") or "")
+        _sym = str(_row.get("symbol") or "")
+        if _disp:
+            _engine_b_cache_put(_disp, _nd)
+            _engine_b_cache_put(_disp.upper(), _nd)
+        if _sym:
+            _sid = _sym.replace("/", "_").replace("=", "_").replace("^", "_").replace(".", "_")
+            _engine_b_cache_put(_sid, _nd)
+            _engine_b_cache_put(_sym, _nd)
+
     # Run Conductor on Engine B signals so widget updates after an Engine B scan
     if results:
         try:
@@ -13180,6 +13199,10 @@ def analyze_pair(
             )
         except Exception:
             pass
+        from config import CONFIG
+        if not bool(CONFIG.get("ENGINE_A_V3_ENABLED", True)):
+            return None
+
         from engine_a_v3.evaluator import evaluate_engine_a_v3
 
         return evaluate_engine_a_v3(
@@ -13310,6 +13333,10 @@ def analyze_pair(
                     )
                 except Exception:
                     pass
+                from config import CONFIG
+                if not bool(CONFIG.get("ENGINE_A_V3_ENABLED", True)):
+                    return None
+
                 from engine_a_v3.evaluator import evaluate_engine_a_v3
 
                 _blocked = evaluate_engine_a_v3(
@@ -13333,6 +13360,10 @@ def analyze_pair(
                 pair.get("display", "?"),
                 _prefresh_err,
             )
+            from config import CONFIG
+            if not bool(CONFIG.get("ENGINE_A_V3_ENABLED", True)):
+                return None
+
             from engine_a_v3.evaluator import evaluate_engine_a_v3
 
             _blocked = evaluate_engine_a_v3(
@@ -13345,22 +13376,24 @@ def analyze_pair(
             _blocked["is_forming"] = is_forming
             return _blocked
 
-    from engine_a_v3.evaluator import evaluate_engine_a_v3
+    from config import CONFIG
+    if bool(CONFIG.get("ENGINE_A_V3_ENABLED", True)):
+        from engine_a_v3.evaluator import evaluate_engine_a_v3
 
-    _v3_signal = evaluate_engine_a_v3(
-        pair,
-        {"D1": d1, "H4": h4, "H1": h1},
-        horizon=style,
-    ).to_dict()
-    _v3_signal["dataFreshness"]["diagnostics"] = _freshness_diag
-    _v3_signal["candleFetchMeta"] = {
-        "D1": preloaded_fetch_meta.get("D1") or _freshness_diag.get("D1"),
-        "H4": preloaded_fetch_meta.get("H4") or _freshness_diag.get("H4"),
-        "H1": preloaded_fetch_meta.get("H1") or _freshness_diag.get("H1"),
-        "pairSource": pair.get("source"),
-    }
-    _v3_signal["is_forming"] = is_forming
-    return _v3_signal
+        _v3_signal = evaluate_engine_a_v3(
+            pair,
+            {"D1": d1, "H4": h4, "H1": h1},
+            horizon=style,
+        ).to_dict()
+        _v3_signal["dataFreshness"]["diagnostics"] = _freshness_diag
+        _v3_signal["candleFetchMeta"] = {
+            "D1": preloaded_fetch_meta.get("D1") or _freshness_diag.get("D1"),
+            "H4": preloaded_fetch_meta.get("H4") or _freshness_diag.get("H4"),
+            "H1": preloaded_fetch_meta.get("H1") or _freshness_diag.get("H1"),
+            "pairSource": pair.get("source"),
+        }
+        _v3_signal["is_forming"] = is_forming
+        return _v3_signal
 
     _asset_type = pair.get("type", "stock")
     d1i = calc_indicators_with_normalized(d1, _asset_type, score_group=_score_group)

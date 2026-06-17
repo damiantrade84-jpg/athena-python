@@ -96,6 +96,7 @@ import type {
   SuggestedTradeWatch,
   TimeframeRoute,
 } from '@/types/athena';
+import { isEngineAV3Signal, resolveEngineAV3Signal } from '@/lib/engineAV3';
 
 const TIMEFRAMES = ['1', '5', '15', '30', '60', '240', 'D', 'W'];
 
@@ -1733,11 +1734,6 @@ function DiagnosticBlock({ label, value }: { label: string; value: unknown }) {
   );
 }
 
-function isEngineAV3Signal(signal: EngineASignal | null): boolean {
-  return String(signal?.engine || '').toUpperCase() === 'ENGINE_A_V3'
-    && String(signal?.contractVersion || '').startsWith('3.');
-}
-
 function EngineAV3SidePanel({
   signal,
   liveTick,
@@ -1820,7 +1816,13 @@ function EngineASidePanel({
   chartPayload: CandleApiResponse | null;
 }) {
   if (signal && isEngineAV3Signal(signal)) {
-    return <EngineAV3SidePanel signal={signal} liveTick={liveTick} chartPayload={chartPayload} />;
+    return (
+      <EngineAV3SidePanel
+        signal={resolveEngineAV3Signal(signal)}
+        liveTick={liveTick}
+        chartPayload={chartPayload}
+      />
+    );
   }
   const factorScores = asRecord(signal?.factorScores);
   const diagnostics = asRecord(signal?.factorDiagnostics);

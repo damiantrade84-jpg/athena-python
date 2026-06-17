@@ -27,6 +27,7 @@ import {
 } from 'lucide-react';
 import { fmtNum, toNum, cn } from '@/lib/utils';
 import { fmtAtrMeta, fmtLiveQuoteMeta, fmtPrice } from '@/lib/athenaFormat';
+import { engineAV3DecisionRank, engineAV3ListLabel, isEngineAV3Signal } from '@/lib/engineAV3';
 import { fetchVisionCandlePayload } from '@/lib/visionReview';
 import apiClient from '@/lib/apiClient';
 import { buildQuickExecutePayload, resolveEngineBExecutionPreviewLevels } from '@/lib/manualExecuteHelpers';
@@ -95,6 +96,11 @@ function compareUnified(a: UnifiedRow, b: UnifiedRow, sortBy: string): number {
   if (sortBy === 'rr') return toNum(b.signal.rr ?? b.signal.rr1) - toNum(a.signal.rr ?? a.signal.rr1);
   if (sortBy === 'time') {
     return new Date(b.signal.timestamp || 0).getTime() - new Date(a.signal.timestamp || 0).getTime();
+  }
+  const aV3 = engineAV3DecisionRank(a.signal);
+  const bV3 = engineAV3DecisionRank(b.signal);
+  if (aV3 >= 0 || bV3 >= 0) {
+    if (aV3 !== bV3) return bV3 - aV3;
   }
   return toNum(b.signal.confluenceScore ?? b.signal.score) - toNum(a.signal.confluenceScore ?? a.signal.score);
 }
@@ -866,7 +872,7 @@ export default function SignalsPanel() {
                           {formatGroupLabel(key)}
                         </span>
                         <Badge variant="outline" className="text-[9px] font-mono">
-                          {items.length} - top {fmtNum(items[0]?.signal.confluenceScore ?? items[0]?.signal.score, 2)}
+                          {items.length} - top {engineAV3ListLabel(items[0]?.signal) ?? fmtNum(items[0]?.signal.confluenceScore ?? items[0]?.signal.score, 2)}
                         </Badge>
                       </div>
                       <div className="space-y-2 pl-0">
@@ -936,7 +942,7 @@ export default function SignalsPanel() {
                       }}
                       onExecute={(s) => requestExecute(
                         { ...selectedRow, signal: s },
-                        String(s.engine || '').toUpperCase() === 'ENGINE_A_V3'
+                        isEngineAV3Signal(s)
                           ? (s.horizon === 'intraday' ? 'intraday' : 'swing')
                           : pendingStyle,
                       )}
@@ -955,7 +961,7 @@ export default function SignalsPanel() {
                     </Button>
 
                     {/* Per-style execute toolbar */}
-                    {String(selectedRow.signal.engine || '').toUpperCase() === 'ENGINE_A_V3' ? (
+                    {isEngineAV3Signal(selectedRow.signal) ? (
                       <Card className="border-border/60 bg-card/50">
                         <CardContent className="p-3 text-[11px] text-muted-foreground">
                           V3 execution re-validates the fixed {selectedRow.signal.horizon || 'signal'} horizon

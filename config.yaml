@@ -94,6 +94,9 @@ ENGINE_A_V3_BACKTEST:
   SWAP_BPS_PER_DAY: 0.5
   MAX_HOLD_BARS: 24
 
+# Master switch for Engine A V3 specialist engine (if false, falls back to legacy Engine A).
+ENGINE_A_V3_ENABLED: true
+
 # Demo-only activation for deterministic V3 specialists without promoted artifacts.
 # This does not force TRADE decisions and cannot pass the V3 live/autopilot guards.
 ENGINE_A_V3_DEMO_UNVALIDATED_ENABLED: true
@@ -4308,7 +4311,7 @@ CONDUCTOR:
 
 LIVE_DASHBOARD:
   ENABLED: true
-  MAX_SYMBOLS: 8
+  MAX_SYMBOLS: 16          # holds the ranked forex Engine-B candidate set (majors+crosses exceed 8)
   DEFAULT_SYMBOLS:
     - NAS100
     - SPY.US

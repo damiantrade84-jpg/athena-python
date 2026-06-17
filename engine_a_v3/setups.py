@@ -484,6 +484,8 @@ def _mean_reversion_candidate(
 def _london_open_breakout_candidate(
     setup_id: str,
     primary: list[dict],
+    *,
+    display: str | None = None,
 ) -> SetupCandidate:
     """Asian range breakout during London open with tick-volume confirmation."""
     if len(primary) < 80:
@@ -520,7 +522,7 @@ def _london_open_breakout_candidate(
     long_break = close > asian.high
     short_break = close < asian.low
     direction = "LONG" if long_break else "SHORT" if short_break else None
-    vol_ratio = volume_spike_ratio(primary)
+    vol_ratio = volume_spike_ratio(primary, display=display, tf="H1")
     vol_ok = vol_ratio >= 1.5
     session_ok = in_london_open_window(as_of)
     quality, quality_label = session_quality_score(as_of)
@@ -556,6 +558,8 @@ def detect_setup(
     route: SpecialistRoute,
     horizon: str,
     candles: dict[str, list[dict]],
+    *,
+    display: str | None = None,
 ) -> SetupCandidate:
     if route.family == "unknown":
         return SetupCandidate(
@@ -587,7 +591,7 @@ def detect_setup(
                 ),
             )
         elif setup_mode == "london_open":
-            candidates = (_london_open_breakout_candidate("fx_london_open_breakout", primary),)
+            candidates = (_london_open_breakout_candidate("fx_london_open_breakout", primary, display=display),)
         else:
             candidates = (
                 _with_session_gate(

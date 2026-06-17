@@ -4,6 +4,7 @@ import type {
   ScalpAIChartReviewResponse,
   SuggestedTradePlan,
 } from '@/types/athena';
+import { isEngineAV3Signal, resolveEngineAV3Signal } from '@/lib/engineAV3';
 
 export type QuickExecuteStyle = 'scalp' | 'intraday' | 'swing' | 'auto';
 export type ExecutionVolumeMode = 'min_lot' | 'calculated';
@@ -183,28 +184,32 @@ export function buildQuickExecutePayload(args: {
   reviewId?: string | null;
 }): Record<string, unknown> {
   const { signal, engineBOverlay, isEngineBOnly, pipMode, volumeMode, sizingOverride, exitMode, reviewId } = args;
-  const signalPayload = isEngineBOnly ? signal : stripEngineBFromSignal(signal);
+  const resolved = isEngineBOnly ? signal : resolveEngineAV3Signal(signal);
+  const signalPayload = isEngineBOnly ? resolved : stripEngineBFromSignal(resolved);
   const nakedData = isEngineBOnly
-    ? (signal.naked_data ?? signal.engine_b ?? {})
+    ? (resolved.naked_data ?? resolved.engine_b ?? {})
     : {};
-  const effectiveStyle = pipMode || signal.style || 'swing';
+  const effectiveStyle = isEngineAV3Signal(resolved)
+    ? String(resolved.horizon || resolved.style || pipMode || 'swing')
+    : (pipMode || resolved.style || 'swing');
   const volumePayload = buildExecutionVolumePayload({ volumeMode, sizingOverride });
   // Per-trade exit-mode override is Engine-A only (backend no-ops it for engine_b).
   const exitModePayload = isEngineBOnly ? {} : buildExitModePayload({ exitMode });
   const payload: Record<string, unknown> = {
     signal: {
       ...signalPayload,
-      symbol: signal.symbol || signal.pair || signal.display,
-      pair: signal.pair || signal.display,
-      display: signal.display || signal.pair,
-      type: signal.type,
-      direction: signal.direction,
-      price: signal.entry ?? signal.price,
-      entry: signal.entry ?? signal.price,
-      sl: signal.sl,
-      tp1: signal.tp1 ?? signal.tp,
-      tp2: signal.tp2 ?? signal.tp,
+      symbol: resolved.symbol || resolved.pair || resolved.display,
+      pair: resolved.pair || resolved.display,
+      display: resolved.display || resolved.pair,
+      type: resolved.type,
+      direction: resolved.direction,
+      price: resolved.entry ?? resolved.price,
+      entry: resolved.entry ?? resolved.price,
+      sl: resolved.sl,
+      tp1: resolved.tp1 ?? resolved.tp,
+      tp2: resolved.tp2 ?? resolved.tp,
       style: effectiveStyle,
+      horizon: resolved.horizon ?? effectiveStyle,
       source: isEngineBOnly ? 'engine_b' : 'engine_a',
       ...exitModePayload,
     },
@@ -282,12 +287,11 @@ export function aiReviewWarningForExecute(review: AIChartReviewResponse | null):
 
 export function canExecuteEngineASignalTier(signal: EngineASignal | null): boolean {
   if (!signal) return false;
-  const isV3 = String(signal.engine || '').toUpperCase() === 'ENGINE_A_V3'
-    && String(signal.contractVersion || '').startsWith('3.');
-  if (isV3) {
-    return signal.decision === 'TRADE'
-      && signal.qualified === true
-      && signal.engineATradeEnabled === true;
+  if (isEngineAV3Signal(signal)) {
+    const resolved = resolveEngineAV3Signal(signal);
+    return resolved.decision === 'TRADE'
+      && resolved.qualified === true
+      && resolved.engineATradeEnabled === true;
   }
   if (signal.engineATradeEnabled === false) return false;
   const tier = String(

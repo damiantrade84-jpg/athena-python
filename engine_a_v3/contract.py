@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
+from datetime import datetime, timezone
 from typing import Any
 
 
@@ -100,9 +101,12 @@ class EngineASetupSignal:
             artifact = asdict(self.validationArtifact)
             artifact["metrics"] = dict(self.validationArtifact.metrics)
             payload["validationArtifact"] = artifact
+        scored_at = datetime.now(timezone.utc).isoformat()
         payload.update(
             {
-                "timestamp": self.decisionTime,
+                # Wall-clock scan/eval time for execution freshness gates (not candle time).
+                "timestamp": scored_at,
+                "scoredAt": scored_at,
                 "display": self.pair,
                 "style": self.horizon,
                 "entry": self.price,

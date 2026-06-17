@@ -14,6 +14,7 @@ import {
   sessionLabel,
 } from '@/lib/athenaFormat';
 import type { EngineASignal } from '@/types/athena';
+import { isEngineAV3Signal, resolveEngineAV3Signal } from '@/lib/engineAV3';
 
 interface Props {
   signal: EngineASignal;
@@ -43,12 +44,10 @@ export default function EngineASignalCard({
   compact,
 }: Props) {
   const raw = signal as Record<string, unknown>;
-  const isEngineAV3 = String(signal.engine || '').toUpperCase() === 'ENGINE_A_V3'
-    && String(signal.contractVersion || '').startsWith('3.');
-  if (isEngineAV3) {
+  if (isEngineAV3Signal(signal)) {
     return (
       <EngineAV3SignalCard
-        signal={signal}
+        signal={resolveEngineAV3Signal(signal)}
         onExecute={onExecute}
         onSelect={onSelect}
         selected={selected}

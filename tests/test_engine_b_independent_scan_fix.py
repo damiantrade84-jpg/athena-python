@@ -112,6 +112,37 @@ def test_blocked_engine_a_stub_preserves_v2_abort_diagnostics():
     assert stub["engine_a_factorScores"] == blocked_a["factorScores"]
 
 
+def test_blocked_engine_a_v3_stub_preserves_display_fields_for_ui():
+    pair = {"display": "SOL/USDT", "symbol": "SOLUSDT", "type": "crypto"}
+    blocked_a = {
+        "engine": "ENGINE_A_V3",
+        "contractVersion": "3.0.0",
+        "setupId": "crypto_trend_pullback_continuation",
+        "decision": "NO_SIGNAL",
+        "direction": "LONG",
+        "qualified": False,
+        "rejectionReasons": ["trend_context_not_directional"],
+        "predicates": [
+            {"name": "context_trend_long", "passed": False, "actual": 0, "expected": "> 0"},
+        ],
+        "family": "crypto",
+        "subclass": "alt_majors",
+        "horizon": "swing",
+        "validationStatus": "UNVALIDATED",
+    }
+
+    stub = _make_engine_b_only_signal_stub_from_blocked_engine_a(pair, blocked_a)
+
+    assert stub["engine_source"] == ENGINE_B_SOURCE
+    assert stub["engine"] == "B"
+    assert stub["engine_a_v3_blocked"] is True
+    assert stub["engine_a_setupId"] == "crypto_trend_pullback_continuation"
+    assert stub["engine_a_decision"] == "NO_SIGNAL"
+    assert stub["engine_a_predicates"] == blocked_a["predicates"]
+    assert stub["engine_a_rejectionReasons"] == blocked_a["rejectionReasons"]
+    assert stub["engine_a_family"] == "crypto"
+
+
 def test_scan_rank_handles_b_only_zero_max_score():
     pair = {"display": "BTCUSDT", "symbol": "BTCUSDT", "type": "crypto"}
     stub = _make_engine_b_only_signal_stub(pair)
@@ -369,3 +400,31 @@ def test_engine_b_only_classifier_never_returns_trade_tier():
     sig["enginesAligned"] = True
     tier, _ = _classify_engine_b_only_signal(sig, pair)
     assert tier in {"watchlist", "skip"}
+
+
+# ---------------------------------------------------------------------------
+# v3 isolation: Engine B scan path must not branch on v3 overlay
+# ---------------------------------------------------------------------------
+
+def test_v3_no_signal_with_direction_does_not_force_b_only_probe():
+    """v3 NO_SIGNAL can still carry LONG/SHORT — B must use that direction,
+    not the independent LONG+SHORT probe (pre-v3 contract)."""
+    text = (REPO_ROOT / "scanner.py").read_text(encoding="utf-8")
+    assert "_v3_overlay" not in text
+    assert (
+        '_is_engine_a_v3_signal(sig_a) and sig_a.get("decision") == "NO_SIGNAL"'
+        not in text
+    )
+
+
+def test_scanner_tier_loop_applies_b_gates_after_v3_classify():
+    """Engine B scan gates must run for v3 rows — not only legacy Engine A rows."""
+    text = (REPO_ROOT / "scanner.py").read_text(encoding="utf-8")
+    marker = "Engine B scan gates run for all non-B-only rows"
+    assert marker in text
+    idx = text.index(marker)
+    tail = text[idx : idx + 400]
+    assert "_apply_engine_b_scan_gate" in tail
+    assert "_apply_engine_b_only_watchlist_scan_tier" in tail
+    assert "_apply_engine_b_structure_ready_scan_tier" in tail
+
