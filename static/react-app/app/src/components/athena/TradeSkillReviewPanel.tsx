@@ -42,7 +42,7 @@ export interface TradeSkillReviewPanelProps {
   skill: TradeSkillReview | null | undefined;
   suggestedPlan?: SuggestedTradePlan | null;
   /** Engine D shows market state / aggression; Engine A chart review hides aggression. */
-  variant?: 'engine_a_chart' | 'engine_d_scalp';
+  variant?: 'engine_a_chart' | 'engine_b_chart' | 'engine_d_scalp';
   timeframeRoute?: string | null;
 }
 

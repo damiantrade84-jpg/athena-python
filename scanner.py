@@ -862,6 +862,11 @@ def _copy_engine_a_v3_stub_fields(stub: dict, engine_a_signal: dict) -> None:
         "contractVersion",
         "validationStatus",
         "validationArtifact",
+        "executionScope",
+        "exitPolicy",
+        "scoringProfile",
+        "componentScores",
+        "confluenceThreshold",
         "engineATradeEnabled",
     ):
         value = engine_a_signal.get(key)
@@ -895,7 +900,8 @@ def _make_engine_b_only_signal_stub_from_blocked_engine_a(
         stub["engine_a_confluenceScore"] = engine_a_signal.get("confluenceScore")
         stub["engine_a_maxScore"] = engine_a_signal.get("maxScore")
         stub["engine_a_threshold"] = (
-            engine_a_signal.get("threshold")
+            engine_a_signal.get("confluenceThreshold")
+            or engine_a_signal.get("threshold")
             or engine_a_signal.get("liveThreshold")
             or engine_a_signal.get("scanThresholdEffective")
             or engine_a_signal.get("scanThreshold")

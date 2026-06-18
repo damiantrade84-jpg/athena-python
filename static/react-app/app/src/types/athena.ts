@@ -184,6 +184,7 @@ export interface EngineASignal {
     status?: string;
     metrics?: Record<string, unknown>;
     provenanceSha256?: string;
+    profileSha256?: string | null;
   } | null;
   scoringProfile?: {
     enabled?: boolean;
@@ -194,7 +195,30 @@ export interface EngineASignal {
     executionTf?: string;
     chartTf?: string;
     trendWeights?: Record<string, number>;
+    profileId?: string;
+    scoreGroup?: string;
+    horizon?: string;
+    indicatorPeriods?: Record<string, number>;
+    weights?: Record<string, number>;
+    directionDeadband?: number;
+    tradeThreshold?: number;
+    exitPolicy?: 'SINGLE_TP1' | 'SPLIT_50_50';
+    profileSha256?: string;
+    scorerSha256?: string;
+    status?: string;
+    createdAt?: string | null;
+    validUntil?: string | null;
   };
+  validationStatus?: 'PROMOTED' | 'UNVALIDATED' | 'UNAVAILABLE' | string;
+  executionScope?: 'DEMO_ONLY' | 'NONE' | string;
+  exitPolicy?: 'SINGLE_TP1' | 'SPLIT_50_50' | string;
+  componentScores?: Record<string, {
+    signal?: number;
+    quality?: number;
+    weight?: number;
+    contribution?: number;
+    available?: boolean;
+  }>;
   scoringTimeframes?: string[];
   momentumTimeframe?: string;
   regimeTimeframe?: string;
@@ -222,6 +246,7 @@ export interface EngineASignal {
   maxScore?: number;
   threshold?: number;
   confluenceScore?: number;
+  confluenceThreshold?: number;
   confluencePct?: number;
   conviction?: number; // 0–1
   signalClass?: string; // CRITERIA / WATCHLIST / SKIP / etc.

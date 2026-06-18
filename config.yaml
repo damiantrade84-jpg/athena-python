@@ -100,6 +100,7 @@ ENGINE_A_V3_ENABLED: true
 # Demo-only activation for deterministic V3 specialists without promoted artifacts.
 # This does not force TRADE decisions and cannot pass the V3 live/autopilot guards.
 ENGINE_A_V3_DEMO_UNVALIDATED_ENABLED: true
+ENGINE_A_V3_PROFILE_TTL_DAYS: 90
 
 # Per-group thesis for the v3 forex specialist: "trend" (default, unchanged) or
 # "mean_reversion" (range-fade, counter-trend). Reversible via this key.

@@ -11,6 +11,7 @@ import yaml
 from athena_research.data_loader import load_ohlcv
 from engine_a_v3.promotion import PromotionRegistry, promote_candidate
 from engine_a_v3.routing import route_specialist
+from engine_a_v3.routing import KNOWN_SCORE_GROUPS
 from engine_a_v3.validation import validate_specialist_cohort
 
 
@@ -26,6 +27,17 @@ def load_manifest(path: str | os.PathLike[str] = DEFAULT_MANIFEST) -> dict[str, 
     raw = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
     if not isinstance(raw, dict) or not isinstance(raw.get("groups"), dict):
         raise ValueError("validation_manifest_invalid")
+    if set(raw["groups"]) != set(KNOWN_SCORE_GROUPS):
+        raise ValueError("validation_manifest_group_coverage_incomplete")
+    for name, group in raw["groups"].items():
+        if not isinstance(group, dict) or group.get("horizons") != ["intraday", "swing"]:
+            raise ValueError(f"validation_manifest_horizons_invalid:{name}")
+        enabled = group.get("validationEnabled") is True
+        provider = str(group.get("requiredProvider") or "")
+        if enabled and (provider not in {"bybit", "mt5"} or group.get("costsVerified") is not True):
+            raise ValueError(f"validation_manifest_provider_or_costs_unverified:{name}")
+        if not enabled and provider != "unverified":
+            raise ValueError(f"validation_manifest_disabled_provider_invalid:{name}")
     return raw
 
 
@@ -71,6 +83,8 @@ def validate_manifest_group(
         raise ValueError("validation_group_unknown")
     if horizon not in {"intraday", "swing"}:
         raise ValueError("validation_horizon_invalid")
+    if group.get("validationEnabled") is not True:
+        raise ValueError(f"validation_lane_unvalidated:{group_name}:{horizon}")
 
     limits = manifest.get("limits") or {}
     datasets = []
@@ -90,10 +104,17 @@ def validate_manifest_group(
                 limit=int(limits.get(timeframe, 1000)),
                 force_refresh=force_refresh,
                 allow_yfinance=False,
+                required_source=("bybit_rest" if group["requiredProvider"] == "bybit" else "mt5"),
             )
             if frame is None or provenance.data_source == "DATA_UNAVAILABLE":
                 raise ValueError(
                     f"validation_data_unavailable:{data_symbol}:{timeframe}"
+                )
+            expected_source = "bybit_rest" if group["requiredProvider"] == "bybit" else "mt5"
+            if provenance.data_source != expected_source:
+                raise ValueError(
+                    f"validation_provider_mismatch:{data_symbol}:{timeframe}:"
+                    f"expected={expected_source}:actual={provenance.data_source}"
                 )
             candles[timeframe] = _frame_to_confirmed_candles(frame)
             pair_provenance[timeframe] = provenance.to_dict()
@@ -113,6 +134,7 @@ def validate_manifest_group(
         swap_bps_per_day=float(costs["swapBpsPerDay"]),
         purge_bars=int(group.get("purgeBars", 5)),
         max_hold_bars=int(group.get("maxHoldBars", {}).get(horizon, 24)),
+        provider=("bybit_rest" if group["requiredProvider"] == "bybit" else "mt5"),
     )
     artifact["provenance"]["sourceManifest"] = provenance_manifest
     root = Path(candidate_root) if candidate_root else default_candidate_root()

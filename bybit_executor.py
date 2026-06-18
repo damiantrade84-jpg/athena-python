@@ -64,6 +64,17 @@ def _is_engine_d_signal(signal: dict) -> bool:
     return engine in ("scalp", "engine d", "scalp_vp")
 
 
+def _engine_a_v3_exit_policy(signal: dict) -> str | None:
+    if str((signal or {}).get("engine") or "").upper() != "ENGINE_A_V3":
+        return None
+    if not str((signal or {}).get("contractVersion") or "").startswith("3.1"):
+        return None
+    policy = str((signal or {}).get("exitPolicy") or "")
+    if policy not in {"SINGLE_TP1", "SPLIT_50_50"}:
+        raise ValueError("ENGINE_A_V3_EXIT_POLICY_INVALID")
+    return policy
+
+
 def _bybit_max_tick_age_sec() -> float | None:
     """Return the configured Bybit broker tick-age limit in seconds, or None when disabled."""
     cfg = CONFIG.get("MAX_BROKER_TICK_AGE_SEC")
@@ -171,7 +182,7 @@ def _hybrid_scaleout_cfg() -> dict:
 
 def _place_reduce_only_partial(
     exchange, ccxt_symbol: str, direction: str, filled_amount: float,
-    price: float, fraction: float, label: str,
+    price: float, fraction: float, label: str, *, require_exact_half: bool = False,
 ) -> str | None:
     """Place a reduce-only limit that closes `fraction` of the position at `price`.
 
@@ -182,6 +193,7 @@ def _place_reduce_only_partial(
     try:
         partial_side = "sell" if direction == "LONG" else "buy"
         partial_qty = round(filled_amount * fraction, 8)
+        _step = 0.001
         # Align to exchange minimum qty step
         try:
             mkt = exchange.market(ccxt_symbol)
@@ -198,6 +210,13 @@ def _place_reduce_only_partial(
             vol_min = float(exchange.market(ccxt_symbol)["limits"]["amount"].get("min") or 0.001)
         except Exception:
             pass
+        if require_exact_half:
+            from engine_a_v3.execution import exact_split_sizes
+            sizes = exact_split_sizes(filled_amount, step=_step, minimum=vol_min)
+            if sizes is None:
+                log.warning(f"[BYBIT] {label} cannot represent exact 50/50 split")
+                return None
+            partial_qty = sizes[0]
         if partial_qty < vol_min:
             log.warning(
                 f"[BYBIT] {label} partial qty {partial_qty} < min {vol_min} — skipping partial order"
@@ -1304,6 +1323,10 @@ def bybit_execute(signal: dict, approval: "RiskApproval") -> dict:  # noqa: F821
         return {"success": False, "error": "INVALID_APPROVAL"}
     if not approval.approved:
         return {"success": False, "error": f"NOT_APPROVED: {approval.reason}"}
+    try:
+        _v3_exit_policy = _engine_a_v3_exit_policy(signal)
+    except ValueError as exc:
+        return {"success": False, "error": str(exc)}
 
     exchange = _get_exchange()
     if not exchange:
@@ -1393,7 +1416,12 @@ def bybit_execute(signal: dict, approval: "RiskApproval") -> dict:  # noqa: F821
 
         sl = float(signal.get("sl", 0) or 0)
         tp1 = float(signal.get("tp1", 0) or 0)
+        _v3_tp2 = float(signal.get("tp2", 0) or 0)
         signal_price = float(signal.get("price") or signal.get("livePrice") or 0)
+        if _v3_exit_policy == "SPLIT_50_50":
+            split_level_error = _validate_exit_levels(direction, signal_price, sl, _v3_tp2)
+            if split_level_error:
+                return {"success": False, "error": f"ENGINE_A_V3_SPLIT_LEVELS_INVALID: {split_level_error}"}
 
         # GAP-7 — provider drift between the signal price (Binance candle close
         # at scan time) and the broker side (Bybit ask for LONG / bid for SHORT
@@ -1684,13 +1712,14 @@ def bybit_execute(signal: dict, approval: "RiskApproval") -> dict:  # noqa: F821
             }
 
         _is_scalp = _is_engine_d_signal(signal)
-        _use_broker_tp = _bybit_should_send_broker_tp(signal)
+        _use_broker_tp = True if _v3_exit_policy else _bybit_should_send_broker_tp(signal)
         _tp1_local = float(tp1 or 0)
         _tp2 = float(signal.get("tp2", 0) or 0)
         _tp_partial = float(signal.get("tp_partial", 0) or 0)
         _hybrid_cfg = _hybrid_scaleout_cfg()
         _hybrid_on = (
-            _uses_trailing_atr_exit(signal)
+            not _v3_exit_policy
+            and _uses_trailing_atr_exit(signal)
             and bool(_hybrid_cfg.get("enabled"))
             and _tp1_local > 0
         )
@@ -1699,7 +1728,9 @@ def bybit_execute(signal: dict, approval: "RiskApproval") -> dict:  # noqa: F821
         # Non-scalp signals use tp1 as the single full-position exit — except in
         # hybrid scale-out (trailing mode): no full-position TP; a reduce-only
         # limit at TP1 banks the first clip and the chandelier manages the runner.
-        if _hybrid_on:
+        if _v3_exit_policy == "SPLIT_50_50":
+            tp_exec = _tp2
+        elif _hybrid_on:
             tp_exec = 0.0
         else:
             tp_exec = _tp1_local if _use_broker_tp else 0.0
@@ -1759,6 +1790,28 @@ def bybit_execute(signal: dict, approval: "RiskApproval") -> dict:  # noqa: F821
         # runner. This is non-fatal; if it fails, the trade still runs to tp1 as a
         # single unit.
         partial_order_id = None
+        if _v3_exit_policy == "SPLIT_50_50":
+            partial_order_id = _place_reduce_only_partial(
+                exchange, ccxt_symbol, direction, filled_amount,
+                _tp1_local, 0.5, "Engine A V3 TP1", require_exact_half=True,
+            )
+            if not partial_order_id:
+                rollback_error = None
+                try:
+                    close_side = "sell" if direction == "LONG" else "buy"
+                    exchange.create_market_order(
+                        ccxt_symbol, close_side, filled_amount,
+                        params={"reduceOnly": True, "positionIdx": 0},
+                    )
+                except Exception as close_err:
+                    rollback_error = str(close_err)
+                return {
+                    "success": False,
+                    "error": "ENGINE_A_V3_SPLIT_CHILD_FAILED",
+                    "ticket": order_id,
+                    "rolledBack": rollback_error is None,
+                    "rollbackError": rollback_error,
+                }
         if _is_scalp and _tp_partial > 0:
             try:
                 partial_side = "sell" if direction == "LONG" else "buy"
@@ -1826,7 +1879,7 @@ def bybit_execute(signal: dict, approval: "RiskApproval") -> dict:  # noqa: F821
             "symbol": ccxt_symbol,
             "direction": direction,
             "sl": sl,
-            "tp": tp1,
+            "tp": tp_exec,
             "tp1": _tp1_local,
             "tp2": _tp2 if _tp2 > 0 else None,
             "tpPartial": _tp_partial if _tp_partial > 0 else None,

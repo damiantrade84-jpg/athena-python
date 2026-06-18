@@ -4,17 +4,26 @@ import inspect
 
 import execution
 import execution_lifecycle
+import mt5_executor
+import bybit_executor
 from bybit_executor import bybit_demo_endpoint_verified
 from engine_a_v3.execution import (
     attest_demo_execution,
+    exact_split_sizes,
     merge_refreshed_signal,
     verify_refreshed_signal,
 )
 
 
+def test_exact_split_sizes_never_rounds_to_an_unequal_broker_allocation():
+    assert exact_split_sizes(0.04, step=0.01, minimum=0.01) == (0.02, 0.02)
+    assert exact_split_sizes(0.03, step=0.01, minimum=0.01) is None
+    assert exact_split_sizes(0.01, step=0.01, minimum=0.01) is None
+
+
 def _signal(**overrides) -> dict:
     signal = {
-        "contractVersion": "3.0.0",
+        "contractVersion": "3.1.0",
         "engine": "ENGINE_A_V3",
         "signalId": "signal-1",
         "pair": "EUR/USD",
@@ -39,6 +48,8 @@ def _signal(**overrides) -> dict:
         "dataFreshness": {"allowed": True},
         "executionScope": "DEMO_ONLY",
         "validationStatus": "UNVALIDATED",
+        "exitPolicy": "SINGLE_TP1",
+        "scoringProfile": {"profileId": "fixture-profile", "profileSha256": "a" * 64},
     }
     signal.update(overrides)
     return signal
@@ -91,6 +102,11 @@ def test_refresh_requires_same_setup_direction_horizon_and_trade_eligibility():
         original,
         _signal(executionScope="LIVE_ALLOWED"),
     )[0] is False
+    assert verify_refreshed_signal(original, _signal(exitPolicy="SPLIT_50_50"))[0] is False
+    assert verify_refreshed_signal(
+        original,
+        _signal(scoringProfile={"profileId": "changed", "profileSha256": "b" * 64}),
+    )[0] is False
 
 
 def test_refreshed_signal_replaces_authoritative_contract_and_levels():
@@ -113,6 +129,7 @@ def test_refreshed_signal_replaces_authoritative_contract_and_levels():
     assert merged["sl"] == 1.10
     assert merged["tp2"] == 1.13
     assert merged["entryZone"] == [1.109, 1.111]
+    assert merged["exitPolicy"] == "SINGLE_TP1"
     assert merged["timestamp"] != refreshed["decisionTime"]
     assert merged["scoredAt"] == merged["timestamp"]
 
@@ -193,3 +210,18 @@ def test_bybit_demo_attestation_requires_demo_endpoint_not_only_flag():
         demo_enabled=True,
         testnet_enabled=False,
     )
+
+
+def test_v3_broker_exit_policy_is_strict_and_other_engines_are_unchanged():
+    assert mt5_executor._engine_a_v3_exit_policy(_signal()) == "SINGLE_TP1"
+    assert bybit_executor._engine_a_v3_exit_policy(_signal(exitPolicy="SPLIT_50_50")) == "SPLIT_50_50"
+    assert mt5_executor._engine_a_v3_exit_policy({"engine": "ENGINE_B", "exitPolicy": "SPLIT_50_50"}) is None
+    assert bybit_executor._engine_a_v3_exit_policy({"engine": "ENGINE_D"}) is None
+
+    for module in (mt5_executor, bybit_executor):
+        try:
+            module._engine_a_v3_exit_policy(_signal(exitPolicy="UNKNOWN"))
+        except ValueError as exc:
+            assert str(exc) == "ENGINE_A_V3_EXIT_POLICY_INVALID"
+        else:
+            raise AssertionError("invalid V3 exit policy must fail closed")

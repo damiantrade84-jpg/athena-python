@@ -28,11 +28,10 @@ from typing import Any
 
 
 # ── scale ──────────────────────────────────────────────────────────────────────
-MAX_SCORE = 3.0  # confluence scale; matches ENGINE_A_SCORE_GROUP_THRESHOLDS
+MAX_SCORE = 3.0
 
 # Relative component priors per family. Normalized at use time, so these are
-# weights not probabilities. Overridable per score_group via config
-# ENGINE_A_QUANT_WEIGHTS_BY_GROUP (see _resolve_weights).
+# weights not probabilities. Runtime values come from the immutable V3 profile.
 _DEFAULT_WEIGHTS: dict[str, dict[str, float]] = {
     "forex": {
         "trend": 0.24, "momentum": 0.16, "location": 0.12, "volume": 0.05,
@@ -111,6 +110,7 @@ def _clamp01(value: float) -> float:
 class Component:
     signal: float   # -1..1 directional (sign = LONG/SHORT)
     quality: float  # 0..1 confidence/cleanliness
+    available: bool = True
 
 
 @dataclass
@@ -272,10 +272,21 @@ def _volume_component(
 ) -> Component:
     signal = 0.0
     quality = 0.0
-    obv = _f(snap.get("obv_trend")) if snap else None
-    if obv is not None:
-        signal = _clamp(obv, -1.0, 1.0)
-        quality = abs(obv)
+    valid = [c for c in candles[-20:] if _f(c.get("close")) is not None and (_f(c.get("vol")) or 0) > 0]
+    if len(valid) >= 5:
+        obv = 0.0
+        midpoint = len(valid) // 2
+        mid_obv = 0.0
+        for index in range(1, len(valid)):
+            close = float(valid[index]["close"])
+            previous = float(valid[index - 1]["close"])
+            volume = float(valid[index].get("vol") or 0)
+            obv += volume if close > previous else -volume if close < previous else 0.0
+            if index == midpoint:
+                mid_obv = obv
+        delta = obv - mid_obv
+        signal = 1.0 if delta > 0 else -1.0 if delta < 0 else 0.0
+        quality = min(1.0, abs(delta) / max(1.0, sum(float(c.get("vol") or 0) for c in valid[midpoint:])))
 
     # Relative volume: prefer feed-provided ratio (Bybit crypto / EOD stock /
     # Dukascopy forex), else derive from candle volume.
@@ -289,7 +300,7 @@ def _volume_component(
                 vr = vols[-1] / avg
     if vr is not None:
         quality = max(quality, _clamp01((vr - 1.0) / 1.5))
-    return Component(signal, _clamp01(quality))
+    return Component(signal, _clamp01(quality), available=len(valid) >= 5)
 
 
 # ── subsystem components (intermarket / carry / sentiment / macro / micro) ───
@@ -306,48 +317,15 @@ def _context_component(context: Mapping[str, Any] | None, key: str) -> Component
 
 
 # ── config resolvers ─────────────────────────────────────────────────────────
-def _resolve_weights(group: str, family: str) -> dict[str, float]:
-    weights = dict(_DEFAULT_WEIGHTS.get(family, _DEFAULT_WEIGHTS["unknown"]))
-    try:
-        from config import CONFIG
-
-        override = (CONFIG.get("ENGINE_A_QUANT_WEIGHTS_BY_GROUP") or {}).get(group)
-        if isinstance(override, Mapping):
-            for k, v in override.items():
-                fv = _f(v)
-                if fv is not None:
-                    weights[k] = fv
-    except Exception:
-        pass
-    return weights
-
-
-def _group_threshold(group: str) -> float:
-    try:
-        from config import CONFIG
-
-        thresholds = CONFIG.get("ENGINE_A_SCORE_GROUP_THRESHOLDS") or {}
-        return float(thresholds.get(group, thresholds.get("default", 1.5)))
-    except Exception:
-        return 1.5
-
-
 def _snapshots(
-    candles: dict[str, list[dict]], asset_type: str, group: str
+    candles: dict[str, list[dict]], asset_type: str, periods: Mapping[str, int]
 ) -> dict[str, Mapping[str, Any]]:
-    from indicators import calc_indicators_with_normalized
+    from engine_a_v3.indicator_adapter import indicator_snapshot
 
     snaps: dict[str, Mapping[str, Any]] = {}
     for tf in ("D1", "H4", "H1"):
         rows = candles.get(tf) or []
-        if len(rows) < 30:
-            continue
-        try:
-            snaps[tf] = calc_indicators_with_normalized(
-                rows, asset_type, score_group=group
-            )["snap"]
-        except Exception:
-            continue
+        snaps[tf] = indicator_snapshot(rows, periods, asset_type)
     return snaps
 
 
@@ -358,6 +336,7 @@ def score_pair(
     candles: dict[str, list[dict]],
     *,
     context: Mapping[str, Any] | None = None,
+    profile: Any | None = None,
 ) -> QuantScore:
     """Continuous quality score for one pair. `route` is a SpecialistRoute
     (.score_group, .family). `context` carries subsystem snapshots and an
@@ -368,7 +347,10 @@ def score_pair(
     horizon = "intraday" if str(horizon).lower() == "intraday" else "swing"
     entry_tf = "H1" if horizon == "intraday" else "H4"
 
-    snaps = _snapshots(candles, asset_type, group)
+    if profile is None:
+        from engine_a_v3.profile import baseline_profile
+        profile = baseline_profile(group, horizon)
+    snaps = _snapshots(candles, asset_type, dict(profile.indicator_periods))
     entry_snap = snaps.get(entry_tf) or snaps.get("H4") or snaps.get("D1") or {}
     momentum_snap = snaps.get("H4") or entry_snap
 
@@ -383,24 +365,21 @@ def score_pair(
         "location": location,
         "volume": volume,
     }
-    for key in _CONTEXT_COMPONENTS:
-        components[key] = _context_component(context, key)
-
-    weights = _resolve_weights(group, family)
+    weights = dict(profile.weights)
     # Normalize over ACTIVE components only — a subsystem with no data (neutral)
     # must neither inject noise nor dilute the score (no-veto, no false penalty).
     active = {
         name: comp
         for name, comp in components.items()
-        if comp.quality > 0.0 or comp.signal != 0.0
+        if comp.available and (name != "volume" or comp.quality > 0.0 or comp.signal != 0.0)
     } or components
     weight_sum = sum(max(0.0, weights.get(name, 0.0)) for name in active) or 1.0
 
     # Direction = sign of the weighted directional sum over active components.
-    dir_sum = sum(weights.get(n, 0.0) * c.signal for n, c in active.items()) / weight_sum
-    if dir_sum > 0.05:
+    dir_sum = sum(weights.get(n, 0.0) * c.signal * c.quality for n, c in active.items()) / weight_sum
+    if dir_sum > profile.direction_deadband:
         direction, dsign = "LONG", 1.0
-    elif dir_sum < -0.05:
+    elif dir_sum < -profile.direction_deadband:
         direction, dsign = "SHORT", -1.0
     else:
         direction, dsign = "FLAT", 0.0
@@ -427,7 +406,7 @@ def score_pair(
     vol_mult = _volatility_mult(entry_snap)
     confluence = _clamp(MAX_SCORE * score_frac * vol_mult, 0.0, MAX_SCORE)
     score_norm = confluence / MAX_SCORE
-    threshold = _group_threshold(group)
+    threshold = profile.trade_threshold
     decision = "TRADE" if direction in ("LONG", "SHORT") and confluence >= threshold else "WATCH"
 
     factor_scores["ortho"] = ortho
@@ -439,6 +418,19 @@ def score_pair(
         "directionalRampMult": round(0.5 + 0.5 * abs(dir_sum), 4),
         "trendCoherence": coherence or {"error": "no_ema_data"},
         "volatilityMult": round(vol_mult, 4),
+        "diagnosticContext": {
+            key: dict(context[key]) for key in _CONTEXT_COMPONENTS
+            if context and isinstance(context.get(key), Mapping)
+        },
+        "components": {
+            name: {
+                "signal": round(comp.signal, 4), "quality": round(comp.quality, 4),
+                "weight": round(weights.get(name, 0.0), 4),
+                "contribution": round(weights.get(name, 0.0) * max(0.0, comp.signal * dsign) * comp.quality, 4),
+                "available": comp.available,
+            }
+            for name, comp in components.items()
+        },
     }
 
     return QuantScore(

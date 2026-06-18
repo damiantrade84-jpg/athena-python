@@ -409,7 +409,6 @@ function EngineAV3SignalCard({
     : decision === 'WATCH'
     ? 'text-warning border-warning/40'
     : 'text-muted-foreground border-border/60';
-
   // Continuous quality fields emitted by the quant scorer (native V3 payloads carry these).
   const conf = confluencePct(signal);
   const conv = toNum(signal.conviction, NaN);
@@ -418,14 +417,8 @@ function EngineAV3SignalCard({
   const max = toNum(signal.maxScore, NaN);
   const threshold = engineAThreshold(signal);
   const passed = Number.isFinite(score) && threshold != null && score >= threshold;
-  const fs = (signal.factorScores || {}) as NonNullable<EngineASignal['factorScores']>;
-  const orthoScores = (
-    fs.ortho && typeof fs.ortho === 'object' && !Array.isArray(fs.ortho)
-      ? fs.ortho
-      : undefined
-  );
-  const hasOrthoScores = Boolean(orthoScores && Object.keys(orthoScores).length > 0);
   const hasQuality = Number.isFinite(score) || conf != null || Number.isFinite(conv);
+  const components = signal.componentScores || {};
 
   return (
     <Card
@@ -446,6 +439,11 @@ function EngineAV3SignalCard({
               <span className="text-sm font-mono font-bold">{pair}</span>
               <Badge variant="outline" className={cn('text-[10px]', decisionClass)}>{decision}</Badge>
               <Badge variant="outline" className="text-[10px]">{signal.horizon || '-'}</Badge>
+              <Badge variant="outline" className={cn(
+                'text-[10px]',
+                signal.validationStatus === 'PROMOTED' ? 'text-long border-long/40' : 'text-warning border-warning/40',
+              )}>{signal.validationStatus || 'UNAVAILABLE'}</Badge>
+              <Badge variant="outline" className="text-[10px]">{signal.exitPolicy || 'SINGLE_TP1'}</Badge>
             </div>
             <p className="mt-1 text-[11px] text-muted-foreground break-words">
               {signal.setupId || 'No qualified setup'} · {signal.family || '-'} / {signal.subclass || '-'}
@@ -480,9 +478,8 @@ function EngineAV3SignalCard({
             </div>
             {!compact && (
               <p className="text-[9px] text-muted-foreground leading-snug">
-                Quality score (0–3.0): weighted multi-timeframe trend + momentum (RSI/MACD/DI·ADX),
-                entry location and volatility regime, plus intermarket, carry, COT, microstructure and
-                volume. The bar fills to ~67% at this group&apos;s TRADE threshold.
+                Executable score: quality-weighted trend, momentum, location and available volume.
+                Context-only diagnostics do not contribute to this score.
               </p>
             )}
           </div>
@@ -503,26 +500,21 @@ function EngineAV3SignalCard({
           </p>
         )}
 
-        {!compact && (fs.trend != null || fs.momentum != null || hasOrthoScores) && (
-          <div className="grid grid-cols-2 gap-1 text-center">
-            <FactorBox label="Trend" value={fs.trend} accent="long" />
-            <FactorBox label="Momentum" value={fs.momentum} accent="primary" />
-            {hasOrthoScores && orthoScores && Object.entries(orthoScores).map(([name, v]) => (
-              <FactorBox
-                key={name}
-                label={ORTHO_LABELS[name] ?? name}
-                value={v}
-                accent={v >= 0 ? 'long' : 'short'}
-              />
+        {!compact && Object.keys(components).length > 0 && (
+          <div className="grid grid-cols-2 gap-1">
+            {Object.entries(components).map(([name, component]) => (
+              <div key={name} className="rounded border border-border/50 bg-muted/20 p-1.5 text-[10px]">
+                <div className="flex justify-between"><span className="capitalize">{name}</span><span className="font-mono">{component.available === false ? 'N/A' : fmtNum(component.contribution, 3)}</span></div>
+                <div className="text-muted-foreground font-mono">s {fmtNum(component.signal, 2)} · q {fmtNum(component.quality, 2)} · w {fmtNum(component.weight, 2)}</div>
+              </div>
             ))}
-            <FactorBox label="Ortho Σ" value={fs.ortho_term} accent="warning" />
           </div>
         )}
 
         {!compact && (
           <div className="rounded-md border border-border/50 bg-muted/20 p-2 space-y-1">
             <p className="text-[10px] uppercase text-muted-foreground">
-              Predicates {passedPredicates.length}/{signal.predicates?.length || 0} passed
+              Component diagnostics {passedPredicates.length}/{signal.predicates?.length || 0} aligned
             </p>
             {(signal.predicates || []).slice(0, 8).map((predicate) => (
               <div key={predicate.name} className="flex items-start justify-between gap-2 text-[10px]">
@@ -550,6 +542,11 @@ function EngineAV3SignalCard({
             Validation: <span className="font-mono text-foreground">
               {signal.validationArtifact.artifactId} · {signal.validationArtifact.status}
             </span>
+            {signal.scoringProfile?.profileSha256 && (
+              <span className="block font-mono text-foreground">
+                Profile {signal.scoringProfile.profileId} · {signal.scoringProfile.profileSha256.slice(0, 12)}
+              </span>
+            )}
           </p>
         )}
 

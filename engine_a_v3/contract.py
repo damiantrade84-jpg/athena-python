@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 
-CONTRACT_VERSION = "3.0.0"
+CONTRACT_VERSION = "3.1.0"
 
 
 @dataclass(frozen=True)
@@ -46,6 +46,7 @@ class ValidationArtifact:
     status: str
     metrics: tuple[tuple[str, Any], ...]
     provenanceSha256: str
+    profileSha256: str | None = None
 
 
 @dataclass(frozen=True)
@@ -91,6 +92,9 @@ class EngineASetupSignal:
     factorScores: dict[str, Any] | None = None
     confidenceDetail: dict[str, Any] | None = None
     factorDiagnostics: dict[str, Any] | None = None
+    scoringProfile: dict[str, Any] | None = None
+    exitPolicy: str = "SINGLE_TP1"
+    componentScores: dict[str, Any] | None = None
     engineATradeEnabled: bool = False
 
     def to_dict(self) -> dict[str, Any]:

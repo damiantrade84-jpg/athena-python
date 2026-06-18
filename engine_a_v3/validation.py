@@ -18,6 +18,15 @@ from engine_a_v3.promotion import (
     validate_promotion_artifact,
 )
 from engine_a_v3.routing import route_specialist
+from engine_a_v3.profile import EngineAV3Profile, baseline_profile, scorer_sha256
+
+
+def _profile_ttl_days() -> int:
+    from config import CONFIG
+    value = int(CONFIG.get("ENGINE_A_V3_PROFILE_TTL_DAYS", 90))
+    if not 1 <= value <= 365:
+        raise ValueError("engine_a_v3_profile_ttl_invalid")
+    return value
 
 
 @dataclass(frozen=True)
@@ -65,11 +74,7 @@ def provenance_sha256(candles: dict[str, list[dict]]) -> str:
 
 
 def implementation_sha256() -> str:
-    digest = hashlib.sha256()
-    for path in sorted(Path(__file__).parent.glob("*.py")):
-        digest.update(path.name.encode("utf-8"))
-        digest.update(path.read_bytes())
-    return digest.hexdigest()
+    return scorer_sha256()
 
 
 def build_validation_windows(
@@ -175,6 +180,7 @@ def _promotion_passes(metrics: dict[str, Any], *, pair_adapter: bool) -> bool:
         and len(folds) == 4
         and sum(1 for value in folds if float(value) > 0) >= 3
         and float(metrics.get("holdoutExpectancyR") or 0) > 0
+        and int(metrics.get("holdoutTrades") or 0) >= 15
         and float(metrics.get("expectancyR") or 0) >= 0.08
         and float(metrics.get("profitFactor") or 0) >= 1.20
         and float(metrics.get("sqn") or 0) >= 1.5
@@ -259,7 +265,9 @@ def validate_specialist(
     purge_bars: int = 5,
     max_hold_bars: int = 24,
     pair_adapter: bool = False,
+    provider: str = "",
 ) -> dict[str, Any]:
+    purge_bars = max(int(purge_bars), int(max_hold_bars) + 1)
     fold_results, holdout_results = _validation_results(
         pair,
         candles,
@@ -275,19 +283,28 @@ def validate_specialist(
     route = route_specialist(pair)
     promoted = _promotion_passes(metrics, pair_adapter=pair_adapter)
     now = datetime.now(timezone.utc)
+    valid_until = now + timedelta(days=_profile_ttl_days())
+    baseline = baseline_profile(route.score_group, horizon)
+    profile = EngineAV3Profile.create(
+        score_group=route.score_group, horizon=horizon,
+        indicator_periods=dict(baseline.indicator_periods), weights=dict(baseline.weights),
+        direction_deadband=baseline.direction_deadband, trade_threshold=baseline.trade_threshold,
+        exit_policy=baseline.exit_policy, status="PROMOTED", profile_id=f"{route.score_group}-{horizon}-{dataset_id}",
+        created_at=now.isoformat(), valid_until=valid_until.isoformat(),
+    )
     symbol = str(pair.get("symbol") or pair.get("display") or "")
     artifact_id = hashlib.sha256(
         f"{dataset_id}|{pair.get('symbol')}|{route.family}|{route.subclass}|{horizon}".encode()
     ).hexdigest()[:24]
     return {
-        "schemaVersion": 2,
+        "schemaVersion": 3,
         "artifactId": artifact_id,
         "family": route.family,
         "subclass": route.subclass,
         "horizon": horizon,
         "status": "PROMOTED" if promoted else "REJECTED",
         "createdAt": now.isoformat(),
-        "validUntil": (now + timedelta(days=365)).isoformat(),
+        "validUntil": valid_until.isoformat(),
         "validationScope": {
             "type": "pair" if pair_adapter else "family",
             "expectedSymbols": [symbol],
@@ -295,6 +312,7 @@ def validate_specialist(
         },
         "provenance": {
             "datasetId": dataset_id,
+            "provider": provider,
             "sha256": provenance_sha256(candles),
             "implementationSha256": implementation_sha256(),
             "confirmedOnly": True,
@@ -312,6 +330,7 @@ def validate_specialist(
         },
         "metrics": metrics,
         "pairAdapter": bool(pair_adapter),
+        "profile": profile.to_dict(),
     }
 
 
@@ -327,9 +346,11 @@ def validate_specialist_cohort(
     swap_bps_per_day: float,
     purge_bars: int = 5,
     max_hold_bars: int = 24,
+    provider: str = "",
 ) -> dict[str, Any]:
     if not datasets:
         raise ValueError("validation_cohort_empty")
+    purge_bars = max(int(purge_bars), int(max_hold_bars) + 1)
     normalized_expected = {
         str(symbol).upper().replace("/", "").replace("-", "")
         for symbol in expected_symbols
@@ -377,6 +398,15 @@ def validate_specialist_cohort(
         json.dumps(dataset_hashes, sort_keys=True, separators=(",", ":")).encode("utf-8")
     ).hexdigest()
     now = datetime.now(timezone.utc)
+    valid_until = now + timedelta(days=_profile_ttl_days())
+    baseline = baseline_profile(first_route.score_group, horizon)
+    profile = EngineAV3Profile.create(
+        score_group=first_route.score_group, horizon=horizon,
+        indicator_periods=dict(baseline.indicator_periods), weights=dict(baseline.weights),
+        direction_deadband=baseline.direction_deadband, trade_threshold=baseline.trade_threshold,
+        exit_policy=baseline.exit_policy, status="PROMOTED", profile_id=f"{first_route.score_group}-{horizon}-{dataset_id}",
+        created_at=now.isoformat(), valid_until=valid_until.isoformat(),
+    )
     artifact_id = hashlib.sha256(
         (
             f"{dataset_id}|{first_route.family}|{first_route.subclass}|{horizon}|"
@@ -384,14 +414,14 @@ def validate_specialist_cohort(
         ).encode("utf-8")
     ).hexdigest()[:24]
     return {
-        "schemaVersion": 2,
+        "schemaVersion": 3,
         "artifactId": artifact_id,
         "family": first_route.family,
         "subclass": first_route.subclass,
         "horizon": horizon,
         "status": "PROMOTED" if promoted else "REJECTED",
         "createdAt": now.isoformat(),
-        "validUntil": (now + timedelta(days=365)).isoformat(),
+        "validUntil": valid_until.isoformat(),
         "validationScope": {
             "type": "family",
             "expectedSymbols": sorted(normalized_expected),
@@ -399,6 +429,7 @@ def validate_specialist_cohort(
         },
         "provenance": {
             "datasetId": dataset_id,
+            "provider": provider,
             "sha256": aggregate_sha,
             "implementationSha256": implementation_sha256(),
             "datasetHashes": dataset_hashes,
@@ -418,6 +449,7 @@ def validate_specialist_cohort(
         "metrics": metrics,
         "pairMetrics": pair_metrics,
         "pairAdapter": False,
+        "profile": profile.to_dict(),
     }
 
 

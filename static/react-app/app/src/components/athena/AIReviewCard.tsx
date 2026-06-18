@@ -70,6 +70,7 @@ export default function AIReviewCard({ response }: AIReviewCardProps) {
   const ctx = primaryEngine === 'B'
     ? (response.engine_b_context ?? response.engineBContext)
     : response.engine_a_context;
+  const engineACtx = primaryEngine === 'A' ? response.engine_a_context : undefined;
   const summary = response.aiReviewSummary ?? response.ai_review_summary;
   const atrInfo = ctx && typeof ctx === 'object' ? (ctx as { atr?: Record<string, unknown> }).atr : undefined;
   const scanDelta = deltaSeconds(ts?.scan_timestamp, ts?.chart_captured_at);
@@ -85,12 +86,12 @@ export default function AIReviewCard({ response }: AIReviewCardProps) {
   const nonVisualContext =
     response.nonVisualContext ??
     response.engineANonVisualContext ??
-    ctx?.non_visual_context ??
-    ctx?.engine_a_non_visual_context;
+    engineACtx?.non_visual_context ??
+    engineACtx?.engine_a_non_visual_context;
   const scoreAttribution =
     response.scoreAttribution ??
     response.engineAScoreAttribution ??
-    ctx?.score_attribution;
+    engineACtx?.score_attribution;
 
   const freshnessFallback = (() => {
     const status = showReviewValue(atrInfo?.atr_freshness_status);

@@ -6,6 +6,9 @@ import pytest
 
 from engine_a_v3.promotion import PromotionRegistry, promote_candidate
 from engine_a_v3.routing import route_specialist
+from engine_a_v3.routing import KNOWN_SCORE_GROUPS
+from engine_a_v3.workflow import load_manifest
+from engine_a_v3.profile import EngineAV3Profile, baseline_profile, scorer_sha256
 import engine_a_v3.validation as validation
 from engine_a_v3.validation import (
     _promotion_passes,
@@ -16,15 +19,27 @@ from engine_a_v3.validation import (
 
 
 def test_validation_uses_four_purged_folds_and_untouched_20_percent_holdout():
-    folds, holdout = build_validation_windows(1_000, purge_bars=5)
+    folds, holdout = build_validation_windows(1_000, purge_bars=25)
 
     assert len(folds) == 4
-    assert holdout.train_end == 795
+    assert holdout.train_end == 775
     assert holdout.test_start == 800
     assert holdout.test_end == 1_000
     assert holdout.test_end - holdout.test_start == 200
-    assert all(window.test_start - window.train_end == 5 for window in folds)
+    assert all(window.test_start - window.train_end == 25 for window in folds)
     assert all(left.test_end <= right.train_end for left, right in zip(folds, folds[1:]))
+
+
+def test_manifest_declares_all_52_lanes_and_pins_provider():
+    manifest = load_manifest("configs/engine_a_v3_validation.yaml")
+    assert set(manifest["groups"]) == set(KNOWN_SCORE_GROUPS)
+    for group in manifest["groups"].values():
+        assert group["horizons"] == ["intraday", "swing"]
+        if group.get("validationEnabled") is True:
+            assert group["requiredProvider"] in {"bybit", "mt5"}
+            assert group.get("costsVerified") is True
+        else:
+            assert group["requiredProvider"] == "unverified"
 
 
 def test_provenance_hash_is_order_stable_and_data_sensitive():
@@ -48,6 +63,7 @@ def test_promotion_requires_every_quality_gate():
         "oosTrades": 80,
         "foldExpectancyR": [0.1, 0.1, -0.01, 0.1],
         "holdoutExpectancyR": 0.1,
+        "holdoutTrades": 15,
         "expectancyR": 0.08,
         "profitFactor": 1.2,
         "sqn": 1.5,
@@ -75,8 +91,22 @@ def test_block_bootstrap_lower_bound_is_deterministic():
 
 
 def _candidate(status: str = "PROMOTED") -> dict:
+    baseline = baseline_profile("forex_majors", "intraday")
+    promoted_profile = EngineAV3Profile.create(
+        score_group=baseline.score_group,
+        horizon=baseline.horizon,
+        indicator_periods=dict(baseline.indicator_periods),
+        weights=dict(baseline.weights),
+        direction_deadband=baseline.direction_deadband,
+        trade_threshold=baseline.trade_threshold,
+        exit_policy=baseline.exit_policy,
+        status="PROMOTED",
+        profile_id="forex-majors-intraday-profile",
+        created_at="2026-06-13T00:00:00+00:00",
+        valid_until="2027-06-13T00:00:00+00:00",
+    )
     return {
-        "schemaVersion": 2,
+        "schemaVersion": 3,
         "artifactId": "forex-majors-intraday-20260613",
         "family": "forex",
         "subclass": "majors",
@@ -91,12 +121,13 @@ def _candidate(status: str = "PROMOTED") -> dict:
         },
         "provenance": {
             "datasetId": "fixture-v2",
+            "provider": "mt5",
             "sha256": "a" * 64,
-            "implementationSha256": "b" * 64,
+            "implementationSha256": scorer_sha256(),
             "confirmedOnly": True,
             "untouchedHoldoutPct": 20,
             "walkForwardFolds": 4,
-            "purgeBars": 5,
+            "purgeBars": 25,
             "maxHoldBars": 24,
             "costs": {
                 "spreadBps": 1.0,
@@ -110,6 +141,7 @@ def _candidate(status: str = "PROMOTED") -> dict:
             "oosTrades": 80,
             "foldExpectancyR": [0.12, 0.09, -0.01, 0.11],
             "holdoutExpectancyR": 0.10,
+            "holdoutTrades": 15,
             "expectancyR": 0.09,
             "profitFactor": 1.25,
             "sqn": 1.7,
@@ -117,7 +149,29 @@ def _candidate(status: str = "PROMOTED") -> dict:
             "bootstrapLower95ExpectancyR": 0.01,
         },
         "pairAdapter": False,
+        "profile": promoted_profile.to_dict(),
     }
+
+
+def test_schema_three_artifact_binds_current_scorer_and_exact_profile():
+    pair = {"display": "EUR/USD", "symbol": "EURUSD", "type": "forex"}
+    route = route_specialist(pair)
+    candidate = _candidate()
+    decision = validation.validate_promotion_artifact(candidate, route, "intraday")
+    assert decision.qualified is True
+    assert decision.profile is not None
+    assert decision.profile.profile_sha256 == candidate["profile"]["profileSha256"]
+
+    candidate["profile"]["scorerSha256"] = "f" * 64
+    decision = validation.validate_promotion_artifact(candidate, route, "intraday")
+    assert decision.qualified is False
+    assert "promotion_scorer_hash_mismatch" in decision.reasons
+
+    candidate = _candidate()
+    candidate["provenance"]["provider"] = "binance_rest"
+    decision = validation.validate_promotion_artifact(candidate, route, "intraday")
+    assert decision.qualified is False
+    assert "promotion_provider_invalid" in decision.reasons
 
 
 def test_family_candidate_requires_complete_declared_cohort(tmp_path):
@@ -154,6 +208,29 @@ def test_rejected_candidate_cannot_be_promoted(tmp_path):
             pair=pair,
             expected_artifact_id=candidate["artifactId"],
         )
+
+
+def test_invalid_or_stale_artifact_falls_back_to_unvalidated_only_in_demo(tmp_path):
+    pair = {"display": "EUR/USD", "symbol": "EURUSD", "type": "forex"}
+    route = route_specialist(pair)
+    candidate = _candidate()
+    candidate["validUntil"] = "2020-01-01T00:00:00+00:00"
+    path = tmp_path / route.family / route.subclass / "intraday" / "promotion.json"
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps(candidate), encoding="utf-8")
+
+    demo = PromotionRegistry(tmp_path, allow_demo_unvalidated=True).resolve(
+        route, "intraday", symbol="EURUSD"
+    )
+    assert demo.qualified is True
+    assert demo.profile.status == "UNVALIDATED"
+    assert demo.profile.exit_policy == "SINGLE_TP1"
+    assert "promotion_artifact_stale" in demo.reasons
+
+    production = PromotionRegistry(tmp_path, allow_demo_unvalidated=False).resolve(
+        route, "intraday", symbol="EURUSD"
+    )
+    assert production.qualified is False
 
 
 def test_candidate_promotion_requires_exact_artifact_confirmation(tmp_path):
@@ -198,6 +275,7 @@ def test_cohort_validation_pools_folds_and_promotes_atomically(tmp_path, monkeyp
         commission_bps=0.5,
         slippage_bps=1.0,
         swap_bps_per_day=0.1,
+        provider="mt5",
     )
 
     assert artifact["status"] == "PROMOTED"

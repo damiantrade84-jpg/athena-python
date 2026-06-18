@@ -7,6 +7,10 @@ limits:
 
 groups:
   crypto_btc:
+    horizons: [intraday, swing]
+    validationEnabled: true
+    requiredProvider: bybit
+    costsVerified: true
     pairs:
       - display: BTC/USDT
         symbol: BTCUSDT
@@ -23,6 +27,10 @@ groups:
       swing: 30
 
   crypto_eth:
+    horizons: [intraday, swing]
+    validationEnabled: true
+    requiredProvider: bybit
+    costsVerified: true
     pairs:
       - display: ETH/USDT
         symbol: ETHUSDT
@@ -39,6 +47,10 @@ groups:
       swing: 30
 
   crypto_doge:
+    horizons: [intraday, swing]
+    validationEnabled: true
+    requiredProvider: bybit
+    costsVerified: true
     pairs:
       - display: DOGE/USDT
         symbol: DOGEUSDT
@@ -55,6 +67,10 @@ groups:
       swing: 30
 
   forex_majors:
+    horizons: [intraday, swing]
+    validationEnabled: true
+    requiredProvider: mt5
+    costsVerified: true
     pairs:
       - display: EUR/USD
         symbol: EURUSD
@@ -95,6 +111,10 @@ groups:
       swing: 30
 
   forex_crosses:
+    horizons: [intraday, swing]
+    validationEnabled: true
+    requiredProvider: mt5
+    costsVerified: true
     pairs:
       - display: EUR/GBP
         symbol: EURGBP
@@ -145,3 +165,70 @@ groups:
     maxHoldBars:
       intraday: 24
       swing: 30
+
+  forex_exotics: &unvalidated_lane
+    horizons: [intraday, swing]
+    validationEnabled: false
+    requiredProvider: unverified
+    costsVerified: false
+    pairs: [{display: USD/ZAR, symbol: USDZAR, type: forex, dataSymbol: USD/ZAR}]
+  forex_other:
+    <<: *unvalidated_lane
+    pairs: [{display: USD/ILS, symbol: USDILS, type: forex, dataSymbol: USD/ILS}]
+  crypto_alt_majors:
+    <<: *unvalidated_lane
+    pairs: [{display: SOL/USDT, symbol: SOLUSDT, type: crypto, dataSymbol: SOL/USDT}]
+  crypto_other:
+    <<: *unvalidated_lane
+    pairs: [{display: AAVE/USDT, symbol: AAVEUSDT, type: crypto, dataSymbol: AAVE/USDT}]
+  precious_trackers:
+    <<: *unvalidated_lane
+    pairs: [{display: XAU/USD, symbol: XAUUSD, type: commodity, dataSymbol: XAU/USD}]
+  energy_oil:
+    <<: *unvalidated_lane
+    pairs: [{display: WTI Oil, symbol: USOIL, type: commodity, dataSymbol: WTI Oil}]
+  nat_gas:
+    <<: *unvalidated_lane
+    pairs: [{display: Nat Gas, symbol: NATGAS, type: commodity, dataSymbol: Nat Gas}]
+  copper:
+    <<: *unvalidated_lane
+    pairs: [{display: Copper, symbol: COPPER, type: commodity, dataSymbol: Copper}]
+  pgm_metals:
+    <<: *unvalidated_lane
+    pairs: [{display: XPT/USD, symbol: XPTUSD, type: commodity, dataSymbol: XPT/USD}]
+  base_metals:
+    <<: *unvalidated_lane
+    pairs: [{display: Aluminium, symbol: ALUMINIUM, type: commodity, dataSymbol: Aluminium}]
+  softs:
+    <<: *unvalidated_lane
+    pairs: [{display: Coffee, symbol: COFFEE, type: commodity, dataSymbol: Coffee}]
+  commodity_other:
+    <<: *unvalidated_lane
+    pairs: [{display: Uranium, symbol: URANIUM, type: commodity, dataSymbol: Uranium}]
+  us_indices_trackers:
+    <<: *unvalidated_lane
+    pairs: [{display: S&P 500, symbol: US500, type: index, dataSymbol: S&P 500}]
+  eu_indices:
+    <<: *unvalidated_lane
+    pairs: [{display: DAX, symbol: GER40, type: index, dataSymbol: DAX}]
+  asian_indices:
+    <<: *unvalidated_lane
+    pairs: [{display: Nikkei 225, symbol: JP225, type: index, dataSymbol: Nikkei 225}]
+  index_other:
+    <<: *unvalidated_lane
+    pairs: [{display: SA40, symbol: SA40, type: index, dataSymbol: SA40}]
+  us_stock_single:
+    <<: *unvalidated_lane
+    pairs: [{display: AAPL, symbol: AAPL.US, type: stock, dataSymbol: AAPL}]
+  bond_tlt:
+    <<: *unvalidated_lane
+    pairs: [{display: TLT, symbol: TLT.US, type: etf_bond, dataSymbol: TLT}]
+  smallcap_em_etf:
+    <<: *unvalidated_lane
+    pairs: [{display: EEM, symbol: EEM.US, type: etf, dataSymbol: EEM}]
+  stock_other:
+    <<: *unvalidated_lane
+    pairs: [{display: JSE:NPN, symbol: NPN.JO, type: stock, dataSymbol: NPN.JO}]
+  unknown:
+    <<: *unvalidated_lane
+    pairs: [{display: UNKNOWN, symbol: UNKNOWN, type: other, dataSymbol: UNKNOWN}]
