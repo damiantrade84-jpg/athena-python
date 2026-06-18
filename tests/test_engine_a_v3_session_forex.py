@@ -170,7 +170,9 @@ def test_session_scoring_gate_rejects_when_enabled(monkeypatch):
             horizon="intraday",
             registry=registry,
         )
-    assert signal.decision == "NO_SIGNAL"
+    # Session gate blocks the setup overlay; the quant path keeps the pair visible.
+    assert signal.decision == "WATCH"
+    assert signal.factorDiagnostics["setupOverlay"]["sessionGateBlocked"] is True
     assert "session_context_score_below_min" in signal.rejectionReasons
 
 

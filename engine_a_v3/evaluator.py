@@ -13,12 +13,16 @@ from engine_a_v3.contract import (
     PredicateResult,
 )
 from engine_a_v3.levels import (
+    StructuralLevels,
+    build_london_open_breakout_levels,
     build_mean_reversion_levels,
     build_structural_levels,
 )
 from engine_a_v3.promotion import PromotionRegistry, production_registry
 from engine_a_v3.quant_scorer import QuantScore, score_pair
 from engine_a_v3.routing import route_specialist
+from engine_a_v3.session_scoring import session_score_passes
+from engine_a_v3.setups import SetupCandidate, detect_setup
 
 
 def _parse_time(value: Any) -> datetime | None:
@@ -107,6 +111,22 @@ def _quant_predicates(quant: QuantScore) -> tuple[PredicateResult, ...]:
             )
         )
     return tuple(out)
+
+
+def _build_levels(
+    primary: list[dict],
+    *,
+    direction: str,
+    level_style: str,
+) -> StructuralLevels | None:
+    """Route to the correct level builder by style."""
+    if direction not in {"LONG", "SHORT"}:
+        return None
+    if level_style == "mean_reversion":
+        return build_mean_reversion_levels(primary, direction=direction)
+    if level_style == "london_open":
+        return build_london_open_breakout_levels(primary, direction=direction)
+    return build_structural_levels(primary, direction=direction)
 
 
 def evaluate_engine_a_v3(
@@ -202,25 +222,75 @@ def evaluate_engine_a_v3(
         symbol=symbol,
     )
 
-    direction = quant.direction if quant.direction in {"LONG", "SHORT"} else None
+    # ── Setup overlay: use already-implemented specialists for every family
+    # (forex: breakout/retest/pullback/london_open/mean_reversion; crypto:
+    # breakout/retest/pullback; commodity: subclass-specific breakout/pullback;
+    # index/equity: opening-range-gap / relative-strength breakout & pullback).
+    # This gives each family an independent, structure/session-based path to
+    # TRADE when the continuous quant score alone is below the threshold. It
+    # never vetoes the quant signal; it only upgrades WATCH -> TRADE when a
+    # validated setup fires.
+    setup: SetupCandidate | None = None
+    setup_diagnostics: dict[str, Any] = {}
+    try:
+        setup = detect_setup(route, normalized_horizon, candles, display=display)
+        setup_diagnostics = {
+            "setupId": setup.setup_id,
+            "setupDecision": setup.decision,
+            "setupDirection": setup.direction,
+            "setupLevelStyle": setup.level_style,
+            "setupPredicateCount": len(setup.predicates),
+        }
+    except Exception:
+        setup = None
+        setup_diagnostics = {"setupError": True}
+
+    use_setup = (
+        setup is not None
+        and setup.decision == "TRADE"
+        and setup.direction in {"LONG", "SHORT"}
+    )
+
+    # Session scoring gate (config-gated, forex-only): a forex setup must also
+    # pass the session context score when ENGINE_A_V3_SESSION_SCORING.ENABLED.
+    if use_setup and route.family == "forex":
+        try:
+            from config import CONFIG
+
+            session_cfg = CONFIG.get("ENGINE_A_V3_SESSION_SCORING") or {}
+            if session_cfg.get("ENABLED"):
+                min_score = float(session_cfg.get("MIN_SCORE", 0.35))
+                if not session_score_passes(
+                    primary, direction=setup.direction, min_score=min_score
+                ):
+                    use_setup = False
+                    setup_diagnostics["sessionGateBlocked"] = True
+        except Exception:
+            pass
+
+    if use_setup:
+        direction = setup.direction
+        level_style = setup.level_style
+        setup_id = setup.setup_id or f"setup_{level_style}"
+    else:
+        direction = quant.direction if quant.direction in {"LONG", "SHORT"} else None
+        level_style = quant.level_style
+        setup_id = f"quant_{quant.level_style}"
+
     levels = None
     if direction is not None:
-        if quant.level_style == "mean_reversion":
-            levels = build_mean_reversion_levels(primary, direction=direction)
-        else:
-            levels = build_structural_levels(primary, direction=direction)
+        levels = _build_levels(primary, direction=direction, level_style=level_style)
 
     # The quant model never emits NO_SIGNAL. Missing levels or ineligible promotion
     # only cap TRADE -> WATCH so the pair stays visible; execution stays gated by
     # executionScope / engineATradeEnabled below.
-    decision = quant.decision
+    decision = "TRADE" if use_setup else quant.decision
     if decision == "TRADE" and (levels is None or not promotion.qualified):
         decision = "WATCH"
 
     qualified = decision == "TRADE" and promotion.qualified and levels is not None
     executable_levels = levels
     targets = executable_levels.targets if executable_levels else ()
-    setup_id = f"quant_{quant.level_style}"
 
     validation_status = (
         "UNVALIDATED"
@@ -230,6 +300,17 @@ def evaluate_engine_a_v3(
         else "UNAVAILABLE"
     )
     execution_scope = "DEMO_ONLY" if promotion.qualified else "NONE"
+
+    predicates = _quant_predicates(quant)
+    if setup is not None:
+        predicates = predicates + setup.predicates
+
+    rejection_reasons: list[str] = []
+    if setup_diagnostics.get("sessionGateBlocked"):
+        rejection_reasons.append("session_context_score_below_min")
+
+    factor_diagnostics = dict(quant.factor_diagnostics or {})
+    factor_diagnostics["setupOverlay"] = setup_diagnostics
 
     signal_identity = {
         "contractVersion": CONTRACT_VERSION,
@@ -274,8 +355,8 @@ def evaluate_engine_a_v3(
         tp2=targets[1].price if len(targets) > 1 else None,
         rr1=targets[0].rr if len(targets) > 0 else None,
         rr2=targets[1].rr if len(targets) > 1 else None,
-        predicates=_quant_predicates(quant),
-        rejectionReasons=(),
+        predicates=predicates,
+        rejectionReasons=tuple(rejection_reasons),
         dataFreshness=DataFreshness(
             allowed=True,
             policy="confirmed_only",
@@ -291,6 +372,6 @@ def evaluate_engine_a_v3(
         conviction=quant.conviction,
         confluenceThreshold=quant.threshold,
         factorScores=quant.factor_scores,
-        factorDiagnostics=quant.factor_diagnostics,
+        factorDiagnostics=factor_diagnostics,
         engineATradeEnabled=qualified,
     )

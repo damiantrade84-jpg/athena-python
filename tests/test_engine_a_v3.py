@@ -204,10 +204,11 @@ def test_contract_evaluation_covers_all_groups_and_both_horizons(tmp_path):
             assert signal.scoreGroup == expected_group
             assert signal.horizon == horizon
             assert signal.decision in {"TRADE", "WATCH", "NO_SIGNAL"}
-            assert signal.confluenceScore is None
+            # Continuous scorer always populates the confluence fields.
+            assert signal.confluenceScore is not None
 
 
-def test_missing_promotion_artifact_fails_flat_to_no_signal(tmp_path):
+def test_missing_promotion_artifact_caps_trade_to_watch(tmp_path):
     signal = evaluate_engine_a_v3(
         REPRESENTATIVE_PAIRS["forex_majors"],
         _trend_pullback_candles(),
@@ -215,12 +216,12 @@ def test_missing_promotion_artifact_fails_flat_to_no_signal(tmp_path):
         registry=PromotionRegistry(tmp_path),
     )
 
-    assert signal.decision == "NO_SIGNAL"
+    # No-veto contract: missing promotion caps TRADE -> WATCH; pair stays visible.
+    assert signal.decision == "WATCH"
     assert signal.qualified is False
-    assert "promotion_artifact_missing" in signal.rejectionReasons
-    assert signal.confluenceScore is None
-    assert signal.scoreNorm is None
     assert signal.engineATradeEnabled is False
+    assert signal.confluenceScore is not None
+    assert signal.scoreNorm is not None
 
 
 def test_demo_unvalidated_registry_activates_all_routed_specialists_without_fake_metrics(
@@ -263,7 +264,7 @@ def test_production_demo_activation_requires_both_flag_and_demo_mode(monkeypatch
     assert production_registry().allow_demo_unvalidated is False
 
 
-def test_insufficient_context_history_fails_flat(tmp_path):
+def test_insufficient_context_history_still_visible_via_quant_path(tmp_path):
     pair = REPRESENTATIVE_PAIRS["forex_majors"]
     candles = _trend_pullback_candles()
     candles["H4"] = candles["H4"][-20:]
@@ -276,10 +277,12 @@ def test_insufficient_context_history_fails_flat(tmp_path):
         registry=registry,
     )
 
-    assert signal.decision == "NO_SIGNAL"
-    assert signal.qualified is False
+    # No-veto contract: the quant path keeps the pair visible even when the
+    # setup overlay cannot form a directional read from truncated context.
+    assert signal.decision in {"TRADE", "WATCH"}
+    assert signal.decision != "NO_SIGNAL"
+    # Setup overlay reported its context-history predicate for transparency.
     assert "context_history" in {item.name for item in signal.predicates}
-    assert "trend_context_not_directional" in signal.rejectionReasons
 
 
 def test_malformed_promotion_metrics_and_costs_fail_closed():
