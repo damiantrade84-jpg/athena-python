@@ -14,7 +14,7 @@ from ai_playbooks.contracts import (
     required_output_fields_for,
 )
 
-ReviewType = Literal["engine_a_chart", "engine_d_scalp"]
+ReviewType = Literal["engine_a_chart", "engine_b_chart", "engine_d_scalp"]
 
 _ENGINE_D_REQUIRED = frozenset(
     {

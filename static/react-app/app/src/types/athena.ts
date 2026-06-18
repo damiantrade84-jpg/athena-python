@@ -15,7 +15,7 @@ export type TradeSkillDecision =
 
 export interface TradeSkillReview {
   tradeSkillVersion?: string;
-  reviewType?: 'engine_a_chart' | 'engine_d_scalp';
+  reviewType?: 'engine_a_chart' | 'engine_b_chart' | 'engine_d_scalp';
   decision?: TradeSkillDecision | string;
   direction?: Direction | 'NEUTRAL' | string;
   confidence?: number;
@@ -1337,6 +1337,45 @@ export interface AIChartReviewEngineAVerdictComparison {
   finalReason?: string | null;
 }
 
+export interface AIChartReviewEngineBVerdictComparison {
+  engineBProvided?: boolean;
+  engineBBiasValid?: boolean | null;
+  engineBPassed?: boolean | null;
+  engineBDirection?: string | null;
+  engineBScore?: number | null;
+  engineBMaxScore?: number | null;
+  engineBThreshold?: number | null;
+  engineBNormalizedScore?: number | null;
+  engineBStructuralVerdict?: string | null;
+  chartConfirmsEngineBDirection?: boolean | null;
+  chartContradictsEngineBDirection?: boolean | null;
+  chartConfirmsEntryTiming?: boolean | null;
+  chartContradictsEntryTiming?: boolean | null;
+  aiAgreesWithEngineB?: boolean | null;
+  aiDowngradedEngineB?: boolean;
+  aiUpgradedEngineB?: boolean;
+  comparisonVerdict?: string;
+  downgradeReasons?: string[];
+  upgradeReasons?: string[];
+  finalDecision?: AIChartReviewSummaryHumanAction | string | null;
+  finalReason?: string | null;
+}
+
+export interface AIChartReviewEngineBContext {
+  symbol?: string;
+  timeframe?: string;
+  chart_timeframe?: string;
+  direction?: string;
+  confluence_score?: number;
+  max_score_override?: number;
+  threshold?: number;
+  passed?: boolean;
+  structure_context?: Record<string, unknown>;
+  timeframe_route?: TimeframeRoute;
+  primary_engine?: string;
+  review_type?: string;
+}
+
 export interface AIChartReviewEngineSummary {
   score: number | null;
   maxScore: number | null;
@@ -1537,11 +1576,16 @@ export interface AIChartReviewResistanceMap {
 }
 
 export interface AIChartReviewConcordance {
-  engine: 'A';
+  engine: 'A' | 'B';
   engine_a_direction?: 'LONG' | 'SHORT' | 'NONE';
+  engine_b_direction?: 'LONG' | 'SHORT' | 'NONE';
   engine_a_score?: number | null;
+  engine_b_score?: number | null;
   engine_a_threshold?: number | null;
+  engine_b_threshold?: number | null;
   engine_a_passed?: boolean;
+  engine_b_passed?: boolean;
+  engine_b_structural_verdict?: string | null;
   ai_verdict?: AIChartReviewVerdict;
   ai_human_action?: AIChartReviewHumanAction;
   concordance: AIChartReviewConcordanceState;
@@ -1648,7 +1692,10 @@ export interface AIChartReviewResponse {
   provider_failure?: Record<string, unknown> | null;
   model: string | null;
   latency_ms?: number | null;
-  engine_a_context: AIChartReviewEngineAContext;
+  engine_a_context?: AIChartReviewEngineAContext;
+  engine_b_context?: AIChartReviewEngineBContext;
+  engineBContext?: AIChartReviewEngineBContext;
+  primaryEngine?: 'A' | 'B' | string;
   ai_review: AIChartReviewNormalized;
   concordance: AIChartReviewConcordance;
   timestamps: {
@@ -1662,6 +1709,8 @@ export interface AIChartReviewResponse {
   aiReviewSummary?: AIChartReviewSummary;
   engineAVerdictComparison?: AIChartReviewEngineAVerdictComparison;
   engine_a_verdict_comparison?: AIChartReviewEngineAVerdictComparison;
+  engineBVerdictComparison?: AIChartReviewEngineBVerdictComparison;
+  engine_b_verdict_comparison?: AIChartReviewEngineBVerdictComparison;
   timeframeRoute?: TimeframeRoute;
   timeframe_route?: TimeframeRoute;
   reviewInputMeta?: ReviewInputMeta;
@@ -1698,6 +1747,8 @@ export interface AIChartReviewScreenshotMeta {
   momentum_timeframe?: string;
   regime_timeframe?: string;
   execution_timeframe?: string;
+  /** Advisory seed for Engine B chart review direction (server re-validates). */
+  candidate_direction?: string;
 }
 
 export interface AIChartReviewChartSnapshot {

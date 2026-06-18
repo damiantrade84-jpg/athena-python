@@ -285,6 +285,34 @@ export function aiReviewWarningForExecute(review: AIChartReviewResponse | null):
   return null;
 }
 
+export function isEngineBOnlySignal(signal: EngineASignal | null): boolean {
+  if (!signal) return false;
+  const raw = signal as Record<string, unknown>;
+  return (
+    raw.engine === 'B'
+    || raw.engine_source === 'engine_b'
+    || raw.is_naked === true
+    || Boolean(raw.naked_data)
+  );
+}
+
+function reviewContextFromAiReview(review: AIChartReviewResponse | null): {
+  symbol: string | null;
+  timeframe: string | null;
+  primaryEngine: 'A' | 'B';
+} {
+  const primaryEngine = String(review?.primaryEngine || 'A').toUpperCase() === 'B' ? 'B' : 'A';
+  const ctx = primaryEngine === 'B'
+    ? (review?.engine_b_context ?? review?.engineBContext)
+    : review?.engine_a_context;
+  const record = ctx && typeof ctx === 'object' ? (ctx as Record<string, unknown>) : {};
+  return {
+    primaryEngine,
+    symbol: typeof record.symbol === 'string' ? record.symbol : null,
+    timeframe: typeof record.timeframe === 'string' ? record.timeframe : null,
+  };
+}
+
 export function canExecuteEngineASignalTier(signal: EngineASignal | null): boolean {
   if (!signal) return false;
   if (isEngineAV3Signal(signal)) {
@@ -301,7 +329,7 @@ export function canExecuteEngineASignalTier(signal: EngineASignal | null): boole
   return tier === 'trade' || tier === 'criteria' || signal.trade === true;
 }
 
-/** Engine A execute gate. Engine B overlay staleness is advisory-only (see TVChartPanel). */
+/** TV Chart execute gate. Engine B overlay staleness is advisory-only (see TVChartPanel). */
 export function evaluateTvChartExecuteBlock(args: {
   signal: EngineASignal | null;
   chartSymbolKey: string | null;
@@ -318,22 +346,41 @@ export function evaluateTvChartExecuteBlock(args: {
   if (chartSymbolKey && signalKey && chartSymbolKey !== signalKey) return 'Symbol mismatch';
   const direction = String(signal.direction || '').toUpperCase();
   if (direction !== 'LONG' && direction !== 'SHORT') return 'No selected signal';
-  const entry = signal.entry ?? signal.price;
-  const tp = signal.tp1 ?? signal.tp;
-  if (!isPositiveNumber(entry) || !isPositiveNumber(signal.sl) || !isPositiveNumber(tp)) {
-    return 'Missing SL/TP';
+
+  const isEngineBOnly = isEngineBOnlySignal(signal);
+  if (isEngineBOnly) {
+    const { entry, sl } = resolveEngineBExecutionPreviewLevels(signal, { engineBOnly: true });
+    const raw = signal as Record<string, unknown>;
+    const naked = (raw.naked_data ?? raw.engine_b) as Record<string, unknown> | undefined;
+    const tp = signal.tp1 ?? signal.tp
+      ?? positiveNumber(naked?.recommended_take_profit as number | undefined)
+      ?? positiveNumber(naked?.final_take_profit as number | undefined);
+    if (!isPositiveNumber(entry) || !isPositiveNumber(sl) || !isPositiveNumber(tp)) {
+      return 'Missing SL/TP';
+    }
+    if (signal.executable === false) return 'Not executable';
+  } else {
+    const entry = signal.entry ?? signal.price;
+    const tp = signal.tp1 ?? signal.tp;
+    if (!isPositiveNumber(entry) || !isPositiveNumber(signal.sl) || !isPositiveNumber(tp)) {
+      return 'Missing SL/TP';
+    }
+    if (signal.engineATradeEnabled === false) return 'Research-only';
+    if (!canExecuteEngineASignalTier(signal)) return 'Watchlist only';
   }
-  if (signal.engineATradeEnabled === false) return 'Research-only';
-  if (!canExecuteEngineASignalTier(signal)) return 'Watchlist only';
+
   if (isPaper) return 'Paper mode';
-  const isV3 = String(signal.engine || '').toUpperCase() === 'ENGINE_A_V3'
+  const isV3 = !isEngineBOnly
+    && String(signal.engine || '').toUpperCase() === 'ENGINE_A_V3'
     && String(signal.contractVersion || '').startsWith('3.');
   if (isV3) return null;
-  const reviewSymbolKey = normalizeSymbolKey(aiReview?.engine_a_context?.symbol);
+
+  const reviewCtx = reviewContextFromAiReview(aiReview);
+  const reviewSymbolKey = normalizeSymbolKey(reviewCtx.symbol);
   if (aiReview && reviewSymbolKey && chartSymbolKey && reviewSymbolKey !== chartSymbolKey) {
     return 'Review not current (symbol mismatch)';
   }
-  const reviewTimeframe = normalizeBackendTf(aiReview?.engine_a_context?.timeframe);
+  const reviewTimeframe = normalizeBackendTf(reviewCtx.timeframe);
   const currentTf = normalizeBackendTf(chartTimeframe);
   if (aiReview && reviewTimeframe && currentTf && reviewTimeframe !== currentTf) {
     return 'Review not current (timeframe mismatch)';

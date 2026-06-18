@@ -50,6 +50,11 @@ export interface AIReviewCardProps {
 export default function AIReviewCard({ response }: AIReviewCardProps) {
   const ai = response.ai_review;
   const c = response.concordance;
+  const primaryEngine = String(response.primaryEngine || 'A').toUpperCase() === 'B' ? 'B' : 'A';
+  const reviewVariant = primaryEngine === 'B' ? 'engine_b_chart' : 'engine_a_chart';
+  const verdictComparison = primaryEngine === 'B'
+    ? (response.engineBVerdictComparison ?? response.engine_b_verdict_comparison)
+    : (response.engineAVerdictComparison ?? response.engine_a_verdict_comparison);
   if (!ai || !c) {
     return (
       <Card className="border-border/60 bg-card/50">
@@ -62,11 +67,11 @@ export default function AIReviewCard({ response }: AIReviewCardProps) {
     );
   }
   const ts = response.timestamps;
-  const ctx = response.engine_a_context;
+  const ctx = primaryEngine === 'B'
+    ? (response.engine_b_context ?? response.engineBContext)
+    : response.engine_a_context;
   const summary = response.aiReviewSummary ?? response.ai_review_summary;
-  const verdictComparison =
-    response.engineAVerdictComparison ?? response.engine_a_verdict_comparison;
-  const atrInfo = ctx?.atr;
+  const atrInfo = ctx && typeof ctx === 'object' ? (ctx as { atr?: Record<string, unknown> }).atr : undefined;
   const scanDelta = deltaSeconds(ts?.scan_timestamp, ts?.chart_captured_at);
   const verdictClass = VERDICT_PILL[ai.verdict] ?? VERDICT_PILL.NO_TRADE;
   const concordanceClass = CONCORDANCE_PILL[c.concordance] ?? CONCORDANCE_PILL.unknown;
@@ -123,24 +128,30 @@ export default function AIReviewCard({ response }: AIReviewCardProps) {
 
         <AIReviewSummaryStrip summary={summary} />
 
-        <AIReviewEngineAVerdictPanel comparison={verdictComparison} />
+        <AIReviewEngineAVerdictPanel comparison={verdictComparison} primaryEngine={primaryEngine} />
 
         <details className="rounded-md border border-border/40 bg-background/20 px-2 py-1.5">
           <summary className="cursor-pointer text-[11px] font-medium text-muted-foreground">
-            Engine A non-visual context
+            {primaryEngine === 'B' ? 'Engine B context' : 'Engine A non-visual context'}
           </summary>
           <div className="mt-2">
-            <EngineANonVisualContextPanel
-              context={nonVisualContext}
-              scoreAttribution={scoreAttribution}
-            />
+            {primaryEngine === 'B' ? (
+              <pre className="text-[10px] whitespace-pre-wrap break-words text-muted-foreground">
+                {JSON.stringify(ctx?.structure_context ?? {}, null, 2)}
+              </pre>
+            ) : (
+              <EngineANonVisualContextPanel
+                context={nonVisualContext}
+                scoreAttribution={scoreAttribution}
+              />
+            )}
           </div>
         </details>
 
         <TradeSkillReviewPanel
           skill={ai}
           suggestedPlan={suggestedPlan}
-          variant="engine_a_chart"
+          variant={reviewVariant}
           timeframeRoute={
             (response as { timeframeRoute?: { route?: string } }).timeframeRoute?.route
             ?? (response as { timeframe_route?: { route?: string } }).timeframe_route?.route
@@ -172,7 +183,9 @@ export default function AIReviewCard({ response }: AIReviewCardProps) {
             <Row label="Setup type" value={showReviewValue(ai.setup_type)} />
             <Row label="Visual confirmation" value={showReviewValue(ai.visual_confirmation)} />
             <Row label="Visual contradiction" value={showReviewValue(ai.visual_contradiction)} />
-            <Row label="Engine A alignment" value={showReviewValue(ai.engine_a_alignment)} />
+            <Row label="Engine alignment" value={showReviewValue(
+              primaryEngine === 'B' ? (ai as { engine_b_alignment?: string }).engine_b_alignment : ai.engine_a_alignment,
+            )} />
             <Row label="ATR / RR assessment" value={showReviewValue(ai.atr_rr_assessment)} />
             <Row
               label="Freshness assessment"

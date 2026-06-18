@@ -8,14 +8,14 @@ from types import SimpleNamespace
 from typing import Any
 
 from flask import jsonify, request
-from config import get_ai_review_provider, normalize_ai_review_provider
+from config import get_ai_review_provider, normalize_ai_review_provider, normalize_chart_review_primary_engine
 
 from athena_ai.ai_review_payload_builder import (
     build_strategy_layer,
     render_strategy_block_for_prompt,
 )
 
-from ai_review.concordance import compute_engine_a_ai_concordance
+from ai_review.concordance import compute_engine_a_ai_concordance, compute_engine_b_ai_concordance
 from ai_review.context_diagnostics import (
     build_context_diagnostics,
     sanitize_ai_review_missing_context,
@@ -25,6 +25,11 @@ from ai_review.engine_a_context import (
     build_engine_b_summary_for_strategy,
 )
 from ai_review.engine_a_verdict import build_engine_a_verdict_comparison
+from ai_review.engine_b_context import (
+    assemble_engine_b_context,
+    build_engine_b_summary_from_context,
+)
+from ai_review.engine_b_verdict import build_engine_b_verdict_comparison
 from ai_review.freshness import classify_atr_freshness
 from ai_review.normalizer import normalize_chart_review_response
 from ai_review.payload_schema import build_payload
@@ -71,20 +76,32 @@ def _resolve_provider_name(
     return get_ai_review_provider(root_cfg or cfg, requested=provider)
 
 
+def _review_type_for_primary(primary_engine: str) -> str:
+    return "engine_b" if primary_engine == "B" else "engine_a"
+
+
+def _chart_review_type_label(primary_engine: str) -> str:
+    return "engine_b_chart" if primary_engine == "B" else "engine_a_chart"
+
+
 def _attach_review_input_meta(
     response: dict[str, Any],
     *,
-    engine_a_ctx: dict[str, Any],
+    engine_ctx: dict[str, Any],
+    primary_engine: str = "A",
 ) -> None:
-    structure_context = engine_a_ctx.get("structure_context")
+    structure_context = engine_ctx.get("structure_context")
     route = response.get("timeframeRoute") or response.get("timeframe_route") or {}
-    has_engine_a = "passed" in engine_a_ctx
-    has_engine_b = isinstance(structure_context, dict) and bool(structure_context)
+    is_b = primary_engine == "B"
+    has_engine_a = not is_b and "passed" in engine_ctx
+    has_engine_b = is_b or (
+        isinstance(structure_context, dict) and bool(structure_context)
+    )
     response["reviewInputMeta"] = {
-        "symbol": engine_a_ctx.get("symbol"),
-        "signalEngine": "A" if has_engine_a else "B" if has_engine_b else "unknown",
-        "signalTimeframe": engine_a_ctx.get("timeframe"),
-        "chartTimeframe": engine_a_ctx.get("chart_timeframe") or engine_a_ctx.get("timeframe"),
+        "symbol": engine_ctx.get("symbol"),
+        "signalEngine": "B" if is_b else ("A" if has_engine_a else "B" if has_engine_b else "unknown"),
+        "signalTimeframe": engine_ctx.get("timeframe"),
+        "chartTimeframe": engine_ctx.get("chart_timeframe") or engine_ctx.get("timeframe"),
         "hasEngineASignal": has_engine_a,
         "hasEngineBOverlay": has_engine_b,
         "hasChartImage": True,
@@ -95,26 +112,32 @@ def _attach_review_input_meta(
 def _attach_review_summary(
     response: dict[str, Any],
     *,
-    engine_a_ctx: dict[str, Any],
+    engine_ctx: dict[str, Any],
     ai_review: dict[str, Any],
     concordance: dict[str, Any],
     provider_meta: dict[str, Any],
     mismatch_warnings: list[str],
     diagnostic_ai_review: dict[str, Any] | None = None,
+    primary_engine: str = "A",
 ) -> dict[str, Any]:
-    snapshots = engine_a_ctx.get("engine_snapshots")
+    snapshots = engine_ctx.get("engine_snapshots")
     diagnostic_source = diagnostic_ai_review or ai_review
-    clean_ai_review = sanitize_ai_review_missing_context(engine_a_ctx, diagnostic_source)
+    clean_ai_review = sanitize_ai_review_missing_context(engine_ctx, diagnostic_source)
     response["ai_review"] = clean_ai_review
     structured = clean_ai_review.get("structured") or {}
     if not isinstance(structured, dict):
         structured = {}
     model_summary = structured.get("aiReviewSummary") or structured.get("ai_review_summary")
-    model_comparison = structured.get("engineAVerdictComparison") or structured.get(
-        "engine_a_verdict_comparison"
-    )
+    if primary_engine == "B":
+        model_comparison = structured.get("engineBVerdictComparison") or structured.get(
+            "engine_b_verdict_comparison"
+        )
+    else:
+        model_comparison = structured.get("engineAVerdictComparison") or structured.get(
+            "engine_a_verdict_comparison"
+        )
     summary = build_ai_review_summary(
-        engine_a_ctx,
+        engine_ctx,
         clean_ai_review,
         concordance,
         provider_meta,
@@ -122,12 +145,23 @@ def _attach_review_summary(
         mismatch_warnings=mismatch_warnings,
         model_summary=model_summary if isinstance(model_summary, dict) else None,
     )
-    verdict_comparison = build_engine_a_verdict_comparison(
-        engine_a_ctx,
-        clean_ai_review,
-        model_comparison=model_comparison if isinstance(model_comparison, dict) else None,
-        engine_snapshots=snapshots,
-    )
+    if primary_engine == "B":
+        verdict_comparison = build_engine_b_verdict_comparison(
+            engine_ctx,
+            clean_ai_review,
+            model_comparison=model_comparison if isinstance(model_comparison, dict) else None,
+        )
+        response["engineBVerdictComparison"] = verdict_comparison
+        response["engine_b_verdict_comparison"] = verdict_comparison
+    else:
+        verdict_comparison = build_engine_a_verdict_comparison(
+            engine_ctx,
+            clean_ai_review,
+            model_comparison=model_comparison if isinstance(model_comparison, dict) else None,
+            engine_snapshots=snapshots,
+        )
+        response["engineAVerdictComparison"] = verdict_comparison
+        response["engine_a_verdict_comparison"] = verdict_comparison
     response["aiReviewSummary"] = summary
     response["ai_review_summary"] = summary
     selected = response.get("selectedProvider")
@@ -155,18 +189,25 @@ def _attach_review_summary(
             summary["providerFailure"] = mismatch
             summary["provider_failure"] = mismatch
             summary["fallbackUsed"] = True
-    response["engineAVerdictComparison"] = verdict_comparison
-    response["engine_a_verdict_comparison"] = verdict_comparison
-    ctx_diag = build_context_diagnostics(engine_a_ctx, diagnostic_source)
+    ctx_diag = build_context_diagnostics(engine_ctx, diagnostic_source)
     response.update(ctx_diag)
     response["derivativesContext"] = ctx_diag.get("fundingOi")
     response["derivatives_context"] = ctx_diag.get("fundingOi")
     response["nonVisualContext"] = ctx_diag.get("nonVisualContext")
-    response["engineANonVisualContext"] = ctx_diag.get("engineANonVisualContext")
-    response["scoreAttribution"] = ctx_diag.get("scoreAttribution")
-    response["engineAScoreAttribution"] = ctx_diag.get("engineAScoreAttribution")
-    response["engine_a_non_visual_context"] = ctx_diag.get("engineANonVisualContext")
-    response["engine_a_score_attribution"] = ctx_diag.get("engineAScoreAttribution")
+    if primary_engine == "B":
+        response["engineBNonVisualContext"] = ctx_diag.get("nonVisualContext")
+        response["engine_b_non_visual_context"] = ctx_diag.get("nonVisualContext")
+    else:
+        response["engineANonVisualContext"] = ctx_diag.get("engineANonVisualContext")
+        response["engineAScoreAttribution"] = ctx_diag.get("scoreAttribution")
+        response["engine_a_non_visual_context"] = ctx_diag.get("engineANonVisualContext")
+        response["engine_a_score_attribution"] = ctx_diag.get("engineAScoreAttribution")
+    response["primaryEngine"] = primary_engine
+    ctx_key = "engine_b_context" if primary_engine == "B" else "engine_a_context"
+    camel_key = "engineBContext" if primary_engine == "B" else "engineAContext"
+    if ctx_key not in response:
+        response[ctx_key] = engine_ctx
+    response[camel_key] = response.get(ctx_key) or engine_ctx
     plan = clean_ai_review.get("suggestedTradePlan") or clean_ai_review.get("suggested_trade_plan")
     if isinstance(plan, dict):
         response["suggestedTradePlan"] = plan
@@ -177,16 +218,22 @@ def _attach_review_summary(
 def _attach_timeframe_route(
     response: dict[str, Any],
     *,
-    engine_a_ctx: dict[str, Any],
+    engine_ctx: dict[str, Any],
     ai_review: dict[str, Any],
     routing_cfg: dict[str, Any] | None,
+    primary_engine: str = "A",
 ) -> dict[str, Any]:
-    response_ctx = response.get("engine_a_context")
+    ctx_key = "engine_b_context" if primary_engine == "B" else "engine_a_context"
+    response_ctx = response.get(ctx_key)
     if not isinstance(response_ctx, dict):
-        response_ctx = engine_a_ctx
-        response["engine_a_context"] = response_ctx
-    comparison = response.get("engineAVerdictComparison") or response.get(
-        "engine_a_verdict_comparison"
+        response_ctx = engine_ctx
+        response[ctx_key] = response_ctx
+    comparison = (
+        response.get("engineBVerdictComparison")
+        or response.get("engine_b_verdict_comparison")
+        if primary_engine == "B"
+        else response.get("engineAVerdictComparison")
+        or response.get("engine_a_verdict_comparison")
     )
     route = resolve_timeframe_route(
         asset_group=response_ctx.get("asset_group"),
@@ -194,21 +241,23 @@ def _attach_timeframe_route(
         ai_review=ai_review,
         verdict_comparison=comparison if isinstance(comparison, dict) else None,
         cfg=routing_cfg,
+        primary_engine=primary_engine,
     )
     response_ctx["timeframe_route"] = route
     response["timeframeRoute"] = route
     response["timeframe_route"] = route
-    _attach_review_input_meta(response, engine_a_ctx=response_ctx)
+    _attach_review_input_meta(response, engine_ctx=response_ctx, primary_engine=primary_engine)
     return response
 
 
 def _build_strategy_layer_safely(
     *,
     cfg: dict[str, Any],
-    engine_a_ctx: dict[str, Any],
+    engine_ctx: dict[str, Any],
     symbol: str,
     timeframe: str,
     screenshot_meta: dict[str, Any] | None = None,
+    primary_engine: str = "A",
 ) -> dict[str, Any] | None:
     """Build the additive strategy-playbook layer behind STRATEGY_LAYER_ENABLED.
 
@@ -220,22 +269,25 @@ def _build_strategy_layer_safely(
         return None
     try:
         limit = int(cfg.get("STRATEGY_LAYER_OHLCV_LIMIT") or 80)
-        ohlcv_window = engine_a_ctx.get("ohlcv_bars")
+        ohlcv_window = engine_ctx.get("ohlcv_bars")
         if not isinstance(ohlcv_window, list) or not ohlcv_window:
             ohlcv_window = None
         overlays = (screenshot_meta or {}).get("overlays") or []
-        engine_b_summary = build_engine_b_summary_for_strategy(engine_a_ctx)
+        if primary_engine == "B":
+            engine_b_summary = build_engine_b_summary_from_context(engine_ctx)
+        else:
+            engine_b_summary = build_engine_b_summary_for_strategy(engine_ctx)
         if isinstance(overlays, list) and "engine_b" not in overlays:
             engine_b_summary = {**engine_b_summary, "available": False}
         return build_strategy_layer(
-            engine_a_ctx=engine_a_ctx,
+            engine_a_ctx=engine_ctx,
             ohlcv_window=ohlcv_window,
             engine_b_summary=engine_b_summary,
             engine_d_summary=None,
             symbol=symbol,
             timeframe=timeframe,
-            asset_group=engine_a_ctx.get("asset_group"),
-            direction=engine_a_ctx.get("direction"),
+            asset_group=engine_ctx.get("asset_group"),
+            direction=engine_ctx.get("direction"),
             ohlcv_limit=limit,
         )
     except Exception:
@@ -275,18 +327,34 @@ def register_ai_chart_review_routes(app, runtime: SimpleNamespace) -> None:
         screenshot_meta = dict(data.get("screenshot_meta") or {})
         provider = _resolve_provider_name(data, cfg, runtime.CONFIG)
 
-        engine_a_ctx = assemble_engine_a_context(
-            symbol,
-            timeframe,
-            screenshot_meta=screenshot_meta,
-            resolve_pair_fn=getattr(runtime, "resolve_pair_fn", None),
-            analyze_pair_fn=getattr(runtime, "analyze_pair_fn", None),
-            btc_bias_fn=getattr(runtime, "btc_bias_fn", None),
-        )
-        if engine_a_ctx is None:
-            return jsonify({"error": "Engine A returned no result"}), 422
+        primary_engine = normalize_chart_review_primary_engine(cfg.get("PRIMARY_ENGINE"))
+        review_type = _review_type_for_primary(primary_engine)
+        chart_review_type = _chart_review_type_label(primary_engine)
 
-        atr = engine_a_ctx.setdefault("atr", {})
+        if primary_engine == "B":
+            engine_ctx = assemble_engine_b_context(
+                symbol,
+                timeframe,
+                screenshot_meta=screenshot_meta,
+                resolve_pair_fn=getattr(runtime, "resolve_pair_fn", None),
+                naked_analysis_fn=getattr(runtime, "naked_analysis_fn", None),
+                last_engine_b_rows_fn=getattr(runtime, "last_engine_b_rows_fn", None),
+            )
+            if engine_ctx is None:
+                return jsonify({"error": "Engine B returned no result"}), 422
+        else:
+            engine_ctx = assemble_engine_a_context(
+                symbol,
+                timeframe,
+                screenshot_meta=screenshot_meta,
+                resolve_pair_fn=getattr(runtime, "resolve_pair_fn", None),
+                analyze_pair_fn=getattr(runtime, "analyze_pair_fn", None),
+                btc_bias_fn=getattr(runtime, "btc_bias_fn", None),
+            )
+            if engine_ctx is None:
+                return jsonify({"error": "Engine A returned no result"}), 422
+
+        atr = engine_ctx.setdefault("atr", {})
         freshness = classify_atr_freshness(
             atr.get("atr_tf"),
             atr.get("atr_age_seconds"),
@@ -295,10 +363,10 @@ def register_ai_chart_review_routes(app, runtime: SimpleNamespace) -> None:
         atr["atr_freshness_status"] = freshness.get("status")
         atr["max_expected_age_seconds"] = freshness.get("max_expected_age_seconds")
 
-        mismatch_warnings = evaluate_timestamp_mismatch(engine_a_ctx, screenshot_meta, cfg)
+        mismatch_warnings = evaluate_timestamp_mismatch(engine_ctx, screenshot_meta, cfg)
         overlays = screenshot_meta.get("overlays") or []
         if isinstance(overlays, list) and "engine_b" in overlays:
-            struct = engine_a_ctx.get("structure_context") or {}
+            struct = engine_ctx.get("structure_context") or {}
             if not isinstance(struct, dict) or not any(
                 struct.get(k)
                 for k in (
@@ -312,8 +380,8 @@ def register_ai_chart_review_routes(app, runtime: SimpleNamespace) -> None:
                 mismatch_warnings.append(
                     "engine_b_overlays_enabled_but_server_structure_context_empty"
                 )
-        engine_a_ctx["mismatch_warnings"] = mismatch_warnings
-        engine_a_ctx["chart_captured_at"] = screenshot_meta.get("captured_at")
+        engine_ctx["mismatch_warnings"] = mismatch_warnings
+        engine_ctx["chart_captured_at"] = screenshot_meta.get("captured_at")
 
         screenshot_bytes = decode_screenshot_bytes(str(data["screenshot_base64"]))
         screenshot_hash = hashlib.sha256(screenshot_bytes).hexdigest()[:16]
@@ -324,6 +392,7 @@ def register_ai_chart_review_routes(app, runtime: SimpleNamespace) -> None:
             screenshot_hash,
             int(cfg.get("DEDUP_WINDOW_SECONDS") or 60),
             audit_db=getattr(runtime, "AUDIT_DB", None),
+            review_type=review_type,
         )
         if dedup:
             cached_provider = normalize_ai_review_provider(dedup.get("provider"))
@@ -337,18 +406,26 @@ def register_ai_chart_review_routes(app, runtime: SimpleNamespace) -> None:
 
         if dedup:
             dedup["dedup_hit"] = True
-            dedup_engine_ctx = dedup.get("engine_a_context") or engine_a_ctx
+            ctx_key = "engine_b_context" if primary_engine == "B" else "engine_a_context"
+            dedup_engine_ctx = dedup.get(ctx_key) or engine_ctx
             dedup_ai_raw = dedup.get("ai_review") or {}
             dedup_ai = sanitize_ai_review_missing_context(
                 dedup_engine_ctx,
                 dedup_ai_raw,
             )
             dedup["ai_review"] = dedup_ai
-            dedup["concordance"] = compute_engine_a_ai_concordance(
-                dedup_engine_ctx,
-                dedup_ai,
-                cfg=cfg,
-            )
+            if primary_engine == "B":
+                dedup["concordance"] = compute_engine_b_ai_concordance(
+                    dedup_engine_ctx,
+                    dedup_ai,
+                    cfg=cfg,
+                )
+            else:
+                dedup["concordance"] = compute_engine_a_ai_concordance(
+                    dedup_engine_ctx,
+                    dedup_ai,
+                    cfg=cfg,
+                )
             pmeta = provider_meta_from_persisted(
                 provider=str(dedup.get("provider") or provider),
                 model=str(dedup.get("model") or ""),
@@ -357,30 +434,34 @@ def register_ai_chart_review_routes(app, runtime: SimpleNamespace) -> None:
             dedup["selectedProvider"] = provider
             dedup["fallbackUsed"] = bool(pmeta.get("fallback_used"))
             dedup["fallback_used"] = dedup["fallbackUsed"]
+            dedup["primaryEngine"] = primary_engine
             _attach_review_summary(
                 dedup,
-                engine_a_ctx=dedup_engine_ctx,
+                engine_ctx=dedup_engine_ctx,
                 ai_review=dedup_ai,
                 concordance=dedup.get("concordance") or {},
                 provider_meta=pmeta,
                 mismatch_warnings=list(dedup.get("mismatch_warnings") or []),
                 diagnostic_ai_review=dedup_ai_raw,
+                primary_engine=primary_engine,
             )
             _attach_timeframe_route(
                 dedup,
-                engine_a_ctx=dedup_engine_ctx,
+                engine_ctx=dedup_engine_ctx,
                 ai_review=dedup_ai,
                 routing_cfg=runtime.CONFIG.get("TIMEFRAME_ROUTING"),
+                primary_engine=primary_engine,
             )
             return jsonify(runtime.json_safe(dedup))
 
-        prompt = build_chart_review_prompt(engine_a_ctx)
+        prompt = build_chart_review_prompt(engine_ctx)
         strategy_layer = _build_strategy_layer_safely(
             cfg=cfg,
-            engine_a_ctx=engine_a_ctx,
+            engine_ctx=engine_ctx,
             symbol=symbol,
             timeframe=timeframe,
             screenshot_meta=screenshot_meta,
+            primary_engine=primary_engine,
         )
         if strategy_layer:
             try:
@@ -391,7 +472,7 @@ def register_ai_chart_review_routes(app, runtime: SimpleNamespace) -> None:
                 log.exception("Failed to render strategy block; using unmodified prompt")
         payload = build_payload(
             data,
-            engine_a_ctx,
+            engine_ctx,
             prompt=prompt,
             mismatch_warnings=mismatch_warnings,
             strategy_layer=strategy_layer,
@@ -409,11 +490,19 @@ def register_ai_chart_review_routes(app, runtime: SimpleNamespace) -> None:
             body, status = provider_error_response(exc, provider=provider)
             return jsonify(body), status
 
-        normalized_raw = normalize_chart_review_response(raw.get("raw_text") or "")
-        normalized = sanitize_ai_review_missing_context(engine_a_ctx, normalized_raw)
-        concordance = compute_engine_a_ai_concordance(
-            engine_a_ctx, normalized, cfg=cfg
+        normalized_raw = normalize_chart_review_response(
+            raw.get("raw_text") or "",
+            review_type=chart_review_type,
         )
+        normalized = sanitize_ai_review_missing_context(engine_ctx, normalized_raw)
+        if primary_engine == "B":
+            concordance = compute_engine_b_ai_concordance(
+                engine_ctx, normalized, cfg=cfg
+            )
+        else:
+            concordance = compute_engine_a_ai_concordance(
+                engine_ctx, normalized, cfg=cfg
+            )
 
         provider_meta = apply_parse_fallback(
             {
@@ -428,35 +517,42 @@ def register_ai_chart_review_routes(app, runtime: SimpleNamespace) -> None:
 
         response: dict[str, Any]
         if cfg.get("PERSIST_REVIEWS", True):
-            response = record_review(
-                symbol=symbol,
-                timeframe=timeframe,
-                asset_group=engine_a_ctx.get("asset_group"),
-                provider=str(provider_meta.get("provider") or provider),
-                model=str(provider_meta.get("model") or cfg.get("ANTHROPIC_MODEL") or ""),
-                latency_ms=raw.get("latency_ms"),
-                screenshot_hash=screenshot_hash,
-                screenshot_bytes=len(screenshot_bytes),
-                screenshot_meta=screenshot_meta,
-                engine_a_context=engine_a_ctx,
-                ai_review=normalized,
-                concordance=concordance,
-                mismatch_warnings=mismatch_warnings,
-                audit_db=getattr(runtime, "AUDIT_DB", None),
-            )
+            record_kwargs: dict[str, Any] = {
+                "symbol": symbol,
+                "timeframe": timeframe,
+                "asset_group": engine_ctx.get("asset_group"),
+                "provider": str(provider_meta.get("provider") or provider),
+                "model": str(provider_meta.get("model") or cfg.get("ANTHROPIC_MODEL") or ""),
+                "latency_ms": raw.get("latency_ms"),
+                "screenshot_hash": screenshot_hash,
+                "screenshot_bytes": len(screenshot_bytes),
+                "screenshot_meta": screenshot_meta,
+                "ai_review": normalized,
+                "concordance": concordance,
+                "mismatch_warnings": mismatch_warnings,
+                "audit_db": getattr(runtime, "AUDIT_DB", None),
+                "review_type": review_type,
+            }
+            if primary_engine == "B":
+                record_kwargs["engine_b_context"] = engine_ctx
+            else:
+                record_kwargs["engine_a_context"] = engine_ctx
+            response = record_review(**record_kwargs)
         else:
+            ctx_key = "engine_b_context" if primary_engine == "B" else "engine_a_context"
             response = {
                 "review_id": None,
                 "provider": provider_meta.get("provider") or provider,
                 "model": provider_meta.get("model"),
                 "latency_ms": raw.get("latency_ms"),
-                "engine_a_context": engine_a_ctx,
+                ctx_key: engine_ctx,
+                "primaryEngine": primary_engine,
                 "ai_review": normalized,
                 "concordance": concordance,
                 "timestamps": {
-                    "scan_timestamp": engine_a_ctx.get("scan_timestamp"),
-                    "chart_captured_at": engine_a_ctx.get("chart_captured_at"),
-                    "latest_candle_ts": engine_a_ctx.get("latest_candle_ts"),
+                    "scan_timestamp": engine_ctx.get("scan_timestamp"),
+                    "chart_captured_at": engine_ctx.get("chart_captured_at"),
+                    "latest_candle_ts": engine_ctx.get("latest_candle_ts"),
                 },
                 "mismatch_warnings": mismatch_warnings,
                 "dedup_hit": False,
@@ -475,18 +571,20 @@ def register_ai_chart_review_routes(app, runtime: SimpleNamespace) -> None:
 
         _attach_review_summary(
             response,
-            engine_a_ctx=engine_a_ctx,
+            engine_ctx=engine_ctx,
             ai_review=normalized,
             concordance=concordance,
             provider_meta=provider_meta,
             mismatch_warnings=mismatch_warnings,
             diagnostic_ai_review=normalized_raw,
+            primary_engine=primary_engine,
         )
         _attach_timeframe_route(
             response,
-            engine_a_ctx=engine_a_ctx,
+            engine_ctx=engine_ctx,
             ai_review=normalized,
             routing_cfg=runtime.CONFIG.get("TIMEFRAME_ROUTING"),
+            primary_engine=primary_engine,
         )
 
         if strategy_layer is not None:

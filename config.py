@@ -109,6 +109,11 @@ def normalize_ai_review_provider(value: object) -> str:
     return _AI_REVIEW_PROVIDER_ALIASES.get(text, text)
 
 
+def normalize_chart_review_primary_engine(value: object) -> str:
+    text = str(value or "A").strip().upper()
+    return "B" if text == "B" else "A"
+
+
 def _provider_from_base_url(base_url: str) -> str:
     url = str(base_url or "").strip().lower()
     if "api.openai.com" in url or "openai" in url:
@@ -945,6 +950,7 @@ CONFIG: dict = {
         "STRATEGY_LAYER_OHLCV_LIMIT": _env_int(
             "AI_CHART_REVIEW_STRATEGY_LAYER_OHLCV_LIMIT", 80
         ),
+        "PRIMARY_ENGINE": os.environ.get("AI_CHART_REVIEW_PRIMARY_ENGINE", "A"),
     },
     "SUGGESTED_TRADE_MONITOR": {
         "ENABLED": _env_bool("SUGGESTED_TRADE_MONITOR_ENABLED", True),

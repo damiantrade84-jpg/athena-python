@@ -369,9 +369,11 @@ def test_tv_chart_panel_execute_does_not_send_visual_engine_b_overlay():
     """Engine A execute must not leak visual-only Engine B overlay into payload.engine_b."""
     source = _read(TV_PANEL)
     confirm_idx = source.index("async function onConfirmExecute()")
-    confirm_section = source[confirm_idx:confirm_idx + 600]
+    confirm_section = source[confirm_idx:confirm_idx + 900]
     assert "buildQuickExecutePayload" in confirm_section
-    assert "engineBOverlay" not in confirm_section
+    assert "isEngineBOnly" in confirm_section
+    assert "naked_data ?? chartCandidate.engine_b" in confirm_section
+    assert "engineBOverlay ?? undefined" in confirm_section
 
 
 def test_tv_chart_panel_execute_shown_when_can_flag_watch():
@@ -495,7 +497,7 @@ def test_tv_chart_panel_clears_stale_ai_review_on_pair_change():
 def test_tv_chart_panel_stale_clear_normalizes_timeframes():
     source = _read(TV_PANEL)
 
-    assert "normalizeBackendTf(aiReview.engine_a_context?.timeframe)" in source
+    assert "reviewContextFromResponse(aiReview)" in source
     assert "normalizeBackendTf(timeframe)" in source
 
 
@@ -720,10 +722,14 @@ def test_engine_a_side_panel_follows_current_chart_symbol_not_first_candidate():
     source = _read(TV_PANEL)
 
     assert "function findEngineACandidateForSymbol" in source
+    assert "function findEngineBCandidateForSymbol" in source
     assert "const intentCandidateRows = useMemo(" in source
     assert "() => (intentSignal ? [intentSignal, ...candidateRows] : candidateRows)" in source
-    assert "const chartCandidate = useMemo(() => findEngineACandidateForSymbol(intentCandidateRows, pair), [intentCandidateRows, pair]);" in source
-    assert "<EngineASidePanel signal={chartCandidate} liveTick={liveTick} chartPayload={chartPayload} />" in source
+    assert "useEngineBPrimary" in source
+    assert "findEngineBCandidateForSymbol(intentCandidateRows, pair)" in source
+    assert "findEngineACandidateForSymbol(intentCandidateRows, pair)" in source
+    assert "<EngineASidePanel signal={chartCandidate}" in source
+    assert "<EngineBSidePanel" in source
     assert "<EngineASidePanel signal={selectedCandidate}" not in source
     assert 'aria-label="Engine A candidate"' in source
 
@@ -997,8 +1003,13 @@ def test_tv_chart_engine_a_diagnostics_collapsed_by_default():
     source = _read(TV_PANEL)
 
     assert "Engine A diagnostics" in source
+    assert "Engine B diagnostics" in source
     assert "<details" in source
     assert "EngineASidePanel" in source
+    assert "EngineBSidePanel" in source
+    assert "useEngineBPrimary" in source
+    assert "scanCacheB" in source
+    assert "AI_CHART_REVIEW_PRIMARY_ENGINE" in source
 
 
 def test_ai_review_card_collapses_verbose_sections():

@@ -90,8 +90,13 @@ def _row_to_response(row: sqlite3.Row) -> dict[str, Any]:
     }
     if review_type == "engine_d":
         out["engine_d_context"] = engine_snapshot
+    elif review_type == "engine_b":
+        out["engine_b_context"] = engine_snapshot
+        out["engineBContext"] = engine_snapshot
+        out["primaryEngine"] = "B"
     else:
         out["engine_a_context"] = engine_snapshot
+        out["primaryEngine"] = "A"
     return out
 
 
@@ -170,6 +175,7 @@ def record_review(
     screenshot_bytes: int,
     screenshot_meta: dict[str, Any],
     engine_a_context: dict[str, Any] | None = None,
+    engine_b_context: dict[str, Any] | None = None,
     engine_d_context: dict[str, Any] | None = None,
     ai_review: dict[str, Any],
     concordance: dict[str, Any],
@@ -182,7 +188,13 @@ def record_review(
     review_id = uuid.uuid4().hex
     created_at = datetime.now(timezone.utc).isoformat()
     parse_success = 1 if ai_review.get("parse_success", True) else 0
-    engine_context = engine_d_context if review_type == "engine_d" else engine_a_context
+    engine_context = (
+        engine_d_context
+        if review_type == "engine_d"
+        else engine_b_context
+        if review_type == "engine_b"
+        else engine_a_context
+    )
     if engine_context is None:
         raise ValueError("engine context is required for record_review")
 
@@ -242,6 +254,11 @@ def record_review(
     }
     if review_type == "engine_d":
         response["engine_d_context"] = engine_context
+    elif review_type == "engine_b":
+        response["engine_b_context"] = engine_context
+        response["engineBContext"] = engine_context
+        response["primaryEngine"] = "B"
     else:
         response["engine_a_context"] = engine_context
+        response["primaryEngine"] = "A"
     return response

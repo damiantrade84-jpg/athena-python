@@ -29,6 +29,12 @@ def _fmt_list(value: Any) -> str:
 
 
 def build_chart_review_prompt(context: dict[str, Any]) -> str:
+    if str(context.get("primary_engine") or "A").upper() == "B":
+        return _build_engine_b_chart_review_prompt(context)
+    return _build_engine_a_chart_review_prompt(context)
+
+
+def _build_engine_a_chart_review_prompt(context: dict[str, Any]) -> str:
     atr = context.get("atr") or {}
     geometry = context.get("geometry") or {}
     equity = context.get("equity_session") or {}
@@ -173,6 +179,92 @@ visible_range: {_fmt(chart_snapshot.get("visibleRange"))}
 engine_b_overlay_status: {_fmt(chart_snapshot.get("engineBOverlayStatus"))}
 engine_b_overlay_count: {_fmt(chart_snapshot.get("engineBOverlayCount"))}
 indicator_layer_states: {_fmt(chart_snapshot.get("indicatorLayerStates"))}
+
+Analyse the chart image and return JSON only.
+"""
+
+
+def _build_engine_b_chart_review_prompt(context: dict[str, Any]) -> str:
+    atr = context.get("atr") or {}
+    geometry = context.get("geometry") or {}
+    mismatch_warnings = context.get("mismatch_warnings") or []
+    chart_snapshot = context.get("chart_snapshot") or {}
+    if not isinstance(chart_snapshot, dict):
+        chart_snapshot = {}
+    rendered_layers = chart_snapshot.get("renderedLayers")
+    if not rendered_layers:
+        rendered_layers = context.get("screenshot_overlays") or []
+    engine_b_context = build_engine_b_prompt_context(context)
+    engine_b_json = json.dumps({"engineBContext": engine_b_context}, default=str, indent=2)
+    playbook_block = render_playbook_prompt_block([get_engine_b_playbook()], compact=True)
+    trade_skill_schema = render_trade_skill_prompt_schema("engine_b_chart")
+
+    return f"""You are reviewing the chart image against the structured Engine B (NakedEngine structure/liquidity) signal supplied below using the Engine B trade playbook.
+
+Workflow (required):
+1. Follow Engine B playbook: structure, liquidity, zones, invalidation.
+2. Decide whether the chart visually confirms Engine B direction.
+3. Decide whether current entry timing is acceptable at the nearest zone/structure.
+4. Output structured trade-skill fields per schema below. Never grant execution permission.
+
+{playbook_block}
+
+== TRADE SKILL OUTPUT (required top-level fields) ==
+{trade_skill_schema}
+
+Return strict JSON only with these top-level keys:
+- tradeSkillVersion, reviewType, decision, direction, confidence, entryAllowedNow, waitReason, noTradeReason, chartReadSummary
+- locationAssessment, invalidationLevel, invalidationReason
+- requiredConfirmation (string[]), riskNotes (string[])
+- aiReviewSummary: {{ humanAction, setupType, overallScore, tradeabilityScore, engineAlignmentScore, visualConfirmationScore, entryQualityScore, riskScore, confidence, finalReason }}
+- engineBVerdictComparison: {{
+    engineBProvided, engineBBiasValid, engineBPassed, engineBDirection, engineBScore, engineBMaxScore,
+    engineBThreshold, engineBNormalizedScore, engineBStructuralVerdict,
+    chartConfirmsEngineBDirection, chartContradictsEngineBDirection,
+    chartConfirmsEntryTiming, chartContradictsEntryTiming,
+    aiAgreesWithEngineB, aiDowngradedEngineB, aiUpgradedEngineB,
+    comparisonVerdict, downgradeReasons, upgradeReasons, finalDecision, finalReason
+  }}
+  comparisonVerdict one of: engine_b_confirmed | engine_b_direction_confirmed_entry_rejected |
+  engine_b_contradicted | engine_b_missing | mixed | unknown
+- contextCompleteness, missingContextDetailed, visualConfirmation, visualContradiction, atrRrAssessment, entryQuality
+- supportingReasons, risks (string arrays)
+- metadata: {{ chartCapturedAt, scanTimestamp, latestCandleTimestamp, chartProvider, engineProvider, providerMismatch }}
+
+Also include legacy flat fields:
+verdict (VALID|CAUTION|INVALID|NO_TRADE), confidence (0-100), setup_type, human_action (take|wait|reject|needs_fresher_data|needs_better_rr),
+engine_b_alignment, freshness_assessment, missing_context (string array).
+
+Rules:
+- Do not approve a trade only because Engine B score is high or passed=true.
+- Never change Engine B score or threshold. AI review may validate or downgrade timing only.
+- Use the chart image for visual direction and timing validation.
+- Engine B overlays on the chart (zones, BOS, FVG) are advisory visual context — server-trusted structure fields in engineBContext are authoritative.
+- This is review-only. Do not issue execution instructions.
+
+== SERVER-TRUSTED engineBContext (JSON) ==
+{engine_b_json}
+
+== SYMBOL ==
+{context.get("symbol")} {context.get("timeframe")} asset_group: {context.get("asset_group")}
+analyze_style: {_fmt(context.get("analyze_style"))}
+
+== ATR ==
+atr_value: {_fmt(atr.get("atr_value"))} atr_tf: {_fmt(atr.get("atr_tf"))} atr_source: {_fmt(atr.get("atr_source"))}
+
+== GEOMETRY ==
+entry: {_fmt(geometry.get("candidate_entry"))} sl: {_fmt(geometry.get("stop_loss"))} tp: {_fmt(geometry.get("take_profit"))} rr: {_fmt(geometry.get("rr"))}
+
+== TIMESTAMPS / PROVIDERS ==
+scan_timestamp: {_fmt(context.get("scan_timestamp"))} chart_captured_at: {_fmt(context.get("chart_captured_at"))}
+engine_provider: {_fmt(context.get("engine_b_provider"))} chart_provider: {_fmt(context.get("chart_provider_hint"))}
+mismatch_warnings: {_fmt(mismatch_warnings)}
+
+== CHART CAPTURE METADATA ==
+rendered_layers: {_fmt_list(rendered_layers)}
+visible_candle_count: {_fmt(chart_snapshot.get("visibleCandleCount"))}
+engine_b_overlay_status: {_fmt(chart_snapshot.get("engineBOverlayStatus"))}
+engine_b_overlay_count: {_fmt(chart_snapshot.get("engineBOverlayCount"))}
 
 Analyse the chart image and return JSON only.
 """

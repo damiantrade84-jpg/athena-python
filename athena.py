@@ -143,6 +143,7 @@ from athena_app.services.crypto_signal_feed import (  # noqa: E402
 
 
 _last_scan_results: dict = {"signals": []}  # latest run_full_scan output for chart-analysis context
+_last_engine_b_scan_results: dict = {"signals": []}  # latest /api/scan-naked output for chart-review B context
 _engine_b_cache: dict = {}  # sid/symbol -> naked analysis result dict
 _ENGINE_B_CACHE_TTL = 300.0
 _eodhd_volume_cache: dict = {}
@@ -7789,6 +7790,9 @@ def api_scan_naked():
             "activePairs": len(candidate_pairs),
         }))
 
+    global _last_engine_b_scan_results
+    _last_engine_b_scan_results = {"signals": results, "scanFunnel": engine_b_funnel}
+
     return jsonify(_json_safe({
         "success": True,
         "signals": results,
@@ -9005,6 +9009,12 @@ def _scan_settings_snapshot() -> dict:
             "LIVE_MILESTONE_MANAGEMENT": bool(_se.get("LIVE_MILESTONE_MANAGEMENT", False)),
             "SL_AFTER_PARTIAL": str(_se.get("SL_AFTER_PARTIAL", "tp_partial")),
         }
+    )
+    from config import normalize_chart_review_primary_engine
+
+    _ai_cr = CONFIG.get("AI_CHART_REVIEW") or {}
+    snap["AI_CHART_REVIEW_PRIMARY_ENGINE"] = normalize_chart_review_primary_engine(
+        _ai_cr.get("PRIMARY_ENGINE")
     )
     return snap
 
@@ -16655,6 +16665,8 @@ register_ai_chart_review_routes(
             },
         ),
         btc_bias_fn=_current_btc_bias,
+        naked_analysis_fn=_compute_naked_analysis,
+        last_engine_b_rows_fn=lambda: list(_last_engine_b_scan_results.get("signals") or []),
     ),
 )
 register_ai_scalp_chart_review_routes(

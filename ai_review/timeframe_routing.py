@@ -187,8 +187,12 @@ def _direction_confirmed(comparison: dict[str, Any]) -> bool:
     if verdict in {
         "engine_a_confirmed",
         "engine_a_direction_confirmed_entry_rejected",
+        "engine_b_confirmed",
+        "engine_b_direction_confirmed_entry_rejected",
     }:
         return True
+    if _truthy(comparison.get("chartConfirmsEngineBDirection")):
+        return comparison.get("engineBProvided") is not False
     if _truthy(comparison.get("chartConfirmsEngineADirection")):
         return comparison.get("engineAProvided") is not False
     return False
@@ -196,7 +200,10 @@ def _direction_confirmed(comparison: dict[str, Any]) -> bool:
 
 def _entry_rejected(comparison: dict[str, Any]) -> bool:
     verdict = str(comparison.get("comparisonVerdict") or "").strip()
-    if verdict == "engine_a_direction_confirmed_entry_rejected":
+    if verdict in {
+        "engine_a_direction_confirmed_entry_rejected",
+        "engine_b_direction_confirmed_entry_rejected",
+    }:
         return True
     return _truthy(comparison.get("chartContradictsEntryTiming"))
 
@@ -217,8 +224,9 @@ def resolve_timeframe_route(
     ai_review: dict[str, Any] | None = None,
     verdict_comparison: dict[str, Any] | None = None,
     cfg: dict[str, Any] | None = None,
+    primary_engine: str = "A",
 ) -> dict[str, Any]:
-    """Resolve the read-only chart route from Engine A context and AI verdict."""
+    """Resolve the read-only chart route from engine context and AI verdict."""
     routing_cfg = _route_config(cfg)
     enabled = bool(routing_cfg.get("ENABLED", True))
     source_group = str(asset_group or "").strip().lower() or "default"
@@ -251,7 +259,7 @@ def resolve_timeframe_route(
     return {
         "schemaVersion": SCHEMA_VERSION,
         "enabled": enabled,
-        "engine": "A",
+        "engine": "B" if str(primary_engine or "A").upper() == "B" else "A",
         "assetGroup": route_group,
         "sourceGroup": source_group,
         "contextTf": context,

@@ -105,6 +105,7 @@ export function buildScreenshotMeta(args: {
   momentum_timeframe?: string;
   regime_timeframe?: string;
   execution_timeframe?: string;
+  candidate_direction?: string;
 }): AIChartReviewScreenshotMeta {
   const provider = args.chart_provider;
   return {
@@ -124,6 +125,7 @@ export function buildScreenshotMeta(args: {
     ...(args.momentum_timeframe ? { momentum_timeframe: args.momentum_timeframe } : {}),
     ...(args.regime_timeframe ? { regime_timeframe: args.regime_timeframe } : {}),
     ...(args.execution_timeframe ? { execution_timeframe: args.execution_timeframe } : {}),
+    ...(args.candidate_direction ? { candidate_direction: args.candidate_direction } : {}),
   };
 }
 
@@ -178,27 +180,42 @@ export function normalizeAIChartReviewResponse(
   const resistanceMap = record.resistanceMap ?? record.resistance_map;
   const engineAVerdictComparison =
     record.engineAVerdictComparison ?? record.engine_a_verdict_comparison;
+  const engineBVerdictComparison =
+    record.engineBVerdictComparison ?? record.engine_b_verdict_comparison;
+  const primaryEngine = String(record.primaryEngine || 'A').toUpperCase() === 'B' ? 'B' : 'A';
+  const engineContext = primaryEngine === 'B'
+    ? (record.engine_b_context ?? record.engineBContext)
+    : record.engine_a_context;
   const derivativesContext = record.derivativesContext ?? record.derivatives_context;
   const nonVisualContext =
     record.nonVisualContext ??
     record.engineANonVisualContext ??
+    record.engineBNonVisualContext ??
     record.engine_a_non_visual_context ??
-    asRecord(record.engine_a_context).non_visual_context ??
-    asRecord(record.engine_a_context).engine_a_non_visual_context;
+    record.engine_b_non_visual_context ??
+    asRecord(engineContext).non_visual_context ??
+    asRecord(engineContext).engine_a_non_visual_context;
   const scoreAttribution =
     record.scoreAttribution ??
     record.engineAScoreAttribution ??
     record.engine_a_score_attribution ??
-    asRecord(record.engine_a_context).score_attribution;
+    asRecord(engineContext).score_attribution;
 
   return {
     ...raw,
+    primaryEngine,
+    engine_b_context: (record.engine_b_context ?? record.engineBContext) as AIChartReviewResponse['engine_b_context'],
+    engineBContext: (record.engine_b_context ?? record.engineBContext) as AIChartReviewResponse['engineBContext'],
     aiReviewSummary: summary as AIChartReviewResponse['aiReviewSummary'],
     ai_review_summary: summary as AIChartReviewResponse['ai_review_summary'],
     engineAVerdictComparison:
       engineAVerdictComparison as AIChartReviewResponse['engineAVerdictComparison'],
     engine_a_verdict_comparison:
       engineAVerdictComparison as AIChartReviewResponse['engine_a_verdict_comparison'],
+    engineBVerdictComparison:
+      engineBVerdictComparison as AIChartReviewResponse['engineBVerdictComparison'],
+    engine_b_verdict_comparison:
+      engineBVerdictComparison as AIChartReviewResponse['engine_b_verdict_comparison'],
     contextCompleteness: contextCompleteness as AIChartReviewResponse['contextCompleteness'],
     missingContextDetailed: missingContextDetailed as AIChartReviewResponse['missingContextDetailed'],
     fundingOi: fundingOi as AIChartReviewResponse['fundingOi'],

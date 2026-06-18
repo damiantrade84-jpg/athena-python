@@ -141,13 +141,14 @@ def _mock_provider_payload(**overrides):
     return base
 
 
-def _make_app(tmp_db: str, enabled: bool = True, openai_enabled: bool = True):
+def _make_app(tmp_db: str, enabled: bool = True, openai_enabled: bool = True, primary_engine: str = "A"):
     app = Flask(__name__)
     cfg = dict(CONFIG)
     cfg["AI_REVIEW_PROVIDER"] = "claude"
     cfg["AI_REVIEW_FALLBACK_PROVIDERS"] = ""
     ai_cfg = dict(cfg["AI_CHART_REVIEW"])
     ai_cfg["ENABLED"] = enabled
+    ai_cfg["PRIMARY_ENGINE"] = primary_engine
     cfg["OPENAI_REVIEW_ENABLED"] = openai_enabled
     ai_cfg["OPENAI_REVIEW_ENABLED"] = openai_enabled
     cfg["AI_CHART_REVIEW"] = ai_cfg
@@ -224,6 +225,22 @@ def _make_app(tmp_db: str, enabled: bool = True, openai_enabled: bool = True):
             },
         }
 
+    def _naked_analysis(sig, overlay_only=False):
+        return {
+            "score": 4.5,
+            "max_possible": 6.0,
+            "min_score_used": 4.0,
+            "passed": True,
+            "checklist_passed": True,
+            "current_price": 65000.0,
+            "recommended_stop_loss": 63000.0,
+            "recommended_take_profit": 68000.0,
+            "rr_used_for_gate": 1.8,
+            "structural_verdict": "CLEAR",
+            "regime": "TRENDING",
+            "atr_source": "candle_atr_tf",
+        }, {"symbol": sig.get("symbol"), "display": sig.get("pair"), "type": "crypto", "source": "binance"}, None
+
     runtime = SimpleNamespace(
         CONFIG=cfg,
         AUDIT_DB=tmp_db,
@@ -232,6 +249,8 @@ def _make_app(tmp_db: str, enabled: bool = True, openai_enabled: bool = True):
         resolve_pair_fn=_resolve,
         analyze_pair_fn=_analyze,
         btc_bias_fn=lambda: "neutral",
+        naked_analysis_fn=_naked_analysis,
+        last_engine_b_rows_fn=lambda: [],
     )
     register_ai_chart_review_routes(app, runtime)
     return app
@@ -2069,4 +2088,58 @@ def test_verdict_keeps_h4_d1_stale_when_execution_blocked():
         },
     )
     assert "H4/D1 stale" in (comparison.get("downgradeReasons") or [])
+
+
+def _base_request_engine_b(**overrides):
+    body = _base_request()
+    meta = dict(body.get("screenshot_meta") or {})
+    meta["candidate_direction"] = "LONG"
+    body["screenshot_meta"] = meta
+    body.update(overrides)
+    return body
+
+
+def test_route_primary_engine_b_returns_engine_b_context(tmp_audit_db):
+    app = _make_app(tmp_audit_db, primary_engine="B")
+    client = app.test_client()
+    body = _base_request_engine_b()
+    with patch(
+        "ai_review.providers.router.call_anthropic_chart_review",
+        return_value=_mock_provider_payload(),
+    ):
+        resp = client.post("/api/ai/chart-review", json=body)
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data.get("primaryEngine") == "B"
+    assert data.get("engine_b_context") is not None
+    assert data.get("engineBContext") == data["engine_b_context"]
+    assert data["engine_b_context"]["primary_engine"] == "B"
+    assert data.get("concordance", {}).get("engine") == "B"
+    assert data["reviewInputMeta"]["signalEngine"] == "B"
+
+
+def test_route_primary_engine_b_fail_closed_without_direction(tmp_audit_db):
+    app = _make_app(tmp_audit_db, primary_engine="B")
+    client = app.test_client()
+    body = _base_request()
+    resp = client.post("/api/ai/chart-review", json=body)
+    assert resp.status_code == 422
+    assert "Engine B returned no result" in resp.get_json()["error"]
+
+
+def test_dedup_engine_b_separate_from_engine_a(tmp_audit_db):
+    app_a = _make_app(tmp_audit_db, primary_engine="A")
+    app_b = _make_app(tmp_audit_db, primary_engine="B")
+    body_a = _base_request()
+    body_b = _base_request_engine_b()
+    with patch(
+        "ai_review.providers.router.call_anthropic_chart_review",
+        return_value=_mock_provider_payload(),
+    ) as mock_call:
+        first_a = app_a.test_client().post("/api/ai/chart-review", json=body_a)
+        assert first_a.status_code == 200
+        assert mock_call.call_count == 1
+        first_b = app_b.test_client().post("/api/ai/chart-review", json=body_b)
+        assert first_b.status_code == 200
+        assert mock_call.call_count == 2
 

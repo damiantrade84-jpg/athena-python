@@ -75,6 +75,8 @@ import {
   buildQuickExecutePayload,
   evaluateTvChartExecuteBlock,
   aiReviewWarningForExecute,
+  isEngineBOnlySignal,
+  resolveEngineBExecutionPreviewLevels,
 } from '@/lib/manualExecuteHelpers';
 import { runnerBadgeClass, runnerBadgeLabel } from '@/lib/suggestedTradeRunnerDisplay';
 import { useSuggestedTradeRunnerStatus } from '@/hooks/useSuggestedTradeRunnerStatus';
@@ -165,7 +167,7 @@ const STUDY_PANEL_INDICATORS = {
 } satisfies Record<string, IndicatorDefinition>;
 
 // Advisory-only: stale overlay shows a UI badge but does not block execute.
-// TV Chart execute uses Engine A signal (/api/quick-execute); overlay fetch is visual-only.
+// TV Chart execute uses the active primary-engine candidate (/api/quick-execute).
 const ENGINE_B_OVERLAY_STALE_SEC = 300;
 
 function buildStudyIndicatorDefs(periods: { rsi: number; adx: number; atr: number }) {
@@ -704,6 +706,51 @@ function findEngineACandidateForSymbol(rows: EngineASignal[], symbol: string): E
   }) || null;
 }
 
+function isEngineBPrimarySignal(value: unknown): boolean {
+  if (!value || typeof value !== 'object') return false;
+  const signal = value as EngineASignal & { engine?: string; engine_source?: string; is_naked?: boolean };
+  return (
+    signal.engine === 'B'
+    || signal.engine_source === 'engine_b'
+    || signal.is_naked === true
+    || Boolean(signal.naked_data)
+  );
+}
+
+function pickEngineBCandidate(rows: unknown[]): EngineASignal | null {
+  const candidates = rows.filter((row): row is EngineASignal => Boolean(row && typeof row === 'object'));
+  const bRows = candidates.filter(isEngineBPrimarySignal);
+  return pickEngineACandidate(bRows.length ? bRows : candidates);
+}
+
+function findEngineBCandidateForSymbol(rows: EngineASignal[], symbol: string): EngineASignal | null {
+  const chartKey = symbolKey(symbol);
+  if (!chartKey) return null;
+  const bRows = rows.filter(isEngineBPrimarySignal);
+  const pool = bRows.length ? bRows : rows;
+  return pool.find((row) => {
+    const keys = [displaySymbol(row), row.symbol, row.pair].map(symbolKey);
+    return keys.includes(chartKey);
+  }) || null;
+}
+
+function reviewContextFromResponse(response: AIChartReviewResponse | null): {
+  symbol: string | null;
+  timeframe: string | null;
+  primaryEngine: 'A' | 'B';
+} {
+  const primaryEngine = String(response?.primaryEngine || 'A').toUpperCase() === 'B' ? 'B' : 'A';
+  const ctx = primaryEngine === 'B'
+    ? (response?.engine_b_context ?? response?.engineBContext)
+    : response?.engine_a_context;
+  const record = ctx && typeof ctx === 'object' ? (ctx as Record<string, unknown>) : {};
+  return {
+    primaryEngine,
+    symbol: typeof record.symbol === 'string' ? record.symbol : null,
+    timeframe: typeof record.timeframe === 'string' ? record.timeframe : null,
+  };
+}
+
 function reviewTimeframeFor(signal: EngineASignal | null): string {
   const rawTimeframe = firstString(signal?.timeframe, signal?.tf, signal?.interval)?.toUpperCase();
   if (rawTimeframe === 'H1' || rawTimeframe === '1H' || rawTimeframe === '60') return '60';
@@ -737,7 +784,9 @@ function reviewTimeframeRoute(response: AIChartReviewResponse | null): Timeframe
   const route =
     response.timeframeRoute ??
     response.timeframe_route ??
-    response.engine_a_context?.timeframe_route;
+    response.engine_a_context?.timeframe_route ??
+    response.engine_b_context?.timeframe_route ??
+    response.engineBContext?.timeframe_route;
   if (!route || route.enabled === false) return route ?? null;
   return route;
 }
@@ -1752,7 +1801,7 @@ function EngineAV3SidePanel({
         <div className="min-w-0">
           <p className="text-xs uppercase tracking-wide text-muted-foreground">Engine A V3 Specialist</p>
           <h3 className="truncate text-sm font-semibold">{displaySymbol(signal) || 'No candidate'}</h3>
-          <p className="text-[11px] text-muted-foreground">{signal.setupId || 'No setup'} · {signal.horizon || '-'}</p>
+          <p className="text-[11px] text-muted-foreground">{signal.setupId || 'No setup'} - {signal.horizon || '-'}</p>
         </div>
         <Badge variant={signal.decision === 'TRADE' ? 'secondary' : 'outline'}>
           {signal.decision || 'NO_SIGNAL'}
@@ -2009,6 +2058,69 @@ function EngineASidePanel({
   );
 }
 
+function EngineBSidePanel({
+  signal,
+  liveTick,
+  engineBOverlay,
+}: {
+  signal: EngineASignal | null;
+  liveTick: LiveTick | null;
+  engineBOverlay: EngineBOverlayPayload | null;
+}) {
+  const naked = asRecord(signal?.naked_data ?? signal?.engine_b);
+  const direction = normalizeDirection(signal?.direction);
+  const score = firstNumber(signal?.confluenceScore, signal?.score, naked.score);
+  const maxScore = firstNumber(signal?.maxScore, signal?.max_score, naked.max_possible);
+  const threshold = firstNumber(naked.min_score_used, signal?.threshold);
+  const structuralVerdict = firstString(
+    signal?.engine_b_verdict,
+    naked.structural_verdict,
+    engineBOverlay?.structural_verdict,
+  );
+  const entry = firstNumber(signal?.entry, signal?.price, naked.current_price);
+  const sl = firstNumber(signal?.sl, naked.recommended_stop_loss, naked.final_stop_loss);
+  const tp = firstNumber(signal?.tp, signal?.tp1, naked.recommended_take_profit, naked.final_take_profit);
+  const rr = firstNumber(naked.rr_used_for_gate, naked.rr, signal?.rr, signal?.rr1);
+  const style = firstString(signal?.style, naked.style);
+  const passed = signal?.passed ?? naked.passed ?? naked.checklist_passed;
+
+  return (
+    <aside className="min-w-0 space-y-3 rounded-md border bg-card/70 p-3">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className="text-xs uppercase tracking-wide text-muted-foreground">Engine B Candidate</p>
+          <h3 className="truncate text-sm font-semibold">{displaySymbol(signal) || 'No candidate'}</h3>
+        </div>
+        <Badge variant={direction === 'SHORT' ? 'destructive' : 'secondary'}>{direction || 'UNAVAILABLE'}</Badge>
+      </div>
+
+      <section className="space-y-2 rounded-md border border-border/60 p-2">
+        <div className="flex items-center justify-between text-xs">
+          <span className="text-muted-foreground">Score</span>
+          <span className="font-mono">{score === null ? 'Unavailable' : `${fmtNum(score, 2)} / ${fmtNum(maxScore, 1)}`}</span>
+        </div>
+        <TextRow label="Structural verdict" value={structuralVerdict} />
+        <TextRow label="Gate passed" value={passed == null ? null : passed ? 'Yes' : 'No'} />
+        <NumberRow label="Threshold" value={threshold} />
+        <TextRow label="Style" value={style} />
+        <NumberRow label="Entry" value={entry} />
+        <NumberRow label="Live price" value={liveTick?.price} />
+        <NumberRow label="SL" value={sl} />
+        <NumberRow label="TP" value={tp} />
+        <NumberRow label="RR" value={rr} />
+      </section>
+
+      {engineBOverlay?.overlay_source === 'engine_b' && (
+        <section className="space-y-1 rounded-md border border-border/60 p-2 text-[11px]">
+          <div className="font-semibold text-xs">Chart overlays</div>
+          <TextRow label="Overlay status" value="Ready" />
+          <TextRow label="Computed at" value={engineBOverlay.computed_at} />
+        </section>
+      )}
+    </aside>
+  );
+}
+
 function IndicatorSwitch({
   label,
   checked,
@@ -2208,7 +2320,10 @@ function buildCleanLegendChips(args: {
 // --- Main panel ------------------------------------------------------
 
 export default function TVChartPanel() {
-  const { scanCacheA, tvChartIntent, clearTvChartIntent, showToast, isTestMode, setActivePanel, aiReviewProvider, setAiReviewProvider } = useStore();
+  const { scanCacheA, scanCacheB, tvChartIntent, clearTvChartIntent, showToast, isTestMode, setActivePanel, aiReviewProvider, setAiReviewProvider } = useStore();
+  const { data: scanSettings } = useApiPoll<{ settings?: { AI_CHART_REVIEW_PRIMARY_ENGINE?: string } }>('/api/scan-settings', 60_000);
+  const chartPrimaryEngine = String(scanSettings?.settings?.AI_CHART_REVIEW_PRIMARY_ENGINE || 'A').toUpperCase() === 'B' ? 'B' : 'A';
+  const useEngineBPrimary = chartPrimaryEngine === 'B';
   const { data: health } = useApiPoll<{ paper_mode?: boolean }>('/api/health', 60_000);
   const { priceEntryFor } = useLivePrices();
   const [pair, setPair] = useState('EURUSD');
@@ -2227,6 +2342,9 @@ export default function TVChartPanel() {
   const [engineAParityVisible, setEngineAParityVisible] = useState(false);
   const [showQuantDebug, setShowQuantDebug] = useState(false);
   const [showEngineBOverlays, setShowEngineBOverlays] = useState(true);
+  useEffect(() => {
+    if (useEngineBPrimary) setShowEngineBOverlays(true);
+  }, [useEngineBPrimary]);
   // Full Stack Clean (default) = bands + compact legend, no repeated axis labels.
   // Debug = legacy behaviour where every Engine B line gets a right-axis title.
   const [chartMode, setChartMode] = useState<'clean' | 'debug'>('clean');
@@ -2271,16 +2389,28 @@ export default function TVChartPanel() {
   const [chartPaintReadyTick, setChartPaintReadyTick] = useState(0);
   const [autoReviewDelayTick, setAutoReviewDelayTick] = useState(0);
 
-  const candidateRows = useMemo(
-    () => (Array.isArray(scanCacheA) ? scanCacheA.filter((row): row is EngineASignal => Boolean(row && typeof row === 'object')) : []),
-    [scanCacheA],
-  );
+  const candidateRows = useMemo(() => {
+    const source = useEngineBPrimary ? scanCacheB : scanCacheA;
+    return Array.isArray(source)
+      ? source.filter((row): row is EngineASignal => Boolean(row && typeof row === 'object'))
+      : [];
+  }, [useEngineBPrimary, scanCacheA, scanCacheB]);
   const intentCandidateRows = useMemo(
     () => (intentSignal ? [intentSignal, ...candidateRows] : candidateRows),
     [intentSignal, candidateRows],
   );
-  const defaultCandidate = useMemo(() => pickEngineACandidate(intentCandidateRows), [intentCandidateRows]);
-  const chartCandidate = useMemo(() => findEngineACandidateForSymbol(intentCandidateRows, pair), [intentCandidateRows, pair]);
+  const defaultCandidate = useMemo(
+    () => (useEngineBPrimary ? pickEngineBCandidate(intentCandidateRows) : pickEngineACandidate(intentCandidateRows)),
+    [useEngineBPrimary, intentCandidateRows],
+  );
+  const chartCandidate = useMemo(
+    () => (
+      useEngineBPrimary
+        ? findEngineBCandidateForSymbol(intentCandidateRows, pair)
+        : findEngineACandidateForSymbol(intentCandidateRows, pair)
+    ),
+    [useEngineBPrimary, intentCandidateRows, pair],
+  );
   const backendTf = TF_BACKEND_MAP[timeframe];
   const currentSymbolKey = symbolKey(pair);
   const timeframeRoute = useMemo(() => reviewTimeframeRoute(aiReview), [aiReview]);
@@ -2708,13 +2838,20 @@ export default function TVChartPanel() {
 
     if (!aiReview) return null;
     const review = aiReview.ai_review;
-    const dir = String(review?.direction || aiReview.concordance?.engine_a_direction || '').toUpperCase();
+    const reviewCtx = reviewContextFromResponse(aiReview);
+    const dir = String(
+      review?.direction
+      || (reviewCtx.primaryEngine === 'B'
+        ? aiReview.concordance?.engine_b_direction
+        : aiReview.concordance?.engine_a_direction)
+      || '',
+    ).toUpperCase();
     if (dir !== 'LONG' && dir !== 'SHORT') return null;
     return {
       schemaVersion: 'suggested_trade_plan.v1',
       armable: true,
       source: 'ai_chart_review',
-      symbol: String(aiReview.engine_a_context?.symbol || pair || '').toUpperCase(),
+      symbol: String(reviewCtx.symbol || pair || '').toUpperCase(),
       direction: dir as 'LONG' | 'SHORT',
       action: 'WATCH_ONLY',
       triggerType: 'ACCEPTANCE_ABOVE',
@@ -2763,6 +2900,10 @@ export default function TVChartPanel() {
       return;
     }
     const effectiveStyle = String(chartCandidate.style || 'swing');
+    const isEngineBOnly = useEngineBPrimary && isEngineBOnlySignal(chartCandidate);
+    const bLevels = isEngineBOnly
+      ? resolveEngineBExecutionPreviewLevels(chartCandidate, { engineBOnly: true })
+      : null;
     let cancelled = false;
     void fetchRiskPreview({
       pair: chartCandidate.pair || chartCandidate.display || pair,
@@ -2770,9 +2911,9 @@ export default function TVChartPanel() {
       symbol: chartCandidate.symbol || chartCandidate.pair || pair,
       type: chartCandidate.type,
       direction: chartCandidate.direction,
-      entry: chartCandidate.entry ?? chartCandidate.price,
-      price: chartCandidate.entry ?? chartCandidate.price,
-      sl: chartCandidate.sl,
+      entry: bLevels?.entry ?? chartCandidate.entry ?? chartCandidate.price,
+      price: bLevels?.entry ?? chartCandidate.entry ?? chartCandidate.price,
+      sl: bLevels?.sl ?? chartCandidate.sl,
       volume_mode: volumeMode,
       sizing_override: volumeMode === 'calculated' ? sizingOverride : 1.0,
       style: effectiveStyle,
@@ -2787,14 +2928,19 @@ export default function TVChartPanel() {
     return () => {
       cancelled = true;
     };
-  }, [confirmExecuteOpen, chartCandidate, pair, volumeMode, sizingOverride]);
+  }, [confirmExecuteOpen, chartCandidate, pair, volumeMode, sizingOverride, useEngineBPrimary]);
 
   async function onConfirmExecute() {
     if (!chartCandidate || executeBlockReason) return;
     setExecuting(true);
     try {
+      const isEngineBOnly = useEngineBPrimary && isEngineBOnlySignal(chartCandidate);
       const payload = buildQuickExecutePayload({
         signal: chartCandidate,
+        isEngineBOnly,
+        engineBOverlay: isEngineBOnly
+          ? ((chartCandidate.naked_data ?? chartCandidate.engine_b) as Record<string, unknown> | undefined)
+          : engineBOverlay ?? undefined,
         pipMode: String(chartCandidate.style || 'swing'),
         volumeMode,
         sizingOverride,
@@ -2854,8 +3000,9 @@ export default function TVChartPanel() {
 
   useEffect(() => {
     if (!aiReview) return;
-    const reviewSymbolKey = aiReviewSymbolKeyRef.current || symbolKey(aiReview.engine_a_context?.symbol);
-    const reviewTimeframe = normalizeBackendTf(aiReview.engine_a_context?.timeframe);
+    const reviewCtx = reviewContextFromResponse(aiReview);
+    const reviewSymbolKey = aiReviewSymbolKeyRef.current || symbolKey(reviewCtx.symbol);
+    const reviewTimeframe = normalizeBackendTf(reviewCtx.timeframe);
     const currentTf = normalizeBackendTf(timeframe);
     const symbolChanged = currentSymbolKey && (!reviewSymbolKey || reviewSymbolKey !== currentSymbolKey);
     const timeframeChanged = currentTf && reviewTimeframe && reviewTimeframe !== currentTf;
@@ -2870,7 +3017,8 @@ export default function TVChartPanel() {
 
   useEffect(() => {
     if (!timeframeAutoMode || !timeframeRoute || timeframeRoute.enabled === false) return;
-    const routeSymbolKey = symbolKey(aiReview?.engine_a_context?.symbol);
+    const reviewCtx = reviewContextFromResponse(aiReview);
+    const routeSymbolKey = symbolKey(reviewCtx.symbol);
     if (!routeSymbolKey || !currentSymbolKey || routeSymbolKey !== currentSymbolKey) return;
     const recommendedCode = tfCodeForBackend(timeframeRoute.autoSelectTf);
     if (!recommendedCode) return;
@@ -2878,7 +3026,7 @@ export default function TVChartPanel() {
     if (routeKey === lastAppliedRouteKeyRef.current) return;
     lastAppliedRouteKeyRef.current = routeKey;
     if (timeframe !== recommendedCode) setTimeframe(recommendedCode);
-  }, [aiReview?.engine_a_context?.symbol, currentSymbolKey, timeframe, timeframeAutoMode, timeframeRoute]);
+  }, [aiReview, currentSymbolKey, timeframe, timeframeAutoMode, timeframeRoute]);
 
   // --- Fetch candles whenever pair/timeframe changes ---------------
   useEffect(() => {
@@ -3228,6 +3376,7 @@ export default function TVChartPanel() {
             scoringProfile.executionTf as string | undefined,
           ) ?? undefined,
         signal_style: candidateStyle,
+        candidate_direction: normalizeDirection(chartCandidate?.direction) ?? undefined,
         overlays,
         visible_range_start: visibleRange?.from != null ? String(visibleRange.from) : undefined,
         visible_range_end: visibleRange?.to != null ? String(visibleRange.to) : undefined,
@@ -3245,7 +3394,11 @@ export default function TVChartPanel() {
         screenshot_base64: dataUrl,
         screenshot_meta: meta,
       });
-      const responseSymbolKey = symbolKey(response.engine_a_context?.symbol) || symbolKey(symbol);
+      const responseSymbolKey =
+        symbolKey(reviewContextFromResponse(response).symbol)
+        || symbolKey(response.engine_a_context?.symbol)
+        || symbolKey(response.engine_b_context?.symbol)
+        || symbolKey(symbol);
       if (responseSymbolKey && currentPairKeyRef.current && responseSymbolKey !== currentPairKeyRef.current) {
         setAiReviewError('Review completed for a different symbol; select the symbol again to view results.');
         return;
@@ -3876,10 +4029,18 @@ export default function TVChartPanel() {
             {aiReview && <AIReviewCard response={aiReview} />}
             <details className="rounded-md border border-border/60 bg-card/70 p-2">
               <summary className="cursor-pointer text-xs font-medium text-muted-foreground">
-                Engine A diagnostics
+                {useEngineBPrimary ? 'Engine B diagnostics' : 'Engine A diagnostics'}
               </summary>
               <div className="mt-2">
-                <EngineASidePanel signal={chartCandidate} liveTick={liveTick} chartPayload={chartPayload} />
+                {useEngineBPrimary ? (
+                  <EngineBSidePanel
+                    signal={chartCandidate}
+                    liveTick={liveTick}
+                    engineBOverlay={engineBOverlay}
+                  />
+                ) : (
+                  <EngineASidePanel signal={chartCandidate} liveTick={liveTick} chartPayload={chartPayload} />
+                )}
               </div>
             </details>
           </div>

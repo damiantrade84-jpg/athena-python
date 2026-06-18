@@ -176,10 +176,11 @@ def normalize_chart_review_response(
     raw_text: str,
     *,
     backend_levels: dict[str, Any] | None = None,
+    review_type: str = "engine_a_chart",
 ) -> dict[str, Any]:
     parsed, err = _extract_json(raw_text)
     if parsed is None:
-        fail_skill = trade_skill_parse_failure("engine_a_chart")
+        fail_skill = trade_skill_parse_failure(review_type)  # type: ignore[arg-type]
         return {
             "verdict": fail_skill.get("verdict", "CAUTION"),
             "confidence": 0,
@@ -187,6 +188,7 @@ def normalize_chart_review_response(
             "visual_confirmation": "",
             "visual_contradiction": "",
             "engine_a_alignment": "",
+            "engine_b_alignment": "",
             "atr_rr_assessment": "",
             "freshness_assessment": "",
             "entry_quality": "",
@@ -200,7 +202,7 @@ def normalize_chart_review_response(
             "entryAllowedNow": False,
             "decision": fail_skill.get("decision", "WATCH_ONLY"),
             "tradeSkillVersion": fail_skill.get("tradeSkillVersion"),
-            "reviewType": "engine_a_chart",
+            "reviewType": review_type,
             "tradeSkillWarnings": fail_skill.get("tradeSkillWarnings", []),
         }
 
@@ -208,7 +210,7 @@ def normalize_chart_review_response(
     legacy_fields = _legacy_from_structured(parsed, structured)
     trade_skill = _merge_trade_skill_fields(
         parsed,
-        review_type="engine_a_chart",
+        review_type=review_type,  # type: ignore[arg-type]
         backend_levels=backend_levels,
     )
 

@@ -7,7 +7,7 @@ from typing import Literal, TypedDict
 PLAYBOOK_SCHEMA_VERSION = "ai_trade_playbook.v1"
 TRADE_SKILL_VERSION = "athena_trade_skill.v1"
 
-ReviewType = Literal["engine_a_chart", "engine_d_scalp"]
+ReviewType = Literal["engine_a_chart", "engine_b_chart", "engine_d_scalp"]
 
 TradeSkillDecision = Literal[
     "ENTRY_NOW",
@@ -135,5 +135,13 @@ def required_output_fields_for(review_type: ReviewType) -> list[str]:
             "invalidationLevel",
             "invalidationReason",
             "requiredConfirmation",
+        ]
+    if review_type == "engine_b_chart":
+        return base + [
+            "locationAssessment",
+            "invalidationLevel",
+            "invalidationReason",
+            "waitReason",
+            "noTradeReason",
         ]
     return base + ["waitReason", "noTradeReason"]
