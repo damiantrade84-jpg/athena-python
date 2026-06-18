@@ -231,31 +231,27 @@ export default function LiveCockpitPanel() {
     [postPaperExec, showToast],
   );
 
-  // Engine B leads forex: scan the forex universe for Engine B candidates and
-  // load the top-ranked passes as the cockpit's active symbols. The returned
-  // signals are passing Engine B structures already sorted by confluence; the
-  // /api/scan-naked call also warms the Engine B cache the snapshot reads.
+  // Scan the user's CURRENT selection through Engine B (does not replace it).
+  // /api/scan-naked accepts an explicit `symbols` scope so only the selected
+  // pairs are analyzed; the call warms the Engine B cache the snapshot reads,
+  // then we re-rank the existing cards by Engine B confluence.
   const scanForexB = useCallback(async () => {
-    const res = await postScanB('/api/scan-naked', { assetClass: 'forex', style: 'auto' });
-    const sigs = Array.isArray(res?.signals) ? res.signals : [];
-    if (sigs.length === 0) {
-      showToast('Engine B forex scan: no candidates', 'info');
+    const scope = activeSymbols.trim();
+    if (!scope) {
+      showToast('Select symbols first, then scan.', 'info');
       return;
     }
-    const displays: string[] = [];
-    for (const s of sigs) {
-      const d = String((s as { display?: string; symbol?: string }).display
-        || (s as { symbol?: string }).symbol || '').trim();
-      if (d && !displays.includes(d)) displays.push(d);
-      if (displays.length >= 16) break;
-    }
-    const joined = displays.join(',');
-    setSymbolsInput(joined);
-    setActiveSymbols(joined);
+    const res = await postScanB('/api/scan-naked', { symbols: scope, style: 'auto' });
+    const sigs = Array.isArray(res?.signals) ? res.signals : [];
     setForexBMode(true);
     setFilter('bcandidate');
-    showToast(`Engine B forex: ${displays.length} candidate${displays.length === 1 ? '' : 's'} loaded`, 'success');
-  }, [postScanB, showToast]);
+    await fetchSnap();
+    if (sigs.length === 0) {
+      showToast('Engine B: no candidates in your selection', 'info');
+    } else {
+      showToast(`Engine B: ${sigs.length} candidate${sigs.length === 1 ? '' : 's'} in selection`, 'success');
+    }
+  }, [activeSymbols, postScanB, showToast, fetchSnap]);
 
   // Open a cockpit symbol on the TV Chart with Engine B context for AI review.
   // Advisory only - mirrors SignalsPanel's setTvChartIntent handoff; no execution.
@@ -300,207 +296,241 @@ export default function LiveCockpitPanel() {
     [tf, setTvChartIntent, setActivePanel, showToast],
   );
 
+  const fresh = snapshot?.freshnessAllOk !== false;
+
   return (
     <div className="flex flex-col h-[calc(100vh-120px)] gap-3 overflow-hidden">
-      {/* Status bar */}
-      <Card className="border-border/60 bg-card/50">
-        <CardContent className="p-3 flex items-center gap-2 flex-wrap">
-          <div className="flex items-center gap-1">
-            <Radio className="w-4 h-4 text-primary" />
-            <span className="text-sm font-semibold">Live Cockpit</span>
-            <Badge variant="outline" className="text-[10px] ml-1">{snapshot?.payloadVersion || 'v3'}</Badge>
-          </div>
-          <Badge className={connBg(conn.mt5)}>MT5: {(conn.mt5 || 'unknown').toUpperCase()}</Badge>
-          <Badge className={connBg(conn.binanceWs === 'live' ? 'connected' : conn.binanceWs)}>BINANCE: {(conn.binanceWs || 'unknown').toUpperCase()}</Badge>
-          <Badge className={snapshot?.freshnessAllOk === false ? 'bg-warning/20 text-warning' : 'bg-long/20 text-long'}>
-            {snapshot?.freshnessAllOk === false ? '⚠ FRESHNESS ISSUE' : '✓ FRESHNESS OK'}
-          </Badge>
-          <Badge variant="outline" className="text-[10px]">
-            Paper: {paperMode.enabled ? 'ENABLED' : 'OFF'} · Real orders: {paperMode.realOrdersAllowed ? 'ALLOWED' : 'BLOCKED'}
-          </Badge>
+      {/* Command deck — status + controls in one cohesive header */}
+      <Card className="border-border/60 bg-gradient-to-b from-card/70 to-card/40 shrink-0 overflow-hidden">
+        <CardContent className="p-0">
+          {/* Status row */}
+          <div className="flex items-center gap-2 flex-wrap px-3 py-2 border-b border-border/40">
+            <div className="flex items-center gap-1.5">
+              <span className="relative flex h-2 w-2">
+                {autoPoll && (
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-primary/60" />
+                )}
+                <span className={cn('relative inline-flex rounded-full h-2 w-2', autoPoll ? 'bg-primary' : 'bg-muted-foreground')} />
+              </span>
+              <span className="text-sm font-semibold tracking-wide" style={{ fontFamily: "'Cinzel', serif", letterSpacing: '0.08em' }}>
+                Live Cockpit
+              </span>
+              <Badge variant="outline" className="text-[9px] ml-0.5">{snapshot?.payloadVersion || 'v3'}</Badge>
+            </div>
+            <div className="h-4 w-px bg-border/60 mx-1" />
+            <Badge className={cn('text-[10px] gap-1', connBg(conn.mt5))}>MT5 · {(conn.mt5 || 'unknown').toUpperCase()}</Badge>
+            <Badge className={cn('text-[10px] gap-1', connBg(conn.binanceWs === 'live' ? 'connected' : conn.binanceWs))}>
+              BINANCE · {(conn.binanceWs || 'unknown').toUpperCase()}
+            </Badge>
+            <Badge className={cn('text-[10px]', fresh ? 'bg-long/20 text-long' : 'bg-warning/20 text-warning')}>
+              {fresh ? '✓ FRESHNESS OK' : '⚠ FRESHNESS ISSUE'}
+            </Badge>
+            <Badge variant="outline" className="text-[10px]">
+              Paper {paperMode.enabled ? 'ON' : 'OFF'} · Orders {paperMode.realOrdersAllowed ? 'LIVE' : 'BLOCKED'}
+            </Badge>
 
-          <div className="flex items-center gap-2 ml-auto">
-            <span className="text-[10px] text-muted-foreground">Auto</span>
-            <Switch checked={autoPoll} onCheckedChange={setAutoPoll} />
-            <RefreshButton onClick={fetchSnap} loading={loading} />
+            <div className="flex items-center gap-2 ml-auto">
+              <span className="text-[10px] text-muted-foreground uppercase tracking-wider">Auto</span>
+              <Switch checked={autoPoll} onCheckedChange={setAutoPoll} />
+              <RefreshButton onClick={fetchSnap} loading={loading} />
+            </div>
+          </div>
+
+          {/* Control row */}
+          <div className="flex items-center gap-2 flex-wrap px-3 py-2">
+            <Popover open={pairsDropdownOpen} onOpenChange={setPairsDropdownOpen}>
+              <PopoverTrigger asChild>
+                <Button variant="outline" className="h-8 text-xs flex items-center gap-1">
+                  <Plus className="w-3.5 h-3.5" />
+                  Symbols
+                  <ChevronDown className="w-3 h-3" />
+                  {activeSymbolsSet.size > 0 && (
+                    <Badge variant="secondary" className="text-[9px] ml-1">
+                      {activeSymbolsSet.size}
+                    </Badge>
+                  )}
+                </Button>
+              </PopoverTrigger>
+              <PopoverContent className="w-[280px] p-0" align="start">
+                <div className="p-2 border-b flex items-center gap-1.5">
+                  <Search className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
+                  <input
+                    autoFocus
+                    placeholder="Search symbols…"
+                    value={pairSearch}
+                    onChange={(e) => setPairSearch(e.target.value)}
+                    className="flex-1 text-xs bg-transparent outline-none placeholder:text-muted-foreground"
+                  />
+                  {pairSearch && (
+                    <button onClick={() => setPairSearch('')} className="text-muted-foreground hover:text-foreground">
+                      <X className="w-3 h-3" />
+                    </button>
+                  )}
+                </div>
+                <ScrollArea className="h-[320px]">
+                  {filteredPairGroups.length === 0 && (
+                    <p className="text-[11px] text-muted-foreground p-3">No pairs found.</p>
+                  )}
+                  {filteredPairGroups.map(([group, syms]) => (
+                    <div key={group}>
+                      <div className="px-3 py-1.5 text-[9px] uppercase font-semibold text-muted-foreground tracking-widest bg-muted/30 border-b border-border/40">
+                        {group} <span className="opacity-60">({syms.length})</span>
+                      </div>
+                      {syms.map((sym) => {
+                        const checked = activeSymbolsSet.has(sym);
+                        return (
+                          <div
+                            key={sym}
+                            className={cn(
+                              'flex items-center gap-2 px-3 py-1.5 cursor-pointer hover:bg-muted/50 transition-colors',
+                              checked && 'bg-primary/5',
+                            )}
+                            onClick={() => toggleSymbol(sym)}
+                          >
+                            <Checkbox checked={checked} className="h-3.5 w-3.5" />
+                            <span className="text-xs font-mono flex-1">{sym}</span>
+                            {checked && <Check className="w-3 h-3 text-primary shrink-0" />}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  ))}
+                </ScrollArea>
+                <div className="p-2 border-t flex items-center justify-between">
+                  <span className="text-[10px] text-muted-foreground">
+                    {activeSymbolsSet.size} selected
+                  </span>
+                  <div className="flex gap-1">
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="h-6 text-[10px]"
+                      onClick={() => {
+                        setSymbolsInput(DEFAULT_SYMBOLS);
+                        setActiveSymbols(DEFAULT_SYMBOLS);
+                      }}
+                    >
+                      Reset
+                    </Button>
+                    <Button
+                      size="sm"
+                      className="h-6 text-[10px]"
+                      onClick={() => { setPairsDropdownOpen(false); setPairSearch(''); }}
+                    >
+                      Done
+                    </Button>
+                  </div>
+                </div>
+              </PopoverContent>
+            </Popover>
+
+            <Select value={tf} onValueChange={(v) => setTf(v as 'H1' | 'H4' | 'D1')}>
+              <SelectTrigger className="w-[72px] h-8 text-xs">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="H1">H1</SelectItem>
+                <SelectItem value="H4">H4</SelectItem>
+                <SelectItem value="D1">D1</SelectItem>
+              </SelectContent>
+            </Select>
+            <Select value={filter} onValueChange={setFilter}>
+              <SelectTrigger className="w-[150px] h-8 text-xs">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All states</SelectItem>
+                <SelectItem value="bcandidate">Engine B candidate</SelectItem>
+                <SelectItem value="paper">Paper candidate</SelectItem>
+                <SelectItem value="aligned">Engine C aligned</SelectItem>
+                <SelectItem value="watchlist">Watchlist</SelectItem>
+                <SelectItem value="blocked">Blocked</SelectItem>
+              </SelectContent>
+            </Select>
+            <Button
+              size="sm"
+              variant={forexBMode ? 'default' : 'outline'}
+              className="h-8 text-xs gap-1"
+              onClick={scanForexB}
+              disabled={scanningB || activeSymbolsSet.size === 0}
+              title="Run Engine B against your selected symbols and rank by structural confluence"
+            >
+              <Search className="w-3.5 h-3.5" />
+              {scanningB ? 'Scanning…' : 'Scan Selected (Engine B)'}
+            </Button>
+            {forexBMode && (
+              <Button
+                size="sm"
+                variant="ghost"
+                className="h-8 text-[10px] text-muted-foreground"
+                onClick={() => { setForexBMode(false); setFilter('all'); }}
+                title="Clear Engine B ranking and return to default state ordering"
+              >
+                Clear B rank
+              </Button>
+            )}
+
+            {/* Selected symbols as removable badges */}
+            <div className="flex items-center gap-1 flex-nowrap overflow-x-auto flex-1 min-w-0 ml-1 py-0.5">
+              {Array.from(activeSymbolsSet).map((sym) => (
+                <Badge
+                  key={sym}
+                  variant="secondary"
+                  className="text-[10px] font-mono cursor-pointer hover:bg-destructive/20 shrink-0"
+                  onClick={() => toggleSymbol(sym)}
+                >
+                  {sym} <X className="w-2.5 h-2.5 inline ml-0.5" />
+                </Badge>
+              ))}
+              {activeSymbolsSet.size === 0 && (
+                <span className="text-[11px] text-muted-foreground">No symbols selected</span>
+              )}
+            </div>
           </div>
         </CardContent>
       </Card>
 
       {!paperMode.realOrdersAllowed && (
-        <Card className="border-border/60 bg-muted/20">
-          <CardContent className="p-3 text-[11px] text-muted-foreground leading-relaxed">
+        <div className="flex items-start gap-2 rounded-md border border-border/50 bg-muted/20 px-3 py-2 text-[11px] text-muted-foreground leading-relaxed shrink-0">
+          <Info className="w-3.5 h-3.5 mt-0.5 shrink-0" />
+          <span>
             <strong className="text-foreground">Real orders: BLOCKED</strong> is expected when <code className="text-[10px]">REAL_ORDERS_ALLOWED</code> is false (paper soak safety).
-            Symbol cards showing <span className="font-mono text-foreground">BLOCKED</span> are separate: freshness gates, Engine C, or no setup — open a card for details, or use filter &quot;All states&quot; instead of &quot;Blocked&quot;.
-          </CardContent>
-        </Card>
+            Cards showing <span className="font-mono text-foreground">BLOCKED</span> are separate (freshness, Engine C, or no setup) — open a card for details, or use the &quot;All states&quot; filter.
+          </span>
+        </div>
       )}
-
-      {/* Symbol selector + filters */}
-      <Card className="border-border/60 bg-card/50">
-        <CardContent className="p-3 flex items-center gap-2 flex-wrap">
-          <Popover open={pairsDropdownOpen} onOpenChange={setPairsDropdownOpen}>
-            <PopoverTrigger asChild>
-              <Button variant="outline" className="h-8 text-xs flex items-center gap-1">
-                <Plus className="w-3.5 h-3.5" />
-                Select Symbols
-                <ChevronDown className="w-3 h-3" />
-                {activeSymbolsSet.size > 0 && (
-                  <Badge variant="secondary" className="text-[9px] ml-1">
-                    {activeSymbolsSet.size}
-                  </Badge>
-                )}
-              </Button>
-            </PopoverTrigger>
-            <PopoverContent className="w-[280px] p-0" align="start">
-              <div className="p-2 border-b flex items-center gap-1.5">
-                <Search className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
-                <input
-                  autoFocus
-                  placeholder="Search symbols…"
-                  value={pairSearch}
-                  onChange={(e) => setPairSearch(e.target.value)}
-                  className="flex-1 text-xs bg-transparent outline-none placeholder:text-muted-foreground"
-                />
-                {pairSearch && (
-                  <button onClick={() => setPairSearch('')} className="text-muted-foreground hover:text-foreground">
-                    <X className="w-3 h-3" />
-                  </button>
-                )}
-              </div>
-              <ScrollArea className="h-[320px]">
-                {filteredPairGroups.length === 0 && (
-                  <p className="text-[11px] text-muted-foreground p-3">No pairs found.</p>
-                )}
-                {filteredPairGroups.map(([group, syms]) => (
-                  <div key={group}>
-                    <div className="px-3 py-1.5 text-[9px] uppercase font-semibold text-muted-foreground tracking-widest bg-muted/30 border-b border-border/40">
-                      {group} <span className="opacity-60">({syms.length})</span>
-                    </div>
-                    {syms.map((sym) => {
-                      const checked = activeSymbolsSet.has(sym);
-                      return (
-                        <div
-                          key={sym}
-                          className={cn(
-                            'flex items-center gap-2 px-3 py-1.5 cursor-pointer hover:bg-muted/50 transition-colors',
-                            checked && 'bg-primary/5',
-                          )}
-                          onClick={() => toggleSymbol(sym)}
-                        >
-                          <Checkbox checked={checked} className="h-3.5 w-3.5" />
-                          <span className="text-xs font-mono flex-1">{sym}</span>
-                          {checked && <Check className="w-3 h-3 text-primary shrink-0" />}
-                        </div>
-                      );
-                    })}
-                  </div>
-                ))}
-              </ScrollArea>
-              <div className="p-2 border-t flex items-center justify-between">
-                <span className="text-[10px] text-muted-foreground">
-                  {activeSymbolsSet.size} selected
-                </span>
-                <div className="flex gap-1">
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    className="h-6 text-[10px]"
-                    onClick={() => {
-                      setSymbolsInput(DEFAULT_SYMBOLS);
-                      setActiveSymbols(DEFAULT_SYMBOLS);
-                    }}
-                  >
-                    Reset
-                  </Button>
-                  <Button
-                    size="sm"
-                    className="h-6 text-[10px]"
-                    onClick={() => { setPairsDropdownOpen(false); setPairSearch(''); }}
-                  >
-                    Done
-                  </Button>
-                </div>
-              </div>
-            </PopoverContent>
-          </Popover>
-
-          {/* Selected symbols as removable badges */}
-          <div className="flex items-center gap-1 flex-wrap flex-1 min-w-0">
-            {Array.from(activeSymbolsSet).map((sym) => (
-              <Badge
-                key={sym}
-                variant="secondary"
-                className="text-[10px] font-mono cursor-pointer hover:bg-destructive/20"
-                onClick={() => toggleSymbol(sym)}
-              >
-                {sym} <X className="w-2.5 h-2.5 inline ml-0.5" />
-              </Badge>
-            ))}
-            {activeSymbolsSet.size === 0 && (
-              <span className="text-[11px] text-muted-foreground">No symbols selected</span>
-            )}
-          </div>
-
-          <Select value={tf} onValueChange={(v) => setTf(v as 'H1' | 'H4' | 'D1')}>
-            <SelectTrigger className="w-[80px] h-8 text-xs">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="H1">H1</SelectItem>
-              <SelectItem value="H4">H4</SelectItem>
-              <SelectItem value="D1">D1</SelectItem>
-            </SelectContent>
-          </Select>
-          <Select value={filter} onValueChange={setFilter}>
-            <SelectTrigger className="w-[140px] h-8 text-xs">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">All states</SelectItem>
-              <SelectItem value="bcandidate">Engine B candidate</SelectItem>
-              <SelectItem value="paper">Paper candidate</SelectItem>
-              <SelectItem value="aligned">Engine C aligned</SelectItem>
-              <SelectItem value="watchlist">Watchlist</SelectItem>
-              <SelectItem value="blocked">Blocked</SelectItem>
-            </SelectContent>
-          </Select>
-          <Button
-            size="sm"
-            variant={forexBMode ? 'default' : 'outline'}
-            className="h-8 text-xs gap-1"
-            onClick={scanForexB}
-            disabled={scanningB}
-            title="Scan the forex universe for Engine B candidates and load the top-ranked passes"
-          >
-            <Search className="w-3.5 h-3.5" />
-            {scanningB ? 'Scanning…' : 'Scan Forex (Engine B)'}
-          </Button>
-          <Button size="sm" className="h-8 text-xs" onClick={() => fetchSnap()}>
-            Refresh
-          </Button>
-        </CardContent>
-      </Card>
 
       {error && <ErrorBanner message={error} onRetry={fetchSnap} />}
 
       {/* Two-column layout */}
       <div className="flex-1 grid grid-cols-7 gap-3 overflow-hidden min-h-0">
-        {/* Left: card grid */}
+        {/* Left: card grid + events */}
         <div className="col-span-3 flex flex-col gap-2 overflow-hidden min-h-0 h-full">
+          <div className="flex items-center justify-between px-1 shrink-0">
+            <span className="text-[10px] uppercase tracking-widest text-muted-foreground font-semibold">
+              Signals
+              <span className="ml-1 text-foreground">{filtered.length}</span>
+            </span>
+            {forexBMode && (
+              <Badge className="text-[9px] bg-primary/15 text-primary gap-1">
+                <Layers className="w-3 h-3" /> Engine B ranked
+              </Badge>
+            )}
+          </div>
           <ScrollArea className="flex-1 min-h-0 pr-2">
             <div className="grid grid-cols-1 gap-2">
               {filtered.length === 0 ? (
-                <Card className="border-border/60 bg-card/50">
-                  <CardContent className="p-6 text-center text-xs text-muted-foreground">
+                <Card className="border-border/60 bg-card/50 border-dashed">
+                  <CardContent className="p-8 text-center text-xs text-muted-foreground">
                     {loading ? 'Loading…' : 'No symbols match this filter.'}
                   </CardContent>
                 </Card>
               ) : (
-                filtered.map((row) => (
+                filtered.map((row, idx) => (
                   <CockpitCard
                     key={row.symbol}
                     row={row}
+                    rank={forexBMode ? idx + 1 : undefined}
                     active={selected === row.symbol}
                     preferB={forexBMode}
                     onClick={() => setSelected(row.symbol)}
@@ -511,10 +541,11 @@ export default function LiveCockpitPanel() {
             </div>
           </ScrollArea>
           {/* Event feed */}
-          <Card className="border-border/60 bg-card/50 shrink min-h-0 max-h-[40%] flex flex-col gap-0 py-3">
+          <Card className="border-border/60 bg-card/50 shrink min-h-0 max-h-[38%] flex flex-col gap-0 py-3">
             <CardHeader className="pb-2 shrink-0">
               <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Cinzel', serif", letterSpacing: '0.12em' }}>
-                <Activity className="w-3.5 h-3.5" /> Event Feed
+                <Activity className="w-3.5 h-3.5 text-primary" /> Event Feed
+                {events.length > 0 && <span className="text-[9px] text-muted-foreground font-normal">({events.length})</span>}
               </CardTitle>
             </CardHeader>
             <CardContent className="p-3 pt-0 flex-1 min-h-0">
@@ -556,8 +587,10 @@ export default function LiveCockpitPanel() {
           {selectedRow ? (
             <CockpitDetail row={selectedRow} onPaperExecute={onPaperExecute} executing={papering} onOpenChart={() => openOnChart(selectedRow)} />
           ) : (
-            <CardContent className="p-12 text-center text-muted-foreground">
-              Select a symbol from the left.
+            <CardContent className="flex flex-col items-center justify-center h-full p-12 text-center text-muted-foreground gap-2">
+              <Radio className="w-8 h-8 opacity-30" />
+              <span className="text-sm">Select a signal to inspect</span>
+              <span className="text-[11px] opacity-70">Engine A/B/C/D breakdown, levels, AI review, and the paper-execute gate appear here.</span>
             </CardContent>
           )}
         </Card>
@@ -633,12 +666,14 @@ function connBg(state?: string): string {
 
 function CockpitCard({
   row,
+  rank,
   active,
   preferB,
   onClick,
   onOpenChart,
 }: {
   row: LdSymbolRow;
+  rank?: number;
   active: boolean;
   preferB?: boolean;
   onClick: () => void;
@@ -656,17 +691,22 @@ function CockpitCard({
     ? row.engineB?.direction || row.engineA?.direction
     : row.engineA?.direction || row.engineB?.direction;
   const dirBg = dir === 'LONG' ? 'bg-long/20 text-long' : dir === 'SHORT' ? 'bg-short/20 text-short' : 'bg-muted/40 text-muted-foreground';
+  const bPass = Boolean(row.engineB?.confidencePassed || row.engineB?.structuralVerdict === 'CLEAR');
   return (
     <Card
       className={cn(
-        'border-border/60 bg-card/50 hover:border-primary/30 transition-colors cursor-pointer',
+        'border-border/60 bg-card/50 hover:border-primary/30 transition-colors cursor-pointer relative overflow-hidden',
         active && 'border-primary/60 ring-1 ring-primary/30',
       )}
       onClick={onClick}
     >
+      {preferB && bPass && <span className="absolute left-0 top-0 bottom-0 w-0.5 bg-primary" />}
       <CardContent className="p-3 space-y-2">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2 min-w-0">
+            {rank != null && (
+              <span className="text-[10px] font-mono text-muted-foreground tabular-nums w-4 shrink-0">#{rank}</span>
+            )}
             <span className="text-sm font-mono font-bold truncate">{row.symbol}</span>
             {dir && <Badge className={cn('text-[10px]', dirBg)}>{dir}</Badge>}
             {row.asset_type && (

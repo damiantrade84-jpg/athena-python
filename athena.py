@@ -6874,6 +6874,20 @@ def api_scan_naked():
     requested_style = d.get("style", "auto")
     debug_mode = d.get("debug", False)
 
+    # Optional explicit symbol scope: when provided, scan only these symbols
+    # (matched against display or symbol, case/separator-insensitive) instead of
+    # the full asset-class universe. Lets the cockpit scan the user's selection.
+    def _norm_sym(value: str) -> str:
+        return str(value or "").upper().replace("/", "").replace("_", "").replace(" ", "").strip()
+
+    raw_symbols = d.get("symbols")
+    symbol_scope = None
+    if raw_symbols:
+        if isinstance(raw_symbols, str):
+            raw_symbols = [s for s in raw_symbols.replace(";", ",").split(",")]
+        symbol_scope = {_norm_sym(s) for s in raw_symbols if _norm_sym(s)}
+        symbol_scope = symbol_scope or None
+
     candidate_pairs = []
     for p in ALL_PAIRS:
         if not p.get("enabled", True):
@@ -6881,7 +6895,10 @@ def api_scan_naked():
         if p["display"] in _disabled_pairs:
             continue
         ptype = str(p.get("type", "")).lower()
-        if asset_class:
+        if symbol_scope is not None:
+            if _norm_sym(p.get("display")) not in symbol_scope and _norm_sym(p.get("symbol")) not in symbol_scope:
+                continue
+        elif asset_class:
             if asset_class == "etf":
                 if ptype not in ("etf", "etf_bond"):
                     continue
