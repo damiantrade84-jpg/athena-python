@@ -266,7 +266,13 @@ def _provider_details(symbol: str, timeframe: str, source: str) -> dict[str, Opt
         "broker_server": None,
         "resampled_from": None,
     }
-    if source == "binance_rest":
+    if source == "bybit_rest":
+        details.update(
+            provider_symbol=symbol.replace("/", "").replace("-", "").upper(),
+            provider_interval={"H1": "60", "H4": "240", "D1": "D"}.get(timeframe),
+            provider_endpoint_family="bybit_v5_market_kline",
+        )
+    elif source == "binance_rest":
         details.update(
             provider_symbol=_binance_symbol(symbol),
             provider_interval=_BINANCE_TF.get(timeframe),
@@ -402,6 +408,56 @@ def _binance_symbol(symbol: str) -> str:
 # ══════════════════════════════════════════════════════════════════════════════
 # Source-specific fetchers
 # ══════════════════════════════════════════════════════════════════════════════
+
+def _fetch_bybit_rest(
+    symbol: str,
+    timeframe: str,
+    limit: int = 1000,
+) -> Optional[pd.DataFrame]:
+    """Fetch linear-perpetual klines from the same provider used by live V3 crypto."""
+    import requests
+
+    interval = {"H1": "60", "H4": "240", "D1": "D"}.get(timeframe)
+    if interval is None:
+        return None
+    provider_symbol = symbol.replace("/", "").replace("-", "").upper()
+    rows: list[list] = []
+    end: int | None = None
+    while len(rows) < limit:
+        params: dict[str, Any] = {
+            "category": "linear", "symbol": provider_symbol,
+            "interval": interval, "limit": min(1000, limit - len(rows)),
+        }
+        if end is not None:
+            params["end"] = end
+        try:
+            response = requests.get("https://api.bybit.com/v5/market/kline", params=params, timeout=15)
+            response.raise_for_status()
+            payload = response.json()
+            if int(payload.get("retCode", -1)) != 0:
+                raise RuntimeError(str(payload.get("retMsg") or "Bybit error"))
+            batch = ((payload.get("result") or {}).get("list") or [])
+        except Exception as exc:
+            log.warning("[data_loader] Bybit REST failed for %s: %s", symbol, exc)
+            return None
+        if not batch:
+            break
+        rows = list(reversed(batch)) + rows
+        earliest = min(int(item[0]) for item in batch)
+        end = earliest - 1
+        if len(batch) < int(params["limit"]):
+            break
+    if not rows:
+        return None
+    deduplicated = {int(item[0]): item for item in rows}
+    ordered = [deduplicated[key] for key in sorted(deduplicated)][-limit:]
+    frame = pd.DataFrame(ordered, columns=["open_time", "open", "high", "low", "close", "volume", "turnover"])
+    frame.index = pd.to_datetime(pd.to_numeric(frame["open_time"], errors="raise"), unit="ms", utc=True)
+    frame.index.name = "time"
+    for column in ("open", "high", "low", "close", "volume"):
+        frame[column] = pd.to_numeric(frame[column], errors="coerce")
+    return frame[["open", "high", "low", "close", "volume"]]
+
 
 def _fetch_binance_rest(
     symbol: str,
@@ -690,6 +746,7 @@ def _dispatch(
     timeframe: str,
     limit: int,
     allow_yfinance: bool,
+    required_source: str | None = None,
 ) -> tuple[Optional[pd.DataFrame], str, str]:
     """
     Try data sources in priority order.
@@ -698,6 +755,21 @@ def _dispatch(
     """
     ac = asset_class_for(symbol)
     tried: list[str] = []
+
+    if required_source:
+        fetchers = {
+            "bybit_rest": _fetch_bybit_rest,
+            "binance_rest": _fetch_binance_rest,
+            "mt5": _fetch_mt5,
+            "eodhd": _fetch_eodhd,
+        }
+        fetcher = fetchers.get(required_source)
+        if fetcher is None:
+            return None, "DATA_UNAVAILABLE", f"required_source_unknown:{required_source}"
+        frame = fetcher(symbol, timeframe, limit)
+        if frame is not None and len(frame) >= 10:
+            return frame, required_source, ""
+        return None, "DATA_UNAVAILABLE", f"required_source_failed:{required_source}"
 
     # ── Crypto: Binance REST first ────────────────────────────────────────────
     if ac == "crypto":
@@ -855,6 +927,7 @@ def load_ohlcv(
     limit: int = 1000,
     force_refresh: bool = False,
     allow_yfinance: bool = False,
+    required_source: str | None = None,
 ) -> tuple[Optional[pd.DataFrame], DataProvenance]:
     """
     Load OHLCV data for *symbol* at *timeframe* from Athena's native sources.
@@ -871,7 +944,7 @@ def load_ohlcv(
     """
     cache_dir = Path(cache_dir) if cache_dir else _DEFAULT_CACHE_DIR
     cache_dir.mkdir(parents=True, exist_ok=True)
-    key = _cache_key(symbol, timeframe)
+    key = _cache_key(symbol, timeframe) + (f"_{required_source}" if required_source else "")
 
     # Cache check
     if not force_refresh:
@@ -888,7 +961,7 @@ def load_ohlcv(
             return cleaned, prov
 
     # Fetch from source
-    df, source, notes = _dispatch(symbol, timeframe, limit, allow_yfinance)
+    df, source, notes = _dispatch(symbol, timeframe, limit, allow_yfinance, required_source=required_source)
 
     if df is None or len(df) == 0:
         prov = DataProvenance.unavailable(symbol, timeframe, notes)

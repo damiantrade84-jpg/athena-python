@@ -116,7 +116,7 @@ def test_blocked_engine_a_v3_stub_preserves_display_fields_for_ui():
     pair = {"display": "SOL/USDT", "symbol": "SOLUSDT", "type": "crypto"}
     blocked_a = {
         "engine": "ENGINE_A_V3",
-        "contractVersion": "3.0.0",
+        "contractVersion": "3.1.0",
         "setupId": "crypto_trend_pullback_continuation",
         "decision": "NO_SIGNAL",
         "direction": "LONG",
@@ -129,6 +129,11 @@ def test_blocked_engine_a_v3_stub_preserves_display_fields_for_ui():
         "subclass": "alt_majors",
         "horizon": "swing",
         "validationStatus": "UNVALIDATED",
+        "executionScope": "DEMO_ONLY",
+        "exitPolicy": "SINGLE_TP1",
+        "confluenceThreshold": 2.0,
+        "scoringProfile": {"profileId": "fixture", "profileSha256": "a" * 64},
+        "componentScores": {"trend": {"signal": 1.0, "quality": 0.8, "weight": 0.4, "contribution": 0.32, "available": True}},
     }
 
     stub = _make_engine_b_only_signal_stub_from_blocked_engine_a(pair, blocked_a)
@@ -141,6 +146,11 @@ def test_blocked_engine_a_v3_stub_preserves_display_fields_for_ui():
     assert stub["engine_a_predicates"] == blocked_a["predicates"]
     assert stub["engine_a_rejectionReasons"] == blocked_a["rejectionReasons"]
     assert stub["engine_a_family"] == "crypto"
+    assert stub["engine_a_executionScope"] == "DEMO_ONLY"
+    assert stub["engine_a_exitPolicy"] == "SINGLE_TP1"
+    assert stub["engine_a_confluenceThreshold"] == 2.0
+    assert stub["engine_a_scoringProfile"] == blocked_a["scoringProfile"]
+    assert stub["engine_a_componentScores"] == blocked_a["componentScores"]
 
 
 def test_scan_rank_handles_b_only_zero_max_score():

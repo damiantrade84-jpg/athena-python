@@ -1,0 +1,180 @@
+{
+  "data_as_of": "2026-05-30",
+  "scorer": "rescaled_aligned_quality",
+  "threshold": 2.0,
+  "costs_bps": {
+    "spread_bps": 2.0,
+    "commission_bps": 1.0,
+    "slippage_bps": 1.0,
+    "swap_bps_per_day": 0.0
+  },
+  "groups": {
+    "crypto_alt_majors": {
+      "n": 20,
+      "winRate": 35.0,
+      "expectancyR": -0.1215,
+      "sqn": -0.707,
+      "profitFactor": 0.672,
+      "totalR": -2.43,
+      "reverse_sqn": 0.707,
+      "family": "crypto"
+    },
+    "crypto_btc": {
+      "n": 22,
+      "winRate": 36.4,
+      "expectancyR": -0.139,
+      "sqn": -0.749,
+      "profitFactor": 0.696,
+      "totalR": -3.06,
+      "reverse_sqn": 0.749,
+      "family": "crypto"
+    },
+    "crypto_doge": {
+      "n": 21,
+      "winRate": 57.1,
+      "expectancyR": -0.0038,
+      "sqn": -0.021,
+      "profitFactor": 0.989,
+      "totalR": -0.08,
+      "reverse_sqn": 0.021,
+      "family": "crypto"
+    },
+    "crypto_eth": {
+      "n": 19,
+      "winRate": 57.9,
+      "expectancyR": 0.2992,
+      "sqn": 1.931,
+      "profitFactor": 3.078,
+      "totalR": 5.68,
+      "reverse_sqn": -1.931,
+      "family": "crypto"
+    },
+    "crypto_other": {
+      "n": 23,
+      "winRate": 47.8,
+      "expectancyR": -0.1631,
+      "sqn": -0.918,
+      "profitFactor": 0.648,
+      "totalR": -3.75,
+      "reverse_sqn": 0.918,
+      "family": "crypto"
+    },
+    "energy_oil": {
+      "n": 24,
+      "winRate": 62.5,
+      "expectancyR": 0.2071,
+      "sqn": 1.198,
+      "profitFactor": 1.714,
+      "totalR": 4.97,
+      "reverse_sqn": -1.198,
+      "family": "commodity"
+    },
+    "eu_indices": {
+      "n": 10,
+      "winRate": 20.0,
+      "expectancyR": -0.3419,
+      "sqn": -1.453,
+      "profitFactor": 0.34,
+      "totalR": -3.42,
+      "reverse_sqn": 1.453,
+      "family": "index"
+    },
+    "forex_crosses": {
+      "n": 21,
+      "winRate": 52.4,
+      "expectancyR": 0.2059,
+      "sqn": 1.194,
+      "profitFactor": 1.786,
+      "totalR": 4.32,
+      "reverse_sqn": -1.194,
+      "family": "forex"
+    },
+    "forex_majors": {
+      "n": 62,
+      "winRate": 37.1,
+      "expectancyR": -0.2262,
+      "sqn": -2.146,
+      "profitFactor": 0.55,
+      "totalR": -14.02,
+      "reverse_sqn": 2.146,
+      "family": "forex"
+    },
+    "precious_trackers": {
+      "n": 43,
+      "winRate": 53.5,
+      "expectancyR": 0.1087,
+      "sqn": 0.781,
+      "profitFactor": 1.292,
+      "totalR": 4.67,
+      "reverse_sqn": -0.781,
+      "family": "commodity"
+    },
+    "us_indices_trackers": {
+      "n": 37,
+      "winRate": 59.5,
+      "expectancyR": 0.1339,
+      "sqn": 1.2,
+      "profitFactor": 1.616,
+      "totalR": 4.95,
+      "reverse_sqn": -1.2,
+      "family": "index"
+    },
+    "us_stock_single": {
+      "n": 37,
+      "winRate": 51.4,
+      "expectancyR": 0.0319,
+      "sqn": 0.256,
+      "profitFactor": 1.102,
+      "totalR": 1.18,
+      "reverse_sqn": -0.256,
+      "family": "equity_etf"
+    }
+  },
+  "families": {
+    "commodity": {
+      "n": 67,
+      "winRate": 56.7,
+      "expectancyR": 0.144,
+      "sqn": 1.332,
+      "profitFactor": 1.419,
+      "totalR": 9.64,
+      "reverse_sqn": -1.332
+    },
+    "crypto": {
+      "n": 105,
+      "winRate": 46.7,
+      "expectancyR": -0.0346,
+      "sqn": -0.44,
+      "profitFactor": 0.905,
+      "totalR": -3.64,
+      "reverse_sqn": 0.44
+    },
+    "equity_etf": {
+      "n": 37,
+      "winRate": 51.4,
+      "expectancyR": 0.0319,
+      "sqn": 0.256,
+      "profitFactor": 1.102,
+      "totalR": 1.18,
+      "reverse_sqn": -0.256
+    },
+    "forex": {
+      "n": 83,
+      "winRate": 41.0,
+      "expectancyR": -0.1168,
+      "sqn": -1.272,
+      "profitFactor": 0.735,
+      "totalR": -9.7,
+      "reverse_sqn": 1.272
+    },
+    "index": {
+      "n": 47,
+      "winRate": 51.1,
+      "expectancyR": 0.0327,
+      "sqn": 0.314,
+      "profitFactor": 1.116,
+      "totalR": 1.54,
+      "reverse_sqn": -0.314
+    }
+  }
+}

@@ -15,6 +15,7 @@ from engine_a_v3.promotion import (
     validate_promotion_artifact,
 )
 from engine_a_v3.routing import KNOWN_SCORE_GROUPS, route_specialist
+from engine_a_v3.profile import EngineAV3Profile, baseline_profile, scorer_sha256
 from engine_a_v3.setups import detect_setup
 
 
@@ -123,8 +124,16 @@ def _breakout_retest_candles() -> dict[str, list[dict]]:
 
 def _valid_artifact(route, horizon: str) -> dict:
     now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    baseline = baseline_profile(route.score_group, horizon)
+    profile = EngineAV3Profile.create(
+        score_group=route.score_group, horizon=horizon,
+        indicator_periods=dict(baseline.indicator_periods), weights=dict(baseline.weights),
+        direction_deadband=baseline.direction_deadband, trade_threshold=baseline.trade_threshold,
+        exit_policy=baseline.exit_policy, status="PROMOTED", profile_id=f"fixture-{route.score_group}-{horizon}",
+        created_at=now.isoformat(), valid_until=(now + timedelta(days=3650)).isoformat(),
+    )
     return {
-        "schemaVersion": 2,
+        "schemaVersion": 3,
         "artifactId": f"{route.family}-{route.subclass}-{horizon}-v1",
         "family": route.family,
         "subclass": route.subclass,
@@ -139,12 +148,13 @@ def _valid_artifact(route, horizon: str) -> dict:
         },
         "provenance": {
             "datasetId": "fixture-ohlcv-v1",
+            "provider": "mt5" if route.family != "crypto" else "bybit_rest",
             "sha256": "a" * 64,
-            "implementationSha256": "b" * 64,
+            "implementationSha256": scorer_sha256(),
             "confirmedOnly": True,
             "untouchedHoldoutPct": 20,
             "walkForwardFolds": 4,
-            "purgeBars": 5,
+            "purgeBars": 25,
             "maxHoldBars": 24,
             "costs": {
                 "spreadBps": 1.0,
@@ -158,12 +168,14 @@ def _valid_artifact(route, horizon: str) -> dict:
             "oosTrades": 80,
             "foldExpectancyR": [0.12, 0.09, -0.01, 0.11],
             "holdoutExpectancyR": 0.10,
+            "holdoutTrades": 15,
             "expectancyR": 0.09,
             "profitFactor": 1.25,
             "sqn": 1.7,
             "maxDrawdownR": 8.0,
             "bootstrapLower95ExpectancyR": 0.01,
         },
+        "profile": profile.to_dict(),
     }
 
 
@@ -204,8 +216,8 @@ def test_contract_evaluation_covers_all_groups_and_both_horizons(tmp_path):
             assert signal.scoreGroup == expected_group
             assert signal.horizon == horizon
             assert signal.decision in {"TRADE", "WATCH", "NO_SIGNAL"}
-            # Continuous scorer always populates the confluence fields.
             assert signal.confluenceScore is not None
+            assert signal.scoringProfile is not None
 
 
 def test_missing_promotion_artifact_caps_trade_to_watch(tmp_path):
@@ -277,12 +289,9 @@ def test_insufficient_context_history_still_visible_via_quant_path(tmp_path):
         registry=registry,
     )
 
-    # No-veto contract: the quant path keeps the pair visible even when the
-    # setup overlay cannot form a directional read from truncated context.
-    assert signal.decision in {"TRADE", "WATCH"}
-    assert signal.decision != "NO_SIGNAL"
-    # Setup overlay reported its context-history predicate for transparency.
-    assert "context_history" in {item.name for item in signal.predicates}
+    assert signal.decision == "NO_SIGNAL"
+    assert signal.qualified is False
+    assert "h4_history_insufficient" in signal.rejectionReasons
 
 
 def test_malformed_promotion_metrics_and_costs_fail_closed():

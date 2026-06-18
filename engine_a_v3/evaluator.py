@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -20,6 +21,7 @@ from engine_a_v3.levels import (
 )
 from engine_a_v3.promotion import PromotionRegistry, production_registry
 from engine_a_v3.quant_scorer import QuantScore, score_pair
+from engine_a_v3.profile import baseline_profile
 from engine_a_v3.routing import route_specialist
 from engine_a_v3.session_scoring import session_score_passes
 from engine_a_v3.setups import SetupCandidate, detect_setup
@@ -41,10 +43,24 @@ def _parse_time(value: Any) -> datetime | None:
 
 def _validate_candles(candles: dict[str, list[dict]]) -> tuple[bool, tuple[str, ...]]:
     reasons: list[str] = []
+    from config import CONFIG
+    try:
+        minimums = {
+            "D1": int(CONFIG["ENGINE_A_MIN_D1_BARS"]),
+            "H4": int(CONFIG["ENGINE_A_MIN_H4_BARS"]),
+            "H1": int(CONFIG["ENGINE_A_MIN_H1_BARS"]),
+        }
+    except (KeyError, TypeError, ValueError):
+        return False, ("engine_a_v3_history_config_invalid",)
+    if minimums["D1"] < 220 or minimums["H4"] < 50 or minimums["H1"] < 50:
+        return False, ("engine_a_v3_history_config_unsafe",)
     for timeframe in ("D1", "H4", "H1"):
         rows = candles.get(timeframe)
-        if not isinstance(rows, list) or len(rows) < 2:
+        if not isinstance(rows, list):
             reasons.append(f"{timeframe.lower()}_candles_missing")
+            continue
+        if len(rows) < minimums[timeframe]:
+            reasons.append(f"{timeframe.lower()}_history_insufficient")
             continue
         previous_ts = None
         for candle in rows:
@@ -59,7 +75,10 @@ def _validate_candles(candles: dict[str, list[dict]]) -> tuple[bool, tuple[str, 
             except (KeyError, TypeError, ValueError):
                 reasons.append(f"{timeframe.lower()}_candle_malformed")
                 break
-            if min(open_, high, low, close) <= 0 or high < max(open_, close) or low > min(open_, close):
+            if not all(math.isfinite(value) for value in (open_, high, low, close)):
+                reasons.append(f"{timeframe.lower()}_ohlc_nonfinite")
+                break
+            if min(open_, high, low, close) <= 0 or high < max(open_, close) or low > min(open_, close) or high < low:
                 reasons.append(f"{timeframe.lower()}_ohlc_invalid")
                 break
             timestamp = _parse_time(candle.get("time") or candle.get("datetime"))
@@ -215,12 +234,13 @@ def evaluate_engine_a_v3(
 
     # ── Continuous quant scoring (no-veto). Every valid pair gets a direction +
     # quality. Promotion governs execution eligibility only; it never hides a pair.
-    quant = score_pair(route, normalized_horizon, candles, context=context)
     promotion = (registry or production_registry()).resolve(
         route,
         normalized_horizon,
         symbol=symbol,
     )
+    profile = promotion.profile or baseline_profile(route.score_group, normalized_horizon)
+    quant = score_pair(route, normalized_horizon, candles, context=context, profile=profile)
 
     # ── Setup overlay: use already-implemented specialists for every family
     # (forex: breakout/retest/pullback/london_open/mean_reversion; crypto:
@@ -356,7 +376,11 @@ def evaluate_engine_a_v3(
         rr1=targets[0].rr if len(targets) > 0 else None,
         rr2=targets[1].rr if len(targets) > 1 else None,
         predicates=predicates,
-        rejectionReasons=tuple(rejection_reasons),
+        rejectionReasons=(
+            tuple(rejection_reasons) + promotion.reasons
+            if not promotion.qualified
+            else tuple(rejection_reasons)
+        ),
         dataFreshness=DataFreshness(
             allowed=True,
             policy="confirmed_only",
@@ -366,6 +390,9 @@ def evaluate_engine_a_v3(
         validationArtifact=promotion.artifact,
         validationStatus=validation_status,
         executionScope=execution_scope,
+        scoringProfile=profile.to_dict(),
+        exitPolicy=profile.exit_policy,
+        componentScores=quant.factor_diagnostics.get("components"),
         confluenceScore=quant.confluence_score,
         maxScore=quant.max_score,
         scoreNorm=quant.score_norm,

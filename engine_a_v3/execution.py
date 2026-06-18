@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from decimal import Decimal, InvalidOperation
 from typing import Any
 
 
@@ -41,6 +42,9 @@ _AUTHORITATIVE_FIELDS = (
     "validationArtifact",
     "validationStatus",
     "executionScope",
+    "scoringProfile",
+    "exitPolicy",
+    "componentScores",
     "engineATradeEnabled",
     "trade",
     "executable",
@@ -49,6 +53,23 @@ _AUTHORITATIVE_FIELDS = (
     "timestamp",
     "style",
 )
+
+
+def exact_split_sizes(total: float, *, step: float, minimum: float) -> tuple[float, float] | None:
+    try:
+        total_d, step_d, minimum_d = Decimal(str(total)), Decimal(str(step)), Decimal(str(minimum))
+    except (InvalidOperation, ValueError):
+        return None
+    if total_d <= 0 or step_d <= 0 or minimum_d <= 0:
+        return None
+    units = total_d / step_d
+    if units != units.to_integral_value() or int(units) % 2:
+        return None
+    half = total_d / 2
+    if half < minimum_d:
+        return None
+    value = float(half)
+    return value, value
 
 
 @dataclass(frozen=True)
@@ -110,6 +131,14 @@ def verify_refreshed_signal(
     for field in ("setupId", "direction", "horizon"):
         if str(refreshed.get(field) or "") != str(original.get(field) or ""):
             return False, f"ENGINE_A_V3_REFRESH_{field.upper()}_CHANGED"
+    if refreshed.get("exitPolicy") != original.get("exitPolicy"):
+        return False, "ENGINE_A_V3_REFRESH_EXIT_POLICY_CHANGED"
+    original_profile = original.get("scoringProfile")
+    refreshed_profile = refreshed.get("scoringProfile")
+    if not isinstance(original_profile, dict) or not isinstance(refreshed_profile, dict):
+        return False, "ENGINE_A_V3_REFRESH_PROFILE_INVALID"
+    if refreshed_profile.get("profileSha256") != original_profile.get("profileSha256"):
+        return False, "ENGINE_A_V3_REFRESH_PROFILE_CHANGED"
     if refreshed.get("decision") != "TRADE" or refreshed.get("qualified") is not True:
         return False, "ENGINE_A_V3_REFRESH_NOT_TRADE_QUALIFIED"
     if refreshed.get("engineATradeEnabled") is not True:

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
+from datetime import datetime
 from math import sqrt
 from statistics import fmean, stdev
 
@@ -18,15 +20,57 @@ def _cost_r(
     commission_bps: float,
     slippage_bps: float,
     swap_bps_per_day: float,
-    holding_bars: int,
-    horizon: str,
+    entry_time: datetime,
+    exit_time: datetime,
 ) -> float:
     risk = abs(entry - sl)
     if entry <= 0 or risk <= 0:
         return 0.0
-    days = holding_bars / (24.0 if horizon == "intraday" else 1.0)
+    days = max(0.0, (exit_time - entry_time).total_seconds() / 86_400.0)
     total_bps = spread_bps + commission_bps + slippage_bps + swap_bps_per_day * days
     return (entry * total_bps / 10_000.0) / risk
+
+
+@dataclass(frozen=True)
+class ExitResult:
+    outcome: str
+    result_r: float
+    exit_offset: int
+    same_bar: bool = False
+
+
+def _simulate_exit(
+    bars: list[dict], *, direction: str, entry: float, sl: float,
+    tp1: float, tp2: float, exit_policy: str,
+) -> ExitResult:
+    risk = abs(entry - sl)
+    if risk <= 0 or not bars:
+        return ExitResult("INVALID", 0.0, 0)
+    split = exit_policy == "SPLIT_50_50"
+    tp1_filled = False
+    for offset, bar in enumerate(bars):
+        high, low = float(bar["high"]), float(bar["low"])
+        sl_hit = low <= sl if direction == "LONG" else high >= sl
+        tp1_hit = high >= tp1 if direction == "LONG" else low <= tp1
+        tp2_hit = high >= tp2 if direction == "LONG" else low <= tp2
+        if sl_hit and ((not tp1_filled and tp1_hit) or (tp1_filled and tp2_hit)):
+            return ExitResult("SL" if not tp1_filled else "TP1_THEN_SL", -1.0 if not tp1_filled else 0.0, offset, True)
+        if sl_hit:
+            return ExitResult("SL" if not tp1_filled else "TP1_THEN_SL", -1.0 if not tp1_filled else 0.0, offset)
+        if not split and tp1_hit:
+            return ExitResult("TP1", abs(tp1 - entry) / risk, offset)
+        if split:
+            if tp1_filled and tp2_hit:
+                return ExitResult("TP1_TP2", 0.5 * abs(tp1 - entry) / risk + 0.5 * abs(tp2 - entry) / risk, offset)
+            if not tp1_filled and tp2_hit:
+                return ExitResult("TP1_TP2", 0.5 * abs(tp1 - entry) / risk + 0.5 * abs(tp2 - entry) / risk, offset)
+            if tp1_hit:
+                tp1_filled = True
+    close = float(bars[-1]["close"])
+    runner_r = ((close - entry) if direction == "LONG" else (entry - close)) / risk
+    if split and tp1_filled:
+        return ExitResult("TP1_TIMEOUT", 0.5 * abs(tp1 - entry) / risk + 0.5 * runner_r, len(bars) - 1)
+    return ExitResult("TIMEOUT", runner_r, len(bars) - 1)
 
 
 def _summarize(pair: dict, horizon: str, trades: list[dict], same_bar: int) -> dict:
@@ -153,45 +197,21 @@ def run_v3_backtest(
         risk = abs(entry - sl)
         if risk <= 0:
             continue
-        outcome = "TIMEOUT"
-        result_r = 0.0
-        exit_index = min(len(primary) - 1, index + max_hold_bars)
-        for probe_index in range(index + 1, exit_index + 1):
-            bar = primary[probe_index]
-            high = float(bar["high"])
-            low = float(bar["low"])
-            sl_hit = low <= sl if direction == "LONG" else high >= sl
-            tp1_hit = (
-                tp1 is not None
-                and (high >= tp1 if direction == "LONG" else low <= tp1)
-            )
-            tp2_hit = high >= tp2 if direction == "LONG" else low <= tp2
-            if sl_hit and (tp1_hit or tp2_hit):
-                same_bar += 1
-                outcome = "SL"
-                result_r = -1.0
-                exit_index = probe_index
-                break
-            if sl_hit:
-                outcome = "SL"
-                result_r = -1.0
-                exit_index = probe_index
-                break
-            if tp2_hit:
-                outcome = "TP2"
-                result_r = abs(tp2 - entry) / risk
-                exit_index = probe_index
-                break
-            if tp1_hit:
-                outcome = "TP1"
-                result_r = abs(tp1 - entry) / risk
-                exit_index = probe_index
-                break
-        if outcome == "TIMEOUT":
-            close = float(primary[exit_index]["close"])
-            signed = close - entry if direction == "LONG" else entry - close
-            result_r = signed / risk
-        holding_bars = max(1, exit_index - index)
+        max_exit_index = min(len(primary) - 1, index + max_hold_bars)
+        exit_result = _simulate_exit(
+            primary[index + 1 : max_exit_index + 1], direction=direction,
+            entry=entry, sl=sl, tp1=float(tp1), tp2=tp2,
+            exit_policy=signal.exitPolicy,
+        )
+        outcome = exit_result.outcome
+        result_r = exit_result.result_r
+        exit_index = index + 1 + exit_result.exit_offset
+        same_bar += 1 if exit_result.same_bar else 0
+        from engine_a_v3.evaluator import _parse_time
+        entry_time = _parse_time(entry_bar.get("time") or entry_bar.get("datetime"))
+        exit_time = _parse_time(primary[exit_index].get("time") or primary[exit_index].get("datetime"))
+        if entry_time is None or exit_time is None:
+            continue
         cost_r = _cost_r(
             entry,
             sl,
@@ -199,8 +219,8 @@ def run_v3_backtest(
             commission_bps=commission_bps,
             slippage_bps=slippage_bps,
             swap_bps_per_day=swap_bps_per_day,
-            holding_bars=holding_bars,
-            horizon=horizon,
+            entry_time=entry_time,
+            exit_time=exit_time,
         )
         result_r -= cost_r
         future_window = primary[index + 1 : exit_index + 1]
@@ -233,6 +253,7 @@ def run_v3_backtest(
                 "tp1": round(tp1, 8) if tp1 is not None else None,
                 "tp": round(tp2, 8),
                 "outcome": outcome,
+                "exitPolicy": signal.exitPolicy,
                 "resultR": round(result_r, 4),
                 "reverseResultR": reverse_direction_result_r(
                     future_window,

@@ -62,6 +62,16 @@ export function resolveEngineAV3Signal(signal: EngineASignal): EngineASignal {
     horizon: pickField(raw, 'horizon', 'engine_a_horizon'),
     validationStatus: pickField(raw, 'validationStatus', 'engine_a_validationStatus'),
     validationArtifact: pickField(raw, 'validationArtifact', 'engine_a_validationArtifact'),
+    executionScope: pickField(raw, 'executionScope', 'engine_a_executionScope'),
+    exitPolicy: pickField(raw, 'exitPolicy', 'engine_a_exitPolicy'),
+    scoringProfile: pickField(raw, 'scoringProfile', 'engine_a_scoringProfile'),
+    componentScores: pickField(raw, 'componentScores', 'engine_a_componentScores'),
+    confluenceScore: pickField(raw, 'confluenceScore', 'engine_a_confluenceScore'),
+    maxScore: pickField(raw, 'maxScore', 'engine_a_maxScore'),
+    scoreNorm: pickField(raw, 'scoreNorm', 'engine_a_scoreNorm'),
+    confluenceThreshold: pickField(raw, 'confluenceThreshold', 'engine_a_confluenceThreshold'),
+    factorScores: pickField(raw, 'factorScores', 'engine_a_factorScores'),
+    factorDiagnostics: pickField(raw, 'factorDiagnostics', 'engine_a_factorDiagnostics'),
     engineATradeEnabled: pickField(raw, 'engineATradeEnabled', 'engine_a_engineATradeEnabled'),
     direction: pickField(raw, 'direction', 'engine_a_direction') ?? signal.direction,
   };
@@ -84,6 +94,6 @@ export function engineAV3ListLabel(signal: EngineASignal | null | undefined): st
   const predicates = Array.isArray(resolved.predicates) ? resolved.predicates : [];
   const passed = predicates.filter((p) => p?.passed).length;
   const total = predicates.length;
-  if (total > 0) return `${decision} · ${passed}/${total} rules`;
+  if (total > 0) return `${decision} · ${passed}/${total} aligned`;
   return decision;
 }

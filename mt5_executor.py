@@ -29,6 +29,17 @@ def _is_engine_d_signal(signal: dict) -> bool:
     return engine in ("scalp", "engine d", "scalp_vp")
 
 
+def _engine_a_v3_exit_policy(signal: dict) -> str | None:
+    if str((signal or {}).get("engine") or "").upper() != "ENGINE_A_V3":
+        return None
+    if not str((signal or {}).get("contractVersion") or "").startswith("3.1"):
+        return None
+    policy = str((signal or {}).get("exitPolicy") or "")
+    if policy not in {"SINGLE_TP1", "SPLIT_50_50"}:
+        raise ValueError("ENGINE_A_V3_EXIT_POLICY_INVALID")
+    return policy
+
+
 def _timed_exit_cfg() -> dict:
     cfg = CONFIG.get("TIMED_EXIT") or {}
     return cfg if isinstance(cfg, dict) else {}
@@ -1399,6 +1410,11 @@ def mt5_execute(signal: dict, approval: "RiskApproval") -> dict:  # noqa: F821
     if not approval.approved:
         return {"success": False, "error": f"NOT_APPROVED: {approval.reason}"}
 
+    try:
+        _v3_exit_policy = _engine_a_v3_exit_policy(signal)
+    except ValueError as exc:
+        return {"success": False, "error": str(exc)}
+
     mt5 = _get_mt5()
 
     if not mt5 or not mt5_connect():
@@ -1712,10 +1728,10 @@ def mt5_execute(signal: dict, approval: "RiskApproval") -> dict:  # noqa: F821
     vol_min = sym_info.volume_min if sym_info else 0.01
 
     _is_scalp = _is_engine_d_signal(signal)
-    _uses_trailing_exit = _uses_trailing_atr_exit(signal)
-    _use_broker_tp = _mt5_should_send_broker_tp(signal)
+    _uses_trailing_exit = False if _v3_exit_policy else _uses_trailing_atr_exit(signal)
+    _use_broker_tp = True if _v3_exit_policy else _mt5_should_send_broker_tp(signal)
     # Engine D / Scalp Lab uses one protected broker position with TP1 and SL.
-    if _is_scalp:
+    if _is_scalp or _v3_exit_policy == "SINGLE_TP1":
         do_split = False
     else:
         # Only split if TP2 is distinct and total volume allows for at least 2 units of min_step
@@ -1727,6 +1743,18 @@ def mt5_execute(signal: dict, approval: "RiskApproval") -> dict:  # noqa: F821
             and abs(tp2 - tp) > (10 * sym_info.point)
             and total_vol >= (vol_min * 2)
         )
+        _v3_split_sizes = None
+        if _v3_exit_policy == "SPLIT_50_50":
+            from engine_a_v3.execution import exact_split_sizes
+            _v3_split_sizes = exact_split_sizes(total_vol, step=vol_step, minimum=vol_min)
+            do_split = do_split and _v3_split_sizes is not None
+        if _v3_exit_policy == "SPLIT_50_50" and not do_split:
+            return {
+                "success": False,
+                "error": "ENGINE_A_V3_SPLIT_NOT_EXECUTABLE",
+                "requiredVolume": vol_min * 2,
+                "approvedVolume": total_vol,
+            }
 
     # Hybrid scale-out (trailing_atr only, mutually exclusive with do_split):
     # banker leg keeps broker TP1 (banks the fraction); runner leg carries no
@@ -1734,9 +1762,12 @@ def mt5_execute(signal: dict, approval: "RiskApproval") -> dict:  # noqa: F821
     hybrid_split = False
     vols = [(total_vol, tp if _use_broker_tp else 0)]
     if do_split:
-        vol1 = round(math.floor((total_vol / 2) / vol_step) * vol_step, 2)
-        if vol1 < vol_min: vol1 = vol_min
-        vol2 = round(total_vol - vol1, 2)
+        if _v3_exit_policy == "SPLIT_50_50":
+            vol1, vol2 = _v3_split_sizes
+        else:
+            vol1 = round(math.floor((total_vol / 2) / vol_step) * vol_step, 2)
+            if vol1 < vol_min: vol1 = vol_min
+            vol2 = round(total_vol - vol1, 2)
         vols = [(vol1, tp), (vol2, tp2)]
         log.info(f"[MT5] {mt5_symbol}: splitting {total_vol} lots into targets TP1={tp} ({vol1}) and TP2={tp2} ({vol2})")
     else:

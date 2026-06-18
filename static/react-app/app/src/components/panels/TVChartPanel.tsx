@@ -328,6 +328,7 @@ interface EngineBOverlayPayload {
   choch_confirmed?: boolean;
   liquidity_sweep?: boolean;
   struct_atr?: number | string | null;
+  structural_verdict?: string | null;
 }
 
 interface EngineBOverlayLine {
@@ -1821,7 +1822,7 @@ function EngineAV3SidePanel({
       </section>
 
       <section className="space-y-2 rounded-md border border-border/60 p-2">
-        <div className="text-xs font-semibold">Deterministic predicates ({passed}/{signal.predicates?.length || 0})</div>
+        <div className="text-xs font-semibold">Component diagnostics ({passed}/{signal.predicates?.length || 0})</div>
         {(signal.predicates || []).slice(0, 10).map((predicate) => (
           <div key={predicate.name} className="flex items-start justify-between gap-2 text-[11px]">
             <span className={predicate.passed ? 'text-long' : 'text-warning'}>
@@ -2940,7 +2941,9 @@ export default function TVChartPanel() {
         isEngineBOnly,
         engineBOverlay: isEngineBOnly
           ? ((chartCandidate.naked_data ?? chartCandidate.engine_b) as Record<string, unknown> | undefined)
-          : engineBOverlay ?? undefined,
+          : engineBOverlay
+            ? ({ ...engineBOverlay } as Record<string, unknown>)
+            : undefined,
         pipMode: String(chartCandidate.style || 'swing'),
         volumeMode,
         sizingOverride,

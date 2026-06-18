@@ -10,6 +10,7 @@ from typing import Any
 
 from engine_a_v3.contract import ValidationArtifact
 from engine_a_v3.routing import SpecialistRoute, route_specialist
+from engine_a_v3.profile import EngineAV3Profile, baseline_profile, scorer_sha256
 
 
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
@@ -20,6 +21,7 @@ class PromotionDecision:
     qualified: bool
     reasons: tuple[str, ...]
     artifact: ValidationArtifact | None
+    profile: EngineAV3Profile | None = None
 
 
 def default_registry_root() -> Path:
@@ -62,34 +64,42 @@ class PromotionRegistry:
             try:
                 raw = json.loads(path.read_text(encoding="utf-8"))
             except (OSError, json.JSONDecodeError):
+                if self.allow_demo_unvalidated:
+                    return self._demo_unvalidated(route, horizon, ("promotion_artifact_malformed",))
                 return PromotionDecision(False, ("promotion_artifact_malformed",), None)
-            return validate_promotion_artifact(
+            decision = validate_promotion_artifact(
                 raw,
                 route,
                 horizon,
                 pair_adapter=pair_adapter,
                 now=now,
             )
+            if decision.qualified or not self.allow_demo_unvalidated:
+                return decision
+            return self._demo_unvalidated(route, horizon, decision.reasons)
         if self.allow_demo_unvalidated:
-            identity = re.sub(
-                r"[^a-z0-9]+",
-                "-",
-                f"demo-unvalidated-{route.family}-{route.subclass}-{horizon}".lower(),
-            ).strip("-")
-            return PromotionDecision(
-                True,
-                ("demo_unvalidated_activation",),
-                ValidationArtifact(
-                    artifactId=identity,
-                    family=route.family,
-                    subclass=route.subclass,
-                    horizon=horizon,
-                    status="DEMO_UNVALIDATED",
-                    metrics=(),
-                    provenanceSha256="0" * 64,
-                ),
-            )
+            return self._demo_unvalidated(route, horizon, ("promotion_artifact_missing",))
         return PromotionDecision(False, ("promotion_artifact_missing",), None)
+
+    @staticmethod
+    def _demo_unvalidated(
+        route: SpecialistRoute, horizon: str, reasons: tuple[str, ...]
+    ) -> PromotionDecision:
+        identity = re.sub(
+            r"[^a-z0-9]+", "-",
+            f"demo-unvalidated-{route.family}-{route.subclass}-{horizon}".lower(),
+        ).strip("-")
+        profile = baseline_profile(route.score_group, horizon)
+        return PromotionDecision(
+            True,
+            tuple(dict.fromkeys(reasons + ("demo_unvalidated_activation",))),
+            ValidationArtifact(
+                artifactId=identity, family=route.family, subclass=route.subclass,
+                horizon=horizon, status="DEMO_UNVALIDATED", metrics=(),
+                provenanceSha256="0" * 64, profileSha256=profile.profile_sha256,
+            ),
+            profile,
+        )
 
 
 def demo_unvalidated_registry(
@@ -140,7 +150,7 @@ def validate_promotion_artifact(
         return PromotionDecision(False, ("promotion_artifact_malformed",), None)
 
     reasons: list[str] = []
-    if raw.get("schemaVersion") != 2:
+    if raw.get("schemaVersion") != 3:
         reasons.append("promotion_schema_invalid")
     if not str(raw.get("artifactId") or "").strip():
         reasons.append("promotion_artifact_id_missing")
@@ -202,12 +212,18 @@ def validate_promotion_artifact(
         provenance = {}
     if not provenance.get("datasetId"):
         reasons.append("promotion_dataset_identity_missing")
+    provider = str(provenance.get("provider") or "")
+    expected_provider = "bybit_rest" if route.family == "crypto" else "mt5"
+    if provider != expected_provider:
+        reasons.append("promotion_provider_invalid")
     sha256 = str(provenance.get("sha256") or "").lower()
     if not _SHA256.fullmatch(sha256):
         reasons.append("promotion_provenance_hash_invalid")
     implementation_sha256 = str(provenance.get("implementationSha256") or "").lower()
     if not _SHA256.fullmatch(implementation_sha256):
         reasons.append("promotion_implementation_hash_invalid")
+    elif implementation_sha256 != scorer_sha256():
+        reasons.append("promotion_implementation_hash_mismatch")
     if provenance.get("confirmedOnly") is not True:
         reasons.append("promotion_confirmed_only_not_proven")
     if provenance.get("untouchedHoldoutPct") != 20:
@@ -220,6 +236,8 @@ def validate_promotion_artifact(
         reasons.append("promotion_purge_bars_invalid")
     if max_hold_bars is None or max_hold_bars < 1:
         reasons.append("promotion_max_hold_bars_invalid")
+    if purge_bars is not None and max_hold_bars is not None and purge_bars < max_hold_bars + 1:
+        reasons.append("promotion_purge_embargo_insufficient")
     costs = provenance.get("costs")
     required_costs = {
         "spreadBps",
@@ -266,6 +284,9 @@ def validate_promotion_artifact(
     holdout = _number(metrics, "holdoutExpectancyR")
     if holdout is None or holdout <= 0:
         reasons.append("promotion_holdout_expectancy_failed")
+    holdout_trades = _number(metrics, "holdoutTrades")
+    if holdout_trades is None or holdout_trades < 15:
+        reasons.append("promotion_holdout_trade_floor_failed")
     expectancy = _number(metrics, "expectancyR")
     if expectancy is None or expectancy < 0.08:
         reasons.append("promotion_expectancy_failed")
@@ -282,6 +303,39 @@ def validate_promotion_artifact(
     if lower is None or lower <= 0:
         reasons.append("promotion_bootstrap_lower_bound_failed")
 
+    profile: EngineAV3Profile | None = None
+    raw_profile = raw.get("profile")
+    if not isinstance(raw_profile, dict):
+        reasons.append("promotion_profile_missing")
+    else:
+        try:
+            profile = EngineAV3Profile.create(
+                score_group=str(raw_profile.get("scoreGroup") or ""),
+                horizon=str(raw_profile.get("horizon") or ""),
+                indicator_periods=raw_profile.get("indicatorPeriods") or {},
+                weights=raw_profile.get("weights") or {},
+                direction_deadband=raw_profile.get("directionDeadband"),
+                trade_threshold=raw_profile.get("tradeThreshold"),
+                exit_policy=str(raw_profile.get("exitPolicy") or ""),
+                status=str(raw_profile.get("status") or ""),
+                profile_id=str(raw_profile.get("profileId") or ""),
+                created_at=raw_profile.get("createdAt"),
+                valid_until=raw_profile.get("validUntil"),
+                expected_scorer_sha256=str(raw_profile.get("scorerSha256") or ""),
+            )
+            if profile.score_group != route.score_group or profile.horizon != horizon:
+                reasons.append("promotion_profile_route_mismatch")
+            if profile.status != "PROMOTED":
+                reasons.append("promotion_profile_status_invalid")
+            if profile.scorer_sha256 != scorer_sha256():
+                reasons.append("promotion_scorer_hash_mismatch")
+            if profile.profile_sha256 != str(raw_profile.get("profileSha256") or ""):
+                reasons.append("promotion_profile_hash_mismatch")
+            if profile.created_at != raw.get("createdAt") or profile.valid_until != raw.get("validUntil"):
+                reasons.append("promotion_profile_validity_mismatch")
+        except (TypeError, ValueError):
+            reasons.append("promotion_profile_invalid")
+
     if reasons:
         return PromotionDecision(False, tuple(dict.fromkeys(reasons)), None)
     artifact = ValidationArtifact(
@@ -292,8 +346,9 @@ def validate_promotion_artifact(
         status="PROMOTED",
         metrics=tuple((key, _freeze(value)) for key, value in sorted(metrics.items())),
         provenanceSha256=sha256,
+        profileSha256=profile.profile_sha256 if profile else None,
     )
-    return PromotionDecision(True, (), artifact)
+    return PromotionDecision(True, (), artifact, profile)
 
 
 def promote_candidate(

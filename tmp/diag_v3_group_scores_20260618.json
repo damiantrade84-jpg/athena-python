@@ -1,0 +1,219 @@
+{
+  "data_as_of": "2026-05-30",
+  "context": "none(feeds absent->neutral)",
+  "groups": {
+    "crypto_alt_majors": {
+      "family": "crypto",
+      "n": 160,
+      "threshold": 2.0,
+      "median": 1.222,
+      "p90": 1.985,
+      "max": 2.545,
+      "pass_pct": 9.4,
+      "pairs": [
+        "SOL/USDT"
+      ],
+      "dir": {
+        "LONG": 46,
+        "SHORT": 92,
+        "FLAT": 22
+      }
+    },
+    "crypto_btc": {
+      "family": "crypto",
+      "n": 160,
+      "threshold": 2.0,
+      "median": 1.317,
+      "p90": 2.01,
+      "max": 2.483,
+      "pass_pct": 10.6,
+      "pairs": [
+        "BTC/USDT"
+      ],
+      "dir": {
+        "LONG": 59,
+        "SHORT": 85,
+        "FLAT": 16
+      }
+    },
+    "crypto_doge": {
+      "family": "crypto",
+      "n": 160,
+      "threshold": 2.0,
+      "median": 1.271,
+      "p90": 2.086,
+      "max": 2.51,
+      "pass_pct": 11.9,
+      "pairs": [
+        "DOGE/USDT"
+      ],
+      "dir": {
+        "LONG": 42,
+        "SHORT": 90,
+        "FLAT": 28
+      }
+    },
+    "crypto_eth": {
+      "family": "crypto",
+      "n": 160,
+      "threshold": 2.0,
+      "median": 1.304,
+      "p90": 2.047,
+      "max": 2.436,
+      "pass_pct": 11.2,
+      "pairs": [
+        "ETH/USDT"
+      ],
+      "dir": {
+        "LONG": 56,
+        "SHORT": 92,
+        "FLAT": 12
+      }
+    },
+    "crypto_other": {
+      "family": "crypto",
+      "n": 160,
+      "threshold": 2.0,
+      "median": 1.246,
+      "p90": 2.12,
+      "max": 2.579,
+      "pass_pct": 11.9,
+      "pairs": [
+        "XRP/USDT"
+      ],
+      "dir": {
+        "LONG": 35,
+        "SHORT": 104,
+        "FLAT": 21
+      }
+    },
+    "energy_oil": {
+      "family": "commodity",
+      "n": 160,
+      "threshold": 2.0,
+      "median": 1.235,
+      "p90": 2.149,
+      "max": 2.55,
+      "pass_pct": 17.5,
+      "pairs": [
+        "WTI OIL"
+      ],
+      "dir": {
+        "LONG": 79,
+        "SHORT": 57,
+        "FLAT": 24
+      }
+    },
+    "eu_indices": {
+      "family": "index",
+      "n": 160,
+      "threshold": 2.0,
+      "median": 1.217,
+      "p90": 1.976,
+      "max": 2.488,
+      "pass_pct": 8.1,
+      "pairs": [
+        "DAX 40"
+      ],
+      "dir": {
+        "LONG": 92,
+        "SHORT": 50,
+        "FLAT": 18
+      }
+    },
+    "forex_crosses": {
+      "family": "forex",
+      "n": 160,
+      "threshold": 2.0,
+      "median": 1.509,
+      "p90": 2.096,
+      "max": 2.285,
+      "pass_pct": 16.2,
+      "pairs": [
+        "GBP/JPY"
+      ],
+      "dir": {
+        "LONG": 115,
+        "SHORT": 26,
+        "FLAT": 19
+      }
+    },
+    "forex_majors": {
+      "family": "forex",
+      "n": 556,
+      "threshold": 2.0,
+      "median": 1.256,
+      "p90": 1.987,
+      "max": 2.304,
+      "pass_pct": 9.2,
+      "pairs": [
+        "EUR/USD",
+        "GBP/USD",
+        "USD/CHF",
+        "USD/JPY"
+      ],
+      "dir": {
+        "LONG": 359,
+        "SHORT": 143,
+        "FLAT": 54
+      }
+    },
+    "precious_trackers": {
+      "family": "commodity",
+      "n": 320,
+      "threshold": 2.0,
+      "median": 1.227,
+      "p90": 2.055,
+      "max": 2.431,
+      "pass_pct": 13.1,
+      "pairs": [
+        "XAG/USD",
+        "XAU/USD"
+      ],
+      "dir": {
+        "LONG": 195,
+        "SHORT": 82,
+        "FLAT": 43
+      }
+    },
+    "us_indices_trackers": {
+      "family": "index",
+      "n": 480,
+      "threshold": 2.0,
+      "median": 1.394,
+      "p90": 2.176,
+      "max": 2.555,
+      "pass_pct": 18.1,
+      "pairs": [
+        "DOW JONES",
+        "NASDAQ-100",
+        "S&P 500"
+      ],
+      "dir": {
+        "LONG": 308,
+        "SHORT": 134,
+        "FLAT": 38
+      }
+    },
+    "us_stock_single": {
+      "family": "equity_etf",
+      "n": 640,
+      "threshold": 2.0,
+      "median": 1.24,
+      "p90": 1.965,
+      "max": 2.555,
+      "pass_pct": 8.4,
+      "pairs": [
+        "AAPL",
+        "MSFT",
+        "NVDA",
+        "TSLA"
+      ],
+      "dir": {
+        "LONG": 345,
+        "SHORT": 243,
+        "FLAT": 52
+      }
+    }
+  }
+}
