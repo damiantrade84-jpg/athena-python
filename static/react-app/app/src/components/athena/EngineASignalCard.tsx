@@ -64,9 +64,11 @@ export default function EngineASignalCard({
     );
   }
   const engineSource = String(raw.engine_source ?? raw.engine ?? '').toUpperCase();
-  const isEngineBOnly = engineSource === 'ENGINE_B' || (
+  const isNakedScan = Boolean(signal.is_naked);
+  const isEngineBOnlyStub = engineSource === 'ENGINE_B' || (
     engineSource === 'B' && raw.engine_a_present === false
   );
+  const isEngineBOnly = isEngineBOnlyStub || isNakedScan;
   const engineABlockReason = String(raw.engine_a_block_reason ?? '').trim();
   const isLong  = signal.direction === 'LONG';
   const isShort = signal.direction === 'SHORT';
@@ -79,17 +81,19 @@ export default function EngineASignalCard({
   const conv = toNum(signal.conviction, NaN);
   const convT = convictionTier(Number.isFinite(conv) ? conv : null);
   const score = toNum(
-    isEngineBOnly ? raw.engine_a_confluenceScore ?? signal.confluenceScore ?? signal.score : signal.confluenceScore ?? signal.score,
+    isEngineBOnlyStub
+      ? raw.engine_a_confluenceScore ?? signal.confluenceScore ?? signal.score
+      : signal.confluenceScore ?? signal.score,
     NaN,
   );
   const max = toNum(
-    isEngineBOnly ? raw.engine_a_maxScore ?? signal.maxScore : signal.maxScore,
+    isEngineBOnlyStub ? raw.engine_a_maxScore ?? signal.maxScore : signal.maxScore,
     NaN,
   );
   const threshold = engineAThreshold(signal);
   const passed = !isEngineBOnly && Number.isFinite(score) && threshold != null && score >= threshold;
   const fs = ((
-    (isEngineBOnly && raw.engine_a_factorScores && typeof raw.engine_a_factorScores === 'object')
+    (isEngineBOnlyStub && raw.engine_a_factorScores && typeof raw.engine_a_factorScores === 'object')
       ? raw.engine_a_factorScores
       : signal.factorScores
   ) || {}) as NonNullable<EngineASignal['factorScores']>;
@@ -100,7 +104,7 @@ export default function EngineASignalCard({
   );
   const hasOrthoScores = Boolean(orthoScores && Object.keys(orthoScores).length > 0);
   const fd = ((
-    (isEngineBOnly && raw.engine_a_factorDiagnostics && typeof raw.engine_a_factorDiagnostics === 'object')
+    (isEngineBOnlyStub && raw.engine_a_factorDiagnostics && typeof raw.engine_a_factorDiagnostics === 'object')
       ? raw.engine_a_factorDiagnostics
       : signal.factorDiagnostics
   ) || {}) as NonNullable<EngineASignal['factorDiagnostics']>;
@@ -197,11 +201,11 @@ export default function EngineASignalCard({
         <div className="space-y-1">
           <div className="flex items-center justify-between text-[10px] text-muted-foreground">
             <span>
-              {isEngineBOnly ? 'Engine A' : 'Confluence'}{' '}
+              {isEngineBOnlyStub ? 'Engine A' : isNakedScan ? 'Engine B' : 'Confluence'}{' '}
               <span className={cn('font-mono', passed ? 'text-long' : 'text-muted-foreground')}>
                 {fmtNum(score, 2)}/{fmtNum(max, 2)}
               </span>
-              {threshold != null && <span className="ml-1">≥ {fmtNum(threshold, 2)}</span>}
+              {threshold != null && !isNakedScan && <span className="ml-1">≥ {fmtNum(threshold, 2)}</span>}
             </span>
             <span className="font-mono">{conf != null ? `${conf.toFixed(0)}%` : '—'}</span>
           </div>
@@ -215,9 +219,13 @@ export default function EngineASignalCard({
               }}
             />
           </div>
-          {isEngineBOnly ? (
+          {isEngineBOnlyStub ? (
             <p className="text-[9px] text-muted-foreground leading-snug">
               Engine B-only watchlist. Engine A blocked: {engineABlockReason || 'no Engine A trade signal'}.
+            </p>
+          ) : isNakedScan ? (
+            <p className="text-[9px] text-muted-foreground leading-snug">
+              Engine B structure scan — confidence from Naked Engine gates (structure, location, trigger, RR).
             </p>
           ) : (
             <p className="text-[9px] text-muted-foreground leading-snug">
@@ -254,7 +262,7 @@ export default function EngineASignalCard({
               )}
             </p>
           )}
-          {!isEngineBOnly && signal.engine_b != null && (
+          {!isEngineBOnlyStub && !isNakedScan && signal.engine_b != null && (
             <p className="text-[9px] text-muted-foreground leading-snug border-t border-border/40 pt-1 mt-1">
               Engine B attached — see detail panel
             </p>
@@ -402,6 +410,23 @@ function EngineAV3SignalCard({
     ? 'text-warning border-warning/40'
     : 'text-muted-foreground border-border/60';
 
+  // Continuous quality fields emitted by the quant scorer (native V3 payloads carry these).
+  const conf = confluencePct(signal);
+  const conv = toNum(signal.conviction, NaN);
+  const convT = convictionTier(Number.isFinite(conv) ? conv : null);
+  const score = toNum(signal.confluenceScore ?? signal.score, NaN);
+  const max = toNum(signal.maxScore, NaN);
+  const threshold = engineAThreshold(signal);
+  const passed = Number.isFinite(score) && threshold != null && score >= threshold;
+  const fs = (signal.factorScores || {}) as NonNullable<EngineASignal['factorScores']>;
+  const orthoScores = (
+    fs.ortho && typeof fs.ortho === 'object' && !Array.isArray(fs.ortho)
+      ? fs.ortho
+      : undefined
+  );
+  const hasOrthoScores = Boolean(orthoScores && Object.keys(orthoScores).length > 0);
+  const hasQuality = Number.isFinite(score) || conf != null || Number.isFinite(conv);
+
   return (
     <Card
       className={cn(
@@ -429,6 +454,40 @@ function EngineAV3SignalCard({
           <Badge variant={isShort ? 'destructive' : 'secondary'}>{signal.direction || '-'}</Badge>
         </div>
 
+        {hasQuality && (
+          <div className="space-y-1">
+            <div className="flex items-center justify-between text-[10px] text-muted-foreground">
+              <span>
+                Confluence{' '}
+                <span className={cn('font-mono', passed ? 'text-long' : 'text-muted-foreground')}>
+                  {fmtNum(score, 2)}/{fmtNum(max, 2)}
+                </span>
+                {threshold != null && <span className="ml-1">≥ {fmtNum(threshold, 2)}</span>}
+              </span>
+              <div className="flex items-center gap-1 shrink-0">
+                <Badge variant="outline" className={cn('text-[10px] font-mono', convT.color)}>{convT.tier}</Badge>
+                <span className="font-mono">{conf != null ? `${conf.toFixed(0)}%` : '—'}</span>
+              </div>
+            </div>
+            <div className="w-full rounded-full h-1.5 overflow-hidden" style={{ background: 'hsl(var(--border) / 0.50)' }}>
+              <div
+                className="h-full rounded-full transition-all duration-300"
+                style={{
+                  width: `${conf ?? 0}%`,
+                  background: 'linear-gradient(90deg, hsl(var(--gold-dark)), hsl(var(--gold-light)))',
+                }}
+              />
+            </div>
+            {!compact && (
+              <p className="text-[9px] text-muted-foreground leading-snug">
+                Quality score (0–3.0): weighted multi-timeframe trend + momentum (RSI/MACD/DI·ADX),
+                entry location and volatility regime, plus intermarket, carry, COT, microstructure and
+                volume. The bar fills to ~67% at this group&apos;s TRADE threshold.
+              </p>
+            )}
+          </div>
+        )}
+
         <div className="grid grid-cols-4 gap-2">
           <Level label="Entry" value={signal.price} pair={pair} type={type} accent="muted" />
           <Level label="Invalidation" value={signal.invalidation ?? signal.sl} pair={pair} type={type} accent="short" />
@@ -442,6 +501,22 @@ function EngineAV3SignalCard({
               {fmtPrice(entryZone[0], pair, type)} - {fmtPrice(entryZone[1], pair, type)}
             </span>
           </p>
+        )}
+
+        {!compact && (fs.trend != null || fs.momentum != null || hasOrthoScores) && (
+          <div className="grid grid-cols-2 gap-1 text-center">
+            <FactorBox label="Trend" value={fs.trend} accent="long" />
+            <FactorBox label="Momentum" value={fs.momentum} accent="primary" />
+            {hasOrthoScores && orthoScores && Object.entries(orthoScores).map(([name, v]) => (
+              <FactorBox
+                key={name}
+                label={ORTHO_LABELS[name] ?? name}
+                value={v}
+                accent={v >= 0 ? 'long' : 'short'}
+              />
+            ))}
+            <FactorBox label="Ortho Σ" value={fs.ortho_term} accent="warning" />
+          </div>
         )}
 
         {!compact && (

@@ -232,6 +232,16 @@ function unifiedEngineLabel(engines: Set<'A' | 'B'>): EngineSource {
   return 'B';
 }
 
+/** Engine B tab shows B-only rows; dual-flagged setups stay on Engine A tab. */
+function isEngineBOnlyRow(row: UnifiedRow): boolean {
+  return row.engines.has('B') && !row.engines.has('A');
+}
+
+function rowMatchesFeed(row: UnifiedRow, feed: EngineSource): boolean {
+  if (feed === 'B') return isEngineBOnlyRow(row);
+  return row.engines.has('A');
+}
+
 function canExecuteRow(row: UnifiedRow | null): boolean {
   if (!row) return false;
   if (row.signal.executable === false) return false;
@@ -374,20 +384,20 @@ export default function SignalsPanel() {
     return list;
   }, [rows, priceFor, filter, directionFilter, assetClass, sortBy]);
 
-  /** Per-engine counts (combined filtered list). A dual-flagged row counts for both. */
+  /** Per-engine tab counts. Dual-flagged rows count for A only; B tab is B-only. */
   const engineCounts = useMemo(() => {
     let a = 0;
     let b = 0;
     for (const r of filteredRows) {
       if (r.engines.has('A')) a += 1;
-      if (r.engines.has('B')) b += 1;
+      if (isEngineBOnlyRow(r)) b += 1;
     }
     return { a, b };
   }, [filteredRows]);
 
-  /** Rows for the active engine tab. Dual-flagged setups appear in both tabs. */
+  /** Rows for the active engine tab. Engine B tab excludes A+B overlaps. */
   const feedRows = useMemo(
-    () => filteredRows.filter((r) => r.engines.has(feedEngine)),
+    () => filteredRows.filter((r) => rowMatchesFeed(r, feedEngine)),
     [filteredRows, feedEngine],
   );
 
@@ -415,10 +425,23 @@ export default function SignalsPanel() {
 
   const selectedRow = useMemo<UnifiedRow | null>(() => {
     if (!selectedId) return null;
-    return filteredRows.find((r) => r.id === selectedId)
-      ?? rows.find((r) => r.id === selectedId)
-      ?? null;
-  }, [selectedId, filteredRows, rows]);
+    return feedRows.find((r) => r.id === selectedId) ?? null;
+  }, [selectedId, feedRows]);
+
+  const handleFeedEngineChange = useCallback((v: string) => {
+    const next = v as EngineSource;
+    setFeedEngine(next);
+    setDetailTab('overview');
+    setAiReview(null);
+    setAiTextReview(null);
+    setAgentOpen(false);
+    setSelectedId((id) => {
+      if (!id) return null;
+      const row = filteredRows.find((r) => r.id === id);
+      if (!row) return null;
+      return rowMatchesFeed(row, next) ? id : null;
+    });
+  }, [filteredRows]);
 
   const scanEngineA = useCallback(async () => {
     const ac = assetClass === 'all' ? '' : assetClass;
@@ -471,23 +494,23 @@ export default function SignalsPanel() {
 
   const runScanA = useCallback(async () => {
     const a = await scanEngineA();
-    setFeedEngine('A');
+    handleFeedEngineChange('A');
     setSortBy('score');
     showToast(
       a ? `Engine A scan complete · ${a.trade} trade / ${a.watchlist} watch` : 'Engine A scan failed',
       a ? 'success' : 'error',
     );
-  }, [scanEngineA, showToast]);
+  }, [scanEngineA, handleFeedEngineChange, showToast]);
 
   const runScanB = useCallback(async () => {
     const b = await scanEngineB();
-    setFeedEngine('B');
+    handleFeedEngineChange('B');
     setSortBy('score');
     showToast(
       b ? `Engine B scan complete · ${b.count} setups` : 'Engine B scan failed',
       b ? 'success' : 'error',
     );
-  }, [scanEngineB, showToast]);
+  }, [scanEngineB, handleFeedEngineChange, showToast]);
 
   const isPaper = Boolean(health?.paper_mode);
   const onOpenAndReview = useCallback((row: UnifiedRow) => {
@@ -809,7 +832,7 @@ export default function SignalsPanel() {
             </CardTitle>
           </CardHeader>
           <CardContent>
-            <Tabs value={feedEngine} onValueChange={(v) => setFeedEngine(v as EngineSource)}>
+            <Tabs value={feedEngine} onValueChange={handleFeedEngineChange}>
               <TabsList className="w-full grid grid-cols-2 h-9 mb-3">
                 <TabsTrigger value="A" className="text-[11px] gap-1.5">
                   <Zap className="w-3.5 h-3.5" /> Engine A
@@ -880,6 +903,7 @@ export default function SignalsPanel() {
                           <UnifiedSignalRow
                             key={row.id}
                             row={row}
+                            feedEngine={feedEngine}
                             selected={selectedId === row.id}
                             onSelect={handleSelect}
                           />
@@ -933,6 +957,16 @@ export default function SignalsPanel() {
                 <ScrollArea className="h-[620px] pr-2 mt-3">
                   {/* ── OVERVIEW TAB ── */}
                   <TabsContent value="overview" className="space-y-3 mt-0">
+                    {feedEngine === 'B' && isEngineBOnlyRow(selectedRow) ? (
+                      <EngineBChecklistCard
+                        data={selectedRow.signal.naked_data || selectedRow.signal.engine_b}
+                        pair={selectedRow.signal.pair || selectedRow.signal.display}
+                        type={selectedRow.signal.type}
+                        livePrice={priceFor(selectedRow.signal)}
+                        livePriceAgeSec={ageSecFor(selectedRow.signal)}
+                        livePriceSource={sourceFor(selectedRow.signal)}
+                      />
+                    ) : (
                     <EngineASignalCard
                       signal={{
                         ...selectedRow.signal,
@@ -949,6 +983,7 @@ export default function SignalsPanel() {
                       executeDisabled={executeDisabled}
                       executeLabel={executeLabel}
                     />
+                    )}
 
                     <Button
                       size="sm"
@@ -1370,14 +1405,16 @@ export default function SignalsPanel() {
  */
 function UnifiedSignalRow({
   row,
+  feedEngine,
   selected,
   onSelect,
 }: {
   row: UnifiedRow;
+  feedEngine: EngineSource;
   selected: boolean;
   onSelect: (row: UnifiedRow) => void;
 }) {
-  const label = unifiedEngineLabel(row.engines);
+  const label = feedEngine === 'B' ? 'B' : unifiedEngineLabel(row.engines);
   const badge = label === 'B'
     ? { text: 'B', icon: <Layers className="w-3 h-3" />, bg: 'hsl(var(--info) / 0.18)', fg: 'hsl(var(--info))' }
     : { text: 'A', icon: <Zap className="w-3 h-3" />, bg: 'hsl(var(--gold) / 0.12)', fg: 'hsl(var(--gold-light))' };
