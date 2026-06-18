@@ -45,6 +45,7 @@ import type {
 } from '@/types/athena';
 
 const DEFAULT_SYMBOLS = 'EUR/USD,GBP/USD,XAU/USD,BTCUSDT,ETHUSDT,NVDA,AAPL,MSFT';
+const PAIR_GROUP_ORDER = ['Forex', 'Crypto', 'Commodities', 'Indices', 'US Stocks', 'ETFs'];
 // Snapshot builds fetch candles per symbol; keep this above observed endpoint
 // latency so the browser does not stack overlapping read-only requests.
 const POLL_MS = 15000;
@@ -61,7 +62,8 @@ export default function LiveCockpitPanel() {
   const [snapshot, setSnapshot] = useState<LdSnapshot | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
-  const [availablePairs, setAvailablePairs] = useState<{ display: string; type: string; enabled: boolean }[]>([]);
+  const [pairGroups, setPairGroups] = useState<Record<string, string[]>>({});
+  const [pairSearch, setPairSearch] = useState('');
   const [pairsDropdownOpen, setPairsDropdownOpen] = useState(false);
   const pollRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const inFlightRef = useRef(false);
@@ -100,40 +102,59 @@ export default function LiveCockpitPanel() {
     fetchSnap();
   }, [fetchSnap]);
 
-  // Fetch available pairs for the dropdown
+  // Fetch available pairs for the dropdown, preserving group structure from /api/pairs
   useEffect(() => {
     fetch('/api/pairs')
       .then((r) => r.json())
       .then((data) => {
-        let pairsRaw: unknown[] = [];
-        if (Array.isArray(data?.pairs)) {
-          pairsRaw = data.pairs as unknown[];
-        } else if (data?.groups && typeof data.groups === 'object') {
-          pairsRaw = Object.values(data.groups as Record<string, unknown[]>).flat();
-        } else if (Array.isArray(data)) {
-          pairsRaw = data;
+        const groups: Record<string, string[]> = {};
+        const raw = data?.groups && typeof data.groups === 'object'
+          ? data.groups as Record<string, unknown[]>
+          : null;
+        if (raw) {
+          for (const [groupName, pairs] of Object.entries(raw)) {
+            const labels = (pairs as Array<{ label?: string; sym?: string; enabled?: boolean }>)
+              .filter((p) => p.enabled !== false)
+              .map((p) => p.label || p.sym || '')
+              .filter(Boolean)
+              .sort();
+            if (labels.length > 0) groups[groupName] = labels;
+          }
+        } else {
+          // Fallback: flat array without group info
+          const flat: string[] = [];
+          const src = Array.isArray(data?.pairs) ? data.pairs : Array.isArray(data) ? data : [];
+          for (const p of src as Array<{ label?: string; sym?: string; display?: string; enabled?: boolean }>) {
+            if (p.enabled !== false) {
+              const lbl = p.label || p.display || p.sym || '';
+              if (lbl) flat.push(lbl);
+            }
+          }
+          if (flat.length > 0) groups['All'] = flat.sort();
         }
-        setAvailablePairs(
-          pairsRaw
-            .filter((p: unknown) => (p as { enabled?: boolean })?.enabled !== false)
-            .map((p: unknown) => {
-              const row = p as { sym?: string; label?: string; display?: string; symbol?: string; type?: string };
-              return {
-                display: row.label || row.display || row.symbol || row.sym || '',
-                type: row.type || 'unknown',
-                enabled: true,
-              };
-            })
-            .filter((p) => p.display)
-            .sort((a, b) => a.display.localeCompare(b.display)),
-        );
+        setPairGroups(groups);
       })
-      .catch(() => setAvailablePairs([]));
+      .catch(() => setPairGroups({}));
   }, []);
 
   const activeSymbolsSet = useMemo(() => {
     return new Set(activeSymbols.split(',').map((s) => s.trim()).filter(Boolean));
   }, [activeSymbols]);
+
+  const filteredPairGroups = useMemo(() => {
+    const q = pairSearch.toLowerCase().trim();
+    const orderedKeys = [
+      ...PAIR_GROUP_ORDER.filter((g) => pairGroups[g]),
+      ...Object.keys(pairGroups).filter((g) => !PAIR_GROUP_ORDER.includes(g)),
+    ];
+    const result: [string, string[]][] = [];
+    for (const key of orderedKeys) {
+      const syms = pairGroups[key] || [];
+      const filtered = q ? syms.filter((s) => s.toLowerCase().includes(q)) : syms;
+      if (filtered.length > 0) result.push([key, filtered]);
+    }
+    return result;
+  }, [pairGroups, pairSearch]);
 
   useEffect(() => {
     if (pollRef.current) clearTimeout(pollRef.current);
@@ -331,32 +352,50 @@ export default function LiveCockpitPanel() {
                 )}
               </Button>
             </PopoverTrigger>
-            <PopoverContent className="w-[340px] p-0" align="start">
-              <div className="p-2 border-b">
-                <p className="text-[10px] uppercase text-muted-foreground font-semibold">Available Pairs</p>
+            <PopoverContent className="w-[280px] p-0" align="start">
+              <div className="p-2 border-b flex items-center gap-1.5">
+                <Search className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
+                <input
+                  autoFocus
+                  placeholder="Search symbols…"
+                  value={pairSearch}
+                  onChange={(e) => setPairSearch(e.target.value)}
+                  className="flex-1 text-xs bg-transparent outline-none placeholder:text-muted-foreground"
+                />
+                {pairSearch && (
+                  <button onClick={() => setPairSearch('')} className="text-muted-foreground hover:text-foreground">
+                    <X className="w-3 h-3" />
+                  </button>
+                )}
               </div>
-              <ScrollArea className="h-[280px]">
-                <div className="p-2 space-y-1">
-                  {availablePairs.length === 0 && (
-                    <p className="text-[11px] text-muted-foreground p-2">No pairs loaded.</p>
-                  )}
-                  {availablePairs.map((p) => {
-                    const checked = activeSymbolsSet.has(p.display);
-                    return (
-                      <div
-                        key={p.display}
-                        className="flex items-center gap-2 p-1.5 rounded hover:bg-muted/50 cursor-pointer"
-                        onClick={() => toggleSymbol(p.display)}
-                      >
-                        <Checkbox checked={checked} />
-                        <span className="text-xs font-mono flex-1">{p.display}</span>
-                        <Badge variant="outline" className="text-[9px] uppercase">
-                          {p.type}
-                        </Badge>
-                      </div>
-                    );
-                  })}
-                </div>
+              <ScrollArea className="h-[320px]">
+                {filteredPairGroups.length === 0 && (
+                  <p className="text-[11px] text-muted-foreground p-3">No pairs found.</p>
+                )}
+                {filteredPairGroups.map(([group, syms]) => (
+                  <div key={group}>
+                    <div className="px-3 py-1.5 text-[9px] uppercase font-semibold text-muted-foreground tracking-widest bg-muted/30 border-b border-border/40">
+                      {group} <span className="opacity-60">({syms.length})</span>
+                    </div>
+                    {syms.map((sym) => {
+                      const checked = activeSymbolsSet.has(sym);
+                      return (
+                        <div
+                          key={sym}
+                          className={cn(
+                            'flex items-center gap-2 px-3 py-1.5 cursor-pointer hover:bg-muted/50 transition-colors',
+                            checked && 'bg-primary/5',
+                          )}
+                          onClick={() => toggleSymbol(sym)}
+                        >
+                          <Checkbox checked={checked} className="h-3.5 w-3.5" />
+                          <span className="text-xs font-mono flex-1">{sym}</span>
+                          {checked && <Check className="w-3 h-3 text-primary shrink-0" />}
+                        </div>
+                      );
+                    })}
+                  </div>
+                ))}
               </ScrollArea>
               <div className="p-2 border-t flex items-center justify-between">
                 <span className="text-[10px] text-muted-foreground">
@@ -377,7 +416,7 @@ export default function LiveCockpitPanel() {
                   <Button
                     size="sm"
                     className="h-6 text-[10px]"
-                    onClick={() => setPairsDropdownOpen(false)}
+                    onClick={() => { setPairsDropdownOpen(false); setPairSearch(''); }}
                   >
                     Done
                   </Button>
@@ -1074,22 +1113,56 @@ function ExecuteCard({
   onPaperExecute: (row: LdSymbolRow) => void;
   executing: boolean;
 }) {
-  const canPaper = !!row.executableState?.canPaperExecute;
+  const ex = row.executableState;
+  const canPaper = !!ex?.canPaperExecute;
+
+  const freshnessOk = ex?.freshnessStatus === 'ALLOW';
+  const paperEnabled = !!ex?.paperMode;
+  const cState = row.engineC?.decisionState || 'NO_SETUP';
+  const dGate = row.engineD?.gateResult || 'DATA_MISSING';
+  const engineOk = cState === 'ALIGNED' || dGate === 'PASS';
+  const hasLevels = !!(
+    row.levels?.entry && row.levels?.sl && (row.levels?.tp || row.levels?.tp1) && (row.levels?.rr ?? 0) > 0
+  );
+
+  const GateRow = ({ label, pass, detail }: { label: string; pass: boolean; detail?: string }) => (
+    <div className="flex items-center gap-2 text-[11px]">
+      {pass
+        ? <Check className="w-3.5 h-3.5 text-long shrink-0" />
+        : <X className="w-3.5 h-3.5 text-short shrink-0" />}
+      <span className={pass ? 'text-foreground' : 'text-muted-foreground'}>{label}</span>
+      {detail && <span className="ml-auto font-mono text-[10px] text-muted-foreground">{detail}</span>}
+    </div>
+  );
+
   return (
     <Card className="border-border/60 bg-card/50">
-      <CardContent className="p-4 space-y-3">
+      <CardContent className="p-4 space-y-4">
         <div className="flex items-center justify-between">
           <span className="text-sm font-semibold flex items-center gap-2">
             <Play className="w-4 h-4 text-primary" /> Paper Execute
           </span>
-          <Badge variant="outline" className="text-[10px]">
+          <Badge
+            variant="outline"
+            className={cn('text-[10px]', canPaper ? 'border-long/50 text-long' : 'border-border/40 text-muted-foreground')}
+          >
             {row.finalState}
           </Badge>
         </div>
-        <p className="text-[11px] text-muted-foreground">
-          Paper-only logger. Calls <code className="font-mono">/api/live-dashboard/paper-execute</code> which re-validates
-          freshness, kill-switch, and paper-mode policy on the backend. Real broker orders are blocked.
-        </p>
+
+        {/* Gate checklist — shows exactly what's blocking */}
+        <div className="space-y-1.5 rounded-md border border-border/40 p-3 bg-muted/10">
+          <p className="text-[9px] uppercase font-semibold text-muted-foreground tracking-widest mb-2">Gate checklist</p>
+          <GateRow label="Paper mode enabled" pass={paperEnabled} detail={paperEnabled ? 'ON' : 'OFF'} />
+          <GateRow label="Freshness gate" pass={freshnessOk} detail={ex?.freshnessStatus || 'BLOCK'} />
+          <GateRow
+            label="Engine C aligned or Engine D pass"
+            pass={engineOk}
+            detail={cState === 'ALIGNED' ? 'C:ALIGNED' : dGate === 'PASS' ? 'D:PASS' : `C:${cState} D:${dGate}`}
+          />
+          <GateRow label="Valid entry / SL / TP / R:R" pass={hasLevels} detail={hasLevels ? 'OK' : 'MISSING'} />
+        </div>
+
         <div className="grid grid-cols-3 gap-2 text-xs">
           <Detail label="Direction" value={row.engineA?.direction || row.engineB?.direction || '—'} />
           <Detail label="Entry" value={fmtPrice(row.levels?.entry, row.symbol, row.asset_type || undefined)} />
@@ -1098,13 +1171,16 @@ function ExecuteCard({
           <Detail label="R:R" value={fmtNum(row.levels?.rr, 2)} />
           <Detail label="Source" value={row.levels?.source || '—'} />
         </div>
-        {!canPaper && (
-          <div className="text-[11px] text-warning flex items-center gap-2">
-            <AlertTriangle className="w-4 h-4" /> Blocked: {row.executableState?.disabledReason || 'unknown'}
+
+        {!canPaper && ex?.disabledReason && (
+          <div className="text-[11px] text-warning flex items-center gap-1.5 bg-warning/5 rounded px-2 py-1.5">
+            <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+            <span className="font-mono">{ex.disabledReason}</span>
           </div>
         )}
-        <Button size="sm" onClick={() => onPaperExecute(row)} disabled={!canPaper || executing}>
-          {executing ? 'Logging…' : 'Paper Execute'}
+
+        <Button size="sm" onClick={() => onPaperExecute(row)} disabled={!canPaper || executing} className="w-full">
+          {executing ? 'Logging…' : canPaper ? 'Paper Execute' : 'Blocked — gates not met'}
         </Button>
       </CardContent>
     </Card>
