@@ -30,6 +30,7 @@ from scoring import (
 from engine_c import ENGINE_C_AB_WEIGHTS
 from market_structure import (
     NakedEngine,
+    _reset_engine_b_gate_failures,
     engine_b_confidence_passes,
     engine_b_forex_asian_session_blocks_bar,
     engine_b_min_score_threshold,
@@ -1468,6 +1469,8 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict[s
     print(f"Requested asset_class: {asset_class}")
     print(f"Requested style: {style}")
     print("="*80 + "\n")
+
+    _reset_engine_b_gate_failures()
 
     _requested_style = _normalize_style(style)
 

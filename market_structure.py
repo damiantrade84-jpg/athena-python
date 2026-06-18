@@ -791,6 +791,7 @@ def _engine_b_regime_gate(regime_label: str | None, asset_type: str = "") -> flo
                 )
             )
         except (TypeError, ValueError):
+            log.warning("Regime multiplier config malformed for regime=%s asset=%s, using default", regime_key, asset_type)
             return float(ENGINE_B_REGIME_GATE_DEFAULTS.get(regime_key, 1.0))
     # Fallback to flat config (backward compatible)
     try:
@@ -798,6 +799,7 @@ def _engine_b_regime_gate(regime_label: str | None, asset_type: str = "") -> flo
             cfg_gate.get(regime_key, ENGINE_B_REGIME_GATE_DEFAULTS.get(regime_key, 1.0))
         )
     except (TypeError, ValueError):
+        log.warning("Regime multiplier config malformed for regime=%s, using default", regime_key)
         return float(ENGINE_B_REGIME_GATE_DEFAULTS.get(regime_key, 1.0))
 
 
@@ -952,6 +954,12 @@ def _log_gate_failure(gate_name: str, reason: str = "") -> None:
 def _get_engine_b_gate_failure_summary() -> dict[str, int]:
     """Return current gate failure counts."""
     return dict(_engine_b_gate_failures)
+
+
+def _reset_engine_b_gate_failures() -> None:
+    """Reset gate failure counters (call at start of each scan cycle)."""
+    for k in _engine_b_gate_failures:
+        _engine_b_gate_failures[k] = 0
 
 
 def _find_breakout_bar_index(
@@ -1508,6 +1516,35 @@ def _engine_b_clamp_sl_to_max_pct(
     return float(entry) + max_dist
 
 
+def _synthesize_tp_from_sl(
+    entry: float,
+    exec_sl: float,
+    direction: str,
+    fallback_rr,
+    min_rr,
+) -> tuple[float | None, float]:
+    """Compute synthetic TP from SL distance * target RR.
+
+    Returns (tp, target_rr) on success, (None, 0.0) when inputs are invalid.
+    """
+    try:
+        _fb = float(fallback_rr)
+    except (TypeError, ValueError):
+        return None, 0.0
+    if _fb <= 0:
+        return None, 0.0
+    try:
+        _mr = float(min_rr) if min_rr is not None else _fb
+    except (TypeError, ValueError):
+        _mr = _fb
+    _sl_dist = abs(entry - exec_sl)
+    if _sl_dist <= 0:
+        return None, 0.0
+    _target_rr = max(_fb, _mr)
+    tp = entry + (_sl_dist * _target_rr) if direction == "LONG" else entry - (_sl_dist * _target_rr)
+    return tp, _target_rr
+
+
 def resolve_engine_b_execution_levels(
     *,
     direction: str,
@@ -1768,14 +1805,9 @@ def resolve_engine_b_execution_levels(
                     else f"{_tp_source}_tp_below_min_rr"
                 )
             if bool(config.CONFIG.get("ENGINE_B_ALLOW_SYNTHETIC_FALLBACK_RR_TP", False)):
-                _sl_dist = abs(_entry - _exec_sl)
-                if _sl_dist > 0:
-                    _target_rr = max(_fallback_rr, _min_rr)
-                    _exec_tp = (
-                        _entry + (_sl_dist * _target_rr)
-                        if direction == "LONG"
-                        else _entry - (_sl_dist * _target_rr)
-                    )
+                _synth_tp, _ = _synthesize_tp_from_sl(_entry, _exec_sl, direction, _fallback_rr, _min_rr)
+                if _synth_tp is not None:
+                    _exec_tp = _synth_tp
                     _tp_source = "fallback_rr"
                     _level_mode = f"{_sl_source}_sl_{_tp_source}_tp"
                     _rr_source = _level_mode
@@ -1821,27 +1853,17 @@ def resolve_engine_b_execution_levels(
                     and _min_rr_after is not None
                     and _exec_rr + 1e-12 < _min_rr_after
                 ):
-                    try:
-                        _fallback_rr_after = float(fallback_rr)
-                    except (TypeError, ValueError):
-                        _fallback_rr_after = 0.0
-                    if _fallback_rr_after > 0:
-                        _sl_dist = abs(_entry - _exec_sl)
-                        if _sl_dist > 0:
-                            _target_rr = max(_fallback_rr_after, _min_rr_after)
-                            _exec_tp = (
-                                _entry + (_sl_dist * _target_rr)
-                                if direction == "LONG"
-                                else _entry - (_sl_dist * _target_rr)
-                            )
-                            _tp_source = "fallback_rr"
-                            _level_mode = f"{_sl_source}_sl_{_tp_source}_tp"
-                            _rr_source = _level_mode
-                            _fallback_applied = True
-                            _fallback_reason = "max_sl_clamp_tp_resynthesized"
-                            _exec_rr, _exec_valid, _exec_reject, _exec_tp_side_ok = _compute_exec_rr(
-                                _exec_sl, _exec_tp
-                            )
+                    _synth_tp, _ = _synthesize_tp_from_sl(_entry, _exec_sl, direction, fallback_rr, min_rr)
+                    if _synth_tp is not None:
+                        _exec_tp = _synth_tp
+                        _tp_source = "fallback_rr"
+                        _level_mode = f"{_sl_source}_sl_{_tp_source}_tp"
+                        _rr_source = _level_mode
+                        _fallback_applied = True
+                        _fallback_reason = "max_sl_clamp_tp_resynthesized"
+                        _exec_rr, _exec_valid, _exec_reject, _exec_tp_side_ok = _compute_exec_rr(
+                            _exec_sl, _exec_tp
+                        )
             elif (
                 _fallback_applied
                 and bool(config.CONFIG.get("ENGINE_B_ALLOW_SYNTHETIC_FALLBACK_RR_TP", False))
@@ -1855,26 +1877,10 @@ def resolve_engine_b_execution_levels(
                 _exec_rr, _exec_valid, _exec_reject, _exec_tp_side_ok = _compute_exec_rr(
                     _exec_sl, _exec_tp
                 )
-                try:
-                    _min_rr_clamp = float(min_rr) if min_rr is not None else None
-                except (TypeError, ValueError):
-                    _min_rr_clamp = None
                 if fallback_rr is not None and _exec_sl is not None:
-                    try:
-                        _fallback_rr_clamp = float(fallback_rr)
-                    except (TypeError, ValueError):
-                        _fallback_rr_clamp = 0.0
-                    _sl_dist = abs(_entry - _exec_sl)
-                    if _sl_dist > 0 and _fallback_rr_clamp > 0:
-                        _target_rr = max(
-                            _fallback_rr_clamp,
-                            _min_rr_clamp if _min_rr_clamp is not None else _fallback_rr_clamp,
-                        )
-                        _exec_tp = (
-                            _entry + (_sl_dist * _target_rr)
-                            if direction == "LONG"
-                            else _entry - (_sl_dist * _target_rr)
-                        )
+                    _synth_tp, _ = _synthesize_tp_from_sl(_entry, _exec_sl, direction, fallback_rr, min_rr)
+                    if _synth_tp is not None:
+                        _exec_tp = _synth_tp
                         _tp_source = "fallback_rr"
                         _level_mode = f"{_sl_source}_sl_{_tp_source}_tp"
                         _rr_source = _level_mode
@@ -1915,25 +1921,9 @@ def resolve_engine_b_execution_levels(
                 and bool(config.CONFIG.get("ENGINE_B_ALLOW_SYNTHETIC_FALLBACK_RR_TP", False))
                 and _exec_sl is not None
             ):
-                try:
-                    _min_rr_b = float(min_rr) if min_rr is not None else None
-                except (TypeError, ValueError):
-                    _min_rr_b = None
-                try:
-                    _fallback_rr_b = float(fallback_rr)
-                except (TypeError, ValueError):
-                    _fallback_rr_b = 0.0
-                _sl_dist_b = abs(_entry - _exec_sl)
-                if _sl_dist_b > 0 and _fallback_rr_b > 0:
-                    _target_rr_b = max(
-                        _fallback_rr_b,
-                        _min_rr_b if _min_rr_b is not None else _fallback_rr_b,
-                    )
-                    _exec_tp = (
-                        _entry + (_sl_dist_b * _target_rr_b)
-                        if direction == "LONG"
-                        else _entry - (_sl_dist_b * _target_rr_b)
-                    )
+                _synth_tp, _ = _synthesize_tp_from_sl(_entry, _exec_sl, direction, fallback_rr, min_rr)
+                if _synth_tp is not None:
+                    _exec_tp = _synth_tp
                     _tp_source = "fallback_rr"
                     _level_mode = f"{_sl_source}_sl_{_tp_source}_tp"
                     _rr_source = _level_mode
@@ -1949,8 +1939,7 @@ def resolve_engine_b_execution_levels(
             if not _bounds_ok:
                 _exec_valid = False
                 _exec_reject = "tp_exchange_bounds"
-                if _synth_attempted:
-                    _exec_tp = None
+                _exec_tp = None
 
     _structural_target_distance_atr = (
         round(abs(_struct_tp - _entry) / _atr, 4)
@@ -2090,13 +2079,18 @@ class NakedEngine:
         atr: float,
         regime: str,
         candles: list,
+        structure_tf: str = "H4",
     ):
         # Find resistance peaks
         # Prominence ensures we only get significant peaks, relative to ATR
         prominence_threshold = atr * 1.5
 
-        peak_idx, _ = find_peaks(highs, prominence=prominence_threshold, distance=5)
-        trough_idx, _ = find_peaks(-lows, prominence=prominence_threshold, distance=5)
+        _zone_peak_dist = int(
+            (config.CONFIG.get("ENGINE_B_ZONE_PEAK_DISTANCE", {}) or {})
+            .get(structure_tf, 5)
+        )
+        peak_idx, _ = find_peaks(highs, prominence=prominence_threshold, distance=_zone_peak_dist)
+        trough_idx, _ = find_peaks(-lows, prominence=prominence_threshold, distance=_zone_peak_dist)
 
         multipliers = config.CONFIG.get("NAKED_ENGINE", {}).get("zone_multipliers", {})
         buf = multipliers.get(
@@ -3240,7 +3234,7 @@ class NakedEngine:
 
         _zf_highs = np.array([float(c["high"]) for c in _zone_fvg_candles])
         _zf_lows = np.array([float(c["low"]) for c in _zone_fvg_candles])
-        res_zones, sup_zones = self._find_zones(_zf_highs, _zf_lows, zone_atr, regime, _zone_fvg_candles)
+        res_zones, sup_zones = self._find_zones(_zf_highs, _zf_lows, zone_atr, regime, _zone_fvg_candles, structure_tf=structure_tf)
 
         fvgs = self._detect_fvg(_zone_fvg_candles)
         active_fvgs = [f for f in fvgs if not f.get("mitigated", False)]
@@ -4438,6 +4432,23 @@ class NakedEngine:
         if isinstance(res.get("equity_session_structure"), dict):
             _engine_b_diag_payload["equity_session_structure"] = res.get("equity_session_structure")
 
+        _hard_fail_reasons = []
+        if not passed:
+            for _gate_key, _gate_val in [
+                ("structure_ok", structure_ok),
+                ("location_ok", location_ok),
+                ("entry_ok", entry_ok),
+                ("room_ok", space_gate_ok),
+                ("rr_ok", rr_ok),
+                ("macro_ok", macro_ok if require_macro_align else True),
+            ]:
+                if not _gate_val:
+                    _hard_fail_reasons.append(f"engine_b_{_gate_key}_false")
+            _hard_fail_reasons.append("engine_b_confidence_passed_false")
+            if res.get("structural_verdict") != "CLEAR":
+                _hard_fail_reasons.append("engine_b_structural_verdict_not_clear")
+            _hard_fail_reasons = sorted(set(_hard_fail_reasons))
+
         return {
             "score": total_score,
             "gate_score": gate_score,
@@ -4523,6 +4534,7 @@ class NakedEngine:
             "trigger_timeframe": res.get("trigger_timeframe"),
             "trigger_type": res.get("trigger_pattern", "NONE"),
             "failed_gate_names": failed_gate_names,
+            "hard_fail_reasons": _hard_fail_reasons,
             "final_engine_b_passed": passed,
             "research_lab_entry_upgrade": research_entry_ok,
             "research_lab_location_upgrade": research_location_ok,
@@ -4538,10 +4550,11 @@ class NakedEngine:
         self, asset_close_series: list, dxy_close_series: list, direction: str
     ) -> tuple[bool, str | None]:
         """Same gate as check_macro_correlation; returns optional block reason code when False."""
-        if len(asset_close_series) < 60 or len(dxy_close_series) < 60:
+        _corr_window = int(config.CONFIG.get("ENGINE_B_MACRO_CORRELATION_WINDOW", 60))
+        if len(asset_close_series) < _corr_window or len(dxy_close_series) < _corr_window:
             return True, None
 
-        min_len = min(len(asset_close_series), len(dxy_close_series), 60)
+        min_len = min(len(asset_close_series), len(dxy_close_series), _corr_window)
         a_series = pd.Series(asset_close_series[-min_len:])
         d_series = pd.Series(dxy_close_series[-min_len:])
 

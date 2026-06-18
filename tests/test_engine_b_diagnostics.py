@@ -1709,6 +1709,46 @@ def test_resolve_engine_b_execution_levels_forex_tp_bounds_rejects_far_tp(monkey
     assert out["execution_levels_valid"] is False
 
 
+def test_resolve_engine_b_execution_levels_tp_bounds_fail_clears_tp(monkeypatch):
+    """When TP fails exchange bounds and synthetic is NOT attempted, execution_tp must be None."""
+    import config as _cfg
+
+    monkeypatch.setitem(
+        _cfg.CONFIG,
+        "MAX_TP_PCT",
+        {"forex": 0.05, "default": 0.50},
+    )
+    monkeypatch.setitem(_cfg.CONFIG, "ENGINE_B_ALLOW_SYNTHETIC_FALLBACK_RR_TP", False)
+    out = resolve_engine_b_execution_levels(
+        direction="LONG",
+        entry=100.0,
+        structural_sl=98.5,
+        structural_tp=115.0,
+        atr=1.0,
+        style="intraday",
+        asset_class="forex",
+        min_rr=1.0,
+    )
+    assert out["execution_levels_valid"] is False
+    assert out["execution_level_reject_reason"] == "tp_exchange_bounds"
+    assert out["execution_tp"] is None
+
+
+def test_resolve_engine_b_execution_levels_nan_atr_fallback_safe():
+    """NaN ATR must not produce garbage execution levels when ATR fallback is needed."""
+    out = resolve_engine_b_execution_levels(
+        direction="LONG",
+        entry=100.0,
+        structural_sl=None,
+        structural_tp=None,
+        atr=float("nan"),
+        style="intraday",
+        asset_class="crypto",
+        min_rr=1.0,
+    )
+    assert out["execution_levels_valid"] is False
+
+
 def test_resolve_engine_b_execution_levels_forex_tp_within_bounds_passes(monkeypatch):
     import config as _cfg
 
@@ -2203,3 +2243,52 @@ def test_find_zones_handles_short_candle_window():
 
     assert isinstance(res_zones, list)
     assert isinstance(sup_zones, list)
+
+
+def test_calculate_confidence_hard_fail_reasons_populated_when_failed():
+    """calculate_confidence must include hard_fail_reasons when passed=False."""
+    engine = NakedEngine()
+    res = {
+        "atr": 5.0,
+        "asset_type": "crypto",
+        "current_swing_sequence": "LH_LL",
+        "macro_swing_sequence": "LH_LL",
+        "zone_touched": False,
+        "trigger_ok": False,
+        "distance_to_res": 1.0,
+        "recommended_stop_loss": 95.0,
+        "recommended_take_profit": 112.0,
+        "bos_confirmed": False,
+    }
+    profile = {"style": "intraday", "min_rr": 1.0, "min_room_atr": 0.25}
+    conf = engine.calculate_confidence(res, 100.0, "LONG", style_profile=profile)
+
+    assert conf["passed"] is False
+    assert "hard_fail_reasons" in conf
+    assert isinstance(conf["hard_fail_reasons"], list)
+    assert len(conf["hard_fail_reasons"]) > 0
+    assert "engine_b_confidence_passed_false" in conf["hard_fail_reasons"]
+
+
+def test_calculate_confidence_hard_fail_reasons_empty_when_passed():
+    """calculate_confidence must return empty hard_fail_reasons when passed=True."""
+    engine = NakedEngine()
+    res = {
+        "atr": 5.0,
+        "asset_type": "crypto",
+        "current_swing_sequence": "HH_HL",
+        "macro_swing_sequence": "HH_HL",
+        "zone_touched": True,
+        "trigger_ok": True,
+        "distance_to_res": 20.0,
+        "recommended_stop_loss": 95.0,
+        "recommended_take_profit": 112.0,
+        "bos_confirmed": True,
+        "bos_volume_confirmed": True,
+    }
+    profile = {"style": "intraday", "min_rr": 1.0, "min_room_atr": 0.25}
+    conf = engine.calculate_confidence(res, 100.0, "LONG", style_profile=profile)
+
+    assert conf["passed"] is True
+    assert "hard_fail_reasons" in conf
+    assert conf["hard_fail_reasons"] == []
