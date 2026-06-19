@@ -103,14 +103,17 @@ def test_active_backtest_routes_to_v3_evaluator():
     assert "res_a = calc_confluence(" not in consensus_source
 
 
-def test_active_analyze_pair_returns_v3_before_legacy_indicator_scoring():
+def test_active_analyze_pair_returns_v3_as_sole_engine_path():
+    # The legacy v2 factor-scoring fallback was removed; v3 is now the only
+    # Engine A scoring path inside analyze_pair (it terminates with return _v3_signal).
     source = (ROOT / "athena.py").read_text(encoding="utf-8")
-    v3_return = source.index("_v3_signal = evaluate_engine_a_v3(")
-    legacy_indicator = source.index(
-        "_asset_type = pair.get(\"type\", \"stock\")",
-        v3_return,
-    )
-    assert "return _v3_signal" in source[v3_return:legacy_indicator]
+    analyze_start = source.index("def analyze_pair(")
+    analyze_end = source.index("def _build_style_levels(", analyze_start)
+    analyze_source = source[analyze_start:analyze_end]
+    assert "_v3_signal = evaluate_engine_a_v3(" in analyze_source
+    assert "return _v3_signal" in analyze_source
+    # Guard against reintroducing the removed v2 fallback.
+    assert "_asset_type = pair.get(\"type\", \"stock\")" not in analyze_source
 
 
 def test_active_analyze_pair_fails_closed_when_freshness_validation_errors():
