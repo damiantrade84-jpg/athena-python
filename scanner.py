@@ -2871,7 +2871,7 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict[s
             "scanQuantileMinSamples": _q_min_n,
             "payloadVersion": "2.0",
             "contract": {
-                "engineA": "v2_factor_scoring",
+                "engineA": "engine_a_v3",
                 "engineB": "naked_structure",
                 "engineC": "consensus",
                 "engineD": "scalp_vp",
