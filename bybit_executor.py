@@ -180,6 +180,10 @@ def _hybrid_scaleout_cfg() -> dict:
     return hyb if isinstance(hyb, dict) else {}
 
 
+def _execution_single_leg_only() -> bool:
+    return bool(CONFIG.get("EXECUTION_SINGLE_LEG_ONLY", True))
+
+
 def _place_reduce_only_partial(
     exchange, ccxt_symbol: str, direction: str, filled_amount: float,
     price: float, fraction: float, label: str, *, require_exact_half: bool = False,
@@ -1717,8 +1721,10 @@ def bybit_execute(signal: dict, approval: "RiskApproval") -> dict:  # noqa: F821
         _tp2 = float(signal.get("tp2", 0) or 0)
         _tp_partial = float(signal.get("tp_partial", 0) or 0)
         _hybrid_cfg = _hybrid_scaleout_cfg()
+        _single_leg_only = _execution_single_leg_only()
         _hybrid_on = (
-            not _v3_exit_policy
+            not _single_leg_only
+            and not _v3_exit_policy
             and _uses_trailing_atr_exit(signal)
             and bool(_hybrid_cfg.get("enabled"))
             and _tp1_local > 0
@@ -1728,7 +1734,7 @@ def bybit_execute(signal: dict, approval: "RiskApproval") -> dict:  # noqa: F821
         # Non-scalp signals use tp1 as the single full-position exit — except in
         # hybrid scale-out (trailing mode): no full-position TP; a reduce-only
         # limit at TP1 banks the first clip and the chandelier manages the runner.
-        if _v3_exit_policy == "SPLIT_50_50":
+        if _v3_exit_policy == "SPLIT_50_50" and not _single_leg_only:
             tp_exec = _tp2
         elif _hybrid_on:
             tp_exec = 0.0
@@ -1790,7 +1796,7 @@ def bybit_execute(signal: dict, approval: "RiskApproval") -> dict:  # noqa: F821
         # runner. This is non-fatal; if it fails, the trade still runs to tp1 as a
         # single unit.
         partial_order_id = None
-        if _v3_exit_policy == "SPLIT_50_50":
+        if _v3_exit_policy == "SPLIT_50_50" and not _single_leg_only:
             partial_order_id = _place_reduce_only_partial(
                 exchange, ccxt_symbol, direction, filled_amount,
                 _tp1_local, 0.5, "Engine A V3 TP1", require_exact_half=True,

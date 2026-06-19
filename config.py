@@ -1826,6 +1826,7 @@ CONFIG: dict = {
     },
     "EXECUTOR_MODE": "paper",
     "EXECUTION_ENABLED": True,  # Master switch — enabled for demo live-level testing
+    "EXECUTION_SINGLE_LEG_ONLY": True,  # One broker position per symbol per execution
     # Re-fetch H1/H4/D1 candle metadata right before risk/guardian during execute paths.
     "QUICK_EXEC_PREFETCH_CANDLE_META": False,
     # Rebuild candleFreshness/consistency/dataFreshness before risk (poisoned client fields).
@@ -2560,6 +2561,7 @@ _CRITICAL_SAFETY_SCHEMA: dict[tuple[str, ...], dict] = {
     ("PAPER_SOAK", "REAL_ORDERS_ALLOWED"): {"type": "bool"},
     ("EXECUTOR_MODE",): {"type": "enum", "allowed": {"paper", "demo", "live"}},
     ("EXECUTION_ENABLED",): {"type": "bool"},
+    ("EXECUTION_SINGLE_LEG_ONLY",): {"type": "bool"},
     ("AUTO_EXECUTE",): {"type": "bool"},
     ("AUTO_TRADE_ENABLED",): {"type": "bool"},
     ("RISK_ENGINE_ENABLED",): {"type": "bool", "must_be": True},

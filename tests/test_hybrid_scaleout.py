@@ -5,6 +5,7 @@ from __future__ import annotations
 import math
 
 import timed_exit_monitor as tem
+from mt5_executor import apply_single_leg_execution_gate
 
 
 def _hybrid_volumes(total_vol: float, fraction: float, vol_step: float, vol_min: float):
@@ -65,3 +66,52 @@ def test_profit_protect_and_giveback_disabled_until_calibrated():
     merged = tem._get_timed_cfg(lambda: {"TIMED_EXIT": {}})
     assert merged["pre_activation_profit_protect_enabled"] is False
     assert merged["trail_giveback_r"]["intraday"] == 0.0
+
+
+def test_single_leg_gate_collapses_hybrid_split_to_one_position():
+    hybrid_vols = [(0.05, 1.10), (0.05, 0.0)]
+    do_split, hybrid_split, vols = apply_single_leg_execution_gate(
+        mt5_symbol="EURUSD",
+        total_vol=0.10,
+        tp=1.10,
+        use_broker_tp=True,
+        do_split=False,
+        hybrid_split=True,
+        vols=hybrid_vols,
+        single_leg_only=True,
+    )
+    assert do_split is False
+    assert hybrid_split is False
+    assert vols == [(0.10, 1.10)]
+
+
+def test_single_leg_gate_leaves_single_leg_unchanged():
+    single_vols = [(0.10, 1.10)]
+    do_split, hybrid_split, vols = apply_single_leg_execution_gate(
+        mt5_symbol="EURUSD",
+        total_vol=0.10,
+        tp=1.10,
+        use_broker_tp=True,
+        do_split=False,
+        hybrid_split=False,
+        vols=single_vols,
+        single_leg_only=True,
+    )
+    assert vols == single_vols
+    assert hybrid_split is False
+
+
+def test_single_leg_gate_allows_multi_leg_when_disabled():
+    hybrid_vols = [(0.05, 1.10), (0.05, 0.0)]
+    do_split, hybrid_split, vols = apply_single_leg_execution_gate(
+        mt5_symbol="EURUSD",
+        total_vol=0.10,
+        tp=1.10,
+        use_broker_tp=True,
+        do_split=False,
+        hybrid_split=True,
+        vols=hybrid_vols,
+        single_leg_only=False,
+    )
+    assert hybrid_split is True
+    assert vols == hybrid_vols

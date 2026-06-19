@@ -1693,6 +1693,10 @@ INDICATOR_CORRELATION_ENABLED: false
 
 EXECUTION_ENABLED: true       # Enable manual execution via dashboard
 
+# Fail-closed: never open multiple broker legs on the same symbol from one execution.
+# Covers hybrid scale-out, legacy TP1+TP2 split, and Engine A v3 SPLIT_50_50.
+EXECUTION_SINGLE_LEG_ONLY: true
+
 EXECUTION_VOLUME:
   DEFAULT_MODE: min_lot          # min_lot | calculated — manual default
   AUTO_TRADE_MODE: min_lot       # autopilot always uses broker minimum
@@ -4290,7 +4294,7 @@ TIMED_EXIT:
   # enabling keep their full-position TP1 and bank fully there (safe legacy
   # behavior). Requires mt5_attach_broker_tp_when_trailing_atr for MT5 splits.
   hybrid_scaleout:
-    enabled: true
+    enabled: false
     fraction: 0.5            # share closed at TP1; remainder trails
 
 CHART_VISION_DATASET_ENABLED: false

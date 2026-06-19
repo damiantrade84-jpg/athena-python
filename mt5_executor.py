@@ -58,6 +58,30 @@ def _mt5_should_send_broker_tp(signal: dict) -> bool:
     return bool(_timed_exit_cfg().get("mt5_attach_broker_tp_when_trailing_atr", True))
 
 
+def _execution_single_leg_only() -> bool:
+    return bool(CONFIG.get("EXECUTION_SINGLE_LEG_ONLY", True))
+
+
+def apply_single_leg_execution_gate(
+    *,
+    mt5_symbol: str,
+    total_vol: float,
+    tp: float,
+    use_broker_tp: bool,
+    do_split: bool,
+    hybrid_split: bool,
+    vols: list[tuple[float, float]],
+    single_leg_only: bool | None = None,
+) -> tuple[bool, bool, list[tuple[float, float]]]:
+    """Collapse multi-leg MT5 execution to one position when config requires it."""
+    if single_leg_only is None:
+        single_leg_only = _execution_single_leg_only()
+    if single_leg_only and (do_split or hybrid_split or len(vols) > 1):
+        log.info(f"[MT5] {mt5_symbol}: single-leg mode — multi-leg split suppressed")
+        return False, False, [(total_vol, tp if use_broker_tp else 0)]
+    return do_split, hybrid_split, vols
+
+
 def _mt5_max_tick_age_sec() -> float | None:
     """Return the configured MT5 broker tick-age limit in seconds, or None when disabled."""
     cfg = CONFIG.get("MAX_BROKER_TICK_AGE_SEC")
@@ -1726,6 +1750,7 @@ def mt5_execute(signal: dict, approval: "RiskApproval") -> dict:  # noqa: F821
     tp2 = round(float(tp2_raw), digits) if tp2_raw else 0
     vol_step = sym_info.volume_step if sym_info else 0.01
     vol_min = sym_info.volume_min if sym_info else 0.01
+    _single_leg_only = _execution_single_leg_only()
 
     _is_scalp = _is_engine_d_signal(signal)
     _uses_trailing_exit = False if _v3_exit_policy else _uses_trailing_atr_exit(signal)
@@ -1748,7 +1773,7 @@ def mt5_execute(signal: dict, approval: "RiskApproval") -> dict:  # noqa: F821
             from engine_a_v3.execution import exact_split_sizes
             _v3_split_sizes = exact_split_sizes(total_vol, step=vol_step, minimum=vol_min)
             do_split = do_split and _v3_split_sizes is not None
-        if _v3_exit_policy == "SPLIT_50_50" and not do_split:
+        if _v3_exit_policy == "SPLIT_50_50" and not do_split and not _single_leg_only:
             return {
                 "success": False,
                 "error": "ENGINE_A_V3_SPLIT_NOT_EXECUTABLE",
@@ -1797,6 +1822,17 @@ def mt5_execute(signal: dict, approval: "RiskApproval") -> dict:  # noqa: F821
                     f"[MT5] {mt5_symbol}: hybrid scale-out — banker {vol1} lots TP1={tp}, "
                     f"runner {vol2} lots on chandelier (no broker TP)"
                 )
+
+    do_split, hybrid_split, vols = apply_single_leg_execution_gate(
+        mt5_symbol=mt5_symbol,
+        total_vol=total_vol,
+        tp=tp,
+        use_broker_tp=_use_broker_tp,
+        do_split=do_split,
+        hybrid_split=hybrid_split,
+        vols=vols,
+        single_leg_only=_single_leg_only,
+    )
 
     # ── Execution Loop ─────────────────────────────────────────────────────
     results = []
