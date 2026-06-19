@@ -42,6 +42,20 @@ def _decision_is(s: dict[str, Any], target: str) -> bool:
     return str(s.get("ai_decision", "")).upper() == target.upper()
 
 
+def _freshness_is_stale(value: Any) -> bool | None:
+    """Classify measured freshness without treating missing/not-applicable as stale."""
+    if value is None:
+        return None
+    status = str(value).strip().upper()
+    if status in ("", "UNKNOWN", "NOT_APPLICABLE", "N/A", "NONE", "NULL", "SERVER_RENDER"):
+        return None
+    if status in ("FRESH", "CONFIRMED_CANDLES_VALID"):
+        return False
+    if status == "STALE" or status.startswith("STALE_DATA_"):
+        return True
+    return None
+
+
 def compute_surface_metrics(samples: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
     if not samples:
         return {}
@@ -87,8 +101,13 @@ def _compute_one_surface(surface: str, samples: list[dict[str, Any]]) -> dict[st
     r_vals = [s.get("realized_r") for s in positive if s.get("realized_r") is not None]
     avg_r = (sum(r_vals) / len(r_vals)) if r_vals else None
 
-    stale = [s for s in samples if str(s.get("data_freshness", "")).upper() not in ("FRESH", "")]
-    stale_rate = len(stale) / n if n > 0 else 0.0
+    freshness = [_freshness_is_stale(s.get("data_freshness")) for s in samples]
+    measured_freshness = [is_stale for is_stale in freshness if is_stale is not None]
+    stale_rate = (
+        sum(1 for is_stale in measured_freshness if is_stale) / len(measured_freshness)
+        if measured_freshness
+        else None
+    )
 
     notes: list[str] = []
     if n < SAMPLE_INSUFFICIENT:
@@ -112,7 +131,7 @@ def _compute_one_surface(surface: str, samples: list[dict[str, Any]]) -> dict[st
         contradiction_rate=round(contradiction_rate, 3),
         missing_data_rate=round(missing_data_rate, 3),
         parse_failure_rate=round(parse_failure_rate, 3),
-        stale_context_rate=round(stale_rate, 3),
+        stale_context_rate=round(stale_rate, 3) if stale_rate is not None else None,
         notes=notes,
     ).model_dump()
 

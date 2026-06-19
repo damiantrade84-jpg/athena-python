@@ -87,6 +87,12 @@ class TestOutcomeLinker:
         result = normalize_ai_decision({"review_type": "strategist"})
         assert result["ai_surface"] == "STRATEGIST"
 
+    def test_normalize_surface_uses_explicit_surface_then_unknown_fallback(self):
+        from ai_outcome_linker import normalize_ai_decision
+
+        assert normalize_ai_decision({"ai_surface": "MARCUS"})["ai_surface"] == "MARCUS"
+        assert normalize_ai_decision({})["ai_surface"] == "UNKNOWN"
+
     def test_classify_block_quality_useful_block(self):
         from ai_outcome_linker import classify_block_quality
         sample = {"ai_blocked": True, "actual_outcome": "LOSS", "sample_valid": True}
@@ -193,6 +199,37 @@ class TestMetricsEngine:
         m = metrics.get("MARCUS", {})
         assert m["sample_count"] == 1
         assert m["valid_outcome_count"] == 0
+
+    def test_stale_rate_uses_only_measured_freshness_statuses(self):
+        from ai_evaluation import compute_surface_metrics
+
+        statuses = [
+            "FRESH",
+            "confirmed_candles_valid",
+            "STALE_DATA_BLOCK:H4:stale_multi_bucket",
+            None,
+            "unknown",
+            "not_applicable",
+            "server_render",
+        ]
+        samples = [
+            {"ai_surface": "DECAY_AI", "data_freshness": status}
+            for status in statuses
+        ]
+
+        metrics = compute_surface_metrics(samples)["DECAY_AI"]
+        assert metrics["stale_context_rate"] == 0.333
+
+    def test_stale_rate_is_unavailable_without_measured_freshness(self):
+        from ai_evaluation import compute_surface_metrics
+
+        samples = [
+            {"ai_surface": "NEWS_SENTIMENT", "data_freshness": "not_applicable"},
+            {"ai_surface": "NEWS_SENTIMENT", "data_freshness": None},
+        ]
+
+        metrics = compute_surface_metrics(samples)["NEWS_SENTIMENT"]
+        assert metrics["stale_context_rate"] is None
 
     def test_evaluate_vision_accuracy_empty(self):
         from ai_evaluation import evaluate_vision_accuracy

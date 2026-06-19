@@ -135,7 +135,8 @@ def normalize_ai_decision(raw: dict[str, Any]) -> dict[str, Any]:
     review_type = str(raw.get("review_type", "")).lower()
 
     # Map review_type to ai_surface
-    out["ai_surface"] = SURFACE_MAP.get(review_type, review_type.upper())
+    explicit_surface = str(raw.get("ai_surface") or "").strip().upper()
+    out["ai_surface"] = explicit_surface or SURFACE_MAP.get(review_type, review_type.upper()) or "UNKNOWN"
 
     # ai_review_state from review logger
     ai_state = str(raw.get("ai_review_state") or raw.get("decision") or "").upper()
