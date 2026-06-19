@@ -15,6 +15,7 @@ from athena_research.commodity_data_audit.freeze_registry import (
     resolve_phase1_mt5_symbol,
 )
 from athena_research.commodity_data_audit.registry import INDEPENDENT_CLUSTERS
+from tools.finalize_commodity_data_gate import select_first_qualifying_replacement
 
 
 def _copper_evidence(**overrides) -> ResidualGapEvidence:
@@ -55,6 +56,16 @@ def test_industrial_independent_closure_requires_complete_chain():
     assert classify_residual_event(
         _copper_evidence(d1_absent=False)
     ) == ResidualGapClass.UNRESOLVED
+
+
+def test_finalizer_selects_first_clear_candidate_and_counts_replacement():
+    rows = {
+        "Copper": {"gate": "CLEAR_ON_FREEZE"},
+        "Aluminium": {"gate": "CLEAR_WITH_GAP_EMBARGO"},
+    }
+    selected = select_first_qualifying_replacement(rows)
+    assert selected == "Copper"
+    assert select_first_qualifying_replacement({"Copper": {"gate": "BLOCKED_UNRESOLVED"}}) is None
     assert classify_residual_event(
         _copper_evidence(primary_peer_traded=True)
     ) == ResidualGapClass.UNRESOLVED

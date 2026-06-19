@@ -71,6 +71,14 @@ BASE_METAL_ORDER = ["Copper", "Aluminium", "Nickel", "Zinc"]
 CLEAR = {"CLEAR_ON_FREEZE", "CLEAR_WITH_GAP_EMBARGO"}
 
 
+def select_first_qualifying_replacement(candidate_rows: dict[str, dict]) -> str | None:
+    for candidate in BASE_METAL_ORDER:
+        row = candidate_rows.get(candidate)
+        if row and row.get("gate") in CLEAR:
+            return candidate
+    return None
+
+
 def _reliable_and_usable(slug: str) -> tuple[str, str | None]:
     qa = read_json(qa_manifest_path(NORM_ROOT, slug, "H4", qa_algorithm_version="commodity_freeze_qa_v3"))
     return str(qa["reliable_research_start"]), qa.get("warmup_adjusted_usable_start")
@@ -224,6 +232,71 @@ def build_wti_placeholder_mask() -> dict:
     }
 
 
+def build_copper_placeholder_mask() -> dict:
+    canonical_symbol = "Copper"
+    slug = slug_symbol(canonical_symbol)
+    reliable_start, usable_start = _reliable_and_usable(slug)
+    bars = load_raw_bars_from_store(RAW_ROOT, slug, "H4")
+    pinned = _pinned_as_of(slug, bars)
+    placeholders = non_trading_placeholder_events(
+        bars, reliable_start=reliable_start, usable_start=usable_start
+    )
+    placeholder_ts = [
+        datetime.fromisoformat(row["timestamp"])
+        for row in placeholders
+        if row["in_reliable_era"]
+    ]
+    confirmed = research_eligible_bars(bars, timeframe="H4", pinned_as_of=pinned)
+    candidates = [
+        datetime.fromtimestamp(int(bar["time"]), tz=timezone.utc)
+        for bar in confirmed
+        if datetime.fromtimestamp(int(bar["time"]), tz=timezone.utc).date().isoformat()
+        >= reliable_start
+    ]
+    hashes = resolve_raw_evidence_hashes(RAW_ROOT, slug, "H4")
+    mask = build_placeholder_exclusion_mask(
+        candidates,
+        placeholder_ts,
+        {
+            "symbol": canonical_symbol,
+            "timeframe": "H4",
+            "reliable_start": reliable_start,
+            "raw_content_hash": hashes["merged_bar_content_hash"],
+        },
+    )
+    payload = {
+        "schema": "commodity_h4_non_trading_placeholder_mask_v1",
+        "canonical_symbol": canonical_symbol,
+        "timeframe": "H4",
+        "classification": "NON_TRADING_PLACEHOLDER",
+        "reliable_start": reliable_start,
+        "usable_start": usable_start,
+        "source_hashes": {
+            "raw_content_hash": hashes["merged_bar_content_hash"],
+            "chunk_set_hash": hashes["chunk_set_hash"],
+        },
+        "placeholder_count_total": len(placeholders),
+        "placeholder_count_reliable_era": len(placeholder_ts),
+        "candidate_universe_size": len(candidates),
+        "candidates_excluded": sum(value is False for value in mask.allowed),
+        "placeholders": placeholders,
+        "excluded_timestamps": list(mask.excluded_timestamps),
+        "mask_run_hash": mask.run_hash,
+        "no_interpolation": True,
+        "raw_mutated": False,
+    }
+    payload["run_hash"] = hash_stable_json({k: v for k, v in payload.items() if k != "run_hash"})
+    out = V4_ROOT / slug / "H4.non_trading_placeholder_mask.commodity_h4_non_trading_placeholder_mask_v1.json"
+    digest = write_json_immutable(out, payload)
+    return {
+        "artifact_path": str(out.relative_to(REPO)).replace("\\", "/"),
+        "artifact_hash": digest,
+        "placeholder_count_total": len(placeholders),
+        "placeholder_count_reliable_era": len(placeholder_ts),
+        "candidates_excluded": payload["candidates_excluded"],
+    }
+
+
 def build_natgas_provider_gap_mask() -> dict:
     slug = slug_symbol("Nat Gas")
     review = read_json(V4_ROOT / slug / f"H4.residual_gap_review.{REVIEW_SCHEMA_VERSION}.json")
@@ -269,22 +342,71 @@ def _authoritative_row(canonical_symbol: str, version: str) -> dict:
     }
 
 
-def build_authoritative_table(onboard_results, wti_mask, ng_mask) -> dict:
+def _copper_replacement_row() -> dict:
+    canonical_symbol = "Copper"
+    slug = slug_symbol(canonical_symbol)
+    review_path = V3_ROOT / slug / f"H4.residual_gap_review.{REVIEW_SCHEMA_VERSION}.json"
+    review = read_json(review_path)
+    hashes = resolve_raw_evidence_hashes(RAW_ROOT, slug, "H4")
+    h4_manifest = read_json(NORM_ROOT / slug / "H4.manifest.json")
+    d1_manifest = read_json(NORM_ROOT / slug / "D1.manifest.json")
+    qa = read_json(qa_manifest_path(NORM_ROOT, slug, "H4", qa_algorithm_version="commodity_freeze_qa_v3"))
+    spread = qa["spread_audit_reliable_era"]
+    total_spread = int(spread["observed_usable_count"]) + int(spread["missing_spread_count"])
+    return {
+        "canonical_symbol": canonical_symbol,
+        "terminal_symbol": resolve_phase1_mt5_symbol(canonical_symbol),
+        "authoritative_version": "replacement_v1",
+        "gate": review["gate"],
+        "classification_counts": review["classification_counts"],
+        "qualifying": review["gate"] in CLEAR,
+        "provider_actual_start": qa["provider_actual_start"],
+        "reliable_start": qa["reliable_research_start"],
+        "usable_start": qa["warmup_adjusted_usable_start"],
+        "h4_confirmed_rows": h4_manifest["confirmed_row_count"],
+        "h4_provisional_rows": h4_manifest["provisional_row_count_at_capture"],
+        "d1_confirmed_rows": d1_manifest["confirmed_row_count"],
+        "d1_provisional_rows": d1_manifest["provisional_row_count_at_capture"],
+        "spread_observed_usable": spread["observed_usable_count"],
+        "spread_total": total_spread,
+        "raw_content_hash": hashes["merged_bar_content_hash"],
+        "chunk_set_hash": hashes["chunk_set_hash"],
+        "raw_content_unchanged_vs_artifact": hashes["merged_bar_content_hash"]
+        == review["source_hashes"]["raw_content_hash"],
+        "artifact": str(review_path.relative_to(REPO)).replace("\\", "/"),
+    }
+
+
+def build_authoritative_table(onboard_results, wti_mask, ng_mask, copper_mask) -> dict:
     rows = [_authoritative_row(sym, ver) for sym, ver in ALL_CLUSTERS]
+    replacement_rows = {"Copper": _copper_replacement_row()}
+    selected_replacement = select_first_qualifying_replacement(replacement_rows)
+    if selected_replacement:
+        rows.append(replacement_rows[selected_replacement])
     qualifying = [r["canonical_symbol"] for r in rows if r["qualifying"]]
     blocked = [
         {"canonical_symbol": r["canonical_symbol"], "gate": r["gate"]}
         for r in rows
         if not r["qualifying"]
     ]
-    base_metal_status = [
-        {
-            "canonical_symbol": metal,
-            "raw_data_present": (RAW_ROOT / slug_symbol(metal) / "H4").exists(),
-            "status": "NOT_ACQUIRED_MT5_REQUIRED",
-        }
-        for metal in BASE_METAL_ORDER
-    ]
+    base_metal_status = []
+    for metal in BASE_METAL_ORDER:
+        raw_present = (RAW_ROOT / slug_symbol(metal) / "H4").exists()
+        if metal == selected_replacement:
+            status = "SELECTED_CLEAR"
+        elif selected_replacement and BASE_METAL_ORDER.index(metal) > BASE_METAL_ORDER.index(selected_replacement):
+            status = "NOT_ATTEMPTED_AFTER_SELECTION"
+        elif raw_present:
+            status = "ACQUIRED_BLOCKED"
+        else:
+            status = "NOT_ACQUIRED"
+        base_metal_status.append(
+            {
+                "canonical_symbol": metal,
+                "raw_data_present": raw_present,
+                "status": status,
+            }
+        )
     table = {
         "schema": "commodity_h4_authoritative_gate_table_v1",
         "generated_from": "frozen artifacts only; no MT5; no raw mutation",
@@ -295,22 +417,20 @@ def build_authoritative_table(onboard_results, wti_mask, ng_mask) -> dict:
         "exclusion_masks": {
             "wti_non_trading_placeholder": wti_mask["artifact_path"],
             "natgas_provider_gap": ng_mask["artifact_path"],
+            "copper_non_trading_placeholder": copper_mask["artifact_path"],
         },
         "base_metal_replacement": {
             "predeclared_order": BASE_METAL_ORDER,
-            "status": "BLOCKED_ACQUISITION_UNAVAILABLE",
-            "reason": (
-                "Registry source is MT5 (registry.py primary_source=MT5); no base-metal "
-                "raw exists in the immutable store and MetaTrader5 is unavailable in this "
-                "environment. No existing immutable acquisition to reuse."
-            ),
+            "status": "SELECTED" if selected_replacement else "ALL_CANDIDATES_BLOCKED",
+            "selected_replacement": selected_replacement,
+            "reason": "First qualifying candidate in the predeclared order is selected.",
             "candidates": base_metal_status,
         },
         "all_raw_unchanged": all(r["raw_content_unchanged_vs_artifact"] for r in rows),
         "success_condition_eight_qualifying": len(qualifying) >= 8,
     }
     table["run_hash"] = hash_stable_json({k: v for k, v in table.items() if k != "run_hash"})
-    out = V4_ROOT / "commodity_authoritative_gate_table_v1.json"
+    out = V4_ROOT / "commodity_authoritative_gate_table_v3.json"
     digest = write_json_immutable(out, table)
     table["_artifact_hash"] = digest
     table["_artifact_path"] = str(out.relative_to(REPO)).replace("\\", "/")
@@ -318,17 +438,18 @@ def build_authoritative_table(onboard_results, wti_mask, ng_mask) -> dict:
 
 
 def main() -> int:
-    onboard = [onboard_metal("XAU/USD"), onboard_metal("XAG/USD")]
-    for row in onboard:
-        print(f"{row['canonical_symbol']}: gate={row['gate']} counts={row['classification_counts']} "
-              f"raw_unchanged={row['raw_content_unchanged']}")
+    onboard = []
+    print("XAU/USD and XAG/USD: consuming preserved authoritative v4 reviews")
     wti_mask = build_wti_placeholder_mask()
     print(f"WTI placeholder mask: total={wti_mask['placeholder_count_total']} "
           f"reliable_era={wti_mask['placeholder_count_reliable_era']} "
           f"candidates_excluded={wti_mask['candidates_excluded']}")
     ng_mask = build_natgas_provider_gap_mask()
     print(f"Nat Gas provider-gap mask: {ng_mask['artifact_path']}")
-    table = build_authoritative_table(onboard, wti_mask, ng_mask)
+    copper_mask = build_copper_placeholder_mask()
+    print(f"Copper placeholder mask: reliable_era={copper_mask['placeholder_count_reliable_era']} "
+          f"candidates_excluded={copper_mask['candidates_excluded']}")
+    table = build_authoritative_table(onboard, wti_mask, ng_mask, copper_mask)
     print("\n=== AUTHORITATIVE GATE TABLE ===")
     for r in table["clusters"]:
         flag = "QUALIFY" if r["qualifying"] else "       "
