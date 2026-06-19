@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal, getcontext
 from enum import Enum
 from pathlib import Path
@@ -9,7 +9,7 @@ from typing import Any, Iterable
 
 from athena_research.commodity_data_audit.freeze_store import hash_stable_json, write_json_immutable
 
-REVIEW_SCHEMA_VERSION = "commodity_h4_residual_gap_review_v3"
+REVIEW_SCHEMA_VERSION = "commodity_h4_residual_gap_review_v4"
 GATE_POLICY_VERSION = "commodity_h4_gap_admissibility_v1"
 MAX_PROVIDER_GAP_BARS = 6
 MIN_PROVIDER_GAP_SEPARATION_DAYS = 20
@@ -46,6 +46,8 @@ class FamilyClosurePolicy:
 
 
 _FAMILY_POLICIES = {
+    "XAU/USD": FamilyClosurePolicy("precious_gold", ("XAG/USD",), ("XPT/USD", "XPD/USD")),
+    "XAG/USD": FamilyClosurePolicy("precious_silver", ("XAU/USD",), ("XPT/USD", "XPD/USD")),
     "XPT/USD": FamilyClosurePolicy("pgm_metals", ("XPD/USD",), ("XAU/USD", "XAG/USD")),
     "XPD/USD": FamilyClosurePolicy("pgm_metals", ("XPT/USD",), ("XAU/USD", "XAG/USD")),
     "WTI Oil": FamilyClosurePolicy("energy_oil", ("Brent Oil",)),
@@ -85,6 +87,9 @@ class ResidualGapEvidence:
     secondary_peer_shared_absence: bool = False
     provider_history_absence: bool = False
     historical_degradation: bool = False
+    d1_holiday_placeholder: bool = False
+    subject_day_traded: bool = False
+    frozen_closure_corroborated: bool = False
     reopen_gap_risk: dict[str, Any] = field(default_factory=dict)
     evidence: dict[str, Any] = field(default_factory=dict)
 
@@ -105,17 +110,36 @@ def classify_residual_event(evidence: ResidualGapEvidence) -> ResidualGapClass:
         return ResidualGapClass.HISTORICAL_INTRADAY_DEGRADATION
 
     policy = family_policy_for_symbol(evidence.canonical_symbol)
-    common_closure = (
+    # Energy-specific: a recognized full/partial energy holiday can carry a
+    # zero-range provider *placeholder* D1 (and flat placeholder H4 neighbours)
+    # instead of a fully absent D1. A flat O==H==L==C day is not real trading,
+    # so it satisfies the closure D1 condition exactly like an absent D1.
+    d1_supports_closure = evidence.d1_absent or evidence.d1_holiday_placeholder
+    common_closure_live = (
         evidence.recognized_holiday
         and evidence.session_closure_pattern
         and evidence.subject_refetch_empty
-        and evidence.d1_absent
+        and d1_supports_closure
         and evidence.chunk_integrity
     )
+    # Onboarding path: when a live targeted refetch was unavailable at forensic
+    # time, a recognized holiday with an absent D1, intact chunk, no returned
+    # bars, and the family peer also frozen-absent over the identical slots is
+    # the validated closure evidence. This corroboration is at least as strong
+    # as an empty live refetch (it adds peer agreement), so it does not weaken
+    # the gate; ``frozen_closure_corroborated`` already encodes the peer check.
+    common_closure = common_closure_live or evidence.frozen_closure_corroborated
     peer_closure = evidence.primary_peer_shared_absence
     independent_closure = policy.allow_independent_closure
     closure_supported = common_closure and (peer_closure or independent_closure)
-    provider_supported = evidence.primary_peer_traded or evidence.provider_history_absence
+    # Energy-specific: an isolated non-holiday intraday gap on a day the subject
+    # demonstrably traded (real-range D1 plus real-range adjacent H4 bars) is a
+    # provider history gap even when no peer trade sample is available.
+    provider_supported = (
+        evidence.primary_peer_traded
+        or evidence.provider_history_absence
+        or evidence.subject_day_traded
+    )
     if closure_supported and provider_supported:
         return ResidualGapClass.UNRESOLVED
     if closure_supported:
@@ -327,6 +351,31 @@ def residual_evidence_from_gap_rows(
         missing = tuple(prev + timedelta(hours=4 * index) for index in range(1, int(base["missing_bar_count"]) + 1))
     old_classification = str(base.get("classification") or "")
     returned_count = int(subject.get("returned_missing_count", 0) or 0)
+    recognized_holiday = bool(holiday.get("holiday_hits"))
+    subject_refetch_empty = (
+        subject.get("status") == "ok"
+        and returned_count == 0
+        and str(subject.get("classification", "")).startswith("B_")
+    )
+    live_refetch_unavailable = subject.get("status") != "ok"
+    d1_absent = (
+        d1.get("status") == "ok"
+        and not d1.get("frozen_d1_present")
+        and not d1.get("live_d1_present")
+    )
+    chunk_integrity = (
+        bool(chunk.get("within_single_chunk")) or chunk.get("at_chunk_boundary") is False
+    ) and not chunk.get("chunk_defect") and not chunk.get("acquisition_defect")
+    # Frozen corroboration path (used only when no live refetch exists): holiday,
+    # absent D1, intact chunk, no returned bars, and family peer frozen-absent.
+    frozen_closure_corroborated = bool(
+        recognized_holiday
+        and d1_absent
+        and chunk_integrity
+        and returned_count == 0
+        and live_refetch_unavailable
+        and primary_shared
+    )
     return ResidualGapEvidence(
         event_id=str(base["event_id"]),
         canonical_symbol=canonical_symbol,
@@ -334,28 +383,19 @@ def residual_evidence_from_gap_rows(
         next_bar_timestamp=datetime.fromisoformat(str(base["next_bar_timestamp"]).replace("Z", "+00:00")),
         missing_timestamps=missing,
         in_reliable_era=True,
-        recognized_holiday=bool(holiday.get("holiday_hits")),
-        session_closure_pattern=bool(holiday.get("holiday_hits")) and int(base.get("missing_bar_count", 0)) <= 6,
-        subject_refetch_empty=(
-            subject.get("status") == "ok"
-            and returned_count == 0
-            and str(subject.get("classification", "")).startswith("B_")
-        ),
+        recognized_holiday=recognized_holiday,
+        session_closure_pattern=recognized_holiday and int(base.get("missing_bar_count", 0)) <= 6,
+        subject_refetch_empty=subject_refetch_empty,
         subject_refetch_returned_bars=returned_count > 0,
-        d1_absent=(
-            d1.get("status") == "ok"
-            and not d1.get("frozen_d1_present")
-            and not d1.get("live_d1_present")
-        ),
-        chunk_integrity=(
-            bool(chunk.get("within_single_chunk")) or chunk.get("at_chunk_boundary") is False
-        ) and not chunk.get("chunk_defect") and not chunk.get("acquisition_defect"),
+        d1_absent=d1_absent,
+        chunk_integrity=chunk_integrity,
         acquisition_defect=old_classification == "ACQUISITION_DEFECT",
         corruption_reasons=tuple(price.get("corruption_reasons") or []),
         primary_peer_shared_absence=primary_shared,
         primary_peer_traded=primary_traded,
         secondary_peer_shared_absence=secondary_shared,
         provider_history_absence=old_classification == "PROVIDER_HISTORY_GAP" or primary_traded,
+        frozen_closure_corroborated=frozen_closure_corroborated,
         reopen_gap_risk=dict(base.get("reopen_gap_risk") or price.get("reopen_gap_risk") or {}),
         evidence={
             "family_policy": asdict(policy),
@@ -365,4 +405,171 @@ def residual_evidence_from_gap_rows(
             "chunk": chunk,
             "peer_symbols_checked": [peer for peer, _row in peer_gap_rows if peer],
         },
+    )
+
+
+def _bar_is_flat(bar: dict[str, Any] | None) -> bool:
+    """A zero-range placeholder bar (open==high==low==close)."""
+    if not bar:
+        return False
+    try:
+        values = [float(bar[name]) for name in ("open", "high", "low", "close")]
+    except (KeyError, TypeError, ValueError):
+        return False
+    return len(set(values)) == 1
+
+
+PLACEHOLDER_CLASS = "NON_TRADING_PLACEHOLDER"
+
+
+def non_trading_placeholder_events(
+    bars: Iterable[dict[str, Any]],
+    *,
+    reliable_start: str,
+    usable_start: str | None = None,
+) -> list[dict[str, Any]]:
+    """Detect zero-range (open==high==low==close) carry-forward placeholder bars.
+
+    A zero-volatility H4 bar is a non-trading provider carry-forward placeholder,
+    never a real trade. Returns one immutable record per placeholder bar; raw
+    bars are read only and never mutated. ``in_reliable_era`` / ``in_usable_era``
+    flag which records belong to the active research candidate window.
+    """
+    from athena_research.commodity_data_audit.gap_forensic import _holiday_proximity
+
+    import pandas as pd
+
+    events: list[dict[str, Any]] = []
+    for bar in bars:
+        if not _bar_is_flat(bar):
+            continue
+        ts = datetime.fromtimestamp(int(bar["time"]), tz=timezone.utc)
+        date_iso = ts.date().isoformat()
+        holiday = _holiday_proximity(pd.Timestamp(ts))
+        events.append(
+            {
+                "classification": PLACEHOLDER_CLASS,
+                "timestamp": ts.isoformat(),
+                "calendar_date": date_iso,
+                "weekday": ts.strftime("%A"),
+                "price": float(bar["close"]),
+                "holiday_hits": list(holiday.get("holiday_hits") or []),
+                "in_reliable_era": date_iso >= reliable_start,
+                "in_usable_era": bool(usable_start) and date_iso >= str(usable_start),
+            }
+        )
+    return sorted(events, key=lambda row: row["timestamp"])
+
+
+def _bar_is_real(bar: dict[str, Any] | None) -> bool:
+    if not bar:
+        return False
+    try:
+        values = [float(bar[name]) for name in ("open", "high", "low", "close")]
+    except (KeyError, TypeError, ValueError):
+        return False
+    return len(set(values)) > 1
+
+
+def _energy_session_flags(
+    *,
+    recognized_holiday: bool,
+    d1: dict[str, Any],
+    calendar_date: str,
+    subject_bar_lookup: dict[int, dict[str, Any]],
+) -> tuple[bool, bool, dict[str, Any]]:
+    """Derive deterministic energy-session flags from frozen evidence.
+
+    Returns ``(d1_holiday_placeholder, subject_day_traded, detail)`` where the
+    detail block records the exact bars inspected. Never reads or mutates raw
+    bars beyond a read-only OHLC inspection on the gap calendar date.
+    """
+    d1_bar = d1.get("live_d1") or d1.get("frozen_d1")
+    d1_present = bool(d1.get("live_d1_present") or d1.get("frozen_d1_present"))
+    d1_flat = d1_present and _bar_is_flat(d1_bar)
+    d1_real = d1_present and _bar_is_real(d1_bar)
+    present_same_date = [
+        bar
+        for ts, bar in sorted(subject_bar_lookup.items())
+        if datetime.fromtimestamp(int(ts), tz=timezone.utc).date().isoformat() == calendar_date
+    ]
+    neighbours_all_flat = bool(present_same_date) and all(
+        _bar_is_flat(bar) for bar in present_same_date
+    )
+    neighbour_real = any(_bar_is_real(bar) for bar in present_same_date)
+    no_present_same_date = not present_same_date
+    d1_holiday_placeholder = bool(recognized_holiday and d1_flat and neighbours_all_flat)
+    # The calendar date demonstrably traded (real-range D1) on a non-holiday, and
+    # the present same-date bars are themselves real trades (or none survive) --
+    # never flat placeholders. This marks an isolated provider history gap.
+    subject_day_traded = bool(
+        (not recognized_holiday)
+        and d1_real
+        and (neighbour_real or no_present_same_date)
+    )
+    detail = {
+        "calendar_date": calendar_date,
+        "d1_present": d1_present,
+        "d1_zero_range_placeholder": d1_flat,
+        "d1_real_range": d1_real,
+        "present_same_date_bar_count": len(present_same_date),
+        "present_same_date_all_flat": neighbours_all_flat,
+        "present_same_date_any_real": neighbour_real,
+    }
+    return d1_holiday_placeholder, subject_day_traded, detail
+
+
+def residual_evidence_from_v3_event(
+    event: dict[str, Any],
+    *,
+    subject_bar_lookup: dict[int, dict[str, Any]],
+) -> ResidualGapEvidence:
+    """Rebuild a residual event from a frozen prior-version artifact, adding the
+    energy-session flags derived from frozen evidence and raw OHLC inspection.
+
+    The frozen targeted-MT5-refetch result already captured in the prior event
+    is reused verbatim (no live refetch). Raw bars are read only, never altered.
+    """
+
+    def _parse(value: str) -> datetime:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+
+    inner = dict(event.get("evidence") or {})
+    d1 = dict(inner.get("d1") or {})
+    recognized_holiday = bool(event.get("recognized_holiday"))
+    calendar_date = str(
+        d1.get("calendar_date")
+        or _parse(event["missing_timestamps"][0]).date().isoformat()
+    )
+    d1_placeholder, day_traded, session_detail = _energy_session_flags(
+        recognized_holiday=recognized_holiday,
+        d1=d1,
+        calendar_date=calendar_date,
+        subject_bar_lookup=subject_bar_lookup,
+    )
+    inner["energy_session"] = session_detail
+    return ResidualGapEvidence(
+        event_id=str(event["event_id"]),
+        canonical_symbol=str(event["canonical_symbol"]),
+        prev_bar_timestamp=_parse(event["prev_bar_timestamp"]),
+        next_bar_timestamp=_parse(event["next_bar_timestamp"]),
+        missing_timestamps=tuple(_parse(value) for value in event["missing_timestamps"]),
+        in_reliable_era=bool(event.get("in_reliable_era", True)),
+        recognized_holiday=recognized_holiday,
+        session_closure_pattern=bool(event.get("session_closure_pattern")),
+        subject_refetch_empty=bool(event.get("subject_refetch_empty")),
+        subject_refetch_returned_bars=bool(event.get("subject_refetch_returned_bars")),
+        d1_absent=bool(event.get("d1_absent")),
+        chunk_integrity=bool(event.get("chunk_integrity")),
+        acquisition_defect=bool(event.get("acquisition_defect")),
+        corruption_reasons=tuple(event.get("corruption_reasons") or ()),
+        primary_peer_shared_absence=bool(event.get("primary_peer_shared_absence")),
+        primary_peer_traded=bool(event.get("primary_peer_traded")),
+        secondary_peer_shared_absence=bool(event.get("secondary_peer_shared_absence")),
+        provider_history_absence=bool(event.get("provider_history_absence")),
+        historical_degradation=bool(event.get("historical_degradation")),
+        d1_holiday_placeholder=d1_placeholder,
+        subject_day_traded=day_traded,
+        reopen_gap_risk=dict(event.get("reopen_gap_risk") or {}),
+        evidence=inner,
     )
