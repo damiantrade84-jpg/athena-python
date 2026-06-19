@@ -49,6 +49,50 @@ class GapExclusionMask:
     run_hash: str
 
 
+@dataclass(frozen=True)
+class PlaceholderExclusionMask:
+    allowed: tuple[bool, ...]
+    reasons: tuple[tuple[str, ...], ...]
+    excluded_timestamps: tuple[str, ...]
+    run_hash: str
+
+
+def build_placeholder_exclusion_mask(
+    candidate_timestamps: Iterable[datetime],
+    placeholder_timestamps: Iterable[datetime],
+    run_context: dict[str, Any],
+) -> PlaceholderExclusionMask:
+    """Exclude zero-range non-trading placeholder bars from candidate / indicator
+    timestamps. Membership test only -- never inserts, edits, or removes raw bars
+    and never treats a placeholder as a real zero-volatility trade. The same
+    excluded set applies to indicator observation series.
+    """
+    placeholders = sorted({value for value in placeholder_timestamps})
+    placeholder_set = set(placeholders)
+    candidates = tuple(candidate_timestamps)
+    allowed: list[bool] = []
+    reasons: list[tuple[str, ...]] = []
+    for candidate in candidates:
+        if candidate in placeholder_set:
+            allowed.append(False)
+            reasons.append(("non_trading_placeholder",))
+        else:
+            allowed.append(True)
+            reasons.append(())
+    run_hash = hash_stable_json(
+        {
+            "run_context": run_context,
+            "placeholder_timestamps": [value.isoformat() for value in placeholders],
+        }
+    )
+    return PlaceholderExclusionMask(
+        tuple(allowed),
+        tuple(reasons),
+        tuple(value.isoformat() for value in placeholders),
+        run_hash,
+    )
+
+
 def _intersects(start: datetime, end: datetime, missing: tuple[datetime, ...]) -> bool:
     return any(start <= value <= end for value in missing)
 
