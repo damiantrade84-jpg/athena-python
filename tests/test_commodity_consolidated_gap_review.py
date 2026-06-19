@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import json
+import shutil
+import uuid
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import pytest
 
@@ -225,19 +228,24 @@ def test_mask_generation_requires_contract_and_does_not_interpolate():
     assert tuple(candidates) == before
 
 
-def test_versioned_artifact_is_immutable_and_exports_each_event_once(tmp_path):
-    events = [_evidence(event_id="a"), _evidence(event_id="b")]
-    payload = {
-        "schema": REVIEW_SCHEMA_VERSION,
-        "events": [event.to_dict() for event in events],
-    }
-    path = tmp_path / "review.json"
-    first_hash = write_versioned_review_artifact(path, payload)
-    assert len(first_hash) == 64
-    assert [row["event_id"] for row in json.loads(path.read_text())["events"]] == ["a", "b"]
-    write_versioned_review_artifact(path, payload)
-    with pytest.raises(FreezeStoreError):
-        write_versioned_review_artifact(path, {**payload, "events": []})
+def test_versioned_artifact_is_immutable_and_exports_each_event_once():
+    scratch = Path(__file__).resolve().parent / f"_tmp_consolidated_gap_{uuid.uuid4().hex}"
+    scratch.mkdir()
+    try:
+        events = [_evidence(event_id="a"), _evidence(event_id="b")]
+        payload = {
+            "schema": REVIEW_SCHEMA_VERSION,
+            "events": [event.to_dict() for event in events],
+        }
+        path = scratch / "review.json"
+        first_hash = write_versioned_review_artifact(path, payload)
+        assert len(first_hash) == 64
+        assert [row["event_id"] for row in json.loads(path.read_text())["events"]] == ["a", "b"]
+        write_versioned_review_artifact(path, payload)
+        with pytest.raises(FreezeStoreError):
+            write_versioned_review_artifact(path, {**payload, "events": []})
+    finally:
+        shutil.rmtree(scratch, ignore_errors=True)
 
 
 def test_consolidated_payload_has_one_classification_per_event_and_no_strategy_mask():
