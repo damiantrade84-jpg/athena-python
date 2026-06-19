@@ -124,7 +124,7 @@ _BASE_METALS = {"Aluminium", "Lead", "Nickel", "Zinc"}
 # Soft commodities + livestock — Athena edge unaudited; route to EXOTIC tier.
 _SOFTS = {"Cattle", "Cocoa", "Coffee", "Corn", "Cotton", "Soybeans", "Sugar", "Wheat"}
 _US_INDICES_TRACKERS = {"NASDAQ-100", "S&P 500", "Dow Jones", "SPY", "QQQ", "DIA", "SOXX"}
-_EU_INDICES = {"DAX 40", "UK100"}
+_EU_INDICES = {"DAX", "DAX 40", "UK100", "FTSE 100"}
 _ASIAN_INDICES = {"ASX 200", "Nikkei 225", "Hang Seng"}
 _US_STOCK_CUSTOM = {
     "AAPL", "TSLA", "NVDA", "MSFT", "AMZN", "META", "GOOG", "JPM", "V", "XOM",
@@ -231,6 +231,7 @@ def get_pair_score_group(pair: dict) -> str:
             "no ENGINE_A_SCORE_GROUP_THRESHOLDS entry; falling back to legacy tier",
             _fallback, display, ptype,
         )
+        return "unknown"
     return _fallback
 
 
