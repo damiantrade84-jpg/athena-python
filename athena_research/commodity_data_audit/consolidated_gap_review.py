@@ -43,6 +43,7 @@ class FamilyClosurePolicy:
     secondary_peers: tuple[str, ...] = ()
     allow_independent_closure: bool = False
     contextual_peers_only: bool = False
+    independent_closure_requires_full_chain: bool = False
 
 
 _FAMILY_POLICIES = {
@@ -54,6 +55,12 @@ _FAMILY_POLICIES = {
         "energy_gasoline", ("WTI Oil", "Brent Oil"), contextual_peers_only=True
     ),
     "Nat Gas": FamilyClosurePolicy("energy_nat_gas", (), allow_independent_closure=True),
+    "Copper": FamilyClosurePolicy(
+        "industrial_metals",
+        (),
+        ("XAU/USD", "XAG/USD"),
+        independent_closure_requires_full_chain=True,
+    ),
 }
 
 
@@ -113,7 +120,9 @@ def classify_residual_event(evidence: ResidualGapEvidence) -> ResidualGapClass:
         and evidence.chunk_integrity
     )
     peer_closure = evidence.primary_peer_shared_absence
-    independent_closure = policy.allow_independent_closure
+    independent_closure = (
+        policy.allow_independent_closure or policy.independent_closure_requires_full_chain
+    )
     closure_supported = common_closure and (peer_closure or independent_closure)
     provider_supported = evidence.primary_peer_traded or evidence.provider_history_absence
     if closure_supported and provider_supported:

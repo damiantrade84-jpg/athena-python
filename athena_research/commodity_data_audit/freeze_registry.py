@@ -12,6 +12,14 @@ PHASE_1_CANONICAL_SYMBOLS: tuple[str, ...] = (
     "Brent Oil",
     "Nat Gas",
     "Gasoline",
+    "Copper",
+)
+
+INDUSTRIAL_METAL_CANDIDATE_ORDER: tuple[str, ...] = (
+    "Copper",
+    "Aluminium",
+    "Nickel",
+    "Zinc",
 )
 
 PHASE_1_MT5_TERMINAL_ALIASES: dict[str, str] = {
@@ -23,6 +31,7 @@ PHASE_1_MT5_TERMINAL_ALIASES: dict[str, str] = {
     "Brent Oil": "SpotBrent",
     "Nat Gas": "NatGas",
     "Gasoline": "Gasoline",
+    "Copper": "Copper",
 }
 
 PHASE_1_TIMEFRAMES: tuple[str, ...] = ("H4", "H1", "D1")
