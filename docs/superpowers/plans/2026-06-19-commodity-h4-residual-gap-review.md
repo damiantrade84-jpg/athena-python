@@ -11,7 +11,7 @@
 ## Global Constraints
 
 - Research-data work only; no strategies, backtests, live routes, thresholds, execution, TradingView, or raw-bar edits.
-- Preserve all prior reviews/manifests and write only `commodity_h4_residual_gap_review_v1` artifacts.
+- Preserve all prior reviews/manifests, including superseded development runs, and write corrected `commodity_h4_residual_gap_review_v3` artifacts.
 - Provider missing percentage is strictly less than `0.5%` against reliable-era expected bars.
 - Isolation means at most 6 missing H4 bars per event, at least 20 calendar days between events, and strictly less than `2.0%` in every rolling 90-day expected-session window.
 - Candidate-mask generation requires an explicit validated `commodity_gap_embargo_contract_v1`; no defaults.
@@ -67,7 +67,7 @@
 
 **Interfaces:**
 - Consumes: existing raw chunks, QA-v3 coverage, MT5 subject/D1 refetch, family peers, chunk provenance, and reopening corruption metadata.
-- Produces: immutable `commodity_h4_residual_gap_review_v1` JSON per symbol and a consolidated summary.
+- Produces: immutable `commodity_h4_residual_gap_review_v3` JSON per symbol and a consolidated summary.
 
 - [ ] Add a failing orchestration test with fake read-only MT5 evidence proving every event is exported once, peers cannot override defects/corruption, no self-peer is created, and conflicting artifact rewrites fail.
 - [ ] Implement the read-only runner, source hashes, evidence serialization, aggregate counts, gate output, and CLI nonzero behavior when any symbol is blocked.
@@ -76,13 +76,13 @@
 ### Task 5: Generate six reviews and verify scope
 
 **Files:**
-- Create: `logs/commodity_data_audit/forensics/consolidated_v1/XPT_USD/H4.residual_gap_review.commodity_h4_residual_gap_review_v1.json`
-- Create: `logs/commodity_data_audit/forensics/consolidated_v1/XPD_USD/H4.residual_gap_review.commodity_h4_residual_gap_review_v1.json`
-- Create: `logs/commodity_data_audit/forensics/consolidated_v1/WTI_Oil/H4.residual_gap_review.commodity_h4_residual_gap_review_v1.json`
-- Create: `logs/commodity_data_audit/forensics/consolidated_v1/Brent_Oil/H4.residual_gap_review.commodity_h4_residual_gap_review_v1.json`
-- Create: `logs/commodity_data_audit/forensics/consolidated_v1/Nat_Gas/H4.residual_gap_review.commodity_h4_residual_gap_review_v1.json`
-- Create: `logs/commodity_data_audit/forensics/consolidated_v1/Gasoline/H4.residual_gap_review.commodity_h4_residual_gap_review_v1.json`
-- Create: `logs/commodity_data_audit/forensics/consolidated_v1/commodity_h4_residual_gap_summary_v1.json`
+- Create: `logs/commodity_data_audit/forensics/consolidated_v3/XPT_USD/H4.residual_gap_review.commodity_h4_residual_gap_review_v3.json`
+- Create: `logs/commodity_data_audit/forensics/consolidated_v3/XPD_USD/H4.residual_gap_review.commodity_h4_residual_gap_review_v3.json`
+- Create: `logs/commodity_data_audit/forensics/consolidated_v3/WTI_Oil/H4.residual_gap_review.commodity_h4_residual_gap_review_v3.json`
+- Create: `logs/commodity_data_audit/forensics/consolidated_v3/Brent_Oil/H4.residual_gap_review.commodity_h4_residual_gap_review_v3.json`
+- Create: `logs/commodity_data_audit/forensics/consolidated_v3/Nat_Gas/H4.residual_gap_review.commodity_h4_residual_gap_review_v3.json`
+- Create: `logs/commodity_data_audit/forensics/consolidated_v3/Gasoline/H4.residual_gap_review.commodity_h4_residual_gap_review_v3.json`
+- Create: `logs/commodity_data_audit/forensics/consolidated_v3/commodity_h4_residual_gap_summary_v3.json`
 
 **Interfaces:**
 - Consumes: the six existing H4 freezes and direct read-only MT5 evidence.

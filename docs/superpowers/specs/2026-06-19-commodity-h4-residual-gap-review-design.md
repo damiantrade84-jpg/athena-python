@@ -6,7 +6,7 @@ Build a separate, research-only consolidated reviewer and gate evaluator for XPT
 
 ## Versioned contracts
 
-- Review schema: `commodity_h4_residual_gap_review_v1`.
+- Review schema: `commodity_h4_residual_gap_review_v3` (`v1` and `v2` are preserved as superseded development runs).
 - Gate policy: `commodity_h4_gap_admissibility_v1`.
 - Embargo contract: `commodity_gap_embargo_contract_v1`.
 - Artifact names include the schema/policy version and are immutable; conflicting rewrites fail closed.
@@ -69,6 +69,6 @@ The mask returns booleans plus reason codes and exclusion intervals. It never in
 
 ## Artifacts and tests
 
-Create `athena_research/commodity_data_audit/consolidated_gap_review.py`, `athena_research/commodity_data_audit/gap_embargo.py`, and a read-only CLI under `tools/`. Add focused tests in one new test file covering energy closure without a same-family peer, WTI/Brent closure, admissible isolated gaps, sustained degradation, corruption/unresolved precedence, feature/label crossings, missing-contract failure, and unchanged bar sequences.
+Create `athena_research/commodity_data_audit/consolidated_gap_review.py`, `athena_research/commodity_data_audit/gap_embargo.py`, and a read-only CLI under `tools/`. Add focused tests in one new test file covering energy closure without a same-family peer, WTI/Brent and Gasoline two-peer closure, admissible isolated gaps, sustained degradation, corruption/unresolved precedence, feature/label crossings, missing-contract failure, and unchanged bar sequences.
 
-Generate new versioned artifacts under symbol-specific subdirectories of `logs/commodity_data_audit/forensics/consolidated_v1/`; preserve every prior review, manifest, and raw file.
+Generate corrected versioned artifacts under symbol-specific subdirectories of `logs/commodity_data_audit/forensics/consolidated_v3/`; preserve the superseded `v1`/`v2` runs and every earlier review, manifest, and raw file.
