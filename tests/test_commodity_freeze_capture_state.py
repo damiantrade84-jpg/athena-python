@@ -31,6 +31,7 @@ from athena_research.commodity_data_audit.freeze_store import (
     state_path,
     write_json_immutable,
 )
+from athena_research.commodity_data_audit.metadata_policy import validate_raw_bar_for_persistence
 
 
 def _scratch_dir(name: str) -> Path:
@@ -54,6 +55,28 @@ def _bar(ts: datetime, close: float = 1.0) -> dict:
         "spread": 5,
         "real_volume": 0,
     }
+
+
+def test_raw_bar_persistence_accepts_only_valid_capture_metadata():
+    pinned = datetime(2026, 6, 19, 19, 25, 47, tzinfo=timezone.utc)
+    bar = annotate_bars_at_capture([_bar(pinned)], timeframe="H4", as_of=pinned)[0]
+    validate_raw_bar_for_persistence(bar)
+
+
+@pytest.mark.parametrize(
+    "overrides,match",
+    [
+        ({"capture_state": "UNKNOWN"}, "capture_state"),
+        ({"capture_as_of": "2026-06-19T19:25:47"}, "timezone-aware UTC"),
+        ({"capture_as_of": "2026-06-19T21:25:47+02:00"}, "timezone-aware UTC"),
+        ({"account_login": 123456}, "unexpected raw bar keys"),
+    ],
+)
+def test_raw_bar_persistence_rejects_invalid_or_additional_metadata(overrides, match):
+    pinned = datetime(2026, 6, 19, 19, 25, 47, tzinfo=timezone.utc)
+    bar = annotate_bars_at_capture([_bar(pinned)], timeframe="H4", as_of=pinned)[0]
+    with pytest.raises(FreezeStoreError, match=match):
+        validate_raw_bar_for_persistence({**bar, **overrides})
 
 
 def test_resume_after_forming_bar_closes_keeps_pinned_provisional_exclusion():

@@ -77,7 +77,7 @@ def test_chunk_start_on_weekend_does_not_flag_truncation():
         def _copy(_terminal: str, _tf: str, _s: datetime, _e: datetime) -> list[dict]:
             return [_bar(_ts(2014, 1, 6, 0), spread=5)]
 
-        merged, warnings = fetch_chunks_with_resume(
+        merged, warnings, state = fetch_chunks_with_resume(
             canonical_symbol="XAU/USD",
             terminal_symbol="XAUUSD",
             timeframe="H4",
@@ -89,6 +89,10 @@ def test_chunk_start_on_weekend_does_not_flag_truncation():
             resume=False,
         )
         assert warnings == []
+        assert state["completed_chunks"]
+        assert state["pinned_as_of"]
+        assert state["acquisition_run_id"]
+        assert state["chunk_revisions"] == {}
         report = audit_freeze_bars(
             merged,
             timeframe="H4",

@@ -20,6 +20,7 @@ from athena_research.commodity_data_audit.freeze_store import (
     repo_root,
     write_json_immutable,
 )
+from athena_research.commodity_data_audit.metadata_policy import validate_raw_bars_for_persistence
 
 
 def infer_legacy_pinned_as_of(raw_root: Path, slug: str, timeframe: str) -> datetime:
@@ -107,6 +108,7 @@ def write_interval_revision(
     revision_kind: str,
 ) -> str:
     path = chunk_revision_path(raw_root, slug, timeframe, interval_key, revision_id)
+    validate_raw_bars_for_persistence(bars)
     write_json_immutable(path, bars)
     rel = str(path.relative_to(repo_root())).replace("\\", "/")
     return rel
@@ -186,7 +188,9 @@ def prepare_bars_for_immutable_chunk_write(
     timeframe: str,
     pinned_as_of: datetime,
 ) -> list[dict[str, Any]]:
-    return annotate_bars_at_capture(bars, timeframe=timeframe, as_of=pinned_as_of)
+    annotated = annotate_bars_at_capture(bars, timeframe=timeframe, as_of=pinned_as_of)
+    validate_raw_bars_for_persistence(annotated)
+    return annotated
 
 
 def _interval_key_to_bounds(interval_key: str) -> tuple[datetime, datetime]:

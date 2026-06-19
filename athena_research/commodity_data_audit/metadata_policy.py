@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+from datetime import datetime, timedelta
 from typing import Any
+
+from athena_research.commodity_data_audit.capture_state import CaptureState
 
 ALLOWED_BROKER_METADATA_KEYS: frozenset[str] = frozenset(
     {
@@ -64,8 +67,37 @@ ALLOWED_RAW_BAR_KEYS: frozenset[str] = frozenset(
         "tick_volume",
         "spread",
         "real_volume",
+        "capture_state",
+        "capture_as_of",
     }
 )
+
+
+def validate_raw_bar_for_persistence(bar: dict[str, Any]) -> None:
+    from athena_research.commodity_data_audit.freeze_store import FreezeStoreError
+
+    unexpected = sorted(set(bar) - ALLOWED_RAW_BAR_KEYS)
+    if unexpected:
+        raise FreezeStoreError(f"unexpected raw bar keys: {unexpected}")
+
+    known_states = {member.value for member in CaptureState}
+    if bar.get("capture_state") not in known_states:
+        raise FreezeStoreError("capture_state is missing or not a known CaptureState value")
+
+    raw_as_of = bar.get("capture_as_of")
+    if not isinstance(raw_as_of, str):
+        raise FreezeStoreError("capture_as_of must be a valid timezone-aware UTC timestamp")
+    try:
+        parsed_as_of = datetime.fromisoformat(raw_as_of.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise FreezeStoreError("capture_as_of must be a valid timezone-aware UTC timestamp") from exc
+    if parsed_as_of.tzinfo is None or parsed_as_of.utcoffset() != timedelta(0):
+        raise FreezeStoreError("capture_as_of must be a valid timezone-aware UTC timestamp")
+
+
+def validate_raw_bars_for_persistence(bars: list[dict[str, Any]]) -> None:
+    for bar in bars:
+        validate_raw_bar_for_persistence(bar)
 
 
 def sanitize_broker_metadata(raw: dict[str, Any]) -> dict[str, Any]:

@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+import math
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from enum import Enum
 from pathlib import Path
@@ -31,7 +32,7 @@ from athena_research.commodity_data_audit.gap_forensic import (
     refetch_gap_samples,
 )
 
-REVIEW_TOOL_VERSION = "commodity_reliable_era_gap_review_v2"
+REVIEW_TOOL_VERSION = "commodity_reliable_era_gap_review_v3"
 DEFAULT_RELIABLE_START = "2016-07-29"
 
 
@@ -60,6 +61,7 @@ class ReliableEraGapReview:
     price_discontinuity: dict[str, Any]
     classification: ReliableEraGapClass
     classification_evidence: list[str]
+    reopen_gap_risk: dict[str, Any] = field(default_factory=dict)
     mt5_xau_refetch: dict[str, Any] | None = None
     xag_comparison: dict[str, Any] | None = None
 
@@ -93,17 +95,86 @@ def _price_discontinuity(
     next_bar: dict[str, Any] | None,
 ) -> dict[str, Any]:
     if prev_bar is None or next_bar is None:
-        return {"status": "missing_adjacent_bars"}
-    prev_close = float(prev_bar["close"])
-    next_open = float(next_bar["open"])
+        return {
+            "status": "missing_adjacent_bars",
+            "corruption_reasons": [],
+            "reopen_gap_risk": {
+                "absolute_gap": None,
+                "relative_gap_pct": None,
+                "atr_normalised_gap": None,
+                "severity": "UNAVAILABLE",
+            },
+        }
+
+    corruption_reasons: list[str] = []
+    for label, bar in (("prev", prev_bar), ("next", next_bar)):
+        try:
+            ohlc = {name: float(bar[name]) for name in ("open", "high", "low", "close")}
+        except (KeyError, TypeError, ValueError):
+            corruption_reasons.append(f"{label}_bar_invalid_ohlc_value")
+            continue
+        if not all(math.isfinite(value) for value in ohlc.values()):
+            corruption_reasons.append(f"{label}_bar_non_finite_price")
+            continue
+        if any(value < 0 for value in ohlc.values()):
+            corruption_reasons.append(f"{label}_bar_negative_price")
+        if (
+            ohlc["high"] < ohlc["low"]
+            or ohlc["high"] < max(ohlc["open"], ohlc["close"])
+            or ohlc["low"] > min(ohlc["open"], ohlc["close"])
+        ):
+            corruption_reasons.append(f"{label}_bar_ohlc_contract_violation")
+
+    try:
+        prev_close = float(prev_bar["close"])
+        next_open = float(next_bar["open"])
+    except (KeyError, TypeError, ValueError):
+        prev_close = math.nan
+        next_open = math.nan
+
+    if math.isfinite(prev_close) and math.isfinite(next_open) and prev_close != 0 and next_open != 0:
+        scale_ratio = max(abs(prev_close), abs(next_open)) / min(abs(prev_close), abs(next_open))
+        if scale_ratio >= 10:
+            corruption_reasons.append("scale_or_decimal_shift")
+
     gap_abs = abs(next_open - prev_close)
-    gap_pct = gap_abs / max(abs(prev_close), 1e-9)
+    gap_ratio = gap_abs / max(abs(prev_close), 1e-9)
+    gap_pct = gap_ratio * 100
+    atr = None
+    for value in (prev_bar.get("atr"), next_bar.get("atr")):
+        try:
+            candidate = float(value)
+        except (TypeError, ValueError):
+            continue
+        if math.isfinite(candidate) and candidate > 0:
+            atr = candidate
+            break
+    atr_normalised = gap_abs / atr if atr is not None else None
+    if not math.isfinite(gap_abs) or not math.isfinite(gap_pct):
+        severity = "INVALID"
+    elif gap_pct >= 2:
+        severity = "HIGH"
+    elif gap_pct >= 1:
+        severity = "MEDIUM"
+    elif gap_pct >= 0.25:
+        severity = "LOW"
+    else:
+        severity = "MINIMAL"
+    reopen_gap_risk = {
+        "absolute_gap": round(gap_abs, 6) if math.isfinite(gap_abs) else None,
+        "relative_gap_pct": round(gap_pct, 6) if math.isfinite(gap_pct) else None,
+        "atr_normalised_gap": round(atr_normalised, 6) if atr_normalised is not None else None,
+        "severity": severity,
+    }
     return {
+        "status": "ok" if not corruption_reasons else "corrupt",
         "prev_close": prev_close,
         "next_open": next_open,
-        "absolute_gap": round(gap_abs, 4),
-        "relative_gap_pct": round(gap_pct, 6),
-        "large_discontinuity": gap_pct > 0.01,
+        "absolute_gap": round(gap_abs, 6) if math.isfinite(gap_abs) else None,
+        "relative_gap_pct": round(gap_pct, 6) if math.isfinite(gap_pct) else None,
+        "large_discontinuity": gap_ratio > 0.01,
+        "corruption_reasons": list(dict.fromkeys(corruption_reasons)),
+        "reopen_gap_risk": reopen_gap_risk,
     }
 
 
@@ -201,8 +272,18 @@ def classify_reliable_era_gap(
         evidence.append(f"peer_samples={peer_trades[:3]}")
         return ReliableEraGapClass.PROVIDER_HISTORY_GAP, evidence
 
-    if price.get("large_discontinuity"):
-        evidence.append("suspicious price discontinuity blocks legitimate closure")
+    corruption_reasons = list(price.get("corruption_reasons") or [])
+    if corruption_reasons:
+        evidence.append(f"price_corruption_blocks_legitimate_closure={corruption_reasons}")
+        return ReliableEraGapClass.UNRESOLVED, evidence
+
+    chunk_context = event.get("chunk_context") or {}
+    if chunk_context.get("chunk_defect") or chunk_context.get("acquisition_defect"):
+        evidence.append("chunk/acquisition defect blocks legitimate closure")
+        return ReliableEraGapClass.ACQUISITION_DEFECT, evidence
+    chunk_clear = bool(chunk_context.get("within_single_chunk")) or chunk_context.get("at_chunk_boundary") is False
+    if not chunk_clear:
+        evidence.append("chunk/acquisition integrity not independently cleared")
         return ReliableEraGapClass.UNRESOLVED, evidence
 
     holiday_hits = holiday.get("holiday_hits") or []
@@ -227,6 +308,7 @@ def classify_reliable_era_gap(
     if peer_shared_frozen:
         evidence.append("Peer frozen raw also lacks bars at the missing H4 slot timestamps")
 
+    d1_checked = d1_info.get("status") == "ok"
     d1_present = bool(d1_info.get("frozen_d1_present") or d1_info.get("live_d1_present"))
     if d1_present:
         evidence.append("D1 bar present on gap calendar date")
@@ -238,11 +320,11 @@ def classify_reliable_era_gap(
         and subject_refetch_absent
         and (peer_shared_mt5 or peer_shared_frozen)
         and not peer_trades
+        and d1_checked
         and not d1_present
-        and not price.get("large_discontinuity")
     ):
         evidence.append(
-            "Combined closure evidence: holiday context, MT5 refetch absence, peer shared absence, D1 absent, no discontinuity"
+            "Combined closure evidence: full-session holiday, MT5 refetch absence, peer shared absence, D1 absent, no acquisition or corruption defect"
         )
         return ReliableEraGapClass.LEGITIMATE_MARKET_CLOSURE, evidence
 
@@ -331,6 +413,7 @@ def review_reliable_era_abnormal_gaps(
                 d1_availability=d1_info,
                 holiday_proximity=holiday,
                 price_discontinuity=price,
+                reopen_gap_risk=dict(price.get("reopen_gap_risk") or {}),
                 classification=classification,
                 classification_evidence=evidence,
                 mt5_xau_refetch=subject_payload,
@@ -378,6 +461,7 @@ def review_to_dict(
                 "d1_availability": review.d1_availability,
                 "holiday_proximity": review.holiday_proximity,
                 "price_discontinuity": review.price_discontinuity,
+                "reopen_gap_risk": review.reopen_gap_risk,
                 "classification": review.classification.value,
                 "classification_evidence": review.classification_evidence,
             }

@@ -97,7 +97,7 @@ def test_fetch_chunks_with_resume_skips_completed_chunks():
             ts = int(s.timestamp())
             return [_bar(ts, close=float(len(calls)))]
 
-        merged1, _ = fetch_chunks_with_resume(
+        merged1, warnings1, state1 = fetch_chunks_with_resume(
             canonical_symbol="XAU/USD",
             terminal_symbol="XAUUSD",
             timeframe="H4",
@@ -108,9 +108,14 @@ def test_fetch_chunks_with_resume_skips_completed_chunks():
             raw_root=tmp_path,
             resume=True,
         )
+        assert warnings1 == []
+        assert len(state1["completed_chunks"]) == len(calls)
+        assert state1["pinned_as_of"]
+        assert state1["acquisition_run_id"]
+        assert state1["chunk_revisions"] == {}
         assert len(calls) >= 2
         calls.clear()
-        merged2, _ = fetch_chunks_with_resume(
+        merged2, warnings2, state2 = fetch_chunks_with_resume(
             canonical_symbol="XAU/USD",
             terminal_symbol="XAUUSD",
             timeframe="H4",
@@ -122,7 +127,9 @@ def test_fetch_chunks_with_resume_skips_completed_chunks():
             resume=True,
         )
         assert calls == []
+        assert warnings2 == []
         assert merged1 == merged2
+        assert state2 == state1
     finally:
         _cleanup(tmp_path)
 

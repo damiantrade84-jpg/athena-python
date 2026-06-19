@@ -10,6 +10,7 @@ from athena_research.commodity_data_audit.gap_forensic import build_abnormal_gap
 from athena_research.commodity_data_audit.reliable_era_gap_review import (
     ReliableEraGapClass,
     ReliableEraGapReview,
+    _price_discontinuity,
     adjust_reliable_quality_for_legitimate_closures,
     classify_reliable_era_gap,
     review_reliable_era_abnormal_gaps,
@@ -34,6 +35,7 @@ def _review(**overrides) -> ReliableEraGapReview:
         "d1_availability": {},
         "holiday_proximity": {},
         "price_discontinuity": {},
+        "reopen_gap_risk": {},
         "classification": ReliableEraGapClass.UNRESOLVED,
         "classification_evidence": [],
     }
@@ -43,7 +45,7 @@ def _review(**overrides) -> ReliableEraGapReview:
 
 def _full_closure_evidence(**overrides):
     base = {
-        "event": {},
+        "event": {"chunk_context": {"at_chunk_boundary": False, "within_single_chunk": True}},
         "refetch_row": {
             "subject": {
                 "status": "ok",
@@ -57,12 +59,24 @@ def _full_closure_evidence(**overrides):
             },
         },
         "peer_frozen": {"shared_frozen_absence_candidate": True},
-        "d1_info": {"frozen_d1_present": False, "live_d1_present": False},
+        "d1_info": {"status": "ok", "frozen_d1_present": False, "live_d1_present": False},
         "holiday": {"holiday_hits": ["christmas"], "any_common_closure": True},
         "price": {"large_discontinuity": False},
     }
     base.update(overrides)
     return base
+
+
+def _valid_price_discontinuity(next_open: float):
+    return _price_discontinuity(
+        {"open": 100.0, "high": 101.0, "low": 99.0, "close": 100.0},
+        {
+            "open": next_open,
+            "high": max(next_open, 100.0) + 1.0,
+            "low": min(next_open, 100.0) - 1.0,
+            "close": next_open,
+        },
+    )
 
 
 def test_classify_acquisition_defect_when_mt5_returns_missing_bars():
@@ -102,7 +116,7 @@ def test_classify_legitimate_closure_requires_combined_evidence():
 
 def test_mt5_refetch_alone_is_not_legitimate_without_corroboration():
     classification, evidence = classify_reliable_era_gap(
-        event={},
+        event={"chunk_context": {"at_chunk_boundary": False, "within_single_chunk": True}},
         refetch_row={
             "subject": {
                 "status": "ok",
@@ -146,12 +160,61 @@ def test_d1_presence_blocks_legitimate_closure():
     assert any("D1 bar present" in item for item in evidence)
 
 
-def test_price_discontinuity_blocks_legitimate_closure():
+def test_proven_christmas_closure_with_2_6_percent_reopen_gap_remains_legitimate():
+    classification, _ = classify_reliable_era_gap(
+        **_full_closure_evidence(
+            holiday={"holiday_hits": ["christmas"], "any_common_closure": True},
+            price=_valid_price_discontinuity(102.6),
+        )
+    )
+    assert classification == ReliableEraGapClass.LEGITIMATE_MARKET_CLOSURE
+
+
+def test_proven_new_year_closure_with_1_percent_reopen_gap_remains_legitimate():
+    classification, _ = classify_reliable_era_gap(
+        **_full_closure_evidence(
+            holiday={"holiday_hits": ["new_year"], "any_common_closure": True},
+            price=_valid_price_discontinuity(101.0),
+        )
+    )
+    assert classification == ReliableEraGapClass.LEGITIMATE_MARKET_CLOSURE
+
+
+def test_reopening_gap_risk_is_visible_with_percentage_and_atr_units():
+    price = _price_discontinuity(
+        {"open": 100.0, "high": 101.0, "low": 99.0, "close": 100.0, "atr": 2.0},
+        {"open": 102.596, "high": 103.0, "low": 102.0, "close": 102.8},
+    )
+    risk = price["reopen_gap_risk"]
+    assert risk["absolute_gap"] == pytest.approx(2.596)
+    assert risk["relative_gap_pct"] == pytest.approx(2.596)
+    assert risk["atr_normalised_gap"] == pytest.approx(1.298)
+    assert risk["severity"] == "HIGH"
+
+
+def test_scale_decimal_corruption_blocks_legitimate_closure():
+    corrupt_price = _price_discontinuity(
+        {"open": 100.0, "high": 101.0, "low": 99.0, "close": 100.0},
+        {"open": 1000.0, "high": 1001.0, "low": 999.0, "close": 1000.0},
+    )
     classification, evidence = classify_reliable_era_gap(
-        **_full_closure_evidence(price={"large_discontinuity": True})
+        **_full_closure_evidence(price=corrupt_price)
     )
     assert classification == ReliableEraGapClass.UNRESOLVED
-    assert any("discontinuity" in item for item in evidence)
+    assert any("scale_or_decimal_shift" in item for item in evidence)
+
+
+def test_holiday_label_alone_is_insufficient_for_legitimate_closure():
+    classification, evidence = classify_reliable_era_gap(
+        event={"chunk_context": {"at_chunk_boundary": False, "within_single_chunk": True}},
+        refetch_row=None,
+        peer_frozen=None,
+        d1_info={"frozen_d1_present": False, "live_d1_present": False},
+        holiday={"holiday_hits": ["christmas"], "any_common_closure": True},
+        price={"large_discontinuity": False, "corruption_reasons": []},
+    )
+    assert classification == ReliableEraGapClass.UNRESOLVED
+    assert "insufficient corroboration" in evidence[-1]
 
 
 def test_adjust_reliable_quality_excludes_legitimate_closures():
