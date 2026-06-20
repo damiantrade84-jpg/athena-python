@@ -1876,18 +1876,66 @@ export interface EngineBHotlistCandidate {
   };
 }
 
+export type EngineBHotlistSlotStatus =
+  | 'PRIORITY'
+  | 'HOT'
+  | 'SCOUT'
+  | 'WEAK_SCOUT'
+  | 'NO_HOT_SETUP';
+
+export interface EngineBHotlistSlot {
+  group: string;
+  symbol: string | null;
+  display: string | null;
+  asset_type: string | null;
+  selected_at: string;
+  last_score: number | null;
+  status: EngineBHotlistSlotStatus | string;
+  data_status: 'fresh' | 'stale' | 'data_missing' | string;
+  locked: boolean;
+  below_since: number | null;
+  switched: boolean;
+  switch_cause: string;
+  previous_symbol: string | null;
+  eligible_for_prime: boolean;
+  ai_review_enabled: boolean;
+  reason: string;
+  candidate: EngineBHotlistCandidate | null;
+}
+
+export interface EngineBHotlistAlternate {
+  symbol: string;
+  display: string;
+  asset_type: string;
+  strength_score: number;
+  change_pct: number | null;
+  freshness_status?: string | null;
+  reason: string;
+  rank: number;
+}
+
 export interface EngineBHotlistGroup {
   group: 'forex' | 'crypto' | 'commodity' | 'index' | string;
   winner: EngineBHotlistCandidate | null;
+  selected?: EngineBHotlistSlot;
+  alternates?: EngineBHotlistAlternate[];
   candidates: EngineBHotlistCandidate[];
 }
 
 export interface EngineBHotlistResponse {
   success: boolean;
-  payloadVersion: 'engine-b-hotbench-v1' | string;
+  payloadVersion: 'engine-b-hotbench-v1' | 'engine-b-hotbench-v2' | string;
   generated_at: string;
   groups: Record<string, EngineBHotlistGroup>;
   selectedSymbols: string[];
+  selectedSlots?: Record<string, EngineBHotlistSlot>;
+  thresholds?: {
+    switch_margin: number;
+    scout_min_score: number;
+    hot_min_score: number;
+    priority_min_score: number;
+    weak_ttl_sec: number;
+  };
   scoring: {
     usesAi: false;
     usesScreenshots: false;

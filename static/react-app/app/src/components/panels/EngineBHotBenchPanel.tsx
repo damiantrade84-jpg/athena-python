@@ -11,17 +11,22 @@ import apiClient from '@/lib/apiClient';
 import { fmtPrice } from '@/lib/athenaFormat';
 import { cn, fmtNum, toNum } from '@/lib/utils';
 import {
+  ArrowLeftRight,
   Bot,
   Eye,
   Flag,
   Layers,
+  Lock,
   Radar,
   RefreshCw,
+  Unlock,
 } from 'lucide-react';
 import type {
   EngineBHotBenchCardState,
+  EngineBHotlistAlternate,
   EngineBHotlistCandidate,
   EngineBHotlistResponse,
+  EngineBHotlistSlot,
   LdSnapshot,
   LdSymbolRow,
   SuggestedTradePlan,
@@ -56,6 +61,13 @@ function firstNumber(...values: unknown[]): number | null {
     }
   }
   return null;
+}
+
+/** Render a price, or an explicit fallback ("missing"/"N/A") when unavailable —
+ *  never 0.00, which reads like a real (zero) level when none exists. */
+function priceOrFallback(value: unknown, display: string, type: string, fallback: string): string {
+  const n = firstNumber(value);
+  return n == null ? fallback : fmtPrice(n, display, type);
 }
 
 function directionForRow(row: LdSymbolRow | null): 'LONG' | 'SHORT' | null {
@@ -319,6 +331,8 @@ export default function EngineBHotBenchPanel() {
     return GROUPS.map((group) => hotlist?.groups?.[group.key]?.winner ?? null);
   }, [hotlist]);
 
+  const [actionKey, setActionKey] = useState<string | null>(null);
+
   const refreshSnapshot = useCallback(async (sourceHotlist?: EngineBHotlistResponse | null) => {
     const activeHotlist = sourceHotlist ?? hotlist;
     const displays = GROUPS
@@ -363,6 +377,45 @@ export default function EngineBHotBenchPanel() {
     await Promise.all([refreshSnapshot(latestHotlist), refreshWatches()]);
   }, [refreshHotlist, refreshSnapshot, refreshWatches]);
 
+  // Sticky-slot actions (lock / unlock / manual replace) are server-side: send
+  // the action as a query param, then re-render from the returned slot state.
+  const applyHotlistAction = useCallback(async (key: string, action: Record<string, string>) => {
+    setActionKey(key);
+    try {
+      const params = new URLSearchParams({
+        groups: GROUPS.map((group) => group.key).join(','),
+        topPerGroup: '1',
+        timeframe,
+        includeCandidates: 'true',
+        ...action,
+      });
+      const res = await apiClient.get<EngineBHotlistResponse>(`/api/engine-b/hotlist?${params.toString()}`);
+      setHotlist(res);
+      setError(null);
+      await refreshSnapshot(res);
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'Hotlist action failed', 'error');
+    } finally {
+      setActionKey(null);
+    }
+  }, [refreshSnapshot, showToast, timeframe]);
+
+  const toggleLock = useCallback((slot: EngineBHotlistSlot | undefined, group: string) => {
+    if (!slot?.symbol) return;
+    if (slot.locked) {
+      void applyHotlistAction(`lock-${group}`, { unlock: group });
+      showToast(`${slot.display || slot.symbol} unlocked`, 'info');
+    } else {
+      void applyHotlistAction(`lock-${group}`, { lock: `${group}:${slot.symbol}` });
+      showToast(`${slot.display || slot.symbol} locked — refreshes update price/score only`, 'success');
+    }
+  }, [applyHotlistAction, showToast]);
+
+  const replaceSlot = useCallback((group: string, symbol: string, label: string) => {
+    void applyHotlistAction(`replace-${group}`, { select: `${group}:${symbol}` });
+    showToast(`Switched ${group} card to ${label}`, 'info');
+  }, [applyHotlistAction, showToast]);
+
   useEffect(() => {
     void refreshAll();
   }, [refreshAll]);
@@ -393,7 +446,10 @@ export default function EngineBHotBenchPanel() {
   const cards = useMemo(() => {
     const rows = snapshot?.symbols || [];
     return GROUPS.map((group) => {
-      const candidate = hotlist?.groups?.[group.key]?.winner ?? null;
+      const groupPayload = hotlist?.groups?.[group.key];
+      const candidate = groupPayload?.winner ?? null;
+      const slot = groupPayload?.selected;
+      const alternates = groupPayload?.alternates ?? [];
       const row = matchSnapshotRow(rows, candidate);
       const symbolWatches = relevantWatches(watches, candidate);
       const primaryWatch = symbolWatches[0] || null;
@@ -408,6 +464,8 @@ export default function EngineBHotBenchPanel() {
       return {
         group,
         candidate,
+        slot,
+        alternates,
         row,
         symbolWatches,
         primaryWatch,
@@ -498,6 +556,11 @@ export default function EngineBHotBenchPanel() {
   }, [autoReviewReadyOnly, cards, openChart]);
 
   const selectedSymbols = hotlist?.selectedSymbols || winnerCandidates.flatMap((candidate) => candidate?.symbol ? [candidate.symbol] : []);
+  // Only group winners above the scout threshold are auto-primable (req 10).
+  const primeEligibleSymbols = useMemo(() => GROUPS.flatMap((group) => {
+    const slot = hotlist?.groups?.[group.key]?.selected;
+    return slot?.symbol && slot.eligible_for_prime ? [slot.symbol] : [];
+  }), [hotlist]);
   const headerBusy = hotlistLoading || snapshotLoading || watchesLoading;
 
   return (
@@ -536,11 +599,12 @@ export default function EngineBHotBenchPanel() {
                 size="sm"
                 variant="outline"
                 className="gap-1 text-xs"
-                onClick={() => void primeSymbols(selectedSymbols, 'ALL')}
-                disabled={selectedSymbols.length === 0 || primingKey !== null}
+                onClick={() => void primeSymbols(primeEligibleSymbols, 'ALL')}
+                disabled={primeEligibleSymbols.length === 0 || primingKey !== null}
+                title={primeEligibleSymbols.length === 0 ? 'No group winner is above the scout threshold' : 'Prime Engine B on eligible winners only'}
               >
                 <Layers className="h-3.5 w-3.5" />
-                {primingKey === 'ALL' ? 'Priming…' : 'Prime Winners'}
+                {primingKey === 'ALL' ? 'Priming…' : `Prime Winners (${primeEligibleSymbols.length})`}
               </Button>
               <RefreshButton onClick={() => void refreshAll()} loading={headerBusy} />
             </div>
@@ -562,24 +626,41 @@ export default function EngineBHotBenchPanel() {
       {error && <ErrorBanner message={error} onRetry={() => void refreshAll()} />}
 
       <div className="grid gap-4 xl:grid-cols-2">
-        {cards.map(({ group, candidate, row, symbolWatches, primaryWatch, watchPlan, state }) => {
+        {cards.map(({ group, candidate, slot, alternates, row, symbolWatches, primaryWatch, watchPlan, state }) => {
           const direction = directionForRow(row);
           const zone = actionableZone(row, direction);
+          const weakSlot = slot?.status === 'WEAK_SCOUT' || slot?.status === 'NO_HOT_SETUP';
+          const locked = Boolean(slot?.locked);
+          // Prime allowed for eligible winners; locked symbols may be primed on
+          // an explicit click even when weak (req 10).
+          const canPrime = Boolean(candidate) && (slot?.eligible_for_prime || locked);
           const canReview = Boolean(
             candidate
             && row
+            && slot?.ai_review_enabled !== false
             && ['ENGINE_B_CLEAR', 'NEAR_ZONE', 'WATCH_ARMED', 'READY_FOR_AI_REVIEW', 'AI_WAIT', 'AI_ENTRY_NOW', 'AI_SKIP'].includes(state.status),
           );
+          const slotBusy = actionKey === `lock-${group.key}` || actionKey === `replace-${group.key}`;
           return (
             <Card key={group.key} className="border-border/60 bg-card/60">
               <CardHeader className="pb-3">
                 <div className="flex items-start justify-between gap-3">
                   <div className="space-y-1">
-                    <div className="flex items-center gap-2">
+                    <div className="flex flex-wrap items-center gap-2">
                       <CardTitle className="text-base">{group.label}</CardTitle>
+                      {slot?.status && (
+                        <Badge variant="outline" className={cn('text-[10px] border', slotStatusTone(slot.status))}>
+                          {slot.status}
+                        </Badge>
+                      )}
                       <Badge variant="outline" className={cn('text-[10px] border', statusTone(state.status))}>
                         {state.status}
                       </Badge>
+                      {locked && (
+                        <Badge variant="outline" className="text-[10px] border border-primary/40 text-primary">
+                          LOCKED
+                        </Badge>
+                      )}
                     </div>
                     <div className="text-sm text-muted-foreground">
                       {candidate ? `${candidate.display} · ${candidate.asset_type}` : 'missing'}
@@ -587,7 +668,7 @@ export default function EngineBHotBenchPanel() {
                   </div>
                   {symbolWatches.length > 0 && <CompactSuggestedWatchStatus watches={symbolWatches} />}
                 </div>
-                <p className="text-xs text-muted-foreground">{state.reason}</p>
+                <p className="text-xs text-muted-foreground">{slot?.reason || state.reason}</p>
               </CardHeader>
               <CardContent className="space-y-4">
                 {!candidate && (
@@ -599,9 +680,9 @@ export default function EngineBHotBenchPanel() {
                 {candidate && (
                   <>
                     <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
-                      <Metric label="Latest" value={fmtPrice(firstNumber(row?.latest_price, candidate.latest_price), candidate.display, candidate.asset_type)} />
-                      <Metric label="Bid / Ask" value={`${fmtPrice(firstNumber(candidate.bid, row?.bid), candidate.display, candidate.asset_type)} / ${fmtPrice(firstNumber(candidate.ask, row?.ask), candidate.display, candidate.asset_type)}`} />
-                      <Metric label="Spread" value={fmtNum(firstNumber(candidate.spread, row?.spread), 5, 'missing')} />
+                      <Metric label="Latest" value={priceOrFallback(firstNumber(row?.latest_price, candidate.latest_price), candidate.display, candidate.asset_type, 'missing')} />
+                      <Metric label="Bid / Ask" value={`${priceOrFallback(firstNumber(candidate.bid, row?.bid), candidate.display, candidate.asset_type, 'N/A')} / ${priceOrFallback(firstNumber(candidate.ask, row?.ask), candidate.display, candidate.asset_type, 'N/A')}`} />
+                      <Metric label="Spread" value={fmtNum(firstNumber(candidate.spread, row?.spread), 5, 'N/A')} />
                       <Metric label="Strength" value={fmtNum(candidate.strength_score, 1, 'missing')} accent="long" />
                       <Metric label="Move %" value={fmtNum(firstNumber(candidate.change_pct, row?.change_pct), 2, 'missing')} />
                       <Metric label="Freshness" value={candidate.freshness_status || row?.freshness?.gateDecision || 'missing'} />
@@ -622,9 +703,9 @@ export default function EngineBHotBenchPanel() {
                         value={state.status === 'SCOUTING' ? 'SCOUTING' : row?.engineB.confidencePassed ? 'PASS' : 'PRIMED'}
                         accent={row?.engineB.confidencePassed ? 'long' : undefined}
                       />
-                      <Metric label="Entry" value={fmtPrice(firstNumber(row?.levels?.entry, row?.engineB.entry), candidate.display, candidate.asset_type)} />
-                      <Metric label="SL" value={fmtPrice(firstNumber(row?.levels?.sl, row?.engineB.sl), candidate.display, candidate.asset_type)} accent="short" />
-                      <Metric label="TP" value={fmtPrice(firstNumber(row?.levels?.tp1, row?.levels?.tp, row?.engineB.tp), candidate.display, candidate.asset_type)} accent="long" />
+                      <Metric label="Entry" value={priceOrFallback(firstNumber(row?.levels?.entry, row?.engineB.entry), candidate.display, candidate.asset_type, 'missing')} />
+                      <Metric label="SL" value={priceOrFallback(firstNumber(row?.levels?.sl, row?.engineB.sl), candidate.display, candidate.asset_type, 'missing')} accent="short" />
+                      <Metric label="TP" value={priceOrFallback(firstNumber(row?.levels?.tp1, row?.levels?.tp, row?.engineB.tp), candidate.display, candidate.asset_type, 'missing')} accent="long" />
                       <Metric label="R:R" value={fmtNum(firstNumber(row?.levels?.rr, row?.engineB.rr), 2, 'missing')} />
                       <Metric label="Trigger" value={primaryWatch?.status || row?.engineB.noTriggerClassification || 'missing'} />
                       <Metric label="Zone TF" value={row?.engineB.sourceTimeframes?.zone_tf || row?.timeframe || timeframe} />
@@ -651,10 +732,22 @@ export default function EngineBHotBenchPanel() {
                         variant="outline"
                         className="gap-1 text-xs"
                         onClick={() => void primeSymbols([candidate.symbol], candidate.symbol)}
-                        disabled={primingKey !== null}
+                        disabled={primingKey !== null || !canPrime}
+                        title={canPrime ? 'Prime Engine B on this symbol' : 'Below scout threshold — lock it first to prime manually'}
                       >
                         <Layers className="h-3.5 w-3.5" />
                         {primingKey === candidate.symbol ? 'Priming…' : 'Prime Engine B'}
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="gap-1 text-xs"
+                        onClick={() => toggleLock(slot, group.key)}
+                        disabled={slotBusy}
+                        title={locked ? 'Unlock — allow auto-rotation again' : 'Lock — keep this symbol on the card across refreshes'}
+                      >
+                        {locked ? <Unlock className="h-3.5 w-3.5" /> : <Lock className="h-3.5 w-3.5" />}
+                        {locked ? 'Unlock' : 'Lock'}
                       </Button>
                       <Button
                         size="sm"
@@ -670,7 +763,7 @@ export default function EngineBHotBenchPanel() {
                         className="gap-1 text-xs"
                         onClick={() => openChart(candidate, row, true)}
                         disabled={!canReview}
-                        title={canReview ? 'Run a fresh Engine B chart review' : 'Prime Engine B first and wait for a usable candidate'}
+                        title={canReview ? 'Run a fresh Engine B chart review' : weakSlot ? 'No candidate above scout threshold' : 'Prime Engine B first and wait for a usable candidate'}
                       >
                         <Bot className="h-3.5 w-3.5" />
                         AI Review
@@ -696,6 +789,23 @@ export default function EngineBHotBenchPanel() {
                         Refresh
                       </Button>
                     </div>
+
+                    {alternates.length > 0 && (
+                      <div className="rounded-md border border-border/60 bg-muted/15 p-3">
+                        <div className="text-[10px] uppercase tracking-wider text-muted-foreground">Alternates</div>
+                        <div className="mt-2 space-y-1.5">
+                          {alternates.map((alt) => (
+                            <AlternateRow
+                              key={`${group.key}-${alt.symbol}`}
+                              alt={alt}
+                              disabled={slotBusy || locked}
+                              lockedHint={locked}
+                              onReplace={() => replaceSlot(group.key, alt.symbol, alt.display || alt.symbol)}
+                            />
+                          ))}
+                        </div>
+                      </div>
+                    )}
                   </>
                 )}
               </CardContent>
@@ -703,6 +813,57 @@ export default function EngineBHotBenchPanel() {
           );
         })}
       </div>
+    </div>
+  );
+}
+
+function slotStatusTone(status: string): string {
+  if (status === 'PRIORITY' || status === 'HOT') {
+    return 'bg-long/15 text-long border-long/30';
+  }
+  if (status === 'SCOUT') {
+    return 'bg-warning/15 text-warning border-warning/30';
+  }
+  // WEAK_SCOUT / NO_HOT_SETUP
+  return 'bg-muted/40 text-muted-foreground border-border/40';
+}
+
+function AlternateRow({
+  alt,
+  disabled,
+  lockedHint,
+  onReplace,
+}: {
+  alt: EngineBHotlistAlternate;
+  disabled: boolean;
+  lockedHint: boolean;
+  onReplace: () => void;
+}) {
+  return (
+    <div className="flex items-center justify-between gap-2 rounded-md border border-border/40 bg-background/40 px-2 py-1.5">
+      <div className="min-w-0">
+        <div className="flex items-center gap-2">
+          <span className="text-sm font-mono">{alt.display || alt.symbol}</span>
+          <Badge variant="outline" className="text-[10px]">{fmtNum(alt.strength_score, 1, '—')}</Badge>
+          {alt.change_pct != null && (
+            <span className={cn('text-[10px] font-mono', alt.change_pct >= 0 ? 'text-long' : 'text-short')}>
+              {fmtNum(alt.change_pct, 2, '—')}%
+            </span>
+          )}
+        </div>
+        <div className="truncate text-[11px] text-muted-foreground">{alt.reason}</div>
+      </div>
+      <Button
+        size="sm"
+        variant="ghost"
+        className="gap-1 text-xs shrink-0"
+        onClick={onReplace}
+        disabled={disabled}
+        title={lockedHint ? 'Unlock the card first to switch symbols' : `Switch this card to ${alt.symbol}`}
+      >
+        <ArrowLeftRight className="h-3.5 w-3.5" />
+        Replace
+      </Button>
     </div>
   );
 }
