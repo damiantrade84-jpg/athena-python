@@ -16,7 +16,14 @@ _VALID_TRIGGERS = frozenset({
     "REJECTION_FROM_ZONE",
     "SWEEP_RECLAIM",
 })
-_VALID_SOURCES = frozenset({"ai_chart_review", "ai_scalp_chart_review"})
+_VALID_SOURCES = frozenset(
+    {
+        "ai_chart_review",
+        "ai_scalp_chart_review",
+        "engine_b_hotbench",
+        "engine_b_candidate",
+    }
+)
 _VALID_SCALP_CONTEXT_TF = frozenset({"M5", "M15"})
 _VALID_SCALP_ENTRY_EXEC_TF = frozenset({"M1", "M5"})
 

@@ -3,6 +3,7 @@ import MainLayout from '@/components/layout/MainLayout';
 import DashboardPanel from '@/components/panels/DashboardPanel';
 import SignalsPanel from '@/components/panels/SignalsPanel';
 import PairBrowserPanel from '@/components/panels/PairBrowserPanel';
+import EngineBHotBenchPanel from '@/components/panels/EngineBHotBenchPanel';
 import LiveCockpitPanel from '@/components/panels/LiveCockpitPanel';
 import ScanConfigPanel from '@/components/panels/ScanConfigPanel';
 import TradesPanel from '@/components/panels/TradesPanel';
@@ -27,6 +28,7 @@ const panels: Record<string, React.ComponentType> = {
   dashboard: DashboardPanel,
   signals: SignalsPanel,
   pairBrowser: PairBrowserPanel,
+  engineBHotBench: EngineBHotBenchPanel,
   liveCockpit: LiveCockpitPanel,
   scanConfig: ScanConfigPanel,
   trades: TradesPanel,

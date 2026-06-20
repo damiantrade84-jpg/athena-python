@@ -39,7 +39,7 @@ export interface TradeSkillReview {
 export interface SuggestedTradePlan {
   schemaVersion?: string;
   armable?: boolean;
-  source?: 'ai_chart_review' | 'ai_scalp_chart_review' | string;
+  source?: 'ai_chart_review' | 'ai_scalp_chart_review' | 'engine_b_hotbench' | 'engine_b_candidate' | string;
   symbol?: string;
   direction?: Direction;
   action?: 'WAIT_FOR_LEVEL' | 'WAIT_FOR_ZONE' | 'WATCH_ONLY' | 'NO_TRADE' | 'ENTRY_NOW' | string;
@@ -695,6 +695,25 @@ export interface LdEngineBRow {
   sl: number | null;
   tp: number | null;
   rr: number | null;
+  nearestSupportZone?: {
+    lower?: number | null;
+    upper?: number | null;
+    center?: number | null;
+    type?: string | null;
+  } | null;
+  nearestResistanceZone?: {
+    lower?: number | null;
+    upper?: number | null;
+    center?: number | null;
+    type?: string | null;
+  } | null;
+  sourceTimeframes?: {
+    zone_tf?: string | null;
+    entry_tf?: string | null;
+    trigger_tf?: string | null;
+    atr_tf?: string | null;
+  } | null;
+  engineBStyle?: string | null;
 }
 
 export interface LdEngineCRow {
@@ -1774,6 +1793,9 @@ export interface AIChartReviewScreenshotMeta {
   execution_timeframe?: string;
   /** Advisory seed for Engine B chart review direction (server re-validates). */
   candidate_direction?: string;
+  primary_engine?: 'A' | 'B';
+  signal_engine?: 'A' | 'B';
+  renderedLayers?: Record<string, boolean>;
 }
 
 export interface AIChartReviewChartSnapshot {
@@ -1788,6 +1810,17 @@ export interface AIChartReviewChartSnapshot {
   engineBContext?: Record<string, unknown> | null;
   engineBOverlayStatus?: 'disabled' | 'loading' | 'ready' | 'error' | 'unavailable';
   engineBOverlayError?: string | null;
+  engineBOverlayMeta?: {
+    chartTimeframe?: string | null;
+    engineBStyle?: string | null;
+    overlaySource?: string | null;
+    sourceTimeframes?: {
+      zone_tf?: string | null;
+      entry_tf?: string | null;
+      trigger_tf?: string | null;
+      atr_tf?: string | null;
+    } | null;
+  } | null;
   priceRange?: {
     min?: number | null;
     max?: number | null;
@@ -1816,6 +1849,71 @@ export interface AIChartReviewRequest {
   provider?: AIChartReviewProvider;
   screenshot_base64: string;
   screenshot_meta: AIChartReviewScreenshotMeta;
+}
+
+export interface EngineBHotlistCandidate {
+  symbol: string;
+  display: string;
+  asset_type: string;
+  source: string;
+  latest_price: number | null;
+  bid: number | null;
+  ask: number | null;
+  spread: number | null;
+  change_pct: number | null;
+  strength_score: number;
+  rank: number;
+  reason: string;
+  freshness_seconds?: number | null;
+  freshness_status?: 'fresh' | 'delayed' | 'stale' | 'missing' | string;
+  components: {
+    freshness: number;
+    movement: number;
+    rangeExpansion: number;
+    activity?: number;
+    spread: number;
+    session: number;
+  };
+}
+
+export interface EngineBHotlistGroup {
+  group: 'forex' | 'crypto' | 'commodity' | 'index' | string;
+  winner: EngineBHotlistCandidate | null;
+  candidates: EngineBHotlistCandidate[];
+}
+
+export interface EngineBHotlistResponse {
+  success: boolean;
+  payloadVersion: 'engine-b-hotbench-v1' | string;
+  generated_at: string;
+  groups: Record<string, EngineBHotlistGroup>;
+  selectedSymbols: string[];
+  scoring: {
+    usesAi: false;
+    usesScreenshots: false;
+    usesFullEngineB: false;
+  };
+}
+
+export type EngineBHotBenchStatus =
+  | 'SCOUTING'
+  | 'PRIMED'
+  | 'ENGINE_B_CLEAR'
+  | 'NEAR_ZONE'
+  | 'WATCH_ARMED'
+  | 'READY_FOR_AI_REVIEW'
+  | 'AI_ENTRY_NOW'
+  | 'AI_WAIT'
+  | 'AI_SKIP'
+  | 'INVALIDATED'
+  | 'EXPIRED'
+  | 'MISSING';
+
+export interface EngineBHotBenchCardState {
+  status: EngineBHotBenchStatus;
+  reason: string;
+  watchStatus?: string | null;
+  reviewStatus?: 'AI_ENTRY_NOW' | 'AI_WAIT' | 'AI_SKIP' | null;
 }
 
 export type ScalpAIReviewHumanAction = 'trade' | 'wait' | 'reject' | 'watch';

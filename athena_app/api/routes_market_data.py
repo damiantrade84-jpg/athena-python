@@ -411,6 +411,52 @@ def _find_chart_pair(symbol: str):
     )
 
 
+def _csv_tokens(value: str | None) -> list[str]:
+    if not value:
+        return []
+    return [token.strip() for token in str(value).replace(";", ",").split(",") if token.strip()]
+
+
+def _truthy_param(value: object, *, default: bool = False) -> bool:
+    if value is None:
+        return default
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def api_engine_b_hotlist():
+    """Return a cheap cross-asset shortlist before any full Engine B prime scan."""
+    from athena_app.services.engine_b_hotlist import build_engine_b_hotlist
+
+    raw_groups = _csv_tokens(request.args.get("groups"))
+    raw_symbols = _csv_tokens(request.args.get("symbols"))
+    timeframe = str(request.args.get("timeframe") or "H1").upper()
+    include_candidates = _truthy_param(
+        request.args.get("includeCandidates"),
+        default=True,
+    )
+    try:
+        top_per_group = max(1, min(int(request.args.get("topPerGroup") or 1), 5))
+    except (TypeError, ValueError):
+        top_per_group = 1
+
+    pairs_universe = ACTIVE_PAIRS or ALL_PAIRS
+    with _live_prices_lock:
+        live_snapshot = dict(_live_prices)
+
+    payload = build_engine_b_hotlist(
+        pairs_universe=list(pairs_universe or []),
+        live_prices=live_snapshot,
+        candle_fetch_fn=fetch_candles,
+        config=CONFIG,
+        symbols_override=raw_symbols or None,
+        groups_override=raw_groups or None,
+        top_per_group=top_per_group,
+        timeframe=timeframe,
+        include_candidates=include_candidates,
+    )
+    return jsonify(_json_safe(payload))
+
+
 def _overlay_zone(value):
     if not isinstance(value, dict):
         return None
@@ -581,16 +627,37 @@ def _normalize_engine_b_overlay_payload(
         warnings.append("engine_b_overlays_missing")
 
     struct_atr = _safe_float(raw.get("struct_atr"))
+    source_timeframes = {
+        "zone_tf": str(raw.get("zone_tf") or raw.get("structure_tf") or "").upper() or None,
+        "entry_tf": str(raw.get("entry_tf") or "").upper() or None,
+        "trigger_tf": str(raw.get("trigger_tf") or raw.get("entry_tf") or "").upper() or None,
+        "atr_tf": str(raw.get("atr_tf") or "").upper() or None,
+    }
+    rendered_layers = {
+        "candles": True,
+        "engine_b": bool(has_overlay),
+        "nearest_support_zone": bool(support_zone),
+        "nearest_resistance_zone": bool(resistance_zone),
+        "bos_data": bool(raw.get("bos_data")),
+        "choch_data": bool(raw.get("choch_data")),
+        "order_blocks": bool(order_blocks),
+        "active_fvgs": bool(active_fvgs),
+        "breaker_block": isinstance(raw.get("breaker_block"), dict),
+    }
 
     return {
         "symbol": symbol,
         "timeframe": timeframe,
+        "chart_timeframe": timeframe,
         "direction": direction,
         "style": style,
+        "engine_b_style": str(raw.get("style") or style or "auto"),
         "confirmed_only": not bool(CONFIG.get("ENGINE_B_USE_FORMING_FOR_STRUCTURE", False)),
         "overlay_source": "engine_b",
         "overlay_version": "engine_b_legacy_v1",
         "computed_at": datetime.now(timezone.utc).isoformat(),
+        "source_timeframes": source_timeframes,
+        "rendered_layers": rendered_layers,
         "price_precision": _overlay_precision_for(pair),
         "warnings": warnings,
         "nearest_support_zone": support_zone,
@@ -1578,6 +1645,12 @@ def register_market_data_routes(app, runtime: SimpleNamespace) -> None:
         api_intermarket_matrix,
     )
     app.add_url_rule("/api/candles", "api_candles", api_candles, methods=["GET"])
+    app.add_url_rule(
+        "/api/engine-b/hotlist",
+        "api_engine_b_hotlist",
+        api_engine_b_hotlist,
+        methods=["GET"],
+    )
     app.add_url_rule(
         "/api/engine-b-overlays",
         "api_engine_b_overlays",

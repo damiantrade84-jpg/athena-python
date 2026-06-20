@@ -310,11 +310,20 @@ interface EngineBBreakerBlock {
 interface EngineBOverlayPayload {
   symbol?: string;
   timeframe?: string;
+  chart_timeframe?: string;
   price_precision?: ChartPricePrecision;
   overlay_source?: string;
   overlay_version?: string;
   computed_at?: string;
+  engine_b_style?: string;
   warnings?: string[];
+  source_timeframes?: {
+    zone_tf?: string | null;
+    entry_tf?: string | null;
+    trigger_tf?: string | null;
+    atr_tf?: string | null;
+  } | null;
+  rendered_layers?: Record<string, boolean> | null;
   nearest_support_zone?: EngineBZone | null;
   nearest_resistance_zone?: EngineBZone | null;
   bos_data?: Record<string, unknown>;
@@ -750,6 +759,19 @@ function reviewContextFromResponse(response: AIChartReviewResponse | null): {
     symbol: typeof record.symbol === 'string' ? record.symbol : null,
     timeframe: typeof record.timeframe === 'string' ? record.timeframe : null,
   };
+}
+
+function reviewOutcomeStatus(response: AIChartReviewResponse | null): 'AI_ENTRY_NOW' | 'AI_WAIT' | 'AI_SKIP' | null {
+  const action = String(
+    response?.ai_review?.human_action
+      ?? response?.aiReviewSummary?.humanAction
+      ?? response?.ai_review_summary?.humanAction
+      ?? '',
+  ).trim().toLowerCase();
+  if (action === 'trade') return 'AI_ENTRY_NOW';
+  if (action === 'wait' || action === 'watch') return 'AI_WAIT';
+  if (action === 'reject') return 'AI_SKIP';
+  return null;
 }
 
 function reviewTimeframeFor(signal: EngineASignal | null): string {
@@ -2321,7 +2343,18 @@ function buildCleanLegendChips(args: {
 // --- Main panel ------------------------------------------------------
 
 export default function TVChartPanel() {
-  const { scanCacheA, scanCacheB, tvChartIntent, clearTvChartIntent, showToast, isTestMode, setActivePanel, aiReviewProvider, setAiReviewProvider } = useStore();
+  const {
+    scanCacheA,
+    scanCacheB,
+    tvChartIntent,
+    clearTvChartIntent,
+    showToast,
+    isTestMode,
+    setActivePanel,
+    aiReviewProvider,
+    setAiReviewProvider,
+    setChartReviewOutcome,
+  } = useStore();
   const { data: scanSettings } = useApiPoll<{ settings?: { AI_CHART_REVIEW_PRIMARY_ENGINE?: string } }>('/api/scan-settings', 60_000);
   const chartPrimaryEngine = String(scanSettings?.settings?.AI_CHART_REVIEW_PRIMARY_ENGINE || 'A').toUpperCase() === 'B' ? 'B' : 'A';
   const useEngineBPrimary = chartPrimaryEngine === 'B';
@@ -3284,8 +3317,15 @@ export default function TVChartPanel() {
       const dataUrl = await canvasToDataUrl(downscaled);
       const tfForBackend = TF_BACKEND_MAP[timeframe] || timeframe;
       const visibleRange = chartRef.current?.timeScale().getVisibleRange() ?? null;
+      const intentSymbolKey = symbolKey(displaySymbol(intentSignal) || intentSignal?.symbol || intentSignal?.pair);
+      const pairSymbolKey = symbolKey(pair);
+      const engineBReviewIntent =
+        (pairSymbolKey != null && intentSymbolKey === pairSymbolKey && isEngineBPrimarySignal(intentSignal))
+        || isEngineBPrimarySignal(chartCandidate);
+      const engineBOverlayExpected = engineBReviewIntent && showEngineBOverlays;
+      const engineBOverlayRendered = engineBOverlayExpected && engineBOverlay?.overlay_source === 'engine_b';
       const overlays: string[] = ['candles'];
-      if (showEngineBOverlays && engineBOverlay?.overlay_source === 'engine_b') overlays.push('engine_b');
+      if (engineBOverlayExpected) overlays.push('engine_b');
       if (quantVolumeBars) overlays.push('volume');
       if (quantVwap) overlays.push('vwap');
       if (quantEma20) overlays.push('ema20');
@@ -3299,8 +3339,36 @@ export default function TVChartPanel() {
       const priceValues = (candles ?? [])
         .flatMap((row) => [toNum(row.l, NaN), toNum(row.h, NaN)])
         .filter((value) => Number.isFinite(value));
+      const renderedLayerState = {
+        candles: true,
+        engine_b: Boolean(engineBOverlayRendered),
+        volume: Boolean(quantVolumeBars),
+        volumeMa: Boolean(quantVolumeBars && quantVolumeMa),
+        vwap: Boolean(quantVwap),
+        ema20: Boolean(quantEma20),
+        ema21: Boolean(quantEma21),
+        ema50: Boolean(quantEma50),
+        ema200: Boolean(quantEma200),
+        dema200: Boolean(quantDema200),
+        atr14: Boolean(quantAtr14),
+        rsi14: Boolean(quantRsi14),
+        adx14: Boolean(quantAdx14),
+      };
       const chartSnapshot: AIChartReviewChartSnapshot = {
-        renderedLayers: [...overlays],
+        renderedLayers: [
+          'candles',
+          ...(engineBOverlayRendered ? ['engine_b'] : []),
+          ...(quantVolumeBars ? ['volume'] : []),
+          ...(quantVwap ? ['vwap'] : []),
+          ...(quantEma20 ? ['ema20'] : []),
+          ...(quantEma21 ? ['ema21'] : []),
+          ...(quantEma50 ? ['ema50'] : []),
+          ...(quantEma200 ? ['ema200'] : []),
+          ...(quantDema200 ? ['dema200'] : []),
+          ...(quantAtr14 ? ['atr14'] : []),
+          ...(quantRsi14 ? ['rsi14'] : []),
+          ...(quantAdx14 ? ['adx14'] : []),
+        ],
         visibleRange: visibleRange
           ? {
               from: visibleRange.from != null ? String(visibleRange.from) : null,
@@ -3309,7 +3377,7 @@ export default function TVChartPanel() {
           : null,
         visibleCandleCount: candles?.length ?? 0,
         indicatorLayerStates: {
-          engineB: showEngineBOverlays && engineBOverlay?.overlay_source === 'engine_b',
+          engineB: engineBOverlayRendered,
           volume: Boolean(quantVolumeBars),
           volumeMa: Boolean(quantVolumeBars && quantVolumeMa),
           vwap: Boolean(quantVwap),
@@ -3323,14 +3391,27 @@ export default function TVChartPanel() {
           adx14: Boolean(quantAdx14),
         },
         engineBOverlayCount:
-          showEngineBOverlays && engineBOverlay?.overlay_source === 'engine_b'
+          engineBOverlayRendered
             ? engineBOverlayLines(engineBOverlay, true).length + buildEngineBZones(engineBOverlay, true).length
             : 0,
-        engineBContext: showEngineBOverlays && engineBOverlay?.overlay_source === 'engine_b'
+        engineBContext: engineBOverlayRendered
             ? (engineBOverlay as Record<string, unknown>)
             : null,
         engineBOverlayStatus,
         engineBOverlayError: engineBOverlayError ?? null,
+        engineBOverlayMeta: engineBOverlayExpected ? {
+          chartTimeframe: firstString(engineBOverlay?.chart_timeframe, engineBOverlay?.timeframe),
+          engineBStyle: firstString(engineBOverlay?.engine_b_style),
+          overlaySource: firstString(engineBOverlay?.overlay_source),
+          sourceTimeframes: engineBOverlay?.source_timeframes
+            ? {
+                zone_tf: firstString(engineBOverlay.source_timeframes.zone_tf),
+                entry_tf: firstString(engineBOverlay.source_timeframes.entry_tf),
+                trigger_tf: firstString(engineBOverlay.source_timeframes.trigger_tf),
+                atr_tf: firstString(engineBOverlay.source_timeframes.atr_tf),
+              }
+            : null,
+        } : null,
         priceRange: priceValues.length
           ? {
               min: Math.min(...priceValues),
@@ -3380,11 +3461,14 @@ export default function TVChartPanel() {
           ) ?? undefined,
         signal_style: candidateStyle,
         candidate_direction: normalizeDirection(chartCandidate?.direction) ?? undefined,
+        primary_engine: engineBReviewIntent ? 'B' : undefined,
+        signal_engine: engineBReviewIntent ? 'B' : undefined,
         overlays,
         visible_range_start: visibleRange?.from != null ? String(visibleRange.from) : undefined,
         visible_range_end: visibleRange?.to != null ? String(visibleRange.to) : undefined,
         chart_provider: chartPayload?.chart_provider || chartPayload?.candle_provider || undefined,
         chart_snapshot: chartSnapshot,
+        renderedLayers: renderedLayerState,
       });
       const symbol = (pair || '').toUpperCase();
       if (!symbol) {
@@ -3408,6 +3492,14 @@ export default function TVChartPanel() {
       }
       aiReviewSymbolKeyRef.current = responseSymbolKey;
       lastAppliedRouteKeyRef.current = null;
+      const outcomeStatus = reviewOutcomeStatus(response);
+      if (response.primaryEngine === 'B' && outcomeStatus) {
+        setChartReviewOutcome({
+          symbol,
+          primaryEngine: 'B',
+          status: outcomeStatus,
+        });
+      }
       setAiReview(response);
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'AI review failed';

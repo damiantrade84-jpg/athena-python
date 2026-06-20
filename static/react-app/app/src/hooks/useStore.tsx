@@ -35,6 +35,12 @@ interface AppState {
   tvChartIntent: TvChartIntent | null;
   scalpWorkbenchIntent: ScalpWorkbenchIntent | null;
   aiReviewProvider: AIReviewProvider;
+  chartReviewOutcomes: Record<string, {
+    symbol: string;
+    primaryEngine: 'A' | 'B';
+    status: 'AI_ENTRY_NOW' | 'AI_WAIT' | 'AI_SKIP';
+    updatedAt: string;
+  }>;
 }
 
 interface AppActions {
@@ -64,6 +70,12 @@ interface AppActions {
   setScalpWorkbenchIntent: (intent: ScalpWorkbenchIntent) => void;
   clearScalpWorkbenchIntent: () => void;
   setAiReviewProvider: (provider: AIReviewProvider) => void;
+  setChartReviewOutcome: (outcome: {
+    symbol: string;
+    primaryEngine: 'A' | 'B';
+    status: 'AI_ENTRY_NOW' | 'AI_WAIT' | 'AI_SKIP';
+    updatedAt?: string;
+  }) => void;
 }
 
 const StoreContext = createContext<(AppState & AppActions) | null>(null);
@@ -116,6 +128,12 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   const [tvChartIntent, setTvChartIntentState] = useState<TvChartIntent | null>(null);
   const [scalpWorkbenchIntent, setScalpWorkbenchIntentState] = useState<ScalpWorkbenchIntent | null>(null);
   const [aiReviewProvider, setAiReviewProviderState] = useState<AIReviewProvider>('openai');
+  const [chartReviewOutcomes, setChartReviewOutcomes] = useState<Record<string, {
+    symbol: string;
+    primaryEngine: 'A' | 'B';
+    status: 'AI_ENTRY_NOW' | 'AI_WAIT' | 'AI_SKIP';
+    updatedAt: string;
+  }>>({});
 
   const setTvChartIntent = useCallback((intent: TvChartIntent) => {
     setTvChartIntentState(intent);
@@ -141,6 +159,25 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   const setScanCacheB = useCallback((signals: unknown[], meta?: { count: number; scannedAt: string; pairsScanned?: number; scanFunnel?: Record<string, number> }) => {
     setScanCacheBState(signals);
     if (meta) setScanCacheBMeta(meta);
+  }, []);
+
+  const setChartReviewOutcome = useCallback((outcome: {
+    symbol: string;
+    primaryEngine: 'A' | 'B';
+    status: 'AI_ENTRY_NOW' | 'AI_WAIT' | 'AI_SKIP';
+    updatedAt?: string;
+  }) => {
+    const key = outcome.symbol.trim().toUpperCase();
+    if (!key) return;
+    setChartReviewOutcomes((current) => ({
+      ...current,
+      [key]: {
+        symbol: outcome.symbol,
+        primaryEngine: outcome.primaryEngine,
+        status: outcome.status,
+        updatedAt: outcome.updatedAt ?? new Date().toISOString(),
+      },
+    }));
   }, []);
 
   const setCascadeScanCache = useCallback((
@@ -316,14 +353,14 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       isAutoTrade, isTestMode, isLoading, toast,
       scanCacheA, scanCacheB, scalpLabScanCache, scalpLabSelectedCache, scanCacheAMeta, scanCacheBMeta,
       cascadeScanCache, cascadeScanMeta, cascadeScanReviewStatus,
-      tvChartIntent, scalpWorkbenchIntent, aiReviewProvider,
+      tvChartIntent, scalpWorkbenchIntent, aiReviewProvider, chartReviewOutcomes,
       setActivePanel, refreshSignals, refreshPositions,
       refreshGuardian, toggleAutoTrade, toggleTestMode, executeSignal,
       closePosition, showToast, getLivePrice: livePriceGetter,
       setScanCacheA, setScanCacheB, setScalpLabScanCache, setScalpLabSelectedCache,
       setCascadeScanCache, setCascadeScanMeta, markCascadeReviewOpened,
       setTvChartIntent, clearTvChartIntent, setScalpWorkbenchIntent, clearScalpWorkbenchIntent,
-      setAiReviewProvider,
+      setAiReviewProvider, setChartReviewOutcome,
     }}>
       {children}
     </StoreContext.Provider>

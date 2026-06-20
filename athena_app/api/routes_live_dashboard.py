@@ -276,6 +276,14 @@ def _ld_list(value) -> list:
         return [value] if value else []
     return [str(value)]
 
+
+def _ld_first(*values):
+    for value in values:
+        if value is not None:
+            return value
+    return None
+
+
 def _ld_has_valid_levels(levels: dict | None) -> bool:
     if not isinstance(levels, dict):
         return False
@@ -410,19 +418,40 @@ def _ld_build_engine_b_row(sig_b: dict) -> dict:
     conf = sig_b.get("confidence") or {}
     checklist = sig_b.get("checklist") or conf.get("checklist") or {}
     structural_verdict = sig_b.get("structural_verdict")
-    score = (sig_b.get("confidence_score") or conf.get("score") or
-             sig_b.get("score"))
-    max_score = sig_b.get("confidence_max") or conf.get("max_score") or sig_b.get("max_score")
-    confidence_passed = bool(conf.get("passed") or sig_b.get("passed"))
+    score = _ld_first(
+        sig_b.get("confidence_score"),
+        conf.get("score"),
+        sig_b.get("score"),
+    )
+    max_score = _ld_first(
+        sig_b.get("confidence_max"),
+        conf.get("max_score"),
+        sig_b.get("max_score"),
+        sig_b.get("max_possible"),
+    )
+    threshold = _ld_first(
+        sig_b.get("min_score"),
+        sig_b.get("min_score_used"),
+        sig_b.get("threshold"),
+    )
+    confidence_passed = bool(
+        _ld_first(conf.get("passed"), sig_b.get("passed"), sig_b.get("checklist_passed"))
+    )
     _sdv = sig_b.get("structural_data_valid")
     if _sdv is not None:
         structural_data_valid = bool(_sdv)
     else:
         structural_data_valid = structural_verdict == "CLEAR"
+    source_timeframes = {
+        "zone_tf": _ld_first(sig_b.get("zone_tf"), sig_b.get("structure_tf")),
+        "entry_tf": sig_b.get("entry_tf"),
+        "trigger_tf": _ld_first(sig_b.get("trigger_tf"), sig_b.get("entry_tf")),
+        "atr_tf": sig_b.get("atr_tf"),
+    }
     return {
         "score": score,
         "maxScore": max_score,
-        "threshold": sig_b.get("min_score"),
+        "threshold": threshold,
         "direction": sig_b.get("direction"),
         "structuralVerdict": structural_verdict,
         "structuralDataValid": structural_data_valid,
@@ -439,10 +468,42 @@ def _ld_build_engine_b_row(sig_b: dict) -> dict:
         "diagnosticNotes": _ld_list(conf.get("diagnostic_notes") or
                                     sig_b.get("diagnostic_notes")),
         "noTriggerClassification": sig_b.get("no_trigger_classification") or sig_b.get("no_trigger"),
-        "entry": sig_b.get("entry"),
-        "sl": sig_b.get("sl"),
-        "tp": sig_b.get("tp"),
-        "rr": sig_b.get("rr"),
+        "entry": _ld_first(
+            sig_b.get("entry"),
+            sig_b.get("current_price"),
+            sig_b.get("price"),
+        ),
+        "sl": _ld_first(
+            sig_b.get("sl"),
+            sig_b.get("final_stop_loss"),
+            sig_b.get("execution_sl"),
+            sig_b.get("recommended_stop_loss"),
+            sig_b.get("stop_loss"),
+        ),
+        "tp": _ld_first(
+            sig_b.get("tp"),
+            sig_b.get("final_take_profit"),
+            sig_b.get("execution_tp"),
+            sig_b.get("recommended_take_profit"),
+            sig_b.get("take_profit"),
+        ),
+        "rr": _ld_first(
+            sig_b.get("rr"),
+            sig_b.get("rr_used_for_gate"),
+            sig_b.get("execution_rr"),
+        ),
+        "nearestSupportZone": (
+            dict(sig_b.get("nearest_support_zone"))
+            if isinstance(sig_b.get("nearest_support_zone"), dict)
+            else None
+        ),
+        "nearestResistanceZone": (
+            dict(sig_b.get("nearest_resistance_zone"))
+            if isinstance(sig_b.get("nearest_resistance_zone"), dict)
+            else None
+        ),
+        "sourceTimeframes": source_timeframes,
+        "engineBStyle": sig_b.get("style"),
     }
 
 def _ld_derive_engine_c_state(a_row: dict, b_row: dict) -> dict:

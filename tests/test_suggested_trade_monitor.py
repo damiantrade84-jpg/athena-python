@@ -58,6 +58,43 @@ def test_sanitize_rejects_malformed_plan():
     assert out["armable"] is False
 
 
+def test_sanitize_accepts_engine_b_hotbench_zone_plan():
+    raw = {
+        "suggestedTradePlan": _valid_plan(
+            source="engine_b_hotbench",
+            action="WAIT_FOR_ZONE",
+            triggerType="PULLBACK_TO_ZONE",
+            zoneLow=1.082,
+            zoneHigh=1.084,
+            invalidateAbove=1.086,
+            level=None,
+        )
+    }
+    out = sanitize_suggested_trade_plan(raw, source="engine_b_hotbench", symbol="EURUSD")
+    assert out is not None
+    assert out["armable"] is True
+    assert out["source"] == "engine_b_hotbench"
+    assert out["zoneLow"] == pytest.approx(1.082)
+    assert out["zoneHigh"] == pytest.approx(1.084)
+
+
+def test_sanitize_engine_b_hotbench_zone_plan_requires_real_zone():
+    raw = {
+        "suggestedTradePlan": _valid_plan(
+            source="engine_b_hotbench",
+            action="WAIT_FOR_ZONE",
+            triggerType="PULLBACK_TO_ZONE",
+            zoneLow=None,
+            zoneHigh=None,
+            level=None,
+        )
+    }
+    out = sanitize_suggested_trade_plan(raw, source="engine_b_hotbench", symbol="EURUSD")
+    assert out is not None
+    assert out["armable"] is False
+    assert "zone required" in str(out.get("reason") or "").lower()
+
+
 def test_validate_flag_rejects_entry_now():
     payload = {
         "symbol": "EURUSD",
@@ -66,6 +103,21 @@ def test_validate_flag_rejects_entry_now():
     _, err = validate_flag_payload(payload)
     assert err is not None
     assert "ENTRY_NOW" in err or "cannot be watched" in err or "not watchable" in err or "invalid" in err.lower()
+
+
+def test_validate_flag_rejects_engine_b_hotbench_entry_now():
+    payload = {
+        "symbol": "EURUSD",
+        "source": "engine_b_hotbench",
+        "suggestedTradePlan": _valid_plan(
+            source="engine_b_hotbench",
+            action="ENTRY_NOW",
+            triggerType="ACCEPTANCE_ABOVE",
+        ),
+    }
+    _, err = validate_flag_payload(payload)
+    assert err is not None
+    assert "ENTRY_NOW" in err or "cannot be watched" in err
 
 
 def test_validate_flag_rejects_no_trade():

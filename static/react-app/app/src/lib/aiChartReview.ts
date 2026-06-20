@@ -106,6 +106,9 @@ export function buildScreenshotMeta(args: {
   regime_timeframe?: string;
   execution_timeframe?: string;
   candidate_direction?: string;
+  primary_engine?: 'A' | 'B';
+  signal_engine?: 'A' | 'B';
+  renderedLayers?: Record<string, boolean>;
 }): AIChartReviewScreenshotMeta {
   const provider = args.chart_provider;
   return {
@@ -126,6 +129,9 @@ export function buildScreenshotMeta(args: {
     ...(args.regime_timeframe ? { regime_timeframe: args.regime_timeframe } : {}),
     ...(args.execution_timeframe ? { execution_timeframe: args.execution_timeframe } : {}),
     ...(args.candidate_direction ? { candidate_direction: args.candidate_direction } : {}),
+    ...(args.primary_engine ? { primary_engine: args.primary_engine } : {}),
+    ...(args.signal_engine ? { signal_engine: args.signal_engine } : {}),
+    ...(args.renderedLayers ? { renderedLayers: { ...args.renderedLayers } } : {}),
   };
 }
 

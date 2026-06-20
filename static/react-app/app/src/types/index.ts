@@ -195,6 +195,7 @@ export type PanelId =
   | 'dashboard'
   | 'signals'
   | 'pairBrowser'
+  | 'engineBHotBench'
   | 'liveCockpit'
   | 'scanConfig'
   | 'trades'

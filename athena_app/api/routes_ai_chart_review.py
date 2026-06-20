@@ -84,6 +84,18 @@ def _chart_review_type_label(primary_engine: str) -> str:
     return "engine_b_chart" if primary_engine == "B" else "engine_a_chart"
 
 
+def _resolve_primary_engine(
+    screenshot_meta: dict[str, Any] | None,
+    cfg: dict[str, Any],
+) -> str:
+    meta = screenshot_meta if isinstance(screenshot_meta, dict) else {}
+    for key in ("primary_engine", "signal_engine"):
+        raw = meta.get(key)
+        if raw not in (None, ""):
+            return normalize_chart_review_primary_engine(raw)
+    return normalize_chart_review_primary_engine(cfg.get("PRIMARY_ENGINE"))
+
+
 def _attach_review_input_meta(
     response: dict[str, Any],
     *,
@@ -327,7 +339,7 @@ def register_ai_chart_review_routes(app, runtime: SimpleNamespace) -> None:
         screenshot_meta = dict(data.get("screenshot_meta") or {})
         provider = _resolve_provider_name(data, cfg, runtime.CONFIG)
 
-        primary_engine = normalize_chart_review_primary_engine(cfg.get("PRIMARY_ENGINE"))
+        primary_engine = _resolve_primary_engine(screenshot_meta, cfg)
         review_type = _review_type_for_primary(primary_engine)
         chart_review_type = _chart_review_type_label(primary_engine)
 

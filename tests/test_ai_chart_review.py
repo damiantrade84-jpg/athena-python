@@ -299,6 +299,17 @@ def test_route_rejects_extra_client_score_keys(tmp_audit_db):
         mock_call.assert_not_called()
 
 
+def test_route_rejects_top_level_primary_engine_key(tmp_audit_db):
+    app = _make_app(tmp_audit_db)
+    client = app.test_client()
+    body = _base_request(primary_engine="B")
+    with patch("ai_review.providers.anthropic_provider.call_anthropic_chart_review") as mock_call:
+        resp = client.post("/api/ai/chart-review", json=body)
+        assert resp.status_code == 400
+        assert "unexpected request keys" in resp.get_json()["error"]
+        mock_call.assert_not_called()
+
+
 def test_route_rejects_non_png_data_url(tmp_audit_db):
     app = _make_app(tmp_audit_db)
     client = app.test_client()
@@ -2099,6 +2110,28 @@ def _base_request_engine_b(**overrides):
     return body
 
 
+def test_route_screenshot_meta_signal_engine_b_overrides_config(tmp_audit_db):
+    app = _make_app(tmp_audit_db, primary_engine="A")
+    client = app.test_client()
+    body = _base_request(
+        screenshot_meta={
+            **(_base_request()["screenshot_meta"]),
+            "candidate_direction": "LONG",
+            "signal_engine": "B",
+        }
+    )
+    with patch(
+        "ai_review.providers.router.call_anthropic_chart_review",
+        return_value=_mock_provider_payload(),
+    ):
+        resp = client.post("/api/ai/chart-review", json=body)
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data.get("primaryEngine") == "B"
+    assert data.get("engine_b_context") is not None
+    assert data["reviewInputMeta"]["signalEngine"] == "B"
+
+
 def test_route_primary_engine_b_returns_engine_b_context(tmp_audit_db):
     app = _make_app(tmp_audit_db, primary_engine="B")
     client = app.test_client()
@@ -2125,6 +2158,28 @@ def test_route_primary_engine_b_fail_closed_without_direction(tmp_audit_db):
     resp = client.post("/api/ai/chart-review", json=body)
     assert resp.status_code == 422
     assert "Engine B returned no result" in resp.get_json()["error"]
+
+
+def test_route_invalid_metadata_engine_falls_back_safely_to_a(tmp_audit_db):
+    app = _make_app(tmp_audit_db, primary_engine="B")
+    client = app.test_client()
+    body = _base_request(
+        screenshot_meta={
+            **(_base_request()["screenshot_meta"]),
+            "candidate_direction": "LONG",
+            "primary_engine": "not-an-engine",
+        }
+    )
+    with patch(
+        "ai_review.providers.router.call_anthropic_chart_review",
+        return_value=_mock_provider_payload(),
+    ):
+        resp = client.post("/api/ai/chart-review", json=body)
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data.get("primaryEngine") == "A"
+    assert data.get("engine_a_context") is not None
+    assert data["reviewInputMeta"]["signalEngine"] == "A"
 
 
 def test_dedup_engine_b_separate_from_engine_a(tmp_audit_db):

@@ -87,6 +87,7 @@ def test_market_data_routes_register_expected_methods():
     assert "GET" in methods_by_path["/api/market-hours"]
     assert "GET" in methods_by_path["/api/prices"]
     assert "GET" in methods_by_path["/api/candles"]
+    assert "GET" in methods_by_path["/api/engine-b/hotlist"]
     assert "GET" in methods_by_path["/api/engine-b-overlays"]
     assert "GET" in methods_by_path["/api/chart-tick"]
     assert "POST" in methods_by_path["/api/news-sentiment"]
@@ -182,6 +183,10 @@ def test_engine_b_overlays_preserve_legacy_structure_contract():
                 "bos_confirmed": True,
                 "choch_confirmed": False,
                 "struct_atr": 2.5,
+                "style": "intraday",
+                "zone_tf": "H4",
+                "entry_tf": "H1",
+                "atr_tf": "H4",
             },
             {"display": "BTC/USDT"},
             None,
@@ -202,6 +207,14 @@ def test_engine_b_overlays_preserve_legacy_structure_contract():
     assert payload["overlay_version"]
     assert payload["symbol"] == "BTCUSDT"
     assert payload["timeframe"] == "M1"
+    assert payload["chart_timeframe"] == "M1"
+    assert payload["engine_b_style"] == "intraday"
+    assert payload["source_timeframes"] == {
+        "zone_tf": "H4",
+        "entry_tf": "H1",
+        "trigger_tf": "H1",
+        "atr_tf": "H4",
+    }
     assert payload["confirmed_only"] is not None
     assert payload["nearest_support_zone"]["lower"] == 95.0
     assert payload["bos_data"]["last_broken_high"] == 103.5
@@ -211,10 +224,90 @@ def test_engine_b_overlays_preserve_legacy_structure_contract():
     assert all(not fvg.get("mitigated") for fvg in payload["active_fvgs"])
     assert payload["breaker_block"]["level"] == 101.25
     assert payload["struct_atr"] == pytest.approx(2.5)
+    assert payload["rendered_layers"]["engine_b"] is True
+    assert payload["rendered_layers"]["nearest_support_zone"] is True
+    assert payload["rendered_layers"]["breaker_block"] is True
     pp = payload["price_precision"]
     assert pp["score_group"] == "crypto_btc"
     assert pp["precision"] == 1
     assert pp["min_move"] == pytest.approx(0.1)
+
+
+def test_engine_b_overlays_warn_when_structure_empty():
+    def _compute_naked_analysis(_signal, **_kwargs):
+        return ({}, {"display": "BTC/USDT"}, None)
+
+    client = _client(
+        _runtime(
+            CONFIG={"CRYPTO_EXECUTION_PROVIDER": "binance"},
+            compute_naked_analysis=_compute_naked_analysis,
+        )
+    )
+
+    resp = client.get("/api/engine-b-overlays?symbol=BTCUSDT&tf=H1&direction=LONG&style=auto")
+
+    assert resp.status_code == 200
+    payload = resp.get_json()
+    assert "engine_b_overlays_missing" in (payload.get("warnings") or [])
+
+
+def test_engine_b_hotlist_returns_group_winners_without_full_engine_b():
+    pairs = [
+        {"symbol": "EURUSD=X", "display": "EUR/USD", "type": "forex", "source": "mt5", "enabled": True},
+        {"symbol": "GBPUSD=X", "display": "GBP/USD", "type": "forex", "source": "mt5", "enabled": True},
+        {"symbol": "BTCUSDT", "display": "BTC/USDT", "type": "crypto", "source": "binance", "enabled": True},
+        {"symbol": "ETHUSDT", "display": "ETH/USDT", "type": "crypto", "source": "binance", "enabled": True},
+    ]
+    live_prices = {
+        "EUR/USD": {"price": 1.101, "bid": 1.1009, "ask": 1.1011, "ts": 1_000.0, "change_pct": 0.42},
+        "GBP/USD": {"price": 1.25, "bid": 1.2499, "ask": 1.2502, "ts": 900.0, "change_pct": 0.05},
+        "BTC/USDT": {"price": 68000.0, "bid": 67995.0, "ask": 68005.0, "ts": 1_000.0, "change_pct": 2.8},
+        "ETH/USDT": {"price": 3500.0, "bid": 3499.0, "ask": 3501.0, "ts": 999.0, "change_pct": 0.6},
+    }
+
+    def _fetch_candles(pair, _tf, _limit):
+        if pair["display"] == "EUR/USD":
+            return [
+                {"time": "2026-05-21T00:00:00Z", "open": 1.09, "high": 1.092, "low": 1.089, "close": 1.091},
+                {"time": "2026-05-21T01:00:00Z", "open": 1.091, "high": 1.095, "low": 1.09, "close": 1.094},
+                {"time": "2026-05-21T02:00:00Z", "open": 1.094, "high": 1.101, "low": 1.093, "close": 1.101},
+            ]
+        if pair["display"] == "BTC/USDT":
+            return [
+                {"time": "2026-05-21T00:00:00Z", "open": 66000.0, "high": 66600.0, "low": 65900.0, "close": 66500.0},
+                {"time": "2026-05-21T01:00:00Z", "open": 66500.0, "high": 67100.0, "low": 66400.0, "close": 67050.0},
+                {"time": "2026-05-21T02:00:00Z", "open": 67050.0, "high": 68100.0, "low": 66900.0, "close": 68000.0},
+            ]
+        return [
+            {"time": "2026-05-21T00:00:00Z", "open": 1.0, "high": 1.001, "low": 0.999, "close": 1.0},
+            {"time": "2026-05-21T01:00:00Z", "open": 1.0, "high": 1.001, "low": 0.999, "close": 1.0},
+            {"time": "2026-05-21T02:00:00Z", "open": 1.0, "high": 1.001, "low": 0.999, "close": 1.0},
+        ]
+
+    client = _client(
+        _runtime(
+            ALL_PAIRS=pairs,
+            ACTIVE_PAIRS=pairs,
+            live_prices=live_prices,
+            fetch_candles=_fetch_candles,
+            compute_naked_analysis=lambda *_args, **_kwargs: pytest.fail("hotlist must not call Engine B"),
+        )
+    )
+
+    resp = client.get("/api/engine-b/hotlist?groups=forex,crypto&topPerGroup=1&timeframe=H1")
+
+    assert resp.status_code == 200
+    payload = resp.get_json()
+    assert payload["success"] is True
+    assert payload["payloadVersion"] == "engine-b-hotbench-v1"
+    assert payload["groups"]["forex"]["winner"]["symbol"] == "EURUSD"
+    assert payload["groups"]["crypto"]["winner"]["symbol"] == "BTCUSDT"
+    assert payload["selectedSymbols"] == ["EURUSD", "BTCUSDT"]
+    assert payload["scoring"] == {
+        "usesAi": False,
+        "usesScreenshots": False,
+        "usesFullEngineB": False,
+    }
 
 
 def test_crypto_chart_provider_resolves_to_bybit_when_execution_provider_bybit():

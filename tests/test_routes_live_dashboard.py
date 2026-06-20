@@ -5,7 +5,10 @@ import threading
 
 from flask import Flask
 
-from athena_app.api.routes_live_dashboard import register_live_dashboard_routes
+from athena_app.api.routes_live_dashboard import (
+    _ld_build_engine_b_row,
+    register_live_dashboard_routes,
+)
 
 
 class _Log:
@@ -106,3 +109,53 @@ def test_live_feed_diagnostics_empty_runtime_is_read_only_success():
     assert data["success"] is True
     assert data["count"] == 0
     assert data["tradesPlaced"] == 0
+
+
+def test_ld_build_engine_b_row_maps_fallback_level_fields():
+    row = _ld_build_engine_b_row(
+        {
+            "current_price": 65000.0,
+            "final_stop_loss": 63000.0,
+            "final_take_profit": 68000.0,
+            "rr_used_for_gate": 1.8,
+            "confidence_score": 4.5,
+            "min_score_used": 4.0,
+            "max_possible": 6.0,
+            "direction": "LONG",
+            "structural_verdict": "CLEAR",
+            "confidence": {"passed": True},
+        }
+    )
+
+    assert row["entry"] == 65000.0
+    assert row["sl"] == 63000.0
+    assert row["tp"] == 68000.0
+    assert row["rr"] == 1.8
+    assert row["score"] == 4.5
+    assert row["threshold"] == 4.0
+    assert row["maxScore"] == 6.0
+    assert row["confidencePassed"] is True
+
+
+def test_ld_build_engine_b_row_preserves_legacy_fields():
+    row = _ld_build_engine_b_row(
+        {
+            "entry": 1.085,
+            "sl": 1.08,
+            "tp": 1.095,
+            "rr": 2.0,
+            "score": 5.0,
+            "min_score": 4.5,
+            "max_score": 6.0,
+            "direction": "SHORT",
+            "structural_verdict": "CLEAR",
+        }
+    )
+
+    assert row["entry"] == 1.085
+    assert row["sl"] == 1.08
+    assert row["tp"] == 1.095
+    assert row["rr"] == 2.0
+    assert row["score"] == 5.0
+    assert row["threshold"] == 4.5
+    assert row["maxScore"] == 6.0
