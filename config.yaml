@@ -232,6 +232,24 @@ ENGINE_AB_CRYPTO_SIGNAL_FEED_FALLBACK: false
 ENGINE_B_CRYPTO_LEVELS_FEED: bybit
 ENGINE_B_CRYPTO_LEVELS_SIGNAL_FEED_FALLBACK: true
 ENGINE_B_CRYPTO_BT_LEVEL_ATR_USE_SIGNAL_FEED: false
+# Engine B Hot Bench (read-only discovery shortlist) sticky-slot hysteresis.
+# Keeps the displayed symbol per group stable across hotlist polls so the card
+# does not jump between weak pairs. Demo/diagnostic only — never primes Engine B
+# or executes; just controls which symbol is surfaced for review.
+ENGINE_B_HOTLIST_SWITCH_MARGIN: 15        # new candidate must beat current by this many points to replace it
+ENGINE_B_HOTLIST_SCOUT_MIN_SCORE: 55      # below this => WEAK_SCOUT / NO_HOT_SETUP, prime + AI review disabled
+ENGINE_B_HOTLIST_HOT_MIN_SCORE: 65
+ENGINE_B_HOTLIST_PRIORITY_MIN_SCORE: 75
+ENGINE_B_HOTLIST_WEAK_TTL_SEC: 900        # current symbol may be replaced after staying weak this long
+ENGINE_B_HOTLIST_CRYPTO_ANCHORS:          # preferred high-liquidity crypto anchors
+  - BTCUSDT
+  - ETHUSDT
+  - SOLUSDT
+  - BNBUSDT
+  - XRPUSDT
+  - DOGEUSDT
+  - LINKUSDT
+  - ADAUSDT
 # Engine B: skip forex signals on 22:00–07:00 UTC (Asian); applies to BT + live scan.
 ENGINE_B_FOREX_ASIAN_SESSION_SKIP_ENABLED: true
 

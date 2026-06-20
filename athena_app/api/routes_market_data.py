@@ -9,6 +9,7 @@ from __future__ import annotations
 import logging
 import os
 import re
+import threading
 import time
 from datetime import datetime, timezone
 from types import SimpleNamespace
@@ -25,6 +26,10 @@ JSE_PAIRS = []
 _disabled_pairs = set()
 _live_prices = {}
 _live_prices_lock = None
+# Sticky Engine B Hot Bench slot state, persisted across hotlist refreshes so the
+# displayed symbol does not jump on every poll. Keyed by canonical group name.
+_engine_b_hotlist_slots: dict[str, dict] = {}
+_engine_b_hotlist_slots_lock = threading.Lock()
 fetch_yield_curve = None
 http_requests = None
 fetch_candles = None
@@ -423,6 +428,38 @@ def _truthy_param(value: object, *, default: bool = False) -> bool:
     return str(value).strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _parse_hotlist_group_token(token: str) -> tuple[str | None, str | None]:
+    """Split a ``group:symbol`` action token into its parts."""
+    if ":" in token:
+        group, _, symbol = token.partition(":")
+        return group.strip().lower() or None, symbol.strip().upper() or None
+    return token.strip().lower() or None, None
+
+
+def _build_hotlist_actions() -> dict[str, dict]:
+    """Parse lock/unlock/select query params into per-group hotlist actions."""
+    actions: dict[str, dict] = {}
+
+    def _slot(group: str) -> dict:
+        return actions.setdefault(group, {})
+
+    for token in _csv_tokens(request.args.get("select")):
+        group, symbol = _parse_hotlist_group_token(token)
+        if group and symbol:
+            _slot(group)["select"] = symbol
+    for token in _csv_tokens(request.args.get("lock")):
+        group, symbol = _parse_hotlist_group_token(token)
+        if group:
+            _slot(group)["lock"] = True
+            if symbol:
+                _slot(group).setdefault("select", symbol)
+    for token in _csv_tokens(request.args.get("unlock")):
+        group, _symbol = _parse_hotlist_group_token(token)
+        if group:
+            _slot(group)["lock"] = False
+    return actions
+
+
 def api_engine_b_hotlist():
     """Return a cheap cross-asset shortlist before any full Engine B prime scan."""
     from athena_app.services.engine_b_hotlist import build_engine_b_hotlist
@@ -439,9 +476,14 @@ def api_engine_b_hotlist():
     except (TypeError, ValueError):
         top_per_group = 1
 
+    actions = _build_hotlist_actions()
+
     pairs_universe = ACTIVE_PAIRS or ALL_PAIRS
     with _live_prices_lock:
         live_snapshot = dict(_live_prices)
+
+    with _engine_b_hotlist_slots_lock:
+        prior_slots = {group: dict(slot) for group, slot in _engine_b_hotlist_slots.items()}
 
     payload = build_engine_b_hotlist(
         pairs_universe=list(pairs_universe or []),
@@ -453,7 +495,15 @@ def api_engine_b_hotlist():
         top_per_group=top_per_group,
         timeframe=timeframe,
         include_candidates=include_candidates,
+        selected_slots=prior_slots,
+        actions=actions,
     )
+
+    updated_slots = payload.get("selectedSlots")
+    if isinstance(updated_slots, dict):
+        with _engine_b_hotlist_slots_lock:
+            _engine_b_hotlist_slots.update(updated_slots)
+
     return jsonify(_json_safe(payload))
 
 

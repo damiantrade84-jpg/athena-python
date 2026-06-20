@@ -16,6 +16,23 @@ from typing import Any, Callable
 
 DEFAULT_GROUPS = ("forex", "crypto", "commodity", "index")
 
+# Sticky slot / hysteresis defaults. Overridable via config keys of the same name.
+DEFAULT_SWITCH_MARGIN = 15.0
+DEFAULT_SCOUT_MIN_SCORE = 55.0
+DEFAULT_HOT_MIN_SCORE = 65.0
+DEFAULT_PRIORITY_MIN_SCORE = 75.0
+DEFAULT_WEAK_TTL_SEC = 900.0
+DEFAULT_CRYPTO_ANCHORS = (
+    "BTCUSDT",
+    "ETHUSDT",
+    "SOLUSDT",
+    "BNBUSDT",
+    "XRPUSDT",
+    "DOGEUSDT",
+    "LINKUSDT",
+    "ADAUSDT",
+)
+
 
 def _safe_float(value: Any) -> float | None:
     if isinstance(value, bool):
@@ -398,6 +415,234 @@ def _with_candles(
     return candidate
 
 
+def _thresholds_from_config(config: dict[str, Any] | None) -> dict[str, float]:
+    cfg = config or {}
+
+    def _num(key: str, default: float) -> float:
+        val = _safe_float(cfg.get(key))
+        return val if val is not None else default
+
+    return {
+        "switch_margin": _num("ENGINE_B_HOTLIST_SWITCH_MARGIN", DEFAULT_SWITCH_MARGIN),
+        "scout_min_score": _num("ENGINE_B_HOTLIST_SCOUT_MIN_SCORE", DEFAULT_SCOUT_MIN_SCORE),
+        "hot_min_score": _num("ENGINE_B_HOTLIST_HOT_MIN_SCORE", DEFAULT_HOT_MIN_SCORE),
+        "priority_min_score": _num("ENGINE_B_HOTLIST_PRIORITY_MIN_SCORE", DEFAULT_PRIORITY_MIN_SCORE),
+        "weak_ttl_sec": _num("ENGINE_B_HOTLIST_WEAK_TTL_SEC", DEFAULT_WEAK_TTL_SEC),
+    }
+
+
+def _crypto_anchors_from_config(config: dict[str, Any] | None) -> set[str]:
+    raw = (config or {}).get("ENGINE_B_HOTLIST_CRYPTO_ANCHORS")
+    if not isinstance(raw, (list, tuple)) or not raw:
+        raw = DEFAULT_CRYPTO_ANCHORS
+    anchors: set[str] = set()
+    for item in raw:
+        for variant in _symbol_variants(item):
+            anchors.add(variant)
+    return anchors
+
+
+def _candidate_data_status(candidate: dict[str, Any]) -> str:
+    """Coarse data-quality bucket for a candidate: fresh | stale | data_missing."""
+    if candidate.get("latest_price") is None:
+        return "data_missing"
+    status = str(candidate.get("freshness_status") or "missing")
+    if status in {"fresh", "delayed"}:
+        return "fresh"
+    if status == "stale":
+        return "stale"
+    return "data_missing"
+
+
+def _preferred_pick(
+    ranked: list[dict[str, Any]],
+    *,
+    group: str,
+    anchors: set[str],
+    switch_margin: float,
+) -> dict[str, Any] | None:
+    """Natural winner for a group, applying the crypto anchor preference.
+
+    For crypto we prefer the strongest high-liquidity anchor unless a non-anchor
+    beats the best anchor by at least ``switch_margin``.
+    """
+    if not ranked:
+        return None
+    top = ranked[0]
+    if group != "crypto" or not anchors:
+        return top
+    anchor_rows = [row for row in ranked if str(row.get("symbol") or "").upper() in anchors]
+    if not anchor_rows:
+        return top
+    best_anchor = anchor_rows[0]
+    top_is_anchor = str(top.get("symbol") or "").upper() in anchors
+    if not top_is_anchor and float(top.get("strength_score") or 0.0) >= float(best_anchor.get("strength_score") or 0.0) + switch_margin:
+        return top
+    return best_anchor
+
+
+def _slot_tier(score: float, thresholds: dict[str, float]) -> str:
+    if score >= thresholds["priority_min_score"]:
+        return "PRIORITY"
+    if score >= thresholds["hot_min_score"]:
+        return "HOT"
+    if score >= thresholds["scout_min_score"]:
+        return "SCOUT"
+    return "WEAK"
+
+
+def _select_slot(
+    *,
+    group: str,
+    ranked: list[dict[str, Any]],
+    prior: dict[str, Any] | None,
+    action: dict[str, Any] | None,
+    thresholds: dict[str, float],
+    anchors: set[str],
+    time_now: float | None,
+) -> dict[str, Any]:
+    """Apply sticky hysteresis to choose the displayed symbol for a group.
+
+    Returns the updated slot state. The chosen candidate (if any) is referenced
+    by ``slot["symbol"]`` and embedded as ``slot["candidate"]``.
+    """
+    by_symbol = {str(row.get("symbol") or "").upper(): row for row in ranked}
+    switch_margin = thresholds["switch_margin"]
+    scout_min = thresholds["scout_min_score"]
+    weak_ttl = thresholds["weak_ttl_sec"]
+    now = time.time() if time_now is None else float(time_now)
+    now_iso = _iso_now(time_now)
+
+    action = action or {}
+    manual_symbol = None
+    for variant in _symbol_variants(action.get("select")):
+        if variant in by_symbol:
+            manual_symbol = variant
+            break
+
+    locked = bool(prior.get("locked")) if prior else False
+    if "lock" in action:
+        locked = bool(action.get("lock"))
+
+    prior_symbol = str(prior.get("symbol") or "").upper() if prior else ""
+    current = by_symbol.get(prior_symbol) if prior_symbol else None
+    preferred = _preferred_pick(ranked, group=group, anchors=anchors, switch_margin=switch_margin)
+
+    chosen: dict[str, Any] | None
+    if manual_symbol is not None:
+        chosen = by_symbol[manual_symbol]
+        cause = "manual_select"
+    elif preferred is None:
+        chosen = None
+        cause = "no_candidates"
+    elif prior is None or current is None:
+        # No prior selection, or the previously selected symbol vanished from the
+        # candidate set (data missing / invalidated) -> take the natural winner.
+        chosen = preferred
+        cause = "initial" if prior is None else "current_missing"
+    elif locked:
+        chosen = current
+        cause = "locked"
+    else:
+        cur_status = _candidate_data_status(current)
+        cur_score = float(current.get("strength_score") or 0.0)
+        below_since = _safe_float(prior.get("below_since"))
+        weak_ttl_expired = (
+            cur_score < scout_min
+            and below_since is not None
+            and (now - below_since) >= weak_ttl
+        )
+        if cur_status in {"stale", "data_missing"}:
+            chosen = preferred
+            cause = f"current_{cur_status}"
+        elif weak_ttl_expired:
+            chosen = preferred
+            cause = "weak_ttl"
+        elif (
+            str(preferred.get("symbol") or "").upper() != prior_symbol
+            and float(preferred.get("strength_score") or 0.0) >= cur_score + switch_margin
+        ):
+            chosen = preferred
+            cause = "switch_margin"
+        else:
+            chosen = current
+            cause = "sticky"
+
+    if chosen is None:
+        return {
+            "group": group,
+            "symbol": None,
+            "display": None,
+            "asset_type": None,
+            "selected_at": now_iso,
+            "last_score": None,
+            "status": "NO_HOT_SETUP",
+            "data_status": "data_missing",
+            "locked": locked,
+            "below_since": None,
+            "switched": bool(prior_symbol),
+            "switch_cause": cause,
+            "previous_symbol": prior_symbol or None,
+            "eligible_for_prime": False,
+            "ai_review_enabled": False,
+            "reason": "market inactive — no candidate available",
+            "candidate": None,
+        }
+
+    chosen_symbol = str(chosen.get("symbol") or "").upper()
+    score = float(chosen.get("strength_score") or 0.0)
+    data_status = _candidate_data_status(chosen)
+    switched = chosen_symbol != prior_symbol
+
+    tier = _slot_tier(score, thresholds)
+    if tier == "WEAK":
+        # Below scout threshold: keep the symbol on screen if it is still fresh
+        # (WEAK_SCOUT), otherwise flag the group as having no hot setup.
+        status = "WEAK_SCOUT" if data_status == "fresh" else "NO_HOT_SETUP"
+        reason = "market active but no candidate above scout threshold"
+        eligible_for_prime = False
+        ai_review_enabled = False
+    else:
+        status = tier
+        reason = str(chosen.get("reason") or "")
+        eligible_for_prime = True
+        ai_review_enabled = True
+
+    # Track (as epoch seconds) how long the slot has been below the scout
+    # threshold so the weak TTL can eventually free a stuck weak symbol.
+    prior_below = _safe_float(prior.get("below_since")) if prior else None
+    if score < scout_min and not switched and prior_below is not None:
+        below_since = prior_below
+    elif score < scout_min:
+        below_since = now
+    else:
+        below_since = None
+
+    selected_at = now_iso
+    if not switched and prior and prior.get("selected_at"):
+        selected_at = str(prior.get("selected_at"))
+
+    return {
+        "group": group,
+        "symbol": chosen_symbol,
+        "display": chosen.get("display"),
+        "asset_type": chosen.get("asset_type"),
+        "selected_at": selected_at,
+        "last_score": round(score, 1),
+        "status": status,
+        "data_status": data_status,
+        "locked": locked,
+        "below_since": below_since,
+        "switched": switched,
+        "switch_cause": cause,
+        "previous_symbol": prior_symbol or None if switched else None,
+        "eligible_for_prime": eligible_for_prime,
+        "ai_review_enabled": ai_review_enabled,
+        "reason": reason,
+        "candidate": chosen,
+    }
+
+
 def build_engine_b_hotlist(
     *,
     pairs_universe: list[dict[str, Any]] | None,
@@ -410,6 +655,8 @@ def build_engine_b_hotlist(
     timeframe: str = "H1",
     include_candidates: bool = True,
     time_now: float | None = None,
+    selected_slots: dict[str, Any] | None = None,
+    actions: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     pairs = [p for p in (pairs_universe or []) if isinstance(p, dict) and p.get("enabled", True)]
     requested_groups = []
@@ -448,7 +695,12 @@ def build_engine_b_hotlist(
     top_n = max(1, int(top_per_group or 1))
     candle_limit = int((config or {}).get("ENGINE_B_HOTLIST_CANDLE_LIMIT") or 8)
     preselect_n = max(top_n, int((config or {}).get("ENGINE_B_HOTLIST_PREFETCH_PER_GROUP") or 5))
+    thresholds = _thresholds_from_config(config)
+    anchors = _crypto_anchors_from_config(config)
+    prior_slots = selected_slots or {}
+    actions = actions or {}
     groups_payload: dict[str, dict[str, Any]] = {}
+    updated_slots: dict[str, Any] = dict(prior_slots)
     selected_symbols: list[str] = []
 
     for group in requested_groups:
@@ -478,12 +730,47 @@ def build_engine_b_hotlist(
         for idx, row in enumerate(ranked, start=1):
             row["rank"] = idx
             row["strength_score"] = round(float(row.get("strength_score") or 0.0), 1)
-        winner = ranked[0] if ranked else None
+
+        slot = _select_slot(
+            group=group,
+            ranked=ranked,
+            prior=prior_slots.get(group),
+            action=actions.get(group),
+            thresholds=thresholds,
+            anchors=anchors,
+            time_now=time_now,
+        )
+        winner = slot.get("candidate")
         if winner:
             selected_symbols.append(str(winner.get("symbol")))
+
+        # Top alternates are the next-best ranked candidates excluding the
+        # currently selected symbol, so the user can switch deliberately.
+        selected_symbol = str(slot.get("symbol") or "")
+        alternates = [
+            {
+                "symbol": row.get("symbol"),
+                "display": row.get("display"),
+                "asset_type": row.get("asset_type"),
+                "strength_score": row.get("strength_score"),
+                "change_pct": row.get("change_pct"),
+                "freshness_status": row.get("freshness_status"),
+                "reason": row.get("reason"),
+                "rank": row.get("rank"),
+            }
+            for row in ranked
+            if str(row.get("symbol") or "") != selected_symbol
+        ][:3]
+
+        # Slot state stored across refreshes never embeds the heavy candidate.
+        persisted_slot = {k: v for k, v in slot.items() if k != "candidate"}
+        updated_slots[group] = persisted_slot
+
         groups_payload[group] = {
             "group": group,
             "winner": winner,
+            "selected": slot,
+            "alternates": alternates,
             "candidates": ranked[:top_n] if include_candidates else [],
         }
 
@@ -493,6 +780,8 @@ def build_engine_b_hotlist(
         "generated_at": _iso_now(time_now),
         "groups": groups_payload,
         "selectedSymbols": selected_symbols,
+        "selectedSlots": updated_slots,
+        "thresholds": thresholds,
         "scoring": {
             "usesAi": False,
             "usesScreenshots": False,
