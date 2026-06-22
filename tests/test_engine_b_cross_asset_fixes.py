@@ -239,8 +239,16 @@ def test_scanner_aligned_engine_b_uses_regime_weights_for_conviction():
 
 
 def test_execution_prefers_nested_engine_b_execution_levels():
+    # The MAX_SL_EXCEEDED guard (added 2026-06-06) resolves the SL cap via
+    # rt().CONFIG; bind a minimal runtime so the unit test exercises the real path.
+    import athena_runtime
+    athena_runtime.set_runtime(SimpleNamespace(CONFIG=config.CONFIG))
+
     sig = {
         "is_naked": True,
+        # entry price required by the MAX_SL_EXCEEDED guard added 2026-06-06; without
+        # it entry resolves to 0.0 and _apply_engine_b_execution_levels fails closed.
+        "price": 100.0,
         "sl": 90.0,
         "tp1": 110.0,
         "naked_data": {"execution_sl": 98.5, "execution_tp": 103.0},

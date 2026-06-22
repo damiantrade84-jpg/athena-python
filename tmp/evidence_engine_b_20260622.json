@@ -1,0 +1,1871 @@
+{
+  "backtest_data_as_of": "2026-05-30",
+  "engine_a_comparators": {
+    "ab6_off_by_pair": {
+      "AAPL": {
+        "error": null,
+        "expectancy": 0,
+        "funnelSetups": 529,
+        "funnelTaken": 0,
+        "maxDrawdownPct": 0,
+        "pair": "AAPL",
+        "profitFactor": null,
+        "sharpe": 0,
+        "sortino": 0,
+        "source": "mt5",
+        "sqn": 0,
+        "symbol": "AAPL.US",
+        "totalTrades": 0,
+        "type": "stock",
+        "winRate": 0
+      },
+      "BTC/USDT": {
+        "error": null,
+        "expectancy": 0,
+        "funnelSetups": 4144,
+        "funnelTaken": 0,
+        "maxDrawdownPct": 0,
+        "pair": "BTC/USDT",
+        "profitFactor": null,
+        "sharpe": 0,
+        "sortino": 0,
+        "source": "binance",
+        "sqn": 0,
+        "symbol": "BTCUSDT",
+        "totalTrades": 0,
+        "type": "crypto",
+        "winRate": 0
+      },
+      "DAX 40": {
+        "error": null,
+        "expectancy": 0,
+        "funnelSetups": 529,
+        "funnelTaken": 0,
+        "maxDrawdownPct": 0,
+        "pair": "DAX 40",
+        "profitFactor": null,
+        "sharpe": 0,
+        "sortino": 0,
+        "source": "mt5",
+        "sqn": 0,
+        "symbol": "^GDAXI",
+        "totalTrades": 0,
+        "type": "index",
+        "winRate": 0
+      },
+      "DOGE/USDT": {
+        "error": null,
+        "expectancy": 0,
+        "funnelSetups": 4144,
+        "funnelTaken": 0,
+        "maxDrawdownPct": 0,
+        "pair": "DOGE/USDT",
+        "profitFactor": null,
+        "sharpe": 0,
+        "sortino": 0,
+        "source": "binance",
+        "sqn": 0,
+        "symbol": "DOGEUSDT",
+        "totalTrades": 0,
+        "type": "crypto",
+        "winRate": 0
+      },
+      "Dow Jones": {
+        "error": null,
+        "expectancy": 0,
+        "funnelSetups": 529,
+        "funnelTaken": 0,
+        "maxDrawdownPct": 0,
+        "pair": "Dow Jones",
+        "profitFactor": null,
+        "sharpe": 0,
+        "sortino": 0,
+        "source": "mt5",
+        "sqn": 0,
+        "symbol": "^DJI",
+        "totalTrades": 0,
+        "type": "index",
+        "winRate": 0
+      },
+      "ETH/USDT": {
+        "error": null,
+        "expectancy": 0,
+        "funnelSetups": 4144,
+        "funnelTaken": 0,
+        "maxDrawdownPct": 0,
+        "pair": "ETH/USDT",
+        "profitFactor": null,
+        "sharpe": 0,
+        "sortino": 0,
+        "source": "binance",
+        "sqn": 0,
+        "symbol": "ETHUSDT",
+        "totalTrades": 0,
+        "type": "crypto",
+        "winRate": 0
+      },
+      "EUR/USD": {
+        "error": null,
+        "expectancy": 0,
+        "funnelSetups": 4149,
+        "funnelTaken": 0,
+        "maxDrawdownPct": 0,
+        "pair": "EUR/USD",
+        "profitFactor": null,
+        "sharpe": 0,
+        "sortino": 0,
+        "source": "mt5",
+        "sqn": 0,
+        "symbol": "EURUSD=X",
+        "totalTrades": 0,
+        "type": "forex",
+        "winRate": 0
+      },
+      "GBP/JPY": {
+        "error": null,
+        "expectancy": 0,
+        "funnelSetups": 4149,
+        "funnelTaken": 0,
+        "maxDrawdownPct": 0,
+        "pair": "GBP/JPY",
+        "profitFactor": null,
+        "sharpe": 0,
+        "sortino": 0,
+        "source": "mt5",
+        "sqn": 0,
+        "symbol": "GBPJPY=X",
+        "totalTrades": 0,
+        "type": "forex",
+        "winRate": 0
+      },
+      "GBP/USD": {
+        "error": null,
+        "expectancy": 0,
+        "funnelSetups": 4149,
+        "funnelTaken": 0,
+        "maxDrawdownPct": 0,
+        "pair": "GBP/USD",
+        "profitFactor": null,
+        "sharpe": 0,
+        "sortino": 0,
+        "source": "mt5",
+        "sqn": 0,
+        "symbol": "GBPUSD=X",
+        "totalTrades": 0,
+        "type": "forex",
+        "winRate": 0
+      },
+      "MSFT": {
+        "error": null,
+        "expectancy": 0,
+        "funnelSetups": 529,
+        "funnelTaken": 0,
+        "maxDrawdownPct": 0,
+        "pair": "MSFT",
+        "profitFactor": null,
+        "sharpe": 0,
+        "sortino": 0,
+        "source": "mt5",
+        "sqn": 0,
+        "symbol": "MSFT.US",
+        "totalTrades": 0,
+        "type": "stock",
+        "winRate": 0
+      },
+      "NASDAQ-100": {
+        "error": null,
+        "expectancy": 0,
+        "funnelSetups": 529,
+        "funnelTaken": 0,
+        "maxDrawdownPct": 0,
+        "pair": "NASDAQ-100",
+        "profitFactor": null,
+        "sharpe": 0,
+        "sortino": 0,
+        "source": "mt5",
+        "sqn": 0,
+        "symbol": "NAS100",
+        "totalTrades": 0,
+        "type": "index",
+        "winRate": 0
+      },
+      "NVDA": {
+        "error": null,
+        "expectancy": 0,
+        "funnelSetups": 529,
+        "funnelTaken": 0,
+        "maxDrawdownPct": 0,
+        "pair": "NVDA",
+        "profitFactor": null,
+        "sharpe": 0,
+        "sortino": 0,
+        "source": "mt5",
+        "sqn": 0,
+        "symbol": "NVDA.US",
+        "totalTrades": 0,
+        "type": "stock",
+        "winRate": 0
+      },
+      "S&P 500": {
+        "error": null,
+        "expectancy": 0,
+        "funnelSetups": 529,
+        "funnelTaken": 0,
+        "maxDrawdownPct": 0,
+        "pair": "S&P 500",
+        "profitFactor": null,
+        "sharpe": 0,
+        "sortino": 0,
+        "source": "mt5",
+        "sqn": 0,
+        "symbol": "^GSPC",
+        "totalTrades": 0,
+        "type": "index",
+        "winRate": 0
+      },
+      "SOL/USDT": {
+        "error": null,
+        "expectancy": 0,
+        "funnelSetups": 4144,
+        "funnelTaken": 0,
+        "maxDrawdownPct": 0,
+        "pair": "SOL/USDT",
+        "profitFactor": null,
+        "sharpe": 0,
+        "sortino": 0,
+        "source": "binance",
+        "sqn": 0,
+        "symbol": "SOLUSDT",
+        "totalTrades": 0,
+        "type": "crypto",
+        "winRate": 0
+      },
+      "TSLA": {
+        "error": null,
+        "expectancy": 0,
+        "funnelSetups": 529,
+        "funnelTaken": 0,
+        "maxDrawdownPct": 0,
+        "pair": "TSLA",
+        "profitFactor": null,
+        "sharpe": 0,
+        "sortino": 0,
+        "source": "mt5",
+        "sqn": 0,
+        "symbol": "TSLA.US",
+        "totalTrades": 0,
+        "type": "stock",
+        "winRate": 0
+      },
+      "USD/JPY": {
+        "error": null,
+        "expectancy": 0,
+        "funnelSetups": 4149,
+        "funnelTaken": 0,
+        "maxDrawdownPct": 0,
+        "pair": "USD/JPY",
+        "profitFactor": null,
+        "sharpe": 0,
+        "sortino": 0,
+        "source": "mt5",
+        "sqn": 0,
+        "symbol": "USDJPY=X",
+        "totalTrades": 0,
+        "type": "forex",
+        "winRate": 0
+      },
+      "WTI Oil": {
+        "error": null,
+        "expectancy": 0,
+        "funnelSetups": 529,
+        "funnelTaken": 0,
+        "maxDrawdownPct": 0,
+        "pair": "WTI Oil",
+        "profitFactor": null,
+        "sharpe": 0,
+        "sortino": 0,
+        "source": "mt5",
+        "sqn": 0,
+        "symbol": "CL=F",
+        "totalTrades": 0,
+        "type": "commodity",
+        "winRate": 0
+      },
+      "XAG/USD": {
+        "error": null,
+        "expectancy": 0,
+        "funnelSetups": 529,
+        "funnelTaken": 0,
+        "maxDrawdownPct": 0,
+        "pair": "XAG/USD",
+        "profitFactor": null,
+        "sharpe": 0,
+        "sortino": 0,
+        "source": "mt5",
+        "sqn": 0,
+        "symbol": "SI=F",
+        "totalTrades": 0,
+        "type": "commodity",
+        "winRate": 0
+      },
+      "XAU/USD": {
+        "error": null,
+        "expectancy": 0,
+        "funnelSetups": 529,
+        "funnelTaken": 0,
+        "maxDrawdownPct": 0,
+        "pair": "XAU/USD",
+        "profitFactor": null,
+        "sharpe": 0,
+        "sortino": 0,
+        "source": "mt5",
+        "sqn": 0,
+        "symbol": "GC=F",
+        "totalTrades": 0,
+        "type": "commodity",
+        "winRate": 0
+      },
+      "XRP/USDT": {
+        "error": null,
+        "expectancy": 0,
+        "funnelSetups": 4144,
+        "funnelTaken": 0,
+        "maxDrawdownPct": 0,
+        "pair": "XRP/USDT",
+        "profitFactor": null,
+        "sharpe": 0,
+        "sortino": 0,
+        "source": "binance",
+        "sqn": 0,
+        "symbol": "XRPUSDT",
+        "totalTrades": 0,
+        "type": "crypto",
+        "winRate": 0
+      }
+    },
+    "majors_summary": {
+      "majors_aggregate": {
+        "avg_mae_r": -1.072,
+        "avg_mfe_r": 0.991,
+        "avg_r": -0.344,
+        "exit_breakdown_pct": {
+          "SL": 69.3,
+          "TIMEOUT": 9.9,
+          "TP1": 18.2,
+          "TP2": 2.6
+        },
+        "mfe_ge_1r_then_nonpositive_pct_all": 14.6,
+        "n": 192,
+        "next10_entry_way_hit_pct": 40.6,
+        "next5_entry_way_hit_pct": 43.2,
+        "pairs": [
+          "EUR/USD",
+          "USD/JPY",
+          "GBP/USD"
+        ],
+        "reverse_gross_avg_r": 0.438,
+        "reverse_gross_sqn": 3.73,
+        "reverse_gross_total_r": 84.0,
+        "sqn": -3.7,
+        "total_r": -66.05,
+        "trade_regime": {
+          "neutral": {
+            "avg_r": -0.009,
+            "n": 23,
+            "total_r": -0.2,
+            "win_rate": 34.8
+          },
+          "ranging": {
+            "avg_r": -0.454,
+            "n": 56,
+            "total_r": -25.4,
+            "win_rate": 21.4
+          },
+          "trending": {
+            "avg_r": -0.358,
+            "n": 113,
+            "total_r": -40.45,
+            "win_rate": 26.5
+          },
+          "unknown": {
+            "avg_r": 0,
+            "n": 0,
+            "total_r": 0,
+            "win_rate": 0.0
+          }
+        },
+        "win_rate": 26.0,
+        "window_regime_pct": {
+          "neutral": 19.1,
+          "ranging": 34.2,
+          "trending": 46.7
+        }
+      },
+      "pairs": {
+        "EUR/USD": {
+          "actual_r": {
+            "avg": -0.395,
+            "n": 63,
+            "sqn": -2.38,
+            "sum": -24.91
+          },
+          "direction": {
+            "LONG": {
+              "avg_r": -0.473,
+              "n": 40,
+              "next10_entry_way_hit_pct": 40.0,
+              "next5_entry_way_hit_pct": 40.0,
+              "total_r": -18.92,
+              "win_rate": 22.5
+            },
+            "SHORT": {
+              "avg_r": -0.26,
+              "n": 23,
+              "next10_entry_way_hit_pct": 34.8,
+              "next5_entry_way_hit_pct": 43.5,
+              "total_r": -5.99,
+              "win_rate": 30.4
+            }
+          },
+          "exit_breakdown": {
+            "SL": 46,
+            "TIMEOUT": 5,
+            "TP1": 9,
+            "TP2": 3
+          },
+          "exit_breakdown_pct": {
+            "SL": 73.0,
+            "TIMEOUT": 7.9,
+            "TP1": 14.3,
+            "TP2": 4.8
+          },
+          "levels": {
+            "avg_loss_r": -1.119,
+            "avg_mae_r": -1.052,
+            "avg_mfe_r": 1.04,
+            "avg_win_r": 1.731,
+            "median_mfe_r": 0.76,
+            "mfe_ge_1r_count": 24,
+            "mfe_ge_1r_pct": 38.1,
+            "mfe_ge_1r_then_nonpositive_count": 10,
+            "mfe_ge_1r_then_nonpositive_pct_of_all": 15.9,
+            "mfe_ge_1r_then_nonpositive_pct_of_mfe_ge_1r": 41.7,
+            "mfe_ge_1r_then_sl_count": 9,
+            "payoff_ratio_abs_avg_win_to_loss": 1.547,
+            "win_rate": 25.4
+          },
+          "regime_trades": {
+            "neutral": {
+              "avg_r": -0.04,
+              "n": 7,
+              "total_r": -0.28,
+              "win_rate": 28.6
+            },
+            "ranging": {
+              "avg_r": -0.682,
+              "n": 19,
+              "total_r": -12.96,
+              "win_rate": 15.8
+            },
+            "trending": {
+              "avg_r": -0.315,
+              "n": 37,
+              "total_r": -11.67,
+              "win_rate": 29.7
+            },
+            "unknown": {
+              "avg_r": 0,
+              "n": 0,
+              "total_r": 0,
+              "win_rate": 0.0
+            }
+          },
+          "reverse_gross_r": {
+            "avg": 0.238,
+            "n": 63,
+            "sqn": 1.17,
+            "sum": 15.0
+          },
+          "summary": {
+            "error": null,
+            "expectancy": -0.395,
+            "maxDrawdownPct": 9.4,
+            "pair": "EUR/USD",
+            "profitFactor": 0.53,
+            "sharpe": -1.66,
+            "sortino": -1.92,
+            "sqn": -2.38,
+            "totalTrades": 63,
+            "type": "forex",
+            "winRate": 25.4
+          },
+          "window_regime_counts": {
+            "neutral": 95,
+            "ranging": 183,
+            "trending": 252
+          }
+        },
+        "GBP/USD": {
+          "actual_r": {
+            "avg": -0.235,
+            "n": 68,
+            "sqn": -1.42,
+            "sum": -16.01
+          },
+          "direction": {
+            "LONG": {
+              "avg_r": -0.099,
+              "n": 52,
+              "next10_entry_way_hit_pct": 38.5,
+              "next5_entry_way_hit_pct": 44.2,
+              "total_r": -5.15,
+              "win_rate": 32.7
+            },
+            "SHORT": {
+              "avg_r": -0.679,
+              "n": 16,
+              "next10_entry_way_hit_pct": 50.0,
+              "next5_entry_way_hit_pct": 37.5,
+              "total_r": -10.86,
+              "win_rate": 12.5
+            }
+          },
+          "exit_breakdown": {
+            "SL": 45,
+            "TIMEOUT": 6,
+            "TP1": 15,
+            "TP2": 2
+          },
+          "exit_breakdown_pct": {
+            "SL": 66.2,
+            "TIMEOUT": 8.8,
+            "TP1": 22.1,
+            "TP2": 2.9
+          },
+          "levels": {
+            "avg_loss_r": -1.059,
+            "avg_mae_r": -0.989,
+            "avg_mfe_r": 0.989,
+            "avg_win_r": 1.888,
+            "median_mfe_r": 0.58,
+            "mfe_ge_1r_count": 26,
+            "mfe_ge_1r_pct": 38.2,
+            "mfe_ge_1r_then_nonpositive_count": 7,
+            "mfe_ge_1r_then_nonpositive_pct_of_all": 10.3,
+            "mfe_ge_1r_then_nonpositive_pct_of_mfe_ge_1r": 26.9,
+            "mfe_ge_1r_then_sl_count": 3,
+            "payoff_ratio_abs_avg_win_to_loss": 1.783,
+            "win_rate": 27.9
+          },
+          "regime_trades": {
+            "neutral": {
+              "avg_r": 0.371,
+              "n": 8,
+              "total_r": 2.97,
+              "win_rate": 50.0
+            },
+            "ranging": {
+              "avg_r": 0.012,
+              "n": 12,
+              "total_r": 0.14,
+              "win_rate": 33.3
+            },
+            "trending": {
+              "avg_r": -0.398,
+              "n": 48,
+              "total_r": -19.12,
+              "win_rate": 22.9
+            },
+            "unknown": {
+              "avg_r": 0,
+              "n": 0,
+              "total_r": 0,
+              "win_rate": 0.0
+            }
+          },
+          "reverse_gross_r": {
+            "avg": 0.779,
+            "n": 68,
+            "sqn": 3.97,
+            "sum": 53.0
+          },
+          "summary": {
+            "error": null,
+            "expectancy": -0.235,
+            "maxDrawdownPct": 9.0,
+            "pair": "GBP/USD",
+            "profitFactor": 0.69,
+            "sharpe": -0.99,
+            "sortino": -1.24,
+            "sqn": -1.42,
+            "totalTrades": 68,
+            "type": "forex",
+            "winRate": 27.9
+          },
+          "window_regime_counts": {
+            "neutral": 116,
+            "ranging": 127,
+            "trending": 287
+          }
+        },
+        "USD/JPY": {
+          "actual_r": {
+            "avg": -0.412,
+            "n": 61,
+            "sqn": -2.73,
+            "sum": -25.13
+          },
+          "direction": {
+            "LONG": {
+              "avg_r": -0.357,
+              "n": 35,
+              "next10_entry_way_hit_pct": 48.6,
+              "next5_entry_way_hit_pct": 51.4,
+              "total_r": -12.49,
+              "win_rate": 25.7
+            },
+            "SHORT": {
+              "avg_r": -0.486,
+              "n": 26,
+              "next10_entry_way_hit_pct": 34.6,
+              "next5_entry_way_hit_pct": 38.5,
+              "total_r": -12.64,
+              "win_rate": 23.1
+            }
+          },
+          "exit_breakdown": {
+            "SL": 42,
+            "TIMEOUT": 8,
+            "TP1": 11
+          },
+          "exit_breakdown_pct": {
+            "SL": 68.9,
+            "TIMEOUT": 13.1,
+            "TP1": 18.0
+          },
+          "levels": {
+            "avg_loss_r": -1.046,
+            "avg_mae_r": -1.186,
+            "avg_mfe_r": 0.942,
+            "avg_win_r": 1.532,
+            "median_mfe_r": 0.65,
+            "mfe_ge_1r_count": 25,
+            "mfe_ge_1r_pct": 41.0,
+            "mfe_ge_1r_then_nonpositive_count": 11,
+            "mfe_ge_1r_then_nonpositive_pct_of_all": 18.0,
+            "mfe_ge_1r_then_nonpositive_pct_of_mfe_ge_1r": 44.0,
+            "mfe_ge_1r_then_sl_count": 7,
+            "payoff_ratio_abs_avg_win_to_loss": 1.465,
+            "win_rate": 24.6
+          },
+          "regime_trades": {
+            "neutral": {
+              "avg_r": -0.361,
+              "n": 8,
+              "total_r": -2.89,
+              "win_rate": 25.0
+            },
+            "ranging": {
+              "avg_r": -0.503,
+              "n": 25,
+              "total_r": -12.58,
+              "win_rate": 20.0
+            },
+            "trending": {
+              "avg_r": -0.345,
+              "n": 28,
+              "total_r": -9.66,
+              "win_rate": 28.6
+            },
+            "unknown": {
+              "avg_r": 0,
+              "n": 0,
+              "total_r": 0,
+              "win_rate": 0.0
+            }
+          },
+          "reverse_gross_r": {
+            "avg": 0.262,
+            "n": 61,
+            "sqn": 1.28,
+            "sum": 16.0
+          },
+          "summary": {
+            "error": null,
+            "expectancy": -0.412,
+            "maxDrawdownPct": 9.7,
+            "pair": "USD/JPY",
+            "profitFactor": 0.48,
+            "sharpe": -1.88,
+            "sortino": -2.02,
+            "sqn": -2.73,
+            "totalTrades": 61,
+            "type": "forex",
+            "winRate": 24.6
+          },
+          "window_regime_counts": {
+            "neutral": 93,
+            "ranging": 233,
+            "trending": 204
+          }
+        },
+        "XAU/USD": {
+          "actual_r": {
+            "avg": 0.407,
+            "n": 20,
+            "sqn": 1.42,
+            "sum": 8.13
+          },
+          "direction": {
+            "LONG": {
+              "avg_r": 0.407,
+              "n": 20,
+              "next10_entry_way_hit_pct": 60.0,
+              "next5_entry_way_hit_pct": 60.0,
+              "total_r": 8.13,
+              "win_rate": 60.0
+            },
+            "SHORT": {
+              "avg_r": 0,
+              "n": 0,
+              "next10_entry_way_hit_pct": 0.0,
+              "next5_entry_way_hit_pct": 0.0,
+              "total_r": 0,
+              "win_rate": 0.0
+            }
+          },
+          "exit_breakdown": {
+            "SL": 8,
+            "TIMEOUT": 3,
+            "TP1": 9
+          },
+          "exit_breakdown_pct": {
+            "SL": 40.0,
+            "TIMEOUT": 15.0,
+            "TP1": 45.0
+          },
+          "levels": {
+            "avg_loss_r": -1.059,
+            "avg_mae_r": -0.714,
+            "avg_mfe_r": 1.276,
+            "avg_win_r": 1.383,
+            "median_mfe_r": 1.32,
+            "mfe_ge_1r_count": 12,
+            "mfe_ge_1r_pct": 60.0,
+            "mfe_ge_1r_then_nonpositive_count": 2,
+            "mfe_ge_1r_then_nonpositive_pct_of_all": 10.0,
+            "mfe_ge_1r_then_nonpositive_pct_of_mfe_ge_1r": 16.7,
+            "mfe_ge_1r_then_sl_count": 2,
+            "payoff_ratio_abs_avg_win_to_loss": 1.307,
+            "win_rate": 60.0
+          },
+          "regime_trades": {
+            "neutral": {
+              "avg_r": 0.86,
+              "n": 4,
+              "total_r": 3.44,
+              "win_rate": 75.0
+            },
+            "ranging": {
+              "avg_r": 0.823,
+              "n": 3,
+              "total_r": 2.47,
+              "win_rate": 100.0
+            },
+            "trending": {
+              "avg_r": 0.171,
+              "n": 13,
+              "total_r": 2.22,
+              "win_rate": 46.2
+            },
+            "unknown": {
+              "avg_r": 0,
+              "n": 0,
+              "total_r": 0,
+              "win_rate": 0.0
+            }
+          },
+          "reverse_gross_r": {
+            "avg": -0.413,
+            "n": 20,
+            "sqn": -1.82,
+            "sum": -8.26
+          },
+          "summary": {
+            "error": null,
+            "expectancy": 0.407,
+            "maxDrawdownPct": 6.8,
+            "pair": "XAU/USD",
+            "profitFactor": 1.96,
+            "sharpe": 1.15,
+            "sortino": 1.3,
+            "sqn": 1.43,
+            "totalTrades": 20,
+            "type": "commodity",
+            "winRate": 60.0
+          },
+          "window_regime_counts": {
+            "neutral": 91,
+            "ranging": 196,
+            "trending": 243
+          }
+        }
+      },
+      "xau_comparator": {
+        "avg_mae_r": -0.714,
+        "avg_mfe_r": 1.276,
+        "avg_r": 0.407,
+        "exit_breakdown_pct": {
+          "SL": 40.0,
+          "TIMEOUT": 15.0,
+          "TP1": 45.0
+        },
+        "mfe_ge_1r_then_nonpositive_pct_all": 10.0,
+        "n": 20,
+        "next10_entry_way_hit_pct": 60.0,
+        "next5_entry_way_hit_pct": 60.0,
+        "pairs": [
+          "XAU/USD"
+        ],
+        "reverse_gross_avg_r": -0.413,
+        "reverse_gross_sqn": -1.82,
+        "reverse_gross_total_r": -8.26,
+        "sqn": 1.42,
+        "total_r": 8.13,
+        "trade_regime": {
+          "neutral": {
+            "avg_r": 0.86,
+            "n": 4,
+            "total_r": 3.44,
+            "win_rate": 75.0
+          },
+          "ranging": {
+            "avg_r": 0.823,
+            "n": 3,
+            "total_r": 2.47,
+            "win_rate": 100.0
+          },
+          "trending": {
+            "avg_r": 0.171,
+            "n": 13,
+            "total_r": 2.22,
+            "win_rate": 46.2
+          },
+          "unknown": {
+            "avg_r": 0,
+            "n": 0,
+            "total_r": 0,
+            "win_rate": 0.0
+          }
+        },
+        "win_rate": 60.0,
+        "window_regime_pct": {
+          "neutral": 17.2,
+          "ranging": 37.0,
+          "trending": 45.8
+        }
+      }
+    }
+  },
+  "engine_b_backtest": [
+    {
+      "clears_n30": true,
+      "clears_sqn_gt_2": false,
+      "error": null,
+      "expectancy": -0.136,
+      "funnelSetups": null,
+      "funnelTaken": null,
+      "pair": "EUR/USD",
+      "profitFactor": 0.8,
+      "sqn": -1.22,
+      "totalTrades": 134,
+      "type": "forex",
+      "winRate": 34.3
+    },
+    {
+      "clears_n30": true,
+      "clears_sqn_gt_2": false,
+      "error": null,
+      "expectancy": -0.219,
+      "funnelSetups": null,
+      "funnelTaken": null,
+      "pair": "GBP/USD",
+      "profitFactor": 0.7,
+      "sqn": -2.05,
+      "totalTrades": 144,
+      "type": "forex",
+      "winRate": 31.9
+    },
+    {
+      "clears_n30": true,
+      "clears_sqn_gt_2": false,
+      "error": null,
+      "expectancy": -0.159,
+      "funnelSetups": null,
+      "funnelTaken": null,
+      "pair": "USD/JPY",
+      "profitFactor": 0.76,
+      "sqn": -1.58,
+      "totalTrades": 152,
+      "type": "forex",
+      "winRate": 34.2
+    },
+    {
+      "clears_n30": true,
+      "clears_sqn_gt_2": false,
+      "error": null,
+      "expectancy": -0.132,
+      "funnelSetups": null,
+      "funnelTaken": null,
+      "pair": "GBP/JPY",
+      "profitFactor": 0.79,
+      "sqn": -1.26,
+      "totalTrades": 139,
+      "type": "forex",
+      "winRate": 34.5
+    },
+    {
+      "clears_n30": true,
+      "clears_sqn_gt_2": false,
+      "error": null,
+      "expectancy": -0.14,
+      "funnelSetups": null,
+      "funnelTaken": null,
+      "pair": "BTC/USDT",
+      "profitFactor": 0.79,
+      "sqn": -1.3,
+      "totalTrades": 130,
+      "type": "crypto",
+      "winRate": 36.2
+    },
+    {
+      "clears_n30": true,
+      "clears_sqn_gt_2": false,
+      "error": null,
+      "expectancy": -0.072,
+      "funnelSetups": null,
+      "funnelTaken": null,
+      "pair": "ETH/USDT",
+      "profitFactor": 0.89,
+      "sqn": -0.69,
+      "totalTrades": 150,
+      "type": "crypto",
+      "winRate": 35.3
+    },
+    {
+      "clears_n30": true,
+      "clears_sqn_gt_2": false,
+      "error": null,
+      "expectancy": -0.072,
+      "funnelSetups": null,
+      "funnelTaken": null,
+      "pair": "SOL/USDT",
+      "profitFactor": 0.89,
+      "sqn": -0.68,
+      "totalTrades": 153,
+      "type": "crypto",
+      "winRate": 35.3
+    },
+    {
+      "clears_n30": true,
+      "clears_sqn_gt_2": false,
+      "error": null,
+      "expectancy": -0.01,
+      "funnelSetups": null,
+      "funnelTaken": null,
+      "pair": "XRP/USDT",
+      "profitFactor": 0.98,
+      "sqn": -0.09,
+      "totalTrades": 147,
+      "type": "crypto",
+      "winRate": 37.4
+    },
+    {
+      "clears_n30": true,
+      "clears_sqn_gt_2": false,
+      "error": null,
+      "expectancy": -0.136,
+      "funnelSetups": null,
+      "funnelTaken": null,
+      "pair": "DOGE/USDT",
+      "profitFactor": 0.8,
+      "sqn": -1.29,
+      "totalTrades": 149,
+      "type": "crypto",
+      "winRate": 32.9
+    },
+    {
+      "clears_n30": true,
+      "clears_sqn_gt_2": false,
+      "error": null,
+      "expectancy": -0.018,
+      "funnelSetups": null,
+      "funnelTaken": null,
+      "pair": "XAU/USD",
+      "profitFactor": 0.97,
+      "sqn": -0.17,
+      "totalTrades": 120,
+      "type": "commodity",
+      "winRate": 44.2
+    },
+    {
+      "clears_n30": true,
+      "clears_sqn_gt_2": false,
+      "error": null,
+      "expectancy": 0.068,
+      "funnelSetups": null,
+      "funnelTaken": null,
+      "pair": "XAG/USD",
+      "profitFactor": 1.13,
+      "sqn": 0.55,
+      "totalTrades": 97,
+      "type": "commodity",
+      "winRate": 43.3
+    },
+    {
+      "clears_n30": true,
+      "clears_sqn_gt_2": false,
+      "error": null,
+      "expectancy": -0.024,
+      "funnelSetups": null,
+      "funnelTaken": null,
+      "pair": "WTI Oil",
+      "profitFactor": 0.96,
+      "sqn": -0.21,
+      "totalTrades": 117,
+      "type": "commodity",
+      "winRate": 35.9
+    },
+    {
+      "clears_n30": true,
+      "clears_sqn_gt_2": false,
+      "error": null,
+      "expectancy": -0.082,
+      "funnelSetups": null,
+      "funnelTaken": null,
+      "pair": "NASDAQ-100",
+      "profitFactor": 0.86,
+      "sqn": -0.84,
+      "totalTrades": 155,
+      "type": "index",
+      "winRate": 37.4
+    },
+    {
+      "clears_n30": true,
+      "clears_sqn_gt_2": false,
+      "error": null,
+      "expectancy": -0.067,
+      "funnelSetups": null,
+      "funnelTaken": null,
+      "pair": "S&P 500",
+      "profitFactor": 0.88,
+      "sqn": -0.71,
+      "totalTrades": 150,
+      "type": "index",
+      "winRate": 42.0
+    },
+    {
+      "clears_n30": true,
+      "clears_sqn_gt_2": false,
+      "error": null,
+      "expectancy": -0.031,
+      "funnelSetups": null,
+      "funnelTaken": null,
+      "pair": "Dow Jones",
+      "profitFactor": 0.95,
+      "sqn": -0.32,
+      "totalTrades": 152,
+      "type": "index",
+      "winRate": 40.1
+    },
+    {
+      "clears_n30": true,
+      "clears_sqn_gt_2": false,
+      "error": null,
+      "expectancy": -0.095,
+      "funnelSetups": null,
+      "funnelTaken": null,
+      "pair": "DAX 40",
+      "profitFactor": 0.85,
+      "sqn": -0.95,
+      "totalTrades": 146,
+      "type": "index",
+      "winRate": 36.3
+    },
+    {
+      "clears_n30": true,
+      "clears_sqn_gt_2": false,
+      "error": null,
+      "expectancy": -0.161,
+      "funnelSetups": null,
+      "funnelTaken": null,
+      "pair": "AAPL",
+      "profitFactor": 0.75,
+      "sqn": -1.06,
+      "totalTrades": 66,
+      "type": "stock",
+      "winRate": 31.8
+    },
+    {
+      "clears_n30": true,
+      "clears_sqn_gt_2": false,
+      "error": null,
+      "expectancy": 0.059,
+      "funnelSetups": null,
+      "funnelTaken": null,
+      "pair": "TSLA",
+      "profitFactor": 1.11,
+      "sqn": 0.36,
+      "totalTrades": 63,
+      "type": "stock",
+      "winRate": 31.7
+    },
+    {
+      "clears_n30": true,
+      "clears_sqn_gt_2": false,
+      "error": null,
+      "expectancy": -0.121,
+      "funnelSetups": null,
+      "funnelTaken": null,
+      "pair": "NVDA",
+      "profitFactor": 0.8,
+      "sqn": -0.75,
+      "totalTrades": 56,
+      "type": "stock",
+      "winRate": 30.4
+    },
+    {
+      "clears_n30": true,
+      "clears_sqn_gt_2": false,
+      "error": null,
+      "expectancy": 0.142,
+      "funnelSetups": null,
+      "funnelTaken": null,
+      "pair": "MSFT",
+      "profitFactor": 1.28,
+      "sqn": 0.78,
+      "totalTrades": 49,
+      "type": "stock",
+      "winRate": 42.9
+    }
+  ],
+  "engine_b_backtest_source": "C:\\dev\\athena-python\\tmp\\evidence_engine_b_backtest_20260622.json",
+  "evidence_standard": {
+    "min_n": 30,
+    "min_sqn": 2.0
+  },
+  "generated_at": "2026-06-22T11:46:25.752051+00:00",
+  "live": {
+    "by_pair": {
+      "AAPL": {
+        "avg_r": -0.04,
+        "clears_n30": false,
+        "clears_sqn_gt_2": false,
+        "n": 1,
+        "sqn": null,
+        "win_pct": 0.0
+      },
+      "ADA/USDT": {
+        "avg_r": -0.03,
+        "clears_n30": false,
+        "clears_sqn_gt_2": false,
+        "n": 2,
+        "sqn": -0.61,
+        "win_pct": 50.0
+      },
+      "ALGO/USDT": {
+        "avg_r": -0.25,
+        "clears_n30": false,
+        "clears_sqn_gt_2": false,
+        "n": 3,
+        "sqn": -2.08,
+        "win_pct": 33.3
+      },
+      "AMD": {
+        "avg_r": -0.88,
+        "clears_n30": false,
+        "clears_sqn_gt_2": false,
+        "n": 1,
+        "sqn": null,
+        "win_pct": 0.0
+      },
+      "ASX 200": {
+        "avg_r": -0.11,
+        "clears_n30": false,
+        "clears_sqn_gt_2": false,
+        "n": 1,
+        "sqn": null,
+        "win_pct": 0.0
+      },
+      "ATOM/USDT": {
+        "avg_r": -0.053,
+        "clears_n30": false,
+        "clears_sqn_gt_2": false,
+        "n": 3,
+        "sqn": -1.19,
+        "win_pct": 33.3
+      },
+      "AUD/CHF": {
+        "avg_r": -1.03,
+        "clears_n30": false,
+        "clears_sqn_gt_2": false,
+        "n": 2,
+        "sqn": null,
+        "win_pct": 0.0
+      },
+      "AUD/NZD": {
+        "avg_r": 0.033,
+        "clears_n30": false,
+        "clears_sqn_gt_2": false,
+        "n": 3,
+        "sqn": 0.7,
+        "win_pct": 33.3
+      },
+      "AUD/USD": {
+        "avg_r": -0.06,
+        "clears_n30": false,
+        "clears_sqn_gt_2": false,
+        "n": 1,
+        "sqn": null,
+        "win_pct": 0.0
+      },
+      "AVAX/USDT": {
+        "avg_r": -0.15,
+        "clears_n30": false,
+        "clears_sqn_gt_2": false,
+        "n": 1,
+        "sqn": null,
+        "win_pct": 0.0
+      },
+      "AVGO": {
+        "avg_r": -0.22,
+        "clears_n30": false,
+        "clears_sqn_gt_2": false,
+        "n": 1,
+        "sqn": null,
+        "win_pct": 0.0
+      },
+      "BCH/USDT": {
+        "avg_r": 0.01,
+        "clears_n30": false,
+        "clears_sqn_gt_2": false,
+        "n": 1,
+        "sqn": null,
+        "win_pct": 100.0
+      },
+      "BNB/USDT": {
+        "avg_r": -0.12,
+        "clears_n30": false,
+        "clears_sqn_gt_2": false,
+        "n": 2,
+        "sqn": -1.89,
+        "win_pct": 0.0
+      },
+      "Brent Oil": {
+        "avg_r": -0.58,
+        "clears_n30": false,
+        "clears_sqn_gt_2": false,
+        "n": 3,
+        "sqn": -1.65,
+        "win_pct": 33.3
+      },
+      "DIS": {
+        "avg_r": -0.593,
+        "clears_n30": false,
+        "clears_sqn_gt_2": false,
+        "n": 3,
+        "sqn": -3.52,
+        "win_pct": 0.0
+      },
+      "DOGE/USDT": {
+        "avg_r": -0.635,
+        "clears_n30": false,
+        "clears_sqn_gt_2": false,
+        "n": 2,
+        "sqn": -1.89,
+        "win_pct": 0.0
+      },
+      "DOT/USDT": {
+        "avg_r": -0.407,
+        "clears_n30": false,
+        "clears_sqn_gt_2": false,
+        "n": 3,
+        "sqn": -1.8,
+        "win_pct": 0.0
+      },
+      "ETC/USDT": {
+        "avg_r": 0.89,
+        "clears_n30": false,
+        "clears_sqn_gt_2": false,
+        "n": 1,
+        "sqn": null,
+        "win_pct": 100.0
+      },
+      "EUR/AUD": {
+        "avg_r": -0.65,
+        "clears_n30": false,
+        "clears_sqn_gt_2": false,
+        "n": 3,
+        "sqn": -3.98,
+        "win_pct": 0.0
+      },
+      "EUR/CHF": {
+        "avg_r": -0.445,
+        "clears_n30": false,
+        "clears_sqn_gt_2": false,
+        "n": 6,
+        "sqn": -2.16,
+        "win_pct": 33.3
+      },
+      "EUR/GBP": {
+        "avg_r": -0.775,
+        "clears_n30": false,
+        "clears_sqn_gt_2": false,
+        "n": 2,
+        "sqn": -43.84,
+        "win_pct": 0.0
+      },
+      "EUR/JPY": {
+        "avg_r": -0.15,
+        "clears_n30": false,
+        "clears_sqn_gt_2": false,
+        "n": 2,
+        "sqn": -7.07,
+        "win_pct": 0.0
+      },
+      "EUR/USD": {
+        "avg_r": -0.54,
+        "clears_n30": false,
+        "clears_sqn_gt_2": false,
+        "n": 2,
+        "sqn": -1.62,
+        "win_pct": 0.0
+      },
+      "FIL/USDT": {
+        "avg_r": -0.38,
+        "clears_n30": false,
+        "clears_sqn_gt_2": false,
+        "n": 1,
+        "sqn": null,
+        "win_pct": 0.0
+      },
+      "GBP/AUD": {
+        "avg_r": -0.44,
+        "clears_n30": false,
+        "clears_sqn_gt_2": false,
+        "n": 1,
+        "sqn": null,
+        "win_pct": 0.0
+      },
+      "GBP/JPY": {
+        "avg_r": -0.285,
+        "clears_n30": false,
+        "clears_sqn_gt_2": false,
+        "n": 2,
+        "sqn": -1.24,
+        "win_pct": 50.0
+      },
+      "Hang Seng": {
+        "avg_r": 0.34,
+        "clears_n30": false,
+        "clears_sqn_gt_2": false,
+        "n": 2,
+        "sqn": null,
+        "win_pct": 100.0
+      },
+      "LTC/USDT": {
+        "avg_r": -0.23,
+        "clears_n30": false,
+        "clears_sqn_gt_2": false,
+        "n": 1,
+        "sqn": null,
+        "win_pct": 0.0
+      },
+      "NFLX": {
+        "avg_r": 0.05,
+        "clears_n30": false,
+        "clears_sqn_gt_2": false,
+        "n": 2,
+        "sqn": null,
+        "win_pct": 100.0
+      },
+      "NZD/USD": {
+        "avg_r": -0.095,
+        "clears_n30": false,
+        "clears_sqn_gt_2": false,
+        "n": 2,
+        "sqn": -1.79,
+        "win_pct": 0.0
+      },
+      "POL/USDT": {
+        "avg_r": 0.86,
+        "clears_n30": false,
+        "clears_sqn_gt_2": false,
+        "n": 1,
+        "sqn": null,
+        "win_pct": 100.0
+      },
+      "RENDER/USDT": {
+        "avg_r": 0.03,
+        "clears_n30": false,
+        "clears_sqn_gt_2": false,
+        "n": 1,
+        "sqn": null,
+        "win_pct": 100.0
+      },
+      "SOXX": {
+        "avg_r": -0.99,
+        "clears_n30": false,
+        "clears_sqn_gt_2": false,
+        "n": 1,
+        "sqn": null,
+        "win_pct": 0.0
+      },
+      "Sugar": {
+        "avg_r": -0.21,
+        "clears_n30": false,
+        "clears_sqn_gt_2": false,
+        "n": 1,
+        "sqn": null,
+        "win_pct": 0.0
+      },
+      "TRX/USDT": {
+        "avg_r": -0.173,
+        "clears_n30": false,
+        "clears_sqn_gt_2": false,
+        "n": 3,
+        "sqn": -1.71,
+        "win_pct": 0.0
+      },
+      "UBER": {
+        "avg_r": 0.05,
+        "clears_n30": false,
+        "clears_sqn_gt_2": false,
+        "n": 2,
+        "sqn": null,
+        "win_pct": 100.0
+      },
+      "UK100": {
+        "avg_r": 0.07,
+        "clears_n30": false,
+        "clears_sqn_gt_2": false,
+        "n": 1,
+        "sqn": null,
+        "win_pct": 100.0
+      },
+      "UNI/USDT": {
+        "avg_r": -1.04,
+        "clears_n30": false,
+        "clears_sqn_gt_2": false,
+        "n": 1,
+        "sqn": null,
+        "win_pct": 0.0
+      },
+      "USD/CAD": {
+        "avg_r": 1.767,
+        "clears_n30": false,
+        "clears_sqn_gt_2": false,
+        "n": 3,
+        "sqn": 1.91,
+        "win_pct": 66.7
+      },
+      "USD/CHF": {
+        "avg_r": -0.002,
+        "clears_n30": false,
+        "clears_sqn_gt_2": false,
+        "n": 6,
+        "sqn": -0.02,
+        "win_pct": 66.7
+      },
+      "USD/INR": {
+        "avg_r": -0.92,
+        "clears_n30": false,
+        "clears_sqn_gt_2": false,
+        "n": 3,
+        "sqn": -8.67,
+        "win_pct": 0.0
+      },
+      "USD/MXN": {
+        "avg_r": -0.64,
+        "clears_n30": false,
+        "clears_sqn_gt_2": false,
+        "n": 2,
+        "sqn": null,
+        "win_pct": 0.0
+      },
+      "USD/SGD": {
+        "avg_r": -1.005,
+        "clears_n30": false,
+        "clears_sqn_gt_2": false,
+        "n": 4,
+        "sqn": -402.0,
+        "win_pct": 0.0
+      },
+      "USD/ZAR": {
+        "avg_r": 0.195,
+        "clears_n30": false,
+        "clears_sqn_gt_2": false,
+        "n": 4,
+        "sqn": 1.18,
+        "win_pct": 75.0
+      },
+      "USO": {
+        "avg_r": 1.04,
+        "clears_n30": false,
+        "clears_sqn_gt_2": true,
+        "n": 2,
+        "sqn": 147.08,
+        "win_pct": 100.0
+      },
+      "WTI Oil": {
+        "avg_r": 0.446,
+        "clears_n30": false,
+        "clears_sqn_gt_2": true,
+        "n": 7,
+        "sqn": 3.79,
+        "win_pct": 100.0
+      },
+      "Wheat": {
+        "avg_r": -0.39,
+        "clears_n30": false,
+        "clears_sqn_gt_2": false,
+        "n": 1,
+        "sqn": null,
+        "win_pct": 0.0
+      },
+      "XAG/USD": {
+        "avg_r": -0.47,
+        "clears_n30": false,
+        "clears_sqn_gt_2": false,
+        "n": 1,
+        "sqn": null,
+        "win_pct": 0.0
+      },
+      "XAU/USD": {
+        "avg_r": -0.14,
+        "clears_n30": false,
+        "clears_sqn_gt_2": false,
+        "n": 3,
+        "sqn": -1.63,
+        "win_pct": 33.3
+      },
+      "XLM/USDT": {
+        "avg_r": -0.14,
+        "clears_n30": false,
+        "clears_sqn_gt_2": false,
+        "n": 1,
+        "sqn": null,
+        "win_pct": 0.0
+      },
+      "XRP/USDT": {
+        "avg_r": -0.05,
+        "clears_n30": false,
+        "clears_sqn_gt_2": false,
+        "n": 1,
+        "sqn": null,
+        "win_pct": 0.0
+      }
+    },
+    "closed_n": 109,
+    "overall": {
+      "avg_r": -0.168,
+      "clears_n30": true,
+      "clears_sqn_gt_2": false,
+      "n": 109,
+      "sqn": -2.65,
+      "win_pct": 34.9
+    },
+    "regime_report": {
+      "calibration_gate_note": "Never set a sub-1.0 RANGING multiplier from a cell flagged sufficient=false.",
+      "cells": [
+        {
+          "ai_grade_split": {
+            "EXECUTED": 5
+          },
+          "avg_r": -0.248,
+          "avg_score_pct": 0.794,
+          "direction": "SHORT",
+          "engine": "engine_b",
+          "excursion_status": "not_recorded",
+          "mae": null,
+          "median_r": 0.25,
+          "mfe": null,
+          "n_closed": 5,
+          "regime": "RANGING",
+          "score_group": "commodity",
+          "sufficient": false,
+          "total_r": -1.24,
+          "win_rate": 0.6
+        },
+        {
+          "ai_grade_split": {
+            "EXECUTED": 9
+          },
+          "avg_r": 0.1922,
+          "avg_score_pct": 0.7604,
+          "direction": "SHORT",
+          "engine": "engine_b",
+          "excursion_status": "not_recorded",
+          "mae": null,
+          "median_r": 0.11,
+          "mfe": null,
+          "n_closed": 9,
+          "regime": "TRENDING",
+          "score_group": "commodity",
+          "sufficient": false,
+          "total_r": 1.73,
+          "win_rate": 0.6667
+        },
+        {
+          "ai_grade_split": {
+            "EXECUTED": 7
+          },
+          "avg_r": -0.2743,
+          "avg_score_pct": 0.8169,
+          "direction": "LONG",
+          "engine": "engine_b",
+          "excursion_status": "not_recorded",
+          "mae": null,
+          "median_r": -0.16,
+          "mfe": null,
+          "n_closed": 7,
+          "regime": "RANGING",
+          "score_group": "crypto",
+          "sufficient": false,
+          "total_r": -1.92,
+          "win_rate": 0.2857
+        },
+        {
+          "ai_grade_split": {
+            "EXECUTED": 4
+          },
+          "avg_r": -0.12,
+          "avg_score_pct": 0.817,
+          "direction": "SHORT",
+          "engine": "engine_b",
+          "excursion_status": "not_recorded",
+          "mae": null,
+          "median_r": -0.07,
+          "mfe": null,
+          "n_closed": 4,
+          "regime": "RANGING",
+          "score_group": "crypto",
+          "sufficient": false,
+          "total_r": -0.48,
+          "win_rate": 0.25
+        },
+        {
+          "ai_grade_split": {
+            "EXECUTED": 7
+          },
+          "avg_r": -0.1457,
+          "avg_score_pct": 0.747,
+          "direction": "LONG",
+          "engine": "engine_b",
+          "excursion_status": "not_recorded",
+          "mae": null,
+          "median_r": -0.07,
+          "mfe": null,
+          "n_closed": 7,
+          "regime": "TRENDING",
+          "score_group": "crypto",
+          "sufficient": false,
+          "total_r": -1.02,
+          "win_rate": 0.2857
+        },
+        {
+          "ai_grade_split": {
+            "EXECUTED": 10
+          },
+          "avg_r": -0.1,
+          "avg_score_pct": 0.7741,
+          "direction": "SHORT",
+          "engine": "engine_b",
+          "excursion_status": "not_recorded",
+          "mae": null,
+          "median_r": -0.125,
+          "mfe": null,
+          "n_closed": 10,
+          "regime": "TRENDING",
+          "score_group": "crypto",
+          "sufficient": false,
+          "total_r": -1.0,
+          "win_rate": 0.2
+        },
+        {
+          "ai_grade_split": {
+            "EXECUTED": 11
+          },
+          "avg_r": 0.5755,
+          "avg_score_pct": 0.7507,
+          "direction": "LONG",
+          "engine": "engine_b",
+          "excursion_status": "not_recorded",
+          "mae": null,
+          "median_r": 0.1,
+          "mfe": null,
+          "n_closed": 11,
+          "regime": "RANGING",
+          "score_group": "forex",
+          "sufficient": false,
+          "total_r": 6.33,
+          "win_rate": 0.5455
+        },
+        {
+          "ai_grade_split": {
+            "EXECUTED": 9
+          },
+          "avg_r": -0.6544,
+          "avg_score_pct": 0.7271,
+          "direction": "SHORT",
+          "engine": "engine_b",
+          "excursion_status": "not_recorded",
+          "mae": null,
+          "median_r": -0.87,
+          "mfe": null,
+          "n_closed": 9,
+          "regime": "RANGING",
+          "score_group": "forex",
+          "sufficient": false,
+          "total_r": -5.89,
+          "win_rate": 0.0
+        },
+        {
+          "ai_grade_split": {
+            "EXECUTED": 11
+          },
+          "avg_r": -0.4064,
+          "avg_score_pct": 0.7895,
+          "direction": "LONG",
+          "engine": "engine_b",
+          "excursion_status": "not_recorded",
+          "mae": null,
+          "median_r": -0.41,
+          "mfe": null,
+          "n_closed": 11,
+          "regime": "TRENDING",
+          "score_group": "forex",
+          "sufficient": false,
+          "total_r": -4.47,
+          "win_rate": 0.2727
+        },
+        {
+          "ai_grade_split": {
+            "EXECUTED": 17
+          },
+          "avg_r": -0.5135,
+          "avg_score_pct": 0.7428,
+          "direction": "SHORT",
+          "engine": "engine_b",
+          "excursion_status": "not_recorded",
+          "mae": null,
+          "median_r": -0.64,
+          "mfe": null,
+          "n_closed": 17,
+          "regime": "TRENDING",
+          "score_group": "forex",
+          "sufficient": false,
+          "total_r": -8.73,
+          "win_rate": 0.2353
+        },
+        {
+          "ai_grade_split": {
+            "EXECUTED": 2
+          },
+          "avg_r": -0.495,
+          "avg_score_pct": 0.75,
+          "direction": "LONG",
+          "engine": "engine_b",
+          "excursion_status": "not_recorded",
+          "mae": null,
+          "median_r": -0.495,
+          "mfe": null,
+          "n_closed": 2,
+          "regime": "RANGING",
+          "score_group": "stock",
+          "sufficient": false,
+          "total_r": -0.99,
+          "win_rate": 0.0
+        },
+        {
+          "ai_grade_split": {
+            "EXECUTED": 11
+          },
+          "avg_r": 0.0327,
+          "avg_score_pct": 0.8649,
+          "direction": "SHORT",
+          "engine": "engine_b",
+          "excursion_status": "not_recorded",
+          "mae": null,
+          "median_r": 0.05,
+          "mfe": null,
+          "n_closed": 11,
+          "regime": "RANGING",
+          "score_group": "stock",
+          "sufficient": false,
+          "total_r": 0.36,
+          "win_rate": 0.6364
+        },
+        {
+          "ai_grade_split": {
+            "AUTO": 2,
+            "EXECUTED": 4
+          },
+          "avg_r": -0.16,
+          "avg_score_pct": 0.7762,
+          "direction": "LONG",
+          "engine": "engine_b",
+          "excursion_status": "not_recorded",
+          "mae": null,
+          "median_r": -0.13,
+          "mfe": null,
+          "n_closed": 6,
+          "regime": "TRENDING",
+          "score_group": "stock",
+          "sufficient": false,
+          "total_r": -0.96,
+          "win_rate": 0.3333
+        }
+      ],
+      "excursion_metrics_available": false,
+      "excursion_note": "MAE/MFE not recorded in learning_log; add excursion capture at trade-close before these can be reported.",
+      "min_trades_per_cell": 30,
+      "sufficient_cells": 0,
+      "total_cells": 13,
+      "total_closed_trades": 109
+    }
+  },
+  "live_precheck": {
+    "closed_date_max": "2026-06-22T06:40:45.330173+00:00",
+    "closed_date_min": "2026-05-05T22:41:35.429573+00:00",
+    "closed_null_or_blank_pair_rows": 0,
+    "closed_rows": 109,
+    "db_exists": true,
+    "db_path": "C:\\dev\\athena-python\\audit.db",
+    "null_or_blank_pair_rows": 0,
+    "total_rows": 109
+  },
+  "live_verdict": "SUFFICIENT_N",
+  "pair_universe": [
+    "EUR/USD",
+    "GBP/USD",
+    "USD/JPY",
+    "GBP/JPY",
+    "BTC/USDT",
+    "ETH/USDT",
+    "SOL/USDT",
+    "XRP/USDT",
+    "DOGE/USDT",
+    "XAU/USD",
+    "XAG/USD",
+    "WTI Oil",
+    "NASDAQ-100",
+    "S&P 500",
+    "Dow Jones",
+    "DAX 40",
+    "AAPL",
+    "TSLA",
+    "NVDA",
+    "MSFT"
+  ]
+}

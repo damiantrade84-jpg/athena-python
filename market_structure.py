@@ -21,6 +21,21 @@ ENGINE_B_REGIME_GATE_DEFAULTS = {
 }
 
 
+def _naked_engine_atr_mult(key: str, default: float, asset_type: str | None = "") -> float:
+    """Resolve a NAKED_ENGINE ATR multiplier that may be a scalar or a per-asset
+    dict ({"crypto": 1.8, "forex": 1.2, "default": 1.5}). Falls back to ``default``
+    on missing/invalid config. Used for zone prominence / merge / touch tolerances
+    that were previously hardcoded literals.
+    """
+    raw = config.CONFIG.get("NAKED_ENGINE", {}).get(key, default)
+    if isinstance(raw, dict):
+        raw = raw.get(str(asset_type or "").lower(), raw.get("default", default))
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return float(default)
+
+
 # Forex pairs whose peak liquidity lies inside Tokyo/Sydney hours. Skipping the
 # Asian session on these pairs removes their primary trading window. The skip
 # stays in effect for European/North-American pairs (EUR/USD, GBP/USD, USD/CHF,
@@ -122,7 +137,17 @@ def _forex_session_bucket(candle_time, *, symbol: str = "") -> dict:
             "sessions_active": [],
             "utc_hour": None,
         }
-    hour = dt.hour
+    # Audit #5: these static UTC bands are the FALLBACK only — the primary path above
+    # (session_contract.classify_session) is the DST-aware source of truth. The bands
+    # do not auto-shift for broker DST, so expose a manual offset
+    # (ENGINE_B_SESSION_FALLBACK_DST_OFFSET_HOURS, default 0) operators can set to +1
+    # during summer DST when this fallback is in use. A full DST calendar is left to
+    # the primary path deliberately.
+    try:
+        _dst_offset = int(config.CONFIG.get("ENGINE_B_SESSION_FALLBACK_DST_OFFSET_HOURS", 0) or 0)
+    except (TypeError, ValueError):
+        _dst_offset = 0
+    hour = (dt.hour - _dst_offset) % 24
     if 12 <= hour < 16:
         session = "london_ny_overlap"
         quality = "high"
@@ -147,7 +172,7 @@ def _forex_session_bucket(candle_time, *, symbol: str = "") -> dict:
         "session": session,
         "session_quality": quality,
         "sessions_active": active,
-        "utc_hour": hour,
+        "utc_hour": dt.hour,
     }
 
 
@@ -1120,6 +1145,9 @@ def _breakout_follow_through(
         "score": round(_score, 2),
         "confidence": _confidence,
         "bars_checked": _max_check,
+        # M-4: distinguish "too recent to evaluate" (0 bars after the breakout, score
+        # is a non-signal neutral) from a genuine no-follow-through verdict.
+        "follow_through_evaluable": _max_check > 0,
         "aligned_bars": _aligned_bars,
         "reversal_bars": _reversal_bars,
         "close_beyond_count": _close_beyond_count,
@@ -1244,6 +1272,8 @@ def _engine_b_vwap_reclaim_value(direction: str, candles: list, atr_val: float, 
             "close": round(close, 8),
         }
     except Exception as exc:
+        # L-5: fail closed but make the indicator-import/compute failure observable.
+        log.debug("[ENGINE_B] vwap_reclaim value failed: %s", exc)
         return {"passed": False, "signal": "error", "error": str(exc)}
 
 
@@ -1274,6 +1304,8 @@ def _engine_b_cvd_momentum_value(direction: str, candles: list) -> dict:
             "vwap": round(last_vwap, 8),
         }
     except Exception as exc:
+        # L-5: fail closed but make the indicator-import/compute failure observable.
+        log.debug("[ENGINE_B] cvd_momentum value failed: %s", exc)
         return {"passed": False, "signal": "error", "error": str(exc)}
 
 
@@ -2080,10 +2112,16 @@ class NakedEngine:
         regime: str,
         candles: list,
         structure_tf: str = "H4",
+        asset_type: str = "",
     ):
         # Find resistance peaks
-        # Prominence ensures we only get significant peaks, relative to ATR
-        prominence_threshold = atr * 1.5
+        # Prominence ensures we only get significant peaks, relative to ATR.
+        # #3: the 1.5 multiplier is configurable (scalar or per-asset dict) via
+        # NAKED_ENGINE.zone_prominence_atr_mult so volatile crypto vs. tight index
+        # universes can be tuned independently.
+        prominence_threshold = atr * _naked_engine_atr_mult(
+            "zone_prominence_atr_mult", 1.5, asset_type
+        )
 
         _zone_peak_dist = int(
             (config.CONFIG.get("ENGINE_B_ZONE_PEAK_DISTANCE", {}) or {})
@@ -2128,6 +2166,9 @@ class NakedEngine:
                     - (atr * buf.get("lower", 1.2)),  # buffer zone thickness
                     "center": peak_price,
                     "volume_strength": vol_strength,
+                    # M-6: bars since the zone-forming pivot, so consumers can
+                    # downweight stale zones. 0 = most recent bar.
+                    "age_bars": int(len(highs) - 1 - idx),
                 }
             )
 
@@ -2146,6 +2187,8 @@ class NakedEngine:
                     "upper": trough_price + (atr * buf.get("lower", 1.2)),
                     "center": trough_price,
                     "volume_strength": vol_strength,
+                    # M-6: bars since the zone-forming pivot (0 = most recent bar).
+                    "age_bars": int(len(lows) - 1 - idx),
                 }
             )
 
@@ -2250,6 +2293,20 @@ class NakedEngine:
             except (TypeError, ValueError):
                 min_break_abs = 0.0
             _has_close = closes is not None and len(closes) > 0
+            if not _has_close:
+                # H-1: BOS must be confirmed by a close through the level. Highs/lows
+                # permit wick-only breaches without conviction, so when closes are
+                # unavailable we fail closed instead of emitting a weaker proxy BOS.
+                return {
+                    "bos_bull": False, "bos_bear": False,
+                    "last_broken_high": None, "last_broken_low": None,
+                    "bos_reference_high": prior_high, "bos_reference_low": prior_low,
+                    "bos_reference_high_index": prior_high_idx,
+                    "bos_reference_low_index": prior_low_idx,
+                    "bos_volume_confirmed": False,
+                    "bos_bull_bar_index": None, "bos_bear_bar_index": None,
+                    "bos_close_unavailable": True,
+                }
             n = len(closes) if _has_close else len(highs)
 
             lookback = int(
@@ -2288,8 +2345,17 @@ class NakedEngine:
                 positive_vols = [float(v) for v in volumes[-20:] if float(v) > 0]
                 avg_vol_20 = float(np.mean(positive_vols)) if positive_vols else 0.0
                 ref_idx = bos_bull_vol_ref if bos_bull else bos_bear_vol_ref
-                bar_vol = float(volumes[ref_idx]) if ref_idx is not None else float(volumes[-1])
-                if avg_vol_20 > 0:
+                # C-3: when forming bars are NOT stripped from the structure TF, the
+                # last bar can be a forming (unconfirmed) candle whose volume is
+                # incomplete; do not gate BOS on partial volume. Default config strips
+                # forming bars (ENGINE_B_STRIP_FORMING_STRUCT=True) so this is a no-op
+                # there — the gate still uses the confirmed last bar.
+                _strip_forming = bool(config.CONFIG.get("ENGINE_B_STRIP_FORMING_STRUCT", True))
+                _bos_on_last_bar = ref_idx is None or ref_idx >= n - 1
+                if _bos_on_last_bar and not _strip_forming:
+                    bos_volume_confirmed = False
+                elif avg_vol_20 > 0:
+                    bar_vol = float(volumes[ref_idx]) if ref_idx is not None else float(volumes[-1])
                     multiplier = float(
                         config.CONFIG.get("NAKED_ENGINE", {}).get("bos_volume_multiplier", 1.3)
                     )
@@ -2403,6 +2469,11 @@ class NakedEngine:
                         "choch_events": choch_events,
                     }
 
+            # M-3: standalone CHoCH path. Reached only when _detect_bos reported
+            # neither bull nor bear BOS (the early return above fires otherwise).
+            # It detects a reversal that broke prior swing structure without a BOS
+            # in the lookback window — a narrow but real case (e.g. a sharp reversal
+            # off equal highs/lows). Kept (not dead); exercised by the no-BOS branch.
             def _trend_count(seq, descending: bool) -> int:
                 # Count adjacent transitions matching the trend direction.
                 if descending:
@@ -2466,6 +2537,14 @@ class NakedEngine:
         if not candles or len(candles) < 10:
             return obs
 
+        # L-3: backward OB scan span is configurable per structure TF via
+        # NAKED_ENGINE.ob_lookback_bars (default 20) so slow swing markets can look
+        # further back for the originating order block.
+        _ob_lookback = int(
+            (config.CONFIG.get("NAKED_ENGINE", {}).get("ob_lookback_bars") or {})
+            .get(structure_tf, 20)
+        )
+
         try:
             # Bullish OB: find last bearish candle before the bullish BOS
             if bos_data.get("bos_bull") and bos_data.get("last_broken_high") is not None:
@@ -2477,14 +2556,14 @@ class NakedEngine:
                     bos_index = int(_precomputed_idx)
                 else:
                     bos_index = len(candles) - 1
-                    for j in range(len(candles) - 1, max(0, len(candles) - 20), -1):
+                    for j in range(len(candles) - 1, max(0, len(candles) - _ob_lookback), -1):
                         if float(candles[j]["close"]) > broken_high:
                             bos_index = j
                         else:
                             break
                 
                 # Scan backward from bos_index - 1 for the last opposite candle
-                for i in range(bos_index - 1, max(0, bos_index - 20), -1):
+                for i in range(bos_index - 1, max(0, bos_index - _ob_lookback), -1):
                     c = candles[i]
                     if float(c["close"]) < float(c["open"]):  # bearish candle
                         ob_top = float(c["open"])
@@ -2527,14 +2606,14 @@ class NakedEngine:
                     bos_index = int(_precomputed_idx)
                 else:
                     bos_index = len(candles) - 1
-                    for j in range(len(candles) - 1, max(0, len(candles) - 20), -1):
+                    for j in range(len(candles) - 1, max(0, len(candles) - _ob_lookback), -1):
                         if float(candles[j]["close"]) < broken_low:
                             bos_index = j
                         else:
                             break
                 
                 # Scan backward from bos_index - 1 for the last opposite candle
-                for i in range(bos_index - 1, max(0, bos_index - 20), -1):
+                for i in range(bos_index - 1, max(0, bos_index - _ob_lookback), -1):
                     c = candles[i]
                     if float(c["close"]) > float(c["open"]):  # bullish candle
                         ob_top = float(c["close"])  # body only — wick excluded per SMC
@@ -2840,6 +2919,12 @@ class NakedEngine:
         zone_touched = False
 
         if candles:
+            # C-1: zone-touch tolerance was a hardcoded 0.1 ATR — far tighter than the
+            # near_zone proximity above and too strict on wide-ATR instruments. Make it
+            # configurable (NAKED_ENGINE.zone_touch_tolerance_atr_mult, default 0.2).
+            _touch_tol = _naked_engine_atr_mult(
+                "zone_touch_tolerance_atr_mult", 0.2, asset_type
+            )
             last = candles[-1]
             last_high = float(last["high"])
             last_low = float(last["low"])
@@ -2847,13 +2932,13 @@ class NakedEngine:
             if direction == "LONG":
                 threshold = upper if upper is not None else center
                 floor = lower if lower is not None else center
-                if threshold is not None and last_low <= threshold + (atr_val * 0.1):
-                    zone_touched = floor is None or last_close >= floor - (atr_val * 0.1)
+                if threshold is not None and last_low <= threshold + (atr_val * _touch_tol):
+                    zone_touched = floor is None or last_close >= floor - (atr_val * _touch_tol)
             else:
                 threshold = lower if lower is not None else center
                 ceiling = upper if upper is not None else center
-                if threshold is not None and last_high >= threshold - (atr_val * 0.1):
-                    zone_touched = ceiling is None or last_close <= ceiling + (atr_val * 0.1)
+                if threshold is not None and last_high >= threshold - (atr_val * _touch_tol):
+                    zone_touched = ceiling is None or last_close <= ceiling + (atr_val * _touch_tol)
 
         return {
             "distance": distance,
@@ -3047,7 +3132,15 @@ class NakedEngine:
         bos_bull = bool(bos_data.get("bos_bull"))
         bos_bear = bool(bos_data.get("bos_bear"))
         diagnostic_bos = {"bos_bull": bos_bull, "bos_bear": bos_bear}
-        # BOS stays diagnostic-only; it is already used by the primary checklist.
+        # M-2: BOS is one of the strongest structural signals — it now contributes a
+        # low-weight vote to Engine B's *independent* directional opinion (weight 1
+        # below). It remains separately gated by the primary checklist.
+        if bos_bull and not bos_bear:
+            votes["bos"] = 1
+        elif bos_bear and not bos_bull:
+            votes["bos"] = -1
+        else:
+            votes["bos"] = 0
 
         # --- D1 BOS (diagnostic only; MTF BOS is tracked separately) ---
         d1_bull = bool(d1_bos.get("bos_bull"))
@@ -3077,6 +3170,7 @@ class NakedEngine:
             "h1_swing": 1,
             "choch":    1,
             "sweep":    1,
+            "bos":      1,
         }
         total_weight = sum(weights.values())
         weighted_score = sum(
@@ -3234,7 +3328,7 @@ class NakedEngine:
 
         _zf_highs = np.array([float(c["high"]) for c in _zone_fvg_candles])
         _zf_lows = np.array([float(c["low"]) for c in _zone_fvg_candles])
-        res_zones, sup_zones = self._find_zones(_zf_highs, _zf_lows, zone_atr, regime, _zone_fvg_candles, structure_tf=structure_tf)
+        res_zones, sup_zones = self._find_zones(_zf_highs, _zf_lows, zone_atr, regime, _zone_fvg_candles, structure_tf=structure_tf, asset_type=asset_type)
 
         fvgs = self._detect_fvg(_zone_fvg_candles)
         active_fvgs = [f for f in fvgs if not f.get("mitigated", False)]
@@ -3363,7 +3457,12 @@ class NakedEngine:
                 if abs(z["center"] - anchors[-1]) <= merge_dist:
                     prev["upper"] = max(prev["upper"], z["upper"])
                     prev["lower"] = min(prev["lower"], z["lower"])
-                    prev["center"] = (prev["upper"] + prev["lower"]) / 2
+                    # H-5: keep the center of the strongest (highest-volume) zone
+                    # rather than recomputing the geometric midpoint, which drifts the
+                    # level away from the real peak/trough and skews nearest-zone
+                    # sorting and distance calcs.
+                    if z.get("volume_strength", 0) > prev.get("volume_strength", 0):
+                        prev["center"] = z["center"]
                     prev["volume_strength"] = max(prev.get("volume_strength", 0), z.get("volume_strength", 0))
                     if z.get("fvg_overlap"):
                         prev["fvg_overlap"] = True
@@ -3373,7 +3472,10 @@ class NakedEngine:
                     anchors.append(float(z["center"]))
             return merged
 
-        _merge_dist = zone_atr * 0.5
+        # #4: merge distance configurable (scalar or per-asset dict) via
+        # NAKED_ENGINE.zone_merge_atr_mult so distinct levels are not over-merged on
+        # volatile instruments nor left duplicated on quiet ones.
+        _merge_dist = zone_atr * _naked_engine_atr_mult("zone_merge_atr_mult", 0.5, asset_type)
         res_zones = _merge_zones(res_zones, _merge_dist)
         sup_zones = _merge_zones(sup_zones, _merge_dist)
 
@@ -3541,6 +3643,20 @@ class NakedEngine:
         d1_adx_val = precompute.get("d1_adx")
         h4_adx_val = precompute.get("h4_adx")
 
+        # H-4: ATR <= 0 makes _swing_cache return empty peak/trough arrays, which
+        # cascades into _determine_sequence using the full-series max/min as the
+        # "recent" swing — producing an absurdly wide SL that fails the RR gate with
+        # no explanation. Fail closed with a clear reason instead.
+        try:
+            _atr_ok = float(atr) > 0 and float(struct_atr) > 0
+        except (TypeError, ValueError):
+            _atr_ok = False
+        if not _atr_ok:
+            return _engine_b_analyze_structure_error_result(
+                {**precompute, "_error": "ENGINE_B_REASON_ATR_ZERO"},
+                direction=direction,
+            )
+
         # D1 PD-array: direction-dependent filtering
         d1_pd_array_conflict: bool = False
         d1_conflict_details: list = []
@@ -3572,8 +3688,10 @@ class NakedEngine:
                     d1_pd_array_conflict = True
                     d1_conflict_details.append(f"D1_bullish_FVG@{fvg_mid:.5f}")
                     d1_conflict_metric_details.append({"zone_type": "bullish_FVG", "zone_price_range": {"top": fvg["top"], "bottom": fvg["bottom"]}, "zone_mid": fvg_mid, "distance_to_conflict": fvg_dist, "distance_in_atr": (fvg_dist / d1_atr) if d1_atr > 0 else None, "conflict_side": "below_price", "entry_side_or_tp_side": "tp_side"})
-        except Exception:
-            pass
+        except Exception as exc:
+            # H-2: surface malformed D1 OB/FVG data so the -0.25 conflict penalty
+            # being skipped is observable, instead of failing silently.
+            log.warning("[ENGINE_B] D1 PD-array conflict check failed: %s", exc)
 
         # Nearest resistance above price
         valid_res = [z for z in res_zones if z["upper"] >= current_price]
@@ -4075,11 +4193,32 @@ class NakedEngine:
         # Trend-continuation path: BOS/CHoCH/sweep confirmed with trigger pattern
         # even if price is not at a zone. Valid pullback entry in trending regimes
         # where price has moved away from structural levels.
+        # C-2: this path must still require *some* structural location — either
+        # proximity to an active zone or proximity to the broken BOS level — so a
+        # BOS+trigger anywhere on the chart can no longer satisfy location_ok with
+        # zero structural evidence.
+        _bos_level = (
+            (res.get("bos_data") or {}).get("last_broken_high")
+            if direction == "LONG"
+            else (res.get("bos_data") or {}).get("last_broken_low")
+        )
+        _near_bos_level = False
+        if _bos_level is not None:
+            try:
+                _bos_prox = _naked_engine_atr_mult(
+                    "trend_pullback_bos_proximity_atr_mult", 1.0, asset_type_lower
+                )
+                _near_bos_level = abs(
+                    float(res.get("current_price")) - float(_bos_level)
+                ) <= atr_val * _bos_prox
+            except (TypeError, ValueError):
+                _near_bos_level = False
         _trend_pullback = (
             (bool(res.get("bos_confirmed"))
              or bool(res.get("choch_confirmed"))
              or bool(res.get("liquidity_sweep")))
             and trigger_ok
+            and (zone_ok or _near_bos_level)
         )
 
         location_ok = zone_ok or ob_at_zone or (allow_breakout_entry and breakout_ok) or _trend_pullback
@@ -4348,15 +4487,26 @@ class NakedEngine:
 
         # hard_counter soft penalty in "penalty" mode. In "veto" mode structure_ok
         # is already False and the signal won't pass, so the penalty has no effect.
+        # H-3: when the structure gate is explicitly disabled via profile, the
+        # hard_counter (a structure-quality measure) penalty is waived too — applying
+        # it while forcing structure_ok=True is inconsistent.
         _hard_counter_penalty = (
             _hard_counter_penalty_cfg
-            if (hard_counter and _hard_counter_mode != "veto")
+            if (hard_counter and _hard_counter_mode != "veto" and not structure_gate_disabled)
             else 0.0
         )
         total_score = max(0.0, total_score - _hard_counter_penalty)
         # gate_score stays integer — never modified by penalty
 
         pct = min(100, max(0, round((total_score / max_possible) * 100)))
+        # M-1: `pct` denominator includes bonus headroom, so passing all mandatory
+        # gates compresses to <50%. Expose a separate gate-only percentage that
+        # reflects mandatory-gate completion without the bonus distortion.
+        gate_pct = (
+            min(100, max(0, round((gate_score / gate_max_possible) * 100)))
+            if gate_max_possible > 0
+            else 0
+        )
         if checklist_mode == "strict":
             passed = structure_ok and zone_ok and trigger_ok and space_gate_ok and rr_ok and macro_ok
         else:
@@ -4453,6 +4603,7 @@ class NakedEngine:
             "score": total_score,
             "gate_score": gate_score,
             "pct": pct,
+            "gate_pct": gate_pct,
             "max_possible": round(max_possible, 2),
             "gate_max_possible": round(gate_max_possible, 2),
             "bonus_points": round(bonus_points, 2),
@@ -4643,7 +4794,11 @@ class NakedEngine:
             )
             if not gate_ok:
                 return None  # No trade signal
-        elif confidence["score"] < confidence_threshold or not confidence.get("passed"):
+        elif not confidence.get("passed") or confidence.get("pct", 0) < 40:
+            # H-6: the legacy fallback keyed off score < 1.8 (~14% of a 12.5 max),
+            # which let near-empty signals through. Require the checklist `passed`
+            # flag AND a meaningful gate percentage. confidence_threshold retained
+            # for API compatibility but no longer the primary gate.
             return None  # No trade signal
 
         return {
