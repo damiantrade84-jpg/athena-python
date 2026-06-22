@@ -489,7 +489,8 @@ def normalise_engine_b(signal_b: dict, confidence_b: dict = None) -> dict:
     direction = signal_b.get("direction")
     passed_raw = conf.get("passed")
     passed = passed_raw is True
-    high_enough = norm > 0.2
+    # L-4: has_signal floor configurable (mirrors ENGINE_C_A_HAS_FLOOR for Engine A).
+    high_enough = norm > float(CONFIG.get("ENGINE_C_B_HAS_FLOOR", 0.2))
     valid_direction = direction in ("LONG", "SHORT")
     diagnostic = ""
     if verdict == "CLEAR" and high_enough and valid_direction and not passed:

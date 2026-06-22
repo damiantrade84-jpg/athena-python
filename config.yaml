@@ -2928,6 +2928,24 @@ NAKED_ENGINE:
     H4: 6
     H1: 5
 
+  # Audit fixes — ATR multipliers previously hardcoded as literals. Each accepts a
+  # scalar or a per-asset dict ({crypto: x, forex: y, default: z}). Values below are
+  # the in-code defaults; uncomment / edit to tune.
+  # C-1: zone-touch tolerance (was 0.1 ATR — too tight on wide-ATR instruments).
+  zone_touch_tolerance_atr_mult: 0.2
+  # #3: zone-detection prominence (was atr * 1.5).
+  zone_prominence_atr_mult: 1.5
+  # #4: zone merge distance (was zone_atr * 0.5).
+  zone_merge_atr_mult: 0.5
+  # C-2: max distance (ATR) from the broken BOS level for the trend-pullback path to
+  # still count as a valid structural location.
+  trend_pullback_bos_proximity_atr_mult: 1.0
+  # L-3: backward order-block scan span per structure TF (was 20).
+  ob_lookback_bars:
+    D1: 20
+    H4: 20
+    H1: 20
+
   # When true, commodity swing forces require_macro_align regardless of style YAML.
   # Default false so NAKED_ENGINE.style_profiles.swing.require_macro_align wins.
   commodity_swing_force_macro_align: false
@@ -3174,7 +3192,10 @@ ENGINE_B_REGIME_MULTIPLIERS:
 
   HIGH_VOLATILITY: 0.85
 
-  LOW_VOLATILITY: 0.90
+  # Audit #2: low-vol must be HARDER to pass (false BOS common in low volatility),
+  # matching ENGINE_B_REGIME_GATE_DEFAULTS in market_structure.py. Was 0.90 (easier),
+  # which contradicted the documented design.
+  LOW_VOLATILITY: 1.15
 
 
 
