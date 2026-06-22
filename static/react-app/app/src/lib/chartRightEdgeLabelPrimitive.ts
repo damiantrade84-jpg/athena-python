@@ -10,6 +10,7 @@ import type { CanvasRenderingTarget2D } from 'fancy-canvas';
 import {
   layoutRightEdgeLabels,
   RIGHT_EDGE_LABEL_HEIGHT_PX,
+  RIGHT_EDGE_LABEL_PRIORITY,
   type LayoutRightEdgeLabel,
   type RightEdgeLabel,
 } from '@/lib/chartRightEdgeLabels';
@@ -31,14 +32,16 @@ class ChartRightEdgeLabelRenderer implements IPrimitivePaneRenderer {
 
     target.useMediaCoordinateSpace(({ context, mediaSize }) => {
       for (const label of labels) {
-        const xRight = mediaSize.width - 6;
         const y = label.layoutY;
         context.save();
         context.font = LABEL_FONT;
         const textWidth = context.measureText(label.text).width;
         const boxWidth = textWidth + LABEL_PAD_X * 2;
         const boxHeight = RIGHT_EDGE_LABEL_HEIGHT_PX;
-        const x = xRight - boxWidth;
+        // The current-price label sits next to the price-axis value and obscures
+        // the most recent candles; anchor it to the left edge instead.
+        const isCurrentPrice = label.priority === RIGHT_EDGE_LABEL_PRIORITY.currentPrice;
+        const x = isCurrentPrice ? 6 : mediaSize.width - 6 - boxWidth;
         const yTop = y - boxHeight / 2;
 
         context.fillStyle = 'rgba(8, 12, 16, 0.82)';
