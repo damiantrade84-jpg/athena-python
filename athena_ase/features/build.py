@@ -66,6 +66,7 @@ __all__ = [
     "build_features_for_candidate",
     "build_feature_matrix",
     "categorical_code",
+    "cot_asset_for_symbol",
     "schema_hash",
     "asof",
 ]
@@ -84,6 +85,7 @@ def _price_series_ids(symbol: str, tf: str, field: str) -> tuple[str, ...]:
     return (
         f"EODHD:{compact}:{tf.upper()}:{field.lower()}",
         f"MT5:{compact}:{tf.upper()}:{field.lower()}",
+        f"BINANCE:{compact}:{tf.upper()}:{field.lower()}",
     )
 
 
@@ -97,6 +99,37 @@ def _bybit_series_id(symbol: str, field: str) -> str:
 
 def _cot_series_id(asset: str) -> str:
     return f"CFTC:COT:{asset.upper()}:noncomm_net"
+
+
+# ── COT asset mapping ─────────────────────────────────────────────────────────
+# Maps instrument symbol → CFTC COT asset code.  For forex, the non-USD
+# currency (base for XXX/USD, quote for USD/XXX).  For crosses, the base
+# currency.  For commodities / indices, the CFTC contract code.
+# Instruments not in this map have no COT coverage → enriched features get NaN.
+COT_ASSET_MAP: dict[str, str] = {
+    # Forex majors
+    "EURUSD": "EUR", "GBPUSD": "GBP", "USDJPY": "JPY", "AUDUSD": "AUD",
+    "NZDUSD": "NZD", "USDCAD": "CAD", "USDCHF": "CHF", "USDMXN": "MXN",
+    # Forex crosses (use base currency)
+    "EURGBP": "EUR", "EURJPY": "EUR", "EURAUD": "EUR", "EURCHF": "EUR",
+    "GBPJPY": "GBP", "GBPAUD": "GBP", "AUDJPY": "AUD", "AUDCHF": "AUD",
+    "AUDNZD": "AUD",
+    # Commodities
+    "GC=F": "XAU", "SI=F": "XAG", "CL=F": "OIL", "BZ=F": "OIL",
+    "NATGAS": "NG", "COPPER": "HG", "PL=F": "PL", "PA=F": "PL",
+    "WHEAT": "WHEAT", "CORN": "CORN", "SOYBEANS": "SOYBEANS",
+    "SUGAR": "SUGAR", "COCOA": "COCOA", "COFFEE": "COFFEE",
+    "CATTLE": "CATTLE", "GASOLINE": "OIL",
+    # Indices
+    "SPY": "SP500", "^GSPC": "SP500", "NAS100": "NQ100", "QQQ": "NQ100",
+    # Crypto (COT has BTC/ETH; enriched block uses funding/OI instead)
+    "BTCUSDT": "BTC", "ETHUSDT": "ETH",
+}
+
+
+def cot_asset_for_symbol(symbol: str) -> str:
+    """Return the CFTC COT asset code for an instrument, or '' if unmapped."""
+    return COT_ASSET_MAP.get(symbol, "")
 
 
 def schema_hash(schema: Sequence[str] | None = None) -> str:
@@ -364,7 +397,7 @@ def build_features_for_candidate(
 
     if enriched and ctx.family == "crypto":
         fund = _asof_values(_bybit_series_id(ctx.symbol, "funding"), ctx.decision_time_ms, 64)
-        oi = _asof_values(_bybit_series_id(ctx.symbol, "open_interest"), ctx.decision_time_ms, 64)
+        oi = _asof_values(_bybit_series_id(ctx.symbol, "oi"), ctx.decision_time_ms, 64)
         if len(fund) >= 8:
             mu = float(np.mean(fund))
             sd = float(np.std(fund))

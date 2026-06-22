@@ -18,6 +18,7 @@ from athena_ase.features.build import (
     FEATURE_SCHEMA_ENRICHED,
     FeatureBuildContext,
     build_features_for_candidate,
+    cot_asset_for_symbol,
 )
 from athena_ase.instruments import instrument_by_symbol
 from athena_ase.labels.triple_barrier import LabelOutcome, label_candidate, uniqueness_weights
@@ -77,6 +78,7 @@ def _feature_row(cand: Candidate, inst, store: PTISStore) -> dict[str, Any]:
         agreement_count=cand.agreement_count,
         conflict_flag=cand.conflict_flag,
         benchmark_symbol=inst.benchmark,
+        cot_asset=cot_asset_for_symbol(inst.symbol),
         sig_tsmom=next((s["rawStrength"] * s["direction"] for s in cand.signals if s.get("name") == "tsmom"), 0.0),
         sig_carry=next((s["rawStrength"] * s["direction"] for s in cand.signals if s.get("name") == "carry"), 0.0),
         sig_xsec=next((s["rawStrength"] * s["direction"] for s in cand.signals if s.get("name") == "xsec"), 0.0),
@@ -185,6 +187,7 @@ def enriched_training_mask(frame: pd.DataFrame, family: str) -> pd.Series:
         "forex": ("cot_pct", "cot_delta_4w"),
         "commodity": ("cot_pct", "cot_delta_4w"),
         "crypto": ("funding_z", "oi_delta_z"),
+        "index_etf": ("cot_pct", "cot_delta_4w"),
     }
     required = required_by_family.get(family)
     if required is None or any(column not in frame.columns for column in required):
@@ -490,7 +493,7 @@ def train_family_horizon(
             "rows": int(len(enriched_rows)),
             "calibration": enriched_calibration,
         }
-    elif family in {"forex", "commodity", "crypto"}:
+    elif family in {"forex", "commodity", "crypto", "index_etf"}:
         enriched_summary["reason"] = "insufficient_verified_enriched_rows"
 
     metrics = {
