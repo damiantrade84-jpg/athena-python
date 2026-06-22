@@ -18,6 +18,7 @@ from athena_ase.features.build import (
     FeatureBuildContext,
     build_features_for_candidate,
     categorical_code,
+    cot_asset_for_symbol,
 )
 from athena_ase.gates.demo_only import GateResult, assert_demo
 from athena_ase.horizon import Horizon, K_TP
@@ -156,6 +157,7 @@ def _build_context(candidate: Candidate, instrument: Instrument) -> FeatureBuild
         sig_xsec=_sig_value(candidate.signals, "xsec"),
         sig_mr=_sig_value(candidate.signals, "meanrev"),
         benchmark_symbol=instrument.benchmark,
+        cot_asset=cot_asset_for_symbol(instrument.symbol),
     )
 
 
@@ -228,7 +230,10 @@ def predict_one(
     route = "enriched" if bundle.model_enriched is not None and _enriched_ok(row_probe, ctx.missing_feeds) else "core"
     row = build_features_for_candidate(ctx, enriched=(route == "enriched"))
     schema: tuple[str, ...] = FEATURE_SCHEMA_ENRICHED if route == "enriched" else FEATURE_SCHEMA_CORE
-    if bundle.feature_names:
+    route_schema = (bundle.manifest.feature_schemas or {}).get(route)
+    if route_schema:
+        schema = tuple(route_schema)
+    elif bundle.feature_names:
         schema = tuple(bundle.feature_names)
     features = _row_to_vector(row, schema)
 
