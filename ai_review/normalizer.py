@@ -23,6 +23,8 @@ _STRUCTURED_KEYS = (
     "ai_review_summary",
     "engineAVerdictComparison",
     "engine_a_verdict_comparison",
+    "engineBVerdictComparison",
+    "engine_b_verdict_comparison",
     "contextCompleteness",
     "context_completeness",
     "missingContextDetailed",
@@ -87,6 +89,7 @@ def _pick_structured(parsed: dict[str, Any]) -> dict[str, Any]:
     aliases = (
         ("aiReviewSummary", "ai_review_summary"),
         ("engineAVerdictComparison", "engine_a_verdict_comparison"),
+        ("engineBVerdictComparison", "engine_b_verdict_comparison"),
         ("contextCompleteness", "context_completeness"),
         ("missingContextDetailed", "missing_context_detailed"),
     )

@@ -1489,6 +1489,38 @@ def test_engine_a_verdict_invalid_model_final_decision_falls_back_to_human_actio
     assert comparison["comparisonVerdict"] == "engine_a_direction_confirmed_entry_rejected"
 
 
+def test_engine_b_structured_verdict_comparison_survives_normalization():
+    ai = normalize_chart_review_response(
+        json.dumps(
+            {
+                "verdict": "INVALID",
+                "confidence": 72,
+                "human_action": "reject",
+                "engine_b_alignment": "BOS confirms Engine B direction",
+                "engineBVerdictComparison": {
+                    "chartConfirmsEngineBDirection": True,
+                    "chartContradictsEngineBDirection": False,
+                    "chartConfirmsEntryTiming": False,
+                    "chartContradictsEntryTiming": True,
+                    "aiAgreesWithEngineB": False,
+                    "comparisonVerdict": "engine_b_direction_confirmed_entry_rejected",
+                    "finalDecision": "reject",
+                    "finalReason": "Direction confirmed, but entry timing is invalid",
+                },
+            }
+        ),
+        review_type="engine_b_chart",
+    )
+
+    comparison = ai["structured"]["engineBVerdictComparison"]
+
+    assert comparison["chartConfirmsEngineBDirection"] is True
+    assert comparison["chartContradictsEngineBDirection"] is False
+    assert comparison["chartConfirmsEntryTiming"] is False
+    assert comparison["chartContradictsEntryTiming"] is True
+    assert comparison["aiAgreesWithEngineB"] is False
+
+
 def test_concordance_prefers_structured_entry_timing_over_visual_contradiction_text():
     ctx = _engine_a_ctx(passed=True)
     ai = normalize_chart_review_response(
