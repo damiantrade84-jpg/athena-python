@@ -187,6 +187,56 @@ def test_scalp_trade_bucket_helpers_bound_historical_reference_ts(monkeypatch):
     assert calls[0]["max_last_ts"] == datetime(2026, 3, 26, 14, 15, tzinfo=timezone.utc).timestamp()
 
 
+def test_shared_aggtrade_helpers_build_vp_and_cvd_from_same_bucket_query(monkeypatch):
+    from athena.microstructure import trade_bucket_store as store
+    from athena.microstructure.aggtrade_volume import (
+        build_trade_bucket_volume_profile,
+        check_trade_bucket_cvd,
+    )
+
+    calls = []
+    rows = [
+        {"price_bucket": 99.0, "total_volume": 10.0, "delta": -4.0, "last_ts": 1.0},
+        {"price_bucket": 100.0, "total_volume": 40.0, "delta": 8.0, "last_ts": 2.0},
+        {"price_bucket": 101.0, "total_volume": 25.0, "delta": 12.0, "last_ts": 3.0},
+    ]
+
+    def fake_query(symbol, **kwargs):
+        calls.append({"symbol": symbol, **kwargs})
+        return rows
+
+    monkeypatch.setattr(store, "query_session_buckets", fake_query)
+    cfg = {
+        "TRADE_BUCKET_MIN_LEVELS": 3,
+        "TRADE_BUCKET_MIN_VOLUME": 0.0,
+        "TRADE_BUCKET_MAX_AGE_SEC": 900,
+        "VP_VALUE_AREA_PCT": 0.70,
+        "VP_LVN_THRESHOLD": 0.15,
+        "CVD_MIN_SLOPE": 0.0,
+    }
+
+    vp = build_trade_bucket_volume_profile(
+        "BTC/USDT",
+        cfg,
+        reference_ts="2026-03-26T14:15:00+00:00",
+        require_fresh=False,
+    )
+    cvd = check_trade_bucket_cvd(
+        "BTC/USDT",
+        cfg,
+        reference_ts="2026-03-26T14:15:00+00:00",
+        require_fresh=False,
+    )
+
+    assert vp["valid"] is True
+    assert vp["volume_source"] == "binance_aggtrade"
+    assert cvd["source"] == "binance_aggtrade"
+    assert cvd["direction"] == "LONG"
+    assert calls[0]["symbol"] == "BTCUSDT"
+    assert calls[0]["session_id"] == "2026-03-26"
+    assert calls[0]["max_last_ts"] == datetime(2026, 3, 26, 14, 15, tzinfo=timezone.utc).timestamp()
+
+
 def test_bybit_ws_emit_uses_ratio_from_accumulators():
     from athena.datafeeds.bybit_ws import BybitWS
 

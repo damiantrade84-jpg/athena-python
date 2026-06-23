@@ -19,6 +19,17 @@ from market_structure import (
 )
 
 
+def _style_profile():
+    return {
+        "style": "intraday",
+        "min_score": 3.0,
+        "min_room_atr": 0.35,
+        "min_rr": 1.0,
+        "fallback_rr": 2.0,
+        "require_macro_align": False,
+    }
+
+
 def _base_res(asset_type: str = "forex"):
     return {
         "atr": 1.0,
@@ -51,6 +62,157 @@ def _base_res(asset_type: str = "forex"):
         "prev_session_val": 99.5,
         "profile_notes": "Rejected from previous-session VAH",
     }
+
+
+def _candles(count: int = 30):
+    return [
+        {
+            "open": 100.0 + i * 0.1,
+            "high": 101.0 + i * 0.1,
+            "low": 99.0 + i * 0.1,
+            "close": 100.5 + i * 0.1,
+            "vol": 1000.0,
+            "time": f"2026-01-01T{i % 24:02d}:00:00+00:00",
+        }
+        for i in range(count)
+    ]
+
+
+def _aggtrade_rows():
+    return [
+        {"price_bucket": 99.5, "total_volume": 10.0, "delta": -2.0, "last_ts": 1.0},
+        {"price_bucket": 100.0, "total_volume": 40.0, "delta": 15.0, "last_ts": 2.0},
+        {"price_bucket": 100.5, "total_volume": 25.0, "delta": 8.0, "last_ts": 3.0},
+    ]
+
+
+def test_precompute_crypto_uses_aggtrade_profile_when_available(monkeypatch):
+    from athena.microstructure import trade_bucket_store
+
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_PROFILE_SCORING_ENABLED", True)
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_CRYPTO_AGGTRADE_ENABLED", True)
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_CRYPTO_REQUIRE_AGGTRADE_FOR_PASS", True)
+    monkeypatch.setitem(
+        config.CONFIG,
+        "SCALP_ENGINE",
+        {
+            **(config.CONFIG.get("SCALP_ENGINE", {}) or {}),
+            "TRADE_BUCKET_MIN_LEVELS": 3,
+            "TRADE_BUCKET_MIN_VOLUME": 0.0,
+            "TRADE_BUCKET_MAX_AGE_SEC": 900,
+        },
+    )
+    calls = []
+
+    def fake_query(symbol, **kwargs):
+        calls.append({"symbol": symbol, **kwargs})
+        return _aggtrade_rows()
+
+    monkeypatch.setattr(trade_bucket_store, "query_session_buckets", fake_query)
+
+    pre = NakedEngine().precompute_structure_data(
+        d1_candles=_candles(),
+        h4_candles=_candles(),
+        h1_candles=_candles(),
+        current_price=100.5,
+        atr=1.0,
+        asset_type="crypto",
+        enable_profile_context=True,
+        pair={"type": "crypto", "display": "BTC/USDT", "symbol": "BTCUSDT"},
+    )
+
+    assert calls and calls[0]["symbol"] == "BTCUSDT"
+    assert pre["_vp_profile"]["volume_source"] == "binance_aggtrade"
+    assert pre["aggtrade_available"] is True
+    assert pre["engine_b_data_fidelity"]["vp_uses_real_trade_buckets"] is True
+
+
+def test_calculate_confidence_crypto_aligned_aggtrade_cvd_adds_orderflow_bonus(monkeypatch):
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_CRYPTO_AGGTRADE_ENABLED", True)
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_CRYPTO_AGGTRADE_CVD_SCORE_ENABLED", True)
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_CRYPTO_REQUIRE_AGGTRADE_FOR_PASS", True)
+    monkeypatch.setitem(
+        config.CONFIG,
+        "NAKED_ENGINE",
+        {**(config.CONFIG.get("NAKED_ENGINE", {}) or {}), "aggtrade_cvd_bonus": 1.0},
+    )
+    res = {
+        **_base_res("crypto"),
+        "aggtrade_required": True,
+        "aggtrade_available": True,
+        "aggtrade_cvd_direction": "LONG",
+        "aggtrade_cvd_source": "binance_aggtrade",
+        "engine_b_data_fidelity": {
+            "vp_uses_real_trade_buckets": True,
+            "cvd_uses_real_trade_buckets": True,
+        },
+    }
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_CRYPTO_AGGTRADE_CVD_SCORE_ENABLED", False)
+    baseline = NakedEngine().calculate_confidence(
+        res,
+        current_price=100.0,
+        direction="LONG",
+        style_profile=_style_profile(),
+    )
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_CRYPTO_AGGTRADE_CVD_SCORE_ENABLED", True)
+
+    out = NakedEngine().calculate_confidence(
+        res,
+        current_price=100.0,
+        direction="LONG",
+        style_profile=_style_profile(),
+    )
+
+    assert out["passed"] is True
+    assert out["aggtrade_orderflow_points"] == pytest.approx(1.0)
+    assert out["score"] == pytest.approx(baseline["score"] + 1.0)
+    assert out["max_possible"] == pytest.approx(baseline["max_possible"] + 1.0)
+    assert out["engine_b_data_fidelity"]["cvd_uses_real_trade_buckets"] is True
+
+
+def test_calculate_confidence_crypto_missing_aggtrade_fails_strict(monkeypatch):
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_CRYPTO_AGGTRADE_ENABLED", True)
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_CRYPTO_REQUIRE_AGGTRADE_FOR_PASS", True)
+    res = {
+        **_base_res("crypto"),
+        "aggtrade_required": True,
+        "aggtrade_available": False,
+        "aggtrade_reason": "insufficient_trade_buckets",
+        "engine_b_data_fidelity": {
+            "vp_uses_real_trade_buckets": False,
+            "cvd_uses_real_trade_buckets": False,
+        },
+    }
+
+    out = NakedEngine().calculate_confidence(
+        res,
+        current_price=100.0,
+        direction="LONG",
+        style_profile=_style_profile(),
+    )
+
+    assert out["passed"] is False
+    assert out["aggtrade_required"] is True
+    assert out["aggtrade_available"] is False
+    assert "aggtrade_required_for_crypto" in out["failed_gate_names"]
+    assert "aggtrade_required_for_crypto" in out["engine_b_diagnostics"]["reason_codes"]
+
+
+def test_calculate_confidence_forex_does_not_require_aggtrade(monkeypatch):
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_CRYPTO_AGGTRADE_ENABLED", True)
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_CRYPTO_REQUIRE_AGGTRADE_FOR_PASS", True)
+
+    out = NakedEngine().calculate_confidence(
+        _base_res("forex"),
+        current_price=100.0,
+        direction="LONG",
+        style_profile=_style_profile(),
+    )
+
+    assert out["passed"] is True
+    assert out["aggtrade_required"] is False
+    assert out["aggtrade_orderflow_points"] == 0.0
+    assert "aggtrade_required_for_crypto" not in out["engine_b_diagnostics"]["reason_codes"]
 
 
 def test_engine_b_profile_context_enabled_respects_asset_type(monkeypatch):
@@ -87,6 +249,7 @@ def test_calculate_confidence_forex_excludes_profile_slot(monkeypatch):
         "ENGINE_B_PROFILE_TRUSTED_ASSET_TYPES",
         ["crypto", "stock"],
     )
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_CRYPTO_AGGTRADE_CVD_SCORE_ENABLED", False)
     style = {
         "style": "intraday",
         "min_score": 3.0,
@@ -102,7 +265,17 @@ def test_calculate_confidence_forex_excludes_profile_slot(monkeypatch):
         style_profile=style,
     )
     crypto_out = NakedEngine().calculate_confidence(
-        _base_res("crypto"),
+        {
+            **_base_res("crypto"),
+            "aggtrade_required": True,
+            "aggtrade_available": True,
+            "aggtrade_cvd_direction": "LONG",
+            "aggtrade_cvd_source": "binance_aggtrade",
+            "engine_b_data_fidelity": {
+                "vp_uses_real_trade_buckets": True,
+                "cvd_uses_real_trade_buckets": True,
+            },
+        },
         current_price=100.0,
         direction="LONG",
         style_profile=style,

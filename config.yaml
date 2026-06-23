@@ -2330,6 +2330,9 @@ ENGINE_B_PROFILE_SCORING_ENABLED: true
 ENGINE_B_PROFILE_TRUSTED_ASSET_TYPES:
   - crypto
   - stock
+ENGINE_B_CRYPTO_AGGTRADE_ENABLED: true
+ENGINE_B_CRYPTO_REQUIRE_AGGTRADE_FOR_PASS: true
+ENGINE_B_CRYPTO_AGGTRADE_CVD_SCORE_ENABLED: true
 
 # Engine contextual room gate. When true, room_ok requires distance_to_opposing_zone >= min_room_atr
 # EXCEPT when no opposing zone exists (room_dist is None) AND trend+BOS confirmed — then room passes
@@ -2919,6 +2922,8 @@ ENGINE_B_RESEARCH_LAB_FACTORS:
       - vwap_reclaim
 
 NAKED_ENGINE:
+
+  aggtrade_cvd_bonus: 1.0
 
   bos_volume_multiplier: 1.3
 

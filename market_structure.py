@@ -511,6 +511,8 @@ ENGINE_B_REASON_NO_TRIGGER_PATTERN = "no_trigger_pattern"
 ENGINE_B_REASON_BOS_WITHOUT_VOLUME = "bos_without_volume"
 ENGINE_B_REASON_D1_PD_ARRAY_CONFLICT = "d1_pd_array_conflict"
 ENGINE_B_REASON_STRUCTURAL_TP_TOO_CLOSE = "structural_tp_too_close"
+ENGINE_B_REASON_AGGTRADE_REQUIRED = "aggtrade_required_for_crypto"
+ENGINE_B_REASON_AGGTRADE_CVD_OPPOSED = "aggtrade_cvd_opposed"
 
 
 def _float_cfg(key: str, default: float) -> float:
@@ -863,6 +865,119 @@ def build_engine_b_profile_vp_context(asset_type: str, cfg: dict | None = None) 
         "trusted": bool(trusted),
         "reason": reason,
     }
+
+
+def _engine_b_crypto_aggtrade_context(
+    asset_type: str,
+    pair: dict | None,
+    *,
+    reference_ts=None,
+    require_fresh: bool = True,
+) -> dict:
+    """Read-only crypto aggTrade VP/CVD context for Engine B."""
+    asset_key = str(asset_type or "").lower()
+    enabled = asset_key == "crypto" and bool(
+        config.CONFIG.get("ENGINE_B_CRYPTO_AGGTRADE_ENABLED", True)
+    )
+    required = enabled and bool(
+        config.CONFIG.get("ENGINE_B_CRYPTO_REQUIRE_AGGTRADE_FOR_PASS", True)
+    )
+    base_fidelity = {
+        "vp_source": "disabled" if not enabled else "unavailable",
+        "vp_fidelity": "vp_unavailable",
+        "vp_uses_real_trade_buckets": False,
+        "vp_is_proxy": True,
+        "cvd_source": "disabled" if not enabled else "unavailable",
+        "cvd_fidelity": "cvd_unavailable",
+        "cvd_uses_real_trade_buckets": False,
+        "cvd_is_proxy": True,
+    }
+    out = {
+        "aggtrade_enabled": enabled,
+        "aggtrade_required": required,
+        "aggtrade_available": False,
+        "aggtrade_reason": None if enabled else "aggtrade_disabled",
+        "aggtrade_profile": None,
+        "aggtrade_profile_source_tf": None,
+        "aggtrade_cvd_direction": None,
+        "aggtrade_cvd_source": None,
+        "aggtrade_cvd_slope": None,
+        "aggtrade_cvd_bucket_count": None,
+        "engine_b_data_fidelity": base_fidelity,
+    }
+    if not enabled:
+        return out
+
+    display = (
+        (pair or {}).get("display")
+        or (pair or {}).get("symbol")
+        or (pair or {}).get("pair")
+    )
+    if not display:
+        out["aggtrade_reason"] = "missing_symbol"
+        return out
+
+    try:
+        from athena.microstructure.aggtrade_volume import (
+            build_trade_bucket_volume_profile,
+            check_trade_bucket_cvd,
+            source_fidelity,
+        )
+
+        scalp_cfg = config.CONFIG.get("SCALP_ENGINE", {}) or {}
+        vp = build_trade_bucket_volume_profile(
+            str(display),
+            scalp_cfg,
+            reference_ts=reference_ts,
+            require_fresh=require_fresh,
+        )
+        cvd = check_trade_bucket_cvd(
+            str(display),
+            scalp_cfg,
+            reference_ts=reference_ts,
+            require_fresh=require_fresh,
+        )
+        vp_fidelity = source_fidelity(
+            vp.get("volume_source") if vp.get("valid") else vp.get("volume_source") or vp.get("source") or "unavailable",
+            domain="vp",
+        )
+        cvd_fidelity = source_fidelity(cvd.get("source") or "unavailable", domain="cvd")
+        vp_ok = bool(vp.get("valid") and vp_fidelity.get("uses_real_trade_buckets"))
+        cvd_ok = bool(cvd_fidelity.get("uses_real_trade_buckets") and cvd.get("bucket_count"))
+        reason = None
+        if not vp_ok:
+            reason = str(vp.get("reason") or "aggtrade_vp_unavailable")
+        elif not cvd_ok:
+            reason = str(cvd.get("reason") or "aggtrade_cvd_unavailable")
+        out.update(
+            {
+                "aggtrade_available": bool(vp_ok and cvd_ok),
+                "aggtrade_reason": reason,
+                "aggtrade_profile": vp if vp_ok else None,
+                "aggtrade_profile_source_tf": "aggtrade_session" if vp_ok else None,
+                "aggtrade_cvd_direction": cvd.get("direction"),
+                "aggtrade_cvd_source": cvd.get("source"),
+                "aggtrade_cvd_slope": cvd.get("cvd_slope"),
+                "aggtrade_cvd_bucket_count": cvd.get("bucket_count"),
+                "engine_b_data_fidelity": {
+                    "vp_source": vp_fidelity.get("source"),
+                    "vp_fidelity": vp_fidelity.get("fidelity"),
+                    "vp_uses_real_trade_buckets": bool(vp_fidelity.get("uses_real_trade_buckets")),
+                    "vp_is_proxy": bool(vp_fidelity.get("is_proxy")),
+                    "vp_bucket_count": vp.get("bucket_count"),
+                    "cvd_source": cvd_fidelity.get("source"),
+                    "cvd_fidelity": cvd_fidelity.get("fidelity"),
+                    "cvd_uses_real_trade_buckets": bool(cvd_fidelity.get("uses_real_trade_buckets")),
+                    "cvd_is_proxy": bool(cvd_fidelity.get("is_proxy")),
+                    "cvd_bucket_count": cvd.get("bucket_count"),
+                },
+            }
+        )
+        return out
+    except Exception as exc:
+        log.debug("[ENGINE_B] aggTrade context unavailable for %s: %s", display, exc)
+        out["aggtrade_reason"] = "trade_bucket_error"
+        return out
 
 
 def sanitize_engine_b_structure_profile_fields(
@@ -3247,6 +3362,8 @@ class NakedEngine:
         h4_snap: dict | None = None,
         style: str = "intraday",
         pair: dict | None = None,
+        trade_bucket_reference_ts=None,
+        trade_bucket_require_fresh: bool = True,
     ) -> dict:
         """Precompute all direction-independent structure analysis data.
 
@@ -3519,17 +3636,30 @@ class NakedEngine:
         _vp_profile = None
         _vp_source_tf = None
         _vp_sessions = None
+        _aggtrade_context = _engine_b_crypto_aggtrade_context(
+            asset_type,
+            pair,
+            reference_ts=trade_bucket_reference_ts,
+            require_fresh=trade_bucket_require_fresh,
+        )
         if enable_profile_context:
-            try:
-                from volume_profile import compute_fixed_range_volume_profile, split_completed_sessions
-                _vp_candles = h1_candles if len(h1_candles or []) >= 24 else h4_candles
-                _vp_source_tf = "H1" if len(h1_candles or []) >= 24 else "H4"
-                _vp_sessions = split_completed_sessions(_vp_candles or [], asset_type)
-                _vp_prev = _vp_sessions.get("prev_session_candles", [])
-                if _vp_prev:
-                    _vp_profile = compute_fixed_range_volume_profile(_vp_prev)
-            except Exception:
-                pass
+            if _aggtrade_context.get("aggtrade_profile"):
+                _vp_profile = _aggtrade_context.get("aggtrade_profile")
+                _vp_source_tf = _aggtrade_context.get("aggtrade_profile_source_tf")
+            elif not (
+                str(asset_type or "").lower() == "crypto"
+                and bool(_aggtrade_context.get("aggtrade_required"))
+            ):
+                try:
+                    from volume_profile import compute_fixed_range_volume_profile, split_completed_sessions
+                    _vp_candles = h1_candles if len(h1_candles or []) >= 24 else h4_candles
+                    _vp_source_tf = "H1" if len(h1_candles or []) >= 24 else "H4"
+                    _vp_sessions = split_completed_sessions(_vp_candles or [], asset_type)
+                    _vp_prev = _vp_sessions.get("prev_session_candles", [])
+                    if _vp_prev:
+                        _vp_profile = compute_fixed_range_volume_profile(_vp_prev)
+                except Exception:
+                    pass
 
         return {
             "_error": None,
@@ -3579,6 +3709,15 @@ class NakedEngine:
             "_vp_profile": _vp_profile,
             "_vp_source_tf": _vp_source_tf,
             "_vp_sessions": _vp_sessions,
+            "aggtrade_enabled": _aggtrade_context.get("aggtrade_enabled"),
+            "aggtrade_required": _aggtrade_context.get("aggtrade_required"),
+            "aggtrade_available": _aggtrade_context.get("aggtrade_available"),
+            "aggtrade_reason": _aggtrade_context.get("aggtrade_reason"),
+            "aggtrade_cvd_direction": _aggtrade_context.get("aggtrade_cvd_direction"),
+            "aggtrade_cvd_source": _aggtrade_context.get("aggtrade_cvd_source"),
+            "aggtrade_cvd_slope": _aggtrade_context.get("aggtrade_cvd_slope"),
+            "aggtrade_cvd_bucket_count": _aggtrade_context.get("aggtrade_cvd_bucket_count"),
+            "engine_b_data_fidelity": _aggtrade_context.get("engine_b_data_fidelity"),
             "structure_tf": structure_tf,
             "regime": regime,
             "fallback_rr": fallback_rr,
@@ -3942,6 +4081,15 @@ class NakedEngine:
             "structure_tf": structure_tf,
             "asset_type": asset_type,
             "pair_display": (pair or {}).get("display") or (pair or {}).get("symbol"),
+            "aggtrade_enabled": precompute.get("aggtrade_enabled"),
+            "aggtrade_required": precompute.get("aggtrade_required"),
+            "aggtrade_available": precompute.get("aggtrade_available"),
+            "aggtrade_reason": precompute.get("aggtrade_reason"),
+            "aggtrade_cvd_direction": precompute.get("aggtrade_cvd_direction"),
+            "aggtrade_cvd_source": precompute.get("aggtrade_cvd_source"),
+            "aggtrade_cvd_slope": precompute.get("aggtrade_cvd_slope"),
+            "aggtrade_cvd_bucket_count": precompute.get("aggtrade_cvd_bucket_count"),
+            "engine_b_data_fidelity": precompute.get("engine_b_data_fidelity"),
             **({"forex_session_structure": forex_session_structure} if str(asset_type or "").lower() == "forex" else {}),
             **({"asset_class_structure_diagnostics": asset_struct_diag} if asset_struct_diag.get("asset_class") in {"stock", "index", "commodity", "etf", "etf_bond"} else {}),
             **({"equity_session_structure": equity_session_structure} if equity_session_structure is not None else {}),
@@ -3978,6 +4126,8 @@ class NakedEngine:
         h4_snap: dict | None = None,
         style: str = "intraday",
         pair: dict | None = None,
+        trade_bucket_reference_ts=None,
+        trade_bucket_require_fresh: bool = True,
     ) -> dict:
         """
         Analyzes raw candle data to find Support/Resistance zones and trend sequence.
@@ -3994,6 +4144,8 @@ class NakedEngine:
             enable_zone_registry=enable_zone_registry,
             enable_profile_context=enable_profile_context,
             d1_snap=d1_snap, h4_snap=h4_snap, style=style, pair=pair,
+            trade_bucket_reference_ts=trade_bucket_reference_ts,
+            trade_bucket_require_fresh=trade_bucket_require_fresh,
         )
         return self.analyze_structure_direction(pre, current_price, direction)
 
@@ -4135,6 +4287,36 @@ class NakedEngine:
         # tests) but no longer gates structure_ok. Consumers can use it as a
         # soft conviction signal.
         _diag_codes: list[str] = []
+        _engine_b_data_fidelity = (
+            res.get("engine_b_data_fidelity")
+            if isinstance(res.get("engine_b_data_fidelity"), dict)
+            else {}
+        )
+        _aggtrade_enabled = asset_type_lower == "crypto" and bool(
+            config.CONFIG.get("ENGINE_B_CRYPTO_AGGTRADE_ENABLED", True)
+        )
+        _aggtrade_required_raw = res.get("aggtrade_required")
+        _aggtrade_required = bool(
+            _aggtrade_enabled
+            and (
+                bool(_aggtrade_required_raw)
+                if _aggtrade_required_raw is not None
+                else bool(config.CONFIG.get("ENGINE_B_CRYPTO_REQUIRE_AGGTRADE_FOR_PASS", True))
+            )
+        )
+        _aggtrade_available = bool(
+            _aggtrade_enabled
+            and res.get("aggtrade_available")
+            and _engine_b_data_fidelity.get("vp_uses_real_trade_buckets")
+            and _engine_b_data_fidelity.get("cvd_uses_real_trade_buckets")
+        )
+        _aggtrade_reason = res.get("aggtrade_reason")
+        _aggtrade_cvd_direction = str(res.get("aggtrade_cvd_direction") or "").upper() or None
+        _aggtrade_cvd_aligned = _aggtrade_cvd_direction == direction
+        _aggtrade_cvd_opposed = (
+            _aggtrade_cvd_direction in ("LONG", "SHORT")
+            and _aggtrade_cvd_direction != direction
+        )
         _engine_b_adx_val = None
         if str(res.get("asset_type") or "").lower() == "forex":
             _adx_val = res.get("d1_adx")
@@ -4443,7 +4625,20 @@ class NakedEngine:
         _profile_vp_context = build_engine_b_profile_vp_context(asset_type_lower)
         _profile_scoring_active = bool(_profile_vp_context.get("enabled"))
         _profile_points_max = 1.0 if _profile_scoring_active else 0.0
-        bonus_count = 3 + _profile_points_max  # bos_mtf, ob_at_zone, volume_ok + profile
+        _aggtrade_cvd_bonus_enabled = bool(
+            _aggtrade_enabled
+            and config.CONFIG.get("ENGINE_B_CRYPTO_AGGTRADE_CVD_SCORE_ENABLED", True)
+        )
+        try:
+            _aggtrade_cvd_bonus_max = float(
+                _naked_engine_cfg.get("aggtrade_cvd_bonus", 1.0)
+            )
+        except (TypeError, ValueError):
+            _aggtrade_cvd_bonus_max = 1.0
+        _aggtrade_cvd_bonus_max = max(0.0, _aggtrade_cvd_bonus_max)
+        if not _aggtrade_cvd_bonus_enabled:
+            _aggtrade_cvd_bonus_max = 0.0
+        bonus_count = 3 + _profile_points_max + _aggtrade_cvd_bonus_max  # bos_mtf, ob_at_zone, volume_ok + profile + aggTrade CVD
         if _ft_enabled:
             bonus_count += abs(float(_ft_cfg.get("MAX_BONUS", 1.5)))
         max_possible = gate_max_possible + bonus_count
@@ -4451,7 +4646,10 @@ class NakedEngine:
         _profile_ok = False
         _profile_alignment = "none"
         _profile_notes = str(res.get("profile_notes") or "")
-        if _profile_scoring_active:
+        _aggtrade_orderflow_points = 0.0
+        _aggtrade_cvd_alignment = "none"
+        _profile_points_blocked_by_aggtrade = bool(_aggtrade_required and not _aggtrade_available)
+        if _profile_scoring_active and not _profile_points_blocked_by_aggtrade:
             _profile_valid = bool(res.get("prev_session_profile_valid", False))
             _profile_in_play = bool(res.get("profile_in_play", False))
             try:
@@ -4475,6 +4673,16 @@ class NakedEngine:
                     _profile_alignment = "weak"
                 bonus_points += _profile_points
                 total_score += _profile_points
+        if _aggtrade_cvd_bonus_enabled:
+            if _aggtrade_available and _aggtrade_cvd_aligned:
+                _aggtrade_orderflow_points = _aggtrade_cvd_bonus_max
+                _aggtrade_cvd_alignment = "aligned"
+                bonus_points += _aggtrade_orderflow_points
+                total_score += _aggtrade_orderflow_points
+            elif _aggtrade_available and _aggtrade_cvd_opposed:
+                _aggtrade_cvd_alignment = "opposed"
+            elif _aggtrade_available and _aggtrade_cvd_direction:
+                _aggtrade_cvd_alignment = "neutral"
 
         # D1 PD-array conflict penalty (B-1).
         # FIX 1: Apply penalty ONLY to total_score, never to gate_score
@@ -4521,6 +4729,8 @@ class NakedEngine:
                 and rr_ok
                 and (macro_ok if require_macro_align else True)
             )
+        if _aggtrade_required and not _aggtrade_available:
+            passed = False
 
         failed_gate_names = []
         if not structure_ok:
@@ -4535,6 +4745,8 @@ class NakedEngine:
             failed_gate_names.append(f"rr={rr:.1f}(src={_exec_lvl['rr_source']})")
         if _exec_lvl.get("execution_level_reject_reason") == "max_sl_exceeded":
             failed_gate_names.append("max_sl_exceeded")
+        if _aggtrade_required and not _aggtrade_available:
+            failed_gate_names.append(ENGINE_B_REASON_AGGTRADE_REQUIRED)
 
         lifecycle_state, lifecycle_reason = self._determine_lifecycle_state(
             res, current_price, direction, trigger_ok
@@ -4560,6 +4772,10 @@ class NakedEngine:
             _diag_codes.append(ENGINE_B_REASON_BOS_WITHOUT_VOLUME)
         if _d1_conflict:
             _diag_codes.append(ENGINE_B_REASON_D1_PD_ARRAY_CONFLICT)
+        if _aggtrade_required and not _aggtrade_available:
+            _diag_codes.append(ENGINE_B_REASON_AGGTRADE_REQUIRED)
+        elif _aggtrade_cvd_opposed:
+            _diag_codes.append(ENGINE_B_REASON_AGGTRADE_CVD_OPPOSED)
         if not room_ok:
             if direction == "LONG":
                 _diag_codes.append(ENGINE_B_REASON_RESISTANCE_TOO_CLOSE)
@@ -4575,6 +4791,16 @@ class NakedEngine:
         _engine_b_diag_payload = {"reason_codes": _diag_codes}
         if asset_type_lower == "crypto" and isinstance(res.get("crypto_structure_diagnostics"), dict):
             _engine_b_diag_payload["crypto_structure"] = res.get("crypto_structure_diagnostics")
+        if asset_type_lower == "crypto":
+            _engine_b_diag_payload["aggtrade"] = {
+                "required": _aggtrade_required,
+                "available": _aggtrade_available,
+                "reason": _aggtrade_reason,
+                "cvd_direction": _aggtrade_cvd_direction,
+                "cvd_alignment": _aggtrade_cvd_alignment,
+                "orderflow_points": round(_aggtrade_orderflow_points, 2),
+                "data_fidelity": _engine_b_data_fidelity,
+            }
         if asset_type_lower == "forex" and isinstance(res.get("forex_session_structure"), dict):
             _engine_b_diag_payload["forex_session_structure"] = res.get("forex_session_structure")
         if isinstance(res.get("asset_class_structure_diagnostics"), dict):
@@ -4597,6 +4823,8 @@ class NakedEngine:
             _hard_fail_reasons.append("engine_b_confidence_passed_false")
             if res.get("structural_verdict") != "CLEAR":
                 _hard_fail_reasons.append("engine_b_structural_verdict_not_clear")
+            if _aggtrade_required and not _aggtrade_available:
+                _hard_fail_reasons.append("engine_b_aggtrade_required_false")
             _hard_fail_reasons = sorted(set(_hard_fail_reasons))
 
         return {
@@ -4669,6 +4897,15 @@ class NakedEngine:
             "profile_alignment": _profile_alignment,
             "profile_notes": _profile_notes,
             "profile_context": _profile_vp_context,
+            "aggtrade_required": _aggtrade_required,
+            "aggtrade_available": _aggtrade_available,
+            "aggtrade_reason": _aggtrade_reason,
+            "aggtrade_cvd_direction": _aggtrade_cvd_direction,
+            "aggtrade_cvd_source": res.get("aggtrade_cvd_source"),
+            "aggtrade_cvd_slope": res.get("aggtrade_cvd_slope"),
+            "aggtrade_cvd_alignment": _aggtrade_cvd_alignment,
+            "aggtrade_orderflow_points": round(_aggtrade_orderflow_points, 2),
+            "engine_b_data_fidelity": _engine_b_data_fidelity,
             "lifecycle_state": lifecycle_state,
             "lifecycle_reason": lifecycle_reason,
             "d1_pd_conflict_penalty": round(_d1_penalty, 2),

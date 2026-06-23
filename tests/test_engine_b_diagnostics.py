@@ -2285,6 +2285,14 @@ def test_calculate_confidence_hard_fail_reasons_empty_when_passed():
         "recommended_take_profit": 112.0,
         "bos_confirmed": True,
         "bos_volume_confirmed": True,
+        "aggtrade_required": True,
+        "aggtrade_available": True,
+        "aggtrade_cvd_direction": "LONG",
+        "aggtrade_cvd_source": "binance_aggtrade",
+        "engine_b_data_fidelity": {
+            "vp_uses_real_trade_buckets": True,
+            "cvd_uses_real_trade_buckets": True,
+        },
     }
     profile = {"style": "intraday", "min_rr": 1.0, "min_room_atr": 0.25}
     conf = engine.calculate_confidence(res, 100.0, "LONG", style_profile=profile)

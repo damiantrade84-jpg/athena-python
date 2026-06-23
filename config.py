@@ -1118,6 +1118,9 @@ CONFIG: dict = {
     "AI_NEUTRAL_ALLOWS_EXECUTION": False,
     "ENGINE_B_PROFILE_SCORING_ENABLED": True,
     "ENGINE_B_PROFILE_TRUSTED_ASSET_TYPES": ["crypto", "stock"],
+    "ENGINE_B_CRYPTO_AGGTRADE_ENABLED": True,
+    "ENGINE_B_CRYPTO_REQUIRE_AGGTRADE_FOR_PASS": True,
+    "ENGINE_B_CRYPTO_AGGTRADE_CVD_SCORE_ENABLED": True,
     "ENGINE_B_FAST_FVG_DETECTION": True,
     "CHART_VISION_DATASET_ENABLED": False,
     "CHART_VISION_V2_SHADOW_ENABLED": False,
@@ -2066,6 +2069,7 @@ CONFIG: dict = {
     "ENGINE_B_CRYPTO_BOS_MIN_BREAK_ATR": 0.10,
     # ── Engine B (Naked Scalp) ────────────────────────────────────────────────
     "NAKED_ENGINE": {
+        "aggtrade_cvd_bonus": 1.0,
         "zone_multipliers": {
             "TRENDING": {"upper": 0.3, "lower": 1.0, "sl": 1.5},
             "RANGING": {"upper": 0.5, "lower": 1.2, "sl": 1.0},
@@ -2898,7 +2902,19 @@ def _fatal_config_validation(cfg: dict) -> None:
     if _b_max is None:
         # Fallback: compute from existing config
         _profile_on = bool(cfg.get("ENGINE_B_PROFILE_SCORING_ENABLED", False))
-        _b_max = 6 + 3 + (1.0 if _profile_on else 0.0)
+        _aggtrade_cvd_on = bool(
+            cfg.get("ENGINE_B_CRYPTO_AGGTRADE_ENABLED", True)
+            and cfg.get("ENGINE_B_CRYPTO_AGGTRADE_CVD_SCORE_ENABLED", True)
+        )
+        try:
+            _aggtrade_bonus = float(
+                (cfg.get("NAKED_ENGINE") or {}).get("aggtrade_cvd_bonus", 1.0)
+            )
+        except (TypeError, ValueError):
+            _aggtrade_bonus = 1.0
+        _b_max = 6 + 3 + (1.0 if _profile_on else 0.0) + (
+            max(0.0, _aggtrade_bonus) if _aggtrade_cvd_on else 0.0
+        )
     if _b_max is None or float(_b_max) <= 0:
         errors.append("Engine B max_possible must be defined and positive")
 

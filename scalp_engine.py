@@ -1322,61 +1322,28 @@ def _build_volume_profile(
 
 
 def _trade_bucket_session_id(reference_ts=None) -> str | None:
-    if reference_ts is None:
-        return None
-    dt = _coerce_utc_datetime(reference_ts)
-    return dt.strftime("%Y-%m-%d") if dt else None
+    from athena.microstructure.aggtrade_volume import trade_bucket_session_id
+
+    return trade_bucket_session_id(reference_ts)
 
 
 def _trade_bucket_max_last_ts(reference_ts=None, require_fresh: bool = True) -> float | None:
-    if reference_ts is None or require_fresh:
-        return None
-    dt = _coerce_utc_datetime(reference_ts)
-    return dt.timestamp() if dt else None
+    from athena.microstructure.aggtrade_volume import trade_bucket_max_last_ts
+
+    return trade_bucket_max_last_ts(reference_ts, require_fresh=require_fresh)
 
 
 def _build_trade_bucket_volume_profile(display: str, reference_ts=None, require_fresh: bool = True) -> dict:
     """Build crypto VP from live Binance aggregate-trade price buckets."""
-    cfg = CONFIG.get("SCALP_ENGINE", {})
-    min_buckets = int(cfg.get("TRADE_BUCKET_MIN_LEVELS", 8))
-    min_volume = float(cfg.get("TRADE_BUCKET_MIN_VOLUME", 0.0))
-    max_age_sec = int(cfg.get("TRADE_BUCKET_MAX_AGE_SEC", 300))
-    va_pct = _as_value_area_pct(
-        _scalp_cfg_lookup(cfg, "VP_VALUE_AREA_PCT", cfg.get("VP_VA_PCT", 0.70), asset_type="crypto"),
-        0.70,
-    )
-    lvn_factor = _as_fraction(
-        _scalp_cfg_lookup(cfg, "VP_LVN_THRESHOLD", cfg.get("VP_LVN_FACTOR", 0.30), asset_type="crypto"),
-        0.30,
-    )
-    symbol = str(display or "").replace("/", "").upper()
-    try:
-        from athena.microstructure.trade_bucket_store import query_session_buckets
-        from volume_profile import compute_bucketed_volume_profile
+    from athena.microstructure.aggtrade_volume import build_trade_bucket_volume_profile
 
-        rows = query_session_buckets(
-            symbol,
-            exchange="binance",
-            session_id=_trade_bucket_session_id(reference_ts),
-            min_last_ts=(_time.time() - max_age_sec) if require_fresh else None,
-            max_last_ts=_trade_bucket_max_last_ts(reference_ts, require_fresh=require_fresh),
-        )
-        if len(rows) < min_buckets:
-            return {"valid": False, "reason": "insufficient_trade_buckets", "bucket_count": len(rows)}
-        vp = compute_bucketed_volume_profile(rows, value_area_pct=va_pct, lvn_threshold=lvn_factor)
-        if not vp.get("profile_valid"):
-            return {"valid": False, "reason": "trade_bucket_profile_invalid", "bucket_count": len(rows)}
-        if float(vp.get("total_volume") or 0.0) < min_volume:
-            return {"valid": False, "reason": "trade_bucket_volume_too_low", "bucket_count": len(rows)}
-        out = dict(vp)
-        out["valid"] = True
-        out["volume_source"] = "binance_aggtrade"
-        out["bucket_count"] = len(rows)
-        out["balance_ratio"] = _calc_balance_ratio(out)
-        return out
-    except Exception as exc:
-        log.debug("[SCALP] trade bucket VP unavailable for %s: %s", display, exc)
-        return {"valid": False, "reason": "trade_bucket_error"}
+    return build_trade_bucket_volume_profile(
+        display,
+        CONFIG.get("SCALP_ENGINE", {}),
+        reference_ts=reference_ts,
+        require_fresh=require_fresh,
+        now_fn=_time.time,
+    )
 
 
 def _calc_balance_ratio(vp: dict) -> float | None:
@@ -1659,42 +1626,15 @@ def _check_cvd(
 
 def _check_trade_bucket_cvd(display: str, reference_ts=None, require_fresh: bool = True) -> dict:
     """Compute live crypto CVD from Binance aggregate-trade buckets."""
-    cfg = CONFIG.get("SCALP_ENGINE", {})
-    max_age_sec = int(cfg.get("TRADE_BUCKET_MAX_AGE_SEC", 300))
-    min_buckets = int(cfg.get("TRADE_BUCKET_MIN_LEVELS", 8))
-    symbol = str(display or "").replace("/", "").upper()
-    try:
-        from athena.microstructure.trade_bucket_store import query_session_buckets
+    from athena.microstructure.aggtrade_volume import check_trade_bucket_cvd
 
-        rows = query_session_buckets(
-            symbol,
-            exchange="binance",
-            session_id=_trade_bucket_session_id(reference_ts),
-            min_last_ts=(_time.time() - max_age_sec) if require_fresh else None,
-            max_last_ts=_trade_bucket_max_last_ts(reference_ts, require_fresh=require_fresh),
-        )
-        if len(rows) < min_buckets:
-            return {"direction": None, "cvd_value": 0, "cvd_slope": 0, "source": "unavailable"}
-        # Sort by last_ts (time-ordered) so slope = recent flow - early flow.
-        # Price-bucket sorting produces a spatial bias: high-price bins always
-        # accumulate more buy delta in a rising market, giving a false positive.
-        rows = sorted(rows, key=lambda r: float(r.get("last_ts") or r.get("price_bucket") or 0.0))
-        deltas = [float(r.get("delta") or 0.0) for r in rows]
-        cvd = sum(deltas)
-        slope = (sum(deltas[-3:]) - sum(deltas[:3])) if len(deltas) >= 6 else cvd
-        # Neutral band parity with the candle CVD path: |slope| <= CVD_MIN_SLOPE -> None.
-        min_slope = float(_scalp_cfg_lookup(cfg, "CVD_MIN_SLOPE", 0.0, asset_type="crypto"))
-        direction = "LONG" if slope > min_slope else "SHORT" if slope < -min_slope else None
-        return {
-            "direction": direction,
-            "cvd_value": round(cvd, 2),
-            "cvd_slope": round(slope, 4),
-            "source": "binance_aggtrade",
-            "bucket_count": len(rows),
-        }
-    except Exception as exc:
-        log.debug("[SCALP] trade bucket CVD unavailable for %s: %s", display, exc)
-        return {"direction": None, "cvd_value": 0, "cvd_slope": 0, "source": "error"}
+    return check_trade_bucket_cvd(
+        display,
+        CONFIG.get("SCALP_ENGINE", {}),
+        reference_ts=reference_ts,
+        require_fresh=require_fresh,
+        now_fn=_time.time,
+    )
 
 
 def _engine_d_aggression_fidelity(

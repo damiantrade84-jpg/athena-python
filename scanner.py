@@ -1247,6 +1247,11 @@ def _attach_engine_b_scan_gate_funnel(
         "rr_source": cnf.get("rr_source"),
         "execution_level_reject_reason": cnf.get("execution_level_reject_reason"),
         "tp_structural_limited": rb.get("tp_structural_limited"),
+        "engine_b_aggtrade_required": cnf.get("aggtrade_required", rb.get("aggtrade_required")),
+        "engine_b_aggtrade_available": cnf.get("aggtrade_available", rb.get("aggtrade_available")),
+        "engine_b_aggtrade_reason": cnf.get("aggtrade_reason", rb.get("aggtrade_reason")),
+        "engine_b_orderflow_points": _scalar_float_gate(cnf.get("aggtrade_orderflow_points")),
+        "engine_b_data_fidelity": cnf.get("engine_b_data_fidelity") or rb.get("engine_b_data_fidelity"),
         "failed_gate_names": list(cnf.get("failed_gate_names") or []),
         "final_tier": None,
         "final_reason": None,
@@ -2298,6 +2303,22 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict[s
                                 _eb_snap["conf"] = conf_b
                                 sig_a["engine_b_status"] = conf_b
                                 sig_a["engine_b"] = res_b
+                                sig_a["engine_b_aggtrade_required"] = conf_b.get(
+                                    "aggtrade_required", res_b.get("aggtrade_required")
+                                )
+                                sig_a["engine_b_aggtrade_available"] = conf_b.get(
+                                    "aggtrade_available", res_b.get("aggtrade_available")
+                                )
+                                sig_a["engine_b_aggtrade_reason"] = conf_b.get(
+                                    "aggtrade_reason", res_b.get("aggtrade_reason")
+                                )
+                                sig_a["engine_b_orderflow_points"] = conf_b.get(
+                                    "aggtrade_orderflow_points"
+                                )
+                                sig_a["engine_b_data_fidelity"] = (
+                                    conf_b.get("engine_b_data_fidelity")
+                                    or res_b.get("engine_b_data_fidelity")
+                                )
                                 # F2: surface Engine B ATR provenance on the overlay
                                 # so dashboards / audits can detect stale or mis-sourced
                                 # structural ATR without parsing the funnel stream.

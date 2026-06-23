@@ -51,6 +51,11 @@ ENGINE_B_SCAN_FUNNEL_SHAPE_KEYS = frozenset(
         "rr_source",
         "execution_level_reject_reason",
         "tp_structural_limited",
+        "engine_b_aggtrade_required",
+        "engine_b_aggtrade_available",
+        "engine_b_aggtrade_reason",
+        "engine_b_orderflow_points",
+        "engine_b_data_fidelity",
         "failed_gate_names",
         "final_tier",
         "final_reason",
@@ -134,6 +139,14 @@ def test_attach_engine_b_scan_gate_funnel_stable_shape(monkeypatch):
         "failed_gate_names": ["space"],
         "score": 2.5,
         "rr_space_gate_enabled": False,
+        "aggtrade_required": True,
+        "aggtrade_available": False,
+        "aggtrade_reason": "insufficient_trade_buckets",
+        "aggtrade_orderflow_points": 0.0,
+        "engine_b_data_fidelity": {
+            "vp_uses_real_trade_buckets": False,
+            "cvd_uses_real_trade_buckets": False,
+        },
     }
     res_b = {"structural_verdict": "UNCLEAR", "tp_structural_limited": False}
     extras = {
@@ -162,6 +175,11 @@ def test_attach_engine_b_scan_gate_funnel_stable_shape(monkeypatch):
     assert ENGINE_B_SCAN_FUNNEL_SHAPE_KEYS <= set(funnel.keys())
     # Crypto rr_space_gate was flipped to True in commit 71dbe7b8 (unblock crypto).
     assert funnel["rr_can_satisfy_space_gate_crypto_config"] is True
+    assert funnel["engine_b_aggtrade_required"] is True
+    assert funnel["engine_b_aggtrade_available"] is False
+    assert funnel["engine_b_aggtrade_reason"] == "insufficient_trade_buckets"
+    assert funnel["engine_b_orderflow_points"] == 0.0
+    assert funnel["engine_b_data_fidelity"]["vp_uses_real_trade_buckets"] is False
 
     _patch_engine_b_funnel_final_tier(sig, "skip", "Below discovery threshold")
     assert funnel["final_tier"] == "skip"
