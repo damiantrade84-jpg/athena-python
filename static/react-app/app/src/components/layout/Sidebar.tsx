@@ -27,6 +27,7 @@ const navItems: { id: PanelId; label: string; icon: ElementType; badge?: string 
   { id: 'trades',      label: 'Trades',       icon: TrendingUp },
   { id: 'engineC',     label: 'Engine C',     icon: Layers },
   { id: 'ase',         label: 'ASE',          icon: Cpu,        badge: 'SHADOW' },
+  { id: 'tsmom',       label: 'TSMOM',        icon: TrendingUp, badge: 'DEMO' },
   { id: 'scalpLab',    label: 'Scalp Lab',    icon: Activity },
   { id: 'scalpWorkbench', label: 'Scalp Workbench', icon: BarChart2 },
   { id: 'tvChart',     label: 'TV Chart',     icon: BarChart2 },

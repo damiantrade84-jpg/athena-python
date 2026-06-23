@@ -214,7 +214,8 @@ export type PanelId =
   | 'exitStrategy'
   | 'cascadeScan'
   | 'suggestedTrades'
-  | 'ase';
+  | 'ase'
+  | 'tsmom';
 
 /**
  * Derived data-fidelity diagnostic for a Cascade Scan candidate.

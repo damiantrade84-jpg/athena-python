@@ -1,0 +1,5 @@
+# Runtime state — never commit
+_journal/
+__pycache__/
+*.pyc
+state_*.json

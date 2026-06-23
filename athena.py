@@ -15303,6 +15303,7 @@ from athena_app.api.routes_lottery import register_lottery_routes  # noqa: E402
 from athena_app.api.routes_market_data import register_market_data_routes  # noqa: E402
 from athena_app.api.routes_status import register_status_routes  # noqa: E402
 from athena_app.api.routes_ase import register_ase_routes  # noqa: E402
+from athena_app.api.routes_tsmom import register_tsmom_routes  # noqa: E402
 from execution import register_execution_routes  # noqa: E402
 
 set_runtime(
@@ -15516,6 +15517,7 @@ register_status_routes(
     ),
 )
 register_ase_routes(app)
+register_tsmom_routes(app)
 
 # ── Research Lab routes (optional - does not affect production logic) ─────────
 try:

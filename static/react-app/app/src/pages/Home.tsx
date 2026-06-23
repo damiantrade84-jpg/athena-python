@@ -23,6 +23,7 @@ import SuggestedTradesPanel from '@/components/panels/SuggestedTradesPanel';
 import ExitStrategyPanel from '@/components/panels/ExitStrategyPanel';
 import CascadeScanPanel from '@/components/panels/CascadeScanPanel';
 import ASEPanel from '@/components/panels/ASEPanel';
+import TSMOMPanel from '@/components/panels/TSMOMPanel';
 
 const panels: Record<string, React.ComponentType> = {
   dashboard: DashboardPanel,
@@ -48,6 +49,7 @@ const panels: Record<string, React.ComponentType> = {
   cascadeScan: CascadeScanPanel,
   suggestedTrades: SuggestedTradesPanel,
   ase: ASEPanel,
+  tsmom: TSMOMPanel,
 };
 
 export default function Home() {
