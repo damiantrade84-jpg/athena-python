@@ -10185,6 +10185,11 @@ def _scalp_ui_skipped_row(raw_row: dict) -> dict:
 def _scalp_ui_signal(raw_signal: dict) -> dict:
     """Normalize Engine D output to the shape expected by the scalp tab."""
     ai_grade = str(raw_signal.get("ai_grade", "C") or "C").upper()
+    # Config-driven AI-review eligibility floor (option #1). Advisory-only: controls which
+    # candidates the frontend "AI Scalp Review" button enables. Execution stays gated separately.
+    ai_review_min_grade = str(
+        (CONFIG.get("SCALP_ENGINE", {}) or {}).get("SCALP_AI_REVIEW_MIN_GRADE", "C") or "C"
+    ).upper()
     risk_level = (
         "LOW"
         if ai_grade == "A"
@@ -10217,6 +10222,7 @@ def _scalp_ui_signal(raw_signal: dict) -> dict:
         "structure_target_close": raw_signal.get("structure_target_close"),
         "rr": float(raw_signal.get("rr1", 0.0) or 0.0),
         "ai_grade": ai_grade,
+        "ai_review_min_grade": ai_review_min_grade,
         "ai_score": raw_signal.get("ai_score", 0),
         "risk_level": risk_level,
         "zone_desc": zone_desc,

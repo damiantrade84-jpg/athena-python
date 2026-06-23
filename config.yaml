@@ -3456,9 +3456,9 @@ SCALP_ENGINE:
     stock: "new_york"
   CRYPTO_SESSION_MODE: "inherit"
 
-  NY_OPEN_SKIP_MINUTES: 30      # Caution window after NY cash open (applies inside london_ny)
+  NY_OPEN_SKIP_MINUTES: 15      # Caution window after NY cash open (applies inside london_ny). 2026-06-23: 30->15 to widen Engine D candidate window (option #4).
 
-  LONDON_OPEN_SKIP_MINUTES: 20  # Avoid first 20 min of London open (07:00-07:20 UTC)
+  LONDON_OPEN_SKIP_MINUTES: 10  # Avoid first 10 min of London open (07:00-07:10 UTC). 2026-06-23: 20->10 to widen Engine D candidate window (option #4).
 
   EXECUTION_TIMEFRAME: "M1"     # 15m structure, 5m context, 1m execution
 
@@ -3495,6 +3495,14 @@ SCALP_ENGINE:
   WATCHLIST_LOCATION_REQUIRED: true  # Watchlist setups must be at VAH/VAL/POC or LVN
 
   EXECUTION_MIN_GRADE: "B"           # Minimum grade for auto-execution (non-watchlist)
+
+  # Minimum Engine D grade that may be sent to advisory AI chart review (option #1, 2026-06-23).
+  # AI review is read-only/advisory and never executes — this only controls which candidates
+  # the "AI Scalp Review" button is enabled for. Execution stays gated at EXECUTION_MIN_GRADE
+  # (and risk_check / RR / freshness). Default "C" so borderline non-crypto proxy-volume setups
+  # (which cap around Grade C) can be adjudicated by AI instead of being silently unreviewable.
+  # Grade D is never review-eligible. Set back to "B" to restore legacy A/B-only review.
+  SCALP_AI_REVIEW_MIN_GRADE: "C"
 
   # Live +1R partial close and SL tighten on runner (Bybit/MT5 outcome monitor).
   LIVE_MILESTONE_MANAGEMENT: true
@@ -3618,7 +3626,7 @@ SCALP_ENGINE:
   # When volume data is proxy-based (tick_volume, candle approximation),
   # grade components are capped to prevent Grade A without real volume evidence.
   PROXY_AWARE_GRADING_ENABLED: true
-  GRADE_PROXY_ABSORPTION_MAX: 10             # Max absorption points when using proxy volume (default 20)
+  GRADE_PROXY_ABSORPTION_MAX: 12             # Max absorption points when using proxy volume (default 20). 2026-06-23: 10->12 (option #3) so a textbook-clean non-crypto setup (~59) can reach Grade B (60). NOTE: affects LIVE execution grades — monitor; revert to 10 if proxy false-positives rise.
   GRADE_PROXY_ABSORPTION_MAX_RELIABLE: 14    # Max absorption when tick-vol quality is reliable (≥35)
   GRADE_PROXY_CVD_MAX: 7                     # Max CVD aligned points for proxy CVD (default 15)
   GRADE_PROXY_CVD_NEUTRAL_MAX: 2             # Max CVD neutral points for proxy CVD (default 5)
@@ -3655,11 +3663,14 @@ SCALP_ENGINE:
   # post-trade volume but with latency, so caps may be set above the pure proxy
   # caps. Each value max(existing_proxy_cap, configured) — i.e. omit/leave equal
   # to the proxy value to keep legacy behaviour.
-  GRADE_DELAYED_REAL_ABSORPTION_MAX: 10      # ≥ GRADE_PROXY_ABSORPTION_MAX to take effect
-  GRADE_DELAYED_REAL_CVD_MAX: 7              # ≥ GRADE_PROXY_CVD_MAX to take effect
-  GRADE_DELAYED_REAL_CVD_NEUTRAL_MAX: 2      # ≥ GRADE_PROXY_CVD_NEUTRAL_MAX to take effect
-  GRADE_DELAYED_REAL_AAA_MAX: 10             # ≥ GRADE_PROXY_AAA_MAX to take effect
-  GRADE_DELAYED_REAL_AAA_ACCUM_MAX: 5        # ≥ GRADE_PROXY_AAA_ACCUM_MAX to take effect
+  # 2026-06-23 (option #2): delayed-real sources (EODHD intraday, ws_tick) carry REAL post-trade
+  # volume with latency — credit them above pure proxy (but below crypto real-bucket 20/15/15).
+  # Mainly lifts US-stock setups so real-volume evidence can reach Grade B. Affects LIVE stock grades.
+  GRADE_DELAYED_REAL_ABSORPTION_MAX: 16      # ≥ GRADE_PROXY_ABSORPTION_MAX to take effect (was 10)
+  GRADE_DELAYED_REAL_CVD_MAX: 12             # ≥ GRADE_PROXY_CVD_MAX to take effect (was 7)
+  GRADE_DELAYED_REAL_CVD_NEUTRAL_MAX: 4      # ≥ GRADE_PROXY_CVD_NEUTRAL_MAX to take effect (was 2)
+  GRADE_DELAYED_REAL_AAA_MAX: 13             # ≥ GRADE_PROXY_AAA_MAX to take effect (was 10)
+  GRADE_DELAYED_REAL_AAA_ACCUM_MAX: 6        # ≥ GRADE_PROXY_AAA_ACCUM_MAX to take effect (was 5)
 
   # Engine A HTF diagnostics enrichment into Engine D (validated improvement #1).
   # When caller supplies lightweight {"regime", "adx_bucket", "mom_quality"} via pair input,

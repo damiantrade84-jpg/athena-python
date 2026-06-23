@@ -88,6 +88,7 @@ export interface ScalpExecuteSignalLike {
   executable?: boolean;
   gate_result?: string;
   ai_grade?: string;
+  ai_review_min_grade?: string;
   grade?: string;
   strict_fabio_pass?: boolean;
   strict_fabio_pillars?: Record<string, boolean>;
@@ -405,7 +406,15 @@ export function isScalpAiReviewEligible(signal: ScalpExecuteSignalLike | null): 
   const direction = String(signal.direction || '').toUpperCase();
   if (direction !== 'LONG' && direction !== 'SHORT') return false;
   const grade = String(signal.ai_grade || '').toUpperCase();
-  return grade === 'A' || grade === 'B';
+  // Grade D is never review-eligible (BLOCKED / context-only).
+  if (grade === 'D' || grade === '') return false;
+  // Config-driven floor from the backend (SCALP_AI_REVIEW_MIN_GRADE, default "C") so borderline
+  // setups can be sent to advisory AI review. Execution stays gated separately (EXECUTION_MIN_GRADE
+  // via evaluateScalpExecuteBlock). Falls back to legacy A/B when the field is absent.
+  const rank: Record<string, number> = { A: 4, B: 3, C: 2, D: 1 };
+  const minGrade = String(signal.ai_review_min_grade || 'B').toUpperCase();
+  const floor = rank[minGrade] ?? rank.B;
+  return (rank[grade] ?? 0) >= floor;
 }
 
 export function requiresScalpAiEntryNow(review: ScalpAIChartReviewResponse | null): boolean {
