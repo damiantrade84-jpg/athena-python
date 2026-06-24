@@ -9859,14 +9859,14 @@ def _scalp_contract_source_is_real(source, *, proxy=None, real_hint=None, domain
     if any(token in normalized for token in ("proxy", "synthetic", "mock", "placeholder", "fallback", "mt5_tick", "candles", "candle_volume", "routed")):
         return False
     if domain in {"orderflow", "cvd", "vp"}:
-        return any(token in normalized for token in ("aggtrade", "trade_bucket", "real_trade_bucket", "footprint", "orderbook"))
+        return any(token in normalized for token in ("aggtrade", "public_trade", "trade_bucket", "real_trade_bucket", "footprint", "orderbook"))
     if domain == "volume":
         # Volume reality is independent of order-flow trust: Binance candle
         # volume is real traded volume (no aggressor split), EODHD/ws_tick is
         # real post-trade volume. eodhd_1h is excluded (2-3h stale in-session).
         if "eodhd_1h" in normalized:
             return False
-        return any(token in normalized for token in ("aggtrade", "trade_bucket", "eodhd", "polygon", "ws_tick", "real_vol", "binance"))
+        return any(token in normalized for token in ("aggtrade", "public_trade", "trade_bucket", "eodhd", "polygon", "ws_tick", "real_vol", "binance", "bybit"))
     if domain == "candle":
         return any(token in normalized for token in ("mt5", "binance", "bybit", "eodhd", "polygon", "yfinance"))
     return False
@@ -15775,6 +15775,7 @@ def ensure_runtime_services_started() -> None:
 
     from athena.crypto_ws_scope import (
         binance_micro_symbol_strings,
+        enabled_crypto_micro_pairs,
         enabled_binance_micro_crypto_pairs,
     )
 
@@ -15889,7 +15890,16 @@ def ensure_runtime_services_started() -> None:
             except ImportError as exc:
                 log.warning(f"[MICRO] Import failed: {exc}")
                 return
-            micro_crypto_pairs = enabled_binance_micro_crypto_pairs(CRYPTO_PAIRS)
+            binance_micro_pairs = enabled_binance_micro_crypto_pairs(CRYPTO_PAIRS)
+            scalp_cfg = CONFIG.get("SCALP_ENGINE") or {}
+            trade_bucket_exchange = str(
+                scalp_cfg.get("TRADE_BUCKET_EXCHANGE")
+                or CONFIG.get("ENGINE_B_CRYPTO_LEVELS_FEED")
+                or "bybit"
+            ).strip().lower()
+            if trade_bucket_exchange not in {"bybit", "binance"}:
+                trade_bucket_exchange = "bybit"
+            bybit_micro_pairs = enabled_crypto_micro_pairs(CRYPTO_PAIRS)
             expected_n = sum(
                 1
                 for p in CRYPTO_PAIRS
@@ -15914,28 +15924,22 @@ def ensure_runtime_services_started() -> None:
                     )
 
             def _apply_micro_cache_update(sym: str, metrics: dict) -> None:
-                """Shared micro-cache writer for Binance multiplex AND Bybit per-symbol callbacks.
-
-                Preserves the previous Binance-preferred / Bybit-fallback selection logic so
-                the multiplex switch is feed-shape neutral.
-                """
+                """Shared micro-cache writer for Binance multiplex and Bybit callbacks."""
                 incoming_exchange = str(metrics.get("exchange", "")).lower()
                 now_ts = time.time()
                 existing = _micro_cache.get(sym, {})
                 existing_exchange = str(existing.get("_exchange", "")).lower()
                 existing_age = now_ts - float(existing.get("_updated_ts", 0) or 0)
+                preferred_exchange = trade_bucket_exchange
 
-                # Prefer Binance for crypto microstructure because the candle/live-price
-                # path also uses Binance Futures. Fall back to Bybit only when the Binance
-                # slot is absent or stale.
                 use_update = False
-                if incoming_exchange == "binance":
+                if incoming_exchange == preferred_exchange:
                     use_update = True
                 elif not existing:
                     use_update = True
-                elif existing_exchange == "binance" and existing_age > 5.0:
+                elif existing_exchange == preferred_exchange and existing_age > 5.0:
                     use_update = True
-                elif existing_exchange != "binance":
+                elif existing_exchange != preferred_exchange:
                     use_update = True
 
                 if not use_update:
@@ -15978,14 +15982,14 @@ def ensure_runtime_services_started() -> None:
                 finally:
                     loop.close()
 
-            bybit_micro_enabled = bool(CONFIG.get("MICROSTRUCTURE_BYBIT_FEEDS_ENABLED", False))
+            bybit_micro_enabled = bool(CONFIG.get("MICROSTRUCTURE_BYBIT_FEEDS_ENABLED", False)) or trade_bucket_exchange == "bybit"
             use_combined = bool(CONFIG.get("MICROSTRUCTURE_BINANCE_COMBINED_STREAM", True))
             stale_after = float(CONFIG.get("MICROSTRUCTURE_BINANCE_STALE_SYMBOL_SEC", 120.0))
 
-            if use_combined and micro_crypto_pairs:
+            if use_combined and binance_micro_pairs:
                 # F1: One multiplexed Binance Futures connection for ALL micro symbols.
                 multi_syms = [
-                    str(p["symbol"]).replace("/", "").lower() for p in micro_crypto_pairs
+                    str(p["symbol"]).replace("/", "").lower() for p in binance_micro_pairs
                 ]
                 try:
                     multi = BinanceMicroMultiWS(
@@ -16011,9 +16015,9 @@ def ensure_runtime_services_started() -> None:
                     )
                     use_combined = False  # trip the legacy path below
 
-            if (not use_combined) and micro_crypto_pairs:
+            if (not use_combined) and binance_micro_pairs:
                 # Legacy per-symbol Binance path (rollback when combined-stream disabled).
-                for pair in micro_crypto_pairs:
+                for pair in binance_micro_pairs:
                     sym = pair["symbol"]
                     cb = _make_cb(sym)
                     b = BinanceWS(sym.lower())
@@ -16022,9 +16026,9 @@ def ensure_runtime_services_started() -> None:
                         target=_run, args=(b, cb), daemon=True, name=f"BinWS-{sym}"
                     ).start()
 
-            # Bybit fallback per-symbol path is independent of the Binance multiplex switch.
+            # Bybit publicTrade/orderbook path is independent of the Binance multiplex switch.
             if bybit_micro_enabled:
-                for pair in micro_crypto_pairs:
+                for pair in bybit_micro_pairs:
                     sym = pair["symbol"]
                     cb = _make_cb(sym)
                     y = BybitWS(sym.upper())
@@ -16034,16 +16038,17 @@ def ensure_runtime_services_started() -> None:
                     ).start()
 
             scope_note = ""
-            if len(micro_crypto_pairs) != expected_n or malformed:
+            if len(binance_micro_pairs) != expected_n or malformed:
                 scope_note = f" enabled_binance_crypto_expected={expected_n}"
             log.info(
-                "[MICRO] Started feeds: binance_path=%s bybit=%s pairs_total=%s%s symbols=%s",
+                "[MICRO] Started feeds: primary_trade_bucket_exchange=%s binance_path=%s bybit=%s pairs_total=%s%s symbols=%s",
+                trade_bucket_exchange,
                 "combined" if use_combined else "per_symbol_legacy",
-                len(micro_crypto_pairs) if bybit_micro_enabled else 0,
+                len(bybit_micro_pairs) if bybit_micro_enabled else 0,
                 expected_n,
                 scope_note,
-                ", ".join(str(p["symbol"]).replace("/", "").upper() for p in micro_crypto_pairs)
-                if micro_crypto_pairs
+                ", ".join(str(p["symbol"]).replace("/", "").upper() for p in bybit_micro_pairs)
+                if bybit_micro_pairs
                 else "none",
             )
 

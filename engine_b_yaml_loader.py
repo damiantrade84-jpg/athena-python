@@ -59,6 +59,12 @@ def _bool(value: Any, name: str) -> bool:
     return value
 
 
+def _bool_default(value: Any, name: str, default: bool) -> bool:
+    if value is None:
+        return default
+    return _bool(value, name)
+
+
 def _strings(value: Any, name: str) -> list[str]:
     items = _as_list(value, name)
     out: list[str] = []
@@ -139,7 +145,11 @@ def translate_engine_b_config(doc: dict[str, Any]) -> dict[str, Any]:
         "ENGINE_B_CRYPTO_AGGTRADE_MISSING_PENALTY": _float(
             agg.get("missing_penalty"), "crypto_aggtrade.missing_penalty", min_value=0.0
         ),
-        "ENGINE_B_SPACE_RR_SUBSTITUTE_MIN_ATR_FLOOR_ENABLED": True,
+        "ENGINE_B_SPACE_RR_SUBSTITUTE_MIN_ATR_FLOOR_ENABLED": _bool_default(
+            space.get("rr_substitute_min_atr_floor_enabled"),
+            "space_gate.rr_substitute_min_atr_floor_enabled",
+            False,
+        ),
         "ENGINE_B_SPACE_RR_SUBSTITUTE_MIN_ATR_FLOOR": _float(
             space.get("rr_substitute_min_atr_floor"),
             "space_gate.rr_substitute_min_atr_floor",

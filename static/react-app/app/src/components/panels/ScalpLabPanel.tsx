@@ -435,7 +435,7 @@ export default function ScalpLabPanel() {
         <CardContent className="space-y-3">
           <p className="text-xs text-muted-foreground">
             Fabio Valentini methodology. Volume Profile (M15) → Absorption / CVD / AAA → VWAP lean →
-            HTF bias gate → setup classification → AI quality grade. Crypto uses Binance aggTrade buckets where fresh;
+            HTF bias gate → setup classification → AI quality grade. Crypto uses configured exchange trade buckets where fresh;
             non-crypto uses MT5 OHLC + EODHD volume overlay (where cached).
           </p>
           <div className="flex items-center gap-3 flex-wrap">

@@ -333,6 +333,21 @@ def test_aggression_fidelity_marks_binance_trade_flow_as_strict():
     assert fields["strict_fabio_pass"] is True
 
 
+def test_aggression_fidelity_marks_bybit_trade_flow_as_strict():
+    fields = scalp_engine._engine_d_aggression_fidelity(
+        absorption={"detected": False, "count": 0},
+        cvd={"direction": "SHORT", "source": "bybit_public_trade", "bucket_count": 12},
+        aaa={"complete": False, "phase": "absorption_only"},
+        vwap={"lean": "SHORT"},
+        setup_direction="SHORT",
+    )
+
+    assert fields["aggression_confirmed"] is True
+    assert fields["aggression_source"] == "bybit_public_trade"
+    assert fields["aggression_source_is_proxy"] is False
+    assert fields["strict_fabio_pass"] is True
+
+
 def test_strict_fabio_shadow_flags_current_pass_with_proxy_aggression():
     aggression = scalp_engine._engine_d_aggression_fidelity(
         absorption={"detected": False, "count": 0},
@@ -2528,7 +2543,7 @@ def test_f3_strict_gate_skip_logs_anchor_for_debugging():
 
 
 def test_f3_live_and_bt_strict_gate_share_aggtrade_check_shape():
-    """Live and BT must both block when vp_source != binance_aggtrade or cvd_source != binance_aggtrade."""
+    """Live and BT must both block when VP/CVD are not real trade buckets."""
     import inspect
 
     import backtest_runner
@@ -2540,9 +2555,9 @@ def test_f3_live_and_bt_strict_gate_share_aggtrade_check_shape():
     assert "vp_uses_real_trade_buckets" in live_src
     assert "cvd_uses_real_trade_buckets" in live_src
 
-    # BT side checks both VP and CVD volume sources are "binance_aggtrade".
-    assert 'vp.get("volume_source") != "binance_aggtrade"' in bt_src
-    assert 'cvd.get("source") != "binance_aggtrade"' in bt_src
+    # BT side checks the same provider-neutral real-trade-bucket flags.
+    assert 'not data_fidelity.get("vp_uses_real_trade_buckets")' in bt_src
+    assert 'not data_fidelity.get("cvd_uses_real_trade_buckets")' in bt_src
 
     # Both gated behind REQUIRE_AGGTRADE_FOR_CRYPTO_STRICT.
     assert 'REQUIRE_AGGTRADE_FOR_CRYPTO_STRICT' in live_src

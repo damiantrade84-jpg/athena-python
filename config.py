@@ -1277,7 +1277,7 @@ CONFIG: dict = {
         "etf_bond": False,
         "crypto": False,
     },
-    "ENGINE_B_SPACE_RR_SUBSTITUTE_MIN_ATR_FLOOR_ENABLED": True,
+    "ENGINE_B_SPACE_RR_SUBSTITUTE_MIN_ATR_FLOOR_ENABLED": False,
     "ENGINE_B_SPACE_RR_SUBSTITUTE_MIN_ATR_FLOOR": 0.5,
     "ENGINE_B_ATR_SL_CLAMPS_ENABLED": True,
     "ENGINE_B_MIN_SL_ATR_DEFAULT": 0.75,
@@ -1844,7 +1844,7 @@ CONFIG: dict = {
     # Log Engine C ALIGNED+tradeable rows to shadow_signals (no broker); Performance tab reads them.
     "SHADOW_LEDGER_ENABLED": True,
     "MICROSTRUCTURE_FEEDS_ENABLED": True,
-    "MICROSTRUCTURE_BYBIT_FEEDS_ENABLED": False,
+    "MICROSTRUCTURE_BYBIT_FEEDS_ENABLED": True,
     "MARKET_DATA_WS_SSL_VERIFY": True,
     "BYBIT_TIME_SYNC_ENABLED": False,
     "BYBIT_RECV_WINDOW_MS": 30000,

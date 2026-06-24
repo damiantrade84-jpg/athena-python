@@ -33,6 +33,7 @@ crypto_aggtrade:
   missing_penalty: 0.5
 
 space_gate:
+  rr_substitute_min_atr_floor_enabled: false
   rr_substitute_min_atr_floor: 0.5
 
 execution_levels:

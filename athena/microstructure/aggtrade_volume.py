@@ -1,7 +1,7 @@
-"""Shared read-only Binance aggTrade bucket helpers.
+"""Shared read-only crypto trade-bucket helpers.
 
 The helpers deliberately only query already-collected trade buckets. They do
-not start streams, write buckets, or contact Binance.
+not start streams, write buckets, or contact exchanges.
 """
 
 from __future__ import annotations
@@ -16,6 +16,24 @@ log = logging.getLogger("sentinel")
 
 def normalize_trade_symbol(display: str | None) -> str:
     return str(display or "").replace("/", "").upper()
+
+
+def resolve_trade_bucket_exchange(cfg: dict | None, default: str = "bybit") -> str:
+    """Resolve the exchange namespace used for stored crypto trade buckets."""
+    cfg = cfg or {}
+    raw = str(cfg.get("TRADE_BUCKET_EXCHANGE") or default or "bybit").strip().lower()
+    if raw in {"bybit", "binance"}:
+        return raw
+    return "bybit"
+
+
+def trade_bucket_source_name(exchange: str | None) -> str:
+    exchange_key = str(exchange or "").strip().lower()
+    if exchange_key == "bybit":
+        return "bybit_public_trade"
+    if exchange_key == "binance":
+        return "binance_aggtrade"
+    return "trade_buckets"
 
 
 def coerce_utc_datetime(value: Any) -> datetime | None:
@@ -99,13 +117,14 @@ def query_trade_buckets(
 ) -> list[dict]:
     cfg = cfg or {}
     symbol = normalize_trade_symbol(display)
+    exchange = resolve_trade_bucket_exchange(cfg)
     max_age_sec = int(cfg.get("TRADE_BUCKET_MAX_AGE_SEC", 300))
     now = now_fn or time.time
     from athena.microstructure import trade_bucket_store
 
     return trade_bucket_store.query_session_buckets(
         symbol,
-        exchange="binance",
+        exchange=exchange,
         session_id=trade_bucket_session_id(reference_ts),
         min_last_ts=(float(now()) - max_age_sec) if require_fresh else None,
         max_last_ts=trade_bucket_max_last_ts(reference_ts, require_fresh=require_fresh),
@@ -121,6 +140,8 @@ def build_trade_bucket_volume_profile(
     now_fn: Callable[[], float] | None = None,
 ) -> dict:
     cfg = cfg or {}
+    exchange = resolve_trade_bucket_exchange(cfg)
+    source_name = trade_bucket_source_name(exchange)
     min_buckets = int(cfg.get("TRADE_BUCKET_MIN_LEVELS", 8))
     min_volume = float(cfg.get("TRADE_BUCKET_MIN_VOLUME", 0.0))
     va_pct = _as_value_area_pct(
@@ -150,7 +171,8 @@ def build_trade_bucket_volume_profile(
             return {"valid": False, "reason": "trade_bucket_volume_too_low", "bucket_count": len(rows)}
         out = dict(vp)
         out["valid"] = True
-        out["volume_source"] = "binance_aggtrade"
+        out["volume_source"] = source_name
+        out["volume_exchange"] = exchange
         out["bucket_count"] = len(rows)
         out["session_start"] = _iso_from_ts(min((r.get("first_ts") or r.get("last_ts") or 0) for r in rows))
         out["session_end"] = _iso_from_ts(max((r.get("last_ts") or r.get("first_ts") or 0) for r in rows))
@@ -170,6 +192,8 @@ def check_trade_bucket_cvd(
     now_fn: Callable[[], float] | None = None,
 ) -> dict:
     cfg = cfg or {}
+    exchange = resolve_trade_bucket_exchange(cfg)
+    source_name = trade_bucket_source_name(exchange)
     min_buckets = int(cfg.get("TRADE_BUCKET_MIN_LEVELS", 8))
     try:
         rows = query_trade_buckets(
@@ -198,7 +222,8 @@ def check_trade_bucket_cvd(
             "direction": direction,
             "cvd_value": round(cvd, 2),
             "cvd_slope": round(slope, 4),
-            "source": "binance_aggtrade",
+            "source": source_name,
+            "exchange": exchange,
             "bucket_count": len(rows),
         }
     except Exception as exc:
@@ -210,7 +235,11 @@ def source_fidelity(source: Any, *, domain: str) -> dict:
     raw = str(source or "unknown").strip().lower()
     aliases = {
         "binance_aggtrade": "binance_aggtrade",
-        "trade_buckets": "binance_aggtrade",
+        "bybit_public_trade": "bybit_public_trade",
+        "bybit_publictrade": "bybit_public_trade",
+        "bybit_trade": "bybit_public_trade",
+        "bybit": "bybit_public_trade",
+        "trade_buckets": "trade_buckets",
         "candle": "candles",
         "candle_volume": "candle_volume",
         "candles": "candles",
@@ -225,7 +254,7 @@ def source_fidelity(source: Any, *, domain: str) -> dict:
         "unknown": "unknown",
     }
     normalized = aliases.get(raw, raw)
-    real_trade_flow = normalized == "binance_aggtrade"
+    real_trade_flow = normalized in {"binance_aggtrade", "bybit_public_trade", "trade_buckets"}
     unavailable = normalized in {"disabled", "error", "unavailable", "unknown"}
     if real_trade_flow:
         fidelity = "real_trade_bucket"

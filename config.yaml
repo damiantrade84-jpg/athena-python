@@ -276,7 +276,15 @@ ENGINE_B_RR_CAN_SATISFY_SPACE_GATE:
   etf: true
   etf_bond: true
   crypto: true
-ENGINE_B_SPACE_RR_SUBSTITUTE_MIN_ATR_FLOOR_ENABLED: true
+# Disabled 2026-06-24: verified binding constraint. In the latest gate funnel,
+# 95 of 120 evaluated signals (79%) were blocked solely by this 0.5-ATR floor —
+# all had room_ok=False, rr_ok=True, a TP-qualified rr_source, and the RR
+# substitute enabled, so floor_ok=False was the only failing AND-term
+# (market_structure.py:4657-4662). The 0.5 default shipped without calibration.
+# Reverts space gate to: room_ok OR (rr_ok AND tp_qualified). rr_ok, SL/TP
+# validation, room_ok, and freshness gates are all unchanged. Re-enable only
+# with OOS edge evidence for a calibrated floor value.
+ENGINE_B_SPACE_RR_SUBSTITUTE_MIN_ATR_FLOOR_ENABLED: false
 ENGINE_B_SPACE_RR_SUBSTITUTE_MIN_ATR_FLOOR: 0.5
 ENGINE_B_ATR_SL_CLAMPS_ENABLED: true
 ENGINE_B_MIN_SL_ATR_DEFAULT: 0.75
@@ -2774,13 +2782,11 @@ POSITION_SIZE_CONFIDENCE_SCALING: true
 
 MICROSTRUCTURE_FEEDS_ENABLED: true
 
-# Binance futures remains the preferred crypto microstructure venue because the
+# Bybit is the primary crypto market-data/execution venue. Keep Bybit publicTrade
+# microstructure feeds on so trade-bucket VP/CVD lines up with Engine A/B Bybit
+# candles, levels, live ticks, and paper execution.
 
-# Engine A candle/live-price path also uses Binance. Keep Bybit WS fallback off
-
-# by default to avoid duplicate per-symbol sockets on Windows/VPN networks.
-
-MICROSTRUCTURE_BYBIT_FEEDS_ENABLED: false
+MICROSTRUCTURE_BYBIT_FEEDS_ENABLED: true
 
 # F1: One multiplexed Binance Futures micro WS for ALL crypto symbols (depth+trade+aggTrade)
 # instead of one socket per symbol. The per-symbol fan-out intermittently left individual
@@ -3603,9 +3609,11 @@ SCALP_ENGINE:
     index: 0.50
     stock: 0.50
 
-  TRADE_BUCKET_VP_ENABLED: true   # Crypto: prefer Binance aggTrade price buckets for VP when fresh
+  TRADE_BUCKET_EXCHANGE: bybit    # Crypto trade buckets: Bybit publicTrade by default; set binance for Binance aggTrade.
 
-  TRADE_BUCKET_CVD_ENABLED: true  # Crypto: prefer Binance aggTrade price buckets for CVD when fresh
+  TRADE_BUCKET_VP_ENABLED: true   # Crypto: prefer real exchange trade buckets for VP when fresh
+
+  TRADE_BUCKET_CVD_ENABLED: true  # Crypto: prefer real exchange trade buckets for CVD when fresh
   REQUIRE_AGGTRADE_FOR_CRYPTO_STRICT: true
   # F3: when REQUIRE_AGGTRADE_FOR_CRYPTO_STRICT trips because trade-bucket VP/CVD fell back to
   # candle volume, skip the pair entirely (BT-parity) instead of emitting a Not-executable card.
@@ -3633,9 +3641,9 @@ SCALP_ENGINE:
   # during thin periods (lunch, session transitions).
   TIME_OF_DAY_ADJUSTMENT_ENABLED: true
 
-  TRADE_BUCKET_MAX_AGE_SEC: 900   # Max age of live aggTrade buckets before candle fallback (15min window)
+  TRADE_BUCKET_MAX_AGE_SEC: 900   # Max age of live trade buckets before candle fallback (15min window)
 
-  TRADE_BUCKET_MIN_LEVELS: 3      # Minimum price buckets required before using aggTrade VP/CVD (lowered for reliability)
+  TRADE_BUCKET_MIN_LEVELS: 3      # Minimum price buckets required before using trade-bucket VP/CVD
 
   # Require real volume (EODHD overlay) for VP construction by asset type.
   # When true, blocks VP construction if only tick_volume is available.

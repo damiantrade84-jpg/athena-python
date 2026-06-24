@@ -1,9 +1,10 @@
-"""Tests for Binance crypto WS / micro subscription scope helpers."""
+"""Tests for crypto WS / micro subscription scope helpers."""
 
 from __future__ import annotations
 
 from athena.crypto_ws_scope import (
     binance_micro_symbol_strings,
+    enabled_crypto_micro_pairs,
     enabled_binance_micro_crypto_pairs,
 )
 
@@ -57,6 +58,18 @@ def test_skips_non_binance_crypto():
         },
     ]
     assert enabled_binance_micro_crypto_pairs(pairs) == []
+
+
+def test_enabled_crypto_micro_without_source_includes_bybit_and_binance():
+    pairs = [
+        {"symbol": "BTCUSDT", "type": "crypto", "display": "BTC/USDT", "source": "binance", "enabled": True},
+        {"symbol": "ETHUSDT", "type": "crypto", "display": "ETH/USDT", "source": "bybit", "enabled": True},
+        {"symbol": "EURUSD", "type": "forex", "display": "EUR/USD", "source": "mt5", "enabled": True},
+    ]
+
+    syms = {str(p["symbol"]).upper() for p in enabled_crypto_micro_pairs(pairs)}
+
+    assert syms == {"BTCUSDT", "ETHUSDT"}
 
 
 def test_enabled_defaults_true_without_key():

@@ -28,7 +28,10 @@ def _sample_doc():
             "alignment_bonus": 0.5,
             "missing_penalty": 0.5,
         },
-        "space_gate": {"rr_substitute_min_atr_floor": 0.5},
+        "space_gate": {
+            "rr_substitute_min_atr_floor_enabled": False,
+            "rr_substitute_min_atr_floor": 0.5,
+        },
         "execution_levels": {
             "max_sl_pct": 0.02,
             "max_sl_atr_default": 3.0,
@@ -62,6 +65,7 @@ def test_translate_engine_b_yaml_maps_schema_to_runtime_config():
     assert out["ENGINE_B_REGIME_MULTIPLIERS_ENABLED"] is True
     assert out["ENGINE_B_CRYPTO_AGGTRADE_MODE"] == "degraded"
     assert out["ENGINE_B_CRYPTO_AGGTRADE_MISSING_PENALTY"] == pytest.approx(0.5)
+    assert out["ENGINE_B_SPACE_RR_SUBSTITUTE_MIN_ATR_FLOOR_ENABLED"] is False
     assert out["ENGINE_B_SPACE_RR_SUBSTITUTE_MIN_ATR_FLOOR"] == pytest.approx(0.5)
     assert out["ENGINE_B_MAX_SL_ATR_DEFAULT"] == pytest.approx(3.0)
     assert out["ENGINE_B_ALLOW_SYNTHETIC_FALLBACK_RR_TP"] is True

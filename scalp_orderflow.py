@@ -71,14 +71,20 @@ def _percentile_threshold(values: list[float], pct: float) -> float:
 def _query_trade_buckets(symbol: str, from_ts: float | None, to_ts: float | None) -> tuple[list[dict], str]:
     try:
         from athena.microstructure.trade_bucket_store import query_session_buckets
+        from athena.microstructure.aggtrade_volume import (
+            resolve_trade_bucket_exchange,
+            trade_bucket_source_name,
+        )
 
+        exchange = resolve_trade_bucket_exchange(CONFIG.get("SCALP_ENGINE") or {})
         rows = query_session_buckets(
             symbol,
+            exchange=exchange,
             min_last_ts=from_ts,
             max_last_ts=to_ts,
         )
         if rows:
-            return rows, "REAL_AGGTRADE"
+            return rows, f"REAL_{trade_bucket_source_name(exchange).upper()}"
     except Exception as exc:
         log.debug("[ScalpOrderflow] trade buckets unavailable: %s", exc)
     return [], "UNAVAILABLE"

@@ -6892,7 +6892,10 @@ def backtest_pair_scalp(pair: dict, validation_mode: str = "standard") -> dict |
             asset_type == "crypto"
             and cfg.get("STRICT_FABIO_GATE_ENABLED", True)
             and cfg.get("REQUIRE_AGGTRADE_FOR_CRYPTO_STRICT", True)
-            and (vp.get("volume_source") != "binance_aggtrade" or cvd.get("source") != "binance_aggtrade")
+            and (
+                not data_fidelity.get("vp_uses_real_trade_buckets")
+                or not data_fidelity.get("cvd_uses_real_trade_buckets")
+            )
         ):
             continue
         if (

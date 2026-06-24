@@ -26,7 +26,14 @@ def test_scalp_orderflow_endpoint_returns_source_fidelity(client):
     data = resp.get_json()
     assert data["symbol"] == "BTCUSDT"
     assert data["timeframe"] == "M5"
-    assert data["source"] in {"REAL_AGGTRADE", "CANDLE_PROXY", "UNAVAILABLE", "DELAYED_REAL", "MT5_TICK_PROXY"}
+    assert data["source"] in {
+        "REAL_AGGTRADE",
+        "REAL_BYBIT_PUBLIC_TRADE",
+        "CANDLE_PROXY",
+        "UNAVAILABLE",
+        "DELAYED_REAL",
+        "MT5_TICK_PROXY",
+    }
     assert "largeTradeEvents" in data
     assert "warnings" in data
 

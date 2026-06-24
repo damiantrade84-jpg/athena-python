@@ -90,6 +90,7 @@ def test_precompute_crypto_uses_aggtrade_profile_when_available(monkeypatch):
     from athena.microstructure import trade_bucket_store
 
     monkeypatch.setitem(config.CONFIG, "ENGINE_B_PROFILE_SCORING_ENABLED", True)
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_PROFILE_TRUST_MODE", "asset_type")
     monkeypatch.setitem(config.CONFIG, "ENGINE_B_CRYPTO_AGGTRADE_ENABLED", True)
     monkeypatch.setitem(config.CONFIG, "ENGINE_B_CRYPTO_REQUIRE_AGGTRADE_FOR_PASS", True)
     monkeypatch.setitem(
@@ -100,6 +101,7 @@ def test_precompute_crypto_uses_aggtrade_profile_when_available(monkeypatch):
             "TRADE_BUCKET_MIN_LEVELS": 3,
             "TRADE_BUCKET_MIN_VOLUME": 0.0,
             "TRADE_BUCKET_MAX_AGE_SEC": 900,
+            "TRADE_BUCKET_EXCHANGE": "bybit",
         },
     )
     calls = []
@@ -122,7 +124,8 @@ def test_precompute_crypto_uses_aggtrade_profile_when_available(monkeypatch):
     )
 
     assert calls and calls[0]["symbol"] == "BTCUSDT"
-    assert pre["_vp_profile"]["volume_source"] == "binance_aggtrade"
+    assert calls[0]["exchange"] == "bybit"
+    assert pre["_vp_profile"]["volume_source"] == "bybit_public_trade"
     assert pre["aggtrade_available"] is True
     assert pre["engine_b_data_fidelity"]["vp_uses_real_trade_buckets"] is True
 
@@ -173,6 +176,7 @@ def test_calculate_confidence_crypto_aligned_aggtrade_cvd_adds_orderflow_bonus(m
 def test_calculate_confidence_crypto_missing_aggtrade_fails_strict(monkeypatch):
     monkeypatch.setitem(config.CONFIG, "ENGINE_B_CRYPTO_AGGTRADE_ENABLED", True)
     monkeypatch.setitem(config.CONFIG, "ENGINE_B_CRYPTO_REQUIRE_AGGTRADE_FOR_PASS", True)
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_CRYPTO_AGGTRADE_MODE", "required")
     res = {
         **_base_res("crypto"),
         "aggtrade_required": True,
@@ -217,6 +221,7 @@ def test_calculate_confidence_forex_does_not_require_aggtrade(monkeypatch):
 
 def test_engine_b_profile_context_enabled_respects_asset_type(monkeypatch):
     monkeypatch.setitem(config.CONFIG, "ENGINE_B_PROFILE_SCORING_ENABLED", True)
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_PROFILE_TRUST_MODE", "asset_type")
     monkeypatch.setitem(
         config.CONFIG,
         "ENGINE_B_PROFILE_TRUSTED_ASSET_TYPES",
@@ -231,6 +236,7 @@ def test_engine_b_profile_context_enabled_respects_asset_type(monkeypatch):
 
 def test_build_engine_b_profile_vp_context_reason_for_forex(monkeypatch):
     monkeypatch.setitem(config.CONFIG, "ENGINE_B_PROFILE_SCORING_ENABLED", True)
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_PROFILE_TRUST_MODE", "asset_type")
     monkeypatch.setitem(
         config.CONFIG,
         "ENGINE_B_PROFILE_TRUSTED_ASSET_TYPES",
@@ -244,6 +250,7 @@ def test_build_engine_b_profile_vp_context_reason_for_forex(monkeypatch):
 
 def test_calculate_confidence_forex_excludes_profile_slot(monkeypatch):
     monkeypatch.setitem(config.CONFIG, "ENGINE_B_PROFILE_SCORING_ENABLED", True)
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_PROFILE_TRUST_MODE", "asset_type")
     monkeypatch.setitem(
         config.CONFIG,
         "ENGINE_B_PROFILE_TRUSTED_ASSET_TYPES",

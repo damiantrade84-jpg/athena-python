@@ -1334,7 +1334,7 @@ def _trade_bucket_max_last_ts(reference_ts=None, require_fresh: bool = True) -> 
 
 
 def _build_trade_bucket_volume_profile(display: str, reference_ts=None, require_fresh: bool = True) -> dict:
-    """Build crypto VP from live Binance aggregate-trade price buckets."""
+    """Build crypto VP from configured real exchange trade buckets."""
     from athena.microstructure.aggtrade_volume import build_trade_bucket_volume_profile
 
     return build_trade_bucket_volume_profile(
@@ -1648,6 +1648,10 @@ def _engine_d_aggression_fidelity(
     cvd_source_raw = str((cvd or {}).get("source") or "candles").strip().lower()
     source_aliases = {
         "binance_aggtrade": "binance_aggtrade",
+        "bybit_public_trade": "bybit_public_trade",
+        "bybit_publictrade": "bybit_public_trade",
+        "bybit_trade": "bybit_public_trade",
+        "bybit": "bybit_public_trade",
         "candles": "candle_proxy",
         "candle": "candle_proxy",
         "disabled": "disabled",
@@ -1657,7 +1661,8 @@ def _engine_d_aggression_fidelity(
         "range_proxy": "range_proxy",
     }
     aggression_source = source_aliases.get(cvd_source_raw, f"{cvd_source_raw}_proxy")
-    source_is_proxy = aggression_source != "binance_aggtrade"
+    real_trade_sources = {"binance_aggtrade", "bybit_public_trade", "trade_buckets"}
+    source_is_proxy = aggression_source not in real_trade_sources
 
     setup_dir = str(setup_direction or "").upper()
     cvd_dir = str((cvd or {}).get("direction") or "").upper()
@@ -1672,7 +1677,7 @@ def _engine_d_aggression_fidelity(
 
     aggression_confirmed = bool(absorption_confirmed or cvd_aligned or aaa_aligned)
     strict_fabio_pass = bool(
-        aggression_source == "binance_aggtrade"
+        aggression_source in real_trade_sources
         and not source_is_proxy
         and (cvd_aligned or aaa_aligned)
     )
@@ -1752,7 +1757,11 @@ def _engine_d_source_fidelity(source: Any, *, domain: str) -> dict:
     raw = str(source or "unknown").strip().lower()
     aliases = {
         "binance_aggtrade": "binance_aggtrade",
-        "trade_buckets": "binance_aggtrade",
+        "bybit_public_trade": "bybit_public_trade",
+        "bybit_publictrade": "bybit_public_trade",
+        "bybit_trade": "bybit_public_trade",
+        "bybit": "bybit_public_trade",
+        "trade_buckets": "trade_buckets",
         "candle": "candles",
         "candle_volume": "candle_volume",
         "candles": "candles",
@@ -1772,7 +1781,7 @@ def _engine_d_source_fidelity(source: Any, *, domain: str) -> dict:
         "unknown": "unknown",
     }
     normalized = aliases.get(raw, raw)
-    real_trade_flow = normalized == "binance_aggtrade"
+    real_trade_flow = normalized in {"binance_aggtrade", "bybit_public_trade", "trade_buckets"}
     # Delayed-real: post-trade real volume with a latency penalty (live US-stock
     # WS aggregation, EODHD intraday history). Still proxy for execution-trust
     # purposes but distinguishable from pure candle/range proxies for caps.
@@ -4687,7 +4696,7 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
             ):
                 if not data_fidelity.get("vp_uses_real_trade_buckets") or not data_fidelity.get("cvd_uses_real_trade_buckets"):
                     if cfg.get("SKIP_CRYPTO_ON_AGGTRADE_UNAVAILABLE", True):
-                        # F3: live/BT parity — when real aggTrade buckets are unavailable
+                        # F3: live/BT parity — when real trade buckets are unavailable
                         # for VP or CVD, skip the pair entirely instead of emitting a
                         # Not-executable card. Mirrors backtest_runner.py:5341-5347.
                         # Strict gate semantics preserved (we are not letting candle-VP

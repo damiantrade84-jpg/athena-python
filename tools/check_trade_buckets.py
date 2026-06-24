@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Inspect trade bucket DB for Engine D aggTrade verification."""
+"""Inspect trade bucket DB for Engine D trade-bucket verification."""
 
 from __future__ import annotations
 
@@ -39,12 +39,13 @@ def _parse_crypto_symbols_athena(repo_root: Path) -> list[str]:
     return sorted({s.replace("/", "").upper() for s in found if s.strip()})
 
 
-def _load_config_trade_bucket(repo_root: Path) -> tuple[object, int, int]:
-    """Return (MICROSTRUCTURE_FEEDS_ENABLED, TRADE_BUCKET_MAX_AGE_SEC, TRADE_BUCKET_MIN_LEVELS)."""
+def _load_config_trade_bucket(repo_root: Path) -> tuple[object, str, int, int]:
+    """Return feed flag, exchange, freshness window, and minimum bucket levels."""
     cfg_path = repo_root / "config.yaml"
     micro: object = "n/a"
     max_age = 300
     min_levels = 8
+    exchange = "bybit"
     if cfg_path.is_file():
         try:
             import yaml
@@ -53,20 +54,28 @@ def _load_config_trade_bucket(repo_root: Path) -> tuple[object, int, int]:
                 cfg = yaml.safe_load(fh)
             micro = cfg.get("MICROSTRUCTURE_FEEDS_ENABLED")
             se = cfg.get("SCALP_ENGINE") or {}
+            if se.get("TRADE_BUCKET_EXCHANGE") is not None:
+                exchange = str(se["TRADE_BUCKET_EXCHANGE"]).strip().lower() or exchange
             if se.get("TRADE_BUCKET_MAX_AGE_SEC") is not None:
                 max_age = int(se["TRADE_BUCKET_MAX_AGE_SEC"])
             if se.get("TRADE_BUCKET_MIN_LEVELS") is not None:
                 min_levels = int(se["TRADE_BUCKET_MIN_LEVELS"])
         except Exception as exc:
             print("config.yaml read failed:", exc)
-    return micro, max_age, min_levels
+    return micro, exchange, max_age, min_levels
 
 
 def main() -> int:
     repo_root = Path(__file__).resolve().parents[1]
-    micro_d, yaml_max_age, yaml_min_levels = _load_config_trade_bucket(repo_root)
+    micro_d, yaml_exchange, yaml_max_age, yaml_min_levels = _load_config_trade_bucket(repo_root)
 
-    ap = argparse.ArgumentParser(description="Check Binance trade bucket rows for a symbol.")
+    ap = argparse.ArgumentParser(description="Check exchange trade bucket rows for a symbol.")
+    ap.add_argument(
+        "--exchange",
+        default=yaml_exchange,
+        choices=("bybit", "binance"),
+        help=f"Trade bucket exchange namespace (default from config: {yaml_exchange})",
+    )
     ap.add_argument(
         "--all-crypto",
         action="store_true",
@@ -86,6 +95,7 @@ def main() -> int:
     )
     args = ap.parse_args()
     max_age = int(args.max_age if args.max_age is not None else yaml_max_age)
+    exchange = str(args.exchange or yaml_exchange).lower()
 
     db = _resolve_db_path()
     print("DB path:", db)
@@ -93,6 +103,7 @@ def main() -> int:
 
     min_levels = yaml_min_levels
     print("MICROSTRUCTURE_FEEDS_ENABLED:", micro_d)
+    print("SCALP_ENGINE TRADE_BUCKET_EXCHANGE:", exchange)
     print("SCALP_ENGINE TRADE_BUCKET_MAX_AGE_SEC:", max_age)
     print("SCALP_ENGINE TRADE_BUCKET_MIN_LEVELS:", min_levels)
     print()
@@ -101,17 +112,17 @@ def main() -> int:
     session_id = datetime.fromtimestamp(now, tz=timezone.utc).strftime("%Y-%m-%d")
 
     if not db.exists():
-        print("No database file - aggTrades are not being persisted at this path, or app never ran.")
+        print("No database file - trade buckets are not being persisted at this path, or app never ran.")
         return 1
 
     con = sqlite3.connect(db)
     cur = con.cursor()
-    cur.execute("SELECT MAX(last_ts) FROM trade_buckets WHERE exchange = 'binance'")
+    cur.execute("SELECT MAX(last_ts) FROM trade_buckets WHERE exchange = ?", (exchange,))
     glob_mx = cur.fetchone()[0]
     if glob_mx:
         g_age = now - float(glob_mx)
         print(
-            f"Global newest last_ts (all Binance rows): {glob_mx} (age_sec={g_age:.1f}; {g_age/86400:.2f} days)"
+            f"Global newest last_ts (all {exchange} rows): {glob_mx} (age_sec={g_age:.1f}; {g_age/86400:.2f} days)"
         )
         if g_age > float(max_age):
             print(
@@ -120,7 +131,8 @@ def main() -> int:
             )
         print()
     cur.execute(
-        "SELECT DISTINCT symbol FROM trade_buckets WHERE exchange = 'binance' ORDER BY symbol LIMIT 40"
+        "SELECT DISTINCT symbol FROM trade_buckets WHERE exchange = ? ORDER BY symbol LIMIT 40",
+        (exchange,),
     )
     sample = [r[0] for r in cur.fetchall()]
     print("Sample symbols with any rows:", ", ".join(sample) if sample else "(none)")
@@ -149,12 +161,12 @@ def main() -> int:
                 SELECT COUNT(*) FROM trade_buckets
                 WHERE exchange = ? AND symbol = ? AND session_id = ? AND last_ts >= ?
                 """,
-                ("binance", sym_key, session_id, fresh_cutoff),
+                (exchange, sym_key, session_id, fresh_cutoff),
             )
             fresh = cur.fetchone()[0]
             cur.execute(
                 "SELECT MAX(last_ts) FROM trade_buckets WHERE exchange = ? AND symbol = ?",
-                ("binance", sym_key),
+                (exchange, sym_key),
             )
             mx_any = cur.fetchone()[0]
             age_s = (now - float(mx_any)) if mx_any else None
@@ -200,7 +212,7 @@ def main() -> int:
         FROM trade_buckets
         WHERE exchange = ? AND symbol = ? AND session_id = ?
         """,
-        ("binance", sym_key, session_id),
+        (exchange, sym_key, session_id),
     )
     cnt, buckets, mn_ts, mx_ts, vol = cur.fetchone()
     print(f"{sym_key} session {session_id}: rows={cnt} distinct_price_buckets={buckets}")
@@ -213,7 +225,7 @@ def main() -> int:
         SELECT COUNT(*) FROM trade_buckets
         WHERE exchange = ? AND symbol = ? AND session_id = ? AND last_ts >= ?
         """,
-        ("binance", sym_key, session_id, fresh_cutoff),
+        (exchange, sym_key, session_id, fresh_cutoff),
     )
     fresh = cur.fetchone()[0]
     print(f"  rows with last_ts >= now-{max_age}s (fresh gate): {fresh}")
@@ -223,13 +235,13 @@ def main() -> int:
 
     cur.execute(
         "SELECT MAX(last_ts) FROM trade_buckets WHERE exchange = ? AND symbol = ?",
-        ("binance", sym_key),
+        (exchange, sym_key),
     )
     mx_any = cur.fetchone()[0]
     if mx_any:
         print(f"  global max last_ts (any session): {mx_any} age_sec={now - float(mx_any):.1f}")
     else:
-        print(f"  no rows ever for exchange=binance symbol={sym_key}")
+        print(f"  no rows ever for exchange={exchange} symbol={sym_key}")
     con.close()
 
     print()
