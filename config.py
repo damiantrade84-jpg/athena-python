@@ -782,6 +782,7 @@ PAIR_PROFILE_FILTERS = {
 
 # ── Load YAML overrides ──────────────────────────────────────────────────────
 _yaml_overrides: dict = {}
+_engine_b_load_started = False
 try:
     import yaml as _yaml
 
@@ -827,9 +828,23 @@ try:
             log.info("Merged config.local.yaml over config.yaml (%d top-level keys)", len(_yaml_overrides))
         elif _local_doc is not None:
             log.warning("[CFG] config.local.yaml root must be a mapping — ignoring file")
+    _engine_b_path = os.path.join(_cfg_dir, "engine_b_config.yaml")
+    if os.path.exists(_engine_b_path):
+        from engine_b_yaml_loader import load_engine_b_yaml
+
+        _engine_b_load_started = True
+        _engine_b_overrides = load_engine_b_yaml(_engine_b_path)
+        _engine_b_load_started = False
+        _yaml_overrides = _deep_merge_dict(_yaml_overrides, _engine_b_overrides)
+        log.info(
+            "Merged engine_b_config.yaml into runtime config (%d top-level keys)",
+            len(_engine_b_overrides),
+        )
 except ImportError:
     pass  # pyyaml optional
 except Exception as _e:
+    if _engine_b_load_started:
+        raise
     log.warning(f"config.yaml load failed: {_e}")
 
 # ── Default CONFIG ───────────────────────────────────────────────────────────
@@ -1117,7 +1132,18 @@ CONFIG: dict = {
     # When False, debate/vision sources classified as neutral (e.g. SKIP/REVIEW) block execution_allowed.
     "AI_NEUTRAL_ALLOWS_EXECUTION": False,
     "ENGINE_B_PROFILE_SCORING_ENABLED": True,
+    "ENGINE_B_PROFILE_TRUST_MODE": "score_group",
     "ENGINE_B_PROFILE_TRUSTED_ASSET_TYPES": ["crypto", "stock"],
+    "ENGINE_B_PROFILE_TRUSTED_SCORE_GROUPS": [
+        "crypto_btc",
+        "crypto_eth",
+        "crypto_alt_majors",
+        "crypto_doge",
+        "crypto_other",
+        "us_stock_single",
+        "stock_other",
+        "smallcap_em_etf",
+    ],
     "ENGINE_B_CRYPTO_AGGTRADE_ENABLED": True,
     "ENGINE_B_CRYPTO_REQUIRE_AGGTRADE_FOR_PASS": True,
     "ENGINE_B_CRYPTO_AGGTRADE_CVD_SCORE_ENABLED": True,
@@ -1208,6 +1234,8 @@ CONFIG: dict = {
     "ENGINE_B_CRYPTO_LEVELS_FEED": "bybit",
     "ENGINE_B_CRYPTO_LEVELS_SIGNAL_FEED_FALLBACK": False,
     "ENGINE_B_CRYPTO_BT_LEVEL_ATR_USE_SIGNAL_FEED": False,
+    "ENGINE_B_CRYPTO_AGGTRADE_MODE": "degraded",
+    "ENGINE_B_CRYPTO_AGGTRADE_MISSING_PENALTY": 0.5,
     "ENGINE_B_SWEEP_LOOKBACK_BARS": 5,
     # Defaults True: synthetic-RR TP fallback rescues otherwise-valid Engine B
     # signals whose structural target falls short of min_rr (or whose structural
@@ -1220,6 +1248,7 @@ CONFIG: dict = {
     "ENGINE_B_BT_EXIT_POLICY": "fixed_target_be",
     # When True, Engine B skips forex on 22:00–07:00 UTC bars (backtest + live scan).
     "ENGINE_B_FOREX_ASIAN_SESSION_SKIP_ENABLED": True,
+    "ENGINE_B_FOREX_PRE_ASIAN_SESSION_SKIP_ENABLED": True,
     # Diagnostics-first forex session weighting for Engine B structure context.
     # Disabled by default; score influence requires SCORE_INFLUENCE_ENABLED too.
     "ENGINE_B_FOREX_SESSION_STRUCTURE_WEIGHTING": {
@@ -1248,6 +1277,12 @@ CONFIG: dict = {
         "etf_bond": False,
         "crypto": False,
     },
+    "ENGINE_B_SPACE_RR_SUBSTITUTE_MIN_ATR_FLOOR_ENABLED": True,
+    "ENGINE_B_SPACE_RR_SUBSTITUTE_MIN_ATR_FLOOR": 0.5,
+    "ENGINE_B_ATR_SL_CLAMPS_ENABLED": True,
+    "ENGINE_B_MIN_SL_ATR_DEFAULT": 0.75,
+    "ENGINE_B_MAX_SL_ATR_DEFAULT": 3.0,
+    "ENGINE_B_ATR_SL_CLAMP_SCORE_GROUP_OVERRIDES": {},
     # Default-off non-forex/crypto structure tuning for stocks, indices, commodities, and ETFs.
     "ENGINE_B_ASSET_CLASS_ADJUSTMENTS_ENABLED": False,
     "ENGINE_B_ASSET_CLASS_VOLATILITY_AWARE_ENABLED": False,
@@ -2087,7 +2122,7 @@ CONFIG: dict = {
                 "require_macro_align": False,
             },
             "intraday": {
-                "min_score": 4.0,
+                "min_score": 4.5,
                 "min_rr": 1.5,
                 "fallback_rr": 2.0,
                 "require_macro_align": False,
@@ -2117,25 +2152,31 @@ CONFIG: dict = {
             },
             "nat_gas": {
                 "scalp": {"min_score": 4.0},
-                "intraday": {"min_score": 4.0, "min_rr": 1.6},
+                "intraday": {"min_score": 4.5, "min_rr": 1.6},
                 "swing": {"min_score": 5.0, "min_rr": 2.0},
             },
             "crypto_doge": {
                 "scalp": {"min_score": 4.0, "min_room_atr": 0.5},
-                "intraday": {"min_score": 4.0, "min_room_atr": 0.9, "min_rr": 1.5},
+                "intraday": {"min_score": 4.5, "min_room_atr": 0.9, "min_rr": 1.5},
                 "swing": {"min_score": 5.0, "min_room_atr": 1.2, "min_rr": 1.9},
             },
         },
     },
     "ENGINE_B_REGIME_MULTIPLIERS": {
-        "TRENDING": 0.90,
-        "RANGING": 0.90,
-        "HIGH_VOLATILITY": 0.85,
-        "LOW_VOLATILITY": 1.15,
+        "TRENDING": 0.95,
+        "RANGING": 1.10,
+        "HIGH_VOLATILITY": 1.10,
+        "LOW_VOLATILITY": 0.90,
     },
     # True: regime adjusts Engine B min_score via ENGINE_B_REGIME_MULTIPLIERS.
     # False: min_score stays at style profile base (multiplier forced to 1.0).
     "ENGINE_B_REGIME_MULTIPLIERS_ENABLED": True,
+    "ENGINE_B_STYLE_MIN_SCORE_DIFFERENTIATION_ENABLED": True,
+    "ENGINE_B_STYLE_MIN_SCORE_BY_STYLE": {
+        "scalp": 4.0,
+        "intraday": 4.5,
+        "swing": 5.0,
+    },
     "FOREX_ENGINE": {
         "hurst_gate_enabled": True,
         "hurst_gate_threshold": 0.52,

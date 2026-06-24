@@ -27,6 +27,7 @@ eodhd==1.0.32
 python-dotenv==1.2.2
 ccxt==4.5.42
 pytest==8.4.2
+hypothesis==6.148.7
 # PTB 20.x breaks run_polling event loop on Python 3.14; 22.7+ required.
 python-telegram-bot>=22.7
 matplotlib>=3.8.0

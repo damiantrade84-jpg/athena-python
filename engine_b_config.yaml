@@ -1,0 +1,177 @@
+# Engine B Configuration
+# =======================
+# Edit this file to tune Engine B without touching Python.
+#
+# Validate with:
+#   python engine_b_yaml_loader.py --validate engine_b_config.yaml
+
+base_thresholds:
+  scalp:
+    min_score: 4.0
+    min_rr: 1.5
+    fallback_rr: 2.0
+  intraday:
+    min_score: 4.5
+    min_rr: 1.5
+    fallback_rr: 2.0
+  swing:
+    min_score: 5.0
+    min_rr: 2.0
+    fallback_rr: 3.0
+
+regime_multipliers:
+  TRENDING: 0.95
+  RANGING: 1.10
+  HIGH_VOLATILITY: 1.10
+  LOW_VOLATILITY: 0.90
+  UNKNOWN: 1.0
+regime_scaling_enabled: true
+
+crypto_aggtrade:
+  mode: degraded
+  alignment_bonus: 0.5
+  missing_penalty: 0.5
+
+space_gate:
+  rr_substitute_min_atr_floor: 0.5
+
+execution_levels:
+  max_sl_pct: 0.02
+  max_sl_atr_default: 3.0
+  min_sl_atr_default: 0.75
+  synthetic_fallback_rr_tp_enabled: true
+
+volume_profile:
+  trusted_groups:
+    - crypto_btc
+    - crypto_eth
+    - crypto_alt_majors
+    - crypto_doge
+    - crypto_other
+    - us_stock_single
+    - stock_other
+    - smallcap_em_etf
+
+forex_session:
+  asian_skip_enabled: true
+  asian_active_currencies: [JPY, AUD, NZD, CNH, SGD, HKD]
+
+group_overrides:
+  - style: intraday
+    group: forex_majors
+    min_rr: 1.3
+  - style: swing
+    group: forex_majors
+    min_rr: 1.8
+  - style: intraday
+    group: forex_crosses
+    min_rr: 1.3
+  - style: swing
+    group: forex_crosses
+    min_rr: 1.8
+  - style: scalp
+    group: forex_exotics
+    min_room_atr: 0.5
+    space_rr_substitute: true
+  - style: intraday
+    group: forex_exotics
+    min_room_atr: 0.85
+    min_rr: 1.35
+    space_rr_substitute: true
+  - style: swing
+    group: forex_exotics
+    min_room_atr: 1.2
+    min_rr: 1.8
+    space_rr_substitute: true
+  - style: intraday
+    group: crypto_btc
+    min_rr: 1.3
+  - style: swing
+    group: crypto_btc
+    min_rr: 1.8
+  - style: intraday
+    group: crypto_eth
+    min_rr: 1.3
+  - style: swing
+    group: crypto_eth
+    min_rr: 1.8
+  - style: intraday
+    group: crypto_alt_majors
+    min_rr: 1.4
+  - style: swing
+    group: crypto_alt_majors
+    min_rr: 1.9
+  - style: intraday
+    group: crypto_other
+    min_rr: 1.4
+  - style: swing
+    group: crypto_other
+    min_rr: 1.9
+  - style: scalp
+    group: crypto_doge
+    min_room_atr: 0.5
+    space_rr_substitute: true
+  - style: intraday
+    group: crypto_doge
+    min_room_atr: 0.9
+    min_rr: 1.5
+    space_rr_substitute: true
+  - style: swing
+    group: crypto_doge
+    min_room_atr: 1.2
+    min_rr: 1.9
+    space_rr_substitute: true
+  - style: intraday
+    group: nat_gas
+    min_rr: 1.6
+  - style: swing
+    group: nat_gas
+    min_rr: 2.0
+  - style: intraday
+    group: precious_trackers
+    min_rr: 1.3
+  - style: swing
+    group: precious_trackers
+    min_rr: 1.8
+  - style: intraday
+    group: energy_oil
+    min_rr: 1.3
+  - style: swing
+    group: energy_oil
+    min_rr: 1.8
+  - style: intraday
+    group: us_stock_single
+    min_rr: 1.4
+  - style: swing
+    group: us_stock_single
+    min_rr: 1.9
+  - style: intraday
+    group: stock_other
+    min_rr: 1.4
+  - style: swing
+    group: stock_other
+    min_rr: 1.9
+  - style: intraday
+    group: smallcap_em_etf
+    min_rr: 1.4
+  - style: swing
+    group: smallcap_em_etf
+    min_rr: 1.9
+  - style: intraday
+    group: bond_tlt
+    min_rr: 1.3
+  - style: swing
+    group: bond_tlt
+    min_rr: 1.8
+  - style: intraday
+    group: us_indices_trackers
+    min_rr: 1.3
+  - style: swing
+    group: us_indices_trackers
+    min_rr: 1.8
+  - style: intraday
+    group: index_other
+    min_rr: 1.4
+  - style: swing
+    group: index_other
+    min_rr: 1.9
