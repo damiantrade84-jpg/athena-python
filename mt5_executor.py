@@ -1712,7 +1712,7 @@ def mt5_execute(signal: dict, approval: "RiskApproval") -> dict:  # noqa: F821
     except Exception:
         _max_sl_pct = CONFIG.get("MAX_SL_PCT", {}).get(signal.get("type", ""), 0.05)
         _max_sl_source = f"asset:{signal.get('type', '')}"
-    if sl_dist_pct > _max_sl_pct:
+    if sl_dist_pct > _max_sl_pct + 1e-9:
         log.error(
             f"[MT5] {mt5_symbol}: SL distance {sl_dist_pct:.1%} exceeds configured cap {_max_sl_pct:.1%} ({_max_sl_source})"
         )

@@ -42,6 +42,89 @@ def test_mt5_execute_rejects_stop_beyond_configured_cap(monkeypatch):
     assert result["error"].startswith("SL_TOO_FAR")
 
 
+def test_mt5_execute_allows_borderline_sl_cap_float_noise(monkeypatch):
+    send_called = False
+
+    class _FakeMT5:
+        ORDER_TYPE_BUY = 0
+        ORDER_TYPE_SELL = 1
+        TRADE_ACTION_DEAL = 1
+        ORDER_TIME_GTC = 0
+        ORDER_FILLING_IOC = 1
+        TRADE_RETCODE_DONE = 10009
+        SYMBOL_TRADE_MODE_FULL = 4
+
+        @staticmethod
+        def symbol_select(_symbol, _enable):
+            return True
+
+        @staticmethod
+        def symbol_info_tick(_symbol):
+            return SimpleNamespace(ask=100.0, bid=99.98)
+
+        @staticmethod
+        def symbol_info(_symbol):
+            return SimpleNamespace(
+                digits=8,
+                trade_stops_level=0,
+                point=0.01,
+                volume_step=0.01,
+                volume_min=0.01,
+                trade_mode=_FakeMT5.SYMBOL_TRADE_MODE_FULL,
+                visible=True,
+            )
+
+        @staticmethod
+        def terminal_info():
+            return SimpleNamespace(trade_allowed=True, tradeapi_disabled=False)
+
+        @staticmethod
+        def account_info():
+            return SimpleNamespace(trade_allowed=True, trade_expert=True, trade_mode=0)
+
+        @staticmethod
+        def last_error():
+            return (0, "OK")
+
+    def fake_send(request):
+        nonlocal send_called
+        send_called = True
+        assert request["symbol"] == "XPDUSD"
+        return SimpleNamespace(
+            retcode=_FakeMT5.TRADE_RETCODE_DONE,
+            order=12345,
+            volume=request["volume"],
+            price=request["price"],
+            comment="done",
+        )
+
+    monkeypatch.setattr(mt5_executor, "_get_mt5", lambda: _FakeMT5())
+    monkeypatch.setattr(mt5_executor, "mt5_connect", lambda: True)
+    monkeypatch.setattr(mt5_executor, "mt5_map_symbol", lambda pair: "XPDUSD")
+    monkeypatch.setattr(mt5_executor, "_send_order_with_filling_fallback", fake_send)
+    monkeypatch.setattr(mt5_executor, "_mt5_order_check_with_filling_fallback", lambda *a, **k: None)
+    monkeypatch.setattr(mt5_executor, "_mt5_resolve_position_ticket", lambda *a, **k: 12345)
+    monkeypatch.setattr(
+        "risk_engine.resolve_max_sl_pct",
+        lambda *args, **kwargs: (0.04, "asset:commodity"),
+    )
+
+    signal = {
+        "pair": "XPD/USD",
+        "direction": "LONG",
+        "price": 100.0,
+        "sl": 95.99999995,
+        "tp1": 108.0,
+        "type": "commodity",
+    }
+    approval = RiskApproval(True, 1.0, 100.0, 0.01, 0.01, 0.0, "OK")
+
+    result = mt5_executor.mt5_execute(signal, approval)
+
+    assert send_called is True
+    assert result["success"] is True
+
+
 def test_mt5_execute_blocks_disabled_symbol_before_order_send(monkeypatch):
     send_called = False
 
