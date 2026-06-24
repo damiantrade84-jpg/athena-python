@@ -4253,11 +4253,9 @@ TIMED_EXIT:
   # the best R reached after a small profit threshold. If price gives that back
   # to the configured floor, close instead of letting a green trade turn red.
   #
-  # DISABLED: close_r=0.0 was closing every trade at breakeven on normal noise.
-  # All recent Engine A/B trades exited as TRAIL_PROFIT_ROUNDTRIP at ~0R instead
-  # of riding to SL or TP. Re-enable only after calibrating close_r/giveback_r
-  # with wider thresholds (close_r ≤ -0.15, giveback_r ≥ 0.40).
-  pre_activation_profit_protect_enabled: false
+  # Active now: thresholds below are deliberately wider than the old 0.0R floor
+  # (close_r <= -0.15, giveback_r >= 0.40).
+  pre_activation_profit_protect_enabled: true
   pre_activation_profit_arm_r:
     scalp: 0.30
     intraday: 0.40

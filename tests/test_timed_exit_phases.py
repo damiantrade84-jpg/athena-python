@@ -7,6 +7,8 @@ Engine D: SL moves to tp_partial after +1R partial
 """
 
 import types
+from pathlib import Path
+
 import pytest
 
 # Broker stubs below are passed directly to helper calls and intentionally not
@@ -1277,6 +1279,25 @@ class TestPhase1Defaults:
         assert tcfg["trail_activation_r"]["scalp"] == pytest.approx(0.7)
         assert tcfg["trail_activation_r"]["intraday"] == pytest.approx(1.2)
         assert tcfg["trail_activation_r"]["swing"] == pytest.approx(1.5)
+
+
+class TestLiveTimedExitConfig:
+    def test_live_config_enables_pre_activation_profit_protection(self):
+        yaml = pytest.importorskip("yaml")
+        cfg_path = Path(__file__).resolve().parents[1] / "config.yaml"
+        cfg = yaml.safe_load(cfg_path.read_text(encoding="utf-8")) or {}
+        timed = cfg.get("TIMED_EXIT") or {}
+
+        assert timed.get("tp_mode") == "trailing_atr"
+        assert timed.get("pre_activation_profit_protect_enabled") is True
+        assert timed["pre_activation_profit_close_r"] == {
+            "scalp": pytest.approx(-0.15),
+            "intraday": pytest.approx(-0.15),
+            "swing": pytest.approx(-0.15),
+        }
+        assert timed["pre_activation_profit_giveback_r"]["scalp"] >= 0.40
+        assert timed["pre_activation_profit_giveback_r"]["intraday"] >= 0.50
+        assert timed["pre_activation_profit_giveback_r"]["swing"] >= 0.60
 
 
 class TestTrailingModeBreakeven:
