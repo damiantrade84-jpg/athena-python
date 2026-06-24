@@ -11,13 +11,13 @@ from zone_registry import get_zone_registry
 log = logging.getLogger(__name__)
 
 
-# FIX 2: Fixed backwards regime multipliers
-# TRENDING/RANGING/HIGH_VOL = easier (lower threshold), LOW_VOL = harder (false BOS common)
+# FIX 2: Corrected risk-inverted regime multipliers.
+# TRENDING/LOW_VOL = slightly easier; RANGING/HIGH_VOL = stricter.
 ENGINE_B_REGIME_GATE_DEFAULTS = {
-    "TRENDING": 0.90,
-    "RANGING": 0.90,
-    "HIGH_VOLATILITY": 0.85,
-    "LOW_VOLATILITY": 1.15,
+    "TRENDING": 0.95,
+    "RANGING": 1.10,
+    "HIGH_VOLATILITY": 1.10,
+    "LOW_VOLATILITY": 0.90,
 }
 
 
@@ -82,6 +82,8 @@ def engine_b_forex_asian_session_blocks_bar(
         if _bar_dt.tzinfo is None:
             _bar_dt = _bar_dt.replace(tzinfo=timezone.utc)
         h = _bar_dt.hour
+        if bool(config.CONFIG.get("ENGINE_B_FOREX_PRE_ASIAN_SESSION_SKIP_ENABLED", True)) and h == 23:
+            return True
         return h >= 22 or h < 7
     except Exception:
         return False
@@ -841,28 +843,63 @@ def engine_b_profile_trusted_asset_types(cfg: dict | None = None) -> frozenset[s
     return frozenset(str(item).strip().lower() for item in raw if str(item or "").strip())
 
 
-def engine_b_profile_context_enabled(asset_type: str, cfg: dict | None = None) -> bool:
+def engine_b_profile_trusted_score_groups(cfg: dict | None = None) -> frozenset[str]:
+    """Score groups allowed to use Engine B previous-session volume profile."""
+    raw_cfg = cfg if isinstance(cfg, dict) else config.CONFIG
+    raw = raw_cfg.get("ENGINE_B_PROFILE_TRUSTED_SCORE_GROUPS")
+    if raw is None:
+        raw = [
+            "crypto_btc",
+            "crypto_eth",
+            "crypto_alt_majors",
+            "crypto_doge",
+            "crypto_other",
+            "us_stock_single",
+            "stock_other",
+            "smallcap_em_etf",
+        ]
+    if not isinstance(raw, (list, tuple)):
+        return frozenset()
+    return frozenset(str(item).strip().lower() for item in raw if str(item or "").strip())
+
+
+def engine_b_profile_context_enabled(
+    asset_type: str, cfg: dict | None = None, score_group: str | None = None
+) -> bool:
     """True when Engine B may compute/score previous-session VP for this asset type."""
     raw_cfg = cfg if isinstance(cfg, dict) else config.CONFIG
     if not bool(raw_cfg.get("ENGINE_B_PROFILE_SCORING_ENABLED", False)):
         return False
+    trust_mode = str(raw_cfg.get("ENGINE_B_PROFILE_TRUST_MODE", "asset_type")).lower()
+    if trust_mode == "score_group":
+        group_key = str(score_group or "").strip().lower()
+        return group_key in engine_b_profile_trusted_score_groups(raw_cfg)
     asset_key = str(asset_type or "").strip().lower()
     return asset_key in engine_b_profile_trusted_asset_types(raw_cfg)
 
 
-def build_engine_b_profile_vp_context(asset_type: str, cfg: dict | None = None) -> dict:
+def build_engine_b_profile_vp_context(
+    asset_type: str, cfg: dict | None = None, score_group: str | None = None
+) -> dict:
     """Metadata for UI/AI: whether Engine B VP context is active for this asset."""
     raw_cfg = cfg if isinstance(cfg, dict) else config.CONFIG
     scoring_on = bool(raw_cfg.get("ENGINE_B_PROFILE_SCORING_ENABLED", False))
-    trusted = engine_b_profile_context_enabled(asset_type, raw_cfg)
+    trusted = engine_b_profile_context_enabled(asset_type, raw_cfg, score_group)
+    trust_mode = str(raw_cfg.get("ENGINE_B_PROFILE_TRUST_MODE", "asset_type")).lower()
     reason = None
     if not scoring_on:
         reason = "profile_scoring_disabled"
     elif not trusted:
-        reason = "asset_type_untrusted_for_volume_profile"
+        reason = (
+            "score_group_untrusted_for_volume_profile"
+            if trust_mode == "score_group"
+            else "asset_type_untrusted_for_volume_profile"
+        )
     return {
         "enabled": bool(scoring_on and trusted),
         "trusted": bool(trusted),
+        "trust_mode": trust_mode,
+        "score_group": score_group,
         "reason": reason,
     }
 
@@ -1048,6 +1085,13 @@ def engine_b_min_score_diagnostics(
     """
     profile = style_profile if isinstance(style_profile, dict) else {}
     base_min = float(profile.get("min_score", 0.0) or 0.0)
+    if bool(config.CONFIG.get("ENGINE_B_STYLE_MIN_SCORE_DIFFERENTIATION_ENABLED", False)):
+        style = str(profile.get("style") or "").lower()
+        style_floors = config.CONFIG.get("ENGINE_B_STYLE_MIN_SCORE_BY_STYLE", {}) or {}
+        try:
+            base_min = float(style_floors.get(style, base_min))
+        except (TypeError, ValueError):
+            pass
     multipliers_enabled = bool(config.CONFIG.get("ENGINE_B_REGIME_MULTIPLIERS_ENABLED", True))
     regime_multiplier = _engine_b_regime_gate(regime_label, asset_type)
     scaled = base_min * regime_multiplier
@@ -1862,6 +1906,55 @@ def resolve_engine_b_execution_levels(
         _exec_sl = _struct_sl
         _sl_source = "structural_invalid"
 
+    _atr_sl_clamp_applied = None
+    if (
+        bool(config.CONFIG.get("ENGINE_B_ATR_SL_CLAMPS_ENABLED", True))
+        and _exec_sl is not None
+        and _entry > 0
+        and _atr > 0
+    ):
+        _group_clamps = (
+            (config.CONFIG.get("ENGINE_B_ATR_SL_CLAMP_SCORE_GROUP_OVERRIDES") or {})
+            .get(str(score_group or "").lower(), {})
+        )
+        try:
+            _min_sl_atr = float(
+                _group_clamps.get(
+                    "min_sl_atr",
+                    config.CONFIG.get("ENGINE_B_MIN_SL_ATR_DEFAULT", 0.75),
+                )
+            )
+        except (TypeError, ValueError):
+            _min_sl_atr = 0.75
+        try:
+            _max_sl_atr = float(
+                _group_clamps.get(
+                    "max_sl_atr",
+                    config.CONFIG.get("ENGINE_B_MAX_SL_ATR_DEFAULT", 3.0),
+                )
+            )
+        except (TypeError, ValueError):
+            _max_sl_atr = 3.0
+        _min_sl_atr = max(0.0, _min_sl_atr)
+        _max_sl_atr = max(_min_sl_atr, _max_sl_atr)
+        _dist_atr = abs(_entry - _exec_sl) / _atr
+        if _dist_atr < _min_sl_atr or _dist_atr > _max_sl_atr:
+            _target_dist_atr = min(max(_dist_atr, _min_sl_atr), _max_sl_atr)
+            _exec_sl = (
+                _entry - (_atr * _target_dist_atr)
+                if direction == "LONG"
+                else _entry + (_atr * _target_dist_atr)
+            )
+            _sl_source = f"{_sl_source}_atr_clamp"
+            _level_mode = f"{_sl_source}_sl_structural_tp"
+            _rr_source = _level_mode
+            _atr_sl_clamp_applied = {
+                "before_atr": round(_dist_atr, 4),
+                "after_atr": round(_target_dist_atr, 4),
+                "min_sl_atr": round(_min_sl_atr, 4),
+                "max_sl_atr": round(_max_sl_atr, 4),
+            }
+
     # Select execution TP: structural when valid, ATR fallback
     if _struct_tp_valid:
         _exec_tp = _struct_tp
@@ -2125,6 +2218,7 @@ def resolve_engine_b_execution_levels(
         "fallback_tp_applied": _fallback_applied,
         "fallback_tp_reason": _fallback_reason,
         "synthetic_rr_tp_used": bool(_tp_source == "fallback_rr" and _fallback_applied),
+        "atr_sl_clamp_applied": _atr_sl_clamp_applied,
         "rr_required": _rr_required,
         "rr_actual": round(_exec_rr, 4),
         "rr_passed": _rr_passed,
@@ -3629,7 +3723,8 @@ class NakedEngine:
             _structure_quality_score = crypto_struct_diag.get("structure_quality_score")
 
         enable_profile_context = bool(enable_profile_context) and engine_b_profile_context_enabled(
-            asset_type
+            asset_type,
+            score_group=_score_group,
         )
 
         # Volume profile: precompute profile candles and VP once (direction-independent part)
@@ -4295,6 +4390,14 @@ class NakedEngine:
         _aggtrade_enabled = asset_type_lower == "crypto" and bool(
             config.CONFIG.get("ENGINE_B_CRYPTO_AGGTRADE_ENABLED", True)
         )
+        _aggtrade_mode = str(
+            config.CONFIG.get(
+                "ENGINE_B_CRYPTO_AGGTRADE_MODE",
+                "required" if config.CONFIG.get("ENGINE_B_CRYPTO_REQUIRE_AGGTRADE_FOR_PASS", True) else "preferred",
+            )
+        ).lower()
+        if _aggtrade_mode not in {"required", "preferred", "degraded"}:
+            _aggtrade_mode = "required"
         _aggtrade_required_raw = res.get("aggtrade_required")
         _aggtrade_required = bool(
             _aggtrade_enabled
@@ -4304,6 +4407,7 @@ class NakedEngine:
                 else bool(config.CONFIG.get("ENGINE_B_CRYPTO_REQUIRE_AGGTRADE_FOR_PASS", True))
             )
         )
+        _aggtrade_hard_required = bool(_aggtrade_required and _aggtrade_mode == "required")
         _aggtrade_available = bool(
             _aggtrade_enabled
             and res.get("aggtrade_available")
@@ -4535,7 +4639,26 @@ class NakedEngine:
         _rr_space_tp_qualified = _level_mode_str.endswith("_structural_tp") or _level_mode_str.endswith(
             "_fallback_rr_tp"
         )
-        rr_can_satisfy_space = bool(rr_ok and _rr_space_tp_qualified)
+        _rr_space_floor_enabled = bool(
+            config.CONFIG.get("ENGINE_B_SPACE_RR_SUBSTITUTE_MIN_ATR_FLOOR_ENABLED", True)
+        )
+        try:
+            _rr_space_floor_atr = float(
+                config.CONFIG.get("ENGINE_B_SPACE_RR_SUBSTITUTE_MIN_ATR_FLOOR", 0.5)
+            )
+        except (TypeError, ValueError):
+            _rr_space_floor_atr = 0.5
+        _room_distance_atr = None
+        if room_dist is not None:
+            try:
+                _room_distance_atr = float(room_dist) / atr_val
+            except (TypeError, ValueError):
+                _room_distance_atr = None
+        _rr_space_floor_ok = (
+            not _rr_space_floor_enabled
+            or (_room_distance_atr is not None and _room_distance_atr >= max(0.0, _rr_space_floor_atr))
+        )
+        rr_can_satisfy_space = bool(rr_ok and _rr_space_tp_qualified and _rr_space_floor_ok)
         space_ok = room_ok or rr_can_satisfy_space
         # Some asset classes often have a nearby structural level while the
         # execution RR model still has valid protective distance. Keep
@@ -4622,7 +4745,10 @@ class NakedEngine:
         gate_max_possible = float(len(gate_confirmations)) if gate_confirmations else 1.0
         total_score = gate_score + bonus_points
         # FIX 4: Dynamic max_possible
-        _profile_vp_context = build_engine_b_profile_vp_context(asset_type_lower)
+        _profile_vp_context = build_engine_b_profile_vp_context(
+            asset_type_lower,
+            score_group=profile.get("score_group"),
+        )
         _profile_scoring_active = bool(_profile_vp_context.get("enabled"))
         _profile_points_max = 1.0 if _profile_scoring_active else 0.0
         _aggtrade_cvd_bonus_enabled = bool(
@@ -4683,6 +4809,18 @@ class NakedEngine:
                 _aggtrade_cvd_alignment = "opposed"
             elif _aggtrade_available and _aggtrade_cvd_direction:
                 _aggtrade_cvd_alignment = "neutral"
+        try:
+            _aggtrade_missing_penalty = float(
+                config.CONFIG.get("ENGINE_B_CRYPTO_AGGTRADE_MISSING_PENALTY", 0.5)
+            )
+        except (TypeError, ValueError):
+            _aggtrade_missing_penalty = 0.5
+        _aggtrade_missing_penalty_applied = (
+            max(0.0, _aggtrade_missing_penalty)
+            if (_aggtrade_required and not _aggtrade_available and _aggtrade_mode == "degraded")
+            else 0.0
+        )
+        total_score = max(0.0, total_score - _aggtrade_missing_penalty_applied)
 
         # D1 PD-array conflict penalty (B-1).
         # FIX 1: Apply penalty ONLY to total_score, never to gate_score
@@ -4729,7 +4867,7 @@ class NakedEngine:
                 and rr_ok
                 and (macro_ok if require_macro_align else True)
             )
-        if _aggtrade_required and not _aggtrade_available:
+        if _aggtrade_hard_required and not _aggtrade_available:
             passed = False
 
         failed_gate_names = []
@@ -4745,7 +4883,7 @@ class NakedEngine:
             failed_gate_names.append(f"rr={rr:.1f}(src={_exec_lvl['rr_source']})")
         if _exec_lvl.get("execution_level_reject_reason") == "max_sl_exceeded":
             failed_gate_names.append("max_sl_exceeded")
-        if _aggtrade_required and not _aggtrade_available:
+        if _aggtrade_hard_required and not _aggtrade_available:
             failed_gate_names.append(ENGINE_B_REASON_AGGTRADE_REQUIRED)
 
         lifecycle_state, lifecycle_reason = self._determine_lifecycle_state(
@@ -4794,6 +4932,7 @@ class NakedEngine:
         if asset_type_lower == "crypto":
             _engine_b_diag_payload["aggtrade"] = {
                 "required": _aggtrade_required,
+                "mode": _aggtrade_mode,
                 "available": _aggtrade_available,
                 "reason": _aggtrade_reason,
                 "cvd_direction": _aggtrade_cvd_direction,
@@ -4823,7 +4962,7 @@ class NakedEngine:
             _hard_fail_reasons.append("engine_b_confidence_passed_false")
             if res.get("structural_verdict") != "CLEAR":
                 _hard_fail_reasons.append("engine_b_structural_verdict_not_clear")
-            if _aggtrade_required and not _aggtrade_available:
+            if _aggtrade_hard_required and not _aggtrade_available:
                 _hard_fail_reasons.append("engine_b_aggtrade_required_false")
             _hard_fail_reasons = sorted(set(_hard_fail_reasons))
 
@@ -4883,6 +5022,8 @@ class NakedEngine:
             "rr_space_gate_enabled": rr_space_gate_enabled,
             "forex_rr_space_gate_enabled": forex_rr_space_gate_enabled,
             "rr_can_satisfy_space_gate": rr_can_satisfy_space,
+            "rr_space_floor_atr": round(_rr_space_floor_atr, 4),
+            "rr_space_floor_passed": bool(_rr_space_floor_ok),
             "min_room_atr_used": round(_effective_min_room_atr, 4),
             "rr_ok": rr_ok,
             "tp_side_ok": tp_side_ok,
@@ -4898,8 +5039,10 @@ class NakedEngine:
             "profile_notes": _profile_notes,
             "profile_context": _profile_vp_context,
             "aggtrade_required": _aggtrade_required,
+            "aggtrade_mode": _aggtrade_mode,
             "aggtrade_available": _aggtrade_available,
             "aggtrade_reason": _aggtrade_reason,
+            "aggtrade_missing_penalty": round(_aggtrade_missing_penalty_applied, 2),
             "aggtrade_cvd_direction": _aggtrade_cvd_direction,
             "aggtrade_cvd_source": res.get("aggtrade_cvd_source"),
             "aggtrade_cvd_slope": res.get("aggtrade_cvd_slope"),
