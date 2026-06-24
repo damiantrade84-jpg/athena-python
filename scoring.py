@@ -133,7 +133,12 @@ _US_STOCK_CUSTOM = {
 _ALTCOIN_MAJORS = {
     "SOL/USDT", "ADA/USDT", "AVAX/USDT", "LINK/USDT", "POL/USDT", "BNB/USDT",
     "DOT/USDT", "LTC/USDT", "SUI/USDT", "NEAR/USDT", "APT/USDT", "INJ/USDT",
-    "RENDER/USDT"
+    "RENDER/USDT",
+    # 2026-06-24: promoted from crypto_other — liquid alts that previously scored
+    # against the stricter crypto_other 2.2 bar despite high liquidity. XRP is an
+    # ENGINE_B_HOTLIST_CRYPTO_ANCHORS member. Effect: Engine A threshold 2.2->2.0,
+    # min_directional 0.24->0.20, RSI bounds 75/25->80/20. Reversible (remove names).
+    "XRP/USDT", "ARB/USDT", "OP/USDT", "UNI/USDT",
 }
 
 

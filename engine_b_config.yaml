@@ -176,3 +176,88 @@ group_overrides:
   - style: swing
     group: index_other
     min_rr: 1.9
+
+  # 2026-06-24 coverage fill (audit): groups present in scoring.get_pair_score_group()
+  # with active pairs but no override rows previously fell through to base_thresholds
+  # (intraday 1.5 / swing 2.0). Values mirror their liquid siblings (forex_majors,
+  # us_indices_trackers, energy_oil = 1.3/1.8). UNVALIDATED judgment values (not n>=30
+  # outcome-backed); these LOOSEN min_rr vs base, consistent with sibling groups.
+  # Reversible: delete the rows to restore base_thresholds fallback.
+
+  # forex_other — no active pair today; safety net for future non-major/cross/exotic adds.
+  - style: intraday
+    group: forex_other
+    min_rr: 1.3
+  - style: swing
+    group: forex_other
+    min_rr: 1.8
+
+  # EU / Asian indices (DAX 40, UK100, ASX 200, Nikkei 225, Hang Seng) — mirror us_indices_trackers.
+  - style: intraday
+    group: eu_indices
+    min_rr: 1.3
+  - style: swing
+    group: eu_indices
+    min_rr: 1.8
+  - style: intraday
+    group: asian_indices
+    min_rr: 1.3
+  - style: swing
+    group: asian_indices
+    min_rr: 1.8
+
+  # Commodity sub-groups. copper/base_metals/commodity_other mirror energy_oil (1.3/1.8).
+  # softs/pgm_metals tightened (1.4/1.9) for thinner liquidity per audit note.
+  # scalp rows add min_room_atr + space_rr_substitute (mirrors forex_exotics scalp) so
+  # illiquid commodity scalps — if ever routed — get room/space protection instead of
+  # the unguarded base scalp profile. Inert if scalp is not executed for these groups.
+  - style: scalp
+    group: copper
+    min_room_atr: 0.5
+    space_rr_substitute: true
+  - style: intraday
+    group: copper
+    min_rr: 1.3
+  - style: swing
+    group: copper
+    min_rr: 1.8
+  - style: scalp
+    group: base_metals
+    min_room_atr: 0.5
+    space_rr_substitute: true
+  - style: intraday
+    group: base_metals
+    min_rr: 1.3
+  - style: swing
+    group: base_metals
+    min_rr: 1.8
+  - style: scalp
+    group: commodity_other
+    min_room_atr: 0.5
+    space_rr_substitute: true
+  - style: intraday
+    group: commodity_other
+    min_rr: 1.3
+  - style: swing
+    group: commodity_other
+    min_rr: 1.8
+  - style: scalp
+    group: softs
+    min_room_atr: 0.5
+    space_rr_substitute: true
+  - style: intraday
+    group: softs
+    min_rr: 1.4
+  - style: swing
+    group: softs
+    min_rr: 1.9
+  - style: scalp
+    group: pgm_metals
+    min_room_atr: 0.5
+    space_rr_substitute: true
+  - style: intraday
+    group: pgm_metals
+    min_rr: 1.4
+  - style: swing
+    group: pgm_metals
+    min_rr: 1.9
