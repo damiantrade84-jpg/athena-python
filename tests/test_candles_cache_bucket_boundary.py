@@ -2,7 +2,8 @@
 
 from datetime import datetime, timezone
 
-from candles_cache import _CANDLE_CACHE_TTL, _cache_key, _ttl_cache_last_bar_stale
+import candles_cache
+from candles_cache import _CANDLE_CACHE_TTL, _cache_key, _ttl_cache_last_bar_stale, fetch_candles
 
 
 def _epoch(iso: str) -> float:
@@ -49,3 +50,47 @@ def test_cache_key_includes_limit_not_provider():
 
 def test_h1_ttl_is_55_minutes():
     assert _CANDLE_CACHE_TTL["H1"] == 55 * 60
+
+
+def test_fetch_candles_refetches_forming_bar_after_bucket_rollover(monkeypatch):
+    """A bar cached while forming must not become a stale confirmed bar after rollover."""
+    pair = {"symbol": "TEST.US", "display": "TEST", "source": "eodhd", "type": "stock"}
+    first = [{"time": "2026-05-20T10:00:00Z", "open": 1.0, "high": 1.2, "low": 0.9, "close": 1.1}]
+    finalized = [{"time": "2026-05-20T10:00:00Z", "open": 1.0, "high": 1.5, "low": 0.8, "close": 1.4}]
+    responses = [list(first), list(finalized)]
+
+    def fake_fetch_eodhd(_pair, _tf, _limit):
+        return responses.pop(0)
+
+    monkeypatch.setattr(candles_cache.time, "time", lambda: _epoch("2026-05-20T10:30:00Z"))
+    got_first = fetch_candles(
+        pair,
+        "H1",
+        10,
+        fetch_candles_live=lambda *_args, **_kwargs: None,
+        fetch_binance=lambda *_args, **_kwargs: None,
+        fetch_binance_paginated=None,
+        fetch_eodhd=fake_fetch_eodhd,
+        fetch_polygon=lambda *_args, **_kwargs: None,
+        fetch_yfinance=lambda *_args, **_kwargs: None,
+        yfinance_symbol_for_pair=lambda _pair: None,
+        tf_b={"H1": "1h"},
+    )
+
+    monkeypatch.setattr(candles_cache.time, "time", lambda: _epoch("2026-05-20T11:05:00Z"))
+    got_after_rollover = fetch_candles(
+        pair,
+        "H1",
+        10,
+        fetch_candles_live=lambda *_args, **_kwargs: None,
+        fetch_binance=lambda *_args, **_kwargs: None,
+        fetch_binance_paginated=None,
+        fetch_eodhd=fake_fetch_eodhd,
+        fetch_polygon=lambda *_args, **_kwargs: None,
+        fetch_yfinance=lambda *_args, **_kwargs: None,
+        yfinance_symbol_for_pair=lambda _pair: None,
+        tf_b={"H1": "1h"},
+    )
+
+    assert got_first == first
+    assert got_after_rollover == finalized

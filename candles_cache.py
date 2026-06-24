@@ -411,6 +411,32 @@ def _ttl_cache_last_bar_stale(
     return (now_s - float(last_ts)) > (2.0 * float(tf_sec))
 
 
+def _cached_forming_bar_rolled(
+    fetch_meta: dict | None,
+    tf: str,
+    now_s: float,
+    pair: dict | None = None,
+) -> bool:
+    """True when a cached current-bucket bar must be refetched after rollover."""
+    if not isinstance(fetch_meta, dict):
+        return False
+    if fetch_meta.get("hasCurrentBucket") is not True:
+        return False
+    tf_u = (tf or "").upper()
+    if tf_u not in _TF_SECONDS:
+        return False
+    stored_bucket = fetch_meta.get("expectedCurrentBucketEpoch")
+    if stored_bucket is None:
+        return False
+    try:
+        stored_bucket_i = int(float(stored_bucket))
+    except (TypeError, ValueError):
+        return False
+    offset_hours = float(market_state_offset_hours(pair, tf_u)) if pair else 0.0
+    current_bucket = get_bucket_start_epoch(tf_u, now_s, offset_hours=offset_hours)
+    return int(current_bucket) > stored_bucket_i
+
+
 def _has_current_bar(candles: list[dict] | None, tf: str, now_s: float | None = None) -> bool:
     """True when the last candle is the currently forming timeframe bucket."""
     if not candles:
@@ -692,11 +718,14 @@ def fetch_candles(
                 cached_candles, expiry = entry
 
                 if now < expiry:
-                    if _ttl_cache_last_bar_stale(cached_candles, tf, now, pair=pair):
+                    cached_meta = dict(_candle_fetch_meta.get(key, {}))
+                    if (
+                        _ttl_cache_last_bar_stale(cached_candles, tf, now, pair=pair)
+                        or _cached_forming_bar_rolled(cached_meta, tf, now, pair=pair)
+                    ):
                         _candle_cache.pop(key, None)
                         _candle_fetch_meta.pop(key, None)
                     else:
-                        cached_meta = dict(_candle_fetch_meta.get(key, {}))
                         cache_age = max(0.0, now - (expiry - _CANDLE_CACHE_TTL.get(tf, 55 * 60)))
                         cached_meta.update(
                             {
@@ -725,11 +754,14 @@ def fetch_candles(
                         cached_candles, expiry = entry
                         _now2 = time.time()
                         if _now2 < expiry:
-                            if _ttl_cache_last_bar_stale(cached_candles, tf, _now2, pair=pair):
+                            cached_meta = dict(_candle_fetch_meta.get(key, {}))
+                            if (
+                                _ttl_cache_last_bar_stale(cached_candles, tf, _now2, pair=pair)
+                                or _cached_forming_bar_rolled(cached_meta, tf, _now2, pair=pair)
+                            ):
                                 _candle_cache.pop(key, None)
                                 _candle_fetch_meta.pop(key, None)
                             else:
-                                cached_meta = dict(_candle_fetch_meta.get(key, {}))
                                 cache_age = max(
                                     0.0,
                                     _now2 - (expiry - _CANDLE_CACHE_TTL.get(tf, 55 * 60)),
