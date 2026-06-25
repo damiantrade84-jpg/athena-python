@@ -28,6 +28,17 @@ from macro.macro_guard import (
 log = logging.getLogger("macro.scan")
 
 
+def _latest_tone() -> dict[str, Any] | None:
+    """Most recent stored FOMC tone (CONTEXT only). Fail-safe → None."""
+    try:
+        from macro.tone_store import default_tone_store
+
+        return default_tone_store().latest()
+    except Exception as exc:
+        log.debug("[MACRO] tone lookup skipped: %s", exc)
+        return None
+
+
 def _signal_symbol(signal: dict[str, Any]) -> str:
     return str(
         signal.get("display")
@@ -61,11 +72,45 @@ def _escalate_major_event_risk(signal: dict[str, Any], state_payload: dict[str, 
     signal["majorEventRisk"] = mer
 
 
+def _attach_tone(signal: dict[str, Any], tone: dict[str, Any] | None) -> None:
+    """Additive macro CONTEXT only. Never touches confluenceScore or any engine score."""
+    if not tone:
+        signal["fomcToneLabel"] = None
+        signal["fomcToneScore"] = None
+        signal["fomcToneConfidence"] = None
+        signal["fomcToneDirection"] = None
+        signal["fomcToneWarnings"] = []
+        signal["fomcExecutionUse"] = "CONTEXT_ONLY"
+        return
+    import json
+
+    score = tone.get("tone_score")
+    direction = (
+        "hawkish" if isinstance(score, (int, float)) and score > 10
+        else "dovish" if isinstance(score, (int, float)) and score < -10
+        else "neutral"
+    )
+    warnings = tone.get("warnings_json")
+    if isinstance(warnings, str):
+        try:
+            warnings = json.loads(warnings)
+        except (ValueError, TypeError):
+            warnings = []
+    signal["fomcToneLabel"] = tone.get("tone_label")
+    signal["fomcToneScore"] = score
+    signal["fomcToneConfidence"] = tone.get("confidence")
+    signal["fomcToneDirection"] = direction
+    signal["fomcToneWarnings"] = warnings or []
+    signal["fomcExecutionUse"] = "CONTEXT_ONLY"
+
+
 def annotate_signal(
-    signal: dict[str, Any], state_payload: dict[str, Any], *, block_auto_exec: bool
+    signal: dict[str, Any], state_payload: dict[str, Any], *, block_auto_exec: bool,
+    tone: dict[str, Any] | None = None,
 ) -> None:
     if not isinstance(signal, dict):
         return
+    _attach_tone(signal, tone)
     global_state = str(state_payload.get("macroRisk") or "NONE")
     if global_state in ("NONE", "COMPLETED"):
         _set_inactive(signal)
@@ -121,6 +166,7 @@ def annotate_signals(
             for s in signals:
                 if isinstance(s, dict):
                     _set_inactive(s)
+                    _attach_tone(s, None)
             return 0
         payload = state_payload if state_payload is not None else get_active_macro_state(now=now)
         block_auto_exec = config.block_auto_execution()
@@ -128,10 +174,12 @@ def annotate_signals(
         log.debug("[MACRO] guard unavailable; scan annotation skipped: %s", exc)
         return 0
 
+    tone = _latest_tone()
+
     count = 0
     for s in signals:
         try:
-            annotate_signal(s, payload, block_auto_exec=block_auto_exec)
+            annotate_signal(s, payload, block_auto_exec=block_auto_exec, tone=tone)
             count += 1
         except Exception as exc:
             log.debug("[MACRO] annotate failed for one candidate: %s", exc)

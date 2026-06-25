@@ -80,9 +80,69 @@ def api_macro_events():
         return jsonify({"success": False, "error": str(exc), "events": []}), 200
 
 
+def _tone_response(rec: dict[str, Any]) -> dict[str, Any]:
+    import json
+
+    def _parse(value):
+        if isinstance(value, str):
+            try:
+                return json.loads(value)
+            except (ValueError, TypeError):
+                return []
+        return value or []
+
+    return {
+        "eventId": rec.get("macro_event_id"),
+        "toneLabel": rec.get("tone_label"),
+        "toneScore": rec.get("tone_score"),
+        "confidence": rec.get("confidence"),
+        "currency": rec.get("currency"),
+        "source": rec.get("source"),
+        "title": rec.get("title"),
+        "statementUrl": rec.get("statement_url"),
+        "statementPublishedUtc": rec.get("statement_published_utc"),
+        "previousStatementEventId": rec.get("previous_statement_event_id"),
+        "targetRangeChangeBps": rec.get("target_range_change_bps"),
+        "marketExpectationSurpriseBps": rec.get("market_expectation_surprise_bps"),
+        "componentScores": {
+            "statementLanguage": rec.get("statement_language_score"),
+            "inflationLanguage": rec.get("inflation_language_score"),
+            "laborMarket": rec.get("labor_market_score"),
+            "growth": rec.get("growth_score"),
+            "balanceSheet": rec.get("balance_sheet_score"),
+            "forwardGuidance": rec.get("forward_guidance_score"),
+            "rateDecision": rec.get("rate_decision_score"),
+            "dotPlot": rec.get("dot_plot_score"),
+            "pressConference": rec.get("press_conference_score"),
+        },
+        "evidence": _parse(rec.get("evidence_json")),
+        "warnings": _parse(rec.get("warnings_json")),
+        "executionUse": "CONTEXT_ONLY",
+    }
+
+
+def api_macro_fomc_tone():
+    event_id = (request.args.get("event_id") or "").strip()
+    try:
+        from macro.tone_store import default_tone_store
+
+        store = default_tone_store()
+        rec = store.get_by_event(event_id) if event_id else store.latest()
+        if not rec:
+            return jsonify({"success": True, "tone": None})
+        return jsonify({"success": True, "tone": _json_safe(_tone_response(rec))})
+    except Exception as exc:
+        log.debug("[MACRO] fomc-tone route failed: %s", exc)
+        return jsonify({"success": False, "error": str(exc), "tone": None}), 200
+
+
 def register_macro_routes(app) -> None:
     rules = {rule.rule for rule in app.url_map.iter_rules()}
     if "/api/macro/state" not in rules:
         app.add_url_rule("/api/macro/state", "api_macro_state", api_macro_state, methods=["GET"])
     if "/api/macro/events" not in rules:
         app.add_url_rule("/api/macro/events", "api_macro_events", api_macro_events, methods=["GET"])
+    if "/api/macro/fomc-tone" not in rules:
+        app.add_url_rule(
+            "/api/macro/fomc-tone", "api_macro_fomc_tone", api_macro_fomc_tone, methods=["GET"]
+        )

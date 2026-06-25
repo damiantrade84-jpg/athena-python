@@ -67,6 +67,8 @@ def parse_rss(xml_text: str | bytes) -> list[dict[str, str]]:
         return []
     try:
         data = xml_text.encode("utf-8") if isinstance(xml_text, str) else xml_text
+        if data[:3] == b"\xef\xbb\xbf":  # strip UTF-8 BOM (Fed feed ships one)
+            data = data[3:]
         root = ET.fromstring(data)
     except Exception as exc:
         log.warning("[FOMC-RSS] xml parse failed (degraded mode): %s", exc)
@@ -139,14 +141,17 @@ def build_event_from_item(item: dict[str, str], now: datetime | None = None) -> 
     }
 
 
-def fetch_rss(url: str | None = None) -> str | None:
+def fetch_rss(url: str | None = None) -> bytes | None:
     target = url or config.rss_url()
     try:
         from feed_http import feed_get
 
         resp = feed_get(target)
         resp.raise_for_status()
-        return resp.text
+        # Return raw bytes: the Fed feed declares encoding="utf-8" with a BOM but sends
+        # no charset header, so requests mis-guesses ISO-8859-1 for .text. Bytes let the
+        # XML parser honor the declared encoding.
+        return resp.content
     except Exception as exc:
         log.warning("[FOMC-RSS] rss fetch failed (degraded mode): %s", exc)
         return None
@@ -155,7 +160,7 @@ def fetch_rss(url: str | None = None) -> str | None:
 def ingest_rss(
     store: MacroEventStore | None = None,
     *,
-    xml: str | None = None,
+    xml: str | bytes | None = None,
     url: str | None = None,
     now: datetime | None = None,
     confirm_fred: bool = True,
@@ -168,12 +173,14 @@ def ingest_rss(
     items = parse_rss(xml)
     events: list[dict[str, Any]] = []
     released_days: list[str] = []
+    statement_ids: list[str] = []
     for raw in items:
         ev = build_event_from_item(raw, now=now)
         if ev is None:
             continue
         if ev.pop("_event_type", "") == "FOMC_STATEMENT":
             released_days.append(str(ev.pop("_published_day", "")))
+            statement_ids.append(str(ev.get("id")))
         else:
             ev.pop("_published_day", None)
         events.append(ev)
@@ -193,6 +200,14 @@ def ingest_rss(
             confirm_recent_events(store, now=now)
         except Exception as exc:
             log.debug("[FOMC-RSS] FRED confirmation skipped: %s", exc)
+    # Best-effort V2 tone scoring (CONTEXT only; never blocks ingest).
+    for sid in statement_ids:
+        try:
+            from macro.fomc_tone import process_event
+
+            process_event(sid, store=store, now=now, fetch_text=True)
+        except Exception as exc:
+            log.debug("[FOMC-RSS] tone scoring skipped for %s: %s", sid, exc)
     log.info(
         "[FOMC-RSS] poll ok: %d FOMC items (%s inserted, %s updated)",
         len(events), counts.get("inserted"), counts.get("updated"),
