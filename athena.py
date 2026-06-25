@@ -52,6 +52,9 @@ from athena_app.services.scan_backtest_service import (
     handle_scan_request,
     handle_backtest_request,
 )
+from athena_app.services.scan_completion_hooks import (
+    publish_scan_result_and_schedule_conductor,
+)
 from athena_app.services.candle_service import recompute_levels_for_style
 from athena_app.repositories.audit_repo import insert_manual_error
 from stability_monitor import (
@@ -143,12 +146,28 @@ from athena_app.services.crypto_signal_feed import (  # noqa: E402
 
 
 _last_scan_results: dict = {"signals": []}  # latest run_full_scan output for chart-analysis context
+_last_scan_results_lock = threading.Lock()
 _last_engine_b_scan_results: dict = {"signals": []}  # latest /api/scan-naked output for chart-review B context
 _engine_b_cache: dict = {}  # sid/symbol -> naked analysis result dict
 _ENGINE_B_CACHE_TTL = 300.0
 _eodhd_volume_cache: dict = {}
 _eodhd_volume_cache_lock = threading.Lock()
 _EODHD_VOLUME_TTL = {"H1": 55 * 60, "H4": 235 * 60, "D1": 23 * 3600}
+
+
+def _publish_last_scan_results(result: dict) -> None:
+    global _last_scan_results
+    with _last_scan_results_lock:
+        _last_scan_results = result
+
+
+def _publish_enriched_last_scan_results(enriched: dict, base_result: dict) -> None:
+    global _last_scan_results
+    with _last_scan_results_lock:
+        if _last_scan_results is base_result:
+            _last_scan_results = enriched
+        else:
+            log.info("[CONDUCTOR] skipped stale scan enrichment publish")
 
 
 def _engine_b_cache_put(key: str, value: dict) -> None:
@@ -2887,6 +2906,7 @@ def fetch_mt5(pair: dict, tf: str, limit: int):
     # is severely stale (illiquid exotics), legacy tick TZ fallback hallucinated ±60h
     # shifts — see infer_mt5_rates_time_shift_seconds + MT5_FETCH_STALE_UNSHIFTED_AGE_SEC.
     offset_seconds = 0
+
     if tf != "D1" and bars is not None and len(bars) > 0:
         _utc_now = time.time()
         _newest_ts = float(bars[-1]["time"])
@@ -5688,37 +5708,13 @@ def api_scan():
         ),
     )
 
-    # Run Conductor on all signals so widget can show routing for any selected pair
-    _signals = result.get("signals", [])
-    _conductor_plan = None
-    if _signals:
-        try:
-            from conductor import (
-                conductor_orchestrate,
-                extract_conductor_microstructure,
-                reset_scan_results,
-            )
-            reset_scan_results("engine_a")
-            for _sig in _signals[:30]:  # cap at 30 to bound DB query cost
-                _vd, _sr = extract_conductor_microstructure(_sig)
-                _plan = conductor_orchestrate(
-                    _sig,
-                    _sig.get("regime", "UNKNOWN"),
-                    _AUDIT_DB,
-                    volume_divergence=_vd,
-                    stop_run=_sr,
-                )
-                if _sig is _signals[0]:
-                    _conductor_plan = _plan
-            # Attach top-signal routing to scan result so /api/last-scan serves it
-            if _conductor_plan:
-                result["conductor"] = _conductor_plan.get("routing", {})
-                result["conductor_context"] = _conductor_plan.get("context", {})
-        except Exception as _cerr:
-            log.warning(f"[CONDUCTOR] scan-side orchestration failed: {_cerr}")
-
-    global _last_scan_results
-    _last_scan_results = result
+    publish_scan_result_and_schedule_conductor(
+        result,
+        publish_initial=_publish_last_scan_results,
+        publish_enriched=_publish_enriched_last_scan_results,
+        audit_db=_AUDIT_DB,
+        logger=log,
+    )
     return jsonify(_json_safe(result))
 
 

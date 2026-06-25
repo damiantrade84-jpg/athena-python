@@ -13,6 +13,7 @@ from athena_app.diagnostics.engine_b_gate_funnel_persist import (
     maybe_persist_engine_b_scan_gate_funnel,
     regenerate_funnel_artifacts_from_scan_file,
     save_engine_b_scan_gate_funnel,
+    scheduled_engine_b_scan_gate_funnel_meta,
     summarize_funnel_rows,
 )
 
@@ -174,6 +175,20 @@ def test_maybe_persist_when_funnel_disabled(monkeypatch):
     assert out.get("engine_b_scan_gate_funnel_persist_skipped") == "ENGINE_B_SCAN_GATE_FUNNEL_DISABLED"
 
 
+def test_scheduled_meta_exposes_summary_path_without_claiming_saved(monkeypatch):
+    with tempfile.TemporaryDirectory() as td:
+        monkeypatch.setitem(CONFIG, "ENGINE_B_SCAN_GATE_FUNNEL_ENABLED", True)
+        monkeypatch.setitem(CONFIG, "ENGINE_B_SCAN_GATE_FUNNEL_PERSIST_ENABLED", True)
+        monkeypatch.setitem(CONFIG, "ENGINE_B_SCAN_GATE_FUNNEL_OUTPUT_DIR", str(Path(td)))
+
+        out = scheduled_engine_b_scan_gate_funnel_meta()
+
+        assert out["engine_b_scan_gate_funnel_saved"] is False
+        assert out["engine_b_scan_gate_funnel_persist_status"] == "scheduled"
+        assert out["engine_b_scan_gate_funnel_summary_path"]
+        assert out["engine_b_scan_gate_funnel_output_dir"] == str(Path(td)).replace("\\", "/")
+
+
 def test_regenerate_from_file_roundtrip():
     with tempfile.TemporaryDirectory() as td:
         tmp_path = Path(td)
@@ -237,4 +252,3 @@ def test_handle_scan_request_merges_persist_keys(monkeypatch):
 @pytest.fixture(autouse=True)
 def cleanup_env(monkeypatch):
     monkeypatch.delenv("ENGINE_B_SCAN_GATE_FUNNEL_PERSIST", raising=False)
-
