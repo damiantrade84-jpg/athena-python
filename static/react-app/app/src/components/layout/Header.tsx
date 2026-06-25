@@ -3,6 +3,7 @@ import { Badge } from '@/components/ui/badge';
 import { useEffect, useState } from 'react';
 import { Activity, Wifi } from 'lucide-react';
 import { currentSegment, nextSegment, QUALITY_META, fmtCountdown } from '@/lib/primeWindows';
+import MacroBadge from '@/components/shared/MacroBadge';
 
 export default function Header() {
   const { guardian } = useStore();
@@ -71,6 +72,9 @@ export default function Header() {
 
       {/* Right — Status chips */}
       <div className="flex items-center gap-4">
+        {/* FOMC / macro-risk chip (advisory; only shows when active/upcoming) */}
+        <MacroBadge />
+
         {/* Prime execution-window pill (advisory) */}
         {(() => {
           const seg = currentSegment(time);

@@ -2871,6 +2871,17 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict[s
 
         watchlist = apply_correlation_cap(watchlist)
 
+        # Macro (FOMC) risk overlay — additive metadata only; never alters score/SL/TP/RR.
+        # During an FOMC lockout it sets macro* fields and escalates the existing
+        # majorEventRisk.blocksAutoExecution contract for affected candidates.
+        try:
+            from macro.scan_integration import annotate_signals
+
+            annotate_signals(results)
+            annotate_signals(watchlist)
+        except Exception as _macro_err:
+            log.debug("[MACRO] scan annotation skipped: %s", _macro_err)
+
         _scan_out: dict[str, Any] = {
             "success": True,
             "signals": results,

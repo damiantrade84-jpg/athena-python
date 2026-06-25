@@ -4424,3 +4424,29 @@ LIVE_DASHBOARD:
   ENGINE_AB_UPDATE_ON_CONFIRMED_CANDLE: true
   DEFAULT_TIMEFRAME: H4
   PAPER_MONITOR_ONLY: true       # Safety flag - dashboard never creates execution permission
+
+# ── Macro FOMC feed + lockout (V1) ────────────────────────────────────────────
+# Official Fed FOMC calendar + monetary-policy RSS ingestion → local macro store →
+# macro-risk lockout/downgrade for NEW trade candidates. Advisory/risk-only: does NOT
+# change Engine A/B/D score math, SL/TP, sizing, or execution rules. Auto-execution
+# blocking during a lockout reuses the existing majorEventRisk.blocksAutoExecution gate.
+# Every ATHENA_FOMC_* key is overridable by an env var of the same name.
+ATHENA_FOMC_ENABLED: true                  # master switch for the macro FOMC layer
+ATHENA_FOMC_SCHEDULER_ENABLED: true        # run the background calendar/RSS scheduler
+ATHENA_FOMC_DEFAULT_RELEASE_TIME_ET: "14:00"   # assumed rate-decision/statement release (ET)
+ATHENA_FOMC_DEFAULT_PRESSER_TIME_ET: "14:30"   # assumed press-conference start (ET)
+ATHENA_FOMC_CALENDAR_REFRESH_HOURS: 24     # how often to re-pull the Fed calendar page
+ATHENA_FOMC_PRE_LOCKOUT_MIN: 30            # block window before scheduled release
+ATHENA_FOMC_POST_LOCKOUT_MIN: 60           # block window after release
+ATHENA_FOMC_EXTENDED_CAUTION_MIN: 120      # downgrade (caution) window after release
+ATHENA_FOMC_PRESSER_PRE_LOCKOUT_MIN: 15    # block window before press conference
+ATHENA_FOMC_PRESSER_POST_LOCKOUT_MIN: 45   # block window after press conference
+ATHENA_FOMC_UPCOMING_HORIZON_MIN: 1440     # how far ahead an event is flagged UPCOMING (informational)
+ATHENA_FOMC_RSS_POLL_NORMAL_SEC: 1800      # RSS poll cadence on normal days
+ATHENA_FOMC_RSS_POLL_FOMC_SEC: 60          # RSS poll cadence inside/near an FOMC window
+ATHENA_FOMC_BLOCK_AUTO_EXECUTION: true     # set majorEventRisk.blocksAutoExecution on affected lockout candidates
+ATHENA_FOMC_AFFECTED_CRYPTO: true          # treat USD/USDT crypto majors as macro-affected
+# Official Fed sources (overridable; never required to be reachable — feed fails safe):
+ATHENA_FOMC_CALENDAR_URL: "https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm"
+ATHENA_FOMC_RSS_URL: "https://www.federalreserve.gov/feeds/press_monetary.xml"
+ATHENA_FOMC_PRATES_RSS_URL: "https://www.federalreserve.gov/feeds/prates.xml"

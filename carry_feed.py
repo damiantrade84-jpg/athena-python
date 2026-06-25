@@ -765,6 +765,27 @@ def get_carry_differential(display: str) -> Optional[float]:
     return round(carry, 3)
 
 
+def get_fred_latest_rate(
+    series_id: str, as_of_date: str = None, *, blocking: bool = False
+) -> Optional[float]:
+    """Latest observation for an arbitrary FRED series via the shared carry_cache.db client.
+
+    Reuses the single FRED ingestion path (``_ensure_series`` / ``_get_latest_rate``) so the
+    macro FOMC layer can confirm historical policy rates (DFEDTARU/DFEDTARL/FEDFUNDS) without
+    introducing a second FRED client or data path. ``blocking`` forces a synchronous fetch when
+    the series is not yet cached (used by the macro confirmation CLI/job).
+    """
+    sid = str(series_id or "").strip()
+    if not sid:
+        return None
+    if blocking:
+        try:
+            _ensure_series(sid, blocking=True)
+        except Exception as exc:  # confirmation is best-effort
+            log.debug(f"[CARRY] blocking fetch for {sid} failed: {exc}")
+    return _get_latest_rate(sid, as_of_date)
+
+
 def seed_carry_background():
     """Trigger background fetch of all FRED rate series on startup."""
 
