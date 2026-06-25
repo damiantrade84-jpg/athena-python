@@ -2902,7 +2902,10 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict[s
         }
         try:
             from athena_app.diagnostics.engine_b_gate_funnel_persist import (
-                maybe_persist_engine_b_scan_gate_funnel,
+                scheduled_engine_b_scan_gate_funnel_meta,
+            )
+            from athena_app.services.scan_completion_hooks import (
+                schedule_engine_b_funnel_persist_hook,
             )
 
             _pair_type_lookup: dict[str, str] = {}
@@ -2911,15 +2914,17 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict[s
                 if not _disp:
                     continue
                 _pair_type_lookup[_disp] = str(_p.get("type") or "").strip().lower()
-            _scan_out.update(
-                maybe_persist_engine_b_scan_gate_funnel(
+            _persist_meta = scheduled_engine_b_scan_gate_funnel_meta()
+            _scan_out.update(_persist_meta)
+            if not _persist_meta.get("engine_b_scan_gate_funnel_persist_skipped"):
+                schedule_engine_b_funnel_persist_hook(
                     _scan_out,
                     pair_types_by_display=_pair_type_lookup,
+                    logger=log,
                 )
-            )
         except Exception as _persist_merge_err:
             log.warning(
-                "[ENGINE_B_FUNNEL_PERSIST] merge failed (non-fatal): %s",
+                "[ENGINE_B_FUNNEL_PERSIST] scheduling failed (non-fatal): %s",
                 _persist_merge_err,
             )
         try:
@@ -2933,12 +2938,13 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict[s
         except Exception as _touch_err:
             log.warning("[ENGINE_B_FUNNEL_TOUCH] %s", _touch_err)
         try:
-            from athena_ase.runtime.scan import run_ase_full_scan_and_execute
+            from athena_app.services.scan_completion_hooks import (
+                schedule_ase_post_scan_hook,
+            )
 
-            _ase_payload = run_ase_full_scan_and_execute()
-            _scan_out["ase"] = _ase_payload
+            _scan_out["ase"] = schedule_ase_post_scan_hook(logger=log)
         except Exception as _ase_err:
-            log.warning("[ASE] post-scan hook failed (non-fatal): %s", _ase_err)
+            log.warning("[ASE] post-scan scheduling failed (non-fatal): %s", _ase_err)
             _scan_out["ase"] = {"success": False, "error": str(_ase_err)}
         return _scan_out
 

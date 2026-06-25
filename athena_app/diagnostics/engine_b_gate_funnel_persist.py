@@ -567,6 +567,33 @@ def maybe_persist_engine_b_scan_gate_funnel(
     )
 
 
+def scheduled_engine_b_scan_gate_funnel_meta() -> dict[str, Any]:
+    """Metadata for scan responses when full funnel artifact writes run later."""
+    if not bool(CONFIG.get("ENGINE_B_SCAN_GATE_FUNNEL_ENABLED", True)):
+        return {
+            "engine_b_scan_gate_funnel_saved": False,
+            "engine_b_scan_gate_funnel_summary_path": None,
+            "engine_b_scan_gate_funnel_persist_skipped": "ENGINE_B_SCAN_GATE_FUNNEL_DISABLED",
+        }
+    if not engine_b_gate_funnel_persist_enabled():
+        return {
+            "engine_b_scan_gate_funnel_saved": False,
+            "engine_b_scan_gate_funnel_summary_path": None,
+            "engine_b_scan_gate_funnel_persist_skipped": "ENGINE_B_SCAN_GATE_FUNNEL_PERSIST_DISABLED",
+        }
+
+    od = funnel_persist_output_dir()
+    return {
+        "engine_b_scan_gate_funnel_saved": False,
+        "engine_b_scan_gate_funnel_summary_path": str(
+            _PosixRel.repo_relative(od / "latest_funnel_summary.json")
+        ).replace("\\", "/"),
+        "engine_b_scan_gate_funnel_output_dir": str(od).replace("\\", "/"),
+        "engine_b_scan_gate_funnel_saved_error": None,
+        "engine_b_scan_gate_funnel_persist_status": "scheduled",
+    }
+
+
 def regenerate_funnel_artifacts_from_scan_file(
     input_path: str | Path,
     *,
