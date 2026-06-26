@@ -228,6 +228,44 @@ def test_bond_tlt_rsi_period_override():
     assert _resolve_rsi_period("us_stock_single", "stock") == 14  # default tier control
 
 
+def test_atr_adx_periods_default_to_14_and_override_fires(monkeypatch):
+    """ATR/ADX periods default to the Wilder 14/14 standard and honor
+    ENGINE_A_ATR_ADX_PERIODS_BY_CLASS when adjustments are enabled.
+
+    Locks the single-source-of-truth contract shared with the chart API
+    (_resolve_chart_indicator_periods): with no config map every group resolves
+    to 14/14; with a map, score_group -> asset_type -> default fallback fires
+    exactly like the EMA/RSI/MACD resolvers. Mirrors the historical 'pinned to
+    14' behavior when the flag is off.
+    """
+    from factor_scoring import _resolve_atr_adx_periods
+
+    # Default contract: 14/14 for every group, flag on but no config map.
+    monkeypatch.setitem(CONFIG, "ENGINE_A_SCORE_GROUP_ADJUSTMENTS_ENABLED", True)
+    monkeypatch.setitem(CONFIG, "ENGINE_A_ATR_ADX_PERIODS_BY_CLASS", {})
+    for group in ENGINE_A_KNOWN_SCORE_GROUPS:
+        assert _resolve_atr_adx_periods(group, "crypto") == {"atr": 14, "adx": 14}
+
+    # Override fires with the same score_group -> asset_type -> default
+    # resolution pattern as the other period resolvers.
+    monkeypatch.setitem(
+        CONFIG,
+        "ENGINE_A_ATR_ADX_PERIODS_BY_CLASS",
+        {
+            "crypto_btc": {"atr": 21, "adx": 18},
+            "forex": {"adx": 20},
+            "default": {"atr": 14, "adx": 14},
+        },
+    )
+    assert _resolve_atr_adx_periods("crypto_btc", "crypto") == {"atr": 21, "adx": 18}
+    assert _resolve_atr_adx_periods("forex_majors", "forex") == {"atr": 14, "adx": 20}
+    assert _resolve_atr_adx_periods("nat_gas", "commodity") == {"atr": 14, "adx": 14}
+
+    # Flag off -> hard 14/14 regardless of config (historical behavior).
+    monkeypatch.setitem(CONFIG, "ENGINE_A_SCORE_GROUP_ADJUSTMENTS_ENABLED", False)
+    assert _resolve_atr_adx_periods("crypto_btc", "crypto") == {"atr": 14, "adx": 14}
+
+
 # ════════════════════════════════════════════════════════════════════════════
 # (2a) RSI BOUNDS DIFFERENTIATION — must resolve per group
 # ════════════════════════════════════════════════════════════════════════════

@@ -266,13 +266,30 @@ def _resolve_rsi_period(score_group: str | None, asset_type: str) -> int:
 
 
 def _resolve_atr_adx_periods(score_group: str | None = None, asset_type: str = "") -> dict:
-    """Return ATR/ADX periods Engine A scores with. Pinned to 14 for all groups.
+    """Return ATR/ADX periods Engine A scores with.
 
     Single source of truth shared with the chart API (_resolve_chart_indicator_periods)
-    so Engine A and the chart surface cannot drift independently if calibration
-    ever makes these per-group.
+    so Engine A and the chart surface cannot drift independently. Defaults to the
+    Wilder standard (14/14). Per-group overrides take effect only when
+    ENGINE_A_SCORE_GROUP_ADJUSTMENTS_ENABLED is true and a
+    ENGINE_A_ATR_ADX_PERIODS_BY_CLASS entry resolves for the class — mirroring
+    _resolve_ema_periods / _resolve_macd_params. With the flag off or no
+    override, behavior is identical to the historical hard-coded 14/14.
     """
-    return {"atr": 14, "adx": 14}
+    defaults = {"atr": 14, "adx": 14}
+    if not _engine_a_group_adjustments_enabled():
+        return defaults
+
+    keyed = CONFIG.get("ENGINE_A_ATR_ADX_PERIODS_BY_CLASS") or {}
+    overrides = _resolve_class_keyed(keyed, score_group, asset_type, {})
+    if isinstance(overrides, dict):
+        for k in ("atr", "adx"):
+            if k in overrides:
+                try:
+                    defaults[k] = int(overrides[k])
+                except (TypeError, ValueError):
+                    pass
+    return defaults
 
 
 def _resolve_macd_params(score_group: str | None, asset_type: str) -> dict:
