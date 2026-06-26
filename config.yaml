@@ -3115,6 +3115,14 @@ NAKED_ENGINE:
 
   # Zone proximity threshold as multiple of ATR (near_zone / location gate input).
   # Resolved per score_group, then asset_type, then default via scoring._resolve_class_keyed.
+  # near_zone is distance-based (direction-agnostic): widening helps LONG and SHORT
+  # symmetrically. Values widened 2026-06-26 from Engine B gate-funnel diagnostics
+  # (328 live scans, 2026-05-21→2026-06-26): LOCATION_OK was the binding gate for
+  # these groups (copper LONG 15%, base_metals LONG 33%, asian_indices 63%,
+  # us_indices_trackers 67%, etf_other 65%, pgm_metals 69% location pass). Widened
+  # toward the existing wide-end precedent (crypto_btc 0.65). PROVISIONAL pending
+  # vectorbt outcome validation (gate-funnel shows where signals are blocked, not
+  # whether releasing them is profitable). Reversible: delete the per-group rows.
   zone_proximity_atr_mult:
     default: 0.5
     forex: 0.40
@@ -3123,6 +3131,13 @@ NAKED_ENGINE:
     forex_majors: 0.38
     crypto_btc: 0.65
     precious_trackers: 0.50
+    # Location-starved groups (data-backed, see comment above):
+    copper: 0.70              # was commodity 0.55; location pass 15% (severe)
+    base_metals: 0.70         # was commodity 0.55; location pass 33% (severe)
+    asian_indices: 0.65       # was default 0.50; location pass 63%
+    us_indices_trackers: 0.65 # was default 0.50; location pass 67%
+    etf_other: 0.65           # was default 0.50; location pass 65%
+    pgm_metals: 0.65          # was commodity 0.55; location pass 69%
 
   # D1 PD-array conflict scan distance as a multiple of D1 ATR.
   # Reduced from 3.0 to 1.5 to prevent persistent score drag — 3.0 ATR window
@@ -3458,6 +3473,20 @@ ENGINE_B_FOLLOW_THROUGH:
   DIAGNOSTICS_ENABLED: true
   MAX_BONUS: 1.5
   MIN_PENALTY: -0.5
+
+# ── Lower-TF Shadow Diagnostics (Engine B + ASE) ────────────────────────────
+# DIAGNOSTIC ONLY. When enabled, Engine B and ASE report read-only M30/M15/M5
+# trend/alignment/freshness context on their signal payloads. These fields NEVER
+# affect signal direction, confidence, eligibility, ranking, SL/TP, sizing,
+# autotrade, or execution — the production scan engines still consume D1/H4/H1
+# only. A missing lower TF is reported (BLOCKED), never substituted with H1.
+# Forming candles are reported, never treated as closed. See lower_tf_shadow.py.
+# Default OFF: when disabled, scan output is byte-for-byte identical.
+LOWER_TF_SHADOW:
+  enabled: false
+  tfs: ["M30", "M15", "M5"]
+  apply_to: ["engine_b", "ase"]
+  diagnostic_only: true
 
 # ── Engine D Volume Divergence Detection ────────────────────────────────────
 # Detects hidden institutional positioning via tick volume divergence.
