@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import Any, Iterable
+from typing import Any, Callable, Iterable
 
 from athena_ase.contracts import ASESignal
 from athena_ase.data.ingest.runner import run_ingest
@@ -40,6 +40,56 @@ DEFAULT_SCAN_BYBIT_LOOKBACK_DAYS = 3
 # Hard wall-clock budget so a slow/hung feed can never stall a scan. On overrun
 # the scan proceeds with existing PTIS data (fail-open).
 DEFAULT_SCAN_INGEST_BUDGET_S = 45.0
+
+
+def _attach_lower_tf_shadow_ase(
+    signals: list[Any],
+    signal_dicts: list[dict[str, Any]],
+    lower_tf_fetch: Callable[..., Any] | None,
+) -> None:
+    """Attach DIAGNOSTIC-ONLY lower-TF (M30/M15/M5) shadow context per signal.
+
+    No-op (output unchanged) unless ``LOWER_TF_SHADOW`` is enabled for "ase".
+    The shadow NEVER affects ASE decisionStatus, direction, SL/TP, or any
+    pass/block gate — it is reported on the signal dict only. When no lower-TF
+    fetcher is supplied, the shadow is reported as BLOCKED (never falls back to
+    H1 or to ASE's own D1/H4/H1 candidates).
+    """
+    try:
+        from lower_tf_shadow import (
+            compute_lower_tf_shadow,
+            lower_tf_shadow_enabled,
+        )
+
+        if not lower_tf_shadow_enabled("ase"):
+            return
+    except Exception as exc:  # pragma: no cover - import guard
+        log.debug("ASE lower_tf_shadow unavailable: %s", exc)
+        return
+
+    cache: dict[str, dict[str, Any]] = {}
+    for sig, d in zip(signals, signal_dicts):
+        symbol = getattr(sig, "instrument", "") or d.get("instrument", "")
+        direction = getattr(sig, "direction", None) or d.get("direction")
+        cache_key = f"{symbol}|{direction}"
+        if cache_key not in cache:
+            pair = _pair_meta_for_symbol(symbol)
+            try:
+                cache[cache_key] = compute_lower_tf_shadow(
+                    pair=pair or {"symbol": symbol, "display": symbol},
+                    source=(pair or {}).get("source"),
+                    fetch_candles=lower_tf_fetch,
+                    direction=direction,
+                    component="ase",
+                )
+            except Exception as exc:  # pragma: no cover - belt
+                log.debug("ASE lower_tf_shadow failed for %s: %s", symbol, exc)
+                cache[cache_key] = {
+                    "lower_tf_status": "BLOCKED",
+                    "diagnostic_only": True,
+                    "lower_tf_notes": f"shadow error: {exc}",
+                }
+        d["lowerTfShadow"] = cache[cache_key]
 
 
 def _maybe_ingest(
@@ -191,6 +241,7 @@ def run_ase_scan(
     ptis_root: str | None = None,
     execution_deps: ASEExecutionDeps | None = None,
     ingest_sources: Iterable[str] | None = DEFAULT_SCAN_INGEST_SOURCES,
+    lower_tf_fetch: Callable[..., Any] | None = None,
 ) -> dict[str, Any]:
     store = PTISStore(ptis_root or default_ptis_root())
     ingest_result = _maybe_ingest(store, ingest_sources)
@@ -254,6 +305,10 @@ def run_ase_scan(
     for sig in signals:
         status_counts[sig.decisionStatus] = status_counts.get(sig.decisionStatus, 0) + 1
 
+    signal_dicts = [s.to_dict() for s in signals]
+    # Diagnostic-only lower-TF shadow context (default OFF; no-op when disabled).
+    _attach_lower_tf_shadow_ase(signals, signal_dicts, lower_tf_fetch)
+
     payload: dict[str, Any] = {
         "success": True,
         "horizon": horizon,
@@ -264,7 +319,7 @@ def run_ase_scan(
         "statusCounts": status_counts,
         "deployment": "OPERATIONAL",
         "diagnostics": scan_diagnostics(store, horizon=horizon),
-        "signals": [s.to_dict() for s in signals],
+        "signals": signal_dicts,
         "executions": executions,
         "journal": trade_journal_summary(),
     }

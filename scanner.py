@@ -2303,6 +2303,33 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict[s
                                 _eb_snap["conf"] = conf_b
                                 sig_a["engine_b_status"] = conf_b
                                 sig_a["engine_b"] = res_b
+
+                                # Lower-TF shadow diagnostics (M30/M15/M5).
+                                # DIAGNOSTIC ONLY — never affects Engine B
+                                # direction, confidence, eligibility, ranking,
+                                # SL/TP, sizing, or execution. Default OFF; adds
+                                # no key when disabled (output stays identical).
+                                try:
+                                    from lower_tf_shadow import (
+                                        compute_lower_tf_shadow,
+                                        lower_tf_shadow_enabled,
+                                    )
+
+                                    if lower_tf_shadow_enabled("engine_b"):
+                                        sig_a["lower_tf_shadow"] = compute_lower_tf_shadow(
+                                            pair=pair,
+                                            source=pair.get("source"),
+                                            fetch_candles=r.fetch_candles,
+                                            direction=direction,
+                                            atr=atr,
+                                            component="engine_b",
+                                        )
+                                except Exception as _ltf_err:
+                                    log.debug(
+                                        "[SCAN+B] %s lower_tf_shadow build failed: %s",
+                                        pair.get("display"),
+                                        _ltf_err,
+                                    )
                                 sig_a["engine_b_aggtrade_required"] = conf_b.get(
                                     "aggtrade_required", res_b.get("aggtrade_required")
                                 )
