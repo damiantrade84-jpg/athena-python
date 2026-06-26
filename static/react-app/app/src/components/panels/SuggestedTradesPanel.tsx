@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Activity,
   BarChart2,
@@ -114,6 +114,7 @@ export default function SuggestedTradesPanel() {
   const [evaluating, setEvaluating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [actionWatchId, setActionWatchId] = useState<string | null>(null);
+  const hasDataRef = useRef(false);
 
   const runner = payload?.runner;
   const watches = useMemo(
@@ -124,10 +125,11 @@ export default function SuggestedTradesPanel() {
   const needsFrontendEval = !runner?.active || runner?.mode === 'frontend_poll' || runner?.mode === 'manual_only';
 
   const refresh = useCallback(async () => {
-    setLoading(true);
+    if (!hasDataRef.current) setLoading(true);
     setError(null);
     try {
       const res = await apiClient.getJson('/api/suggested-trades') as SuggestedTradesListResponse;
+      hasDataRef.current = true;
       setPayload(res);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load suggested trades');

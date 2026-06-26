@@ -223,7 +223,6 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       const res = await apiClient.getJson('/api/last-scan') as { signals?: Signal[] };
       if (res && Array.isArray(res.signals)) {
         setSignals(res.signals);
-        showToast('Signals refreshed', 'success');
       }
     } catch {
       showToast('Failed to refresh signals', 'error');
@@ -239,7 +238,6 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
         arr = (res as { positions: Position[] }).positions;
       }
       setPositions(arr);
-      showToast('Positions refreshed', 'success');
     } catch {
       showToast('Failed to refresh positions', 'error');
     }
@@ -250,7 +248,6 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       const res = await apiClient.getJson('/api/guardian/status') as GuardianStatus | null;
       if (res && typeof res === 'object') {
         setGuardian(res);
-        showToast('Guardian refreshed', 'success');
       }
     } catch {
       showToast('Failed to refresh guardian', 'error');

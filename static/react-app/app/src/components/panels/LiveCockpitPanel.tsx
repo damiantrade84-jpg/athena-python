@@ -67,13 +67,18 @@ export default function LiveCockpitPanel() {
   const [pairsDropdownOpen, setPairsDropdownOpen] = useState(false);
   const pollRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const inFlightRef = useRef(false);
+  const hasSnapshotRef = useRef(false);
+  const selectedRef = useRef<string | null>(null);
   const { post: postPaperExec, loading: papering } = useApiPost<{ ok?: boolean; error?: string; ticket?: string }>();
   const { post: postScanB, loading: scanningB } = useApiPost<{ signals?: Array<Record<string, unknown>> }>();
+
+  // Keep ref in sync so fetchSnap can read current selection without being a dep
+  useEffect(() => { selectedRef.current = selected; }, [selected]);
 
   const fetchSnap = useCallback(async () => {
     if (inFlightRef.current) return;
     inFlightRef.current = true;
-    setLoading(true);
+    if (!hasSnapshotRef.current) setLoading(true);
     setError(null);
     try {
       const params = new URLSearchParams();
@@ -85,8 +90,9 @@ export default function LiveCockpitPanel() {
       if (!res.ok || data?.error) {
         setError(data?.error || `HTTP ${res.status}`);
       } else {
+        hasSnapshotRef.current = true;
         setSnapshot(data);
-        if (!selected && data.symbols && data.symbols.length > 0) {
+        if (!selectedRef.current && data.symbols && data.symbols.length > 0) {
           setSelected(data.symbols[0].symbol);
         }
       }
@@ -96,7 +102,7 @@ export default function LiveCockpitPanel() {
       inFlightRef.current = false;
       setLoading(false);
     }
-  }, [activeSymbols, tf, selected]);
+  }, [activeSymbols, tf]);
 
   useEffect(() => {
     fetchSnap();
