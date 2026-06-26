@@ -1933,6 +1933,10 @@ MAX_SL_PCT_SCORE_GROUP_OVERRIDES:
   base_metals: 0.055        # Zinc/Nickel/Lead/Aluminium slightly above 4%
   energy_oil: 0.08          # WTI/Brent style energy swings
   nat_gas: 0.10
+  softs: 0.12               # Cocoa/Coffee/Sugar/Cotton/Corn/Wheat/Soybeans/Cattle:
+                            # high-vol softs whose swing-horizon sigma stops run
+                            # well past the 4% default. risk_check still sizes
+                            # volume from SL distance, so dollar-risk stays capped.
 MAX_SL_PCT_SYMBOL_OVERRIDES:
   Gasoline: 0.08
 
