@@ -102,3 +102,51 @@ def test_ase_execute_reports_when_refreshed_signal_is_no_longer_trade(monkeypatc
             "direction": "LONG",
         },
     }
+
+
+def test_ase_execute_passes_ingest_sources(monkeypatch):
+    calls: list[dict] = []
+
+    def fake_run_ase_scan(**kwargs):
+        calls.append(kwargs)
+        return {
+            "success": True,
+            "signals": [
+                {
+                    "instrument": "EURUSD",
+                    "horizon": "intraday",
+                    "decisionStatus": "TRADE",
+                    "direction": "LONG",
+                }
+            ],
+            "executions": [{"executed": False, "reason": "demo"}],
+        }
+
+    monkeypatch.setattr(routes_ase, "run_ase_scan", fake_run_ase_scan)
+
+    app = Flask(__name__)
+    routes_ase.register_ase_routes(app)
+
+    response = app.test_client().post(
+        "/api/ase-execute",
+        json={
+            "instrument": "EURUSD",
+            "horizon": "intraday",
+            "skipIngest": True,
+        },
+    )
+    assert response.status_code == 200
+    assert calls[0]["ingest_sources"] == ()
+    assert calls[0]["execute_trades"] is True
+
+    calls.clear()
+    response = app.test_client().post(
+        "/api/ase-execute",
+        json={
+            "instrument": "EURUSD",
+            "horizon": "intraday",
+            "ingestSources": ["mt5_live"],
+        },
+    )
+    assert response.status_code == 200
+    assert calls[0]["ingest_sources"] == ("mt5_live",)

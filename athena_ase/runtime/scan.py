@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import Any
+from typing import Any, Iterable
 
 from athena_ase.contracts import ASESignal
+from athena_ase.data.ingest.runner import run_ingest
 from athena_ase.data.ptis import PTISStore, default_ptis_root
 from athena_ase.execution.bridge import (
     ASEExecutionDeps,
@@ -28,6 +29,26 @@ from athena_ase.signals.tsmom import compute_tsmom
 from athena_ase.signals.xsec import compute_xsec
 
 log = logging.getLogger("ase.runtime.scan")
+
+DEFAULT_SCAN_INGEST_SOURCES = ("mt5_live", "bybit")
+
+
+def _maybe_ingest(
+    store: PTISStore,
+    sources: Iterable[str] | None,
+) -> dict[str, Any] | None:
+    """Refresh PTIS before a scan. Fail-open: log and return error metadata on failure."""
+    if sources is None:
+        return None
+    selected = tuple(sources)
+    if not selected:
+        return None
+    try:
+        result = run_ingest(store=store, sources=selected, write_audit=False)
+        return {"result": result}
+    except Exception as exc:
+        log.warning("ASE ingest failed (scan continues): %s", exc)
+        return {"error": str(exc)}
 
 
 def _latest_candidate(
@@ -130,8 +151,11 @@ def run_ase_scan(
     execute_trades: bool = False,
     ptis_root: str | None = None,
     execution_deps: ASEExecutionDeps | None = None,
+    ingest_sources: Iterable[str] | None = DEFAULT_SCAN_INGEST_SOURCES,
 ) -> dict[str, Any]:
     store = PTISStore(ptis_root or default_ptis_root())
+    ingest_result = _maybe_ingest(store, ingest_sources)
+
     if symbols:
         instruments: tuple[Instrument, ...] = tuple(
             inst for sym in symbols if (inst := instrument_by_symbol(sym)) is not None
@@ -205,6 +229,8 @@ def run_ase_scan(
         "executions": executions,
         "journal": trade_journal_summary(),
     }
+    if ingest_result is not None:
+        payload["ingestResult"] = ingest_result
     if journal_error:
         payload["journalError"] = journal_error
     return payload
@@ -218,9 +244,13 @@ def run_ase_dual_horizon_scan(
     execute_trades: bool = False,
     ptis_root: str | None = None,
     execution_deps: ASEExecutionDeps | None = None,
+    ingest_sources: Iterable[str] | None = DEFAULT_SCAN_INGEST_SOURCES,
 ) -> dict[str, Any]:
     """Scan all instruments on intraday and swing horizons."""
     horizons: tuple[Horizon, ...] = ("intraday", "swing")
+    store = PTISStore(ptis_root or default_ptis_root())
+    ingest_result = _maybe_ingest(store, ingest_sources)
+
     by_horizon: dict[str, Any] = {}
     all_signals: list[dict[str, Any]] = []
     all_executions: list[dict[str, Any]] = []
@@ -233,6 +263,7 @@ def run_ase_dual_horizon_scan(
             execute_trades=execute_trades,
             ptis_root=ptis_root,
             execution_deps=execution_deps,
+            ingest_sources=None,
         )
         by_horizon[horizon] = result
         all_signals.extend(result.get("signals") or [])
@@ -243,7 +274,7 @@ def run_ase_dual_horizon_scan(
         status = str(row.get("decisionStatus") or "FLAT")
         status_counts[status] = status_counts.get(status, 0) + 1
 
-    return {
+    payload: dict[str, Any] = {
         "success": True,
         "family": family or "all",
         "horizons": list(horizons),
@@ -255,12 +286,16 @@ def run_ase_dual_horizon_scan(
         "executions": all_executions,
         "journal": trade_journal_summary(),
     }
+    if ingest_result is not None:
+        payload["ingestResult"] = ingest_result
+    return payload
 
 
 def run_ase_full_scan_and_execute(
     *,
     ptis_root: str | None = None,
     execution_deps: ASEExecutionDeps | None = None,
+    ingest_sources: Iterable[str] | None = DEFAULT_SCAN_INGEST_SOURCES,
 ) -> dict[str, Any]:
     """Full-universe dual-horizon scan with TRADE execution and time-stop refresh."""
     deps = execution_deps or default_execution_deps()
@@ -269,6 +304,7 @@ def run_ase_full_scan_and_execute(
         execute_trades=True,
         ptis_root=ptis_root,
         execution_deps=deps,
+        ingest_sources=ingest_sources,
     )
     closed: list[dict[str, Any]] = []
     for venue in ("mt5", "bybit"):

@@ -6,12 +6,13 @@ import time
 
 import pytest
 
+import athena_ase.runtime.scan as scan_module
 from athena_ase.data.availability import AvailabilityRuleId, compute_available_time_ms
 from athena_ase.data.ptis import PTISStore, build_row
 from athena_ase.inference.predict import predict_no_candidate
 from athena_ase.instruments import instrument_by_symbol
 from athena_ase.runtime.health import ase_health, scan_diagnostics
-from athena_ase.runtime.scan import run_ase_scan
+from athena_ase.runtime.scan import DEFAULT_SCAN_INGEST_SOURCES, run_ase_scan
 from athena_ase.data.ingest.common import eodhd_series_id
 
 
@@ -60,6 +61,7 @@ def test_scan_empty_ptis_returns_flat_with_ptis_blocker(ptis: PTISStore):
         horizon="intraday",
         write_journal=False,
         ptis_root=str(ptis.root),
+        ingest_sources=(),
     )
     assert result["success"] is True
     assert result["candidateCount"] == 0
@@ -82,6 +84,7 @@ def test_scan_with_bars_and_no_artifacts_yields_error_candidates(ptis: PTISStore
         horizon="intraday",
         write_journal=False,
         ptis_root=str(ptis.root),
+        ingest_sources=(),
     )
     assert result["candidateCount"] >= 1
     flat = next(s for s in result["signals"] if s["decisionStatus"] == "FLAT")
@@ -113,3 +116,61 @@ def test_ase_health_reports_blockers(ptis: PTISStore):
     assert health2["eurusdH1CloseRows"] > 100
     diag = scan_diagnostics(ptis, horizon="intraday")
     assert diag["ptisSeriesCount"] >= 3
+
+
+def test_scan_runs_ingest_by_default(ptis: PTISStore, monkeypatch):
+    calls: list[dict[str, Any]] = []
+
+    def fake_run_ingest(*, store, sources, write_audit):
+        calls.append({"store": store, "sources": tuple(sources), "write_audit": write_audit})
+        return {"mt5_live": {"inserted": 5}}
+
+    monkeypatch.setattr(scan_module, "run_ingest", fake_run_ingest)
+
+    result = run_ase_scan(
+        symbols=["EURUSD"],
+        horizon="intraday",
+        write_journal=False,
+        ptis_root=str(ptis.root),
+    )
+    assert len(calls) == 1
+    assert calls[0]["sources"] == DEFAULT_SCAN_INGEST_SOURCES
+    assert calls[0]["write_audit"] is False
+    assert result["ingestResult"]["result"] == {"mt5_live": {"inserted": 5}}
+
+
+def test_scan_skips_ingest_when_sources_empty(ptis: PTISStore, monkeypatch):
+    calls: list[dict[str, Any]] = []
+
+    def fake_run_ingest(*, store, sources, write_audit):
+        calls.append({"store": store, "sources": tuple(sources), "write_audit": write_audit})
+        return {}
+
+    monkeypatch.setattr(scan_module, "run_ingest", fake_run_ingest)
+
+    result = run_ase_scan(
+        symbols=["EURUSD"],
+        horizon="intraday",
+        write_journal=False,
+        ptis_root=str(ptis.root),
+        ingest_sources=(),
+    )
+    assert calls == []
+    assert "ingestResult" not in result
+
+
+def test_scan_ingest_failure_is_fail_open(ptis: PTISStore, monkeypatch):
+    def fake_run_ingest(*, store, sources, write_audit):
+        raise RuntimeError("bybit timeout")
+
+    monkeypatch.setattr(scan_module, "run_ingest", fake_run_ingest)
+
+    result = run_ase_scan(
+        symbols=["EURUSD", "GBPUSD"],
+        horizon="intraday",
+        write_journal=False,
+        ptis_root=str(ptis.root),
+        ingest_sources=["bybit"],
+    )
+    assert result["success"] is True
+    assert result["ingestResult"]["error"] == "bybit timeout"
