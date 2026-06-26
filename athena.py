@@ -15306,6 +15306,7 @@ from athena_app.api.routes_market_data import register_market_data_routes  # noq
 from athena_app.api.routes_status import register_status_routes  # noqa: E402
 from athena_app.api.routes_ase import register_ase_routes  # noqa: E402
 from athena_app.api.routes_tsmom import register_tsmom_routes  # noqa: E402
+from athena_app.api.routes_macro import register_macro_routes  # noqa: E402
 from execution import register_execution_routes  # noqa: E402
 
 set_runtime(
@@ -15520,6 +15521,15 @@ register_status_routes(
 )
 register_ase_routes(app)
 register_tsmom_routes(app)
+register_macro_routes(app)
+# Macro (FOMC) feed scheduler — daily calendar refresh + adaptive RSS polling.
+# Gated by ATHENA_FOMC_ENABLED/ATHENA_FOMC_SCHEDULER_ENABLED; fully fail-safe.
+try:
+    from macro.scheduler import start_macro_scheduler
+
+    start_macro_scheduler()
+except Exception as _macro_sched_err:
+    log.warning("[startup] Macro scheduler not started: %s", _macro_sched_err)
 
 # ── Research Lab routes (optional - does not affect production logic) ─────────
 try:

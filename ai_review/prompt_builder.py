@@ -9,6 +9,7 @@ from ai_playbooks import get_engine_a_playbook, get_engine_b_playbook, render_pl
 from ai_playbooks.trade_skill_normalizer import render_trade_skill_prompt_schema
 from ai_review.engine_a_context import build_engine_a_prompt_context, build_engine_b_prompt_context
 from ai_review.ase_context import render_ase_prompt_block
+from ai_review.macro_context import render_macro_prompt_block
 
 
 def _fmt(value: Any) -> str:
@@ -52,6 +53,7 @@ def _build_engine_a_chart_review_prompt(context: dict[str, Any]) -> str:
     engine_a_json = json.dumps({"engineAContext": engine_a_context}, default=str, indent=2)
     engine_b_json = json.dumps({"engineBContext": engine_b_context}, default=str, indent=2)
     ase_block = render_ase_prompt_block(context.get("aseSignal") or context.get("ase_signal"))
+    macro_block = render_macro_prompt_block(context.get("symbol"), context.get("asset_class"))
 
     playbooks = [get_engine_a_playbook()]
     has_engine_b = bool(engine_b_context and engine_b_context.get("available") is not False)
@@ -147,6 +149,7 @@ nonVisualContext and scoreAttribution are included inside engineAContext above. 
 {engine_b_json}
 
 {ase_block}
+{macro_block}
 == SYMBOL ==
 {context.get("symbol")} {context.get("timeframe")} asset_group: {context.get("asset_group")}{_vol_note}
 analyze_style: {_fmt(context.get("analyze_style"))} scoring_tfs: {_fmt(context.get("scoring_timeframes"))} momentum_tf: {_fmt(context.get("momentum_timeframe"))} regime_tf: {_fmt(context.get("regime_timeframe"))} execution_tf: {_fmt(context.get("execution_timeframe"))}
@@ -198,6 +201,7 @@ def _build_engine_b_chart_review_prompt(context: dict[str, Any]) -> str:
     engine_b_json = json.dumps({"engineBContext": engine_b_context}, default=str, indent=2)
     playbook_block = render_playbook_prompt_block([get_engine_b_playbook()], compact=True)
     trade_skill_schema = render_trade_skill_prompt_schema("engine_b_chart")
+    macro_block = render_macro_prompt_block(context.get("symbol"), context.get("asset_class"))
 
     return f"""You are reviewing the chart image against the structured Engine B (NakedEngine structure/liquidity) signal supplied below using the Engine B trade playbook.
 
@@ -245,6 +249,7 @@ Rules:
 == SERVER-TRUSTED engineBContext (JSON) ==
 {engine_b_json}
 
+{macro_block}
 == SYMBOL ==
 {context.get("symbol")} {context.get("timeframe")} asset_group: {context.get("asset_group")}
 analyze_style: {_fmt(context.get("analyze_style"))}
