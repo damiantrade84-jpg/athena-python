@@ -31,24 +31,63 @@ from athena_ase.signals.xsec import compute_xsec
 log = logging.getLogger("ase.runtime.scan")
 
 DEFAULT_SCAN_INGEST_SOURCES = ("mt5_live", "bybit")
+# Scan-time ingest is a freshness *top-up*, not a historical backfill. Bybit
+# OI/funding history is fetched over the network and its cache key churns with
+# wall-clock now(), so a wide window re-fetches thousands of paginated requests
+# on every scan. Keep the scan-time window small; the scheduled/manual ingest
+# job still backfills the full history via run_ingest's default lookback.
+DEFAULT_SCAN_BYBIT_LOOKBACK_DAYS = 3
+# Hard wall-clock budget so a slow/hung feed can never stall a scan. On overrun
+# the scan proceeds with existing PTIS data (fail-open).
+DEFAULT_SCAN_INGEST_BUDGET_S = 45.0
 
 
 def _maybe_ingest(
     store: PTISStore,
     sources: Iterable[str] | None,
+    *,
+    bybit_lookback_days: int = DEFAULT_SCAN_BYBIT_LOOKBACK_DAYS,
+    budget_s: float = DEFAULT_SCAN_INGEST_BUDGET_S,
 ) -> dict[str, Any] | None:
-    """Refresh PTIS before a scan. Fail-open: log and return error metadata on failure."""
+    """Refresh PTIS before a scan. Fail-open: log and return error metadata on failure.
+
+    Runs in a daemon worker bounded by ``budget_s`` so a slow or hung feed can
+    never block the scan; on timeout the scan continues with existing data.
+    """
     if sources is None:
         return None
     selected = tuple(sources)
     if not selected:
         return None
-    try:
-        result = run_ingest(store=store, sources=selected, write_audit=False)
-        return {"result": result}
-    except Exception as exc:
-        log.warning("ASE ingest failed (scan continues): %s", exc)
-        return {"error": str(exc)}
+
+    import threading
+
+    outcome: dict[str, Any] = {}
+
+    def _run() -> None:
+        try:
+            outcome["result"] = run_ingest(
+                store=store,
+                sources=selected,
+                bybit_lookback_days=bybit_lookback_days,
+                write_audit=False,
+            )
+        except Exception as exc:  # noqa: BLE001 - fail-open
+            outcome["error"] = str(exc)
+
+    worker = threading.Thread(target=_run, name="ase-scan-ingest", daemon=True)
+    worker.start()
+    worker.join(timeout=budget_s)
+    if worker.is_alive():
+        log.warning(
+            "ASE ingest exceeded %.0fs budget (scan continues with existing data)",
+            budget_s,
+        )
+        return {"timeout": True, "budgetSeconds": budget_s}
+    if "error" in outcome:
+        log.warning("ASE ingest failed (scan continues): %s", outcome["error"])
+        return {"error": outcome["error"]}
+    return {"result": outcome.get("result")}
 
 
 def _latest_candidate(

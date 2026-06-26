@@ -22,7 +22,11 @@ from athena_ase.features.build import (
 )
 from athena_ase.gates.demo_only import GateResult, assert_demo
 from athena_ase.horizon import Horizon, K_TP
-from athena_ase.inference.decision import apply_decision_rule
+from athena_ase.inference.decision import (
+    apply_decision_rule,
+    legacy_expected_r_strength,
+    signal_strength as compute_signal_strength,
+)
 from athena_ase.inference.monitor import apply_watch_max_cap, evaluate_monitor
 from athena_ase.instruments import Instrument
 from athena_ase.levels.brackets import compute_brackets
@@ -304,7 +308,13 @@ def predict_one(
     if is_watch_max(family) or monitor.watch_max:
         status = apply_watch_max_cap(status, True)
 
-    signal_strength = int(round(100 * min(max(expected_r / 0.5, 0.0), 1.0)))
+    signal_strength = compute_signal_strength(expected_r, p_cal)
+    conviction_detail = {
+        "probEdge": round(max(0.0, min(1.0, 2.0 * (p_cal - 0.5))), 4),
+        "payoff": round(max(0.0, min(1.0, expected_r)), 4),
+        "method": "sqrt(probEdge*payoff)",
+        "legacyExpectedRStrength": legacy_expected_r_strength(expected_r),
+    }
 
     return ASESignal(
         engineVersion=ENGINE_VERSION,
@@ -329,7 +339,11 @@ def predict_one(
         tp2=brackets.tp2,
         maxHoldBars=brackets.max_hold_bars,
         primarySignals=list(candidate.signals),
-        predictionDiagnostics={"rawP": raw_p, "thrFamily": bundle.thr_family},
+        predictionDiagnostics={
+            "rawP": raw_p,
+            "thrFamily": bundle.thr_family,
+            "conviction": conviction_detail,
+        },
         dataQuality={**data_quality, "deployment": "OPERATIONAL"},
         modelHealth={
             "artifactHash": bundle.artifact_hash,

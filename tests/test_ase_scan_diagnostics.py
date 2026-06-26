@@ -121,8 +121,15 @@ def test_ase_health_reports_blockers(ptis: PTISStore):
 def test_scan_runs_ingest_by_default(ptis: PTISStore, monkeypatch):
     calls: list[dict[str, Any]] = []
 
-    def fake_run_ingest(*, store, sources, write_audit):
-        calls.append({"store": store, "sources": tuple(sources), "write_audit": write_audit})
+    def fake_run_ingest(*, store, sources, write_audit, bybit_lookback_days):
+        calls.append(
+            {
+                "store": store,
+                "sources": tuple(sources),
+                "write_audit": write_audit,
+                "bybit_lookback_days": bybit_lookback_days,
+            }
+        )
         return {"mt5_live": {"inserted": 5}}
 
     monkeypatch.setattr(scan_module, "run_ingest", fake_run_ingest)
@@ -136,13 +143,14 @@ def test_scan_runs_ingest_by_default(ptis: PTISStore, monkeypatch):
     assert len(calls) == 1
     assert calls[0]["sources"] == DEFAULT_SCAN_INGEST_SOURCES
     assert calls[0]["write_audit"] is False
+    assert calls[0]["bybit_lookback_days"] == scan_module.DEFAULT_SCAN_BYBIT_LOOKBACK_DAYS
     assert result["ingestResult"]["result"] == {"mt5_live": {"inserted": 5}}
 
 
 def test_scan_skips_ingest_when_sources_empty(ptis: PTISStore, monkeypatch):
     calls: list[dict[str, Any]] = []
 
-    def fake_run_ingest(*, store, sources, write_audit):
+    def fake_run_ingest(*, store, sources, write_audit, bybit_lookback_days):
         calls.append({"store": store, "sources": tuple(sources), "write_audit": write_audit})
         return {}
 
@@ -160,7 +168,7 @@ def test_scan_skips_ingest_when_sources_empty(ptis: PTISStore, monkeypatch):
 
 
 def test_scan_ingest_failure_is_fail_open(ptis: PTISStore, monkeypatch):
-    def fake_run_ingest(*, store, sources, write_audit):
+    def fake_run_ingest(*, store, sources, write_audit, bybit_lookback_days):
         raise RuntimeError("bybit timeout")
 
     monkeypatch.setattr(scan_module, "run_ingest", fake_run_ingest)
