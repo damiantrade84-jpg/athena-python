@@ -2882,7 +2882,9 @@ def fetch_mt5(pair: dict, tf: str, limit: int):
     if not mt5.symbol_select(mt5_symbol, True):
         return _mt5_fallback("symbol not found in MT5")
 
-    # Map timeframe
+    # Map timeframe. Fail closed on unknown/malformed TF: do NOT silently serve
+    # H1 (a bad TF string must not masquerade as valid H1 data). Valid TFs
+    # resolve exactly as before; normalization only upper/strips the input.
     tf_map = {
         "M1": mt5.TIMEFRAME_M1,
         "M5": mt5.TIMEFRAME_M5,
@@ -2892,7 +2894,17 @@ def fetch_mt5(pair: dict, tf: str, limit: int):
         "H4": mt5.TIMEFRAME_H4,
         "D1": mt5.TIMEFRAME_D1,
     }
-    mt5_tf = tf_map.get(tf, mt5.TIMEFRAME_H1)
+    mt5_tf = tf_map.get(str(tf).upper().strip()) if tf is not None else None
+    if mt5_tf is None:
+        log.error(
+            f"[MT5] {symbol}: unsupported timeframe {tf!r} - failing closed "
+            f"(no H1 fallback); supported={sorted(tf_map)}"
+        )
+        return {
+            "error": True,
+            "symbol": symbol,
+            "detail": f"unsupported MT5 timeframe: {tf!r}",
+        }
 
     request_limit = limit + 100
 
