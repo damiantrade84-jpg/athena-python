@@ -6,6 +6,7 @@ from athena.crypto_ws_scope import (
     binance_micro_symbol_strings,
     enabled_crypto_micro_pairs,
     enabled_binance_micro_crypto_pairs,
+    should_start_binance_micro_feeds,
 )
 
 
@@ -84,3 +85,31 @@ def test_duplicate_symbol_dedupes_last_wins():
         {"symbol": "BTCUSDT", "type": "crypto", "source": "binance", "enabled": True, "a": 2},
     ]
     assert len(enabled_binance_micro_crypto_pairs(pairs)) == 1
+
+
+def test_binance_micro_disabled_when_bybit_is_primary_without_override():
+    cfg = {
+        "MICROSTRUCTURE_BINANCE_COMBINED_STREAM": True,
+        "SCALP_ENGINE": {"TRADE_BUCKET_EXCHANGE": "bybit"},
+    }
+
+    assert should_start_binance_micro_feeds(cfg, has_binance_pairs=True) is False
+
+
+def test_binance_micro_explicit_override_can_enable_parallel_feed():
+    cfg = {
+        "MICROSTRUCTURE_BINANCE_FEEDS_ENABLED": True,
+        "MICROSTRUCTURE_BINANCE_COMBINED_STREAM": True,
+        "SCALP_ENGINE": {"TRADE_BUCKET_EXCHANGE": "bybit"},
+    }
+
+    assert should_start_binance_micro_feeds(cfg, has_binance_pairs=True) is True
+
+
+def test_binance_micro_enabled_when_binance_is_primary():
+    cfg = {
+        "MICROSTRUCTURE_BINANCE_COMBINED_STREAM": True,
+        "SCALP_ENGINE": {"TRADE_BUCKET_EXCHANGE": "binance"},
+    }
+
+    assert should_start_binance_micro_feeds(cfg, has_binance_pairs=True) is True

@@ -48,3 +48,29 @@ def binance_micro_symbol_strings(crypto_pairs: Optional[list[dict[str, Any]]]) -
         str(p.get("symbol") or "").replace("/", "").strip().upper()
         for p in enabled_binance_micro_crypto_pairs(crypto_pairs)
     ]
+
+
+def should_start_binance_micro_feeds(
+    config: dict[str, Any] | None,
+    *,
+    has_binance_pairs: bool,
+) -> bool:
+    """Return whether Binance microstructure sockets should start.
+
+    Bybit is the default trade-bucket venue. Binance microstructure is only
+    started when Binance is primary or an explicit parallel-feed override is set.
+    """
+    if not has_binance_pairs:
+        return False
+    cfg = config if isinstance(config, dict) else {}
+    scalp_cfg = cfg.get("SCALP_ENGINE") if isinstance(cfg.get("SCALP_ENGINE"), dict) else {}
+    primary = str(
+        scalp_cfg.get("TRADE_BUCKET_EXCHANGE")
+        or cfg.get("ENGINE_B_CRYPTO_LEVELS_FEED")
+        or "bybit"
+    ).strip().lower()
+    if primary not in {"bybit", "binance"}:
+        primary = "bybit"
+    if primary == "binance":
+        return True
+    return bool(cfg.get("MICROSTRUCTURE_BINANCE_FEEDS_ENABLED", False))

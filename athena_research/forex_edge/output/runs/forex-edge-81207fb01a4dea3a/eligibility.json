@@ -1,0 +1,9 @@
+{
+  "details": {
+    "message": "Empirical quality limits are not pre-registered."
+  },
+  "eligible": false,
+  "reason_codes": [
+    "UNREGISTERED_QUALITY_LIMIT"
+  ]
+}

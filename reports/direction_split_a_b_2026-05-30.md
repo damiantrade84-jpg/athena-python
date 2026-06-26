@@ -1,0 +1,37 @@
+## Engine A LONG vs SHORT by pair
+
+| pair | direction | n | win_pct | expR | SQN | profit_factor | avg_win_R | avg_loss_R | max_drawdown_R | verdict |
+|---|---|---|---|---|---|---|---|---|---|---|
+| EUR/USD | LONG | 67 | 38.8 | -0.255 | -2.36 | 0.53 | 0.735 | -0.883 | 17.1 | BAD_DIRECTION |
+| EUR/USD | SHORT | 76 | 60.5 | 0.054 | 0.54 | 1.14 | 0.717 | -0.962 | 4.91 | WEAK_POSITIVE |
+| GBP/USD | LONG | 75 | 42.7 | -0.162 | -1.62 | 0.66 | 0.736 | -0.83 | 12.17 | BAD_DIRECTION |
+| GBP/USD | SHORT | 67 | 52.2 | -0.058 | -0.54 | 0.86 | 0.7 | -0.886 | 10.11 | BAD_DIRECTION |
+| BTC/USDT | LONG | 53 | 60.4 | 0.172 | 1.57 | 1.61 | 0.753 | -0.713 | 3.27 | TRADABLE_AVERAGE |
+| BTC/USDT | SHORT | 86 | 48.8 | 0.083 | 0.91 | 1.24 | 0.87 | -0.669 | 5.34 | WEAK_POSITIVE |
+| ETH/USDT | LONG | 50 | 64.0 | 0.197 | 1.72 | 1.71 | 0.743 | -0.772 | 4.08 | TRADABLE_AVERAGE |
+| ETH/USDT | SHORT | 92 | 53.3 | 0.025 | 0.3 | 1.07 | 0.699 | -0.743 | 7.17 | FLAT_NO_EDGE |
+| XAU/USD | LONG | 27 | 63.0 | 0.206 | 1.46 | 1.9 | 0.693 | -0.621 | 1.96 | INSUFFICIENT_SAMPLE |
+| XAU/USD | SHORT | 9 | 55.6 | 0.186 | 0.57 | 1.52 | 0.976 | -0.8 | 2.04 | INSUFFICIENT_SAMPLE |
+| XAG/USD | LONG | 31 | 71.0 | 0.374 | 2.64 | 2.73 | 0.832 | -0.745 | 1.38 | GOOD_EDGE_CANDIDATE |
+| XAG/USD | SHORT | 10 | 40.0 | -0.026 | -0.09 | 0.94 | 0.977 | -0.695 | 2.15 | INSUFFICIENT_SAMPLE |
+| MSFT | LONG | 11 | 54.5 | -0.04 | -0.17 | 0.89 | 0.592 | -0.797 | 2.04 | INSUFFICIENT_SAMPLE |
+| MSFT | SHORT | 9 | 55.6 | 0.241 | 1.07 | 2.3 | 0.769 | -0.418 | 0.91 | INSUFFICIENT_SAMPLE |
+
+## Engine B LONG vs SHORT by pair
+
+| pair | direction | n | win_pct | expR | SQN | profit_factor | avg_win_R | avg_loss_R | max_drawdown_R | verdict |
+|---|---|---|---|---|---|---|---|---|---|---|
+| EUR/USD | LONG | 70 | 37.1 | -0.043 | -0.28 | 0.93 | 1.545 | -0.982 | 12.63 | BAD_DIRECTION |
+| EUR/USD | SHORT | 64 | 31.2 | -0.237 | -1.48 | 0.68 | 1.595 | -1.07 | 15.58 | BAD_DIRECTION |
+| GBP/USD | LONG | 72 | 40.3 | -0.052 | -0.33 | 0.92 | 1.446 | -1.061 | 15.05 | BAD_DIRECTION |
+| GBP/USD | SHORT | 73 | 26.0 | -0.353 | -2.39 | 0.56 | 1.732 | -1.086 | 27.85 | BAD_DIRECTION |
+| BTC/USDT | LONG | 72 | 37.5 | -0.139 | -0.99 | 0.78 | 1.316 | -1.012 | 16.96 | BAD_DIRECTION |
+| BTC/USDT | SHORT | 58 | 32.8 | -0.184 | -1.11 | 0.74 | 1.569 | -1.038 | 15.66 | BAD_DIRECTION |
+| ETH/USDT | LONG | 87 | 32.2 | -0.141 | -1.04 | 0.79 | 1.639 | -0.985 | 22.94 | BAD_DIRECTION |
+| ETH/USDT | SHORT | 63 | 39.7 | 0.033 | 0.2 | 1.05 | 1.578 | -0.984 | 7.44 | WEAK_POSITIVE |
+| XAU/USD | LONG | 79 | 49.4 | 0.128 | 1.0 | 1.28 | 1.177 | -0.894 | 6.79 | WEAK_POSITIVE |
+| XAU/USD | SHORT | 37 | 37.8 | -0.188 | -1.0 | 0.7 | 1.135 | -0.993 | 12.24 | BAD_DIRECTION |
+| XAG/USD | LONG | 54 | 46.3 | 0.127 | 0.76 | 1.27 | 1.295 | -0.88 | 6.03 | WEAK_POSITIVE |
+| XAG/USD | SHORT | 44 | 38.6 | -0.073 | -0.4 | 0.87 | 1.318 | -0.949 | 9.73 | BAD_DIRECTION |
+| MSFT | LONG | 26 | 50.0 | 0.278 | 1.04 | 1.54 | 1.582 | -1.026 | 6.15 | INSUFFICIENT_SAMPLE |
+| MSFT | SHORT | 25 | 32.0 | -0.09 | -0.39 | 0.83 | 1.395 | -0.789 | 7.17 | INSUFFICIENT_SAMPLE |

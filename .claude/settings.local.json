@@ -184,7 +184,24 @@
       "PowerShell($env:ATHENA_REAL_ORDERS_CONFIRM = 'I_UNDERSTAND_REAL_ORDER_RISK'; Set-Location C:\\\\dev\\\\athena-python; .\\\\.venv\\\\Scripts\\\\python.exe -m pytest tests/test_suggested_trade_routes.py tests/test_tv_chart_panel.py tests/test_scalp_workbench_panel.py --basetemp=tests/.tmp/flag3 -q 2>&1 | Select-Object -Last 5)",
       "Bash(npx eslint *)",
       "PowerShell($gh = \\(Get-Command gh -ErrorAction SilentlyContinue\\); if \\($gh\\) { \"gh at: $\\($gh.Source\\)\" } else { \"gh not found\" })",
-      "PowerShell($d = \"C:\\\\dev\\\\athena-python\\\\static\\\\react-app\\\\app\"; if \\(Test-Path \"$d\\\\node_modules\"\\) { \"node_modules present\" } else { \"NO node_modules\" }; \\(Get-Command npm\\).Source)"
+      "PowerShell($d = \"C:\\\\dev\\\\athena-python\\\\static\\\\react-app\\\\app\"; if \\(Test-Path \"$d\\\\node_modules\"\\) { \"node_modules present\" } else { \"NO node_modules\" }; \\(Get-Command npm\\).Source)",
+      "Bash(npm --prefix static/react-app/app run build)",
+      "PowerShell(python -m pytest tests/test_scalp_workbench_panel.py -q 2>&1 | Select-Object -Last 20)",
+      "PowerShell(npm *)",
+      "PowerShell(git add *)",
+      "Bash(ATHENA_REAL_ORDERS_CONFIRM='I_UNDERSTAND_REAL_ORDER_RISK' python *)",
+      "Bash(PYTHONPATH=/c/dev/athena-python python \"C:/Users/damia/AppData/Local/Temp/claude/C--dev-athena-python/ba3eb7cd-50a4-4506-8bac-004dfab74410/scratchpad/macro_smoke.py\")",
+      "Bash(PYTHONPATH=/c/dev/athena-python ATHENA_REAL_ORDERS_CONFIRM='I_UNDERSTAND_REAL_ORDER_RISK' python \"C:/Users/damia/AppData/Local/Temp/claude/C--dev-athena-python/ba3eb7cd-50a4-4506-8bac-004dfab74410/scratchpad/macro_smoke.py\")",
+      "Bash(ATHENA_REAL_ORDERS_CONFIRM=I_UNDERSTAND_REAL_ORDER_RISK python -c ' *)",
+      "Bash(./.venv/Scripts/python -c \"import pyarrow; print\\('pyarrow', pyarrow.__version__\\)\")",
+      "Bash(./.venv/Scripts/python -c ' *)",
+      "Bash(grep -v \"athena_ase[/\\\\\\\\]data[/\\\\\\\\]ingest\")",
+      "Bash(PYTHONPATH=/c/dev/athena-python python \"C:/Users/damia/AppData/Local/Temp/claude/C--dev-athena-python/3b07999e-fd81-4260-9b42-1a2001862758/scratchpad/tsmom_status_check.py\")",
+      "Bash(ATHENA_REAL_ORDERS_CONFIRM='I_UNDERSTAND_REAL_ORDER_RISK' PYTHONPATH=/c/dev/athena-python python \"C:/Users/damia/AppData/Local/Temp/claude/C--dev-athena-python/3b07999e-fd81-4260-9b42-1a2001862758/scratchpad/tsmom_status_check.py\")",
+      "Bash(ATHENA_REAL_ORDERS_CONFIRM=I_UNDERSTAND_REAL_ORDER_RISK ./.venv/Scripts/python -c ' *)",
+      "Bash(ATHENA_REAL_ORDERS_CONFIRM='I_UNDERSTAND_REAL_ORDER_RISK' ./.venv/Scripts/python ase_cli.py ingest --sources mt5_live --no-audit)",
+      "Bash(schtasks /query /fo LIST)",
+      "Bash(schtasks *)"
     ]
   },
   "disabledMcpjsonServers": [

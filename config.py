@@ -835,7 +835,28 @@ try:
         _engine_b_load_started = True
         _engine_b_overrides = load_engine_b_yaml(_engine_b_path)
         _engine_b_load_started = False
+        # Capture config.yaml + config.local.yaml score_group_overrides BEFORE the
+        # engine_b_config.yaml merge. engine_b_config.yaml is deep-merged last and
+        # would otherwise shadow these values, silently reverting dashboard min_rr
+        # edits (persisted to config.yaml via /api/scalp-group-rr) on every reload.
+        # Re-assert precedence after the merge so config.yaml stays authoritative
+        # for groups it defines, while engine_b_config.yaml still seeds groups that
+        # config.yaml does not cover. No effect today (values match); durability fix.
+        _pre_engine_b_ne = _yaml_overrides.get("NAKED_ENGINE")
+        _pre_engine_b_sgo = None
+        if isinstance(_pre_engine_b_ne, dict) and isinstance(
+            _pre_engine_b_ne.get("score_group_overrides"), dict
+        ):
+            _pre_engine_b_sgo = _pre_engine_b_ne["score_group_overrides"]
         _yaml_overrides = _deep_merge_dict(_yaml_overrides, _engine_b_overrides)
+        if _pre_engine_b_sgo:
+            _ne_merged = _yaml_overrides.setdefault("NAKED_ENGINE", {})
+            if not isinstance(_ne_merged, dict):
+                _ne_merged = {}
+                _yaml_overrides["NAKED_ENGINE"] = _ne_merged
+            _ne_merged["score_group_overrides"] = _deep_merge_dict(
+                _ne_merged.get("score_group_overrides") or {}, _pre_engine_b_sgo
+            )
         log.info(
             "Merged engine_b_config.yaml into runtime config (%d top-level keys)",
             len(_engine_b_overrides),
@@ -1845,6 +1866,7 @@ CONFIG: dict = {
     "SHADOW_LEDGER_ENABLED": True,
     "MICROSTRUCTURE_FEEDS_ENABLED": True,
     "MICROSTRUCTURE_BYBIT_FEEDS_ENABLED": True,
+    "MICROSTRUCTURE_BINANCE_FEEDS_ENABLED": False,
     "MARKET_DATA_WS_SSL_VERIFY": True,
     "BYBIT_TIME_SYNC_ENABLED": False,
     "BYBIT_RECV_WINDOW_MS": 30000,
@@ -1869,6 +1891,9 @@ CONFIG: dict = {
     "QUICK_EXEC_PREFETCH_CANDLE_META": False,
     # Rebuild candleFreshness/consistency/dataFreshness before risk (poisoned client fields).
     "EXECUTION_HYDRATE_CANDLE_QUALITY": True,
+    # MT5 D1: one read-only refetch for small stale-history windows before risk evaluates freshness.
+    "MT5_D1_FETCH_RETRY_ENABLED": True,
+    "MT5_D1_FETCH_RETRY_MAX_LAG": 7,
     # MT5 D1: small multi-bucket lag vs wall clock (weekends/holidays) downgraded to non-blocking severity.
     "MT5_D1_CALENDAR_GAP_GRACE_BUCKETS": 4,
     # Legacy alias — used if MT5_D1_CALENDAR_GAP_GRACE_BUCKETS is omitted in YAML.

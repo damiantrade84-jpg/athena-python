@@ -74,6 +74,44 @@ def test_forex_mt5_d1_calendar_gap_disabled_when_lag_exceeds_cap(monkeypatch) ->
     assert diag["stalenessSeverity"] == "stale_multi_bucket"
 
 
+def test_mt5_d1_stale_refetch_decision_retries_bounded_non_crypto(monkeypatch) -> None:
+    import athena_app.services.market_state as ms
+
+    monkeypatch.setitem(ms.CONFIG, "MT5_D1_FETCH_RETRY_ENABLED", True)
+    monkeypatch.setitem(ms.CONFIG, "MT5_D1_FETCH_RETRY_MAX_LAG", 7)
+
+    pair = {"display": "EUR/GBP", "type": "forex", "source": "mt5"}
+    now = datetime(2026, 6, 25, 7, 39, tzinfo=timezone.utc).timestamp()
+    stale_d1 = int(datetime(2026, 6, 19, 0, 0, tzinfo=timezone.utc).timestamp())
+
+    should, lag = ms.should_refetch_mt5_d1_stale(pair, stale_d1, time_now=now)
+
+    assert should is True
+    assert lag == 6
+
+
+def test_mt5_d1_stale_refetch_decision_remains_fail_closed(monkeypatch) -> None:
+    import athena_app.services.market_state as ms
+
+    monkeypatch.setitem(ms.CONFIG, "MT5_D1_FETCH_RETRY_ENABLED", True)
+    monkeypatch.setitem(ms.CONFIG, "MT5_D1_FETCH_RETRY_MAX_LAG", 7)
+
+    now = datetime(2026, 6, 25, 7, 39, tzinfo=timezone.utc).timestamp()
+    stale_d1 = int(datetime(2026, 6, 15, 0, 0, tzinfo=timezone.utc).timestamp())
+    crypto = {"display": "BTCUSD", "type": "crypto", "source": "mt5"}
+    non_mt5 = {"display": "EUR/GBP", "type": "forex", "source": "eodhd"}
+
+    assert ms.should_refetch_mt5_d1_stale(crypto, stale_d1, time_now=now) == (False, 0)
+    assert ms.should_refetch_mt5_d1_stale(non_mt5, stale_d1, time_now=now) == (False, 0)
+
+    forex = {"display": "EUR/GBP", "type": "forex", "source": "mt5"}
+    assert ms.should_refetch_mt5_d1_stale(forex, stale_d1, time_now=now) == (False, 10)
+
+    monkeypatch.setitem(ms.CONFIG, "MT5_D1_FETCH_RETRY_ENABLED", False)
+    retryable_d1 = int(datetime(2026, 6, 19, 0, 0, tzinfo=timezone.utc).timestamp())
+    assert ms.should_refetch_mt5_d1_stale(forex, retryable_d1, time_now=now) == (False, 0)
+
+
 def test_hydrate_empty_fetch_preserves_embedded_freshness(monkeypatch) -> None:
     """Incomplete fetches must not overwrite a prior analyze_pair refresh."""
     import execution
@@ -232,4 +270,3 @@ def test_execution_freshness_allows_d1_calendar_gap_policy_ok() -> None:
     assert result["allowed"] is True
     assert result["blocked"] == []
     assert all(w.get("severity") != "d1_calendar_gap_policy_ok" for w in result["warnings"])
-

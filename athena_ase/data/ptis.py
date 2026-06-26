@@ -7,9 +7,10 @@ import json
 import os
 import sqlite3
 import threading
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Iterable, Sequence
+from typing import Any, Iterable, Iterator, Sequence
 
 import numpy as np
 import pandas as pd
@@ -92,11 +93,24 @@ class PTISStore:
         self._frame_cache: dict[str, pd.DataFrame] = {}
         self._init_catalog()
 
-    def _connect(self) -> sqlite3.Connection:
+    @contextmanager
+    def _connect(self) -> Iterator[sqlite3.Connection]:
+        # NB: a sqlite3.Connection used as a context manager commits/rolls back
+        # the transaction but does NOT close the connection, which leaks the
+        # handle until GC (surfaces as ResourceWarning: unclosed database).
+        # This wrapper preserves the commit-on-success / rollback-on-error
+        # semantics callers rely on and also closes the connection.
         con = sqlite3.connect(self.catalog_path, timeout=15.0)
         con.execute("PRAGMA journal_mode=WAL")
         con.execute("PRAGMA synchronous=NORMAL")
-        return con
+        try:
+            yield con
+            con.commit()
+        except BaseException:
+            con.rollback()
+            raise
+        finally:
+            con.close()
 
     def _init_catalog(self) -> None:
         with self._connect() as con:

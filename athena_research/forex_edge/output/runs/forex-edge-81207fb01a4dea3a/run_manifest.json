@@ -1,0 +1,12 @@
+{
+  "config_hash": "ad10a443d6eaf2a3899a0a8b1127737669115cee45c9870f1bbeda51a7c648a8",
+  "dataset_manifest_hash": "9fbdf5a1832093b5d0c63cde49767b54338f5f22e148767710d0aa39567bf4b1",
+  "dataset_manifests": {
+    "bis_reer": "missing",
+    "fred_rates": "missing",
+    "fred_spot": "missing"
+  },
+  "lane": "portfolio",
+  "production_eligible": false,
+  "trial_count": 48
+}

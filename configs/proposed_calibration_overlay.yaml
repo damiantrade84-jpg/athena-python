@@ -6,17 +6,80 @@
 # =============================================================================
 
 PROPOSED_OVERLAY_META:
-  version: "2026-05-19-r7"
+  version: "2026-06-26-r2"
   status: proposed_inactive
   import_into_live_config: false
   live_behavior_changed_by_this_file: false
-  evidence_accepted_trades: 466
-  evidence_rejected_diagnostics: 68
-  evidence_date_range: "2026-03-29..2026-05-19"
+  # r2 adds the 2026-06-26 period sweep results (tools/period_sweep_research.py,
+  # 20 pairs × 3-5 variants × full 2026-05-30 frozen dataset, triple-barrier exit).
+  # r1 was the direction-split + threshold sweep cycle (same date).
+  # r7 was 2026-05-19. All cycles reach the same conclusion: 0 promotions.
+  evidence_accepted_trades_r7: 466
+  evidence_accepted_trades_r1_long_short:
+    # Pooled per-direction trade counts in the 2026-05-30 frozen backtest (Engine A only)
+    forex_majors_long: 142
+    forex_majors_short: 143
+    crypto_btc_long: 53
+    crypto_btc_short: 86
+    crypto_eth_long: 50
+    crypto_eth_short: 92
+    precious_trackers_long: 31
+    precious_trackers_short: 10
+    us_stock_single_long: 11
+    us_stock_single_short: 9
+  evidence_period_sweep_r2:
+    # Bar-by-bar H4 backtest (simplified scorer, triple-barrier 1.0×ATR SL / 1.5×ATR TP / 18-bar max)
+    # Pairs covered: 20 (all groups with data in frozen 2026-05-30)
+    # Variants per class: crypto=5, forex=3, default(commodity/index/stock)=3
+    # Total rows in period_sweep_2026-06-26.csv: 70
+    # Bonferroni threshold: sqrt(2*log(K)), K=5 -> t=1.794; K=3 -> t=1.482
+    groups_with_first_data_r2:
+      - "crypto_doge (DOGE/USDT — first coverage in any cycle)"
+      - "crypto_alt_majors (SOL/USDT, XRP/USDT — first coverage)"
+      - "us_indices_trackers (NDX/SPX/DJI — first coverage)"
+      - "eu_indices (DAX — first coverage)"
+      - "energy_oil (WTI/Oil — first coverage)"
+      - "us_stock_single (AAPL/NVDA/TSLA added to MSFT)"
+      - "forex_majors (USD/JPY added; GBP/JPY as forex_crosses first coverage)"
+  evidence_date_range_r7: "2026-03-29..2026-05-19"
+  evidence_date_range_r1: "2026-05-30-frozen-backtest"
+  evidence_date_range_r2: "2026-05-30-frozen-backtest-full-pair-sweep (H4 bar-by-bar, warmup 220 bars)"
+  evidence_source_r1:
+    - reports/direction_split_a_b_2026-05-30.csv
+    - reports/confluence_score_audit_2026-05-30_engine_a_thresholds.csv
+    - reports/confluence_score_audit_2026-05-30_engine_a_bands.csv
+    - logs/calibration/threshold_recommendation_matrix.csv
+  evidence_source_r2:
+    - logs/calibration/period_sweep_2026-06-26.csv
+    - tools/period_sweep_research.py (standalone, no live feeds)
   ranking_policy: robust_metrics_not_raw_pnl
   engines_merged: false
   final_threshold_decision: "no threshold promotions supported"
-  final_threshold_reason: "Engine A diagnostics are under n>=30; Engine B candidates do not clear expectancy/trade-count gates or lack required gate metadata"
+  final_threshold_reason: >
+    r2 cycle (2026-06-26, period sweep): 0 of 25 Engine A score groups cleared all gates
+    simultaneously (n>=30 LONG, n>=30 SHORT, SQN>2.0 per direction, L/S symmetry,
+    Bonferroni correction). Key new findings from r2: (1) XAU/XAG LONG edges confirmed
+    strong (XAU LONG SQN=2.679, XAG LONG SQN=2.149 at baseline) but SHORT direction is
+    structurally near-zero/negative across all variants (XAU SHORT SQN=-0.573, XAG SHORT
+    SQN=-0.098 at n=42-53) — the precious metals SHORT block is a REGIME problem (2023-2026
+    bull market), NOT a sample-size problem; collecting more SHORT trades from this same
+    window will not clear the gate. (2) DOGE LONG shows robust edge (SQN=2.38 current
+    periods, 2.26 baseline) but SHORT SQN=0.87-0.94 < 2.0 blocks symmetry gate.
+    (3) AAPL LONG SQN=2.0 (baseline) but SHORT SQN=-1.08 strongly negative. (4) BTC
+    baseline SHORT SQN=2.228 passes but LONG SQN=1.08 fails — asymmetric, no promotion.
+    (5) ALL forex groups: negative or near-zero alpha regardless of period variant;
+    period change does not fix the forex alpha deficit. (6) Period variants compared to
+    baseline: current unvalidated crypto periods (18/40/RSI12) NOT demonstrably better
+    than baseline (21/50/RSI14) by SQN — both fail the gate. No period change justified.
+    r1 and r7 conclusions confirmed and extended by r2.
+  groups_promoted: 0
+  groups_held: 26
+  parity_tests_r1:
+    test_engine_a_indicator_period_parity: "10 passed, 0 failed (2026-06-26)"
+    test_chart_api_indicator_period_parity: "5 passed, 0 failed (2026-06-26)"
+  parity_tests_r2:
+    test_engine_a_indicator_period_parity: "10 passed, 0 failed (post-period-sweep, 2026-06-26)"
+    test_chart_api_indicator_period_parity: "5 passed, 0 failed (post-period-sweep, 2026-06-26)"
 
 _proposed_active_settings:
   CALIBRATION_DIAGNOSTICS_ENABLED:
@@ -26,7 +89,7 @@ _proposed_active_settings:
     engine: BOTH
     group: all
     evidence_file: logs/calibration/diagnostics_normalized/diagnostic_events_summary.csv
-    metric: "diagnostic_n=68; ENGINE_A=10; ENGINE_B=58"
+    metric: "diagnostic_n=68 (r7); ENGINE_A=10; ENGINE_B=58; r1 adds direction_split data"
     accepted_sample_size: 466
     diagnostic_sample_size: 68
     expected_effect: "collect enough rejected diagnostic events for future gate calibration"
@@ -52,22 +115,19 @@ _proposed_active_settings:
     live_change_allowed: false
     research_only: true
 
-# Evidence: logs/calibration/threshold_recommendation_matrix.csv
-# Metric: no row has live_change_allowed=true or a promoted recommendation
-# Sample: accepted=466 diagnostic=68
-# Rollback: no threshold change proposed
 CALIBRATION_DIAGNOSTICS_ENABLED: true
 CALIBRATION_DIAGNOSTICS_PATH: "logs/calibration_diagnostics/calibration_events.jsonl"
 
 _proposed_gate_adjustments: []
 
 _proposed_holds:
+  # ─── r7 holds (unchanged) ────────────────────────────────────────────────
   - hold_id: PH-A-THRESHOLD-001
     engine: ENGINE_A
     config_keys: [ENGINE_A_SCORE_GROUP_THRESHOLDS.default]
     live_value: 1.5
     evidence_file: logs/calibration/threshold_recommendation_matrix.csv
-    metric: "engine_a_thresholds diagnostic_n=10; best_R=-0.075905; accepted trade count change=-62"
+    metric: "engine_a_thresholds diagnostic_n=10 (r7); best_R=-0.075905; accepted trade count change=-62"
     accepted_sample_size: 276
     diagnostic_sample_size: 10
     evidence_strength: insufficient
@@ -165,3 +225,314 @@ _proposed_holds:
     overfit_risk: medium
     rollback_rule: "n/a - no threshold change proposed"
     live_change_allowed: false
+
+  # ─── r1 holds (2026-06-26 calibration cycle) ─────────────────────────────
+
+  - hold_id: PH-A-FOREX-MAJORS-THRESHOLD-r1
+    engine: ENGINE_A
+    config_keys: [ENGINE_A_SCORE_GROUP_THRESHOLDS.forex_majors]
+    live_value: 2.1
+    evidence_file: reports/direction_split_a_b_2026-05-30.csv
+    metric: >
+      EUR/USD LONG n=67 SQN=-2.36 (BAD_DIRECTION); EUR/USD SHORT n=76 SQN=0.54 (WEAK_POSITIVE);
+      GBP/USD LONG n=75 SQN=-1.62 (BAD_DIRECTION); GBP/USD SHORT n=67 SQN=-0.54 (BAD_DIRECTION).
+      EUR/USD SHORT band analysis: top-quartile SQN=-0.67 vs mid-band SQN=+1.83 — inverse
+      score-outcome relationship. Higher Engine A scores correlate with WORSE forex SHORT outcomes.
+    accepted_sample_size_long: 142
+    accepted_sample_size_short: 143
+    evidence_strength: strong_negative
+    overfit_risk: low
+    rollback_rule: "n/a - no threshold change proposed; forex majors engine requires directional-edge fix, not threshold tuning"
+    live_change_allowed: false
+    note: >
+      The data shows Engine A forex_majors has NEGATIVE directional alpha (LONG SQN=-1.99 pooled).
+      Tightening the threshold cannot fix a negative-edge setup — it only selects a smaller bad
+      sample. The binding problem is in direction selection / factor weights, not the acceptance
+      threshold. Do not raise or lower forex_majors threshold until directional edge is corrected.
+
+  - hold_id: PH-A-CRYPTO-BTC-THRESHOLD-r1
+    engine: ENGINE_A
+    config_keys: [ENGINE_A_SCORE_GROUP_THRESHOLDS.crypto_btc]
+    live_value: 2.0
+    evidence_file: reports/direction_split_a_b_2026-05-30.csv
+    metric: >
+      BTC/USDT LONG n=53 SQN=1.57 (TRADABLE_AVERAGE, below SQN>2.0 gate);
+      BTC/USDT SHORT n=86 SQN=0.91 (WEAK_POSITIVE, below SQN>2.0 gate).
+      Threshold sweep: @1.5 n_long=17 (n<30 lost); @1.75 n_long=5 (n<30 lost).
+      No threshold variant maintains n>=30 with SQN>2.0.
+    accepted_sample_size_long: 53
+    accepted_sample_size_short: 86
+    evidence_strength: weak_positive
+    overfit_risk: medium
+    rollback_rule: "n/a - no threshold change proposed"
+    live_change_allowed: false
+
+  - hold_id: PH-A-CRYPTO-ETH-THRESHOLD-r1
+    engine: ENGINE_A
+    config_keys: [ENGINE_A_SCORE_GROUP_THRESHOLDS.crypto_eth]
+    live_value: 2.0
+    evidence_file: reports/direction_split_a_b_2026-05-30.csv
+    metric: >
+      ETH/USDT LONG n=50 SQN=1.72 (TRADABLE_AVERAGE, below SQN>2.0);
+      ETH/USDT SHORT n=92 SQN=0.30 (FLAT_NO_EDGE).
+      L/S asymmetry: promoting LONG-only change degrades SHORT direction beyond gate.
+    accepted_sample_size_long: 50
+    accepted_sample_size_short: 92
+    evidence_strength: weak_positive
+    overfit_risk: medium
+    rollback_rule: "n/a - no threshold change proposed"
+    live_change_allowed: false
+    note: >
+      Nearest-to-promotion among crypto. ETH SHORT flat edge (SQN=0.30) is the
+      binding constraint. If SHORT improves to SQN>2.0 in future data, re-assess
+      threshold and period parameters jointly.
+
+  - hold_id: PH-A-PRECIOUS-THRESHOLD-r2
+    engine: ENGINE_A
+    config_keys: [ENGINE_A_SCORE_GROUP_THRESHOLDS.precious_trackers]
+    live_value: 1.5
+    evidence_file: "reports/direction_split_a_b_2026-05-30.csv + logs/calibration/period_sweep_2026-06-26.csv"
+    metric: >
+      r1 (production backtest 1yr): XAG LONG n=31 SQN=2.64; XAG SHORT n=10 (appeared sample-limited).
+      r2 (period sweep 3yr, H4 bar-by-bar): XAU LONG n=283 SQN=2.679; XAG LONG n=227 SQN=2.149;
+        XAU SHORT n=42 SQN=-0.573; XAG SHORT n=53 SQN=-0.098.
+      Threshold sweep (r1, production backtest): XAG LONG @1.25: n=29 SQN=2.242; @1.5: n=24 SQN=2.086.
+      REVISED: SHORT is NOT sample-limited — with n=42-53 SHORT trades, SQN remains near-zero
+      or negative. The threshold (1.5) is irrelevant to the SHORT block.
+    accepted_sample_size_long: 283
+    accepted_sample_size_short: 53
+    evidence_strength: strong_positive_long_structural_short_deficit
+    overfit_risk: medium
+    rollback_rule: "n/a - no threshold change proposed; unblocking action: await bear market regime"
+    live_change_allowed: false
+    note: >
+      REVISED STATUS (r2): Was highest-priority HOLD in r1. Now confirmed as REGIME-BLOCKED,
+      not sample-blocked. The SHORT direction for XAU/XAG was near-zero/negative across
+      3 years of data (2023-2026 bull market). Collecting more SHORT signals from the
+      current market regime will NOT unblock this hold. See PH-A-PRECIOUS-NEAR-PROMOTION-r2
+      for revised unblocking path. Threshold (1.5) is adequate for the LONG direction;
+      do NOT raise speculatively while awaiting regime change.
+
+  - hold_id: PH-A-EMA-PERIODS-r2
+    engine: ENGINE_A
+    config_keys:
+      - ENGINE_A_EMA_PERIODS_BY_CLASS
+      - ENGINE_A_RSI_PERIOD_BY_CLASS
+      - ENGINE_A_MACD_PARAMS_BY_CLASS
+    live_value: "2026-05-28 unvalidated judgment values (config.yaml: forex 26/60 RSI18; crypto 18/40 RSI12; bond 34/80 RSI21; rest 21/50 RSI14)"
+    evidence_file: logs/calibration/period_sweep_2026-06-26.csv
+    metric: >
+      Period sweep EXECUTED r2 (2026-06-26): 20 pairs × 3-5 variants, bar-by-bar H4,
+      triple-barrier exit (SL 1.0×ATR / TP 1.5×ATR / max 18 bars).
+      Bonferroni correction applied (t-crit = sqrt(2*log(K)): K=5→1.794, K=3→1.482).
+      Result: 0/70 variant rows promoted. Key comparisons:
+        CRYPTO (current 18/40/RSI12 vs baseline 21/50/RSI14):
+          BTC LONG: current SQN=1.103, baseline SQN=1.083 — negligible difference, both fail SQN>2.0.
+          BTC SHORT: current SQN=1.772, baseline SQN=2.228 — baseline BETTER for SHORT (but LONG fails).
+          ETH ALL variants: SQN<1.0 LONG, <1.2 SHORT — period choice irrelevant, edge absent.
+          DOGE LONG: current SQN=2.381, baseline SQN=2.261 — current marginally better, but SHORT blocks.
+        FOREX (current 26/60/RSI18 vs baseline 21/50/RSI14):
+          EUR/USD ALL variants: LONG SQN negative (-0.06 to -1.04), SHORT SQN negative.
+          GBP/USD, USD/JPY, GBP/JPY: All negative/near-zero. Period irrelevant.
+        PRECIOUS (current 21/50/RSI14 = baseline):
+          XAG LONG: baseline SQN=2.149, fast_18_40_r12 SQN=2.040 — baseline slightly better LONG.
+          XAU LONG: baseline SQN=2.679, fast SQN=2.731 — equivalent.
+      CONCLUSION: Current unvalidated crypto periods (18/40/RSI12) are NOT demonstrably
+      better than baseline (21/50/RSI14) on SQN. No period variant cleared all gates.
+      The BINDING CONSTRAINT is L/S asymmetry and absent SHORT edge, NOT period selection.
+    accepted_sample_size: 0
+    evidence_strength: negative_sweep_complete
+    overfit_risk: high
+    rollback_rule: "Delete all non-default rows in ENGINE_A_EMA_PERIODS_BY_CLASS / ENGINE_A_RSI_PERIOD_BY_CLASS to restore universal 21/50/200 / RSI 14"
+    live_change_allowed: false
+    note: >
+      PERIOD SWEEP COMPLETE — 0 variants promoted. Current unvalidated periods (2026-05-28)
+      remain as the HOLD position because NO alternative period outperformed them by the
+      SQN>2.0 + n>=30 + L/S symmetry + Bonferroni evidence standard. The MACD 12/26/9
+      was held universal across all variants (no MACD sweep needed given absent edge base).
+      Future period changes require demonstrating the same n>=30 + SQN>2.0 + L/S symmetry
+      evidence. The period sweep found the CORRECT interpretation: period is not the
+      blocking variable — directional regime is.
+
+  - hold_id: PH-A-ADX-PERIODS-r1
+    engine: ENGINE_A
+    config_keys:
+      - ENGINE_A_ATR_ADX_PERIODS_BY_CLASS
+    live_value: "not set in config.yaml (defaults to 14/14 everywhere via code)"
+    evidence_file: logs/calibration/threshold_recommendation_matrix.csv
+    metric: "No per-group ATR/ADX period overrides configured. Default 14/14 applies to all groups."
+    accepted_sample_size: 0
+    evidence_strength: none
+    overfit_risk: high
+    rollback_rule: "n/a - no override configured"
+    live_change_allowed: false
+    note: >
+      ATR/ADX periods remain at the Wilder standard 14/14 for all groups.
+      No per-group override has been configured or proposed. This is intentional:
+      ATR/ADX at 14/14 is the historical default. Any future per-group ATR/ADX
+      differentiation requires the same n>=30 + SQN>2.0 + L/S symmetry evidence
+      as other parameters.
+
+  - hold_id: PH-A-DI-ALIGNMENT-r1
+    engine: ENGINE_A
+    config_keys:
+      - ENGINE_A_DI_ALIGNMENT_MULT_BY_CLASS
+    live_value: "forex/crypto/commodity/stock/index: missing=1.0, balanced=0.85, opposed=0.65, severe_opposed=0.35"
+    evidence_file: logs/calibration/threshold_recommendation_matrix.csv
+    metric: "DI alignment multipliers cannot be validated without per-bar DI state classification in the backtest export"
+    accepted_sample_size: 0
+    evidence_strength: none
+    overfit_risk: high
+    rollback_rule: "Reset all classes to defaults: missing=0.5, balanced=0.5, opposed=0.5, severe_opposed=0.35"
+    live_change_allowed: false
+
+  - hold_id: PH-A-DIRECTIONAL-RAMP-r1
+    engine: ENGINE_A
+    config_keys:
+      - ENGINE_A_DIRECTIONAL_RAMP_BY_CLASS
+    live_value: "per-class min_directional/soft_span (unvalidated 2026-05-28 judgment values)"
+    evidence_file: logs/calibration/threshold_recommendation_matrix.csv
+    metric: "Directional ramp cannot be validated without per-bar directional score in the backtest export"
+    accepted_sample_size: 0
+    evidence_strength: none
+    overfit_risk: high
+    rollback_rule: "Delete ENGINE_A_DIRECTIONAL_RAMP_BY_CLASS to restore global FACTOR_MIN_DIRECTIONAL=0.25"
+    live_change_allowed: false
+
+  - hold_id: PH-A-CONVICTION-FLOOR-r1
+    engine: ENGINE_A
+    config_keys:
+      - ENGINE_A_CONVICTION_FLOOR_BY_CLASS
+    live_value: "forex=0.60, forex_majors/crosses/other=0.60, exotics=0.55, stock=0.22, index=0.24, commodity=0.20, crypto=0.15"
+    evidence_file: logs/calibration/threshold_recommendation_matrix.csv
+    metric: "Conviction floor cannot be validated without per-bar momentum_quality in the backtest export"
+    accepted_sample_size: 0
+    evidence_strength: none
+    overfit_risk: high
+    rollback_rule: "Delete ENGINE_A_CONVICTION_FLOOR_BY_CLASS to restore global FACTOR_CONVICTION_FLOOR=0.20"
+    live_change_allowed: false
+
+  - hold_id: PH-A-FACTOR-WEIGHTS-r1
+    engine: ENGINE_A
+    config_keys:
+      - ENGINE_A_FACTOR_WEIGHTS_BY_CLASS
+      - INDICATOR_WEIGHTS
+    live_value: "per-class momentum/addon/base weights (unvalidated 2026-05-28 judgment values)"
+    evidence_file: logs/calibration/threshold_recommendation_matrix.csv
+    metric: "Factor weights cannot be validated without per-factor score decomposition in the backtest export"
+    accepted_sample_size: 0
+    evidence_strength: none
+    overfit_risk: high
+    rollback_rule: "Delete ENGINE_A_FACTOR_WEIGHTS_BY_CLASS entries to restore code defaults momentum=0.50, addon=0.30, base=0.20"
+    live_change_allowed: false
+
+  - hold_id: PH-A-RSI-BOUNDS-r1
+    engine: ENGINE_A
+    config_keys:
+      - RSI_BOUNDS
+    live_value: "crypto 80/20, forex 70/30, commodity 75/25, stock 70/30, index 70/30 (unvalidated judgment values)"
+    evidence_file: logs/calibration/threshold_recommendation_matrix.csv
+    metric: "RSI bounds cannot be validated without per-bar RSI level in the backtest export"
+    accepted_sample_size: 0
+    evidence_strength: none
+    overfit_risk: high
+    rollback_rule: "Reset RSI_BOUNDS to universal 70/30 for all classes"
+    live_change_allowed: false
+
+  - hold_id: PH-A-PRECIOUS-NEAR-PROMOTION-r2
+    engine: ENGINE_A
+    config_keys:
+      - ENGINE_A_SCORE_GROUP_THRESHOLDS.precious_trackers
+      - ENGINE_A_EMA_PERIODS_BY_CLASS.precious_trackers
+      - ADX_TREND_MIN_CLASS.precious_trackers
+    live_value: "threshold=1.5, EMA=21/50/200, RSI=14, ADX_TREND_MIN=25"
+    evidence_file: "reports/direction_split_a_b_2026-05-30.csv + logs/calibration/period_sweep_2026-06-26.csv"
+    metric: >
+      r1 evidence (production backtest, 1yr lookback, n=31/10):
+        XAG/USD LONG: n=31, SQN=2.64, expR=+0.374, WR=71% — PASSES n>=30 AND SQN>2.0.
+        XAG/USD SHORT: n=10 (assessed as sample-limited in r1).
+        XAU/USD: LONG n=27, SHORT n=9 (both insufficient in r1).
+      r2 evidence (period sweep, bar-by-bar H4, 3yr data window 2023-07-05..2026-05-29):
+        XAG LONG (baseline 21/50/RSI14): n=227, SQN=2.149 — PASSES SQN>2.0 with large sample.
+        XAG SHORT (baseline): n=53, SQN=-0.098 — NEAR-ZERO/NEGATIVE edge. n>>30 does NOT help.
+        XAU LONG (baseline): n=283, SQN=2.679 — STRONG LONG edge confirmed.
+        XAU SHORT (baseline): n=42, SQN=-0.573 — NEGATIVE edge. n>=30 does NOT help.
+      CRITICAL REVISION: The prior r1 assessment that SHORT was "sample-limited" (n=10)
+      was INCORRECT. With 3 years of data and n=53 XAG SHORT / n=42 XAU SHORT, the SHORT
+      direction still shows SQN near-zero or negative. This is a REGIME problem (2023-2026
+      precious metals bull market), NOT a sample size problem.
+    accepted_sample_size_long: 283
+    accepted_sample_size_short: 53
+    evidence_strength: strong_positive_long_confirmed_structural_short_deficit
+    overfit_risk: low_for_long_assessment
+    rollback_rule: "n/a - no change proposed; this hold documents the regime-blocked status"
+    live_change_allowed: false
+    note: >
+      REVISED ASSESSMENT (r2): The precious_trackers SHORT direction is structurally weak
+      in the 2023-2026 bull market regime. Collecting more SHORT trades from the same
+      regime window will NOT clear the SQN>2.0 gate — the evidence base is already n=42-53
+      and SQN is near-zero or negative.
+
+      UNBLOCKING PATH (revised):
+        - Wait for a precious metals bear market regime (price decline persisting >=12 months)
+        - OR extend historical data back to 2018-2022 which included silver bear conditions
+        - Then re-run calibration with SHORT direction separately validated
+
+      The LONG edge for precious_trackers (XAU SQN=2.679, XAG SQN=2.149) is the strongest
+      confirmed edge in the entire calibration corpus. It remains HOLD due to L/S symmetry
+      requirement. If the user explicitly authorizes LONG-ONLY promotion (acknowledging the
+      SHORT SQN gap), this group is the FIRST candidate — but this requires explicit
+      evidence-governance override, NOT a default calibration decision.
+
+      Threshold: current 1.5 is adequate for LONG. Do NOT raise speculatively.
+      Periods: baseline 21/50/RSI14 marginally better for LONG than alternatives.
+              Do NOT change periods until regime unblock is achieved.
+
+# ─── Summary of all UNVALIDATED judgment values still in production ──────────
+# All of the following were shipped 2026-05-28 with "UNVALIDATED judgment values"
+# labels in config.yaml. None have been promoted to validated status in any
+# calibration cycle as of 2026-06-26. They remain in production as starting
+# points by operator authorization. Each should be explicitly targeted when
+# its score_group reaches the n>=30/SQN>2.0 evidence bar.
+_unvalidated_judgment_values_in_production:
+  - key: ENGINE_A_EMA_PERIODS_BY_CLASS
+    groups_affected: "all 25 (forex_majors/crosses/exotics/other use 26/60; crypto groups use 18/40; bond_tlt uses 34/80; rest use default 21/50)"
+    shipped_date: "2026-05-28"
+    note: "Velocity-tiered starting points. Reversible: delete entries to restore universal 21/50/200."
+
+  - key: ENGINE_A_RSI_PERIOD_BY_CLASS
+    groups_affected: "all 25 (forex uses 18; crypto uses 12; bond_tlt uses 21; rest use 14)"
+    shipped_date: "2026-05-28"
+    note: "Velocity-tiered starting points. Reversible: reset to universal 14."
+
+  - key: ENGINE_A_FACTOR_WEIGHTS_BY_CLASS
+    groups_affected: "all listed groups (stock, index, commodity sub-groups, crypto, forex)"
+    shipped_date: "2026-05-28"
+    note: "Judgment values redistributing addon weight. Reversible: delete entries."
+
+  - key: ENGINE_A_DIRECTIONAL_RAMP_BY_CLASS
+    groups_affected: "crypto, forex, stock, index, commodity, nat_gas sub-groups"
+    shipped_date: "2026-05-28"
+    note: "Per-class min_directional/soft_span. Reversible: delete entries."
+
+  - key: ENGINE_A_CONVICTION_FLOOR_BY_CLASS
+    groups_affected: "forex=0.60, stock=0.22, index=0.24, commodity=0.20, crypto=0.15"
+    shipped_date: "2026-05-28"
+    note: "Class floors. Reversible: delete entries to restore global 0.20."
+
+  - key: ENGINE_A_DI_ALIGNMENT_MULT_BY_CLASS
+    groups_affected: "forex, crypto, commodity, stock, index (forex missing=1.0 vs code default 0.5)"
+    shipped_date: "untracked"
+    note: "DI multipliers. Reversible: delete entries."
+
+  - key: RSI_BOUNDS
+    groups_affected: "crypto 80/20, forex 70/30, commodity 75/25, stock/index 70/30"
+    shipped_date: "untracked (pre-2026-05-28)"
+    note: "Per-class RSI extreme bounds. Partially justified by practitioner literature (verified references in indicator_calibration_references.yaml do NOT directly authorize specific thresholds). Reversible: reset to universal 70/30."
+
+  - key: ENGINE_A_SCORE_GROUP_THRESHOLDS
+    groups_affected: >
+      nat_gas=2.0, energy_oil=1.8, forex_majors/crosses/other=2.1, crypto_btc/eth/doge/alt_majors=2.0,
+      crypto_other=2.2, forex_exotics=1.7, softs=1.7; rest at 1.5
+    shipped_date: "various (2026-05-28 for latest bumps)"
+    note: "Only nat_gas and energy_oil bumps remain from 2026-05-28; precious reverted to 1.5 on 2026-06-03. None n>=30 validated."

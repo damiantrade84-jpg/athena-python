@@ -1,0 +1,11 @@
+engine,pair,direction,n,min_score,max_score,average_score,median_score,winner_average_score,winner_median_score,loser_average_score,loser_median_score,winner_minus_loser_median
+Engine B,XAU/USD,SHORT,37,3.75,6.0,5.1149,5.0,5.1607,5.0,5.087,5.0,0.0
+Engine B,XAU/USD,LONG,79,4.75,7.0,5.4589,5.0,5.5,5.0,5.4188,5.0,0.0
+Engine B,XAG/USD,SHORT,44,3.75,6.0,4.9034,5.0,4.8971,5.0,4.9074,4.75,0.25
+Engine B,XAG/USD,LONG,54,4.0,7.0,5.4861,5.0,5.65,6.0,5.3448,5.0,1.0
+Engine B,ETH/USDT,SHORT,63,4.75,7.75,5.5595,5.75,5.474,5.0,5.6158,5.75,-0.75
+Engine B,BTC/USDT,SHORT,58,3.75,8.0,5.8345,6.0,5.7211,5.75,5.8897,6.0,-0.25
+Engine B,BTC/USDT,LONG,72,4.0,8.0,5.6687,5.75,5.8722,6.0,5.5467,5.0,1.0
+Engine B,GBP/USD,SHORT,73,3.75,7.0,5.2021,5.0,5.25,5.0,5.1852,5.0,0.0
+Engine B,EUR/USD,SHORT,64,3.75,7.0,5.1562,5.0,5.025,5.0,5.2159,5.0,0.0
+Engine B,EUR/USD,LONG,70,4.0,6.0,5.3071,5.0,5.3846,5.0,5.2614,5.0,0.0

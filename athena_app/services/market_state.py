@@ -574,3 +574,44 @@ def should_refetch_forex_h4(
     return should_refetch_forex_stale_tf(
         pair, "H4", newest_bar_epoch, time_now=time_now, config=config
     )
+
+
+def should_refetch_mt5_d1_stale(
+    pair: dict[str, Any] | None,
+    newest_bar_epoch: float | int | None,
+    *,
+    time_now: Optional[float] = None,
+    config: dict[str, Any] | None = None,
+) -> tuple[bool, int]:
+    """Decide whether one read-only MT5 D1 refetch is warranted for stale history.
+
+    This is a fetch repair only. It does not downgrade stale diagnostics or allow
+    execution; if the retry is still stale, the existing freshness gate blocks.
+    """
+    cfg = config if isinstance(config, dict) else CONFIG
+    if not isinstance(pair, dict):
+        return False, 0
+    if str(pair.get("source") or "").lower() != "mt5":
+        return False, 0
+    if str(pair.get("type") or "").lower() in _mt5_d1_calendar_gap_excluded_types():
+        return False, 0
+    if not cfg.get("MT5_D1_FETCH_RETRY_ENABLED", True):
+        return False, 0
+    try:
+        newest = float(newest_bar_epoch)
+    except (TypeError, ValueError):
+        return False, 0
+    if newest <= 0:
+        return False, 0
+
+    now = time_now if time_now is not None else time.time()
+    offset_hours = market_state_offset_hours(pair, "D1")
+    now_bucket = get_bucket_start_epoch("D1", now, offset_hours=offset_hours)
+    last_bucket = get_bucket_start_epoch("D1", newest, offset_hours=offset_hours)
+    lag = max(0, int((int(now_bucket) - int(last_bucket)) // _timeframe_seconds("D1")))
+
+    try:
+        max_lag = int(cfg.get("MT5_D1_FETCH_RETRY_MAX_LAG", 7) or 7)
+    except (TypeError, ValueError):
+        max_lag = 7
+    return (2 <= lag <= max_lag), lag

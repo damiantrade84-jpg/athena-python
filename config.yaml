@@ -196,6 +196,12 @@ MT5_H4_FETCH_RETRY_SLEEP_MS: 400
 MT5_H1_FETCH_RETRY_ENABLED: true
 MT5_H1_FETCH_RETRY_MAX_LAG: 6
 
+# MT5 D1 one-shot refetch: repairs lazy terminal history such as a 5-bar D1 slice
+# ending several sessions behind before risk evaluates freshness. If retry remains
+# stale, the stale-data execution block still rejects the signal.
+MT5_D1_FETCH_RETRY_ENABLED: true
+MT5_D1_FETCH_RETRY_MAX_LAG: 7
+
 # Broker candle safety: do not turn MT5 error payloads with Polygon/yfinance
 # fallback candles into execution-eligible Engine A candles.
 MT5_CANDLE_FALLBACK_ENABLED: false
@@ -2788,6 +2794,10 @@ MICROSTRUCTURE_FEEDS_ENABLED: true
 
 MICROSTRUCTURE_BYBIT_FEEDS_ENABLED: true
 
+# Binance microstructure is off by default when Bybit is the primary trade-bucket
+# venue. Set true only for intentional parallel Binance orderflow diagnostics.
+MICROSTRUCTURE_BINANCE_FEEDS_ENABLED: false
+
 # F1: One multiplexed Binance Futures micro WS for ALL crypto symbols (depth+trade+aggTrade)
 # instead of one socket per symbol. The per-symbol fan-out intermittently left individual
 # streams half-closed (no close frame) without tripping the socket-level recv timeout, so
@@ -2933,7 +2943,22 @@ AUTO_EXIT_ON_DECAY: false
 # Protected gates (never upgraded by research lab): structure_ok, room_ok/space_gate_ok, rr_ok, macro_ok.
 ENGINE_B_RESEARCH_LAB_FACTORS:
   ENABLED: true
+  # Gate upgrade stays OFF: these factors are DIAGNOSTIC-only (raw_entry_ok /
+  # raw_location_ok are computed and surfaced in research_lab_detail but never
+  # flip a gate to pass). Expanding GROUPS gives every score group a micro-
+  # structure indicator reading for review without changing any pass verdict.
+  # Flip ALLOW_GATE_UPGRADE to true only after per-group backtest validation.
   ALLOW_GATE_UPGRADE: false
+  # Factor data dependencies (each factor fails closed — returns insufficient/
+  # missing — when its input is unavailable, so listing it is always safe):
+  #   micro_breakout   : OHLC only (any market)
+  #   vwap_deviation   : OHLC only (any market) — location/mean-reversion signal
+  #   vwap_reclaim     : OHLC only (any market) — entry trigger
+  #   cvd_momentum     : requires reliable trade VOLUME — real on crypto/stock/
+  #                      ETF/index trackers; unreliable on spot forex, so excluded
+  #                      from forex groups to avoid constant missing_cvd noise.
+  # metals alias (market_structure._ENGINE_B_RESEARCH_LAB_GROUP_ALIASES) maps
+  # precious_trackers + pgm_metals here.
   GROUPS:
     commodity_other:
       - micro_breakout
@@ -2944,6 +2969,114 @@ ENGINE_B_RESEARCH_LAB_FACTORS:
       - micro_breakout
       - vwap_deviation
       - cvd_momentum
+      - vwap_reclaim
+    nat_gas:
+      - micro_breakout
+      - vwap_deviation
+      - cvd_momentum
+      - vwap_reclaim
+    energy_oil:
+      - micro_breakout
+      - vwap_deviation
+      - cvd_momentum
+      - vwap_reclaim
+    copper:
+      - micro_breakout
+      - vwap_deviation
+      - cvd_momentum
+      - vwap_reclaim
+    base_metals:
+      - micro_breakout
+      - vwap_deviation
+      - cvd_momentum
+      - vwap_reclaim
+    softs:
+      - micro_breakout
+      - vwap_deviation
+      - cvd_momentum
+      - vwap_reclaim
+    crypto_btc:
+      - micro_breakout
+      - vwap_deviation
+      - cvd_momentum
+      - vwap_reclaim
+    crypto_eth:
+      - micro_breakout
+      - vwap_deviation
+      - cvd_momentum
+      - vwap_reclaim
+    crypto_doge:
+      - micro_breakout
+      - vwap_deviation
+      - cvd_momentum
+      - vwap_reclaim
+    crypto_alt_majors:
+      - micro_breakout
+      - vwap_deviation
+      - cvd_momentum
+      - vwap_reclaim
+    crypto_other:
+      - micro_breakout
+      - vwap_deviation
+      - cvd_momentum
+      - vwap_reclaim
+    us_indices_trackers:
+      - micro_breakout
+      - vwap_deviation
+      - cvd_momentum
+      - vwap_reclaim
+    eu_indices:
+      - micro_breakout
+      - vwap_deviation
+      - cvd_momentum
+      - vwap_reclaim
+    asian_indices:
+      - micro_breakout
+      - vwap_deviation
+      - cvd_momentum
+      - vwap_reclaim
+    index_other:
+      - micro_breakout
+      - vwap_deviation
+      - cvd_momentum
+      - vwap_reclaim
+    us_stock_single:
+      - micro_breakout
+      - vwap_deviation
+      - cvd_momentum
+      - vwap_reclaim
+    stock_other:
+      - micro_breakout
+      - vwap_deviation
+      - cvd_momentum
+      - vwap_reclaim
+    smallcap_em_etf:
+      - micro_breakout
+      - vwap_deviation
+      - cvd_momentum
+      - vwap_reclaim
+    bond_tlt:
+      - micro_breakout
+      - vwap_deviation
+      - cvd_momentum
+      - vwap_reclaim
+    # Spot forex: no reliable trade volume → cvd_momentum excluded (would only
+    # emit missing_cvd noise). OHLC factors still apply.
+    forex_majors:
+      - micro_breakout
+      - vwap_deviation
+      - vwap_reclaim
+    forex_crosses:
+      - micro_breakout
+      - vwap_deviation
+      - vwap_reclaim
+    forex_exotics:
+      - micro_breakout
+      - vwap_deviation
+      - vwap_reclaim
+    forex_other:
+      - micro_breakout
+      - vwap_deviation
       - vwap_reclaim
 
 NAKED_ENGINE:

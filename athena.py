@@ -2906,6 +2906,35 @@ def fetch_mt5(pair: dict, tf: str, limit: int):
     # is severely stale (illiquid exotics), legacy tick TZ fallback hallucinated ±60h
     # shifts — see infer_mt5_rates_time_shift_seconds + MT5_FETCH_STALE_UNSHIFTED_AGE_SEC.
     offset_seconds = 0
+    if tf == "D1" and bars is not None and len(bars) > 0:
+        try:
+            from athena_app.services.market_state import should_refetch_mt5_d1_stale
+
+            _utc_now = time.time()
+            _newest_ts = float(bars[-1]["time"])
+            _d1_retry, _d1_lag = should_refetch_mt5_d1_stale(
+                pair, _newest_ts, time_now=_utc_now
+            )
+            if _d1_retry:
+                _retry_sleep_ms = int(CONFIG.get("MT5_H4_FETCH_RETRY_SLEEP_MS", 400) or 0)
+                if _retry_sleep_ms > 0:
+                    time.sleep(min(_retry_sleep_ms, 2000) / 1000.0)
+                _retry_bars = mt5.copy_rates_from_pos(mt5_symbol, mt5_tf, 0, request_limit)
+                if _retry_bars is not None and len(_retry_bars) > 0:
+                    _r_newest = float(_retry_bars[-1]["time"])
+                    _, _retry_lag = should_refetch_mt5_d1_stale(
+                        pair, _r_newest, time_now=time.time()
+                    )
+                    log.debug(
+                        "[MT5] %s %s: one-shot refetch (lag %d->%d buckets) after stale newest bar",
+                        symbol,
+                        tf,
+                        _d1_lag,
+                        _retry_lag,
+                    )
+                    bars = _retry_bars
+        except Exception:
+            pass
 
     if tf != "D1" and bars is not None and len(bars) > 0:
         _utc_now = time.time()
@@ -15783,6 +15812,7 @@ def ensure_runtime_services_started() -> None:
         binance_micro_symbol_strings,
         enabled_crypto_micro_pairs,
         enabled_binance_micro_crypto_pairs,
+        should_start_binance_micro_feeds,
     )
 
     # Start EODHD WebSocket real-time price streaming + candle builder
@@ -15989,10 +16019,14 @@ def ensure_runtime_services_started() -> None:
                     loop.close()
 
             bybit_micro_enabled = bool(CONFIG.get("MICROSTRUCTURE_BYBIT_FEEDS_ENABLED", False)) or trade_bucket_exchange == "bybit"
+            binance_micro_enabled = should_start_binance_micro_feeds(
+                CONFIG,
+                has_binance_pairs=bool(binance_micro_pairs),
+            )
             use_combined = bool(CONFIG.get("MICROSTRUCTURE_BINANCE_COMBINED_STREAM", True))
             stale_after = float(CONFIG.get("MICROSTRUCTURE_BINANCE_STALE_SYMBOL_SEC", 120.0))
 
-            if use_combined and binance_micro_pairs:
+            if binance_micro_enabled and use_combined and binance_micro_pairs:
                 # F1: One multiplexed Binance Futures connection for ALL micro symbols.
                 multi_syms = [
                     str(p["symbol"]).replace("/", "").lower() for p in binance_micro_pairs
@@ -16021,7 +16055,7 @@ def ensure_runtime_services_started() -> None:
                     )
                     use_combined = False  # trip the legacy path below
 
-            if (not use_combined) and binance_micro_pairs:
+            if binance_micro_enabled and (not use_combined) and binance_micro_pairs:
                 # Legacy per-symbol Binance path (rollback when combined-stream disabled).
                 for pair in binance_micro_pairs:
                     sym = pair["symbol"]
@@ -16049,7 +16083,9 @@ def ensure_runtime_services_started() -> None:
             log.info(
                 "[MICRO] Started feeds: primary_trade_bucket_exchange=%s binance_path=%s bybit=%s pairs_total=%s%s symbols=%s",
                 trade_bucket_exchange,
-                "combined" if use_combined else "per_symbol_legacy",
+                "combined" if binance_micro_enabled and use_combined else (
+                    "per_symbol_legacy" if binance_micro_enabled else "disabled"
+                ),
                 len(bybit_micro_pairs) if bybit_micro_enabled else 0,
                 expected_n,
                 scope_note,
