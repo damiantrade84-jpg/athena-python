@@ -140,6 +140,32 @@ def _maybe_ingest(
     return {"result": outcome.get("result")}
 
 
+def _resolve_instruments(
+    *,
+    family: str | None = None,
+    symbols: list[str] | None = None,
+) -> tuple[Instrument, ...]:
+    if symbols:
+        return tuple(inst for sym in symbols if (inst := instrument_by_symbol(sym)) is not None)
+    if family:
+        return tuple(instruments_for_family(family))  # type: ignore[arg-type]
+    return DEFAULT_INSTRUMENTS
+
+
+def _scan_ingest_sources_for_instruments(
+    sources: Iterable[str] | None,
+    instruments: tuple[Instrument, ...],
+) -> tuple[str, ...] | None:
+    if sources is None:
+        return None
+    selected = tuple(sources)
+    if selected != DEFAULT_SCAN_INGEST_SOURCES:
+        return selected
+    if instruments and all(inst.family == "crypto" for inst in instruments):
+        return ()
+    return selected
+
+
 def _latest_candidate(
     store: PTISStore,
     instrument: Instrument,
@@ -244,16 +270,11 @@ def run_ase_scan(
     lower_tf_fetch: Callable[..., Any] | None = None,
 ) -> dict[str, Any]:
     store = PTISStore(ptis_root or default_ptis_root())
-    ingest_result = _maybe_ingest(store, ingest_sources)
-
-    if symbols:
-        instruments: tuple[Instrument, ...] = tuple(
-            inst for sym in symbols if (inst := instrument_by_symbol(sym)) is not None
-        )
-    elif family:
-        instruments = tuple(instruments_for_family(family))  # type: ignore[arg-type]
-    else:
-        instruments = DEFAULT_INSTRUMENTS
+    instruments = _resolve_instruments(family=family, symbols=symbols)
+    ingest_result = _maybe_ingest(
+        store,
+        _scan_ingest_sources_for_instruments(ingest_sources, instruments),
+    )
 
     candidates = generate_live_candidates(store, instruments, horizon=horizon)
     inst_map = {i.symbol: i for i in instruments}
@@ -343,7 +364,11 @@ def run_ase_dual_horizon_scan(
     """Scan all instruments on intraday and swing horizons."""
     horizons: tuple[Horizon, ...] = ("intraday", "swing")
     store = PTISStore(ptis_root or default_ptis_root())
-    ingest_result = _maybe_ingest(store, ingest_sources)
+    instruments = _resolve_instruments(family=family, symbols=symbols)
+    ingest_result = _maybe_ingest(
+        store,
+        _scan_ingest_sources_for_instruments(ingest_sources, instruments),
+    )
 
     by_horizon: dict[str, Any] = {}
     all_signals: list[dict[str, Any]] = []

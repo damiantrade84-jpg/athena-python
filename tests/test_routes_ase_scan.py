@@ -44,9 +44,9 @@ def test_ase_scan_skip_ingest(monkeypatch):
 
 
 def test_ase_scan_custom_ingest_sources(monkeypatch):
-    response, calls = _register_and_call({"ingestSources": ["mt5", "bybit"]}, monkeypatch)
+    response, calls = _register_and_call({"ingestSources": ["binance", "bybit"]}, monkeypatch)
     assert response.status_code == 200
-    assert calls[0]["kwargs"]["ingest_sources"] == ("mt5", "bybit")
+    assert calls[0]["kwargs"]["ingest_sources"] == ("binance", "bybit")
 
 
 def test_ase_scan_intraday(monkeypatch):

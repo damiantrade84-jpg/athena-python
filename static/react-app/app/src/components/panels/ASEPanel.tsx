@@ -308,7 +308,8 @@ export default function ASEPanel() {
           <span>
             Layer 2 models missing for most pairs ({artifactFamilies}/5 families trained).
             Signals show <code className="font-mono">model_not_trained</code> until you run:{' '}
-            <code className="font-mono">py ase_cli.py ingest --sources eodhd,dukascopy,cot,fred,bybit</code>,{' '}
+            <code className="font-mono">py ase_cli.py ingest --sources eodhd,mt5,binance,dukascopy,cot,fred</code>,{' '}
+            optionally <code className="font-mono">py ase_cli.py ingest --sources bybit</code> for crypto derivatives,{' '}
             <code className="font-mono">py -m athena_research.ase.run_phase1</code>,{' '}
             <code className="font-mono">py ase_cli.py train-all</code>.
           </span>

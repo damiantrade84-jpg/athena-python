@@ -147,6 +147,28 @@ def test_scan_runs_ingest_by_default(ptis: PTISStore, monkeypatch):
     assert result["ingestResult"]["result"] == {"mt5_live": {"inserted": 5}}
 
 
+def test_crypto_only_scan_skips_default_ingest(ptis: PTISStore, monkeypatch):
+    calls: list[dict[str, Any]] = []
+
+    def fake_run_ingest(*, store, sources, write_audit):
+        calls.append({"store": store, "sources": tuple(sources), "write_audit": write_audit})
+        return {"mt5_live": {"inserted": 5}}
+
+    monkeypatch.setattr(scan_module, "run_ingest", fake_run_ingest)
+
+    result = run_ase_scan(
+        family="crypto",
+        horizon="intraday",
+        write_journal=False,
+        ptis_root=str(ptis.root),
+    )
+
+    assert calls == []
+    assert "ingestResult" not in result
+    assert result["instrumentCount"] > 0
+    assert result["signalCount"] == result["instrumentCount"]
+
+
 def test_scan_skips_ingest_when_sources_empty(ptis: PTISStore, monkeypatch):
     calls: list[dict[str, Any]] = []
 
