@@ -14858,7 +14858,10 @@ def api_performance():
             last_20_rows = con.execute(
                 "SELECT * FROM audit_log WHERE exit_price IS NOT NULL ORDER BY id DESC LIMIT 20"
             ).fetchall()
-            last_20 = [dict(r) for r in last_20_rows]
+            last_20 = [
+                {**dict(r), "engine_resolved": _infer_perf_engine(dict(r))}
+                for r in last_20_rows
+            ]
 
         all_trades = [dict(r) for r in rows]
 

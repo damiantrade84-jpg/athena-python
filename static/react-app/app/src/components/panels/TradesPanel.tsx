@@ -20,6 +20,7 @@ import {
 } from 'recharts';
 import { X, AlertTriangle } from 'lucide-react';
 import { fmtNum } from '@/lib/utils';
+import { auditEngineTitle, formatAuditEngineLabel, resolveAuditEngine } from '@/lib/auditEngine';
 import type { PerformanceMetrics, PerformanceEngineRow } from '@/types';
 
 interface OpenTradesTimedResp {
@@ -428,6 +429,7 @@ export default function TradesPanel() {
                       <TableRow className="hover:bg-transparent">
                         <TableHead className="text-[10px] uppercase">Pair</TableHead>
                         <TableHead className="text-[10px] uppercase">Dir</TableHead>
+                        <TableHead className="text-[10px] uppercase">Engine</TableHead>
                         <TableHead className="text-[10px] uppercase text-right">Entry</TableHead>
                         <TableHead className="text-[10px] uppercase text-right">Exit</TableHead>
                         <TableHead className="text-[10px] uppercase text-right">P&amp;L</TableHead>
@@ -436,10 +438,26 @@ export default function TradesPanel() {
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {performance!.last_20_trades.map((t, i) => (
+                      {performance!.last_20_trades.map((t, i) => {
+                        const engineKey = resolveAuditEngine(t as Record<string, unknown>);
+                        const direction = String(t.direction || '—');
+                        return (
                         <TableRow key={i}>
                           <TableCell className="text-xs font-mono">{String(t.pair || '—')}</TableCell>
-                          <TableCell className="text-xs font-mono">{String(t.direction || '—')}</TableCell>
+                          <TableCell>
+                            <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${direction === 'LONG' ? 'bg-long/20 text-long' : direction === 'SHORT' ? 'bg-short/20 text-short' : ''}`}>
+                              {direction}
+                            </span>
+                          </TableCell>
+                          <TableCell>
+                            <Badge
+                              variant="outline"
+                              className="text-[10px] h-5 font-mono"
+                              title={auditEngineTitle(engineKey)}
+                            >
+                              {formatAuditEngineLabel(engineKey)}
+                            </Badge>
+                          </TableCell>
                           <TableCell className="text-xs font-mono text-right">{fmtNum(t.entry_price, 5)}</TableCell>
                           <TableCell className="text-xs font-mono text-right">{fmtNum(t.exit_price, 5)}</TableCell>
                           <TableCell className={`text-xs font-mono text-right ${num(t.pnl) >= 0 ? 'text-long' : 'text-short'}`}>
@@ -450,7 +468,8 @@ export default function TradesPanel() {
                           </TableCell>
                           <TableCell className="text-[10px] font-mono text-muted-foreground">{String(t.exit_reason || '—')}</TableCell>
                         </TableRow>
-                      ))}
+                        );
+                      })}
                     </TableBody>
                   </Table>
                 </ScrollArea>

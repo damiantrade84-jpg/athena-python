@@ -149,6 +149,18 @@ export interface PerformanceEngineRow {
   avg_slippage_bps?: number | null;
 }
 
+export interface AuditClosedTrade {
+  pair?: string;
+  direction?: string;
+  entry_price?: number;
+  exit_price?: number;
+  pnl?: number;
+  r_multiple?: number;
+  exit_reason?: string;
+  engine?: string;
+  engine_resolved?: string;
+}
+
 export interface PerformanceMetrics {
   total_trades: number;
   win_count?: number;
@@ -175,7 +187,7 @@ export interface PerformanceMetrics {
   daily_pnl?: { date: string; pnl: number }[];
   /** Human-readable notes on how headline metrics are computed (e.g. Sharpe annualiser). */
   metric_interpretation_notes?: string[];
-  last_20_trades?: Record<string, unknown>[];
+  last_20_trades?: AuditClosedTrade[];
   execution_quality?: {
     trades_with_slippage?: number;
     median_abs_slippage_bps?: number | null;
