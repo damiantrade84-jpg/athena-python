@@ -52,6 +52,14 @@ volume_profile:
     - us_stock_single
     - stock_other
     - smallcap_em_etf
+    # C2: index ETFs, precious/energy/bond trackers with real RTH volume
+    # (SPY/QQQ/DAX ETFs, GLD/SLV, USO/XLE, TLT) — audit MED #18.
+    - us_indices_trackers
+    - eu_indices
+    - asian_indices
+    - precious_trackers
+    - energy_oil
+    - bond_tlt
 
 forex_session:
   asian_skip_enabled: true

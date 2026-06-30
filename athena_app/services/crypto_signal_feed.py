@@ -27,7 +27,10 @@ def resolve_crypto_signal_feed(engine: str, config: dict | None) -> str:
     engine_key = f"ENGINE_{eng}_CRYPTO_SIGNAL_FEED"
     value = cfg.get(engine_key)
     if value is None:
-        value = cfg.get("ENGINE_AB_CRYPTO_SIGNAL_FEED", "binance")
+        # B1: default to "bybit" to match config.yaml and config.py. Previously
+        # "binance", which silently produced a different venue than the loaded
+        # config.yaml when callers read CONFIG without the YAML layer (audit MED #11).
+        value = cfg.get("ENGINE_AB_CRYPTO_SIGNAL_FEED", "bybit")
     return _normalize_feed(value)
 
 
