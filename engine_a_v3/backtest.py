@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 from math import sqrt
 from statistics import fmean, stdev
+from typing import Any
 
 from engine_a_v3.contract import CONTRACT_VERSION
 from engine_a_v3.diagnostics import reverse_direction_result_r, trade_path_diagnostics
@@ -131,6 +133,32 @@ def _summarize(pair: dict, horizon: str, trades: list[dict], same_bar: int) -> d
     }
 
 
+def _intermarket_confirmation_for_bar(
+    pair: dict,
+    signal,
+    *,
+    raw_context: dict | None,
+) -> dict | None:
+    if not raw_context or signal.direction not in ("LONG", "SHORT"):
+        return None
+    try:
+        from config import CONFIG
+        from intermarket import apply_confirmation_to_score
+
+        _im = apply_confirmation_to_score(
+            float(signal.confluenceScore or 0.0),
+            str(signal.direction),
+            pair,
+            raw_context,
+            max_score=float(signal.maxScore or 3.0),
+            config=CONFIG,
+        )
+        confirmation = _im.get("confirmation")
+        return confirmation if isinstance(confirmation, dict) else None
+    except Exception:
+        return None
+
+
 def run_v3_backtest(
     pair: dict,
     candles: dict[str, list[dict]],
@@ -144,6 +172,7 @@ def run_v3_backtest(
     max_hold_bars: int = 24,
     start_index: int | None = None,
     collect_funnel: bool = False,
+    intermarket_context_provider: Callable[[Any], dict | None] | None = None,
 ) -> dict:
     primary_tf = "H1" if horizon == "intraday" else "H4"
     primary = list(candles.get(primary_tf) or [])
@@ -169,6 +198,17 @@ def run_v3_backtest(
             horizon=horizon,
             registry=registry,
         )
+        _im_confirmation = None
+        if intermarket_context_provider is not None:
+            try:
+                raw_ctx = intermarket_context_provider(cutoff)
+                _im_confirmation = _intermarket_confirmation_for_bar(
+                    pair,
+                    signal,
+                    raw_context=raw_ctx,
+                )
+            except Exception:
+                _im_confirmation = None
         if signal.decision != "TRADE" or not signal.qualified:
             continue
         entry_bar = primary[index + 1]
@@ -271,6 +311,8 @@ def run_v3_backtest(
                 "oos": True,
             }
         )
+        if _im_confirmation is not None:
+            trades[-1]["intermarketConfirmation"] = _im_confirmation
         next_available_index = exit_index + 1
 
     result = _summarize(pair, horizon, trades, same_bar)

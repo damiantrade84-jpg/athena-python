@@ -1815,6 +1815,25 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict[s
                     intermarket_snapshot=intermarket_snapshot,
                 )
 
+                if sig_a:
+                    try:
+                        from news_sentiment_feed import apply_news_sentiment_to_scan_result
+
+                        apply_news_sentiment_to_scan_result(
+                            sig_a,
+                            pair,
+                            config=CONFIG,
+                            eodhd_ticker_for_pair=r.eodhd_ticker_for_pair,
+                            threshold=sig_a.get("threshold"),
+                            max_score=sig_a.get("maxScore", 3.0),
+                        )
+                    except Exception as _news_sent_exc:
+                        log.debug(
+                            "[SCAN] %s news sentiment blend skipped: %s",
+                            pair.get("display", "?"),
+                            _news_sent_exc,
+                        )
+
                 # Attach execution-gate freshness so the scan UI shows execution
                 # blocks. analyze_pair only sets dataFreshness from the pre-scoring
                 # gate (allowed=True); the execution gate is stricter and can block
