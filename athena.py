@@ -13152,6 +13152,74 @@ def fetch_eodhd_indicators(pair):
         return None
 
 
+def _attach_v3_intermarket_confirmation(
+    signal: dict,
+    pair: dict,
+    *,
+    intermarket_snapshot: dict | None,
+) -> dict:
+    """Attach intermarket confirmation and optional score delta to an Engine A v3 signal."""
+    if not intermarket_snapshot or not isinstance(intermarket_snapshot, dict):
+        return signal
+    try:
+        from intermarket import apply_confirmation_to_score, build_symbol_context
+
+        ctx = build_symbol_context(pair, intermarket_snapshot, config=CONFIG)
+        if not ctx:
+            return signal
+
+        direction = signal.get("direction")
+        if direction not in ("LONG", "SHORT"):
+            signal["intermarketConfirmation"] = {
+                "verdict": "neutral",
+                "score": 0.0,
+                "explanation": (
+                    "Intermarket confirmation neutral: no trade direction on signal."
+                ),
+                "unavailablePriors": list(ctx.get("unavailablePriors") or []),
+                "driversConsidered": 0,
+                "engineADelta": 0.0,
+            }
+            signal["intermarketEngineADelta"] = 0.0
+            return signal
+
+        base_score = float(signal.get("confluenceScore") or signal.get("score") or 0.0)
+        max_score = float(signal.get("maxScore") or 3.0)
+        _im_result = apply_confirmation_to_score(
+            base_score,
+            direction,
+            pair,
+            ctx,
+            max_score=max_score,
+            config=CONFIG,
+        )
+        _confirmation = _im_result.get("confirmation")
+        if isinstance(_confirmation, dict):
+            signal["intermarketConfirmation"] = _confirmation
+            signal["intermarketEngineADelta"] = float(
+                _confirmation.get("engineADelta", 0.0) or 0.0
+            )
+        _adjusted = _im_result.get("adjusted_score")
+        if isinstance(_adjusted, (int, float)):
+            adjusted = round(float(_adjusted), 6)
+            signal["confluenceScore"] = adjusted
+            signal["score"] = adjusted
+            if signal.get("maxScore"):
+                try:
+                    _max = float(signal["maxScore"])
+                    if _max > 0:
+                        signal["scoreNorm"] = round(min(1.0, adjusted / _max), 6)
+                except (TypeError, ValueError):
+                    pass
+    except Exception as exc:
+        log.warning(
+            "[ANALYZE] %s intermarket confirmation skipped: %s",
+            pair.get("display", "?"),
+            exc,
+        )
+    return signal
+
+
 def analyze_pair(
     pair,
     btc_bias,
@@ -13332,12 +13400,16 @@ def analyze_pair(
             pass
         from engine_a_v3.evaluator import evaluate_engine_a_v3
 
-        return evaluate_engine_a_v3(
+        return _attach_v3_intermarket_confirmation(
+            evaluate_engine_a_v3(
+                pair,
+                {"D1": list(d1 or []), "H4": list(h4 or []), "H1": list(h1 or [])},
+                horizon=style,
+                blocked_reasons=("required_confirmed_candles_missing",),
+            ).to_dict(),
             pair,
-            {"D1": list(d1 or []), "H4": list(h4 or []), "H1": list(h1 or [])},
-            horizon=style,
-            blocked_reasons=("required_confirmed_candles_missing",),
-        ).to_dict()
+            intermarket_snapshot=intermarket_snapshot,
+        )
 
     # Engine A scores confirmed candles only. Forming-bar state remains diagnostic
     # for UI/freshness, but indicators and two-bar confirmation use closed bars.
@@ -13485,7 +13557,11 @@ def analyze_pair(
                     "pairSource": pair.get("source"),
                 }
                 _blocked["is_forming"] = is_forming
-                return _blocked
+                return _attach_v3_intermarket_confirmation(
+                    _blocked,
+                    pair,
+                    intermarket_snapshot=intermarket_snapshot,
+                )
         except Exception as _prefresh_err:
             log.warning(
                 "[ANALYZE] %s V3 freshness validation failed closed: %s",
@@ -13502,7 +13578,11 @@ def analyze_pair(
             ).to_dict()
             _blocked["dataFreshness"]["diagnostics"] = _freshness_diag
             _blocked["is_forming"] = is_forming
-            return _blocked
+            return _attach_v3_intermarket_confirmation(
+                _blocked,
+                pair,
+                intermarket_snapshot=intermarket_snapshot,
+            )
 
     from engine_a_v3.evaluator import evaluate_engine_a_v3
     from engine_a_v3.quant_context import build_quant_context
@@ -13544,7 +13624,11 @@ def analyze_pair(
         "pairSource": pair.get("source"),
     }
     _v3_signal["is_forming"] = is_forming
-    return _v3_signal
+    return _attach_v3_intermarket_confirmation(
+        _v3_signal,
+        pair,
+        intermarket_snapshot=intermarket_snapshot,
+    )
 
 
 def _build_style_levels(price: float, atr: float, direction: str, pair_type: str) -> dict:

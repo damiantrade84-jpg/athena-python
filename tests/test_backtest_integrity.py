@@ -852,6 +852,25 @@ def test_intermarket_point_in_time_context_excludes_future_bars():
     assert spy_driver["summary"]["current"]["driverRecentChangePct"] < 0
 
 
+def test_engine_c_bt_attaches_intermarket_to_v3_signal():
+    from pathlib import Path
+
+    source = (Path(__file__).resolve().parents[1] / "backtest_runner.py").read_text(encoding="utf-8")
+    consensus_start = source.index("def backtest_pair_consensus(")
+    consensus_source = source[consensus_start:]
+    assert "_attach_bt_intermarket_to_v3_signal(" in consensus_source
+    assert "evaluate_engine_a_v3(" in consensus_source
+
+
+def test_run_v3_backtest_accepts_intermarket_provider():
+    import inspect
+
+    from engine_a_v3.backtest import run_v3_backtest
+
+    params = inspect.signature(run_v3_backtest).parameters
+    assert "intermarket_context_provider" in params
+
+
 def test_backtest_pair_naked_telemetry_captures_non_zero_values(monkeypatch):
     pair = {"display": "AAPL", "symbol": "AAPL", "type": "stock", "source": "eodhd"}
     d1 = _make_bars(datetime(2024, 1, 1, tzinfo=timezone.utc), 100, 24, base=90.0)
