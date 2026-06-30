@@ -72,6 +72,53 @@ class TestBybitPositionRiskFallback:
         # After fix this should be much higher (e.g., >= notional * 0.5 = 3000)
         assert p["risk_amount"] >= notional * 0.5
 
+    def test_position_keeps_sub_cent_unrealized_pnl_precision(self, monkeypatch):
+        """Timed exits must not persist 0.00 PnL just because display rounding is 2dp."""
+        import bybit_executor
+
+        pos = self._mock_position(
+            symbol="DOT/USDT:USDT",
+            contracts=1.0,
+            entry=4.0,
+            stop_loss=3.9,
+        )
+        pos["markPrice"] = 4.004
+        pos["unrealizedPnl"] = 0.004
+        exchange = self._make_mock_exchange([pos])
+        monkeypatch.setattr(bybit_executor, "_get_exchange", lambda: exchange)
+
+        result = bybit_executor.bybit_get_positions()
+
+        assert result["error"] is False
+        p = result["positions"][0]
+        assert p["profit"] == pytest.approx(0.0)
+        assert p["profit_raw"] == pytest.approx(0.004)
+        assert p["unrealizedPnl"] == pytest.approx(0.004)
+
+    def test_position_reads_bybit_info_mark_price_aliases(self, monkeypatch):
+        """Some symbols expose mark price through info snake_case fields."""
+        import bybit_executor
+
+        pos = self._mock_position(
+            symbol="ATOM/USDT:USDT",
+            contracts=1.0,
+            entry=6.0,
+            stop_loss=5.8,
+        )
+        pos.pop("markPrice", None)
+        pos["info"]["mark_price"] = "6.1234"
+        pos["info"]["unrealisedPnl"] = "0.1234"
+        exchange = self._make_mock_exchange([pos])
+        monkeypatch.setattr(bybit_executor, "_get_exchange", lambda: exchange)
+
+        result = bybit_executor.bybit_get_positions()
+
+        assert result["error"] is False
+        p = result["positions"][0]
+        assert p["markPrice"] == pytest.approx(6.1234)
+        assert p["lastPrice"] == pytest.approx(6.1234)
+        assert p["profit_raw"] == pytest.approx(0.1234)
+
 
 class TestBybitExecutableQuoteSafety:
     def _approval(self):
