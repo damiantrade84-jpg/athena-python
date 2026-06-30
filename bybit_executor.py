@@ -823,11 +823,63 @@ def bybit_get_positions() -> dict:
                 symbol_raw = pos.get("symbol", "")
                 # Convert BTC/USDT:USDT back to display format BTC/USDT
                 display = symbol_raw.split(":")[0] if ":" in symbol_raw else symbol_raw
-                # markPrice: ccxt stores as "markPrice" in info or top-level
-                mark_price = float(pos.get("markPrice") or info.get("markPrice") or 0)
+                # CCXT/Bybit field names vary by version and endpoint. Keep this
+                # normalized mark usable for timed-exit bookkeeping.
+                mark_price = 0.0
+                for price_key in (
+                    "markPrice",
+                    "lastPrice",
+                    "price",
+                    "indexPrice",
+                ):
+                    try:
+                        mark_price = float(pos.get(price_key) or 0)
+                    except (TypeError, ValueError):
+                        mark_price = 0.0
+                    if mark_price > 0:
+                        break
+                if mark_price <= 0:
+                    for price_key in (
+                        "markPrice",
+                        "mark_price",
+                        "lastPrice",
+                        "last_price",
+                        "indexPrice",
+                        "index_price",
+                    ):
+                        try:
+                            mark_price = float(info.get(price_key) or 0)
+                        except (TypeError, ValueError):
+                            mark_price = 0.0
+                        if mark_price > 0:
+                            break
                 side = pos.get("side", "")
                 direction = "LONG" if side.lower() == "long" else "SHORT"
-                upnl = float(pos.get("unrealizedPnl", 0) or 0)
+                upnl = 0.0
+                for pnl_key in (
+                    "unrealizedPnl",
+                    "unrealizedProfit",
+                    "unrealisedPnl",
+                ):
+                    try:
+                        upnl = float(pos.get(pnl_key) or 0)
+                    except (TypeError, ValueError):
+                        upnl = 0.0
+                    if upnl != 0:
+                        break
+                if upnl == 0.0:
+                    for pnl_key in (
+                        "unrealisedPnl",
+                        "unrealizedPnl",
+                        "unrealisedProfit",
+                        "unrealizedProfit",
+                    ):
+                        try:
+                            upnl = float(info.get(pnl_key) or 0)
+                        except (TypeError, ValueError):
+                            upnl = 0.0
+                        if upnl != 0:
+                            break
                 positions.append(
                     {
                         # Normalised fields (match MT5 position card schema)
@@ -836,6 +888,7 @@ def bybit_get_positions() -> dict:
                         "entry": entry,
                         "volume": size,
                         "profit": round(upnl, 2),
+                        "profit_raw": upnl,
                         "sl": sl_val,
                         "tp": tp_val,
                         "ticket": info.get("positionIdx", ""),

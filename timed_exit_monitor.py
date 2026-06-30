@@ -1344,6 +1344,28 @@ def _live_current_price(live: dict, fallback: float = 0.0) -> float:
         return 0.0
 
 
+def _live_position_profit(live: dict) -> float:
+    """Return raw live PnL when available; fall back to display-rounded profit."""
+    for key in (
+        "profit_raw",
+        "unrealizedPnl",
+        "unrealisedPnl",
+        "unrealizedProfit",
+        "unrealisedProfit",
+    ):
+        try:
+            value = float(live.get(key))
+        except (TypeError, ValueError):
+            continue
+        if value != 0.0:
+            return value
+    try:
+        return float(live.get("profit"))
+    except (TypeError, ValueError):
+        pass
+    return 0.0
+
+
 def _compute_chandelier_trail(
     pair: str, style: str, direction: str, entry: float, sl: float,
     tcfg: dict, ticket_key: str, *, mins_open: float = 0.0,
@@ -1941,7 +1963,7 @@ def _handle_mt5_row(
                 pass
         return
 
-    profit    = float(live.get("profit", 0))
+    profit    = _live_position_profit(live)
     cur_price = _live_current_price(live, entry)
     tp        = float(row.get("tp") or live.get("tp") or 0)
     direction = live.get("direction", row.get("direction", "LONG"))
@@ -2289,7 +2311,7 @@ def _handle_bybit_row(
     if not live:
         return  # already closed
 
-    profit    = float(live.get("profit", 0))
+    profit    = _live_position_profit(live)
     cur_price = _live_current_price(live, entry)
     tp        = float(row.get("tp") or live.get("tp") or 0)
     direction = live.get("direction", row.get("direction", "LONG"))

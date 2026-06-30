@@ -1447,3 +1447,78 @@ class TestEngineDProfitProtect:
         tem._peak_r_state["bybit:aid:42"] = 0.5
         tem._handle_bybit_row(row, cfg)
         assert closes, "expected pre_activation giveback close for Engine D"
+
+    def test_bybit_profit_roundtrip_persists_sub_cent_pnl(self, tmp_path, monkeypatch):
+        import sqlite3
+        import sys
+        import timed_exit_monitor as tem
+
+        db = tmp_path / "audit.db"
+        with sqlite3.connect(str(db)) as con:
+            con.execute(
+                "CREATE TABLE audit_log (id INTEGER PRIMARY KEY, ticket TEXT, "
+                "exit_reason TEXT, exit_price REAL, pnl REAL, r_multiple REAL, "
+                "exit_time TEXT)"
+            )
+            con.execute("INSERT INTO audit_log (id, ticket) VALUES (43, '0')")
+            con.commit()
+
+        row = {
+            "audit_id": 43,
+            "ticket": "0",
+            "pair": "DOT/USDT",
+            "engine": "engine d",
+            "style": "scalp",
+            "ts": "2026-01-01T00:00:00+00:00",
+            "entry_price": 4.0,
+            "sl": 3.0,
+            "volume": 1.0,
+            "risk_amount": 0.10,
+            "direction": "LONG",
+        }
+        cfg = _get_timed_cfg(lambda: {
+            "TIMED_EXIT": {
+                "enabled": True,
+                "tp_mode": "trailing_atr",
+                "pre_activation_profit_protect_enabled": True,
+                "pre_activation_profit_arm_r": {"scalp": 0.20},
+                "pre_activation_profit_close_r": {"scalp": 0.0},
+                "pre_activation_profit_giveback_r": {"scalp": 0.25},
+                "trail_activation_r": {"scalp": 0.7, "intraday": 1.0, "swing": 1.5},
+                "scalp": {"breakeven_min": 5, "close_min": 10},
+                "intraday": {"breakeven_min": 15, "close_min": 30},
+                "swing": {"breakeven_days": 2.5, "close_days": 5.0},
+            },
+            "SCALP_ENGINE": {"LIVE_PROFIT_PROTECT": True},
+        })
+
+        fake_bybit = types.ModuleType("bybit_executor")
+        fake_bybit.bybit_get_positions = lambda: {
+            "positions": [{
+                "pair": "DOT/USDT",
+                "profit": 0.0,
+                "unrealizedPnl": 0.004,
+                "currentPrice": 4.0,
+                "sl": 3.0,
+                "direction": "LONG",
+                "volume": 1.0,
+            }]
+        }
+        fake_bybit.bybit_close_position = lambda *a, **kw: {"success": True}
+        fake_bybit.bybit_map_symbol = lambda p: f"{p}:USDT"
+        fake_bybit.bybit_modify_protective_sl = lambda *a, **kw: {"success": True}
+        fake_bybit.bybit_move_sl_to_breakeven = lambda *a, **kw: {"success": True}
+        monkeypatch.setitem(sys.modules, "bybit_executor", fake_bybit)
+        monkeypatch.setitem(sys.modules, "telegram_notify", _tg_stub)
+
+        tem._peak_r_state["bybit:aid:43"] = 0.5
+        tem._handle_bybit_row(row, cfg, str(db))
+
+        with sqlite3.connect(str(db)) as con:
+            saved = con.execute(
+                "SELECT exit_reason, exit_price, pnl, r_multiple FROM audit_log WHERE id=43"
+            ).fetchone()
+        assert saved[0] == "TRAIL_PROFIT_ROUNDTRIP"
+        assert saved[1] == pytest.approx(4.0)
+        assert saved[2] == pytest.approx(0.004)
+        assert saved[3] == pytest.approx(0.04)
