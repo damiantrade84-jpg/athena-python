@@ -16,6 +16,29 @@ from athena_app.services.market_state import (
     split_market_state,
     trim_mt5_d1_broker_session_ahead_tail,
 )
+from engine_a_scoring_profile import resolve_engine_a_scoring_profile
+
+
+def d1_consumed_by_score_group(score_group: str | None, style: str | None) -> bool:
+    """Return True if D1 feeds the trend or momentum scoring for this group/style.
+
+    Groups that drop D1 from their trend layers (e.g., energy_oil/commodity_other
+    use H4+H1 only) and don't anchor momentum on D1 do not consume D1, so stale D1
+    must not block them pre-scoring or at execution. Conservative default True
+    (require D1) when the profile can't be resolved or the group is unknown, so
+    unaudited groups keep the historic fail-closed D1 gate.
+    """
+    if not score_group:
+        return True
+    try:
+        profile = resolve_engine_a_scoring_profile(
+            score_group=str(score_group), asset_type="", style=str(style or "intraday")
+        )
+        tfs = {str(t).upper() for t in (profile.get("trend_timeframes") or [])}
+        momentum_tf = str(profile.get("momentum_tf") or "H4").upper()
+        return "D1" in tfs or momentum_tf == "D1"
+    except Exception:
+        return True
 
 
 DEFAULT_DATA_FRESHNESS_GATES = {
@@ -586,12 +609,22 @@ def evaluate_execution_data_freshness(
     """Evaluate signal candle diagnostics against config-gated execution blocks."""
     sig = signal or {}
     gate = _gate_config(config)
+    _d1_required = d1_consumed_by_score_group(
+        sig.get("scoreGroup") or sig.get("score_group"),
+        sig.get("horizon") or sig.get("style"),
+    )
     blocked: list[dict[str, Any]] = []
     warnings: list[dict[str, Any]] = []
 
     def _add(tf: str, code: str, source: str, detail: dict[str, Any] | None = None) -> None:
         tf_u = str(tf or "").upper()
         if tf_u not in gate["BLOCK_TIMEFRAMES"]:
+            return
+        # D1 freshness only blocks when D1 feeds the signal's trend/momentum
+        # scoring. Groups that drop D1 from their trend layers (energy_oil,
+        # commodity_other) and don't anchor momentum on D1 must not be blocked
+        # on stale D1 that doesn't affect their score.
+        if tf_u == "D1" and not _d1_required:
             return
         code_norm = _normalize_block_code(code)
         item = {

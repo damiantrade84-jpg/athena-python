@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from typing import Any, Callable, List, Optional, TypedDict
 
 from config import CONFIG
-from engine_a_groups import ENGINE_A_KNOWN_SCORE_GROUPS
+from engine_a_groups import ENGINE_A_KNOWN_SCORE_GROUPS, _PRECIOUS_TRACKERS, resolve_score_group_by_type
 from indicators import (
     calc_rsi,
 )
@@ -109,39 +109,6 @@ _LEGACY_VOTE_FACTOR_MAP = {
     "H1 RSI Divergence": "rsi_div",
 }
 
-_MAJOR_FOREX = {
-    "EUR/USD", "GBP/USD", "USD/JPY", "AUD/USD", "NZD/USD", "USD/CAD", "USD/CHF"
-}
-_FOREX_CROSSES = {
-    "EUR/GBP", "EUR/JPY", "GBP/JPY", "AUD/JPY", "EUR/AUD", "GBP/AUD", "EUR/CHF", "USD/SGD",
-    "AUD/CHF", "AUD/NZD",
-}
-_EXOTIC_FOREX = {"USD/ZAR", "USD/MXN", "USD/BRL", "USD/INR"}
-_PRECIOUS_TRACKERS = {"XAU/USD", "XAG/USD", "GLD", "SLV", "GDX"}
-_ENERGY_OIL = {"WTI Oil", "Brent Oil", "USO", "XLE"}
-# Industrial base metals — trend well, route to STABLE tier.
-_BASE_METALS = {"Aluminium", "Lead", "Nickel", "Zinc"}
-# Soft commodities + livestock — Athena edge unaudited; route to EXOTIC tier.
-_SOFTS = {"Cattle", "Cocoa", "Coffee", "Corn", "Cotton", "Soybeans", "Sugar", "Wheat"}
-_US_INDICES_TRACKERS = {"NASDAQ-100", "S&P 500", "Dow Jones", "SPY", "QQQ", "DIA", "SOXX"}
-_EU_INDICES = {"DAX", "DAX 40", "UK100", "FTSE 100"}
-_ASIAN_INDICES = {"ASX 200", "Nikkei 225", "Hang Seng"}
-_US_STOCK_CUSTOM = {
-    "AAPL", "TSLA", "NVDA", "MSFT", "AMZN", "META", "GOOG", "JPM", "V", "XOM",
-    "NFLX", "AMD", "CRM", "DIS", "BA", "COIN", "PYPL", "INTC", "UBER", "PLTR"
-}
-_ALTCOIN_MAJORS = {
-    "SOL/USDT", "ADA/USDT", "AVAX/USDT", "LINK/USDT", "POL/USDT", "BNB/USDT",
-    "DOT/USDT", "LTC/USDT", "SUI/USDT", "NEAR/USDT", "APT/USDT", "INJ/USDT",
-    "RENDER/USDT",
-    # 2026-06-24: promoted from crypto_other — liquid alts that previously scored
-    # against the stricter crypto_other 2.2 bar despite high liquidity. XRP is an
-    # ENGINE_B_HOTLIST_CRYPTO_ANCHORS member. Effect: Engine A threshold 2.2->2.0,
-    # min_directional 0.24->0.20, RSI bounds 75/25->80/20. Reversible (remove names).
-    "XRP/USDT", "ARB/USDT", "OP/USDT", "UNI/USDT",
-}
-
-
 def get_pair_profile(pair: dict) -> dict:
     """Return pair-specific profile overrides keyed by display or symbol."""
     profiles = CONFIG.get("PAIR_PROFILES", {}) or {}
@@ -155,89 +122,14 @@ def get_pair_score_group(pair: dict) -> str:
     profile = get_pair_profile(pair)
     if profile.get("score_group"):
         return str(profile.get("score_group"))
-
-    from engine_a_groups import ENGINE_A_KNOWN_SCORE_GROUPS
-
-    display = pair.get("display", "")
-    ptype = pair.get("type", "")
-
-    if ptype == "forex":
-        if display in _MAJOR_FOREX:
-            return "forex_majors"
-        if display in _FOREX_CROSSES:
-            return "forex_crosses"
-        if display in _EXOTIC_FOREX:
-            return "forex_exotics"
-        return "forex_other"
-    if ptype == "crypto":
-        if display == "BTC/USDT":
-            return "crypto_btc"
-        if display == "ETH/USDT":
-            return "crypto_eth"
-        if display == "DOGE/USDT":
-            return "crypto_doge"
-        if display in _ALTCOIN_MAJORS:
-            return "crypto_alt_majors"
-        return "crypto_other"
-    if ptype == "commodity":
-        if display in _PRECIOUS_TRACKERS:
-            return "precious_trackers"
-        if display in _ENERGY_OIL:
-            return "energy_oil"
-        if display == "Nat Gas":
-            return "nat_gas"
-        if display == "Copper":
-            return "copper"
-        if display in {"XPT/USD", "XPD/USD"}:
-            return "pgm_metals"
-        if display in _BASE_METALS:
-            return "base_metals"
-        if display in _SOFTS:
-            return "softs"
-        return "commodity_other"
-    if ptype == "index":
-        if display in _US_INDICES_TRACKERS:
-            return "us_indices_trackers"
-        if display in _EU_INDICES:
-            return "eu_indices"
-        if display in _ASIAN_INDICES:
-            return "asian_indices"
-        return "index_other"
-    if ptype == "stock":
-        if display in _US_STOCK_CUSTOM:
-            return "us_stock_single"
-        if display == "TLT":
-            return "bond_tlt"
-        if display in {"IWM", "EEM"}:
-            return "smallcap_em_etf"
-        if display in _PRECIOUS_TRACKERS:
-            return "precious_trackers"
-        if display in _ENERGY_OIL:
-            return "energy_oil"
-        if display in _US_INDICES_TRACKERS:
-            return "us_indices_trackers"
-        return "stock_other"
-    if ptype in ("etf", "etf_bond"):
-        if display == "TLT" or ptype == "etf_bond":
-            return "bond_tlt"
-        if display in {"IWM", "EEM"}:
-            return "smallcap_em_etf"
-        if display in _PRECIOUS_TRACKERS:
-            return "precious_trackers"
-        if display in _ENERGY_OIL:
-            return "energy_oil"
-        if display in _US_INDICES_TRACKERS:
-            return "us_indices_trackers"
-        return "stock_other"
-    _fallback = f"{ptype}_other" if ptype else "unknown"
-    if _fallback not in ENGINE_A_KNOWN_SCORE_GROUPS:
+    group = resolve_score_group_by_type(pair)
+    if group == "unknown" and pair.get("type"):
         log.warning(
-            "get_pair_score_group: unknown group '%s' for %s (type=%s) — "
+            "get_pair_score_group: unknown group for %s (type=%s) — "
             "no ENGINE_A_SCORE_GROUP_THRESHOLDS entry; falling back to legacy tier",
-            _fallback, display, ptype,
+            pair.get("display", ""), pair.get("type", ""),
         )
-        return "unknown"
-    return _fallback
+    return group
 
 
 ENGINE_A_ASSET_CLASS_SCORE_GROUPS: dict[str, tuple[str, ...]] = {

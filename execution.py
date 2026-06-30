@@ -678,9 +678,17 @@ def _hydrate_execution_candle_quality(sig: dict, *, _r) -> None:
     try:
         limits = scan_candle_limits()
         candles: dict[str, list] = {"H1": [], "H4": [], "D1": []}
+        # Route crypto pairs through the same Bybit/Binance resolver the scoring
+        # path uses (_fetch_ab_crypto_signal_candles) so execution freshness is
+        # evaluated on the same provider the signal was scored on. Non-crypto and
+        # binance-feed pairs fall through to fetch_candles unchanged.
+        crypto_signal_fetch = getattr(_r, "_fetch_ab_crypto_signal_candles", None)
         for tf in ("H1", "H4", "D1"):
             lim = int(limits[str(tf)])
-            raw = fetch(pair_obj, str(tf), lim)
+            if callable(crypto_signal_fetch):
+                raw, _sig_meta = crypto_signal_fetch(pair_obj, str(tf), lim, engine="A")
+            else:
+                raw = fetch(pair_obj, str(tf), lim)
             extracted = extract_candles(raw)
             candles[str(tf)] = list(extracted or [])
 

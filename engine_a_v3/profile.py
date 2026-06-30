@@ -13,17 +13,13 @@ from engine_a_v3.routing import KNOWN_SCORE_GROUPS
 CORE_COMPONENTS = ("trend", "momentum", "location", "volume")
 EXIT_POLICIES = ("SINGLE_TP1", "SPLIT_50_50")
 
-# Uniform baseline bar on the rescaled 0..3 confluence scale (see quant_scorer
-# "aligned quality" aggregation, 2026-06-18). The pre-rescale per-group spread
-# (forex 2.1 / crypto 2.0 / equity 1.5) assumed a 0..3 range the old
-# alignment*quality double-count never realized (forex/crypto topped out <2.1 ->
-# 0% pass). On the rescaled scale all groups share a ~p80 of ~2.0, so a single
-# honest quality bar of 2.0 yields ~10-18% TRADE-tier pass across groups, with
-# weaker-confluence families (forex/crypto) naturally passing less. Per-group
-# selectivity tuning is deferred to backtest-edge validation; UNVALIDATED
-# baselines, execution stays gated by engine_a_trade_gate regardless.
+# Baseline fallback bar on the rescaled 0..3 confluence scale (see quant_scorer
+# "aligned quality" aggregation, 2026-06-18). Live V3 resolves the per-group
+# trade threshold from ENGINE_A_SCORE_GROUP_THRESHOLDS via
+# _resolved_trade_threshold(); this constant is only the defensive fallback when
+# neither the group nor "default" is present in config. Execution stays gated by
+# engine_a_trade_gate regardless.
 _BASELINE_THRESHOLD = 2.0
-_BASELINE_THRESHOLDS = {group: _BASELINE_THRESHOLD for group in KNOWN_SCORE_GROUPS}
 
 _FAMILY_WEIGHTS = {
     "forex": {"trend": .42, "momentum": .28, "location": .21, "volume": .09},
@@ -33,6 +29,29 @@ _FAMILY_WEIGHTS = {
     "equity_etf": {"trend": .36, "momentum": .23, "location": .18, "volume": .23},
     "unknown": {"trend": .40, "momentum": .27, "location": .20, "volume": .13},
 }
+
+
+def _resolved_trade_threshold(score_group: str) -> float:
+    """Resolve the per-group V3 trade threshold from config.
+
+    Wires the V3 baseline profile to ``ENGINE_A_SCORE_GROUP_THRESHOLDS`` so
+    operator tuning of per-group thresholds (forex_majors 2.1, crypto_other 2.2,
+    forex_exotics 1.7, etc.) takes live effect. Resolution order mirrors
+    ``scoring._configured_score_threshold``: score_group → "default" →
+    ``_BASELINE_THRESHOLD`` (defensive fallback when config is absent).
+    """
+    from config import CONFIG
+
+    group_thresholds = CONFIG.get("ENGINE_A_SCORE_GROUP_THRESHOLDS", {}) or {}
+    for key in (score_group, "default"):
+        value = group_thresholds.get(key)
+        if value is None:
+            continue
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            break
+    return _BASELINE_THRESHOLD
 
 
 def scorer_sha256() -> str:
@@ -176,6 +195,6 @@ def baseline_profile(score_group: str, horizon: str) -> EngineAV3Profile:
         score_group=score_group, horizon=horizon,
         indicator_periods=_resolved_periods(score_group, family),
         weights=_FAMILY_WEIGHTS[family], direction_deadband=0.05,
-        trade_threshold=_BASELINE_THRESHOLDS[score_group],
+        trade_threshold=_resolved_trade_threshold(score_group),
         exit_policy="SINGLE_TP1", status="UNVALIDATED",
     )

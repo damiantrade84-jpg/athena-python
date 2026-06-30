@@ -13285,14 +13285,17 @@ def analyze_pair(
     # TF is stale. This prevents wasted CPU and false signal log entries from
     # scoring on stale data that would be blocked at execution time anyway.
     _freshness_diag = {}
-    _v3_freshness_required = True
+    _v3_freshness_required = bool(CONFIG.get("PRE_SCORING_FRESHNESS_GATE_ENABLED", True))
     if _v3_freshness_required:
         try:
             from athena_app.services.data_freshness import (
+                d1_consumed_by_score_group,
                 pre_scoring_allows_confirmed_only_stale_1,
                 pre_scoring_allows_intraday_calendar_gap,
             )
             from athena_app.services.market_state import candle_freshness_diagnostic
+
+            _d1_required = d1_consumed_by_score_group(_score_group, style)
 
             _stale_tfs = []
             _freshness_diag = {}
@@ -13306,6 +13309,12 @@ def analyze_pair(
                     source=pair.get("source"),
                 )
                 _freshness_diag[_tf] = _diag
+                # D1 freshness only blocks when D1 feeds this group's trend/momentum
+                # scoring. Groups that drop D1 from trend layers (energy_oil,
+                # commodity_other) and don't anchor momentum on D1 are not blocked
+                # on stale D1. The diagnostic is still recorded for display.
+                if _tf == "D1" and not _d1_required:
+                    continue
                 _sev = _diag.get("stalenessSeverity", "")
                 if not _sev or _sev == "fresh":
                     continue
@@ -13343,7 +13352,7 @@ def analyze_pair(
             # Crypto-specific D1 staleness threshold: enforce max hours since last bar open
             # only when bucket lag is genuinely multi-bucket. Confirmed-only D1 can be
             # 24-48h old by wall-clock while bucketLag stays at 1 (policy-normal).
-            if pair.get("type") == "crypto" and d1:
+            if pair.get("type") == "crypto" and d1 and _d1_required:
                 try:
                     from scalp_engine import _coerce_utc_datetime, _current_utc_datetime
 

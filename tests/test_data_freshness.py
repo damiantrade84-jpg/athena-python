@@ -3,6 +3,7 @@ from datetime import datetime
 from athena_app.services.data_freshness import (
     build_live_feed_diagnostic,
     check_live_candle_consistency,
+    d1_consumed_by_score_group,
     evaluate_execution_data_freshness,
 )
 from config import CONFIG
@@ -318,3 +319,60 @@ def test_crypto_genuine_stale_multi_bucket_still_blocks_execution():
 
     assert result["allowed"] is False
     assert result["reason"] == "STALE_DATA_BLOCK:D1:stale_multi_bucket"
+
+
+def test_d1_stale_skipped_for_group_that_drops_d1_from_trend():
+    """energy_oil drops D1 from trend layers (H4+H1 only) and anchors momentum on
+    H4, so stale D1 must not block execution — D1 doesn't feed the score."""
+    assert d1_consumed_by_score_group("energy_oil", "intraday") is False
+    assert d1_consumed_by_score_group("commodity_other", "swing") is False
+
+    signal = {
+        "scoreGroup": "energy_oil",
+        "horizon": "intraday",
+        "candleFreshness": {
+            "D1": {"stalenessSeverity": "stale_multi_bucket", "bucketLag": 3},
+        },
+    }
+    config = {
+        "DATA_FRESHNESS_GATES": {
+            "BLOCK_EXECUTION_ON_STALE": True,
+            "BLOCK_TIMEFRAMES": ["D1"],
+            "BLOCK_SEVERITIES": ["stale_multi_bucket"],
+        }
+    }
+
+    result = evaluate_execution_data_freshness(signal, config)
+
+    assert result["allowed"] is True
+
+
+def test_d1_stale_blocks_for_group_that_uses_d1_in_trend():
+    """forex_majors uses D1 in its default trend stack, so stale D1 still blocks."""
+    assert d1_consumed_by_score_group("forex_majors", "intraday") is True
+
+    signal = {
+        "scoreGroup": "forex_majors",
+        "horizon": "intraday",
+        "candleFreshness": {
+            "D1": {"stalenessSeverity": "stale_multi_bucket", "bucketLag": 3},
+        },
+    }
+    config = {
+        "DATA_FRESHNESS_GATES": {
+            "BLOCK_EXECUTION_ON_STALE": True,
+            "BLOCK_TIMEFRAMES": ["D1"],
+            "BLOCK_SEVERITIES": ["stale_multi_bucket"],
+        }
+    }
+
+    result = evaluate_execution_data_freshness(signal, config)
+
+    assert result["allowed"] is False
+    assert result["reason"] == "STALE_DATA_BLOCK:D1:stale_multi_bucket"
+
+
+def test_d1_consumed_when_momentum_anchors_on_d1():
+    """bond_tlt anchors momentum on D1, so D1 is consumed even though its trend
+    layers are the default D1/H4/H1 stack — D1 freshness must still block."""
+    assert d1_consumed_by_score_group("bond_tlt", "swing") is True

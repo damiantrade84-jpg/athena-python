@@ -683,22 +683,35 @@ ENGINE_A_DI_ALIGNMENT_MULT_BY_CLASS:
   stock: { missing: 1.0, balanced: 0.85, opposed: 0.65, severe_opposed: 0.35 }
   index: { missing: 1.0, balanced: 0.85, opposed: 0.65, severe_opposed: 0.35 }
 
+# DI alignment gap thresholds (|+DI - -DI|) that segment the multiplier tiers.
+# factor_scoring._di_alignment_multiplier ramps 1.0 → balanced → opposed →
+# severe_opposed across these boundaries. Defaults (5.0 / 15.0) preserve the
+# prior hardcoded ramp exactly. Tunable so calibration can move the
+# balanced/opposed boundaries without code changes.
+ENGINE_A_DI_ALIGNMENT_GAP_THRESHOLDS:
+  BALANCED: 5.0    # |di_diff| at/below this ramps 1.0 → balanced
+  OPPOSED: 15.0    # |di_diff| between BALANCED and OPPOSED ramps balanced → opposed; above → severe_opposed
+
 # ── Engine A entry-extension quality gate (cross-asset, 2026-06-13) ───────────
 # Deterministic version of the AI playbook's "extended / late entry" test: how
 # far the H4 close sits BEYOND the EMA50 anchor in ATR units, measured in the
 # trade direction. Chasing entries (large positive extension) are penalised;
 # pullback / at-value entries (price on the value side of EMA50, or within
 # NEAR_ATR) are not. Multiplier ∈ [MIN_MULT, 1.0] — never raises a score.
-# Fail-open (1.0) when EMA50 / ATR / close are unavailable. Applies to ALL
-# asset classes. Targets the late-entry → stop-out pattern (frozen Engine A
-# backtest: 69% SL, avg MFE ~+1R then reverse). PROVISIONAL thresholds — under
-# frozen-backtest calibration (2026-05-30 layer); reversible via ENABLED:false.
+# Fail-closed (MIN_MULT) when EMA50 / ATR / close are unavailable — a chasing
+# entry we can't measure must not pass unpenalised (safety: missing data fails
+# closed). Set FAIL_CLOSED_ON_MISSING_DATA:false to restore prior fail-open
+# (1.0) behaviour. Applies to ALL asset classes. Targets the late-entry →
+# stop-out pattern (frozen Engine A backtest: 69% SL, avg MFE ~+1R then
+# reverse). PROVISIONAL thresholds — under frozen-backtest calibration
+# (2026-05-30 layer); reversible via ENABLED:false.
 # factor_scoring._entry_extension_multiplier consumes this block.
 ENGINE_A_ENTRY_EXTENSION_GATE:
   ENABLED: true
   NEAR_ATR: 2.0     # no penalty up to this extension beyond EMA50
   FAR_ATR: 4.0      # full MIN_MULT penalty at/beyond this extension
   MIN_MULT: 0.5     # strongest penalty for severely extended (chasing) entries
+  FAIL_CLOSED_ON_MISSING_DATA: true   # M7: missing EMA/ATR/close → MIN_MULT, not 1.0
   BY_CLASS:
     forex:     { NEAR_ATR: 1.5, FAR_ATR: 3.5, MIN_MULT: 0.50 }
     crypto:    { NEAR_ATR: 2.5, FAR_ATR: 5.0, MIN_MULT: 0.50 }
@@ -813,6 +826,42 @@ ENGINE_A_MACD_PARAMS_BY_CLASS:
   smallcap_em_etf:       { fast: 12, slow: 26, signal: 9 }
   stock_other:           { fast: 12, slow: 26, signal: 9 }
   unknown:               { fast: 12, slow: 26, signal: 9 }
+
+# ATR/ADX periods per score group. Intentionally uniform at the Wilder standard
+# 14/14 — the calibration overlay (hold PH-A-ADX-PERIODS-r1) keeps 14/14 as the
+# evidence-backed position for all groups; per-group differentiation requires
+# n>=30 + SQN>2.0 + L/S symmetry evidence. Listed explicitly here (not a silent
+# code fallback) so config.yaml is the single source of truth and any future
+# tuning is config-gated and visible. Mirrors ENGINE_A_MACD_PARAMS_BY_CLASS
+# structure.
+ENGINE_A_ATR_ADX_PERIODS_BY_CLASS:
+  default:               { atr: 14, adx: 14 }
+  forex_majors:          { atr: 14, adx: 14 }
+  forex_crosses:         { atr: 14, adx: 14 }
+  forex_exotics:         { atr: 14, adx: 14 }
+  forex_other:           { atr: 14, adx: 14 }
+  crypto_btc:            { atr: 14, adx: 14 }
+  crypto_eth:            { atr: 14, adx: 14 }
+  crypto_doge:           { atr: 14, adx: 14 }
+  crypto_alt_majors:     { atr: 14, adx: 14 }
+  crypto_other:          { atr: 14, adx: 14 }
+  precious_trackers:     { atr: 14, adx: 14 }
+  energy_oil:            { atr: 14, adx: 14 }
+  nat_gas:               { atr: 14, adx: 14 }
+  copper:                { atr: 14, adx: 14 }
+  pgm_metals:            { atr: 14, adx: 14 }
+  base_metals:           { atr: 14, adx: 14 }
+  softs:                 { atr: 14, adx: 14 }
+  commodity_other:       { atr: 14, adx: 14 }
+  us_indices_trackers:   { atr: 14, adx: 14 }
+  eu_indices:            { atr: 14, adx: 14 }
+  asian_indices:         { atr: 14, adx: 14 }
+  index_other:           { atr: 14, adx: 14 }
+  us_stock_single:       { atr: 14, adx: 14 }
+  bond_tlt:              { atr: 14, adx: 14 }
+  smallcap_em_etf:       { atr: 14, adx: 14 }
+  stock_other:           { atr: 14, adx: 14 }
+  unknown:               { atr: 14, adx: 14 }
 
 # Engine A scoring profile: trend TF stack, style weights, momentum/regime anchors.
 # D1/H4/H1 layers are unchanged by default; style adjusts trend weights only.
@@ -1010,6 +1059,28 @@ ENGINE_A_RESEARCH_LAB_FACTORS:
       - 14
     K_SMOOTH: 3
     D_SMOOTH: 3
+  # Bollinger band touch factor params. Defaults (period 20, mult 2.0) preserve
+  # the prior hardcoded values exactly. Tunable so calibration can adjust band
+  # sensitivity without code changes. factor_scoring._research_bollinger_value
+  # consumes this block.
+  BOLLINGER_TOUCH:
+    PERIOD: 20
+    MULT: 2.0
+
+# Per-class Research Lab factor overrides. Keys resolve score_group → asset_type
+# → default (see factor_scoring._resolve_research_lab_profile). Only applies when
+# ENGINE_A_SCORE_GROUP_ADJUSTMENTS_ENABLED is true. Forex has no real exchange
+# volume (OTC tick volume only), so OBV divergence is unreliable there — drop
+# obv_divergence from forex and keep the volume-independent factors. Add other
+# weak-tick-volume classes (commodity trackers, index CFDs) here as evidence
+# supports. Defaulting FACTORS replaces the universal list (no merge), so each
+# entry must list every factor that class should run.
+ENGINE_A_RESEARCH_LAB_FACTORS_BY_CLASS:
+  forex:
+    FACTORS:
+      - bollinger_touch
+      - price_momentum
+      - stochastic_cross
 
 # ── Engine A Mean Reversion Factor (config-gated, additive) ─────────────────
 # Disabled by default. When enabled, adds a small bounded adjustment (±MAX_ABS)

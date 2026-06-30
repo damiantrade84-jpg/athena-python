@@ -90,6 +90,15 @@ def _validate_candles(candles: dict[str, list[dict]]) -> tuple[bool, tuple[str, 
 
 
 def _horizon(value: str | None) -> str | None:
+    """Normalize the requested style to a V3 horizon.
+
+    V3 intentionally supports only intraday and swing. Scalp is NOT mapped here
+    — scalp is owned by Engine D (separate scalp logic), so a scalp request
+    reaching V3 returns None → unsupported_horizon → NO_SIGNAL. This is the
+    intended fail-closed boundary between Engine A V3 and Engine D; do not map
+    scalp→intraday here or V3 would silently run scalp signals that Engine D
+    should handle.
+    """
     normalized = str(value or "").lower()
     if normalized in {"intraday", "swing"}:
         return normalized

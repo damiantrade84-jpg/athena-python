@@ -1671,7 +1671,13 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict[s
                 _im_h4_limit = max(int(_scan_limits["H4"]), 220)
                 _im_preloaded_h4 = {}
                 for _pair in active_pairs:
-                    _candles = r.fetch_candles(_pair, "H4", _im_h4_limit)
+                    # Route crypto pairs through the same Bybit/Binance resolver the
+                    # per-pair scoring path uses so intermarket H4 context is built on
+                    # the same provider Engine A scores. Non-crypto / binance-feed
+                    # pairs fall through to fetch_candles unchanged.
+                    _candles, _ = _fetch_ab_crypto_signal_candles(
+                        r, _pair, "H4", _im_h4_limit
+                    )
                     if _candles:
                         _im_preloaded_h4[_pair["display"]] = _candles
                 intermarket_snapshot = build_scan_snapshot(
@@ -1792,6 +1798,54 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict[s
                     preloaded_fetch_meta=fetch_meta,
                     intermarket_snapshot=intermarket_snapshot,
                 )
+
+                # Attach execution-gate freshness so the scan UI shows execution
+                # blocks. analyze_pair only sets dataFreshness from the pre-scoring
+                # gate (allowed=True); the execution gate is stricter and can block
+                # on stale_1_bucket. Mirrors the athena.py naked-scan pattern.
+                if sig_a:
+                    try:
+                        from athena_app.services.market_state import candle_freshness_diagnostic
+                        from athena_app.services.data_freshness import (
+                            evaluate_execution_data_freshness,
+                        )
+
+                        def _scan_series_for_diag(tf_key):
+                            state = preloaded_market_state.get(tf_key)
+                            if isinstance(state, dict):
+                                confirmed = list(state.get("confirmed") or [])
+                                forming = state.get("forming")
+                                return confirmed + ([forming] if forming else [])
+                            return list(raw_candles.get(tf_key) or [])
+
+                        sig_a["candleFreshness"] = {
+                            "D1": candle_freshness_diagnostic(
+                                pair, "D1", _scan_series_for_diag("D1"),
+                                source=pair.get("source"),
+                            ),
+                            "H4": candle_freshness_diagnostic(
+                                pair, "H4", _scan_series_for_diag("H4"),
+                                source=pair.get("source"),
+                            ),
+                            "H1": candle_freshness_diagnostic(
+                                pair, "H1", _scan_series_for_diag("H1"),
+                                source=pair.get("source"),
+                            ),
+                        }
+                        _exec_fresh = evaluate_execution_data_freshness(sig_a, CONFIG)
+                        sig_a["dataFreshness"] = _exec_fresh
+                        if (
+                            bool(CONFIG.get("SIGNAL_EXECUTABLE_FALSE_WHEN_FRESHNESS_BLOCKS", True))
+                            and isinstance(_exec_fresh, dict)
+                            and not _exec_fresh.get("allowed")
+                        ):
+                            sig_a["executable"] = False
+                    except Exception as _scan_fresh_err:
+                        log.debug(
+                            "[SCAN] %s execution freshness unavailable: %s",
+                            pair.get("display", "?"),
+                            _scan_fresh_err,
+                        )
 
                 # REGRESSION CHECK: Log per-pair Engine A details
                 d1_count = _regression_candle_count(raw_candles, "D1")

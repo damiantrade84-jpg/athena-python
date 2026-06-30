@@ -53,8 +53,9 @@ from engine_a_v3.quant_scorer import (
     _clamp,
     _location_component,
     _momentum_component,
+    _resolve_v3_momentum_tf,
+    _resolve_v3_tf_weights,
     _snapshots,
-    _TF_WEIGHTS,
     _FAMILY_ASSET,
     _trend_component,
     _volatility_mult,
@@ -183,10 +184,17 @@ def compute_components(
 
     snaps = _snapshots(candles, asset_type, dict(profile.indicator_periods))
     entry_snap = snaps.get(entry_tf) or snaps.get("H4") or snaps.get("D1") or {}
-    momentum_snap = snaps.get("H4") or entry_snap
+    _shadow_group = getattr(route, "score_group", "unknown")
+    momentum_tf = _resolve_v3_momentum_tf(_shadow_group, asset_type, horizon)
+    momentum_snap = snaps.get(momentum_tf) or snaps.get("H4") or entry_snap
 
-    trend, _ = _trend_component(snaps, _TF_WEIGHTS[horizon])
-    momentum, _ = _momentum_component(momentum_snap)
+    trend, _ = _trend_component(
+        snaps,
+        _resolve_v3_tf_weights(_shadow_group, asset_type, horizon),
+    )
+    momentum, _ = _momentum_component(
+        momentum_snap, asset_type, getattr(route, "score_group", "unknown")
+    )
     location, level_style = _location_component(entry_snap)
     volume = _volume_component(entry_snap, candles.get(entry_tf) or [], context)
 

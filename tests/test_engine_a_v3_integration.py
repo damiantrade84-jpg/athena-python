@@ -122,7 +122,7 @@ def test_active_analyze_pair_fails_closed_when_freshness_validation_errors():
     v3_return = source.index("_v3_signal = evaluate_engine_a_v3(", freshness_start)
     freshness_source = source[freshness_start:v3_return]
 
-    assert "_v3_freshness_required = True" in freshness_source
+    assert "_v3_freshness_required = bool(CONFIG.get(\"PRE_SCORING_FRESHNESS_GATE_ENABLED\", True))" in freshness_source
     assert "FRESHNESS_VALIDATION_ERROR" in freshness_source
     assert "freshness check skipped" not in freshness_source
 

@@ -1965,6 +1965,15 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
     except Exception as e:
         return {"error": f"Data fetch failed: {e}"}
 
+    # ── Engine A backtest routing (H6: live V3 vs backtest v2 path split) ──────
+    # backtest_pair routes Engine A backtests through evaluate_engine_a_v3 (via
+    # run_v3_backtest) — the SAME scorer the live/demo scan path uses. This
+    # eliminates the v2 path split: live and backtest now share one scorer, so
+    # config changes (C2/C3/H3 — per-group thresholds, ADX gates, TF overrides)
+    # take effect in backtest too. The legacy v2 walk-forward body that follows
+    # this return is UNREACHABLE dead code retained for historical reference;
+    # do not add new logic below it. To restore v2, gate this return behind a
+    # config flag and re-enter the v2 body.
     from engine_a_v3.backtest import run_v3_backtest
 
     _v3_costs = CONFIG.get("ENGINE_A_V3_BACKTEST") or {}

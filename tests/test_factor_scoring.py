@@ -1164,6 +1164,10 @@ def test_research_lab_factor_adds_bounded_candidate_context(monkeypatch):
         "MAX_ABS": 0.20,
     }
     monkeypatch.setitem(CONFIG, "ENGINE_A_RESEARCH_LAB_FACTORS", cfg)
+    # Isolate the universal factor path: clear the per-class override map so the
+    # forex pair runs the universal factor list (incl. obv_divergence). The live
+    # config drops obv_divergence for forex (weak tick volume) via this map.
+    monkeypatch.setitem(CONFIG, "ENGINE_A_RESEARCH_LAB_FACTORS_BY_CLASS", {})
 
     result = _score(
         pair={"type": "forex", "display": "EUR/AUD"},
@@ -1243,6 +1247,62 @@ def test_research_lab_class_profile_falls_back_to_asset_type(monkeypatch):
     assert result["research_lab_detail"]["profile_source"] == "asset_type:commodity"
     assert result["research_lab_detail"]["class_adjusted"] is True
     assert result["research_lab_value"] == pytest.approx(0.07)
+
+
+def test_research_lab_forex_excludes_obv_divergence_weak_tick_volume(monkeypatch):
+    """Forex has no real exchange volume (OTC tick volume only), so OBV divergence
+    is unreliable. The live ENGINE_A_RESEARCH_LAB_FACTORS_BY_CLASS.forex override
+    drops obv_divergence from the forex factor list. Verify the override takes
+    effect for forex pairs (keyed by asset_type) using the live config."""
+    cfg = {
+        "ENABLED": True,
+        "BONUS": 0.15,
+        "PENALTY": -0.10,
+        "MAX_ABS": 0.20,
+        "FACTORS": ["obv_divergence", "bollinger_touch", "price_momentum", "stochastic_cross"],
+    }
+    monkeypatch.setitem(CONFIG, "ENGINE_A_RESEARCH_LAB_FACTORS", cfg)
+    monkeypatch.setitem(CONFIG, "ENGINE_A_SCORE_GROUP_ADJUSTMENTS_ENABLED", True)
+    # Use the live ENGINE_A_RESEARCH_LAB_FACTORS_BY_CLASS (forex override) — do NOT
+    # monkeypatch it; this verifies the live config drops obv_divergence for forex.
+
+    for display in ("EUR/USD", "GBP/JPY", "USD/ZAR"):
+        result = _score(
+            pair={"type": "forex", "display": display},
+            d1_candles=_candles(trend=0.2, volume_trend=10.0),
+        )
+        allowed = result["research_lab_detail"].get("allowed") or []
+        assert "obv_divergence" not in allowed, f"{display} still runs obv_divergence: {allowed}"
+        assert "bollinger_touch" in allowed, f"{display} missing bollinger_touch: {allowed}"
+        assert "price_momentum" in allowed, f"{display} missing price_momentum: {allowed}"
+        assert result["research_lab_detail"]["class_adjusted"] is True
+        assert result["research_lab_detail"]["profile_source"].startswith("asset_type:forex")
+
+
+def test_research_bollinger_period_mult_config_tunable(monkeypatch):
+    """M6: Bollinger band period/mult are config-tunable via
+    ENGINE_A_RESEARCH_LAB_FACTORS.BOLLINGER_TOUCH. Override PERIOD/MULT and
+    verify the band-touch signal responds to the new bands (not the hardcoded
+    20/2.0)."""
+    from factor_scoring import _research_bollinger_value
+
+    # Build a gentle uptrend where the last close dips below the 10/1.0 lower
+    # band but is well inside the default 20/2.0 lower band.
+    closes = list(range(100, 130))  # 30 closes
+    candles = [{"close": float(c), "vol": 100} for c in closes]
+    candles[-1]["close"] = 120.0  # dips below 10/1.0 lower (≈120.87), inside 20/2.0 lower (≈107.5)
+
+    # Default 20/2.0 → inside_bands (no touch)
+    val_default, detail_default = _research_bollinger_value("LONG", candles, 0.15, -0.10, cfg={"BOLLINGER_TOUCH": {}})
+    assert detail_default["signal"] == "inside_bands"
+    assert val_default == pytest.approx(0.0)
+
+    # PERIOD=10, MULT=1.0 → lower_band_touch (bonus)
+    val_tight, detail_tight = _research_bollinger_value(
+        "LONG", candles, 0.15, -0.10, cfg={"BOLLINGER_TOUCH": {"PERIOD": 10, "MULT": 1.0}}
+    )
+    assert detail_tight["signal"] == "lower_band_touch"
+    assert val_tight == pytest.approx(0.15)
 
 
 def test_research_lab_class_profile_uses_default_when_no_class_match(monkeypatch):
@@ -1379,6 +1439,10 @@ def test_research_lab_stochastic_candidate_still_rejects_non_crypto(monkeypatch)
         },
     }
     monkeypatch.setitem(CONFIG, "ENGINE_A_RESEARCH_LAB_FACTORS", cfg)
+    # Isolate the test's FACTORS=["stochastic_cross"] by clearing the per-class
+    # override map; otherwise the live forex override would replace the factor
+    # list and other factors would add non-zero value.
+    monkeypatch.setitem(CONFIG, "ENGINE_A_RESEARCH_LAB_FACTORS_BY_CLASS", {})
 
     result = _score(
         pair={"type": "forex", "display": "EUR/USD"},
@@ -1463,6 +1527,10 @@ def test_calc_confluence_factor_diagnostics_includes_research_lab(monkeypatch):
         "MAX_ABS": 0.20,
     }
     monkeypatch.setitem(CONFIG, "ENGINE_A_RESEARCH_LAB_FACTORS", cfg)
+    # Isolate the universal factor path: clear the per-class override map so the
+    # forex pair runs the universal factor list (incl. obv_divergence). The live
+    # config drops obv_divergence for forex (weak tick volume) via this map.
+    monkeypatch.setitem(CONFIG, "ENGINE_A_RESEARCH_LAB_FACTORS_BY_CLASS", {})
 
     pair = {"type": "forex", "display": "EUR/AUD"}
     d1 = {"snap": _snap("long")}
@@ -2834,6 +2902,106 @@ def test_di_alignment_multiplier_is_smooth(monkeypatch):
     
     assert res_limit["feed_status"]["di_align"] == "0.85"
     assert res_minor["feed_status"]["di_align"] == "0.93"
+
+
+def test_di_alignment_gap_thresholds_config_tunable(monkeypatch):
+    """M6: DI alignment gap thresholds (|+DI - -DI|) that segment the multiplier
+    tiers are config-tunable via ENGINE_A_DI_ALIGNMENT_GAP_THRESHOLDS. Override
+    BALANCED/OPPOSED and verify the multiplier ramps at the new boundaries."""
+    monkeypatch.setitem(CONFIG, "ENGINE_A_SCORE_GROUP_ADJUSTMENTS_ENABLED", True)
+    monkeypatch.setitem(
+        CONFIG,
+        "ENGINE_A_DI_ALIGNMENT_GAP_THRESHOLDS",
+        {"BALANCED": 3.0, "OPPOSED": 9.0},
+    )
+    # Forex balanced/opposed multipliers from live config: 0.85 / 0.65.
+    d1 = _snap("long")
+    h1 = _snap("long")
+    pair = {"type": "forex", "display": "EUR/USD", "symbol": "EURUSD"}
+
+    # |di_diff| = 3.0 → at the new BALANCED boundary → mult = balanced = 0.85
+    h4_at_balanced = _snap("long")
+    h4_at_balanced["plusDI"] = 20.0
+    h4_at_balanced["minusDI"] = 23.0
+    res_balanced = compute_factor_scores(d1, h4_at_balanced, h1, pair, [], [], [], 1.0)
+    assert res_balanced["feed_status"]["di_align"] == "0.85"
+
+    # |di_diff| = 9.0 → at the new OPPOSED boundary → mult = opposed = 0.65
+    h4_at_opposed = _snap("long")
+    h4_at_opposed["plusDI"] = 20.0
+    h4_at_opposed["minusDI"] = 29.0
+    res_opposed = compute_factor_scores(d1, h4_at_opposed, h1, pair, [], [], [], 1.0)
+    assert res_opposed["feed_status"]["di_align"] == "0.65"
+
+    # |di_diff| = 12.0 → beyond OPPOSED → severe_opposed = 0.35
+    h4_severe = _snap("long")
+    h4_severe["plusDI"] = 20.0
+    h4_severe["minusDI"] = 32.0
+    res_severe = compute_factor_scores(d1, h4_severe, h1, pair, [], [], [], 1.0)
+    assert res_severe["feed_status"]["di_align"] == "0.35"
+
+
+def test_entry_extension_fail_closed_on_missing_ema50(monkeypatch):
+    """M7: entry-extension gate fails closed (MIN_MULT) when EMA50 is missing —
+    a chasing entry we can't measure must not pass unpenalised."""
+    from factor_scoring import _entry_extension_multiplier
+
+    monkeypatch.setitem(CONFIG, "ENGINE_A_ENTRY_EXTENSION_GATE", {
+        "ENABLED": True, "NEAR_ATR": 2.0, "FAR_ATR": 4.0, "MIN_MULT": 0.5,
+        "FAIL_CLOSED_ON_MISSING_DATA": True,
+    })
+    h4 = {"close": 110.0, "atr": 1.0}  # no ema50
+    mult, detail = _entry_extension_multiplier(h4, 1.0, "LONG", "forex_majors", "forex")
+    assert mult == pytest.approx(0.5)
+    assert detail["enabled"] is True
+    assert detail["fail_closed"] is True
+    assert detail["fail_reason"] == "missing_data"
+
+
+def test_entry_extension_fail_closed_on_missing_atr(monkeypatch):
+    """M7: entry-extension gate fails closed (MIN_MULT) when ATR is missing."""
+    from factor_scoring import _entry_extension_multiplier
+
+    monkeypatch.setitem(CONFIG, "ENGINE_A_ENTRY_EXTENSION_GATE", {
+        "ENABLED": True, "NEAR_ATR": 2.0, "FAR_ATR": 4.0, "MIN_MULT": 0.5,
+        "FAIL_CLOSED_ON_MISSING_DATA": True,
+    })
+    h4 = {"close": 110.0, "ema50": 100.0}
+    mult, detail = _entry_extension_multiplier(h4, None, "LONG", "forex_majors", "forex")
+    assert mult == pytest.approx(0.5)
+    assert detail["fail_closed"] is True
+
+
+def test_entry_extension_fail_open_when_flag_disabled(monkeypatch):
+    """M7: FAIL_CLOSED_ON_MISSING_DATA:false restores prior fail-open (1.0)
+    behaviour for missing data — operator escape hatch."""
+    from factor_scoring import _entry_extension_multiplier
+
+    monkeypatch.setitem(CONFIG, "ENGINE_A_ENTRY_EXTENSION_GATE", {
+        "ENABLED": True, "NEAR_ATR": 2.0, "FAR_ATR": 4.0, "MIN_MULT": 0.5,
+        "FAIL_CLOSED_ON_MISSING_DATA": False,
+    })
+    h4 = {"close": 110.0, "atr": 1.0}  # no ema50
+    mult, detail = _entry_extension_multiplier(h4, 1.0, "LONG", "forex_majors", "forex")
+    assert mult == pytest.approx(1.0)
+    assert detail["fail_closed"] is False
+
+
+def test_entry_extension_normal_ramp_unchanged(monkeypatch):
+    """M7: with all data present, the gate ramps normally (fail-closed doesn't
+    affect the non-missing path)."""
+    from factor_scoring import _entry_extension_multiplier
+
+    monkeypatch.setitem(CONFIG, "ENGINE_A_ENTRY_EXTENSION_GATE", {
+        "ENABLED": True, "NEAR_ATR": 2.0, "FAR_ATR": 4.0, "MIN_MULT": 0.5,
+        "FAIL_CLOSED_ON_MISSING_DATA": True,
+    })
+    # ext_atr = (110-100)/1.0 = 10.0 → beyond FAR_ATR (4.0) → MIN_MULT
+    h4 = {"close": 110.0, "ema50": 100.0, "atr": 1.0}
+    mult, detail = _entry_extension_multiplier(h4, 1.0, "LONG", "forex_majors", "forex")
+    assert mult == pytest.approx(0.5)
+    assert detail["fail_closed"] is False
+    assert detail["ext_atr"] == pytest.approx(10.0)
 
 
 def test_volume_price_concordance_correct_weighting():

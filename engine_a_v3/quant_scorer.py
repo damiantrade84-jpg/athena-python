@@ -26,6 +26,9 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
+from factor_scoring import _adx_multiplier_from_value, _resolve_adx_thresholds
+from engine_a_scoring_profile import resolve_engine_a_scoring_profile
+
 
 # ── scale ──────────────────────────────────────────────────────────────────────
 MAX_SCORE = 3.0
@@ -71,6 +74,60 @@ _TF_WEIGHTS: dict[str, dict[str, float]] = {
     "swing":    {"D1": 0.50, "H4": 0.32, "H1": 0.18},
     "intraday": {"D1": 0.28, "H4": 0.40, "H1": 0.32},
 }
+
+
+def _resolve_v3_tf_weights(score_group: str, asset_type: str, horizon: str) -> dict[str, float]:
+    """Resolve per-group TF weights for the V3 trend component.
+
+    Wires V3 to ``ENGINE_A_SCORING_PROFILE`` so per-group TF overrides take live
+    effect (e.g., energy_oil/commodity_other drop D1 and weight H4+H1 0.55/0.45;
+    us_stock_single uses 0.40/0.35/0.25). The profile's ``trend_layers`` map each
+    ``weight_key`` to a ``tf``; the returned dict is keyed by TF (D1/H4/H1) so
+    ``_trend_component`` can consume it directly. Falls back to the hardcoded
+    ``_TF_WEIGHTS[horizon]`` when the profile is disabled or yields no usable
+    weights, preserving prior behaviour for unaudited groups / disabled config.
+    """
+    try:
+        profile = resolve_engine_a_scoring_profile(
+            score_group=score_group, asset_type=asset_type, style=horizon
+        )
+    except Exception:
+        return dict(_TF_WEIGHTS[horizon])
+    if not profile.get("enabled"):
+        return dict(_TF_WEIGHTS[horizon])
+    layers = profile.get("trend_layers") or []
+    weights = profile.get("trend_weights") or {}
+    tf_weights: dict[str, float] = {}
+    for layer in layers:
+        tf = str(layer.get("tf", "")).upper()
+        wkey = str(layer.get("weight_key", "")).strip()
+        if not tf or not wkey or wkey not in weights:
+            continue
+        try:
+            tf_weights[tf] = float(weights[wkey])
+        except (TypeError, ValueError):
+            pass
+    return tf_weights or dict(_TF_WEIGHTS[horizon])
+
+
+def _resolve_v3_momentum_tf(score_group: str, asset_type: str, horizon: str) -> str:
+    """Resolve the per-group momentum anchor TF for V3.
+
+    Wires V3 to ``ENGINE_A_SCORING_PROFILE.momentum_tf`` so per-group overrides
+    take live effect (e.g., bond_tlt anchors momentum on D1 instead of the
+    universal H4 — D1 RSI/MACD are smoother for a slow-swing instrument). Falls
+    back to "H4" when the profile is disabled or momentum_tf is absent.
+    """
+    try:
+        profile = resolve_engine_a_scoring_profile(
+            score_group=score_group, asset_type=asset_type, style=horizon
+        )
+    except Exception:
+        return "H4"
+    if not profile.get("enabled"):
+        return "H4"
+    return str(profile.get("momentum_tf") or "H4").upper() or "H4"
+
 
 # route.family -> asset_type expected by calc_indicators_with_normalized.
 _FAMILY_ASSET = {
@@ -181,7 +238,9 @@ def _trend_component(
 
 
 # ── momentum (RSI / MACD / DI+ADX) ───────────────────────────────────────────
-def _momentum_component(snap: Mapping[str, Any]) -> tuple[Component, dict[str, Any]]:
+def _momentum_component(
+    snap: Mapping[str, Any], asset_type: str, score_group: str
+) -> tuple[Component, dict[str, Any]]:
     diag: dict[str, Any] = {"adxValue": None, "adxMultiplier": None, "diAlignMult": None}
     if not snap:
         return Component(0.0, 0.0), diag
@@ -215,9 +274,15 @@ def _momentum_component(snap: Mapping[str, Any]) -> tuple[Component, dict[str, A
 
     adx = _f(snap.get("adx"), 0.0) or 0.0
     diag["adxValue"] = round(adx, 2)
-    diag["adxMultiplier"] = round(_clamp(adx / 25.0, 0.0, 1.4), 4)
-    # ADX gates how *meaningful* momentum is (quality), never direction.
-    quality = _clamp01(abs(signal) * _clamp(adx / 30.0, 0.2, 1.0))
+    # ADX gates how *meaningful* momentum is (quality), never direction. Thresholds
+    # are per-group from ADX_TREND_MIN_CLASS / FACTOR_ADX_HARD_FAIL_CLASS (canonical
+    # factor_scoring resolver) so forex/crypto/etc. use their configured trend_min
+    # and hard_fail instead of a uniform hardcoded 25/30. adx_mult ramps 0 below
+    # hard_fail → 1 at trend_min (matches factor_scoring's _adx_multiplier_from_value).
+    trend_min, hard_fail = _resolve_adx_thresholds(asset_type, score_group)
+    adx_mult = _adx_multiplier_from_value(adx, trend_min, hard_fail)
+    diag["adxMultiplier"] = round(adx_mult, 4)
+    quality = _clamp01(abs(signal) * adx_mult)
     return Component(_clamp(signal, -1.0, 1.0), quality), diag
 
 
@@ -352,10 +417,11 @@ def score_pair(
         profile = baseline_profile(group, horizon)
     snaps = _snapshots(candles, asset_type, dict(profile.indicator_periods))
     entry_snap = snaps.get(entry_tf) or snaps.get("H4") or snaps.get("D1") or {}
-    momentum_snap = snaps.get("H4") or entry_snap
+    momentum_tf = _resolve_v3_momentum_tf(group, asset_type, horizon)
+    momentum_snap = snaps.get(momentum_tf) or snaps.get("H4") or entry_snap
 
-    trend, coherence = _trend_component(snaps, _TF_WEIGHTS[horizon])
-    momentum, mom_diag = _momentum_component(momentum_snap)
+    trend, coherence = _trend_component(snaps, _resolve_v3_tf_weights(group, asset_type, horizon))
+    momentum, mom_diag = _momentum_component(momentum_snap, asset_type, group)
     location, level_style = _location_component(entry_snap)
     volume = _volume_component(entry_snap, candles.get(entry_tf) or [], context)
 

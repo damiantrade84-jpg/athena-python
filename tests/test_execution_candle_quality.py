@@ -172,6 +172,7 @@ def test_hydrate_nonempty_fetch_repairs_poison_staleness(monkeypatch) -> None:
     }
     mock_r.ALL_PAIRS = [{"display": "EUR/USD", "source": "mt5", "type": "forex"}]
     mock_r.fetch_candles = _fake_fetch
+    mock_r._fetch_ab_crypto_signal_candles = None
     mock_r.log = MagicMock()
     monkeypatch.setattr(execution, "scan_candle_limits", lambda: {"H1": 100, "H4": 100, "D1": 110})
 
@@ -229,6 +230,7 @@ def test_hydrate_reannotates_cache_meta_at_execution_time(monkeypatch) -> None:
         {"display": "ETC/USDT", "symbol": "ETCUSDT", "source": "bybit", "type": "crypto"}
     ]
     mock_r.fetch_candles = _fake_fetch
+    mock_r._fetch_ab_crypto_signal_candles = None
     mock_r.log = MagicMock()
     monkeypatch.setattr(execution, "scan_candle_limits", lambda: {"H1": 100, "H4": 100, "D1": 110})
 

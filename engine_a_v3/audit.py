@@ -169,25 +169,39 @@ def audit_threshold_layers(
     cfg = config if isinstance(config, dict) else CONFIG
     checks: list[AuditCheck] = []
 
+    group_thresholds_cfg = dict(cfg.get("ENGINE_A_SCORE_GROUP_THRESHOLDS") or {})
     v3_thresholds = {
         group: baseline_profile(group, "intraday").trade_threshold
         for group in sorted(KNOWN_SCORE_GROUPS)
     }
-    uniform = all(
-        abs(value - V3_BASELINE_TRADE_THRESHOLD) < 1e-9 for value in v3_thresholds.values()
-    )
+    # V3 baseline must be config-driven: each group's threshold should match
+    # ENGINE_A_SCORE_GROUP_THRESHOLDS[group] (or the "default" fallback), not a
+    # uniform hardcoded value.
+    config_mismatches: dict[str, dict[str, float]] = {}
+    for group, v3_value in v3_thresholds.items():
+        configured = group_thresholds_cfg.get(group)
+        if configured is None:
+            configured = group_thresholds_cfg.get("default")
+        if configured is None:
+            continue
+        try:
+            configured_value = float(configured)
+        except (TypeError, ValueError):
+            continue
+        if abs(v3_value - configured_value) > 1e-9:
+            config_mismatches[group] = {"v3": v3_value, "configured": configured_value}
     checks.append(
         AuditCheck(
-            id="v3_baseline_uniform_2_0",
-            status="PASS" if uniform else "FAIL",
-            detail=f"V3 baseline trade_threshold is {V3_BASELINE_TRADE_THRESHOLD} for all groups",
-            evidence={"thresholds": v3_thresholds},
+            id="v3_baseline_config_driven",
+            status="PASS" if not config_mismatches else "FAIL",
+            detail="V3 baseline trade_threshold matches ENGINE_A_SCORE_GROUP_THRESHOLDS per group",
+            evidence={"thresholds": v3_thresholds, "mismatches": config_mismatches},
         )
     )
 
-    legacy_map = dict(cfg.get("ENGINE_A_SCORE_GROUP_THRESHOLDS") or {})
     legacy_groups = {
-        key for key in legacy_map if key != "default" and key in ENGINE_A_KNOWN_SCORE_GROUPS
+        key for key in group_thresholds_cfg
+        if key != "default" and key in ENGINE_A_KNOWN_SCORE_GROUPS
     }
     checks.append(
         AuditCheck(
@@ -206,12 +220,9 @@ def audit_threshold_layers(
             divergent[group] = {"legacy": legacy, "v3_baseline": v3}
     checks.append(
         AuditCheck(
-            id="legacy_and_v3_layers_diverge",
-            status="PASS" if divergent else "WARN",
-            detail=(
-                "Legacy and V3 threshold layers are intentionally separate "
-                "(non-empty divergence expected while V3 uses uniform baseline)"
-            ),
+            id="legacy_and_v3_layers_aligned",
+            status="PASS" if not divergent else "FAIL",
+            detail="Legacy and V3 threshold layers align (both config-driven from ENGINE_A_SCORE_GROUP_THRESHOLDS)",
             evidence={"divergent_groups": divergent},
         )
     )

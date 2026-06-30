@@ -6,7 +6,6 @@ from config import CONFIG
 from engine_a_v3.audit import (
     AUDIT_BRIEF_VERSION,
     AUDIT_REPRESENTATIVE_PAIRS,
-    V3_BASELINE_TRADE_THRESHOLD,
     audit_entry_points,
     audit_execution_gates,
     audit_score_group_parity,
@@ -77,22 +76,24 @@ def test_audit_entry_points_passes():
     assert any(check.id == "v3_no_legacy_threshold_imports" for check in section.checks)
 
 
-def test_audit_threshold_layers_v3_uniform_and_legacy_separate():
+def test_audit_threshold_layers_v3_config_driven_and_aligned():
     section = audit_threshold_layers(config=CONFIG)
     assert section.status in {"PASS", "WARN"}
 
-    baseline_check = next(c for c in section.checks if c.id == "v3_baseline_uniform_2_0")
-    assert baseline_check.status == "PASS"
-    assert all(
-        abs(value - V3_BASELINE_TRADE_THRESHOLD) < 1e-9
-        for value in baseline_check.evidence["thresholds"].values()
-    )
+    config_check = next(c for c in section.checks if c.id == "v3_baseline_config_driven")
+    assert config_check.status == "PASS"
+    assert not config_check.evidence.get("mismatches")
 
     legacy_check = next(c for c in section.checks if c.id == "legacy_threshold_map_present")
     assert legacy_check.status == "PASS"
 
+    aligned_check = next(c for c in section.checks if c.id == "legacy_and_v3_layers_aligned")
+    assert aligned_check.status == "PASS"
+    assert not aligned_check.evidence.get("divergent_groups")
+
+    # Representative pair: canonical resolver and V3 baseline agree on the group threshold.
     pair = AUDIT_REPRESENTATIVE_PAIRS["forex_majors"]
-    assert get_score_threshold(pair) != V3_BASELINE_TRADE_THRESHOLD
+    assert get_score_threshold(pair) == config_check.evidence["thresholds"]["forex_majors"]
 
 
 def test_audit_execution_gates_on_evaluated_v3_signal():
@@ -155,4 +156,4 @@ def test_run_audit_brief_end_to_end():
     assert "group_coverage" in report["sections"]
     assert "validation_lanes" in report["sections"]
     assert "exec_gates" in report["sections"]
-    assert report["signalSample"]["confluenceThreshold"] == V3_BASELINE_TRADE_THRESHOLD
+    assert report["signalSample"]["confluenceThreshold"] == get_score_threshold(pair)

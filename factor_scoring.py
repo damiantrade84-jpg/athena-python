@@ -185,6 +185,20 @@ def _resolve_di_alignment_multipliers(score_group: str | None, asset_type: str) 
     return {state: max(0.0, min(1.0, value)) for state, value in multipliers.items()}
 
 
+def _resolve_di_alignment_gap_thresholds() -> tuple[float, float]:
+    """Resolve the |+DI - -DI| gap thresholds that segment the DI alignment
+    multiplier tiers. Returns (balanced, opposed) where balanced < opposed.
+    Defaults (5.0, 15.0) preserve the prior hardcoded ramp exactly. Read from
+    ENGINE_A_DI_ALIGNMENT_GAP_THRESHOLDS so calibration can move the
+    balanced/opposed boundaries without code changes."""
+    raw = CONFIG.get("ENGINE_A_DI_ALIGNMENT_GAP_THRESHOLDS") or {}
+    balanced = _float_cfg(raw.get("BALANCED"), 5.0)
+    opposed = _float_cfg(raw.get("OPPOSED"), 15.0)
+    if balanced <= 0.0 or opposed <= balanced:
+        return 5.0, 15.0
+    return balanced, opposed
+
+
 def _resolve_research_lab_profile(
     base_cfg: dict,
     score_group: str | None,
@@ -1314,7 +1328,7 @@ def _research_factor_value(
         if name == "obv_divergence":
             return _research_obv_value(direction, candles, bonus, penalty)
         if name == "bollinger_touch":
-            return _research_bollinger_value(direction, candles, bonus, penalty)
+            return _research_bollinger_value(direction, candles, bonus, penalty, cfg=cfg)
         if name == "price_momentum":
             return _research_price_momentum_value(direction, candles, bonus, penalty, snap=snap)
         # Legacy factors — still callable but not in default factor list
@@ -1458,16 +1472,29 @@ def _research_chandelier_value(direction: str, candles: list, bonus: float, pena
     return 0.0, {"signal": "missing", "value": 0.0}
 
 
-def _research_bollinger_value(direction: str, candles: list, bonus: float, penalty: float) -> tuple[float, dict]:
+def _research_bollinger_value(
+    direction: str,
+    candles: list,
+    bonus: float,
+    penalty: float,
+    *,
+    cfg: dict | None = None,
+) -> tuple[float, dict]:
+    bb_cfg = (cfg or {}).get("BOLLINGER_TOUCH") if isinstance(cfg, dict) else None
+    bb_cfg = bb_cfg if isinstance(bb_cfg, dict) else {}
+    period = int(_float_cfg(bb_cfg.get("PERIOD"), 20.0))
+    mult = _float_cfg(bb_cfg.get("MULT"), 2.0)
+    if period < 5:
+        period = 20
     closes = [float(c["close"]) for c in candles if c.get("close") is not None]
-    if len(closes) < 25:
+    if len(closes) < period + 5:
         return 0.0, {"signal": "missing", "value": 0.0}
-    window = closes[-20:]
+    window = closes[-period:]
     mean = sum(window) / len(window)
     variance = sum((x - mean) ** 2 for x in window) / len(window)
     std = math.sqrt(max(0.0, variance))
-    upper = mean + 2.0 * std
-    lower = mean - 2.0 * std
+    upper = mean + mult * std
+    lower = mean - mult * std
     close = closes[-1]
     if direction == "LONG" and close <= lower:
         return bonus, {"signal": "lower_band_touch", "value": bonus}
@@ -1870,19 +1897,31 @@ def _entry_extension_multiplier(
     trade direction. Chasing entries (large positive extension) are penalised;
     pullback / at-value entries (price on the value side of EMA50, or within
     NEAR_ATR) are not. Targets the late-entry → stop-out pattern. Multiplier is
-    bounded to [MIN_MULT, 1.0] — it never raises a score. Fail-open (1.0) when
-    EMA50 / ATR / close are unavailable.
+    bounded to [MIN_MULT, 1.0] — it never raises a score. Fail-closed
+    (MIN_MULT) when EMA50 / ATR / close are unavailable — a chasing entry we
+    can't measure must not pass unpenalised (safety: missing data fails closed).
+    Set FAIL_CLOSED_ON_MISSING_DATA:false to restore prior fail-open (1.0).
     """
     cfg = CONFIG.get("ENGINE_A_ENTRY_EXTENSION_GATE") or {}
-    detail = {"enabled": False, "ext_atr": None, "multiplier": 1.0}
+    detail = {"enabled": False, "ext_atr": None, "multiplier": 1.0, "fail_closed": False}
     if not isinstance(cfg, dict) or not bool(cfg.get("ENABLED", False)):
         return 1.0, detail
+    near, far, min_mult = _resolve_entry_extension_params(cfg, score_group, asset_type)
+    fail_closed = bool(cfg.get("FAIL_CLOSED_ON_MISSING_DATA", True))
     close = _safe_indicator_float(h4_snap.get("close"))
     ema50 = _safe_indicator_float(h4_snap.get("ema50"))
     a = _safe_indicator_float(atr)
-    if close is None or ema50 is None or a is None or a <= 0 or direction not in ("LONG", "SHORT"):
+    missing = close is None or ema50 is None or a is None or a <= 0 or direction not in ("LONG", "SHORT")
+    if missing:
+        if fail_closed:
+            detail.update({
+                "enabled": True,
+                "multiplier": round(min_mult, 4),
+                "fail_closed": True,
+                "fail_reason": "missing_data",
+            })
+            return min_mult, detail
         return 1.0, detail
-    near, far, min_mult = _resolve_entry_extension_params(cfg, score_group, asset_type)
     ext_atr = (close - ema50) / a if direction == "LONG" else (ema50 - close) / a
     detail.update({"enabled": True, "ext_atr": round(ext_atr, 4)})
     if ext_atr <= near:
@@ -3412,6 +3451,8 @@ def compute_factor_scores(
     # Stage 1.3: ADX measures strength but not direction. If EMA says LONG but
     # -DI > +DI, bearish pressure dominates — score must be suppressed.
     _di_mults = _resolve_di_alignment_multipliers(score_group, asset_type)
+    _di_gap_balanced, _di_gap_opposed = _resolve_di_alignment_gap_thresholds()
+    _di_gap_span = max(1e-9, _di_gap_opposed - _di_gap_balanced)
 
     def _di_alignment_multiplier(trend_dir: str, plus_di: float | None, minus_di: float | None) -> float:
         if plus_di is None or minus_di is None:
@@ -3420,22 +3461,22 @@ def compute_factor_scores(
         if trend_dir == "LONG":
             if plus_di > minus_di:
                 return 1.0
-            elif abs(di_diff) <= 5.0:
-                t = abs(di_diff) / 5.0
+            elif abs(di_diff) <= _di_gap_balanced:
+                t = abs(di_diff) / _di_gap_balanced
                 return 1.0 + t * (_di_mults["balanced"] - 1.0)
-            elif abs(di_diff) <= 15.0:
-                t = (abs(di_diff) - 5.0) / 10.0
+            elif abs(di_diff) <= _di_gap_opposed:
+                t = (abs(di_diff) - _di_gap_balanced) / _di_gap_span
                 return _di_mults["balanced"] + t * (_di_mults["opposed"] - _di_mults["balanced"])
             else:
                 return _di_mults["severe_opposed"]
         elif trend_dir == "SHORT":
             if minus_di > plus_di:
                 return 1.0
-            elif abs(di_diff) <= 5.0:
-                t = abs(di_diff) / 5.0
+            elif abs(di_diff) <= _di_gap_balanced:
+                t = abs(di_diff) / _di_gap_balanced
                 return 1.0 + t * (_di_mults["balanced"] - 1.0)
-            elif abs(di_diff) <= 15.0:
-                t = (abs(di_diff) - 5.0) / 10.0
+            elif abs(di_diff) <= _di_gap_opposed:
+                t = (abs(di_diff) - _di_gap_balanced) / _di_gap_span
                 return _di_mults["balanced"] + t * (_di_mults["opposed"] - _di_mults["balanced"])
             else:
                 return _di_mults["severe_opposed"]
