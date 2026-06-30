@@ -21,13 +21,20 @@ def _bars(source: str, count: int = 3) -> list[dict]:
     ]
 
 
-def test_crypto_signal_feed_defaults_to_binance_without_touching_default_fetcher_shape():
+def test_crypto_signal_feed_defaults_to_bybit_without_touching_bybit_fetcher_shape():
+    """B1: with no config, the default feed is bybit (matches config.yaml/config.py).
+    Previously defaulted to binance — audit MED #11."""
     pair = {"display": "BTC/USDT", "symbol": "BTCUSDT", "type": "crypto", "source": "binance"}
-    calls = []
+    default_calls = []
+    bybit_calls = []
 
     def default_fetch(pair_arg, tf_arg, limit_arg):
-        calls.append((pair_arg, tf_arg, limit_arg))
+        default_calls.append((pair_arg, tf_arg, limit_arg))
         return _bars("binance", limit_arg)
+
+    def bybit_fetch(symbol, tf, limit):
+        bybit_calls.append((symbol, tf, limit))
+        return _bars("bybit", limit)
 
     result = fetch_crypto_signal_candles(
         pair,
@@ -36,14 +43,15 @@ def test_crypto_signal_feed_defaults_to_binance_without_touching_default_fetcher
         engine="AB",
         config={},
         default_fetch=default_fetch,
-        bybit_fetch=lambda *_args, **_kwargs: _bars("bybit"),
+        bybit_fetch=bybit_fetch,
     )
 
-    assert [c["source_tag"] for c in result.candles] == ["binance"] * 3
-    assert calls == [(pair, "H4", 3)]
-    assert result.meta["signalFeed"] == "binance"
+    assert [c["source_tag"] for c in result.candles] == ["bybit"] * 3
+    assert default_calls == []
+    assert bybit_calls == [("BTCUSDT", "H4", 3)]
+    assert result.meta["signalFeed"] == "bybit"
     assert result.meta["actualPriceVolume"] is True
-    assert result.meta["upstream"] == "binance_futures"
+    assert result.meta["upstream"] == "bybit_linear_kline"
 
 
 def test_crypto_signal_feed_uses_bybit_when_configured_and_records_source_truth():

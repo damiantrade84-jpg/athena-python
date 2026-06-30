@@ -162,9 +162,12 @@ def test_engine_b_base_style_profiles_keep_min_score_contract():
     _, intraday = _naked_scan_style_profile("intraday", asset_type="forex")
     _, swing = _naked_scan_style_profile("swing", asset_type="forex")
 
+    # B5: YAML base_thresholds (engine_b_config.yaml:9-19) is the source of truth.
+    # scalp=4.0, intraday=4.5, swing=5.0. Previously asserted 4.0 for all three,
+    # which masked the YAML drift (audit LOW #20).
     assert float(scalp["min_score"]) == 4.0
-    assert float(intraday["min_score"]) == 4.0
-    assert float(swing["min_score"]) == 4.0
+    assert float(intraday["min_score"]) == 4.5
+    assert float(swing["min_score"]) == 5.0
 
 
 def test_min_confluence_threshold_tiers():
