@@ -118,8 +118,8 @@ export default function PrimeTimeCard() {
           </div>
         </div>
 
-        {/* Per-asset-group status */}
-        <div className="grid grid-cols-2 xl:grid-cols-4 gap-2">
+        {/* Per-asset-group schedule — every window shown, active one highlighted */}
+        <div className="grid grid-cols-1 xl:grid-cols-2 gap-2">
           {groups.map(({ group, active, minutes, next: nextWin }) => {
             const live = active != null;
             const livePrime = live && active.tier === 'prime';
@@ -127,24 +127,56 @@ export default function PrimeTimeCard() {
             return (
               <div
                 key={group.id}
-                className="flex items-center justify-between gap-2 px-2.5 py-2 rounded-lg border transition-colors"
+                className="rounded-lg border px-2.5 py-2 transition-colors"
                 style={{
                   borderColor: livePrime ? 'hsl(var(--gold) / 0.40)' : live ? 'hsl(var(--gold) / 0.22)' : 'hsl(var(--border) / 0.40)',
                   background: livePrime ? 'hsl(var(--gold) / 0.10)' : live ? 'hsl(var(--gold) / 0.05)' : 'hsl(var(--secondary) / 0.35)',
                 }}
               >
-                <div className="flex items-center gap-2 min-w-0">
-                  <span
-                    className={`w-1.5 h-1.5 rounded-full shrink-0 ${livePrime ? 'animate-pulse' : ''}`}
-                    style={{ background: dotColor, boxShadow: live ? '0 0 6px hsl(var(--gold) / 0.7)' : 'none' }}
-                  />
-                  <span className="text-[10px] font-medium uppercase tracking-wide truncate">{group.label}</span>
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <span
+                      className={`w-1.5 h-1.5 rounded-full shrink-0 ${livePrime ? 'animate-pulse' : ''}`}
+                      style={{ background: dotColor, boxShadow: live ? '0 0 6px hsl(var(--gold) / 0.7)' : 'none' }}
+                    />
+                    <span className="text-[10px] font-semibold uppercase tracking-wide truncate">{group.label}</span>
+                  </div>
+                  <span className="text-[9px] font-mono shrink-0 text-right" style={{ color: live ? 'hsl(var(--gold-light))' : 'hsl(var(--muted-foreground))' }}>
+                    {live
+                      ? `${livePrime ? 'PRIME NOW' : 'ACTIVE'} · ends ${refMinToAnchorLabel(active.endMin)}`
+                      : `next in ${fmtCountdown(minutes)}`}
+                  </span>
                 </div>
-                <span className="text-[9px] font-mono shrink-0 text-right" style={{ color: live ? 'hsl(var(--gold-light))' : 'hsl(var(--muted-foreground))' }}>
-                  {live
-                    ? `${livePrime ? 'PRIME' : 'ACTIVE'} · ends ${refMinToAnchorLabel(active.endMin)}`
-                    : `next ${refMinToAnchorLabel(nextWin.startMin)} · in ${fmtCountdown(minutes)}`}
-                </span>
+
+                {/* All windows for this group as time chips */}
+                <div className="flex flex-wrap items-center gap-1 mt-1.5">
+                  {group.windows.map(w => {
+                    const isActive = live && w.startMin === active.startMin && w.endMin === active.endMin;
+                    const isNext = !live && w.startMin === nextWin.startMin && w.endMin === nextWin.endMin;
+                    const isPrimeTier = w.tier === 'prime';
+                    return (
+                      <span
+                        key={w.startMin}
+                        className="text-[9px] font-mono px-1.5 py-0.5 rounded border tabular-nums"
+                        style={{
+                          color: isActive
+                            ? 'hsl(var(--gold-light))'
+                            : isPrimeTier ? 'hsl(var(--gold))' : 'hsl(var(--muted-foreground))',
+                          background: isActive
+                            ? 'hsl(var(--gold) / 0.16)'
+                            : isNext ? 'hsl(var(--gold) / 0.05)' : 'transparent',
+                          borderColor: isActive
+                            ? 'hsl(var(--gold) / 0.55)'
+                            : isPrimeTier ? 'hsl(var(--gold) / 0.30)' : 'hsl(var(--border) / 0.55)',
+                        }}
+                        title={`${isPrimeTier ? 'Prime' : 'Secondary'} window${isActive ? ' · live now' : isNext ? ' · up next' : ''}`}
+                      >
+                        {refMinToAnchorLabel(w.startMin, false)}–{refMinToAnchorLabel(w.endMin, false)}
+                        {!isPrimeTier && <span className="opacity-60"> ·2nd</span>}
+                      </span>
+                    );
+                  })}
+                </div>
               </div>
             );
           })}

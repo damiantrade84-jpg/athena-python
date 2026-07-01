@@ -46,8 +46,10 @@ export const QUALITY_SEGMENTS: QualitySegment[] = [
   { startMin: h(9), endMin: h(11, 30), quality: 'high', label: 'London Prime', markets: 'EUR · GBP · DAX · FTSE · Gold · EU stocks' },
   { startMin: h(11, 30), endMin: h(13, 30), quality: 'low', label: 'Midday Lull', markets: 'Manage positions; avoid weak entries' },
   { startMin: h(13, 30), endMin: h(14), quality: 'medium', label: 'New York Ramp', markets: 'Pre-overlap positioning' },
-  { startMin: h(14), endMin: h(18), quality: 'prime', label: 'London–NY Overlap', markets: 'FX majors · Gold · Oil · Crypto · US indices' },
-  { startMin: h(18), endMin: h(20, 30), quality: 'low', label: 'US Lunch Chop', markets: 'Avoid chop unless strong trend day' },
+  // Overlap runs to 17:00 UTC (19:00 GMT+2); the 16:00–17:00 UTC tail still carries
+  // strong FX/gold flow, so the prime band extends to 19:00 (was clipped at 18:00).
+  { startMin: h(14), endMin: h(19), quality: 'prime', label: 'London–NY Overlap', markets: 'FX majors · Gold · Oil · Crypto · US indices' },
+  { startMin: h(19), endMin: h(20, 30), quality: 'low', label: 'US Lunch Chop', markets: 'Avoid chop unless strong trend day' },
   { startMin: h(20, 30), endMin: h(22), quality: 'high', label: 'US Power Hour', markets: 'US stocks · ETFs · index close setups' },
   { startMin: h(22), endMin: h(24), quality: 'avoid', label: 'Rollover Risk', markets: 'No new trades; spreads widen' },
 ];
@@ -59,7 +61,7 @@ export const ASSET_GROUPS: AssetGroup[] = [
     label: 'FX Majors',
     windows: [
       { startMin: h(9), endMin: h(11, 30), tier: 'prime' },
-      { startMin: h(14), endMin: h(18), tier: 'prime' },
+      { startMin: h(14), endMin: h(19), tier: 'prime' },
     ],
   },
   {
@@ -100,7 +102,7 @@ export const ASSET_GROUPS: AssetGroup[] = [
     label: 'Gold · Commodities',
     windows: [
       { startMin: h(9), endMin: h(12), tier: 'prime' },
-      { startMin: h(14), endMin: h(18, 30), tier: 'prime' },
+      { startMin: h(14), endMin: h(19), tier: 'prime' },
     ],
   },
   {
