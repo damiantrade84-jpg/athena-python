@@ -208,6 +208,23 @@ def _legacy_mechanical_block(signal: dict[str, Any]) -> str | None:
     return None
 
 
+def _execution_levels_block(signal: dict[str, Any]) -> str | None:
+    entry = _signal_level(signal, "entry")
+    sl = _signal_level(signal, "sl")
+    tp1 = _signal_level(signal, "tp1")
+    if entry is None or sl is None or tp1 is None:
+        return "ENGINE_D_LEVELS_MISSING"
+    if entry <= 0 or sl <= 0 or tp1 <= 0:
+        return "ENGINE_D_LEVELS_MISSING"
+
+    direction = str(signal.get("direction") or "").upper()
+    if direction == "LONG" and not (sl < entry < tp1):
+        return "ENGINE_D_LEVELS_INVALID"
+    if direction == "SHORT" and not (tp1 < entry < sl):
+        return "ENGINE_D_LEVELS_INVALID"
+    return None
+
+
 def _review_age_seconds(created_at: str | None) -> float | None:
     if not created_at:
         return None
@@ -302,6 +319,46 @@ def resolve_engine_d_execute_gate(
         return None, review
 
     return _legacy_mechanical_block(signal), None
+
+
+def engine_d_paper_demo_execution_block_reason(
+    signal: dict[str, Any],
+    *,
+    review_id: str | None = None,
+    audit_db: str | None = None,
+    cfg: dict[str, Any] | None = None,
+    require_ai_review: bool | None = None,
+) -> str | None:
+    """Paper/demo scalp gate: allow A/B advisory demotions, keep hard blocks closed."""
+    cfg = cfg or {}
+    hard = engine_d_signal_hard_block(signal)
+    if hard:
+        return hard
+
+    levels_block = _execution_levels_block(signal)
+    if levels_block:
+        return levels_block
+
+    grade = str(signal.get("ai_grade") or signal.get("grade") or "").upper()
+    if grade not in ("A", "B"):
+        return "ENGINE_D_GRADE_BELOW_B_NOT_EXECUTABLE"
+
+    ai_cfg = _ai_execute_cfg(cfg)
+    requires_ai = (
+        bool(ai_cfg.get("EXECUTE_REQUIRES_AI_REVIEW", True))
+        if require_ai_review is None
+        else bool(require_ai_review)
+    )
+    if not requires_ai:
+        return None
+
+    reason, _review = resolve_engine_d_execute_gate(
+        signal,
+        review_id=review_id,
+        audit_db=audit_db,
+        cfg=cfg,
+    )
+    return reason
 
 
 def engine_d_execution_block_reason(

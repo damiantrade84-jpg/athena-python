@@ -8,6 +8,7 @@ import { isEngineAV3Signal, resolveEngineAV3Signal } from '@/lib/engineAV3';
 
 export type QuickExecuteStyle = 'scalp' | 'intraday' | 'swing' | 'auto';
 export type ExecutionVolumeMode = 'min_lot' | 'calculated';
+export type ScalpExecutionMode = 'paper' | 'demo' | 'live_disabled' | 'live';
 
 export type ExitMode = 'traditional_static' | 'adaptive_trail' | 'manual' | 'time_based';
 // 'default' = no per-trade override; backend resolves per-group -> global.
@@ -491,16 +492,31 @@ export function evaluateScalpExecuteBlock(args: {
   suggestedTradePlan?: SuggestedTradePlan | null;
   isTestMode?: boolean;
   isPaper?: boolean;
+  executionMode?: ScalpExecutionMode;
+  requireAiReview?: boolean;
 }): string | null {
-  const { signal, chartSymbolKey, chartTimeframe, aiReview, suggestedTradePlan, isTestMode, isPaper } = args;
+  const {
+    signal,
+    chartSymbolKey,
+    chartTimeframe,
+    aiReview,
+    suggestedTradePlan,
+    isTestMode,
+    isPaper,
+    executionMode,
+    requireAiReview,
+  } = args;
   if (isTestMode) return 'Test mode';
-  if (isPaper) return 'Paper mode';
+  const mode = executionMode || (isPaper ? 'paper' : undefined);
+  if (mode === 'live' || mode === 'live_disabled') return 'Live execution disabled';
   if (!signal) return 'No scalp candidate';
   const direction = String(signal.direction || '').toUpperCase();
   if (direction !== 'LONG' && direction !== 'SHORT') return 'Direction missing';
   const grade = scalpSignalGrade(signal);
   if (grade === 'D') return 'Grade D not executable';
-  if ((grade === 'A' || grade === 'B') && !aiReview?.review_id && !aiReview?.ai_review) {
+  if (grade !== 'A' && grade !== 'B') return 'Grade below B';
+  const needsAiReview = requireAiReview !== false;
+  if (needsAiReview && !aiReview?.review_id && !aiReview?.ai_review) {
     return 'AI review required';
   }
   const reviewSymbolKey = aiReview?.engine_d_context?.symbol ? normalizeSymbolKey(aiReview.engine_d_context.symbol) : null;
@@ -518,13 +534,10 @@ export function evaluateScalpExecuteBlock(args: {
   if (grade === 'A' || grade === 'B') {
     const mechanical = scalpMechanicalGateBlock(signal);
     if (mechanical === 'Blocked') return mechanical;
-    if (requiresScalpAiEntryNow(aiReview)) return 'AI ENTRY_NOW required';
-    if (scalpAiReviewBlocksExecute(aiReview)) return 'AI says wait';
-  } else {
-    const mechanical = scalpMechanicalGateBlock(signal);
-    if (mechanical) return mechanical;
-    if (requiresScalpAiEntryNow(aiReview)) return 'AI ENTRY_NOW required';
-    if (scalpAiReviewBlocksExecute(aiReview)) return 'AI says wait';
+    if (needsAiReview) {
+      if (requiresScalpAiEntryNow(aiReview)) return 'AI ENTRY_NOW required';
+      if (scalpAiReviewBlocksExecute(aiReview)) return 'AI says wait';
+    }
   }
   const planAction = String(suggestedTradePlan?.action || '').toUpperCase();
   if (planAction === 'WAIT_FOR_LEVEL') return 'Waiting for level';
@@ -538,6 +551,8 @@ export function buildScalpExecutePayload(args: {
   volumeMode?: ExecutionVolumeMode;
   sizingOverride?: number;
   reviewId?: string | null;
+  executionMode?: ScalpExecutionMode;
+  requireAiReview?: boolean;
 }): Record<string, unknown> {
   const volumePayload = buildExecutionVolumePayload({
     volumeMode: args.volumeMode,
@@ -550,6 +565,12 @@ export function buildScalpExecutePayload(args: {
   };
   if (args.reviewId) {
     payload.review_id = args.reviewId;
+  }
+  if (args.executionMode) {
+    payload.execution_mode = args.executionMode;
+  }
+  if (typeof args.requireAiReview === 'boolean') {
+    payload.require_ai_review = args.requireAiReview;
   }
   return payload;
 }

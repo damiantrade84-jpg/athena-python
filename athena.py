@@ -1657,6 +1657,29 @@ def _build_atr_freshness_eval(
     )
 
 
+def _attach_engine_a_v3_atr_provenance(
+    signal: dict,
+    pair: dict,
+    style: str | None,
+    d1: list | None,
+    h4: list | None,
+    h1: list | None,
+) -> dict:
+    """Wire Engine A V3 level ATR provenance onto scan/review signal payloads."""
+    from atr_diagnostics import attach_engine_a_v3_atr_provenance
+
+    return attach_engine_a_v3_atr_provenance(
+        signal,
+        pair,
+        style,
+        d1,
+        h4,
+        h1,
+        config=CONFIG if isinstance(CONFIG, dict) else {},
+        bybit_atr_and_candles_fn=_bybit_atr_and_candles_for_levels,
+    )
+
+
 def _bybit_atr_and_candles_for_levels(
     pair: dict, style: str | None, as_of=None
 ) -> tuple[float | None, list | None]:
@@ -10553,6 +10576,51 @@ def api_scalp_execute():
         else:
             signal = raw_signals[0]
 
+        from ai_scalp_review.execute_gate import resolve_engine_d_execute_gate
+        from execution import (
+            _engine_d_paper_demo_execution_block_reason,
+            _payload_require_ai_review,
+            _requested_scalp_execution_mode,
+            _scalp_demo_execution_requested,
+        )
+
+        review_id = str(payload.get("review_id") or payload.get("ai_review_id") or "").strip() or None
+        if _requested_scalp_execution_mode(payload) == "paper":
+            return jsonify({"success": False, "error": "USE_SCALP_PAPER_EXECUTE"}), 400
+        if _scalp_demo_execution_requested("", CONFIG):
+            pre_exec_block = _engine_d_paper_demo_execution_block_reason(
+                signal,
+                review_id=review_id,
+                audit_db=_AUDIT_DB,
+                cfg=CONFIG,
+                require_ai_review=_payload_require_ai_review(payload),
+            )
+        else:
+            pre_exec_block, _pre_ai_review_row = resolve_engine_d_execute_gate(
+                signal,
+                review_id=review_id,
+                audit_db=_AUDIT_DB,
+                cfg=CONFIG,
+            )
+        if pre_exec_block:
+            return jsonify(
+                {
+                    "success": False,
+                    "error": pre_exec_block,
+                    "skipped": [
+                        {
+                            "pair": signal.get("pair") or symbol,
+                            "reason": pre_exec_block,
+                            "gate_result": signal.get("gate_result"),
+                            "ai_grade": signal.get("ai_grade"),
+                            "ai_score": signal.get("ai_score"),
+                            "fail_reasons": signal.get("fail_reasons", []),
+                        }
+                    ],
+                    "fresh_scan": scan,
+                }
+            ), 200
+
         is_crypto = (signal.get("type") == "crypto")
 
         if is_crypto:
@@ -10612,15 +10680,22 @@ def api_scalp_execute():
         if _rebase_error:
             return jsonify({"success": False, "error": _rebase_error}), 400
 
-        from ai_scalp_review.execute_gate import resolve_engine_d_execute_gate
-
-        review_id = str(payload.get("review_id") or payload.get("ai_review_id") or "").strip() or None
-        exec_block, _ai_review_row = resolve_engine_d_execute_gate(
-            signal,
-            review_id=review_id,
-            audit_db=_AUDIT_DB,
-            cfg=CONFIG,
-        )
+        if _scalp_demo_execution_requested(_exec_venue, CONFIG):
+            exec_block = _engine_d_paper_demo_execution_block_reason(
+                signal,
+                review_id=review_id,
+                audit_db=_AUDIT_DB,
+                cfg=CONFIG,
+                require_ai_review=_payload_require_ai_review(payload),
+            )
+            _ai_review_row = None
+        else:
+            exec_block, _ai_review_row = resolve_engine_d_execute_gate(
+                signal,
+                review_id=review_id,
+                audit_db=_AUDIT_DB,
+                cfg=CONFIG,
+            )
         if exec_block:
             return jsonify(
                 {
@@ -13557,6 +13632,9 @@ def analyze_pair(
                     "pairSource": pair.get("source"),
                 }
                 _blocked["is_forming"] = is_forming
+                _attach_engine_a_v3_atr_provenance(
+                    _blocked, pair, style, d1, h4, h1
+                )
                 return _attach_v3_intermarket_confirmation(
                     _blocked,
                     pair,
@@ -13578,6 +13656,9 @@ def analyze_pair(
             ).to_dict()
             _blocked["dataFreshness"]["diagnostics"] = _freshness_diag
             _blocked["is_forming"] = is_forming
+            _attach_engine_a_v3_atr_provenance(
+                _blocked, pair, style, d1, h4, h1
+            )
             return _attach_v3_intermarket_confirmation(
                 _blocked,
                 pair,
@@ -13613,6 +13694,7 @@ def analyze_pair(
         "pairSource": pair.get("source"),
     }
     _v3_signal["is_forming"] = is_forming
+    _attach_engine_a_v3_atr_provenance(_v3_signal, pair, style, d1, h4, h1)
     return _attach_v3_intermarket_confirmation(
         _v3_signal,
         pair,

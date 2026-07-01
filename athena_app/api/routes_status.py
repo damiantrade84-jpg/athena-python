@@ -7,6 +7,7 @@ surfaces. This module does not own scoring, risk, freshness, or execution logic.
 from __future__ import annotations
 
 import logging
+import os
 import time
 from datetime import datetime, timezone
 from types import SimpleNamespace
@@ -162,6 +163,34 @@ def _paper_mode_snapshot() -> tuple[bool, bool]:
     return False, bool(real_orders_allowed if real_orders_allowed is not None else True)
 
 
+def _scalp_execute_requires_ai_review() -> bool:
+    ai_cfg = CONFIG.get("AI_SCALP_CHART_REVIEW") or {}
+    if not isinstance(ai_cfg, dict):
+        return True
+    return bool(ai_cfg.get("EXECUTE_REQUIRES_AI_REVIEW", True))
+
+
+def _scalp_demo_broker_requested() -> bool:
+    try:
+        if str(CONFIG.get("EXECUTOR_MODE") or "").strip().lower() == "demo":
+            return True
+    except Exception:
+        pass
+    if os.environ.get("BYBIT_DEMO", "").strip().lower() in ("1", "true", "yes", "on"):
+        return True
+    return "demo" in os.environ.get("MT5_SERVER", "").lower()
+
+
+def _scalp_execution_mode(paper_mode: bool, real_orders_allowed: bool) -> str:
+    if paper_mode:
+        return "paper"
+    if _scalp_demo_broker_requested():
+        return "demo"
+    if not real_orders_allowed:
+        return "live_disabled"
+    return "live"
+
+
 def health():
     all_pairs = _all_pairs_getter()
     active_pairs = _active_pairs_getter()
@@ -186,6 +215,8 @@ def health():
             "xaiKey": ai_key_configured(CONFIG),
             "paper_mode": paper_mode,
             "real_orders_allowed": real_orders_allowed,
+            "scalp_execute_requires_ai_review": _scalp_execute_requires_ai_review(),
+            "scalp_execution_mode": _scalp_execution_mode(paper_mode, real_orders_allowed),
         }
     )
 

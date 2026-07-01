@@ -57,6 +57,228 @@ def test_scalp_execute_rejects_direction_flip(monkeypatch):
     assert data["newDirection"] == "LONG"
 
 
+def _create_scalp_audit_table(path: Path) -> None:
+    with sqlite3.connect(path) as con:
+        con.execute(
+            """
+            CREATE TABLE audit_log (
+                ts TEXT, pair TEXT, score REAL, max_score REAL, engine TEXT,
+                direction TEXT, grade TEXT, risk TEXT, style TEXT,
+                entry_price REAL, sl REAL, tp REAL, tp_partial REAL, tp2 REAL,
+                volume REAL, ticket TEXT, risk_amount REAL, risk_pct REAL,
+                asset_class TEXT, regime TEXT, factors_json TEXT
+            )
+            """
+        )
+
+
+def test_scalp_paper_execute_logs_without_broker_execution(monkeypatch, tmp_path):
+    audit_db = tmp_path / "audit.db"
+    _create_scalp_audit_table(audit_db)
+    captured = {}
+
+    class _Log:
+        def warning(self, *args, **kwargs):
+            return None
+
+        def error(self, *args, **kwargs):
+            return None
+
+    class _Runtime:
+        CONFIG = {
+            "PAPER_SOAK": {"ENABLED": True, "REAL_ORDERS_ALLOWED": False, "ACCOUNT_BALANCE": 10000.0},
+            "AI_SCALP_CHART_REVIEW": {"EXECUTE_REQUIRES_AI_REVIEW": False},
+        }
+        AUDIT_DB = str(audit_db)
+        ACTIVE_PAIRS = [{"display": "EUR/USD", "type": "forex"}]
+        log = _Log()
+
+        @staticmethod
+        def kill_switch():
+            return False
+
+    class _Approval:
+        approved = True
+        reason = "OK"
+        risk_amount = 12.5
+        risk_pct = 0.00125
+        volume = 0.02
+
+        @staticmethod
+        def to_dict():
+            return {"approved": True, "reason": "OK"}
+
+    monkeypatch.setattr(execution, "rt", lambda: _Runtime())
+    monkeypatch.setattr(
+        scalp_engine,
+        "run_scalp_scan",
+        lambda pairs: {
+            "signals": [
+                {
+                    "pair": "EUR/USD",
+                    "direction": "LONG",
+                    "type": "forex",
+                    "ai_grade": "B",
+                    "gate_result": "WATCHLIST",
+                    "executable": False,
+                    "candidate_status": "rr_below_min",
+                    "price": 1.1,
+                    "sl": 1.095,
+                    "tp1": 1.11,
+                    "soft_warnings": ["rr_below_min", "fee_guard_high_cost"],
+                }
+            ]
+        },
+    )
+    monkeypatch.setattr(scalp_engine, "rebase_scalp_signal_levels", lambda sig, symbol, info: (sig, None))
+
+    def _risk_check(**kwargs):
+        captured["risk_signal"] = kwargs["signal"]
+        captured["symbol_info"] = kwargs["symbol_info"]
+        return _Approval()
+
+    monkeypatch.setattr(risk_engine, "risk_check", _risk_check)
+    monkeypatch.setattr(execution, "_guardian_pre_trade", lambda *args, **kwargs: (True, None))
+    monkeypatch.setattr(execution, "_hydrate_execution_candle_quality", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        execution,
+        "run_managed_execution",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("paper route must not execute broker orders")),
+    )
+    monkeypatch.setattr(
+        mt5_executor,
+        "mt5_get_account",
+        lambda: (_ for _ in ()).throw(AssertionError("paper route must not fetch broker account")),
+    )
+
+    app = Flask(__name__)
+    execution.register_execution_routes(app)
+    client = app.test_client()
+
+    resp = client.post(
+        "/api/scalp-paper-execute",
+        json={"symbol": "EUR/USD", "signal": {"symbol": "EUR/USD", "direction": "LONG"}},
+    )
+
+    assert resp.status_code == 200, resp.get_data(as_text=True)
+    data = resp.get_json()
+    assert data["success"] is True
+    assert data["ticket"].startswith("paper-scalp-")
+    assert captured["risk_signal"]["pair"] == "EUR/USD"
+    assert captured["symbol_info"] is None
+    with sqlite3.connect(audit_db) as con:
+        row = con.execute("SELECT grade, style, ticket FROM audit_log").fetchone()
+    assert row == ("SCALP-PAPER-EXECUTE", "paper", data["ticket"])
+
+
+def test_scalp_paper_execute_blocks_when_real_orders_allowed(monkeypatch, tmp_path):
+    audit_db = tmp_path / "audit.db"
+    _create_scalp_audit_table(audit_db)
+
+    class _Runtime:
+        CONFIG = {"PAPER_SOAK": {"ENABLED": True, "REAL_ORDERS_ALLOWED": True}}
+        AUDIT_DB = str(audit_db)
+        ACTIVE_PAIRS = []
+
+        @staticmethod
+        def kill_switch():
+            return False
+
+    monkeypatch.setattr(execution, "rt", lambda: _Runtime())
+
+    app = Flask(__name__)
+    execution.register_execution_routes(app)
+    client = app.test_client()
+
+    resp = client.post(
+        "/api/scalp-paper-execute",
+        json={"symbol": "EUR/USD", "signal": {"symbol": "EUR/USD", "direction": "LONG"}},
+    )
+
+    assert resp.status_code == 403
+    assert "REAL_ORDERS_ALLOWED" in resp.get_json()["error"]
+
+
+def test_modular_scalp_execute_demo_allows_advisory_ab_gate(monkeypatch, tmp_path):
+    audit_db = tmp_path / "audit.db"
+    _create_scalp_audit_table(audit_db)
+    captured = {}
+
+    class _Log:
+        def warning(self, *args, **kwargs):
+            return None
+
+        def error(self, *args, **kwargs):
+            return None
+
+    class _Runtime:
+        CONFIG = {
+            "EXECUTOR_MODE": "demo",
+            "AI_SCALP_CHART_REVIEW": {"EXECUTE_REQUIRES_AI_REVIEW": False},
+        }
+        ALL_PAIRS = [{"display": "EUR/USD", "type": "forex"}]
+        AUDIT_DB = str(audit_db)
+        log = _Log()
+
+        @staticmethod
+        def kill_switch():
+            return False
+
+    class _Approval:
+        approved = True
+        reason = "OK"
+        risk_amount = 10.0
+        risk_pct = 0.001
+
+        @staticmethod
+        def to_dict():
+            return {"approved": True, "reason": "OK"}
+
+    monkeypatch.setattr(execution, "rt", lambda: _Runtime())
+    monkeypatch.setattr(mt5_executor, "mt5_get_account", lambda: {"balance": 10000.0, "equity": 10000.0})
+    monkeypatch.setattr(mt5_executor, "mt5_get_positions", lambda: {"positions": []})
+    monkeypatch.setattr(mt5_executor, "mt5_get_symbol_info", lambda symbol: {"digits": 5, "point": 0.00001})
+    monkeypatch.setattr(scalp_engine, "rebase_scalp_signal_levels", lambda sig, symbol, info: (sig, None))
+    monkeypatch.setattr(execution, "_guardian_pre_trade", lambda *args, **kwargs: (True, None))
+    monkeypatch.setattr(execution, "_hydrate_execution_candle_quality", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        risk_engine,
+        "risk_check",
+        lambda **kwargs: captured.setdefault("approval", _Approval()),
+    )
+    monkeypatch.setattr(
+        execution,
+        "run_managed_execution",
+        lambda venue, signal, approval: {"success": True, "ticket": "demo-123", "volume": 0.01, "entryPrice": signal["price"]},
+    )
+
+    app = Flask(__name__)
+    execution.register_execution_routes(app)
+    client = app.test_client()
+    resp = client.post(
+        "/api/scalp-execute",
+        json={
+            "symbol": "EUR/USD",
+            "execution_mode": "demo",
+            "signal": {
+                "pair": "EUR/USD",
+                "direction": "LONG",
+                "type": "forex",
+                "ai_grade": "B",
+                "gate_result": "WATCHLIST",
+                "executable": False,
+                "candidate_status": "rr_below_min",
+                "price": 1.1,
+                "sl": 1.095,
+                "tp1": 1.11,
+            },
+        },
+    )
+
+    assert resp.status_code == 200, resp.get_data(as_text=True)
+    assert resp.get_json()["success"] is True
+
+
 def test_quick_execute_rejects_direction_flip(monkeypatch):
     athena_module = _load_athena_module()
 
@@ -245,6 +467,9 @@ def test_scalp_execute_passes_size_multiplier_to_risk_engine(monkeypatch):
                     "pair": "EUR/USD",
                     "direction": "LONG",
                     "type": "forex",
+                    "ai_grade": "B",
+                    "gate_result": "PASS",
+                    "executable": True,
                     "price": 1.1,
                     "sl": 1.095,
                     "tp1": 1.11,
@@ -306,6 +531,9 @@ def test_scalp_execute_calculated_mode_uses_grade_multiplier(monkeypatch):
                     "pair": "EUR/USD",
                     "direction": "LONG",
                     "type": "forex",
+                    "ai_grade": "B",
+                    "gate_result": "PASS",
+                    "executable": True,
                     "price": 1.1,
                     "sl": 1.095,
                     "tp1": 1.11,
@@ -597,6 +825,9 @@ def test_production_scalp_execute_rebase_uses_pair_score_group_min_rr(monkeypatc
                     "pair": "USD/ZAR",
                     "direction": "LONG",
                     "type": "forex",
+                    "ai_grade": "B",
+                    "gate_result": "PASS",
+                    "executable": True,
                     "price": 1.1,
                     "sl": 1.095,
                     "tp1": 1.11,
@@ -763,6 +994,9 @@ def test_modular_scalp_execute_rebase_uses_pair_score_group_min_rr(monkeypatch, 
                 "pair": "USD/ZAR",
                 "type": "forex",
                 "direction": "LONG",
+                "ai_grade": "B",
+                "gate_result": "PASS",
+                "executable": True,
                 "price": 1.1,
                 "sl": 1.095,
                 "tp1": 1.11,
@@ -1178,7 +1412,7 @@ def test_open_trades_timed_hides_intraday_labels_for_scalp(monkeypatch):
     monkeypatch.setattr(
         mt5_executor,
         "mt5_get_positions",
-        lambda: {
+        lambda *args, **kwargs: {
             "error": False,
             "positions": [
                 {
@@ -1196,7 +1430,7 @@ def test_open_trades_timed_hides_intraday_labels_for_scalp(monkeypatch):
         },
     )
     import bybit_executor
-    monkeypatch.setattr(bybit_executor, "bybit_get_positions", lambda: {"error": False, "positions": []})
+    monkeypatch.setattr(bybit_executor, "bybit_get_positions", lambda *args, **kwargs: {"error": False, "positions": []})
     import timed_exit_monitor
     monkeypatch.setattr(
         timed_exit_monitor,
@@ -1227,7 +1461,7 @@ def test_open_trades_timed_engine_scalp_overrides_stale_intraday_style(monkeypat
     monkeypatch.setattr(
         mt5_executor,
         "mt5_get_positions",
-        lambda: {
+        lambda *args, **kwargs: {
             "error": False,
             "positions": [
                 {
@@ -1246,7 +1480,7 @@ def test_open_trades_timed_engine_scalp_overrides_stale_intraday_style(monkeypat
         },
     )
     import bybit_executor
-    monkeypatch.setattr(bybit_executor, "bybit_get_positions", lambda: {"error": False, "positions": []})
+    monkeypatch.setattr(bybit_executor, "bybit_get_positions", lambda *args, **kwargs: {"error": False, "positions": []})
     import timed_exit_monitor
     monkeypatch.setattr(
         timed_exit_monitor,
@@ -1306,7 +1540,7 @@ def test_open_trades_timed_exposes_unresolved_audit_rows(monkeypatch, tmp_path):
     monkeypatch.setattr(
         mt5_executor,
         "mt5_get_positions",
-        lambda: {
+        lambda *args, **kwargs: {
             "error": False,
             "positions": [
                 {
@@ -1324,7 +1558,7 @@ def test_open_trades_timed_exposes_unresolved_audit_rows(monkeypatch, tmp_path):
         },
     )
     import bybit_executor
-    monkeypatch.setattr(bybit_executor, "bybit_get_positions", lambda: {"error": False, "positions": []})
+    monkeypatch.setattr(bybit_executor, "bybit_get_positions", lambda *args, **kwargs: {"error": False, "positions": []})
     import timed_exit_monitor
     monkeypatch.setattr(timed_exit_monitor, "_load_recent_audit_rows", lambda _db: [])
     monkeypatch.setattr(timed_exit_monitor, "_match_audit_row_for_position", lambda p, rows: {})
@@ -1610,12 +1844,12 @@ def test_open_trades_timed_marks_bybit_uuid_audit_row_live_by_position_match(mon
         )
 
     monkeypatch.setattr(athena_module, "_AUDIT_DB", str(db_path))
-    monkeypatch.setattr(mt5_executor, "mt5_get_positions", lambda: {"error": False, "positions": []})
+    monkeypatch.setattr(mt5_executor, "mt5_get_positions", lambda *args, **kwargs: {"error": False, "positions": []})
     import bybit_executor
     monkeypatch.setattr(
         bybit_executor,
         "bybit_get_positions",
-        lambda: {
+        lambda *args, **kwargs: {
             "error": False,
             "positions": [
                 {
