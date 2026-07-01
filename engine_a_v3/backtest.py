@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import bisect
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
@@ -180,23 +181,50 @@ def run_v3_backtest(
     trades: list[dict] = []
     same_bar = 0
     next_available_index = min_index
+    # Precompute string time keys per TF once and detect sortedness so the
+    # per-bar prefix can be built with bisect + slice (O(log n)) instead of a
+    # full O(n) filter pass over every candle on every bar. Falls back to the
+    # original filter if a TF's keys are not non-decreasing, preserving exact
+    # string-comparison semantics either way.
+    _time_keys: dict[str, list[str]] = {}
+    _tf_sorted: dict[str, bool] = {}
+    for _tf, _rows in candles.items():
+        _keys = [str(c.get("time") or c.get("datetime")) for c in _rows]
+        _time_keys[_tf] = _keys
+        _tf_sorted[_tf] = all(_keys[i] <= _keys[i + 1] for i in range(len(_keys) - 1))
+
+    def _build_prefix(cutoff_key: str) -> dict[str, list[dict]]:
+        prefix: dict[str, list[dict]] = {}
+        for tf, rows in candles.items():
+            if _tf_sorted[tf]:
+                split = bisect.bisect_right(_time_keys[tf], cutoff_key)
+                prefix[tf] = rows[:split]
+            else:
+                prefix[tf] = [
+                    c
+                    for c in rows
+                    if str(c.get("time") or c.get("datetime")) <= cutoff_key
+                ]
+        return prefix
+
+    # Per-run indicator snapshot cache keyed by (tf, len(prefix)). Secondary TFs
+    # (D1, H4 when intraday) keep the same prefix across many primary bars, so
+    # this avoids recomputing their full indicator bundle each bar. Safe because
+    # the underlying candle lists are immutable for the whole run and the prefix
+    # for a given (tf, k) is always candles[tf][:k].
+    snapshot_cache: dict = {}
+
     for index in range(min_index, len(primary) - 1):
         if index < next_available_index:
             continue
         cutoff = primary[index].get("time")
-        prefix = {
-            timeframe: [
-                candle
-                for candle in rows
-                if str(candle.get("time") or candle.get("datetime")) <= str(cutoff)
-            ]
-            for timeframe, rows in candles.items()
-        }
+        prefix = _build_prefix(str(cutoff))
         signal = evaluate_engine_a_v3(
             pair,
             prefix,
             horizon=horizon,
             registry=registry,
+            snapshot_cache=snapshot_cache,
         )
         _im_confirmation = None
         if intermarket_context_provider is not None:
@@ -325,15 +353,8 @@ def run_v3_backtest(
         evaluated = 0
         for index in range(min_index, len(primary) - 1):
             cutoff = primary[index].get("time")
-            prefix = {
-                timeframe: [
-                    candle
-                    for candle in rows
-                    if str(candle.get("time") or candle.get("datetime")) <= str(cutoff)
-                ]
-                for timeframe, rows in candles.items()
-            }
-            sig = evaluate_engine_a_v3(pair, prefix, horizon=horizon, registry=registry)
+            prefix = _build_prefix(str(cutoff))
+            sig = evaluate_engine_a_v3(pair, prefix, horizon=horizon, registry=registry, snapshot_cache=snapshot_cache)
             decisions[sig.decision] = decisions.get(sig.decision, 0) + 1
             qualified += 1 if sig.qualified else 0
             for reason in sig.rejectionReasons:

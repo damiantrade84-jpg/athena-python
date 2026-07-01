@@ -334,14 +334,24 @@ def _volume_component(
 
 # ── config resolvers ─────────────────────────────────────────────────────────
 def _snapshots(
-    candles: dict[str, list[dict]], asset_type: str, periods: Mapping[str, int]
+    candles: dict[str, list[dict]], asset_type: str, periods: Mapping[str, int],
+    snapshot_cache: dict | None = None,
 ) -> dict[str, Mapping[str, Any]]:
     from engine_a_v3.indicator_adapter import indicator_snapshot
 
     snaps: dict[str, Mapping[str, Any]] = {}
     for tf in ("D1", "H4", "H1"):
         rows = candles.get(tf) or []
-        snaps[tf] = indicator_snapshot(rows, periods, asset_type)
+        if snapshot_cache is not None:
+            key = (tf, len(rows))
+            cached = snapshot_cache.get(key)
+            if cached is not None:
+                snaps[tf] = cached
+                continue
+        snap = indicator_snapshot(rows, periods, asset_type)
+        if snapshot_cache is not None:
+            snapshot_cache[(tf, len(rows))] = snap
+        snaps[tf] = snap
     return snaps
 
 
@@ -353,6 +363,7 @@ def score_pair(
     *,
     context: Mapping[str, Any] | None = None,
     profile: Any | None = None,
+    snapshot_cache: dict | None = None,
 ) -> QuantScore:
     """Continuous quality score for one pair. `route` is a SpecialistRoute
     (.score_group, .family). `context` carries subsystem snapshots and an
@@ -366,7 +377,7 @@ def score_pair(
     if profile is None:
         from engine_a_v3.profile import baseline_profile
         profile = baseline_profile(group, horizon)
-    snaps = _snapshots(candles, asset_type, dict(profile.indicator_periods))
+    snaps = _snapshots(candles, asset_type, dict(profile.indicator_periods), snapshot_cache)
     entry_snap = snaps.get(entry_tf) or snaps.get("H4") or snaps.get("D1") or {}
     momentum_tf = _resolve_v3_momentum_tf(group, asset_type, horizon)
     momentum_snap = snaps.get(momentum_tf) or snaps.get("H4") or entry_snap

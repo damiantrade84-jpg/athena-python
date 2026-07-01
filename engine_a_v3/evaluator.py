@@ -165,6 +165,7 @@ def evaluate_engine_a_v3(
     registry: PromotionRegistry | None = None,
     blocked_reasons: tuple[str, ...] = (),
     context: Mapping[str, Any] | None = None,
+    snapshot_cache: dict | None = None,
 ) -> EngineASetupSignal:
     route = route_specialist(pair)
     normalized_horizon = _horizon(horizon)
@@ -249,7 +250,7 @@ def evaluate_engine_a_v3(
         symbol=symbol,
     )
     profile = promotion.profile or baseline_profile(route.score_group, normalized_horizon)
-    quant = score_pair(route, normalized_horizon, candles, context=context, profile=profile)
+    quant = score_pair(route, normalized_horizon, candles, context=context, profile=profile, snapshot_cache=snapshot_cache)
 
     # ── Setup overlay: use already-implemented specialists for every family
     # (forex: breakout/retest/pullback/london_open/mean_reversion; crypto:

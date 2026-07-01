@@ -1367,7 +1367,7 @@ ENGINE_C_BT_EXIT: &engine_bt_exit_defaults
 
     intraday:
 
-      max_hold_bars: 30      # H4 bars for intraday style
+      max_hold_bars: 40      # H4 bars for intraday style (was 30 — raised so structural TP has time to be reached)
 
       be_arm_rr: 1.5         # BE triggers at 1.5R
 
@@ -1375,7 +1375,7 @@ ENGINE_C_BT_EXIT: &engine_bt_exit_defaults
 
     swing:
 
-      max_hold_bars: 60      # H4 bars for swing style
+      max_hold_bars: 80      # H4 bars for swing style (was 60 — raised so structural TP has time to be reached)
 
       be_arm_rr: 1.5
 
@@ -1383,7 +1383,7 @@ ENGINE_C_BT_EXIT: &engine_bt_exit_defaults
 
     scalp:
 
-      max_hold_bars: 12      # H4 bars for scalp style
+      max_hold_bars: 16      # H4 bars for scalp style (was 12)
 
       be_arm_rr: 1.5
 
@@ -1393,7 +1393,7 @@ ENGINE_C_BT_EXIT: &engine_bt_exit_defaults
 
     intraday:
 
-      max_hold_bars: 40
+      max_hold_bars: 50      # was 40
 
       be_arm_rr: 1.5
 
@@ -1401,7 +1401,7 @@ ENGINE_C_BT_EXIT: &engine_bt_exit_defaults
 
     swing:
 
-      max_hold_bars: 80
+      max_hold_bars: 100     # was 80
 
       be_arm_rr: 1.5
 
@@ -1409,7 +1409,7 @@ ENGINE_C_BT_EXIT: &engine_bt_exit_defaults
 
     scalp:
 
-      max_hold_bars: 12
+      max_hold_bars: 16      # was 12
 
       be_arm_rr: 1.5
 
@@ -1419,7 +1419,7 @@ ENGINE_C_BT_EXIT: &engine_bt_exit_defaults
 
     intraday:
 
-      max_hold_bars: 24
+      max_hold_bars: 32      # was 24
 
       be_arm_rr: 1.5
 
@@ -1427,7 +1427,7 @@ ENGINE_C_BT_EXIT: &engine_bt_exit_defaults
 
     swing:
 
-      max_hold_bars: 50
+      max_hold_bars: 64      # was 50
 
       be_arm_rr: 1.5
 
@@ -1435,7 +1435,7 @@ ENGINE_C_BT_EXIT: &engine_bt_exit_defaults
 
     scalp:
 
-      max_hold_bars: 8
+      max_hold_bars: 12      # was 8
 
       be_arm_rr: 1.5
 
@@ -1445,7 +1445,7 @@ ENGINE_C_BT_EXIT: &engine_bt_exit_defaults
 
     intraday:
 
-      max_hold_bars: 24
+      max_hold_bars: 32      # was 24
 
       be_arm_rr: 1.5
 
@@ -1453,7 +1453,7 @@ ENGINE_C_BT_EXIT: &engine_bt_exit_defaults
 
     swing:
 
-      max_hold_bars: 50
+      max_hold_bars: 64      # was 50
 
       be_arm_rr: 1.5
 
@@ -1461,7 +1461,7 @@ ENGINE_C_BT_EXIT: &engine_bt_exit_defaults
 
     scalp:
 
-      max_hold_bars: 10
+      max_hold_bars: 14      # was 10
 
       be_arm_rr: 1.5
 
@@ -1471,7 +1471,7 @@ ENGINE_C_BT_EXIT: &engine_bt_exit_defaults
 
     intraday:
 
-      max_hold_bars: 24
+      max_hold_bars: 32      # was 24
 
       be_arm_rr: 1.5
 
@@ -1479,7 +1479,7 @@ ENGINE_C_BT_EXIT: &engine_bt_exit_defaults
 
     swing:
 
-      max_hold_bars: 50
+      max_hold_bars: 64      # was 50
 
       be_arm_rr: 1.5
 
@@ -1487,7 +1487,7 @@ ENGINE_C_BT_EXIT: &engine_bt_exit_defaults
 
     scalp:
 
-      max_hold_bars: 10
+      max_hold_bars: 14      # was 10
 
       be_arm_rr: 1.5
 
@@ -3329,7 +3329,7 @@ NAKED_ENGINE:
 
       min_rr: 1.5
 
-      fallback_rr: 2.0
+      fallback_rr: 1.8
 
     intraday:
 
@@ -3337,7 +3337,7 @@ NAKED_ENGINE:
 
       min_rr: 1.5
 
-      fallback_rr: 2.0
+      fallback_rr: 1.8
 
     swing:
 
@@ -3345,7 +3345,7 @@ NAKED_ENGINE:
 
       min_rr: 2.0
 
-      fallback_rr: 3.0
+      fallback_rr: 2.5
 
       require_macro_align:
 
