@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
 import {
   createChart,
   CandlestickSeries,
@@ -38,7 +38,7 @@ import {
   buildScalpScreenshotMeta,
   canvasToDataUrl,
   downscaleToCap,
-  postScalpChartReview,
+  streamScalpChartReview,
 } from '@/lib/aiScalpChartReview';
 import {
   buildScalpExecutePayload,
@@ -882,6 +882,9 @@ export default function ScalpWorkbenchPanel() {
   const [aiCaptureError, setAiCaptureError] = useState<string | null>(null);
   const [aiReviewLoading, setAiReviewLoading] = useState(false);
   const [scalpAiReviewResponse, setScalpAiReviewResponse] = useState<ScalpAIChartReviewResponse | null>(null);
+  const [scalpStreamingNarrative, setScalpStreamingNarrative] = useState<string>('');
+  const deferredScalpStreamingNarrative = useDeferredValue(scalpStreamingNarrative);
+  const scalpStreamAbortRef = useRef<AbortController | null>(null);
   const [scalpAiReviewPreview, setScalpAiReviewPreview] = useState<ScalpAIReviewPreview | null>(null);
   const [tfDisplayOverride, setTfDisplayOverride] = useState(false);
   const [intentSourceBadge, setIntentSourceBadge] = useState<string | null>(null);
@@ -1380,20 +1383,36 @@ export default function ScalpWorkbenchPanel() {
           outputContract: 'scalpAIReview',
         },
       });
-      const response = await postScalpChartReview({
+      const scalpReviewRequest = {
         symbol: chartSymbol,
         timeframe,
         provider: aiReviewProvider,
         screenshot_base64: screenshotBase64,
         screenshot_meta: screenshotMeta,
-      });
-      setScalpAiReviewResponse(response);
+      };
+      setScalpStreamingNarrative('');
+      const controller = new AbortController();
+      scalpStreamAbortRef.current = controller;
+      await streamScalpChartReview(
+        scalpReviewRequest,
+        {
+          onToken: (data) => {
+            const text = typeof data?.text === 'string' ? data.text : '';
+            if (text) setScalpStreamingNarrative((prev) => prev + text);
+          },
+          onReview: (response) => setScalpAiReviewResponse(response),
+          onError: () => setScalpStreamingNarrative(''),
+        },
+        controller.signal,
+      );
       showToast('Engine D AI chart review complete', 'success');
     } catch (err) {
       setAiCaptureError(err instanceof Error ? err.message : 'AI chart review failed');
       showToast('Engine D AI chart review failed', 'error');
     } finally {
       setAiReviewLoading(false);
+      setScalpStreamingNarrative('');
+      scalpStreamAbortRef.current = null;
     }
   }, [
     activeSignal,
@@ -1903,6 +1922,12 @@ export default function ScalpWorkbenchPanel() {
               {aiCaptureError}
             </div>
           )}
+          {aiReviewLoading && deferredScalpStreamingNarrative ? (
+            <div className="rounded-md border border-amber-500/40 bg-amber-950/30 p-2 text-[11px] text-amber-100 whitespace-pre-wrap break-words">
+              <span className="text-amber-400 font-semibold">Live read: </span>
+              {deferredScalpStreamingNarrative}
+            </div>
+          ) : null}
           {scalpAiReviewResponse && <ScalpAIReviewCard response={scalpAiReviewResponse} />}
           <Card className="border-border/60 bg-card/70">
             <CardHeader className="px-4 py-3">

@@ -29,8 +29,27 @@ from config import (
     get_ai_model,
     get_ai_provider_label,
 )
+from prompt_store import load_prompt
 
 log = logging.getLogger("sentinel.debate")
+
+_DEBATE_BULL_BEAR_SYSTEM_FALLBACK = (
+    "You are a rigorous trading analyst. Use only provided signal data. "
+    "Return valid JSON only."
+)
+_DEBATE_BULL_BEAR_SYSTEM, _DEBATE_BB_SOURCE, _DEBATE_BB_HASH = load_prompt(
+    "debate_bull_bear_system",
+    fallback=_DEBATE_BULL_BEAR_SYSTEM_FALLBACK,
+)
+
+_DEBATE_JUDGE_SYSTEM_FALLBACK = (
+    "You are an impartial risk committee judge. "
+    "Weigh both cases and output strict JSON only."
+)
+_DEBATE_JUDGE_SYSTEM, _DEBATE_JUDGE_SOURCE, _DEBATE_JUDGE_HASH = load_prompt(
+    "debate_judge_system",
+    fallback=_DEBATE_JUDGE_SYSTEM_FALLBACK,
+)
 
 
 def _debate_timeout_sec() -> float:
@@ -384,10 +403,7 @@ def _get_debate_case(
             f'"counter_risks": ["risk1","risk2"] }}'
         )
 
-    system_prompt = (
-        "You are a rigorous trading analyst. Use only provided signal data. "
-        "Return valid JSON only."
-    )
+    system_prompt = _DEBATE_BULL_BEAR_SYSTEM
 
     try:
         completion = client.beta.chat.completions.parse(
@@ -462,10 +478,7 @@ def _get_judge_verdict(
         f'"score_adjustment": <=0.0 penalty only (never positive; downgrade-only policy) }}'
     )
 
-    system_prompt = (
-        "You are an impartial risk committee judge. "
-        "Weigh both cases and output strict JSON only."
-    )
+    system_prompt = _DEBATE_JUDGE_SYSTEM
 
     try:
         completion = client.beta.chat.completions.parse(

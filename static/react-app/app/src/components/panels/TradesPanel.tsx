@@ -270,6 +270,7 @@ export default function TradesPanel() {
                         <TableHead className="text-[10px] uppercase text-right">Volume</TableHead>
                         <TableHead className="text-[10px] uppercase text-right">Open</TableHead>
                         <TableHead className="text-[10px] uppercase text-right">P&amp;L</TableHead>
+                        <TableHead className="text-[10px] uppercase text-right">P&amp;L %</TableHead>
                         <TableHead className="text-[10px] uppercase text-right">SL / Close</TableHead>
                         <TableHead className="text-[10px] uppercase text-right">TP</TableHead>
                         <TableHead className="text-[10px] uppercase">Style</TableHead>
@@ -284,7 +285,12 @@ export default function TradesPanel() {
                         const exch = String(p.exchange || (p._bybit ? 'bybit' : 'mt5'));
                         const volume = num(p.volume ?? p.size);
                         const openPx = num(p.entry ?? p.open_price);
-                        const pnl = num(p.profit ?? p.pnl);
+                        // Prefer broker sub-cent precision; show more decimals when the
+                        // 2-dp dollar value would collapse to $0.00 on tiny positions.
+                        const pnlRaw = num(p.profit_raw ?? p.profit ?? p.pnl);
+                        const pnlDecimals = pnlRaw !== 0 && Math.abs(pnlRaw) < 0.01 ? 4 : 2;
+                        const pnlPctRaw = p.pnl_pct;
+                        const pnlPct = pnlPctRaw == null ? null : num(pnlPctRaw);
                         const sl = num(p.sl);
                         const tp = num(p.tp);
                         const style = String(p.style || p.audit_engine || '—');
@@ -304,8 +310,11 @@ export default function TradesPanel() {
                             <TableCell className="text-[10px] uppercase text-muted-foreground">{exch}</TableCell>
                             <TableCell className="text-xs font-mono text-right">{fmtNum(volume, volume < 1 ? 3 : 2)}</TableCell>
                             <TableCell className="text-xs font-mono text-right">{fmtNum(openPx, 5)}</TableCell>
-                            <TableCell className={`text-xs font-mono font-bold text-right ${pnl >= 0 ? 'text-long' : 'text-short'}`}>
-                              {pnl >= 0 ? '+' : ''}${fmtNum(pnl, 2)}
+                            <TableCell className={`text-xs font-mono font-bold text-right ${pnlRaw >= 0 ? 'text-long' : 'text-short'}`}>
+                              {pnlRaw >= 0 ? '+' : ''}${fmtNum(pnlRaw, pnlDecimals)}
+                            </TableCell>
+                            <TableCell className={`text-xs font-mono text-right ${pnlPct == null ? 'text-muted-foreground' : pnlPct >= 0 ? 'text-long' : 'text-short'}`}>
+                              {pnlPct == null ? '—' : `${pnlPct >= 0 ? '+' : ''}${fmtNum(pnlPct, 2)}%`}
                             </TableCell>
                             <TableCell className="text-xs font-mono text-right text-short">
                               <div>{fmtNum(sl, 5)}</div>

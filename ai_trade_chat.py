@@ -22,6 +22,7 @@ from config import (
     get_ai_timeout_sec,
     resolve_ai_review_runtime,
 )
+from prompt_store import load_prompt
 
 
 log = logging.getLogger("athena")
@@ -38,7 +39,7 @@ _LLM_UNSAFE_EXECUTION_RE = re.compile(
 )
 
 
-MARCUS_CHAT_SYSTEM_PROMPT = """You are Marcus Reid, a trading desk analyst.
+MARCUS_CHAT_SYSTEM_PROMPT_FALLBACK = """You are Marcus Reid, a trading desk analyst.
 Athena's read is a hypothesis, not truth.
 Use raw market evidence, engine context, Vision, market intelligence, similar outcomes, and risk state.
 If data is missing, say what is missing.
@@ -59,6 +60,11 @@ Required answer format:
 - Risk warning
 - Final action
 """
+
+MARCUS_CHAT_SYSTEM_PROMPT, _MARCUS_CHAT_SOURCE, _MARCUS_CHAT_HASH = load_prompt(
+    "marcus_chat_system",
+    fallback=MARCUS_CHAT_SYSTEM_PROMPT_FALLBACK,
+)
 
 
 def _as_dict(value: Any) -> dict[str, Any]:
@@ -170,6 +176,31 @@ def plan_tool_calls(user_message: str, context: dict) -> list[dict[str, Any]]:
         add("get_historical_analogues", signal_id=trace_id, symbol=symbol)
 
     return calls
+
+
+def _plan_tool_calls_with_optional_llm(message: str, context: dict) -> list[dict[str, Any]]:
+    """Dispatch between the native LLM planner and the keyword planner.
+
+    When AI_AGENT_NATIVE_PLANNING_ENABLED is true, try the LLM planner first.
+    If it returns a non-empty plan, use it. If it returns empty (e.g. no API
+    key, LLM failure, or the LLM chose no tools), fall back to the keyword
+    planner so the user still gets a useful answer.
+
+    All LLM-proposed calls are re-validated against READ_ONLY_TOOL_NAMES by
+    the planner before reaching the executor.
+    """
+    try:
+        from ai_agent_planner import is_native_planning_enabled, plan_tool_calls_with_llm
+
+        if is_native_planning_enabled():
+            llm_plan = plan_tool_calls_with_llm(message, context)
+            if llm_plan:
+                return llm_plan
+            # LLM planner returned nothing → fall back to keyword planner
+            log.debug("[AI_TRADE_CHAT] LLM planner returned empty; using keyword planner")
+    except Exception as exc:
+        log.warning("[AI_TRADE_CHAT] LLM planner failed; falling back to keyword planner: %s", exc)
+    return plan_tool_calls(message, context)
 
 
 def _execute_tool(call: dict[str, Any]) -> dict[str, Any]:
@@ -647,7 +678,7 @@ def run_trade_chat_turn(request: dict) -> dict[str, Any]:
         "comparison_symbol": request.get("comparison_symbol"),
         "resolved_signal": resolved_signal,
     }
-    tool_plan = plan_tool_calls(message, context)
+    tool_plan = _plan_tool_calls_with_optional_llm(message, context)
     if request.get("include_vision") is False:
         tool_plan = [call for call in tool_plan if call.get("name") != "get_chart_vision"]
     if request.get("include_similar_setups") is False:

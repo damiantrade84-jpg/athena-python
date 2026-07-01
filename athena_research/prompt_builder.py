@@ -13,10 +13,12 @@ from typing import Optional
 import pandas as pd
 import yaml
 
+from prompt_store import load_prompt
+
 
 # ─── Safety preamble (injected into every prompt) ────────────────────────────
 
-_SAFETY_PREAMBLE = """
+_SAFETY_PREAMBLE_FALLBACK = """
 You are a quantitative research analyst reviewing backtest discovery results for Athena Pro v4,
 a multi-engine algorithmic trading system.
 
@@ -32,6 +34,11 @@ IMPORTANT SAFETY RULES — YOU MUST FOLLOW THESE:
 9. Separate Engine A, Engine B, and Engine D recommendations.
 10. Mention explicitly if a result is not trustworthy due to missing data or telemetry.
 """.strip()
+
+_SAFETY_PREAMBLE, _RESEARCH_SAFETY_SOURCE, _RESEARCH_SAFETY_HASH = load_prompt(
+    "research_safety_preamble",
+    fallback=_SAFETY_PREAMBLE_FALLBACK,
+)
 
 _PROJECT_CONTEXT = """
 ## Project Context

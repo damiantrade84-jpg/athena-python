@@ -353,6 +353,8 @@ def log_ai_review(
     strategist_verdict: str | None = None,
     strategist_warnings: list[str] | None = None,
     packet_schema_version: str | None = None,
+    prompt_source: str | None = None,
+    prompt_text_hash: str | None = None,
 ) -> None:
     """Write one AI review audit record to JSONL.  Never raises."""
     ai_changed_execution_permission = (
@@ -437,6 +439,10 @@ def log_ai_review(
         record["strategist_warnings"] = strategist_warnings
     if packet_schema_version:
         record["packet_schema_version"] = packet_schema_version
+    if prompt_source:
+        record["prompt_source"] = prompt_source
+    if prompt_text_hash:
+        record["prompt_text_hash"] = prompt_text_hash
 
     try:
         _ensure_log_dir()

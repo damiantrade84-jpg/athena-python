@@ -92,3 +92,31 @@ def test_frontend_renders_summary_and_context_before_detail_rows():
     assert verdict_idx < details_idx
     assert context_idx < details_idx
     assert summary_idx < verdict_idx
+    assert context_idx < details_idx
+
+
+def test_phase6_ux_surface_components_exist():
+    for rel in (
+        "components/athena/EvidenceRefsPanel.tsx",
+        "components/athena/ConfidenceCalibrationPanel.tsx",
+        "components/athena/AIDisagreementVizPanel.tsx",
+        "components/athena/WhatIfReplayPanel.tsx",
+        "lib/sseStream.ts",
+    ):
+        assert (FRONTEND_SRC / rel).is_file(), f"missing Phase 6 frontend file: {rel}"
+
+
+def test_phase6_streaming_wired_into_panels():
+    chat_panel = (FRONTEND_SRC / "components/ai/AITradingAgentPanel.tsx").read_text(encoding="utf-8")
+    chart_lib = (FRONTEND_SRC / "lib/aiChartReview.ts").read_text(encoding="utf-8")
+    scalp_lib = (FRONTEND_SRC / "lib/aiScalpChartReview.ts").read_text(encoding="utf-8")
+    chart_panel = (FRONTEND_SRC / "components/panels/TVChartPanel.tsx").read_text(encoding="utf-8")
+    scalp_panel = (FRONTEND_SRC / "components/panels/ScalpWorkbenchPanel.tsx").read_text(encoding="utf-8")
+    assert "streamSse" in chat_panel
+    assert "streamChartReview" in chart_lib
+    assert "streamChartReview" in chart_panel
+    assert "streamScalpChartReview" in scalp_lib
+    assert "streamScalpChartReview" in scalp_panel
+    assert "EvidenceRefsPanel" in (FRONTEND_SRC / "components/athena/AIReviewCard.tsx").read_text(encoding="utf-8")
+    assert "postEvidenceRefs" in (FRONTEND_SRC / "lib/apiClient.ts").read_text(encoding="utf-8")
+    assert "getCalibration" in (FRONTEND_SRC / "lib/apiClient.ts").read_text(encoding="utf-8")

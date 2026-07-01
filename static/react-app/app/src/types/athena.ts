@@ -2195,3 +2195,79 @@ export interface ScalpAIChartReviewRequest {
   screenshot_base64: string;
   screenshot_meta: ScalpAIChartReviewScreenshotMeta;
 }
+
+// ---------------------------------------------------------------------------
+// Phase 6 — UX surface types (citations, calibration, disagreement, what-if)
+// Advisory-only; every response carries do_not_auto_apply where applicable.
+// ---------------------------------------------------------------------------
+
+export interface EvidenceRef {
+  claim_id?: string | number;
+  text: string;
+  source_field?: string;
+  source_value?: unknown;
+  ungrounded: boolean;
+}
+
+export interface EvidenceRefsResponse {
+  enabled: boolean;
+  evidence_refs: EvidenceRef[];
+  do_not_auto_apply: boolean;
+  error?: string;
+}
+
+export interface CalibrationBin {
+  bin: string;
+  count: number;
+  avg_confidence: number | null;
+  realized_accuracy: number | null;
+  gap: number | null;
+}
+
+export interface ConfidenceCalibrationResponse {
+  schema_version: string;
+  enabled: boolean;
+  bins: CalibrationBin[];
+  surface?: string | null;
+  lookback_days?: number;
+  do_not_auto_apply: boolean;
+  error?: string;
+}
+
+export interface AIDisagreementResponse {
+  schema_version: string;
+  enabled: boolean;
+  surfaces?: string[];
+  decisions?: Record<string, string | null>;
+  confidences?: Record<string, number | null>;
+  decision_agreement?: boolean;
+  confidence_spread?: number;
+  divergent: boolean;
+  summary?: string;
+  advisory_only: boolean;
+  error?: string;
+}
+
+export interface WhatIfReplayResponse {
+  schema_version: string;
+  enabled: boolean;
+  hypothetical_context: Record<string, unknown> | null;
+  applied_overrides: string[];
+  rejected_overrides: string[];
+  advisory_only: boolean;
+  do_not_auto_apply: boolean;
+  error?: string;
+}
+
+export interface EvidenceRefClaim {
+  claim_id?: string | number;
+  text?: string;
+  claim?: string;
+  source_field?: string;
+}
+
+export interface AiSurfaceVerdict {
+  decision?: string | null;
+  verdict?: string | null;
+  confidence?: number | null;
+}

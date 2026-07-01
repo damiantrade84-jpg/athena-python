@@ -1,8 +1,10 @@
+import { Suspense, lazy, memo, useMemo } from 'react';
 import { Sparkles } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent } from '@/components/ui/card';
 import AIReviewContextCompletenessPanel from '@/components/athena/AIReviewContextCompletenessPanel';
 import AIReviewSummaryStrip from '@/components/athena/AIReviewSummaryStrip';
+import EvidenceRefsPanel from '@/components/athena/EvidenceRefsPanel';
 import TradeSkillReviewPanel from '@/components/athena/TradeSkillReviewPanel';
 import {
   AI_REVIEW_EMPTY,
@@ -13,10 +15,13 @@ import {
 import type {
   AIChartReviewContextCompleteness,
   AIChartReviewSummary,
+  EvidenceRefClaim,
   ScalpAIChartReviewResponse,
   ScalpContextCompleteness,
   ScalpVerdictComparison,
 } from '@/types/athena';
+
+const WhatIfReplayPanel = lazy(() => import('@/components/athena/WhatIfReplayPanel'));
 
 function normalizeContextCompleteness(
   raw: ScalpContextCompleteness | undefined,
@@ -97,7 +102,7 @@ export interface ScalpAIReviewCardProps {
   response: ScalpAIChartReviewResponse;
 }
 
-export default function ScalpAIReviewCard({ response }: ScalpAIReviewCardProps) {
+function ScalpAIReviewCardImpl({ response }: ScalpAIReviewCardProps) {
   const ai = response.ai_review || {};
   const c = response.concordance || {};
   const ctx = response.engine_d_context ?? response.engineDContext;
@@ -113,6 +118,30 @@ export default function ScalpAIReviewCard({ response }: ScalpAIReviewCardProps) 
   const warnings = showList(response.mismatch_warnings);
   const suggestedPlan =
     response.suggestedTradePlan ?? response.suggested_trade_plan ?? ai.suggestedTradePlan;
+
+  const evidenceClaims = useMemo((): EvidenceRefClaim[] => {
+    const claims: EvidenceRefClaim[] = [];
+    const summary = ai.chartReadSummary ?? (ai as { chart_read_summary?: string }).chart_read_summary;
+    if (summary) claims.push({ claim_id: 'chart_read', text: String(summary), source_field: 'chartReadSummary' });
+    supporting?.forEach((text, idx) => {
+      claims.push({ claim_id: `support_${idx}`, text, source_field: 'supporting_reasons' });
+    });
+    return claims;
+  }, [ai.chartReadSummary, supporting]);
+
+  const evidenceSources = useMemo(
+    () => ({
+      ...(ctx && typeof ctx === 'object' ? (ctx as Record<string, unknown>) : {}),
+      verdict: ai.verdict,
+      confidence: ai.confidence,
+    }),
+    [ctx, ai.verdict, ai.confidence],
+  );
+
+  const whatIfBaseContext = useMemo(
+    () => (ctx && typeof ctx === 'object' ? (ctx as Record<string, unknown>) : {}),
+    [ctx],
+  );
 
   return (
     <Card className="border-border/60 bg-card/50">
@@ -144,6 +173,12 @@ export default function ScalpAIReviewCard({ response }: ScalpAIReviewCardProps) 
         <AIReviewSummaryStrip summary={summary as AIChartReviewSummary | null | undefined} />
 
         <ScalpVerdictPanel comparison={verdictComparison} />
+
+        <EvidenceRefsPanel claims={evidenceClaims} sources={evidenceSources} />
+
+        <Suspense fallback={null}>
+          <WhatIfReplayPanel baseContext={whatIfBaseContext} />
+        </Suspense>
 
         <TradeSkillReviewPanel
           skill={ai}
@@ -226,3 +261,6 @@ export default function ScalpAIReviewCard({ response }: ScalpAIReviewCardProps) 
     </Card>
   );
 }
+
+const ScalpAIReviewCard = memo(ScalpAIReviewCardImpl);
+export default ScalpAIReviewCard;

@@ -52,8 +52,56 @@ def _run_provider(provider: str, payload: Any) -> dict[str, Any]:
     if resolved == "dual":
         if not cfg.get("ALLOW_DUAL_PROVIDER"):
             raise PermissionError("Dual provider disabled")
-        raise NotImplementedError("Dual provider not implemented for v1")
+        return _run_dual_provider(payload, cfg)
     raise ValueError(f"Unknown provider: {provider!r}")
+
+
+def _run_dual_provider(payload: Any, cfg: dict[str, Any]) -> dict[str, Any]:
+    """Run primary + secondary providers in parallel and reconcile.
+
+    Primary/secondary resolved from config; defaults to (openai, claude).
+    Tiebreaker is `AI_DUAL_PROVIDER_TIEBREAKER` (primary | secondary |
+    fail_closed); default `primary`.
+    """
+    from ai_review.dual_provider import run_dual_provider
+
+    primary = str(cfg.get("AI_DUAL_PROVIDER_PRIMARY") or "openai").strip().lower()
+    secondary = str(cfg.get("AI_DUAL_PROVIDER_SECONDARY") or "claude").strip().lower()
+    tiebreaker = str(cfg.get("AI_DUAL_PROVIDER_TIEBREAKER") or "primary").strip().lower()
+    if primary == secondary:
+        raise ValueError("dual provider requires two distinct providers")
+    if primary not in ("openai", "claude", "grok") or secondary not in ("openai", "claude", "grok"):
+        raise ValueError("dual provider supports only: openai, claude, grok")
+    timeout = float(cfg.get("AI_DUAL_PROVIDER_TIMEOUT_SEC") or 60.0)
+
+    def _call(name: str):
+        if name in ("claude", "anthropic"):
+            out = call_anthropic_chart_review(payload)
+            out["provider"] = "claude"
+            return out
+        if name in ("grok", "xai"):
+            out = call_xai_chart_review(payload)
+            out["provider"] = "grok"
+            return out
+        if name == "openai":
+            enabled_cfg = dict(cfg)
+            enabled_cfg.setdefault("OPENAI_REVIEW_ENABLED", CONFIG.get("OPENAI_REVIEW_ENABLED", True))
+            if not openai_review_enabled(enabled_cfg):
+                raise PermissionError("OpenAI provider disabled")
+            return call_openai_chart_review(payload)
+        raise ValueError(f"unknown provider in dual call: {name!r}")
+
+    out = run_dual_provider(
+        primary_fn=lambda: _call(primary),
+        secondary_fn=lambda: _call(secondary),
+        primary_name=primary,
+        secondary_name=secondary,
+        tiebreaker=tiebreaker,
+        timeout_sec=timeout,
+    )
+    out["provider"] = "dual"
+    out["dualProviderConfigured"] = True
+    return out
 
 
 def run_chart_review(provider: str | None, payload: Any) -> dict[str, Any]:

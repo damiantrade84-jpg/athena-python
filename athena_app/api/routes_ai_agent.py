@@ -10,13 +10,14 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from typing import Any, Iterable
 
-from flask import jsonify, request
+from flask import Response, jsonify, request, stream_with_context
 
 from ai_conversation_store import get_recent_turns, list_threads, set_thread_title
 from ai_lee_confirmation import run_lee_confirmation
 from ai_strategist import strategist_morning_brief, strategist_pre_trade_check, weekly_strategy_retrospective
+from ai_streaming import is_streaming_enabled, sse_done, sse_format, stream_sse_tokens
 from ai_tools import set_ai_tools_runtime
-from ai_trade_chat import run_trade_chat_turn
+from ai_trade_chat import MARCUS_CHAT_SYSTEM_PROMPT, run_trade_chat_turn
 from config import (
     CONFIG,
     ai_key_configured,
@@ -306,6 +307,95 @@ def register_ai_agent_routes(app, runtime) -> None:
         json_safe = getattr(runtime, "json_safe", None)
         safe_answer = json_safe(answer) if callable(json_safe) else answer
         return jsonify(safe_answer)
+
+    @app.post("/api/ai/trade-chat/stream")
+    def api_ai_trade_chat_stream():
+        """SSE streaming variant of /api/ai/trade-chat.
+
+        Config-gated by AI_STREAMING_ENABLED. When disabled, returns 410 Gone
+        so the client falls back to the non-streaming endpoint.
+
+        Emits SSE events: start, token, error, done. The streamed tokens are
+        the conversational Marcus answer; tool execution and safety validation
+        happen in the non-streaming run_trade_chat_turn path and are echoed
+        in the `start` event's metadata so the client can render tool results
+        immediately while the answer streams.
+        """
+        if not is_streaming_enabled():
+            return jsonify({"error": "streaming_disabled", "fallback": "/api/ai/trade-chat"}), 410
+
+        payload = request.get_json(silent=True) or {}
+        trace_id = str(payload.get("trace_id") or "").strip() or None
+        symbol = str(payload.get("symbol") or "").strip() or None
+        message = str(payload.get("message") or "").strip()
+        if not message:
+            return jsonify({"error": "message_required"}), 400
+
+        signal_payload = payload.get("signal")
+        signal_payload = signal_payload if isinstance(signal_payload, dict) else None
+
+        # Run the deterministic tool/safety path first so the client gets
+        # tool results + decision immediately. The LLM answer is what streams.
+        answer = run_trade_chat_turn(
+            {
+                "session_id": payload.get("session_id"),
+                "trace_id": trace_id,
+                "symbol": symbol,
+                "message": message,
+                "include_vision": payload.get("include_vision", True),
+                "include_similar_setups": payload.get("include_similar_setups", True),
+                "comparison_symbol": payload.get("comparison_symbol") or payload.get("compare_symbol"),
+                "signal": signal_payload,
+                "_audit_db": audit_db,
+            }
+        )
+        json_safe = getattr(runtime, "json_safe", None)
+        safe_answer = json_safe(answer) if callable(json_safe) else answer
+
+        pre_text = ""
+        try:
+            pre_text = str((safe_answer or {}).get("answer") or "")
+        except Exception:
+            pre_text = ""
+
+        meta = {
+            "symbol": symbol,
+            "trace_id": trace_id,
+            "decision": (safe_answer or {}).get("decision") if isinstance(safe_answer, dict) else None,
+            "tools": (safe_answer or {}).get("tools") if isinstance(safe_answer, dict) else None,
+            "safety_flags": (safe_answer or {}).get("safety_flags") if isinstance(safe_answer, dict) else None,
+            "model_used": (safe_answer or {}).get("model_used") if isinstance(safe_answer, dict) else None,
+        }
+
+        def generate():
+            yield sse_format("start", meta)
+            if pre_text:
+                yield sse_format("token", {"text": pre_text})
+            else:
+                for sse in stream_sse_tokens(
+                    messages=[{"role": "user", "content": message}],
+                    system_prompt=MARCUS_CHAT_SYSTEM_PROMPT,
+                    max_tokens=600,
+                    meta=meta,
+                ):
+                    yield sse
+                    if sse == sse_done():
+                        # stream_sse_tokens already emitted its own done; still
+                        # emit a terminal done carrying the full payload so the
+                        # client can render the structured card.
+                        yield sse_format("done", {"ok": True, "full_payload": safe_answer})
+                        return
+            yield sse_format("done", {"ok": True, "full_payload": safe_answer})
+
+        return Response(
+            stream_with_context(generate()),
+            mimetype="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no",
+                "Connection": "keep-alive",
+            },
+        )
 
     @app.get("/api/ai-review/provider")
     def api_ai_review_provider_get():

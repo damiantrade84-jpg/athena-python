@@ -10,6 +10,31 @@ from ai_playbooks.trade_skill_normalizer import render_trade_skill_prompt_schema
 from ai_review.engine_a_context import build_engine_a_prompt_context, build_engine_b_prompt_context
 from ai_review.ase_context import render_ase_prompt_block
 from ai_review.macro_context import render_macro_prompt_block
+from prompt_store import load_prompt
+
+
+_CHART_REVIEW_A_PREAMBLE_FALLBACK = (
+    "You are not only reviewing the chart image. You are validating the chart against the structured Engine A signal supplied below using Athena trade playbooks.\n\n"
+    "Workflow (required):\n"
+    "1. Follow Engine A playbook: confluence, factor alignment, direction quality, entry timing.\n"
+    "2. If Engine B context is present, follow Engine B playbook: structure, liquidity, zones, invalidation.\n"
+    "3. Decide whether the chart visually confirms Engine A direction (directional validity).\n"
+    "4. Decide whether current entry timing is acceptable. Acceptable timing is common: a confirmed BOS with acceptance/retest, a pullback to structure, or a breakout retest pass timing. Only mark timing poor on concrete evidence (price measurably extended from value/structure in ATR terms with no pullback, exhaustion, or RR degraded) — not as a reflex because Engine A passed. Genuinely extended/late entries do downgrade tradeability even when direction is correct.\n"
+    "5. Output structured trade-skill fields (decision, entryAllowedNow) per schema below. Never grant execution permission.\n"
+)
+_CHART_REVIEW_A_PREAMBLE, _CRA_SOURCE, _CRA_HASH = load_prompt(
+    "chart_review_engine_a_preamble",
+    fallback=_CHART_REVIEW_A_PREAMBLE_FALLBACK,
+)
+
+_CHART_REVIEW_B_PREAMBLE_FALLBACK = (
+    "You are reviewing the chart image against the structured Engine B (NakedEngine structure/liquidity) signal supplied below using the Engine B trade playbook.\n\n"
+    "Workflow (required):\n"
+)
+_CHART_REVIEW_B_PREAMBLE, _CRB_SOURCE, _CRB_HASH = load_prompt(
+    "chart_review_engine_b_preamble",
+    fallback=_CHART_REVIEW_B_PREAMBLE_FALLBACK,
+)
 
 
 def _fmt(value: Any) -> str:
@@ -69,14 +94,7 @@ def _build_engine_a_chart_review_prompt(context: dict[str, Any]) -> str:
     elif _ac == "commodity":
         _vol_note = " volume_type: mixed (may be tick volume)"
 
-    return f"""You are not only reviewing the chart image. You are validating the chart against the structured Engine A signal supplied below using Athena trade playbooks.
-
-Workflow (required):
-1. Follow Engine A playbook: confluence, factor alignment, direction quality, entry timing.
-2. If Engine B context is present, follow Engine B playbook: structure, liquidity, zones, invalidation.
-3. Decide whether the chart visually confirms Engine A direction (directional validity).
-4. Decide whether current entry timing is acceptable. Acceptable timing is common: a confirmed BOS with acceptance/retest, a pullback to structure, or a breakout retest pass timing. Only mark timing poor on concrete evidence (price measurably extended from value/structure in ATR terms with no pullback, exhaustion, or RR degraded) — not as a reflex because Engine A passed. Genuinely extended/late entries do downgrade tradeability even when direction is correct.
-5. Output structured trade-skill fields (decision, entryAllowedNow) per schema below. Never grant execution permission.
+    return f"""{_CHART_REVIEW_A_PREAMBLE}
 
 {playbook_block}
 
@@ -203,9 +221,7 @@ def _build_engine_b_chart_review_prompt(context: dict[str, Any]) -> str:
     trade_skill_schema = render_trade_skill_prompt_schema("engine_b_chart")
     macro_block = render_macro_prompt_block(context.get("symbol"), context.get("asset_class"))
 
-    return f"""You are reviewing the chart image against the structured Engine B (NakedEngine structure/liquidity) signal supplied below using the Engine B trade playbook.
-
-Workflow (required):
+    return f"""{_CHART_REVIEW_B_PREAMBLE}
 1. Follow Engine B playbook: structure, liquidity, zones, invalidation.
 2. Decide whether the chart visually confirms Engine B direction.
 3. Decide whether current entry timing is acceptable at the nearest zone/structure.

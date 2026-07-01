@@ -11,11 +11,27 @@ from typing import Optional
 from ai_schemas import EngineBResponse
 from ai_utils import parse_json_object
 from config import CONFIG, AITemperatureConfig, create_ai_client, get_ai_model, resolve_ai_review_runtime
+from prompt_store import load_prompt
 
 log = logging.getLogger("athena")
 VALID_ENGINE_B_GRADES = {"A+", "A", "B", "C", "D", "F"}
 VALID_ENGINE_B_RISK_LEVELS = {"Low", "Medium", "High"}
 REQUIRED_STYLE_KEYS = {"scalp", "intraday", "swing"}
+
+_ENGINE_B_AI_EXPERT_PREFIX_FALLBACK = (
+    "You are Marcus Reid, veteran SMC/ICT structural trader analyzing naked price action setups. "
+    "Focus on structure and liquidity evidence: swing alignment, BOS, sweeps, FVG overlap, zone quality, "
+    "trigger quality, and risk:reward. "
+    "Derive letter grades by weighing evidence — do NOT map a short checklist phrase to A+/A/B mechanically. "
+    "Evaluate the trade setup based on the 'Resolved AI style' and 'Asset type' provided in the AI CALIBRATION CONTEXT. "
+    "Do NOT judge a Scalp setup by Swing criteria (or vice versa). "
+    "Evaluate Risk:Reward per style rules (SCALP: RR >= 1.5 acceptable; INTRADAY: RR >= 2.0 preferred; SWING: RR >= 3.0 preferred). "
+    "Do not automatically penalize Crypto for wide SL unless it exceeds MAX_SL_PCT. "
+)
+_ENGINE_B_AI_EXPERT_PREFIX, _ENGINE_B_AI_PREFIX_SOURCE, _ENGINE_B_AI_PREFIX_HASH = load_prompt(
+    "engine_b_ai_expert_prefix",
+    fallback=_ENGINE_B_AI_EXPERT_PREFIX_FALLBACK,
+)
 
 
 def _is_retryable_ai_error(exc: Exception) -> bool:
@@ -543,14 +559,7 @@ def get_engine_b_ai_verdict(
         )
 
         expert_prompt = (
-            "You are Marcus Reid, veteran SMC/ICT structural trader analyzing naked price action setups. "
-            "Focus on structure and liquidity evidence: swing alignment, BOS, sweeps, FVG overlap, zone quality, "
-            "trigger quality, and risk:reward. "
-            "Derive letter grades by weighing evidence — do NOT map a short checklist phrase to A+/A/B mechanically. "
-            "Evaluate the trade setup based on the 'Resolved AI style' and 'Asset type' provided in the AI CALIBRATION CONTEXT. "
-            "Do NOT judge a Scalp setup by Swing criteria (or vice versa). "
-            "Evaluate Risk:Reward per style rules (SCALP: RR >= 1.5 acceptable; INTRADAY: RR >= 2.0 preferred; SWING: RR >= 3.0 preferred). "
-            "Do not automatically penalize Crypto for wide SL unless it exceeds MAX_SL_PCT. "
+            _ENGINE_B_AI_EXPERT_PREFIX
             + cross_engine_note
             + " Weigh: overall structural conviction; distance to boundary; "
             "trigger quality; multi-TF alignment (explicit Y/N with evidence from available swing sequences). "

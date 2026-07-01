@@ -3,14 +3,20 @@
 
 import { safeJson } from './safeJson';
 import type {
+  AIDisagreementResponse,
   AiLeeConfirmationRequest,
   AiLeeConfirmationResponse,
   AiStrategistBriefResponse,
+  AiSurfaceVerdict,
   AiTradeChatRequest,
   AiTradeChatResponse,
   CompareResponse,
+  ConfidenceCalibrationResponse,
   EngineASignal,
+  EvidenceRefClaim,
+  EvidenceRefsResponse,
   PairScanResponse,
+  WhatIfReplayResponse,
 } from '@/types/athena';
 
 const API_BASE = import.meta.env.VITE_API_BASE || '';
@@ -104,6 +110,43 @@ export function postCompareEngines(signal: EngineASignal, style = 'auto'): Promi
 export function getAiStrategistBrief(assetScope = 'all'): Promise<AiStrategistBriefResponse> {
   const params = new URLSearchParams({ asset_scope: assetScope || 'all' });
   return apiClient.get<AiStrategistBriefResponse>(`/api/ai/strategist/brief?${params.toString()}`);
+}
+
+// ---------------------------------------------------------------------------
+// Phase 6 — UX surface wrappers (advisory-only, config-gated server-side).
+// ---------------------------------------------------------------------------
+
+export function postEvidenceRefs(
+  claims: EvidenceRefClaim[],
+  sources: Record<string, unknown>,
+): Promise<EvidenceRefsResponse> {
+  return apiClient.post<EvidenceRefsResponse>('/api/ai/evidence-refs', { claims, sources });
+}
+
+export function getCalibration(
+  surface?: string,
+  lookbackDays = 30,
+): Promise<ConfidenceCalibrationResponse> {
+  const params = new URLSearchParams();
+  if (surface) params.set('surface', surface);
+  params.set('lookback_days', String(lookbackDays));
+  return apiClient.get<ConfidenceCalibrationResponse>(`/api/ai/calibration?${params.toString()}`);
+}
+
+export function postDisagreement(
+  verdicts: Record<string, AiSurfaceVerdict>,
+): Promise<AIDisagreementResponse> {
+  return apiClient.post<AIDisagreementResponse>('/api/ai/disagreement', { verdicts });
+}
+
+export function postWhatif(
+  baseContext: Record<string, unknown>,
+  overrides: Record<string, unknown>,
+): Promise<WhatIfReplayResponse> {
+  return apiClient.post<WhatIfReplayResponse>('/api/ai/whatif', {
+    base_context: baseContext,
+    overrides,
+  });
 }
 
 export default apiClient;

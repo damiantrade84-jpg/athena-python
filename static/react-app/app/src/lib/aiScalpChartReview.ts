@@ -5,6 +5,7 @@
 //   symbol, timeframe, provider, screenshot_base64, screenshot_meta.
 
 import { apiClient } from './apiClient';
+import { streamSse, type SseHandlers } from './sseStream';
 import {
   canvasToDataUrl,
   downscaleToCap,
@@ -126,4 +127,47 @@ export async function postScalpChartReview(
     body as unknown as Record<string, unknown>,
   );
   return normalizeScalpAIChartReviewResponse(response);
+}
+
+const STREAM_ENDPOINT = '/api/ai/scalp-chart-review/stream';
+
+export interface StreamScalpChartReviewHandlers {
+  onStart?: SseHandlers['onStart'];
+  onToken?: SseHandlers['onToken'];
+  onError?: SseHandlers['onError'];
+  onReview?: (response: ScalpAIChartReviewResponse) => void;
+}
+
+/**
+ * Stream the scalp chart review narrative over SSE. Falls back to the
+ * non-streaming `postScalpChartReview` on HTTP 410 (streaming disabled).
+ * `onReview` is invoked exactly once with the normalized full response.
+ */
+export async function streamScalpChartReview(
+  body: ScalpAIChartReviewRequest,
+  handlers: StreamScalpChartReviewHandlers,
+  signal?: AbortSignal,
+): Promise<{ fallback: boolean }> {
+  const result = await streamSse(
+    STREAM_ENDPOINT,
+    body as unknown as Record<string, unknown>,
+    {
+      onStart: handlers.onStart,
+      onToken: handlers.onToken,
+      onError: handlers.onError,
+      onDone: (data) => {
+        const payload = (data || {}) as { full_payload?: ScalpAIChartReviewResponse };
+        if (payload.full_payload) {
+          handlers.onReview?.(normalizeScalpAIChartReviewResponse(payload.full_payload));
+        }
+      },
+    },
+    signal,
+  );
+  if (result.fallback) {
+    const response = await postScalpChartReview(body);
+    handlers.onReview?.(response);
+    return { fallback: true };
+  }
+  return { fallback: false };
 }

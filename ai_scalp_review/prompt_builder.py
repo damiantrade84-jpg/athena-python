@@ -8,6 +8,37 @@ from typing import Any
 from ai_playbooks import get_engine_d_scalp_playbook, render_playbook_prompt_block
 from ai_playbooks.trade_skill_normalizer import render_trade_skill_prompt_schema
 from ai_scalp_review.engine_d_context import build_engine_d_prompt_context
+from prompt_store import load_prompt
+
+
+_SCALP_REVIEW_D_PREAMBLE_FALLBACK = (
+    "You are reviewing a scalp chart against the server-trusted Engine D setup below using the Engine D naked-chart scalp playbook.\n\n"
+    "Workflow (required — follow this exact order):\n"
+    "Session Context -> Regime/Location (server candleUnderstanding) -> Market State -> Effort vs Result -> Location -> Trapped Traders -> Entry Model -> Target -> Invalidation -> Management -> Decision\n\n"
+    "CANDLE UNDERSTANDING (server-trusted, read before visual pattern naming):\n"
+    "- Use engineDContext.candleUnderstanding structured facts when present.\n"
+    "- Read order: regime gate -> location (POC/VAH/VAL/named pool) -> last 3 anatomy -> sweep/reclaim/BOS/FVG/OB -> effort-vs-result/absorption -> directional view (advisory only).\n"
+    "- Do NOT invent candle patterns when structured facts exist.\n"
+    "- Distinguish: confirmed sweep | possible sweep | clean BOS acceptance | random wick/noise | regime-suppressed candle.\n"
+    "- The rightmost candle on the chart may still be forming (not closed). Never count it as a confirmed sweep, reclaim, BOS, or acceptance — confirmed-close judgments use closed bars only.\n"
+    "- candleUnderstanding is report-only and must NOT grant execution permission by itself.\n\n"
+    "0. Session Context: use server-trusted engineDContext.sessionContext (currentSession, deliveryWindow, preferredModel). Do NOT guess session from screenshot.\n"
+    "1. Market State: classify as trending, balancing, expanding, compressing, choppy/no_trade, or transition.\n"
+    "2. Effort vs Result: classify effortVsResultClassification and aggressionClassification BEFORE entry model.\n"
+    "3. Location: assess value area/POC/VAH/VAL, HVN/LVN, supply/demand, session H/L, swings, liquidity, chase risk.\n"
+    "4. Trapped Traders: score trappedTraderAssessment (trappedSide, trapTrigger, squeezeFuelScore).\n"
+    "5. Entry Model: choose Model A (NY trend squeeze) or Model B (London mean reversion) per sessionContext.preferredModel.\n"
+    "6. Target: populate targetLogic — POC magnet for mean-reversion; structural liquidity for continuation.\n"
+    "7. Invalidation: assess stop geometry with engineDContext.slMethod. The engine takes the WIDER of structural invalidation and the ATR stop, so slMethod=atr means the ATR stop is wider than structure (acceptable); slMethod=fallback_buffer means structure was invalid (scrutinize hard). Flag stopPlacementValid=false only when the stop sits inside structural invalidation. Populate invalidationAssessment.\n"
+    "8. Management: for ENTRY_NOW, populate managementPlan (BE trigger, scale-out, invalidation exit).\n"
+    "9. Decision: ENTRY_NOW | WAIT_FOR_PULLBACK | WAIT_FOR_ACCEPTANCE | WATCH_ONLY | NO_TRADE | INVALIDATED.\n\n"
+    "Timeframe rules: M5 is default context chart; M1 is execution zoom only, not primary context.\n"
+    "Engine D grade/pass does NOT auto-imply trade. Never grant execution permission.\n"
+)
+_SCALP_REVIEW_D_PREAMBLE, _SRD_SOURCE, _SRD_HASH = load_prompt(
+    "scalp_review_engine_d_preamble",
+    fallback=_SCALP_REVIEW_D_PREAMBLE_FALLBACK,
+)
 
 
 def _fmt(value: Any) -> str:
@@ -36,32 +67,7 @@ def build_scalp_chart_review_prompt(context: dict[str, Any]) -> str:
     playbook_block = render_playbook_prompt_block([get_engine_d_scalp_playbook()], compact=True)
     trade_skill_schema = render_trade_skill_prompt_schema("engine_d_scalp")
 
-    return f"""You are reviewing a scalp chart against the server-trusted Engine D setup below using the Engine D naked-chart scalp playbook.
-
-Workflow (required — follow this exact order):
-Session Context -> Regime/Location (server candleUnderstanding) -> Market State -> Effort vs Result -> Location -> Trapped Traders -> Entry Model -> Target -> Invalidation -> Management -> Decision
-
-CANDLE UNDERSTANDING (server-trusted, read before visual pattern naming):
-- Use engineDContext.candleUnderstanding structured facts when present.
-- Read order: regime gate -> location (POC/VAH/VAL/named pool) -> last 3 anatomy -> sweep/reclaim/BOS/FVG/OB -> effort-vs-result/absorption -> directional view (advisory only).
-- Do NOT invent candle patterns when structured facts exist.
-- Distinguish: confirmed sweep | possible sweep | clean BOS acceptance | random wick/noise | regime-suppressed candle.
-- The rightmost candle on the chart may still be forming (not closed). Never count it as a confirmed sweep, reclaim, BOS, or acceptance — confirmed-close judgments use closed bars only.
-- candleUnderstanding is report-only and must NOT grant execution permission by itself.
-
-0. Session Context: use server-trusted engineDContext.sessionContext (currentSession, deliveryWindow, preferredModel). Do NOT guess session from screenshot.
-1. Market State: classify as trending, balancing, expanding, compressing, choppy/no_trade, or transition.
-2. Effort vs Result: classify effortVsResultClassification and aggressionClassification BEFORE entry model.
-3. Location: assess value area/POC/VAH/VAL, HVN/LVN, supply/demand, session H/L, swings, liquidity, chase risk.
-4. Trapped Traders: score trappedTraderAssessment (trappedSide, trapTrigger, squeezeFuelScore).
-5. Entry Model: choose Model A (NY trend squeeze) or Model B (London mean reversion) per sessionContext.preferredModel.
-6. Target: populate targetLogic — POC magnet for mean-reversion; structural liquidity for continuation.
-7. Invalidation: assess stop geometry with engineDContext.slMethod. The engine takes the WIDER of structural invalidation and the ATR stop, so slMethod=atr means the ATR stop is wider than structure (acceptable); slMethod=fallback_buffer means structure was invalid (scrutinize hard). Flag stopPlacementValid=false only when the stop sits inside structural invalidation. Populate invalidationAssessment.
-8. Management: for ENTRY_NOW, populate managementPlan (BE trigger, scale-out, invalidation exit).
-9. Decision: ENTRY_NOW | WAIT_FOR_PULLBACK | WAIT_FOR_ACCEPTANCE | WATCH_ONLY | NO_TRADE | INVALIDATED.
-
-Timeframe rules: M5 is default context chart; M1 is execution zoom only, not primary context.
-Engine D grade/pass does NOT auto-imply trade. Never grant execution permission.
+    return f"""{_SCALP_REVIEW_D_PREAMBLE}
 
 {playbook_block}
 

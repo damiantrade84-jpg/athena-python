@@ -19,12 +19,15 @@ from config import (
     get_ai_provider_label,
     resolve_ai_review_runtime,
 )
+from prompt_store import load_prompt
+from ai_schema_enforcer import validate_or_safe_default
+from ai_schemas import EngineCWeightVerdictSchema
 
 log = logging.getLogger("sentinel")
 
 VALID_TRUST = frozenset({"trust_a", "trust_b", "trust_both", "trust_neither"})
 
-_ENGINE_C_AI_SYSTEM = """You are Marcus Reid, prop-desk risk head reviewing Engine A (factors) vs Engine B (structure).
+_ENGINE_C_AI_SYSTEM_FALLBACK = """You are Marcus Reid, prop-desk risk head reviewing Engine A (factors) vs Engine B (structure).
 Output ONLY valid JSON. No markdown.
 
 ABSOLUTE RULES:
@@ -39,6 +42,11 @@ TASK:
 REQUIRED JSON KEYS IN THIS EXACT ORDER:
 reasoning, trust_verdict, weight_recommendation, conviction_modifier
 """
+
+_ENGINE_C_AI_SYSTEM, _ENGINE_C_AI_SYSTEM_SOURCE, _ENGINE_C_AI_SYSTEM_HASH = load_prompt(
+    "engine_c_ai_system",
+    fallback=_ENGINE_C_AI_SYSTEM_FALLBACK,
+)
 
 
 def normalize_engine_c_ai_weight_verdict(
@@ -239,6 +247,8 @@ def _log_engine_c_ai_review(
             execution_allowed_before_ai=bool(consensus_snapshot.get("trade")),
             execution_allowed_after_ai=bool(consensus_snapshot.get("trade")),
             final_action="advisory",
+            prompt_source=_ENGINE_C_AI_SYSTEM_SOURCE,
+            prompt_text_hash=_ENGINE_C_AI_SYSTEM_HASH,
         )
     except Exception as _log_exc:
         log.debug("[ENGINE_C_AI] audit log failed: %s", _log_exc)
@@ -318,6 +328,26 @@ def get_engine_c_weight_verdict(
         w_min = float(CONFIG.get("ENGINE_C_AI_WEIGHT_MIN", 0.20) or 0.20)
         w_max = float(CONFIG.get("ENGINE_C_AI_WEIGHT_MAX", 0.80) or 0.80)
         out = normalize_engine_c_ai_weight_verdict(parsed, w_min=w_min, w_max=w_max)
+        # Phase 0 schema hardening: validate against EngineCWeightVerdictSchema
+        # when AI_STRICT_SCHEMA_ENFORCEMENT is enabled. Fail-closed to a
+        # trust_neither safe default on validation failure.
+        safe_default = {
+            "trust_verdict": "trust_neither",
+            "weight_recommendation": None,
+            "conviction_modifier": 0.0,
+            "reasoning": "",
+            "error": "schema_validation_failed",
+        }
+        validated, schema_ok = validate_or_safe_default(
+            EngineCWeightVerdictSchema,
+            out,
+            surface="engine_c_ai_weight_verdict",
+            safe_default=safe_default,
+        )
+        if not schema_ok:
+            log.warning("[ENGINE_C_AI] schema validation failed; using safe default")
+            out = dict(safe_default)
+            out.pop("_schema_validation_failed", None)
         out["reviewSource"] = "engine_c_marcus_weight"
         out.setdefault("provider", active_provider)
         out.setdefault("selectedProvider", runtime.get("selectedProvider") or active_provider)

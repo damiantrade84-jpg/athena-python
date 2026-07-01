@@ -974,6 +974,14 @@ CONFIG: dict = {
             _env_bool("OPENAI_REVIEW_ENABLED", True),
         ),
         "ALLOW_DUAL_PROVIDER": _env_bool("AI_CHART_REVIEW_ALLOW_DUAL_PROVIDER", False),
+        # Dual-provider reconciler (Phase 0). Primary wins on disagreement
+        # unless tiebreaker is "secondary" or "fail_closed". Advisory-only;
+        # entryAllowedNow is always downgraded to false if EITHER provider
+        # says no (fail-closed).
+        "AI_DUAL_PROVIDER_PRIMARY": "openai",
+        "AI_DUAL_PROVIDER_SECONDARY": "claude",
+        "AI_DUAL_PROVIDER_TIEBREAKER": "primary",
+        "AI_DUAL_PROVIDER_TIMEOUT_SEC": 60.0,
         "MAX_DISPLACEMENT_ATR_MULTIPLE": 1.0,
         "MISMATCH_WARN_MAX_SECONDS": 120,
         "ATR_FRESHNESS_MAX_AGE_SEC": None,
@@ -1096,6 +1104,76 @@ CONFIG: dict = {
     "AI_PROMPT_STORE_MIN_DELETE_AGE_DAYS": 7,
     "AI_PROMPT_STORE_MAX_BYTES": 1073741824,
     "AI_PROMPT_STORE_CLEANUP_INTERVAL_SEC": 86400,
+    # External prompt store (Phase 0). Default-off; surfaces fall back to
+    # their hardcoded prompts when disabled. See prompt_store.py.
+    "AI_PROMPT_STORE_ENABLED": False,
+    "AI_PROMPT_STORE_DIR": "prompts",
+    # SSE streaming for advisory AI surfaces (Phase 0). Default-off; routes
+    # fall back to non-streaming endpoints when disabled. See ai_streaming.py.
+    "AI_STREAMING_ENABLED": False,
+    # Vision path unification (Phase 0). Default-off; when enabled, the legacy
+    # /api/chart-analysis response is stamped with deprecation metadata that
+    # points clients to /api/ai/chart-review. The legacy response shape is
+    # unchanged so existing clients keep working.
+    "AI_VISION_LEGACY_ROUTE_DEPRECATED": False,
+    # Strict Pydantic schema enforcement for AI responses (Phase 0). Default-off;
+    # when disabled, raw dicts pass through unchanged. When enabled, schema
+    # validation failures fall back to caller-supplied safe defaults.
+    "AI_STRICT_SCHEMA_ENFORCEMENT": False,
+    # Local semantic memory (Phase 1). Default-off; uses dependency-free
+    # hashing-trick embeddings stored in SQLite. NEVER calls external APIs to
+    # embed trade data. See ai_memory.py.
+    "AI_MEMORY_ENABLED": False,
+    "AI_MEMORY_DB_PATH": "",
+    # Native LLM function-calling planner for the AI agent (Phase 2). Default-
+    # off; when disabled, the keyword-based plan_tool_calls() is used. When
+    # enabled, the LLM proposes read-only tool calls which are re-validated
+    # against READ_ONLY_TOOL_NAMES before execution. See ai_agent_planner.py.
+    "AI_AGENT_NATIVE_PLANNING_ENABLED": False,
+    "AI_AGENT_MAX_STEPS": 8,
+    # Phase 3 — Eval + feedback loop. All default-off, advisory-only, no
+    # auto-apply. Golden-set eval harness (tests/ai_eval/golden_set.py +
+    # tools/run_prompt_eval.py), drift detector (ai_drift_detector.py), and
+    # the weekly prompt-quality report section.
+    "AI_PROMPT_EVAL_ENABLED": False,
+    "AI_DRIFT_DETECTION_ENABLED": False,
+    "AI_DRIFT_DECISION_JS_THRESHOLD": 0.20,
+    "AI_DRIFT_ENTRY_RATE_DELTA": 0.15,
+    "AI_DRIFT_CONFIDENCE_DELTA": 0.10,
+    "AI_DRIFT_MIN_SAMPLES": 10,
+    # Phase 4 — Activate dormant surfaces. All default-off, advisory-only,
+    # fail-closed, full audit. Strategist LLM narrative + ASE narrator.
+    # (Engine C AI weight verdict and Lee LLM narrative are pre-existing
+    # code paths gated by ENGINE_C_AI_WEIGHT_VERDICT_ENABLED and
+    # AI_LEE_CONFIRMATION_LLM_ENABLED respectively.)
+    "AI_STRATEGIST_LLM_ENABLED": False,
+    "AI_ASE_NARRATOR_ENABLED": False,
+    # Phase 5 — Reasoning depth. All default-off, advisory-only, fail-closed.
+    # Multi-role debate, tree-of-thought, self-critique, cross-engine
+    # consistency. Multi-role debate honors FORCE_DEBATE_DOWNGRADE_ONLY.
+    "AI_MULTI_ROLE_DEBATE_ENABLED": False,
+    "DEBATE_ROLES": ["risk_officer", "macro_strategist"],
+    "AI_TOT_ENABLED": False,
+    "AI_TOT_MIN_SCORE": 7.5,
+    "AI_TOT_BRANCHES": 3,
+    "AI_SELF_CRITIQUE_ENABLED": False,
+    # Phase 6 — UX + surfacing. All default-off, advisory-only, fail-closed.
+    # Citations/grounding tags, confidence calibration, AI disagreement viz,
+    # what-if replay (read-only, no execution).
+    "AI_CITATIONS_ENABLED": False,
+    "AI_CONFIDENCE_CALIBRATION_ENABLED": False,
+    "AI_DISAGREEMENT_VIZ_ENABLED": False,
+    "AI_DISAGREEMENT_CONF_SPREAD": 0.25,
+    "AI_WHATIF_ENABLED": False,
+    # Phase 7 — Research Lab AI. All default-off, advisory-only, fail-closed,
+    # no auto-apply. Agentic research loops, AI-driven parameter discovery
+    # with human-approval queue, multi-run synthesis. Never touches live
+    # config.yaml.
+    "AI_RESEARCH_LOOP_ENABLED": False,
+    "AI_RESEARCH_MAX_STEPS": 4,
+    "AI_PARAM_DISCOVERY_ENABLED": False,
+    "AI_MULTI_RUN_SYNTHESIS_ENABLED": False,
+    "AI_MULTI_RUN_SYNTHESIS_LLM_NARRATE": False,
     "NEWS_SENTIMENT_CONFLUENCE_ENABLED": False,
     "NEWS_SENTIMENT_CACHE_TTL_SEC": 900,
     "NEWS_SENTIMENT_SCORE_IMPACT": 0.06,

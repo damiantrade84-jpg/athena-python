@@ -12,6 +12,7 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 import { Checkbox } from '@/components/ui/checkbox';
 import { ErrorBanner, RefreshButton } from '@/components/shared';
 import AITradingAgentPanel from '@/components/ai/AITradingAgentPanel';
+import ConfidenceCalibrationPanel from '@/components/athena/ConfidenceCalibrationPanel';
 import {
   Radio,
   Bot,
@@ -507,6 +508,8 @@ export default function LiveCockpitPanel() {
       )}
 
       {error && <ErrorBanner message={error} onRetry={fetchSnap} />}
+
+      <ConfidenceCalibrationPanel surface="marcus" lookbackDays={30} />
 
       {/* Two-column layout */}
       <div className="flex-1 grid grid-cols-7 gap-3 overflow-hidden min-h-0">

@@ -132,10 +132,54 @@ def generate_weekly_ai_report() -> dict[str, Any]:
         "strategist_findings": strategist_findings,
         "debate_findings": debate_findings,
         "chat_findings": chat_findings,
+        "prompt_quality": _build_prompt_quality_section(),
         "recommendations": recs,
         "do_not_auto_apply": True,
     }
     return output
+
+
+def _build_prompt_quality_section() -> dict[str, Any]:
+    """Phase 3 — advisory prompt-quality summary. Never auto-applies.
+
+    Pulls the most recent golden-set eval report (if present on disk) and a
+    drift snapshot (if drift detection is enabled). All findings are
+    advisory-only; this function never mutates prompts or config.
+    """
+    section: dict[str, Any] = {
+        "enabled": False,
+        "golden_set": None,
+        "drift": None,
+        "do_not_auto_apply": True,
+    }
+    try:
+        if _get_config_bool("AI_PROMPT_EVAL_ENABLED", False):
+            section["enabled"] = True
+            # Best-effort: read the latest eval report if it exists
+            try:
+                import json as _json
+                import os as _os
+
+                path = _os.path.join("reports", "prompt_eval.json")
+                if _os.path.isfile(path):
+                    with open(path, "r", encoding="utf-8") as fh:
+                        data = _json.load(fh)
+                    section["golden_set"] = {
+                        "total": data.get("total"),
+                        "passed": data.get("passed"),
+                        "failed": data.get("failed"),
+                        "pass_rate": data.get("pass_rate"),
+                        "provider": data.get("provider"),
+                        "generated_at": data.get("generated_at"),
+                    }
+            except Exception:
+                section["golden_set"] = None
+        if _get_config_bool("AI_DRIFT_DETECTION_ENABLED", False):
+            section["enabled"] = True
+            section["drift"] = "drift_detection_enabled_run_detector_for_snapshot"
+    except Exception:
+        pass
+    return section
 
 
 def _build_headline(report: dict[str, Any]) -> str:

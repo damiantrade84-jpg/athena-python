@@ -242,6 +242,7 @@ from athena.datafeeds.ws_ssl import configure_process_ca_bundle  # noqa: E402
 from ai_safe_wrappers import ai_call_with_safe_default  # noqa: E402
 from ai_signal_trace import ensure_trace_id  # noqa: E402
 from athena_app.services.mt5_time_alignment import infer_mt5_rates_time_shift_seconds  # noqa: E402
+from prompt_store import load_prompt  # noqa: E402
 from prompt_versions import get_prompt_version  # noqa: E402
 from regime_shift_monitor import classify_position as _regime_classify  # noqa: E402
 
@@ -3383,7 +3384,7 @@ def _effective_backtest_style(pair: dict, requested_style: str) -> str:
     return resolve_auto_style(requested_style, pair)
 
 
-EXPERT_PROMPT = """You are Marcus Reid - 18-year prop-desk veteran turned trading mentor.
+EXPERT_PROMPT_FALLBACK = """You are Marcus Reid - 18-year prop-desk veteran turned trading mentor.
 You speak like a sharp friend who happens to be a market wizard - concise, opinionated.
 No corporate-speak. No filler. No hedging.
 
@@ -3464,6 +3465,11 @@ PER-STYLE RATINGS - rate ALL THREE independently using specific data:
 OUTPUT - EXACT JSON in this precise key order to ensure reasoning happens before scoring (no other text):
 {"symbol":"BTCUSDT","timeframe":"H4","bias":"long|short|neutral","setup_type":"breakout_retest","trend_score":18,"structure_score":17,"momentum_score":13,"liquidity_score":8,"risk_score":7,"confirmation_score":14,"total_score":77,"grade":"B","ai_action":"needs_confirmation","blocking_reasons":["RR_BELOW_MIN"],"reason":"Good structure, but risk/reward is below required threshold.","narrative":"2-3 sentences. MUST reference specific factor names, scores, and weights from the input. Name the strongest and weakest factors.","verdict":"One punchy sentence citing specific factor scores","reviewSource":"engine_a_marcus","resolvedStyle":"SWING|INTRADAY|SCALP","scannerReadiness":"Weak|Medium|Strong","factorQuality":85,"structuralRisk":"Low","executionRisk":"Medium","selectedStyleGrade":"A","entryZone":"exact price or fib level from input","invalidation":"exact price from SL or structural level","keyLevels":"S1/R1 from input data only","positionSizing":"Full/Half/Quarter + why (reference confidence_multiplier and nondirectionalScore)","tradeStyle":"SWING|INTRADAY|SCALP","tradeStyleReason":"cite specific data","warnings":["specific risks citing data points"],"edgeProbability":68,"riskLevel":"Medium","style_ratings":{"scalp":{"grade":"B","edgeProbability":52,"riskLevel":"High"},"intraday":{"grade":"A","edgeProbability":68,"riskLevel":"Medium"},"swing":{"grade":"A+","edgeProbability":78,"riskLevel":"Low"}}}
 """
+
+EXPERT_PROMPT, _EXPERT_PROMPT_SOURCE, _EXPERT_PROMPT_HASH = load_prompt(
+    "marcus_expert",
+    fallback=EXPERT_PROMPT_FALLBACK,
+)
 
 
 def fetch_dxy_context():
@@ -10986,6 +10992,19 @@ def _chart_blocks_to_openai_user_content(blocks: list) -> list:
     return out
 
 
+def _stamp_vision_legacy_deprecation(payload: dict) -> dict:
+    """Thin wrapper around ai_vision_deprecation.stamp_vision_legacy_deprecation.
+
+    Kept as a local alias so the call site in api_chart_analysis stays stable
+    if the implementation module moves. Never raises.
+    """
+    try:
+        from ai_vision_deprecation import stamp_vision_legacy_deprecation
+        return stamp_vision_legacy_deprecation(payload)
+    except Exception:
+        return payload
+
+
 @app.route("/api/chart-analysis", methods=["POST"])
 def api_chart_analysis():
     """Send chart screenshot to configured vision model for professional TA reading."""
@@ -11912,6 +11931,7 @@ def api_chart_analysis():
             _response_payload["latest_candle_ts"] = _latest_candle_ts
         if _stored_vision.get("image_hash"):
             _response_payload["image_hash"] = _stored_vision.get("image_hash")
+        _stamp_vision_legacy_deprecation(_response_payload)
         return jsonify(_response_payload)
 
     except Exception as e:
@@ -12955,6 +12975,24 @@ def api_open_trades_timed():
             "sl_after_partial": str(_se.get("SL_AFTER_PARTIAL", "tp_partial")),
             "live_milestone_management": bool(_se.get("LIVE_MILESTONE_MANAGEMENT", False)),
         }
+
+        # Signed % price move in the trade's direction. Legible even when the
+        # dollar P/L rounds to $0.00 on minimum-size positions (e.g. 0.1 ATOM).
+        def _ott_float(value: object, fallback: float = 0.0) -> float:
+            try:
+                return float(value)  # type: ignore[arg-type]
+            except (TypeError, ValueError):
+                return fallback
+
+        _entry_f = _ott_float(res_p.get("entry"))
+        _mark_f = _ott_float(res_p.get("mark"))
+        if _entry_f > 0 and _mark_f > 0:
+            _move = (_mark_f - _entry_f) if res_p["direction"] == "LONG" else (_entry_f - _mark_f)
+            res_p["pnl_pct"] = round(_move / _entry_f * 100.0, 3)
+        else:
+            res_p["pnl_pct"] = None
+        # Preserve sub-cent precision the broker reports so the UI can show it.
+        res_p["profit_raw"] = _ott_float(p.get("profit_raw"), fallback=profit)
 
         # Attach timers only if both are resolved (hides UI timer for scalps/unknowns)
         if be_min is not None and close_min is not None:
@@ -15445,6 +15483,7 @@ from athena_app.api.routes_audit import register_audit_routes  # noqa: E402
 from athena_app.api.routes_ai_agent import register_ai_agent_routes  # noqa: E402
 from athena_app.api.routes_ai_chart_review import register_ai_chart_review_routes  # noqa: E402
 from athena_app.api.routes_ai_scalp_chart_review import register_ai_scalp_chart_review_routes  # noqa: E402
+from athena_app.api.routes_ai_ux import register_ai_ux_routes  # noqa: E402
 from athena_app.api.routes_scalp_orderflow import register_scalp_orderflow_routes  # noqa: E402
 from athena_app.api.routes_suggested_trades import register_suggested_trade_routes  # noqa: E402
 from athena_app.api.routes_backtest import register_backtest_history_routes  # noqa: E402
@@ -15580,6 +15619,14 @@ register_ai_scalp_chart_review_routes(
             "scalp_engine", fromlist=["run_scalp_scan"]
         ).run_scalp_scan(pairs),
         scalp_ui_signal_fn=_scalp_ui_signal,
+    ),
+)
+register_ai_ux_routes(
+    app,
+    SimpleNamespace(
+        CONFIG=CONFIG,
+        AUDIT_DB=_AUDIT_DB,
+        log=log,
     ),
 )
 register_scalp_orderflow_routes(

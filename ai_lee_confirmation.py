@@ -15,8 +15,18 @@ from typing import Any
 
 from ai_contracts import LeeConfirmationResponse, LeeExternalContext, LeeReasoningDraft
 from ai_orchestrator import build_packet_for_signal
+from prompt_store import load_prompt
 
 log = logging.getLogger("athena")
+
+_LEE_SYSTEM_FALLBACK = (
+    "You are Lee inside Athena. Return JSON only. You are read-only advisory context. "
+    "Never authorize, place, route, submit, or execute trades. Athena deterministic gates are authoritative."
+)
+_LEE_SYSTEM, _LEE_SYSTEM_SOURCE, _LEE_SYSTEM_HASH = load_prompt(
+    "lee_system",
+    fallback=_LEE_SYSTEM_FALLBACK,
+)
 
 LEE_LABELS = {
     "CONTEXT_SUPPORTS": "Context supports",
@@ -380,10 +390,7 @@ class HermesLeeReasoningAdapter:
                 messages=[
                     {
                         "role": "system",
-                        "content": (
-                            "You are Lee inside Athena. Return JSON only. You are read-only advisory context. "
-                            "Never authorize, place, route, submit, or execute trades. Athena deterministic gates are authoritative."
-                        ),
+                        "content": _LEE_SYSTEM,
                     },
                     {
                         "role": "user",

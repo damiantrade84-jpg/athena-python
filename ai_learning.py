@@ -11,6 +11,7 @@ import sqlite3
 from datetime import datetime, timezone, timedelta
 
 from ai_utils import parse_json_object
+from prompt_store import load_prompt
 
 log = logging.getLogger("sentinel.learning")
 
@@ -475,10 +476,15 @@ def get_meta_analysis_context(db_path: str, days: int = 7) -> str:
     return "\n".join(lines)
 
 
-_META_SYSTEM = """You are a quantitative trading systems analyst reviewing live trade outcomes.
+_META_SYSTEM_FALLBACK = """You are a quantitative trading systems analyst reviewing live trade outcomes.
 Your job is to identify systematic biases in the AI signal grader and scoring system,
 and suggest specific, actionable adjustments.
 Be direct, data-driven, and concise. No fluff."""
+
+_META_SYSTEM, _META_SYSTEM_SOURCE, _META_SYSTEM_HASH = load_prompt(
+    "meta_analysis_system",
+    fallback=_META_SYSTEM_FALLBACK,
+)
 
 _META_USER_TMPL = """{context}
 

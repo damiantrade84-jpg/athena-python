@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import {
   AlertTriangle,
@@ -27,7 +27,9 @@ import { Separator } from '@/components/ui/separator';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Textarea } from '@/components/ui/textarea';
 import { ErrorBanner } from '@/components/shared';
+import EvidenceRefsPanel from '@/components/athena/EvidenceRefsPanel';
 import { getAiStrategistBrief, postAiLeeConfirmation, postAiTradeChat } from '@/lib/apiClient';
+import { streamSse } from '@/lib/sseStream';
 import { cn } from '@/lib/utils';
 import type {
   AiDataCheckedSummary,
@@ -40,6 +42,7 @@ import type {
   AiTradeChatResponse,
   AiTradeChatSignalPayload,
   AiVisionSummary,
+  EvidenceRefClaim,
 } from '@/types/athena';
 
 const DEFAULT_SEED =
@@ -532,6 +535,28 @@ function AssistantResponse({
   const factsUsed = asList(response.facts_used);
   const answerText = (response.answer && response.answer.trim()) || deriveAnswerFallback(response);
 
+  const evidenceClaims = useMemo((): EvidenceRefClaim[] => {
+    const claims: EvidenceRefClaim[] = [];
+    if (answerText) claims.push({ claim_id: 'answer', text: answerText, source_field: 'answer' });
+    if (response.market_read) claims.push({ claim_id: 'market_read', text: response.market_read, source_field: 'market_read' });
+    if (response.trade_thesis) claims.push({ claim_id: 'trade_thesis', text: response.trade_thesis, source_field: 'trade_thesis' });
+    supports.forEach((text, idx) => {
+      claims.push({ claim_id: `support_${idx}`, text, source_field: 'supports' });
+    });
+    return claims;
+  }, [answerText, response.market_read, response.trade_thesis, supports]);
+
+  const evidenceSources = useMemo(
+    () => ({
+      decision: response.decision,
+      final_action: response.final_action,
+      selected_signal: response.selected_signal,
+      facts_used: factsUsed,
+      missing_data: missingData,
+    }),
+    [response.decision, response.final_action, response.selected_signal, factsUsed, missingData],
+  );
+
   return (
     <div className="space-y-3 relative isolate">
       {/* 1. Decision badge row */}
@@ -587,6 +612,8 @@ function AssistantResponse({
 
       {/* 5. Supports */}
       <ListBlock title="Supports" items={supports} />
+
+      <EvidenceRefsPanel claims={evidenceClaims} sources={evidenceSources} />
 
       {/* 6. Contradictions / Risk warnings */}
       <ListBlock title="Contradictions" items={contradictions} />
@@ -844,6 +871,8 @@ export default function AITradingAgentPanel({
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [input, setInput] = useState(seedMessage);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const deferredMessages = useDeferredValue(messages);
+  const streamAbortRef = useRef<AbortController | null>(null);
   const [compareSymbol, setCompareSymbol] = useState('');
   const [brief, setBrief] = useState<AiStrategistBriefResponse | null>(null);
   const [briefLoading, setBriefLoading] = useState(false);
@@ -975,33 +1004,146 @@ export default function AITradingAgentPanel({
       setLoading(true);
       setError(null);
 
+      const assistantId = `assistant-${Date.now()}`;
+      const baseResponse: AiTradeChatResponse = {
+        session_id: sessionId,
+        trace_id: resolvedTraceId,
+        symbol: resolvedSymbol,
+        answer: '',
+        decision: '',
+      } as AiTradeChatResponse;
+
+      // Insert the assistant placeholder immediately so streaming handlers
+      // can update it in place.
+      setMessages((current) => [
+        ...current,
+        {
+          id: assistantId,
+          role: 'assistant',
+          content: '',
+          response: baseResponse,
+          createdAt: new Date().toISOString(),
+        },
+      ]);
+
+      const streamBody = {
+        session_id: sessionId,
+        trace_id: resolvedTraceId,
+        symbol: resolvedSymbol,
+        message,
+        include_vision: true,
+        include_similar_setups: true,
+        compare_symbol: options?.compare || null,
+        signal: signal || null,
+      };
+
       try {
-        const response = await postAiTradeChat({
-          session_id: sessionId,
-          trace_id: resolvedTraceId,
-          symbol: resolvedSymbol,
-          message,
-          include_vision: true,
-          include_similar_setups: true,
-          compare_symbol: options?.compare || null,
-          signal: signal || null,
-        });
-        setSessionId(response.session_id);
-        setMessages((current) => [
-          ...current,
+        const controller = new AbortController();
+        streamAbortRef.current = controller;
+        const result = await streamSse(
+          '/api/ai/trade-chat/stream',
+          streamBody,
           {
-            id: `assistant-${Date.now()}`,
-            role: 'assistant',
-            content: response.answer,
-            response,
-            createdAt: response.created_at || new Date().toISOString(),
+            onStart: (data) => {
+              const meta = (data || {}) as Record<string, unknown>;
+              setMessages((current) =>
+                current.map((m) =>
+                  m.id === assistantId && m.role === 'assistant'
+                    ? {
+                        ...m,
+                        response: {
+                          ...m.response,
+                          ...baseResponse,
+                          decision: (meta.decision as string) || m.response.decision,
+                        } as AiTradeChatResponse,
+                      }
+                    : m,
+                ),
+              );
+            },
+            onToken: (data) => {
+              const text = typeof data?.text === 'string' ? data.text : '';
+              if (!text) return;
+              setMessages((current) =>
+                current.map((m) =>
+                  m.id === assistantId && m.role === 'assistant'
+                    ? { ...m, content: m.content + text, response: { ...m.response, answer: m.content + text } }
+                    : m,
+                ),
+              );
+            },
+            onDone: (data) => {
+              const payload = (data || {}) as { full_payload?: AiTradeChatResponse };
+              if (payload.full_payload) {
+                const full = payload.full_payload;
+                setSessionId(full.session_id);
+                setMessages((current) =>
+                  current.map((m) =>
+                    m.id === assistantId && m.role === 'assistant'
+                      ? {
+                          ...m,
+                          content: full.answer || m.content,
+                          response: full,
+                          createdAt: full.created_at || m.createdAt,
+                        }
+                      : m,
+                  ),
+                );
+              }
+            },
+            onError: (data) => {
+              setError(typeof data === 'string' ? data : 'stream_error');
+            },
           },
-        ]);
+          controller.signal,
+        );
+
+        if (result.fallback) {
+          // Streaming disabled (HTTP 410) — fall back to the non-streaming endpoint.
+          const response = await postAiTradeChat({
+            session_id: sessionId,
+            trace_id: resolvedTraceId,
+            symbol: resolvedSymbol,
+            message,
+            include_vision: true,
+            include_similar_setups: true,
+            compare_symbol: options?.compare || null,
+            signal: signal || null,
+          });
+          setSessionId(response.session_id);
+          setMessages((current) => [
+            ...current,
+            {
+              id: assistantId,
+              role: 'assistant',
+              content: response.answer,
+              response,
+              createdAt: response.created_at || new Date().toISOString(),
+            },
+          ]);
+        } else {
+          // Ensure the assistant placeholder exists even if no tokens arrived.
+          setMessages((current) =>
+            current.some((m) => m.id === assistantId)
+              ? current
+              : [
+                  ...current,
+                  {
+                    id: assistantId,
+                    role: 'assistant',
+                    content: '',
+                    response: baseResponse,
+                    createdAt: new Date().toISOString(),
+                  },
+                ],
+          );
+        }
         if (!messageOverride) setInput('');
       } catch (err) {
         setMessages((current) => current.filter((messageItem) => messageItem.id !== userMessage.id));
         setError(err instanceof Error ? err.message : 'AI agent request failed');
       } finally {
+        streamAbortRef.current = null;
         setLoading(false);
       }
     },
@@ -1114,7 +1256,7 @@ export default function AITradingAgentPanel({
                   </div>
                 )}
 
-                {messages.map((message) => (
+                {deferredMessages.map((message) => (
                   <div
                     key={message.id}
                     className={cn(

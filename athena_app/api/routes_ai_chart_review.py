@@ -7,8 +7,10 @@ import logging
 from types import SimpleNamespace
 from typing import Any
 
-from flask import jsonify, request
+from flask import Response, jsonify, request, stream_with_context
 from config import get_ai_review_provider, normalize_ai_review_provider, normalize_chart_review_primary_engine
+
+from ai_streaming import is_streaming_enabled, sse_done, sse_format
 
 from athena_ai.ai_review_payload_builder import (
     build_strategy_layer,
@@ -604,3 +606,71 @@ def register_ai_chart_review_routes(app, runtime: SimpleNamespace) -> None:
             response["strategyLayer"] = strategy_layer
 
         return jsonify(runtime.json_safe(response))
+
+    @app.post("/api/ai/chart-review/stream")
+    def api_ai_chart_review_stream():
+        """SSE streaming variant of /api/ai/chart-review.
+
+        Config-gated by AI_STREAMING_ENABLED (410 when off). Reuses the
+        non-streaming assembly verbatim via the registered view function, then
+        emits SSE events: start {review_id, provider, model}, token {text}
+        with the narrative (chartReadSummary + supporting_reasons), and done
+        {ok, full_payload} carrying the complete structured response so the
+        client can render the full card. Advisory-only; no execution.
+        """
+        if not is_streaming_enabled():
+            return jsonify({"error": "streaming_disabled", "fallback": "/api/ai/chart-review"}), 410
+
+        view = app.view_functions.get("api_ai_chart_review")
+        if view is None:
+            return jsonify({"error": "streaming_unavailable"}), 503
+
+        result = view()
+        if isinstance(result, tuple):
+            resp, status = result
+        else:
+            resp, status = result, 200
+        if status != 200:
+            # Forward validation/disabled/provider errors as-is.
+            return resp
+
+        payload = resp.get_json() or {}
+
+        ai_review = payload.get("ai_review") or {}
+        if isinstance(ai_review, dict):
+            narrative_parts: list[str] = []
+            crs = ai_review.get("chartReadSummary") or ai_review.get("chart_read_summary")
+            if isinstance(crs, str) and crs.strip():
+                narrative_parts.append(crs)
+            reasons = ai_review.get("supporting_reasons") or []
+            if isinstance(reasons, list) and reasons:
+                narrative_parts.extend(str(r) for r in reasons if r)
+            narrative = "\n".join(narrative_parts)
+        else:
+            narrative = ""
+
+        meta = {
+            "review_id": payload.get("review_id"),
+            "provider": payload.get("provider"),
+            "model": payload.get("model"),
+            "primaryEngine": payload.get("primaryEngine"),
+        }
+
+        def generate():
+            yield sse_format("start", meta)
+            if narrative:
+                # Chunk the narrative into ~80-char token-like fragments so the
+                # client sees a progressive "live read" effect.
+                for i in range(0, len(narrative), 80):
+                    yield sse_format("token", {"text": narrative[i : i + 80]})
+            yield sse_format("done", {"ok": True, "full_payload": payload})
+
+        return Response(
+            stream_with_context(generate()),
+            mimetype="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no",
+                "Connection": "keep-alive",
+            },
+        )

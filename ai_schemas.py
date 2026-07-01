@@ -351,3 +351,24 @@ class MetaAnalysisResponse(BaseModel):
     devils_advocate: str = Field(
         description="Strongest counter-argument to conclusions"
     )
+
+
+class EngineCWeightVerdictSchema(BaseModel):
+    """Schema for Engine C AI weight verdict (Phase 0 schema hardening).
+
+    Advisory-only: the verdict tweaks weights + conviction_modifier; it
+    never flips trade from False to True. See engine_c_ai.py.
+    """
+
+    trust_verdict: str = Field(description="trust_a | trust_b | trust_both | trust_neither")
+    weight_recommendation: Optional[dict] = Field(
+        default=None,
+        description='{"A": float, "B": float} summing to ~1.0, each in [0.2, 0.8]',
+    )
+    conviction_modifier: float = Field(
+        default=0.0,
+        ge=-0.15,
+        le=0.15,
+        description="Edge-only conviction tweak in [-0.15, 0.15]",
+    )
+    reasoning: str = Field(default="", description="Cited reasoning from the packet")

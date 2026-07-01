@@ -14,6 +14,7 @@
 //   browser for diagnostics. See spec section 5.2 and routes_ai_chart_review.
 
 import { apiClient } from './apiClient';
+import { streamSse, type SseHandlers } from './sseStream';
 import type {
   AIChartReviewChartSnapshot,
   AIChartReviewRequest,
@@ -248,4 +249,49 @@ export async function postChartReview(
     body as unknown as Record<string, unknown>,
   );
   return normalizeAIChartReviewResponse(response);
+}
+
+const STREAM_ENDPOINT = '/api/ai/chart-review/stream';
+
+export interface StreamChartReviewHandlers {
+  onStart?: SseHandlers['onStart'];
+  onToken?: SseHandlers['onToken'];
+  onError?: SseHandlers['onError'];
+  /** Called once with the fully-assembled, normalized review response. */
+  onReview?: (response: AIChartReviewResponse) => void;
+}
+
+/**
+ * Stream the chart review narrative over SSE. Falls back to the non-streaming
+ * `postChartReview` when the server returns 410 (streaming disabled). The
+ * `onReview` handler is invoked exactly once with the normalized full response
+ * — either from the SSE `done` event or from the fallback POST.
+ */
+export async function streamChartReview(
+  body: AIChartReviewRequest,
+  handlers: StreamChartReviewHandlers,
+  signal?: AbortSignal,
+): Promise<{ fallback: boolean }> {
+  const result = await streamSse(
+    STREAM_ENDPOINT,
+    body as unknown as Record<string, unknown>,
+    {
+      onStart: handlers.onStart,
+      onToken: handlers.onToken,
+      onError: handlers.onError,
+      onDone: (data) => {
+        const payload = (data || {}) as { full_payload?: AIChartReviewResponse };
+        if (payload.full_payload) {
+          handlers.onReview?.(normalizeAIChartReviewResponse(payload.full_payload));
+        }
+      },
+    },
+    signal,
+  );
+  if (result.fallback) {
+    const response = await postChartReview(body);
+    handlers.onReview?.(response);
+    return { fallback: true };
+  }
+  return { fallback: false };
 }

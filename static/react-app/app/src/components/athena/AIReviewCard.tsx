@@ -1,10 +1,13 @@
+import { Suspense, lazy, memo, useMemo } from 'react';
 import { Sparkles } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import AIReviewContextCompletenessPanel from '@/components/athena/AIReviewContextCompletenessPanel';
 import AIReviewEngineAVerdictPanel from '@/components/athena/AIReviewEngineAVerdictPanel';
 import AIReviewSummaryStrip from '@/components/athena/AIReviewSummaryStrip';
+import AIDisagreementVizPanel from '@/components/athena/AIDisagreementVizPanel';
 import EngineANonVisualContextPanel from '@/components/athena/EngineANonVisualContextPanel';
+import EvidenceRefsPanel from '@/components/athena/EvidenceRefsPanel';
 import TradeSkillReviewPanel from '@/components/athena/TradeSkillReviewPanel';
 import {
   AI_REVIEW_EMPTY,
@@ -14,7 +17,10 @@ import {
 import type {
   AIChartReviewResponse,
   AIChartReviewConcordanceState,
+  EvidenceRefClaim,
 } from '@/types/athena';
+
+const WhatIfReplayPanel = lazy(() => import('@/components/athena/WhatIfReplayPanel'));
 
 const CONCORDANCE_PILL: Record<AIChartReviewConcordanceState, string> = {
   agree: 'bg-emerald-500/15 text-emerald-300 border-emerald-500/40',
@@ -47,7 +53,7 @@ export interface AIReviewCardProps {
   response: AIChartReviewResponse;
 }
 
-export default function AIReviewCard({ response }: AIReviewCardProps) {
+function AIReviewCardImpl({ response }: AIReviewCardProps) {
   const ai = response.ai_review;
   const c = response.concordance;
   const primaryEngine = String(response.primaryEngine || 'A').toUpperCase() === 'B' ? 'B' : 'A';
@@ -93,6 +99,43 @@ export default function AIReviewCard({ response }: AIReviewCardProps) {
     response.engineAScoreAttribution ??
     engineACtx?.score_attribution;
 
+  const evidenceClaims = useMemo((): EvidenceRefClaim[] => {
+    const claims: EvidenceRefClaim[] = [];
+    const summary = ai.chartReadSummary ?? (ai as { chart_read_summary?: string }).chart_read_summary;
+    if (summary) claims.push({ claim_id: 'chart_read', text: String(summary), source_field: 'chartReadSummary' });
+    supporting?.forEach((text, idx) => {
+      claims.push({ claim_id: `support_${idx}`, text, source_field: 'supporting_reasons' });
+    });
+    return claims;
+  }, [ai.chartReadSummary, supporting]);
+
+  const evidenceSources = useMemo(
+    () => ({
+      ...(ctx && typeof ctx === 'object' ? (ctx as Record<string, unknown>) : {}),
+      verdict: ai.verdict,
+      confidence: ai.confidence,
+      concordance: c.concordance,
+    }),
+    [ctx, ai.verdict, ai.confidence, c.concordance],
+  );
+
+  const disagreementVerdicts = useMemo(
+    () => ({
+      marcus: { decision: ai.verdict, confidence: null },
+      vision: {
+        decision: ai.visual_confirmation ?? ai.visual_contradiction ?? null,
+        confidence: null,
+      },
+      concordance: { decision: c.concordance, confidence: null },
+    }),
+    [ai.verdict, ai.visual_confirmation, ai.visual_contradiction, c.concordance],
+  );
+
+  const whatIfBaseContext = useMemo(
+    () => (ctx && typeof ctx === 'object' ? (ctx as Record<string, unknown>) : {}),
+    [ctx],
+  );
+
   const freshnessFallback = (() => {
     const status = showReviewValue(atrInfo?.atr_freshness_status);
     const tf = showReviewValue(atrInfo?.atr_tf);
@@ -130,6 +173,18 @@ export default function AIReviewCard({ response }: AIReviewCardProps) {
         <AIReviewSummaryStrip summary={summary} />
 
         <AIReviewEngineAVerdictPanel comparison={verdictComparison} primaryEngine={primaryEngine} />
+
+        <AIDisagreementVizPanel
+          verdicts={disagreementVerdicts}
+          claims={evidenceClaims}
+          sources={evidenceSources}
+        />
+
+        <EvidenceRefsPanel claims={evidenceClaims} sources={evidenceSources} />
+
+        <Suspense fallback={null}>
+          <WhatIfReplayPanel baseContext={whatIfBaseContext} />
+        </Suspense>
 
         <details className="rounded-md border border-border/40 bg-background/20 px-2 py-1.5">
           <summary className="cursor-pointer text-[11px] font-medium text-muted-foreground">
@@ -282,3 +337,6 @@ function ListBlock({
     </div>
   );
 }
+
+const AIReviewCard = memo(AIReviewCardImpl);
+export default AIReviewCard;

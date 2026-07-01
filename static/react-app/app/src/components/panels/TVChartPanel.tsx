@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
+import { useDeferredValue, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import {
   createChart,
   createSeriesMarkers,
@@ -61,7 +61,7 @@ import {
   buildScreenshotMeta,
   canvasToDataUrl,
   downscaleToCap,
-  postChartReview,
+  streamChartReview,
 } from '@/lib/aiChartReview';
 import VolumeModeField from '@/components/execution/VolumeModeField';
 import ExitModeField from '@/components/execution/ExitModeField';
@@ -2394,6 +2394,9 @@ export default function TVChartPanel() {
   const [aiReview, setAiReview] = useState<AIChartReviewResponse | null>(null);
   const [aiReviewLoading, setAiReviewLoading] = useState<boolean>(false);
   const [aiReviewError, setAiReviewError] = useState<string | null>(null);
+  const [streamingNarrative, setStreamingNarrative] = useState<string>('');
+  const deferredStreamingNarrative = useDeferredValue(streamingNarrative);
+  const streamAbortRef = useRef<AbortController | null>(null);
   const [intentSourceBadge, setIntentSourceBadge] = useState<string | null>(null);
   const [autoReviewStatus, setAutoReviewStatus] = useState<'idle' | 'pending' | 'running' | 'done'>('idle');
   const [activeWatches, setActiveWatches] = useState<SuggestedTradeWatch[]>([]);
@@ -3474,38 +3477,59 @@ export default function TVChartPanel() {
       if (!symbol) {
         throw new Error('No symbol selected');
       }
-      const response = await postChartReview({
+      const reviewRequest = {
         symbol,
         timeframe: tfForBackend,
         provider: aiReviewProvider,
         screenshot_base64: dataUrl,
         screenshot_meta: meta,
-      });
-      const responseSymbolKey =
-        symbolKey(reviewContextFromResponse(response).symbol)
-        || symbolKey(response.engine_a_context?.symbol)
-        || symbolKey(response.engine_b_context?.symbol)
-        || symbolKey(symbol);
-      if (responseSymbolKey && currentPairKeyRef.current && responseSymbolKey !== currentPairKeyRef.current) {
-        setAiReviewError('Review completed for a different symbol; select the symbol again to view results.');
-        return;
-      }
-      aiReviewSymbolKeyRef.current = responseSymbolKey;
-      lastAppliedRouteKeyRef.current = null;
-      const outcomeStatus = reviewOutcomeStatus(response);
-      if (response.primaryEngine === 'B' && outcomeStatus) {
-        setChartReviewOutcome({
-          symbol,
-          primaryEngine: 'B',
-          status: outcomeStatus,
-        });
-      }
-      setAiReview(response);
+      };
+
+      const applyReviewResponse = (response: AIChartReviewResponse) => {
+        const responseSymbolKey =
+          symbolKey(reviewContextFromResponse(response).symbol)
+          || symbolKey(response.engine_a_context?.symbol)
+          || symbolKey(response.engine_b_context?.symbol)
+          || symbolKey(symbol);
+        if (responseSymbolKey && currentPairKeyRef.current && responseSymbolKey !== currentPairKeyRef.current) {
+          setAiReviewError('Review completed for a different symbol; select the symbol again to view results.');
+          return;
+        }
+        aiReviewSymbolKeyRef.current = responseSymbolKey;
+        lastAppliedRouteKeyRef.current = null;
+        const outcomeStatus = reviewOutcomeStatus(response);
+        if (response.primaryEngine === 'B' && outcomeStatus) {
+          setChartReviewOutcome({
+            symbol,
+            primaryEngine: 'B',
+            status: outcomeStatus,
+          });
+        }
+        setAiReview(response);
+      };
+
+      setStreamingNarrative('');
+      const controller = new AbortController();
+      streamAbortRef.current = controller;
+      await streamChartReview(
+        reviewRequest,
+        {
+          onToken: (data) => {
+            const text = typeof data?.text === 'string' ? data.text : '';
+            if (text) setStreamingNarrative((prev) => prev + text);
+          },
+          onReview: (response) => applyReviewResponse(response),
+          onError: () => setStreamingNarrative(''),
+        },
+        controller.signal,
+      );
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'AI review failed';
       setAiReviewError(msg);
     } finally {
       setAiReviewLoading(false);
+      setStreamingNarrative('');
+      streamAbortRef.current = null;
     }
   }
 
@@ -4121,6 +4145,12 @@ export default function TVChartPanel() {
                 AI review error: {aiReviewError}
               </div>
             )}
+            {aiReviewLoading && deferredStreamingNarrative ? (
+              <div className="rounded-md border border-amber-500/40 bg-amber-950/30 p-2 text-[11px] text-amber-100 whitespace-pre-wrap break-words">
+                <span className="text-amber-400 font-semibold">Live read: </span>
+                {deferredStreamingNarrative}
+              </div>
+            ) : null}
             {aiReview && <AIReviewCard response={aiReview} />}
             <details className="rounded-md border border-border/60 bg-card/70 p-2">
               <summary className="cursor-pointer text-xs font-medium text-muted-foreground">

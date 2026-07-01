@@ -24,6 +24,7 @@ from config import (
     resolve_ai_review_runtime,
 )
 from data_feeds import http_requests
+from prompt_store import load_prompt
 
 log = logging.getLogger("athena")
 
@@ -552,7 +553,7 @@ def _combine_llm_and_eodhd_vote(
     return round(max(-1.0, min(1.0, combined)), 4), agreement
 
 
-SYSTEM_PROMPT = """You are a senior quantitative analyst embedded in the Athena trading system.
+SYSTEM_PROMPT_FALLBACK = """You are a senior quantitative analyst embedded in the Athena trading system.
 Read financial news and produce a structured sentiment signal for the confluence engine.
 
 Rules:
@@ -562,6 +563,11 @@ Rules:
 4. Only score above 0.6 or below -0.6 for major confirmed events.
 5. Never hallucinate facts not present in the articles.
 6. Output ONLY valid JSON. No markdown. No preamble. No explanation outside the JSON."""
+
+SYSTEM_PROMPT, _NEWS_SYSTEM_SOURCE, _NEWS_SYSTEM_HASH = load_prompt(
+    "news_sentiment_system",
+    fallback=SYSTEM_PROMPT_FALLBACK,
+)
 
 
 def build_user_prompt(
