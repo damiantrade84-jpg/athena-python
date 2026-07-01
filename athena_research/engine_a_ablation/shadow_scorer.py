@@ -7,10 +7,13 @@ into direction/confluence the way the production scorer fails to (see
 
 Confirmed production defect being studied:
   * `engine_a_v3/quant_scorer.py` builds `components` from only the 4 price
-    factors (trend/momentum/location/volume). `_context_component()` is never
-    called, and `engine_a_v3/profile.py` forbids subsystem weights. So
-    intermarket/carry/sentiment/macro/microstructure never reach direction or
-    confluence on ANY path.
+    factors (trend/momentum/location/volume), and `engine_a_v3/profile.py`
+    forbids subsystem weights. So intermarket/carry/sentiment/macro/
+    microstructure never reach direction or confluence on ANY path. (The dead
+    `_context_component()`/`_DEFAULT_WEIGHTS` plumbing this docstring
+    originally pointed at was removed from quant_scorer.py on 2026-06-30 —
+    it was provably inert, never called from `score_pair`. The defect this
+    module studies is the missing wiring itself, not that specific code.)
 
 Parity guarantee: the price core (trend/momentum/location/volume + volatility)
 is imported VERBATIM from the production scorer, so any score difference vs
@@ -34,10 +37,11 @@ Denominator policy (user-specified 2026-06-19, "HYBRID"):
   5. Diagnostics expose configured weight, effective weight, state,
      contribution and total coverage.
 
-Thresholds and weights are NOT tuned here; the research weights are the
-documented design-intent priors (the dead `_DEFAULT_WEIGHTS` table in the
-production scorer) restricted to the subset of subsystems we can source with
-leak-free point-in-time data.
+Thresholds and weights are NOT tuned here; the research weights below are
+copied from the original design-intent priors (formerly the production
+scorer's `_DEFAULT_WEIGHTS` table, removed 2026-06-30 — see module docstring
+above), restricted to the subset of subsystems we can source with leak-free
+point-in-time data.
 """
 
 from __future__ import annotations
@@ -73,10 +77,11 @@ ST_UNAVAILABLE = "unavailable"
 ST_NA = "na"
 
 # Design-intent priors (absolute; NOT renormalized — the denominator policy does
-# the normalizing). Source: the production scorer's `_DEFAULT_WEIGHTS` docstring
-# table, restricted to factors with leak-free point-in-time data this pass.
-# `intermarket`/`microstructure`/separate-`macro` have no point-in-time builder
-# yet, so they are listed weight 0 here and reported as insufficient-coverage.
+# the normalizing). Source: the former production scorer `_DEFAULT_WEIGHTS`
+# table (removed 2026-06-30, see module docstring), restricted to factors with
+# leak-free point-in-time data this pass. `intermarket`/`microstructure`/
+# separate-`macro` have no point-in-time builder yet, so they are listed
+# weight 0 here and reported as insufficient-coverage.
 _RESEARCH_WEIGHTS: dict[str, dict[str, float]] = {
     "forex": {
         "trend": 0.24, "momentum": 0.16, "location": 0.12, "volume": 0.05,

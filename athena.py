@@ -3242,12 +3242,9 @@ from indicators import (  # noqa: E402
     calc_fib_proximity,
     calc_stochastic,
     calc_levels,
-    select_overlay_sl,
-    struct_sl_on_correct_side,
     calc_indicators,
     calc_fib,
     calc_indicators_with_normalized,
-    calc_usd_relative_strength_context,
 )
 
 
@@ -3496,41 +3493,6 @@ def fetch_dxy_context():
         return f"trend={trend} 5d_chg={chg}% price={round(cl[-1], 2)}"
 
     except Exception:
-        return None
-
-
-def fetch_usd_relative_strength_context(
-    pair: dict, asset_candles: list | None, tf: str = "H4"
-) -> dict | None:
-    """USD macro context for precious metals using DXY as the USD proxy."""
-    from scoring import _PRECIOUS_TRACKERS
-    if not pair or pair.get("display") not in _PRECIOUS_TRACKERS or not asset_candles:
-        return None
-
-    try:
-        dxy_candles = fetch_candles(
-            {
-                "symbol": "DX-Y.NYB",
-                "display": "DXY",
-                "source": "yfinance",
-                "type": "index",
-            },
-            tf,
-            100,
-        )
-        if not dxy_candles:
-            return None
-
-        asset_label = (pair.get("display") or "Asset").split("/")[0].strip() or "Asset"
-        return calc_usd_relative_strength_context(
-            asset_candles,
-            dxy_candles,
-            asset_label=asset_label,
-            proxy_label="DXY",
-            tf=tf,
-        )
-    except Exception as exc:
-        log.debug("[MACRO] USD relative strength unavailable for %s: %s", pair.get("display"), exc)
         return None
 
 
@@ -13446,14 +13408,8 @@ def analyze_pair(
     from engine_a_v3.evaluator import evaluate_engine_a_v3
     from engine_a_v3.quant_context import build_quant_context
 
-    # Subsystem inputs for the quant scorer (intermarket/carry/COT/micro/volume).
-    # Assembled here because these feeds live in analyze_pair scope; each maps to
-    # a {signal, quality} or is omitted (-> neutral) when unavailable.
-    try:
-        _v3_usd = fetch_usd_relative_strength_context(pair, h4, tf="H4")
-    except Exception:
-        _v3_usd = None
-    _v3_micro = _micro_cache.get(pair.get("symbol", ""), {})
+    # Relative-volume input for the quant scorer's volume component. Assembled
+    # here because the forex volume-ratio feed lives in analyze_pair scope.
     _v3_vr = None
     if str(pair.get("type") or "").lower() == "forex":
         try:
@@ -13462,12 +13418,7 @@ def analyze_pair(
             _v3_vr = _get_forex_vr(pair.get("display", ""), tf="H1", lookback=20)
         except Exception:
             _v3_vr = None
-    _v3_ctx = build_quant_context(
-        pair,
-        micro=_v3_micro,
-        usd_strength=_v3_usd,
-        volume_ratio=_v3_vr,
-    )
+    _v3_ctx = build_quant_context(volume_ratio=_v3_vr)
 
     _v3_signal = evaluate_engine_a_v3(
         pair,

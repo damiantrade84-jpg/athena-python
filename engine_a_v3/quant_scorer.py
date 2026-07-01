@@ -15,9 +15,13 @@ This module owns ONLY component scoring + aggregation.
 
 Components (each -> signed direction in [-1,1] and quality in [0,1]):
   trend (multi-TF EMA stack), momentum (RSI/MACD/DI+ADX), location (pullback /
-  mean-reversion timing), volume/flow, and the subsystem inputs intermarket /
-  carry / sentiment / macro / microstructure (read from an injected context dict;
-  neutral until the call site populates them).
+  mean-reversion timing), volume/flow. These four are the only components that
+  feed direction/confluence — engine_a_v3.profile's CORE_COMPONENTS schema
+  enforces this. Subsystem signals (intermarket/carry/sentiment/macro/
+  microstructure) are NOT wired in; see
+  athena_research/engine_a_ablation/shadow_scorer.py for the research-only
+  ablation studying whether/how to add them, gated on the same walk-forward
+  evidence engine_a_v3.promotion requires before any live wiring.
 """
 
 from __future__ import annotations
@@ -32,41 +36,6 @@ from engine_a_scoring_profile import resolve_engine_a_scoring_profile
 
 # ── scale ──────────────────────────────────────────────────────────────────────
 MAX_SCORE = 3.0
-
-# Relative component priors per family. Normalized at use time, so these are
-# weights not probabilities. Runtime values come from the immutable V3 profile.
-_DEFAULT_WEIGHTS: dict[str, dict[str, float]] = {
-    "forex": {
-        "trend": 0.24, "momentum": 0.16, "location": 0.12, "volume": 0.05,
-        "intermarket": 0.15, "carry": 0.14, "sentiment": 0.08, "macro": 0.06,
-        "microstructure": 0.0,
-    },
-    "crypto": {
-        "trend": 0.24, "momentum": 0.18, "location": 0.12, "volume": 0.12,
-        "intermarket": 0.07, "carry": 0.0, "sentiment": 0.09, "macro": 0.03,
-        "microstructure": 0.15,
-    },
-    "commodity": {  # precious / energy / metals / softs
-        "trend": 0.26, "momentum": 0.15, "location": 0.12, "volume": 0.07,
-        "intermarket": 0.15, "carry": 0.0, "sentiment": 0.09, "macro": 0.16,
-        "microstructure": 0.0,
-    },
-    "index": {
-        "trend": 0.24, "momentum": 0.16, "location": 0.12, "volume": 0.12,
-        "intermarket": 0.16, "carry": 0.0, "sentiment": 0.08, "macro": 0.12,
-        "microstructure": 0.0,
-    },
-    "equity_etf": {
-        "trend": 0.24, "momentum": 0.15, "location": 0.12, "volume": 0.15,
-        "intermarket": 0.13, "carry": 0.0, "sentiment": 0.09, "macro": 0.12,
-        "microstructure": 0.0,
-    },
-    "unknown": {
-        "trend": 0.30, "momentum": 0.20, "location": 0.15, "volume": 0.10,
-        "intermarket": 0.10, "carry": 0.0, "sentiment": 0.10, "macro": 0.05,
-        "microstructure": 0.0,
-    },
-}
 
 # Multi-timeframe trend weights by horizon (Elder triple screen: D1 tide,
 # H4 momentum, H1 entry). Intraday emphasises faster TFs; swing emphasises D1.
@@ -137,11 +106,6 @@ _FAMILY_ASSET = {
     "index": "index",
     "equity_etf": "stock",
 }
-
-# Subsystem components consumed from the injected context dict. Each is expected
-# as context[key] = {"signal": -1..1, "quality": 0..1}; absent -> neutral (0,0).
-_CONTEXT_COMPONENTS = ("intermarket", "carry", "sentiment", "macro", "microstructure")
-
 
 # ── small numeric helpers ────────────────────────────────────────────────────
 def _f(value: Any, default: float | None = None) -> float | None:
@@ -368,19 +332,6 @@ def _volume_component(
     return Component(signal, _clamp01(quality), available=len(valid) >= 5)
 
 
-# ── subsystem components (intermarket / carry / sentiment / macro / micro) ───
-def _context_component(context: Mapping[str, Any] | None, key: str) -> Component:
-    if not context:
-        return Component(0.0, 0.0)
-    data = context.get(key)
-    if not isinstance(data, Mapping):
-        return Component(0.0, 0.0)
-    return Component(
-        _clamp(_f(data.get("signal"), 0.0) or 0.0, -1.0, 1.0),
-        _clamp01(_f(data.get("quality"), 0.0) or 0.0),
-    )
-
-
 # ── config resolvers ─────────────────────────────────────────────────────────
 def _snapshots(
     candles: dict[str, list[dict]], asset_type: str, periods: Mapping[str, int]
@@ -491,10 +442,6 @@ def score_pair(
         "directionalRampMult": round(0.5 + 0.5 * abs(dir_sum), 4),
         "trendCoherence": coherence or {"error": "no_ema_data"},
         "volatilityMult": round(vol_mult, 4),
-        "diagnosticContext": {
-            key: dict(context[key]) for key in _CONTEXT_COMPONENTS
-            if context and isinstance(context.get(key), Mapping)
-        },
         "components": {
             name: {
                 "signal": round(comp.signal, 4), "quality": round(comp.quality, 4),
