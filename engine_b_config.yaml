@@ -9,15 +9,15 @@ base_thresholds:
   scalp:
     min_score: 4.0
     min_rr: 1.5
-    fallback_rr: 2.0
+    fallback_rr: 1.8
   intraday:
     min_score: 4.5
     min_rr: 1.5
-    fallback_rr: 2.0
+    fallback_rr: 1.8
   swing:
     min_score: 5.0
     min_rr: 2.0
-    fallback_rr: 3.0
+    fallback_rr: 2.5
 
 regime_multipliers:
   TRENDING: 0.95

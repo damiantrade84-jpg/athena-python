@@ -1183,8 +1183,6 @@ def api_quick_execute():
                 {"error": "ENGINE_A_V3_HORIZON_OVERRIDE_FORBIDDEN", "pair": _quick_pair}
             ), 422
         sig["style"] = _v3_horizon
-        _volume_mode = "min_lot"
-        _sizing_override = 1.0
         _v3_refresh_error = _refresh_engine_a_v3_execution_context(sig, _r)
         if _v3_refresh_error:
             return jsonify({"error": _v3_refresh_error, "pair": _quick_pair}), 409
@@ -2394,10 +2392,6 @@ def api_execute():
 
             else:
                 _sizing_override = _payload_sizing
-        if _is_engine_a_v3:
-            _volume_mode = "min_lot"
-            _sizing_override = 1.0
-
         _hydrate_execution_candle_quality(sig, _r=_r)
 
         # Engine A exit-mode selector (Plan 2): resolve mode + advisable-pip clamp
