@@ -864,12 +864,19 @@ def engine_b_profile_trusted_score_groups(cfg: dict | None = None) -> frozenset[
 
 
 def engine_b_profile_context_enabled(
-    asset_type: str, cfg: dict | None = None, score_group: str | None = None
+    asset_type: str, cfg: dict | None = None, score_group: str | None = None,
+    profile_trusted_override: bool | None = None,
 ) -> bool:
     """True when Engine B may compute/score previous-session VP for this asset type."""
     raw_cfg = cfg if isinstance(cfg, dict) else config.CONFIG
     if not bool(raw_cfg.get("ENGINE_B_PROFILE_SCORING_ENABLED", False)):
         return False
+    # Per-(group,style) YAML override: profile_trusted in score_group_overrides
+    # replaces the global trust list for this scoring call. Wired so
+    # engine_b_config.yaml group_overrides rows can extend the global
+    # ENGINE_B_PROFILE_TRUSTED_SCORE_GROUPS list per (group, style) — audit HIGH #2.
+    if profile_trusted_override is not None:
+        return bool(profile_trusted_override)
     trust_mode = str(raw_cfg.get("ENGINE_B_PROFILE_TRUST_MODE", "asset_type")).lower()
     if trust_mode == "score_group":
         group_key = str(score_group or "").strip().lower()
@@ -878,13 +885,44 @@ def engine_b_profile_context_enabled(
     return asset_key in engine_b_profile_trusted_asset_types(raw_cfg)
 
 
+def _engine_b_resolve_profile_trusted_override(
+    score_group: str | None, style: str | None, cfg: dict | None = None,
+) -> bool | None:
+    """Look up per-(group,style) profile_trusted from score_group_overrides.
+
+    Returns True/False when the override row sets profile_trusted, None when no
+    override exists (caller falls back to the global trust list).
+    """
+    raw_cfg = cfg if isinstance(cfg, dict) else config.CONFIG
+    group_key = str(score_group or "").strip().lower()
+    style_key = str(style or "").strip().lower()
+    if not group_key or not style_key:
+        return None
+    group_overrides = (raw_cfg.get("NAKED_ENGINE", {}) or {}).get("score_group_overrides", {}) or {}
+    if not isinstance(group_overrides, dict):
+        return None
+    group_entry = group_overrides.get(group_key, {})
+    if not isinstance(group_entry, dict):
+        return None
+    style_overrides = group_entry.get(style_key, {})
+    if not isinstance(style_overrides, dict):
+        return None
+    if "profile_trusted" not in style_overrides:
+        return None
+    return bool(style_overrides["profile_trusted"])
+
+
 def build_engine_b_profile_vp_context(
-    asset_type: str, cfg: dict | None = None, score_group: str | None = None
+    asset_type: str, cfg: dict | None = None, score_group: str | None = None,
+    profile_trusted_override: bool | None = None,
 ) -> dict:
     """Metadata for UI/AI: whether Engine B VP context is active for this asset."""
     raw_cfg = cfg if isinstance(cfg, dict) else config.CONFIG
     scoring_on = bool(raw_cfg.get("ENGINE_B_PROFILE_SCORING_ENABLED", False))
-    trusted = engine_b_profile_context_enabled(asset_type, raw_cfg, score_group)
+    trusted = engine_b_profile_context_enabled(
+        asset_type, raw_cfg, score_group,
+        profile_trusted_override=profile_trusted_override,
+    )
     trust_mode = str(raw_cfg.get("ENGINE_B_PROFILE_TRUST_MODE", "asset_type")).lower()
     reason = None
     if not scoring_on:
@@ -1075,6 +1113,36 @@ def sanitize_engine_b_structure_profile_fields(
     return out
 
 
+def _engine_b_resolve_min_score_override(
+    score_group: str | None, style: str | None, cfg: dict | None = None,
+) -> float | None:
+    """Look up per-(group,style) min_score from score_group_overrides.
+
+    Returns the override value when set, None when no override exists (caller
+    falls back to the global style floor).
+    """
+    raw_cfg = cfg if isinstance(cfg, dict) else config.CONFIG
+    group_key = str(score_group or "").strip().lower()
+    style_key = str(style or "").strip().lower()
+    if not group_key or not style_key:
+        return None
+    group_overrides = (raw_cfg.get("NAKED_ENGINE", {}) or {}).get("score_group_overrides", {}) or {}
+    if not isinstance(group_overrides, dict):
+        return None
+    group_entry = group_overrides.get(group_key, {})
+    if not isinstance(group_entry, dict):
+        return None
+    style_overrides = group_entry.get(style_key, {})
+    if not isinstance(style_overrides, dict):
+        return None
+    if "min_score" not in style_overrides:
+        return None
+    try:
+        return float(style_overrides["min_score"])
+    except (TypeError, ValueError):
+        return None
+
+
 def engine_b_min_score_diagnostics(
     style_profile: dict | None, regime_label: str | None, asset_type: str = ""
 ) -> dict:
@@ -1089,9 +1157,17 @@ def engine_b_min_score_diagnostics(
         style = str(profile.get("style") or "").lower()
         style_floors = config.CONFIG.get("ENGINE_B_STYLE_MIN_SCORE_BY_STYLE", {}) or {}
         try:
-            base_min = float(style_floors.get(style, base_min))
+            style_floor = float(style_floors.get(style, base_min))
         except (TypeError, ValueError):
-            pass
+            style_floor = base_min
+        # C3: per-(group,style) min_score override in score_group_overrides wins
+        # over the global style floor when set. Without this, the style floor
+        # silently overrode group-level min_score overrides (e.g. nat_gas,
+        # crypto_doge) — audit MED #6.
+        _group_override = _engine_b_resolve_min_score_override(
+            profile.get("score_group"), style
+        )
+        base_min = _group_override if _group_override is not None else style_floor
     multipliers_enabled = bool(config.CONFIG.get("ENGINE_B_REGIME_MULTIPLIERS_ENABLED", True))
     regime_multiplier = _engine_b_regime_gate(regime_label, asset_type)
     scaled = base_min * regime_multiplier
@@ -3725,6 +3801,9 @@ class NakedEngine:
         enable_profile_context = bool(enable_profile_context) and engine_b_profile_context_enabled(
             asset_type,
             score_group=_score_group,
+            profile_trusted_override=_engine_b_resolve_profile_trusted_override(
+                _score_group, style
+            ),
         )
 
         # Volume profile: precompute profile candles and VP once (direction-independent part)
@@ -4621,15 +4700,16 @@ class NakedEngine:
         if research_entry_ok and not trigger_ok:
             trigger_ok = True
 
-        # FIX 9: Add Absorption Entry Fallback
-        absorption_confirmed = bool(res.get("absorption_confirmed", False))
-        location_at_extreme = bool(res.get("location_at_extreme", False))
+        # entry_ok: trigger OR breakout-with-volume OR sweep-at-zone OR choch-at-zone.
+        # The absorption_confirmed mean-reversion branch was removed (audit LOW #19):
+        # analyze_structure_direction never set absorption_confirmed or
+        # location_at_extreme, so the branch was dead. Only scalp_engine.py sets
+        # absorption_confirmed. Re-add when Engine B gains absorption detection.
         entry_ok = (
             trigger_ok
             or (breakout_ok and bool(res.get("bos_volume_confirmed", False)))
             or (bool(res.get("liquidity_sweep")) and zone_ok)
             or (bool(res.get("choch_confirmed")) and zone_ok)
-            or (absorption_confirmed and location_at_extreme)  # NEW: mean-reversion entry
         )
 
         # Accept both structural TPs and synthetic-fallback TPs as a "meaningful"
@@ -4676,6 +4756,15 @@ class NakedEngine:
             and bool(config.CONFIG.get("ENGINE_B_FOREX_RR_CAN_SATISFY_SPACE_GATE", False))
         )
         rr_space_gate_enabled = rr_space_gate_enabled or forex_rr_space_gate_enabled
+        # Per-(group,style) YAML override: when engine_b_config.yaml sets
+        # space_rr_substitute for a (group, style) row, the loader places it
+        # in the merged style_profile. Honour it here as the final say for
+        # this scoring call, replacing the global asset-scoped flag. Without
+        # this wire-up the YAML field is inert (audit HIGH #1).
+        _space_rr_substitute_override = profile.get("space_rr_substitute")
+        _space_rr_substitute_active = _space_rr_substitute_override is not None
+        if _space_rr_substitute_active:
+            rr_space_gate_enabled = bool(_space_rr_substitute_override)
         space_gate_ok = space_ok if rr_space_gate_enabled else room_ok
 
         # Stage 2.8: Optional volume confirmation gate.
@@ -4748,6 +4837,7 @@ class NakedEngine:
         _profile_vp_context = build_engine_b_profile_vp_context(
             asset_type_lower,
             score_group=profile.get("score_group"),
+            profile_trusted_override=profile.get("profile_trusted"),
         )
         _profile_scoring_active = bool(_profile_vp_context.get("enabled"))
         _profile_points_max = 1.0 if _profile_scoring_active else 0.0
@@ -5021,6 +5111,12 @@ class NakedEngine:
             "space_gate_ok": space_gate_ok,
             "rr_space_gate_enabled": rr_space_gate_enabled,
             "forex_rr_space_gate_enabled": forex_rr_space_gate_enabled,
+            "space_rr_substitute_override_active": _space_rr_substitute_active,
+            "space_rr_substitute_override_value": (
+                bool(_space_rr_substitute_override)
+                if _space_rr_substitute_active
+                else None
+            ),
             "rr_can_satisfy_space_gate": rr_can_satisfy_space,
             "rr_space_floor_atr": round(_rr_space_floor_atr, 4),
             "rr_space_floor_passed": bool(_rr_space_floor_ok),

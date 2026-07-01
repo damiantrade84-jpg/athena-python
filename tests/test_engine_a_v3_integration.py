@@ -111,7 +111,8 @@ def test_active_analyze_pair_returns_v3_as_sole_engine_path():
     analyze_end = source.index("def _build_style_levels(", analyze_start)
     analyze_source = source[analyze_start:analyze_end]
     assert "_v3_signal = evaluate_engine_a_v3(" in analyze_source
-    assert "return _v3_signal" in analyze_source
+    assert "_attach_v3_intermarket_confirmation(" in analyze_source
+    assert "return _attach_v3_intermarket_confirmation(" in analyze_source
     # Guard against reintroducing the removed v2 fallback.
     assert "_asset_type = pair.get(\"type\", \"stock\")" not in analyze_source
 

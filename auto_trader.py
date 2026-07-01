@@ -1239,7 +1239,10 @@ class AutoTrader:
             "checked": False,
             "skippedReason": None,
             "result": None,
-            "newsScoreAlreadyApplied": bool(_score_attribution(signal).get("newsSentimentDelta") is not None),
+            "newsScoreAlreadyApplied": bool(
+                _score_attribution(signal).get("newsSentimentDelta") is not None
+                or signal.get("newsSentimentDelta") is not None
+            ),
         }
         signal["sentimentGate"] = gate
         if not gate["enabled"] or mode == "off":
@@ -1255,6 +1258,14 @@ class AutoTrader:
                 return True, ""
         elif mode not in ("always_when_enabled", "severe_opposition_only", "conductor_routed"):
             gate["skippedReason"] = f"unknown_mode:{mode}"
+            return True, ""
+
+        if (
+            bool(cfg.get("NEWS_SENTIMENT_CONFLUENCE_ENABLED"))
+            and gate["newsScoreAlreadyApplied"]
+            and bool(cfg.get("SENTIMENT_GATE_SKIP_WHEN_NEWS_APPLIED", False))
+        ):
+            gate["skippedReason"] = "news_sentiment_already_applied"
             return True, ""
 
         try:

@@ -498,3 +498,76 @@ def test_build_public_matrix_payload_filters_asset_classes():
         == {"forex", "commodity"}
         for row in payload["relationships"]
     )
+
+
+def test_v3_signal_intermarket_attachment_pattern():
+    """Mirror analyze_pair helper: confirmation attaches to v3-shaped signal dict."""
+    from intermarket import apply_confirmation_to_score, build_symbol_context
+
+    raw_context = {
+        "target": "XAU/USD",
+        "drivers": [
+            {
+                "driver": "DXY",
+                "driverAssetClass": "macro",
+                "sourceType": "both",
+                "priorRelation": "inverse",
+                "effectivePriorRelation": "inverse",
+                "summary": {
+                    "regime": {"relation": "inverse", "label": "strongly inverse"},
+                    "current": {
+                        "correlation": -0.82,
+                        "stability": 0.91,
+                        "signPersistence": 0.88,
+                        "volAdjustedScore": -0.70,
+                        "driverRecentChangePct": -1.4,
+                        "targetRecentChangePct": 1.1,
+                        "window": 50,
+                        "flippedRecently": False,
+                    },
+                },
+            }
+        ],
+        "unavailablePriors": [],
+    }
+    snapshot = {
+        "universe": {"byCanonical": {"XAU/USD": {"display": "XAU/USD", "type": "commodity"}}},
+        "seriesStore": {},
+        "relationLookup": {},
+    }
+    pair = {"display": "XAU/USD", "type": "commodity"}
+    ctx = build_symbol_context(
+        pair,
+        snapshot,
+        config={
+            "INTERMARKET_CONFIRMATION": {
+                "enabled": True,
+                "engine_a_enabled": True,
+                "macro_priors": [{"pair": "XAU/USD", "driver": "DXY", "relation": "inverse"}],
+            }
+        },
+    )
+    # Use raw_context directly when matrix empty (same as rich driver path)
+    ctx = raw_context
+    signal = {
+        "confluenceScore": 2.0,
+        "score": 2.0,
+        "maxScore": 3.0,
+        "direction": "LONG",
+    }
+    result = apply_confirmation_to_score(
+        signal["confluenceScore"],
+        signal["direction"],
+        pair,
+        ctx,
+        max_score=signal["maxScore"],
+        config={"INTERMARKET_CONFIRMATION": {"enabled": True, "engine_a_enabled": True}},
+    )
+    signal["intermarketConfirmation"] = result["confirmation"]
+    signal["intermarketEngineADelta"] = result["confirmation"]["engineADelta"]
+    signal["confluenceScore"] = result["adjusted_score"]
+    signal["score"] = result["adjusted_score"]
+
+    assert signal["intermarketConfirmation"]["verdict"] == "supportive"
+    assert signal["intermarketEngineADelta"] > 0
+    assert signal["confluenceScore"] > 2.0

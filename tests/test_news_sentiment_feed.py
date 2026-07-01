@@ -502,6 +502,14 @@ def test_news_sentiment_ai_runtime_pins_grok_when_global_openai(monkeypatch):
     assert runtime["model"] == "grok-4.3"
 
 
+def test_scanner_run_full_scan_wires_news_sentiment_blend():
+    from pathlib import Path
+
+    source = (Path(__file__).resolve().parents[1] / "scanner.py").read_text(encoding="utf-8")
+    assert "apply_news_sentiment_to_scan_result(" in source
+    assert "eodhd_ticker_for_pair=r.eodhd_ticker_for_pair" in source
+
+
 def test_get_news_sentiment_create_ai_client_uses_grok_provider(monkeypatch):
     monkeypatch.setenv("AI_REVIEW_PROVIDER", "openai")
     monkeypatch.setenv("OPENAI_API_KEY", "openai-key")

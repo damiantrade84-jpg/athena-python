@@ -5574,7 +5574,7 @@ init_learning_db(_AUDIT_DB)
 ensure_advisory_store(_AUDIT_DB)
 
 
-from scanner import run_full_scan  # noqa: E402
+from scanner import run_full_scan, _engine_b_scan_freshness_stale_tfs  # noqa: E402
 
 from auto_trader import auto_trader as _auto_trader  # noqa: E402
 
@@ -6444,6 +6444,28 @@ def _compute_naked_analysis(
             score_group=_pair_score_group,
             asset_type=pair_obj.get("type", ""),
         )
+
+        # A3: Pre-score freshness gate — fail closed on stale D1/H4/H1 like the
+        # full scan path (scanner.py:2068-2093). Without this, stale structure
+        # candles flow into NakedEngine scoring on /api/naked-analysis and
+        # execution refresh (audit HIGH #3). honours ENGINE_B_SCAN_FRESHNESS_GATE
+        # and the same per-asset-class allowances (confirmed-only stale_1,
+        # intraday calendar gap, weekend D1 grace, crypto D1 25h wall-clock).
+        # B3: also threads (score_group, style) so D1 staleness only blocks when
+        # the group's trend/momentum scoring actually consumes D1.
+        _stale_tfs, _fresh_diag = _engine_b_scan_freshness_stale_tfs(
+            pair_obj, d1, h4, h1,
+            score_group=_pair_score_group,
+            style=resolved_style,
+        )
+        if _stale_tfs:
+            _fresh_reason = "STALE_DATA_ENGINE_B:" + ",".join(_stale_tfs)
+            log.warning(
+                "[NAKED-AI] %s freshness gate block: %s",
+                pair_obj.get("display", "?"),
+                _fresh_reason,
+            )
+            return None, pair_obj, _fresh_reason
         _zone_tf = str(style_profile.get("zone_tf", "H4")).upper()
         _entry_tf = str(style_profile.get("entry_tf", "H1")).upper()
         _atr_tf = str(style_profile.get("atr_tf", "H4")).upper()
@@ -6917,6 +6939,7 @@ def api_scan_naked():
         "total": len(candidate_pairs),
         "passed": 0,
         "insufficient_candles": 0,
+        "freshness_gate": 0,
         "bybit_atr_unavailable": 0,
         "invalid_atr": 0,
         "volatility_gate": 0,
@@ -6958,6 +6981,8 @@ def api_scan_naked():
             reason = str(row.get("final_reject_reason") or "").strip()
             if reason == "insufficient_candles":
                 engine_b_funnel["insufficient_candles"] += 1
+            elif reason == "freshness_gate":
+                engine_b_funnel["freshness_gate"] += 1
             elif reason == "bybit_atr_unavailable":
                 engine_b_funnel["bybit_atr_unavailable"] += 1
             elif reason == "invalid_atr":
@@ -7061,7 +7086,16 @@ def api_scan_naked():
                         state, include_forming=_use_forming_trigger
                     )
                 else:
-                    raw = fetch_candles(pair, tf, limit)
+                    # A5: Route crypto OHLCV through the same Engine A/B signal-feed
+                    # resolver the full scan uses (scanner.py:1718) so api_scan_naked
+                    # honours ENGINE_AB_CRYPTO_SIGNAL_FEED=bybit. Without this, the
+                    # naked scan fell through to fetch_candles (typically Binance for
+                    # source=binance pairs), producing structure on a different venue
+                    # than the full scan (audit HIGH #5). Non-crypto pairs pass through
+                    # unchanged via _fetch_ab_crypto_signal_candles's non-crypto branch.
+                    raw, _crypto_signal_meta_b = _fetch_ab_crypto_signal_candles(pair, tf, limit)
+                    if _crypto_signal_meta_b is not None:
+                        debug_row.setdefault("crypto_signal_feed_meta", {})[tf] = _crypto_signal_meta_b
                     from athena_app.services.market_state import (
                         market_state_offset_hours,
                         split_market_state,
@@ -7099,6 +7133,33 @@ def api_scan_naked():
 
             if len(zone_candles) < 10 or len(entry_candles) < 10:
                 debug_row["final_reject_reason"] = "insufficient_candles"
+                if debug_mode:
+                    return {"debug": debug_row}
+                return []
+
+            # A4: Pre-score freshness gate — fail closed BEFORE structure scoring
+            # so stale D1/H4/H1 cannot flow into NakedEngine.analyze_structure.
+            # Mirrors scanner.py:2068-2093. Without this, api_scan_naked scored
+            # first and only flipped executable=false afterward (audit HIGH #4).
+            # B3: threads (score_group, style) so D1 staleness only blocks when
+            # the group's trend/momentum scoring actually consumes D1.
+            _stale_tfs_b, _fresh_diag_b = _engine_b_scan_freshness_stale_tfs(
+                pair,
+                _tf_map.get("D1", []),
+                _tf_map.get("H4", []),
+                _tf_map.get("H1", []),
+                score_group=_pair_score_group,
+                style=resolved_style,
+            )
+            if _stale_tfs_b:
+                debug_row["final_reject_reason"] = "freshness_gate"
+                debug_row["freshness_stale_tfs"] = _stale_tfs_b
+                debug_row["freshness_diag"] = _fresh_diag_b
+                log.warning(
+                    "[NAKED-SCAN] %s freshness gate block: STALE_DATA_ENGINE_B:%s",
+                    pair.get("display", "?"),
+                    ",".join(_stale_tfs_b),
+                )
                 if debug_mode:
                     return {"debug": debug_row}
                 return []
@@ -13053,6 +13114,74 @@ def fetch_eodhd_indicators(pair):
         return None
 
 
+def _attach_v3_intermarket_confirmation(
+    signal: dict,
+    pair: dict,
+    *,
+    intermarket_snapshot: dict | None,
+) -> dict:
+    """Attach intermarket confirmation and optional score delta to an Engine A v3 signal."""
+    if not intermarket_snapshot or not isinstance(intermarket_snapshot, dict):
+        return signal
+    try:
+        from intermarket import apply_confirmation_to_score, build_symbol_context
+
+        ctx = build_symbol_context(pair, intermarket_snapshot, config=CONFIG)
+        if not ctx:
+            return signal
+
+        direction = signal.get("direction")
+        if direction not in ("LONG", "SHORT"):
+            signal["intermarketConfirmation"] = {
+                "verdict": "neutral",
+                "score": 0.0,
+                "explanation": (
+                    "Intermarket confirmation neutral: no trade direction on signal."
+                ),
+                "unavailablePriors": list(ctx.get("unavailablePriors") or []),
+                "driversConsidered": 0,
+                "engineADelta": 0.0,
+            }
+            signal["intermarketEngineADelta"] = 0.0
+            return signal
+
+        base_score = float(signal.get("confluenceScore") or signal.get("score") or 0.0)
+        max_score = float(signal.get("maxScore") or 3.0)
+        _im_result = apply_confirmation_to_score(
+            base_score,
+            direction,
+            pair,
+            ctx,
+            max_score=max_score,
+            config=CONFIG,
+        )
+        _confirmation = _im_result.get("confirmation")
+        if isinstance(_confirmation, dict):
+            signal["intermarketConfirmation"] = _confirmation
+            signal["intermarketEngineADelta"] = float(
+                _confirmation.get("engineADelta", 0.0) or 0.0
+            )
+        _adjusted = _im_result.get("adjusted_score")
+        if isinstance(_adjusted, (int, float)):
+            adjusted = round(float(_adjusted), 6)
+            signal["confluenceScore"] = adjusted
+            signal["score"] = adjusted
+            if signal.get("maxScore"):
+                try:
+                    _max = float(signal["maxScore"])
+                    if _max > 0:
+                        signal["scoreNorm"] = round(min(1.0, adjusted / _max), 6)
+                except (TypeError, ValueError):
+                    pass
+    except Exception as exc:
+        log.warning(
+            "[ANALYZE] %s intermarket confirmation skipped: %s",
+            pair.get("display", "?"),
+            exc,
+        )
+    return signal
+
+
 def analyze_pair(
     pair,
     btc_bias,
@@ -13233,12 +13362,16 @@ def analyze_pair(
             pass
         from engine_a_v3.evaluator import evaluate_engine_a_v3
 
-        return evaluate_engine_a_v3(
+        return _attach_v3_intermarket_confirmation(
+            evaluate_engine_a_v3(
+                pair,
+                {"D1": list(d1 or []), "H4": list(h4 or []), "H1": list(h1 or [])},
+                horizon=style,
+                blocked_reasons=("required_confirmed_candles_missing",),
+            ).to_dict(),
             pair,
-            {"D1": list(d1 or []), "H4": list(h4 or []), "H1": list(h1 or [])},
-            horizon=style,
-            blocked_reasons=("required_confirmed_candles_missing",),
-        ).to_dict()
+            intermarket_snapshot=intermarket_snapshot,
+        )
 
     # Engine A scores confirmed candles only. Forming-bar state remains diagnostic
     # for UI/freshness, but indicators and two-bar confirmation use closed bars.
@@ -13386,7 +13519,11 @@ def analyze_pair(
                     "pairSource": pair.get("source"),
                 }
                 _blocked["is_forming"] = is_forming
-                return _blocked
+                return _attach_v3_intermarket_confirmation(
+                    _blocked,
+                    pair,
+                    intermarket_snapshot=intermarket_snapshot,
+                )
         except Exception as _prefresh_err:
             log.warning(
                 "[ANALYZE] %s V3 freshness validation failed closed: %s",
@@ -13403,7 +13540,11 @@ def analyze_pair(
             ).to_dict()
             _blocked["dataFreshness"]["diagnostics"] = _freshness_diag
             _blocked["is_forming"] = is_forming
-            return _blocked
+            return _attach_v3_intermarket_confirmation(
+                _blocked,
+                pair,
+                intermarket_snapshot=intermarket_snapshot,
+            )
 
     from engine_a_v3.evaluator import evaluate_engine_a_v3
     from engine_a_v3.quant_context import build_quant_context
@@ -13434,7 +13575,11 @@ def analyze_pair(
         "pairSource": pair.get("source"),
     }
     _v3_signal["is_forming"] = is_forming
-    return _v3_signal
+    return _attach_v3_intermarket_confirmation(
+        _v3_signal,
+        pair,
+        intermarket_snapshot=intermarket_snapshot,
+    )
 
 
 def _build_style_levels(price: float, atr: float, direction: str, pair_type: str) -> dict:

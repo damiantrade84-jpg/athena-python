@@ -17,6 +17,7 @@ from market_structure import (
     engine_b_profile_context_enabled,
     sanitize_engine_b_structure_profile_fields,
 )
+from market_structure import _engine_b_resolve_profile_trusted_override
 
 
 def _style_profile():
@@ -248,6 +249,66 @@ def test_build_engine_b_profile_vp_context_reason_for_forex(monkeypatch):
     assert ctx["reason"] == "asset_type_untrusted_for_volume_profile"
 
 
+def test_engine_b_profile_trusted_override_enables_untrusted_group(monkeypatch):
+    """A2: per-(group,style) profile_trusted=True override in score_group_overrides
+    enables VP scoring for a group that is NOT in the global trusted list."""
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_PROFILE_SCORING_ENABLED", True)
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_PROFILE_TRUST_MODE", "score_group")
+    monkeypatch.setitem(
+        config.CONFIG,
+        "ENGINE_B_PROFILE_TRUSTED_SCORE_GROUPS",
+        ["crypto_btc", "us_stock_single"],
+    )
+    monkeypatch.setitem(
+        config.CONFIG,
+        "NAKED_ENGINE",
+        {
+            "score_group_overrides": {
+                "eu_indices": {
+                    "intraday": {"profile_trusted": True, "min_rr": 1.3},
+                    "swing": {"profile_trusted": False, "min_rr": 1.8},
+                },
+            },
+        },
+    )
+
+    # Without override: eu_indices is NOT in the global trusted list -> blocked.
+    assert engine_b_profile_context_enabled("index", score_group="eu_indices") is False
+    # With override True: eu_indices intraday is trusted via YAML override.
+    assert (
+        engine_b_profile_context_enabled(
+            "index", score_group="eu_indices", profile_trusted_override=True
+        )
+        is True
+    )
+    # With override False: eu_indices swing is explicitly disabled via YAML override.
+    assert (
+        engine_b_profile_context_enabled(
+            "index", score_group="eu_indices", profile_trusted_override=False
+        )
+        is False
+    )
+
+    # Helper resolves the override from CONFIG by (score_group, style).
+    assert _engine_b_resolve_profile_trusted_override("eu_indices", "intraday") is True
+    assert _engine_b_resolve_profile_trusted_override("eu_indices", "swing") is False
+    assert _engine_b_resolve_profile_trusted_override("eu_indices", "scalp") is None
+    assert _engine_b_resolve_profile_trusted_override("crypto_btc", "intraday") is None
+
+    # build_engine_b_profile_vp_context threads the override through.
+    ctx_on = build_engine_b_profile_vp_context(
+        "index", score_group="eu_indices", profile_trusted_override=True
+    )
+    assert ctx_on["enabled"] is True
+    assert ctx_on["trusted"] is True
+
+    ctx_off = build_engine_b_profile_vp_context(
+        "index", score_group="eu_indices", profile_trusted_override=False
+    )
+    assert ctx_off["enabled"] is False
+    assert ctx_off["trusted"] is False
+
+
 def test_calculate_confidence_forex_excludes_profile_slot(monkeypatch):
     monkeypatch.setitem(config.CONFIG, "ENGINE_B_PROFILE_SCORING_ENABLED", True)
     monkeypatch.setitem(config.CONFIG, "ENGINE_B_PROFILE_TRUST_MODE", "asset_type")
@@ -404,3 +465,34 @@ def test_strategy_classifier_rejects_return_to_poc_for_untrusted_profile(monkeyp
     )
     rejected_ids = {item["id"] for item in out["rejected_models"]}
     assert "RETURN_TO_POC_MEAN_REVERSION" in rejected_ids
+
+
+def test_engine_b_profile_trusted_groups_includes_etf_index_commodity_bond_trackers():
+    """C2: repo config trusts index ETFs, precious/energy/bond trackers for VP
+    scoring (audit MED #18). SPY/QQQ/DAX ETFs, GLD/SLV, USO/XLE, TLT have real
+    RTH volume."""
+    from market_structure import engine_b_profile_trusted_score_groups
+
+    trusted = engine_b_profile_trusted_score_groups(config.CONFIG)
+    expected_additions = {
+        "us_indices_trackers",
+        "eu_indices",
+        "asian_indices",
+        "precious_trackers",
+        "energy_oil",
+        "bond_tlt",
+    }
+    assert expected_additions.issubset(trusted), (
+        f"missing trusted groups: {expected_additions - trusted}"
+    )
+    # Original trusted groups must still be present.
+    assert {
+        "crypto_btc",
+        "crypto_eth",
+        "crypto_alt_majors",
+        "crypto_doge",
+        "crypto_other",
+        "us_stock_single",
+        "stock_other",
+        "smallcap_em_etf",
+    }.issubset(trusted)

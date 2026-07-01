@@ -1164,6 +1164,15 @@ CONFIG: dict = {
         "us_stock_single",
         "stock_other",
         "smallcap_em_etf",
+        # C2: index ETFs, precious/energy/bond trackers have real RTH volume
+        # (SPY/QQQ/DAX ETFs, GLD/SLV, USO/XLE, TLT) — VP scoring was disabled
+        # despite reliable volume (audit MED #18).
+        "us_indices_trackers",
+        "eu_indices",
+        "asian_indices",
+        "precious_trackers",
+        "energy_oil",
+        "bond_tlt",
     ],
     "ENGINE_B_CRYPTO_AGGTRADE_ENABLED": True,
     "ENGINE_B_CRYPTO_REQUIRE_AGGTRADE_FOR_PASS": True,
@@ -1245,7 +1254,7 @@ CONFIG: dict = {
     "ENGINE_A_STRUCTURAL_SL_FLOOR_ATR": True,
     "ENGINE_A_STRUCTURAL_SL_VALIDATE_SIDE": True,
     "ENGINE_A_BTC_CORR_WARN_ON_MISSING_SERIES": False,
-    "ENGINE_AB_CRYPTO_SIGNAL_FEED": "binance",
+    "ENGINE_AB_CRYPTO_SIGNAL_FEED": "bybit",
     "ENGINE_AB_CRYPTO_SIGNAL_FEED_FALLBACK": False,
     "ENGINE_A_MULTI_EXCHANGE_FUNDING": {
         "ENABLED": True,
@@ -2035,6 +2044,7 @@ CONFIG: dict = {
     "SENTIMENT_BLOCK_THRESHOLD": 0.4,
     "SENTIMENT_ALIGN_THRESHOLD": 0.3,
     "SENTIMENT_API_FAIL_CLOSED": False,
+    "SENTIMENT_GATE_SKIP_WHEN_NEWS_APPLIED": False,
     "EVENT_RISK_ENABLED": True,
     "EVENT_RISK_HOURS": 4,
     "EVENT_RISK_API_FAIL_CLOSED": False,

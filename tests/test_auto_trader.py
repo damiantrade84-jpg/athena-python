@@ -543,6 +543,25 @@ class TestCanExecuteSentimentGate:
         assert not ok
         assert "Sentiment gate unavailable" in reason
 
+    def test_skips_legacy_sentiment_when_news_already_applied(self, monkeypatch):
+        trader = AutoTrader()
+        cfg = _base_cfg()
+        cfg["SENTIMENT_GATE_ENABLED"] = True
+        cfg["AUTO_TRADE_SENTIMENT_GATE_MODE"] = "always_when_enabled"
+        cfg["NEWS_SENTIMENT_CONFLUENCE_ENABLED"] = True
+        cfg["SENTIMENT_GATE_SKIP_WHEN_NEWS_APPLIED"] = True
+
+        def _unexpected(*_args, **_kwargs):
+            raise AssertionError("check_sentiment should be skipped")
+
+        monkeypatch.setattr("sentiment_gate.check_sentiment", _unexpected)
+        sig = _passing_signal()
+        sig["newsSentimentDelta"] = 0.05
+        ok, reason = trader._sentiment_gate_allowed(sig, cfg, {}, {}, "forex")
+        assert ok
+        assert reason == ""
+        assert sig["sentimentGate"]["skippedReason"] == "news_sentiment_already_applied"
+
 
 class TestCanExecuteEventRiskGate:
     def test_blocks_on_event_risk_block(self, monkeypatch):

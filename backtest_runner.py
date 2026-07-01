@@ -44,7 +44,6 @@ from indicators import (
 )
 from factor_scoring import build_oi_context_for_factor_scoring
 from intermarket import (
-    apply_confirmation_to_score,
     FOREX_ENGINE_A_MAX_SCORE,
     build_point_in_time_context,
     discover_active_universe,
@@ -5830,7 +5829,56 @@ def backtest_pair_naked(pair: dict, style: str = "naked", validation_mode="stand
     return result
 
 
+def _attach_bt_intermarket_to_v3_signal(
+    signal_a: dict,
+    pair: dict,
+    raw_context: dict | None,
+) -> None:
+    """Attach intermarket confirmation metadata to a v3 Engine A signal dict."""
+    if not raw_context:
+        return
+    try:
+        from intermarket import apply_confirmation_to_score
 
+        direction = signal_a.get("direction")
+        if direction not in ("LONG", "SHORT"):
+            signal_a["intermarketConfirmation"] = {
+                "verdict": "neutral",
+                "score": 0.0,
+                "explanation": (
+                    "Intermarket confirmation neutral: no trade direction on signal."
+                ),
+                "unavailablePriors": list(raw_context.get("unavailablePriors") or []),
+                "driversConsidered": 0,
+                "engineADelta": 0.0,
+            }
+            signal_a["intermarketEngineADelta"] = 0.0
+            return
+        _im = apply_confirmation_to_score(
+            float(signal_a.get("confluenceScore") or signal_a.get("score") or 0.0),
+            direction,
+            pair,
+            raw_context,
+            max_score=float(signal_a.get("maxScore") or 3.0),
+            config=CONFIG,
+        )
+        confirmation = _im.get("confirmation")
+        if isinstance(confirmation, dict):
+            signal_a["intermarketConfirmation"] = confirmation
+            signal_a["intermarketEngineADelta"] = float(
+                confirmation.get("engineADelta", 0.0) or 0.0
+            )
+        adjusted = _im.get("adjusted_score")
+        if isinstance(adjusted, (int, float)):
+            adjusted_score = round(float(adjusted), 6)
+            signal_a["confluenceScore"] = adjusted_score
+            signal_a["score"] = adjusted_score
+    except Exception as exc:
+        log.debug(
+            "[ENGINE C BT] %s intermarket attach skipped: %s",
+            pair.get("display", "?"),
+            exc,
+        )
 
 
 def backtest_pair_consensus(
@@ -6182,6 +6230,11 @@ def backtest_pair_consensus(
                 {"D1": d1_ctx, "H4": h4_window, "H1": h1_window},
                 horizon="intraday",
             ).to_dict()
+            _attach_bt_intermarket_to_v3_signal(
+                signal_a,
+                pair,
+                _bt_intermarket_ctx_c,
+            )
             a_direction = (
                 signal_a.get("direction")
                 if signal_a.get("decision") in ("TRADE", "WATCH")

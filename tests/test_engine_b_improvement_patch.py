@@ -35,6 +35,56 @@ def test_engine_b_style_min_score_differentiation_can_be_enabled(monkeypatch):
     assert engine_b_min_score_threshold({"style": "swing", "min_score": 4.0}, "UNKNOWN", "forex") == 5.0
 
 
+def test_engine_b_min_score_per_group_override_wins_over_style_floor(monkeypatch):
+    """C3: when ENGINE_B_STYLE_MIN_SCORE_DIFFERENTIATION_ENABLED is true AND a
+    per-(group,style) min_score override exists in score_group_overrides, the
+    override wins over the global style floor (audit MED #6)."""
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_STYLE_MIN_SCORE_DIFFERENTIATION_ENABLED", True)
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_REGIME_MULTIPLIERS_ENABLED", False)
+    monkeypatch.setitem(
+        config.CONFIG,
+        "ENGINE_B_STYLE_MIN_SCORE_BY_STYLE",
+        {"scalp": 4.0, "intraday": 4.5, "swing": 5.0},
+    )
+    monkeypatch.setitem(
+        config.CONFIG,
+        "NAKED_ENGINE",
+        {
+            "score_group_overrides": {
+                "nat_gas": {
+                    "intraday": {"min_score": 5.5},
+                    "swing": {"min_score": 6.0},
+                },
+            },
+        },
+    )
+
+    # Per-group override (5.5) wins over style floor (4.5).
+    assert engine_b_min_score_threshold(
+        {"style": "intraday", "min_score": 4.5, "score_group": "nat_gas"},
+        "UNKNOWN",
+        "commodity",
+    ) == 5.5
+    # Per-group override (6.0) wins over style floor (5.0).
+    assert engine_b_min_score_threshold(
+        {"style": "swing", "min_score": 5.0, "score_group": "nat_gas"},
+        "UNKNOWN",
+        "commodity",
+    ) == 6.0
+    # No per-group override for scalp → style floor (4.0) wins.
+    assert engine_b_min_score_threshold(
+        {"style": "scalp", "min_score": 4.0, "score_group": "nat_gas"},
+        "UNKNOWN",
+        "commodity",
+    ) == 4.0
+    # No per-group override for forex_majors → style floor wins.
+    assert engine_b_min_score_threshold(
+        {"style": "intraday", "min_score": 4.5, "score_group": "forex_majors"},
+        "UNKNOWN",
+        "forex",
+    ) == 4.5
+
+
 def test_engine_b_crypto_aggtrade_degraded_mode_penalizes_without_failing(monkeypatch):
     monkeypatch.setitem(config.CONFIG, "ENGINE_B_CRYPTO_AGGTRADE_ENABLED", True)
     monkeypatch.setitem(config.CONFIG, "ENGINE_B_CRYPTO_REQUIRE_AGGTRADE_FOR_PASS", True)
@@ -135,6 +185,80 @@ def test_engine_b_rr_space_substitution_keeps_min_atr_floor(monkeypatch):
     assert blocked["rr_ok"] is True
     assert blocked["space_gate_ok"] is False
     assert allowed["space_gate_ok"] is True
+
+
+def test_engine_b_space_rr_substitute_profile_override_enables_gate(monkeypatch):
+    """A1: space_rr_substitute=True in the per-(group,style) style_profile
+    enables the RR-for-room substitute even when the global
+    ENGINE_B_RR_CAN_SATISFY_SPACE_GATE flag is False (its default)."""
+    monkeypatch.setitem(
+        config.CONFIG,
+        "ENGINE_B_RR_CAN_SATISFY_SPACE_GATE",
+        {"default": False, "forex": False, "crypto": False},
+    )
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_FOREX_RR_CAN_SATISFY_SPACE_GATE", False)
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_SPACE_RR_SUBSTITUTE_MIN_ATR_FLOOR_ENABLED", True)
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_SPACE_RR_SUBSTITUTE_MIN_ATR_FLOOR", 0.5)
+
+    base = {
+        "atr": 1.0,
+        "asset_type": "crypto",
+        "current_swing_sequence": "HH_HL",
+        "macro_swing_sequence": "HH_HL",
+        "bos_confirmed": True,
+        "liquidity_sweep": False,
+        "choch_confirmed": False,
+        "zone_touched": True,
+        "near_active_zone": False,
+        "trigger_ok": True,
+        "bos_volume_confirmed": True,
+        "strong_close": True,
+        "inside_break_candle": False,
+        "engulfing_candle": False,
+        "ob_at_zone": True,
+        "breaker_block": False,
+        "bos_mtf_confirmed": False,
+        "distance_to_res": 0.5,
+        "distance_to_sup": 5.0,
+        "recommended_stop_loss": 99.0,
+        "recommended_take_profit": 105.0,
+    }
+    style_with_override = {
+        "style": "scalp",
+        "min_score": 4.0,
+        "min_room_atr": 1.0,
+        "min_rr": 1.0,
+        "fallback_rr": 2.0,
+        "require_macro_align": False,
+        "space_rr_substitute": True,
+    }
+    style_without_override = {
+        "style": "scalp",
+        "min_score": 4.0,
+        "min_room_atr": 1.0,
+        "min_rr": 1.0,
+        "fallback_rr": 2.0,
+        "require_macro_align": False,
+    }
+
+    with_override = NakedEngine().calculate_confidence(
+        base, 100.0, "LONG", style_profile=style_with_override
+    )
+    without_override = NakedEngine().calculate_confidence(
+        base, 100.0, "LONG", style_profile=style_without_override
+    )
+
+    assert with_override["rr_ok"] is True
+    assert with_override["space_gate_ok"] is True
+    assert with_override["rr_space_gate_enabled"] is True
+    assert with_override["space_rr_substitute_override_active"] is True
+    assert with_override["space_rr_substitute_override_value"] is True
+
+    assert without_override["rr_ok"] is True
+    assert without_override["space_gate_ok"] is False
+    assert without_override["rr_space_gate_enabled"] is False
+    assert without_override["space_rr_substitute_override_active"] is False
+    assert without_override["space_rr_substitute_override_value"] is None
 
 
 def test_engine_b_execution_sl_clamps_to_min_and_max_atr(monkeypatch):

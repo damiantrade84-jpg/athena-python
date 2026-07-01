@@ -81,6 +81,8 @@ def _engine_b_scan_freshness_stale_tfs(
     h1: list | None,
     *,
     config: dict | None = None,
+    score_group: str | None = None,
+    style: str | None = None,
 ) -> tuple[list[str], dict[str, dict]]:
     """Return stale TF labels for Engine B scan when freshness gate is enabled."""
     cfg = config or CONFIG
@@ -89,6 +91,7 @@ def _engine_b_scan_freshness_stale_tfs(
 
     try:
         from athena_app.services.data_freshness import (
+            d1_consumed_by_score_group,
             pre_scoring_allows_confirmed_only_stale_1,
             pre_scoring_allows_intraday_calendar_gap,
         )
@@ -108,6 +111,14 @@ def _engine_b_scan_freshness_stale_tfs(
         "etf_bond",
     )
     allow_confirmed_only_stale_1 = pre_scoring_allows_confirmed_only_stale_1(pair)
+    # B3: skip the D1 freshness BLOCK when the (score_group, style) does not
+    # consume D1 for trend/momentum scoring. The diagnostic is still recorded
+    # for display. Mirrors Engine A's behaviour at athena.py:13351-13369.
+    # Without this, energy_oil/commodity_other intraday were blocked on stale
+    # D1 that doesn't affect their score (audit MED #9). Conservative default
+    # True (require D1) when score_group/style are not supplied, preserving the
+    # historic fail-closed D1 gate for callers that don't pass the new args.
+    d1_required = d1_consumed_by_score_group(score_group, style) if score_group else True
 
     for tf, candles in (("D1", d1), ("H4", h4), ("H1", h1)):
         diag = candle_freshness_diagnostic(
@@ -119,6 +130,11 @@ def _engine_b_scan_freshness_stale_tfs(
         freshness_diag[tf] = diag
         sev = diag.get("stalenessSeverity", "")
         if not sev or sev == "fresh":
+            continue
+
+        # B3: D1 only blocks pre-scoring when D1 feeds this group's trend/momentum
+        # scoring. The diagnostic stays in freshness_diag for display.
+        if tf == "D1" and not d1_required:
             continue
 
         if allow_confirmed_only_stale_1 and sev == "stale_1_bucket":
@@ -147,7 +163,7 @@ def _engine_b_scan_freshness_stale_tfs(
 
         stale_tfs.append(f"{tf}:{sev}")
 
-    if pair.get("type") == "crypto" and d1:
+    if pair.get("type") == "crypto" and d1 and d1_required:
         try:
             from scalp_engine import _coerce_utc_datetime, _current_utc_datetime
 
@@ -1799,6 +1815,25 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict[s
                     intermarket_snapshot=intermarket_snapshot,
                 )
 
+                if sig_a:
+                    try:
+                        from news_sentiment_feed import apply_news_sentiment_to_scan_result
+
+                        apply_news_sentiment_to_scan_result(
+                            sig_a,
+                            pair,
+                            config=CONFIG,
+                            eodhd_ticker_for_pair=r.eodhd_ticker_for_pair,
+                            threshold=sig_a.get("threshold"),
+                            max_score=sig_a.get("maxScore", 3.0),
+                        )
+                    except Exception as _news_sent_exc:
+                        log.debug(
+                            "[SCAN] %s news sentiment blend skipped: %s",
+                            pair.get("display", "?"),
+                            _news_sent_exc,
+                        )
+
                 # Attach execution-gate freshness so the scan UI shows execution
                 # blocks. analyze_pair only sets dataFreshness from the pre-scoring
                 # gate (allowed=True); the execution gate is stricter and can block
@@ -2066,7 +2101,9 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict[s
 
                     if zone_candles_b and entry_candles_b and atr_candles_b:
                         _stale_b_tfs, _fresh_diag_b = _engine_b_scan_freshness_stale_tfs(
-                            pair, d1, h4, h1
+                            pair, d1, h4, h1,
+                            score_group=_pair_score_group,
+                            style=resolved_style_b,
                         )
                         if _stale_b_tfs:
                             _fresh_reason = "STALE_DATA_ENGINE_B:" + ",".join(_stale_b_tfs)
