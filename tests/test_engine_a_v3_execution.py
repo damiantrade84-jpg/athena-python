@@ -183,7 +183,11 @@ def test_manual_routes_refresh_and_attest_before_risk_without_force_or_overrides
 
     regular_source = inspect.getsource(execution.api_execute)
     assert "ENGINE_A_V3_FORCE_FORBIDDEN" in regular_source
-    assert '"min_lot"' in regular_source
+    # Manual volume mode is resolved by risk_engine (EXECUTION_VOLUME config),
+    # not hard-forced to min_lot for v3.
+    assert '_volume_mode = "min_lot"' not in regular_source
+    quick_source = inspect.getsource(execution.api_quick_execute)
+    assert '_volume_mode = "min_lot"' not in quick_source
 
 
 def test_ai_review_is_advisory_for_v3_but_legacy_veto_is_preserved():
