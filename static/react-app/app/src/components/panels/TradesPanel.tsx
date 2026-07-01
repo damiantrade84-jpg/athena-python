@@ -31,9 +31,36 @@ interface OpenTradesTimedResp {
   error?: string;
 }
 
+// /api/score-decay — advisory-only re-scoring of live broker positions.
+// Backend (athena.py _check_score_decay) already restricts this to pairs open
+// at MT5/Bybit; keyed by pair display name.
+interface RegimeShiftInfo {
+  classification?: string;
+  advisory?: string;
+  confidence?: number;
+}
+interface ScoreDecayRow {
+  engine?: string;
+  decayPct?: number;
+  directionFlip?: boolean;
+  scoreNote?: string;
+  currentDirection?: string;
+  aiVerdict?: string;
+  aiUrgency?: string;
+  aiReasoning?: string;
+  regimeShift?: RegimeShiftInfo;
+}
+
 type AnyPos = Record<string, unknown>;
 
 const OPEN_TRADES_POLL_MS = 2000;
+// Decay recomputes on a ~250s server cadence; 30s polling is ample.
+const SCORE_DECAY_POLL_MS = 30000;
+
+/** Normalize a pair label for cross-source matching (EUR/USD ↔ EURUSD). */
+function normPair(v: unknown): string {
+  return String(v ?? '').replace(/[/\s]/g, '').toUpperCase();
+}
 
 function asArray<T = AnyPos>(x: unknown): T[] {
   if (Array.isArray(x)) return x as T[];
@@ -94,6 +121,46 @@ function AutoTradeLogRow({ entry }: { entry: Record<string, unknown> }) {
   );
 }
 
+/** Advisory badge for a decaying open position. Advisory only — no execution. */
+function DecayAdvisoryBadge({ info }: { info?: ScoreDecayRow }) {
+  if (!info) return <span className="text-[10px] text-muted-foreground">—</span>;
+  const decayPct = num(info.decayPct);
+  const flip = info.directionFlip === true;
+  const verdict = String(info.aiVerdict || '').toUpperCase();
+  const regime = String(info.regimeShift?.classification || '').toUpperCase();
+
+  const danger = flip || decayPct >= 40 || verdict === 'EXIT' || regime === 'FAKE';
+  const warn = !danger && (decayPct >= 25 || verdict === 'WATCH');
+
+  // Evaluated but nothing to flag — position looks healthy.
+  if (!danger && !warn) {
+    return <span className="text-[10px] text-muted-foreground">ok</span>;
+  }
+
+  const tone = danger ? 'text-short border-short/50' : 'text-warning border-warning/50';
+  const label = flip ? 'FLIP' : decayPct >= 25 ? `▼${decayPct.toFixed(0)}%` : (verdict || 'WATCH');
+
+  const tip = [
+    info.scoreNote ? `Score: ${info.scoreNote}` : '',
+    decayPct ? `Decay: ${decayPct.toFixed(0)}% from entry` : '',
+    flip ? `Direction flip vs entry (now ${str(info.currentDirection)})` : '',
+    verdict ? `AI verdict: ${verdict}${info.aiUrgency ? ` · ${info.aiUrgency}` : ''}` : '',
+    info.aiReasoning ? String(info.aiReasoning) : '',
+    regime ? `Regime: ${regime}${info.regimeShift?.advisory ? ` — ${info.regimeShift.advisory}` : ''}` : '',
+  ].filter(Boolean).join('\n');
+
+  return (
+    <div className="flex flex-col items-end gap-0.5" title={tip}>
+      <Badge variant="outline" className={`text-[10px] h-5 font-mono ${tone}`}>{label}</Badge>
+      {verdict ? (
+        <span className={`text-[9px] font-mono ${verdict === 'EXIT' ? 'text-short' : verdict === 'HOLD' ? 'text-long' : 'text-warning'}`}>
+          AI {verdict}
+        </span>
+      ) : null}
+    </div>
+  );
+}
+
 export default function TradesPanel() {
   const { showToast } = useStore();
   const [activeTab, setActiveTab] = useState('open');
@@ -106,6 +173,7 @@ export default function TradesPanel() {
   const [auditOrphanBulk, setAuditOrphanBulk] = useState(false);
 
   const { data: openTradesResp, loading: openLoading, error: openError, refresh: refreshOpen } = useApiPoll<OpenTradesTimedResp>('/api/open-trades-timed', OPEN_TRADES_POLL_MS);
+  const { data: scoreDecayResp } = useApiPoll<Record<string, ScoreDecayRow>>('/api/score-decay', SCORE_DECAY_POLL_MS);
   const { data: performance, loading: perfLoading, error: perfError, refresh: refreshPerf } = useApiPoll<PerformanceMetrics>('/api/performance', 0);
   const { data: autoLog } = useApiPoll<unknown>('/api/auto-trade/log', 0);
   const { data: failedExecs } = useApiPoll<unknown>('/api/failed-executions', 0);
@@ -145,6 +213,16 @@ export default function TradesPanel() {
     () => asArray(openTradesResp),
     [openTradesResp],
   );
+  // Decay/advisory keyed by normalized pair for row lookup.
+  const decayByPair = useMemo<Record<string, ScoreDecayRow>>(() => {
+    const out: Record<string, ScoreDecayRow> = {};
+    if (scoreDecayResp && typeof scoreDecayResp === 'object') {
+      for (const [k, v] of Object.entries(scoreDecayResp)) {
+        if (v && typeof v === 'object') out[normPair(k)] = v as ScoreDecayRow;
+      }
+    }
+    return out;
+  }, [scoreDecayResp]);
   const unresolvedAudit = useMemo<AnyPos[]>(() => {
     if (!openTradesResp || Array.isArray(openTradesResp)) return [];
     return Array.isArray(openTradesResp.audit_unresolved) ? openTradesResp.audit_unresolved : [];
@@ -274,6 +352,7 @@ export default function TradesPanel() {
                         <TableHead className="text-[10px] uppercase text-right">SL / Close</TableHead>
                         <TableHead className="text-[10px] uppercase text-right">TP</TableHead>
                         <TableHead className="text-[10px] uppercase">Style</TableHead>
+                        <TableHead className="text-[10px] uppercase text-right">Advisory</TableHead>
                         <TableHead className="text-[10px] uppercase text-right">Action</TableHead>
                       </TableRow>
                     </TableHeader>
@@ -324,6 +403,9 @@ export default function TradesPanel() {
                             </TableCell>
                             <TableCell className="text-xs font-mono text-right text-long">{fmtNum(tp, 5)}</TableCell>
                             <TableCell className="text-[10px] font-mono text-muted-foreground">{style}</TableCell>
+                            <TableCell className="text-right">
+                              <DecayAdvisoryBadge info={decayByPair[normPair(pairLabel)]} />
+                            </TableCell>
                             <TableCell className="text-right">
                               <Button
                                 size="sm"
