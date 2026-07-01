@@ -25,7 +25,7 @@ def test_scalp_workbench_ai_capture_posts_server_trusted_review():
     panel = _read(SCALP_WORKBENCH)
     helper = _read(AI_SCALP_HELPER)
 
-    assert "postScalpChartReview" in panel
+    assert "streamScalpChartReview" in panel
     assert "AIReviewProviderToggle" in panel
     assert "aiReviewProvider" in panel
     assert "setAiReviewProvider" in panel
@@ -35,6 +35,7 @@ def test_scalp_workbench_ai_capture_posts_server_trusted_review():
     assert "downscaleToCap" in panel
     assert "/api/ai/scalp-chart-review" in helper
     assert "postScalpChartReview" in helper
+    assert "streamScalpChartReview" in helper
     assert "chart_snapshot" in helper
     assert "rendered_layers" in helper
     assert "ScalpAIReviewCard" in panel
@@ -107,7 +108,8 @@ def test_scalp_workbench_execute_scalp_button():
     assert "/api/scalp-execute" in source
     assert "buildScalpExecutePayload" in source
     assert "evaluateScalpExecuteBlock" in source
-    assert "useApiPoll<{ paper_mode?: boolean }>('/api/health'" in source
+    assert "scalp_execution_mode?: ScalpExecutionMode" in source
+    assert "scalp_execute_requires_ai_review?: boolean" in source
     assert "isPaper" in source
     assert "Confirm Scalp Execution" in source
     assert "refresh/revalidate before order" in source
@@ -238,8 +240,10 @@ def test_scalp_workbench_overlay_layers_use_api_zone_keys():
     assert "bottom" in layers
     assert "choch_level" in layers or "chochLevel" in snapshot
     assert "last_broken_high" in layers or "last_broken_high" in snapshot
-    assert "zone.lower ?? zone.bottom ?? zone.low" in layers
-    assert "zone.upper ?? zone.top ?? zone.high" in layers
+    assert ".lower ??" in layers
+    assert ".bottom ?? zone.low" in layers
+    assert ".upper ??" in layers
+    assert ".top ?? zone.high" in layers
 
 
 def test_scalp_workbench_builds_chart_snapshot_with_profile_liquidity_engineb_orderflow():
@@ -296,12 +300,43 @@ def test_scalp_workbench_ab_execute_lock_keeps_hard_block_fail_closed():
     assert "if (mechanical === 'Blocked') return mechanical" in ab_branch
 
 
+def test_scalp_workbench_execute_lock_allows_paper_mode_and_reads_health_contract():
+    helper = _read(ROOT / "static/react-app/app/src/lib/manualExecuteHelpers.ts")
+    source = _read(SCALP_WORKBENCH)
+    body_start = helper.index("export function evaluateScalpExecuteBlock")
+    body = helper[body_start: helper.index("\n}\n", body_start) + 3]
+
+    assert "executionMode?: ScalpExecutionMode" in helper
+    assert "requireAiReview?: boolean" in helper
+    assert "if (isPaper) return 'Paper mode'" not in body
+    assert "scalp_execution_mode?: ScalpExecutionMode" in source
+    assert "scalp_execute_requires_ai_review?: boolean" in source
+
+
+def test_scalp_workbench_paper_mode_posts_paper_endpoint():
+    source = _read(SCALP_WORKBENCH)
+
+    assert "executeEndpoint" in source
+    assert "'/api/scalp-paper-execute'" in source
+    assert "executionMode" in source
+    assert "requireAiReview" in source
+    assert "Paper Execute" in source
+
+
 def test_scalp_workbench_execute_callback_depends_on_review_id():
     source = _read(SCALP_WORKBENCH)
     start = source.index("const onConfirmScalpExecute = useCallback")
     body = source[start: source.index("const flagWatchSetup", start)]
     assert "reviewId: scalpAiReviewResponse?.review_id ?? null" in body
     assert "scalpAiReviewResponse?.review_id" in body[body.rindex("}, ["):]
+
+
+def test_scalp_lab_direct_execute_routes_to_workbench():
+    source = _read(ROOT / "static/react-app/app/src/components/panels/ScalpLabPanel.tsx")
+
+    assert "canOpenWorkbench" in source
+    assert "onOpenWorkbenchAndReview(sig)" in source
+    assert "Open Workbench" in source
 
 
 def test_scalp_workbench_layout_keeps_chart_and_ai_verdict_visible():

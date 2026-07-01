@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 
 from ai_review.persistence import ensure_schema, record_review
 from ai_scalp_review.execute_gate import (
+    engine_d_paper_demo_execution_block_reason,
     resolve_engine_d_execute_gate,
     scalp_ai_review_allows_entry,
 )
@@ -130,6 +131,74 @@ def test_watchlist_ab_candidate_allowed_with_fresh_ai_review():
     )
     assert reason is None
     assert review is not None
+
+
+def test_paper_demo_gate_allows_advisory_ab_without_ai_review():
+    signal = {
+        "pair": "EUR/USD",
+        "direction": "LONG",
+        "ai_grade": "B",
+        "gate_result": "WATCHLIST",
+        "executable": False,
+        "candidate_status": "rr_below_min",
+        "fail_reasons": [],
+        "soft_warnings": ["rr_below_min", "fee_guard_high_cost"],
+        "price": 1.1,
+        "sl": 1.095,
+        "tp1": 1.11,
+    }
+
+    reason = engine_d_paper_demo_execution_block_reason(
+        signal,
+        review_id=None,
+        audit_db=None,
+        cfg=_cfg(requires_ai=False),
+    )
+
+    assert reason is None
+
+
+def test_paper_demo_gate_blocks_grade_c_even_with_ai_disabled():
+    signal = {
+        "pair": "EUR/USD",
+        "direction": "LONG",
+        "ai_grade": "C",
+        "gate_result": "PASS",
+        "executable": True,
+        "price": 1.1,
+        "sl": 1.095,
+        "tp1": 1.11,
+    }
+
+    reason = engine_d_paper_demo_execution_block_reason(
+        signal,
+        review_id=None,
+        audit_db=None,
+        cfg=_cfg(requires_ai=False),
+    )
+
+    assert reason == "ENGINE_D_GRADE_BELOW_B_NOT_EXECUTABLE"
+
+
+def test_paper_demo_gate_blocks_missing_levels():
+    signal = {
+        "pair": "EUR/USD",
+        "direction": "LONG",
+        "ai_grade": "B",
+        "gate_result": "PASS",
+        "executable": True,
+        "price": 1.1,
+        "tp1": 1.11,
+    }
+
+    reason = engine_d_paper_demo_execution_block_reason(
+        signal,
+        review_id=None,
+        audit_db=None,
+        cfg=_cfg(requires_ai=False),
+    )
+
+    assert reason == "ENGINE_D_LEVELS_MISSING"
 
 
 def test_tvq_blocked_candidate_not_reopened_by_ai_review():

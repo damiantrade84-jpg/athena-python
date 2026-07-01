@@ -6,6 +6,7 @@ import json
 import sqlite3
 import time
 import traceback
+import uuid
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 from datetime import datetime, timezone
 
@@ -32,7 +33,7 @@ from candles_cache import (
 )
 from config import _json_safe, scan_candle_limits
 from engine_c import compute_consensus, normalise_engine_a
-from execution_lifecycle import run_managed_execution
+from execution_lifecycle import _demo_broker_execution_requested, run_managed_execution
 from factor_scoring import make_regime_smoothing_context
 from indicators import calc_atr, calc_indicators_with_normalized
 from intermarket import build_scan_snapshot
@@ -399,6 +400,60 @@ def _engine_d_execution_block_reason(
         audit_db=audit_db,
         cfg=cfg or {},
     )
+
+
+def _engine_d_paper_demo_execution_block_reason(
+    sig: dict,
+    *,
+    review_id: str | None = None,
+    audit_db: str | None = None,
+    cfg: dict | None = None,
+    require_ai_review: bool | None = None,
+) -> str | None:
+    """Return the paper/demo scalp block reason while allowing advisory A/B demotions."""
+    from ai_scalp_review.execute_gate import engine_d_paper_demo_execution_block_reason
+
+    return engine_d_paper_demo_execution_block_reason(
+        sig,
+        review_id=review_id,
+        audit_db=audit_db,
+        cfg=cfg or {},
+        require_ai_review=require_ai_review,
+    )
+
+
+def _payload_bool(value) -> bool | None:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        raw = value.strip().lower()
+        if raw in ("1", "true", "yes", "on"):
+            return True
+        if raw in ("0", "false", "no", "off"):
+            return False
+    return None
+
+
+def _payload_require_ai_review(payload: dict | None) -> bool | None:
+    payload = payload or {}
+    for key in ("require_ai_review", "requireAiReview"):
+        if key in payload:
+            return _payload_bool(payload.get(key))
+    return None
+
+
+def _requested_scalp_execution_mode(payload: dict | None) -> str:
+    mode = str((payload or {}).get("execution_mode") or (payload or {}).get("executionMode") or "").strip().lower()
+    return mode if mode in ("paper", "demo", "live") else ""
+
+
+def _scalp_demo_execution_requested(venue: str, cfg: dict | None) -> bool:
+    try:
+        if str((cfg or {}).get("EXECUTOR_MODE") or "").strip().lower() == "demo":
+            return True
+    except Exception:
+        pass
+    return _demo_broker_execution_requested(venue)
 
 
 def _engine_a_trade_gate_block_reason(
@@ -2622,6 +2677,13 @@ def register_execution_routes(app: Flask) -> None:
             api_scalp_execute,
             methods=["POST"],
         )
+    if "/api/scalp-paper-execute" not in rules:
+        app.add_url_rule(
+            "/api/scalp-paper-execute",
+            "api_scalp_paper_execute",
+            api_scalp_paper_execute,
+            methods=["POST"],
+        )
     if "/api/risk-preview" not in rules:
         app.add_url_rule(
             "/api/risk-preview",
@@ -2688,6 +2750,232 @@ def api_scalp_scan():
     except Exception as e:
         rt().log.error(f"[SCALP API] Scan error: {e}")
         return jsonify({"error": str(e)}), 500
+
+
+def api_scalp_paper_execute():
+    """Paper-only Engine D scalp execution logger.
+
+    This path never calls broker account/order APIs. It revalidates the setup
+    against a fresh scalp scan, runs deterministic risk and guardian checks,
+    then writes an audit-only paper ticket.
+    """
+    _r = rt()
+    d = request.get_json() or {}
+    cfg = _r.CONFIG or {}
+    paper_cfg = cfg.get("PAPER_SOAK") if isinstance(cfg.get("PAPER_SOAK"), dict) else {}
+
+    if bool(cfg.get("REAL_ORDERS_ALLOWED", False)) or bool(paper_cfg.get("REAL_ORDERS_ALLOWED", False)):
+        return jsonify({"success": False, "error": "REAL_ORDERS_ALLOWED is true - paper endpoint blocked"}), 403
+    if not bool(paper_cfg.get("ENABLED", False)):
+        return jsonify({"success": False, "error": "PAPER_SOAK.ENABLED is false - paper mode is off"}), 403
+
+    symbol = str(d.get("symbol") or "").strip()
+    client_signal = d.get("signal") if isinstance(d.get("signal"), dict) else None
+    if not symbol:
+        return jsonify({"success": False, "error": "Missing symbol"}), 400
+
+    try:
+        from scalp_engine import rebase_scalp_signal_levels, run_scalp_scan
+        from risk_engine import risk_check
+
+        scan = run_scalp_scan([symbol])
+        raw_signals = scan.get("signals", []) or []
+        if not raw_signals:
+            reason = scan.get("reason") or "No valid scalp setup found"
+            skipped = scan.get("skipped", []) or []
+            if skipped:
+                reason = skipped[0].get("reason", reason)
+            return jsonify(
+                {
+                    "success": False,
+                    "error": reason,
+                    "skipped": skipped,
+                    "fresh_scan": {
+                        "signals": [],
+                        "skipped": skipped,
+                        "session": scan.get("session"),
+                        "reason": scan.get("reason"),
+                    },
+                }
+            ), 200
+
+        if client_signal:
+            requested_symbol = str(
+                client_signal.get("symbol")
+                or client_signal.get("pair")
+                or client_signal.get("display")
+                or ""
+            ).strip()
+            requested_direction = str(client_signal.get("direction") or "").upper()
+            if requested_symbol and requested_symbol != symbol:
+                return jsonify({"success": False, "error": "Signal symbol mismatch"}), 200
+            if requested_direction not in ("LONG", "SHORT"):
+                return jsonify({"success": False, "error": "Signal direction missing"}), 200
+            signal = next(
+                (
+                    s
+                    for s in raw_signals
+                    if str(s.get("pair") or "").strip() == symbol
+                    and str(s.get("direction") or "").upper() == requested_direction
+                ),
+                None,
+            )
+            if signal is None:
+                fresh_dirs = sorted(
+                    {
+                        str((s.get("direction") or "")).upper()
+                        for s in raw_signals
+                        if s.get("direction")
+                    }
+                )
+                if fresh_dirs:
+                    return jsonify(
+                        {
+                            "success": False,
+                            "error": (
+                                f"SIGNAL_FLIPPED: {symbol} is now {'/'.join(fresh_dirs)} "
+                                f"(was {requested_direction})"
+                            ),
+                            "newDirection": fresh_dirs[0] if len(fresh_dirs) == 1 else fresh_dirs,
+                        }
+                    ), 200
+                return jsonify(
+                    {
+                        "success": False,
+                        "error": f"SETUP_INVALIDATED: {symbol} {requested_direction} is no longer a valid scalp setup",
+                    }
+                ), 200
+        else:
+            signal = raw_signals[0]
+
+        signal, _rebase_error = rebase_scalp_signal_levels(signal, symbol, {})
+        if _rebase_error:
+            return jsonify({"success": False, "error": _rebase_error, "fresh_scan": scan}), 400
+
+        review_id = str(d.get("review_id") or d.get("ai_review_id") or "").strip() or None
+        block_reason = _engine_d_paper_demo_execution_block_reason(
+            signal,
+            review_id=review_id,
+            audit_db=getattr(_r, "AUDIT_DB", None),
+            cfg=cfg,
+            require_ai_review=_payload_require_ai_review(d),
+        )
+        if block_reason:
+            return jsonify(
+                {
+                    "success": False,
+                    "error": block_reason,
+                    "skipped": [
+                        {
+                            "pair": signal.get("pair") or symbol,
+                            "reason": block_reason,
+                            "gate_result": signal.get("gate_result"),
+                            "ai_grade": signal.get("ai_grade"),
+                            "ai_score": signal.get("ai_score"),
+                            "fail_reasons": signal.get("fail_reasons", []),
+                        }
+                    ],
+                    "fresh_scan": scan,
+                }
+            ), 200
+
+        _volume_mode, _exec_context, _ = parse_execution_volume_args(d)
+        _sizing_override = merge_scalp_sizing_override(_volume_mode, d, signal)
+        _hydrate_execution_candle_quality(signal, _r=_r)
+
+        paper_balance = float(paper_cfg.get("ACCOUNT_BALANCE", 10000.0) or 10000.0)
+        approval = risk_check(
+            signal=signal,
+            account_balance=paper_balance,
+            account_equity=paper_balance,
+            open_positions=[],
+            symbol_info=None,
+            kill_switch=_r.kill_switch(),
+            sizing_override=_sizing_override,
+            account_domain="paper",
+            volume_mode=_volume_mode,
+            execution_context=_exec_context,
+        )
+        if not approval.approved:
+            return jsonify(
+                {
+                    "success": False,
+                    "error": f"Risk engine rejected: {approval.reason}",
+                    "approval": approval.to_dict(),
+                }
+            ), 409
+
+        account = {"balance": paper_balance, "equity": paper_balance, "risk_domain": "paper"}
+        positions_resp = {"positions": []}
+        _ptc_ok, _ptc_reason = _guardian_pre_trade(signal, [], account, positions_resp)
+        if not _ptc_ok:
+            return jsonify({"success": False, "error": f"Guardian: {_ptc_reason}"}), 409
+
+        ticket = f"paper-scalp-{uuid.uuid4().hex[:12]}"
+        try:
+            _factors_json = json.dumps(
+                {
+                    "paper_execute": True,
+                    "vp_poc": signal.get("vp_poc"),
+                    "vp_vah": signal.get("vp_vah"),
+                    "vp_val": signal.get("vp_val"),
+                    "ai_score": signal.get("ai_score"),
+                    "soft_warnings": signal.get("soft_warnings", []),
+                    "candidate_status": signal.get("candidate_status"),
+                }
+            )
+            with timed_sqlite_connect(
+                _r.AUDIT_DB, timeout=15.0, label="scalp_paper_execute.audit.connect"
+            ) as con:
+                timed_sqlite_execute_write(
+                    con,
+                    "INSERT INTO audit_log("
+                    "ts,pair,score,max_score,engine,direction,grade,risk,style,"
+                    "entry_price,sl,tp,tp_partial,tp2,volume,ticket,risk_amount,risk_pct,"
+                    "asset_class,regime,factors_json"
+                    ") VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    (
+                        datetime.now(timezone.utc).isoformat(),
+                        signal.get("pair") or symbol,
+                        signal.get("confluenceScore") or signal.get("ai_score"),
+                        1.0,
+                        "scalp",
+                        signal.get("direction"),
+                        "SCALP-PAPER-EXECUTE",
+                        f"${approval.risk_amount}",
+                        "paper",
+                        signal.get("price") or signal.get("entry"),
+                        signal.get("sl"),
+                        signal.get("tp1") or signal.get("tp"),
+                        signal.get("tp_partial"),
+                        signal.get("tp2"),
+                        getattr(approval, "volume", None),
+                        ticket,
+                        approval.risk_amount,
+                        approval.risk_pct,
+                        signal.get("type"),
+                        signal.get("market_state"),
+                        _factors_json,
+                    ),
+                    label="scalp_paper_execute.audit.insert",
+                )
+        except Exception as audit_exc:
+            _r.log.warning(f"[SCALP PAPER EXEC] audit_log insert failed: {audit_exc}")
+            return jsonify({"success": False, "error": f"AUDIT_INSERT_FAILED: {audit_exc}"}), 500
+
+        return jsonify(
+            {
+                "success": True,
+                "ticket": ticket,
+                "volume": getattr(approval, "volume", None),
+                "entry_price": signal.get("price") or signal.get("entry"),
+                "approval": approval.to_dict(),
+                "message": "Scalp paper execution logged - no broker order placed",
+            }
+        )
+    except Exception as e:
+        _r.log.error(f"[SCALP PAPER EXEC] Execute error: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
 
 
 def api_scalp_execute():
@@ -2758,12 +3046,23 @@ def api_scalp_execute():
         from ai_scalp_review.execute_gate import engine_d_signal_hard_block
 
         hard_block_reason = engine_d_signal_hard_block(sig)
-        _block_reason = _engine_d_execution_block_reason(
-            sig,
-            review_id=review_id,
-            audit_db=getattr(_r, "AUDIT_DB", None),
-            cfg=_r.CONFIG,
-        )
+        if _requested_scalp_execution_mode(d) == "paper":
+            return jsonify({"error": "USE_SCALP_PAPER_EXECUTE", "success": False}), 400
+        if _scalp_demo_execution_requested(_exec_venue, _r.CONFIG):
+            _block_reason = _engine_d_paper_demo_execution_block_reason(
+                sig,
+                review_id=review_id,
+                audit_db=getattr(_r, "AUDIT_DB", None),
+                cfg=_r.CONFIG,
+                require_ai_review=_payload_require_ai_review(d),
+            )
+        else:
+            _block_reason = _engine_d_execution_block_reason(
+                sig,
+                review_id=review_id,
+                audit_db=getattr(_r, "AUDIT_DB", None),
+                cfg=_r.CONFIG,
+            )
         if _block_reason:
             body = {"error": _block_reason, "success": False}
             if hard_block_reason:

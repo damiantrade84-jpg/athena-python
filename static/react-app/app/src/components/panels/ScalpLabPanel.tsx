@@ -214,6 +214,12 @@ function isSignalExecutable(sig: ScalpSignal): boolean {
   return sig.executable === true && String(sig.gate_result || '').toUpperCase() === 'PASS';
 }
 
+function canOpenWorkbench(sig: ScalpSignal): boolean {
+  const symbol = String(sig.symbol || sig.pair || sig.display || '').trim();
+  const direction = String(sig.direction || '').toUpperCase();
+  return Boolean(symbol) && (direction === 'LONG' || direction === 'SHORT');
+}
+
 function invalidateScalpSignal(
   scan: ScalpScanResponse | null,
   symbol: string,
@@ -525,7 +531,7 @@ export default function ScalpLabPanel() {
                                 livePriceSource={sourceFor(s)}
                                 selected={selected === s}
                                 onSelect={setScalpLabSelectedCache}
-                                onExecute={requestExecute}
+                                onExecute={openWorkbenchAndReview}
                               />
                             ))}
                           </div>
@@ -667,6 +673,7 @@ function ScalpCard({
   const rr = sig.rr ?? sig.rr1;
   const sizeMult = sig.size_multiplier;
   const exec = isSignalExecutable(sig);
+  const openable = canOpenWorkbench(sig);
   const live = toNum(livePrice);
 
   return (
@@ -752,10 +759,10 @@ function ScalpCard({
           variant="outline"
           className="h-7 gap-1 text-[10px]"
           onClick={(e) => { e.stopPropagation(); onExecute(sig); }}
-          disabled={!exec}
+          disabled={!openable}
         >
           <Play className="w-3 h-3" />
-          {exec ? 'Execute' : 'Not executable'}
+          {openable ? 'Open Workbench' : 'Missing direction'}
         </Button>
         {!exec && sig.candidate_status && (
           <span className="text-[10px] text-warning">{sig.candidate_status}</span>
@@ -802,6 +809,7 @@ function ScalpDetail({
   const absorptionProxy = sig.absorption_is_proxy ?? sig.data_fidelity?.absorption_is_proxy;
   const realOrderFlow = sig.aggression_uses_real_order_flow ?? sig.data_fidelity?.aggression_uses_real_order_flow;
   const exec = isSignalExecutable(sig);
+  const openable = canOpenWorkbench(sig);
   return (
     <div className="space-y-3">
       <div className="p-3 rounded-md bg-muted/30 space-y-2">
@@ -971,11 +979,11 @@ function ScalpDetail({
       <Button
         size="sm"
         className="w-full gap-2"
-        onClick={() => onExecute(sig)}
-        disabled={!exec}
+        onClick={() => onOpenWorkbenchAndReview(sig)}
+        disabled={!openable}
       >
         <Play className="w-3.5 h-3.5" />
-        Execute Engine D Scalp
+        Open Workbench
       </Button>
     </div>
   );

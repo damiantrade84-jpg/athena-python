@@ -88,6 +88,28 @@ def test_health_uses_runtime_getters():
     assert data["mt5"]["connected"] is True
     assert "paper_mode" in data
     assert "real_orders_allowed" in data
+    assert "scalp_execute_requires_ai_review" in data
+    assert "scalp_execution_mode" in data
+
+
+def test_health_reports_paper_scalp_execution_mode(monkeypatch):
+    from athena_app.services import paper_mode
+
+    monkeypatch.setattr(paper_mode, "_paper_mode_enforcer", None)
+    runtime = _runtime(
+        CONFIG={
+            "PAPER_SOAK": {"ENABLED": True, "REAL_ORDERS_ALLOWED": False},
+            "AI_SCALP_CHART_REVIEW": {"EXECUTE_REQUIRES_AI_REVIEW": False},
+        }
+    )
+    client, _app = _client(runtime)
+
+    data = client.get("/api/health").get_json()
+
+    assert data["paper_mode"] is True
+    assert data["real_orders_allowed"] is False
+    assert data["scalp_execution_mode"] == "paper"
+    assert data["scalp_execute_requires_ai_review"] is False
 
 
 def test_last_scan_reflects_runtime_state_changes():

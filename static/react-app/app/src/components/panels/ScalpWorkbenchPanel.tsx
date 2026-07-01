@@ -45,6 +45,7 @@ import {
   evaluateScalpExecuteBlock,
   isScalpAiReviewEligible,
   normalizeSymbolKey,
+  type ScalpExecutionMode,
 } from '@/lib/manualExecuteHelpers';
 import { buildEngineBZones, EngineBZonePrimitive } from '@/lib/engineBPrimitives';
 import { buildScalpChartLevels, buildOrderFlowPrimitiveMarkers, DEFAULT_SCALP_OVERLAY_TOGGLES, type EngineBOverlayLike, type OrderFlowPayloadLike, type ScalpOverlayToggles } from '@/lib/scalpWorkbenchChart/layers';
@@ -871,7 +872,12 @@ export default function ScalpWorkbenchPanel() {
     aiReviewProvider,
     setAiReviewProvider,
   } = useStore();
-  const { data: health } = useApiPoll<{ paper_mode?: boolean }>('/api/health', 60_000);
+  const { data: health } = useApiPoll<{
+    paper_mode?: boolean;
+    real_orders_allowed?: boolean;
+    scalp_execution_mode?: ScalpExecutionMode;
+    scalp_execute_requires_ai_review?: boolean;
+  }>('/api/health', 60_000);
   const { post: postScan, loading: scanLoading, error: scanError } = useApiPost<ScalpScanResponse>();
   const { post: postExecute, loading: executingScalp } = useApiPost<ScalpExecuteResponse>();
   const [symbolOverride, setSymbolOverride] = useState('');
@@ -1045,7 +1051,16 @@ export default function ScalpWorkbenchPanel() {
     && ['WAIT_FOR_LEVEL', 'WAIT_FOR_ZONE', 'WATCH_ONLY'].includes(String(suggestedPlan?.action || '').toUpperCase()),
   );
 
-  const isPaper = Boolean(health?.paper_mode);
+  const scalpExecutionMode: ScalpExecutionMode = health?.scalp_execution_mode
+    || (health?.paper_mode ? 'paper' : 'live_disabled');
+  const isPaper = scalpExecutionMode === 'paper';
+  const requireAiReview = health?.scalp_execute_requires_ai_review !== false;
+  const executeEndpoint = scalpExecutionMode === 'paper' ? '/api/scalp-paper-execute' : '/api/scalp-execute';
+  const executeLabel = scalpExecutionMode === 'paper'
+    ? 'Paper Execute'
+    : scalpExecutionMode === 'demo'
+      ? 'Demo Execute'
+      : 'Execute Scalp';
   const executeBlockReason = useMemo(
     () => evaluateScalpExecuteBlock({
       signal: activeSignal
@@ -1060,8 +1075,10 @@ export default function ScalpWorkbenchPanel() {
       suggestedTradePlan: suggestedPlan,
       isTestMode,
       isPaper,
+      executionMode: scalpExecutionMode,
+      requireAiReview,
     }),
-    [activeSignal, activeUi.sourceContract.strictOrderflowSourcePass, chartSymbol, timeframe, scalpAiReviewResponse, suggestedPlan, isTestMode, isPaper],
+    [activeSignal, activeUi.sourceContract.strictOrderflowSourcePass, chartSymbol, timeframe, scalpAiReviewResponse, suggestedPlan, isTestMode, isPaper, scalpExecutionMode, requireAiReview],
   );
   const showViewSuggestedTrades = Boolean(flagStatus) || symbolWatches.length > 0;
   const { runner: suggestedTradeRunner } = useSuggestedTradeRunnerStatus();
@@ -1102,18 +1119,20 @@ export default function ScalpWorkbenchPanel() {
       volumeMode,
       sizingOverride,
       reviewId: scalpAiReviewResponse?.review_id ?? null,
+      executionMode: scalpExecutionMode,
+      requireAiReview,
     });
-    const result = await postExecute('/api/scalp-execute', payload);
+    const result = await postExecute(executeEndpoint, payload);
     if (!result) {
       showToast('Execution failed (no response)', 'error');
     } else if (result.success) {
-      showToast(`Scalp executed — ticket ${result.ticket || '?'}`, 'success');
+      showToast(`${executeLabel} confirmed - ticket ${result.ticket || '?'}`, 'success');
     } else {
       const hard = result.hardBlockReason ? ` [hard block: ${result.hardBlockReason}]` : '';
       showToast(`Scalp rejected: ${result.error || 'unknown'}${hard}`, 'error');
     }
     setConfirmExecOpen(false);
-  }, [activeSignal, chartSymbol, executeBlockReason, postExecute, scalpAiReviewResponse?.review_id, showToast, volumeMode, sizingOverride]);
+  }, [activeSignal, chartSymbol, executeBlockReason, postExecute, scalpAiReviewResponse?.review_id, showToast, volumeMode, sizingOverride, scalpExecutionMode, requireAiReview, executeEndpoint, executeLabel]);
 
   const flagWatchSetup = useCallback(async () => {
     if (!canFlagWatch || !suggestedPlan || flagLoading) return;
@@ -1889,7 +1908,7 @@ export default function ScalpWorkbenchPanel() {
               onClick={() => setConfirmExecOpen(true)}
             >
               <Play className={cn('mr-2 h-4 w-4', executingScalp && 'animate-pulse')} />
-              Execute Scalp
+              {executeLabel}
             </Button>
             {canFlagWatch && (
               <Button
@@ -2267,7 +2286,7 @@ export default function ScalpWorkbenchPanel() {
               onClick={() => void onConfirmScalpExecute()}
               disabled={executingScalp || Boolean(executeBlockReason)}
             >
-              {executingScalp ? 'Executing…' : 'Confirm Execute Scalp'}
+              {executingScalp ? 'Executing...' : `Confirm ${executeLabel}`}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
