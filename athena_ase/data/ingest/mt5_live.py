@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 import time
+from typing import Callable
 
 from athena_ase.data.availability import AvailabilityRuleId
 from athena_ase.data.ingest.common import append_ptis_rows, price_series_id, row_from_rule
@@ -48,6 +49,56 @@ def _connect_mt5():
     import MetaTrader5 as mt5
 
     return mt5
+
+
+def _mt5_symbol_candidates(
+    inst: Instrument,
+    map_symbol: Callable[[str], str | None],
+) -> list[str]:
+    """Build ordered MT5 symbol candidates: ticker first, then display, then .US bare fallback."""
+    seen: set[str] = set()
+    candidates: list[str] = []
+
+    def _add(name: str | None) -> None:
+        if not name or name in seen:
+            return
+        seen.add(name)
+        candidates.append(name)
+
+    for key in (inst.symbol, inst.display):
+        mapped = map_symbol(key)
+        _add(mapped)
+        if mapped and mapped.upper().endswith(".US"):
+            _add(mapped[:-3])
+
+    return candidates
+
+
+def _resolve_mt5_symbol(mt5, inst: Instrument, map_symbol: Callable[[str], str | None]) -> str | None:
+    """Return the first MT5 symbol that can be selected in the terminal."""
+    last_error: tuple[int, str] | None = None
+    for candidate in _mt5_symbol_candidates(inst, map_symbol):
+        try:
+            if not mt5.symbol_select(candidate, True):
+                err = mt5.last_error()
+                if err:
+                    last_error = err
+                continue
+        except Exception:
+            continue
+        info = mt5.symbol_info(candidate)
+        if info is not None:
+            return candidate
+        err = mt5.last_error()
+        if err:
+            last_error = err
+    if last_error is not None:
+        log.debug(
+            "mt5_live symbol resolve failed for %s: %s",
+            inst.symbol,
+            last_error,
+        )
+    return None
 
 
 def ingest_instrument_tf(
@@ -118,16 +169,12 @@ def ingest_all(
     totals: dict[str, int] = {}
     skipped: list[str] = []
     for inst in instruments or UNIVERSE:
-        if inst.family == "crypto":
-            continue  # crypto PTIS comes from the Bybit/Binance ingests
-        mt5_symbol = mt5_map_symbol(inst.display) or mt5_map_symbol(inst.symbol)
+        if inst.family == "crypto" or not inst.mt5_live:
+            continue
+        mt5_symbol = _resolve_mt5_symbol(mt5, inst, mt5_map_symbol)
         if not mt5_symbol:
             skipped.append(inst.symbol)
             continue
-        try:
-            mt5.symbol_select(mt5_symbol, True)
-        except Exception:
-            pass
         got_any = False
         for tf in timeframes:
             try:
@@ -140,8 +187,14 @@ def ingest_all(
             except Exception as exc:
                 log.warning("mt5_live ingest failed %s %s: %s", inst.symbol, tf, exc)
         if not got_any:
+            err = mt5.last_error()
+            if err:
+                log.debug("mt5_live ingest empty rates for %s (%s): %s", inst.symbol, mt5_symbol, err)
             skipped.append(inst.symbol)
     if skipped:
-        log.info("mt5_live ingest: no terminal data for %s", ", ".join(sorted(set(skipped))))
+        log.warning(
+            "mt5_live ingest: no terminal data for %s",
+            ", ".join(sorted(set(skipped))),
+        )
     log.info("mt5_live ingest complete: %d series touched", len(totals))
     return totals

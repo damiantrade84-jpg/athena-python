@@ -125,9 +125,13 @@ def _eodhd_symbol(pair: dict, overrides: dict) -> str:
     return _compact_symbol(sym)
 
 
-def build_rows() -> list[tuple[str, str, str, str, str, str, bool]]:
+def _mt5_live(pair: dict) -> bool:
+    return bool(pair.get("enabled", True)) and str(pair.get("source")) == "mt5"
+
+
+def build_rows() -> list[tuple[str, str, str, str, str, str, bool, bool]]:
     pairs, overrides = _load_athena_pairs()
-    rows: list[tuple[str, str, str, str, str, str, bool]] = []
+    rows: list[tuple[str, str, str, str, str, str, bool, bool]] = []
     for pair in pairs:
         family = _ase_family(str(pair.get("type", "")))
         if not family:
@@ -139,6 +143,7 @@ def build_rows() -> list[tuple[str, str, str, str, str, str, bool]]:
         eodhd = _eodhd_symbol(pair, overrides)
         benchmark = BENCHMARK_BY_FAMILY[family]
         swing_only = subclass == "jse"
+        mt5_live = _mt5_live(pair)
         rows.append(
             (
                 symbol,
@@ -148,12 +153,13 @@ def build_rows() -> list[tuple[str, str, str, str, str, str, bool]]:
                 eodhd,
                 benchmark,
                 swing_only,
+                mt5_live,
             )
         )
     return rows
 
 
-def render(rows: list[tuple[str, str, str, str, str, str, bool]]) -> str:
+def render(rows: list[tuple[str, str, str, str, str, str, bool, bool]]) -> str:
     lines = [
         '"""ASE instrument universe — derived from ALL_PAIRS (134 instruments)."""',
         "",
@@ -176,6 +182,7 @@ def render(rows: list[tuple[str, str, str, str, str, str, bool]]) -> str:
         "    eodhd_symbol: str",
         "    benchmark: str",
         "    swing_only: bool = False",
+        "    mt5_live: bool = True",
         "",
         "",
         "def compact_symbol(symbol: str) -> str:",
@@ -184,10 +191,15 @@ def render(rows: list[tuple[str, str, str, str, str, str, bool]]) -> str:
         "",
         "UNIVERSE: tuple[Instrument, ...] = (",
     ]
-    for sym, disp, fam, sub, eod, bench, swing in rows:
-        lines.append(
-            f'    Instrument("{sym}", "{disp}", "{fam}", "{sub}", "{eod}", "{bench}", {swing}),'
-        )
+    for sym, disp, fam, sub, eod, bench, swing, mt5_live in rows:
+        if swing or not mt5_live:
+            lines.append(
+                f'    Instrument("{sym}", "{disp}", "{fam}", "{sub}", "{eod}", "{bench}", {swing}, {mt5_live}),'
+            )
+        else:
+            lines.append(
+                f'    Instrument("{sym}", "{disp}", "{fam}", "{sub}", "{eod}", "{bench}"),'
+            )
     lines.extend(
         [
             ")",
