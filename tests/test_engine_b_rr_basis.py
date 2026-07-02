@@ -746,11 +746,9 @@ _CAPPED_TP_STYLE_PROFILE = {
 }
 
 
-def test_synthetic_fallback_tp_from_capped_structural_tp_blocked_at_space_gate():
-    """2026-07-02 audit: a synthetic fallback TP that replaced a structural TP
-    capped by a nearby opposing zone must NOT substitute for the room gate —
-    the wall that made the structural target fail min_rr is still in front of
-    price, and the synthetic target sits beyond it."""
+def test_scale_out_plan_satisfies_space_gate_when_structural_tp_capped():
+    """Active dual-TP scale-out: structural wall is TP1, so space passes even
+    when room_ok is false and synthetic TP2 would have been capped-blocked."""
     engine = NakedEngine()
     out = engine.calculate_confidence(
         _capped_structural_tp_res(),
@@ -762,13 +760,41 @@ def test_synthetic_fallback_tp_from_capped_structural_tp_blocked_at_space_gate()
 
     assert out["fallback_tp_applied"] is True
     assert out["rr_ok"] is True
-    assert out["execution_tp"] == pytest.approx(103.0)
+    assert out["exit_strategy"] == "scale_out_structural_tp1_fallback_tp2"
+    assert out["scale_out_guard_reason"] is None
+    assert out["scale_out_active"] is True
+    assert out["scale_out_space_ok"] is True
     assert out["room_ok"] is False
-    assert out["rr_space_gate_enabled"] is True
+    assert out["rr_space_capped_tp_blocked"] is False
+    assert out["space_gate_ok"] is True
+    assert out["passed"] is True
+    assert "space" not in (out.get("failed_gate_names") or [])
+
+
+def test_single_tp_fallback_still_blocked_at_space_when_scale_out_dropped(monkeypatch):
+    """When scale-out is dropped (no sane TP1/SL pair), legacy single-TP fallback
+    keeps the capped-structural space block — trade still fails closed on space."""
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_TP1_MIN_RR", {"default": 2.0})
+
+    engine = NakedEngine()
+    out = engine.calculate_confidence(
+        _capped_structural_tp_res(),
+        current_price=100.0,
+        direction="LONG",
+        entry_candles=[],
+        style_profile=dict(_CAPPED_TP_STYLE_PROFILE),
+    )
+
+    assert out["exit_strategy"] == "single_fallback_rr_tp"
+    assert out["scale_out_guard_reason"] == "tp1_rr_below_min_no_sane_sl"
+    assert out["scale_out_active"] is False
+    assert out["scale_out_space_ok"] is False
+    assert out["rr_ok"] is True
+    assert out["room_ok"] is False
     assert out["rr_space_capped_tp_blocked"] is True
-    assert out["rr_can_satisfy_space_gate"] is False
     assert out["space_gate_ok"] is False
     assert out["passed"] is False
+    assert "space" in (out.get("failed_gate_names") or [])
 
 
 def test_synthetic_fallback_tp_capped_block_flag_off_restores_legacy(monkeypatch):

@@ -4913,17 +4913,42 @@ class NakedEngine:
         _rr_space_tp_qualified = _level_mode_str.endswith("_structural_tp") or _level_mode_str.endswith(
             "_fallback_rr_tp"
         )
+        # Dual-TP scale-out keeps the structural wall as TP1; space at entry
+        # is satisfied by the reachable partial target, not by synthetic TP2.
+        _scale_out_active = (
+            _exec_lvl.get("exit_strategy") == "scale_out_structural_tp1_fallback_tp2"
+            and _exec_lvl.get("scale_out_guard_reason") is None
+            and _exec_lvl.get("execution_tp1") is not None
+            and _exec_lvl.get("execution_rr1") is not None
+        )
+        _tp1_min_rr_for_space = _engine_b_style_threshold(
+            config.CONFIG.get("ENGINE_B_TP1_MIN_RR"), exec_style
+        )
+        try:
+            _exec_rr1_for_space = float(_exec_lvl.get("execution_rr1"))
+        except (TypeError, ValueError):
+            _exec_rr1_for_space = None
+        _scale_out_space_ok = bool(
+            _scale_out_active
+            and _exec_rr1_for_space is not None
+            and (
+                _tp1_min_rr_for_space <= 0
+                or _exec_rr1_for_space + 1e-12 >= _tp1_min_rr_for_space
+            )
+        )
         # A synthetic fallback TP that replaced a structural TP capped by a nearby
         # opposing zone must not substitute for room: the wall that made the
         # structural target fail min_rr is still in front of price, and the
         # synthetic target sits beyond it. Substitution stays valid for structural
         # TPs and for synthetic TPs created because no structural target existed
-        # (missing/wrong-side TP — no opposing wall was mapped).
+        # (missing/wrong-side TP — no opposing wall was mapped). Active scale-out
+        # plans are exempt: TP1 is the wall, TP2 is the runner beyond it.
         _rr_space_capped_tp_blocked = False
         if (
             _rr_space_tp_qualified
             and _level_mode_str.endswith("_fallback_rr_tp")
             and _exec_lvl.get("fallback_tp_reason") == "structural_tp_below_min_rr"
+            and not _scale_out_active
             and bool(
                 config.CONFIG.get(
                     "ENGINE_B_SPACE_RR_SUBSTITUTE_BLOCK_CAPPED_STRUCTURAL_TP", True
@@ -4952,7 +4977,7 @@ class NakedEngine:
             or (_room_distance_atr is not None and _room_distance_atr >= max(0.0, _rr_space_floor_atr))
         )
         rr_can_satisfy_space = bool(rr_ok and _rr_space_tp_qualified and _rr_space_floor_ok)
-        space_ok = room_ok or rr_can_satisfy_space
+        space_ok = room_ok or rr_can_satisfy_space or _scale_out_space_ok
         # Some asset classes often have a nearby structural level while the
         # execution RR model still has valid protective distance. Keep
         # historical behavior unless the explicit asset-scoped flag is enabled.
@@ -4978,7 +5003,11 @@ class NakedEngine:
         _space_rr_substitute_active = _space_rr_substitute_override is not None
         if _space_rr_substitute_active:
             rr_space_gate_enabled = bool(_space_rr_substitute_override)
-        space_gate_ok = space_ok if rr_space_gate_enabled else room_ok
+        space_gate_ok = (
+            space_ok
+            if rr_space_gate_enabled
+            else (room_ok or _scale_out_space_ok)
+        )
 
         # Stage 2.8: Optional volume confirmation gate.
         # Contributes to gate_score (+1 bonus) but is NOT mandatory for pass.
@@ -5342,6 +5371,8 @@ class NakedEngine:
             ),
             "rr_can_satisfy_space_gate": rr_can_satisfy_space,
             "rr_space_capped_tp_blocked": _rr_space_capped_tp_blocked,
+            "scale_out_active": _scale_out_active,
+            "scale_out_space_ok": _scale_out_space_ok,
             "rr_space_floor_atr": round(_rr_space_floor_atr, 4),
             "rr_space_floor_passed": bool(_rr_space_floor_ok),
             "min_room_atr_used": round(_effective_min_room_atr, 4),
