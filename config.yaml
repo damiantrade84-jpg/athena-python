@@ -104,6 +104,10 @@ ENGINE_A_V3_PROFILE_TTL_DAYS: 90
 ENGINE_A_V3_FOREX_THESIS: trend
 # Forex setup selector: "trend" (breakout/pullback) or "london_open" (Asian IB breakout).
 ENGINE_A_V3_FOREX_SETUP: trend
+# V3 setup overlay may only upgrade WATCH -> TRADE; when a setup fires TRADE in the
+# OPPOSITE direction of the quant scorer, fall back to the quant path instead of
+# flipping direction (rejection reason: setup_direction_conflicts_quant).
+ENGINE_A_V3_SETUP_QUANT_CONFLICT_GUARD: true
 ENGINE_A_V3_SESSION_SCORING:
   ENABLED: false
   MIN_SCORE: 0.35
@@ -113,14 +117,16 @@ ENGINE_A_V3_MEAN_REVERSION:
   LOOKBACK: 20
 
 # Engine A quant scorer (ground-up rebuild) per-score_group component weights.
-# Relative priors, normalized over the components that actually have data (a
-# subsystem with no coverage does not dilute the score). Components: trend,
-# momentum, location, volume, intermarket, carry, sentiment, macro,
-# microstructure. Empty {} -> per-family defaults in engine_a_v3/quant_scorer.py.
-# TRADE cutoff reuses ENGINE_A_SCORE_GROUP_THRESHOLDS. Timeframes: intraday =
-# H1 entry / H4 momentum / D1 bias; swing = H4 entry / D1 bias (per horizon).
+# Core components only: trend, momentum, location, volume (the V3 profile schema
+# rejects anything else; subsystem signals are research-only, see
+# athena_research/engine_a_ablation). Partial overrides are merged over the
+# family default in engine_a_v3/profile.py and renormalized to sum 1.0; unknown
+# keys and invalid values are ignored (fall back to the family default). Empty
+# {} -> per-family defaults (_FAMILY_WEIGHTS). TRADE cutoff reuses
+# ENGINE_A_SCORE_GROUP_THRESHOLDS. Timeframes: intraday = H1 entry / H4 momentum
+# / D1 bias; swing = H4 entry / D1 bias (per horizon).
 # Tunable live with no code change, e.g.:
-#   crypto_btc: { trend: 0.26, momentum: 0.18, microstructure: 0.18, volume: 0.12 }
+#   crypto_btc: { trend: 0.40, momentum: 0.25, location: 0.15, volume: 0.20 }
 ENGINE_A_QUANT_WEIGHTS_BY_GROUP: {}
 
 # Per-TF candle freshness diagnostic (stalenessSeverity, bucketLag, etc.).

@@ -93,6 +93,78 @@ def test_bearish_obv_is_directionally_bearish_and_context_is_not_executable():
     assert component.signal < 0
 
 
+def test_quant_weights_by_group_override_merges_and_renormalizes(monkeypatch):
+    from config import CONFIG
+
+    monkeypatch.setitem(
+        CONFIG,
+        "ENGINE_A_QUANT_WEIGHTS_BY_GROUP",
+        {"crypto_btc": {"trend": 0.50, "momentum": 0.50, "bogus": 9.0, "location": "junk"}},
+    )
+    profile = baseline_profile("crypto_btc", "intraday")
+    weights = dict(profile.weights)
+    assert set(weights) == set(CORE_COMPONENTS)
+    assert sum(weights.values()) == pytest.approx(1.0)
+    # trend/momentum overridden to equal shares; location/volume keep family
+    # defaults (.18/.19); everything renormalized over the merged total 1.37.
+    assert weights["trend"] == pytest.approx(0.50 / 1.37)
+    assert weights["momentum"] == pytest.approx(0.50 / 1.37)
+    assert weights["location"] == pytest.approx(0.18 / 1.37)
+    assert weights["volume"] == pytest.approx(0.19 / 1.37)
+
+    # Untouched group keeps its family default.
+    untouched = dict(baseline_profile("forex_majors", "intraday").weights)
+    assert untouched["trend"] == pytest.approx(0.42)
+
+
+def test_quant_weights_by_group_invalid_override_falls_back(monkeypatch):
+    from config import CONFIG
+
+    monkeypatch.setitem(
+        CONFIG,
+        "ENGINE_A_QUANT_WEIGHTS_BY_GROUP",
+        {"forex_majors": {"trend": "abc", "unknown_component": 1.0}},
+    )
+    weights = dict(baseline_profile("forex_majors", "intraday").weights)
+    assert weights == {"trend": 0.42, "momentum": 0.28, "location": 0.21, "volume": 0.09}
+
+
+def test_setup_direction_conflict_falls_back_to_quant_path(monkeypatch):
+    import engine_a_v3.evaluator as evaluator_module
+    from engine_a_v3.quant_scorer import QuantScore
+    from engine_a_v3.setups import SetupCandidate
+
+    def _fake_score_pair(route, horizon, candles, *, context=None, profile=None, snapshot_cache=None):
+        return QuantScore(
+            direction="LONG", confluence_score=1.0, max_score=3.0, score_norm=0.3333,
+            conviction=0.3333, decision="WATCH", threshold=2.1, level_style="trend",
+            factor_scores={}, factor_diagnostics={}, components={},
+        )
+
+    def _fake_detect_setup(route, horizon, candles, *, display=None):
+        return SetupCandidate("fx_trend_pullback", "TRADE", "SHORT", (), (), "trend")
+
+    monkeypatch.setattr(evaluator_module, "score_pair", _fake_score_pair)
+    monkeypatch.setattr(evaluator_module, "detect_setup", _fake_detect_setup)
+
+    pair = {"display": "EUR/USD", "symbol": "EURUSD", "type": "forex"}
+
+    signal = evaluate_engine_a_v3(pair, _candles(), horizon="intraday")
+    assert signal.direction == "LONG"          # quant direction preserved
+    assert signal.decision == "WATCH"          # no upgrade from the conflicting setup
+    assert "setup_direction_conflicts_quant" in signal.rejectionReasons
+    payload = signal.to_dict()
+    assert payload["tp"] == payload["tp1"]
+    assert payload["rr"] == payload["rr1"]     # headline rr describes the headline tp
+
+    from config import CONFIG
+
+    monkeypatch.setitem(CONFIG, "ENGINE_A_V3_SETUP_QUANT_CONFLICT_GUARD", False)
+    signal = evaluate_engine_a_v3(pair, _candles(), horizon="intraday")
+    assert signal.direction == "SHORT"         # guard off restores prior behavior
+    assert "setup_direction_conflicts_quant" not in signal.rejectionReasons
+
+
 def test_evaluator_uses_profile_returned_by_promotion_registry():
     base = baseline_profile("forex_majors", "intraday")
     promoted = EngineAV3Profile.create(

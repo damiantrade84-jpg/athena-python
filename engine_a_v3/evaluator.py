@@ -281,6 +281,27 @@ def evaluate_engine_a_v3(
         and setup.direction in {"LONG", "SHORT"}
     )
 
+    # Direction-conflict guard: the setup overlay may only UPGRADE the quant
+    # signal (WATCH -> TRADE), never flip its direction. When the quant model
+    # has a direction and a setup fires TRADE the opposite way, the signal is
+    # ambiguous — fall back to the quant path (its own threshold still applies)
+    # instead of executing a direction the quality model disagrees with.
+    # Config-gated (default ON); disable via ENGINE_A_V3_SETUP_QUANT_CONFLICT_GUARD.
+    setup_direction_conflict = False
+    if use_setup and quant.direction in {"LONG", "SHORT"} and setup.direction != quant.direction:
+        guard_enabled = True
+        try:
+            from config import CONFIG
+
+            guard_enabled = bool(CONFIG.get("ENGINE_A_V3_SETUP_QUANT_CONFLICT_GUARD", True))
+        except Exception:
+            guard_enabled = True
+        if guard_enabled:
+            use_setup = False
+            setup_direction_conflict = True
+            setup_diagnostics["directionConflictBlocked"] = True
+            setup_diagnostics["quantDirection"] = quant.direction
+
     # Session scoring gate (config-gated, forex-only): a forex setup must also
     # pass the session context score when ENGINE_A_V3_SESSION_SCORING.ENABLED.
     if use_setup and route.family == "forex":
@@ -338,6 +359,8 @@ def evaluate_engine_a_v3(
     rejection_reasons: list[str] = []
     if setup_diagnostics.get("sessionGateBlocked"):
         rejection_reasons.append("session_context_score_below_min")
+    if setup_direction_conflict:
+        rejection_reasons.append("setup_direction_conflicts_quant")
 
     factor_diagnostics = dict(quant.factor_diagnostics or {})
     factor_diagnostics["setupOverlay"] = setup_diagnostics

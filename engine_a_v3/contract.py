@@ -119,7 +119,10 @@ class EngineASetupSignal:
                 "style": self.horizon,
                 "entry": self.price,
                 "tp": self.tp1,
-                "rr": self.rr2,
+                # Headline rr must describe the headline tp (tp1) — the level the
+                # default SINGLE_TP1 policy executes. rr2 stays available for the
+                # TP2 runner under SPLIT_50_50.
+                "rr": self.rr1 if self.rr1 is not None else self.rr2,
                 "trade": self.decision == "TRADE" and self.qualified,
                 "executable": self.decision == "TRADE" and self.qualified,
                 "signalTier": {
