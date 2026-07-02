@@ -36,12 +36,14 @@ def test_engine_a_execute_surfaces_quick_execute_error_reason():
     assert "Execution failed: ${err instanceof Error ? err.message : 'unknown'}" in src
 
 
-def test_engine_b_tab_excludes_engine_a_only_and_dual_flagged_rows():
+def test_engine_b_tab_shows_b_only_and_dual_rows_with_engine_b_overlay():
     src = _source()
 
     assert "isEngineBOnlyRow" in src
-    assert "rowMatchesFeed" in src
-    assert "!row.engines.has('A')" in src
+    assert "hasEngineBFeedRow" in src
+    assert "engineBSignal" in src
+    assert "row.engineBSignal" in src
+    assert "feedEngine === 'B' && hasEngineBFeedRow(selectedRow)" in src
     assert "feedRows.find((r) => r.id === selectedId)" in src
     assert "handleFeedEngineChange" in src
     assert "handleFeedEngineChange('A')" in src
@@ -59,5 +61,5 @@ def test_engine_b_naked_scan_signals_use_b_presentation():
 
     assert "isNakedScan" in card_src
     assert "signal.is_naked" in card_src
-    assert "feedEngine === 'B' && isEngineBOnlyRow(selectedRow)" in panel_src
+    assert "feedEngine === 'B' && hasEngineBFeedRow(selectedRow)" in panel_src
     assert "EngineBChecklistCard" in panel_src

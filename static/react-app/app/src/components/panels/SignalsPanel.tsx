@@ -232,18 +232,32 @@ function unifiedEngineLabel(engines: Set<'A' | 'B'>): EngineSource {
   return 'B';
 }
 
-/** Engine B tab shows B-only rows; dual-flagged setups stay on Engine A tab. */
+/** True when this row is Engine B-only (no Engine A flag). */
 function isEngineBOnlyRow(row: UnifiedRow): boolean {
   return row.engines.has('B') && !row.engines.has('A');
 }
 
+/** Engine B feed includes B-only rows and dual rows with a B scan overlay. */
+function hasEngineBFeedRow(row: UnifiedRow): boolean {
+  return isEngineBOnlyRow(row) || Boolean(row.engineBSignal);
+}
+
+function engineBPresentationSignal(row: UnifiedRow): EngineASignal {
+  return row.engineBSignal ?? row.signal;
+}
+
 function rowMatchesFeed(row: UnifiedRow, feed: EngineSource): boolean {
-  if (feed === 'B') return isEngineBOnlyRow(row);
+  if (feed === 'B') return hasEngineBFeedRow(row);
   return row.engines.has('A');
 }
 
 function canExecuteRow(row: UnifiedRow | null): boolean {
   if (!row) return false;
+  const bSignal = row.engineBSignal;
+  if (bSignal?.is_naked) {
+    if (bSignal.executable === false) return false;
+    return true;
+  }
   if (row.signal.executable === false) return false;
   if (row.engines.has('A') && row.signal.engineATradeEnabled === false) return false;
   // Engine B alone is always executable (it has its own gates). Engine A
@@ -268,6 +282,11 @@ function signalSymbol(signal: EngineASignal | null): string | null {
 }
 
 function preferredExecutionSignal(row: UnifiedRow): EngineASignal {
+  // Prefer the naked Engine B payload when the B scan produced one (including
+  // dual rows where A is watchlist-only but B passed).
+  if (row.engineBSignal?.is_naked) {
+    return row.engineBSignal;
+  }
   // Engine A payload is canonical for execution when present; Engine B alone
   // falls back to the B signal. Mirrors the legacy execute-payload logic.
   if (row.engines.has('A') && !row.engines.has('B')) {
@@ -384,13 +403,13 @@ export default function SignalsPanel() {
     return list;
   }, [rows, priceFor, filter, directionFilter, assetClass, sortBy]);
 
-  /** Per-engine tab counts. Dual-flagged rows count for A only; B tab is B-only. */
+  /** Per-engine tab counts after asset/direction filters. */
   const engineCounts = useMemo(() => {
     let a = 0;
     let b = 0;
     for (const r of filteredRows) {
       if (r.engines.has('A')) a += 1;
-      if (isEngineBOnlyRow(r)) b += 1;
+      if (hasEngineBFeedRow(r)) b += 1;
     }
     return { a, b };
   }, [filteredRows]);
@@ -957,14 +976,20 @@ export default function SignalsPanel() {
                 <ScrollArea className="h-[620px] pr-2 mt-3">
                   {/* ── OVERVIEW TAB ── */}
                   <TabsContent value="overview" className="space-y-3 mt-0">
-                    {feedEngine === 'B' && isEngineBOnlyRow(selectedRow) ? (
+                    {feedEngine === 'B' && hasEngineBFeedRow(selectedRow) ? (
                       <EngineBChecklistCard
-                        data={selectedRow.signal.naked_data || selectedRow.signal.engine_b}
-                        pair={selectedRow.signal.pair || selectedRow.signal.display}
-                        type={selectedRow.signal.type}
-                        livePrice={priceFor(selectedRow.signal)}
-                        livePriceAgeSec={ageSecFor(selectedRow.signal)}
-                        livePriceSource={sourceFor(selectedRow.signal)}
+                        data={
+                          engineBPresentationSignal(selectedRow).naked_data
+                          || engineBPresentationSignal(selectedRow).engine_b
+                        }
+                        pair={
+                          engineBPresentationSignal(selectedRow).pair
+                          || engineBPresentationSignal(selectedRow).display
+                        }
+                        type={engineBPresentationSignal(selectedRow).type}
+                        livePrice={priceFor(engineBPresentationSignal(selectedRow))}
+                        livePriceAgeSec={ageSecFor(engineBPresentationSignal(selectedRow))}
+                        livePriceSource={sourceFor(engineBPresentationSignal(selectedRow))}
                       />
                     ) : (
                     <EngineASignalCard
@@ -1240,14 +1265,21 @@ export default function SignalsPanel() {
 
                   {/* ── ENGINE B TAB ── */}
                   <TabsContent value="engineB" className="space-y-3 mt-0">
-                    {(selectedRow.signal.naked_data || selectedRow.signal.engine_b) ? (
+                    {(engineBPresentationSignal(selectedRow).naked_data
+                      || engineBPresentationSignal(selectedRow).engine_b) ? (
                       <EngineBChecklistCard
-                        data={selectedRow.signal.naked_data || selectedRow.signal.engine_b}
-                        pair={selectedRow.signal.pair || selectedRow.signal.display}
-                        type={selectedRow.signal.type}
-                        livePrice={priceFor(selectedRow.signal)}
-                        livePriceAgeSec={ageSecFor(selectedRow.signal)}
-                        livePriceSource={sourceFor(selectedRow.signal)}
+                        data={
+                          engineBPresentationSignal(selectedRow).naked_data
+                          || engineBPresentationSignal(selectedRow).engine_b
+                        }
+                        pair={
+                          engineBPresentationSignal(selectedRow).pair
+                          || engineBPresentationSignal(selectedRow).display
+                        }
+                        type={engineBPresentationSignal(selectedRow).type}
+                        livePrice={priceFor(engineBPresentationSignal(selectedRow))}
+                        livePriceAgeSec={ageSecFor(engineBPresentationSignal(selectedRow))}
+                        livePriceSource={sourceFor(engineBPresentationSignal(selectedRow))}
                       />
                     ) : (
                       <div className="text-[11px] text-muted-foreground border border-border/40 rounded-md p-3 leading-snug">
@@ -1414,6 +1446,7 @@ function UnifiedSignalRow({
   selected: boolean;
   onSelect: (row: UnifiedRow) => void;
 }) {
+  const presentation = feedEngine === 'B' ? engineBPresentationSignal(row) : row.signal;
   const label = feedEngine === 'B' ? 'B' : unifiedEngineLabel(row.engines);
   const badge = label === 'B'
     ? { text: 'B', icon: <Layers className="w-3 h-3" />, bg: 'hsl(var(--info) / 0.18)', fg: 'hsl(var(--info))' }
@@ -1431,7 +1464,7 @@ function UnifiedSignalRow({
       </div>
       <div className="flex-1 min-w-0">
         <EngineASignalCard
-          signal={row.signal}
+          signal={presentation}
           selected={selected}
           onSelect={() => onSelect(row)}
           compact
