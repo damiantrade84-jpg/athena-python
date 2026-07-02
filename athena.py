@@ -89,6 +89,7 @@ from data_feeds import (  # noqa: E402
 )
 from eodhd_volume_overlay import (  # noqa: E402
     eodhd_commodity_ticker_for_pair as _eodhd_commodity_ticker_for_pair,
+    infer_grid_offset_seconds as _infer_eodhd_grid_offset_seconds,
     is_eodhd_volume_whitelisted as _is_eodhd_volume_whitelisted,
     overlay_candle_volumes as _overlay_candle_volumes,
     resample_eodhd_volume_bars as _resample_eodhd_volume_bars,
@@ -839,9 +840,11 @@ ETF_PAIRS = [
         "type": "etf",
         "display": "GLD",
         "source": "mt5",
-        "enabled": True,
+        "enabled": False,
         "ws": False,
-    },  # SQN +2.08, OOS:+2.98 ✓
+    },  # SQN +2.08, OOS:+2.98 ✓ — Disabled 2026-07-02: no GLD symbol on Pepperstone
+    # MT5 demo (symbols_get returns nothing); every scan failed closed with 0 candles.
+    # Re-enable if the broker lists it again or the pair is re-sourced.
     {
         "symbol": "TLT.US",
         "type": "etf_bond",
@@ -898,8 +901,9 @@ ETF_PAIRS = [
         "type": "etf",
         "display": "SLV",
         "source": "mt5",
-        "enabled": True,
-    },  # Silver ETF
+        "enabled": False,
+    },  # Silver ETF — Disabled 2026-07-02: no SLV symbol on Pepperstone MT5 demo
+    # (symbols_get returns nothing); every scan failed closed with 0 candles.
     {
         "symbol": "USO.US",
         "type": "etf",
@@ -2047,12 +2051,21 @@ def _eodhd_intraday_ticker_for_pair(pair: dict) -> str | None:
     return _eodhd_ticker_for_pair(pair)
 
 
-def _eodhd_volume_cache_key(pair: dict, tf: str, limit: int) -> tuple[str, str, int]:
-    return (pair.get("symbol", pair.get("display", "")), str(tf or "").upper(), int(limit))
+def _eodhd_volume_cache_key(
+    pair: dict, tf: str, limit: int, grid_offset_seconds: int = 0
+) -> tuple[str, str, int, int]:
+    return (
+        pair.get("symbol", pair.get("display", "")),
+        str(tf or "").upper(),
+        int(limit),
+        int(grid_offset_seconds or 0),
+    )
 
 
-def _get_cached_eodhd_volume_only(pair: dict, tf: str, limit: int):
-    key = _eodhd_volume_cache_key(pair, tf, limit)
+def _get_cached_eodhd_volume_only(
+    pair: dict, tf: str, limit: int, grid_offset_seconds: int = 0
+):
+    key = _eodhd_volume_cache_key(pair, tf, limit, grid_offset_seconds)
     now = time.time()
     with _eodhd_volume_cache_lock:
         entry = _eodhd_volume_cache.get(key)
@@ -2065,14 +2078,23 @@ def _get_cached_eodhd_volume_only(pair: dict, tf: str, limit: int):
         return payload
 
 
-def _store_cached_eodhd_volume_only(pair: dict, tf: str, limit: int, payload: dict) -> None:
-    key = _eodhd_volume_cache_key(pair, tf, limit)
+def _store_cached_eodhd_volume_only(
+    pair: dict, tf: str, limit: int, payload: dict, grid_offset_seconds: int = 0
+) -> None:
+    key = _eodhd_volume_cache_key(pair, tf, limit, grid_offset_seconds)
     ttl = _EODHD_VOLUME_TTL.get(str(tf or "").upper(), 15 * 60)
     with _eodhd_volume_cache_lock:
         _eodhd_volume_cache[key] = (payload, time.time() + ttl)
 
 
-def _fetch_eodhd_volume_only(pair: dict, tf: str, limit: int, *, cache_only: bool = False) -> dict:
+def _fetch_eodhd_volume_only(
+    pair: dict,
+    tf: str,
+    limit: int,
+    *,
+    cache_only: bool = False,
+    grid_offset_seconds: int = 0,
+) -> dict:
     """Best-effort EODHD volume fetch for MT5-routed symbols only.
 
     Priority order for live scans (cache_only=True path):
@@ -2085,7 +2107,7 @@ def _fetch_eodhd_volume_only(pair: dict, tf: str, limit: int, *, cache_only: boo
     This never changes OHLC routing. It is used only to overlay `vol`.
     """
     tf_key = str(tf or "").upper()
-    cached = _get_cached_eodhd_volume_only(pair, tf_key, limit)
+    cached = _get_cached_eodhd_volume_only(pair, tf_key, limit, grid_offset_seconds)
     if cached is not None:
         return cached
 
@@ -2136,7 +2158,7 @@ def _fetch_eodhd_volume_only(pair: dict, tf: str, limit: int, *, cache_only: boo
                                 "source_tf": "candle_builder_d1",
                                 "volume_source": "candle_builder_d1",
                             }
-                            _store_cached_eodhd_volume_only(pair, tf_key, limit, d1_payload)
+                            _store_cached_eodhd_volume_only(pair, tf_key, limit, d1_payload, grid_offset_seconds)
                             log.debug(
                                 "[EODHD-VOL] %s D1: CandleBuilder used bars=%s (bulk_update_d1)",
                                 display, len(cb_candles),
@@ -2144,8 +2166,10 @@ def _fetch_eodhd_volume_only(pair: dict, tf: str, limit: int, *, cache_only: boo
                             return d1_payload
                     # D1 not yet populated in CandleBuilder - fall through to REST
 
-                else:
-                    # M1-H4 path: WS ticks or Live v2 injected ticks
+                elif not grid_offset_seconds:
+                    # M1-H4 path: WS ticks or Live v2 injected ticks. Skipped when the
+                    # caller's bar grid is shifted off epoch alignment (MT5 H4) —
+                    # CandleBuilder buckets are epoch-aligned and can never match it.
                     _min_bars = {"M1": 5, "M5": 5, "M15": 5, "H1": 20, "H4": 10}.get(tf_key, 5)
                     if cb_candles and len(cb_candles) >= _min_bars:
                         last_ts_str = cb_candles[-1].get("time", "")
@@ -2168,7 +2192,7 @@ def _fetch_eodhd_volume_only(pair: dict, tf: str, limit: int, *, cache_only: boo
                                         "source_tf": "ws_tick",
                                         "volume_source": "ws_tick",
                                     }
-                                    _store_cached_eodhd_volume_only(pair, tf_key, limit, ws_payload)
+                                    _store_cached_eodhd_volume_only(pair, tf_key, limit, ws_payload, grid_offset_seconds)
                                     log.debug(
                                         "[EODHD-VOL] %s %s: CandleBuilder bars used bars=%s age_s=%.0f (Engine A/D)",
                                         display, tf_key, len(cb_candles), age_s,
@@ -2185,9 +2209,9 @@ def _fetch_eodhd_volume_only(pair: dict, tf: str, limit: int, *, cache_only: boo
                 "VP will use MT5 tick-volume this scan; bg re-warm triggered",
                 display, tf_key,
             )
-            def _bg_rewarm(p=pair, t=tf_key, lim=limit):
+            def _bg_rewarm(p=pair, t=tf_key, lim=limit, off=grid_offset_seconds):
                 try:
-                    _fetch_eodhd_volume_only(p, t, lim, cache_only=False)
+                    _fetch_eodhd_volume_only(p, t, lim, cache_only=False, grid_offset_seconds=off)
                 except Exception:
                     pass
             threading.Thread(target=_bg_rewarm, daemon=True, name="eodhd-vol-rewarm").start()
@@ -2197,7 +2221,7 @@ def _fetch_eodhd_volume_only(pair: dict, tf: str, limit: int, *, cache_only: boo
 
     if not _supports_eodhd_volume_overlay(pair):
         payload["detail"] = "unsupported asset type"
-        _store_cached_eodhd_volume_only(pair, tf_key, limit, payload)
+        _store_cached_eodhd_volume_only(pair, tf_key, limit, payload, grid_offset_seconds)
         return payload
 
     # Skip EODHD REST for forex: OTC markets have no real exchange volume.
@@ -2206,23 +2230,23 @@ def _fetch_eodhd_volume_only(pair: dict, tf: str, limit: int, *, cache_only: boo
     if ptype == "forex":
         payload["detail"] = "no_real_volume"
         payload["volume_source"] = "mt5_tick"
-        _store_cached_eodhd_volume_only(pair, tf_key, limit, payload)
+        _store_cached_eodhd_volume_only(pair, tf_key, limit, payload, grid_offset_seconds)
         return payload
 
     if tf_key not in {"M1", "M5", "M15", "H1", "H4", "D1"}:
         payload["detail"] = f"unsupported timeframe: {tf_key}"
-        _store_cached_eodhd_volume_only(pair, tf_key, limit, payload)
+        _store_cached_eodhd_volume_only(pair, tf_key, limit, payload, grid_offset_seconds)
         return payload
 
     if not _is_eodhd_volume_whitelisted(pair, tf_key):
         payload["detail"] = f"pair/timeframe not whitelisted: {tf_key}"
-        _store_cached_eodhd_volume_only(pair, tf_key, limit, payload)
+        _store_cached_eodhd_volume_only(pair, tf_key, limit, payload, grid_offset_seconds)
         return payload
 
     _key = os.environ.get("EODHD_KEY", "").strip()
     if not _key:
         payload["detail"] = "EODHD_KEY not set"
-        _store_cached_eodhd_volume_only(pair, tf_key, limit, payload)
+        _store_cached_eodhd_volume_only(pair, tf_key, limit, payload, grid_offset_seconds)
         return payload
 
     try:
@@ -2232,13 +2256,13 @@ def _fetch_eodhd_volume_only(pair: dict, tf: str, limit: int, *, cache_only: boo
             payload["source_tf"] = "D1"
             if not ticker:
                 payload["detail"] = "no valid EODHD daily ticker"
-                _store_cached_eodhd_volume_only(pair, tf_key, limit, payload)
+                _store_cached_eodhd_volume_only(pair, tf_key, limit, payload, grid_offset_seconds)
                 return payload
 
             api = _get_eodhd_client()
             if not api:
                 payload["detail"] = "EODHD client unavailable"
-                _store_cached_eodhd_volume_only(pair, tf_key, limit, payload)
+                _store_cached_eodhd_volume_only(pair, tf_key, limit, payload, grid_offset_seconds)
                 return payload
 
             days = max(90, int(limit) + 10)
@@ -2264,7 +2288,7 @@ def _fetch_eodhd_volume_only(pair: dict, tf: str, limit: int, *, cache_only: boo
             payload["ticker"] = ticker
             if not ticker:
                 payload["detail"] = "no valid EODHD intraday ticker"
-                _store_cached_eodhd_volume_only(pair, tf_key, limit, payload)
+                _store_cached_eodhd_volume_only(pair, tf_key, limit, payload, grid_offset_seconds)
                 return payload
 
             now_ts = int(datetime.now(timezone.utc).timestamp())
@@ -2297,13 +2321,13 @@ def _fetch_eodhd_volume_only(pair: dict, tf: str, limit: int, *, cache_only: boo
             )
             if resp.status_code != 200:
                 payload["detail"] = f"HTTP {resp.status_code}"
-                _store_cached_eodhd_volume_only(pair, tf_key, limit, payload)
+                _store_cached_eodhd_volume_only(pair, tf_key, limit, payload, grid_offset_seconds)
                 return payload
 
             bars = resp.json()
             if not isinstance(bars, list) or not bars:
                 payload["detail"] = "no intraday data"
-                _store_cached_eodhd_volume_only(pair, tf_key, limit, payload)
+                _store_cached_eodhd_volume_only(pair, tf_key, limit, payload, grid_offset_seconds)
                 return payload
 
             source_candles = [
@@ -2318,7 +2342,9 @@ def _fetch_eodhd_volume_only(pair: dict, tf: str, limit: int, *, cache_only: boo
                 for b in bars
                 if b.get("open") is not None and b.get("close") is not None
             ]
-            candles = _resample_eodhd_volume_bars(source_candles, tf_key, int(limit))
+            candles = _resample_eodhd_volume_bars(
+                source_candles, tf_key, int(limit), offset_seconds=grid_offset_seconds
+            )
 
         usable = [c for c in (candles or []) if float(c.get("vol", 0) or 0) > 0]
         if usable:
@@ -2331,7 +2357,7 @@ def _fetch_eodhd_volume_only(pair: dict, tf: str, limit: int, *, cache_only: boo
     except Exception as e:
         payload["detail"] = str(e)
 
-    _store_cached_eodhd_volume_only(pair, tf_key, limit, payload)
+    _store_cached_eodhd_volume_only(pair, tf_key, limit, payload, grid_offset_seconds)
     return payload
 
 
@@ -2352,7 +2378,13 @@ def _overlay_mt5_candles_with_eodhd_volume(pair: dict, tf: str, mt5_resp: dict) 
     if tf_key not in {"H1", "H4", "D1"}:
         return mt5_resp
 
-    volume_resp = _fetch_eodhd_volume_only(pair, tf_key, len(candles))
+    # MT5 bars keep the broker's bar grid after the UTC shift (H4 at 01/05/09/...
+    # UTC on a UTC+3 broker), so align the EODHD volume resample to the same grid
+    # or exact-timestamp matching never succeeds on H4.
+    grid_offset_seconds = _infer_eodhd_grid_offset_seconds(candles, tf_key)
+    volume_resp = _fetch_eodhd_volume_only(
+        pair, tf_key, len(candles), grid_offset_seconds=grid_offset_seconds
+    )
     volume_candles = _extract_candles(volume_resp)
     if not volume_candles:
         if volume_resp.get("detail"):
@@ -16037,7 +16069,14 @@ def _start_eodhd_volume_warmer() -> None:
                         skipped += 1
                         continue
                     try:
-                        resp = _fetch_eodhd_volume_only(pair, tf, engine_a_limits[tf])
+                        # H4 scan candles sit on the broker-shifted grid; warm the
+                        # matching offset-aware cache slot so analyze_pair() hits it.
+                        _grid_off = 0
+                        if tf == "H4":
+                            _grid_off = (-int(CONFIG.get("MT5_BROKER_UTC_OFFSET", 3)) * 3600) % 14400
+                        resp = _fetch_eodhd_volume_only(
+                            pair, tf, engine_a_limits[tf], grid_offset_seconds=_grid_off
+                        )
                         if isinstance(resp, dict) and not resp.get("error"):
                             warmed += 1
                     except Exception as exc:

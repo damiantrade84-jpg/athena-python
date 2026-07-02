@@ -191,12 +191,49 @@ def is_eodhd_volume_whitelisted(pair: dict | None, tf: str) -> bool:
     return tf_key in allowed
 
 
+_GRID_BUCKET_SECONDS = {"M1": 60, "M5": 300, "M15": 900, "H1": 3600, "H4": 14400}
+
+
+def infer_grid_offset_seconds(base_candles: list[dict] | None, tf: str) -> int:
+    """Offset of the base candle grid vs the epoch-aligned grid for ``tf``.
+
+    MT5 bars keep the broker's bar grid after the UTC shift, so H4 bars can sit
+    at 01/05/09/... UTC while epoch-aligned resampling buckets at 00/04/08/...
+    — exact-timestamp overlay matching then never succeeds. Returns the
+    dominant remainder of ``ts % bucket_seconds`` over the recent base bars so
+    the volume resample can be aligned to the same grid; 0 when the grid is
+    already epoch-aligned, unknown, or the timeframe has no fixed bucket (D1
+    matching floors to calendar dates instead).
+    """
+    bucket = _GRID_BUCKET_SECONDS.get(str(tf or "").upper())
+    if not bucket or not base_candles:
+        return 0
+    counts: dict[int, int] = {}
+    for candle in base_candles[-20:]:
+        if not isinstance(candle, dict):
+            continue
+        ts = candle_time_epoch_utc(candle.get("time", candle.get("datetime")))
+        if ts is None:
+            continue
+        rem = int(ts) % bucket
+        counts[rem] = counts.get(rem, 0) + 1
+    if not counts:
+        return 0
+    return max(counts.items(), key=lambda kv: kv[1])[0]
+
+
 def resample_eodhd_volume_bars(
     source_candles: list[dict] | None,
     target_tf: str,
     limit: int,
+    offset_seconds: int = 0,
 ) -> list[dict] | None:
-    """Resample EODHD bars for volume-only overlays."""
+    """Resample EODHD bars for volume-only overlays.
+
+    ``offset_seconds`` shifts the resample grid off the epoch alignment so the
+    buckets land on the same grid as broker-shifted MT5 bars (see
+    infer_grid_offset_seconds). 0 preserves the historical epoch-aligned grid.
+    """
     tf = str(target_tf or "").upper()
     if tf == "M1":
         if not source_candles:
@@ -235,8 +272,12 @@ def resample_eodhd_volume_bars(
     if df.empty:
         return None
     df = df.set_index("time")
+    resample_kwargs: dict = {"origin": "epoch", "label": "left", "closed": "left"}
+    off = int(offset_seconds or 0)
+    if off and freq != "1D":
+        resample_kwargs["offset"] = pd.Timedelta(seconds=off)
     agg = (
-        df.resample(freq, origin="epoch", label="left", closed="left")
+        df.resample(freq, **resample_kwargs)
         .agg({"open": "first", "high": "max", "low": "min", "close": "last", "vol": "sum"})
         .dropna(subset=["open", "close"])
     )

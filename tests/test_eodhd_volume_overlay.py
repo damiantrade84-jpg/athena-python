@@ -6,6 +6,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from eodhd_volume_overlay import (
     eodhd_commodity_ticker_for_pair,
+    infer_grid_offset_seconds,
     is_eodhd_volume_whitelisted,
     overlay_candle_volumes,
     resample_eodhd_volume_bars,
@@ -108,6 +109,71 @@ def test_overlay_candle_volumes_matches_d1_date_boundaries():
     assert matched == 2
     assert merged[0]["vol"] == 300
     assert merged[1]["vol"] == 400
+
+
+def test_infer_grid_offset_seconds_detects_broker_shifted_h4_grid():
+    # MT5 H4 bars on a UTC+3 broker land at 01/05/09/13/17/21 UTC after the shift.
+    shifted = [
+        {"time": "2026-03-31T05:00:00+00:00"},
+        {"time": "2026-03-31T09:00:00+00:00"},
+        {"time": "2026-03-31T13:00:00+00:00"},
+    ]
+    assert infer_grid_offset_seconds(shifted, "H4") == 3600
+
+    aligned = [
+        {"time": "2026-03-31T04:00:00+00:00"},
+        {"time": "2026-03-31T08:00:00+00:00"},
+    ]
+    assert infer_grid_offset_seconds(aligned, "H4") == 0
+    # Hour-aligned bars have no offset on H1; D1 has no fixed bucket (date matching).
+    assert infer_grid_offset_seconds(shifted, "H1") == 0
+    assert infer_grid_offset_seconds(shifted, "D1") == 0
+    assert infer_grid_offset_seconds([], "H4") == 0
+    assert infer_grid_offset_seconds(None, "H4") == 0
+
+
+def test_resample_h4_with_offset_matches_broker_shifted_bars():
+    # Four 1h exchange-volume bars inside the broker-shifted 13:00-17:00 UTC window.
+    h1 = [
+        {"time": "2026-03-31T13:30:00+00:00", "open": 1, "high": 2, "low": 1, "close": 2, "vol": 10},
+        {"time": "2026-03-31T14:30:00+00:00", "open": 2, "high": 3, "low": 2, "close": 3, "vol": 20},
+        {"time": "2026-03-31T15:30:00+00:00", "open": 3, "high": 4, "low": 3, "close": 4, "vol": 30},
+        {"time": "2026-03-31T16:30:00+00:00", "open": 4, "high": 5, "low": 4, "close": 5, "vol": 40},
+    ]
+
+    epoch_aligned = resample_eodhd_volume_bars(h1, "H4", 10)
+    assert epoch_aligned is not None
+    # Without the offset the buckets sit on the 12:00/16:00 epoch grid...
+    assert [c["time"][11:16] for c in epoch_aligned] == ["12:00", "16:00"]
+
+    shifted = resample_eodhd_volume_bars(h1, "H4", 10, offset_seconds=3600)
+    assert shifted is not None
+    # ...with it they land on the broker grid and hold the full window's volume.
+    assert [c["time"][11:16] for c in shifted] == ["13:00"]
+    assert shifted[0]["vol"] == 100
+
+    base = [
+        {"time": "2026-03-31T09:00:00+00:00", "open": 1, "high": 2, "low": 1, "close": 2, "vol": 7},
+        {"time": "2026-03-31T13:00:00+00:00", "open": 2, "high": 5, "low": 2, "close": 5, "vol": 9},
+    ]
+    offset = infer_grid_offset_seconds(base, "H4")
+    assert offset == 3600
+    merged, matched = overlay_candle_volumes(
+        base, resample_eodhd_volume_bars(h1, "H4", 10, offset_seconds=offset), "H4"
+    )
+    assert matched == 1
+    assert merged[0]["vol"] == 7   # no exchange data for the 09:00 window -> tick volume kept
+    assert merged[1]["vol"] == 100  # 13:00-17:00 window replaced with exchange volume
+
+
+def test_resample_eodhd_volume_bars_offset_zero_is_unchanged():
+    h1 = [
+        {"time": "2026-03-31T00:00:00+00:00", "open": 10, "high": 11, "low": 9, "close": 10.1, "vol": 10},
+        {"time": "2026-03-31T01:00:00+00:00", "open": 10.1, "high": 11, "low": 9.5, "close": 10.2, "vol": 20},
+    ]
+    assert resample_eodhd_volume_bars(h1, "H4", 10) == resample_eodhd_volume_bars(
+        h1, "H4", 10, offset_seconds=0
+    )
 
 
 def test_resample_eodhd_volume_bars_builds_h4_from_h1():
