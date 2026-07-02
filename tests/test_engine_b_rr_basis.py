@@ -567,56 +567,105 @@ def test_calculate_confidence_uses_synthetic_fallback_when_structural_tp_below_m
     assert out["fallback_tp_applied"] is True
 
 
-def test_synthetic_fallback_tp_satisfies_rr_can_satisfy_space_gate():
-    """Regression: a synthetic-fallback TP signal must satisfy the
-    rr_can_satisfy_space gate when room_ok is False.
+def _capped_structural_tp_res() -> dict:
+    return {
+        "atr": 1.0,
+        "asset_type": "crypto",  # crypto has RR_CAN_SATISFY_SPACE_GATE: true
+        "current_swing_sequence": "HH_HL",
+        "macro_swing_sequence": "HH_HL",
+        "bos_confirmed": True,
+        "trigger_ok": True,
+        "zone_touched": True,
+        "near_active_zone": True,
+        # Tight room — fails the room_ok gate
+        "distance_to_res": 0.05,
+        "recommended_stop_loss": 90.0,
+        # Structural TP below min_rr — forces synthetic fallback
+        "recommended_take_profit": 101.0,
+        "structural_verdict": "CLEAR",
+    }
 
-    Before the fix, market_structure.py:3400 tested
-    `level_mode.endswith("_structural_tp")`. After synthetic fallback,
-    level_mode is `<sl>_sl_fallback_rr_tp`, so the suffix never matched
-    and rr_can_satisfy_space was forced False. Crypto signals rescued by
-    the synthetic TP would still die at the space gate when room was tight.
-    """
+
+_CAPPED_TP_STYLE_PROFILE = {
+    "style": "intraday",
+    "min_score": 3.0,
+    "min_rr": 1.5,
+    "fallback_rr": 2.0,
+    "require_macro_align": False,
+}
+
+
+def test_synthetic_fallback_tp_from_capped_structural_tp_blocked_at_space_gate():
+    """2026-07-02 audit: a synthetic fallback TP that replaced a structural TP
+    capped by a nearby opposing zone must NOT substitute for the room gate —
+    the wall that made the structural target fail min_rr is still in front of
+    price, and the synthetic target sits beyond it."""
     engine = NakedEngine()
     out = engine.calculate_confidence(
-        {
-            "atr": 1.0,
-            "asset_type": "crypto",  # crypto has RR_CAN_SATISFY_SPACE_GATE: true
-            "current_swing_sequence": "HH_HL",
-            "macro_swing_sequence": "HH_HL",
-            "bos_confirmed": True,
-            "trigger_ok": True,
-            "zone_touched": True,
-            "near_active_zone": True,
-            # Tight room — fails the room_ok gate
-            "distance_to_res": 0.05,
-            "recommended_stop_loss": 90.0,
-            # Structural TP below min_rr — forces synthetic fallback
-            "recommended_take_profit": 101.0,
-            "structural_verdict": "CLEAR",
-        },
+        _capped_structural_tp_res(),
         current_price=100.0,
         direction="LONG",
         entry_candles=[],
-        style_profile={
-            "style": "intraday",
-            "min_score": 3.0,
-            "min_rr": 1.5,
-            "fallback_rr": 2.0,
-            "require_macro_align": False,
-        },
+        style_profile=dict(_CAPPED_TP_STYLE_PROFILE),
     )
 
     assert out["fallback_tp_applied"] is True
     assert out["rr_ok"] is True
     assert out["execution_tp"] == pytest.approx(103.0)
     assert out["room_ok"] is False
-    # The whole point: rr_can_satisfy_space_gate must rescue the signal.
     assert out["rr_space_gate_enabled"] is True
-    assert out["rr_can_satisfy_space_gate"] is True, (
-        f"Synthetic TP should satisfy space gate; "
-        f"level_mode={out.get('level_mode')!r}, rr_source={out.get('rr_source')!r}"
+    assert out["rr_space_capped_tp_blocked"] is True
+    assert out["rr_can_satisfy_space_gate"] is False
+    assert out["space_gate_ok"] is False
+    assert out["passed"] is False
+
+
+def test_synthetic_fallback_tp_capped_block_flag_off_restores_legacy(monkeypatch):
+    """Legacy rescue behaviour returns when the block flag is disabled."""
+    monkeypatch.setitem(
+        config.CONFIG, "ENGINE_B_SPACE_RR_SUBSTITUTE_BLOCK_CAPPED_STRUCTURAL_TP", False
     )
+    engine = NakedEngine()
+    out = engine.calculate_confidence(
+        _capped_structural_tp_res(),
+        current_price=100.0,
+        direction="LONG",
+        entry_candles=[],
+        style_profile=dict(_CAPPED_TP_STYLE_PROFILE),
+    )
+
+    assert out["fallback_tp_applied"] is True
+    assert out["room_ok"] is False
+    assert out["rr_space_capped_tp_blocked"] is False
+    assert out["rr_can_satisfy_space_gate"] is True
+    assert out["space_gate_ok"] is True
+
+
+def test_synthetic_fallback_tp_without_opposing_wall_still_satisfies_space_gate():
+    """A synthetic TP created with NO opposing wall mapped (no structural TP,
+    no distance_to_res) still qualifies for the space substitution — the
+    2026-06-24 'no opposing zone' over-block must not recur."""
+    engine = NakedEngine()
+    res = _capped_structural_tp_res()
+    res.pop("recommended_take_profit")  # no opposing wall → no structural TP
+    res["distance_to_res"] = None
+    res["bos_confirmed"] = False  # room None-path needs trend+BOS → room_ok False
+    profile = dict(_CAPPED_TP_STYLE_PROFILE)
+    profile["min_rr"] = 2.5  # above the crypto intraday ATR tp1/sl ratio (2.0)
+    out = engine.calculate_confidence(
+        res,
+        current_price=100.0,
+        direction="LONG",
+        entry_candles=[],
+        style_profile=profile,
+    )
+
+    assert out["fallback_tp_applied"] is True
+    assert out["fallback_tp_reason"] == "atr_tp_below_min_rr"
+    assert out["room_ok"] is False
+    assert out["rr_ok"] is True
+    assert out["rr_space_capped_tp_blocked"] is False
+    assert out["rr_can_satisfy_space_gate"] is True
     assert out["space_gate_ok"] is True
 
 

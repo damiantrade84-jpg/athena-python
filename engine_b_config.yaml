@@ -23,7 +23,10 @@ regime_multipliers:
   TRENDING: 0.95
   RANGING: 1.10
   HIGH_VOLATILITY: 1.10
-  LOW_VOLATILITY: 0.90
+  # 2026-07-02 audit: was 0.90. A structural BOS/trigger engine should not get a
+  # min_score DISCOUNT in low-volatility chop — that is where false breaks and
+  # doji-noise triggers cluster. TRENDING keeps the only discount.
+  LOW_VOLATILITY: 1.0
   UNKNOWN: 1.0
 regime_scaling_enabled: true
 
@@ -35,8 +38,17 @@ crypto_aggtrade:
 space_gate:
   rr_substitute_min_atr_floor_enabled: false
   rr_substitute_min_atr_floor: 0.5
+  # 2026-07-02 audit: a synthetic fallback TP that replaced a structural TP
+  # capped by a nearby opposing zone may NOT substitute for the room gate —
+  # the wall that capped the structural target is still in front of price.
+  # Synthetic TPs created because no opposing wall existed still qualify.
+  # Set false to restore legacy behaviour.
+  block_capped_structural_tp_substitute: true
 
 execution_levels:
+  # max_sl_pct is accepted but UNUSED (2026-07-02 audit: the old
+  # MAX_SL_PCT["engine_b"] key it produced was read by nothing). Engine B SL
+  # width caps come from the risk_engine per-asset-class MAX_SL_PCT map.
   max_sl_pct: 0.02
   max_sl_atr_default: 3.0
   min_sl_atr_default: 0.75
@@ -92,30 +104,43 @@ group_overrides:
     min_room_atr: 1.2
     min_rr: 1.8
     space_rr_substitute: true
+  # 2026-07-02 audit: min_room_atr rows below wire up the crypto room-gate
+  # values the code intended contextually (calculate_confidence._get_min_room_atr:
+  # crypto intraday 0.25 / swing 0.40) but which were dead — every live profile
+  # already carried the flat style defaults (0.7/1.0), masking the fallbacks.
+  # crypto_doge keeps its stricter explicit rows (deliberate exception).
   - style: intraday
     group: crypto_btc
     min_rr: 1.3
+    min_room_atr: 0.25
   - style: swing
     group: crypto_btc
     min_rr: 1.8
+    min_room_atr: 0.4
   - style: intraday
     group: crypto_eth
     min_rr: 1.3
+    min_room_atr: 0.25
   - style: swing
     group: crypto_eth
     min_rr: 1.8
+    min_room_atr: 0.4
   - style: intraday
     group: crypto_alt_majors
     min_rr: 1.4
+    min_room_atr: 0.25
   - style: swing
     group: crypto_alt_majors
     min_rr: 1.9
+    min_room_atr: 0.4
   - style: intraday
     group: crypto_other
     min_rr: 1.4
+    min_room_atr: 0.25
   - style: swing
     group: crypto_other
     min_rr: 1.9
+    min_room_atr: 0.4
   - style: scalp
     group: crypto_doge
     min_room_atr: 0.5
@@ -172,15 +197,20 @@ group_overrides:
   - style: swing
     group: bond_tlt
     min_rr: 1.8
+  # 2026-07-02 audit: index intraday min_room_atr 0.2 wires the dead contextual
+  # index room value (see crypto comment above). Swing keeps the 1.0 default —
+  # 0.2 ATR of room is not a sound swing requirement.
   - style: intraday
     group: us_indices_trackers
     min_rr: 1.3
+    min_room_atr: 0.2
   - style: swing
     group: us_indices_trackers
     min_rr: 1.8
   - style: intraday
     group: index_other
     min_rr: 1.4
+    min_room_atr: 0.2
   - style: swing
     group: index_other
     min_rr: 1.9
@@ -204,12 +234,14 @@ group_overrides:
   - style: intraday
     group: eu_indices
     min_rr: 1.3
+    min_room_atr: 0.2
   - style: swing
     group: eu_indices
     min_rr: 1.8
   - style: intraday
     group: asian_indices
     min_rr: 1.3
+    min_room_atr: 0.2
   - style: swing
     group: asian_indices
     min_rr: 1.8

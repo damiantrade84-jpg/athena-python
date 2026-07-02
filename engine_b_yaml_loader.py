@@ -155,8 +155,15 @@ def translate_engine_b_config(doc: dict[str, Any]) -> dict[str, Any]:
             "space_gate.rr_substitute_min_atr_floor",
             min_value=0.0,
         ),
+        "ENGINE_B_SPACE_RR_SUBSTITUTE_BLOCK_CAPPED_STRUCTURAL_TP": _bool_default(
+            space.get("block_capped_structural_tp_substitute"),
+            "space_gate.block_capped_structural_tp_substitute",
+            True,
+        ),
         "ENGINE_B_ENFORCE_MAX_SL_PCT": True,
-        "MAX_SL_PCT": {"engine_b": _float(execution.get("max_sl_pct"), "execution_levels.max_sl_pct", min_value=0.0)},
+        # execution_levels.max_sl_pct is accepted for schema compatibility but is
+        # NOT emitted: the previous MAX_SL_PCT["engine_b"] key was read by nothing.
+        # SL width caps come from the risk_engine per-asset-class MAX_SL_PCT map.
         "ENGINE_B_MAX_SL_ATR_DEFAULT": _float(
             execution.get("max_sl_atr_default"), "execution_levels.max_sl_atr_default", min_value=0.0
         ),
