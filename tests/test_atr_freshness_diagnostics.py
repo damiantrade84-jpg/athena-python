@@ -305,3 +305,141 @@ def test_stale_classifier_threshold_tf_specific():
         {"atr_tf": "M1", "atr_age_seconds": 10}, {"H1": 7200}
     )
     assert stale is False
+
+
+def _make_ohlcv_series(count: int = 30, step: float = 0.01) -> list[dict]:
+    candles = []
+    price = 1.0
+    for i in range(count):
+        candles.append(
+            {
+                "time": f"2026-01-{(i // 24) + 1:02d}T{i % 24:02d}:00:00Z",
+                "open": price,
+                "high": price + step,
+                "low": price - step,
+                "close": price + step * 0.5,
+            }
+        )
+        price += step * 0.5
+    return candles
+
+
+def test_attach_engine_a_v3_atr_provenance_forex_intraday_uses_h1_signal_feed():
+    import atr_diagnostics as ad
+
+    d1 = _make_ohlcv_series()
+    h4 = _make_ohlcv_series()
+    h1 = _make_ohlcv_series()
+    signal: dict = {}
+
+    ad.attach_engine_a_v3_atr_provenance(
+        signal,
+        {"type": "forex", "source": "mt5", "display": "EUR/USD"},
+        "intraday",
+        d1,
+        h4,
+        h1,
+        config={"ATR_FRESHNESS": {"ENABLED": False}},
+    )
+
+    diag = signal["atrDiagnostics"]
+    assert diag["atr_tf"] == "H1"
+    assert diag["atr_source"] == "mt5"
+    assert diag["atr_value"] is not None and diag["atr_value"] > 0
+    assert diag["atr_confirmed_only"] is True
+    assert "atrFreshness" in signal
+
+
+def test_attach_engine_a_v3_atr_provenance_crypto_prefers_bybit_levels_feed():
+    import atr_diagnostics as ad
+
+    d1 = _make_ohlcv_series()
+    h4 = _make_ohlcv_series()
+    h1 = _make_ohlcv_series()
+    bybit_candles = _make_ohlcv_series()
+
+    def _fake_bybit(_pair, _style):
+        return 123.45, bybit_candles
+
+    signal: dict = {}
+    ad.attach_engine_a_v3_atr_provenance(
+        signal,
+        {"type": "crypto", "source": "binance", "display": "BTC/USDT"},
+        "intraday",
+        d1,
+        h4,
+        h1,
+        config={
+            "ENGINE_A_CRYPTO_LEVELS_FEED": "bybit",
+            "ENGINE_A_CRYPTO_LEVELS_SIGNAL_FEED_FALLBACK": False,
+            "ATR_FRESHNESS": {"ENABLED": False},
+        },
+        bybit_atr_and_candles_fn=_fake_bybit,
+    )
+
+    diag = signal["atrDiagnostics"]
+    assert diag["atr_value"] == 123.45
+    assert diag["atr_tf"] == "H4"
+    assert diag["atr_source"] == "bybit"
+    assert diag["atr_confirmed_only"] is True
+
+
+def test_attach_engine_a_v3_atr_provenance_crypto_bybit_unavailable_fail_closed():
+    import atr_diagnostics as ad
+
+    d1 = _make_ohlcv_series()
+    h4 = _make_ohlcv_series()
+    h1 = _make_ohlcv_series()
+    signal: dict = {}
+
+    ad.attach_engine_a_v3_atr_provenance(
+        signal,
+        {"type": "crypto", "source": "binance", "display": "BTC/USDT"},
+        "intraday",
+        d1,
+        h4,
+        h1,
+        config={
+            "ENGINE_A_CRYPTO_LEVELS_FEED": "bybit",
+            "ENGINE_A_CRYPTO_LEVELS_SIGNAL_FEED_FALLBACK": False,
+            "ATR_FRESHNESS": {"ENABLED": False},
+        },
+        bybit_atr_and_candles_fn=lambda *_a, **_k: (None, None),
+    )
+
+    diag = signal["atrDiagnostics"]
+    assert diag["atr_source"] == "bybit_unavailable"
+    assert diag["atr_value"] is None
+
+
+def test_cascade_provenance_accepts_attached_engine_a_atr_diagnostics():
+    from cascade_scan import _provenance_blockers
+
+    import atr_diagnostics as ad
+
+    d1 = _make_ohlcv_series()
+    h4 = _make_ohlcv_series()
+    h1 = _make_ohlcv_series()
+    signal: dict = {
+        "candleFetchMeta": {
+            "D1": {"stalenessSeverity": "fresh"},
+            "H4": {"stalenessSeverity": "fresh"},
+            "H1": {"stalenessSeverity": "fresh"},
+        },
+        "atrFreshness": {"enabled": False, "stale": False},
+    }
+    ad.attach_engine_a_v3_atr_provenance(
+        signal,
+        {"type": "forex", "source": "mt5"},
+        "intraday",
+        d1,
+        h4,
+        h1,
+        config={"ATR_FRESHNESS": {"ENABLED": False}},
+    )
+
+    blockers = _provenance_blockers(signal)
+    assert "missing_atr_diagnostics" not in blockers
+    assert "invalid_atr_value" not in blockers
+    assert "missing_atr_tf" not in blockers
+    assert "missing_atr_source" not in blockers

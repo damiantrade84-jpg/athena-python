@@ -1894,13 +1894,21 @@ def resolve_engine_b_execution_levels(
             "structural_tp_available": _struct_tp is not None,
             "execution_sl": None,
             "execution_tp": None,
+            "execution_tp1": None,
+            "execution_tp2": None,
             "execution_rr": 0.0,
+            "execution_rr1": 0.0,
+            "execution_rr2": 0.0,
             "rr_used_for_gate": 0.0,
             "rr_source": _reject,
             "level_mode": _reject,
             "level_cohort": "unknown_level_mode",
             "sl_source": None,
             "tp_source": None,
+            "tp1_source": None,
+            "tp2_source": None,
+            "exit_strategy": "invalid_levels",
+            "runner_tp_requires_structural_break": False,
             "execution_levels_valid": False,
             "execution_level_reject_reason": _reject,
             "execution_tp_side_ok": False,
@@ -2070,6 +2078,7 @@ def resolve_engine_b_execution_levels(
 
     _fallback_applied = False
     _fallback_reason = None
+    _structural_tp_below_min_rr = False
     # Synthetic fallback eligibility: a valid SL (correct side, non-zero distance)
     # is required to construct a TP from sl_dist * fallback_rr. We allow the
     # fallback to fire in two cases:
@@ -2120,6 +2129,7 @@ def resolve_engine_b_execution_levels(
                     if _tp_source == "structural"
                     else f"{_tp_source}_tp_below_min_rr"
                 )
+                _structural_tp_below_min_rr = _tp_source == "structural"
             if bool(config.CONFIG.get("ENGINE_B_ALLOW_SYNTHETIC_FALLBACK_RR_TP", False)):
                 _synth_tp, _ = _synthesize_tp_from_sl(_entry, _exec_sl, direction, _fallback_rr, _min_rr)
                 if _synth_tp is not None:
@@ -2257,6 +2267,36 @@ def resolve_engine_b_execution_levels(
                 _exec_reject = "tp_exchange_bounds"
                 _exec_tp = None
 
+    _execution_tp1 = _exec_tp
+    _execution_tp2 = _exec_tp
+    _execution_rr1 = _exec_rr
+    _execution_rr2 = _exec_rr
+    _tp1_source = _tp_source
+    _tp2_source = _tp_source
+    _exit_strategy = (
+        f"single_{_tp_source}_tp"
+        if _exec_valid and _exec_tp is not None and _tp_source
+        else "invalid_levels"
+    )
+    _runner_tp_requires_structural_break = False
+    if (
+        _fallback_applied
+        and _structural_tp_below_min_rr
+        and _struct_tp_valid
+        and _exec_sl is not None
+        and _exec_tp is not None
+    ):
+        _tp1_rr, _tp1_valid, _, _ = _compute_exec_rr(_exec_sl, _struct_tp)
+        if _tp1_valid:
+            _execution_tp1 = _struct_tp
+            _execution_tp2 = _exec_tp
+            _execution_rr1 = _tp1_rr
+            _execution_rr2 = _exec_rr
+            _tp1_source = "structural"
+            _tp2_source = "fallback_rr"
+            _exit_strategy = "scale_out_structural_tp1_fallback_tp2"
+            _runner_tp_requires_structural_break = True
+
     _structural_target_distance_atr = (
         round(abs(_struct_tp - _entry) / _atr, 4)
         if _struct_tp is not None and _entry > 0 and _atr > 0
@@ -2281,13 +2321,21 @@ def resolve_engine_b_execution_levels(
         "structural_tp_available": _struct_tp is not None,
         "execution_sl": _exec_sl,
         "execution_tp": _exec_tp,
+        "execution_tp1": _execution_tp1,
+        "execution_tp2": _execution_tp2,
         "execution_rr": round(_exec_rr, 4),
+        "execution_rr1": round(_execution_rr1, 4),
+        "execution_rr2": round(_execution_rr2, 4),
         "rr_used_for_gate": round(_exec_rr, 4),
         "rr_source": _rr_source,
         "level_mode": _level_mode,
         "level_cohort": _level_cohort,
         "sl_source": _sl_source,
         "tp_source": _tp_source,
+        "tp1_source": _tp1_source,
+        "tp2_source": _tp2_source,
+        "exit_strategy": _exit_strategy,
+        "runner_tp_requires_structural_break": _runner_tp_requires_structural_break,
         "execution_levels_valid": _exec_valid,
         "execution_level_reject_reason": _exec_reject,
         "execution_tp_side_ok": _exec_tp_side_ok,
@@ -5114,11 +5162,19 @@ class NakedEngine:
             "structural_tp_available": _exec_lvl.get("structural_tp_available"),
             "execution_sl": _exec_lvl["execution_sl"],
             "execution_tp": _exec_lvl["execution_tp"],
+            "execution_tp1": _exec_lvl.get("execution_tp1"),
+            "execution_tp2": _exec_lvl.get("execution_tp2"),
             "execution_rr": _exec_lvl["execution_rr"],
+            "execution_rr1": _exec_lvl.get("execution_rr1"),
+            "execution_rr2": _exec_lvl.get("execution_rr2"),
             "level_mode": _exec_lvl["level_mode"],
             "level_cohort": _exec_lvl.get("level_cohort", engine_b_level_cohort(_exec_lvl.get("level_mode"))),
             "sl_source": _exec_lvl.get("sl_source"),
             "tp_source": _exec_lvl.get("tp_source"),
+            "tp1_source": _exec_lvl.get("tp1_source"),
+            "tp2_source": _exec_lvl.get("tp2_source"),
+            "exit_strategy": _exec_lvl.get("exit_strategy"),
+            "runner_tp_requires_structural_break": _exec_lvl.get("runner_tp_requires_structural_break"),
             "execution_levels_valid": _exec_lvl["execution_levels_valid"],
             "execution_level_reject_reason": _exec_lvl["execution_level_reject_reason"],
             "fallback_tp_applied": _exec_lvl["fallback_tp_applied"],
@@ -5312,7 +5368,19 @@ class NakedEngine:
         return {
             "entry_price": current_price,
             "sl": confidence.get("execution_sl") or result.get("recommended_stop_loss"),
-            "tp1": confidence.get("execution_tp") or result.get("recommended_take_profit"),
+            "tp1": (
+                confidence.get("execution_tp1")
+                or confidence.get("execution_tp")
+                or result.get("recommended_take_profit")
+            ),
+            "tp2": (
+                confidence.get("execution_tp2")
+                or confidence.get("execution_tp")
+                or result.get("recommended_take_profit")
+            ),
+            "rr1": confidence.get("execution_rr1") or confidence.get("rr_used_for_gate"),
+            "rr2": confidence.get("execution_rr2") or confidence.get("rr_used_for_gate"),
+            "exit_strategy": confidence.get("exit_strategy"),
             "direction": direction,
             "score": confidence["score"],
             "confidence_pct": confidence["pct"],

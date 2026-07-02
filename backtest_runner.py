@@ -5335,6 +5335,8 @@ def backtest_pair_naked(pair: dict, style: str = "naked", validation_mode="stand
             # produce execution levels (e.g. zero ATR / invalid entry).
             sl = conf_data.get("execution_sl")
             tp = conf_data.get("execution_tp")
+            tp1 = conf_data.get("execution_tp1", tp)
+            tp2 = conf_data.get("execution_tp2", tp)
             level_source = conf_data.get("rr_source") or "engine_b_execution"
             if sl is None or tp is None:
                 _bt_regime = res.get("regime_state")
@@ -5351,8 +5353,10 @@ def backtest_pair_naked(pair: dict, style: str = "naked", validation_mode="stand
                 )
                 sl = sl if sl is not None else _lvl.get("sl")
                 tp = tp if tp is not None else _lvl.get("tp1")
+                tp1 = tp1 if tp1 is not None else tp
+                tp2 = tp2 if tp2 is not None else tp
                 level_source = "calc_levels_fallback"
-            if sl is None or tp is None:
+            if sl is None or tp is None or tp1 is None or tp2 is None:
                 continue
 
             _rr_sl_dist = abs(entry - sl)
@@ -5369,13 +5373,20 @@ def backtest_pair_naked(pair: dict, style: str = "naked", validation_mode="stand
                     "entry": entry,
                     "sl": sl,
                     "tp": tp,
+                    "tp1": tp1,
+                    "tp2": tp2,
+                    "rr1": conf_data.get("execution_rr1"),
+                    "rr2": conf_data.get("execution_rr2"),
                     "rr": rr,
                     "res": res,
                     "conf": conf_data,
                     "regime_label": regime_label,
                     "level_mode": level_source,
-                    "selected_tp_source": level_source,
+                    "selected_tp_source": conf_data.get("tp2_source") or level_source,
+                    "selected_tp1_source": conf_data.get("tp1_source") or level_source,
+                    "selected_tp2_source": conf_data.get("tp2_source") or level_source,
                     "selected_sl_source": level_source,
+                    "exit_strategy": conf_data.get("exit_strategy"),
                 }
             )
 
@@ -5386,7 +5397,10 @@ def backtest_pair_naked(pair: dict, style: str = "naked", validation_mode="stand
         best = max(candidates, key=lambda x: x["score"])
         direction = best["direction"]
         selected_tp_source = best.get("selected_tp_source", "unknown")
+        selected_tp1_source = best.get("selected_tp1_source", selected_tp_source)
+        selected_tp2_source = best.get("selected_tp2_source", selected_tp_source)
         selected_sl_source = best.get("selected_sl_source", "unknown")
+        exit_strategy = best.get("exit_strategy")
 
         # Execute at the open of the very next candle in the entry timeframe.
         # This matches live discovery where fill is immediate, not delayed to next H4.
@@ -5407,15 +5421,21 @@ def backtest_pair_naked(pair: dict, style: str = "naked", validation_mode="stand
         # so structural targets don't run beyond the style's risk contract.
         sl = best["sl"]
         tp = best["tp"]
-        if sl is None or tp is None:
+        tp1 = best.get("tp1", tp)
+        tp2 = best.get("tp2", tp)
+        if sl is None or tp is None or tp1 is None or tp2 is None:
             i += 1
             continue
         try:
             sl = float(sl)
             tp = float(tp)
+            tp1 = float(tp1)
+            tp2 = float(tp2)
         except (TypeError, ValueError):
             i += 1
             continue
+        # Treat the runner target as the compatibility TP used by older fields.
+        tp = tp2
         _sl_dist = abs(entry - sl)
         _tp_dist = abs(tp - entry)
         target_rr = (_tp_dist / _sl_dist) if _sl_dist > 0 else 0.0
@@ -5426,17 +5446,25 @@ def backtest_pair_naked(pair: dict, style: str = "naked", validation_mode="stand
                 if direction == "LONG"
                 else entry - (_sl_dist * _fallback_rr)
             )
+            tp2 = tp
             target_rr = _fallback_rr
             selected_tp_source = "capped_to_fallback_rr"
+            selected_tp2_source = "capped_to_fallback_rr"
+            if (
+                (direction == "LONG" and tp1 > tp2)
+                or (direction == "SHORT" and tp1 < tp2)
+            ):
+                tp1 = tp2
+                selected_tp1_source = "capped_to_fallback_rr"
 
         _levels_side_ok = (
-            (direction == "LONG" and sl < entry < tp)
-            or (direction == "SHORT" and sl > entry > tp)
+            (direction == "LONG" and sl < entry < tp1 and sl < entry < tp2)
+            or (direction == "SHORT" and sl > entry > tp1 and sl > entry > tp2)
         )
         if not _levels_side_ok:
             log.debug(
                 f"[ENGINE-B-BT] {pair['display']} {direction} invalid post-fill levels "
-                f"entry={entry} sl={sl} tp={tp} - SKIP"
+                f"entry={entry} sl={sl} tp1={tp1} tp2={tp2} - SKIP"
             )
             i += 1
             continue
@@ -5453,6 +5481,8 @@ def backtest_pair_naked(pair: dict, style: str = "naked", validation_mode="stand
 
         # Post-fill structural targets stay bounded by the style fallback RR contract.
         actual_rr = target_rr
+        rr1_actual = (abs(tp1 - entry) / _sl_dist) if _sl_dist > 0 else 0.0
+        rr2_actual = (abs(tp2 - entry) / _sl_dist) if _sl_dist > 0 else 0.0
 
         # MAX_SL_PCT rejection — Ensuring backtest results reflect the same risk thresholds as live trading.
         _max_sl_pct_b = CONFIG.get("MAX_SL_PCT", {}).get(_ptype, 0.05)
@@ -5478,6 +5508,21 @@ def backtest_pair_naked(pair: dict, style: str = "naked", validation_mode="stand
         risk = abs(entry - sl)
         _active_sl = sl
         _be_triggered = False
+        _scale_out_runner = (
+            exit_strategy == "scale_out_structural_tp1_fallback_tp2"
+            and bool(CONFIG.get("ENGINE_B_BT_RUNNER_ENABLED", True))
+        )
+        _tp1_size = float(CONFIG.get("ENGINE_B_BT_SCALE_OUT_TP1_SIZE", 0.5) or 0.5)
+        _tp1_size = max(0.0, min(1.0, _tp1_size))
+        if not _scale_out_runner:
+            _tp1_size = 1.0
+        _move_runner_sl_to_be = bool(
+            CONFIG.get("ENGINE_B_BT_MOVE_SL_TO_BE_AFTER_TP1", True)
+        )
+        _tp1_hit = False
+        _tp2_hit = False
+        _runner_be_armed = False
+        _exit_path = None
 
         # PHASE 1E: Track additive diagnostics
         max_favorable_excursion_r = 0.0
@@ -5519,18 +5564,52 @@ def backtest_pair_naked(pair: dict, style: str = "naked", validation_mode="stand
                 future,
                 direction=direction,
                 sl=_active_sl,
-                tp1=tp,
+                tp1=None if (_scale_out_runner and _tp1_hit) else tp1,
+                tp2=tp2,
                 sl_outcome="BE" if _be_triggered else "SL",
             )
             if _both_hit:
                 same_bar_both_hit += 1
+            if _bar_outcome == "TP2":
+                if _scale_out_runner and _tp1_size < 1.0:
+                    _tp1_hit = True
+                    _tp2_hit = True
+                    _exit_path = "TP1_THEN_TP2"
+                    r_multiple = round(
+                        (_tp1_size * rr1_actual) + ((1.0 - _tp1_size) * rr2_actual),
+                        2,
+                    )
+                else:
+                    r_multiple = round(rr2_actual, 2)
+                outcome = "TP2"
+                price_never_reached_tp = False
+                break
             if _bar_outcome == "TP1":
+                price_never_reached_tp = False
+                if _scale_out_runner and _tp1_size < 1.0:
+                    _tp1_hit = True
+                    _exit_path = "TP1_THEN_RUNNING"
+                    if _move_runner_sl_to_be:
+                        _active_sl = entry
+                        _be_triggered = True
+                        be_armed = True
+                        _runner_be_armed = True
+                        be_trigger_r = round(rr1_actual, 2)
+                    continue
                 outcome = "TP1"
-                r_multiple = round(target_rr, 2)
+                r_multiple = round(rr1_actual, 2)
                 break
             if _bar_outcome in ("SL", "BE"):
                 outcome = _bar_outcome
-                r_multiple = 0.0 if outcome == "BE" else -1.0
+                if _scale_out_runner and _tp1_hit and _tp1_size < 1.0:
+                    _runner_r = 0.0 if outcome == "BE" else -1.0
+                    r_multiple = round(
+                        (_tp1_size * rr1_actual) + ((1.0 - _tp1_size) * _runner_r),
+                        2,
+                    )
+                    _exit_path = "TP1_THEN_BE" if outcome == "BE" else "TP1_THEN_SL"
+                else:
+                    r_multiple = 0.0 if outcome == "BE" else -1.0
                 break
             
             # Use H1 granularity for barrier checks if we need more precision than H4 (optional enhancement)
@@ -5564,12 +5643,12 @@ def backtest_pair_naked(pair: dict, style: str = "naked", validation_mode="stand
                 
                 # Track if TP/SL were ever reached
                 if direction == "LONG":
-                    if f_high >= tp:
+                    if f_high >= tp1 or f_high >= tp2:
                         price_never_reached_tp = False
                     if f_low <= sl:
                         price_never_reached_sl = False
                 else:
-                    if f_low <= tp:
+                    if f_low <= tp1 or f_low <= tp2:
                         price_never_reached_tp = False
                     if f_high >= sl:
                         price_never_reached_sl = False
@@ -5595,7 +5674,15 @@ def backtest_pair_naked(pair: dict, style: str = "naked", validation_mode="stand
             last_close = float(future_window[-1]["close"])
             if risk > 0:
                 open_r = ((last_close - entry) / risk) if direction == "LONG" else ((entry - last_close) / risk)
-                r_multiple = round(max(-1.0, min(target_rr, open_r)), 2)
+                if _scale_out_runner and _tp1_hit and _tp1_size < 1.0:
+                    runner_r = max(-1.0, min(rr2_actual, open_r))
+                    r_multiple = round(
+                        (_tp1_size * rr1_actual) + ((1.0 - _tp1_size) * runner_r),
+                        2,
+                    )
+                    _exit_path = "TP1_THEN_TIMEOUT"
+                else:
+                    r_multiple = round(max(-1.0, min(target_rr, open_r)), 2)
 
         # Deduct round-trip transaction costs from every closed result, including forced TIMEOUT exits.
         _fee_r = _bt_transaction_cost_r(entry, sl, pair.get("type", "stock"))
@@ -5628,8 +5715,8 @@ def backtest_pair_naked(pair: dict, style: str = "naked", validation_mode="stand
                 "score": best["score"],
                 "entry": round(float(entry), 6),
                 "sl": round(float(sl), 6),
-                "tp1": round(float(tp), 6),
-                "tp2": round(float(tp), 6),
+                "tp1": round(float(tp1), 6),
+                "tp2": round(float(tp2), 6),
                 "outcome": outcome,
                 "resultR": round(r_multiple, 2),
                 "regime": best.get("regime_label", "RANGING"),
@@ -5662,8 +5749,17 @@ def backtest_pair_naked(pair: dict, style: str = "naked", validation_mode="stand
                 "zone_touched": best["res"].get("zone_touched", False),
                 "rr_target": round(target_rr, 2),
                 "actual_rr": round(actual_rr, 2),
-                "selected_tp": round(float(tp), 6),
+                "rr1": round(rr1_actual, 2),
+                "rr2": round(rr2_actual, 2),
+                "selected_tp": round(float(tp2), 6),
+                "selected_tp1": round(float(tp1), 6),
+                "selected_tp2": round(float(tp2), 6),
                 "selected_sl": round(float(sl), 6),
+                "exit_strategy": exit_strategy,
+                "exit_strategy_path": _exit_path,
+                "partial_taken_tp1": bool(_scale_out_runner and _tp1_hit and _tp1_size < 1.0),
+                "runner_be_armed": bool(_runner_be_armed),
+                "tp1_size": round(_tp1_size, 4),
                 "bt_exit_policy": CONFIG.get("ENGINE_B_BT_EXIT_POLICY", "fixed_target_be"),
                 "bos_volume_confirmed": best["res"].get("bos_volume_confirmed", True),
                 "choch_confirmed": best["res"].get("choch_confirmed", False),
@@ -5682,6 +5778,8 @@ def backtest_pair_naked(pair: dict, style: str = "naked", validation_mode="stand
                 "bos_confirmed": best["res"].get("bos_confirmed", False),
                 # PHASE 1C: Level source tracking
                 "selected_tp_source": selected_tp_source,
+                "selected_tp1_source": selected_tp1_source,
+                "selected_tp2_source": selected_tp2_source,
                 "selected_sl_source": selected_sl_source,
             }
         )
@@ -5705,12 +5803,13 @@ def backtest_pair_naked(pair: dict, style: str = "naked", validation_mode="stand
         mode_warning=_vm_mode_warning,
     )
     _tp_count = sum(1 for t in trades if t.get("outcome") == "TP1")
+    _tp2_count = sum(1 for t in trades if t.get("outcome") == "TP2")
     _sl_count = sum(1 for t in trades if t.get("outcome") == "SL")
     _be_count = sum(1 for t in trades if t.get("outcome") == "BE")
     _to_count = sum(1 for t in trades if t.get("outcome") == "TIMEOUT")
     log.warning(
         f"[ENGINE B BT] {pair['display']} done: {result.get('totalTrades', 0)} trades "
-        f"(TP1={_tp_count} SL={_sl_count} BE={_be_count} TIMEOUT={_to_count}), "
+        f"(TP1={_tp_count} TP2={_tp2_count} SL={_sl_count} BE={_be_count} TIMEOUT={_to_count}), "
         f"WR {result.get('winRate', 0):.1f}%, PF {result.get('profitFactor', 0):.2f}, "
         f"Expect {result.get('expectancy', 0):.2f}R, SQN {result.get('sqn', 0):.2f}, "
         f"style={resolved_style}"

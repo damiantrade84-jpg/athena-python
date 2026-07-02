@@ -1354,6 +1354,9 @@ CONFIG: dict = {
     "ENGINE_B_ENFORCE_MAX_SL_PCT": True,
     "NAKED_MAX_DAILY": 3,
     "ENGINE_B_BT_EXIT_POLICY": "fixed_target_be",
+    "ENGINE_B_BT_SCALE_OUT_TP1_SIZE": 0.5,
+    "ENGINE_B_BT_MOVE_SL_TO_BE_AFTER_TP1": True,
+    "ENGINE_B_BT_RUNNER_ENABLED": True,
     # When True, Engine B skips forex on 22:00–07:00 UTC bars (backtest + live scan).
     "ENGINE_B_FOREX_ASIAN_SESSION_SKIP_ENABLED": True,
     "ENGINE_B_FOREX_PRE_ASIAN_SESSION_SKIP_ENABLED": True,

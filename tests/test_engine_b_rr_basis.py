@@ -15,6 +15,7 @@ from market_structure import (
     engine_b_level_cohort,
     resolve_engine_b_execution_levels,
 )
+from scanner import _apply_engine_b_scan_levels
 
 
 @pytest.fixture(autouse=True)
@@ -273,6 +274,57 @@ def test_forex_structural_tp_below_min_rr_uses_synthetic_fallback():
     assert out["fallback_tp_reason"] == "structural_tp_below_min_rr"
 
 
+def test_structural_tp_below_min_rr_preserves_reachable_tp1_and_runner_tp2():
+    out = resolve_engine_b_execution_levels(
+        direction="LONG",
+        entry=100.0,
+        structural_sl=90.0,
+        structural_tp=101.0,
+        atr=1.0,
+        style="intraday",
+        asset_class="forex",
+        min_rr=1.5,
+        fallback_rr=2.0,
+    )
+
+    assert out["execution_tp"] == pytest.approx(103.0)
+    assert out["execution_tp1"] == pytest.approx(101.0)
+    assert out["execution_tp2"] == pytest.approx(103.0)
+    assert out["execution_rr1"] == pytest.approx(round(1.0 / 1.5, 4))
+    assert out["execution_rr2"] == pytest.approx(2.0)
+    assert out["tp1_source"] == "structural"
+    assert out["tp2_source"] == "fallback_rr"
+    assert out["exit_strategy"] == "scale_out_structural_tp1_fallback_tp2"
+    assert out["runner_tp_requires_structural_break"] is True
+
+
+def test_engine_b_scan_levels_use_reachable_tp1_and_runner_tp2(monkeypatch):
+    signal = {"engine": "engine_b"}
+    conf_b = {
+        "execution_levels_valid": True,
+        "execution_sl": 98.5,
+        "execution_tp": 103.0,
+        "execution_tp1": 101.0,
+        "execution_tp2": 103.0,
+        "execution_rr1": 1.0 / 1.5,
+        "execution_rr2": 2.0,
+        "rr_used_for_gate": 2.0,
+        "exit_strategy": "scale_out_structural_tp1_fallback_tp2",
+    }
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_USE_EXECUTION_LEVELS_FOR_SCAN_SIGNALS", True)
+
+    _apply_engine_b_scan_levels(signal, conf_b, {})
+
+    assert signal["engine_b_execution_tp"] == pytest.approx(103.0)
+    assert signal["engine_b_execution_tp1"] == pytest.approx(101.0)
+    assert signal["engine_b_execution_tp2"] == pytest.approx(103.0)
+    assert signal["engine_b_execution_rr1"] == pytest.approx(1.0 / 1.5)
+    assert signal["engine_b_execution_rr2"] == pytest.approx(2.0)
+    assert signal["engine_b_exit_strategy"] == "scale_out_structural_tp1_fallback_tp2"
+    assert signal["tp1"] == pytest.approx(101.0)
+    assert signal["tp2"] == pytest.approx(103.0)
+
+
 def test_structural_sl_fallback_rr_tp_cohort_when_structural_sl_selected():
     """Structural SL can remain while TP is replaced by synthetic fallback RR."""
     out = resolve_engine_b_execution_levels(
@@ -384,6 +436,14 @@ _ENGINE_B_EXECUTION_METADATA_KEYS = (
     "rr_required",
     "rr_actual",
     "rr_passed",
+    "execution_tp1",
+    "execution_tp2",
+    "execution_rr1",
+    "execution_rr2",
+    "tp1_source",
+    "tp2_source",
+    "exit_strategy",
+    "runner_tp_requires_structural_break",
     "structural_target_distance_atr",
     "stop_distance_atr",
 )

@@ -696,6 +696,237 @@ def test_backtest_pair_naked_caps_post_fill_rr_to_style_fallback(monkeypatch):
     assert first["selected_tp_source"] == "capped_to_fallback_rr"
 
 
+def test_backtest_pair_naked_preserves_engine_b_tp1_tp2_exit_plan(monkeypatch):
+    pair = {"display": "AAPL", "symbol": "AAPL", "type": "stock", "source": "eodhd"}
+    d1 = _make_bars(datetime(2024, 1, 1, tzinfo=timezone.utc), 100, 24, base=90.0)
+    h4 = _make_bars(datetime(2024, 2, 1, tzinfo=timezone.utc), 70, 4, base=99.0)
+    h1 = _make_bars(datetime(2024, 2, 1, tzinfo=timezone.utc), 400, 1, base=100.0)
+
+    audit_dir = Path(os.path.dirname(__file__)) / "_artifacts"
+    audit_dir.mkdir(exist_ok=True)
+    runtime = SimpleNamespace(
+        fetch_eodhd=lambda *_args, **_kwargs: d1,
+        extract_candles=lambda candles: candles,
+        fetch_candles=lambda *_args, **_kwargs: d1,
+        fetch_eodhd_intraday_bt=lambda *_args, **_kwargs: (h4, h1),
+        naked_scan_style_profile=lambda style, score_group=None, asset_type=None: (
+            "intraday",
+            {"min_score": 0.5, "fallback_rr": 2.0, "min_rr": 1.0, "atr_tf": "H4"},
+        ),
+        engine_b_regime_label=lambda *_args, **_kwargs: "TRENDING",
+        AUDIT_DB=str(audit_dir / "audit.db"),
+    )
+
+    monkeypatch.setattr(backtest_runner, "_rt", lambda: runtime)
+    monkeypatch.setattr(backtest_runner, "_get_slippage_for_bar", lambda *_args, **_kwargs: 0.0)
+    monkeypatch.setattr(backtest_runner, "get_pair_score_group", lambda _pair: "default")
+    monkeypatch.setattr(backtest_runner, "enrich_backtest_summary", lambda result, returns: result)
+    monkeypatch.setattr(backtest_runner, "record_backtest_summary", lambda *args, **kwargs: None)
+    monkeypatch.setattr(backtest_runner, "calibration_report", lambda *args, **kwargs: {})
+    monkeypatch.setattr(backtest_runner, "meta_report", lambda *args, **kwargs: {})
+    monkeypatch.setattr(
+        backtest_runner,
+        "_format_backtest_results",
+        lambda trades, pair, engine_type="NAKED", same_bar_both_hit=0, **kwargs: {
+            "pair": pair["display"],
+            "engine": engine_type,
+            "totalTrades": len(trades),
+            "trades": trades,
+            "same_bar_both_hit": same_bar_both_hit,
+            "winRate": 0.0,
+            "profitFactor": 0.0,
+            "expectancy": 0.0,
+            "sqn": 0.0,
+        },
+    )
+
+    import market_structure
+
+    monkeypatch.setattr(
+        market_structure.engine,
+        "analyze_structure_direction",
+        lambda *_args, **_kwargs: {
+            "structural_verdict": "CLEAR",
+            "recommended_stop_loss": 95.0,
+            "recommended_take_profit": 101.25,
+            "regime_state": "TRENDING",
+            "order_blocks": [],
+            "liquidity_sweep": False,
+            "fvg_overlap": False,
+            "bos_volume_confirmed": True,
+            "choch_confirmed": False,
+            "ob_at_zone": False,
+            "bos_mtf_confirmed": False,
+            "fvg_bonus": 0.0,
+            "volume_strength": 0.0,
+        },
+    )
+
+    def _confidence(_res, px, direction, **_kwargs):
+        if direction != "LONG":
+            return {
+                "score": 0.0,
+                "pct": 0.0,
+                "passed": False,
+                "max_possible": 5.0,
+            }
+        return {
+            "score": 2.0,
+            "pct": 80.0,
+            "rr": 2.0,
+            "passed": True,
+            "trigger_pattern": "NONE",
+            "max_possible": 5.0,
+            "structure_ok": True,
+            "macro_ok": True,
+            "zone_ok": True,
+            "breakout_ok": False,
+            "location_ok": True,
+            "trigger_ok": True,
+            "entry_ok": True,
+            "room_ok": True,
+            "rr_ok": True,
+            "tp_side_ok": True,
+            "space_ok": True,
+            "execution_sl": px - 1.0,
+            "execution_tp": px + 2.0,
+            "execution_tp1": px + 0.75,
+            "execution_tp2": px + 2.0,
+            "execution_rr1": 0.75,
+            "execution_rr2": 2.0,
+            "rr_used_for_gate": 2.0,
+            "rr_source": "atr_sl_fallback_rr_tp",
+            "exit_strategy": "scale_out_structural_tp1_fallback_tp2",
+        }
+
+    monkeypatch.setattr(market_structure.engine, "calculate_confidence", _confidence)
+
+    result = backtest_runner.backtest_pair_naked(pair, style="intraday")
+
+    assert result["totalTrades"] >= 1
+    first = result["trades"][0]
+    assert first["tp2"] > first["tp1"]
+    assert first["tp2"] - first["tp1"] == pytest.approx(1.25)
+    assert first["rr1"] > 0.0
+    assert first["rr1"] < first["rr2"]
+    assert first["rr2"] == pytest.approx(first["rr_target"])
+    assert first["exit_strategy"] == "scale_out_structural_tp1_fallback_tp2"
+
+
+def test_backtest_pair_naked_scale_out_runner_can_reach_tp2(monkeypatch):
+    pair = {"display": "AAPL", "symbol": "AAPL", "type": "stock", "source": "mt5"}
+    d1 = _make_bars(datetime(2024, 1, 1, tzinfo=timezone.utc), 100, 24, base=90.0)
+    h4 = _make_bars(datetime(2024, 2, 1, tzinfo=timezone.utc), 80, 4, base=99.0)
+    h1 = _make_bars(datetime(2024, 2, 1, tzinfo=timezone.utc), 400, 1, base=100.0)
+    h1[81].update({"high": 101.60, "low": 100.60, "close": 101.50})
+    h1[82].update({"high": 102.90, "low": 101.00, "close": 102.70})
+
+    audit_dir = Path(os.path.dirname(__file__)) / "_artifacts"
+    audit_dir.mkdir(exist_ok=True)
+    runtime = SimpleNamespace(
+        fetch_candles=lambda _pair, tf, _limit: {"D1": d1, "H4": h4, "H1": h1}[tf],
+        naked_scan_style_profile=lambda style, score_group=None, asset_type=None: (
+            "intraday",
+            {"min_score": 0.5, "fallback_rr": 2.0, "min_rr": 1.0, "atr_tf": "H4"},
+        ),
+        engine_b_regime_label=lambda *_args, **_kwargs: "TRENDING",
+        AUDIT_DB=str(audit_dir / "audit.db"),
+    )
+
+    monkeypatch.setattr(backtest_runner, "_rt", lambda: runtime)
+    monkeypatch.setattr(backtest_runner, "_get_slippage_for_bar", lambda *_args, **_kwargs: 0.0)
+    monkeypatch.setattr(backtest_runner, "_bt_transaction_cost_r", lambda *_args, **_kwargs: 0.0)
+    monkeypatch.setattr(backtest_runner, "get_pair_score_group", lambda _pair: "default")
+    monkeypatch.setattr(backtest_runner, "enrich_backtest_summary", lambda result, returns: result)
+    monkeypatch.setattr(backtest_runner, "record_backtest_summary", lambda *args, **kwargs: None)
+    monkeypatch.setattr(backtest_runner, "calibration_report", lambda *args, **kwargs: {})
+    monkeypatch.setattr(backtest_runner, "meta_report", lambda *args, **kwargs: {})
+    monkeypatch.setitem(backtest_runner.CONFIG, "ENGINE_B_BT_SCALE_OUT_TP1_SIZE", 0.5)
+    monkeypatch.setitem(backtest_runner.CONFIG, "ENGINE_B_BT_MOVE_SL_TO_BE_AFTER_TP1", True)
+    monkeypatch.setitem(backtest_runner.CONFIG, "ENGINE_B_BT_RUNNER_ENABLED", True)
+    monkeypatch.setattr(
+        backtest_runner,
+        "_format_backtest_results",
+        lambda trades, pair, engine_type="NAKED", same_bar_both_hit=0, **kwargs: {
+            "pair": pair["display"],
+            "engine": engine_type,
+            "totalTrades": len(trades),
+            "trades": trades,
+            "same_bar_both_hit": same_bar_both_hit,
+            "winRate": 0.0,
+            "profitFactor": 0.0,
+            "expectancy": 0.0,
+            "sqn": 0.0,
+        },
+    )
+
+    import market_structure
+
+    monkeypatch.setattr(
+        market_structure.engine,
+        "analyze_structure_direction",
+        lambda *_args, **_kwargs: {
+            "structural_verdict": "CLEAR",
+            "recommended_stop_loss": 99.5,
+            "recommended_take_profit": 101.25,
+            "regime_state": "TRENDING",
+            "order_blocks": [],
+            "liquidity_sweep": False,
+            "fvg_overlap": False,
+            "bos_volume_confirmed": True,
+            "choch_confirmed": False,
+            "ob_at_zone": False,
+            "bos_mtf_confirmed": False,
+            "fvg_bonus": 0.0,
+            "volume_strength": 0.0,
+        },
+    )
+
+    def _confidence(_res, px, direction, **_kwargs):
+        if direction != "LONG":
+            return {"score": 0.0, "pct": 0.0, "passed": False, "max_possible": 5.0}
+        return {
+            "score": 2.0,
+            "pct": 80.0,
+            "rr": 2.0,
+            "passed": True,
+            "trigger_pattern": "NONE",
+            "max_possible": 5.0,
+            "structure_ok": True,
+            "macro_ok": True,
+            "zone_ok": True,
+            "breakout_ok": False,
+            "location_ok": True,
+            "trigger_ok": True,
+            "entry_ok": True,
+            "room_ok": True,
+            "rr_ok": True,
+            "tp_side_ok": True,
+            "space_ok": True,
+            "execution_sl": px - 1.0,
+            "execution_tp": px + 2.0,
+            "execution_tp1": px + 0.75,
+            "execution_tp2": px + 2.0,
+            "execution_rr1": 0.75,
+            "execution_rr2": 2.0,
+            "rr_used_for_gate": 2.0,
+            "rr_source": "atr_sl_fallback_rr_tp",
+            "exit_strategy": "scale_out_structural_tp1_fallback_tp2",
+        }
+
+    monkeypatch.setattr(market_structure.engine, "calculate_confidence", _confidence)
+
+    result = backtest_runner.backtest_pair_naked(pair, style="intraday")
+
+    assert result["totalTrades"] >= 1
+    first = result["trades"][0]
+    assert first["outcome"] == "TP2"
+    assert first["partial_taken_tp1"] is True
+    assert first["runner_be_armed"] is True
+    expected_r = round((first["rr1"] * 0.5) + (first["rr2"] * 0.5), 2)
+    assert first["resultR"] == pytest.approx(expected_r)
+
+
 def test_time_series_quality_reports_parse_failures_duplicates_and_order():
     times = backtest_runner.pd.to_datetime(
         [

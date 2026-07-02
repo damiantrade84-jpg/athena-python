@@ -128,6 +128,16 @@ def test_active_analyze_pair_fails_closed_when_freshness_validation_errors():
     assert "freshness check skipped" not in freshness_source
 
 
+def test_active_analyze_pair_attaches_engine_a_atr_provenance():
+    source = (ROOT / "athena.py").read_text(encoding="utf-8")
+    analyze_start = source.index("def analyze_pair(")
+    analyze_end = source.index("def _build_style_levels(", analyze_start)
+    analyze_source = source[analyze_start:analyze_end]
+
+    assert "_attach_engine_a_v3_atr_provenance(" in analyze_source
+    assert analyze_source.count("_attach_engine_a_v3_atr_provenance(") >= 3
+
+
 def test_auto_trader_blocks_engine_a_v3():
     source = (ROOT / "auto_trader.py").read_text(encoding="utf-8")
     assert "ENGINE_A_V3_MANUAL_DEMO_ONLY" in source

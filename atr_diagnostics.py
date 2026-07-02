@@ -350,6 +350,132 @@ def evaluate_freshness_from_config(
     )
 
 
+def _engine_a_v3_primary_tf(style: str | None) -> str:
+    """Match ``engine_a_v3.evaluator``: intraday uses H1, otherwise H4."""
+    resolved = normalize_style(style)
+    return "H1" if resolved == "intraday" else "H4"
+
+
+def _bybit_levels_tf(style: str | None) -> str:
+    """Match ``athena._bybit_atr_and_candles_for_levels`` timeframe mapping."""
+    resolved = normalize_style(style)
+    return {"scalp": "H1", "intraday": "H4", "swing": "D1"}.get(resolved, "D1")
+
+
+def resolve_engine_a_v3_level_atr(
+    pair: dict | None,
+    style: str | None,
+    d1: list | None,
+    h4: list | None,
+    h1: list | None,
+    *,
+    config: dict | None,
+    bybit_atr_and_candles_fn=None,
+) -> tuple[float | None, str | None, str | None, list | None]:
+    """Resolve Engine A V3 level ATR value, TF, source, and optional Bybit series.
+
+    Mirrors the live/backtest level-ATR contract: crypto may prefer Bybit levels
+    feed; non-crypto and fallbacks use the V3 primary candle series ATR.
+    Returns ``(atr_value, atr_tf, atr_source, levels_feed_candles)``.
+    """
+    from engine_a_v3.setups import atr_for_levels
+
+    primary_tf = _engine_a_v3_primary_tf(style)
+    primary = h1 if primary_tf == "H1" else h4
+    signal_atr: float | None = None
+    if primary:
+        try:
+            raw = float(atr_for_levels(primary))
+            signal_atr = raw if raw > 0 else None
+        except (TypeError, ValueError):
+            signal_atr = None
+
+    p = pair or {}
+    ptype = str(p.get("type") or "").lower()
+    pair_source = str(p.get("source") or "signal").strip().lower() or "signal"
+    cfg = config or {}
+
+    if ptype == "crypto":
+        if str(cfg.get("ENGINE_A_CRYPTO_LEVELS_FEED", "bybit")).lower() == "bybit":
+            bybit_atr = None
+            bybit_candles = None
+            if callable(bybit_atr_and_candles_fn):
+                try:
+                    bybit_atr, bybit_candles = bybit_atr_and_candles_fn(p, style)
+                except TypeError:
+                    bybit_atr, bybit_candles = None, None
+            if bybit_atr:
+                try:
+                    return (
+                        float(bybit_atr),
+                        _bybit_levels_tf(style),
+                        "bybit",
+                        bybit_candles,
+                    )
+                except (TypeError, ValueError):
+                    pass
+            if not bool(cfg.get("ENGINE_A_CRYPTO_LEVELS_SIGNAL_FEED_FALLBACK", False)):
+                return None, primary_tf, "bybit_unavailable", None
+        if signal_atr is not None:
+            return signal_atr, primary_tf, pair_source, None
+        return None, primary_tf, "signal_unavailable", None
+
+    if signal_atr is not None:
+        return signal_atr, primary_tf, pair_source, None
+    return None, primary_tf, pair_source or "unknown", None
+
+
+def attach_engine_a_v3_atr_provenance(
+    signal: dict,
+    pair: dict | None,
+    style: str | None,
+    d1: list | None,
+    h4: list | None,
+    h1: list | None,
+    *,
+    config: dict | None = None,
+    bybit_atr_and_candles_fn=None,
+) -> dict:
+    """Populate ``signal['atrDiagnostics']`` and ``signal['atrFreshness']``.
+
+    Observability-only — does not change scoring, levels, or execution gates.
+    """
+    if not isinstance(signal, dict):
+        return signal
+
+    atr_value, atr_tf, atr_source, levels_candles = resolve_engine_a_v3_level_atr(
+        pair,
+        style,
+        d1,
+        h4,
+        h1,
+        config=config,
+        bybit_atr_and_candles_fn=bybit_atr_and_candles_fn,
+    )
+    d1_series, h4_series, h1_series = substitute_levels_atr_series(
+        atr_tf,
+        d1,
+        h4,
+        h1,
+        levels_candles,
+    )
+    diag = build_engine_a_diagnostics(
+        atr_value=atr_value,
+        atr_tf=atr_tf,
+        atr_source=atr_source,
+        d1_candles=d1_series,
+        h4_candles=h4_series,
+        h1_candles=h1_series,
+    )
+    signal["atrDiagnostics"] = diag
+    cfg = config or {}
+    signal["atrFreshness"] = evaluate_freshness_from_config(
+        diag,
+        cfg.get("ATR_FRESHNESS") if isinstance(cfg.get("ATR_FRESHNESS"), dict) else None,
+    )
+    return signal
+
+
 def build_engine_d_diagnostics(
     *,
     atr_value: float | None,

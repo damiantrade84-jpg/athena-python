@@ -263,6 +263,48 @@ def _engine_b_level_pair(conf_b: dict | None, res_b: dict | None) -> tuple[float
     return sl_f, tp_f
 
 
+def _engine_b_level_targets(
+    conf_b: dict | None,
+    res_b: dict | None,
+) -> tuple[
+    float | None,
+    float | None,
+    float | None,
+    float | None,
+    float | None,
+    str | None,
+]:
+    sl, legacy_tp = _engine_b_level_pair(conf_b, res_b)
+    if sl is None or legacy_tp is None:
+        return None, None, None, None, None, None
+    conf_b = conf_b or {}
+    exec_invalid = _engine_b_execution_levels_marked_invalid(conf_b)
+    tp1 = conf_b.get("execution_tp1") if "execution_tp1" in conf_b else None
+    tp2 = conf_b.get("execution_tp2") if "execution_tp2" in conf_b else None
+    if tp1 is None and not exec_invalid:
+        tp1 = legacy_tp
+    if tp2 is None and not exec_invalid:
+        tp2 = legacy_tp
+    try:
+        tp1_f = float(tp1) if tp1 is not None else None
+        tp2_f = float(tp2) if tp2 is not None else None
+    except (TypeError, ValueError):
+        return None, None, None, None, None, None
+    if tp1_f is None or tp2_f is None:
+        return None, None, None, None, None, None
+    rr1 = conf_b.get("execution_rr1")
+    rr2 = conf_b.get("execution_rr2")
+    try:
+        rr1_f = float(rr1) if rr1 is not None else None
+    except (TypeError, ValueError):
+        rr1_f = None
+    try:
+        rr2_f = float(rr2) if rr2 is not None else None
+    except (TypeError, ValueError):
+        rr2_f = None
+    return sl, tp1_f, tp2_f, rr1_f, rr2_f, conf_b.get("exit_strategy")
+
+
 def _engine_b_levels_apply_to_generic(signal: dict) -> bool:
     """Return True when Engine B execution levels may overwrite generic SL/TP.
 
@@ -320,16 +362,24 @@ def _resolve_engine_b_h4_snap(
 
 
 def _apply_engine_b_scan_levels(signal: dict, conf_b: dict | None, res_b: dict | None) -> None:
-    sl, tp = _engine_b_level_pair(conf_b, res_b)
-    if sl is None or tp is None:
+    sl, tp1, tp2, rr1, rr2, exit_strategy = _engine_b_level_targets(conf_b, res_b)
+    if sl is None or tp1 is None or tp2 is None:
         return
+    legacy_tp = (conf_b or {}).get("execution_tp")
+    try:
+        legacy_tp = float(legacy_tp) if legacy_tp is not None else tp2
+    except (TypeError, ValueError):
+        legacy_tp = tp2
     # Engine B overlay levels are always stored separately so diagnostics,
     # research, and Engine C have access to them without contaminating
     # Engine A's generic SL/TP fields.
     signal["engine_b_execution_sl"] = sl
-    signal["engine_b_execution_tp"] = tp
-    signal["engine_b_execution_tp1"] = tp
-    signal["engine_b_execution_tp2"] = tp
+    signal["engine_b_execution_tp"] = legacy_tp
+    signal["engine_b_execution_tp1"] = tp1
+    signal["engine_b_execution_tp2"] = tp2
+    signal["engine_b_execution_rr1"] = rr1
+    signal["engine_b_execution_rr2"] = rr2
+    signal["engine_b_exit_strategy"] = exit_strategy
     signal["engine_b_level_source"] = "engine_b_execution"
     signal["engine_b_rr_used_for_gate"] = (conf_b or {}).get("rr_used_for_gate")
 
@@ -341,8 +391,8 @@ def _apply_engine_b_scan_levels(signal: dict, conf_b: dict | None, res_b: dict |
     if not bool(CONFIG.get("ENGINE_B_USE_EXECUTION_LEVELS_FOR_SCAN_SIGNALS", False)):
         return
     signal["sl"] = sl
-    signal["tp1"] = tp
-    signal["tp2"] = tp
+    signal["tp1"] = tp1
+    signal["tp2"] = tp2
     signal["levelSource"] = "engine_b_execution"
     signal["level_source"] = "engine_b_execution"
 
@@ -1259,6 +1309,13 @@ def _attach_engine_b_scan_gate_funnel(
         "structural_tp": cnf.get("structural_tp"),
         "execution_sl": cnf.get("execution_sl"),
         "execution_tp": cnf.get("execution_tp"),
+        "execution_tp1": cnf.get("execution_tp1"),
+        "execution_tp2": cnf.get("execution_tp2"),
+        "execution_rr1": cnf.get("execution_rr1"),
+        "execution_rr2": cnf.get("execution_rr2"),
+        "exit_strategy": cnf.get("exit_strategy"),
+        "tp1_source": cnf.get("tp1_source"),
+        "tp2_source": cnf.get("tp2_source"),
         "rr": _scalar_float_gate(cnf.get("rr")),
         "rr_source": cnf.get("rr_source"),
         "execution_level_reject_reason": cnf.get("execution_level_reject_reason"),

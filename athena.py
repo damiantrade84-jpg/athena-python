@@ -6652,6 +6652,16 @@ def _compute_naked_analysis(
         # Expose execution-resolved levels as final levels for consumers
         res["final_stop_loss"] = conf.get("execution_sl") or res.get("recommended_stop_loss")
         res["final_take_profit"] = conf.get("execution_tp") or res.get("recommended_take_profit")
+        res["final_take_profit_1"] = (
+            conf.get("execution_tp1")
+            or conf.get("execution_tp")
+            or res.get("recommended_take_profit")
+        )
+        res["final_take_profit_2"] = (
+            conf.get("execution_tp2")
+            or conf.get("execution_tp")
+            or res.get("recommended_take_profit")
+        )
         res["rr_used_for_gate"] = conf.get("rr_used_for_gate", conf.get("rr", 0.0))
 
         if not overlay_only:
@@ -7476,7 +7486,11 @@ def api_scan_naked():
 
                 sl = conf_data.get("execution_sl") or _res.get("recommended_stop_loss")
                 tp = conf_data.get("execution_tp") or _res.get("recommended_take_profit")
+                tp1 = conf_data.get("execution_tp1") or tp
+                tp2 = conf_data.get("execution_tp2") or tp
                 rr = conf_data.get("rr_used_for_gate", conf_data.get("rr", 0.0))
+                rr1 = conf_data.get("execution_rr1", rr)
+                rr2 = conf_data.get("execution_rr2", rr)
 
                 _crypto_requires_structural_target = (
                     pair.get("type") == "crypto"
@@ -7493,6 +7507,8 @@ def api_scan_naked():
                         tp = current_price + (sl_dist * style_profile["fallback_rr"])
                     else:
                         tp = current_price - (sl_dist * style_profile["fallback_rr"])
+                    tp1 = tp
+                    tp2 = tp
                     _res["recommended_take_profit"] = tp
                     _res["fallback_tp_applied"] = True
                 elif not tp and sl and _crypto_requires_structural_target:
@@ -7503,6 +7519,10 @@ def api_scan_naked():
                     sl_dist = abs(current_price - sl)
                     tp_dist = abs(tp - current_price)
                     rr = (tp_dist / sl_dist) if sl_dist > 0 else 0.0
+                if rr1 is None:
+                    rr1 = rr
+                if rr2 is None:
+                    rr2 = rr
                 if rr < style_profile["min_rr"]:
                     debug_row["failed_gate_names"].append(f"rr_gate")
                     if "rr_gate" not in _direction_debug["debug_gate_failed_names"]:
@@ -7564,10 +7584,12 @@ def api_scan_naked():
                     )
                     if sl
                     else 0.0,
-                    "tp1": tp,
-                    "tp2": tp,
-                    "rr1": round(rr, 2) if rr else style_profile["fallback_rr"],
-                    "rr2": round(rr, 2) if rr else style_profile["fallback_rr"],
+                    "tp1": tp1,
+                    "tp2": tp2,
+                    "rr1": round(rr1, 2) if rr1 else style_profile["fallback_rr"],
+                    "rr2": round(rr2, 2) if rr2 else style_profile["fallback_rr"],
+                    "exitStrategy": conf_data.get("exit_strategy"),
+                    "exit_strategy": conf_data.get("exit_strategy"),
                     "fib": {"fib618": 0.0, "fib500": 0.0},
                     "style_levels": _build_style_levels(
                         price=float(current_price),
