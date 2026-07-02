@@ -91,3 +91,50 @@ def apply_engine_a_exit_mode(
             sig["tp1"] = clamped["tp1"]
             sig["tp2"] = clamped["tp2"]
     return mode
+
+
+def apply_engine_b_exit_strategy(
+    sig: dict,
+    engine: str | None,
+    cfg: dict,
+    score_group_resolver=None,
+) -> str | None:
+    """Resolve + stamp the Engine B exit mode and runner directive.
+
+    No-op unless ``engine`` is Engine B. Mutates ``sig``: sets
+    ``sig['exit_mode']`` (per-trade -> ENGINE_B_EXIT_MODE_BY_SCORE_GROUP ->
+    ENGINE_B_EXIT_MODE_GLOBAL_DEFAULT) and ``sig['runner_directive']`` derived
+    from the signal's ``engine_b_exit_strategy`` / ``exit_strategy`` field.
+    Levels are never mutated here — Engine B levels come exclusively from
+    resolve_engine_b_execution_levels.
+
+    Returns the resolved exit mode, or None when not Engine B.
+    """
+    if str(engine or "").strip().lower() not in (
+        "engine_b",
+        "b",
+        "naked",
+        "naked_structure",
+        "structure",
+        "smc",
+    ):
+        return None
+
+    if score_group_resolver is None:
+        from scoring import get_pair_score_group
+        score_group_resolver = get_pair_score_group
+    score_group = score_group_resolver(sig)
+
+    group_map = cfg.get("ENGINE_B_EXIT_MODE_BY_SCORE_GROUP") or {}
+    mode = exit_policy.resolve_exit_mode(
+        per_trade=sig.get("exit_mode"),
+        group_default=exit_policy.group_default_for(score_group, group_map),
+        global_default=cfg.get(
+            "ENGINE_B_EXIT_MODE_GLOBAL_DEFAULT", exit_policy.DEFAULT_EXIT_MODE
+        ),
+    )
+    sig["exit_mode"] = mode
+
+    strategy = sig.get("engine_b_exit_strategy") or sig.get("exit_strategy")
+    sig["runner_directive"] = exit_policy.resolve_runner_directive(strategy, mode)
+    return mode

@@ -107,6 +107,83 @@ def test_exit_mode_resolution_matches_exit_strategy_defaults():
     ) == "traditional_static"
 
 
+def test_resolve_runner_directive_matrix():
+    import exit_policy as ep
+
+    scale_out = "scale_out_structural_tp1_fallback_tp2"
+    single = "single_fallback_rr_tp"
+
+    # single-TP plans
+    assert ep.resolve_runner_directive(single, "traditional_static") == ep.RUNNER_TO_TP2
+    assert ep.resolve_runner_directive(single, "adaptive_trail") == ep.RUNNER_TRAIL
+    assert ep.resolve_runner_directive(single, "time_based") == ep.RUNNER_TIMED
+    # scale-out plans
+    assert ep.resolve_runner_directive(scale_out, "traditional_static") == ep.RUNNER_TO_TP2
+    assert ep.resolve_runner_directive(scale_out, "adaptive_trail") == ep.RUNNER_TRAIL
+    assert ep.resolve_runner_directive(scale_out, "time_based") == ep.RUNNER_TIMED
+    # manual carries a fixed bracket like static
+    assert ep.resolve_runner_directive(scale_out, "manual") == ep.RUNNER_TO_TP2
+    # unknown mode falls back to the static default
+    assert ep.resolve_runner_directive(scale_out, None) == ep.RUNNER_TO_TP2
+    assert ep.resolve_runner_directive(scale_out, "junk") == ep.RUNNER_TO_TP2
+    # fail-closed: invalid/unknown exit strategies never get a runner plan
+    assert ep.resolve_runner_directive(None, "traditional_static") == ep.RUNNER_NONE
+    assert ep.resolve_runner_directive("invalid_levels", "adaptive_trail") == ep.RUNNER_NONE
+    assert ep.resolve_runner_directive("junk", "time_based") == ep.RUNNER_NONE
+    # single_structural_tp normalizes to the single plan
+    assert ep.normalize_exit_strategy("single_structural_tp") == ep.EXIT_STRATEGY_SINGLE
+    assert ep.normalize_exit_strategy(scale_out) == ep.EXIT_STRATEGY_SCALE_OUT
+    assert ep.normalize_exit_strategy("invalid_levels") is None
+
+
+def test_apply_engine_b_exit_strategy_stamps_mode_and_directive():
+    from exit_mode_apply import apply_engine_b_exit_strategy
+
+    cfg = {
+        "ENGINE_B_EXIT_MODE_GLOBAL_DEFAULT": "traditional_static",
+        "ENGINE_B_EXIT_MODE_BY_SCORE_GROUP": {"crypto_btc": "adaptive_trail"},
+    }
+    sig = {
+        "engine": "engine_b",
+        "engine_b_exit_strategy": "scale_out_structural_tp1_fallback_tp2",
+    }
+    mode = apply_engine_b_exit_strategy(
+        sig, "engine_b", cfg, score_group_resolver=lambda _s: "crypto_btc"
+    )
+    assert mode == "adaptive_trail"
+    assert sig["exit_mode"] == "adaptive_trail"
+    assert sig["runner_directive"] == "runner_trail"
+
+    # Global default applies when the group has no override.
+    sig_static = {
+        "engine": "engine_b",
+        "engine_b_exit_strategy": "single_fallback_rr_tp",
+    }
+    mode = apply_engine_b_exit_strategy(
+        sig_static, "engine_b", cfg, score_group_resolver=lambda _s: "forex_majors"
+    )
+    assert mode == "traditional_static"
+    assert sig_static["runner_directive"] == "runner_to_tp2"
+
+    # Non-Engine-B rows are untouched (Engine A keeps its own exit_mode path).
+    sig_a = {"engine_b_exit_strategy": "scale_out_structural_tp1_fallback_tp2"}
+    assert (
+        apply_engine_b_exit_strategy(
+            sig_a, "engine_a", cfg, score_group_resolver=lambda _s: "crypto_btc"
+        )
+        is None
+    )
+    assert "exit_mode" not in sig_a
+    assert "runner_directive" not in sig_a
+
+    # Invalid exit strategy: mode still resolves but no runner plan is invented.
+    sig_bad = {"engine": "engine_b", "engine_b_exit_strategy": "invalid_levels"}
+    apply_engine_b_exit_strategy(
+        sig_bad, "engine_b", cfg, score_group_resolver=lambda _s: "forex_majors"
+    )
+    assert sig_bad["runner_directive"] == "runner_none"
+
+
 def test_row_for_live_position_legacy_null_exit_mode_trails():
     now = "2026-06-10T12:00:00+00:00"
     audit_rows = [

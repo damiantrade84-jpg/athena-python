@@ -13,6 +13,7 @@ import time
 import threading
 from datetime import datetime, timezone
 
+import exit_policy
 import telegram_notify
 
 log = logging.getLogger("sentinel")
@@ -73,6 +74,57 @@ def _engine_a_v3_exit_policy(signal: dict) -> str | None:
     if policy not in {"SINGLE_TP1", "SPLIT_50_50"}:
         raise ValueError("ENGINE_A_V3_EXIT_POLICY_INVALID")
     return policy
+
+
+def _engine_b_scale_out_plan(signal: dict) -> str | None:
+    """Return the runner directive for a valid Engine B scale-out signal, else None.
+
+    Fail-closed on every field: requires the live scale-out config gate, an
+    explicit Engine B identity, a scale-out exit strategy, and positive,
+    direction-consistent TP1 < TP2 levels. Anything missing, malformed, or
+    ambiguous returns None so the executor keeps its legacy single-TP path
+    (no new order behavior is ever invented for an unqualified signal).
+    """
+    if not bool(CONFIG.get("ENGINE_B_LIVE_SCALE_OUT_ENABLED", False)):
+        return None
+    engine = str((signal or {}).get("engine") or "").strip().lower()
+    if engine not in ("engine_b", "naked", "naked_structure", "structure", "smc", "b"):
+        return None
+    strategy = exit_policy.normalize_exit_strategy(
+        (signal or {}).get("engine_b_exit_strategy") or (signal or {}).get("exit_strategy")
+    )
+    if strategy != exit_policy.EXIT_STRATEGY_SCALE_OUT:
+        return None
+    try:
+        tp1 = float((signal or {}).get("tp1", 0) or 0)
+        tp2 = float((signal or {}).get("tp2", 0) or 0)
+    except (TypeError, ValueError):
+        return None
+    if tp1 <= 0 or tp2 <= 0:
+        return None
+    direction = str((signal or {}).get("direction") or "").upper()
+    if direction == "LONG":
+        if not tp2 > tp1:
+            return None
+    elif direction == "SHORT":
+        if not tp2 < tp1:
+            return None
+    else:
+        return None
+    directive = exit_policy.resolve_runner_directive(
+        strategy, (signal or {}).get("exit_mode")
+    )
+    if directive == exit_policy.RUNNER_TRAIL and not _uses_trailing_atr_exit(signal):
+        # No trailing manager runs in this deployment — never leave the runner
+        # unmanaged; degrade to the fixed TP2 bracket.
+        return exit_policy.RUNNER_TO_TP2
+    if directive == exit_policy.RUNNER_TIMED:
+        # The timed-exit monitor does not yet dispatch Engine B exit modes; the
+        # fixed TP2 bracket is the safe live equivalent until it does.
+        return exit_policy.RUNNER_TO_TP2
+    if directive not in (exit_policy.RUNNER_TO_TP2, exit_policy.RUNNER_TRAIL):
+        return None
+    return directive
 
 
 def _bybit_max_tick_age_sec() -> float | None:
@@ -1782,6 +1834,18 @@ def bybit_execute(signal: dict, approval: "RiskApproval") -> dict:  # noqa: F821
             and bool(_hybrid_cfg.get("enabled"))
             and _tp1_local > 0
         )
+        # Engine B dual-TP scale-out (config-gated, default off). Resolved only
+        # when no other multi-leg mode claims the position; fail-closed helper
+        # returns None for anything unqualified and the legacy path applies.
+        _b_scale_out_directive = None
+        if (
+            not _single_leg_only
+            and not _v3_exit_policy
+            and not _is_scalp
+            and not _hybrid_on
+        ):
+            _b_scale_out_directive = _engine_b_scale_out_plan(signal)
+        _b_scale_out = _b_scale_out_directive is not None
         # Engine D: position TP sits at the structural target (tp1).
         # A separate reduce-only limit at tp_partial closes the first 50% clip at +1R.
         # Non-scalp signals use tp1 as the single full-position exit — except in
@@ -1791,6 +1855,14 @@ def bybit_execute(signal: dict, approval: "RiskApproval") -> dict:  # noqa: F821
             tp_exec = _tp2
         elif _hybrid_on:
             tp_exec = 0.0
+        elif _b_scale_out:
+            # Engine B scale-out: a reduce-only partial banks the TP1 clip; the
+            # position TP carries the runner target. RUNNER_TRAIL keeps the TP2
+            # bracket only as the pre-activation failsafe when configured.
+            if _b_scale_out_directive == exit_policy.RUNNER_TRAIL:
+                tp_exec = _tp2 if _use_broker_tp else 0.0
+            else:
+                tp_exec = _tp2
         else:
             tp_exec = _tp1_local if _use_broker_tp else 0.0
 
@@ -1928,6 +2000,23 @@ def bybit_execute(signal: dict, approval: "RiskApproval") -> dict:  # noqa: F821
                 _tp1_local, _hybrid_frac, "Hybrid TP1",
             )
 
+        # ── Engine B scale-out: reduce-only limit banks the TP1 clip ──────────
+        # The position TP already sits at the runner target (TP2) — or is
+        # trail-managed — so a failed partial is non-fatal: SL stays attached
+        # and the whole position runs as a single unit to the runner exit.
+        if _b_scale_out:
+            try:
+                _b_frac = float(
+                    CONFIG.get("ENGINE_B_LIVE_SCALE_OUT_TP1_SIZE", 0.5) or 0.5
+                )
+            except (TypeError, ValueError):
+                _b_frac = 0.5
+            _b_frac = min(max(_b_frac, 0.0), 1.0)
+            partial_order_id = _place_reduce_only_partial(
+                exchange, ccxt_symbol, direction, filled_amount,
+                _tp1_local, _b_frac, "Engine B TP1",
+            )
+
         fee_info = order.get("fee") or {}
         fee_cost = float(fee_info.get("cost") or 0) or None
         return {
@@ -1944,6 +2033,8 @@ def bybit_execute(signal: dict, approval: "RiskApproval") -> dict:  # noqa: F821
             "tpPartial": _tp_partial if _tp_partial > 0 else None,
             "partialOrderId": partial_order_id,
             "hybridScaleout": _hybrid_on,
+            "engineBScaleOut": _b_scale_out,
+            "runnerDirective": _b_scale_out_directive,
             "slOrderId": sl_order_id,
             "tpOrderId": tp_order_id,
             "riskAmount": approval.risk_amount,

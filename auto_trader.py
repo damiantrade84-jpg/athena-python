@@ -2237,10 +2237,16 @@ class AutoTrader:
             # Engine A exit-mode selector (Plan 2): resolve mode + advisable-pip
             # clamp before risk_check so auto-traded Engine A signals honor the
             # selected mode (audit H1). No-op for non-Engine-A signals.
-            from exit_mode_apply import apply_engine_a_exit_mode
+            from exit_mode_apply import (
+                apply_engine_a_exit_mode,
+                apply_engine_b_exit_strategy,
+            )
             apply_engine_a_exit_mode(
                 signal, _signal_engine(signal), symbol_info, cfg, None
             )
+            # Engine B exit-strategy/runner-directive stamp (no level mutation);
+            # no-op for non-Engine-B signals.
+            apply_engine_b_exit_strategy(signal, _signal_engine(signal), cfg)
 
             approval = risk_check(
                 signal=signal,

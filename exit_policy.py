@@ -18,6 +18,18 @@ VALID_EXIT_MODES = frozenset(
     {EXIT_MODE_STATIC, EXIT_MODE_ADAPTIVE, EXIT_MODE_MANUAL, EXIT_MODE_TIME}
 )
 
+# Engine B exit strategies (produced by resolve_engine_b_execution_levels).
+# "single_*_tp" values (single_structural_tp, single_fallback_rr_tp, ...) all
+# normalize to EXIT_STRATEGY_SINGLE.
+EXIT_STRATEGY_SCALE_OUT = "scale_out_structural_tp1_fallback_tp2"
+EXIT_STRATEGY_SINGLE = "single_tp"
+
+# Runner directives: how the position (or the post-TP1 runner) is managed.
+RUNNER_TO_TP2 = "runner_to_tp2"
+RUNNER_TRAIL = "runner_trail"
+RUNNER_TIMED = "runner_timed"
+RUNNER_NONE = "runner_none"
+
 # Ultimate fallback when neither per-trade, per-group, nor global config yields a
 # recognized mode. traditional_static matches the user-authorized Engine-A default
 # (see spec). Consumers still pass the config global default explicitly.
@@ -104,6 +116,49 @@ def clamp_to_advisable_pip(
         new_tp1 = entry - rr1 * new_dist
         new_tp2 = entry - rr2 * new_dist
     return {"sl": new_sl, "tp1": new_tp1, "tp2": new_tp2, "clamped": True}
+
+
+def normalize_exit_strategy(strategy: str | None) -> str | None:
+    """Canonicalize an Engine B exit_strategy string.
+
+    Returns EXIT_STRATEGY_SCALE_OUT, EXIT_STRATEGY_SINGLE, or None for
+    unknown/invalid values (including "invalid_levels").
+    """
+    if not strategy:
+        return None
+    s = str(strategy).strip().lower()
+    if s == EXIT_STRATEGY_SCALE_OUT:
+        return EXIT_STRATEGY_SCALE_OUT
+    if s.startswith("single_") and s.endswith("_tp"):
+        return EXIT_STRATEGY_SINGLE
+    return None
+
+
+def resolve_runner_directive(exit_strategy: str | None, exit_mode: str | None) -> str:
+    """Map (Engine B exit_strategy, exit_mode) to a runner-management directive.
+
+    The directive says how the position — or, for scale-out plans, the
+    post-TP1 runner — is managed:
+
+      runner_to_tp2  fixed broker TP at the (runner) target
+      runner_trail   no fixed runner TP; trailing management owns the exit
+      runner_timed   fixed bracket plus a timed close at the hold horizon
+      runner_none    unknown/invalid exit strategy — no runner plan (callers
+                     keep their legacy single-TP behavior)
+
+    Fail-closed: anything unrecognized returns RUNNER_NONE so consumers never
+    invent a runner plan for a signal that did not carry a valid one.
+    """
+    strategy = normalize_exit_strategy(exit_strategy)
+    if strategy is None:
+        return RUNNER_NONE
+    mode = normalize_mode(exit_mode) or DEFAULT_EXIT_MODE
+    if mode == EXIT_MODE_ADAPTIVE:
+        return RUNNER_TRAIL
+    if mode == EXIT_MODE_TIME:
+        return RUNNER_TIMED
+    # traditional_static and manual both carry a fixed broker bracket.
+    return RUNNER_TO_TP2
 
 
 def uses_trail_management(mode: str | None) -> bool:

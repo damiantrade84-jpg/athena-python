@@ -42,6 +42,13 @@ from indicators import (
     calc_stochastic,
     calc_usd_relative_strength_context,
 )
+from exit_policy import (
+    RUNNER_TIMED,
+    RUNNER_TRAIL,
+    group_default_for,
+    resolve_exit_mode,
+    resolve_runner_directive,
+)
 from factor_scoring import build_oi_context_for_factor_scoring
 from intermarket import (
     FOREX_ENGINE_A_MAX_SCORE,
@@ -5387,6 +5394,9 @@ def backtest_pair_naked(pair: dict, style: str = "naked", validation_mode="stand
                     "selected_tp2_source": conf_data.get("tp2_source") or level_source,
                     "selected_sl_source": level_source,
                     "exit_strategy": conf_data.get("exit_strategy"),
+                    "runner_tp_requires_structural_break": conf_data.get(
+                        "runner_tp_requires_structural_break"
+                    ),
                 }
             )
 
@@ -5512,6 +5522,36 @@ def backtest_pair_naked(pair: dict, style: str = "naked", validation_mode="stand
             exit_strategy == "scale_out_structural_tp1_fallback_tp2"
             and bool(CONFIG.get("ENGINE_B_BT_RUNNER_ENABLED", True))
         )
+        # Exit mode (static/trail/timed) resolved from the same config the
+        # live path uses, then combined with the signal's exit strategy into
+        # a runner directive. Default (static) keeps current fixed-TP2 behavior.
+        _bt_exit_mode = resolve_exit_mode(
+            per_trade=None,
+            group_default=group_default_for(
+                _pair_score_group,
+                CONFIG.get("ENGINE_B_EXIT_MODE_BY_SCORE_GROUP") or {},
+            ),
+            global_default=CONFIG.get(
+                "ENGINE_B_EXIT_MODE_GLOBAL_DEFAULT", "traditional_static"
+            ),
+        )
+        _runner_directive = resolve_runner_directive(exit_strategy, _bt_exit_mode)
+        # Trail management only models the post-TP1 runner of a scale-out plan
+        # (live hybrid parity: no fixed runner TP, trailing stop owns the exit).
+        _runner_trail_plan = _scale_out_runner and _runner_directive == RUNNER_TRAIL
+        try:
+            _timed_exit_bars = int(CONFIG.get("ENGINE_B_TIME_EXIT_BARS", 0) or 0)
+        except (TypeError, ValueError):
+            _timed_exit_bars = 0
+        _runner_timed_plan = _runner_directive == RUNNER_TIMED and _timed_exit_bars > 0
+        _timed_closed = False
+        try:
+            _bt_trail_mult = float(
+                CONFIG.get("ENGINE_B_BT_RUNNER_TRAIL_ATR_MULT", 2.0) or 2.0
+            )
+        except (TypeError, ValueError):
+            _bt_trail_mult = 2.0
+        _trail_extreme = None
         _tp1_size = float(CONFIG.get("ENGINE_B_BT_SCALE_OUT_TP1_SIZE", 0.5) or 0.5)
         _tp1_size = max(0.0, min(1.0, _tp1_size))
         if not _scale_out_runner:
@@ -5523,6 +5563,16 @@ def backtest_pair_naked(pair: dict, style: str = "naked", validation_mode="stand
         _tp2_hit = False
         _runner_be_armed = False
         _exit_path = None
+        # Runner TP2 sits beyond the structural wall (TP1). When the resolver
+        # flagged the plan, a TP2 touch only counts after a confirmed break:
+        # a bar CLOSE beyond TP1. Wicks through TP2 before confirmation are
+        # not credited (conservative, live-parity with structural-break exits).
+        _runner_requires_break = (
+            _scale_out_runner
+            and bool(best.get("runner_tp_requires_structural_break"))
+            and bool(CONFIG.get("ENGINE_B_BT_RUNNER_REQUIRES_BREAK", True))
+        )
+        _structural_break_confirmed = False
 
         # PHASE 1E: Track additive diagnostics
         max_favorable_excursion_r = 0.0
@@ -5560,12 +5610,33 @@ def backtest_pair_naked(pair: dict, style: str = "naked", validation_mode="stand
         future_window = _monitor_candles[_monitor_fill_index : min(_monitor_fill_index + _max_hold_monitor_bars + 1, len(_monitor_candles))]
         for fi, future in enumerate(future_window):
             exit_bar_offset = fi
+            _tp2_active = tp2
+            if _runner_requires_break and not _structural_break_confirmed:
+                _f_close_pre = float(future["close"])
+                _close_beyond_tp2 = (
+                    _f_close_pre >= tp2 if direction == "LONG" else _f_close_pre <= tp2
+                )
+                # Unconfirmed break: a wick through TP2 is not credited unless
+                # the bar CLOSES beyond TP2 (which itself confirms the break).
+                if not _close_beyond_tp2:
+                    _tp2_active = None
+            if _runner_requires_break and not _structural_break_confirmed:
+                _f_close_conf = float(future["close"])
+                if (direction == "LONG" and _f_close_conf > tp1) or (
+                    direction == "SHORT" and _f_close_conf < tp1
+                ):
+                    # Break confirmed at this bar's close; TP2 becomes eligible
+                    # from the next bar onward (this bar already used the
+                    # pre-confirmation TP2 state above).
+                    _structural_break_confirmed = True
             _bar_outcome, _both_hit = _resolve_barrier_exit(
                 future,
                 direction=direction,
                 sl=_active_sl,
                 tp1=None if (_scale_out_runner and _tp1_hit) else tp1,
-                tp2=tp2,
+                # Trail plans carry no fixed runner TP (live hybrid parity);
+                # the trailing stop owns the runner exit.
+                tp2=None if _runner_trail_plan else _tp2_active,
                 sl_outcome="BE" if _be_triggered else "SL",
             )
             if _both_hit:
@@ -5589,6 +5660,12 @@ def backtest_pair_naked(pair: dict, style: str = "naked", validation_mode="stand
                 if _scale_out_runner and _tp1_size < 1.0:
                     _tp1_hit = True
                     _exit_path = "TP1_THEN_RUNNING"
+                    if _runner_trail_plan:
+                        _trail_extreme = (
+                            float(future["high"])
+                            if direction == "LONG"
+                            else float(future["low"])
+                        )
                     if _move_runner_sl_to_be:
                         _active_sl = entry
                         _be_triggered = True
@@ -5602,12 +5679,23 @@ def backtest_pair_naked(pair: dict, style: str = "naked", validation_mode="stand
             if _bar_outcome in ("SL", "BE"):
                 outcome = _bar_outcome
                 if _scale_out_runner and _tp1_hit and _tp1_size < 1.0:
-                    _runner_r = 0.0 if outcome == "BE" else -1.0
+                    if _runner_trail_plan and risk > 0:
+                        # Trail-managed runner exits at the trailed stop level,
+                        # which may sit above break-even.
+                        _runner_r = (
+                            (_active_sl - entry) / risk
+                            if direction == "LONG"
+                            else (entry - _active_sl) / risk
+                        )
+                        _runner_r = max(-1.0, _runner_r)
+                        _exit_path = "TP1_THEN_TRAIL_EXIT"
+                    else:
+                        _runner_r = 0.0 if outcome == "BE" else -1.0
+                        _exit_path = "TP1_THEN_BE" if outcome == "BE" else "TP1_THEN_SL"
                     r_multiple = round(
                         (_tp1_size * rr1_actual) + ((1.0 - _tp1_size) * _runner_r),
                         2,
                     )
-                    _exit_path = "TP1_THEN_BE" if outcome == "BE" else "TP1_THEN_SL"
                 else:
                     r_multiple = 0.0 if outcome == "BE" else -1.0
                 break
@@ -5670,7 +5758,45 @@ def backtest_pair_naked(pair: dict, style: str = "naked", validation_mode="stand
                         be_armed = True
                         be_trigger_r = _be_arm_rr
 
-        if outcome == "TIMEOUT" and future_window:
+            # Trail-managed runner: ratchet the stop from this bar's extreme.
+            # Applied at bar close, so the trailed level takes effect from the
+            # next bar (no intrabar lookahead).
+            if _runner_trail_plan and _tp1_hit and _trail_extreme is not None and atr > 0:
+                if direction == "LONG":
+                    _trail_extreme = max(_trail_extreme, f_high)
+                    _trail_sl = _trail_extreme - (_bt_trail_mult * atr)
+                    if _trail_sl > _active_sl:
+                        _active_sl = _trail_sl
+                else:
+                    _trail_extreme = min(_trail_extreme, f_low)
+                    _trail_sl = _trail_extreme + (_bt_trail_mult * atr)
+                    if _trail_sl < _active_sl:
+                        _active_sl = _trail_sl
+
+            # Timed close (time_based exit mode): fixed bracket stays active
+            # above; whatever is still open at the horizon closes at this
+            # bar's close.
+            if _runner_timed_plan and fi >= _timed_exit_bars and risk > 0:
+                _open_r = (
+                    (f_close - entry) / risk
+                    if direction == "LONG"
+                    else (entry - f_close) / risk
+                )
+                outcome = "TIMEOUT"
+                if _scale_out_runner and _tp1_hit and _tp1_size < 1.0:
+                    _runner_r = max(-1.0, min(rr2_actual, _open_r))
+                    r_multiple = round(
+                        (_tp1_size * rr1_actual) + ((1.0 - _tp1_size) * _runner_r),
+                        2,
+                    )
+                    _exit_path = "TP1_THEN_TIMED"
+                else:
+                    r_multiple = round(max(-1.0, min(target_rr, _open_r)), 2)
+                    _exit_path = "TIMED_FULL"
+                _timed_closed = True
+                break
+
+        if outcome == "TIMEOUT" and future_window and not _timed_closed:
             last_close = float(future_window[-1]["close"])
             if risk > 0:
                 open_r = ((last_close - entry) / risk) if direction == "LONG" else ((entry - last_close) / risk)
@@ -5757,8 +5883,12 @@ def backtest_pair_naked(pair: dict, style: str = "naked", validation_mode="stand
                 "selected_sl": round(float(sl), 6),
                 "exit_strategy": exit_strategy,
                 "exit_strategy_path": _exit_path,
+                "exit_mode": _bt_exit_mode,
+                "runner_directive": _runner_directive,
                 "partial_taken_tp1": bool(_scale_out_runner and _tp1_hit and _tp1_size < 1.0),
                 "runner_be_armed": bool(_runner_be_armed),
+                "runner_break_required": bool(_runner_requires_break),
+                "runner_break_confirmed": bool(_structural_break_confirmed),
                 "tp1_size": round(_tp1_size, 4),
                 "bt_exit_policy": CONFIG.get("ENGINE_B_BT_EXIT_POLICY", "fixed_target_be"),
                 "bos_volume_confirmed": best["res"].get("bos_volume_confirmed", True),

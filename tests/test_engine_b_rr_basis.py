@@ -298,6 +298,91 @@ def test_structural_tp_below_min_rr_preserves_reachable_tp1_and_runner_tp2():
     assert out["runner_tp_requires_structural_break"] is True
 
 
+def test_tp2_below_min_room_falls_back_to_single_tp(monkeypatch):
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_TP2_MIN_ROOM_ATR", {"default": 5.0})
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_TP2_ROOM_FAIL_CLOSED", True)
+
+    out = resolve_engine_b_execution_levels(
+        direction="LONG",
+        entry=100.0,
+        structural_sl=90.0,
+        structural_tp=101.0,
+        atr=1.0,
+        style="intraday",
+        asset_class="forex",
+        min_rr=1.5,
+        fallback_rr=2.0,
+    )
+
+    # Fallback TP2 has only 3 ATR of room; guard requires 5 → single-TP plan.
+    assert out["exit_strategy"] == "single_fallback_rr_tp"
+    assert out["scale_out_guard_reason"] == "tp2_room_below_min_atr"
+    assert out["runner_tp_requires_structural_break"] is False
+    assert out["execution_tp1"] == pytest.approx(103.0)
+    assert out["execution_tp2"] == pytest.approx(103.0)
+    assert out["execution_rr1"] == pytest.approx(2.0)
+    assert out["execution_rr2"] == pytest.approx(2.0)
+    # Legacy gate fields unchanged: trade still flows.
+    assert out["execution_levels_valid"] is True
+    assert out["rr_used_for_gate"] == pytest.approx(2.0)
+
+
+def test_tp1_too_close_retries_tighter_sl_and_preserves_scale_out(monkeypatch):
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_TP1_MIN_RR", {"default": 1.0})
+
+    out = resolve_engine_b_execution_levels(
+        direction="LONG",
+        entry=100.0,
+        structural_sl=90.0,
+        structural_tp=101.0,
+        atr=1.0,
+        style="intraday",
+        asset_class="forex",
+        min_rr=1.5,
+        fallback_rr=2.0,
+    )
+
+    # Original SL dist 1.5 ATR gives rr1=0.67 < 1.0; retry at min_sl_atr=0.75
+    # gives rr1=1.33 and resynthesized TP2 at fallback RR from the tighter SL.
+    assert out["exit_strategy"] == "scale_out_structural_tp1_fallback_tp2"
+    assert out["tp1_sl_retry_applied"] is True
+    assert out["sl_source"].endswith("_tp1_rr_retry")
+    assert out["execution_sl"] == pytest.approx(99.25)
+    assert out["execution_tp1"] == pytest.approx(101.0)
+    assert out["execution_tp2"] == pytest.approx(101.5)
+    assert out["execution_rr1"] == pytest.approx(round(1.0 / 0.75, 4))
+    assert out["execution_rr2"] == pytest.approx(2.0)
+    assert out["rr_used_for_gate"] == pytest.approx(2.0)
+    assert out["runner_tp_requires_structural_break"] is True
+
+
+def test_tp1_too_close_with_no_sane_sl_falls_back_to_single_tp(monkeypatch):
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_TP1_MIN_RR", {"default": 2.0})
+
+    out = resolve_engine_b_execution_levels(
+        direction="LONG",
+        entry=100.0,
+        structural_sl=90.0,
+        structural_tp=101.0,
+        atr=1.0,
+        style="intraday",
+        asset_class="forex",
+        min_rr=1.5,
+        fallback_rr=2.0,
+    )
+
+    # Even the tightest allowed SL (0.75 ATR) only reaches rr1=1.33 < 2.0 →
+    # scale-out dropped, legacy single-TP levels preserved untouched.
+    assert out["exit_strategy"] == "single_fallback_rr_tp"
+    assert out["scale_out_guard_reason"] == "tp1_rr_below_min_no_sane_sl"
+    assert out["tp1_sl_retry_applied"] is False
+    assert out["execution_sl"] == pytest.approx(98.5)
+    assert out["execution_tp"] == pytest.approx(103.0)
+    assert out["execution_tp1"] == pytest.approx(103.0)
+    assert out["execution_tp2"] == pytest.approx(103.0)
+    assert out["execution_levels_valid"] is True
+
+
 def test_engine_b_scan_levels_use_reachable_tp1_and_runner_tp2(monkeypatch):
     signal = {"engine": "engine_b"}
     conf_b = {
@@ -323,6 +408,10 @@ def test_engine_b_scan_levels_use_reachable_tp1_and_runner_tp2(monkeypatch):
     assert signal["engine_b_exit_strategy"] == "scale_out_structural_tp1_fallback_tp2"
     assert signal["tp1"] == pytest.approx(101.0)
     assert signal["tp2"] == pytest.approx(103.0)
+    # Exit mode + runner directive stamped for Engine B rows (global default
+    # is the static fixed-bracket mode -> runner rides to TP2).
+    assert signal["exit_mode"] == "traditional_static"
+    assert signal["runner_directive"] == "runner_to_tp2"
 
 
 def test_structural_sl_fallback_rr_tp_cohort_when_structural_sl_selected():
@@ -444,6 +533,8 @@ _ENGINE_B_EXECUTION_METADATA_KEYS = (
     "tp2_source",
     "exit_strategy",
     "runner_tp_requires_structural_break",
+    "scale_out_guard_reason",
+    "tp1_sl_retry_applied",
     "structural_target_distance_atr",
     "stop_distance_atr",
 )

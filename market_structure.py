@@ -1783,6 +1783,22 @@ def _engine_b_clamp_sl_to_max_pct(
     return float(entry) + max_dist
 
 
+def _engine_b_style_threshold(cfg_val, style: str) -> float:
+    """Resolve a per-style Engine B threshold from a scalar or ``{style: value}`` map.
+
+    Returns 0.0 (disabled) for missing/malformed values so deployments without
+    the new config keys keep current behavior.
+    """
+    raw = cfg_val
+    if isinstance(cfg_val, dict):
+        raw = cfg_val.get(style, cfg_val.get("default"))
+    try:
+        v = float(raw) if raw is not None else 0.0
+    except (TypeError, ValueError):
+        v = 0.0
+    return max(0.0, v)
+
+
 def _synthesize_tp_from_sl(
     entry: float,
     exec_sl: float,
@@ -1909,6 +1925,8 @@ def resolve_engine_b_execution_levels(
             "tp2_source": None,
             "exit_strategy": "invalid_levels",
             "runner_tp_requires_structural_break": False,
+            "scale_out_guard_reason": None,
+            "tp1_sl_retry_applied": False,
             "execution_levels_valid": False,
             "execution_level_reject_reason": _reject,
             "execution_tp_side_ok": False,
@@ -2279,6 +2297,8 @@ def resolve_engine_b_execution_levels(
         else "invalid_levels"
     )
     _runner_tp_requires_structural_break = False
+    _scale_out_guard_reason = None
+    _tp1_sl_retry_applied = False
     if (
         _fallback_applied
         and _structural_tp_below_min_rr
@@ -2288,14 +2308,126 @@ def resolve_engine_b_execution_levels(
     ):
         _tp1_rr, _tp1_valid, _, _ = _compute_exec_rr(_exec_sl, _struct_tp)
         if _tp1_valid:
-            _execution_tp1 = _struct_tp
-            _execution_tp2 = _exec_tp
-            _execution_rr1 = _tp1_rr
-            _execution_rr2 = _exec_rr
-            _tp1_source = "structural"
-            _tp2_source = "fallback_rr"
-            _exit_strategy = "scale_out_structural_tp1_fallback_tp2"
-            _runner_tp_requires_structural_break = True
+            _scale_out_ok = True
+            _plan_sl = _exec_sl
+            _plan_sl_source = _sl_source
+            _plan_tp2 = _exec_tp
+            _plan_rr1 = _tp1_rr
+            _plan_retry = False
+
+            # Guard: TP1 too close relative to the stop. Retry with the
+            # tightest allowed ATR-clamp SL before dropping the scale-out plan.
+            # Tightening the stop only increases RR, so this never loosens the
+            # RR gate; on failure we fall back to the legacy single-TP plan
+            # (the trade still flows through the unchanged gate).
+            _tp1_min_rr = _engine_b_style_threshold(
+                config.CONFIG.get("ENGINE_B_TP1_MIN_RR"), _style
+            )
+            if _tp1_min_rr > 0 and _plan_rr1 + 1e-12 < _tp1_min_rr:
+                _retry_ok = False
+                if _atr > 0:
+                    _retry_group_clamps = (
+                        (config.CONFIG.get("ENGINE_B_ATR_SL_CLAMP_SCORE_GROUP_OVERRIDES") or {})
+                        .get(str(score_group or "").lower(), {})
+                    )
+                    try:
+                        _retry_sl_atr = float(
+                            _retry_group_clamps.get(
+                                "min_sl_atr",
+                                config.CONFIG.get("ENGINE_B_MIN_SL_ATR_DEFAULT", 0.75),
+                            )
+                        )
+                    except (TypeError, ValueError):
+                        _retry_sl_atr = 0.75
+                    _retry_dist = _atr * max(0.0, _retry_sl_atr)
+                    _cur_sl_dist = abs(_entry - _plan_sl)
+                    if 0 < _retry_dist < _cur_sl_dist:
+                        _retry_sl = (
+                            _entry - _retry_dist
+                            if direction == "LONG"
+                            else _entry + _retry_dist
+                        )
+                        _retry_rr1, _retry_rr1_valid, _, _ = _compute_exec_rr(
+                            _retry_sl, _struct_tp
+                        )
+                        # Re-synthesize the runner TP from the tighter SL so
+                        # TP2 keeps the fallback-RR contract; the new TP2 is
+                        # strictly closer to entry than the old one, so it
+                        # cannot newly violate exchange TP bounds.
+                        _retry_tp2, _ = _synthesize_tp_from_sl(
+                            _entry, _retry_sl, direction, fallback_rr, min_rr
+                        )
+                        if (
+                            _retry_rr1_valid
+                            and _retry_rr1 + 1e-12 >= _tp1_min_rr
+                            and _retry_tp2 is not None
+                            and _engine_b_sl_within_max_sl_pct(_entry, _retry_sl, _max_sl_pct)
+                        ):
+                            _plan_sl = _retry_sl
+                            _plan_sl_source = f"{_sl_source}_tp1_rr_retry"
+                            _plan_tp2 = _retry_tp2
+                            _plan_rr1 = _retry_rr1
+                            _plan_retry = True
+                            _retry_ok = True
+                if not _retry_ok:
+                    _scale_out_ok = False
+                    _scale_out_guard_reason = "tp1_rr_below_min_no_sane_sl"
+
+            # Guard: runner TP2 must have minimum room (in ATR) for the
+            # scale-out plan to be worth holding a runner for. Fail-closed
+            # drops back to the single-TP plan; otherwise TP2 is floored to
+            # the minimum room distance (subject to exchange TP bounds).
+            if _scale_out_ok:
+                _tp2_min_room = _engine_b_style_threshold(
+                    config.CONFIG.get("ENGINE_B_TP2_MIN_ROOM_ATR"), _style
+                )
+                if _tp2_min_room > 0 and _atr > 0:
+                    _tp2_room_atr = abs(_plan_tp2 - _entry) / _atr
+                    if _tp2_room_atr + 1e-12 < _tp2_min_room:
+                        if bool(config.CONFIG.get("ENGINE_B_TP2_ROOM_FAIL_CLOSED", True)):
+                            _scale_out_ok = False
+                            _scale_out_guard_reason = "tp2_room_below_min_atr"
+                        else:
+                            _floor_tp2 = (
+                                _entry + (_atr * _tp2_min_room)
+                                if direction == "LONG"
+                                else _entry - (_atr * _tp2_min_room)
+                            )
+                            _floor_ok = True
+                            if _asset_class_lower:
+                                try:
+                                    from risk_engine import validate_tp_exchange_bounds
+
+                                    _floor_ok, _ = validate_tp_exchange_bounds(
+                                        _entry, _floor_tp2, _asset_class_lower, config.CONFIG
+                                    )
+                                except Exception:
+                                    _floor_ok = True
+                            if _floor_ok:
+                                _plan_tp2 = _floor_tp2
+                            else:
+                                _scale_out_ok = False
+                                _scale_out_guard_reason = "tp2_room_floor_exchange_bounds"
+
+            if _scale_out_ok:
+                if _plan_retry or _plan_tp2 != _exec_tp:
+                    _exec_sl = _plan_sl
+                    _sl_source = _plan_sl_source
+                    _exec_tp = _plan_tp2
+                    _level_mode = f"{_sl_source}_sl_{_tp_source}_tp"
+                    _rr_source = _level_mode
+                    _exec_rr, _exec_valid, _exec_reject, _exec_tp_side_ok = _compute_exec_rr(
+                        _exec_sl, _exec_tp
+                    )
+                _tp1_sl_retry_applied = _plan_retry
+                _execution_tp1 = _struct_tp
+                _execution_tp2 = _exec_tp
+                _execution_rr1 = _plan_rr1
+                _execution_rr2 = _exec_rr
+                _tp1_source = "structural"
+                _tp2_source = "fallback_rr"
+                _exit_strategy = "scale_out_structural_tp1_fallback_tp2"
+                _runner_tp_requires_structural_break = True
 
     _structural_target_distance_atr = (
         round(abs(_struct_tp - _entry) / _atr, 4)
@@ -2336,6 +2468,8 @@ def resolve_engine_b_execution_levels(
         "tp2_source": _tp2_source,
         "exit_strategy": _exit_strategy,
         "runner_tp_requires_structural_break": _runner_tp_requires_structural_break,
+        "scale_out_guard_reason": _scale_out_guard_reason,
+        "tp1_sl_retry_applied": _tp1_sl_retry_applied,
         "execution_levels_valid": _exec_valid,
         "execution_level_reject_reason": _exec_reject,
         "execution_tp_side_ok": _exec_tp_side_ok,
@@ -5175,6 +5309,8 @@ class NakedEngine:
             "tp2_source": _exec_lvl.get("tp2_source"),
             "exit_strategy": _exec_lvl.get("exit_strategy"),
             "runner_tp_requires_structural_break": _exec_lvl.get("runner_tp_requires_structural_break"),
+            "scale_out_guard_reason": _exec_lvl.get("scale_out_guard_reason"),
+            "tp1_sl_retry_applied": _exec_lvl.get("tp1_sl_retry_applied"),
             "execution_levels_valid": _exec_lvl["execution_levels_valid"],
             "execution_level_reject_reason": _exec_lvl["execution_level_reject_reason"],
             "fallback_tp_applied": _exec_lvl["fallback_tp_applied"],

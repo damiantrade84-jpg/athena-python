@@ -35,6 +35,7 @@ from market_structure import (
     engine_b_forex_asian_session_blocks_bar,
     engine_b_min_score_threshold,
 )
+from exit_mode_apply import apply_engine_b_exit_strategy
 from threshold_audit import (
     audit_enabled as threshold_audit_enabled,
     build_signal_funnel_row,
@@ -382,6 +383,15 @@ def _apply_engine_b_scan_levels(signal: dict, conf_b: dict | None, res_b: dict |
     signal["engine_b_exit_strategy"] = exit_strategy
     signal["engine_b_level_source"] = "engine_b_execution"
     signal["engine_b_rr_used_for_gate"] = (conf_b or {}).get("rr_used_for_gate")
+
+    # Stamp the resolved Engine B exit mode + runner directive. The helper
+    # no-ops for non-Engine-B rows, so Engine A rows carrying a B overlay
+    # keep their own exit_mode untouched.
+    apply_engine_b_exit_strategy(
+        signal,
+        signal.get("engine") or signal.get("engine_source") or signal.get("source_engine"),
+        CONFIG,
+    )
 
     # Engine identity is the primary gate: generic level overwrite only fires
     # for explicit Engine B rows (or Engine C with B levels selected). Engine

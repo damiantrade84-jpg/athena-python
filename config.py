@@ -1357,6 +1357,47 @@ CONFIG: dict = {
     "ENGINE_B_BT_SCALE_OUT_TP1_SIZE": 0.5,
     "ENGINE_B_BT_MOVE_SL_TO_BE_AFTER_TP1": True,
     "ENGINE_B_BT_RUNNER_ENABLED": True,
+    # Scale-out plan guards (dual-TP exit plan). TP1 below this RR triggers a
+    # tighter-SL retry; if no sane SL/TP1 pair exists the plan falls back to
+    # the legacy single-TP levels (trade still flows through unchanged gates).
+    "ENGINE_B_TP1_MIN_RR": {"default": 0.3},
+    # Minimum runner room for TP2 in ATR multiples, per style. 0 disables.
+    "ENGINE_B_TP2_MIN_ROOM_ATR": {"default": 0.5, "swing": 0.75},
+    # True: insufficient TP2 room drops the scale-out plan (single-TP legacy).
+    # False: TP2 is floored to the minimum room distance instead.
+    "ENGINE_B_TP2_ROOM_FAIL_CLOSED": True,
+    # Backtest: runner TP2 fill requires a confirmed structural break (a bar
+    # CLOSE beyond TP1) before a TP2 touch counts.
+    "ENGINE_B_BT_RUNNER_REQUIRES_BREAK": True,
+    # Engine B exit-mode selector (parallels ENGINE_A_EXIT_MODE_*). The default
+    # matches today's live behavior: fixed broker bracket (static). The exit
+    # strategy (single vs scale-out) comes from resolve_engine_b_execution_levels;
+    # the mode decides how the runner leg is managed (see exit_policy).
+    "ENGINE_B_EXIT_MODE_GLOBAL_DEFAULT": "traditional_static",
+    "ENGINE_B_EXIT_MODE_BY_SCORE_GROUP": {},
+    # Live Engine B scale-out (Bybit paper/demo): default OFF — live order
+    # behavior is unchanged until explicitly enabled. When on, a reduce-only
+    # partial banks the TP1 clip and the position TP carries the TP2 runner.
+    "ENGINE_B_LIVE_SCALE_OUT_ENABLED": False,
+    "ENGINE_B_LIVE_SCALE_OUT_TP1_SIZE": 0.5,
+    # ── Phase 3 calibration placeholders — NOT wired into level resolution ──
+    # Values mirror the current NAKED_ENGINE style-profile min_rr rows (forex
+    # groups override to 1.3/1.8). They only become active after the
+    # calibrate_engine_b_min_rr report is reviewed and new values are
+    # explicitly approved and wired into resolve_engine_b_execution_levels.
+    "ENGINE_B_MIN_RR_INTRADAY_FLOOR": 1.5,
+    "ENGINE_B_MIN_RR_SWING_FLOOR": 2.0,
+    "ENGINE_B_MIN_RR_BY_ASSET_CLASS": {
+        "forex": {"intraday": 1.3, "swing": 1.8},
+        "crypto": {"intraday": 1.5, "swing": 2.0},
+        "stock": {"intraday": 1.5, "swing": 2.0},
+    },
+    # Backtest runner-trail proxy: chandelier-style ATR trail multiple for the
+    # post-TP1 runner when the resolved exit mode is adaptive_trail.
+    "ENGINE_B_BT_RUNNER_TRAIL_ATR_MULT": 2.0,
+    # time_based exit mode horizon in entry-timeframe bars; 0 disables the
+    # timed close (mode then behaves like the static fixed bracket).
+    "ENGINE_B_TIME_EXIT_BARS": 0,
     # When True, Engine B skips forex on 22:00–07:00 UTC bars (backtest + live scan).
     "ENGINE_B_FOREX_ASIAN_SESSION_SKIP_ENABLED": True,
     "ENGINE_B_FOREX_PRE_ASIAN_SESSION_SKIP_ENABLED": True,
