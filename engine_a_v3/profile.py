@@ -31,6 +31,45 @@ _FAMILY_WEIGHTS = {
 }
 
 
+def _resolved_weights(score_group: str, family: str) -> dict[str, float]:
+    """Resolve per-group component weights from config.
+
+    Wires ``ENGINE_A_QUANT_WEIGHTS_BY_GROUP`` (config.yaml) so operator tuning of
+    per-group weights takes live effect. An override entry is merged over the
+    family default, restricted to CORE_COMPONENTS (unknown keys ignored), and
+    renormalized to sum 1.0 so it always satisfies EngineAV3Profile.create's
+    weight schema. Missing/empty/invalid entries fall back to the family default.
+    """
+    base = dict(_FAMILY_WEIGHTS[family])
+    try:
+        from config import CONFIG
+
+        keyed = CONFIG.get("ENGINE_A_QUANT_WEIGHTS_BY_GROUP") or {}
+    except Exception:
+        return base
+    override = keyed.get(score_group) if isinstance(keyed, dict) else None
+    if not isinstance(override, dict):
+        return base
+    merged = dict(base)
+    changed = False
+    for key, value in override.items():
+        if key not in CORE_COMPONENTS:
+            continue
+        try:
+            parsed = float(value)
+        except (TypeError, ValueError):
+            continue
+        if math.isfinite(parsed) and parsed >= 0:
+            merged[key] = parsed
+            changed = True
+    if not changed:
+        return base
+    total = sum(merged.values())
+    if total <= 0:
+        return base
+    return {key: value / total for key, value in merged.items()}
+
+
 def _resolved_trade_threshold(score_group: str) -> float:
     """Resolve the per-group V3 trade threshold from config.
 
@@ -194,7 +233,7 @@ def baseline_profile(score_group: str, horizon: str) -> EngineAV3Profile:
     return EngineAV3Profile.create(
         score_group=score_group, horizon=horizon,
         indicator_periods=_resolved_periods(score_group, family),
-        weights=_FAMILY_WEIGHTS[family], direction_deadband=0.05,
+        weights=_resolved_weights(score_group, family), direction_deadband=0.05,
         trade_threshold=_resolved_trade_threshold(score_group),
         exit_policy="SINGLE_TP1", status="UNVALIDATED",
     )

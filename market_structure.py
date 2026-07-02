@@ -3239,6 +3239,7 @@ class NakedEngine:
         zone_hit: bool,
         bos_confirmed: bool,
         is_trending: bool = False,
+        asset_type: str | None = "",
     ) -> dict:
         if len(candles) < 3:
             return {
@@ -3282,17 +3283,27 @@ class NakedEngine:
         bull_rejection = lower_wick >= max(body * rejection_ratio, atr * 0.08) and close >= low + (range_ * 0.6)
         bear_rejection = upper_wick >= max(body * rejection_ratio, atr * 0.08) and close <= high - (range_ * 0.6)
 
+        # Engulfing displacement floor: a real engulfing trigger needs a body
+        # that means something at this timeframe's volatility. Without it,
+        # doji-engulfs-doji noise in quiet regimes fires the entry gate.
+        # NAKED_ENGINE.engulfing_min_body_atr_mult (scalar or per-asset dict);
+        # set 0.0 to restore legacy body-agnostic behaviour. Inert when atr<=0.
+        _engulf_min_body = atr * _naked_engine_atr_mult(
+            "engulfing_min_body_atr_mult", 0.2, asset_type
+        ) if atr and atr > 0 else 0.0
         bull_engulf = (
             close > open_
             and prev_close < prev_open
             and close >= prev_open
             and open_ <= prev_close
+            and body >= _engulf_min_body
         )
         bear_engulf = (
             close < open_
             and prev_close > prev_open
             and close <= prev_open
             and open_ >= prev_close
+            and body >= _engulf_min_body
         )
 
         inside_bar = prev_high < prev2_high and prev_low > prev2_low
@@ -4124,6 +4135,7 @@ class NakedEngine:
                 (direction == "LONG" and sequence_data["state"] == "HH_HL" and macro_seq_data["state"] == "HH_HL")
                 or (direction == "SHORT" and sequence_data["state"] == "LH_LL" and macro_seq_data["state"] == "LH_LL")
             ),
+            asset_type=asset_type,
         )
 
         latest_trigger_candle_time = None
@@ -4719,6 +4731,25 @@ class NakedEngine:
         _rr_space_tp_qualified = _level_mode_str.endswith("_structural_tp") or _level_mode_str.endswith(
             "_fallback_rr_tp"
         )
+        # A synthetic fallback TP that replaced a structural TP capped by a nearby
+        # opposing zone must not substitute for room: the wall that made the
+        # structural target fail min_rr is still in front of price, and the
+        # synthetic target sits beyond it. Substitution stays valid for structural
+        # TPs and for synthetic TPs created because no structural target existed
+        # (missing/wrong-side TP — no opposing wall was mapped).
+        _rr_space_capped_tp_blocked = False
+        if (
+            _rr_space_tp_qualified
+            and _level_mode_str.endswith("_fallback_rr_tp")
+            and _exec_lvl.get("fallback_tp_reason") == "structural_tp_below_min_rr"
+            and bool(
+                config.CONFIG.get(
+                    "ENGINE_B_SPACE_RR_SUBSTITUTE_BLOCK_CAPPED_STRUCTURAL_TP", True
+                )
+            )
+        ):
+            _rr_space_tp_qualified = False
+            _rr_space_capped_tp_blocked = True
         _rr_space_floor_enabled = bool(
             config.CONFIG.get("ENGINE_B_SPACE_RR_SUBSTITUTE_MIN_ATR_FLOOR_ENABLED", True)
         )
@@ -5118,6 +5149,7 @@ class NakedEngine:
                 else None
             ),
             "rr_can_satisfy_space_gate": rr_can_satisfy_space,
+            "rr_space_capped_tp_blocked": _rr_space_capped_tp_blocked,
             "rr_space_floor_atr": round(_rr_space_floor_atr, 4),
             "rr_space_floor_passed": bool(_rr_space_floor_ok),
             "min_room_atr_used": round(_effective_min_room_atr, 4),

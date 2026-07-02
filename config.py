@@ -1387,6 +1387,11 @@ CONFIG: dict = {
     },
     "ENGINE_B_SPACE_RR_SUBSTITUTE_MIN_ATR_FLOOR_ENABLED": False,
     "ENGINE_B_SPACE_RR_SUBSTITUTE_MIN_ATR_FLOOR": 0.5,
+    # When a synthetic fallback TP replaced a structural TP that failed min_rr
+    # (an opposing zone capped the structural target), that synthetic TP may not
+    # substitute for the room gate — the wall is still in front of price.
+    # Synthetic TPs created because no structural target existed still qualify.
+    "ENGINE_B_SPACE_RR_SUBSTITUTE_BLOCK_CAPPED_STRUCTURAL_TP": True,
     "ENGINE_B_ATR_SL_CLAMPS_ENABLED": True,
     "ENGINE_B_MIN_SL_ATR_DEFAULT": 0.75,
     "ENGINE_B_MAX_SL_ATR_DEFAULT": 3.0,
