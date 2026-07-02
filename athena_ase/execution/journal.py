@@ -11,6 +11,7 @@ from typing import Any
 import pandas as pd
 
 from athena_ase.contracts import ASESignal
+from athena_ase.data.parquet_io import read_parquet_safe, write_parquet_atomic
 from athena_ase.paths import trade_journal_path
 
 log = logging.getLogger("ase.execution.journal")
@@ -41,6 +42,12 @@ def _flatten_signal(sig: ASESignal) -> dict[str, Any]:
     return row
 
 
+def _read_journal_df(out_path: Path) -> pd.DataFrame:
+    if not out_path.exists():
+        return pd.DataFrame()
+    return read_parquet_safe(out_path)
+
+
 def append_trade_signals(
     signals: list[ASESignal],
     *,
@@ -52,16 +59,12 @@ def append_trade_signals(
     if not rows:
         return out_path
     df_new = pd.DataFrame(rows)
-    if out_path.exists():
-        try:
-            df_old = pd.read_parquet(out_path)
-            df = pd.concat([df_old, df_new], ignore_index=True)
-        except Exception as exc:
-            log.warning("Trade journal read failed (%s) — overwriting", exc)
-            df = df_new
-    else:
+    df_old = _read_journal_df(out_path)
+    if df_old.empty:
         df = df_new
-    df.to_parquet(out_path, index=False)
+    else:
+        df = pd.concat([df_old, df_new], ignore_index=True)
+    write_parquet_atomic(out_path, df)
     return out_path
 
 
@@ -77,7 +80,7 @@ def append_execution_outcome(
     out_path = path or trade_journal_path()
     if not out_path.exists():
         return False
-    df = pd.read_parquet(out_path)
+    df = _read_journal_df(out_path)
     if df.empty:
         return False
     mask = (df["instrument"].astype(str) == str(instrument)) & (
@@ -90,15 +93,12 @@ def append_execution_outcome(
     df.at[idx, "executionDetail"] = json.dumps(detail or {}, sort_keys=True, default=str)
     if order_id:
         df.at[idx, "orderId"] = order_id
-    df.to_parquet(out_path, index=False)
+    write_parquet_atomic(out_path, df)
     return True
 
 
 def load_trade_journal(path: Path | None = None) -> pd.DataFrame:
-    out_path = path or trade_journal_path()
-    if not out_path.exists():
-        return pd.DataFrame()
-    return pd.read_parquet(out_path)
+    return _read_journal_df(path or trade_journal_path())
 
 
 def trade_journal_summary(path: Path | None = None) -> dict[str, Any]:

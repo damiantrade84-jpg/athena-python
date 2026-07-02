@@ -16,6 +16,7 @@ import numpy as np
 import pandas as pd
 
 from athena_ase.data.availability import AvailabilityRuleId, rule_for_source, series_metadata_for_audit
+from athena_ase.data.parquet_io import read_parquet_safe, write_parquet_atomic
 
 PTIS_ROW_COLUMNS = (
     "series_id",
@@ -188,22 +189,38 @@ class PTISStore:
             raise KeyError(f"unknown PTIS series: {series_id}")
         return str(row[0])
 
+    def _iter_partition_paths(self, source: str, series_id: str) -> list[Path]:
+        base = self.root / source / _series_path_component(series_id)
+        if not base.exists():
+            return []
+        paths: list[Path] = []
+        for year_dir in sorted(base.glob("*"), key=lambda path: path.name):
+            if not year_dir.is_dir() or not year_dir.name.isdigit():
+                continue
+            part_path = year_dir / "data.parquet"
+            if part_path.exists():
+                paths.append(part_path)
+        return paths
+
+    def _read_series_partitions(self, source: str, series_id: str) -> pd.DataFrame:
+        frames: list[pd.DataFrame] = []
+        for part_path in self._iter_partition_paths(source, series_id):
+            part = read_parquet_safe(part_path)
+            if not part.empty:
+                frames.append(part)
+        return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+
     def _load_series_frame(self, series_id: str, source: str) -> pd.DataFrame:
         cached = self._frame_cache.get(series_id)
         if cached is not None:
             return cached
-        base = self.root / source / _series_path_component(series_id)
-        frames: list[pd.DataFrame] = []
-        if base.exists():
-            for year_dir in sorted(base.glob("*"), key=lambda path: path.name):
-                if not year_dir.is_dir() or not year_dir.name.isdigit():
-                    continue
-                part_path = year_dir / "data.parquet"
-                if part_path.exists():
-                    frames.append(pd.read_parquet(part_path))
-        frame = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
-        self._frame_cache[series_id] = frame
-        return frame
+        with self._lock:
+            cached = self._frame_cache.get(series_id)
+            if cached is not None:
+                return cached
+            frame = self._read_series_partitions(source, series_id)
+            self._frame_cache[series_id] = frame
+            return frame
 
     def append_rows(
         self,
@@ -244,14 +261,19 @@ class PTISStore:
                 year = int(year)
                 part_path = self.partition_file(src, series_id, year)
                 if part_path.exists():
-                    existing = pd.read_parquet(part_path)
-                    merged = pd.concat([existing, chunk.drop(columns=["year"])], ignore_index=True)
+                    existing = read_parquet_safe(part_path)
+                    if existing.empty:
+                        merged = chunk.drop(columns=["year"])
+                    else:
+                        merged = pd.concat(
+                            [existing, chunk.drop(columns=["year"])], ignore_index=True
+                        )
                 else:
                     merged = chunk.drop(columns=["year"])
                 merged = merged.sort_values(
                     ["value_time", "revision", "ingest_time"]
                 ).drop_duplicates(subset=["value_time", "revision"], keep="last")
-                merged.to_parquet(part_path, index=False)
+                write_parquet_atomic(part_path, merged)
                 written += len(chunk)
         self._frame_cache.pop(series_id, None)
         return written
@@ -323,17 +345,11 @@ class PTISStore:
 
     def series_row_count(self, series_id: str) -> int:
         source = self._series_source(series_id)
-        base = self.root / source / _series_path_component(series_id)
-        if not base.exists():
-            return 0
-        total = 0
-        for year_dir in base.glob("*"):
-            if not year_dir.is_dir() or not year_dir.name.isdigit():
-                continue
-            part_path = year_dir / "data.parquet"
-            if part_path.exists():
-                total += len(pd.read_parquet(part_path))
-        return total
+        with self._lock:
+            total = 0
+            for part_path in self._iter_partition_paths(source, series_id):
+                total += len(read_parquet_safe(part_path))
+            return total
 
 
 _default_store: PTISStore | None = None
