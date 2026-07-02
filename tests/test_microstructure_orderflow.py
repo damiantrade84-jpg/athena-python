@@ -427,3 +427,19 @@ def test_binance_micro_multi_ws_rejects_empty_symbols():
 
     with pytest.raises(ValueError):
         BinanceMicroMultiWS(symbols=[])
+
+
+def test_default_bucket_size_major_crypto_granularity():
+    from athena.microstructure.trade_bucket_store import bucket_price, default_bucket_size
+
+    assert default_bucket_size(61250.0) == 1.0
+    assert default_bucket_size(1648.0) == 0.1
+    assert default_bucket_size(82.0) == 0.001
+
+    btc_buckets = {bucket_price(p)[0] for p in (61250.0, 61251.2, 61252.8)}
+    eth_buckets = {bucket_price(p)[0] for p in (1648.05, 1648.15, 1648.35)}
+    sol_buckets = {bucket_price(p)[0] for p in (82.26, 82.27, 82.28)}
+
+    assert len(btc_buckets) >= 3
+    assert len(eth_buckets) >= 3
+    assert len(sol_buckets) >= 3

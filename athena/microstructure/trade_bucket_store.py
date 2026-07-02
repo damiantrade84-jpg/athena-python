@@ -80,19 +80,26 @@ _ensure_db()
 
 
 def default_bucket_size(price: float) -> float:
-    """Return a conservative display-level bucket for crypto symbols."""
+    """Return a conservative display-level bucket for crypto symbols.
+
+    Sized to ~0.01% of mid so high-priced majors (BTC/ETH) still accumulate
+    enough distinct price levels for TRADE_BUCKET_MIN_LEVELS within tight ranges.
+    """
     p = abs(float(price or 0.0))
-    if p >= 10_000:
-        return 10.0
-    if p >= 1_000:
+    if p <= 0:
+        return 0.0001
+    target = p * 0.0001
+    if target >= 1.0:
         return 1.0
-    if p >= 100:
+    if target >= 0.1:
         return 0.1
-    if p >= 10:
+    if target >= 0.01:
         return 0.01
-    if p >= 1:
+    if target >= 0.001:
         return 0.001
-    return 0.0001
+    if target >= 0.0001:
+        return 0.0001
+    return 0.00001
 
 
 def bucket_price(price: float, bucket_size: float | None = None) -> tuple[float, float]:

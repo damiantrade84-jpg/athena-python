@@ -2951,15 +2951,16 @@ POSITION_SIZE_CONFIDENCE_SCALING: true
 
 MICROSTRUCTURE_FEEDS_ENABLED: true
 
-# Bybit is the primary crypto market-data/execution venue. Keep Bybit publicTrade
-# microstructure feeds on so trade-bucket VP/CVD lines up with Engine A/B Bybit
-# candles, levels, live ticks, and paper execution.
+# Bybit publicTrade microstructure reverted OFF 2026-07-02: the per-symbol BybitWS
+# fan-out (one socket per symbol, no per-symbol staleness watchdog) left BTC/ETH/SOL
+# buckets silent >15 min repeatedly, failing the crypto aggtrade freshness gate.
+# Bybit remains primary for candles, levels, live ticks, and paper execution.
 
-MICROSTRUCTURE_BYBIT_FEEDS_ENABLED: true
+MICROSTRUCTURE_BYBIT_FEEDS_ENABLED: false
 
-# Binance microstructure is off by default when Bybit is the primary trade-bucket
-# venue. Set true only for intentional parallel Binance orderflow diagnostics.
-MICROSTRUCTURE_BINANCE_FEEDS_ENABLED: false
+# Binance aggTrade microstructure re-enabled 2026-07-02 (combined multiplexed stream
+# with MICROSTRUCTURE_BINANCE_STALE_SYMBOL_SEC watchdog) as the trade-bucket source.
+MICROSTRUCTURE_BINANCE_FEEDS_ENABLED: true
 
 # F1: One multiplexed Binance Futures micro WS for ALL crypto symbols (depth+trade+aggTrade)
 # instead of one socket per symbol. The per-symbol fan-out intermittently left individual
@@ -3951,7 +3952,10 @@ SCALP_ENGINE:
     index: 0.50
     stock: 0.50
 
-  TRADE_BUCKET_EXCHANGE: bybit    # Crypto trade buckets: Bybit publicTrade by default; set binance for Binance aggTrade.
+  TRADE_BUCKET_EXCHANGE: binance  # Crypto trade buckets: Binance aggTrade (combined stream + staleness watchdog).
+                                  # Reverted from bybit 2026-07-02: per-symbol Bybit publicTrade sockets went silent
+                                  # >15 min on BTC/ETH/SOL (same half-closed failure the Binance combined stream fixed),
+                                  # so the majors kept failing the aggtrade freshness gate during active hours.
 
   TRADE_BUCKET_VP_ENABLED: true   # Crypto: prefer real exchange trade buckets for VP when fresh
 
