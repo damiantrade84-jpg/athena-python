@@ -1,0 +1,17 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "athena",
+      "runtimeExecutable": "py",
+      "runtimeArgs": ["athena.py"],
+      "port": 5000
+    },
+    {
+      "name": "react-dev",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["--prefix", "static/react-app/app", "run", "dev"],
+      "port": 3000
+    }
+  ]
+}
