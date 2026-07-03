@@ -404,77 +404,74 @@ export default function ASEPanel() {
 
       {executedRows.length > 0 && (
         <Card className="shrink-0 border-0" style={{ background: 'hsl(200 30% 6%)', border: `1px solid ${CYAN_DIM}` }}>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm flex items-center justify-between" style={{ color: CYAN }}>
+          <CardHeader className="pt-3 pb-1 px-4">
+            <CardTitle className="text-[11px] uppercase tracking-wider flex items-center justify-between" style={{ color: CYAN }}>
               <span className="flex items-center gap-2">
-                <ClipboardList className="h-4 w-4" />
-                Executed Trades ({executedTrades?.totalExecuted ?? executedRows.length} filled)
+                <ClipboardList className="h-3.5 w-3.5" />
+                Executed fills — {executedTrades?.totalExecuted ?? executedRows.length} demo trades
               </span>
-              <span className="text-[10px] font-normal text-muted-foreground">
-                demo fills · mirror manually on funded account
+              <span className="text-[10px] font-normal normal-case tracking-normal text-muted-foreground">
+                mirror manually on funded account
               </span>
             </CardTitle>
           </CardHeader>
-          <CardContent className="p-0">
-            <ScrollArea className="max-h-48 px-4 pb-3">
-              <table className="w-full text-[11px] font-mono">
-                <thead>
-                  <tr className="text-[10px] uppercase text-muted-foreground text-left">
-                    <th className="pr-2 py-1 font-normal">Time</th>
-                    <th className="pr-2 py-1 font-normal">Instrument</th>
-                    <th className="pr-2 py-1 font-normal">Dir</th>
-                    <th className="pr-2 py-1 font-normal">Entry</th>
-                    <th className="pr-2 py-1 font-normal">SL</th>
-                    <th className="pr-2 py-1 font-normal">TP1</th>
-                    <th className="pr-2 py-1 font-normal">TP2</th>
-                    <th className="pr-2 py-1 font-normal">R:R</th>
-                    <th className="pr-2 py-1 font-normal">Ticket</th>
-                    <th className="py-1 font-normal" />
-                  </tr>
-                </thead>
-                <tbody>
-                  {executedRows.map((trade) => (
-                    <tr
-                      key={`${trade.instrument}-${trade.decisionTimeMs}-${trade.horizon}`}
-                      className="border-t"
-                      style={{ borderColor: CYAN_DIM }}
+          <CardContent className="px-4 pb-3 pt-1">
+            <ScrollArea className="max-h-52">
+              <div className="space-y-px">
+                {executedRows.map((trade) => (
+                  <div
+                    key={`${trade.instrument}-${trade.decisionTimeMs}-${trade.horizon}`}
+                    className="flex items-center gap-3 py-1.5 rounded text-[11px] font-mono"
+                    style={{ borderBottom: `1px solid hsl(185 40% 12%)` }}
+                  >
+                    <span className="text-[10px] text-muted-foreground whitespace-nowrap w-24 shrink-0">
+                      {trade.decisionTimeMs
+                        ? new Date(trade.decisionTimeMs).toLocaleString([], {
+                            month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit',
+                          })
+                        : '—'}
+                    </span>
+                    <span className="font-semibold w-20 shrink-0 truncate" style={{ color: CYAN }}>
+                      {trade.instrument || '—'}
+                    </span>
+                    <Badge
+                      className={`text-[9px] px-1.5 py-0 h-4 shrink-0 ${trade.direction === 'LONG' ? 'badge-long' : 'badge-short'}`}
                     >
-                      <td className="pr-2 py-1 text-muted-foreground whitespace-nowrap">
-                        {trade.decisionTimeMs
-                          ? new Date(trade.decisionTimeMs).toLocaleString([], {
-                              month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit',
-                            })
-                          : '—'}
-                      </td>
-                      <td className="pr-2 py-1" style={{ color: CYAN }}>{trade.instrument || '—'}</td>
-                      <td className="pr-2 py-1">
-                        <Badge className={trade.direction === 'LONG' ? 'badge-long' : 'badge-short'}>
-                          {trade.direction || '—'}
-                        </Badge>
-                      </td>
-                      <td className="pr-2 py-1">{fmtAsePrice(trade.entryReference)}</td>
-                      <td className="pr-2 py-1">{fmtAsePrice(trade.sl)}</td>
-                      <td className="pr-2 py-1">{fmtAsePrice(trade.tp1)}</td>
-                      <td className="pr-2 py-1">{fmtAsePrice(trade.tp2)}</td>
-                      <td className="pr-2 py-1">{fmtNum(trade.rr1, 2)}</td>
-                      <td className="pr-2 py-1 text-muted-foreground">
-                        {trade.brokerFill?.ticket || trade.orderId || '—'}
-                      </td>
-                      <td className="py-1 text-right">
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          className="h-6 px-2"
-                          title="Copy trade plan"
-                          onClick={() => void copyTradePlan(trade)}
-                        >
-                          <Copy className="h-3 w-3" />
-                        </Button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+                      {trade.direction || '—'}
+                    </Badge>
+                    <div className="flex items-center gap-3 flex-1 min-w-0 text-[10px]">
+                      <span className="text-muted-foreground">
+                        @ <span className="text-foreground">{fmtAsePrice(trade.entryReference)}</span>
+                      </span>
+                      <span className="text-muted-foreground hidden sm:inline">
+                        SL <span className="text-red-400">{fmtAsePrice(trade.sl)}</span>
+                      </span>
+                      <span className="text-muted-foreground">
+                        TP <span className="text-green-400">{fmtAsePrice(trade.tp1)}</span>
+                      </span>
+                      <span className="text-muted-foreground hidden lg:inline">
+                        RR <span className="text-foreground">{fmtNum(trade.rr1, 2)}</span>
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      {(trade.brokerFill?.ticket || trade.orderId) && (
+                        <span className="text-[9px] text-muted-foreground hidden xl:inline">
+                          #{trade.brokerFill?.ticket || trade.orderId}
+                        </span>
+                      )}
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        className="h-5 w-6 p-0 opacity-40 hover:opacity-100 transition-opacity"
+                        title="Copy trade plan"
+                        onClick={() => void copyTradePlan(trade)}
+                      >
+                        <Copy className="h-3 w-3" />
+                      </Button>
+                    </div>
+                  </div>
+                ))}
+              </div>
             </ScrollArea>
           </CardContent>
         </Card>
@@ -495,7 +492,7 @@ export default function ASEPanel() {
           </CardTitle>
         </CardHeader>
         <CardContent className="flex-1 min-h-0 p-0">
-          <ScrollArea className="h-[calc(100vh-360px)] px-4 pb-4">
+          <ScrollArea className="h-full px-4 pb-4">
             <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
               {signals.length === 0 && (
                 <p className="text-sm text-muted-foreground col-span-full py-8 text-center">
