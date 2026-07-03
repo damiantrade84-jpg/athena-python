@@ -68,6 +68,22 @@ class EngineAResponse(BaseModel):
     entryZone: str = Field(description="Exact entry price or fib level")
     invalidation: str = Field(description="Price level that invalidates the trade")
     keyLevels: str = Field(description="Key S/R levels (S1/R1 format)")
+    levelsVerdict: Optional[str] = Field(
+        default=None,
+        description="Advisory SL/TP review: accept, adjust, or reject",
+    )
+    levelsReason: Optional[str] = Field(
+        default=None,
+        description="Evidence cited for levelsVerdict",
+    )
+    suggestedSL: Optional[str] = Field(
+        default=None,
+        description="Advisory stop suggestion when levelsVerdict is adjust/reject",
+    )
+    suggestedTP: Optional[str] = Field(
+        default=None,
+        description="Advisory target suggestion when levelsVerdict is adjust/reject",
+    )
     positionSizing: str = Field(description="Full/Half/Quarter with R explanation")
     tradeStyle: str = Field(description="SWING, INTRADAY, or SCALP")
     tradeStyleReason: str = Field(description="Why this style fits")
@@ -285,6 +301,22 @@ class EngineBResponse(BaseModel):
     )
     riskLevel: str = Field(description="LOW, MEDIUM, or HIGH")
     verdict: str = Field(description="Concise structural analysis")
+    levelsVerdict: Optional[str] = Field(
+        default=None,
+        description="Advisory SL/TP review: accept, adjust, or reject",
+    )
+    levelsReason: Optional[str] = Field(
+        default=None,
+        description="Evidence cited for levelsVerdict",
+    )
+    suggestedSL: Optional[str] = Field(
+        default=None,
+        description="Advisory stop suggestion when levelsVerdict is adjust/reject",
+    )
+    suggestedTP: Optional[str] = Field(
+        default=None,
+        description="Advisory target suggestion when levelsVerdict is adjust/reject",
+    )
     style_ratings: Optional[dict] = Field(
         default=None,
         description="Per-style ratings: {scalp: {grade, edgeProbability, riskLevel}, intraday: {...}, swing: {...}}",

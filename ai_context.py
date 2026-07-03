@@ -63,6 +63,28 @@ def resolve_ai_style(signal: Dict[str, Any], explicit_style: str = "auto") -> st
         return "INTRADAY"
     return "SCALP"
 
+def resolve_ai_review_min_rr(signal: Dict[str, Any], resolved_style: str) -> float:
+    """Resolve min RR for AI review context from signal payload or config."""
+    direct = signal.get("min_rr")
+    if direct is not None:
+        try:
+            return float(direct)
+        except (TypeError, ValueError):
+            pass
+    style_key = str(resolved_style or "intraday").lower()
+    defaults = {"scalp": 1.5, "intraday": 1.5, "swing": 2.0}
+    try:
+        from config import CONFIG
+
+        by_style = CONFIG.get("AI_REVIEW_MIN_RR_BY_STYLE") or defaults
+    except Exception:
+        by_style = defaults
+    try:
+        return float(by_style.get(style_key, by_style.get("intraday", 1.5)))
+    except (TypeError, ValueError):
+        return float(defaults.get(style_key, 1.5))
+
+
 def classify_rr_by_style(asset_type: str, style: str, rr: float) -> str:
     """Classify Risk:Reward ratios based on style rules.
     
@@ -117,7 +139,8 @@ def build_ai_calibration_context(signal: Dict[str, Any], engine_source: str, exp
     """Build a unified dictionary context across all engines for LLM prompts."""
     asset_type = str(signal.get("type") or signal.get("asset_type", "unknown")).lower()
     resolved_style = resolve_ai_style(signal, explicit_style)
-    
+    style_min_rr = resolve_ai_review_min_rr(signal, resolved_style)
+
     # 1. Identity/context
     identity = {
         "pair": signal.get("display") or signal.get("pair", "?"),
@@ -226,6 +249,7 @@ def build_ai_calibration_context(signal: Dict[str, Any], engine_source: str, exp
         "tp2": signal.get("tp2"),
         "rr1": signal.get("rr1") or signal.get("rr"),
         "rr2": signal.get("rr2"),
+        "style_min_rr": style_min_rr,
         "slPct": sl_pct,
         "atr": atr,
         "slDistance": abs(entry - sl) if entry > 0 and sl > 0 else 0,
@@ -297,7 +321,11 @@ def build_ai_calibration_context_string(signal: Dict[str, Any], engine_source: s
         
     lines.append(f"Entry: {trade_risk['entry']} | SL: {trade_risk['sl']} | TP1: {trade_risk['tp1']} | TP2: {trade_risk['tp2']}")
     lines.append(f"R:R = 1:{trade_risk['rr1']} / 1:{trade_risk['rr2']}")
-
+    lines.append(f"Style min RR (config): {trade_risk.get('style_min_rr', '?')}")
+    lines.append(
+        "Note: TP1/RR1 is partial exit target; TP2/RR2 is runner. "
+        "Levels are deterministic engine outputs already gated by Python."
+    )
     lines.append("Note: thresholdProgressPct is scanner readiness; rawScorePct is theoretical factor quality.")
 
     dq = ctx.get("data_quality") or {}

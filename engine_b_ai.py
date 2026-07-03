@@ -25,7 +25,10 @@ _ENGINE_B_AI_EXPERT_PREFIX_FALLBACK = (
     "Derive letter grades by weighing evidence — do NOT map a short checklist phrase to A+/A/B mechanically. "
     "Evaluate the trade setup based on the 'Resolved AI style' and 'Asset type' provided in the AI CALIBRATION CONTEXT. "
     "Do NOT judge a Scalp setup by Swing criteria (or vice versa). "
-    "Evaluate Risk:Reward per style rules (SCALP: RR >= 1.5 acceptable; INTRADAY: RR >= 2.0 preferred; SWING: RR >= 3.0 preferred). "
+    "Compare RR1/RR2 to `Style min RR (config)` from AI CALIBRATION CONTEXT only — do NOT invent thresholds. "
+    "RR/SL/TP are deterministic engine outputs already gated by Python; treat RR as informational, not the primary grade driver. "
+    "Review SL/TP structurally: output levelsVerdict accept/adjust/reject with levelsReason citing zones/ATR; "
+    "suggestedSL/suggestedTP only when adjust/reject. "
     "Do not automatically penalize Crypto for wide SL unless it exceeds MAX_SL_PCT. "
 )
 _ENGINE_B_AI_EXPERT_PREFIX, _ENGINE_B_AI_PREFIX_SOURCE, _ENGINE_B_AI_PREFIX_HASH = load_prompt(

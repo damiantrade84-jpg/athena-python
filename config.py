@@ -927,6 +927,13 @@ CONFIG: dict = {
     "AI_MARKET_INTELLIGENCE_ENABLED": True,
     "AI_MARKET_INTELLIGENCE_TTL_SECONDS": 1800,
     "AI_MARKET_INTELLIGENCE_FAIL_OPEN": True,
+    # Min RR thresholds injected into Marcus AI calibration context (advisory review only).
+    # Matches deterministic gate floors; overridable via config.yaml.
+    "AI_REVIEW_MIN_RR_BY_STYLE": {
+        "scalp": 1.5,
+        "intraday": 1.5,
+        "swing": 2.0,
+    },
     "AI_STRATEGIST_ENABLED": True,
     "AI_STRATEGIST_PRE_TRADE_ENABLED": False,
     "AI_STRATEGIST_MORNING_BRIEF_ENABLED": True,

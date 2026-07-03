@@ -1245,6 +1245,23 @@ export default function SignalsPanel() {
                             <div><span className="text-muted-foreground">Entry:</span> <span className="font-mono">{aiTextReview.entryZone || '-'}</span></div>
                             <div><span className="text-muted-foreground">Invalidation:</span> <span className="font-mono">{aiTextReview.invalidation || '-'}</span></div>
                             <div><span className="text-muted-foreground">Key Levels:</span> <span className="font-mono">{aiTextReview.keyLevels || '-'}</span></div>
+                            <div className="col-span-2">
+                              <span className="text-muted-foreground">Levels:</span>{' '}
+                              <span className="font-mono">
+                                {aiTextReview.levelsVerdict || '-'}
+                                {aiTextReview.levelsReason ? ` — ${aiTextReview.levelsReason}` : ''}
+                              </span>
+                            </div>
+                            {(aiTextReview.suggestedSL || aiTextReview.suggestedTP) && (
+                              <div className="col-span-2">
+                                <span className="text-muted-foreground">Suggested:</span>{' '}
+                                <span className="font-mono">
+                                  {aiTextReview.suggestedSL ? `SL ${aiTextReview.suggestedSL}` : ''}
+                                  {aiTextReview.suggestedSL && aiTextReview.suggestedTP ? ' · ' : ''}
+                                  {aiTextReview.suggestedTP ? `TP ${aiTextReview.suggestedTP}` : ''}
+                                </span>
+                              </div>
+                            )}
                           </div>
                           {aiTextReview.warnings && aiTextReview.warnings.length > 0 && (
                             <div className="text-[11px] text-warning">

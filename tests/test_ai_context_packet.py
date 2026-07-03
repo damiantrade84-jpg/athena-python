@@ -5,10 +5,14 @@ import pytest
 
 from ai_context import (
     build_ai_calibration_context,
+    build_ai_calibration_context_string,
     build_ai_review_packet,
     build_engine_d_context,
+    resolve_ai_review_min_rr,
 )
 from ai_contracts import AIReviewPacket
+from ai_schemas import EngineAResponse
+from prompt_store import _strip_frontmatter
 
 
 @pytest.fixture(autouse=True)
@@ -21,6 +25,11 @@ def _unit_config(monkeypatch):
                 "AI_MARKET_INTELLIGENCE_ENABLED": True,
                 "AI_MARKET_INTELLIGENCE_TTL_SECONDS": 1800,
                 "AI_SIMILAR_SETUPS_ENABLED": False,
+                "AI_REVIEW_MIN_RR_BY_STYLE": {
+                    "scalp": 1.5,
+                    "intraday": 1.5,
+                    "swing": 2.0,
+                },
             }
         ),
     )
@@ -246,3 +255,118 @@ def test_deterministic_gate_context_exposes_engine_a_trade_gate_fields():
     assert gates["engine_a_trade_enabled"] is False
     assert gates["engine_a_trade_gate"]["source"] == "class:forex"
     assert gates["engine_a_trade_gate_reason"] == "Engine A research-only for EUR/USD"
+
+
+def test_calibration_context_string_injects_style_min_rr():
+    signal = {
+        "pair": "BTCUSDT",
+        "symbol": "BTCUSDT",
+        "type": "crypto",
+        "style": "swing",
+        "confluenceScore": 2.1,
+        "maxScore": 3.0,
+        "price": 52855,
+        "sl": 52114,
+        "tp1": 54100,
+        "tp2": 54500,
+        "rr1": 1.67,
+        "rr2": 2.67,
+    }
+    text = build_ai_calibration_context_string(signal, "Engine A factor/confluence signal", "swing")
+
+    assert "Style min RR (config): 2.0" in text
+    assert "TP1/RR1 is partial exit target" in text
+
+
+def test_resolve_ai_review_min_rr_prefers_signal_min_rr():
+    signal = {"min_rr": 1.8, "style": "intraday"}
+    assert resolve_ai_review_min_rr(signal, "intraday") == 1.8
+
+
+def _read_repo_prompt(relative_path: str) -> str:
+    from pathlib import Path
+
+    path = Path(__file__).resolve().parents[1] / relative_path
+    return _strip_frontmatter(path.read_text(encoding="utf-8"))
+
+
+def test_marcus_prompt_uses_config_rr_not_hardcoded_swing_three():
+    prompt = _read_repo_prompt("prompts/marcus_v6.md")
+    assert "RR >= 3.0" not in prompt
+    assert "Style min RR (config)" in prompt
+    assert "levelsVerdict" in prompt
+
+
+def test_engine_b_prompt_prefix_uses_config_rr_not_hardcoded_swing_three():
+    prompt = _read_repo_prompt("prompts/engine_b_v2.md")
+    assert "RR >= 3.0" not in prompt
+    assert "Style min RR (config)" in prompt
+
+
+def test_engine_a_response_parses_with_and_without_levels_fields():
+    with_levels = EngineAResponse.model_validate(
+        {
+            "symbol": "BTCUSDT",
+            "timeframe": "H4",
+            "bias": "long",
+            "setup_type": "breakout_retest",
+            "trend_score": 18,
+            "structure_score": 17,
+            "momentum_score": 13,
+            "liquidity_score": 8,
+            "risk_score": 12,
+            "confirmation_score": 14,
+            "total_score": 84,
+            "grade": "B",
+            "ai_action": "needs_confirmation",
+            "blocking_reasons": [],
+            "reason": "Aligned structure.",
+            "verdict": "LONG with trend factor support.",
+            "narrative": "trend_term strong.",
+            "entryZone": "52855",
+            "invalidation": "52114",
+            "keyLevels": "Sup 49565",
+            "levelsVerdict": "accept",
+            "levelsReason": "SL below nearest support zone.",
+            "suggestedSL": None,
+            "suggestedTP": None,
+            "positionSizing": "Half",
+            "tradeStyle": "SWING",
+            "tradeStyleReason": "D1 trend aligned",
+            "warnings": [],
+            "edgeProbability": 68,
+            "riskLevel": "Medium",
+        }
+    )
+    assert with_levels.levelsVerdict == "accept"
+
+    without_levels = EngineAResponse.model_validate(
+        {
+            "symbol": "BTCUSDT",
+            "timeframe": "H4",
+            "bias": "long",
+            "setup_type": "breakout_retest",
+            "trend_score": 18,
+            "structure_score": 17,
+            "momentum_score": 13,
+            "liquidity_score": 8,
+            "risk_score": 12,
+            "confirmation_score": 14,
+            "total_score": 84,
+            "grade": "B",
+            "ai_action": "needs_confirmation",
+            "reason": "Aligned structure.",
+            "verdict": "LONG with trend factor support.",
+            "narrative": "trend_term strong.",
+            "entryZone": "52855",
+            "invalidation": "52114",
+            "keyLevels": "Sup 49565",
+            "positionSizing": "Half",
+            "tradeStyle": "SWING",
+            "tradeStyleReason": "D1 trend aligned",
+            "warnings": [],
+            "edgeProbability": 68,
+            "riskLevel": "Medium",
+        }
+    )
+    assert without_levels.levelsVerdict is None

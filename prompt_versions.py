@@ -8,8 +8,8 @@ log = logging.getLogger("sentinel.prompt_versions")
 
 # Bump the relevant entry whenever prompt text changes in code or modules.
 PROMPT_VERSIONS: dict[str, str] = {
-    "marcus_expert": "EXPERT_PROMPT_v5",
-    "engine_b_ai": "ENGINE_B_AI_v1",
+    "marcus_expert": "EXPERT_PROMPT_v6",
+    "engine_b_ai": "ENGINE_B_AI_v2",
     "vision_system": "VISION_SYSTEM_v1",
     "vision_modes": "VISION_MODES_v1",
     "debate_bull": "DEBATE_BULL_v1",

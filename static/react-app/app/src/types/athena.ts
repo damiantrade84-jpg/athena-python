@@ -633,6 +633,10 @@ export interface AiTextReviewResponse {
   entryZone?: string;
   invalidation?: string;
   keyLevels?: string;
+  levelsVerdict?: string | null;
+  levelsReason?: string | null;
+  suggestedSL?: string | null;
+  suggestedTP?: string | null;
   positionSizing?: string;
   tradeStyle?: string;
   tradeStyleReason?: string;
