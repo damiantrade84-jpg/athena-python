@@ -32,3 +32,12 @@ def test_engine_c_does_not_import_ase_normalizer():
     source = open(engine_c.__file__, encoding="utf-8").read()
     assert "normalise_ase_for_engine_c" not in source
     assert "is_ase_engine_a_signal" not in source
+
+
+def test_coffee_excluded_from_ase_universe():
+    from athena_ase.universe import UNIVERSE, instrument_by_symbol
+
+    symbols = {inst.symbol for inst in UNIVERSE}
+    assert "COFFEE" not in symbols
+    assert instrument_by_symbol("COFFEE") is None
+    assert instrument_by_symbol("Coffee") is None

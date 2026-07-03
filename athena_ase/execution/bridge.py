@@ -163,6 +163,31 @@ def _rr_floor_ok(signal: ASESignal) -> bool:
     return tp_dist >= 0.6 * sl_dist
 
 
+def _notify_fill_opened(
+    signal: ASESignal, exec_dict: dict[str, Any], venue: str
+) -> None:
+    """Fire-and-forget Telegram alert for a demo fill (manual-mirror aid).
+
+    Must never affect execution results or journaling; notify_trade_opened is a
+    no-op when Telegram is disabled and queues delivery asynchronously.
+    """
+    try:
+        from telegram_notify import notify_trade_opened
+
+        notify_trade_opened(
+            pair=str(exec_dict.get("pair") or signal.instrument),
+            direction=signal.direction,
+            entry_price=float(signal.entryReference),
+            stop_loss=float(signal.sl),
+            take_profit=float(signal.tp1),
+            style=signal.horizon,
+            engine="ASE",
+            exchange=venue,
+        )
+    except Exception as exc:
+        log.warning("ASE fill notification failed for %s: %s", signal.instrument, exc)
+
+
 def execute_trade_signal(
     signal: ASESignal,
     *,
@@ -254,6 +279,8 @@ def execute_trade_signal(
             detail=result,
             order_id=str(result.get("orderId") or result.get("order_id") or ""),
         )
+    if success:
+        _notify_fill_opened(signal, exec_dict, venue)
     return {
         "executed": success,
         "reason": "ok" if success else str(result.get("error", "executor_failed")),

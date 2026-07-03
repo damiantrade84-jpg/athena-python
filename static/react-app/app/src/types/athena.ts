@@ -1275,6 +1275,37 @@ export interface ASEHealthResponse {
   error?: string;
 }
 
+export interface ASEExecutedTrade {
+  instrument?: string;
+  direction?: string;
+  horizon?: string;
+  modelFamily?: string;
+  entryReference?: number | null;
+  sl?: number | null;
+  tp1?: number | null;
+  tp2?: number | null;
+  expectedNetR?: number | null;
+  signalStrength?: number | null;
+  probabilityPositive?: number | null;
+  decisionTimeMs?: number | null;
+  recordedAt?: string | null;
+  orderId?: string | null;
+  executionStatus?: string | null;
+  rr1?: number | null;
+  brokerFill?: {
+    fillPrice?: number;
+    volume?: number;
+    ticket?: string;
+  };
+}
+
+export interface ASEExecutedTradesResponse {
+  success?: boolean;
+  trades?: ASEExecutedTrade[];
+  totalExecuted?: number;
+  error?: string;
+}
+
 export interface ASEShadowSummary {
   success?: boolean;
   deployment?: {

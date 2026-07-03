@@ -18,9 +18,12 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
 import { ErrorBanner } from '@/components/shared';
-import { Cpu, Radar, Activity, Shield, AlertTriangle } from 'lucide-react';
+import { Cpu, Radar, Activity, Shield, AlertTriangle, Copy, ClipboardList } from 'lucide-react';
 import { fmtNum, toNum } from '@/lib/utils';
+import { aseTradePlanText, fmtAsePrice } from '@/components/athena/ASEFillWatcher';
 import type {
+  ASEExecutedTrade,
+  ASEExecutedTradesResponse,
   ASEExecuteResponse,
   ASEHealthResponse,
   ASEScanResponse,
@@ -207,6 +210,10 @@ export default function ASEPanel() {
     '/api/ase-journal-summary',
     30000,
   );
+  const { data: executedTrades, refresh: refreshExecuted } = useApiPoll<ASEExecutedTradesResponse>(
+    '/api/ase-executed-trades?limit=50',
+    30000,
+  );
   const { post: postScan, loading: scanning, error: scanError } = useApiPost<ASEScanResponse>();
   const { post: postExecute, loading: executing, error: executeError } = useApiPost<ASEExecuteResponse>();
 
@@ -248,6 +255,7 @@ export default function ASEPanel() {
     }
     setExecutionResults((current) => ({ ...current, [key]: result }));
     await refreshSummary();
+    await refreshExecuted();
     if (result.executed) {
       const ticket = executionTicket(result);
       showToast(
@@ -258,7 +266,16 @@ export default function ASEPanel() {
       showToast(`ASE blocked ${confirmSignal.instrument}: ${result.reason || result.error || 'unknown'}`, 'error');
     }
     setConfirmSignal(null);
-  }, [confirmSignal, postExecute, refreshSummary, showToast]);
+  }, [confirmSignal, postExecute, refreshSummary, refreshExecuted, showToast]);
+
+  const copyTradePlan = useCallback(async (trade: ASEExecutedTrade) => {
+    try {
+      await navigator.clipboard.writeText(aseTradePlanText(trade));
+      showToast('Trade plan copied', 'success');
+    } catch {
+      showToast('Copy failed — clipboard unavailable', 'error');
+    }
+  }, [showToast]);
 
   const signals = useMemo(() => {
     const rows = scanResult?.signals || [];
@@ -266,6 +283,7 @@ export default function ASEPanel() {
   }, [scanResult]);
 
   const activeSignals = signals.filter((s) => s.decisionStatus === 'TRADE' || s.decisionStatus === 'WATCH');
+  const executedRows = executedTrades?.trades || [];
   const diagnostics = scanResult?.diagnostics;
   const artifactFamilies = diagnostics?.familiesWithArtifacts?.length
     ?? health?.familiesWithArtifacts?.length
@@ -382,6 +400,84 @@ export default function ASEPanel() {
             </Card>
           ))}
         </div>
+      )}
+
+      {executedRows.length > 0 && (
+        <Card className="shrink-0 border-0" style={{ background: 'hsl(200 30% 6%)', border: `1px solid ${CYAN_DIM}` }}>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm flex items-center justify-between" style={{ color: CYAN }}>
+              <span className="flex items-center gap-2">
+                <ClipboardList className="h-4 w-4" />
+                Executed Trades ({executedTrades?.totalExecuted ?? executedRows.length} filled)
+              </span>
+              <span className="text-[10px] font-normal text-muted-foreground">
+                demo fills · mirror manually on funded account
+              </span>
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="p-0">
+            <ScrollArea className="max-h-48 px-4 pb-3">
+              <table className="w-full text-[11px] font-mono">
+                <thead>
+                  <tr className="text-[10px] uppercase text-muted-foreground text-left">
+                    <th className="pr-2 py-1 font-normal">Time</th>
+                    <th className="pr-2 py-1 font-normal">Instrument</th>
+                    <th className="pr-2 py-1 font-normal">Dir</th>
+                    <th className="pr-2 py-1 font-normal">Entry</th>
+                    <th className="pr-2 py-1 font-normal">SL</th>
+                    <th className="pr-2 py-1 font-normal">TP1</th>
+                    <th className="pr-2 py-1 font-normal">TP2</th>
+                    <th className="pr-2 py-1 font-normal">R:R</th>
+                    <th className="pr-2 py-1 font-normal">Ticket</th>
+                    <th className="py-1 font-normal" />
+                  </tr>
+                </thead>
+                <tbody>
+                  {executedRows.map((trade) => (
+                    <tr
+                      key={`${trade.instrument}-${trade.decisionTimeMs}-${trade.horizon}`}
+                      className="border-t"
+                      style={{ borderColor: CYAN_DIM }}
+                    >
+                      <td className="pr-2 py-1 text-muted-foreground whitespace-nowrap">
+                        {trade.decisionTimeMs
+                          ? new Date(trade.decisionTimeMs).toLocaleString([], {
+                              month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit',
+                            })
+                          : '—'}
+                      </td>
+                      <td className="pr-2 py-1" style={{ color: CYAN }}>{trade.instrument || '—'}</td>
+                      <td className="pr-2 py-1">
+                        <Badge className={trade.direction === 'LONG' ? 'badge-long' : 'badge-short'}>
+                          {trade.direction || '—'}
+                        </Badge>
+                      </td>
+                      <td className="pr-2 py-1">{fmtAsePrice(trade.entryReference)}</td>
+                      <td className="pr-2 py-1">{fmtAsePrice(trade.sl)}</td>
+                      <td className="pr-2 py-1">{fmtAsePrice(trade.tp1)}</td>
+                      <td className="pr-2 py-1">{fmtAsePrice(trade.tp2)}</td>
+                      <td className="pr-2 py-1">{fmtNum(trade.rr1, 2)}</td>
+                      <td className="pr-2 py-1 text-muted-foreground">
+                        {trade.brokerFill?.ticket || trade.orderId || '—'}
+                      </td>
+                      <td className="py-1 text-right">
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          className="h-6 px-2"
+                          title="Copy trade plan"
+                          onClick={() => void copyTradePlan(trade)}
+                        >
+                          <Copy className="h-3 w-3" />
+                        </Button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </ScrollArea>
+          </CardContent>
+        </Card>
       )}
 
       <Card className="flex-1 min-h-0 border-0 flex flex-col" style={{ background: 'hsl(200 30% 6%)', border: `1px solid ${CYAN_DIM}` }}>

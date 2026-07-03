@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
+import json
 import logging
+import math
 from pathlib import Path
 from typing import Any
 
 from flask import jsonify, request
 
-from athena_ase.execution.journal import trade_journal_summary
+from athena_ase.execution.journal import load_trade_journal, trade_journal_summary
 from athena_ase.horizon import Horizon
 from athena_ase.instruments import instrument_by_symbol
 from athena_ase.runtime.health import ase_health
@@ -189,6 +191,142 @@ def api_ase_journal_summary():
         return jsonify({"success": False, "error": str(exc)}), 500
 
 
+def _cell(value: Any) -> Any:
+    """Journal cell -> JSON-safe scalar (pandas NULL/NaN -> None)."""
+    if value is None:
+        return None
+    try:
+        import pandas as pd
+
+        if pd.isna(value):
+            return None
+    except (TypeError, ValueError):
+        pass
+    item = getattr(value, "item", None)
+    if callable(item):
+        try:
+            value = item()
+        except (TypeError, ValueError):
+            pass
+    if isinstance(value, float) and math.isnan(value):
+        return None
+    return value
+
+
+def _cell_float(value: Any) -> float | None:
+    value = _cell(value)
+    if value is None:
+        return None
+    try:
+        f = float(value)
+    except (TypeError, ValueError):
+        return None
+    return None if math.isnan(f) else f
+
+
+def _execution_detail_extract(raw: Any) -> dict[str, Any]:
+    """Pull fill price / volume / ticket out of the journalled broker result."""
+    raw = _cell(raw)
+    if not raw:
+        return {}
+    try:
+        detail = json.loads(raw) if isinstance(raw, str) else dict(raw)
+    except (ValueError, TypeError):
+        return {}
+    if not isinstance(detail, dict):
+        return {}
+    out: dict[str, Any] = {}
+    for key in ("fillPrice", "fill_price", "price"):
+        val = _cell_float(detail.get(key))
+        if val is not None:
+            out["fillPrice"] = val
+            break
+    for key in ("volume", "lots", "qty", "quantity"):
+        val = _cell_float(detail.get(key))
+        if val is not None:
+            out["volume"] = val
+            break
+    for key in ("ticket", "order_ticket", "orderId", "order_id"):
+        val = detail.get(key)
+        if val not in (None, ""):
+            out["ticket"] = str(val)
+            break
+    return out
+
+
+def _executed_trade_row(row: dict[str, Any]) -> dict[str, Any]:
+    entry = _cell_float(row.get("entryReference"))
+    sl = _cell_float(row.get("sl"))
+    tp1 = _cell_float(row.get("tp1"))
+    rr1 = None
+    if entry is not None and sl is not None and tp1 is not None:
+        sl_dist = abs(entry - sl)
+        if sl_dist > 0:
+            rr1 = abs(tp1 - entry) / sl_dist
+    decision_ms = _cell(row.get("decisionTimeMs"))
+    return {
+        "instrument": _cell(row.get("instrument")),
+        "direction": _cell(row.get("direction")),
+        "horizon": _cell(row.get("horizon")),
+        "modelFamily": _cell(row.get("modelFamily")),
+        "entryReference": entry,
+        "sl": sl,
+        "tp1": tp1,
+        "tp2": _cell_float(row.get("tp2")),
+        "expectedNetR": _cell_float(row.get("expectedNetR")),
+        "signalStrength": _cell(row.get("signalStrength")),
+        "probabilityPositive": _cell_float(row.get("probabilityPositive")),
+        "decisionTimeMs": int(decision_ms) if decision_ms is not None else None,
+        "recordedAt": _cell(row.get("recordedAt")),
+        "orderId": _cell(row.get("orderId")),
+        "executionStatus": _cell(row.get("executionStatus")),
+        "rr1": rr1,
+        "brokerFill": _execution_detail_extract(row.get("executionDetail")),
+    }
+
+
+def api_ase_executed_trades():
+    """Read-only view of journalled ASE executions for manual mirroring."""
+    try:
+        limit = max(1, min(int(request.args.get("limit", 50)), 200))
+    except (TypeError, ValueError):
+        limit = 50
+    status = str(request.args.get("status", "filled")).strip().lower() or "filled"
+    since_ms_raw = request.args.get("sinceMs")
+    try:
+        since_ms = int(since_ms_raw) if since_ms_raw not in (None, "") else None
+    except (TypeError, ValueError):
+        since_ms = None
+
+    try:
+        df = load_trade_journal()
+        if df.empty or "executionStatus" not in df.columns:
+            return jsonify({"success": True, "trades": [], "totalExecuted": 0})
+        executed: list[dict[str, Any]] = []
+        for record in df.to_dict(orient="records"):
+            row_status = _cell(record.get("executionStatus"))
+            if row_status is None:
+                continue
+            if status != "all" and str(row_status).lower() != status:
+                continue
+            decision_ms = _cell(record.get("decisionTimeMs"))
+            if since_ms is not None and (
+                decision_ms is None or int(decision_ms) <= since_ms
+            ):
+                continue
+            executed.append(record)
+        executed.sort(
+            key=lambda r: int(_cell(r.get("decisionTimeMs")) or 0), reverse=True
+        )
+        trades = [_executed_trade_row(row) for row in executed[:limit]]
+        return jsonify(
+            {"success": True, "trades": trades, "totalExecuted": len(executed)}
+        )
+    except Exception as exc:
+        log.exception("ASE executed-trades query failed")
+        return jsonify({"success": False, "error": str(exc)}), 500
+
+
 def api_ase_health():
     horizon: Horizon = (
         "swing" if str(request.args.get("horizon", "intraday")).lower() == "swing" else "intraday"
@@ -226,6 +364,13 @@ def register_ase_routes(app) -> None:
             "/api/ase-shadow-summary",
             "api_ase_shadow_summary",
             api_ase_journal_summary,
+            methods=["GET"],
+        )
+    if "/api/ase-executed-trades" not in rules:
+        app.add_url_rule(
+            "/api/ase-executed-trades",
+            "api_ase_executed_trades",
+            api_ase_executed_trades,
             methods=["GET"],
         )
     if "/api/ase-health" not in rules:

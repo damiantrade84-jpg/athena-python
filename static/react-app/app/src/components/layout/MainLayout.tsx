@@ -1,6 +1,7 @@
 import Header from './Header';
 import Sidebar from './Sidebar';
 import Toast from './Toast';
+import ASEFillWatcher from '@/components/athena/ASEFillWatcher';
 import { ScrollArea } from '@/components/ui/scroll-area';
 
 export default function MainLayout({ children }: { children: React.ReactNode }) {
@@ -18,6 +19,7 @@ export default function MainLayout({ children }: { children: React.ReactNode }) 
         </main>
       </div>
       <Toast />
+      <ASEFillWatcher />
     </div>
   );
 }

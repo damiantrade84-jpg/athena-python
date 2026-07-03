@@ -1,4 +1,4 @@
-"""ASE instrument universe — derived from ALL_PAIRS (134 instruments)."""
+"""ASE instrument universe — derived from ALL_PAIRS (133 instruments)."""
 
 from __future__ import annotations
 
@@ -63,7 +63,6 @@ UNIVERSE: tuple[Instrument, ...] = (
     Instrument("GASOLINE", "Gasoline", "commodity", "cfd", "GASOLINE", "XAUUSD"),
     Instrument("CATTLE", "Cattle", "commodity", "cfd", "CATTLE", "XAUUSD"),
     Instrument("COCOA", "Cocoa", "commodity", "cfd", "COCOA", "XAUUSD"),
-    Instrument("COFFEE", "Coffee", "commodity", "cfd", "COFFEE", "XAUUSD"),
     Instrument("CORN", "Corn", "commodity", "cfd", "CORN", "XAUUSD"),
     Instrument("COTTON", "Cotton", "commodity", "cfd", "COTTON", "XAUUSD"),
     Instrument("SOYBEANS", "Soybeans", "commodity", "cfd", "SOYBEANS", "XAUUSD"),
