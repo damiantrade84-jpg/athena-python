@@ -157,6 +157,13 @@ def supports_eodhd_volume_overlay(pair: dict | None) -> bool:
     return str(pair.get("type") or "").lower() in _EODHD_VOLUME_TYPES
 
 
+def eodhd_live_overlay_asset_types() -> set[str]:
+    """Asset types that keep the EODHD volume overlay in live scans."""
+    cfg = CONFIG.get("SCALP_ENGINE") or {}
+    types = cfg.get("EODHD_VOLUME_OVERLAY_LIVE_ASSET_TYPES", ["stock"])
+    return {str(t).lower() for t in (types or [])}
+
+
 def eodhd_commodity_ticker_for_pair(pair: dict | None) -> str | None:
     """Resolve configured EODHD commodity ticker without changing OHLC routing."""
     if not isinstance(pair, dict):

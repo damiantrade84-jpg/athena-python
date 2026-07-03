@@ -4082,6 +4082,11 @@ SCALP_ENGINE:
 
   EODHD_VOLUME_OVERLAY_LIVE_ENABLED: true   # When false in YAML, code default is also false; live overlay off → MT5 tick vol only
   EODHD_VOLUME_OVERLAY_BACKTEST_ENABLED: true # Use audited EODHD intraday volume in Engine D backtests
+  # Asset types that get EODHD volume overlay in LIVE scans.
+  # Forex always uses MT5 tick volume (OTC has no real exchange volume).
+  # Commodity + index use MT5 (real_volume then tick_volume) — EODHD intraday volume is delayed.
+  # Scalp backtests (live=False) keep the EODHD overlay via EODHD_VOLUME_OVERLAY_BACKTEST_ENABLED.
+  EODHD_VOLUME_OVERLAY_LIVE_ASSET_TYPES: ["stock"]
 
   # Live V2 US delayed quotes: 0 = off. When >0, skip volume delta injection when quote event time lags wall clock by more than this many seconds.
   EODHD_LIVE_V2_MAX_QUOTE_LAG_SEC: 900

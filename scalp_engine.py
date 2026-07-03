@@ -33,6 +33,7 @@ from typing import Any, Optional
 from zoneinfo import ZoneInfo
 
 from config import CONFIG
+from eodhd_volume_overlay import eodhd_live_overlay_asset_types
 from stability_monitor import record_signal_event
 
 log = logging.getLogger("sentinel.scalp")
@@ -314,13 +315,14 @@ def mt5_fetch_scalp_candles(
 
         candles = []
         for r in rates:
+            _rv = float(_rate_value(r, "real_volume", 0) or 0)
             candles.append({
                 "time":  _rate_value(r, "time"),
                 "open":  float(_rate_value(r, "open")),
                 "high":  float(_rate_value(r, "high")),
                 "low":   float(_rate_value(r, "low")),
                 "close": float(_rate_value(r, "close")),
-                "vol":   float(_rate_value(r, "tick_volume", 0)),
+                "vol":   _rv if _rv > 0 else float(_rate_value(r, "tick_volume", 0)),
             })
 
         if not include_forming and len(candles) > 1:
@@ -359,6 +361,8 @@ def _overlay_eodhd_volume_for_scalp(
         return candles, "mt5_tick"
     cfg = CONFIG.get("SCALP_ENGINE", {})
     if live and not cfg.get("EODHD_VOLUME_OVERLAY_LIVE_ENABLED", True):
+        return candles, "mt5_tick"
+    if live and str(asset_type or "").lower() not in eodhd_live_overlay_asset_types():
         return candles, "mt5_tick"
     if not live and not cfg.get("EODHD_VOLUME_OVERLAY_BACKTEST_ENABLED", True):
         return candles, "mt5_tick"

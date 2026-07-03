@@ -89,6 +89,7 @@ from data_feeds import (  # noqa: E402
 )
 from eodhd_volume_overlay import (  # noqa: E402
     eodhd_commodity_ticker_for_pair as _eodhd_commodity_ticker_for_pair,
+    eodhd_live_overlay_asset_types as _eodhd_live_overlay_asset_types,
     infer_grid_offset_seconds as _infer_eodhd_grid_offset_seconds,
     is_eodhd_volume_whitelisted as _is_eodhd_volume_whitelisted,
     overlay_candle_volumes as _overlay_candle_volumes,
@@ -2369,6 +2370,8 @@ def _overlay_mt5_candles_with_eodhd_volume(pair: dict, tf: str, mt5_resp: dict) 
         return mt5_resp
     if not _supports_eodhd_volume_overlay(pair):
         return mt5_resp
+    if str(pair.get("type") or "").lower() not in _eodhd_live_overlay_asset_types():
+        return mt5_resp
 
     candles = _extract_candles(mt5_resp)
     if not candles:
@@ -3175,13 +3178,17 @@ def fetch_mt5(pair: dict, tf: str, limit: int):
     for b in bars:
         shifted_ts = b['time'] - offset_seconds
         dt = datetime.fromtimestamp(shifted_ts, tz=timezone.utc)
+        try:
+            _rv = float(b['real_volume'])
+        except (KeyError, ValueError, TypeError):
+            _rv = 0.0
         candles.append({
             "time": dt.isoformat(),
             "open": float(b['open']),
             "high": float(b['high']),
             "low": float(b['low']),
             "close": float(b['close']),
-            "vol": float(b['tick_volume'])
+            "vol": _rv if _rv > 0 else float(b['tick_volume']),
         })
     # Bridge to global _live_prices using a live MT5 tick (bid/ask mid) so the
     # price shown in the dashboard and used for execution drift checks is the
@@ -15973,9 +15980,12 @@ def _select_eodhd_volume_warm_pairs() -> list[dict]:
         scalp_names = set(get_scalp_pairs(ACTIVE_PAIRS))
     except Exception:
         scalp_names = {str(p.get("display") or p.get("symbol") or "") for p in ACTIVE_PAIRS}
+    overlay_types = _eodhd_live_overlay_asset_types()
     selected = []
     for pair in ACTIVE_PAIRS:
         if pair.get("type") == "crypto":
+            continue
+        if str(pair.get("type") or "").lower() not in overlay_types:
             continue
         display = str(pair.get("display") or pair.get("symbol") or "")
         if display not in scalp_names:
@@ -15987,9 +15997,12 @@ def _select_eodhd_volume_warm_pairs() -> list[dict]:
 
 def _select_engine_a_warm_pairs() -> list[dict]:
     """Select ALL active non-crypto pairs for H1/H4/D1 volume warming (Engine A + chart rendering)."""
+    overlay_types = _eodhd_live_overlay_asset_types()
     return [
         p for p in ACTIVE_PAIRS
-        if p.get("type") != "crypto" and _supports_eodhd_volume_overlay(p)
+        if p.get("type") != "crypto"
+        and str(p.get("type") or "").lower() in overlay_types
+        and _supports_eodhd_volume_overlay(p)
     ]
 
 
