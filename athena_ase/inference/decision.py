@@ -7,6 +7,14 @@ from typing import Any, Literal
 
 DecisionStatus = Literal["TRADE", "WATCH", "FLAT", "ERROR"]
 
+# Deterministic floor on the TRADE expected-R threshold. thr_family is chosen
+# by the training pipeline's expectancy search, which has no positivity
+# constraint and has produced negative thresholds (e.g. crypto/swing -0.387 on
+# 2026-07-03) — a negative threshold would let barely-positive or even
+# negative expected-R signals reach TRADE. 0.10R matches the training
+# pipeline's own fallback threshold (select_expected_net_r_threshold).
+MIN_TRADE_EXPECTED_R = 0.10
+
 
 def apply_decision_rule(
     *,
@@ -19,7 +27,8 @@ def apply_decision_rule(
     if not dq.get("coreOk", True):
         return "FLAT"
     margin = abs(p_cal - 0.5)
-    if expected_net_r >= thr_family and p_cal >= 0.55 and margin >= 0.05:
+    thr_effective = max(float(thr_family), MIN_TRADE_EXPECTED_R)
+    if expected_net_r >= thr_effective and p_cal >= 0.55 and margin >= 0.05:
         return "TRADE"
     if expected_net_r > 0:
         return "WATCH"

@@ -47,7 +47,9 @@ def compute_brackets(
         return BracketLevels(entry_reference, (entry_reference, entry_reference), entry_reference, entry_reference, entry_reference, h, False)
 
     d = direction
-    zone_half = 0.25 * sigma_bar * math.sqrt(h) ** 0.5 * entry_reference
+    # 0.25 R_unit half-width (was sqrt(h)**0.5 == h^0.25, an operator-precedence
+    # slip that made the zone ~half-width for H=16).
+    zone_half = 0.25 * sigma_bar * math.sqrt(h) * entry_reference
     if d > 0:
         entry_zone = (entry_reference - zone_half, entry_reference)
     else:

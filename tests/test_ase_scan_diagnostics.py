@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import time
+from typing import Any
 
 import pytest
 
@@ -147,12 +148,20 @@ def test_scan_runs_ingest_by_default(ptis: PTISStore, monkeypatch):
     assert result["ingestResult"]["result"] == {"mt5_live": {"inserted": 5}}
 
 
-def test_crypto_only_scan_skips_default_ingest(ptis: PTISStore, monkeypatch):
+def test_crypto_only_scan_ingests_bybit_only(ptis: PTISStore, monkeypatch):
+    # Bybit klines are the sole live crypto OHLC path into PTIS; crypto-only
+    # scans must keep the bybit leg and drop only the MT5 leg.
     calls: list[dict[str, Any]] = []
 
-    def fake_run_ingest(*, store, sources, write_audit):
-        calls.append({"store": store, "sources": tuple(sources), "write_audit": write_audit})
-        return {"mt5_live": {"inserted": 5}}
+    def fake_run_ingest(*, store, sources, bybit_lookback_days, write_audit):
+        calls.append(
+            {
+                "sources": tuple(sources),
+                "lookback": bybit_lookback_days,
+                "write_audit": write_audit,
+            }
+        )
+        return {"bybit": {"inserted": 5}}
 
     monkeypatch.setattr(scan_module, "run_ingest", fake_run_ingest)
 
@@ -163,8 +172,9 @@ def test_crypto_only_scan_skips_default_ingest(ptis: PTISStore, monkeypatch):
         ptis_root=str(ptis.root),
     )
 
-    assert calls == []
-    assert "ingestResult" not in result
+    assert len(calls) == 1
+    assert calls[0]["sources"] == ("bybit",)
+    assert result["ingestResult"] == {"result": {"bybit": {"inserted": 5}}}
     assert result["instrumentCount"] > 0
     assert result["signalCount"] == result["instrumentCount"]
 

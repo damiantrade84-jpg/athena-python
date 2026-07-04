@@ -171,7 +171,12 @@ def label_candidate(
     )
     if series is None:
         return None
-    idx = candidate.bar_index
+    # candidate.bar_index is only valid within the window it was computed on;
+    # this series uses a different window, so re-derive the index from the
+    # decision time (available_time ordering) instead.
+    from athena_ase.signals.common import bar_index_at_decision
+
+    idx = bar_index_at_decision(series, candidate.decision_time_ms)
     if idx is None or idx >= len(series.close_log) - 1:
         return None
 

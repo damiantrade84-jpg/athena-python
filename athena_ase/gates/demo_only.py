@@ -24,6 +24,17 @@ def assert_demo(
     config: dict[str, Any] | None = None,
 ) -> GateResult:
     cfg = config or {}
+    if config is None and executor_mode is None:
+        # Bare calls (inference path) previously checked an empty dict, whose
+        # "paper" default made the gate pass regardless of the real executor
+        # mode. Read the live CONFIG when available; research environments
+        # without the app config keep the paper default.
+        try:
+            from config import CONFIG as _app_config
+
+            cfg = _app_config
+        except BaseException:  # config validation may sys.exit outside the app
+            cfg = {}
     mode = executor_mode or str(cfg.get("EXECUTOR_MODE", "paper")).lower()
     ok_mode = mode in {"paper", "demo"}
 

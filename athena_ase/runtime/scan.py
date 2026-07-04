@@ -22,7 +22,12 @@ from athena_ase.instruments import DEFAULT_INSTRUMENTS, Instrument, instrument_b
 from athena_ase.runtime.health import scan_diagnostics
 from athena_ase.signals.arbitrate import Candidate, FiredSignal, arbitrate
 from athena_ase.signals.carry import compute_carry
-from athena_ase.signals.common import BarSeries, bar_index_at_decision, load_bar_series
+from athena_ase.signals.common import (
+    BarSeries,
+    bar_index_at_decision,
+    live_bars_stale,
+    load_bar_series,
+)
 from athena_ase.signals.engine import iter_candidates
 from athena_ase.signals.meanrev import compute_meanrev
 from athena_ase.signals.tsmom import compute_tsmom
@@ -122,7 +127,9 @@ def _maybe_ingest(
                 bybit_lookback_days=bybit_lookback_days,
                 write_audit=False,
             )
-        except Exception as exc:  # noqa: BLE001 - fail-open
+        except BaseException as exc:  # noqa: BLE001 - fail-open; legacy config
+            # validation raises a SystemExit subclass, which must not kill the
+            # ingest worker silently either.
             outcome["error"] = str(exc)
 
     worker = threading.Thread(target=_run, name="ase-scan-ingest", daemon=True)
@@ -162,7 +169,10 @@ def _scan_ingest_sources_for_instruments(
     if selected != DEFAULT_SCAN_INGEST_SOURCES:
         return selected
     if instruments and all(inst.family == "crypto" for inst in instruments):
-        return ()
+        # Crypto-only scans skip the MT5 leg but keep Bybit: klines are the
+        # sole live crypto OHLC path into PTIS (the Binance backtest-cache
+        # ingest goes stale whenever the app stops backfilling).
+        return ("bybit",)
     return selected
 
 
@@ -176,6 +186,11 @@ def _latest_candidate(
     lookback_ms = 180 * 24 * 3600 * 1000
     series = load_bar_series(store, instrument.symbol, horizon, decision_time_ms - lookback_ms, decision_time_ms)
     if series is None:
+        return None
+    # Fail closed on dead feeds: signals computed from bars weeks old are
+    # fiction even though every per-bar computation still "works".
+    if live_bars_stale(series, horizon, decision_time_ms):
+        log.debug("ASE stale bars for %s/%s — candidate suppressed", instrument.symbol, horizon)
         return None
     idx = bar_index_at_decision(series, decision_time_ms)
     if idx is None:
@@ -427,9 +442,22 @@ def run_ase_full_scan_and_execute(
     )
     closed: list[dict[str, Any]] = []
     for venue in ("mt5", "bybit"):
-        positions, _raw = deps.get_positions(venue)
+        try:
+            positions, _raw = deps.get_positions(venue)
+        except Exception as exc:
+            log.warning("ASE time-stop position read failed for %s: %s", venue, exc)
+            continue
+        for pos in positions:
+            pos.setdefault("venue", venue)
         closed.extend(enforce_time_stops(positions, deps=deps))
     payload["timeStopsClosed"] = closed
+    try:
+        from athena_ase.execution.reconcile import reconcile_filled_from_ptis
+
+        payload["reconciledFills"] = reconcile_filled_from_ptis()
+    except Exception as exc:
+        log.warning("ASE fill reconciliation failed (non-fatal): %s", exc)
+        payload["reconciledFills"] = 0
     return payload
 
 
