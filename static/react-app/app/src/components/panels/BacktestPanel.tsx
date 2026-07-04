@@ -15,7 +15,8 @@ import { ErrorBanner, SqnBadge } from '@/components/shared';
 import { FlaskConical, Play, AlertTriangle, Trophy, Layers, ChevronsUpDown, Check } from 'lucide-react';
 import { AreaChart, Area, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { cn, fmtNum, toNum } from '@/lib/utils';
-import type { PairsResponse, PairListEntry } from '@/types/athena';
+import { buildBacktestRequest, type ASEBacktestHorizon, type BacktestEngineKey } from '@/lib/backtestPayload';
+import type { ASEBacktestDiagnostics, PairsResponse, PairListEntry } from '@/types/athena';
 
 /**
  * Canonical backtest result shape returned by ALL backtest endpoints
@@ -102,6 +103,7 @@ interface BacktestResult {
   };
   metricsInterpretationNotes?: string[];
   researchValidation?: Record<string, unknown>;
+  aseDiagnostics?: ASEBacktestDiagnostics;
   [k: string]: unknown;
 }
 
@@ -171,13 +173,14 @@ interface AdvisoryResponse {
   [k: string]: unknown;
 }
 
-type EngineKey = 'A' | 'B' | 'C' | 'D';
+type EngineKey = BacktestEngineKey;
 
 const ENGINE_OPTIONS: { value: EngineKey; label: string; help: string }[] = [
   { value: 'A', label: 'Engine A', help: 'factor scoring + asset addon (forex/crypto/equity/commodity/index)' },
   { value: 'B', label: 'Engine B', help: 'naked structure (BOS / CHoCH / FVG / OB / sweep)' },
   { value: 'C', label: 'Engine C', help: 'A + B consensus' },
   { value: 'D', label: 'Engine D (Scalp VP)', help: 'Fabio Valentini VP + orderflow (M15 stable proxy)' },
+  { value: 'ASE', label: 'ASE', help: 'Adaptive Specialist Engine PTIS + predict_batch + cost-aware triple-barrier outcomes' },
 ];
 
 const STYLE_OPTIONS = [
@@ -416,6 +419,8 @@ export default function BacktestPanel() {
   const [engine, setEngine] = useState<EngineKey>('A');
   const [style, setStyle] = useState('auto');
   const [validationMode, setValidationMode] = useState('standard');
+  const [aseHorizon, setAseHorizon] = useState<ASEBacktestHorizon>('both');
+  const [aseLookbackDays, setAseLookbackDays] = useState(365);
   const [result, setResult] = useState<BacktestResult | null>(null);
   const [activeTab, setActiveTab] = useState<'run' | 'history' | 'best' | 'advisory'>('run');
 
@@ -433,15 +438,13 @@ export default function BacktestPanel() {
   const { post: postApprove } = useApiPost<{ ok?: boolean; error?: string }>();
 
   const handleRun = useCallback(async () => {
-    let endpoint = '/api/backtest';
-    if (engine === 'B') endpoint = '/api/backtest-naked';
-    else if (engine === 'C') endpoint = '/api/backtest-consensus';
-    else if (engine === 'D') endpoint = '/api/backtest-scalp';
-
-    const singlePayload = (pairKey: string): Record<string, unknown> => ({
+    const singleRequest = (pairKey: string) => buildBacktestRequest({
+      engine,
       pair: pairKey,
       style,
-      validation_mode: validationMode,
+      validationMode,
+      aseHorizon,
+      aseLookbackDays,
     });
 
     if (batchMode) {
@@ -479,7 +482,7 @@ export default function BacktestPanel() {
       const rowsOut: BatchRow[] = [];
       for (const tok of tokens) {
         const pk = resolvePairKey(tok, allPairs);
-        const payload = singlePayload(pk);
+        const { endpoint, payload } = singleRequest(pk);
         const res = await postBacktest(endpoint, payload);
         if (!res || res.error) {
           rowsOut.push({ pairKey: pk, ok: false, error: String(res?.error || 'unknown'), result: res || undefined });
@@ -495,8 +498,13 @@ export default function BacktestPanel() {
       return;
     }
 
-    const res = await postBacktest(endpoint, singlePayload(pair));
+    const { endpoint, payload } = singleRequest(pair);
+    const res = await postBacktest(endpoint, payload);
     if (!res || res.error) {
+      if (res?.aseDiagnostics) {
+        setBatchRows([]);
+        setResult(res);
+      }
       showToast(`Backtest failed: ${res?.error || 'unknown'}`, 'error');
       return;
     }
@@ -509,7 +517,7 @@ export default function BacktestPanel() {
     refreshHistory();
   }, [
     pair, engine, style, validationMode, postBacktest, postBatchB, showToast, refreshHistory,
-    batchMode, batchList, allPairs,
+    batchMode, batchList, allPairs, aseHorizon, aseLookbackDays,
   ]);
 
   const handleApprove = useCallback(async (rec: AdvisoryRecommendation) => {
@@ -582,13 +590,34 @@ export default function BacktestPanel() {
                     ))}
                   </SelectContent>
                 </Select>
-                {engine !== 'D' && (
+                {engine !== 'D' && engine !== 'ASE' && (
                   <Select value={style} onValueChange={setStyle}>
                     <SelectTrigger className="w-[120px] h-8 text-xs"><SelectValue /></SelectTrigger>
                     <SelectContent>
                       {STYLE_OPTIONS.map((o) => <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>)}
                     </SelectContent>
                   </Select>
+                )}
+                {engine === 'ASE' && (
+                  <>
+                    <Select value={aseHorizon} onValueChange={(v) => setAseHorizon(v as ASEBacktestHorizon)}>
+                      <SelectTrigger className="w-[126px] h-8 text-xs"><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="both">Both horizons</SelectItem>
+                        <SelectItem value="intraday">Intraday H1</SelectItem>
+                        <SelectItem value="swing">Swing D1</SelectItem>
+                      </SelectContent>
+                    </Select>
+                    <Input
+                      type="number"
+                      min={30}
+                      step={30}
+                      className="w-[112px] h-8 text-xs"
+                      value={aseLookbackDays}
+                      onChange={(e) => setAseLookbackDays(Number(e.target.value) || 365)}
+                      aria-label="ASE lookback days"
+                    />
+                  </>
                 )}
                 <Select value={validationMode} onValueChange={setValidationMode}>
                   <SelectTrigger className="w-[150px] h-8 text-xs"><SelectValue /></SelectTrigger>
@@ -671,6 +700,10 @@ export default function BacktestPanel() {
             </Card>
           )}
 
+          {result?.error && result.aseDiagnostics && !running && (
+            <ASEDiagnosticsBlock diagnostics={result.aseDiagnostics} />
+          )}
+
           {result && !result.error && (
             <>
               {/* KPIs */}
@@ -713,6 +746,10 @@ export default function BacktestPanel() {
                     <p key={`mi-${i}`}>{line}</p>
                   ))}
                 </div>
+              )}
+
+              {result.aseDiagnostics && (
+                <ASEDiagnosticsBlock diagnostics={result.aseDiagnostics} />
               )}
 
               {result.researchMetrics && (
@@ -1127,6 +1164,32 @@ function TradeTable({ trades, totalCount }: { trades: Array<Record<string, unkno
             </tbody>
           </table>
         </ScrollArea>
+      </CardContent>
+    </Card>
+  );
+}
+
+function ASEDiagnosticsBlock({ diagnostics }: { diagnostics: ASEBacktestDiagnostics }) {
+  const signalCounts = diagnostics.signalCounts || {};
+  return (
+    <Card className="border-border/60 bg-card/50">
+      <CardHeader className="pb-2">
+        <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Cinzel', serif", letterSpacing: '0.12em' }}>ASE Diagnostics</CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          <Stat title="Candidates" value={diagnostics.candidateCount ?? '—'} />
+          <Stat title="ASE trades" value={diagnostics.tradeCount ?? '—'} />
+          <Stat title="Lookback" value={diagnostics.lookbackDays != null ? `${diagnostics.lookbackDays}d` : '—'} />
+          <Stat title="Horizons" value={(diagnostics.horizons || []).join(' + ') || '—'} />
+        </div>
+        <div className="flex flex-wrap gap-2 text-[10px] font-mono text-muted-foreground">
+          {diagnostics.instrument && <Badge variant="outline">{diagnostics.instrument}</Badge>}
+          {diagnostics.family && <Badge variant="outline">{diagnostics.family}</Badge>}
+          {Object.entries(signalCounts).map(([status, count]) => (
+            <Badge key={status} variant="outline">{status}:{count}</Badge>
+          ))}
+        </div>
       </CardContent>
     </Card>
   );
