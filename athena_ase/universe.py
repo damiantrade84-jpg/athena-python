@@ -26,6 +26,16 @@ def compact_symbol(symbol: str) -> str:
     return str(symbol or "").replace("/", "").replace(" ", "").upper()
 
 
+def _lookup_keys(symbol: str) -> set[str]:
+    key = compact_symbol(symbol)
+    keys = {key}
+    if key.endswith("=X") and len(key) > 2:
+        keys.add(key[:-2])
+    if key.endswith(".FOREX") and len(key) > 6:
+        keys.add(key[:-6])
+    return {k for k in keys if k}
+
+
 UNIVERSE: tuple[Instrument, ...] = (
     Instrument("EURUSD", "EUR/USD", "forex", "major", "EURUSD.FOREX", "USDX"),
     Instrument("GBPUSD", "GBP/USD", "forex", "major", "GBPUSD.FOREX", "USDX"),
@@ -170,8 +180,13 @@ def instruments_for_family(family: ModelFamily) -> list[Instrument]:
 
 
 def instrument_by_symbol(symbol: str) -> Instrument | None:
-    key = compact_symbol(symbol)
+    keys = _lookup_keys(symbol)
     for inst in UNIVERSE:
-        if compact_symbol(inst.symbol) == key:
+        inst_keys = (
+            _lookup_keys(inst.symbol)
+            | _lookup_keys(inst.display)
+            | _lookup_keys(inst.eodhd_symbol)
+        )
+        if keys & inst_keys:
             return inst
     return None

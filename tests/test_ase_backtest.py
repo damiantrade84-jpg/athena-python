@@ -25,6 +25,22 @@ def test_ase_backtest_config_defaults():
     assert int(CONFIG.get("ASE_BT_LOOKBACK_DAYS", 0) or 0) >= 30
 
 
+def test_ase_backtest_resolves_yahoo_forex_symbols_from_all_pairs():
+    import athena_ase.backtest as ase_backtest
+
+    eur_gbp = ase_backtest._resolve_instrument(
+        {"symbol": "EURGBP=X", "display": "EUR/GBP", "type": "forex"}
+    )
+    usd_chf = ase_backtest._resolve_instrument(
+        {"symbol": "USDCHF=X", "display": "USD/CHF", "type": "forex"}
+    )
+
+    assert eur_gbp is not None
+    assert eur_gbp.symbol == "EURGBP"
+    assert usd_chf is not None
+    assert usd_chf.symbol == "USDCHF"
+
+
 def test_ase_empty_backtest_message_names_ase_engine():
     import backtest_runner
 
