@@ -4801,3 +4801,82 @@ ATHENA_FOMC_AFFECTED_CRYPTO: true          # treat USD/USDT crypto majors as mac
 ATHENA_FOMC_CALENDAR_URL: "https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm"
 ATHENA_FOMC_RSS_URL: "https://www.federalreserve.gov/feeds/press_monetary.xml"
 ATHENA_FOMC_PRATES_RSS_URL: "https://www.federalreserve.gov/feeds/prates.xml"
+
+# ============================================================================
+# FX FACTOR LANE (athena_fx) - research/backtesting only, no live execution.
+# Factor-first FX layer: Carry / Momentum / Value primaries, COT overlay,
+# volatility + cost HARD GATES (never score components). All keys default-safe;
+# code falls back to the same defaults when a key is absent.
+# ============================================================================
+# Carry family
+FX_FACTOR_CARRY_MIN_NET_ANNUAL: 0.005      # min audited net broker carry (annualized decimal) for eligibility
+FX_FACTOR_MARKUP_WARN_ANNUAL: 0.03         # broker markup vs theoretical carry warning level
+FX_FACTOR_CARRY_BLOCK_ON_MARKUP: false     # neutralize carry direction when markup_warning fires
+FX_FACTOR_CARRY_FULL_SCALE: 0.05           # net annual carry mapping to full 35-point family score
+# Momentum family (TSMOM + cross-sectional are ONE family)
+FX_FACTOR_MOMENTUM_TSMOM_WEIGHT: 0.6
+FX_FACTOR_MOMENTUM_XS_WEIGHT: 0.4
+FX_FACTOR_MOMENTUM_NEUTRAL_BAND: 0.1
+# Value family (REER, publication-lagged)
+FX_FACTOR_VALUE_Z_BAND: 1.0                # |z| beyond which a currency is under/overvalued
+FX_FACTOR_VALUE_NEUTRAL_BAND: 0.25
+FX_FACTOR_VALUE_FULL_SCALE: 2.0            # pair value z mapping to full 20-point family score
+# COT overlay (currency-leg crowding; veto/downweight only, never creates trades)
+FX_FACTOR_COT_PERCENTILE_LOOKBACK_YEARS: 3
+FX_FACTOR_COT_EXTREME_HIGH_PCT: 90
+FX_FACTOR_COT_EXTREME_LOW_PCT: 10
+FX_FACTOR_COT_DOWNWEIGHT_POINTS: 5.0
+# Volatility hard gate
+FX_FACTOR_VOL_REDUCE_Z: 1.0                # new carry entries sized 50% above this vol z
+FX_FACTOR_VOL_BLOCK_Z: 2.0                 # block new entries / cut existing sleeve 50%
+FX_FACTOR_VOL_FLATTEN_Z: 3.0               # flatten existing carry sleeve
+FX_FACTOR_VOL_JUMP_FLATTEN: 2.0            # 20d vol doubling within 5 sessions -> flatten
+FX_FACTOR_VOL_RESUME_Z: 0.5                # hysteresis: resume only below this...
+FX_FACTOR_VOL_RESUME_CLOSES: 3             # ...for this many consecutive daily closes
+# Cost hard gate
+FX_FACTOR_SLIPPAGE_PIPS: 0.3
+FX_FACTOR_COST_MAX_ATR_FRACTION: 0.10      # total one-way cost must stay under this fraction of ATR
+# Decision engine / backtest sizing
+FX_FACTOR_MIN_TOTAL_SCORE: null            # empirical threshold - set ONLY from distribution report (Phase 13)
+FX_FACTOR_TARGET_VOL: 0.10
+FX_FACTOR_PAIR_RISK_CAP: 0.02
+FX_FACTOR_CCY_RISK_CAP: 0.04
+FX_FACTOR_TOTAL_RISK_CAP: 0.10
+FX_FACTOR_MAX_VOL_LEVERAGE: 2.0
+# Demo MT5 execution (requires EXECUTION_ENABLED: true and Pepperstone/MT5 demo).
+FX_FACTOR_EXECUTION_ENABLED: false
+FX_FACTOR_EXEC_MIN_RR: 1.0
+FX_FACTOR_EXEC_SL_ATR_MULT: 2.5
+FX_FACTOR_EXEC_TP_ATR_MULT: 5.0
+FX_FACTOR_EXEC_STYLE: swing
+# Typical retail spread assumptions (pips) for the FX factor cost gate when no
+# live spread feed is attached. Missing symbols fail the cost gate closed.
+FX_FACTOR_SPREAD_PIPS_BY_SYMBOL:
+  EURUSD: 1.0
+  GBPUSD: 1.3
+  AUDUSD: 1.2
+  NZDUSD: 1.6
+  USDJPY: 1.1
+  USDCHF: 1.5
+  USDCAD: 1.5
+  EURGBP: 1.5
+  EURJPY: 1.6
+  EURCHF: 1.8
+  EURCAD: 2.2
+  EURAUD: 2.2
+  EURNZD: 3.0
+  GBPJPY: 2.2
+  GBPCHF: 2.8
+  GBPCAD: 3.0
+  GBPAUD: 3.0
+  GBPNZD: 3.5
+  AUDJPY: 1.8
+  AUDCHF: 2.2
+  AUDCAD: 2.2
+  AUDNZD: 2.5
+  NZDJPY: 2.5
+  NZDCHF: 3.0
+  NZDCAD: 3.0
+  CADJPY: 2.2
+  CADCHF: 2.8
+  CHFJPY: 2.5

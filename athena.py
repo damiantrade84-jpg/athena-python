@@ -15660,6 +15660,7 @@ from athena_app.api.routes_status import register_status_routes  # noqa: E402
 from athena_app.api.routes_ase import register_ase_routes  # noqa: E402
 from athena_app.api.routes_tsmom import register_tsmom_routes  # noqa: E402
 from athena_app.api.routes_macro import register_macro_routes  # noqa: E402
+from athena_app.api.routes_forex_factor import register_forex_factor_routes  # noqa: E402
 from execution import register_execution_routes  # noqa: E402
 
 set_runtime(
@@ -15883,6 +15884,7 @@ register_status_routes(
 register_ase_routes(app)
 register_tsmom_routes(app)
 register_macro_routes(app)
+register_forex_factor_routes(app)
 # Macro (FOMC) feed scheduler — daily calendar refresh + adaptive RSS polling.
 # Gated by ATHENA_FOMC_ENABLED/ATHENA_FOMC_SCHEDULER_ENABLED; fully fail-safe.
 try:

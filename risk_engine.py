@@ -1379,6 +1379,11 @@ def risk_check(
             _min_exec_rr = float(CONFIG.get("ASE_EXEC_MIN_RR", 0.6) or 0.6)
         except (TypeError, ValueError):
             _min_exec_rr = 0.6
+    if execution_context == "fx_factor_bridge" and signal.get("fxFactorExecution") is True:
+        try:
+            _min_exec_rr = float(CONFIG.get("FX_FACTOR_EXEC_MIN_RR", 1.0) or 1.0)
+        except (TypeError, ValueError):
+            _min_exec_rr = 1.0
     if _is_engine_b_execution_signal(signal):
         for _rr_source in (
             signal,
