@@ -85,6 +85,28 @@ def resolve_ai_review_min_rr(signal: Dict[str, Any], resolved_style: str) -> flo
         return float(defaults.get(style_key, 1.5))
 
 
+def derive_engine_b_score_pct(engine_b: Dict[str, Any] | None) -> float:
+    """Return Engine B score percent, deriving from score/max when stored pct is stale."""
+
+    def _num(value: Any) -> float | None:
+        try:
+            if value is None or value == "":
+                return None
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+
+    data = engine_b if isinstance(engine_b, dict) else {}
+    score = _num(data.get("score"))
+    max_score = _num(data.get("max_possible")) or _num(data.get("maxScore"))
+    provided_pct = _num(data.get("score_pct"))
+    if score is not None and max_score and max_score > 0:
+        derived = score / max_score * 100.0
+        if provided_pct is None or abs(provided_pct - derived) > 1.0:
+            return derived
+    return provided_pct if provided_pct is not None else 0.0
+
+
 def classify_rr_by_style(asset_type: str, style: str, rr: float) -> str:
     """Classify Risk:Reward ratios based on style rules.
     
@@ -318,6 +340,22 @@ def build_ai_calibration_context_string(signal: Dict[str, Any], engine_source: s
     lines.append(f"ScoreNorm: {engine_a['scoreNorm']}")
     if ctx["engine_c"].get("conviction") is not None:
         lines.append(f"CombinedConviction: {ctx['engine_c']['conviction']}")
+    if str(identity.get("engine_source") or "").lower().startswith("engine c") or any(
+        ctx["engine_c"].get(k) is not None
+        for k in ("decision_state", "tier", "sizing_override", "components")
+    ):
+        lines.append(f"Engine C decision_state: {ctx['engine_c'].get('decision_state')}")
+        lines.append(f"Engine C tier: {ctx['engine_c'].get('tier')}")
+        lines.append(f"Engine C sizing_override: {ctx['engine_c'].get('sizing_override')}")
+        components = ctx["engine_c"].get("components")
+        if isinstance(components, dict):
+            lines.append(
+                "Engine C components: "
+                f"a_norm={components.get('a_norm')} "
+                f"b_norm={components.get('b_norm')} "
+                f"a_has_signal={components.get('a_has_signal')} "
+                f"b_has_signal={components.get('b_has_signal')}"
+            )
         
     lines.append(f"Entry: {trade_risk['entry']} | SL: {trade_risk['sl']} | TP1: {trade_risk['tp1']} | TP2: {trade_risk['tp2']}")
     lines.append(f"R:R = 1:{trade_risk['rr1']} / 1:{trade_risk['rr2']}")

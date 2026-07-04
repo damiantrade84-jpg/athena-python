@@ -8,6 +8,7 @@ from ai_context import (
     build_ai_calibration_context_string,
     build_ai_review_packet,
     build_engine_d_context,
+    derive_engine_b_score_pct,
     resolve_ai_review_min_rr,
 )
 from ai_contracts import AIReviewPacket
@@ -278,6 +279,49 @@ def test_calibration_context_string_injects_style_min_rr():
     assert "TP1/RR1 is partial exit target" in text
 
 
+def test_calibration_context_string_injects_engine_c_consensus_fields():
+    signal = {
+        "pair": "DOGE/USDT",
+        "symbol": "DOGEUSDT",
+        "type": "crypto",
+        "style": "intraday",
+        "engine_source": "engine_c",
+        "direction": "LONG",
+        "price": 0.07915,
+        "sl": 0.077086,
+        "tp1": 0.08334,
+        "tp2": 0.08334,
+        "rr1": 2.03,
+        "rr2": 2.03,
+        "confluenceScore": 0.78,
+        "maxScore": 1.0,
+        "engine_c": {
+            "decision_state": "execute",
+            "conviction": 0.78,
+            "tier": "HIGH",
+            "sizing_override": 1.0,
+            "components": {
+                "a_norm": 0.86,
+                "b_norm": 0.5,
+                "a_has_signal": True,
+                "b_has_signal": True,
+            },
+        },
+    }
+
+    text = build_ai_calibration_context_string(signal, "Engine C consensus", "intraday")
+
+    assert "Engine source: Engine C consensus" in text
+    assert "Engine C decision_state: execute" in text
+    assert "Engine C tier: HIGH" in text
+    assert "Engine C sizing_override: 1.0" in text
+    assert "Engine C components: a_norm=0.86 b_norm=0.5" in text
+
+
+def test_derive_engine_b_score_pct_recomputes_stale_zero_percent():
+    assert derive_engine_b_score_pct({"score": 4.75, "max_possible": 9.5, "score_pct": 0.0}) == 50.0
+
+
 def test_resolve_ai_review_min_rr_prefers_signal_min_rr():
     signal = {"min_rr": 1.8, "style": "intraday"}
     assert resolve_ai_review_min_rr(signal, "intraday") == 1.8
@@ -295,6 +339,8 @@ def test_marcus_prompt_uses_config_rr_not_hardcoded_swing_three():
     assert "RR >= 3.0" not in prompt
     assert "Style min RR (config)" in prompt
     assert "levelsVerdict" in prompt
+    assert "ENGINE C CONSENSUS" in prompt
+    assert "sizing_override/conviction for Engine C" in prompt
 
 
 def test_engine_b_prompt_prefix_uses_config_rr_not_hardcoded_swing_three():

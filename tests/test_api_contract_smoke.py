@@ -83,6 +83,11 @@ def test_api_analyze_normalizes_engine_c_review_payload_shape():
     assert 'sig["tp1"] = sig.get("tp")' in src
     assert 'sig["rr1"] = sig.get("rr")' in src
     assert 'sig.setdefault("engine_source", "engine_c")' in src
+    assert '("sizing_override", sig.get("sizing_override"))' in src
+    assert '("decision_state_reason", sig.get("decision_state_reason"))' in src
+    assert 'components.get(nested_key)' in src
+    assert "=== ENGINE C CONSENSUS ===" in src
+    assert "derive_engine_b_score_pct(eng_b)" in src
     assert "signal = _normalize_ai_analyze_signal(signal)" in src
 
     panel_src = (ROOT / "static" / "react-app" / "app" / "src" / "components" / "panels" / "EngineCPanel.tsx").read_text(
@@ -92,6 +97,9 @@ def test_api_analyze_normalizes_engine_c_review_payload_shape():
     assert "price: row.entry" in panel_src
     assert "tp2: row.tp" in panel_src
     assert "rr2: row.rr" in panel_src
+    assert "sizing_override: row.sizing_override" in panel_src
+    assert "decision_state_reason: row.decision_state_reason" in panel_src
+    assert "disagreement_diagnosis: row.disagreement_diagnosis" in panel_src
     assert "engine_c: {" in panel_src
 
 

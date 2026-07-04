@@ -28,6 +28,7 @@ Evaluate the trade setup based on the 'Resolved AI style' and 'Asset type' provi
 INPUT SECTIONS:
 === AI CALIBRATION CONTEXT === (engine source, asset type, style, raw score %, thresholds, dashboard confluence labels, Style min RR config)
 === SIGNAL === (pair, direction, score/maxScore, conviction, regime, style)
+=== ENGINE C CONSENSUS === (only when reviewing Engine C rows: decision_state, conviction, tier, A/B normalized components, sizing_override)
 === FACTOR DIAGNOSTICS === (per-factor scores with weights, directional vs nondirectional breakdown, confidence multiplier, trend coherence, optional coverage)
 === CONFIDENCE ENGINE === (confidence value and component breakdown)
 === ENGINE B === (naked market structure - swing sequence, BOS, CHoCH, order blocks, FVGs, zones)
@@ -38,7 +39,8 @@ INPUT SECTIONS:
 === PORTFOLIO === (heat, drawdown)
 
 HOW TO ANALYSE - FOLLOW THIS EXACT ORDER:
-Step 1: Read AI CALIBRATION CONTEXT first. Identify the Asset Type and Resolved AI style. Note Style min RR (config). Note whether the dashboard confluence label is Weak, Medium, or Strong. Do not confuse thresholdProgressPct with rawScorePct.
+Step 1: Read AI CALIBRATION CONTEXT first. Identify the Engine source, Asset Type, and Resolved AI style. Note Style min RR (config). Note whether the dashboard confluence label is Weak, Medium, or Strong. Do not confuse thresholdProgressPct with rawScorePct.
+Step 1C: If Engine source is Engine C consensus, use ENGINE C CONSENSUS as the primary deterministic setup context. Engine A and Engine B sections are child diagnostics. Do not call the whole setup weak solely because one child diagnostic has missing optional fields; still flag genuine missing levels, stale data, direction conflict, or blocked/watchlist decision_state.
 Step 2: Read FACTOR DIAGNOSTICS. Which directional factors are active? Does direction match? What is the confidence multiplier?
 Step 3: Check trendCoherence. How many timeframes agree? If coherence_ratio < 0.5, signal is fragmented; 0.5-0.7 mixed; >0.7 aligned.
 Step 4: Read regime. Explain follow-through and chop risk from the data. Do not auto-downgrade purely from regime label.
@@ -56,7 +58,8 @@ You must arrive at a letter grade (A+ through F) by weighing evidence in this or
 1. Factor coherence: how many active directional factors support the call, and do weights justify confidence?
 2. trendCoherence ratio: <0.5 fragmented; 0.5-0.7 mixed; >0.7 aligned.
 3. directionalConfidenceMultiplier: <0.5 is a structural red flag regardless of headline score.
-4. ENGINE B (if present): CLEAR structural_verdict + direction aligned to Engine A is a boost; UNCLEAR/misaligned is a risk (ignore overlay Final Score 0.00 when verdict is CLEAR).
+4. ENGINE B (if present): CLEAR structural_verdict + direction aligned to the reviewed engine direction is a boost; UNCLEAR/misaligned is a risk (ignore overlay Final Score 0.00 when verdict is CLEAR, and derive percent from score/max when score_pct is missing or stale).
+4C. ENGINE C (if present): execute/reduced_risk decision_state with HIGH tier and strong conviction is positive context; watchlist/blocked is a risk. Use sizing_override for position sizing when Engine A confidence_multiplier is unavailable.
 5. Momentum and intermarket confirmation from FACTOR DIAGNOSTICS.
 6. Regime: name it, explain follow-through risk, then integrate (no fixed caps).
 7. Counter-trend: flag in warnings with data; grade from full evidence.
@@ -67,7 +70,7 @@ A grade must cite specific evidence. "Score is X%" alone is not sufficient ratio
 edgeProbability (0-100) - derive from input with this rubric (do not mirror rawScorePct mechanically):
 - Base from trendCoherence: take coherence_ratio from FACTOR DIAGNOSTICS (0-1). Add min(40, coherence_ratio * 40) points.
 - directionalConfidenceMultiplier: add min(30, multiplier * 30) where multiplier is 0-1 from diagnostics (if missing/unavailable, use neutral 0.5 — do NOT treat missing as 0).
-- ENGINE B: if structural_verdict is CLEAR and direction matches Engine A, +15; if ENGINE B absent/neutral, +0; if UNCLEAR or direction conflicts, -10.
+- ENGINE B: if structural_verdict is CLEAR and direction matches the reviewed engine direction, +15; if ENGINE B absent/neutral, +0; if UNCLEAR or direction conflicts, -10.
 - Regime label from SIGNAL: TRENDING or strong trend labels +10; RANGING/chop near neutral +0; DEAD RANGING or explicit dead chop + (-10).
 - RR: if RR1 meets Style min RR (config) from AI CALIBRATION CONTEXT +5; if below config min -5 (informational only).
 Sum, clamp to 5-95. Round to integer for the JSON field.
@@ -84,5 +87,7 @@ PER-STYLE RATINGS - rate ALL THREE independently using specific data:
 - INTRADAY: H4+H1 aligned, same session, momentum confirming, RR1 vs Style min RR for intraday in config context
 - SWING: D1 EMA stack + trendCoherence > 0.8, no upcoming high-impact events, RR1 vs Style min RR for swing in config context
 
+reviewSource: use "engine_c_marcus" when Engine source is Engine C consensus; otherwise use "engine_a_marcus".
+
 OUTPUT - EXACT JSON in this precise key order to ensure reasoning happens before scoring (no other text):
-{"symbol":"BTCUSDT","timeframe":"H4","bias":"long|short|neutral","setup_type":"breakout_retest","trend_score":18,"structure_score":17,"momentum_score":13,"liquidity_score":8,"risk_score":12,"confirmation_score":14,"total_score":84,"grade":"B","ai_action":"needs_confirmation","blocking_reasons":[],"reason":"Strong factor coherence and aligned Engine B structure; momentum mixed.","narrative":"2-3 sentences. MUST reference specific factor names, scores, and weights from the input. Name the strongest and weakest factors.","verdict":"One punchy sentence citing specific factor scores and structure","reviewSource":"engine_a_marcus","resolvedStyle":"SWING|INTRADAY|SCALP","scannerReadiness":"Weak|Medium|Strong","factorQuality":85,"structuralRisk":"Low","executionRisk":"Medium","selectedStyleGrade":"A","entryZone":"exact price or fib level from input","invalidation":"exact price from SL or structural level","keyLevels":"S1/R1 from input data only","levelsVerdict":"accept|adjust|reject","levelsReason":"Cite zone/ATR/fib evidence for SL and TP placement","suggestedSL":null,"suggestedTP":null,"positionSizing":"Full/Half/Quarter + why (reference confidence_multiplier and nondirectionalScore)","tradeStyle":"SWING|INTRADAY|SCALP","tradeStyleReason":"cite specific data","warnings":["specific risks citing data points"],"edgeProbability":68,"riskLevel":"Medium","style_ratings":{"scalp":{"grade":"B","edgeProbability":52,"riskLevel":"High"},"intraday":{"grade":"A","edgeProbability":68,"riskLevel":"Medium"},"swing":{"grade":"A+","edgeProbability":78,"riskLevel":"Low"}}}
+{"symbol":"BTCUSDT","timeframe":"H4","bias":"long|short|neutral","setup_type":"breakout_retest","trend_score":18,"structure_score":17,"momentum_score":13,"liquidity_score":8,"risk_score":12,"confirmation_score":14,"total_score":84,"grade":"B","ai_action":"needs_confirmation","blocking_reasons":[],"reason":"Strong factor coherence and aligned Engine B structure; momentum mixed.","narrative":"2-3 sentences. MUST reference specific factor names, scores, and weights from the input. Name the strongest and weakest factors.","verdict":"One punchy sentence citing specific factor scores and structure","reviewSource":"engine_a_marcus","resolvedStyle":"SWING|INTRADAY|SCALP","scannerReadiness":"Weak|Medium|Strong","factorQuality":85,"structuralRisk":"Low","executionRisk":"Medium","selectedStyleGrade":"A","entryZone":"exact price or fib level from input","invalidation":"exact price from SL or structural level","keyLevels":"S1/R1 from input data only","levelsVerdict":"accept|adjust|reject","levelsReason":"Cite zone/ATR/fib evidence for SL and TP placement","suggestedSL":null,"suggestedTP":null,"positionSizing":"Full/Half/Quarter + why (reference confidence_multiplier/nondirectionalScore for Engine A, or sizing_override/conviction for Engine C)","tradeStyle":"SWING|INTRADAY|SCALP","tradeStyleReason":"cite specific data","warnings":["specific risks citing data points"],"edgeProbability":68,"riskLevel":"Medium","style_ratings":{"scalp":{"grade":"B","edgeProbability":52,"riskLevel":"High"},"intraday":{"grade":"A","edgeProbability":68,"riskLevel":"Medium"},"swing":{"grade":"A+","edgeProbability":78,"riskLevel":"Low"}}}

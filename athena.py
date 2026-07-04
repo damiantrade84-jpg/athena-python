@@ -3471,6 +3471,7 @@ Evaluate the trade setup based on the 'Resolved AI style' and 'Asset type' provi
 INPUT SECTIONS:
 === AI CALIBRATION CONTEXT === (engine source, asset type, style, raw score %, thresholds, dashboard confluence labels, Style min RR config)
 === SIGNAL === (pair, direction, score/maxScore, conviction, regime, style)
+=== ENGINE C CONSENSUS === (only when reviewing Engine C rows: decision_state, conviction, tier, A/B normalized components, sizing_override)
 === FACTOR DIAGNOSTICS === (per-factor scores with weights, directional vs nondirectional breakdown, confidence multiplier, trend coherence, optional coverage)
 === CONFIDENCE ENGINE === (confidence value and component breakdown)
 === ENGINE B === (naked market structure - swing sequence, BOS, CHoCH, order blocks, FVGs, zones)
@@ -3481,7 +3482,8 @@ INPUT SECTIONS:
 === PORTFOLIO === (heat, drawdown)
 
 HOW TO ANALYSE - FOLLOW THIS EXACT ORDER:
-Step 1: Read AI CALIBRATION CONTEXT first. Identify the Asset Type and Resolved AI style. Note Style min RR (config). Note whether the dashboard confluence label is Weak, Medium, or Strong. Do not confuse thresholdProgressPct with rawScorePct.
+Step 1: Read AI CALIBRATION CONTEXT first. Identify the Engine source, Asset Type, and Resolved AI style. Note Style min RR (config). Note whether the dashboard confluence label is Weak, Medium, or Strong. Do not confuse thresholdProgressPct with rawScorePct.
+Step 1C: If Engine source is Engine C consensus, use ENGINE C CONSENSUS as the primary deterministic setup context. Engine A and Engine B sections are child diagnostics. Do not call the whole setup weak solely because one child diagnostic has missing optional fields; still flag genuine missing levels, stale data, direction conflict, or blocked/watchlist decision_state.
 Step 2: Read FACTOR DIAGNOSTICS. Which directional factors are active? Does direction match? What is the confidence multiplier?
 Step 3: Check trendCoherence. How many timeframes agree? If coherence_ratio < 0.5, signal is fragmented; 0.5-0.7 mixed; >0.7 aligned.
 Step 4: Read regime. Explain follow-through and chop risk from the data. Do not auto-downgrade purely from regime label.
@@ -3499,7 +3501,8 @@ You must arrive at a letter grade (A+ through F) by weighing evidence in this or
 1. Factor coherence: how many active directional factors support the call, and do weights justify confidence?
 2. trendCoherence ratio: <0.5 fragmented; 0.5-0.7 mixed; >0.7 aligned.
 3. directionalConfidenceMultiplier: <0.5 is a structural red flag regardless of headline score.
-4. ENGINE B (if present): CLEAR structural_verdict + direction aligned to Engine A is a boost; UNCLEAR/misaligned is a risk (ignore overlay Final Score 0.00 when verdict is CLEAR).
+4. ENGINE B (if present): CLEAR structural_verdict + direction aligned to the reviewed engine direction is a boost; UNCLEAR/misaligned is a risk (ignore overlay Final Score 0.00 when verdict is CLEAR, and derive percent from score/max when score_pct is missing or stale).
+4C. ENGINE C (if present): execute/reduced_risk decision_state with HIGH tier and strong conviction is positive context; watchlist/blocked is a risk. Use sizing_override for position sizing when Engine A confidence_multiplier is unavailable.
 5. Momentum and intermarket confirmation from FACTOR DIAGNOSTICS.
 6. Regime: name it, explain follow-through risk, then integrate (no fixed caps).
 7. Counter-trend: flag in warnings with data; grade from full evidence.
@@ -3510,7 +3513,7 @@ A grade must cite specific evidence. "Score is X%" alone is not sufficient ratio
 edgeProbability (0-100) - derive from input with this rubric (do not mirror rawScorePct mechanically):
 - Base from trendCoherence: take coherence_ratio from FACTOR DIAGNOSTICS (0-1). Add min(40, coherence_ratio * 40) points.
 - directionalConfidenceMultiplier: add min(30, multiplier * 30) where multiplier is 0-1 from diagnostics (if missing/unavailable, use neutral 0.5 — do NOT treat missing as 0).
-- ENGINE B: if structural_verdict is CLEAR and direction matches Engine A, +15; if ENGINE B absent/neutral, +0; if UNCLEAR or direction conflicts, -10.
+- ENGINE B: if structural_verdict is CLEAR and direction matches the reviewed engine direction, +15; if ENGINE B absent/neutral, +0; if UNCLEAR or direction conflicts, -10.
 - Regime label from SIGNAL: TRENDING or strong trend labels +10; RANGING/chop near neutral +0; DEAD RANGING or explicit dead chop + (-10).
 - RR: if RR1 meets Style min RR (config) from AI CALIBRATION CONTEXT +5; if below config min -5 (informational only).
 Sum, clamp to 5-95. Round to integer for the JSON field.
@@ -3527,8 +3530,10 @@ PER-STYLE RATINGS - rate ALL THREE independently using specific data:
 - INTRADAY: H4+H1 aligned, same session, momentum confirming, RR1 vs Style min RR for intraday in config context
 - SWING: D1 EMA stack + trendCoherence > 0.8, no upcoming high-impact events, RR1 vs Style min RR for swing in config context
 
+reviewSource: use "engine_c_marcus" when Engine source is Engine C consensus; otherwise use "engine_a_marcus".
+
 OUTPUT - EXACT JSON in this precise key order to ensure reasoning happens before scoring (no other text):
-{"symbol":"BTCUSDT","timeframe":"H4","bias":"long|short|neutral","setup_type":"breakout_retest","trend_score":18,"structure_score":17,"momentum_score":13,"liquidity_score":8,"risk_score":12,"confirmation_score":14,"total_score":84,"grade":"B","ai_action":"needs_confirmation","blocking_reasons":[],"reason":"Strong factor coherence and aligned Engine B structure; momentum mixed.","narrative":"2-3 sentences. MUST reference specific factor names, scores, and weights from the input. Name the strongest and weakest factors.","verdict":"One punchy sentence citing specific factor scores and structure","reviewSource":"engine_a_marcus","resolvedStyle":"SWING|INTRADAY|SCALP","scannerReadiness":"Weak|Medium|Strong","factorQuality":85,"structuralRisk":"Low","executionRisk":"Medium","selectedStyleGrade":"A","entryZone":"exact price or fib level from input","invalidation":"exact price from SL or structural level","keyLevels":"S1/R1 from input data only","levelsVerdict":"accept|adjust|reject","levelsReason":"Cite zone/ATR/fib evidence for SL and TP placement","suggestedSL":null,"suggestedTP":null,"positionSizing":"Full/Half/Quarter + why (reference confidence_multiplier and nondirectionalScore)","tradeStyle":"SWING|INTRADAY|SCALP","tradeStyleReason":"cite specific data","warnings":["specific risks citing data points"],"edgeProbability":68,"riskLevel":"Medium","style_ratings":{"scalp":{"grade":"B","edgeProbability":52,"riskLevel":"High"},"intraday":{"grade":"A","edgeProbability":68,"riskLevel":"Medium"},"swing":{"grade":"A+","edgeProbability":78,"riskLevel":"Low"}}}
+{"symbol":"BTCUSDT","timeframe":"H4","bias":"long|short|neutral","setup_type":"breakout_retest","trend_score":18,"structure_score":17,"momentum_score":13,"liquidity_score":8,"risk_score":12,"confirmation_score":14,"total_score":84,"grade":"B","ai_action":"needs_confirmation","blocking_reasons":[],"reason":"Strong factor coherence and aligned Engine B structure; momentum mixed.","narrative":"2-3 sentences. MUST reference specific factor names, scores, and weights from the input. Name the strongest and weakest factors.","verdict":"One punchy sentence citing specific factor scores and structure","reviewSource":"engine_a_marcus","resolvedStyle":"SWING|INTRADAY|SCALP","scannerReadiness":"Weak|Medium|Strong","factorQuality":85,"structuralRisk":"Low","executionRisk":"Medium","selectedStyleGrade":"A","entryZone":"exact price or fib level from input","invalidation":"exact price from SL or structural level","keyLevels":"S1/R1 from input data only","levelsVerdict":"accept|adjust|reject","levelsReason":"Cite zone/ATR/fib evidence for SL and TP placement","suggestedSL":null,"suggestedTP":null,"positionSizing":"Full/Half/Quarter + why (reference confidence_multiplier/nondirectionalScore for Engine A, or sizing_override/conviction for Engine C)","tradeStyle":"SWING|INTRADAY|SCALP","tradeStyleReason":"cite specific data","warnings":["specific risks citing data points"],"edgeProbability":68,"riskLevel":"Medium","style_ratings":{"scalp":{"grade":"B","edgeProbability":52,"riskLevel":"High"},"intraday":{"grade":"A","edgeProbability":68,"riskLevel":"Medium"},"swing":{"grade":"A+","edgeProbability":78,"riskLevel":"Low"}}}
 """
 
 EXPERT_PROMPT, _EXPERT_PROMPT_SOURCE, _EXPERT_PROMPT_HASH = load_prompt(
@@ -4376,6 +4381,22 @@ def _build_signal_message(
         except (TypeError, ValueError):
             return float(default)
 
+    def _engine_source_label() -> str:
+        engine_hint = str(
+            signal.get("engine_source")
+            or signal.get("source_engine")
+            or signal.get("engine")
+            or signal.get("setup_engine")
+            or ""
+        ).lower()
+        if engine_hint in {"engine_c", "consensus", "c"} or isinstance(signal.get("engine_c"), dict):
+            return "Engine C consensus"
+        if engine_hint in {"engine_b", "naked", "b"} or signal.get("is_naked"):
+            return "Engine B naked market structure"
+        return "Engine A factor/confluence signal"
+
+    engine_source_label = _engine_source_label()
+
     max_score = _num(signal.get("maxScore"), 3.0)
 
     score = _num(signal.get("confluenceScore"), 0.0)
@@ -4395,11 +4416,48 @@ def _build_signal_message(
         f"Pair: {signal['pair']} | Direction: {signal['direction']} | Score: {score}/{max_score} ({score_pct}%)",
         f"Conviction: {conviction} (spread {spread}) | Entry Mode: {signal.get('entryMode', 'trend')} | "
         f"Class: {signal.get('signalClass', 'trend_continuation')}",
+        f"Review source: {engine_source_label}",
         f"Style: {style_pref.upper()} ({style_labels.get(style_pref.lower(), '')}) | "
         f"Regime: {signal.get('trendState', '?')} "
         f"(ADX {signal.get('h4', {}).get('snap', {}).get('adxPct', '?')}th pct, "
         f"{signal.get('h4', {}).get('snap', {}).get('adxLabel', '?')})",
     ]
+
+    engine_c = signal.get("engine_c") if isinstance(signal.get("engine_c"), dict) else {}
+    if engine_source_label == "Engine C consensus" or engine_c:
+        components = engine_c.get("components") or signal.get("components") or {}
+        if not isinstance(components, dict):
+            components = {}
+        lines.append("")
+        lines.append("=== ENGINE C CONSENSUS ===")
+        lines.append(
+            f"  Decision State: {engine_c.get('decision_state') or signal.get('decision_state')} "
+            f"| Verdict: {engine_c.get('verdict') or signal.get('verdict')}"
+        )
+        lines.append(
+            f"  Combined Conviction: {engine_c.get('conviction') or signal.get('combinedConviction') or signal.get('conviction')} "
+            f"| Tier: {engine_c.get('tier') or signal.get('tier')} "
+            f"| Sizing Override: {engine_c.get('sizing_override') or signal.get('sizing_override')}"
+        )
+        lines.append(
+            f"  A norm: {components.get('a_norm')} "
+            f"(dir={components.get('a_direction')}, has_signal={components.get('a_has_signal')})"
+        )
+        lines.append(
+            f"  B norm: {components.get('b_norm')} "
+            f"(dir={components.get('b_direction')}, has_signal={components.get('b_has_signal')}, "
+            f"checklist_passed={components.get('b_checklist_passed')})"
+        )
+        if engine_c.get("decision_state_reason") or signal.get("decision_state_reason"):
+            lines.append(
+                f"  Decision State Reason: {engine_c.get('decision_state_reason') or signal.get('decision_state_reason')}"
+            )
+        if engine_c.get("disagreement_diagnosis") or signal.get("disagreement_diagnosis"):
+            lines.append(
+                "  Disagreement Diagnosis: "
+                f"{json.dumps(engine_c.get('disagreement_diagnosis') or signal.get('disagreement_diagnosis'), default=str)[:1200]}"
+            )
+
     # === ENGINE B (NAKED MARKET STRUCTURE) ===
     # Engine A signals store naked overlay in "engine_b"; Engine B scan signals store it in "naked_data"
     eng_b = signal.get("engine_b") or signal.get("naked_data")
@@ -4427,8 +4485,10 @@ def _build_signal_message(
         lines.append(f"  Room to Move Bonus: {eng_b.get('room_to_move_bonus', 0)}")
         lines.append(f"  Catalyst Bonus: {eng_b.get('catalyst_bonus', 0)}")
         lines.append(f"  AI Stats Adjustment: {_num(eng_b.get('ai_adjustment')):.2f}")
+        from ai_context import derive_engine_b_score_pct
+
         lines.append(
-            f"  Engine B Final Score: {_num(eng_b.get('score')):.2f} / {_num(eng_b.get('max_possible'), 3.0):.2f} ({_num(eng_b.get('score_pct')):.1f}%)"
+            f"  Engine B Final Score: {_num(eng_b.get('score')):.2f} / {_num(eng_b.get('max_possible'), 3.0):.2f} ({derive_engine_b_score_pct(eng_b):.1f}%)"
         )
         lines.append(
             f"  Engine B Actionable: {'YES' if eng_b.get('is_actionable') else 'NO'}"
@@ -4524,7 +4584,7 @@ def _build_signal_message(
         from ai_context import build_ai_calibration_context_string
         from conductor import conductor_orchestrate
         lines.append("")
-        lines.append(build_ai_calibration_context_string(signal, engine_source="Engine A factor/confluence signal", explicit_style=style_pref))
+        lines.append(build_ai_calibration_context_string(signal, engine_source=engine_source_label, explicit_style=style_pref))
     except Exception as _ai_ctx_err:
         log.debug("[BUILD_SIGNAL] aiContext string failed: %s", _ai_ctx_err)
 
@@ -4958,13 +5018,21 @@ def _normalize_ai_analyze_signal(sig: dict) -> dict:
             sig["engine_c"] = engine_c
         for key, value in (
             ("decision_state", sig.get("decision_state")),
+            ("decision_state_reason", sig.get("decision_state_reason")),
             ("conviction", conviction),
             ("tier", sig.get("tier")),
+            ("sizing_override", sig.get("sizing_override")),
             ("components", sig.get("components")),
             ("verdict", sig.get("verdict")),
+            ("disagreement_diagnosis", sig.get("disagreement_diagnosis")),
         ):
             if value is not None and engine_c.get(key) is None:
                 engine_c[key] = value
+        components = engine_c.get("components")
+        if isinstance(components, dict):
+            for nested_key in ("a_norm", "b_norm"):
+                if engine_c.get(nested_key) is None and components.get(nested_key) is not None:
+                    engine_c[nested_key] = components.get(nested_key)
 
     return sig
 
