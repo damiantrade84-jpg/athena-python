@@ -307,3 +307,85 @@ class FxDecision:
             "reason": self.reason,
             "diagnostics": [d.to_dict() for d in self.diagnostics],
         }
+
+
+@dataclass
+class FxTradeCandidate:
+    scan_id: str
+    symbol: str
+    action: str
+    direction: Optional[str]
+    tradable_now: bool
+    factor_eligible: bool
+    execution_eligible: bool
+    current_price: Optional[float] = None
+    bid: Optional[float] = None
+    ask: Optional[float] = None
+    spread_pips: Optional[float] = None
+    atr_pips: Optional[float] = None
+    entry: Optional[float] = None
+    sl: Optional[float] = None
+    tp1: Optional[float] = None
+    tp2: Optional[float] = None
+    rr1: Optional[float] = None
+    target_weight: Optional[float] = None
+    size_multiplier: float = 1.0
+    aligned_families: list[str] = field(default_factory=list)
+    blocked_families: list[str] = field(default_factory=list)
+    family_scores: dict[str, Any] = field(default_factory=dict)
+    gate_results: dict[str, Any] = field(default_factory=dict)
+    cot_overlay: Optional[dict[str, Any]] = None
+    cost_diagnostics: dict[str, Any] = field(default_factory=dict)
+    execution_preflight: dict[str, Any] = field(default_factory=dict)
+    existing_position: Optional[dict[str, Any]] = None
+    reason: str = ""
+    diagnostics: list[Any] = field(default_factory=list)
+    last_factor_decision_date: Optional[str] = None
+    generated_at: Optional[str] = None
+
+    @property
+    def gate_summary(self) -> str:
+        parts: list[str] = []
+        for name in sorted(self.gate_results):
+            gate = self.gate_results.get(name) or {}
+            if isinstance(gate, dict):
+                parts.append(
+                    f"{name}:{gate.get('result')}:{gate.get('reason_code')}"
+                )
+        return "; ".join(parts)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "scan_id": self.scan_id,
+            "symbol": self.symbol,
+            "action": self.action,
+            "direction": self.direction,
+            "tradable_now": self.tradable_now,
+            "factor_eligible": self.factor_eligible,
+            "execution_eligible": self.execution_eligible,
+            "current_price": self.current_price,
+            "bid": self.bid,
+            "ask": self.ask,
+            "spread_pips": self.spread_pips,
+            "atr_pips": self.atr_pips,
+            "entry": self.entry,
+            "sl": self.sl,
+            "tp1": self.tp1,
+            "tp2": self.tp2,
+            "rr1": self.rr1,
+            "target_weight": self.target_weight,
+            "size_multiplier": self.size_multiplier,
+            "aligned_families": list(self.aligned_families),
+            "blocked_families": list(self.blocked_families),
+            "family_scores": dict(self.family_scores),
+            "gate_results": dict(self.gate_results),
+            "gate_summary": self.gate_summary,
+            "cot_overlay": dict(self.cot_overlay) if self.cot_overlay else None,
+            "cost_diagnostics": dict(self.cost_diagnostics),
+            "execution_preflight": dict(self.execution_preflight),
+            "existing_position": dict(self.existing_position) if self.existing_position else None,
+            "reason": self.reason,
+            "diagnostics": list(self.diagnostics),
+            "last_factor_decision_date": self.last_factor_decision_date,
+            "generated_at": self.generated_at,
+        }

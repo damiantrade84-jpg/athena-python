@@ -3,6 +3,10 @@ import {
   formatForexDiagnostics,
   ForexApiError,
   getFactorStatus,
+  getForexTradingStatus,
+  getLatestForexScan,
+  postForexExecuteCandidate,
+  postForexScan,
   parseSymbolList,
   validateForexBacktestRequest,
   G8_PAIRS,
@@ -66,6 +70,63 @@ describe('forexFactorApi', () => {
       'missing_carry: stale',
     );
     expect(formatForexDiagnostics([])).toBe('Request failed');
+  });
+
+  it('postForexScan calls scan endpoint with scanner options', async () => {
+    const envelope = {
+      success: true,
+      data: { scan_id: 'scan-1', candidates: [] },
+      status: 'ok',
+      diagnostics: [],
+      warnings: [],
+      generated_at: '2026-01-15T12:00:00+00:00',
+    };
+    vi.mocked(fetch).mockResolvedValue({ ok: true, json: async () => envelope } as Response);
+
+    await postForexScan({ symbols: ['EURUSD'], refreshDecisions: false, includeBlocked: true });
+
+    expect(fetch).toHaveBeenCalledWith('/api/forex/scan', expect.objectContaining({
+      method: 'POST',
+      body: JSON.stringify({ symbols: ['EURUSD'], refreshDecisions: false, includeBlocked: true }),
+    }));
+  });
+
+  it('getLatestForexScan and trading status call read endpoints', async () => {
+    const envelope = {
+      success: true,
+      data: {},
+      status: 'ok',
+      diagnostics: [],
+      warnings: [],
+      generated_at: '2026-01-15T12:00:00+00:00',
+    };
+    vi.mocked(fetch).mockResolvedValue({ ok: true, json: async () => envelope } as Response);
+
+    await getLatestForexScan();
+    await getForexTradingStatus();
+
+    expect(fetch).toHaveBeenNthCalledWith(1, '/api/forex/scan/latest', undefined);
+    expect(fetch).toHaveBeenNthCalledWith(2, '/api/forex/trading-status', undefined);
+  });
+
+  it('postForexExecuteCandidate defaults to dry run', async () => {
+    const envelope = {
+      success: true,
+      data: { dry_run: true, reason: 'dry_run' },
+      status: 'ok',
+      diagnostics: [],
+      warnings: [],
+      generated_at: '2026-01-15T12:00:00+00:00',
+    };
+    vi.mocked(fetch).mockResolvedValue({ ok: true, json: async () => envelope } as Response);
+    const candidate = { symbol: 'EURUSD', action: 'BUY' };
+
+    await postForexExecuteCandidate({ candidate });
+
+    expect(fetch).toHaveBeenCalledWith('/api/forex/execute-candidate', expect.objectContaining({
+      method: 'POST',
+      body: JSON.stringify({ candidate, dryRun: true, confirm: true }),
+    }));
   });
 });
 

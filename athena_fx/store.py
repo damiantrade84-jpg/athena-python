@@ -65,6 +65,11 @@ CREATE TABLE IF NOT EXISTS backtest_runs (
     request TEXT NOT NULL,
     report TEXT
 );
+CREATE TABLE IF NOT EXISTS scans (
+    scan_id TEXT PRIMARY KEY,
+    generated_at TEXT NOT NULL,
+    payload TEXT NOT NULL
+);
 """
 
 
@@ -292,3 +297,25 @@ def load_backtest_run(run_id: str, db_path: Optional[str] = None) -> Optional[di
         "request": json.loads(row["request"]),
         "report": json.loads(row["report"]) if row["report"] else None,
     }
+
+
+def save_scan(scan: dict[str, Any], db_path: Optional[str] = None) -> None:
+    scan_id = str(scan.get("scan_id") or "")
+    generated_at = str(scan.get("generated_at") or "")
+    if not scan_id or not generated_at:
+        raise ValueError("scan_id and generated_at are required")
+    with connect(db_path) as con:
+        con.execute(
+            "INSERT OR REPLACE INTO scans (scan_id, generated_at, payload) VALUES (?,?,?)",
+            (scan_id, generated_at, json.dumps(scan)),
+        )
+
+
+def load_latest_scan(db_path: Optional[str] = None) -> Optional[dict[str, Any]]:
+    with connect(db_path) as con:
+        row = con.execute(
+            "SELECT payload FROM scans ORDER BY generated_at DESC LIMIT 1"
+        ).fetchone()
+    if row is None:
+        return None
+    return json.loads(row["payload"])
