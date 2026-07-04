@@ -3,7 +3,12 @@
 from __future__ import annotations
 
 from athena_fx.models import ACTION_BUY, ACTION_NO_TRADE, FxTradeCandidate, GateResult
-from athena_fx.scanner import build_candidate_from_decision, scan_forex
+import athena_fx.scanner as scanner_module
+from athena_fx.scanner import (
+    build_candidate_from_decision,
+    scan_forex,
+    _fetch_mt5_recent_d1_bars,
+)
 
 
 def _bars() -> list[dict]:
@@ -115,7 +120,7 @@ def test_cost_gate_failure_blocks_candidate_and_keeps_reason() -> None:
         decision,
         scan_id="scan-1",
         bid=1.1000,
-        ask=1.1002,
+        ask=1.1200,
         bars=_bars(),
         execution_allowed=True,
         execution_block_reason=None,
@@ -127,6 +132,40 @@ def test_cost_gate_failure_blocks_candidate_and_keeps_reason() -> None:
     assert candidate.tradable_now is False
     assert "cost_exceeds_atr_fraction" in candidate.reason
     assert candidate.gate_results["cost"]["result"] == "fail"
+
+
+def test_candidate_recomputes_stale_missing_atr_cost_gate_from_live_context() -> None:
+    decision = _buy_decision(
+        gate_results=[
+            GateResult("data_quality", "pass", "data_ok").to_dict(),
+            GateResult("volatility", "pass", "vol_ok").to_dict(),
+            GateResult(
+                "cost",
+                "fail",
+                "missing_atr",
+                recommended_action="block",
+                size_multiplier=0.0,
+            ).to_dict(),
+        ],
+        reason="gate failure: cost (missing_atr)",
+    )
+
+    candidate = build_candidate_from_decision(
+        decision,
+        scan_id="scan-1",
+        bid=1.1000,
+        ask=1.1002,
+        bars=_bars(),
+        execution_allowed=True,
+        execution_block_reason=None,
+    )
+
+    assert candidate.action == ACTION_BUY
+    assert candidate.execution_eligible is True
+    assert candidate.tradable_now is True
+    assert candidate.gate_results["cost"]["result"] == "pass"
+    assert candidate.gate_results["cost"]["reason_code"] == "cost_ok"
+    assert candidate.atr_pips is not None
 
 
 def test_scan_ranks_tradable_before_blocked_and_no_trade() -> None:
@@ -160,3 +199,65 @@ def test_scan_ranks_tradable_before_blocked_and_no_trade() -> None:
     assert result["summary"]["tradable_count"] == 1
     assert result["summary"]["blocked_count"] == 1
     assert result["summary"]["no_trade_count"] == 1
+
+
+def test_scan_recomputes_live_decision_when_persisted_decision_has_missing_atr(monkeypatch) -> None:
+    stale_decision = _buy_decision(
+        symbol="AUDCAD",
+        action=ACTION_NO_TRADE,
+        direction=None,
+        gate_results=[GateResult("cost", "fail", "missing_atr").to_dict()],
+        reason="gate failure: cost (missing_atr)",
+    )
+
+    def live_decision_provider(symbol, as_of_date, spread_pips, bars, strict):
+        assert symbol == "AUDCAD"
+        assert as_of_date == "2026-01-15"
+        assert spread_pips is not None and spread_pips > 0
+        assert len(bars) >= 15
+        assert strict is True
+        return _buy_decision(symbol="AUDCAD")
+
+    monkeypatch.setattr(scanner_module.fx_store, "load_decisions", lambda as_of_date=None: [stale_decision])
+
+    result = scan_forex(
+        symbols=["AUDCAD"],
+        price_provider=lambda _symbol: (0.9000, 0.9002),
+        bars_provider=lambda _symbol: _bars(),
+        execution_allowed=True,
+        live_decision_provider=live_decision_provider,
+    )
+
+    candidate = result["candidates"][0]
+    assert candidate["symbol"] == "AUDCAD"
+    assert candidate["action"] == ACTION_BUY
+    assert candidate["tradable_now"] is True
+    assert candidate["gate_results"]["cost"]["reason_code"] == "cost_ok"
+
+
+def test_fetch_mt5_recent_d1_bars_returns_ohlc(monkeypatch) -> None:
+    class _FakeMt5:
+        TIMEFRAME_D1 = 1440
+
+        def symbol_select(self, symbol, enabled):
+            return symbol == "AUDCAD"
+
+        def copy_rates_from_pos(self, symbol, timeframe, start, count):
+            assert symbol == "AUDCAD"
+            assert timeframe == self.TIMEFRAME_D1
+            assert start == 0
+            assert count == 3
+            return [
+                {"time": 1764547200, "open": 0.9000, "high": 0.9100, "low": 0.8900, "close": 0.9050},
+                {"time": 1764633600, "open": 0.9050, "high": 0.9150, "low": 0.8950, "close": 0.9100},
+            ]
+
+    monkeypatch.setattr("mt5_executor._get_mt5", lambda: _FakeMt5())
+    monkeypatch.setattr("mt5_executor.mt5_connect", lambda: True)
+    monkeypatch.setattr("mt5_executor.mt5_map_symbol", lambda symbol: symbol)
+
+    bars = _fetch_mt5_recent_d1_bars("AUDCAD", limit=3)
+
+    assert len(bars) == 2
+    assert bars[0]["date"] == "2025-12-01"
+    assert bars[0]["high"] == 0.91

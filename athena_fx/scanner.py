@@ -14,6 +14,7 @@ from config import CONFIG
 
 from athena_fx import store as fx_store
 from athena_fx.execution import sl_tp_from_atr
+from athena_fx.gates import cost_gate
 from athena_fx.models import (
     ACTION_BUY,
     ACTION_FLATTEN,
@@ -30,6 +31,10 @@ from athena_fx.pipeline import _atr_pips_from_bars, refresh_decisions
 
 PriceProvider = Callable[[str], tuple[float | None, float | None] | None]
 BarsProvider = Callable[[str], list[dict[str, Any]]]
+LiveDecisionProvider = Callable[
+    [str, str | None, float | None, list[dict[str, Any]], bool],
+    dict[str, Any] | None,
+]
 
 
 def _now_iso() -> str:
@@ -38,6 +43,23 @@ def _now_iso() -> str:
 
 def _pip_size(symbol: str) -> float:
     return 0.01 if pair_legs(symbol)[1] == "JPY" else 0.0001
+
+
+def _spread_pips_from_bid_ask(
+    symbol: str,
+    bid: float | None,
+    ask: float | None,
+) -> float | None:
+    if bid is None or ask is None:
+        return None
+    try:
+        bid_f = float(bid)
+        ask_f = float(ask)
+    except (TypeError, ValueError):
+        return None
+    if ask_f < bid_f:
+        return None
+    return (ask_f - bid_f) / _pip_size(symbol)
 
 
 def _latest_decision_date(decisions: list[dict[str, Any]]) -> Optional[str]:
@@ -61,6 +83,50 @@ def _default_price_provider(symbol: str) -> tuple[float | None, float | None] | 
         return None
 
 
+def _fetch_mt5_recent_d1_bars(symbol: str, *, limit: int = 90) -> list[dict[str, Any]]:
+    """Read recent D1 bars directly from MT5 for live scanner ATR context."""
+    try:
+        from mt5_executor import _get_mt5, mt5_connect, mt5_map_symbol
+    except ImportError:
+        return []
+
+    mt5 = _get_mt5()
+    if not mt5 or not mt5_connect():
+        return []
+    sym = symbol.replace("/", "").upper()
+    mt5_symbol = mt5_map_symbol(sym)
+    if not mt5_symbol:
+        return []
+    try:
+        if not mt5.symbol_select(mt5_symbol, True):
+            return []
+        raw_bars = mt5.copy_rates_from_pos(mt5_symbol, mt5.TIMEFRAME_D1, 0, int(limit))
+    except Exception:
+        return []
+    if raw_bars is None:
+        return []
+
+    names = getattr(getattr(raw_bars, "dtype", None), "names", None) or ()
+    bars: list[dict[str, Any]] = []
+    for bar in raw_bars:
+        try:
+            ts = int(bar["time"])
+            dt = _dt.datetime.fromtimestamp(ts, tz=_dt.timezone.utc)
+            bars.append({
+                "date": dt.strftime("%Y-%m-%d"),
+                "open": float(bar["open"]),
+                "high": float(bar["high"]),
+                "low": float(bar["low"]),
+                "close": float(bar["close"]),
+            })
+        except (KeyError, TypeError, ValueError, OverflowError):
+            if names:
+                continue
+            continue
+    bars.sort(key=lambda row: str(row.get("date") or ""))
+    return bars
+
+
 def _default_bars_provider(symbol: str, as_of_date: str | None = None) -> list[dict[str, Any]]:
     try:
         from datetime import date, timedelta
@@ -70,9 +136,38 @@ def _default_bars_provider(symbol: str, as_of_date: str | None = None) -> list[d
         end = as_of_date or _dt.date.today().isoformat()
         start = (date.fromisoformat(end) - timedelta(days=90)).isoformat()
         bars_map, _diags = load_daily_bars([symbol], start, end)
-        return list(bars_map.get(symbol.replace("/", "").upper(), []) or [])
+        cached = list(bars_map.get(symbol.replace("/", "").upper(), []) or [])
     except Exception:
-        return []
+        cached = []
+    if len(cached) >= 15:
+        return cached
+    live = _fetch_mt5_recent_d1_bars(symbol)
+    return live or cached
+
+
+def _live_decision_from_pipeline(
+    symbol: str,
+    as_of_date: str | None,
+    spread_pips: float | None,
+    bars: list[dict[str, Any]],
+    strict: bool,
+) -> dict[str, Any] | None:
+    from athena_fx.pipeline import compute_symbol_state
+
+    decision_date = as_of_date or _dt.date.today().isoformat()
+    state = compute_symbol_state(
+        symbol,
+        decision_date,
+        strict=strict,
+        spread_pips=spread_pips,
+        bars=bars,
+    )
+    decision = state.get("decision")
+    if decision is None:
+        return None
+    if hasattr(decision, "to_dict"):
+        return decision.to_dict()
+    return dict(decision)
 
 
 def _gate_map(decision: dict[str, Any]) -> dict[str, dict[str, Any]]:
@@ -109,9 +204,6 @@ def build_candidate_from_decision(
     failed = _failed_gates(gates)
     raw_action = str(decision.get("action") or ACTION_NO_TRADE)
     factor_eligible = raw_action in {ACTION_BUY, ACTION_SELL, ACTION_REDUCE, ACTION_FLATTEN}
-    action = raw_action
-    if failed and action in {ACTION_BUY, ACTION_SELL}:
-        action = ACTION_NO_TRADE
 
     mid = None
     if bid and ask:
@@ -123,6 +215,12 @@ def build_candidate_from_decision(
     if bid and ask and ask >= bid:
         spread_pips = (float(ask) - float(bid)) / _pip_size(sym)
     atr_pips = _atr_pips_from_bars(bars, sym)
+    if "cost" in gates:
+        gates["cost"] = cost_gate(spread_pips=spread_pips, atr_pips=atr_pips).to_dict()
+        failed = _failed_gates(gates)
+    action = raw_action
+    if failed and action in {ACTION_BUY, ACTION_SELL}:
+        action = ACTION_NO_TRADE
 
     entry = None
     if action == ACTION_BUY:
@@ -219,12 +317,14 @@ def scan_forex(
     decisions_by_symbol: dict[str, dict[str, Any]] | None = None,
     price_provider: PriceProvider | None = None,
     bars_provider: BarsProvider | None = None,
+    live_decision_provider: LiveDecisionProvider | None = None,
 ) -> dict[str, Any]:
     universe = [s.replace("/", "").upper() for s in (symbols or list(G8_PAIRS))]
     if refresh:
         refresh_decisions(symbols=universe, as_of_date=as_of_date)
 
     diagnostics: list[dict[str, Any]] = []
+    injected_decisions = decisions_by_symbol is not None
     if decisions_by_symbol is None:
         all_decisions = fx_store.load_decisions(as_of_date=as_of_date)
         latest = as_of_date or _latest_decision_date(all_decisions)
@@ -239,6 +339,8 @@ def scan_forex(
     generated_at = _now_iso()
     price_provider = price_provider or _default_price_provider
     bars_provider = bars_provider or (lambda s: _default_bars_provider(s, as_of_date))
+    if live_decision_provider is None and not injected_decisions:
+        live_decision_provider = _live_decision_from_pipeline
     candidates: list[FxTradeCandidate] = []
 
     for sym in universe:
@@ -266,6 +368,25 @@ def scan_forex(
         bars = bars_provider(sym)
         if not bars:
             diagnostics.append({"code": "MISSING_BARS", "symbol": sym})
+        spread_pips = _spread_pips_from_bid_ask(sym, bid, ask)
+        if live_decision_provider is not None:
+            try:
+                live_decision = live_decision_provider(
+                    sym,
+                    as_of_date,
+                    spread_pips,
+                    bars,
+                    strict_factor_data,
+                )
+            except Exception as exc:
+                diagnostics.append({
+                    "code": "LIVE_DECISION_FAILED",
+                    "symbol": sym,
+                    "message": str(exc),
+                })
+            else:
+                if live_decision:
+                    decision = live_decision
         candidate = build_candidate_from_decision(
             decision,
             scan_id=scan_id,

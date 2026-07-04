@@ -93,7 +93,10 @@ def test_execute_candidate_rejects_failed_gate() -> None:
     assert body["diagnostics"][0]["code"] == "HARD_GATE_FAILED"
 
 
-def test_execute_candidate_real_execution_blocked_by_default() -> None:
+def test_execute_candidate_real_execution_blocked_when_fx_flag_disabled(monkeypatch) -> None:
+    import athena_app.api.routes_forex_factor as routes
+
+    monkeypatch.setitem(routes.CONFIG, "FX_FACTOR_EXECUTION_ENABLED", False)
     client = _client(None)
 
     response = client.post(
