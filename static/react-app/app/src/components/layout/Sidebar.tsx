@@ -28,7 +28,7 @@ const navItems: { id: PanelId; label: string; icon: ElementType; badge?: string 
   { id: 'engineC',     label: 'Engine C',     icon: Layers },
   { id: 'ase',         label: 'ASE',          icon: Cpu,        badge: 'SHADOW' },
   { id: 'tsmom',       label: 'TSMOM',        icon: TrendingUp, badge: 'DEMO' },
-  { id: 'forexFactor', label: 'Forex Trading & Backtesting', icon: Landmark, badge: 'RESEARCH' },
+  { id: 'forexFactor', label: 'Forex Trading & Backtesting', icon: Landmark, badge: 'FX' },
   { id: 'scalpLab',    label: 'Scalp Lab',    icon: Activity },
   { id: 'scalpWorkbench', label: 'Scalp Workbench', icon: BarChart2 },
   { id: 'tvChart',     label: 'TV Chart',     icon: BarChart2 },

@@ -8,12 +8,17 @@ from typing import Any, Optional
 
 from flask import jsonify, request
 
+from config import CONFIG
 from athena_fx import store as fx_store
 from athena_fx.models import (
     ACTION_BUY,
+    ACTION_FLATTEN,
     ACTION_SELL,
+    ACTION_REDUCE,
     DIAG_MISSING_CARRY,
     G8_CURRENCIES,
+    G8_PAIRS,
+    GATE_FAIL,
     PRIMARY_FAMILIES,
 )
 
@@ -912,6 +917,311 @@ def api_forex_rebalance():
         )
 
 
+def _trading_status_payload() -> dict[str, Any]:
+    block_reasons: list[str] = []
+    execution_enabled = bool(CONFIG.get("EXECUTION_ENABLED", False))
+    fx_execution_enabled = bool(CONFIG.get("FX_FACTOR_EXECUTION_ENABLED", False))
+    mt5_execution_enabled = bool(CONFIG.get("MT5_EXECUTION_ENABLED", True))
+    kill_switch = bool(CONFIG.get("KILL_SWITCH", False))
+    if not execution_enabled:
+        block_reasons.append("EXECUTION_DISABLED")
+    if not fx_execution_enabled:
+        block_reasons.append("FX_FACTOR_EXECUTION_DISABLED")
+    if not mt5_execution_enabled:
+        block_reasons.append("MT5_EXECUTION_DISABLED")
+    if kill_switch:
+        block_reasons.append("KILL_SWITCH")
+    if str(CONFIG.get("EXECUTOR_MODE", "paper")).lower() == "live" and not bool(
+        CONFIG.get("FX_FACTOR_ALLOW_LIVE_EXECUTION", False)
+    ):
+        block_reasons.append("FX_FACTOR_LIVE_EXECUTION_DISABLED")
+
+    latest_scan = fx_store.load_latest_scan()
+    latest_scan_at = latest_scan.get("generated_at") if latest_scan else None
+    decisions = fx_store.load_decisions()
+    latest_decision_date = _latest_decision_date(decisions)
+
+    open_positions: list[Any] = []
+    account_mode = "unknown"
+    account: dict[str, Any] | None = None
+    try:
+        from athena_fx.execution import default_fx_execution_deps
+
+        deps = default_fx_execution_deps()
+        positions, _raw = deps.get_positions()
+        open_positions = [
+            p for p in positions if str(p.get("symbol") or p.get("pair") or "").replace("/", "").upper() in G8_PAIRS
+        ]
+        account = deps.get_account()
+        mode = deps.get_mt5_trade_mode()
+        account_mode = "demo" if mode == 0 else "live" if mode == 2 else "unknown"
+    except Exception as exc:
+        block_reasons.append(f"MT5_STATUS_UNAVAILABLE:{exc}")
+
+    can_demo_execute = not block_reasons
+    return {
+        "market_open": True,
+        "execution_enabled": execution_enabled,
+        "fx_factor_execution_enabled": fx_execution_enabled,
+        "mt5_execution_enabled": mt5_execution_enabled,
+        "kill_switch": kill_switch,
+        "executor_mode": str(CONFIG.get("EXECUTOR_MODE", "paper")),
+        "account_mode": account_mode,
+        "account": account,
+        "auto_trade_enabled": bool(CONFIG.get("AUTO_TRADE_ENABLED", False)),
+        "open_positions": open_positions,
+        "latest_scan_at": latest_scan_at,
+        "latest_decision_date": latest_decision_date,
+        "can_dry_run": True,
+        "can_demo_execute": can_demo_execute,
+        "block_reasons": block_reasons,
+    }
+
+
+def api_forex_trading_status():
+    try:
+        return _envelope(data=_trading_status_payload())
+    except Exception as exc:
+        log.exception("forex trading-status failed")
+        return _envelope(
+            data=None,
+            status="error",
+            diagnostics=[{"code": "internal_error", "message": str(exc)}],
+            success=False,
+            http=500,
+        )
+
+
+def api_forex_scan():
+    body = request.get_json(force=True, silent=True) or {}
+    symbols_raw = body.get("symbols")
+    symbols = None
+    if isinstance(symbols_raw, list) and symbols_raw:
+        symbols = [str(s).replace("/", "").upper() for s in symbols_raw]
+    refresh_requested = bool(
+        body.get(
+            "refreshDecisions",
+            CONFIG.get("FX_FACTOR_SCAN_REFRESH_DECISIONS_DEFAULT", True),
+        )
+    )
+    include_blocked = bool(
+        body.get(
+            "includeBlocked",
+            CONFIG.get("FX_FACTOR_SCAN_INCLUDE_BLOCKED_DEFAULT", True),
+        )
+    )
+    strict_factor_data = bool(
+        body.get(
+            "strictFactorData",
+            CONFIG.get("FX_FACTOR_STRICT_DATA_DEFAULT", True),
+        )
+    )
+    as_of = str(body.get("as_of") or "").strip() or None
+    try:
+        if not bool(CONFIG.get("FX_FACTOR_SCANNER_ENABLED", True)):
+            return _envelope(
+                data=None,
+                status="blocked",
+                diagnostics=[{"code": "FX_FACTOR_SCANNER_DISABLED"}],
+                success=False,
+                http=403,
+            )
+        status = _trading_status_payload()
+        from athena_fx.scanner import scan_forex
+
+        scan = scan_forex(
+            symbols=symbols,
+            refresh=refresh_requested,
+            include_blocked=include_blocked,
+            strict_factor_data=strict_factor_data,
+            as_of_date=as_of,
+            execution_allowed=bool(status.get("can_demo_execute")),
+            execution_block_reason=";".join(status.get("block_reasons") or []) or None,
+        )
+        fx_store.save_scan(scan)
+        return _envelope(
+            data=scan,
+            diagnostics=list(scan.get("diagnostics") or []),
+            warnings=list(scan.get("warnings") or []),
+        )
+    except Exception as exc:
+        log.exception("forex scan failed")
+        return _envelope(
+            data=None,
+            status="error",
+            diagnostics=[{"code": "scan_failed", "message": str(exc)}],
+            success=False,
+            http=500,
+        )
+
+
+def api_forex_scan_latest():
+    scan = fx_store.load_latest_scan()
+    if scan is None:
+        return _envelope(data={"scan": None}, warnings=["missing:scan"])
+    return _envelope(data=scan)
+
+
+def _candidate_failed_gates(candidate: dict[str, Any]) -> list[str]:
+    failed: list[str] = []
+    gates = candidate.get("gate_results") or {}
+    if isinstance(gates, list):
+        iterable = ((g.get("gate_name"), g) for g in gates if isinstance(g, dict))
+    else:
+        iterable = gates.items() if isinstance(gates, dict) else []
+    for name, gate in iterable:
+        if isinstance(gate, dict) and gate.get("result") == GATE_FAIL:
+            failed.append(f"{name}:{gate.get('reason_code')}")
+    return failed
+
+
+def _candidate_to_decision(candidate: dict[str, Any]) -> dict[str, Any]:
+    gates = candidate.get("gate_results") or {}
+    if isinstance(gates, dict):
+        gate_results = [
+            {"gate_name": name, **gate} for name, gate in gates.items() if isinstance(gate, dict)
+        ]
+    else:
+        gate_results = list(gates or [])
+    return {
+        "symbol": candidate.get("symbol"),
+        "as_of_date": candidate.get("last_factor_decision_date"),
+        "action": candidate.get("action"),
+        "direction": candidate.get("direction"),
+        "total_score": sum(
+            abs(float(v.get("points") or 0.0))
+            for v in (candidate.get("family_scores") or {}).values()
+            if isinstance(v, dict)
+        ),
+        "size_multiplier": candidate.get("size_multiplier"),
+        "aligned_families": candidate.get("aligned_families") or [],
+        "blocked_families": candidate.get("blocked_families") or [],
+        "gate_results": gate_results,
+        "reason": candidate.get("reason"),
+    }
+
+
+def api_forex_execute_candidate():
+    body = request.get_json(force=True, silent=True) or {}
+    candidate = body.get("candidate")
+    dry_run = bool(body.get("dryRun", True))
+    if not isinstance(candidate, dict):
+        return _envelope(
+            data=None,
+            status="invalid_request",
+            diagnostics=[{"code": "MISSING_CANDIDATE"}],
+            success=False,
+            http=400,
+        )
+    action = str(candidate.get("action") or "")
+    if action not in {ACTION_BUY, ACTION_SELL, ACTION_FLATTEN, ACTION_REDUCE}:
+        return _envelope(
+            data=None,
+            status="invalid_request",
+            diagnostics=[{"code": "ACTION_NOT_EXECUTABLE", "action": action}],
+            success=False,
+            http=400,
+        )
+    failed = _candidate_failed_gates(candidate)
+    if failed:
+        return _envelope(
+            data=None,
+            status="blocked",
+            diagnostics=[{"code": "HARD_GATE_FAILED", "gates": failed}],
+            success=False,
+            http=403,
+        )
+    if not dry_run and not bool(candidate.get("tradable_now")) and action not in {ACTION_FLATTEN, ACTION_REDUCE}:
+        return _envelope(
+            data=None,
+            status="blocked",
+            diagnostics=[{"code": "CANDIDATE_NOT_TRADABLE"}],
+            success=False,
+            http=403,
+        )
+
+    if not dry_run:
+        from athena_fx.execution import default_fx_execution_deps, assert_fx_execution_allowed
+
+        allowed, reason = assert_fx_execution_allowed(default_fx_execution_deps())
+        if not allowed:
+            return _envelope(
+                data=None,
+                status="blocked",
+                diagnostics=[{"code": reason}],
+                success=False,
+                http=403,
+            )
+        if bool(CONFIG.get("FX_FACTOR_REQUIRE_VALIDATION_FOR_EXECUTION", True)):
+            run = _latest_completed_backtest()
+            validation = (run or {}).get("report", {}).get("validation") if run else None
+            if not isinstance(validation, dict) or validation.get("pass") is not True:
+                return _envelope(
+                    data=None,
+                    status="blocked",
+                    diagnostics=[{"code": "FX_FACTOR_VALIDATION_REQUIRED"}],
+                    success=False,
+                    http=403,
+                )
+
+    try:
+        from athena_fx.execution import (
+            close_fx_symbol_position,
+            execute_fx_decision,
+            fx_decision_to_execution_dict,
+        )
+
+        decision = _candidate_to_decision(candidate)
+        if action == ACTION_FLATTEN:
+            result = close_fx_symbol_position(
+                str(candidate.get("symbol") or ""),
+                dry_run=dry_run,
+            )
+            return _envelope(data=result)
+        if action == ACTION_REDUCE:
+            return _envelope(
+                data={
+                    "executed": False,
+                    "dry_run": dry_run,
+                    "reason": "REDUCE_NOT_SUPPORTED_BY_EXECUTOR",
+                    "symbol": candidate.get("symbol"),
+                },
+                status="blocked" if not dry_run else "ok",
+                http=501 if not dry_run else 200,
+                success=dry_run,
+            )
+        if dry_run:
+            signal = fx_decision_to_execution_dict(
+                decision,
+                entry_price=float(candidate.get("entry") or candidate.get("current_price") or 0),
+                sl=float(candidate.get("sl") or 0),
+                tp1=float(candidate.get("tp1") or 0),
+                tp2=float(candidate.get("tp2") or candidate.get("tp1") or 0),
+            )
+            return _envelope(
+                data={
+                    "executed": False,
+                    "dry_run": True,
+                    "reason": "dry_run",
+                    "symbol": candidate.get("symbol"),
+                    "signal": signal,
+                    "risk_result": {},
+                    "guardian_result": {},
+                }
+            )
+        result = execute_fx_decision(decision, dry_run=False)
+        return _envelope(data=result, success=bool(result.get("executed")), status="ok" if result.get("executed") else "blocked")
+    except Exception as exc:
+        log.exception("forex execute-candidate failed")
+        return _envelope(
+            data=None,
+            status="error",
+            diagnostics=[{"code": "execute_candidate_failed", "message": str(exc)}],
+            success=False,
+            http=500,
+        )
+
+
 def register_forex_factor_routes(app) -> None:
     rules = {rule.rule for rule in app.url_map.iter_rules()}
     endpoints = [
@@ -963,6 +1273,11 @@ def register_forex_factor_routes(app) -> None:
             api_forex_rebalance,
             ["POST"],
         ),
+        ("/api/forex/trading-status", "api_forex_trading_status", api_forex_trading_status, ["GET"]),
+        ("/api/forex/execution-status", "api_forex_execution_status", api_forex_trading_status, ["GET"]),
+        ("/api/forex/scan", "api_forex_scan", api_forex_scan, ["POST"]),
+        ("/api/forex/scan/latest", "api_forex_scan_latest", api_forex_scan_latest, ["GET"]),
+        ("/api/forex/execute-candidate", "api_forex_execute_candidate", api_forex_execute_candidate, ["POST"]),
     ]
     for rule, name, view, methods in endpoints:
         if rule not in rules:

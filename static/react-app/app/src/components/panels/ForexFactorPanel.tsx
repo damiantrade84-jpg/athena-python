@@ -10,6 +10,7 @@ import CotPositioningTab from './forexFactor/CotPositioningTab';
 import ReerValueTab from './forexFactor/ReerValueTab';
 import VolCostGatesTab from './forexFactor/VolCostGatesTab';
 import BacktestingTab from './forexFactor/BacktestingTab';
+import ScannerTab from './forexFactor/ScannerTab';
 import ExecutionTab from './forexFactor/ExecutionTab';
 import ValidationTab from './forexFactor/ValidationTab';
 import DiagnosticsTab from './forexFactor/DiagnosticsTab';
@@ -20,17 +21,19 @@ export default function ForexFactorPanel() {
       <div className="flex items-center gap-2 shrink-0">
         <Landmark className="h-5 w-5" style={{ color: FX_ACCENT }} />
         <h2 className="text-lg font-semibold">Forex Trading &amp; Backtesting</h2>
-        <Badge className="badge-neutral">RESEARCH</Badge>
-        <Badge variant="outline" className="text-[10px]">Demo execution</Badge>
+        <Badge className="badge-long">FACTOR LIVE</Badge>
+        <Badge variant="outline" className="text-[10px]">SCAN</Badge>
+        <Badge variant="outline" className="text-[10px]">DEMO EXECUTION</Badge>
+        <Badge variant="outline" className="text-[10px]">EXECUTION OFF</Badge>
       </div>
 
       <p className="text-[11px] text-muted-foreground shrink-0">
-        G8 factor lane — carry, momentum, value, COT overlay, vol/cost gates, backtests,
-        and optional demo MT5 execution (config-gated).
+        Factor-first Forex trading cockpit - scan G8 FX pairs, validate hard gates, generate trade candidates, backtest factor families, and execute demo/paper trades through the existing risk engine.
       </p>
 
-      <Tabs defaultValue="overview" className="flex-1 min-h-0 flex flex-col">
+      <Tabs defaultValue="scanner" className="flex-1 min-h-0 flex flex-col">
         <TabsList className="flex flex-wrap h-auto gap-0.5 shrink-0">
+          <TabsTrigger value="scanner" className="text-xs">Scanner</TabsTrigger>
           <TabsTrigger value="overview" className="text-xs">Overview</TabsTrigger>
           <TabsTrigger value="signals" className="text-xs">Factor Signals</TabsTrigger>
           <TabsTrigger value="swap" className="text-xs">Swap Audit</TabsTrigger>
@@ -45,6 +48,7 @@ export default function ForexFactorPanel() {
         </TabsList>
 
         <div className="flex-1 min-h-0 overflow-auto mt-2">
+          <TabsContent value="scanner" className="mt-0"><ScannerTab /></TabsContent>
           <TabsContent value="overview" className="mt-0"><OverviewTab /></TabsContent>
           <TabsContent value="signals" className="mt-0"><FactorSignalsTab /></TabsContent>
           <TabsContent value="swap" className="mt-0"><SwapAuditTab /></TabsContent>

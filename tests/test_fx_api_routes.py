@@ -441,3 +441,88 @@ def test_backtest_run_and_readback(fx_client):
     read_body = read.get_json()
     assert read_body["success"] is True
     assert read_body["data"]["run_id"] == run_id
+
+
+def test_forex_scan_endpoint_returns_candidates(fx_client, monkeypatch):
+    client, _seed, _db = fx_client
+
+    def fake_scan_forex(**kwargs):
+        return {
+            "scan_id": "scan-test",
+            "as_of_date": "2026-01-15",
+            "generated_at": "2026-01-15T12:00:00+00:00",
+            "summary": {
+                "symbols_scanned": 1,
+                "tradable_count": 1,
+                "blocked_count": 0,
+                "no_trade_count": 0,
+                "buy_count": 1,
+                "sell_count": 0,
+                "execution_enabled": False,
+            },
+            "candidates": [
+                {
+                    "scan_id": "scan-test",
+                    "symbol": "EURUSD",
+                    "action": ACTION_BUY,
+                    "direction": "LONG",
+                    "tradable_now": True,
+                    "entry": 1.1002,
+                    "sl": 1.0952,
+                    "tp1": 1.1102,
+                    "tp2": 1.1152,
+                    "rr1": 2.0,
+                    "reason": "2 families aligned long",
+                    "gate_results": {"cost": {"result": "pass", "reason_code": "cost_ok"}},
+                }
+            ],
+            "diagnostics": [],
+            "warnings": [],
+        }
+
+    monkeypatch.setattr("athena_fx.scanner.scan_forex", fake_scan_forex)
+    resp = client.post(
+        "/api/forex/scan",
+        json={"symbols": ["EURUSD"], "refreshDecisions": False},
+    )
+    body = resp.get_json()
+    _envelope_keys(body)
+    assert resp.status_code == 200
+    assert body["success"] is True
+    assert body["data"]["scan_id"] == "scan-test"
+    assert body["data"]["candidates"][0]["action"] == ACTION_BUY
+
+    latest = client.get("/api/forex/scan/latest").get_json()
+    assert latest["data"]["scan_id"] == "scan-test"
+
+
+def test_forex_scan_endpoint_includes_missing_data_diagnostics(empty_fx_client, monkeypatch):
+    import athena_app.api.routes_forex_factor as routes
+
+    monkeypatch.setitem(routes.CONFIG, "FX_FACTOR_SCAN_REFRESH_DECISIONS_DEFAULT", False)
+    resp = empty_fx_client.post(
+        "/api/forex/scan",
+        json={"symbols": ["EURUSD"], "refreshDecisions": False},
+    )
+    body = resp.get_json()
+    assert resp.status_code == 200
+    assert body["success"] is True
+    assert any(d.get("code") == "MISSING_DECISION" for d in body["diagnostics"])
+    candidate = body["data"]["candidates"][0]
+    assert candidate["action"] == ACTION_NO_TRADE
+    assert candidate["tradable_now"] is False
+
+
+def test_trading_status_endpoint_reports_safe_defaults(fx_client, monkeypatch):
+    import athena_app.api.routes_forex_factor as routes
+
+    client, _seed, _db = fx_client
+    monkeypatch.setitem(routes.CONFIG, "EXECUTION_ENABLED", False)
+    monkeypatch.setitem(routes.CONFIG, "FX_FACTOR_EXECUTION_ENABLED", False)
+    monkeypatch.setitem(routes.CONFIG, "MT5_EXECUTION_ENABLED", True)
+    resp = client.get("/api/forex/trading-status")
+    body = resp.get_json()
+    assert resp.status_code == 200
+    assert body["data"]["can_dry_run"] is True
+    assert body["data"]["can_demo_execute"] is False
+    assert "FX_FACTOR_EXECUTION_DISABLED" in body["data"]["block_reasons"]

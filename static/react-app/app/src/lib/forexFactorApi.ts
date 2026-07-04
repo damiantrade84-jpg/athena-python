@@ -268,6 +268,99 @@ export interface DiagnosticsData {
   parity?: Record<string, unknown>;
 }
 
+export interface ForexGateResult {
+  result?: string;
+  reason_code?: string;
+  recommended_action?: string;
+  size_multiplier?: number;
+  numeric_inputs?: Record<string, unknown>;
+}
+
+export interface ForexTradeCandidate {
+  scan_id?: string;
+  symbol?: string;
+  action?: 'BUY' | 'SELL' | 'NO_TRADE' | 'REDUCE' | 'FLATTEN' | string;
+  direction?: 'LONG' | 'SHORT' | 'NONE' | string | null;
+  tradable_now?: boolean;
+  factor_eligible?: boolean;
+  execution_eligible?: boolean;
+  current_price?: number | null;
+  bid?: number | null;
+  ask?: number | null;
+  spread_pips?: number | null;
+  atr_pips?: number | null;
+  entry?: number | null;
+  sl?: number | null;
+  tp1?: number | null;
+  tp2?: number | null;
+  rr1?: number | null;
+  target_weight?: number | null;
+  size_multiplier?: number | null;
+  aligned_families?: string[];
+  blocked_families?: string[];
+  family_scores?: Record<string, FactorScoreEntry>;
+  gate_results?: Record<string, ForexGateResult>;
+  gate_summary?: string;
+  cot_overlay?: Record<string, unknown> | null;
+  cost_diagnostics?: Record<string, unknown>;
+  execution_preflight?: {
+    execution_allowed?: boolean;
+    execution_block_reason?: string | null;
+    [key: string]: unknown;
+  };
+  existing_position?: Record<string, unknown> | null;
+  reason?: string;
+  diagnostics?: ForexDiagnostic[];
+  last_factor_decision_date?: string | null;
+  generated_at?: string | null;
+}
+
+export interface ForexScanData {
+  scan_id?: string;
+  as_of_date?: string | null;
+  generated_at?: string;
+  summary?: {
+    symbols_scanned?: number;
+    tradable_count?: number;
+    blocked_count?: number;
+    no_trade_count?: number;
+    buy_count?: number;
+    sell_count?: number;
+    execution_enabled?: boolean;
+  };
+  candidates?: ForexTradeCandidate[];
+  diagnostics?: ForexDiagnostic[];
+  warnings?: string[];
+}
+
+export interface ForexTradingStatusData {
+  market_open?: boolean;
+  execution_enabled?: boolean;
+  fx_factor_execution_enabled?: boolean;
+  mt5_execution_enabled?: boolean;
+  kill_switch?: boolean;
+  executor_mode?: string;
+  account_mode?: string;
+  account?: Record<string, unknown> | null;
+  auto_trade_enabled?: boolean;
+  open_positions?: Array<Record<string, unknown>>;
+  latest_scan_at?: string | null;
+  latest_decision_date?: string | null;
+  can_dry_run?: boolean;
+  can_demo_execute?: boolean;
+  block_reasons?: string[];
+}
+
+export interface ExecuteCandidateData {
+  executed?: boolean;
+  dry_run?: boolean;
+  reason?: string;
+  symbol?: string;
+  signal?: Record<string, unknown>;
+  risk_result?: Record<string, unknown>;
+  guardian_result?: Record<string, unknown>;
+}
+
 // ── API functions ───────────────────────────────────────────────────────────
 
 export function getFactorStatus() {
@@ -359,6 +452,45 @@ export function postForexRebalance(payload: {
       dryRun: payload.dryRun ?? false,
       symbols: payload.symbols,
       as_of: payload.as_of,
+    }),
+  });
+}
+
+export function postForexScan(payload: {
+  symbols?: string[];
+  refreshDecisions?: boolean;
+  includeBlocked?: boolean;
+  strictFactorData?: boolean;
+  executionMode?: string;
+  as_of?: string;
+} = {}) {
+  return forexRequest<ForexScanData>('/api/forex/scan', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+}
+
+export function getLatestForexScan() {
+  return forexRequest<ForexScanData | { scan?: null }>('/api/forex/scan/latest');
+}
+
+export function getForexTradingStatus() {
+  return forexRequest<ForexTradingStatusData>('/api/forex/trading-status');
+}
+
+export function postForexExecuteCandidate(payload: {
+  candidate: ForexTradeCandidate;
+  dryRun?: boolean;
+  confirm?: boolean;
+}) {
+  return forexRequest<ExecuteCandidateData>('/api/forex/execute-candidate', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      candidate: payload.candidate,
+      dryRun: payload.dryRun ?? true,
+      confirm: payload.confirm ?? true,
     }),
   });
 }
