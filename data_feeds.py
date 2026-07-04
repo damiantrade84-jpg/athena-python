@@ -52,6 +52,15 @@ _BYBIT_FUNDING_CACHE_TTL = 300  # 5 minutes, same as Binance
 _oi_cache: dict = {}
 _OI_CACHE_TTL = 300
 
+# Live Bybit kline cache — short TTL that only collapses duplicate REST calls
+# within a scan (Engine C candles + ATR-for-levels re-fetch the same series).
+# Point-in-time fetches (end_ms set) are never cached. Confirmed flags are
+# recomputed at read time so a cache hit is indistinguishable from a fresh
+# fetch of the same rows; worst case a newly closed bar appears up to TTL
+# seconds late, which confirmed-only consumers tolerate (fail-conservative).
+_bybit_kline_cache: dict[tuple[str, str, int], tuple[list[dict], float]] = {}
+_BYBIT_KLINE_CACHE_TTL = 30.0  # seconds
+
 # Historical series for backtests (longer TTL — data is immutable once settled)
 _funding_history_cache: dict[str, tuple[Any, float]] = {}
 _FUNDING_HISTORY_CACHE_TTL = 3600.0
@@ -69,6 +78,11 @@ def clear_derivative_history_caches() -> None:
     """Clear in-memory caches for historical funding/OI (tests)."""
     _funding_history_cache.clear()
     _oi_history_cache.clear()
+
+
+def clear_bybit_kline_cache() -> None:
+    """Clear the live Bybit kline TTL cache (tests)."""
+    _bybit_kline_cache.clear()
 
 
 def _bybit_interval(tf: str) -> str | None:
@@ -129,20 +143,46 @@ def _bybit_kline_to_candle(
     }
 
 
+def _bybit_kline_cache_copy(candles: list[dict], tf: str) -> list[dict]:
+    """Copy cached klines with confirmed/closed flags recomputed for 'now'."""
+    interval_ms = _bybit_interval_ms(tf)
+    now_ms = int(time.time() * 1000)
+    out = []
+    for candle in candles:
+        row = dict(candle)
+        if interval_ms:
+            confirmed = int(row.get("open_time") or 0) + interval_ms <= now_ms
+            row["confirmed"] = confirmed
+            row["closed"] = confirmed
+        out.append(row)
+    return out
+
+
 def _fetch_bybit_klines(
     symbol: str, tf: str, limit: int, *, end_ms: int | None = None
 ) -> list[dict] | None:
-    """Fetch Bybit linear USDT perpetual klines as normalized candles."""
+    """Fetch Bybit linear USDT perpetual klines as normalized candles.
+
+    Live fetches (``end_ms is None``) are served from a short TTL cache so
+    repeated same-series requests inside one scan don't multiply REST calls.
+    Point-in-time fetches always go to the API.
+    """
     interval = _bybit_interval(tf)
     if not symbol or interval is None:
         return None
     bybit_symbol = symbol.replace("/", "").upper()
+    limit_i = min(max(int(limit or 1), 1), 1000)
+    cache_key = (bybit_symbol, str(tf or "").upper(), limit_i)
+    if end_ms is None:
+        cached = _bybit_kline_cache.get(cache_key)
+        if cached is not None and time.time() < cached[1]:
+            return _bybit_kline_cache_copy(cached[0], tf)
     category = "linear"
     params = {
         "category": category,
         "symbol": bybit_symbol,
         "interval": interval,
-        "limit": str(min(max(int(limit or 1), 1), 1000)),
+        "limit": str(limit_i),
     }
     if end_ms is not None:
         params["end"] = str(int(end_ms))
@@ -168,6 +208,12 @@ def _fetch_bybit_klines(
             for row in rows
         ]
         candles.sort(key=lambda c: int(c.get("open_time", 0)))
+        if candles and end_ms is None:
+            # Store private copies so caller-side mutation cannot taint the cache.
+            _bybit_kline_cache[cache_key] = (
+                [dict(c) for c in candles],
+                time.time() + _BYBIT_KLINE_CACHE_TTL,
+            )
         return candles or None
     except Exception as exc:
         log.debug("[BYBIT-KLINE] %s %s fetch failed: %s", symbol, tf, exc)

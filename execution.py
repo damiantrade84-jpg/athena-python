@@ -7,7 +7,11 @@ import sqlite3
 import time
 import traceback
 import uuid
-from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
+from concurrent.futures import (
+    ThreadPoolExecutor,
+    TimeoutError as FuturesTimeoutError,
+    as_completed,
+)
 from datetime import datetime, timezone
 
 from flask import Flask, jsonify, request
@@ -19,6 +23,10 @@ from athena_app.api.routes_execution import (
 )
 from athena_app.repositories.audit_repo import insert_manual_error
 from athena_app.services.candle_service import recompute_levels_for_style
+from athena_app.services.crypto_signal_feed import (
+    fetch_crypto_signal_candles,
+    resolve_crypto_signal_feed,
+)
 from athena_runtime import (
     abort_signal_execution,
     begin_signal_execution,
@@ -31,7 +39,7 @@ from candles_cache import (
     extract_candles,
     get_candle_fetch_meta,
 )
-from config import _json_safe, scan_candle_limits
+from config import _json_safe, get_optimal_workers, scan_candle_limits
 from engine_c import compute_consensus, normalise_engine_a
 from execution_lifecycle import _demo_broker_execution_requested, run_managed_execution
 from factor_scoring import make_regime_smoothing_context
@@ -188,6 +196,39 @@ def _engine_b_atr_for_scan_levels(
             return 0.0, "bybit_unavailable"
 
     return float(atr or 0.0), tf
+
+
+def _fetch_engine_c_signal_candles(runtime, pair: dict, tf: str, limit: int):
+    """Fetch Engine C scan candles honouring the Engine A/B crypto signal feed.
+
+    Mirrors scanner._fetch_ab_crypto_signal_candles / the api_scan_naked A5 fix
+    so Engine C scores crypto on the same venue (ENGINE_AB_CRYPTO_SIGNAL_FEED,
+    default bybit) as the standalone Engine A/B scans, instead of falling
+    through to fetch_candles (Binance for source=binance pairs). Non-crypto
+    pairs pass through to runtime.fetch_candles unchanged.
+
+    Returns (candles, meta); meta is None on the passthrough path.
+    """
+    cfg = getattr(runtime, "CONFIG", {}) or {}
+    if (
+        str((pair or {}).get("type") or "").lower() != "crypto"
+        or resolve_crypto_signal_feed("AB", cfg) == "binance"
+    ):
+        return runtime.fetch_candles(pair, tf, limit), None
+
+    result = fetch_crypto_signal_candles(
+        pair,
+        tf,
+        limit,
+        engine="AB",
+        config=cfg,
+        default_fetch=lambda pair_arg, tf_arg, limit_arg: runtime.fetch_candles(
+            pair_arg, tf_arg, limit_arg
+        ),
+        bybit_fetch=getattr(runtime, "fetch_bybit_klines", None),
+        bybit_paginated_fetch=getattr(runtime, "fetch_bybit_klines_paginated", None),
+    )
+    return result.candles, result.meta
 
 
 def _engine_c_best_score(confidence_b: dict | None) -> float:
@@ -1634,13 +1675,31 @@ def api_engine_c_scan():
     _regime_context = make_regime_smoothing_context()
     _EC_PAIR_TIMEOUT = 30  # seconds max per pair
 
-    for pair in candidate_pairs:
+    # BTC bias is scan-wide (a pure function of BTC D1 candles) — compute it
+    # once up front instead of once per crypto pair inside the loop.
+    _btc_bias_crypto = "neutral"
+    if any(str(p.get("type", "")).lower() == "crypto" for p in candidate_pairs):
+        try:
+            _btc_bias_crypto = _r.current_btc_bias()
+        except Exception as _bias_err:
+            _r.log.warning(
+                "[ENGINE C] BTC bias unavailable, using neutral: %s", _bias_err
+            )
+
+    def _scan_pair_engines(pair):
+        """Fetch candles and run the Engine A / Engine B legs for one pair.
+
+        Worker-thread safe: no Flask request access, no shared scan-state
+        mutation (NakedEngine registry context is threading.local, mirroring
+        scanner.py's pooled use). Returns ("skip", skip_entry) or
+        ("ok", payload); consensus scoring stays on the request thread.
+        """
         _pair_start = time.time()
         try:
             symbol = pair.get("symbol", pair.get("display"))
             display = pair.get("display", symbol)
             ptype = pair.get("type", "")
-            btc_bias = _r.current_btc_bias() if ptype == "crypto" else "neutral"
+            btc_bias = _btc_bias_crypto if ptype == "crypto" else "neutral"
             _pair_score_group = get_pair_score_group(pair)
 
             engine_a_style = _r.resolve_scan_style(
@@ -1662,15 +1721,37 @@ def api_engine_c_scan():
                 .get(display, {})
                 .get("candles")
             )
+            # Crypto candles route through the same A/B signal-feed resolver as
+            # scanner.py and api_scan_naked (ENGINE_AB_CRYPTO_SIGNAL_FEED, default
+            # bybit) so Engine C scores the same venue as standalone A/B scans.
+            # The intermarket H4 preload comes from fetch_candles (Binance for
+            # crypto), so it is only reused when the Bybit feed is not active
+            # (mirrors scanner._fetch_scan_h4_candles).
+            _crypto_bybit_signal_feed = (
+                str(ptype or "").lower() == "crypto"
+                and resolve_crypto_signal_feed("AB", _r.CONFIG or {}) == "bybit"
+            )
+            _d1_res, _d1_meta = _fetch_engine_c_signal_candles(
+                _r, pair, "D1", _lim["D1"]
+            )
+            if _im_h4 and not _crypto_bybit_signal_feed:
+                _h4_res, _h4_meta = _im_h4, None
+            else:
+                _h4_res, _h4_meta = _fetch_engine_c_signal_candles(
+                    _r, pair, "H4", _lim["H4"]
+                )
+            _h1_res, _h1_meta = _fetch_engine_c_signal_candles(
+                _r, pair, "H1", _lim["H1"]
+            )
             raw_candles = {
-                "D1": _r.fetch_candles(pair, "D1", _lim["D1"]),
-                "H4": _im_h4 or _r.fetch_candles(pair, "H4", _lim["H4"]),
-                "H1": _r.fetch_candles(pair, "H1", _lim["H1"]),
+                "D1": _d1_res,
+                "H4": _h4_res,
+                "H1": _h1_res,
             }
             fetch_meta = {
-                "D1": get_candle_fetch_meta(pair, "D1", _lim["D1"]),
-                "H4": get_candle_fetch_meta(pair, "H4", _lim["H4"]),
-                "H1": get_candle_fetch_meta(pair, "H1", _lim["H1"]),
+                "D1": _d1_meta or get_candle_fetch_meta(pair, "D1", _lim["D1"]),
+                "H4": _h4_meta or get_candle_fetch_meta(pair, "H4", _lim["H4"]),
+                "H1": _h1_meta or get_candle_fetch_meta(pair, "H1", _lim["H1"]),
             }
             rate_limited_tfs = [
                 tf
@@ -1683,15 +1764,12 @@ def api_engine_c_scan():
                 and not raw_candles.get(tf)
             ]
             if rate_limited_tfs:
-                results["skipped"].append(
-                    _engine_c_skip_entry(
-                        display,
-                        "Rate limited",
-                        code="rate_limited",
-                        detail=f"Rate limited on {', '.join(rate_limited_tfs)}",
-                    )
+                return "skip", _engine_c_skip_entry(
+                    display,
+                    "Rate limited",
+                    code="rate_limited",
+                    detail=f"Rate limited on {', '.join(rate_limited_tfs)}",
                 )
-                continue
 
             # Fetch candles ONCE — Engine A uses analyze_pair (confirmed inside);
             # Engine B uses bucket-aware confirmed series (scanner parity).
@@ -1706,7 +1784,7 @@ def api_engine_c_scan():
                     raw = raw_candles.get(tf) or []
                 else:
                     limit = _lim.get(tf, _lim.get("H4", 0))
-                    raw = _r.fetch_candles(pair, tf, limit)
+                    raw, _ = _fetch_engine_c_signal_candles(_r, pair, tf, limit)
                 _tf_map[tf] = engine_b_confirmed_candles_from_raw(pair, tf, raw)
             d1 = _tf_map.get("D1", [])
             zone_candles = _tf_map.get(_zone_tf, [])
@@ -1734,26 +1812,20 @@ def api_engine_c_scan():
 
             if (time.time() - _pair_start) > _EC_PAIR_TIMEOUT:
                 _r.log.warning(f"[ENGINE C] {display}: timeout after candle fetch ({_EC_PAIR_TIMEOUT}s)")
-                results["skipped"].append(
-                    _engine_c_skip_entry(
-                        display,
-                        "Timeout",
-                        code="timeout",
-                        detail=f"Exceeded {_EC_PAIR_TIMEOUT}s after candle fetch",
-                    )
+                return "skip", _engine_c_skip_entry(
+                    display,
+                    "Timeout",
+                    code="timeout",
+                    detail=f"Exceeded {_EC_PAIR_TIMEOUT}s after candle fetch",
                 )
-                continue
 
             if len(zone_candles) < 10 or len(entry_candles) < 10:
-                results["skipped"].append(
-                    _engine_c_skip_entry(
-                        display,
-                        "Insufficient data",
-                        code="insufficient_data",
-                        detail=f"{_zone_tf}={len(zone_candles)}, {_entry_tf}={len(entry_candles)}",
-                    )
+                return "skip", _engine_c_skip_entry(
+                    display,
+                    "Insufficient data",
+                    code="insufficient_data",
+                    detail=f"{_zone_tf}={len(zone_candles)}, {_entry_tf}={len(entry_candles)}",
                 )
-                continue
 
             current_price = float(sig_a.get("price") or entry_candles[-1]["close"])
             atr, atr_source = _engine_b_atr_for_scan_levels(
@@ -1771,15 +1843,12 @@ def api_engine_c_scan():
                     if atr_source == "bybit_unavailable"
                     else f"ATR unavailable on {_atr_tf}"
                 )
-                results["skipped"].append(
-                    _engine_c_skip_entry(
-                        display,
-                        "Zero ATR",
-                        code="zero_atr",
-                        detail=_atr_detail,
-                    )
+                return "skip", _engine_c_skip_entry(
+                    display,
+                    "Zero ATR",
+                    code="zero_atr",
+                    detail=_atr_detail,
                 )
-                continue
 
             _ec_d1_snap = {}
             _ec_h4_snap = {}
@@ -1872,6 +1941,90 @@ def api_engine_c_scan():
                 sig_b_best = {"structural_verdict": "ERROR", "direction": None}
             if conf_b_best is None:
                 conf_b_best = {"score": 0, "max_possible": 5, "pct": 0}
+
+            return "ok", {
+                "symbol": symbol,
+                "display": display,
+                "ptype": ptype,
+                "pair_score_group": _pair_score_group,
+                "engine_a_style": engine_a_style,
+                "resolved_style_b": resolved_style_b,
+                "zone_tf": _zone_tf,
+                "entry_tf": _entry_tf,
+                "atr_tf": _atr_tf,
+                "sig_a": sig_a,
+                "engine_a_returned_none": _engine_a_returned_none,
+                "sig_b_best": sig_b_best,
+                "conf_b_best": conf_b_best,
+                "raw_sig_b": raw_sig_b,
+                "raw_conf_b": raw_conf_b,
+                "raw_b_direction": raw_b_direction,
+                "raw_min_score_scaled": raw_min_score_scaled,
+                "raw_gate_ok": raw_gate_ok,
+                "current_price": current_price,
+                "atr": atr,
+                "regime_label": regime_label,
+            }
+        except Exception as e:
+            _r.log.error(f"[ENGINE C] Error on {pair.get('display')}: {e}")
+            return "skip", _engine_c_skip_entry(
+                pair.get("display"),
+                "Error",
+                code="exception",
+                detail=str(e),
+            )
+
+    # Per-pair fetch/analysis is REST-bound (Binance/Bybit/EODHD/MT5), which is
+    # what made sequential crypto scans slow. Run pairs on a worker pool like
+    # scanner.py does; consensus scoring and classification below stay on the
+    # request thread and preserve original candidate order.
+    _max_workers = min(
+        len(candidate_pairs),
+        get_optimal_workers(
+            configured_max=int((_r.CONFIG or {}).get("SCAN_MAX_WORKERS", 8) or 8),
+            conservative=True,
+        ),
+    )
+    outcomes: list = [None] * len(candidate_pairs)
+    if _max_workers <= 1:
+        for _idx, _pair_item in enumerate(candidate_pairs):
+            outcomes[_idx] = _scan_pair_engines(_pair_item)
+    else:
+        with ThreadPoolExecutor(max_workers=_max_workers) as _pool:
+            _futures = {
+                _pool.submit(_scan_pair_engines, _pair_item): _idx
+                for _idx, _pair_item in enumerate(candidate_pairs)
+            }
+            for _fut in as_completed(_futures):
+                outcomes[_futures[_fut]] = _fut.result()
+
+    for pair, _outcome in zip(candidate_pairs, outcomes):
+        _kind, _payload = _outcome
+        if _kind == "skip":
+            results["skipped"].append(_payload)
+            continue
+        try:
+            symbol = _payload["symbol"]
+            display = _payload["display"]
+            ptype = _payload["ptype"]
+            _pair_score_group = _payload["pair_score_group"]
+            engine_a_style = _payload["engine_a_style"]
+            resolved_style_b = _payload["resolved_style_b"]
+            _zone_tf = _payload["zone_tf"]
+            _entry_tf = _payload["entry_tf"]
+            _atr_tf = _payload["atr_tf"]
+            sig_a = _payload["sig_a"]
+            _engine_a_returned_none = _payload["engine_a_returned_none"]
+            sig_b_best = _payload["sig_b_best"]
+            conf_b_best = _payload["conf_b_best"]
+            raw_sig_b = _payload["raw_sig_b"]
+            raw_conf_b = _payload["raw_conf_b"]
+            raw_b_direction = _payload["raw_b_direction"]
+            raw_min_score_scaled = _payload["raw_min_score_scaled"]
+            raw_gate_ok = _payload["raw_gate_ok"]
+            current_price = _payload["current_price"]
+            atr = _payload["atr"]
+            regime_label = _payload["regime_label"]
 
             consensus = compute_consensus(
                 signal_a=sig_a,

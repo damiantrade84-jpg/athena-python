@@ -490,3 +490,233 @@ def test_engine_c_scan_optional_pairs_filter(monkeypatch):
         execution.api_engine_c_scan()
 
     assert scanned == ["GBP/USD"]
+
+
+def test_engine_c_scan_multi_pair_parallel_preserves_candidate_order(monkeypatch):
+    """Multi-pair scans run on a worker pool; results must keep candidate order.
+
+    Regression for the 2026-07-04 parallelization: per-pair fetch/analysis moved
+    to threads, consensus/classification stays on the request thread and must
+    process pairs in the original candidate order (stable sort on equal
+    conviction keeps that order in the response buckets).
+    """
+    p1 = {"display": "EUR/USD", "symbol": "EURUSD", "type": "forex", "enabled": True}
+    p2 = {"display": "GBP/USD", "symbol": "GBPUSD", "type": "forex", "enabled": True}
+    p3 = {"display": "USD/JPY", "symbol": "USDJPY", "type": "forex", "enabled": True}
+    bars_by_tf = {
+        "D1": _make_bars(count=35, base=1.1000),
+        "H4": _make_bars(count=35, base=1.0900),
+        "H1": _make_bars(count=35, base=1.0800),
+    }
+    scanned: list[str] = []
+
+    def _spy_analyze_pair(pair, btc_bias, **kwargs):  # noqa: ARG001
+        scanned.append(str(pair.get("display") or pair.get("symbol") or "?"))
+        return {"direction": "LONG", "price": 1.1, "atr": 0.001}
+
+    runtime = SimpleNamespace(
+        ALL_PAIRS=[p1, p2, p3],
+        disabled_pairs=set(),
+        current_btc_bias=lambda: "neutral",
+        resolve_scan_style=lambda style, _pair: style,
+        normalize_style=lambda style: style,
+        analyze_pair=_spy_analyze_pair,
+        naked_scan_style_profile=lambda requested_style, score_group=None, asset_type=None: (
+            "intraday",
+            {
+                "min_score": 1.0,
+                "fallback_rr": 2.0,
+                "min_rr": 1.0,
+                "zone_tf": "H4",
+                "entry_tf": "H1",
+                "atr_tf": "H4",
+            },
+        ),
+        CONFIG={"ENGINE_B_FOREX_STRUCTURE_TF": "D1", "SCAN_MAX_WORKERS": 4},
+        fetch_candles=lambda pair, tf, _limit: list(bars_by_tf[tf]),
+        engine_b_regime_label=lambda *_a, **_k: "TRENDING",
+        insert_shadow_from_engine_c=lambda *_a, **_k: None,
+        log=SimpleNamespace(
+            warning=lambda *args, **kwargs: None,
+            error=lambda *args, **kwargs: None,
+            info=lambda *args, **kwargs: None,
+        ),
+    )
+
+    class StubNaked:
+        def set_registry_context(self, *_a, **_k):
+            return self
+
+        def analyze_structure(self, *_a, **_k):
+            return {"structural_verdict": "CLEAR", "direction": "LONG"}
+
+        def calculate_confidence(self, *_a, **_k):
+            return {
+                "score": 5.0,
+                "max_possible": 6.0,
+                "pct": 80.0,
+                "passed": True,
+                "rr": 2.0,
+                "structure_ok": True,
+                "zone_ok": True,
+                "trigger_ok": True,
+                "location_ok": True,
+            }
+
+    def _stub_consensus(**kwargs):
+        return {"verdict": "ALIGNED", "conviction": 0.5, "trade": False, "tier": "MEDIUM"}
+
+    monkeypatch.setattr(execution, "rt", lambda: runtime)
+    monkeypatch.setattr(execution, "NakedEngine", StubNaked)
+    monkeypatch.setattr(
+        execution,
+        "scan_candle_limits",
+        lambda: {"D1": len(bars_by_tf["D1"]), "H4": len(bars_by_tf["H4"]), "H1": len(bars_by_tf["H1"])},
+    )
+    monkeypatch.setattr(
+        execution,
+        "calc_indicators_with_normalized",
+        lambda _candles, _ptype: {"snap": {"atr": 0.002, "close": 1.1}},
+    )
+    monkeypatch.setattr(execution, "compute_consensus", _stub_consensus)
+    monkeypatch.setattr(execution, "get_pair_score_group", lambda _p: "forex_majors")
+
+    app = Flask(__name__)
+    with app.test_request_context(
+        "/api/engine-c-scan",
+        method="POST",
+        json={"assetClass": "forex", "style": "intraday"},
+    ):
+        response = execution.api_engine_c_scan()
+
+    data = response.get_json()
+
+    # All pairs analysed (worker order may vary — that's the point of the pool).
+    assert sorted(scanned) == ["EUR/USD", "GBP/USD", "USD/JPY"]
+    # Classification preserved candidate order despite parallel execution.
+    assert [row["display"] for row in data["aligned"]] == [
+        "EUR/USD",
+        "GBP/USD",
+        "USD/JPY",
+    ]
+    assert data["skipped"] == []
+
+
+def test_engine_c_scan_crypto_uses_ab_signal_feed_bybit(monkeypatch):
+    """Crypto candles must honour ENGINE_AB_CRYPTO_SIGNAL_FEED=bybit.
+
+    Regression for the 2026-07-04 parity fix: Engine C previously fell through
+    to runtime.fetch_candles (Binance for source=binance pairs) while the
+    standalone A/B scans fetched Bybit klines, so the same crypto pair could
+    score on different venues per scan surface.
+    """
+    pair = {
+        "display": "BTC/USD",
+        "symbol": "BTCUSDT",
+        "type": "crypto",
+        "source": "binance",
+        "enabled": True,
+    }
+    bars = _make_bars(count=35, base=50000.0)
+    binance_fetch_tfs: list[str] = []
+    bybit_calls: list[tuple[str, str, int]] = []
+
+    def _fake_fetch_candles(_pair, tf, _limit):
+        binance_fetch_tfs.append(tf)
+        return list(bars)
+
+    def _fake_bybit_klines(symbol, tf, limit):
+        bybit_calls.append((symbol, tf, limit))
+        return list(bars)
+
+    runtime = SimpleNamespace(
+        ALL_PAIRS=[pair],
+        disabled_pairs=set(),
+        current_btc_bias=lambda: "neutral",
+        resolve_scan_style=lambda style, _pair: style,
+        normalize_style=lambda style: style,
+        analyze_pair=lambda _pair, _btc_bias, **kwargs: {
+            "direction": "LONG",
+            "price": 50010.0,
+            "atr": 120.0,
+        },
+        naked_scan_style_profile=lambda requested_style, score_group=None, asset_type=None: (
+            "intraday",
+            {
+                "min_score": 1.0,
+                "fallback_rr": 2.0,
+                "min_rr": 1.0,
+                "zone_tf": "H4",
+                "entry_tf": "H1",
+                "atr_tf": "H4",
+            },
+        ),
+        CONFIG={"ENGINE_AB_CRYPTO_SIGNAL_FEED": "bybit"},
+        fetch_candles=_fake_fetch_candles,
+        fetch_bybit_klines=_fake_bybit_klines,
+        engine_b_regime_label=lambda *_a, **_k: "TRENDING",
+        insert_shadow_from_engine_c=lambda *_a, **_k: None,
+        log=SimpleNamespace(
+            warning=lambda *args, **kwargs: None,
+            error=lambda *args, **kwargs: None,
+            info=lambda *args, **kwargs: None,
+        ),
+    )
+
+    class StubNaked:
+        def set_registry_context(self, *_a, **_k):
+            return self
+
+        def analyze_structure(self, *_a, **_k):
+            return {"structural_verdict": "CLEAR", "direction": "LONG"}
+
+        def calculate_confidence(self, *_a, **_k):
+            return {
+                "score": 5.0,
+                "max_possible": 6.0,
+                "pct": 80.0,
+                "passed": True,
+                "rr": 2.0,
+                "structure_ok": True,
+                "zone_ok": True,
+                "trigger_ok": True,
+                "location_ok": True,
+            }
+
+    def _stub_consensus(**kwargs):
+        return {"verdict": "ALIGNED", "conviction": 0.5, "trade": False, "tier": "MEDIUM"}
+
+    monkeypatch.setattr(execution, "rt", lambda: runtime)
+    monkeypatch.setattr(execution, "NakedEngine", StubNaked)
+    monkeypatch.setattr(
+        execution,
+        "scan_candle_limits",
+        lambda: {"D1": len(bars), "H4": len(bars), "H1": len(bars)},
+    )
+    monkeypatch.setattr(
+        execution,
+        "calc_indicators_with_normalized",
+        lambda _candles, _ptype: {"snap": {"atr": 120.0, "close": 50010.0}},
+    )
+    monkeypatch.setattr(execution, "compute_consensus", _stub_consensus)
+    monkeypatch.setattr(execution, "get_pair_score_group", lambda _p: "crypto_majors")
+
+    app = Flask(__name__)
+    with app.test_request_context(
+        "/api/engine-c-scan",
+        method="POST",
+        json={"assetClass": "crypto", "style": "intraday"},
+    ):
+        response = execution.api_engine_c_scan()
+
+    data = response.get_json()
+
+    # Bybit fed all three scan timeframes for the crypto pair.
+    assert {(sym, tf) for sym, tf, _limit in bybit_calls} == {
+        ("BTCUSDT", "D1"),
+        ("BTCUSDT", "H4"),
+        ("BTCUSDT", "H1"),
+    }
+    # No fallback to the Binance fetch_candles path for candles.
+    assert binance_fetch_tfs == []
+    assert [row["display"] for row in data["aligned"]] == ["BTC/USD"]

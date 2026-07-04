@@ -558,17 +558,23 @@ def resolve_sl(
     candidates = []
     max_sl_dist = atr * 2.5 if atr > 0 else float("inf")
 
+    def _sl_side_ok(sl_val: float) -> bool:
+        # SL must sit on the loss side of entry; a wrong-side SL (price already
+        # beyond the level, or SL == entry) would otherwise win the "tighter"
+        # pick below and produce an instantly-invalid stop.
+        return sl_val < entry if direction == "LONG" else sl_val > entry
+
     # Engine B structural SL
     if sl_b is not None and sl_b > 0:
         dist_b = abs(entry - sl_b)
-        if dist_b <= max_sl_dist and dist_b > 0:
-            candidates.append(("structural", sl_b, dist_b))
-        elif dist_b == 0:
+        if not _sl_side_ok(sl_b):
             log.debug(
-                "[ENGINE_C] resolve_sl: structural SL=%s equals entry=%s — dropped (zero distance)",
-                sl_b, entry,
+                "[ENGINE_C] resolve_sl: structural SL=%s on wrong side of entry=%s (%s) — dropped",
+                sl_b, entry, direction,
             )
-        elif dist_b > max_sl_dist and atr > 0:
+        elif dist_b <= max_sl_dist:
+            candidates.append(("structural", sl_b, dist_b))
+        elif atr > 0:
             # Structural too wide — clamp to 2.5x ATR
             if direction == "LONG":
                 clamped = entry - max_sl_dist
@@ -578,9 +584,13 @@ def resolve_sl(
 
     # Engine A ATR-based SL
     if sl_a is not None and sl_a > 0:
-        dist_a = abs(entry - sl_a)
-        if dist_a > 0:
-            candidates.append(("atr", sl_a, dist_a))
+        if _sl_side_ok(sl_a):
+            candidates.append(("atr", sl_a, abs(entry - sl_a)))
+        else:
+            log.debug(
+                "[ENGINE_C] resolve_sl: ATR SL=%s on wrong side of entry=%s (%s) — dropped",
+                sl_a, entry, direction,
+            )
 
     if not candidates:
         # Fallback: 1.5x ATR
@@ -619,8 +629,14 @@ def resolve_tp(
     if risk <= 0:
         return {"tp": None, "rr": 0, "method": "ZERO_RISK"}
 
+    def _tp_side_ok(tp_val: float) -> bool:
+        # TP must sit on the profit side of entry; reward is computed with
+        # abs(), so a wrong-side TP would otherwise yield a positive RR and
+        # pass downstream RR gates with an unreachable target.
+        return tp_val > entry if direction == "LONG" else tp_val < entry
+
     # Check Engine B structural TP
-    if tp_b is not None and tp_b > 0:
+    if tp_b is not None and tp_b > 0 and _tp_side_ok(tp_b):
         reward_b = abs(tp_b - entry)
         rr_b = reward_b / risk if risk > 0 else 0
         if rr_b >= 1.5:
@@ -631,7 +647,7 @@ def resolve_tp(
             }
 
     # Fallback to Engine A ATR-based TP
-    if tp_a is not None and tp_a > 0:
+    if tp_a is not None and tp_a > 0 and _tp_side_ok(tp_a):
         reward_a = abs(tp_a - entry)
         rr_a = reward_a / risk if risk > 0 else 0
         return {
@@ -1122,7 +1138,7 @@ def compute_consensus(
     if b_has and not a_has:
         direction = b["direction"]
         if b.get("sl") is None or b.get("tp") is None:
-            return _build_result(
+            return _finalize_consensus(_build_result(
                 trade=False,
                 verdict="B_ONLY_LEVELS_MISSING",
                 direction=direction,
@@ -1142,7 +1158,7 @@ def compute_consensus(
                 disagreement_diagnosis=_build_disagreement_diagnosis(
                     "B_ONLY", a, b, signal_a, signal_b, regime
                 ),
-            )
+            ), asset_type)
         b_only_mult = float(CONFIG.get("ENGINE_C_B_ONLY_MULT", 0.65))
         conviction = b["score_norm"] * b_only_mult
         tier, sizing = classify_conviction(conviction)
@@ -1165,16 +1181,16 @@ def compute_consensus(
             elif c_reliability >= _REL_RR and conviction >= _CONV_RR:
                 decision_state = "reduced_risk"
                 sizing = max(0.0, sizing - _SIZING_DELTA_RR)
-            elif conviction >= 0.40:
+            elif conviction >= _CONV_WATCH:
                 decision_state = "watchlist"
-                
+
         if decision_state == "blocked":
             tier = "SKIP"
             sizing = 0.0
         elif decision_state == "watchlist":
             tier = "WATCHLIST"
             sizing = 0.0
-            
+
         result = _build_result(
             trade=decision_state in ("execute", "reduced_risk"),
             verdict="B_ONLY_SCORED" if tier not in ("SKIP", "WATCHLIST") else "B_ONLY",
@@ -1243,9 +1259,9 @@ def compute_consensus(
                 elif c_reliability >= _REL_RR and conviction >= _CONV_RR:
                     decision_state = "reduced_risk"
                     sizing = max(0.0, sizing - _SIZING_DELTA_RR)
-                elif conviction >= 0.40:
+                elif conviction >= _CONV_WATCH:
                     decision_state = "watchlist"
-                    
+
             if decision_state == "blocked":
                 tier = "SKIP"
                 sizing = 0.0
@@ -1517,12 +1533,12 @@ def compute_consensus(
             sizing = max(0.0, sizing - _SIZING_DELTA_RR_WEAK)
         elif _a_is_weak and conviction >= _WEAK_A_CONV_RR2:
             decision_state = "reduced_risk"
-            sizing = max(0.0, sizing - 0.25)
+            sizing = max(0.0, sizing - _SIZING_DELTA_RR)
         elif c_reliability >= _REL_EXEC and conviction >= _CONV_EXEC:
             decision_state = "execute"
-        elif c_reliability >= 0.45 and conviction >= 0.50:
+        elif c_reliability >= _REL_RR and conviction >= _CONV_RR:
             decision_state = "reduced_risk"
-            sizing = max(0.0, sizing - 0.25)
+            sizing = max(0.0, sizing - _SIZING_DELTA_RR)
         elif conviction >= _CONV_WATCH_CONS:
             decision_state = "watchlist"
 
