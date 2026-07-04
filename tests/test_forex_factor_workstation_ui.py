@@ -42,6 +42,24 @@ def test_scanner_tab_calls_scan_and_execute_candidate_endpoints():
     assert "These gates are not score components" in source
 
 
+def test_scanner_controls_do_not_push_action_buttons_offscreen():
+    source = _read(SCANNER)
+    assert "lg:grid-cols-[minmax(260px,1fr)_auto]" not in source
+    assert 'data-testid="fx-scanner-controls"' in source
+    assert 'data-testid="fx-scanner-actions"' in source
+    assert "flex flex-col gap-3" in source
+    assert "w-full sm:w-auto" in source
+    assert "sm:justify-end" not in source
+
+
+def test_scanner_candidate_actions_are_near_left_edge():
+    source = _read(SCANNER)
+    actions_idx = source.index("<TableHead>Actions</TableHead>")
+    score_idx = source.index('<TableHead className="text-right">Score</TableHead>')
+    reason_idx = source.index("<TableHead>Reason</TableHead>")
+    assert actions_idx < score_idx < reason_idx
+
+
 def test_forex_api_exposes_scan_status_and_execute_helpers():
     source = _read(API)
     assert "'/api/forex/scan'" in source

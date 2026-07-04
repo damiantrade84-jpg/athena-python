@@ -169,21 +169,21 @@ export default function ScannerTab() {
           </div>
         </div>
 
-        <div className="grid gap-3 lg:grid-cols-[minmax(260px,1fr)_auto] items-end">
-          <label className="space-y-1 text-xs">
+        <div data-testid="fx-scanner-controls" className="flex flex-col gap-3">
+          <label className="min-w-0 space-y-1 text-xs">
             <span className="text-muted-foreground">Symbols</span>
             <textarea
-              className="min-h-16 w-full rounded-md border border-input bg-background px-3 py-2 font-mono text-xs"
+              className="min-h-20 w-full max-w-full resize-y rounded-md border border-input bg-background px-3 py-2 font-mono text-xs"
               value={symbolsText}
               onChange={(event) => setSymbolsText(event.target.value)}
             />
           </label>
-          <div className="flex flex-wrap gap-2">
-            <Button variant="outline" size="sm" onClick={() => setSymbolsText(G8_PAIRS.join(', '))}>G8 preset</Button>
-            <Button size="sm" disabled={busy || !symbols.length} onClick={runScan}>
+          <div data-testid="fx-scanner-actions" className="flex w-full flex-col gap-2 sm:flex-row sm:flex-wrap">
+            <Button className="w-full sm:w-auto" variant="outline" size="sm" onClick={() => setSymbolsText(G8_PAIRS.join(', '))}>G8 preset</Button>
+            <Button className="w-full sm:w-auto" size="sm" disabled={busy || !symbols.length} onClick={runScan}>
               <Search className="h-3.5 w-3.5 mr-1" /> Scan Forex
             </Button>
-            <Button variant="outline" size="sm" disabled={busy} onClick={loadLatest}>
+            <Button className="w-full sm:w-auto" variant="outline" size="sm" disabled={busy} onClick={loadLatest}>
               <RefreshCw className="h-3.5 w-3.5 mr-1" /> Refresh latest scan
             </Button>
           </div>
@@ -252,6 +252,7 @@ export default function ScannerTab() {
                 <TableHead>Action</TableHead>
                 <TableHead>Dir</TableHead>
                 <TableHead>Tradable</TableHead>
+                <TableHead>Actions</TableHead>
                 <TableHead className="text-right">Score</TableHead>
                 <TableHead>Carry</TableHead>
                 <TableHead>Momentum</TableHead>
@@ -267,7 +268,6 @@ export default function ScannerTab() {
                 <TableHead className="text-right">RR</TableHead>
                 <TableHead className="text-right">Weight</TableHead>
                 <TableHead>Reason</TableHead>
-                <TableHead>Actions</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -278,6 +278,20 @@ export default function ScannerTab() {
                   <TableCell><Badge className={actionBadgeClass(row.action)}>{row.action}</Badge></TableCell>
                   <TableCell>{row.direction || '--'}</TableCell>
                   <TableCell>{row.tradable_now ? 'Yes' : 'No'}</TableCell>
+                  <TableCell>
+                    <div className="flex flex-wrap gap-1">
+                      <Button variant="outline" size="sm" onClick={() => setSelectedSymbol(row.symbol || null)}>Details</Button>
+                      <Button variant="secondary" size="sm" disabled={busy || row.action === 'NO_TRADE'} onClick={() => executeCandidate(row, true)}>
+                        <Play className="h-3.5 w-3.5 mr-1" /> Dry-run
+                      </Button>
+                      <Button size="sm" disabled={busy || !status?.can_demo_execute || !row.tradable_now} onClick={() => executeCandidate(row, false)}>
+                        <ShieldCheck className="h-3.5 w-3.5 mr-1" /> Demo
+                      </Button>
+                      <Button variant="ghost" size="sm" onClick={() => copyCandidate(row)} title="Copy signal JSON">
+                        <Copy className="h-3.5 w-3.5" />
+                      </Button>
+                    </div>
+                  </TableCell>
                   <TableCell className="text-right font-mono text-xs">{fmtNum(candidateScore(row), 1)}</TableCell>
                   <TableCell>{row.family_scores?.carry?.direction || '--'}</TableCell>
                   <TableCell>{row.family_scores?.momentum?.direction || '--'}</TableCell>
@@ -293,20 +307,6 @@ export default function ScannerTab() {
                   <TableCell className="text-right font-mono text-xs">{fmtNum(row.rr1, 2)}</TableCell>
                   <TableCell className="text-right font-mono text-xs">{fmtPct(row.target_weight)}</TableCell>
                   <TableCell className="max-w-[260px] truncate" title={row.reason}>{row.reason || '--'}</TableCell>
-                  <TableCell>
-                    <div className="flex gap-1">
-                      <Button variant="outline" size="sm" onClick={() => setSelectedSymbol(row.symbol || null)}>Details</Button>
-                      <Button variant="secondary" size="sm" disabled={busy || row.action === 'NO_TRADE'} onClick={() => executeCandidate(row, true)}>
-                        <Play className="h-3.5 w-3.5 mr-1" /> Dry-run
-                      </Button>
-                      <Button size="sm" disabled={busy || !status?.can_demo_execute || !row.tradable_now} onClick={() => executeCandidate(row, false)}>
-                        <ShieldCheck className="h-3.5 w-3.5 mr-1" /> Demo
-                      </Button>
-                      <Button variant="ghost" size="sm" onClick={() => copyCandidate(row)} title="Copy signal JSON">
-                        <Copy className="h-3.5 w-3.5" />
-                      </Button>
-                    </div>
-                  </TableCell>
                 </TableRow>
               ))}
             </TableBody>
