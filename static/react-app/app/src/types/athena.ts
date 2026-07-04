@@ -1239,6 +1239,50 @@ export interface ASEScanResponse {
   error?: string;
 }
 
+export interface ASEBacktestDiagnostics {
+  candidateCount?: number;
+  tradeCount?: number;
+  signalCounts?: Record<string, number>;
+  horizons?: string[];
+  lookbackDays?: number;
+  instrument?: string;
+  family?: string;
+  [k: string]: unknown;
+}
+
+export interface ASEBacktestResponse {
+  success?: boolean;
+  error?: string;
+  engine?: 'ASE' | string;
+  pair?: string;
+  symbol?: string;
+  type?: string;
+  totalTrades?: number;
+  winRate?: number;
+  profitFactor?: number | null;
+  expectancy?: number | null;
+  sqn?: number | null;
+  sharpe?: number | null;
+  sortino?: number | null;
+  maxDrawdownPct?: number | null;
+  btStyle?: string;
+  btStyleRequested?: string;
+  aseDiagnostics?: ASEBacktestDiagnostics;
+  equityCurve?: number[] | { idx?: number; equity: number; date?: string }[];
+  trades?: Array<Record<string, unknown>>;
+  [k: string]: unknown;
+}
+
+export interface ASEBatchBacktestResponse {
+  success?: boolean;
+  error?: string;
+  engine?: 'ASE' | string;
+  results?: ASEBacktestResponse[];
+  errors?: Array<{ pair?: string; error?: string }>;
+  totalPairs?: number;
+  family?: string;
+}
+
 export interface ASEExecutionOutcome {
   executed?: boolean;
   reason?: string;

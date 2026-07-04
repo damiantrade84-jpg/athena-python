@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import logging
+import math
 import time
 from datetime import datetime, timezone
 from typing import Any
 
 from athena_ase.data.ptis import PTISStore, default_ptis_root
-from athena_ase.horizon import Horizon
+from athena_ase.horizon import HORIZONS, K_SL, K_TP, Horizon
 from athena_ase.instruments import DEFAULT_INSTRUMENTS, Instrument, instrument_by_symbol
 from athena_ase.runtime.scan import _pair_meta_for_symbol
 from config import CONFIG
@@ -43,6 +44,23 @@ def _resolve_instrument(pair: dict[str, Any]) -> Instrument | None:
 
 def _ms_to_iso(ms: int) -> str:
     return datetime.fromtimestamp(ms / 1000.0, tz=timezone.utc).isoformat()
+
+
+def _barrier_prices(outcome: Any) -> dict[str, float]:
+    """Return exact prices used by the ASE triple-barrier simulator."""
+    entry_log = float(outcome.entry_log)
+    direction = int(outcome.direction)
+    horizon = str(outcome.horizon)
+    cfg = HORIZONS[horizon]  # type: ignore[index]
+    r_unit = K_SL * float(outcome.sigma_bar) * math.sqrt(cfg.max_hold_bars)
+    entry = math.exp(entry_log)
+    if direction > 0:
+        sl = math.exp(entry_log - K_SL * r_unit)
+        tp = math.exp(entry_log + K_TP * r_unit)
+    else:
+        sl = math.exp(entry_log + K_SL * r_unit)
+        tp = math.exp(entry_log - K_TP * r_unit)
+    return {"entry": entry, "sl": sl, "tp": tp}
 
 
 def run_ase_pair_backtest(
@@ -105,20 +123,32 @@ def run_ase_pair_backtest(
             outcome = simulate_candidate(cand, store, inst)
             if outcome is None:
                 continue
+            levels = _barrier_prices(outcome)
+            decision_iso = _ms_to_iso(outcome.decision_time_ms)
             trades.append(
                 {
                     "resultR": round(float(outcome.net_R), 4),
                     "r_multiple": round(float(outcome.net_R), 4),
-                    "date": _ms_to_iso(outcome.decision_time_ms),
-                    "time": _ms_to_iso(outcome.decision_time_ms),
+                    "date": decision_iso,
+                    "time": decision_iso,
+                    "entryTime": decision_iso,
                     "direction": "LONG" if outcome.direction > 0 else "SHORT",
                     "horizon": hz,
                     "instrument": outcome.instrument,
                     "family": outcome.family,
                     "exit_reason": outcome.exit_reason,
                     "hold_bars": outcome.hold_bars,
+                    "entry": round(levels["entry"], 8),
+                    "sl": round(levels["sl"], 8),
+                    "tp": round(levels["tp"], 8),
+                    "tp1": round(levels["tp"], 8),
+                    "grossR": float(outcome.gross_R),
+                    "costR": float(outcome.cost_R),
+                    "maeR": float(outcome.mae_R),
+                    "mfeR": float(outcome.mfe_R),
                     "expectedNetR": float(sig.expectedNetR),
                     "probabilityPositive": float(sig.probabilityPositive),
+                    "score": float(sig.expectedNetR),
                     "engine": "ASE",
                 }
             )

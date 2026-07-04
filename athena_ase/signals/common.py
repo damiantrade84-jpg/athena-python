@@ -12,18 +12,67 @@ from athena_ase.data.ptis import PTISStore, load_window
 from athena_ase.horizon import Horizon, HORIZONS
 
 
-PRICE_SOURCES = ("EODHD", "MT5", "BINANCE")
+PRICE_SOURCES = ("EODHD", "MT5", "BINANCE", "BYBIT")
+
+# Live-scan bar-age bounds per horizon. Wide enough to survive weekends and
+# long holiday closures on TradFi venues, narrow enough to fail closed when a
+# feed has actually died (observed: crypto BINANCE bars 45-134 days stale
+# still produced TRADE/WATCH signals). Applies to live candidate generation
+# only — historical backfill/training paths are unaffected.
+MAX_LIVE_BAR_AGE_MS: dict[str, int] = {
+    "intraday": 96 * 3_600_000,  # 4 days
+    "swing": 7 * 86_400_000,  # 7 days
+}
 
 
 def price_series_id(source: str, symbol: str, tf: str, field: str) -> str:
     return f"{source}:{compact_symbol(symbol)}:{tf.upper()}:{field.lower()}"
 
 
-def resolve_price_source(store: PTISStore, symbol: str, tf: str) -> str | None:
+def resolve_price_source(
+    store: PTISStore,
+    symbol: str,
+    tf: str,
+    *,
+    end_ms: int | None = None,
+) -> str | None:
+    """Pick the source with the freshest last bar at/before end_ms.
+
+    First-existing resolution proved unsafe: a long-dead series (e.g. stale
+    BINANCE bars from the backtest cache) would shadow a live source appended
+    later. Ties keep the earlier PRICE_SOURCES entry.
+    """
+    import time as _time
+
+    horizon_end = end_ms if end_ms is not None else int(_time.time() * 1000)
+    best: str | None = None
+    best_t = -1
     for source in PRICE_SOURCES:
-        if store.series_exists(price_series_id(source, symbol, tf, "close")):
-            return source
-    return None
+        sid = price_series_id(source, symbol, tf, "close")
+        if not store.series_exists(sid):
+            continue
+        try:
+            rows = store.asof(sid, horizon_end, 1)
+        except KeyError:
+            continue
+        last_t = int(rows[-1]["value_time"]) if len(rows) else -1
+        if last_t > best_t:
+            best = source
+            best_t = last_t
+    return best
+
+
+def live_bars_stale(
+    series: "BarSeries",
+    horizon: Horizon,
+    decision_time_ms: int,
+) -> bool:
+    """True when the newest available bar is older than the live-age bound."""
+    if len(series.value_time) == 0:
+        return True
+    max_age = MAX_LIVE_BAR_AGE_MS.get(horizon, MAX_LIVE_BAR_AGE_MS["intraday"])
+    last_t = int(series.value_time[-1])
+    return (decision_time_ms - last_t) > max_age
 
 
 @dataclass
@@ -81,7 +130,7 @@ def load_bar_series(
 ) -> BarSeries | None:
     cfg = HORIZONS[horizon]
     tf = cfg.tf
-    source = resolve_price_source(store, symbol, tf)
+    source = resolve_price_source(store, symbol, tf, end_ms=end_ms)
     if source is None:
         return None
     close_id = price_series_id(source, symbol, tf, "close")

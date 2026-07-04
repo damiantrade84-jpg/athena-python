@@ -8855,14 +8855,27 @@ def api_backtest_ase():
 
         _vm = str(data.get("validation_mode") or "standard").strip().lower()
         _horizon = str(data.get("horizon") or "both").strip().lower()
-        result = backtest_pair_ase(pair, horizon=_horizon, validation_mode=_vm)
+        _lookback_raw = data.get("lookbackDays", data.get("lookback_days"))
+        try:
+            _lookback_days = int(_lookback_raw) if _lookback_raw not in (None, "") else None
+        except (TypeError, ValueError):
+            _lookback_days = None
+        result = backtest_pair_ase(
+            pair,
+            horizon=_horizon,
+            validation_mode=_vm,
+            lookback_days=_lookback_days,
+        )
         if result is None:
             return jsonify({
                 "success": False,
                 "error": "ASE backtest returned no result.",
             }), 422
         if result.get("error"):
-            return jsonify({"success": False, **result}), 422
+            safe_error = _json_safe(result) if callable(globals().get("_json_safe")) else result
+            if result.get("success") is False and result.get("aseDiagnostics") is not None:
+                return jsonify(safe_error)
+            return jsonify({**safe_error, "success": False}), 422
 
         safe_result = _json_safe(result) if callable(globals().get("_json_safe")) else result
         return jsonify(safe_result)
@@ -8883,10 +8896,16 @@ def api_backtest_ase_all():
         _vm = str(data.get("validation_mode") or "standard").strip().lower()
         _horizon = str(data.get("horizon") or "both").strip().lower()
         _family = data.get("family")
+        _lookback_raw = data.get("lookbackDays", data.get("lookback_days"))
+        try:
+            _lookback_days = int(_lookback_raw) if _lookback_raw not in (None, "") else None
+        except (TypeError, ValueError):
+            _lookback_days = None
         out = run_full_backtest_ase(
             horizon=_horizon,
             validation_mode=_vm,
             family=str(_family).strip().lower() if _family else None,
+            lookback_days=_lookback_days,
         )
         safe = _json_safe(out) if callable(globals().get("_json_safe")) else out
         return jsonify(safe)

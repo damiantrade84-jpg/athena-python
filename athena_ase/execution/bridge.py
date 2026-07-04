@@ -155,6 +155,25 @@ def _ptis_freshness_evidence(
         return False, f"evidence_error:{exc}"
 
 
+def _result_order_id(result: dict[str, Any]) -> str:
+    """Broker order/position id from an executor result.
+
+    mt5_execute returns ``ticket`` (position ticket) and bybit_execute returns
+    ``ticket`` (order id); the previous orderId/order_id lookup matched neither,
+    leaving every journal fill without a broker reference.
+    """
+    for key in ("orderId", "order_id", "ticket"):
+        val = result.get(key)
+        if val:
+            return str(val)
+    legs = result.get("legs")
+    if isinstance(legs, list) and legs:
+        val = legs[0].get("ticket") if isinstance(legs[0], dict) else None
+        if val:
+            return str(val)
+    return ""
+
+
 def _rr_floor_ok(signal: ASESignal) -> bool:
     sl_dist = abs(signal.entryReference - signal.sl)
     tp_dist = abs(signal.tp1 - signal.entryReference)
@@ -244,6 +263,12 @@ def execute_trade_signal(
         append_trade_signals([signal])
 
     venue = deps.route_executor(exec_dict)
+    if venue == "bybit":
+        # The demo gate skips the Bybit URL check when the URL is unset; an
+        # order routed to Bybit must positively prove testnet before send.
+        bybit_url = str(deps.get_bybit_base_url() or "")
+        if not bybit_url.rstrip("/").endswith("api-testnet.bybit.com"):
+            return _reject("venue", "bybit_url_not_testnet")
     positions, positions_raw = deps.get_positions(venue)
     account = deps.get_account(venue)
 
@@ -277,7 +302,7 @@ def execute_trade_signal(
             decision_time_ms=signal.decisionTimeMs,
             status=status,
             detail=result,
-            order_id=str(result.get("orderId") or result.get("order_id") or ""),
+            order_id=_result_order_id(result),
         )
     if success:
         _notify_fill_opened(signal, exec_dict, venue)
@@ -291,13 +316,84 @@ def execute_trade_signal(
     }
 
 
+def _compact(text: Any) -> str:
+    return str(text or "").replace("/", "").replace(" ", "").upper()
+
+
+# Fill must occur shortly after its decision; used to match broker positions
+# back to journal fill rows when the broker cannot carry ASE metadata.
+_FILL_MATCH_WINDOW_MS = 2 * 3_600_000
+
+
+def _ase_fill_index() -> list[dict[str, Any]]:
+    """ASE-owned fills from the trade journal (broker positions carry no ASE tags).
+
+    Returns rows with compacted display/symbol keys, decision time, horizon and
+    maxHoldBars so open broker positions can be attributed to ASE.
+    """
+    try:
+        from athena_ase.execution.journal import load_trade_journal
+
+        df = load_trade_journal()
+    except Exception as exc:  # pragma: no cover - journal read belt
+        log.warning("ASE time-stop journal read failed: %s", exc)
+        return []
+    if df is None or df.empty or "executionStatus" not in df.columns:
+        return []
+    fills = df[df["executionStatus"] == "filled"]
+    out: list[dict[str, Any]] = []
+    for _, row in fills.iterrows():
+        symbol = str(row.get("instrument") or "")
+        inst = instrument_by_symbol(symbol)
+        keys = {_compact(symbol)}
+        if inst is not None:
+            keys.add(_compact(inst.display))
+        out.append(
+            {
+                "keys": keys,
+                "direction": str(row.get("direction") or ""),
+                "decisionTimeMs": int(row.get("decisionTimeMs") or 0),
+                "maxHoldBars": int(row.get("maxHoldBars") or 0),
+                "horizon": str(row.get("horizon") or "intraday"),
+                "orderId": str(row.get("orderId") or ""),
+            }
+        )
+    return out
+
+
+def _match_fill(pos: dict[str, Any], fills: list[dict[str, Any]]) -> dict[str, Any] | None:
+    ticket = str(pos.get("ticket") or "")
+    pos_keys = {_compact(pos.get("pair")), _compact(pos.get("symbol"))} - {""}
+    pos_dir = str(pos.get("direction") or "")
+    open_ms = int(pos.get("open_time") or 0) * 1000
+    best: dict[str, Any] | None = None
+    for fill in fills:
+        if ticket and fill["orderId"] and ticket == fill["orderId"]:
+            return fill
+        if not pos_keys & fill["keys"] or pos_dir != fill["direction"]:
+            continue
+        if open_ms > 0 and fill["decisionTimeMs"] > 0:
+            delta = open_ms - fill["decisionTimeMs"]
+            if -60_000 <= delta <= _FILL_MATCH_WINDOW_MS and (
+                best is None or fill["decisionTimeMs"] > best["decisionTimeMs"]
+            ):
+                best = fill
+    return best
+
+
 def enforce_time_stops(
     open_positions: list[dict[str, Any]],
     *,
     deps: ASEExecutionDeps | None = None,
     now_ms: int | None = None,
 ) -> list[dict[str, Any]]:
-    """Close ASE-owned positions older than maxHoldBars (bar-duration heuristic)."""
+    """Close ASE-owned positions older than maxHoldBars (bar-duration heuristic).
+
+    Broker positions carry no ASE metadata, so ownership and hold parameters
+    are resolved from the ASE trade journal (ticket match first, then
+    pair+direction+open-time proximity). Explicitly tagged positions (tests,
+    future executors) keep the original direct path.
+    """
     deps = deps or ASEExecutionDeps()
     gate = assert_demo(
         executor_mode=deps.get_executor_mode(),
@@ -308,13 +404,22 @@ def enforce_time_stops(
         return []
 
     now = now_ms or int(time.time() * 1000)
+    fills: list[dict[str, Any]] | None = None
     closed: list[dict[str, Any]] = []
     for pos in open_positions:
-        if not pos.get("aseExecution") and pos.get("engine") != "ASE":
-            continue
+        tagged = bool(pos.get("aseExecution")) or pos.get("engine") == "ASE"
         opened_ms = int(pos.get("openedAtMs") or pos.get("timestamp") or 0)
         max_hold = int(pos.get("maxHoldBars") or 0)
         horizon = str(pos.get("horizon") or "intraday")
+        if not tagged:
+            if fills is None:
+                fills = _ase_fill_index()
+            fill = _match_fill(pos, fills)
+            if fill is None:
+                continue
+            opened_ms = opened_ms or int(pos.get("open_time") or 0) * 1000 or fill["decisionTimeMs"]
+            max_hold = max_hold or fill["maxHoldBars"]
+            horizon = fill["horizon"] or horizon
         if opened_ms <= 0 or max_hold <= 0:
             continue
         bar_ms = 3_600_000 if horizon == "intraday" else 86_400_000
@@ -322,6 +427,14 @@ def enforce_time_stops(
             continue
         result = deps.close_position(pos)
         closed.append({"position": pos, "result": result})
+        log.info(
+            "ASE time stop closed %s %s (held > %d %s bars): %s",
+            pos.get("pair") or pos.get("symbol"),
+            pos.get("direction"),
+            max_hold,
+            horizon,
+            result.get("success"),
+        )
     return closed
 
 
@@ -393,6 +506,23 @@ def default_execution_deps() -> ASEExecutionDeps:
             return list(res.get("positions") or []), res
         return list(res or []), None
 
+    def _close_position(pos: dict) -> dict:
+        venue = str(pos.get("venue") or ("bybit" if _compact(pos.get("symbol")).endswith("USDT") else "mt5"))
+        if venue == "bybit":
+            from bybit_executor import bybit_close_position
+
+            return bybit_close_position(
+                str(pos.get("pair") or pos.get("symbol") or ""),
+                str(pos.get("direction") or ""),
+                float(pos.get("volume") or pos.get("contracts") or 0.0),
+            )
+        from mt5_executor import mt5_close_position
+
+        ticket = pos.get("ticket")
+        if not ticket:
+            return {"success": False, "error": "missing_ticket"}
+        return mt5_close_position(int(ticket))
+
     def _get_symbol_info(symbol: str, exec_dict: dict) -> dict | None:
         display = str(exec_dict.get("pair") or symbol)
         if str(exec_dict.get("type") or "").lower() == "crypto":
@@ -419,5 +549,6 @@ def default_execution_deps() -> ASEExecutionDeps:
         guardian_check=_guardian,
         mt5_execute=_mt5_execute,
         bybit_execute=_bybit_execute,
+        close_position=_close_position,
         candle_freshness_ok=_ptis_freshness_evidence,
     )

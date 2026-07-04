@@ -4618,7 +4618,7 @@ def _format_backtest_results(
     """Format Engine B backtest results to match Engine A's response schema exactly."""
     if not trades:
         return {
-            "error": f"No signals generated for {pair['display']} in NAKED mode",
+            "error": f"No signals generated for {pair['display']} in {engine_type} mode",
             "same_bar_both_hit": same_bar_both_hit,
         }
 
@@ -7735,6 +7735,7 @@ def backtest_pair_ase(
     pair: dict,
     horizon: str = "both",
     validation_mode: str = "standard",
+    lookback_days: int | None = None,
 ) -> dict | None:
     """Backtest ASE via PTIS candidates + predict_batch + triple-barrier outcomes."""
     from athena_ase.backtest import run_ase_pair_backtest
@@ -7742,11 +7743,11 @@ def backtest_pair_ase(
     display = pair.get("display", pair.get("symbol", "UNKNOWN"))
     log.info("[ASE-BT] Starting backtest for %s horizon=%s", display, horizon)
 
-    raw = run_ase_pair_backtest(pair, horizon=horizon)
+    raw = run_ase_pair_backtest(pair, horizon=horizon, lookback_days=lookback_days)
     if raw.get("error"):
         err = str(raw["error"])
         log.warning("[ASE-BT] %s: %s", display, err)
-        out: dict[str, Any] = {"error": err}
+        out: dict[str, Any] = {"success": False, "error": err}
         if raw.get("diagnostics"):
             out["aseDiagnostics"] = raw["diagnostics"]
         return out
@@ -7762,6 +7763,45 @@ def backtest_pair_ase(
         result["aseDiagnostics"] = raw["diagnostics"]
         result["btStyle"] = "ase"
         result["btStyleRequested"] = horizon
+        try:
+            _diag = raw.get("diagnostics") or {}
+            _wf = result.get("wfSplit", {}) or {}
+            _is_sqn = _wf.get("is_sqn")
+            _oos_sqn = _wf.get("oos_sqn")
+            _lookback = _diag.get("lookbackDays")
+            with sqlite3.connect(_rt().AUDIT_DB, timeout=15.0) as _con:
+                _con.execute(
+                    "INSERT INTO backtest_results "
+                    "(run_date,pair,asset_type,engine,trades,win_rate,profit_factor,"
+                    "expectancy,sqn,sharpe,sortino,is_score,oos_score,max_dd_pct,bt_min,atr_source,notes) "
+                    "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    (
+                        datetime.now(timezone.utc).isoformat(),
+                        display,
+                        pair.get("type", ""),
+                        "ase",
+                        result.get("totalTrades", 0),
+                        result.get("winRate"),
+                        result.get("profitFactor"),
+                        result.get("expectancy"),
+                        result.get("sqn"),
+                        result.get("sharpe"),
+                        result.get("sortino"),
+                        round(_is_sqn, 4) if _is_sqn is not None else None,
+                        round(_oos_sqn, 4) if _oos_sqn is not None else None,
+                        result.get("maxDrawdownPct"),
+                        None,
+                        "ASE_PTIS",
+                        (
+                            f"horizon={horizon};lookback_days={_lookback};"
+                            f"candidates={_diag.get('candidateCount')};"
+                            f"trades={_diag.get('tradeCount', len(trades))}"
+                        ),
+                    ),
+                )
+                _con.commit()
+        except Exception as _dbe:
+            log.warning("[ASE-BT] backtest_results write failed: %s", _dbe)
     return result
 
 
@@ -7769,6 +7809,7 @@ def run_full_backtest_ase(
     horizon: str = "both",
     validation_mode: str = "standard",
     family: str | None = None,
+    lookback_days: int | None = None,
 ):
     """Run ASE backtest across the ASE instrument universe (standalone)."""
     from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -7799,6 +7840,7 @@ def run_full_backtest_ase(
                 one_pair,
                 horizon=horizon,
                 validation_mode=validation_mode,
+                lookback_days=lookback_days,
             )
         except Exception as exc:
             return one_pair, {"error": str(exc)}

@@ -32,7 +32,7 @@ from athena_ase.instruments import Instrument
 from athena_ase.levels.brackets import compute_brackets
 from athena_ase.registry.promotion import is_watch_max, set_watch_max
 from athena_ase.signals.arbitrate import Candidate
-from athena_ase.signals.common import load_bar_series
+from athena_ase.signals.common import live_bars_stale, load_bar_series
 
 log = logging.getLogger("ase.predict")
 
@@ -285,6 +285,22 @@ def predict_one(
         core_ok=bool(data_quality.get("coreOk")),
     )
 
+    # Model-quality gate: an artifact whose own eval-set expectancy at its
+    # selected threshold is non-positive has demonstrated no edge — its TRADE
+    # decisions are capped to WATCH (fail-closed, per-family/horizon). The
+    # signal stays visible; only auto-execution eligibility is removed.
+    trade_cap_reason: str | None = None
+    if status == "TRADE":
+        eval_expectancy = (bundle.manifest.eval_summary or {}).get("expectancy")
+        if eval_expectancy is not None:
+            try:
+                if float(eval_expectancy) <= 0.0:
+                    status = "WATCH"
+                    trade_cap_reason = "model_eval_expectancy_nonpositive"
+            except (TypeError, ValueError):
+                status = "WATCH"
+                trade_cap_reason = "model_eval_expectancy_unreadable"
+
     entry_ref = math.exp(candidate.entry_log)
     brackets = compute_brackets(
         direction=candidate.direction,
@@ -343,6 +359,7 @@ def predict_one(
             "rawP": raw_p,
             "thrFamily": bundle.thr_family,
             "conviction": conviction_detail,
+            **({"tradeCapReason": trade_cap_reason} if trade_cap_reason else {}),
         },
         dataQuality={**data_quality, "deployment": "OPERATIONAL"},
         modelHealth={
@@ -352,6 +369,7 @@ def predict_one(
             "driftScore": monitor.drift_score,
             "gateResult": gate.to_dict(),
             "monitor": monitor.to_dict(),
+            **({"tradeCapReason": trade_cap_reason} if trade_cap_reason else {}),
         },
         instrument=candidate.instrument,
         decisionTimeMs=candidate.decision_time_ms,
@@ -421,6 +439,8 @@ def predict_no_candidate(
 
     now_ms = decision_time_ms or int(time.time() * 1000)
     ptis_ok = False
+    bars_stale = False
+    last_bar_age_hours: float | None = None
     if store is not None:
         lookback_ms = 180 * 24 * 3600 * 1000
         series = load_bar_series(
@@ -431,13 +451,20 @@ def predict_no_candidate(
             now_ms,
         )
         ptis_ok = series is not None and len(series.close_log) > 0
+        if ptis_ok and series is not None:
+            bars_stale = live_bars_stale(series, horizon, now_ms)
+            last_bar_age_hours = round(
+                (now_ms - int(series.value_time[-1])) / 3_600_000.0, 1
+            )
 
     blocker = "no_layer1_candidate"
     if not ptis_ok:
         blocker = "ptis_bars_missing"
+    elif bars_stale:
+        blocker = "stale_ptis_bars"
 
     data_quality: dict[str, Any] = {
-        "coreOk": ptis_ok,
+        "coreOk": ptis_ok and not bars_stale,
         "route": "core",
         "missingFeeds": [] if ptis_ok else ["eodhd_bars"],
         "blocker": blocker,
@@ -445,6 +472,8 @@ def predict_no_candidate(
         "artifactsPresent": artifacts_present,
         "deployment": "OPERATIONAL",
     }
+    if last_bar_age_hours is not None:
+        data_quality["lastBarAgeHours"] = last_bar_age_hours
     model_health: dict[str, Any] = {
         "artifactHash": bundle.artifact_hash if bundle else "",
         "trainedAt": bundle.manifest.trained_at if bundle else "",

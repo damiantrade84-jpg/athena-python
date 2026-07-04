@@ -86,6 +86,7 @@ def _price_series_ids(symbol: str, tf: str, field: str) -> tuple[str, ...]:
         f"EODHD:{compact}:{tf.upper()}:{field.lower()}",
         f"MT5:{compact}:{tf.upper()}:{field.lower()}",
         f"BINANCE:{compact}:{tf.upper()}:{field.lower()}",
+        f"BYBIT:{compact}:{tf.upper()}:{field.lower()}",
     )
 
 
@@ -176,12 +177,32 @@ def _asof_values(series_id: str, decision_time_ms: int, n: int) -> np.ndarray:
     return rows["value"].astype(float)
 
 
+def _asof_values_freshest(
+    series_ids: Sequence[str], decision_time_ms: int, n: int
+) -> np.ndarray:
+    """Values from the source whose last row is newest at decision time.
+
+    First-with-any-rows selection let a long-dead series (stale BINANCE cache
+    bars) shadow a live source appended later under another prefix.
+    """
+    best_vals = np.array([], dtype=float)
+    best_t = -1
+    for series_id in series_ids:
+        try:
+            rows = asof(series_id, decision_time_ms, n)
+        except KeyError:
+            continue
+        if len(rows) == 0:
+            continue
+        last_t = int(rows[-1]["value_time"])
+        if last_t > best_t:
+            best_t = last_t
+            best_vals = rows["value"].astype(float)
+    return best_vals
+
+
 def _asof_close_log(symbol: str, tf: str, decision_time_ms: int, n: int) -> np.ndarray:
-    vals = np.array([], dtype=float)
-    for series_id in _price_series_ids(symbol, tf, "close"):
-        vals = _asof_values(series_id, decision_time_ms, n)
-        if len(vals):
-            break
+    vals = _asof_values_freshest(_price_series_ids(symbol, tf, "close"), decision_time_ms, n)
     if len(vals) == 0:
         return vals
     return np.log(np.maximum(vals, 1e-12))
@@ -344,11 +365,9 @@ def build_features_for_candidate(
     if ctx.family == "forex":
         vol_rows = _asof_values(_duka_series_id(ctx.symbol, tf), ctx.decision_time_ms, 64)
     else:
-        vol_rows = np.array([], dtype=float)
-        for series_id in _price_series_ids(ctx.symbol, tf, "volume"):
-            vol_rows = _asof_values(series_id, ctx.decision_time_ms, 64)
-            if len(vol_rows):
-                break
+        vol_rows = _asof_values_freshest(
+            _price_series_ids(ctx.symbol, tf, "volume"), ctx.decision_time_ms, 64
+        )
     if len(vol_rows) == 0:
         ctx.missing_feeds.append("volume")
         out["volu_z"] = float("nan")
