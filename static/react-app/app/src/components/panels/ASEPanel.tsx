@@ -533,6 +533,15 @@ export default function ASEPanel() {
                   {backtestResult.error}
                 </div>
               )}
+              {backtestResult.aseDiagnostics?.nonTradeReasons && (
+                <div className="col-span-full flex flex-wrap gap-1 text-[10px] font-mono">
+                  {Object.entries(backtestResult.aseDiagnostics.nonTradeReasons).map(([reason, count]) => (
+                    <Badge key={reason} variant="outline" className="text-amber-300">
+                      {reason}:{count}
+                    </Badge>
+                  ))}
+                </div>
+              )}
             </div>
           )}
 

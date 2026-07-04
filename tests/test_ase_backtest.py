@@ -115,6 +115,60 @@ def test_run_ase_pair_backtest_returns_simulated_barrier_trade_fields(monkeypatc
     assert trade["mfeR"] == pytest.approx(1.8)
 
 
+def test_run_ase_pair_backtest_reports_non_trade_blockers(monkeypatch):
+    from athena_ase.signals.arbitrate import Candidate
+    import athena_ase.backtest as ase_backtest
+    import athena_ase.inference.predict as predict_mod
+    import athena_ase.signals.engine as engine_mod
+
+    candidate = Candidate(
+        instrument="TRXUSDT",
+        family="crypto",
+        horizon="intraday",
+        decision_time_ms=1_700_000_000_000,
+        bar_index=12,
+        direction=1,
+        sigma_bar=0.01,
+        entry_log=2.302585092994046,
+    )
+    signal = SimpleNamespace(
+        decisionStatus="FLAT",
+        direction="NONE",
+        expectedNetR=0.0,
+        probabilityPositive=0.0,
+        dataQuality={"blocker": "model_not_trained"},
+        modelHealth={"errorReason": "artifact_missing"},
+        predictionDiagnostics={},
+    )
+
+    monkeypatch.setattr(ase_backtest, "PTISStore", lambda *_args, **_kwargs: object())
+    monkeypatch.setattr(ase_backtest.time, "time", lambda: 1_700_000_900)
+    monkeypatch.setattr(engine_mod, "iter_candidates", lambda *_args, **_kwargs: [candidate])
+    monkeypatch.setattr(predict_mod, "predict_batch", lambda *_args, **_kwargs: [signal])
+
+    result = ase_backtest.run_ase_pair_backtest(
+        {"symbol": "TRXUSDT", "display": "TRX/USDT", "type": "crypto"},
+        horizon="intraday",
+        lookback_days=45,
+        ptis_root="unused",
+    )
+
+    assert "top blocker: model_not_trained=1" in result["error"]
+    assert result["diagnostics"]["nonTradeReasons"] == {"model_not_trained": 1}
+    assert result["diagnostics"]["sampleNonTradeSignals"] == [
+        {
+            "instrument": "TRXUSDT",
+            "horizon": "intraday",
+            "status": "FLAT",
+            "direction": "NONE",
+            "expectedNetR": 0.0,
+            "probabilityPositive": 0.0,
+            "blocker": "model_not_trained",
+            "modelErrorReason": "artifact_missing",
+        }
+    ]
+
+
 def test_backtest_pair_ase_passes_lookback_and_persists_history(monkeypatch, tmp_path):
     import backtest_runner
     from athena_runtime import set_runtime

@@ -1171,6 +1171,7 @@ function TradeTable({ trades, totalCount }: { trades: Array<Record<string, unkno
 
 function ASEDiagnosticsBlock({ diagnostics }: { diagnostics: ASEBacktestDiagnostics }) {
   const signalCounts = diagnostics.signalCounts || {};
+  const nonTradeReasons = diagnostics.nonTradeReasons || {};
   return (
     <Card className="border-border/60 bg-card/50">
       <CardHeader className="pb-2">
@@ -1190,6 +1191,18 @@ function ASEDiagnosticsBlock({ diagnostics }: { diagnostics: ASEBacktestDiagnost
             <Badge key={status} variant="outline">{status}:{count}</Badge>
           ))}
         </div>
+        {Object.keys(nonTradeReasons).length > 0 && (
+          <div className="space-y-1">
+            <p className="text-[10px] uppercase text-muted-foreground">Non-trade blockers</p>
+            <div className="flex flex-wrap gap-2 text-[10px] font-mono text-muted-foreground">
+              {Object.entries(nonTradeReasons).map(([reason, count]) => (
+                <Badge key={reason} variant="outline" className="max-w-full">
+                  <span className="truncate">{reason}:{count}</span>
+                </Badge>
+              ))}
+            </div>
+          </div>
+        )}
       </CardContent>
     </Card>
   );
