@@ -52,6 +52,62 @@ def _envelope(
     ), http
 
 
+def _summarize_diagnostics_for_response(
+    diagnostics: list[Any],
+    *,
+    max_rows: int = 50,
+    max_samples: int = 5,
+) -> list[Any]:
+    """Compact repeated diagnostics for UI envelopes without mutating reports."""
+    grouped: dict[tuple[str, str, str], dict[str, Any]] = {}
+    passthrough: list[Any] = []
+    for diag in diagnostics:
+        if not isinstance(diag, dict):
+            passthrough.append(diag)
+            continue
+        code = str(diag.get("code") or diag.get("field") or "diagnostic")
+        message = str(diag.get("message") or "")
+        severity = str(diag.get("severity") or "")
+        key = (code, message, severity)
+        row = grouped.get(key)
+        if row is None:
+            row = {
+                "code": code,
+                "message": message,
+                "severity": severity,
+                "count": 0,
+                "sample_symbols": [],
+                "sample_as_of_dates": [],
+            }
+            grouped[key] = row
+        row["count"] += 1
+
+        context = diag.get("context") if isinstance(diag.get("context"), dict) else {}
+        symbol = diag.get("symbol") or context.get("symbol")
+        as_of_date = diag.get("as_of_date") or context.get("as_of_date")
+        if symbol and symbol not in row["sample_symbols"] and len(row["sample_symbols"]) < max_samples:
+            row["sample_symbols"].append(str(symbol))
+        if (
+            as_of_date
+            and as_of_date not in row["sample_as_of_dates"]
+            and len(row["sample_as_of_dates"]) < max_samples
+        ):
+            row["sample_as_of_dates"].append(str(as_of_date))
+
+    compact = passthrough + list(grouped.values())
+    if len(compact) <= max_rows:
+        return compact
+    hidden = len(compact) - max_rows
+    return compact[:max_rows] + [
+        {
+            "code": "diagnostics_truncated",
+            "message": f"{hidden} diagnostic groups omitted from response; inspect report diagnostics for full detail",
+            "severity": "warning",
+            "count": hidden,
+        }
+    ]
+
+
 def _latest_decision_date(decisions: list[dict[str, Any]]) -> Optional[str]:
     dates = [str(d.get("as_of_date") or "") for d in decisions if d.get("as_of_date")]
     return max(dates) if dates else None
@@ -671,7 +727,7 @@ def api_forex_backtest_run():
 
     return _envelope(
         data={"run_id": result.get("run_id"), "report": result.get("report", result)},
-        diagnostics=list(result.get("diagnostics") or []),
+        diagnostics=_summarize_diagnostics_for_response(list(result.get("diagnostics") or [])),
     )
 
 

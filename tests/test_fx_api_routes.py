@@ -413,6 +413,60 @@ def test_backtest_run_strict_forced_and_diagnostics(fx_client):
     )
 
 
+def test_backtest_run_summarizes_repeated_response_diagnostics(fx_client):
+    pytest.importorskip("athena_fx.backtest")
+    client, _seed, _db = fx_client
+    fridays = ["2026-01-09", "2026-01-16", "2026-01-23"]
+    bars = [
+        {"date": "2026-01-09", "open": 1.080, "high": 1.090, "low": 1.070, "close": 1.085},
+        {"date": "2026-01-12", "open": 1.085, "high": 1.095, "low": 1.080, "close": 1.090},
+        {"date": "2026-01-16", "open": 1.090, "high": 1.100, "low": 1.085, "close": 1.095},
+        {"date": "2026-01-19", "open": 1.095, "high": 1.105, "low": 1.090, "close": 1.100},
+        {"date": "2026-01-23", "open": 1.100, "high": 1.110, "low": 1.095, "close": 1.105},
+    ]
+    fixture_decisions = {
+        f"EURUSD|{as_of}": _sample_decision(
+            "EURUSD",
+            as_of,
+            ACTION_NO_TRADE,
+            diagnostics=[
+                {
+                    "code": DIAG_MISSING_CARRY,
+                    "severity": "error",
+                    "message": "carry unavailable",
+                    "context": {"symbol": "EURUSD", "as_of_date": as_of},
+                }
+            ],
+        )
+        for as_of in fridays
+    }
+    payload = {
+        "start": "2026-01-09",
+        "end": "2026-01-23",
+        "symbols": ["EURUSD"],
+        "bars_by_symbol": {"EURUSD": bars},
+        "fixture_decisions": fixture_decisions,
+        "spread_pips_by_symbol": {"EURUSD": 0.8},
+    }
+
+    resp = client.post(
+        "/api/forex/backtest/run",
+        data=json.dumps(payload),
+        content_type="application/json",
+    )
+    body = resp.get_json()
+
+    assert resp.status_code == 200, body
+    report_diags = body["data"]["report"]["diagnostics"]
+    response_diags = body["diagnostics"]
+    assert len(report_diags) == 6
+    assert len(response_diags) < len(report_diags)
+    carry_summary = next(d for d in response_diags if d.get("code") == DIAG_MISSING_CARRY)
+    assert carry_summary["count"] == 3
+    assert carry_summary["sample_symbols"] == ["EURUSD"]
+    assert carry_summary["sample_as_of_dates"] == fridays
+
+
 def test_backtest_run_and_readback(fx_client):
     pytest.importorskip("athena_fx.backtest")
     client, _seed, _db = fx_client
