@@ -1243,6 +1243,8 @@ export interface ASEBacktestDiagnostics {
   candidateCount?: number;
   tradeCount?: number;
   signalCounts?: Record<string, number>;
+  nonTradeReasons?: Record<string, number>;
+  sampleNonTradeSignals?: Array<Record<string, unknown>>;
   horizons?: string[];
   lookbackDays?: number;
   instrument?: string;

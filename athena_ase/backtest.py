@@ -63,6 +63,56 @@ def _barrier_prices(outcome: Any) -> dict[str, float]:
     return {"entry": entry, "sl": sl, "tp": tp}
 
 
+def _signal_dict_field(sig: Any, name: str) -> dict[str, Any]:
+    value = getattr(sig, name, None)
+    return value if isinstance(value, dict) else {}
+
+
+def _non_trade_reason(sig: Any, status: str, direction: str) -> str:
+    data_quality = _signal_dict_field(sig, "dataQuality")
+    model_health = _signal_dict_field(sig, "modelHealth")
+    prediction_diagnostics = _signal_dict_field(sig, "predictionDiagnostics")
+    for source, key in (
+        (data_quality, "blocker"),
+        (model_health, "blocker"),
+        (model_health, "tradeCapReason"),
+        (prediction_diagnostics, "tradeCapReason"),
+        (model_health, "errorReason"),
+        (prediction_diagnostics, "error"),
+    ):
+        value = source.get(key)
+        if value:
+            return str(value)
+    if direction not in ("LONG", "SHORT"):
+        return "direction_none"
+    return f"{status.lower()}_without_trade"
+
+
+def _sample_non_trade_signal(cand: Any, sig: Any, status: str, direction: str) -> dict[str, Any]:
+    data_quality = _signal_dict_field(sig, "dataQuality")
+    model_health = _signal_dict_field(sig, "modelHealth")
+    prediction_diagnostics = _signal_dict_field(sig, "predictionDiagnostics")
+    sample: dict[str, Any] = {
+        "instrument": getattr(cand, "instrument", ""),
+        "horizon": getattr(cand, "horizon", ""),
+        "status": status,
+        "direction": direction,
+        "expectedNetR": float(getattr(sig, "expectedNetR", 0.0) or 0.0),
+        "probabilityPositive": float(getattr(sig, "probabilityPositive", 0.0) or 0.0),
+    }
+    optional_fields = {
+        "blocker": data_quality.get("blocker") or model_health.get("blocker"),
+        "modelErrorReason": model_health.get("errorReason"),
+        "tradeCapReason": model_health.get("tradeCapReason")
+        or prediction_diagnostics.get("tradeCapReason"),
+        "predictionError": prediction_diagnostics.get("error"),
+    }
+    for key, value in optional_fields.items():
+        if value:
+            sample[key] = str(value)
+    return sample
+
+
 def run_ase_pair_backtest(
     pair: dict[str, Any],
     *,
@@ -100,6 +150,8 @@ def run_ase_pair_backtest(
     trades: list[dict[str, Any]] = []
     candidate_count = 0
     signal_counts: dict[str, int] = {}
+    non_trade_reasons: dict[str, int] = {}
+    sample_non_trade_signals: list[dict[str, Any]] = []
 
     for hz in horizons:
         candidates = list(
@@ -118,7 +170,14 @@ def run_ase_pair_backtest(
         for cand, sig in zip(candidates, signals):
             status = str(sig.decisionStatus or "FLAT")
             signal_counts[status] = signal_counts.get(status, 0) + 1
-            if status != "TRADE" or sig.direction not in ("LONG", "SHORT"):
+            direction = str(getattr(sig, "direction", "NONE") or "NONE")
+            if status != "TRADE" or direction not in ("LONG", "SHORT"):
+                reason = _non_trade_reason(sig, status, direction)
+                non_trade_reasons[reason] = non_trade_reasons.get(reason, 0) + 1
+                if len(sample_non_trade_signals) < 5:
+                    sample_non_trade_signals.append(
+                        _sample_non_trade_signal(cand, sig, status, direction)
+                    )
                 continue
             outcome = simulate_candidate(cand, store, inst)
             if outcome is None:
@@ -153,28 +212,37 @@ def run_ase_pair_backtest(
                 }
             )
 
+    diagnostics = {
+        "candidateCount": candidate_count,
+        "signalCounts": signal_counts,
+        "horizons": list(horizons),
+        "lookbackDays": days,
+        "instrument": inst.symbol,
+        "family": inst.family,
+    }
+    if non_trade_reasons:
+        diagnostics["nonTradeReasons"] = dict(
+            sorted(non_trade_reasons.items(), key=lambda item: (-item[1], item[0]))
+        )
+    if sample_non_trade_signals:
+        diagnostics["sampleNonTradeSignals"] = sample_non_trade_signals
+
     if not trades:
+        top_reason = ""
+        if non_trade_reasons:
+            reason, count = max(non_trade_reasons.items(), key=lambda item: item[1])
+            top_reason = f"; top blocker: {reason}={count}"
         return {
             "error": f"No ASE TRADE outcomes for {pair.get('display', inst.display)} "
-            f"({candidate_count} candidates, horizons={list(horizons)})",
-            "diagnostics": {
-                "candidateCount": candidate_count,
-                "signalCounts": signal_counts,
-                "horizons": list(horizons),
-                "lookbackDays": days,
-            },
+            f"({candidate_count} candidates, horizons={list(horizons)}{top_reason})",
+            "diagnostics": {**diagnostics, "tradeCount": 0},
         }
 
     return {
         "trades": trades,
         "diagnostics": {
-            "candidateCount": candidate_count,
+            **diagnostics,
             "tradeCount": len(trades),
-            "signalCounts": signal_counts,
-            "horizons": list(horizons),
-            "lookbackDays": days,
-            "instrument": inst.symbol,
-            "family": inst.family,
         },
     }
 

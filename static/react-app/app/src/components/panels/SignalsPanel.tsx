@@ -30,7 +30,12 @@ import { fmtAtrMeta, fmtLiveQuoteMeta, fmtPrice } from '@/lib/athenaFormat';
 import { engineAV3DecisionRank, engineAV3ListLabel, isEngineAV3Signal } from '@/lib/engineAV3';
 import { fetchVisionCandlePayload } from '@/lib/visionReview';
 import apiClient from '@/lib/apiClient';
-import { buildQuickExecutePayload, resolveEngineBExecutionPreviewLevels } from '@/lib/manualExecuteHelpers';
+import {
+  aiLevelOverrideFromReview,
+  buildQuickExecutePayload,
+  computeLevelOverrideRR,
+  resolveEngineBExecutionPreviewLevels,
+} from '@/lib/manualExecuteHelpers';
 import VolumeModeField from '@/components/execution/VolumeModeField';
 import ExitModeField from '@/components/execution/ExitModeField';
 import { useExitModeState } from '@/hooks/useExitModeState';
@@ -347,6 +352,7 @@ export default function SignalsPanel() {
   } = useExecutionVolumeState('min_lot');
   const { exitMode, setExitMode } = useExitModeState('default');
   const [riskPreviewLine, setRiskPreviewLine] = useState<string | null>(null);
+  const [useAiLevels, setUseAiLevels] = useState(false);
 
   // Hot-cached snapshot from server-side last scan (Engine A only).
   const { data: lastScan, loading: lastLoading, error: lastError, refresh: refreshLast } =
@@ -644,6 +650,17 @@ export default function SignalsPanel() {
     [],
   );
 
+  const aiOverride = useMemo(
+    () => aiLevelOverrideFromReview(aiTextReview, {
+      fallbackTp1: confirmRow?.signal.tp ?? confirmRow?.signal.tp1 ?? null,
+    }),
+    [aiTextReview, confirmRow],
+  );
+
+  useEffect(() => {
+    setUseAiLevels(false);
+  }, [confirmRow]);
+
   useEffect(() => {
     if (!confirmRow) {
       setRiskPreviewLine(null);
@@ -698,6 +715,7 @@ export default function SignalsPanel() {
       volumeMode,
       sizingOverride,
       exitMode,
+      levelOverride: useAiLevels ? aiOverride : null,
     });
     setExecuting(true);
     try {
@@ -722,7 +740,7 @@ export default function SignalsPanel() {
       setConfirmRow(null);
       setPendingStyle('auto');
     }
-  }, [confirmRow, style, pendingStyle, volumeMode, sizingOverride, exitMode, showToast]);
+  }, [confirmRow, style, pendingStyle, volumeMode, sizingOverride, exitMode, useAiLevels, aiOverride, showToast]);
 
   const lastScannedAtA = scanCacheAMeta?.scannedAt ?? (lastScan as ScanResponse | null)?.scannedAt;
   const lastScannedAtB = scanCacheBMeta?.scannedAt;
@@ -1409,6 +1427,38 @@ export default function SignalsPanel() {
                   TP: {fmtPrice(confirmRow?.signal.tp ?? confirmRow?.signal.tp1, confirmRow?.signal.pair, confirmRow?.signal.type)} ·{' '}
                   R:R {fmtNum(confirmRow?.signal.rr ?? confirmRow?.signal.rr1, 2)}
                 </div>
+                {aiOverride && (
+                  <label className="flex items-start gap-2 text-[11px] cursor-pointer">
+                    <input
+                      type="checkbox"
+                      className="mt-0.5"
+                      checked={useAiLevels}
+                      onChange={(e) => setUseAiLevels(e.target.checked)}
+                    />
+                    <span>
+                      Use AI-suggested SL/TP (
+                      {fmtPrice(aiOverride.sl, confirmRow?.signal.pair, confirmRow?.signal.type)}
+                      {' / '}
+                      {fmtPrice(aiOverride.tp1, confirmRow?.signal.pair, confirmRow?.signal.type)}
+                      )
+                    </span>
+                  </label>
+                )}
+                {useAiLevels && aiOverride && (
+                  <div className="text-[10px] text-muted-foreground font-mono">
+                    R:R {fmtNum(
+                      computeLevelOverrideRR(
+                        confirmRow?.signal.entry ?? confirmRow?.signal.price,
+                        aiOverride.sl,
+                        aiOverride.tp1,
+                      ),
+                      2,
+                    )}
+                    {aiTextReview?.levelsReason
+                      ? ` · ${String(aiTextReview.levelsReason).slice(0, 120)}`
+                      : ''}
+                  </div>
+                )}
                 <VolumeModeField
                   volumeMode={volumeMode}
                   onVolumeModeChange={setVolumeMode}
@@ -1428,8 +1478,8 @@ export default function SignalsPanel() {
                   Style: <span className="font-mono">{(pendingStyle === 'auto' ? confirmRow?.signal.style || 'auto' : pendingStyle).toUpperCase()}</span>
                 </div>
                 <div className="text-[10px] text-muted-foreground">
-                  Backend will recompute SL/TP for the selected style via /api/quick-execute (recompute_levels_for_style),
-                  apply risk_check, and route to MT5 or Bybit.
+                  Backend recomputes SL/TP for the selected style; AI override is applied and validated
+                  after recompute when &quot;Use AI-suggested&quot; is on.
                 </div>
                 {isPaper && <span className="block text-warning">This will execute in PAPER mode.</span>}
               </div>

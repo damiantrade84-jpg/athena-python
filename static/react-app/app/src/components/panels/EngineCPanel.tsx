@@ -28,7 +28,7 @@ import {
   formatRiskPreviewLine,
   useExecutionVolumeState,
 } from '@/hooks/useExecutionVolumeState';
-import { buildQuickExecutePayload } from '@/lib/manualExecuteHelpers';
+import { buildQuickExecutePayload, aiLevelOverrideFromReview, computeLevelOverrideRR } from '@/lib/manualExecuteHelpers';
 import { GitMerge, Play, BarChart3, Layers, Activity, Zap, Eye, Clock, Sun, Moon, FileText } from 'lucide-react';
 import { fmtNum, toNum } from '@/lib/utils';
 import { fmtLiveQuoteMeta, fmtPrice } from '@/lib/athenaFormat';
@@ -215,6 +215,7 @@ export default function EngineCPanel() {
     setSizingOverride,
   } = useExecutionVolumeState('min_lot');
   const [riskPreviewLine, setRiskPreviewLine] = useState<string | null>(null);
+  const [useAiLevels, setUseAiLevels] = useState(false);
 
   // AI Review state
   const [aiReview, setAiReview] = useState<ChartAnalysisResponse | null>(null);
@@ -314,6 +315,17 @@ export default function EngineCPanel() {
     [],
   );
 
+  const aiOverride = useMemo(
+    () => aiLevelOverrideFromReview(aiTextReview, {
+      fallbackTp1: confirmRow?.tp ?? null,
+    }),
+    [aiTextReview, confirmRow],
+  );
+
+  useEffect(() => {
+    setUseAiLevels(false);
+  }, [confirmRow]);
+
   useEffect(() => {
     if (!confirmRow) {
       setRiskPreviewLine(null);
@@ -376,6 +388,7 @@ export default function EngineCPanel() {
       pipMode: pendingStyle,
       volumeMode,
       sizingOverride: effectiveSizing,
+      levelOverride: useAiLevels ? aiOverride : null,
     });
     const result = await postExecute('/api/quick-execute', payload as unknown as Record<string, unknown>);
     if (result) {
@@ -388,7 +401,7 @@ export default function EngineCPanel() {
       showToast('Execution failed', 'error');
     }
     setConfirmRow(null);
-  }, [confirmRow, pendingStyle, volumeMode, sizingOverride, postExecute, showToast]);
+  }, [confirmRow, pendingStyle, volumeMode, sizingOverride, useAiLevels, aiOverride, postExecute, showToast]);
 
   // AI Vision Review
   const runAiReview = useCallback(
@@ -902,6 +915,34 @@ export default function EngineCPanel() {
                   TP: {fmtPrice(confirmRow?.tp, confirmRow?.pair, confirmRow?.type)} ·
                   RR: {fmtNum(confirmRow?.rr, 2)}
                 </div>
+                {aiOverride && (
+                  <label className="flex items-start gap-2 text-[11px] cursor-pointer">
+                    <input
+                      type="checkbox"
+                      className="mt-0.5"
+                      checked={useAiLevels}
+                      onChange={(e) => setUseAiLevels(e.target.checked)}
+                    />
+                    <span>
+                      Use AI-suggested SL/TP (
+                      {fmtPrice(aiOverride.sl, confirmRow?.pair, confirmRow?.type)}
+                      {' / '}
+                      {fmtPrice(aiOverride.tp1, confirmRow?.pair, confirmRow?.type)}
+                      )
+                    </span>
+                  </label>
+                )}
+                {useAiLevels && aiOverride && (
+                  <div className="text-[10px] text-muted-foreground font-mono">
+                    R:R {fmtNum(
+                      computeLevelOverrideRR(confirmRow?.entry, aiOverride.sl, aiOverride.tp1),
+                      2,
+                    )}
+                    {aiTextReview?.levelsReason
+                      ? ` · ${String(aiTextReview.levelsReason).slice(0, 120)}`
+                      : ''}
+                  </div>
+                )}
                 <VolumeModeField
                   volumeMode={volumeMode}
                   onVolumeModeChange={setVolumeMode}
@@ -915,8 +956,8 @@ export default function EngineCPanel() {
                   Tier: {confirmRow?.tier || '—'} · Conviction: {fmtNum(confirmRow?.conviction, 2)}
                 </div>
                 <div className="text-[10px] text-muted-foreground">
-                  Backend will recompute SL/TP for the selected style via /api/quick-execute (recompute_levels_for_style),
-                  apply risk_check, and route to MT5 or Bybit.
+                  Backend recomputes SL/TP for the selected style; AI override is applied and validated
+                  after recompute when &quot;Use AI-suggested&quot; is on.
                 </div>
               </div>
             </AlertDialogDescription>

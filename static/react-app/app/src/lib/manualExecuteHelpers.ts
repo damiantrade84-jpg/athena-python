@@ -1,5 +1,6 @@
 import type {
   AIChartReviewResponse,
+  AiTextReviewResponse,
   EngineASignal,
   ScalpAIChartReviewResponse,
   SuggestedTradePlan,
@@ -175,6 +176,64 @@ export function resolveEngineBExecutionPreviewLevels(
   return { entry, sl };
 }
 
+export interface AiLevelOverride {
+  sl: number;
+  tp1: number;
+  tp2?: number;
+  source: 'marcus_ai';
+}
+
+export function parseAiLevelString(value: string | null | undefined): number | null {
+  if (value == null) return null;
+  const trimmed = String(value).trim();
+  if (!trimmed) return null;
+  const match = trimmed.match(/-?\d[\d,]*(?:\.\d+)?(?:e[-+]?\d+)?/i);
+  if (!match) return null;
+  const parsed = Number.parseFloat(match[0].replace(/,/g, ''));
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
+export function aiLevelOverrideFromReview(
+  review: AiTextReviewResponse | null | undefined,
+  opts?: { fallbackTp1?: number | null },
+): AiLevelOverride | null {
+  if (!review) return null;
+  const verdict = String(review.levelsVerdict || '').trim().toLowerCase();
+  const fallbackTp1 = typeof opts?.fallbackTp1 === 'number' && opts.fallbackTp1 > 0
+    ? opts.fallbackTp1
+    : null;
+
+  if (verdict === 'adjust' || verdict === 'reject') {
+    const sl = parseAiLevelString(review.suggestedSL);
+    const tp1 = parseAiLevelString(review.suggestedTP);
+    if (sl == null || tp1 == null) return null;
+    return { sl, tp1, tp2: tp1, source: 'marcus_ai' };
+  }
+
+  if (verdict === 'accept') {
+    const sl = parseAiLevelString(review.invalidation);
+    const tp1 = parseAiLevelString(review.suggestedTP) ?? fallbackTp1;
+    if (sl == null || tp1 == null) return null;
+    return { sl, tp1, tp2: tp1, source: 'marcus_ai' };
+  }
+
+  return null;
+}
+
+export function computeLevelOverrideRR(
+  entry: number | null | undefined,
+  sl: number | null | undefined,
+  tp1: number | null | undefined,
+): number | null {
+  if (entry == null || sl == null || tp1 == null) return null;
+  if (!Number.isFinite(entry) || !Number.isFinite(sl) || !Number.isFinite(tp1)) return null;
+  if (entry <= 0 || sl <= 0 || tp1 <= 0) return null;
+  const risk = Math.abs(entry - sl);
+  const reward = Math.abs(tp1 - entry);
+  if (risk <= 0) return null;
+  return reward / risk;
+}
+
 export function buildQuickExecutePayload(args: {
   signal: EngineASignal;
   engineBOverlay?: Record<string, unknown>;
@@ -184,8 +243,19 @@ export function buildQuickExecutePayload(args: {
   sizingOverride?: number;
   exitMode?: ExitModeSelection;
   reviewId?: string | null;
+  levelOverride?: AiLevelOverride | null;
 }): Record<string, unknown> {
-  const { signal, engineBOverlay, isEngineBOnly, pipMode, volumeMode, sizingOverride, exitMode, reviewId } = args;
+  const {
+    signal,
+    engineBOverlay,
+    isEngineBOnly,
+    pipMode,
+    volumeMode,
+    sizingOverride,
+    exitMode,
+    reviewId,
+    levelOverride,
+  } = args;
   const resolved = isEngineBOnly ? signal : resolveEngineAV3Signal(signal);
   const signalPayload = isEngineBOnly ? resolved : stripEngineBFromSignal(resolved);
   const nakedData = isEngineBOnly
@@ -221,6 +291,14 @@ export function buildQuickExecutePayload(args: {
   };
   if (reviewId) {
     payload.review_id = reviewId;
+  }
+  if (levelOverride && !isEngineAV3Signal(resolved)) {
+    payload.level_override = {
+      sl: levelOverride.sl,
+      tp1: levelOverride.tp1,
+      tp2: levelOverride.tp2 ?? levelOverride.tp1,
+      source: levelOverride.source,
+    };
   }
   return payload;
 }
