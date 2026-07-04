@@ -6,7 +6,6 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Textarea } from '@/components/ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -21,7 +20,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
-import { ErrorBanner } from '@/components/shared';
+import { ErrorBanner, MultiPairPicker } from '@/components/shared';
 import VolumeModeField from '@/components/execution/VolumeModeField';
 import {
   fetchRiskPreview,
@@ -262,7 +261,7 @@ export default function EngineCPanel() {
   const runCompareBulk = useCallback(async () => {
     const tokens = comparePairBulk.split(/[,;\n\r]+/).map((s) => s.trim()).filter(Boolean);
     if (!tokens.length) {
-      showToast('Enter comma-separated symbols for bulk compare.', 'info');
+      showToast('Select one or more pairs for bulk compare.', 'info');
       return;
     }
     setBulkCompareResults([]);
@@ -570,11 +569,12 @@ export default function EngineCPanel() {
           </div>
           <div className="space-y-1">
             <p className="text-[10px] uppercase text-muted-foreground">Restrict to pairs (optional)</p>
-            <Textarea
+            <MultiPairPicker
               value={scanPairFilter}
-              onChange={(e) => setScanPairFilter(e.target.value)}
-              placeholder="Comma or space separated, e.g. EUR/USD, GBP/USD, XAU/USD — empty = entire asset class"
-              className="min-h-[56px] text-xs font-mono"
+              onChange={setScanPairFilter}
+              allPairs={allPairs}
+              assetClassFilter={assetClass}
+              placeholder="Select pairs to scan"
             />
           </div>
 
@@ -798,11 +798,11 @@ export default function EngineCPanel() {
 
           <div className="border-t border-border/40 pt-3 mt-2 space-y-2">
             <p className="text-[10px] uppercase text-muted-foreground">Bulk compare (one request per symbol)</p>
-            <Textarea
+            <MultiPairPicker
               value={comparePairBulk}
-              onChange={(e) => setComparePairBulk(e.target.value)}
-              placeholder="EUR/USD, GBP/USD, XAU/USD ..."
-              className="min-h-[52px] text-xs font-mono"
+              onChange={setComparePairBulk}
+              allPairs={allPairs}
+              placeholder="Select pairs to compare"
             />
             <Button size="sm" variant="outline" className="h-8 text-xs" onClick={runCompareBulk} disabled={comparing}>
               Run bulk compare
