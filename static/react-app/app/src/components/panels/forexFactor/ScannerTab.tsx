@@ -5,7 +5,7 @@ import { Checkbox } from '@/components/ui/checkbox';
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from '@/components/ui/table';
-import { Copy, Play, RefreshCw, Search, ShieldCheck } from 'lucide-react';
+import { ChevronDown, ChevronRight, Copy, Play, RefreshCw, Search, ShieldCheck } from 'lucide-react';
 import {
   G8_PAIRS,
   getForexTradingStatus,
@@ -23,7 +23,6 @@ import {
   TabEmpty,
   TabShell,
   actionBadgeClass,
-  gateResultClass,
 } from './shared';
 
 function fmtNum(value?: number | null, digits = 4): string {
@@ -48,14 +47,45 @@ function actionRowClass(row: ForexTradeCandidate): string {
   if (row.tradable_now && row.action === 'SELL') return 'border-l-2 border-l-red-500/80 bg-red-500/5';
   if (row.action === 'REDUCE' || row.action === 'FLATTEN') return 'border-l-2 border-l-amber-500/80 bg-amber-500/5';
   if (row.factor_eligible && !row.tradable_now) return 'border-l-2 border-l-amber-500/80 bg-amber-500/5';
-  return 'opacity-75';
+  return 'opacity-70';
 }
 
-function GateBadge({ gate }: { gate?: { result?: string; reason_code?: string } }) {
+function familyGlyphClass(direction?: string | null): string {
+  switch ((direction || '').toUpperCase()) {
+    case 'LONG':
+      return 'text-emerald-400';
+    case 'SHORT':
+      return 'text-red-400';
+    default:
+      return 'text-muted-foreground/50';
+  }
+}
+
+function FamilyGlyphs({ row }: { row: ForexTradeCandidate }) {
+  const families: Array<[string, string]> = [
+    ['C', row.family_scores?.carry?.direction || ''],
+    ['M', row.family_scores?.momentum?.direction || ''],
+    ['V', row.family_scores?.value?.direction || ''],
+  ];
   return (
-    <Badge className={gateResultClass(gate?.result)} title={gate?.reason_code}>
-      {gate?.result || '--'}
-    </Badge>
+    <span className="font-mono text-xs tracking-widest">
+      {families.map(([letter, dir]) => (
+        <span key={letter} className={familyGlyphClass(dir)} title={`${letter}: ${dir || 'neutral'}`}>
+          {letter}
+        </span>
+      ))}
+    </span>
+  );
+}
+
+function GateDot({ label, result }: { label: string; result?: string }) {
+  const r = (result || '').toLowerCase();
+  const color = r === 'pass' ? 'bg-emerald-400' : r === 'fail' ? 'bg-red-400' : r === 'reduced' ? 'bg-amber-400' : 'bg-muted-foreground/40';
+  return (
+    <span className="inline-flex items-center gap-1" title={`${label}: ${result || 'unknown'}`}>
+      <span className={`h-2 w-2 rounded-full ${color}`} />
+      <span className="text-[10px] text-muted-foreground">{label}</span>
+    </span>
   );
 }
 
@@ -66,6 +96,7 @@ export default function ScannerTab() {
   const [strictFactorData, setStrictFactorData] = useState(true);
   const [autoRefresh, setAutoRefresh] = useState(false);
   const [intervalMs, setIntervalMs] = useState(300000);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [scan, setScan] = useState<ForexScanData | null>(null);
   const [status, setStatus] = useState<ForexTradingStatusData | null>(null);
   const [selectedSymbol, setSelectedSymbol] = useState<string | null>(null);
@@ -76,7 +107,7 @@ export default function ScannerTab() {
 
   const symbols = useMemo(() => parseSymbolList(symbolsText), [symbolsText]);
   const candidates = scan?.candidates || [];
-  const selected = candidates.find((row) => row.symbol === selectedSymbol) || candidates[0];
+  const selected = candidates.find((row) => row.symbol === selectedSymbol) || null;
 
   const refreshStatus = async () => {
     const statusResp = await getForexTradingStatus();
@@ -112,7 +143,7 @@ export default function ScannerTab() {
         executionMode: 'paper',
       });
       setScan(resp.data || null);
-      setSelectedSymbol(resp.data?.candidates?.[0]?.symbol || null);
+      setSelectedSymbol(null);
       setLastExecution(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -159,84 +190,90 @@ export default function ScannerTab() {
   return (
     <TabShell loading={loading} error={error} diagnostics={diagnostics} warnings={warnings} onRefresh={loadLatest}>
       <div className="space-y-4">
-        <div className="space-y-2">
-          <p className="text-[11px] text-muted-foreground">
-            Factor decision = weekly/daily Carry, Momentum, and Value bias. Scanner = actionable candidates with hard gates and execution context. Execution defaults to dry-run; demo orders require config gates.
-          </p>
-          <div className="rounded-md border border-border/60 px-3 py-2 text-[11px] text-muted-foreground">
-            <div className="font-medium text-foreground mb-1">Hard Gates</div>
-            These gates are not score components. A failed volatility or cost gate blocks, reduces, or flattens exposure even when Carry/Momentum/Value are aligned.
-          </div>
-        </div>
-
-        <div data-testid="fx-scanner-controls" className="flex flex-col gap-3">
-          <label className="min-w-0 space-y-1 text-xs">
-            <span className="text-muted-foreground">Symbols</span>
-            <textarea
-              className="min-h-20 w-full max-w-full resize-y rounded-md border border-input bg-background px-3 py-2 font-mono text-xs"
-              value={symbolsText}
-              onChange={(event) => setSymbolsText(event.target.value)}
-            />
-          </label>
-          <div data-testid="fx-scanner-actions" className="flex w-full flex-col gap-2 sm:flex-row sm:flex-wrap">
-            <Button className="w-full sm:w-auto" variant="outline" size="sm" onClick={() => setSymbolsText(G8_PAIRS.join(', '))}>G8 preset</Button>
+        <div data-testid="fx-scanner-controls" className="flex flex-col gap-3 rounded-md border border-border/60 p-3">
+          <div data-testid="fx-scanner-actions" className="flex w-full flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center">
             <Button className="w-full sm:w-auto" size="sm" disabled={busy || !symbols.length} onClick={runScan}>
               <Search className="h-3.5 w-3.5 mr-1" /> Scan Forex
             </Button>
             <Button className="w-full sm:w-auto" variant="outline" size="sm" disabled={busy} onClick={loadLatest}>
               <RefreshCw className="h-3.5 w-3.5 mr-1" /> Refresh latest scan
             </Button>
+            <Badge variant="outline" className="text-[10px]">
+              {status?.can_demo_execute ? 'Demo execution ready' : 'Execution off'}
+            </Badge>
+            <Badge variant="outline" className="text-[10px]">Mode {status?.executor_mode || 'paper'}</Badge>
+            <Badge variant="outline" className="text-[10px]">{symbols.length} symbols</Badge>
+            <button
+              type="button"
+              className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground sm:ml-auto"
+              onClick={() => setSettingsOpen((v) => !v)}
+            >
+              {settingsOpen ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
+              Scan settings
+            </button>
           </div>
+
+          {settingsOpen && (
+            <div className="space-y-3 border-t border-border/60 pt-3">
+              <label className="min-w-0 space-y-1 text-xs block">
+                <span className="text-muted-foreground">Symbols</span>
+                <textarea
+                  className="min-h-20 w-full max-w-full resize-y rounded-md border border-input bg-background px-3 py-2 font-mono text-xs"
+                  value={symbolsText}
+                  onChange={(event) => setSymbolsText(event.target.value)}
+                />
+              </label>
+              <div className="flex flex-wrap gap-4 text-xs items-center">
+                <Button className="w-full sm:w-auto" variant="outline" size="sm" onClick={() => setSymbolsText(G8_PAIRS.join(', '))}>G8 preset</Button>
+                <label className="flex items-center gap-1.5 cursor-pointer">
+                  <Checkbox checked={includeBlocked} onCheckedChange={(v) => setIncludeBlocked(v === true)} />
+                  Include blocked
+                </label>
+                <label className="flex items-center gap-1.5 cursor-pointer">
+                  <Checkbox checked={refreshDecisions} onCheckedChange={(v) => setRefreshDecisions(v === true)} />
+                  Refresh decisions before scan
+                </label>
+                <label className="flex items-center gap-1.5 cursor-pointer">
+                  <Checkbox checked={strictFactorData} onCheckedChange={(v) => setStrictFactorData(v === true)} />
+                  Strict factor data
+                </label>
+                <label className="flex items-center gap-1.5 cursor-pointer">
+                  <Checkbox checked={autoRefresh} onCheckedChange={(v) => setAutoRefresh(v === true)} />
+                  Auto-refresh
+                </label>
+                <select
+                  className="rounded-md border border-input bg-background px-2 py-1 text-xs"
+                  value={intervalMs}
+                  onChange={(event) => setIntervalMs(Number(event.target.value))}
+                  disabled={!autoRefresh}
+                >
+                  <option value={60000}>1 min</option>
+                  <option value={300000}>5 min</option>
+                  <option value={900000}>15 min</option>
+                </select>
+              </div>
+              <div className="rounded-md border border-border/60 px-3 py-2 text-[11px] text-muted-foreground">
+                <div className="font-medium text-foreground mb-1">Hard Gates</div>
+                These gates are not score components. A failed volatility or cost gate blocks, reduces, or flattens exposure even when Carry/Momentum/Value are aligned.
+                Factor decision = weekly/daily Carry, Momentum, and Value bias. Execution defaults to dry-run; demo orders require config gates.
+              </div>
+            </div>
+          )}
         </div>
 
-        <div className="flex flex-wrap gap-4 text-xs">
-          <label className="flex items-center gap-1.5 cursor-pointer">
-            <Checkbox checked={includeBlocked} onCheckedChange={(v) => setIncludeBlocked(v === true)} />
-            Include blocked
-          </label>
-          <label className="flex items-center gap-1.5 cursor-pointer">
-            <Checkbox checked={refreshDecisions} onCheckedChange={(v) => setRefreshDecisions(v === true)} />
-            Refresh decisions before scan
-          </label>
-          <label className="flex items-center gap-1.5 cursor-pointer">
-            <Checkbox checked={strictFactorData} onCheckedChange={(v) => setStrictFactorData(v === true)} />
-            Strict factor data
-          </label>
-          <label className="flex items-center gap-1.5 cursor-pointer">
-            <Checkbox checked={autoRefresh} onCheckedChange={(v) => setAutoRefresh(v === true)} />
-            Auto-refresh
-          </label>
-          <select
-            className="rounded-md border border-input bg-background px-2 py-1 text-xs"
-            value={intervalMs}
-            onChange={(event) => setIntervalMs(Number(event.target.value))}
-            disabled={!autoRefresh}
-          >
-            <option value={60000}>1 min</option>
-            <option value={300000}>5 min</option>
-            <option value={900000}>15 min</option>
-          </select>
-          <Badge variant="outline" className="text-[10px]">
-            {status?.can_demo_execute ? 'Demo execution ready' : 'Execution off'}
-          </Badge>
-          <Badge variant="outline" className="text-[10px]">
-            Mode {status?.executor_mode || 'paper'}
-          </Badge>
-        </div>
-
-        <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-7 gap-3">
+        <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-7 gap-2">
           {[
-            ['Symbols scanned', scan?.summary?.symbols_scanned],
-            ['Tradable now', scan?.summary?.tradable_count],
+            ['Scanned', scan?.summary?.symbols_scanned],
+            ['Tradable', scan?.summary?.tradable_count],
             ['BUY', scan?.summary?.buy_count],
             ['SELL', scan?.summary?.sell_count],
             ['Blocked', scan?.summary?.blocked_count],
             ['No trade', scan?.summary?.no_trade_count],
-            ['Open FX positions', status?.open_positions?.length || 0],
+            ['Open positions', status?.open_positions?.length || 0],
           ].map(([label, value]) => (
-            <div key={String(label)} className="rounded-md border border-border/60 px-3 py-2">
+            <div key={String(label)} className="rounded-md border border-border/60 px-3 py-1.5">
               <div className="text-[10px] uppercase tracking-wide text-muted-foreground">{label}</div>
-              <div className="text-lg font-mono">{value ?? '--'}</div>
+              <div className="text-base font-mono leading-tight">{value ?? '--'}</div>
             </div>
           ))}
         </div>
@@ -247,68 +284,83 @@ export default function ScannerTab() {
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>Rank</TableHead>
+                <TableHead>#</TableHead>
                 <TableHead>Symbol</TableHead>
                 <TableHead>Action</TableHead>
-                <TableHead>Dir</TableHead>
-                <TableHead>Tradable</TableHead>
                 <TableHead>Actions</TableHead>
                 <TableHead className="text-right">Score</TableHead>
-                <TableHead>Carry</TableHead>
-                <TableHead>Momentum</TableHead>
-                <TableHead>Value</TableHead>
-                <TableHead>COT</TableHead>
-                <TableHead>Vol</TableHead>
-                <TableHead>Cost</TableHead>
-                <TableHead className="text-right">Spread</TableHead>
-                <TableHead className="text-right">ATR</TableHead>
+                <TableHead title="Carry / Momentum / Value alignment">Factors</TableHead>
+                <TableHead>Gates</TableHead>
                 <TableHead className="text-right">Entry</TableHead>
-                <TableHead className="text-right">SL</TableHead>
-                <TableHead className="text-right">TP1</TableHead>
+                <TableHead className="text-right">SL / TP1</TableHead>
                 <TableHead className="text-right">RR</TableHead>
+                <TableHead className="text-right">Spread / ATR</TableHead>
                 <TableHead className="text-right">Weight</TableHead>
                 <TableHead>Reason</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
-              {candidates.map((row, index) => (
-                <TableRow key={`${row.scan_id}-${row.symbol}-${index}`} className={actionRowClass(row)}>
-                  <TableCell className="font-mono text-xs">{index + 1}</TableCell>
-                  <TableCell className="font-mono text-xs">{row.symbol}</TableCell>
-                  <TableCell><Badge className={actionBadgeClass(row.action)}>{row.action}</Badge></TableCell>
-                  <TableCell>{row.direction || '--'}</TableCell>
-                  <TableCell>{row.tradable_now ? 'Yes' : 'No'}</TableCell>
-                  <TableCell>
-                    <div className="flex flex-wrap gap-1">
-                      <Button variant="outline" size="sm" onClick={() => setSelectedSymbol(row.symbol || null)}>Details</Button>
-                      <Button variant="secondary" size="sm" disabled={busy || row.action === 'NO_TRADE'} onClick={() => executeCandidate(row, true)}>
-                        <Play className="h-3.5 w-3.5 mr-1" /> Dry-run
-                      </Button>
-                      <Button size="sm" disabled={busy || !status?.can_demo_execute || !row.tradable_now} onClick={() => executeCandidate(row, false)}>
-                        <ShieldCheck className="h-3.5 w-3.5 mr-1" /> Demo
-                      </Button>
-                      <Button variant="ghost" size="sm" onClick={() => copyCandidate(row)} title="Copy signal JSON">
-                        <Copy className="h-3.5 w-3.5" />
-                      </Button>
-                    </div>
-                  </TableCell>
-                  <TableCell className="text-right font-mono text-xs">{fmtNum(candidateScore(row), 1)}</TableCell>
-                  <TableCell>{row.family_scores?.carry?.direction || '--'}</TableCell>
-                  <TableCell>{row.family_scores?.momentum?.direction || '--'}</TableCell>
-                  <TableCell>{row.family_scores?.value?.direction || '--'}</TableCell>
-                  <TableCell>{String(row.cot_overlay?.action || '--')}</TableCell>
-                  <TableCell><GateBadge gate={row.gate_results?.volatility} /></TableCell>
-                  <TableCell><GateBadge gate={row.gate_results?.cost} /></TableCell>
-                  <TableCell className="text-right font-mono text-xs">{fmtNum(row.spread_pips, 1)}</TableCell>
-                  <TableCell className="text-right font-mono text-xs">{fmtNum(row.atr_pips, 1)}</TableCell>
-                  <TableCell className="text-right font-mono text-xs">{fmtNum(row.entry)}</TableCell>
-                  <TableCell className="text-right font-mono text-xs">{fmtNum(row.sl)}</TableCell>
-                  <TableCell className="text-right font-mono text-xs">{fmtNum(row.tp1)}</TableCell>
-                  <TableCell className="text-right font-mono text-xs">{fmtNum(row.rr1, 2)}</TableCell>
-                  <TableCell className="text-right font-mono text-xs">{fmtPct(row.target_weight)}</TableCell>
-                  <TableCell className="max-w-[260px] truncate" title={row.reason}>{row.reason || '--'}</TableCell>
-                </TableRow>
-              ))}
+              {candidates.map((row, index) => {
+                const isSelected = selectedSymbol === row.symbol;
+                return (
+                  <TableRow
+                    key={`${row.scan_id}-${row.symbol}-${index}`}
+                    className={`${actionRowClass(row)} cursor-pointer ${isSelected ? 'ring-1 ring-inset ring-border' : ''}`}
+                    onClick={() => setSelectedSymbol(isSelected ? null : (row.symbol || null))}
+                  >
+                    <TableCell className="font-mono text-xs">{index + 1}</TableCell>
+                    <TableCell className="font-mono text-xs font-semibold">{row.symbol}</TableCell>
+                    <TableCell>
+                      <div className="flex items-center gap-1.5">
+                        <Badge className={actionBadgeClass(row.action)}>{row.action}</Badge>
+                        {row.direction && <span className="text-[10px] text-muted-foreground">{row.direction}</span>}
+                      </div>
+                    </TableCell>
+                    <TableCell onClick={(e) => e.stopPropagation()}>
+                      <div className="flex flex-nowrap gap-1">
+                        <Button variant="secondary" size="sm" disabled={busy || row.action === 'NO_TRADE'} onClick={() => executeCandidate(row, true)}>
+                          <Play className="h-3.5 w-3.5 mr-1" /> Dry-run
+                        </Button>
+                        <Button size="sm" disabled={busy || !status?.can_demo_execute || !row.tradable_now} onClick={() => executeCandidate(row, false)}>
+                          <ShieldCheck className="h-3.5 w-3.5 mr-1" /> Demo
+                        </Button>
+                        <Button variant="ghost" size="sm" onClick={() => copyCandidate(row)} title="Copy signal JSON">
+                          <Copy className="h-3.5 w-3.5" />
+                        </Button>
+                      </div>
+                    </TableCell>
+                    <TableCell className="text-right font-mono text-xs">{fmtNum(candidateScore(row), 1)}</TableCell>
+                    <TableCell>
+                      <div className="flex items-center gap-1.5">
+                        <FamilyGlyphs row={row} />
+                        {row.cot_overlay?.action ? (
+                          <span className="text-[10px] text-muted-foreground" title={`COT: ${String(row.cot_overlay.action)}`}>
+                            COT
+                          </span>
+                        ) : null}
+                      </div>
+                    </TableCell>
+                    <TableCell>
+                      <div className="flex flex-col gap-0.5">
+                        <GateDot label="Vol" result={row.gate_results?.volatility?.result} />
+                        <GateDot label="Cost" result={row.gate_results?.cost?.result} />
+                      </div>
+                    </TableCell>
+                    <TableCell className="text-right font-mono text-xs">{fmtNum(row.entry)}</TableCell>
+                    <TableCell className="text-right font-mono text-xs">
+                      <div>{fmtNum(row.sl)}</div>
+                      <div className="text-muted-foreground">{fmtNum(row.tp1)}</div>
+                    </TableCell>
+                    <TableCell className="text-right font-mono text-xs">{fmtNum(row.rr1, 2)}</TableCell>
+                    <TableCell className="text-right font-mono text-xs">
+                      <div>{fmtNum(row.spread_pips, 1)}</div>
+                      <div className="text-muted-foreground">{fmtNum(row.atr_pips, 1)}</div>
+                    </TableCell>
+                    <TableCell className="text-right font-mono text-xs">{fmtPct(row.target_weight)}</TableCell>
+                    <TableCell className="max-w-[220px] truncate text-xs text-muted-foreground" title={row.reason}>{row.reason || '--'}</TableCell>
+                  </TableRow>
+                );
+              })}
             </TableBody>
           </Table>
         )}

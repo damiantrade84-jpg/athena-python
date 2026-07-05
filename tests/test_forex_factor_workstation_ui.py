@@ -26,9 +26,12 @@ def test_forex_panel_defaults_to_scanner_and_trading_badges():
 
 def test_sidebar_badge_is_fx_not_research():
     source = _read(SIDEBAR)
-    assert "id: 'forexFactor'" in source
-    assert "badge: 'FX'" in source
-    assert "badge: 'RESEARCH'" not in source
+    forex_line = next(
+        (line for line in source.splitlines() if "id: 'forexFactor'" in line), ""
+    )
+    assert forex_line, "forexFactor sidebar entry missing"
+    assert "badge: 'FX'" in forex_line
+    assert "RESEARCH" not in forex_line
 
 
 def test_scanner_tab_calls_scan_and_execute_candidate_endpoints():
