@@ -1,0 +1,7 @@
+diff --git a/research/edgelab/stub/stub_config.yaml b/research/edgelab/stub/stub_config.yaml
+--- a/research/edgelab/stub/stub_config.yaml
++++ b/research/edgelab/stub/stub_config.yaml
+@@ -1,2 +1,2 @@
+ # EdgeLab safe stub config (research-only).
+-evaluator_scenario: baseline
++evaluator_scenario: candidate_bad_trades

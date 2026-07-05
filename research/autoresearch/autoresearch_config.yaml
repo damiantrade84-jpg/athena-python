@@ -1,0 +1,66 @@
+# AutoResearch configuration (research-only; no live execution paths).
+
+baseline_command: python research/autoresearch/stub_evaluator.py --scenario baseline
+evaluation_command: python research/autoresearch/stub_evaluator.py --scenario evaluate
+
+# Bounded Athena research alternatives (uncomment when frozen data / deps are available):
+# baseline_command: python -m athena_research.engine_a_ablation.run --max-symbols 4 --step 4 --out research/autoresearch/logs/baseline_eval.json
+# evaluation_command: python -m athena_research.engine_a_ablation.run --max-symbols 4 --step 4 --out research/autoresearch/logs/candidate_eval.json
+# metrics_output_path: research/autoresearch/logs/candidate_eval.json
+#
+# baseline_command: python tools/vectorbt_research_lab.py --mode tiny
+# evaluation_command: python tools/vectorbt_research_lab.py --mode tiny
+
+test_command: pytest tests/research/autoresearch -q
+
+min_score_delta: 0.05
+min_trade_count: 30
+max_drawdown_R: 3.0
+max_symbol_concentration: 0.60
+require_oos_not_worse: true
+dry_run_default: false
+
+manual_poll_seconds: 5
+manual_timeout_seconds: 3600
+
+# Used by --mode command; must print or save a .patch path.
+candidate_command: python research/autoresearch/stub_evaluator.py --scenario baseline
+
+metrics_output_path: ""
+
+allowed_paths:
+  - research/
+  - config/research/
+  - configs/research/
+  - tests/research/
+  - athena_research/
+  - engine_a/research/
+  - engine_b/research/
+
+denied_keywords:
+  - live
+  - broker
+  - order
+  - execution
+  - execute
+  - autotrade
+  - scheduler
+  - credentials
+  - secret
+  - key
+  - mt5_login
+  - account
+  - trade_router
+  - position_manager
+  - risk_live
+  - ui
+  - frontend
+  - dashboard
+  - button
+  - send_order
+  - place_order
+  - close_order
+
+detected_alternatives:
+  vectorbt_lab: python tools/vectorbt_research_lab.py --mode tiny
+  engine_a_ablation: python -m athena_research.engine_a_ablation.run --max-symbols 4 --step 4 --out research/autoresearch/logs/baseline_eval.json

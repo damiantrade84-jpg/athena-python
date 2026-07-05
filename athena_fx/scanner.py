@@ -405,7 +405,7 @@ def scan_forex(
     summary = {
         "symbols_scanned": len(universe),
         "tradable_count": sum(1 for c in candidates if c.tradable_now),
-        "blocked_count": sum(1 for c in candidates if c.factor_eligible and not c.tradable_now and c.action == ACTION_NO_TRADE),
+        "blocked_count": sum(1 for c in candidates if c.factor_eligible and not c.tradable_now),
         "no_trade_count": sum(1 for c in candidates if not c.factor_eligible),
         "buy_count": sum(1 for c in candidates if c.action == ACTION_BUY),
         "sell_count": sum(1 for c in candidates if c.action == ACTION_SELL),

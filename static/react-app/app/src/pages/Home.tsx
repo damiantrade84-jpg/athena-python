@@ -25,6 +25,7 @@ import CascadeScanPanel from '@/components/panels/CascadeScanPanel';
 import ASEPanel from '@/components/panels/ASEPanel';
 import TSMOMPanel from '@/components/panels/TSMOMPanel';
 import ForexFactorPanel from '@/components/panels/ForexFactorPanel';
+import EdgeLabSuggestionsPanel from '@/components/panels/EdgeLabSuggestionsPanel';
 
 const panels: Record<string, React.ComponentType> = {
   dashboard: DashboardPanel,
@@ -52,6 +53,7 @@ const panels: Record<string, React.ComponentType> = {
   ase: ASEPanel,
   tsmom: TSMOMPanel,
   forexFactor: ForexFactorPanel,
+  edgeLab: EdgeLabSuggestionsPanel,
 };
 
 export default function Home() {

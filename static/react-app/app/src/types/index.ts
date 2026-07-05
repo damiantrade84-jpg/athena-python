@@ -228,7 +228,8 @@ export type PanelId =
   | 'suggestedTrades'
   | 'ase'
   | 'tsmom'
-  | 'forexFactor';
+  | 'forexFactor'
+  | 'edgeLab';
 
 /**
  * Derived data-fidelity diagnostic for a Cascade Scan candidate.

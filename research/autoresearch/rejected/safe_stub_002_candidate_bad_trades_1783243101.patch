@@ -1,0 +1,7 @@
+diff --git a/research/autoresearch/stub/stub_config.yaml b/research/autoresearch/stub/stub_config.yaml
+--- a/research/autoresearch/stub/stub_config.yaml
++++ b/research/autoresearch/stub/stub_config.yaml
+@@ -1,2 +1,2 @@
+ # Research-only stub config for AutoResearch safe_stub mode.
+-evaluator_scenario: baseline
++evaluator_scenario: candidate_bad_trades

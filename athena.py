@@ -15978,6 +15978,14 @@ try:
 except Exception as _ra_err:
     log.warning("[startup] Research Agent routes not loaded: %s", _ra_err)
 
+# ── EdgeLab routes (research-only suggestions; no live execution) ─────────────
+try:
+    from research.edgelab.routes import register_edgelab_routes
+    register_edgelab_routes(app)
+    log.info("[startup] EdgeLab routes registered (research-only)")
+except Exception as _el_err:
+    log.warning("[startup] EdgeLab routes not loaded: %s", _el_err)
+
 # ── AI Evaluation routes (read-only metrics, never executes trades) ────────────
 try:
     from athena_research.ai_evaluation_routes import register_ai_evaluation_routes

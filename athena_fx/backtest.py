@@ -589,16 +589,21 @@ def run_fx_factor_backtest(
                     tgt_w, tgt_dir = abs(target[0]), target[1]
 
                 if cur_dir and tgt_dir and cur_dir != tgt_dir and cur_w > 0:
-                    _close_position(
+                    exit_cost = _close_position(
                         symbol, pos, cur_date, bar_index, request, trades, positions
                     )
+                    if request.cost_model_enabled:
+                        equity -= exit_cost * equity
+                    turnover += cur_w
                     cur_w = 0.0
                     pos = None
 
                 if tgt_w == 0 and cur_w > 0:
-                    _close_position(
+                    exit_cost = _close_position(
                         symbol, pos, cur_date, bar_index, request, trades, positions
                     )
+                    if request.cost_model_enabled:
+                        equity -= exit_cost * equity
                     turnover += cur_w
                     continue
 
@@ -625,8 +630,9 @@ def run_fx_factor_backtest(
                         open_px, tgt_dir, spread, request.slippage_pips, symbol, is_entry=True
                     )
                     cost = _cost_fraction(spread, request.slippage_pips, fill, symbol) * tgt_w
+                    cost_amt = cost * equity if request.cost_model_enabled else 0.0
                     if request.cost_model_enabled:
-                        equity -= cost * equity
+                        equity -= cost_amt
                     positions[symbol] = _OpenPosition(
                         symbol=symbol,
                         direction=tgt_dir,
@@ -637,7 +643,7 @@ def run_fx_factor_backtest(
                         aligned_families=list(
                             (decisions_meta.get(symbol) or {}).get("aligned_families") or []
                         ),
-                        cost_paid=cost * equity if request.cost_model_enabled else 0.0,
+                        cost_paid=cost_amt,
                         prev_close=open_px,
                     )
                     turnover += tgt_w
@@ -647,17 +653,21 @@ def run_fx_factor_backtest(
                         open_px, tgt_dir, spread, request.slippage_pips, symbol, is_entry=True
                     )
                     cost = _cost_fraction(spread, request.slippage_pips, fill, symbol) * add_w
+                    cost_amt = cost * equity if request.cost_model_enabled else 0.0
                     if request.cost_model_enabled:
-                        equity -= cost * equity
+                        equity -= cost_amt
                     pos.weight = tgt_w
-                    pos.cost_paid += cost * equity if request.cost_model_enabled else 0.0
-                    pos.prev_close = float(bar["close"])
+                    pos.cost_paid += cost_amt
+                    # prev_close deliberately untouched: the daily mark below must
+                    # still capture prior-close -> close for the full position
                     turnover += add_w
                 elif delta < 0:
                     reduce_w = -delta
-                    _partial_close(
+                    exit_cost = _partial_close(
                         symbol, pos, reduce_w, cur_date, bar_index, request, trades
                     )
+                    if request.cost_model_enabled:
+                        equity -= exit_cost * equity
                     pos.weight = tgt_w
                     turnover += reduce_w
 
@@ -822,11 +832,12 @@ def _close_position(
     positions: dict[str, _OpenPosition],
     *,
     at_close: bool = False,
-) -> None:
+) -> float:
+    """Close *pos* fully; return exit cost as a fraction of current equity."""
     bar = bar_index[symbol].get(exit_date)
     if not bar:
         positions.pop(symbol, None)
-        return
+        return 0.0
     spread = request.spread_pips_by_symbol.get(symbol, 0.0)
     if at_close:
         exit_px = float(bar["close"])
@@ -871,6 +882,7 @@ def _close_position(
         }
     )
     positions.pop(symbol, None)
+    return exit_cost
 
 
 def _partial_close(
@@ -881,11 +893,12 @@ def _partial_close(
     bar_index: dict[str, dict[str, dict]],
     request: FxBacktestRequest,
     trades: list[dict[str, Any]],
-) -> None:
+) -> float:
+    """Close *reduce_w* of *pos*; return exit cost as a fraction of current equity."""
     fraction = reduce_w / pos.weight if pos.weight > 0 else 0.0
     bar = bar_index[symbol].get(exit_date)
     if not bar:
-        return
+        return 0.0
     spread = request.spread_pips_by_symbol.get(symbol, 0.0)
     open_px = float(bar["open"])
     exit_px = _fill_price(
@@ -894,10 +907,11 @@ def _partial_close(
     spot_part = pos.spot_pnl * fraction
     swap_part = pos.swap_pnl * fraction
     cost_part = pos.cost_paid * fraction
+    pos.cost_paid -= cost_part
+    exit_cost = 0.0
     if request.cost_model_enabled:
-        extra = _cost_fraction(spread, request.slippage_pips, exit_px, symbol) * reduce_w
-        cost_part += extra * pos.entry_equity
-        pos.cost_paid -= cost_part
+        exit_cost = _cost_fraction(spread, request.slippage_pips, exit_px, symbol) * reduce_w
+        cost_part += exit_cost * pos.entry_equity
     pos.spot_pnl -= spot_part
     pos.swap_pnl -= swap_part
     holding = (_parse_date(exit_date) - _parse_date(pos.entry_date)).days
@@ -920,3 +934,4 @@ def _partial_close(
             "aligned_families": list(pos.aligned_families),
         }
     )
+    return exit_cost

@@ -37,6 +37,7 @@ const navItems: { id: PanelId; label: string; icon: ElementType; badge?: string 
   { id: 'screener',    label: 'Screener',     icon: Filter },
   { id: 'lotteryLab',  label: 'Lottery Lab',  icon: Ticket },
   { id: 'researchLab', label: 'Research Lab', icon: Microscope },
+  { id: 'edgeLab', label: 'EdgeLab Suggestions', icon: FlaskConical, badge: 'RESEARCH' },
   { id: 'performance', label: 'Performance',  icon: PieChart },
   { id: 'markets',     label: 'Markets',      icon: Globe },
   { id: 'guardian',    label: 'Guardian',     icon: ShieldCheck },
