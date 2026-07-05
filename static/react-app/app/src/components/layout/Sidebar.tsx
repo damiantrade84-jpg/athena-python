@@ -13,36 +13,62 @@ import { Switch } from '@/components/ui/switch';
 import {
   LayoutDashboard, Zap, Search, Settings, TrendingUp,
   Layers, Activity, BarChart2, FlaskConical, Filter, Ticket,
-  Microscope, PieChart, Globe, ShieldCheck, Radio, BrainCircuit, ListChecks, LogOut, Workflow, Cpu, Radar, Landmark,
+  Microscope, PieChart, Globe, ShieldCheck, Radio, BrainCircuit, ListChecks, LogOut, Workflow, Cpu, Radar, Landmark, Sparkles,
 } from 'lucide-react';
 
-const navItems: { id: PanelId; label: string; icon: ElementType; badge?: string }[] = [
-  { id: 'dashboard',   label: 'Dashboard',   icon: LayoutDashboard },
-  { id: 'signals',     label: 'Signals',      icon: Zap,        badge: 'LIVE' },
-  { id: 'cascadeScan', label: 'Cascade Scan', icon: Workflow,   badge: 'NEW' },
-  { id: 'pairBrowser', label: 'Pair Browser', icon: Search },
-  { id: 'engineBHotBench', label: 'Engine B Bench', icon: Radar, badge: 'HOT' },
-  { id: 'liveCockpit', label: 'Live Cockpit', icon: Radio,      badge: 'CYBER' },
-  { id: 'scanConfig',  label: 'Scan Config',  icon: Settings },
-  { id: 'trades',      label: 'Trades',       icon: TrendingUp },
-  { id: 'engineC',     label: 'Engine C',     icon: Layers },
-  { id: 'ase',         label: 'ASE',          icon: Cpu,        badge: 'SHADOW' },
-  { id: 'tsmom',       label: 'TSMOM',        icon: TrendingUp, badge: 'DEMO' },
-  { id: 'forexFactor', label: 'Forex Trading & Backtesting', icon: Landmark, badge: 'FX' },
-  { id: 'scalpLab',    label: 'Scalp Lab',    icon: Activity },
-  { id: 'scalpWorkbench', label: 'Scalp Workbench', icon: BarChart2 },
-  { id: 'tvChart',     label: 'TV Chart',     icon: BarChart2 },
-  { id: 'suggestedTrades', label: 'Suggested Trades', icon: ListChecks },
-  { id: 'backtest',    label: 'Backtest',     icon: FlaskConical },
-  { id: 'screener',    label: 'Screener',     icon: Filter },
-  { id: 'lotteryLab',  label: 'Lottery Lab',  icon: Ticket },
-  { id: 'researchLab', label: 'Research Lab', icon: Microscope },
-  { id: 'edgeLab', label: 'EdgeLab Suggestions', icon: FlaskConical, badge: 'RESEARCH' },
-  { id: 'performance', label: 'Performance',  icon: PieChart },
-  { id: 'markets',     label: 'Markets',      icon: Globe },
-  { id: 'guardian',    label: 'Guardian',     icon: ShieldCheck },
-  { id: 'exitStrategy', label: 'Exit Strategy', icon: LogOut },
-  { id: 'aiPerformance', label: 'AI Perf',    icon: BrainCircuit },
+type NavItem = { id: PanelId; label: string; icon: ElementType; badge?: string; title?: string };
+
+type NavSection = {
+  title?: string;
+  items: NavItem[];
+};
+
+const navSections: NavSection[] = [
+  {
+    items: [
+      { id: 'dashboard',   label: 'Dashboard',   icon: LayoutDashboard },
+      { id: 'signals',     label: 'Signals',      icon: Zap,        badge: 'LIVE' },
+      { id: 'cascadeScan', label: 'Cascade Scan', icon: Workflow,   badge: 'NEW' },
+      { id: 'pairBrowser', label: 'Pair Browser', icon: Search },
+      { id: 'engineBHotBench', label: 'Engine B Bench', icon: Radar, badge: 'HOT' },
+      { id: 'liveCockpit', label: 'Live Cockpit', icon: Radio,      badge: 'CYBER' },
+      { id: 'scanConfig',  label: 'Scan Config',  icon: Settings },
+      { id: 'trades',      label: 'Trades',       icon: TrendingUp },
+      { id: 'engineC',     label: 'Engine C',     icon: Layers },
+    ],
+  },
+  {
+    title: 'Research',
+    items: [
+      { id: 'researchLab', label: 'Research Lab', icon: Microscope },
+      {
+        id: 'edgeLab',
+        label: 'EdgeLab',
+        title: 'EdgeLab Suggestions — research-only findings and patch reviews',
+        icon: Sparkles,
+        badge: 'RESEARCH',
+      },
+    ],
+  },
+  {
+    items: [
+      { id: 'ase',         label: 'ASE',          icon: Cpu,        badge: 'SHADOW' },
+      { id: 'tsmom',       label: 'TSMOM',        icon: TrendingUp, badge: 'DEMO' },
+      { id: 'forexFactor', label: 'Forex Trading & Backtesting', icon: Landmark, badge: 'FX' },
+      { id: 'scalpLab',    label: 'Scalp Lab',    icon: Activity },
+      { id: 'scalpWorkbench', label: 'Scalp Workbench', icon: BarChart2 },
+      { id: 'tvChart',     label: 'TV Chart',     icon: BarChart2 },
+      { id: 'suggestedTrades', label: 'Suggested Trades', icon: ListChecks },
+      { id: 'backtest',    label: 'Backtest',     icon: FlaskConical },
+      { id: 'screener',    label: 'Screener',     icon: Filter },
+      { id: 'lotteryLab',  label: 'Lottery Lab',  icon: Ticket },
+      { id: 'performance', label: 'Performance',  icon: PieChart },
+      { id: 'markets',     label: 'Markets',      icon: Globe },
+      { id: 'guardian',    label: 'Guardian',     icon: ShieldCheck },
+      { id: 'exitStrategy', label: 'Exit Strategy', icon: LogOut },
+      { id: 'aiPerformance', label: 'AI Perf',    icon: BrainCircuit },
+    ],
+  },
 ];
 
 export default function Sidebar() {
@@ -122,77 +148,91 @@ export default function Sidebar() {
 
       {/* ── Navigation ── */}
       <ScrollArea className="flex-1 min-h-0 py-2">
-        <nav className="px-2 space-y-0.5">
-          {navItems.map(item => {
-            const isActive = activePanel === item.id;
-            const Icon = item.icon;
-            return (
-              <button
-                key={item.id}
-                onClick={() => setActivePanel(item.id)}
-                className={cn(
-                  'w-full flex items-center gap-2.5 px-3 py-2 rounded-md text-xs font-medium transition-all duration-150 group relative',
-                  isActive
-                    ? 'nav-active-bar border'
-                    : 'text-sidebar-foreground/60 hover:text-sidebar-foreground border border-transparent'
-                )}
-                style={isActive ? {
-                  background: 'hsl(var(--gold) / 0.10)',
-                  borderColor: 'hsl(var(--gold) / 0.25)',
-                  color: 'hsl(var(--gold-light))',
-                } : {
-                  background: 'transparent',
-                }}
-              >
-                <Icon
-                  className={cn('w-4 h-4 shrink-0 transition-colors')}
-                  style={{ color: isActive ? 'hsl(var(--gold))' : undefined }}
-                />
-                <span className="flex-1 text-left">{item.label}</span>
+        <nav className="px-2 space-y-2">
+          {navSections.map((section, sectionIndex) => (
+            <div key={section.title ?? `section-${sectionIndex}`} className="space-y-0.5">
+              {section.title && (
+                <div
+                  className="px-3 pt-1 pb-0.5 text-[9px] uppercase tracking-[0.16em] text-muted-foreground/80"
+                  style={{ fontFamily: "'Cinzel', serif" }}
+                >
+                  {section.title}
+                </div>
+              )}
+              {section.items.map(item => {
+                const isActive = activePanel === item.id;
+                const Icon = item.icon;
+                return (
+                  <button
+                    key={item.id}
+                    type="button"
+                    title={item.title || item.label}
+                    onClick={() => setActivePanel(item.id)}
+                    className={cn(
+                      'w-full flex items-center gap-2.5 px-3 py-2 rounded-md text-xs font-medium transition-all duration-150 group relative',
+                      isActive
+                        ? 'nav-active-bar border'
+                        : 'text-sidebar-foreground/60 hover:text-sidebar-foreground border border-transparent'
+                    )}
+                    style={isActive ? {
+                      background: 'hsl(var(--gold) / 0.10)',
+                      borderColor: 'hsl(var(--gold) / 0.25)',
+                      color: 'hsl(var(--gold-light))',
+                    } : {
+                      background: 'transparent',
+                    }}
+                  >
+                    <Icon
+                      className={cn('w-4 h-4 shrink-0 transition-colors')}
+                      style={{ color: isActive ? 'hsl(var(--gold))' : undefined }}
+                    />
+                    <span className="flex-1 text-left truncate">{item.label}</span>
 
-                {/* Special badges */}
-                {item.badge && (
-                  <Badge
-                    variant="outline"
-                    className="text-[9px] h-4 px-1"
-                    style={item.badge === 'LIVE'
-                      ? { borderColor: 'hsl(var(--gold) / 0.5)', color: 'hsl(var(--gold-light))', background: 'hsl(var(--gold) / 0.10)' }
-                      : { borderColor: 'hsl(var(--info) / 0.5)', color: 'hsl(var(--info))', background: 'hsl(var(--info) / 0.08)' }
-                    }
-                  >
-                    {item.badge}
-                  </Badge>
-                )}
+                    {item.badge && (
+                      <Badge
+                        variant="outline"
+                        className="text-[9px] h-4 px-1 shrink-0"
+                        style={item.badge === 'LIVE'
+                          ? { borderColor: 'hsl(var(--gold) / 0.5)', color: 'hsl(var(--gold-light))', background: 'hsl(var(--gold) / 0.10)' }
+                          : item.badge === 'RESEARCH'
+                            ? { borderColor: 'hsl(var(--gold) / 0.35)', color: 'hsl(var(--gold-light))', background: 'hsl(var(--gold) / 0.08)' }
+                            : { borderColor: 'hsl(var(--info) / 0.5)', color: 'hsl(var(--info))', background: 'hsl(var(--info) / 0.08)' }
+                        }
+                      >
+                        {item.badge}
+                      </Badge>
+                    )}
 
-                {/* Live count badges */}
-                {item.id === 'signals' && activeSignals > 0 && (
-                  <span
-                    className="w-4 h-4 rounded-full text-[9px] flex items-center justify-center font-mono"
-                    style={{ background: 'hsl(var(--gold) / 0.20)', color: 'hsl(var(--gold-light))' }}
-                  >
-                    {activeSignals}
-                  </span>
-                )}
-                {item.id === 'trades' && openPositions > 0 && (
-                  <span
-                    className="w-4 h-4 rounded-full text-[9px] flex items-center justify-center font-mono"
-                    style={{ background: 'hsl(var(--gold) / 0.20)', color: 'hsl(var(--gold-light))' }}
-                  >
-                    {openPositions}
-                  </span>
-                )}
-                {item.id === 'suggestedTrades' && suggestedTradeRunner && (
-                  <Badge
-                    variant="outline"
-                    className={cn('text-[8px] h-4 px-1', runnerBadgeClass(suggestedTradeRunner))}
-                    title={`Suggested trade runner: ${runnerBadgeLabel(suggestedTradeRunner)}`}
-                  >
-                    {runnerBadgeLabel(suggestedTradeRunner)}
-                  </Badge>
-                )}
-              </button>
-            );
-          })}
+                    {item.id === 'signals' && activeSignals > 0 && (
+                      <span
+                        className="w-4 h-4 rounded-full text-[9px] flex items-center justify-center font-mono shrink-0"
+                        style={{ background: 'hsl(var(--gold) / 0.20)', color: 'hsl(var(--gold-light))' }}
+                      >
+                        {activeSignals}
+                      </span>
+                    )}
+                    {item.id === 'trades' && openPositions > 0 && (
+                      <span
+                        className="w-4 h-4 rounded-full text-[9px] flex items-center justify-center font-mono shrink-0"
+                        style={{ background: 'hsl(var(--gold) / 0.20)', color: 'hsl(var(--gold-light))' }}
+                      >
+                        {openPositions}
+                      </span>
+                    )}
+                    {item.id === 'suggestedTrades' && suggestedTradeRunner && (
+                      <Badge
+                        variant="outline"
+                        className={cn('text-[8px] h-4 px-1 shrink-0', runnerBadgeClass(suggestedTradeRunner))}
+                        title={`Suggested trade runner: ${runnerBadgeLabel(suggestedTradeRunner)}`}
+                      >
+                        {runnerBadgeLabel(suggestedTradeRunner)}
+                      </Badge>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+          ))}
         </nav>
       </ScrollArea>
 
