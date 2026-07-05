@@ -325,13 +325,20 @@ def _build_disagreement_diagnosis(
 def normalise_engine_a(signal_a: dict) -> dict:
     """Normalise Engine A output to 0-1 scale.
 
-    Engine A outputs:
-      - confluenceScore: raw score (0 to ~3.0)
-      - maxScore: maximum possible (dynamic, depends on active factors)
-      - direction: LONG/SHORT
-      - regime: dict with label, state
-      - sl, tp1, tp2: ATR-based levels
-      - confluencePct: threshold-relative display percentage (UI only)
+    Two contracts are supported:
+      V3 (production, engine == "ENGINE_A_V3", contractVersion 3.x):
+        - decision: TRADE / WATCH / NO_SIGNAL (authoritative gate)
+        - scoreNorm / conviction / confluenceScore / maxScore: continuous
+          quality (0..1) from the quant scorer — used for score_norm so the
+          consensus conviction blend reflects actual setup strength.
+        - qualified, engineATradeEnabled: trade eligibility gates.
+      V2 (legacy, kept for tests / backtest parity):
+        - confluenceScore: raw score (0 to ~3.0)
+        - maxScore: maximum possible (dynamic, depends on active factors)
+        - direction: LONG/SHORT
+        - regime: dict with label, state
+        - sl, tp1, tp2: ATR-based levels
+        - confluencePct: threshold-relative display percentage (UI only)
 
     """
     if (
@@ -345,16 +352,66 @@ def normalise_engine_a(signal_a: dict) -> dict:
         trade_enabled = signal_a.get("engineATradeEnabled") is True
         is_full = decision == "TRADE" and qualified and trade_enabled and direction_ok
         is_partial = decision == "WATCH" and direction_ok
+
+        # V3 carries a continuous scoreNorm (0..1) from the quant scorer
+        # (quant_scorer.score_norm = confluence / MAX_SCORE). Use it so the
+        # Engine C conviction blend reflects actual setup quality instead of
+        # collapsing every TRADE to 1.0 and every WATCH to 0.5 — which
+        # inflated consensus conviction and produced HIGH tiers for borderline
+        # V3 TRADEs. Decision-based gating flags (has_signal /
+        # has_partial_signal / trade_enabled) remain binary below; only the
+        # continuous quality signal flows through score_norm.
+        _v3_norm = None
+        for _v3_key in ("scoreNorm", "conviction"):
+            _v3_raw = signal_a.get(_v3_key)
+            if _v3_raw is None:
+                continue
+            try:
+                _v3_norm = max(0.0, min(1.0, float(_v3_raw)))
+                break
+            except (TypeError, ValueError):
+                continue
+        if _v3_norm is None:
+            _v3_cs_raw = signal_a.get("confluenceScore")
+            _v3_ms_raw = signal_a.get("maxScore")
+            if _v3_cs_raw is not None or _v3_ms_raw is not None:
+                try:
+                    _v3_cs = float(_v3_cs_raw or 0)
+                    _v3_ms = float(_v3_ms_raw or 0) or 3.0
+                    _v3_norm = min(1.0, _v3_cs / _v3_ms) if _v3_ms > 0 else None
+                except (TypeError, ValueError):
+                    _v3_norm = None
+        if _v3_norm is None:
+            # Last-resort fallback for stub/malformed V3 payloads that carry
+            # no score data at all — preserve the decision-tier binary mapping.
+            _v3_norm = 1.0 if is_full else 0.5 if is_partial else 0.0
+
+        # Confidence: prefer confidenceDetail.confidence, then V3 conviction.
+        _v3_conf = None
+        _v3_cdetail = signal_a.get("confidenceDetail")
+        if isinstance(_v3_cdetail, dict) and _v3_cdetail.get("confidence") is not None:
+            try:
+                _v3_conf = float(_v3_cdetail["confidence"])
+            except (TypeError, ValueError):
+                _v3_conf = None
+        if _v3_conf is None:
+            _v3_conv_raw = signal_a.get("conviction")
+            if _v3_conv_raw is not None:
+                try:
+                    _v3_conf = max(0.0, min(1.0, float(_v3_conv_raw)))
+                except (TypeError, ValueError):
+                    _v3_conf = None
+
         return {
-            "score_norm": 1.0 if is_full else 0.5 if is_partial else 0.0,
+            "score_norm": round(_v3_norm, 4),
             "direction": direction,
             "regime": "V3_SPECIALIST",
             "sl": signal_a.get("sl"),
             "tp": signal_a.get("tp1"),
             "tp2": signal_a.get("tp2"),
             "rr": signal_a.get("rr1", 0),
-            "raw_score": None,
-            "max_score": None,
+            "raw_score": signal_a.get("confluenceScore"),
+            "max_score": signal_a.get("maxScore"),
             "has_signal": is_full,
             "has_partial_signal": is_partial,
             "trade_enabled": is_full,
@@ -362,7 +419,7 @@ def normalise_engine_a(signal_a: dict) -> dict:
             "cot_active": False,
             "carry_active": False,
             "style": signal_a.get("horizon"),
-            "confidence": None,
+            "confidence": _v3_conf,
             "setup_id": signal_a.get("setupId"),
             "horizon": signal_a.get("horizon"),
             "decision": decision,

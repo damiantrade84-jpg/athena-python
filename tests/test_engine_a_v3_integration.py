@@ -3,7 +3,7 @@ from __future__ import annotations
 import inspect
 from pathlib import Path
 
-from engine_c import normalise_engine_a
+from engine_c import compute_consensus, normalise_engine_a
 from scanner import classify_signal
 from scoring import _classify_signal as classify_pair_scan_signal
 
@@ -11,9 +11,31 @@ from scoring import _classify_signal as classify_pair_scan_signal
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def _v3_signal(decision: str, *, qualified: bool) -> dict:
-    return {
-        "contractVersion": "3.0.0",
+def _v3_signal(
+    decision: str,
+    *,
+    qualified: bool,
+    score_norm: float | None = None,
+    b_score: float = 0.0,
+    b_verdict: str = "CLEAR",
+    b_passed: bool = False,
+) -> dict:
+    # Default continuous scores aligned with V3 decision semantics so the
+    # fixture mirrors what evaluate_engine_a_v3 actually emits. score_norm
+    # can be overridden to exercise the continuous-quality path.
+    if score_norm is None:
+        if decision == "TRADE":
+            _sn, _cs, _conv = 0.78, 2.34, 0.78
+        elif decision == "WATCH":
+            _sn, _cs, _conv = 0.45, 1.35, 0.45
+        else:
+            _sn, _cs, _conv = 0.0, 0.0, 0.0
+    else:
+        _sn = float(score_norm)
+        _cs = round(_sn * 3.0, 4)
+        _conv = _sn
+    sig = {
+        "contractVersion": "3.1.0",
         "engine": "ENGINE_A_V3",
         "pair": "EUR/USD",
         "symbol": "EURUSD",
@@ -36,7 +58,19 @@ def _v3_signal(decision: str, *, qualified: bool) -> dict:
         "eventRisk": {"hardBlock": False},
         "exchangeClosed": False,
         "isEnabled": True,
+        "confluenceScore": _cs,
+        "maxScore": 3.0,
+        "scoreNorm": _sn,
+        "conviction": _conv,
     }
+    if b_score or b_verdict != "CLEAR" or b_passed:
+        sig["engine_b"] = {
+            "structural_verdict": b_verdict,
+            "direction": "LONG" if b_verdict == "CLEAR" else None,
+            "recommended_stop_loss": 1.09 if b_verdict == "CLEAR" else None,
+            "recommended_take_profit": 1.11 if b_verdict == "CLEAR" else None,
+        }
+    return sig
 
 
 def test_engine_c_uses_v3_decision_instead_of_legacy_scores():
@@ -45,9 +79,129 @@ def test_engine_c_uses_v3_decision_instead_of_legacy_scores():
     assert normalized["has_signal"] is True
     assert normalized["has_partial_signal"] is False
     assert normalized["trade_enabled"] is True
-    assert normalized["score_norm"] == 1.0
+    # score_norm now reflects V3's continuous quality, not a binary 1.0.
+    assert normalized["score_norm"] == 0.78
+    assert normalized["raw_score"] == 2.34
+    assert normalized["max_score"] == 3.0
+    assert normalized["confidence"] == 0.78
     assert normalized["setup_id"] == "fx_trend_pullback"
     assert normalized["horizon"] == "intraday"
+
+
+def test_engine_c_v3_uses_continuous_score_norm_not_binary():
+    """A borderline TRADE (scoreNorm 0.68) must NOT be inflated to 1.0.
+
+    Previously the V3 branch collapsed every TRADE to score_norm=1.0, which
+    inflated Engine C consensus conviction and produced HIGH tiers for
+    borderline setups. The fix passes V3's continuous scoreNorm through.
+    """
+    borderline = normalise_engine_a(
+        _v3_signal("TRADE", qualified=True, score_norm=0.68)
+    )
+    assert borderline["score_norm"] == 0.68
+    assert borderline["has_signal"] is True  # decision gate stays binary
+
+    strong = normalise_engine_a(
+        _v3_signal("TRADE", qualified=True, score_norm=0.95)
+    )
+    assert strong["score_norm"] == 0.95
+
+    weak_watch = normalise_engine_a(
+        _v3_signal("WATCH", qualified=False, score_norm=0.32)
+    )
+    assert weak_watch["score_norm"] == 0.32
+    assert weak_watch["has_partial_signal"] is True
+
+
+def test_engine_c_v3_consensus_reflects_actual_score_norm():
+    """compute_consensus ALIGNED conviction must reflect V3's real scoreNorm.
+
+    Regression for the DOGE/USDT HIGH-inflation class of bug: a V3 TRADE with
+    scoreNorm=0.72 and a confirming Engine B (norm 0.5) should produce
+    conviction = 0.72*0.4 + 0.5*0.6 = 0.588 (MEDIUM), not the old binary
+    1.0*0.4 + 0.5*0.6 = 0.70 (HIGH).
+    """
+    signal_a = _v3_signal("TRADE", qualified=True, score_norm=0.72)
+    signal_b = {
+        "structural_verdict": "CLEAR",
+        "direction": "LONG",
+        "recommended_stop_loss": 1.09,
+        "recommended_take_profit": 1.115,
+    }
+    confidence_b = {
+        "score": 2.5,
+        "max_possible": 5.0,
+        "pct": 50.0,
+        "passed": True,
+        "structure_ok": True,
+        "zone_ok": True,
+        "trigger_ok": True,
+        "execution_sl": 1.09,
+        "execution_tp": 1.115,
+    }
+    result = compute_consensus(
+        signal_a=signal_a,
+        signal_b=signal_b,
+        confidence_b=confidence_b,
+        regime="TRENDING",
+        entry_price=1.10,
+        atr=0.002,
+        asset_type="forex",
+    )
+    assert result["verdict"] == "ALIGNED"
+    assert result["direction"] == "LONG"
+    # Key invariant: conviction is blended from the real V3 a_norm (0.72),
+    # NOT inflated to 1.0. Meta-learner may tilt weights slightly off the
+    # 0.40/0.60 base, so assert the tier + range rather than an exact value.
+    assert result["components"]["a_norm"] == 0.72
+    assert 0.55 <= result["conviction"] < 0.70  # MEDIUM, not HIGH
+    assert result["tier"] == "MEDIUM"
+
+
+def test_engine_c_v3_consensus_still_high_when_score_norm_genuinely_high():
+    """A strong V3 TRADE (scoreNorm 0.95) with strong B can still reach HIGH."""
+    signal_a = _v3_signal("TRADE", qualified=True, score_norm=0.95)
+    signal_b = {
+        "structural_verdict": "CLEAR",
+        "direction": "LONG",
+        "recommended_stop_loss": 1.09,
+        "recommended_take_profit": 1.13,
+    }
+    confidence_b = {
+        "score": 4.5,
+        "max_possible": 5.0,
+        "pct": 90.0,
+        "passed": True,
+        "structure_ok": True,
+        "zone_ok": True,
+        "trigger_ok": True,
+        "execution_sl": 1.09,
+        "execution_tp": 1.13,
+    }
+    result = compute_consensus(
+        signal_a=signal_a,
+        signal_b=signal_b,
+        confidence_b=confidence_b,
+        regime="TRENDING",
+        entry_price=1.10,
+        atr=0.002,
+        asset_type="forex",
+    )
+    assert result["verdict"] == "ALIGNED"
+    # 0.95*0.4 + 0.9*0.6 = 0.38 + 0.54 = 0.92 → HIGH.
+    assert result["tier"] == "HIGH"
+    assert result["components"]["a_norm"] == 0.95
+
+
+def test_engine_c_v3_falls_back_to_decision_tier_when_scores_missing():
+    """Stub V3 payloads without score fields still normalize safely."""
+    stub = _v3_signal("TRADE", qualified=True)
+    for _key in ("scoreNorm", "conviction", "confluenceScore", "maxScore"):
+        stub.pop(_key, None)
+    normalized = normalise_engine_a(stub)
+    assert normalized["has_signal"] is True
+    # Fallback: decision-tier binary mapping.
+    assert normalized["score_norm"] == 1.0
 
 
 def test_scanner_classifies_v3_trade_watch_and_no_signal_without_scores():
