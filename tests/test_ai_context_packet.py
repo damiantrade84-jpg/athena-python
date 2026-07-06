@@ -322,6 +322,60 @@ def test_derive_engine_b_score_pct_recomputes_stale_zero_percent():
     assert derive_engine_b_score_pct({"score": 4.75, "max_possible": 9.5, "score_pct": 0.0}) == 50.0
 
 
+def test_calibration_context_string_injects_engine_b_native_diagnostics():
+    signal = {
+        "pair": "GBP/JPY",
+        "symbol": "GBPJPY",
+        "type": "forex",
+        "style": "intraday",
+        "engine_source": "engine_b",
+        "is_naked": True,
+        "direction": "LONG",
+        "price": 216.781,
+        "sl": 215.3986,
+        "tp1": 221.4372,
+        "tp2": 221.4372,
+        "rr1": 3.37,
+        "rr2": 3.37,
+        "confluenceScore": 6.0,
+        "maxScore": 8.0,
+        "naked_data": {
+            "structural_verdict": "CLEAR",
+            "current_swing_sequence": "HH_HL",
+            "macro_swing_sequence": "HH_HL",
+            "score": 6.0,
+            "max_possible": 8.0,
+            "is_actionable": False,
+            "rr_used_for_gate": 3.37,
+            "room_ok": False,
+            "d1_adx": 22.4,
+            "h4_adx": 28.7,
+            "_adx_derived_regime": "NORMAL",
+            "engine_b_diagnostics": {
+                "reason_codes": [
+                    "bos_without_volume",
+                    "resistance_too_close",
+                    "structural_tp_too_close",
+                ]
+            },
+        },
+    }
+
+    text = build_ai_calibration_context_string(
+        signal,
+        "Engine B naked market structure",
+        "intraday",
+    )
+
+    assert "Engine B structural verdict: CLEAR" in text
+    assert "Engine B swing sequence: HH_HL | Macro: HH_HL" in text
+    assert "Engine B score: 6.0 / 8.0 (75.0%)" in text
+    assert "Engine B actionable: False | RR gate: 3.37 | room_ok: False" in text
+    assert "Engine B ADX: D1=22.4 H4=28.7 regime=NORMAL" in text
+    assert "Engine B reason codes: bos_without_volume, resistance_too_close, structural_tp_too_close" in text
+    assert "Engine B primary note: Engine A factor diagnostics are optional child context, not missing Engine B evidence." in text
+
+
 def test_resolve_ai_review_min_rr_prefers_signal_min_rr():
     signal = {"min_rr": 1.8, "style": "intraday"}
     assert resolve_ai_review_min_rr(signal, "intraday") == 1.8

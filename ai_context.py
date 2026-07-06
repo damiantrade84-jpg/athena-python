@@ -202,22 +202,40 @@ def build_ai_calibration_context(signal: Dict[str, Any], engine_source: str, exp
     engine_b_data = signal.get("engine_b") or signal.get("engine_b_overlay") or signal.get("naked_data") or {}
     if not isinstance(engine_b_data, dict):
         engine_b_data = {}
+
+    def _first_not_none(*values: Any) -> Any:
+        for value in values:
+            if value is not None:
+                return value
+        return None
         
     engine_b = {
-        "structural_verdict": engine_b_data.get("structural_verdict") or signal.get("engine_b_verdict"),
-        "current_swing_sequence": engine_b_data.get("current_swing_sequence") or engine_b_data.get("swing_sequence"),
-        "macro_swing_sequence": engine_b_data.get("macro_swing_sequence") or engine_b_data.get("macro_sequence"),
-        "structure_score": engine_b_data.get("structure_score") or engine_b_data.get("score") or signal.get("engine_b_score"),
-        "confidence_score": engine_b_data.get("confidence_score") or engine_b_data.get("confidence") or signal.get("engine_b_score"),
-        "max_possible": engine_b_data.get("max_possible") or signal.get("engine_b_max"),
-        "score_pct": engine_b_data.get("score_pct") or engine_b_data.get("pct"),
-        "is_actionable": engine_b_data.get("is_actionable") or engine_b_data.get("passed") or engine_b_data.get("checklist_passed"),
-        "zone_quality": engine_b_data.get("zone_quality") or engine_b_data.get("zone_ok"),
-        "trigger_quality": engine_b_data.get("trigger_quality") or engine_b_data.get("trigger_ok"),
-        "room_to_resistance": engine_b_data.get("room_to_resistance") or engine_b_data.get("distance_to_res"),
-        "room_to_support": engine_b_data.get("room_to_support") or engine_b_data.get("distance_to_sup"),
-        "recommended_sl": engine_b_data.get("recommended_sl") or engine_b_data.get("recommended_stop_loss"),
-        "recommended_tp": engine_b_data.get("recommended_tp") or engine_b_data.get("recommended_take_profit"),
+        "structural_verdict": _first_not_none(engine_b_data.get("structural_verdict"), signal.get("engine_b_verdict")),
+        "current_swing_sequence": _first_not_none(engine_b_data.get("current_swing_sequence"), engine_b_data.get("swing_sequence")),
+        "macro_swing_sequence": _first_not_none(engine_b_data.get("macro_swing_sequence"), engine_b_data.get("macro_sequence")),
+        "structure_score": _first_not_none(engine_b_data.get("structure_score"), engine_b_data.get("score"), signal.get("engine_b_score")),
+        "confidence_score": _first_not_none(engine_b_data.get("confidence_score"), engine_b_data.get("confidence"), signal.get("engine_b_score")),
+        "max_possible": _first_not_none(engine_b_data.get("max_possible"), signal.get("engine_b_max")),
+        "score_pct": _first_not_none(engine_b_data.get("score_pct"), engine_b_data.get("pct")),
+        "is_actionable": _first_not_none(engine_b_data.get("is_actionable"), engine_b_data.get("passed"), engine_b_data.get("checklist_passed")),
+        "zone_quality": _first_not_none(engine_b_data.get("zone_quality"), engine_b_data.get("zone_ok")),
+        "trigger_quality": _first_not_none(engine_b_data.get("trigger_quality"), engine_b_data.get("trigger_ok")),
+        "room_to_resistance": _first_not_none(engine_b_data.get("room_to_resistance"), engine_b_data.get("distance_to_res")),
+        "room_to_support": _first_not_none(engine_b_data.get("room_to_support"), engine_b_data.get("distance_to_sup")),
+        "recommended_sl": _first_not_none(engine_b_data.get("recommended_sl"), engine_b_data.get("recommended_stop_loss")),
+        "recommended_tp": _first_not_none(engine_b_data.get("recommended_tp"), engine_b_data.get("recommended_take_profit")),
+        "rr_used_for_gate": _first_not_none(
+            engine_b_data.get("rr_used_for_gate"),
+            engine_b_data.get("execution_rr"),
+            engine_b_data.get("rr"),
+        ),
+        "room_ok": _first_not_none(engine_b_data.get("room_ok"), engine_b_data.get("room_rr_ok")),
+        "d1_adx": engine_b_data.get("d1_adx"),
+        "h4_adx": engine_b_data.get("h4_adx"),
+        "adx_derived_regime": _first_not_none(
+            engine_b_data.get("_adx_derived_regime"),
+            engine_b_data.get("adx_derived_regime"),
+        ),
         "reason_codes": engine_b_data.get("reason_codes") or engine_b_data.get("engine_b_diagnostics", {}).get("reason_codes", []),
         "independent_direction": engine_b_data.get("independent_direction") or engine_b_data.get("engine_b_independent_direction"),
     }
@@ -313,6 +331,7 @@ def build_ai_calibration_context_string(signal: Dict[str, Any], engine_source: s
     ctx = build_ai_calibration_context(signal, engine_source, explicit_style)
     identity = ctx["identity"]
     engine_a = ctx["engine_a"]
+    engine_b = ctx["engine_b"]
     trade_risk = ctx["trade_risk"]
     
     lines = [
@@ -340,6 +359,50 @@ def build_ai_calibration_context_string(signal: Dict[str, Any], engine_source: s
     lines.append(f"ScoreNorm: {engine_a['scoreNorm']}")
     if ctx["engine_c"].get("conviction") is not None:
         lines.append(f"CombinedConviction: {ctx['engine_c']['conviction']}")
+    is_engine_b_source = str(identity.get("engine_source") or "").lower().startswith("engine b") or bool(signal.get("is_naked"))
+    if is_engine_b_source:
+        score = engine_b.get("structure_score")
+        max_possible = engine_b.get("max_possible")
+        score_pct = engine_b.get("score_pct")
+        try:
+            if score_pct is None and score is not None and max_possible:
+                score_pct = float(score) / float(max_possible) * 100.0
+        except (TypeError, ValueError, ZeroDivisionError):
+            score_pct = None
+        lines.append(f"Engine B structural verdict: {engine_b.get('structural_verdict')}")
+        lines.append(
+            "Engine B swing sequence: "
+            f"{engine_b.get('current_swing_sequence')} | Macro: {engine_b.get('macro_swing_sequence')}"
+        )
+        if score is not None or max_possible is not None:
+            pct_text = f"{float(score_pct):.1f}%" if score_pct is not None else "n/a"
+            lines.append(f"Engine B score: {score} / {max_possible} ({pct_text})")
+        lines.append(
+            "Engine B actionable: "
+            f"{engine_b.get('is_actionable')} | RR gate: {engine_b.get('rr_used_for_gate')} "
+            f"| room_ok: {engine_b.get('room_ok')}"
+        )
+        if (
+            engine_b.get("d1_adx") is not None
+            or engine_b.get("h4_adx") is not None
+            or engine_b.get("adx_derived_regime") is not None
+        ):
+            lines.append(
+                "Engine B ADX: "
+                f"D1={engine_b.get('d1_adx')} H4={engine_b.get('h4_adx')} "
+                f"regime={engine_b.get('adx_derived_regime')}"
+            )
+        reason_codes = engine_b.get("reason_codes") or []
+        if reason_codes:
+            if isinstance(reason_codes, (list, tuple)):
+                reason_text = ", ".join(str(x) for x in reason_codes)
+            else:
+                reason_text = str(reason_codes)
+            lines.append(f"Engine B reason codes: {reason_text}")
+        lines.append(
+            "Engine B primary note: Engine A factor diagnostics are optional child context, "
+            "not missing Engine B evidence."
+        )
     if str(identity.get("engine_source") or "").lower().startswith("engine c") or any(
         ctx["engine_c"].get(k) is not None
         for k in ("decision_state", "tier", "sizing_override", "components")

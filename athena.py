@@ -4415,6 +4415,24 @@ def _build_signal_message(
     conviction = "HIGH" if spread >= 0.6 else "MEDIUM" if spread >= 0.3 else "LOW"
 
     ptype = signal.get("type", "stock")
+    engine_b_for_signal = signal.get("engine_b") or signal.get("naked_data")
+    if not isinstance(engine_b_for_signal, dict):
+        engine_b_for_signal = {}
+    if is_primary_engine_b and engine_b_for_signal:
+        _b_d1_adx = engine_b_for_signal.get("d1_adx")
+        _b_h4_adx = engine_b_for_signal.get("h4_adx")
+        _b_adx_regime = engine_b_for_signal.get("_adx_derived_regime") or engine_b_for_signal.get("adx_derived_regime")
+        regime_detail = (
+            f"(Engine B ADX D1={_b_d1_adx if _b_d1_adx is not None else '?'} "
+            f"H4={_b_h4_adx if _b_h4_adx is not None else '?'} "
+            f"regime={_b_adx_regime if _b_adx_regime is not None else '?'}; "
+            "ADX percentile is Engine A-only)"
+        )
+    else:
+        regime_detail = (
+            f"(ADX {signal.get('h4', {}).get('snap', {}).get('adxPct', '?')}th pct, "
+            f"{signal.get('h4', {}).get('snap', {}).get('adxLabel', '?')})"
+        )
 
     # === SIGNAL ===
 
@@ -4425,9 +4443,7 @@ def _build_signal_message(
         f"Class: {signal.get('signalClass', 'trend_continuation')}",
         f"Review source: {engine_source_label}",
         f"Style: {style_pref.upper()} ({style_labels.get(style_pref.lower(), '')}) | "
-        f"Regime: {signal.get('trendState', '?')} "
-        f"(ADX {signal.get('h4', {}).get('snap', {}).get('adxPct', '?')}th pct, "
-        f"{signal.get('h4', {}).get('snap', {}).get('adxLabel', '?')})",
+        f"Regime: {signal.get('trendState', '?')} {regime_detail}",
     ]
 
     engine_c = signal.get("engine_c") if isinstance(signal.get("engine_c"), dict) else {}
@@ -4474,6 +4490,12 @@ def _build_signal_message(
         lines.append(f"  Structural Verdict: {eng_b.get('structural_verdict')}")
         lines.append(f"  Current Swing Seq: {eng_b.get('current_swing_sequence')}")
         lines.append(f"  Macro Swing Seq: {eng_b.get('macro_swing_sequence')}")
+        if _present(eng_b.get("d1_adx")) or _present(eng_b.get("h4_adx")) or _present(eng_b.get("_adx_derived_regime")):
+            lines.append(
+                f"  Engine B ADX: D1={eng_b.get('d1_adx')} "
+                f"| H4={eng_b.get('h4_adx')} "
+                f"| Derived regime={eng_b.get('_adx_derived_regime') or eng_b.get('adx_derived_regime')}"
+            )
 
         rz = eng_b.get("nearest_resistance_zone")
         if rz:
@@ -4528,6 +4550,10 @@ def _build_signal_message(
         lines.append("=== OPTIONAL TECHNICALS (not Engine B scoring) ===")
         lines.append(
             "  Engine B is structure/checklist-driven. Missing Engine A indicators here are not bearish evidence."
+        )
+        lines.append(
+            "  Engine A factorDiagnostics/trendCoherence/directionalConfidenceMultiplier are optional child context, "
+            "not required Engine B inputs."
         )
         if vote_lines:
             lines.extend(vote_lines)
@@ -4689,10 +4715,17 @@ def _build_signal_message(
         lines.append("")
         lines.append("=== ENGINE B SCORING DIAGNOSTICS ===")
         lines.append("  Engine B uses structural checklist diagnostics, not Engine A factor diagnostics.")
+        lines.append("  Do not list missing Engine A factor diagnostics as missing Engine B data.")
         lines.append(f"  Score: {_naked.get('score', 'N/A')} / {_naked.get('max_possible', 'N/A')} ({_naked.get('score_pct', 'N/A')}%)")
         lines.append(f"  Structural Verdict: {_naked.get('structural_verdict', 'N/A')}")
         lines.append(f"  Style: {_naked.get('style', signal.get('style', 'N/A'))} | Min RR: {_naked.get('min_rr', signal.get('min_rr', 'N/A'))}")
         lines.append(f"  RR used for gate: {_naked.get('rr_used_for_gate', _naked.get('execution_rr', _naked.get('rr', 'N/A')))}")
+        if _present(_naked.get("d1_adx")) or _present(_naked.get("h4_adx")) or _present(_naked.get("_adx_derived_regime")):
+            lines.append(
+                f"  ADX/regime: D1={_naked.get('d1_adx')} "
+                f"H4={_naked.get('h4_adx')} "
+                f"derived={_naked.get('_adx_derived_regime') or _naked.get('adx_derived_regime')}"
+            )
         lines.append(
             "  Gate flags: "
             f"structure_ok={_naked.get('structure_ok', 'N/A')}, "

@@ -63,3 +63,12 @@ def test_engine_b_naked_scan_signals_use_b_presentation():
     assert "signal.is_naked" in card_src
     assert "feedEngine === 'B' && hasEngineBFeedRow(selectedRow)" in panel_src
     assert "EngineBChecklistCard" in panel_src
+
+
+def test_engine_b_ai_text_review_uses_b_presentation_payload():
+    panel_src = _source()
+
+    assert "function aiTextReviewSignal(row: UnifiedRow, feed: EngineSource): EngineASignal" in panel_src
+    assert "feed === 'B' && hasEngineBFeedRow(row)" in panel_src
+    assert "return engineBPresentationSignal(row);" in panel_src
+    assert "onClick={() => runAiTextReview(aiTextReviewSignal(selectedRow, feedEngine))}" in panel_src

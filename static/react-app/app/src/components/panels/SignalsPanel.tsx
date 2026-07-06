@@ -265,6 +265,13 @@ function engineBPresentationSignal(row: UnifiedRow): EngineASignal {
   return row.engineBSignal ?? row.signal;
 }
 
+function aiTextReviewSignal(row: UnifiedRow, feed: EngineSource): EngineASignal {
+  if (feed === 'B' && hasEngineBFeedRow(row)) {
+    return engineBPresentationSignal(row);
+  }
+  return row.signal;
+}
+
 function rowMatchesFeed(row: UnifiedRow, feed: EngineSource): boolean {
   if (feed === 'B') return hasEngineBFeedRow(row);
   return row.engines.has('A');
@@ -1202,7 +1209,7 @@ export default function SignalsPanel() {
                         size="sm"
                         variant="outline"
                         className="h-8 text-xs gap-1"
-                        onClick={() => runAiTextReview(selectedRow.signal)}
+                        onClick={() => runAiTextReview(aiTextReviewSignal(selectedRow, feedEngine))}
                         disabled={textLoading}
                       >
                         <FileText className={textLoading ? 'w-3.5 h-3.5 animate-pulse' : 'w-3.5 h-3.5'} />
