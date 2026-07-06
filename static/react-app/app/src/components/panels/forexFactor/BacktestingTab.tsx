@@ -22,7 +22,7 @@ import {
   type BacktestReport,
   ForexApiError,
 } from '@/lib/forexFactorApi';
-import { DiagnosticsList, FX_ACCENT, Stat, TabEmpty } from './shared';
+import { DiagnosticsList, FX_ACCENT, Stat, TabEmpty, ValidationDemoBanner } from './shared';
 import { ErrorBanner } from '@/components/shared';
 
 type UniverseMode = 'g8' | 'custom';
@@ -85,6 +85,7 @@ export default function BacktestingTab() {
   }, [start, end, symbols, strictData, costModel, slippagePips]);
 
   const summary = (report?.summary || {}) as Record<string, unknown>;
+  const validation = (report?.validation || {}) as Record<string, unknown>;
   const equityCurve = useMemo(() => {
     const raw = report?.equity_curve;
     if (!Array.isArray(raw)) return [];
@@ -180,6 +181,7 @@ export default function BacktestingTab() {
       {report && (
         <>
           {runId && <p className="text-[11px] text-muted-foreground font-mono">Run ID: {runId}</p>}
+          <ValidationDemoBanner validation={validation} />
           <Card>
             <CardHeader className="pb-2"><CardTitle className="text-sm">Summary</CardTitle></CardHeader>
             <CardContent className="grid grid-cols-2 md:grid-cols-5 gap-3">

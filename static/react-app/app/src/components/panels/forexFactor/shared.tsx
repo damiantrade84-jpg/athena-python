@@ -8,6 +8,85 @@ import type { ForexDiagnostic, ForexEnvelope } from '@/lib/forexFactorApi';
 import { ForexApiError } from '@/lib/forexFactorApi';
 
 export const FX_ACCENT = 'hsl(220 70% 55%)';
+export const FX_VALIDATION_MIN_FAMILY_TRADES = 30;
+
+export function fxFamilyTradeCounts(
+  validation?: Record<string, unknown> | null,
+): Record<string, number> {
+  const raw = (validation?.family_trade_counts || validation?.by_family || {}) as Record<string, unknown>;
+  const counts: Record<string, number> = {};
+  for (const [family, value] of Object.entries(raw)) {
+    const n = Number(value);
+    if (Number.isFinite(n)) counts[family] = n;
+  }
+  return counts;
+}
+
+export function fxValidationPass(
+  validation?: Record<string, unknown> | null,
+): boolean {
+  if (!validation) return false;
+  if (validation.pass === true) return true;
+  const counts = fxFamilyTradeCounts(validation);
+  const entries = Object.entries(counts);
+  if (!entries.length) return false;
+  return entries.every(([, count]) => count >= FX_VALIDATION_MIN_FAMILY_TRADES);
+}
+
+export function fxValidationBlockReason(
+  validation?: Record<string, unknown> | null,
+): string | null {
+  if (fxValidationPass(validation)) return null;
+  const counts = fxFamilyTradeCounts(validation);
+  const failing = Object.entries(counts).filter(([, count]) => count < FX_VALIDATION_MIN_FAMILY_TRADES);
+  if (failing.length) {
+    return `Demo blocked: ${failing.map(([fam, count]) => `${fam}=${count} (< ${FX_VALIDATION_MIN_FAMILY_TRADES})`).join(', ')}`;
+  }
+  if (!Object.keys(counts).length) {
+    return 'Demo blocked: no completed FX Factor backtest validation found.';
+  }
+  return 'Demo blocked: backtest validation did not pass.';
+}
+
+export function ValidationDemoBanner({
+  validation,
+}: {
+  validation?: Record<string, unknown> | null;
+}) {
+  const pass = fxValidationPass(validation);
+  const counts = fxFamilyTradeCounts(validation);
+  const blockReason = fxValidationBlockReason(validation);
+  return (
+    <div
+      className={
+        pass
+          ? 'rounded-md border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-[11px] text-emerald-100/90'
+          : 'rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-[11px] text-amber-100/90'
+      }
+    >
+      <div className="font-medium text-foreground mb-1">
+        Demo execution: {pass ? 'READY' : 'BLOCKED'}
+      </div>
+      <p>{pass
+        ? 'This backtest meets the validation gate (≥30 aligned trades per factor family). Demo orders can proceed when other execution gates allow.'
+        : blockReason}
+      </p>
+      {Object.keys(counts).length > 0 && (
+        <div className="mt-2 flex flex-wrap gap-2">
+          {Object.entries(counts).map(([fam, count]) => (
+            <Badge
+              key={fam}
+              variant="outline"
+              className={count < FX_VALIDATION_MIN_FAMILY_TRADES ? 'border-amber-500/50 text-amber-300' : 'border-emerald-500/40 text-emerald-200'}
+            >
+              {fam}: {count}
+            </Badge>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
 
 export function Stat({ label, value, warn }: { label: string; value: React.ReactNode; warn?: boolean }) {
   return (

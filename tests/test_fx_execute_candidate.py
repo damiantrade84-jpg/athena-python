@@ -133,6 +133,53 @@ def test_execute_candidate_real_execution_requires_validation_when_configured(mo
     assert "backtest" in body["diagnostics"][0]["message"].lower()
 
 
+def test_execute_candidate_real_execution_passes_with_legacy_validation_counts(monkeypatch) -> None:
+    import athena_app.api.routes_forex_factor as routes
+
+    monkeypatch.setitem(routes.CONFIG, "EXECUTION_ENABLED", True)
+    monkeypatch.setitem(routes.CONFIG, "FX_FACTOR_EXECUTION_ENABLED", True)
+    monkeypatch.setitem(routes.CONFIG, "MT5_EXECUTION_ENABLED", True)
+    monkeypatch.setitem(routes.CONFIG, "KILL_SWITCH", False)
+    monkeypatch.setitem(routes.CONFIG, "FX_FACTOR_REQUIRE_VALIDATION_FOR_EXECUTION", True)
+    monkeypatch.setattr(
+        routes,
+        "_latest_completed_backtest",
+        lambda: {
+            "run_id": "legacy-run",
+            "status": "completed",
+            "report": {
+                "validation": {
+                    "family_trade_counts": {"carry": 51, "momentum": 88, "value": 84},
+                    "n_warning": False,
+                }
+            },
+        },
+    )
+    monkeypatch.setattr(
+        "athena_fx.execution.execute_fx_decision",
+        lambda decision, dry_run=False: {
+            "executed": True,
+            "dry_run": dry_run,
+            "symbol": decision.get("symbol"),
+        },
+    )
+    monkeypatch.setattr(
+        "athena_fx.execution.assert_fx_execution_allowed",
+        lambda deps: (True, None),
+    )
+    client = _client(monkeypatch)
+
+    response = client.post(
+        "/api/forex/execute-candidate",
+        json={"candidate": _candidate(), "dryRun": False, "confirm": True},
+    )
+
+    body = response.get_json()
+    assert response.status_code == 200
+    assert body["success"] is True
+    assert body["data"]["executed"] is True
+
+
 def test_execute_candidate_flatten_uses_close_path(monkeypatch) -> None:
     calls: list[str] = []
 

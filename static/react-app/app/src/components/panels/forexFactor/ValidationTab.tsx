@@ -2,7 +2,7 @@ import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { fmtNum } from '@/lib/utils';
 import { getValidationLatest } from '@/lib/forexFactorApi';
-import { Stat, TabEmpty, TabShell, useForexTabFetch } from './shared';
+import { Stat, TabEmpty, TabShell, useForexTabFetch, ValidationDemoBanner, fxFamilyTradeCounts, fxValidationPass } from './shared';
 
 export default function ValidationTab() {
   const { envelope, loading, error, diagnostics, refresh } = useForexTabFetch(
@@ -19,7 +19,8 @@ export default function ValidationTab() {
   const n = Number(validation.n ?? validation.sample_size ?? summary.trade_count ?? summary.n ?? NaN);
   const lowSample = Number.isFinite(n) && n < 30;
 
-  const familyCounts = (validation.family_trade_counts || validation.by_family || {}) as Record<string, number>;
+  const familyCounts = fxFamilyTradeCounts(validation);
+  const validationPass = fxValidationPass(validation);
   const pairContrib = (validation.pair_contribution || pairSanity.pair_contribution || {}) as Record<string, number>;
 
   return (
@@ -31,6 +32,8 @@ export default function ValidationTab() {
           {data.run_id && (
             <p className="text-[11px] text-muted-foreground font-mono">Source run: {data.run_id}</p>
           )}
+
+          <ValidationDemoBanner validation={validation} />
 
           <Card>
             <CardHeader className="pb-2">
@@ -55,7 +58,7 @@ export default function ValidationTab() {
                   <Badge
                     key={fam}
                     variant="outline"
-                    className={count < 30 ? 'border-amber-500/50 text-amber-400' : ''}
+                    className={count < 30 ? 'border-amber-500/50 text-amber-400' : validationPass ? 'border-emerald-500/40 text-emerald-300' : ''}
                   >
                     {fam}: {count}
                   </Badge>

@@ -770,6 +770,91 @@ _FX_VALIDATION_REQUIRED_MESSAGE = (
     "(completed run with at least 30 trades per carry, momentum, and value family) "
     "before demo execution."
 )
+_FX_VALIDATION_MIN_FAMILY_TRADES = 30
+
+
+def _family_trade_counts_from_validation(
+    validation: dict[str, Any] | None,
+) -> dict[str, int]:
+    if not isinstance(validation, dict):
+        return {}
+    raw = validation.get("family_trade_counts") or validation.get("by_family") or {}
+    if not isinstance(raw, dict):
+        return {}
+    counts: dict[str, int] = {}
+    for key, value in raw.items():
+        try:
+            counts[str(key)] = int(value)
+        except (TypeError, ValueError):
+            continue
+    return counts
+
+
+def _validation_pass_from_snapshot(
+    validation: dict[str, Any] | None,
+    *,
+    run_status: str | None = None,
+) -> bool:
+    """Match backtest report semantics; recompute pass for legacy reports missing the flag."""
+    if not isinstance(validation, dict):
+        return False
+    if validation.get("pass") is True:
+        return True
+    if run_status and str(run_status).lower() != "completed":
+        return False
+    counts = _family_trade_counts_from_validation(validation)
+    if not counts:
+        return False
+    return all(count >= _FX_VALIDATION_MIN_FAMILY_TRADES for count in counts.values())
+
+
+def _enrich_validation_snapshot(
+    validation: dict[str, Any] | None,
+    *,
+    run_status: str | None = None,
+) -> dict[str, Any] | None:
+    if not isinstance(validation, dict):
+        return None
+    enriched = dict(validation)
+    counts = _family_trade_counts_from_validation(enriched)
+    if counts:
+        enriched["family_trade_counts"] = counts
+    enriched["pass"] = _validation_pass_from_snapshot(enriched, run_status=run_status)
+    enriched["n_warning"] = any(c < _FX_VALIDATION_MIN_FAMILY_TRADES for c in counts.values())
+    return enriched
+
+
+def _validation_block_detail(
+    validation: dict[str, Any] | None,
+    run_id: str | None,
+) -> dict[str, Any]:
+    counts = _family_trade_counts_from_validation(validation)
+    failing = {
+        family: count
+        for family, count in counts.items()
+        if count < _FX_VALIDATION_MIN_FAMILY_TRADES
+    }
+    detail: dict[str, Any] = {
+        "code": "FX_FACTOR_VALIDATION_REQUIRED",
+        "message": _FX_VALIDATION_REQUIRED_MESSAGE,
+    }
+    if run_id:
+        detail["run_id"] = run_id
+    if counts:
+        detail["family_trade_counts"] = counts
+    if failing:
+        detail["failing_families"] = failing
+        detail["message"] = (
+            "Demo execution requires at least "
+            f"{_FX_VALIDATION_MIN_FAMILY_TRADES} aligned trades per factor family. "
+            f"Below threshold: {', '.join(f'{k}={v}' for k, v in failing.items())}."
+        )
+    elif not counts:
+        detail["message"] = (
+            "No completed FX Factor backtest validation found. "
+            "Run a backtest in the Backtesting tab first."
+        )
+    return detail
 
 
 def _fx_validation_required_for_execution() -> bool:
@@ -782,11 +867,15 @@ def _fx_backtest_validation_state() -> tuple[bool, dict[str, Any] | None, str | 
         return True, None, None
     run = _latest_completed_backtest()
     run_id = str(run.get("run_id") or "") if isinstance(run, dict) else None
-    validation = (run or {}).get("report", {}).get("validation") if run else None
-    if isinstance(validation, dict) and validation.get("pass") is True:
+    run_status = str(run.get("status") or "") if isinstance(run, dict) else None
+    raw_validation = (run or {}).get("report", {}).get("validation") if run else None
+    validation = _enrich_validation_snapshot(
+        raw_validation if isinstance(raw_validation, dict) else None,
+        run_status=run_status,
+    )
+    if validation and validation.get("pass") is True:
         return True, validation, run_id
-    snapshot = validation if isinstance(validation, dict) else None
-    return False, snapshot, run_id
+    return False, validation, run_id
 
 
 def api_forex_validation_latest():
@@ -801,7 +890,10 @@ def api_forex_validation_latest():
                 warnings=warnings,
             )
         report = run.get("report") or {}
-        validation = report.get("validation")
+        validation = _enrich_validation_snapshot(
+            report.get("validation") if isinstance(report.get("validation"), dict) else None,
+            run_status=str(run.get("status") or ""),
+        )
         summary = report.get("summary")
         pair_sanity = report.get("pair_sanity_flags")
         n = None
@@ -1241,16 +1333,13 @@ def api_forex_execute_candidate():
                 success=False,
                 http=403,
             )
-        validation_pass, _, _ = _fx_backtest_validation_state()
+        validation_pass, validation_snapshot, validation_run_id = _fx_backtest_validation_state()
         if not validation_pass:
             return _envelope(
                 data=None,
                 status="blocked",
                 diagnostics=[
-                    {
-                        "code": "FX_FACTOR_VALIDATION_REQUIRED",
-                        "message": _FX_VALIDATION_REQUIRED_MESSAGE,
-                    }
+                    _validation_block_detail(validation_snapshot, validation_run_id),
                 ],
                 success=False,
                 http=403,
