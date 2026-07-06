@@ -298,6 +298,16 @@ def _candidate_from_signal(
         "shortlistReasons": ["passes_hard_filters"],
         "shortlistBlockers": soft_blockers,
         "rr": _as_float(signal.get("rr")),
+        # Levels forwarded so downstream AI review (run_ai -> _build_signal_message)
+        # can build the LEVELS prompt section without KeyError. Values may be None
+        # when the source engine did not produce them; consumers must tolerate that.
+        "price": signal.get("price") if signal.get("price") is not None else signal.get("entry"),
+        "entry": signal.get("entry") if signal.get("entry") is not None else signal.get("price"),
+        "sl": signal.get("sl") if signal.get("sl") is not None else signal.get("stop"),
+        "tp1": signal.get("tp1") if signal.get("tp1") is not None else signal.get("tp"),
+        "tp2": signal.get("tp2"),
+        "rr1": signal.get("rr1"),
+        "rr2": signal.get("rr2"),
         "regime": signal.get("regime") or signal.get("regimeName"),
         "session": _session_value(signal),
         "freshnessDiagnostics": signal.get("dataFreshness"),

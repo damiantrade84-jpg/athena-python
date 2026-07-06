@@ -186,6 +186,16 @@ def _signal_from_candidate(candidate: dict, asset_class: str) -> dict:
         "direction": candidate.get("direction"),
         "confluenceScore": candidate.get("confluenceScore"),
         "rr": candidate.get("rr"),
+        # Levels: _build_signal_message reads these via bracket access in the
+        # LEVELS section; omitting them crashes run_ai with KeyError -> every
+        # review returns a safe-default and bulk returns no A/B results.
+        "price": candidate.get("price"),
+        "entry": candidate.get("entry"),
+        "sl": candidate.get("sl"),
+        "tp1": candidate.get("tp1"),
+        "tp2": candidate.get("tp2"),
+        "rr1": candidate.get("rr1"),
+        "rr2": candidate.get("rr2"),
         "regime": candidate.get("regime"),
         "session": candidate.get("session"),
         "dataFreshness": candidate.get("freshnessDiagnostics"),
