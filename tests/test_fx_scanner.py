@@ -7,6 +7,8 @@ import athena_fx.scanner as scanner_module
 from athena_fx.scanner import (
     build_candidate_from_decision,
     scan_forex,
+    _cached_d1_bars_fresh,
+    _default_bars_provider,
     _fetch_mt5_recent_d1_bars,
 )
 
@@ -261,3 +263,45 @@ def test_fetch_mt5_recent_d1_bars_returns_ohlc(monkeypatch) -> None:
     assert len(bars) == 2
     assert bars[0]["date"] == "2025-12-01"
     assert bars[0]["high"] == 0.91
+
+
+def test_cached_d1_bars_fresh_rejects_stale_newest_bar() -> None:
+    stale_bars = [
+        {
+            "date": "2020-01-01",
+            "open": 1.1,
+            "high": 1.11,
+            "low": 1.09,
+            "close": 1.105,
+        }
+        for _ in range(20)
+    ]
+    assert _cached_d1_bars_fresh(stale_bars) is False
+
+
+def test_default_bars_provider_prefers_live_when_cache_is_stale(monkeypatch) -> None:
+    stale_bars = [
+        {
+            "date": "2020-01-01",
+            "open": 1.1,
+            "high": 1.11,
+            "low": 1.09,
+            "close": 1.105,
+        }
+        for _ in range(20)
+    ]
+    live_bars = _bars()
+
+    monkeypatch.setattr(
+        "athena_fx.backtest_data.load_daily_bars",
+        lambda symbols, start, end: ({"EURUSD": stale_bars}, []),
+    )
+    monkeypatch.setattr(
+        scanner_module,
+        "_fetch_mt5_recent_d1_bars",
+        lambda symbol, limit=90: live_bars,
+    )
+
+    out = _default_bars_provider("EURUSD")
+
+    assert out == live_bars

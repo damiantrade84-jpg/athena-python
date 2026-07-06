@@ -147,6 +147,42 @@ def test_last_scan_limit_slices_signals_without_changing_default_payload():
     assert limited["signalsTruncated"] is True
 
 
+def test_last_scan_asset_class_mismatch_returns_unavailable():
+    runtime = _runtime()
+    runtime.state["last_scan"] = {
+        "success": True,
+        "scannedAt": "2026-05-13T12:00:00+00:00",
+        "assetClass": "crypto",
+        "signals": [{"pair": "BTC/USDT", "type": "crypto"}],
+    }
+    client, _app = _client(runtime)
+
+    resp = client.get("/api/last-scan?asset_class=forex").get_json()
+
+    assert resp["available"] is False
+    assert resp["reason"] == "asset_class_mismatch"
+
+
+def test_last_scan_asset_class_filters_full_universe_signals():
+    runtime = _runtime()
+    runtime.state["last_scan"] = {
+        "success": True,
+        "scannedAt": "2026-05-13T12:00:00+00:00",
+        "signals": [
+            {"pair": "EUR/USD", "type": "forex"},
+            {"pair": "BTC/USDT", "type": "crypto"},
+        ],
+    }
+    client, _app = _client(runtime)
+
+    resp = client.get("/api/last-scan?asset_class=forex").get_json()
+
+    assert resp["available"] is True
+    assert len(resp["signals"]) == 1
+    assert resp["signals"][0]["pair"] == "EUR/USD"
+    assert resp["assetClassFiltered"] == "forex"
+
+
 def test_microstructure_health_uses_runtime_cache():
     runtime = _runtime()
     client, _app = _client(runtime)

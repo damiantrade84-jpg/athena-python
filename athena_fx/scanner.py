@@ -7,6 +7,7 @@ execution context. The scanner is signal-only: it never submits orders.
 from __future__ import annotations
 
 import datetime as _dt
+import time
 import uuid
 from typing import Any, Callable, Optional
 
@@ -127,6 +128,42 @@ def _fetch_mt5_recent_d1_bars(symbol: str, *, limit: int = 90) -> list[dict[str,
     return bars
 
 
+_D1_BAR_SECONDS = 86400
+_D1_CACHE_MAX_AGE_SEC = _D1_BAR_SECONDS * 2
+
+
+def _newest_d1_bar_epoch(bars: list[dict[str, Any]]) -> float | None:
+    newest: float | None = None
+    for bar in bars:
+        raw = bar.get("date") or bar.get("time")
+        if not raw:
+            continue
+        try:
+            if isinstance(raw, (int, float)):
+                ts = float(raw)
+            else:
+                text = str(raw).strip()
+                if len(text) >= 10:
+                    text = text[:10]
+                dt = _dt.datetime.fromisoformat(text).replace(tzinfo=_dt.timezone.utc)
+                ts = dt.timestamp()
+        except (TypeError, ValueError, OverflowError):
+            continue
+        if newest is None or ts > newest:
+            newest = ts
+    return newest
+
+
+def _cached_d1_bars_fresh(bars: list[dict[str, Any]]) -> bool:
+    """True when newest cached D1 bar is within ~2 daily periods (backtest cache policy)."""
+    if len(bars) < 15:
+        return False
+    newest_epoch = _newest_d1_bar_epoch(bars)
+    if newest_epoch is None:
+        return False
+    return (time.time() - newest_epoch) <= _D1_CACHE_MAX_AGE_SEC
+
+
 def _default_bars_provider(symbol: str, as_of_date: str | None = None) -> list[dict[str, Any]]:
     try:
         from datetime import date, timedelta
@@ -139,7 +176,7 @@ def _default_bars_provider(symbol: str, as_of_date: str | None = None) -> list[d
         cached = list(bars_map.get(symbol.replace("/", "").upper(), []) or [])
     except Exception:
         cached = []
-    if len(cached) >= 15:
+    if _cached_d1_bars_fresh(cached):
         return cached
     live = _fetch_mt5_recent_d1_bars(symbol)
     return live or cached

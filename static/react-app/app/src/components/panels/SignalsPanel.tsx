@@ -174,13 +174,27 @@ function unifyScanResults(
   scanA: EngineASignal[] | null,
   scanB: EngineASignal[] | null,
   lastScan: ScanResponse | null,
+  assetClassFilter: string,
 ): UnifiedRow[] {
   const map = new Map<string, UnifiedRow>();
+
+  const lastScanAssetClass = String(
+    lastScan?.assetClass ?? lastScan?.asset_class ?? '',
+  )
+    .trim()
+    .toLowerCase();
+  const activeFilter = assetClassFilter === 'all' ? '' : assetClassFilter.trim().toLowerCase();
+  const lastScanMatchesFilter =
+    !activeFilter
+    || lastScanAssetClass === activeFilter
+    || !lastScanAssetClass;
 
   // Engine A: combine trade list + watchlist from the scan/lastScan cache.
   const sourceA: EngineASignal[] = scanA != null
     ? scanA
-    : Array.isArray(lastScan?.signals) ? (lastScan!.signals as EngineASignal[]) : [];
+    : lastScanMatchesFilter && Array.isArray(lastScan?.signals)
+      ? (lastScan!.signals as EngineASignal[])
+      : [];
   for (const raw of sourceA) {
     if (!raw) continue;
     const sig: EngineASignal = {
@@ -355,8 +369,14 @@ export default function SignalsPanel() {
   const [useAiLevels, setUseAiLevels] = useState(false);
 
   // Hot-cached snapshot from server-side last scan (Engine A only).
+  const lastScanAssetClassParam = assetClass === 'all' ? '' : assetClass;
   const { data: lastScan, loading: lastLoading, error: lastError, refresh: refreshLast } =
-    useApiPoll<ScanResponse>('/api/last-scan', 60_000);
+    useApiPoll<ScanResponse>(
+      lastScanAssetClassParam
+        ? `/api/last-scan?asset_class=${encodeURIComponent(lastScanAssetClassParam)}`
+        : '/api/last-scan',
+      60_000,
+    );
 
   const { data: health } = useApiPoll<HealthStatus>('/api/health', 60_000);
   const { post: postScanA, loading: scanningA } = useApiPost<ScanResponse>();
@@ -376,8 +396,9 @@ export default function SignalsPanel() {
       scanCacheA as EngineASignal[] | null,
       scanCacheB as EngineASignal[] | null,
       lastScan ?? null,
+      assetClass,
     ),
-    [scanCacheA, scanCacheB, lastScan],
+    [scanCacheA, scanCacheB, lastScan, assetClass],
   );
 
   // Apply live price + filters + sort.
@@ -490,7 +511,9 @@ export default function SignalsPanel() {
       ];
       setScanCacheA(displaySignals, {
         count: displaySignals.length,
-        scannedAt: new Date().toISOString(),
+        scannedAt: typeof result.scannedAt === 'string' && result.scannedAt
+          ? result.scannedAt
+          : new Date().toISOString(),
       });
       return { trade: tradeSignals.length, watchlist: watchlistSignals.length, pairs: result.totalPairs ?? result.pairs_scanned };
     } catch {
@@ -507,7 +530,9 @@ export default function SignalsPanel() {
       const funnel = result.scanFunnel as Record<string, number> | undefined;
       setScanCacheB(result.signals as EngineASignal[], {
         count: result.signals.length,
-        scannedAt: new Date().toISOString(),
+        scannedAt: typeof result.scannedAt === 'string' && result.scannedAt
+          ? result.scannedAt
+          : new Date().toISOString(),
         ...(pairsScanned != null ? { pairsScanned } : {}),
         ...(funnel && Object.keys(funnel).length ? { scanFunnel: funnel } : {}),
       });
@@ -744,6 +769,13 @@ export default function SignalsPanel() {
 
   const lastScannedAtA = scanCacheAMeta?.scannedAt ?? (lastScan as ScanResponse | null)?.scannedAt;
   const lastScannedAtB = scanCacheBMeta?.scannedAt;
+  const scanAgeMinutesA = useMemo(() => {
+    if (!lastScannedAtA) return null;
+    const ts = Date.parse(lastScannedAtA);
+    if (Number.isNaN(ts)) return null;
+    return Math.max(0, Math.floor((Date.now() - ts) / 60_000));
+  }, [lastScannedAtA]);
+  const mt5Connected = health?.mt5?.connected !== false && health?.mt5?.available !== false;
   const scanning = scanningA || scanningB;
 
   return (
@@ -833,6 +865,19 @@ export default function SignalsPanel() {
 
       {lastError && <ErrorBanner message={lastError} onRetry={refreshLast} />}
 
+      {!mt5Connected && assetClass === 'forex' && (
+        <ErrorBanner
+          message="MT5 is disconnected — forex scores and live prices may be stale. Reconnect MT5, restart Athena, then run Scan A."
+        />
+      )}
+
+      {scanAgeMinutesA != null && scanAgeMinutesA >= 30 && (
+        <div className="rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-[11px] text-amber-100/90">
+          Engine A scores are {scanAgeMinutesA} min old. Scores use confirmed H1/H4/D1 bars (not live ticks);
+          run Scan A to refresh. Live prices update separately.
+        </div>
+      )}
+
       {/* Status row */}
       <div className="flex items-center gap-3 text-[11px] text-muted-foreground flex-wrap">
         <span>
@@ -840,7 +885,10 @@ export default function SignalsPanel() {
           {rows.length !== filteredRows.length && ` (of ${rows.length} total)`}
         </span>
         {lastScannedAtA && (
-          <span>Engine A: {new Date(lastScannedAtA).toLocaleTimeString()}</span>
+          <span>
+            Engine A: {new Date(lastScannedAtA).toLocaleString()}
+            {scanAgeMinutesA != null ? ` (${scanAgeMinutesA}m ago · confirmed bars)` : ''}
+          </span>
         )}
         {lastScannedAtB && (
           <span>Engine B: {new Date(lastScannedAtB).toLocaleTimeString()}{' '}

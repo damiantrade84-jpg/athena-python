@@ -3078,6 +3078,7 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict[s
             "btcBias": btc_bias,
             "totalPairs": len(candidate_pairs),
             "activePairs": len(active_pairs),
+            "assetClass": _ac,
             "scannedAt": datetime.now(timezone.utc).isoformat(),
             "styleRequested": _requested_style,
             "style": _requested_style,

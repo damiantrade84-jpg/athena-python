@@ -75,6 +75,31 @@ def api_last_scan():
         out["signals"] = out["signals"][:limit]
         out["signalsTruncated"] = total_signals > limit
         out["totalSignals"] = total_signals
+    asset_class_filter = str(request.args.get("asset_class") or "").strip().lower()
+    if asset_class_filter and isinstance(out.get("signals"), list):
+        stored_ac = str(out.get("assetClass") or out.get("asset_class") or "").strip().lower()
+        if stored_ac and stored_ac != asset_class_filter:
+            out["available"] = False
+            out["reason"] = "asset_class_mismatch"
+            out["requestedAssetClass"] = asset_class_filter
+            out["storedAssetClass"] = stored_ac
+            return jsonify(_json_safe(out)), 200
+        if not stored_ac:
+            filtered = [
+                s
+                for s in out["signals"]
+                if isinstance(s, dict)
+                and str(s.get("type") or "").strip().lower() == asset_class_filter
+            ]
+            out["signals"] = filtered
+            if isinstance(out.get("watchlist"), list):
+                out["watchlist"] = [
+                    s
+                    for s in out["watchlist"]
+                    if isinstance(s, dict)
+                    and str(s.get("type") or "").strip().lower() == asset_class_filter
+                ]
+            out["assetClassFiltered"] = asset_class_filter
     out["available"] = True
     return jsonify(_json_safe(out))
 

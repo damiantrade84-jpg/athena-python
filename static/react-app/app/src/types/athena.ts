@@ -489,6 +489,7 @@ export interface ScanResponse {
   pairs_scanned?: number;
   totalPairs?: number;
   activePairs?: number;
+  assetClass?: string | null;
   asset_class?: string;
   style?: string;
   available?: boolean;
