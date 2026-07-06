@@ -186,10 +186,27 @@ export default function ScannerTab() {
     ...(scan?.warnings || []),
     ...((status?.block_reasons || []).map((reason) => `execution:${reason}`)),
   ];
+  const scanAgeMinutes = useMemo(() => {
+    const raw = scan?.generated_at || status?.latest_scan_at;
+    if (!raw) return null;
+    const ts = Date.parse(raw);
+    if (Number.isNaN(ts)) return null;
+    return Math.max(0, Math.floor((Date.now() - ts) / 60_000));
+  }, [scan?.generated_at, status?.latest_scan_at]);
+  const validationBlocked = Boolean(
+    status?.validation_required && status?.validation_pass === false,
+  );
 
   return (
     <TabShell loading={loading} error={error} diagnostics={diagnostics} warnings={warnings} onRefresh={loadLatest}>
       <div className="space-y-4">
+        {validationBlocked && (
+          <div className="rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-[11px] text-amber-100/90">
+            Demo execution is blocked until you run an FX Factor backtest that passes validation
+            (completed run with at least 30 trades per carry, momentum, and value family).
+            Use the Backtesting tab, then retry Demo here. Dry-run preview works without validation.
+          </div>
+        )}
         <div data-testid="fx-scanner-controls" className="flex flex-col gap-3 rounded-md border border-border/60 p-3">
           <div data-testid="fx-scanner-actions" className="flex w-full flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center">
             <Button className="w-full sm:w-auto" size="sm" disabled={busy || !symbols.length} onClick={runScan}>
@@ -201,8 +218,18 @@ export default function ScannerTab() {
             <Badge variant="outline" className="text-[10px]">
               {status?.can_demo_execute ? 'Demo execution ready' : 'Execution off'}
             </Badge>
+            {validationBlocked && (
+              <Badge variant="outline" className="text-[10px] border-amber-500/50 text-amber-200">
+                Backtest validation required
+              </Badge>
+            )}
             <Badge variant="outline" className="text-[10px]">Mode {status?.executor_mode || 'paper'}</Badge>
             <Badge variant="outline" className="text-[10px]">{symbols.length} symbols</Badge>
+            {scanAgeMinutes != null && (
+              <Badge variant="outline" className="text-[10px]">
+                Scan {scanAgeMinutes}m ago · factor scores refresh on Scan Forex
+              </Badge>
+            )}
             <button
               type="button"
               className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground sm:ml-auto"

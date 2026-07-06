@@ -44,10 +44,14 @@ export class ForexApiError extends Error {
 
 export function formatForexDiagnostics(diagnostics: ForexDiagnostic[] | undefined): string {
   if (!diagnostics?.length) return 'Request failed';
+  const knownMessages: Record<string, string> = {
+    FX_FACTOR_VALIDATION_REQUIRED:
+      'Demo execution requires a completed FX Factor backtest with validation pass (≥30 trades per factor family). Run backtest in the Backtesting tab first.',
+  };
   return diagnostics
     .map((d) => {
       const code = d.code || d.field || 'error';
-      const msg = d.message || JSON.stringify(d);
+      const msg = d.message || knownMessages[String(code)] || JSON.stringify(d);
       return `${code}: ${msg}`;
     })
     .join('; ');
@@ -346,6 +350,10 @@ export interface ForexTradingStatusData {
   open_positions?: Array<Record<string, unknown>>;
   latest_scan_at?: string | null;
   latest_decision_date?: string | null;
+  validation_required?: boolean;
+  validation_pass?: boolean;
+  validation_run_id?: string | null;
+  validation?: Record<string, unknown> | null;
   can_dry_run?: boolean;
   can_demo_execute?: boolean;
   block_reasons?: string[];

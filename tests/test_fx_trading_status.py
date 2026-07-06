@@ -45,3 +45,24 @@ def test_trading_status_detects_kill_switch(monkeypatch) -> None:
     assert status["kill_switch"] is True
     assert status["can_demo_execute"] is False
     assert "KILL_SWITCH" in status["block_reasons"]
+
+
+def test_trading_status_blocks_demo_when_validation_required_but_missing(monkeypatch) -> None:
+    import athena_app.api.routes_forex_factor as routes
+
+    monkeypatch.setitem(routes.CONFIG, "EXECUTION_ENABLED", True)
+    monkeypatch.setitem(routes.CONFIG, "FX_FACTOR_EXECUTION_ENABLED", True)
+    monkeypatch.setitem(routes.CONFIG, "MT5_EXECUTION_ENABLED", True)
+    monkeypatch.setitem(routes.CONFIG, "KILL_SWITCH", False)
+    monkeypatch.setitem(routes.CONFIG, "FX_FACTOR_REQUIRE_VALIDATION_FOR_EXECUTION", True)
+    monkeypatch.setattr(routes, "_fx_backtest_validation_state", lambda: (False, None, None))
+
+    app = Flask(__name__)
+    register_forex_factor_routes(app)
+    response = app.test_client().get("/api/forex/trading-status")
+
+    status = response.get_json()["data"]
+    assert status["validation_required"] is True
+    assert status["validation_pass"] is False
+    assert status["can_demo_execute"] is False
+    assert "FX_FACTOR_VALIDATION_REQUIRED" in status["block_reasons"]

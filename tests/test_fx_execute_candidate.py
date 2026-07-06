@@ -130,6 +130,7 @@ def test_execute_candidate_real_execution_requires_validation_when_configured(mo
     assert response.status_code == 403
     assert body["success"] is False
     assert body["diagnostics"][0]["code"] == "FX_FACTOR_VALIDATION_REQUIRED"
+    assert "backtest" in body["diagnostics"][0]["message"].lower()
 
 
 def test_execute_candidate_flatten_uses_close_path(monkeypatch) -> None:

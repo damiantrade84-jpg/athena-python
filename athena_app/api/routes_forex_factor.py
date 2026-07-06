@@ -765,6 +765,30 @@ def _latest_completed_backtest() -> Optional[dict[str, Any]]:
     return fx_store.load_backtest_run(str(row["run_id"]))
 
 
+_FX_VALIDATION_REQUIRED_MESSAGE = (
+    "Run an FX Factor backtest that passes validation "
+    "(completed run with at least 30 trades per carry, momentum, and value family) "
+    "before demo execution."
+)
+
+
+def _fx_validation_required_for_execution() -> bool:
+    return bool(CONFIG.get("FX_FACTOR_REQUIRE_VALIDATION_FOR_EXECUTION", True))
+
+
+def _fx_backtest_validation_state() -> tuple[bool, dict[str, Any] | None, str | None]:
+    """Return (passed, validation_snapshot, completed_run_id)."""
+    if not _fx_validation_required_for_execution():
+        return True, None, None
+    run = _latest_completed_backtest()
+    run_id = str(run.get("run_id") or "") if isinstance(run, dict) else None
+    validation = (run or {}).get("report", {}).get("validation") if run else None
+    if isinstance(validation, dict) and validation.get("pass") is True:
+        return True, validation, run_id
+    snapshot = validation if isinstance(validation, dict) else None
+    return False, snapshot, run_id
+
+
 def api_forex_validation_latest():
     warnings: list[str] = []
     diagnostics: list[Any] = []
@@ -1014,6 +1038,11 @@ def _trading_status_payload() -> dict[str, Any]:
     except Exception as exc:
         block_reasons.append(f"MT5_STATUS_UNAVAILABLE:{exc}")
 
+    validation_required = _fx_validation_required_for_execution()
+    validation_pass, validation_snapshot, validation_run_id = _fx_backtest_validation_state()
+    if validation_required and not validation_pass:
+        block_reasons.append("FX_FACTOR_VALIDATION_REQUIRED")
+
     can_demo_execute = not block_reasons
     return {
         "market_open": True,
@@ -1028,6 +1057,10 @@ def _trading_status_payload() -> dict[str, Any]:
         "open_positions": open_positions,
         "latest_scan_at": latest_scan_at,
         "latest_decision_date": latest_decision_date,
+        "validation_required": validation_required,
+        "validation_pass": validation_pass,
+        "validation_run_id": validation_run_id,
+        "validation": validation_snapshot,
         "can_dry_run": True,
         "can_demo_execute": can_demo_execute,
         "block_reasons": block_reasons,
@@ -1208,17 +1241,20 @@ def api_forex_execute_candidate():
                 success=False,
                 http=403,
             )
-        if bool(CONFIG.get("FX_FACTOR_REQUIRE_VALIDATION_FOR_EXECUTION", True)):
-            run = _latest_completed_backtest()
-            validation = (run or {}).get("report", {}).get("validation") if run else None
-            if not isinstance(validation, dict) or validation.get("pass") is not True:
-                return _envelope(
-                    data=None,
-                    status="blocked",
-                    diagnostics=[{"code": "FX_FACTOR_VALIDATION_REQUIRED"}],
-                    success=False,
-                    http=403,
-                )
+        validation_pass, _, _ = _fx_backtest_validation_state()
+        if not validation_pass:
+            return _envelope(
+                data=None,
+                status="blocked",
+                diagnostics=[
+                    {
+                        "code": "FX_FACTOR_VALIDATION_REQUIRED",
+                        "message": _FX_VALIDATION_REQUIRED_MESSAGE,
+                    }
+                ],
+                success=False,
+                http=403,
+            )
 
     try:
         from athena_fx.execution import (
