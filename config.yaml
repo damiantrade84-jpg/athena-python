@@ -2263,9 +2263,13 @@ NEWS_SENTIMENT_MODEL: "grok-4.3"  # News AI text; defaults to AI_MODEL if empty 
 AI_REQUEST_TIMEOUT_SEC: 30
 # Bull/Bear/Judge debate uses this (falls back to AI_REQUEST_TIMEOUT_SEC if unset).
 DEBATE_AI_TIMEOUT_SEC: 30
-MARCUS_AI_PROVIDER: "grok"  # Marcus Reid text review (/api/analyze); independent of AI_REVIEW_PROVIDER
+MARCUS_AI_PROVIDER: "openai"  # Marcus Reid text review (/api/analyze); independent of AI_REVIEW_PROVIDER. openai resolves model via OPENAI_REVIEW_MODEL (gpt-5.5).
 
 MARCUS_AI_TIMEOUT_SEC: 90
+# Marcus output budget. On OpenAI Responses, reasoning tokens share this budget;
+# keep it large enough that JSON output is never truncated to empty.
+MARCUS_AI_MAX_TOKENS: 6000
+MARCUS_AI_REASONING_EFFORT: "low"  # OpenAI path only; keeps latency/cost bounded
 # Keep Marcus manual reviews bounded; SDK default retries can multiply the timeout.
 MARCUS_AI_SDK_MAX_RETRIES: 0
 # Phase 1 AI agent scaffolding is advisory/read-only by default.

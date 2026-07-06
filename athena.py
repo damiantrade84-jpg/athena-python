@@ -5157,6 +5157,14 @@ def run_ai(
             )
             return any(marker in text for marker in markers)
 
+        _max_tokens = int(CONFIG.get("MARCUS_AI_MAX_TOKENS", 6000) or 6000)
+        _extra_completion_kwargs: dict = {}
+        if _active_provider == "openai":
+            # OpenAI Responses path: reasoning tokens count against the output
+            # budget, so a high effort with a small budget yields empty text.
+            _extra_completion_kwargs["reasoning"] = {
+                "effort": str(CONFIG.get("MARCUS_AI_REASONING_EFFORT", "low") or "low").strip().lower()
+            }
         _max_ai_retries = int(CONFIG.get("MARCUS_AI_MAX_RETRIES", 1) or 1)
         _backoff_base = float(CONFIG.get("MARCUS_AI_RETRY_BACKOFF_SEC", 2.0) or 2.0)
         _last_exc = None
@@ -5182,11 +5190,12 @@ def run_ai(
                     )
                 completion = c.chat.completions.create(
                     model=_model,
-                    max_tokens=1100,
+                    max_tokens=_max_tokens,
                     temperature=_temp,
                     messages=_messages,
                     response_format={"type": "json_object"},
                     timeout=_timeout_sec,
+                    **_extra_completion_kwargs,
                 )
                 t = (completion.choices[0].message.content or "").strip()
                 result = _parse_ai_json(t, signal["pair"])
