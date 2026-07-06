@@ -29,6 +29,7 @@ const navSections: NavSection[] = [
       { id: 'dashboard',   label: 'Dashboard',   icon: LayoutDashboard },
       { id: 'signals',     label: 'Signals',      icon: Zap,        badge: 'LIVE' },
       { id: 'cascadeScan', label: 'Cascade Scan', icon: Workflow,   badge: 'NEW' },
+      { id: 'bulkAiReview', label: 'Bulk AI Review', icon: Sparkles, badge: 'AI' },
       { id: 'pairBrowser', label: 'Pair Browser', icon: Search },
       { id: 'engineBHotBench', label: 'Engine B Bench', icon: Radar, badge: 'HOT' },
       { id: 'liveCockpit', label: 'Live Cockpit', icon: Radio,      badge: 'CYBER' },

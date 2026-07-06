@@ -225,6 +225,7 @@ export type PanelId =
   | 'aiPerformance'
   | 'exitStrategy'
   | 'cascadeScan'
+  | 'bulkAiReview'
   | 'suggestedTrades'
   | 'ase'
   | 'tsmom'

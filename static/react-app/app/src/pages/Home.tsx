@@ -22,6 +22,7 @@ import AiPerformancePanel from '@/components/panels/AiPerformancePanel';
 import SuggestedTradesPanel from '@/components/panels/SuggestedTradesPanel';
 import ExitStrategyPanel from '@/components/panels/ExitStrategyPanel';
 import CascadeScanPanel from '@/components/panels/CascadeScanPanel';
+import BulkAiReviewPanel from '@/components/panels/BulkAiReviewPanel';
 import ASEPanel from '@/components/panels/ASEPanel';
 import TSMOMPanel from '@/components/panels/TSMOMPanel';
 import ForexFactorPanel from '@/components/panels/ForexFactorPanel';
@@ -49,6 +50,7 @@ const panels: Record<string, React.ComponentType> = {
   aiPerformance: AiPerformancePanel,
   exitStrategy: ExitStrategyPanel,
   cascadeScan: CascadeScanPanel,
+  bulkAiReview: BulkAiReviewPanel,
   suggestedTrades: SuggestedTradesPanel,
   ase: ASEPanel,
   tsmom: TSMOMPanel,

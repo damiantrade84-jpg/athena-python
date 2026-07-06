@@ -5885,6 +5885,59 @@ def api_cascade_scan():
     return jsonify(_json_safe(result))
 
 
+@app.route("/api/bulk-ai-review", methods=["POST"])
+def api_bulk_ai_review():
+    """Cascade shortlist + Marcus Reid text review per candidate. Advisory only."""
+    if _kill_switch:
+        return jsonify({"error": "Kill-switch active - system paused"}), 503
+    d = request.get_json(force=True, silent=True) or {}
+    from functools import partial
+
+    from bulk_ai_review import run_bulk_ai_review
+    from cascade_scan import run_cascade_scan
+    from ai_review import bulk_persistence
+
+    result = run_bulk_ai_review(
+        asset_class=d.get("asset_class", "forex"),
+        style=d.get("style", "auto"),
+        top_n=d.get("top_n"),
+        rules=d.get("rules") if isinstance(d.get("rules"), dict) else None,
+        run_cascade_scan_fn=partial(run_cascade_scan, run_full_scan_fn=run_full_scan),
+        run_ai_fn=run_ai,
+        persist_fn=bulk_persistence.insert_review,
+        cache_ttl_s=float(CONFIG.get("BULK_AI_REVIEW_CACHE_TTL_S", 3600) or 3600),
+        budget_s=float(CONFIG.get("BULK_AI_REVIEW_BUDGET_S", 120) or 120),
+    )
+    return jsonify(_json_safe(result))
+
+
+@app.route("/api/bulk-ai-review/history", methods=["GET"])
+def api_bulk_ai_review_history():
+    """Persisted bulk-review rows/runs for win-rate tracking."""
+    from ai_review import bulk_persistence
+
+    view = str(request.args.get("view") or "reviews").strip().lower()
+    if view == "runs":
+        return jsonify(
+            _json_safe({"success": True, "runs": bulk_persistence.list_runs(
+                limit=request.args.get("limit", 20)
+            )})
+        )
+    return jsonify(
+        _json_safe(
+            {
+                "success": True,
+                "reviews": bulk_persistence.list_reviews(
+                    scan_run_id=request.args.get("scan_run_id"),
+                    grade=request.args.get("grade"),
+                    symbol=request.args.get("symbol"),
+                    limit=request.args.get("limit", 100),
+                ),
+            }
+        )
+    )
+
+
 @app.route("/api/analyze", methods=["POST"])
 def api_analyze():
 
