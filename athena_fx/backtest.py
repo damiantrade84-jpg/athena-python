@@ -782,6 +782,13 @@ def run_fx_factor_backtest(
         "validation": {
             "family_trade_counts": dict(family_trade_counts),
             "n_warning": any(c < 30 for c in family_trade_counts.values()),
+            # Execution gate (FX_FACTOR_REQUIRE_VALIDATION_FOR_EXECUTION) requires
+            # this explicit flag; anything other than True fails closed.
+            "pass": (
+                status == "completed"
+                and bool(family_trade_counts)
+                and all(c >= 30 for c in family_trade_counts.values())
+            ),
         },
     }
     store.save_backtest_run(run_id, created_at, status, request_dict, report)
@@ -818,7 +825,7 @@ def _empty_report(
         "factor_family_pnl": {},
         "pair_pnl": {},
         "pair_sanity_flags": [],
-        "validation": {"family_trade_counts": {}, "n_warning": False},
+        "validation": {"family_trade_counts": {}, "n_warning": False, "pass": False},
     }
 
 
