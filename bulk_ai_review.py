@@ -20,6 +20,13 @@ DEFAULT_BUDGET_S = 120.0
 
 PASS_GRADES = {"A+", "A", "B"}
 
+# The bulk review defers to Engine A/B's own emission thresholds: any signal
+# the engines produced is eligible for AI review. Cascade's extra
+# min_confluence/min_rr shortlist rules are zeroed here (freshness and
+# provenance hard blockers still apply inside cascade). Callers can still
+# tighten via the `rules` payload.
+DEFAULT_RULES: dict = {"min_confluence": 0.0, "min_rr": 0.0}
+
 # In-process TTL cache: key -> (monotonic_ts, review dict). Safe-defaults are
 # never cached so a transient provider failure does not stick for an hour.
 _REVIEW_CACHE: dict[tuple, tuple[float, dict]] = {}
@@ -42,12 +49,16 @@ def run_bulk_ai_review(
     limit = _clamp_top_n(top_n)
     started = now_fn()
 
+    merged_rules = dict(DEFAULT_RULES)
+    if isinstance(rules, dict):
+        merged_rules.update(rules)
+
     cascade = run_cascade_scan_fn(
         asset_class=asset_class,
         style=style,
         enable_triage=False,
         top_n=limit,
-        rules=rules,
+        rules=merged_rules,
     )
     if not isinstance(cascade, dict) or cascade.get("success") is not True:
         return cascade if isinstance(cascade, dict) else {
@@ -136,6 +147,7 @@ def run_bulk_ai_review(
         "universeCount": cascade.get("universeCount"),
         "shortlistCount": len(candidates),
         "hardBlockedCount": cascade.get("hardBlockedCount"),
+        "hardBlockedSummary": cascade.get("hardBlockedSummary"),
         "results": results,
         "filteredOut": filtered_out,
         "skipped": skipped,

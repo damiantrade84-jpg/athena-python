@@ -176,6 +176,23 @@ def test_top_n_clamped_and_default():
     assert seen["top_n"] == bar.DEFAULT_TOP_N
 
 
+def test_default_rules_zero_cascade_thresholds_and_are_overridable():
+    seen = {}
+
+    def cascade_fn(**kwargs):
+        seen.update(kwargs)
+        return {"success": True, "scanRunId": "x", "candidates": []}
+
+    bar.run_bulk_ai_review(run_cascade_scan_fn=cascade_fn, run_ai_fn=_ai_fn({}))
+    assert seen["rules"] == {"min_confluence": 0.0, "min_rr": 0.0}
+    bar.run_bulk_ai_review(
+        rules={"min_rr": 1.2},
+        run_cascade_scan_fn=cascade_fn,
+        run_ai_fn=_ai_fn({}),
+    )
+    assert seen["rules"] == {"min_confluence": 0.0, "min_rr": 1.2}
+
+
 def test_busy_or_failed_cascade_passes_through():
     def busy_fn(**kwargs):
         return {"success": False, "busy": True, "error": "Scan already in progress"}

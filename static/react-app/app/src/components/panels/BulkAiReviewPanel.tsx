@@ -47,6 +47,7 @@ interface BulkReviewResponse {
   universeCount?: number;
   shortlistCount?: number;
   hardBlockedCount?: number;
+  hardBlockedSummary?: { symbol: string; blockers: string[] }[];
   results?: BulkReviewRow[];
   filteredOut?: BulkFilteredOut[];
   skipped?: { symbol: string; reason: string }[];
@@ -238,6 +239,9 @@ export default function BulkAiReviewPanel() {
           <span>Asset class: {result.assetClass}</span>
           <span>Universe: {result.universeCount}</span>
           <span>Shortlisted: {result.shortlistCount}</span>
+          {(result.hardBlockedCount ?? 0) > 0 && (
+            <span className="text-warning">Hard blocked: {result.hardBlockedCount}</span>
+          )}
           <span>Reviewed: {summary.reviewed}</span>
           <span className="text-long">A: {summary.aGrades}</span>
           <span>B: {summary.bGrades}</span>
@@ -270,9 +274,11 @@ export default function BulkAiReviewPanel() {
               <Filter className="w-8 h-8 mb-3 opacity-40" />
               <p className="text-sm">{result ? 'No A/B-graded signals this run' : 'No bulk review yet'}</p>
               <p className="text-[11px] mt-1">
-                {result
-                  ? 'All shortlisted candidates graded C or below (or AI unavailable).'
-                  : 'Run a bulk scan + AI review to surface Marcus Reid A/B signals.'}
+                {!result
+                  ? 'Run a bulk scan + AI review to surface Marcus Reid A/B signals.'
+                  : (result.shortlistCount ?? 0) === 0
+                    ? 'No candidates reached the AI review — the engines emitted no eligible signals this run (see hard-block reasons below).'
+                    : 'All shortlisted candidates graded C or below (or AI unavailable).'}
               </p>
             </div>
           ) : (
@@ -342,6 +348,25 @@ export default function BulkAiReviewPanel() {
           )}
         </CardContent>
       </Card>
+
+      {/* -- HARD BLOCKED -- */}
+      {result && (result.hardBlockedSummary?.length ?? 0) > 0 && (
+        <Card className="border-warning/35 bg-warning/5">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-xs font-semibold uppercase tracking-wider text-warning">
+              Blocked before AI review ({result.hardBlockedCount ?? result.hardBlockedSummary?.length})
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-2 text-[11px]">
+            {result.hardBlockedSummary?.map((row) => (
+              <div key={row.symbol} className="rounded border border-border/50 px-2 py-1.5">
+                <span className="font-mono font-semibold">{row.symbol}</span>
+                <span className="text-muted-foreground"> — {row.blockers.join(', ')}</span>
+              </div>
+            ))}
+          </CardContent>
+        </Card>
+      )}
 
       {/* -- FILTERED OUT -- */}
       {filteredOut.length > 0 && (
