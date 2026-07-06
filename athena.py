@@ -3483,6 +3483,7 @@ INPUT SECTIONS:
 
 HOW TO ANALYSE - FOLLOW THIS EXACT ORDER:
 Step 1: Read AI CALIBRATION CONTEXT first. Identify the Engine source, Asset Type, and Resolved AI style. Note Style min RR (config). Note whether the dashboard confluence label is Weak, Medium, or Strong. Do not confuse thresholdProgressPct with rawScorePct.
+Step 1B: If Engine source is Engine B naked market structure, use ENGINE B (NAKED MARKET STRUCTURE), ENGINE B SCORING DIAGNOSTICS, LEVELS, and CANDLE DATA FRESHNESS as the primary deterministic setup context. Engine A FACTOR DIAGNOSTICS and Engine A technical indicators may be absent; do not call them weak or bearish unless actual values are supplied.
 Step 1C: If Engine source is Engine C consensus, use ENGINE C CONSENSUS as the primary deterministic setup context. Engine A and Engine B sections are child diagnostics. Do not call the whole setup weak solely because one child diagnostic has missing optional fields; still flag genuine missing levels, stale data, direction conflict, or blocked/watchlist decision_state.
 Step 2: Read FACTOR DIAGNOSTICS. Which directional factors are active? Does direction match? What is the confidence multiplier?
 Step 3: Check trendCoherence. How many timeframes agree? If coherence_ratio < 0.5, signal is fragmented; 0.5-0.7 mixed; >0.7 aligned.
@@ -3501,7 +3502,7 @@ You must arrive at a letter grade (A+ through F) by weighing evidence in this or
 1. Factor coherence: how many active directional factors support the call, and do weights justify confidence?
 2. trendCoherence ratio: <0.5 fragmented; 0.5-0.7 mixed; >0.7 aligned.
 3. directionalConfidenceMultiplier: <0.5 is a structural red flag regardless of headline score.
-4. ENGINE B (if present): CLEAR structural_verdict + direction aligned to the reviewed engine direction is a boost; UNCLEAR/misaligned is a risk (ignore overlay Final Score 0.00 when verdict is CLEAR, and derive percent from score/max when score_pct is missing or stale).
+4. ENGINE B (if present): CLEAR structural_verdict + direction aligned to the reviewed engine direction is a boost; UNCLEAR/misaligned is a risk (ignore overlay Final Score 0.00 when verdict is CLEAR, and derive percent from score/max when score_pct is missing or stale). For Engine B-primary reviews, gate flags, reason codes, min_rr, rr_used_for_gate, structural levels, and freshness diagnostics are the confirmation layer; do not require Engine A factor diagnostics.
 4C. ENGINE C (if present): execute/reduced_risk decision_state with HIGH tier and strong conviction is positive context; watchlist/blocked is a risk. Use sizing_override for position sizing when Engine A confidence_multiplier is unavailable.
 5. Momentum and intermarket confirmation from FACTOR DIAGNOSTICS.
 6. Regime: name it, explain follow-through risk, then integrate (no fixed caps).
@@ -4381,6 +4382,9 @@ def _build_signal_message(
         except (TypeError, ValueError):
             return float(default)
 
+    def _present(x) -> bool:
+        return x is not None and x != ""
+
     def _engine_source_label() -> str:
         engine_hint = str(
             signal.get("engine_source")
@@ -4391,11 +4395,14 @@ def _build_signal_message(
         ).lower()
         if engine_hint in {"engine_c", "consensus", "c"} or isinstance(signal.get("engine_c"), dict):
             return "Engine C consensus"
-        if engine_hint in {"engine_b", "naked", "b"} or signal.get("is_naked"):
+        if engine_hint in {"engine_a", "engine-a", "a"}:
+            return "Engine A factor/confluence signal"
+        if engine_hint in {"engine_b", "naked", "b"} or (signal.get("is_naked") and not engine_hint):
             return "Engine B naked market structure"
         return "Engine A factor/confluence signal"
 
     engine_source_label = _engine_source_label()
+    is_primary_engine_b = engine_source_label == "Engine B naked market structure"
 
     max_score = _num(signal.get("maxScore"), 3.0)
 
@@ -4517,23 +4524,44 @@ def _build_signal_message(
             vote_lines.append(f"  {vname}: {vval}")
 
     lines.append("")
+    if is_primary_engine_b:
+        lines.append("=== OPTIONAL TECHNICALS (not Engine B scoring) ===")
+        lines.append(
+            "  Engine B is structure/checklist-driven. Missing Engine A indicators here are not bearish evidence."
+        )
+        if vote_lines:
+            lines.extend(vote_lines)
+        if _present(signal.get("stochK")) or _present(signal.get("stochD")):
+            lines.append(f"  Stoch K/D: {signal.get('stochK')}/{signal.get('stochD')}")
+        if _present(signal.get("volRatio")):
+            lines.append(f"  Volume ratio: {signal.get('volRatio')}x avg")
+        if _present(signal.get("ema200Slope")):
+            lines.append(f"  EMA200 slope: {signal.get('ema200Slope')}%")
+        if _present(signal.get("weinsteinLabel")):
+            lines.append(f"  Weinstein: {signal.get('weinsteinLabel')}")
+        _h4_snap = signal.get("h4", {}).get("snap", {}) if isinstance(signal.get("h4"), dict) else {}
+        if _present(_h4_snap.get("atrPct")) or _present(_h4_snap.get("atrLabel")):
+            lines.append(
+                f"  ATR percentile: {_h4_snap.get('atrPct', '?')} "
+                f"({_h4_snap.get('atrLabel', '?')})"
+            )
+    else:
+        lines.append("=== TECHNICALS (scored votes) ===")
 
-    lines.append("=== TECHNICALS (scored votes) ===")
+        lines.extend(vote_lines)
 
-    lines.extend(vote_lines)
+        lines.append(f"  Stoch K/D: {signal.get('stochK')}/{signal.get('stochD')}")
 
-    lines.append(f"  Stoch K/D: {signal.get('stochK')}/{signal.get('stochD')}")
+        lines.append(f"  Volume ratio: {signal.get('volRatio', 1.0)}x avg")
 
-    lines.append(f"  Volume ratio: {signal.get('volRatio', 1.0)}x avg")
+        lines.append(f"  EMA200 slope: {signal.get('ema200Slope', 0)}%")
 
-    lines.append(f"  EMA200 slope: {signal.get('ema200Slope', 0)}%")
+        lines.append(f"  Weinstein: {signal.get('weinsteinLabel', 'n/a')}")
 
-    lines.append(f"  Weinstein: {signal.get('weinsteinLabel', 'n/a')}")
-
-    lines.append(
-        f"  ATR percentile: {signal.get('h4', {}).get('snap', {}).get('atrPct', '?')} "
-        f"({signal.get('h4', {}).get('snap', {}).get('atrLabel', '?')})"
-    )
+        lines.append(
+            f"  ATR percentile: {signal.get('h4', {}).get('snap', {}).get('atrPct', '?')} "
+            f"({signal.get('h4', {}).get('snap', {}).get('atrLabel', '?')})"
+        )
 
     # === RAW MARKET DATA (last 20 H4 bars) ===
     # Give Marcus Reid actual OHLCV + indicator time-series so the AI can
@@ -4594,7 +4622,7 @@ def _build_signal_message(
     _fw = signal.get("factorWeights", {})
     _naked = signal.get("naked_data", {})
     _is_naked = bool(signal.get("is_naked"))
-    if _fd or _fs or (_is_naked and _naked):
+    if _fd or _fs:
         lines.append("")
         lines.append("=== FACTOR DIAGNOSTICS ===")
         if _fs:
@@ -4660,12 +4688,34 @@ def _build_signal_message(
     if _is_naked and _naked and not _fs:
         lines.append("")
         lines.append("=== ENGINE B SCORING DIAGNOSTICS ===")
+        lines.append("  Engine B uses structural checklist diagnostics, not Engine A factor diagnostics.")
         lines.append(f"  Score: {_naked.get('score', 'N/A')} / {_naked.get('max_possible', 'N/A')} ({_naked.get('score_pct', 'N/A')}%)")
         lines.append(f"  Structural Verdict: {_naked.get('structural_verdict', 'N/A')}")
+        lines.append(f"  Style: {_naked.get('style', signal.get('style', 'N/A'))} | Min RR: {_naked.get('min_rr', signal.get('min_rr', 'N/A'))}")
+        lines.append(f"  RR used for gate: {_naked.get('rr_used_for_gate', _naked.get('execution_rr', _naked.get('rr', 'N/A')))}")
+        lines.append(
+            "  Gate flags: "
+            f"structure_ok={_naked.get('structure_ok', 'N/A')}, "
+            f"location_ok={_naked.get('location_ok', 'N/A')}, "
+            f"trigger_ok={_naked.get('trigger_ok', 'N/A')}, "
+            f"rr_ok={_naked.get('rr_ok', 'N/A')}, "
+            f"room_ok={_naked.get('room_ok', 'N/A')}, "
+            f"macro_ok={_naked.get('macro_ok', 'N/A')}"
+        )
         lines.append(f"  Room-to-move bonus: {_naked.get('room_to_move_bonus', 0)}")
         lines.append(f"  Catalyst bonus: {_naked.get('catalyst_bonus', 0)}")
         lines.append(f"  AI stats adjustment: {_naked.get('ai_adjustment', 0)}")
         lines.append(f"  Actionable: {'YES' if _naked.get('is_actionable') else 'NO'}")
+        _reason_codes = (
+            _naked.get("reason_codes")
+            or (_naked.get("engine_b_diagnostics") or {}).get("reason_codes")
+            or _naked.get("fail_reasons")
+        )
+        if _reason_codes:
+            if isinstance(_reason_codes, (list, tuple)):
+                lines.append("  Reason codes: " + ", ".join(str(x) for x in _reason_codes))
+            else:
+                lines.append(f"  Reason codes: {_reason_codes}")
 
     # === CONFIDENCE ENGINE ===
     _conf = signal.get("confidenceDetail", {})
@@ -4995,6 +5045,79 @@ def _normalize_ai_analyze_signal(sig: dict) -> dict:
         or sig.get("engine")
         or ""
     ).lower()
+    is_engine_b_like = (
+        engine_hint in {"engine_b", "naked", "b"}
+        or (bool(sig.get("is_naked")) and not engine_hint)
+    )
+    if is_engine_b_like:
+        sig.setdefault("engine_source", "engine_b")
+        naked = sig.get("naked_data") if isinstance(sig.get("naked_data"), dict) else {}
+        engine_b = sig.get("engine_b") if isinstance(sig.get("engine_b"), dict) else {}
+        if not naked and engine_b:
+            naked = engine_b
+            sig["naked_data"] = naked
+        if naked and not engine_b:
+            sig["engine_b"] = naked
+
+        def _first_present(*values):
+            for value in values:
+                if value is not None and value != "":
+                    return value
+            return None
+
+        score = _first_present(sig.get("confluenceScore"), naked.get("score"))
+        max_score = _first_present(sig.get("maxScore"), naked.get("max_possible"), naked.get("maxScore"))
+        if score is not None:
+            sig["confluenceScore"] = score
+        if max_score is not None:
+            sig["maxScore"] = max_score
+        if sig.get("confluencePct") is None:
+            sig["confluencePct"] = _first_present(naked.get("pct"), naked.get("score_pct"))
+        if sig.get("score_pct") is None:
+            sig["score_pct"] = _first_present(naked.get("score_pct"), naked.get("pct"), sig.get("confluencePct"))
+        if sig.get("price") is None:
+            sig["price"] = _first_present(sig.get("entry"), naked.get("current_price"))
+        if sig.get("sl") is None:
+            sig["sl"] = _first_present(
+                naked.get("final_stop_loss"),
+                naked.get("execution_sl"),
+                naked.get("recommended_stop_loss"),
+                naked.get("recommended_sl"),
+            )
+        if sig.get("tp1") is None:
+            sig["tp1"] = _first_present(
+                naked.get("final_take_profit_1"),
+                naked.get("execution_tp1"),
+                naked.get("execution_tp"),
+                naked.get("recommended_take_profit"),
+                naked.get("recommended_tp"),
+            )
+        if sig.get("tp2") is None:
+            sig["tp2"] = _first_present(
+                naked.get("final_take_profit_2"),
+                naked.get("execution_tp2"),
+                sig.get("tp1"),
+            )
+        if sig.get("rr1") is None:
+            sig["rr1"] = _first_present(
+                naked.get("execution_rr1"),
+                naked.get("rr_used_for_gate"),
+                naked.get("execution_rr"),
+                naked.get("rr"),
+            )
+        if sig.get("rr2") is None:
+            sig["rr2"] = _first_present(naked.get("execution_rr2"), sig.get("rr1"))
+        if sig.get("trendState") is None:
+            sig["trendState"] = _first_present(
+                naked.get("regime"),
+                naked.get("current_swing_sequence"),
+                naked.get("structural_verdict"),
+            )
+        if sig.get("style") is None:
+            sig["style"] = _first_present(naked.get("style"), sig.get("requestedStyle"))
+        if sig.get("min_rr") is None:
+            sig["min_rr"] = naked.get("min_rr")
+
     is_engine_c_like = (
         engine_hint in {"engine_c", "consensus", "c"}
         or (

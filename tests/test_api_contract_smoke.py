@@ -103,6 +103,24 @@ def test_api_analyze_normalizes_engine_c_review_payload_shape():
     assert "engine_c: {" in panel_src
 
 
+def test_api_analyze_normalizes_engine_b_review_payload_shape():
+    """Engine B text review must not grade placeholder Engine A fields as missing B evidence."""
+    src = ATHENA_PATH.read_text(encoding="utf-8")
+    assert 'sig.setdefault("engine_source", "engine_b")' in src
+    assert 'sig["naked_data"] = naked' in src
+    assert 'sig["engine_b"] = naked' in src
+    assert 'sig["confluenceScore"] = score' in src
+    assert 'sig["maxScore"] = max_score' in src
+    assert 'naked.get("final_stop_loss")' in src
+    assert 'naked.get("rr_used_for_gate")' in src
+    assert 'sig["min_rr"] = naked.get("min_rr")' in src
+    assert "=== OPTIONAL TECHNICALS (not Engine B scoring) ===" in src
+    assert "Missing Engine A indicators here are not bearish evidence" in src
+    assert "Engine B uses structural checklist diagnostics, not Engine A factor diagnostics." in src
+    assert "if _fd or _fs:" in src
+    assert "Step 1B: If Engine source is Engine B naked market structure" in src
+
+
 def test_execute_payload_contract_strings_present():
     src = ATHENA_PATH.read_text(encoding="utf-8") + EXECUTION_PATH.read_text(
         encoding="utf-8"
