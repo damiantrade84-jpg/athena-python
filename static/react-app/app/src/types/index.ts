@@ -359,6 +359,11 @@ export interface HealthStatus {
   killSwitch?: boolean;
   dataSource?: string;
   dataSources?: string[];
+  mt5?: {
+    available?: boolean;
+    connected?: boolean;
+    detail?: string;
+  };
 }
 
 export interface MT5Account {
