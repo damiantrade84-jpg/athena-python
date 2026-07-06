@@ -50,8 +50,10 @@ interface FreshnessResponse {
 function statusBadge(status?: string) {
   const s = (status || 'new').toLowerCase();
   if (s === 'accepted_research') return 'default';
+  if (s === 'reviewed') return 'secondary';
   if (s === 'rejected') return 'destructive';
   if (s === 'promoted_to_review') return 'secondary';
+  if (s === 'needs_review') return 'outline';
   return 'outline';
 }
 
@@ -139,6 +141,7 @@ export default function EdgeLabSuggestionsPanel() {
             <SelectItem value="all">All statuses</SelectItem>
             <SelectItem value="new">New</SelectItem>
             <SelectItem value="needs_review">Needs review</SelectItem>
+            <SelectItem value="reviewed">Reviewed</SelectItem>
             <SelectItem value="accepted_research">Accepted research</SelectItem>
             <SelectItem value="rejected">Rejected</SelectItem>
             <SelectItem value="promoted_to_review">Promoted to review</SelectItem>

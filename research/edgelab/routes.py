@@ -65,8 +65,8 @@ def register_edgelab_routes(app) -> None:
         reviewer = str(payload.get("reviewer") or "ui")
 
         status_map = {
-            "mark_reviewed": "needs_review",
-            "reviewed": "needs_review",
+            "mark_reviewed": "reviewed",
+            "reviewed": "reviewed",
             "reject": "rejected",
             "promote": "promoted_to_review",
         }
