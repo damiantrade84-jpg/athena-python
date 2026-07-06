@@ -36,6 +36,21 @@ def _display_symbol(symbol: str) -> str:
     return f"{sym[:3]}/{sym[3:]}" if len(sym) == 6 else sym
 
 
+def _hydrate_fx_execution_candle_quality(exec_dict: dict[str, Any]) -> None:
+    """Refresh candle freshness before risk_check (parity with /api/execute and auto-trader)."""
+    try:
+        from execution import _hydrate_execution_candle_quality
+        from athena_runtime import rt
+
+        _hydrate_execution_candle_quality(exec_dict, _r=rt())
+    except Exception as exc:
+        log.warning(
+            "FX execution candle hydrate failed for %s: %s",
+            exec_dict.get("pair") or exec_dict.get("symbol"),
+            exc,
+        )
+
+
 def sl_tp_from_atr(
     entry: float,
     direction: str,
@@ -257,6 +272,8 @@ def execute_fx_decision(
 
     size_mult = float(decision.get("size_multiplier") or 1.0)
     sizing_override = max(0.25, min(1.0, size_mult))
+
+    _hydrate_fx_execution_candle_quality(exec_dict)
 
     approval = deps.risk_check(
         signal=exec_dict,
