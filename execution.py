@@ -12,7 +12,7 @@ from concurrent.futures import (
     TimeoutError as FuturesTimeoutError,
     as_completed,
 )
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from flask import Flask, jsonify, request
 
@@ -93,6 +93,47 @@ def _execution_audit_legs(result: dict, approval) -> list[dict]:
             }
         )
     return audit_legs
+
+
+def _resolve_ai_review_for_audit(sig: dict, audit_db: str | None) -> tuple[str | None, str | None]:
+    """Best-effort (grade, review_id) of the latest real AI review for journaling.
+
+    Audit metadata only — never gates, blocks, or alters execution. Prefers the
+    grade carried on the signal payload, then falls back to the most recent
+    stored review for the symbol within 24h. Any failure returns (None, None).
+    """
+    try:
+        grade = sig.get("ai_grade") or sig.get("aiGrade")
+        review_id = sig.get("ai_review_id") or sig.get("review_id")
+        if grade:
+            return str(grade), (str(review_id) if review_id else None)
+        symbol = sig.get("pair") or sig.get("symbol")
+        if not audit_db or not symbol:
+            return None, None
+        cutoff = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
+        with sqlite3.connect(audit_db, timeout=5.0) as con:
+            row = con.execute(
+                "SELECT grade, review_id FROM bulk_ai_reviews"
+                " WHERE (pair=? OR symbol=?) AND created_at>=? AND is_safe_default=0"
+                " ORDER BY created_at DESC LIMIT 1",
+                (symbol, symbol, cutoff),
+            ).fetchone()
+            if row and row[0]:
+                return str(row[0]), (str(row[1]) if row[1] else None)
+            row = con.execute(
+                "SELECT ai_review_json, review_id FROM ai_chart_reviews"
+                " WHERE symbol=? AND created_at>=? AND parse_success=1"
+                " ORDER BY created_at DESC LIMIT 1",
+                (symbol, cutoff),
+            ).fetchone()
+            if row and row[0]:
+                rev = json.loads(row[0])
+                g = rev.get("grade") or rev.get("verdict")
+                if g:
+                    return str(g), (str(row[1]) if row[1] else None)
+    except Exception:
+        pass
+    return None, None
 
 
 def _execution_failure_reason(result: object, default: str = "Execution failed") -> str:
@@ -1522,6 +1563,7 @@ def api_quick_execute():
             _audit_ok = True
             try:
                 _audit_ts = datetime.now(timezone.utc).isoformat()
+                _ai_grade, _ai_review_id = _resolve_ai_review_for_audit(sig, _r.AUDIT_DB)
                 _audit_rows = []
                 for _leg in _execution_audit_legs(result, approval):
                     _audit_rows.append((
@@ -1548,6 +1590,8 @@ def api_quick_execute():
                         _audit["max_score"],
                         _audit["score_pct"],
                         sig.get("exit_mode"),
+                        _ai_grade,
+                        _ai_review_id,
                     ))
                 with timed_sqlite_connect(
                     _r.AUDIT_DB, timeout=15.0, label="quick_execute.audit_success.connect"
@@ -1556,8 +1600,8 @@ def api_quick_execute():
                         con,
                         "INSERT INTO audit_log(ts,pair,score,engine,direction,trend,grade,edge_prob,risk,style,"
                         "entry_price,sl,tp,volume,regime,risk_amount,risk_pct,ticket,fee_cost,factors_json,"
-                        "max_score,score_pct,exit_mode) "
-                        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                        "max_score,score_pct,exit_mode,ai_review_grade,ai_review_id) "
+                        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                         _audit_rows,
                         label="quick_execute.audit_success.insert",
                     )
@@ -2627,6 +2671,7 @@ def api_execute():
                     _eng_b_data = sig.get("engine_b") or sig.get("naked_data") or {}
                     
                     _audit_ts = datetime.now(timezone.utc).isoformat()
+                    _ai_grade, _ai_review_id = _resolve_ai_review_for_audit(sig, _r.AUDIT_DB)
                     _audit_rows = []
                     for _leg in _execution_audit_legs(result, approval):
                         _audit_rows.append((
@@ -2655,13 +2700,15 @@ def api_execute():
                             _eng_b_data.get("max_possible") if _audit_engine == "engine_b" else sig.get("maxScore"),
                             _eng_b_data.get("pct") if _audit_engine == "engine_b" else None,
                             sig.get("exit_mode"),
+                            _ai_grade,
+                            _ai_review_id,
                         ))
                     timed_sqlite_executemany_write(
                         con,
                         "INSERT INTO audit_log(ts,pair,score,engine,direction,trend,grade,edge_prob,risk,style,"
                         "entry_price,sl,tp,volume,regime,risk_amount,risk_pct,ticket,fee_cost,factors_json,"
-                        "signal_price_ref,slippage_bps,max_score,score_pct,exit_mode) "
-                        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                        "signal_price_ref,slippage_bps,max_score,score_pct,exit_mode,ai_review_grade,ai_review_id) "
+                        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                         _audit_rows,
                         label="execute.audit_success.insert",
                     )

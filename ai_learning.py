@@ -83,6 +83,10 @@ def init_learning_db(db_path: str) -> None:
                 con.execute("ALTER TABLE learning_log ADD COLUMN engine TEXT")
             if "outcome" not in existing:
                 con.execute("ALTER TABLE learning_log ADD COLUMN outcome TEXT")
+            if "ai_review_grade" not in existing:
+                con.execute("ALTER TABLE learning_log ADD COLUMN ai_review_grade TEXT")
+            if "ai_review_id" not in existing:
+                con.execute("ALTER TABLE learning_log ADD COLUMN ai_review_id TEXT")
             con.commit()
         log.info("[LEARN] Learning DB ready")
     except Exception as e:
@@ -146,8 +150,8 @@ def extract_learning_from_trade(
                    (ts, trade_ts, ticket, pair, asset_type, direction, engine, outcome,
                     ai_grade, edge_prob, confluence_score, max_score, score_pct,
                     votes_json, regime, pnl, r_multiple, win, exit_reason,
-                    holding_hours, is_demo, factors_json)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    holding_hours, is_demo, factors_json, ai_review_grade, ai_review_id)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (
                     datetime.now(timezone.utc).isoformat(),
                     row["ts"],
@@ -173,6 +177,8 @@ def extract_learning_from_trade(
                     row["holding_period_hours"],
                     1 if is_demo else 0,
                     factors_raw,
+                    row.get("ai_review_grade"),
+                    row.get("ai_review_id"),
                 ),
             )
             con.commit()

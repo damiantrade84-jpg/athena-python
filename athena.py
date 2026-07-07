@@ -5750,6 +5750,8 @@ def _init_audit_db(db_path: str) -> None:
         ("tp_partial", "REAL"),
         ("tp2", "REAL"),
         ("exit_mode", "TEXT"),  # Engine A exit-mode selector (Plan 2)
+        ("ai_review_grade", "TEXT"),  # Real AI review grade at execution (audit only, never gates)
+        ("ai_review_id", "TEXT"),  # Source AI review row for the grade above
     ]:
         if col not in existing:
             con.execute(f"ALTER TABLE audit_log ADD COLUMN {col} {defn}")
