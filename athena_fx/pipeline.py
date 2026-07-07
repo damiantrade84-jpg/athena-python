@@ -131,6 +131,36 @@ def _spread_pips_for(symbol: str, override: Optional[float]) -> Optional[float]:
     return None
 
 
+def _load_recent_daily_bars_for_cost_gate(
+    symbol: str,
+    as_of_date: str,
+    *,
+    lookback_days: int = 90,
+) -> list[dict[str, Any]]:
+    """Read cached D1 bars for ATR; absence keeps the cost gate fail-closed."""
+    sym = symbol.replace("/", "").upper()
+    try:
+        end_date = _dt.date.fromisoformat(str(as_of_date)[:10])
+    except ValueError:
+        return []
+    start = (end_date - _dt.timedelta(days=lookback_days)).isoformat()
+    end = end_date.isoformat()
+    try:
+        from athena_fx.backtest_data import load_daily_bars
+
+        bars_by_symbol, diagnostics = load_daily_bars([sym], start, end)
+    except Exception as exc:
+        log.debug("D1 bar load for cost gate failed (%s): %s", sym, exc)
+        return []
+    if diagnostics:
+        log.debug(
+            "D1 bar load for cost gate diagnostics (%s): %s",
+            sym,
+            [d.to_dict() if hasattr(d, "to_dict") else d for d in diagnostics],
+        )
+    return list(bars_by_symbol.get(sym) or [])
+
+
 def compute_symbol_state(
     symbol: str,
     as_of_date: str,
@@ -272,7 +302,8 @@ def refresh_decisions(
     errors: list[dict[str, str]] = []
     for sym in universe:
         try:
-            state = compute_symbol_state(sym, as_of, db_path=db_path)
+            bars = _load_recent_daily_bars_for_cost_gate(sym, as_of)
+            state = compute_symbol_state(sym, as_of, bars=bars, db_path=db_path)
         except Exception as exc:
             log.warning("refresh failed for %s: %s", sym, exc)
             errors.append({"symbol": sym, "error": str(exc)})

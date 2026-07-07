@@ -130,6 +130,32 @@ def test_gate_failure_blocks_despite_aligned_families():
     assert "gate failure" in decision.reason
 
 
+def test_gate_failure_keeps_factor_score_context():
+    scores = {
+        FAMILY_CARRY: _family(FAMILY_CARRY, "bullish", 0.05),
+        FAMILY_MOMENTUM: _family(FAMILY_MOMENTUM, "bullish", 1.0),
+        FAMILY_VALUE: _family(FAMILY_VALUE, "neutral", 0.0),
+    }
+    gates = _pass_gates()
+    gates[1] = GateResult(
+        gate_name="cost",
+        result=GATE_FAIL,
+        reason_code="missing_atr",
+        recommended_action="block",
+        size_multiplier=0.0,
+    )
+
+    decision = decide(
+        "EURUSD", "2026-01-15", family_scores=scores, cot=None, gate_results=gates
+    )
+
+    assert decision.action == ACTION_NO_TRADE
+    assert decision.reason == "gate failure: cost (missing_atr)"
+    assert set(decision.aligned_families) == {FAMILY_CARRY, FAMILY_MOMENTUM}
+    assert decision.factor_scores[FAMILY_CARRY]["points"] > 0
+    assert decision.factor_scores[FAMILY_MOMENTUM]["points"] > 0
+
+
 def test_cot_veto_blocks_trade():
     scores = {
         FAMILY_CARRY: _family(FAMILY_CARRY, "bullish", 0.04),

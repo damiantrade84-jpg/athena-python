@@ -199,3 +199,31 @@ def test_refresh_decisions_persists(seeded):
     stored = fx_store.load_decisions(as_of_date=AS_OF, symbol="AUDJPY", db_path=seeded)
     assert len(stored) == 1
     assert stored[0]["symbol"] == "AUDJPY"
+
+
+def test_refresh_decisions_uses_cached_d1_bars_for_cost_gate(seeded, monkeypatch):
+    monkeypatch.setitem(
+        fx_pipeline.CONFIG,
+        "FX_FACTOR_SPREAD_PIPS_BY_SYMBOL",
+        {"AUDJPY": 1.0},
+    )
+
+    def fake_load_daily_bars(symbols, start, end, db_path=None):
+        assert symbols == ["AUDJPY"]
+        assert start < AS_OF <= end
+        return {"AUDJPY": _fixture_bars()}, []
+
+    monkeypatch.setattr(
+        "athena_fx.backtest_data.load_daily_bars",
+        fake_load_daily_bars,
+    )
+
+    result = fx_pipeline.refresh_decisions(["AUDJPY"], AS_OF, db_path=seeded)
+
+    assert result["decisions_saved"] == 1
+    stored = fx_store.load_decisions(as_of_date=AS_OF, symbol="AUDJPY", db_path=seeded)
+    cost_gate = next(
+        g for g in stored[0]["gate_results"] if g.get("gate_name") == "cost"
+    )
+    assert cost_gate["reason_code"] == "cost_ok"
+    assert cost_gate["numeric_inputs"]["atr_pips"] > 0

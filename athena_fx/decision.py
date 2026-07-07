@@ -68,6 +68,19 @@ def _family_points(family: str, score: float | None, direction: str) -> float:
     return 0.0
 
 
+def _factor_score_entry(family: str, normalized: dict[str, Any]) -> dict[str, Any]:
+    score = normalized.get("score")
+    direction = normalized.get("direction", "neutral")
+    status = normalized.get("status", "ok")
+    points = _family_points(family, score, direction) if status == "ok" else 0.0
+    return {
+        "score": score,
+        "direction": direction,
+        "points": points,
+        "status": status,
+    }
+
+
 def _gate_action_for_failure(
     gate: GateResult, has_existing_position: bool
 ) -> tuple[str, str | None]:
@@ -100,29 +113,6 @@ def decide(
     vol_action = "allow"
     cost_diag: dict[str, Any] = {}
     gate_size_mult = 1.0
-
-    for gate in gate_results:
-        if gate.gate_name == "volatility":
-            vol_action = gate.recommended_action
-        if gate.gate_name == "cost":
-            cost_diag = dict(gate.numeric_inputs)
-
-        if gate.result == GATE_FAIL:
-            action, _ = _gate_action_for_failure(gate, has_existing_position)
-            reason = f"gate failure: {gate.gate_name} ({gate.reason_code})"
-            return FxDecision(
-                symbol=symbol,
-                as_of_date=as_of_date,
-                action=action,
-                direction=None,
-                gate_results=list(gate_results),
-                volatility_action=vol_action,
-                size_multiplier=0.0,
-                cost_diagnostics=cost_diag,
-                reason=reason,
-            )
-        if gate.result != GATE_FAIL:
-            gate_size_mult *= gate.size_multiplier
 
     normalized: dict[str, dict[str, Any]] = {}
     all_diagnostics: list[Diagnostic] = []
@@ -161,6 +151,48 @@ def decide(
             aligned_short.append(fam)
         else:
             blocked.append(fam)
+
+    for gate in gate_results:
+        if gate.gate_name == "volatility":
+            vol_action = gate.recommended_action
+        if gate.gate_name == "cost":
+            cost_diag = dict(gate.numeric_inputs)
+
+        if gate.result == GATE_FAIL:
+            action, _ = _gate_action_for_failure(gate, has_existing_position)
+            reason = f"gate failure: {gate.gate_name} ({gate.reason_code})"
+            factor_scores = {
+                fam: _factor_score_entry(fam, nd) for fam, nd in normalized.items()
+            }
+            gate_aligned: list[str] = []
+            if len(aligned_long) >= 2 and len(aligned_short) == 0:
+                gate_aligned = aligned_long
+            elif len(aligned_short) >= 2 and len(aligned_long) == 0:
+                gate_aligned = aligned_short
+            gate_total = (
+                sum(float(factor_scores[fam].get("points") or 0.0) for fam in gate_aligned)
+                if gate_aligned
+                else None
+            )
+            return FxDecision(
+                symbol=symbol,
+                as_of_date=as_of_date,
+                action=action,
+                direction=None,
+                aligned_families=gate_aligned,
+                blocked_families=sorted(set(blocked)),
+                factor_scores=factor_scores,
+                total_score=gate_total,
+                cot_overlay=cot_data,
+                gate_results=list(gate_results),
+                volatility_action=vol_action,
+                size_multiplier=0.0,
+                cost_diagnostics=cost_diag,
+                reason=reason,
+                diagnostics=all_diagnostics,
+            )
+        if gate.result != GATE_FAIL:
+            gate_size_mult *= gate.size_multiplier
 
     trade_direction: str | None = None
     aligned: list[str] = []
@@ -212,16 +244,8 @@ def decide(
     total = 0.0
     for fam in aligned:
         nd = normalized[fam]
-        score = nd.get("score")
-        direction = nd.get("direction", "neutral")
-        points = _family_points(fam, score, direction)
-        factor_scores[fam] = {
-            "score": score,
-            "direction": direction,
-            "points": points,
-            "status": nd.get("status", "ok"),
-        }
-        total += points
+        factor_scores[fam] = _factor_score_entry(fam, nd)
+        total += float(factor_scores[fam].get("points") or 0.0)
 
     cot_modifier = 0.0
     size_mult = gate_size_mult
