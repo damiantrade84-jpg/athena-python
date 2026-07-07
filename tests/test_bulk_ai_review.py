@@ -5,9 +5,13 @@ Uses DI fakes (no LLM, no scanner) mirroring tests/test_cascade_scan.py style.
 
 from __future__ import annotations
 
+import ast
+import json
 import os
 import sys
 import tempfile
+import types
+from types import SimpleNamespace
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -54,6 +58,28 @@ def _ai_fn(grades: dict):
 
     fn.calls = calls
     return fn
+
+
+def _load_build_signal_message():
+    src = ATHENA_PATH.read_text(encoding="utf-8")
+    tree = ast.parse(src, filename=str(ATHENA_PATH))
+    fn_node = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef) and node.name == "_build_signal_message"
+    )
+    module = ast.Module(body=[fn_node], type_ignores=[])
+    ast.fix_missing_locations(module)
+    namespace = {
+        "CONFIG": {"LEARNING_MIN_TRADES": 5},
+        "json": json,
+        "log": SimpleNamespace(debug=lambda *args, **kwargs: None),
+        "fetch_dxy_context": lambda: None,
+        "fetch_yield_curve": lambda: None,
+        "fetch_div_split_context": lambda: None,
+    }
+    exec(compile(module, str(ATHENA_PATH), "exec"), namespace)
+    return namespace["_build_signal_message"]
 
 
 def setup_function(_fn):
@@ -191,6 +217,46 @@ def test_default_rules_zero_cascade_thresholds_and_are_overridable():
         run_ai_fn=_ai_fn({}),
     )
     assert seen["rules"] == {"min_confluence": 0.0, "min_rr": 1.2}
+
+
+def test_bulk_prompt_build_tolerates_missing_session(monkeypatch):
+    fake_ai_context = types.ModuleType("ai_context")
+    fake_ai_context.build_ai_calibration_context_string = lambda *args, **kwargs: "AI calibration context"
+    fake_conductor = types.ModuleType("conductor")
+    fake_conductor.conductor_orchestrate = lambda *args, **kwargs: None
+    fake_ai_utils = types.ModuleType("ai_utils")
+    fake_ai_utils.build_freshness_ai_context = lambda signal: ""
+    monkeypatch.setitem(sys.modules, "ai_context", fake_ai_context)
+    monkeypatch.setitem(sys.modules, "conductor", fake_conductor)
+    monkeypatch.setitem(sys.modules, "ai_utils", fake_ai_utils)
+
+    build_signal_message = _load_build_signal_message()
+    signal = bar._signal_from_candidate(
+        {
+            "symbol": "EURUSD=X",
+            "direction": "SHORT",
+            "confluenceScore": 3.1,
+            "rr": 2.2,
+            "price": 1.1,
+            "entry": 1.1,
+            "sl": 1.105,
+            "tp1": 1.09,
+            "tp2": 1.08,
+            "rr1": 2.0,
+            "rr2": 3.0,
+            "session": None,
+        },
+        "forex",
+    )
+
+    prompt = build_signal_message(
+        signal,
+        news_ctx=None,
+        style_pref="intraday",
+        style_labels={"intraday": "INTRADAY"},
+    )
+
+    assert "Session: Global (N/A)" in prompt
 
 
 def test_busy_or_failed_cascade_passes_through():

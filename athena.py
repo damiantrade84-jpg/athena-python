@@ -4385,6 +4385,16 @@ def _build_signal_message(
     def _present(x) -> bool:
         return x is not None and x != ""
 
+    def _session_context() -> tuple[str, str]:
+        session = signal.get("session")
+        if isinstance(session, dict):
+            name = session.get("name") or session.get("session") or "Global"
+            quality = session.get("quality") or "N/A"
+            return str(name), str(quality)
+        if session:
+            return str(session), "N/A"
+        return "Global", "N/A"
+
     def _engine_source_label() -> str:
         engine_hint = str(
             signal.get("engine_source")
@@ -4804,8 +4814,7 @@ def _build_signal_message(
 
     lines.append("=== CONTEXT (for your analysis, NOT scored) ===")
 
-    _sname = signal.get("session", {}).get("name", "Global")
-    _squal = signal.get("session", {}).get("quality", "N/A")
+    _sname, _squal = _session_context()
     lines.append(
         f"BTC bias: {signal.get('btcBias', 'n/a')} | Session: {_sname} ({_squal})"
     )
