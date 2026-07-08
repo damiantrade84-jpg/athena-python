@@ -34,6 +34,7 @@ import {
 } from 'lucide-react';
 import { cn, fmtNum, toNum } from '@/lib/utils';
 import { fmtPrice } from '@/lib/athenaFormat';
+import { readEngineBCanonicalGatesFromRow } from '@/lib/engineBCanonicalGates';
 import type {
   LdSnapshot,
   LdSymbolRow,
@@ -998,16 +999,42 @@ function EngineARowCard({ row, pair, type }: { row: LdEngineARow; pair?: string;
 }
 
 function EngineBRowCard({ row, pair, type }: { row: LdEngineBRow; pair?: string; type?: string }) {
+  const gates = readEngineBCanonicalGatesFromRow(row)!;
+  const confidenceBadgeClass =
+    gates.confidenceDisplayLabel === 'CONFIDENCE PASSED'
+      ? 'badge-long'
+      : gates.confidenceDisplayLabel === 'SCORE PASSED / GATE FAILED'
+        ? 'bg-warning/20 text-warning'
+        : 'badge-short';
+
   return (
     <Card className="border-border/60 bg-card/50">
       <CardContent className="p-3 space-y-2">
-        <div className="flex items-center justify-between">
+        <div className="flex items-center justify-between gap-2 flex-wrap">
           <span className="text-xs font-semibold flex items-center gap-1">
             <Layers className="w-3.5 h-3.5 text-primary" /> Engine B
           </span>
-          <Badge className={row.confidencePassed ? 'badge-long' : 'badge-short'}>
-            {row.confidencePassed ? 'PASS' : 'FAIL'}
-          </Badge>
+          <div className="flex items-center gap-1">
+            <Badge className={confidenceBadgeClass}>
+              {gates.confidenceDisplayLabel}
+            </Badge>
+            {!gates.canonicalTradeOk && (
+              <Badge variant="outline" className="text-[10px] bg-short/10 text-short border-short/30">
+                NO ENTRY
+              </Badge>
+            )}
+            {gates.canonicalStatus && (
+              <Badge
+                variant="outline"
+                className={cn(
+                  'text-[10px]',
+                  gates.canonicalTradeOk ? 'bg-long/10 text-long border-long/30' : 'bg-short/10 text-short border-short/30',
+                )}
+              >
+                {gates.canonicalStatus}
+              </Badge>
+            )}
+          </div>
         </div>
         <div className="grid grid-cols-2 gap-2 text-xs">
           <Detail label="Score" value={`${fmtNum(row.score, 2)} / ${fmtNum(row.maxScore, 2)}`} />
@@ -1018,16 +1045,46 @@ function EngineBRowCard({ row, pair, type }: { row: LdEngineBRow; pair?: string;
           <Detail label="No-trigger class" value={row.noTriggerClassification || '—'} />
         </div>
         <div className="grid grid-cols-2 gap-2">
-          <Gate label="Structure" ok={row.structure_ok} />
-          <Gate label="Location" ok={row.location_ok} />
-          <Gate label="Entry" ok={row.entry_ok} />
-          <Gate label="Room / RR" ok={row.room_rr_ok} />
+          <Gate label="Structure" ok={gates.canonicalStructureOk} />
+          <Gate label="Location" ok={gates.canonicalLocationOk} />
+          <Gate label="Entry" ok={gates.canonicalTriggerOk} />
+          <Gate label="Room / RR" ok={gates.canonicalRoomRrOk} />
         </div>
         <div className="grid grid-cols-3 gap-2 text-xs">
-          <Detail label="Entry" value={fmtPrice(row.entry, pair, type)} />
-          <Detail label="SL" value={fmtPrice(row.sl, pair, type)} accent="short" />
-          <Detail label="TP" value={fmtPrice(row.tp, pair, type)} accent="long" />
+          <Detail
+            label="Entry"
+            value={gates.suggestedLevelsExecutable ? fmtPrice(row.entry, pair, type) : '—'}
+          />
+          <Detail
+            label="SL"
+            value={gates.suggestedLevelsExecutable ? fmtPrice(row.sl, pair, type) : '—'}
+            accent="short"
+          />
+          <Detail
+            label="TP"
+            value={gates.suggestedLevelsExecutable ? fmtPrice(row.tp, pair, type) : '—'}
+            accent="long"
+          />
         </div>
+        {!gates.suggestedLevelsExecutable
+          && (row.entry != null || row.sl != null || row.tp != null) && (
+          <div className="text-[10px] text-muted-foreground border border-border/40 rounded-md p-2">
+            <p className="uppercase font-semibold text-warning mb-1">Rejected diagnostic levels — not executable</p>
+            <p className="font-mono">
+              Entry {fmtPrice(row.entry, pair, type)}
+              {' · '}SL {fmtPrice(row.sl, pair, type)}
+              {' · '}TP {fmtPrice(row.tp, pair, type)}
+            </p>
+          </div>
+        )}
+        {gates.canonicalPrimaryRejectReason && (
+          <ReasonList
+            items={[gates.canonicalPrimaryRejectReason]}
+            className="text-short bg-short/10"
+            label="Primary reject"
+            icon={<X className="w-3 h-3" />}
+          />
+        )}
         {row.hardFailReasons.length > 0 && (
           <ReasonList items={row.hardFailReasons} className="text-short bg-short/10" label="Hard fail" icon={<X className="w-3 h-3" />} />
         )}

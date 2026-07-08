@@ -27,6 +27,7 @@ import {
 } from 'lucide-react';
 import { fmtNum, toNum, cn } from '@/lib/utils';
 import { engineAListScore, fmtAtrMeta, fmtLiveQuoteMeta, fmtPrice } from '@/lib/athenaFormat';
+import { readEngineBCanonicalGatesFromNaked } from '@/lib/engineBCanonicalGates';
 import { engineAV3DecisionRank, engineAV3ListLabel, isEngineAV3Signal } from '@/lib/engineAV3';
 import { fetchVisionCandlePayload } from '@/lib/visionReview';
 import apiClient from '@/lib/apiClient';
@@ -53,6 +54,7 @@ import {
 import AITradingAgentPanel from '@/components/ai/AITradingAgentPanel';
 import type {
   EngineASignal,
+  EngineBNakedResult,
   ScanResponse,
   NakedScanResponse,
   ChartAnalysisResponse,
@@ -263,6 +265,26 @@ function hasEngineBFeedRow(row: UnifiedRow): boolean {
 
 function engineBPresentationSignal(row: UnifiedRow): EngineASignal {
   return row.engineBSignal ?? row.signal;
+}
+
+function engineBCanonicalChip(signal: EngineASignal): { label: string; className: string } | null {
+  const naked = (signal.naked_data || signal.engine_b) as EngineBNakedResult | undefined;
+  if (!naked) return null;
+  const gates = readEngineBCanonicalGatesFromNaked(naked);
+  if (!gates) return null;
+  if (!gates.canonicalTradeOk) {
+    return {
+      label: gates.canonicalStatus ? `NO ENTRY · ${gates.canonicalStatus}` : 'NO ENTRY',
+      className: 'bg-short/15 text-short border-short/30',
+    };
+  }
+  if (gates.canonicalStatus) {
+    return {
+      label: gates.canonicalStatus,
+      className: 'bg-long/10 text-long border-long/30',
+    };
+  }
+  return null;
 }
 
 function aiTextReviewSignal(row: UnifiedRow, feed: EngineSource): EngineASignal {
@@ -533,6 +555,9 @@ export default function SignalsPanel() {
       if (!result || !result.signals) return null;
       const pairsScanned = result.totalPairs ?? result.activePairs;
       const funnel = result.scanFunnel as Record<string, number> | undefined;
+      const rejectedDiagnostics = Array.isArray(result.rejectedDiagnostics)
+        ? result.rejectedDiagnostics
+        : [];
       setScanCacheB(result.signals as EngineASignal[], {
         count: result.signals.length,
         scannedAt: typeof result.scannedAt === 'string' && result.scannedAt
@@ -540,6 +565,7 @@ export default function SignalsPanel() {
           : new Date().toISOString(),
         ...(pairsScanned != null ? { pairsScanned } : {}),
         ...(funnel && Object.keys(funnel).length ? { scanFunnel: funnel } : {}),
+        ...(rejectedDiagnostics.length ? { rejectedDiagnostics } : {}),
       });
       return { count: result.signals.length, pairs: pairsScanned };
     } catch {
@@ -1374,6 +1400,40 @@ export default function SignalsPanel() {
                         Engine B did not flag this setup. Engine B is strict by design — it requires a complete checklist (structure, location, trigger, room, RR, no D1 conflict).
                       </div>
                     )}
+                    {Array.isArray(scanCacheBMeta?.rejectedDiagnostics)
+                      && scanCacheBMeta.rejectedDiagnostics.length > 0 && (
+                      <Card className="border-border/60 bg-card/50">
+                        <CardContent className="p-3 space-y-2">
+                          <p className="text-[10px] uppercase text-muted-foreground">
+                            Rejected diagnostics ({scanCacheBMeta.rejectedDiagnostics.length})
+                          </p>
+                          <div className="space-y-2 max-h-48 overflow-y-auto">
+                            {(scanCacheBMeta.rejectedDiagnostics as EngineASignal[]).slice(0, 8).map((sig, idx) => {
+                              const naked = (sig.naked_data || sig.engine_b) as EngineBNakedResult | undefined;
+                              const gates = naked ? readEngineBCanonicalGatesFromNaked(naked) : null;
+                              return (
+                                <div
+                                  key={`${sig.pair || sig.display}-${sig.direction}-${idx}`}
+                                  className="text-[10px] font-mono border border-border/40 rounded p-2"
+                                >
+                                  <div className="flex items-center justify-between gap-2">
+                                    <span>{sig.pair || sig.display} · {sig.direction}</span>
+                                    <Badge variant="outline" className="text-[9px] bg-short/10 text-short border-short/30">
+                                      {gates?.canonicalStatus || 'REJECTED'}
+                                    </Badge>
+                                  </div>
+                                  {gates?.canonicalPrimaryRejectReason && (
+                                    <p className="text-muted-foreground mt-1">
+                                      {gates.canonicalPrimaryRejectReason}
+                                    </p>
+                                  )}
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </CardContent>
+                      </Card>
+                    )}
                   </TabsContent>
 
                   {/* ── DIAGNOSTICS TAB ── */}
@@ -1568,6 +1628,7 @@ function UnifiedSignalRow({
 }) {
   const presentation = feedEngine === 'B' ? engineBPresentationSignal(row) : row.signal;
   const label = feedEngine === 'B' ? 'B' : unifiedEngineLabel(row.engines);
+  const canonicalChip = feedEngine === 'B' ? engineBCanonicalChip(presentation) : null;
   const badge = label === 'B'
     ? { text: 'B', icon: <Layers className="w-3 h-3" />, bg: 'hsl(var(--info) / 0.18)', fg: 'hsl(var(--info))' }
     : { text: 'A', icon: <Zap className="w-3 h-3" />, bg: 'hsl(var(--gold) / 0.12)', fg: 'hsl(var(--gold-light))' };
@@ -1582,7 +1643,12 @@ function UnifiedSignalRow({
         {badge.icon}
         <span className="mt-1 font-semibold">{badge.text}</span>
       </div>
-      <div className="flex-1 min-w-0">
+      <div className="flex-1 min-w-0 space-y-1">
+        {canonicalChip && (
+          <Badge variant="outline" className={cn('text-[9px] font-mono', canonicalChip.className)}>
+            {canonicalChip.label}
+          </Badge>
+        )}
         <EngineASignalCard
           signal={presentation}
           selected={selected}

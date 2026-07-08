@@ -79,6 +79,51 @@ _STRUCTURE_AUDIT_COLUMNS = [
     "rejection_reason",
 ]
 
+_STATUS_PRIORITY = (
+    STATUS_REJECT_DATA,
+    STATUS_REJECT_NO_TRIGGER,
+    STATUS_REJECT_ENTRY_LOCATION,
+    STATUS_REJECT_NO_ROOM,
+    STATUS_REJECT_STRUCTURAL_TP,
+    STATUS_REJECT_RR_QUALITY,
+    STATUS_REJECT_LEARNING,
+    STATUS_REJECT_CONFLICT,
+    STATUS_DEBUG_ONLY,
+)
+
+_SIGNAL_CARD_CONSISTENCY_COLUMNS = [
+    "timestamp",
+    "pair",
+    "direction",
+    "entry",
+    "nearest_support_low",
+    "nearest_support_high",
+    "nearest_resistance_low",
+    "nearest_resistance_high",
+    "raw_structure_ok",
+    "raw_location_ok",
+    "raw_trigger_ok",
+    "raw_room_ok",
+    "raw_rr_ok",
+    "displayed_structure_badge",
+    "displayed_location_badge",
+    "displayed_trigger_badge",
+    "displayed_room_rr_badge",
+    "confidence_passed",
+    "canonical_structure_ok",
+    "canonical_location_ok",
+    "canonical_trigger_ok",
+    "canonical_room_ok",
+    "canonical_rr_ok",
+    "canonical_trade_ok",
+    "canonical_status",
+    "canonical_primary_reject_reason",
+    "canonical_secondary_reject_reasons",
+    "suggested_levels_displayed",
+    "ui_consistency_pass",
+    "inconsistency_reasons",
+]
+
 _RECONCILIATION_AUDIT_COLUMNS = [
     "timestamp",
     "pair",
@@ -294,6 +339,191 @@ def _structural_status_alias(status: str) -> str:
     return STRUCTURE_REJECT
 
 
+def _raw_bool_gate(conf: dict[str, Any], key: str) -> bool | None:
+    val = conf.get(key)
+    if val is None and isinstance(conf.get("checklist"), dict):
+        val = conf["checklist"].get(key)
+    return _bool(val)
+
+
+def _pick_primary_status(status_reasons: list[tuple[str, str]]) -> tuple[str | None, str | None, list[str]]:
+    """Pick primary status by priority; return (status, primary_reason, all_reasons)."""
+    if not status_reasons:
+        return None, None, []
+    all_reasons = sorted({r for _, r in status_reasons if r})
+    status_to_reason: dict[str, str] = {}
+    for status, reason in status_reasons:
+        if status not in status_to_reason and reason:
+            status_to_reason[status] = reason
+    for status in _STATUS_PRIORITY:
+        if status in status_to_reason:
+            return status, status_to_reason[status], all_reasons
+    first_status, first_reason = status_reasons[0]
+    return first_status, first_reason, all_reasons
+
+
+def _derive_canonical_gate_fields(
+    *,
+    conf: dict[str, Any],
+    direction: str,
+    entry_inside_support: bool,
+    entry_inside_resistance: bool,
+    tp_inside_support: bool,
+    tp_inside_resistance: bool,
+    support_too_close: bool,
+    resistance_too_close: bool,
+    structural_tp_too_close: bool,
+    trigger_ok: bool | None,
+    room_ok: bool | None,
+    no_trigger_pattern: bool,
+    partial_rr_fail: bool,
+    canonical_actionable: bool,
+    primary_status: str,
+    primary_reason: str | None,
+    all_reasons: list[str],
+) -> dict[str, Any]:
+    raw_structure_ok = _raw_bool_gate(conf, "structure_ok")
+    raw_location_ok = _raw_bool_gate(conf, "location_ok")
+    raw_trigger_ok = _raw_bool_gate(conf, "trigger_ok")
+    raw_room_ok = _raw_bool_gate(conf, "room_ok")
+    raw_rr_ok = _raw_bool_gate(conf, "rr_ok")
+
+    location_blocked = (
+        (direction == "LONG" and entry_inside_resistance)
+        or (direction == "SHORT" and entry_inside_support)
+        or (direction == "LONG" and resistance_too_close)
+        or (direction == "SHORT" and support_too_close)
+    )
+    room_blocked = (
+        room_ok is False
+        or structural_tp_too_close
+        or (direction == "LONG" and resistance_too_close)
+        or (direction == "SHORT" and support_too_close)
+        or (direction == "LONG" and tp_inside_resistance)
+        or (direction == "SHORT" and tp_inside_support)
+    )
+
+    canonical_structure_ok = raw_structure_ok is not False
+    canonical_location_ok = not location_blocked and raw_location_ok is not False
+    canonical_trigger_ok = trigger_ok is not False and not no_trigger_pattern
+    canonical_room_ok = not room_blocked and raw_room_ok is not False
+    canonical_rr_ok = not partial_rr_fail
+    canonical_trade_ok = canonical_actionable
+
+    confidence_passed = bool(conf.get("passed")) or bool(conf.get("checklist_passed"))
+    room_rr_ok = canonical_room_ok and canonical_rr_ok and not structural_tp_too_close
+    if confidence_passed and not canonical_trade_ok:
+        confidence_badge = "PASSED_GATE_FAILED"
+    elif confidence_passed:
+        confidence_badge = "PASSED"
+    else:
+        confidence_badge = "FAILED"
+
+    secondary_reasons = [r for r in all_reasons if r and r != primary_reason]
+
+    return {
+        "confidence_passed": confidence_passed,
+        "raw_structure_ok": raw_structure_ok,
+        "raw_location_ok": raw_location_ok,
+        "raw_trigger_ok": raw_trigger_ok,
+        "raw_room_ok": raw_room_ok,
+        "raw_rr_ok": raw_rr_ok,
+        "canonical_structure_ok": canonical_structure_ok,
+        "canonical_location_ok": canonical_location_ok,
+        "canonical_trigger_ok": canonical_trigger_ok,
+        "canonical_room_ok": canonical_room_ok,
+        "canonical_rr_ok": canonical_rr_ok,
+        "canonical_trade_ok": canonical_trade_ok,
+        "canonical_status": primary_status,
+        "canonical_primary_reject_reason": primary_reason,
+        "canonical_secondary_reject_reasons": secondary_reasons,
+        "canonical_badge_state": {
+            "structure": "PASS" if canonical_structure_ok else "FAIL",
+            "location": "PASS" if canonical_location_ok else "FAIL",
+            "trigger": "PASS" if canonical_trigger_ok else "FAIL",
+            "room_rr": "PASS" if room_rr_ok else "FAIL",
+            "confidence": confidence_badge,
+            "trade": "PASS" if canonical_trade_ok else "FAIL",
+        },
+        "canonical_room_rr_ok": room_rr_ok,
+        "suggested_levels_executable": canonical_trade_ok,
+    }
+
+
+def evaluate_ui_consistency(
+    *,
+    conf: dict[str, Any],
+    canonical_fields: dict[str, Any],
+) -> dict[str, Any]:
+    """Detect raw-flag vs canonical UI mismatches for audit reporting."""
+    raw_location_ok = canonical_fields.get("raw_location_ok")
+    raw_room_ok = canonical_fields.get("raw_room_ok")
+    raw_rr_ok = canonical_fields.get("raw_rr_ok")
+    confidence_passed = bool(canonical_fields.get("confidence_passed"))
+    canonical_trade_ok = bool(canonical_fields.get("canonical_trade_ok"))
+    canonical_location_ok = bool(canonical_fields.get("canonical_location_ok"))
+    canonical_room_ok = bool(canonical_fields.get("canonical_room_ok"))
+    canonical_rr_ok = bool(canonical_fields.get("canonical_rr_ok"))
+    structural_tp_too_close = bool(conf.get("structural_tp_too_close"))
+    reasons = canonical_fields.get("canonical_secondary_reject_reasons") or []
+    primary = canonical_fields.get("canonical_primary_reject_reason")
+    all_reason_codes = set(reasons)
+    if primary:
+        all_reason_codes.add(primary)
+    all_reason_codes.update(conf.get("engine_b_rejection_reasons") or [])
+
+    inconsistencies: list[str] = []
+
+    if raw_location_ok is True and not canonical_location_ok:
+        if "LONG_ENTRY_INSIDE_RESISTANCE" in all_reason_codes:
+            inconsistencies.append("location_ok_true_but_LONG_ENTRY_INSIDE_RESISTANCE")
+        if "SHORT_ENTRY_INSIDE_SUPPORT" in all_reason_codes:
+            inconsistencies.append("location_ok_true_but_SHORT_ENTRY_INSIDE_SUPPORT")
+        if not inconsistencies:
+            inconsistencies.append("location_ok_true_but_canonical_location_false")
+
+    raw_room_rr_pass = (raw_room_ok is True or raw_rr_ok is True) and not (
+        raw_room_ok is False and raw_rr_ok is False
+    )
+    canonical_room_rr_pass = (
+        canonical_room_ok and canonical_rr_ok and not structural_tp_too_close
+    )
+    if raw_room_rr_pass and not canonical_room_rr_pass:
+        if raw_room_ok is False:
+            inconsistencies.append("room_rr_badge_ok_but_room_ok_false")
+        if structural_tp_too_close:
+            inconsistencies.append("room_rr_badge_ok_but_structural_tp_too_close")
+        if not inconsistencies:
+            inconsistencies.append("room_rr_badge_ok_but_canonical_room_rr_false")
+
+    if confidence_passed and not canonical_trade_ok:
+        badge = (canonical_fields.get("canonical_badge_state") or {}).get("confidence")
+        if badge != "PASSED_GATE_FAILED":
+            inconsistencies.append("confidence_passed_but_canonical_trade_false")
+
+    has_levels = any(
+        conf.get(k) is not None
+        for k in ("execution_sl", "execution_tp1", "execution_tp", "sl", "tp", "tp1")
+    ) or conf.get("entry") is not None
+    if has_levels and not canonical_trade_ok:
+        inconsistencies.append("suggested_levels_displayed_while_canonical_trade_false")
+
+    displayed_structure = "OK" if canonical_fields.get("canonical_structure_ok") else "FAIL"
+    displayed_location = "OK" if canonical_location_ok else "FAIL"
+    displayed_trigger = "OK" if canonical_fields.get("canonical_trigger_ok") else "FAIL"
+    displayed_room_rr = "OK" if canonical_room_rr_pass else "FAIL"
+
+    return {
+        "displayed_structure_badge": displayed_structure,
+        "displayed_location_badge": displayed_location,
+        "displayed_trigger_badge": displayed_trigger,
+        "displayed_room_rr_badge": displayed_room_rr,
+        "suggested_levels_displayed": has_levels and not canonical_trade_ok,
+        "ui_consistency_pass": len(inconsistencies) == 0,
+        "inconsistency_reasons": inconsistencies,
+    }
+
+
 def reconcile_engine_b_actionability(
     *,
     direction: str,
@@ -351,56 +581,54 @@ def reconcile_engine_b_actionability(
     freshness = candle_freshness_status or _freshness_status(conf, res, signal)
     learning = _learning_fields(learning_ctx)
 
-    reasons: list[str] = []
-    primary_status: str | None = None
+    status_reasons: list[tuple[str, str]] = []
+    extra_reasons: list[str] = []
 
-    def _set(status: str, reason: str | None = None) -> None:
-        nonlocal primary_status
-        if reason:
-            reasons.append(reason)
-        if primary_status is None:
-            primary_status = status
-
-    # Priority-ordered hard blockers
-    if _actionability_conflict(conf):
-        _set(STATUS_REJECT_CONFLICT, REASON_CONFLICT)
+    def _add(status: str, reason: str) -> None:
+        status_reasons.append((status, reason))
+        extra_reasons.append(reason)
 
     if _data_stale(freshness):
-        _set(STATUS_REJECT_DATA, "CANDLE_FRESHNESS_STALE")
+        _add(STATUS_REJECT_DATA, "CANDLE_FRESHNESS_STALE")
 
     if trigger_ok is False or no_trigger_pattern:
-        _set(STATUS_REJECT_NO_TRIGGER, "TRIGGER_NOT_OK" if trigger_ok is False else ENGINE_B_REASON_NO_TRIGGER_PATTERN)
+        _add(
+            STATUS_REJECT_NO_TRIGGER,
+            "TRIGGER_NOT_OK" if trigger_ok is False else ENGINE_B_REASON_NO_TRIGGER_PATTERN,
+        )
 
     if direction == "SHORT" and entry_inside_support:
-        _set(STATUS_REJECT_ENTRY_LOCATION, "SHORT_ENTRY_INSIDE_SUPPORT")
+        _add(STATUS_REJECT_ENTRY_LOCATION, "SHORT_ENTRY_INSIDE_SUPPORT")
     if direction == "LONG" and entry_inside_resistance:
-        _set(STATUS_REJECT_ENTRY_LOCATION, "LONG_ENTRY_INSIDE_RESISTANCE")
-
-    if structural_tp_too_close:
-        _set(STATUS_REJECT_STRUCTURAL_TP, ENGINE_B_REASON_STRUCTURAL_TP_TOO_CLOSE)
-    if direction == "SHORT" and tp_inside_support:
-        _set(STATUS_REJECT_STRUCTURAL_TP, "SHORT_TP1_INSIDE_SUPPORT")
-    if direction == "LONG" and tp_inside_resistance:
-        _set(STATUS_REJECT_STRUCTURAL_TP, "LONG_TP1_INSIDE_RESISTANCE")
+        _add(STATUS_REJECT_ENTRY_LOCATION, "LONG_ENTRY_INSIDE_RESISTANCE")
 
     if room_ok is False:
-        _set(STATUS_REJECT_NO_ROOM, "ROOM_OK_FALSE")
+        _add(STATUS_REJECT_NO_ROOM, "ROOM_OK_FALSE")
     if direction == "SHORT" and support_too_close:
-        _set(STATUS_REJECT_NO_ROOM, ENGINE_B_REASON_SUPPORT_TOO_CLOSE)
+        _add(STATUS_REJECT_NO_ROOM, ENGINE_B_REASON_SUPPORT_TOO_CLOSE)
     if direction == "LONG" and resistance_too_close:
-        _set(STATUS_REJECT_NO_ROOM, ENGINE_B_REASON_RESISTANCE_TOO_CLOSE)
+        _add(STATUS_REJECT_NO_ROOM, ENGINE_B_REASON_RESISTANCE_TOO_CLOSE)
+
+    if structural_tp_too_close:
+        _add(STATUS_REJECT_STRUCTURAL_TP, ENGINE_B_REASON_STRUCTURAL_TP_TOO_CLOSE)
+    if direction == "SHORT" and tp_inside_support:
+        _add(STATUS_REJECT_STRUCTURAL_TP, "SHORT_TP1_INSIDE_SUPPORT")
+    if direction == "LONG" and tp_inside_resistance:
+        _add(STATUS_REJECT_STRUCTURAL_TP, "LONG_TP1_INSIDE_RESISTANCE")
 
     allow_rr1_below = bool(_cfg().get("ALLOW_RR1_BELOW_MIN_IN_RESEARCH", False))
     partial_rr_fail = False
     if style_min_rr is not None and rr1 is not None and rr1 < style_min_rr and not allow_rr1_below:
         partial_rr_fail = True
-        _set(STATUS_REJECT_RR_QUALITY, REASON_PARTIAL_RR)
-    if partial_rr_fail and rr2 is not None and gate_rr_used is not None and rr2 >= gate_rr_used:
-        if REASON_PARTIAL_RR not in reasons:
-            reasons.append(REASON_PARTIAL_RR)
+        _add(STATUS_REJECT_RR_QUALITY, REASON_PARTIAL_RR)
+
+    if _actionability_conflict(conf):
+        _add(STATUS_REJECT_CONFLICT, REASON_CONFLICT)
 
     if conf.get("is_actionable") is False:
-        _set(STATUS_DEBUG_ONLY, "ENGINE_B_ACTIONABLE_EXPLICIT_NO")
+        _add(STATUS_DEBUG_ONLY, "ENGINE_B_ACTIONABLE_EXPLICIT_NO")
+
+    primary_status, primary_reason, all_reasons = _pick_primary_status(status_reasons)
 
     structural_blockers = primary_status is not None and primary_status not in {
         STATUS_REJECT_LEARNING,
@@ -408,15 +636,39 @@ def reconcile_engine_b_actionability(
         STATUS_ACTIONABLE,
     }
     if learning["learning_context_negative"]:
-        reasons.append(REASON_LEARNING_NEGATIVE)
+        extra_reasons.append(REASON_LEARNING_NEGATIVE)
         if not structural_blockers and primary_status is None:
-            _set(STATUS_REJECT_LEARNING, REASON_LEARNING_NEGATIVE)
+            primary_status = STATUS_REJECT_LEARNING
+            primary_reason = REASON_LEARNING_NEGATIVE
+            all_reasons = sorted(set(extra_reasons))
 
     if primary_status is None:
         primary_status = STATUS_ACTIONABLE
+        primary_reason = None
 
+    reasons = sorted(set(extra_reasons))
     canonical_actionable = primary_status == STATUS_ACTIONABLE
     structural_status = _structural_status_alias(primary_status)
+
+    canonical_gate_fields = _derive_canonical_gate_fields(
+        conf=conf,
+        direction=direction,
+        entry_inside_support=entry_inside_support,
+        entry_inside_resistance=entry_inside_resistance,
+        tp_inside_support=tp_inside_support,
+        tp_inside_resistance=tp_inside_resistance,
+        support_too_close=support_too_close,
+        resistance_too_close=resistance_too_close,
+        structural_tp_too_close=structural_tp_too_close,
+        trigger_ok=trigger_ok,
+        room_ok=room_ok,
+        no_trigger_pattern=no_trigger_pattern,
+        partial_rr_fail=partial_rr_fail,
+        canonical_actionable=canonical_actionable,
+        primary_status=primary_status,
+        primary_reason=primary_reason,
+        all_reasons=reasons,
+    )
 
     cfg = _cfg()
     routing = route_engine_b_candidate(primary_status, enforce=bool(cfg.get("ENFORCE_ROUTING", False)))
@@ -424,14 +676,14 @@ def reconcile_engine_b_actionability(
     return {
         "engine_b_canonical_actionable": canonical_actionable,
         "engine_b_canonical_status": primary_status,
-        "engine_b_rejection_reasons": sorted(set(reasons)),
+        "engine_b_rejection_reasons": reasons,
         "engine_b_actionable_raw": playbook_raw,
         "engine_b_playbook_actionable_raw": playbook_raw,
         "ai_calibration_actionable_raw": ai_raw,
         "ai_calibration_pass_fallback_raw": ai_pass_fallback_raw,
         "is_actionable": canonical_actionable,
         "structural_status": structural_status,
-        "structural_rejection_reasons": sorted(set(reasons)),
+        "structural_rejection_reasons": reasons,
         "entry_inside_support": entry_inside_support,
         "entry_inside_resistance": entry_inside_resistance,
         "tp_inside_support": tp_inside_support,
@@ -457,6 +709,7 @@ def reconcile_engine_b_actionability(
         "class_learning_trade_count": learning["class_learning_trade_count"],
         "final_candidate_routing": routing,
         "final_routing": routing,
+        **canonical_gate_fields,
     }
 
 
@@ -621,6 +874,50 @@ def _append_audit_rows(
         _RECONCILIATION_AUDIT_COLUMNS,
         recon_row,
     )
+    if reached_ui:
+        ui_eval = evaluate_ui_consistency(conf=conf, canonical_fields=conf)
+        consistency_row = {
+            "timestamp": ts,
+            "pair": pair or "",
+            "direction": direction,
+            "entry": entry,
+            "nearest_support_low": sup_lo,
+            "nearest_support_high": sup_hi,
+            "nearest_resistance_low": res_lo,
+            "nearest_resistance_high": res_hi,
+            "raw_structure_ok": conf.get("raw_structure_ok"),
+            "raw_location_ok": conf.get("raw_location_ok"),
+            "raw_trigger_ok": conf.get("raw_trigger_ok"),
+            "raw_room_ok": conf.get("raw_room_ok"),
+            "raw_rr_ok": conf.get("raw_rr_ok"),
+            "displayed_structure_badge": ui_eval.get("displayed_structure_badge"),
+            "displayed_location_badge": ui_eval.get("displayed_location_badge"),
+            "displayed_trigger_badge": ui_eval.get("displayed_trigger_badge"),
+            "displayed_room_rr_badge": ui_eval.get("displayed_room_rr_badge"),
+            "confidence_passed": conf.get("confidence_passed"),
+            "canonical_structure_ok": conf.get("canonical_structure_ok"),
+            "canonical_location_ok": conf.get("canonical_location_ok"),
+            "canonical_trigger_ok": conf.get("canonical_trigger_ok"),
+            "canonical_room_ok": conf.get("canonical_room_ok"),
+            "canonical_rr_ok": conf.get("canonical_rr_ok"),
+            "canonical_trade_ok": conf.get("canonical_trade_ok"),
+            "canonical_status": conf.get("canonical_status"),
+            "canonical_primary_reject_reason": conf.get("canonical_primary_reject_reason"),
+            "canonical_secondary_reject_reasons": "; ".join(
+                conf.get("canonical_secondary_reject_reasons") or []
+            ),
+            "suggested_levels_displayed": ui_eval.get("suggested_levels_displayed"),
+            "ui_consistency_pass": ui_eval.get("ui_consistency_pass"),
+            "inconsistency_reasons": "; ".join(ui_eval.get("inconsistency_reasons") or []),
+        }
+        _append_csv(
+            cfg.get(
+                "SIGNAL_CARD_CONSISTENCY_CSV",
+                "reports/engine_b_signal_card_consistency.csv",
+            ),
+            _SIGNAL_CARD_CONSISTENCY_COLUMNS,
+            consistency_row,
+        )
 
 
 def _append_csv(path: str, columns: list[str], row: dict[str, Any]) -> None:
@@ -650,6 +947,7 @@ def apply_to_naked_signal(
     if not isinstance(naked, dict):
         naked = {}
     conf = dict(naked)
+    enforce = bool(_cfg().get("ENFORCE_ROUTING", False))
     attach_canonical_actionability(
         conf,
         naked,
@@ -659,7 +957,7 @@ def apply_to_naked_signal(
         style_profile={"min_rr": signal.get("min_rr")},
         pair=signal.get("pair") or signal.get("display"),
         signal=signal,
-        reached_ui=reached_ui if reached_ui is not None else (not blocked if bool(_cfg().get("ENFORCE_ROUTING", False)) else None),
+        reached_ui=reached_ui if reached_ui is not None else (True if not enforce else None),
         reached_ai_review=reached_ai_review,
     )
     signal["naked_data"] = {**naked, **conf}
@@ -667,5 +965,22 @@ def apply_to_naked_signal(
     signal["engine_b_canonical_actionable"] = conf.get("engine_b_canonical_actionable")
     signal["engine_b_canonical_status"] = conf.get("engine_b_canonical_status")
     signal["engine_b_rejection_reasons"] = conf.get("engine_b_rejection_reasons")
+    for key in (
+        "canonical_structure_ok",
+        "canonical_location_ok",
+        "canonical_trigger_ok",
+        "canonical_room_ok",
+        "canonical_rr_ok",
+        "canonical_trade_ok",
+        "canonical_status",
+        "canonical_primary_reject_reason",
+        "canonical_secondary_reject_reasons",
+        "canonical_badge_state",
+        "canonical_room_rr_ok",
+        "confidence_passed",
+        "suggested_levels_executable",
+    ):
+        if key in conf:
+            signal[key] = conf[key]
     blocked = should_block_normal_routing(str(conf.get("engine_b_canonical_status") or ""))
     return signal, blocked

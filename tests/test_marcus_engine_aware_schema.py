@@ -1,6 +1,11 @@
 """Marcus text review must use engine-aware schema and reviewSource."""
 
-from ai_schemas import EngineBResponse, EngineCMarcusResponse, enforce_marcus_grade_edge_consistency
+from ai_schemas import (
+    EngineBResponse,
+    EngineCMarcusResponse,
+    enforce_marcus_grade_edge_consistency,
+    normalize_marcus_advisory_levels,
+)
 from marcus_review import (
     marcus_response_model,
     marcus_review_source,
@@ -57,3 +62,20 @@ def test_grade_edge_consistency_clamps_mismatch():
     enforce_marcus_grade_edge_consistency(result)
     assert result["edgeProbability"] == 55
     assert "GRADE_EDGE_MISMATCH_ADJUSTED" in result["warnings"]
+
+
+def test_engine_b_coerces_numeric_advisory_levels():
+    payload = {
+        "grade": "B",
+        "edgeProbability": 55,
+        "riskLevel": "Medium",
+        "verdict": "SL should sit below sweep low.",
+        "reviewSource": "engine_b_marcus",
+        "levelsVerdict": "adjust",
+        "suggestedSL": 161.33921043846448,
+        "suggestedTP": 163.12,
+    }
+    normalize_marcus_advisory_levels(payload)
+    validated = EngineBResponse.model_validate(payload)
+    assert validated.suggestedSL == "161.33921043846448"
+    assert validated.suggestedTP == "163.12"

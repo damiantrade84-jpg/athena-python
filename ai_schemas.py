@@ -97,6 +97,11 @@ class EngineAResponse(BaseModel):
         description="Per-style ratings: {scalp: {grade, edgeProbability, riskLevel}, intraday: {...}, swing: {...}}",
     )
 
+    @field_validator("suggestedSL", "suggestedTP", mode="before")
+    @classmethod
+    def _coerce_advisory_levels(cls, value: Any) -> str | None:
+        return _coerce_optional_str(value)
+
 
 def _coerce_float(value: Any) -> float | None:
     try:
@@ -105,6 +110,33 @@ def _coerce_float(value: Any) -> float | None:
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def _coerce_optional_str(value: Any) -> str | None:
+    """Coerce AI price/level fields to optional strings (models often emit numbers)."""
+    if value is None:
+        return None
+    if isinstance(value, str):
+        stripped = value.strip()
+        return stripped or None
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return str(value)
+    stripped = str(value).strip()
+    return stripped or None
+
+
+_MARCUS_ADVISORY_LEVEL_FIELDS = ("suggestedSL", "suggestedTP")
+
+
+def normalize_marcus_advisory_levels(result: dict[str, Any]) -> None:
+    """In-place coercion for Marcus SL/TP advisory fields before schema validation."""
+    if not isinstance(result, dict):
+        return
+    for key in _MARCUS_ADVISORY_LEVEL_FIELDS:
+        if key in result:
+            result[key] = _coerce_optional_str(result.get(key))
 
 
 def _first_number(*values: Any) -> float | None:
@@ -525,6 +557,11 @@ class EngineBResponse(BaseModel):
         default=None,
         description="Per-style ratings: {scalp: {grade, edgeProbability, riskLevel}, intraday: {...}, swing: {...}}",
     )
+
+    @field_validator("suggestedSL", "suggestedTP", mode="before")
+    @classmethod
+    def _coerce_advisory_levels(cls, value: Any) -> str | None:
+        return _coerce_optional_str(value)
 
 
 class EngineCMarcusResponse(BaseModel):

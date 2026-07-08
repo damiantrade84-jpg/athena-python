@@ -224,6 +224,18 @@ def build_ai_calibration_context(signal: Dict[str, Any], engine_source: str, exp
         "engine_b_canonical_actionable": engine_b_data.get("engine_b_canonical_actionable"),
         "engine_b_canonical_status": engine_b_data.get("engine_b_canonical_status"),
         "engine_b_rejection_reasons": engine_b_data.get("engine_b_rejection_reasons") or [],
+        "canonical_structure_ok": engine_b_data.get("canonical_structure_ok"),
+        "canonical_location_ok": engine_b_data.get("canonical_location_ok"),
+        "canonical_trigger_ok": engine_b_data.get("canonical_trigger_ok"),
+        "canonical_room_ok": engine_b_data.get("canonical_room_ok"),
+        "canonical_rr_ok": engine_b_data.get("canonical_rr_ok"),
+        "canonical_trade_ok": engine_b_data.get("canonical_trade_ok"),
+        "canonical_status": engine_b_data.get("canonical_status"),
+        "canonical_primary_reject_reason": engine_b_data.get("canonical_primary_reject_reason"),
+        "canonical_secondary_reject_reasons": engine_b_data.get("canonical_secondary_reject_reasons") or [],
+        "canonical_badge_state": engine_b_data.get("canonical_badge_state"),
+        "confidence_passed": engine_b_data.get("confidence_passed"),
+        "suggested_levels_executable": engine_b_data.get("suggested_levels_executable"),
         "ai_calibration_actionable_raw": engine_b_data.get("ai_calibration_actionable_raw"),
         "engine_b_actionable_raw": engine_b_data.get("engine_b_actionable_raw"),
         "zone_quality": _first_not_none(engine_b_data.get("zone_quality"), engine_b_data.get("zone_ok")),
@@ -392,6 +404,26 @@ def build_ai_calibration_context_string(signal: Dict[str, Any], engine_source: s
         )
         if engine_b.get("engine_b_canonical_status"):
             lines.append(f"Engine B canonical status: {engine_b.get('engine_b_canonical_status')}")
+        if engine_b.get("canonical_primary_reject_reason"):
+            lines.append(
+                f"Engine B primary reject: {engine_b.get('canonical_primary_reject_reason')}"
+            )
+        secondary = engine_b.get("canonical_secondary_reject_reasons") or []
+        if secondary:
+            lines.append(
+                f"Engine B secondary rejects: {', '.join(str(x) for x in secondary)}"
+            )
+        badge = engine_b.get("canonical_badge_state")
+        if isinstance(badge, dict):
+            lines.append(
+                "Engine B canonical gates: "
+                f"structure={badge.get('structure')} "
+                f"location={badge.get('location')} "
+                f"trigger={badge.get('trigger')} "
+                f"room_rr={badge.get('room_rr')} "
+                f"confidence={badge.get('confidence')} "
+                f"trade={badge.get('trade')}"
+            )
         rej = engine_b.get("engine_b_rejection_reasons") or []
         if rej:
             lines.append(f"Engine B rejection reasons: {', '.join(str(x) for x in rej)}")

@@ -437,6 +437,59 @@ def _ld_build_engine_b_row(sig_b: dict) -> dict:
     confidence_passed = bool(
         _ld_first(conf.get("passed"), sig_b.get("passed"), sig_b.get("checklist_passed"))
     )
+    canonical_trade_ok = bool(
+        _ld_first(
+            conf.get("canonical_trade_ok"),
+            conf.get("engine_b_canonical_actionable"),
+            sig_b.get("canonical_trade_ok"),
+            sig_b.get("engine_b_canonical_actionable"),
+        )
+    )
+    if confidence_passed and not canonical_trade_ok:
+        confidence_display_label = "SCORE PASSED / GATE FAILED"
+    elif confidence_passed:
+        confidence_display_label = "CONFIDENCE PASSED"
+    else:
+        confidence_display_label = "CONFIDENCE FAILED"
+    canonical_structure_ok = bool(
+        _ld_first(conf.get("canonical_structure_ok"), sig_b.get("canonical_structure_ok"), True)
+        if _ld_first(conf.get("canonical_structure_ok"), sig_b.get("canonical_structure_ok")) is not None
+        else bool(checklist.get("structure_ok") or sig_b.get("structure_ok"))
+    )
+    canonical_location_ok = bool(
+        _ld_first(conf.get("canonical_location_ok"), sig_b.get("canonical_location_ok"))
+        if _ld_first(conf.get("canonical_location_ok"), sig_b.get("canonical_location_ok")) is not None
+        else bool(checklist.get("location_ok") or sig_b.get("location_ok"))
+    )
+    canonical_trigger_ok = bool(
+        _ld_first(conf.get("canonical_trigger_ok"), sig_b.get("canonical_trigger_ok"))
+        if _ld_first(conf.get("canonical_trigger_ok"), sig_b.get("canonical_trigger_ok")) is not None
+        else bool(
+            checklist.get("entry_ok")
+            or checklist.get("trigger_ok")
+            or sig_b.get("entry_ok")
+        )
+    )
+    canonical_room_ok = bool(
+        _ld_first(conf.get("canonical_room_ok"), sig_b.get("canonical_room_ok"))
+        if _ld_first(conf.get("canonical_room_ok"), sig_b.get("canonical_room_ok")) is not None
+        else bool(
+            checklist.get("room_rr_ok") or checklist.get("room_ok") or sig_b.get("room_rr_ok")
+        )
+    )
+    canonical_rr_ok = bool(
+        _ld_first(conf.get("canonical_rr_ok"), sig_b.get("canonical_rr_ok"), True)
+        if _ld_first(conf.get("canonical_rr_ok"), sig_b.get("canonical_rr_ok")) is not None
+        else True
+    )
+    structural_tp_too_close = bool(
+        _ld_first(conf.get("structural_tp_too_close"), sig_b.get("structural_tp_too_close"))
+    )
+    canonical_room_rr_ok = bool(
+        _ld_first(conf.get("canonical_room_rr_ok"), sig_b.get("canonical_room_rr_ok"))
+        if _ld_first(conf.get("canonical_room_rr_ok"), sig_b.get("canonical_room_rr_ok")) is not None
+        else (canonical_room_ok and canonical_rr_ok and not structural_tp_too_close)
+    )
     _sdv = sig_b.get("structural_data_valid")
     if _sdv is not None:
         structural_data_valid = bool(_sdv)
@@ -456,10 +509,43 @@ def _ld_build_engine_b_row(sig_b: dict) -> dict:
         "structuralVerdict": structural_verdict,
         "structuralDataValid": structural_data_valid,
         "confidencePassed": confidence_passed,
-        "structure_ok": bool(checklist.get("structure_ok") or sig_b.get("structure_ok")),
-        "location_ok": bool(checklist.get("location_ok") or sig_b.get("location_ok")),
-        "entry_ok": bool(checklist.get("entry_ok") or sig_b.get("entry_ok")),
-        "room_rr_ok": bool(checklist.get("room_rr_ok") or checklist.get("room_ok") or sig_b.get("room_rr_ok")),
+        "confidenceDisplayLabel": confidence_display_label,
+        "structure_ok": canonical_structure_ok,
+        "location_ok": canonical_location_ok,
+        "entry_ok": canonical_trigger_ok,
+        "room_rr_ok": canonical_room_rr_ok,
+        "canonicalStatus": _ld_first(
+            conf.get("canonical_status"),
+            conf.get("engine_b_canonical_status"),
+            sig_b.get("canonical_status"),
+            sig_b.get("engine_b_canonical_status"),
+        ),
+        "canonicalTradeOk": canonical_trade_ok,
+        "canonicalStructureOk": canonical_structure_ok,
+        "canonicalLocationOk": canonical_location_ok,
+        "canonicalTriggerOk": canonical_trigger_ok,
+        "canonicalRoomOk": canonical_room_ok,
+        "canonicalRrOk": canonical_rr_ok,
+        "canonicalRoomRrOk": canonical_room_rr_ok,
+        "canonicalPrimaryRejectReason": _ld_first(
+            conf.get("canonical_primary_reject_reason"),
+            sig_b.get("canonical_primary_reject_reason"),
+        ),
+        "canonicalSecondaryRejectReasons": _ld_list(
+            conf.get("canonical_secondary_reject_reasons")
+            or sig_b.get("canonical_secondary_reject_reasons")
+        ),
+        "suggestedLevelsExecutable": bool(
+            _ld_first(
+                conf.get("suggested_levels_executable"),
+                sig_b.get("suggested_levels_executable"),
+                canonical_trade_ok,
+            )
+        ),
+        "structuralTpTooClose": structural_tp_too_close,
+        "engineBRejectionReasons": _ld_list(
+            conf.get("engine_b_rejection_reasons") or sig_b.get("engine_b_rejection_reasons")
+        ),
         "d1_conflict": checklist.get("d1_conflict") if "d1_conflict" in checklist else sig_b.get("d1_conflict"),
         "hardFailReasons": _ld_list(conf.get("hard_fail_reasons") or
                                     sig_b.get("hard_fail_reasons")),

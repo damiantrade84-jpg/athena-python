@@ -386,7 +386,6 @@ export interface EngineASignal {
 
   // News / intermarket / vision context
   newsContext?: unknown;
-  intermarketConfirmation?: unknown;
   chartVision?: unknown;
   aiAnalysis?: unknown;
 
@@ -484,6 +483,33 @@ export interface EngineBNakedResult {
     trusted?: boolean;
     reason?: string | null;
   };
+
+  // Canonical gate fields (authoritative for UI badges)
+  engine_b_canonical_actionable?: boolean;
+  engine_b_canonical_status?: string;
+  engine_b_rejection_reasons?: string[];
+  canonical_structure_ok?: boolean;
+  canonical_location_ok?: boolean;
+  canonical_trigger_ok?: boolean;
+  canonical_room_ok?: boolean;
+  canonical_rr_ok?: boolean;
+  canonical_trade_ok?: boolean;
+  canonical_status?: string;
+  canonical_primary_reject_reason?: string | null;
+  canonical_secondary_reject_reasons?: string[];
+  canonical_badge_state?: {
+    structure?: string;
+    location?: string;
+    trigger?: string;
+    room_rr?: string;
+    confidence?: string;
+    trade?: string;
+  };
+  canonical_room_rr_ok?: boolean;
+  confidence_passed?: boolean;
+  suggested_levels_executable?: boolean;
+  structural_tp_too_close?: boolean;
+
   [k: string]: unknown;
 }
 
@@ -525,6 +551,7 @@ export interface ScanResponse {
 export interface NakedScanResponse {
   success?: boolean;
   signals?: EngineASignal[]; // each carries naked_data
+  rejectedDiagnostics?: EngineASignal[];
   debugRows?: unknown[];
   scanFunnel?: Record<string, unknown>;
   totalPairs?: number;
@@ -710,10 +737,24 @@ export interface LdEngineBRow {
   structuralVerdict: string | null;
   structuralDataValid: boolean;
   confidencePassed: boolean;
+  confidenceDisplayLabel?: string;
   structure_ok: boolean;
   location_ok: boolean;
   entry_ok: boolean;
   room_rr_ok: boolean;
+  canonicalStatus?: string | null;
+  canonicalTradeOk?: boolean;
+  canonicalStructureOk?: boolean;
+  canonicalLocationOk?: boolean;
+  canonicalTriggerOk?: boolean;
+  canonicalRoomOk?: boolean;
+  canonicalRrOk?: boolean;
+  canonicalRoomRrOk?: boolean;
+  canonicalPrimaryRejectReason?: string | null;
+  canonicalSecondaryRejectReasons?: string[];
+  suggestedLevelsExecutable?: boolean;
+  structuralTpTooClose?: boolean;
+  engineBRejectionReasons?: string[];
   d1_conflict: boolean | string | null;
   hardFailReasons: string[];
   softWarnings: string[];

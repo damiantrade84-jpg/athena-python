@@ -3,6 +3,10 @@ import { Badge } from '@/components/ui/badge';
 import { Check, X, AlertTriangle, Info } from 'lucide-react';
 import { cn, fmtNum } from '@/lib/utils';
 import { fmtLiveQuoteMeta, fmtPrice, engineBScoreBreakdown } from '@/lib/athenaFormat';
+import {
+  executableLevels,
+  readEngineBCanonicalGatesFromNaked,
+} from '@/lib/engineBCanonicalGates';
 import type { EngineBNakedResult } from '@/types/athena';
 
 interface Props {
@@ -29,7 +33,6 @@ export default function EngineBChecklistCard({ data, pair, type, livePrice, live
   const conf = data.confidence || {};
   const breakdown = engineBScoreBreakdown(data);
   const checklist = (data.checklist || conf.checklist || {}) as Record<string, unknown>;
-  const passed = Boolean(conf.passed ?? data.passed);
   const score = breakdown?.gateScore ?? (conf.gate_score as number | undefined);
   const max = breakdown?.gateMax ?? (conf.gate_max_possible as number | undefined);
   const totalScore = breakdown?.totalScore ?? ((conf.score ?? data.score) as number | undefined);
@@ -40,22 +43,13 @@ export default function EngineBChecklistCard({ data, pair, type, livePrice, live
   const dirBg =
     data.direction === 'LONG' ? 'bg-long/20 text-long' : data.direction === 'SHORT' ? 'bg-short/20 text-short' : 'bg-muted/40 text-muted-foreground';
 
-  // Read all the checklist fields with both shapes (analyze_pair vs naked-analysis)
-  const struct_ok = Boolean(checklist.structure_ok ?? data.structure_ok);
-  const loc_ok = Boolean(checklist.location_ok ?? data.location_ok);
-  const entry_ok = Boolean(checklist.entry_ok ?? checklist.trigger_ok ?? data.entry_ok);
-  const room_ok = Boolean(checklist.room_rr_ok ?? checklist.room_ok ?? data.room_rr_ok);
-  const rr_ok = Boolean(checklist.rr_ok ?? data.rr);
+  const gates = readEngineBCanonicalGatesFromNaked(data)!;
+  const levels = executableLevels(data, gates, pair, type);
   const macro_ok = Boolean(checklist.macro_ok);
   const d1_conflict = (checklist.d1_conflict ?? data.d1_conflict) as unknown;
 
   const hardFails =
     (conf.hard_fail_reasons as string[] | undefined) || (data.hard_fail_reasons as string[] | undefined) || [];
-  const canonicalStatus =
-    (conf.engine_b_canonical_status as string | undefined)
-    || (data.engine_b_canonical_status as string | undefined);
-  const canonicalActionable =
-    conf.engine_b_canonical_actionable ?? data.engine_b_canonical_actionable;
   const canonicalReasons =
     (conf.engine_b_rejection_reasons as string[] | undefined)
     || (data.engine_b_rejection_reasons as string[] | undefined)
@@ -74,15 +68,27 @@ export default function EngineBChecklistCard({ data, pair, type, livePrice, live
   const profileUnavailable = profileCtx?.trusted === false;
   const profileActive = Boolean(profileCtx?.enabled);
 
+  const confidenceBadgeClass =
+    gates.confidenceDisplayLabel === 'CONFIDENCE PASSED'
+      ? 'bg-long/20 text-long'
+      : gates.confidenceDisplayLabel === 'SCORE PASSED / GATE FAILED'
+        ? 'bg-warning/20 text-warning'
+        : 'bg-short/20 text-short';
+
   return (
     <Card className="border-border/60 bg-card/50">
       <CardContent className={compact ? 'p-3 space-y-2' : 'p-4 space-y-3'}>
         {/* Header */}
         <div className="flex items-center justify-between gap-2 flex-wrap">
           <div className="flex items-center gap-2">
-            <Badge className={cn('text-[10px]', passed ? 'bg-long/20 text-long' : 'bg-short/20 text-short')}>
-              {passed ? 'CONFIDENCE PASSED' : 'CONFIDENCE FAILED'}
+            <Badge className={cn('text-[10px]', confidenceBadgeClass)}>
+              {gates.confidenceDisplayLabel}
             </Badge>
+            {!gates.canonicalTradeOk && (
+              <Badge variant="outline" className="text-[10px] bg-short/10 text-short border-short/30">
+                NO ENTRY
+              </Badge>
+            )}
             {data.direction && <Badge className={cn('text-[10px]', dirBg)}>{data.direction}</Badge>}
             {data.style && (
               <Badge variant="outline" className="text-[10px]">
@@ -94,15 +100,15 @@ export default function EngineBChecklistCard({ data, pair, type, livePrice, live
                 Profile +{fmtNum(profilePoints, 2)}
               </Badge>
             )}
-            {canonicalStatus && (
+            {gates.canonicalStatus && (
               <Badge
                 variant="outline"
                 className={cn(
                   'text-[10px]',
-                  canonicalActionable ? 'bg-long/10 text-long border-long/30' : 'bg-short/10 text-short border-short/30',
+                  gates.canonicalTradeOk ? 'bg-long/10 text-long border-long/30' : 'bg-short/10 text-short border-short/30',
                 )}
               >
-                {canonicalStatus}
+                {gates.canonicalStatus}
               </Badge>
             )}
           </div>
@@ -140,12 +146,12 @@ export default function EngineBChecklistCard({ data, pair, type, livePrice, live
           </div>
         )}
 
-        {/* Checklist gates */}
+        {/* Checklist gates — canonical only */}
         <div className="grid grid-cols-2 gap-2">
-          <Gate label="Structure" ok={struct_ok} />
-          <Gate label="Location" ok={loc_ok} />
-          <Gate label="Entry / Trigger" ok={entry_ok} />
-          <Gate label="Room / RR" ok={room_ok || rr_ok} />
+          <Gate label="Structure" ok={gates.canonicalStructureOk} />
+          <Gate label="Location" ok={gates.canonicalLocationOk} />
+          <Gate label="Entry / Trigger" ok={gates.canonicalTriggerOk} />
+          <Gate label="Room / RR" ok={gates.canonicalRoomRrOk} />
           {checklist.macro_ok != null && <Gate label="Macro" ok={macro_ok} />}
           {d1_conflict != null && (
             <Gate
@@ -157,13 +163,45 @@ export default function EngineBChecklistCard({ data, pair, type, livePrice, live
         </div>
 
         {/* Levels */}
-        {(data.entry != null || data.sl != null || data.tp != null) && (
-          <div className="grid grid-cols-4 gap-2">
-            <SmallStat label="Live" value={fmtPrice(livePrice, pair, type)} accent="primary" meta={fmtLiveQuoteMeta(livePriceAgeSec, livePriceSource)} />
-            <SmallStat label="Entry" value={fmtPrice(data.entry, pair, type)} />
-            <SmallStat label="SL" value={fmtPrice(data.sl, pair, type)} accent="short" />
-            <SmallStat label="TP" value={fmtPrice(data.tp, pair, type)} accent="long" />
-            <SmallStat label="R:R" value={fmtNum(data.rr, 2)} accent={typeof data.rr === 'number' && typeof minRr === 'number' && data.rr >= minRr ? 'long' : 'muted'} />
+        <div className="grid grid-cols-4 gap-2">
+          <SmallStat label="Live" value={fmtPrice(livePrice, pair, type)} accent="primary" meta={fmtLiveQuoteMeta(livePriceAgeSec, livePriceSource)} />
+          <SmallStat
+            label="Entry"
+            value={levels.showExecutable ? fmtPrice(levels.entry, pair, type) : '—'}
+          />
+          <SmallStat
+            label="SL"
+            value={levels.showExecutable ? fmtPrice(levels.sl, pair, type) : '—'}
+            accent="short"
+          />
+          <SmallStat
+            label="TP"
+            value={levels.showExecutable ? fmtPrice(levels.tp, pair, type) : '—'}
+            accent="long"
+          />
+          <SmallStat
+            label="R:R"
+            value={levels.showExecutable ? fmtNum(data.rr, 2) : '—'}
+            accent={
+              levels.showExecutable
+              && typeof data.rr === 'number'
+              && typeof minRr === 'number'
+              && data.rr >= minRr
+                ? 'long'
+                : 'muted'
+            }
+          />
+        </div>
+
+        {!levels.showExecutable
+          && (levels.diagnosticEntry != null || levels.diagnosticSl != null || levels.diagnosticTp != null) && (
+          <div className="text-[10px] text-muted-foreground border border-border/40 rounded-md p-2 space-y-1">
+            <p className="uppercase font-semibold text-warning">Rejected diagnostic levels — not executable</p>
+            <p className="font-mono">
+              Entry {fmtPrice(levels.diagnosticEntry, pair, type)}
+              {' · '}SL {fmtPrice(levels.diagnosticSl, pair, type)}
+              {' · '}TP {fmtPrice(levels.diagnosticTp, pair, type)}
+            </p>
           </div>
         )}
 
@@ -185,6 +223,22 @@ export default function EngineBChecklistCard({ data, pair, type, livePrice, live
         )}
 
         {/* Hard fail / soft warn / diagnostic */}
+        {gates.canonicalPrimaryRejectReason && (
+          <ReasonRow
+            icon={<X className="w-3 h-3" />}
+            className="text-short bg-short/10"
+            label="Primary reject"
+            items={[gates.canonicalPrimaryRejectReason]}
+          />
+        )}
+        {gates.canonicalSecondaryRejectReasons.length > 0 && (
+          <ReasonRow
+            icon={<X className="w-3 h-3" />}
+            className="text-short/80 bg-short/5"
+            label="Secondary rejects"
+            items={gates.canonicalSecondaryRejectReasons}
+          />
+        )}
         {canonicalReasons.length > 0 && (
           <ReasonRow
             icon={<X className="w-3 h-3" />}

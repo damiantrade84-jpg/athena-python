@@ -4542,11 +4542,45 @@ def _build_signal_message(
         )
         if eng_b.get("engine_b_canonical_status"):
             lines.append(f"  Engine B Canonical Status: {eng_b.get('engine_b_canonical_status')}")
+        if eng_b.get("canonical_primary_reject_reason"):
+            lines.append(
+                f"  Engine B Primary Reject: {eng_b.get('canonical_primary_reject_reason')}"
+            )
+        _secondary = eng_b.get("canonical_secondary_reject_reasons") or []
+        if _secondary:
+            lines.append(
+                f"  Engine B Secondary Rejects: {', '.join(str(x) for x in _secondary)}"
+            )
+        _badge = eng_b.get("canonical_badge_state")
+        if isinstance(_badge, dict):
+            lines.append(
+                "  Engine B Canonical Gates: "
+                f"structure={_badge.get('structure')} "
+                f"location={_badge.get('location')} "
+                f"trigger={_badge.get('trigger')} "
+                f"room_rr={_badge.get('room_rr')} "
+                f"confidence={_badge.get('confidence')} "
+                f"trade={_badge.get('trade')}"
+            )
         _rej = eng_b.get("engine_b_rejection_reasons") or []
         if _rej:
             lines.append(f"  Engine B Rejection Reasons: {', '.join(str(x) for x in _rej)}")
-        lines.append(f"  Engine B Rec SL: {eng_b.get('recommended_stop_loss')}")
-        lines.append(f"  Engine B Rec TP: {eng_b.get('recommended_take_profit')}")
+        _canonical_trade_ok = bool(
+            eng_b.get("canonical_trade_ok", eng_b.get("engine_b_canonical_actionable"))
+        )
+        if _canonical_trade_ok:
+            lines.append(f"  Engine B Rec SL: {eng_b.get('recommended_stop_loss')}")
+            lines.append(f"  Engine B Rec TP: {eng_b.get('recommended_take_profit')}")
+        else:
+            lines.append("  Engine B Suggested SL/TP: - (rejected — diagnostic only, not executable)")
+            if eng_b.get("execution_sl") or eng_b.get("recommended_stop_loss"):
+                lines.append(
+                    f"  Engine B Diagnostic SL: {eng_b.get('execution_sl') or eng_b.get('recommended_stop_loss')}"
+                )
+            if eng_b.get("execution_tp1") or eng_b.get("recommended_take_profit"):
+                lines.append(
+                    f"  Engine B Diagnostic TP: {eng_b.get('execution_tp1') or eng_b.get('recommended_take_profit')}"
+                )
 
     # === TECHNICALS ===
     votes = signal.get("votes", {})
@@ -5520,8 +5554,10 @@ def run_ai(
             from ai_schemas import (
                 enforce_marcus_grade_edge_consistency,
                 evaluate_marcus_advisory_rules,
+                normalize_marcus_advisory_levels,
             )
 
+            normalize_marcus_advisory_levels(result)
             _response_model = marcus_response_model(_marcus_engine_source)
             enforce_marcus_grade_edge_consistency(result)
             _response_model.model_validate(result)

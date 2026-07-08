@@ -323,7 +323,35 @@ def build_engine_b_signal_message(
         lines.append(f"Pair: {pair} | Direction: {direction} | Price: {current_price}")
         lines.append(f"Confidence: {conf_score:.2f} / {max_score} ({score_pct}%)")
     lines.append(f"Verdict: {structure_result.get('structural_verdict', 'UNCLEAR')}")
-    lines.append(f"Actionable: {'YES' if confidence_result.get('passed', False) else 'NO'}")
+    canonical_trade_ok = bool(
+        confidence_result.get("canonical_trade_ok", confidence_result.get("engine_b_canonical_actionable"))
+    )
+    confidence_passed = bool(confidence_result.get("passed") or confidence_result.get("confidence_passed"))
+    if confidence_passed and not canonical_trade_ok:
+        actionable_line = "SCORE PASSED / GATE FAILED (canonical_trade_ok=NO)"
+    elif canonical_trade_ok:
+        actionable_line = "YES (canonical_trade_ok)"
+    else:
+        actionable_line = "NO (canonical_trade_ok)"
+    lines.append(f"Actionable: {actionable_line}")
+    if confidence_result.get("engine_b_canonical_status"):
+        lines.append(f"Canonical status: {confidence_result.get('engine_b_canonical_status')}")
+    badge = confidence_result.get("canonical_badge_state")
+    if isinstance(badge, dict):
+        lines.append("")
+        lines.append("=== CANONICAL GATES (authoritative) ===")
+        lines.append(f"Structure: {badge.get('structure', 'n/a')}")
+        lines.append(f"Location: {badge.get('location', 'n/a')}")
+        lines.append(f"Trigger: {badge.get('trigger', 'n/a')}")
+        lines.append(f"Room/RR: {badge.get('room_rr', 'n/a')}")
+        lines.append(f"Confidence: {badge.get('confidence', 'n/a')}")
+        lines.append(f"Trade: {badge.get('trade', 'n/a')}")
+    primary_reject = confidence_result.get("canonical_primary_reject_reason")
+    if primary_reject:
+        lines.append(f"Primary reject: {primary_reject}")
+    secondary = confidence_result.get("canonical_secondary_reject_reasons") or []
+    if secondary:
+        lines.append(f"Secondary rejects: {', '.join(str(x) for x in secondary)}")
 
     # === STRUCTURE ===
     lines.append("")
@@ -380,19 +408,39 @@ def build_engine_b_signal_message(
 
     # === TRADE PARAMETERS ===
     lines.append("")
-    lines.append("=== TRADE PARAMETERS ===")
-    sl = structure_result.get("recommended_stop_loss")
-    tp = structure_result.get("recommended_take_profit")
+    if canonical_trade_ok:
+        lines.append("=== TRADE PARAMETERS (executable) ===")
+    else:
+        lines.append("=== REJECTED DIAGNOSTIC LEVELS (not executable) ===")
+    sl = (
+        confidence_result.get("execution_sl")
+        or structure_result.get("recommended_stop_loss")
+    )
+    tp = (
+        confidence_result.get("execution_tp1")
+        or confidence_result.get("execution_tp")
+        or structure_result.get("recommended_take_profit")
+    )
     rr = 0.0
     if sl is not None and tp is not None:
         sl_dist = abs(float(current_price) - float(sl))
         tp_dist = abs(float(tp) - float(current_price))
         rr = (tp_dist / sl_dist) if sl_dist > 0 else 0.0
 
-    lines.append(f"Entry: {current_price}")
-    lines.append(f"Stop Loss: {sl}")
-    lines.append(f"Take Profit: {tp}")
-    lines.append(f"Risk:Reward: 1:{rr:.2f}")
+    if canonical_trade_ok:
+        lines.append(f"Entry: {current_price}")
+        lines.append(f"Stop Loss: {sl}")
+        lines.append(f"Take Profit: {tp}")
+        lines.append(f"Risk:Reward: 1:{rr:.2f}")
+    else:
+        lines.append("Entry: -")
+        lines.append("Stop Loss: -")
+        lines.append("Take Profit: -")
+        lines.append("Risk:Reward: -")
+        if sl is not None or tp is not None:
+            lines.append(
+                f"Diagnostic only — Entry: {current_price} | SL: {sl} | TP: {tp} | RR: 1:{rr:.2f}"
+            )
 
     # === CONFIDENCE BREAKDOWN ===
     lines.append("")
