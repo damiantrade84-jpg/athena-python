@@ -495,6 +495,42 @@ def resolve_engine_b_tfs(asset_type: str, style: str) -> dict:
         "atr": atr_tf,
     }
 
+
+def engine_b_candles_for_tf(
+    tf: str,
+    d1_candles: list,
+    h4_candles: list,
+    h1_candles: list,
+) -> list:
+    """Return the canonical D1/H4/H1 candle series for a role timeframe."""
+    key = str(tf or "").upper()
+    if key == "D1":
+        return d1_candles or []
+    if key == "H4":
+        return h4_candles or []
+    return h1_candles or []
+
+
+def resolve_engine_b_h4_snap(
+    h4_candles: list | None,
+    asset_type: str,
+) -> dict:
+    """Build the H4 indicator snapshot Engine B should consume.
+
+    Callers must pass the real H4 candle series — not zone candles, which can
+    be D1 for swing style.
+    """
+    if not h4_candles:
+        return {}
+    try:
+        from indicators import calc_indicators_with_normalized
+
+        snap = (calc_indicators_with_normalized(h4_candles, asset_type) or {}).get("snap")
+    except Exception:
+        return {}
+    return snap or {}
+
+
 # Observability only — stable codes for logs/diagnostics (no scoring side effects).
 ENGINE_B_REASON_RESISTANCE_TOO_CLOSE = "resistance_too_close"
 ENGINE_B_REASON_SUPPORT_TOO_CLOSE = "support_too_close"
@@ -3809,7 +3845,9 @@ class NakedEngine:
                 "_error": _strip_reason or "struct_candles_empty",
                 "forming_strip_diagnostics": forming_strip_diag,
             }
-        trigger_candles = h4_candles if _tfs["trigger"] == "H4" else h1_candles
+        trigger_candles = engine_b_candles_for_tf(
+            _tfs["trigger"], d1_candles, h4_candles, h1_candles
+        )
         _zone_fvg_candles = struct_candles if structure_tf == "H4" else h4_candles
 
         h4_highs = np.array([float(c["high"]) for c in h4_candles])
@@ -4531,6 +4569,9 @@ class NakedEngine:
         """
         Analyzes raw candle data to find Support/Resistance zones and trend sequence.
         Returns structural verdict used by the Comparator in athena.py.
+
+        Positional candle args are canonical D1/H4/H1 series (not style zone/entry
+        roles). Role timeframes are resolved inside ``precompute_structure_data()``.
 
         Delegates to ``precompute_structure_data()`` + ``analyze_structure_direction()``
         for backward compatibility. For optimal performance (especially during backtesting),

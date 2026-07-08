@@ -146,6 +146,8 @@ def shadow_proximity_simulations(
     vp: dict,
     atr: float,
     tick_size: float = 1e-6,
+    *,
+    current_proximity_pct: float | None = None,
 ) -> dict:
     """Shadow-simulate how many levels price would be 'near' under different proximity rules.
 
@@ -156,9 +158,23 @@ def shadow_proximity_simulations(
     vah = vp.get("vah")
     val = vp.get("val")
     lvns = vp.get("lvn_levels", [])
+    ref_level = float(poc or vah or val or price or 1.0)
+    if current_proximity_pct is None:
+        try:
+            from scalp_engine import engine_d_vp_proximity_pct
+            from config import CONFIG
+
+            cfg = CONFIG.get("SCALP_ENGINE", {})
+            current_proximity_pct = engine_d_vp_proximity_pct(
+                cfg,
+                atr_m15=atr,
+                ref_level=ref_level,
+            )
+        except Exception:
+            current_proximity_pct = float(vp.get("_proximity_pct", 0.003))
 
     variants = {
-        "current": float(vp.get("_proximity_pct", 0.003)),
+        "current": float(current_proximity_pct),
         "atr_10pct": (atr * 0.10) / price if price > 0 else 0,
         "atr_15pct": (atr * 0.15) / price if price > 0 else 0,
         "atr_25pct": (atr * 0.25) / price if price > 0 else 0,

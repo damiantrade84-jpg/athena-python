@@ -2119,6 +2119,41 @@ def test_scalp_fetch_candles_crypto_m1_falls_back_when_ws_stale(monkeypatch):
     assert source == "binance_candle"
 
 
+def test_scalp_fetch_candles_crypto_routes_bybit_when_trade_bucket_primary(monkeypatch):
+    bybit_candles = [
+        {"time": "2026-03-26T13:00:00+00:00", "open": 9, "high": 9, "low": 9, "close": 9, "vol": 9}
+    ] * 30
+    monkeypatch.setitem(
+        scalp_engine.CONFIG,
+        "SCALP_ENGINE",
+        {
+            **scalp_engine.CONFIG.get("SCALP_ENGINE", {}),
+            "TRADE_BUCKET_EXCHANGE": "bybit",
+        },
+    )
+    monkeypatch.setattr(
+        "data_feeds._fetch_bybit_klines",
+        lambda symbol, tf, limit: list(bybit_candles),
+    )
+    out, source = scalp_engine._scalp_fetch_candles(
+        scalp_engine._scalp_crypto_pair_dict("BTC/USDT"),
+        "M15",
+        50,
+    )
+    assert out == bybit_candles
+    assert source == "bybit_candle"
+
+
+def test_scalp_crypto_pair_dict_follows_trade_bucket_exchange(monkeypatch):
+    monkeypatch.setitem(
+        scalp_engine.CONFIG,
+        "SCALP_ENGINE",
+        {**scalp_engine.CONFIG.get("SCALP_ENGINE", {}), "TRADE_BUCKET_EXCHANGE": "bybit"},
+    )
+    pair = scalp_engine._scalp_crypto_pair_dict("ETH/USDT")
+    assert pair["source"] == "bybit"
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # 10. UNCOVERED FIXES (Engine D audit residuals)
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -2562,3 +2597,57 @@ def test_f3_live_and_bt_strict_gate_share_aggtrade_check_shape():
     # Both gated behind REQUIRE_AGGTRADE_FOR_CRYPTO_STRICT.
     assert 'REQUIRE_AGGTRADE_FOR_CRYPTO_STRICT' in live_src
     assert 'REQUIRE_AGGTRADE_FOR_CRYPTO_STRICT' in bt_src
+
+
+def test_stop_run_scales_with_atr():
+    import scalp_engine as se
+
+    cfg = {
+        "STOP_RUN_DETECTION_ENABLED": True,
+        "STOP_RUN_WICK_PCT": 0.60,
+        "STOP_RUN_WICK_SUSPECT_PCT": 0.40,
+        "ATR_STOP_RUN_WICK_K": 0.25,
+        "ATR_STOP_RUN_WICK_SUSPECT_K": 0.18,
+    }
+    old_cfg = se.CONFIG.get("SCALP_ENGINE", {})
+    se.CONFIG["SCALP_ENGINE"] = {**old_cfg, **cfg}
+    try:
+        candles_low_atr = [{
+            "open": 100.0, "high": 100.05, "low": 99.95, "close": 100.01, "vol": 1000,
+        }, {
+            "open": 100.01, "high": 100.06, "low": 99.94, "close": 100.00, "vol": 1200,
+        }, {
+            "open": 100.00, "high": 100.20, "low": 99.98, "close": 100.02, "vol": 2000,
+        }]
+        low = se._detect_stop_run(candles_low_atr, "LONG", atr=0.01)
+        high = se._detect_stop_run(candles_low_atr, "LONG", atr=0.50)
+        assert low.get("stop_run") is not None or high.get("stop_run") is not None
+        thr_low, _ = se._stop_run_wick_thresholds(cfg, 0.01, 0.22)
+        thr_high, _ = se._stop_run_wick_thresholds(cfg, 0.50, 0.22)
+        assert thr_high >= thr_low
+    finally:
+        se.CONFIG["SCALP_ENGINE"] = old_cfg
+
+
+def test_atr_window_matches_vp_window():
+    import scalp_engine as se
+
+    full = []
+    p = 1.1000
+    start = datetime.now(timezone.utc) - timedelta(minutes=39)
+    for i in range(40):
+        spread = 0.0010 + (i * 0.00005)
+        p += 0.0001
+        t = start + timedelta(minutes=i)
+        full.append({
+            "time": t.isoformat(),
+            "open": round(p, 6),
+            "high": round(p + spread, 6),
+            "low": round(p - spread * 0.5, 6),
+            "close": round(p + spread * 0.1, 6),
+            "vol": 500.0,
+        })
+    vp_window = full[-20:]
+    atr_full = se._calc_m15_atr(full, period=14)
+    atr_vp = se._calc_m15_atr(vp_window, period=14)
+    assert atr_full != atr_vp

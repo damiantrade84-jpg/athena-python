@@ -356,6 +356,7 @@ def _replay_engine_b(config: LiveGateReplayConfig, symbol: str, timeframe: str, 
     atr_values = _atr_for(atr_candles) if atr_candles else []
     base_times = _times(base)
     d1_times, zone_times, entry_times, atr_times = _times(d1), _times(zone), _times(entry), _times(atr_candles)
+    h4_times, h1_times = _times(h4), _times(h1)
     engine = NakedEngine()
     details: list[dict] = []
     start = max(config.min_history_bars, 60)
@@ -370,30 +371,33 @@ def _replay_engine_b(config: LiveGateReplayConfig, symbol: str, timeframe: str, 
         zone_idx = _idx_at_or_before(zone_times, ts)
         entry_idx = _idx_at_or_before(entry_times, ts)
         atr_idx = _idx_at_or_before(atr_times, ts)
+        h4_idx = _idx_at_or_before(h4_times, ts)
+        h1_idx = _idx_at_or_before(h1_times, ts)
         d1_w = _window(d1, d1_idx, 220)
-        zone_w = _window(zone, zone_idx, 250)
+        h4_w = _window(h4, h4_idx, 250)
+        h1_w = _window(h1, h1_idx, 250)
         entry_w = _window(entry, entry_idx, 250)
-        if not zone_w or not entry_w:
+        if not h4_w or not h1_w or not entry_w:
             continue
         current_price = _finite(entry_w[-1].get("close"), 0.0)
         atr = _finite(atr_values[atr_idx] if 0 <= atr_idx < len(atr_values) else None, current_price * 0.01)
         try:
             d1_snap = (_calc_snap(d1_w, asset_type) or {}).get("snap") or {}
-            zone_snap = (_calc_snap(zone_w, asset_type) or {}).get("snap") or {}
+            h4_snap = (_calc_snap(h4_w, asset_type) or {}).get("snap") or {}
             regime_label = "RANGING"
             best_detail: dict | None = None
             engine.set_registry_context(symbol)
             pre = engine.precompute_structure_data(
                 d1_w,
-                zone_w,
-                entry_w,
+                h4_w,
+                h1_w,
                 current_price,
                 atr,
                 regime=regime_label,
                 fallback_rr=style_profile.get("fallback_rr", 2.0),
                 asset_type=asset_type,
                 d1_snap=d1_snap,
-                h4_snap=zone_snap,
+                h4_snap=h4_snap,
                 style=resolved_style,
                 pair=pair,
             )

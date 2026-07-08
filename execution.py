@@ -1831,6 +1831,8 @@ def api_engine_c_scan():
                     raw, _ = _fetch_engine_c_signal_candles(_r, pair, tf, limit)
                 _tf_map[tf] = engine_b_confirmed_candles_from_raw(pair, tf, raw)
             d1 = _tf_map.get("D1", [])
+            h4 = _tf_map.get("H4", [])
+            h1 = _tf_map.get("H1", [])
             zone_candles = _tf_map.get(_zone_tf, [])
             entry_candles = _tf_map.get(_entry_tf, [])
             atr_candles = _tf_map.get(_atr_tf, zone_candles)
@@ -1897,10 +1899,10 @@ def api_engine_c_scan():
             _ec_d1_snap = {}
             _ec_h4_snap = {}
             try:
+                from market_structure import resolve_engine_b_h4_snap
+
                 _ec_d1_snap = (calc_indicators_with_normalized(d1, ptype) or {}).get("snap") or {}
-                _ec_h4_snap = (
-                    calc_indicators_with_normalized(zone_candles, ptype) or {}
-                ).get("snap") or {}
+                _ec_h4_snap = resolve_engine_b_h4_snap(h4, ptype)
             except Exception:
                 pass
 
@@ -1924,8 +1926,8 @@ def api_engine_c_scan():
                     pair.get("symbol") or display
                 ).analyze_structure(
                     d1 or [],
-                    zone_candles,
-                    entry_candles or [],
+                    h4 or [],
+                    h1 or [],
                     current_price,
                     test_dir,
                     atr,

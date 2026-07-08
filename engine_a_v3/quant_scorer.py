@@ -187,6 +187,7 @@ def _trend_component(
     *,
     entry_candles: list[dict] | None = None,
     indicator_periods: Mapping[str, int] | None = None,
+    entry_tf: str = "H1",
 ) -> tuple[Component, dict[str, str]]:
     parts: dict[str, float] = {}
     coherence: dict[str, str] = {}
@@ -214,7 +215,9 @@ def _trend_component(
     else:
         coherence_q = abs(weighted)
     quality = abs(weighted) * (0.5 + 0.5 * coherence_q)
-    quality *= _trend_health_mult(weighted, snaps, entry_candles, indicator_periods)
+    quality *= _trend_health_mult(
+        weighted, snaps, entry_candles, indicator_periods, entry_tf=entry_tf
+    )
     return Component(_clamp(weighted, -1.0, 1.0), _clamp01(quality)), coherence
 
 
@@ -247,6 +250,8 @@ def _trend_health_mult(
     snaps: dict[str, Mapping[str, Any]],
     entry_candles: list[dict] | None,
     indicator_periods: Mapping[str, int] | None,
+    *,
+    entry_tf: str = "H1",
 ) -> float:
     """Penalize stale or weakening trends (config-gated, default on)."""
     enabled = True
@@ -269,7 +274,14 @@ def _trend_health_mult(
         return 1.0
 
     mult = 1.0
-    entry_snap = snaps.get("H1") or snaps.get("H4") or snaps.get("D1") or {}
+    _entry_key = str(entry_tf or "H1").upper()
+    entry_snap = (
+        snaps.get(_entry_key)
+        or snaps.get("H4")
+        or snaps.get("H1")
+        or snaps.get("D1")
+        or {}
+    )
     adx_slope = _f(entry_snap.get("adxSlope"), 0.0) or 0.0
     if trend_signal > 0 and adx_slope < 0:
         mult *= _clamp(1.0 + adx_weakening_penalty * adx_slope, floor, 1.0)
@@ -588,6 +600,7 @@ def score_pair(
         _resolve_v3_tf_weights(group, asset_type, horizon),
         entry_candles=candles.get(entry_tf) or [],
         indicator_periods=dict(profile.indicator_periods),
+        entry_tf=entry_tf,
     )
     momentum, mom_diag = _momentum_component(momentum_snap, asset_type, group)
     location, level_style = _location_component(entry_snap, asset_type, group)

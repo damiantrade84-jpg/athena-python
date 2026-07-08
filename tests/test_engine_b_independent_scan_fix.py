@@ -206,7 +206,7 @@ def test_engine_b_independent_direction_probe_picks_best_passing_direction(monke
     direction, res_b, conf_b = _engine_b_independent_direction_probe(
         {"display": "X", "symbol": "X", "type": "crypto"},
         engine=fake,
-        d1_candles=[], zone_candles=[], entry_candles=[],
+        d1_candles=[], h4_candles=[], h1_candles=[], entry_candles=[],
         current_price=100.0, atr=1.0, regime_label="TRENDING",
         style_profile={"fallback_rr": 2.0, "min_rr": 1.5},
         resolved_style="intraday",
@@ -232,7 +232,7 @@ def test_engine_b_independent_direction_probe_returns_none_when_no_clear(monkeyp
     direction, res_b, conf_b = _engine_b_independent_direction_probe(
         {"display": "X", "symbol": "X", "type": "forex"},
         engine=fake,
-        d1_candles=[], zone_candles=[], entry_candles=[],
+        d1_candles=[], h4_candles=[], h1_candles=[], entry_candles=[],
         current_price=1.10, atr=0.001, regime_label="RANGING",
         style_profile={"fallback_rr": 2.0, "min_rr": 1.5},
         resolved_style="intraday",

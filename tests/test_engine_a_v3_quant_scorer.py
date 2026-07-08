@@ -17,6 +17,7 @@ from engine_a_v3.quant_scorer import (
     _location_component,
     _momentum_component,
     _trend_component,
+    _trend_health_mult,
     _volume_component,
     score_pair,
 )
@@ -376,3 +377,13 @@ def test_contract_to_dict_unknown_decision_does_not_raise():
     )
     payload = signal.to_dict()
     assert payload["signalTier"] == "skip"
+
+
+def test_trend_health_mult_prefers_entry_tf_snap_for_swing():
+    snaps = {
+        "H1": {"adx": 10.0, "adxSlope": -2.0, "adxPrev": 30.0},
+        "H4": {"adx": 30.0, "adxSlope": 0.0, "adxPrev": 29.0},
+    }
+    h1_mult = _trend_health_mult(0.8, snaps, None, None, entry_tf="H1")
+    h4_mult = _trend_health_mult(0.8, snaps, None, None, entry_tf="H4")
+    assert h1_mult < h4_mult
