@@ -510,7 +510,7 @@ export default function TradesPanel() {
         <TabsContent value="history" className="mt-2">
           <Card className="border-border/60 bg-card/50">
             <CardHeader className="pb-2">
-              <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Cinzel', serif", letterSpacing: '0.12em' }}>Last 20 Closed Trades</CardTitle>
+              <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Cinzel', serif", letterSpacing: '0.12em' }}>Last 20 Trade History</CardTitle>
             </CardHeader>
             <CardContent>
               {Array.isArray(performance?.last_20_trades) && performance!.last_20_trades.length > 0 ? (

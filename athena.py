@@ -15425,8 +15425,10 @@ def api_performance():
             engine = str(row.get("engine") or "").strip().lower()
             style = str(row.get("style") or "").strip().lower()
             grade = str(row.get("grade") or "").strip().upper()
-            if engine in ("engine_a", "engine_b", "engine_c", "scalp", "external"):
+            if engine in ("engine_a", "engine_b", "engine_c", "ase", "scalp", "external"):
                 return engine
+            if grade == "ASE":
+                return "ase"
             if not engine and (style == "scalp" or grade == "SCALP"):
                 return "scalp"
             if grade == "WEBHOOK":
@@ -15463,12 +15465,22 @@ def api_performance():
             last_20_rows = con.execute(
                 "SELECT * FROM audit_log WHERE exit_price IS NOT NULL ORDER BY id DESC LIMIT 20"
             ).fetchall()
-            last_20 = [
+            last_20_audit = [
                 {**dict(r), "engine_resolved": _infer_perf_engine(dict(r))}
                 for r in last_20_rows
             ]
 
         all_trades = [dict(r) for r in rows]
+        try:
+            from athena_app.services.performance_ase import load_ase_journal_performance_rows
+
+            ase_trades = load_ase_journal_performance_rows()
+            ase_history_trades = load_ase_journal_performance_rows(realized_only=False)
+        except Exception as ase_exc:
+            log.warning("[PERF] ASE history merge failed: %s", ase_exc)
+            ase_trades = []
+            ase_history_trades = []
+        all_trades.extend(ase_trades)
 
         if not all_trades:
             _empty = jsonify(
@@ -15550,6 +15562,12 @@ def api_performance():
 
         def _trade_closed_sort_key(trade: dict):
             return (_parse_close_dt(trade), int(trade.get("id") or 0))
+
+        last_20 = sorted(
+            list(last_20_audit) + list(ase_history_trades),
+            key=_trade_closed_sort_key,
+            reverse=True,
+        )[:20]
 
         # Same chronological order for R series, cumulative equity, Sharpe annualiser hints, and max DD path.
         trades_series = sorted(trades, key=_trade_closed_sort_key)

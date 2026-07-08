@@ -2,6 +2,7 @@ export type AuditEngineKey =
   | 'engine_a'
   | 'engine_b'
   | 'engine_c'
+  | 'ase'
   | 'scalp'
   | 'external'
   | 'unknown'
@@ -19,6 +20,7 @@ const ENGINE_LABELS: Record<string, string> = {
   engine_a: 'A',
   engine_b: 'B',
   engine_c: 'C',
+  ase: 'ASE',
   scalp: 'D',
   external: 'WH',
   unknown: '—',
@@ -28,6 +30,7 @@ const ENGINE_TITLES: Record<string, string> = {
   engine_a: 'Engine A',
   engine_b: 'Engine B',
   engine_c: 'Engine C',
+  ase: 'ASE',
   scalp: 'Engine D',
   external: 'Webhook / external',
   unknown: 'Unknown engine',

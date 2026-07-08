@@ -25,9 +25,12 @@ def test_trade_history_shows_engine_column():
     assert "export function formatAuditEngineLabel" in helper_source
     assert "export function auditEngineTitle" in helper_source
     assert "engine_a: 'A'" in helper_source
+    assert "ase: 'ASE'" in helper_source
     assert "scalp: 'D'" in helper_source
 
     assert "export interface AuditClosedTrade" in types_source
     assert "last_20_trades?: AuditClosedTrade[]" in types_source
 
     assert '"engine_resolved": _infer_perf_engine(dict(r))' in athena_source
+    assert '"ase"' in athena_source
+    assert "load_ase_journal_performance_rows" in athena_source

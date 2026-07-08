@@ -159,6 +159,7 @@ export interface AuditClosedTrade {
   exit_reason?: string;
   engine?: string;
   engine_resolved?: string;
+  style?: string;
 }
 
 export interface PerformanceMetrics {
