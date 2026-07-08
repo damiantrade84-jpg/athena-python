@@ -24,7 +24,11 @@ from athena_app.services.crypto_signal_feed import (
     fetch_crypto_signal_candles,
     resolve_crypto_signal_feed,
 )
-from athena_app.services.market_state import market_state_offset_hours, split_market_state
+from athena_app.services.market_state import (
+    candle_timestamp_epoch,
+    market_state_offset_hours,
+    split_market_state,
+)
 from athena_app.services.structure_context import (
     apply_engine_a_correlated_overlay_guard,
     apply_structure_context_to_score,
@@ -5087,6 +5091,11 @@ def backtest_pair_naked(pair: dict, style: str = "naked", validation_mode="stand
     )
     d1_times = [c.get("time", c.get("datetime", "")) for c in candles_d1]
     h4_times = [c.get("time", c.get("datetime", "")) for c in candles_h4]
+    # Parallel open-time epoch arrays for confirmed-only higher-TF alignment
+    # (anti-lookahead). Kept alongside the string lists because those remain in
+    # use for lexical fill/monitor lookups further down.
+    _d1_epochs = [candle_timestamp_epoch(c) for c in candles_d1]
+    _h4_epochs = [candle_timestamp_epoch(c) for c in candles_h4]
     h1_times = pd.to_datetime(
         [c.get("time", c.get("datetime", "")) for c in candles_h1],
         utc=True,
@@ -5181,8 +5190,15 @@ def backtest_pair_naked(pair: dict, style: str = "naked", validation_mode="stand
             i += 1
             continue
 
-        _h4_cut_idx = bisect.bisect_left(h4_times, entry_time)
-        _d1_cut_idx = bisect.bisect_left(d1_times, entry_time)
+        # Anti-lookahead: structure/ATR context must be confirmed-only relative to
+        # the entry-bar decision. A plain bisect_left(entry_time) admits a higher-TF
+        # bar that merely OPENED before entry_time but has not yet closed (the
+        # same-day D1 always; the containing H4 when entry_tf is H1), leaking its
+        # eventual OHLC into the structure snapshot and the ATR lookup. Include a
+        # bar only once it has fully closed by entry_time: open <= entry_time - tf.
+        _entry_epoch = candle_timestamp_epoch(entry_raw[i])
+        _h4_cut_idx = bisect.bisect_right(_h4_epochs, _entry_epoch - 14400)
+        _d1_cut_idx = bisect.bisect_right(_d1_epochs, _entry_epoch - 86400)
         h4_ctx = candles_h4[:_h4_cut_idx]
         d1_ctx = candles_d1[:_d1_cut_idx]
 
@@ -6369,7 +6385,13 @@ def backtest_pair_consensus(
 
         h4_idx = bisect.bisect_left(h4_times, entry_time)
         h1_idx = bisect.bisect_left(h1_times, entry_time)
-        d1_idx = bisect.bisect_left(d1_times, entry_time)
+        # Anti-lookahead: D1 must be confirmed-only. bisect_left(entry_time) would
+        # include the same-day daily (open 00:00 < the H4 decision at entry_time)
+        # even though that daily does not close until ~16h later — leaking its
+        # eventual close/high/low into the D1 indicator snapshot and D1 ATR. A D1
+        # bar is confirmed by entry_time only when it opened >= 24h earlier, i.e.
+        # open <= entry_time - 24h. Mirrors the H4/H1 forming-bar exclusion above.
+        d1_idx = bisect.bisect_right(d1_times, entry_time - pd.Timedelta(hours=24))
 
         h4_window = candles_h4[max(0, h4_idx - _h4_need): h4_idx]
         h1_window = candles_h1[max(0, h1_idx - _h1_need): h1_idx]
@@ -7953,4 +7975,11 @@ def run_full_backtest(
         "errors": errors,
         "totalPairs": len(pairs_to_test),
         "assetClass": _ac or "all",
+        # Survivorship transparency: pairs that failed to fetch enough history are
+        # excluded from `results` (and any aggregate computed over it). Surface the
+        # count and identities so a data-driven exclusion cannot silently flatter
+        # the aggregate stats.
+        "testedPairs": len(results),
+        "excludedPairs": [e.get("pair") for e in errors],
+        "excludedCount": len(errors),
     }

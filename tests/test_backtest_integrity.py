@@ -111,44 +111,79 @@ def test_volatility_slippage_model_can_be_disabled(monkeypatch):
     assert backtest_runner._get_slippage_for_bar(bar, "stock") == backtest_runner._BASE_BACKTEST_SLIP["stock"]
 
 
-def test_engine_a_backtest_indicator_windows_stop_before_fill_bar():
-    src = Path(backtest_runner.__file__).read_text(encoding="utf-8")
-    swing = _source_block(
-        src,
-        'if effective_style == "swing":',
-        'elif effective_style == "intraday":',
-    )
-    intraday = _source_block(
-        src,
-        'elif effective_style == "intraday":',
-        'elif effective_style == "scalp":',
-    )
-    scalp = _source_block(
-        src,
-        'elif effective_style == "scalp":',
-        "if not trades:",
+def _aligned_multi_tf_candles(start_dt, *, h1_count=400):
+    """Build time-aligned D1/H4/H1 series for a run_v3_backtest walk.
+
+    H1 is the intraday primary; D1/H4 are the higher timeframes whose still-
+    forming bar must never reach a decision.
+    """
+    h1 = _make_bars(start_dt, h1_count, 1, base=100.0)
+    h4 = _make_bars(start_dt, h1_count // 4 + 2, 4, base=100.0)
+    d1 = _make_bars(start_dt, h1_count // 24 + 3, 24, base=100.0)
+    return {"D1": d1, "H4": h4, "H1": h1}
+
+
+def test_engine_a_v3_backtest_excludes_unclosed_higher_tf_bars(monkeypatch):
+    """Behavioral anti-lookahead guard for the ACTIVE Engine A V3 backtester.
+
+    Every prefix handed to the evaluator must contain, for each higher timeframe,
+    only bars that have fully CLOSED by the primary decision bar's close. A same-
+    day D1 (or same-4h H4) bar that is still forming at the decision would leak
+    its eventual close into scoring and inflate results vs live.
+    """
+    from engine_a_v3 import backtest as v3bt
+    from athena_app.services.market_state import candle_timestamp_epoch
+
+    start = datetime(2024, 1, 1, tzinfo=timezone.utc)
+    candles = _aligned_multi_tf_candles(start)
+
+    captured: list[dict] = []
+
+    def _recording_eval(pair, prefix, **kwargs):
+        captured.append({tf: list(rows) for tf, rows in prefix.items()})
+        return SimpleNamespace(decision="WATCH", qualified=False)
+
+    monkeypatch.setattr(v3bt, "evaluate_engine_a_v3", _recording_eval)
+
+    v3bt.run_v3_backtest(
+        {"display": "TEST/USD", "symbol": "TESTUSD", "type": "forex"},
+        candles,
+        horizon="intraday",
+        spread_bps=0.0,
+        commission_bps=0.0,
+        slippage_bps=0.0,
+        swap_bps_per_day=0.0,
     )
 
-    assert "d1_window = d1_raw[i - MIN_BARS : i]" in swing
-    assert "calc_indicators_with_normalized(\n                        d1_window" in swing
-    assert "entry_bar = d1_raw[i]" in swing
-    assert swing.index("d1_window = d1_raw[i - MIN_BARS : i]") < swing.index(
-        "entry_bar = d1_raw[i]"
-    )
+    assert captured, "run_v3_backtest never evaluated a bar"
+    tf_seconds = {"H1": 3600, "H4": 14400, "D1": 86400}
+    for prefix in captured:
+        primary = prefix["H1"]
+        assert primary, "empty primary prefix"
+        decision_close = candle_timestamp_epoch(primary[-1]) + tf_seconds["H1"]
+        for tf in ("D1", "H4"):
+            for bar in prefix[tf]:
+                bar_close = candle_timestamp_epoch(bar) + tf_seconds[tf]
+                assert bar_close <= decision_close, (
+                    f"{tf} bar closing at {bar_close} leaked into a decision "
+                    f"closing at {decision_close}"
+                )
 
-    assert "h4_window = h4_raw[i - MIN_H4 : i]" in intraday
-    assert "calc_indicators_with_normalized(\n                        h4_window" in intraday
-    assert "entry_bar = h4_raw[i]" in intraday
-    assert intraday.index("h4_window = h4_raw[i - MIN_H4 : i]") < intraday.index(
-        "entry_bar = h4_raw[i]"
-    )
 
-    assert "h1_window = h1_raw[i - MIN_H1 : i]" in scalp
-    assert "calc_indicators_with_normalized(\n                        h1_window" in scalp
-    assert "entry_bar = h1_raw[i]" in scalp
-    assert scalp.index("h1_window = h1_raw[i - MIN_H1 : i]") < scalp.index(
-        "entry_bar = h1_raw[i]"
-    )
+def test_engine_a_v3_confirmed_cutoff_excludes_same_day_d1():
+    """Unit check of the anti-lookahead cutoff rule used by _build_prefix_at."""
+    from engine_a_v3.backtest import confirmed_cutoff_open_epoch
+
+    # H4 decision bar opening 2024-01-05 08:00 UTC (closes 12:00).
+    primary_open = int(datetime(2024, 1, 5, 8, tzinfo=timezone.utc).timestamp())
+    cutoff = confirmed_cutoff_open_epoch("H4", primary_open, "D1")
+
+    same_day_d1 = int(datetime(2024, 1, 5, 0, tzinfo=timezone.utc).timestamp())
+    prev_day_d1 = int(datetime(2024, 1, 4, 0, tzinfo=timezone.utc).timestamp())
+    # Same-day D1 (closes 2024-01-06 00:00) is still forming → excluded.
+    assert same_day_d1 > cutoff
+    # Previous-day D1 (closed 2024-01-05 00:00) is confirmed → included.
+    assert prev_day_d1 <= cutoff
 
 
 def test_engine_b_backtest_validates_post_fill_level_sides_before_rr():
