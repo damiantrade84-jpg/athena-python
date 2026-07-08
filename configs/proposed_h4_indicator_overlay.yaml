@@ -1,0 +1,383 @@
+# =============================================================================
+# PROPOSED H4 INDICATOR OVERLAY - INACTIVE / NOT IMPORTED
+# =============================================================================
+# DO NOT merge into config.yaml or config.local.yaml.
+# config.py loads only config.yaml + config.local.yaml, not this file.
+# =============================================================================
+
+PROPOSED_H4_OVERLAY_META:
+  version: 2026-07-08-r1
+  status: proposed_inactive
+  import_into_live_config: false
+  live_behavior_changed_by_this_file: false
+  evidence_source:
+  - tools/h4_tuning_experiment.py
+  ranking_policy: h4_tuned_vs_h1_baseline_sl_rate_and_r_multiple
+  scaling_rules:
+    ema_trend: H1 value x 0.5
+    ema_momentum: H1 value x 0.25
+    ema_long: unchanged at 200
+    rsi: H1 value x 0.5
+    atr_adx: unchanged at 14/14
+    macd: unchanged at 12/26/9
+    sweep_lookback: 5 -> 2 bars on H4
+_proposed_active_settings:
+  ENGINE_A_EMA_PERIODS_BY_CLASS_H4:
+    config_key: ENGINE_A_EMA_PERIODS_BY_CLASS
+    engine: ENGINE_B
+    group: per_score_group
+    evidence_file: tools/_h4_tuning_experiment_results.csv
+    evidence_strength: pending
+    overfit_risk: medium
+    live_change_allowed: false
+    research_only: true
+    rollback_rule: Delete configs/proposed_h4_indicator_overlay.yaml or unset ATHENA_BT_H4_OVERLAY
+  ENGINE_A_RSI_PERIOD_BY_CLASS_H4:
+    config_key: ENGINE_A_RSI_PERIOD_BY_CLASS
+    engine: ENGINE_B
+    group: per_score_group
+    evidence_file: tools/_h4_tuning_experiment_results.csv
+    evidence_strength: pending
+    overfit_risk: medium
+    live_change_allowed: false
+    research_only: true
+    rollback_rule: Delete configs/proposed_h4_indicator_overlay.yaml or unset ATHENA_BT_H4_OVERLAY
+  ENGINE_B_SWEEP_LOOKBACK_BARS_H4:
+    config_key: ENGINE_B_SWEEP_LOOKBACK_BARS
+    engine: ENGINE_B
+    group: global
+    evidence_file: tools/_h4_tuning_experiment_results.csv
+    evidence_strength: pending
+    overfit_risk: medium
+    live_change_allowed: false
+    research_only: true
+    rollback_rule: Delete configs/proposed_h4_indicator_overlay.yaml or unset ATHENA_BT_H4_OVERLAY
+ENGINE_A_EMA_PERIODS_BY_CLASS:
+  default:
+    trend: 10
+    long: 200
+    momentum: 12
+  forex_majors:
+    trend: 13
+    long: 200
+    momentum: 15
+  forex_crosses:
+    trend: 13
+    long: 200
+    momentum: 15
+  forex_exotics:
+    trend: 12
+    long: 200
+    momentum: 14
+  forex_other:
+    trend: 13
+    long: 200
+    momentum: 15
+  crypto_btc:
+    trend: 9
+    long: 200
+    momentum: 10
+  crypto_eth:
+    trend: 9
+    long: 200
+    momentum: 10
+  crypto_doge:
+    trend: 9
+    long: 200
+    momentum: 10
+  crypto_alt_majors:
+    trend: 9
+    long: 200
+    momentum: 10
+  crypto_other:
+    trend: 9
+    long: 200
+    momentum: 10
+  precious_trackers:
+    trend: 10
+    long: 200
+    momentum: 12
+  energy_oil:
+    trend: 10
+    long: 200
+    momentum: 12
+  nat_gas:
+    trend: 10
+    long: 200
+    momentum: 12
+  copper:
+    trend: 10
+    long: 200
+    momentum: 12
+  pgm_metals:
+    trend: 10
+    long: 200
+    momentum: 12
+  base_metals:
+    trend: 10
+    long: 200
+    momentum: 12
+  softs:
+    trend: 10
+    long: 200
+    momentum: 12
+  commodity_other:
+    trend: 10
+    long: 200
+    momentum: 12
+  us_indices_trackers:
+    trend: 10
+    long: 200
+    momentum: 12
+  eu_indices:
+    trend: 10
+    long: 200
+    momentum: 12
+  asian_indices:
+    trend: 10
+    long: 200
+    momentum: 12
+  index_other:
+    trend: 10
+    long: 200
+    momentum: 12
+  us_stock_single:
+    trend: 10
+    long: 200
+    momentum: 12
+  bond_tlt:
+    trend: 17
+    long: 200
+    momentum: 20
+  smallcap_em_etf:
+    trend: 10
+    long: 200
+    momentum: 12
+  stock_other:
+    trend: 10
+    long: 200
+    momentum: 12
+  unknown:
+    trend: 10
+    long: 200
+    momentum: 12
+ENGINE_A_RSI_PERIOD_BY_CLASS:
+  default: 7
+  forex_majors: 9
+  forex_crosses: 9
+  forex_exotics: 8
+  forex_other: 9
+  crypto_btc: 6
+  crypto_eth: 6
+  crypto_doge: 6
+  crypto_alt_majors: 6
+  crypto_other: 6
+  precious_trackers: 7
+  energy_oil: 7
+  nat_gas: 7
+  copper: 7
+  pgm_metals: 7
+  base_metals: 7
+  softs: 7
+  commodity_other: 7
+  us_indices_trackers: 7
+  eu_indices: 7
+  asian_indices: 7
+  index_other: 7
+  us_stock_single: 7
+  bond_tlt: 10
+  smallcap_em_etf: 7
+  stock_other: 7
+  unknown: 7
+ENGINE_A_ATR_ADX_PERIODS_BY_CLASS:
+  default:
+    atr: 14
+    adx: 14
+  forex_majors:
+    atr: 14
+    adx: 14
+  forex_crosses:
+    atr: 14
+    adx: 14
+  forex_exotics:
+    atr: 14
+    adx: 14
+  forex_other:
+    atr: 14
+    adx: 14
+  crypto_btc:
+    atr: 14
+    adx: 14
+  crypto_eth:
+    atr: 14
+    adx: 14
+  crypto_doge:
+    atr: 14
+    adx: 14
+  crypto_alt_majors:
+    atr: 14
+    adx: 14
+  crypto_other:
+    atr: 14
+    adx: 14
+  precious_trackers:
+    atr: 14
+    adx: 14
+  energy_oil:
+    atr: 14
+    adx: 14
+  nat_gas:
+    atr: 14
+    adx: 14
+  copper:
+    atr: 14
+    adx: 14
+  pgm_metals:
+    atr: 14
+    adx: 14
+  base_metals:
+    atr: 14
+    adx: 14
+  softs:
+    atr: 14
+    adx: 14
+  commodity_other:
+    atr: 14
+    adx: 14
+  us_indices_trackers:
+    atr: 14
+    adx: 14
+  eu_indices:
+    atr: 14
+    adx: 14
+  asian_indices:
+    atr: 14
+    adx: 14
+  index_other:
+    atr: 14
+    adx: 14
+  us_stock_single:
+    atr: 14
+    adx: 14
+  bond_tlt:
+    atr: 14
+    adx: 14
+  smallcap_em_etf:
+    atr: 14
+    adx: 14
+  stock_other:
+    atr: 14
+    adx: 14
+  unknown:
+    atr: 14
+    adx: 14
+ENGINE_A_MACD_PARAMS_BY_CLASS:
+  default:
+    fast: 12
+    slow: 26
+    signal: 9
+  forex_majors:
+    fast: 12
+    slow: 26
+    signal: 9
+  forex_crosses:
+    fast: 12
+    slow: 26
+    signal: 9
+  forex_exotics:
+    fast: 12
+    slow: 26
+    signal: 9
+  forex_other:
+    fast: 12
+    slow: 26
+    signal: 9
+  crypto_btc:
+    fast: 12
+    slow: 26
+    signal: 9
+  crypto_eth:
+    fast: 12
+    slow: 26
+    signal: 9
+  crypto_doge:
+    fast: 12
+    slow: 26
+    signal: 9
+  crypto_alt_majors:
+    fast: 12
+    slow: 26
+    signal: 9
+  crypto_other:
+    fast: 12
+    slow: 26
+    signal: 9
+  precious_trackers:
+    fast: 12
+    slow: 26
+    signal: 9
+  energy_oil:
+    fast: 12
+    slow: 26
+    signal: 9
+  nat_gas:
+    fast: 12
+    slow: 26
+    signal: 9
+  copper:
+    fast: 12
+    slow: 26
+    signal: 9
+  pgm_metals:
+    fast: 12
+    slow: 26
+    signal: 9
+  base_metals:
+    fast: 12
+    slow: 26
+    signal: 9
+  softs:
+    fast: 12
+    slow: 26
+    signal: 9
+  commodity_other:
+    fast: 12
+    slow: 26
+    signal: 9
+  us_indices_trackers:
+    fast: 12
+    slow: 26
+    signal: 9
+  eu_indices:
+    fast: 12
+    slow: 26
+    signal: 9
+  asian_indices:
+    fast: 12
+    slow: 26
+    signal: 9
+  index_other:
+    fast: 12
+    slow: 26
+    signal: 9
+  us_stock_single:
+    fast: 12
+    slow: 26
+    signal: 9
+  bond_tlt:
+    fast: 12
+    slow: 26
+    signal: 9
+  smallcap_em_etf:
+    fast: 12
+    slow: 26
+    signal: 9
+  stock_other:
+    fast: 12
+    slow: 26
+    signal: 9
+  unknown:
+    fast: 12
+    slow: 26
+    signal: 9
+ENGINE_B_SWEEP_LOOKBACK_BARS: 2
