@@ -117,6 +117,31 @@ def test_pre_trade_check_blocks_h4_only_staleness():
         CONFIG["ENGINE_A_STALE_CANDLE_GUARD"] = original
 
 
+def test_pre_trade_check_allows_mt5_stock_h4_one_bucket_lag():
+    original = CONFIG.get("ENGINE_A_STALE_CANDLE_GUARD", True)
+    try:
+        CONFIG["ENGINE_A_STALE_CANDLE_GUARD"] = True
+        signal = _base_signal()
+        signal["type"] = "stock"
+        signal["pair"] = "PYPL"
+        signal["candleFetchMeta"] = {
+            "H1": {"lastBarStale": False, "lastBarAgeSec": 0},
+            "H4": {
+                "lastBarStale": False,
+                "lastBarAgeSec": 10449,
+                "stalenessSeverity": "stale_1_bucket",
+                "bucketLag": 1,
+            },
+        }
+
+        ok, reason = pre_trade_check(signal, [], {"balance": 1000.0, "equity": 1000.0})
+
+        assert ok is True
+        assert reason == "OK"
+    finally:
+        CONFIG["ENGINE_A_STALE_CANDLE_GUARD"] = original
+
+
 def test_pre_trade_check_blocks_multiple_stale_timeframes():
     original = CONFIG.get("ENGINE_A_STALE_CANDLE_GUARD", True)
     try:

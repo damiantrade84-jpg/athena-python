@@ -82,6 +82,28 @@ def test_annotate_mt5_forex_h4_one_bucket_lag_not_last_bar_stale():
     assert out["lastBarStale"] is False
 
 
+def test_annotate_mt5_stock_h4_one_bucket_lag_not_last_bar_stale():
+    """MT5 US equities (e.g. PYPL) share confirmed-only H4 lag; must not block quick-exec."""
+    meta = {}
+    candles = [{"time": _epoch("2026-04-24T07:00:00Z"), "close": 75.0}]
+    pair = {"type": "stock", "source": "mt5", "display": "PYPL"}
+
+    out = _annotate_fetch_meta_with_bar_freshness(
+        meta,
+        candles,
+        "H4",
+        now=_epoch("2026-04-24T11:30:00Z"),
+        offset_hours=3.0,
+        live_feed=True,
+        pair=pair,
+    )
+
+    assert out["bucketLag"] == 1
+    assert out["stalenessSeverity"] == "stale_1_bucket"
+    assert out["lastBarStale"] is False
+    assert out["lastBarAgeSec"] < 2 * 14_400
+
+
 def test_live_forex_fetch_meta_exposes_h4_one_bucket_lag(monkeypatch):
     monkeypatch.setitem(CONFIG, "FOREX_H4_RESAMPLE_OFFSET_HOURS", 1.0)
     monkeypatch.setattr(

@@ -164,17 +164,20 @@ def _annotate_fetch_meta_with_bar_freshness(
             except Exception:
                 pass
         # #endregion
-        # MT5 forex H1/H4: Engine A confirmed-only pipeline often lags provider series by
+        # MT5 forex/stock H1/H4: confirmed-only pipeline often lags provider series by
         # exactly one closed bar while ticks are fresh; risk/data-freshness treats this as
         # policy-normal (CONFIRMED_ONLY_OK). Align lastBarStale so guardian/quick-exec matches.
-        forex_mt5_struct = (
+        _mt5_confirmed_only_types = frozenset(
+            {"forex", "stock", "index", "commodity", "etf", "etf_bond"}
+        )
+        mt5_session_struct = (
             pt is not None
-            and str(pt.get("type") or "").lower() == "forex"
+            and str(pt.get("type") or "").lower() in _mt5_confirmed_only_types
             and str(pt.get("source") or "").lower() == "mt5"
             and tf_u in {"H1", "H4"}
         )
         age_exceeds_cap = age_sec > (2 * tf_seconds)
-        if forex_mt5_struct and severity == "stale_1_bucket":
+        if mt5_session_struct and severity == "stale_1_bucket":
             fetch_meta["lastBarStale"] = bool(age_exceeds_cap)
         else:
             fetch_meta["lastBarStale"] = bool(
