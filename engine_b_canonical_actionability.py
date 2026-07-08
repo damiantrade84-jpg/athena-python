@@ -21,11 +21,13 @@ from market_structure import (
 
 STATUS_ACTIONABLE = "ACTIONABLE"
 STATUS_WARNING_ONLY = "WARNING_ONLY"
+STATUS_REJECT_STRUCTURE = "REJECT_STRUCTURE"
 STATUS_REJECT_NO_TRIGGER = "REJECT_NO_TRIGGER"
 STATUS_REJECT_NO_ROOM = "REJECT_NO_ROOM"
 STATUS_REJECT_STRUCTURAL_TP = "REJECT_STRUCTURAL_TP"
 STATUS_REJECT_ENTRY_LOCATION = "REJECT_ENTRY_LOCATION"
 STATUS_REJECT_RR_QUALITY = "REJECT_RR_QUALITY"
+STATUS_REJECT_CONFIDENCE = "REJECT_CONFIDENCE_GATE"
 STATUS_REJECT_DATA = "REJECT_DATA"
 STATUS_REJECT_CONFLICT = "REJECT_CONFLICT"
 STATUS_REJECT_LEARNING = "REJECT_LEARNING_CONTEXT"
@@ -41,11 +43,13 @@ REASON_LEARNING_NEGATIVE = "LEARNING_CONTEXT_NEGATIVE"
 
 _REJECT_STATUSES = frozenset(
     {
+        STATUS_REJECT_STRUCTURE,
         STATUS_REJECT_NO_TRIGGER,
         STATUS_REJECT_NO_ROOM,
         STATUS_REJECT_STRUCTURAL_TP,
         STATUS_REJECT_ENTRY_LOCATION,
         STATUS_REJECT_RR_QUALITY,
+        STATUS_REJECT_CONFIDENCE,
         STATUS_REJECT_DATA,
         STATUS_REJECT_CONFLICT,
         STATUS_REJECT_LEARNING,
@@ -81,11 +85,13 @@ _STRUCTURE_AUDIT_COLUMNS = [
 
 _STATUS_PRIORITY = (
     STATUS_REJECT_DATA,
+    STATUS_REJECT_STRUCTURE,
     STATUS_REJECT_NO_TRIGGER,
     STATUS_REJECT_ENTRY_LOCATION,
     STATUS_REJECT_NO_ROOM,
     STATUS_REJECT_STRUCTURAL_TP,
     STATUS_REJECT_RR_QUALITY,
+    STATUS_REJECT_CONFIDENCE,
     STATUS_REJECT_LEARNING,
     STATUS_REJECT_CONFLICT,
     STATUS_DEBUG_ONLY,
@@ -229,10 +235,26 @@ def _code_present(codes: list[str], token: str) -> bool:
     return token in codes
 
 
+_LEGACY_IS_ACTIONABLE_KEY = "engine_b_legacy_is_actionable"
+
+
+def _legacy_is_actionable(conf: dict[str, Any]) -> Any:
+    """Pre-reconciliation ``is_actionable`` value.
+
+    The reconciler itself writes ``is_actionable`` into the conf dict, so on
+    re-runs we must read the snapshot taken before the first reconciliation —
+    otherwise our own output is mistaken for a legacy explicit NO/conflict.
+    """
+    if _LEGACY_IS_ACTIONABLE_KEY in conf:
+        return conf.get(_LEGACY_IS_ACTIONABLE_KEY)
+    return conf.get("is_actionable")
+
+
 def _legacy_ai_calibration_actionable(conf: dict[str, Any]) -> bool:
     """Pre-fix AI calibration derivation (audit only): is_actionable then passed."""
-    if conf.get("is_actionable") is not None:
-        return bool(conf.get("is_actionable"))
+    legacy = _legacy_is_actionable(conf)
+    if legacy is not None:
+        return bool(legacy)
     if conf.get("passed") is not None:
         return bool(conf.get("passed"))
     if conf.get("checklist_passed") is not None:
@@ -242,15 +264,21 @@ def _legacy_ai_calibration_actionable(conf: dict[str, Any]) -> bool:
 
 def _playbook_actionable_raw(conf: dict[str, Any]) -> bool:
     """Playbook line uses is_actionable only; unset reads as NO."""
-    return conf.get("is_actionable") is True
+    return _legacy_is_actionable(conf) is True
 
 
 def _actionability_conflict(conf: dict[str, Any]) -> bool:
-    """Engine B Actionable=NO (unset/false) while legacy AI path reads True via passed."""
-    if _playbook_actionable_raw(conf):
+    """Legacy playbook said NO (explicit False) while AI path read True via passed.
+
+    An *unset* legacy is_actionable is not a conflict: nothing in the engine
+    pipeline sets it — the reconciler is the component that computes it. Only an
+    explicit legacy False against an inflated passed/checklist True is a real
+    display contradiction, and it is reported as a diagnostic, not a rejection.
+    """
+    legacy = _legacy_is_actionable(conf)
+    if legacy is not False:
         return False
-    inflated = bool(conf.get("passed")) or bool(conf.get("checklist_passed"))
-    return inflated and conf.get("is_actionable") is not True
+    return bool(conf.get("passed")) or bool(conf.get("checklist_passed"))
 
 
 def _style_min_rr(style_profile: dict[str, Any] | None, conf: dict[str, Any]) -> float | None:
@@ -365,53 +393,37 @@ def _pick_primary_status(status_reasons: list[tuple[str, str]]) -> tuple[str | N
 def _derive_canonical_gate_fields(
     *,
     conf: dict[str, Any],
-    direction: str,
-    entry_inside_support: bool,
-    entry_inside_resistance: bool,
-    tp_inside_support: bool,
-    tp_inside_resistance: bool,
-    support_too_close: bool,
-    resistance_too_close: bool,
-    structural_tp_too_close: bool,
-    trigger_ok: bool | None,
-    room_ok: bool | None,
-    no_trigger_pattern: bool,
-    partial_rr_fail: bool,
+    structure_gate_ok: bool | None,
+    location_gate_ok: bool | None,
+    entry_gate_ok: bool | None,
+    space_gate_ok: bool | None,
+    rr_gate_ok: bool | None,
     canonical_actionable: bool,
     primary_status: str,
     primary_reason: str | None,
     all_reasons: list[str],
 ) -> dict[str, Any]:
+    """Canonical gate booleans mirror the engine's real gates.
+
+    Zone-containment flags, capped-TP and partial-RR conditions are surfaced as
+    diagnostics only — Engine B is a zone-retest engine, so entry AT a zone is
+    the setup its own location gate validated, not a canonical failure.
+    """
     raw_structure_ok = _raw_bool_gate(conf, "structure_ok")
     raw_location_ok = _raw_bool_gate(conf, "location_ok")
     raw_trigger_ok = _raw_bool_gate(conf, "trigger_ok")
     raw_room_ok = _raw_bool_gate(conf, "room_ok")
     raw_rr_ok = _raw_bool_gate(conf, "rr_ok")
 
-    location_blocked = (
-        (direction == "LONG" and entry_inside_resistance)
-        or (direction == "SHORT" and entry_inside_support)
-        or (direction == "LONG" and resistance_too_close)
-        or (direction == "SHORT" and support_too_close)
-    )
-    room_blocked = (
-        room_ok is False
-        or structural_tp_too_close
-        or (direction == "LONG" and resistance_too_close)
-        or (direction == "SHORT" and support_too_close)
-        or (direction == "LONG" and tp_inside_resistance)
-        or (direction == "SHORT" and tp_inside_support)
-    )
-
-    canonical_structure_ok = raw_structure_ok is not False
-    canonical_location_ok = not location_blocked and raw_location_ok is not False
-    canonical_trigger_ok = trigger_ok is not False and not no_trigger_pattern
-    canonical_room_ok = not room_blocked and raw_room_ok is not False
-    canonical_rr_ok = not partial_rr_fail
+    canonical_structure_ok = structure_gate_ok is not False
+    canonical_location_ok = location_gate_ok is not False
+    canonical_trigger_ok = entry_gate_ok is not False
+    canonical_room_ok = space_gate_ok is not False
+    canonical_rr_ok = rr_gate_ok is not False
     canonical_trade_ok = canonical_actionable
 
     confidence_passed = bool(conf.get("passed")) or bool(conf.get("checklist_passed"))
-    room_rr_ok = canonical_room_ok and canonical_rr_ok and not structural_tp_too_close
+    room_rr_ok = canonical_room_ok and canonical_rr_ok
     if confidence_passed and not canonical_trade_ok:
         confidence_badge = "PASSED_GATE_FAILED"
     elif confidence_passed:
@@ -464,7 +476,6 @@ def evaluate_ui_consistency(
     canonical_location_ok = bool(canonical_fields.get("canonical_location_ok"))
     canonical_room_ok = bool(canonical_fields.get("canonical_room_ok"))
     canonical_rr_ok = bool(canonical_fields.get("canonical_rr_ok"))
-    structural_tp_too_close = bool(conf.get("structural_tp_too_close"))
     reasons = canonical_fields.get("canonical_secondary_reject_reasons") or []
     primary = canonical_fields.get("canonical_primary_reject_reason")
     all_reason_codes = set(reasons)
@@ -485,14 +496,10 @@ def evaluate_ui_consistency(
     raw_room_rr_pass = (raw_room_ok is True or raw_rr_ok is True) and not (
         raw_room_ok is False and raw_rr_ok is False
     )
-    canonical_room_rr_pass = (
-        canonical_room_ok and canonical_rr_ok and not structural_tp_too_close
-    )
+    canonical_room_rr_pass = canonical_room_ok and canonical_rr_ok
     if raw_room_rr_pass and not canonical_room_rr_pass:
         if raw_room_ok is False:
             inconsistencies.append("room_rr_badge_ok_but_room_ok_false")
-        if structural_tp_too_close:
-            inconsistencies.append("room_rr_badge_ok_but_structural_tp_too_close")
         if not inconsistencies:
             inconsistencies.append("room_rr_badge_ok_but_canonical_room_rr_false")
 
@@ -557,12 +564,27 @@ def reconcile_engine_b_actionability(
 
     trigger_ok = _bool(conf.get("trigger_ok"))
     room_ok = _bool(conf.get("room_ok"))
+    # Actual engine gates. ``entry_ok`` accepts structural catalysts (BOS with
+    # volume, liquidity sweep, CHoCH) beyond raw candle triggers; the space gate
+    # allows RR substitution. Fall back to the raw flags for legacy payloads.
+    entry_gate_ok = _bool(conf.get("entry_ok"))
+    if entry_gate_ok is None:
+        entry_gate_ok = trigger_ok
+    space_gate_ok = _bool(conf.get("space_gate_ok"))
+    if space_gate_ok is None:
+        space_gate_ok = room_ok
+    location_gate_ok = _bool(conf.get("location_ok"))
+    structure_gate_ok = _bool(conf.get("structure_ok"))
+    rr_gate_ok = _bool(conf.get("rr_ok"))
+    passed_flag = _bool(conf.get("passed"))
+    execution_levels_valid = _bool(conf.get("execution_levels_valid"))
     support_too_close = _code_present(codes, ENGINE_B_REASON_SUPPORT_TOO_CLOSE)
     resistance_too_close = _code_present(codes, ENGINE_B_REASON_RESISTANCE_TOO_CLOSE)
     structural_tp_too_close = _code_present(codes, ENGINE_B_REASON_STRUCTURAL_TP_TOO_CLOSE) or bool(
         res.get("tp_structural_limited")
     )
     no_trigger_pattern = _code_present(codes, ENGINE_B_REASON_NO_TRIGGER_PATTERN)
+    legacy_is_actionable = _legacy_is_actionable(conf)
 
     entry_inside_support = _price_in_zone(sup_lo, sup_hi, entry_f)
     entry_inside_resistance = _price_in_zone(res_lo, res_hi, entry_f)
@@ -583,6 +605,7 @@ def reconcile_engine_b_actionability(
 
     status_reasons: list[tuple[str, str]] = []
     extra_reasons: list[str] = []
+    diagnostics: list[str] = []
 
     def _add(status: str, reason: str) -> None:
         status_reasons.append((status, reason))
@@ -591,42 +614,79 @@ def reconcile_engine_b_actionability(
     if _data_stale(freshness):
         _add(STATUS_REJECT_DATA, "CANDLE_FRESHNESS_STALE")
 
-    if trigger_ok is False or no_trigger_pattern:
+    # ── Rejections mirror the engine's real gate decisions ──────────────────
+    if structure_gate_ok is False:
+        _add(STATUS_REJECT_STRUCTURE, "STRUCTURE_GATE_FAILED")
+
+    if entry_gate_ok is False:
         _add(
             STATUS_REJECT_NO_TRIGGER,
-            "TRIGGER_NOT_OK" if trigger_ok is False else ENGINE_B_REASON_NO_TRIGGER_PATTERN,
+            ENGINE_B_REASON_NO_TRIGGER_PATTERN if no_trigger_pattern else "TRIGGER_NOT_OK",
         )
 
+    if location_gate_ok is False:
+        if direction == "SHORT" and entry_inside_support:
+            _add(STATUS_REJECT_ENTRY_LOCATION, "SHORT_ENTRY_INSIDE_SUPPORT")
+        elif direction == "LONG" and entry_inside_resistance:
+            _add(STATUS_REJECT_ENTRY_LOCATION, "LONG_ENTRY_INSIDE_RESISTANCE")
+        else:
+            _add(STATUS_REJECT_ENTRY_LOCATION, "LOCATION_GATE_FAILED")
+
+    if space_gate_ok is False:
+        if direction == "SHORT" and support_too_close:
+            _add(STATUS_REJECT_NO_ROOM, ENGINE_B_REASON_SUPPORT_TOO_CLOSE)
+        elif direction == "LONG" and resistance_too_close:
+            _add(STATUS_REJECT_NO_ROOM, ENGINE_B_REASON_RESISTANCE_TOO_CLOSE)
+        elif room_ok is False:
+            _add(STATUS_REJECT_NO_ROOM, "ROOM_OK_FALSE")
+        else:
+            _add(STATUS_REJECT_NO_ROOM, "SPACE_GATE_FAILED")
+
+    if execution_levels_valid is False:
+        _add(
+            STATUS_REJECT_STRUCTURAL_TP,
+            str(conf.get("execution_level_reject_reason") or "EXECUTION_LEVELS_INVALID"),
+        )
+
+    if rr_gate_ok is False:
+        _add(STATUS_REJECT_RR_QUALITY, "RR_GATE_FAILED")
+
+    if passed_flag is False and not status_reasons:
+        _add(STATUS_REJECT_CONFIDENCE, "ENGINE_B_CONFIDENCE_PASSED_FALSE")
+
+    if legacy_is_actionable is False:
+        _add(STATUS_DEBUG_ONLY, "ENGINE_B_ACTIONABLE_EXPLICIT_NO")
+
+    # ── Diagnostics: real conditions, but not canonical rejections ──────────
+    # Engine B is a zone-retest engine — nearest zones are selected to include
+    # bands containing price, so entry-inside-zone is the setup its location
+    # gate validated, not a failure of it.
     if direction == "SHORT" and entry_inside_support:
-        _add(STATUS_REJECT_ENTRY_LOCATION, "SHORT_ENTRY_INSIDE_SUPPORT")
+        diagnostics.append("SHORT_ENTRY_INSIDE_SUPPORT")
     if direction == "LONG" and entry_inside_resistance:
-        _add(STATUS_REJECT_ENTRY_LOCATION, "LONG_ENTRY_INSIDE_RESISTANCE")
-
-    if room_ok is False:
-        _add(STATUS_REJECT_NO_ROOM, "ROOM_OK_FALSE")
-    if direction == "SHORT" and support_too_close:
-        _add(STATUS_REJECT_NO_ROOM, ENGINE_B_REASON_SUPPORT_TOO_CLOSE)
-    if direction == "LONG" and resistance_too_close:
-        _add(STATUS_REJECT_NO_ROOM, ENGINE_B_REASON_RESISTANCE_TOO_CLOSE)
-
-    if structural_tp_too_close:
-        _add(STATUS_REJECT_STRUCTURAL_TP, ENGINE_B_REASON_STRUCTURAL_TP_TOO_CLOSE)
+        diagnostics.append("LONG_ENTRY_INSIDE_RESISTANCE")
     if direction == "SHORT" and tp_inside_support:
-        _add(STATUS_REJECT_STRUCTURAL_TP, "SHORT_TP1_INSIDE_SUPPORT")
+        diagnostics.append("SHORT_TP1_INSIDE_SUPPORT")
     if direction == "LONG" and tp_inside_resistance:
-        _add(STATUS_REJECT_STRUCTURAL_TP, "LONG_TP1_INSIDE_RESISTANCE")
+        diagnostics.append("LONG_TP1_INSIDE_RESISTANCE")
+    if structural_tp_too_close:
+        diagnostics.append(ENGINE_B_REASON_STRUCTURAL_TP_TOO_CLOSE)
+    if no_trigger_pattern and entry_gate_ok is not False:
+        diagnostics.append(ENGINE_B_REASON_NO_TRIGGER_PATTERN)
+    if support_too_close and space_gate_ok is not False:
+        diagnostics.append(ENGINE_B_REASON_SUPPORT_TOO_CLOSE)
+    if resistance_too_close and space_gate_ok is not False:
+        diagnostics.append(ENGINE_B_REASON_RESISTANCE_TOO_CLOSE)
 
     allow_rr1_below = bool(_cfg().get("ALLOW_RR1_BELOW_MIN_IN_RESEARCH", False))
     partial_rr_fail = False
-    if style_min_rr is not None and rr1 is not None and rr1 < style_min_rr and not allow_rr1_below:
+    if style_min_rr is not None and rr1 is not None and rr1 < style_min_rr:
         partial_rr_fail = True
-        _add(STATUS_REJECT_RR_QUALITY, REASON_PARTIAL_RR)
+        if not allow_rr1_below:
+            diagnostics.append(REASON_PARTIAL_RR)
 
     if _actionability_conflict(conf):
-        _add(STATUS_REJECT_CONFLICT, REASON_CONFLICT)
-
-    if conf.get("is_actionable") is False:
-        _add(STATUS_DEBUG_ONLY, "ENGINE_B_ACTIONABLE_EXPLICIT_NO")
+        diagnostics.append(REASON_CONFLICT)
 
     primary_status, primary_reason, all_reasons = _pick_primary_status(status_reasons)
 
@@ -652,18 +712,11 @@ def reconcile_engine_b_actionability(
 
     canonical_gate_fields = _derive_canonical_gate_fields(
         conf=conf,
-        direction=direction,
-        entry_inside_support=entry_inside_support,
-        entry_inside_resistance=entry_inside_resistance,
-        tp_inside_support=tp_inside_support,
-        tp_inside_resistance=tp_inside_resistance,
-        support_too_close=support_too_close,
-        resistance_too_close=resistance_too_close,
-        structural_tp_too_close=structural_tp_too_close,
-        trigger_ok=trigger_ok,
-        room_ok=room_ok,
-        no_trigger_pattern=no_trigger_pattern,
-        partial_rr_fail=partial_rr_fail,
+        structure_gate_ok=structure_gate_ok,
+        location_gate_ok=location_gate_ok,
+        entry_gate_ok=entry_gate_ok,
+        space_gate_ok=space_gate_ok,
+        rr_gate_ok=rr_gate_ok,
         canonical_actionable=canonical_actionable,
         primary_status=primary_status,
         primary_reason=primary_reason,
@@ -677,6 +730,8 @@ def reconcile_engine_b_actionability(
         "engine_b_canonical_actionable": canonical_actionable,
         "engine_b_canonical_status": primary_status,
         "engine_b_rejection_reasons": reasons,
+        "engine_b_canonical_diagnostics": sorted(set(diagnostics)),
+        _LEGACY_IS_ACTIONABLE_KEY: legacy_is_actionable,
         "engine_b_actionable_raw": playbook_raw,
         "engine_b_playbook_actionable_raw": playbook_raw,
         "ai_calibration_actionable_raw": ai_raw,
@@ -965,6 +1020,7 @@ def apply_to_naked_signal(
     signal["engine_b_canonical_actionable"] = conf.get("engine_b_canonical_actionable")
     signal["engine_b_canonical_status"] = conf.get("engine_b_canonical_status")
     signal["engine_b_rejection_reasons"] = conf.get("engine_b_rejection_reasons")
+    signal["engine_b_canonical_diagnostics"] = conf.get("engine_b_canonical_diagnostics")
     for key in (
         "canonical_structure_ok",
         "canonical_location_ok",

@@ -83,8 +83,18 @@ export default function EngineASignalCard({
   const bBreakdown = isNakedScan
     ? engineBScoreBreakdown((signal.naked_data || signal.engine_b || signal) as Record<string, unknown>)
     : null;
-  const conf = isNakedScan && bBreakdown?.gateScore != null && bBreakdown.minScore
-    ? Math.max(0, Math.min(100, Math.round((bBreakdown.gateScore / bBreakdown.minScore) * 67)))
+  // Engine B percent must come from the quality total, not gateScore/minScore:
+  // gate score is a fixed gate count, so that ratio is identical on every
+  // passing card of a style.
+  const nakedPct = isNakedScan
+    ? toNum(raw.confluencePct ?? raw.score_pct ?? raw.edgeProbability, NaN)
+    : NaN;
+  const conf = isNakedScan
+    ? (Number.isFinite(nakedPct)
+        ? Math.max(0, Math.min(100, Math.round(nakedPct)))
+        : bBreakdown?.totalScore != null && bBreakdown.totalMax
+          ? Math.max(0, Math.min(100, Math.round((bBreakdown.totalScore / bBreakdown.totalMax) * 100)))
+          : null)
     : confluencePct(signal);
   const conv = toNum(signal.conviction, NaN);
   const convT = convictionTier(Number.isFinite(conv) ? conv : null);

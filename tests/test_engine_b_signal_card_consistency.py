@@ -106,4 +106,8 @@ def test_reconcile_populates_signal_card_audit_fields():
     assert "canonical_location_ok" in out
     assert "canonical_badge_state" in out
     assert out["raw_location_ok"] is True
-    assert out["canonical_location_ok"] is False
+    # Location gate passed → canonical location mirrors the engine gate; the
+    # room/space gate failure is what makes the card non-actionable.
+    assert out["canonical_location_ok"] is True
+    assert out["canonical_room_ok"] is False
+    assert out["canonical_trade_ok"] is False
