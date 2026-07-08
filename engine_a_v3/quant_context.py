@@ -1,29 +1,56 @@
-"""Engine A quant scorer — relative-volume context assembler.
-
-Maps the app's forex/crypto volume-ratio feeds to the `volume_ratio` input
-`engine_a_v3.quant_scorer._volume_component` consumes.
-
-Subsystem signals (carry/sentiment/microstructure/intermarket) were previously
-assembled here too, but `quant_scorer.score_pair` never wired them into
-direction/confluence (no caller reads anything but `volume_ratio` from this
-context dict), so that dead plumbing was removed (2026-06-30). See
-`athena_research/engine_a_ablation/shadow_scorer.py` for the research-only
-ablation studying whether/how to add subsystem signals with point-in-time-safe
-data and walk-forward evidence before any live wiring.
-"""
+"""Engine A quant scorer — context assembler for volume and subsystem signals."""
 
 from __future__ import annotations
 
 from typing import Any
 
+from engine_a_v3.subsystems import ST_NA, ST_UNAVAILABLE, z_to_subsystem_entry, subsystems_enabled
 
-def build_quant_context(*, volume_ratio: Any = None) -> dict[str, Any]:
-    """Assemble the quant scorer's context. Only populated keys are returned;
-    absent keys are treated as neutral by the scorer."""
+
+def _carry_entry(display: str, *, as_of_date: str | None = None) -> dict[str, Any]:
+    try:
+        from carry_feed import _PAIR_CARRY_FORMULA, get_carry_z
+
+        if not _PAIR_CARRY_FORMULA.get(display):
+            return {"state": ST_NA}
+        return z_to_subsystem_entry(get_carry_z(display, as_of_date=as_of_date))
+    except Exception:
+        return {"state": ST_UNAVAILABLE}
+
+
+def _sentiment_entry(display: str, *, as_of_date: str | None = None) -> dict[str, Any]:
+    try:
+        from cot_feed import _PAIR_FORMULA, get_cot_z
+
+        if not _PAIR_FORMULA.get(display):
+            return {"state": ST_NA}
+        return z_to_subsystem_entry(get_cot_z(display, as_of_date=as_of_date))
+    except Exception:
+        return {"state": ST_UNAVAILABLE}
+
+
+def build_quant_context(
+    *,
+    volume_ratio: Any = None,
+    display: str | None = None,
+    as_of_date: str | None = None,
+    subsystem_entries: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Assemble the quant scorer context. Only populated keys are returned."""
     context: dict[str, Any] = {}
     if volume_ratio is not None:
         try:
             context["volume_ratio"] = float(volume_ratio)
         except (TypeError, ValueError):
             pass
+
+    if subsystem_entries:
+        context.update(subsystem_entries)
+        return context
+
+    if not subsystems_enabled() or not display:
+        return context
+
+    context["carry"] = _carry_entry(display, as_of_date=as_of_date)
+    context["sentiment"] = _sentiment_entry(display, as_of_date=as_of_date)
     return context

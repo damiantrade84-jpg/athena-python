@@ -129,7 +129,7 @@ class EngineASetupSignal:
                     "TRADE": "trade",
                     "WATCH": "watchlist",
                     "NO_SIGNAL": "skip",
-                }[self.decision],
+                }.get(self.decision, "skip"),
                 "signalClass": self.setupId,
                 "score": self.confluenceScore,
                 "threshold": self.confluenceThreshold,

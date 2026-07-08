@@ -136,8 +136,8 @@ def test_setup_direction_conflict_falls_back_to_quant_path(monkeypatch):
 
     def _fake_score_pair(route, horizon, candles, *, context=None, profile=None, snapshot_cache=None):
         return QuantScore(
-            direction="LONG", confluence_score=1.0, max_score=3.0, score_norm=0.3333,
-            conviction=0.3333, decision="WATCH", threshold=2.1, level_style="trend",
+            direction="LONG", confluence_score=1.1, max_score=3.0, score_norm=0.3667,
+            conviction=0.3667, decision="WATCH", threshold=2.1, level_style="trend",
             factor_scores={}, factor_diagnostics={}, components={},
         )
 

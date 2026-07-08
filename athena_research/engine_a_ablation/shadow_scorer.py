@@ -200,7 +200,9 @@ def compute_components(
     momentum, _ = _momentum_component(
         momentum_snap, asset_type, getattr(route, "score_group", "unknown")
     )
-    location, level_style = _location_component(entry_snap)
+    location, level_style = _location_component(
+        entry_snap, asset_type, getattr(route, "score_group", "unknown")
+    )
     volume = _volume_component(entry_snap, candles.get(entry_tf) or [], context)
 
     comps: dict[str, Component] = {

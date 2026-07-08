@@ -14058,7 +14058,7 @@ def analyze_pair(
             _v3_vr = _get_forex_vr(pair.get("display", ""), tf="H1", lookback=20)
         except Exception:
             _v3_vr = None
-    _v3_ctx = build_quant_context(volume_ratio=_v3_vr)
+    _v3_ctx = build_quant_context(volume_ratio=_v3_vr, display=pair.get("display"))
 
     _v3_signal = evaluate_engine_a_v3(
         pair,

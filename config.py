@@ -1829,10 +1829,38 @@ CONFIG: dict = {
     # trend-pullback/breakout setups; "mean_reversion" swaps in the range-fade
     # (counter-trend) specialist. Reversible; default preserves existing behavior.
     "ENGINE_A_V3_FOREX_THESIS": "trend",
+    "ENGINE_A_V3_SETUP_UPGRADE": {
+        "ENABLED": True,
+        "MIN_CONFLUENCE_FRAC": 0.5,
+    },
     "ENGINE_A_V3_MEAN_REVERSION": {
         "Z_ENTRY": 1.5,
         "EFF_MAX": 0.35,
         "LOOKBACK": 20,
+    },
+    "ENGINE_A_V3_SUBSYSTEMS": {
+        "ENABLED": True,
+        "WEIGHTS_BY_FAMILY": {},
+    },
+    "ENGINE_A_V3_MOMENTUM_BLEND": {
+        "ENABLED": True,
+        "RSI_WEIGHT": 0.35,
+        "DI_WEIGHT": 0.35,
+        "MACD_SLOPE_WEIGHT": 0.30,
+    },
+    "ENGINE_A_V3_VOLATILITY_GATING": {
+        "ENABLED": True,
+        "TP2_R_MIN": 1.5,
+        "TP2_R_MAX": 2.5,
+        "ATR_PCT_LOW": 0.3,
+        "ATR_PCT_HIGH": 0.9,
+    },
+    "ENGINE_A_V3_TREND_HEALTH": {
+        "ENABLED": True,
+        "STALE_ALIGNMENT_BARS": 8,
+        "BAR_PENALTY": 0.03,
+        "FLOOR": 0.75,
+        "ADX_WEAKENING_PENALTY": 0.15,
     },
     "ENGINE_A_SCORING_PROFILE": {
         "ENABLED": True,

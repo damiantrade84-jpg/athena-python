@@ -146,6 +146,7 @@ def _build_levels(
     *,
     direction: str,
     level_style: str,
+    atr_pct: float | None = None,
 ) -> StructuralLevels | None:
     """Route to the correct level builder by style."""
     if direction not in {"LONG", "SHORT"}:
@@ -154,7 +155,7 @@ def _build_levels(
         return build_mean_reversion_levels(primary, direction=direction)
     if level_style == "london_open":
         return build_london_open_breakout_levels(primary, direction=direction)
-    return build_structural_levels(primary, direction=direction)
+    return build_structural_levels(primary, direction=direction, atr_pct=atr_pct)
 
 
 def evaluate_engine_a_v3(
@@ -302,6 +303,24 @@ def evaluate_engine_a_v3(
             setup_diagnostics["directionConflictBlocked"] = True
             setup_diagnostics["quantDirection"] = quant.direction
 
+    # Quality floor for setup upgrades: a structural setup may only promote
+    # WATCH -> TRADE when quant confluence meets a minimum fraction of threshold.
+    # Config-gated (default ON); disable via ENGINE_A_V3_SETUP_UPGRADE.ENABLED.
+    if use_setup:
+        try:
+            from config import CONFIG
+
+            upgrade_cfg = CONFIG.get("ENGINE_A_V3_SETUP_UPGRADE") or {}
+            if upgrade_cfg.get("ENABLED", True):
+                frac = float(upgrade_cfg.get("MIN_CONFLUENCE_FRAC", 0.5))
+                floor = frac * quant.threshold
+                if quant.confluence_score < floor:
+                    use_setup = False
+                    setup_diagnostics["qualityFloorBlocked"] = True
+                    setup_diagnostics["minConfluenceFloor"] = round(floor, 4)
+        except Exception:
+            pass
+
     # Session scoring gate (config-gated, forex-only): a forex setup must also
     # pass the session context score when ENGINE_A_V3_SESSION_SCORING.ENABLED.
     if use_setup and route.family == "forex":
@@ -327,10 +346,19 @@ def evaluate_engine_a_v3(
         direction = quant.direction if quant.direction in {"LONG", "SHORT"} else None
         level_style = quant.level_style
         setup_id = f"quant_{quant.level_style}"
+        if level_style == "mean_reversion" and direction is not None:
+            loc = quant.components.get("location")
+            if loc is not None and loc.signal != 0.0:
+                mr_direction = "LONG" if loc.signal > 0 else "SHORT"
+                if mr_direction != direction:
+                    direction = mr_direction
 
     levels = None
+    atr_pct = quant.factor_diagnostics.get("atrPct") if quant.factor_diagnostics else None
     if direction is not None:
-        levels = _build_levels(primary, direction=direction, level_style=level_style)
+        levels = _build_levels(
+            primary, direction=direction, level_style=level_style, atr_pct=atr_pct
+        )
 
     # The quant model never emits NO_SIGNAL. Missing levels or ineligible promotion
     # only cap TRADE -> WATCH so the pair stays visible; execution stays gated by
@@ -357,6 +385,8 @@ def evaluate_engine_a_v3(
         predicates = predicates + setup.predicates
 
     rejection_reasons: list[str] = []
+    if setup_diagnostics.get("qualityFloorBlocked"):
+        rejection_reasons.append("setup_upgrade_below_quant_quality_floor")
     if setup_diagnostics.get("sessionGateBlocked"):
         rejection_reasons.append("session_context_score_below_min")
     if setup_direction_conflict:

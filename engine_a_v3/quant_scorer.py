@@ -17,11 +17,10 @@ Components (each -> signed direction in [-1,1] and quality in [0,1]):
   trend (multi-TF EMA stack), momentum (RSI/MACD/DI+ADX), location (pullback /
   mean-reversion timing), volume/flow. These four are the only components that
   feed direction/confluence — engine_a_v3.profile's CORE_COMPONENTS schema
-  enforces this. Subsystem signals (intermarket/carry/sentiment/macro/
-  microstructure) are NOT wired in; see
-  athena_research/engine_a_ablation/shadow_scorer.py for the research-only
-  ablation studying whether/how to add them, gated on the same walk-forward
-  evidence engine_a_v3.promotion requires before any live wiring.
+  enforces the price-core weight table. Optional orthogonal subsystem factors
+  (intermarket/carry/sentiment/macro/microstructure) wire in when
+  ``ENGINE_A_V3_SUBSYSTEMS.ENABLED`` is true; default off preserves the
+  four-factor path. Research ablation: shadow_scorer.py.
 """
 
 from __future__ import annotations
@@ -32,6 +31,17 @@ from typing import Any
 
 from factor_scoring import _adx_multiplier_from_value, _resolve_adx_thresholds
 from engine_a_scoring_profile import resolve_engine_a_scoring_profile
+from engine_a_v3.profile import CORE_COMPONENTS
+from engine_a_v3.subsystems import (
+    ST_AVAILABLE,
+    ST_NA,
+    ST_NEUTRAL,
+    ST_UNAVAILABLE,
+    SUBSYSTEM_FACTORS,
+    resolve_subsystem_weights,
+    subsystems_enabled,
+    subsystem_component,
+)
 
 
 # ── scale ──────────────────────────────────────────────────────────────────────
@@ -150,14 +160,14 @@ class QuantScore:
 
 
 # ── trend (multi-timeframe EMA stack) ────────────────────────────────────────
-def _tf_trend(snap: Mapping[str, Any]) -> tuple[float, str]:
-    """One timeframe's EMA-stack vote -> (-1..1, label)."""
+def _tf_trend(snap: Mapping[str, Any]) -> tuple[float, str, bool]:
+    """One timeframe's EMA-stack vote -> (-1..1, label, available)."""
     close = _f(snap.get("close"))
     e_trend = _f(snap.get("ema21"))   # trend EMA (group period)
     e_mom = _f(snap.get("ema50"))     # momentum EMA
     e_long = _f(snap.get("ema200"))   # long EMA
     if close is None or e_trend is None or e_mom is None or e_long is None:
-        return 0.0, "FLAT"
+        return 0.0, "FLAT", False
     votes = [
         1.0 if close > e_trend else -1.0,
         1.0 if e_trend > e_mom else -1.0,
@@ -168,11 +178,15 @@ def _tf_trend(snap: Mapping[str, Any]) -> tuple[float, str]:
         votes.append(1.0 if slope > 0 else -1.0)
     score = sum(votes) / len(votes)
     label = "UP" if score > 0.34 else "DOWN" if score < -0.34 else "FLAT"
-    return score, label
+    return score, label, True
 
 
 def _trend_component(
-    snaps: dict[str, Mapping[str, Any]], tf_w: Mapping[str, float]
+    snaps: dict[str, Mapping[str, Any]],
+    tf_w: Mapping[str, float],
+    *,
+    entry_candles: list[dict] | None = None,
+    indicator_periods: Mapping[str, int] | None = None,
 ) -> tuple[Component, dict[str, str]]:
     parts: dict[str, float] = {}
     coherence: dict[str, str] = {}
@@ -182,7 +196,9 @@ def _trend_component(
         snap = snaps.get(tf)
         if not snap:
             continue
-        score, label = _tf_trend(snap)
+        score, label, available = _tf_trend(snap)
+        if not available:
+            continue
         parts[tf] = score
         coherence[tf.lower()] = label
         weighted += w * score
@@ -198,60 +214,203 @@ def _trend_component(
     else:
         coherence_q = abs(weighted)
     quality = abs(weighted) * (0.5 + 0.5 * coherence_q)
+    quality *= _trend_health_mult(weighted, snaps, entry_candles, indicator_periods)
     return Component(_clamp(weighted, -1.0, 1.0), _clamp01(quality)), coherence
 
 
+def _trend_alignment_age(
+    candles: list[dict], *, ema_period: int = 21, max_lookback: int = 25
+) -> int:
+    """Count consecutive entry-TF bars with the same close vs EMA side as the latest bar."""
+    if len(candles) < ema_period + 2:
+        return 0
+    from engine_a_v3.setups import _ema
+
+    closes = [float(c["close"]) for c in candles if _f(c.get("close")) is not None]
+    if len(closes) < ema_period + 2:
+        return 0
+    ema = _ema(closes, ema_period)
+    latest_side = closes[-1] > ema[-1]
+    age = 0
+    start = len(closes) - 2
+    stop = max(ema_period - 1, start - max_lookback)
+    for idx in range(start, stop, -1):
+        if (closes[idx] > ema[idx]) == latest_side:
+            age += 1
+        else:
+            break
+    return age
+
+
+def _trend_health_mult(
+    trend_signal: float,
+    snaps: dict[str, Mapping[str, Any]],
+    entry_candles: list[dict] | None,
+    indicator_periods: Mapping[str, int] | None,
+) -> float:
+    """Penalize stale or weakening trends (config-gated, default on)."""
+    enabled = True
+    start_bars = 8
+    bar_penalty = 0.03
+    floor = 0.75
+    adx_weakening_penalty = 0.15
+    try:
+        from config import CONFIG
+
+        cfg = CONFIG.get("ENGINE_A_V3_TREND_HEALTH") or {}
+        enabled = bool(cfg.get("ENABLED", True))
+        start_bars = int(cfg.get("STALE_ALIGNMENT_BARS", 8))
+        bar_penalty = float(cfg.get("BAR_PENALTY", 0.03))
+        floor = float(cfg.get("FLOOR", 0.75))
+        adx_weakening_penalty = float(cfg.get("ADX_WEAKENING_PENALTY", 0.15))
+    except Exception:
+        pass
+    if not enabled or abs(trend_signal) < 0.34:
+        return 1.0
+
+    mult = 1.0
+    entry_snap = snaps.get("H1") or snaps.get("H4") or snaps.get("D1") or {}
+    adx_slope = _f(entry_snap.get("adxSlope"), 0.0) or 0.0
+    if trend_signal > 0 and adx_slope < 0:
+        mult *= _clamp(1.0 + adx_weakening_penalty * adx_slope, floor, 1.0)
+    elif trend_signal < 0 and adx_slope > 0:
+        mult *= _clamp(1.0 - adx_weakening_penalty * adx_slope, floor, 1.0)
+
+    adx = _f(entry_snap.get("adx"), 0.0) or 0.0
+    adx_prev = _f(entry_snap.get("adxPrev"))
+    if adx_prev is not None and adx > 25 and abs(adx - adx_prev) < 1.0:
+        mult *= 0.85
+
+    if entry_candles:
+        ema_period = 21
+        if indicator_periods and "ema_trend" in indicator_periods:
+            ema_period = int(indicator_periods["ema_trend"])
+        age = _trend_alignment_age(entry_candles, ema_period=ema_period)
+        if age > start_bars:
+            mult *= max(floor, 1.0 - bar_penalty * (age - start_bars))
+    return _clamp(mult, floor, 1.0)
+
+
 # ── momentum (RSI / MACD / DI+ADX) ───────────────────────────────────────────
+def _momentum_blend_enabled() -> bool:
+    try:
+        from config import CONFIG
+
+        cfg = CONFIG.get("ENGINE_A_V3_MOMENTUM_BLEND") or {}
+        return bool(cfg.get("ENABLED", True))
+    except Exception:
+        return True
+
+
 def _momentum_component(
     snap: Mapping[str, Any], asset_type: str, score_group: str
 ) -> tuple[Component, dict[str, Any]]:
-    diag: dict[str, Any] = {"adxValue": None, "adxMultiplier": None, "diAlignMult": None}
+    diag: dict[str, Any] = {
+        "adxValue": None,
+        "adxMultiplier": None,
+        "diAlignMult": None,
+        "rsiTerm": None,
+        "diTerm": None,
+        "macdSlopeTerm": None,
+    }
     if not snap:
         return Component(0.0, 0.0), diag
-    sigs: list[float] = []
+
+    rsi_w, di_w, macd_w = 0.35, 0.35, 0.30
+    if _momentum_blend_enabled():
+        try:
+            from config import CONFIG
+
+            cfg = CONFIG.get("ENGINE_A_V3_MOMENTUM_BLEND") or {}
+            rsi_w = float(cfg.get("RSI_WEIGHT", 0.35))
+            di_w = float(cfg.get("DI_WEIGHT", 0.35))
+            macd_w = float(cfg.get("MACD_SLOPE_WEIGHT", 0.30))
+        except Exception:
+            pass
+    else:
+        rsi_w = di_w = macd_w = 1.0 / 3.0
+
+    weighted_signal = 0.0
+    weight_total = 0.0
+    quality_terms: list[float] = []
 
     rsi = _f(snap.get("rsi"))
     if rsi is not None:
-        sigs.append(_clamp((rsi - 50.0) / 30.0, -1.0, 1.0))  # 20/80 saturate
+        rsi_term = _clamp((rsi - 50.0) / 30.0, -1.0, 1.0)
+        rsi_quality = _clamp01(abs(rsi - 50.0) / 30.0)
+        weighted_signal += rsi_w * rsi_term
+        weight_total += rsi_w
+        quality_terms.append(rsi_quality)
+        diag["rsiTerm"] = round(rsi_term, 4)
 
     di_p = _f(snap.get("plusDI"))
     di_m = _f(snap.get("minusDI"))
-    di_align = 0.0
     if di_p is not None and di_m is not None and (di_p + di_m) > 0:
-        di_align = _clamp((di_p - di_m) / (di_p + di_m), -1.0, 1.0)
-        sigs.append(di_align)
-        diag["diAlignMult"] = round(1.0 + 0.3 * di_align, 4)
+        di_term = _clamp((di_p - di_m) / (di_p + di_m), -1.0, 1.0)
+        weighted_signal += di_w * di_term
+        weight_total += di_w
+        quality_terms.append(abs(di_term))
+        diag["diAlignMult"] = round(1.0 + 0.3 * di_term, 4)
+        diag["diTerm"] = round(di_term, 4)
 
     hist = _f(snap.get("macdHist"))
     hist_prev = _f(snap.get("macdHistPrev"))
     if hist is not None:
-        base = 1.0 if hist > 0 else -1.0 if hist < 0 else 0.0
-        if hist_prev is not None and base != 0.0:
-            rising = hist > hist_prev
-            strengthening = (base > 0 and rising) or (base < 0 and not rising)
-            base *= 1.0 if strengthening else 0.6
-        elif base != 0.0:
-            base *= 0.8
-        sigs.append(base)
+        if hist_prev is not None and _momentum_blend_enabled():
+            slope = hist - hist_prev
+            macd_term = _clamp(slope / max(abs(hist_prev), 0.05), -1.0, 1.0)
+            if abs(macd_term) < 0.05 and hist != 0.0:
+                macd_term = 0.8 if hist > 0 else -0.8 if hist < 0 else 0.0
+        else:
+            macd_term = 1.0 if hist > 0 else -1.0 if hist < 0 else 0.0
+            if hist_prev is not None and macd_term != 0.0:
+                rising = hist > hist_prev
+                strengthening = (macd_term > 0 and rising) or (macd_term < 0 and not rising)
+                macd_term *= 1.0 if strengthening else 0.6
+            elif macd_term != 0.0:
+                macd_term *= 0.8
+        weighted_signal += macd_w * macd_term
+        weight_total += macd_w
+        quality_terms.append(_clamp01(abs(macd_term)))
+        diag["macdSlopeTerm"] = round(macd_term, 4)
 
-    signal = sum(sigs) / len(sigs) if sigs else 0.0
+    signal = weighted_signal / weight_total if weight_total > 0 else 0.0
 
     adx = _f(snap.get("adx"), 0.0) or 0.0
     diag["adxValue"] = round(adx, 2)
-    # ADX gates how *meaningful* momentum is (quality), never direction. Thresholds
-    # are per-group from ADX_TREND_MIN_CLASS / FACTOR_ADX_HARD_FAIL_CLASS (canonical
-    # factor_scoring resolver) so forex/crypto/etc. use their configured trend_min
-    # and hard_fail instead of a uniform hardcoded 25/30. adx_mult ramps 0 below
-    # hard_fail → 1 at trend_min (matches factor_scoring's _adx_multiplier_from_value).
     trend_min, hard_fail = _resolve_adx_thresholds(asset_type, score_group)
     adx_mult = _adx_multiplier_from_value(adx, trend_min, hard_fail)
     diag["adxMultiplier"] = round(adx_mult, 4)
-    quality = _clamp01(abs(signal) * adx_mult)
+    base_quality = sum(quality_terms) / len(quality_terms) if quality_terms else 0.0
+    quality = _clamp01(base_quality * adx_mult)
     return Component(_clamp(signal, -1.0, 1.0), quality), diag
 
 
+def _resolve_mr_adx_ceiling(asset_type: str, score_group: str) -> float:
+    """Per-group ADX ceiling for the location mean-reversion regime switch.
+
+    Defaults to ``ADX_TREND_MIN_CLASS`` via the canonical factor_scoring resolver
+    (same source as momentum quality). Optional override:
+    ``ENGINE_A_V3_MEAN_REVERSION.ADX_MAX``.
+    """
+    trend_min, _hard_fail = _resolve_adx_thresholds(asset_type, score_group)
+    ceiling = trend_min
+    try:
+        from config import CONFIG
+
+        mr_cfg = CONFIG.get("ENGINE_A_V3_MEAN_REVERSION") or {}
+        override = mr_cfg.get("ADX_MAX")
+        if override is not None:
+            ceiling = float(override)
+    except Exception:
+        pass
+    return ceiling
+
+
 # ── location (pullback timing / mean-reversion regime) ───────────────────────
-def _location_component(snap: Mapping[str, Any]) -> tuple[Component, str]:
+def _location_component(
+    snap: Mapping[str, Any], asset_type: str, score_group: str
+) -> tuple[Component, str]:
     """Entry timing. In a trend, a small pullback toward the trend EMA is the
     best entry (high quality); over-extension lowers quality but never vetoes.
     In a weak-ADX, BB-stretched regime, flips to a mean-reversion fade signal."""
@@ -267,8 +426,9 @@ def _location_component(snap: Mapping[str, Any]) -> tuple[Component, str]:
     bb_u = _f(snap.get("bbUpper"))
     bb_l = _f(snap.get("bbLower"))
     stretched = bool((bb_u is not None and close > bb_u) or (bb_l is not None and close < bb_l))
+    mr_adx_ceiling = _resolve_mr_adx_ceiling(asset_type, score_group)
 
-    if adx < 18.0 and stretched:
+    if adx < mr_adx_ceiling and stretched:
         # Range fade: signal opposite to the stretch; quality scales with stretch.
         signal = -1.0 if (bb_u is not None and close > bb_u) else 1.0
         quality = _clamp01(abs(dist) / 3.0)
@@ -281,18 +441,48 @@ def _location_component(snap: Mapping[str, Any]) -> tuple[Component, str]:
     return Component(signal, quality), "trend"
 
 
-# ── volatility regime (quality multiplier, not directional) ──────────────────
-def _volatility_mult(snap: Mapping[str, Any]) -> float:
-    if not snap:
-        return 1.0
-    mult = 1.0
+# ── volatility regime (per-component quality multipliers) ────────────────────
+def _volatility_gating_enabled() -> bool:
+    try:
+        from config import CONFIG
+
+        cfg = CONFIG.get("ENGINE_A_V3_VOLATILITY_GATING") or {}
+        return bool(cfg.get("ENABLED", True))
+    except Exception:
+        return True
+
+
+def _component_vol_mults(snap: Mapping[str, Any]) -> dict[str, float]:
+    """Per-component volatility/regime multipliers (default global 1.0)."""
+    if not snap or not _volatility_gating_enabled():
+        return {name: 1.0 for name in CORE_COMPONENTS}
     adx_pct = _f(snap.get("adx_pct"))
-    if adx_pct is not None:
-        mult += 0.10 * (adx_pct - 0.5)        # trending percentile -> up to +/-0.05
     atr_pct = _f(snap.get("atr_pct"))
-    if atr_pct is not None and atr_pct > 0.9:
-        mult -= 0.10                          # blow-off volatility -> de-rate
-    return _clamp(mult, 0.85, 1.10)
+    trend_mult = 1.0
+    momentum_mult = 1.0
+    location_mult = 1.0
+    volume_mult = 1.0
+    if adx_pct is not None:
+        trend_mult += 0.08 * (adx_pct - 0.5)
+        momentum_mult += 0.12 * (adx_pct - 0.5)
+    if atr_pct is not None:
+        location_mult += 0.06 * (0.5 - atr_pct)
+        if atr_pct > 0.9:
+            volume_mult -= 0.08
+        if atr_pct > 0.9:
+            trend_mult -= 0.06
+    return {
+        "trend": _clamp(trend_mult, 0.85, 1.10),
+        "momentum": _clamp(momentum_mult, 0.85, 1.12),
+        "location": _clamp(location_mult, 0.88, 1.08),
+        "volume": _clamp(volume_mult, 0.85, 1.08),
+    }
+
+
+def _volatility_mult(snap: Mapping[str, Any]) -> float:
+    """Headline volatility multiplier retained for diagnostics/backward compat."""
+    mults = _component_vol_mults(snap)
+    return round(sum(mults.values()) / len(mults), 4)
 
 
 # ── volume / flow ────────────────────────────────────────────────────────────
@@ -329,6 +519,17 @@ def _volume_component(
                 vr = vols[-1] / avg
     if vr is not None:
         quality = max(quality, _clamp01((vr - 1.0) / 1.5))
+        if vr > 1.0 and len(valid) >= 2:
+            last_close = float(valid[-1]["close"])
+            prev_close = float(valid[-2]["close"])
+            bar_dir = (
+                1.0 if last_close > prev_close else -1.0 if last_close < prev_close else 0.0
+            )
+            surprise = bar_dir * _clamp01((vr - 1.0) / 1.5)
+            if signal == 0.0:
+                signal = surprise
+            elif signal * surprise < 0:
+                signal = _clamp(signal * 0.6 + surprise * 0.4, -1.0, 1.0)
     return Component(signal, _clamp01(quality), available=len(valid) >= 5)
 
 
@@ -382,9 +583,14 @@ def score_pair(
     momentum_tf = _resolve_v3_momentum_tf(group, asset_type, horizon)
     momentum_snap = snaps.get(momentum_tf) or snaps.get("H4") or entry_snap
 
-    trend, coherence = _trend_component(snaps, _resolve_v3_tf_weights(group, asset_type, horizon))
+    trend, coherence = _trend_component(
+        snaps,
+        _resolve_v3_tf_weights(group, asset_type, horizon),
+        entry_candles=candles.get(entry_tf) or [],
+        indicator_periods=dict(profile.indicator_periods),
+    )
     momentum, mom_diag = _momentum_component(momentum_snap, asset_type, group)
-    location, level_style = _location_component(entry_snap)
+    location, level_style = _location_component(entry_snap, asset_type, group)
     volume = _volume_component(entry_snap, candles.get(entry_tf) or [], context)
 
     components: dict[str, Component] = {
@@ -393,19 +599,68 @@ def score_pair(
         "location": location,
         "volume": volume,
     }
+    subsystem_states: dict[str, str] = {}
+    if subsystems_enabled():
+        sub_weights = resolve_subsystem_weights(family)
+        for name in SUBSYSTEM_FACTORS:
+            comp, state = subsystem_component((context or {}).get(name))
+            components[name] = comp
+            subsystem_states[name] = state
+
     weights = dict(profile.weights)
-    # Normalize over ACTIVE components only — a subsystem with no data (neutral)
-    # must neither inject noise nor dilute the score (no-veto, no false penalty).
+    combined_weights = dict(weights)
+    if subsystems_enabled():
+        sub_budget = sum(
+            resolve_subsystem_weights(family).get(name, 0.0)
+            for name in SUBSYSTEM_FACTORS
+            if subsystem_states.get(name) not in {ST_NA, None}
+        )
+        sub_budget = min(0.35, sub_budget)
+        price_scale = max(0.65, 1.0 - sub_budget)
+        for name in CORE_COMPONENTS:
+            combined_weights[name] = weights.get(name, 0.0) * price_scale
+        for name in SUBSYSTEM_FACTORS:
+            if subsystem_states.get(name) == ST_NA:
+                combined_weights[name] = 0.0
+            else:
+                combined_weights[name] = resolve_subsystem_weights(family).get(name, 0.0)
+
     active = {
         name: comp
         for name, comp in components.items()
-        if comp.available and (name != "volume" or comp.quality > 0.0 or comp.signal != 0.0)
-    } or components
-    weight_sum = sum(max(0.0, weights.get(name, 0.0)) for name in active) or 1.0
+        if name in CORE_COMPONENTS
+        and comp.available
+        and (name != "volume" or comp.quality > 0.0 or comp.signal != 0.0)
+    }
+    weight_sum = 0.0
+    for name in active:
+        weight_sum += max(0.0, combined_weights.get(name, 0.0))
+    if subsystems_enabled():
+        for name in SUBSYSTEM_FACTORS:
+            w = max(0.0, combined_weights.get(name, 0.0))
+            if w > 0 and subsystem_states.get(name) != ST_NA:
+                weight_sum += w
+    weight_sum = weight_sum or 1.0
 
-    # Direction = sign of the weighted directional sum over active components.
-    dir_sum = sum(weights.get(n, 0.0) * c.signal * c.quality for n, c in active.items()) / weight_sum
-    if dir_sum > profile.direction_deadband:
+    def _subsystem_contributes(name: str) -> bool:
+        state = subsystem_states.get(name)
+        return state in (ST_AVAILABLE, ST_NEUTRAL) and max(0.0, combined_weights.get(name, 0.0)) > 0
+
+    # Direction = sign of the weighted directional sum over active components,
+    # except in mean-reversion regime where the fade direction is authoritative.
+    dir_terms: list[tuple[float, float]] = []
+    for n, c in active.items():
+        dir_terms.append((combined_weights.get(n, 0.0), c.signal * c.quality))
+    if subsystems_enabled():
+        for n in SUBSYSTEM_FACTORS:
+            if _subsystem_contributes(n):
+                comp = components[n]
+                dir_terms.append((combined_weights.get(n, 0.0), comp.signal * comp.quality))
+    dir_sum = sum(w * term for w, term in dir_terms) / weight_sum
+    if level_style == "mean_reversion" and location.signal != 0.0:
+        direction = "LONG" if location.signal > 0 else "SHORT"
+        dsign = 1.0 if location.signal > 0 else -1.0
+    elif dir_sum > profile.direction_deadband:
         direction, dsign = "LONG", 1.0
     elif dir_sum < -profile.direction_deadband:
         direction, dsign = "SHORT", -1.0
@@ -419,27 +674,25 @@ def score_pair(
     factor_scores: dict[str, Any] = {}
     ortho: dict[str, float] = {}
     score_frac = 0.0
+    vol_mults = _component_vol_mults(entry_snap)
     for name, comp in components.items():
-        weight = max(0.0, weights.get(name, 0.0))
-        # Aligned quality: a component that agrees with the chosen direction
-        # contributes its full quality; one that disagrees contributes nothing
-        # (no veto, but it still dilutes via weight_sum). comp.quality already
-        # encodes each component's directional magnitude/confidence, so we gate
-        # by sign rather than re-multiplying by signal magnitude — the latter
-        # double-counted magnitude (e.g. momentum -> signal**2) and capped the
-        # realized confluence well below MAX_SCORE.
+        weight = max(0.0, combined_weights.get(name, 0.0))
+        in_direction_pool = name in active or (subsystems_enabled() and _subsystem_contributes(name))
         aligned = bool(dsign) and (comp.signal * dsign) > 0.0
-        if name in active and aligned:
-            score_frac += weight * comp.quality
+        vol_mult = vol_mults.get(name, 1.0) if name in CORE_COMPONENTS else 1.0
+        if in_direction_pool and aligned:
+            score_frac += weight * comp.quality * vol_mult
         signed = round(comp.signal * comp.quality, 4)
         if name in ("trend", "momentum"):
             factor_scores[name] = signed
+        elif name in CORE_COMPONENTS:
+            ortho[name] = signed
         else:
             ortho[name] = signed
     score_frac /= weight_sum
 
     vol_mult = _volatility_mult(entry_snap)
-    confluence = _clamp(MAX_SCORE * score_frac * vol_mult, 0.0, MAX_SCORE)
+    confluence = _clamp(MAX_SCORE * score_frac, 0.0, MAX_SCORE)
     score_norm = confluence / MAX_SCORE
     threshold = profile.trade_threshold
     decision = "TRADE" if direction in ("LONG", "SHORT") and confluence >= threshold else "WATCH"
@@ -451,13 +704,23 @@ def score_pair(
         "adxMultiplier": mom_diag.get("adxMultiplier"),
         "diAlignMult": mom_diag.get("diAlignMult"),
         "directionalRampMult": round(0.5 + 0.5 * abs(dir_sum), 4),
+        "mrAdxCeiling": round(_resolve_mr_adx_ceiling(asset_type, group), 4) if level_style == "mean_reversion" else None,
         "trendCoherence": coherence or {"error": "no_ema_data"},
         "volatilityMult": round(vol_mult, 4),
+        "componentVolMults": {k: round(v, 4) for k, v in vol_mults.items()},
+        "atrPct": _f(entry_snap.get("atr_pct")),
+        "subsystemsEnabled": subsystems_enabled(),
+        "subsystemStates": subsystem_states or None,
         "components": {
             name: {
                 "signal": round(comp.signal, 4), "quality": round(comp.quality, 4),
-                "weight": round(weights.get(name, 0.0), 4),
-                "contribution": round(weights.get(name, 0.0) * comp.quality if (dsign and comp.signal * dsign > 0.0) else 0.0, 4),
+                "weight": round(combined_weights.get(name, 0.0), 4),
+                "contribution": round(
+                    combined_weights.get(name, 0.0) * comp.quality * vol_mults.get(name, 1.0)
+                    if (dsign and comp.signal * dsign > 0.0)
+                    else 0.0,
+                    4,
+                ),
                 "available": comp.available,
             }
             for name, comp in components.items()

@@ -108,6 +108,9 @@ ENGINE_A_V3_FOREX_SETUP: trend
 # OPPOSITE direction of the quant scorer, fall back to the quant path instead of
 # flipping direction (rejection reason: setup_direction_conflicts_quant).
 ENGINE_A_V3_SETUP_QUANT_CONFLICT_GUARD: true
+ENGINE_A_V3_SETUP_UPGRADE:
+  ENABLED: true
+  MIN_CONFLUENCE_FRAC: 0.5
 ENGINE_A_V3_SESSION_SCORING:
   ENABLED: false
   MIN_SCORE: 0.35
@@ -115,6 +118,37 @@ ENGINE_A_V3_MEAN_REVERSION:
   Z_ENTRY: 1.5
   EFF_MAX: 0.35
   LOOKBACK: 20
+
+# Optional orthogonal subsystem factors for V3 quant scoring (default OFF).
+# When ENABLED, carry/sentiment context entries feed direction/confluence using
+# the hybrid denominator policy from the ablation harness. intermarket/macro/
+# microstructure remain weight-0 until point-in-time builders exist.
+ENGINE_A_V3_SUBSYSTEMS:
+  ENABLED: true
+  WEIGHTS_BY_FAMILY: {}
+
+# Richer momentum blend: RSI extremity + DI alignment + MACD histogram slope.
+ENGINE_A_V3_MOMENTUM_BLEND:
+  ENABLED: true
+  RSI_WEIGHT: 0.35
+  DI_WEIGHT: 0.35
+  MACD_SLOPE_WEIGHT: 0.30
+
+# Per-component volatility sensitivity and adaptive structural TP2 sizing.
+ENGINE_A_V3_VOLATILITY_GATING:
+  ENABLED: true
+  TP2_R_MIN: 1.5
+  TP2_R_MAX: 2.5
+  ATR_PCT_LOW: 0.3
+  ATR_PCT_HIGH: 0.9
+
+# Trend-health decay: penalize stale EMA alignment and weakening ADX.
+ENGINE_A_V3_TREND_HEALTH:
+  ENABLED: true
+  STALE_ALIGNMENT_BARS: 8
+  BAR_PENALTY: 0.03
+  FLOOR: 0.75
+  ADX_WEAKENING_PENALTY: 0.15
 
 # Engine A quant scorer (ground-up rebuild) per-score_group component weights.
 # Core components only: trend, momentum, location, volume (the V3 profile schema

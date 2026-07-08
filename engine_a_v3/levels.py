@@ -7,6 +7,29 @@ from engine_a_v3.session_forex import asian_session_range, parse_utc
 from engine_a_v3.setups import _ema, atr_for_levels
 
 
+def _resolve_tp2_rr(atr_pct: float | None) -> float:
+    """Map ATR percentile to an adaptive TP2 reward multiple (config-gated)."""
+    try:
+        from config import CONFIG
+
+        cfg = CONFIG.get("ENGINE_A_V3_VOLATILITY_GATING") or {}
+        if not cfg.get("ENABLED", True):
+            return 2.0
+        tp2_min = float(cfg.get("TP2_R_MIN", 1.5))
+        tp2_max = float(cfg.get("TP2_R_MAX", 2.5))
+        atr_low = float(cfg.get("ATR_PCT_LOW", 0.3))
+        atr_high = float(cfg.get("ATR_PCT_HIGH", 0.9))
+    except Exception:
+        return 2.0
+    if atr_pct is None:
+        return 2.0
+    if atr_high <= atr_low:
+        return 2.0
+    frac = (float(atr_pct) - atr_low) / (atr_high - atr_low)
+    frac = max(0.0, min(1.0, frac))
+    return tp2_min + frac * (tp2_max - tp2_min)
+
+
 @dataclass(frozen=True)
 class StructuralLevels:
     entry_zone: PriceZone
@@ -19,6 +42,7 @@ def build_structural_levels(
     primary: list[dict],
     *,
     direction: str,
+    atr_pct: float | None = None,
 ) -> StructuralLevels | None:
     if len(primary) < 20 or direction not in {"LONG", "SHORT"}:
         return None
@@ -33,9 +57,10 @@ def build_structural_levels(
         if invalidation >= current:
             return None
         risk = current - invalidation
+        tp2_rr = _resolve_tp2_rr(atr_pct)
         targets = (
             Target("TP1", current + risk, 1.0),
-            Target("TP2", current + 2.0 * risk, 2.0),
+            Target("TP2", current + tp2_rr * risk, round(tp2_rr, 4)),
         )
     else:
         structural = max(float(candle["high"]) for candle in recent)
@@ -43,9 +68,10 @@ def build_structural_levels(
         if invalidation <= current:
             return None
         risk = invalidation - current
+        tp2_rr = _resolve_tp2_rr(atr_pct)
         targets = (
             Target("TP1", current - risk, 1.0),
-            Target("TP2", current - 2.0 * risk, 2.0),
+            Target("TP2", current - tp2_rr * risk, round(tp2_rr, 4)),
         )
     return StructuralLevels(
         entry_zone=PriceZone(current - 0.10 * atr, current + 0.10 * atr),
