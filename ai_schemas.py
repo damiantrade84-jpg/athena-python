@@ -292,6 +292,206 @@ def evaluate_engine_a_ai_advisory_rules(
     }
 
 
+_GRADE_EDGE_BANDS: dict[str, tuple[int, int]] = {
+    "A+": (75, 95),
+    "A": (70, 90),
+    "B": (45, 65),
+    "C": (30, 50),
+    "D": (15, 35),
+    "F": (5, 25),
+}
+
+
+def _grade_edge_midpoint(grade: str) -> int | None:
+    band = _GRADE_EDGE_BANDS.get(str(grade or "").upper().strip())
+    if not band:
+        return None
+    return (band[0] + band[1]) // 2
+
+
+def _clamp_edge_to_grade_band(grade: str, edge: float) -> tuple[float, bool]:
+    band = _GRADE_EDGE_BANDS.get(str(grade or "").upper().strip())
+    if band is None:
+        return edge, False
+    low, high = band
+    if low <= edge <= high:
+        return edge, False
+    midpoint = (low + high) // 2
+    return float(midpoint), True
+
+
+def enforce_marcus_grade_edge_consistency(result: dict) -> dict:
+    """Clamp edgeProbability toward grade-consistent bands; append warning on mismatch."""
+    if not isinstance(result, dict):
+        return result
+
+    warnings = list(result.get("warnings") or [])
+    adjusted = False
+
+    grade = str(result.get("grade") or "").upper().strip()
+    edge = _coerce_float(result.get("edgeProbability"))
+    if grade and edge is not None:
+        clamped, changed = _clamp_edge_to_grade_band(grade, edge)
+        if changed:
+            result["edgeProbability"] = round(clamped)
+            adjusted = True
+
+    style_ratings = result.get("style_ratings")
+    if isinstance(style_ratings, dict):
+        for style_key, style_val in style_ratings.items():
+            if not isinstance(style_val, dict):
+                continue
+            s_grade = str(style_val.get("grade") or "").upper().strip()
+            s_edge = _coerce_float(style_val.get("edgeProbability"))
+            if not s_grade or s_edge is None:
+                continue
+            clamped, changed = _clamp_edge_to_grade_band(s_grade, s_edge)
+            if changed:
+                style_val["edgeProbability"] = round(clamped)
+                adjusted = True
+
+    if adjusted and "GRADE_EDGE_MISMATCH_ADJUSTED" not in warnings:
+        warnings.append("GRADE_EDGE_MISMATCH_ADJUSTED")
+        result["warnings"] = warnings
+
+    return result
+
+
+def _engine_b_gate_score(signal: dict) -> float | None:
+    naked = signal.get("naked_data") if isinstance(signal.get("naked_data"), dict) else {}
+    engine_b = signal.get("engine_b") if isinstance(signal.get("engine_b"), dict) else {}
+    data = naked or engine_b
+    if not data:
+        return None
+
+    gate_pct = _coerce_float(data.get("gate_pct"))
+    if gate_pct is not None:
+        return max(0.0, min(100.0, gate_pct))
+
+    score = _coerce_float(data.get("score"))
+    max_score = _coerce_float(data.get("max_possible")) or _coerce_float(data.get("maxScore"))
+    score_pct = _coerce_float(data.get("score_pct"))
+    if score is not None and max_score and max_score > 0:
+        return max(0.0, min(100.0, score / max_score * 100.0))
+    if score_pct is not None:
+        return max(0.0, min(100.0, score_pct))
+    return None
+
+
+def _engine_b_structural_bucket(signal: dict) -> tuple[str, str, float | None]:
+    naked = signal.get("naked_data") if isinstance(signal.get("naked_data"), dict) else {}
+    engine_b = signal.get("engine_b") if isinstance(signal.get("engine_b"), dict) else {}
+    data = naked or engine_b
+
+    verdict = str(data.get("structural_verdict") or "").upper()
+    gate_flags = [
+        data.get("structure_ok"),
+        data.get("location_ok"),
+        data.get("trigger_ok") or data.get("entry_ok"),
+        data.get("rr_ok") or data.get("room_rr_ok"),
+        data.get("room_ok"),
+    ]
+    failed_gates = sum(1 for flag in gate_flags if flag is False)
+    score = _engine_b_gate_score(signal)
+
+    if verdict == "CLEAR" and failed_gates == 0 and (score is None or score >= 75):
+        return "high_quality_review", "engine_b_clear_gates_pass", score
+    if verdict in {"CLEAR", "CAUTION"} and failed_gates <= 1 and (score is None or score >= 65):
+        return "needs_confirmation", "engine_b_mixed_gates", score
+    if score is not None and score >= 50:
+        return "watchlist_only", "engine_b_partial_gates", score
+    return "ignore", "engine_b_weak_structure", score
+
+
+def _engine_c_consensus_bucket(signal: dict) -> tuple[str, str, float | None]:
+    engine_c = signal.get("engine_c") if isinstance(signal.get("engine_c"), dict) else {}
+    decision = str(
+        engine_c.get("decision_state") or signal.get("decision_state") or ""
+    ).lower()
+    tier = str(engine_c.get("tier") or signal.get("tier") or "").upper()
+    conviction = _coerce_float(
+        engine_c.get("conviction")
+        or signal.get("combinedConviction")
+        or signal.get("conviction")
+    )
+    score = None
+    if conviction is not None:
+        score = max(0.0, min(100.0, conviction * 100.0 if conviction <= 1.0 else conviction))
+
+    if decision in {"blocked", "reject", "no_trade"}:
+        return "reject", "engine_c_blocked", score
+    if decision in {"watchlist", "reduced_risk"}:
+        return "watchlist_only", "engine_c_watchlist", score
+    if tier == "HIGH" and (score is None or score >= 75):
+        return "high_quality_review", "engine_c_high_tier", score
+    if score is not None and score >= 65:
+        return "needs_confirmation", "engine_c_moderate_conviction", score
+    return "watchlist_only", "engine_c_low_conviction", score
+
+
+def evaluate_marcus_advisory_rules(
+    engine_source: str,
+    ai_result: dict,
+    signal: dict,
+    news_ctx: dict | None = None,
+    *,
+    resolved_style: str = "intraday",
+) -> dict:
+    """Engine-aware advisory rules for Marcus text review."""
+    from ai_context import resolve_ai_review_min_rr
+
+    min_rr = resolve_ai_review_min_rr(signal, resolved_style)
+    source = str(engine_source or "engine_a").lower()
+
+    if source == "engine_b":
+        action, bucket, score = _engine_b_structural_bucket(signal)
+        edge = _coerce_float(ai_result.get("edgeProbability"))
+        if score is None and edge is not None:
+            score = edge
+    elif source == "engine_c":
+        action, bucket, score = _engine_c_consensus_bucket(signal)
+        edge = _coerce_float(ai_result.get("edgeProbability"))
+        if score is None and edge is not None:
+            score = edge
+    else:
+        return evaluate_engine_a_ai_advisory_rules(
+            ai_result,
+            signal,
+            news_ctx,
+            min_rr=min_rr,
+        )
+
+    blocking_reasons: list[str] = []
+    if _signal_stop_loss(signal) is None:
+        blocking_reasons.append("NO_STOP_LOSS")
+
+    rr = _signal_rr(signal)
+    if rr is None:
+        blocking_reasons.append("RR_UNAVAILABLE")
+    elif rr < min_rr:
+        blocking_reasons.append("RR_BELOW_MIN")
+
+    if _daily_loss_limit_hit(signal):
+        blocking_reasons.append("DAILY_LOSS_LIMIT_HIT")
+
+    if _high_impact_news_nearby(signal, news_ctx):
+        blocking_reasons.append("HIGH_IMPACT_NEWS_NEARBY")
+
+    if blocking_reasons and action not in {"review_incomplete", "reject"}:
+        action = "reject"
+
+    return {
+        "advisory_rule_trade_allowed": bool(
+            action == "high_quality_review" and not blocking_reasons
+        ),
+        "advisory_rule_action": action,
+        "advisory_rule_score": round(score, 2) if score is not None else None,
+        "advisory_rule_bucket": bucket,
+        "advisory_blocking_reasons": blocking_reasons,
+        "advisory_min_rr": min_rr,
+    }
+
+
 class EngineBResponse(BaseModel):
     """Schema for Engine B (Naked Structure) AI response."""
 
@@ -301,6 +501,10 @@ class EngineBResponse(BaseModel):
     )
     riskLevel: str = Field(description="LOW, MEDIUM, or HIGH")
     verdict: str = Field(description="Concise structural analysis")
+    reviewSource: Optional[str] = Field(
+        default=None,
+        description="Review provenance label, e.g. engine_b_marcus",
+    )
     levelsVerdict: Optional[str] = Field(
         default=None,
         description="Advisory SL/TP review: accept, adjust, or reject",
@@ -321,6 +525,28 @@ class EngineBResponse(BaseModel):
         default=None,
         description="Per-style ratings: {scalp: {grade, edgeProbability, riskLevel}, intraday: {...}, swing: {...}}",
     )
+
+
+class EngineCMarcusResponse(BaseModel):
+    """Relaxed Marcus schema for Engine C consensus reviews."""
+
+    grade: str = Field(description="Trade grade: A+, A, B, C, D, or F")
+    edgeProbability: float = Field(ge=0, le=100, description="Win probability estimate 0-100")
+    riskLevel: str = Field(description="Low, Medium, or High")
+    verdict: str = Field(description="One punchy sentence assessment")
+    reviewSource: Optional[str] = Field(default=None, description="engine_c_marcus")
+    reason: Optional[str] = Field(default=None, description="Concise reason for grade/action")
+    narrative: Optional[str] = Field(default=None, description="2-3 sentences referencing consensus data")
+    warnings: Optional[List[str]] = Field(default=None, description="Specific risk warnings")
+    style_ratings: Optional[dict] = Field(default=None, description="Per-style ratings")
+    trend_score: Optional[float] = Field(default=None, ge=0, le=100)
+    structure_score: Optional[float] = Field(default=None, ge=0, le=100)
+    momentum_score: Optional[float] = Field(default=None, ge=0, le=100)
+    liquidity_score: Optional[float] = Field(default=None, ge=0, le=100)
+    risk_score: Optional[float] = Field(default=None, ge=0, le=100)
+    confirmation_score: Optional[float] = Field(default=None, ge=0, le=100)
+    total_score: Optional[float] = Field(default=None, ge=0, le=100)
+    ai_action: Optional[str] = Field(default=None)
 
 
 class DebateCaseResponse(BaseModel):

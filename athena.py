@@ -3537,7 +3537,9 @@ PER-STYLE RATINGS - rate ALL THREE independently using specific data:
 - INTRADAY: H4+H1 aligned, same session, momentum confirming, RR1 vs Style min RR for intraday in config context
 - SWING: D1 EMA stack + trendCoherence > 0.8, no upcoming high-impact events, RR1 vs Style min RR for swing in config context
 
-reviewSource: use "engine_c_marcus" when Engine source is Engine C consensus; otherwise use "engine_a_marcus".
+reviewSource: use "engine_c_marcus" when Engine source is Engine C consensus; use "engine_b_marcus" when Engine source is Engine B naked market structure; otherwise use "engine_a_marcus".
+
+PLAYBOOK AUTHORITY: The ATHENA TRADE PLAYBOOKS block in the user message is authoritative for entry models, mustRejectIf rules, and invalidations. Apply them strictly (advisory only).
 
 OUTPUT - EXACT JSON in this precise key order to ensure reasoning happens before scoring (no other text):
 {"symbol":"BTCUSDT","timeframe":"H4","bias":"long|short|neutral","setup_type":"breakout_retest","trend_score":18,"structure_score":17,"momentum_score":13,"liquidity_score":8,"risk_score":12,"confirmation_score":14,"total_score":84,"grade":"B","ai_action":"needs_confirmation","blocking_reasons":[],"reason":"Strong factor coherence and aligned Engine B structure; momentum mixed.","narrative":"2-3 sentences. MUST reference specific factor names, scores, and weights from the input. Name the strongest and weakest factors.","verdict":"One punchy sentence citing specific factor scores and structure","reviewSource":"engine_a_marcus","resolvedStyle":"SWING|INTRADAY|SCALP","scannerReadiness":"Weak|Medium|Strong","factorQuality":85,"structuralRisk":"Low","executionRisk":"Medium","selectedStyleGrade":"A","entryZone":"exact price or fib level from input","invalidation":"exact price from SL or structural level","keyLevels":"S1/R1 from input data only","levelsVerdict":"accept|adjust|reject","levelsReason":"Cite zone/ATR/fib evidence for SL and TP placement","suggestedSL":null,"suggestedTP":null,"positionSizing":"Full/Half/Quarter + why (reference confidence_multiplier/nondirectionalScore for Engine A, or sizing_override/conviction for Engine C)","tradeStyle":"SWING|INTRADAY|SCALP","tradeStyleReason":"cite specific data","warnings":["specific risks citing data points"],"edgeProbability":68,"riskLevel":"Medium","style_ratings":{"scalp":{"grade":"B","edgeProbability":52,"riskLevel":"High"},"intraday":{"grade":"A","edgeProbability":68,"riskLevel":"Medium"},"swing":{"grade":"A+","edgeProbability":78,"riskLevel":"Low"}}}
@@ -4617,17 +4619,32 @@ def _build_signal_message(
         _lows = [c.get("l", c.get("low")) for c in _h4_candles]
         try:
             from indicators import calc_ema, calc_rsi, calc_macd, calc_adx, calc_atr
-            _ema21_s = calc_ema(_closes, 21)
-            _ema50_s = calc_ema(_closes, 50)
-            _ema200_s = calc_ema(_closes, 200)
-            _rsi_s = calc_rsi(_closes, 14)
+            from marcus_review import resolve_marcus_indicator_periods
+
+            _periods = resolve_marcus_indicator_periods(signal)
+            _ema_trend_p = _periods["ema_trend"]
+            _ema_mom_p = _periods["ema_momentum"]
+            _ema_long_p = _periods["ema_long"]
+            _rsi_p = _periods["rsi"]
+            _adx_p = _periods["adx"]
+            _atr_p = _periods["atr"]
+            _ema_trend_s = calc_ema(_closes, _ema_trend_p)
+            _ema_mom_s = calc_ema(_closes, _ema_mom_p)
+            _ema_long_s = calc_ema(_closes, _ema_long_p)
+            _rsi_s = calc_rsi(_closes, _rsi_p)
             _macd_s = calc_macd(_closes, 12, 26, 9)
-            _adx_s = calc_adx(_highs, _lows, _closes, 14)
-            _atr_s = calc_atr(_highs, _lows, _closes, 14)
+            _adx_s = calc_adx(_highs, _lows, _closes, _adx_p)
+            _atr_s = calc_atr(_highs, _lows, _closes, _atr_p)
             lines.append("")
             lines.append(f"=== RAW MARKET DATA (last {_raw_count} H4 bars) ===")
             lines.append(
-                "Bar | Time | Open | High | Low | Close | Vol | EMA21 | EMA50 | RSI | MACD | MACD_Sig | ADX | +DI | -DI | ATR"
+                f"Engine A scoring periods: trend={_ema_trend_p} momentum={_ema_mom_p} "
+                f"long={_ema_long_p} rsi={_rsi_p} atr={_atr_p} adx={_adx_p} (H4)"
+            )
+            lines.append(
+                f"Bar | Time | Open | High | Low | Close | Vol | EMA{_ema_trend_p} | "
+                f"EMA{_ema_mom_p} | RSI{_rsi_p} | MACD | MACD_Sig | ADX{_adx_p} | "
+                f"+DI | -DI | ATR{_atr_p}"
             )
             for idx, c in enumerate(_raw_slice):
                 _g = idx + (len(_h4_candles) - _raw_count)  # global index in full array
@@ -4637,15 +4654,15 @@ def _build_signal_message(
                     f"{_g:3d} | {c.get('t','')[:16]} | {_fmt(c.get('o',c.get('open')))} | "
                     f"{_fmt(c.get('h',c.get('high')))} | {_fmt(c.get('l',c.get('low')))} | "
                     f"{_fmt(c.get('c',c.get('close')))} | {_fmt(c.get('v',c.get('volume')))} | "
-                    f"{_fmt(_ema21_s[_g])} | {_fmt(_ema50_s[_g])} | {_fmt_rsi(_rsi_s[_g])} | "
+                    f"{_fmt(_ema_trend_s[_g])} | {_fmt(_ema_mom_s[_g])} | {_fmt_rsi(_rsi_s[_g])} | "
                     f"{_fmt(_macd_s['macd'][_g])} | {_fmt(_macd_s['signal'][_g])} | "
                     f"{_fmt_rsi(_adx_s['adx'][_g])} | {_fmt_rsi(_adx_s['plusDI'][_g])} | "
                     f"{_fmt_rsi(_adx_s['minusDI'][_g])} | {_fmt(_atr_s[_g])}"
                 )
                 lines.append(_row)
             lines.append(
-                "NOTE: EMA50/EMA200 may show '-' until lookback fills. "
-                "MACD valid after 26 bars. ADX valid after 28 bars."
+                f"NOTE: EMA{_ema_long_p}/long EMA may show '-' until lookback fills. "
+                f"MACD valid after 26 bars. ADX valid after {max(28, _adx_p + 14)} bars."
             )
         except Exception as _raw_err:
             log.debug("[BUILD_SIGNAL] raw market data section failed: %s", _raw_err)
@@ -5298,6 +5315,24 @@ def run_ai(
             drawdown_pct=drawdown_pct,
             learning_ctx=learning_ctx,
         )
+        from marcus_review import (
+            build_marcus_playbook_block,
+            build_marcus_system_prompt,
+            marcus_legacy_required_keys,
+            marcus_reasoning_effort,
+            marcus_response_model,
+            marcus_review_source,
+            marcus_stage_prompt,
+            marcus_structured_required_keys,
+            resolve_marcus_engine_source,
+        )
+
+        _marcus_engine_source = resolve_marcus_engine_source(signal)
+        _marcus_review_source = marcus_review_source(_marcus_engine_source)
+        playbook_block = build_marcus_playbook_block(signal)
+        if playbook_block:
+            msg = f"{playbook_block}\n\n{msg}"
+        _system_prompt = build_marcus_system_prompt(EXPERT_PROMPT, _marcus_engine_source)
         _prompt_sec = time.monotonic() - _prompt_started
         _prompt_chars = len(msg)
 
@@ -5328,74 +5363,109 @@ def run_ai(
             )
             return any(marker in text for marker in markers)
 
-        _max_tokens = int(CONFIG.get("MARCUS_AI_MAX_TOKENS", 6000) or 6000)
+        _max_tokens = int(CONFIG.get("MARCUS_AI_MAX_TOKENS", 10000) or 10000)
         _extra_completion_kwargs: dict = {}
         if _active_provider == "openai":
             # OpenAI Responses path: reasoning tokens count against the output
             # budget, so a high effort with a small budget yields empty text.
+            _configured_effort = str(CONFIG.get("MARCUS_AI_REASONING_EFFORT", "low") or "low").strip().lower()
             _extra_completion_kwargs["reasoning"] = {
-                "effort": str(CONFIG.get("MARCUS_AI_REASONING_EFFORT", "low") or "low").strip().lower()
+                "effort": marcus_reasoning_effort(
+                    _configured_effort,
+                    has_playbook=bool(playbook_block),
+                    provider=_active_provider,
+                )
             }
+        _two_stage_enabled = bool(CONFIG.get("AI_MARCUS_TWO_STAGE_ENABLED", False))
         _max_ai_retries = int(CONFIG.get("MARCUS_AI_MAX_RETRIES", 1) or 1)
         _backoff_base = float(CONFIG.get("MARCUS_AI_RETRY_BACKOFF_SEC", 2.0) or 2.0)
         _last_exc = None
         completion = None
         result = None
         t = ""
-        for _attempt in range(_max_ai_retries + 1):
-            try:
-                _messages = [
-                    {"role": "system", "content": EXPERT_PROMPT},
-                    {"role": "user", "content": msg},
-                ]
-                if _attempt > 0:
-                    _messages.append(
-                        {
-                            "role": "user",
-                            "content": (
-                                "Marcus parse failed on the previous attempt. "
-                                "Return exactly one valid JSON object matching the requested schema. "
-                                "Do not include markdown, prose, or code fences."
-                            ),
-                        }
+
+        def _call_marcus_llm(messages: list, *, stage_label: str = "") -> tuple[str, object]:
+            nonlocal completion, _last_exc
+            for _attempt in range(_max_ai_retries + 1):
+                try:
+                    _attempt_messages = list(messages)
+                    if _attempt > 0:
+                        _attempt_messages.append(
+                            {
+                                "role": "user",
+                                "content": (
+                                    "Marcus parse failed on the previous attempt. "
+                                    "Return exactly one valid JSON object matching the requested schema. "
+                                    "Do not include markdown, prose, or code fences."
+                                ),
+                            }
+                        )
+                    completion = c.chat.completions.create(
+                        model=_model,
+                        max_tokens=_max_tokens,
+                        temperature=_temp,
+                        messages=_attempt_messages,
+                        response_format={"type": "json_object"},
+                        timeout=_timeout_sec,
+                        **_extra_completion_kwargs,
                     )
-                completion = c.chat.completions.create(
-                    model=_model,
-                    max_tokens=_max_tokens,
-                    temperature=_temp,
-                    messages=_messages,
-                    response_format={"type": "json_object"},
-                    timeout=_timeout_sec,
-                    **_extra_completion_kwargs,
-                )
-                t = (completion.choices[0].message.content or "").strip()
-                result = _parse_ai_json(t, signal["pair"])
-                if result is not None:
-                    break
-                log.warning(
-                    "[AI] %s Marcus parse failed attempt %s/%s raw_len=%d preview=%r",
-                    signal.get("pair", "?"),
-                    _attempt + 1,
-                    _max_ai_retries + 1,
-                    len(t),
-                    t[:120],
-                )
-                if _attempt >= _max_ai_retries:
-                    break
-            except Exception as _e:
-                _last_exc = _e
-                if _attempt >= _max_ai_retries or not _is_retryable_ai_error(_e):
-                    raise
-                _sleep = _backoff_base * (2 ** _attempt)
-                log.warning(
-                    "[AI] transient failure for %s on attempt %s/%s: %s; retrying in %.1fs",
-                    signal.get("pair", "?"),
-                    _attempt + 1,
-                    _max_ai_retries + 1,
-                    _e,
-                    _sleep,
-                )
-                time.sleep(_sleep)
+                    raw = (completion.choices[0].message.content or "").strip()
+                    parsed = _parse_ai_json(raw, signal["pair"])
+                    if parsed is not None:
+                        return raw, parsed
+                    log.warning(
+                        "[AI] %s Marcus parse failed%s attempt %s/%s raw_len=%d preview=%r",
+                        signal.get("pair", "?"),
+                        f" ({stage_label})" if stage_label else "",
+                        _attempt + 1,
+                        _max_ai_retries + 1,
+                        len(raw),
+                        raw[:120],
+                    )
+                    if _attempt >= _max_ai_retries:
+                        return raw, None
+                except Exception as _e:
+                    _last_exc = _e
+                    if _attempt >= _max_ai_retries or not _is_retryable_ai_error(_e):
+                        raise
+                    _sleep = _backoff_base * (2 ** _attempt)
+                    log.warning(
+                        "[AI] transient failure for %s on attempt %s/%s: %s; retrying in %.1fs",
+                        signal.get("pair", "?"),
+                        _attempt + 1,
+                        _max_ai_retries + 1,
+                        _e,
+                        _sleep,
+                    )
+                    time.sleep(_sleep)
+            return "", None
+
+        _base_messages = [
+            {"role": "system", "content": _system_prompt},
+            {"role": "user", "content": msg},
+        ]
+        if _two_stage_enabled:
+            stage1_messages = _base_messages + [
+                {"role": "user", "content": marcus_stage_prompt(1)},
+            ]
+            t, stage1_result = _call_marcus_llm(stage1_messages, stage_label="stage1")
+            if stage1_result is not None:
+                stage2_messages = _base_messages + [
+                    {"role": "assistant", "content": t},
+                    {"role": "user", "content": marcus_stage_prompt(2)},
+                ]
+                t2, stage2_result = _call_marcus_llm(stage2_messages, stage_label="stage2")
+                if stage2_result is not None:
+                    merged = dict(stage1_result)
+                    merged.update(stage2_result)
+                    result = merged
+                    t = t2 or t
+                else:
+                    result = stage1_result
+            else:
+                result = None
+        else:
+            t, result = _call_marcus_llm(_base_messages)
         if completion is None:
             raise _last_exc or RuntimeError("AI call failed with no completion")
 
@@ -5437,13 +5507,17 @@ def run_ai(
             result.setdefault("providerFailure", _ai_runtime.get("providerFailure"))
             result.setdefault("provider_failure", _ai_runtime.get("provider_failure"))
 
+        result.setdefault("reviewSource", _marcus_review_source)
+
         try:
             from ai_schemas import (
-                EngineAResponse,
-                evaluate_engine_a_ai_advisory_rules,
+                enforce_marcus_grade_edge_consistency,
+                evaluate_marcus_advisory_rules,
             )
 
-            EngineAResponse.model_validate(result)
+            _response_model = marcus_response_model(_marcus_engine_source)
+            enforce_marcus_grade_edge_consistency(result)
+            _response_model.model_validate(result)
             _schema_valid = True
             _schema_error = None
         except Exception as _schema_exc:
@@ -5457,11 +5531,12 @@ def run_ai(
 
         try:
             result.update(
-                evaluate_engine_a_ai_advisory_rules(
+                evaluate_marcus_advisory_rules(
+                    _marcus_engine_source,
                     result,
                     signal,
                     news_ctx,
-                    min_rr=1.5,
+                    resolved_style=style_pref,
                 )
             )
         except Exception as _rule_exc:
@@ -5469,23 +5544,8 @@ def run_ai(
 
         # Validate legacy and structured keys for audit visibility.
 
-        _required = {"grade", "edgeProbability", "riskLevel"}
-        _structured_required = {
-            "symbol",
-            "timeframe",
-            "bias",
-            "setup_type",
-            "trend_score",
-            "structure_score",
-            "momentum_score",
-            "liquidity_score",
-            "risk_score",
-            "confirmation_score",
-            "total_score",
-            "ai_action",
-            "blocking_reasons",
-            "reason",
-        }
+        _required = marcus_legacy_required_keys(_marcus_engine_source)
+        _structured_required = marcus_structured_required_keys(_marcus_engine_source)
 
         _missing = _required - set(result.keys())
         _structured_missing = _structured_required - set(result.keys())

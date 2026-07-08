@@ -1290,6 +1290,30 @@ class TestMarcusTextReviewTimeoutContract:
         assert "Marcus parse failed" in run_ai_body
 
 
+class TestMarcusEngineAwareContract:
+    """Marcus text review must be engine-aware for playbooks, advisory rules, and two-stage."""
+
+    def test_run_ai_uses_engine_aware_advisory_and_no_hardcoded_min_rr(self):
+        athena_path = os.path.join(os.path.dirname(__file__), "..", "athena.py")
+        with open(athena_path, encoding="utf-8") as f:
+            text = f.read()
+        start = text.index("def run_ai(")
+        end = text.index("except Exception as e:", start)
+        run_ai_body = text[start:end]
+        assert "build_marcus_playbook_block" in run_ai_body
+        assert "evaluate_marcus_advisory_rules" in run_ai_body
+        assert "enforce_marcus_grade_edge_consistency" in run_ai_body
+        assert "AI_MARCUS_TWO_STAGE_ENABLED" in run_ai_body
+        assert "marcus_stage_prompt" in run_ai_body
+        assert "min_rr=1.5" not in run_ai_body
+
+    def test_ai_schemas_exports_marcus_helpers(self):
+        from ai_schemas import enforce_marcus_grade_edge_consistency, evaluate_marcus_advisory_rules
+
+        assert callable(enforce_marcus_grade_edge_consistency)
+        assert callable(evaluate_marcus_advisory_rules)
+
+
 class TestMarcusNewsFreshnessContract:
     """Marcus AI review must request fresh news instead of stale cached sentiment."""
 

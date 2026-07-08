@@ -2310,7 +2310,7 @@ MARCUS_AI_PROVIDER: "openai"  # Marcus Reid text review (/api/analyze); independ
 MARCUS_AI_TIMEOUT_SEC: 90
 # Marcus output budget. On OpenAI Responses, reasoning tokens share this budget;
 # keep it large enough that JSON output is never truncated to empty.
-MARCUS_AI_MAX_TOKENS: 6000
+MARCUS_AI_MAX_TOKENS: 10000
 MARCUS_AI_REASONING_EFFORT: "low"  # OpenAI path only; keeps latency/cost bounded
 # Keep Marcus manual reviews bounded; SDK default retries can multiply the timeout.
 MARCUS_AI_SDK_MAX_RETRIES: 0
