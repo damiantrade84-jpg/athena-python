@@ -27,8 +27,10 @@ describe('engineAScoreBreakdown', () => {
     expect(breakdown?.hasAdjustments).toBe(true);
   });
 
-  it('uses pre_news_score minus intermarket for decision score when present', () => {
+  it('uses pre_news_score minus intermarket for V3 decision score when present', () => {
     const sig = {
+      engine: 'ENGINE_A_V3',
+      contractVersion: '3.1.0',
       confluenceScore: 2.4,
       confluenceThreshold: 2.2,
       pre_news_score: 2.3,
@@ -38,6 +40,20 @@ describe('engineAScoreBreakdown', () => {
 
     const breakdown = engineAScoreBreakdown(sig);
     expect(breakdown?.decisionScore).toBeCloseTo(2.2, 4);
+  });
+
+  it('legacy rows use post-blend display score for pass checks', () => {
+    const sig = {
+      confluenceScore: 2.4,
+      confluenceThreshold: 2.2,
+      pre_news_score: 2.3,
+      intermarketEngineADelta: 0.1,
+      news_adjustment: 0.1,
+    } as EngineASignal;
+
+    const breakdown = engineAScoreBreakdown(sig);
+    expect(breakdown?.displayPasses).toBe(true);
+    expect(breakdown?.decisionPasses).toBe(true);
   });
 });
 

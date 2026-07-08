@@ -224,7 +224,7 @@ def api_live_feed_diagnostics():
 def _ld_empty_engine_a() -> dict:
     return {
         "score": None, "maxScore": None, "threshold": None,
-        "direction": None, "passed": False,
+        "direction": None, "passed": False, "decision": None,
         "factorScores": {"trend": None, "momentum": None, "addon": None},
         "trendScore": None, "momentumScore": None, "addonScore": None,
         "adxValue": None, "adxGate": None, "sessionMultiplier": None, "conviction": None,
@@ -236,6 +236,7 @@ def _ld_empty_engine_a() -> dict:
 def _ld_empty_engine_b() -> dict:
     return {
         "score": None, "maxScore": None, "threshold": None,
+        "gateScore": None, "gateMax": None, "totalScore": None, "bonusPoints": None,
         "direction": None, "structuralVerdict": None, "structuralDataValid": False,
         "confidencePassed": False,
         "structure_ok": False, "location_ok": False, "entry_ok": False,
@@ -354,19 +355,31 @@ def _ld_executable_state(symbol_row: dict, risk_reason: str | None = None) -> di
         "realOrdersAllowed": real_allowed,
     }
 
+def _ld_is_engine_a_v3_signal(sig: dict) -> bool:
+    return (
+        str(sig.get("engine") or "").upper() == "ENGINE_A_V3"
+        and str(sig.get("contractVersion") or "").startswith("3.")
+    )
+
+
 def _ld_build_engine_a_row(sig: dict) -> dict:
-    """Extract Engine A v2 fields from a cached scan signal dict."""
+    """Extract Engine A fields from a cached scan signal dict (V2 + V3)."""
     if not sig:
         return _ld_empty_engine_a()
     score = sig.get("confluenceScore") or sig.get("score") or 0.0
     max_score = sig.get("maxScore") or 3.0
     direction = sig.get("direction")
+    decision = sig.get("decision")
+    is_v3 = _ld_is_engine_a_v3_signal(sig)
     threshold = (
-        sig.get("threshold")
-        or sig.get("liveThreshold")
-        or sig.get("scanThresholdEffective")
-        or sig.get("scanThreshold")
-        or sig.get("minThreshold")
+        sig.get("confluenceThreshold")
+        if is_v3
+        else (
+            sig.get("threshold")
+            or sig.get("liveThreshold")
+            or sig.get("scanThresholdEffective")
+            or sig.get("scanThreshold")
+        )
     )
     # Derive threshold from pair profile if not in signal
     if threshold is None:
@@ -377,7 +390,18 @@ def _ld_build_engine_a_row(sig: dict) -> dict:
                 threshold = get_min_confluence_threshold(_pair_lookup)
         except Exception:
             pass
-    passed = bool(threshold is not None and float(score or 0) >= float(threshold)) if threshold else bool(float(score or 0) > 0 and direction)
+    if is_v3:
+        passed = (
+            str(decision or "").upper() == "TRADE"
+            and sig.get("qualified") is True
+        )
+    elif threshold is not None:
+        try:
+            passed = float(score or 0) >= float(threshold)
+        except (TypeError, ValueError):
+            passed = False
+    else:
+        passed = False
     factor_scores = sig.get("factorScores") or {}
     fail_reasons = []
     _warns = sig.get("warnings") or []
@@ -389,6 +413,7 @@ def _ld_build_engine_a_row(sig: dict) -> dict:
         "threshold": threshold,
         "direction": direction,
         "passed": passed,
+        "decision": decision if is_v3 else None,
         "factorScores": {
             "trend": factor_scores.get("trend"),
             "momentum": factor_scores.get("momentum"),
@@ -418,6 +443,16 @@ def _ld_build_engine_b_row(sig_b: dict) -> dict:
     conf = sig_b.get("confidence") or {}
     checklist = sig_b.get("checklist") or conf.get("checklist") or {}
     structural_verdict = sig_b.get("structural_verdict")
+    gate_score = _ld_first(
+        conf.get("gate_score"),
+        sig_b.get("engine_b_gate_score"),
+        sig_b.get("gate_score"),
+    )
+    gate_max = _ld_first(
+        conf.get("gate_max_possible"),
+        sig_b.get("engine_b_gate_max"),
+        sig_b.get("gate_max_possible"),
+    )
     score = _ld_first(
         sig_b.get("confidence_score"),
         conf.get("score"),
@@ -425,11 +460,14 @@ def _ld_build_engine_b_row(sig_b: dict) -> dict:
     )
     max_score = _ld_first(
         sig_b.get("confidence_max"),
+        conf.get("max_possible"),
         conf.get("max_score"),
         sig_b.get("max_score"),
         sig_b.get("max_possible"),
     )
+    bonus_points = _ld_first(conf.get("bonus_points"), conf.get("bonusPoints"))
     threshold = _ld_first(
+        conf.get("min_score_scaled"),
         sig_b.get("min_score"),
         sig_b.get("min_score_used"),
         sig_b.get("threshold"),
@@ -505,6 +543,10 @@ def _ld_build_engine_b_row(sig_b: dict) -> dict:
         "score": score,
         "maxScore": max_score,
         "threshold": threshold,
+        "gateScore": gate_score,
+        "gateMax": gate_max,
+        "totalScore": score,
+        "bonusPoints": bonus_points,
         "direction": sig_b.get("direction"),
         "structuralVerdict": structural_verdict,
         "structuralDataValid": structural_data_valid,

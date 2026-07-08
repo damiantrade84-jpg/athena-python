@@ -88,12 +88,7 @@ export default function EngineASignalCard({
     : confluencePct(signal);
   const conv = toNum(signal.conviction, NaN);
   const convT = convictionTier(Number.isFinite(conv) ? conv : null);
-  const score = scoreBreakdown?.decisionScore ?? toNum(
-    isEngineBOnlyStub
-      ? raw.engine_a_confluenceScore ?? signal.confluenceScore ?? signal.score
-      : signal.confluenceScore ?? signal.score,
-    NaN,
-  );
+  const score = scoreBreakdown?.displayScore ?? toNum(signal.confluenceScore ?? signal.score, NaN);
   const max = toNum(
     isEngineBOnlyStub ? raw.engine_a_maxScore ?? signal.maxScore : signal.maxScore,
     NaN,
@@ -101,7 +96,11 @@ export default function EngineASignalCard({
   const threshold = scoreBreakdown?.threshold ?? engineAThreshold(signal);
   const passed = isNakedScan && bBreakdown
     ? bBreakdown.gatePasses
-    : !isEngineBOnly && Number.isFinite(score) && threshold != null && score >= threshold;
+    : !isEngineBOnly && Number.isFinite(score) && threshold != null && (
+      isEngineAV3Signal(signal) && scoreBreakdown?.hasAdjustments
+        ? Boolean(scoreBreakdown.decisionPasses)
+        : score >= threshold
+    );
   const fs = ((
     (isEngineBOnlyStub && raw.engine_a_factorScores && typeof raw.engine_a_factorScores === 'object')
       ? raw.engine_a_factorScores

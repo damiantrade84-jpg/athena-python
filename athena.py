@@ -3435,6 +3435,14 @@ def resolve_auto_style(requested_style: str, pair: dict | None) -> str:
         return requested
 
     ptype = str((pair or {}).get("type") or "").lower()
+    try:
+        from scoring import get_pair_score_group
+
+        score_group = get_pair_score_group(pair or {})
+        if score_group in ("forex_exotics", "crypto_other"):
+            return "swing"
+    except Exception:
+        pass
     if ptype in ("crypto", "forex"):
         return "intraday"
     return "swing"
@@ -7017,13 +7025,19 @@ def _compute_naked_analysis(
             f"[NAKED-AI] {pair_obj.get('display')}: ATR tf={_atr_tf} series length={len(atr_series) if atr_series else 0}, final_ATR={atr}"
         )
 
+        from athena_app.services.engine_b_market_state import engine_b_gate_current_price
+
         if not atr or atr <= 0:
             if execution_mode:
                 return None, pair_obj, "Engine B execution ATR unavailable"
             log.warning(
                 f"[NAKED-AI] {pair_obj.get('display')}: Failed ATR calc - series={atr_series}, using fallback ATR"
             )
-            current_price = float(sig.get("price") or (trigger_candles or structure_entry_candles)[-1]["close"])
+            current_price = engine_b_gate_current_price(
+                explicit_price=sig.get("price"),
+                structure_entry_candles=structure_entry_candles,
+                trigger_entry_candles=trigger_candles,
+            )
             _atr_pct = {
                 "forex": 0.002,
                 "crypto": 0.02,
@@ -7037,7 +7051,11 @@ def _compute_naked_analysis(
                 f"[NAKED-AI] {pair_obj.get('display')}: Using fallback ATR={atr} (type={pair_obj.get('type')})"
             )
 
-        current_price = float(sig.get("price") or (trigger_candles or structure_entry_candles)[-1]["close"])
+        current_price = engine_b_gate_current_price(
+            explicit_price=sig.get("price"),
+            structure_entry_candles=structure_entry_candles,
+            trigger_entry_candles=trigger_candles,
+        )
 
         from market_structure import (
             NakedEngine,
@@ -7790,7 +7808,12 @@ def api_scan_naked():
                         return {"debug": debug_row}
                     return []
 
-            current_price = float(entry_candles[-1]["close"])
+            from athena_app.services.engine_b_market_state import engine_b_gate_current_price
+
+            current_price = engine_b_gate_current_price(
+                structure_entry_candles=structure_entry_candles,
+                trigger_entry_candles=entry_candles,
+            )
 
             # analyze_structure expects canonical D1/H4/H1 candle series
             regime_label = _engine_b_regime_label(zone_candles, pair.get("type", "stock"))

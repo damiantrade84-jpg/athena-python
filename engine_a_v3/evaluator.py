@@ -20,7 +20,7 @@ from engine_a_v3.levels import (
     build_structural_levels,
 )
 from engine_a_v3.promotion import PromotionRegistry, production_registry
-from engine_a_v3.quant_scorer import QuantScore, score_pair
+from engine_a_v3.quant_scorer import QuantScore, _resolve_v3_entry_tf, score_pair
 from engine_a_v3.profile import baseline_profile
 from engine_a_v3.routing import route_specialist
 from engine_a_v3.session_scoring import session_score_passes
@@ -170,7 +170,11 @@ def evaluate_engine_a_v3(
 ) -> EngineASetupSignal:
     route = route_specialist(pair)
     normalized_horizon = _horizon(horizon)
-    primary_tf = "H1" if normalized_horizon == "intraday" else "H4"
+    primary_tf = _resolve_v3_entry_tf(
+        route.score_group,
+        str(pair.get("type") or pair.get("asset_type") or "other"),
+        normalized_horizon or "intraday",
+    )
     primary = candles.get(primary_tf, []) if normalized_horizon else []
     last_ts_raw = (
         (primary[-1].get("time") or primary[-1].get("datetime"))

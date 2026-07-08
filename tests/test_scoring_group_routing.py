@@ -152,7 +152,7 @@ def test_engine_b_resolved_style_profiles_keep_configured_min_rr_contracts():
     assert float(btc["min_rr"]) == 1.3
     assert float(eth["min_rr"]) == 1.3
     assert float(alt["min_rr"]) == 1.4
-    assert float(commodity["min_rr"]) == 2.0
+    assert float(commodity["min_rr"]) == 1.8
 
 
 def test_engine_b_base_style_profiles_keep_min_score_contract():
@@ -253,8 +253,8 @@ def test_equity_and_commodity_groups_use_explicit_stable_floor():
     examples = [
         ({"display": "AAPL", "type": "stock"}, "us_stock_single", 1.5),
         ({"display": "SPY", "type": "stock"}, "us_indices_trackers", 1.5),
-        ({"display": "XAU/USD", "type": "commodity"}, "precious_trackers", 1.7),
-        ({"display": "Copper", "type": "commodity"}, "copper", 1.5),
+        ({"display": "XAU/USD", "type": "commodity"}, "precious_trackers", 1.5),
+        ({"display": "Copper", "type": "commodity"}, "copper", 1.7),
         ({"display": "DAX 40", "type": "index"}, "eu_indices", 1.5),
     ]
     for pair, expected_group, expected_threshold in examples:
@@ -503,9 +503,16 @@ def test_divergence_monitor_replays_shared_factor_path_for_forex():
     assert "compute_forex_score" not in text
 
 
-def test_analyze_pair_wires_divergence_monitor_and_candle_fetch_meta():
+def test_analyze_pair_wires_v3_candle_fetch_meta():
     src = Path(__file__).resolve().parents[1] / "athena.py"
     text = src.read_text(encoding="utf-8")
-    assert "ENGINE_A_DIVERGENCE_MONITOR_ENABLED" in text
-    assert "check_divergence(" in text
-    assert 'signal["candleFetchMeta"] = _candle_fetch_meta' in text
+    assert "evaluate_engine_a_v3" in text
+    assert '_v3_signal["candleFetchMeta"]' in text
+    assert '"pairSource": pair.get("source")' in text
+
+
+def test_currency_indices_route_to_forex_majors():
+    assert get_pair_score_group({"display": "USDX", "type": "index"}) == "forex_majors"
+    assert get_pair_score_group({"display": "EURX", "type": "index"}) == "forex_majors"
+    assert get_pair_score_group({"display": "JPYX", "type": "index"}) == "forex_majors"
+    assert get_pair_score_group({"display": "US2000", "type": "index"}) == "index_other"

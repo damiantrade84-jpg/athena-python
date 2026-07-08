@@ -1435,19 +1435,18 @@ def engine_b_effective_min_score_floor(
     min_score_scaled: float,
     gate_max_possible: float,
 ) -> float:
-    """Cap the score floor at achievable mandatory-gate count."""
+    """Return the style/regime min_score floor for total-score gating.
+
+    ``gate_max_possible`` is retained for diagnostics only; the floor applies to
+    ``confidence.score`` (mandatory gates + quality bonuses), not ``gate_score``.
+    """
+    _ = gate_max_possible  # diagnostics callers still pass gate headroom
     try:
         scaled = float(min_score_scaled or 0.0)
     except (TypeError, ValueError):
         scaled = 0.0
-    try:
-        gate_max = float(gate_max_possible or 0.0)
-    except (TypeError, ValueError):
-        gate_max = 0.0
     if scaled <= 0:
         return 0.0
-    if gate_max > 0:
-        return min(scaled, gate_max)
     return scaled
 
 
@@ -1464,9 +1463,9 @@ def engine_b_confidence_passes(
     )
     conf = conf_data if isinstance(conf_data, dict) else {}
     try:
-        gate_score = float(conf.get("gate_score", conf.get("score", 0.0)) or 0.0)
+        quality_score = float(conf.get("score", conf.get("gate_score", 0.0)) or 0.0)
     except (TypeError, ValueError):
-        gate_score = 0.0
+        quality_score = 0.0
     try:
         gate_max_possible = float(conf.get("gate_max_possible", 0.0) or 0.0)
     except (TypeError, ValueError):
@@ -1474,7 +1473,7 @@ def engine_b_confidence_passes(
     effective_min = engine_b_effective_min_score_floor(
         min_score_scaled, gate_max_possible
     )
-    score_floor_ok = effective_min <= 0 or gate_score >= effective_min
+    score_floor_ok = effective_min <= 0 or quality_score >= effective_min
     passed = bool(conf.get("passed", False)) and score_floor_ok
     try:
         from calibration_diagnostics import (
@@ -3848,7 +3847,10 @@ class NakedEngine:
         trigger_candles = engine_b_candles_for_tf(
             _tfs["trigger"], d1_candles, h4_candles, h1_candles
         )
-        _zone_fvg_candles = struct_candles if structure_tf == "H4" else h4_candles
+        _zone_tf = str(_tfs.get("zone") or structure_tf or "H4").upper()
+        _zone_fvg_candles = engine_b_candles_for_tf(
+            _zone_tf, d1_candles, h4_candles, h1_candles
+        )
 
         h4_highs = np.array([float(c["high"]) for c in h4_candles])
         h4_lows = np.array([float(c["low"]) for c in h4_candles])

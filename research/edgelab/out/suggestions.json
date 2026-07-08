@@ -3,8 +3,8 @@
   "disclaimer": "EdgeLab suggestions are research-only. Manual promotion required for production.",
   "suggestions": [
     {
-      "id": "6f71df3c-5e25-4ea2-bf9f-b7429c91e871",
-      "timestamp": "2026-07-06T14:47:24.076492+00:00",
+      "id": "08faf3f0-e853-4ebf-9ee3-fbfd7ade5e61",
+      "timestamp": "2026-07-07T05:49:01.778714+00:00",
       "engine": "engine_a",
       "symbol": "ETHUSDT",
       "timeframe": "H1",
@@ -33,8 +33,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "c33e35b7-2b67-4c0d-b7d5-0a405f138c4b",
-      "timestamp": "2026-07-06T14:47:23.741089+00:00",
+      "id": "fe375f81-2605-438b-b442-5a1eec47062e",
+      "timestamp": "2026-07-07T05:49:01.581585+00:00",
       "engine": "engine_a",
       "symbol": "ETHUSDT",
       "timeframe": "H4",
@@ -63,8 +63,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "f9efe37c-87e4-4162-928f-dec08c3731b1",
-      "timestamp": "2026-07-06T14:47:23.522715+00:00",
+      "id": "4a4c303b-d609-4964-acca-1fde3e418ef8",
+      "timestamp": "2026-07-07T05:49:01.476635+00:00",
       "engine": "engine_a",
       "symbol": "BTCUSDT",
       "timeframe": "H1",
@@ -93,8 +93,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "15d73e0d-d46f-4c43-8861-72b1bda2760b",
-      "timestamp": "2026-07-06T14:47:23.280961+00:00",
+      "id": "41d5194b-b57b-48bf-9a83-9d32327e86a4",
+      "timestamp": "2026-07-07T05:49:01.374540+00:00",
       "engine": "engine_a",
       "symbol": "BTCUSDT",
       "timeframe": "H4",
@@ -123,8 +123,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "1b4854e9-c6e2-4b7b-a4f9-3c77e238e86a",
-      "timestamp": "2026-07-06T14:47:23.083141+00:00",
+      "id": "829dd2bd-df6f-40aa-956c-a81d36ac5529",
+      "timestamp": "2026-07-07T05:49:01.272428+00:00",
       "engine": "cascade",
       "symbol": "ETHUSDT",
       "timeframe": "H1",
@@ -153,8 +153,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "8b2b09dd-f166-47b2-9d10-66169d16f68e",
-      "timestamp": "2026-07-06T14:47:22.969906+00:00",
+      "id": "489472fe-9bfa-4c03-99ab-097b1e751e04",
+      "timestamp": "2026-07-07T05:49:01.177371+00:00",
       "engine": "cascade",
       "symbol": "ETHUSDT",
       "timeframe": "H4",
@@ -183,8 +183,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "675e30e0-08e1-461b-9505-39749c195e11",
-      "timestamp": "2026-07-06T14:47:22.733081+00:00",
+      "id": "b37a4064-ffef-477e-8e01-6ebe8d5c9a21",
+      "timestamp": "2026-07-07T05:49:01.072508+00:00",
       "engine": "cascade",
       "symbol": "BTCUSDT",
       "timeframe": "H1",
@@ -213,8 +213,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "0db23e0c-6372-4771-88e4-667ae5d36d7a",
-      "timestamp": "2026-07-06T14:47:22.604283+00:00",
+      "id": "5836e6d2-995f-4e5e-a418-490ef8d07e65",
+      "timestamp": "2026-07-07T05:49:00.966088+00:00",
       "engine": "cascade",
       "symbol": "BTCUSDT",
       "timeframe": "H4",
@@ -243,8 +243,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "b30a6790-04ef-43b5-82d0-87560ee32f45",
-      "timestamp": "2026-07-06T14:47:22.377514+00:00",
+      "id": "19bd57b0-3f6e-4f5a-b048-f6d4f2ea5d31",
+      "timestamp": "2026-07-07T05:49:00.859661+00:00",
       "engine": "engine_b",
       "symbol": "ETHUSDT",
       "timeframe": "H1",
@@ -273,8 +273,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "1ee721d7-1b6f-4e18-a5f4-f10394c62fda",
-      "timestamp": "2026-07-06T14:47:22.253669+00:00",
+      "id": "15b09ad3-5e35-4957-9eac-10c9389b6240",
+      "timestamp": "2026-07-07T05:49:00.756449+00:00",
       "engine": "engine_b",
       "symbol": "ETHUSDT",
       "timeframe": "H4",
@@ -303,8 +303,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "e79963fe-1e04-4089-8b4b-4566e7c90bfc",
-      "timestamp": "2026-07-06T14:47:22.127540+00:00",
+      "id": "3150af7e-78c5-4a17-801d-91ec07267f02",
+      "timestamp": "2026-07-07T05:49:00.637113+00:00",
       "engine": "engine_b",
       "symbol": "BTCUSDT",
       "timeframe": "H1",
@@ -333,8 +333,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "60bb5bfb-45db-463e-b3bd-2d0309fac162",
-      "timestamp": "2026-07-06T14:47:21.998293+00:00",
+      "id": "2e911873-08ec-43f1-81a7-9820aa8117bb",
+      "timestamp": "2026-07-07T05:49:00.537669+00:00",
       "engine": "engine_b",
       "symbol": "BTCUSDT",
       "timeframe": "H4",
@@ -363,8 +363,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "1cb94b50-c1c7-4ced-9358-a48866672539",
-      "timestamp": "2026-07-06T14:32:21.463779+00:00",
+      "id": "8cd724af-be47-44dd-80d9-414defdf03c1",
+      "timestamp": "2026-07-07T05:34:00.349585+00:00",
       "engine": "engine_a",
       "symbol": "ETHUSDT",
       "timeframe": "H1",
@@ -393,8 +393,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "57175dbb-a15a-487a-9263-f7d74c5434cc",
-      "timestamp": "2026-07-06T14:32:21.301800+00:00",
+      "id": "00a0d7e2-19dd-417d-b839-3ad45f55b228",
+      "timestamp": "2026-07-07T05:34:00.245345+00:00",
       "engine": "engine_a",
       "symbol": "ETHUSDT",
       "timeframe": "H4",
@@ -423,8 +423,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "fd6c9651-f292-43a1-8f71-a9aaa8a79187",
-      "timestamp": "2026-07-06T14:32:21.192793+00:00",
+      "id": "8f7734c9-528d-4dec-aebe-f203fe9d2f70",
+      "timestamp": "2026-07-07T05:34:00.130519+00:00",
       "engine": "engine_a",
       "symbol": "BTCUSDT",
       "timeframe": "H1",
@@ -453,8 +453,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "8ffbfe86-bc49-4db0-8734-2b7f4e59f58e",
-      "timestamp": "2026-07-06T14:32:21.077904+00:00",
+      "id": "0e79a713-e117-4e67-a8f2-14409de80892",
+      "timestamp": "2026-07-07T05:33:59.965877+00:00",
       "engine": "engine_a",
       "symbol": "BTCUSDT",
       "timeframe": "H4",
@@ -483,8 +483,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "2c2897e4-4dd1-49de-90cf-d7a8159010d5",
-      "timestamp": "2026-07-06T14:32:20.854618+00:00",
+      "id": "ec519b82-7723-4b6a-8466-1161aa6711d9",
+      "timestamp": "2026-07-07T05:33:59.866519+00:00",
       "engine": "cascade",
       "symbol": "ETHUSDT",
       "timeframe": "H1",
@@ -513,8 +513,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "de6bedd2-e972-400d-a810-8a68eb67dfe8",
-      "timestamp": "2026-07-06T14:32:20.749735+00:00",
+      "id": "ada8b3d9-0990-466c-843f-805ab354ba69",
+      "timestamp": "2026-07-07T05:33:59.767584+00:00",
       "engine": "cascade",
       "symbol": "ETHUSDT",
       "timeframe": "H4",
@@ -543,8 +543,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "ce124bcf-6c62-4683-b972-05ee90880d62",
-      "timestamp": "2026-07-06T14:32:20.640978+00:00",
+      "id": "fc86d3db-df05-4906-af61-aea4b17efb6f",
+      "timestamp": "2026-07-07T05:33:59.648105+00:00",
       "engine": "cascade",
       "symbol": "BTCUSDT",
       "timeframe": "H1",
@@ -573,8 +573,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "2808b3f9-65f7-43dc-9426-50c821d1203b",
-      "timestamp": "2026-07-06T14:32:20.539355+00:00",
+      "id": "ff8c9807-e0e8-4009-a985-2b26cd2f9324",
+      "timestamp": "2026-07-07T05:33:59.543663+00:00",
       "engine": "cascade",
       "symbol": "BTCUSDT",
       "timeframe": "H4",
@@ -603,8 +603,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "cdda201a-1009-4350-94f5-7742297560f1",
-      "timestamp": "2026-07-06T14:32:20.432870+00:00",
+      "id": "ca87cc10-1fae-4619-9a28-9057fd944bec",
+      "timestamp": "2026-07-07T05:33:59.445232+00:00",
       "engine": "engine_b",
       "symbol": "ETHUSDT",
       "timeframe": "H1",
@@ -633,8 +633,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "eac8253e-157f-4c3e-b8b4-5b8499ead2f0",
-      "timestamp": "2026-07-06T14:32:20.329095+00:00",
+      "id": "e19e6e5f-a51b-4161-b34c-1d78ea8e0f0c",
+      "timestamp": "2026-07-07T05:33:59.341199+00:00",
       "engine": "engine_b",
       "symbol": "ETHUSDT",
       "timeframe": "H4",
@@ -663,8 +663,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "3f205d45-16d8-4a27-b65b-a48b535971be",
-      "timestamp": "2026-07-06T14:32:20.216072+00:00",
+      "id": "58c79c9c-042a-4cd0-8955-9a249785961f",
+      "timestamp": "2026-07-07T05:33:59.241821+00:00",
       "engine": "engine_b",
       "symbol": "BTCUSDT",
       "timeframe": "H1",
@@ -693,8 +693,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "f7a50414-6a35-46bd-b11e-ce0778a51f46",
-      "timestamp": "2026-07-06T14:32:20.112713+00:00",
+      "id": "c1756723-78e5-4fa6-82ad-4c104fd6b4cb",
+      "timestamp": "2026-07-07T05:33:59.112049+00:00",
       "engine": "engine_b",
       "symbol": "BTCUSDT",
       "timeframe": "H4",
@@ -723,8 +723,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "802817e5-93ae-419b-8d0d-323e92ebb44f",
-      "timestamp": "2026-07-06T14:17:19.714489+00:00",
+      "id": "e99b164d-7814-4c26-a9e6-dbb728f65345",
+      "timestamp": "2026-07-07T05:18:58.809839+00:00",
       "engine": "engine_a",
       "symbol": "ETHUSDT",
       "timeframe": "H1",
@@ -753,8 +753,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "9a8b29b5-5170-423d-b21f-ff2ff0738895",
-      "timestamp": "2026-07-06T14:17:19.535108+00:00",
+      "id": "a2dd47aa-03b8-4288-84c1-759717189967",
+      "timestamp": "2026-07-07T05:18:58.692855+00:00",
       "engine": "engine_a",
       "symbol": "ETHUSDT",
       "timeframe": "H4",
@@ -783,8 +783,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "96efd338-bddc-4b91-874b-e4ccb417cb02",
-      "timestamp": "2026-07-06T14:17:19.405765+00:00",
+      "id": "3c35bc0d-b411-4970-8846-4b045e774fb1",
+      "timestamp": "2026-07-07T05:18:58.576784+00:00",
       "engine": "engine_a",
       "symbol": "BTCUSDT",
       "timeframe": "H1",
@@ -813,8 +813,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "0f78ec5e-2ee8-4f26-9506-9bf04808cef0",
-      "timestamp": "2026-07-06T14:17:19.273573+00:00",
+      "id": "93ee8a6d-e6fd-4ef5-8fea-e5bb62167386",
+      "timestamp": "2026-07-07T05:18:58.367519+00:00",
       "engine": "engine_a",
       "symbol": "BTCUSDT",
       "timeframe": "H4",
@@ -843,8 +843,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "e4e47045-37b8-4f3c-958e-797eed06ccd9",
-      "timestamp": "2026-07-06T14:17:19.051919+00:00",
+      "id": "ec7a838e-bbac-4cac-8546-914c970a8de7",
+      "timestamp": "2026-07-07T05:18:58.277072+00:00",
       "engine": "cascade",
       "symbol": "ETHUSDT",
       "timeframe": "H1",
@@ -873,8 +873,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "60957790-8817-4acc-9f26-1ec1a9f7b49c",
-      "timestamp": "2026-07-06T14:17:18.924376+00:00",
+      "id": "390662b7-b4e3-4e14-bf5b-fd99d7149974",
+      "timestamp": "2026-07-07T05:18:58.187423+00:00",
       "engine": "cascade",
       "symbol": "ETHUSDT",
       "timeframe": "H4",
@@ -903,8 +903,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "c5de46ee-78e4-4256-a0ba-2990ba7f3b71",
-      "timestamp": "2026-07-06T14:17:18.814872+00:00",
+      "id": "38eb89b0-7604-476a-9826-00d15f19f08e",
+      "timestamp": "2026-07-07T05:18:58.080523+00:00",
       "engine": "cascade",
       "symbol": "BTCUSDT",
       "timeframe": "H1",
@@ -933,8 +933,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "de0ffde0-717d-4613-a08b-79154e3712f8",
-      "timestamp": "2026-07-06T14:17:18.686670+00:00",
+      "id": "b1213436-0ec1-465c-836f-88b67303f464",
+      "timestamp": "2026-07-07T05:18:57.978942+00:00",
       "engine": "cascade",
       "symbol": "BTCUSDT",
       "timeframe": "H4",
@@ -963,8 +963,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "14049341-779b-4cb6-9026-818db1238756",
-      "timestamp": "2026-07-06T14:17:18.565401+00:00",
+      "id": "1ddf724a-dcf8-46a0-aefe-449ff1fac89d",
+      "timestamp": "2026-07-07T05:18:57.879763+00:00",
       "engine": "engine_b",
       "symbol": "ETHUSDT",
       "timeframe": "H1",
@@ -993,8 +993,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "384aa36b-6f7c-439e-a5ec-c7495c0db1cc",
-      "timestamp": "2026-07-06T14:17:18.434981+00:00",
+      "id": "486a7d7e-44d3-498d-88a2-93bfd76bf7f7",
+      "timestamp": "2026-07-07T05:18:57.777358+00:00",
       "engine": "engine_b",
       "symbol": "ETHUSDT",
       "timeframe": "H4",
@@ -1023,8 +1023,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "1c8f6bd4-3d9d-4242-ad72-44b17dd526a9",
-      "timestamp": "2026-07-06T14:17:18.325050+00:00",
+      "id": "5c9863ba-d16b-4766-bee6-b01db422c539",
+      "timestamp": "2026-07-07T05:18:57.677246+00:00",
       "engine": "engine_b",
       "symbol": "BTCUSDT",
       "timeframe": "H1",
@@ -1053,8 +1053,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "5aa1e31c-47df-412a-9786-f4bde274b6bb",
-      "timestamp": "2026-07-06T14:17:18.083630+00:00",
+      "id": "125c935a-0a2b-4cb7-b127-859f45e50d9c",
+      "timestamp": "2026-07-07T05:18:57.569908+00:00",
       "engine": "engine_b",
       "symbol": "BTCUSDT",
       "timeframe": "H4",
@@ -1083,8 +1083,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "467f7a66-cda6-452d-ac09-6bc2bd06c756",
-      "timestamp": "2026-07-06T14:02:17.801512+00:00",
+      "id": "b58c7798-5888-481c-9f4b-8eef19b347af",
+      "timestamp": "2026-07-07T05:03:57.303333+00:00",
       "engine": "engine_a",
       "symbol": "ETHUSDT",
       "timeframe": "H1",
@@ -1113,8 +1113,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "b772c295-6f60-451e-8d20-d0ce9c2ae044",
-      "timestamp": "2026-07-06T14:02:17.645280+00:00",
+      "id": "f7b358e9-7d7d-4dd2-9b09-4fbe0ee95dcd",
+      "timestamp": "2026-07-07T05:03:57.219385+00:00",
       "engine": "engine_a",
       "symbol": "ETHUSDT",
       "timeframe": "H4",
@@ -1143,8 +1143,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "076fc5dd-eb63-4606-807f-81521467b4a8",
-      "timestamp": "2026-07-06T14:02:17.525218+00:00",
+      "id": "dc49d3be-9dc8-4dd1-829e-5b548ec91514",
+      "timestamp": "2026-07-07T05:03:57.107378+00:00",
       "engine": "engine_a",
       "symbol": "BTCUSDT",
       "timeframe": "H1",
@@ -1173,8 +1173,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "efc67cc4-9820-4224-928f-97fd2507dc64",
-      "timestamp": "2026-07-06T14:02:17.407777+00:00",
+      "id": "94ec55b5-9845-4f1a-88d2-2ae05fd35257",
+      "timestamp": "2026-07-07T05:03:57.013951+00:00",
       "engine": "engine_a",
       "symbol": "BTCUSDT",
       "timeframe": "H4",
@@ -1203,8 +1203,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "18999e3c-99e0-4da2-b2ae-97d4a99658da",
-      "timestamp": "2026-07-06T14:02:17.274930+00:00",
+      "id": "859a9a71-d91b-4dec-bfe3-1fd58bf0b1e5",
+      "timestamp": "2026-07-07T05:03:56.926035+00:00",
       "engine": "cascade",
       "symbol": "ETHUSDT",
       "timeframe": "H1",
@@ -1233,8 +1233,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "bdac766d-33b7-4105-a1e5-0d8eb6793b7c",
-      "timestamp": "2026-07-06T14:02:17.168938+00:00",
+      "id": "5f7e4ed5-5e81-49c5-8a71-9a0ad670e609",
+      "timestamp": "2026-07-07T05:03:56.819450+00:00",
       "engine": "cascade",
       "symbol": "ETHUSDT",
       "timeframe": "H4",
@@ -1263,8 +1263,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "496ab707-9e64-4b51-9806-1f17fb66fa7e",
-      "timestamp": "2026-07-06T14:02:17.062464+00:00",
+      "id": "eaecaaf3-e55a-40cf-b679-4cd3e076dc1b",
+      "timestamp": "2026-07-07T05:03:56.725941+00:00",
       "engine": "cascade",
       "symbol": "BTCUSDT",
       "timeframe": "H1",
@@ -1293,8 +1293,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "2e9e9df2-c32c-46e1-b1a1-daf14a603f15",
-      "timestamp": "2026-07-06T14:02:16.850811+00:00",
+      "id": "89b712dd-11b7-4cf2-8f19-ca5a3f790ca7",
+      "timestamp": "2026-07-07T05:03:56.634042+00:00",
       "engine": "cascade",
       "symbol": "BTCUSDT",
       "timeframe": "H4",
@@ -1323,8 +1323,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "3d78b997-0852-438b-ab9d-805b27bda48a",
-      "timestamp": "2026-07-06T14:02:16.736844+00:00",
+      "id": "2c658784-88c7-4a3e-991a-89290169232c",
+      "timestamp": "2026-07-07T05:03:56.451266+00:00",
       "engine": "engine_b",
       "symbol": "ETHUSDT",
       "timeframe": "H1",
@@ -1353,8 +1353,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "f2849a25-e681-4dfd-b7e7-e6cf6badf16a",
-      "timestamp": "2026-07-06T14:02:16.631787+00:00",
+      "id": "1a6fcbb1-cc17-4848-bc01-457d3468bd8b",
+      "timestamp": "2026-07-07T05:03:56.354874+00:00",
       "engine": "engine_b",
       "symbol": "ETHUSDT",
       "timeframe": "H4",
@@ -1383,8 +1383,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "b05f280b-15f0-4d7b-b987-1930930c4cc8",
-      "timestamp": "2026-07-06T14:02:16.528726+00:00",
+      "id": "80c0024f-bf90-4dd7-8056-d10b22758f24",
+      "timestamp": "2026-07-07T05:03:56.253956+00:00",
       "engine": "engine_b",
       "symbol": "BTCUSDT",
       "timeframe": "H1",
@@ -1413,8 +1413,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "f3200637-b367-4083-ae84-e54cca8e58bb",
-      "timestamp": "2026-07-06T14:02:16.423117+00:00",
+      "id": "2c6ffc84-f418-4141-9130-652d3566471b",
+      "timestamp": "2026-07-07T05:03:56.147572+00:00",
       "engine": "engine_b",
       "symbol": "BTCUSDT",
       "timeframe": "H4",
@@ -1443,8 +1443,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "dc15b83b-0122-430d-a01a-1f1a3a1c4046",
-      "timestamp": "2026-07-06T13:47:16.134400+00:00",
+      "id": "101713d3-5272-4900-8079-4ef680bb26a5",
+      "timestamp": "2026-07-07T04:48:55.936102+00:00",
       "engine": "engine_a",
       "symbol": "ETHUSDT",
       "timeframe": "H1",
@@ -1473,8 +1473,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "aa3c2841-603e-43e4-9699-ee6dbe172d7a",
-      "timestamp": "2026-07-06T13:47:15.891166+00:00",
+      "id": "fbcd3ef0-8209-43be-ba7e-41e2fd64aa07",
+      "timestamp": "2026-07-07T04:48:55.816074+00:00",
       "engine": "engine_a",
       "symbol": "ETHUSDT",
       "timeframe": "H4",
@@ -1503,8 +1503,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "b1b78673-5836-46e7-9860-6d76f7590214",
-      "timestamp": "2026-07-06T13:47:15.751029+00:00",
+      "id": "a127e6cb-14a2-4450-9c87-3d7de6e7f00d",
+      "timestamp": "2026-07-07T04:48:55.693851+00:00",
       "engine": "engine_a",
       "symbol": "BTCUSDT",
       "timeframe": "H1",
@@ -1533,8 +1533,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "66019d59-b860-45b0-824e-3b1f9a57815b",
-      "timestamp": "2026-07-06T13:47:15.563024+00:00",
+      "id": "d2200e6e-f04e-4eb5-9a52-7663f2bf1467",
+      "timestamp": "2026-07-07T04:48:55.573744+00:00",
       "engine": "engine_a",
       "symbol": "BTCUSDT",
       "timeframe": "H4",
@@ -1563,8 +1563,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "623ccdc5-deb0-4ef5-8dbe-9dbe8579af59",
-      "timestamp": "2026-07-06T13:47:15.423553+00:00",
+      "id": "6750665e-e28c-41f0-82b3-2850de011482",
+      "timestamp": "2026-07-07T04:48:55.438304+00:00",
       "engine": "cascade",
       "symbol": "ETHUSDT",
       "timeframe": "H1",
@@ -1593,8 +1593,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "40485e93-ab75-4825-9ee0-0a995c429b56",
-      "timestamp": "2026-07-06T13:47:15.304056+00:00",
+      "id": "18c9c098-136f-486c-a10a-2761218a6663",
+      "timestamp": "2026-07-07T04:48:55.234982+00:00",
       "engine": "cascade",
       "symbol": "ETHUSDT",
       "timeframe": "H4",
@@ -1623,8 +1623,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "cc5e692e-eaac-41a4-9c57-d270940d381d",
-      "timestamp": "2026-07-06T13:47:15.190869+00:00",
+      "id": "4cea25b2-3634-45d1-805c-39b611570896",
+      "timestamp": "2026-07-07T04:48:55.127463+00:00",
       "engine": "cascade",
       "symbol": "BTCUSDT",
       "timeframe": "H1",
@@ -1653,8 +1653,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "9f49465d-7b34-40dc-8891-e20eca1150f3",
-      "timestamp": "2026-07-06T13:47:15.077603+00:00",
+      "id": "ed317396-b10c-4d99-9eb5-5eacfec983d5",
+      "timestamp": "2026-07-07T04:48:55.016072+00:00",
       "engine": "cascade",
       "symbol": "BTCUSDT",
       "timeframe": "H4",
@@ -1683,8 +1683,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "37dcf87c-2f57-49e9-8595-f256f8088a9a",
-      "timestamp": "2026-07-06T13:47:14.963206+00:00",
+      "id": "ed5fe89e-9721-410a-b23c-eff92a76e809",
+      "timestamp": "2026-07-07T04:48:54.905091+00:00",
       "engine": "engine_b",
       "symbol": "ETHUSDT",
       "timeframe": "H1",
@@ -1713,8 +1713,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "99af3c61-1bc5-4587-903a-75b62716aa51",
-      "timestamp": "2026-07-06T13:47:14.852534+00:00",
+      "id": "b23c66e7-acf0-4235-ba02-027fee730940",
+      "timestamp": "2026-07-07T04:48:54.790545+00:00",
       "engine": "engine_b",
       "symbol": "ETHUSDT",
       "timeframe": "H4",
@@ -1743,8 +1743,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "3d0a3445-b3df-4711-bc4f-d7260f29476d",
-      "timestamp": "2026-07-06T13:47:14.743204+00:00",
+      "id": "db7ac5c4-1fbf-4407-b4e6-29f1f46de921",
+      "timestamp": "2026-07-07T04:48:54.689142+00:00",
       "engine": "engine_b",
       "symbol": "BTCUSDT",
       "timeframe": "H1",
@@ -1773,8 +1773,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "9413662f-89d7-4c44-b2ab-30c3981567e3",
-      "timestamp": "2026-07-06T13:47:14.522834+00:00",
+      "id": "93878f24-1822-4909-b54b-7e950a5a509b",
+      "timestamp": "2026-07-07T04:48:54.583612+00:00",
       "engine": "engine_b",
       "symbol": "BTCUSDT",
       "timeframe": "H4",
@@ -1803,8 +1803,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "8db7f6f8-9ff1-404d-8898-c253242b44fa",
-      "timestamp": "2026-07-06T13:32:14.219011+00:00",
+      "id": "9448e437-8c9a-4368-b13a-7a96ce360770",
+      "timestamp": "2026-07-07T04:33:54.369958+00:00",
       "engine": "engine_a",
       "symbol": "ETHUSDT",
       "timeframe": "H1",
@@ -1833,8 +1833,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "0f624229-4739-4b93-b515-6c93c6310961",
-      "timestamp": "2026-07-06T13:32:14.117001+00:00",
+      "id": "c7c5bb00-19ff-47de-8069-c901f1f014e6",
+      "timestamp": "2026-07-07T04:33:54.272288+00:00",
       "engine": "engine_a",
       "symbol": "ETHUSDT",
       "timeframe": "H4",
@@ -1863,8 +1863,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "1872107b-50a2-4fec-bbf0-45d835801db7",
-      "timestamp": "2026-07-06T13:32:14.012099+00:00",
+      "id": "75f9ebf0-8c23-4808-a037-683ebe1fc89d",
+      "timestamp": "2026-07-07T04:33:54.159976+00:00",
       "engine": "engine_a",
       "symbol": "BTCUSDT",
       "timeframe": "H1",
@@ -1893,8 +1893,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "9ad82687-cd37-49c1-bd10-723eade08b74",
-      "timestamp": "2026-07-06T13:32:13.907318+00:00",
+      "id": "31de72c3-c4cb-4d09-bc88-ffa0fd52e2c1",
+      "timestamp": "2026-07-07T04:33:54.046679+00:00",
       "engine": "engine_a",
       "symbol": "BTCUSDT",
       "timeframe": "H4",
@@ -1923,8 +1923,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "95062d72-a3ae-4e26-be4f-a3809fdb3ff1",
-      "timestamp": "2026-07-06T13:32:13.699222+00:00",
+      "id": "85322324-e768-4014-aee5-2105c6e21bf6",
+      "timestamp": "2026-07-07T04:33:53.930559+00:00",
       "engine": "cascade",
       "symbol": "ETHUSDT",
       "timeframe": "H1",
@@ -1953,8 +1953,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "8c87c682-cac2-47a0-a779-1d8e3db6da09",
-      "timestamp": "2026-07-06T13:32:13.589584+00:00",
+      "id": "327fe5f0-b574-4d01-b607-5091a7c08d57",
+      "timestamp": "2026-07-07T04:33:53.823736+00:00",
       "engine": "cascade",
       "symbol": "ETHUSDT",
       "timeframe": "H4",
@@ -1983,8 +1983,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "dfd3b58e-0e6c-4dad-93eb-89d84d916c21",
-      "timestamp": "2026-07-06T13:32:13.486930+00:00",
+      "id": "84ecf634-0114-4b94-a060-e74d71fd9ef7",
+      "timestamp": "2026-07-07T04:33:53.731982+00:00",
       "engine": "cascade",
       "symbol": "BTCUSDT",
       "timeframe": "H1",
@@ -2013,8 +2013,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "a99c70d4-2cc3-4fdf-ba2c-fc9d5bce68e6",
-      "timestamp": "2026-07-06T13:32:13.380665+00:00",
+      "id": "d455b131-5d54-482b-8e7a-695182fc3a21",
+      "timestamp": "2026-07-07T04:33:53.629272+00:00",
       "engine": "cascade",
       "symbol": "BTCUSDT",
       "timeframe": "H4",
@@ -2043,8 +2043,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "5120541c-f9dd-483c-adce-533b06c085f8",
-      "timestamp": "2026-07-06T13:32:13.270900+00:00",
+      "id": "b128b5c0-e268-43ea-97a4-a1c4e0962e79",
+      "timestamp": "2026-07-07T04:33:53.526365+00:00",
       "engine": "engine_b",
       "symbol": "ETHUSDT",
       "timeframe": "H1",
@@ -2073,8 +2073,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "5ab7e079-5fee-4264-b285-b5ac6b0cdf10",
-      "timestamp": "2026-07-06T13:32:13.161497+00:00",
+      "id": "f8743538-8da1-4e95-87bd-fdaf4a111c6c",
+      "timestamp": "2026-07-07T04:33:53.328836+00:00",
       "engine": "engine_b",
       "symbol": "ETHUSDT",
       "timeframe": "H4",
@@ -2103,8 +2103,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "62c111ef-5ad7-4e49-8265-02c6d2070c35",
-      "timestamp": "2026-07-06T13:32:12.949708+00:00",
+      "id": "5ef243e3-1aa3-4ea3-a3cf-e1ff4ec9b9db",
+      "timestamp": "2026-07-07T04:33:53.237037+00:00",
       "engine": "engine_b",
       "symbol": "BTCUSDT",
       "timeframe": "H1",
@@ -2133,8 +2133,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "88edcdc6-1ae1-445e-839d-bcbf55e802d3",
-      "timestamp": "2026-07-06T13:32:12.827612+00:00",
+      "id": "658719a6-9a7f-49d2-b831-19749c6ae1f1",
+      "timestamp": "2026-07-07T04:33:53.136754+00:00",
       "engine": "engine_b",
       "symbol": "BTCUSDT",
       "timeframe": "H4",
@@ -2163,8 +2163,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "478d29cf-b06e-42f7-a4f8-0eaf569f09df",
-      "timestamp": "2026-07-06T13:17:12.462591+00:00",
+      "id": "95374704-3554-4793-9304-476d59872d65",
+      "timestamp": "2026-07-07T04:18:52.935531+00:00",
       "engine": "engine_a",
       "symbol": "ETHUSDT",
       "timeframe": "H1",
@@ -2193,8 +2193,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "b5a4483a-fcba-44a5-955a-00c72adbb3a7",
-      "timestamp": "2026-07-06T13:17:12.245864+00:00",
+      "id": "9e733fdf-1e1c-4069-8f74-d2f81984dc14",
+      "timestamp": "2026-07-07T04:18:52.814260+00:00",
       "engine": "engine_a",
       "symbol": "ETHUSDT",
       "timeframe": "H4",
@@ -2223,8 +2223,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "22ddaacd-49e2-48ee-8d16-025ed320a4d2",
-      "timestamp": "2026-07-06T13:17:12.131717+00:00",
+      "id": "1ba1d481-948b-444e-b933-db696e3bf95a",
+      "timestamp": "2026-07-07T04:18:52.703615+00:00",
       "engine": "engine_a",
       "symbol": "BTCUSDT",
       "timeframe": "H1",
@@ -2253,8 +2253,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "f82e6567-1b79-4e8c-bbf8-ce2016eeb445",
-      "timestamp": "2026-07-06T13:17:12.008197+00:00",
+      "id": "ddf1cec6-5e52-47a7-806c-1ad04b8dffc0",
+      "timestamp": "2026-07-07T04:18:52.594828+00:00",
       "engine": "engine_a",
       "symbol": "BTCUSDT",
       "timeframe": "H4",
@@ -2283,8 +2283,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "c5bb1400-22a6-49d6-b01c-07401dade9c6",
-      "timestamp": "2026-07-06T13:17:11.912170+00:00",
+      "id": "468a8379-fdf0-45dc-ad5d-01295c2c89e9",
+      "timestamp": "2026-07-07T04:18:52.483524+00:00",
       "engine": "cascade",
       "symbol": "ETHUSDT",
       "timeframe": "H1",
@@ -2313,8 +2313,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "d7a6f46b-d071-4fca-b103-d73a6eeb122b",
-      "timestamp": "2026-07-06T13:17:11.818011+00:00",
+      "id": "037fe294-419c-4076-854d-491a095f47b3",
+      "timestamp": "2026-07-07T04:18:52.372793+00:00",
       "engine": "cascade",
       "symbol": "ETHUSDT",
       "timeframe": "H4",
@@ -2343,8 +2343,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "dfd46bf4-9bdc-46fc-b75c-d0db776d7dcf",
-      "timestamp": "2026-07-06T13:17:11.726594+00:00",
+      "id": "29697687-dd8c-4470-8d84-a696aeb2261c",
+      "timestamp": "2026-07-07T04:18:52.269130+00:00",
       "engine": "cascade",
       "symbol": "BTCUSDT",
       "timeframe": "H1",
@@ -2373,8 +2373,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "231be3fb-3a4d-474c-9050-7c50c502c747",
-      "timestamp": "2026-07-06T13:17:11.625964+00:00",
+      "id": "aa4cf1f3-b6fa-488b-ba05-0277afa91e80",
+      "timestamp": "2026-07-07T04:18:52.178378+00:00",
       "engine": "cascade",
       "symbol": "BTCUSDT",
       "timeframe": "H4",
@@ -2403,8 +2403,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "d1b3a5e4-8952-4c4f-85a2-c8597a2a9bdd",
-      "timestamp": "2026-07-06T13:17:11.433779+00:00",
+      "id": "c90eac54-6216-4103-98d3-deaec0fc0371",
+      "timestamp": "2026-07-07T04:18:52.076770+00:00",
       "engine": "engine_b",
       "symbol": "ETHUSDT",
       "timeframe": "H1",
@@ -2433,8 +2433,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "25fec40f-ba63-47c8-98ef-9eb0818ec99c",
-      "timestamp": "2026-07-06T13:17:11.327980+00:00",
+      "id": "0a56f45c-10d4-4192-bd63-0055d4e437ab",
+      "timestamp": "2026-07-07T04:18:51.975515+00:00",
       "engine": "engine_b",
       "symbol": "ETHUSDT",
       "timeframe": "H4",
@@ -2463,8 +2463,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "81ac2398-6f4e-44a8-98e2-082b76c82478",
-      "timestamp": "2026-07-06T13:17:11.226049+00:00",
+      "id": "4eb9459e-7b6f-451f-a2fb-bf7545b3ee48",
+      "timestamp": "2026-07-07T04:18:51.882344+00:00",
       "engine": "engine_b",
       "symbol": "BTCUSDT",
       "timeframe": "H1",
@@ -2493,8 +2493,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "cfdd3841-4943-4ca1-90f9-12174d135e8c",
-      "timestamp": "2026-07-06T13:17:11.111622+00:00",
+      "id": "8158428d-edc9-48de-b95a-f0147dd9636a",
+      "timestamp": "2026-07-07T04:18:51.791969+00:00",
       "engine": "engine_b",
       "symbol": "BTCUSDT",
       "timeframe": "H4",
@@ -2523,8 +2523,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "6209c936-60e5-4650-b53f-b4e469a8acbd",
-      "timestamp": "2026-07-06T13:02:10.903691+00:00",
+      "id": "b2fe41dd-0d7a-4318-bccb-7d8001421cd4",
+      "timestamp": "2026-07-07T04:03:51.614656+00:00",
       "engine": "engine_a",
       "symbol": "ETHUSDT",
       "timeframe": "H1",
@@ -2553,8 +2553,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "07fc61a9-7e41-4e4a-abbe-5499cb5632a8",
-      "timestamp": "2026-07-06T13:02:10.786321+00:00",
+      "id": "6d7ecadd-442b-4a46-b7de-a667d4af5d26",
+      "timestamp": "2026-07-07T04:03:51.517337+00:00",
       "engine": "engine_a",
       "symbol": "ETHUSDT",
       "timeframe": "H4",
@@ -2583,8 +2583,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "963b0a75-3763-422a-a6c0-8326926c44ee",
-      "timestamp": "2026-07-06T13:02:10.674947+00:00",
+      "id": "997b02c0-259c-4078-9629-c715480eac06",
+      "timestamp": "2026-07-07T04:03:51.421858+00:00",
       "engine": "engine_a",
       "symbol": "BTCUSDT",
       "timeframe": "H1",
@@ -2613,8 +2613,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "ca016c49-512f-4922-8cb6-34be750a6f7d",
-      "timestamp": "2026-07-06T13:02:10.525078+00:00",
+      "id": "4d14432a-72b8-4c97-b59d-d55420ec8610",
+      "timestamp": "2026-07-07T04:03:51.313254+00:00",
       "engine": "engine_a",
       "symbol": "BTCUSDT",
       "timeframe": "H4",
@@ -2643,8 +2643,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "8e468191-2a71-4d15-aacd-770c0d140f2d",
-      "timestamp": "2026-07-06T13:02:10.416971+00:00",
+      "id": "38ba8c79-b660-4d65-b88d-91a7ea3fb23e",
+      "timestamp": "2026-07-07T04:03:51.213950+00:00",
       "engine": "cascade",
       "symbol": "ETHUSDT",
       "timeframe": "H1",
@@ -2673,8 +2673,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "b3588e91-a757-44d9-ac5a-fc5aa4d4e388",
-      "timestamp": "2026-07-06T13:02:10.310211+00:00",
+      "id": "89dc5044-3c72-4933-a813-15565cc1295f",
+      "timestamp": "2026-07-07T04:03:51.121699+00:00",
       "engine": "cascade",
       "symbol": "ETHUSDT",
       "timeframe": "H4",
@@ -2703,8 +2703,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "29928f2e-ef6e-4d04-bb29-86930d3836c6",
-      "timestamp": "2026-07-06T13:02:10.211105+00:00",
+      "id": "dadd7e48-1812-4c66-bfe3-b2a98522e9bc",
+      "timestamp": "2026-07-07T04:03:50.905264+00:00",
       "engine": "cascade",
       "symbol": "BTCUSDT",
       "timeframe": "H1",
@@ -2733,8 +2733,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "9339200c-f3f6-4963-a877-3003dca8392c",
-      "timestamp": "2026-07-06T13:02:10.110995+00:00",
+      "id": "c2a64507-b454-400c-82e3-98fdb7e5833f",
+      "timestamp": "2026-07-07T04:03:50.807386+00:00",
       "engine": "cascade",
       "symbol": "BTCUSDT",
       "timeframe": "H4",
@@ -2763,8 +2763,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "8162ed32-7e11-4aae-8ad5-c36fda99885d",
-      "timestamp": "2026-07-06T13:02:10.004866+00:00",
+      "id": "3b212027-c721-4950-b71b-e4d4c25a8587",
+      "timestamp": "2026-07-07T04:03:50.712053+00:00",
       "engine": "engine_b",
       "symbol": "ETHUSDT",
       "timeframe": "H1",
@@ -2793,8 +2793,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "2105804d-e352-445c-b8eb-2a606e612f88",
-      "timestamp": "2026-07-06T13:02:09.904579+00:00",
+      "id": "fc4d3a59-9f4a-4326-aa63-cd675e50f906",
+      "timestamp": "2026-07-07T04:03:50.614838+00:00",
       "engine": "engine_b",
       "symbol": "ETHUSDT",
       "timeframe": "H4",
@@ -2823,8 +2823,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "8b6073f2-4ea1-4dcf-b394-81c4cca07483",
-      "timestamp": "2026-07-06T13:02:09.805496+00:00",
+      "id": "dacd52e1-9f50-457a-b8b6-98a6a855b3fd",
+      "timestamp": "2026-07-07T04:03:50.520163+00:00",
       "engine": "engine_b",
       "symbol": "BTCUSDT",
       "timeframe": "H1",
@@ -2853,8 +2853,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "306f2519-c5f5-4853-8ae1-5515ed109589",
-      "timestamp": "2026-07-06T13:02:09.593121+00:00",
+      "id": "e297701c-578a-4b9b-86d3-9f1d3a9edb2f",
+      "timestamp": "2026-07-07T04:03:50.415484+00:00",
       "engine": "engine_b",
       "symbol": "BTCUSDT",
       "timeframe": "H4",
@@ -2883,8 +2883,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "17def16c-4bac-424a-a014-a409206e9e0f",
-      "timestamp": "2026-07-06T12:47:09.343357+00:00",
+      "id": "eac7399e-aff8-43ea-8d13-35d0d552bba7",
+      "timestamp": "2026-07-07T03:48:50.211099+00:00",
       "engine": "engine_a",
       "symbol": "ETHUSDT",
       "timeframe": "H1",
@@ -2913,8 +2913,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "10a39e79-9d36-4aae-b17d-71f7b66e47d0",
-      "timestamp": "2026-07-06T12:47:09.158300+00:00",
+      "id": "f79e4cbe-1902-4827-a1b9-7c75fefe1169",
+      "timestamp": "2026-07-07T03:48:50.094242+00:00",
       "engine": "engine_a",
       "symbol": "ETHUSDT",
       "timeframe": "H4",
@@ -2943,8 +2943,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "2223378f-5cb9-4f90-92d9-80a7b1e21588",
-      "timestamp": "2026-07-06T12:47:09.049159+00:00",
+      "id": "be363b4c-0c18-4dee-8684-113b654e932e",
+      "timestamp": "2026-07-07T03:48:49.980203+00:00",
       "engine": "engine_a",
       "symbol": "BTCUSDT",
       "timeframe": "H1",
@@ -2973,8 +2973,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "293c22d0-99ac-4d09-8c54-59b96c7f09b8",
-      "timestamp": "2026-07-06T12:47:08.848728+00:00",
+      "id": "e350b42e-17d7-4c65-a47c-d75a9096a0a5",
+      "timestamp": "2026-07-07T03:48:49.873616+00:00",
       "engine": "engine_a",
       "symbol": "BTCUSDT",
       "timeframe": "H4",
@@ -3003,8 +3003,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "6ffdef78-002d-44ae-b974-7eab44914638",
-      "timestamp": "2026-07-06T12:47:08.745065+00:00",
+      "id": "5e226c8a-8f39-4351-a0ce-e9850389a595",
+      "timestamp": "2026-07-07T03:48:49.768129+00:00",
       "engine": "cascade",
       "symbol": "ETHUSDT",
       "timeframe": "H1",
@@ -3033,8 +3033,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "1a3144f7-eb68-4533-bcb8-483db4789d77",
-      "timestamp": "2026-07-06T12:47:08.649012+00:00",
+      "id": "d25fe00b-9fef-4d9f-9c23-ac56b5a4dec3",
+      "timestamp": "2026-07-07T03:48:49.667902+00:00",
       "engine": "cascade",
       "symbol": "ETHUSDT",
       "timeframe": "H4",
@@ -3063,8 +3063,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "2da2a111-7a45-4bc7-bb89-a18693a1d4bb",
-      "timestamp": "2026-07-06T12:47:08.549168+00:00",
+      "id": "b181d072-dd6a-433a-ad77-fb7b0c21caff",
+      "timestamp": "2026-07-07T03:48:49.566405+00:00",
       "engine": "cascade",
       "symbol": "BTCUSDT",
       "timeframe": "H1",
@@ -3093,8 +3093,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "49312ec4-a7f9-4be4-b334-507ce17d053a",
-      "timestamp": "2026-07-06T12:47:08.452053+00:00",
+      "id": "7304b55e-2fb9-4cf1-afc4-ecebe350e433",
+      "timestamp": "2026-07-07T03:48:49.472835+00:00",
       "engine": "cascade",
       "symbol": "BTCUSDT",
       "timeframe": "H4",
@@ -3123,8 +3123,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "6eabecc4-0e00-4bc3-80c2-367c0df22a47",
-      "timestamp": "2026-07-06T12:47:08.266713+00:00",
+      "id": "193b8985-60e0-4f6e-8d59-6747b92e391e",
+      "timestamp": "2026-07-07T03:48:49.369179+00:00",
       "engine": "engine_b",
       "symbol": "ETHUSDT",
       "timeframe": "H1",
@@ -3153,8 +3153,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "89e075f2-710b-4e0f-bc62-7a5c2ec53b04",
-      "timestamp": "2026-07-06T12:47:08.164048+00:00",
+      "id": "debea959-cb8e-4111-93fb-28c0bc8f8546",
+      "timestamp": "2026-07-07T03:48:49.166503+00:00",
       "engine": "engine_b",
       "symbol": "ETHUSDT",
       "timeframe": "H4",
@@ -3183,8 +3183,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "e7992c46-a4f6-4f70-8834-d7c588a78107",
-      "timestamp": "2026-07-06T12:47:08.064742+00:00",
+      "id": "7509f4d2-5230-4796-98f0-c03919e4782c",
+      "timestamp": "2026-07-07T03:48:49.063001+00:00",
       "engine": "engine_b",
       "symbol": "BTCUSDT",
       "timeframe": "H1",
@@ -3213,8 +3213,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "e5e0ab67-78fb-4762-8da5-741863354744",
-      "timestamp": "2026-07-06T12:47:07.957845+00:00",
+      "id": "a7b5dbb8-481a-4e69-a09d-01a0d0257121",
+      "timestamp": "2026-07-07T03:48:48.955305+00:00",
       "engine": "engine_b",
       "symbol": "BTCUSDT",
       "timeframe": "H4",
@@ -3243,8 +3243,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "3910593d-cbea-4408-8ba5-b7ebff7ff42a",
-      "timestamp": "2026-07-06T12:32:07.678903+00:00",
+      "id": "fcdb598e-d223-492f-8008-fdf69500fdda",
+      "timestamp": "2026-07-07T03:33:48.781321+00:00",
       "engine": "engine_a",
       "symbol": "ETHUSDT",
       "timeframe": "H1",
@@ -3273,8 +3273,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "fe51cbbf-677a-4c7e-bf4d-2fd93ae3dcd8",
-      "timestamp": "2026-07-06T12:32:07.575269+00:00",
+      "id": "f6c0074b-0b5b-49a3-a44b-173d9dd03266",
+      "timestamp": "2026-07-07T03:33:48.673753+00:00",
       "engine": "engine_a",
       "symbol": "ETHUSDT",
       "timeframe": "H4",
@@ -3303,8 +3303,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "7bc19221-e965-4b31-9ffd-13a78a1b3a4a",
-      "timestamp": "2026-07-06T12:32:07.385440+00:00",
+      "id": "fdb0a099-df08-4c34-9546-9a8476037c95",
+      "timestamp": "2026-07-07T03:33:48.567389+00:00",
       "engine": "engine_a",
       "symbol": "BTCUSDT",
       "timeframe": "H1",
@@ -3333,8 +3333,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "b6ab580c-06b5-4657-b0a8-3d690e40faca",
-      "timestamp": "2026-07-06T12:32:07.258490+00:00",
+      "id": "7c3970e7-5a86-4a9d-be6c-db1ac7e47e1f",
+      "timestamp": "2026-07-07T03:33:48.470642+00:00",
       "engine": "engine_a",
       "symbol": "BTCUSDT",
       "timeframe": "H4",
@@ -3363,8 +3363,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "45c0df96-52e1-4fb9-8dfb-136db15b2350",
-      "timestamp": "2026-07-06T12:32:07.157140+00:00",
+      "id": "e78f6717-7522-481f-b9e3-34fed606ca29",
+      "timestamp": "2026-07-07T03:33:48.370390+00:00",
       "engine": "cascade",
       "symbol": "ETHUSDT",
       "timeframe": "H1",
@@ -3393,8 +3393,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "8f90df03-af03-4811-9104-cde7d6631c10",
-      "timestamp": "2026-07-06T12:32:07.059569+00:00",
+      "id": "76fc54ea-8e3d-4586-a2a9-0ad4bdc2803f",
+      "timestamp": "2026-07-07T03:33:48.263204+00:00",
       "engine": "cascade",
       "symbol": "ETHUSDT",
       "timeframe": "H4",
@@ -3423,8 +3423,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "d249f73f-19ca-43b1-8582-00028a92cec0",
-      "timestamp": "2026-07-06T12:32:06.952971+00:00",
+      "id": "338b1d49-f1d6-49ee-b0e8-e46cf2bfbe21",
+      "timestamp": "2026-07-07T03:33:48.166847+00:00",
       "engine": "cascade",
       "symbol": "BTCUSDT",
       "timeframe": "H1",
@@ -3453,8 +3453,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "9171cc93-e5de-45f7-a931-7219c5fb1c8c",
-      "timestamp": "2026-07-06T12:32:06.852578+00:00",
+      "id": "4f7c732b-eb12-4f40-8573-85d3f597d0ac",
+      "timestamp": "2026-07-07T03:33:48.068511+00:00",
       "engine": "cascade",
       "symbol": "BTCUSDT",
       "timeframe": "H4",
@@ -3483,8 +3483,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "022621d4-6c68-47be-8aa0-65d0a2b0489c",
-      "timestamp": "2026-07-06T12:32:06.754926+00:00",
+      "id": "4d087e98-c558-4050-9a78-ea03743ad214",
+      "timestamp": "2026-07-07T03:33:47.964996+00:00",
       "engine": "engine_b",
       "symbol": "ETHUSDT",
       "timeframe": "H1",
@@ -3513,8 +3513,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "51685e13-3140-4473-ae62-cf96cbf9c349",
-      "timestamp": "2026-07-06T12:32:06.655274+00:00",
+      "id": "581414f0-f410-4f78-8bdc-79e96051b8ab",
+      "timestamp": "2026-07-07T03:33:47.856959+00:00",
       "engine": "engine_b",
       "symbol": "ETHUSDT",
       "timeframe": "H4",
@@ -3543,8 +3543,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "499a3b1d-78aa-4008-ad42-98ced295980f",
-      "timestamp": "2026-07-06T12:32:06.469505+00:00",
+      "id": "b1c08cc8-22d3-4c57-8059-2acb4a74dcc0",
+      "timestamp": "2026-07-07T03:33:47.754797+00:00",
       "engine": "engine_b",
       "symbol": "BTCUSDT",
       "timeframe": "H1",
@@ -3573,8 +3573,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "c351112d-13b9-4a49-80e9-ef4ce05eb3ed",
-      "timestamp": "2026-07-06T12:32:06.367446+00:00",
+      "id": "898a228f-d592-4f17-a807-c8c26ad8b852",
+      "timestamp": "2026-07-07T03:33:47.654948+00:00",
       "engine": "engine_b",
       "symbol": "BTCUSDT",
       "timeframe": "H4",
@@ -3603,8 +3603,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "0532d1b5-352b-47a5-a6df-52f1ad4b53f0",
-      "timestamp": "2026-07-06T12:17:06.118307+00:00",
+      "id": "cf98426e-5a2c-4794-96a2-20753e673312",
+      "timestamp": "2026-07-07T03:18:47.288666+00:00",
       "engine": "engine_a",
       "symbol": "ETHUSDT",
       "timeframe": "H1",
@@ -3633,8 +3633,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "9b86b7dc-2d12-4c34-a6e6-602a2f1ec777",
-      "timestamp": "2026-07-06T12:17:06.007802+00:00",
+      "id": "6b427ecc-a544-4c47-a48b-9fff19234cba",
+      "timestamp": "2026-07-07T03:18:47.185316+00:00",
       "engine": "engine_a",
       "symbol": "ETHUSDT",
       "timeframe": "H4",
@@ -3663,8 +3663,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "14537c8a-aa43-44c7-995e-dbe096e0d77e",
-      "timestamp": "2026-07-06T12:17:05.892199+00:00",
+      "id": "bb2c8ad2-27bc-4073-8742-6d62f9c51158",
+      "timestamp": "2026-07-07T03:18:47.071619+00:00",
       "engine": "engine_a",
       "symbol": "BTCUSDT",
       "timeframe": "H1",
@@ -3693,8 +3693,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "83e59e0e-840d-42ca-be5c-ceeed6bb99eb",
-      "timestamp": "2026-07-06T12:17:05.681056+00:00",
+      "id": "a13140cb-3ccd-43e9-8830-8cfa8a5f0ef5",
+      "timestamp": "2026-07-07T03:18:46.967161+00:00",
       "engine": "engine_a",
       "symbol": "BTCUSDT",
       "timeframe": "H4",
@@ -3723,8 +3723,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "eb84cb11-255e-4fae-a5e9-d55aae5205c8",
-      "timestamp": "2026-07-06T12:17:05.583160+00:00",
+      "id": "0631f091-4c8c-4644-aebc-e8c2c2e51410",
+      "timestamp": "2026-07-07T03:18:46.875479+00:00",
       "engine": "cascade",
       "symbol": "ETHUSDT",
       "timeframe": "H1",
@@ -3753,8 +3753,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "6654a2e4-ebb7-41e0-945f-7ea985d92ab2",
-      "timestamp": "2026-07-06T12:17:05.468930+00:00",
+      "id": "f543fcb9-615a-4b6a-a302-5373c9fd8633",
+      "timestamp": "2026-07-07T03:18:46.770650+00:00",
       "engine": "cascade",
       "symbol": "ETHUSDT",
       "timeframe": "H4",
@@ -3783,8 +3783,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "1dfb63e4-7597-4b64-b7d0-8be542c5348d",
-      "timestamp": "2026-07-06T12:17:05.346419+00:00",
+      "id": "09786f62-f26b-42b8-bb02-a07eff777f32",
+      "timestamp": "2026-07-07T03:18:46.669420+00:00",
       "engine": "cascade",
       "symbol": "BTCUSDT",
       "timeframe": "H1",
@@ -3813,8 +3813,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "d2574824-71a7-4859-8265-879fab4bca2e",
-      "timestamp": "2026-07-06T12:17:05.243079+00:00",
+      "id": "4b675b6f-2a58-4dd1-81b3-fbb53beb98b1",
+      "timestamp": "2026-07-07T03:18:46.567236+00:00",
       "engine": "cascade",
       "symbol": "BTCUSDT",
       "timeframe": "H4",
@@ -3843,8 +3843,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "9a7bc740-d561-459f-ac38-c364dd6ebb80",
-      "timestamp": "2026-07-06T12:17:05.146154+00:00",
+      "id": "bb3cca51-a63e-448a-9f35-9512b5680965",
+      "timestamp": "2026-07-07T03:18:46.451199+00:00",
       "engine": "engine_b",
       "symbol": "ETHUSDT",
       "timeframe": "H1",
@@ -3873,8 +3873,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "7c40538e-a937-4ed6-b541-37e40672a429",
-      "timestamp": "2026-07-06T12:17:05.033262+00:00",
+      "id": "0eb3ca6e-08c5-4745-a4e5-092843715a41",
+      "timestamp": "2026-07-07T03:18:46.349517+00:00",
       "engine": "engine_b",
       "symbol": "ETHUSDT",
       "timeframe": "H4",
@@ -3903,8 +3903,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "fb42b87d-0b37-4061-9b31-6b7157a33ff2",
-      "timestamp": "2026-07-06T12:17:04.933357+00:00",
+      "id": "ef2c84bc-f527-4a28-9e7c-f7edc944e664",
+      "timestamp": "2026-07-07T03:18:46.245134+00:00",
       "engine": "engine_b",
       "symbol": "BTCUSDT",
       "timeframe": "H1",
@@ -3933,8 +3933,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "3fdef86b-fabe-4cd2-8920-978f20036e2b",
-      "timestamp": "2026-07-06T12:17:04.830431+00:00",
+      "id": "0018a35f-4900-4f9e-a838-296045848143",
+      "timestamp": "2026-07-07T03:18:46.135952+00:00",
       "engine": "engine_b",
       "symbol": "BTCUSDT",
       "timeframe": "H4",
@@ -3963,8 +3963,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "df1172b2-8357-4626-9fbc-108bde09a25b",
-      "timestamp": "2026-07-06T12:02:04.453511+00:00",
+      "id": "0bbaee37-bd8a-4f5d-a688-9995352fc27e",
+      "timestamp": "2026-07-07T03:03:45.930248+00:00",
       "engine": "engine_a",
       "symbol": "ETHUSDT",
       "timeframe": "H1",
@@ -3993,8 +3993,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "2afee3e0-850b-4807-8252-526070a6c89d",
-      "timestamp": "2026-07-06T12:02:04.358264+00:00",
+      "id": "326f53f5-acb9-4f83-a361-08d2c4a96367",
+      "timestamp": "2026-07-07T03:03:45.824318+00:00",
       "engine": "engine_a",
       "symbol": "ETHUSDT",
       "timeframe": "H4",
@@ -4023,8 +4023,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "47f3049c-f218-40d4-b8ab-d04c126cddf5",
-      "timestamp": "2026-07-06T12:02:04.264896+00:00",
+      "id": "1e877535-f6ea-4948-8959-4782087f4200",
+      "timestamp": "2026-07-07T03:03:45.731761+00:00",
       "engine": "engine_a",
       "symbol": "BTCUSDT",
       "timeframe": "H1",
@@ -4053,8 +4053,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "650d7937-db1b-4ad1-8f39-f2bed3b77ea4",
-      "timestamp": "2026-07-06T12:02:04.159597+00:00",
+      "id": "c0958de0-06fd-4d9c-8a22-bb4370433bee",
+      "timestamp": "2026-07-07T03:03:45.479185+00:00",
       "engine": "engine_a",
       "symbol": "BTCUSDT",
       "timeframe": "H4",
@@ -4083,8 +4083,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "c10bbc5f-7c2b-4d98-b069-1729746e1c40",
-      "timestamp": "2026-07-06T12:02:04.060100+00:00",
+      "id": "12a9f358-9dac-4ce6-88b8-fbc444b688f3",
+      "timestamp": "2026-07-07T03:03:45.384325+00:00",
       "engine": "cascade",
       "symbol": "ETHUSDT",
       "timeframe": "H1",
@@ -4113,8 +4113,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "fb833c59-8b89-45b2-b0f0-9fcac73ab1c1",
-      "timestamp": "2026-07-06T12:02:03.960064+00:00",
+      "id": "6b1addb4-a9f6-47f7-b01d-c1cd9c081b0a",
+      "timestamp": "2026-07-07T03:03:45.286527+00:00",
       "engine": "cascade",
       "symbol": "ETHUSDT",
       "timeframe": "H4",
@@ -4143,8 +4143,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "7109f61a-76c7-4b8b-b763-8acde16ddca3",
-      "timestamp": "2026-07-06T12:02:03.768159+00:00",
+      "id": "c25bb0cd-91f2-4e87-93d1-336b326beb34",
+      "timestamp": "2026-07-07T03:03:45.189388+00:00",
       "engine": "cascade",
       "symbol": "BTCUSDT",
       "timeframe": "H1",
@@ -4173,8 +4173,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "d1c623ea-02c9-46fb-a77f-c32cc712a63c",
-      "timestamp": "2026-07-06T12:02:03.665137+00:00",
+      "id": "7202f9c3-e13d-4686-843f-8e9619fa73e2",
+      "timestamp": "2026-07-07T03:03:45.093892+00:00",
       "engine": "cascade",
       "symbol": "BTCUSDT",
       "timeframe": "H4",
@@ -4203,8 +4203,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "eeebd779-f6f5-44fa-a635-27339a7c86dd",
-      "timestamp": "2026-07-06T12:02:03.573040+00:00",
+      "id": "550d6a1d-1d72-4d54-bedf-4d9424e1e5f8",
+      "timestamp": "2026-07-07T03:03:45.001457+00:00",
       "engine": "engine_b",
       "symbol": "ETHUSDT",
       "timeframe": "H1",
@@ -4233,8 +4233,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "a13c4db4-214d-4f00-9fe4-e899c3c20cf6",
-      "timestamp": "2026-07-06T12:02:03.472421+00:00",
+      "id": "50c325fa-c62d-438f-acad-5a4f613c0256",
+      "timestamp": "2026-07-07T03:03:44.899019+00:00",
       "engine": "engine_b",
       "symbol": "ETHUSDT",
       "timeframe": "H4",
@@ -4263,8 +4263,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "0760c658-5710-4e2e-908f-a1d8f62b1bce",
-      "timestamp": "2026-07-06T12:02:03.378303+00:00",
+      "id": "eb3f611b-e43c-471d-8b16-fd84bb600128",
+      "timestamp": "2026-07-07T03:03:44.798444+00:00",
       "engine": "engine_b",
       "symbol": "BTCUSDT",
       "timeframe": "H1",
@@ -4293,8 +4293,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "e8d13b25-ba2f-45a3-9986-72fd38ffbe14",
-      "timestamp": "2026-07-06T12:02:03.275911+00:00",
+      "id": "dba6e7a9-4bbc-40c6-a45a-c1cd2bd7519a",
+      "timestamp": "2026-07-07T03:03:44.694242+00:00",
       "engine": "engine_b",
       "symbol": "BTCUSDT",
       "timeframe": "H4",
@@ -4323,8 +4323,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "a2974f1a-42fc-4cef-9a7b-85ea5767e4de",
-      "timestamp": "2026-07-06T11:47:01.130851+00:00",
+      "id": "a9d28a26-cd9f-42e3-a8f9-5ba56b5e3f81",
+      "timestamp": "2026-07-07T02:48:44.513370+00:00",
       "engine": "engine_a",
       "symbol": "ETHUSDT",
       "timeframe": "H1",
@@ -4353,8 +4353,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "f496c8b9-23a0-429f-a567-7112ea123fe9",
-      "timestamp": "2026-07-06T11:47:00.962864+00:00",
+      "id": "0b6767c0-0691-4187-9424-dcacf006f87b",
+      "timestamp": "2026-07-07T02:48:44.392731+00:00",
       "engine": "engine_a",
       "symbol": "ETHUSDT",
       "timeframe": "H4",
@@ -4383,8 +4383,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "c600b314-9e25-4748-beb4-8c499dc2b265",
-      "timestamp": "2026-07-06T11:47:00.836367+00:00",
+      "id": "d2045485-ca76-4559-bc4e-cca88fb1acc3",
+      "timestamp": "2026-07-07T02:48:44.285278+00:00",
       "engine": "engine_a",
       "symbol": "BTCUSDT",
       "timeframe": "H1",
@@ -4413,8 +4413,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "b649e114-d1b2-4f31-8b06-c8c82f89525b",
-      "timestamp": "2026-07-06T11:47:00.663371+00:00",
+      "id": "7e3289ea-72de-4803-8cea-2c74816f1d78",
+      "timestamp": "2026-07-07T02:48:44.171311+00:00",
       "engine": "engine_a",
       "symbol": "BTCUSDT",
       "timeframe": "H4",
@@ -4443,8 +4443,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "17969a37-f5fb-4ac2-8987-ea7c7dffaa8f",
-      "timestamp": "2026-07-06T11:47:00.548657+00:00",
+      "id": "cf4751a5-08a0-4bad-8d3f-4909ce59f003",
+      "timestamp": "2026-07-07T02:48:44.065071+00:00",
       "engine": "cascade",
       "symbol": "ETHUSDT",
       "timeframe": "H1",
@@ -4473,8 +4473,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "cd43f1e4-e00e-4151-a682-6b8861c6219e",
-      "timestamp": "2026-07-06T11:47:00.414349+00:00",
+      "id": "d3160bb5-5720-42cb-808d-74e3a94b0478",
+      "timestamp": "2026-07-07T02:48:43.960960+00:00",
       "engine": "cascade",
       "symbol": "ETHUSDT",
       "timeframe": "H4",
@@ -4503,8 +4503,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "38877e09-c9bc-4116-aa0f-9130bb8c596e",
-      "timestamp": "2026-07-06T11:47:00.294845+00:00",
+      "id": "80a6b929-e4e6-44ee-8f57-ffac4ef4a906",
+      "timestamp": "2026-07-07T02:48:43.852226+00:00",
       "engine": "cascade",
       "symbol": "BTCUSDT",
       "timeframe": "H1",
@@ -4533,8 +4533,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "44eaab84-db2d-416e-8f81-989243d84989",
-      "timestamp": "2026-07-06T11:47:00.169703+00:00",
+      "id": "127dd0bd-14a9-4c16-a73e-747e08b3d6fd",
+      "timestamp": "2026-07-07T02:48:43.761539+00:00",
       "engine": "cascade",
       "symbol": "BTCUSDT",
       "timeframe": "H4",
@@ -4563,8 +4563,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "98fec7dd-d7c6-4ab3-9202-8aeee209f3c7",
-      "timestamp": "2026-07-06T11:46:59.926438+00:00",
+      "id": "f782a74f-e8d0-474b-88f8-57079d1be988",
+      "timestamp": "2026-07-07T02:48:43.654493+00:00",
       "engine": "engine_b",
       "symbol": "ETHUSDT",
       "timeframe": "H1",
@@ -4593,8 +4593,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "47903227-c240-4a30-baf1-47667a244403",
-      "timestamp": "2026-07-06T11:46:59.814827+00:00",
+      "id": "1a02995b-b64d-4791-b792-cb781ebfbdf9",
+      "timestamp": "2026-07-07T02:48:43.553413+00:00",
       "engine": "engine_b",
       "symbol": "ETHUSDT",
       "timeframe": "H4",
@@ -4623,8 +4623,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "c7862ff7-2390-4b32-aedf-9695052785aa",
-      "timestamp": "2026-07-06T11:46:59.715147+00:00",
+      "id": "8304d4ec-3f27-4e43-94ab-ced156c4fec0",
+      "timestamp": "2026-07-07T02:48:43.446266+00:00",
       "engine": "engine_b",
       "symbol": "BTCUSDT",
       "timeframe": "H1",
@@ -4653,8 +4653,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "f2778b48-f75a-4b42-be22-e3d35365bbd6",
-      "timestamp": "2026-07-06T11:46:59.611329+00:00",
+      "id": "28722e0a-4393-406f-bbab-ae97352d427b",
+      "timestamp": "2026-07-07T02:48:43.351202+00:00",
       "engine": "engine_b",
       "symbol": "BTCUSDT",
       "timeframe": "H4",
@@ -4683,8 +4683,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "e6c8a799-6acf-4a95-acd5-58063820529c",
-      "timestamp": "2026-07-06T11:31:59.309224+00:00",
+      "id": "cdf3aa7c-1ea0-4719-aa4e-277565cda680",
+      "timestamp": "2026-07-07T02:33:43.174413+00:00",
       "engine": "engine_a",
       "symbol": "ETHUSDT",
       "timeframe": "H1",
@@ -4713,8 +4713,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "6e76c461-260e-4da9-bcba-8e1e8dac8bb3",
-      "timestamp": "2026-07-06T11:31:59.209081+00:00",
+      "id": "c2f9134b-1579-4ddc-a46b-b69223b998d1",
+      "timestamp": "2026-07-07T02:33:43.056347+00:00",
       "engine": "engine_a",
       "symbol": "ETHUSDT",
       "timeframe": "H4",
@@ -4743,8 +4743,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "39efafdd-f38a-4bde-ab55-a7f83d969662",
-      "timestamp": "2026-07-06T11:31:59.081347+00:00",
+      "id": "d0362a52-3332-4936-8468-5d9f1ed8a582",
+      "timestamp": "2026-07-07T02:33:42.948082+00:00",
       "engine": "engine_a",
       "symbol": "BTCUSDT",
       "timeframe": "H1",
@@ -4773,8 +4773,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "78bc9566-8ec8-4086-a154-537566764504",
-      "timestamp": "2026-07-06T11:31:58.966947+00:00",
+      "id": "6d437d71-84ef-43e3-b492-3dbd9f09e610",
+      "timestamp": "2026-07-07T02:33:42.848455+00:00",
       "engine": "engine_a",
       "symbol": "BTCUSDT",
       "timeframe": "H4",
@@ -4803,8 +4803,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "b2982e93-bb50-41ca-bee0-34ce0183ce42",
-      "timestamp": "2026-07-06T11:31:58.861419+00:00",
+      "id": "27121b04-24f4-4bfd-8081-e793ecfed887",
+      "timestamp": "2026-07-07T02:33:42.750314+00:00",
       "engine": "cascade",
       "symbol": "ETHUSDT",
       "timeframe": "H1",
@@ -4833,8 +4833,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "7910908f-fb70-4443-a592-fee002b313fb",
-      "timestamp": "2026-07-06T11:31:58.753337+00:00",
+      "id": "08a1ab75-ba95-4915-915a-2458f8e2f15b",
+      "timestamp": "2026-07-07T02:33:42.525636+00:00",
       "engine": "cascade",
       "symbol": "ETHUSDT",
       "timeframe": "H4",
@@ -4863,8 +4863,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "aed895c4-71c2-4a2f-86d0-b5c8f7418abc",
-      "timestamp": "2026-07-06T11:31:58.654329+00:00",
+      "id": "710611d1-8f70-478a-9838-5ae86ecce407",
+      "timestamp": "2026-07-07T02:33:42.411393+00:00",
       "engine": "cascade",
       "symbol": "BTCUSDT",
       "timeframe": "H1",
@@ -4893,8 +4893,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "2574efe8-ff4f-4ae0-8357-6618c525ed64",
-      "timestamp": "2026-07-06T11:31:58.553408+00:00",
+      "id": "8b1701f5-c2ad-4ef8-b3e9-d0c77c9a2c26",
+      "timestamp": "2026-07-07T02:33:42.306424+00:00",
       "engine": "cascade",
       "symbol": "BTCUSDT",
       "timeframe": "H4",
@@ -4923,8 +4923,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "dc6d126e-6f80-4e10-993b-2cc1740351d5",
-      "timestamp": "2026-07-06T11:31:58.450459+00:00",
+      "id": "b6abaa46-2616-4e95-be5d-6cdda35a19c2",
+      "timestamp": "2026-07-07T02:33:42.197435+00:00",
       "engine": "engine_b",
       "symbol": "ETHUSDT",
       "timeframe": "H1",
@@ -4953,8 +4953,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "096d015e-db1d-43e2-af84-e152f7f181e2",
-      "timestamp": "2026-07-06T11:31:58.343289+00:00",
+      "id": "b7ce397c-77fd-4300-9e00-395c3a88f469",
+      "timestamp": "2026-07-07T02:33:42.066011+00:00",
       "engine": "engine_b",
       "symbol": "ETHUSDT",
       "timeframe": "H4",
@@ -4983,8 +4983,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "d2f5ef30-3d82-419d-863b-dfa1cafbf445",
-      "timestamp": "2026-07-06T11:31:58.237276+00:00",
+      "id": "ca0e0bba-ace9-4587-84a1-69c661a6e378",
+      "timestamp": "2026-07-07T02:33:41.955152+00:00",
       "engine": "engine_b",
       "symbol": "BTCUSDT",
       "timeframe": "H1",
@@ -5013,8 +5013,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "d7fbb1d1-de74-4a69-b0b8-75df939ae33c",
-      "timestamp": "2026-07-06T11:31:58.135692+00:00",
+      "id": "16d14fcb-f338-4335-8bfb-655391cd46ae",
+      "timestamp": "2026-07-07T02:33:41.840719+00:00",
       "engine": "engine_b",
       "symbol": "BTCUSDT",
       "timeframe": "H4",
@@ -5043,8 +5043,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "58781a85-88f1-48f0-848f-df9ed068d1b4",
-      "timestamp": "2026-07-06T11:16:57.902246+00:00",
+      "id": "8bbdfec7-4817-4bd0-9db8-063e1f913fe6",
+      "timestamp": "2026-07-07T02:18:41.566223+00:00",
       "engine": "engine_a",
       "symbol": "ETHUSDT",
       "timeframe": "H1",
@@ -5073,8 +5073,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "d35068a3-2a61-42ea-a8a7-f5c9d31c873f",
-      "timestamp": "2026-07-06T11:16:57.738078+00:00",
+      "id": "e17c5d54-09a9-4638-82cb-02598b9355e6",
+      "timestamp": "2026-07-07T02:18:41.442111+00:00",
       "engine": "engine_a",
       "symbol": "ETHUSDT",
       "timeframe": "H4",
@@ -5103,8 +5103,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "6534695e-30e5-42f4-8437-94a50257ef2a",
-      "timestamp": "2026-07-06T11:16:57.637362+00:00",
+      "id": "88d3b654-66d5-42a3-a46e-39b9cb2d4e11",
+      "timestamp": "2026-07-07T02:18:41.337795+00:00",
       "engine": "engine_a",
       "symbol": "BTCUSDT",
       "timeframe": "H1",
@@ -5133,8 +5133,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "e08b070c-e34b-46d9-ae57-d574e9d68edd",
-      "timestamp": "2026-07-06T11:16:57.538836+00:00",
+      "id": "9ee958a9-6f09-46f8-b12e-9ecaa6d07a49",
+      "timestamp": "2026-07-07T02:18:41.228967+00:00",
       "engine": "engine_a",
       "symbol": "BTCUSDT",
       "timeframe": "H4",
@@ -5163,8 +5163,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "427d9d53-5e84-4d96-adae-f2dc715b34fb",
-      "timestamp": "2026-07-06T11:16:57.360278+00:00",
+      "id": "879a5d99-1367-4658-907b-cc79138b3e5a",
+      "timestamp": "2026-07-07T02:18:40.972030+00:00",
       "engine": "cascade",
       "symbol": "ETHUSDT",
       "timeframe": "H1",
@@ -5193,8 +5193,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "27d0850c-2b26-4fc5-90d7-5cad95a8b696",
-      "timestamp": "2026-07-06T11:16:57.260402+00:00",
+      "id": "2448cfe4-913a-4699-9724-33d827a2549f",
+      "timestamp": "2026-07-07T02:18:40.867033+00:00",
       "engine": "cascade",
       "symbol": "ETHUSDT",
       "timeframe": "H4",
@@ -5223,8 +5223,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "977261ba-df5e-4cb2-9c8d-5393bbe20463",
-      "timestamp": "2026-07-06T11:16:57.154366+00:00",
+      "id": "0e314c98-7bf0-4762-9ca2-f22263a12f2b",
+      "timestamp": "2026-07-07T02:18:40.772464+00:00",
       "engine": "cascade",
       "symbol": "BTCUSDT",
       "timeframe": "H1",
@@ -5253,8 +5253,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "80ad1d9f-a45e-4e34-ba4d-74f42f46da60",
-      "timestamp": "2026-07-06T11:16:56.950540+00:00",
+      "id": "468b4d3f-96dc-4e96-97a2-49ce2100d073",
+      "timestamp": "2026-07-07T02:18:40.672263+00:00",
       "engine": "cascade",
       "symbol": "BTCUSDT",
       "timeframe": "H4",
@@ -5283,8 +5283,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "20293857-e6df-401d-b2db-95e170281127",
-      "timestamp": "2026-07-06T11:16:56.851977+00:00",
+      "id": "f2790d23-ad19-4e52-8cda-465b301ab058",
+      "timestamp": "2026-07-07T02:18:40.572326+00:00",
       "engine": "engine_b",
       "symbol": "ETHUSDT",
       "timeframe": "H1",
@@ -5313,8 +5313,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "30cd86bf-863d-45c2-934f-f24c9baae260",
-      "timestamp": "2026-07-06T11:16:56.757408+00:00",
+      "id": "9bfa98fc-b12a-44b9-a589-863f9312f807",
+      "timestamp": "2026-07-07T02:18:40.481816+00:00",
       "engine": "engine_b",
       "symbol": "ETHUSDT",
       "timeframe": "H4",
@@ -5343,8 +5343,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "7c164b26-2c92-4808-919a-ad449419f076",
-      "timestamp": "2026-07-06T11:16:56.655463+00:00",
+      "id": "1b720d6f-d9d4-4d88-8f33-34e03901eb84",
+      "timestamp": "2026-07-07T02:18:40.372236+00:00",
       "engine": "engine_b",
       "symbol": "BTCUSDT",
       "timeframe": "H1",
@@ -5373,8 +5373,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "60ae0fd1-8516-4887-8eaf-3da293c5d0e4",
-      "timestamp": "2026-07-06T11:16:56.555157+00:00",
+      "id": "ae9d9153-7e4a-47a6-a15e-c2911113081f",
+      "timestamp": "2026-07-07T02:18:40.267973+00:00",
       "engine": "engine_b",
       "symbol": "BTCUSDT",
       "timeframe": "H4",
@@ -5403,8 +5403,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "9b8fa77d-6e62-4af1-952c-87d6235e85ea",
-      "timestamp": "2026-07-06T11:01:56.328845+00:00",
+      "id": "6bb8c1bf-1c5a-4870-aaa6-c99422f8eb26",
+      "timestamp": "2026-07-07T02:03:40.076048+00:00",
       "engine": "engine_a",
       "symbol": "ETHUSDT",
       "timeframe": "H1",
@@ -5433,8 +5433,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "0ab7f3a9-c9c5-40b5-b812-34b5f2250955",
-      "timestamp": "2026-07-06T11:01:56.229698+00:00",
+      "id": "3549a99d-e7ed-4889-9a6a-4d1864c83a90",
+      "timestamp": "2026-07-07T02:03:39.975438+00:00",
       "engine": "engine_a",
       "symbol": "ETHUSDT",
       "timeframe": "H4",
@@ -5463,8 +5463,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "30e31a74-6661-45ac-bb87-5944904addb2",
-      "timestamp": "2026-07-06T11:01:56.123806+00:00",
+      "id": "256c2cef-925a-42a7-b09d-1033023fe2bb",
+      "timestamp": "2026-07-07T02:03:39.866112+00:00",
       "engine": "engine_a",
       "symbol": "BTCUSDT",
       "timeframe": "H1",
@@ -5493,8 +5493,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "bc625aa6-7eef-41d1-a8df-74f0599bcb74",
-      "timestamp": "2026-07-06T11:01:56.022955+00:00",
+      "id": "7f540ceb-c9e6-4750-bd4a-676ea8c64371",
+      "timestamp": "2026-07-07T02:03:39.761088+00:00",
       "engine": "engine_a",
       "symbol": "BTCUSDT",
       "timeframe": "H4",
@@ -5523,8 +5523,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "56077ec6-5559-4064-bdd8-234b8401cb36",
-      "timestamp": "2026-07-06T11:01:55.927520+00:00",
+      "id": "40fceb61-b50d-48e1-b778-d689366d1722",
+      "timestamp": "2026-07-07T02:03:39.657303+00:00",
       "engine": "cascade",
       "symbol": "ETHUSDT",
       "timeframe": "H1",
@@ -5553,8 +5553,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "80307b96-9c26-4396-b1f3-01fbe7720d78",
-      "timestamp": "2026-07-06T11:01:55.817632+00:00",
+      "id": "05fe9cd2-f7fb-4b8f-bdeb-0f1d4cc0cfb7",
+      "timestamp": "2026-07-07T02:03:39.555363+00:00",
       "engine": "cascade",
       "symbol": "ETHUSDT",
       "timeframe": "H4",
@@ -5583,8 +5583,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "55cac462-5146-4c09-8892-78e2d09eb396",
-      "timestamp": "2026-07-06T11:01:55.711140+00:00",
+      "id": "dfe6cad7-00b0-428c-b4bd-2ce9fe9642ec",
+      "timestamp": "2026-07-07T02:03:39.453512+00:00",
       "engine": "cascade",
       "symbol": "BTCUSDT",
       "timeframe": "H1",
@@ -5613,8 +5613,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "8dd7444b-242c-440a-8135-fbd0c053353e",
-      "timestamp": "2026-07-06T11:01:55.606552+00:00",
+      "id": "2d7cb3c4-1e38-4430-9cfd-23cf6fffca89",
+      "timestamp": "2026-07-07T02:03:39.350412+00:00",
       "engine": "cascade",
       "symbol": "BTCUSDT",
       "timeframe": "H4",
@@ -5643,8 +5643,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "3acfe8bf-5ee6-4440-a5d4-d23da7a8e177",
-      "timestamp": "2026-07-06T11:01:55.499528+00:00",
+      "id": "419fb478-0c3d-4b80-a24b-e1da02ba2d9b",
+      "timestamp": "2026-07-07T02:03:39.249504+00:00",
       "engine": "engine_b",
       "symbol": "ETHUSDT",
       "timeframe": "H1",
@@ -5673,8 +5673,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "6b495bcc-001a-49d8-a759-629786db2904",
-      "timestamp": "2026-07-06T11:01:55.397695+00:00",
+      "id": "9ef65cf8-a1a2-4b8c-acaf-0cdf7b492a88",
+      "timestamp": "2026-07-07T02:03:39.139870+00:00",
       "engine": "engine_b",
       "symbol": "ETHUSDT",
       "timeframe": "H4",
@@ -5703,8 +5703,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "825455ac-04d1-4c7a-ae33-0024d0a22da5",
-      "timestamp": "2026-07-06T11:01:55.298925+00:00",
+      "id": "10cbf9c4-2ba6-48f1-bf0d-19d1a2e34b66",
+      "timestamp": "2026-07-07T02:03:39.034180+00:00",
       "engine": "engine_b",
       "symbol": "BTCUSDT",
       "timeframe": "H1",
@@ -5733,8 +5733,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "8bc20a65-a639-44da-ae9c-6d1a08977e6e",
-      "timestamp": "2026-07-06T11:01:55.200457+00:00",
+      "id": "70bfd6d0-204d-48ba-a635-0e1e71802d3a",
+      "timestamp": "2026-07-07T02:03:38.926549+00:00",
       "engine": "engine_b",
       "symbol": "BTCUSDT",
       "timeframe": "H4",
@@ -5763,8 +5763,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "1b38e2f2-d003-4c4a-8dfe-24bf7c78c3a3",
-      "timestamp": "2026-07-06T10:46:54.930567+00:00",
+      "id": "795949dc-3b7f-4641-b73c-26b698fff653",
+      "timestamp": "2026-07-07T01:48:38.748300+00:00",
       "engine": "engine_a",
       "symbol": "ETHUSDT",
       "timeframe": "H1",
@@ -5793,8 +5793,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "2334d905-240b-454e-986e-158329cee6d2",
-      "timestamp": "2026-07-06T10:46:54.833193+00:00",
+      "id": "22581509-959f-40a9-8d57-d12596990d8c",
+      "timestamp": "2026-07-07T01:48:38.629542+00:00",
       "engine": "engine_a",
       "symbol": "ETHUSDT",
       "timeframe": "H4",
@@ -5823,8 +5823,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "c2f764b6-ebc6-47f8-a42a-18e12a2f25ad",
-      "timestamp": "2026-07-06T10:46:54.737548+00:00",
+      "id": "422173f4-6931-4874-ae3d-d77fb6a311a5",
+      "timestamp": "2026-07-07T01:48:38.515200+00:00",
       "engine": "engine_a",
       "symbol": "BTCUSDT",
       "timeframe": "H1",
@@ -5853,8 +5853,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "a2fba0a1-db03-466b-a4c2-619f9dfb146e",
-      "timestamp": "2026-07-06T10:46:54.629310+00:00",
+      "id": "a540f126-f08f-4b88-9f64-0f5fd1ebf6ca",
+      "timestamp": "2026-07-07T01:48:38.391193+00:00",
       "engine": "engine_a",
       "symbol": "BTCUSDT",
       "timeframe": "H4",
@@ -5883,8 +5883,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "3bbaa1eb-70d9-4af4-8173-9201fdf288e2",
-      "timestamp": "2026-07-06T10:46:54.516802+00:00",
+      "id": "ee47526c-0cb6-49f3-80e4-df7f8ccb889c",
+      "timestamp": "2026-07-07T01:48:38.291003+00:00",
       "engine": "cascade",
       "symbol": "ETHUSDT",
       "timeframe": "H1",
@@ -5913,8 +5913,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "9a9418d7-0673-4698-b439-efd2fe8509ec",
-      "timestamp": "2026-07-06T10:46:54.075774+00:00",
+      "id": "1c85d650-78c8-4335-b6c5-c09948850700",
+      "timestamp": "2026-07-07T01:48:38.171808+00:00",
       "engine": "cascade",
       "symbol": "ETHUSDT",
       "timeframe": "H4",
@@ -5943,8 +5943,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "abe3c0cc-1569-4ff6-92eb-27ac2d0a766e",
-      "timestamp": "2026-07-06T10:46:53.874230+00:00",
+      "id": "2e2ed273-3a26-4466-8995-dce3b442fcfa",
+      "timestamp": "2026-07-07T01:48:38.076932+00:00",
       "engine": "cascade",
       "symbol": "BTCUSDT",
       "timeframe": "H1",
@@ -5973,8 +5973,8 @@
       "candidate_metrics": {}
     },
     {
-      "id": "58dee530-39df-4200-9429-110bf54625a9",
-      "timestamp": "2026-07-06T10:46:53.761966+00:00",
+      "id": "d500c96f-ed62-46a8-8b88-197b1642f7ca",
+      "timestamp": "2026-07-07T01:48:37.984813+00:00",
       "engine": "cascade",
       "symbol": "BTCUSDT",
       "timeframe": "H4",
@@ -6005,735 +6005,735 @@
   ],
   "data_freshness": [
     {
-      "id": "06d23d45-25d9-433c-972a-a92d66b4644c",
-      "timestamp": "2026-07-06T14:47:21.626346+00:00",
-      "symbol": "BTCUSDT",
-      "timeframe": "H1",
-      "freshness_score": 80.0,
-      "blocking_issues": "[]",
-      "warnings": "[\"frozen_manifest_stale:2026-05-30\", \"no_local_candle_file_detected\"]",
-      "recommended_action": "proceed",
-      "details_json": "{\"symbol\": \"BTCUSDT\", \"timeframe\": \"H1\", \"manifest_path\": \"data\\\\manifests\\\\2026-05-30.json\", \"manifest_date\": \"2026-05-30\", \"manifest_age_days\": 37, \"data_quality_penalty\": 0.5}"
-    },
-    {
-      "id": "7e0c00ca-0ffb-4170-aef5-2f37273fbc37",
-      "timestamp": "2026-07-06T14:47:21.626346+00:00",
-      "symbol": "ETHUSDT",
-      "timeframe": "H4",
-      "freshness_score": 80.0,
-      "blocking_issues": "[]",
-      "warnings": "[\"frozen_manifest_stale:2026-05-30\", \"no_local_candle_file_detected\"]",
-      "recommended_action": "proceed",
-      "details_json": "{\"symbol\": \"ETHUSDT\", \"timeframe\": \"H4\", \"manifest_path\": \"data\\\\manifests\\\\2026-05-30.json\", \"manifest_date\": \"2026-05-30\", \"manifest_age_days\": 37, \"data_quality_penalty\": 0.5}"
-    },
-    {
-      "id": "e07b3711-bea7-4481-8377-1b613db45246",
-      "timestamp": "2026-07-06T14:47:21.626346+00:00",
-      "symbol": "ETHUSDT",
-      "timeframe": "H1",
-      "freshness_score": 80.0,
-      "blocking_issues": "[]",
-      "warnings": "[\"frozen_manifest_stale:2026-05-30\", \"no_local_candle_file_detected\"]",
-      "recommended_action": "proceed",
-      "details_json": "{\"symbol\": \"ETHUSDT\", \"timeframe\": \"H1\", \"manifest_path\": \"data\\\\manifests\\\\2026-05-30.json\", \"manifest_date\": \"2026-05-30\", \"manifest_age_days\": 37, \"data_quality_penalty\": 0.5}"
-    },
-    {
-      "id": "b2a34b44-3361-4b49-823f-d5a48a0a97d1",
-      "timestamp": "2026-07-06T14:47:21.625021+00:00",
+      "id": "2aeca969-5122-41e3-a6fb-513b32d69b5a",
+      "timestamp": "2026-07-07T05:49:00.425013+00:00",
       "symbol": "BTCUSDT",
       "timeframe": "H4",
       "freshness_score": 80.0,
       "blocking_issues": "[]",
       "warnings": "[\"frozen_manifest_stale:2026-05-30\", \"no_local_candle_file_detected\"]",
       "recommended_action": "proceed",
-      "details_json": "{\"symbol\": \"BTCUSDT\", \"timeframe\": \"H4\", \"manifest_path\": \"data\\\\manifests\\\\2026-05-30.json\", \"manifest_date\": \"2026-05-30\", \"manifest_age_days\": 37, \"data_quality_penalty\": 0.5}"
+      "details_json": "{\"symbol\": \"BTCUSDT\", \"timeframe\": \"H4\", \"manifest_path\": \"data\\\\manifests\\\\2026-05-30.json\", \"manifest_date\": \"2026-05-30\", \"manifest_age_days\": 38, \"data_quality_penalty\": 0.5}"
     },
     {
-      "id": "cc103e85-01ee-4c14-964c-a4d405a07881",
-      "timestamp": "2026-07-06T14:32:19.832952+00:00",
+      "id": "f26dfa63-0460-4d60-afb4-c63ab9002501",
+      "timestamp": "2026-07-07T05:49:00.425013+00:00",
       "symbol": "BTCUSDT",
       "timeframe": "H1",
       "freshness_score": 80.0,
       "blocking_issues": "[]",
       "warnings": "[\"frozen_manifest_stale:2026-05-30\", \"no_local_candle_file_detected\"]",
       "recommended_action": "proceed",
-      "details_json": "{\"symbol\": \"BTCUSDT\", \"timeframe\": \"H1\", \"manifest_path\": \"data\\\\manifests\\\\2026-05-30.json\", \"manifest_date\": \"2026-05-30\", \"manifest_age_days\": 37, \"data_quality_penalty\": 0.5}"
+      "details_json": "{\"symbol\": \"BTCUSDT\", \"timeframe\": \"H1\", \"manifest_path\": \"data\\\\manifests\\\\2026-05-30.json\", \"manifest_date\": \"2026-05-30\", \"manifest_age_days\": 38, \"data_quality_penalty\": 0.5}"
     },
     {
-      "id": "39acf84b-ed0b-4519-bb14-eba2d4c62c7f",
-      "timestamp": "2026-07-06T14:32:19.832952+00:00",
+      "id": "6615d05e-ea15-419a-b24b-59242e0217ad",
+      "timestamp": "2026-07-07T05:49:00.425013+00:00",
       "symbol": "ETHUSDT",
       "timeframe": "H4",
       "freshness_score": 80.0,
       "blocking_issues": "[]",
       "warnings": "[\"frozen_manifest_stale:2026-05-30\", \"no_local_candle_file_detected\"]",
       "recommended_action": "proceed",
-      "details_json": "{\"symbol\": \"ETHUSDT\", \"timeframe\": \"H4\", \"manifest_path\": \"data\\\\manifests\\\\2026-05-30.json\", \"manifest_date\": \"2026-05-30\", \"manifest_age_days\": 37, \"data_quality_penalty\": 0.5}"
+      "details_json": "{\"symbol\": \"ETHUSDT\", \"timeframe\": \"H4\", \"manifest_path\": \"data\\\\manifests\\\\2026-05-30.json\", \"manifest_date\": \"2026-05-30\", \"manifest_age_days\": 38, \"data_quality_penalty\": 0.5}"
     },
     {
-      "id": "2433dfa5-f77f-4599-969c-45b4d4ed0458",
-      "timestamp": "2026-07-06T14:32:19.832952+00:00",
-      "symbol": "ETHUSDT",
-      "timeframe": "H1",
-      "freshness_score": 80.0,
-      "blocking_issues": "[]",
-      "warnings": "[\"frozen_manifest_stale:2026-05-30\", \"no_local_candle_file_detected\"]",
-      "recommended_action": "proceed",
-      "details_json": "{\"symbol\": \"ETHUSDT\", \"timeframe\": \"H1\", \"manifest_path\": \"data\\\\manifests\\\\2026-05-30.json\", \"manifest_date\": \"2026-05-30\", \"manifest_age_days\": 37, \"data_quality_penalty\": 0.5}"
-    },
-    {
-      "id": "e0f1beb2-088f-442f-b231-c9628c94b332",
-      "timestamp": "2026-07-06T14:32:19.831950+00:00",
-      "symbol": "BTCUSDT",
-      "timeframe": "H4",
-      "freshness_score": 80.0,
-      "blocking_issues": "[]",
-      "warnings": "[\"frozen_manifest_stale:2026-05-30\", \"no_local_candle_file_detected\"]",
-      "recommended_action": "proceed",
-      "details_json": "{\"symbol\": \"BTCUSDT\", \"timeframe\": \"H4\", \"manifest_path\": \"data\\\\manifests\\\\2026-05-30.json\", \"manifest_date\": \"2026-05-30\", \"manifest_age_days\": 37, \"data_quality_penalty\": 0.5}"
-    },
-    {
-      "id": "7255e14c-1729-4c76-aa04-654c4c5f33af",
-      "timestamp": "2026-07-06T14:17:17.898495+00:00",
-      "symbol": "BTCUSDT",
-      "timeframe": "H1",
-      "freshness_score": 80.0,
-      "blocking_issues": "[]",
-      "warnings": "[\"frozen_manifest_stale:2026-05-30\", \"no_local_candle_file_detected\"]",
-      "recommended_action": "proceed",
-      "details_json": "{\"symbol\": \"BTCUSDT\", \"timeframe\": \"H1\", \"manifest_path\": \"data\\\\manifests\\\\2026-05-30.json\", \"manifest_date\": \"2026-05-30\", \"manifest_age_days\": 37, \"data_quality_penalty\": 0.5}"
-    },
-    {
-      "id": "00d2c718-db95-4616-a96e-e388ea47fd98",
-      "timestamp": "2026-07-06T14:17:17.898495+00:00",
-      "symbol": "ETHUSDT",
-      "timeframe": "H4",
-      "freshness_score": 80.0,
-      "blocking_issues": "[]",
-      "warnings": "[\"frozen_manifest_stale:2026-05-30\", \"no_local_candle_file_detected\"]",
-      "recommended_action": "proceed",
-      "details_json": "{\"symbol\": \"ETHUSDT\", \"timeframe\": \"H4\", \"manifest_path\": \"data\\\\manifests\\\\2026-05-30.json\", \"manifest_date\": \"2026-05-30\", \"manifest_age_days\": 37, \"data_quality_penalty\": 0.5}"
-    },
-    {
-      "id": "c4bc717c-f109-4295-bbfb-f70fa41e6555",
-      "timestamp": "2026-07-06T14:17:17.898495+00:00",
+      "id": "36202b69-c072-4a3e-86d9-9a3d23b6d44d",
+      "timestamp": "2026-07-07T05:49:00.425013+00:00",
       "symbol": "ETHUSDT",
       "timeframe": "H1",
       "freshness_score": 80.0,
       "blocking_issues": "[]",
       "warnings": "[\"frozen_manifest_stale:2026-05-30\", \"no_local_candle_file_detected\"]",
       "recommended_action": "proceed",
-      "details_json": "{\"symbol\": \"ETHUSDT\", \"timeframe\": \"H1\", \"manifest_path\": \"data\\\\manifests\\\\2026-05-30.json\", \"manifest_date\": \"2026-05-30\", \"manifest_age_days\": 37, \"data_quality_penalty\": 0.5}"
+      "details_json": "{\"symbol\": \"ETHUSDT\", \"timeframe\": \"H1\", \"manifest_path\": \"data\\\\manifests\\\\2026-05-30.json\", \"manifest_date\": \"2026-05-30\", \"manifest_age_days\": 38, \"data_quality_penalty\": 0.5}"
     },
     {
-      "id": "d66e0546-46fc-478a-bf5b-ff1ba23ffc28",
-      "timestamp": "2026-07-06T14:17:17.897530+00:00",
-      "symbol": "BTCUSDT",
-      "timeframe": "H4",
-      "freshness_score": 80.0,
-      "blocking_issues": "[]",
-      "warnings": "[\"frozen_manifest_stale:2026-05-30\", \"no_local_candle_file_detected\"]",
-      "recommended_action": "proceed",
-      "details_json": "{\"symbol\": \"BTCUSDT\", \"timeframe\": \"H4\", \"manifest_path\": \"data\\\\manifests\\\\2026-05-30.json\", \"manifest_date\": \"2026-05-30\", \"manifest_age_days\": 37, \"data_quality_penalty\": 0.5}"
-    },
-    {
-      "id": "29ef67c6-90fe-4605-b7ab-889ab3bfd290",
-      "timestamp": "2026-07-06T14:02:16.268839+00:00",
-      "symbol": "BTCUSDT",
-      "timeframe": "H1",
-      "freshness_score": 80.0,
-      "blocking_issues": "[]",
-      "warnings": "[\"frozen_manifest_stale:2026-05-30\", \"no_local_candle_file_detected\"]",
-      "recommended_action": "proceed",
-      "details_json": "{\"symbol\": \"BTCUSDT\", \"timeframe\": \"H1\", \"manifest_path\": \"data\\\\manifests\\\\2026-05-30.json\", \"manifest_date\": \"2026-05-30\", \"manifest_age_days\": 37, \"data_quality_penalty\": 0.5}"
-    },
-    {
-      "id": "a40901b4-6e0e-489a-9ad3-c6fb4dbfc48b",
-      "timestamp": "2026-07-06T14:02:16.268839+00:00",
+      "id": "fbacc620-be6d-4fef-ba8f-ab6a81a093c8",
+      "timestamp": "2026-07-07T05:33:58.915093+00:00",
       "symbol": "ETHUSDT",
       "timeframe": "H4",
       "freshness_score": 80.0,
       "blocking_issues": "[]",
       "warnings": "[\"frozen_manifest_stale:2026-05-30\", \"no_local_candle_file_detected\"]",
       "recommended_action": "proceed",
-      "details_json": "{\"symbol\": \"ETHUSDT\", \"timeframe\": \"H4\", \"manifest_path\": \"data\\\\manifests\\\\2026-05-30.json\", \"manifest_date\": \"2026-05-30\", \"manifest_age_days\": 37, \"data_quality_penalty\": 0.5}"
+      "details_json": "{\"symbol\": \"ETHUSDT\", \"timeframe\": \"H4\", \"manifest_path\": \"data\\\\manifests\\\\2026-05-30.json\", \"manifest_date\": \"2026-05-30\", \"manifest_age_days\": 38, \"data_quality_penalty\": 0.5}"
     },
     {
-      "id": "3be176ef-1e10-451e-b64f-8bf91794357f",
-      "timestamp": "2026-07-06T14:02:16.268839+00:00",
+      "id": "2ca201a8-6269-42cb-b0b1-90dbc0a00d6a",
+      "timestamp": "2026-07-07T05:33:58.915093+00:00",
       "symbol": "ETHUSDT",
       "timeframe": "H1",
       "freshness_score": 80.0,
       "blocking_issues": "[]",
       "warnings": "[\"frozen_manifest_stale:2026-05-30\", \"no_local_candle_file_detected\"]",
       "recommended_action": "proceed",
-      "details_json": "{\"symbol\": \"ETHUSDT\", \"timeframe\": \"H1\", \"manifest_path\": \"data\\\\manifests\\\\2026-05-30.json\", \"manifest_date\": \"2026-05-30\", \"manifest_age_days\": 37, \"data_quality_penalty\": 0.5}"
+      "details_json": "{\"symbol\": \"ETHUSDT\", \"timeframe\": \"H1\", \"manifest_path\": \"data\\\\manifests\\\\2026-05-30.json\", \"manifest_date\": \"2026-05-30\", \"manifest_age_days\": 38, \"data_quality_penalty\": 0.5}"
     },
     {
-      "id": "dd8f709f-05ff-4545-8a1c-9071a8abf2ed",
-      "timestamp": "2026-07-06T14:02:16.267837+00:00",
+      "id": "5f067849-f63d-421d-bbb4-805da5b73012",
+      "timestamp": "2026-07-07T05:33:58.914141+00:00",
       "symbol": "BTCUSDT",
       "timeframe": "H4",
       "freshness_score": 80.0,
       "blocking_issues": "[]",
       "warnings": "[\"frozen_manifest_stale:2026-05-30\", \"no_local_candle_file_detected\"]",
       "recommended_action": "proceed",
-      "details_json": "{\"symbol\": \"BTCUSDT\", \"timeframe\": \"H4\", \"manifest_path\": \"data\\\\manifests\\\\2026-05-30.json\", \"manifest_date\": \"2026-05-30\", \"manifest_age_days\": 37, \"data_quality_penalty\": 0.5}"
+      "details_json": "{\"symbol\": \"BTCUSDT\", \"timeframe\": \"H4\", \"manifest_path\": \"data\\\\manifests\\\\2026-05-30.json\", \"manifest_date\": \"2026-05-30\", \"manifest_age_days\": 38, \"data_quality_penalty\": 0.5}"
     },
     {
-      "id": "4545db59-37ac-42a4-9579-79cb392d03c5",
-      "timestamp": "2026-07-06T13:47:14.368492+00:00",
-      "symbol": "BTCUSDT",
-      "timeframe": "H1",
-      "freshness_score": 80.0,
-      "blocking_issues": "[]",
-      "warnings": "[\"frozen_manifest_stale:2026-05-30\", \"no_local_candle_file_detected\"]",
-      "recommended_action": "proceed",
-      "details_json": "{\"symbol\": \"BTCUSDT\", \"timeframe\": \"H1\", \"manifest_path\": \"data\\\\manifests\\\\2026-05-30.json\", \"manifest_date\": \"2026-05-30\", \"manifest_age_days\": 37, \"data_quality_penalty\": 0.5}"
-    },
-    {
-      "id": "ca43cb66-55cb-421e-bdcd-2a43d7255f47",
-      "timestamp": "2026-07-06T13:47:14.368492+00:00",
-      "symbol": "ETHUSDT",
-      "timeframe": "H4",
-      "freshness_score": 80.0,
-      "blocking_issues": "[]",
-      "warnings": "[\"frozen_manifest_stale:2026-05-30\", \"no_local_candle_file_detected\"]",
-      "recommended_action": "proceed",
-      "details_json": "{\"symbol\": \"ETHUSDT\", \"timeframe\": \"H4\", \"manifest_path\": \"data\\\\manifests\\\\2026-05-30.json\", \"manifest_date\": \"2026-05-30\", \"manifest_age_days\": 37, \"data_quality_penalty\": 0.5}"
-    },
-    {
-      "id": "d7ae1c83-0f2b-496e-863d-7b6b3f222f95",
-      "timestamp": "2026-07-06T13:47:14.368492+00:00",
-      "symbol": "ETHUSDT",
-      "timeframe": "H1",
-      "freshness_score": 80.0,
-      "blocking_issues": "[]",
-      "warnings": "[\"frozen_manifest_stale:2026-05-30\", \"no_local_candle_file_detected\"]",
-      "recommended_action": "proceed",
-      "details_json": "{\"symbol\": \"ETHUSDT\", \"timeframe\": \"H1\", \"manifest_path\": \"data\\\\manifests\\\\2026-05-30.json\", \"manifest_date\": \"2026-05-30\", \"manifest_age_days\": 37, \"data_quality_penalty\": 0.5}"
-    },
-    {
-      "id": "8232c55f-8bcf-424f-b102-06c2a9cac4b5",
-      "timestamp": "2026-07-06T13:47:14.367492+00:00",
-      "symbol": "BTCUSDT",
-      "timeframe": "H4",
-      "freshness_score": 80.0,
-      "blocking_issues": "[]",
-      "warnings": "[\"frozen_manifest_stale:2026-05-30\", \"no_local_candle_file_detected\"]",
-      "recommended_action": "proceed",
-      "details_json": "{\"symbol\": \"BTCUSDT\", \"timeframe\": \"H4\", \"manifest_path\": \"data\\\\manifests\\\\2026-05-30.json\", \"manifest_date\": \"2026-05-30\", \"manifest_age_days\": 37, \"data_quality_penalty\": 0.5}"
-    },
-    {
-      "id": "b3dcc6f6-3cf4-4e6e-b170-c0fac203ff55",
-      "timestamp": "2026-07-06T13:32:12.609298+00:00",
-      "symbol": "ETHUSDT",
-      "timeframe": "H1",
-      "freshness_score": 80.0,
-      "blocking_issues": "[]",
-      "warnings": "[\"frozen_manifest_stale:2026-05-30\", \"no_local_candle_file_detected\"]",
-      "recommended_action": "proceed",
-      "details_json": "{\"symbol\": \"ETHUSDT\", \"timeframe\": \"H1\", \"manifest_path\": \"data\\\\manifests\\\\2026-05-30.json\", \"manifest_date\": \"2026-05-30\", \"manifest_age_days\": 37, \"data_quality_penalty\": 0.5}"
-    },
-    {
-      "id": "e43b987d-af0b-4583-98af-a20b1eafddd8",
-      "timestamp": "2026-07-06T13:32:12.608298+00:00",
+      "id": "eceaec11-f4c0-4756-bc5c-af6d018865bc",
+      "timestamp": "2026-07-07T05:33:58.914141+00:00",
       "symbol": "BTCUSDT",
       "timeframe": "H1",
       "freshness_score": 80.0,
       "blocking_issues": "[]",
       "warnings": "[\"frozen_manifest_stale:2026-05-30\", \"no_local_candle_file_detected\"]",
       "recommended_action": "proceed",
-      "details_json": "{\"symbol\": \"BTCUSDT\", \"timeframe\": \"H1\", \"manifest_path\": \"data\\\\manifests\\\\2026-05-30.json\", \"manifest_date\": \"2026-05-30\", \"manifest_age_days\": 37, \"data_quality_penalty\": 0.5}"
+      "details_json": "{\"symbol\": \"BTCUSDT\", \"timeframe\": \"H1\", \"manifest_path\": \"data\\\\manifests\\\\2026-05-30.json\", \"manifest_date\": \"2026-05-30\", \"manifest_age_days\": 38, \"data_quality_penalty\": 0.5}"
     },
     {
-      "id": "b7a93b9f-6cce-472a-a36a-0d95876bd7ea",
-      "timestamp": "2026-07-06T13:32:12.608298+00:00",
-      "symbol": "ETHUSDT",
-      "timeframe": "H4",
-      "freshness_score": 80.0,
-      "blocking_issues": "[]",
-      "warnings": "[\"frozen_manifest_stale:2026-05-30\", \"no_local_candle_file_detected\"]",
-      "recommended_action": "proceed",
-      "details_json": "{\"symbol\": \"ETHUSDT\", \"timeframe\": \"H4\", \"manifest_path\": \"data\\\\manifests\\\\2026-05-30.json\", \"manifest_date\": \"2026-05-30\", \"manifest_age_days\": 37, \"data_quality_penalty\": 0.5}"
-    },
-    {
-      "id": "f0e52210-a04b-4503-b3f4-2190e8722240",
-      "timestamp": "2026-07-06T13:32:12.607299+00:00",
-      "symbol": "BTCUSDT",
-      "timeframe": "H4",
-      "freshness_score": 80.0,
-      "blocking_issues": "[]",
-      "warnings": "[\"frozen_manifest_stale:2026-05-30\", \"no_local_candle_file_detected\"]",
-      "recommended_action": "proceed",
-      "details_json": "{\"symbol\": \"BTCUSDT\", \"timeframe\": \"H4\", \"manifest_path\": \"data\\\\manifests\\\\2026-05-30.json\", \"manifest_date\": \"2026-05-30\", \"manifest_age_days\": 37, \"data_quality_penalty\": 0.5}"
-    },
-    {
-      "id": "7916d575-46f5-4dcb-9ca9-19b1a35f52b9",
-      "timestamp": "2026-07-06T13:17:10.985365+00:00",
-      "symbol": "BTCUSDT",
-      "timeframe": "H4",
-      "freshness_score": 80.0,
-      "blocking_issues": "[]",
-      "warnings": "[\"frozen_manifest_stale:2026-05-30\", \"no_local_candle_file_detected\"]",
-      "recommended_action": "proceed",
-      "details_json": "{\"symbol\": \"BTCUSDT\", \"timeframe\": \"H4\", \"manifest_path\": \"data\\\\manifests\\\\2026-05-30.json\", \"manifest_date\": \"2026-05-30\", \"manifest_age_days\": 37, \"data_quality_penalty\": 0.5}"
-    },
-    {
-      "id": "1948a54f-bf33-4b92-834b-0a32831988e1",
-      "timestamp": "2026-07-06T13:17:10.985365+00:00",
-      "symbol": "BTCUSDT",
-      "timeframe": "H1",
-      "freshness_score": 80.0,
-      "blocking_issues": "[]",
-      "warnings": "[\"frozen_manifest_stale:2026-05-30\", \"no_local_candle_file_detected\"]",
-      "recommended_action": "proceed",
-      "details_json": "{\"symbol\": \"BTCUSDT\", \"timeframe\": \"H1\", \"manifest_path\": \"data\\\\manifests\\\\2026-05-30.json\", \"manifest_date\": \"2026-05-30\", \"manifest_age_days\": 37, \"data_quality_penalty\": 0.5}"
-    },
-    {
-      "id": "2ab89322-870e-4dda-80f1-e776bffd25c3",
-      "timestamp": "2026-07-06T13:17:10.985365+00:00",
-      "symbol": "ETHUSDT",
-      "timeframe": "H4",
-      "freshness_score": 80.0,
-      "blocking_issues": "[]",
-      "warnings": "[\"frozen_manifest_stale:2026-05-30\", \"no_local_candle_file_detected\"]",
-      "recommended_action": "proceed",
-      "details_json": "{\"symbol\": \"ETHUSDT\", \"timeframe\": \"H4\", \"manifest_path\": \"data\\\\manifests\\\\2026-05-30.json\", \"manifest_date\": \"2026-05-30\", \"manifest_age_days\": 37, \"data_quality_penalty\": 0.5}"
-    },
-    {
-      "id": "f0723596-32e6-4894-840b-e7fe527ebc00",
-      "timestamp": "2026-07-06T13:17:10.985365+00:00",
+      "id": "802aa853-c1fe-4098-b865-2d2ae4320179",
+      "timestamp": "2026-07-07T05:18:57.445173+00:00",
       "symbol": "ETHUSDT",
       "timeframe": "H1",
       "freshness_score": 80.0,
       "blocking_issues": "[]",
       "warnings": "[\"frozen_manifest_stale:2026-05-30\", \"no_local_candle_file_detected\"]",
       "recommended_action": "proceed",
-      "details_json": "{\"symbol\": \"ETHUSDT\", \"timeframe\": \"H1\", \"manifest_path\": \"data\\\\manifests\\\\2026-05-30.json\", \"manifest_date\": \"2026-05-30\", \"manifest_age_days\": 37, \"data_quality_penalty\": 0.5}"
+      "details_json": "{\"symbol\": \"ETHUSDT\", \"timeframe\": \"H1\", \"manifest_path\": \"data\\\\manifests\\\\2026-05-30.json\", \"manifest_date\": \"2026-05-30\", \"manifest_age_days\": 38, \"data_quality_penalty\": 0.5}"
     },
     {
-      "id": "86161bfc-1e90-46a5-972e-52cc16c0e3eb",
-      "timestamp": "2026-07-06T13:02:09.454544+00:00",
+      "id": "9ebc2da3-a8f9-4fa1-8d55-4d91e9268e9d",
+      "timestamp": "2026-07-07T05:18:57.444173+00:00",
       "symbol": "BTCUSDT",
       "timeframe": "H4",
       "freshness_score": 80.0,
       "blocking_issues": "[]",
       "warnings": "[\"frozen_manifest_stale:2026-05-30\", \"no_local_candle_file_detected\"]",
       "recommended_action": "proceed",
-      "details_json": "{\"symbol\": \"BTCUSDT\", \"timeframe\": \"H4\", \"manifest_path\": \"data\\\\manifests\\\\2026-05-30.json\", \"manifest_date\": \"2026-05-30\", \"manifest_age_days\": 37, \"data_quality_penalty\": 0.5}"
+      "details_json": "{\"symbol\": \"BTCUSDT\", \"timeframe\": \"H4\", \"manifest_path\": \"data\\\\manifests\\\\2026-05-30.json\", \"manifest_date\": \"2026-05-30\", \"manifest_age_days\": 38, \"data_quality_penalty\": 0.5}"
     },
     {
-      "id": "8df12716-5016-4f7a-8375-95827e5f56c0",
-      "timestamp": "2026-07-06T13:02:09.454544+00:00",
+      "id": "4122b594-7182-4184-9079-02f466db97fe",
+      "timestamp": "2026-07-07T05:18:57.444173+00:00",
       "symbol": "BTCUSDT",
       "timeframe": "H1",
       "freshness_score": 80.0,
       "blocking_issues": "[]",
       "warnings": "[\"frozen_manifest_stale:2026-05-30\", \"no_local_candle_file_detected\"]",
       "recommended_action": "proceed",
-      "details_json": "{\"symbol\": \"BTCUSDT\", \"timeframe\": \"H1\", \"manifest_path\": \"data\\\\manifests\\\\2026-05-30.json\", \"manifest_date\": \"2026-05-30\", \"manifest_age_days\": 37, \"data_quality_penalty\": 0.5}"
+      "details_json": "{\"symbol\": \"BTCUSDT\", \"timeframe\": \"H1\", \"manifest_path\": \"data\\\\manifests\\\\2026-05-30.json\", \"manifest_date\": \"2026-05-30\", \"manifest_age_days\": 38, \"data_quality_penalty\": 0.5}"
     },
     {
-      "id": "39c19dec-a211-4ccc-bfdd-093f0a2e5838",
-      "timestamp": "2026-07-06T13:02:09.454544+00:00",
+      "id": "789b71fe-78b2-41ba-80fc-c6c284476d81",
+      "timestamp": "2026-07-07T05:18:57.444173+00:00",
       "symbol": "ETHUSDT",
       "timeframe": "H4",
       "freshness_score": 80.0,
       "blocking_issues": "[]",
       "warnings": "[\"frozen_manifest_stale:2026-05-30\", \"no_local_candle_file_detected\"]",
       "recommended_action": "proceed",
-      "details_json": "{\"symbol\": \"ETHUSDT\", \"timeframe\": \"H4\", \"manifest_path\": \"data\\\\manifests\\\\2026-05-30.json\", \"manifest_date\": \"2026-05-30\", \"manifest_age_days\": 37, \"data_quality_penalty\": 0.5}"
+      "details_json": "{\"symbol\": \"ETHUSDT\", \"timeframe\": \"H4\", \"manifest_path\": \"data\\\\manifests\\\\2026-05-30.json\", \"manifest_date\": \"2026-05-30\", \"manifest_age_days\": 38, \"data_quality_penalty\": 0.5}"
     },
     {
-      "id": "b73c8bfd-f932-4d15-8a41-eed89bf87e95",
-      "timestamp": "2026-07-06T13:02:09.454544+00:00",
-      "symbol": "ETHUSDT",
-      "timeframe": "H1",
-      "freshness_score": 80.0,
-      "blocking_issues": "[]",
-      "warnings": "[\"frozen_manifest_stale:2026-05-30\", \"no_local_candle_file_detected\"]",
-      "recommended_action": "proceed",
-      "details_json": "{\"symbol\": \"ETHUSDT\", \"timeframe\": \"H1\", \"manifest_path\": \"data\\\\manifests\\\\2026-05-30.json\", \"manifest_date\": \"2026-05-30\", \"manifest_age_days\": 37, \"data_quality_penalty\": 0.5}"
-    },
-    {
-      "id": "01771702-87a5-4c5a-9dd8-383a744e861c",
-      "timestamp": "2026-07-06T12:47:07.817352+00:00",
-      "symbol": "BTCUSDT",
-      "timeframe": "H1",
-      "freshness_score": 80.0,
-      "blocking_issues": "[]",
-      "warnings": "[\"frozen_manifest_stale:2026-05-30\", \"no_local_candle_file_detected\"]",
-      "recommended_action": "proceed",
-      "details_json": "{\"symbol\": \"BTCUSDT\", \"timeframe\": \"H1\", \"manifest_path\": \"data\\\\manifests\\\\2026-05-30.json\", \"manifest_date\": \"2026-05-30\", \"manifest_age_days\": 37, \"data_quality_penalty\": 0.5}"
-    },
-    {
-      "id": "86ab9700-33fd-47df-9692-3cac1d25c614",
-      "timestamp": "2026-07-06T12:47:07.817352+00:00",
+      "id": "fbffec52-bb3f-4bb7-b970-51cbab917457",
+      "timestamp": "2026-07-07T05:03:56.038089+00:00",
       "symbol": "ETHUSDT",
       "timeframe": "H4",
       "freshness_score": 80.0,
       "blocking_issues": "[]",
       "warnings": "[\"frozen_manifest_stale:2026-05-30\", \"no_local_candle_file_detected\"]",
       "recommended_action": "proceed",
-      "details_json": "{\"symbol\": \"ETHUSDT\", \"timeframe\": \"H4\", \"manifest_path\": \"data\\\\manifests\\\\2026-05-30.json\", \"manifest_date\": \"2026-05-30\", \"manifest_age_days\": 37, \"data_quality_penalty\": 0.5}"
+      "details_json": "{\"symbol\": \"ETHUSDT\", \"timeframe\": \"H4\", \"manifest_path\": \"data\\\\manifests\\\\2026-05-30.json\", \"manifest_date\": \"2026-05-30\", \"manifest_age_days\": 38, \"data_quality_penalty\": 0.5}"
     },
     {
-      "id": "b7a05d7d-6c30-4cdb-b531-a291e6425418",
-      "timestamp": "2026-07-06T12:47:07.817352+00:00",
+      "id": "cc7b1921-242c-452b-b5d6-9e2f3c7c9aec",
+      "timestamp": "2026-07-07T05:03:56.038089+00:00",
       "symbol": "ETHUSDT",
       "timeframe": "H1",
       "freshness_score": 80.0,
       "blocking_issues": "[]",
       "warnings": "[\"frozen_manifest_stale:2026-05-30\", \"no_local_candle_file_detected\"]",
       "recommended_action": "proceed",
-      "details_json": "{\"symbol\": \"ETHUSDT\", \"timeframe\": \"H1\", \"manifest_path\": \"data\\\\manifests\\\\2026-05-30.json\", \"manifest_date\": \"2026-05-30\", \"manifest_age_days\": 37, \"data_quality_penalty\": 0.5}"
+      "details_json": "{\"symbol\": \"ETHUSDT\", \"timeframe\": \"H1\", \"manifest_path\": \"data\\\\manifests\\\\2026-05-30.json\", \"manifest_date\": \"2026-05-30\", \"manifest_age_days\": 38, \"data_quality_penalty\": 0.5}"
     },
     {
-      "id": "66480a80-dad6-4088-b199-28f38c2eb6b0",
-      "timestamp": "2026-07-06T12:47:07.816353+00:00",
+      "id": "fd461620-b764-40c0-9d19-33ffa65eb4c4",
+      "timestamp": "2026-07-07T05:03:56.037027+00:00",
       "symbol": "BTCUSDT",
       "timeframe": "H4",
       "freshness_score": 80.0,
       "blocking_issues": "[]",
       "warnings": "[\"frozen_manifest_stale:2026-05-30\", \"no_local_candle_file_detected\"]",
       "recommended_action": "proceed",
-      "details_json": "{\"symbol\": \"BTCUSDT\", \"timeframe\": \"H4\", \"manifest_path\": \"data\\\\manifests\\\\2026-05-30.json\", \"manifest_date\": \"2026-05-30\", \"manifest_age_days\": 37, \"data_quality_penalty\": 0.5}"
+      "details_json": "{\"symbol\": \"BTCUSDT\", \"timeframe\": \"H4\", \"manifest_path\": \"data\\\\manifests\\\\2026-05-30.json\", \"manifest_date\": \"2026-05-30\", \"manifest_age_days\": 38, \"data_quality_penalty\": 0.5}"
     },
     {
-      "id": "fd40ff1c-7e3b-4b21-bcea-e9f13b6aea48",
-      "timestamp": "2026-07-06T12:32:06.225603+00:00",
-      "symbol": "BTCUSDT",
-      "timeframe": "H4",
-      "freshness_score": 80.0,
-      "blocking_issues": "[]",
-      "warnings": "[\"frozen_manifest_stale:2026-05-30\", \"no_local_candle_file_detected\"]",
-      "recommended_action": "proceed",
-      "details_json": "{\"symbol\": \"BTCUSDT\", \"timeframe\": \"H4\", \"manifest_path\": \"data\\\\manifests\\\\2026-05-30.json\", \"manifest_date\": \"2026-05-30\", \"manifest_age_days\": 37, \"data_quality_penalty\": 0.5}"
-    },
-    {
-      "id": "541fb5da-a6b8-4098-bce0-4a2bc56c8656",
-      "timestamp": "2026-07-06T12:32:06.225603+00:00",
+      "id": "4791c905-8673-4137-bcf3-87427a0f4e84",
+      "timestamp": "2026-07-07T05:03:56.037027+00:00",
       "symbol": "BTCUSDT",
       "timeframe": "H1",
       "freshness_score": 80.0,
       "blocking_issues": "[]",
       "warnings": "[\"frozen_manifest_stale:2026-05-30\", \"no_local_candle_file_detected\"]",
       "recommended_action": "proceed",
-      "details_json": "{\"symbol\": \"BTCUSDT\", \"timeframe\": \"H1\", \"manifest_path\": \"data\\\\manifests\\\\2026-05-30.json\", \"manifest_date\": \"2026-05-30\", \"manifest_age_days\": 37, \"data_quality_penalty\": 0.5}"
+      "details_json": "{\"symbol\": \"BTCUSDT\", \"timeframe\": \"H1\", \"manifest_path\": \"data\\\\manifests\\\\2026-05-30.json\", \"manifest_date\": \"2026-05-30\", \"manifest_age_days\": 38, \"data_quality_penalty\": 0.5}"
     },
     {
-      "id": "3e6bf75a-876e-46b8-87a3-04db6a7c96d1",
-      "timestamp": "2026-07-06T12:32:06.225603+00:00",
-      "symbol": "ETHUSDT",
-      "timeframe": "H4",
-      "freshness_score": 80.0,
-      "blocking_issues": "[]",
-      "warnings": "[\"frozen_manifest_stale:2026-05-30\", \"no_local_candle_file_detected\"]",
-      "recommended_action": "proceed",
-      "details_json": "{\"symbol\": \"ETHUSDT\", \"timeframe\": \"H4\", \"manifest_path\": \"data\\\\manifests\\\\2026-05-30.json\", \"manifest_date\": \"2026-05-30\", \"manifest_age_days\": 37, \"data_quality_penalty\": 0.5}"
-    },
-    {
-      "id": "a60dcf41-0ecb-4196-9bee-450848265898",
-      "timestamp": "2026-07-06T12:32:06.225603+00:00",
-      "symbol": "ETHUSDT",
-      "timeframe": "H1",
-      "freshness_score": 80.0,
-      "blocking_issues": "[]",
-      "warnings": "[\"frozen_manifest_stale:2026-05-30\", \"no_local_candle_file_detected\"]",
-      "recommended_action": "proceed",
-      "details_json": "{\"symbol\": \"ETHUSDT\", \"timeframe\": \"H1\", \"manifest_path\": \"data\\\\manifests\\\\2026-05-30.json\", \"manifest_date\": \"2026-05-30\", \"manifest_age_days\": 37, \"data_quality_penalty\": 0.5}"
-    },
-    {
-      "id": "fa03fde0-0677-4e0c-946e-e67d10a3e965",
-      "timestamp": "2026-07-06T12:17:04.593737+00:00",
-      "symbol": "BTCUSDT",
-      "timeframe": "H1",
-      "freshness_score": 80.0,
-      "blocking_issues": "[]",
-      "warnings": "[\"frozen_manifest_stale:2026-05-30\", \"no_local_candle_file_detected\"]",
-      "recommended_action": "proceed",
-      "details_json": "{\"symbol\": \"BTCUSDT\", \"timeframe\": \"H1\", \"manifest_path\": \"data\\\\manifests\\\\2026-05-30.json\", \"manifest_date\": \"2026-05-30\", \"manifest_age_days\": 37, \"data_quality_penalty\": 0.5}"
-    },
-    {
-      "id": "51ab70f0-c22d-4bbe-be56-8ae9521b5820",
-      "timestamp": "2026-07-06T12:17:04.593737+00:00",
-      "symbol": "ETHUSDT",
-      "timeframe": "H4",
-      "freshness_score": 80.0,
-      "blocking_issues": "[]",
-      "warnings": "[\"frozen_manifest_stale:2026-05-30\", \"no_local_candle_file_detected\"]",
-      "recommended_action": "proceed",
-      "details_json": "{\"symbol\": \"ETHUSDT\", \"timeframe\": \"H4\", \"manifest_path\": \"data\\\\manifests\\\\2026-05-30.json\", \"manifest_date\": \"2026-05-30\", \"manifest_age_days\": 37, \"data_quality_penalty\": 0.5}"
-    },
-    {
-      "id": "0ceaa22e-b82e-4f4f-9d49-60108371b3b4",
-      "timestamp": "2026-07-06T12:17:04.593737+00:00",
-      "symbol": "ETHUSDT",
-      "timeframe": "H1",
-      "freshness_score": 80.0,
-      "blocking_issues": "[]",
-      "warnings": "[\"frozen_manifest_stale:2026-05-30\", \"no_local_candle_file_detected\"]",
-      "recommended_action": "proceed",
-      "details_json": "{\"symbol\": \"ETHUSDT\", \"timeframe\": \"H1\", \"manifest_path\": \"data\\\\manifests\\\\2026-05-30.json\", \"manifest_date\": \"2026-05-30\", \"manifest_age_days\": 37, \"data_quality_penalty\": 0.5}"
-    },
-    {
-      "id": "cdeb397c-c98a-4dc8-bef9-a24ef16bfe13",
-      "timestamp": "2026-07-06T12:17:04.592317+00:00",
+      "id": "93adadce-27ae-444d-b57a-22ff1fecaffd",
+      "timestamp": "2026-07-07T04:48:54.429440+00:00",
       "symbol": "BTCUSDT",
       "timeframe": "H4",
       "freshness_score": 80.0,
       "blocking_issues": "[]",
       "warnings": "[\"frozen_manifest_stale:2026-05-30\", \"no_local_candle_file_detected\"]",
       "recommended_action": "proceed",
-      "details_json": "{\"symbol\": \"BTCUSDT\", \"timeframe\": \"H4\", \"manifest_path\": \"data\\\\manifests\\\\2026-05-30.json\", \"manifest_date\": \"2026-05-30\", \"manifest_age_days\": 37, \"data_quality_penalty\": 0.5}"
+      "details_json": "{\"symbol\": \"BTCUSDT\", \"timeframe\": \"H4\", \"manifest_path\": \"data\\\\manifests\\\\2026-05-30.json\", \"manifest_date\": \"2026-05-30\", \"manifest_age_days\": 38, \"data_quality_penalty\": 0.5}"
     },
     {
-      "id": "00426529-810f-4b44-bdc0-0659a929fb4c",
-      "timestamp": "2026-07-06T12:02:03.119309+00:00",
+      "id": "e39606f3-5ed5-457e-9eaa-4d8cd7097a80",
+      "timestamp": "2026-07-07T04:48:54.429440+00:00",
       "symbol": "BTCUSDT",
       "timeframe": "H1",
       "freshness_score": 80.0,
       "blocking_issues": "[]",
       "warnings": "[\"frozen_manifest_stale:2026-05-30\", \"no_local_candle_file_detected\"]",
       "recommended_action": "proceed",
-      "details_json": "{\"symbol\": \"BTCUSDT\", \"timeframe\": \"H1\", \"manifest_path\": \"data\\\\manifests\\\\2026-05-30.json\", \"manifest_date\": \"2026-05-30\", \"manifest_age_days\": 37, \"data_quality_penalty\": 0.5}"
+      "details_json": "{\"symbol\": \"BTCUSDT\", \"timeframe\": \"H1\", \"manifest_path\": \"data\\\\manifests\\\\2026-05-30.json\", \"manifest_date\": \"2026-05-30\", \"manifest_age_days\": 38, \"data_quality_penalty\": 0.5}"
     },
     {
-      "id": "568755e6-8dfb-4fdb-b933-b84e4f9c5c0f",
-      "timestamp": "2026-07-06T12:02:03.119309+00:00",
+      "id": "818b7958-19e5-4580-a229-3e46fa5e74ae",
+      "timestamp": "2026-07-07T04:48:54.429440+00:00",
       "symbol": "ETHUSDT",
       "timeframe": "H4",
       "freshness_score": 80.0,
       "blocking_issues": "[]",
       "warnings": "[\"frozen_manifest_stale:2026-05-30\", \"no_local_candle_file_detected\"]",
       "recommended_action": "proceed",
-      "details_json": "{\"symbol\": \"ETHUSDT\", \"timeframe\": \"H4\", \"manifest_path\": \"data\\\\manifests\\\\2026-05-30.json\", \"manifest_date\": \"2026-05-30\", \"manifest_age_days\": 37, \"data_quality_penalty\": 0.5}"
+      "details_json": "{\"symbol\": \"ETHUSDT\", \"timeframe\": \"H4\", \"manifest_path\": \"data\\\\manifests\\\\2026-05-30.json\", \"manifest_date\": \"2026-05-30\", \"manifest_age_days\": 38, \"data_quality_penalty\": 0.5}"
     },
     {
-      "id": "cedc1d8d-6fc3-4d39-aed7-879d6436b5d2",
-      "timestamp": "2026-07-06T12:02:03.119309+00:00",
+      "id": "bf668cf9-fba7-42dc-a325-1aa03d8df8c2",
+      "timestamp": "2026-07-07T04:48:54.429440+00:00",
       "symbol": "ETHUSDT",
       "timeframe": "H1",
       "freshness_score": 80.0,
       "blocking_issues": "[]",
       "warnings": "[\"frozen_manifest_stale:2026-05-30\", \"no_local_candle_file_detected\"]",
       "recommended_action": "proceed",
-      "details_json": "{\"symbol\": \"ETHUSDT\", \"timeframe\": \"H1\", \"manifest_path\": \"data\\\\manifests\\\\2026-05-30.json\", \"manifest_date\": \"2026-05-30\", \"manifest_age_days\": 37, \"data_quality_penalty\": 0.5}"
+      "details_json": "{\"symbol\": \"ETHUSDT\", \"timeframe\": \"H1\", \"manifest_path\": \"data\\\\manifests\\\\2026-05-30.json\", \"manifest_date\": \"2026-05-30\", \"manifest_age_days\": 38, \"data_quality_penalty\": 0.5}"
     },
     {
-      "id": "9396f73d-4541-4b55-89b6-f6316d8dc8a6",
-      "timestamp": "2026-07-06T12:02:03.118308+00:00",
+      "id": "84c558c4-5cbc-4886-b653-c281abc6b96c",
+      "timestamp": "2026-07-07T04:33:52.992100+00:00",
+      "symbol": "ETHUSDT",
+      "timeframe": "H1",
+      "freshness_score": 80.0,
+      "blocking_issues": "[]",
+      "warnings": "[\"frozen_manifest_stale:2026-05-30\", \"no_local_candle_file_detected\"]",
+      "recommended_action": "proceed",
+      "details_json": "{\"symbol\": \"ETHUSDT\", \"timeframe\": \"H1\", \"manifest_path\": \"data\\\\manifests\\\\2026-05-30.json\", \"manifest_date\": \"2026-05-30\", \"manifest_age_days\": 38, \"data_quality_penalty\": 0.5}"
+    },
+    {
+      "id": "4fb07105-1da0-471e-9023-77c1bec08437",
+      "timestamp": "2026-07-07T04:33:52.991099+00:00",
       "symbol": "BTCUSDT",
       "timeframe": "H4",
       "freshness_score": 80.0,
       "blocking_issues": "[]",
       "warnings": "[\"frozen_manifest_stale:2026-05-30\", \"no_local_candle_file_detected\"]",
       "recommended_action": "proceed",
-      "details_json": "{\"symbol\": \"BTCUSDT\", \"timeframe\": \"H4\", \"manifest_path\": \"data\\\\manifests\\\\2026-05-30.json\", \"manifest_date\": \"2026-05-30\", \"manifest_age_days\": 37, \"data_quality_penalty\": 0.5}"
+      "details_json": "{\"symbol\": \"BTCUSDT\", \"timeframe\": \"H4\", \"manifest_path\": \"data\\\\manifests\\\\2026-05-30.json\", \"manifest_date\": \"2026-05-30\", \"manifest_age_days\": 38, \"data_quality_penalty\": 0.5}"
     },
     {
-      "id": "c2977413-e8d2-49bc-99d7-0e19cdf828a7",
-      "timestamp": "2026-07-06T11:46:59.403367+00:00",
+      "id": "c2ae728d-7fbf-4ff1-84cd-b581c5bb81f5",
+      "timestamp": "2026-07-07T04:33:52.991099+00:00",
       "symbol": "BTCUSDT",
       "timeframe": "H1",
       "freshness_score": 80.0,
       "blocking_issues": "[]",
       "warnings": "[\"frozen_manifest_stale:2026-05-30\", \"no_local_candle_file_detected\"]",
       "recommended_action": "proceed",
-      "details_json": "{\"symbol\": \"BTCUSDT\", \"timeframe\": \"H1\", \"manifest_path\": \"data\\\\manifests\\\\2026-05-30.json\", \"manifest_date\": \"2026-05-30\", \"manifest_age_days\": 37, \"data_quality_penalty\": 0.5}"
+      "details_json": "{\"symbol\": \"BTCUSDT\", \"timeframe\": \"H1\", \"manifest_path\": \"data\\\\manifests\\\\2026-05-30.json\", \"manifest_date\": \"2026-05-30\", \"manifest_age_days\": 38, \"data_quality_penalty\": 0.5}"
     },
     {
-      "id": "0d2bf1eb-6106-4128-a4a4-a664e2dc9ec4",
-      "timestamp": "2026-07-06T11:46:59.403367+00:00",
+      "id": "8b9c34e9-6173-4b1c-854d-4a9792e41b92",
+      "timestamp": "2026-07-07T04:33:52.991099+00:00",
       "symbol": "ETHUSDT",
       "timeframe": "H4",
       "freshness_score": 80.0,
       "blocking_issues": "[]",
       "warnings": "[\"frozen_manifest_stale:2026-05-30\", \"no_local_candle_file_detected\"]",
       "recommended_action": "proceed",
-      "details_json": "{\"symbol\": \"ETHUSDT\", \"timeframe\": \"H4\", \"manifest_path\": \"data\\\\manifests\\\\2026-05-30.json\", \"manifest_date\": \"2026-05-30\", \"manifest_age_days\": 37, \"data_quality_penalty\": 0.5}"
+      "details_json": "{\"symbol\": \"ETHUSDT\", \"timeframe\": \"H4\", \"manifest_path\": \"data\\\\manifests\\\\2026-05-30.json\", \"manifest_date\": \"2026-05-30\", \"manifest_age_days\": 38, \"data_quality_penalty\": 0.5}"
+    },
+    {
+      "id": "5a1e9e10-2dd5-4d03-9a93-7337347903d7",
+      "timestamp": "2026-07-07T04:18:51.682092+00:00",
+      "symbol": "BTCUSDT",
+      "timeframe": "H4",
+      "freshness_score": 80.0,
+      "blocking_issues": "[]",
+      "warnings": "[\"frozen_manifest_stale:2026-05-30\", \"no_local_candle_file_detected\"]",
+      "recommended_action": "proceed",
+      "details_json": "{\"symbol\": \"BTCUSDT\", \"timeframe\": \"H4\", \"manifest_path\": \"data\\\\manifests\\\\2026-05-30.json\", \"manifest_date\": \"2026-05-30\", \"manifest_age_days\": 38, \"data_quality_penalty\": 0.5}"
+    },
+    {
+      "id": "d5a41509-2646-4d62-9985-0a21c427e365",
+      "timestamp": "2026-07-07T04:18:51.682092+00:00",
+      "symbol": "BTCUSDT",
+      "timeframe": "H1",
+      "freshness_score": 80.0,
+      "blocking_issues": "[]",
+      "warnings": "[\"frozen_manifest_stale:2026-05-30\", \"no_local_candle_file_detected\"]",
+      "recommended_action": "proceed",
+      "details_json": "{\"symbol\": \"BTCUSDT\", \"timeframe\": \"H1\", \"manifest_path\": \"data\\\\manifests\\\\2026-05-30.json\", \"manifest_date\": \"2026-05-30\", \"manifest_age_days\": 38, \"data_quality_penalty\": 0.5}"
+    },
+    {
+      "id": "d010a059-badb-4d10-8c9f-c6281ed7dffb",
+      "timestamp": "2026-07-07T04:18:51.682092+00:00",
+      "symbol": "ETHUSDT",
+      "timeframe": "H4",
+      "freshness_score": 80.0,
+      "blocking_issues": "[]",
+      "warnings": "[\"frozen_manifest_stale:2026-05-30\", \"no_local_candle_file_detected\"]",
+      "recommended_action": "proceed",
+      "details_json": "{\"symbol\": \"ETHUSDT\", \"timeframe\": \"H4\", \"manifest_path\": \"data\\\\manifests\\\\2026-05-30.json\", \"manifest_date\": \"2026-05-30\", \"manifest_age_days\": 38, \"data_quality_penalty\": 0.5}"
+    },
+    {
+      "id": "8baf564b-32e5-425d-9b78-cae76ac42725",
+      "timestamp": "2026-07-07T04:18:51.682092+00:00",
+      "symbol": "ETHUSDT",
+      "timeframe": "H1",
+      "freshness_score": 80.0,
+      "blocking_issues": "[]",
+      "warnings": "[\"frozen_manifest_stale:2026-05-30\", \"no_local_candle_file_detected\"]",
+      "recommended_action": "proceed",
+      "details_json": "{\"symbol\": \"ETHUSDT\", \"timeframe\": \"H1\", \"manifest_path\": \"data\\\\manifests\\\\2026-05-30.json\", \"manifest_date\": \"2026-05-30\", \"manifest_age_days\": 38, \"data_quality_penalty\": 0.5}"
+    },
+    {
+      "id": "39e65367-3ada-4240-bcfb-9cb2494fc2ea",
+      "timestamp": "2026-07-07T04:03:50.304780+00:00",
+      "symbol": "BTCUSDT",
+      "timeframe": "H1",
+      "freshness_score": 80.0,
+      "blocking_issues": "[]",
+      "warnings": "[\"frozen_manifest_stale:2026-05-30\", \"no_local_candle_file_detected\"]",
+      "recommended_action": "proceed",
+      "details_json": "{\"symbol\": \"BTCUSDT\", \"timeframe\": \"H1\", \"manifest_path\": \"data\\\\manifests\\\\2026-05-30.json\", \"manifest_date\": \"2026-05-30\", \"manifest_age_days\": 38, \"data_quality_penalty\": 0.5}"
+    },
+    {
+      "id": "5527967b-225b-4a16-aa5c-1d9a5283ae4d",
+      "timestamp": "2026-07-07T04:03:50.304780+00:00",
+      "symbol": "ETHUSDT",
+      "timeframe": "H4",
+      "freshness_score": 80.0,
+      "blocking_issues": "[]",
+      "warnings": "[\"frozen_manifest_stale:2026-05-30\", \"no_local_candle_file_detected\"]",
+      "recommended_action": "proceed",
+      "details_json": "{\"symbol\": \"ETHUSDT\", \"timeframe\": \"H4\", \"manifest_path\": \"data\\\\manifests\\\\2026-05-30.json\", \"manifest_date\": \"2026-05-30\", \"manifest_age_days\": 38, \"data_quality_penalty\": 0.5}"
+    },
+    {
+      "id": "dd7286f0-be0b-4908-a01b-b13e12fb006c",
+      "timestamp": "2026-07-07T04:03:50.304780+00:00",
+      "symbol": "ETHUSDT",
+      "timeframe": "H1",
+      "freshness_score": 80.0,
+      "blocking_issues": "[]",
+      "warnings": "[\"frozen_manifest_stale:2026-05-30\", \"no_local_candle_file_detected\"]",
+      "recommended_action": "proceed",
+      "details_json": "{\"symbol\": \"ETHUSDT\", \"timeframe\": \"H1\", \"manifest_path\": \"data\\\\manifests\\\\2026-05-30.json\", \"manifest_date\": \"2026-05-30\", \"manifest_age_days\": 38, \"data_quality_penalty\": 0.5}"
+    },
+    {
+      "id": "8db60007-9be0-4206-a73b-f0e7d41c4a6d",
+      "timestamp": "2026-07-07T04:03:50.303780+00:00",
+      "symbol": "BTCUSDT",
+      "timeframe": "H4",
+      "freshness_score": 80.0,
+      "blocking_issues": "[]",
+      "warnings": "[\"frozen_manifest_stale:2026-05-30\", \"no_local_candle_file_detected\"]",
+      "recommended_action": "proceed",
+      "details_json": "{\"symbol\": \"BTCUSDT\", \"timeframe\": \"H4\", \"manifest_path\": \"data\\\\manifests\\\\2026-05-30.json\", \"manifest_date\": \"2026-05-30\", \"manifest_age_days\": 38, \"data_quality_penalty\": 0.5}"
+    },
+    {
+      "id": "55bd3ebf-ca68-49f2-961f-5938f36d5ab0",
+      "timestamp": "2026-07-07T03:48:48.832646+00:00",
+      "symbol": "BTCUSDT",
+      "timeframe": "H1",
+      "freshness_score": 80.0,
+      "blocking_issues": "[]",
+      "warnings": "[\"frozen_manifest_stale:2026-05-30\", \"no_local_candle_file_detected\"]",
+      "recommended_action": "proceed",
+      "details_json": "{\"symbol\": \"BTCUSDT\", \"timeframe\": \"H1\", \"manifest_path\": \"data\\\\manifests\\\\2026-05-30.json\", \"manifest_date\": \"2026-05-30\", \"manifest_age_days\": 38, \"data_quality_penalty\": 0.5}"
+    },
+    {
+      "id": "fe27d388-ac34-4591-863c-f7c85afb4344",
+      "timestamp": "2026-07-07T03:48:48.832646+00:00",
+      "symbol": "ETHUSDT",
+      "timeframe": "H4",
+      "freshness_score": 80.0,
+      "blocking_issues": "[]",
+      "warnings": "[\"frozen_manifest_stale:2026-05-30\", \"no_local_candle_file_detected\"]",
+      "recommended_action": "proceed",
+      "details_json": "{\"symbol\": \"ETHUSDT\", \"timeframe\": \"H4\", \"manifest_path\": \"data\\\\manifests\\\\2026-05-30.json\", \"manifest_date\": \"2026-05-30\", \"manifest_age_days\": 38, \"data_quality_penalty\": 0.5}"
+    },
+    {
+      "id": "833f72f1-92ba-4d73-8269-85e2ac82ade3",
+      "timestamp": "2026-07-07T03:48:48.832646+00:00",
+      "symbol": "ETHUSDT",
+      "timeframe": "H1",
+      "freshness_score": 80.0,
+      "blocking_issues": "[]",
+      "warnings": "[\"frozen_manifest_stale:2026-05-30\", \"no_local_candle_file_detected\"]",
+      "recommended_action": "proceed",
+      "details_json": "{\"symbol\": \"ETHUSDT\", \"timeframe\": \"H1\", \"manifest_path\": \"data\\\\manifests\\\\2026-05-30.json\", \"manifest_date\": \"2026-05-30\", \"manifest_age_days\": 38, \"data_quality_penalty\": 0.5}"
+    },
+    {
+      "id": "ce23d569-c173-40fd-8c31-3e089775f750",
+      "timestamp": "2026-07-07T03:48:48.831475+00:00",
+      "symbol": "BTCUSDT",
+      "timeframe": "H4",
+      "freshness_score": 80.0,
+      "blocking_issues": "[]",
+      "warnings": "[\"frozen_manifest_stale:2026-05-30\", \"no_local_candle_file_detected\"]",
+      "recommended_action": "proceed",
+      "details_json": "{\"symbol\": \"BTCUSDT\", \"timeframe\": \"H4\", \"manifest_path\": \"data\\\\manifests\\\\2026-05-30.json\", \"manifest_date\": \"2026-05-30\", \"manifest_age_days\": 38, \"data_quality_penalty\": 0.5}"
+    },
+    {
+      "id": "f6f236da-d72c-466c-9d67-4104426a6c12",
+      "timestamp": "2026-07-07T03:33:47.486559+00:00",
+      "symbol": "BTCUSDT",
+      "timeframe": "H1",
+      "freshness_score": 80.0,
+      "blocking_issues": "[]",
+      "warnings": "[\"frozen_manifest_stale:2026-05-30\", \"no_local_candle_file_detected\"]",
+      "recommended_action": "proceed",
+      "details_json": "{\"symbol\": \"BTCUSDT\", \"timeframe\": \"H1\", \"manifest_path\": \"data\\\\manifests\\\\2026-05-30.json\", \"manifest_date\": \"2026-05-30\", \"manifest_age_days\": 38, \"data_quality_penalty\": 0.5}"
+    },
+    {
+      "id": "160f8b5d-c4d3-4657-9bd9-6c4dd209bcf0",
+      "timestamp": "2026-07-07T03:33:47.486559+00:00",
+      "symbol": "ETHUSDT",
+      "timeframe": "H4",
+      "freshness_score": 80.0,
+      "blocking_issues": "[]",
+      "warnings": "[\"frozen_manifest_stale:2026-05-30\", \"no_local_candle_file_detected\"]",
+      "recommended_action": "proceed",
+      "details_json": "{\"symbol\": \"ETHUSDT\", \"timeframe\": \"H4\", \"manifest_path\": \"data\\\\manifests\\\\2026-05-30.json\", \"manifest_date\": \"2026-05-30\", \"manifest_age_days\": 38, \"data_quality_penalty\": 0.5}"
+    },
+    {
+      "id": "1984d106-c925-4ece-9289-2f47868421a4",
+      "timestamp": "2026-07-07T03:33:47.486559+00:00",
+      "symbol": "ETHUSDT",
+      "timeframe": "H1",
+      "freshness_score": 80.0,
+      "blocking_issues": "[]",
+      "warnings": "[\"frozen_manifest_stale:2026-05-30\", \"no_local_candle_file_detected\"]",
+      "recommended_action": "proceed",
+      "details_json": "{\"symbol\": \"ETHUSDT\", \"timeframe\": \"H1\", \"manifest_path\": \"data\\\\manifests\\\\2026-05-30.json\", \"manifest_date\": \"2026-05-30\", \"manifest_age_days\": 38, \"data_quality_penalty\": 0.5}"
+    },
+    {
+      "id": "dba01e02-6f51-4099-806e-d9d93dbd1e30",
+      "timestamp": "2026-07-07T03:33:47.484791+00:00",
+      "symbol": "BTCUSDT",
+      "timeframe": "H4",
+      "freshness_score": 80.0,
+      "blocking_issues": "[]",
+      "warnings": "[\"frozen_manifest_stale:2026-05-30\", \"no_local_candle_file_detected\"]",
+      "recommended_action": "proceed",
+      "details_json": "{\"symbol\": \"BTCUSDT\", \"timeframe\": \"H4\", \"manifest_path\": \"data\\\\manifests\\\\2026-05-30.json\", \"manifest_date\": \"2026-05-30\", \"manifest_age_days\": 38, \"data_quality_penalty\": 0.5}"
+    },
+    {
+      "id": "4639d246-a4f7-4bee-b740-1738635bff6d",
+      "timestamp": "2026-07-07T03:18:46.005646+00:00",
+      "symbol": "BTCUSDT",
+      "timeframe": "H4",
+      "freshness_score": 80.0,
+      "blocking_issues": "[]",
+      "warnings": "[\"frozen_manifest_stale:2026-05-30\", \"no_local_candle_file_detected\"]",
+      "recommended_action": "proceed",
+      "details_json": "{\"symbol\": \"BTCUSDT\", \"timeframe\": \"H4\", \"manifest_path\": \"data\\\\manifests\\\\2026-05-30.json\", \"manifest_date\": \"2026-05-30\", \"manifest_age_days\": 38, \"data_quality_penalty\": 0.5}"
+    },
+    {
+      "id": "a5eb1767-0c9a-48d7-88d5-d9201c9db3a2",
+      "timestamp": "2026-07-07T03:18:46.005646+00:00",
+      "symbol": "BTCUSDT",
+      "timeframe": "H1",
+      "freshness_score": 80.0,
+      "blocking_issues": "[]",
+      "warnings": "[\"frozen_manifest_stale:2026-05-30\", \"no_local_candle_file_detected\"]",
+      "recommended_action": "proceed",
+      "details_json": "{\"symbol\": \"BTCUSDT\", \"timeframe\": \"H1\", \"manifest_path\": \"data\\\\manifests\\\\2026-05-30.json\", \"manifest_date\": \"2026-05-30\", \"manifest_age_days\": 38, \"data_quality_penalty\": 0.5}"
+    },
+    {
+      "id": "0eba69e4-4d16-4317-8215-ca41a3ac883a",
+      "timestamp": "2026-07-07T03:18:46.005646+00:00",
+      "symbol": "ETHUSDT",
+      "timeframe": "H4",
+      "freshness_score": 80.0,
+      "blocking_issues": "[]",
+      "warnings": "[\"frozen_manifest_stale:2026-05-30\", \"no_local_candle_file_detected\"]",
+      "recommended_action": "proceed",
+      "details_json": "{\"symbol\": \"ETHUSDT\", \"timeframe\": \"H4\", \"manifest_path\": \"data\\\\manifests\\\\2026-05-30.json\", \"manifest_date\": \"2026-05-30\", \"manifest_age_days\": 38, \"data_quality_penalty\": 0.5}"
+    },
+    {
+      "id": "4b44076a-3538-4c1c-ba56-a0e335a07812",
+      "timestamp": "2026-07-07T03:18:46.005646+00:00",
+      "symbol": "ETHUSDT",
+      "timeframe": "H1",
+      "freshness_score": 80.0,
+      "blocking_issues": "[]",
+      "warnings": "[\"frozen_manifest_stale:2026-05-30\", \"no_local_candle_file_detected\"]",
+      "recommended_action": "proceed",
+      "details_json": "{\"symbol\": \"ETHUSDT\", \"timeframe\": \"H1\", \"manifest_path\": \"data\\\\manifests\\\\2026-05-30.json\", \"manifest_date\": \"2026-05-30\", \"manifest_age_days\": 38, \"data_quality_penalty\": 0.5}"
+    },
+    {
+      "id": "3eaa5c21-3c73-43e0-8009-df99e5bc225b",
+      "timestamp": "2026-07-07T03:03:44.569640+00:00",
+      "symbol": "BTCUSDT",
+      "timeframe": "H4",
+      "freshness_score": 80.0,
+      "blocking_issues": "[]",
+      "warnings": "[\"frozen_manifest_stale:2026-05-30\", \"no_local_candle_file_detected\"]",
+      "recommended_action": "proceed",
+      "details_json": "{\"symbol\": \"BTCUSDT\", \"timeframe\": \"H4\", \"manifest_path\": \"data\\\\manifests\\\\2026-05-30.json\", \"manifest_date\": \"2026-05-30\", \"manifest_age_days\": 38, \"data_quality_penalty\": 0.5}"
+    },
+    {
+      "id": "eabe4d57-1a56-4f1a-9933-1ccda834eb1b",
+      "timestamp": "2026-07-07T03:03:44.569640+00:00",
+      "symbol": "BTCUSDT",
+      "timeframe": "H1",
+      "freshness_score": 80.0,
+      "blocking_issues": "[]",
+      "warnings": "[\"frozen_manifest_stale:2026-05-30\", \"no_local_candle_file_detected\"]",
+      "recommended_action": "proceed",
+      "details_json": "{\"symbol\": \"BTCUSDT\", \"timeframe\": \"H1\", \"manifest_path\": \"data\\\\manifests\\\\2026-05-30.json\", \"manifest_date\": \"2026-05-30\", \"manifest_age_days\": 38, \"data_quality_penalty\": 0.5}"
+    },
+    {
+      "id": "accbed81-c4b2-4827-9fe7-d7e1bd20b7e0",
+      "timestamp": "2026-07-07T03:03:44.569640+00:00",
+      "symbol": "ETHUSDT",
+      "timeframe": "H4",
+      "freshness_score": 80.0,
+      "blocking_issues": "[]",
+      "warnings": "[\"frozen_manifest_stale:2026-05-30\", \"no_local_candle_file_detected\"]",
+      "recommended_action": "proceed",
+      "details_json": "{\"symbol\": \"ETHUSDT\", \"timeframe\": \"H4\", \"manifest_path\": \"data\\\\manifests\\\\2026-05-30.json\", \"manifest_date\": \"2026-05-30\", \"manifest_age_days\": 38, \"data_quality_penalty\": 0.5}"
+    },
+    {
+      "id": "e7162842-ad8e-46ab-a88d-65abbeb4cd09",
+      "timestamp": "2026-07-07T03:03:44.569640+00:00",
+      "symbol": "ETHUSDT",
+      "timeframe": "H1",
+      "freshness_score": 80.0,
+      "blocking_issues": "[]",
+      "warnings": "[\"frozen_manifest_stale:2026-05-30\", \"no_local_candle_file_detected\"]",
+      "recommended_action": "proceed",
+      "details_json": "{\"symbol\": \"ETHUSDT\", \"timeframe\": \"H1\", \"manifest_path\": \"data\\\\manifests\\\\2026-05-30.json\", \"manifest_date\": \"2026-05-30\", \"manifest_age_days\": 38, \"data_quality_penalty\": 0.5}"
+    },
+    {
+      "id": "251af23d-9d6d-45ab-bc18-0ae25b0560dd",
+      "timestamp": "2026-07-07T02:48:43.228963+00:00",
+      "symbol": "BTCUSDT",
+      "timeframe": "H1",
+      "freshness_score": 80.0,
+      "blocking_issues": "[]",
+      "warnings": "[\"frozen_manifest_stale:2026-05-30\", \"no_local_candle_file_detected\"]",
+      "recommended_action": "proceed",
+      "details_json": "{\"symbol\": \"BTCUSDT\", \"timeframe\": \"H1\", \"manifest_path\": \"data\\\\manifests\\\\2026-05-30.json\", \"manifest_date\": \"2026-05-30\", \"manifest_age_days\": 38, \"data_quality_penalty\": 0.5}"
+    },
+    {
+      "id": "ef595024-d0e0-4956-b0b0-fb38e745534c",
+      "timestamp": "2026-07-07T02:48:43.228963+00:00",
+      "symbol": "ETHUSDT",
+      "timeframe": "H4",
+      "freshness_score": 80.0,
+      "blocking_issues": "[]",
+      "warnings": "[\"frozen_manifest_stale:2026-05-30\", \"no_local_candle_file_detected\"]",
+      "recommended_action": "proceed",
+      "details_json": "{\"symbol\": \"ETHUSDT\", \"timeframe\": \"H4\", \"manifest_path\": \"data\\\\manifests\\\\2026-05-30.json\", \"manifest_date\": \"2026-05-30\", \"manifest_age_days\": 38, \"data_quality_penalty\": 0.5}"
     }
   ],
   "recent_runs": [
     {
-      "id": "54b03d3f-d8a5-4f94-ad39-e6c65e55dcba",
-      "timestamp": "2026-07-06T14:47:24.077492+00:00",
-      "cycle_number": 85,
-      "dry_run": 0,
-      "engines_run": "[\"ase\", \"cascade\", \"engine_a\", \"engine_b\", \"scalp\"]",
-      "duration_seconds": 2.532,
-      "summary": "{\"freshness_count\": 4, \"findings_count\": 20, \"candidates_count\": 0, \"accepted\": 0, \"rejected\": 0}"
-    },
-    {
-      "id": "73f84f11-87e3-404a-a280-7364e03b2363",
-      "timestamp": "2026-07-06T14:32:21.465777+00:00",
-      "cycle_number": 84,
-      "dry_run": 0,
-      "engines_run": "[\"ase\", \"cascade\", \"engine_a\", \"engine_b\", \"scalp\"]",
-      "duration_seconds": 1.687,
-      "summary": "{\"freshness_count\": 4, \"findings_count\": 20, \"candidates_count\": 0, \"accepted\": 0, \"rejected\": 0}"
-    },
-    {
-      "id": "576c33ab-a862-4e73-9609-484a2dc26f57",
-      "timestamp": "2026-07-06T14:17:19.714489+00:00",
-      "cycle_number": 83,
-      "dry_run": 0,
-      "engines_run": "[\"ase\", \"cascade\", \"engine_a\", \"engine_b\", \"scalp\"]",
-      "duration_seconds": 1.859,
-      "summary": "{\"freshness_count\": 4, \"findings_count\": 20, \"candidates_count\": 0, \"accepted\": 0, \"rejected\": 0}"
-    },
-    {
-      "id": "8cc5354e-e1f3-4946-8892-8641a182d411",
-      "timestamp": "2026-07-06T14:02:17.802513+00:00",
-      "cycle_number": 82,
-      "dry_run": 0,
-      "engines_run": "[\"ase\", \"cascade\", \"engine_a\", \"engine_b\", \"scalp\"]",
-      "duration_seconds": 1.578,
-      "summary": "{\"freshness_count\": 4, \"findings_count\": 20, \"candidates_count\": 0, \"accepted\": 0, \"rejected\": 0}"
-    },
-    {
-      "id": "66e3d3f5-8f32-4fd1-a7cb-5fac1db32fdd",
-      "timestamp": "2026-07-06T13:47:16.135399+00:00",
-      "cycle_number": 81,
-      "dry_run": 0,
-      "engines_run": "[\"ase\", \"cascade\", \"engine_a\", \"engine_b\", \"scalp\"]",
-      "duration_seconds": 1.844,
-      "summary": "{\"freshness_count\": 4, \"findings_count\": 20, \"candidates_count\": 0, \"accepted\": 0, \"rejected\": 0}"
-    },
-    {
-      "id": "12dfe2f3-5ce5-43be-9c54-393dd7b57fb7",
-      "timestamp": "2026-07-06T13:32:14.220013+00:00",
-      "cycle_number": 80,
-      "dry_run": 0,
-      "engines_run": "[\"ase\", \"cascade\", \"engine_a\", \"engine_b\", \"scalp\"]",
-      "duration_seconds": 1.687,
-      "summary": "{\"freshness_count\": 4, \"findings_count\": 20, \"candidates_count\": 0, \"accepted\": 0, \"rejected\": 0}"
-    },
-    {
-      "id": "f4d80621-50d0-491a-adb6-e6695a391793",
-      "timestamp": "2026-07-06T13:17:12.463592+00:00",
-      "cycle_number": 79,
-      "dry_run": 0,
-      "engines_run": "[\"ase\", \"cascade\", \"engine_a\", \"engine_b\", \"scalp\"]",
-      "duration_seconds": 1.515,
-      "summary": "{\"freshness_count\": 4, \"findings_count\": 20, \"candidates_count\": 0, \"accepted\": 0, \"rejected\": 0}"
-    },
-    {
-      "id": "7c5d7367-4dec-4fc5-ba84-db11f62ea2b9",
-      "timestamp": "2026-07-06T13:02:10.903691+00:00",
-      "cycle_number": 78,
-      "dry_run": 0,
-      "engines_run": "[\"ase\", \"cascade\", \"engine_a\", \"engine_b\", \"scalp\"]",
-      "duration_seconds": 1.485,
-      "summary": "{\"freshness_count\": 4, \"findings_count\": 20, \"candidates_count\": 0, \"accepted\": 0, \"rejected\": 0}"
-    },
-    {
-      "id": "07637cc7-bba6-4730-b2e1-bf4910d7e5c0",
-      "timestamp": "2026-07-06T12:47:09.344862+00:00",
-      "cycle_number": 77,
-      "dry_run": 0,
-      "engines_run": "[\"ase\", \"cascade\", \"engine_a\", \"engine_b\", \"scalp\"]",
-      "duration_seconds": 1.609,
-      "summary": "{\"freshness_count\": 4, \"findings_count\": 20, \"candidates_count\": 0, \"accepted\": 0, \"rejected\": 0}"
-    },
-    {
-      "id": "a6a16f8b-13b8-4b9d-b576-572af2f02b34",
-      "timestamp": "2026-07-06T12:32:07.679906+00:00",
-      "cycle_number": 76,
-      "dry_run": 0,
-      "engines_run": "[\"ase\", \"cascade\", \"engine_a\", \"engine_b\", \"scalp\"]",
-      "duration_seconds": 1.5,
-      "summary": "{\"freshness_count\": 4, \"findings_count\": 20, \"candidates_count\": 0, \"accepted\": 0, \"rejected\": 0}"
-    },
-    {
-      "id": "79866fa8-adb7-4857-81fc-952a5f13aee4",
-      "timestamp": "2026-07-06T12:17:06.118307+00:00",
-      "cycle_number": 75,
-      "dry_run": 0,
-      "engines_run": "[\"ase\", \"cascade\", \"engine_a\", \"engine_b\", \"scalp\"]",
-      "duration_seconds": 1.594,
-      "summary": "{\"freshness_count\": 4, \"findings_count\": 20, \"candidates_count\": 0, \"accepted\": 0, \"rejected\": 0}"
-    },
-    {
-      "id": "7d01fb19-075b-4913-9c9c-0b4d419e35ed",
-      "timestamp": "2026-07-06T12:02:04.453511+00:00",
-      "cycle_number": 74,
+      "id": "14080022-74b3-4fea-b7e0-df828c80af4c",
+      "timestamp": "2026-07-07T05:49:01.779715+00:00",
+      "cycle_number": 145,
       "dry_run": 0,
       "engines_run": "[\"ase\", \"cascade\", \"engine_a\", \"engine_b\", \"scalp\"]",
       "duration_seconds": 1.375,
       "summary": "{\"freshness_count\": 4, \"findings_count\": 20, \"candidates_count\": 0, \"accepted\": 0, \"rejected\": 0}"
     },
     {
-      "id": "90a305f8-a744-47e2-8380-47234177f860",
-      "timestamp": "2026-07-06T11:47:01.132850+00:00",
-      "cycle_number": 73,
+      "id": "facc115c-0d1a-499c-8e04-bee4bee56edf",
+      "timestamp": "2026-07-07T05:34:00.350644+00:00",
+      "cycle_number": 144,
       "dry_run": 0,
       "engines_run": "[\"ase\", \"cascade\", \"engine_a\", \"engine_b\", \"scalp\"]",
-      "duration_seconds": 1.766,
+      "duration_seconds": 1.453,
       "summary": "{\"freshness_count\": 4, \"findings_count\": 20, \"candidates_count\": 0, \"accepted\": 0, \"rejected\": 0}"
     },
     {
-      "id": "c3c5ff81-a716-403a-a0b9-246d6d772e4f",
-      "timestamp": "2026-07-06T11:31:59.310727+00:00",
-      "cycle_number": 72,
-      "dry_run": 0,
-      "engines_run": "[\"ase\", \"cascade\", \"engine_a\", \"engine_b\", \"scalp\"]",
-      "duration_seconds": 1.359,
-      "summary": "{\"freshness_count\": 4, \"findings_count\": 20, \"candidates_count\": 0, \"accepted\": 0, \"rejected\": 0}"
-    },
-    {
-      "id": "33b3ec0b-e6dc-4be4-b586-0adee8c615ae",
-      "timestamp": "2026-07-06T11:16:57.902246+00:00",
-      "cycle_number": 71,
-      "dry_run": 0,
-      "engines_run": "[\"ase\", \"cascade\", \"engine_a\", \"engine_b\", \"scalp\"]",
-      "duration_seconds": 1.531,
-      "summary": "{\"freshness_count\": 4, \"findings_count\": 20, \"candidates_count\": 0, \"accepted\": 0, \"rejected\": 0}"
-    },
-    {
-      "id": "4667b4e0-cd51-4b8f-a78b-ca8eeb4f085a",
-      "timestamp": "2026-07-06T11:01:56.328845+00:00",
-      "cycle_number": 70,
-      "dry_run": 0,
-      "engines_run": "[\"ase\", \"cascade\", \"engine_a\", \"engine_b\", \"scalp\"]",
-      "duration_seconds": 1.344,
-      "summary": "{\"freshness_count\": 4, \"findings_count\": 20, \"candidates_count\": 0, \"accepted\": 0, \"rejected\": 0}"
-    },
-    {
-      "id": "13377c6d-fd83-4696-a586-59dcdfbc1bbd",
-      "timestamp": "2026-07-06T10:46:54.930567+00:00",
-      "cycle_number": 69,
-      "dry_run": 0,
-      "engines_run": "[\"ase\", \"cascade\", \"engine_a\", \"engine_b\", \"scalp\"]",
-      "duration_seconds": 1.921,
-      "summary": "{\"freshness_count\": 4, \"findings_count\": 20, \"candidates_count\": 0, \"accepted\": 0, \"rejected\": 0}"
-    },
-    {
-      "id": "f5210936-9b13-4f35-bc31-31f5d7916e48",
-      "timestamp": "2026-07-06T10:31:52.950475+00:00",
-      "cycle_number": 68,
-      "dry_run": 0,
-      "engines_run": "[\"ase\", \"cascade\", \"engine_a\", \"engine_b\", \"scalp\"]",
-      "duration_seconds": 1.578,
-      "summary": "{\"freshness_count\": 4, \"findings_count\": 20, \"candidates_count\": 0, \"accepted\": 0, \"rejected\": 0}"
-    },
-    {
-      "id": "a5517240-7328-495d-b169-2b37d046e6be",
-      "timestamp": "2026-07-06T10:16:51.319977+00:00",
-      "cycle_number": 67,
+      "id": "492d8a39-62bb-470a-b3a5-ad1c42b7e69f",
+      "timestamp": "2026-07-07T05:18:58.809839+00:00",
+      "cycle_number": 143,
       "dry_run": 0,
       "engines_run": "[\"ase\", \"cascade\", \"engine_a\", \"engine_b\", \"scalp\"]",
       "duration_seconds": 1.437,
       "summary": "{\"freshness_count\": 4, \"findings_count\": 20, \"candidates_count\": 0, \"accepted\": 0, \"rejected\": 0}"
     },
     {
-      "id": "58dc7658-1bfc-4c5f-82ff-29741e790c60",
-      "timestamp": "2026-07-06T10:01:49.808495+00:00",
-      "cycle_number": 66,
+      "id": "c1f58ea3-6ce6-40f7-a5ff-681731b11d1f",
+      "timestamp": "2026-07-07T05:03:57.304371+00:00",
+      "cycle_number": 142,
       "dry_run": 0,
       "engines_run": "[\"ase\", \"cascade\", \"engine_a\", \"engine_b\", \"scalp\"]",
-      "duration_seconds": 1.578,
+      "duration_seconds": 1.297,
+      "summary": "{\"freshness_count\": 4, \"findings_count\": 20, \"candidates_count\": 0, \"accepted\": 0, \"rejected\": 0}"
+    },
+    {
+      "id": "3a1de7f8-0c7b-4b2b-a2b7-7bab3c4f0a2c",
+      "timestamp": "2026-07-07T04:48:55.938125+00:00",
+      "cycle_number": 141,
+      "dry_run": 0,
+      "engines_run": "[\"ase\", \"cascade\", \"engine_a\", \"engine_b\", \"scalp\"]",
+      "duration_seconds": 1.516,
+      "summary": "{\"freshness_count\": 4, \"findings_count\": 20, \"candidates_count\": 0, \"accepted\": 0, \"rejected\": 0}"
+    },
+    {
+      "id": "6f105b63-7c3a-4ad6-9534-afa4bb339b45",
+      "timestamp": "2026-07-07T04:33:54.370981+00:00",
+      "cycle_number": 140,
+      "dry_run": 0,
+      "engines_run": "[\"ase\", \"cascade\", \"engine_a\", \"engine_b\", \"scalp\"]",
+      "duration_seconds": 1.407,
+      "summary": "{\"freshness_count\": 4, \"findings_count\": 20, \"candidates_count\": 0, \"accepted\": 0, \"rejected\": 0}"
+    },
+    {
+      "id": "2eae5aa6-fb25-45ef-a4d1-3e466717230d",
+      "timestamp": "2026-07-07T04:18:52.936532+00:00",
+      "cycle_number": 139,
+      "dry_run": 0,
+      "engines_run": "[\"ase\", \"cascade\", \"engine_a\", \"engine_b\", \"scalp\"]",
+      "duration_seconds": 1.281,
+      "summary": "{\"freshness_count\": 4, \"findings_count\": 20, \"candidates_count\": 0, \"accepted\": 0, \"rejected\": 0}"
+    },
+    {
+      "id": "86c3fe9b-2c70-4335-b527-81a3d517e613",
+      "timestamp": "2026-07-07T04:03:51.614656+00:00",
+      "cycle_number": 138,
+      "dry_run": 0,
+      "engines_run": "[\"ase\", \"cascade\", \"engine_a\", \"engine_b\", \"scalp\"]",
+      "duration_seconds": 1.328,
+      "summary": "{\"freshness_count\": 4, \"findings_count\": 20, \"candidates_count\": 0, \"accepted\": 0, \"rejected\": 0}"
+    },
+    {
+      "id": "8ca0a379-2199-4897-b810-4c75a501a5e0",
+      "timestamp": "2026-07-07T03:48:50.213408+00:00",
+      "cycle_number": 137,
+      "dry_run": 0,
+      "engines_run": "[\"ase\", \"cascade\", \"engine_a\", \"engine_b\", \"scalp\"]",
+      "duration_seconds": 1.406,
+      "summary": "{\"freshness_count\": 4, \"findings_count\": 20, \"candidates_count\": 0, \"accepted\": 0, \"rejected\": 0}"
+    },
+    {
+      "id": "15f9d29b-c329-437a-a84b-158706038e1c",
+      "timestamp": "2026-07-07T03:33:48.782346+00:00",
+      "cycle_number": 136,
+      "dry_run": 0,
+      "engines_run": "[\"ase\", \"cascade\", \"engine_a\", \"engine_b\", \"scalp\"]",
+      "duration_seconds": 1.313,
+      "summary": "{\"freshness_count\": 4, \"findings_count\": 20, \"candidates_count\": 0, \"accepted\": 0, \"rejected\": 0}"
+    },
+    {
+      "id": "18a05ff5-b57b-4dab-b80d-70e1851e947e",
+      "timestamp": "2026-07-07T03:18:47.289922+00:00",
+      "cycle_number": 135,
+      "dry_run": 0,
+      "engines_run": "[\"ase\", \"cascade\", \"engine_a\", \"engine_b\", \"scalp\"]",
+      "duration_seconds": 1.328,
+      "summary": "{\"freshness_count\": 4, \"findings_count\": 20, \"candidates_count\": 0, \"accepted\": 0, \"rejected\": 0}"
+    },
+    {
+      "id": "d737673d-8584-4f92-959d-0729b96153ec",
+      "timestamp": "2026-07-07T03:03:45.930248+00:00",
+      "cycle_number": 134,
+      "dry_run": 0,
+      "engines_run": "[\"ase\", \"cascade\", \"engine_a\", \"engine_b\", \"scalp\"]",
+      "duration_seconds": 1.391,
+      "summary": "{\"freshness_count\": 4, \"findings_count\": 20, \"candidates_count\": 0, \"accepted\": 0, \"rejected\": 0}"
+    },
+    {
+      "id": "9a855a8f-584b-46ab-b7bc-7ed30c10a6e3",
+      "timestamp": "2026-07-07T02:48:44.513370+00:00",
+      "cycle_number": 133,
+      "dry_run": 0,
+      "engines_run": "[\"ase\", \"cascade\", \"engine_a\", \"engine_b\", \"scalp\"]",
+      "duration_seconds": 1.312,
+      "summary": "{\"freshness_count\": 4, \"findings_count\": 20, \"candidates_count\": 0, \"accepted\": 0, \"rejected\": 0}"
+    },
+    {
+      "id": "2fef18b7-01c2-447d-8cc0-6db0ed18af9f",
+      "timestamp": "2026-07-07T02:33:43.175429+00:00",
+      "cycle_number": 132,
+      "dry_run": 0,
+      "engines_run": "[\"ase\", \"cascade\", \"engine_a\", \"engine_b\", \"scalp\"]",
+      "duration_seconds": 1.546,
+      "summary": "{\"freshness_count\": 4, \"findings_count\": 20, \"candidates_count\": 0, \"accepted\": 0, \"rejected\": 0}"
+    },
+    {
+      "id": "191026c5-8efa-43d8-aadb-eba509ba49d0",
+      "timestamp": "2026-07-07T02:18:41.567726+00:00",
+      "cycle_number": 131,
+      "dry_run": 0,
+      "engines_run": "[\"ase\", \"cascade\", \"engine_a\", \"engine_b\", \"scalp\"]",
+      "duration_seconds": 1.453,
+      "summary": "{\"freshness_count\": 4, \"findings_count\": 20, \"candidates_count\": 0, \"accepted\": 0, \"rejected\": 0}"
+    },
+    {
+      "id": "d85dec56-bc93-46cc-920b-5a27c806245d",
+      "timestamp": "2026-07-07T02:03:40.078599+00:00",
+      "cycle_number": 130,
+      "dry_run": 0,
+      "engines_run": "[\"ase\", \"cascade\", \"engine_a\", \"engine_b\", \"scalp\"]",
+      "duration_seconds": 1.297,
+      "summary": "{\"freshness_count\": 4, \"findings_count\": 20, \"candidates_count\": 0, \"accepted\": 0, \"rejected\": 0}"
+    },
+    {
+      "id": "75f04379-eb3d-4c97-8bb8-50276228398e",
+      "timestamp": "2026-07-07T01:48:38.750806+00:00",
+      "cycle_number": 129,
+      "dry_run": 0,
+      "engines_run": "[\"ase\", \"cascade\", \"engine_a\", \"engine_b\", \"scalp\"]",
+      "duration_seconds": 1.516,
+      "summary": "{\"freshness_count\": 4, \"findings_count\": 20, \"candidates_count\": 0, \"accepted\": 0, \"rejected\": 0}"
+    },
+    {
+      "id": "65bee3e3-ed8f-4edf-a602-b6e66f5b1427",
+      "timestamp": "2026-07-07T01:33:37.198939+00:00",
+      "cycle_number": 128,
+      "dry_run": 0,
+      "engines_run": "[\"ase\", \"cascade\", \"engine_a\", \"engine_b\", \"scalp\"]",
+      "duration_seconds": 1.547,
+      "summary": "{\"freshness_count\": 4, \"findings_count\": 20, \"candidates_count\": 0, \"accepted\": 0, \"rejected\": 0}"
+    },
+    {
+      "id": "51b02f37-e333-46ac-811a-c5b0401652aa",
+      "timestamp": "2026-07-07T01:18:35.611592+00:00",
+      "cycle_number": 127,
+      "dry_run": 0,
+      "engines_run": "[\"ase\", \"cascade\", \"engine_a\", \"engine_b\", \"scalp\"]",
+      "duration_seconds": 2.141,
+      "summary": "{\"freshness_count\": 4, \"findings_count\": 20, \"candidates_count\": 0, \"accepted\": 0, \"rejected\": 0}"
+    },
+    {
+      "id": "39ef58c7-c52e-4cbb-b06e-c710213ada95",
+      "timestamp": "2026-07-07T01:03:33.417508+00:00",
+      "cycle_number": 126,
+      "dry_run": 0,
+      "engines_run": "[\"ase\", \"cascade\", \"engine_a\", \"engine_b\", \"scalp\"]",
+      "duration_seconds": 1.546,
       "summary": "{\"freshness_count\": 4, \"findings_count\": 20, \"candidates_count\": 0, \"accepted\": 0, \"rejected\": 0}"
     }
   ]

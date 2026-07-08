@@ -121,7 +121,7 @@ def test_mr_yields_tradable_level(monkeypatch):
         indicator_periods=dict(base.indicator_periods),
         weights=dict(base.weights),
         direction_deadband=base.direction_deadband,
-        trade_threshold=0.5,
+        trade_threshold=0.40,
         exit_policy="SINGLE_TP1",
         status="UNVALIDATED",
     )
@@ -245,6 +245,49 @@ def test_momentum_blend_exposes_component_terms():
     _comp, diag = _momentum_component(snap, "forex", "forex_majors")
     assert diag.get("rsiTerm") is not None
     assert diag.get("macdSlopeTerm") is not None
+
+
+def test_unavailable_volume_does_not_inflate_confluence(monkeypatch):
+    import engine_a_v3.quant_scorer as qs
+    from engine_a_v3.profile import EngineAV3Profile, baseline_profile
+    from engine_a_v3.routing import route_specialist
+
+    aligned = Component(1.0, 1.0, available=True)
+
+    monkeypatch.setattr(qs, "_snapshots", lambda *a, **k: {"H1": {}, "H4": {}, "D1": {}})
+    monkeypatch.setattr(qs, "_trend_component", lambda *a, **k: (aligned, {}))
+    monkeypatch.setattr(qs, "_momentum_component", lambda *a, **k: (aligned, {}))
+    monkeypatch.setattr(qs, "_location_component", lambda *a, **k: (aligned, "trend"))
+
+    base = baseline_profile("forex_majors", "intraday")
+    profile = EngineAV3Profile.create(
+        score_group=base.score_group,
+        horizon=base.horizon,
+        indicator_periods=dict(base.indicator_periods),
+        weights=dict(base.weights),
+        direction_deadband=0.01,
+        trade_threshold=0.1,
+        exit_policy="SINGLE_TP1",
+        status="UNVALIDATED",
+    )
+    route = route_specialist({"display": "EUR/USD", "symbol": "EURUSD", "type": "forex"})
+    candles = _candles()
+
+    monkeypatch.setattr(
+        qs,
+        "_volume_component",
+        lambda *a, **k: Component(1.0, 1.0, available=True),
+    )
+    with_volume = score_pair(route, "intraday", candles, profile=profile)
+
+    monkeypatch.setattr(
+        qs,
+        "_volume_component",
+        lambda *a, **k: Component(0.0, 0.0, available=False),
+    )
+    without_volume = score_pair(route, "intraday", candles, profile=profile)
+
+    assert without_volume.confluence_score < with_volume.confluence_score
 
 
 def test_subsystems_enabled_carry_can_flip_direction(monkeypatch):

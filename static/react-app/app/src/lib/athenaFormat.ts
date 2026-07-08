@@ -125,11 +125,20 @@ function readSignalNumber(sig: Record<string, unknown>, ...keys: string[]): numb
   return NaN;
 }
 
-/** Split display confluence from the pre-blend score used for V3 decision / legacy tier. */
+/** Split display confluence from the pre-blend score used for V3 decision (not legacy tier). */
 export function engineAScoreBreakdown(sig: EngineASignal | null | undefined): EngineAScoreBreakdown | null {
   if (!sig) return null;
   const raw = sig as Record<string, unknown>;
-  const displayScore = readSignalNumber(raw, 'confluenceScore', 'score', 'engine_a_confluenceScore');
+  const isV3 = isEngineAV3Signal(sig);
+  const isBOnlyStub = String(raw.engine_source ?? raw.engine ?? '').toUpperCase() === 'ENGINE_B'
+    || (String(raw.engine_source ?? raw.engine ?? '').toUpperCase() === 'B' && raw.engine_a_present === false);
+  const displayScore = readSignalNumber(
+    raw,
+    ...(isBOnlyStub ? ['engine_a_confluenceScore'] as const : []),
+    'confluenceScore',
+    'score',
+    ...(isBOnlyStub ? [] as const : ['engine_a_confluenceScore'] as const),
+  );
   if (!Number.isFinite(displayScore)) return null;
 
   const intermarket = (raw.intermarketConfirmation && typeof raw.intermarketConfirmation === 'object'
@@ -154,11 +163,14 @@ export function engineAScoreBreakdown(sig: EngineASignal | null | undefined): En
 
   const preNews = readSignalNumber(raw, 'pre_news_score', 'engine_a_pre_news_score');
   let decisionScore = displayScore;
-  if (Number.isFinite(preNews)) {
+  if (isV3 && Number.isFinite(preNews)) {
     decisionScore = preNews - (Number.isFinite(intermarketDeltaResolved) ? intermarketDeltaResolved : 0);
   } else if (
-    (Number.isFinite(intermarketDeltaResolved) && intermarketDeltaResolved !== 0)
-    || newsAdjustmentResolved !== 0
+    isV3
+    && (
+      (Number.isFinite(intermarketDeltaResolved) && intermarketDeltaResolved !== 0)
+      || newsAdjustmentResolved !== 0
+    )
   ) {
     decisionScore = displayScore
       - (Number.isFinite(intermarketDeltaResolved) ? intermarketDeltaResolved : 0)
@@ -168,10 +180,12 @@ export function engineAScoreBreakdown(sig: EngineASignal | null | undefined): En
   const threshold = engineAThreshold(sig);
   const maxScore = readSignalNumber(raw, 'maxScore', 'engine_a_maxScore');
   const maxScoreResolved = Number.isFinite(maxScore) ? maxScore : null;
-  const hasAdjustments = (
+  const hasAdjustments = isV3 && (
     (Number.isFinite(intermarketDeltaResolved) && Math.abs(intermarketDeltaResolved) > 0.0001)
     || Math.abs(newsAdjustmentResolved) > 0.0001
   );
+
+  const passScore = isV3 && hasAdjustments ? decisionScore : displayScore;
 
   return {
     displayScore,
@@ -181,7 +195,7 @@ export function engineAScoreBreakdown(sig: EngineASignal | null | undefined): En
     intermarketDelta: Number.isFinite(intermarketDeltaResolved) ? intermarketDeltaResolved : 0,
     newsAdjustment: newsAdjustmentResolved,
     hasAdjustments,
-    decisionPasses: threshold != null && threshold > 0 && Number.isFinite(decisionScore) && decisionScore >= threshold,
+    decisionPasses: threshold != null && threshold > 0 && Number.isFinite(passScore) && passScore >= threshold,
     displayPasses: threshold != null && threshold > 0 && displayScore >= threshold,
   };
 }
@@ -223,6 +237,7 @@ export function engineBScoreBreakdown(
   );
   const gateScoreFromTop = readSignalNumber(
     row,
+    'gateScore',
     'engine_b_gate_score',
     'gate_score',
   );
@@ -239,7 +254,7 @@ export function engineBScoreBreakdown(
   const resolvedTotal = Number.isFinite(totalScore) ? totalScore : totalFromTop;
 
   const gateMax = readSignalNumber(conf, 'gate_max_possible', 'gate_max');
-  const gateMaxFromTop = readSignalNumber(row, 'engine_b_gate_max', 'gate_max_possible');
+  const gateMaxFromTop = readSignalNumber(row, 'gateMax', 'engine_b_gate_max', 'gate_max_possible');
   const resolvedGateMax = Number.isFinite(gateMax) ? gateMax : gateMaxFromTop;
 
   const totalMax = readSignalNumber(conf, 'max_possible', 'max_score');
@@ -296,7 +311,7 @@ export function confluencePct(
 ): number | null {
   if (!sig) return null;
   const breakdown = engineAScoreBreakdown(sig);
-  const useDecisionScore = isEngineAV3Signal(sig) || breakdown?.hasAdjustments;
+  const useDecisionScore = isEngineAV3Signal(sig) && breakdown?.hasAdjustments;
   const score = scoreOverride != null && Number.isFinite(scoreOverride)
     ? scoreOverride
     : useDecisionScore && breakdown?.decisionScore != null
@@ -319,7 +334,7 @@ export function confluencePct(
 export function engineAListScore(sig: EngineASignal | null | undefined): number {
   if (!sig) return 0;
   const breakdown = engineAScoreBreakdown(sig);
-  const useDecision = isEngineAV3Signal(sig) || breakdown?.hasAdjustments;
+  const useDecision = isEngineAV3Signal(sig) && breakdown?.hasAdjustments;
   if (useDecision && breakdown?.decisionScore != null) return breakdown.decisionScore;
   return toNum(sig.confluenceScore ?? sig.score, 0);
 }

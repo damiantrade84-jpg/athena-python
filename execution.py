@@ -704,6 +704,11 @@ def _extract_engine_b_execution_levels(
     for label, source, allow_recommended, allow_signal_levels, block_stale in candidates:
         if not isinstance(source, dict):
             continue
+        if label in ("sig_overlay", "naked_data", "sig_recommended"):
+            if sig.get("engine_b_confidence_passed") is False:
+                continue
+            if sig.get("engine_b_levels_gate_passed") is False:
+                continue
         levels = _levels_from(
             source,
             allow_recommended=allow_recommended,

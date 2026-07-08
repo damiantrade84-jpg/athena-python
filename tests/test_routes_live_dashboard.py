@@ -6,6 +6,7 @@ import threading
 from flask import Flask
 
 from athena_app.api.routes_live_dashboard import (
+    _ld_build_engine_a_row,
     _ld_build_engine_b_row,
     register_live_dashboard_routes,
 )
@@ -159,3 +160,53 @@ def test_ld_build_engine_b_row_preserves_legacy_fields():
     assert row["score"] == 5.0
     assert row["threshold"] == 4.5
     assert row["maxScore"] == 6.0
+
+
+def test_ld_build_engine_b_row_emits_gate_score_and_floor():
+    row = _ld_build_engine_b_row(
+        {
+            "confidence": {
+                "passed": False,
+                "gate_score": 4.0,
+                "gate_max_possible": 5.0,
+                "score": 5.5,
+                "min_score_scaled": 4.5,
+            },
+            "direction": "LONG",
+            "structural_verdict": "CLEAR",
+        }
+    )
+
+    assert row["gateScore"] == 4.0
+    assert row["gateMax"] == 5.0
+    assert row["totalScore"] == 5.5
+    assert row["threshold"] == 4.5
+
+
+def test_ld_build_engine_a_row_v3_uses_confluence_threshold_and_decision():
+    row = _ld_build_engine_a_row(
+        {
+            "engine": "ENGINE_A_V3",
+            "contractVersion": "3.1.0",
+            "confluenceScore": 2.4,
+            "confluenceThreshold": 2.2,
+            "decision": "WATCH",
+            "qualified": False,
+            "direction": "LONG",
+        }
+    )
+
+    assert row["threshold"] == 2.2
+    assert row["passed"] is False
+    assert row["decision"] == "WATCH"
+
+
+def test_ld_build_engine_a_row_no_threshold_fails_closed():
+    row = _ld_build_engine_a_row(
+        {
+            "confluenceScore": 2.0,
+            "direction": "LONG",
+        }
+    )
+
+    assert row["passed"] is False

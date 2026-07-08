@@ -1,0 +1,3 @@
+ambiguity_pct,avg_r,avg_r_cost_adjusted,engine,entry_tf,indicator_profile,label,profit_factor,reasons,signal_tf,sqn,symbol,trade_count,validated_by_athena,vectorbt_only,verdict
+0.0,-0.4036,-0.4036,A,H1,bar_native,H1_score_H1_entry|EUR/USD|bar_native,0.3506,"['negative_avg_r', 'pf_below_1.2:pf=0.35']",H1,-3.7805,EUR/USD,66,True,False,FAIL
+0.0,-0.2369,-0.2369,A,H4,bar_native,H4_score_H4_entry|EUR/USD|bar_native,0.532,"['sample_too_small:n=19<30', 'negative_avg_r', 'pf_below_1.2:pf=0.53', 'one_quarter_dominates:91%', 'short_hides_long_failure']",H4,-1.233,EUR/USD,19,True,False,FAIL

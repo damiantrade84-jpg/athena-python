@@ -230,10 +230,19 @@ def _resolved_periods(group: str, family: str) -> dict[str, int]:
 
 def baseline_profile(score_group: str, horizon: str) -> EngineAV3Profile:
     family = _family_for(score_group)
+    deadband = 0.05
+    try:
+        from config import CONFIG
+
+        raw = CONFIG.get("ENGINE_A_DIRECTION_MIN_MARGIN")
+        if raw is not None:
+            deadband = float(raw)
+    except Exception:
+        pass
     return EngineAV3Profile.create(
         score_group=score_group, horizon=horizon,
         indicator_periods=_resolved_periods(score_group, family),
-        weights=_resolved_weights(score_group, family), direction_deadband=0.05,
+        weights=_resolved_weights(score_group, family), direction_deadband=deadband,
         trade_threshold=_resolved_trade_threshold(score_group),
         exit_policy="SINGLE_TP1", status="UNVALIDATED",
     )

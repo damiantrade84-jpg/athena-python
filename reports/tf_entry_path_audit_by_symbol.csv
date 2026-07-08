@@ -1,0 +1,2 @@
+avg_mae,avg_mfe,avg_r,be_touch_rate,group_key,max_drawdown_r,median_mae,median_mfe,median_r,pct_ambiguous_intrabar,pct_clean_entry,pct_early_adverse,pct_pos_mfe_neg_final_r,pct_tp_exceeded_mfe,plus_0_25r_touch_rate,plus_0_5r_touch_rate,plus_1_0r_touch_rate,profit_factor,sl_hit_rate,sqn,tp_hit_rate,trade_count,win_rate
+0.7495,0.6572,-0.3663,0.0,EUR/USD,31.6789,0.7901,0.5102,-0.3696,0.0,35.29,0.0,64.71,98.82,0.0,0.0,0.0,0.3851,37.65,-3.9335,28.24,85,35.29

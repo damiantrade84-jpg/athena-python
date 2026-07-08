@@ -355,9 +355,14 @@ def _resolve_engine_b_h4_snap(
 
 
 def _apply_engine_b_scan_levels(signal: dict, conf_b: dict | None, res_b: dict | None) -> None:
+    if not bool((conf_b or {}).get("passed", False)):
+        signal["engine_b_levels_gate_passed"] = False
+        return
     sl, tp1, tp2, rr1, rr2, exit_strategy = _engine_b_level_targets(conf_b, res_b)
     if sl is None or tp1 is None or tp2 is None:
+        signal["engine_b_levels_gate_passed"] = False
         return
+    signal["engine_b_levels_gate_passed"] = True
     legacy_tp = (conf_b or {}).get("execution_tp")
     try:
         legacy_tp = float(legacy_tp) if legacy_tp is not None else tp2
@@ -2282,7 +2287,13 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict[s
                             elif not bool(CONFIG.get("ENGINE_B_CRYPTO_LEVELS_SIGNAL_FEED_FALLBACK", False)):
                                 atr = 0.0
                                 sig_a["engine_b_error"] = "bybit_atr_unavailable"
-                        current_price = float(entry_candles_b[-1]["close"])
+                        from athena_app.services.engine_b_market_state import (
+                            engine_b_gate_current_price,
+                        )
+
+                        current_price = engine_b_gate_current_price(
+                            structure_entry_candles=entry_candles_b,
+                        )
                         _eb_funnel_extras["entry_price"] = current_price
 
                         if atr and atr > 0:

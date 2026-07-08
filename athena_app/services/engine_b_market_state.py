@@ -173,3 +173,32 @@ def engine_b_confirmed_candles_from_raw(
     )
     return list(state.get("confirmed") or [])
 
+
+def engine_b_gate_current_price(
+    *,
+    explicit_price: Any = None,
+    structure_entry_candles: list[dict[str, Any]] | None = None,
+    trigger_entry_candles: list[dict[str, Any]] | None = None,
+) -> float:
+    """Resolve Engine B gate ``current_price`` (room/location/RR distance maths).
+
+    Matches the full scan path (``scanner.py``): last close on the structure entry
+    TF (confirmed-only when ``ENGINE_B_STRIP_FORMING_STRUCT`` is true). Trigger
+    series may include the live forming bar for follow-through bonuses only — never
+    for gate pricing when structure candles are confirmed-only.
+    """
+    if explicit_price is not None:
+        try:
+            px = float(explicit_price)
+            if px > 0:
+                return px
+        except (TypeError, ValueError):
+            pass
+    confirmed = list(structure_entry_candles or [])
+    if confirmed:
+        return float(confirmed[-1]["close"])
+    trigger = list(trigger_entry_candles or [])
+    if trigger:
+        return float(trigger[-1]["close"])
+    raise ValueError("engine_b_gate_current_price: no candle series for price")
+

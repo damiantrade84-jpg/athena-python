@@ -58,7 +58,18 @@ class SpecialistRoute:
 def _explicit_group(pair: dict) -> str | None:
     value = pair.get("score_group") or pair.get("scoreGroup")
     value = str(value or "").strip()
-    return value if value in KNOWN_SCORE_GROUPS else None
+    if value in KNOWN_SCORE_GROUPS:
+        return value
+    try:
+        from scoring import get_pair_profile
+
+        profile = get_pair_profile(pair) or {}
+        override = str(profile.get("score_group") or "").strip()
+        if override in KNOWN_SCORE_GROUPS:
+            return override
+    except Exception:
+        pass
+    return None
 
 
 def route_specialist(pair: dict) -> SpecialistRoute:

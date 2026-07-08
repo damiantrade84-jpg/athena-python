@@ -50,3 +50,20 @@ def test_engine_c_legacy_chop_documented_mismatch():
     # At minimum both should be lists; parity fix ensures execution uses confirmed.
     assert isinstance(confirmed, list)
     assert isinstance(legacy, list)
+
+
+def test_naked_scan_current_price_matches_full_scan_confirmed_close():
+    """Gate current_price must use structure (confirmed) close, not trigger forming close."""
+    from athena_app.services.engine_b_market_state import engine_b_gate_current_price
+
+    structure = [_bar("2026-05-20T08:00:00Z", close=100.0), _bar("2026-05-20T09:00:00Z", close=101.0)]
+    trigger = structure + [_bar("2026-05-20T10:00:00Z", close=105.0)]  # forming bar
+
+    gate_px = engine_b_gate_current_price(
+        structure_entry_candles=structure,
+        trigger_entry_candles=trigger,
+    )
+    full_scan_px = float(structure[-1]["close"])
+
+    assert gate_px == full_scan_px == 101.0
+    assert gate_px != float(trigger[-1]["close"])

@@ -711,6 +711,7 @@ export interface LdEngineARow {
   threshold: number | null;
   direction: Direction | null;
   passed: boolean;
+  decision?: string | null;
   factorScores: { trend: number | null; momentum: number | null; addon: number | null };
   trendScore: number | null;
   momentumScore: number | null;
@@ -733,6 +734,10 @@ export interface LdEngineBRow {
   score: number | null;
   maxScore: number | null;
   threshold: number | null;
+  gateScore?: number | null;
+  gateMax?: number | null;
+  totalScore?: number | null;
+  bonusPoints?: number | null;
   direction: Direction | null;
   structuralVerdict: string | null;
   structuralDataValid: boolean;

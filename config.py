@@ -2815,6 +2815,14 @@ def validate_config(cfg: dict) -> None:
             f"[CFG] PAIR_PROFILES must be a dict, got {type(pair_profiles).__name__!r}"
         )
         return
+    aggtrade_required = bool(cfg.get("ENGINE_B_CRYPTO_REQUIRE_AGGTRADE_FOR_PASS", False))
+    aggtrade_mode = str(cfg.get("ENGINE_B_CRYPTO_AGGTRADE_MODE", "degraded") or "degraded").lower()
+    if aggtrade_required and aggtrade_mode != "required":
+        log.warning(
+            "[CFG] ENGINE_B_CRYPTO_REQUIRE_AGGTRADE_FOR_PASS is true but "
+            "ENGINE_B_CRYPTO_AGGTRADE_MODE=%r — aggtrade will not hard-block passes",
+            aggtrade_mode,
+        )
     for profile_name, profile in pair_profiles.items():
         if not isinstance(profile, dict):
             log.warning(f"[CFG] PAIR_PROFILES[{profile_name!r}] must be a dict")

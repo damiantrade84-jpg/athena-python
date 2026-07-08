@@ -1,4 +1,4 @@
-"""Static regression: Engine A analyze_pair wires bar_time into live and replay paths."""
+"""Static regression: Engine A analyze_pair V3 path wires candle fetch meta."""
 
 from pathlib import Path
 
@@ -7,25 +7,14 @@ def _athena_source() -> str:
     return (Path(__file__).resolve().parents[1] / "athena.py").read_text(encoding="utf-8")
 
 
-def test_bar_time_derivation_before_calc_confluence():
+def test_analyze_pair_uses_v3_evaluator():
     src = _athena_source()
-    confluence_idx = src.index("res = calc_confluence(")
-    prefix = src[:confluence_idx]
-    assert "_bar_time" in prefix
-    assert "_bt_src = _cf_h4c or _cf_d1c or _cf_h1c" in prefix
+    assert "def analyze_pair(" in src
+    assert "evaluate_engine_a_v3" in src
+    assert "calc_confluence(" not in src.split("def analyze_pair(")[1].split("def _build_style_levels")[0]
 
 
-def test_calc_confluence_passes_bar_time():
+def test_analyze_pair_sets_v3_candle_fetch_meta():
     src = _athena_source()
-    start = src.index("res = calc_confluence(")
-    end = src.index(")", start) + 1
-    call_region = src[start:end]
-    assert "bar_time=_bar_time" in call_region
-
-
-def test_check_divergence_passes_bar_time():
-    src = _athena_source()
-    start = src.index("check_divergence(")
-    end = src.index("except Exception as _div_err", start)
-    call_region = src[start:end]
-    assert "bar_time=_bar_time" in call_region
+    assert '_v3_signal["candleFetchMeta"]' in src
+    assert '"pairSource": pair.get("source")' in src

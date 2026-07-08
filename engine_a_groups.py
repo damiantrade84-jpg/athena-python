@@ -66,6 +66,7 @@ _SOFTS = {"CATTLE", "COCOA", "COFFEE", "CORN", "COTTON", "SOYBEANS", "SUGAR", "W
 _US_INDICES_TRACKERS = {"NASDAQ-100", "S&P 500", "DOW JONES", "SPY", "QQQ", "DIA", "SOXX"}
 _EU_INDICES = {"DAX", "DAX 40", "UK100", "FTSE 100"}
 _ASIAN_INDICES = {"ASX 200", "NIKKEI 225", "HANG SENG"}
+_CURRENCY_INDICES = {"USDX", "EURX", "JPYX"}
 _US_STOCKS = {
     "AAPL", "TSLA", "NVDA", "MSFT", "AMZN", "META", "GOOG", "GOOGL", "AVGO",
     "JPM", "V", "XOM", "NFLX", "AMD", "CRM", "DIS", "BA", "COIN", "PYPL",
@@ -119,6 +120,8 @@ def resolve_score_group_by_type(pair: dict) -> str:
             return "softs"
         return "commodity_other"
     if ptype == "index":
+        if display in _CURRENCY_INDICES or symbol in _CURRENCY_INDICES:
+            return "forex_majors"
         if display in _US_INDICES_TRACKERS:
             return "us_indices_trackers"
         if display in _EU_INDICES:

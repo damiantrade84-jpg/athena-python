@@ -98,8 +98,11 @@ def independent_conflict_blocks_emit(
             or "HIGH"
         ).upper()
 
+    _RANK = {"LOW": 0, "MEDIUM": 1, "HIGH": 2}
     confidence = str(independent.get("confidence") or "").upper()
-    if confidence != min_confidence:
+    min_rank = _RANK.get(str(min_confidence or "").upper())
+    conf_rank = _RANK.get(confidence)
+    if min_rank is None or conf_rank is None or conf_rank < min_rank:
         return False
 
     independent_dir = _independent_direction_value(independent)

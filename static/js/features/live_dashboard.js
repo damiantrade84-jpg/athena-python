@@ -558,13 +558,18 @@ function ldTabEngineA(sym) {
 function ldTabEngineB(sym) {
   var b = sym.engineB||{};
   var hf = b.hardFailReasons||[], sw = b.softWarnings||[], dn = b.diagnosticNotes||[];
+  var levelsOk = b.suggestedLevelsExecutable === true;
   return '<div class="ld-section-head">Engine B — Naked Structure</div>'
     + ldKV('Confidence Passed', b.confidencePassed===true?'YES':'NO', b.confidencePassed===true?'bull':'bear')
+    + ldKV('Gate Score', b.gateScore != null ? parseFloat(b.gateScore).toFixed(2) + ' / ' + (b.gateMax != null ? b.gateMax : '—') : '—')
+    + ldKV('Min Score', b.threshold != null ? b.threshold : '—')
+    + ldKV('Total Score', b.totalScore != null ? parseFloat(b.totalScore).toFixed(2) : (b.score != null ? parseFloat(b.score).toFixed(2) : '—'))
     + ldKV('Direction', b.direction||'—', b.direction==='LONG'?'bull':b.direction==='SHORT'?'bear':'')
-    + ldKV('Entry', b.entry != null ? ldFmtPrice(b.entry) : '—', 'warn')
-    + ldKV('SL',    b.sl    != null ? ldFmtPrice(b.sl)    : '—', 'bear')
-    + ldKV('TP',    b.tp    != null ? ldFmtPrice(b.tp)    : '—', 'bull')
-    + ldKV('RR',    b.rr    != null ? parseFloat(b.rr).toFixed(2) : '—', 'cyan')
+    + ldKV('Entry', levelsOk && b.entry != null ? ldFmtPrice(b.entry) : '—', 'warn')
+    + ldKV('SL',    levelsOk && b.sl    != null ? ldFmtPrice(b.sl)    : '—', 'bear')
+    + ldKV('TP',    levelsOk && b.tp    != null ? ldFmtPrice(b.tp)    : '—', 'bull')
+    + (levelsOk ? '' : '<div style="color:#f0b90b;font-size:9px;padding:4px 0;">Rejected diagnostic levels — not executable</div>')
+    + ldKV('RR',    levelsOk && b.rr    != null ? parseFloat(b.rr).toFixed(2) : '—', 'cyan')
     + '<div class="ld-section-head">Hard Failures</div>'
     + (hf.length ? hf.map(function(r){ return '<div style="color:#f6465d;font-size:9px;padding:2px 0;">✗ ' + ldEsc(r) + '</div>'; }).join('') : '<div style="color:var(--muted);font-size:9px;">None</div>')
     + '<div class="ld-section-head">Soft Warnings</div>'

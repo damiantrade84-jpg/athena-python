@@ -108,6 +108,27 @@ def _resolve_v3_momentum_tf(score_group: str, asset_type: str, horizon: str) -> 
     return str(profile.get("momentum_tf") or "H4").upper() or "H4"
 
 
+def _resolve_v3_entry_tf(score_group: str, asset_type: str, horizon: str) -> str:
+    """Resolve primary entry TF for V3 scoring.
+
+    Default remains H1 (intraday) / H4 (swing). Only ``BY_SCORE_GROUP.execution_tf``
+    overrides change the entry anchor — not the universal ``BY_STYLE.execution_tf``,
+    which describes chart/execution context rather than the quant entry bar.
+    """
+    fallback = "H1" if str(horizon).lower() == "intraday" else "H4"
+    try:
+        from config import CONFIG
+
+        by_group = (CONFIG.get("ENGINE_A_SCORING_PROFILE") or {}).get("BY_SCORE_GROUP") or {}
+        group_cfg = by_group.get(score_group) or {}
+        override = str(group_cfg.get("execution_tf") or "").strip().upper()
+        if override:
+            return override
+    except Exception:
+        pass
+    return fallback
+
+
 # route.family -> asset_type expected by calc_indicators_with_normalized.
 _FAMILY_ASSET = {
     "forex": "forex",
@@ -388,11 +409,33 @@ def _momentum_component(
 
     signal = weighted_signal / weight_total if weight_total > 0 else 0.0
 
-    adx = _f(snap.get("adx"), 0.0) or 0.0
+    adx_raw = snap.get("adx")
+    adx_missing = adx_raw is None
+    if not adx_missing:
+        try:
+            adx_probe = float(adx_raw)
+            adx_missing = adx_probe != adx_probe  # NaN
+        except (TypeError, ValueError):
+            adx_missing = True
+    if adx_missing:
+        diag["adxMissing"] = True
+        try:
+            from config import CONFIG
+
+            if CONFIG.get("ADX_MISSING_BOTH_ABORT", False):
+                diag["adxHardAbort"] = True
+                diag["adxAbortReason"] = "missing_both_abort"
+                return Component(0.0, 0.0, available=False), diag
+        except Exception:
+            pass
+
+    adx = _f(adx_raw, 0.0) or 0.0
     diag["adxValue"] = round(adx, 2)
     trend_min, hard_fail = _resolve_adx_thresholds(asset_type, score_group)
     adx_mult = _adx_multiplier_from_value(adx, trend_min, hard_fail)
     diag["adxMultiplier"] = round(adx_mult, 4)
+    if adx_mult <= 0.0:
+        diag["adxHardFail"] = True
     base_quality = sum(quality_terms) / len(quality_terms) if quality_terms else 0.0
     quality = _clamp01(base_quality * adx_mult)
     return Component(_clamp(signal, -1.0, 1.0), quality), diag
@@ -585,7 +628,7 @@ def score_pair(
     family = getattr(route, "family", "unknown")
     asset_type = _FAMILY_ASSET.get(family, "other")
     horizon = "intraday" if str(horizon).lower() == "intraday" else "swing"
-    entry_tf = "H1" if horizon == "intraday" else "H4"
+    entry_tf = _resolve_v3_entry_tf(group, asset_type, horizon)
 
     if profile is None:
         from engine_a_v3.profile import baseline_profile
@@ -603,6 +646,23 @@ def score_pair(
         entry_tf=entry_tf,
     )
     momentum, mom_diag = _momentum_component(momentum_snap, asset_type, group)
+    if mom_diag.get("adxHardAbort") and mom_diag.get("adxAbortReason") == "missing_both_abort":
+        return QuantScore(
+            direction="FLAT",
+            confluence_score=0.0,
+            max_score=MAX_SCORE,
+            score_norm=0.0,
+            conviction=0.0,
+            decision="WATCH",
+            threshold=profile.trade_threshold,
+            level_style="trend",
+            factor_scores={"trend": 0.0, "momentum": 0.0, "ortho": {}},
+            factor_diagnostics={
+                **mom_diag,
+                "adxGateRejected": True,
+            },
+            components={"trend": trend, "momentum": momentum, "location": Component(0.0, 0.0), "volume": Component(0.0, 0.0)},
+        )
     location, level_style = _location_component(entry_snap, asset_type, group)
     volume = _volume_component(entry_snap, candles.get(entry_tf) or [], context)
 
@@ -659,6 +719,17 @@ def score_pair(
         state = subsystem_states.get(name)
         return state in (ST_AVAILABLE, ST_NEUTRAL) and max(0.0, combined_weights.get(name, 0.0)) > 0
 
+    # Confluence uses the full configured weight budget so unavailable components
+    # cannot inflate scores by shrinking the divisor (L-1).
+    confluence_denom = sum(
+        max(0.0, combined_weights.get(name, 0.0)) for name in CORE_COMPONENTS
+    )
+    if subsystems_enabled():
+        for name in SUBSYSTEM_FACTORS:
+            if _subsystem_contributes(name):
+                confluence_denom += max(0.0, combined_weights.get(name, 0.0))
+    confluence_denom = confluence_denom or 1.0
+
     # Direction = sign of the weighted directional sum over active components,
     # except in mean-reversion regime where the fade direction is authoritative.
     dir_terms: list[tuple[float, float]] = []
@@ -702,7 +773,7 @@ def score_pair(
             ortho[name] = signed
         else:
             ortho[name] = signed
-    score_frac /= weight_sum
+    score_frac /= confluence_denom
 
     vol_mult = _volatility_mult(entry_snap)
     confluence = _clamp(MAX_SCORE * score_frac, 0.0, MAX_SCORE)

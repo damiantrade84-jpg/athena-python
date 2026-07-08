@@ -4,6 +4,7 @@ import './index.css'
 import { initCoreUtils } from '@/lib/safeJson'
 import { initApiClient } from '@/lib/apiClient'
 import { initGlobalState } from '@/lib/globalState'
+import { initLegacyPairBrowserBridge } from '@/lib/legacyPairBrowserBridge'
 import { initExecutionFeature } from '@/lib/executionFeature'
 import App from './App.tsx'
 
@@ -17,6 +18,7 @@ function initFrontendBuildMeta() {
 // Order matters: core utils → API client → state container → execution.
 initFrontendBuildMeta()
 initGlobalState();
+initLegacyPairBrowserBridge();
 initCoreUtils();
 initApiClient();
 initExecutionFeature();

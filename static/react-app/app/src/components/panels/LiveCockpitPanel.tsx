@@ -33,7 +33,7 @@ import {
   LineChart,
 } from 'lucide-react';
 import { cn, fmtNum, toNum } from '@/lib/utils';
-import { fmtPrice } from '@/lib/athenaFormat';
+import { engineBScoreBreakdown, fmtPrice } from '@/lib/athenaFormat';
 import { readEngineBCanonicalGatesFromRow } from '@/lib/engineBCanonicalGates';
 import type {
   LdSnapshot,
@@ -196,7 +196,7 @@ export default function LiveCockpitPanel() {
     // Engine B leads forex: rank passing/CLEAR structures first, then by score.
     if (!forexBMode) return rows;
     const rank = (r: LdSymbolRow) => {
-      let v = toNum(r.engineB?.score) || 0;
+      let v = toNum(r.engineB?.gateScore ?? r.engineB?.score) || 0;
       if (r.engineB?.confidencePassed) v += 1000;
       if (r.engineB?.structuralVerdict === 'CLEAR') v += 100;
       return v;
@@ -1000,6 +1000,7 @@ function EngineARowCard({ row, pair, type }: { row: LdEngineARow; pair?: string;
 
 function EngineBRowCard({ row, pair, type }: { row: LdEngineBRow; pair?: string; type?: string }) {
   const gates = readEngineBCanonicalGatesFromRow(row)!;
+  const bBreakdown = engineBScoreBreakdown(row as unknown as Record<string, unknown>);
   const confidenceBadgeClass =
     gates.confidenceDisplayLabel === 'CONFIDENCE PASSED'
       ? 'badge-long'
@@ -1037,8 +1038,15 @@ function EngineBRowCard({ row, pair, type }: { row: LdEngineBRow; pair?: string;
           </div>
         </div>
         <div className="grid grid-cols-2 gap-2 text-xs">
-          <Detail label="Score" value={`${fmtNum(row.score, 2)} / ${fmtNum(row.maxScore, 2)}`} />
-          <Detail label="Threshold" value={fmtNum(row.threshold, 2)} />
+          <Detail
+            label="Gate"
+            value={
+              bBreakdown?.gateScore != null && bBreakdown?.gateMax != null
+                ? `${fmtNum(bBreakdown.gateScore, 2)} / ${fmtNum(bBreakdown.gateMax, 2)} (min ${fmtNum(bBreakdown.minScore, 2)})`
+                : `${fmtNum(row.score, 2)} / ${fmtNum(row.maxScore, 2)}`
+            }
+          />
+          <Detail label="Total score" value={`${fmtNum(row.totalScore ?? row.score, 2)} / ${fmtNum(row.maxScore, 2)}`} />
           <Detail label="Direction" value={row.direction || '—'} />
           <Detail label="Verdict" value={row.structuralVerdict || '—'} />
           <Detail label="Data valid" value={row.structuralDataValid ? 'YES' : 'NO'} />
