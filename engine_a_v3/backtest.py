@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import bisect
+from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
@@ -160,6 +161,13 @@ def _summarize(
         peak = max(peak, equity)
         max_dd_r = max(max_dd_r, peak - equity)
         equity_curve.append(round(equity, 4))
+    direction_counts = Counter()
+    for trade in trades:
+        direction = str(trade.get("direction") or "").upper()
+        if direction in {"LONG", "SHORT"}:
+            direction_counts[direction] += 1
+        else:
+            direction_counts["UNKNOWN"] += 1
     return {
         "pair": pair.get("display") or pair.get("symbol"),
         "symbol": pair.get("symbol"),
@@ -182,6 +190,11 @@ def _summarize(
         "sameBarPolicy": "ADVERSE_SL_FIRST",
         "lookaheadUsed": False,
         "equityCurve": equity_curve,
+        "directionBreakdown": {
+            "LONG": direction_counts["LONG"],
+            "SHORT": direction_counts["SHORT"],
+            "UNKNOWN": direction_counts["UNKNOWN"],
+        },
         "trades": trades,
         "funnel": {},
         "wfSplit": {

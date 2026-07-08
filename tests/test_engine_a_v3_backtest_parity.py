@@ -4,7 +4,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from engine_a_v3.backtest import _cost_r, _simulate_exit
+from engine_a_v3.backtest import _cost_r, _simulate_exit, _summarize
 
 
 def test_financing_cost_uses_elapsed_time_not_horizon_bar_assumptions():
@@ -47,3 +47,22 @@ def test_split_exit_returns_one_point_five_r_and_adverse_same_bar_is_sl():
     assert adverse.outcome == "SL"
     assert adverse.result_r == -1.0
     assert adverse.same_bar is True
+
+
+def test_engine_a_summary_reports_direction_breakdown_from_all_trades():
+    summary = _summarize(
+        {"display": "USD/JPY", "symbol": "USDJPY", "type": "forex"},
+        "intraday",
+        [
+            {"direction": "LONG", "resultR": 1.0},
+            {"direction": "SHORT", "resultR": -0.5},
+            {"direction": "SHORT", "resultR": 0.25},
+        ],
+        same_bar=0,
+    )
+
+    assert summary["directionBreakdown"] == {
+        "LONG": 1,
+        "SHORT": 2,
+        "UNKNOWN": 0,
+    }

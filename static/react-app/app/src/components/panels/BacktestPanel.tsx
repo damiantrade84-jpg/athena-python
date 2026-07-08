@@ -15,6 +15,12 @@ import { ErrorBanner, SqnBadge, EquityAreaChart } from '@/components/shared';
 import { FlaskConical, Play, AlertTriangle, Trophy, Layers, ChevronsUpDown, Check } from 'lucide-react';
 import { cn, fmtNum, toNum } from '@/lib/utils';
 import { buildBacktestRequest, type ASEBacktestHorizon, type BacktestEngineKey } from '@/lib/backtestPayload';
+import {
+  normalizeBacktestDirection,
+  resolveDirectionBreakdown,
+  type DirectionBreakdown,
+  type DirectionKey,
+} from '@/lib/backtestDirection';
 import type { ASEBacktestDiagnostics, PairsResponse, PairListEntry } from '@/types/athena';
 
 /**
@@ -65,6 +71,7 @@ interface BacktestResult {
   bhReturn?: number | null;
   evalThreshold?: number;
   equityCurve?: number[] | { idx?: number; equity: number; date?: string }[];
+  directionBreakdown?: DirectionBreakdown;
   trades?: Array<Record<string, unknown>>;
   scalp_analysis?: {
     absorption?: { count: number; wr: number | null; avg_r: number | null };
@@ -426,6 +433,10 @@ export default function BacktestPanel() {
   const [aseLookbackDays, setAseLookbackDays] = useState(365);
   const [result, setResult] = useState<BacktestResult | null>(null);
   const [activeTab, setActiveTab] = useState<'run' | 'history' | 'best' | 'advisory'>('run');
+  const directionBreakdown = useMemo(
+    () => resolveDirectionBreakdown(result?.directionBreakdown, result?.trades),
+    [result?.directionBreakdown, result?.trades],
+  );
 
   const { data: pairsData } = useApiPoll<PairsResponse>('/api/pairs', 0);
   const allPairs = useMemo(() => flattenPairs(pairsData), [pairsData]);
@@ -871,7 +882,10 @@ export default function BacktestPanel() {
 
               {/* Trade table */}
               {Array.isArray(result.trades) && result.trades.length > 0 && (
-                <TradeTable trades={result.trades.slice(0, 100)} totalCount={result.trades.length} />
+                <TradeTable
+                  trades={result.trades}
+                  directionBreakdown={directionBreakdown}
+                />
               )}
             </>
           )}
@@ -1132,13 +1146,65 @@ function wrAccent(wr?: number | null): string {
   return 'text-short';
 }
 
-function TradeTable({ trades, totalCount }: { trades: Array<Record<string, unknown>>; totalCount: number }) {
+function TradeTable({
+  trades,
+  directionBreakdown,
+}: {
+  trades: Array<Record<string, unknown>>;
+  directionBreakdown: DirectionBreakdown;
+}) {
+  const [directionFilter, setDirectionFilter] = useState<'ALL' | DirectionKey>('ALL');
+  const filteredTrades = useMemo(
+    () => (
+      directionFilter === 'ALL'
+        ? trades
+        : trades.filter((trade) => normalizeBacktestDirection(trade.direction) === directionFilter)
+    ),
+    [directionFilter, trades],
+  );
+  const visibleTrades = filteredTrades.slice(0, 100);
+
   return (
     <Card className="border-border/60 bg-card/50">
       <CardHeader className="pb-2">
-        <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Cinzel', serif", letterSpacing: '0.12em' }}>
-          Trade Log {totalCount > trades.length && <span className="text-[10px] text-muted-foreground">(showing first {trades.length} of {totalCount})</span>}
-        </CardTitle>
+        <div className="flex flex-wrap items-center gap-2">
+          <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Cinzel', serif", letterSpacing: '0.12em' }}>
+            Trade Log {filteredTrades.length > visibleTrades.length && <span className="text-[10px] text-muted-foreground">(showing first {visibleTrades.length} of {filteredTrades.length})</span>}
+          </CardTitle>
+          <div className="ml-auto flex flex-wrap items-center gap-1 text-[10px]">
+            <span className="text-muted-foreground">Full run:</span>
+            <Button
+              type="button"
+              variant={directionFilter === 'ALL' ? 'secondary' : 'outline'}
+              size="sm"
+              className="h-6 px-2 text-[10px]"
+              onClick={() => setDirectionFilter('ALL')}
+            >
+              ALL {trades.length}
+            </Button>
+            <Button
+              type="button"
+              variant={directionFilter === 'LONG' ? 'secondary' : 'outline'}
+              size="sm"
+              className="h-6 px-2 text-[10px] text-long"
+              onClick={() => setDirectionFilter('LONG')}
+            >
+              LONG {directionBreakdown.LONG}
+            </Button>
+            <Button
+              type="button"
+              variant={directionFilter === 'SHORT' ? 'secondary' : 'outline'}
+              size="sm"
+              className="h-6 px-2 text-[10px] text-short"
+              onClick={() => setDirectionFilter('SHORT')}
+            >
+              SHORT {directionBreakdown.SHORT}
+            </Button>
+            {directionBreakdown.UNKNOWN > 0 && (
+              <Badge variant="outline" className="text-muted-foreground">UNKNOWN {directionBreakdown.UNKNOWN}</Badge>
+            )}
+          </div>
+        </div>
       </CardHeader>
       <CardContent>
         <ScrollArea className="h-[320px]">
@@ -1156,7 +1222,7 @@ function TradeTable({ trades, totalCount }: { trades: Array<Record<string, unkno
               </tr>
             </thead>
             <tbody>
-              {trades.map((t, i) => {
+              {visibleTrades.map((t, i) => {
                 const r = (t.resultR ?? t.r_multiple ?? 0) as number;
                 const dir = String(t.direction || '').toUpperCase();
                 return (
