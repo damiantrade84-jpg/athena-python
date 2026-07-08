@@ -20,7 +20,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
-import { ErrorBanner, MultiPairPicker } from '@/components/shared';
+import { ErrorBanner, MultiPairPicker, EquityAreaChart } from '@/components/shared';
 import VolumeModeField from '@/components/execution/VolumeModeField';
 import {
   fetchRiskPreview,
@@ -43,7 +43,6 @@ import type {
   ChartAnalysisResponse,
   AiTextReviewResponse,
 } from '@/types/athena';
-import { AreaChart, Area, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 
 const ASSET_OPTIONS: { value: string; label: string }[] = [
   { value: 'all', label: 'All assets' },
@@ -877,25 +876,13 @@ export default function EngineCPanel() {
                 <KpiBox title="Max DD" value={btResult.max_dd_pct == null ? '—' : `${fmtNum(btResult.max_dd_pct, 1)}%`} />
               </div>
               {equityChart.length > 0 && (
-                <div className="h-[220px]">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <AreaChart data={equityChart} margin={{ left: 0, right: 0, top: 4, bottom: 0 }}>
-                      <defs>
-                        <linearGradient id="ecBtFill" x1="0" y1="0" x2="0" y2="1">
-                          <stop offset="0%" stopColor="hsl(var(--primary))" stopOpacity={0.45} />
-                          <stop offset="100%" stopColor="hsl(var(--primary))" stopOpacity={0} />
-                        </linearGradient>
-                      </defs>
-                      <XAxis dataKey="idx" hide />
-                      <YAxis domain={['auto', 'auto']} tick={{ fontSize: 10 }} width={50} />
-                      <Tooltip
-                        contentStyle={{ background: 'hsl(var(--popover))', border: '1px solid hsl(var(--border))', fontSize: 11 }}
-                        formatter={(v: number) => [`$${fmtNum(v, 2)}`, 'Equity']}
-                      />
-                      <Area type="monotone" dataKey="equity" stroke="hsl(var(--primary))" fill="url(#ecBtFill)" strokeWidth={2} />
-                    </AreaChart>
-                  </ResponsiveContainer>
-                </div>
+                <EquityAreaChart
+                  data={equityChart}
+                  height={220}
+                  valueLabel="Equity"
+                  valueFormatter={(v) => `$${fmtNum(v, 2)}`}
+                  idSuffix="Ec"
+                />
               )}
               {btResult.notes && <p className="text-[10px] text-muted-foreground">{btResult.notes}</p>}
             </div>

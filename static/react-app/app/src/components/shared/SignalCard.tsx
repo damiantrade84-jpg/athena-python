@@ -34,6 +34,10 @@ export default function SignalCard({ signal, onExecute, disabled, disabledLabel,
   const CONF_HIGH = 85;
   const CONF_MED  = 70;
   const confColor = conf >= CONF_HIGH ? 'text-long' : conf >= CONF_MED ? 'text-warning' : 'text-muted-foreground';
+  const confHigh = conf >= CONF_HIGH;
+  const confBarColor = confHigh
+    ? 'linear-gradient(90deg, hsl(var(--gold-dark)), hsl(var(--long)))'
+    : 'linear-gradient(90deg, hsl(var(--gold-dark)), hsl(var(--gold-light)))';
 
   const tp2Num = Number(signal.tp2);
   const hasTp2 = signal.tp2 != null && Number.isFinite(tp2Num);
@@ -128,13 +132,16 @@ export default function SignalCard({ signal, onExecute, disabled, disabledLabel,
                 {fmtNum(conf, 0)}%
               </span>
             </div>
-            {/* Gold gradient progress bar */}
-            <div className="w-full rounded-full h-1.5 overflow-hidden" style={{ background: 'hsl(var(--border) / 0.50)' }}>
+            {/* Gradient progress bar — glows when high conviction */}
+            <div
+              className="relative w-full rounded-full h-2 overflow-hidden"
+              style={{ background: 'hsl(var(--border) / 0.55)' }}
+            >
               <div
-                className="h-full rounded-full transition-all duration-300"
+                className={`h-full rounded-full transition-all duration-300 ${confHigh ? 'glow-gold-sm' : ''}`}
                 style={{
                   width: `${Number.isFinite(conf) ? conf : 0}%`,
-                  background: 'linear-gradient(90deg, hsl(var(--gold-dark)), hsl(var(--gold-light)))',
+                  background: confBarColor,
                 }}
               />
             </div>

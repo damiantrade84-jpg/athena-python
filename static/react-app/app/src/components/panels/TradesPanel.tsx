@@ -14,10 +14,7 @@ import {
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from '@/components/ui/table';
-import { ErrorBanner, SqnBadge } from '@/components/shared';
-import {
-  AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer,
-} from 'recharts';
+import { ErrorBanner, SqnBadge, EquityAreaChart } from '@/components/shared';
 import { X, AlertTriangle } from 'lucide-react';
 import { fmtNum } from '@/lib/utils';
 import { auditEngineTitle, formatAuditEngineLabel, resolveAuditEngine } from '@/lib/auditEngine';
@@ -589,26 +586,14 @@ export default function TradesPanel() {
               {perfLoading ? (
                 <Skeleton className="h-[260px] w-full" />
               ) : equityData.length > 0 ? (
-                <div className="h-[260px]">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <AreaChart data={equityData}>
-                      <defs>
-                        <linearGradient id="equityGrad2" x1="0" y1="0" x2="0" y2="1">
-                          <stop offset="5%" stopColor="hsl(var(--primary))" stopOpacity={0.3} />
-                          <stop offset="95%" stopColor="hsl(var(--primary))" stopOpacity={0} />
-                        </linearGradient>
-                      </defs>
-                      <XAxis dataKey="idx" tick={{ fontSize: 10, fill: 'hsl(var(--muted-foreground))' }} axisLine={false} tickLine={false} />
-                      <YAxis tick={{ fontSize: 10, fill: 'hsl(var(--muted-foreground))' }} axisLine={false} tickLine={false} width={50} />
-                      <Tooltip
-                        contentStyle={{ backgroundColor: 'hsl(var(--card))', border: '1px solid hsl(var(--border))', borderRadius: '6px', fontSize: '11px' }}
-                        formatter={(value: number) => [`${fmtNum(value, 2)}R`, 'Cumulative R']}
-                        labelFormatter={(label) => `Trade #${label}`}
-                      />
-                      <Area type="monotone" dataKey="equity" stroke="hsl(var(--primary))" strokeWidth={2} fill="url(#equityGrad2)" />
-                    </AreaChart>
-                  </ResponsiveContainer>
-                </div>
+                <EquityAreaChart
+                  data={equityData}
+                  height={260}
+                  valueLabel="Cumulative R"
+                  valueFormatter={(v) => `${fmtNum(v, 2)}R`}
+                  labelFormatter={(label) => `Trade #${label}`}
+                  idSuffix="Trades"
+                />
               ) : (
                 <div className="text-center text-muted-foreground py-12 text-sm">No equity data — waiting for closed trades</div>
               )}

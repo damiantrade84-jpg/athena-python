@@ -3,10 +3,10 @@ import { useApiPoll } from '@/hooks/useApiData';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 import {
-  AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer,
-  BarChart, Bar, Cell,
+  XAxis, YAxis, Tooltip, ResponsiveContainer,
+  BarChart, Bar, Cell, CartesianGrid, ReferenceLine,
 } from 'recharts';
-import { ErrorBanner, SqnBadge } from '@/components/shared';
+import { ErrorBanner, SqnBadge, EquityAreaChart } from '@/components/shared';
 import { TrendingUp, BarChart3, PieChart } from 'lucide-react';
 import { fmtNum } from '@/lib/utils';
 import type { PerformanceMetrics, PerformanceEngineRow } from '@/types';
@@ -114,26 +114,14 @@ export default function PerformancePanel() {
           </CardHeader>
           <CardContent>
             {loading ? <Skeleton className="h-[260px] w-full" /> : equityData.length > 0 ? (
-              <div className="h-[260px]">
-                <ResponsiveContainer width="100%" height="100%">
-                  <AreaChart data={equityData}>
-                    <defs>
-                      <linearGradient id="perfEquityGrad" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="5%" stopColor="hsl(var(--primary))" stopOpacity={0.3} />
-                        <stop offset="95%" stopColor="hsl(var(--primary))" stopOpacity={0} />
-                      </linearGradient>
-                    </defs>
-                    <XAxis dataKey="idx" tick={{ fontSize: 10, fill: 'hsl(var(--muted-foreground))' }} axisLine={false} tickLine={false} />
-                    <YAxis tick={{ fontSize: 10, fill: 'hsl(var(--muted-foreground))' }} axisLine={false} tickLine={false} width={50} />
-                    <Tooltip
-                      contentStyle={{ backgroundColor: 'hsl(var(--card))', border: '1px solid hsl(var(--border))', borderRadius: '6px', fontSize: '11px' }}
-                      formatter={(value: number) => [`${fmtNum(value, 2)}R`, 'Cumulative R']}
-                      labelFormatter={(label) => `Trade #${label}`}
-                    />
-                    <Area type="monotone" dataKey="equity" stroke="hsl(var(--primary))" strokeWidth={2} fill="url(#perfEquityGrad)" />
-                  </AreaChart>
-                </ResponsiveContainer>
-              </div>
+              <EquityAreaChart
+                data={equityData}
+                height={260}
+                valueLabel="Cumulative R"
+                valueFormatter={(v) => `${fmtNum(v, 2)}R`}
+                labelFormatter={(label) => `Trade #${label}`}
+                idSuffix="Perf"
+              />
             ) : (
               <div className="text-center text-muted-foreground py-12 text-sm">No equity data — waiting for closed trades</div>
             )}
@@ -151,11 +139,17 @@ export default function PerformancePanel() {
             {loading ? <Skeleton className="h-[260px] w-full" /> : dailyPnl.length > 0 ? (
               <div className="h-[260px]">
                 <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={dailyPnl}>
+                  <BarChart data={dailyPnl} margin={{ left: 4, right: 8, top: 8, bottom: 0 }}>
+                    <CartesianGrid stroke="hsl(var(--border) / 0.5)" strokeDasharray="3 6" vertical={false} />
                     <XAxis dataKey="date" tick={{ fontSize: 10, fill: 'hsl(var(--muted-foreground))' }} axisLine={false} tickLine={false} />
                     <YAxis tick={{ fontSize: 10, fill: 'hsl(var(--muted-foreground))' }} axisLine={false} tickLine={false} width={50} />
-                    <Tooltip contentStyle={{ backgroundColor: 'hsl(var(--card))', border: '1px solid hsl(var(--border))', borderRadius: '6px', fontSize: '11px' }} formatter={(value: number) => [`$${fmtNum(value, 2)}`, 'P&L']} />
-                    <Bar dataKey="pnl" radius={[3, 3, 0, 0]}>
+                    <ReferenceLine y={0} stroke="hsl(var(--border))" strokeDasharray="2 4" />
+                    <Tooltip
+                      cursor={{ fill: 'hsl(var(--gold) / 0.06)' }}
+                      contentStyle={{ background: 'hsl(var(--popover))', border: '1px solid hsl(var(--gold) / 0.35)', borderRadius: '0.6rem', boxShadow: '0 8px 24px hsl(250 60% 3% / 0.6)', fontSize: '11px' }}
+                      formatter={(value: number) => [`$${fmtNum(value, 2)}`, 'P&L']}
+                    />
+                    <Bar dataKey="pnl" radius={[4, 4, 0, 0]}>
                       {dailyPnl.map((entry, index) => (
                         <Cell key={`cell-${index}`} fill={num(entry.pnl) >= 0 ? 'hsl(var(--long))' : 'hsl(var(--short))'} />
                       ))}

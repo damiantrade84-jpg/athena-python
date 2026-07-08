@@ -13,7 +13,7 @@ import {
   TrendingUp, TrendingDown, Activity, Zap, Target,
   Clock, Globe, AlertTriangle, BarChart3, Play, Square, X
 } from 'lucide-react';
-import { AreaChart, Area, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
+import { AreaChart, Area, ResponsiveContainer, Tooltip, XAxis, YAxis, CartesianGrid, ReferenceLine } from 'recharts';
 import { fmtNum, toNum } from '@/lib/utils';
 import { fmtLiveQuoteMeta } from '@/lib/athenaFormat';
 import type {
@@ -294,20 +294,58 @@ export default function DashboardPanel() {
               </div>
             ) : (
               <ResponsiveContainer width="100%" height={260}>
-                <AreaChart data={equityData} margin={{ left: 0, right: 0, top: 4, bottom: 0 }}>
+                <AreaChart data={equityData} margin={{ left: 4, right: 8, top: 8, bottom: 0 }}>
                   <defs>
-                    <linearGradient id="dashEquityFill" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="0%" stopColor="hsl(var(--primary))" stopOpacity={0.5} />
-                      <stop offset="100%" stopColor="hsl(var(--primary))" stopOpacity={0} />
+                    <linearGradient id="dashEquityStroke" x1="0" y1="0" x2="1" y2="0">
+                      <stop offset="0%" stopColor="hsl(250 72% 62%)" />
+                      <stop offset="55%" stopColor="hsl(258 90% 70%)" />
+                      <stop offset="100%" stopColor="hsl(199 92% 64%)" />
                     </linearGradient>
+                    <linearGradient id="dashEquityFill" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stopColor="hsl(258 90% 68%)" stopOpacity={0.42} />
+                      <stop offset="60%" stopColor="hsl(258 90% 68%)" stopOpacity={0.10} />
+                      <stop offset="100%" stopColor="hsl(258 90% 68%)" stopOpacity={0} />
+                    </linearGradient>
+                    <filter id="dashEquityGlow" x="-20%" y="-20%" width="140%" height="140%">
+                      <feGaussianBlur stdDeviation="3" result="blur" />
+                      <feMerge>
+                        <feMergeNode in="blur" />
+                        <feMergeNode in="SourceGraphic" />
+                      </feMerge>
+                    </filter>
                   </defs>
+                  <CartesianGrid stroke="hsl(var(--border) / 0.5)" strokeDasharray="3 6" vertical={false} />
                   <XAxis dataKey="idx" hide />
-                  <YAxis domain={['auto', 'auto']} tick={{ fontSize: 10 }} width={50} />
+                  <YAxis
+                    domain={['auto', 'auto']}
+                    tick={{ fontSize: 10, fill: 'hsl(var(--muted-foreground))' }}
+                    axisLine={false}
+                    tickLine={false}
+                    width={52}
+                  />
+                  <ReferenceLine y={0} stroke="hsl(var(--border))" strokeDasharray="2 4" />
                   <Tooltip
-                    contentStyle={{ background: 'hsl(var(--popover))', border: '1px solid hsl(var(--border))', fontSize: 11 }}
+                    cursor={{ stroke: 'hsl(var(--gold) / 0.4)', strokeWidth: 1, strokeDasharray: '4 4' }}
+                    contentStyle={{
+                      background: 'hsl(var(--popover))',
+                      border: '1px solid hsl(var(--gold) / 0.35)',
+                      borderRadius: '0.6rem',
+                      boxShadow: '0 8px 24px hsl(250 60% 3% / 0.6), 0 0 12px hsl(var(--gold) / 0.12)',
+                      fontSize: 11,
+                    }}
+                    labelStyle={{ color: 'hsl(var(--muted-foreground))' }}
                     formatter={(v: number) => [`$${fmtNum(v, 2)}`, 'Equity']}
                   />
-                  <Area type="monotone" dataKey="equity" stroke="hsl(var(--primary))" fill="url(#dashEquityFill)" strokeWidth={2} />
+                  <Area
+                    type="monotone"
+                    dataKey="equity"
+                    stroke="url(#dashEquityStroke)"
+                    strokeWidth={2.5}
+                    fill="url(#dashEquityFill)"
+                    dot={false}
+                    activeDot={{ r: 4, fill: 'hsl(var(--gold-light))', stroke: 'hsl(var(--gold))', strokeWidth: 2 }}
+                    style={{ filter: 'url(#dashEquityGlow)' }}
+                  />
                 </AreaChart>
               </ResponsiveContainer>
             )}

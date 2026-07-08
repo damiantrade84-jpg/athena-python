@@ -11,9 +11,8 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Textarea } from '@/components/ui/textarea';
-import { ErrorBanner, SqnBadge } from '@/components/shared';
+import { ErrorBanner, SqnBadge, EquityAreaChart } from '@/components/shared';
 import { FlaskConical, Play, AlertTriangle, Trophy, Layers, ChevronsUpDown, Check } from 'lucide-react';
-import { AreaChart, Area, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { cn, fmtNum, toNum } from '@/lib/utils';
 import { buildBacktestRequest, type ASEBacktestHorizon, type BacktestEngineKey } from '@/lib/backtestPayload';
 import type { ASEBacktestDiagnostics, PairsResponse, PairListEntry } from '@/types/athena';
@@ -798,25 +797,13 @@ export default function BacktestPanel() {
                   {equityChart.length === 0 ? (
                     <div className="text-xs text-muted-foreground py-12 text-center">No equity curve data</div>
                   ) : (
-                    <div className="h-[280px]">
-                      <ResponsiveContainer width="100%" height="100%">
-                        <AreaChart data={equityChart} margin={{ left: 0, right: 0, top: 4, bottom: 0 }}>
-                          <defs>
-                            <linearGradient id="btEqGrad" x1="0" y1="0" x2="0" y2="1">
-                              <stop offset="0%" stopColor="hsl(var(--primary))" stopOpacity={0.5} />
-                              <stop offset="100%" stopColor="hsl(var(--primary))" stopOpacity={0} />
-                            </linearGradient>
-                          </defs>
-                          <XAxis dataKey="idx" hide />
-                          <YAxis tick={{ fontSize: 10 }} width={50} domain={['auto', 'auto']} />
-                          <Tooltip
-                            contentStyle={{ background: 'hsl(var(--popover))', border: '1px solid hsl(var(--border))', fontSize: 11 }}
-                            formatter={(v: number) => [`$${fmtNum(v, 2)}`, 'Equity']}
-                          />
-                          <Area type="monotone" dataKey="equity" stroke="hsl(var(--primary))" strokeWidth={2} fill="url(#btEqGrad)" />
-                        </AreaChart>
-                      </ResponsiveContainer>
-                    </div>
+                    <EquityAreaChart
+                      data={equityChart}
+                      height={280}
+                      valueLabel="Equity"
+                      valueFormatter={(v) => `$${fmtNum(v, 2)}`}
+                      idSuffix="Bt"
+                    />
                   )}
                 </CardContent>
               </Card>

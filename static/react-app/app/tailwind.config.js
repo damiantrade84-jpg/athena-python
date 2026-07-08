@@ -74,10 +74,10 @@ module.exports = {
       },
       boxShadow: {
         xs: "0 1px 2px 0 rgb(0 0 0 / 0.05)",
-        gold: "0 0 12px hsl(192 72% 58% / 0.25), 0 0 30px hsl(192 72% 58% / 0.08)",
-        "gold-sm": "0 0 8px hsl(192 72% 58% / 0.35)",
-        "long-sm": "0 0 8px hsl(152 70% 44% / 0.35)",
-        "short-sm": "0 0 8px hsl(351 88% 60% / 0.35)",
+        gold: "0 0 14px hsl(258 90% 68% / 0.28), 0 0 34px hsl(258 90% 68% / 0.10)",
+        "gold-sm": "0 0 9px hsl(258 90% 68% / 0.36)",
+        "long-sm": "0 0 9px hsl(156 72% 47% / 0.36)",
+        "short-sm": "0 0 9px hsl(350 85% 64% / 0.36)",
       },
       keyframes: {
         "accordion-down": {
@@ -93,8 +93,8 @@ module.exports = {
           "20%,50%": { opacity: "0" },
         },
         "glow-pulse-gold": {
-          "0%, 100%": { boxShadow: "0 0 6px hsl(192 72% 58% / 0.35)" },
-          "50%": { boxShadow: "0 0 18px hsl(192 72% 58% / 0.65)" },
+          "0%, 100%": { boxShadow: "0 0 6px hsl(258 90% 68% / 0.38)" },
+          "50%": { boxShadow: "0 0 20px hsl(258 90% 68% / 0.66)" },
         },
       },
       animation: {

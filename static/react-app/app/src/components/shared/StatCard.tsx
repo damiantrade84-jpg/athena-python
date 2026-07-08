@@ -16,13 +16,20 @@ interface StatCardProps {
 export default function StatCard({ title, value, icon, iconClass, valueClass, loading, subtitle }: StatCardProps) {
   return (
     <Card
-      className="group border-border/70 relative overflow-hidden stat-card-top-line transition-all duration-300 hover:border-primary/35 hover:-translate-y-px hover:shadow-gold"
+      className="group relative overflow-hidden stat-card-top-line transition-all duration-300 hover:-translate-y-0.5 hover:shadow-gold hover:border-gold/40"
       style={{
-        background: 'linear-gradient(180deg, hsl(var(--card) / 0.92), hsl(var(--background) / 0.55))',
-        backdropFilter: 'blur(8px)',
+        background: 'linear-gradient(168deg, hsl(var(--card) / 0.94), hsl(var(--background) / 0.6))',
+        backdropFilter: 'blur(10px)',
+        boxShadow: 'inset 0 1px 0 hsl(var(--gold) / 0.08), 0 6px 18px hsl(250 60% 3% / 0.5)',
+        border: '1px solid hsl(var(--border) / 0.7)',
       }}
     >
-      <CardContent className="p-4">
+      {/* ambient corner glow */}
+      <div
+        className="pointer-events-none absolute -top-8 -right-8 w-28 h-28 rounded-full opacity-0 blur-2xl transition-opacity duration-300 group-hover:opacity-100"
+        style={{ background: 'radial-gradient(circle, hsl(var(--gold) / 0.22), transparent 70%)' }}
+      />
+      <CardContent className="p-4 relative">
         <div className="flex items-center justify-between">
           <div className="min-w-0">
             <p
@@ -44,12 +51,12 @@ export default function StatCard({ title, value, icon, iconClass, valueClass, lo
               </p>
             )}
           </div>
-          {/* Icon chip — frosted ice ring */}
+          {/* Icon chip — luminous violet ring */}
           <div
-            className={cn('p-2 rounded-lg shrink-0 transition-shadow duration-300 group-hover:glow-gold-sm', iconClass)}
+            className={cn('p-2 rounded-lg shrink-0 transition-all duration-300 group-hover:glow-gold-sm', iconClass)}
             style={{
-              background: 'linear-gradient(160deg, hsl(var(--gold) / 0.12), hsl(var(--gold) / 0.03))',
-              border: '1px solid hsl(var(--gold) / 0.25)',
+              background: 'linear-gradient(160deg, hsl(var(--gold) / 0.16), hsl(var(--gold) / 0.04))',
+              border: '1px solid hsl(var(--gold) / 0.28)',
             }}
           >
             {icon}
