@@ -10,6 +10,8 @@ import {
   confluencePct,
   convictionTier,
   engineAThreshold,
+  engineAScoreBreakdown,
+  engineBScoreBreakdown,
   regimeLabel,
   sessionLabel,
 } from '@/lib/athenaFormat';
@@ -77,10 +79,16 @@ export default function EngineASignalCard({
     : isShort
     ? { background: 'hsl(var(--short) / 0.18)', color: 'hsl(var(--short))' }
     : { background: 'hsl(var(--muted) / 0.40)', color: 'hsl(var(--muted-foreground))' };
-  const conf = confluencePct(signal);
+  const scoreBreakdown = engineAScoreBreakdown(signal);
+  const bBreakdown = isNakedScan
+    ? engineBScoreBreakdown((signal.naked_data || signal.engine_b || signal) as Record<string, unknown>)
+    : null;
+  const conf = isNakedScan && bBreakdown?.gateScore != null && bBreakdown.minScore
+    ? Math.max(0, Math.min(100, Math.round((bBreakdown.gateScore / bBreakdown.minScore) * 67)))
+    : confluencePct(signal);
   const conv = toNum(signal.conviction, NaN);
   const convT = convictionTier(Number.isFinite(conv) ? conv : null);
-  const score = toNum(
+  const score = scoreBreakdown?.decisionScore ?? toNum(
     isEngineBOnlyStub
       ? raw.engine_a_confluenceScore ?? signal.confluenceScore ?? signal.score
       : signal.confluenceScore ?? signal.score,
@@ -90,8 +98,10 @@ export default function EngineASignalCard({
     isEngineBOnlyStub ? raw.engine_a_maxScore ?? signal.maxScore : signal.maxScore,
     NaN,
   );
-  const threshold = engineAThreshold(signal);
-  const passed = !isEngineBOnly && Number.isFinite(score) && threshold != null && score >= threshold;
+  const threshold = scoreBreakdown?.threshold ?? engineAThreshold(signal);
+  const passed = isNakedScan && bBreakdown
+    ? bBreakdown.gatePasses
+    : !isEngineBOnly && Number.isFinite(score) && threshold != null && score >= threshold;
   const fs = ((
     (isEngineBOnlyStub && raw.engine_a_factorScores && typeof raw.engine_a_factorScores === 'object')
       ? raw.engine_a_factorScores
@@ -201,14 +211,37 @@ export default function EngineASignalCard({
         <div className="space-y-1">
           <div className="flex items-center justify-between text-[10px] text-muted-foreground">
             <span>
-              {isEngineBOnlyStub ? 'Engine A' : isNakedScan ? 'Engine B' : 'Confluence'}{' '}
+              {isEngineBOnlyStub ? 'Engine A' : isNakedScan ? 'Engine B gate' : 'Confluence'}{' '}
               <span className={cn('font-mono', passed ? 'text-long' : 'text-muted-foreground')}>
-                {fmtNum(score, 2)}/{fmtNum(max, 2)}
+                {isNakedScan && bBreakdown?.gateScore != null
+                  ? `${fmtNum(bBreakdown.gateScore, 2)}/${fmtNum(bBreakdown.gateMax ?? max, 2)}`
+                  : `${fmtNum(score, 2)}/${fmtNum(max, 2)}`}
               </span>
-              {threshold != null && !isNakedScan && <span className="ml-1">≥ {fmtNum(threshold, 2)}</span>}
+              {isNakedScan && bBreakdown?.minScore != null ? (
+                <span className="ml-1">≥ {fmtNum(bBreakdown.minScore, 2)}</span>
+              ) : threshold != null && !isNakedScan ? (
+                <span className="ml-1">≥ {fmtNum(threshold, 2)}</span>
+              ) : null}
             </span>
             <span className="font-mono">{conf != null ? `${conf.toFixed(0)}%` : '—'}</span>
           </div>
+          {isNakedScan && bBreakdown?.totalScore != null && (
+            <p className="text-[9px] text-muted-foreground leading-snug">
+              Quality total{' '}
+              <span className="font-mono text-foreground">
+                {fmtNum(bBreakdown.totalScore, 2)}/{fmtNum(bBreakdown.totalMax ?? max, 2)}
+              </span>
+              {bBreakdown.bonusPoints != null && bBreakdown.bonusPoints !== 0 && (
+                <span> · bonuses {bBreakdown.bonusPoints >= 0 ? '+' : ''}{fmtNum(bBreakdown.bonusPoints, 2)}</span>
+              )}
+              {bBreakdown.totalPasses && !bBreakdown.gatePasses && (
+                <span className="text-warning"> — total clears min but gate score does not</span>
+              )}
+            </p>
+          )}
+          {!isNakedScan && scoreBreakdown?.hasAdjustments && (
+            <EngineAScoreAdjustmentNote breakdown={scoreBreakdown} />
+          )}
           {/* Violet gradient bar — glows when score passes threshold */}
           <div className="relative w-full rounded-full h-2 overflow-hidden" style={{ background: 'hsl(var(--border) / 0.55)' }}>
             <div
@@ -411,16 +444,25 @@ function EngineAV3SignalCard({
     : decision === 'WATCH'
     ? 'text-warning border-warning/40'
     : 'text-muted-foreground border-border/60';
-  // Continuous quality fields emitted by the quant scorer (native V3 payloads carry these).
+  const scoreBreakdown = engineAScoreBreakdown(signal);
+  const score = scoreBreakdown?.decisionScore ?? toNum(signal.confluenceScore ?? signal.score, NaN);
+  const max = toNum(signal.maxScore, NaN);
+  const threshold = scoreBreakdown?.threshold ?? engineAThreshold(signal);
+  const passed = Number.isFinite(score) && threshold != null && score >= threshold;
   const conf = confluencePct(signal);
   const conv = toNum(signal.conviction, NaN);
   const convT = convictionTier(Number.isFinite(conv) ? conv : null);
-  const score = toNum(signal.confluenceScore ?? signal.score, NaN);
-  const max = toNum(signal.maxScore, NaN);
-  const threshold = engineAThreshold(signal);
-  const passed = Number.isFinite(score) && threshold != null && score >= threshold;
   const hasQuality = Number.isFinite(score) || conf != null || Number.isFinite(conv);
   const components = signal.componentScores || {};
+  const showAdjustmentMismatch = (
+    decision === 'WATCH'
+    && scoreBreakdown?.displayPasses
+    && !scoreBreakdown.decisionPasses
+  );
+  const showDecisionPassButWatch = (
+    decision === 'WATCH'
+    && scoreBreakdown?.decisionPasses
+  );
 
   return (
     <Card
@@ -458,7 +500,7 @@ function EngineAV3SignalCard({
           <div className="space-y-1">
             <div className="flex items-center justify-between text-[10px] text-muted-foreground">
               <span>
-                Confluence{' '}
+                Decision score{' '}
                 <span className={cn('font-mono', passed ? 'text-long' : 'text-muted-foreground')}>
                   {fmtNum(score, 2)}/{fmtNum(max, 2)}
                 </span>
@@ -469,6 +511,19 @@ function EngineAV3SignalCard({
                 <span className="font-mono">{conf != null ? `${conf.toFixed(0)}%` : '—'}</span>
               </div>
             </div>
+            {scoreBreakdown?.hasAdjustments && (
+              <EngineAScoreAdjustmentNote breakdown={scoreBreakdown} />
+            )}
+            {showAdjustmentMismatch && (
+              <p className="text-[9px] text-warning leading-snug">
+                WATCH: adjusted score clears threshold, but decision used the pre-blend score.
+              </p>
+            )}
+            {showDecisionPassButWatch && (
+              <p className="text-[9px] text-warning leading-snug">
+                WATCH: score clears threshold — awaiting setup confirmation or execution eligibility.
+              </p>
+            )}
             <div className="relative w-full rounded-full h-2 overflow-hidden" style={{ background: 'hsl(var(--border) / 0.55)' }}>
               <div
                 className={`h-full rounded-full transition-all duration-300 ${passed ? 'glow-gold-sm' : ''}`}
@@ -482,8 +537,8 @@ function EngineAV3SignalCard({
             </div>
             {!compact && (
               <p className="text-[9px] text-muted-foreground leading-snug">
-                Executable score: quality-weighted trend, momentum, location and available volume.
-                Context-only diagnostics do not contribute to this score.
+                Bar uses the decision-time score (before intermarket/news blends). Tier follows the V3
+                {` ${decision}`} badge, not the adjusted display score.
               </p>
             )}
           </div>
@@ -575,6 +630,30 @@ function EngineAV3SignalCard({
         )}
       </CardContent>
     </Card>
+  );
+}
+
+function EngineAScoreAdjustmentNote({
+  breakdown,
+}: {
+  breakdown: NonNullable<ReturnType<typeof engineAScoreBreakdown>>;
+}) {
+  if (!breakdown.hasAdjustments || breakdown.displayScore == null) return null;
+  const parts: string[] = [];
+  if (Math.abs(breakdown.intermarketDelta) > 0.0001) {
+    parts.push(`intermarket ${breakdown.intermarketDelta >= 0 ? '+' : ''}${fmtNum(breakdown.intermarketDelta, 2)}`);
+  }
+  if (Math.abs(breakdown.newsAdjustment) > 0.0001) {
+    parts.push(`news ${breakdown.newsAdjustment >= 0 ? '+' : ''}${fmtNum(breakdown.newsAdjustment, 2)}`);
+  }
+  return (
+    <p className="text-[9px] text-muted-foreground leading-snug">
+      Adjusted display{' '}
+      <span className="font-mono text-foreground">{fmtNum(breakdown.displayScore, 2)}</span>
+      {parts.length > 0 && (
+        <span> ({parts.join(', ')})</span>
+      )}
+    </p>
   );
 }
 

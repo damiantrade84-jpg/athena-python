@@ -2,7 +2,7 @@ import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Check, X, AlertTriangle, Info } from 'lucide-react';
 import { cn, fmtNum } from '@/lib/utils';
-import { fmtLiveQuoteMeta, fmtPrice } from '@/lib/athenaFormat';
+import { fmtLiveQuoteMeta, fmtPrice, engineBScoreBreakdown } from '@/lib/athenaFormat';
 import type { EngineBNakedResult } from '@/types/athena';
 
 interface Props {
@@ -27,11 +27,14 @@ export default function EngineBChecklistCard({ data, pair, type, livePrice, live
   }
 
   const conf = data.confidence || {};
+  const breakdown = engineBScoreBreakdown(data);
   const checklist = (data.checklist || conf.checklist || {}) as Record<string, unknown>;
   const passed = Boolean(conf.passed ?? data.passed);
-  const score = (conf.score ?? data.confidence_score ?? data.score) as number | undefined;
-  const max = (conf.max_score ?? data.confidence_max ?? data.max_score) as number | undefined;
-  const minScore = data.min_score as number | undefined;
+  const score = breakdown?.gateScore ?? (conf.gate_score as number | undefined);
+  const max = breakdown?.gateMax ?? (conf.gate_max_possible as number | undefined);
+  const totalScore = breakdown?.totalScore ?? ((conf.score ?? data.score) as number | undefined);
+  const totalMax = breakdown?.totalMax ?? ((conf.max_possible ?? data.max_score) as number | undefined);
+  const minScore = breakdown?.minScore ?? (data.min_score as number | undefined);
   const minRr = data.min_rr as number | undefined;
   const verdict = data.structural_verdict || '—';
   const dirBg =
@@ -83,8 +86,24 @@ export default function EngineBChecklistCard({ data, pair, type, livePrice, live
               </Badge>
             )}
           </div>
-          <div className="text-[10px] text-muted-foreground font-mono">
-            {fmtNum(score, 2)} / {fmtNum(max, 2)} {minScore != null && <span>(min {fmtNum(minScore, 2)})</span>}
+          <div className="text-[10px] text-muted-foreground font-mono text-right">
+            <div>
+              Gate {fmtNum(score, 2)} / {fmtNum(max, 2)}
+              {minScore != null && <span> (min {fmtNum(minScore, 2)})</span>}
+            </div>
+            {totalScore != null && totalScore !== score && (
+              <div className="text-[9px]">
+                Total {fmtNum(totalScore, 2)} / {fmtNum(totalMax, 2)}
+                {breakdown?.bonusPoints != null && breakdown.bonusPoints !== 0 && (
+                  <span> · bonus {breakdown.bonusPoints >= 0 ? '+' : ''}{fmtNum(breakdown.bonusPoints, 2)}</span>
+                )}
+              </div>
+            )}
+            {breakdown?.totalPasses && !breakdown.gatePasses && (
+              <div className="text-[9px] text-warning">
+                Total clears min; gate score does not (pass uses gate floor).
+              </div>
+            )}
           </div>
         </div>
 

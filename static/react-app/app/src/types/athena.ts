@@ -248,6 +248,18 @@ export interface EngineASignal {
   confluenceScore?: number;
   confluenceThreshold?: number;
   confluencePct?: number;
+  /** Pre-blend score fields (V3: decision uses score before intermarket/news). */
+  pre_news_score?: number;
+  news_adjustment?: number;
+  newsSentimentDelta?: number;
+  intermarketEngineADelta?: number;
+  intermarketConfirmation?: {
+    verdict?: string;
+    score?: number;
+    engineADelta?: number;
+    explanation?: string;
+    [k: string]: unknown;
+  };
   conviction?: number; // 0–1
   signalClass?: string; // CRITERIA / WATCHLIST / SKIP / etc.
   grade?: string;
@@ -365,6 +377,11 @@ export interface EngineASignal {
 
   // Engine B attached when present (analyze_pair stores under "engine_b")
   engine_b?: EngineBNakedResult | null;
+  engine_b_score?: number;
+  engine_b_gate_score?: number;
+  engine_b_gate_max?: number;
+  engine_b_min_score_scaled?: number;
+  engine_b_confidence_passed?: boolean;
   naked_data?: EngineBNakedResult | null; // Engine B scan signals expose this
 
   // News / intermarket / vision context
@@ -407,6 +424,12 @@ export interface EngineBNakedResult {
     passed?: boolean;
     score?: number;
     max_score?: number;
+    gate_score?: number;
+    gate_max_possible?: number;
+    gate_pct?: number;
+    max_possible?: number;
+    min_score_scaled?: number;
+    bonus_points?: number;
     checklist?: EngineBChecklist;
     hard_fail_reasons?: string[];
     soft_warnings?: string[];

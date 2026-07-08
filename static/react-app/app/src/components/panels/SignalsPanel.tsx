@@ -26,7 +26,7 @@ import {
   BarChart2, Shield, Gauge, Sparkles,
 } from 'lucide-react';
 import { fmtNum, toNum, cn } from '@/lib/utils';
-import { fmtAtrMeta, fmtLiveQuoteMeta, fmtPrice } from '@/lib/athenaFormat';
+import { engineAListScore, fmtAtrMeta, fmtLiveQuoteMeta, fmtPrice } from '@/lib/athenaFormat';
 import { engineAV3DecisionRank, engineAV3ListLabel, isEngineAV3Signal } from '@/lib/engineAV3';
 import { fetchVisionCandlePayload } from '@/lib/visionReview';
 import apiClient from '@/lib/apiClient';
@@ -107,7 +107,7 @@ function compareUnified(a: UnifiedRow, b: UnifiedRow, sortBy: string): number {
   if (aV3 >= 0 || bV3 >= 0) {
     if (aV3 !== bV3) return bV3 - aV3;
   }
-  return toNum(b.signal.confluenceScore ?? b.signal.score) - toNum(a.signal.confluenceScore ?? a.signal.score);
+  return engineAListScore(b.signal) - engineAListScore(a.signal);
 }
 
 function isWatchlist(s: EngineASignal): boolean {
@@ -464,9 +464,7 @@ export default function SignalsPanel() {
     }
     const entries = [...map.entries()].map(([key, items]) => {
       const sorted = [...items].sort((a, b) => compareUnified(a, b, sortBy));
-      const top = sorted.length
-        ? toNum(sorted[0].signal.confluenceScore ?? sorted[0].signal.score, 0)
-        : 0;
+      const top = sorted.length ? engineAListScore(sorted[0].signal) : 0;
       return { key, items: sorted, topScore: top };
     });
     entries.sort((a, b) => {
@@ -987,7 +985,7 @@ export default function SignalsPanel() {
                           {formatGroupLabel(key)}
                         </span>
                         <Badge variant="outline" className="text-[9px] font-mono">
-                          {items.length} - top {engineAV3ListLabel(items[0]?.signal) ?? fmtNum(items[0]?.signal.confluenceScore ?? items[0]?.signal.score, 2)}
+                          {items.length} - top {engineAV3ListLabel(items[0]?.signal) ?? fmtNum(engineAListScore(items[0]?.signal), 2)}
                         </Badge>
                       </div>
                       <div className="space-y-2 pl-0">
