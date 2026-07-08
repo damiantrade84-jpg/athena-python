@@ -1944,6 +1944,19 @@ CONFIG: dict = {
     },
     "ENGINE_A_FACTOR_WEIGHTS_BY_CLASS": {},
     "ENGINE_A_DIRECTIONAL_RAMP_BY_CLASS": {},
+    # Minimum weighted vote margin before Engine A emits a concrete direction.
+    # 0.0 = disabled (legacy exact-tie only).
+    "ENGINE_A_DIRECTION_MIN_MARGIN": 0.05,
+    # Contra-trend intermarket/BTC conflict surfacing (default off).
+    "ENGINE_A_DIRECTION_INTERMARKET_CONFLICT_GUARD_ENABLED": True,
+    "ENGINE_A_DIRECTION_INTERMARKET_CONFLICT_MIN_SCORE": -0.12,
+    "ENGINE_A_DIRECTION_BTC_CONFLICT_GUARD_ENABLED": True,
+    "ENGINE_A_DIRECTION_BTC_CONFLICT_MIN_CORRELATION": 0.80,
+    # EMA cross gap when no previous bar is available (default 0.001 = 0.1%).
+    "ENGINE_A_EMA_CROSS_MIN_GAP": 0.001,
+    # Advisory reversal-pending when fresh crosses align before 2-bar confirm.
+    "ENGINE_A_REVERSAL_PENDING_ENABLED": True,
+    "ENGINE_A_REVERSAL_PENDING_MIN_TF": 2,
     "ENGINE_A_ADDON_UNSUPPORTED_SPLIT_BY_CLASS": {},
     "ENGINE_A_CONVICTION_FLOOR_BY_CLASS": {},
     "ENGINE_A_ADX_SOURCE_BY_CLASS": {},
@@ -2284,6 +2297,12 @@ CONFIG: dict = {
     # Scan-only: let Engine B re-check its own naked-structure direction when
     # the Engine A direction blocks B. Default-off to preserve historical scan behavior.
     "ENGINE_B_SCAN_INDEPENDENT_DIRECTION_ENABLED": False,
+    # When both LONG and SHORT pass gates, require this score gap before emitting.
+    # 0.0 = disabled (legacy max-score pick).
+    "ENGINE_B_DIRECTION_MIN_SCORE_GAP": 0.5,
+    # Block emit when independent structural opinion strongly opposes chosen side.
+    "ENGINE_B_DIRECTION_INDEPENDENT_CONFLICT_GUARD_ENABLED": True,
+    "ENGINE_B_DIRECTION_INDEPENDENT_CONFLICT_MIN_CONFIDENCE": "HIGH",
     # Scan-only: surface passed B-only structures as watchlist rows when A is
     # below its scan threshold. This does not grant execution permission.
     "ENGINE_B_SCAN_B_ONLY_WATCHLIST_ENABLED": False,

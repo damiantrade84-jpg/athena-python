@@ -3142,3 +3142,102 @@ def test_resolve_funding_stats_builds_rolling_mean_std(monkeypatch):
     assert stats["n"] == 5
     assert stats["mean"] == pytest.approx(0.0003)
     assert stats["std"] > 0
+
+
+def test_direction_deadband_rejects_razor_thin_margin(monkeypatch):
+    monkeypatch.setitem(CONFIG, "ENGINE_A_DIRECTION_MIN_MARGIN", 0.05)
+    votes = [("d1_ema_trend", 1.0, 0.5001), ("h4_ema_trend", -1.0, 0.4999)]
+    score, direction, detail = factor_scoring._finalize_coherent_trend_score(votes, {})
+    assert score == 0.0
+    assert direction is None
+    assert detail["error"] == "direction_margin_below_min"
+    assert detail["weighted_margin_below_min"] is True
+
+
+def test_compute_factor_scores_honors_direction_deadband_abort(monkeypatch):
+    monkeypatch.setitem(CONFIG, "ENGINE_A_DIRECTION_MIN_MARGIN", 0.05)
+    monkeypatch.setitem(
+        CONFIG,
+        "ENGINE_A_SCORING_PROFILE",
+        {"ENABLED": False},
+    )
+    monkeypatch.setitem(
+        CONFIG,
+        "INDICATOR_WEIGHTS",
+        {
+            "trend": {
+                "default": {
+                    "d1_ema_trend": 0.5001,
+                    "h4_ema_trend": 0.4999,
+                    "ema_trend": 0.0,
+                }
+            }
+        },
+    )
+    result = _score(_snap("long"), _snap("short"), _snap("neutral"))
+    assert result["direction"] is None
+    assert result["abort_reason"] == "direction_margin_below_min"
+
+
+def test_reversal_pending_overlay_emits_advisory_direction(monkeypatch):
+    monkeypatch.setitem(CONFIG, "ENGINE_A_REVERSAL_PENDING_ENABLED", True)
+    monkeypatch.setitem(CONFIG, "ENGINE_A_REVERSAL_PENDING_MIN_TF", 2)
+
+    score, direction, detail = factor_scoring._apply_reversal_pending_overlay(
+        0.0,
+        None,
+        {},
+        tf_specs=[
+            (_snap("long"), _snap("long"), "ema21", "ema50"),
+            (_snap("short"), _snap("long"), "ema21", "ema50"),
+            (_snap("short"), _snap("long"), "ema21", "ema50"),
+        ],
+    )
+    assert score == 0.0
+    assert direction == "SHORT"
+    assert detail["reversal_pending"] is True
+    assert detail["direction_status"] == "reversal_pending"
+
+
+def test_reversal_pending_advisory_result_is_not_executable():
+    result = factor_scoring._reversal_pending_advisory_result(
+        {"type": "stock", "display": "TEST"},
+        "TRENDING",
+        {"reversal_pending": True, "reversal_pending_direction": "SHORT"},
+        {},
+        direction="SHORT",
+    )
+    assert result["direction"] == "SHORT"
+    assert result["signalExecutable"] is False
+    assert result["directionStatus"] == "reversal_pending"
+    assert result["reversalPending"] is True
+
+
+def test_intermarket_conflict_guard_marks_result_not_executable(monkeypatch):
+    monkeypatch.setitem(
+        CONFIG, "ENGINE_A_DIRECTION_INTERMARKET_CONFLICT_GUARD_ENABLED", True
+    )
+
+    def _fake_apply_confirmation(*_args, **_kwargs):
+        return {
+            "adjusted_score": 2.0,
+            "confirmation": {
+                "verdict": "contradictory",
+                "score": -0.25,
+                "engineADelta": -0.1,
+            },
+        }
+
+    monkeypatch.setattr(
+        "intermarket.apply_confirmation_to_score",
+        _fake_apply_confirmation,
+    )
+    result = _score(
+        _snap("long"),
+        _snap("long"),
+        _snap("long"),
+        intermarket_context={"drivers": [{"name": "dxy"}]},
+    )
+    assert result["direction"] == "LONG"
+    assert result["directionConflictedWithIntermarket"] is True
+    assert result["signalExecutable"] is False

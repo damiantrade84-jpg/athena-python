@@ -1040,6 +1040,16 @@ def calc_confluence(
         factor_result["btc_bias_adjusted_score"] = _adjusted
         factor_result["btc_bias_delta"] = round(_adjusted - _fs, 4)
 
+    from athena_app.services.engine_a_direction import apply_direction_conflict_to_result
+
+    factor_result = apply_direction_conflict_to_result(
+        dict(factor_result),
+        intermarket_confirmation=factor_result.get("intermarket_confirmation"),
+        btc_bias=btc_bias if pair.get("type") == "crypto" else None,
+        btc_correlation=_btc_corr_diag,
+        btc_mult=factor_result.get("btc_bias_applied"),
+    )
+
     # Preserve warnings for readability using the same score_group-aware bounds as factor scoring.
     w = []
     s4 = h4["snap"]
@@ -1152,6 +1162,7 @@ def calc_confluence(
     _hard_abort = (
         factor_result.get("signalExecutable") is False
         or factor_result.get("directionStatus") == "diagnostic_only"
+        or factor_result.get("directionStatus") == "reversal_pending"
         or factor_result.get("abort_reason") in {
             "atr_invalid_abort",
             "indeterminate_trend",
@@ -1160,6 +1171,8 @@ def calc_confluence(
             "adx_missing_both_abort",
             "final_score_invalid",
             "weighted_tf_tie",
+            "direction_margin_below_min",
+            "reversal_pending_advisory",
         }
     )
     _pair_type = pair.get("type", "forex")
@@ -1201,6 +1214,7 @@ def calc_confluence(
         confidence_val = round(confidence_val * _lt_conf_mult, 4)
         _conf["confidence"] = confidence_val
         _conf["late_trend_confidence_mult"] = _lt_conf_mult
+    _tc = factor_result.get("trend_coherence") or {}
     # Legacy return dict
     result = {
         "score": score,
@@ -1221,6 +1235,18 @@ def calc_confluence(
         "fundingRate": funding_rate,
         "maxScoreOverride": 3.0,  # Engine A v2 score cap (trend × adx × session × conviction)
         "regimeNote": f"Regime: {_regime_str.upper()}",
+        "signalExecutable": factor_result.get("signalExecutable", True),
+        "directionStatus": factor_result.get("directionStatus"),
+        "directionConflicted": factor_result.get("directionConflicted", False),
+        "directionConflictedWithIntermarket": factor_result.get(
+            "directionConflictedWithIntermarket", False
+        ),
+        "directionConflictedWithBtc": factor_result.get("directionConflictedWithBtc", False),
+        "directionCoherenceRatio": _tc.get("coherence_ratio"),
+        "directionWeightedBalance": _tc.get("weighted_balance"),
+        "directionDominant": _tc.get("dominant_direction"),
+        "reversalPending": factor_result.get("reversalPending", False),
+        "reversalPendingDirection": factor_result.get("reversalPendingDirection"),
         # New fields for factor diagnostics (Unified to snake_case)
         "factor_scores": factor_result["factor_scores"],
         "factor_weights": factor_result["weights"],

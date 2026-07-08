@@ -493,9 +493,102 @@ def _ema_cross_confirmed(current_snap: dict, prev_snap: dict, fast_key: str, slo
 
     # No previous data — allow current bar only if gap is significant (>0.1%)
     _gap = abs(fast_cur - slow_cur) / abs(slow_cur) if slow_cur != 0 else 0
-    if _gap > 0.001:
+    if _gap > _ema_cross_min_gap():
         return 1.0 if cur_long else (-1.0 if cur_short else None)
     return None
+
+
+def _ema_cross_min_gap() -> float:
+    try:
+        return max(0.0, float(CONFIG.get("ENGINE_A_EMA_CROSS_MIN_GAP", 0.001) or 0.001))
+    except (TypeError, ValueError):
+        return 0.001
+
+
+def _fresh_ema_cross_sign(
+    current_snap: dict,
+    prev_snap: dict | None,
+    fast_key: str,
+    slow_key: str,
+) -> float | None:
+    """Return +/-1 only on the fresh-cross bar (current relation != previous)."""
+    if not isinstance(current_snap, dict) or not isinstance(prev_snap, dict):
+        return None
+    fast_cur = current_snap.get(fast_key)
+    slow_cur = current_snap.get(slow_key)
+    fast_prev = prev_snap.get(fast_key)
+    slow_prev = prev_snap.get(slow_key)
+    if fast_cur is None or slow_cur is None or fast_prev is None or slow_prev is None:
+        return None
+    try:
+        fast_cur = float(fast_cur)
+        slow_cur = float(slow_cur)
+        fast_prev = float(fast_prev)
+        slow_prev = float(slow_prev)
+    except (TypeError, ValueError):
+        return None
+    if slow_cur == 0 or slow_prev == 0:
+        return None
+
+    cur_long = fast_cur > slow_cur
+    cur_short = fast_cur < slow_cur
+    prev_long = fast_prev > slow_prev
+    prev_short = fast_prev < slow_prev
+    if cur_long and prev_long:
+        return None
+    if cur_short and prev_short:
+        return None
+    if cur_long and not prev_long:
+        return 1.0
+    if cur_short and not prev_short:
+        return -1.0
+    return None
+
+
+def _apply_reversal_pending_overlay(
+    trend_score: float,
+    direction: str | None,
+    detail: dict,
+    *,
+    tf_specs: list[tuple[dict, dict | None, str, str]],
+) -> tuple[float, str | None, dict]:
+    if not bool(CONFIG.get("ENGINE_A_REVERSAL_PENDING_ENABLED", False)):
+        return trend_score, direction, detail
+
+    try:
+        min_tf = int(CONFIG.get("ENGINE_A_REVERSAL_PENDING_MIN_TF", 2) or 2)
+    except (TypeError, ValueError):
+        min_tf = 2
+    min_tf = max(1, min_tf)
+
+    fresh_long = 0
+    fresh_short = 0
+    for cur_snap, prev_snap, fast_key, slow_key in tf_specs:
+        sign = _fresh_ema_cross_sign(cur_snap, prev_snap, fast_key, slow_key)
+        if sign is not None and sign > 0:
+            fresh_long += 1
+        elif sign is not None and sign < 0:
+            fresh_short += 1
+
+    pending_dir = None
+    if fresh_long >= min_tf and fresh_short < min_tf:
+        pending_dir = "LONG"
+    elif fresh_short >= min_tf and fresh_long < min_tf:
+        pending_dir = "SHORT"
+    if not pending_dir:
+        return trend_score, direction, detail
+
+    detail = dict(detail)
+    detail["reversal_pending"] = True
+    detail["reversal_pending_direction"] = pending_dir
+    confirmed = str(direction or "").upper()
+    if confirmed in ("LONG", "SHORT"):
+        if confirmed != pending_dir:
+            detail["reversal_pending_opposes_confirmed"] = True
+        return trend_score, direction, detail
+
+    detail["direction_status"] = "reversal_pending"
+    return 0.0, pending_dir, detail
 
 
 def _trend_magnitude_cfg() -> dict:
@@ -580,7 +673,14 @@ def _coherent_trend_score_legacy(
     elif h1_snap.get("ema21") is not None and h1_snap.get("ema50") is not None:
         detail["h1_hysteresis_pending"] = True
 
-    return _finalize_coherent_trend_score(votes, detail, vote_strengths=vote_strengths)
+    return _apply_reversal_pending_overlay(
+        *_finalize_coherent_trend_score(votes, detail, vote_strengths=vote_strengths),
+        tf_specs=[
+            (d1_snap, d1_prev, "ema21", "ema200"),
+            (h4_snap, h4_prev, "ema21", "ema50"),
+            (h1_snap, h1_prev, "ema21", "ema50"),
+        ],
+    )
 
 
 def _coherent_trend_score_from_profile(
@@ -627,7 +727,18 @@ def _coherent_trend_score_from_profile(
             detail[f"{tf_key}_hysteresis_pending"] = True
 
     detail["trend_timeframes"] = list(scoring_profile.get("trend_timeframes") or [])
-    return _finalize_coherent_trend_score(votes, detail, vote_strengths=vote_strengths)
+    tf_specs = []
+    for layer in layers:
+        tf = str(layer.get("tf") or "").upper()
+        snap = snaps.get(tf) or {}
+        prev = prevs.get(tf)
+        fast_ema = str(layer.get("fast_ema") or "ema21")
+        slow_ema = str(layer.get("slow_ema") or "ema50")
+        tf_specs.append((snap, prev, fast_ema, slow_ema))
+    return _apply_reversal_pending_overlay(
+        *_finalize_coherent_trend_score(votes, detail, vote_strengths=vote_strengths),
+        tf_specs=tf_specs,
+    )
 
 
 def _finalize_coherent_trend_score(
@@ -673,6 +784,25 @@ def _finalize_coherent_trend_score(
     _coh_floor = float(CONFIG.get("COHERENCE_RATIO_FLOOR", 0.0))
     _coh_floor = max(0.0, min(1.0, _coh_floor))
     weighted_margin = abs(long_w - short_w) / total_w
+    try:
+        _min_margin = float(CONFIG.get("ENGINE_A_DIRECTION_MIN_MARGIN", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        _min_margin = 0.0
+    if _min_margin > 0 and weighted_margin < _min_margin:
+        detail["weighted_margin_below_min"] = True
+        detail["direction_min_margin"] = _min_margin
+        detail["long_weight"] = round(long_w, 4)
+        detail["short_weight"] = round(short_w, 4)
+        detail["weighted_balance"] = round((long_w - short_w) / total_w, 4)
+        detail["vote_components"] = [
+            {
+                "component": name,
+                "direction": "LONG" if d > 0 else "SHORT",
+                "weight": round(w, 4),
+            }
+            for name, d, w in votes
+        ]
+        return 0.0, None, {"error": "direction_margin_below_min", **detail}
     coherence_ratio = max(_coh_floor, min(1.0, weighted_margin))
     agreement_count = sum(1 for _, d, _ in votes if d == dominant_sign)
     # Scale by TF coverage so a single available TF cannot produce a full 3.0 score.
@@ -3254,12 +3384,32 @@ def compute_factor_scores(
     # direction=None from _coherent_trend_score means D1/H4/H1 trend votes are
     # perfectly balanced (weighted tie) or no EMA data was available.  This is an
     # intentional hard abort — the engine genuinely cannot determine direction.
+    _reversal_pending_only = (
+        bool(trend_detail.get("reversal_pending"))
+        and trend_detail.get("direction_status") == "reversal_pending"
+        and direction in ("LONG", "SHORT")
+    )
+    if _reversal_pending_only:
+        log.debug("[EA2] %s reversal-pending advisory direction=%s", display, direction)
+        _bbw_pct_for_exit = h4_snap.get("bbWidth_pct") or h4_snap.get("bb_width_pct")
+        regime_raw = detect_regime(_regime_snap, asset_type, bb_width_pct=_bbw_pct_for_exit).get("regime", "UNKNOWN")
+        regime = _get_smoothed_regime(regime_context, pair_id, regime_raw)
+        return _reversal_pending_advisory_result(
+            pair, regime, trend_detail, feed_status, direction=direction,
+        )
+
     if direction is None or abs(trend_score) < 1e-9:
         log.debug("[EA2] %s trend indeterminate — score=0", display)
         _bbw_pct_for_exit = h4_snap.get("bbWidth_pct") or h4_snap.get("bb_width_pct")
         regime_raw = detect_regime(_regime_snap, asset_type, bb_width_pct=_bbw_pct_for_exit).get("regime", "UNKNOWN")
         regime = _get_smoothed_regime(regime_context, pair_id, regime_raw)
-        return _zero_result(pair, regime, trend_detail, feed_status, reason="indeterminate_trend")
+        _trend_err = str(trend_detail.get("error") or "")
+        _reason = (
+            _trend_err
+            if _trend_err in _NON_TRADABLE_ABORT_REASONS
+            else "indeterminate_trend"
+        )
+        return _zero_result(pair, regime, trend_detail, feed_status, reason=_reason)
 
     # ── Directional gate: hard cut + soft confidence ramp ────────────────────
     # Below `min_directional`: abort (trend signal is too weak to justify any score).
@@ -3959,6 +4109,8 @@ def compute_factor_scores(
                 "error": "structure_context_error",
             }
 
+    from athena_app.services.engine_a_direction import apply_direction_conflict_to_result
+
     asset_diagnostics = {
         "asset_type": asset_type,
         "score_group": score_group,
@@ -4017,12 +4169,17 @@ def compute_factor_scores(
         mom_quality, addon_val, addon_type, mean_rev_adj, session_mult, regime,
     )
 
-    return {
+    _tc = trend_detail or {}
+    result = {
         # ── Core outputs ──────────────────────────────────────────────────────
         "final_score": round(final_score, 4),
         "direction": direction,
         "regime": regime,
         "signal_status": "ok",
+        "signalExecutable": True,
+        "directionStatus": _tc.get("direction_status") or "ok",
+        "reversalPending": bool(_tc.get("reversal_pending")),
+        "reversalPendingDirection": _tc.get("reversal_pending_direction"),
         # ── Factor breakdown (UI + AI) ────────────────────────────────────────
         "factor_scores": factor_scores,
         "factor_breakdown": {
@@ -4113,6 +4270,10 @@ def compute_factor_scores(
             mean_rev_detail,
         ),
     }
+    return apply_direction_conflict_to_result(
+        result,
+        intermarket_confirmation=intermarket_confirmation,
+    )
 
 
 _NON_TRADABLE_ABORT_REASONS = {
@@ -4123,7 +4284,60 @@ _NON_TRADABLE_ABORT_REASONS = {
     "adx_missing_both_abort",
     "final_score_invalid",
     "weighted_tf_tie",
+    "direction_margin_below_min",
 }
+
+
+def _reversal_pending_advisory_result(
+    pair: dict,
+    regime: str,
+    trend_detail: dict,
+    feed_status: dict,
+    *,
+    direction: str,
+) -> dict:
+    """Advisory-only reversal direction before 2-bar EMA confirmation."""
+    asset_type = pair.get("type", "stock")
+    score_group = _resolve_pair_score_group(pair)
+    weight_cfg = _resolve_factor_weights(score_group, asset_type)
+    pending_dir = str(direction or "").upper()
+    return {
+        "final_score": 0.0,
+        "direction": pending_dir if pending_dir in ("LONG", "SHORT") else None,
+        "diagnostic_direction": pending_dir,
+        "signalExecutable": False,
+        "directionStatus": "reversal_pending",
+        "reversalPending": True,
+        "reversalPendingDirection": trend_detail.get("reversal_pending_direction"),
+        "directionConflicted": False,
+        "directionConflictedWithIntermarket": False,
+        "directionConflictedWithBtc": False,
+        "regime": regime,
+        "signal_status": "advisory",
+        "factor_scores": {"trend": 0.0, "momentum": 0.0, "addon": 0.0, "research_lab": 0.0, "mean_reversion": 0.0},
+        "factor_breakdown": {
+            "trend": 0.0,
+            "momentum": 0.0,
+            "addon": 0.0,
+            "research_lab": 0.0,
+            "mean_reversion": 0.0,
+            "adx_multiplier": 0.0,
+            "conviction": 0.0,
+            "final_score": 0.0,
+            "abort_reason": "reversal_pending_advisory",
+        },
+        "weights": {"trend": 1.0, **weight_cfg},
+        "asset_type": asset_type,
+        "score_group": score_group,
+        "trend_coherence": trend_detail,
+        "directional_score": 0.0,
+        "nondirectional_score": 0.0,
+        "feed_status": feed_status,
+        "abort_reason": "reversal_pending_advisory",
+        "indeterminate_direction": False,
+        "intermarket_confirmation": None,
+        "intermarket_engine_a_delta": 0.0,
+    }
 
 
 def _zero_result(

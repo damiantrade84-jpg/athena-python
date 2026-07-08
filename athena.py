@@ -56,6 +56,12 @@ from athena_app.services.scan_completion_hooks import (
     publish_scan_result_and_schedule_conductor,
 )
 from athena_app.services.candle_service import recompute_levels_for_style
+from athena_app.services.engine_b_direction import (
+    annotate_signal_direction_metadata,
+    independent_conflict_blocks_emit,
+    normalize_caller_direction,
+    resolve_analysis_direction,
+)
 from athena_app.repositories.audit_repo import insert_manual_error
 from stability_monitor import (
     get_signal_stability_index,
@@ -5889,7 +5895,11 @@ init_learning_db(_AUDIT_DB)
 ensure_advisory_store(_AUDIT_DB)
 
 
-from scanner import run_full_scan, _engine_b_scan_freshness_stale_tfs  # noqa: E402
+from scanner import (  # noqa: E402
+    run_full_scan,
+    _engine_b_independent_direction_probe,
+    _engine_b_scan_freshness_stale_tfs,
+)
 
 from auto_trader import auto_trader as _auto_trader  # noqa: E402
 
@@ -6681,11 +6691,12 @@ def _compute_naked_analysis(
     if not pair_obj:
         return None, None, "Invalid signal"
 
-    direction = str(sig.get("direction", "LONG")).upper()
-    if direction not in ("LONG", "SHORT"):
-        if execution_mode:
-            return None, pair_obj, "Invalid Engine B execution direction"
-        direction = "LONG"
+    direction, _dir_err = normalize_caller_direction(
+        sig.get("direction"),
+        execution_mode=execution_mode,
+    )
+    if _dir_err:
+        return None, pair_obj, _dir_err
 
     def _enrich_engine_b_ai_payload(payload: dict) -> dict:
         enriched = dict(payload or {})
@@ -6786,11 +6797,32 @@ def _compute_naked_analysis(
                 if isinstance(state, dict)
             )
         else:
-            from candle_manager import fetch_market_state as _fms
+            from athena_app.services.market_state import (
+                market_state_offset_hours,
+                split_market_state,
+            )
 
-            d1_state = _fms(pair_obj, "D1", _clim["D1"])
-            h4_state = _fms(pair_obj, "H4", _clim["H4"])
-            h1_state = _fms(pair_obj, "H1", _clim["H1"])
+            d1_state = {}
+            h4_state = {}
+            h1_state = {}
+            for tf, limit in (
+                ("D1", _clim["D1"]),
+                ("H4", _clim["H4"]),
+                ("H1", _clim["H1"]),
+            ):
+                raw, _crypto_meta = _fetch_ab_crypto_signal_candles(pair_obj, tf, limit)
+                _state = split_market_state(
+                    list(raw or []),
+                    tf,
+                    pair_obj.get("display") or pair_obj.get("symbol") or "",
+                    offset_hours=market_state_offset_hours(pair_obj, tf),
+                )
+                if tf == "D1":
+                    d1_state = _state
+                elif tf == "H4":
+                    h4_state = _state
+                else:
+                    h1_state = _state
             d1 = _market_state_series(d1_state, include_forming=_use_forming_structure)
             h4 = _market_state_series(h4_state, include_forming=_use_forming_structure)
             h1 = _market_state_series(h1_state, include_forming=_use_forming_structure)
@@ -6908,6 +6940,7 @@ def _compute_naked_analysis(
             NakedEngine,
             _engine_b_regime_gate,
             engine_b_confidence_passes,
+            resolve_engine_b_h4_snap,
         )
 
         engine = NakedEngine()
@@ -6922,27 +6955,60 @@ def _compute_naked_analysis(
             _na_d1_snap = (
                 calc_indicators_with_normalized(d1, pair_obj.get("type", "stock")) or {}
             ).get("snap") or {}
-            _na_h4_snap = (
-                calc_indicators_with_normalized(zone_candles, pair_obj.get("type", "stock")) or {}
-            ).get("snap") or {}
+            _na_h4_snap = resolve_engine_b_h4_snap(
+                h4, pair_obj.get("type", "stock")
+            )
         except Exception:
             pass
-        res = engine.set_registry_context(
-            pair_obj.get("symbol") or pair_obj.get("display")
-        ).analyze_structure(
-            d1,
-            zone_candles,
-            structure_entry_candles,
-            current_price,
-            direction,
-            atr,
-            regime_label,
-            asset_type=pair_obj.get("type", ""),
-            d1_snap=_na_d1_snap,
-            h4_snap=_na_h4_snap,
-            style=resolved_style,
-            pair=pair_obj,
-        )
+
+        _direction_source = "caller"
+        _probe_res = None
+        _probe_conf = None
+        if direction is None:
+            direction, _probe_res, _probe_conf, _direction_source, _dir_resolve_err = (
+                resolve_analysis_direction(
+                    direction=direction,
+                    probe_fn=_engine_b_independent_direction_probe,
+                    probe_kwargs={
+                        "pair": pair_obj,
+                        "engine": engine,
+                        "d1_candles": d1,
+                        "h4_candles": h4,
+                        "h1_candles": h1,
+                        "entry_candles": structure_entry_candles,
+                        "current_price": current_price,
+                        "atr": atr,
+                        "regime_label": regime_label,
+                        "style_profile": style_profile,
+                        "resolved_style": resolved_style,
+                        "asset_type": pair_obj.get("type", ""),
+                        "d1_snap": _na_d1_snap,
+                        "h4_snap": _na_h4_snap,
+                    },
+                )
+            )
+            if _dir_resolve_err:
+                return None, pair_obj, _dir_resolve_err
+
+        if _probe_res is not None:
+            res = _probe_res
+        else:
+            res = engine.set_registry_context(
+                pair_obj.get("symbol") or pair_obj.get("display")
+            ).analyze_structure(
+                d1,
+                h4,
+                h1,
+                current_price,
+                direction,
+                atr,
+                regime_label,
+                asset_type=pair_obj.get("type", ""),
+                d1_snap=_na_d1_snap,
+                h4_snap=_na_h4_snap,
+                style=resolved_style,
+                pair=pair_obj,
+            )
 
         try:
             from ai_learning import get_ai_learning_context
@@ -6955,14 +7021,17 @@ def _compute_naked_analysis(
             learning_ctx = None
 
         _pair_type = pair_obj.get("type", "")
-        conf = engine.calculate_confidence(
-            res,
-            current_price,
-            direction,
-            learning_ctx,
-            entry_candles=trigger_candles,
-            style_profile=style_profile,
-        )
+        if _probe_conf is not None:
+            conf = _probe_conf
+        else:
+            conf = engine.calculate_confidence(
+                res,
+                current_price,
+                direction,
+                learning_ctx,
+                entry_candles=trigger_candles,
+                style_profile=style_profile,
+            )
         _gate_ok, _min_score_scaled = engine_b_confidence_passes(
             conf,
             style_profile,
@@ -6984,6 +7053,7 @@ def _compute_naked_analysis(
         res["passed"] = bool(_gate_ok)
         res["current_price"] = current_price
         res["direction"] = direction
+        res["direction_source"] = _direction_source
         res["style"] = resolved_style
         res["regime"] = regime_label
         res["is_forming"] = is_forming_b
@@ -7201,17 +7271,18 @@ def api_compare_engines():
         compare_direction = (
             sig.get("direction") if sig.get("is_naked") else engine_a.get("direction")
         )
+        compare_direction = str(compare_direction or "").upper()
         engine_b_seed = dict(sig)
-        engine_b_seed.update(
-            {
-                "symbol": pair_obj.get("symbol"),
-                "pair": pair_obj.get("display"),
-                "display": pair_obj.get("display"),
-                "type": pair_obj.get("type"),
-                "direction": compare_direction,
-                "price": engine_a.get("price", sig.get("price")),
-            }
-        )
+        _engine_b_seed_updates = {
+            "symbol": pair_obj.get("symbol"),
+            "pair": pair_obj.get("display"),
+            "display": pair_obj.get("display"),
+            "type": pair_obj.get("type"),
+            "price": engine_a.get("price", sig.get("price")),
+        }
+        if compare_direction in ("LONG", "SHORT"):
+            _engine_b_seed_updates["direction"] = compare_direction
+        engine_b_seed.update(_engine_b_seed_updates)
         engine_b, _pair_obj, err = _compute_naked_analysis(
             engine_b_seed, engine_a_ctx=engine_a, force_ai=True
         )
@@ -7412,6 +7483,7 @@ def api_scan_naked():
         }
 
         _best_signal = None
+        _direction_candidates: list[dict] = []
         try:
             engine = NakedEngine()
 
@@ -7498,6 +7570,8 @@ def api_scan_naked():
             structure_entry_candles = _tf_map.get(_entry_tf, [])
             entry_candles = _tf_trigger_map.get(_entry_tf, _tf_map.get(_entry_tf, []))
             d1_candles = _tf_map.get("D1", [])
+            h4_candles = _tf_map.get("H4", [])
+            h1_candles = _tf_map.get("H1", [])
             atr_candles = _tf_map.get(_atr_tf, zone_candles)
             _engine_b_is_forming = any(
                 bool((_tf_state_map.get(tf) or {}).get("is_live"))
@@ -7584,12 +7658,13 @@ def api_scan_naked():
 
             current_price = float(entry_candles[-1]["close"])
 
-            # Test both directions
-            # analyze_structure uses: arg2 (h4 slot) for zones/macro, arg3 (h1 slot) for micro/BOS/sweep
+            # analyze_structure expects canonical D1/H4/H1 candle series
             regime_label = _engine_b_regime_label(zone_candles, pair.get("type", "stock"))
             _eb_d1_snap = {}
-            _eb_zone_snap = {}
+            _eb_h4_snap = {}
             try:
+                from market_structure import resolve_engine_b_h4_snap
+
                 if len(d1_candles) >= 20:
                     _eb_d1_snap = (
                         calc_indicators_with_normalized(
@@ -7597,13 +7672,9 @@ def api_scan_naked():
                         )
                         or {}
                     ).get("snap") or {}
-                if len(zone_candles) >= 20:
-                    _eb_zone_snap = (
-                        calc_indicators_with_normalized(
-                            zone_candles, pair.get("type", "stock")
-                        )
-                        or {}
-                    ).get("snap") or {}
+                _eb_h4_snap = resolve_engine_b_h4_snap(
+                    h4_candles, pair.get("type", "stock")
+                )
             except Exception:
                 pass
             local_results = []
@@ -7701,8 +7772,8 @@ def api_scan_naked():
                     pair.get("symbol") or pair.get("display")
                 ).analyze_structure(
                     d1_candles,
-                    zone_candles,
-                    structure_entry_candles,
+                    h4_candles,
+                    h1_candles,
                     current_price,
                     direction,
                     atr,
@@ -7710,7 +7781,7 @@ def api_scan_naked():
                     fallback_rr=style_profile.get("fallback_rr", 2.0),
                     asset_type=pair.get("type", ""),
                     d1_snap=_eb_d1_snap,
-                    h4_snap=_eb_zone_snap,
+                    h4_snap=_eb_h4_snap,
                     style=resolved_style,
                     pair=pair,
                 )
@@ -8085,8 +8156,30 @@ def api_scan_naked():
                 except Exception:
                     pass
 
-                if _best_signal is None or signal["confluenceScore"] > _best_signal["confluenceScore"]:
-                    _best_signal = signal
+                annotate_signal_direction_metadata(signal, _res, direction)
+                _direction_candidates.append(signal)
+
+            from engine_b_subsystems import (
+                engine_b_direction_min_score_gap,
+                engine_b_pick_directional_candidate,
+            )
+
+            _picked_signal = engine_b_pick_directional_candidate(
+                _direction_candidates,
+                min_gap=engine_b_direction_min_score_gap(),
+                score_key="confluenceScore",
+            )
+            if _picked_signal is None and _direction_candidates:
+                debug_row["final_reject_reason"] = "direction_score_gap_too_small"
+            elif _picked_signal is not None:
+                if independent_conflict_blocks_emit(
+                    _picked_signal["direction"],
+                    _picked_signal.get("naked_data"),
+                ):
+                    debug_row["final_reject_reason"] = "independent_direction_conflict"
+                    _picked_signal["independent_conflict"] = True
+                else:
+                    _best_signal = _picked_signal
 
             if _best_signal is None:
                 if not debug_row["long_structural_verdict"] and not debug_row["short_structural_verdict"]:

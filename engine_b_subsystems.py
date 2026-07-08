@@ -150,3 +150,35 @@ def compute_subsystem_orderflow_score(
     if weight_sum <= 0:
         return 0.0
     return round(_clamp01(score_sum / weight_sum), 4)
+
+
+def engine_b_pick_directional_candidate(
+    candidates: list[dict[str, Any]],
+    *,
+    min_gap: float = 0.0,
+    score_key: str = "score",
+) -> dict[str, Any] | None:
+    """Pick the best directional candidate, optionally requiring a minimum score gap."""
+    if not candidates:
+        return None
+
+    def _score(candidate: dict[str, Any]) -> float:
+        try:
+            return float(candidate.get(score_key) or 0.0)
+        except (TypeError, ValueError):
+            return 0.0
+
+    ranked = sorted(candidates, key=_score, reverse=True)
+    if len(ranked) >= 2 and min_gap > 0:
+        if _score(ranked[0]) - _score(ranked[1]) < min_gap:
+            return None
+    return ranked[0]
+
+
+def engine_b_direction_min_score_gap() -> float:
+    try:
+        from config import CONFIG
+
+        return max(0.0, float(CONFIG.get("ENGINE_B_DIRECTION_MIN_SCORE_GAP", 0.0) or 0.0))
+    except (TypeError, ValueError):
+        return 0.0

@@ -915,6 +915,14 @@ ENGINE_A_ATR_ADX_PERIODS_BY_CLASS:
 
 # Engine A scoring profile: trend TF stack, style weights, momentum/regime anchors.
 # D1/H4/H1 layers are unchanged by default; style adjusts trend weights only.
+ENGINE_A_DIRECTION_MIN_MARGIN: 0.05
+ENGINE_A_DIRECTION_INTERMARKET_CONFLICT_GUARD_ENABLED: true
+ENGINE_A_DIRECTION_INTERMARKET_CONFLICT_MIN_SCORE: -0.12
+ENGINE_A_DIRECTION_BTC_CONFLICT_GUARD_ENABLED: true
+ENGINE_A_DIRECTION_BTC_CONFLICT_MIN_CORRELATION: 0.80
+ENGINE_A_EMA_CROSS_MIN_GAP: 0.001
+ENGINE_A_REVERSAL_PENDING_ENABLED: true
+ENGINE_A_REVERSAL_PENDING_MIN_TF: 2
 ENGINE_A_SCORING_PROFILE:
   ENABLED: true
   DEFAULT_BY_CLASS:
@@ -3780,6 +3788,12 @@ ENGINE_B_SCAN_CONFIRMATION_GATE_ENABLED: false
 # naked-structure direction when the Engine A direction blocks B. config.py
 # remains default-off.
 ENGINE_B_SCAN_INDEPENDENT_DIRECTION_ENABLED: true
+# When both LONG and SHORT pass gates, require this score gap before emitting.
+# 0.0 = disabled (legacy max-score pick).
+ENGINE_B_DIRECTION_MIN_SCORE_GAP: 0.5
+# Block emit when independent structural opinion strongly opposes chosen side.
+ENGINE_B_DIRECTION_INDEPENDENT_CONFLICT_GUARD_ENABLED: true
+ENGINE_B_DIRECTION_INDEPENDENT_CONFLICT_MIN_CONFIDENCE: HIGH
 # Scan-only paper/demo diagnostics: passed B-only setups surface as watchlist
 # rows instead of disappearing behind Engine A's scan tier. No execution bypass.
 ENGINE_B_SCAN_B_ONLY_WATCHLIST_ENABLED: true
@@ -3973,6 +3987,7 @@ SCALP_ENGINE:
   # ── Directional Filter ────────────────────────────────────
 
   WITH_TREND_ONLY: true         # Reject counter-trend scalp setups
+  WITH_TREND_ONLY_HARD_BLOCK: true  # Route counter-trend to mechanical gate (not soft-warning only)
 
   BIAS_TIMEFRAME: "H1"          # Higher-TF direction gate for scalp signals
 
@@ -4098,6 +4113,33 @@ SCALP_ENGINE:
   STOP_RUN_DETECTION_ENABLED: true
   STOP_RUN_WICK_PCT: 0.60              # Wick % of range to count as confirmed stop-run
   STOP_RUN_WICK_SUSPECT_PCT: 0.40      # Wick % for suspected stop-run
+  ATR_STOP_RUN_WICK_K: 0.25            # ATR multiplier blended into stop-run wick threshold
+  ATR_STOP_RUN_WICK_SUSPECT_K: 0.18    # ATR multiplier for suspected stop-run wick threshold
+
+  # VWAP band entry timing (reduces chop entries inside ±σ bands)
+  VWAP_BAND_ENTRY_TIMING_ENABLED: true
+  VWAP_BAND_CHOP_BLOCK_ENABLED: true
+
+  # Large trade-bucket notional at VP level (crypto confirmation pillar)
+  LIQUIDITY_AT_LEVEL_ENABLED: true
+
+  # CVD acceleration (2nd derivative) grade bump when flow is strengthening
+  CVD_ACCELERATION_GRADING_ENABLED: true
+  CVD_MIN_ACCELERATION: 0.0
+  CVD_ACCELERATION_GRADE_BUMP: 3
+
+  # Post London-open range expansion filter for trend setups (after cooldown window)
+  SESSION_OPEN_EXPANSION_FILTER_ENABLED: true
+  SESSION_OPEN_EXPANSION_BARS: 4
+
+  # Fee guard: use VP invalidation distance (not ATR-widened execution SL) for cost_as_R
+  ENGINE_D_FEE_GUARD_USE_STRUCTURAL_SL: true
+  ENGINE_D_MAX_COST_R_CLASS:
+    crypto: 0.40
+    forex: 0.20
+    commodity: 0.25
+    index: 0.25
+    stock: 0.25
 
   # ── Time-of-Day Grading Adjustment ────────────────────────
   # Adjusts signal quality by hour of day (UTC). Reduces false signals

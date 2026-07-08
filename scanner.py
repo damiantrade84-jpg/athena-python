@@ -28,6 +28,11 @@ from scoring import (
     get_pair_score_group,
 )
 from engine_c import ENGINE_C_AB_WEIGHTS
+from athena_app.services.engine_b_direction import (
+    annotate_signal_direction_metadata,
+    independent_conflict_blocks_emit,
+)
+from engine_b_subsystems import engine_b_direction_min_score_gap, engine_b_pick_directional_candidate
 from market_structure import (
     NakedEngine,
     _reset_engine_b_gate_failures,
@@ -342,24 +347,11 @@ def _resolve_engine_b_h4_snap(
     zone_candles: list | None,
     asset_type: str,
 ) -> dict:
-    """Return the H4 indicator snapshot Engine B should consume.
+    """Return the H4 indicator snapshot Engine B should consume."""
+    from market_structure import resolve_engine_b_h4_snap
 
-    Previously the Engine B scanner path computed an ``h4_snap`` from
-    ``zone_candles_b`` and passed it as ``h4_snap=...`` into Engine B. For
-    swing style ``zone_candles_b`` is D1, so Engine B was reading D1
-    indicators (notably ADX) while believing they came from H4. This helper
-    builds the snap from the actual H4 candle series; if H4 candles are
-    unavailable it returns an empty dict so callers fall back to Engine B's
-    internal candle-derived ADX path instead of being silently fed the wrong
-    timeframe.
-    """
-    if not h4_candles:
-        return {}
-    try:
-        snap = (calc_indicators_with_normalized(h4_candles, asset_type) or {}).get("snap")
-    except Exception:
-        return {}
-    return snap or {}
+    _ = zone_candles  # legacy param; zone TF may be D1 for swing
+    return resolve_engine_b_h4_snap(h4_candles, asset_type)
 
 
 def _apply_engine_b_scan_levels(signal: dict, conf_b: dict | None, res_b: dict | None) -> None:
@@ -1019,7 +1011,8 @@ def _engine_b_independent_direction_probe(
     *,
     engine,
     d1_candles: list,
-    zone_candles: list,
+    h4_candles: list,
+    h1_candles: list,
     entry_candles: list,
     current_price: float,
     atr: float,
@@ -1038,14 +1031,14 @@ def _engine_b_independent_direction_probe(
     not-passed, then higher confidence score. Returns ``(None, None, None)``
     when neither direction has a CLEAR structural verdict.
     """
-    best: tuple[bool, float, str, dict, dict] | None = None
+    candidates: list[dict[str, Any]] = []
     for try_direction in ("LONG", "SHORT"):
         res_b = engine.set_registry_context(
             pair.get("symbol") or pair.get("display")
         ).analyze_structure(
             d1_candles or [],
-            zone_candles,
-            entry_candles,
+            h4_candles or [],
+            h1_candles or [],
             current_price,
             try_direction,
             atr,
@@ -1063,7 +1056,7 @@ def _engine_b_independent_direction_probe(
             res_b,
             current_price,
             try_direction,
-            entry_candles=entry_candles or zone_candles,
+            entry_candles=entry_candles,
             style_profile=style_profile,
         )
         gate_ok, _ = engine_b_confidence_passes(
@@ -1073,9 +1066,51 @@ def _engine_b_independent_direction_probe(
             score = float(conf_b.get("score") or 0.0)
         except (TypeError, ValueError):
             score = 0.0
-        candidate = (bool(gate_ok), score, try_direction, res_b, conf_b)
-        if best is None or candidate > best:
-            best = candidate
+        candidates.append(
+            {
+                "direction": try_direction,
+                "score": score,
+                "gate_ok": bool(gate_ok),
+                "res_b": res_b,
+                "conf_b": conf_b,
+            }
+        )
+
+    if not candidates:
+        return None, None, None
+
+    passed_candidates = [
+        {
+            "direction": c["direction"],
+            "score": c["score"],
+            "res_b": c["res_b"],
+            "conf_b": c["conf_b"],
+        }
+        for c in candidates
+        if c["gate_ok"]
+    ]
+    if passed_candidates:
+        picked = engine_b_pick_directional_candidate(
+            passed_candidates,
+            min_gap=engine_b_direction_min_score_gap(),
+        )
+        if picked is None:
+            return None, None, None
+        if independent_conflict_blocks_emit(picked["direction"], picked["res_b"]):
+            return None, None, None
+        return picked["direction"], picked["res_b"], picked["conf_b"]
+
+    best: tuple[bool, float, str, dict, dict] | None = None
+    for candidate in candidates:
+        row = (
+            candidate["gate_ok"],
+            candidate["score"],
+            candidate["direction"],
+            candidate["res_b"],
+            candidate["conf_b"],
+        )
+        if best is None or row > best:
+            best = row
     if best is None:
         return None, None, None
     _, _, direction, res_b, conf_b = best
@@ -2284,7 +2319,8 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict[s
                                         pair,
                                         engine=_engine_b,
                                         d1_candles=d1 or [],
-                                        zone_candles=zone_candles_b,
+                                        h4_candles=h4 or [],
+                                        h1_candles=h1 or [],
                                         entry_candles=entry_candles_b,
                                         current_price=current_price,
                                         atr=atr,
@@ -2315,8 +2351,8 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict[s
                                         pair.get("symbol") or pair.get("display")
                                     ).analyze_structure(
                                         d1 or [],
-                                        zone_candles_b,
-                                        entry_candles_b,
+                                        h4 or [],
+                                        h1 or [],
                                         current_price,
                                         direction,
                                         atr,
@@ -2372,8 +2408,8 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict[s
                                                 pair.get("symbol") or pair.get("display")
                                             ).analyze_structure(
                                                 d1 or [],
-                                                zone_candles_b,
-                                                entry_candles_b,
+                                                h4 or [],
+                                                h1 or [],
                                                 current_price,
                                                 _alt_direction,
                                                 atr,
@@ -2425,6 +2461,11 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict[s
                                     sig_a["engine_b_gate_max"] = round(b_gate_max, 2) if b_gate_max else None
                                     sig_a["engine_b_pct"] = round(b_gate_pct_f, 1)
                                     sig_a["engine_b_direction"] = _engine_b_direction_used
+                                    annotate_signal_direction_metadata(
+                                        sig_a,
+                                        res_b,
+                                        _engine_b_direction_used,
+                                    )
                                     sig_a["engine_b_verdict"] = res_b.get("structural_verdict")
                                     sig_a["engine_b_bos"] = res_b.get("bos_confirmed", False)
                                     sig_a["engine_b_ob"] = res_b.get("ob_at_zone", False)

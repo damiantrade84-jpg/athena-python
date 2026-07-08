@@ -33,6 +33,8 @@ from athena_app.services.structure_context import (
     apply_engine_a_correlated_overlay_guard,
     apply_structure_context_to_score,
 )
+from athena_app.services.engine_b_direction import independent_conflict_blocks_emit
+from engine_b_subsystems import engine_b_direction_min_score_gap, engine_b_pick_directional_candidate
 from backtest_candle_cache import fetch_backtest_candles, fetch_backtest_eodhd_intraday
 from calibration import calibration_report
 from config import CONFIG, _json_safe, get_optimal_workers
@@ -1482,8 +1484,9 @@ def _engine_c_select_engine_b_bt_candidate(
     *,
     naked_engine,
     d1_ctx: list,
-    zone_ctx: list,
-    h1_window: list,
+    h4_ctx: list,
+    h1_ctx: list,
+    entry_ctx: list,
     current_price: float,
     atr: float,
     regime_label: str,
@@ -1509,8 +1512,8 @@ def _engine_c_select_engine_b_bt_candidate(
     if hasattr(naked_engine, "precompute_structure_data") and hasattr(naked_engine, "analyze_structure_direction"):
         precomputed = naked_engine.precompute_structure_data(
             d1_ctx,
-            zone_ctx,
-            h1_window,
+            h4_ctx,
+            h1_ctx,
             current_price,
             atr,
             regime=regime_label,
@@ -1530,8 +1533,8 @@ def _engine_c_select_engine_b_bt_candidate(
         else:
             res_b = naked_engine.analyze_structure(
                 d1_ctx,
-                zone_ctx,
-                h1_window,
+                h4_ctx,
+                h1_ctx,
                 current_price,
                 b_direction,
                 atr,
@@ -1551,7 +1554,7 @@ def _engine_c_select_engine_b_bt_candidate(
             res_b,
             current_price,
             b_direction,
-            entry_candles=h1_window,
+            entry_candles=entry_ctx,
             style_profile=style_profile,
         )
         b_gate_ok, b_scaled_min = confidence_passes(
@@ -1610,12 +1613,20 @@ def _engine_d_fee_guard_metrics(
     sl: float,
     estimated_fee_pct: float,
     estimated_slippage_pct: float,
+    invalidation_distance: float | None = None,
 ) -> dict:
-    risk_distance_abs = abs(float(entry) - float(sl))
+    if cfg.get("ENGINE_D_FEE_GUARD_USE_STRUCTURAL_SL", True) and invalidation_distance is not None:
+        risk_distance_abs = float(invalidation_distance)
+    else:
+        risk_distance_abs = abs(float(entry) - float(sl))
     risk_distance_pct = risk_distance_abs / float(entry) if float(entry) > 0 else 0.0
     estimated_total_cost_pct = float(estimated_fee_pct) + float(estimated_slippage_pct)
     cost_as_r = estimated_total_cost_pct / risk_distance_pct if risk_distance_pct > 0 else float("inf")
-    max_cost_r = float(cfg.get("ENGINE_D_MAX_COST_R", 0.20))
+    from scalp_engine import _scalp_cfg_lookup
+
+    max_cost_r = float(
+        _scalp_cfg_lookup(cfg, "ENGINE_D_MAX_COST_R", 0.20, asset_type=asset_type)
+    )
     min_stop_pct = float(cfg.get("ENGINE_D_MIN_STOP_PCT", 0.0005))
     reason = None
     if cfg.get("ENGINE_D_FEE_GUARD_ENABLED", True):
@@ -5096,6 +5107,7 @@ def backtest_pair_naked(pair: dict, style: str = "naked", validation_mode="stand
     # use for lexical fill/monitor lookups further down.
     _d1_epochs = [candle_timestamp_epoch(c) for c in candles_d1]
     _h4_epochs = [candle_timestamp_epoch(c) for c in candles_h4]
+    _h1_epochs = [candle_timestamp_epoch(c) for c in candles_h1]
     h1_times = pd.to_datetime(
         [c.get("time", c.get("datetime", "")) for c in candles_h1],
         utc=True,
@@ -5201,11 +5213,13 @@ def backtest_pair_naked(pair: dict, style: str = "naked", validation_mode="stand
         _d1_cut_idx = bisect.bisect_right(_d1_epochs, _entry_epoch - 86400)
         h4_ctx = candles_h4[:_h4_cut_idx]
         d1_ctx = candles_d1[:_d1_cut_idx]
+        _h1_cut_idx = bisect.bisect_right(_h1_epochs, _entry_epoch - 3600)
+        h1_ctx = candles_h1[:_h1_cut_idx]
 
         # entry_ctx is exactly where we are in the entry loop
         entry_ctx = entry_raw[:i + 1]
 
-        if len(d1_ctx) < 20 or len(h4_ctx) < 20 or len(entry_ctx) < 20:
+        if len(d1_ctx) < 20 or len(h4_ctx) < 20 or len(h1_ctx) < 20 or len(entry_ctx) < 20:
             i += 1
             continue
         current_price = float(entry_raw[i]["close"])
@@ -5273,12 +5287,12 @@ def backtest_pair_naked(pair: dict, style: str = "naked", validation_mode="stand
             ).get("snap") or {}
             _bt_b_zone_snap = (
                 _cached_calc_indicators(
-                    zone_ctx,
+                    h4_ctx,
                     pair.get("type", "stock"),
-                    "zone",
-                    full_candles=_zone_full_candles,
-                    end_idx=_zone_end_idx,
-                    window=len(zone_ctx),
+                    "h4",
+                    full_candles=candles_h4,
+                    end_idx=_h4_cut_idx - 1,
+                    window=len(h4_ctx),
                 ) or {}
             ).get("snap") or {}
         except Exception:
@@ -5290,8 +5304,8 @@ def backtest_pair_naked(pair: dict, style: str = "naked", validation_mode="stand
         # Precompute direction-independent structure data once per bar
         _bt_pre = naked_engine.precompute_structure_data(
             d1_ctx,
-            zone_ctx,
-            entry_ctx,
+            h4_ctx,
+            h1_ctx,
             current_price,
             atr,
             regime=regime_label,
@@ -5420,7 +5434,16 @@ def backtest_pair_naked(pair: dict, style: str = "naked", validation_mode="stand
             i += 1
             continue
 
-        best = max(candidates, key=lambda x: x["score"])
+        best = engine_b_pick_directional_candidate(
+            candidates,
+            min_gap=engine_b_direction_min_score_gap(),
+        )
+        if best is None:
+            i += 1
+            continue
+        if independent_conflict_blocks_emit(best["direction"], best.get("res")):
+            i += 1
+            continue
         direction = best["direction"]
         selected_tp_source = best.get("selected_tp_source", "unknown")
         selected_tp1_source = best.get("selected_tp1_source", selected_tp_source)
@@ -6504,8 +6527,9 @@ def backtest_pair_consensus(
             best_b = _engine_c_select_engine_b_bt_candidate(
                 naked_engine=naked_engine,
                 d1_ctx=d1_ctx,
-                zone_ctx=zone_ctx,
-                h1_window=h1_window,
+                h4_ctx=h4_window,
+                h1_ctx=h1_window,
+                entry_ctx=h1_window if _entry_tf == "H1" else h4_window,
                 current_price=current_price,
                 atr=atr,
                 regime_label=regime_label,
@@ -7351,6 +7375,7 @@ def backtest_pair_scalp(pair: dict, validation_mode: str = "standard") -> dict |
             sl=sl,
             estimated_fee_pct=estimated_fee_pct,
             estimated_slippage_pct=estimated_slippage_pct,
+            invalidation_distance=levels.get("invalidation_distance"),
         )
         if fee_guard_metrics.get("engine_d_reject_reason"):
             continue
