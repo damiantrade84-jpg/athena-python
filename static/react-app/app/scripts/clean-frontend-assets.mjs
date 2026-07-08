@@ -3,13 +3,29 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const assetsDir = join(dirname(fileURLToPath(import.meta.url)), '../../../assets');
-const stalePattern = /^index-.*\.(js|css)$/;
 
-let removed = 0;
+const indexBundlePattern = /^index-.*\.(js|css)$/;
+const lazyChunkPattern = /^(?!index-)[A-Za-z0-9_-]+-[A-Za-z0-9_-]+\.js$/;
+
+let removedIndex = 0;
+let removedLazy = 0;
+
 for (const name of readdirSync(assetsDir)) {
-  if (!stalePattern.test(name)) continue;
-  unlinkSync(join(assetsDir, name));
-  removed += 1;
+  const fullPath = join(assetsDir, name);
+
+  if (indexBundlePattern.test(name)) {
+    unlinkSync(fullPath);
+    removedIndex += 1;
+    continue;
+  }
+
+  if (lazyChunkPattern.test(name)) {
+    unlinkSync(fullPath);
+    removedLazy += 1;
+  }
 }
 
-console.log(`clean-frontend-assets: removed ${removed} stale bundle file(s) from static/assets`);
+console.log(
+  `clean-frontend-assets: removed ${removedIndex} stale index bundle(s), ` +
+    `${removedLazy} lazy chunk(s) from static/assets`,
+);

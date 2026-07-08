@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "node scripts/clean-frontend-assets.mjs && tsc -b && vite build",
+    "build": "node scripts/clean-frontend-assets.mjs && tsc -b && vite build && node scripts/verify-frontend-build.mjs",
     "lint": "eslint .",
     "preview": "vite preview",
     "test": "vitest run"

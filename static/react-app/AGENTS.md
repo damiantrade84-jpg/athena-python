@@ -2,6 +2,15 @@
 
 Scope: `static/react-app/` and chart-related API consumers.
 
+## Prod UI (Flask :5000)
+
+1. `cd static/react-app/app && npm run build`
+2. Restart Flask if already running (optional; static files are read from disk)
+3. Hard refresh browser (Ctrl+Shift+R)
+4. Verify: View Source → `meta name="athena-frontend-build"` + `/static/assets/index-<hash>.js`
+
+Flask serves `static/index.html` — **not** `static/react-app/dist/`. Source edits without `npm run build` will **not** appear in prod.
+
 ## Rules
 
 - Native chart is the active surface for chart and AI review work. Do not build new review features on legacy TradingView paths.

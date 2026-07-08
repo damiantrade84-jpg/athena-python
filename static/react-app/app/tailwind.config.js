@@ -2,6 +2,26 @@
 module.exports = {
   darkMode: ["class"],
   content: ['./index.html', './src/**/*.{js,ts,jsx,tsx}'],
+  // Aurora design-system classes defined in index.css @layer components must survive
+  // production purge even before panels adopt them in TSX.
+  safelist: [
+    'panel-glass',
+    'panel-header-title',
+    'surface-glass',
+    'badge-long',
+    'badge-short',
+    'badge-gold',
+    'badge-neutral',
+    'glow-gold',
+    'glow-gold-sm',
+    'glow-long-sm',
+    'glow-short-sm',
+    'progress-gold',
+    'data-grid',
+    'animate-glow-gold',
+    'animate-glow-long',
+    'animate-slide-in',
+  ],
   theme: {
     extend: {
       colors: {
