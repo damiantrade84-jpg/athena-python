@@ -49,6 +49,10 @@ interface BacktestResult {
   wfSplit?: {
     is_sqn?: number | null;
     oos_sqn?: number | null;
+    is_trades?: number;
+    oos_trades?: number;
+    oosFraction?: number;
+    overfit_flag?: boolean;
     lowSampleSqnWarning?: boolean;
     lowSampleSqnTradeFloor?: number;
     [k: string]: unknown;
@@ -674,7 +678,12 @@ export default function BacktestPanel() {
                         <td className="py-2 text-right">{row.ok ? '✓' : '—'}</td>
                         <td className="py-2 text-right font-mono">{row.ok ? row.result?.totalTrades ?? '—' : '—'}</td>
                         <td className="py-2 text-right font-mono">{row.ok && row.result?.winRate != null ? `${fmtNum(row.result.winRate, 1)}%` : '—'}</td>
-                        <td className="py-2 text-right font-mono">{row.ok && row.result?.sqn != null ? fmtNum(row.result.sqn, 2) : '—'}</td>
+                        <td className="py-2 text-right font-mono">
+                          {row.ok && row.result?.sqn != null ? fmtNum(row.result.sqn, 2) : '—'}
+                          {row.ok && row.result?.wfSplit?.overfit_flag === true && (
+                            <span className="ml-1 text-short" title="Overfit: OOS SQN collapsed vs in-sample">⚠</span>
+                          )}
+                        </td>
                         <td className="py-2 text-short text-[10px]">{row.error || ''}</td>
                       </tr>
                     ))}
@@ -724,9 +733,28 @@ export default function BacktestPanel() {
                 <Stat title="Sortino" value={result.sortino == null ? '—' : fmtNum(result.sortino, 2)} />
                 <Stat title="Avg win" value={result.avgWin == null ? '—' : fmtNum(result.avgWin, 2)} accent="text-long" />
                 <Stat title="Avg loss" value={result.avgLoss == null ? '—' : fmtNum(result.avgLoss, 2)} accent="text-short" />
-                <Stat title="IS SQN" value={result.wfSplit?.is_sqn == null ? '—' : fmtNum(result.wfSplit.is_sqn, 2)} />
-                <Stat title="OOS SQN" value={result.wfSplit?.oos_sqn == null ? '—' : fmtNum(result.wfSplit.oos_sqn, 2)} />
+                <Stat
+                  title={`IS SQN${result.wfSplit?.is_trades != null ? ` (${result.wfSplit.is_trades})` : ''}`}
+                  value={result.wfSplit?.is_sqn == null ? '—' : fmtNum(result.wfSplit.is_sqn, 2)}
+                />
+                <Stat
+                  title={`OOS SQN${result.wfSplit?.oos_trades != null ? ` (${result.wfSplit.oos_trades})` : ''}`}
+                  value={result.wfSplit?.oos_sqn == null ? '—' : fmtNum(result.wfSplit.oos_sqn, 2)}
+                  accent={result.wfSplit?.overfit_flag === true ? 'text-short' : undefined}
+                />
               </div>
+
+              {result.wfSplit?.overfit_flag === true && (
+                <div className="flex items-center gap-2 p-3 rounded-md bg-short/15 border border-short/40 text-short text-xs">
+                  <AlertTriangle className="w-4 h-4 shrink-0" />
+                  <span>
+                    Overfit flag: out-of-sample SQN ({result.wfSplit?.oos_sqn == null ? '—' : fmtNum(result.wfSplit.oos_sqn, 2)})
+                    collapsed vs in-sample ({result.wfSplit?.is_sqn == null ? '—' : fmtNum(result.wfSplit.is_sqn, 2)}) on the last{' '}
+                    {result.wfSplit?.oosFraction != null ? `${Math.round(result.wfSplit.oosFraction * 100)}%` : '30%'} holdout — the
+                    edge does not survive out of sample. Do not tune thresholds on the in-sample figure.
+                  </span>
+                </div>
+              )}
 
               {result.wfSplit?.lowSampleSqnWarning === true && (
                 <div className="flex items-center gap-2 p-3 rounded-md bg-warning/15 border border-warning/40 text-warning text-xs">
